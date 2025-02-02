@@ -97,12 +97,15 @@ jobs:
           mkdir -p tt_metal/hostdevcommon
           cp -a deleteme/tt_metal/hostdevcommon/api tt_metal/hostdevcommon/
           ls -al tt_metal/hostdevcommon/api/hostdevcommon
-          mkdir -p tt_metal/third_party/tt_llk_wormhole_b0/common
-          cp -a deleteme/tt_metal/third_party/tt_llk_wormhole_b0/common/inc tt_metal/third_party/tt_llk_wormhole_b0/common/
-          mkdir -p tt_metal/third_party/tt_llk_grayskull/common
-          cp -a deleteme/tt_metal/third_party/tt_llk_grayskull/common/inc tt_metal/third_party/tt_llk_grayskull/common/
-          mkdir -p tt_metal/third_party/tt_llk_blackhole/common
-          cp -a deleteme/tt_metal/third_party/tt_llk_blackhole/common/inc tt_metal/third_party/tt_llk_blackhole/common/
+
+          find . -iname 'ckernel.h'
+
+          #mkdir -p tt_metal/third_party/tt_llk_wormhole_b0/common
+          #cp -a deleteme/tt_metal/third_party/tt_llk_wormhole_b0/common/inc tt_metal/third_party/tt_llk_wormhole_b0/common/
+          #mkdir -p tt_metal/third_party/tt_llk_grayskull/common
+          #cp -a deleteme/tt_metal/third_party/tt_llk_grayskull/common/inc tt_metal/third_party/tt_llk_grayskull/common/
+          #mkdir -p tt_metal/third_party/tt_llk_blackhole/common
+          #cp -a deleteme/tt_metal/third_party/tt_llk_blackhole/common/inc tt_metal/third_party/tt_llk_blackhole/common/
 
       - name: Run a test
         env:
