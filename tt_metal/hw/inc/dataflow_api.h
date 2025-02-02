@@ -1777,10 +1777,9 @@ void noc_async_atomic_barrier(uint8_t noc_idx = noc_index) {
  */
 FORCE_INLINE
 void noc_async_full_barrier(uint8_t noc_idx = noc_index) {
+    invalidate_l1_cache();
     WAYPOINT("NFBW");
-    do {
-        invalidate_l1_cache();
-    } while (!ncrisc_noc_reads_flushed(noc_idx));
+    while (!ncrisc_noc_reads_flushed(noc_idx));
     WAYPOINT("NFCW");
     while (!ncrisc_noc_nonposted_writes_sent(noc_idx));
     WAYPOINT("NFDW");

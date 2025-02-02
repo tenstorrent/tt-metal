@@ -491,16 +491,16 @@ int Cluster::get_device_aiclk(const chip_id_t &chip_id) const {
     return 0;
 }
 
-void Cluster::deassert_risc_reset_at_core(const tt_cxy_pair &core) const {
+void Cluster::deassert_risc_reset_at_core(const tt_cxy_pair& core, const TensixSoftResetOptions& soft_resets) const {
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(core.chip);
     tt_cxy_pair umd_core = this->virtual_to_umd_coord_mapping_.at(core);
-    this->driver_->deassert_risc_reset_at_core(umd_core);
+    this->driver_->deassert_risc_reset_at_core(umd_core, soft_resets);
 }
 
-void Cluster::assert_risc_reset_at_core(const tt_cxy_pair &core) const {
+void Cluster::assert_risc_reset_at_core(const tt_cxy_pair& core, const TensixSoftResetOptions& soft_resets) const {
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(core.chip);
     tt_cxy_pair umd_core = this->virtual_to_umd_coord_mapping_.at(core);
-    this->driver_->assert_risc_reset_at_core(umd_core);
+    this->driver_->assert_risc_reset_at_core(umd_core, soft_resets);
 }
 
 void Cluster::write_dram_vec(std::vector<uint32_t> &vec, tt_target_dram dram, uint64_t addr, bool small_access) const {

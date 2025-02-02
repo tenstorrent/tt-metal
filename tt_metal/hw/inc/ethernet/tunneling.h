@@ -55,11 +55,20 @@ volatile uint32_t* RtosTable =
 
 namespace internal_ {
 
-FORCE_INLINE bool eth_txq_is_busy(uint32_t q_num) { return eth_txq_reg_read(q_num, ETH_TXQ_CMD) != 0; }
+FORCE_INLINE bool eth_txq_is_busy(uint32_t q_num) {
+#ifdef ARCH_WORMHOLE
+    return eth_txq_reg_read(q_num, ETH_TXQ_CMD) != 0;
+#else
+    // Due to https://tenstorrent.atlassian.net/browse/BH-55 we don't want to poll STATUS.cmd_ongoing bit too soon after
+    // a previous TX. Workaround is to perform any register operation on the same TX queue to slow down successive polls
+    eth_txq_reg_read(q_num, ETH_TXQ_CMD);
+    return ((eth_txq_reg_read(q_num, ETH_TXQ_STATUS) >> ETH_TXQ_STATUS_CMD_ONGOING_BIT) & 0x1) != 0;
+#endif
+}
 
 FORCE_INLINE
 void eth_send_packet(uint32_t q_num, uint32_t src_word_addr, uint32_t dest_word_addr, uint32_t num_words) {
-    while (eth_txq_reg_read(q_num, ETH_TXQ_CMD) != 0) {
+    while (eth_txq_is_busy(q_num)) {
         // Note, this is overly eager... Kills perf on allgather
         risc_context_switch();
     }
@@ -71,7 +80,7 @@ void eth_send_packet(uint32_t q_num, uint32_t src_word_addr, uint32_t dest_word_
 
 FORCE_INLINE
 void eth_send_packet_unsafe(uint32_t q_num, uint32_t src_word_addr, uint32_t dest_word_addr, uint32_t num_words) {
-    ASSERT(eth_txq_reg_read(q_num, ETH_TXQ_CMD) == 0);
+    ASSERT(!eth_txq_is_busy(q_num));
     eth_txq_reg_write(q_num, ETH_TXQ_TRANSFER_START_ADDR, src_word_addr << 4);
     eth_txq_reg_write(q_num, ETH_TXQ_DEST_ADDR, dest_word_addr << 4);
     eth_txq_reg_write(q_num, ETH_TXQ_TRANSFER_SIZE_BYTES, num_words << 4);
@@ -80,7 +89,7 @@ void eth_send_packet_unsafe(uint32_t q_num, uint32_t src_word_addr, uint32_t des
 
 FORCE_INLINE
 void eth_write_remote_reg(uint32_t q_num, uint32_t reg_addr, uint32_t val) {
-    while (eth_txq_reg_read(q_num, ETH_TXQ_CMD) != 0) {
+    while (eth_txq_is_busy(q_num)) {
         risc_context_switch();
     }
     eth_txq_reg_write(q_num, ETH_TXQ_DEST_ADDR, reg_addr);
