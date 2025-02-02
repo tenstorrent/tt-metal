@@ -13,6 +13,7 @@
 #include "compute_kernel_api/binary_bitwise_sfpu.h"
 #include "compute_kernel_api/binary_shift.h"
 #include "compute_kernel_api/add_int32_sfpu.h"
+#include "debug/dprint.h"
 
 #define PRE_SCALE defined SFPU_OP_INIT_PRE_IN0_0 || defined SFPU_OP_INIT_PRE_IN1_0
 
@@ -21,6 +22,8 @@ void MAIN {
     uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);
     uint32_t per_core_block_size = get_arg_val<uint32_t>(1);
 
+    // DPRINT << "Printing out per_core_block_cnt " << per_core_block_cnt << ENDL(); // 1
+    // DPRINT << "Printing out per_core_block_size " << per_core_block_size << ENDL(); // 1
     constexpr auto cb_in0 = tt::CBIndex::c_0;
     constexpr auto cb_in1 = tt::CBIndex::c_1;
 
@@ -135,7 +138,12 @@ void MAIN {
         }
         tile_regs_commit();
         tile_regs_release();
-
+        DPRINT << "Printing in a sfpu CB: " << ENDL();
+        DPRINT << TSLICE(tt::CBIndex::c_0, 0, SliceRange::h0_w0_32()) << ENDL();
+        DPRINT << "Printing in b sfpu CB: " << ENDL();
+        DPRINT << TSLICE(tt::CBIndex::c_1, 0, SliceRange::h0_w0_32()) << ENDL();
+        DPRINT << "Printing out sfpu CB: " << ENDL();
+        DPRINT << TSLICE(tt::CBIndex::c_2, 0, SliceRange::h0_w0_32()) << ENDL();
         cb_pop_front(cb_inp0, per_core_block_size);
         cb_pop_front(cb_inp1, per_core_block_size);
         cb_push_back(cb_out0, per_core_block_size);
