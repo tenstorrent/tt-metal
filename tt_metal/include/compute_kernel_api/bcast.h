@@ -9,6 +9,7 @@
 #include "llk_math_binary_api.h"
 #include "llk_math_matmul_api.h"
 #include "llk_math_common.h"
+#include "llk_math_unary_datacopy_api.h"
 #endif
 #ifdef TRISC_UNPACK
 #include "llk_unpack_AB_api.h"
@@ -20,6 +21,39 @@
 #endif
 
 namespace ckernel {
+
+template <BroadcastType bcast_type>
+ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb) {
+    // Pass through uses A2D and potentially direct unpack to dest.
+    const auto data_copy_type = (bcast_type == BroadcastType::NONE) ? A2D : B2D;
+    const bool enable_unpack_to_dest = data_copy_type == A2D;
+
+    // Will configure A & B in similar way
+    UNPACK((llk_unpack_A_hw_configure_disaggregated<DST_ACCUM_MODE>(icb)));
+    UNPACK((llk_unpack_A_init<bcast_type, false, EltwiseBinaryReuseDestType::NONE, enable_unpack_to_dest>(
+        false, false /*transpose within 16x16 face*/, icb)));
+
+    MATH((llk_math_eltwise_unary_datacopy_init<data_copy_type, bcast_type, DST_ACCUM_MODE>(
+        false /*transpose of faces*/, false /*transpose within 16x16 face*/, icb)));
+    MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
+    MATH((llk_math_hw_configure_disaggregated(icb, icb)));
+
+    PACK((llk_pack_hw_configure_disaggregated<false, DST_ACCUM_MODE>(ocb)));
+    PACK((llk_pack_init<false>(ocb)));
+    PACK((llk_pack_dest_init<false, DST_ACCUM_MODE>()));
+}
+
+template <BroadcastType bcast_type>
+ALWI void unary_bcast(uint32_t icb, uint32_t in_tile_index, uint32_t dst_tile_index) {
+    // Pass through uses A2D and potentially direct unpack to dest.
+    const auto data_copy_type = (bcast_type == BroadcastType::NONE) ? A2D : B2D;
+    const bool enable_unpack_to_dest = data_copy_type == A2D;
+
+    UNPACK(
+        (llk_unpack_A<bcast_type, false, EltwiseBinaryReuseDestType::NONE, enable_unpack_to_dest>(icb, in_tile_index)));
+    MATH((llk_math_eltwise_unary_datacopy<data_copy_type, bcast_type, DST_ACCUM_MODE, enable_unpack_to_dest>(
+        dst_tile_index, icb)));
+}
 
 /**
  * Shorthand template instantiation of sub_tiles_bcast.
@@ -193,14 +227,14 @@ ALWI void any_tiles_bcast(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_
  *
  * | Argument       | Description                                              | Type          | Valid Range                                    | Required |
  * |----------------|----------------------------------------------------------|---------------|------------------------------------------------|----------|
- * | tBcastDim      | Broadcast dimension                                      | BroadcastType | One of Dim::R, Dim::C, Dim::RC.                | True     | 
- * | in0_cb_id      | The identifier of the circular buffer (CB) containing A  | uint32_t      | 0 to 31                                        | True     | 
- * | in1_cb_id      | The indentifier of the circular buffer (CB) containing B | uint32_t      | 0 to 31                                        | True     | 
- * | in0_tile_index | The index of tile A within the first CB                  | uint32_t      | Must be less than the size of the CB           | True     | 
- * | in1_tile_index | The index of tile B within the second CB                 | uint32_t      | Must be less than the size of the CB           | True     | 
+ * | tBcastDim      | Broadcast dimension                                      | BroadcastType | One of Dim::R, Dim::C, Dim::RC.                | True     |
+ * | in0_cb_id      | The identifier of the circular buffer (CB) containing A  | uint32_t      | 0 to 31                                        | True     |
+ * | in1_cb_id      | The indentifier of the circular buffer (CB) containing B | uint32_t      | 0 to 31                                        | True     |
+ * | in0_tile_index | The index of tile A within the first CB                  | uint32_t      | Must be less than the size of the CB           | True     |
+ * | in1_tile_index | The index of tile B within the second CB                 | uint32_t      | Must be less than the size of the CB           | True     |
  * | dst_tile_index | The index of the tile in DST REG for the result C        | uint32_t      | Must be less than the acquired size of DST REG | True     |
  */
- // clang-format on
+// clang-format on
 template <BroadcastType tBcastDim>
 ALWI void add_tiles_bcast(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
     any_tiles_bcast<EltwiseBinaryType::ELWADD, tBcastDim>(icb0, icb1, itile0, itile1, idst);
