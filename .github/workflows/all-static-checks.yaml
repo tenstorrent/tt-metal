@@ -120,7 +120,7 @@ jobs:
         DEBIAN_FRONTEND: noninteractive
       run: |
         sudo apt update
-        sudo xargs -a scripts/docker/requirements-22.04.txt apt install -y --no-install-recommends
+        sudo apt install -y --no-install-recommends git
     - name: Check CMake compatibility
       if: steps.changed-cmake-files.outputs.any_changed == 'true'
       env:
