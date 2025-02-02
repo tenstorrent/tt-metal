@@ -79,9 +79,10 @@ jobs:
       - name: Extract files
         run: tar -xvf ttm_any.tar
       - name: Srsly
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: 1
+          submodules: true
           path: docker-job/deleteme # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace
       - name: Proper packaging can't come soon enough
         run: |
@@ -100,12 +101,12 @@ jobs:
 
           find . -iname 'ckernel.h'
 
-          #mkdir -p tt_metal/third_party/tt_llk_wormhole_b0/common
-          #cp -a deleteme/tt_metal/third_party/tt_llk_wormhole_b0/common/inc tt_metal/third_party/tt_llk_wormhole_b0/common/
-          #mkdir -p tt_metal/third_party/tt_llk_grayskull/common
-          #cp -a deleteme/tt_metal/third_party/tt_llk_grayskull/common/inc tt_metal/third_party/tt_llk_grayskull/common/
-          #mkdir -p tt_metal/third_party/tt_llk_blackhole/common
-          #cp -a deleteme/tt_metal/third_party/tt_llk_blackhole/common/inc tt_metal/third_party/tt_llk_blackhole/common/
+          mkdir -p tt_metal/third_party/tt_llk_wormhole_b0/common
+          cp -a deleteme/tt_metal/third_party/tt_llk_wormhole_b0/common/inc tt_metal/third_party/tt_llk_wormhole_b0/common/
+          mkdir -p tt_metal/third_party/tt_llk_grayskull/common
+          cp -a deleteme/tt_metal/third_party/tt_llk_grayskull/common/inc tt_metal/third_party/tt_llk_grayskull/common/
+          mkdir -p tt_metal/third_party/tt_llk_blackhole/common
+          cp -a deleteme/tt_metal/third_party/tt_llk_blackhole/common/inc tt_metal/third_party/tt_llk_blackhole/common/
 
       - name: Run a test
         env:
