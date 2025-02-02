@@ -416,4 +416,12 @@ struct OutboundReceiverChannelPointers {
     }
 };
 
+template <uint8_t RECEIVER_NUM_BUFFERS>
+struct ReceiverChannelPointers {
+    ChannelBufferPointer<RECEIVER_NUM_BUFFERS> wr_sent_ptr;
+    ChannelBufferPointer<RECEIVER_NUM_BUFFERS> wr_flush_ptr;
+    ChannelBufferPointer<RECEIVER_NUM_BUFFERS> ack_ptr;
+    ChannelBufferPointer<RECEIVER_NUM_BUFFERS> completion_ptr;
+};
+
 }  // namespace tt::fabric
