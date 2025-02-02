@@ -62,8 +62,7 @@ jobs:
           {name: eth, cmd: "./build/test/tt_metal/unit_tests_eth_${{ inputs.arch }}"},
           {name: llk, cmd: "./build/test/tt_metal/unit_tests_llk"},
           {name: stl, cmd: "./build/test/tt_metal/unit_tests_stl"},
-          {name: distributed, cmd: "./build/test/tt_metal/distributed/distributed_unit_tests_${{ inputs.arch }} --gtest_filter=MeshDeviceSuite.*"},
-
+          {name: distributed, cmd: "./build/test/tt_metal/distributed/distributed_unit_tests_${{ inputs.arch }}"},
           {name: dispatch multicmd queue, cmd: "TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_dispatch_${{ inputs.arch }} --gtest_filter=MultiCommandQueue*Fixture.*"},
 
           {name: ttnn cpp unit tests, cmd: ./build/test/ttnn/unit_tests_ttnn},

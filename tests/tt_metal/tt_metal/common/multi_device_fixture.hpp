@@ -50,23 +50,27 @@ protected:
     }
 };
 
-class T3000MultiDeviceFixture : public ::testing::Test {
+template <int r, int c>
+class MeshDeviceFixture : public ::testing::Test {
 protected:
     void SetUp() override {
         using tt::tt_metal::distributed::MeshDevice;
         using tt::tt_metal::distributed::MeshDeviceConfig;
         using tt::tt_metal::distributed::MeshShape;
 
+        constexpr uint32_t num_required_devices = r * c;
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         const auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
         const size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
         if (slow_dispatch) {
-            GTEST_SKIP() << "Skipping Multi-Device test suite, since it can only be run in Fast Dispatch Mode.";
+            GTEST_SKIP() << "Skipping Mesh-Device test suite, since it can only be run in Fast Dispatch Mode.";
         }
-        if (num_devices < 8 or arch != tt::ARCH::WORMHOLE_B0) {
-            GTEST_SKIP() << "Skipping T3K Multi-Device test suite on non T3K machine.";
+        if (num_devices != num_required_devices or arch != tt::ARCH::WORMHOLE_B0) {
+            GTEST_SKIP() << fmt::format(
+                "Skipping Mesh-Device test suite on non-{} device machine.",
+                num_required_devices == 8 ? "T3K" : "N300");
         }
-        mesh_device_ = MeshDevice::create(MeshDeviceConfig{.mesh_shape = MeshShape{2, 4}});
+        mesh_device_ = MeshDevice::create(MeshDeviceConfig{.mesh_shape = MeshShape{r, c}});
     }
 
     void TearDown() override {
@@ -77,5 +81,17 @@ protected:
         mesh_device_->close();
         mesh_device_.reset();
     }
+
+protected:
     std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device_;
 };
+
+class T3000MeshDeviceFixture : public MeshDeviceFixture<2, 4> {};
+class N300MeshDeviceFixture : public MeshDeviceFixture<2, 1> {};
+
+using MeshFixtureTypes = ::testing::Types<T3000MeshDeviceFixture, N300MeshDeviceFixture>;
+template <typename T>
+class MeshTestSuite : public T {};
+
+// Register the N300 and T3K fixture types
+TYPED_TEST_SUITE(MeshTestSuite, MeshFixtureTypes);
