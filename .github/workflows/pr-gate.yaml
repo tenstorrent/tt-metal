@@ -92,6 +92,9 @@ jobs:
           mkdir -p tt_metal/hw/firmware
           cp -a deleteme/tt_metal/hw/firmware/src tt_metal/hw/firmware/
           cp -a deleteme/tt_metal/hw/inc tt_metal/hw/
+          mkdir -p tt_metal/api/tt-metalium
+          cp deleteme/tt_metal/api/tt-metalium/dev_msgs.h tt_metal/api/tt-metalium/
+          cp -a deleteme/hostdevcommon/api tt_metal/hostdevcommon/
 
       - name: Run a test
         env:
