@@ -7,36 +7,8 @@
 
 namespace tt::tt_metal {
 
-std::variant<CoreCoord, CoreRange, CoreRangeSet> from_flatbuffer(
-    const flatbuffer::CoreSpec core_spec, const void* flatbuffer_union) {
-    switch (core_spec) {
-        case flatbuffer::CoreSpec::CoreCoord: {
-            auto core_coord = static_cast<const flatbuffer::CoreCoord*>(flatbuffer_union);
-            TT_FATAL(core_coord, "Invalid CoreCoord data");
-            return CoreCoord{core_coord->x(), core_coord->y()};
-        }
-        case flatbuffer::CoreSpec::CoreRange: {
-            auto core_range = static_cast<const flatbuffer::CoreRange*>(flatbuffer_union);
-            TT_FATAL(core_range, "Invalid CoreRange data");
-            return CoreRange{
-                {core_range->start()->x(), core_range->start()->y()}, {core_range->end()->x(), core_range->end()->y()}};
-        }
-        case flatbuffer::CoreSpec::CoreRangeSet: {
-            auto core_range_set = static_cast<const flatbuffer::CoreRangeSet*>(flatbuffer_union);
-            TT_FATAL(core_range_set, "Invalid CoreRangeSet data");
-            std::vector<CoreRange> ranges;
-            for (const auto range : *core_range_set->ranges()) {
-                ranges.emplace_back(
-                    CoreCoord{range->start()->x(), range->start()->y()},
-                    CoreCoord{range->end()->x(), range->end()->y()});
-            }
-            return CoreRangeSet{ranges};
-        }
-        default: throw std::runtime_error("Unhandled CoreSpec type in from_flatbuffer");
-    }
-}
-
 DataMovementConfig from_flatbuffer(const flatbuffer::DataMovementConfig* fb_config) {
+    TT_FATAL(fb_config, "Invalid DataMovementConfig data from flatbuffer.");
     DataMovementConfig config;
 
     // Extract processor, noc, and noc_mode
@@ -58,6 +30,7 @@ DataMovementConfig from_flatbuffer(const flatbuffer::DataMovementConfig* fb_conf
 }
 
 ComputeConfig from_flatbuffer(const flatbuffer::ComputeConfig* fb_config) {
+    TT_FATAL(fb_config, "Invalid ComputeConfig data from flatbuffer.");
     ComputeConfig config;
 
     // Extract math_fidelity and boolean flags
@@ -88,6 +61,7 @@ ComputeConfig from_flatbuffer(const flatbuffer::ComputeConfig* fb_config) {
 }
 
 EthernetConfig from_flatbuffer(const flatbuffer::EthernetConfig* fb_config) {
+    TT_FATAL(fb_config, "Invalid EthernetConfig data from flatbuffer.");
     EthernetConfig config;
 
     // Extract eth_mode, noc, and processor
@@ -106,21 +80,6 @@ EthernetConfig from_flatbuffer(const flatbuffer::EthernetConfig* fb_config) {
     }
 
     return config;
-}
-
-std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> from_flatbuffer(
-    const flatbuffer::KernelConfig config_type, const void* flatbuffer_union) {
-    switch (config_type) {
-        case flatbuffer::KernelConfig::DataMovementConfig:
-            return from_flatbuffer(static_cast<const flatbuffer::DataMovementConfig*>(flatbuffer_union));
-        case flatbuffer::KernelConfig::ComputeConfig:
-            return from_flatbuffer(static_cast<const flatbuffer::ComputeConfig*>(flatbuffer_union));
-        case flatbuffer::KernelConfig::EthernetConfig:
-            return from_flatbuffer(static_cast<const flatbuffer::EthernetConfig*>(flatbuffer_union));
-        case flatbuffer::KernelConfig::NONE:
-            throw std::runtime_error("Unhandled KernelConfig type in from_flatbuffer.");
-    }
-    TT_THROW("Unhandled KernelConfig type in from_flatbuffer.");
 }
 
 std::vector<SubDeviceId> from_flatbuffer(const flatbuffers::Vector<uint8_t>* fb_sub_device_ids) {
