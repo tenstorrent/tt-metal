@@ -122,6 +122,9 @@ jobs:
           mkdir -p tt_metal/impl/dispatch
           cp -a deleteme/tt_metal/impl/dispatch/kernels tt_metal/impl/dispatch/
 
+          mkdir -p tt_metal/hw
+          cp -a deleteme/tt_metal/hw/ckernels tt_metal/hw/
+
       - name: Run a test
         env:
           # TODO: None of these should be necessary
