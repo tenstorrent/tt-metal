@@ -47,6 +47,12 @@ void MAIN {
         tile_regs_acquire();
         BINARY_OP(cb_post_lhs, cb_post_rhs, 0, 0, 0);
         PROCESS_POST_ACTIVATIONS(0);
+#ifdef TYPE_INIT
+        TYPE_INIT
+#endif
+#ifdef TYPE_OP
+        TYPE_OP(0);
+#endif
         tile_regs_commit();
 
         tile_regs_wait();
