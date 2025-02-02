@@ -17,8 +17,9 @@
 namespace tt::fabric {
 
 struct WorkerToFabricEdmSender {
+    static constexpr uint32_t unused_connection_value = 0;
     static constexpr uint32_t open_connection_value = 1;
-    static constexpr uint32_t close_connection_value = 0;
+    static constexpr uint32_t close_connection_request_value = 2;
 
     WorkerToFabricEdmSender() : from_remote_buffer_slot_rdptr_ptr(nullptr) {}
 
@@ -185,7 +186,7 @@ struct WorkerToFabricEdmSender {
             get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_slot_wrptr_addr) & ~(uint64_t)NOC_COORDINATE_MASK;
 
         const uint64_t dest_edm_connection_state_addr = dest_noc_addr_coord_only | edm_connection_handshake_l1_addr;
-        noc_inline_dw_write(dest_edm_connection_state_addr, close_connection_value);
+        noc_inline_dw_write(dest_edm_connection_state_addr, close_connection_request_value);
 
         // buffer index stored at location after handshake addr
         const uint64_t remote_buffer_index_addr = dest_noc_addr_coord_only | edm_buffer_index_addr;

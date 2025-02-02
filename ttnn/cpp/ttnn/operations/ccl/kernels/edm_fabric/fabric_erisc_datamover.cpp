@@ -560,7 +560,9 @@ bool run_sender_channel_state_machine_step(
         } break;
 
         case SenderState::SENDER_WAIT_WORKER_HANDSHAKE:
-            if (local_sender_channel_worker_interface.connection_is_live()) {
+            // We check for teardown request as well because it is possible that the worker completed the following
+            // sequence between EDM visits to this sender channel
+            if (local_sender_channel_worker_interface.connection_is_live() || local_sender_channel_worker_interface.has_worker_teardown_request()) {
                 bool is_safe_to_receive_next_message = local_sender_channel.eth_is_receiver_channel_send_acked() ||
                                                        local_sender_channel.eth_is_receiver_channel_send_done();
                 if (is_safe_to_receive_next_message) {
