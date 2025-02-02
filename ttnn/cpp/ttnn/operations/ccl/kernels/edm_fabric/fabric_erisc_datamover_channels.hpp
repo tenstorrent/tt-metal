@@ -147,7 +147,8 @@ class EthChannelBuffer final {
     }
 
     FORCE_INLINE void advance_buffer_index() {
-        this->buff_idx = wrap_increment<decltype(this->buff_idx), NUM_BUFFERS>(this->buff_idx);
+        this->buff_idx = wrap_increment<decltype(this->buff_idx), 2 * NUM_BUFFERS>(this->buff_idx);
+        DPRINT << "new buff_idx: " << (uint32_t)this->buff_idx << "\n";
     }
 
     [[nodiscard]] FORCE_INLINE bool all_buffers_drained() const {
@@ -158,10 +159,18 @@ class EthChannelBuffer final {
         return drained;
     }
 
+    /*
+     * NOT used directly to index the buffers list
+     */
+    [[nodiscard]] FORCE_INLINE uint8_t get_rdptr() const {
+        return this->buff_idx;
+    }
+
    private:
     FORCE_INLINE auto buffer_index() const {
         ASSERT(this->buff_idx < NUM_BUFFERS);
-        return buff_idx;
+        bool normalize = buff_idx >= NUM_BUFFERS;
+        return buff_idx - (normalize * NUM_BUFFERS);
     }
 
     std::array<size_t, NUM_BUFFERS> buffer_addresses;
@@ -180,7 +189,7 @@ class EthChannelBuffer final {
 
 struct EdmChannelWorkerInterface {
     EdmChannelWorkerInterface() :
-        worker_location_info_ptr(nullptr), local_semaphore_address(nullptr), connection_live_semaphore(nullptr) {}
+        worker_location_info_ptr(nullptr), remote_producer_wrptr(nullptr), connection_live_semaphore(nullptr) {}
     EdmChannelWorkerInterface(
         // TODO: PERF: See if we can make this non-volatile and then only
         // mark it volatile when we know we need to reload it (i.e. after we receive a
@@ -190,32 +199,36 @@ struct EdmChannelWorkerInterface {
         // packet... Then we'll also be able to cache the uint64_t addr of the worker
         // semaphore directly (saving on regenerating it each time)
         volatile EDMChannelWorkerLocationInfo *worker_location_info_ptr,
-        volatile tt_l1_ptr uint32_t *const local_semaphore_address,
+        volatile tt_l1_ptr uint32_t *const remote_producer_wrptr,
         volatile tt_l1_ptr uint32_t *const connection_live_semaphore) :
         worker_location_info_ptr(worker_location_info_ptr),
-        local_semaphore_address(local_semaphore_address),
-        connection_live_semaphore(connection_live_semaphore) {}
+        remote_producer_wrptr(remote_producer_wrptr),
+        connection_live_semaphore(connection_live_semaphore){}
 
     // Flow control methods
     //
-    [[nodiscard]] FORCE_INLINE auto local_semaphore_value() const { return *local_semaphore_address; }
+    [[nodiscard]] FORCE_INLINE bool has_payload(uint8_t local_rdptr) {
+        DPRINT << "\t*remote_producer_wrptr: " << (uint32_t)*remote_producer_wrptr << "\n";
+        return local_rdptr != *remote_producer_wrptr;
+    }
 
-    [[nodiscard]] FORCE_INLINE bool has_payload() { return *local_semaphore_address != 0; }
-
-    FORCE_INLINE void clear_local_semaphore() { noc_semaphore_set(local_semaphore_address, 0); }
+    // FORCE_INLINE void clear_local_semaphore() { noc_semaphore_set(remote_producer_wrptr, 0); }
 
     [[nodiscard]] FORCE_INLINE uint32_t get_worker_semaphore_address() const {
         return worker_location_info_ptr->worker_semaphore_address;
     }
 
-    void increment_worker_semaphore() const {
+    FORCE_INLINE void update_worker_read_ptr(uint8_t new_rdptr) {
         auto const &worker_info = *worker_location_info_ptr;
         uint64_t worker_semaphore_address = get_noc_addr(
             (uint32_t)worker_info.worker_xy.x, (uint32_t)worker_info.worker_xy.y, worker_info.worker_semaphore_address);
-
-        DPRINT << "EDM ntf wrkr sem @" << (uint64_t)worker_semaphore_address << "\n";
-        noc_semaphore_inc(worker_semaphore_address, 1);
+        DPRINT << "EDM ntf wrkr sem @" << (uint64_t)worker_semaphore_address << ", val = " << (uint32_t)new_rdptr << "\n";
+        noc_inline_dw_write(worker_semaphore_address, new_rdptr);
     }
+    // void increment_worker_semaphore() const {
+
+    //     noc_semaphore_inc(worker_semaphore_address, 1);
+    // }
 
     // Connection management methods
     //
@@ -232,7 +245,7 @@ struct EdmChannelWorkerInterface {
     [[nodiscard]] FORCE_INLINE bool connection_is_live() const { return *connection_live_semaphore == 1; }
 
     volatile EDMChannelWorkerLocationInfo *worker_location_info_ptr;
-    volatile tt_l1_ptr uint32_t *const local_semaphore_address;
+    volatile tt_l1_ptr uint32_t *const remote_producer_wrptr;
     volatile tt_l1_ptr uint32_t *const connection_live_semaphore;
 };
 

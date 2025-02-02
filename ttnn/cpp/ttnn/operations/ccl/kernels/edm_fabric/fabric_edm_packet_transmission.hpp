@@ -185,7 +185,7 @@ tt::fabric::SendStatus forward_payload_to_downstream_edm(
     ) {
     DPRINT << "Fwding pkt to downstream\n";
     // TODO: PERF - this should already be getting checked by the caller so this should be redundant make it an ASSERT
-    bool safe_to_send = downstream_edm_interface.consumer_has_space();
+    bool safe_to_send = downstream_edm_interface.edm_has_space_for_packet();
     if (!safe_to_send) {
         return tt::fabric::SendStatus::NOT_SENT;
     }
