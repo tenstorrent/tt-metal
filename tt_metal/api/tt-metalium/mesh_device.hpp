@@ -15,7 +15,6 @@
 #include "mesh_device_view.hpp"
 #include "sub_device_types.hpp"
 #include "span.hpp"
-#include "work_executor.hpp"
 
 namespace tt::tt_metal {
 
@@ -62,7 +61,6 @@ private:
     std::weak_ptr<MeshDevice> parent_mesh_;  // Submesh created with reference to parent mesh
     std::unique_ptr<MeshCommandQueue> mesh_command_queue_;
     std::unique_ptr<SubDeviceManagerTracker> sub_device_manager_tracker_;
-    std::unique_ptr<WorkExecutor> work_executor_;
 
     // This is a reference device used to query properties that are the same for all devices in the mesh.
     IDevice* reference_device() const;
@@ -145,7 +143,6 @@ public:
     std::shared_ptr<TraceBuffer> get_trace(uint32_t tid) override;
     uint32_t get_trace_buffers_size() const override;
     void set_trace_buffers_size(uint32_t size) override;
-
     // Light Metal
     void load_trace(uint8_t cq_id, uint32_t trace_id, const TraceDescriptor& trace_desc) override;
 
