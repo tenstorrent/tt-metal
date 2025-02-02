@@ -1163,6 +1163,7 @@ void generate_multi_input_command_stream_kernel_rt_args(
         // else: Interleaved addrgen passes no additional args - we specify interleaved addrgen as the default
     }
 
+    rt_args.push_back(forward_fabric_connections.has_value());
     if (forward_fabric_connections.has_value()) {
         const auto new_rt_args =
             generate_edm_connection_rt_args(*forward_fabric_connections, program, worker_core_range);
