@@ -529,10 +529,10 @@ bool run_sender_channel_state_machine_step(
         case SenderState::SENDER_WAITING_FOR_WORKER: {
             bool able_to_send = local_sender_channel_worker_interface.has_payload(local_sender_channel.get_rdptr()) && !eth_txq_is_busy() &&
                                 local_sender_channel.eth_is_receiver_channel_send_done();
-            DPRINT << "EDMS " << (uint32_t)sender_channel_index << "\n";
-            DPRINT << "\tlocal_sender_channel.get_rdptr(): " << (uint32_t)local_sender_channel.get_rdptr() << "\n";
-
+            // DPRINT << "EDMS " << (uint32_t)sender_channel_index << "\n";
+            // DPRINT << "\tlocal_sender_channel.get_rdptr(): " << (uint32_t)local_sender_channel.get_rdptr() << "\n";
             if (able_to_send) {
+                tt::fabric::validate(*reinterpret_cast<tt::fabric::PacketHeader*>(local_sender_channel.get_current_buffer_address()));
                 DPRINT << "EDMS " << (uint32_t)sender_channel_index << "\n";
                 DPRINT << "\taddress: " << (uint32_t)local_sender_channel.get_current_buffer_address() << "\n";
                 DPRINT << "\t1st 8B: " << (uint64_t)*reinterpret_cast<volatile uint64_t*>(local_sender_channel.get_current_buffer_address()) << "\n";
@@ -553,7 +553,7 @@ bool run_sender_channel_state_machine_step(
             } else if (!graceful_termination_mode) {
                 if (local_sender_channel_worker_interface.has_worker_teardown_request() && !local_sender_channel_worker_interface.has_payload(local_sender_channel.get_rdptr())) {
                     DPRINT << "EDMS TDWN\n";
-                    local_sender_channel_worker_interface.teardown_connection();
+                    local_sender_channel_worker_interface.teardown_connection(local_sender_channel.get_rdptr());
                     *sender_state_out = SenderState::SENDER_WAIT_WORKER_HANDSHAKE;
                 }
             }
@@ -566,6 +566,7 @@ bool run_sender_channel_state_machine_step(
                 bool is_safe_to_receive_next_message = local_sender_channel.eth_is_receiver_channel_send_acked() ||
                                                        local_sender_channel.eth_is_receiver_channel_send_done();
                 if (is_safe_to_receive_next_message) {
+                    DPRINT << "EDMS " << (uint32_t)sender_channel_index << " handshake complete\n";
                     DPRINT << "EDM ch " << (uint32_t)sender_channel_index << " wkr con ntfy wrkr\n";
                     DPRINT << "\tl1 worker info ptr: " << (uint32_t)local_sender_channel_worker_interface.worker_location_info_ptr << "\n";
                     DPRINT << "\tworker.x=" << (uint32_t)local_sender_channel_worker_interface.worker_location_info_ptr->worker_xy.x << ", .y=" << (uint32_t)local_sender_channel_worker_interface.worker_location_info_ptr->worker_xy.y << ", sem_addr=" << (uint32_t)local_sender_channel_worker_interface.worker_location_info_ptr->worker_semaphore_address << "\n";
@@ -803,6 +804,17 @@ void kernel_main() {
     static constexpr size_t remote_sender_0_channel_address = get_compile_time_arg_val(12);
     static constexpr size_t remote_sender_1_channel_address = get_compile_time_arg_val(13);
 
+    DPRINT << "SENDER_NUM_BUFFERS: " << (uint32_t)SENDER_NUM_BUFFERS << "\n";
+    DPRINT << "RECEIVER_NUM_BUFFERS: " << (uint32_t)RECEIVER_NUM_BUFFERS << "\n";
+    DPRINT << "local_sender_0_channel_address: " << (uint32_t)local_sender_0_channel_address << "\n";
+    DPRINT << "local_sender_channel_0_connection_info_addr: " << (uint32_t)local_sender_channel_0_connection_info_addr << "\n";
+    DPRINT << "local_sender_1_channel_address: " << (uint32_t)local_sender_1_channel_address << "\n";
+    DPRINT << "local_sender_channel_1_connection_info_addr: " << (uint32_t)local_sender_channel_1_connection_info_addr << "\n";
+    DPRINT << "local_receiver_channel_buffer_address: " << (uint32_t)local_receiver_channel_buffer_address << "\n";
+    DPRINT << "remote_receiver_channel_buffer_address: " << (uint32_t)remote_receiver_channel_buffer_address << "\n";
+    DPRINT << "remote_sender_0_channel_address: " << (uint32_t)remote_sender_0_channel_address << "\n";
+    DPRINT << "remote_sender_1_channel_address: " << (uint32_t)remote_sender_1_channel_address << "\n";
+
     // TODO: CONVERT TO SEMAPHORE
     volatile auto termination_signal_ptr =
         reinterpret_cast<volatile tt::fabric::TerminationSignal *>(get_compile_time_arg_val(14));
@@ -942,6 +954,7 @@ void kernel_main() {
             reinterpret_cast<volatile tt_l1_ptr uint32_t *const>(local_sender_connection_live_semaphore_addresses[i]);
         auto connection_worker_info_ptr = reinterpret_cast<volatile tt::fabric::EDMChannelWorkerLocationInfo *>(
             local_sender_connection_info_addresses[i]);
+        DPRINT << "connection_worker_info_ptr: " << (uint32_t)connection_worker_info_ptr << "\n";
         new (&local_sender_channel_worker_interfaces[i]) tt::fabric::EdmChannelWorkerInterface(
             connection_worker_info_ptr,
             reinterpret_cast<volatile tt_l1_ptr uint32_t *const>(

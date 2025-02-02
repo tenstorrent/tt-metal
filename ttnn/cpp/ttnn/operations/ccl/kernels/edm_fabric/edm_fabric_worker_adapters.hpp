@@ -9,6 +9,7 @@
 #include "tt_metal/hw/inc/ethernet/dataflow_api.h"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_edm_utils.hpp"
 #include "cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header_validate.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_types.hpp"
 #include "debug/assert.h"
 #include "debug/dprint.h"
 
@@ -167,17 +168,23 @@ struct WorkerToFabricEdmSender {
         const uint64_t remote_buffer_index_addr = dest_noc_addr_coord_only | edm_buffer_index_addr;
         ASSERT(remote_buffer_index_addr > 0);
         noc_async_read(remote_buffer_index_addr, reinterpret_cast<size_t>(this->buffer_slot_wrptr_ptr), sizeof(uint32_t));
+        DPRINT << "Reading buffer_slot_wrptr_ptr frmo: " << (uint64_t)remote_buffer_index_addr << "\n";
 
-        const uint64_t dest_edm_location_info_addr = dest_noc_addr_coord_only | edm_worker_location_info_addr;
+        tt::fabric::EDMChannelWorkerLocationInfo* worker_location_info_ptr = reinterpret_cast<tt::fabric::EDMChannelWorkerLocationInfo*>(edm_worker_location_info_addr);
+        const uint64_t edm_rdptr_addr = dest_noc_addr_coord_only | reinterpret_cast<uint64_t>(&(worker_location_info_ptr->edm_rdptr));
+        noc_async_read(edm_rdptr_addr, reinterpret_cast<size_t>(this->from_remote_buffer_slot_rdptr_ptr), sizeof(uint32_t));
         // TODO: Need to change byte enable to be word enable
-        noc_inline_dw_write(dest_edm_location_info_addr, reinterpret_cast<size_t>(from_remote_buffer_slot_rdptr_ptr));
-        noc_inline_dw_write(dest_edm_location_info_addr + sizeof(uint32_t), reinterpret_cast<size_t>(worker_teardown_addr));
-        noc_inline_dw_write(
-            dest_edm_location_info_addr + 2 * sizeof(uint32_t), ttnn::ccl::WorkerXY(my_x[0], my_y[0]).to_uint32());
+        const uint64_t dest_edm_location_info_addr            = dest_noc_addr_coord_only | edm_worker_location_info_addr;
+        const uint64_t edm_teardown_semaphore_address_address = dest_noc_addr_coord_only | reinterpret_cast<uint64_t>(&(worker_location_info_ptr->worker_teardown_semaphore_address));
+        const uint64_t connection_worker_xy_address           = dest_noc_addr_coord_only | reinterpret_cast<uint64_t>(&(worker_location_info_ptr->worker_xy));
+        noc_inline_dw_write(dest_edm_location_info_addr,            reinterpret_cast<size_t>(from_remote_buffer_slot_rdptr_ptr));
+        noc_inline_dw_write(edm_teardown_semaphore_address_address, reinterpret_cast<size_t>(worker_teardown_addr));
+        noc_inline_dw_write(connection_worker_xy_address,           ttnn::ccl::WorkerXY(my_x[0], my_y[0]).to_uint32());
 
         const uint64_t edm_connection_handshake_noc_addr = dest_noc_addr_coord_only | edm_connection_handshake_l1_addr;
         noc_inline_dw_write(edm_connection_handshake_noc_addr, open_connection_value);
         noc_async_read_barrier();
+        DPRINT << "buffer_slot_wrptr_ptr: " << (uint32_t)buffer_slot_wrptr_ptr << ", *buffer_slot_wrptr_ptr: " << (uint32_t)*this->buffer_slot_wrptr_ptr << "\n";
         ASSERT(*this->buffer_slot_wrptr_ptr < 20);
     }
 

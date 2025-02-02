@@ -41,10 +41,25 @@ struct FabricEriscDatamoverConfig {
 
     // ----------- Sender Channel 0
     std::size_t sender_channel_0_buffer_index_address = termination_signal_address + field_size;
-    std::size_t sender_channel_0_worker_connection_info_address =
-        sender_channel_0_buffer_index_address + field_size;
+    // Connection info layout:
+    // 0: buffer_index_rdptr -> Tells EDM the address in worker L1 to update EDM's copy of channel rdptr
+    // 1: worker_teardown_semaphore_address -> Tells EDM where to signal connection teardown completion in worker's L1
+    // 2: WorkerXY (as uint32_t)
+    // 3: Hold's EDM's rdptr for the buffer index in the channel
+    std::size_t sender_channel_0_worker_conn_info_base_address = sender_channel_0_buffer_index_address + field_size;
+    //
+    // std::size_t sender_channel_0_conn_info_worker_rdptr_address_address =
+    //     sender_channel_0_worker_conn_info_base_address;
+    // std::size_t sender_channel_0_conn_info_worker_teardown_semaphore_address =
+    //     sender_channel_0_conn_info_worker_rdptr_address_address + field_size;
+    // std::size_t sender_channel_0_conn_info_worker_xy_address =
+    //     sender_channel_0_conn_info_worker_teardown_semaphore_address + field_size;
+    // std::size_t sender_channel_0_conn_info_edm_rdptr_address_address =
+    //     sender_channel_0_conn_info_worker_xy_address + field_size;
+    //
     std::size_t sender_channel_0_local_flow_control_semaphore_address =
-        sender_channel_0_worker_connection_info_address + field_size;
+        sender_channel_0_worker_conn_info_base_address + sizeof(tt::fabric::EDMChannelWorkerLocationInfo);
+    // sender_channel_0_conn_info_edm_rdptr_address_address + field_size;
     std::size_t sender_channel_0_producer_terminate_connection_address =
         sender_channel_0_local_flow_control_semaphore_address + field_size;
     // persistent mode field
@@ -54,17 +69,33 @@ struct FabricEriscDatamoverConfig {
     std::size_t sender_channel_0_buffer_index_semaphore_address =
         sender_channel_0_connection_semaphore_address + field_size;
 
-    static_assert(field_size >= sizeof(tt::fabric::EDMChannelWorkerLocationInfo));
+    static_assert(sizeof(tt::fabric::EDMChannelWorkerLocationInfo) % field_size == 0);
 
     // ----------- Sender Channel 1
     std::size_t sender_channel_1_buffer_index_address =
         sender_channel_0_buffer_index_semaphore_address + field_size;
-    std::size_t sender_channel_1_worker_connection_info_address =
-        sender_channel_1_buffer_index_address + field_size;
+    // Connection info layout:
+    // 0: buffer_index_rdptr -> Tells EDM the address in worker L1 to update EDM's copy of channel rdptr
+    // 1: worker_teardown_semaphore_address -> Tells EDM where to signal connection teardown completion in worker's L1
+    // 2: WorkerXY (as uint32_t)
+    // 3: Hold's EDM's rdptr for the buffer index in the channel
+    std::size_t sender_channel_1_worker_conn_info_base_address = sender_channel_1_buffer_index_address + field_size;
+    //
+    // std::size_t sender_channel_1_conn_info_worker_rdptr_address_address =
+    //     sender_channel_1_worker_conn_info_base_address;
+    // std::size_t sender_channel_1_conn_info_worker_teardown_semaphore_address =
+    //     sender_channel_1_conn_info_worker_rdptr_address_address + field_size;
+    // std::size_t sender_channel_1_conn_info_worker_xy_address =
+    //     sender_channel_1_conn_info_worker_teardown_semaphore_address + field_size;
+    // std::size_t sender_channel_1_conn_info_edm_rdptr_address_address =
+    //     sender_channel_1_conn_info_worker_xy_address + field_size;
+    ////
     std::size_t sender_channel_1_local_flow_control_semaphore_address =
-        sender_channel_1_worker_connection_info_address + field_size;
+        sender_channel_1_worker_conn_info_base_address + sizeof(tt::fabric::EDMChannelWorkerLocationInfo);
+    // sender_channel_1_conn_info_edm_rdptr_address_address + field_size;
     std::size_t sender_channel_1_producer_terminate_connection_address =
         sender_channel_1_local_flow_control_semaphore_address + field_size;
+
     // persistent mode field
     std::size_t sender_channel_1_connection_semaphore_address =
         sender_channel_1_producer_terminate_connection_address + field_size;

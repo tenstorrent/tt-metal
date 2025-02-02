@@ -190,9 +190,9 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
     receiver_channel_local_buffer_index_address(config.receiver_channel_local_buffer_index_address),
 
     local_sender_channel_0_buffer_address(config.sender_0_channel_base_address),
-    local_sender_channel_0_connection_info_addr(config.sender_channel_0_worker_connection_info_address),
+    local_sender_channel_0_connection_info_addr(config.sender_channel_0_worker_conn_info_base_address),
     local_sender_channel_1_buffer_address(config.sender_1_channel_base_address),
-    local_sender_channel_1_connection_info_addr(config.sender_channel_1_worker_connection_info_address),
+    local_sender_channel_1_connection_info_addr(config.sender_channel_1_worker_conn_info_base_address),
     local_receiver_channel_buffer_address(config.receiver_channel_base_address),
 
     termination_signal_ptr(config.termination_signal_address),
@@ -221,9 +221,9 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_compile_time_args() const
         this->receiver_num_buffers,
 
         config.sender_0_channel_base_address,
-        config.sender_channel_0_worker_connection_info_address,
+        config.sender_channel_0_worker_conn_info_base_address,
         config.sender_1_channel_base_address,
-        config.sender_channel_1_worker_connection_info_address,
+        config.sender_channel_1_worker_conn_info_base_address,
         config.receiver_channel_base_address,
         config.receiver_channel_base_address,
 
@@ -349,34 +349,32 @@ SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_worker_
         log_trace(tt::LogOp, "Building connection to non-persistent fabric");
     }
     TT_FATAL(sender_channel_0_buffer_index_semaphore_id != sender_channel_0_flow_control_semaphore_id, "Internal error - sender_channel_0_buffer_index_semaphore_id and sender_channel_0_flow_control_semaphore_id aliased eachother");
-    return SenderWorkerAdapterSpec {
+    return SenderWorkerAdapterSpec{
         this->my_noc_x,
         this->my_noc_y,
         this->local_sender_channel_0_buffer_address,
         this->sender_0_num_buffers,
         this->sender_channel_0_flow_control_semaphore_id,
         this->sender_channel_0_connection_semaphore_id,
-        this->config.sender_channel_0_worker_connection_info_address,
+        this->config.sender_channel_0_worker_conn_info_base_address,
         this->config.channel_buffer_size_bytes,
         this->sender_channel_0_buffer_index_semaphore_id,
-        this->enable_persistent_mode
-    };
+        this->enable_persistent_mode};
 }
 
 
 SenderWorkerAdapterSpec FabricEriscDatamoverBuilder::build_connection_to_fabric_channel() const {
-    return SenderWorkerAdapterSpec {
+    return SenderWorkerAdapterSpec{
         this->my_noc_x,
         this->my_noc_y,
         this->local_sender_channel_1_buffer_address,
         this->sender_1_num_buffers,
         this->sender_channel_1_flow_control_semaphore_id,
         this->sender_channel_1_connection_semaphore_id,
-        this->config.sender_channel_1_worker_connection_info_address,
+        this->config.sender_channel_1_worker_conn_info_base_address,
         this->config.channel_buffer_size_bytes,
         this->sender_channel_1_buffer_index_semaphore_id,
-        false
-    };
+        false};
 }
 
 void FabricEriscDatamoverBuilder::connect_to_downstream_edm(FabricEriscDatamoverBuilder const& downstream_edm) {
