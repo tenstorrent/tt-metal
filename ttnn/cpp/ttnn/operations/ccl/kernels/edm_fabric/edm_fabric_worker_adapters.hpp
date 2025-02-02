@@ -12,7 +12,6 @@
 #include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_types.hpp"
 #include "debug/assert.h"
 #include "debug/dprint.h"
-
 #include <cstdint>
 
 namespace tt::fabric {
@@ -103,14 +102,9 @@ struct WorkerToFabricEdmSender {
         ASSERT(buffer_size_bytes > 0);
     }
 
-    // [[nodiscard]] FORCE_INLINE bool consumer_has_space() const { return *this->from_remote_buffer_slot_rdptr_ptr == 1; }
-    // FORCE_INLINE void clear_flow_control_semaphore() const { noc_semaphore_set(this->from_remote_buffer_slot_rdptr_ptr, 0); }
-
     FORCE_INLINE bool edm_has_space_for_packet() const {
         auto const wrptr = *this->buffer_slot_wrptr_ptr;
         auto const rdptr = *this->from_remote_buffer_slot_rdptr_ptr;
-        DPRINT << "edm buf space check rdptr: " << (uint32_t)rdptr << "\n";
-        DPRINT << "wrptr: " << (uint32_t)wrptr << "\n";
         bool wrptr_ge_rptr = wrptr >= rdptr;
         // TODO: optimize to *= -1 and mask (bit hacks)
         uint8_t slots_used = wrptr_ge_rptr ? (wrptr - rdptr) : ((2 * this->num_buffers_per_channel) - rdptr) + wrptr;

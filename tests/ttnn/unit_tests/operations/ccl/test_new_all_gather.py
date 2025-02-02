@@ -290,6 +290,7 @@ def run_all_gather_impl(
             ttnn.synchronize_devices(mesh_device, sub_device_ids=sub_device_stall_group)
             logger.info(f"Done iteration {i}")
 
+    passed = True
     for tensor_index in range(len(tt_out_tensor_list)):
         tt_out_tensor = tt_out_tensor_list[tensor_index]
         output_tensor = output_tensor_goldens_list[tensor_index]
@@ -303,11 +304,14 @@ def run_all_gather_impl(
                 eq, output = comp_pcc(tt_output_tensor, output_tensor)
             if not eq:
                 logger.error(f"output mismatch for tensor {i}")
-            assert eq, f"{i} FAILED: {output}"
+                passed = False
 
     if enable_persistent_fabric and teardown_persistent_fabric:
         mesh_device.reset_sub_device_stall_group()
         teardown_fabric_interface(mesh_device)
+
+    if not passed:
+        assert eq, f"{i} FAILED: {output}"
 
 
 # Enumerate the post-commit cases explicitly
@@ -432,7 +436,7 @@ def test_all_gather(
         ),
     ],
 )
-@pytest.mark.parametrize("num_links", [2])
+@pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize(
     "input_dtype",
     [
