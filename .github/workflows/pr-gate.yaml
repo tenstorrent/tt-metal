@@ -158,6 +158,7 @@ jobs:
           name: Foo Tests # Name of the check run which will be created
           path: /work/test-results.json
           reporter: jest-junit        # Format of test results
+          only-summary: 'true'
 
       - name: Test Report XML
         uses: dorny/test-reporter@v1
@@ -166,6 +167,7 @@ jobs:
           name: Foo Tests # Name of the check run which will be created
           path: /work/test-results.xml
           reporter: jest-junit        # Format of test results
+          only-summary: 'true'
 
       - name: Cleanup
         if: always()
