@@ -54,6 +54,7 @@ void kernel_main() {
             noc_async_read(src_noc_addr, scratch_l1_write_addr, aligned_block_width_bytes);
             noc_async_read_barrier();
             noc_async_read(scratch_l1_noc_read_addr, l1_write_addr, block_width_bytes);
+            noc_async_read_barrier();
             stick_id++;
             l1_write_addr += padded_block_width_bytes;
         }
