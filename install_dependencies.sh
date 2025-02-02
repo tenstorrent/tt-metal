@@ -218,28 +218,28 @@ install() {
             build)
                 prep_ubuntu_build
                 install_llvm
-                DEBIAN_FRONTEND="noninteractive" apt-get install -y --no-install-recommends "${PKG_LIST[@]}"
                 if [[ "$VERSION" = "22.04" ]]; then
 	            echo "Detected Ubuntu 22.04, thus install g++-12"
-		    apt-get install -y --no-install-recommends g++-12 gcc-12
+		    apt-get install -y --no-install-recommends g++-12 gcc-12 build-essential
 		    update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 12
 		    update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 12
 		    update-alternatives --set gcc /usr/bin/gcc-12
 		    update-alternatives --set g++ /usr/bin/g++-12
                 fi
+		DEBIAN_FRONTEND="noninteractive" apt-get install -y --no-install-recommends "${PKG_LIST[@]}"
                 ;;
             baremetal)
                 prep_ubuntu_build
                 install_llvm
-                DEBIAN_FRONTEND="noninteractive" apt-get install -y --no-install-recommends "${PKG_LIST[@]}"
                 if [[ "$VERSION" = "22.04" ]]; then
 	            echo "Detected Ubuntu 22.04, thus install g++-12"
-		    apt-get install -y --no-install-recommeneds g++-12 gcc-12
+		    apt-get install -y --no-install-recommeneds g++-12 gcc-12 build-essential
 		    update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 12
 		    update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 12
 		    update-alternatives --set gcc /usr/bin/gcc-12
 		    update-alternatives --set g++ /usr/bin/g++-12
                 fi
+		DEBIAN_FRONTEND="noninteractive" apt-get install -y --no-install-recommends "${PKG_LIST[@]}"
                 configure_hugepages
                 ;;
         esac
