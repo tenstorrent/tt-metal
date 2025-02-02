@@ -131,40 +131,18 @@ jobs:
 
       - name: Run a test
         env:
-          # TODO: None of these should be necessary
-          LD_LIBRARY_PATH: /work/build/lib
-          TT_METAL_HOME: /work
-          GTEST_COLOR: yes
-          GTEST_OUTPUT: json:/work/test-results.json
-          GMOCK_VERBOSE: warning
-
-        run: |
-          ./build/test/tt_metal/unit_tests_noc
-
-      - name: Run a test - XML
-        env:
-          # TODO: None of these should be necessary
-          LD_LIBRARY_PATH: /work/build/lib
-          TT_METAL_HOME: /work
           GTEST_COLOR: yes
           GTEST_OUTPUT: xml:/work/test-results.xml
-          GMOCK_VERBOSE: warning
 
+          # TODO: None of these should be necessary
+          LD_LIBRARY_PATH: /work/build/lib
+          TT_METAL_HOME: /work
         run: |
           ./build/test/tt_metal/unit_tests_noc
 
       - name: unimpressed
         run: |
           git config --global --add safe.directory /__w/tt-metal/tt-metal
-
-      - name: Test Report JSON
-        uses: dorny/test-reporter@v1
-        if: success() || failure()
-        with:
-          name: Foo Tests # Name of the check run which will be created
-          path: /work/test-results.json
-          reporter: jest-junit        # Format of test results
-          only-summary: 'true'
 
       - name: Test Report XML
         uses: dorny/test-reporter@v1
@@ -173,7 +151,6 @@ jobs:
           name: Foo Tests # Name of the check run which will be created
           path: /work/test-results.xml
           reporter: jest-junit        # Format of test results
-          only-summary: 'true'
 
       - name: Cleanup
         if: always()
