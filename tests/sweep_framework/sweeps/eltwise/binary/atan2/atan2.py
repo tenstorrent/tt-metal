@@ -59,13 +59,13 @@ def run(
     torch.manual_seed(0)
 
     torch_input_tensor_a = gen_func_with_cast_tt(
-        partial(torch_random, low=-10, high=10, dtype=torch.float32), input_a_dtype
+        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(input_shape)
     torch_input_tensor_b = gen_func_with_cast_tt(
-        partial(torch_random, low=-10, high=10, dtype=torch.float32), input_b_dtype
+        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
     )(input_shape)
 
-    golden_function = ttnn.get_golden_function(ttnn.ldexp)
+    golden_function = ttnn.get_golden_function(ttnn.atan2)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b)
 
     input_tensor_a = ttnn.from_torch(
@@ -83,7 +83,7 @@ def run(
         memory_config=input_b_memory_config,
     )
     start_time = start_measuring_time()
-    result = ttnn.ldexp(input_tensor_a, input_tensor_b)
+    result = ttnn.atan2(input_tensor_a, input_tensor_b)
     output_tensor = ttnn.to_torch(result)
     e2e_perf = stop_measuring_time(start_time)
 
