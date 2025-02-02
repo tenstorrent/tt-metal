@@ -238,7 +238,8 @@ def run_prefetcher_mm(
 
     tt_tensors_all = []
     for tid in range(num_tensors * num_layers):
-        K, N = padded_shapes[tid % num_tensors]
+        K, _ = input_shapes[tid % num_tensors]
+        _, N = padded_shapes[tid % num_tensors]
         input_sharded_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             ttnn.BufferType.DRAM,
