@@ -65,7 +65,7 @@ jobs:
           target: dev
           push: true
           tags: ${{ env.TT_METAL_DOCKER_IMAGE_TAG}}
-          build-args: UBUNTU_VERSION=${{ fromJSON('["' + join(split(inputs.os, '-'), '","') + '"]')[1] }}
+          build-args: UBUNTU_VERSION=${{ fromJSON(toJSON(split(inputs.os, '-')))[1] }}
           cache-from: type=registry,ref=${{ env.TT_METAL_REF_IMAGE_TAG }}
           cache-to: type=inline
           pull: true
