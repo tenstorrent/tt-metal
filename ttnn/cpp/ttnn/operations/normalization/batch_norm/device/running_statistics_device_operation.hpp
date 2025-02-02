@@ -9,9 +9,9 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn::operations::normalization {
-struct BatchNormOperation {
+struct RunningStatistics {
     struct operation_attributes_t {
-        const float eps;
+        const float momentum;
         const MemoryConfig memory_config;
 
         DataType input_dtype;
@@ -20,18 +20,16 @@ struct BatchNormOperation {
     };
 
     struct tensor_args_t {
-        const Tensor& input;
         const Tensor& batch_mean;
         const Tensor& batch_var;
-        std::optional<Tensor> weight;
-        std::optional<Tensor> bias;
-        std::optional<Tensor> output;
+        std::optional<Tensor> running_mean;
+        std::optional<Tensor> running_var;
     };
 
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
 
-    struct BatchNormFactory {
+    struct RunningStatisticsProgramFactory {
         struct shared_variables_t {
             tt::tt_metal::KernelHandle reader_kernel_id;
             tt::tt_metal::KernelHandle writer_kernel_id;
@@ -53,7 +51,7 @@ struct BatchNormOperation {
             tensor_return_value_t& output);
     };
 
-    using program_factory_t = std::variant<BatchNormFactory>;
+    using program_factory_t = std::variant<RunningStatisticsProgramFactory>;
 
     static void validate_tensors(const operation_attributes_t&, const tensor_args_t&);
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
@@ -62,18 +60,16 @@ struct BatchNormOperation {
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
-        const Tensor& input,
         const Tensor& batch_mean,
         const Tensor& batch_var,
-        const float eps,
-        std::optional<Tensor> weight,
-        std::optional<Tensor> bias,
-        std::optional<Tensor> output,
+        const float momentum,
+        std::optional<Tensor> running_mean,
+        std::optional<Tensor> running_var,
         const std::optional<MemoryConfig>& memory_config);
 };
 }  // namespace ttnn::operations::normalization
 
 namespace ttnn::prim {
-constexpr auto batch_norm =
-    ttnn::register_operation<"ttnn::prim::batch_norm", ttnn::operations::normalization::BatchNormOperation>();
+constexpr auto running_statistics =
+    ttnn::register_operation<"ttnn::prim::running_statistics", ttnn::operations::normalization::RunningStatistics>();
 }
