@@ -20,6 +20,8 @@ constexpr uint32_t PQ_TEST_STATUS_INDEX = 0;
 constexpr uint32_t PQ_TEST_WORD_CNT_INDEX = 2;
 constexpr uint32_t PQ_TEST_CYCLES_INDEX = 4;
 constexpr uint32_t PQ_TEST_ITER_INDEX = 6;
+constexpr uint32_t PQ_TEST_START_TIME_INDEX = 8;
+constexpr uint32_t PQ_TEST_END_TIME_INDEX = 10;
 constexpr uint32_t PQ_TEST_MISC_INDEX = 16;
 
 /*
