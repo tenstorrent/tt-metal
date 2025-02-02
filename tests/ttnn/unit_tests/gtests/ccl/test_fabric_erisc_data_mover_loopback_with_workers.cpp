@@ -2949,8 +2949,9 @@ void RunWriteThroughputStabilityTestWIthPersistentFabric(
     auto worker_core_logical = [](size_t link) { return CoreCoord(link, 0); };
 
     static constexpr size_t line_size = 4;
-    static constexpr size_t source_l1_buffer_address = 1000000;
+    // static constexpr size_t source_l1_buffer_address = 1000000;
     static constexpr uint32_t packet_header_cb_index = tt::CB::c_in0;
+    static constexpr uint32_t source_payload_cb_index = tt::CB::c_in1;
     static constexpr size_t packet_header_cb_size_in_headers = 4;
     static constexpr bool enable_persistent_fabric_mode = true;
     static constexpr size_t packet_payload_size_bytes = 4096;
@@ -3054,6 +3055,11 @@ void RunWriteThroughputStabilityTestWIthPersistentFabric(
                 .set_page_size(packet_header_cb_index, sizeof(tt::fabric::PacketHeader));
         CBHandle sender_workers_cb = CreateCircularBuffer(program, worker_cores, cb_src0_config);
 
+        tt_metal::CircularBufferConfig cb_src1_config =
+            tt_metal::CircularBufferConfig(packet_payload_size_bytes, {{source_payload_cb_index, cb_df}})
+                .set_page_size(source_payload_cb_index, packet_payload_size_bytes);
+        CBHandle sender_workers_payload_cb = CreateCircularBuffer(program, worker_cores, cb_src1_config);
+
         TT_FATAL(
             local_device_fabric_handle.get_num_links() == num_links,
             "Error in test setup. Expected two links between devices but got {} links for device {}",
@@ -3103,7 +3109,7 @@ void RunWriteThroughputStabilityTestWIthPersistentFabric(
                 unicast_hops,
                 unicast_forward,
 
-                source_l1_buffer_address,
+                source_payload_cb_index,  // source_l1_buffer_address,
                 packet_header_cb_index,
                 packet_header_cb_size_in_headers,
             };
@@ -3160,6 +3166,15 @@ TEST(EdmFabric, BasicMcastThroughputTest_SmallPerf) {
         num_mcasts, num_unicasts, num_links, num_op_invocations, report_performance);
 }
 
+TEST(EdmFabric, BasicMcastThroughputTest_SingleMcast) {
+    const size_t num_mcasts = 1;
+    const size_t num_unicasts = 2;
+    const size_t num_links = 2;
+    const size_t num_op_invocations = 1;
+    const bool report_performance = false;
+    RunWriteThroughputStabilityTestWIthPersistentFabric(
+        num_mcasts, num_unicasts, num_links, num_op_invocations, report_performance);
+}
 TEST(EdmFabric, BasicMcastThroughputTest_0) {
     const size_t num_mcasts = 100;
     const size_t num_unicasts = 2;
