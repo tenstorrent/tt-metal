@@ -563,14 +563,17 @@ bool run_sender_channel_state_machine_step(
             // We check for teardown request as well because it is possible that the worker completed the following
             // sequence between EDM visits to this sender channel
             if (local_sender_channel_worker_interface.connection_is_live() || local_sender_channel_worker_interface.has_worker_teardown_request()) {
+                DPRINT << "EDMS " << (uint32_t)sender_channel_index << " handshake complete\n";
+                DPRINT << "EDM ch " << (uint32_t)sender_channel_index << " wkr con ntfy wrkr\n";
+                DPRINT << "\tl1 worker info ptr: " << (uint32_t)local_sender_channel_worker_interface.worker_location_info_ptr << "\n";
+                DPRINT << "\tworker.x=" << (uint32_t)local_sender_channel_worker_interface.worker_location_info_ptr->worker_xy.x << ", .y=" << (uint32_t)local_sender_channel_worker_interface.worker_location_info_ptr->worker_xy.y << ", sem_addr=" << (uint32_t)local_sender_channel_worker_interface.worker_location_info_ptr->worker_semaphore_address << "\n";
+                sender_notify_workers_if_buffer_available_sequence(local_sender_channel_worker_interface, local_sender_channel);
+
+                // We are full so we need to go to wait for eth state so we can get the ack to free up space
+                // Future implementation will not have these discrete states so we can avoid these types of issues
                 bool is_safe_to_receive_next_message = local_sender_channel.eth_is_receiver_channel_send_acked() ||
                                                        local_sender_channel.eth_is_receiver_channel_send_done();
                 if (is_safe_to_receive_next_message) {
-                    DPRINT << "EDMS " << (uint32_t)sender_channel_index << " handshake complete\n";
-                    DPRINT << "EDM ch " << (uint32_t)sender_channel_index << " wkr con ntfy wrkr\n";
-                    DPRINT << "\tl1 worker info ptr: " << (uint32_t)local_sender_channel_worker_interface.worker_location_info_ptr << "\n";
-                    DPRINT << "\tworker.x=" << (uint32_t)local_sender_channel_worker_interface.worker_location_info_ptr->worker_xy.x << ", .y=" << (uint32_t)local_sender_channel_worker_interface.worker_location_info_ptr->worker_xy.y << ", sem_addr=" << (uint32_t)local_sender_channel_worker_interface.worker_location_info_ptr->worker_semaphore_address << "\n";
-                    sender_notify_workers_if_buffer_available_sequence(local_sender_channel_worker_interface, local_sender_channel);
                     *sender_state_out = SenderState::SENDER_WAITING_FOR_WORKER;
                 } else {
                     *sender_state_out = SenderState::SENDER_WAITING_FOR_ETH;

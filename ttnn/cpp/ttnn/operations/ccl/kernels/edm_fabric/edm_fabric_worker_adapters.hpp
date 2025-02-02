@@ -163,7 +163,8 @@ struct WorkerToFabricEdmSender {
 
     FORCE_INLINE void open() {
         const auto dest_noc_addr_coord_only =
-            get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_slot_wrptr_addr) & ~(uint64_t)NOC_COORDINATE_MASK;
+            // get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_slot_wrptr_addr) & ~(uint64_t)NOC_COORDINATE_MASK;
+            get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0);
 
         const uint64_t remote_buffer_index_addr = dest_noc_addr_coord_only | edm_buffer_index_addr;
         ASSERT(remote_buffer_index_addr > 0);
@@ -171,7 +172,7 @@ struct WorkerToFabricEdmSender {
         DPRINT << "Reading buffer_slot_wrptr_ptr frmo: " << (uint64_t)remote_buffer_index_addr << "\n";
 
         tt::fabric::EDMChannelWorkerLocationInfo* worker_location_info_ptr = reinterpret_cast<tt::fabric::EDMChannelWorkerLocationInfo*>(edm_worker_location_info_addr);
-        const uint64_t edm_rdptr_addr = dest_noc_addr_coord_only | reinterpret_cast<uint64_t>(&(worker_location_info_ptr->edm_rdptr));
+        const uint64_t edm_rdptr_addr = dest_noc_addr_coord_only | reinterpret_cast<size_t>(edm_worker_location_info_addr + offsetof(tt::fabric::EDMChannelWorkerLocationInfo, edm_rdptr));
         noc_async_read(edm_rdptr_addr, reinterpret_cast<size_t>(this->from_remote_buffer_slot_rdptr_ptr), sizeof(uint32_t));
         // TODO: Need to change byte enable to be word enable
         const uint64_t dest_edm_location_info_addr            = dest_noc_addr_coord_only | edm_worker_location_info_addr;
