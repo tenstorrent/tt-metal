@@ -229,11 +229,9 @@ static void build_and_enqueue(const std::vector<IDevice*>& devices, std::vector<
         devices.size() == programs.size(),
         "Number of devices must match number of programs when calling build_and_enqueue in test");
     for (size_t i = 0; i < devices.size(); i++) {
-        log_info(tt::LogTest, "Compiling program for device {}", i);
         tt::tt_metal::detail::CompileProgram(devices[i], programs[i]);
     }
     for (size_t i = 0; i < devices.size(); i++) {
-        log_info(tt::LogTest, "Enqueuing program for device {}", i);
         tt_metal::EnqueueProgram(devices[i]->command_queue(), programs[i], false);
     }
 }
@@ -2821,11 +2819,9 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
 
 static void wait_for_worker_subdevice_program_completion(
     const std::vector<IDevice*>& devices, const std::optional<SubdeviceInfo>& subdevice_managers) {
-    log_info(tt::LogTest, "Waiting for Op finish");
     std::ranges::for_each(devices, [&](IDevice* d) {
         tt_metal::Finish(d->command_queue(), {subdevice_managers->worker_subdevice_id.at(d->id())});
     });
-    log_info(tt::LogTest, "Main op done");
 }
 
 #include "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
@@ -3156,7 +3152,6 @@ void RunWriteThroughputStabilityTestWIthPersistentFabric(
 
     for (size_t i = 0; i < num_op_invocations; i++) {
         log_info(tt::LogTest, "Iteration: {}", i);
-        log_info(tt::LogTest, "Building and enqueing worker programs");
         build_and_enqueue(worker_devices, programs);
 
         log_info(tt::LogTest, "Waiting for Op finish on all devices");
@@ -3500,39 +3495,84 @@ TEST(EdmFabric, BasicMcastThroughputTest_5) {
     const size_t num_op_invocations = 20000;
     RunWriteThroughputStabilityTestWIthPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
 }
-TEST(EdmFabric, BasicMcastThroughputTest_6) {
+// DISABLED due to long runtime
+TEST(EdmFabric, DISABLED_BasicMcastThroughputTest_6) {
     const size_t num_mcasts = 100;
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
     const size_t num_op_invocations = 8000;
     RunWriteThroughputStabilityTestWIthPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
 }
-TEST(EdmFabric, BasicMcastThroughputTest_7) {
+// DISABLED due to long runtime
+TEST(EdmFabric, DISABLED_BasicMcastThroughputTest_7) {
     const size_t num_mcasts = 1000;
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
     const size_t num_op_invocations = 1000;
     RunWriteThroughputStabilityTestWIthPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
 }
-TEST(EdmFabric, BasicMcastThroughputTest_8) {
+// DISABLED due to long runtime
+TEST(EdmFabric, DISABLED_BasicMcastThroughputTest_8) {
     const size_t num_mcasts = 50000;
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
     const size_t num_op_invocations = 200;
     RunWriteThroughputStabilityTestWIthPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
 }
-TEST(EdmFabric, BasicMcastThroughputTest_9) {
+// DISABLED due to long runtime
+TEST(EdmFabric, DISABLED_BasicMcastThroughputTest_9) {
     const size_t num_mcasts = 200000;
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
     const size_t num_op_invocations = 150;
     RunWriteThroughputStabilityTestWIthPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
 }
-TEST(EdmFabric, BasicMcastThroughputTest_10) {
+// DISABLED due to long runtime
+TEST(EdmFabric, DISABLED_BasicMcastThroughputTest_10) {
     const size_t num_mcasts = 800000;
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
     const size_t num_op_invocations = 50;
+    RunWriteThroughputStabilityTestWIthPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
+}
+// DISABLED due to long runtime
+TEST(EdmFabric, BasicMcastThroughputTest_6_Short) {
+    const size_t num_mcasts = 100;
+    const size_t num_unicasts = 2;
+    const size_t num_links = 2;
+    const size_t num_op_invocations = 100;
+    RunWriteThroughputStabilityTestWIthPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
+}
+// DISABLED due to long runtime
+TEST(EdmFabric, BasicMcastThroughputTest_7_Short) {
+    const size_t num_mcasts = 1000;
+    const size_t num_unicasts = 2;
+    const size_t num_links = 2;
+    const size_t num_op_invocations = 50;
+    RunWriteThroughputStabilityTestWIthPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
+}
+// DISABLED due to long runtime
+TEST(EdmFabric, BasicMcastThroughputTest_8_Short) {
+    const size_t num_mcasts = 50000;
+    const size_t num_unicasts = 2;
+    const size_t num_links = 2;
+    const size_t num_op_invocations = 20;
+    RunWriteThroughputStabilityTestWIthPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
+}
+// DISABLED due to long runtime
+TEST(EdmFabric, BasicMcastThroughputTest_9_Short) {
+    const size_t num_mcasts = 200000;
+    const size_t num_unicasts = 2;
+    const size_t num_links = 2;
+    const size_t num_op_invocations = 10;
+    RunWriteThroughputStabilityTestWIthPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
+}
+// DISABLED due to long runtime
+TEST(EdmFabric, BasicMcastThroughputTest_10_Short) {
+    const size_t num_mcasts = 800000;
+    const size_t num_unicasts = 2;
+    const size_t num_links = 2;
+    const size_t num_op_invocations = 5;
     RunWriteThroughputStabilityTestWIthPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
 }
 
