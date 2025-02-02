@@ -31,9 +31,9 @@ autograd::TensorPtr all_gather(const autograd::TensorPtr& tensor, int dim) {
     return out;
 }
 
-autograd::TensorPtr all_reduce(const autograd::TensorPtr& tensor, int dim) {
-    auto out = autograd::create_tensor(
-        ttnn::experimental::all_reduce(tensor->get_value(), ttnn::operations::reduction::ReduceType::Sum, dim));
+autograd::TensorPtr all_reduce(const autograd::TensorPtr& tensor) {
+    auto out = autograd::create_tensor(ttnn::experimental::all_reduce(
+        tensor->get_value(), ttnn::operations::reduction::ReduceType::Sum, 1, std::nullopt, ttnn::ccl::Topology::Ring));
     autograd::GradFunction grad = [tensor, out]() { tensor->set_grad(out->get_grad()); };
     auto links = autograd::get_links(tensor);
     out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));

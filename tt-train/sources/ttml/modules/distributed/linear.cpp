@@ -34,7 +34,7 @@ autograd::TensorPtr RowParallelLinear::operator()(autograd::TensorPtr tensor) {
 
     // do not pass bias
     tensor = ops::linear_op(tensor, m_weight, /* bias */ nullptr);
-    tensor = ops::distributed::all_reduce(tensor, tensor->rank() - 1U);
+    tensor = ops::distributed::all_reduce(tensor);
     if (m_bias != nullptr) {
         tensor = ops::add(tensor, m_bias);
     }

@@ -9,7 +9,7 @@
 namespace ttml::ops::distributed {
 
 autograd::TensorPtr scatter(const autograd::TensorPtr& tensor, int dim);
-autograd::TensorPtr all_reduce(const autograd::TensorPtr& tensor, int dim);
+autograd::TensorPtr all_reduce(const autograd::TensorPtr& tensor);
 autograd::TensorPtr all_gather(const autograd::TensorPtr& tensor, int dim);
 
 }  // namespace ttml::ops::distributed

@@ -64,10 +64,14 @@ float evaluate(DataLoader &test_dataloader, Model &model, size_t num_targets) {
     model->eval();
     float num_correct = 0;
     float num_samples = 0;
+    auto *device = &ttml::autograd::ctx().get_device();
     for (const auto &[data, target] : test_dataloader) {
         auto output = (*model)(data);
-        auto output_vec = ttml::core::to_vector(output->get_value());
-        auto target_vec = ttml::core::to_vector(target->get_value());
+        ttml::core::MeshToXTensorVariant<float> composer = ttml::core::VectorMeshToXTensor<float>(device->shape());
+        auto output_xtensor = ttml::core::to_xtensor(output->get_value(), composer)[0];
+        auto target_xtensor = ttml::core::to_xtensor(target->get_value(), composer)[0];
+        auto output_vec = std::vector<float>(output_xtensor.begin(), output_xtensor.end());
+        auto target_vec = std::vector<float>(target_xtensor.begin(), target_xtensor.end());
         for (size_t i = 0; i < output_vec.size(); i += num_targets) {
             auto predicted_class = std::distance(
                 output_vec.begin() + i,
@@ -194,12 +198,25 @@ int main(int argc, char **argv) {
 
     LossAverageMeter loss_meter;
     int training_step = 0;
+
+    auto get_loss_value = [device](const TensorPtr &loss) {
+        ttml::core::MeshToXTensorVariant<float> composer = ttml::core::VectorMeshToXTensor<float>(device->shape());
+        auto loss_xtensors = ttml::core::to_xtensor(loss->get_value(), composer);
+        // sum of loss xtensors
+        float loss_float =
+            std::accumulate(loss_xtensors.begin(), loss_xtensors.end(), 0.0F, [](float acc, auto &xtensor) {
+                return acc + xtensor(0);
+            });
+
+        return loss_float / static_cast<float>(loss_xtensors.size());
+    };
+
     for (size_t epoch = 0; epoch < config.num_epochs; ++epoch) {
         for (const auto &[data, target] : train_dataloader) {
             optimizer.zero_grad();
             auto output = (*model)(data);
             auto loss = ttml::ops::cross_entropy_loss(output, target);
-            auto loss_float = ttml::core::to_vector(loss->get_value())[0];
+            auto loss_float = get_loss_value(loss);
             loss_meter.update(loss_float, config.batch_size);
             if (training_step % config.logging_interval == 0) {
                 fmt::print("Step: {:5d} | Average Loss: {:.4f}\n", training_step, loss_meter.average());
