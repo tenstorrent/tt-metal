@@ -178,7 +178,7 @@ class SD35mTestInfra:
         grid_size = core_grid
         grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
         shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
-        shard_spec = ttnn.ShardSpec(shard_grid, (shard_h, 16), ttnn.ShardOrientation.ROW_MAJOR, False)
+        shard_spec = ttnn.ShardSpec(shard_grid, (shard_h, 16), ttnn.ShardOrientation.ROW_MAJOR)  # , False)
         input_mem_config = ttnn.MemoryConfig(
             ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
         )
@@ -202,7 +202,7 @@ class SD35mTestInfra:
                 16,
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
+            # False,
         )
         sharded_mem_config_DRAM = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, dram_shard_spec
@@ -234,7 +234,7 @@ class SD35mTestInfra:
         grid_size = core_grid
         grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
         shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
-        shard_spec = ttnn.ShardSpec(shard_grid, (shard_h, shard_w), ttnn.ShardOrientation.ROW_MAJOR, False)
+        shard_spec = ttnn.ShardSpec(shard_grid, (shard_h, shard_w), ttnn.ShardOrientation.ROW_MAJOR)  # , False)
         input_mem_config = ttnn.MemoryConfig(
             ttnn.types.TensorMemoryLayout.WIDTH_SHARDED, ttnn.types.BufferType.L1, shard_spec
         )
@@ -257,7 +257,7 @@ class SD35mTestInfra:
                 divup(tt_inputs_host.shape[-1], (dram_grid_size.x * dram_grid_size.y)),
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
+            # False,
         )
         sharded_mem_config_DRAM = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, dram_shard_spec
@@ -288,7 +288,7 @@ class SD35mTestInfra:
         grid_size = core_grid
         grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
         shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
-        shard_spec = ttnn.ShardSpec(shard_grid, (shard_h, shard_w), ttnn.ShardOrientation.ROW_MAJOR, False)
+        shard_spec = ttnn.ShardSpec(shard_grid, (shard_h, shard_w), ttnn.ShardOrientation.ROW_MAJOR)  # , False)
         input_mem_config = ttnn.MemoryConfig(
             ttnn.types.TensorMemoryLayout.WIDTH_SHARDED, ttnn.types.BufferType.L1, shard_spec
         )
@@ -320,7 +320,7 @@ class SD35mTestInfra:
         grid_size = core_grid
         grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
         shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
-        shard_spec = ttnn.ShardSpec(shard_grid, (shard_h, shard_w), ttnn.ShardOrientation.ROW_MAJOR, False)
+        shard_spec = ttnn.ShardSpec(shard_grid, (shard_h, shard_w), ttnn.ShardOrientation.ROW_MAJOR)  # , False)
         input_mem_config = ttnn.MemoryConfig(
             ttnn.types.TensorMemoryLayout.WIDTH_SHARDED, ttnn.types.BufferType.L1, shard_spec
         )

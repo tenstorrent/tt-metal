@@ -118,6 +118,7 @@ class ttnn_JointTransformerBlock:
         temb: ttnn.Tensor,
         index_block=0,
         parameters=None,
+        device=None,
     ):
         if self.use_dual_attention:
             norm_hidden_states, gate_msa, shift_mlp, scale_mlp, gate_mlp, norm_hidden_states2, gate_msa2 = self.norm1(
@@ -141,7 +142,7 @@ class ttnn_JointTransformerBlock:
         attn_output, context_attn_output_sh = self.attn(
             hidden_states=norm_hidden_states,
             encoder_hidden_states=norm_encoder_hidden_states,
-            # device=norm_hidden_states.device(),
+            device=device,
         )
 
         # Process attention outputs for the `hidden_states`.
@@ -161,7 +162,7 @@ class ttnn_JointTransformerBlock:
         context_attn_output_sh = ttnn.reallocate(context_attn_output_sh)
 
         if self.use_dual_attention:
-            attn_output2 = self.attn2(hidden_states=norm_hidden_states2)  # , device=norm_hidden_states2.device())
+            attn_output2 = self.attn2(hidden_states=norm_hidden_states2, device=device)
 
             # attn_output2 = ttnn.unsqueeze(gate_msa2, 1) * attn_output2
             attn_output2 = ttnn.to_memory_config(attn_output2, ttnn.L1_MEMORY_CONFIG)

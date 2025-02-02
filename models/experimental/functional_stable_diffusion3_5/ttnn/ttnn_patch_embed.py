@@ -89,6 +89,7 @@ class ttnn_PatchEmbed:
         latent = self.proj(device, latent)
         latent = ttnn.to_layout(latent, layout=ttnn.ROW_MAJOR_LAYOUT)
         latent = ttnn.reshape(latent, (1, self.patch_size, latent.shape[2] // self.patch_size, latent.shape[3]))
+        latent = ttnn.to_memory_config(latent, ttnn.L1_MEMORY_CONFIG)
         latent = ttnn.permute(latent, (1, 0, 2, 3))
         latent = ttnn.to_layout(latent, layout=ttnn.TILE_LAYOUT)
 

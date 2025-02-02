@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "cpp/pybind11/decorators.hpp"
 
 #include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads_sd35/nlp_create_qkv_heads_sd35.hpp"
 #include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads_sd35/nlp_create_qkv_heads_sd35_pybind.hpp"

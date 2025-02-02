@@ -294,21 +294,33 @@ class ttnn_JointAttnProcessor2_0:
         #     q_size = 4448
         # elif encoder_hidden_states is not None and encoder_hidden_states.shape[1] == 154:
         #     q_size = 1184
-        # program_config = ttnn.SDPAProgramConfig(
-        #     compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
-        #     q_chunk_size=q_size,
-        #     k_chunk_size=q_size,
-        #     exp_approx_mode=False,
-        # )
+
+        q_size = 256
+        program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+            q_chunk_size=q_size,
+            k_chunk_size=q_size,
+            exp_approx_mode=False,
+        )
+        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=False,
+        )
         # compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-        #     math_fidelity=ttnn.MathFidelity.HiFi4,
-        #     math_approx_mode=False,
+        #     math_fidelity=ttnn.MathFidelity.HiFi2,
+        #     math_approx_mode=True,
         #     fp32_dest_acc_en=False,
         #     packer_l1_acc=False,
         # )
-
         ## SDPA
-        hidden_states_combined = ttnn.transformer.scaled_dot_product_attention(query, key, value, is_causal=False)
+        # hidden_states_combined = ttnn.transformer.scaled_dot_product_attention(query, key, value, is_causal=False)
+        hidden_states_combined = ttnn.transformer.scaled_dot_product_attention(
+            query, key, value, is_causal=False, program_config=program_config
+        )
+        # hidden_states_combined = ttnn.transformer.scaled_dot_product_attention(query, key, value, is_causal=False, program_config=program_config, compute_kernel_config=compute_kernel_config)
+
         hidden_states_combined = ttnn.to_memory_config(hidden_states_combined, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         ## Concat Heads

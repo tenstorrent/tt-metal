@@ -29,14 +29,21 @@ def create_custom_preprocessor(device):
     return custom_preprocessor
 
 
+@pytest.mark.parametrize(
+    "h,w",
+    (
+        # (128, 128),
+        (64, 64),
+    ),
+)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @skip_for_grayskull()
-def test_patch_embed(device, reset_seeds):
+def test_patch_embed(device, reset_seeds, h, w):
     torch_model = PatchEmbed(
-        height=128, width=128, patch_size=2, in_channels=16, embed_dim=1536, pos_embed_max_size=384
+        height=h, width=w, patch_size=2, in_channels=16, embed_dim=1536, pos_embed_max_size=384
     ).to(dtype=torch.bfloat16)
     torch_model.eval()
-    torch_input = torch.randn(2, 16, 128, 128, dtype=torch.bfloat16)
+    torch_input = torch.randn(2, 16, h, w, dtype=torch.bfloat16)
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: torch_model, custom_preprocessor=create_custom_preprocessor(None), device=None
@@ -46,8 +53,8 @@ def test_patch_embed(device, reset_seeds):
     torch_output = torch_model(torch_input)
 
     ttnn_model = ttnn_PatchEmbed(
-        height=128,
-        width=128,
+        height=h,
+        width=w,
         patch_size=2,
         in_channels=16,
         embed_dim=1536,
@@ -55,8 +62,11 @@ def test_patch_embed(device, reset_seeds):
         parameters=parameters,
     )
 
-    ttnn_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    torch_input = torch_input.permute(0, 2, 3, 1)  # NCHW to NHWC
+    ttnn_input = ttnn.from_torch(
+        torch_input, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
     ttnn_output = ttnn_model(device, ttnn_input)
     ttnn_output = ttnn.to_torch(ttnn_output)
 
-    assert_with_pcc(torch_output, ttnn_output, pcc=0.99)
+    assert_with_pcc(torch_output.unsqueeze(1), ttnn_output, pcc=0.9995)

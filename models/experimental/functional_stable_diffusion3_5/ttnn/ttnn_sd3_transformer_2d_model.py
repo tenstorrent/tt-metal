@@ -112,11 +112,10 @@ class ttnn_SD3Transformer2DModel:
 
         # height, width = hidden_states.shape[-2], hidden_states.shape[-1]
         height, width = 64, 64
+        device = hidden_states.device()
 
-        hidden_states = self.pos_embed(
-            hidden_states.device(), hidden_states
-        )  # takes care of adding positional embeddings too.
-        temb = self.time_text_embed(timestep, pooled_projections, device=hidden_states.device())
+        hidden_states = self.pos_embed(device, hidden_states)  # takes care of adding positional embeddings too.
+        temb = self.time_text_embed(timestep, pooled_projections, device=device)
 
         encoder_hidden_states = ttnn.to_memory_config(encoder_hidden_states, ttnn.L1_MEMORY_CONFIG)
         encoder_hidden_states = self.context_embedder(
@@ -137,6 +136,7 @@ class ttnn_SD3Transformer2DModel:
                 encoder_hidden_states=encoder_hidden_states,
                 temb=temb,
                 parameters=parameters["transformer_blocks"][index_block],
+                device=device,
             )
             # torch.save(ttnn.to_torch(hidden_states), 'hidden_states_TR_'+str(index_block)+'__m2.pt')
             # if index_block < 23:

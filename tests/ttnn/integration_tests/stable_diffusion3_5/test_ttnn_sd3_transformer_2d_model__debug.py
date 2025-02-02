@@ -2,7 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import numpy as np
 import torch
 import pytest
 import ttnn
@@ -36,10 +35,10 @@ def create_custom_preprocessor_transformer_block(device):
                 parameters["norm1"] = {}
                 parameters["norm1"]["linear"] = {}
                 parameters["norm1"]["linear"]["weight"] = preprocess_linear_weight(
-                    model.norm1.linear.weight, dtype=ttnn.bfloat8_b
+                    model.norm1.linear.weight, dtype=ttnn.bfloat16
                 )
                 parameters["norm1"]["linear"]["bias"] = preprocess_linear_bias(
-                    model.norm1.linear.bias, dtype=ttnn.bfloat8_b
+                    model.norm1.linear.bias, dtype=ttnn.bfloat16
                 )
 
                 # Its none as elementwise_affine=False
@@ -48,10 +47,10 @@ def create_custom_preprocessor_transformer_block(device):
                 parameters["norm1"] = {}
                 parameters["norm1"]["linear"] = {}
                 parameters["norm1"]["linear"]["weight"] = preprocess_linear_weight(
-                    model.norm1.linear.weight, dtype=ttnn.bfloat8_b
+                    model.norm1.linear.weight, dtype=ttnn.bfloat16
                 )
                 parameters["norm1"]["linear"]["bias"] = preprocess_linear_bias(
-                    model.norm1.linear.bias, dtype=ttnn.bfloat8_b
+                    model.norm1.linear.bias, dtype=ttnn.bfloat16
                 )
 
                 # Its none as elementwise_affine=False
@@ -61,10 +60,10 @@ def create_custom_preprocessor_transformer_block(device):
                 parameters["norm1_context"] = {}
                 parameters["norm1_context"]["linear"] = {}
                 parameters["norm1_context"]["linear"]["weight"] = preprocess_linear_weight(
-                    model.norm1_context.linear.weight, dtype=ttnn.bfloat8_b
+                    model.norm1_context.linear.weight, dtype=ttnn.bfloat16
                 )
                 parameters["norm1_context"]["linear"]["bias"] = preprocess_linear_bias(
-                    model.norm1_context.linear.bias, dtype=ttnn.bfloat8_b
+                    model.norm1_context.linear.bias, dtype=ttnn.bfloat16
                 )
 
                 # Its none as elementwise_affine=False
@@ -73,10 +72,10 @@ def create_custom_preprocessor_transformer_block(device):
                 parameters["norm1_context"] = {}
                 parameters["norm1_context"]["linear"] = {}
                 parameters["norm1_context"]["linear"]["weight"] = preprocess_linear_weight(
-                    model.norm1_context.linear.weight, dtype=ttnn.bfloat8_b
+                    model.norm1_context.linear.weight, dtype=ttnn.bfloat16
                 )
                 parameters["norm1_context"]["linear"]["bias"] = preprocess_linear_bias(
-                    model.norm1_context.linear.bias, dtype=ttnn.bfloat8_b
+                    model.norm1_context.linear.bias, dtype=ttnn.bfloat16
                 )
 
                 # Its none as elementwise_affine=False
@@ -87,77 +86,71 @@ def create_custom_preprocessor_transformer_block(device):
             parameters["attn"]["norm_q"]["weight"] = ttnn.from_torch(
                 model.attn.norm_q.weight.unsqueeze(0).unsqueeze(0).unsqueeze(0),
                 device=device,
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
             )
             parameters["attn"]["norm_k"] = {}
             parameters["attn"]["norm_k"]["weight"] = ttnn.from_torch(
                 model.attn.norm_k.weight.unsqueeze(0).unsqueeze(0).unsqueeze(0),
                 device=device,
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
             )
             parameters["attn"]["to_q"] = {}
-            parameters["attn"]["to_q"]["weight"] = preprocess_linear_weight(
-                model.attn.to_q.weight, dtype=ttnn.bfloat8_b
-            )
-            parameters["attn"]["to_q"]["bias"] = preprocess_linear_bias(model.attn.to_q.bias, dtype=ttnn.bfloat8_b)
+            parameters["attn"]["to_q"]["weight"] = preprocess_linear_weight(model.attn.to_q.weight, dtype=ttnn.bfloat16)
+            parameters["attn"]["to_q"]["bias"] = preprocess_linear_bias(model.attn.to_q.bias, dtype=ttnn.bfloat16)
             parameters["attn"]["to_k"] = {}
-            parameters["attn"]["to_k"]["weight"] = preprocess_linear_weight(
-                model.attn.to_k.weight, dtype=ttnn.bfloat8_b
-            )
-            parameters["attn"]["to_k"]["bias"] = preprocess_linear_bias(model.attn.to_k.bias, dtype=ttnn.bfloat8_b)
+            parameters["attn"]["to_k"]["weight"] = preprocess_linear_weight(model.attn.to_k.weight, dtype=ttnn.bfloat16)
+            parameters["attn"]["to_k"]["bias"] = preprocess_linear_bias(model.attn.to_k.bias, dtype=ttnn.bfloat16)
             parameters["attn"]["to_v"] = {}
-            parameters["attn"]["to_v"]["weight"] = preprocess_linear_weight(
-                model.attn.to_v.weight, dtype=ttnn.bfloat8_b
-            )
-            parameters["attn"]["to_v"]["bias"] = preprocess_linear_bias(model.attn.to_v.bias, dtype=ttnn.bfloat8_b)
+            parameters["attn"]["to_v"]["weight"] = preprocess_linear_weight(model.attn.to_v.weight, dtype=ttnn.bfloat16)
+            parameters["attn"]["to_v"]["bias"] = preprocess_linear_bias(model.attn.to_v.bias, dtype=ttnn.bfloat16)
             if hasattr(model.attn, "add_k_proj"):
                 parameters["attn"]["add_k_proj"] = {}
                 parameters["attn"]["add_k_proj"]["weight"] = preprocess_linear_weight(
-                    model.attn.add_k_proj.weight, dtype=ttnn.bfloat8_b
+                    model.attn.add_k_proj.weight, dtype=ttnn.bfloat16
                 )
                 parameters["attn"]["add_k_proj"]["bias"] = preprocess_linear_bias(
-                    model.attn.add_k_proj.bias, dtype=ttnn.bfloat8_b
+                    model.attn.add_k_proj.bias, dtype=ttnn.bfloat16
                 )
             if hasattr(model.attn, "add_v_proj"):
                 parameters["attn"]["add_v_proj"] = {}
                 parameters["attn"]["add_v_proj"]["weight"] = preprocess_linear_weight(
-                    model.attn.add_v_proj.weight, dtype=ttnn.bfloat8_b
+                    model.attn.add_v_proj.weight, dtype=ttnn.bfloat16
                 )
                 parameters["attn"]["add_v_proj"]["bias"] = preprocess_linear_bias(
-                    model.attn.add_v_proj.bias, dtype=ttnn.bfloat8_b
+                    model.attn.add_v_proj.bias, dtype=ttnn.bfloat16
                 )
             if hasattr(model.attn, "add_q_proj"):
                 parameters["attn"]["add_q_proj"] = {}
                 parameters["attn"]["add_q_proj"]["weight"] = preprocess_linear_weight(
-                    model.attn.add_q_proj.weight, dtype=ttnn.bfloat8_b
+                    model.attn.add_q_proj.weight, dtype=ttnn.bfloat16
                 )
                 parameters["attn"]["add_q_proj"]["bias"] = preprocess_linear_bias(
-                    model.attn.add_q_proj.bias, dtype=ttnn.bfloat8_b
+                    model.attn.add_q_proj.bias, dtype=ttnn.bfloat16
                 )
             parameters["attn"]["to_out"] = {}
             parameters["attn"]["to_out"][0] = {}
             parameters["attn"]["to_out"][0]["weight"] = preprocess_linear_weight(
-                model.attn.to_out[0].weight, dtype=ttnn.bfloat8_b
+                model.attn.to_out[0].weight, dtype=ttnn.bfloat16
             )
             parameters["attn"]["to_out"][0]["bias"] = preprocess_linear_bias(
-                model.attn.to_out[0].bias, dtype=ttnn.bfloat8_b
+                model.attn.to_out[0].bias, dtype=ttnn.bfloat16
             )
             if hasattr(model.attn, "to_add_out"):
                 parameters["attn"]["to_add_out"] = {}
                 parameters["attn"]["to_add_out"]["weight"] = preprocess_linear_weight(
-                    model.attn.to_add_out.weight, dtype=ttnn.bfloat8_b
+                    model.attn.to_add_out.weight, dtype=ttnn.bfloat16
                 )
                 parameters["attn"]["to_add_out"]["bias"] = preprocess_linear_bias(
-                    model.attn.to_add_out.bias, dtype=ttnn.bfloat8_b
+                    model.attn.to_add_out.bias, dtype=ttnn.bfloat16
                 )
             if model.attn.norm_added_q != None:
                 parameters["attn"]["norm_added_q"] = {}
                 parameters["attn"]["norm_added_q"]["weight"] = ttnn.from_torch(
                     model.attn.norm_added_q.weight.unsqueeze(0).unsqueeze(0).unsqueeze(0),
                     device=device,
-                    dtype=ttnn.bfloat8_b,
+                    dtype=ttnn.bfloat16,
                     layout=ttnn.TILE_LAYOUT,
                 )
             if model.attn.norm_added_k != None:
@@ -165,7 +158,7 @@ def create_custom_preprocessor_transformer_block(device):
                 parameters["attn"]["norm_added_k"]["weight"] = ttnn.from_torch(
                     model.attn.norm_added_k.weight.unsqueeze(0).unsqueeze(0).unsqueeze(0),
                     device=device,
-                    dtype=ttnn.bfloat8_b,
+                    dtype=ttnn.bfloat16,
                     layout=ttnn.TILE_LAYOUT,
                 )
 
@@ -175,83 +168,77 @@ def create_custom_preprocessor_transformer_block(device):
                 parameters["attn2"]["norm_q"]["weight"] = ttnn.from_torch(
                     model.attn2.norm_q.weight.unsqueeze(0).unsqueeze(0).unsqueeze(0),
                     device=device,
-                    dtype=ttnn.bfloat8_b,
+                    dtype=ttnn.bfloat16,
                     layout=ttnn.TILE_LAYOUT,
                 )
                 parameters["attn2"]["norm_k"] = {}
                 parameters["attn2"]["norm_k"]["weight"] = ttnn.from_torch(
                     model.attn2.norm_k.weight.unsqueeze(0).unsqueeze(0).unsqueeze(0),
                     device=device,
-                    dtype=ttnn.bfloat8_b,
+                    dtype=ttnn.bfloat16,
                     layout=ttnn.TILE_LAYOUT,
                 )
                 parameters["attn2"]["to_q"] = {}
                 parameters["attn2"]["to_q"]["weight"] = preprocess_linear_weight(
-                    model.attn2.to_q.weight, dtype=ttnn.bfloat8_b
+                    model.attn2.to_q.weight, dtype=ttnn.bfloat16
                 )
-                parameters["attn2"]["to_q"]["bias"] = preprocess_linear_bias(
-                    model.attn2.to_q.bias, dtype=ttnn.bfloat8_b
-                )
+                parameters["attn2"]["to_q"]["bias"] = preprocess_linear_bias(model.attn2.to_q.bias, dtype=ttnn.bfloat16)
                 parameters["attn2"]["to_k"] = {}
                 parameters["attn2"]["to_k"]["weight"] = preprocess_linear_weight(
-                    model.attn2.to_k.weight, dtype=ttnn.bfloat8_b
+                    model.attn2.to_k.weight, dtype=ttnn.bfloat16
                 )
-                parameters["attn2"]["to_k"]["bias"] = preprocess_linear_bias(
-                    model.attn2.to_k.bias, dtype=ttnn.bfloat8_b
-                )
+                parameters["attn2"]["to_k"]["bias"] = preprocess_linear_bias(model.attn2.to_k.bias, dtype=ttnn.bfloat16)
                 parameters["attn2"]["to_v"] = {}
                 parameters["attn2"]["to_v"]["weight"] = preprocess_linear_weight(
-                    model.attn2.to_v.weight, dtype=ttnn.bfloat8_b
+                    model.attn2.to_v.weight, dtype=ttnn.bfloat16
                 )
-                parameters["attn2"]["to_v"]["bias"] = preprocess_linear_bias(
-                    model.attn2.to_v.bias, dtype=ttnn.bfloat8_b
-                )
+                parameters["attn2"]["to_v"]["bias"] = preprocess_linear_bias(model.attn2.to_v.bias, dtype=ttnn.bfloat16)
                 if hasattr(model.attn2, "add_k_proj"):
                     parameters["attn2"]["add_k_proj"] = {}
                     parameters["attn2"]["add_k_proj"]["weight"] = preprocess_linear_weight(
-                        model.attn2.add_k_proj.weight, dtype=ttnn.bfloat8_b
+                        model.attn2.add_k_proj.weight, dtype=ttnn.bfloat16
                     )
                     parameters["attn2"]["add_k_proj"]["bias"] = preprocess_linear_bias(
-                        model.attn2.add_k_proj.bias, dtype=ttnn.bfloat8_b
+                        model.attn2.add_k_proj.bias, dtype=ttnn.bfloat16
                     )
                 if hasattr(model.attn2, "add_v_proj"):
                     parameters["attn2"]["add_v_proj"] = {}
                     parameters["attn2"]["add_v_proj"]["weight"] = preprocess_linear_weight(
-                        model.attn2.add_v_proj.weight, dtype=ttnn.bfloat8_b
+                        model.attn2.add_v_proj.weight, dtype=ttnn.bfloat16
                     )
                     parameters["attn2"]["add_v_proj"]["bias"] = preprocess_linear_bias(
-                        model.attn2.add_v_proj.bias, dtype=ttnn.bfloat8_b
+                        model.attn2.add_v_proj.bias, dtype=ttnn.bfloat16
                     )
                 if hasattr(model.attn2, "add_q_proj"):
                     parameters["attn2"]["add_q_proj"] = {}
                     parameters["attn2"]["add_q_proj"]["weight"] = preprocess_linear_weight(
-                        model.attn2.add_q_proj.weight, dtype=ttnn.bfloat8_b
+                        model.attn2.add_q_proj.weight, dtype=ttnn.bfloat16
                     )
                     parameters["attn2"]["add_q_proj"]["bias"] = preprocess_linear_bias(
-                        model.attn2.add_q_proj.bias, dtype=ttnn.bfloat8_b
+                        model.attn2.add_q_proj.bias, dtype=ttnn.bfloat16
                     )
                 parameters["attn2"]["to_out"] = {}
                 parameters["attn2"]["to_out"][0] = {}
                 parameters["attn2"]["to_out"][0]["weight"] = preprocess_linear_weight(
-                    model.attn2.to_out[0].weight, dtype=ttnn.bfloat8_b
+                    model.attn2.to_out[0].weight, dtype=ttnn.bfloat16
                 )
                 parameters["attn2"]["to_out"][0]["bias"] = preprocess_linear_bias(
-                    model.attn2.to_out[0].bias, dtype=ttnn.bfloat8_b
+                    model.attn2.to_out[0].bias, dtype=ttnn.bfloat16
                 )
                 if hasattr(model.attn2, "to_add_out"):
                     parameters["attn2"]["to_add_out"] = {}
                     parameters["attn2"]["to_add_out"]["weight"] = preprocess_linear_weight(
-                        model.attn2.to_add_out.weight, dtype=ttnn.bfloat8_b
+                        model.attn2.to_add_out.weight, dtype=ttnn.bfloat16
                     )
                     parameters["attn2"]["to_add_out"]["bias"] = preprocess_linear_bias(
-                        model.attn2.to_add_out.bias, dtype=ttnn.bfloat8_b
+                        model.attn2.to_add_out.bias, dtype=ttnn.bfloat16
                     )
                 if model.attn2.norm_added_q != None:
                     parameters["attn2"]["norm_added_q"] = {}
                     parameters["attn2"]["norm_added_q"]["weight"] = ttnn.from_torch(
                         model.attn2.norm_added_q.weight.unsqueeze(0).unsqueeze(0).unsqueeze(0),
                         device=device,
-                        dtype=ttnn.bfloat8_b,
+                        dtype=ttnn.bfloat16,
                         layout=ttnn.TILE_LAYOUT,
                     )
                 if model.attn2.norm_added_k != None:
@@ -259,7 +246,7 @@ def create_custom_preprocessor_transformer_block(device):
                     parameters["attn2"]["norm_added_k"]["weight"] = ttnn.from_torch(
                         model.attn2.norm_added_k.weight.unsqueeze(0).unsqueeze(0).unsqueeze(0),
                         device=device,
-                        dtype=ttnn.bfloat8_b,
+                        dtype=ttnn.bfloat16,
                         layout=ttnn.TILE_LAYOUT,
                     )
 
@@ -272,17 +259,15 @@ def create_custom_preprocessor_transformer_block(device):
             parameters["ff"]["net"][0] = {}
             parameters["ff"]["net"][0]["proj"] = {}
             parameters["ff"]["net"][0]["proj"]["weight"] = preprocess_linear_weight(
-                model.ff.net[0].proj.weight, dtype=ttnn.bfloat8_b
+                model.ff.net[0].proj.weight, dtype=ttnn.bfloat16
             )
             parameters["ff"]["net"][0]["proj"]["bias"] = preprocess_linear_bias(
-                model.ff.net[0].proj.bias, dtype=ttnn.bfloat8_b
+                model.ff.net[0].proj.bias, dtype=ttnn.bfloat16
             )
             parameters["ff"]["net"][1] = {}
             parameters["ff"]["net"][2] = {}
-            parameters["ff"]["net"][2]["weight"] = preprocess_linear_weight(
-                model.ff.net[2].weight, dtype=ttnn.bfloat8_b
-            )
-            parameters["ff"]["net"][2]["bias"] = preprocess_linear_bias(model.ff.net[2].bias, dtype=ttnn.bfloat8_b)
+            parameters["ff"]["net"][2]["weight"] = preprocess_linear_weight(model.ff.net[2].weight, dtype=ttnn.bfloat16)
+            parameters["ff"]["net"][2]["bias"] = preprocess_linear_bias(model.ff.net[2].bias, dtype=ttnn.bfloat16)
 
             if model.norm2_context != None:
                 parameters["norm2_context"] = {}  # Its none as elementwise_affine=False
@@ -294,18 +279,18 @@ def create_custom_preprocessor_transformer_block(device):
                 parameters["ff_context"]["net"][0] = {}
                 parameters["ff_context"]["net"][0]["proj"] = {}
                 parameters["ff_context"]["net"][0]["proj"]["weight"] = preprocess_linear_weight(
-                    model.ff_context.net[0].proj.weight, dtype=ttnn.bfloat8_b
+                    model.ff_context.net[0].proj.weight, dtype=ttnn.bfloat16
                 )
                 parameters["ff_context"]["net"][0]["proj"]["bias"] = preprocess_linear_bias(
-                    model.ff_context.net[0].proj.bias, dtype=ttnn.bfloat8_b
+                    model.ff_context.net[0].proj.bias, dtype=ttnn.bfloat16
                 )
                 parameters["ff_context"]["net"][1] = {}
                 parameters["ff_context"]["net"][2] = {}
                 parameters["ff_context"]["net"][2]["weight"] = preprocess_linear_weight(
-                    model.ff_context.net[2].weight, dtype=ttnn.bfloat8_b
+                    model.ff_context.net[2].weight, dtype=ttnn.bfloat16
                 )
                 parameters["ff_context"]["net"][2]["bias"] = preprocess_linear_bias(
-                    model.ff_context.net[2].bias, dtype=ttnn.bfloat8_b
+                    model.ff_context.net[2].bias, dtype=ttnn.bfloat16
                 )
 
         return parameters
@@ -380,15 +365,15 @@ def create_custom_preprocessor(device):
             parameters["norm_out"] = {}
             parameters["norm_out"]["linear"] = {}
             parameters["norm_out"]["linear"]["weight"] = preprocess_linear_weight(
-                model.norm_out.linear.weight, dtype=ttnn.bfloat8_b
+                model.norm_out.linear.weight, dtype=ttnn.bfloat16
             )
             parameters["norm_out"]["linear"]["bias"] = preprocess_linear_bias(
-                model.norm_out.linear.bias, dtype=ttnn.bfloat8_b
+                model.norm_out.linear.bias, dtype=ttnn.bfloat16
             )
 
             parameters["proj_out"] = {}
-            parameters["proj_out"]["weight"] = preprocess_linear_weight(model.proj_out.weight, dtype=ttnn.bfloat8_b)
-            parameters["proj_out"]["bias"] = preprocess_linear_bias(model.proj_out.bias, dtype=ttnn.bfloat8_b)
+            parameters["proj_out"]["weight"] = preprocess_linear_weight(model.proj_out.weight, dtype=ttnn.bfloat16)
+            parameters["proj_out"]["bias"] = preprocess_linear_bias(model.proj_out.bias, dtype=ttnn.bfloat16)
 
         return parameters
 
@@ -447,115 +432,43 @@ def test_ttnn_sd3_transformer_2d_model(device, reset_seeds):
         parameters=parameters,
     )
 
-    # hidden_states = torch.load(
-    #     "models/experimental/functional_stable_diffusion3_5/demo/inputs_512_latest/hidden_states_512.pt",
-    #     map_location=torch.device("cpu"),
-    # )
-    # encoder_hidden_states = torch.load(
-    #     "models/experimental/functional_stable_diffusion3_5/demo/inputs_512_latest/encoder_hidden_states_512_paddedto160.pt",
-    #     map_location=torch.device("cpu"),
-    # )  # the input is padded from 2,154,4096 to 2,160,4096 while passing to the torch model.
-    # pooled_projections = torch.load(
-    #     "models/experimental/functional_stable_diffusion3_5/demo/inputs_512_latest/pooled_projections_512.pt",
-    #     map_location=torch.device("cpu"),
-    # )
-    # timestep = torch.load(
-    #     "models/experimental/functional_stable_diffusion3_5/demo/inputs_512_latest/timestep_512.pt",
-    #     map_location=torch.device("cpu"),
-    # )
-    import time
+    hidden_states = torch.load(
+        "models/experimental/functional_stable_diffusion3_5/reference/hidden_states.pt",
+        map_location=torch.device("cpu"),
+    )
+    encoder_hidden_states = torch.load(
+        "models/experimental/functional_stable_diffusion3_5/reference/encoder_hidden_states.pt",
+        map_location=torch.device("cpu"),
+    )
+    pooled_projections = torch.load(
+        "models/experimental/functional_stable_diffusion3_5/reference/pooled_projections.pt",
+        map_location=torch.device("cpu"),
+    )
+    timestep = torch.load(
+        "models/experimental/functional_stable_diffusion3_5/reference/timestep.pt", map_location=torch.device("cpu")
+    )
 
-    for i in range(38):
-        # i = 0
-        # if (1):
-        numpy_array = np.load(
-            "../../sd35_512_unopt/tt-metal/models/experimental/functional_stable_diffusion3_5/demo/demo_unoptimized_512x512__hidden_states_"
-            + str(i)
-            + ".npy"
-        )
-        hidden_states = torch.from_numpy(numpy_array)  # .to(dtype=torch.bfloat16)
-        numpy_array = np.load(
-            "../../sd35_512_unopt/tt-metal/models/experimental/functional_stable_diffusion3_5/demo/demo_unoptimized_512x512__encoder_hidden_"
-            + str(i)
-            + ".npy"
-        )
-        encoder_hidden_states = torch.from_numpy(numpy_array)  # .to(dtype=torch.bfloat16)
-        numpy_array = np.load(
-            "../../sd35_512_unopt/tt-metal/models/experimental/functional_stable_diffusion3_5/demo/demo_unoptimized_512x512__pooled_proj_"
-            + str(i)
-            + ".npy"
-        )
-        pooled_projections = torch.from_numpy(numpy_array)  # .to(dtype=torch.bfloat16)
-        numpy_array = np.load(
-            "../../sd35_512_unopt/tt-metal/models/experimental/functional_stable_diffusion3_5/demo/demo_unoptimized_512x512___timesteps_proj_"
-            + str(i)
-            + ".npy"
-        )
-        timesteps_proj = torch.from_numpy(numpy_array)  # .to(dtype=torch.bfloat16)
+    ttnn_hidden_states = ttnn.from_torch(hidden_states, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
+    ttnn_encoder_hidden_states = ttnn.from_torch(
+        encoder_hidden_states, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device
+    )
+    ttnn_pooled_projections = ttnn.from_torch(
+        pooled_projections, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device
+    )
+    ttnn_timestep = ttnn.from_torch(timestep, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
 
-        hidden_states = hidden_states.permute(0, 2, 3, 1)  # NCHW to NHWC
+    ttnn_output = ttnn_model(
+        ttnn_hidden_states,
+        ttnn_encoder_hidden_states,
+        ttnn_pooled_projections,
+        ttnn_timestep,
+        None,
+        None,
+        None,
+        parameters=parameters,
+    )
 
-        ttnn_hidden_states = ttnn.from_torch(
-            hidden_states,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            dtype=ttnn.bfloat16,
-            device=device,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
-        ttnn_encoder_hidden_states = ttnn.from_torch(
-            encoder_hidden_states.unsqueeze(1),
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
-            device=device,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
-        ttnn_pooled_projections = ttnn.from_torch(
-            pooled_projections.unsqueeze(0).unsqueeze(0),
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
-            device=device,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
-        ttnn_timestep = ttnn.from_torch(
-            timesteps_proj.unsqueeze(0).unsqueeze(0),
-            layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat16,
-            device=device,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
-
-        # ttnn_timestep = ttnn.from_torch(
-        #     timestep, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
-        # )
-        t0 = time.time()
-
-        ttnn_output = ttnn_model(
-            ttnn_hidden_states,
-            ttnn_encoder_hidden_states,
-            ttnn_pooled_projections,
-            ttnn_timestep,
-            None,
-            None,
-            None,
-            parameters=parameters,
-        )
-
-        t1 = time.time()
-        print("Time:", t1 - t0)
-        """
-        torch_output = torch.load(
-            "models/experimental/functional_stable_diffusion3_5/demo/inputs_512_latest/output_512.pt",
-            map_location=torch.device("cpu"),
-        )
-        """
-
-        torch_output = torch.from_numpy(
-            np.load(
-                "../../sd35_512_unopt/tt-metal/models/experimental/functional_stable_diffusion3_5/demo/demo_unoptimized_512x512__noise_pred_"
-                + str(i)
-                + ".npy"
-            )
-        )
-        print(i, " --", assert_with_pcc(torch_output, ttnn.to_torch(ttnn_output[0]), pcc=-100))  # 0.94
-        # print(torch_output)
-        # print(ttnn.to_torch(ttnn_output[0]))
+    torch_output = torch.load(
+        "models/experimental/functional_stable_diffusion3_5/reference/sd3_5_output.pt", map_location=torch.device("cpu")
+    )
+    assert_with_pcc(torch_output, ttnn.to_torch(ttnn_output[0]), pcc=0.98)  # 0.9883407924985295

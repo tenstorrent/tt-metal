@@ -5,9 +5,8 @@
 import torch
 import pytest
 import ttnn
+
 from ttnn.model_preprocessing import preprocess_model_parameters, preprocess_linear_weight, preprocess_linear_bias
-
-
 from models.utility_functions import skip_for_grayskull
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.functional_stable_diffusion3_5.reference.feed_forward import FeedForward
@@ -27,8 +26,8 @@ def create_custom_preprocessor(device):
             parameters["net"][0] = gelu_custom_preprocessor(model.net[0], None, None)
             parameters["net"][1] = {}
             parameters["net"][2] = {}
-            parameters["net"][2]["weight"] = preprocess_linear_weight(model.net[2].weight, dtype=ttnn.bfloat16)
-            parameters["net"][2]["bias"] = preprocess_linear_bias(model.net[2].bias, dtype=ttnn.bfloat16)
+            parameters["net"][2]["weight"] = preprocess_linear_weight(model.net[2].weight, dtype=ttnn.bfloat8_b)
+            parameters["net"][2]["bias"] = preprocess_linear_bias(model.net[2].bias, dtype=ttnn.bfloat8_b)
 
         return parameters
 
@@ -40,8 +39,10 @@ def create_custom_preprocessor(device):
 @pytest.mark.parametrize(
     "hidden_states_shape",
     [
-        ([2, 4096, 1536]),
-        ([2, 333, 1536]),
+        # ([2, 4096, 1536]),
+        # ([2, 333, 1536]),
+        ([2, 1, 1024, 1536]),
+        ([2, 1, 160, 1536]),
     ],
 )
 def test_feed_forward(device, hidden_states_shape, reset_seeds):
@@ -63,9 +64,31 @@ def test_feed_forward(device, hidden_states_shape, reset_seeds):
     )
 
     torch_output = reference_model(hidden_states=torch_hidden_states)
-    ttnn_hidden_states = ttnn.from_torch(
-        torch_hidden_states, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device
+
+    mm_a_y = 8
+    mm_a_x = 8
+    mm_a_x_strategy = ttnn.ShardStrategy.BLOCK
+    mm_a_x_memory_config = ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
+    if torch_hidden_states.shape[-2] < 512:
+        mm_a_y = 6
+        mm_a_x_strategy = ttnn.ShardStrategy.WIDTH
+        mm_a_x_memory_config = ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG
+
+    input_memory_config = ttnn.create_sharded_memory_config(
+        torch_hidden_states.shape,
+        core_grid=ttnn.CoreGrid(y=mm_a_y, x=mm_a_x),
+        strategy=mm_a_x_strategy,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
     )
+
+    ttnn_hidden_states = ttnn.from_torch(
+        torch_hidden_states,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat8_b,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,  # input_memory_config,
+    )
+
     ttnn_model = ttnn_FeedForward(
         dim=1536, dim_out=1536, mult=4, activation_fn="gelu-approximate", inner_dim=None, bias=True
     )

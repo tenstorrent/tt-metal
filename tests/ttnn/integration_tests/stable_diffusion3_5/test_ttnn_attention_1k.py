@@ -6,7 +6,7 @@ import pytest
 import torch
 import torch.nn as nn
 import ttnn
-from models.experimental.functional_stable_diffusion3_5.ttnn.ttnn_attention import (
+from models.experimental.functional_stable_diffusion3_5.ttnn.ttnn_attention_1k import (
     ttnn_Attention as tt_module,
     ttnn_JointAttnProcessor2_0,
 )
@@ -100,76 +100,8 @@ def create_custom_preprocessor(device):
 @pytest.mark.parametrize(
     "attn_inputs, hidden_states, attention_mask, encoder_hidden_states",
     [
-        (
-            {  # 512x512
-                "query_dim": 1536,
-                "cross_attention_dim": None,
-                "heads": 24,
-                "kv_heads": None,
-                "dim_head": 64,
-                "dropout": 0.0,
-                "bias": True,
-                "upcast_attention": False,
-                "upcast_softmax": False,
-                "cross_attention_norm": None,
-                "cross_attention_norm_num_groups": 32,
-                "qk_norm": "rms_norm",
-                "added_kv_proj_dim": 1536,
-                "added_proj_bias": True,
-                "norm_num_groups": None,
-                "spatial_norm_dim": None,
-                "out_bias": True,
-                "scale_qk": True,
-                "only_cross_attention": False,
-                "eps": 1e-06,
-                "rescale_output_factor": 1.0,
-                "residual_connection": False,
-                "_from_deprecated_attn_block": False,
-                "out_dim": 1536,
-                "context_pre_only": False,
-                "pre_only": False,
-                "elementwise_affine": True,
-            },
-            torch.randn([2, 1, 1024, 1536], dtype=torch.bfloat16),
-            None,
-            torch.randn([2, 1, 160, 1536], dtype=torch.bfloat16),
-        ),
-        (
-            {  # 512x512
-                "query_dim": 1536,
-                "cross_attention_dim": None,
-                "heads": 24,
-                "kv_heads": None,
-                "dim_head": 64,
-                "dropout": 0.0,
-                "bias": True,
-                "upcast_attention": False,
-                "upcast_softmax": False,
-                "cross_attention_norm": None,
-                "cross_attention_norm_num_groups": 32,
-                "qk_norm": "rms_norm",
-                "added_kv_proj_dim": None,
-                "added_proj_bias": True,
-                "norm_num_groups": None,
-                "spatial_norm_dim": None,
-                "out_bias": True,
-                "scale_qk": True,
-                "only_cross_attention": False,
-                "eps": 1e-06,
-                "rescale_output_factor": 1.0,
-                "residual_connection": False,
-                "_from_deprecated_attn_block": False,
-                "out_dim": 1536,
-                "context_pre_only": None,
-                "pre_only": False,
-                "elementwise_affine": True,
-            },
-            torch.randn([2, 1, 1024, 1536], dtype=torch.bfloat16),
-            None,
-            None,
-        ),
         # (
-        #     {  # 1024x1024
+        #     {  # 512x512
         #         "query_dim": 1536,
         #         "cross_attention_dim": None,
         #         "heads": 24,
@@ -198,10 +130,78 @@ def create_custom_preprocessor(device):
         #         "pre_only": False,
         #         "elementwise_affine": True,
         #     },
-        #     torch.randn([2, 4096, 1536], dtype=torch.bfloat16),
+        #     torch.randn([2, 1, 1024, 1536], dtype=torch.bfloat16),
         #     None,
-        #     torch.randn([2, 333, 1536], dtype=torch.bfloat16),
+        #     torch.randn([2, 1, 160, 1536], dtype=torch.bfloat16),
         # ),
+        # (
+        #     {  # 512x512
+        #         "query_dim": 1536,
+        #         "cross_attention_dim": None,
+        #         "heads": 24,
+        #         "kv_heads": None,
+        #         "dim_head": 64,
+        #         "dropout": 0.0,
+        #         "bias": True,
+        #         "upcast_attention": False,
+        #         "upcast_softmax": False,
+        #         "cross_attention_norm": None,
+        #         "cross_attention_norm_num_groups": 32,
+        #         "qk_norm": "rms_norm",
+        #         "added_kv_proj_dim": None,
+        #         "added_proj_bias": True,
+        #         "norm_num_groups": None,
+        #         "spatial_norm_dim": None,
+        #         "out_bias": True,
+        #         "scale_qk": True,
+        #         "only_cross_attention": False,
+        #         "eps": 1e-06,
+        #         "rescale_output_factor": 1.0,
+        #         "residual_connection": False,
+        #         "_from_deprecated_attn_block": False,
+        #         "out_dim": 1536,
+        #         "context_pre_only": None,
+        #         "pre_only": False,
+        #         "elementwise_affine": True,
+        #     },
+        #     torch.randn([2, 1, 1024, 1536], dtype=torch.bfloat16),
+        #     None,
+        #     None,
+        # ),
+        (
+            {  # 1024x1024
+                "query_dim": 1536,
+                "cross_attention_dim": None,
+                "heads": 24,
+                "kv_heads": None,
+                "dim_head": 64,
+                "dropout": 0.0,
+                "bias": True,
+                "upcast_attention": False,
+                "upcast_softmax": False,
+                "cross_attention_norm": None,
+                "cross_attention_norm_num_groups": 32,
+                "qk_norm": "rms_norm",
+                "added_kv_proj_dim": 1536,
+                "added_proj_bias": True,
+                "norm_num_groups": None,
+                "spatial_norm_dim": None,
+                "out_bias": True,
+                "scale_qk": True,
+                "only_cross_attention": False,
+                "eps": 1e-06,
+                "rescale_output_factor": 1.0,
+                "residual_connection": False,
+                "_from_deprecated_attn_block": False,
+                "out_dim": 1536,
+                "context_pre_only": False,
+                "pre_only": False,
+                "elementwise_affine": True,
+            },
+            torch.randn([2, 1, 4096, 1536], dtype=torch.bfloat16),
+            None,
+            torch.randn([2, 1, 352, 1536], dtype=torch.bfloat16),
+        ),
         # (
         #     {  # 1024x1024
         #         "query_dim": 1536,
@@ -232,7 +232,7 @@ def create_custom_preprocessor(device):
         #         "pre_only": False,
         #         "elementwise_affine": True,
         #     },
-        #     torch.randn([2, 4096, 1536], dtype=torch.bfloat16),
+        #     torch.randn([2, 1, 4096, 1536], dtype=torch.bfloat16),
         #     None,
         #     None,
         # ),
@@ -246,6 +246,10 @@ def test_ttnn_attention(attn_inputs, device, hidden_states, attention_mask, enco
         initialize_model=lambda: torch_sub_module, device=device, custom_preprocessor=create_custom_preprocessor(device)
     )
 
+    tt_input_hidden_states = ttnn.from_torch(
+        hidden_states, dtype=ttnn.bfloat8_b, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+
     if encoder_hidden_states is not None:
         tt_input_encoder_hidden_states = ttnn.from_torch(
             encoder_hidden_states,
@@ -257,9 +261,6 @@ def test_ttnn_attention(attn_inputs, device, hidden_states, attention_mask, enco
     else:
         tt_input_encoder_hidden_states = None
 
-    tt_input_hidden_states = ttnn.from_torch(
-        hidden_states, dtype=ttnn.bfloat8_b, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG
-    )
     tt_sub_module = tt_module(**attn_inputs, processor=ttnn_JointAttnProcessor2_0(), parameters=parameters)
 
     torch_hidden_states = hidden_states.squeeze(1)

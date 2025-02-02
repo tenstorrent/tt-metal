@@ -4,7 +4,7 @@
 
 #include "nlp_create_qkv_heads_sd35_device_operation.hpp"
 
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 
 using namespace tt::tt_metal;
 
@@ -13,7 +13,7 @@ namespace ttnn::operations::experimental::transformer {
 // Hard-coded for SD35
 void NlpCreateHeadsSD35DeviceOperation::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    const auto input_shape = input_tensor.get_legacy_shape();
+    const auto input_shape = input_tensor.get_padded_shape();
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to TM need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to TM need to be allocated in buffers on device!");
@@ -31,32 +31,21 @@ void NlpCreateHeadsSD35DeviceOperation::validate(const std::vector<Tensor>& inpu
     TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
 }
 
-std::vector<tt::tt_metal::LegacyShape> NlpCreateHeadsSD35DeviceOperation::compute_output_shapes(
+std::vector<ttnn::TensorSpec> NlpCreateHeadsSD35DeviceOperation::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
-    std::vector<tt::tt_metal::LegacyShape> output_shape_vec;
-    const auto& input_tensor = input_tensors.at(0);
-    const auto input_shape = input_tensor.get_legacy_shape();
-    const auto head_dim = 64;                    // head_dim is hard-coded = 64
-    auto num_heads = input_shape[3] / head_dim;  // head_dim is hard-coded = 64
-    output_shape_vec = {
-        (tt::tt_metal::LegacyShape){input_shape[0], num_heads, input_shape[2], head_dim},
-        (tt::tt_metal::LegacyShape){input_shape[0], num_heads, input_shape[2], head_dim},
-        (tt::tt_metal::LegacyShape){input_shape[0], num_heads, input_shape[2], head_dim}};
-    // output_shape_vec = {(tt::tt_metal::LegacyShape) {input_shape[0], num_heads, input_shape[2], head_dim},  };
-
-    return output_shape_vec;
-}
-
-std::vector<Tensor> NlpCreateHeadsSD35DeviceOperation::create_output_tensors(
-    const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    if (this->output_mem_config.is_sharded()) {
+    if (output_mem_config.is_sharded()) {
         TT_ASSERT(false);
         return {};
-    } else {
-        return operation::generic_create_output_tensors(
-            *this, input_tensors, input_tensor.get_dtype(), Layout::TILE, this->output_mem_config);
     }
+
+    const auto& input_tensor = input_tensors.at(0);
+    const auto input_shape = input_tensor.get_padded_shape();
+    const auto head_dim = 64;                    // head_dim is hard-coded = 64
+    auto num_heads = input_shape[3] / head_dim;  // head_dim is hard-coded = 64
+    TensorSpec spec(
+        Shape({input_shape[0], num_heads, input_shape[2], head_dim}),
+        TensorLayout(input_tensor.get_dtype(), PageConfig(Layout::TILE), output_mem_config));
+    return {spec, spec, spec};
 }
 
 operation::ProgramWithCallbacks NlpCreateHeadsSD35DeviceOperation::create_program(
