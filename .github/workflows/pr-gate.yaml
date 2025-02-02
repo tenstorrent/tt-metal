@@ -97,6 +97,7 @@ jobs:
           cp deleteme/tt_metal/api/tt-metalium/dev_msgs.h tt_metal/api/tt-metalium/
           cp deleteme/tt_metal/api/tt-metalium/tt_log.h tt_metal/api/tt-metalium/
           cp deleteme/tt_metal/api/tt-metalium/circular_buffer_constants.h tt_metal/api/tt-metalium/
+          cp deleteme/tt_metal/api/tt-metalium/cq_commands.hpp tt_metal/api/tt-metalium/
           mkdir -p tt_metal/hostdevcommon
           cp -a deleteme/tt_metal/hostdevcommon/api tt_metal/hostdevcommon/
           ls -al tt_metal/hostdevcommon/api/hostdevcommon
