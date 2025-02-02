@@ -151,7 +151,7 @@ void kernel_main() {
                 DeviceZoneScopedN("WR-FWD");
                 mcast_fwd_packet_header->to_noc_unicast(NocUnicastCommandHeader{
                     dest_bank_addr,
-                    packet_payload_size_bytes,
+                    packet_payload_size_bytes + sizeof(tt::fabric::PacketHeader),
                     static_cast<uint8_t>(dest_noc_x),
                     static_cast<uint8_t>(dest_noc_y)});
                 // auto &fwd_conn = fabric_connection.get_forward_connection();
@@ -171,7 +171,7 @@ void kernel_main() {
                 DeviceZoneScopedN("WR-BWD");
                 mcast_bwd_packet_header->to_noc_unicast(NocUnicastCommandHeader{
                     dest_bank_addr,
-                    packet_payload_size_bytes,
+                    packet_payload_size_bytes + sizeof(tt::fabric::PacketHeader),
                     static_cast<uint8_t>(dest_noc_x),
                     static_cast<uint8_t>(dest_noc_y)});
                 // auto &bwd_conn = fabric_connection.get_backward_connection();
