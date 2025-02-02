@@ -204,13 +204,16 @@ struct EdmChannelWorkerInterface {
         volatile tt_l1_ptr uint32_t *const connection_live_semaphore) :
         worker_location_info_ptr(worker_location_info_ptr),
         remote_producer_wrptr(remote_producer_wrptr),
-        connection_live_semaphore(connection_live_semaphore){}
+        connection_live_semaphore(connection_live_semaphore){
+        DPRINT << "EDM  my_x: " << (uint32_t)my_x[0] << ", my_y: " << (uint32_t)my_y[0] << " rdptr set to 0 at " << (uint32_t)(void*)&(worker_location_info_ptr->edm_rdptr) << "\n";
+        *reinterpret_cast<volatile uint32_t*>(&(worker_location_info_ptr->edm_rdptr)) = 0;
+        }
 
     // Flow control methods
     //
     [[nodiscard]] FORCE_INLINE bool has_payload(uint8_t local_rdptr) {
-        DPRINT << "\t*remote_producer_wrptr: " << (uint32_t)*remote_producer_wrptr << "\n";
-        DPRINT << "\tlocal_rdpt: " << (uint32_t)local_rdptr << "\n";
+        // DPRINT << "\t*remote_producer_wrptr: " << (uint32_t)*remote_producer_wrptr << "\n";
+        // DPRINT << "\tlocal_rdpt: " << (uint32_t)local_rdptr << "\n";
         return local_rdptr != *remote_producer_wrptr;
     }
 
@@ -234,13 +237,16 @@ struct EdmChannelWorkerInterface {
 
     // Connection management methods
     //
-    FORCE_INLINE void teardown_connection() const {
+    FORCE_INLINE void teardown_connection(uint32_t last_edm_rdptr_value) const {
         auto const &worker_info = *worker_location_info_ptr;
         uint64_t worker_semaphore_address = get_noc_addr(
             (uint32_t)worker_info.worker_xy.x, (uint32_t)worker_info.worker_xy.y, worker_info.worker_teardown_semaphore_address);
 
         // Set connection to unused so it's available for next worker
         *this->connection_live_semaphore = tt::fabric::WorkerToFabricEdmSender::unused_connection_value;
+
+        DPRINT << "EDM tdwn my_x: " << (uint32_t)my_x[0] << ", my_y: " << (uint32_t)my_y[0] << " rdptr set to " << (uint32_t)last_edm_rdptr_value << " at " << (uint32_t)worker_location_info_ptr->edm_rdptr << "\n";
+        *reinterpret_cast<volatile uint32_t*>(&(worker_location_info_ptr->edm_rdptr)) = last_edm_rdptr_value;
 
         noc_semaphore_inc(worker_semaphore_address, 1);
     }
