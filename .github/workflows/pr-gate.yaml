@@ -111,6 +111,9 @@ jobs:
           cp -a deleteme/tt_metal/third_party/tt_llk_blackhole/common/inc tt_metal/third_party/tt_llk_blackhole/common/
           cp -a deleteme/tt_metal/third_party/tt_llk_blackhole/llk_lib tt_metal/third_party/tt_llk_blackhole/
 
+          mkdir -p tt_metal/tools/profiler
+          cp deleteme/tt_metal/tools/profiler/kernel_profiler.hpp tt_metal/tools/profiler/
+
       - name: Run a test
         env:
           # TODO: None of these should be necessary
