@@ -72,7 +72,7 @@ std::vector<ttnn::TensorSpec> UntilizeWithUnpadding::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
     SmallVector<uint32_t> out_shape;
     const auto& input_tensor_a = input_tensors.at(0);
-    auto rank = input_tensor_a.get_padded_shape().rank();
+    size_t rank = input_tensor_a.logical_shape().rank();
     out_shape.reserve(rank);
     for (uint32_t i = 0; i < rank; i++) {
         out_shape.push_back(this->output_tensor_end[i] + 1);
