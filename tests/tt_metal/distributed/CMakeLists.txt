@@ -2,6 +2,7 @@ set(UNIT_TESTS_DISTRIBUTED_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/test_distributed.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_mesh_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_mesh_workload.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_mesh_sub_device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_mesh_allocator.cpp
 )
 

@@ -135,7 +135,6 @@ public:
     std::shared_ptr<TraceBuffer> get_trace(uint32_t tid) override;
     uint32_t get_trace_buffers_size() const override { return trace_buffers_size_; }
     void set_trace_buffers_size(uint32_t size) override { trace_buffers_size_ = size; }
-
     // Light Metal
     void load_trace(uint8_t cq_id, uint32_t trace_id, const TraceDescriptor& trace_desc) override;
 
@@ -158,10 +157,10 @@ public:
     void enable_async(bool enable) override;
     void synchronize() override;
     WorkExecutorMode get_worker_mode() override { return work_executor_.get_worker_mode(); }
-    void set_worker_queue_mode(const WorkerQueueMode& mode) override { this->work_executor_.set_worker_queue_mode(mode); }
-    WorkerQueueMode get_worker_queue_mode() override { return this->work_executor_.get_worker_queue_mode(); }
+    void set_worker_queue_mode(const WorkerQueueMode& mode) override {
+        this->work_executor_.set_worker_queue_mode(mode);
+    }
     bool is_worker_queue_empty() const override { return work_executor_.worker_queue.empty(); }
-    bool can_use_passthrough_scheduling() const override;
 
     void push_work(std::function<void()> work, bool blocking) override;
 

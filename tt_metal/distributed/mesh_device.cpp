@@ -127,12 +127,7 @@ MeshDevice::MeshDevice(
     mesh_shape_(mesh_shape),
     type_(type),
     mesh_id_(generate_unique_mesh_id()),
-    parent_mesh_(std::move(parent_mesh))
-{
-    work_executor_ = std::make_unique<WorkExecutor>(0 /* worker_core */, mesh_id_);
-    work_executor_->initialize();
-    work_executor_->set_worker_mode(WorkExecutorMode::SYNCHRONOUS);
-}
+    parent_mesh_(std::move(parent_mesh)) {}
 
 std::shared_ptr<MeshDevice> MeshDevice::create(
     const MeshDeviceConfig& config,
@@ -314,7 +309,6 @@ bool MeshDevice::close() {
     parent_mesh_.reset();
     view_.reset();
     sub_device_manager_tracker_.reset();
-    work_executor_.reset();
     return true;
 }
 
@@ -524,30 +518,24 @@ uint32_t MeshDevice::get_noc_multicast_encoding(uint8_t noc_index, const CoreRan
 }
 
 // Floating point and build environment
-const JitBuildEnv& MeshDevice::build_env() const {
-    TT_THROW("build_env() is not supported on MeshDevice - use individual devices instead");
-    return reference_device()->build_env();
-}
+const JitBuildEnv& MeshDevice::build_env() const { return reference_device()->build_env(); }
 
 // Build and firmware paths
 const string MeshDevice::build_firmware_target_path(uint32_t programmable_core, uint32_t processor_class, int i) const {
-    TT_THROW("build_firmware_target_path() is not supported on MeshDevice - use individual devices instead");
     return reference_device()->build_firmware_target_path(programmable_core, processor_class, i);
 }
-const string MeshDevice::build_kernel_target_path(uint32_t programmable_core, uint32_t processor_class, int i, const string& kernel_name) const {
-    TT_THROW("build_kernel_target_path() is not supported on MeshDevice - use individual devices instead");
+const string MeshDevice::build_kernel_target_path(
+    uint32_t programmable_core, uint32_t processor_class, int i, const string& kernel_name) const {
     return reference_device()->build_kernel_target_path(programmable_core, processor_class, i, kernel_name);
 }
-const JitBuildState& MeshDevice::build_firmware_state(uint32_t programmable_core, uint32_t processor_class, int i) const {
-    TT_THROW("build_firmware_state() is not supported on MeshDevice - use individual devices instead");
+const JitBuildState& MeshDevice::build_firmware_state(
+    uint32_t programmable_core, uint32_t processor_class, int i) const {
     return reference_device()->build_firmware_state(programmable_core, processor_class, i);
 }
 const JitBuildState& MeshDevice::build_kernel_state(uint32_t programmable_core, uint32_t processor_class, int i) const {
-    TT_THROW("build_kernel_state() is not supported on MeshDevice - use individual devices instead");
     return reference_device()->build_kernel_state(programmable_core, processor_class, i);
 }
 const JitBuildStateSubset MeshDevice::build_kernel_states(uint32_t programmable_core, uint32_t processor_class) const {
-    TT_THROW("build_kernel_states() is not supported on MeshDevice - use individual devices instead");
     return reference_device()->build_kernel_states(programmable_core, processor_class);
 }
 
@@ -599,9 +587,12 @@ void MeshDevice::load_trace(const uint8_t cq_id, const uint32_t trace_id, const 
 }
 
 // Dispatch and initialization
-bool MeshDevice::initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap, bool minimal) {
-    work_executor_->initialize();
-    work_executor_->set_worker_mode(WorkExecutorMode::SYNCHRONOUS);
+bool MeshDevice::initialize(
+    const uint8_t num_hw_cqs,
+    size_t l1_small_size,
+    size_t trace_region_size,
+    tt::stl::Span<const std::uint32_t> l1_bank_remap,
+    bool minimal) {
     view_ = std::make_unique<MeshDeviceView>(scoped_devices_->get_devices(), mesh_shape_);
     SystemMesh::instance().register_mesh_device(shared_from_this(), this->get_devices());
 
@@ -641,34 +632,29 @@ void MeshDevice::init_command_queue_device() {
     reference_device()->init_command_queue_device();
 }
 void MeshDevice::update_dispatch_cores_for_multi_cq_eth_dispatch() {
-    TT_THROW("update_dispatch_cores_for_multi_cq_eth_dispatch() is not supported on MeshDevice - use individual devices instead");
+    TT_THROW(
+        "update_dispatch_cores_for_multi_cq_eth_dispatch() is not supported on MeshDevice - use individual devices "
+        "instead");
     reference_device()->update_dispatch_cores_for_multi_cq_eth_dispatch();
 }
 void MeshDevice::synchronize() {
-    TT_FATAL(
-        this->get_worker_mode() == WorkExecutorMode::SYNCHRONOUS,
-        "MeshDevice must be in synchronous mode to synchronize");
-    this->work_executor_->synchronize();
+    // Nothing to synchronize, as all work is executed by MeshDevice is synchronous.
 }
-WorkExecutorMode MeshDevice::get_worker_mode() { return this->work_executor_->get_worker_mode(); }
-void MeshDevice::set_worker_queue_mode(const WorkerQueueMode& mode) {
-    this->work_executor_->set_worker_queue_mode(mode);
-}
-WorkerQueueMode MeshDevice::get_worker_queue_mode() { return this->work_executor_->get_worker_queue_mode(); }
-bool MeshDevice::is_worker_queue_empty() const { return this->work_executor_->worker_queue.empty(); }
-bool MeshDevice::can_use_passthrough_scheduling() const { return this->work_executor_->use_passthrough(); }
+WorkExecutorMode MeshDevice::get_worker_mode() { return WorkExecutorMode::SYNCHRONOUS; }
+void MeshDevice::set_worker_queue_mode(const WorkerQueueMode& mode) {}
+bool MeshDevice::is_worker_queue_empty() const { return true; }
 void MeshDevice::push_work(std::function<void()> work, bool blocking) {
-    this->work_executor_->push_work(std::move(work), blocking);
+    // Execute inline synchronously.
+    work();
 }
 program_cache::detail::ProgramCache& MeshDevice::get_program_cache() { return reference_device()->get_program_cache(); }
 HalProgrammableCoreType MeshDevice::get_programmable_core_type(CoreCoord virtual_core) const { return reference_device()->get_programmable_core_type(virtual_core); }
-std::vector<std::pair<transfer_info_cores, uint32_t>> MeshDevice::extract_dst_noc_multicast_info(const std::vector<CoreRange>& ranges, const CoreType core_type) {
-    TT_THROW("extract_dst_noc_multicast_info() is not supported on MeshDevice - use individual devices instead");
+std::vector<std::pair<transfer_info_cores, uint32_t>> MeshDevice::extract_dst_noc_multicast_info(
+    const std::vector<CoreRange>& ranges, const CoreType core_type) {
     return reference_device()->extract_dst_noc_multicast_info(ranges, core_type);
 }
 
 size_t MeshDevice::get_device_kernel_defines_hash() {
-    TT_THROW("get_device_kernel_defines_hash() is not supported on MeshDevice - use individual devices instead");
     return validate_and_get_reference_value(
         scoped_devices_->get_devices(), [](const auto& device) { return device->get_device_kernel_defines_hash(); });
 }
