@@ -134,6 +134,7 @@ struct MultiDeviceHostStorage {
     DistributedTensorConfig strategy;
     std::vector<OwnedBuffer> buffers;
     std::vector<TensorSpec> specs;
+    std::optional<TensorSpec> global_spec;
     mutable std::mutex mtx;
 
     friend void swap(MultiDeviceHostStorage& first, MultiDeviceHostStorage& second) {
@@ -181,6 +182,11 @@ struct MultiDeviceHostStorage {
     // preinitialize empty tensor handles and use/populate them in the worker threads.
     void insert_buffer_and_spec_for_device(int buffer_index, const OwnedBuffer& buffer, TensorSpec spec) {
         std::lock_guard<std::mutex> lock(mtx);
+        if (global_spec.has_value()) {
+            TT_FATAL(*global_spec == spec, "Spec doesn't match global spec");
+        } else {
+            *global_spec = spec;
+        }
         buffers[buffer_index] = buffer;
         specs[buffer_index] = std::move(spec);
     }
@@ -224,6 +230,7 @@ struct MultiDeviceStorage {
     std::vector<int> ordered_device_ids;
     std::unordered_map<int, std::shared_ptr<Buffer>> buffers;
     std::unordered_map<int, TensorSpec> specs;
+    std::optional<TensorSpec> global_spec;
 
     // TODO: #17215 - This isn't populated by default. Switch to creating MeshBuffer backed storage, when TTNN is ready
     // to consume it.
@@ -314,6 +321,11 @@ struct MultiDeviceStorage {
         TT_ASSERT(
             device == buffer->device(),
             "Mismatch between device derived from buffer and device derived from MultiDeviceStorage.");
+        if (global_spec.has_value()) {
+            TT_FATAL(*global_spec == spec, "Spec doesn't match global spec");
+        } else {
+            *global_spec = spec;
+        }
         buffers.insert({device->id(), buffer});
         specs.insert({device->id(), std::move(spec)});
     }
