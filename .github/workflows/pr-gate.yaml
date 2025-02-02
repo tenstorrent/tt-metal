@@ -119,8 +119,8 @@ jobs:
           mkdir -p tt_metal/third_party/umd/device
           cp -a deleteme/tt_metal/third_party/umd/device/api tt_metal/third_party/umd/device/
 
-          mkdir -p tt_metal/dispatch
-          cp -a deleteme/tt_metal/impl/dispatch/kernels tt_metal/dispatch/
+          mkdir -p tt_metal/impl/dispatch
+          cp -a deleteme/tt_metal/impl/dispatch/kernels tt_metal/impl/dispatch/
 
       - name: Run a test
         env:
