@@ -103,10 +103,13 @@ jobs:
 
           mkdir -p tt_metal/third_party/tt_llk_wormhole_b0/common
           cp -a deleteme/tt_metal/third_party/tt_llk_wormhole_b0/common/inc tt_metal/third_party/tt_llk_wormhole_b0/common/
+          cp -a deleteme/tt_metal/third_party/tt_llk_wormhole_b0/llk_lib tt_metal/third_party/tt_llk_wormhole_b0/common/
           mkdir -p tt_metal/third_party/tt_llk_grayskull/common
           cp -a deleteme/tt_metal/third_party/tt_llk_grayskull/common/inc tt_metal/third_party/tt_llk_grayskull/common/
+          cp -a deleteme/tt_metal/third_party/tt_llk_grayskull/llk_lib tt_metal/third_party/tt_llk_grayskull/common/
           mkdir -p tt_metal/third_party/tt_llk_blackhole/common
           cp -a deleteme/tt_metal/third_party/tt_llk_blackhole/common/inc tt_metal/third_party/tt_llk_blackhole/common/
+          cp -a deleteme/tt_metal/third_party/tt_llk_blackhole/llk_lib tt_metal/third_party/tt_llk_blackhole/common/
 
       - name: Run a test
         env:
