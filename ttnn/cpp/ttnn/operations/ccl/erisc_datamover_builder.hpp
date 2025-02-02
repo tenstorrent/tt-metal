@@ -14,6 +14,8 @@
 #include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
 
+#include "cpp/ttnn/operations/ccl/kernels/edm_fabric/edm_fabric_counters.hpp"
+
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/program_impl.hpp>
 #include <tt-metalium/hal_exp.hpp>
@@ -30,6 +32,8 @@ struct FabricEriscDatamoverConfig {
     static constexpr std::size_t field_size = 16;
     static constexpr std::size_t buffer_alignment = 32;
     static_assert(((buffer_alignment - 1) & buffer_alignment) == 0);
+    static constexpr bool enable_fabric_counters = false;
+    static constexpr bool enable_fabric_pkt_header_recording = false;
 
     // Global
     static constexpr std::size_t eth_channel_sync_size = 16;
@@ -39,8 +43,35 @@ struct FabricEriscDatamoverConfig {
         edm_channel_ack_addr +
         (4 * eth_channel_sync_size);  // pad extra bytes to match old EDM so handshake logic will still work
 
+    // Debug and Counters
+    static constexpr std::size_t receiver_channel_counters_size_bytes =
+        (((tt::fabric::receiver_channel_counters_l1_size - 1) / field_size) + 1) * field_size;
+    static constexpr std::size_t sender_channel_counters_size_bytes =
+        (((tt::fabric::sender_channel_counters_l1_size - 1) / field_size) + 1) * field_size;
+
+    std::size_t receiver_channel_counters_address = termination_signal_address + field_size;
+    std::size_t sender_channel_0_counters_address =
+        receiver_channel_counters_address + receiver_channel_counters_size_bytes;
+    std::size_t sender_channel_1_counters_address =
+        sender_channel_0_counters_address + sender_channel_counters_size_bytes;
+
+    // Packet header history buffer(s)
+    static constexpr std::size_t receiver_completed_packet_header_cb_size_headers = 32;
+    static constexpr std::size_t receiver_completed_packet_header_cb_size_bytes =
+        sizeof(tt::fabric::PacketHeader) * receiver_completed_packet_header_cb_size_headers;
+    static constexpr std::size_t sender_completed_packet_header_cb_size_headers = 32;
+    static constexpr std::size_t sender_completed_packet_header_cb_size_bytes =
+        sizeof(tt::fabric::PacketHeader) * sender_completed_packet_header_cb_size_headers;
+    std::size_t receiver_completed_packet_header_cb_address =
+        sender_channel_1_counters_address + sender_channel_counters_size_bytes;
+    std::size_t sender_0_completed_packet_header_cb_address =
+        receiver_completed_packet_header_cb_address + receiver_completed_packet_header_cb_size_bytes;
+    std::size_t sender_1_completed_packet_header_cb_address =
+        sender_0_completed_packet_header_cb_address + sender_completed_packet_header_cb_size_bytes;
+
     // ----------- Sender Channel 0
-    std::size_t sender_channel_0_buffer_index_address = termination_signal_address + field_size;
+    std::size_t sender_channel_0_buffer_index_address =
+        sender_1_completed_packet_header_cb_address + sender_completed_packet_header_cb_size_bytes;
     // Connection info layout:
     // 0: buffer_index_rdptr -> Tells EDM the address in worker L1 to update EDM's copy of channel rdptr
     // 1: worker_teardown_semaphore_address -> Tells EDM where to signal connection teardown completion in worker's L1
