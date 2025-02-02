@@ -175,3 +175,11 @@ def test_run_untilize_5d(dtype, shape, device):
         passing1 = torch.equal(inp, our_untilized)
 
     assert passing1
+
+
+def test_run_untilize_1d(device):
+    # shape = (1280,)
+    input = ttnn.ones([1280], ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG)
+    out_untilized = ttnn.to_layout(input, layout=ttnn.ROW_MAJOR_LAYOUT)
+    # out_untilized = ttnn.untilize(input)
+    assert out_untilized is not None
