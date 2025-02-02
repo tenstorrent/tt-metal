@@ -56,6 +56,8 @@ jobs:
         uses: ./.github/actions/generate-docker-tag
         with:
           image: tt-metalium/${{ inputs.os }}
+      - name: Extract numeric version
+        run: echo "UBUNTU_VERSION=$(echo '${{ inputs.os }}' | sed -E 's/[^0-9.]*([0-9]+\.[0-9]+).*/\1/')" >> $GITHUB_ENV
       - name: Build Docker image and push to GHCR
         if: steps.changed-files-specific.outputs.any_changed == 'true'
         uses: docker/build-push-action@v6
@@ -65,7 +67,7 @@ jobs:
           target: dev
           push: true
           tags: ${{ env.TT_METAL_DOCKER_IMAGE_TAG}}
-          build-args: UBUNTU_VERSION=${{ fromJSON(toJSON(split(inputs.os, '-')))[1] }}
+          build-args: UBUNTU_VERSION=${{ env.UBUNTU_VERSION }}
           cache-from: type=registry,ref=${{ env.TT_METAL_REF_IMAGE_TAG }}
           cache-to: type=inline
           pull: true
