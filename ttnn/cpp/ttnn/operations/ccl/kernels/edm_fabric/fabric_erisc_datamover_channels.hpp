@@ -169,9 +169,10 @@ class EthChannelBuffer final {
 
    private:
     FORCE_INLINE auto buffer_index() const {
-        ASSERT(this->buff_idx < NUM_BUFFERS);
         bool normalize = buff_idx >= NUM_BUFFERS;
-        return buff_idx - (normalize * NUM_BUFFERS);
+        auto normalized_buff_idx = buff_idx - (normalize * NUM_BUFFERS);
+        ASSERT(normalized_buff_idx < NUM_BUFFERS);
+        return normalized_buff_idx;
     }
 
     std::array<size_t, NUM_BUFFERS> buffer_addresses;
