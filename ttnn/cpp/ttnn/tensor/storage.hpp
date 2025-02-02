@@ -185,7 +185,7 @@ struct MultiDeviceHostStorage {
         if (global_spec.has_value()) {
             TT_FATAL(*global_spec == spec, "Spec doesn't match global spec");
         } else {
-            *global_spec = spec;
+            global_spec = spec;
         }
         buffers[buffer_index] = buffer;
         specs[buffer_index] = std::move(spec);
@@ -324,7 +324,7 @@ struct MultiDeviceStorage {
         if (global_spec.has_value()) {
             TT_FATAL(*global_spec == spec, "Spec doesn't match global spec");
         } else {
-            *global_spec = spec;
+            global_spec = spec;
         }
         buffers.insert({device->id(), buffer});
         specs.insert({device->id(), std::move(spec)});
