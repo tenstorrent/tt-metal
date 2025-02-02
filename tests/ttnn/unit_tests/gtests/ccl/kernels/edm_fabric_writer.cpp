@@ -64,7 +64,7 @@ void kernel_main() {
     const size_t unicast_hops = get_arg_val<uint32_t>(arg_idx++);
     const bool unicast_is_fwd = get_arg_val<uint32_t>(arg_idx++) != 0;
 
-    const size_t source_l1_buffer_address = get_arg_val<uint32_t>(arg_idx++);
+    const size_t source_l1_cb_index = get_arg_val<uint32_t>(arg_idx++);
     const size_t packet_header_cb = get_arg_val<uint32_t>(arg_idx++);
     const size_t packet_header_size_in_headers = get_arg_val<uint32_t>(arg_idx++);
 
@@ -99,8 +99,11 @@ void kernel_main() {
     DPRINT << "Open connection\n";
     fabric_connection.open();
 
+    cb_reserve_back(source_l1_cb_index, 1);
     cb_reserve_back(packet_header_cb, packet_header_size_in_headers);
+    const auto source_l1_buffer_address = get_write_ptr(source_l1_cb_index);
     const auto packet_header_buffer_address = get_write_ptr(packet_header_cb);
+
     auto* mcast_fwd_packet_header = reinterpret_cast<PacketHeader*>(packet_header_buffer_address);
     auto* mcast_bwd_packet_header =
         reinterpret_cast<PacketHeader*>(packet_header_buffer_address + sizeof(tt::fabric::PacketHeader));
@@ -134,7 +137,8 @@ void kernel_main() {
         MulticastRoutingCommandHeader{1, static_cast<uint8_t>(mcast_fwd_hops)});
     mcast_bwd_packet_header->to_write().to_chip_multicast(
         MulticastRoutingCommandHeader{1, static_cast<uint8_t>(mcast_bwd_hops)});
-    unicast_packet_header->to_write().to_chip_unicast(UnicastRoutingCommandHeader{static_cast<uint8_t>(unicast_hops)});
+    unicast_packet_header->to_atomic_inc().to_chip_unicast(
+        UnicastRoutingCommandHeader{static_cast<uint8_t>(unicast_hops)});
 
     {
         DeviceZoneScopedN("MAIN-WRITE-ZONE");
