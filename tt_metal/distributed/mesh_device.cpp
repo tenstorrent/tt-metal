@@ -127,12 +127,7 @@ MeshDevice::MeshDevice(
     mesh_shape_(mesh_shape),
     type_(type),
     mesh_id_(generate_unique_mesh_id()),
-    parent_mesh_(std::move(parent_mesh))
-{
-    work_executor_ = std::make_unique<WorkExecutor>(0 /* worker_core */, mesh_id_);
-    work_executor_->initialize();
-    work_executor_->set_worker_mode(WorkExecutorMode::SYNCHRONOUS);
-}
+    parent_mesh_(std::move(parent_mesh)) {}
 
 std::shared_ptr<MeshDevice> MeshDevice::create(
     const MeshDeviceConfig& config,
@@ -314,7 +309,6 @@ bool MeshDevice::close() {
     parent_mesh_.reset();
     view_.reset();
     sub_device_manager_tracker_.reset();
-    work_executor_.reset();
     return true;
 }
 
@@ -599,9 +593,12 @@ void MeshDevice::load_trace(const uint8_t cq_id, const uint32_t trace_id, const 
 }
 
 // Dispatch and initialization
-bool MeshDevice::initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap, bool minimal) {
-    work_executor_->initialize();
-    work_executor_->set_worker_mode(WorkExecutorMode::SYNCHRONOUS);
+bool MeshDevice::initialize(
+    const uint8_t num_hw_cqs,
+    size_t l1_small_size,
+    size_t trace_region_size,
+    tt::stl::Span<const std::uint32_t> l1_bank_remap,
+    bool minimal) {
     view_ = std::make_unique<MeshDeviceView>(scoped_devices_->get_devices(), mesh_shape_);
     SystemMesh::instance().register_mesh_device(shared_from_this(), this->get_devices());
 
@@ -641,22 +638,20 @@ void MeshDevice::init_command_queue_device() {
     reference_device()->init_command_queue_device();
 }
 void MeshDevice::update_dispatch_cores_for_multi_cq_eth_dispatch() {
-    TT_THROW("update_dispatch_cores_for_multi_cq_eth_dispatch() is not supported on MeshDevice - use individual devices instead");
+    TT_THROW(
+        "update_dispatch_cores_for_multi_cq_eth_dispatch() is not supported on MeshDevice - use individual devices "
+        "instead");
     reference_device()->update_dispatch_cores_for_multi_cq_eth_dispatch();
 }
 void MeshDevice::synchronize() {
-    TT_FATAL(
-        this->get_worker_mode() == WorkExecutorMode::SYNCHRONOUS,
-        "MeshDevice must be in synchronous mode to synchronize");
-    this->work_executor_->synchronize();
+    // Nothing to synchronize, as all work is executed by MeshDevice is synchronous.
 }
-WorkExecutorMode MeshDevice::get_worker_mode() { return this->work_executor_->get_worker_mode(); }
-void MeshDevice::set_worker_queue_mode(const WorkerQueueMode& mode) {
-    this->work_executor_->set_worker_queue_mode(mode);
-}
-bool MeshDevice::is_worker_queue_empty() const { return this->work_executor_->worker_queue.empty(); }
+WorkExecutorMode MeshDevice::get_worker_mode() { return WorkExecutorMode::SYNCHRONOUS; }
+void MeshDevice::set_worker_queue_mode(const WorkerQueueMode& mode) {}
+bool MeshDevice::is_worker_queue_empty() const { return true; }
 void MeshDevice::push_work(std::function<void()> work, bool blocking) {
-    this->work_executor_->push_work(std::move(work), blocking);
+    // Execute inline synchronously.
+    work();
 }
 program_cache::detail::ProgramCache& MeshDevice::get_program_cache() { return reference_device()->get_program_cache(); }
 HalProgrammableCoreType MeshDevice::get_programmable_core_type(CoreCoord virtual_core) const { return reference_device()->get_programmable_core_type(virtual_core); }
