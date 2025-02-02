@@ -140,6 +140,13 @@ jobs:
         run: |
           # ./build/test/tt_metal/unit_tests_noc
           ./build/test/tt_metal/unit_tests_llk
+          ./build/test/tt_metal/test_bcast
+          ./build/test/tt_metal/test_dataflow_cb
+          ./build/test/tt_metal/test_multi_core_kernel
+          ./build/test/tt_metal/unit_tests_stl
+          ./build/test/tt_metal/api_blackhole
+
+          ls -al test-results*
 
       - name: unimpressed
         run: |
@@ -150,7 +157,7 @@ jobs:
         if: success() || failure()
         with:
           name: Foo Tests # Name of the check run which will be created
-          path: /work/test-results.xml
+          path: /work/test-results*.xml
           reporter: jest-junit        # Format of test results
 
       - name: Cleanup
