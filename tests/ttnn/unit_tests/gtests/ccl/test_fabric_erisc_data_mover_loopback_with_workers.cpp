@@ -2942,12 +2942,23 @@ struct WriteThroughputStabilityTestWithPersistentFabricParams {
     bool line_sync = false;
 };
 
-void RunWriteThroughputStabilityTestWIthPersistentFabric(
+void RunWriteThroughputStabilityTestWithPersistentFabric(
     size_t num_mcasts,
     size_t num_unicasts,
     size_t num_links,
     size_t num_op_invocations,
     const WriteThroughputStabilityTestWithPersistentFabricParams& params = {}) {
+    auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+    auto num_devices = tt::tt_metal::GetNumAvailableDevices();
+    if (num_devices < 4) {
+        log_info("This test can only be run on T3000 devices");
+        return 0;
+    }
+    if (arch == tt::ARCH::GRAYSKULL) {
+        log_info("Test must be run on WH");
+        return 0;
+    }
+
     size_t line_size = params.line_size;
     size_t num_devices_with_workers = params.num_devices_with_workers;
     if (num_devices_with_workers == 0) {
@@ -3190,7 +3201,7 @@ TEST(EdmFabric, BasicMcastThroughputTest_SingleLink_LineSize2_SingleMcast) {
     WriteThroughputStabilityTestWithPersistentFabricParams params;
     params.line_sync = line_sync;
     params.line_size = 2;
-    RunWriteThroughputStabilityTestWIthPersistentFabric(
+    RunWriteThroughputStabilityTestWithPersistentFabric(
         num_mcasts, num_unicasts, num_links, num_op_invocations, params);
 }
 
@@ -3202,7 +3213,7 @@ TEST(EdmFabric, BasicMcastThroughputTest_SingleMcast) {
     const bool line_sync = false;
     WriteThroughputStabilityTestWithPersistentFabricParams params;
     params.line_sync = line_sync;
-    RunWriteThroughputStabilityTestWIthPersistentFabric(
+    RunWriteThroughputStabilityTestWithPersistentFabric(
         num_mcasts, num_unicasts, num_links, num_op_invocations, params);
 }
 TEST(EdmFabric, BasicMcastThroughputTest_SenderFullNoWrap_ReceiverNoWrap) {
@@ -3213,7 +3224,7 @@ TEST(EdmFabric, BasicMcastThroughputTest_SenderFullNoWrap_ReceiverNoWrap) {
     const bool line_sync = false;
     WriteThroughputStabilityTestWithPersistentFabricParams params;
     params.line_sync = line_sync;
-    RunWriteThroughputStabilityTestWIthPersistentFabric(
+    RunWriteThroughputStabilityTestWithPersistentFabric(
         num_mcasts, num_unicasts, num_links, num_op_invocations, params);
 }
 TEST(EdmFabric, BasicMcastThroughputTest_SenderOneElemWrap_ReceiverNoWrap_2Device) {
@@ -3226,7 +3237,7 @@ TEST(EdmFabric, BasicMcastThroughputTest_SenderOneElemWrap_ReceiverNoWrap_2Devic
     WriteThroughputStabilityTestWithPersistentFabricParams params;
     params.line_size = line_size;
     params.line_sync = line_sync;
-    RunWriteThroughputStabilityTestWIthPersistentFabric(
+    RunWriteThroughputStabilityTestWithPersistentFabric(
         num_mcasts, num_unicasts, num_links, num_op_invocations, params);
 }
 TEST(EdmFabric, BasicMcastThroughputTest_SenderOneElemWrap_ReceiverNoWrap) {
@@ -3237,7 +3248,7 @@ TEST(EdmFabric, BasicMcastThroughputTest_SenderOneElemWrap_ReceiverNoWrap) {
     const bool line_sync = false;
     WriteThroughputStabilityTestWithPersistentFabricParams params;
     params.line_sync = line_sync;
-    RunWriteThroughputStabilityTestWIthPersistentFabric(
+    RunWriteThroughputStabilityTestWithPersistentFabric(
         num_mcasts, num_unicasts, num_links, num_op_invocations, params);
 }
 TEST(EdmFabric, BasicMcastThroughputTest_SenderTwiceFilled_ReceiverOnceFilled_2Device) {
@@ -3250,7 +3261,7 @@ TEST(EdmFabric, BasicMcastThroughputTest_SenderTwiceFilled_ReceiverOnceFilled_2D
     WriteThroughputStabilityTestWithPersistentFabricParams params;
     params.line_size = line_size;
     params.line_sync = line_sync;
-    RunWriteThroughputStabilityTestWIthPersistentFabric(
+    RunWriteThroughputStabilityTestWithPersistentFabric(
         num_mcasts, num_unicasts, num_links, num_op_invocations, params);
 }
 // hangs if run back-to-back but passes if run separately. Also passes if only one test run before
@@ -3262,7 +3273,7 @@ TEST(EdmFabric, BasicMcastThroughputTest_SenderTwiceFilled_ReceiverOnceFilled) {
     const bool line_sync = false;
     WriteThroughputStabilityTestWithPersistentFabricParams params;
     params.line_sync = line_sync;
-    RunWriteThroughputStabilityTestWIthPersistentFabric(
+    RunWriteThroughputStabilityTestWithPersistentFabric(
         num_mcasts, num_unicasts, num_links, num_op_invocations, params);
 }
 TEST(EdmFabric, BasicMcastThroughputTest_SenderTwoWrap_ReceiverOneWrap) {
@@ -3273,7 +3284,7 @@ TEST(EdmFabric, BasicMcastThroughputTest_SenderTwoWrap_ReceiverOneWrap) {
     const bool line_sync = false;
     WriteThroughputStabilityTestWithPersistentFabricParams params;
     params.line_sync = line_sync;
-    RunWriteThroughputStabilityTestWIthPersistentFabric(
+    RunWriteThroughputStabilityTestWithPersistentFabric(
         num_mcasts, num_unicasts, num_links, num_op_invocations, params);
 }
 
@@ -3285,7 +3296,7 @@ TEST(EdmFabric, BasicMcastThroughputTest_SingleLink_LineSize2_SingleMcast_LineSy
     const bool line_sync = true;
     WriteThroughputStabilityTestWithPersistentFabricParams params;
     params.line_sync = line_sync;
-    RunWriteThroughputStabilityTestWIthPersistentFabric(
+    RunWriteThroughputStabilityTestWithPersistentFabric(
         num_mcasts, num_unicasts, num_links, num_op_invocations, params);
 }
 
@@ -3297,7 +3308,7 @@ TEST(EdmFabric, BasicMcastThroughputTest_SingleMcast_LineSync) {
     const bool line_sync = true;
     WriteThroughputStabilityTestWithPersistentFabricParams params;
     params.line_sync = line_sync;
-    RunWriteThroughputStabilityTestWIthPersistentFabric(
+    RunWriteThroughputStabilityTestWithPersistentFabric(
         num_mcasts, num_unicasts, num_links, num_op_invocations, params);
 }
 TEST(EdmFabric, BasicMcastThroughputTest_SenderFullNoWrap_ReceiverNoWrap_LineSync) {
@@ -3308,7 +3319,7 @@ TEST(EdmFabric, BasicMcastThroughputTest_SenderFullNoWrap_ReceiverNoWrap_LineSyn
     const bool line_sync = true;
     WriteThroughputStabilityTestWithPersistentFabricParams params;
     params.line_sync = line_sync;
-    RunWriteThroughputStabilityTestWIthPersistentFabric(
+    RunWriteThroughputStabilityTestWithPersistentFabric(
         num_mcasts, num_unicasts, num_links, num_op_invocations, params);
 }
 TEST(EdmFabric, BasicMcastThroughputTest_SenderOneElemWrap_ReceiverNoWrap_2Device_LineSync) {
@@ -3321,7 +3332,7 @@ TEST(EdmFabric, BasicMcastThroughputTest_SenderOneElemWrap_ReceiverNoWrap_2Devic
     WriteThroughputStabilityTestWithPersistentFabricParams params;
     params.line_size = line_size;
     params.line_sync = line_sync;
-    RunWriteThroughputStabilityTestWIthPersistentFabric(
+    RunWriteThroughputStabilityTestWithPersistentFabric(
         num_mcasts, num_unicasts, num_links, num_op_invocations, params);
 }
 TEST(EdmFabric, BasicMcastThroughputTest_SenderOneElemWrap_ReceiverNoWrap_LineSync) {
@@ -3332,7 +3343,7 @@ TEST(EdmFabric, BasicMcastThroughputTest_SenderOneElemWrap_ReceiverNoWrap_LineSy
     const bool line_sync = true;
     WriteThroughputStabilityTestWithPersistentFabricParams params;
     params.line_sync = line_sync;
-    RunWriteThroughputStabilityTestWIthPersistentFabric(
+    RunWriteThroughputStabilityTestWithPersistentFabric(
         num_mcasts, num_unicasts, num_links, num_op_invocations, params);
 }
 TEST(EdmFabric, BasicMcastThroughputTest_SenderTwiceFilled_ReceiverOnceFilled_2Device_LineSync) {
@@ -3345,7 +3356,7 @@ TEST(EdmFabric, BasicMcastThroughputTest_SenderTwiceFilled_ReceiverOnceFilled_2D
     WriteThroughputStabilityTestWithPersistentFabricParams params;
     params.line_size = line_size;
     params.line_sync = line_sync;
-    RunWriteThroughputStabilityTestWIthPersistentFabric(
+    RunWriteThroughputStabilityTestWithPersistentFabric(
         num_mcasts, num_unicasts, num_links, num_op_invocations, params);
 }
 // hangs if run back-to-back but passes if run separately. Also passes if only one test run before
@@ -3357,7 +3368,7 @@ TEST(EdmFabric, BasicMcastThroughputTest_SenderTwiceFilled_ReceiverOnceFilled_Li
     const bool line_sync = true;
     WriteThroughputStabilityTestWithPersistentFabricParams params;
     params.line_sync = line_sync;
-    RunWriteThroughputStabilityTestWIthPersistentFabric(
+    RunWriteThroughputStabilityTestWithPersistentFabric(
         num_mcasts, num_unicasts, num_links, num_op_invocations, params);
 }
 TEST(EdmFabric, BasicMcastThroughputTest_SenderFourTImesFilled_ReceiverTwiceFilled_2Device_1Worker) {
@@ -3371,7 +3382,7 @@ TEST(EdmFabric, BasicMcastThroughputTest_SenderFourTImesFilled_ReceiverTwiceFill
     params.line_size = line_size;
     params.line_sync = line_sync;
     params.num_devices_with_workers = 1;
-    RunWriteThroughputStabilityTestWIthPersistentFabric(
+    RunWriteThroughputStabilityTestWithPersistentFabric(
         num_mcasts, num_unicasts, num_links, num_op_invocations, params);
 }
 TEST(EdmFabric, BasicMcastThroughputTest_SenderFourTImesFilled_ReceiverTwiceFilled_2Device_LineSync) {
@@ -3384,7 +3395,7 @@ TEST(EdmFabric, BasicMcastThroughputTest_SenderFourTImesFilled_ReceiverTwiceFill
     WriteThroughputStabilityTestWithPersistentFabricParams params;
     params.line_size = line_size;
     params.line_sync = line_sync;
-    RunWriteThroughputStabilityTestWIthPersistentFabric(
+    RunWriteThroughputStabilityTestWithPersistentFabric(
         num_mcasts, num_unicasts, num_links, num_op_invocations, params);
 }
 // hangs if run back-to-back but passes if run separately. Also passes if only one test run before
@@ -3396,7 +3407,7 @@ TEST(EdmFabric, BasicMcastThroughputTest_SenderFourTImesFilled_ReceiverTwiceFill
     const bool line_sync = true;
     WriteThroughputStabilityTestWithPersistentFabricParams params;
     params.line_sync = line_sync;
-    RunWriteThroughputStabilityTestWIthPersistentFabric(
+    RunWriteThroughputStabilityTestWithPersistentFabric(
         num_mcasts, num_unicasts, num_links, num_op_invocations, params);
 }
 TEST(EdmFabric, BasicMcastThroughputTest_SenderTwoWrap_ReceiverOneWrap_LineSync) {
@@ -3407,7 +3418,7 @@ TEST(EdmFabric, BasicMcastThroughputTest_SenderTwoWrap_ReceiverOneWrap_LineSync)
     const bool line_sync = true;
     WriteThroughputStabilityTestWithPersistentFabricParams params;
     params.line_sync = line_sync;
-    RunWriteThroughputStabilityTestWIthPersistentFabric(
+    RunWriteThroughputStabilityTestWithPersistentFabric(
         num_mcasts, num_unicasts, num_links, num_op_invocations, params);
 }
 
@@ -3421,7 +3432,7 @@ TEST(EdmFabric, BasicMcastThroughputTest_SmallPerf_2Device) {
     WriteThroughputStabilityTestWithPersistentFabricParams params;
     params.line_sync = report_performance;
     params.line_size = line_size;
-    RunWriteThroughputStabilityTestWIthPersistentFabric(
+    RunWriteThroughputStabilityTestWithPersistentFabric(
         num_mcasts, num_unicasts, num_links, num_op_invocations, params);
 }
 
@@ -3432,7 +3443,7 @@ TEST(EdmFabric, BasicMcastThroughputTest_SmallPerf0) {
     const size_t num_op_invocations = 1;
     WriteThroughputStabilityTestWithPersistentFabricParams params;
     params.line_sync = true;
-    RunWriteThroughputStabilityTestWIthPersistentFabric(
+    RunWriteThroughputStabilityTestWithPersistentFabric(
         num_mcasts, num_unicasts, num_links, num_op_invocations, params);
 }
 TEST(EdmFabric, BasicMcastThroughputTest_SmallPerf1) {
@@ -3442,7 +3453,7 @@ TEST(EdmFabric, BasicMcastThroughputTest_SmallPerf1) {
     const size_t num_op_invocations = 1;
     WriteThroughputStabilityTestWithPersistentFabricParams params;
     params.line_sync = true;
-    RunWriteThroughputStabilityTestWIthPersistentFabric(
+    RunWriteThroughputStabilityTestWithPersistentFabric(
         num_mcasts, num_unicasts, num_links, num_op_invocations, params);
 }
 
@@ -3454,7 +3465,7 @@ TEST(EdmFabric, BasicMcastThroughputTest_0) {
     const bool line_sync = false;
     WriteThroughputStabilityTestWithPersistentFabricParams params;
     params.line_size = 2;
-    RunWriteThroughputStabilityTestWIthPersistentFabric(
+    RunWriteThroughputStabilityTestWithPersistentFabric(
         num_mcasts, num_unicasts, num_links, num_op_invocations, params);
 }
 TEST(EdmFabric, BasicMcastThroughputTest_1) {
@@ -3463,7 +3474,7 @@ TEST(EdmFabric, BasicMcastThroughputTest_1) {
     const size_t num_links = 2;
     const size_t num_op_invocations = 1;
     const bool line_sync = false;
-    RunWriteThroughputStabilityTestWIthPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
+    RunWriteThroughputStabilityTestWithPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
 }
 TEST(EdmFabric, BasicMcastThroughputTest_2) {
     const size_t num_mcasts = 50000;
@@ -3471,21 +3482,21 @@ TEST(EdmFabric, BasicMcastThroughputTest_2) {
     const size_t num_links = 2;
     const size_t num_op_invocations = 1;
 
-    RunWriteThroughputStabilityTestWIthPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
+    RunWriteThroughputStabilityTestWithPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
 }
 TEST(EdmFabric, BasicMcastThroughputTest_3) {
     const size_t num_mcasts = 200000;
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
     const size_t num_op_invocations = 1;
-    RunWriteThroughputStabilityTestWIthPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
+    RunWriteThroughputStabilityTestWithPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
 }
 TEST(EdmFabric, BasicMcastThroughputTest_4) {
     const size_t num_mcasts = 800000;
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
     const size_t num_op_invocations = 1;
-    RunWriteThroughputStabilityTestWIthPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
+    RunWriteThroughputStabilityTestWithPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
 }
 
 TEST(EdmFabric, BasicMcastThroughputTest_5) {
@@ -3493,7 +3504,7 @@ TEST(EdmFabric, BasicMcastThroughputTest_5) {
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
     const size_t num_op_invocations = 20000;
-    RunWriteThroughputStabilityTestWIthPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
+    RunWriteThroughputStabilityTestWithPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
 }
 // DISABLED due to long runtime
 TEST(EdmFabric, DISABLED_BasicMcastThroughputTest_6) {
@@ -3501,7 +3512,7 @@ TEST(EdmFabric, DISABLED_BasicMcastThroughputTest_6) {
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
     const size_t num_op_invocations = 8000;
-    RunWriteThroughputStabilityTestWIthPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
+    RunWriteThroughputStabilityTestWithPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
 }
 // DISABLED due to long runtime
 TEST(EdmFabric, DISABLED_BasicMcastThroughputTest_7) {
@@ -3509,7 +3520,7 @@ TEST(EdmFabric, DISABLED_BasicMcastThroughputTest_7) {
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
     const size_t num_op_invocations = 1000;
-    RunWriteThroughputStabilityTestWIthPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
+    RunWriteThroughputStabilityTestWithPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
 }
 // DISABLED due to long runtime
 TEST(EdmFabric, DISABLED_BasicMcastThroughputTest_8) {
@@ -3517,7 +3528,7 @@ TEST(EdmFabric, DISABLED_BasicMcastThroughputTest_8) {
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
     const size_t num_op_invocations = 200;
-    RunWriteThroughputStabilityTestWIthPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
+    RunWriteThroughputStabilityTestWithPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
 }
 // DISABLED due to long runtime
 TEST(EdmFabric, DISABLED_BasicMcastThroughputTest_9) {
@@ -3525,7 +3536,7 @@ TEST(EdmFabric, DISABLED_BasicMcastThroughputTest_9) {
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
     const size_t num_op_invocations = 150;
-    RunWriteThroughputStabilityTestWIthPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
+    RunWriteThroughputStabilityTestWithPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
 }
 // DISABLED due to long runtime
 TEST(EdmFabric, DISABLED_BasicMcastThroughputTest_10) {
@@ -3533,7 +3544,7 @@ TEST(EdmFabric, DISABLED_BasicMcastThroughputTest_10) {
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
     const size_t num_op_invocations = 50;
-    RunWriteThroughputStabilityTestWIthPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
+    RunWriteThroughputStabilityTestWithPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
 }
 // DISABLED due to long runtime
 TEST(EdmFabric, BasicMcastThroughputTest_6_Short) {
@@ -3541,7 +3552,7 @@ TEST(EdmFabric, BasicMcastThroughputTest_6_Short) {
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
     const size_t num_op_invocations = 100;
-    RunWriteThroughputStabilityTestWIthPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
+    RunWriteThroughputStabilityTestWithPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
 }
 // DISABLED due to long runtime
 TEST(EdmFabric, BasicMcastThroughputTest_7_Short) {
@@ -3549,7 +3560,7 @@ TEST(EdmFabric, BasicMcastThroughputTest_7_Short) {
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
     const size_t num_op_invocations = 50;
-    RunWriteThroughputStabilityTestWIthPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
+    RunWriteThroughputStabilityTestWithPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
 }
 // DISABLED due to long runtime
 TEST(EdmFabric, BasicMcastThroughputTest_8_Short) {
@@ -3557,7 +3568,7 @@ TEST(EdmFabric, BasicMcastThroughputTest_8_Short) {
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
     const size_t num_op_invocations = 20;
-    RunWriteThroughputStabilityTestWIthPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
+    RunWriteThroughputStabilityTestWithPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
 }
 // DISABLED due to long runtime
 TEST(EdmFabric, BasicMcastThroughputTest_9_Short) {
@@ -3565,7 +3576,7 @@ TEST(EdmFabric, BasicMcastThroughputTest_9_Short) {
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
     const size_t num_op_invocations = 10;
-    RunWriteThroughputStabilityTestWIthPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
+    RunWriteThroughputStabilityTestWithPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
 }
 // DISABLED due to long runtime
 TEST(EdmFabric, BasicMcastThroughputTest_10_Short) {
@@ -3573,7 +3584,7 @@ TEST(EdmFabric, BasicMcastThroughputTest_10_Short) {
     const size_t num_unicasts = 2;
     const size_t num_links = 2;
     const size_t num_op_invocations = 5;
-    RunWriteThroughputStabilityTestWIthPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
+    RunWriteThroughputStabilityTestWithPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
 }
 
 TEST(EdmFabric, BasicMcastThroughputTest_0_WithLineSync) {
@@ -3584,7 +3595,7 @@ TEST(EdmFabric, BasicMcastThroughputTest_0_WithLineSync) {
     const bool line_sync = true;
     WriteThroughputStabilityTestWithPersistentFabricParams params;
     params.line_sync = line_sync;
-    RunWriteThroughputStabilityTestWIthPersistentFabric(
+    RunWriteThroughputStabilityTestWithPersistentFabric(
         num_mcasts, num_unicasts, num_links, num_op_invocations, params);
 }
 TEST(EdmFabric, BasicMcastThroughputTest_1_WithLineSync) {
@@ -3595,7 +3606,7 @@ TEST(EdmFabric, BasicMcastThroughputTest_1_WithLineSync) {
     const bool line_sync = true;
     WriteThroughputStabilityTestWithPersistentFabricParams params;
     params.line_sync = line_sync;
-    RunWriteThroughputStabilityTestWIthPersistentFabric(
+    RunWriteThroughputStabilityTestWithPersistentFabric(
         num_mcasts, num_unicasts, num_links, num_op_invocations, params);
 }
 TEST(EdmFabric, BasicMcastThroughputTest_2_WithLineSync) {
@@ -3606,7 +3617,7 @@ TEST(EdmFabric, BasicMcastThroughputTest_2_WithLineSync) {
     const bool line_sync = true;
     WriteThroughputStabilityTestWithPersistentFabricParams params;
     params.line_sync = line_sync;
-    RunWriteThroughputStabilityTestWIthPersistentFabric(
+    RunWriteThroughputStabilityTestWithPersistentFabric(
         num_mcasts, num_unicasts, num_links, num_op_invocations, params);
 }
 TEST(EdmFabric, BasicMcastThroughputTest_3_WithLineSync) {
@@ -3617,7 +3628,7 @@ TEST(EdmFabric, BasicMcastThroughputTest_3_WithLineSync) {
     const bool line_sync = true;
     WriteThroughputStabilityTestWithPersistentFabricParams params;
     params.line_sync = line_sync;
-    RunWriteThroughputStabilityTestWIthPersistentFabric(
+    RunWriteThroughputStabilityTestWithPersistentFabric(
         num_mcasts, num_unicasts, num_links, num_op_invocations, params);
 }
 TEST(EdmFabric, BasicMcastThroughputTest_4_WithLineSync) {
@@ -3628,6 +3639,6 @@ TEST(EdmFabric, BasicMcastThroughputTest_4_WithLineSync) {
     const bool line_sync = true;
     WriteThroughputStabilityTestWithPersistentFabricParams params;
     params.line_sync = line_sync;
-    RunWriteThroughputStabilityTestWIthPersistentFabric(
+    RunWriteThroughputStabilityTestWithPersistentFabric(
         num_mcasts, num_unicasts, num_links, num_op_invocations, params);
 }
