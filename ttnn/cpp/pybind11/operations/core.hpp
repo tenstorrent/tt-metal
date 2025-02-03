@@ -228,7 +228,7 @@ void py_module(py::module& module) {
     module.def(
         "allocate_tensor_on_device",
         py::overload_cast<
-            const ttnn::SimpleShape&,
+            const ttnn::Shape&,
             ttnn::DataType,
             ttnn::Layout,
             IDevice*,
@@ -242,7 +242,7 @@ void py_module(py::module& module) {
     module.def(
         "allocate_tensor_on_device",
         py::overload_cast<
-            const ttnn::SimpleShape&,
+            const ttnn::Shape&,
             ttnn::DataType,
             ttnn::Layout,
             MeshDevice*,

@@ -20,7 +20,7 @@ namespace types {
 
 void py_module_types(py::module& module) {
     py::class_<ttnn::CoreGrid>(module, "CoreGrid");
-    py::class_<ttnn::SimpleShape>(module, "Shape");
+    py::class_<ttnn::Shape>(module, "Shape");
 
     export_enum<ttnn::BcastOpMath>(module, "BcastOpMath");
     export_enum<ttnn::BcastOpDim>(module, "BcastOpDim");
@@ -41,25 +41,25 @@ void py_module(py::module& module) {
             return ss.str();
         });
 
-    auto PyShape = static_cast<py::class_<ttnn::SimpleShape>>(module.attr("Shape"));
+    auto PyShape = static_cast<py::class_<ttnn::Shape>>(module.attr("Shape"));
     PyShape.def(py::init<const ttnn::SmallVector<uint32_t>&>(), py::arg("shape"))
-        .def("__len__", [](const SimpleShape& self) { return self.rank(); })
-        .def("__getitem__", [](const SimpleShape& self, std::int64_t index) { return self[index]; })
+        .def("__len__", [](const Shape& self) { return self.rank(); })
+        .def("__getitem__", [](const Shape& self, std::int64_t index) { return self[index]; })
         .def(
             "__iter__",
-            [](const SimpleShape& self) {
+            [](const Shape& self) {
                 return py::iter(py::cast(ttnn::SmallVector<uint32_t>(self.cbegin(), self.cend())));
             })
         .def(pybind11::self == pybind11::self)
         .def(
             "__repr__",
-            [](const SimpleShape& self) {
+            [](const Shape& self) {
                 std::stringstream ss;
                 ss << self;
                 return ss.str();
             })
-        .def_property_readonly("rank", [](const SimpleShape& self) -> std::size_t { return self.rank(); })
-        .def("to_rank", [](const SimpleShape& self, std::size_t new_rank) {
+        .def_property_readonly("rank", [](const Shape& self) -> std::size_t { return self.rank(); })
+        .def("to_rank", [](const Shape& self, std::size_t new_rank) {
             SmallVector<uint32_t> new_shape(new_rank, 1);
 
             int cur_idx = static_cast<int>(self.rank()) - 1;
@@ -71,9 +71,9 @@ void py_module(py::module& module) {
                 TT_FATAL(self[cur_idx] == 1, "Can't convert shape rank");
             }
 
-            return ttnn::SimpleShape(std::move(new_shape));
+            return ttnn::Shape(std::move(new_shape));
         });
-    py::implicitly_convertible<ttnn::SmallVector<uint32_t>, ttnn::SimpleShape>();
+    py::implicitly_convertible<ttnn::SmallVector<uint32_t>, ttnn::Shape>();
 }
 
 }  // namespace types

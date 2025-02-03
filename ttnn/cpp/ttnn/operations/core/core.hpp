@@ -37,14 +37,14 @@ ttnn::Tensor to_device(
     uint8_t cq_id = ttnn::DefaultQueueId);
 
 ttnn::Tensor allocate_tensor_on_device(
-    const SimpleShape& shape,
+    const Shape& shape,
     DataType data_type,
     Layout layout,
     IDevice* device,
     const std::optional<MemoryConfig>& memory_config);
 
 ttnn::Tensor allocate_tensor_on_device(
-    const SimpleShape& shape,
+    const Shape& shape,
     DataType data_type,
     Layout layout,
     MeshDevice* mesh_device,

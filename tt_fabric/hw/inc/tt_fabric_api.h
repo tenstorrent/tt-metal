@@ -16,28 +16,10 @@ using namespace tt::tt_fabric;
 extern volatile local_pull_request_t* local_pull_request;
 extern volatile fabric_client_interface_t* client_interface;
 
-/*
-inline void fabric_async_write(
-    uint32_t routing_plane,      // the network plane to use for this transaction
-    uint32_t src_addr,           // source address in sender’s memory
-    uint64_t dst_addr,           // destination write address
-    uint32_t size,               // number of bytes to write to remote destination
-    uint32_t& fvc,               // fabric virtual channel. Set to –1 for automatic selection
-    uint32_t return_status_addr  // TT-Fabric returns api call status at this address
-) {
-    uint32_t size_in_words = (size + PACKET_WORD_SIZE_BYTES - 1) >> 4;
-    local_pull_request.pull_request.wr_ptr = size_in_words;
-    local_pull_request.pull_request.rd_ptr = 0;
-    local_pull_request.pull_request.size = size;
-    local_pull_request.pull_request.buffer_size = size_in_words;
-    local_pull_request.pull_request.buffer_start = src_addr;
-    local_pull_request.pull_request.ack_addr = -1;
-    local_pull_request.pull_request.flags = FORWARD;
-
-    uint64_t router_request_queue = NOC_XY_ADDR(2, 0, 0x19000);
-    tt_fabric_send_pull_request(router_request_queue, &local_pull_request);
-}
-*/
+#define ASYNC_WR_ALL 1
+#define ASYNC_WR_ADD_PR 2
+#define ASYNC_WR_SEND 3
+#define ASYNC_WR_ADD_HEADER 4
 
 inline uint32_t get_next_hop_router_noc_xy(uint32_t routing_plane, uint32_t dst_mesh_id, uint32_t dst_dev_id) {
     if (dst_mesh_id != routing_table[routing_plane].my_mesh_id) {
@@ -46,6 +28,65 @@ inline uint32_t get_next_hop_router_noc_xy(uint32_t routing_plane, uint32_t dst_
     } else {
         uint32_t next_port = routing_table[routing_plane].intra_mesh_table.dest_entry[dst_dev_id];
         return eth_chan_to_noc_xy[noc_index][next_port];
+    }
+}
+
+inline void fabric_setup_pull_request(uint32_t src_addr, uint32_t size) {
+    uint32_t size_in_words = (size + PACKET_WORD_SIZE_BYTES - 1) >> 4;
+    client_interface->local_pull_request.pull_request.wr_ptr = size_in_words;
+    client_interface->local_pull_request.pull_request.rd_ptr = 0;
+    client_interface->local_pull_request.pull_request.size = size;
+    client_interface->local_pull_request.pull_request.buffer_size = size_in_words;
+    client_interface->local_pull_request.pull_request.buffer_start = xy_local_addr + src_addr;
+    client_interface->local_pull_request.pull_request.ack_addr =
+        xy_local_addr + (uint32_t)&client_interface->local_pull_request.pull_request.rd_ptr;
+    client_interface->local_pull_request.pull_request.flags = FORWARD;
+}
+
+inline void fabric_send_pull_request(uint32_t routing_plane, uint16_t dst_mesh_id, uint16_t dst_dev_id) {
+    uint64_t router_addr = ((uint64_t)get_next_hop_router_noc_xy(routing_plane, dst_mesh_id, dst_dev_id) << 32) |
+                           FABRIC_ROUTER_REQ_QUEUE_START;
+    tt_fabric_send_pull_request(router_addr, (volatile local_pull_request_t*)&client_interface->local_pull_request);
+}
+
+inline void fabric_async_write_add_header(
+    uint32_t src_addr,  // source address in sender’s memory
+    uint16_t dst_mesh_id,
+    uint16_t dst_dev_id,
+    uint64_t dst_addr,
+    uint32_t size  // number of bytes to write to remote destination
+) {
+    packet_header_t* packet_header = (packet_header_t*)(src_addr);
+    packet_header->routing.flags = FORWARD;
+    packet_header->routing.packet_size_bytes = size;
+    packet_header->routing.dst_mesh_id = dst_mesh_id;
+    packet_header->routing.dst_dev_id = dst_dev_id;
+    packet_header->session.command = ASYNC_WR;
+    packet_header->session.target_offset_l = (uint32_t)dst_addr;
+    packet_header->session.target_offset_h = dst_addr >> 32;
+    tt_fabric_add_header_checksum(packet_header);
+}
+// Write packetized data over fabric to dst_mesh, dst_dev.
+// Packet is at src_addr in sender L1.
+template <uint8_t mode = ASYNC_WR_ALL>
+inline void fabric_async_write(
+    uint32_t routing_plane,  // the network plane to use for this transaction
+    uint32_t src_addr,       // source address in sender’s memory
+    uint16_t dst_mesh_id,
+    uint16_t dst_dev_id,
+    uint64_t dst_addr,
+    uint32_t size  // number of bytes to write to remote destination
+) {
+    if constexpr (mode == ASYNC_WR_ALL or mode == ASYNC_WR_ADD_HEADER) {
+        fabric_async_write_add_header(src_addr, dst_mesh_id, dst_dev_id, dst_addr, size);
+    }
+
+    if constexpr (mode == ASYNC_WR_ALL or mode == ASYNC_WR_ADD_PR) {
+        fabric_setup_pull_request(src_addr, size);
+    }
+
+    if constexpr (mode == ASYNC_WR_ALL or mode == ASYNC_WR_SEND) {
+        fabric_send_pull_request(routing_plane, dst_mesh_id, dst_dev_id);
     }
 }
 

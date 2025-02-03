@@ -18,21 +18,18 @@ tt::tt_metal::Tensor zeros_like(const tt::tt_metal::Tensor& tensor);
 tt::tt_metal::Tensor ones_like(const tt::tt_metal::Tensor& tensor);
 
 tt::tt_metal::Tensor empty(
-    const ttnn::SimpleShape& shape, ttnn::distributed::MeshDevice* device, const MemoryConfig& memory_config);
+    const ttnn::Shape& shape, ttnn::distributed::MeshDevice* device, const MemoryConfig& memory_config);
 tt::tt_metal::Tensor full(
-    const ttnn::SimpleShape& shape,
-    float value,
-    ttnn::distributed::MeshDevice* device,
-    DataType dtype = DataType::BFLOAT16);
+    const ttnn::Shape& shape, float value, ttnn::distributed::MeshDevice* device, DataType dtype = DataType::BFLOAT16);
 tt::tt_metal::Tensor zeros(
-    const ttnn::SimpleShape& shape, ttnn::distributed::MeshDevice* device, DataType dtype = DataType::BFLOAT16);
+    const ttnn::Shape& shape, ttnn::distributed::MeshDevice* device, DataType dtype = DataType::BFLOAT16);
 tt::tt_metal::Tensor ones(
-    const ttnn::SimpleShape& shape, ttnn::distributed::MeshDevice* device, DataType dtype = DataType::BFLOAT16);
+    const ttnn::Shape& shape, ttnn::distributed::MeshDevice* device, DataType dtype = DataType::BFLOAT16);
 
 template <class VectorType = float, DataType TensorType = DataType::BFLOAT16>
 [[nodiscard]] tt::tt_metal::Tensor from_vector(
     const std::vector<VectorType>& buffer,
-    const ttnn::SimpleShape& shape,
+    const ttnn::Shape& shape,
     ttnn::distributed::MeshDevice* device,
     Layout layout = Layout::TILE);
 
@@ -47,7 +44,7 @@ template <class T = float>
 
 [[nodiscard]] bool is_tensor_initialized(const tt::tt_metal::Tensor& tensor);
 
-[[nodiscard]] ttnn::SimpleShape create_shape(const std::array<uint32_t, 4>& args);
+[[nodiscard]] ttnn::Shape create_shape(const std::array<uint32_t, 4>& args);
 
 template <class T = float, DataType TensorType = DataType::BFLOAT16>
 [[nodiscard]] tt::tt_metal::Tensor from_xtensor(

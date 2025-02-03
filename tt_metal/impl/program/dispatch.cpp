@@ -5,7 +5,8 @@
 #include "tt_metal/impl/program/dispatch.hpp"
 
 #include <command_queue.hpp>
-#include <hardware_command_queue.hpp>
+#include <tt-metalium/command_queue_interface.hpp>
+#include <tt-metalium/dispatch_settings.hpp>
 #include <mesh_command_queue.hpp>
 #include <mesh_workload.hpp>
 #include <tt_align.hpp>
@@ -13,6 +14,7 @@
 
 #include "tt_metal/impl/dispatch/data_collection.hpp"
 #include "tt_metal/impl/dispatch/device_command_calculator.hpp"
+#include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
 
 namespace tt::tt_metal {
 namespace program_dispatch {
@@ -406,9 +408,9 @@ void insert_stall_cmds(ProgramCommandSequence& program_command_sequence, SubDevi
     // Initialize stall command sequences for this program.
     auto dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
     uint32_t dispatch_message_addr =
-        dispatch_constants::get(dispatch_core_type)
+        DispatchMemMap::get(dispatch_core_type)
             .get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE) +
-        dispatch_constants::get(dispatch_core_type).get_dispatch_message_offset(sub_device_id.to_index());
+        DispatchMemMap::get(dispatch_core_type).get_dispatch_message_offset(sub_device_id.to_index());
     uint32_t uncached_stall_cmd_sizeB = hal.get_alignment(HalMemType::HOST) + hal.get_alignment(HalMemType::HOST);
     uint32_t cached_stall_cmd_seqB = hal.get_alignment(HalMemType::HOST);
 
@@ -548,7 +550,7 @@ void assemble_runtime_args_commands(
     static const uint32_t packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(device);
     NOC noc_index = dispatch_downstream_noc;
     CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
-    const uint32_t max_prefetch_command_size = dispatch_constants::get(dispatch_core_type).max_prefetch_command_size();
+    const uint32_t max_prefetch_command_size = DispatchMemMap::get(dispatch_core_type).max_prefetch_command_size();
 
     // Dispatch Commands to Unicast Unique Runtime Args to Workers
     std::vector<CQDispatchWritePackedUnicastSubCmd> unique_sub_cmds;
@@ -802,7 +804,7 @@ void insert_write_packed_payloads(
             tt::align(sizeof(CQDispatchCmd) + num_sub_cmds_in_cmd * sizeof(PackedSubCmd), l1_alignment);
         packed_cmd_payloads.emplace_back(num_sub_cmds_in_cmd, dispatch_cmd_sizeB + aligned_data_sizeB);
         rem_num_sub_cmds -= num_sub_cmds_in_cmd;
-        calculator.add_dispatch_write_packed<CQDispatchWritePackedMulticastSubCmd>(
+        calculator.add_dispatch_write_packed<PackedSubCmd>(
             num_sub_cmds_in_cmd, sub_cmd_sizeB, packed_write_max_unicast_sub_cmds);
     }
 }
@@ -812,7 +814,7 @@ void assemble_device_commands(
     DeviceCommandCalculator calculator;
     CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
     NOC noc_index = dispatch_downstream_noc;
-    const uint32_t max_prefetch_command_size = dispatch_constants::get(dispatch_core_type).max_prefetch_command_size();
+    const uint32_t max_prefetch_command_size = DispatchMemMap::get(dispatch_core_type).max_prefetch_command_size();
     static const uint32_t packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(device);
     const auto& program_transfer_info = program.get_program_transfer_info();
     // Multicast Semaphore Cmd
@@ -1027,7 +1029,7 @@ void assemble_device_commands(
     std::vector<std::vector<CQDispatchWritePackedLargeSubCmd>> kernel_bins_dispatch_subcmds;
     std::vector<uint32_t> kernel_bins_write_packed_large_data_aligned_sizeB;
     std::vector<HostMemDeviceCommand> kernel_bins_unicast_cmds;
-    const uint32_t max_length_per_sub_cmd = dispatch_constants::get(dispatch_core_type).scratch_db_size() / 2;
+    const uint32_t max_length_per_sub_cmd = DispatchMemMap::get(dispatch_core_type).scratch_db_size() / 2;
     const uint32_t max_paged_length_per_sub_cmd =
         max_length_per_sub_cmd / HostMemDeviceCommand::PROGRAM_PAGE_SIZE * HostMemDeviceCommand::PROGRAM_PAGE_SIZE;
     if (program_transfer_info.kernel_bins.size()) {
@@ -1235,6 +1237,9 @@ void assemble_device_commands(
             unicast_go_signals_payload);
     }
 
+    // if dispatch_s is enabled have dispatch_d send a semaphore update to dispatch_s (this will include a write barrier
+    // on dispatch_d if program is active) if not,  check if the program is active on workers. If active, have
+    // dispatch_d issue a write barrier
     // either dispatch_s or dispatch_d will send the go signal (go_signal_mcast command)
     const auto& noc_data_start_idx = device->noc_data_start_index(
         sub_device_id, multicast_go_signal_sub_cmds.size() > 0, unicast_go_signal_sub_cmds.size() > 0);
@@ -1242,7 +1247,7 @@ void assemble_device_commands(
         multicast_go_signal_sub_cmds.size() > 0 ? device->num_noc_mcast_txns(sub_device_id) : 0;
     const auto& num_noc_unicast_txns =
         unicast_go_signal_sub_cmds.size() > 0 ? device->num_noc_unicast_txns(sub_device_id) : 0;
-    if (device->dispatch_s_enabled()) {
+    if (tt_metal::DispatchQueryManager::instance().dispatch_s_enabled()) {
         calculator.add_notify_dispatch_s_go_signal_cmd();
     } else {
         // Wait Noc Write Barrier, wait for binaries/configs and launch_msg to be written to worker cores
@@ -1417,10 +1422,10 @@ void assemble_device_commands(
     DispatcherSelect dispatcher_for_go_signal = DispatcherSelect::DISPATCH_MASTER;
     auto sub_device_index = sub_device_id.to_index();
     uint32_t dispatch_message_addr =
-        dispatch_constants::get(dispatch_core_type)
+        DispatchMemMap::get(dispatch_core_type)
             .get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE) +
-        dispatch_constants::get(dispatch_core_type).get_dispatch_message_offset(sub_device_index);
-    if (device->dispatch_s_enabled()) {
+        DispatchMemMap::get(dispatch_core_type).get_dispatch_message_offset(sub_device_index);
+    if (tt_metal::DispatchQueryManager::instance().dispatch_s_enabled()) {
         // dispatch_d signals dispatch_s to send the go signal, use a barrier if there are cores active
         uint16_t index_bitmask = 0;
         index_bitmask |= 1 << sub_device_index;
@@ -1439,7 +1444,7 @@ void assemble_device_commands(
     run_program_go_signal.master_x = 0;
     run_program_go_signal.master_y = 0;
     run_program_go_signal.dispatch_message_offset =
-        (uint8_t)dispatch_constants::get(dispatch_core_type).get_dispatch_message_offset(sub_device_index);
+        (uint8_t)DispatchMemMap::get(dispatch_core_type).get_dispatch_message_offset(sub_device_index);
     uint32_t write_offset_bytes = device_command_sequence.write_offset_bytes();
     // Num Workers Resolved when the program is enqueued
     device_command_sequence.add_dispatch_go_signal_mcast(
@@ -1633,7 +1638,7 @@ void update_program_dispatch_commands(
     run_program_go_signal.master_x = (uint8_t)dispatch_core.x;
     run_program_go_signal.master_y = (uint8_t)dispatch_core.y;
     run_program_go_signal.dispatch_message_offset =
-        (uint8_t)dispatch_constants::get(dispatch_core_type).get_dispatch_message_offset(sub_device_id.to_index());
+        (uint8_t)DispatchMemMap::get(dispatch_core_type).get_dispatch_message_offset(sub_device_id.to_index());
     cached_program_command_sequence.mcast_go_signal_cmd_ptr->go_signal =
         *reinterpret_cast<uint32_t*>(&run_program_go_signal);
     cached_program_command_sequence.mcast_go_signal_cmd_ptr->wait_count = expected_num_workers_completed;
@@ -1677,7 +1682,7 @@ void write_program_command_sequence(
     uint32_t total_fetch_size_bytes =
         stall_fetch_size_bytes + preamble_fetch_size_bytes + runtime_args_fetch_size_bytes + program_fetch_size_bytes;
 
-    if (total_fetch_size_bytes <= dispatch_constants::get(dispatch_core_type).max_prefetch_command_size()) {
+    if (total_fetch_size_bytes <= DispatchMemMap::get(dispatch_core_type).max_prefetch_command_size()) {
         manager.issue_queue_reserve(total_fetch_size_bytes, command_queue_id);
         uint32_t write_ptr = manager.get_issue_queue_write_ptr(command_queue_id);
 

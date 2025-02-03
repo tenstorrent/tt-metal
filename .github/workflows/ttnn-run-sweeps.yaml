@@ -201,6 +201,8 @@ on:
           - eltwise.unary_backward.fill_zero_bw.fill_zero_bw_sharded
           - eltwise.unary_backward.log_sigmoid_bw.log_sigmoid_bw
           - eltwise.unary_backward.log_sigmoid_bw.log_sigmoid_bw_sharded
+          - eltwise.unary_backward.clip_bw.clip_bw
+          - eltwise.unary_backward.clip_bw.clip_bw_sharded
           - eltwise.unary_backward.logit_bw
           - eltwise.unary_backward.neg_bw.neg_bw
           - eltwise.unary_backward.neg_bw.neg_bw_sharded
@@ -230,10 +232,14 @@ on:
           - eltwise.unary_backward.trunc_bw.trunc_bw
           - eltwise.unary_backward.trunc_bw.trunc_bw_sharded
           - eltwise.unary_backward.clamp_bw.clamp_bw
+          - eltwise.unary_backward.clamp_bw.clamp_bw_sharded
           - eltwise.unary_backward.hardtanh_bw.hardtanh_bw
+          - eltwise.unary_backward.hardtanh_bw.hardtanh_bw_sharded
           - eltwise.unary_backward.mul_bw.mul_bw
           - eltwise.unary_backward.softplus_bw.softplus_bw
+          - eltwise.unary_backward.softplus_bw.softplus_bw_sharded
           - eltwise.unary_backward.threshold_bw.threshold_bw
+          - eltwise.unary_backward.threshold_bw.threshold_bw_sharded
           - eltwise.unary_backward.div_bw.div_bw
           - eltwise.unary_backward.log_bw.log_bw
           - eltwise.unary_backward.log_bw.log_bw_sharded
@@ -245,11 +251,16 @@ on:
           - eltwise.unary_backward.sin_bw.sin_bw
           - eltwise.unary_backward.square_bw.square_bw
           - eltwise.unary_backward.rdiv_bw.rdiv_bw
+          - eltwise.unary_backward.rdiv_bw.rdiv_bw_sharded
           - eltwise.unary_backward.bias_gelu_bw.bias_gelu_bw
           - eltwise.unary_backward.pow_bw.pow_bw
+          - eltwise.unary_backward.pow_bw.pow_bw_sharded
           - eltwise.unary_backward.exp_bw.exp_bw
+          - eltwise.unary_backward.exp_bw.exp_bw_sharded
           - eltwise.unary_backward.tanh_bw.tanh_bw
+          - eltwise.unary_backward.tanh_bw.tanh_bw_sharded
           - eltwise.unary_backward.sqrt_bw.sqrt_bw
+          - eltwise.unary_backward.sqrt_bw.sqrt_bw_sharded
           - eltwise.unary_backward.add_bw.add_bw
           - eltwise.unary_backward.add_bw.add_bw_sharded
           - eltwise.unary_backward.assign_bw.assign_bw
@@ -258,7 +269,9 @@ on:
           - eltwise.unary_backward.hardsigmoid_bw.hardsigmoid_bw
           - eltwise.unary_backward.hardsigmoid_bw.hardsigmoid_bw_sharded
           - eltwise.unary_backward.lgamma_bw.lgamma_bw
+          - eltwise.unary_backward.lgamma_bw.lgamma_bw_sharded
           - eltwise.unary_backward.multigammaln_bw.multigammaln_bw
+          - eltwise.unary_backward.multigammaln_bw.multigammaln_bw_sharded
           - eltwise.unary_backward.leaky_relu_bw.leaky_relu_bw
           - eltwise.unary_backward.leaky_relu_bw.leaky_relu_bw_sharded
           - eltwise.unary_backward.elu_bw.elu_bw
@@ -357,6 +370,7 @@ on:
           - eltwise.binary.remainder.remainder_forge
           - eltwise.binary.remainder.remainder_unary
           - eltwise.binary.remainder.remainder_unary_sharded
+          - eltwise.binary.remainder.remainder_shape
           - eltwise.binary.squared_difference.squared_difference
           - eltwise.binary.squared_difference_output.squared_difference_output
           - eltwise.binary.scatter.scatter_forge
@@ -372,6 +386,7 @@ on:
           - eltwise.binary.fmod.fmod_unary
           - eltwise.binary.fmod.fmod_unary_sharded
           - eltwise.binary.floor_divide.floor_divide_pytorch2
+          - eltwise.binary.floor_divide.floor_divide
           - eltwise.binary.logaddexp.logaddexp
           - eltwise.binary.logaddexp2.logaddexp2
           - eltwise.binary.ldexp.ldexp

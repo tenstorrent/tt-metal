@@ -119,7 +119,7 @@ TEST(GalaxyTests, TestAllGatherDeadlock) {
     // Setup input data and output data containers
     MemoryConfig mem_cfg = MemoryConfig{
         .memory_layout = TensorMemoryLayout::INTERLEAVED, .buffer_type = BufferType::DRAM, .shard_spec = std::nullopt};
-    ttnn::SimpleShape shape{1, 1, 32, 16384};
+    ttnn::Shape shape{1, 1, 32, 16384};
     const uint32_t buf_size_datums = 32 * 16384;
     const uint32_t datum_size_bytes = 2;
     auto host_data = std::shared_ptr<bfloat16[]>(new bfloat16[buf_size_datums]);
@@ -185,7 +185,7 @@ TEST(GalaxyTests, TestAllGatherDeadlock) {
             for (auto& tensor : output_tensors) {
                 ASSERT_EQ(
                     tensor.get_logical_shape(),
-                    SimpleShape({1, 1, 32, static_cast<uint32_t>(16384 * device_ids.size())}));
+                    Shape({1, 1, 32, static_cast<uint32_t>(16384 * device_ids.size())}));
                 ttnn::read_buffer(0, tensor, {readback_data});
                 for (int j = 0; j < device_ids.size() * 32 * 16384; j++) {
                     ASSERT_EQ(readback_data[j].to_float(), 1);
@@ -227,7 +227,7 @@ TEST(GalaxyTests, TestReduceScatterDeadlock) {
     // Setup input data and output data containers
     MemoryConfig mem_cfg = MemoryConfig{
         .memory_layout = TensorMemoryLayout::INTERLEAVED, .buffer_type = BufferType::DRAM, .shard_spec = std::nullopt};
-    ttnn::SimpleShape shape{1, 2, 256, static_cast<uint32_t>(256 * ring_devices.size())};
+    ttnn::Shape shape{1, 2, 256, static_cast<uint32_t>(256 * ring_devices.size())};
     const uint32_t buf_size_datums = 2 * 256 * 256 * ring_devices.size();
     const uint32_t datum_size_bytes = 2;
     // Output of reduce scatter is input_numel / num_devices_used_in_scatter_op
@@ -294,7 +294,7 @@ TEST(GalaxyTests, TestReduceScatterDeadlock) {
         }
         // Readback data and verify correctness.
         for (auto& tensor : output_tensors) {
-            ASSERT_EQ(tensor.get_logical_shape(), SimpleShape({1, 2, 256, 256}));
+            ASSERT_EQ(tensor.get_logical_shape(), Shape({1, 2, 256, 256}));
             ttnn::read_buffer(0, tensor, {readback_data});
             for (int j = 0; j < 512 * 256; j++) {
                 ASSERT_EQ(readback_data[j].to_float(), ring_devices.size());

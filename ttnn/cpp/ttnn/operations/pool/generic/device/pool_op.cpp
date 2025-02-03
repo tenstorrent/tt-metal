@@ -83,11 +83,8 @@ Pool2D::spec_return_value_t Pool2D::compute_output_specs(
         tt::round_up(out_nhw, (is_out_tiled ? tt::constants::TILE_HEIGHT : 1) * sliding_window_config.num_cores_nhw);
 
     // {1, 1, N * H * W, C}
-    const ttnn::SmallVector<uint32_t> out_dims({1, 1, out_nhw_padded, out_c_padded});
-    const auto padding = Padding(
-        {{0, 0}, {0, 0}, {0, out_nhw_padded - out_nhw}, {0, out_c_padded - out_c}},
-        Padding::PadValue::NegativeInfinity);
-    auto output_shape = Shape(tt::tt_metal::LegacyShape(out_dims, padding));
+    const ttnn::Shape padded_output_shape({1, 1, out_nhw_padded, out_c_padded});
+    const ttnn::Shape output_shape({1, 1, out_nhw, out_c});
 
     auto mem_config = out_mem_config;
     if (mem_config.shard_spec.has_value()) {
@@ -102,8 +99,9 @@ Pool2D::spec_return_value_t Pool2D::compute_output_specs(
     }
 
     return TensorSpec(
-        output_shape.logical_shape(),
-        TensorLayout::fromLegacyPaddedShape(output_dtype, PageConfig(input.get_layout()), mem_config, output_shape));
+        output_shape,
+        TensorLayout::fromPaddedShape(
+            output_dtype, PageConfig(input.get_layout()), mem_config, output_shape, padded_output_shape));
 }
 
 Pool2D::tensor_return_value_t Pool2D::create_output_tensors(

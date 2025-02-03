@@ -446,7 +446,7 @@ static uint32_t compare_out_with_ref(const owned_buffer::Buffer<bfloat16>& out_b
 static void test_convert_conv_weight_tensor_to_tiled_layout_block_sharded() {
     tt::log_info(tt::LogTest, "Running {}", __func__);
     for (auto i = 0; i < weight_tensor_shape.size(); i++) {
-        auto input_tensor = ttnn::zeros(ttnn::SimpleShape(weight_tensor_shape[i]));
+        auto input_tensor = ttnn::zeros(ttnn::Shape(weight_tensor_shape[i]));
         auto input_buffer = owned_buffer::get_as<bfloat16>(input_tensor);
         for (auto j = 0; j < input_buffer.size(); j++) {
             input_buffer[j] = ref_weight_in[i][j];
@@ -463,7 +463,7 @@ static void test_convert_conv_bias_tensor_to_tiled_layout_block_sharded() {
     tt::log_info(tt::LogTest, "Running {}", __func__);
     for (auto i = 0; i < bias_tensor_shape.size(); i++) {
         auto input_tensor =
-            ttnn::random::random(SimpleShape(bias_tensor_shape[i]), DataType::BFLOAT16).to(Layout::ROW_MAJOR).cpu();
+            ttnn::random::random(Shape(bias_tensor_shape[i]), DataType::BFLOAT16).to(Layout::ROW_MAJOR).cpu();
         auto input_buffer = owned_buffer::get_as<bfloat16>(input_tensor);
         auto output_tensor = ttnn::operations::conv::convert_conv_bias_tensor_to_tiled_layout_block_sharded(
             input_tensor, shards[i], DataType::BFLOAT16);

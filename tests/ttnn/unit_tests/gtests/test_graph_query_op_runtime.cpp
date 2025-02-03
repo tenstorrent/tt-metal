@@ -47,7 +47,7 @@ public:
 };
 
 const ttnn::TensorSpec TTNNFixtureWithTraceEnabledDevice::m_interleaved_1_3_1024_1024_tiled = ttnn::TensorSpec(
-    ttnn::SimpleShape({1, 3, 1024, 1024}),
+    ttnn::Shape({1, 3, 1024, 1024}),
     tt::tt_metal::TensorLayout(
         tt::tt_metal::DataType::BFLOAT16,
         tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),

@@ -47,7 +47,7 @@ Tensor AutoFormat::move_tensor_to_device_and_pad(
     const Tensor& input, IDevice* device, Layout target_layout, std::optional<MemoryConfig> target_mem_config) {
     using namespace tt::constants;
     const auto device_shape = input.get_padded_shape();
-    const SimpleShape new_device_shape(
+    const Shape new_device_shape(
         {device_shape[0],
          device_shape[1],
          (device_shape[-2] % TILE_HEIGHT != 0 ? (device_shape[-2] / TILE_HEIGHT + 1) * TILE_HEIGHT : device_shape[-2]),
@@ -59,7 +59,7 @@ Tensor AutoFormat::move_tensor_to_device_and_pad(
 Tensor AutoFormat::format_input_tensor(
     const Tensor& input,
     IDevice* device,
-    const ttnn::SimpleShape& padded_shape,
+    const ttnn::Shape& padded_shape,
     float pad_value,
     Layout target_layout,
     std::optional<MemoryConfig> target_mem_config) {
@@ -148,7 +148,7 @@ Tensor AutoFormat::format_input_tensor(
 
 Tensor AutoFormat::format_output_tensor(
     const Tensor& output,
-    const ttnn::SimpleShape& shape,
+    const ttnn::Shape& shape,
     IDevice* device,
     Layout target_layout,
     std::optional<MemoryConfig> target_mem_config) {
@@ -194,7 +194,7 @@ Tensor AutoFormat::format_output_tensor(
             } else if (formatted_output.get_layout() == Layout::TILE && AutoFormat::legal_rm_shape(shape)) {
                 formatted_output = ttnn::untilize_with_unpadding(
                     formatted_output,
-                    SmallVector<uint32_t>({shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1}),
+                    ttnn::Shape({shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1}),
                     mem_config);
                 return formatted_output;
             }
@@ -203,7 +203,7 @@ Tensor AutoFormat::format_output_tensor(
                 AutoFormat::legal_rm_shape(shape)) {
                 formatted_output = ttnn::untilize_with_unpadding(
                     formatted_output,
-                    SmallVector<uint32_t>({shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1}),
+                    ttnn::Shape({shape[0] - 1, shape[1] - 1, shape[2] - 1, shape[3] - 1}),
                     mem_config);
                 return formatted_output;
             } else if (

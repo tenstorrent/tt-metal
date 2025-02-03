@@ -12,7 +12,7 @@ namespace ttnn {
 namespace operations {
 namespace data_movement {
 
-ttnn::SimpleShape squeeze_shape_to_4D(ttnn::SimpleShape shape) {
+ttnn::Shape squeeze_shape_to_4D(ttnn::Shape shape) {
     if (shape.rank() <= 4) {
         return shape;
     }
@@ -25,7 +25,7 @@ ttnn::SimpleShape squeeze_shape_to_4D(ttnn::SimpleShape shape) {
     shape_4d[1] = shape[1 + extra_rank];
     shape_4d[2] = shape[2 + extra_rank];
     shape_4d[3] = shape[3 + extra_rank];
-    return ttnn::SimpleShape(shape_4d);
+    return ttnn::Shape(shape_4d);
 }
 
 ttnn::Tensor squeeze_from_ND_to_4D(const ttnn::Tensor& tensor) {
@@ -123,7 +123,7 @@ std::array<uint32_t, 2> compute_height_sharded_shard_shape(const std::array<uint
 }
 
 ttnn::MemoryConfig create_sharded_memory_config(
-    const ttnn::SimpleShape& logical_shape,
+    const ttnn::Shape& logical_shape,
     const tt::tt_metal::CoreRangeSet& core_grid,
     const ShardStrategy& strategy,
     const tt::tt_metal::ShardOrientation& orientation,

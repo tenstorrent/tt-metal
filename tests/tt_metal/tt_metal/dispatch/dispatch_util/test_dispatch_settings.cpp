@@ -6,13 +6,12 @@
 #include <stdexcept>
 #include "command_queue_fixture.hpp"
 #include <tt-metalium/logger.hpp>
-#include <tt-metalium/dispatch_constants.hpp>
 #include "gtest/gtest.h"
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/dispatch_settings.hpp>
 #include "umd/device/tt_core_coordinates.h"
 
-using namespace tt::tt_metal::dispatch;
+using namespace tt::tt_metal;
 
 // Loop through test_func for WORKER, ETH X 1, 2 CQs
 void ForEachCoreTypeXHWCQs(const std::function<void(const CoreType& core_type, const uint32_t num_hw_cqs)>& test_func) {
@@ -54,7 +53,7 @@ TEST_F(CommandQueueSingleCardFixture, TestDispatchSettingsEq) {
 TEST_F(CommandQueueSingleCardFixture, TestDispatchSettingsSetPrefetchDBuffer) {
     static constexpr uint32_t hw_cqs = 2;
     static constexpr uint32_t expected_buffer_bytes = 0xcafe;
-    static constexpr uint32_t expected_page_count = expected_buffer_bytes / (1 << DispatchConstants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE);
+    static constexpr uint32_t expected_page_count = expected_buffer_bytes / (1 << DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE);
     auto settings = DispatchSettings::worker_defaults(tt::Cluster::instance(), hw_cqs);
     settings.prefetch_d_buffer_size(expected_buffer_bytes);
     EXPECT_EQ(settings.prefetch_d_buffer_size_, expected_buffer_bytes);
@@ -64,7 +63,7 @@ TEST_F(CommandQueueSingleCardFixture, TestDispatchSettingsSetPrefetchDBuffer) {
 TEST_F(CommandQueueSingleCardFixture, TestDispatchSettingsSetPrefetchQBuffer) {
     static constexpr uint32_t hw_cqs = 2;
     static constexpr uint32_t expected_buffer_entries = 0x1000;
-    static constexpr uint32_t expected_buffer_bytes = expected_buffer_entries * sizeof(DispatchConstants::prefetch_q_entry_type);
+    static constexpr uint32_t expected_buffer_bytes = expected_buffer_entries * sizeof(DispatchSettings::prefetch_q_entry_type);
     auto settings = DispatchSettings::worker_defaults(tt::Cluster::instance(), hw_cqs);
     settings.prefetch_q_entries(expected_buffer_entries);
     EXPECT_EQ(settings.prefetch_q_entries_, expected_buffer_entries);
@@ -74,7 +73,7 @@ TEST_F(CommandQueueSingleCardFixture, TestDispatchSettingsSetPrefetchQBuffer) {
 TEST_F(CommandQueueSingleCardFixture, TestDispatchSettingsSetDispatchBuffer) {
     static constexpr uint32_t hw_cqs = 2;
     static constexpr uint32_t expected_buffer_bytes = 0x2000;
-    static constexpr uint32_t expected_page_count = expected_buffer_bytes / (1 << DispatchConstants::DISPATCH_BUFFER_LOG_PAGE_SIZE);
+    static constexpr uint32_t expected_page_count = expected_buffer_bytes / (1 << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE);
     auto settings = DispatchSettings::worker_defaults(tt::Cluster::instance(), hw_cqs);
     settings.dispatch_size(expected_buffer_bytes);
     EXPECT_EQ(settings.dispatch_size_, expected_buffer_bytes);
@@ -84,7 +83,7 @@ TEST_F(CommandQueueSingleCardFixture, TestDispatchSettingsSetDispatchBuffer) {
 TEST_F(CommandQueueSingleCardFixture, TestDispatchSettingsSetDispatchSBuffer) {
     static constexpr uint32_t hw_cqs = 2;
     static constexpr uint32_t expected_buffer_bytes = 0x2000;
-    static constexpr uint32_t expected_page_count = expected_buffer_bytes / (1 << DispatchConstants::DISPATCH_S_BUFFER_LOG_PAGE_SIZE);
+    static constexpr uint32_t expected_page_count = expected_buffer_bytes / (1 << DispatchSettings::DISPATCH_S_BUFFER_LOG_PAGE_SIZE);
     auto settings = DispatchSettings::worker_defaults(tt::Cluster::instance(), hw_cqs);
     settings.dispatch_s_buffer_size(expected_buffer_bytes);
     EXPECT_EQ(settings.dispatch_s_buffer_size_, expected_buffer_bytes);
@@ -94,7 +93,7 @@ TEST_F(CommandQueueSingleCardFixture, TestDispatchSettingsSetDispatchSBuffer) {
 TEST_F(CommandQueueSingleCardFixture, TestDispatchSettingsSetTunnelerBuffer) {
     static constexpr uint32_t hw_cqs = 2;
     static constexpr uint32_t expected_buffer_bytes = 0x2000;
-    static constexpr uint32_t expected_page_count = expected_buffer_bytes / (1 << DispatchConstants::PREFETCH_D_BUFFER_LOG_PAGE_SIZE);
+    static constexpr uint32_t expected_page_count = expected_buffer_bytes / (1 << DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE);
     auto settings = DispatchSettings::worker_defaults(tt::Cluster::instance(), hw_cqs);
     settings.tunneling_buffer_size(expected_buffer_bytes);
     EXPECT_EQ(settings.tunneling_buffer_size_, expected_buffer_bytes);

@@ -198,11 +198,12 @@ std::vector<ttnn::TensorSpec> Transpose::compute_output_specs(const std::vector<
     }
     return {ttnn::TensorSpec(
         output_shape,
-        TensorLayout::fromLegacyPaddedShape(
+        TensorLayout::fromPaddedShape(
             input_tensor.get_dtype(),
             PageConfig(input_tensor.get_layout()),
             output_mem_config,
-            ttnn::Shape(output_shape.view(), output_padded_shape.view())))};
+            output_shape,
+            output_padded_shape))};
 }
 
 operation::ProgramWithCallbacks Transpose::create_program(

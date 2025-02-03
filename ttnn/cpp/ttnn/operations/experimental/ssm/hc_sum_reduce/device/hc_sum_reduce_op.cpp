@@ -48,7 +48,7 @@ std::vector<ttnn::TensorSpec> HCSumReduce::compute_output_specs(const std::vecto
     constexpr uint32_t latent = 32;
     const auto& input_tensor_a = input_tensors.at(0);
     const auto shape_a = input_tensor_a.get_padded_shape();
-    SimpleShape output_shape({shape_a[0], shape_a[1], shape_a[2], shape_a[3] / latent});
+    Shape output_shape({shape_a[0], shape_a[1], shape_a[2], shape_a[3] / latent});
     return {TensorSpec(output_shape, TensorLayout(dtype, PageConfig(Layout::TILE), memory_config))};
 }
 

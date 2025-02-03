@@ -14,7 +14,7 @@
 namespace ttnn::operations::experimental::reshape {
 
 static MemoryConfig infer_output_memory_config(
-    const MemoryConfig& input_memory_config, const ttnn::SimpleShape& output_padded_shape) {
+    const MemoryConfig& input_memory_config, const ttnn::Shape& output_padded_shape) {
     if (input_memory_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
         auto shard_spec = input_memory_config.shard_spec.value();
         shard_spec.shape[1] = output_padded_shape[-1];  // update output shard to match new shard width
@@ -25,7 +25,7 @@ static MemoryConfig infer_output_memory_config(
 }
 
 Tensor tensor_reshape(
-    const Tensor& input_tensor, const ttnn::SimpleShape& new_logical_shape, const ttnn::SimpleShape& new_padded_shape) {
+    const Tensor& input_tensor, const ttnn::Shape& new_logical_shape, const ttnn::Shape& new_padded_shape) {
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::reshape", input_tensor, new_logical_shape, new_padded_shape);
 
@@ -142,16 +142,12 @@ Tensor tensor_reshape(
 }
 
 ttnn::Tensor ViewOperation::invoke(
-    const ttnn::Tensor& tensor, const ttnn::SimpleShape& logical_shape, const ttnn::SimpleShape& padded_shape) {
+    const ttnn::Tensor& tensor, const ttnn::Shape& logical_shape, const ttnn::Shape& padded_shape) {
     return tensor_reshape(tensor, logical_shape, padded_shape);
 }
 
-ttnn::Tensor ViewOperation::invoke(const ttnn::Tensor& tensor, const ttnn::SimpleShape& shape) {
-    return tensor_reshape(tensor, shape, shape);
-}
-
 ttnn::Tensor ViewOperation::invoke(const ttnn::Tensor& tensor, const ttnn::Shape& shape) {
-    return tensor_reshape(tensor, shape.logical_shape(), shape.padded_shape());
+    return tensor_reshape(tensor, shape, shape);
 }
 
 }  // namespace ttnn::operations::experimental::reshape

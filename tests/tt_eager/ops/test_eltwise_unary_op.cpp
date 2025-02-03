@@ -56,7 +56,7 @@ Tensor host_function(const Tensor& input_tensor) {
 }
 
 template <ttnn::operations::unary::UnaryOpType unary_op_type, typename... Args>
-bool run_test(IDevice* device, const ttnn::SimpleShape& shape, float low, float high, Args... args) {
+bool run_test(IDevice* device, const ttnn::Shape& shape, float low, float high, Args... args) {
     auto input_tensor = ttnn::random::uniform(bfloat16(low), bfloat16(high), shape).to(Layout::TILE);
 
     using ttnn::operations::unary::UnaryOpType;
@@ -109,7 +109,7 @@ void test_operation_infrastructure() {
     int device_id = 0;
     auto device = tt::tt_metal::CreateDevice(device_id);
 
-    auto shape = ttnn::SimpleShape({1, 1, TILE_HEIGHT, TILE_WIDTH});
+    auto shape = ttnn::Shape({1, 1, TILE_HEIGHT, TILE_WIDTH});
     auto input_tensor = ttnn::random::uniform(bfloat16(0), bfloat16(1), shape).to(Layout::TILE).to(device);
 
     ttnn::operations::unary::operation_attributes_t op_args{
@@ -136,7 +136,7 @@ void test_shape_padding() {
     auto device = tt::tt_metal::CreateDevice(device_id);
     ttnn::operations::experimental::auto_format::AutoFormat::SetDefaultDevice(device);
 
-    ttnn::SimpleShape input_shape({1, 1, 13, 18});
+    ttnn::Shape input_shape({1, 1, 13, 18});
     tt::tt_metal::Array4D padded_input_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
     auto input_tensor = ttnn::random::uniform(bfloat16(0), bfloat16(1), input_shape);
 
@@ -175,7 +175,7 @@ void test_numerically() {
     int device_id = 0;
     auto device = tt::tt_metal::CreateDevice(device_id);
 
-    ttnn::SimpleShape shape({1, 1, TILE_HEIGHT, TILE_WIDTH});
+    ttnn::Shape shape({1, 1, TILE_HEIGHT, TILE_WIDTH});
     {
         auto allclose = run_test<UnaryOpType::SQRT>(device, shape, 0.0f, 1.0f, 1e-1f, 1e-5f);
         TT_FATAL(allclose, "Error");
@@ -234,47 +234,39 @@ void test_program_cache() {
 
     auto run_tests = [&]() {
         // Program Cache Miss
-        run_test<UnaryOpType::SQRT>(
-            device, ttnn::SimpleShape({1, 1, TILE_HEIGHT, TILE_WIDTH}), 0.0f, 1.0f, 1e-1f, 1e-5f);
+        run_test<UnaryOpType::SQRT>(device, ttnn::Shape({1, 1, TILE_HEIGHT, TILE_WIDTH}), 0.0f, 1.0f, 1e-1f, 1e-5f);
 
         // Program Cache Hit
-        run_test<UnaryOpType::SQRT>(
-            device, ttnn::SimpleShape({1, 1, TILE_HEIGHT, TILE_WIDTH}), 0.0f, 1.0f, 1e-1f, 1e-5f);
+        run_test<UnaryOpType::SQRT>(device, ttnn::Shape({1, 1, TILE_HEIGHT, TILE_WIDTH}), 0.0f, 1.0f, 1e-1f, 1e-5f);
 
         // Program Cache Miss
-        run_test<UnaryOpType::SQRT>(device, ttnn::SimpleShape({1, 1, 384, 4096}), 0.0f, 1.0f, 1e-1f, 1e-5f);
+        run_test<UnaryOpType::SQRT>(device, ttnn::Shape({1, 1, 384, 4096}), 0.0f, 1.0f, 1e-1f, 1e-5f);
 
         // Program Cache Miss
-        run_test<UnaryOpType::EXP>(
-            device, ttnn::SimpleShape({1, 1, TILE_HEIGHT, TILE_WIDTH}), 0.0f, 1.0f, 1e-1f, 1e-5f);
+        run_test<UnaryOpType::EXP>(device, ttnn::Shape({1, 1, TILE_HEIGHT, TILE_WIDTH}), 0.0f, 1.0f, 1e-1f, 1e-5f);
 
         // Program Cache Hit
-        run_test<UnaryOpType::SQRT>(
-            device, ttnn::SimpleShape({1, 1, TILE_HEIGHT, TILE_WIDTH}), 0.0f, 1.0f, 1e-1f, 1e-5f);
+        run_test<UnaryOpType::SQRT>(device, ttnn::Shape({1, 1, TILE_HEIGHT, TILE_WIDTH}), 0.0f, 1.0f, 1e-1f, 1e-5f);
 
         // Allocate a tensor to show that the addresses aren't cached
-        auto input_tensor = ttnn::random::uniform(bfloat16(0.0f), bfloat16(0.0f), ttnn::SimpleShape({1, 1, 32, 32}))
+        auto input_tensor = ttnn::random::uniform(bfloat16(0.0f), bfloat16(0.0f), ttnn::Shape({1, 1, 32, 32}))
                                 .to(Layout::TILE)
                                 .to(device);
 
         // Program Cache Hit
-        run_test<UnaryOpType::EXP>(
-            device, ttnn::SimpleShape({1, 1, TILE_HEIGHT, TILE_WIDTH}), 0.0f, 1.0f, 1e-1f, 1e-5f);
+        run_test<UnaryOpType::EXP>(device, ttnn::Shape({1, 1, TILE_HEIGHT, TILE_WIDTH}), 0.0f, 1.0f, 1e-1f, 1e-5f);
 
         // Program Cache Miss
-        run_test<UnaryOpType::GELU>(
-            device, ttnn::SimpleShape({1, 1, TILE_HEIGHT, TILE_WIDTH}), 1.0f, 10.0f, 1e-1f, 1e-3f);
+        run_test<UnaryOpType::GELU>(device, ttnn::Shape({1, 1, TILE_HEIGHT, TILE_WIDTH}), 1.0f, 10.0f, 1e-1f, 1e-3f);
 
         // Program Cache Miss
-        run_test<UnaryOpType::GELU>(
-            device, ttnn::SimpleShape({1, 1, TILE_HEIGHT, TILE_WIDTH}), 1.0f, 10.0f, 1e-1f, 1e-3f);
+        run_test<UnaryOpType::GELU>(device, ttnn::Shape({1, 1, TILE_HEIGHT, TILE_WIDTH}), 1.0f, 10.0f, 1e-1f, 1e-3f);
 
         // Program Cache Hit
-        run_test<UnaryOpType::SQRT>(
-            device, ttnn::SimpleShape({1, 1, TILE_HEIGHT, TILE_WIDTH}), 0.0f, 1.0f, 1e-1f, 1e-5f);
+        run_test<UnaryOpType::SQRT>(device, ttnn::Shape({1, 1, TILE_HEIGHT, TILE_WIDTH}), 0.0f, 1.0f, 1e-1f, 1e-5f);
 
         // Program Cache Hit
-        run_test<UnaryOpType::SQRT>(device, ttnn::SimpleShape({1, 1, 384, 4096}), 0.0f, 1.0f, 1e-1f, 1e-5f);
+        run_test<UnaryOpType::SQRT>(device, ttnn::Shape({1, 1, 384, 4096}), 0.0f, 1.0f, 1e-1f, 1e-5f);
     };
 
     device->enable_program_cache();

@@ -90,14 +90,14 @@ public:
 
     Tensor(
         Storage storage,
-        const ttnn::SimpleShape& shape,
+        const ttnn::Shape& shape,
         DataType dtype,
         Layout layout,
         const std::optional<Tile>& tile = std::nullopt);
     Tensor(
         Storage storage,
-        const ttnn::SimpleShape& logical_shape,
-        const ttnn::SimpleShape& padded_shape,
+        const ttnn::Shape& logical_shape,
+        const ttnn::Shape& padded_shape,
         DataType dtype,
         Layout layout,
         const std::optional<Tile>& tile = std::nullopt);
@@ -193,18 +193,15 @@ public:
 
     Tensor to(Layout target_layout, distributed::MeshDevice* mesh_device) const;
 
-    Tensor pad(
-        const ttnn::SimpleShape& output_padded_shape,
-        const ttnn::SimpleShape& input_tensor_start,
-        float pad_value) const;
+    Tensor pad(const ttnn::Shape& output_padded_shape, const ttnn::Shape& input_tensor_start, float pad_value) const;
 
     Tensor cpu(bool blocking = true, uint8_t cq_id = ttnn::DefaultQueueId) const;
 
-    Tensor unpad(const ttnn::SimpleShape& output_tensor_start, const ttnn::SimpleShape& output_tensor_end) const;
+    Tensor unpad(const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end) const;
 
     Tensor pad_to_tile(float pad_value) const;
 
-    Tensor unpad_from_tile(const ttnn::SimpleShape& output_tensor_shape) const;
+    Tensor unpad_from_tile(const ttnn::Shape& output_tensor_shape) const;
 
     const std::string write_to_string() const;
     void print() const;
@@ -215,32 +212,24 @@ public:
     // ======================================================================================
     //                                  Low Level APIs
     // ======================================================================================
-    Tensor reshape(const ttnn::SimpleShape& new_shape) const;
     Tensor reshape(const ttnn::Shape& new_shape) const;
+    Tensor reshape(const ttnn::Shape& new_logical_shape, const ttnn::Shape& new_padded_shape) const;
     // ======================================================================================
     //                                      Getters
     // ======================================================================================
     const Storage& get_storage() const;
     DataType get_dtype() const;
     Layout get_layout() const;
-    const ttnn::SimpleShape& get_logical_shape() const;
-    const ttnn::SimpleShape& get_padded_shape() const;
+    const ttnn::Shape& get_logical_shape() const;
+    const ttnn::Shape& get_padded_shape() const;
     const TensorSpec& get_tensor_spec() const;
-
-    ttnn::Shape get_shape() const;
-    tt::tt_metal::Padding get_padding() const;
 
     // ======================================================================================
     // Non-Blocking Getters. Query attributes directly, without waiting for worker completion
     // ======================================================================================
     inline const Storage& storage() const { return this->tensor_attributes->storage; };
-    inline ttnn::Shape shape() const { return this->tensor_attributes->tensor_spec.shape(); };
-    inline const ttnn::SimpleShape& logical_shape() const {
-        return this->tensor_attributes->tensor_spec.logical_shape();
-    };
-    inline const ttnn::SimpleShape& padded_shape() const {
-        return this->tensor_attributes->tensor_spec.padded_shape();
-    };
+    inline const ttnn::Shape& logical_shape() const { return this->tensor_attributes->tensor_spec.logical_shape(); };
+    inline const ttnn::Shape& padded_shape() const { return this->tensor_attributes->tensor_spec.padded_shape(); };
     inline DataType dtype() const { return this->tensor_attributes->tensor_spec.tensor_layout().get_data_type(); };
     inline Layout layout() const { return this->tensor_attributes->tensor_spec.tensor_layout().get_layout(); };
     inline const TensorSpec& tensor_spec() const { return this->tensor_attributes->tensor_spec; }
@@ -258,7 +247,7 @@ public:
     //                                      Extra Helper Functions
     // ======================================================================================
     StorageType storage_type() const;
-    const ttnn::SimpleShape strides() const;
+    const ttnn::Shape strides() const;
     uint32_t volume() const;
 
     // todo: rename volume to get_volume to indicate that its blocking
@@ -356,16 +345,6 @@ private:
 Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device);
 
 [[deprecated]]
-Tensor create_device_tensor(
-    const ttnn::SimpleShape& shape,
-    DataType dtype,
-    Layout layout,
-    IDevice* device,
-    const MemoryConfig& memory_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED},
-    const std::optional<Tile>& tile = std::nullopt);
-
-// TODO: Remove once ALL ops switch over to return ttnn::SimpleShape in compute_output_shapes
-[[deprecated("Use create_device_tensor(const TensorSpec&, IDevice*) instead")]]
 Tensor create_device_tensor(
     const ttnn::Shape& shape,
     DataType dtype,

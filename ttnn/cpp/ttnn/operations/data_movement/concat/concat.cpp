@@ -76,7 +76,7 @@ MassagedConcat build_unsqueeze_concat(int input_rank, const MemoryConfig& output
                     shape_vec.push_back(shape[i]);
                     full_shape_vec.push_back(full_shape[i]);
                 }
-                res = ttnn::reshape(res, ttnn::Shape(shape_vec, full_shape_vec));
+                res = ttnn::reshape(res, ttnn::Shape(std::move(shape_vec)), ttnn::Shape(std::move(full_shape_vec)));
             }
             return res;
         },
@@ -88,7 +88,7 @@ MassagedConcat build_unsqueeze_concat(int input_rank, const MemoryConfig& output
 }
 
 MassagedConcat build_untilize_rm_retilize_concat(
-    uint8_t queue_id, const MemoryConfig& output_memory_config, ttnn::SimpleShape& logical_output_shape) {
+    uint8_t queue_id, const MemoryConfig& output_memory_config, ttnn::Shape& logical_output_shape) {
     return MassagedConcat(MassagedConcatParams{
         .predicate = [](const std::vector<ttnn::Tensor>& tensors, int dim, unsigned int groups) -> bool {
             // untilize_rm_retilize if the concat dim is padded for tilized tensors
@@ -128,10 +128,7 @@ MassagedConcat build_untilize_rm_retilize_concat(
                     // op.
                     untilized_tensor = operation::run(
                         SliceDeviceOperation{
-                            ttnn::SimpleShape(begins),
-                            ttnn::SimpleShape(ends),
-                            ttnn::SimpleShape(steps),
-                            output_memory_config},
+                            ttnn::Shape(begins), ttnn::Shape(ends), ttnn::Shape(steps), output_memory_config},
                         {untilized_tensor},
                         {},
                         {std::nullopt},
@@ -152,8 +149,7 @@ MassagedConcat build_untilize_rm_retilize_concat(
                     ttnn::tilize_with_val_padding(padded, padded.get_padded_shape(), 0.0f, output.memory_config());
                 concat_db_print(true, "[DEBUG] tilized");
                 // need to reshape tilized result to logical concat output shape
-                auto reshaped = ttnn::reshape(
-                    tilized, ttnn::Shape{logical_output_shape.view(), tilized.get_padded_shape().view()});
+                auto reshaped = ttnn::reshape(tilized, logical_output_shape, tilized.get_padded_shape());
                 return reshaped;
             }
             concat_db_print(true, "[DEBUG] already tilized");
@@ -309,17 +305,17 @@ ttnn::Tensor ConcatOperation::invoke(
         shapes_match,
         "All dimensions must be the same size except for the dimension along which the contenation is taking place.");
 
-    auto compute_output_shape = [](const std::vector<ttnn::Tensor>& tensors, int dim) -> ttnn::SimpleShape {
-        ttnn::SimpleShape shape_out = tensors[0].get_logical_shape();
+    auto compute_output_shape = [](const std::vector<ttnn::Tensor>& tensors, int dim) -> ttnn::Shape {
+        ttnn::Shape shape_out = tensors[0].get_logical_shape();
         shape_out[dim] = 0;
         for (const Tensor& in_ref : tensors) {
-            ttnn::SimpleShape curr_shape = in_ref.get_logical_shape();
+            ttnn::Shape curr_shape = in_ref.get_logical_shape();
             shape_out[dim] += curr_shape[dim];
         }
         return shape_out;
     };
 
-    ttnn::SimpleShape logical_output_shape = compute_output_shape(input_tensors, dim);
+    ttnn::Shape logical_output_shape = compute_output_shape(input_tensors, dim);
 
     auto untilize_rm_retilize_concat = build_untilize_rm_retilize_concat(queue_id, mem_config, logical_output_shape);
     auto non_aligned_last_dim_concat = build_non_aligned_last_dim_concat(input_tensors, queue_id, mem_config);

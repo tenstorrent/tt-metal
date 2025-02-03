@@ -40,7 +40,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     tt_metal::Program& program,
     const Tensor& a,
     const Tensor& b,
-    const ttnn::SimpleShape& ashape,
+    const ttnn::Shape& ashape,
     std::optional<const Tensor> bias,
     const std::optional<const Tensor>& conv_reader_indices,
     const sliding_window::SlidingWindowConfig& sliding_window_config,
@@ -406,7 +406,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     tt_metal::Program& program,
     const Tensor& a,
     const Tensor& b,
-    const ttnn::SimpleShape& ashape,
+    const ttnn::Shape& ashape,
     std::optional<const Tensor> bias,
     const std::optional<const Tensor>& conv_reader_indices,
     const sliding_window::SlidingWindowConfig& sliding_window_config,
@@ -579,7 +579,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
             block_config.act_block_h_ntiles % block_config.out_subblock_h_ntiles == 0,
             "Out_block_h must be divisible by out_subblock_h!");
     }
-    ttnn::SimpleShape ashape_with_channels_padded({ashape[0], ashape[1], ashape[2], input_channels_padded});
+    ttnn::Shape ashape_with_channels_padded({ashape[0], ashape[1], ashape[2], input_channels_padded});
     uint32_t conv_act_size_h = ashape_with_channels_padded[1];
     uint32_t conv_act_size_w = ashape_with_channels_padded[2];
     uint32_t conv_act_size_c = ashape_with_channels_padded[3];
@@ -1844,7 +1844,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(
             program,
             a,
             b,
-            ttnn::SimpleShape(input_tensor_shape),
+            ttnn::Shape(input_tensor_shape),
             bias,
             conv_reader_indices_tensor,
             sliding_window_config,
@@ -1867,7 +1867,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(
         program,
         a,
         b,
-        ttnn::SimpleShape(input_tensor_shape),
+        ttnn::Shape(input_tensor_shape),
         bias,
         conv_reader_indices_tensor,
         sliding_window_config,

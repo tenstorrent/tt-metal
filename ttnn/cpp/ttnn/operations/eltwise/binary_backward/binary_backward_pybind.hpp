@@ -713,7 +713,8 @@ void bind_binary_bw(
     py::module& module,
     const binary_backward_operation_t& operation,
     const std::string_view description,
-    const std::string_view supported_dtype = "BFLOAT16") {
+    const std::string_view supported_dtype = "BFLOAT16",
+    const std::string_view note = "") {
     auto doc = fmt::format(
         R"doc(
 
@@ -747,6 +748,8 @@ void bind_binary_bw(
 
             bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT
 
+            {4}
+
         Example:
             >>> grad_tensor = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
             >>> tensor1 = ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16, requires_grad=True), layout=ttnn.TILE_LAYOUT, device=device)
@@ -762,7 +765,8 @@ void bind_binary_bw(
         operation.base_name(),
         operation.python_fully_qualified_name(),
         description,
-        supported_dtype);
+        supported_dtype,
+        note);
 
     bind_registered_operation(
         module,
@@ -1183,7 +1187,8 @@ void py_module(py::module& module) {
         module,
         ttnn::add_bw,
         R"doc(Performs backward operations for add of :attr:`input_tensor_a` and :attr:`input_tensor_b` or :attr:`scalar` with given :attr:`grad_tensor`.)doc",
-        R"doc(BFLOAT16, BFLOAT8_B)doc");
+        R"doc(BFLOAT16, BFLOAT8_B)doc",
+        R"doc(Sharding is not supported if both inputs are tensors.)doc");
 
     detail::bind_binary_bw(
         module,

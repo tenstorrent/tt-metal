@@ -423,5 +423,4 @@ class dispatch_core_manager {
 
 };
 
-
 }   // namespace tt::tt_metal

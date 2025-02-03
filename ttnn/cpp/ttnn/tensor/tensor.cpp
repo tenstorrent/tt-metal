@@ -68,7 +68,7 @@ std::vector<T> unpad_tensor_to_vec(const Tensor& cpu_tensor) {
 
     std::vector<T> untiled_data(total_size);
 
-    auto compute_flat_index = [](const std::vector<uint32_t>& indices, const ttnn::SimpleShape& shape) -> uint32_t {
+    auto compute_flat_index = [](const std::vector<uint32_t>& indices, const ttnn::Shape& shape) -> uint32_t {
         uint32_t flat_index = 0;
         uint32_t multiplier = 1;
         for (int i = (int)indices.size() - 1; i >= 0; --i) {
@@ -104,7 +104,7 @@ std::vector<T> unpad_tensor_to_vec(const Tensor& cpu_tensor) {
 
 Tensor::TensorAttributes::TensorAttributes() :
     tensor_spec(
-        ttnn::SimpleShape(std::array<uint32_t, 4>{0xff, 0xff, 0xff, 0xff}),
+        ttnn::Shape(std::array<uint32_t, 4>{0xff, 0xff, 0xff, 0xff}),
         TensorLayout(DataType::INVALID, PageConfig(Layout::INVALID), MemoryConfig{})) {}
 
 Tensor::TensorAttributes::TensorAttributes(Storage storage, TensorSpec tensor_spec) :
@@ -153,8 +153,8 @@ void Tensor::TensorAttributes::update_main_thread_ref_count(IDevice* worker, uin
 
 Tensor::Tensor(
     Storage storage,
-    const ttnn::SimpleShape& logical_shape,
-    const ttnn::SimpleShape& padded_shape,
+    const ttnn::Shape& logical_shape,
+    const ttnn::Shape& padded_shape,
     DataType dtype,
     Layout layout,
     const std::optional<Tile>& tile) {
@@ -284,7 +284,7 @@ Tensor::Tensor(uint32_t num_buffers, std::optional<DistributedTensorConfig> dist
         storage.buffers = std::vector<OwnedBuffer>(num_buffers, OwnedBuffer());
         storage.specs = std::vector<ttnn::TensorSpec>(
             num_buffers,
-            TensorSpec(SimpleShape{}, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), MemoryConfig{})));
+            TensorSpec(Shape{}, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), MemoryConfig{})));
         return Storage(std::move(storage));
     }();
     tensor_attributes->num_shards_to_be_populated = num_buffers;
@@ -327,7 +327,7 @@ Tensor::~Tensor() {
 }
 
 Tensor::Tensor(
-    Storage storage, const ttnn::SimpleShape& shape, DataType dtype, Layout layout, const std::optional<Tile>& tile) :
+    Storage storage, const ttnn::Shape& shape, DataType dtype, Layout layout, const std::optional<Tile>& tile) :
     Tensor(std::move(storage), /* logical_shape */ shape, /* padded_shape */ shape, dtype, layout, tile) {}
 
 void Tensor::deallocate(bool force) { deallocate_impl(force, /*deallocation_through_destructor=*/false); }
@@ -566,10 +566,6 @@ std::vector<IDevice*> Tensor::get_workers(bool blocking) const {
 }
 
 // Getters - Spin until tensor is populated before querying tensor metadata
-ttnn::Shape Tensor::get_shape() const {
-    wait_for_tensor_metadata_populated();
-    return shape();
-}
 DataType Tensor::get_dtype() const {
     wait_for_tensor_metadata_populated();
     return dtype();
@@ -584,19 +580,14 @@ const TensorSpec& Tensor::get_tensor_spec() const {
     return tensor_spec();
 }
 
-const ttnn::SimpleShape& Tensor::get_logical_shape() const {
+const ttnn::Shape& Tensor::get_logical_shape() const {
     wait_for_tensor_metadata_populated();
     return logical_shape();
 }
 
-const ttnn::SimpleShape& Tensor::get_padded_shape() const {
+const ttnn::Shape& Tensor::get_padded_shape() const {
     wait_for_tensor_metadata_populated();
     return padded_shape();
-}
-
-tt::tt_metal::Padding Tensor::get_padding() const {
-    wait_for_tensor_metadata_populated();
-    return tensor_attributes->tensor_spec.shape().value.padding();
 }
 
 const Storage& Tensor::get_storage() const {
@@ -794,17 +785,17 @@ const std::string Tensor::write_to_string() const { return tensor_impl::to_strin
 void Tensor::print() const { tensor_ops::tensor_print(*this); }
 
 Tensor Tensor::pad(
-    const ttnn::SimpleShape& output_padded_shape, const ttnn::SimpleShape& input_tensor_start, float pad_value) const {
+    const ttnn::Shape& output_padded_shape, const ttnn::Shape& input_tensor_start, float pad_value) const {
     return tensor_ops::tensor_pad(*this, output_padded_shape, input_tensor_start, pad_value);
 }
 
-Tensor Tensor::unpad(const ttnn::SimpleShape& output_tensor_start, const ttnn::SimpleShape& output_tensor_end) const {
+Tensor Tensor::unpad(const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end) const {
     return tensor_ops::tensor_unpad(*this, output_tensor_start, output_tensor_end);
 }
 
 Tensor Tensor::pad_to_tile(float pad_value) const { return tensor_ops::tensor_pad_to_tile(*this, pad_value); }
 
-Tensor Tensor::unpad_from_tile(const ttnn::SimpleShape& output_tensor_shape) const {
+Tensor Tensor::unpad_from_tile(const ttnn::Shape& output_tensor_shape) const {
     return tensor_ops::tensor_unpad_from_tile(*this, output_tensor_shape);
 }
 
@@ -814,11 +805,11 @@ const bool Tensor::is_sharded() const {
 
 uint32_t Tensor::element_size() const { return tensor_impl::element_size_bytes(this->get_dtype()); }
 
-Tensor Tensor::reshape(const ttnn::SimpleShape& new_shape) const {
-    return tensor_ops::tensor_reshape(*this, new_shape);
-}
-
 Tensor Tensor::reshape(const ttnn::Shape& new_shape) const { return tensor_ops::tensor_reshape(*this, new_shape); }
+
+Tensor Tensor::reshape(const ttnn::Shape& new_logical_shape, const ttnn::Shape& new_padded_shape) const {
+    return tensor_ops::tensor_reshape(*this, new_logical_shape, new_padded_shape);
+}
 
 bool Tensor::is_allocated() const {
     ZoneScoped;
@@ -854,8 +845,8 @@ StorageType Tensor::storage_type() const {
         this->get_storage());
 }
 
-const ttnn::SimpleShape Tensor::strides() const {
-    return ttnn::SimpleShape(tt::tt_metal::compute_strides(this->get_padded_shape()));
+const ttnn::Shape Tensor::strides() const {
+    return ttnn::Shape(tt::tt_metal::compute_strides(this->get_padded_shape()));
 }
 
 uint32_t Tensor::volume() const { return get_padded_shape().volume(); }
@@ -863,7 +854,7 @@ uint32_t Tensor::volume() const { return get_padded_shape().volume(); }
 uint32_t Tensor::get_logical_volume() const { return get_logical_shape().volume(); }
 
 bool Tensor::is_scalar() const {
-    const ttnn::SimpleShape logical_shape = this->get_logical_shape();
+    const ttnn::Shape logical_shape = this->get_logical_shape();
     return logical_shape.rank() == 0 || logical_shape.volume() == 1;
 }
 
@@ -887,17 +878,6 @@ Tensor create_device_tensor(const TensorSpec& tensor_spec, IDevice* device) {
 }
 
 Tensor create_device_tensor(
-    const ttnn::SimpleShape& shape,
-    DataType data_type,
-    Layout layout,
-    IDevice* device,
-    const MemoryConfig& memory_config,
-    const std::optional<Tile>& tile) {
-    return create_device_tensor(
-        TensorSpec(shape, TensorLayout(data_type, PageConfig(layout, tile), memory_config)), device);
-}
-
-Tensor create_device_tensor(
     const ttnn::Shape& shape,
     DataType data_type,
     Layout layout,
@@ -905,10 +885,7 @@ Tensor create_device_tensor(
     const MemoryConfig& memory_config,
     const std::optional<Tile>& tile) {
     return create_device_tensor(
-        TensorSpec(
-            shape.logical_shape(),
-            TensorLayout::fromLegacyPaddedShape(data_type, PageConfig(layout, tile), memory_config, shape)),
-        device);
+        TensorSpec(shape, TensorLayout(data_type, PageConfig(layout, tile), memory_config)), device);
 }
 
 namespace detail {

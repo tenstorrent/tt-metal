@@ -6,6 +6,8 @@
 #include <device.hpp>
 #include "assert.hpp"
 #include "dispatch.hpp"
+#include <tt-metalium/command_queue_interface.hpp>
+#include <tt-metalium/dispatch_settings.hpp>
 
 namespace tt::tt_metal {
 namespace buffer_dispatch {
@@ -58,8 +60,7 @@ BufferDispatchConstants generate_buffer_dispatch_constants(
     BufferDispatchConstants buf_dispatch_constants;
 
     buf_dispatch_constants.issue_queue_cmd_limit = sysmem_manager.get_issue_queue_limit(cq_id);
-    buf_dispatch_constants.max_prefetch_cmd_size =
-        dispatch_constants::get(dispatch_core_type).max_prefetch_command_size();
+    buf_dispatch_constants.max_prefetch_cmd_size = DispatchMemMap::get(dispatch_core_type).max_prefetch_command_size();
     buf_dispatch_constants.max_data_sizeB = buf_dispatch_constants.max_prefetch_cmd_size -
                                             (hal.get_alignment(HalMemType::HOST) * 2);  // * 2 to account for issue
 
@@ -113,7 +114,7 @@ InterleavedBufferWriteDispatchParams initialize_interleaved_buf_dispatch_params(
 
     if (dispatch_params.write_partial_pages) {
         TT_FATAL(num_pages == 1, "TODO: add support for multi-paged buffer with page size > 64KB");
-        uint32_t partial_size = dispatch_constants::BASE_PARTIAL_PAGE_SIZE;
+        uint32_t partial_size = DispatchSettings::BASE_PARTIAL_PAGE_SIZE;
         uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
         while (dispatch_params.padded_buffer_size % partial_size != 0) {
             partial_size += pcie_alignment;
@@ -268,13 +269,13 @@ void issue_buffer_dispatch_command_sequence(
 
     if (dispatch_params.issue_wait) {
         uint32_t dispatch_message_base_addr =
-            dispatch_constants::get(dispatch_core_type)
+            DispatchMemMap::get(dispatch_core_type)
                 .get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
         for (const auto& sub_device_id : sub_device_ids) {
             auto offset_index = sub_device_id.to_index();
             uint32_t dispatch_message_addr =
                 dispatch_message_base_addr +
-                dispatch_constants::get(dispatch_core_type).get_dispatch_message_offset(offset_index);
+                DispatchMemMap::get(dispatch_core_type).get_dispatch_message_offset(offset_index);
             command_sequence.add_dispatch_wait(
                 false, dispatch_message_addr, dispatch_params.expected_num_workers_completed[offset_index]);
         }
@@ -630,7 +631,7 @@ void issue_read_buffer_dispatch_command_sequence(
     HugepageDeviceCommand command_sequence(cmd_region, cmd_sequence_sizeB);
 
     uint32_t dispatch_message_base_addr =
-        dispatch_constants::get(dispatch_core_type)
+        DispatchMemMap::get(dispatch_core_type)
             .get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
     uint32_t last_index = num_worker_counters - 1;
     // We only need the write barrier + prefetch stall for the last wait cmd
@@ -638,14 +639,13 @@ void issue_read_buffer_dispatch_command_sequence(
         auto offset_index = sub_device_ids[i].to_index();
         uint32_t dispatch_message_addr =
             dispatch_message_base_addr +
-            dispatch_constants::get(dispatch_core_type).get_dispatch_message_offset(offset_index);
+            DispatchMemMap::get(dispatch_core_type).get_dispatch_message_offset(offset_index);
         command_sequence.add_dispatch_wait(
             false, dispatch_message_addr, dispatch_params.expected_num_workers_completed[offset_index]);
     }
     auto offset_index = sub_device_ids[last_index].to_index();
     uint32_t dispatch_message_addr =
-        dispatch_message_base_addr +
-        dispatch_constants::get(dispatch_core_type).get_dispatch_message_offset(offset_index);
+        dispatch_message_base_addr + DispatchMemMap::get(dispatch_core_type).get_dispatch_message_offset(offset_index);
     command_sequence.add_dispatch_wait_with_prefetch_stall(
         true, dispatch_message_addr, dispatch_params.expected_num_workers_completed[offset_index]);
 
@@ -766,14 +766,14 @@ void copy_interleaved_buffer_to_completion_queue(
 }
 
 // Functions used to copy buffer data from completion queue into user space
-std::shared_ptr<tt::tt_metal::detail::CompletionReaderVariant> generate_sharded_buffer_read_descriptor(
+std::shared_ptr<tt::tt_metal::CompletionReaderVariant> generate_sharded_buffer_read_descriptor(
     void* dst, ShardedBufferReadDispatchParams& dispatch_params, Buffer& buffer) {
     // Increment the src_page_index after the Read Buffer Descriptor has been populated
     // for the current core/txn
     auto initial_src_page_index = dispatch_params.src_page_index;
     dispatch_params.src_page_index += dispatch_params.pages_per_txn;
-    return std::make_shared<tt::tt_metal::detail::CompletionReaderVariant>(
-        std::in_place_type<tt::tt_metal::detail::ReadBufferDescriptor>,
+    return std::make_shared<tt::tt_metal::CompletionReaderVariant>(
+        std::in_place_type<tt::tt_metal::ReadBufferDescriptor>,
         buffer.buffer_layout(),
         buffer.page_size(),
         dispatch_params.padded_page_size,
@@ -785,10 +785,10 @@ std::shared_ptr<tt::tt_metal::detail::CompletionReaderVariant> generate_sharded_
         dispatch_params.buffer_page_mapping);
 }
 
-std::shared_ptr<tt::tt_metal::detail::CompletionReaderVariant> generate_interleaved_buffer_read_descriptor(
+std::shared_ptr<tt::tt_metal::CompletionReaderVariant> generate_interleaved_buffer_read_descriptor(
     void* dst, BufferReadDispatchParams& dispatch_params, Buffer& buffer) {
-    return std::make_shared<tt::tt_metal::detail::CompletionReaderVariant>(
-        std::in_place_type<tt::tt_metal::detail::ReadBufferDescriptor>,
+    return std::make_shared<tt::tt_metal::CompletionReaderVariant>(
+        std::in_place_type<tt::tt_metal::ReadBufferDescriptor>,
         buffer.buffer_layout(),
         buffer.page_size(),
         dispatch_params.padded_page_size,
@@ -799,7 +799,7 @@ std::shared_ptr<tt::tt_metal::detail::CompletionReaderVariant> generate_interlea
 }
 
 void copy_completion_queue_data_into_user_space(
-    const detail::ReadBufferDescriptor& read_buffer_descriptor,
+    const ReadBufferDescriptor& read_buffer_descriptor,
     chip_id_t mmio_device_id,
     uint16_t channel,
     uint32_t cq_id,
@@ -843,7 +843,7 @@ void copy_completion_queue_data_into_user_space(
 
         // completion queue write ptr on device could have wrapped but our read ptr is lagging behind
         uint32_t bytes_xfered = std::min(remaining_bytes_to_read, bytes_avail_in_completion_queue);
-        uint32_t num_pages_xfered = div_up(bytes_xfered, dispatch_constants::TRANSFER_PAGE_SIZE);
+        uint32_t num_pages_xfered = div_up(bytes_xfered, DispatchSettings::TRANSFER_PAGE_SIZE);
 
         remaining_bytes_to_read -= bytes_xfered;
 
@@ -984,6 +984,21 @@ void copy_completion_queue_data_into_user_space(
             contig_dst_offset = dst_offset_bytes;
         }
         sysmem_manager.completion_queue_pop_front(num_pages_xfered, cq_id);
+    }
+}
+
+tt::stl::Span<const SubDeviceId> select_sub_device_ids(
+    IDevice* device, tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    if (sub_device_ids.empty()) {
+        return device->get_sub_device_stall_group();
+    } else {
+        for (const auto& sub_device_id : sub_device_ids) {
+            TT_FATAL(
+                sub_device_id.to_index() < device->num_sub_devices(),
+                "Invalid sub-device id specified {}",
+                sub_device_id.to_index());
+        }
+        return sub_device_ids;
     }
 }
 

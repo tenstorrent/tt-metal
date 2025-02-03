@@ -60,7 +60,7 @@ TEST_F(DispatchFixture, TestTensorOwnershipSanity) {
             },
             host_tensor.get_storage());
         // Send tensor to device, read it back and copy it to empty tensor initialized by main thread
-        Tensor reshaped_tensor = ttnn::experimental::view(host_tensor, ttnn::SimpleShape{1, 1, 32, 128});
+        Tensor reshaped_tensor = ttnn::experimental::view(host_tensor, ttnn::Shape{1, 1, 32, 128});
         auto device_tensor = reshaped_tensor.to(Layout::TILE).to(device);
         auto thread_local_tensor = device_tensor.cpu().to(Layout::ROW_MAJOR);
         readback_tensor.set_storage(thread_local_tensor.get_storage());
@@ -106,7 +106,7 @@ TEST_F(DispatchFixture, TestTensorOwnershipSanity) {
         readback_tensor.get_storage());
     EXPECT_EQ(readback_tensor.get_dtype(), DataType::FLOAT32);
     EXPECT_EQ(readback_tensor.get_layout(), Layout::ROW_MAJOR);
-    EXPECT_EQ(readback_tensor.get_logical_shape(), SimpleShape({1, 1, 32, 128}));
+    EXPECT_EQ(readback_tensor.get_logical_shape(), Shape({1, 1, 32, 128}));
 }
 
 TEST_F(DispatchFixture, TestAsyncEltwiseBinary) {
@@ -122,15 +122,15 @@ TEST_F(DispatchFixture, TestAsyncEltwiseBinary) {
     for (int i = 0; i < 5; i++) {
         // Initialize tensors and move them to DRAM
         Tensor input_tensor_a = ttnn::full(
-            ttnn::SimpleShape({1, 1, 1024, 1024}), static_cast<float>(i), DataType::BFLOAT16, Layout::TILE, *device);
+            ttnn::Shape({1, 1, 1024, 1024}), static_cast<float>(i), DataType::BFLOAT16, Layout::TILE, *device);
         Tensor input_tensor_b = ttnn::full(
-            ttnn::SimpleShape({1, 1, 1024, 1024}), static_cast<float>(i), DataType::BFLOAT16, Layout::TILE, *device);
+            ttnn::Shape({1, 1, 1024, 1024}), static_cast<float>(i), DataType::BFLOAT16, Layout::TILE, *device);
         Tensor input_tensor_c = ttnn::full(
-            ttnn::SimpleShape({1, 1, 1024, 1024}), static_cast<float>(i), DataType::BFLOAT16, Layout::TILE, *device);
+            ttnn::Shape({1, 1, 1024, 1024}), static_cast<float>(i), DataType::BFLOAT16, Layout::TILE, *device);
         Tensor output_tensor_device = ttnn::multiply(ttnn::add(input_tensor_a, input_tensor_b), input_tensor_c);
         Tensor output_tensor_device_2 = ttnn::neg(ttnn::subtract(output_tensor_device, input_tensor_c));
 
-        EXPECT_EQ(output_tensor_device.get_logical_shape(), SimpleShape({1, 1, 1024, 1024}));
+        EXPECT_EQ(output_tensor_device.get_logical_shape(), Shape({1, 1, 1024, 1024}));
         EXPECT_EQ(output_tensor_device.get_dtype(), DataType::BFLOAT16);
 
         Tensor output_tensor_host = output_tensor_device_2.cpu();
@@ -175,13 +175,13 @@ TEST_F(DispatchFixture, TestAsyncRefCountManager) {
         // Run for multiple loops to ensure deterministic behaviour with device addresses
         // Initialize 2 tensors on device
         Tensor tensor1 = ttnn::full(
-            ttnn::SimpleShape({1, 1, 1024, 1024}),
+            ttnn::Shape({1, 1, 1024, 1024}),
             static_cast<float>(i),
             DataType::BFLOAT16,
             /*layout=*/std::nullopt,
             *device);
         Tensor tensor2 = ttnn::full(
-            ttnn::SimpleShape({1, 1, 1024, 1024}),
+            ttnn::Shape({1, 1, 1024, 1024}),
             static_cast<float>(i),
             DataType::BFLOAT16,
             /*layout=*/std::nullopt,
@@ -195,7 +195,7 @@ TEST_F(DispatchFixture, TestAsyncRefCountManager) {
         // To check if tensor2 is deallocated, create a third tensor on device and ensure that its address matches the
         // prev addr for tensor2
         Tensor tensor3 = ttnn::full(
-            ttnn::SimpleShape({1, 1, 1024, 1024}),
+            ttnn::Shape({1, 1, 1024, 1024}),
             static_cast<float>(i),
             DataType::BFLOAT16,
             /*layout=*/std::nullopt,
@@ -206,7 +206,7 @@ TEST_F(DispatchFixture, TestAsyncRefCountManager) {
     log_info(LogTest, "Testing Device tensor self-assignment through function");
     for (int i = 0; i < 5; i++) {
         Tensor device_tensor = ttnn::full(
-            ttnn::SimpleShape({1, 1, 1024, 1024}),
+            ttnn::Shape({1, 1, 1024, 1024}),
             static_cast<float>(i),
             DataType::BFLOAT16,
             /*layout=*/std::nullopt,
@@ -222,7 +222,7 @@ TEST_F(DispatchFixture, TestAsyncRefCountManager) {
     log_info(LogTest, "Testing Device tensor move assignment");
     for (int i = 0; i < 5; i++) {
         Tensor tensor1 = ttnn::full(
-            ttnn::SimpleShape({1, 1, 1024, 1024}),
+            ttnn::Shape({1, 1, 1024, 1024}),
             static_cast<float>(i),
             DataType::BFLOAT16,
             /*layout=*/std::nullopt,
@@ -233,7 +233,7 @@ TEST_F(DispatchFixture, TestAsyncRefCountManager) {
 
     log_info(LogTest, "Testing Device tensor self-assignment");
     Tensor tensor_to_self_assign = ttnn::full(
-        ttnn::SimpleShape({1, 1, 1024, 1024}),
+        ttnn::Shape({1, 1, 1024, 1024}),
         static_cast<float>(0),
         DataType::BFLOAT16,
         /*layout=*/std::nullopt,
@@ -291,8 +291,7 @@ TEST_F(DispatchFixture, TestTensorAsyncDataMovement) {
                 },
                 host_tensor.get_storage());
 
-            Tensor reshaped_tensor =
-                ttnn::experimental::view(host_tensor, ttnn::SimpleShape{1, 1, 32, tensor_stop / 32});
+            Tensor reshaped_tensor = ttnn::experimental::view(host_tensor, ttnn::Shape{1, 1, 32, tensor_stop / 32});
             auto device_tensor = reshaped_tensor.to(Layout::TILE).to(device);
             auto thread_local_tensor = device_tensor.cpu().to(Layout::ROW_MAJOR);
             log_info(LogTest, "Worker populating empty host readback_tensor");
@@ -346,7 +345,7 @@ TEST_F(DispatchFixture, TestTensorAsyncDataMovement) {
         readback_tensor.get_storage());
     EXPECT_EQ(readback_tensor.get_dtype(), DataType::FLOAT32);
     EXPECT_EQ(readback_tensor.get_layout(), Layout::ROW_MAJOR);
-    EXPECT_EQ(readback_tensor.get_logical_shape(), SimpleShape({1, 1, 32, tensor_stop / 32}));
+    EXPECT_EQ(readback_tensor.get_logical_shape(), Shape({1, 1, 32, tensor_stop / 32}));
 }
 }  // namespace
 }  // namespace tt::tt_metal

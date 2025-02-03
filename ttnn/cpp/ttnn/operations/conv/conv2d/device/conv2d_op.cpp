@@ -25,7 +25,7 @@ namespace optimized_conv_op_utils {
 using namespace tt;
 
 std::pair<std::vector<uint32_t>, std::vector<uint32_t>> compute_opt_conv_activation_as_mm_shape(
-    const ttnn::SimpleShape& conv_activation_shape,
+    const ttnn::Shape& conv_activation_shape,
     const ttnn::operations::sliding_window::SlidingWindowConfig& sliding_window_config,
     uint32_t num_cores_nhw,
     uint32_t act_block_h_ntiles) {
@@ -101,8 +101,8 @@ Tensor optimized_conv_new(
             TT_FATAL(
                 b.get_layout() == Layout::TILE,
                 "Weights should be in TILE layout.");  // Weights should already be formatted
-            const auto& ashape = tt::tt_metal::LegacyShape(input_tensor_shape);
-            auto padded_a_shape = ttnn::SimpleShape({ashape[0], ashape[1], ashape[2], tt::round_up(ashape[3], 16)});
+            const auto& ashape = input_tensor_shape;
+            auto padded_a_shape = ttnn::Shape({ashape[0], ashape[1], ashape[2], tt::round_up(ashape[3], 16)});
             FormatParams input_a_format_params = {
                 .pad_shape = padded_a_shape, .pad_value = 0.0, .target_layout = Layout::ROW_MAJOR};
             FormatParams input_b_format_params = {
@@ -210,8 +210,8 @@ std::vector<TensorSpec> OptimizedConvNew::compute_output_specs(const std::vector
                               : parallelization_config.num_cores_nhw *
                                     tt::round_up(parallelization_config.per_core_out_matrix_height, TILE_HEIGHT);
     auto padded_shape_c = tt::round_up(this->output_channels, TILE_WIDTH);
-    ttnn::SimpleShape output_shape({1, 1, shape_w, shape_c});
-    ttnn::SimpleShape padded_output_shape({1, 1, padded_shape_w, padded_shape_c});
+    ttnn::Shape output_shape({1, 1, shape_w, shape_c});
+    ttnn::Shape padded_output_shape({1, 1, padded_shape_w, padded_shape_c});
 
     auto output_layout = this->untilize_out ? Layout::ROW_MAJOR : Layout::TILE;
     if (this->memory_config.is_sharded()) {
@@ -333,7 +333,7 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
         compute_kernel_config,
         block_config,
         parallelization_config,
-        input_tensor_shape,
+        ttnn::Shape(input_tensor_shape),
         weights_shape,
         sliding_window_config.get_output_shape(),
         output_channels,

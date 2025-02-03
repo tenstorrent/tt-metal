@@ -81,7 +81,7 @@ std::vector<ttnn::TensorSpec> AttnMatmulDeviceOperation::compute_output_specs(
     if (this->transpose_hw.value_or(false)) {
         N = this->num_tokens.value();
     }
-    SimpleShape shape({1, ashape[1], ashape[2], N});
+    Shape shape({1, ashape[1], ashape[2], N});
     return {TensorSpec(shape, TensorLayout(output_dtype, PageConfig(Layout::TILE), output_mem_config))};
 }
 

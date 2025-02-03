@@ -15,7 +15,6 @@
 #include "mesh_device_view.hpp"
 #include "sub_device_types.hpp"
 #include "span.hpp"
-#include "work_executor.hpp"
 
 namespace tt::tt_metal {
 
@@ -62,7 +61,6 @@ private:
     std::weak_ptr<MeshDevice> parent_mesh_;  // Submesh created with reference to parent mesh
     std::unique_ptr<MeshCommandQueue> mesh_command_queue_;
     std::unique_ptr<SubDeviceManagerTracker> sub_device_manager_tracker_;
-    std::unique_ptr<WorkExecutor> work_executor_;
 
     // This is a reference device used to query properties that are the same for all devices in the mesh.
     IDevice* reference_device() const;
@@ -145,7 +143,6 @@ public:
     std::shared_ptr<TraceBuffer> get_trace(uint32_t tid) override;
     uint32_t get_trace_buffers_size() const override;
     void set_trace_buffers_size(uint32_t size) override;
-
     // Light Metal
     void load_trace(uint8_t cq_id, uint32_t trace_id, const TraceDescriptor& trace_desc) override;
 
@@ -165,19 +162,15 @@ public:
     void synchronize() override;
     WorkExecutorMode get_worker_mode() override;
     void set_worker_queue_mode(const WorkerQueueMode& mode) override;
-    WorkerQueueMode get_worker_queue_mode() override;
     bool is_worker_queue_empty() const override;
-    bool can_use_passthrough_scheduling() const override;
     void push_work(std::function<void()> work, bool blocking) override;
     void enable_program_cache() override;
     void disable_and_clear_program_cache() override;
     program_cache::detail::ProgramCache& get_program_cache() override;
     std::size_t num_program_cache_entries() override;
     HalProgrammableCoreType get_programmable_core_type(CoreCoord virtual_core) const override;
-    std::vector<std::pair<transfer_info_cores, uint32_t>> extract_dst_noc_multicast_info(const std::vector<CoreRange>& ranges, const CoreType core_type) override;
-    bool dispatch_s_enabled() const override;
-    bool distributed_dispatcher() const override;
-    NOC dispatch_go_signal_noc() const override;
+    std::vector<std::pair<transfer_info_cores, uint32_t>> extract_dst_noc_multicast_info(
+        const std::vector<CoreRange>& ranges, const CoreType core_type) override;
     size_t get_device_kernel_defines_hash() override;
     uint8_t num_noc_mcast_txns(SubDeviceId sub_device_id) const override;
     uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const override;
