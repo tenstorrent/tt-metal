@@ -113,6 +113,13 @@ def run_conv(
         shard_layout = (
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED if use_1d_systolic_array else ttnn.TensorMemoryLayout.BLOCK_SHARDED
         )
+    if (
+        shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+        and output_channels > 256
+        and output_layout == ttnn.ROW_MAJOR_LAYOUT
+    ):
+        pytest.skip("Skipping when out_block_w > 8 for untilize_out == True")
+
     conv_config = ttnn.Conv2dConfig(
         dtype=activations_dtype,
         weights_dtype=weights_dtype,
