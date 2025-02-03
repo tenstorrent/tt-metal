@@ -10,6 +10,8 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
     data_gen_with_range_dtype,
     compare_pcc,
 )
+from tests.ttnn.utils_for_testing import assert_with_pcc
+
 from models.utility_functions import skip_for_grayskull, is_wormhole_b0, is_blackhole
 
 
@@ -838,27 +840,30 @@ def test_unary_softshrink(input_shapes, param, device):
     assert comp_pass
 
 
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize(
     "input_shapes",
     (
         (torch.Size([1, 1, 32, 32])),
         (torch.Size([1, 1, 320, 384])),
         (torch.Size([1, 3, 320, 384])),
+        (torch.Size([7, 185, 20])),
+        (torch.Size([6, 45, 233])),
     ),
 )
 @pytest.mark.parametrize(
     "param",
-    {-1e4, -98.5, -43.7, -8.5, 0.45, 7.7, 58.4, 89.9, 1e5},
+    {-1e4, -98.5, -43.7, -8.5, 0.0, 0.45, 1.0, 7.7, 58.4, 89.9, 1e5},
 )
 def test_unary_logit(input_shapes, param, device):
-    in_data, input_tensor = data_gen_with_range(input_shapes, 0, 1, device)
+    in_data = torch.Tensor(size=input_shapes).uniform_(-100, 100).to(torch.bfloat16)
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
     output_tensor = ttnn.logit(input_tensor, eps=param)
     golden_function = ttnn.get_golden_function(ttnn.logit)
     golden_tensor = golden_function(in_data, eps=param, device=device)
 
-    comp_pass = compare_pcc([output_tensor], [golden_tensor])
-    assert comp_pass
+    out = ttnn.to_torch(output_tensor)
+    assert_with_pcc(golden_tensor, out, 0.99)
 
 
 @pytest.mark.parametrize(
