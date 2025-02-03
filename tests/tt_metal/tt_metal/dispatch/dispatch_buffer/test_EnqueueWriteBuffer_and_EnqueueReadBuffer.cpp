@@ -1013,9 +1013,9 @@ TEST_F(CommandQueueSingleCardBufferFixture, TestReadWriteShardedSubBufferForL1) 
     const std::vector<ShardedSubBufferStressTestConfig>& configs =
         local_test_functions::generate_sharded_sub_buffer_test_configs(max_buffer_size);
     for (IDevice* device : devices_) {
-        tt::log_info("Running on Device {}", device->id());
+        tt::log_debug("Running on Device {}", device->id());
         for (const ShardedSubBufferStressTestConfig& config : configs) {
-            tt::log_info(
+            tt::log_debug(
                 tt::LogTest,
                 "Device: {} buffer_size: {} page_size: {} region_offset: {} region_size: {} shard_shape: [{}, {}] "
                 "page_shape: [{}, {}] tensor2d_shape: [{}, {}] layout: {} orientation: {} cores: {}",
