@@ -1,6 +1,7 @@
 apt-utils
 dialog
 build-essential
+file
 gcc-12
 g++-12
 git
