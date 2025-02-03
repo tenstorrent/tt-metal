@@ -48,7 +48,7 @@ set(CPACK_INSTALL_DEFAULT_DIRECTORY_PERMISSIONS
 
 set(CPACK_DEBIAN_ENABLE_COMPONENT_DEPENDS TRUE)
 
-# set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS TRUE)
+set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS TRUE)
 
 # set(CPACK_DEBIAN_PACKAGE_GENERATE_SHLIBS FALSE) # FIXME
 # TODO set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS TRUE)
@@ -59,6 +59,7 @@ get_cmake_property(CPACK_COMPONENTS_ALL COMPONENTS)
 list(
     REMOVE_ITEM
     CPACK_COMPONENTS_ALL
+    dev
     tt_pybinds # Wow this one is big!
     Unspecified # TODO: audit if there's anything we need to ship here
     Headers # TODO: Where is this coming from?

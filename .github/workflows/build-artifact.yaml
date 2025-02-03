@@ -173,3 +173,11 @@ jobs:
         with:
           name: TTMetal_build_any${{ (inputs.tracy && '_profiler') || '' }}
           path: ttm_any.tar
+      - name: 'Upload Packages'
+        uses: actions/upload-artifact@v4
+        with:
+          name: packages
+          path: |
+            build/*.deb
+            build/*.ddeb
+          compression-level: 0
