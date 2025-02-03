@@ -94,6 +94,39 @@ void bind_all_reduce(pybind11::module& module, const ccl_operation_t& operation,
             py::arg("memory_config") = std::nullopt,
             py::arg("topology") = ttnn::ccl::Topology::Linear,
             py::arg("num_links") = std::nullopt,
+            py::arg("subdevice_id") = std::nullopt},
+
+        ttnn::pybind_overload_t{
+            [](const ccl_operation_t& self,
+               const ttnn::Tensor& input_tensor,
+               ttnn::Tensor& all_gather_output_tensor,
+               const uint32_t cluster_axis,
+               const MeshDevice& mesh_device,
+               const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
+               const ttnn::MemoryConfig& memory_config,
+               ttnn::ccl::Topology topology,
+               const std::optional<size_t> num_links,
+               std::optional<SubDeviceId> worker_subdevice_id_opt) -> ttnn::Tensor {
+                return self(
+                    input_tensor,
+                    all_gather_output_tensor,
+                    cluster_axis,
+                    mesh_device,
+                    multi_device_global_semaphore,
+                    memory_config,
+                    topology,
+                    num_links,
+                    worker_subdevice_id_opt);
+            },
+            py::arg("input_tensor"),
+            py::arg("all_gather_output_tensor"),
+            py::arg("cluster_axis"),
+            py::arg("mesh_device"),
+            py::arg("multi_device_global_semaphore"),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt,
+            py::arg("topology") = ttnn::ccl::Topology::Linear,
+            py::arg("num_links") = std::nullopt,
             py::arg("subdevice_id") = std::nullopt});
 }
 

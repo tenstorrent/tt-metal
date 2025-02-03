@@ -77,14 +77,18 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
     size_t num_workers_per_link,
     bool persistent_fabric_mode,
     IDevice* device,
-    const std::optional<SubDeviceId>& sub_device_id) {
+    const std::optional<SubDeviceId>& sub_device_id,
+    const std::optional<CoreRangeSet>& reserved_core_range) {
     std::tuple<CoreRangeSet, std::vector<CoreCoord>> result;
     CoreRangeSet sender_worker_core_range;
     if (persistent_fabric_mode) {
         const size_t num_workers_preferred = num_workers_per_link * num_links;
-        const auto available_cores = device->worker_cores(
+        auto available_cores = device->worker_cores(
             HalProgrammableCoreType::TENSIX,
             sub_device_id.has_value() ? *sub_device_id : device->get_sub_device_ids().at(0));
+        if (reserved_core_range.has_value()) {
+            available_cores = available_cores.subtract(*reserved_core_range);
+        }
         if (available_cores.num_cores() < num_workers_preferred) {
             log_warning(
                 tt::LogOp,
