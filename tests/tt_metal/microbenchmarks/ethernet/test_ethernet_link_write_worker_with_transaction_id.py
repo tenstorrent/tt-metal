@@ -81,9 +81,17 @@ def profile_results(sample_size, sample_count, channel_count):
 @pytest.mark.skipif(is_grayskull(), reason="Unsupported on GS")
 @pytest.mark.parametrize("sample_count", [256])
 @pytest.mark.parametrize("channel_count", [16])
-@pytest.mark.parametrize("sample_size", [16, 128, 256, 512, 1024, 2048, 4096, 8192])
-def test_erisc_write_worker_latency(sample_count, sample_size, channel_count):
+@pytest.mark.parametrize(
+    "sample_size_expected_latency",
+    [(16, 85.2), (128, 85.2), (256, 85.3), (512, 85.4), (1024, 87.2), (2048, 172.9), (4096, 339.9), (8192, 678.4)],
+)
+def test_erisc_write_worker_latency(sample_count, sample_size_expected_latency, channel_count):
     os.system(f"rm -rf {os.environ['TT_METAL_HOME']}/generated/profiler/.logs/profile_log_device.csv")
+
+    sample_size = sample_size_expected_latency[0]
+    expected_latency = sample_size_expected_latency[1]
+    expected_latency_lower_bound = expected_latency - 0.5
+    expected_latency_upper_bound = expected_latency + 0.5
 
     ARCH_NAME = os.getenv("ARCH_NAME")
     cmd = f"TT_METAL_DEVICE_PROFILER=1 \
@@ -91,14 +99,13 @@ def test_erisc_write_worker_latency(sample_count, sample_size, channel_count):
                 {sample_count} \
                 {sample_size} \
                 {channel_count} "
-    print(cmd)
     rc = os.system(cmd)
     if rc != 0:
-        print("Error in running the test")
+        logger.info("Error in running the test")
         assert False
 
     main_loop_latency = profile_results(sample_size, sample_count, channel_count)
-    print(f"sender_loop_latency {main_loop_latency}")
-    print(f"result BW (B/c): {sample_size / main_loop_latency}")
+    logger.info(f"sender_loop_latency {main_loop_latency}")
+    logger.info(f"result BW (B/c): {sample_size / main_loop_latency}")
 
-    return True
+    assert expected_latency_lower_bound <= main_loop_latency <= expected_latency_upper_bound
