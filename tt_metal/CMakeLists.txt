@@ -87,3 +87,16 @@ add_subdirectory(impl)
 add_subdirectory(detail)
 add_subdirectory(distributed)
 add_subdirectory(tt_stl)
+
+install(
+    TARGETS
+        tt_metal
+    # ttmetalium_hostdevcommon
+    # EXPORT Metalium
+    LIBRARY
+        COMPONENT metalium
+    # FILE_SET
+    # api
+    # COMPONENT metalium-dev
+)
+# install(EXPORT Metalium NAMESPACE TT:: DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/tt-metalium COMPONENT metalium-dev)
