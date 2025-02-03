@@ -480,29 +480,24 @@ inline void dprint_tensix_pack_edge_offset_helper(const ckernel::packer::pck_edg
 
 // Choose what register you want printed with reg_id (1-4), 0 for all
 inline void dprint_tensix_pack_edge_offset(uint reg_id = 0) {
-#ifdef ARCH_BLACKHOLE
-    constexpr uint num_of_instances = 1;
-#else
-    constexpr uint num_of_instances = 4;
-#endif
-    std::array<ckernel::packer::pck_edge_offset_t, num_of_instances> edge_vec;
+    std::array<ckernel::packer::pck_edge_offset_t, ckernel::packer::NUM_PACKERS> edge_vec;
     PACK(
         edge_vec = ckernel::packer::read_pack_edge_offset();
-        if (reg_id >= 1 && reg_id <= num_of_instances) {
+        if (reg_id >= 1 && reg_id <= ckernel::packer::NUM_PACKERS) {
             DPRINT << "REG_ID: " << reg_id << ENDL();
             dprint_tensix_pack_edge_offset_helper(edge_vec[reg_id - 1]);
         }
         // Print all registers
         else if (reg_id == 0) {
-            for (uint i = 1; i <= num_of_instances; i++) {
+            for (uint i = 1; i <= ckernel::packer::NUM_PACKERS; i++) {
                 DPRINT << "REG_ID: " << i << ENDL();
                 dprint_tensix_pack_edge_offset_helper(edge_vec[i - 1]);
-                if (i != num_of_instances) {
+                if (i != ckernel::packer::NUM_PACKERS) {
                     DPRINT << ENDL();
                 }
             }
         } else DPRINT
-        << "INVALID REGISTER ID! PLEASE CHOOSE A NUMBER BETWEEN 0 AND " << num_of_instances << "." << ENDL();)
+        << "INVALID REGISTER ID! PLEASE CHOOSE A NUMBER BETWEEN 0 AND " << ckernel::packer::NUM_PACKERS << "." << ENDL();)
 }
 
 // PACK COUNTERS
@@ -545,51 +540,41 @@ inline void dprint_tensix_pack_counters_helper(const ckernel::packer::pack_count
 
 // Choose what register you want printed with reg_id (1-4), 0 for all
 inline void dprint_tensix_pack_counters(uint reg_id = 0) {
-#ifdef ARCH_BLACKHOLE
-    constexpr uint num_of_instances = 1;
-#else
-    constexpr uint num_of_instances = 4;
-#endif
-    std::array<ckernel::packer::pack_counters_t, num_of_instances> counters_vec;
+    std::array<ckernel::packer::pack_counters_t, ckernel::packer::NUM_PACKERS> counters_vec;
     PACK(
         counters_vec = ckernel::packer::read_pack_counters();
-        if (reg_id >= 1 && reg_id <= num_of_instances) {
+        if (reg_id >= 1 && reg_id <= ckernel::packer::NUM_PACKERS) {
             DPRINT << "REG_ID: " << reg_id << ENDL();
             dprint_tensix_pack_counters_helper(counters_vec[reg_id - 1]);
         }
         // Print all registers
         else if (reg_id == 0) {
-            for (uint i = 1; i <= num_of_instances; i++) {
+            for (uint i = 1; i <= ckernel::packer::NUM_PACKERS; i++) {
                 DPRINT << "REG_ID: " << i << ENDL();
                 dprint_tensix_pack_counters_helper(counters_vec[i - 1]);
-                if (i != num_of_instances) {
+                if (i != ckernel::packer::NUM_PACKERS) {
                     DPRINT << ENDL();
                 }
             }
         } else DPRINT
-        << "INVALID REGISTER ID! PLEASE CHOOSE A NUMBER BETWEEN 0 AND " << num_of_instances << "." << ENDL();)
+        << "INVALID REGISTER ID! PLEASE CHOOSE A NUMBER BETWEEN 0 AND " << ckernel::packer::NUM_PACKERS << "." << ENDL();)
 }
 
 // Choose what register you want by id (1-4). 0 for all.
 inline void dprint_tensix_pack_config(uint reg_id = 0) {
-#ifdef ARCH_BLACKHOLE
-    constexpr uint num_of_instances = 1;
-#else
-    constexpr uint num_of_instances = 4;
-#endif
-    std::array<ckernel::packer::pack_config_t, num_of_instances> config_vec;
+    std::array<ckernel::packer::pack_config_t, ckernel::packer::NUM_PACKERS> config_vec;
     MATH(
-        config_vec = ckernel::packer::read_pack_config(); if (reg_id >= 1 && reg_id <= num_of_instances) {
+        config_vec = ckernel::packer::read_pack_config(); if (reg_id >= 1 && reg_id <= ckernel::packer::NUM_PACKERS) {
             DPRINT << "REG_ID: " << reg_id << ENDL();
             dprint_tensix_pack_config_helper(config_vec[reg_id - 1]);
-        } else if (reg_id == 0) for (uint i = 1; i <= num_of_instances; i++) {
+        } else if (reg_id == 0) for (uint i = 1; i <= ckernel::packer::NUM_PACKERS; i++) {
             DPRINT << "REG_ID: " << i << ENDL();
             dprint_tensix_pack_config_helper(config_vec[i - 1]);
-            if (i != num_of_instances) {
+            if (i != ckernel::packer::NUM_PACKERS) {
                 DPRINT << ENDL();
             }
         } else DPRINT << "INVALID REGISTER ID! PLEASE CHOOSE A NUMBER BETWEEN 0 AND "
-                      << num_of_instances << "." << ENDL();)
+                      << ckernel::packer::NUM_PACKERS << "." << ENDL();)
 }
 
 // Choose what register you want printed (1-2). 0 for all.

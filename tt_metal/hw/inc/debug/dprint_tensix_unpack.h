@@ -213,22 +213,22 @@ inline void dprint_tensix_unpack_tile_descriptor_helper(
 }
 
 inline void dprint_tensix_unpack_tile_descriptor(uint reg_id = 0) {
-    std::array<ckernel::unpacker::unpack_tile_descriptor_t, 2> tile_descriptor_vec;
+    std::array<ckernel::unpacker::unpack_tile_descriptor_t, ckernel::unpacker::NUM_UNPACKERS> tile_descriptor_vec;
     UNPACK(
     tile_descriptor_vec = ckernel::unpacker::read_unpack_tile_descriptor();
-    if (reg_id >= 1 && reg_id <= 2) {
+    if (reg_id >= 1 && reg_id <= ckernel::unpacker::NUM_UNPACKERS) {
         DPRINT << "REG_ID: " << reg_id << ENDL();
         dprint_tensix_unpack_tile_descriptor_helper(tile_descriptor_vec[reg_id - 1]);
     } else if (reg_id == 0) {
-        for (uint i = 1; i <= 2; i++) {
+        for (uint i = 1; i <= ckernel::unpacker::NUM_UNPACKERS; i++) {
             DPRINT << "REG_ID: " << i << ENDL();
             dprint_tensix_unpack_tile_descriptor_helper(tile_descriptor_vec[i - 1]);
-            if (i != 2) {
+            if (i != ckernel::unpacker::NUM_UNPACKERS) {
                 DPRINT << ENDL();
             }
         }
     } else {
-        DPRINT << "INVALID REGISTER ID! PLEASE CHOOSE A NUMBER BETWEEN 0 AND 2." << ENDL();
+        DPRINT << "INVALID REGISTER ID! PLEASE CHOOSE A NUMBER BETWEEN 0 AND " << ckernel::unpacker::NUM_UNPACKERS << "." << ENDL();
     }
     )
 }
@@ -268,22 +268,22 @@ inline void dprint_tensix_unpack_config_helper(const ckernel::unpacker::unpack_c
 }
 
 inline void dprint_tensix_unpack_config(uint reg_id = 0) {
-    std::array<ckernel::unpacker::unpack_config_t, 2> config_vec;
+    std::array<ckernel::unpacker::unpack_config_t, ckernel::unpacker::NUM_UNPACKERS> config_vec;
     UNPACK(
     config_vec = ckernel::unpacker::read_unpack_config();
-    if (reg_id >= 1 && reg_id <= 2) {
+    if (reg_id >= 1 && reg_id <= ckernel::unpacker::NUM_UNPACKERS) {
         DPRINT << "REG_ID: " << reg_id << ENDL();
         dprint_tensix_unpack_config_helper(config_vec[reg_id - 1]);
     } else if (reg_id == 0) {
-        for (uint i = 1; i <= 2; i++) {
+        for (uint i = 1; i <= ckernel::unpacker::NUM_UNPACKERS; i++) {
             DPRINT << "REG_ID: " << i << ENDL();
             dprint_tensix_unpack_config_helper(config_vec[i - 1]);
-            if (i != 2) {
+            if (i != ckernel::unpacker::NUM_UNPACKERS) {
                 DPRINT << ENDL();
             }
         }
     } else {
-        DPRINT << "INVALID REGISTER ID! PLEASE CHOOSE A NUMBER BETWEEN 0 AND 2." << ENDL();
+        DPRINT << "INVALID REGISTER ID! PLEASE CHOOSE A NUMBER BETWEEN 0 AND " << ckernel::unpacker::NUM_UNPACKERS << "." << ENDL();
     }
     )
 }
@@ -319,22 +319,22 @@ inline void dprint_tensix_unpack_tile_descriptor_helper(
 
 // Choose which register you want (1-2). 0 for both.
 inline void dprint_tensix_unpack_tile_descriptor(uint reg_id = 0) {
-    std::array<ckernel::unpacker::unpack_tile_descriptor_t, 2> tile_descriptor_vec;
+    std::array<ckernel::unpacker::unpack_tile_descriptor_t, ckernel::unpacker::NUM_UNPACKERS> tile_descriptor_vec;
     UNPACK(
     tile_descriptor_vec = ckernel::unpacker::read_unpack_tile_descriptor();
-    if (reg_id >= 1 && reg_id <= 2) {
+    if (reg_id >= 1 && reg_id <= ckernel::unpacker::NUM_UNPACKERS) {
         DPRINT << "REG_ID: " << reg_id << ENDL();
         dprint_tensix_unpack_tile_descriptor_helper(tile_descriptor_vec[reg_id - 1]);
     } else if (reg_id == 0) {
-        for (uint i = 1; i <= 2; i++) {
+        for (uint i = 1; i <= ckernel::unpacker::NUM_UNPACKERS; i++) {
             DPRINT << "REG_ID: " << i << ENDL();
             dprint_tensix_unpack_tile_descriptor_helper(tile_descriptor_vec[i - 1]);
-            if (i != 2) {
+            if (i != ckernel::unpacker::NUM_UNPACKERS) {
                 DPRINT << ENDL();
             }
         }
     } else {
-        DPRINT << "INVALID REGISTER ID! PLEASE CHOOSE A NUMBER BETWEEN 0 AND 2." << ENDL();
+        DPRINT << "INVALID REGISTER ID! PLEASE CHOOSE A NUMBER BETWEEN 0 AND " << ckernel::unpacker::NUM_UNPACKERS << "." << ENDL();
     }
     )
 }
@@ -388,22 +388,22 @@ inline void dprint_tensix_unpack_config_helper(const ckernel::unpacker::unpack_c
 
 // Choose which register you want (1-2). 0 for both.
 inline void dprint_tensix_unpack_config(uint reg_id = 0) {
-    std::array<ckernel::unpacker::unpack_config_t, 2> config_vec;
+    std::array<ckernel::unpacker::unpack_config_t, ckernel::unpacker::NUM_UNPACKERS> config_vec;
     UNPACK(
     config_vec = ckernel::unpacker::read_unpack_config();
-    if (reg_id >= 1 && reg_id <= 2) {
+    if (reg_id >= 1 && reg_id <= ckernel::unpacker::NUM_UNPACKERS) {
         DPRINT << "REG_ID: " << reg_id << ENDL();
         dprint_tensix_unpack_config_helper(config_vec[reg_id - 1]);
     } else if (reg_id == 0) {
-        for (uint i = 1; i <= 2; i++) {
+        for (uint i = 1; i <= ckernel::unpacker::NUM_UNPACKERS; i++) {
             DPRINT << "REG_ID: " << i << ENDL();
             dprint_tensix_unpack_config_helper(config_vec[i - 1]);
-            if (i != 2) {
+            if (i != ckernel::unpacker::NUM_UNPACKERS) {
                 DPRINT << ENDL();
             }
         }
     } else {
-        DPRINT << "INVALID REGISTER ID! PLEASE CHOOSE A NUMBER BETWEEN 0 AND 2." << ENDL();
+        DPRINT << "INVALID REGISTER ID! PLEASE CHOOSE A NUMBER BETWEEN 0 AND " << ckernel::unpacker::NUM_UNPACKERS << "." << ENDL();
     }
     )
 }
