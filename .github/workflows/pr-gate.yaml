@@ -145,7 +145,7 @@ jobs:
           # ./build/test/tt_metal/test_multi_core_kernel || true <-- requires an env var and dies without it
           ./build/test/tt_metal/unit_tests_stl || true
 
-          ls -al test-results*
+          ls -al test-reports
 
       - name: unimpressed
         run: |
