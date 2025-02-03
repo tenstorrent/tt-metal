@@ -64,6 +64,7 @@ def run_with_trace(
     n_worker=None,
     n_buffer=None,
     num_iter=20,
+    warmup_iters=0,
     use_all_gather_async=False,
     profiler=BenchmarkProfiler(),
 ):
@@ -98,47 +99,64 @@ def run_with_trace(
 
     # Capture trace
     logger.info("Capturing trace")
-    trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-    for i in range(num_iter):
-        if use_all_gather_async:
-            logger.info("Running all-gather async")
-            tt_out_tensor = ttnn.experimental.all_gather_async(
-                input_tensor,
-                dim,
-                cluster_axis=cluster_axis,
-                mesh_device=mesh_device,
-                topology=ttnn.Topology.Linear,
-                multi_device_global_semaphore=ccl_semaphore_handles[i]
-                if type(ccl_semaphore_handles) == list
-                else ccl_semaphore_handles,
-                num_links=num_links,
-                memory_config=output_mem_config,
-                subdevice_id=worker_sub_device_id,
-                enable_persistent_fabric_mode=enable_persistent_fabric,
-            )
-        else:
-            tt_out_tensor = ttnn.all_gather(
-                input_tensor,
-                dim=dim,
-                cluster_axis=cluster_axis,
-                mesh_device=mesh_device,
-                num_links=num_links,
-                memory_config=output_mem_config,
-                topology=all_gather_topology,
-            )
-    ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
-    ttnn.synchronize_device(mesh_device)
+
+    def capture_trace(n_iters):
+        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+        for i in range(n_iters):
+            if use_all_gather_async:
+                tt_out_tensor = ttnn.experimental.all_gather_async(
+                    input_tensor,
+                    dim,
+                    cluster_axis=cluster_axis,
+                    mesh_device=mesh_device,
+                    topology=ttnn.Topology.Linear,
+                    multi_device_global_semaphore=ccl_semaphore_handles[i % 8]
+                    if type(ccl_semaphore_handles) == list
+                    else ccl_semaphore_handles,
+                    num_links=num_links,
+                    memory_config=output_mem_config,
+                    subdevice_id=worker_sub_device_id,
+                    enable_persistent_fabric_mode=enable_persistent_fabric,
+                )
+            else:
+                tt_out_tensor = ttnn.all_gather(
+                    input_tensor,
+                    dim=dim,
+                    cluster_axis=cluster_axis,
+                    mesh_device=mesh_device,
+                    num_links=num_links,
+                    memory_config=output_mem_config,
+                    topology=all_gather_topology,
+                )
+        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+        ttnn.synchronize_device(mesh_device)
+        return trace_id
+
+    if warmup_iters > 0:
+        trace_id_warmup = capture_trace(warmup_iters)
+    trace_id = capture_trace(num_iter)
 
     # Run the op
     logger.info("Starting Trace perf test...")
+    profiler.start("all-gather-async-trace-warmup")
+    if warmup_iters > 0:
+        ttnn.execute_trace(mesh_device, trace_id_warmup, blocking=False)
+        ttnn.release_trace(mesh_device, trace_id_warmup)
+        ttnn.synchronize_device(mesh_device)
+    profiler.end("all-gather-async-trace-warmup")
+
     profiler.start("all-gather-async-trace")
     ttnn.execute_trace(mesh_device, trace_id, blocking=False)
     ttnn.release_trace(mesh_device, trace_id)
     ttnn.synchronize_device(mesh_device)
     profiler.end("all-gather-async-trace")
-    logger.info(f"Time taken: {profiler.get_duration('all-gather-async-trace')} s")
-    logger.info(f"Time per iter: {(profiler.get_duration('all-gather-async-trace')) / num_iter} s")
-    logger.info(f"Time per iter: {(profiler.get_duration('all-gather-async-trace')) / num_iter * 1e6} us")
+    time_taken = profiler.get_duration("all-gather-async-trace") - profiler.get_duration(
+        "all-gather-async-trace-warmup"
+    )
+    effective_iter = num_iter - warmup_iters
+    logger.info(f"Time taken: {time_taken} s")
+    logger.info(f"Time per iter: {time_taken / effective_iter} s")
+    logger.info(f"Time per iter: {time_taken / effective_iter * 1e6} us")
 
     return tt_out_tensor
 
@@ -160,6 +178,7 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
     output_shard_spec: ttnn.ShardSpec = None,
     num_all_gather_instances: int = 1,
     num_iters: int = 1,
+    warmup_iters: int = 0,
     cluster_axis: int = 0,
     tile=(32, 32),
     trace_mode=False,
@@ -257,7 +276,7 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
 
         # create global semaphore handles
         ccl_semaphore_handles = [
-            create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)
+            create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0) for _ in range(8)
         ]
     try:
         # ttnn.visualize_mesh_device(mesh_device, tensor=ttnn_tensor)
@@ -274,6 +293,7 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
                 enable_persistent_fabric=enable_persistent_fabric,
                 all_gather_topology=ttnn.Topology.Linear,
                 num_iter=num_iters,
+                warmup_iters=warmup_iters,
                 use_all_gather_async=use_all_gather_async,
                 profiler=profiler,
             )
@@ -288,7 +308,7 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
                         cluster_axis=cluster_axis,
                         mesh_device=mesh_device,
                         topology=ttnn.Topology.Linear,
-                        multi_device_global_semaphore=ccl_semaphore_handles[i],
+                        multi_device_global_semaphore=ccl_semaphore_handles[i % 8],
                         num_links=num_links,
                         memory_config=output_mem_config,
                         subdevice_id=worker_sub_device_id,

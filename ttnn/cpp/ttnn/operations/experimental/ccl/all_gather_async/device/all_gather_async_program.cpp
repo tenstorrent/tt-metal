@@ -86,6 +86,9 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
         const auto available_cores = device->worker_cores(
             tt::tt_metal::HalProgrammableCoreType::TENSIX,
             sub_device_id.has_value() ? *sub_device_id : device->get_sub_device_ids().at(0));
+        if (reserved_core_range.has_value()) {
+            available_cores = available_cores.subtract(*reserved_core_range);
+        }
         if (available_cores.num_cores() < num_workers_preferred) {
             log_warning(
                 tt::LogOp,
