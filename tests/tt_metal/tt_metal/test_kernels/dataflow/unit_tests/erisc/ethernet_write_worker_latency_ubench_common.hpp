@@ -35,3 +35,8 @@ FORCE_INLINE void switch_context_if_debug() {
     internal_::risc_context_switch();
 #endif
 }
+
+template <typename T>
+bool is_power_of_two(T val) {
+    return (val & (val - 1)) == T(0);
+}

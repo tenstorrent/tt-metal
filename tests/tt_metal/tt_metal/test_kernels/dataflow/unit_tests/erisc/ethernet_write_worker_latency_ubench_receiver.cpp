@@ -121,7 +121,7 @@ void kernel_main() {
     const uint32_t num_messages = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t message_size = get_arg_val<uint32_t>(arg_idx++);
 
-    ASSERT(num_writes_skip_barrier <= NUM_BUFFER_SLOTS);
+    ASSERT(is_power_of_two(NUM_BUFFER_SLOTS));
 
     std::array<uint32_t, NUM_BUFFER_SLOTS> buffer_slot_addrs;
     std::array<volatile eth_buffer_slot_sync_t*, NUM_BUFFER_SLOTS> buffer_slot_sync_addrs;

@@ -23,7 +23,7 @@ FORCE_INLINE bool has_receiver_ack(volatile eth_buffer_slot_sync_t* buffer_slot_
     return buffer_slot_sync_addr->bytes_sent == 0;
 }
 
-FORCE_INLINE void check_receiver_done_and_send_packet(
+FORCE_INLINE void check_buffer_full_and_send_packet(
     const std::array<uint32_t, NUM_BUFFER_SLOTS>& buffer_slot_addrs,
     const std::array<volatile eth_buffer_slot_sync_t*, NUM_BUFFER_SLOTS>& buffer_slot_sync_addrs,
     uint32_t read_ptr,
@@ -44,7 +44,7 @@ FORCE_INLINE void check_receiver_done_and_send_packet(
     }
 }
 
-FORCE_INLINE void check_write_worker_done(
+FORCE_INLINE void check_receiver_done(
     const std::array<volatile eth_buffer_slot_sync_t*, NUM_BUFFER_SLOTS>& buffer_slot_sync_addrs,
     uint32_t& read_ptr,
     uint32_t& num_messages_ack) {
@@ -70,7 +70,7 @@ FORCE_INLINE void sender_main_loop(
     uint32_t num_messages_ack = 0;
     while (num_messages_ack < total_msgs) {
         // Check if current buffer slot is ready and send packet to receiver
-        check_receiver_done_and_send_packet(
+        check_buffer_full_and_send_packet(
             buffer_slot_addrs,
             buffer_slot_sync_addrs,
             buffer_read_ptr,
@@ -78,7 +78,7 @@ FORCE_INLINE void sender_main_loop(
             full_payload_size,
             full_payload_size_eth_words);
         // Check if the write for trid is done, and ack sender if the current buffer slot is done
-        check_write_worker_done(buffer_slot_sync_addrs, buffer_read_ptr, num_messages_ack);
+        check_receiver_done(buffer_slot_sync_addrs, buffer_read_ptr, num_messages_ack);
 
         // not called in normal execution mode
         switch_context_if_debug();
@@ -91,6 +91,8 @@ void kernel_main() {
     const uint32_t num_messages = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t message_size = get_arg_val<uint32_t>(arg_idx++);
     bool is_sender_offset_0 = get_arg_val<uint32_t>(arg_idx++) == 1;
+
+    ASSERT(is_power_of_two(NUM_BUFFER_SLOTS));
 
     const uint32_t message_size_eth_words = message_size >> 4;
 
