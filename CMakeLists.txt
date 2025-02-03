@@ -261,7 +261,6 @@ endif()
 ############################################################################################################################
 # Install for build artifacts that will upload build/lib
 
-#[[
 install(
     TARGETS
         tt_fabric
@@ -269,7 +268,7 @@ install(
         DESTINATION ${CMAKE_INSTALL_LIBDIR}
     LIBRARY
         DESTINATION ${CMAKE_INSTALL_LIBDIR}
-        COMPONENT dev
+        COMPONENT tar
 )
 install(
     TARGETS
@@ -278,7 +277,7 @@ install(
         DESTINATION ${CMAKE_INSTALL_LIBDIR}
     LIBRARY
         DESTINATION ${CMAKE_INSTALL_LIBDIR}
-        COMPONENT dev
+        COMPONENT tar
 )
 install(
     TARGETS
@@ -287,7 +286,7 @@ install(
         DESTINATION ${CMAKE_INSTALL_LIBDIR}
     LIBRARY
         DESTINATION ${CMAKE_INSTALL_LIBDIR}
-        COMPONENT dev
+        COMPONENT tar
 )
 if(WITH_PYTHON_BINDINGS)
     # Install .so into src files for pybinds implementation
@@ -300,7 +299,6 @@ if(WITH_PYTHON_BINDINGS)
             tt_pybinds
     )
 endif()
-#]]
 
 # Custom clean target for `built` folder for when new kernel changes are pulled
 add_custom_target(
