@@ -16,6 +16,8 @@ from models.experimental.functional_yolov11.tt.model_preprocessing import (
 )
 from models.experimental.functional_yolov11.tt import ttnn_yolov11
 import torch.nn as nn
+from models.utility_functions import run_for_wormhole_b0
+from models.experimental.functional_yolov11.test.yolov11_perfomant import run_yolov11_trace_inference
 
 try:
     sys.modules["ultralytics"] = yolov11
@@ -85,3 +87,18 @@ def test_yolov11(device, use_program_cache, reset_seeds):
     ttnn_output = ttnn_output.reshape(torch_output.shape)
 
     assert_with_pcc(torch_output, ttnn_output, 0.99999)
+
+
+@run_for_wormhole_b0()
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "trace_region_size": 1843200}], indirect=True)
+@pytest.mark.parametrize("enable_async_mode", (False, True), indirect=True)
+def test_run_yolov11_trace_inference(
+    device,
+    use_program_cache,
+    enable_async_mode,
+    model_location_generator,
+):
+    run_yolov11_trace_inference(
+        device,
+        model_location_generator,
+    )

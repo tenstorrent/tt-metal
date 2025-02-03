@@ -159,8 +159,8 @@ def create_yolov11_model_parameters(model: YoloV11, input_tensor: torch.Tensor, 
 
     anchors, strides = make_anchors(device, feats, strides)  # Optimization: Processing make anchors outside model run
 
-    parameters.model[23]["anchors"] = anchors
-    parameters.model[23]["strides"] = strides
+    # parameters.model[23]["anchors"] = anchors
+    # parameters.model[23]["strides"] = strides
 
     return parameters
 
