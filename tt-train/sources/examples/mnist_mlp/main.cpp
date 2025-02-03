@@ -39,9 +39,9 @@ class MnistTP : public ttml::autograd::ModuleBase {
 public:
     MnistTP() {
         m_linear1 = std::make_shared<ttml::modules::distributed::ColumnParallelLinear>(
-            784, 256, /* has_bias */ true, /* gather_output */ false);
+            784, 128, /* has_bias */ true, /* gather_output */ false);
         m_linear2 = std::make_shared<ttml::modules::distributed::RowParallelLinear>(
-            256, 10, /* has_bias */ true, /* input_is_parallel */ true);
+            128, 10, /* has_bias */ true, /* input_is_parallel */ true);
         create_name(model_name);
         register_module(m_linear1, "linear1");
         register_module(m_linear2, "linear2");
