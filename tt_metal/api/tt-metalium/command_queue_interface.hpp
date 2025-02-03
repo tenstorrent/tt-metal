@@ -61,7 +61,7 @@ public:
     DispatchMemMap(DispatchMemMap&& other) noexcept = delete;
 
     //
-    // Returns an instance. The instance is reset if the core_type and/or num_hw_cqs changed from
+    // Returns the instance. The instance is reset if the core_type and/or num_hw_cqs changed from
     // the last call. The memory region sizes can be configured using DispatchSettings.
     //
     // If the settings changed, then force_reinit_with_settings will recreate the instance with
