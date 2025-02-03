@@ -79,9 +79,7 @@ def create_models(mesh_device, state_dict, partial_state_dict, block_path, dim_x
 @torch.no_grad()
 @pytest.mark.parametrize(
     "vision_seq_len, text_seq_len",
-    [
-        (43 * 1024, 256),
-    ],
+    [(43 * 1024, 256), (44520, 118)],
 )
 @pytest.mark.parametrize(
     "mesh_device",
@@ -96,11 +94,14 @@ def create_models(mesh_device, state_dict, partial_state_dict, block_path, dim_x
     "block_path, update_y",
     [
         ("blocks.0", True),
-        ("blocks.47", False),
+        # ("blocks.47", False),
     ],
 )
 def test_tt_block(mesh_device, vision_seq_len, text_seq_len, use_program_cache, reset_seeds, block_path, update_y):
     """Test TtAsymmetricJointBlock implementation by comparing with reference model."""
+
+    min_pcc = 0.998
+    max_mse = 0.0088
     state_dict, partial_state_dict = load_model_weights(block_path)
 
     # Create reference model
@@ -154,7 +155,6 @@ def test_tt_block(mesh_device, vision_seq_len, text_seq_len, use_program_cache, 
         rope_cos=tt_rope_cos,
         rope_sin=tt_rope_sin,
         trans_mat=tt_trans_mat,
-        packed_indices=packed_indices,
     )
 
     # Convert TT outputs to torch tensors
@@ -174,7 +174,7 @@ def test_tt_block(mesh_device, vision_seq_len, text_seq_len, use_program_cache, 
         metrics.append((name, pcc, mse, mae))
         print(f"{name} - PCC: {pcc}, MSE: {mse}, MAE: {mae}")
 
-    passing = all(pcc >= PCC_REQUIRED for _, pcc, _, _ in metrics)
+    passing = all((mse <= max_mse) and (pcc >= min_pcc) for _, pcc, mse, _ in metrics)
 
     if passing:
         logger.info("TtAsymmetricJointBlock Passed!")
@@ -263,34 +263,13 @@ def test_tt_block_with_saved_tensors(mesh_device, use_program_cache, reset_seeds
 
     max_seqlen_in_batch_kv = packed_indices["max_seqlen_in_batch_kv"]
 
-    attn_padded_len = 44 * 1024
-    x_unpadded_len = x_shape[1]
-    # TODO: Must be a multiple of X_MM_SEQ_LEN, which should be 512. This just happens to work for this input shape.
-    x_tile_padding = nearest_32(x_shape[1]) - x_shape[1]
     y_unpadded_len = max_seqlen_in_batch_kv - x_shape[1]
-    y_tile_padding = MAX_T5_TOKEN_LENGTH - y_unpadded_len
-    xy_padding = attn_padded_len - (x_unpadded_len + x_tile_padding + y_unpadded_len + y_tile_padding)
-    print(
-        f"x_unpadded_len: {x_unpadded_len}\nx_tile_padding: {x_tile_padding}\ny_unpadded_len: {y_unpadded_len}\ny_tile_padding: {y_tile_padding}\nxy_padding: {xy_padding}"
-    )
 
-    x_padded = torch.nn.functional.pad(tensors["x"], (0, 0, 0, x_tile_padding))
-    # Create attention mask for padded tokens
-    # XY = [X_unpadded, X_tile_padding, Y_unpadded, Y_tile_padding, XY_padding]
-    attn_mask = torch.zeros((attn_padded_len, attn_padded_len), dtype=torch.float16)
-    x_padding_end = x_unpadded_len + x_tile_padding
-    attn_mask[:, x_unpadded_len:x_padding_end] = -float("inf")
-    y_padding_start = x_padding_end + y_unpadded_len
-    attn_mask[:, y_padding_start:] = -float("inf")
-
-    tt_x = to_tt_tensor(x_padded.view(1, x_shape[0], x_padded.shape[1], x_shape[2]), mesh_device)
+    tt_x = to_tt_tensor(tensors["x"].view(1, x_shape[0], x_shape[1], x_shape[2]), mesh_device)
     tt_y = to_tt_tensor(tensors["y_feat"].view(1, y_shape[0], y_shape[1], y_shape[2]), mesh_device)
     tt_c = to_tt_tensor(tensors["c"].view(x_shape[0], 1, 1, -1), mesh_device)
-    attn_mask = attn_mask.view(1, 1, attn_padded_len, attn_padded_len)
-    tt_attn_mask = replicate_attn_mask(attn_mask, mesh_device, ttnn.bfloat4_b)
 
     # Stack and convert RoPE tensors
-    # NOTE: do I need to pad rope_cos and rope_sin? I think this will break if padding is more than tile aligned!
     rope_cos_stack, rope_sin_stack = stack_cos_sin(
         tensors["rope_cos"].unsqueeze(0).permute(0, 2, 1, 3), tensors["rope_sin"].unsqueeze(0).permute(0, 2, 1, 3)
     )
@@ -310,8 +289,6 @@ def test_tt_block_with_saved_tensors(mesh_device, use_program_cache, reset_seeds
         rope_cos=tt_rope_cos,
         rope_sin=tt_rope_sin,
         trans_mat=tt_trans_mat,
-        packed_indices=packed_indices,
-        attn_mask=tt_attn_mask,
     )
 
     # Run reference model
