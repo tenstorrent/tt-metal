@@ -62,6 +62,14 @@ inline uint64_t GetDprintBufAddr(tt::tt_metal::IDevice* device, const CoreCoord&
     return reinterpret_cast<uint64_t>(&(buf->data[risc_id]));
 }
 
-inline int GetNumRiscs(const CoreDescriptor& core) {
-    return (core.type == CoreType::ETH) ? DPRINT_NRISCVS_ETH : DPRINT_NRISCVS;
+// TODO(#17275): Move this and others to the HAL
+#define DPRINT_NRISCVS 5
+#define DPRINT_NRISCVS_ETH 1
+
+inline int GetNumRiscs(tt::tt_metal::IDevice* device, const CoreDescriptor& core) {
+    if (core.type == CoreType::ETH) {
+        return (device->arch() == tt::ARCH::BLACKHOLE)? DPRINT_NRISCVS_ETH + 1 : DPRINT_NRISCVS_ETH;
+    } else {
+        return DPRINT_NRISCVS;
+    }
 }

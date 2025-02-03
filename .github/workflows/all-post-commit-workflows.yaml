@@ -152,7 +152,7 @@ jobs:
     uses: ./.github/workflows/code-analysis.yaml
     secrets: inherit
     with:
-      os: ubuntu-22.04-amd64
+      version: 22.04
   tt-train-cpp-unit-tests:
     needs: build-artifact
     secrets: inherit
@@ -183,30 +183,30 @@ jobs:
     strategy:
       matrix:
         config:
-          - os: "ubuntu-20.04-amd64"
+          - version: "20.04"
             toolchain: "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
             build-type: "Debug"
             publish-artifact: false
-          - os: "ubuntu-20.04-amd64"
+          - version: "20.04"
             toolchain: "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
             build-type: "RelWithDebInfo"
             publish-artifact: false
-          - os: "ubuntu-22.04-amd64"
+          - version: "22.04"
             toolchain: "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
             build-type: "Release"
             publish-artifact: false
-          - os: "ubuntu-22.04-amd64"
+          - version: "22.04"
             toolchain: "cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
             build-type: "Release"
             publish-artifact: false
             skip-tt-train: true
-          - os: "ubuntu-22.04-amd64"
+          - version: "22.04"
             toolchain: "cmake/x86_64-linux-gcc-12-toolchain.cmake"
             build-type: "Release"
             publish-artifact: false
             skip-tt-train: true
     with:
-      os: ${{ matrix.config.os }}
+      version: ${{ matrix.config.version }}
       toolchain: ${{ matrix.config.toolchain }}
       build-type: ${{ matrix.config.build-type }}
       publish-artifact: ${{ matrix.config.publish-artifact }}
