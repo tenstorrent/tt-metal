@@ -38,51 +38,86 @@ FORCE_INLINE void switch_context_if_debug() {
 #endif
 }
 
-FORCE_INLINE void wait_ack(volatile eth_buffer_slot_sync_t* buffer_slot_sync_addr) {
-    while (buffer_slot_sync_addr->bytes_sent != 0) {
-        switch_context_if_debug();
+FORCE_INLINE uint32_t advance_buffer_slot_ptr(uint32_t curr_ptr) { return (curr_ptr + 1) % NUM_BUFFER_SLOTS; }
+
+FORCE_INLINE void write_receiver(
+    uint32_t buffer_slot_addr,
+    volatile eth_buffer_slot_sync_t* buffer_slot_sync_addr,
+    uint32_t full_payload_size,
+    uint32_t full_payload_size_eth_words) {
+    buffer_slot_sync_addr->bytes_sent = 1;
+
+#if ENABLE_DEBUG
+    eth_send_bytes_over_channel_payload_only(
+#else
+    eth_send_bytes_over_channel_payload_only_unsafe(
+#endif
+        buffer_slot_addr, buffer_slot_addr, full_payload_size, full_payload_size, full_payload_size_eth_words);
+}
+
+FORCE_INLINE bool has_receiver_ack(volatile eth_buffer_slot_sync_t* buffer_slot_sync_addr) {
+    return buffer_slot_sync_addr->bytes_sent == 0;
+}
+
+FORCE_INLINE void check_receiver_done_and_send_packet(
+    const std::array<uint32_t, NUM_BUFFER_SLOTS>& buffer_slot_addrs,
+    const std::array<volatile eth_buffer_slot_sync_t*, NUM_BUFFER_SLOTS>& buffer_slot_sync_addrs,
+    uint32_t read_ptr,
+    uint32_t& write_ptr,
+    uint64_t full_payload_size,
+    uint32_t full_payload_size_eth_words) {
+    uint32_t next_write_ptr = advance_buffer_slot_ptr(write_ptr);
+    bool buffer_not_full = next_write_ptr != read_ptr;
+
+    if (buffer_not_full && !eth_txq_is_busy()) {
+        write_receiver(
+            buffer_slot_addrs[write_ptr],
+            buffer_slot_sync_addrs[write_ptr],
+            full_payload_size,
+            full_payload_size_eth_words);
+
+        write_ptr = next_write_ptr;
     }
 }
 
-FORCE_INLINE void wait_eth_txq() {
-    while (eth_txq_is_busy()) {
-        switch_context_if_debug();
+FORCE_INLINE void check_write_worker_done(
+    const std::array<volatile eth_buffer_slot_sync_t*, NUM_BUFFER_SLOTS>& buffer_slot_sync_addrs,
+    uint32_t& read_ptr,
+    uint32_t& num_messages_ack) {
+    if (has_receiver_ack(buffer_slot_sync_addrs[read_ptr])) {
+        read_ptr = advance_buffer_slot_ptr(read_ptr);
+        num_messages_ack++;
     }
 }
 
-template <bool waiting_tails>
-FORCE_INLINE void run_loop_iteration(
+FORCE_INLINE void sender_main_loop(
     const std::array<uint32_t, NUM_BUFFER_SLOTS>& buffer_slot_addrs,
     const std::array<volatile eth_buffer_slot_sync_t*, NUM_BUFFER_SLOTS>& buffer_slot_sync_addrs,
     uint32_t full_payload_size,
-    uint32_t full_payload_size_eth_words) {
-    if constexpr (!waiting_tails) {
-        // send packet
-        for (uint32_t i = 0; i < NUM_BUFFER_SLOTS; i++) {
-            // wait for receiver ack compelete
-            wait_ack(buffer_slot_sync_addrs[i]);
+    uint32_t num_messages) {
+    uint32_t full_payload_size_eth_words = full_payload_size >> 4;
+    uint32_t total_msgs = num_messages * NUM_BUFFER_SLOTS;
 
-            buffer_slot_sync_addrs[i]->bytes_sent = 1;
+    DPRINT << "SENDER MAIN LOOP" << ENDL();
 
-            wait_eth_txq();
+    uint32_t buffer_read_ptr = 0;
+    uint32_t buffer_write_ptr = 0;
 
-#if ENABLE_DEBUG
-            eth_send_bytes_over_channel_payload_only(
-#else
-            eth_send_bytes_over_channel_payload_only_unsafe(
-#endif
-                buffer_slot_addrs[i],
-                buffer_slot_addrs[i],
-                full_payload_size,
-                full_payload_size,
-                full_payload_size_eth_words);
-        }
-    } else {
-        // waiting tails
-        for (uint32_t i = 0; i < NUM_BUFFER_SLOTS; i++) {
-            // wait for receiver ack compelete
-            wait_ack(buffer_slot_sync_addrs[i]);
-        }
+    uint32_t num_messages_ack = 0;
+    while (num_messages_ack < total_msgs) {
+        // Check if current buffer slot is ready and send packet to receiver
+        check_receiver_done_and_send_packet(
+            buffer_slot_addrs,
+            buffer_slot_sync_addrs,
+            buffer_read_ptr,
+            buffer_write_ptr,
+            full_payload_size,
+            full_payload_size_eth_words);
+        // Check if the write for trid is done, and ack sender if the current buffer slot is done
+        check_write_worker_done(buffer_slot_sync_addrs, buffer_read_ptr, num_messages_ack);
+
+        // not called in normal execution mode
+        switch_context_if_debug();
     }
 }
 
@@ -131,11 +166,6 @@ void kernel_main() {
 
     {
         DeviceZoneScopedN("MAIN-TEST-BODY");
-        for (uint32_t i = 0; i < num_messages; i++) {
-            run_loop_iteration<false>(
-                buffer_slot_addrs, buffer_slot_sync_addrs, full_payload_size, full_payload_size_eth_words);
-        }
-        run_loop_iteration<true>(
-            buffer_slot_addrs, buffer_slot_sync_addrs, full_payload_size, full_payload_size_eth_words);
+        sender_main_loop(buffer_slot_addrs, buffer_slot_sync_addrs, full_payload_size, num_messages);
     }
 }

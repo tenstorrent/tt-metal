@@ -134,7 +134,7 @@ FORCE_INLINE void receiver_main_loop(
     uint32_t num_messages) {
     uint32_t total_msgs = num_messages * NUM_BUFFER_SLOTS;
 
-    DPRINT << "MAIN LOOP" << ENDL();
+    DPRINT << "RECEIVER MAIN LOOP" << ENDL();
 
     uint32_t buffer_read_ptr = 0;
     uint32_t buffer_write_ptr = 0;
