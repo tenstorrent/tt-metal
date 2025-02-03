@@ -283,3 +283,45 @@ def test_to_layout_page_error(shape, device):
     torch_output = torch_tensor
     assert torch_output.shape == output_tensor.shape
     assert_with_pcc(torch_output, output_tensor, 0.9999)
+
+
+@pytest.mark.parametrize("shape", [[64, 7680]])
+@pytest.mark.parametrize("output_layout", [ttnn.ROW_MAJOR_LAYOUT])
+@pytest.mark.parametrize("input_layout", [ttnn.TILE_LAYOUT])
+def test_untilize_w1(shape, input_layout, output_layout, device):
+    torch.manual_seed(0)
+    input_a = torch.randn(shape, dtype=torch.bfloat16)
+
+    input_tensor = ttnn.from_torch(input_a, device=device, layout=input_layout, dtype=ttnn.bfloat16)
+    output_tensor = ttnn.untilize_with_unpadding(input_tensor, [36, 7667])
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(input_a[:37, :7668], output_tensor)
+
+
+@pytest.mark.parametrize("shape", [[2, 2, 64, 6144]])
+@pytest.mark.parametrize("output_layout", [ttnn.ROW_MAJOR_LAYOUT])
+@pytest.mark.parametrize("input_layout", [ttnn.TILE_LAYOUT])
+def test_untilize_w2(shape, input_layout, output_layout, device):
+    torch.manual_seed(0)
+    input_a = torch.randn(shape, dtype=torch.bfloat16)
+
+    input_tensor = ttnn.from_torch(input_a, device=device, layout=input_layout, dtype=ttnn.bfloat16)
+    output_tensor = ttnn.untilize_with_unpadding(input_tensor, [1, 1, 38, 6140])
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(input_a[:, :, :39, :6141], output_tensor)
+
+
+@pytest.mark.parametrize("shape", [[1, 1, 32, 1536]])
+@pytest.mark.parametrize("output_layout", [ttnn.ROW_MAJOR_LAYOUT])
+@pytest.mark.parametrize("input_layout", [ttnn.TILE_LAYOUT])
+def test_untilize_w3(shape, input_layout, output_layout, device):
+    torch.manual_seed(0)
+    input_a = torch.randn(shape, dtype=torch.bfloat16)
+
+    input_tensor = ttnn.from_torch(input_a, device=device, layout=input_layout, dtype=ttnn.bfloat16)
+    output_tensor = ttnn.untilize_with_unpadding(input_tensor, [0, 0, 31, 1535])
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(input_a[:, :, :32, :1536], output_tensor)
