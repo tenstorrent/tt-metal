@@ -64,7 +64,7 @@ jobs:
             echo "no-op"
           fi
           # FIXME!
-          echo "ci-build-exists=false" >> $GITHUB_OUTPUT
+          echo "ci-build-exists=true" >> $GITHUB_OUTPUT
 
           TEST_IMAGE_EXISTS=$(curl -s -o /dev/null -w "%{http_code}" ghcr.io/tenstorrent/tt-metal/tt-metalium/${{ env.OS }}-amd64:${{ env.TEST_TAG }})
           if [ "$TEST_IMAGE_EXISTS" == "200" ]; then
