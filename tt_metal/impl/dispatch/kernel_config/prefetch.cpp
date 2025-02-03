@@ -37,8 +37,7 @@ void PrefetchKernel::GenerateStaticConfigs() {
 
         static_config_.pcie_base = issue_queue_start_addr;
         static_config_.pcie_size = issue_queue_size;
-        static_config_.prefetch_q_base =
-            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
+        static_config_.prefetch_q_base = my_dispatch_constants.dispatch_buffer_base();
         static_config_.prefetch_q_size = my_dispatch_constants.prefetch_q_size();
         static_config_.prefetch_q_rd_ptr_addr =
             my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_RD);
@@ -96,8 +95,7 @@ void PrefetchKernel::GenerateStaticConfigs() {
 
         static_config_.pcie_base = issue_queue_start_addr;
         static_config_.pcie_size = issue_queue_size;
-        static_config_.prefetch_q_base =
-            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
+        static_config_.prefetch_q_base = my_dispatch_constants.dispatch_buffer_base();
         static_config_.prefetch_q_size = my_dispatch_constants.prefetch_q_size();
         static_config_.prefetch_q_rd_ptr_addr =
             my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_RD);
@@ -397,8 +395,7 @@ void PrefetchKernel::ConfigureCore() {
         uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
         uint32_t cq_size = device_->sysmem_manager().get_cq_size();
         std::vector<uint32_t> prefetch_q(my_dispatch_constants.prefetch_q_entries(), 0);
-        uint32_t prefetch_q_base =
-            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
+        uint32_t prefetch_q_base = my_dispatch_constants.dispatch_buffer_base();
         std::vector<uint32_t> prefetch_q_rd_ptr_addr_data = {
             (uint32_t)(prefetch_q_base + my_dispatch_constants.prefetch_q_size())};
         uint32_t prefetch_q_rd_ptr =
