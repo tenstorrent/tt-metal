@@ -12,6 +12,7 @@
 #include <host_api.hpp>
 #include <trace.hpp>
 #include <core_descriptor.hpp>
+#include "lightmetal/lightmetal_capture.hpp"
 #include "tracy/Tracy.hpp"
 #include <tt_metal.hpp>
 #include "dprint_server.hpp"
@@ -1450,6 +1451,13 @@ void Device::end_trace(const uint8_t cq_id, const uint32_t tid) {
                 this->id_,
                 active_sub_device_manager->id());
             this->command_queues_[cq_id]->record_end();
+
+            // Capture Trace if light metal trace capturing is enabled.
+            auto& lm_capture_ctx = LightMetalCaptureContext::get();
+            if (lm_capture_ctx.is_tracing()) {
+                lm_capture_ctx.capture_trace_descriptor(*trace_buffer->desc, tid);
+            }
+
             Trace::initialize_buffer(this->command_queue(cq_id), trace_buffer);
             this->mark_allocations_unsafe();
         },

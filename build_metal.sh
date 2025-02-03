@@ -29,6 +29,7 @@ show_help() {
     echo "  --clean                          Remove build workspaces."
     echo "  --build-static-libs              Build tt_metal (not ttnn) as a static lib (BUILD_SHARED_LIBS=OFF)"
     echo "  --disable-unity-builds           Disable Unity builds"
+    echo "  --disable-light-metal-trace      Disable Light Metal tracing to binary."
     echo "  --cxx-compiler-path              Set path to C++ compiler."
     echo "  --c-compiler-path                Set path to C++ compiler."
     echo "  --ttnn-shared-sub-libs           Use shared libraries for ttnn."
@@ -58,6 +59,7 @@ build_programming_examples="OFF"
 build_tt_train="OFF"
 build_static_libs="OFF"
 unity_builds="ON"
+light_metal_trace="ON"
 build_all="OFF"
 cxx_compiler_path=""
 c_compiler_path=""
@@ -88,6 +90,7 @@ build-programming-examples
 build-tt-train
 build-static-libs
 disable-unity-builds
+disable-light-metal-trace
 release
 development
 debug
@@ -155,6 +158,8 @@ while true; do
             ttnn_shared_sub_libs="ON";;
         --disable-unity-builds)
 	    unity_builds="OFF";;
+        --disable-light-metal-trace)
+            light_metal_trace="OFF";;
         --cxx-compiler-path)
             cxx_compiler_path="$2";shift;;
         --c-compiler-path)
@@ -218,6 +223,7 @@ echo "INFO: Install Prefix: $cmake_install_prefix"
 echo "INFO: Build tests: $build_tests"
 echo "INFO: Enable Unity builds: $unity_builds"
 echo "INFO: TTNN Shared sub libs : $ttnn_shared_sub_libs"
+echo "INFO: Enable Light Metal Trace: $light_metal_trace"
 
 # Prepare cmake arguments
 cmake_args+=("-B" "$build_dir")
@@ -306,6 +312,12 @@ if [ "$unity_builds" = "ON" ]; then
     cmake_args+=("-DTT_UNITY_BUILDS=ON")
 else
     cmake_args+=("-DTT_UNITY_BUILDS=OFF")
+fi
+
+if [ "$light_metal_trace" = "ON" ]; then
+    cmake_args+=("-DTT_ENABLE_LIGHT_METAL_TRACE=ON")
+else
+    cmake_args+=("-DTT_ENABLE_LIGHT_METAL_TRACE=OFF")
 fi
 
 if [ "$build_all" = "ON" ]; then
