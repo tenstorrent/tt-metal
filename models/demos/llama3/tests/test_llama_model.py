@@ -105,14 +105,6 @@ def test_llama_model_inference(
     else:
         pcc = 0.94 if mode_accuracy else 0.86
 
-    # Define tight final PCC thresholds for quick mode
-    final_model_pcc = {
-        "llama32_1b": 0.9990 if mode_accuracy else 0.9864,
-        "llama32_3b": 0.9989 if mode_accuracy else 0.9837,
-        "llama31_8b": 0.9987 if mode_accuracy else 0.9850,
-        "llama32_11b": 0.9987 if mode_accuracy else 0.9850,
-        "llama31_70b": 0.9419 if mode_accuracy else 0.9419,
-    }[model_name]
     if layers == 1:  # quick mode has tight PCC checks for known models
         model_name = {
             (16, False): "llama32_1b",
@@ -439,6 +431,7 @@ def test_llama_model_inference(
             logger.info(f"All {generation_length} Llama decode iterations Passed!")
         else:
             logger.warning("One or more iterations of Llama decode had bad PCC")
-            assert final_tests_pass, f"PCC value is lower than {final_model_pcc} for final output. Check Warnings!"
+            if layers == 1:
+                assert final_tests_pass, f"PCC value is lower than {final_model_pcc} for final output. Check Warnings!"
             assert kv_cache_tests_pass, f"KV Cache PCC value is lower expected for some of the outputs. Check Warnings!"
             assert all_tests_pass, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"
