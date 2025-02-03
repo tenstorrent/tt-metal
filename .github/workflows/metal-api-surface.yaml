@@ -6,6 +6,14 @@ on:
   push:
     branches: ["main"]
 
+permissions:
+  actions: read
+  contents: write
+  pull-requests: write
+  pages: write
+  id-token: write
+  packages: write
+
 jobs:
   compute_and_notify:
     runs-on: ubuntu-latest
@@ -29,13 +37,29 @@ jobs:
       - name: Run script
         id: compute_api
         run: |
-          python3 compute_public_api_surface.py > api_surface.json
-          cat api_surface.json
+          python3 compute_public_api_surface.py > raw_output.json
+          cat raw_output.json
+
+      - name: Reformat JSON for Slack
+        run: |
+          date=$(jq -r '.date' raw_output.json)
+          num_files=$(jq -r '.num_files' raw_output.json)
+          num_types=$(jq -r '.num_types' raw_output.json)
+          num_methods=$(jq -r '.num_methods' raw_output.json)
+
+          echo "DATE=$date" >> $GITHUB_ENV
+          echo "NUM_FILES=$num_files" >> $GITHUB_ENV
+          echo "NUM_TYPES=$num_types" >> $GITHUB_ENV
+          echo "NUM_METHODS=$num_methods" >> $GITHUB_ENV
 
       - name: Send Slack message to a channel
         uses: slackapi/slack-github-action@v1.26.0
         with:
-          payload-file-path: "./api_surface.json"
+          payload: |
+            {
+              "text": "\nTT_METAL_API_SURFACE:\ndate: ${{ env.DATE }} \nnum_files: ${{ env.NUM_FILES }} \nnum_types: ${{ env.NUM_TYPES }} \nnum_methods: ${{ env.NUM_METHODS }}",
+              "owner": "U0704SWRY9H"
+            }
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
           SLACK_CHANNEL_ID: C08BAGE4410
