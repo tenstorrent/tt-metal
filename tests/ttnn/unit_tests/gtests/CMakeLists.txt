@@ -18,6 +18,7 @@ set(TTNN_CCL_UNIT_TESTS_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/ccl/test_ccl_helpers.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ccl/test_ccl_tensor_slicers.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ccl/test_sharded_address_generators.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ccl/test_sharded_address_generators_new.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ccl/test_ccl_reduce_scatter_host_helpers.cpp
 )
 

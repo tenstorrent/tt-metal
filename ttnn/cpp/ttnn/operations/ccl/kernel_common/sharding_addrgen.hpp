@@ -6,8 +6,22 @@
 // It is currently here while its reliability is proven
 
 #pragma once
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
 
 #include "dataflow_api.h"
+#else
+#include "tt_metal/hw/inc/wormhole/noc/noc_parameters.h"
+#define FORCE_INLINE inline __attribute__((always_inline))
+#define noc_index 0
+#define NOC_XY_ADDR(x, y, addr)                                                                                      \
+    ((((uint64_t)(y)) << (NOC_ADDR_LOCAL_BITS + NOC_ADDR_NODE_ID_BITS)) | (((uint64_t)(x)) << NOC_ADDR_LOCAL_BITS) | \
+     ((uint64_t)(addr)))
+#define NOC_0_X(noc_index, noc_size_x, x) x
+#define NOC_0_Y(noc_index, noc_size_y, y) y
+#define DYNAMIC_NOC_X(noc, x) NOC_0_X(noc, noc_size_x, (x))
+#define DYNAMIC_NOC_Y(noc, y) NOC_0_Y(noc, noc_size_y, (y))
+#endif
+
 #include "ttnn/cpp/ttnn/operations/ccl/common/types/sharding_common.hpp"
 
 typedef uint32_t mapping_table_t;
@@ -299,6 +313,9 @@ FORCE_INLINE std::pair<uint64_t, uint32_t> get_contiguous_noc_addr(
     const uint32_t id, const experimental::ShardedAddrGen<SIC>& s, uint32_t offset = 0, uint8_t noc = noc_index) {
     return s.get_contiguous_noc_addr(id, offset, noc);
 }
+
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+
 template <bool DRAM>
 FORCE_INLINE std::pair<uint64_t, uint32_t> get_contiguous_noc_addr(
     const uint32_t id, const InterleavedAddrGen<DRAM>& s, uint32_t offset = 0, uint8_t noc = noc_index) {
@@ -326,6 +343,8 @@ FORCE_INLINE std::pair<uint64_t, uint32_t> get_contiguous_noc_addr(
     std::pair<uint64_t, uint32_t> ret_val(s.get_noc_addr(id, offset, noc), 1);
     return ret_val;
 }
+
+#endif
 
 template <typename SIC>
 FORCE_INLINE void noc_async_read_page(
