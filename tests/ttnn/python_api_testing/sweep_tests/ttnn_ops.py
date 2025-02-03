@@ -813,7 +813,7 @@ def reshape(
     **kwargs,
 ):
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.reshape(t0, reshape_dims)  # , memory_config=output_mem_config)
+    t1 = ttnn.reshape(t0, reshape_dims, memory_config=output_mem_config)
     return ttnn_tensor_to_torch(t1)
 
 
@@ -2772,9 +2772,7 @@ def arange(
     output_mem_config,
     **kwargs,
 ):
-    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-
-    t1 = ttnn.arange(start, end, step, device)
+    t1 = ttnn.arange(start, end, step, dtype=dtype[0], device=device, memory_config=input_mem_config[0])
     return ttnn_tensor_to_torch(t1)
 
 
@@ -2875,8 +2873,6 @@ def zeros(
     output_mem_config,
     **kwargs,
 ):
-    # t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-
     t1 = ttnn.zeros(
         x.shape,
         device=device,
@@ -3455,13 +3451,6 @@ def eltwise_unary_fmod(
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
 
     t1 = ttnn.fmod(t0, value, memory_config=output_mem_config)
-
-    return ttnn_tensor_to_torch(t1)
-
-
-def eltwise_softmax_in_place(x, *args, device, dtype, layout, input_mem_config, output_mem_config, **kwargs):
-    t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.softmax_in_place(t0)
 
     return ttnn_tensor_to_torch(t1)
 
