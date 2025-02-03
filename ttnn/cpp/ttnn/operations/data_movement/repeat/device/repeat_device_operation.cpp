@@ -32,10 +32,8 @@ void RepeatDeviceOperation::validate(const std::vector<Tensor>& input_tensors) c
 
 std::vector<TensorSpec> RepeatDeviceOperation::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
-    auto simple_output_shape = input_tensor_a.get_logical_shape();
-    simple_output_shape[m_is_last_dim ? -1 : 1] *= m_num_repeats;
-
-    ttnn::Shape output_shape(simple_output_shape);
+    auto output_shape = input_tensor_a.get_logical_shape();
+    output_shape[m_is_last_dim ? -1 : 1] *= m_num_repeats;
 
     auto mem_config = this->m_output_mem_config;
     if (input_tensor_a.memory_config().is_sharded()) {
@@ -44,13 +42,13 @@ std::vector<TensorSpec> RepeatDeviceOperation::compute_output_specs(const std::v
         mem_config.shard_spec = shard_spec;
     }
     return {TensorSpec(
-        output_shape.logical_shape(),
+        output_shape,
         TensorLayout::fromPaddedShape(
             input_tensor_a.get_dtype(),
             PageConfig(input_tensor_a.get_layout()),
             mem_config,
-            output_shape.logical_shape(),
-            output_shape.padded_shape()))};
+            output_shape,
+            output_shape))};  // no padding requried because we are RM only right now
 }
 
 std::vector<Tensor> RepeatDeviceOperation::create_output_tensors(const std::vector<Tensor>& input_tensors) const {

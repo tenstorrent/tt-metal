@@ -58,7 +58,7 @@ ttnn::Tensor repeat_upper_dims_rm(
     collapsed_shape_vector[UpperRepeatDims::page_size] = input_shape[-1];
 
     // use ttnn::view to check logic
-    auto input_tensor = ttnn::view(tensor, ttnn::SimpleShape(collapsed_shape_vector));
+    auto input_tensor = ttnn::view(tensor, ttnn::Shape(collapsed_shape_vector));
 
     constexpr bool is_final_dim = false;
     auto out_tensor =
@@ -68,7 +68,7 @@ ttnn::Tensor repeat_upper_dims_rm(
     auto expected_shape = input_shape;
     expected_shape[dim] *= repetitions;
 
-    return ttnn::view(out_tensor, ttnn::SimpleShape(expected_shape));
+    return ttnn::view(out_tensor, ttnn::Shape(expected_shape));
 }
 
 ttnn::Tensor repeat_last_dim_rm(
@@ -84,7 +84,7 @@ ttnn::Tensor repeat_last_dim_rm(
     collapsed_shape_vector[1] = input_shape[-1];
 
     // use ttnn:view
-    auto input_tensor = ttnn::view(tensor, ttnn::SimpleShape(collapsed_shape_vector));
+    auto input_tensor = ttnn::view(tensor, ttnn::Shape(collapsed_shape_vector));
 
     constexpr bool is_final_dim = true;
     auto out_tensor =
@@ -95,7 +95,7 @@ ttnn::Tensor repeat_last_dim_rm(
     auto expected_shape = input_shape;
     expected_shape[-1] *= repetitions;
 
-    return ttnn::view(out_tensor, ttnn::SimpleShape(expected_shape));
+    return ttnn::view(out_tensor, ttnn::Shape(expected_shape));
 }
 
 std::tuple<ttnn::Tensor, ttnn::SmallVector<uint32_t>> match_input_rank(
@@ -110,7 +110,7 @@ std::tuple<ttnn::Tensor, ttnn::SmallVector<uint32_t>> match_input_rank(
     if (input_shape.rank() < repetition_vector.size()) {
         ttnn::SmallVector<uint32_t> new_shape_vec(repetition_vector.size(), 1);
         std::copy_backward(input_shape.cbegin(), input_shape.cend(), new_shape_vec.end());
-        working_tensor = ttnn::view(working_tensor, ttnn::SimpleShape(new_shape_vec));
+        working_tensor = ttnn::view(working_tensor, ttnn::Shape(new_shape_vec));
         working_repetition_vector = std::move(repetition_vector);
     }
     // torch actually throws an error if the repetition rank is smaller than the tensor rank but it seems reasonable to
@@ -153,7 +153,7 @@ ttnn::Tensor RepeatOperation::invoke(
             repetition_vector.cbegin(),
             repetition_vector.begin(),
             std::multiplies<uint32_t>());
-        return tensor.reshape(repetition_vector);
+        return tensor.reshape(ttnn::Shape(repetition_vector));
     }
 
     TT_FATAL(working_tensor.get_logical_shape().rank() > 0, "repeat does not support rank 0 tensors");
@@ -175,8 +175,8 @@ ttnn::Tensor RepeatOperation::invoke(
 
     // tiled -> RM
     if (working_tensor.layout() == ttnn::TILE_LAYOUT) {
-        working_tensor = ttnn::to_layout(
-            working_tensor, ttnn::ROW_MAJOR_LAYOUT, working_tensor.get_dtype(), std::nullopt, (Device*)nullptr);
+        working_tensor =
+            ttnn::to_layout(working_tensor, ttnn::ROW_MAJOR_LAYOUT, std::nullopt, std::nullopt, (Device*)nullptr);
     }
 
     // loop over dims in repetition vector, backwards because repeat pages first is faster
@@ -198,8 +198,8 @@ ttnn::Tensor RepeatOperation::invoke(
 
     // RM -> OG page layout
     if (tensor.layout() == ttnn::TILE_LAYOUT) {
-        working_tensor = ttnn::to_layout(
-            working_tensor, ttnn::TILE_LAYOUT, working_tensor.get_dtype(), std::nullopt, (Device*)nullptr);
+        working_tensor =
+            ttnn::to_layout(working_tensor, ttnn::TILE_LAYOUT, tensor.get_dtype(), std::nullopt, (Device*)nullptr);
     }
 
     // Interleaved to OG mem layout
@@ -211,9 +211,8 @@ ttnn::Tensor RepeatOperation::invoke(
 }
 
 ttnn::Tensor RepeatOperation::invoke(const ttnn::Tensor& input_tensor, const ttnn::Shape& repeat_dims) {
-    const auto lshape = repeat_dims.logical_shape();
     return RepeatOperation::invoke(
-        input_tensor, SmallVector<uint32_t>(lshape.cbegin(), lshape.cend()), std::nullopt, DefaultQueueId);
+        input_tensor, SmallVector<uint32_t>(repeat_dims.cbegin(), repeat_dims.cend()), std::nullopt, DefaultQueueId);
 }
 
 }  // namespace ttnn::operations::data_movement
