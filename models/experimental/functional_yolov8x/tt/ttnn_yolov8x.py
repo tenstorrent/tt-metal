@@ -32,6 +32,7 @@ def Conv(
     is_fused=True,
     is_dfl=False,
     is_detect_cv2=False,
+    width_shard=False,
 ):
     p = autopad(k, p, d)
 
@@ -59,6 +60,9 @@ def Conv(
 
     if block_shard:
         conv_config.shard_layout = ttnn.TensorMemoryLayout.BLOCK_SHARDED
+
+    if width_shard:
+        conv_config.shard_layout = ttnn.TensorMemoryLayout.WIDTH_SHARDED
 
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -252,11 +256,10 @@ def C2f(
 
 
 def SPPF(device, x, parameters, path, in_h, in_w, k=5):
-    cv1, out_h, out_w = Conv(device, x, parameters, f"{path}.cv1", in_h, in_w, 1, 1)
+    cv1, out_h, out_w = Conv(device, x, parameters, f"{path}.cv1", in_h, in_w, 1, 1, change_shard=True)
 
     p = k // 2
 
-    cv1 = ttnn.sharded_to_interleaved(cv1, ttnn.L1_MEMORY_CONFIG)
     cv1 = ttnn.to_layout(cv1, ttnn.ROW_MAJOR_LAYOUT)
 
     y = [cv1]
@@ -275,7 +278,7 @@ def SPPF(device, x, parameters, path, in_h, in_w, k=5):
         )
         y.append(output)
 
-    x = ttnn.concat(y, 3)
+    x = ttnn.concat(y, 3, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     for i in range(len(y)):
         ttnn.deallocate(y[i])
@@ -377,11 +380,12 @@ def Detect(device, x, parameters, path, nc=80, ch=(), bfloat8=True):
 
     xi = []
     for i in x:
-        i = ttnn.permute(i, (0, 3, 1, 2))
-        i = ttnn.reshape(i, (shape[0], no, -1))
+        i = ttnn.reshape(i, (shape[0], -1, no))
         xi.append(i)
 
-    x_cat = ttnn.concat(xi, 2)
+    x_cat = ttnn.concat(xi, 1)
+
+    x_cat = ttnn.permute(x_cat, (0, 2, 1))
 
     box = ttnn.slice(x_cat, [0, 0, 0], [1, 64, 8400])
     cls = ttnn.slice(x_cat, [0, 64, 0], [1, 144, 8400])
