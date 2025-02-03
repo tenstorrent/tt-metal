@@ -12,14 +12,14 @@ name: PR Gate
 
 on:
   workflow_dispatch:
-  pull_request:
-    types:
-      - opened
-      - reopened
-      - synchronize
-      - ready_for_review
-    branches:
-      - "main"
+#  pull_request:
+#    types:
+#      - opened
+#      - reopened
+#      - synchronize
+#      - ready_for_review
+#    branches:
+#      - "main"
 
 concurrency:
   # Use github.run_id on main branch (or any protected branch)

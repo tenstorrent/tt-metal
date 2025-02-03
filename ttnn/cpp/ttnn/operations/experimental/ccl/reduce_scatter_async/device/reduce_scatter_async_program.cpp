@@ -1345,7 +1345,10 @@ static void validate_end_of_line_worker_tensors(
             all_tensors.input_tensor_from_remote[LineDirection::BACKWARD] != nullptr,
             "Input tensor from remote must be populated");
         TT_FATAL(
-            all_tensors.input_tensor->shape() == all_tensors.input_tensor_from_remote[LineDirection::BACKWARD]->shape(),
+            all_tensors.input_tensor->logical_shape() == all_tensors.input_tensor_from_remote[LineDirection::BACKWARD]->logical_shape(),
+            "Input tensor and input from remote tensor must have the same shape");
+        TT_FATAL(
+            all_tensors.input_tensor->padded_shape() == all_tensors.input_tensor_from_remote[LineDirection::BACKWARD]->padded_shape(),
             "Input tensor and input from remote tensor must have the same shape");
     }
     if (line_topology.is_first_device_in_line(LineDirection::BACKWARD)) {
@@ -1356,7 +1359,10 @@ static void validate_end_of_line_worker_tensors(
             all_tensors.input_tensor_from_remote[LineDirection::FORWARD] != nullptr,
             "Input tensor from remote must be populated");
         TT_FATAL(
-            all_tensors.input_tensor->shape() == all_tensors.input_tensor_from_remote[LineDirection::FORWARD]->shape(),
+            all_tensors.input_tensor->logical_shape() == all_tensors.input_tensor_from_remote[LineDirection::FORWARD]->logical_shape(),
+            "Input tensor and input from remote tensor must have the same shape");
+        TT_FATAL(
+            all_tensors.input_tensor->padded_shape() == all_tensors.input_tensor_from_remote[LineDirection::FORWARD]->padded_shape(),
             "Input tensor and input from remote tensor must have the same shape");
     }
 }
@@ -1650,12 +1656,21 @@ static void validate_non_end_of_line_tensors(ReduceScatterBuilderConfig& builder
             "Internal error. Expected input tensor from remote direction {} to be populated",
             direction);
         TT_ASSERT(
-            all_program_tensors.input_tensor->shape() == all_program_tensors.remote_output[direction]->shape(),
+            all_program_tensors.input_tensor->logical_shape() == all_program_tensors.remote_output[direction]->logical_shape(),
             "Input tensor and remote output tensor - direction {} must have the same shape",
             direction);
         TT_ASSERT(
-            all_program_tensors.input_tensor->shape() ==
-                all_program_tensors.input_tensor_from_remote[direction]->shape(),
+            all_program_tensors.input_tensor->padded_shape() == all_program_tensors.remote_output[direction]->padded_shape(),
+            "Input tensor and remote output tensor - direction {} must have the same shape",
+            direction);
+        TT_ASSERT(
+            all_program_tensors.input_tensor->logical_shape() ==
+                all_program_tensors.input_tensor_from_remote[direction]->logical_shape(),
+            "Input tensor and input from remote tensor from direction {} must have the same shape",
+            direction);
+        TT_ASSERT(
+            all_program_tensors.input_tensor->padded_shape() ==
+                all_program_tensors.input_tensor_from_remote[direction]->padded_shape(),
             "Input tensor and input from remote tensor from direction {} must have the same shape",
             direction);
     }
@@ -1764,17 +1779,26 @@ static void validate_tensors(ProgramTensorsBundle const& all_tensors, LineTopolo
             }
             if (all_tensors.local_output_partial[direction] != nullptr) {
                 TT_FATAL(
-                    all_tensors.local_output_partial[direction]->shape() == all_tensors.local_final_output_tensor->shape(),
+                    all_tensors.local_output_partial[direction]->logical_shape() == all_tensors.local_final_output_tensor->logical_shape(),
+                    "Partial output tensor and local output tensor must have the same shape");
+                TT_FATAL(
+                    all_tensors.local_output_partial[direction]->padded_shape() == all_tensors.local_final_output_tensor->padded_shape(),
                     "Partial output tensor and local output tensor must have the same shape");
             }
             if (all_tensors.input_tensor_from_remote[direction] != nullptr) {
                 TT_FATAL(
-                    all_tensors.input_tensor_from_remote[direction]->shape() == all_tensors.input_tensor->shape(),
+                    all_tensors.input_tensor_from_remote[direction]->logical_shape() == all_tensors.input_tensor->logical_shape(),
+                    "Input tensor from remote and input tensor must have the same shape");
+                TT_FATAL(
+                    all_tensors.input_tensor_from_remote[direction]->padded_shape() == all_tensors.input_tensor->padded_shape(),
                     "Input tensor from remote and input tensor must have the same shape");
             }
             if (all_tensors.remote_output[direction] != nullptr) {
                 TT_FATAL(
-                    all_tensors.remote_output[direction]->shape() == all_tensors.input_tensor->shape(),
+                    all_tensors.remote_output[direction]->logical_shape() == all_tensors.input_tensor->logical_shape(),
+                    "Remote output tensor and input tensor must have the same shape");
+                TT_FATAL(
+                    all_tensors.remote_output[direction]->padded_shape() == all_tensors.input_tensor->padded_shape(),
                     "Remote output tensor and input tensor must have the same shape");
             }
         }

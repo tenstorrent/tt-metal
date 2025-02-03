@@ -226,7 +226,7 @@ int main(int argc, char** argv) {
         uint32_t host_write_ptr = 0;
 
         CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device_id);
-        uint32_t prefetch_q_base = dispatch_constants::get(dispatch_core_type)
+        uint32_t prefetch_q_base = DispatchMemMap::get(dispatch_core_type)
                                        .get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
 
         uint32_t reg_addr = prefetch_q_base;

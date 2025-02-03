@@ -30,15 +30,14 @@ ttnn::Tensor FillPadOperation::invoke(
     auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
     // if input_tensor is rank > 3, then we need to reshape it to rank 3 such that the last 2 dims are the same
     if (input_tensor.get_logical_shape().rank() > 3) {
-        ttnn::SimpleShape original_shape = input_tensor.get_logical_shape();
+        ttnn::Shape original_shape = input_tensor.get_logical_shape();
 
         uint32_t third_dim = 1;
         for (uint32_t i = 0; i < original_shape.rank() - 2; i++) {
             third_dim *= original_shape[i];
         }
 
-        ttnn::SimpleShape new_shape =
-            ttnn::SimpleShape{std::array<uint32_t, 3>{third_dim, original_shape[-2], original_shape[-1]}};
+        ttnn::Shape new_shape = ttnn::Shape{std::array<uint32_t, 3>{third_dim, original_shape[-2], original_shape[-1]}};
         auto reshaped_tensor = ttnn::reshape(input_tensor, new_shape);
 
         reshaped_tensor = operation::run_without_autoformat(

@@ -146,7 +146,6 @@ public:
 
     // Light Metal
     virtual void load_trace(uint8_t cq_id, uint32_t trace_id, const TraceDescriptor& trace_desc) = 0;
-
     virtual bool using_slow_dispatch() const = 0;
     virtual bool using_fast_dispatch() const = 0;
 
@@ -167,9 +166,7 @@ public:
     virtual void synchronize() = 0;
     virtual WorkExecutorMode get_worker_mode() = 0;
     virtual void set_worker_queue_mode(const WorkerQueueMode& mode) = 0;
-    virtual WorkerQueueMode get_worker_queue_mode() = 0;
     virtual bool is_worker_queue_empty() const = 0;
-    virtual bool can_use_passthrough_scheduling() const = 0;
 
     virtual void push_work(std::function<void()> work, bool blocking = false) = 0;
 
@@ -187,9 +184,6 @@ public:
 
     virtual std::vector<std::pair<transfer_info_cores, uint32_t>> extract_dst_noc_multicast_info(const std::vector<CoreRange>& ranges, const CoreType core_type) = 0;
 
-    virtual bool dispatch_s_enabled() const = 0;
-    virtual bool distributed_dispatcher() const = 0;
-    virtual NOC dispatch_go_signal_noc() const = 0;
     virtual size_t get_device_kernel_defines_hash() = 0;
 
     virtual uint8_t num_noc_mcast_txns(SubDeviceId sub_device_id) const = 0;

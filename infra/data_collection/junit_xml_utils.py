@@ -52,6 +52,13 @@ def get_at_most_one_single_child_element_(element, tag_name):
 def get_pytest_testcase_properties(testcase_element):
     properties_block = get_at_most_one_single_child_element_(testcase_element, "properties")
 
+    if properties_block is None:
+        # Unable to find <properties> block for test case, process possibly hung or was terminated
+        classname = testcase_element.attrib.get("classname", "unknown_test_classname")
+        name = testcase_element.attrib.get("name", "unknown_test_name")
+        logger.warning(f"Testcase {classname}: {name} properties block not found")
+        return None
+
     assert properties_block is not None
 
     def get_property_as_dict_(property_):

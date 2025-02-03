@@ -38,7 +38,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestMultiProducerLockBasedQueue) {
     uint32_t tensor_buf_size = 1024 * 1024;
     uint32_t datum_size_bytes = 2;
 
-    ttnn::SimpleShape tensor_shape{1, 1, 1024, 1024};
+    ttnn::Shape tensor_shape{1, 1, 1024, 1024};
     auto t0_host_data = std::shared_ptr<bfloat16[]>(new bfloat16[tensor_buf_size]);
     auto t0_readback_data = std::shared_ptr<bfloat16[]>(new bfloat16[tensor_buf_size]);
     auto t1_host_data = std::shared_ptr<bfloat16[]>(new bfloat16[tensor_buf_size]);
@@ -118,7 +118,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestMultiAppThreadSync) {
     std::shared_ptr<Event> write_event = std::make_shared<Event>();
     std::shared_ptr<Event> read_event = std::make_shared<Event>();
 
-    ttnn::SimpleShape tensor_shape{1, 1, 1024, 1024};
+    ttnn::Shape tensor_shape{1, 1, 1024, 1024};
     auto host_data = std::shared_ptr<bfloat16[]>(new bfloat16[tensor_buf_size]);
     TensorLayout tensor_layout(DataType::BFLOAT16, PageConfig(Layout::TILE), mem_cfg);
     auto allocated_buffer =

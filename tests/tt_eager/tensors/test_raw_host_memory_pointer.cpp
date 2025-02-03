@@ -44,10 +44,10 @@
 
 template <typename DataType>
 struct NDArray {
-    ttnn::SimpleShape shape;
+    ttnn::Shape shape;
     void* data;
 
-    NDArray(const ttnn::SimpleShape& shape) : shape(shape), data(malloc(shape.volume() * sizeof(DataType))) {}
+    NDArray(const ttnn::Shape& shape) : shape(shape), data(malloc(shape.volume() * sizeof(DataType))) {}
     ~NDArray() { free(data); }
 
     std::size_t size() const { return shape.volume(); }
@@ -56,7 +56,6 @@ struct NDArray {
 void test_raw_host_memory_pointer() {
     using tt::tt_metal::BorrowedStorage;
     using tt::tt_metal::DataType;
-    using tt::tt_metal::LegacyShape;
     using tt::tt_metal::OwnedStorage;
     using tt::tt_metal::Tensor;
     using namespace tt::tt_metal::borrowed_buffer;
@@ -65,7 +64,7 @@ void test_raw_host_memory_pointer() {
     int device_id = 0;
     tt::tt_metal::IDevice* device = tt::tt_metal::CreateDevice(device_id);
 
-    ttnn::SimpleShape shape({1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH});
+    ttnn::Shape shape({1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH});
 
     // Host tensor to print the output
     Tensor tensor_for_printing =

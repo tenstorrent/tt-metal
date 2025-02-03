@@ -22,8 +22,7 @@ void ConcatenateHeadsDeviceOperation::validate_with_output_tensors(
             input_tensor.get_dtype() == tt::tt_metal::DataType::BFLOAT8_B,
         "Unsupported data format");
 
-    TT_FATAL(
-        (input_tensor.get_padded_shape() == ttnn::SimpleShape({batch_size, 16, 384, 64})), "Unsupported input shape");
+    TT_FATAL((input_tensor.get_padded_shape() == ttnn::Shape({batch_size, 16, 384, 64})), "Unsupported input shape");
 
     TT_FATAL(output_tensors.size() == 1, "Must have 1 output tensors");
     const auto& optional_output_tensor = output_tensors.at(0);
@@ -33,7 +32,7 @@ void ConcatenateHeadsDeviceOperation::validate_with_output_tensors(
             "Output dtype must be same as input dtype!");
 
         TT_FATAL(
-            optional_output_tensor.value().get_padded_shape() == ttnn::SimpleShape({batch_size, 1, 384, 1024}),
+            optional_output_tensor.value().get_padded_shape() == ttnn::Shape({batch_size, 1, 384, 1024}),
             "Output shape must be (batch_size, 1, 384, 1024)!");
     }
 }
@@ -45,7 +44,7 @@ std::vector<ttnn::TensorSpec> ConcatenateHeadsDeviceOperation::compute_output_sp
     }
     const auto& input_tensor = input_tensors.at(0);
     const auto batch_size = input_tensor.get_padded_shape()[0];
-    ttnn::SimpleShape output_shape({batch_size, 1, 384, 1024});
+    ttnn::Shape output_shape({batch_size, 1, 384, 1024});
     return {
         TensorSpec(output_shape, TensorLayout(input_tensor.get_dtype(), PageConfig(Layout::TILE), output_mem_config))};
 }

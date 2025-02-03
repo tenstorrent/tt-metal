@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,6 +7,7 @@
 #include "hostdevcommon/common_values.hpp"
 #include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
 #include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
+#include "reshard_writer.hpp"
 
 void kernel_main() {
     constexpr bool is_all_to_all_worker = get_compile_time_arg_val(0) == 1;
@@ -18,16 +19,28 @@ void kernel_main() {
     constexpr bool FLOAT32_DTYPE_GAMMA = get_compile_time_arg_val(8) == 1;
     constexpr bool FLOAT32_DTYPE_BETA = get_compile_time_arg_val(9) == 1;
 
+    // Reshard writer
+    constexpr uint32_t worker_core_stride_w_bytes = get_compile_time_arg_val(10);
+    constexpr uint32_t storage_core_stride_w_bytes = get_compile_time_arg_val(11);
+    constexpr uint32_t block_ht = get_compile_time_arg_val(12);
+
     const uint32_t gamma_addr = get_arg_val<uint32_t>(3);
     const uint32_t beta_addr = get_arg_val<uint32_t>(4);
     const uint32_t gamma_tile_start_id = get_arg_val<uint32_t>(5);
     const uint32_t beta_tile_start_id = get_arg_val<uint32_t>(6);
 
+    // Reshard writer
+    const uint32_t num_segments_to_write_back = get_arg_val<uint32_t>(7);
+    const uint32_t storage_core_start_offset = get_arg_val<uint32_t>(8);
+    tt_l1_ptr uint32_t* segment_args = (tt_l1_ptr uint32_t*)(get_arg_addr(9));
+
     constexpr uint32_t cb_gamma = tt::CBIndex::c_5;
     constexpr uint32_t cb_beta = tt::CBIndex::c_6;
 
-    // constexpr uint32_t block_w = 4;
-    const uint32_t single_tile_size_bytes = get_tile_size(cb_gamma);
+    constexpr uint32_t cb_out = tt::CBIndex::c_16;
+    constexpr uint32_t cb_out_resharded = tt::CBIndex::c_17;
+
+    const uint32_t out_single_tile_size_bytes = get_tile_size(cb_out);
 
     {
         constexpr uint32_t cb_in_2 = tt::CBIndex::c_2;
@@ -104,4 +117,16 @@ void kernel_main() {
         noc_async_read_barrier();
         cb_push_back(cb_beta, block_w);
     }
+
+#ifndef SKIP_WRITE_BACK
+    write_resharded_data(
+        cb_out,
+        cb_out_resharded,
+        num_segments_to_write_back,
+        storage_core_start_offset,
+        segment_args,
+        worker_core_stride_w_bytes,
+        storage_core_stride_w_bytes,
+        block_ht);
+#endif
 }

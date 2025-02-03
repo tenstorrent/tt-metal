@@ -82,8 +82,7 @@ std::shared_ptr<distributed::MeshBuffer> allocate_mesh_buffer_on_device(
     return distributed::MeshBuffer::create(replicated_buffer_config, device_local_buffer_config, mesh_device);
 }
 
-void validate_on_device_dtype_and_layout(
-    IDevice* device, const ttnn::SimpleShape& shape, DataType dtype, Layout layout) {
+void validate_on_device_dtype_and_layout(IDevice* device, const ttnn::Shape& shape, DataType dtype, Layout layout) {
     // TODO: Get supported layout and dtypes from device
     auto supported_dtype = [&dtype]() {
         TT_ASSERT(
@@ -119,8 +118,8 @@ void validate_on_device_dtype_and_layout(
 
 Tensor pad_bfloat8_b(
     const Tensor& tensor,
-    const ttnn::SimpleShape& output_padded_shape,
-    const ttnn::SimpleShape& input_tensor_start,
+    const ttnn::Shape& output_padded_shape,
+    const ttnn::Shape& input_tensor_start,
     float pad_value) {
     auto tile = tensor.get_tensor_spec().tile();
     // TODO(arakhmati): do not convert to FLOAT32
@@ -159,7 +158,7 @@ Tensor pad_bfloat8_b(
 }
 
 Tensor unpad_bfloat8_b(
-    const Tensor& tensor, const ttnn::SimpleShape& output_tensor_start, const ttnn::SimpleShape& output_tensor_end) {
+    const Tensor& tensor, const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end) {
     auto tile = tensor.get_tensor_spec().tile();
     // TODO(arakhmati): do not convert to FLOAT32
 
@@ -199,8 +198,8 @@ Tensor unpad_bfloat8_b(
 
 Tensor pad_bfloat4_b(
     const Tensor& tensor,
-    const ttnn::SimpleShape& output_padded_shape,
-    const ttnn::SimpleShape& input_tensor_start,
+    const ttnn::Shape& output_padded_shape,
+    const ttnn::Shape& input_tensor_start,
     float pad_value) {
     auto tile = tensor.get_tensor_spec().tile();
     // TODO(arakhmati): do not convert to FLOAT32
@@ -239,7 +238,7 @@ Tensor pad_bfloat4_b(
 }
 
 Tensor unpad_bfloat4_b(
-    const Tensor& tensor, const ttnn::SimpleShape& output_tensor_start, const ttnn::SimpleShape& output_tensor_end) {
+    const Tensor& tensor, const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end) {
     auto tile = tensor.get_tensor_spec().tile();
     // TODO(arakhmati): do not convert to FLOAT32
 
@@ -343,7 +342,7 @@ template <typename BufferType>
 void to_string_row_major(
     std::stringstream& ss,
     const BufferType& buffer,
-    const ttnn::SimpleShape& shape,
+    const ttnn::Shape& shape,
     const tt::tt_metal::Strides& strides,
     std::size_t outer_index,
     const std::size_t buffer_offset,
@@ -397,7 +396,7 @@ void to_string_row_major(
 template <typename BufferType>
 std::string to_string(
     const BufferType& buffer,
-    const ttnn::SimpleShape& shape,
+    const ttnn::Shape& shape,
     const tt::tt_metal::Strides& strides,
     DataType dtype,
     Layout layout) {
@@ -1008,8 +1007,8 @@ Tensor to_layout<bfloat4_b>(const Tensor& tensor, Layout target_layout) {
 template <typename T>
 Tensor pad(
     const Tensor& tensor,
-    const ttnn::SimpleShape& output_padded_shape,
-    const ttnn::SimpleShape& input_tensor_start,
+    const ttnn::Shape& output_padded_shape,
+    const ttnn::Shape& input_tensor_start,
     float pad_value) {
     if (ttnn::distributed::is_multi_device_tensor(tensor)) {
         return transform(tensor, [&](const Tensor& device_tensor) {
@@ -1024,7 +1023,7 @@ Tensor pad(
 
     auto pad =
         [&input_padded_shape, &output_padded_shape, &input_tensor_start, &pad_value_](const auto& input_buffer) {
-            auto compute_stride = [](const ttnn::SimpleShape& padded_shape, uint32_t index) {
+            auto compute_stride = [](const ttnn::Shape& padded_shape, uint32_t index) {
                 uint32_t stride = 1;
                 for (auto i = index + 1; i < padded_shape.rank(); i++) {
                     stride *= padded_shape[i];
@@ -1109,40 +1108,40 @@ Tensor pad(
 
 template Tensor pad<bfloat16>(
     const Tensor& tensor,
-    const ttnn::SimpleShape& output_padded_shape,
-    const ttnn::SimpleShape& input_tensor_start,
+    const ttnn::Shape& output_padded_shape,
+    const ttnn::Shape& input_tensor_start,
     float pad_value);
 template Tensor pad<float>(
     const Tensor& tensor,
-    const ttnn::SimpleShape& output_padded_shape,
-    const ttnn::SimpleShape& input_tensor_start,
+    const ttnn::Shape& output_padded_shape,
+    const ttnn::Shape& input_tensor_start,
     float pad_value);
 template Tensor pad<int32_t>(
     const Tensor& tensor,
-    const ttnn::SimpleShape& output_padded_shape,
-    const ttnn::SimpleShape& input_tensor_start,
+    const ttnn::Shape& output_padded_shape,
+    const ttnn::Shape& input_tensor_start,
     float pad_value);
 template Tensor pad<uint32_t>(
     const Tensor& tensor,
-    const ttnn::SimpleShape& output_padded_shape,
-    const ttnn::SimpleShape& input_tensor_start,
+    const ttnn::Shape& output_padded_shape,
+    const ttnn::Shape& input_tensor_start,
     float pad_value);
 template Tensor pad<uint16_t>(
     const Tensor& tensor,
-    const ttnn::SimpleShape& output_padded_shape,
-    const ttnn::SimpleShape& input_tensor_start,
+    const ttnn::Shape& output_padded_shape,
+    const ttnn::Shape& input_tensor_start,
     float pad_value);
 template Tensor pad<uint8_t>(
     const Tensor& tensor,
-    const ttnn::SimpleShape& output_padded_shape,
-    const ttnn::SimpleShape& input_tensor_start,
+    const ttnn::Shape& output_padded_shape,
+    const ttnn::Shape& input_tensor_start,
     float pad_value);
 
 template <>
 Tensor pad<bfloat8_b>(
     const Tensor& tensor,
-    const ttnn::SimpleShape& output_padded_shape,
-    const ttnn::SimpleShape& input_tensor_start,
+    const ttnn::Shape& output_padded_shape,
+    const ttnn::Shape& input_tensor_start,
     float pad_value) {
     return pad_bfloat8_b(tensor, output_padded_shape, input_tensor_start, pad_value);
 }
@@ -1150,15 +1149,14 @@ Tensor pad<bfloat8_b>(
 template <>
 Tensor pad<bfloat4_b>(
     const Tensor& tensor,
-    const ttnn::SimpleShape& output_padded_shape,
-    const ttnn::SimpleShape& input_tensor_start,
+    const ttnn::Shape& output_padded_shape,
+    const ttnn::Shape& input_tensor_start,
     float pad_value) {
     return pad_bfloat4_b(tensor, output_padded_shape, input_tensor_start, pad_value);
 }
 
 template <typename T>
-Tensor unpad(
-    const Tensor& tensor, const ttnn::SimpleShape& output_tensor_start, const ttnn::SimpleShape& output_tensor_end) {
+Tensor unpad(const Tensor& tensor, const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end) {
     const auto input_shape = tensor.get_padded_shape();
     const auto input_strides = tensor.strides();
 
@@ -1179,7 +1177,7 @@ Tensor unpad(
         ttnn::SmallVector<uint32_t> input_indices(input_shape.rank(), 0);
 
         auto flat_output_index = 0;
-        auto output_buffer = owned_buffer::create<T>(compute_volume(output_shape));
+        auto output_buffer = owned_buffer::create<T>(ttnn::Shape(output_shape).volume());
 
         std::function<void(std::size_t)> unpad_from_tile = [&](std::size_t dim) -> void {
             for (auto i = output_tensor_start[dim]; i < output_tensor_end[dim]; i++) {
@@ -1219,34 +1217,34 @@ Tensor unpad(
         tensor.get_storage());
     return Tensor(
         OwnedStorage{output_buffer},
-        ttnn::SimpleShape(output_shape),
+        ttnn::Shape(output_shape),
         tensor.get_dtype(),
         tensor.get_layout(),
         tensor.get_tensor_spec().tile());
 }
 
 template Tensor unpad<bfloat16>(
-    const Tensor& tensor, const ttnn::SimpleShape& output_tensor_start, const ttnn::SimpleShape& output_tensor_end);
+    const Tensor& tensor, const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end);
 template Tensor unpad<float>(
-    const Tensor& tensor, const ttnn::SimpleShape& output_tensor_start, const ttnn::SimpleShape& output_tensor_end);
+    const Tensor& tensor, const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end);
 template Tensor unpad<int32_t>(
-    const Tensor& tensor, const ttnn::SimpleShape& output_tensor_start, const ttnn::SimpleShape& output_tensor_end);
+    const Tensor& tensor, const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end);
 template Tensor unpad<uint32_t>(
-    const Tensor& tensor, const ttnn::SimpleShape& output_tensor_start, const ttnn::SimpleShape& output_tensor_end);
+    const Tensor& tensor, const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end);
 template Tensor unpad<uint16_t>(
-    const Tensor& tensor, const ttnn::SimpleShape& output_tensor_start, const ttnn::SimpleShape& output_tensor_end);
+    const Tensor& tensor, const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end);
 template Tensor unpad<uint8_t>(
-    const Tensor& tensor, const ttnn::SimpleShape& output_tensor_start, const ttnn::SimpleShape& output_tensor_end);
+    const Tensor& tensor, const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end);
 
 template <>
 Tensor unpad<bfloat8_b>(
-    const Tensor& tensor, const ttnn::SimpleShape& output_tensor_start, const ttnn::SimpleShape& output_tensor_end) {
+    const Tensor& tensor, const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end) {
     return unpad_bfloat8_b(tensor, output_tensor_start, output_tensor_end);
 }
 
 template <>
 Tensor unpad<bfloat4_b>(
-    const Tensor& tensor, const ttnn::SimpleShape& output_tensor_start, const ttnn::SimpleShape& output_tensor_end) {
+    const Tensor& tensor, const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end) {
     return unpad_bfloat4_b(tensor, output_tensor_start, output_tensor_end);
 }
 
@@ -1258,7 +1256,7 @@ template <typename T>
 Tensor extract_shard(const Tensor& tensor, const uint32_t& core_id) {
     auto buffer = tensor.buffer();
     auto buffer_shard_shape = buffer->shard_spec().shape();
-    ttnn::SimpleShape shard_shape({1, 1, buffer_shard_shape[0], buffer_shard_shape[1]});
+    ttnn::Shape shard_shape({1, 1, buffer_shard_shape[0], buffer_shard_shape[1]});
     std::vector<T> device_data;
     ::detail::ReadShard(*buffer, device_data, core_id);
 

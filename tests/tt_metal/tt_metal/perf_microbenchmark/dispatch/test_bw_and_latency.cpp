@@ -396,8 +396,8 @@ int main(int argc, char** argv) {
             vec.resize(page_size_g / sizeof(uint32_t));
 
             CoreType core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
-            uint32_t dispatch_l1_unreserved_base = dispatch_constants::get(core_type).get_device_command_queue_addr(
-                CommandQueueDeviceAddrType::UNRESERVED);
+            uint32_t dispatch_l1_unreserved_base =
+                DispatchMemMap::get(core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
             for (int i = 0; i < warmup_iterations_g; i++) {
                 if (source_mem_g == 4) {
                     tt::Cluster::instance().read_core(

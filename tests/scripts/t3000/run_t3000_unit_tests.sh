@@ -22,6 +22,11 @@ run_t3000_ttmetal_tests() {
   ./build/test/tt_metal/unit_tests_dispatch_${ARCH_NAME} --gtest_filter="CommandQueueMultiDevice*Fixture.*" ; fail+=$?
   ./build/test/tt_metal/unit_tests_debug_tools_${ARCH_NAME} --gtest_filter="DPrintFixture.*:WatcherFixture.*" ; fail+=$?
 
+  # Programming examples
+  ./build/test/tt_metal/programming_examples/distributed/distributed_program_dispatch
+  ./build/test/tt_metal/programming_examples/distributed/distributed_buffer_rw
+  ./build/test/tt_metal/programming_examples/distributed/distributed_eltwise_add
+
   # Record the end time
   end_time=$(date +%s)
   duration=$((end_time - start_time))

@@ -17,7 +17,7 @@ using MeshTensorTest = T3kMultiDeviceFixture;
 
 TEST_F(MeshTensorTest, Lifecycle) {
     const TensorSpec tensor_spec =
-        TensorSpec(ttnn::SimpleShape{1, 1, 32, 32}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
+        TensorSpec(ttnn::Shape{1, 1, 32, 32}, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
 
     Tensor input_tensor = allocate_tensor_on_mesh(tensor_spec, mesh_device_.get());
 

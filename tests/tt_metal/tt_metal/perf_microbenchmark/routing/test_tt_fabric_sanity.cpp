@@ -636,6 +636,11 @@ typedef struct test_traffic {
             tt::llrt::write_hex_vec_to_core(
                 tx_device->device_handle->id(), tx_physical_cores[i], zero_buf, tx_signal_address);
 
+            // 12: skip_pkt_content_gen. If packet content is being skipped, use the tx microbenchmark kernel.
+            std::string tx_kernel =
+                tx_compile_args[12]
+                    ? "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_tx_ubench.cpp"
+                    : "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen_tx.cpp";
             log_info(
                 LogTest,
                 "run traffic_gen_tx at logical: x={},y={}; physical: x={},y={}",
@@ -645,7 +650,7 @@ typedef struct test_traffic {
                 tx_physical_cores[i].y);
             auto kernel = tt_metal::CreateKernel(
                 tx_device->program_handle,
-                "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen_tx.cpp",
+                tx_kernel,
                 {core},
                 tt_metal::DataMovementConfig{
                     .processor = tt_metal::DataMovementProcessor::RISCV_0,

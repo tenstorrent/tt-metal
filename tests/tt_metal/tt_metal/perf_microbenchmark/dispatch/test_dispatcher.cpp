@@ -434,8 +434,7 @@ int main(int argc, char** argv) {
 
         // Want different buffers on each core, instead use big buffer and self-manage it
         uint32_t dispatch_l1_unreserved_base =
-            dispatch_constants::get(CoreType::WORKER)
-                .get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
+            DispatchMemMap::get(CoreType::WORKER).get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
         uint32_t l1_buf_base = tt::align(dispatch_l1_unreserved_base, dispatch_buffer_page_size_g);
         TT_ASSERT((l1_buf_base & (dispatch_buffer_page_size_g - 1)) == 0);
 
@@ -524,13 +523,13 @@ int main(int argc, char** argv) {
         const uint32_t prefetch_sync_sem = spoof_prefetch_core_sem_1_id;
 
         const uint32_t host_completion_queue_wr_ptr =
-            dispatch_constants::get(CoreType::WORKER)
+            DispatchMemMap::get(CoreType::WORKER)
                 .get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_WR);
         const uint32_t dev_completion_queue_wr_ptr =
-            dispatch_constants::get(CoreType::WORKER)
+            DispatchMemMap::get(CoreType::WORKER)
                 .get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR);
         const uint32_t dev_completion_queue_rd_ptr =
-            dispatch_constants::get(CoreType::WORKER)
+            DispatchMemMap::get(CoreType::WORKER)
                 .get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_RD);
 
         std::vector<uint32_t> dispatch_compile_args = {
@@ -556,8 +555,8 @@ int main(int argc, char** argv) {
             0,                  // prefetch_downstream_buffer_pages
             num_compute_cores,  // max_write_packed_cores
             0,
-            dispatch_constants::DISPATCH_MESSAGE_ENTRIES,
-            dispatch_constants::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES,
+            DispatchSettings::DISPATCH_MESSAGE_ENTRIES,
+            DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES,
             0,
             0,
             0,

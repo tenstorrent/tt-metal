@@ -11,6 +11,7 @@
 #include <assert.hpp>
 #include <core_coord.hpp>
 #include <tt_metal.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <host_api.hpp>
 #include <buffer.hpp>
 #include <buffer_constants.hpp>
@@ -66,7 +67,26 @@ void GlobalSemaphore::reset_semaphore_value(uint32_t reset_value) const {
             detail::WriteToBuffer(*buffer, host_buffer);
             tt::Cluster::instance().l1_barrier(device->id());
         } else {
-            EnqueueWriteBuffer(device->command_queue(), buffer, host_buffer, false);
+            // Dynamic resolution of device types is unclean and poor design. This will be cleaned up
+            // when MeshBuffer + Buffer and MeshCommandQueue + CommandQueue are unified under the same
+            // API
+            if (dynamic_cast<distributed::MeshDevice*>(device)) {
+                distributed::MeshDevice* mesh_device = dynamic_cast<distributed::MeshDevice*>(device);
+
+                distributed::ReplicatedBufferConfig replicated_buffer_config{.size = buffer->size()};
+                distributed::DeviceLocalBufferConfig local_config{
+                    .page_size = buffer->page_size(),
+                    .buffer_type = buffer->buffer_type(),
+                    .buffer_layout = buffer->buffer_layout(),
+                    .shard_parameters = buffer->shard_spec(),
+                    .bottom_up = buffer->bottom_up()};
+                auto mesh_buffer = distributed::MeshBuffer::create(
+                    replicated_buffer_config, local_config, mesh_device, buffer->address());
+                distributed::EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), mesh_buffer, host_buffer);
+                // mesh_device->mesh_command_queue().enqueue_write_buffer_broadcast(buffer, host_buffer.data(), false);
+            } else {
+                EnqueueWriteBuffer(device->command_queue(), buffer, host_buffer, false);
+            }
         }
     });
 }

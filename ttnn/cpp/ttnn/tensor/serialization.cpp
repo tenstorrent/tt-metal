@@ -21,6 +21,54 @@ using MeshDevice = distributed::MeshDevice;
 
 namespace {
 
+struct Padding {
+    enum class PadValue { Any, Zero, Infinity, NegativeInfinity };
+    struct PadDimension {
+        std::size_t front;
+        std::size_t back;
+    };
+    std::size_t rank_;
+    std::array<PadDimension, MAX_NUM_DIMENSIONS> pad_dimensions_;
+    PadValue pad_value_ = PadValue::Any;
+};
+
+struct LegacyShape {
+    std::size_t rank_;
+    std::array<uint32_t, MAX_NUM_DIMENSIONS> dimensions_;
+    Padding padding_;
+
+    LegacyShape() = default;
+    LegacyShape(const ttnn::Shape& logical_shape, const ttnn::Shape& padded_shape) {
+        rank_ = padded_shape.rank();
+        padding_.rank_ = padded_shape.rank();
+        for (int index = 0; index < padded_shape.rank(); index++) {
+            int shape_index = index + static_cast<int>(logical_shape.size()) - static_cast<int>(padded_shape.size());
+            int dimension = shape_index >= 0 ? logical_shape[shape_index] : 1;
+            int padded_dimension = padded_shape[index];
+            this->dimensions_[index] = padded_dimension;
+            this->padding_.pad_dimensions_[index] = {
+                .front = 0, .back = static_cast<size_t>(padded_dimension - dimension)};
+        }
+    }
+
+    ttnn::Shape logical_shape() const {
+        ttnn::SmallVector<uint32_t> values(rank_);
+        for (size_t i = 0; i < values.size(); i++) {
+            auto [front_pad, back_pad] = padding_.pad_dimensions_[i];
+            values[i] = dimensions_[i] - front_pad - back_pad;
+        }
+        return ttnn::Shape(std::move(values));
+    }
+
+    ttnn::Shape padded_shape() const {
+        ttnn::SmallVector<uint32_t> values(rank_);
+        for (size_t i = 0; i < values.size(); i++) {
+            values[i] = dimensions_[i];
+        }
+        return ttnn::Shape(std::move(values));
+    }
+};
+
 static constexpr std::size_t SENTINEL_VALUE = std::numeric_limits<std::size_t>::max();
 
 void dump_owned_storage(std::ofstream& output_stream, const OwnedStorage& storage) {
@@ -62,8 +110,9 @@ void dump_multi_device_host_storage(
                 output_stream.write(reinterpret_cast<const char*>(buffer.begin()), sizeof(T) * size);
             },
             storage.get_buffer(0));
-        ttnn::Shape shape = storage.specs.at(0).shape();
-        output_stream.write(reinterpret_cast<const char*>(&shape), sizeof(ttnn::Shape));
+        auto spec = storage.specs.at(0);
+        LegacyShape shape(spec.logical_shape(), spec.padded_shape());
+        output_stream.write(reinterpret_cast<const char*>(&shape), sizeof(LegacyShape));
     } else {
         for (int i = 0; i < num_buffers; i++) {
             std::visit(
@@ -76,8 +125,8 @@ void dump_multi_device_host_storage(
                 storage.get_buffer(i));
         }
         for (const auto& spec : storage.specs) {
-            auto shape = spec.shape();
-            output_stream.write(reinterpret_cast<const char*>(&shape), sizeof(ttnn::Shape));
+            LegacyShape shape(spec.logical_shape(), spec.padded_shape());
+            output_stream.write(reinterpret_cast<const char*>(&shape), sizeof(LegacyShape));
         }
     }
 }
@@ -105,9 +154,9 @@ MultiDeviceHostStorage load_multi_device_host_storage(
         std::size_t size = 0;
         input_stream.read(reinterpret_cast<char*>(&size), sizeof(std::size_t));
         auto buffer = owned_buffer::create<T>(size);
-        auto shape = ttnn::Shape{};
+        auto shape = LegacyShape{};
         input_stream.read(reinterpret_cast<char*>(buffer.begin()), sizeof(T) * size);
-        input_stream.read(reinterpret_cast<char*>(&shape), sizeof(ttnn::Shape));
+        input_stream.read(reinterpret_cast<char*>(&shape), sizeof(LegacyShape));
         buffers.push_back(buffer);
         TensorSpec spec(
             shape.logical_shape(),
@@ -131,8 +180,8 @@ MultiDeviceHostStorage load_multi_device_host_storage(
             buffers.push_back(std::move(buffer));
         }
         for (std::size_t i = 0; i < num_buffers; ++i) {
-            auto shape = ttnn::Shape{};
-            input_stream.read(reinterpret_cast<char*>(&shape), sizeof(ttnn::Shape));
+            auto shape = LegacyShape{};
+            input_stream.read(reinterpret_cast<char*>(&shape), sizeof(LegacyShape));
             TensorSpec spec(
                 shape.logical_shape(),
                 TensorLayout::fromPaddedShape(
@@ -210,14 +259,14 @@ void dump_tensor(
         throw std::runtime_error(fmt::format("Cannot open \"{}\"", file_name));
     }
 
-    auto shape = tensor.get_shape();
+    LegacyShape shape(tensor.get_logical_shape(), tensor.get_padded_shape());
     auto data_type = tensor.get_dtype();
     auto layout = tensor.get_layout();
     auto storage_type = tensor.storage_type();
 
     output_stream.write(reinterpret_cast<const char*>(&SENTINEL_VALUE), sizeof(std::size_t));
     output_stream.write(reinterpret_cast<const char*>(&VERSION_ID), sizeof(std::uint8_t));
-    output_stream.write(reinterpret_cast<const char*>(&shape), sizeof(ttnn::Shape));
+    output_stream.write(reinterpret_cast<const char*>(&shape), sizeof(LegacyShape));
     output_stream.write(reinterpret_cast<const char*>(&data_type), sizeof(DataType));
     output_stream.write(reinterpret_cast<const char*>(&layout), sizeof(Layout));
     output_stream.write(reinterpret_cast<const char*>(&storage_type), sizeof(StorageType));
@@ -275,11 +324,11 @@ Tensor load_tensor_helper(const std::string& file_name, T device) {
             throw std::runtime_error(
                 fmt::format("Serialized tensor with version_id: {}. Loader version: {}", version_id, VERSION_ID));
         }
-        auto shape = ttnn::Shape{};
+        auto shape = LegacyShape{};
         DataType data_type;
         Layout layout;
         StorageType storage_type;
-        input_stream.read(reinterpret_cast<char*>(&shape), sizeof(ttnn::Shape));
+        input_stream.read(reinterpret_cast<char*>(&shape), sizeof(LegacyShape));
         input_stream.read(reinterpret_cast<char*>(&data_type), sizeof(DataType));
         input_stream.read(reinterpret_cast<char*>(&layout), sizeof(Layout));
         input_stream.read(reinterpret_cast<char*>(&storage_type), sizeof(StorageType));
@@ -313,10 +362,10 @@ Tensor load_tensor_helper(const std::string& file_name, T device) {
     } else {
         input_stream.seekg(0, std::ios::beg);  // No sentinel found, assume it's an older format and rewind
 
-        auto shape = ttnn::Shape{};
+        auto shape = LegacyShape{};
         DataType data_type;
         Layout layout;
-        input_stream.read(reinterpret_cast<char*>(&shape), sizeof(ttnn::Shape));
+        input_stream.read(reinterpret_cast<char*>(&shape), sizeof(LegacyShape));
         input_stream.read(reinterpret_cast<char*>(&data_type), sizeof(DataType));
         input_stream.read(reinterpret_cast<char*>(&layout), sizeof(Layout));
 

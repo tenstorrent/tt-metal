@@ -12,11 +12,11 @@ Tensor MorehMeanBackward::invoke(
     const Tensor& output_grad,
     std::optional<std::variant<int64_t, ttnn::SmallVector<int64_t>>> dim,
     const bool keepdim,
-    const std::optional<ttnn::SimpleShape>& input_grad_shape,
+    const std::optional<ttnn::Shape>& input_grad_shape,
     const std::optional<Tensor>& input_grad,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
-    auto output_grad_rank = output_grad.get_shape().rank();
+    auto output_grad_rank = output_grad.get_logical_shape().rank();
     auto input_grad_rank = output_grad_rank;
     if (keepdim == false) {
         if (!dim.has_value()) {
@@ -29,11 +29,7 @@ Tensor MorehMeanBackward::invoke(
         }
     }
     ttnn::SmallVector<int64_t> dims = get_dim(dim, input_grad_rank);
-    std::optional<ttnn::Shape> upd_grad_shape;
-    if (input_grad_shape) {
-        upd_grad_shape = ttnn::Shape(input_grad_shape->view());
-    }
     return ttnn::prim::moreh_mean_backward(
-        output_grad, dims, keepdim, upd_grad_shape, input_grad, memory_config, compute_kernel_config);
+        output_grad, dims, keepdim, input_grad_shape, input_grad, memory_config, compute_kernel_config);
 }
 }  // namespace ttnn::operations::moreh::moreh_mean_backward
