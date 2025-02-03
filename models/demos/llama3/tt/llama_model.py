@@ -317,10 +317,10 @@ class TtTransformer(LightweightModule):
                     num_links=2,
                     cluster_axis=0,
                     mesh_device=self.mesh_device,
-                    topology=ttnn.Topology.Linear,
+                    topology=self.args.ccl_topology(),
                 )
             else:
-                tt_logits = ttnn.all_gather(tt_logits, dim=3, num_links=1, topology=ttnn.Topology.Linear)
+                tt_logits = ttnn.all_gather(tt_logits, dim=3, num_links=1, topology=self.args.ccl_topology())
         tt_logits = ttnn.untilize(tt_logits, use_multicore=True)
 
         if argmax_on_device:
