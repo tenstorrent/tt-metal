@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -12,7 +12,7 @@ from tests.sweep_framework.sweep_utils.utils import gen_shapes, sanitize_shape_r
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
-from models.utility_functions import torch_random, is_wormhole_b0
+from models.utility_functions import torch_random
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
@@ -39,18 +39,6 @@ parameters = {
 }
 
 
-def mesh_device_fixture():
-    device = ttnn.open_device(device_id=0)
-    assert ttnn.device.is_wormhole_b0(device) or ttnn.device.is_blackhole(device), "This op is not available for GS"
-    yield (device, "Wormhole_B0")
-    yield (device, "Blackhole")
-    ttnn.close_device(device)
-    del device
-
-
-# Invalidate vector is called during the generation phase where each vector will be passed in.
-# If invalidated, the vector will still be stored but will be skipped.
-# Returns False, None if the vector is valid, and True, str with a reason for invalidation if it is invalid.
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT:
         return True, "Input to eltwise binary must be tilized"
@@ -89,12 +77,10 @@ def run(
     )(input_shape)
 
     torch_input_tensor_b = gen_func_with_cast_tt(
-        partial(torch_random, low=0.1, high=100, dtype=torch.float32), input_b_dtype
+        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
     )(input_shape)
-    signs_b = torch.randint(0, 2, input_shape) * 2 - 1
-    torch_input_tensor_b *= signs_b
 
-    golden_function = ttnn.get_golden_function(ttnn.floor_div)
+    golden_function = ttnn.get_golden_function(ttnn.nextafter)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b)
 
     input_tensor_a = ttnn.from_torch(
@@ -114,7 +100,7 @@ def run(
     )
 
     start_time = start_measuring_time()
-    output_tensor = ttnn.floor_div(input_tensor_a, input_tensor_b, memory_config=output_memory_config)
+    output_tensor = ttnn.nextafter(input_tensor_a, input_tensor_b, memory_config=output_memory_config)
     e2e_perf = stop_measuring_time(start_time)
 
     output_tensor = ttnn.to_torch(output_tensor)
