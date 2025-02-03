@@ -58,7 +58,7 @@ jobs:
           payload: |
             {
               "text": " date: ${{ env.DATE }} \n num_files: ${{ env.NUM_FILES }} \n num_types: ${{ env.NUM_TYPES }} \n num_methods: ${{ env.NUM_METHODS }}",
-              "channel": "${{ env.SLACK_CHANNEL_ID }}"
+              "owner": "U014XCQ9CF8"
             }
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
