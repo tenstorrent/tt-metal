@@ -1,7 +1,8 @@
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 import torch
-from models.experimental.mochi.common import matmul_config
+from models.experimental.mochi.common import matmul_2d_config
+from functools import partial
 
 
 class TtFeedForward(LightweightModule):
@@ -57,72 +58,61 @@ class TtFeedForward(LightweightModule):
         self.w3 = as_tensor("w3", w3_tensor, ttnn.bfloat16, dim=-1)
         self.w2 = as_tensor("w2", torch_weight("w2"), ttnn.bfloat16, dim=-2)
 
-        # Vision MLP has longer seqlen than text MLP
-        self.MM_SEQ_LEN = 512 if "mlp_x" in state_dict_prefix else 256
+        self.w13_config = partial(matmul_2d_config, k=in_features, n=hidden_size // self.num_devices, grid_size=(8, 8))
+        self.w2_config = partial(matmul_2d_config, k=hidden_size // self.num_devices, n=in_features, grid_size=(8, 8))
 
-        self.w13_config = matmul_config(self.MM_SEQ_LEN, in_features, hidden_size // self.num_devices, (8, 8))
-        self.w2_config = matmul_config(self.MM_SEQ_LEN, hidden_size // self.num_devices, in_features, (8, 8))
-
-    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        B = x.shape[1]
-        S = x.shape[2]
-        D = x.shape[3]
-        assert S % self.MM_SEQ_LEN == 0, "Sequence length must be divisible by {}, got {}".format(self.MM_SEQ_LEN, S)
+    def forward(self, x_1BSD: ttnn.Tensor) -> ttnn.Tensor:
+        B = x_1BSD.shape[1]
+        S = x_1BSD.shape[2]
+        D = x_1BSD.shape[3]
         assert B == 1, "Batch size must be 1, got {}".format(B)
 
-        x = ttnn.reshape(x, (B, S // self.MM_SEQ_LEN, self.MM_SEQ_LEN, D))
-
         # W1 computation (includes both x and gate paths)
-        w1_out = ttnn.linear(
-            x,
+        w1_out_1BSF = ttnn.linear(
+            x_1BSD,
             self.w1,
             compute_kernel_config=self.compute_kernel_config_hifi2,
             dtype=ttnn.bfloat16,
-            memory_config=x.memory_config(),
-            program_config=self.w13_config,
+            memory_config=x_1BSD.memory_config(),
+            program_config=self.w13_config(m=S, n=D),
         )
-        w3_out = ttnn.linear(
-            x,
+        w3_out_1BSF = ttnn.linear(
+            x_1BSD,
             self.w3,
             compute_kernel_config=self.compute_kernel_config_hifi2,
             dtype=ttnn.bfloat16,
-            memory_config=x.memory_config(),
-            program_config=self.w13_config,
+            memory_config=x_1BSD.memory_config(),
+            program_config=self.w13_config(m=S),
         )
-
-        w1_out = ttnn.reshape(w1_out, (1, B, S, w1_out.shape[-1]))
-        w3_out = ttnn.reshape(w3_out, (1, B, S, w3_out.shape[-1]))
 
         # Apply SiLU and multiply with gate
-        w2_in = ttnn.multiply(
-            w1_out,
-            w3_out,
+        w2_in_1BSF = ttnn.multiply(
+            w1_out_1BSF,
+            w3_out_1BSF,
             input_tensor_a_activation=ttnn.UnaryOpType.SILU,
             dtype=ttnn.bfloat16,
-            memory_config=w1_out.memory_config(),
+            memory_config=w1_out_1BSF.memory_config(),
         )
 
-        w2_in = ttnn.reshape(w2_in, (B, S // self.MM_SEQ_LEN, self.MM_SEQ_LEN, w2_in.shape[-1]))
-
         # W2 computation
-        result = ttnn.linear(
-            w2_in,
+        result_1BSD = ttnn.linear(
+            w2_in_1BSF,
             self.w2,
             compute_kernel_config=self.compute_kernel_config_hifi2,
             dtype=ttnn.bfloat16,
-            memory_config=w2_in.memory_config(),
-            program_config=self.w2_config,
+            memory_config=w2_in_1BSF.memory_config(),
+            program_config=self.w2_config(m=S),
         )
 
         # # All reduce for multi-chip setups
         if self.num_devices > 1:
-            result = ttnn.reduce_scatter(
-                result,
+            result_1BSD = ttnn.reduce_scatter(
+                result_1BSD,
                 dim=3,
                 math_op=ttnn.ReduceType.Sum,
                 num_links=1,
-                memory_config=result.memory_config(),
+                memory_config=result_1BSD.memory_config(),
             )
 
-        result = ttnn.reshape(result, (1, B, S, D // self.num_devices))
-        return result
+        result_1BSD = ttnn.reshape(result_1BSD, (1, B, S, D // self.num_devices))
+        return result_1BSD
