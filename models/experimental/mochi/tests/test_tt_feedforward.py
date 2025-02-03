@@ -29,7 +29,9 @@ from models.experimental.mochi.common import get_mochi_dir, get_cache_path, comp
     "ff_path, in_feat, seq_len",
     [
         ("blocks.0.mlp_x", 3072, 44 * 1024),
+        ("blocks.0.mlp_x", 3072, 44520),
         ("blocks.0.mlp_y", 1536, 256),
+        ("blocks.0.mlp_y", 1536, 118),
     ],
 )
 def test_tt_feedforward_inference(mesh_device, seq_len, use_program_cache, reset_seeds, ff_path, in_feat):
