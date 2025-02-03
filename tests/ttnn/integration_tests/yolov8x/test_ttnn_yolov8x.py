@@ -351,6 +351,7 @@ def test_last_detect(device, input_tensor):
     for i in range(len(input_tensor)):
         x = ttnn.from_torch(input_tensor[i], dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
         x = ttnn.permute(x, (0, 2, 3, 1))
+        x = ttnn.reshape(x, (1, 1, x.shape[1] * x.shape[2], x.shape[-1]))
         ttnn_input.append(x)
 
     state_dict = torch_model.state_dict()
