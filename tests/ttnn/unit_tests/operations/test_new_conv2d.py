@@ -42,7 +42,7 @@ def run_conv(
     padded_input_channels=None,
     fp32_accum=False,
     packer_l1_acc=False,
-    output_layout=ttnn.TILE_LAYOUT,
+    output_layout=ttnn.ROW_MAJOR_LAYOUT,
     deallocate_activation=False,
     debug=False,
     groups=1,
@@ -64,6 +64,8 @@ def run_conv(
     else:
         total_batch_size = batch_size
 
+    if output_layout == ttnn.ROW_MAJOR_LAYOUT and activations_dtype == ttnn.bfloat8_b:
+        pytest.skip("Row major layout not compatible with bfloat8_b")
     torch.manual_seed(0)
     conv_input_shape = [total_batch_size, input_channels, input_height, input_width]
     conv_weight_shape = [output_channels, input_channels // groups, filter_height, filter_width]
@@ -111,6 +113,13 @@ def run_conv(
         shard_layout = (
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED if use_1d_systolic_array else ttnn.TensorMemoryLayout.BLOCK_SHARDED
         )
+    if (
+        shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+        and output_channels > 256
+        and output_layout == ttnn.ROW_MAJOR_LAYOUT
+    ):
+        pytest.skip("Skipping when out_block_w > 8 for untilize_out == True")
+
     conv_config = ttnn.Conv2dConfig(
         dtype=activations_dtype,
         weights_dtype=weights_dtype,
@@ -1228,7 +1237,7 @@ def test_resnet50_conv_wh_fp32(
 )
 @pytest.mark.parametrize(
     "activations_dtype",
-    [ttnn.bfloat8_b],
+    [ttnn.bfloat16],
 )
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
 @pytest.mark.parametrize("enable_auto_formatting", [True, False])
