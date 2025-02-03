@@ -725,6 +725,7 @@ void run_receiver_channel_step(
         bool can_send_to_all_local_chip_receivers =
             can_forward_packet_completely(packet_header, downstream_edm_interface);
         if (can_send_to_all_local_chip_receivers) {
+            print_pkt_header(packet_header);
             receiver_forward_packet(packet_header, downstream_edm_interface);
             wr_sent_ptr.increment();
         }
