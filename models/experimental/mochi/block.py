@@ -114,29 +114,47 @@ class TtAsymmetricJointBlock(LightweightModule):
                 state_dict_prefix=f"{state_dict_prefix}.mlp_y",
             )
 
-    def ff_block_x(self, x: ttnn.Tensor, scale_x: ttnn.Tensor, gate_x: ttnn.Tensor) -> ttnn.Tensor:
-        """Feed-forward block for visual features."""
-        x_mod = modulated_rmsnorm(x, scale_x)
-        x_res_shard = self.mlp_x(x_mod)
-        if self.num_devices > 1:
-            # Collect hidden-dim-fractured MLP outputs
-            x_res = ttnn.all_gather(x_res_shard, dim=3)
-        else:
-            x_res = x_res_shard
-        x = residual_tanh_gated_rmsnorm(x, x_res, gate_x)
-        return x
+    def ff_block_x(self, x_1BNX: ttnn.Tensor, scale_x_B11X: ttnn.Tensor, gate_x_B11X: ttnn.Tensor) -> ttnn.Tensor:
+        """Feed-forward block for visual features.
 
-    def ff_block_y(self, y: ttnn.Tensor, scale_y: ttnn.Tensor, gate_y: ttnn.Tensor) -> ttnn.Tensor:
-        """Feed-forward block for text features."""
-        y_mod = modulated_rmsnorm(y, scale_y)
-        y_res_shard = self.mlp_y(y_mod)
+        Args:
+            x_1BNX: Input tensor of shape (1, B, N, X)
+            scale_x_B11X: Scale tensor of shape (B, 1, 1, X)
+            gate_x_B11X: Gate tensor of shape (B, 1, 1, X)
+
+        Returns:
+            Tensor of shape (1, B, N, X)
+        """
+        x_mod_1BNX = modulated_rmsnorm(x_1BNX, scale_x_B11X)
+        x_res_shard_1BNX = self.mlp_x(x_mod_1BNX)
         if self.num_devices > 1:
             # Collect hidden-dim-fractured MLP outputs
-            y_res = ttnn.all_gather(y_res_shard, dim=3)
+            x_res_1BNX = ttnn.all_gather(x_res_shard_1BNX, dim=3)
         else:
-            y_res = y_res_shard
-        y = residual_tanh_gated_rmsnorm(y, y_res, gate_y)
-        return y
+            x_res_1BNX = x_res_shard_1BNX
+        x_1BNX = residual_tanh_gated_rmsnorm(x_1BNX, x_res_1BNX, gate_x_B11X)
+        return x_1BNX
+
+    def ff_block_y(self, y_1BLY: ttnn.Tensor, scale_y_B11Y: ttnn.Tensor, gate_y_B11Y: ttnn.Tensor) -> ttnn.Tensor:
+        """Feed-forward block for text features.
+
+        Args:
+            y_1BLY: Input tensor of shape (1, B, L, Y)
+            scale_y_B11Y: Scale tensor of shape (B, 1, 1, Y)
+            gate_y_B11Y: Gate tensor of shape (B, 1, 1, Y)
+
+        Returns:
+            Tensor of shape (1, B, L, Y)
+        """
+        y_mod_1BLY = modulated_rmsnorm(y_1BLY, scale_y_B11Y)
+        y_res_shard_1BLY = self.mlp_y(y_mod_1BLY)
+        if self.num_devices > 1:
+            # Collect hidden-dim-fractured MLP outputs
+            y_res_1BLY = ttnn.all_gather(y_res_shard_1BLY, dim=3)
+        else:
+            y_res_1BLY = y_res_shard_1BLY
+        y_1BLY = residual_tanh_gated_rmsnorm(y_1BLY, y_res_1BLY, gate_y_B11Y)
+        return y_1BLY
 
     def forward(
         self,
@@ -146,23 +164,27 @@ class TtAsymmetricJointBlock(LightweightModule):
         rope_cos: ttnn.Tensor,
         rope_sin: ttnn.Tensor,
         trans_mat: ttnn.Tensor,
-        packed_indices=None,
-        attn_mask=None,
         uncond: bool = False,
     ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
         """Forward pass of a block.
-
-        Args:
-            x: (1, B, N, dim) tensor of visual tokens
-            c: (1, 1, B, dim) tensor of conditioned features
-            y: (1, B, L, dim) tensor of text tokens
-            **attn_kwargs: Additional arguments passed to attention layer
-
-        Returns:
-            x: (B, N, dim) tensor of visual tokens after block
-            y: (B, L, dim) tensor of text tokens after block
+        Shape metadata:
+            B: batch
+            N: vision sequence length
+            L: text sequence length
+            H: number of heads
+            D: head dim
+            X: visual hidden dim
+            Y: text hidden dim
+            M: 4 * X
+            C: 4 * Y
         """
-        N = x.shape[2]
+        x_1BNX = x
+        c_B11X = c
+        y_1BLY = y
+        rope_cos_1HND = rope_cos
+        rope_sin_1HND = rope_sin
+
+        N = x_1BNX.shape[2]
 
         # Set up compute kernel config for high-fidelity computations
         compute_kernel_config = ttnn.WormholeComputeKernelConfig(
@@ -173,11 +195,11 @@ class TtAsymmetricJointBlock(LightweightModule):
         )
 
         # Apply modulation
-        c = ttnn.silu(c)
+        c_B11X = ttnn.silu(c_B11X)
 
         # Apply linear layers with bias
-        mod_x = ttnn.linear(
-            c,
+        mod_x_B11M = ttnn.linear(
+            c_B11X,
             self.mod_x,
             bias=self.mod_x_bias,
             compute_kernel_config=compute_kernel_config,
@@ -185,15 +207,15 @@ class TtAsymmetricJointBlock(LightweightModule):
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        print(f"mod_x: {mod_x.shape}")
-        scale_msa_x = mod_x[:, :, :, : self.hidden_size_x]
-        gate_msa_x = mod_x[:, :, :, self.hidden_size_x : 2 * self.hidden_size_x]
-        scale_mlp_x = mod_x[:, :, :, 2 * self.hidden_size_x : 3 * self.hidden_size_x]
-        gate_mlp_x = mod_x[:, :, :, 3 * self.hidden_size_x :]
+
+        scale_msa_x_B11X = mod_x_B11M[:, :, :, : self.hidden_size_x]
+        gate_msa_x_B11X = mod_x_B11M[:, :, :, self.hidden_size_x : 2 * self.hidden_size_x]
+        scale_mlp_x_B11X = mod_x_B11M[:, :, :, 2 * self.hidden_size_x : 3 * self.hidden_size_x]
+        gate_mlp_x_B11X = mod_x_B11M[:, :, :, 3 * self.hidden_size_x :]
         # scale_msa_x, gate_msa_x, scale_mlp_x, gate_mlp_x = ttnn.split(mod_x, 4, dim=1)
 
-        mod_y = ttnn.linear(
-            c,
+        mod_y_B11C = ttnn.linear(
+            c_B11X,
             self.mod_y,
             bias=self.mod_y_bias,
             compute_kernel_config=compute_kernel_config,
@@ -203,48 +225,43 @@ class TtAsymmetricJointBlock(LightweightModule):
         )
 
         if self.update_y:
-            scale_msa_y = mod_y[:, :, :, : self.hidden_size_y]
-            gate_msa_y = mod_y[:, :, :, self.hidden_size_y : 2 * self.hidden_size_y]
-            scale_mlp_y = mod_y[:, :, :, 2 * self.hidden_size_y : 3 * self.hidden_size_y]
-            gate_mlp_y = mod_y[:, :, :, 3 * self.hidden_size_y :]
+            scale_msa_y_B11Y = mod_y_B11C[:, :, :, : self.hidden_size_y]
+            gate_msa_y_B11Y = mod_y_B11C[:, :, :, self.hidden_size_y : 2 * self.hidden_size_y]
+            scale_mlp_y_B11Y = mod_y_B11C[:, :, :, 2 * self.hidden_size_y : 3 * self.hidden_size_y]
+            gate_mlp_y_B11Y = mod_y_B11C[:, :, :, 3 * self.hidden_size_y :]
             # scale_msa_y, gate_msa_y, scale_mlp_y, gate_mlp_y = ttnn.split(mod_y, 4, dim=1)
         else:
-            scale_msa_y = mod_y
-
-        print(f"x: {x.shape}")
-        print(f"y: {y.shape}")
+            scale_msa_y_B11Y = mod_y_B11C
 
         # Self-attention block
-        x_attn_shard, y_attn_shard = self.attn(
-            x,
-            y,
-            scale_x=scale_msa_x,
-            scale_y=scale_msa_y,
-            rope_cos=rope_cos,
-            rope_sin=rope_sin,
+        x_attn_shard_1BNX, y_attn_shard_1BLY = self.attn(
+            x_1BNX,
+            y_1BLY,
+            scale_x=scale_msa_x_B11X,
+            scale_y=scale_msa_y_B11Y,
+            rope_cos=rope_cos_1HND,
+            rope_sin=rope_sin_1HND,
             trans_mat=trans_mat,
-            packed_indices=packed_indices,
-            attn_mask=attn_mask,
             uncond=uncond,
         )
 
         if self.num_devices > 1:
             # Collect hidden-dim-fractured attention outputs
-            x_attn = ttnn.all_gather(x_attn_shard, dim=3)
-            y_attn = ttnn.all_gather(y_attn_shard, dim=3)
+            x_attn_1BNX = ttnn.all_gather(x_attn_shard_1BNX, dim=3)
+            y_attn_1BLY = ttnn.all_gather(y_attn_shard_1BLY, dim=3)
         else:
-            x_attn = x_attn_shard
-            y_attn = y_attn_shard
+            x_attn_1BNX = x_attn_shard_1BNX
+            y_attn_1BLY = y_attn_shard_1BLY
 
-        assert x_attn.shape[2] == N
-        x = residual_tanh_gated_rmsnorm(x, x_attn, gate_msa_x)
+        assert x_attn_1BNX.shape[2] == N
+        x_1BNX = residual_tanh_gated_rmsnorm(x_1BNX, x_attn_1BNX, gate_msa_x_B11X)
 
         if self.update_y:
-            y = residual_tanh_gated_rmsnorm(y, y_attn, gate_msa_y)
+            y_1BLY = residual_tanh_gated_rmsnorm(y_1BLY, y_attn_1BLY, gate_msa_y_B11Y)
 
         # MLP block
-        x = self.ff_block_x(x, scale_mlp_x, gate_mlp_x)
+        x_1BNX = self.ff_block_x(x_1BNX, scale_mlp_x_B11X, gate_mlp_x_B11X)
         if self.update_y:
-            y = self.ff_block_y(y, scale_mlp_y, gate_mlp_y)
+            y_1BLY = self.ff_block_y(y_1BLY, scale_mlp_y_B11Y, gate_mlp_y_B11Y)
 
-        return x, y
+        return x_1BNX, y_1BLY
