@@ -236,6 +236,7 @@ on:
           - eltwise.unary_backward.hardtanh_bw.hardtanh_bw
           - eltwise.unary_backward.hardtanh_bw.hardtanh_bw_sharded
           - eltwise.unary_backward.mul_bw.mul_bw
+          - eltwise.unary_backward.mul_bw.mul_bw_sharded
           - eltwise.unary_backward.softplus_bw.softplus_bw
           - eltwise.unary_backward.softplus_bw.softplus_bw_sharded
           - eltwise.unary_backward.threshold_bw.threshold_bw
@@ -290,11 +291,14 @@ on:
           - eltwise.unary_complex.reciprocal.reciprocal_sharded
           - eltwise.unary_complex.reciprocal_bw
           - eltwise.binary_complex.div_bw.div_bw
+          - eltwise.binary_complex.div_bw.div_bw_sharded
           - eltwise.binary_complex.add_bw.add_bw
+          - eltwise.binary_complex.add_bw.add_bw_sharded
           - eltwise.binary_complex.sub_bw.sub_bw
           - eltwise.binary_complex.mul_bw.mul_bw
           - eltwise.unary.digamma.digamma
           - eltwise.unary.digamma.digamma_sharded
+          - eltwise.binary_complex.mul_bw.mul_bw_sharded
           - eltwise.unary.lgamma.lgamma
           - eltwise.unary.lgamma.lgamma_sharded
           - eltwise.unary.logit.logit
@@ -395,6 +399,7 @@ on:
           - eltwise.binary.lt.lt_forge
           - eltwise.binary.ne.ne_scalar_pytorch2
           - eltwise.binary.ne.ne_forge
+          - eltwise.binary.nextafter.nextafter_sharded
           - eltwise.binary.hypot.hypot
           - eltwise.binary.xlogy.xlogy
           - eltwise.binary_backward.ldexp_bw.ldexp_bw
