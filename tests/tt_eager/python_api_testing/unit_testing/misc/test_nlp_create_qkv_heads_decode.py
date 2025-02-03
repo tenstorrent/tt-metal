@@ -417,7 +417,6 @@ def test_create_heads_with_slice(
 @pytest.fixture()
 def set_dispatch_col(device_params):
     device_params["dispatch_core_axis"] = ttnn.DispatchCoreAxis.COL
-    print("activated dispatch core axis")
     return device_params
 
 
@@ -434,8 +433,8 @@ def set_dispatch_col(device_params):
     (
         ttnn.CoreRangeSet(
             {
-                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 8)),
-                ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 8)),
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
+                ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
             }
         ),
     ),
