@@ -75,10 +75,9 @@ public:
         tt::stl::Span<const SubDeviceId> sub_device_ids = {}) = 0;
 
     virtual void enqueue_record_event(
-        const std::shared_ptr<Event>& event,
-        bool clear_count = false,
-        tt::stl::Span<const SubDeviceId> sub_device_ids = {}) = 0;
-    virtual void enqueue_wait_for_event(const std::shared_ptr<Event>& sync_event, bool clear_count = false) = 0;
+        const std::shared_ptr<Event>& event, tt::stl::Span<const SubDeviceId> sub_device_ids = {}) = 0;
+
+    virtual void enqueue_wait_for_event(const std::shared_ptr<Event>& sync_event) = 0;
 
     virtual void enqueue_write_buffer(
         const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,

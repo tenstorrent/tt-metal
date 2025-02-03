@@ -8,6 +8,7 @@
 #include <sub_device_types.hpp>
 #include <command_queue.hpp>
 #include "buffer.hpp"
+#include "tt_metal/impl/event/dispatch.hpp"
 
 namespace tt::tt_metal {
 
@@ -42,17 +43,6 @@ struct ReadBufferDescriptor {
         num_pages_read(num_pages_read),
         cur_dev_page_id(cur_dev_page_id),
         starting_host_page_id(starting_host_page_id) {}
-};
-
-// Used so host knows data in completion queue is just an event ID
-struct ReadEventDescriptor {
-    uint32_t event_id;
-    uint32_t global_offset;
-
-    explicit ReadEventDescriptor(uint32_t event) : event_id(event), global_offset(0) {}
-
-    void set_global_offset(uint32_t offset) { global_offset = offset; }
-    uint32_t get_global_event_id() { return global_offset + event_id; }
 };
 
 using CompletionReaderVariant = std::variant<std::monostate, ReadBufferDescriptor, ReadEventDescriptor>;

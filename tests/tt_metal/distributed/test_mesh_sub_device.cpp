@@ -116,34 +116,10 @@ TEST_F(MeshSubDeviceTest, DataCopyOnSubDevices) {
 
         std::vector<uint32_t> src_vec(input_buf->size() / sizeof(uint32_t));
         std::iota(src_vec.begin(), src_vec.end(), i);
-        EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), input_buf, src_vec, false);
-        // Read Back global semaphore value across all cores to verify that it has been reset to 0
-        // before updating it through host
-        auto shard_parameters =
-            ShardSpecBuffer(all_cores, {1, 1}, ShardOrientation::ROW_MAJOR, {1, 1}, {all_cores.size(), 1});
-        DeviceLocalBufferConfig global_sem_buf_local_config{
-            .page_size = sizeof(uint32_t),
-            .buffer_type = BufferType::L1,
-            .buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED,
-            .shard_parameters = shard_parameters,
-            .bottom_up = false};
-        ReplicatedBufferConfig global_sem_buf_global_config{
-            .size = all_cores.size() * sizeof(uint32_t),
-        };
-
-        auto global_sem_buf = MeshBuffer::create(
-            global_sem_buf_global_config, global_sem_buf_local_config, mesh_device_.get(), global_sem.address());
-
-        for (std::size_t logical_x = 0; logical_x < input_buf->device()->num_cols(); logical_x++) {
-            for (std::size_t logical_y = 0; logical_y < input_buf->device()->num_rows(); logical_y++) {
-                std::vector<uint32_t> dst_vec;
-                ReadShard(
-                    mesh_device_->mesh_command_queue(), dst_vec, global_sem_buf, Coordinate(logical_y, logical_x));
-                for (const auto& val : dst_vec) {
-                    EXPECT_EQ(val, 0);
-                }
-            }
-        }
+        // Block after this write on host, since the global semaphore update starting the
+        // program goes through an independent path (UMD) and can go out of order wrt the
+        // buffer data
+        EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), input_buf, src_vec, true);
 
         for (auto device : mesh_device_->get_devices()) {
             tt::llrt::write_hex_vec_to_core(
