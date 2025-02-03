@@ -74,6 +74,13 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
+          name: packages
+          path: /work/pkgs/
+      - name: Install packages
+        run: |
+          apt install pkgs/tt-metalium_*.deb
+      - uses: actions/download-artifact@v4
+        with:
           name: TTMetal_build_any
           path: /work/
       - name: Extract files
