@@ -80,4 +80,12 @@ public:
     uint32_t get_cb_base_addr(std::shared_ptr<MeshDevice>& mesh_device, CoreCoord logical_core, CoreType core_type);
     uint32_t get_cb_size(std::shared_ptr<MeshDevice>& mesh_device, CoreCoord logical_core, CoreType core_type);
 };
+
+struct MeshEvent {
+    MeshDevice* device = nullptr;
+    // LogicalDeviceRange device_range = {0xff, 0xff};
+    uint32_t cq_id = -1;
+    uint32_t event_id = -1;
+};
+
 }  // namespace tt::tt_metal::distributed

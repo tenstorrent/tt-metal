@@ -52,6 +52,9 @@ public:
     void enqueue_read_shard(
         void* host_data, const std::shared_ptr<MeshBuffer>& mesh_buffer, const Coordinate& coord, bool blocking);
     void enqueue_read_mesh_buffer(void* host_data, const std::shared_ptr<MeshBuffer>& buffer, bool blocking);
+    void enqueue_record_event(
+        const std::shared_ptr<MeshEvent>& event, tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+    void enqueue_wait_for_event(const std::shared_ptr<MeshEvent>& sync_event);
     void finish();
     void reset_worker_state(
         bool reset_launch_msg_state,

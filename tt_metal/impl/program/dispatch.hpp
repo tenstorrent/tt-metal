@@ -118,6 +118,18 @@ void write_program_command_sequence(
 
 KernelHandle get_device_local_kernel_handle(KernelHandle kernel_handle);
 
+void issue_record_event_commands(
+    IDevice* device,
+    uint32_t event_id,
+    uint8_t cq_id,
+    uint32_t num_command_queues,
+    SystemMemoryManager& manager,
+    tt::stl::Span<const SubDeviceId> sub_device_ids,
+    tt::stl::Span<const uint32_t> expected_num_workers_completed);
+
+void issue_wait_for_event_commands(
+    uint8_t cq_id, uint8_t event_cq_id, SystemMemoryManager& sysmem_manager, uint32_t event_id);
+
 template <typename WorkloadType, typename DeviceType>
 uint32_t program_base_addr_on_core(
     WorkloadType& workload, DeviceType generic_device, HalProgrammableCoreType programmable_core_type);

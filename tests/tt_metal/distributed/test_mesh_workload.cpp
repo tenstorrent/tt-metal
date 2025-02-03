@@ -908,5 +908,54 @@ TEST_F(MeshWorkloadTest, MeshWorkloadSemaphoreDifferentPrograms) {
     }
 }
 
+TEST(MeshEvent, TestMeshEvents) {
+    // auto mesh_device_ = MeshDevice::create(MeshDeviceConfig{.mesh_shape = MeshShape{2, 2}}, 0, 0, 1,
+    // DispatchCoreType::ETH);
+    auto devices = tt::tt_metal::detail::CreateDevices({0, 1, 2, 3, 4, 5, 6, 7}, 2, 0, 0, DispatchCoreType::ETH);
+    int32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);
+    uint32_t NUM_TILES = 100;
+    // DeviceLocalBufferConfig per_device_buffer_config{
+    //     .page_size = single_tile_size,
+    //     .buffer_type = BufferType::L1,
+    //     .buffer_layout = TensorMemoryLayout::INTERLEAVED,
+    //     .bottom_up = false};
+    // ReplicatedBufferConfig global_buffer_config = {
+    //     .size = NUM_TILES * single_tile_size,
+    // };
+
+    for (auto dev : devices) {
+        auto buf = Buffer::create(dev.second, NUM_TILES * single_tile_size, single_tile_size, BufferType::L1);
+        std::vector<uint32_t> src_vec(NUM_TILES * single_tile_size / sizeof(uint32_t), 0);
+        std::iota(src_vec.begin(), src_vec.end(), 0);
+        EnqueueWriteBuffer(dev.second->command_queue(), buf, src_vec, false);
+        std::vector<uint32_t> dst_vec = {};
+        EnqueueReadBuffer(dev.second->command_queue(), buf, dst_vec, true);
+    }
+
+    // std::shared_ptr<MeshBuffer> buf = MeshBuffer::create(global_buffer_config, per_device_buffer_config,
+    // mesh_device_.get());
+
+    // std::vector<uint32_t> src_vec(NUM_TILES * single_tile_size / sizeof(uint32_t), 0);
+    // std::iota(src_vec.begin(), src_vec.end(), 0);
+    // for (std::size_t logical_x = 0; logical_x < buf->device()->num_cols(); logical_x++) {
+    //     for (std::size_t logical_y = 0; logical_y < buf->device()->num_rows(); logical_y++) {
+    //         auto shard = buf->get_device_buffer(Coordinate(logical_y, logical_x));
+    //         EnqueueWriteBuffer(shard->device()->command_queue(), buf->get_device_buffer(Coordinate(logical_y,
+    //         logical_x)), src_vec, false);
+
+    //     }
+    // }
+    // for (std::size_t logical_x = 0; logical_x < buf->device()->num_cols(); logical_x++) {
+    //     for (std::size_t logical_y = 0; logical_y < buf->device()->num_rows(); logical_y++) {
+    //         std::vector<uint32_t> dst_vec = {};
+    //         auto shard = buf->get_device_buffer(Coordinate(logical_y, logical_x));
+    //         EnqueueReadBuffer(shard->device()->command_queue(), shard, dst_vec, true);
+    //         // ReadShard(mesh_device_->mesh_command_queue(), dst_vec, buf, Coordinate(logical_y, logical_x));
+    //         // for (auto val : dst_vec) std::cout << val << " ";
+    //         // std::cout << " =========== " << std::endl;
+    //     }
+    // }
+}
+
 }  // namespace
 }  // namespace tt::tt_metal::distributed::test

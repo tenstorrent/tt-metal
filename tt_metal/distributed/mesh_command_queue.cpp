@@ -171,6 +171,7 @@ void MeshCommandQueue::write_shard_to_device(
     auto device = shard_view->device();
     BufferRegion region(0, shard_view->size());
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
+    std::cout << "Write to: " << shard_view->device()->id() << std::endl;
     buffer_dispatch::write_to_device_buffer(
         src, *shard_view, region, id_, expected_num_workers_completed_, this->dispatch_core_type(), sub_device_ids);
 }
@@ -208,8 +209,10 @@ void MeshCommandQueue::read_shard_from_device(
         if (dispatch_params.pages_per_txn > 0) {
             auto read_descriptor = std::get<tt::tt_metal::ReadBufferDescriptor>(
                 *buffer_dispatch::generate_interleaved_buffer_read_descriptor(dst, dispatch_params, *shard_view));
+            std::cout << "Wait on: " << shard_view->device()->id() << std::endl;
             buffer_dispatch::copy_completion_queue_data_into_user_space(
                 read_descriptor, mmio_device_id, channel, id_, device->sysmem_manager(), exit_condition);
+            std::cout << "Done wait on: " << shard_view->device()->id() << std::endl;
         }
     }
 }
@@ -388,6 +391,34 @@ void MeshCommandQueue::enqueue_read_mesh_buffer(
     TT_FATAL(
         buffer->global_layout() == MeshBufferLayout::SHARDED, "Can only read a Sharded MeshBuffer from a MeshDevice.");
     this->read_sharded_buffer(*buffer, host_data);
+}
+
+void MeshCommandQueue::enqueue_record_event(
+    const std::shared_ptr<MeshEvent>& event, tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    auto& sysmem_manager = mesh_device_->get_device(0, 0)->sysmem_manager();
+    event->cq_id = id_;
+    event->event_id = sysmem_manager.get_next_event(id_);
+    event->device = mesh_device_;
+
+    sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
+
+    for (auto device : mesh_device_->get_devices()) {
+        program_dispatch::issue_record_event_commands(
+            mesh_device_,
+            event->event_id,
+            id_,
+            mesh_device_->num_hw_cqs(),
+            device->sysmem_manager(),
+            sub_device_ids,
+            expected_num_workers_completed_);
+    }
+}
+
+void MeshCommandQueue::enqueue_wait_for_event(const std::shared_ptr<MeshEvent>& sync_event) {
+    for (auto device : mesh_device_->get_devices()) {
+        program_dispatch::issue_wait_for_event_commands(
+            id_, sync_event->cq_id, device->sysmem_manager(), sync_event->event_id);
+    }
 }
 
 void MeshCommandQueue::reset_worker_state(

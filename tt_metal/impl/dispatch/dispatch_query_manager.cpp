@@ -24,6 +24,28 @@ tt::tt_metal::DispatchCoreConfig dispatch_core_config() {
     return dispatch_core_config;
 }
 
+tt_cxy_pair dispatch_core(uint8_t cq_id) {
+    tt_cxy_pair dispatch_core;
+    tt_cxy_pair first_dispatch_core;
+    for (chip_id_t device_id = 0; device_id < tt::Cluster::instance().number_of_devices(); device_id++) {
+        uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_id);
+        if (tt::Cluster::instance().get_associated_mmio_device(device_id) == device_id) {
+            dispatch_core = tt::tt_metal::dispatch_core_manager::instance().dispatcher_core(device_id, channel, cq_id);
+        } else {
+            dispatch_core =
+                tt::tt_metal::dispatch_core_manager::instance().dispatcher_d_core(device_id, channel, cq_id);
+        }
+        if (device_id == 0) {
+            first_dispatch_core = dispatch_core;
+        } else {
+            TT_FATAL(
+                dispatch_core.x == first_dispatch_core.x and dispatch_core.y == first_dispatch_core.y,
+                "Expected the Dispatch Cores to be consistent across physical devices");
+        }
+    }
+    return dispatch_core;
+}
+
 tt::tt_metal::DispatchQueryManager* inst = nullptr;
 
 }  // namespace
@@ -58,6 +80,12 @@ void DispatchQueryManager::reset(uint8_t num_hw_cqs) {
     distributed_dispatcher_ =
         (num_hw_cqs == 1 and dispatch_core_config_.get_dispatch_core_type() == DispatchCoreType::ETH);
     go_signal_noc_ = dispatch_s_enabled_ ? NOC::NOC_1 : NOC::NOC_0;
+    std::cout << "Ethernet Dispatch Enabled: "
+              << (dispatch_core_config_.get_dispatch_core_type() == DispatchCoreType::ETH) << std::endl;
+    dispatch_cores_.reserve(num_hw_cqs_);
+    for (std::size_t cq_id = 0; cq_id < num_hw_cqs_; cq_id++) {
+        dispatch_cores_.push_back(dispatch_core(cq_id));
+    }
 }
 
 const DispatchCoreConfig& DispatchQueryManager::get_dispatch_core_config() const { return dispatch_core_config_; }
@@ -69,6 +97,8 @@ const std::vector<CoreCoord>& DispatchQueryManager::get_logical_storage_cores(ui
 const std::vector<CoreCoord>& DispatchQueryManager::get_logical_dispatch_cores(uint32_t device_id) const {
     return tt::get_logical_dispatch_cores(device_id, num_hw_cqs_, dispatch_core_config_);
 }
+
+tt_cxy_pair DispatchQueryManager::get_dispatch_core(uint8_t cq_id) const { return dispatch_cores_[cq_id]; }
 
 DispatchQueryManager::DispatchQueryManager(uint8_t num_hw_cqs) { this->reset(num_hw_cqs); }
 

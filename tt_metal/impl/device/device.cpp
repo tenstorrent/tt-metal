@@ -964,7 +964,12 @@ void Device::update_dispatch_cores_for_multi_cq_eth_dispatch() {
 
 void Device::init_command_queue_host() {
     using_fast_dispatch_ = true;
+    std::cout << "Init sysmem manager for: " << this->id() << std::endl;
     sysmem_manager_ = std::make_unique<SystemMemoryManager>(this->id_, this->num_hw_cqs());
+    uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->id());
+    tt_cxy_pair prefetcher_core =
+        tt::tt_metal::dispatch_core_manager::instance().prefetcher_core(this->id(), channel, 0);
+    std::cout << "Prefetcher core: " << prefetcher_core.str() << std::endl;
     command_queues_.reserve(num_hw_cqs());
     for (size_t cq_id = 0; cq_id < num_hw_cqs(); cq_id++) {
         command_queues_.push_back(

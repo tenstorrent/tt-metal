@@ -288,6 +288,7 @@ void issue_buffer_dispatch_command_sequence(
 
     sysmem_manager.issue_queue_push_back(cmd_sequence_sizeB, dispatch_params.cq_id);
     sysmem_manager.fetch_queue_reserve_back(dispatch_params.cq_id);
+    // std::cout << "Issue fetch queue write to: " << dispatch_params.device->id() << std::endl;
     sysmem_manager.fetch_queue_write(cmd_sequence_sizeB, dispatch_params.cq_id);
 }
 
