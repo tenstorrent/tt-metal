@@ -838,9 +838,8 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     TT_FATAL(weight_matrix_height_padding >= 0, " Matrix Height Padding can't be negative");
 
     ttnn::Shape target_shape(std::array<uint32_t, 4>{1, 1, weight_matrix_height, out_channels});
-    ttnn::Shape padded_target_shape({1, 1, weight_tensor_.get_logical_shape()[2], out_channels_padded});
 
-    weight_tensor_ = ttnn::reshape(weight_tensor_, target_shape, padded_target_shape);
+    weight_tensor_ = ttnn::reshape(weight_tensor_, target_shape, weight_tensor_.get_padded_shape());
 
     if (bias_tensor.has_value()) {
         bias_tensor_ = bias_tensor.value();
