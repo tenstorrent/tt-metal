@@ -80,16 +80,6 @@ struct FabricEriscDatamoverConfig {
     // 2: WorkerXY (as uint32_t)
     // 3: Hold's EDM's rdptr for the buffer index in the channel
     std::size_t sender_channel_0_worker_conn_info_base_address = sender_channel_0_buffer_index_address + field_size;
-    //
-    // std::size_t sender_channel_0_conn_info_worker_rdptr_address_address =
-    //     sender_channel_0_worker_conn_info_base_address;
-    // std::size_t sender_channel_0_conn_info_worker_teardown_semaphore_address =
-    //     sender_channel_0_conn_info_worker_rdptr_address_address + field_size;
-    // std::size_t sender_channel_0_conn_info_worker_xy_address =
-    //     sender_channel_0_conn_info_worker_teardown_semaphore_address + field_size;
-    // std::size_t sender_channel_0_conn_info_edm_rdptr_address_address =
-    //     sender_channel_0_conn_info_worker_xy_address + field_size;
-    //
     std::size_t sender_channel_0_local_flow_control_semaphore_address =
         sender_channel_0_worker_conn_info_base_address + sizeof(tt::fabric::EDMChannelWorkerLocationInfo);
     // sender_channel_0_conn_info_edm_rdptr_address_address + field_size;
@@ -113,16 +103,6 @@ struct FabricEriscDatamoverConfig {
     // 2: WorkerXY (as uint32_t)
     // 3: Hold's EDM's rdptr for the buffer index in the channel
     std::size_t sender_channel_1_worker_conn_info_base_address = sender_channel_1_buffer_index_address + field_size;
-    //
-    // std::size_t sender_channel_1_conn_info_worker_rdptr_address_address =
-    //     sender_channel_1_worker_conn_info_base_address;
-    // std::size_t sender_channel_1_conn_info_worker_teardown_semaphore_address =
-    //     sender_channel_1_conn_info_worker_rdptr_address_address + field_size;
-    // std::size_t sender_channel_1_conn_info_worker_xy_address =
-    //     sender_channel_1_conn_info_worker_teardown_semaphore_address + field_size;
-    // std::size_t sender_channel_1_conn_info_edm_rdptr_address_address =
-    //     sender_channel_1_conn_info_worker_xy_address + field_size;
-    ////
     std::size_t sender_channel_1_local_flow_control_semaphore_address =
         sender_channel_1_worker_conn_info_base_address + sizeof(tt::fabric::EDMChannelWorkerLocationInfo);
     // sender_channel_1_conn_info_edm_rdptr_address_address + field_size;

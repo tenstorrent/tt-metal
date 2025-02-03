@@ -122,7 +122,6 @@ struct WorkerToFabricEdmSender {
         auto const wrptr = *this->buffer_slot_wrptr_ptr;
         auto const rdptr = *this->from_remote_buffer_slot_rdptr_ptr;
         bool wrptr_ge_rptr = wrptr >= rdptr;
-        // TODO: optimize to *= -1 and mask (bit hacks)
         uint8_t slots_used = wrptr_ge_rptr ? (wrptr - rdptr) : ((2 * this->num_buffers_per_channel) - rdptr) + wrptr;
         return slots_used < this->num_buffers_per_channel;
     }
@@ -227,7 +226,6 @@ struct WorkerToFabricEdmSender {
     volatile uint32_t* worker_teardown_addr;
     size_t edm_buffer_base_addr;
 
-    // the
     // TODO: keep a local copy that we use during the lifetime of the channel to avoid repeated L1 reads
     size_t* buffer_slot_wrptr_ptr;
 

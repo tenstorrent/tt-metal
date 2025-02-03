@@ -2952,11 +2952,11 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
     if (num_devices < 4) {
         log_info("This test can only be run on T3000 devices");
-        return 0;
+        return;
     }
     if (arch == tt::ARCH::GRAYSKULL) {
         log_info("Test must be run on WH");
-        return 0;
+        return;
     }
 
     size_t line_size = params.line_size;
@@ -3059,10 +3059,10 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
         const size_t line_index = i;
         auto& program = programs[i];
         auto* device = devices[i];
-        const size_t dest_noc_x = device->worker_core_from_logical_core(dest_core_coord).x;  // TODO;
-        const size_t dest_noc_y = device->worker_core_from_logical_core(dest_core_coord).y;  // TODO;
-        const size_t sync_core_noc_x = device->worker_core_from_logical_core(sync_core_coord).x;  // TODO;
-        const size_t sync_core_noc_y = device->worker_core_from_logical_core(sync_core_coord).y;  // TODO;
+        const size_t dest_noc_x = device->worker_core_from_logical_core(dest_core_coord).x;
+        const size_t dest_noc_y = device->worker_core_from_logical_core(dest_core_coord).y;
+        const size_t sync_core_noc_x = device->worker_core_from_logical_core(sync_core_coord).x;
+        const size_t sync_core_noc_y = device->worker_core_from_logical_core(sync_core_coord).y;
 
         IDevice* backward_device = i == 0 ? nullptr : devices[i - 1];
         IDevice* forward_device = i == line_size - 1 ? nullptr : devices[i + 1];
@@ -3264,7 +3264,6 @@ TEST(EdmFabric, BasicMcastThroughputTest_SenderTwiceFilled_ReceiverOnceFilled_2D
     RunWriteThroughputStabilityTestWithPersistentFabric(
         num_mcasts, num_unicasts, num_links, num_op_invocations, params);
 }
-// hangs if run back-to-back but passes if run separately. Also passes if only one test run before
 TEST(EdmFabric, BasicMcastThroughputTest_SenderTwiceFilled_ReceiverOnceFilled) {
     const size_t num_mcasts = 18;
     const size_t num_unicasts = 0;
@@ -3359,7 +3358,6 @@ TEST(EdmFabric, BasicMcastThroughputTest_SenderTwiceFilled_ReceiverOnceFilled_2D
     RunWriteThroughputStabilityTestWithPersistentFabric(
         num_mcasts, num_unicasts, num_links, num_op_invocations, params);
 }
-// hangs if run back-to-back but passes if run separately. Also passes if only one test run before
 TEST(EdmFabric, BasicMcastThroughputTest_SenderTwiceFilled_ReceiverOnceFilled_LineSync) {
     const size_t num_mcasts = 18;
     const size_t num_unicasts = 0;
@@ -3398,7 +3396,6 @@ TEST(EdmFabric, BasicMcastThroughputTest_SenderFourTImesFilled_ReceiverTwiceFill
     RunWriteThroughputStabilityTestWithPersistentFabric(
         num_mcasts, num_unicasts, num_links, num_op_invocations, params);
 }
-// hangs if run back-to-back but passes if run separately. Also passes if only one test run before
 TEST(EdmFabric, BasicMcastThroughputTest_SenderFourTImesFilled_ReceiverTwiceFilled_LineSync) {
     const size_t num_mcasts = 36;
     const size_t num_unicasts = 0;

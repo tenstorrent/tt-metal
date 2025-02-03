@@ -154,12 +154,10 @@ void kernel_main() {
                     packet_payload_size_bytes + sizeof(tt::fabric::PacketHeader),
                     static_cast<uint8_t>(dest_noc_x),
                     static_cast<uint8_t>(dest_noc_y)});
-                DPRINT << "Wait EDMF\n";
                 {
                     DeviceZoneScopedN("WR-FWD-WAIT");
                     fabric_connection.get_forward_connection().wait_for_empty_write_slot();
                 }
-                DPRINT << "Got it\n";
                 fabric_connection.get_forward_connection().send_payload_without_header_non_blocking_from_address(
                     source_l1_buffer_address, packet_payload_size_bytes);
                 fabric_connection.get_forward_connection().send_payload_flush_non_blocking_from_address(
@@ -173,12 +171,10 @@ void kernel_main() {
                     packet_payload_size_bytes + sizeof(tt::fabric::PacketHeader),
                     static_cast<uint8_t>(dest_noc_x),
                     static_cast<uint8_t>(dest_noc_y)});
-                DPRINT << "Wait EDMR\n";
                 {
                     DeviceZoneScopedN("WR-BWD-WAIT");
                     fabric_connection.get_backward_connection().wait_for_empty_write_slot();
                 }
-                DPRINT << "Got it\n";
                 fabric_connection.get_backward_connection().send_payload_without_header_non_blocking_from_address(
                     source_l1_buffer_address, packet_payload_size_bytes);
                 fabric_connection.get_backward_connection().send_payload_flush_non_blocking_from_address(

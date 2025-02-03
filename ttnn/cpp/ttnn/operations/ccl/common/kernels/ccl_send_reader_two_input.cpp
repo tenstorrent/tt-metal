@@ -1067,7 +1067,6 @@ void kernel_main() {
     }
 
     if (fabric_connection.is_logically_connected()) {
-        DPRINT << "close\n";
         fabric_connection.close();
     }
 

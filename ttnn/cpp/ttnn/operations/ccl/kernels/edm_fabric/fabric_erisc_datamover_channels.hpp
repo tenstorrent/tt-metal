@@ -173,7 +173,7 @@ class EthChannelBuffer final {
         channel_id(channel_id) {
         for (uint8_t i = 0; i < NUM_BUFFERS; i++) {
             this->buffer_addresses[i] =
-                channel_base_address + i * this->max_eth_payload_size_in_bytes;  //(this->buffer_size_in_bytes);
+                channel_base_address + i * this->max_eth_payload_size_in_bytes;
 
             uint32_t channel_sync_addr = this->buffer_addresses[i] + buffer_size_in_bytes;
             auto channel_sync_ptr = reinterpret_cast<eth_channel_sync_t *>(channel_sync_addr);
@@ -210,9 +210,6 @@ class EthChannelBuffer final {
         return get_packet_header(buffer_index)->get_payload_size_including_header() + sizeof(eth_channel_sync_t);
     }
 
-    // TODO: Split off into two separate functions:
-    //       volatile tt_l1_ptr size_t *get_current_bytes_sent_ptr() const
-    //       size_t get_bytes_sent_address() const
     [[nodiscard]] FORCE_INLINE volatile tt_l1_ptr size_t *get_bytes_sent_address(BufferIndex const& buffer_index) const {
         return this->channel_bytes_sent_addresses[buffer_index];
     }
@@ -333,8 +330,6 @@ struct EdmChannelWorkerInterface {
         return local_ackptr.get_ptr() != local_wrptr.get_ptr();
     }
 
-    // FORCE_INLINE void clear_local_semaphore() { noc_semaphore_set(remote_producer_wrptr, 0); }
-
     [[nodiscard]] FORCE_INLINE uint32_t get_worker_semaphore_address() const {
         return worker_location_info_ptr->worker_semaphore_address;
     }
@@ -343,7 +338,6 @@ struct EdmChannelWorkerInterface {
         auto const &worker_info = *worker_location_info_ptr;
         uint64_t worker_semaphore_address = get_noc_addr(
             (uint32_t)worker_info.worker_xy.x, (uint32_t)worker_info.worker_xy.y, worker_info.worker_semaphore_address);
-        DPRINT << "EDM ntf wrkr sem @" << (uint64_t)worker_semaphore_address << ", val = " << (uint32_t)local_ackptr.get_ptr() << "\n";
         noc_inline_dw_write(worker_semaphore_address, local_ackptr.get_ptr());
     }
 
@@ -357,7 +351,6 @@ struct EdmChannelWorkerInterface {
         // Set connection to unused so it's available for next worker
         *this->connection_live_semaphore = tt::fabric::WorkerToFabricEdmSender::unused_connection_value;
 
-        DPRINT << "EDM tdwn my_x: " << (uint32_t)my_x[0] << ", my_y: " << (uint32_t)my_y[0] << " rdptr set to " << (uint32_t)last_edm_rdptr_value << " at " << (uint32_t)worker_location_info_ptr->edm_rdptr << "\n";
         *reinterpret_cast<volatile uint32_t*>(&(worker_location_info_ptr->edm_rdptr)) = last_edm_rdptr_value;
 
         noc_semaphore_inc(worker_semaphore_address, 1);
@@ -370,12 +363,7 @@ struct EdmChannelWorkerInterface {
         return this->local_rdptr.is_caught_up_to(this->local_wrptr);
     }
 
-
-    // Call to keep the connection info fresh.
-    // Eventually TODO is to consolidate this with `local_rdptr` in this class too
-    // void propagate_ackptr_to_connection_info(BufferPtr const& rdptr) {
-    //     worker_location_info_ptr->edm_rdptr = rdptr;
-    // }
+    // Call to keep the connection flow control info fresh with worker.
     void propagate_ackptr_to_connection_info() {
         worker_location_info_ptr->edm_rdptr = local_ackptr.get_ptr();
     }
