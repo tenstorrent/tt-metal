@@ -233,8 +233,15 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_col_interleav
     uint32_t padded_row_size_bytes;
     uint32_t unpadded_row_size_bytes;
 
-    padded_row_size_bytes = input_shape[-1] * a.element_size();
-    unpadded_row_size_bytes = output_shape[-1] * a.element_size();
+    uint32_t el_size = a.element_size();
+    if (a.get_dtype() == DataType::BFLOAT8_B) {
+        padded_row_size_bytes = input_shape[-1] * output.element_size();
+        unpadded_row_size_bytes = output_shape[-1] * output.element_size();
+        el_size = output.element_size();
+    } else {
+        padded_row_size_bytes = input_shape[-1] * a.element_size();
+        unpadded_row_size_bytes = output_shape[-1] * a.element_size();
+    }
 
     create_cb(tt::CBIndex::c_0, program, all_cores, input_single_tile_size, num_tiles_per_col, input_cb_data_format);
     create_cb(tt::CBIndex::c_16, program, all_cores, output_single_tile_size, num_tiles_per_col, output_cb_data_format);
@@ -313,7 +320,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_col_interleav
         } else {
             number_blocks_per_core = nblocks_per_core;
         }
-        uint32_t size_per_row_per_block = nblocks_per_core * TILE_WIDTH * a.element_size();
+        uint32_t size_per_row_per_block = nblocks_per_core * TILE_WIDTH * el_size;
 
         //  writer runtime args
         std::vector<uint32_t> writer_rt_args = {
@@ -322,7 +329,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_col_interleav
             i,
             size_per_row_per_block,
             number_blocks_per_core,
-            TILE_WIDTH * a.element_size(),
+            TILE_WIDTH * el_size,
         };
 
         // reader runtime args
@@ -376,7 +383,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
     uint32_t num_tiles_per_row = a.get_padded_shape()[-1] / TILE_WIDTH;
 
     uint32_t num_tiles_per_col = a.get_padded_shape()[-2] / TILE_HEIGHT;
-    if (num_tiles_per_row > num_tiles_per_col && a.get_dtype() != DataType::BFLOAT8_B) {
+    if (num_tiles_per_row > num_tiles_per_col) {
         return untilize_with_unpadding_multi_core_col_interleaved(a, output, use_pack_untilize, fp32_dest_acc_en);
     }
 
