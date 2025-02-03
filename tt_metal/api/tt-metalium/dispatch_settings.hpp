@@ -105,6 +105,8 @@ struct DispatchSettings {
     // packet_mux, packet_demux, vc_eth_tunneler, vc_packet_router
     uint32_t tunneling_buffer_size_;
     uint32_t tunneling_buffer_pages_;  // tunneling_buffer_size_ / PREFETCH_D_BUFFER_LOG_PAGE_SIZE
+    uint32_t tunneling_debug_status_enable_{
+        false};  // enable tunneling kernels, mux, demux to write their kernel status
 
     CoreType core_type_;  // Which core this settings is for
 

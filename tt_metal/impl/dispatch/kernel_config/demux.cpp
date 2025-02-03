@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "demux.hpp"
 #include "dispatch.hpp"
+#include "dispatch/kernel_config/mux.hpp"
+#include "dispatch/kernel_config/prefetch.hpp"
 #include "eth_tunneler.hpp"
 
 #include <host_api.hpp>
@@ -41,7 +43,8 @@ void DemuxKernel::GenerateStaticConfigs() {
 }
 
 void DemuxKernel::GenerateDependentConfigs() {
-    // Upstream, expect EthTunneler or DEMUX
+    // Upstream
+    // EthTunneler or DEMUX or MUX
     TT_ASSERT(upstream_kernels_.size() == 1);
     if (auto us = dynamic_cast<EthTunnelerKernel*>(upstream_kernels_[0])) {
         dependent_config_.remote_rx_x = us->GetVirtualCore().x;
@@ -56,11 +59,18 @@ void DemuxKernel::GenerateDependentConfigs() {
             static_config_.endpoint_id_start_index =
                 static_config_.endpoint_id_start_index.value() + downstream_kernels_.size();
         }
+    } else if (auto us = dynamic_cast<MuxKernel*>(upstream_kernels_[0])) {
+        dependent_config_.remote_rx_x = us->GetVirtualCore().x;
+        dependent_config_.remote_rx_y = us->GetVirtualCore().y;
+        dependent_config_.remote_rx_queue_id = us->GetDownstreamPort(this);
+        static_config_.endpoint_id_start_index =
+            static_config_.endpoint_id_start_index.value() + downstream_kernels_.size();
     } else {
-        TT_FATAL(false, "Unexpected kernel type upstream of DEMUX");
+        TT_FATAL(false, "DEMUX got unexpected upstream kernel type");
     }
 
-    // Downstream, expect DISPATCH_H or DEMUX
+    // Downstream
+    // DISPATCH_H or DEMUX or PREFETCH_D
     TT_ASSERT(downstream_kernels_.size() <= MAX_SWITCH_FAN_OUT && downstream_kernels_.size() > 0);
     dependent_config_.output_depacketize = 0;  // Populated per downstream kernel
     for (int idx = 0; idx < downstream_kernels_.size(); idx++) {
@@ -99,8 +109,23 @@ void DemuxKernel::GenerateDependentConfigs() {
             }
             dependent_config_.dest_endpoint_output_map_hi = (uint32_t)(dest_endpoint_output_map >> 32);
             dependent_config_.dest_endpoint_output_map_lo = (uint32_t)(dest_endpoint_output_map & 0xFFFFFFFF);
+        } else if (auto prefetch_d_kernel = dynamic_cast<PrefetchKernel*>(k)) {
+            TT_ASSERT(downstream_kernels_.size() == 1);
+            dependent_config_.remote_tx_queue_start_addr_words[idx] =
+                prefetch_d_kernel->GetStaticConfig().prefetch_q_base.value();
+            dependent_config_.remote_tx_queue_size_words[idx] =
+                prefetch_d_kernel->GetStaticConfig().prefetch_q_size.value() >> 4;
+
+            dependent_config_.output_depacketize = dependent_config_.output_depacketize.value() | (1 << idx);
+            dependent_config_.output_depacketize_downstream_sem_id[idx] =
+                prefetch_d_kernel->GetStaticConfig().my_upstream_cb_sem_id.value();
+
+            uint32_t dest_map_array[4] = {0, 1, 2, 3};
+            uint64_t dest_endpoint_output_map = packet_switch_dest_pack(dest_map_array, 4);
+            dependent_config_.dest_endpoint_output_map_hi = (uint32_t)(dest_endpoint_output_map >> 32);
+            dependent_config_.dest_endpoint_output_map_lo = (uint32_t)(dest_endpoint_output_map & 0xFFFFFFFF);
         } else {
-            TT_FATAL(false, "Unexpected kernel type downstream of DEMUX");
+            TT_FATAL(false, "DEMUX got unexpected downstream kernel type");
         }
     }
 }
