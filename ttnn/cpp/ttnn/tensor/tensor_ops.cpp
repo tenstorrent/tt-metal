@@ -100,13 +100,6 @@ Tensor tensor_to(
 Tensor tensor_cpu(const Tensor& input_tensor, bool blocking, uint8_t cq_id) {
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::cpu", input_tensor, blocking);
-    if (ttnn::distributed::is_mesh_buffer_tensor(input_tensor)) {
-        Tensor host_tensor = tensor_impl::to_host_from_mesh_tensor_wrapper(input_tensor, blocking);
-        host_tensor = tt::tt_metal::set_tensor_id(host_tensor);
-        GraphTracker::instance().track_function_end(host_tensor);
-        return host_tensor;
-    }
-
     auto workers = input_tensor.get_workers(blocking);
     if (not workers.size()) {
         // Tensor is on host and does not have a worker group.

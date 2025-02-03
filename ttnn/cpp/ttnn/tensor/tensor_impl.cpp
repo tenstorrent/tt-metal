@@ -9,6 +9,7 @@
 #include "tt-metalium/mesh_device.hpp"
 #include "tt-metalium/mesh_command_queue.hpp"
 #include "tt-metalium/overloaded.hpp"
+#include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor_impl_wrapper.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
@@ -572,8 +573,9 @@ Tensor to_host<bfloat8_b>(const Tensor& tensor, bool blocking, uint8_t cq_id) {
 }
 
 template <typename T>
-Tensor to_host_from_mesh_tensor(const Tensor& tensor, bool blocking) {
+Tensor to_host_mesh_tensor(const Tensor& tensor, bool blocking) {
     TT_FATAL(ttnn::distributed::is_mesh_buffer_tensor(tensor), "Tensor is not a mesh buffer tensor!");
+    TT_FATAL(tt::tt_metal::detail::InMainThread(), "to_host_mesh_tensor must be called from the main thread");
     const auto& storage = std::get<MultiDeviceStorage>(tensor.get_storage());
     const auto& mesh_buffer = storage.mesh_buffer;
     ttnn::MeshDevice* device = mesh_buffer->device();
@@ -589,33 +591,34 @@ Tensor to_host_from_mesh_tensor(const Tensor& tensor, bool blocking) {
 
     mesh_cq.enqueue_read_shards(read_back, mesh_buffer, blocking);
 
+    const auto& tensor_spec = tensor.get_tensor_spec();
     std::vector<TensorSpec> specs;
     std::vector<OwnedBuffer> buffers;
     specs.reserve(device->num_devices());
     buffers.reserve(device->num_devices());
     for (int i = 0; i < device->num_devices(); i++) {
-        specs.push_back(tensor.get_tensor_spec());
+        specs.push_back(tensor_spec);
         buffers.push_back(owned_buffer::create<T>(std::move(host_buffers[i])));
     }
     MultiDeviceHostStorage host_storage(storage.strategy, std::move(buffers), std::move(specs));
-    return Tensor(std::move(host_storage), tensor.get_tensor_spec());
+    return Tensor(std::move(host_storage), tensor_spec);
 }
 
-template Tensor to_host_from_mesh_tensor<bfloat16>(const Tensor& tensor, bool blocking);
-template Tensor to_host_from_mesh_tensor<float>(const Tensor& tensor, bool blocking);
-template Tensor to_host_from_mesh_tensor<int32_t>(const Tensor& tensor, bool blocking);
-template Tensor to_host_from_mesh_tensor<uint32_t>(const Tensor& tensor, bool blocking);
-template Tensor to_host_from_mesh_tensor<uint16_t>(const Tensor& tensor, bool blocking);
-template Tensor to_host_from_mesh_tensor<uint8_t>(const Tensor& tensor, bool blocking);
+template Tensor to_host_mesh_tensor<bfloat16>(const Tensor& tensor, bool blocking);
+template Tensor to_host_mesh_tensor<float>(const Tensor& tensor, bool blocking);
+template Tensor to_host_mesh_tensor<int32_t>(const Tensor& tensor, bool blocking);
+template Tensor to_host_mesh_tensor<uint32_t>(const Tensor& tensor, bool blocking);
+template Tensor to_host_mesh_tensor<uint16_t>(const Tensor& tensor, bool blocking);
+template Tensor to_host_mesh_tensor<uint8_t>(const Tensor& tensor, bool blocking);
 
 template <>
-Tensor to_host_from_mesh_tensor<bfloat4_b>(const Tensor& tensor, bool blocking) {
-    return to_host_from_mesh_tensor<uint32_t>(tensor, blocking);
+Tensor to_host_mesh_tensor<bfloat4_b>(const Tensor& tensor, bool blocking) {
+    return to_host_mesh_tensor<uint32_t>(tensor, blocking);
 }
 
 template <>
-Tensor to_host_from_mesh_tensor<bfloat8_b>(const Tensor& tensor, bool blocking) {
-    return to_host_from_mesh_tensor<uint32_t>(tensor, blocking);
+Tensor to_host_mesh_tensor<bfloat8_b>(const Tensor& tensor, bool blocking) {
+    return to_host_mesh_tensor<uint32_t>(tensor, blocking);
 }
 
 // ======================================================================================
@@ -690,9 +693,6 @@ std::shared_ptr<Buffer> to_device_buffer(
 template <typename T>
 Tensor to_device(const Tensor& tensor, IDevice* target_device, const MemoryConfig& memory_config, uint8_t cq_id) {
     TT_FATAL(tensor.storage_type() != StorageType::DEVICE, "Tensor is already on device!");
-    if (tensor.storage_type() == StorageType::OWNED) {
-        TT_FATAL(tensor.is_allocated(), "Need host buffer on device to exist to copy data to device!");
-    }
     TT_FATAL(target_device != nullptr, "Need target device in order to move tensor to device!");
     TT_FATAL(tensor.is_allocated(), "Need data to exist in order to move it to device");
 
@@ -725,6 +725,120 @@ template <>
 Tensor to_device<bfloat8_b>(
     const Tensor& tensor, IDevice* target_device, const MemoryConfig& memory_config, uint8_t cq_id) {
     return to_device<uint32_t>(tensor, target_device, memory_config, cq_id);
+}
+
+template <typename T>
+Tensor to_device_mesh_tensor(
+    const Tensor& tensor, distributed::MeshDevice* target_device, const MemoryConfig& memory_config) {
+    TT_FATAL(tt::tt_metal::detail::InMainThread(), "to_device_mesh_tensor must be called from the main thread");
+    TT_FATAL(tensor.storage_type() != StorageType::MULTI_DEVICE, "Tensor is already on device!");
+    TT_FATAL(target_device != nullptr, "Need target device in order to move tensor to device!");
+    TT_FATAL(tensor.is_allocated(), "Need data to exist in order to move it to device");
+
+    TensorSpec tensor_spec(
+        tensor.get_logical_shape(), tensor.get_tensor_spec().tensor_layout().with_memory_config(memory_config));
+
+    auto mesh_buffer = allocate_mesh_buffer_on_device(target_device, tensor_spec);
+    auto distribution_strategy = std::visit(
+        tt::stl::overloaded{
+            [&target_device, &mesh_buffer, &tensor_spec]<OwnedOrBorrowedStorage StorageType>(
+                const StorageType& storage) -> DistributedTensorConfig {
+                auto data_to_write = host_buffer::get_as<T>(storage.buffer);
+                const auto expected_packed_buffer_size_bytes = tensor_spec.compute_packed_buffer_size_bytes();
+                const auto input_size_bytes = data_to_write.size() * sizeof(T);
+                TT_FATAL(
+                    input_size_bytes == expected_packed_buffer_size_bytes,
+                    "Host data with total size {}B does not match expected size {}B of device buffer!",
+                    input_size_bytes,
+                    expected_packed_buffer_size_bytes);
+
+                // Replicate a buffer across devices in a mesh.
+                target_device->mesh_command_queue().enqueue_write_mesh_buffer(
+                    mesh_buffer, data_to_write.data(), /*blocking=*/false);
+                return ReplicateTensor{};
+            },
+            [&target_device, &mesh_buffer, &tensor_spec](
+                const MultiDeviceHostStorage& storage) -> DistributedTensorConfig {
+                TT_FATAL(
+                    storage.num_buffers() == target_device->num_devices(),
+                    "Number of buffers {} does not match number of devices {}",
+                    storage.num_buffers(),
+                    target_device->num_devices());
+
+                const auto expected_packed_buffer_size_bytes = tensor_spec.compute_packed_buffer_size_bytes();
+
+                std::vector<const void*> shards;
+                shards.reserve(storage.buffers.size());
+                for (int i = 0; i < storage.buffers.size(); i++) {
+                    auto data_to_write = host_buffer::get_as<T>(storage.buffers[i]);
+                    const auto input_size_bytes = data_to_write.size() * sizeof(T);
+                    TT_FATAL(
+                        input_size_bytes == expected_packed_buffer_size_bytes,
+                        "Host data with total size {}B does not match expected size {}B of device buffer!",
+                        input_size_bytes,
+                        expected_packed_buffer_size_bytes);
+                    TT_FATAL(tensor_spec == storage.specs[i], "Tensor spec mismatch!");
+                    shards.push_back(data_to_write.data());
+                }
+
+                target_device->mesh_command_queue().enqueue_write_shards(mesh_buffer, shards, /*blocking=*/false);
+                return storage.strategy;
+            },
+            [](const auto& s) -> DistributedTensorConfig {
+                TT_THROW("Unexpected storage type {}", tt::stl::get_type_name(s));
+            }},
+        tensor.get_storage());
+
+    const auto [num_rows, num_cols] = target_device->shape();
+    std::vector<int> ordered_device_ids;
+    std::unordered_map<int, std::shared_ptr<Buffer>> buffers;
+    std::unordered_map<int, TensorSpec> specs;
+    ordered_device_ids.reserve(num_rows * num_cols);
+    buffers.reserve(num_rows * num_cols);
+    specs.reserve(num_rows * num_cols);
+    for (int row = 0; row < num_rows; ++row) {
+        for (int col = 0; col < num_cols; ++col) {
+            auto buffer = mesh_buffer->get_device_buffer(distributed::Coordinate{row, col});
+            const int device_id = buffer->device()->id();
+            ordered_device_ids.push_back(device_id);
+            buffers.emplace(device_id, std::move(buffer));
+            specs.emplace(device_id, tensor_spec);
+        }
+    }
+
+    MultiDeviceStorage multi_device_storage(
+        std::move(distribution_strategy),
+        std::move(ordered_device_ids),
+        std::move(buffers),
+        std::move(specs),
+        mesh_buffer);
+
+    return Tensor(std::move(multi_device_storage), tensor_spec);
+}
+
+template Tensor to_device_mesh_tensor<bfloat16>(
+    const Tensor& tensor, distributed::MeshDevice* target_device, const MemoryConfig& memory_config);
+template Tensor to_device_mesh_tensor<float>(
+    const Tensor& tensor, distributed::MeshDevice* target_device, const MemoryConfig& memory_config);
+template Tensor to_device_mesh_tensor<int32_t>(
+    const Tensor& tensor, distributed::MeshDevice* target_device, const MemoryConfig& memory_config);
+template Tensor to_device_mesh_tensor<uint32_t>(
+    const Tensor& tensor, distributed::MeshDevice* target_device, const MemoryConfig& memory_config);
+template Tensor to_device_mesh_tensor<uint16_t>(
+    const Tensor& tensor, distributed::MeshDevice* target_device, const MemoryConfig& memory_config);
+template Tensor to_device_mesh_tensor<uint8_t>(
+    const Tensor& tensor, distributed::MeshDevice* target_device, const MemoryConfig& memory_config);
+
+template <>
+Tensor to_device_mesh_tensor<bfloat4_b>(
+    const Tensor& tensor, distributed::MeshDevice* target_device, const MemoryConfig& memory_config) {
+    return to_device_mesh_tensor<uint32_t>(tensor, target_device, memory_config);
+}
+
+template <>
+Tensor to_device_mesh_tensor<bfloat8_b>(
+    const Tensor& tensor, distributed::MeshDevice* target_device, const MemoryConfig& memory_config) {
+    return to_device_mesh_tensor<uint32_t>(tensor, target_device, memory_config);
 }
 
 // ======================================================================================
