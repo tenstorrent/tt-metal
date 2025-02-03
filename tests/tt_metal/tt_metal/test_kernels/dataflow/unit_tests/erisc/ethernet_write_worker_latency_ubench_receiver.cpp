@@ -10,7 +10,7 @@
 #include "debug/assert.h"
 #include "debug/dprint.h"
 
-#define ENABLE_DEBUG 1
+// #define ENABLE_DEBUG 1
 
 struct eth_buffer_slot_sync_t {
     volatile uint32_t bytes_sent;
@@ -39,9 +39,15 @@ static constexpr uint32_t worker_buffer_addr = get_compile_time_arg_val(3);
 static constexpr bool use_transaction_id = get_compile_time_arg_val(4) == 1;
 static constexpr uint32_t num_writes_skip_barrier = get_compile_time_arg_val(5);
 
-FORCE_INLINE bool advance_buffer_slot_ptr(uint32_t curr_ptr) { return (curr_ptr + 1) % NUM_BUFFER_SLOTS; }
+FORCE_INLINE void switch_context_if_debug() {
+#if ENABLE_DEBUG
+    internal_::risc_context_switch();
+#endif
+}
 
-FORCE_INLINE bool get_buffer_slot_trid(uint32_t curr_ptr) { return curr_ptr % MAX_NUM_TRANSACTION_ID + 1; }
+FORCE_INLINE uint32_t advance_buffer_slot_ptr(uint32_t curr_ptr) { return (curr_ptr + 1) % NUM_BUFFER_SLOTS; }
+
+FORCE_INLINE uint32_t get_buffer_slot_trid(uint32_t curr_ptr) { return curr_ptr % MAX_NUM_TRANSACTION_ID + 1; }
 
 FORCE_INLINE bool has_incoming_packet(volatile eth_buffer_slot_sync_t* buffer_slot_sync_addr) {
     return buffer_slot_sync_addr->bytes_sent != 0;
@@ -57,9 +63,7 @@ FORCE_INLINE void ack_complete(volatile eth_buffer_slot_sync_t* buffer_slot_sync
     // wait for txq to be ready, otherwise we'll
     // hit a context switch in the send command
     while (eth_txq_is_busy()) {
-#if ENABLE_DEBUG
-        internal_::risc_context_switch();
-#endif
+        switch_context_if_debug();
     }
 #if ENABLE_DEBUG
     eth_send_bytes_over_channel_payload_only(
@@ -78,9 +82,9 @@ FORCE_INLINE void write_worker(
     volatile eth_buffer_slot_sync_t* buffer_slot_sync_addr,
     uint64_t worker_noc_addr,
     uint32_t message_size,
-    uint32_t curr_tid_to_write) {
+    uint32_t curr_trid_to_write) {
     // write to local
-    noc_async_write_one_packet_with_trid(buffer_slot_addr, worker_noc_addr, message_size, curr_tid_to_write);
+    noc_async_write_one_packet_with_trid(buffer_slot_addr, worker_noc_addr, message_size, curr_trid_to_write);
 
     // reset sync
     buffer_slot_sync_addr->bytes_sent = 0;
@@ -97,11 +101,9 @@ FORCE_INLINE void check_incomping_packet_and_write_worker(
     bool buffer_not_full = next_write_ptr != read_ptr;
 
     if (buffer_not_full && has_incoming_packet(buffer_slot_sync_addrs[write_ptr])) {
-        DPRINT << "write_ptr " << write_ptr << ENDL();
-        uint32_t curr_tid = get_buffer_slot_trid(write_ptr);
-        DPRINT << "curr_tid " << curr_tid << ENDL();
+        uint32_t curr_trid = get_buffer_slot_trid(write_ptr);
         write_worker(
-            buffer_slot_addrs[write_ptr], buffer_slot_sync_addrs[write_ptr], worker_noc_addr, message_size, curr_tid);
+            buffer_slot_addrs[write_ptr], buffer_slot_sync_addrs[write_ptr], worker_noc_addr, message_size, curr_trid);
 
         write_ptr = next_write_ptr;
     }
@@ -113,9 +115,9 @@ FORCE_INLINE void check_write_worker_done_and_send_ack(
     uint32_t write_ptr,
     uint32_t& num_messages_ack) {
     bool buffer_not_empty = read_ptr != write_ptr;
-    uint32_t curr_tid = get_buffer_slot_trid(read_ptr);
+    uint32_t curr_trid = get_buffer_slot_trid(read_ptr);
 
-    if (buffer_not_empty && write_worker_done(curr_tid)) {
+    if (buffer_not_empty && write_worker_done(curr_trid)) {
         ack_complete(buffer_slot_sync_addrs[read_ptr]);
 
         read_ptr = advance_buffer_slot_ptr(read_ptr);
@@ -132,63 +134,27 @@ FORCE_INLINE void receiver_main_loop(
     uint32_t num_messages) {
     uint32_t total_msgs = num_messages * NUM_BUFFER_SLOTS;
 
-    // uint32_t chCount = 0;
-    // uint32_t tidCount = 0;
-
     DPRINT << "MAIN LOOP" << ENDL();
-
-    // Variables to hold the pointer values
-    // uint32_t ch = 0;
-    // uint32_t trid = 0;
-    // uint32_t curr_ch_to_ack = 0;
-    // uint32_t curr_tid_to_write = 0;
 
     uint32_t buffer_read_ptr = 0;
     uint32_t buffer_write_ptr = 0;
 
     uint32_t num_messages_ack = 0;
     while (num_messages_ack < total_msgs) {
-        DPRINT << "num_messages_ack" << num_messages_ack << ENDL();
         // Check if there's an incoming packet for current buffer slot and write to worker if there's new packet
-        // check_incomping_packet_and_write_worker(buffer_slot_addrs, buffer_slot_sync_addrs, buffer_read_ptr,
-        // buffer_write_ptr, worker_noc_addr, message_size);
-        // // Check if the write for trid is done, and ack sender if the current buffer slot is done
-        // check_write_worker_done_and_send_ack(buffer_slot_sync_addrs, buffer_read_ptr, buffer_write_ptr,
-        // num_messages_ack);
+        check_incomping_packet_and_write_worker(
+            buffer_slot_addrs,
+            buffer_slot_sync_addrs,
+            buffer_read_ptr,
+            buffer_write_ptr,
+            worker_noc_addr,
+            message_size);
+        // Check if the write for trid is done, and ack sender if the current buffer slot is done
+        check_write_worker_done_and_send_ack(
+            buffer_slot_sync_addrs, buffer_read_ptr, buffer_write_ptr, num_messages_ack);
 
-        ch = chCount % NUM_BUFFER_SLOTS;                 // range: 0..17
-        trid = (tidCount % MAX_NUM_TRANSACTION_ID) + 1;  // range: 1..9
-
-        // 1) Check if there's an incoming packet for ch
-        if (has_incoming_packet(buffer_slot_sync_addrs[ch])) {
-            curr_tid_to_write = ch % MAX_NUM_TRANSACTION_ID + 1;
-            write_worker(
-                buffer_slot_addrs[ch], buffer_slot_sync_addrs[ch], worker_noc_addr, message_size, curr_tid_to_write);
-
-            DPRINT << "write from ch: " << chCount << " with trid: " << curr_tid_to_write << ENDL();
-
-            // Only increment chCount if we won't exceed tidCount + 17
-            // i.e. chCount < tidCount + 18
-            if (chCount < tidCount + NUM_BUFFER_SLOTS) {
-                chCount++;
-            }
-        }
-
-        // 2) Check if the write for trid is done, make sure trid count is less than ch count so we never check barrier
-        // on the packet hasn't been sent
-        if (write_worker_done(trid) && (tidCount < chCount)) {
-            curr_ch_to_ack = tidCount % NUM_BUFFER_SLOTS;
-            ack_complete(buffer_slot_sync_addrs[curr_ch_to_ack]);
-
-            DPRINT << "ack to ch: " << curr_ch_to_ack << ENDL();
-
-            tidCount++;
-            i++;
-        }
-
-#if ENABLE_DEBUG
-        internal_::risc_context_switch();
-#endif
+        // not called in normal execution mode
+        switch_context_if_debug();
     }
 }
 

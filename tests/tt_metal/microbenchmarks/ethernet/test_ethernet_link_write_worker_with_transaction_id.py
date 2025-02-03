@@ -80,15 +80,15 @@ def profile_results(sample_size, sample_count, channel_count, num_writes_skip_ba
 
 
 @pytest.mark.skipif(is_grayskull(), reason="Unsupported on GS")
-@pytest.mark.parametrize("sample_count", [1])
+@pytest.mark.parametrize("sample_count", [256])
 @pytest.mark.parametrize("channel_count", [16])
 @pytest.mark.parametrize("num_writes_skip_barrier", [1])
-@pytest.mark.parametrize("sample_size", [16])
+@pytest.mark.parametrize("sample_size", [16, 128, 256, 512, 1024, 2048, 4096, 8192])
 def test_erisc_write_worker_latency(sample_count, sample_size, channel_count, num_writes_skip_barrier):
     os.system(f"rm -rf {os.environ['TT_METAL_HOME']}/generated/profiler/.logs/profile_log_device.csv")
 
     ARCH_NAME = os.getenv("ARCH_NAME")
-    cmd = f"\
+    cmd = f"TT_METAL_DEVICE_PROFILER=1 \
             {os.environ['TT_METAL_HOME']}/build/test/tt_metal/perf_microbenchmark/ethernet/test_ethernet_write_worker_latency_no_edm_{ARCH_NAME} \
                 {sample_count} \
                 {sample_size} \

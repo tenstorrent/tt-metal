@@ -10,7 +10,7 @@
 #include "debug/dprint.h"
 #include "debug/debug.h"
 
-#define ENABLE_DEBUG 1
+// #define ENABLE_DEBUG 1
 
 struct eth_buffer_slot_sync_t {
     volatile uint32_t bytes_sent;
@@ -32,19 +32,21 @@ FORCE_INLINE void eth_setup_handshake(std::uint32_t handshake_register_address, 
 
 static constexpr uint32_t NUM_BUFFER_SLOTS = get_compile_time_arg_val(0);
 
+FORCE_INLINE void switch_context_if_debug() {
+#if ENABLE_DEBUG
+    internal_::risc_context_switch();
+#endif
+}
+
 FORCE_INLINE void wait_ack(volatile eth_buffer_slot_sync_t* buffer_slot_sync_addr) {
     while (buffer_slot_sync_addr->bytes_sent != 0) {
-#if ENABLE_DEBUG
-        internal_::risc_context_switch();
-#endif
+        switch_context_if_debug();
     }
 }
 
 FORCE_INLINE void wait_eth_txq() {
     while (eth_txq_is_busy()) {
-#if ENABLE_DEBUG
-        internal_::risc_context_switch();
-#endif
+        switch_context_if_debug();
     }
 }
 
