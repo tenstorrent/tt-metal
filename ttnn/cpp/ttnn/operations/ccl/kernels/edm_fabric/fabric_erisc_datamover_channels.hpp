@@ -392,36 +392,5 @@ struct EdmChannelWorkerInterface {
     ChannelBufferPointer<NUM_BUFFERS> local_rdptr; // also used as completion_ptr
 };
 
-template <uint8_t RECEIVER_NUM_BUFFERS>
-struct OutboundReceiverChannelPointers {
-    ChannelBufferPointer<RECEIVER_NUM_BUFFERS> wrptr;
-    ChannelBufferPointer<RECEIVER_NUM_BUFFERS> ack_ptr;
-    ChannelBufferPointer<RECEIVER_NUM_BUFFERS> completion_ptr;
-
-    bool has_space_for_packet() const {
-        // DPRINT << "EDMS has_space_for_packet: " << (uint32_t)completion_ptr.distance_behind(wrptr) << " < " << (uint32_t)RECEIVER_NUM_BUFFERS << ", completion_ptr: " << (uint32_t)completion_ptr.get_ptr() << ", wrptr: " << (uint32_t)wrptr.get_ptr() << "\n";
-        return completion_ptr.distance_behind(wrptr) < RECEIVER_NUM_BUFFERS;
-    }
-
-    bool has_unacknowledged_eth_packets() const {
-        return ack_ptr.get_ptr() != wrptr.get_ptr();
-    }
-
-    bool has_incomplete_eth_packets() const {
-        return completion_ptr.get_ptr() != wrptr.get_ptr();
-    }
-
-    bool has_unacknowledged_or_incomplete_eth_packets() const {
-        return has_incomplete_eth_packets() || has_unacknowledged_eth_packets();
-    }
-};
-
-template <uint8_t RECEIVER_NUM_BUFFERS>
-struct ReceiverChannelPointers {
-    ChannelBufferPointer<RECEIVER_NUM_BUFFERS> wr_sent_ptr;
-    ChannelBufferPointer<RECEIVER_NUM_BUFFERS> wr_flush_ptr;
-    ChannelBufferPointer<RECEIVER_NUM_BUFFERS> ack_ptr;
-    ChannelBufferPointer<RECEIVER_NUM_BUFFERS> completion_ptr;
-};
 
 }  // namespace tt::fabric

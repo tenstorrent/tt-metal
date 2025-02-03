@@ -16,6 +16,24 @@
 
 namespace tt::fabric {
 
+/*
+ * The WorkerToFabricEdmSender acts as an adapter between the worker and the EDM, it hides details
+ * of the communication between worker and EDM to provide flexibility for the implementation to change
+ * over time without kernel updates. Additionally, details for adapter setup w.r.t runtime args is also hidden.
+ * The main functionality provided is:
+ * - Opening a connection with the EDM
+ * - Closing a connection with the EDM
+ * - Flow control protocol between worker and EDM
+ *
+ * ### Flow Control Protocol:
+ * The flow control protocol is rd/wr ptr based and is implemented as follows (from the worker's perspective):
+ * The adapter has a local write pointer (wrptr) which is used to track the next buffer slot to write to. The adapter
+ * also has a local memory slot that holds the remote read pointer (rdptr) of the EDM. The adapter uses the difference
+ * between these two pointers (where rdptr trails wrptr) to determine if the EDM has space to accept a new packet.
+ *
+ * As the adapter writes into the EDM, it updates the local wrptr. As the EDM reads from its local L1 channel buffer,
+ * it will notify the worker/adapter (here) by updating the worker remote_rdptr to carry the value of the EDM rdptr.
+ */
 struct WorkerToFabricEdmSender {
     static constexpr uint32_t unused_connection_value = 0;
     static constexpr uint32_t open_connection_value = 1;
@@ -97,8 +115,6 @@ struct WorkerToFabricEdmSender {
         last_buffer_index(num_buffers_per_channel - 1),
         edm_noc_x(edm_worker_x),
         edm_noc_y(edm_worker_y) {
-        DPRINT << "num_buffers_per_channel: " << (uint32_t)num_buffers_per_channel << "\n";
-        DPRINT << "last_buffer_index: " << (uint32_t)last_buffer_index << "\n";
         ASSERT(buffer_size_bytes > 0);
     }
 
@@ -112,8 +128,6 @@ struct WorkerToFabricEdmSender {
     }
 
     FORCE_INLINE void wait_for_empty_write_slot() const {
-        DPRINT << "Wait for write slot @ " << (uint32_t)this->from_remote_buffer_slot_rdptr_ptr << "\n";
-        // noc_semaphore_wait(this->from_remote_buffer_slot_rdptr_ptr, 1);
         while (!this->edm_has_space_for_packet());
     }
 
@@ -156,14 +170,11 @@ struct WorkerToFabricEdmSender {
     static constexpr size_t edm_sender_channel_field_stride_bytes = 16;
 
     void open() {
-        const auto dest_noc_addr_coord_only =
-            // get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_slot_wrptr_addr) & ~(uint64_t)NOC_COORDINATE_MASK;
-            get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0);
+        const auto dest_noc_addr_coord_only = get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0);
 
         const uint64_t remote_buffer_index_addr = dest_noc_addr_coord_only | edm_buffer_index_addr;
         ASSERT(remote_buffer_index_addr > 0);
         noc_async_read(remote_buffer_index_addr, reinterpret_cast<size_t>(this->buffer_slot_wrptr_ptr), sizeof(uint32_t));
-        DPRINT << "Reading buffer_slot_wrptr_ptr frmo: " << (uint64_t)remote_buffer_index_addr << "\n";
 
         tt::fabric::EDMChannelWorkerLocationInfo* worker_location_info_ptr = reinterpret_cast<tt::fabric::EDMChannelWorkerLocationInfo*>(edm_worker_location_info_addr);
         const uint64_t edm_rdptr_addr = dest_noc_addr_coord_only | reinterpret_cast<size_t>(edm_worker_location_info_addr + offsetof(tt::fabric::EDMChannelWorkerLocationInfo, edm_rdptr));
@@ -179,7 +190,6 @@ struct WorkerToFabricEdmSender {
         const uint64_t edm_connection_handshake_noc_addr = dest_noc_addr_coord_only | edm_connection_handshake_l1_addr;
         noc_inline_dw_write(edm_connection_handshake_noc_addr, open_connection_value);
         noc_async_read_barrier();
-        DPRINT << "buffer_slot_wrptr_ptr: " << (uint32_t)buffer_slot_wrptr_ptr << ", *buffer_slot_wrptr_ptr: " << (uint32_t)*this->buffer_slot_wrptr_ptr << "\n";
         ASSERT(*this->buffer_slot_wrptr_ptr < 20);
     }
 
@@ -237,7 +247,6 @@ private:
         uint64_t const noc_sem_addr = get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_slot_wrptr_addr);
 
         noc_inline_dw_write(noc_sem_addr, *this->buffer_slot_wrptr_ptr);
-        DPRINT << "\tSEMINC TO @ " << (uint64_t)noc_sem_addr << " with wrptr val=" << (uint32_t)*this->buffer_slot_wrptr_ptr << "\n";
     }
 
     FORCE_INLINE void advance_buffer_slot_wrptr() {
@@ -245,7 +254,6 @@ private:
         uint8_t wrptr = *this->buffer_slot_wrptr_ptr;
         *this->buffer_slot_wrptr_ptr =
             !(wrptr == ((this->num_buffers_per_channel * 2) - 1)) ? wrptr + 1 : 0;
-        DPRINT << "advanced local wrptr to " << (uint32_t)*this->buffer_slot_wrptr_ptr << "\n";
     }
 
     FORCE_INLINE uint8_t get_buffer_slot_index() const {
@@ -256,14 +264,11 @@ private:
 
     template <ttnn::ccl::EDM_IO_BLOCKING_MODE blocking_mode>
     FORCE_INLINE void send_packet_header_and_notify_fabric(uint32_t source_address) {
-        // this->clear_flow_control_semaphore();
 
         uint64_t buffer_address = get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_addr) +
                                   (this->get_buffer_slot_index() * (this->buffer_size_bytes + sizeof(eth_channel_sync_t)));
 
         send_chunk_from_address<blocking_mode>(source_address, 1, sizeof(tt::fabric::PacketHeader), buffer_address);
-        // auto const noc_sem_addr = get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_slot_wrptr_addr);
-        // noc_semaphore_inc(noc_sem_addr, 1);
         this->advance_buffer_slot_wrptr();
         this->update_edm_buffer_slot_wrptr();
     }
@@ -278,18 +283,13 @@ private:
 
     template <ttnn::ccl::EDM_IO_BLOCKING_MODE blocking_mode>
     FORCE_INLINE void send_payload_from_address_impl(uint32_t source_address, size_t size_bytes) {
-        // this->clear_flow_control_semaphore();
         uint64_t buffer_address = get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_addr) +
                                   (this->get_buffer_slot_index() * (this->buffer_size_bytes + sizeof(eth_channel_sync_t)));
 
         ASSERT(size_bytes <= this->buffer_size_bytes);
-
-        DPRINT << "SND PKT TO @ " << (uint64_t)buffer_address << "\n";
         ASSERT(tt::fabric::is_valid(*const_cast<tt::fabric::PacketHeader*>(
             reinterpret_cast<volatile tt::fabric::PacketHeader*>(source_address))));
         send_chunk_from_address<blocking_mode>(source_address, 1, size_bytes, buffer_address);
-        // auto const noc_sem_addr = get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_slot_wrptr_addr);
-        // DPRINT << "\tSEMINC TO @ " << (uint64_t)noc_sem_addr << "\n";
 
         this->advance_buffer_slot_wrptr();
         this->update_edm_buffer_slot_wrptr();
@@ -297,12 +297,10 @@ private:
 
     template <ttnn::ccl::EDM_IO_BLOCKING_MODE blocking_mode>
     FORCE_INLINE void send_payload_impl(uint32_t cb_id, uint32_t num_pages, uint32_t page_size) {
-        // this->clear_flow_control_semaphore();
         uint64_t buffer_address = get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_addr) +
                                   (this->get_buffer_slot_index() * (this->buffer_size_bytes + sizeof(eth_channel_sync_t)));
         ASSERT(num_pages * page_size <= this->buffer_size_bytes);
         send_chunk<blocking_mode>(cb_id, num_pages, page_size, buffer_address);
-        // noc_semaphore_inc(get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_slot_wrptr_addr), 1);
         this->advance_buffer_slot_wrptr();
         this->update_edm_buffer_slot_wrptr();
     }

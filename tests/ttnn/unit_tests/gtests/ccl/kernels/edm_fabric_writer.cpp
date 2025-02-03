@@ -154,7 +154,6 @@ void kernel_main() {
                     packet_payload_size_bytes + sizeof(tt::fabric::PacketHeader),
                     static_cast<uint8_t>(dest_noc_x),
                     static_cast<uint8_t>(dest_noc_y)});
-                // auto &fwd_conn = fabric_connection.get_forward_connection();
                 DPRINT << "Wait EDMF\n";
                 {
                     DeviceZoneScopedN("WR-FWD-WAIT");
@@ -174,7 +173,6 @@ void kernel_main() {
                     packet_payload_size_bytes + sizeof(tt::fabric::PacketHeader),
                     static_cast<uint8_t>(dest_noc_x),
                     static_cast<uint8_t>(dest_noc_y)});
-                // auto &bwd_conn = fabric_connection.get_backward_connection();
                 DPRINT << "Wait EDMR\n";
                 {
                     DeviceZoneScopedN("WR-BWD-WAIT");
@@ -187,7 +185,6 @@ void kernel_main() {
                     (uint32_t)mcast_bwd_packet_header, sizeof(tt::fabric::PacketHeader));
             }
             {
-                // DeviceZoneScopedN("WR-FLUSH");
                 noc_async_writes_flushed();
             }
         }
@@ -224,5 +221,5 @@ void kernel_main() {
         DeviceZoneScopedN("WR-CLOSE");
         fabric_connection.close();
     }
-    // noc_async_write_barrier();
+    noc_async_write_barrier();
 }
