@@ -223,6 +223,9 @@ int main(int argc, char** argv) {
         eth_sender_core_iter++;
     } while (device_id != 1);
 
+    log_info("eth_sender_core: {}", eth_sender_core);
+    log_info("eth_receiver_core: {}", eth_receiver_core);
+
     TT_ASSERT(device_id == 1);
     const auto& device_1 = test_fixture.devices_.at(device_id);
     // worker

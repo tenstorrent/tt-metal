@@ -10,7 +10,15 @@
 #include "debug/assert.h"
 #include "debug/dprint.h"
 
-// #define ENABLE_DEBUG 1
+#define ENABLE_DEBUG 1
+
+struct eth_buffer_slot_sync_t {
+    volatile uint32_t bytes_sent;
+    volatile uint32_t receiver_ack;
+    volatile uint32_t src_id;
+
+    uint32_t reserved_2;
+};
 
 FORCE_INLINE void eth_setup_handshake(std::uint32_t handshake_register_address, bool is_sender) {
     if (is_sender) {
@@ -22,143 +30,29 @@ FORCE_INLINE void eth_setup_handshake(std::uint32_t handshake_register_address, 
     }
 }
 
-// static constexpr uint32_t MAX_TRANSACTION_ID = 15;
-// static constexpr uint32_t NUM_CHANNELS = get_compile_time_arg_val(0);
-// static constexpr uint32_t worker_noc_x = get_compile_time_arg_val(1);
-// static constexpr uint32_t worker_noc_y = get_compile_time_arg_val(2);
-// static constexpr uint32_t worker_buffer_addr = get_compile_time_arg_val(3);
-// static constexpr bool use_transaction_id = get_compile_time_arg_val(4) == 1;
-// static constexpr uint32_t num_writes_skip_barrier = get_compile_time_arg_val(5);
-
-// template <bool sending_tails>
-// FORCE_INLINE void run_loop_iteration(
-//     const std::array<uint32_t, NUM_CHANNELS>& channel_addrs,
-//     const std::array<volatile eth_channel_sync_t*, NUM_CHANNELS>& channel_sync_addrs,
-//     uint64_t worker_noc_addr,
-//     uint32_t message_size) {
-//     if constexpr (!sending_tails) {
-//         static uint32_t writes_count;
-
-//         for (uint32_t i = 0; i < NUM_CHANNELS; i++) {
-//             if constexpr (use_transaction_id) {
-//                 uint32_t curr_transaction_id = i % MAX_TRANSACTION_ID + 1;
-
-//                 if (writes_count < num_writes_skip_barrier) {
-//                     // wait for sender data arrive
-//                     while (channel_sync_addrs[i]->bytes_sent == 0) {
-//                     }
-
-//                     noc_async_write_with_trid(channel_addrs[i], worker_noc_addr, message_size, curr_transaction_id);
-
-//                     channel_sync_addrs[i]->bytes_sent = 0;
-
-//                     DPRINT << "write CH: " << i << " tid: " << curr_transaction_id << ENDL();
-
-//                     // not using any barrier
-//                     writes_count++;
-//                 } else {
-//                     uint32_t prev_channel_id_to_ack = (NUM_CHANNELS - num_writes_skip_barrier + i) % NUM_CHANNELS;
-//                     uint32_t prev_transaction_id = prev_channel_id_to_ack % MAX_TRANSACTION_ID + 1;
-
-//                     // barrier on previous data
-//                     noc_async_write_barrier_with_trid(prev_transaction_id);
-
-//                     channel_sync_addrs[prev_channel_id_to_ack]->bytes_sent = 0;
-
-//                     // wait for txq to be ready, otherwise we'll
-//                     // hit a context switch in the send command
-//                     while (eth_txq_is_busy()) {
-//                     }
-//                     eth_send_bytes_over_channel_payload_only_unsafe(
-//                         reinterpret_cast<uint32_t>(channel_sync_addrs[prev_channel_id_to_ack]),
-//                         reinterpret_cast<uint32_t>(channel_sync_addrs[prev_channel_id_to_ack]),
-//                         sizeof(eth_channel_sync_t),
-//                         sizeof(eth_channel_sync_t),
-//                         sizeof(eth_channel_sync_t) >> 4);
-
-//                     DPRINT << "ack CH: " << prev_channel_id_to_ack << ENDL();
-//                     DPRINT << "wait tid: " << prev_transaction_id << ENDL();
-
-//                     // wait only after the ack is sent for the previous packet
-//                     while (channel_sync_addrs[i]->bytes_sent == 0) {
-//                     }
-
-//                     noc_async_write_with_trid(channel_addrs[i], worker_noc_addr, message_size, curr_transaction_id);
-
-//                     channel_sync_addrs[i]->bytes_sent = 0;
-
-//                     DPRINT << "write CH: " << i << " tid: " << curr_transaction_id << ENDL();
-//                 }
-//             } else {
-//                 // wait for sender data arrive
-//                 while (channel_sync_addrs[i]->bytes_sent == 0) {
-//                 }
-
-//                 channel_sync_addrs[i]->bytes_sent = 0;
-
-//                 // for current channel data, send it to worker core and perform barrier
-//                 noc_async_write(channel_addrs[i], worker_noc_addr, message_size);
-//                 noc_async_write_barrier();
-
-//                 // wait for txq to be ready, otherwise we'll
-//                 // hit a context switch in the send command
-//                 while (eth_txq_is_busy()) {
-//                 }
-//                 eth_send_bytes_over_channel_payload_only_unsafe(
-//                     reinterpret_cast<uint32_t>(channel_sync_addrs[i]),
-//                     reinterpret_cast<uint32_t>(channel_sync_addrs[i]),
-//                     sizeof(eth_channel_sync_t),
-//                     sizeof(eth_channel_sync_t),
-//                     sizeof(eth_channel_sync_t) >> 4);
-//             }
-//         }
-//     } else {
-//         // sending tails
-//         for (uint32_t i = 0; i < num_writes_skip_barrier; i++) {
-//             // barrier on previous data
-//             uint32_t prev_channel_id_to_ack = NUM_CHANNELS - num_writes_skip_barrier + i;
-//             uint32_t prev_transaction_id = prev_channel_id_to_ack % MAX_TRANSACTION_ID + 1;
-
-//             noc_async_write_barrier_with_trid(prev_transaction_id);
-
-//             DPRINT << "tails wait tid: " << prev_transaction_id << ENDL();
-//             DPRINT << "tails ack CH: " << prev_channel_id_to_ack << ENDL();
-
-//             channel_sync_addrs[prev_channel_id_to_ack]->bytes_sent = 0;
-
-//             // wait for txq to be ready, otherwise we'll
-//             // hit a context switch in the send command
-//             while (eth_txq_is_busy()) {
-//             }
-//             eth_send_bytes_over_channel_payload_only_unsafe(
-//                 reinterpret_cast<uint32_t>(channel_sync_addrs[prev_channel_id_to_ack]),
-//                 reinterpret_cast<uint32_t>(channel_sync_addrs[prev_channel_id_to_ack]),
-//                 sizeof(eth_channel_sync_t),
-//                 sizeof(eth_channel_sync_t),
-//                 sizeof(eth_channel_sync_t) >> 4);
-//         }
-//     }
-// }
-
-static constexpr uint32_t NUM_CHANNELS = get_compile_time_arg_val(0);
+static constexpr uint32_t NUM_BUFFER_SLOTS = get_compile_time_arg_val(0);
 static constexpr uint32_t MAX_NUM_TRANSACTION_ID =
-    NUM_CHANNELS / 2;  // the algorithm only works for NUM_CHANNELS divisible by MAX_NUM_TRANSACTION_ID
+    NUM_BUFFER_SLOTS / 2;  // the algorithm only works for NUM_BUFFER_SLOTS divisible by MAX_NUM_TRANSACTION_ID
 static constexpr uint32_t worker_noc_x = get_compile_time_arg_val(1);
 static constexpr uint32_t worker_noc_y = get_compile_time_arg_val(2);
 static constexpr uint32_t worker_buffer_addr = get_compile_time_arg_val(3);
 static constexpr bool use_transaction_id = get_compile_time_arg_val(4) == 1;
 static constexpr uint32_t num_writes_skip_barrier = get_compile_time_arg_val(5);
 
-FORCE_INLINE bool has_incoming_packet(volatile eth_channel_sync_t* channel_sync_addr) {
-    return channel_sync_addr->bytes_sent != 0;
+FORCE_INLINE bool advance_buffer_slot_ptr(uint32_t curr_ptr) { return (curr_ptr + 1) % NUM_BUFFER_SLOTS; }
+
+FORCE_INLINE bool get_buffer_slot_trid(uint32_t curr_ptr) { return curr_ptr % MAX_NUM_TRANSACTION_ID + 1; }
+
+FORCE_INLINE bool has_incoming_packet(volatile eth_buffer_slot_sync_t* buffer_slot_sync_addr) {
+    return buffer_slot_sync_addr->bytes_sent != 0;
 }
 
-FORCE_INLINE bool write_done(uint32_t tid) {
-    return ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc_index, tid);
+FORCE_INLINE bool write_worker_done(uint32_t trid) {
+    return ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc_index, trid);
 }
 
-FORCE_INLINE void ack_complete(volatile eth_channel_sync_t* channel_sync_addr) {
-    channel_sync_addr->bytes_sent = 0;
+FORCE_INLINE void ack_complete(volatile eth_buffer_slot_sync_t* buffer_slot_sync_addr) {
+    buffer_slot_sync_addr->bytes_sent = 0;
 
     // wait for txq to be ready, otherwise we'll
     // hit a context switch in the send command
@@ -172,95 +66,124 @@ FORCE_INLINE void ack_complete(volatile eth_channel_sync_t* channel_sync_addr) {
 #else
     eth_send_bytes_over_channel_payload_only_unsafe(
 #endif
-        reinterpret_cast<uint32_t>(channel_sync_addr),
-        reinterpret_cast<uint32_t>(channel_sync_addr),
-        sizeof(eth_channel_sync_t),
-        sizeof(eth_channel_sync_t),
-        sizeof(eth_channel_sync_t) >> 4);
+        reinterpret_cast<uint32_t>(buffer_slot_sync_addr),
+        reinterpret_cast<uint32_t>(buffer_slot_sync_addr),
+        sizeof(eth_buffer_slot_sync_t),
+        sizeof(eth_buffer_slot_sync_t),
+        sizeof(eth_buffer_slot_sync_t) >> 4);
 }
 
-FORCE_INLINE void write_to_worker(
-    uint32_t channel_addr,
-    volatile eth_channel_sync_t* channel_sync_addr,
+FORCE_INLINE void write_worker(
+    uint32_t buffer_slot_addr,
+    volatile eth_buffer_slot_sync_t* buffer_slot_sync_addr,
     uint64_t worker_noc_addr,
     uint32_t message_size,
     uint32_t curr_tid_to_write) {
     // write to local
-    noc_async_write_one_packet_with_trid(channel_addr, worker_noc_addr, message_size, curr_tid_to_write);
+    noc_async_write_one_packet_with_trid(buffer_slot_addr, worker_noc_addr, message_size, curr_tid_to_write);
 
     // reset sync
-    channel_sync_addr->bytes_sent = 0;
+    buffer_slot_sync_addr->bytes_sent = 0;
 }
 
-FORCE_INLINE void process_messages(
-    const std::array<uint32_t, NUM_CHANNELS>& channel_addrs,
-    const std::array<volatile eth_channel_sync_t*, NUM_CHANNELS>& channel_sync_addrs,
+FORCE_INLINE void check_incomping_packet_and_write_worker(
+    const std::array<uint32_t, NUM_BUFFER_SLOTS>& buffer_slot_addrs,
+    const std::array<volatile eth_buffer_slot_sync_t*, NUM_BUFFER_SLOTS>& buffer_slot_sync_addrs,
+    uint32_t read_ptr,
+    uint32_t& write_ptr,
+    uint64_t worker_noc_addr,
+    uint32_t message_size) {
+    uint32_t next_write_ptr = advance_buffer_slot_ptr(write_ptr);
+    bool buffer_not_full = next_write_ptr != read_ptr;
+
+    if (buffer_not_full && has_incoming_packet(buffer_slot_sync_addrs[write_ptr])) {
+        DPRINT << "write_ptr " << write_ptr << ENDL();
+        uint32_t curr_tid = get_buffer_slot_trid(write_ptr);
+        DPRINT << "curr_tid " << curr_tid << ENDL();
+        write_worker(
+            buffer_slot_addrs[write_ptr], buffer_slot_sync_addrs[write_ptr], worker_noc_addr, message_size, curr_tid);
+
+        write_ptr = next_write_ptr;
+    }
+}
+
+FORCE_INLINE void check_write_worker_done_and_send_ack(
+    const std::array<volatile eth_buffer_slot_sync_t*, NUM_BUFFER_SLOTS>& buffer_slot_sync_addrs,
+    uint32_t& read_ptr,
+    uint32_t write_ptr,
+    uint32_t& num_messages_ack) {
+    bool buffer_not_empty = read_ptr != write_ptr;
+    uint32_t curr_tid = get_buffer_slot_trid(read_ptr);
+
+    if (buffer_not_empty && write_worker_done(curr_tid)) {
+        ack_complete(buffer_slot_sync_addrs[read_ptr]);
+
+        read_ptr = advance_buffer_slot_ptr(read_ptr);
+
+        num_messages_ack++;
+    }
+}
+
+FORCE_INLINE void receiver_main_loop(
+    const std::array<uint32_t, NUM_BUFFER_SLOTS>& buffer_slot_addrs,
+    const std::array<volatile eth_buffer_slot_sync_t*, NUM_BUFFER_SLOTS>& buffer_slot_sync_addrs,
     uint64_t worker_noc_addr,
     uint32_t message_size,
     uint32_t num_messages) {
-    uint32_t total_msgs = num_messages * NUM_CHANNELS;
+    uint32_t total_msgs = num_messages * NUM_BUFFER_SLOTS;
 
-    uint32_t chCount = 0;
-    uint32_t tidCount = 0;
+    // uint32_t chCount = 0;
+    // uint32_t tidCount = 0;
 
     DPRINT << "MAIN LOOP" << ENDL();
 
     // Variables to hold the pointer values
-    uint32_t ch = 0;
-    uint32_t tid = 0;
-    uint32_t curr_ch_to_ack = 0;
-    uint32_t curr_tid_to_write = 0;
+    // uint32_t ch = 0;
+    // uint32_t trid = 0;
+    // uint32_t curr_ch_to_ack = 0;
+    // uint32_t curr_tid_to_write = 0;
 
-    uint32_t i = 0;
-    while (i < total_msgs) {
-        ch = chCount % NUM_CHANNELS;                    // range: 0..17
-        tid = (tidCount % MAX_NUM_TRANSACTION_ID) + 1;  // range: 1..9
+    uint32_t buffer_read_ptr = 0;
+    uint32_t buffer_write_ptr = 0;
+
+    uint32_t num_messages_ack = 0;
+    while (num_messages_ack < total_msgs) {
+        DPRINT << "num_messages_ack" << num_messages_ack << ENDL();
+        // Check if there's an incoming packet for current buffer slot and write to worker if there's new packet
+        // check_incomping_packet_and_write_worker(buffer_slot_addrs, buffer_slot_sync_addrs, buffer_read_ptr,
+        // buffer_write_ptr, worker_noc_addr, message_size);
+        // // Check if the write for trid is done, and ack sender if the current buffer slot is done
+        // check_write_worker_done_and_send_ack(buffer_slot_sync_addrs, buffer_read_ptr, buffer_write_ptr,
+        // num_messages_ack);
+
+        ch = chCount % NUM_BUFFER_SLOTS;                 // range: 0..17
+        trid = (tidCount % MAX_NUM_TRANSACTION_ID) + 1;  // range: 1..9
 
         // 1) Check if there's an incoming packet for ch
-        if (has_incoming_packet(channel_sync_addrs[ch])) {
+        if (has_incoming_packet(buffer_slot_sync_addrs[ch])) {
             curr_tid_to_write = ch % MAX_NUM_TRANSACTION_ID + 1;
-            write_to_worker(
-                channel_addrs[ch], channel_sync_addrs[ch], worker_noc_addr, message_size, curr_tid_to_write);
+            write_worker(
+                buffer_slot_addrs[ch], buffer_slot_sync_addrs[ch], worker_noc_addr, message_size, curr_tid_to_write);
 
-            DPRINT << "write from ch: " << chCount << " with tid: " << curr_tid_to_write << ENDL();
+            DPRINT << "write from ch: " << chCount << " with trid: " << curr_tid_to_write << ENDL();
 
             // Only increment chCount if we won't exceed tidCount + 17
             // i.e. chCount < tidCount + 18
-            if (chCount < tidCount + NUM_CHANNELS) {
+            if (chCount < tidCount + NUM_BUFFER_SLOTS) {
                 chCount++;
             }
+        }
 
+        // 2) Check if the write for trid is done, make sure trid count is less than ch count so we never check barrier
+        // on the packet hasn't been sent
+        if (write_worker_done(trid) && (tidCount < chCount)) {
+            curr_ch_to_ack = tidCount % NUM_BUFFER_SLOTS;
+            ack_complete(buffer_slot_sync_addrs[curr_ch_to_ack]);
+
+            DPRINT << "ack to ch: " << curr_ch_to_ack << ENDL();
+
+            tidCount++;
             i++;
-        }
-
-        // 2) Check if the write for tid is done, make sure tid count is less than ch count so we never check barrier on
-        // the packet hasn't been sent
-        if (write_done(tid) && (tidCount < chCount)) {
-            curr_ch_to_ack = tidCount % NUM_CHANNELS;
-            ack_complete(channel_sync_addrs[curr_ch_to_ack]);
-
-            DPRINT << "ack to ch: " << curr_ch_to_ack << ENDL();
-
-            tidCount++;
-        }
-
-#if ENABLE_DEBUG
-        internal_::risc_context_switch();
-#endif
-    }
-
-    DPRINT << "ACK TAIL" << ENDL();
-
-    // wait for some tail writes to finish so we can send ack to sender
-    while (tidCount < chCount) {
-        tid = (tidCount % MAX_NUM_TRANSACTION_ID) + 1;
-        if (write_done(tid)) {
-            curr_ch_to_ack = tidCount % NUM_CHANNELS;
-            ack_complete(channel_sync_addrs[curr_ch_to_ack]);
-
-            DPRINT << "ack to ch: " << curr_ch_to_ack << ENDL();
-
-            tidCount++;
         }
 
 #if ENABLE_DEBUG
@@ -275,19 +198,19 @@ void kernel_main() {
     const uint32_t num_messages = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t message_size = get_arg_val<uint32_t>(arg_idx++);
 
-    ASSERT(num_writes_skip_barrier <= NUM_CHANNELS);
+    ASSERT(num_writes_skip_barrier <= NUM_BUFFER_SLOTS);
 
-    std::array<uint32_t, NUM_CHANNELS> channel_addrs;
-    std::array<volatile eth_channel_sync_t*, NUM_CHANNELS> channel_sync_addrs;
+    std::array<uint32_t, NUM_BUFFER_SLOTS> buffer_slot_addrs;
+    std::array<volatile eth_buffer_slot_sync_t*, NUM_BUFFER_SLOTS> buffer_slot_sync_addrs;
     {
-        uint32_t channel_addr = handshake_addr + sizeof(eth_channel_sync_t);
-        for (uint8_t i = 0; i < NUM_CHANNELS; i++) {
-            channel_addrs[i] = channel_addr;
-            channel_addr += message_size;
-            channel_sync_addrs[i] = reinterpret_cast<volatile eth_channel_sync_t*>(channel_addr);
-            channel_sync_addrs[i]->bytes_sent = 0;
-            channel_sync_addrs[i]->receiver_ack = 0;
-            channel_addr += sizeof(eth_channel_sync_t);
+        uint32_t buffer_slot_addr = handshake_addr + sizeof(eth_buffer_slot_sync_t);
+        for (uint8_t i = 0; i < NUM_BUFFER_SLOTS; i++) {
+            buffer_slot_addrs[i] = buffer_slot_addr;
+            buffer_slot_addr += message_size;
+            buffer_slot_sync_addrs[i] = reinterpret_cast<volatile eth_buffer_slot_sync_t*>(buffer_slot_addr);
+            buffer_slot_sync_addrs[i]->bytes_sent = 0;
+            buffer_slot_sync_addrs[i]->receiver_ack = 0;
+            buffer_slot_addr += sizeof(eth_buffer_slot_sync_t);
         }
     }
 
@@ -303,13 +226,6 @@ void kernel_main() {
 
     {
         DeviceZoneScopedN("MAIN-TEST-BODY");
-        process_messages(channel_addrs, channel_sync_addrs, worker_noc_addr, message_size, num_messages);
-        // for (uint32_t i = 0; i < num_messages; i++) {
-        //     run_loop_iteration<false>(channel_addrs, channel_sync_addrs, worker_noc_addr, message_size);
-        // }
-
-        // if constexpr (use_transaction_id) {
-        //     run_loop_iteration<true>(channel_addrs, channel_sync_addrs, worker_noc_addr, message_size);
-        // }
+        receiver_main_loop(buffer_slot_addrs, buffer_slot_sync_addrs, worker_noc_addr, message_size, num_messages);
     }
 }

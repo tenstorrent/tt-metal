@@ -10,7 +10,15 @@
 #include "debug/dprint.h"
 #include "debug/debug.h"
 
-// #define ENABLE_DEBUG 1
+#define ENABLE_DEBUG 1
+
+struct eth_buffer_slot_sync_t {
+    volatile uint32_t bytes_sent;
+    volatile uint32_t receiver_ack;
+    volatile uint32_t src_id;
+
+    uint32_t reserved_2;
+};
 
 FORCE_INLINE void eth_setup_handshake(std::uint32_t handshake_register_address, bool is_sender) {
     if (is_sender) {
@@ -22,10 +30,10 @@ FORCE_INLINE void eth_setup_handshake(std::uint32_t handshake_register_address, 
     }
 }
 
-static constexpr uint32_t NUM_CHANNELS = get_compile_time_arg_val(0);
+static constexpr uint32_t NUM_BUFFER_SLOTS = get_compile_time_arg_val(0);
 
-FORCE_INLINE void wait_ack(volatile eth_channel_sync_t* channel_sync_addr) {
-    while (channel_sync_addr->bytes_sent != 0) {
+FORCE_INLINE void wait_ack(volatile eth_buffer_slot_sync_t* buffer_slot_sync_addr) {
+    while (buffer_slot_sync_addr->bytes_sent != 0) {
 #if ENABLE_DEBUG
         internal_::risc_context_switch();
 #endif
@@ -42,17 +50,17 @@ FORCE_INLINE void wait_eth_txq() {
 
 template <bool waiting_tails>
 FORCE_INLINE void run_loop_iteration(
-    const std::array<uint32_t, NUM_CHANNELS>& channel_addrs,
-    const std::array<volatile eth_channel_sync_t*, NUM_CHANNELS>& channel_sync_addrs,
+    const std::array<uint32_t, NUM_BUFFER_SLOTS>& buffer_slot_addrs,
+    const std::array<volatile eth_buffer_slot_sync_t*, NUM_BUFFER_SLOTS>& buffer_slot_sync_addrs,
     uint32_t full_payload_size,
     uint32_t full_payload_size_eth_words) {
     if constexpr (!waiting_tails) {
         // send packet
-        for (uint32_t i = 0; i < NUM_CHANNELS; i++) {
+        for (uint32_t i = 0; i < NUM_BUFFER_SLOTS; i++) {
             // wait for receiver ack compelete
-            wait_ack(channel_sync_addrs[i]);
+            wait_ack(buffer_slot_sync_addrs[i]);
 
-            channel_sync_addrs[i]->bytes_sent = 1;
+            buffer_slot_sync_addrs[i]->bytes_sent = 1;
 
             wait_eth_txq();
 
@@ -61,13 +69,17 @@ FORCE_INLINE void run_loop_iteration(
 #else
             eth_send_bytes_over_channel_payload_only_unsafe(
 #endif
-                channel_addrs[i], channel_addrs[i], full_payload_size, full_payload_size, full_payload_size_eth_words);
+                buffer_slot_addrs[i],
+                buffer_slot_addrs[i],
+                full_payload_size,
+                full_payload_size,
+                full_payload_size_eth_words);
         }
     } else {
         // waiting tails
-        for (uint32_t i = 0; i < NUM_CHANNELS; i++) {
+        for (uint32_t i = 0; i < NUM_BUFFER_SLOTS; i++) {
             // wait for receiver ack compelete
-            wait_ack(channel_sync_addrs[i]);
+            wait_ack(buffer_slot_sync_addrs[i]);
         }
     }
 }
@@ -81,29 +93,29 @@ void kernel_main() {
 
     const uint32_t message_size_eth_words = message_size >> 4;
 
-    const uint32_t full_payload_size = message_size + sizeof(eth_channel_sync_t);
+    const uint32_t full_payload_size = message_size + sizeof(eth_buffer_slot_sync_t);
     const uint32_t full_payload_size_eth_words = full_payload_size >> 4;
 
-    std::array<uint32_t, NUM_CHANNELS> channel_addrs;
-    std::array<volatile eth_channel_sync_t*, NUM_CHANNELS> channel_sync_addrs;
+    std::array<uint32_t, NUM_BUFFER_SLOTS> buffer_slot_addrs;
+    std::array<volatile eth_buffer_slot_sync_t*, NUM_BUFFER_SLOTS> buffer_slot_sync_addrs;
     {
-        uint32_t channel_addr = handshake_addr + sizeof(eth_channel_sync_t);
-        for (uint8_t i = 0; i < NUM_CHANNELS; i++) {
-            channel_addrs[i] = channel_addr;
+        uint32_t channel_addr = handshake_addr + sizeof(eth_buffer_slot_sync_t);
+        for (uint8_t i = 0; i < NUM_BUFFER_SLOTS; i++) {
+            buffer_slot_addrs[i] = channel_addr;
             channel_addr += message_size;
-            channel_sync_addrs[i] = reinterpret_cast<volatile eth_channel_sync_t*>(channel_addr);
-            channel_addr += sizeof(eth_channel_sync_t);
+            buffer_slot_sync_addrs[i] = reinterpret_cast<volatile eth_buffer_slot_sync_t*>(channel_addr);
+            channel_addr += sizeof(eth_buffer_slot_sync_t);
         }
     }
 
     // reset bytes_sent to 0s so first iter it won't block
-    for (uint32_t i = 0; i < NUM_CHANNELS; i++) {
-        channel_sync_addrs[i]->bytes_sent = 0;
+    for (uint32_t i = 0; i < NUM_BUFFER_SLOTS; i++) {
+        buffer_slot_sync_addrs[i]->bytes_sent = 0;
     }
 
     // assemble a packet filled with values
-    for (uint32_t i = 0; i < NUM_CHANNELS; i++) {
-        tt_l1_ptr uint8_t* ptr = reinterpret_cast<tt_l1_ptr uint8_t*>(channel_addrs[i]);
+    for (uint32_t i = 0; i < NUM_BUFFER_SLOTS; i++) {
+        tt_l1_ptr uint8_t* ptr = reinterpret_cast<tt_l1_ptr uint8_t*>(buffer_slot_addrs[i]);
         for (uint32_t j = 0; j < message_size; j++) {
             ptr[j] = j;
         }
@@ -119,8 +131,9 @@ void kernel_main() {
         DeviceZoneScopedN("MAIN-TEST-BODY");
         for (uint32_t i = 0; i < num_messages; i++) {
             run_loop_iteration<false>(
-                channel_addrs, channel_sync_addrs, full_payload_size, full_payload_size_eth_words);
+                buffer_slot_addrs, buffer_slot_sync_addrs, full_payload_size, full_payload_size_eth_words);
         }
-        run_loop_iteration<true>(channel_addrs, channel_sync_addrs, full_payload_size, full_payload_size_eth_words);
+        run_loop_iteration<true>(
+            buffer_slot_addrs, buffer_slot_sync_addrs, full_payload_size, full_payload_size_eth_words);
     }
 }
