@@ -66,9 +66,9 @@ static Tensor index_trilu(
                           logical_shape,
                           TensorLayout::fromPaddedShape(
                               data_type, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}, logical_shape, padded_shape)))
-                      .to(layout);
+                      .to_layout(layout);
     if (device != nullptr) {
-        output = output.to(device, output_mem_config);
+        output = output.to_device(device, output_mem_config);
     }
     return output;
 }
@@ -108,9 +108,9 @@ static Tensor index_width(
                           logical_shape,
                           TensorLayout::fromPaddedShape(
                               data_type, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}, logical_shape, padded_shape)))
-                      .to(layout);
+                      .to_layout(layout);
     if (device != nullptr) {
-        output = output.to(device, output_mem_config);
+        output = output.to_device(device, output_mem_config);
     }
     return output;
 }
@@ -150,9 +150,9 @@ static Tensor index_height(
                           logical_shape,
                           TensorLayout::fromPaddedShape(
                               data_type, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}, logical_shape, padded_shape)))
-                      .to(layout);
+                      .to_layout(layout);
     if (device != nullptr) {
-        output = output.to(device, output_mem_config);
+        output = output.to_device(device, output_mem_config);
     }
     return output;
 }
@@ -191,9 +191,9 @@ static Tensor index_all(
                           logical_shape,
                           TensorLayout::fromPaddedShape(
                               data_type, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}, logical_shape, padded_shape)))
-                      .to(layout);
+                      .to_layout(layout);
     if (device != nullptr) {
-        output = output.to(device, output_mem_config);
+        output = output.to_device(device, output_mem_config);
     }
     return output;
 }
@@ -227,9 +227,9 @@ static Tensor mask_padded_input(
             }  // dim H
         }  // dim C
     }  // dim N
-    auto output = Tensor(OwnedStorage{owned_buffer}, padded_shape, data_type, Layout::ROW_MAJOR).to(layout);
+    auto output = Tensor(OwnedStorage{owned_buffer}, padded_shape, data_type, Layout::ROW_MAJOR).to_layout(layout);
     if (device != nullptr) {
-        output = output.to(device, output_mem_config);
+        output = output.to_device(device, output_mem_config);
     }
     return output;
 }
@@ -270,9 +270,9 @@ static Tensor fill_first_val_into_tensor(
                               MemoryConfig{},
                               input_tensor.get_logical_shape(),
                               input_tensor.get_padded_shape())))
-                      .to(layout);
+                      .to_layout(layout);
     if (device != nullptr) {
-        output = output.to(device, output_mem_config);
+        output = output.to_device(device, output_mem_config);
     }
     return output;
 }
@@ -329,9 +329,9 @@ static Tensor prod_result_computation_GS(
                               MemoryConfig{},
                               input_tensor.get_logical_shape(),
                               input_tensor.get_padded_shape())))
-                      .to(layout);
+                      .to_layout(layout);
     if (device != nullptr) {
-        output = output.to(device, output_mem_config);
+        output = output.to_device(device, output_mem_config);
     }
     return output;
 }
@@ -392,9 +392,9 @@ static Tensor prod_result_computation_WH_B0(
                               MemoryConfig{},
                               input_tensor.get_logical_shape(),
                               input_tensor.get_padded_shape())))
-                      .to(layout);
+                      .to_layout(layout);
     if (device != nullptr) {
-        output = output.to(device, output_mem_config);
+        output = output.to_device(device, output_mem_config);
     }
     return output;
 }
@@ -434,9 +434,9 @@ static Tensor index_channel(
                           logical_shape,
                           TensorLayout::fromPaddedShape(
                               data_type, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}, logical_shape, padded_shape)))
-                      .to(layout);
+                      .to_layout(layout);
     if (device != nullptr) {
-        output = output.to(device, output_mem_config);
+        output = output.to_device(device, output_mem_config);
     }
     return output;
 }
@@ -475,9 +475,9 @@ static Tensor index_batch(
                           logical_shape,
                           TensorLayout::fromPaddedShape(
                               data_type, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}, logical_shape, padded_shape)))
-                      .to(layout);
+                      .to_layout(layout);
     if (device != nullptr) {
-        output = output.to(device, output_mem_config);
+        output = output.to_device(device, output_mem_config);
     }
     return output;
 }
@@ -514,9 +514,9 @@ static Tensor manual_insertion(
                           logical_shape,
                           TensorLayout::fromPaddedShape(
                               data_type, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}, logical_shape, padded_shape)))
-                      .to(layout);
+                      .to_layout(layout);
     if (device != nullptr) {
-        output = output.to(device, output_mem_config);
+        output = output.to_device(device, output_mem_config);
     }
     return output;
 }
@@ -578,7 +578,7 @@ static Tensor uniform(T low, T high, const ttnn::Shape& shape, const Layout layo
         }
     }
 
-    return Tensor(OwnedStorage{owned_buffer}, spec).to(layout);
+    return Tensor(OwnedStorage{owned_buffer}, spec).to_layout(layout);
 }
 
 static Tensor random(
