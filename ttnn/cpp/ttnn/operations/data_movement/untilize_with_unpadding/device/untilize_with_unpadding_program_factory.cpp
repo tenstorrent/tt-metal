@@ -217,13 +217,10 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_col_interleav
 
     const auto& input_shape = a.get_padded_shape();
     const auto& output_shape = output.get_padded_shape();
-    // printf("output shape:\n");
-    // std::cout << output_shape << std::endl;
 
     IDevice* device = a.device();
     CoreCoord grid_size = device->compute_with_storage_grid_size();
 
-    // uint32_t num_blocks = input_shape[-1] == 0 ? 0 : a.volume() / input_shape[-1] / TILE_HEIGHT;
     uint32_t num_blocks = input_shape[-1] == 0 ? 0 : input_shape[-1] / TILE_WIDTH;
     uint32_t num_tiles_per_row = a.get_padded_shape()[-1] / TILE_WIDTH;
     uint32_t num_tiles_per_col = a.get_padded_shape()[-2] / TILE_HEIGHT;
@@ -236,13 +233,8 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_col_interleav
     uint32_t padded_row_size_bytes;
     uint32_t unpadded_row_size_bytes;
 
-    if (a.get_dtype() == DataType::BFLOAT8_B) {
-        padded_row_size_bytes = input_shape[-1] * output.element_size();
-        unpadded_row_size_bytes = output_shape[-1] * output.element_size();
-    } else {
-        padded_row_size_bytes = input_shape[-1] * a.element_size();
-        unpadded_row_size_bytes = output_shape[-1] * a.element_size();
-    }
+    padded_row_size_bytes = input_shape[-1] * a.element_size();
+    unpadded_row_size_bytes = output_shape[-1] * a.element_size();
 
     create_cb(tt::CBIndex::c_0, program, all_cores, input_single_tile_size, num_tiles_per_col, input_cb_data_format);
     create_cb(tt::CBIndex::c_16, program, all_cores, output_single_tile_size, num_tiles_per_col, output_cb_data_format);
@@ -255,10 +247,6 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_col_interleav
 
     uint32_t src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
     uint32_t num_tiles_2d = a.get_padded_shape()[-1] * a.get_padded_shape()[-2] / TILE_HW;
-    // printf("a.get_padded_shape()[-1]: %u\n", a.get_padded_shape()[-1]);
-    // printf("a.get_padded_shape()[-2]: %u\n", a.get_padded_shape()[-2]);
-    // printf("TILE_HW: %u\n", TILE_HW);
-    // printf("num_tiles_2d: %u\n", num_tiles_2d);
 
     auto log_shape = output.get_logical_shape();
     uint32_t third_dim = 1;
@@ -282,7 +270,6 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_col_interleav
     uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::uint32_t)std::log2(stick_size) : 0;
 
     uint32_t total_num_rows = output.get_logical_shape()[-2];
-    // printf("total_num_rows: %u\n", total_num_rows);
 
     KernelHandle unary_writer_kernel_id = CreateKernel(
         program,
@@ -295,9 +282,6 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_col_interleav
     // compute
 
     std::string compute_kernel("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize_w.cpp");
-    // if (num_tiles_per_row > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize || a.get_dtype() == DataType::UINT16) {
-    //     compute_kernel = "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp";
-    // }
 
     if (core_range.size() > 0) {
         auto tilize_kernel_id = CreateKernel(
@@ -391,8 +375,8 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
     uint32_t num_blocks = input_shape[-1] == 0 ? 0 : a.volume() / input_shape[-1] / TILE_HEIGHT;
     uint32_t num_tiles_per_row = a.get_padded_shape()[-1] / TILE_WIDTH;
 
-    uint32_t num_tiles_per_col = output.get_padded_shape()[-2] / TILE_HEIGHT;
-    if (num_tiles_per_row > num_tiles_per_col) {
+    uint32_t num_tiles_per_col = a.get_padded_shape()[-2] / TILE_HEIGHT;
+    if (num_tiles_per_row > num_tiles_per_col && a.get_dtype() != DataType::BFLOAT8_B) {
         return untilize_with_unpadding_multi_core_col_interleaved(a, output, use_pack_untilize, fp32_dest_acc_en);
     }
 
