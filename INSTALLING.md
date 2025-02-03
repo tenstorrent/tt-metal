@@ -70,14 +70,24 @@ export ARCH_NAME=<ARCH_NAME> # See below for ARCH_NAME examples
 export TT_METAL_HOME=$(pwd)
 export PYTHONPATH=$(pwd)
 ./build_metal.sh
+```
 
+Where `ARCH_NAME` is one of `grayskull`, `wormhole_b0`, or `blackhole`,
+depending on your Tenstorrent card type.
+
+If using a Wormhole device (i.e., n150, n300), be sure to also set the following environment variable
+
+```sh
+export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
+```
+
+##### Create a Python Virtual Environment
+
+```sh
 # See NOTE below on Python Environments for alternative to OOTB venv
 ./create_venv.sh
 source python_env/bin/activate
 ```
-
-where `ARCH_NAME` is one of `grayskull`, `wormhole_b0`, or `blackhole`,
-depending on your Tenstorrent card type.
 
 > [!NOTE]
 >
