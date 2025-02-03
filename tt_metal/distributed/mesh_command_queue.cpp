@@ -212,7 +212,7 @@ void MeshCommandQueue::read_shard_from_device(
 }
 
 void MeshCommandQueue::enqueue_write_shard(
-    std::shared_ptr<MeshBuffer>& mesh_buffer, const void* host_data, const Coordinate& coord, bool blocking) {
+    const std::shared_ptr<MeshBuffer>& mesh_buffer, const void* host_data, const Coordinate& coord, bool blocking) {
     auto shard = mesh_buffer->get_device_buffer(coord);
     this->write_shard_to_device(shard, host_data);
 
@@ -385,6 +385,30 @@ void MeshCommandQueue::enqueue_read_mesh_buffer(
     TT_FATAL(
         buffer->global_layout() == MeshBufferLayout::SHARDED, "Can only read a Sharded MeshBuffer from a MeshDevice.");
     this->read_sharded_buffer(*buffer, host_data);
+}
+
+void MeshCommandQueue::enqueue_write_shards(
+    const std::shared_ptr<MeshBuffer>& buffer, const std::vector<const void*>& host_data, bool blocking) {
+    const auto [num_rows, num_cols] = buffer->device()->shape();
+    TT_FATAL(host_data.size() == num_rows * num_cols, "Expected number of shards to match the number of devices.");
+    for (std::size_t shard_y = 0; shard_y < num_rows; ++shard_y) {
+        for (std::size_t shard_x = 0; shard_x < num_cols; ++shard_x) {
+            auto device_shard_view = buffer->get_device_buffer(Coordinate(shard_y, shard_x));
+            write_shard_to_device(device_shard_view, host_data[shard_y * num_cols + shard_x]);
+        }
+    }
+}
+
+void MeshCommandQueue::enqueue_read_shards(
+    const std::vector<void*>& host_data, const std::shared_ptr<MeshBuffer>& buffer, bool blocking) {
+    const auto [num_rows, num_cols] = buffer->device()->shape();
+    TT_FATAL(host_data.size() == num_rows * num_cols, "Expected number of shards to match the number of devices.");
+    for (std::size_t shard_y = 0; shard_y < num_rows; ++shard_y) {
+        for (std::size_t shard_x = 0; shard_x < num_cols; ++shard_x) {
+            auto device_shard_view = buffer->get_device_buffer(Coordinate(shard_y, shard_x));
+            read_shard_from_device(device_shard_view, host_data[shard_y * num_cols + shard_x]);
+        }
+    }
 }
 
 void MeshCommandQueue::reset_worker_state(
