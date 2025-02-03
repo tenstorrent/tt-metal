@@ -22,6 +22,7 @@
 =======
 >>>>>>> fix module names and variant unpacking
 #include "ttnn/distributed/api.hpp"
+#include "ttnn/tensor/host_buffer/borrowed_buffer.hpp"
 #include "ttnn/tensor/layout/page_config.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
@@ -62,7 +63,7 @@ py::object get_torch_type(DataType& dtype, const py::object& torch) {
 =======
 >>>>>>> fix module names and variant unpacking
 template <typename T>
-owned_buffer::Buffer<T> create_row_major_owned_buffer(
+owned_buffer::Buffer<T> create_owned_buffer(
     owned_buffer::Buffer<T>&& owned_buffer, const ttnn::TensorSpec& tensor_spec) {
     TT_FATAL(
         !tensor_spec.memory_config().is_sharded() or tensor_spec.memory_config().shard_spec.has_value(),
@@ -79,20 +80,13 @@ owned_buffer::Buffer<T> create_row_major_owned_buffer(
 template <typename T>
 OwnedBuffer get_host_buffer_from_tensor(const Tensor& tt_tensor) {
     TT_ASSERT(tt_tensor.storage_type() == StorageType::OWNED);
-    // add devicestorage
     return std::visit(
         tt::stl::overloaded{
 
             [&tt_tensor](const OwnedStorage& storage) -> OwnedBuffer {
                 const auto& tensor_spec = tt_tensor.get_tensor_spec();
                 const auto tt_dtype = tensor_spec.data_type();
-                return create_row_major_owned_buffer(std::move(owned_buffer::get_as<T>(storage.buffer)), tensor_spec);
-            },
-            [&tt_tensor](const MultiDeviceStorage& storage) -> MultiDevice {
-                const auto& tensor_spec = tt_tensor.get_tensor_spec();
-                const auto tt_dtype = tensor_spec.data_type();
-                return create_row_major_multi_buffer(
-                    std::move(owned_buffer::get_as<T>(storage.get_buffers())), tensor_spec);
+                return create_owned_buffer(std::move(owned_buffer::get_as<T>(storage.buffer)), tensor_spec);
             },
             [&tt_tensor](auto&&) -> OwnedBuffer {
                 TT_THROW(
@@ -115,11 +109,10 @@ OwnedBuffer get_host_buffer_from_tensor(const Tensor& tt_tensor)
                 const auto tt_dtype = tensor_spec.data_type();
                 switch (tt_dtype) {
                     case DataType::FLOAT32: {
-                        return create_row_major_owned_buffer(
-                            std::move(owned_buffer::get_as<T>(storage.buffer)), tensor_spec);
+                        return create_owned_buffer(std::move(owned_buffer::get_as<T>(storage.buffer)), tensor_spec);
                     }
                     case DataType::BFLOAT16: {
-                        return create_row_major_owned_buffer(
+                        return create_owned_buffer(
                             std::move(owned_buffer::get_as<::bfloat16>(storage.buffer)), tensor_spec);
                     }
                     case DataType::BFLOAT8_B:
@@ -141,15 +134,14 @@ OwnedBuffer get_host_buffer_from_tensor(const Tensor& tt_tensor)
                             std::back_inserter(bfloat16_unpacked_data),
                             [](float f) { return bfloat16(f); });
                         auto input_bfloat16_buffer = owned_buffer::create<bfloat16>(std::move(bfloat16_unpacked_data));
-                        return create_row_major_owned_buffer(std::move(input_bfloat16_buffer), tensor_spec);
+                        return create_owned_buffer(std::move(input_bfloat16_buffer), tensor_spec);
                     }
                     default: {
                         TT_THROW("Unsupported DataType: {}", tt_dtype);
                         break;
                     }
                 }
-            },  // TODO: fix multidevice
-
+            },
             [&tt_tensor](auto&&) -> OwnedBuffer {
                 TT_THROW(
                     "Tensor with {} storage type cannot be converted to torch",
@@ -197,11 +189,15 @@ py::object convert_tt_tensor_to_torch_tensor(
     //      1. Update tests to use ttnn.from_torch and ttnn.to_torch
     //      2. Fix usage of tensor.to_torch inside ttnn functional APIs
     //      3. Deprecate old tensor.to_torch and rename tensor.to_torch_with_logical_shape back to tensor.to_torch
-    auto buffer = get_host_buffer_from_tensor<T>(tt_tensor);
+
+    auto buffer = tt_tensor.buffer();
+
+    if (tt_tensor.storage_type() == StorageType::OWNED) {
+        auto buffer = get_host_buffer_from_tensor<T>(tt_tensor);
+        static_assert(std::is_same_v<std::decay_t<decltype(buffer)>, OwnedBuffer>);
+    }
 
     auto frombuffer = torch_module.attr("frombuffer");
-
-    static_assert(std::is_same_v<std::decay_t<decltype(buffer)>, OwnedBuffer>);
 
     DataType dtype = tt_tensor.get_tensor_spec().data_type();
 
