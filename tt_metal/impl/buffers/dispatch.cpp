@@ -987,6 +987,21 @@ void copy_completion_queue_data_into_user_space(
     }
 }
 
+tt::stl::Span<const SubDeviceId> select_sub_device_ids(
+    IDevice* device, tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    if (sub_device_ids.empty()) {
+        return device->get_sub_device_stall_group();
+    } else {
+        for (const auto& sub_device_id : sub_device_ids) {
+            TT_FATAL(
+                sub_device_id.to_index() < device->num_sub_devices(),
+                "Invalid sub-device id specified {}",
+                sub_device_id.to_index());
+        }
+        return sub_device_ids;
+    }
+}
+
 template void issue_buffer_dispatch_command_sequence<InterleavedBufferWriteDispatchParams>(
     const void*, Buffer&, InterleavedBufferWriteDispatchParams&, tt::stl::Span<const SubDeviceId>, CoreType);
 template void issue_buffer_dispatch_command_sequence<ShardedBufferWriteDispatchParams>(

@@ -146,8 +146,13 @@ def get_pydantic_test_from_pytest_testcase_(testcase, default_timestamp=datetime
     # Error at the beginning of a test can prevent pytest from recording timestamps at all
     if not (skipped or error):
         properties = junit_xml_utils.get_pytest_testcase_properties(testcase)
-        test_start_ts = datetime.strptime(properties["start_timestamp"], "%Y-%m-%dT%H:%M:%S")
-        test_end_ts = datetime.strptime(properties["end_timestamp"], "%Y-%m-%dT%H:%M:%S")
+        # Check if properties is none to see if pytest recorded the timestamps
+        if properties is not None:
+            test_start_ts = datetime.strptime(properties["start_timestamp"], "%Y-%m-%dT%H:%M:%S")
+            test_end_ts = datetime.strptime(properties["end_timestamp"], "%Y-%m-%dT%H:%M:%S")
+        else:
+            test_start_ts = default_timestamp
+            test_end_ts = default_timestamp
     else:
         test_start_ts = default_timestamp
         test_end_ts = default_timestamp

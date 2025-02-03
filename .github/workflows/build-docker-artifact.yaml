@@ -3,29 +3,49 @@ name: "Build tt-metal docker artifact"
 on:
   workflow_call:
     inputs:
-      os:
+      distro:
         required: false
         type: string
-        default: "ubuntu-20.04-amd64"
+        default: "ubuntu"
+      version:
+        required: false
+        type: string
+        default: "20.04"
+      architecture:
+        required: false
+        type: string
+        default: "amd64"
   workflow_dispatch:
     inputs:
-      os:
+      distro:
         required: false
         type: choice
-        default: "ubuntu-20.04-amd64"
+        default: "ubuntu"
         options:
-            - "ubuntu-20.04-amd64"
-            - "ubuntu-22.04-amd64"
+            - "ubuntu"
+      version:
+        required: false
+        type: choice
+        default: "20.04"
+        options:
+            - "20.04"
+            - "22.04"
+            - "24.04"
+      architecture:
+        required: false
+        type: choice
+        default: "amd64"
+        options:
+            - "amd64"
 jobs:
   build-docker-image:
-    name: "🐳️ Build ${{ inputs.os }} image"
+    name: "🐳️ Build ${{ inputs.distro }} {inputs.version }} image"
     timeout-minutes: 30
     env:
-      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       CONFIG: ci
       SILENT: 0
       VERBOSE: 1
-      TT_METAL_DOCKER_IMAGE: ${{ inputs.os }}
+      IMAGE_PARAMS: "${{ inputs.distro }}-${{ inputs.version }}-${{ inputs.architecture }}"
       DOCKERFILE: ubuntu-20.04-amd64
     runs-on:
       - build-docker
@@ -55,9 +75,7 @@ jobs:
       - name: Determine docker image tag
         uses: ./.github/actions/generate-docker-tag
         with:
-          image: tt-metalium/${{ inputs.os }}
-      - name: Extract numeric version
-        run: echo "UBUNTU_VERSION=$(echo '${{ inputs.os }}' | sed -E 's/[^0-9.]*([0-9]+\.[0-9]+).*/\1/')" >> $GITHUB_ENV
+          image: tt-metalium/${{ env.IMAGE_PARAMS }}
       - name: Build Docker image and push to GHCR
         if: steps.changed-files-specific.outputs.any_changed == 'true'
         uses: docker/build-push-action@v6
@@ -67,15 +85,15 @@ jobs:
           target: dev
           push: true
           tags: ${{ env.TT_METAL_DOCKER_IMAGE_TAG}}
-          build-args: UBUNTU_VERSION=${{ env.UBUNTU_VERSION }}
+          build-args: UBUNTU_VERSION=${{ inputs.version }}
           cache-from: type=registry,ref=${{ env.TT_METAL_REF_IMAGE_TAG }}
           cache-to: type=inline
           pull: true
       - name: Tag Docker main image as current image
         if: steps.changed-files-specific.outputs.any_changed != 'true'
         run: |
-          docker pull ghcr.io/${{ github.repository }}/tt-metalium/${{ env.TT_METAL_DOCKER_IMAGE }}:latest
-          docker tag ghcr.io/${{ github.repository }}/tt-metalium/${{ env.TT_METAL_DOCKER_IMAGE }}:latest ${{ env.TT_METAL_DOCKER_IMAGE_TAG}}
+          docker pull ghcr.io/${{ github.repository }}/tt-metalium/${{ env.IMAGE_PARAMS }}:latest
+          docker tag ghcr.io/${{ github.repository }}/tt-metalium/${{ env.IMAGE_PARAMS }}:latest ${{ env.TT_METAL_DOCKER_IMAGE_TAG}}
       - name: Push Docker image to GitHub Container Registry
         run: |
           docker push ${{ env.TT_METAL_DOCKER_IMAGE_TAG }}
