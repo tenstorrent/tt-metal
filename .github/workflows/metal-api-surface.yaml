@@ -57,8 +57,8 @@ jobs:
         with:
           payload: |
             {
-              "text": " date: ${{ env.DATE }} \n num_files: ${{ env.NUM_FILES }} \n num_types: ${{ env.NUM_TYPES }} \n num_methods: ${{ env.NUM_METHODS }}",
-              "owner": "U014XCQ9CF8"
+              "text": "TT_METAL_API_SURFACE:\ndate: ${{ env.DATE }} \n num_files: ${{ env.NUM_FILES }} \n num_types: ${{ env.NUM_TYPES }} \n num_methods: ${{ env.NUM_METHODS }}",
+              "owner": "U0704SWRY9H"
             }
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
