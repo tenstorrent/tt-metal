@@ -506,27 +506,3 @@ inline void dprint_tensix_alu_config() {
 }
 
 #endif  // END OF ELSE
-
-/*
-// Choose register you want (1-2). 0 for both.
-inline void dprint_tensix_unpack_tile_descriptor(uint reg_id = 0) {
-    UNPACK(
-#ifdef ARCH_GRAYSKULL
-        dprint_tensix_unpack_tile_descriptor_grayskull(reg_id);
-#else
-        dprint_tensix_unpack_tile_descriptor_wormhole_or_blackhole(reg_id);
-#endif
-    )
-}
-
-// Choose register you want (1-2). 0 for both.
-inline void dprint_tensix_unpack_config(uint reg_id = 0) {
-    UNPACK(
-#ifdef ARCH_GRAYSKULL
-        dprint_tensix_unpack_config_grayskull(reg_id);
-#else
-        dprint_tensix_unpack_config_wormhole_or_blackhole(reg_id);
-#endif
-    )
-}
-*/
