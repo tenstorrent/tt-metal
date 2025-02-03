@@ -163,81 +163,60 @@ class TtAsymmDiTJoint(LightweightModule):
 
         return x, c, y_feat, rope_cos, rope_sin
 
-    def prepare_attn_mask_and_padding(self, x, packed_indices):
-        attn_padded_len = 44 * 1024
-        max_seqlen_in_batch_kv = packed_indices["max_seqlen_in_batch_kv"]
-        y_unpadded_len = max_seqlen_in_batch_kv - x.shape[1]
-        x_unpadded_len = x.shape[1]
-        x_tile_padding = nearest_32(x.shape[1]) - x.shape[1]
-        y_padding_len = 256 - y_unpadded_len
-        assert x_unpadded_len + x_tile_padding + y_unpadded_len + y_padding_len <= attn_padded_len
-
-        x_padded = torch.nn.functional.pad(x, (0, 0, 0, x_tile_padding))
-
-        attn_mask = torch.zeros((attn_padded_len, attn_padded_len))
-        x_padding_end = x_unpadded_len + x_tile_padding
-        attn_mask[:, x_unpadded_len:x_padding_end] = -float("inf")
-        y_padding_start = x_padding_end + y_unpadded_len
-        attn_mask[:, y_padding_start:] = -float("inf")
-        attn_mask = attn_mask.view(1, 1, attn_padded_len, attn_padded_len)
-        return x_padded, attn_mask
-
     def forward(
         self,
         x: torch.Tensor,
         sigma: torch.Tensor,
         y_feat: List[torch.Tensor],
         y_mask: List[torch.Tensor],
-        packed_indices: Dict[str, torch.Tensor] = None,
         uncond: bool = False,
     ) -> torch.Tensor:
         """Forward pass of DiT."""
         B, _, T, H, W = x.shape
 
         # Run prepare() in PyTorch on CPU
-        x, c, y_feat, rope_cos, rope_sin = self.prepare(x, sigma, y_feat[0], y_mask[0])
-        x_N = x.shape[1]
+        x_BNX, c_BX, y_feat_BLY, rope_cos_NHD, rope_sin_NHD = self.prepare(x, sigma, y_feat[0], y_mask[0])
+        x_N = x_BNX.shape[1]
 
-        rope_cos_stack, rope_sin_stack = stack_cos_sin(
-            rope_cos.unsqueeze(0).permute(0, 2, 1, 3), rope_sin.unsqueeze(0).permute(0, 2, 1, 3)
+        rope_cos_1HND, rope_sin_1HND = stack_cos_sin(
+            rope_cos_NHD.unsqueeze(0).permute(0, 2, 1, 3), rope_sin_NHD.unsqueeze(0).permute(0, 2, 1, 3)
         )
-        x, attn_mask = self.prepare_attn_mask_and_padding(x, packed_indices)
 
         trans_mat = get_rot_transformation_mat(None)
 
+        # TODO: c shape should be broadcastable to x shape, with batch dim matching. It currently doesn't.
         # Convert tensors to ttnn format using common function
-        tt_x = to_tt_tensor(unsqueeze_to_4d(x), self.mesh_device)
-        tt_c = to_tt_tensor(unsqueeze_to_4d(c), self.mesh_device)  # Add dims for ttnn format
-        tt_y_feat = to_tt_tensor(unsqueeze_to_4d(y_feat), self.mesh_device)  # Add dim for ttnn format
-        tt_rope_cos = to_tt_tensor(unsqueeze_to_4d(rope_cos_stack), self.mesh_device, shard_dim=-3)
-        tt_rope_sin = to_tt_tensor(unsqueeze_to_4d(rope_sin_stack), self.mesh_device, shard_dim=-3)
-        tt_attn_mask = replicate_attn_mask(attn_mask, self.mesh_device, ttnn.bfloat4_b)
+        tt_x_1BNX = to_tt_tensor(unsqueeze_to_4d(x_BNX), self.mesh_device)
+        tt_c_11BX = to_tt_tensor(unsqueeze_to_4d(c_BX), self.mesh_device)  # Add dims for ttnn format
+        tt_y_feat_1BLY = to_tt_tensor(unsqueeze_to_4d(y_feat_BLY), self.mesh_device)  # Add dim for ttnn format
+        tt_rope_cos_1HND = to_tt_tensor(unsqueeze_to_4d(rope_cos_1HND), self.mesh_device, shard_dim=-3)
+        tt_rope_sin_1HND = to_tt_tensor(unsqueeze_to_4d(rope_sin_1HND), self.mesh_device, shard_dim=-3)
         tt_trans_mat = to_tt_tensor(trans_mat, self.mesh_device)
         # Run blocks
         for block in self.blocks:
-            tt_x, tt_y_feat = block(
-                tt_x,
-                tt_c,
-                tt_y_feat,
-                rope_cos=tt_rope_cos,
-                rope_sin=tt_rope_sin,
-                packed_indices=packed_indices,
-                attn_mask=tt_attn_mask,
+            tt_x_1BNX, tt_y_feat_1BLY = block(
+                tt_x_1BNX,
+                tt_c_11BX,
+                tt_y_feat_1BLY,
+                rope_cos=tt_rope_cos_1HND,
+                rope_sin=tt_rope_sin_1HND,
                 trans_mat=tt_trans_mat,
                 uncond=uncond,
             )
 
         # Run final layer
-        tt_x = self.final_layer(tt_x, tt_c)
+        tt_x_1BND = self.final_layer(tt_x_1BNX, tt_c_11BX)
 
         # Convert output back to PyTorch
         # output is already replicated.
-        x = ttnn.to_torch(tt_x, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0))[0:1]
+        # TODO: Don't do this concat here, just get a ref to single device tensor
+        x_1BND = ttnn.to_torch(tt_x_1BND, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0))[0:1]
         x_D = self.patch_size**2 * self.out_channels
-        x = x[..., :x_N, :].reshape(B, x_N, x_D)
+        x_BND = x_1BND[..., :x_N, :].reshape(B, x_N, x_D)
+
         # Rearrange output in PyTorch on CPU
-        x = rearrange(
-            x,
+        x_BCTHW = rearrange(
+            x_BND,
             "B (T hp wp) (p1 p2 c) -> B c T (hp p1) (wp p2)",
             T=T,
             hp=H // self.patch_size,
@@ -247,4 +226,4 @@ class TtAsymmDiTJoint(LightweightModule):
             c=self.out_channels,
         )
 
-        return x
+        return x_BCTHW

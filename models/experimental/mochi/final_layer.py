@@ -84,7 +84,7 @@ class TtFinalLayer(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         if self.num_devices > 1:
-            mod = ttnn.all_gather(mod, dim=-1)
+            mod = ttnn.all_gather(mod, dim=3)
 
         # Split modulation into shift and scale
         shift = mod[:, :, :, : self.hidden_size]

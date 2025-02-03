@@ -129,7 +129,6 @@ def test_tt_asymm_dit_joint_inference(mesh_device, n_layers, use_program_cache, 
         sigma=sigma,
         y_feat=[t5_feat],
         y_mask=[t5_mask],
-        packed_indices=packed_indices,
     )
 
     # Get reference output
@@ -215,7 +214,7 @@ def test_tt_asymm_dit_joint_prepare(mesh_device, use_program_cache, reset_seeds)
     indirect=True,
 )
 @pytest.mark.parametrize("n_layers", [1, 2, 4, 48], ids=["L1", "L2", "L4", "L48"])
-def test_tt_asymm_dit_joint_real_inputs(mesh_device, use_program_cache, reset_seeds, n_layers):
+def test_tt_asymm_dit_joint_model_fn(mesh_device, use_program_cache, reset_seeds, n_layers):
     """Test the model with real inputs processed just like in the pipeline."""
     dtype = ttnn.bfloat16
     cfg_scale = 6.0
@@ -243,8 +242,13 @@ def test_tt_asymm_dit_joint_real_inputs(mesh_device, use_program_cache, reset_se
                 sigma=sigma,
                 y_feat=cond["null"]["y_feat"],
                 y_mask=cond["null"]["y_mask"],
-                packed_indices=cond["null"]["packed_indices"],
                 uncond=True,
+            )
+            cond_out = model(
+                x=x,
+                sigma=sigma,
+                y_feat=cond["cond"]["y_feat"],
+                y_mask=cond["cond"]["y_mask"],
             )
         else:
             uncond_out = model(
@@ -254,15 +258,13 @@ def test_tt_asymm_dit_joint_real_inputs(mesh_device, use_program_cache, reset_se
                 y_mask=cond["null"]["y_mask"],
                 packed_indices=cond["null"]["packed_indices"],
             )
-
-        # Run conditional
-        cond_out = model(
-            x=x,
-            sigma=sigma,
-            y_feat=cond["cond"]["y_feat"],
-            y_mask=cond["cond"]["y_mask"],
-            packed_indices=cond["cond"]["packed_indices"],
-        )
+            cond_out = model(
+                x=x,
+                sigma=sigma,
+                y_feat=cond["cond"]["y_feat"],
+                y_mask=cond["cond"]["y_mask"],
+                packed_indices=cond["cond"]["packed_indices"],
+            )
 
         # Combine outputs with cfg_scale=1.0 as in pipeline
         return uncond_out + cfg_scale * (cond_out - uncond_out), cond_out, uncond_out
