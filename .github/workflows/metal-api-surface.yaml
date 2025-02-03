@@ -57,7 +57,7 @@ jobs:
         with:
           payload: |
             {
-              "text": "\nTT_METAL_API_SURFACE:\ndate: ${{ env.DATE }} \n num_files: ${{ env.NUM_FILES }} \n num_types: ${{ env.NUM_TYPES }} \n num_methods: ${{ env.NUM_METHODS }}",
+              "text": "\nTT_METAL_API_SURFACE:\ndate: ${{ env.DATE }} \nnum_files: ${{ env.NUM_FILES }} \nnum_types: ${{ env.NUM_TYPES }} \nnum_methods: ${{ env.NUM_METHODS }}",
               "owner": "U0704SWRY9H"
             }
         env:
