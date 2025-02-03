@@ -20,7 +20,7 @@ def create_yolov11_input_tensors(device, batch=1, input_channels=3, input_height
         ttnn_input_tensor.shape[0] * ttnn_input_tensor.shape[1] * ttnn_input_tensor.shape[2],
         ttnn_input_tensor.shape[3],
     )
-    ttnn_input_tensor = ttnn.from_torch(ttnn_input_tensor, dtype=ttnn.bfloat16)
+    ttnn_input_tensor = ttnn.from_torch(ttnn_input_tensor, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
     return torch_input_tensor, ttnn_input_tensor
 
 
@@ -159,8 +159,9 @@ def create_yolov11_model_parameters(model: YoloV11, input_tensor: torch.Tensor, 
 
     anchors, strides = make_anchors(device, feats, strides)  # Optimization: Processing make anchors outside model run
 
-    parameters.model[23]["anchors"] = anchors
-    parameters.model[23]["strides"] = strides
+    if "model" in parameters:
+        parameters.model[23]["anchors"] = anchors
+        parameters.model[23]["strides"] = strides
 
     return parameters
 
