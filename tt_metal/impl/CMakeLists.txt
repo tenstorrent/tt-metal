@@ -51,6 +51,8 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/flatbuffer/buffer_types_to_flatbuffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/flatbuffer/program_types_from_flatbuffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/flatbuffer/program_types_to_flatbuffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/lightmetal/lightmetal_replay.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/lightmetal/lightmetal_capture.cpp
 )
 
 # Include helper functions and generate headers from flatbuffer schemas
@@ -95,7 +97,7 @@ target_include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/debug
         ${PROJECT_SOURCE_DIR}/tt_metal/include
-    PRIVATE
+        # PRIVATE
         ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers
 )
 

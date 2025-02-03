@@ -48,6 +48,10 @@ class CommandQueue;
 class TraceBuffer;
 struct TraceDescriptor;
 
+namespace detail {
+struct TraceDescriptor;
+}
+
 inline namespace v0 {
 
 class IDevice {
