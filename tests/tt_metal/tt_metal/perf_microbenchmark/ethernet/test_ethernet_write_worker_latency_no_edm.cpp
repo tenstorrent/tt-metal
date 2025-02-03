@@ -72,11 +72,6 @@ private:
     bool device_open;
 };
 
-struct ChipSenderReceiverEthCore {
-    CoreCoord sender_core;
-    CoreCoord receiver_core;
-};
-
 void validation(const std::shared_ptr<tt::tt_metal::Buffer>& worker_buffer) {
     std::vector<uint8_t> golden_vec(worker_buffer->size(), 0);
     std::vector<uint8_t> result_vec(worker_buffer->size(), 0);
@@ -98,8 +93,7 @@ std::vector<Program> build(
     CoreCoord worker_core,
     std::size_t num_samples,
     std::size_t sample_page_size,
-    std::size_t num_channels,
-    std::size_t num_writes_skip_barrier,
+    std::size_t num_buffer_slots,
     KernelHandle& local_kernel,
     KernelHandle& remote_kernel,
     std::shared_ptr<Buffer>& worker_buffer) {
@@ -112,15 +106,10 @@ std::vector<Program> build(
 
     uint32_t worker_buffer_addr = worker_buffer->address();
 
-    bool use_transaction_id = false;
-    if (num_writes_skip_barrier != 0) {
-        use_transaction_id = true;
-    }
-
     // eth core ct args
-    const std::vector<uint32_t>& eth_sender_ct_args = {num_channels};
+    const std::vector<uint32_t>& eth_sender_ct_args = {num_buffer_slots};
     const std::vector<uint32_t>& eth_receiver_ct_args = {
-        num_channels, worker_noc_x, worker_noc_y, worker_buffer_addr, use_transaction_id, num_writes_skip_barrier};
+        num_buffer_slots, worker_noc_x, worker_noc_y, worker_buffer_addr};
 
     // eth core rt args
     const std::vector<uint32_t>& eth_sender_rt_args = {
@@ -190,8 +179,7 @@ int main(int argc, char** argv) {
     std::size_t arg_idx = 1;
     std::size_t num_samples = std::stoi(argv[arg_idx++]);
     std::size_t sample_page_size = std::stoi(argv[arg_idx++]);
-    std::size_t max_channels_per_direction = std::stoi(argv[arg_idx++]);
-    std::size_t num_writes_skip_barrier = std::stoi(argv[arg_idx++]);
+    std::size_t num_buffer_slots = std::stoi(argv[arg_idx++]);
 
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     auto num_devices = tt::tt_metal::GetNumAvailableDevices();
@@ -237,10 +225,10 @@ int main(int argc, char** argv) {
     try {
         log_info(
             tt::LogTest,
-            "num_samples: {}, sample_page_size: {}, num_channels_per_direction: {}",
+            "num_samples: {}, sample_page_size: {}, num_buffer_slots: {}",
             num_samples,
             sample_page_size,
-            max_channels_per_direction);
+            num_buffer_slots);
         KernelHandle local_kernel;
         KernelHandle remote_kernel;
         try {
@@ -265,8 +253,7 @@ int main(int argc, char** argv) {
                 worker_core,
                 num_samples,
                 sample_page_size,
-                max_channels_per_direction,
-                num_writes_skip_barrier,
+                num_buffer_slots,
                 local_kernel,
                 remote_kernel,
                 worker_buffer);

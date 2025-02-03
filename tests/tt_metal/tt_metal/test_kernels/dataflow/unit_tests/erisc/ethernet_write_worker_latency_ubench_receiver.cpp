@@ -10,8 +10,6 @@ static constexpr uint32_t MAX_NUM_TRANSACTION_ID =
 static constexpr uint32_t worker_noc_x = get_compile_time_arg_val(1);
 static constexpr uint32_t worker_noc_y = get_compile_time_arg_val(2);
 static constexpr uint32_t worker_buffer_addr = get_compile_time_arg_val(3);
-static constexpr bool use_transaction_id = get_compile_time_arg_val(4) == 1;
-static constexpr uint32_t num_writes_skip_barrier = get_compile_time_arg_val(5);
 
 FORCE_INLINE uint32_t advance_buffer_slot_ptr(uint32_t curr_ptr) { return (curr_ptr + 1) % NUM_BUFFER_SLOTS; }
 

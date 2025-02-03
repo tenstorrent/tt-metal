@@ -40,7 +40,7 @@ def get_device_freq():
     return freq
 
 
-def profile_results(sample_size, sample_count, channel_count, num_writes_skip_barrier):
+def profile_results(sample_size, sample_count, channel_count):
     freq = get_device_freq() / 1000.0
     setup = device_post_proc_config.default_setup()
     setup.deviceInputLog = profiler_log_path
@@ -66,14 +66,13 @@ def profile_results(sample_size, sample_count, channel_count, num_writes_skip_ba
 
     header = [
         "SAMPLE_SIZE",
-        "NUM_WRITES_BEFORE_BARRIER",
         "BW (B/c)",
     ]
     write_header = not os.path.exists(FILE_NAME)
     append_to_csv(
         FILE_NAME,
         header,
-        [sample_size, num_writes_skip_barrier, bw],
+        [sample_size, bw],
         write_header,
     )
     return main_loop_latency
@@ -82,9 +81,8 @@ def profile_results(sample_size, sample_count, channel_count, num_writes_skip_ba
 @pytest.mark.skipif(is_grayskull(), reason="Unsupported on GS")
 @pytest.mark.parametrize("sample_count", [256])
 @pytest.mark.parametrize("channel_count", [16])
-@pytest.mark.parametrize("num_writes_skip_barrier", [1])
 @pytest.mark.parametrize("sample_size", [16, 128, 256, 512, 1024, 2048, 4096, 8192])
-def test_erisc_write_worker_latency(sample_count, sample_size, channel_count, num_writes_skip_barrier):
+def test_erisc_write_worker_latency(sample_count, sample_size, channel_count):
     os.system(f"rm -rf {os.environ['TT_METAL_HOME']}/generated/profiler/.logs/profile_log_device.csv")
 
     ARCH_NAME = os.getenv("ARCH_NAME")
@@ -92,16 +90,14 @@ def test_erisc_write_worker_latency(sample_count, sample_size, channel_count, nu
             {os.environ['TT_METAL_HOME']}/build/test/tt_metal/perf_microbenchmark/ethernet/test_ethernet_write_worker_latency_no_edm_{ARCH_NAME} \
                 {sample_count} \
                 {sample_size} \
-                {channel_count} \
-                {num_writes_skip_barrier} \
-    #         "
+                {channel_count} "
     print(cmd)
     rc = os.system(cmd)
     if rc != 0:
         print("Error in running the test")
         assert False
 
-    main_loop_latency = profile_results(sample_size, sample_count, channel_count, num_writes_skip_barrier)
+    main_loop_latency = profile_results(sample_size, sample_count, channel_count)
     print(f"sender_loop_latency {main_loop_latency}")
     print(f"result BW (B/c): {sample_size / main_loop_latency}")
 
