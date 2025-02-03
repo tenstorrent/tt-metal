@@ -35,6 +35,25 @@ target_link_libraries(
         HAL::blackhole
 )
 
+# TODO(afuller): this should be self-describing modules.
+#   For now just cherry-pick all the files I discovered empirally by trying to run a test.
+if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.23)
+    target_sources(
+        tt_metal
+        PUBLIC
+            FILE_SET jit_api
+            TYPE HEADERS
+            BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+            FILES
+                soc_descriptors/grayskull_120_arch.yaml
+                soc_descriptors/wormhole_b0_80_arch.yaml
+                soc_descriptors/blackhole_140_arch.yaml
+                core_descriptors/grayskull_120_arch.yaml
+                core_descriptors/wormhole_b0_80_arch.yaml
+                core_descriptors/blackhole_140_arch.yaml
+    )
+endif()
+
 target_precompile_headers(
     tt_metal
     PRIVATE
@@ -98,5 +117,10 @@ install(
     # FILE_SET
     # api
     # COMPONENT metalium-dev
+    FILE_SET
+    jit_api
+        DESTINATION
+            ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/tt_metal # FIXME: fix the include paths for jit_build
+        COMPONENT metalium
 )
 # install(EXPORT Metalium NAMESPACE TT:: DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/tt-metalium COMPONENT metalium-dev)

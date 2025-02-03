@@ -95,8 +95,8 @@ jobs:
         run: |
           mkdir -p tt_metal
           ls -al tt_metal
-          cp -a deleteme/tt_metal/soc_descriptors tt_metal/
-          cp -a deleteme/tt_metal/core_descriptors tt_metal/
+          # cp -a deleteme/tt_metal/soc_descriptors tt_metal/
+          # cp -a deleteme/tt_metal/core_descriptors tt_metal/
           mkdir -p tt_metal/hw/firmware
           cp -a deleteme/tt_metal/hw/firmware/src tt_metal/hw/firmware/
           cp -a deleteme/tt_metal/hw/inc tt_metal/hw/
