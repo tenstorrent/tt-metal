@@ -389,6 +389,8 @@ void MeshCommandQueue::enqueue_read_mesh_buffer(
 
 void MeshCommandQueue::enqueue_write_shards(
     const std::shared_ptr<MeshBuffer>& buffer, const std::vector<const void*>& host_data, bool blocking) {
+    // Note: this API is used by TTNN, as it currently implements rich ND sharding API for multi-devices.
+    // In the long run, the multi-device sharding API in Metal will change, and this will most likely be replaced.
     const auto [num_rows, num_cols] = buffer->device()->shape();
     TT_FATAL(host_data.size() == num_rows * num_cols, "Expected number of shards to match the number of devices.");
     for (std::size_t shard_y = 0; shard_y < num_rows; ++shard_y) {
@@ -401,6 +403,8 @@ void MeshCommandQueue::enqueue_write_shards(
 
 void MeshCommandQueue::enqueue_read_shards(
     const std::vector<void*>& host_data, const std::shared_ptr<MeshBuffer>& buffer, bool blocking) {
+    // Note: this API is used by TTNN, as it currently implements rich ND sharding API for multi-devices.
+    // In the long run, the multi-device sharding API in Metal will change, and this will most likely be replaced.
     const auto [num_rows, num_cols] = buffer->device()->shape();
     TT_FATAL(host_data.size() == num_rows * num_cols, "Expected number of shards to match the number of devices.");
     for (std::size_t shard_y = 0; shard_y < num_rows; ++shard_y) {

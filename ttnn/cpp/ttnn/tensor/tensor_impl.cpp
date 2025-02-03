@@ -80,6 +80,9 @@ std::shared_ptr<distributed::MeshBuffer> allocate_mesh_buffer_on_device(
         .buffer_layout = memory_config.memory_layout,
         .shard_parameters = tensor_spec.compute_shard_spec_buffer(),
     };
+
+    // Use replicated buffer, which supports both working with individual shards and replicating data across all shards.
+    // This is required for the time being, as TTNN has rich multi-device sharding implementation.
     const distributed::ReplicatedBufferConfig replicated_buffer_config{
         .size = tensor_spec.compute_packed_buffer_size_bytes(),
     };
@@ -789,29 +792,7 @@ Tensor to_device_mesh_tensor(
             }},
         tensor.get_storage());
 
-    const auto [num_rows, num_cols] = target_device->shape();
-    std::vector<int> ordered_device_ids;
-    std::unordered_map<int, std::shared_ptr<Buffer>> buffers;
-    std::unordered_map<int, TensorSpec> specs;
-    ordered_device_ids.reserve(num_rows * num_cols);
-    buffers.reserve(num_rows * num_cols);
-    specs.reserve(num_rows * num_cols);
-    for (int row = 0; row < num_rows; ++row) {
-        for (int col = 0; col < num_cols; ++col) {
-            auto buffer = mesh_buffer->get_device_buffer(distributed::Coordinate{row, col});
-            const int device_id = buffer->device()->id();
-            ordered_device_ids.push_back(device_id);
-            buffers.emplace(device_id, std::move(buffer));
-            specs.emplace(device_id, tensor_spec);
-        }
-    }
-
-    MultiDeviceStorage multi_device_storage(
-        std::move(distribution_strategy),
-        std::move(ordered_device_ids),
-        std::move(buffers),
-        std::move(specs),
-        mesh_buffer);
+    MultiDeviceStorage multi_device_storage(std::move(distribution_strategy), mesh_buffer, tensor_spec);
 
     return Tensor(std::move(multi_device_storage), tensor_spec);
 }

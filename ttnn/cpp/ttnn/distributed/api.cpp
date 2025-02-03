@@ -115,8 +115,7 @@ Tensor aggregate_as_tensor(
                     shard_tile.get_width());
             }
         }
-        auto storage =
-            MultiDeviceStorage{config, ordered_device_ids, std::move(device_buffers), specs, /*mesh_buffer_=*/nullptr};
+        auto storage = MultiDeviceStorage{config, ordered_device_ids, std::move(device_buffers), specs};
         return Tensor(std::move(storage), reference_shard.get_tensor_spec());
     }
 }
@@ -268,7 +267,7 @@ Tensor create_multi_device_tensor(
             specs.insert({device_id, tensor.get_tensor_spec()});
         }
         return Tensor{
-            MultiDeviceStorage{strategy, ordered_device_ids, device_buffers, specs, /*mesh_buffer_=*/nullptr},
+            MultiDeviceStorage{strategy, ordered_device_ids, device_buffers, specs},
             TensorSpec(
                 tensors.at(0).get_logical_shape(),
                 TensorLayout::fromPaddedShape(

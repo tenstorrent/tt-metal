@@ -8,6 +8,7 @@
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_impl_wrapper.hpp"
 #include "ttnn_test_fixtures.hpp"
 #include <ttnn/distributed/types.hpp>
@@ -51,24 +52,32 @@ TEST_F(MeshTensorTest, Lifecycle) {
 
 using MeshTensorDeviceTest = T3kMultiDeviceFixture;
 
+TEST_F(MeshTensorDeviceTest, ToHostNonMeshTensor) {
+    const ttnn::Shape shape{1, 1, 32, 32};
+    const TensorSpec tensor_spec =
+        TensorSpec(shape, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
+    Tensor input_host_tensor = Tensor::from_vector(std::vector<float>(shape.volume()), tensor_spec);
+    EXPECT_TRUE(input_host_tensor.storage_type() == StorageType::OWNED);
+
+    EXPECT_ANY_THROW(tensor_impl::to_host_mesh_tensor_wrapper(input_host_tensor));
+}
+
 TEST_F(MeshTensorDeviceTest, ReplicateHostTensor) {
     const ttnn::Shape shape{1, 1, 32, 32};
     const TensorSpec tensor_spec =
         TensorSpec(shape, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
 
     std::vector<float> host_data(shape.volume());
-    for (int i = 0; i < shape.volume(); i++) {
-        host_data[i] = i;
-    }
+    std::iota(host_data.begin(), host_data.end(), 0);
 
     // Prepare host tensor to offload on device.
-    Tensor input_host_tensor_sharded = Tensor::from_vector(host_data, tensor_spec);
-    EXPECT_TRUE(input_host_tensor_sharded.storage_type() == StorageType::OWNED);
-    EXPECT_EQ(input_host_tensor_sharded.get_tensor_spec().logical_shape(), shape);
+    Tensor input_host_tensor = Tensor::from_vector(host_data, tensor_spec);
+    EXPECT_TRUE(input_host_tensor.storage_type() == StorageType::OWNED);
+    EXPECT_EQ(input_host_tensor.get_tensor_spec().logical_shape(), shape);
 
     // Write host tensor to device.
     Tensor device_tensor =
-        tensor_impl::to_device_mesh_tensor_wrapper(input_host_tensor_sharded, mesh_device_.get(), MemoryConfig{});
+        tensor_impl::to_device_mesh_tensor_wrapper(input_host_tensor, mesh_device_.get(), MemoryConfig{});
     EXPECT_TRUE(distributed::is_mesh_buffer_tensor(device_tensor));
     EXPECT_EQ(device_tensor.get_tensor_spec().logical_shape(), shape);
 
@@ -99,9 +108,7 @@ TEST_F(MeshTensorDeviceTest, WriteMultiDeviceHostTensor) {
         TensorSpec(shape, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
 
     std::vector<float> host_data(shape.volume());
-    for (int i = 0; i < shape.volume(); i++) {
-        host_data[i] = i;
-    }
+    std::iota(host_data.begin(), host_data.end(), 0);
 
     // Prepare multi-device host tensor to offload on device.
     Tensor input_host_tensor_sharded = distribute_tensor(
