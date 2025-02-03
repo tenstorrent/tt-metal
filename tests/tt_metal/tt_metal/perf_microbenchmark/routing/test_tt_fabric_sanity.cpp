@@ -94,6 +94,8 @@ typedef struct test_board {
             _init_galaxy_board(16);
         } else if ("glx32" == board_type_) {
             _init_galaxy_board(32);
+        } else if ("ubb" == board_type_) {
+            _init_galaxy_board(32, true);
         } else {
             throw std::runtime_error("Unsupported board");
         }
@@ -103,8 +105,8 @@ typedef struct test_board {
             throw std::runtime_error("Odd number of chips detected, not supported currently");
         }
 
-        _init_control_plane(mesh_graph_descriptor);
         device_handle_map = tt::tt_metal::detail::CreateDevices(available_chip_ids);
+        _init_control_plane(mesh_graph_descriptor);
 
         if (num_chips_to_use != available_chip_ids.size()) {
             // initialize partial board to get the set of physical chip IDs for fabric kernels
@@ -121,9 +123,13 @@ typedef struct test_board {
         }
     }
 
-    void _init_galaxy_board(uint32_t num_chips) {
+    void _init_galaxy_board(uint32_t num_chips, bool all_pcie = false) {
         // TODO: add support for quanta galaxy variant
-        mesh_graph_descriptor = "tg_mesh_graph_descriptor.yaml";
+        if (all_pcie) {
+            mesh_graph_descriptor = "quanta_galaxy_mesh_graph_descriptor.yaml";
+        } else {
+            mesh_graph_descriptor = "tg_mesh_graph_descriptor.yaml";
+        }
         num_chips_to_use = num_chips;
 
         // do run time check for number of available chips
@@ -131,8 +137,14 @@ typedef struct test_board {
             throw std::runtime_error("Not a valid galaxy board since it has less than 32 chips");
         }
 
-        for (auto i = 4; i < tt_metal::GetNumAvailableDevices() + 4; i++) {
-            available_chip_ids.push_back(i);
+        if (all_pcie) {
+            for (auto i = 0; i < tt_metal::GetNumAvailableDevices(); i++) {
+                available_chip_ids.push_back(i);
+            }
+        } else {
+            for (auto i = 4; i < tt_metal::GetNumAvailableDevices() + 4; i++) {
+                available_chip_ids.push_back(i);
+            }
         }
     }
 

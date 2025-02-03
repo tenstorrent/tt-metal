@@ -1001,11 +1001,10 @@ void Device::init_command_queue_device() {
             tt::llrt::write_launch_msg_to_core(this->id(), virtual_core, &msg, &go_msg, this->get_dev_addr(virtual_core, HalL1MemAddrType::LAUNCH));
         }
     }
-
+    // Set num_worker_sems and go_signal_noc_data on dispatch for the default sub device config
     for (auto& hw_cq : this->command_queues_) {
-        hw_cq->set_num_worker_sems_on_dispatch(
-            sub_device_manager_tracker_->get_active_sub_device_manager()->num_sub_devices());
-        hw_cq->set_go_signal_noc_data_on_dispatch(
+        hw_cq->set_go_signal_noc_data_and_dispatch_sems(
+            sub_device_manager_tracker_->get_active_sub_device_manager()->num_sub_devices(),
             sub_device_manager_tracker_->get_active_sub_device_manager()->noc_mcast_unicast_data());
     }
 }
