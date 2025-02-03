@@ -21,9 +21,7 @@ class unet_mid_block_2d_cross_attn:
             for resnet in parameters.resnets
         ]
         self.attentions = [
-            transformer_2d_model(
-                device, attention, reader_patterns_cache, batch_size, input_height, input_width, compute_kernel_config
-            )
+            transformer_2d_model(device, attention, batch_size, input_height, input_width, compute_kernel_config)
             for attention in parameters.attentions
         ]
 
