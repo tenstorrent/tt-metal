@@ -216,7 +216,7 @@ TEST(AnyRangeTest, CanReferenceRangeOfNonTrivialElements) {
             // no extra copies stored
             EXPECT_EQ(range[0].use_count(), 1);
             EXPECT_EQ(range[1].use_count(), 1);
-            EXPECT_EQ(range[2].use_count(), 1 + 42);
+            EXPECT_EQ(range[2].use_count(), 1);
             EXPECT_EQ(range[3].use_count(), 1);
 
             EXPECT_EQ(*range[0], 0);
