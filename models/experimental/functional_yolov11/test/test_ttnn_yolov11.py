@@ -79,7 +79,9 @@ def test_yolov11(device, use_program_cache, reset_seeds):
     parameters = create_yolov11_model_parameters(torch_model, torch_input, device=device)
     ttnn_model = ttnn_yolov11.YoloV11(device, parameters)
     ttnn_output = ttnn_model(ttnn_input)
-
+    # l1 = torch.load("/home/ubuntu/tt-metal/models/experimental/functional_yolov11/dumps/torch_out.pth")
+    # l2 = torch.load("/home/ubuntu/tt-metal/models/experimental/functional_yolov11/dumps/ttnn_out.pth")
+    # assert_with_pcc(l1,l2,0.99999)
     ttnn_output = ttnn.to_torch(ttnn_output)
     # ttnn_output = ttnn_output.permute(0, 2, 1)
     print(ttnn_output.shape, torch_output.shape)

@@ -15,8 +15,8 @@ from functools import partial
 from models.utility_functions import disable_persistent_kernel_cache
 from models.experimental.functional_yolov11.reference import yolov11
 
-# from models.experimental.functional_yolov11.tt.ttnn_yolov11 import YOLOv11
-# from models.experimental.functional_yolov11.tt.ttnn_yolov11_utils import custom_preprocessor
+from models.experimental.functional_yolov11.tt import ttnn_yolov11
+
 from models.experimental.functional_yolov11.tt.model_preprocessing import (
     create_yolov11_input_tensors,
     create_yolov11_model_parameters,
@@ -103,8 +103,10 @@ def save_yolo_predictions_by_model(result, save_dir, image_path, model_name):
 @pytest.mark.parametrize(
     "source, model_type",
     [
-        ("models/experimental/functional_yolov11/demo/images/bus.jpg", "torch_model"),
-        # ("models/experimental/functional_yolov11/demo/images/bus.jpg", "tt_model"),
+        ("models/experimental/functional_yolov11/demo/images/cycle_girl.jpg", "torch_model"),
+        ("models/experimental/functional_yolov11/demo/images/cycle_girl.jpg", "tt_model"),
+        ("models/experimental/functional_yolov11/demo/images/dog.jpg", "torch_model"),
+        ("models/experimental/functional_yolov11/demo/images/dog.jpg", "tt_model"),
     ],
 )
 def test_demo(device, source, model_type):
@@ -123,9 +125,19 @@ def test_demo(device, source, model_type):
         model.eval()
         logger.info("Inferencing using Torch Model")
     else:
-        state_dict = attempt_load("yolov11.pt", map_location="cpu").state_dict()
-        # parameters = custom_preprocessor(device, state_dict)
-        # model = partial(YOLOv11, device=device, parameters=parameters)
+        torch_input, ttnn_input = create_yolov11_input_tensors(device)
+        torch_model = attempt_load("models/experimental/functional_yolov11/reference/yolo11n.pt", map_location="cpu")
+        state_dict = torch_model.state_dict()
+        torch_model = yolov11.YoloV11()
+        ds_state_dict = {k: v for k, v in state_dict.items()}
+        new_state_dict = {}
+        for (name1, parameter1), (name2, parameter2) in zip(torch_model.state_dict().items(), ds_state_dict.items()):
+            if isinstance(parameter2, torch.FloatTensor):
+                new_state_dict[name1] = parameter2
+        torch_model.load_state_dict(new_state_dict)
+        torch_model.eval()
+        parameters = create_yolov11_model_parameters(torch_model, torch_input, device=device)
+        model = ttnn_yolov11.YoloV11(device, parameters)
         logger.info("Inferencing using ttnn Model")
 
     save_dir = "models/experimental/functional_yolov11/demo/runs"
@@ -220,16 +232,22 @@ def test_demo(device, source, model_type):
 
     for batch in dataset:
         paths, im0s, s = batch
-
         im = preprocess(im0s)
-
-        ttnn_im = ttnn.from_torch(im, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-
         if model_type == "torch_model":
             preds = model(im)
+            print("preds in torch", preds.shape)
         else:
+            img = torch.permute(im, (0, 2, 3, 1))
+            img = img.reshape(
+                1,
+                1,
+                img.shape[0] * img.shape[1] * img.shape[2],
+                img.shape[3],
+            )
+            ttnn_im = ttnn.from_torch(img, dtype=ttnn.bfloat16)
             preds = model(x=ttnn_im)
-            preds[0] = ttnn.to_torch(preds[0], dtype=torch.float32)
+            preds = ttnn.to_torch(preds, dtype=torch.float32)
+            print("preds in ttnn", preds.shape)
 
         results = postprocess(preds, im, im0s, batch, names)[0]
 
