@@ -163,8 +163,6 @@ def Bottleneck(
 
     ttnn.deallocate(cv1)
 
-    cv2 = ttnn.sharded_to_interleaved(cv2, ttnn.L1_MEMORY_CONFIG)
-
     if tilize:
         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, device=device)
 
@@ -190,6 +188,7 @@ def C2f(
     change_shard=None,
     deallocate_activation=False,
     output_layout=ttnn.ROW_MAJOR_LAYOUT,
+    temp=False,
 ):
     cv1, out_h, out_w = Conv(
         device,
@@ -206,8 +205,9 @@ def C2f(
         output_layout=output_layout,
     )
 
-    cv1 = ttnn.to_layout(cv1, ttnn.ROW_MAJOR_LAYOUT)
-    y = list(ttnn.split(cv1, 2, 3))
+    cv1 = ttnn.to_layout(cv1, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+    y = list(ttnn.split(cv1, 2, 3, memory_config=ttnn.L1_MEMORY_CONFIG))
+    ttnn.deallocate(cv1)
 
     to_tile = True
 
@@ -231,10 +231,14 @@ def C2f(
         y.append(z)
         to_tile = False
 
-    y[0] = ttnn.to_layout(y[0], layout=ttnn.TILE_LAYOUT)
-    y[1] = ttnn.to_layout(y[1], layout=ttnn.TILE_LAYOUT)
+    y[0] = ttnn.to_layout(y[0], layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+    y[1] = ttnn.to_layout(y[1], layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    x = ttnn.concat(y, 3)
+    if not shortcut:
+        for i in range(2, len(y)):
+            y[i] = ttnn.sharded_to_interleaved(y[i], ttnn.L1_MEMORY_CONFIG)
+
+    x = ttnn.concat(y, 3)  # memory_config=ttnn.L1_MEMORY_CONFIG OOM issue
 
     for i in range(len(y)):
         ttnn.deallocate(y[i])
