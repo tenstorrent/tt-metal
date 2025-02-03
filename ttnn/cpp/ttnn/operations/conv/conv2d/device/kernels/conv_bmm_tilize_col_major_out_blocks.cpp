@@ -151,15 +151,6 @@ void MAIN {
            const bool use_partials_for_out = (partials_cb_read_ptr == get_local_cb_interface(out_cb_id).fifo_rd_ptr);)
     PACK(uint32_t partials_cb_write_ptr = get_local_cb_interface(matmul_partials_cb).fifo_wr_ptr;
          const bool use_partials_for_out = (partials_cb_write_ptr == get_local_cb_interface(out_cb_id).fifo_wr_ptr);)
-    DPRINT_UNPACK(
-        DPRINT << "Saved  Read Ptr: " << partials_cb_read_ptr << "\n"; if (use_partials_for_out) {
-            DPRINT << "Using Partials for Out\n";
-        } else { DPRINT << "Not Using Partials for Out\n"; })
-
-    DPRINT_PACK(DPRINT << "Saved CB Write Ptr: " << partials_cb_write_ptr << "\n";)
-
-    DPRINT_UNPACK(DPRINT << "MM Out CB Read Ptr: " << mm_out_cb_id << " "
-                         << get_local_cb_interface(mm_out_cb_id).fifo_rd_ptr << "\n";)
     // in1 num blocks w is the outer loop. Output blocks are computed in col major order.
     for (uint32_t in1_block_w_i = 0; in1_block_w_i < in1_num_blocks_w; ++in1_block_w_i) {
         for (uint32_t in0_block_h_i = 0; in0_block_h_i < in0_num_blocks_h; ++in0_block_h_i) {
@@ -184,8 +175,6 @@ void MAIN {
             PACK(
                 if (use_partials_for_out) partials_cb_write_ptr =
                     get_local_cb_interface(matmul_partials_cb).fifo_wr_ptr);
-            DPRINT_UNPACK(DPRINT << "Saved  Read Ptr: " << partials_cb_read_ptr << "\n";)
-            DPRINT_PACK(DPRINT << "Saved CB Write Ptr: " << partials_cb_write_ptr << "\n";)
             uint32_t curr_matmul_out_cb = matmul_partials_cb;
             for (uint32_t in0_block_w_i = 0; in0_block_w_i < in0_num_blocks_w; ++in0_block_w_i) {
 #ifdef WIDTH_SHARDED
