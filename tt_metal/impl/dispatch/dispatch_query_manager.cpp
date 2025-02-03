@@ -82,10 +82,10 @@ void DispatchQueryManager::reset(uint8_t num_hw_cqs) {
     go_signal_noc_ = dispatch_s_enabled_ ? NOC::NOC_1 : NOC::NOC_0;
     std::cout << "Ethernet Dispatch Enabled: "
               << (dispatch_core_config_.get_dispatch_core_type() == DispatchCoreType::ETH) << std::endl;
-    dispatch_cores_.reserve(num_hw_cqs_);
-    for (std::size_t cq_id = 0; cq_id < num_hw_cqs_; cq_id++) {
-        dispatch_cores_.push_back(dispatch_core(cq_id));
-    }
+    // dispatch_cores_.reserve(num_hw_cqs_);
+    // for (std::size_t cq_id = 0; cq_id < num_hw_cqs_; cq_id++) {
+    //     dispatch_cores_.push_back(dispatch_core(cq_id));
+    // }
 }
 
 const DispatchCoreConfig& DispatchQueryManager::get_dispatch_core_config() const { return dispatch_core_config_; }
@@ -98,7 +98,16 @@ const std::vector<CoreCoord>& DispatchQueryManager::get_logical_dispatch_cores(u
     return tt::get_logical_dispatch_cores(device_id, num_hw_cqs_, dispatch_core_config_);
 }
 
-tt_cxy_pair DispatchQueryManager::get_dispatch_core(uint8_t cq_id) const { return dispatch_cores_[cq_id]; }
+tt_cxy_pair DispatchQueryManager::get_dispatch_core(uint8_t cq_id) const {
+    return dispatch_core(cq_id);
+    // if (not dispatch_cores_.size()) {
+    //     dispatch_cores_.reserve(num_hw_cqs_);
+    //     for (std::size_t cq_id = 0; cq_id < num_hw_cqs_; cq_id++) {
+    //         // dispatch_cores_.push_back(dispatch_core(cq_id));
+    //     }
+    // }
+    // return dispatch_cores_[cq_id];
+}
 
 DispatchQueryManager::DispatchQueryManager(uint8_t num_hw_cqs) { this->reset(num_hw_cqs); }
 

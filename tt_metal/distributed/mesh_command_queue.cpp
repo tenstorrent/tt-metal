@@ -171,7 +171,6 @@ void MeshCommandQueue::write_shard_to_device(
     auto device = shard_view->device();
     BufferRegion region(0, shard_view->size());
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
-    std::cout << "Write to: " << shard_view->device()->id() << std::endl;
     buffer_dispatch::write_to_device_buffer(
         src, *shard_view, region, id_, expected_num_workers_completed_, this->dispatch_core_type(), sub_device_ids);
 }
@@ -209,10 +208,8 @@ void MeshCommandQueue::read_shard_from_device(
         if (dispatch_params.pages_per_txn > 0) {
             auto read_descriptor = std::get<tt::tt_metal::ReadBufferDescriptor>(
                 *buffer_dispatch::generate_interleaved_buffer_read_descriptor(dst, dispatch_params, *shard_view));
-            std::cout << "Wait on: " << shard_view->device()->id() << std::endl;
             buffer_dispatch::copy_completion_queue_data_into_user_space(
                 read_descriptor, mmio_device_id, channel, id_, device->sysmem_manager(), exit_condition);
-            std::cout << "Done wait on: " << shard_view->device()->id() << std::endl;
         }
     }
 }

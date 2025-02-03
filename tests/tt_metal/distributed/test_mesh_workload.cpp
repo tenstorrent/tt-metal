@@ -908,53 +908,92 @@ TEST_F(MeshWorkloadTest, MeshWorkloadSemaphoreDifferentPrograms) {
     }
 }
 
-TEST(MeshEvent, TestMeshEvents) {
-    // auto mesh_device_ = MeshDevice::create(MeshDeviceConfig{.mesh_shape = MeshShape{2, 2}}, 0, 0, 1,
-    // DispatchCoreType::ETH);
-    auto devices = tt::tt_metal::detail::CreateDevices({0, 1, 2, 3, 4, 5, 6, 7}, 2, 0, 0, DispatchCoreType::ETH);
+TEST(MeshEvent, TestMeshEventsWithReplicatedIO) {
+    uint32_t NUM_TILES = 1000;
+    uint32_t num_iterations = 20;
+    auto mesh_device_ =
+        MeshDevice::create(MeshDeviceConfig{.mesh_shape = MeshShape{2, 1}}, 0, 0, 2, DispatchCoreType::ETH);
     int32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);
-    uint32_t NUM_TILES = 100;
-    // DeviceLocalBufferConfig per_device_buffer_config{
-    //     .page_size = single_tile_size,
-    //     .buffer_type = BufferType::L1,
-    //     .buffer_layout = TensorMemoryLayout::INTERLEAVED,
-    //     .bottom_up = false};
-    // ReplicatedBufferConfig global_buffer_config = {
-    //     .size = NUM_TILES * single_tile_size,
-    // };
 
-    for (auto dev : devices) {
-        auto buf = Buffer::create(dev.second, NUM_TILES * single_tile_size, single_tile_size, BufferType::L1);
+    DeviceLocalBufferConfig per_device_buffer_config{
+        .page_size = single_tile_size,
+        .buffer_type = BufferType::L1,
+        .buffer_layout = TensorMemoryLayout::INTERLEAVED,
+        .bottom_up = false};
+    ReplicatedBufferConfig global_buffer_config = {
+        .size = NUM_TILES * single_tile_size,
+    };
+
+    std::shared_ptr<MeshBuffer> buf =
+        MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device_.get());
+
+    for (std::size_t i = 0; i < num_iterations; i++) {
         std::vector<uint32_t> src_vec(NUM_TILES * single_tile_size / sizeof(uint32_t), 0);
-        std::iota(src_vec.begin(), src_vec.end(), 0);
-        EnqueueWriteBuffer(dev.second->command_queue(), buf, src_vec, false);
-        std::vector<uint32_t> dst_vec = {};
-        EnqueueReadBuffer(dev.second->command_queue(), buf, dst_vec, true);
+        std::iota(src_vec.begin(), src_vec.end(), i);
+
+        std::vector<std::vector<uint32_t>> readback_vecs = {};
+        std::shared_ptr<MeshEvent> event = std::make_shared<MeshEvent>();
+
+        EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(0), buf, src_vec);
+
+        mesh_device_->mesh_command_queue(0).enqueue_record_event(event);
+        mesh_device_->mesh_command_queue(1).enqueue_wait_for_event(event);
+
+        for (std::size_t logical_x = 0; logical_x < buf->device()->num_cols(); logical_x++) {
+            for (std::size_t logical_y = 0; logical_y < buf->device()->num_rows(); logical_y++) {
+                readback_vecs.push_back({});
+                auto shard = buf->get_device_buffer(Coordinate(logical_y, logical_x));
+                ReadShard(
+                    mesh_device_->mesh_command_queue(1), readback_vecs.back(), buf, Coordinate(logical_y, logical_x));
+            }
+        }
+
+        for (auto& vec : readback_vecs) {
+            EXPECT_EQ(vec, src_vec);
+        }
     }
+}
 
-    // std::shared_ptr<MeshBuffer> buf = MeshBuffer::create(global_buffer_config, per_device_buffer_config,
-    // mesh_device_.get());
+TEST(MeshEvent, TestMeshEventsWithShardedIO) {
+    uint32_t num_iterations = 20;
+    auto mesh_device_ =
+        MeshDevice::create(MeshDeviceConfig{.mesh_shape = MeshShape{2, 1}}, 0, 0, 2, DispatchCoreType::ETH);
+    uint32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);
 
-    // std::vector<uint32_t> src_vec(NUM_TILES * single_tile_size / sizeof(uint32_t), 0);
-    // std::iota(src_vec.begin(), src_vec.end(), 0);
-    // for (std::size_t logical_x = 0; logical_x < buf->device()->num_cols(); logical_x++) {
-    //     for (std::size_t logical_y = 0; logical_y < buf->device()->num_rows(); logical_y++) {
-    //         auto shard = buf->get_device_buffer(Coordinate(logical_y, logical_x));
-    //         EnqueueWriteBuffer(shard->device()->command_queue(), buf->get_device_buffer(Coordinate(logical_y,
-    //         logical_x)), src_vec, false);
+    DeviceLocalBufferConfig per_device_buffer_config{
+        .page_size = single_tile_size,
+        .buffer_type = BufferType::DRAM,
+        .buffer_layout = TensorMemoryLayout::INTERLEAVED,
+        .bottom_up = true};
 
-    //     }
-    // }
-    // for (std::size_t logical_x = 0; logical_x < buf->device()->num_cols(); logical_x++) {
-    //     for (std::size_t logical_y = 0; logical_y < buf->device()->num_rows(); logical_y++) {
-    //         std::vector<uint32_t> dst_vec = {};
-    //         auto shard = buf->get_device_buffer(Coordinate(logical_y, logical_x));
-    //         EnqueueReadBuffer(shard->device()->command_queue(), shard, dst_vec, true);
-    //         // ReadShard(mesh_device_->mesh_command_queue(), dst_vec, buf, Coordinate(logical_y, logical_x));
-    //         // for (auto val : dst_vec) std::cout << val << " ";
-    //         // std::cout << " =========== " << std::endl;
-    //     }
-    // }
+    Shape2D global_buffer_shape = {2048, 2048};
+    Shape2D shard_shape = {2048, 1024};
+
+    uint32_t global_buffer_size = global_buffer_shape.height() * global_buffer_shape.width() * sizeof(uint32_t);
+
+    ShardedBufferConfig sharded_config{
+        .global_size = global_buffer_size,
+        .global_buffer_shape = global_buffer_shape,
+        .shard_shape = shard_shape,
+        .shard_orientation = ShardOrientation::COL_MAJOR,
+    };
+
+    auto mesh_buffer = MeshBuffer::create(sharded_config, per_device_buffer_config, mesh_device_.get());
+    for (std::size_t i = 0; i < num_iterations; i++) {
+        std::vector<uint32_t> src_vec =
+            std::vector<uint32_t>(global_buffer_shape.height() * global_buffer_shape.width(), 0);
+        std::iota(src_vec.begin(), src_vec.end(), i);
+        std::shared_ptr<MeshEvent> event = std::make_shared<MeshEvent>();
+        EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(0), mesh_buffer, src_vec);
+
+        mesh_device_->mesh_command_queue(0).enqueue_record_event(event);
+        mesh_device_->mesh_command_queue(1).enqueue_wait_for_event(event);
+
+        std::vector<uint32_t> dst_vec = {};
+        EnqueueReadMeshBuffer(mesh_device_->mesh_command_queue(), dst_vec, mesh_buffer);
+
+        EXPECT_EQ(dst_vec, src_vec);
+    }
 }
 
 }  // namespace
