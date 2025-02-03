@@ -40,11 +40,6 @@ RUN mkdir -p /tmp/cba \
     && cmake --install /tmp/cba/build \
     && rm -rf /tmp/cba
 
-
-## Why am I doing this????????
-# If any file in scripts changes, cache is invalidated
-COPY /scripts /opt/tt_metal_infra/scripts
-
 # Install extra ci apt requirements
 RUN apt-get update && apt-get install -y --no-install-recommends \
     apt-utils \
