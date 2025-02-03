@@ -161,7 +161,6 @@ public:
     void enable_async(bool enable) override;
     void synchronize() override;
     WorkExecutorMode get_worker_mode() override;
-    void set_worker_queue_mode(const WorkerQueueMode& mode) override;
     bool is_worker_queue_empty() const override;
     void push_work(std::function<void()> work, bool blocking) override;
     void enable_program_cache() override;

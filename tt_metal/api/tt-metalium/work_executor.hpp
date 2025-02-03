@@ -14,7 +14,7 @@
 #include <thread>
 
 #include "env_lib.hpp"
-#include "lock_free_queue.hpp"
+#include "multi_producer_single_consumer_queue.hpp"
 #include "tracy/Tracy.hpp"
 
 #if defined(TRACY_ENABLE)
@@ -30,11 +30,6 @@ namespace tt {
 enum class WorkExecutorMode {
     SYNCHRONOUS = 0,
     ASYNCHRONOUS = 1,
-};
-
-enum class WorkerQueueMode {
-    LOCKFREE = 0,
-    LOCKBASED = 1,
 };
 
 enum class WorkerState {
@@ -77,7 +72,7 @@ class WorkExecutor {
     // that have access to the device handle can queue up tasks asynchronously. In synchronous/pass through mode, we
     // bypass the queue and tasks are executed immediately after being pushed.
 public:
-    LockFreeQueue<std::function<void()>> worker_queue;
+    MultiProducerSingleConsumerQueue<std::function<void()>> worker_queue;
 
     WorkExecutor(int cpu_core, int device_id) : cpu_core_for_worker(cpu_core), managed_device_id(device_id) {}
 
@@ -100,11 +95,9 @@ public:
 
     inline void initialize() {
         this->work_executor_mode = default_worker_executor_mode();
-        this->worker_queue_mode = default_worker_queue_mode();
         this->worker_state = WorkerState::IDLE;
         set_process_priority(0);
         if (this->work_executor_mode == WorkExecutorMode::ASYNCHRONOUS) {
-            this->set_worker_queue_mode(this->worker_queue_mode);
             this->start_worker();
         }
     }
@@ -196,17 +189,6 @@ public:
 
     WorkExecutorMode get_worker_mode() { return work_executor_mode; }
 
-    inline void set_worker_queue_mode(const WorkerQueueMode& mode) {
-        if (mode == WorkerQueueMode::LOCKFREE) {
-            this->worker_queue.set_lock_free();
-        } else {
-            this->worker_queue.set_lock_based();
-        }
-        this->worker_queue_mode = mode;
-    }
-
-    WorkerQueueMode get_worker_queue_mode() const { return worker_queue_mode; }
-
     inline std::thread::id get_parent_thread_id() const { return this->worker_queue.parent_thread_id; }
 
     inline std::thread::id get_worker_thread_id() const { return this->worker_queue.worker_thread_id; }
@@ -247,13 +229,7 @@ private:
         return static_cast<WorkExecutorMode>(value);
     }
 
-    static WorkerQueueMode default_worker_queue_mode() {
-        static int value = parse_env<int>("TT_METAL_LOCK_BASED_QUEUE", static_cast<int>(WorkerQueueMode::LOCKFREE));
-        return static_cast<WorkerQueueMode>(value);
-    }
-
     WorkExecutorMode work_executor_mode;
-    WorkerQueueMode worker_queue_mode;
 };
 
 }  // namespace tt

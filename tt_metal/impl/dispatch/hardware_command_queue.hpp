@@ -12,7 +12,7 @@
 #include "command_queue.hpp"
 #include "host_runtime_commands.hpp"
 #include "command_queue_interface.hpp"
-#include "lock_free_queue.hpp"
+#include "multi_producer_single_consumer_queue.hpp"
 #include "worker_config_buffer.hpp"
 #include "program_impl.hpp"
 #include "trace_buffer.hpp"
@@ -116,7 +116,7 @@ private:
     volatile uint32_t num_completed_completion_q_reads;  // completion queue reader thread increments this after reading
                                                          // an entry out of the completion queue
 
-    LockFreeQueue<CompletionReaderVariant> issued_completion_q_reads;
+    MultiProducerSingleConsumerQueue<CompletionReaderVariant> issued_completion_q_reads;
     // These values are used to reset the host side launch message wptr after a trace is captured
     // Trace capture is a fully host side operation, but it modifies the state of the wptrs above
     // To ensure that host and device are not out of sync, we reset the wptrs to their original values
