@@ -667,7 +667,7 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     ttnn::Tensor weight_tensor_;  // tensor to return
     ttnn::Tensor bias_tensor_;
 
-    auto original_weights_shape = weight_tensor.get_shape();
+    auto original_weights_shape = weight_tensor.get_logical_shape();
     uint32_t original_weights_out_channels = original_weights_shape[0];
     uint32_t original_weights_in_channels = original_weights_shape[1];
     uint32_t original_weights_window_h = original_weights_shape[2];
@@ -692,7 +692,7 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
 
     weight_tensor_ = ttnn::operations::core::to_device(weight_tensor_, device, std::nullopt);
 
-    auto weights_shape = weight_tensor_.get_shape();
+    auto weights_shape = weight_tensor_.get_logical_shape();
     uint32_t out_channels = weights_shape[0];
     uint32_t in_channels = weights_shape[1];
     uint32_t window_h = weights_shape[2];
@@ -705,10 +705,10 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     uint32_t in_channels_padded = tt::round_up(in_channels, input_num_cores_channels * input_channels_alignment);
     uint32_t out_channel_padding = out_channels_padded - out_channels;
 
-    tt::tt_metal::LegacyShape weights_channels_padded_shape = tt::tt_metal::LegacyShape(
+    ttnn::Shape weights_channels_padded_shape(
         std::array<uint32_t, 4>({out_channels_padded, in_channels_padded, window_h, window_w}));
     if (is_non_tile_mul_width) {
-        weights_channels_padded_shape = tt::tt_metal::LegacyShape(std::array<uint32_t, 4>(
+        weights_channels_padded_shape = ttnn::Shape(std::array<uint32_t, 4>(
             {round_up(out_channels, 32), round_up(in_channels, input_channels_alignment), window_h, window_w}));
         out_channels_padded = tt::round_up(out_channels, 32);
         in_channels_padded = round_up(in_channels, input_channels_alignment);
@@ -834,23 +834,21 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
         true);
 
     uint32_t weight_matrix_height = in_channels * window_h * window_w;
-    int32_t weight_matrix_height_padding = weight_tensor_.shape()[2] - weight_matrix_height;
+    int32_t weight_matrix_height_padding = weight_tensor_.get_logical_shape()[2] - weight_matrix_height;
     TT_FATAL(weight_matrix_height_padding >= 0, " Matrix Height Padding can't be negative");
 
-    auto target_shape = ttnn::Shape(
-        std::array<uint32_t, 4>{1, 1, weight_matrix_height, out_channels},
-        std::array<std::array<uint32_t, 2>, 4>{
-            std::array<uint32_t, 2>{0, 0},
-            std::array<uint32_t, 2>{0, 0},
-            std::array<uint32_t, 2>{0, weight_matrix_height_padding},
-            std::array<uint32_t, 2>{0, out_channel_padding}});
-    weight_tensor_ = ttnn::reshape(weight_tensor_, target_shape);
+    ttnn::Shape target_shape(std::array<uint32_t, 4>{1, 1, weight_matrix_height, out_channels});
+    ttnn::Shape padded_target_shape({1, 1, weight_tensor_.get_logical_shape()[2], out_channels_padded});
+
+    weight_tensor_ = ttnn::reshape(weight_tensor_, target_shape, padded_target_shape);
 
     if (bias_tensor.has_value()) {
         bias_tensor_ = bias_tensor.value();
         bool is_bias_tensor_is_on_device = ttnn::is_tensor_on_device_or_multidevice(bias_tensor_);
         if (!is_bias_tensor_is_on_device) {
-            TT_FATAL(bias_tensor_.shape()[3] == out_channels, "Bias must have the same length as output channels");
+            TT_FATAL(
+                bias_tensor_.get_logical_shape()[3] == out_channels,
+                "Bias must have the same length as output channels");
             bias_tensor_ = conv_bias_layout_convert(
                 bias_tensor_,
                 weights_bias_dtype,
