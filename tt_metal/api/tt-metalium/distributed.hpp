@@ -6,7 +6,7 @@
 
 #include "mesh_buffer.hpp"
 #include "mesh_command_queue.hpp"
-#include "mesh_workload.hpp"
+#include "mesh_event.hpp"
 
 namespace tt::tt_metal {
 
@@ -78,7 +78,23 @@ void EnqueueReadMeshBuffer(
     mesh_cq.enqueue_read_mesh_buffer(dst.data(), mesh_buffer, blocking);
 }
 
-void Finish(MeshCommandQueue& mesh_cq);
+void EnqueueRecordEvent(
+    MeshCommandQueue& mesh_cq,
+    const std::shared_ptr<MeshEvent>& event,
+    tt::stl::Span<const SubDeviceId> sub_device_ids = {},
+    const std::optional<LogicalDeviceRange>& device_range = std::nullopt);
+
+void EnqueueRecordEventToHost(
+    MeshCommandQueue& mesh_cq,
+    const std::shared_ptr<MeshEvent>& event,
+    tt::stl::Span<const SubDeviceId> sub_device_ids = {},
+    const std::optional<LogicalDeviceRange>& device_range = std::nullopt);
+
+void EnqueueWaitForEvent(MeshCommandQueue& mesh_cq, const std::shared_ptr<MeshEvent>& event);
+
+void EventSynchronize(const std::shared_ptr<MeshEvent>& event);
+
+void Finish(MeshCommandQueue& mesh_cq, tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
 }  // namespace distributed
 }  // namespace tt::tt_metal
