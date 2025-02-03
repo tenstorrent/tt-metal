@@ -10,7 +10,7 @@
 #include "dprint_tensix.h"
 #include "cpack_common.h"
 
-// NOTE: FUNCTIONS WITHOUT ARCH NAME (GRAYSKULL, WORMHOLE, BLACKHOLE) AND WITHOUT HELPER SUFIX ARE INTENDED TO BE USE
+// NOTE: FUNCTIONS WITHOUT HELPER SUFIX ARE INTENDED TO BE USED
 
 // PACK CONFIG
 
@@ -143,7 +143,7 @@ inline void dprint_tensix_pack_config_pack_dis_y_pos_start_offset(const ckernel:
 
 #ifdef ARCH_GRAYSKULL
 
-inline void dprint_tensix_pack_config_grayskull(const ckernel::packer::pack_config_t& config) {
+inline void dprint_tensix_pack_config_helper(const ckernel::packer::pack_config_t& config) {
     DPRINT << "row_ptr_section_size: ";
     dprint_tensix_pack_config_row_ptr_section_size(config);
     DPRINT << "exp_section_size: ";
@@ -185,7 +185,7 @@ inline void dprint_tensix_pack_config_grayskull(const ckernel::packer::pack_conf
 #else  // ARCH_WORMHOLE or ARCH_BLACKHOLE
 
 #ifdef ARCH_WORMHOLE
-inline void dprint_tensix_pack_config_wormhole(const ckernel::packer::pack_config_t& config) {
+inline void dprint_tensix_pack_config_helper(const ckernel::packer::pack_config_t& config) {
     DPRINT << "row_ptr_section_size: ";
     dprint_tensix_pack_config_row_ptr_section_size(config);
     DPRINT << "exp_section_size: ";
@@ -228,7 +228,7 @@ inline void dprint_tensix_pack_config_wormhole(const ckernel::packer::pack_confi
 #endif  // ARCH_WORMHOLE
 
 #ifdef ARCH_BLACKHOLE
-inline void dprint_tensix_pack_config_blackhole(const ckernel::packer::pack_config_t& config) {
+inline void dprint_tensix_pack_config_helper(const ckernel::packer::pack_config_t& config) {
     DPRINT << "row_ptr_section_size: ";
     dprint_tensix_pack_config_row_ptr_section_size(config);
     DPRINT << "exp_section_size: ";
@@ -568,17 +568,6 @@ inline void dprint_tensix_pack_counters(uint reg_id = 0) {
             }
         } else DPRINT
         << "INVALID REGISTER ID! PLEASE CHOOSE A NUMBER BETWEEN 0 AND " << num_of_instances << "." << ENDL();)
-}
-
-// Choose what register you want printed with reg_id (1-4)
-inline void dprint_tensix_pack_config_helper(const ckernel::packer::pack_config_t& config) {
-#ifdef ARCH_GRAYSKULL
-    dprint_tensix_pack_config_grayskull(config);
-#elif ARCH_WORMHOLE
-    dprint_tensix_pack_config_wormhole(config);
-#else
-    dprint_tensix_pack_config_blackhole(config);
-#endif
 }
 
 // Choose what register you want by id (1-4). 0 for all.
