@@ -358,7 +358,7 @@ def Detect(device, x, parameters, path, nc=80, ch=()):
 
 def DetectionModel(device, x, parameters):
     conv_0, out_h, out_w = Conv(device, x, parameters, "model.0", 640, 640, 3, 2, 1, act_block_h=True)
-    ttnn.deallocate(x)
+    # ttnn.deallocate(x)
 
     conv_1, out_h, out_w = Conv(device, conv_0, parameters, "model.1", out_h, out_w, 3, 2, 1, act_block_h=True)
     ttnn.deallocate(conv_0)

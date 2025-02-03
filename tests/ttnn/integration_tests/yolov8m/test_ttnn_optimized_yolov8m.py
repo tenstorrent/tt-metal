@@ -101,9 +101,7 @@ def test_optimized_yolov8m(device, input_tensor, reset_seeds):
 
     parameters = custom_preprocessor(device, state_dict)
     ttnn_input = input_tensor.permute(0, 2, 3, 1)
-    ttnn_input = ttnn.from_torch(
-        ttnn_input, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
-    )
+    ttnn_input = ttnn.from_torch(ttnn_input, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
 
     ttnn_model_output = YOLOv8m(device, ttnn_input, parameters)[0]
     ttnn_model_output = ttnn.to_torch(ttnn_model_output)
