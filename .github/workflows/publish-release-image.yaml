@@ -54,7 +54,8 @@ jobs:
             BASE_IMAGE_NAME=tt-metalium/${{ matrix.os }}-amd64
           tags: ${{ env.TAG_NAME }}
           context: .
-          file: dockerfile/release.Dockerfile
+          file: dockerfile/Dockerfile
+          target: release
   smoke-test-docker-image:
     needs: create-docker-release-image
     strategy:
