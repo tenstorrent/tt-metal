@@ -51,7 +51,7 @@ def test_yolo_v11_psa_block(
         input_width=fwd_input_shape[3],
     )
     ttnn_input = ttnn.to_device(ttnn_input, device=device)
-    ttnn_input = ttnn.to_layout(ttnn_input, layout=ttnn.TILE_LAYOUT)
+    ttnn_input = ttnn.to_layout(ttnn_input, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
     torch_output = torch_module(torch_input)
     parameters = create_yolov11_model_parameters(torch_module, torch_input, device=device)
     ttnn_module = ttnn_psa_block(device=device, parameter=parameters.conv_args, conv_pt=parameters)

@@ -68,11 +68,11 @@ def test_yolo_v11_detect(
         input_width=fwd_input_shape[2][3],
     )
     ttnn_input_1 = ttnn.to_device(ttnn_input_1, device=device)
-    ttnn_input_1 = ttnn.to_layout(ttnn_input_1, layout=ttnn.TILE_LAYOUT)
+    ttnn_input_1 = ttnn.to_layout(ttnn_input_1, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
     ttnn_input_2 = ttnn.to_device(ttnn_input_2, device=device)
-    ttnn_input_2 = ttnn.to_layout(ttnn_input_2, layout=ttnn.TILE_LAYOUT)
+    ttnn_input_2 = ttnn.to_layout(ttnn_input_2, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
     ttnn_input_3 = ttnn.to_device(ttnn_input_3, device=device)
-    ttnn_input_3 = ttnn.to_layout(ttnn_input_3, layout=ttnn.TILE_LAYOUT)
+    ttnn_input_3 = ttnn.to_layout(ttnn_input_3, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
     torch_output = torch_module(torch_input_1, torch_input_2, torch_input_3)
     parameters = create_yolov11_model_parameters_detect(
         torch_module, torch_input_1, torch_input_2, torch_input_3, device=device
@@ -80,7 +80,6 @@ def test_yolo_v11_detect(
     ttnn_module = ttnn_detect(device=device, parameter=parameters.model, conv_pt=parameters)
 
     ttnn_output = ttnn_module(y1=ttnn_input_1, y2=ttnn_input_2, y3=ttnn_input_3, device=device)
-    print("shape outputs", ttnn_output.shape, torch_output.shape)
     ttnn_output = ttnn.to_torch(ttnn_output)
     # ttnn_output = ttnn_output.permute(0, 2, 1)
     ttnn_output = ttnn_output.reshape(torch_output.shape)
