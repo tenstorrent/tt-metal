@@ -221,9 +221,10 @@ IDevice* MeshDevice::get_device(size_t row_idx, size_t col_idx) const {
     return this->get_device_index(row_idx * num_cols() + col_idx);
 }
 
-MeshCommandQueue& MeshDevice::mesh_command_queue() {
-    TT_FATAL(this->using_fast_dispatch(), "Can only acess the MeshCommandQueue when using Fast Dispatch.");
-    return *(mesh_command_queue_);
+MeshCommandQueue& MeshDevice::mesh_command_queue(std::size_t cq_id) const {
+    TT_FATAL(this->using_fast_dispatch(), "Can only access the MeshCommandQueue when using Fast Dispatch.");
+    TT_FATAL(cq_id < mesh_command_queues_.size(), "cq_id {} is out of range", cq_id);
+    return *(mesh_command_queues_[cq_id]);
 }
 
 const DeviceIds MeshDevice::get_device_ids() const {
@@ -626,9 +627,11 @@ bool MeshDevice::initialize(
     const auto& allocator = reference_device()->allocator();
     sub_device_manager_tracker_ = std::make_unique<SubDeviceManagerTracker>(
         this, std::make_unique<L1BankingAllocator>(allocator->get_config()), sub_devices);
-
+    mesh_command_queues_.reserve(this->num_hw_cqs());
     if (this->using_fast_dispatch()) {
-        mesh_command_queue_ = std::make_unique<MeshCommandQueue>(this, 0);
+        for (std::size_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
+            mesh_command_queues_.push_back(std::make_unique<MeshCommandQueue>(this, cq_id));
+        }
     }
     return true;
 }
