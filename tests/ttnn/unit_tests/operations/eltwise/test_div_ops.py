@@ -21,7 +21,7 @@ def test_remainder_fp32(device, ttnn_function):
     x_torch = torch.rand([2, 3, 64, 64], dtype=torch.float32)
     y_torch = torch.rand([2, 3, 64, 64], dtype=torch.float32)
     golden_fn = ttnn.get_golden_function(ttnn_function)
-    z_torch = golden_fn(x_torch, y_torch)
+    z_torch = golden_fn(x_torch, y_torch, device=device)
     x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     y_tt = ttnn.from_torch(y_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     z_tt_div = ttnn.remainder(x_tt, y_tt)
@@ -93,7 +93,7 @@ def test_remainder_forge(device, ttnn_function):
     input2 = torch.randn(2, 32, 32)
 
     golden_fn = ttnn.get_golden_function(ttnn_function)
-    torch_output = golden_fn(input1, input2)
+    torch_output = golden_fn(input1, input2, device=device)
 
     input1 = ttnn.from_torch(input1, dtype=ttnn.float32)
     input2 = ttnn.from_torch(input2, dtype=ttnn.float32)
