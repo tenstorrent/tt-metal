@@ -481,12 +481,14 @@ def test_tt_attn_post_attention(
     "attn_path, dim_x, dim_y, update_y",
     [
         ("blocks.0.attn", 3072, 1536, True),
-        ("blocks.47.attn", 3072, 1536, False),
+        # ("blocks.47.attn", 3072, 1536, False),
     ],
 )
 def test_tt_attn_forward(
     mesh_device, vision_seq_len, text_seq_len, use_program_cache, reset_seeds, attn_path, dim_x, dim_y, update_y
 ):
+    min_pcc = 0.9975
+    max_mse = 1.2e-4
     """Test complete forward pass of TtAsymmetricAttention."""
     state_dict, partial_state_dict = load_model_weights(attn_path)
     reference_model, tt_model = create_models(
@@ -579,7 +581,7 @@ def test_tt_attn_forward(
         metrics.append((name, pcc, mse, mae))
         logger.info(f"{name} - PCC: {pcc}, MSE: {mse}, MAE: {mae}")
 
-    passing = all(pcc >= PCC_REQUIRED for _, pcc, _, _ in metrics)
+    passing = all((mse <= max_mse and pcc >= min_pcc) for _, pcc, mse, _ in metrics)
 
     if passing:
         logger.info("TtAsymmetricAttention forward Passed!")

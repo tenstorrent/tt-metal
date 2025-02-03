@@ -3,13 +3,16 @@ from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 import torch
 from typing import Tuple, Optional
+import math
 
 from models.experimental.mochi.mod_rmsnorm import modulated_rmsnorm
 from models.experimental.mochi.common import (
     matmul_config,
     as_sharded_tensor,
     col_parallel_linear,
+    matmul_2d_config,
 )
+from functools import partial
 
 
 class TtAsymmetricAttention(LightweightModule):
@@ -91,10 +94,17 @@ class TtAsymmetricAttention(LightweightModule):
         self.q_norm_y = self._create_rmsmorn(".q_norm_y")
         self.k_norm_y = self._create_rmsmorn(".k_norm_y")
 
-        self.X_MM_SEQ_LEN = 512
+        self.X_MM_SEQ_LEN = 44 * 1024
 
-        self.qkv_x_config = matmul_config(self.X_MM_SEQ_LEN, dim_x, 3 * self.n_local_heads * self.head_dim, (8, 8))
-        self.proj_x_config = matmul_config(self.X_MM_SEQ_LEN, dim_x // self.num_devices, dim_x, (8, 8))
+        # TODO: using qkv_x program config leads to worse PCC
+        # self.qkv_x_config = matmul_config(self.X_MM_SEQ_LEN, dim_x, 3 * self.n_local_heads * self.head_dim, (8, 8))
+        self.proj_x_config = partial(matmul_2d_config, k=dim_x, n=dim_x // self.num_devices, grid_size=(8, 8))
+        self.mm_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=True,
+        )
 
     def _create_rmsmorn(self, key):
         return RMSNorm(
@@ -140,20 +150,12 @@ class TtAsymmetricAttention(LightweightModule):
         return w, b
 
     def run_qkv_y(self, y):
-        # Set up compute kernel config for high-fidelity computations
-        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
-
         # Compute QKV projection
         qkv_y = ttnn.linear(
             y,
             self.qkv_y,
             bias=self.qkv_y_bias,
-            compute_kernel_config=compute_kernel_config,
+            compute_kernel_config=self.mm_compute_kernel_config,
             core_grid=ttnn.CoreGrid(y=8, x=8),
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -206,13 +208,6 @@ class TtAsymmetricAttention(LightweightModule):
         # assert (
         #     seq_x % self.X_MM_SEQ_LEN == 0
         # ), f"Visual sequence length must be divisible by {self.X_MM_SEQ_LEN}, got {seq_x}"
-        # Set up compute kernel config for high-fidelity computations
-        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
         x_1BNX = modulated_rmsnorm(x_1BNX, scale_x)
 
         # Process visual features
@@ -220,7 +215,7 @@ class TtAsymmetricAttention(LightweightModule):
             x_1BNX,
             self.qkv_x,
             bias=self.qkv_x_bias,
-            compute_kernel_config=compute_kernel_config,
+            compute_kernel_config=self.mm_compute_kernel_config,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             # NOTE: Running without program config is functional and keeps padding
@@ -357,6 +352,7 @@ class TtAsymmetricAttention(LightweightModule):
             y: (B, L, dim_y) Text token features
         """
         assert B == 1, "Batch size must be 1"
+        N = out_1BNX.shape[2]
         assert out_1BNX.shape[1] == B, "Batch size must be 1"
         assert (out_joint_1BLX is None) == uncond
         local_dim = self.dim_x // self.num_devices  # No head parallel support yet
@@ -377,29 +373,23 @@ class TtAsymmetricAttention(LightweightModule):
         else:
             raise ValueError("Batch size > 1 not supported")
 
-        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=True,
-        )
-
         if self.num_devices > 1:
             out_1BNX = ttnn.all_gather(
                 out_1BNX,
                 dim=3,
             )
-        # BUG
-        # This linear clobbers `out_joint_1BLX` if padded
+
+        # BUG: This linear clobbers `out_joint_1BLX` if padded and certain program configs are used
         out_1BNX = ttnn.linear(
             out_1BNX,
             self.proj_x,
             bias=self.proj_x_bias,
-            compute_kernel_config=compute_kernel_config,
+            compute_kernel_config=self.mm_compute_kernel_config,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            # program_config=self.proj_x_config,
+            program_config=self.proj_x_config(m=N),
         )
+
         if self.update_y:
             if self.num_devices > 1:
                 out_joint_1BLX = ttnn.all_gather(
@@ -410,7 +400,7 @@ class TtAsymmetricAttention(LightweightModule):
                 out_joint_1BLX,
                 self.proj_y,
                 bias=self.proj_y_bias,
-                compute_kernel_config=compute_kernel_config,
+                compute_kernel_config=self.mm_compute_kernel_config,
                 core_grid=ttnn.CoreGrid(y=8, x=8),
                 dtype=ttnn.bfloat16,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,

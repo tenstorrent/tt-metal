@@ -74,6 +74,46 @@ def matmul_config(
     )
 
 
+def matmul_2d_config(
+    m,
+    k,
+    n,
+    grid_size,
+):
+    TILE_SIZE = 32
+    per_core_M = math.ceil(m / (TILE_SIZE * grid_size[1]))
+    per_core_N = math.ceil(n / (TILE_SIZE * grid_size[0]))
+    k_tiles = math.ceil(k / TILE_SIZE)
+
+    # Compute in0_block_w as largest divisor of k_tiles that's <= 12
+    # 12 is first guess at largest in0_block_w
+    in0_block_w = 1
+    for i in range(min(12, k_tiles), 0, -1):
+        if k_tiles % i == 0:
+            in0_block_w = i
+            break
+
+    out_subblock_h = 1
+    out_subblock_w = get_out_subblock_w(per_core_N, out_subblock_h)
+    # TODO: sweep below values for optimal config
+    out_block_h = out_subblock_h
+    out_block_w = out_subblock_w
+
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=grid_size,
+        in0_block_w=in0_block_w,
+        out_block_h=out_block_h,
+        out_block_w=out_block_w,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=False,
+    )
+
+
 def to_tt_tensor(tensor, mesh_device, dtype=ttnn.bfloat16, shard_dim=None):
     """Convert torch tensor to TT tensor."""
     if shard_dim is None:
