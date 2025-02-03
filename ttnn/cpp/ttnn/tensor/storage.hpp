@@ -379,6 +379,9 @@ struct MultiDeviceStorage {
 using Storage = std::variant<OwnedStorage, DeviceStorage, BorrowedStorage, MultiDeviceHostStorage, MultiDeviceStorage>;
 
 template <typename T>
+concept OwnedOrBorrowedStorage = std::is_same_v<T, OwnedStorage> || std::is_same_v<T, BorrowedStorage>;
+
+template <typename T>
 constexpr void raise_unsupported_storage() {
     static_assert(tt::stl::concepts::always_false_v<T>, "Unsupported Storage");
 }

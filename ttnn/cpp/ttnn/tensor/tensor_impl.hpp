@@ -190,6 +190,10 @@ inline void read_data_from_device_buffer(std::shared_ptr<Buffer> device_buffer, 
 template <typename T>
 Tensor to_host(const Tensor& tensor, bool blocking = true, uint8_t cq_id = ttnn::DefaultQueueId);
 
+// TODO: #17215 - This will eventually subsume `to_host`, when "mesh buffer" backed tensors become the default.
+template <typename T>
+Tensor to_host_from_mesh_tensor(const Tensor& tensor, bool blocking = true);
+
 template <typename T>
 Tensor to_device(
     const Tensor& tensor,

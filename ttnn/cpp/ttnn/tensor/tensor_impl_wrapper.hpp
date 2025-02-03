@@ -38,6 +38,7 @@ inline size_t packed_buffer_size_bytes_wrapper(DataType dtype, size_t volume_unp
 }
 
 WRAP_FUNCTION(to_host)
+WRAP_FUNCTION(to_host_from_mesh_tensor)
 WRAP_FUNCTION(extract_shard)
 WRAP_FUNCTION(to_device)
 WRAP_FUNCTION(to_layout)
