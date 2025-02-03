@@ -3,20 +3,36 @@ name: "Code analysis"
 on:
   workflow_call:
     inputs:
-      os:
+      distro:
         required: false
         type: string
-        default: "ubuntu-22.04-amd64"
+        default: "ubuntu"
+      version:
+        required: false
+        type: string
+        default: "20.04"
+      architecture:
+        required: false
+        type: string
+        default: "amd64"
       full-scan:
         required: false
         type: boolean
         default: false
   workflow_dispatch:
     inputs:
-      os:
+      distro:
         required: false
         type: string
-        default: "ubuntu-22.04-amd64"
+        default: "ubuntu"
+      version:
+        required: false
+        type: string
+        default: "20.04"
+      architecture:
+        required: false
+        type: string
+        default: "amd64"
       full-scan:
         required: false
         type: boolean
@@ -27,7 +43,9 @@ jobs:
     uses: ./.github/workflows/build-docker-artifact.yaml
     secrets: inherit
     with:
-      os: ${{ inputs.os }}
+      distro: ${{ inputs.distro }}
+      version: ${{ inputs.version }}
+      architecture: ${{ inputs.architecture }}
 
   clang-tidy:
     needs: build-docker-image
