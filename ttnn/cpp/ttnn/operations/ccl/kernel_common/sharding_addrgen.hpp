@@ -9,17 +9,7 @@
 #if defined(KERNEL_BUILD) || defined(FW_BUILD)
 
 #include "dataflow_api.h"
-#else
-#include "tt_metal/hw/inc/wormhole/noc/noc_parameters.h"
-#define FORCE_INLINE inline __attribute__((always_inline))
-#define noc_index 0
-#define NOC_XY_ADDR(x, y, addr)                                                                                      \
-    ((((uint64_t)(y)) << (NOC_ADDR_LOCAL_BITS + NOC_ADDR_NODE_ID_BITS)) | (((uint64_t)(x)) << NOC_ADDR_LOCAL_BITS) | \
-     ((uint64_t)(addr)))
-#define NOC_0_X(noc_index, noc_size_x, x) x
-#define NOC_0_Y(noc_index, noc_size_y, y) y
-#define DYNAMIC_NOC_X(noc, x) NOC_0_X(noc, noc_size_x, (x))
-#define DYNAMIC_NOC_Y(noc, y) NOC_0_Y(noc, noc_size_y, (y))
+
 #endif
 
 #include "ttnn/cpp/ttnn/operations/ccl/common/types/sharding_common.hpp"
