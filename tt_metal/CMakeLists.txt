@@ -33,6 +33,7 @@ target_link_libraries(
         HAL::grayskull
         HAL::wormhole
         HAL::blackhole
+        FlatBuffers::FlatBuffers
 )
 
 target_precompile_headers(

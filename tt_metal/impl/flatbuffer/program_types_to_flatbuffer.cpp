@@ -4,7 +4,9 @@
 
 #include "flatbuffer/base_types_to_flatbuffer.hpp"
 #include "flatbuffer/program_types_to_flatbuffer.hpp"
+#include "lightmetal/lightmetal_capture.hpp"  // For LightMetalCaptureContext
 #include <overloaded.hpp>
+
 namespace tt::tt_metal {
 
 // Original types defined in core_coord.hpp
@@ -155,10 +157,8 @@ flatbuffers::Offset<flatbuffer::RuntimeArg> create_runtime_arg(
                 return builder.CreateStruct(tt_metal::flatbuffer::UInt32Value{arg_value}).Union();
             },
             [&](Buffer* arg_value) -> flatbuffers::Offset<void> {
-                // auto& ctx = LightMetalCaptureContext::Get();
-                // uint32_t buffer_global_id = ctx.GetGlobalId(arg_value);
-                // TODO (kmabee) - Uncomment above code once capture library is merged. Temp hack here for now.
-                uint32_t buffer_global_id = 0;
+                auto& ctx = LightMetalCaptureContext::get();
+                uint32_t buffer_global_id = ctx.get_global_id(arg_value);
                 value_type = flatbuffer::RuntimeArgValue::BufferGlobalId;
                 return builder.CreateStruct(tt_metal::flatbuffer::BufferGlobalId{buffer_global_id}).Union();
             }},

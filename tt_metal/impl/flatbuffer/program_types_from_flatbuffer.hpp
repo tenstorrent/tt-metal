@@ -54,8 +54,7 @@ std::variant<DataMovementConfig, ComputeConfig, EthernetConfig> kernel_config_fr
             return from_flatbuffer(cmd->kernel_config_as_DataMovementConfig());
         case flatbuffer::KernelConfig::ComputeConfig: return from_flatbuffer(cmd->kernel_config_as_ComputeConfig());
         case flatbuffer::KernelConfig::EthernetConfig: return from_flatbuffer(cmd->kernel_config_as_EthernetConfig());
-        case flatbuffer::KernelConfig::NONE:
-            throw std::runtime_error("Unhandled KernelConfig type in from_flatbuffer.");
+        case flatbuffer::KernelConfig::NONE: TT_THROW("Unhandled KernelConfig type in from_flatbuffer.");
     }
     TT_THROW("Unhandled KernelConfig type in from_flatbuffer.");
 }
