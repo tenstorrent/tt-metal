@@ -1,6 +1,0 @@
-acl
-emacs
-less
-nano
-openssh-server
-vim
