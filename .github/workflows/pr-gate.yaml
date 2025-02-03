@@ -151,13 +151,13 @@ jobs:
         run: |
           git config --global --add safe.directory /__w/tt-metal/tt-metal
 
-      - name: Test Report XML
-        uses: dorny/test-reporter@v1
+      - name: Test Report
+        uses: phoenix-actions/test-reporting@v15
         if: success() || failure()
         with:
-          name: Foo Tests # Name of the check run which will be created
+          name: Foo Tests
           path: /work/test-reports/*.xml
-          reporter: jest-junit        # Format of test results
+          reporter: jest-junit
 
       - name: Cleanup
         if: always()
