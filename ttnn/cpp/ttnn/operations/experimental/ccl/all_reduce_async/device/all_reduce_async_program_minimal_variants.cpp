@@ -140,7 +140,7 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
     }
     auto worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/"
+        "ttnn/cpp/ttnn/operations/experimental/ccl/all_reduce_async/device/kernels/"
         "llama_post_binary_matmul_shape_reader.cpp",
         sender_worker_core_range,
         reader_kernel_config);
@@ -163,7 +163,7 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
     }
     auto worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/"
+        "ttnn/cpp/ttnn/operations/experimental/ccl/all_reduce_async/device/kernels/"
         "llama_post_binary_matmul_shape_writer.cpp",
         sender_worker_core_range,
         writer_kernel_config);
@@ -174,12 +174,6 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
     auto input_cores_vec = corerange_to_cores(input_tensor_cores, std::nullopt, true);
     auto output_cores_vec = corerange_to_cores(output_tensor_cores, std::nullopt, true);
     auto cores_per_device = output_cores_vec.size() / ring_size;
-    TT_FATAL(
-        output_cores_vec.size() % ring_size == 0,
-        "output sharded cores must be divisible by num_links for this work distribution scheme");
-    auto output_cores_this_device = std::vector<CoreCoord>(
-        output_cores_vec.begin() + ring_index * cores_per_device,
-        output_cores_vec.begin() + (ring_index + 1) * cores_per_device);
 
     for (uint32_t link = 0; link < num_links; link++) {
         CoreCoord core = sender_worker_cores[link];
@@ -192,25 +186,16 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
 
         uint32_t worker_num_tiles_to_read = input_tile_id_end - input_tile_id_start;
         uint32_t input_first_core_tile_start_offset = worker_num_tiles_to_read % input_tensor_shard_num_pages;
-        uint32_t output_first_core_tile_start_offset = worker_num_tiles_to_read % output_tensor_shard_num_pages;
+        uint32_t output_first_core_tile_start_offset = 0;  // worker_num_tiles_to_read % output_tensor_shard_num_pages;
 
         std::vector<uint32_t> input_tensor_cores_x;
         std::vector<uint32_t> input_tensor_cores_y;
-        std::vector<uint32_t> output_tensor_cores_x;
-        std::vector<uint32_t> output_tensor_cores_y;
         for (uint32_t i = input_tile_id_start / input_tensor_shard_num_pages;
              i < (input_tile_id_end + input_tensor_shard_num_pages - 1) / input_tensor_shard_num_pages;
              i++) {
             auto this_core = device->worker_core_from_logical_core(input_cores_vec[i]);
             input_tensor_cores_x.push_back(this_core.x);
             input_tensor_cores_y.push_back(this_core.y);
-        }
-        for (uint32_t i = input_tile_id_start / output_tensor_shard_num_pages;
-             i < (input_tile_id_end + output_tensor_shard_num_pages - 1) / output_tensor_shard_num_pages;
-             i++) {
-            auto this_core = device->worker_core_from_logical_core(output_cores_this_device[i]);
-            output_tensor_cores_x.push_back(this_core.x);
-            output_tensor_cores_y.push_back(this_core.y);
         }
 
         tt::log_debug(tt::LogOp, "input_tile_id_start: {}", input_tile_id_start);
@@ -220,8 +205,6 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
         tt::log_debug(tt::LogOp, "output_first_core_tile_start_offset: {}", output_first_core_tile_start_offset);
         tt::log_debug(tt::LogOp, "input_tensor_cores_x: {}", input_tensor_cores_x);
         tt::log_debug(tt::LogOp, "input_tensor_cores_y: {}", input_tensor_cores_y);
-        tt::log_debug(tt::LogOp, "output_tensor_cores_x: {}", output_tensor_cores_x);
-        tt::log_debug(tt::LogOp, "output_tensor_cores_y: {}", output_tensor_cores_y);
 
         if (link == 0) {
             // drain sync core is the first worker core
@@ -260,10 +243,10 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
         uint32_t out_ready_sem_wait_value = ring_size * num_links;
         std::vector<uint32_t> writer_rt_args = {
             output_tensor.buffer()->address(),    // tensor_address0
-            output_tensor_shard_num_pages,        // num_tiles_per_core
+            input_tensor_shard_num_pages,         // num_tiles_per_core
             worker_num_tiles_to_read,             // num_tiles_to_read
             output_first_core_tile_start_offset,  // first_core_tile_start_offset
-            output_tensor_cores_x.size(),         // num_cores
+            input_tensor_cores_x.size(),          // num_cores
             wait_output_semaphore,                // wait_output_semaphore
             reset_global_semaphore,               // reset_global_semaphore
             semaphore.address(),                  // out_ready_sem_bank_addr (absolute address)
@@ -271,8 +254,8 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
             drain_sync_core.y,                    // out_ready_sem_noc0_y
             out_ready_sem_wait_value,             // out_ready_sem_wait_value
         };
-        writer_rt_args.insert(writer_rt_args.end(), output_tensor_cores_x.begin(), output_tensor_cores_x.end());
-        writer_rt_args.insert(writer_rt_args.end(), output_tensor_cores_y.begin(), output_tensor_cores_y.end());
+        writer_rt_args.insert(writer_rt_args.end(), input_tensor_cores_x.begin(), input_tensor_cores_x.end());
+        writer_rt_args.insert(writer_rt_args.end(), input_tensor_cores_y.begin(), input_tensor_cores_y.end());
         log_trace(tt::LogOp, "Writer Runtime Args:");
         for (const auto& arg : writer_rt_args) {
             log_trace(tt::LogOp, "\t{}", arg);
