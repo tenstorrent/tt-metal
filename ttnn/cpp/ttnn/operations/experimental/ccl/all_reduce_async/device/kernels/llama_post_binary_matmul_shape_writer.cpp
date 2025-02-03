@@ -237,6 +237,11 @@ void kernel_main() {
         DPRINT << "waitval done\n";
     }
 
+    /*
+        reduction signal semaphore
+        mcast to reduction cores (using noc_semaphore_set_multicast)
+    */
+
     // 4. global semaphore reset
     if (reset_global_semaphore) {
         const uint64_t dest_noc_addr = get_noc_addr(my_x[0], my_y[0], out_ready_sem_bank_addr);
