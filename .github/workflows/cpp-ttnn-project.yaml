@@ -10,7 +10,9 @@ jobs:
     uses: ./.github/workflows/build-docker-artifact.yaml
     secrets: inherit
     with:
-      os: ubuntu-22.04-amd64
+      distro: "ubuntu"
+      version: "22.04"
+      architecture: "amd64"
 
   ttnn-project:
     needs: build-docker-image
