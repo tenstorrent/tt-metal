@@ -6,7 +6,7 @@ set(CPACK_PACKAGE_NAME tt)
 set(CPACK_COMPONENT_METALIUM_DESCRIPTION "TT-Metalium runtime library")
 set(CPACK_DEBIAN_METALIUM_PACKAGE_SECTION "libs")
 
-set(CPACK_DEB_COMPONENT_INSTALL TRUE)
+set(CPACK_DEB_COMPONENT_INSTALL YES)
 set(CPACK_DEBIAN_PACKAGE_VERSION "${VERSION_DEB}")
 set(CPACK_DEBIAN_FILE_NAME DEB-DEFAULT)
 
@@ -30,7 +30,7 @@ get_cmake_property(CPACK_COMPONENTS_ALL COMPONENTS)
 list(
     REMOVE_ITEM
     CPACK_COMPONENTS_ALL
-    dev
+    # dev FIXME: uncomment when we bump UMD submodule
     tt_pybinds # Wow this one is big!
     Unspecified # TODO: audit if there's anything we need to ship here
     Headers # TODO: Where is this coming from?
@@ -38,6 +38,9 @@ list(
     msgpack-cxx # TODO: Where is this coming from?
 )
 
+cpack_add_component(metalium GROUP metalium)
 cpack_add_component(umd-runtime GROUP metalium)
+cpack_add_component(dev GROUP metalium) # FIXME: delete this line when we bump UMD submodule
+cpack_add_component_group(metalium)
 
 include(CPack)

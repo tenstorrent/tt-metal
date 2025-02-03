@@ -206,4 +206,43 @@ add_library(Metalium::Metal::Hardware ALIAS hw)
 
 target_include_directories(hw INTERFACE inc)
 
+if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.23)
+    target_sources(
+        hw
+        PUBLIC
+            FILE_SET jit_api
+            TYPE HEADERS
+            BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
+            FILES
+                inc/atomic_rwptr.h
+                inc/bit_utils.h
+                inc/circular_buffer_init.h
+                inc/circular_buffer.h
+                inc/cmd_defs.h
+                inc/compile_time_args.h
+                inc/dataflow_api.h
+                inc/dataflow_cmd_bufs.h
+                inc/dataflow_internal.h
+                inc/firmware_common.h
+                inc/mod_div_lib.h
+                inc/remote_circular_buffer_api.h
+                inc/risc_attribs.h
+                inc/risc_common.h
+                inc/tensix_functions.h
+                inc/vptr_uint.h
+    )
+endif()
+
 target_link_libraries(hw INTERFACE TT::Metalium::HostDevCommon)
+
+add_subdirectory(firmware)
+
+install(
+    TARGETS
+        hw
+    FILE_SET
+    jit_api
+        DESTINATION
+            ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium/tt_metal/hw # FIXME: fix the include paths for jit_build
+        COMPONENT metalium
+)

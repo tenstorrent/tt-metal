@@ -261,6 +261,7 @@ endif()
 ############################################################################################################################
 # Install for build artifacts that will upload build/lib
 
+#[[
 install(
     TARGETS
         tt_fabric
@@ -299,6 +300,7 @@ if(WITH_PYTHON_BINDINGS)
             tt_pybinds
     )
 endif()
+#]]
 
 # Custom clean target for `built` folder for when new kernel changes are pulled
 add_custom_target(
