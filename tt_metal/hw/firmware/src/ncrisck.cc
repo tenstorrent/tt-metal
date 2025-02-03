@@ -35,7 +35,7 @@ void kernel_launch(uint32_t kernel_base_addr) {
     DeviceZoneScopedMainChildN("NCRISC-KERNEL");
 #ifdef KERNEL_RUN_TIME
     uint64_t end_time = c_tensix_core::read_wall_clock() + KERNEL_RUN_TIME;
-    while (c_tensix_core::read_wall_clock() < KERNEL_RUN_TIME);
+    while (c_tensix_core::read_wall_clock() < end_time);
 #endif
 #else
     extern uint32_t __kernel_init_local_l1_base[];
