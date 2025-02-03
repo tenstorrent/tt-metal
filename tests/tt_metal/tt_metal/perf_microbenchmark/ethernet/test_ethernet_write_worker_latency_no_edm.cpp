@@ -112,13 +112,8 @@ std::vector<Program> build(
         num_buffer_slots, worker_noc_x, worker_noc_y, worker_buffer_addr};
 
     // eth core rt args
-    const std::vector<uint32_t>& eth_sender_rt_args = {
-        eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE,
-        static_cast<uint32_t>(num_samples),
-        static_cast<uint32_t>(sample_page_size)};
-
-    std::vector<uint32_t> eth_receiver_rt_args = {
-        eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE,
+    const std::vector<uint32_t>& eth_sender_receiver_rt_args = {
+        tt_metal::hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED),
         static_cast<uint32_t>(num_samples),
         static_cast<uint32_t>(sample_page_size)};
 
@@ -128,7 +123,7 @@ std::vector<Program> build(
         "ethernet_write_worker_latency_ubench_sender.cpp",
         eth_sender_core,
         tt_metal::EthernetConfig{.noc = tt_metal::NOC::RISCV_0_default, .compile_args = eth_sender_ct_args});
-    tt_metal::SetRuntimeArgs(program0, local_kernel, eth_sender_core, eth_sender_rt_args);
+    tt_metal::SetRuntimeArgs(program0, local_kernel, eth_sender_core, eth_sender_receiver_rt_args);
 
     remote_kernel = tt_metal::CreateKernel(
         program1,
@@ -136,7 +131,7 @@ std::vector<Program> build(
         "ethernet_write_worker_latency_ubench_receiver.cpp",
         eth_receiver_core,
         tt_metal::EthernetConfig{.noc = tt_metal::NOC::RISCV_0_default, .compile_args = eth_receiver_ct_args});
-    tt_metal::SetRuntimeArgs(program1, remote_kernel, eth_receiver_core, eth_receiver_rt_args);
+    tt_metal::SetRuntimeArgs(program1, remote_kernel, eth_receiver_core, eth_sender_receiver_rt_args);
 
     // Launch
     try {
@@ -165,7 +160,7 @@ void run(
         tt_metal::EnqueueProgram(device0->command_queue(), program0, false);
         tt_metal::EnqueueProgram(device1->command_queue(), program1, false);
 
-        std::cout << "Calling Finish" << std::endl;
+        log_info(tt::LogTest, "Calling Finish");
         tt_metal::Finish(device0->command_queue());
         tt_metal::Finish(device1->command_queue());
     }
@@ -192,9 +187,9 @@ int main(int argc, char** argv) {
         return 0;
     }
 
-    std::cout << "setting up test fixture" << std::endl;
+    log_info(tt::LogTest, "setting up test fixture");
     N300TestDevice test_fixture;
-    std::cout << "done setting up test fixture" << std::endl;
+    log_info(tt::LogTest, "done setting up test fixture");
 
     const auto& device_0 = test_fixture.devices_.at(0);
     const auto& active_eth_cores = device_0->get_active_ethernet_cores(true);
@@ -211,8 +206,8 @@ int main(int argc, char** argv) {
         eth_sender_core_iter++;
     } while (device_id != 1);
 
-    log_info("eth_sender_core: {}", eth_sender_core);
-    log_info("eth_receiver_core: {}", eth_receiver_core);
+    log_info(tt::LogTest, "eth_sender_core: {}", eth_sender_core);
+    log_info(tt::LogTest, "eth_receiver_core: {}", eth_receiver_core);
 
     TT_ASSERT(device_id == 1);
     const auto& device_1 = test_fixture.devices_.at(device_id);
@@ -221,7 +216,7 @@ int main(int argc, char** argv) {
     // Add more configurations here until proper argc parsing added
     bool success = false;
     success = true;
-    std::cout << "STARTING" << std::endl;
+    log_info(tt::LogTest, "STARTING");
     try {
         log_info(
             tt::LogTest,
