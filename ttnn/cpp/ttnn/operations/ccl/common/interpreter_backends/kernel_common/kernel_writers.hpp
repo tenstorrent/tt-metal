@@ -35,7 +35,7 @@ FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
 #endif
 
     size_t packet_send_size_bytes = payload_size_bytes + sizeof(tt::fabric::PacketHeader);
-    pkt_hdr->to_write()->to_noc_unicast(tt::fabric::NocUnicastCommandHeader{
+    pkt_hdr->to_noc_unicast(tt::fabric::NocUnicastCommandHeader{
         dest_addr, packet_send_size_bytes, static_cast<uint8_t>(dest_noc_xy.x), static_cast<uint8_t>(dest_noc_xy.y)});
 
     switch (current_cmd_header.dest_type) {

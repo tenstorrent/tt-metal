@@ -497,21 +497,21 @@ FORCE_INLINE void try_advance_inline_write_or_atomic_inc(command_context_t<Addrg
         }
 
         ASSERT(cmd_ctx.packet_header_buffer_addr != 0);
+        uint64_t dest_noc_addr = safe_get_noc_addr(dest_noc0_x, dest_noc0_y, dest_bank_addr);
         auto* pkt_hdr = reinterpret_cast<tt::fabric::PacketHeader*>(cmd_ctx.packet_header_buffer_addr);
-        if (cmd_ctx.current_cmd_header.code == ttnn::ccl::cmd::CclCommandCode::ATOMIC_INC) {
-            pkt_hdr->to_atomic_inc();
-        } else {
-            pkt_hdr->to_write();
-        }
 #ifdef DEBUG_PRINT_ENABLED
         pkt_hdr->reserved2 = my_chip_id;
 #endif
-        pkt_hdr->to_noc_unicast_atomic_inc(tt::fabric::NocUnicastAtomicIncCommandHeader{
-            dest_bank_addr,
-            static_cast<uint16_t>(value),
-            32,
-            static_cast<uint8_t>(dest_noc0_x),
-            static_cast<uint8_t>(dest_noc0_y)});
+        if (cmd_ctx.current_cmd_header.code == ttnn::ccl::cmd::CclCommandCode::ATOMIC_INC) {
+            pkt_hdr->to_noc_unicast_atomic_inc(tt::fabric::NocUnicastAtomicIncCommandHeader{
+                dest_noc_addr,
+                static_cast<uint16_t>(value),
+                32});
+        } else {
+            pkt_hdr->to_noc_unicast(tt::fabric::NocUnicastCommandHeader{
+                dest_noc_addr,
+                static_cast<uint16_t>(value)});
+        }
 
         switch (cmd_ctx.current_cmd_header.dest_type) {
             case ttnn::ccl::cmd::CclCommandDestType::CHIP_UNICAST: {
@@ -544,7 +544,6 @@ FORCE_INLINE void try_advance_inline_write_or_atomic_inc(command_context_t<Addrg
                         cmd_ctx.packet_header_buffer_addr, sizeof(tt::fabric::PacketHeader));
                 }
 
-                uint64_t dest_noc_addr = safe_get_noc_addr(dest_noc0_x, dest_noc0_y, dest_bank_addr);
                 if (cmd_ctx.current_cmd_header.code == ttnn::ccl::cmd::CclCommandCode::ATOMIC_INC) {
                     noc_semaphore_inc(dest_noc_addr, value);
                 } else if (cmd_ctx.current_cmd_header.code == ttnn::ccl::cmd::CclCommandCode::RAW_INLINE_WRITE_BYTES) {
@@ -637,8 +636,9 @@ FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
 #endif
 
     size_t packet_send_size_bytes = payload_size_bytes + sizeof(tt::fabric::PacketHeader);
-    pkt_hdr->to_write()->to_noc_unicast(tt::fabric::NocUnicastCommandHeader{
-        dest_addr, packet_send_size_bytes, static_cast<uint8_t>(dest_noc_xy.x), static_cast<uint8_t>(dest_noc_xy.y)});
+    uint64_t dest_noc_addr = safe_get_noc_addr(static_cast<uint8_t>(dest_noc_xy.x), static_cast<uint8_t>(dest_noc_xy.y), dest_addr);
+    pkt_hdr->to_noc_unicast(tt::fabric::NocUnicastCommandHeader{
+        dest_noc_addr, packet_send_size_bytes});
 
     switch (current_cmd_header.dest_type) {
         case ttnn::ccl::cmd::CclCommandDestType::CHIP_UNICAST: {
