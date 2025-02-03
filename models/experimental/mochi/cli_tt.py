@@ -13,7 +13,6 @@ from genmo.lib.progress import progress_bar
 from genmo.lib.utils import save_video
 from genmo.mochi_preview.pipelines import (
     DecoderModelFactory,
-    MochiMultiGPUPipeline,
     MochiSingleGPUPipeline,
     T5ModelFactory,
     linear_quadratic_schedule,
@@ -25,13 +24,6 @@ model_dir_path = os.getenv("MOCHI_DIR")
 lora_path = None
 num_gpus = 1
 cpu_offload = True
-
-
-# def configure_model(model_dir_path_, lora_path_, cpu_offload_):
-#     global model_dir_path, lora_path, cpu_offload
-#     model_dir_path = model_dir_path_
-#     lora_path = lora_path_
-#     cpu_offload = cpu_offload_
 
 
 def load_model(mesh_device):
@@ -67,8 +59,9 @@ def load_model(mesh_device):
     ],
     indirect=True,
 )
-def test_generate_video(mesh_device, generation_args):
+def test_generate_video(mesh_device, generation_args, use_program_cache):
     """Generate video using the provided mesh device and arguments."""
+    mesh_device.enable_async(True)
     load_model(mesh_device)
 
     # sigma_schedule should be a list of floats of length (num_inference_steps + 1),
