@@ -97,6 +97,26 @@ def test_add_int32(device, ttnn_function):
 @pytest.mark.parametrize(
     "ttnn_function",
     [
+        ttnn.sub,
+    ],
+)
+def test_sub_int32(device, ttnn_function):
+    x_torch = torch.tensor([[11, 23, 0, -23, -1, -100]], dtype=torch.int32)
+    y_torch = torch.tensor([[78, 99, 34, -33, -1, 100]], dtype=torch.int32)
+    golden_fn = ttnn.get_golden_function(ttnn_function)
+    z_torch = golden_fn(x_torch, y_torch)
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = ttnn.from_torch(y_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    z_tt = ttnn.from_torch(z_torch, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    z_tt_sub = ttnn.sub(x_tt, y_tt)
+    tt_out = ttnn.to_torch(z_tt_sub)
+    assert torch.allclose(z_torch, tt_out, atol=1e-10, rtol=1e-5, equal_nan=False)
+
+
+@skip_for_grayskull("Unsupported dtype for Grayskull")
+@pytest.mark.parametrize(
+    "ttnn_function",
+    [
         ttnn.mul,
     ],
 )
