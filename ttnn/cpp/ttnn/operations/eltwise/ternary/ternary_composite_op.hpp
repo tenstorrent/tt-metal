@@ -12,7 +12,7 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/types.hpp"
-#include "tt_metal/common/bfloat16.hpp"
+#include <tt-metalium/bfloat16.hpp>
 
 #include "where.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"

@@ -31,7 +31,7 @@ def pre_process_input(device, tensor):
     return tensor
     import math
 
-    assert input_channels == tensor.shape.with_tile_padding()[3]
+    assert input_channels == tensor.padded_shape[3]
     padded_input_channels = math.ceil(input_channels / 32) * 32
     if padded_input_channels != input_channels:
         tensor = fallback_ops.pad(
@@ -279,7 +279,6 @@ def reshard_to(tensor, grid_size, layout, col_major=False, shape=None):
         output_shard_grid,
         shard_spec,
         (ttnn.ShardOrientation.COL_MAJOR if col_major else ttnn.ShardOrientation.ROW_MAJOR),
-        False,
     )
     output_mem_config = ttnn.MemoryConfig(
         layout,

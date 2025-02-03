@@ -65,11 +65,16 @@ OPS_CSV_HEADER = [
     "OUTPUTS",
     "METAL TRACE ID",
     "METAL TRACE REPLAY SESSION ID",
-    "COMPUTE KERNEL PATH",
     "COMPUTE KERNEL SOURCE",
     "COMPUTE KERNEL HASH",
     "DATA MOVEMENT KERNEL SOURCE",
     "DATA MOVEMENT KERNEL HASH",
+    "BRISC MAX KERNEL SIZE [B]",
+    "NCRISC MAX KERNEL SIZE [B]",
+    "TRISC 0 MAX KERNEL SIZE [B]",
+    "TRISC 1 MAX KERNEL SIZE [B]",
+    "TRISC 2 MAX KERNEL SIZE [B]",
+    "ERISC MAX KERNEL SIZE [B]",
     "PM IDEAL [ns]",
     "PM COMPUTE [ns]",
     "PM BANDWIDTH [ns]",
@@ -196,6 +201,34 @@ def import_tracy_op_logs(logFolder):
     return ops, signposts, traceReplays
 
 
+def host_device_op_compare(op):
+    if "metal_trace_replay_session_id" in op:
+        return int(op["global_call_count"]), int(op["metal_trace_replay_session_id"])
+    else:
+        return int(op["global_call_count"]), 0
+
+
+def device_op_compare_time(op):
+    if "timeseries" in op and len(op["timeseries"]) > 0 and len(op["timeseries"][0]) > 1:
+        return int(op["timeseries"][0][1])
+    else:
+        return 0
+
+
+def device_op_compare_opID_time(op):
+    if (
+        "timeseries" in op
+        and len(op["timeseries"]) > 0
+        and len(op["timeseries"][0]) > 1
+        and "run_host_id" in op["timeseries"][0][0]
+    ):
+        return int(op["timeseries"][0][0]["run_host_id"]), int(op["timeseries"][0][1])
+    elif "timeseries" in op and len(op["timeseries"]) > 0 and len(op["timeseries"][0]) > 1:
+        return 0, int(op["timeseries"][0][1])
+    else:
+        return 0, 0
+
+
 # Generate a map of OP reference list per device.
 def get_device_op_data(ops):
     logger.info(f"Getting device ops")
@@ -211,20 +244,10 @@ def get_device_op_data(ops):
         if "metal_trace_id" in opData.keys() and opData["metal_trace_id"] is not None:
             hasTraceRuns = True
 
-    def device_ops_compare(op):
-        return int(op["global_call_count"])
-
     for deviceID in deviceOps:
-        deviceOps[deviceID].sort(key=device_ops_compare)
+        deviceOps[deviceID].sort(key=host_device_op_compare)
 
     return deviceOps, hasTraceRuns
-
-
-def device_log_ops_compare(op):
-    if "timeseries" in op and len(op["timeseries"]) > 0 and len(op["timeseries"][0]) > 1:
-        return int(op["timeseries"][0][1])
-    else:
-        return 0
 
 
 # Append device data to device ops and return the list of mapped device op ref list
@@ -246,7 +269,7 @@ def append_device_data(ops, traceReplays, logFolder):
         for device in devicesOps:
             assert device in deviceData["devices"].keys()
             deviceOpsTime = deviceData["devices"][device]["cores"]["DEVICE"]["riscs"]["TENSIX"]["ops"]
-            deviceOpsTime.sort(key=device_log_ops_compare)
+            deviceOpsTime.sort(key=device_op_compare_time)
             if hasTraceRuns:
                 generatedHostData = []
                 opIDHostDataDict = {}
@@ -289,6 +312,8 @@ def append_device_data(ops, traceReplays, logFolder):
                         generatedHostData.append(copy.deepcopy(opIDHostDataDict[deviceOpID]))
                 devicesOps[device] = generatedHostData
 
+            deviceOpsTime.sort(key=device_op_compare_opID_time)
+            devicesOps[device].sort(key=host_device_op_compare)
             if len(devicesOps[device]) != len(deviceOpsTime):
                 deviceOPId = None
                 hostOPId = None
@@ -311,7 +336,7 @@ def append_device_data(ops, traceReplays, logFolder):
                 else:
                     assert (
                         False
-                    ), f"Device data mismatch: Expected {len(deviceOps[device])} but received {len(deviceOpsTime)} ops on device {device}"
+                    ), f"Device data mismatch: Expected {len(devicesOps[device])} but received {len(deviceOpsTime)} ops on device {device}"
             for deviceOp, deviceOpTime in zip(devicesOps[device], deviceOpsTime):
                 cores = set()
                 for timeID, ts, statData, risc, core in deviceOpTime["timeseries"]:
@@ -319,7 +344,7 @@ def append_device_data(ops, traceReplays, logFolder):
                         if "run_host_id" in timeID.keys():
                             assert (
                                 timeID["run_host_id"] == deviceOp["global_call_count"]
-                            ), f"op id {timeID['run_host_id']} reproted by device {device} is not matching assigned op id {deviceOp['global_call_count']}"
+                            ), f"op id {timeID['run_host_id']} reported by device {device} is not matching assigned op id {deviceOp['global_call_count']}"
                         if core not in cores:
                             cores.add(core)
                 deviceOp["core_usage"] = {"count": len(cores), "cores": [str(core) for core in cores]}
@@ -417,6 +442,7 @@ def get_device_data_generate_report(
                     if analysis == "device_fw_duration":
                         rowDict["DEVICE FW START CYCLE"] = analysisData[0]["start_cycle"]
                         rowDict["DEVICE FW END CYCLE"] = analysisData[0]["end_cycle"]
+                    if analysis == "device_kernel_duration":
                         if device in devicePreOpTime.keys():
                             rowDict["OP TO OP LATENCY [ns]"] = round(
                                 1000 * (analysisData[0]["start_cycle"] - devicePreOpTime[device]) / freq
@@ -611,6 +637,9 @@ def generate_reports(ops, deviceOps, traceOps, signposts, logFolder, outputFolde
                         rowDict["DATA MOVEMENT KERNEL SOURCE"].append(dmKernel["source"])
                         rowDict["DATA MOVEMENT KERNEL HASH"].append(dmKernel["name"])
 
+                    for kernel, kernelSize in opData["kernel_info"]["kernel_sizes"].items():
+                        rowDict[kernel.upper().replace("_", " ") + " [B]"] = kernelSize
+
                 if "core_usage" in opData.keys():
                     rowDict["CORE COUNT"] = opData["core_usage"]["count"]
 
@@ -625,6 +654,7 @@ def generate_reports(ops, deviceOps, traceOps, signposts, logFolder, outputFolde
                             rowDict["DEVICE FW START CYCLE"] = analysisData[0]["start_cycle"]
                             rowDict["DEVICE FW END CYCLE"] = analysisData[0]["end_cycle"]
                             freq = analysisData[0]["duration_cycles"] / analysisData[0]["duration_ns"]
+                        if analysis == "device_kernel_duration":
                             if deviceID in devicePreOpTime.keys():
                                 rowDict["OP TO OP LATENCY [ns]"] = round(
                                     (analysisData[0]["start_cycle"] - devicePreOpTime[deviceID]) / freq

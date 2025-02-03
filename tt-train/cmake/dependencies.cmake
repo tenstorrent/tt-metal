@@ -58,7 +58,7 @@ CPMAddPackage(NAME magic_enum GITHUB_REPOSITORY Neargye/magic_enum GIT_TAG v0.9.
 # nlohmann/json : https://github.com/nlohmann/json
 ############################################################################################################################
 
-CPMAddPackage(NAME json GITHUB_REPOSITORY nlohmann/json GIT_TAG v3.9.1 OPTIONS "JSON_BuildTests OFF")
+CPMAddPackage(NAME json GITHUB_REPOSITORY nlohmann/json GIT_TAG v3.11.3 OPTIONS "JSON_BuildTests OFF")
 
 CPMAddPackage(NAME xtl GITHUB_REPOSITORY xtensor-stack/xtl GIT_TAG 0.7.7 OPTIONS "XTL_ENABLE_TESTS OFF")
 
@@ -72,6 +72,36 @@ CPMAddPackage(
         "XTENSOR_ENABLE_TESTS OFF"
 )
 
-include(${PROJECT_SOURCE_DIR}/cmake/fetch_msgpack.cmake)
+CPMAddPackage(NAME taskflow GITHUB_REPOSITORY taskflow/taskflow GIT_TAG v3.7.0 OPTIONS "TF_BUILD_TESTS OFF")
 
 include(${PROJECT_SOURCE_DIR}/cmake/fetch_cli11.cmake)
+
+CPMAddPackage(
+    NAME msgpack
+    GIT_REPOSITORY https://github.com/msgpack/msgpack-c.git
+    GIT_TAG cpp-6.1.0
+    PATCHES
+        msgpack.patch
+    OPTIONS
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+        "MSGPACK_BUILD_EXAMPLES OFF"
+        "MSGPACK_BUILD_TESTS OFF"
+        "MSGPACK_BUILD_DOCS OFF"
+        "MSGPACK_ENABLE_CXX ON"
+        "MSGPACK_USE_BOOST OFF"
+        "MSGPACK_BUILD_HEADER_ONLY ON"
+        "MSGPACK_ENABLE_SHARED OFF"
+        "MSGPACK_ENABLE_STATIC OFF"
+        "MSGPACK_CXX20 ON"
+        "MSGPACK_NO_BOOST ON"
+)
+
+CPMAddPackage(
+    NAME tokenizers-cpp
+    GITHUB_REPOSITORY mlc-ai/tokenizers-cpp
+    GIT_TAG 5de6f656c06da557d4f0fb1ca611b16d6e9ff11d
+    PATCHES
+        tokenizers-cpp.patch
+    OPTIONS
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+)

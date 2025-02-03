@@ -21,11 +21,6 @@ struct ExecuteUnaryInvokeResult {
     using type = ComplexTensor;
 };
 
-template <>
-struct ExecuteUnaryInvokeResult<UnaryOpType::ABS> {
-    using type = Tensor;
-};
-
 template <UnaryOpType... unary_op_types>
 struct ExecuteUnary {
     static Tensor invoke(
@@ -146,6 +141,21 @@ struct Identity {
         const Tensor& input_tensor,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
+struct Abs {
+    static Tensor invoke(
+        uint8_t queue_id,
+        const Tensor& input_tensor,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
+    static Tensor invoke(
+        const Tensor& input_tensor,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+
+    static Tensor invoke(const ComplexTensor& input_tensor, const MemoryConfig& memory_config);
 };
 
 struct Floor {
@@ -274,11 +284,6 @@ struct AsymmetricBinop {
         "ttnn::" #operation_name,                                                 \
         ttnn::operations::unary::ExecuteUnary<ttnn::operations::unary::UnaryOpType::operation_type>>();
 
-#define REGISTER_UNARY_OPERATION_OVERLOAD(operation_name, operation_type) \
-    constexpr auto operation_name = ttnn::register_operation<             \
-        "ttnn::" #operation_name,                                         \
-        ttnn::operations::unary::ExecuteUnary<ttnn::operations::unary::UnaryOpType::operation_type>>();
-
 #define REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(operation_name, operation_type) \
     constexpr auto operation_name = ttnn::register_operation_with_auto_launch_op<               \
         "ttnn::" #operation_name,                                                               \
@@ -297,7 +302,6 @@ struct AsymmetricBinop {
         ttnn::operations::unary::                                                                  \
             ExecuteUnaryWithIntegerParameter<ttnn::operations::unary::UnaryOpType::operation_type, data_type>>();
 
-REGISTER_UNARY_OPERATION_OVERLOAD(abs, ABS);
 REGISTER_UNARY_OPERATION(acos, ACOS);
 REGISTER_UNARY_OPERATION(asin, ASIN);
 REGISTER_UNARY_OPERATION(atan, ATAN);
@@ -323,7 +327,7 @@ REGISTER_UNARY_OPERATION(logical_not, LOGICAL_NOT_UNARY);
 REGISTER_UNARY_OPERATION(ltz, LTZ);
 REGISTER_UNARY_OPERATION(neg, NEG);
 REGISTER_UNARY_OPERATION(nez, NEZ);
-REGISTER_UNARY_OPERATION_OVERLOAD(reciprocal, RECIP);
+REGISTER_UNARY_OPERATION(reciprocal, RECIP);
 REGISTER_UNARY_OPERATION(relu, RELU);
 REGISTER_UNARY_OPERATION(relu6, RELU6);
 REGISTER_UNARY_OPERATION(sigmoid, SIGMOID);
@@ -365,14 +369,11 @@ REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(ne_unary, UNARY_NE);
 
 // Unaries with integer parameter
 REGISTER_UNARY_OPERATION_WITH_INTEGER_PARAMETER(power, POWER, uint32_t);
-REGISTER_UNARY_OPERATION_WITH_INTEGER_PARAMETER(bitwise_left_shift, LEFT_SHIFT, int32_t);
-REGISTER_UNARY_OPERATION_WITH_INTEGER_PARAMETER(bitwise_right_shift, RIGHT_SHIFT, int32_t);
 
 // Other unaries
-constexpr auto dropout =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::dropout", ttnn::operations::unary::Dropout>();
 constexpr auto identity =
     ttnn::register_operation_with_auto_launch_op<"ttnn::identity", ttnn::operations::unary::Identity>();
+constexpr auto abs = ttnn::register_operation_with_auto_launch_op<"ttnn::abs", ttnn::operations::unary::Abs>();
 constexpr auto floor =
     ttnn::register_operation_with_auto_launch_op<"ttnn::floor", ttnn::operations::unary::Floor>();
 constexpr auto ceil = ttnn::register_operation_with_auto_launch_op<"ttnn::ceil", ttnn::operations::unary::Ceil>();

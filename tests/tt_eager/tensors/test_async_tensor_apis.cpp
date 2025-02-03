@@ -4,8 +4,8 @@
 
 #include <chrono>
 
-#include "common/bfloat16.hpp"
-#include "common/constants.hpp"
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/constants.hpp>
 #include "ttnn/cpp/ttnn/operations/creation.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/host_buffer/types.hpp"
@@ -13,10 +13,12 @@
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "tests/tt_metal/tt_metal/common/dispatch_fixture.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
+
+#include "ttnn/cpp/ttnn/operations/experimental/reshape/view.hpp"
 
 namespace tt::tt_metal {
 namespace {
@@ -35,7 +37,7 @@ uint32_t get_device_buffer_address(const Tensor& tensor) {
 TEST_F(DispatchFixture, TestTensorOwnershipSanity) {
     // Sanity test tensor read, write and update paths with synchronous
     // Ensure that tensor data is copied and owned as expected
-    Device* device = this->devices_[0];
+    IDevice* device = this->devices_[0];
     Tensor host_tensor = ttnn::arange(/*start=*/0, /*stop=*/32 * 32 * 4, /*step=*/1, DataType::FLOAT32);
     Tensor readback_tensor(1);
 
@@ -58,7 +60,7 @@ TEST_F(DispatchFixture, TestTensorOwnershipSanity) {
             },
             host_tensor.get_storage());
         // Send tensor to device, read it back and copy it to empty tensor initialized by main thread
-        Tensor reshaped_tensor = host_tensor.reshape(ttnn::SimpleShape{1, 1, 32, 128});
+        Tensor reshaped_tensor = ttnn::experimental::view(host_tensor, ttnn::Shape{1, 1, 32, 128});
         auto device_tensor = reshaped_tensor.to(Layout::TILE).to(device);
         auto thread_local_tensor = device_tensor.cpu().to(Layout::ROW_MAJOR);
         readback_tensor.set_storage(thread_local_tensor.get_storage());
@@ -104,11 +106,11 @@ TEST_F(DispatchFixture, TestTensorOwnershipSanity) {
         readback_tensor.get_storage());
     EXPECT_EQ(readback_tensor.get_dtype(), DataType::FLOAT32);
     EXPECT_EQ(readback_tensor.get_layout(), Layout::ROW_MAJOR);
-    EXPECT_EQ(readback_tensor.get_shape(), ttnn::Shape(tt::tt_metal::LegacyShape({1, 1, 32, 128})));
+    EXPECT_EQ(readback_tensor.get_logical_shape(), Shape({1, 1, 32, 128}));
 }
 
 TEST_F(DispatchFixture, TestAsyncEltwiseBinary) {
-    Device* device = this->devices_[0];
+    IDevice* device = this->devices_[0];
     device->enable_async(true);
     // Populate these in first loop and verify that deallocation worked - addresses should be identical across loops
     std::size_t input_a_addr = 0;
@@ -128,7 +130,7 @@ TEST_F(DispatchFixture, TestAsyncEltwiseBinary) {
         Tensor output_tensor_device = ttnn::multiply(ttnn::add(input_tensor_a, input_tensor_b), input_tensor_c);
         Tensor output_tensor_device_2 = ttnn::neg(ttnn::subtract(output_tensor_device, input_tensor_c));
 
-        EXPECT_EQ(output_tensor_device.get_shape(), ttnn::Shape(tt::tt_metal::LegacyShape({1, 1, 1024, 1024})));
+        EXPECT_EQ(output_tensor_device.get_logical_shape(), Shape({1, 1, 1024, 1024}));
         EXPECT_EQ(output_tensor_device.get_dtype(), DataType::BFLOAT16);
 
         Tensor output_tensor_host = output_tensor_device_2.cpu();
@@ -165,7 +167,7 @@ TEST_F(DispatchFixture, TestAsyncEltwiseBinary) {
 Tensor tensor_identity_copy_function(const Tensor& tensor) { return tensor; }
 
 TEST_F(DispatchFixture, TestAsyncRefCountManager) {
-    Device* device = this->devices_[0];
+    IDevice* device = this->devices_[0];
     device->enable_async(true);
 
     log_info(LogTest, "Testing Device tensor copy assignment");
@@ -231,7 +233,11 @@ TEST_F(DispatchFixture, TestAsyncRefCountManager) {
 
     log_info(LogTest, "Testing Device tensor self-assignment");
     Tensor tensor_to_self_assign = ttnn::full(
-        ttnn::Shape({1, 1, 1024, 1024}), static_cast<float>(0), DataType::BFLOAT16, /*layout=*/std::nullopt, *device);
+        ttnn::Shape({1, 1, 1024, 1024}),
+        static_cast<float>(0),
+        DataType::BFLOAT16,
+        /*layout=*/std::nullopt,
+        *device);
     uint32_t tensor_to_self_assign_address = get_device_buffer_address(tensor_to_self_assign);
     tensor_to_self_assign = tensor_to_self_assign;
     EXPECT_EQ(tensor_to_self_assign.tensor_attributes->main_thread_ref_count, 1);
@@ -249,7 +255,7 @@ TEST_F(DispatchFixture, TestTensorAsyncDataMovement) {
     // 2. Worker -> Main: Create an empty tensor in the mainb thread. Populate it in the worker thread. Ensure that the
     // tensor is correctly
     //                    populated in the main thread once the worker is done.
-    Device* device = this->devices_[0];
+    IDevice* device = this->devices_[0];
     uint32_t tensor_start = 0;
     uint32_t num_tiles = 128;
     uint32_t tensor_stop = TILE_HEIGHT * TILE_WIDTH * num_tiles;
@@ -285,7 +291,7 @@ TEST_F(DispatchFixture, TestTensorAsyncDataMovement) {
                 },
                 host_tensor.get_storage());
 
-            Tensor reshaped_tensor = host_tensor.reshape(ttnn::SimpleShape{1, 1, 32, tensor_stop / 32});
+            Tensor reshaped_tensor = ttnn::experimental::view(host_tensor, ttnn::Shape{1, 1, 32, tensor_stop / 32});
             auto device_tensor = reshaped_tensor.to(Layout::TILE).to(device);
             auto thread_local_tensor = device_tensor.cpu().to(Layout::ROW_MAJOR);
             log_info(LogTest, "Worker populating empty host readback_tensor");
@@ -339,7 +345,7 @@ TEST_F(DispatchFixture, TestTensorAsyncDataMovement) {
         readback_tensor.get_storage());
     EXPECT_EQ(readback_tensor.get_dtype(), DataType::FLOAT32);
     EXPECT_EQ(readback_tensor.get_layout(), Layout::ROW_MAJOR);
-    EXPECT_EQ(readback_tensor.get_shape(), ttnn::Shape(tt::tt_metal::LegacyShape({1, 1, 32, tensor_stop / 32})));
+    EXPECT_EQ(readback_tensor.get_logical_shape(), Shape({1, 1, 32, tensor_stop / 32}));
 }
 }  // namespace
 }  // namespace tt::tt_metal

@@ -2,25 +2,24 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "common/core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
 #include "ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
 #include "ttnn/operations/math.hpp"
-#include "tt_metal/host_api.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
-#include "eth_l1_address_map.h"
 #include "ttnn/operations/experimental/ccl/all_gather_matmul/device/all_gather_matmul_op.hpp"
 
 /* All Gather Matmul fusion includes */
-#include "ttnn/cpp/ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
-#include "ttnn/cpp/ttnn/operations/matmul/device/matmul_op.hpp"
-#include "ttnn/cpp/ttnn/operations/matmul/matmul.hpp"
+#include "cpp/ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
+#include "cpp/ttnn/operations/matmul/device/matmul_op.hpp"
+#include "cpp/ttnn/operations/matmul/matmul.hpp"
 
 namespace ttnn {
 namespace experimental {
 
 void AllGatherMatmul::validate(
     const std::vector<Tensor>& input_tensors,
-    const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors) const {
+    const std::vector<std::optional<const ttnn::Tensor>>& optional_input_tensors,
+    const std::vector<std::optional<Tensor>>& optional_output_tensors) const {
     TT_ASSERT(
         input_tensors.size() == 4,
         "AllGatherMatmul requires 4 input tensors: [input, weight, all_gather_output, datacopy_output]");
@@ -33,12 +32,12 @@ void AllGatherMatmul::validate(
     this->all_gather_struct.validate({input_tensor});
 
     // Matmul validate.
-    this->matmul_struct.validate({all_gather_output_tensor, weight_tensor}, optional_input_tensors);
+    this->matmul_struct.validate({all_gather_output_tensor, weight_tensor}, optional_input_tensors, {});
 
     // All Gather Matmul validate
     TT_FATAL(this->all_gather_struct.dim == 3, "AllGatherMatmul requires dim=3 for the AllGather operaitons.");
     TT_FATAL(
-        input_tensor.get_legacy_shape()[0] == 1 && input_tensor.get_legacy_shape()[1] == 1,
+        input_tensor.get_padded_shape()[0] == 1 && input_tensor.get_padded_shape()[1] == 1,
         "AllGatherMatmul requires input tensor to have batch size of 1.");
     std::visit(
         [&](const auto& config) {
@@ -73,7 +72,7 @@ std::vector<ttnn::TensorSpec> AllGatherMatmul::compute_output_specs(const std::v
 
     // Matmul shape
     ttnn::TensorSpec matmul_output_specs =
-        this->matmul_struct.compute_output_specs({input_tensors[1], input_tensors[2]})[0];
+        this->matmul_struct.compute_output_specs({input_tensors[1], input_tensors[2]}, {})[0];
 
     return {all_gather_output_shape, matmul_output_specs, datacopy_output_shape};
 }
@@ -219,7 +218,9 @@ std::vector<ttnn::Tensor> all_gather_matmul(
                     ttnn::operations::matmul::get_fused_activation(activation),
                     user_run_batched,
                     transpose_a,
-                    transpose_b});
+                    transpose_b,
+                    /*output_tile=*/std::nullopt,
+                    /*global_cb=*/std::nullopt});
 
             return operation::run(
                 ttnn::experimental::AllGatherMatmul{/* All Gather Params */

@@ -9,44 +9,14 @@
 
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/operation.hpp"
-#include "tt_stl/concepts.hpp"
-#include "tt_stl/type_name.hpp"
+#include <tt-metalium/device_impl.hpp>
+#include <tt-metalium/type_name.hpp>
 
 namespace tt::tt_metal {
 
 namespace operation {
 
 using ttnn::operations::experimental::auto_format::FormatParams;
-
-// TODO: create_output_tensors should become a fully manual path with no dependency on infra
-// - Pass output shapes directly
-// - Move default values for output_dtype and output_mem_config inside ops
-// - This function becomes just a regular helper function
-template <typename ConcreteOperation>
-auto generic_create_output_tensors(
-    const ConcreteOperation& operation,
-    const Tensors& input_tensors,
-    const std::optional<DataType> output_dtype,
-    const Layout output_layout,
-    const std::optional<MemoryConfig>& output_mem_config,
-    const std::optional<Tile>& tile = std::nullopt) -> ProgramOutputTensors<ConcreteOperation> {
-    const auto& input_tensor = input_tensors.at(0);
-    const auto& output_shapes = operation.compute_output_shapes(input_tensors);
-
-    using OutputTensors = ProgramOutputTensors<ConcreteOperation>;
-    OutputTensors output_tensors;
-    output_tensors.reserve(output_shapes.size());
-    for (const auto& output_shape : output_shapes) {
-        output_tensors.emplace_back(create_device_tensor(
-            output_shape,
-            output_dtype.value_or(input_tensors.at(0).get_dtype()),
-            output_layout,
-            input_tensor.device(),
-            output_mem_config.value_or(input_tensors.at(0).memory_config()),
-            tile));
-    }
-    return output_tensors;
-}
 
 template <class OutputTensors = Tensors>
 OutputTensors run(
@@ -149,14 +119,34 @@ inline auto run_with_autoformat(
         cq_id);
 }
 
-template <class Callable, class OutputType = Tensors>
-void launch_op(
-    Callable&& op_func,
+template <class OutputType = Tensors>
+__attribute__((noinline)) void launch_op_func(
+    const std::function<OutputType(const Tensors&, const OptionalConstTensors&, const OptionalTensors&)>& op_func,
     const Tensors input_tensors,
     OutputType& output_tensors,
     const OptionalConstTensors optional_input_tensors = {},
     const OptionalTensors optional_output_tensors = {},
     bool enable_autoformat_device = true);
+
+/*
+ */
+template <class F, class OutputType>
+void launch_op(
+    F&& op_func,
+    const Tensors input_tensors,
+    OutputType& output_tensors,
+    const OptionalConstTensors optional_input_tensors = {},
+    const OptionalTensors optional_output_tensors = {},
+    bool enable_autoformat_device = true) {
+    using FuncType = std::function<OutputType(const Tensors&, const OptionalConstTensors&, const OptionalTensors&)>;
+    launch_op_func(
+        FuncType(std::forward<F>(op_func)),
+        input_tensors,
+        output_tensors,
+        optional_input_tensors,
+        optional_output_tensors,
+        enable_autoformat_device);
+}
 
 void launch_with_autoformat(
     std::function<Tensors(const Tensors&, const OptionalConstTensors&, const OptionalTensors&)>&& op_func,
@@ -165,17 +155,15 @@ void launch_with_autoformat(
     const OptionalConstTensors& optional_input_tensors = {},
     const OptionalTensors& optional_output_tensors = {});
 
-std::vector<Device*> get_workers_for_op_output(
+std::vector<IDevice*> get_workers_for_op_output(
     const std::vector<Tensor>& inputs,
     const std::vector<std::optional<const Tensor>>& optional_inputs = {},
     bool enable_autoformat_device = true);
 
 namespace detail {
-Device* get_device(const Tensors& input_tensors, const OptionalConstTensors& optional_input_tensors = {});
+IDevice* get_device(const Tensors& input_tensors, const OptionalConstTensors& optional_input_tensors = {});
 }
 
 }  // namespace operation
 
 }  // namespace tt::tt_metal
-
-#include "run_operation_inl.hpp"

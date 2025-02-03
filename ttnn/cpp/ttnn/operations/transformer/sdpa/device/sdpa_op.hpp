@@ -35,6 +35,9 @@ struct ScaledDotProductAttention {
     operation::Hash compute_program_hash(
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
+
+    std::uint32_t get_q_chunk_size() const;
+    std::uint32_t get_k_chunk_size() const;
 };
 
 }  // namespace ttnn::operations::transformer

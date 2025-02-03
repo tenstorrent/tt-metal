@@ -69,7 +69,6 @@ def run_test_concat_head1(
                 head_dim,  # head dim
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
         ),
     )
     WIDTH_SHARDED_MEMCFG = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1)
@@ -145,7 +144,6 @@ def run_test_concat_head2(
                 head_dim,  # head dim
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
         ),
     )
     WIDTH_SHARDED_MEMCFG = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1)

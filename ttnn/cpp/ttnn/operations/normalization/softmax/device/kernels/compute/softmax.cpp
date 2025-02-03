@@ -33,13 +33,13 @@ void calc_numeric_stable(
     reconfig_data_format(cb_in, cb_bcast_scaler);
     cb_reserve_back(cb_max, 1);
     cb_wait_front(cb_bcast_scaler, 1);
-    reduce_init_delta<false, PoolType::MAX, ReduceDim::REDUCE_ROW>();
+    reduce_init_delta<false, PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_in, cb_bcast_scaler, cb_max);
     for (uint32_t wt = 0; wt < Wt; wt++) {
         cb_wait_front(cb_in, wt + 1);
         constexpr uint32_t bcast_scaler0 = 0;
         reduce_tile<PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_in, cb_bcast_scaler, wt, bcast_scaler0, 0);
     }
-    reduce_revert_delta<ReduceDim::REDUCE_ROW>();
+    reduce_revert_delta<ReduceDim::REDUCE_ROW>(cb_max);
     pack_tile(0, cb_max);
     cb_push_back(cb_max, 1);
     REL();
@@ -48,7 +48,7 @@ void calc_numeric_stable(
     exp_tile_init<EXP_APPROX>();
     reconfig_data_format_srcb(cb_max);
     cb_wait_front(cb_max, 1);
-    sub_bcast_cols_init_short();
+    sub_bcast_cols_init_short(cb_in, cb_max);
     for (uint32_t wt = 0; wt < Wt; wt += ndst) {
         ACQ();
         for (uint32_t wt8 = 0; wt8 < ndst; wt8++) {
@@ -111,7 +111,7 @@ void MAIN {
 #if FUSED_SCALE_MASK
         reconfig_data_format(cb_in0, cb_fused_scale);
         pack_reconfig_data_format(cb_scale_mask);
-        mul_tiles_bcast_scalar_init_short();
+        mul_tiles_bcast_scalar_init_short(cb_in0, cb_fused_scale);
         for (uint32_t wt = 0; wt < Wt; wt += ndst) {
             // apply fused scale [*= 1/sqrt(...)]
             ACQ();
@@ -134,7 +134,7 @@ void MAIN {
 #ifdef CAUSAL_MASK
         add_tiles_init();
 #else
-        add_bcast_rows_init_short();
+        add_bcast_rows_init_short(cb_scale_mask, cb_fused_attn);
 #endif
         for (uint32_t wt = 0; wt < Wt; wt += ndst) {
             ACQ();
@@ -189,7 +189,7 @@ void MAIN {
 #else
         reconfig_data_format(cb_in0, cb_in0);
         pack_reconfig_data_format(cb_exps);
-        copy_tile_to_dst_init_short();  // need to copy from CB to DST to be able to run sfpu math
+        copy_tile_to_dst_init_short(cb_in0);  // need to copy from CB to DST to be able to run sfpu math
 #ifndef NUMERIC_STABLE
         exp_tile_init<EXP_APPROX>();
 #endif
@@ -200,7 +200,7 @@ void MAIN {
                 for (uint32_t wt8 = 0; wt8 < ndst; ++wt8) {
                     if (wt == (Wt - ndst) && (wt8 == ndst - 1)) {
                         reconfig_data_format(cb_in0, cb_mask_padded);
-                        add_bcast_rows_init_short();
+                        add_bcast_rows_init_short(cb_in0, cb_mask_padded);
                         cb_wait_front(cb_mask_padded, 1);
                         add_tiles_bcast_rows(cb_in0, cb_mask_padded, wt8, 0, wt8);
                     } else {
@@ -256,13 +256,13 @@ void MAIN {
 
         ACQ();
         cb_reserve_back(cb_recipsumexps, onetile);
-        reduce_init_delta<false>();
+        reduce_init_delta<false>(cb_exps, cb_bcast_scaler, cb_recipsumexps);
         for (uint32_t wt = 0; wt < Wt; wt++) {
             cb_wait_front(cb_exps, wt + 1);        // must be a cumulative wait for correctness
             constexpr uint32_t bcast_scaler0 = 0;  // 0th index from bcast_scaler CB
             reduce_tile(cb_exps, cb_bcast_scaler, wt, bcast_scaler0, dst0);
         }
-        reduce_revert_delta();
+        reduce_revert_delta(cb_recipsumexps);
         recip_tile_init();
         recip_tile(dst0);  // DST[0] = 1/sum(exp(x))
         pack_tile(dst0, cb_recipsumexps);
@@ -276,7 +276,7 @@ void MAIN {
         pack_reconfig_data_format(cb_out0);
         // now cb_sumexps has exp tiles, need to multiply by our DST[2]
         // by now we already did a umulative wait for Wt tiles in cb_exps
-        mul_bcast_cols_init_short();
+        mul_bcast_cols_init_short(cb_exps, cb_recipsumexps);
         for (uint32_t wt = 0; wt < Wt; wt += ndst) {
             ACQ();
             cb_reserve_back(cb_out0, ndst);

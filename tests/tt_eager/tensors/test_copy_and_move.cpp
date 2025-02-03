@@ -2,23 +2,24 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "common/bfloat16.hpp"
-#include "common/constants.hpp"
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/constants.hpp>
 #include "ttnn/cpp/ttnn/operations/creation.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/host_buffer/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/functions.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/reshape/view.hpp"
 
 using namespace tt;
 using namespace tt_metal;
 using namespace constants;
 
-bool test_tensor_copy_semantics(Device* device) {
+bool test_tensor_copy_semantics(IDevice* device) {
     bool pass = true;
-    tt::tt_metal::LegacyShape single_tile_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
+    ttnn::Shape single_tile_shape({1, 1, TILE_HEIGHT, TILE_WIDTH});
 
     // host tensor to host tensor copy constructor
     Tensor host_a = ttnn::random::random(single_tile_shape).to(Layout::TILE);
@@ -37,8 +38,8 @@ bool test_tensor_copy_semantics(Device* device) {
     pass &= dev_a_data == dev_a_copy_data;
 
     // host tensor updated with host tensor copy assignment
-    Tensor host_c = ttnn::arange(/*start=*/0, /*stop=*/tt_metal::compute_volume(single_tile_shape), /*step=*/1)
-                        .reshape(single_tile_shape)
+    Tensor host_c = ttnn::experimental::view(
+                        ttnn::arange(/*start=*/0, /*stop=*/single_tile_shape.volume(), /*step=*/1), single_tile_shape)
                         .to(Layout::TILE);
     Tensor host_c_copy = ttnn::random::random(single_tile_shape).to(Layout::TILE);
     host_c_copy = host_c;
@@ -77,9 +78,9 @@ bool test_tensor_copy_semantics(Device* device) {
     return pass;
 }
 
-bool test_tensor_move_semantics(Device* device) {
+bool test_tensor_move_semantics(IDevice* device) {
     bool pass = true;
-    tt::tt_metal::LegacyShape single_tile_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
+    ttnn::Shape single_tile_shape({1, 1, TILE_HEIGHT, TILE_WIDTH});
 
     auto random_tensor = ttnn::random::uniform(bfloat16(-1.0f), bfloat16(1.0f), single_tile_shape);
     auto bfloat_data = owned_buffer::get_as<bfloat16>(random_tensor);
@@ -143,9 +144,9 @@ bool test_tensor_move_semantics(Device* device) {
     return pass;
 }
 
-bool test_tensor_deallocate_semantics(Device* device) {
+bool test_tensor_deallocate_semantics(IDevice* device) {
     bool pass = true;
-    tt::tt_metal::LegacyShape single_tile_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
+    ttnn::Shape single_tile_shape({1, 1, TILE_HEIGHT, TILE_WIDTH});
 
     MemoryConfig dram_mem_config =
         MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED, .buffer_type = BufferType::DRAM};
@@ -185,9 +186,9 @@ bool test_tensor_deallocate_semantics(Device* device) {
     return pass;
 }
 
-bool test_tensor_deallocate_and_close_device(Device* device) {
+bool test_tensor_deallocate_and_close_device(IDevice* device) {
     bool pass = true;
-    tt::tt_metal::LegacyShape single_tile_shape = {1, 1, TILE_HEIGHT, TILE_WIDTH};
+    ttnn::Shape single_tile_shape({1, 1, TILE_HEIGHT, TILE_WIDTH});
 
     MemoryConfig dram_mem_config =
         MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED, .buffer_type = BufferType::DRAM};
@@ -211,7 +212,7 @@ int main(int argc, char** argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         pass &= test_tensor_copy_semantics(device);
 

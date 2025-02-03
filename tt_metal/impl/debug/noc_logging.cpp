@@ -12,7 +12,8 @@
 
 #include "debug_helpers.hpp"
 #include "hostdevcommon/dprint_common.h"
-#include "tt_metal/impl/device/device.hpp"
+#include <device.hpp>
+#include "llrt.hpp"
 
 using namespace tt::tt_metal;
 
@@ -38,12 +39,12 @@ void PrintNocData(noc_data_t noc_data, const string& file_name) {
     outfile.close();
 }
 
-void DumpCoreNocData(Device* device, const CoreDescriptor& logical_core, noc_data_t& noc_data) {
-    CoreCoord phys_core = device->virtual_core_from_logical_core(logical_core.coord, logical_core.type);
-    for (int risc_id = 0; risc_id < GetNumRiscs(logical_core); risc_id++) {
+void DumpCoreNocData(IDevice* device, const CoreDescriptor& logical_core, noc_data_t& noc_data) {
+    CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_core.coord, logical_core.type);
+    for (int risc_id = 0; risc_id < GetNumRiscs(device, logical_core); risc_id++) {
         // Read out the DPRINT buffer, we stored our data in the "data field"
-        uint64_t addr = GetDprintBufAddr(device, phys_core, risc_id);
-        auto from_dev = tt::llrt::read_hex_vec_from_core(device->id(), phys_core, addr, DPRINT_BUFFER_SIZE);
+        uint64_t addr = GetDprintBufAddr(device, virtual_core, risc_id);
+        auto from_dev = tt::llrt::read_hex_vec_from_core(device->id(), virtual_core, addr, DPRINT_BUFFER_SIZE);
         DebugPrintMemLayout* l = reinterpret_cast<DebugPrintMemLayout*>(from_dev.data());
         uint32_t* data = reinterpret_cast<uint32_t*>(l->data);
 
@@ -54,7 +55,7 @@ void DumpCoreNocData(Device* device, const CoreDescriptor& logical_core, noc_dat
     }
 }
 
-void DumpDeviceNocData(Device* device, noc_data_t& noc_data, noc_data_t& dispatch_noc_data) {
+void DumpDeviceNocData(IDevice* device, noc_data_t& noc_data, noc_data_t& dispatch_noc_data) {
     // Need to treat dispatch cores and normal cores separately, so keep track of which cores are dispatch.
     CoreDescriptorSet dispatch_cores = GetDispatchCores(device);
 
@@ -69,14 +70,14 @@ void DumpDeviceNocData(Device* device, noc_data_t& noc_data, noc_data_t& dispatc
     }
 }
 
-void DumpNocData(const std::vector<Device*>& devices) {
+void DumpNocData(const std::vector<IDevice*>& devices) {
     // Skip if feature is not enabled
     if (!tt::llrt::RunTimeOptions::get_instance().get_record_noc_transfers()) {
         return;
     }
 
     noc_data_t noc_data = {}, dispatch_noc_data = {};
-    for (Device* device : devices) {
+    for (IDevice* device : devices) {
         log_info("Dumping noc data for Device {}...", device->id());
         DumpDeviceNocData(device, noc_data, dispatch_noc_data);
     }
@@ -85,7 +86,7 @@ void DumpNocData(const std::vector<Device*>& devices) {
     PrintNocData(dispatch_noc_data, "dispatch_noc_data.txt");
 }
 
-void ClearNocData(Device* device) {
+void ClearNocData(IDevice* device) {
     // Skip if feature is not enabled
     if (!tt::llrt::RunTimeOptions::get_instance().get_record_noc_transfers()) {
         return;
@@ -98,11 +99,11 @@ void ClearNocData(Device* device) {
 
     CoreDescriptorSet all_cores = GetAllCores(device);
     for (const CoreDescriptor& logical_core : all_cores) {
-        CoreCoord phys_core = device->virtual_core_from_logical_core(logical_core.coord, logical_core.type);
-        for (int risc_id = 0; risc_id < GetNumRiscs(logical_core); risc_id++) {
-            uint64_t addr = GetDprintBufAddr(device, phys_core, risc_id);
+        CoreCoord virtual_core = device->virtual_core_from_logical_core(logical_core.coord, logical_core.type);
+        for (int risc_id = 0; risc_id < GetNumRiscs(device, logical_core); risc_id++) {
+            uint64_t addr = GetDprintBufAddr(device, virtual_core, risc_id);
             std::vector<uint32_t> initbuf = std::vector<uint32_t>(DPRINT_BUFFER_SIZE / sizeof(uint32_t), 0);
-            tt::llrt::write_hex_vec_to_core(device->id(), phys_core, initbuf, addr);
+            tt::llrt::write_hex_vec_to_core(device->id(), virtual_core, initbuf, addr);
         }
     }
 }

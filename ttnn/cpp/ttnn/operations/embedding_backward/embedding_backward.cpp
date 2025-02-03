@@ -6,7 +6,7 @@
 
 #include <utility>
 
-#include "ttnn/cpp/ttnn/common/constants.hpp"
+#include "cpp/ttnn/common/constants.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/embedding_backward/device/embedding_backward_device_operation.hpp"
 #include "ttnn/run_operation.hpp"
@@ -21,12 +21,12 @@ Tensor EmbeddingBackwardOperation::invoke(
     const std::optional<const DataType> dtype,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
-    auto num_embeddings = weight_tensor_arg.get_shape()[-2];
+    auto num_embeddings = weight_tensor_arg.get_logical_shape()[-2];
 
-    auto batch_size = input_tensor_arg.get_shape()[0];
-    auto sentence_size = input_tensor_arg.get_shape()[-1];
-    auto input_tensor =
-        ttnn::reshape(input_tensor_arg, ttnn::SimpleShape{std::array<uint32_t, 4>{batch_size, 1, 1, sentence_size}});
+    const auto& input_shape = input_tensor_arg.get_logical_shape();
+    auto batch_size = input_shape[0];
+    auto sentence_size = input_shape[-1];
+    auto input_tensor = ttnn::reshape(input_tensor_arg, ttnn::Shape({batch_size, 1, 1, sentence_size}));
 
     auto input_gradient =
         operation::run(

@@ -159,6 +159,20 @@ class TtModelArgs:
             # NOTE: 3.2-90B and 3.3-70B also use scaling factor of 8
             raise ValueError(f"Unsupported LLAMA model: {LLAMA_DIR}")
 
+        # Set the max number of tokens for each prefill chunk based on the model and device
+        MAX_PREFILL_CHUNK_SIZES_DIV1024 = {
+            "3.2-1B": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128},
+            "3.2-3B": {"N150": 8, "N300": 128, "T3K": 128, "TG": 128},
+            "3.1-8B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128},
+            "3.2-11B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128},
+            "3.1-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128},
+        }
+        max_prefill_chunk_size_div1024 = MAX_PREFILL_CHUNK_SIZES_DIV1024[self.model_name][self.device_name]
+        assert (
+            max_prefill_chunk_size_div1024 is not None
+        ), f"Unsupported model {self.model_name} on device {self.device_name}"
+        self.max_prefill_chunk_size = max_prefill_chunk_size_div1024 * 1024
+
         if callable(optimizations):
             self.optimizations = optimizations(self.model_name)
         else:
@@ -388,18 +402,19 @@ class TtModelArgs:
             )
             self.qkv_size = self.head_dim * (2 * self.n_kv_heads + self.n_heads)
             self.min_kv_prefill_shard_seqlen = (self.tile_size * 8 * 8) / (self.n_kv_heads // self.cluster_shape[1])
+            self.MAX_QKV_MM_SEQ_LEN = 2048
             self.model_config["XQKV_PREFILL_PROGCFG"] = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=(8, 8),
                 in0_block_w=1,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
                 out_subblock_h=1,  # Must be divisible by per_core_M
                 out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
                 per_core_M=max(
-                    1, 8 if seq_len >= 2048 else seq_len // self.tile_size // 8  # 8 rows
+                    1, 8 if seq_len >= self.MAX_QKV_MM_SEQ_LEN else seq_len // self.tile_size // 8  # 8 rows
                 ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
                 per_core_N=math.ceil(self.qkv_size / self.cluster_shape[1] / 32 / 8),  # N / TILE_WIDTH / grid width
                 transpose_mcast=False,
                 fused_activation=None,
-                fuse_batch=seq_len <= 2048,
+                fuse_batch=seq_len <= self.MAX_QKV_MM_SEQ_LEN,
             )
 
             assert self.n_kv_heads % self.cluster_shape[1] == 0, "n_kv_heads must be divisible by num_devices"
@@ -469,7 +484,6 @@ class TtModelArgs:
                         128,
                     ],
                     ttnn.ShardOrientation.ROW_MAJOR,
-                    False,
                 ),
             )
 
@@ -581,7 +595,6 @@ class TtModelArgs:
                         nearest_32(56),
                     ],
                     ttnn.ShardOrientation.ROW_MAJOR,
-                    False,
                 ),
             )
 
@@ -819,7 +832,6 @@ class TtModelArgs:
                         self.dim // self.num_devices,
                     ],
                     ttnn.ShardOrientation.ROW_MAJOR,
-                    False,
                 ),
             )
 
@@ -1043,7 +1055,7 @@ class TtModelArgs:
         dram_cores = 12
         padded_size = math.ceil(n / (self.tile_size * dram_cores)) * (self.tile_size * dram_cores)
         shard_spec = ttnn.ShardSpec(
-            self.dram_weight_grid, (k, padded_size // dram_cores), ttnn.ShardOrientation.ROW_MAJOR, False
+            self.dram_weight_grid, (k, padded_size // dram_cores), ttnn.ShardOrientation.ROW_MAJOR
         )
         return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, shard_spec)
 
@@ -1394,7 +1406,6 @@ def set_tg_attention_config(model_config, dim):
                     32,
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             ),
         )
     )

@@ -8,13 +8,13 @@
 #include <random>
 #include <thread>
 
-#include "common/bfloat16.hpp"
-#include "test_tiles.hpp"
-#include "tt_metal/impl/device/device.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/debug/dprint_server.hpp"
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/test_tiles.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/host_api.hpp>
+#include "dprint_server.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 
 using std::vector;
@@ -34,7 +34,7 @@ CoreCoord get_core_range(
 
 // took & revise from bmm_op_multi_core_reuse_mcast_2d_optimized.cpp
 tt_metal::Program create_program_mcast_in0_in1(
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     MathFidelity math_fidelity,
     CoreCoord core_range,
     uint32_t B,
@@ -1017,7 +1017,7 @@ int main(int argc, char** argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Inputs Setup

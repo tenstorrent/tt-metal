@@ -8,5 +8,7 @@ target_link_libraries(
     tools
     PUBLIC
         profiler
-        llrt
+        Metalium::Metal::LLRT
+    PRIVATE
+        TT::Metalium::HostDevCommon
 )

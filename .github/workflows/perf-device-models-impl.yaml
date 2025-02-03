@@ -27,18 +27,13 @@ jobs:
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     runs-on: ${{ matrix.test-info.runs-on }}
     steps:
-      - name: Ensure weka mount is active
-        run: |
-          sudo systemctl restart mnt-MLPerf.mount
-          sudo /etc/rc.local
-          ls -al /mnt/MLPerf/bit_error_tests
       - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
+      - uses: ./.github/actions/ensure-active-weka-mount
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - uses: ./.github/actions/prepare-metal-run
         with:
-          arch: ${{ matrix.test-info.arch }}
           is_profiler: 'true'
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ matrix.test-info.timeout }}

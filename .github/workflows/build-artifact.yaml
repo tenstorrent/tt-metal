@@ -3,10 +3,6 @@ name: "Build tt-metal artifacts"
 on:
   workflow_call:
     inputs:
-      arch:
-        required: false
-        type: string
-        default: '["grayskull", "wormhole_b0"]'
       build-type:
         required: false
         type: string
@@ -16,26 +12,40 @@ on:
         type: boolean
         default: false
         description: "Build with tracy enabled"
-      os:
+      distro:
         required: false
         type: string
-        default: "ubuntu-20.04-amd64"
-      build-docker:
+        default: "ubuntu"
+      version:
+        required: false
+        type: string
+        default: "20.04"
+      architecture:
+        required: false
+        type: string
+        default: "amd64"
+      toolchain:
+        required: false
+        type: string
+        default: "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
+        description: "Toolchain file to use for build"
+      publish-artifact:
         required: false
         type: boolean
         default: true
-        description: "Build docker image"
+        # FIXME(afuller): We need to fix our artifact naming to avoid conflicts if we
+        #     wish to make builds of differing types available in a single workflow.
+        description: "Make resulting artifact available in the workflow"
+      skip-tt-train:
+        # FIXME: TT-Train needs to get fixed to not assume a specific toolchain.
+        #        Fow now enabling an opt-out. But this should get removed.
+        required: false
+        type: boolean
+        default: false
+
+
   workflow_dispatch:
     inputs:
-      build-docker:
-        required: false
-        type: boolean
-        default: true
-        description: "Build docker image"
-      arch:
-        required: false
-        type: string
-        default: '["grayskull", "wormhole_b0"]'
       build-type:
         required: false
         type: string
@@ -45,32 +55,37 @@ on:
         type: boolean
         default: false
         description: "Build with tracy enabled"
-      os:
+      distro:
         required: false
         type: string
-        default: "ubuntu-20.04-amd64"
+        default: "ubuntu"
+      version:
+        required: false
+        type: string
+        default: "20.04"
+      architecture:
+        required: false
+        type: string
+        default: "amd64"
 
 
 jobs:
   build-docker-image:
-    if: ${{ inputs.build-docker == true }}
     uses: ./.github/workflows/build-docker-artifact.yaml
     secrets: inherit
     with:
-      os: ${{ inputs.os }}
+      distro: ${{ inputs.distro }}
+      version: ${{ inputs.version }}
+      architecture: ${{ inputs.architecture }}
 
   build-artifact:
+    name: "🛠️ Build ${{ inputs.build-type }} ${{ inputs.distro }} ${{ inputs.version }}"
     needs: build-docker-image
-    if: always()
     timeout-minutes: 30
-    strategy:
-      matrix:
-        arch: ${{ fromJson(inputs.arch || '["grayskull", "wormhole_b0", "blackhole"]') }}
     env:
-      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
-      ARCH_NAME: ${{ matrix.arch }}
       SILENT: 0
       VERBOSE: 1
+      IMAGE_PARAMS: "${{ inputs.distro }}-${{ inputs.version }}-${{ inputs.architecture }}"
     runs-on:
       - build
       - in-service
@@ -99,7 +114,7 @@ jobs:
         id: generate-docker-tag
         uses: ./.github/actions/generate-docker-tag
         with:
-          image: tt-metalium/${{ inputs.os }}
+          image: tt-metalium/${{ env.IMAGE_PARAMS }}
       - name: Docker login
         uses: docker/login-action@v3
         with:
@@ -109,7 +124,7 @@ jobs:
       - name: Pull docker image
         run: docker pull ${{ env.TT_METAL_DOCKER_IMAGE_TAG }}
       - name: Build tt-metal and libs
-        uses: addnab/docker-run-action@v3
+        uses: tenstorrent/docker-run-action@v5
         with:
           image: ${{ env.TT_METAL_DOCKER_IMAGE_TAG }}
           options: |
@@ -123,7 +138,6 @@ jobs:
             -v /etc/bashrc:/etc/bashrc:ro
             -v /home/ubuntu/.ccache-ci:/home/ubuntu/.ccache
             -v /mnt/MLPerf/ccache:/mnt/MLPerf/ccache
-            -e ARCH_NAME=${{ matrix.arch }}
             -e CARGO_HOME=${{ github.workspace }}/.cargo
             -w ${{ github.workspace }}
           run: |
@@ -137,11 +151,17 @@ jobs:
             # NOTE: may be inaccurate if we have >1 build runner on the same machine, using the same local cache
             ccache -z
 
-            build_command="./build_metal.sh --build-type ${{ inputs.build-type }} --build-all --enable-ccache"
-            echo "${{ inputs.tracy }}"
+            args_fixme=$([ "${{ inputs.skip-tt-train }}" = "true" ] && echo "--build-metal-tests --build-ttnn-tests --build-programming-examples" || echo "--build-all")
+            echo "Args: ${args_fixme}"
+            build_command="./build_metal.sh --build-type ${{ inputs.build-type }} --toolchain-path ${{ inputs.toolchain }} ${args_fixme} --enable-ccache"
+            echo "Build tracy: ${{ inputs.tracy }}"
             if [ "${{ inputs.tracy }}" = "true" ]; then
               build_command="$build_command --enable-profiler"
             fi
+
+            [ -n "$(find . -maxdepth 1 -type d -name 'build*' -print -quit)" ] &&
+              { echo "!!! ALERT !!! This should never happen, but does explain an issue we've been hunting. Please send a link to this job to Metal Infra.  kthxbye."; exit 1; }
+
             nice -n 19 $build_command
             ccache -s > build/ccache.stats
       - name: Publish Ccache summary
@@ -151,9 +171,11 @@ jobs:
           cat build/ccache.stats >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
       - name: 'Tar files'
-        run: tar -cvhf ttm_${{ matrix.arch }}.tar ttnn/ttnn/*.so build/lib ttnn/ttnn/*.so build/programming_examples build/test build/tools build/tt-train data runtime
+        if: ${{ inputs.publish-artifact }}
+        run: tar -cvhf ttm_any.tar ttnn/ttnn/*.so build/lib ttnn/ttnn/*.so build/programming_examples build/test build/tools build/tt-train data runtime
       - name: 'Upload Artifact'
+        if: ${{ inputs.publish-artifact }}
         uses: actions/upload-artifact@v4
         with:
-          name: TTMetal_build_${{ matrix.arch }}${{ (inputs.tracy && '_profiler') || '' }}
-          path: ttm_${{ matrix.arch }}.tar
+          name: TTMetal_build_any${{ (inputs.tracy && '_profiler') || '' }}
+          path: ttm_any.tar

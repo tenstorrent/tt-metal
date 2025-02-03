@@ -20,53 +20,28 @@ using BaseTilizeValType = std::function<ttnn::Tensor(const ttnn::Tensor&)>;
 using MassagedTilizeVal = MassagedOperation<ttnn::Tensor, const ttnn::Tensor&>;
 using MassagedTilizeValParams = MassagedOperationParams<ttnn::Tensor, const ttnn::Tensor&>;
 
-ttnn::Shape update_original_shape(ttnn::Shape& original, uint32_t tile_height, uint32_t tile_width) {
-    std::vector<uint32_t> update_original(original.rank());
-    uint32_t indx1 = original.rank() - 1;
-    uint32_t indx2 = original.rank() - 2;
-    if (original[indx2] % tile_height != 0) {
-        update_original[indx2] = (original[indx2] / tile_height + 1) * tile_height;
-        for (int i = 0; i < original.rank(); i++) {
-            if (i != indx2) {
-                update_original[i] = original[i];
-            }
-        }
-        return tt::tt_metal::LegacyShape(update_original);
-    }
-
-    else if (original[indx1] % tile_width != 0) {
-        update_original[indx1] = (original[indx1] / tile_width + 1) * tile_width;
-        for (int i = 0; i < original.rank(); i++) {
-            if (i != indx1) {
-                update_original[i] = original[i];
-            }
-        }
-        return tt::tt_metal::LegacyShape(update_original);
-    }
-    return original;
-}
-
 MassagedTilizeVal build_ndiml_tilize_val(BaseTilizeValType base_tilize) {
-    auto original_shape = std::make_shared<ttnn::Shape>(ttnn::Shape{});
+    auto original_shape = std::make_shared<Shape>();
     return MassagedTilizeVal(MassagedTilizeValParams{
-        .predicate = [](const ttnn::Tensor& input_tensor) -> bool { return input_tensor.get_shape().rank() > 4; },
+        .predicate = [](const ttnn::Tensor& input_tensor) -> bool {
+            return input_tensor.get_logical_shape().rank() > 4;
+        },
         .pre_transform = [=](const ttnn::Tensor& input_tensor) -> OwnedTilizeValArgs {
-            *original_shape = input_tensor.get_shape();
-            ttnn::Tensor squeezed_tensor = squeeze_to_le_4D(input_tensor);
+            *original_shape = input_tensor.get_logical_shape();
+            ttnn::Tensor squeezed_tensor = squeeze_from_ND_to_4D(input_tensor);
             return std::make_tuple(squeezed_tensor);
         },
         .post_transform = [=](const ttnn::Tensor& output) -> ttnn::Tensor {
             const auto tile = output.get_tensor_spec().tile();
             uint32_t tile_height = tile.get_height();
             uint32_t tile_width = tile.get_width();
-            auto unsqueezed_tensor =
-                ttnn::reshape(output, update_original_shape(*original_shape, tile_height, tile_width));
+            auto unsqueezed_tensor = ttnn::reshape(output, *original_shape);
             return unsqueezed_tensor;
         },
         .operation = std::move(base_tilize)});
 }
 
-tt::tt_metal::LegacyShape squeeze_output_shape(tt::tt_metal::LegacyShape output_shape) {
+ttnn::Shape squeeze_output_shape(const ttnn::Shape& output_shape) {
     if (output_shape.rank() > 4) {
         std::array<uint32_t, 4> output_shape_4d;
         output_shape_4d[0] = 1;
@@ -77,7 +52,7 @@ tt::tt_metal::LegacyShape squeeze_output_shape(tt::tt_metal::LegacyShape output_
         output_shape_4d[1] = output_shape[1 + extra_rank];
         output_shape_4d[2] = output_shape[2 + extra_rank];
         output_shape_4d[3] = output_shape[3 + extra_rank];
-        return tt::tt_metal::LegacyShape(output_shape_4d);
+        return ttnn::Shape(output_shape_4d);
     }
     return output_shape;
 }
@@ -85,7 +60,7 @@ tt::tt_metal::LegacyShape squeeze_output_shape(tt::tt_metal::LegacyShape output_
 ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
     uint8_t queue_id,
     const ttnn::Tensor& input_tensor,
-    const tt::tt_metal::LegacyShape& output_tensor_shape,
+    const ttnn::Shape& output_padded_shape,
     const PadValue pad_value,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DataType> output_dtype,
@@ -93,7 +68,7 @@ ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
     auto base_tilize = [=](const ttnn::Tensor& input_tensor) {
         return operation::run(
             TilizeWithValPadding{
-                squeeze_output_shape(output_tensor_shape),
+                squeeze_output_shape(output_padded_shape),
                 pad_value,
                 memory_config.value_or(input_tensor.memory_config()),
                 output_dtype.value_or(input_tensor.get_dtype()),
@@ -109,13 +84,42 @@ ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
 
 ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
     const ttnn::Tensor& input_tensor,
-    const tt::tt_metal::LegacyShape& output_tensor_shape,
+    const ttnn::Shape& output_padded_shape,
     const PadValue pad_value,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DataType> output_dtype,
     bool use_multicore) {
     return invoke(
-        DefaultQueueId, input_tensor, output_tensor_shape, pad_value, memory_config, output_dtype, use_multicore);
+        DefaultQueueId, input_tensor, output_padded_shape, pad_value, memory_config, output_dtype, use_multicore);
+}
+
+ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
+    uint8_t queue_id,
+    const ttnn::Tensor& input_tensor,
+    const ttnn::SmallVector<uint32_t>& output_padded_shape,
+    const PadValue pad_value,
+    const std::optional<MemoryConfig>& memory_config,
+    std::optional<DataType> output_dtype,
+    bool use_multicore) {
+    return invoke(
+        queue_id,
+        input_tensor,
+        ttnn::Shape{output_padded_shape},
+        pad_value,
+        memory_config,
+        output_dtype,
+        use_multicore);
+}
+
+ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::SmallVector<uint32_t>& output_padded_shape,
+    const PadValue pad_value,
+    const std::optional<MemoryConfig>& memory_config,
+    std::optional<DataType> output_dtype,
+    bool use_multicore) {
+    return invoke(
+        DefaultQueueId, input_tensor, output_padded_shape, pad_value, memory_config, output_dtype, use_multicore);
 }
 
 ttnn::Tensor ExecuteTilizeWithZeroPadding::invoke(
@@ -125,10 +129,10 @@ ttnn::Tensor ExecuteTilizeWithZeroPadding::invoke(
     std::optional<DataType> output_dtype,
     bool use_multicore) {
     using namespace tt::constants;
-    auto shape = input_tensor.get_legacy_shape();
+    auto padded_shape = input_tensor.get_padded_shape();
 
-    shape[2] = tt::round_up(shape[2], tt::constants::TILE_HEIGHT);
-    shape[3] = tt::round_up(shape[3], tt::constants::TILE_WIDTH);
+    padded_shape[-2] = tt::round_up(padded_shape[-2], tt::constants::TILE_HEIGHT);
+    padded_shape[-1] = tt::round_up(padded_shape[-1], tt::constants::TILE_WIDTH);
 
     PadValue pad_value;
     if (input_tensor.get_dtype() == DataType::BFLOAT16 or input_tensor.get_dtype() == DataType::FLOAT32) {
@@ -137,7 +141,7 @@ ttnn::Tensor ExecuteTilizeWithZeroPadding::invoke(
         pad_value = (uint32_t)0;
     }
     return ExecuteTilizeWithValPadding::invoke(
-        queue_id, input_tensor, shape, pad_value, memory_config, output_dtype, use_multicore);
+        queue_id, input_tensor, padded_shape, pad_value, memory_config, output_dtype, use_multicore);
 }
 
 ttnn::Tensor ExecuteTilizeWithZeroPadding::invoke(

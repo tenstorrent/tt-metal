@@ -42,11 +42,14 @@ void py_module(py::module& module) {
         });
 
     auto PyShape = static_cast<py::class_<ttnn::Shape>>(module.attr("Shape"));
-    PyShape.def(py::init<tt::tt_metal::LegacyShape>())
-        .def_property_readonly("value", [](const Shape& self) { return self.value; })
+    PyShape.def(py::init<const ttnn::SmallVector<uint32_t>&>(), py::arg("shape"))
         .def("__len__", [](const Shape& self) { return self.rank(); })
         .def("__getitem__", [](const Shape& self, std::int64_t index) { return self[index]; })
-        .def("__iter__", [](const Shape& self) { return py::iter(py::cast(self.value.without_padding())); })
+        .def(
+            "__iter__",
+            [](const Shape& self) {
+                return py::iter(py::cast(ttnn::SmallVector<uint32_t>(self.cbegin(), self.cend())));
+            })
         .def(pybind11::self == pybind11::self)
         .def(
             "__repr__",
@@ -56,30 +59,21 @@ void py_module(py::module& module) {
                 return ss.str();
             })
         .def_property_readonly("rank", [](const Shape& self) -> std::size_t { return self.rank(); })
-        .def("with_tile_padding", [](const Shape& self) { return self.with_tile_padding(); })
-        .def("to_rank", [](const Shape& self, std::size_t rank) { return self.to_rank(rank); });
+        .def("to_rank", [](const Shape& self, std::size_t new_rank) {
+            SmallVector<uint32_t> new_shape(new_rank, 1);
 
-    [&PyShape]<auto... Ns>(std::index_sequence<Ns...>) {
-        (
-            [&PyShape]() {
-                if constexpr (Ns > 0) {
-                    PyShape.def(py::init<const std::array<uint32_t, Ns>&>(), py::arg("shape"));
+            int cur_idx = static_cast<int>(self.rank()) - 1;
+            int new_idx = static_cast<int>(new_rank) - 1;
+            for (; cur_idx >= 0 && new_idx >= 0; cur_idx--, new_idx--) {
+                new_shape[new_idx] = self[cur_idx];
+            }
+            for (; cur_idx >= 0; cur_idx--) {
+                TT_FATAL(self[cur_idx] == 1, "Can't convert shape rank");
+            }
 
-                    PyShape.def(
-                        py::init<const std::array<uint32_t, Ns>&, const std::array<std::array<uint32_t, 2>, Ns>&>(),
-                        py::arg("shape"),
-                        py::arg("padding"));
-
-                    PyShape.def(
-                        py::init<const std::array<uint32_t, Ns>&, std::array<uint32_t, Ns>&>(),
-                        py::arg("shape"),
-                        py::arg("padded_shape"));
-
-                    PyShape.def(pybind11::self == std::array<uint32_t, Ns>{});
-                }
-            }(),
-            ...);
-    }(std::make_index_sequence<8>());
+            return ttnn::Shape(std::move(new_shape));
+        });
+    py::implicitly_convertible<ttnn::SmallVector<uint32_t>, ttnn::Shape>();
 }
 
 }  // namespace types

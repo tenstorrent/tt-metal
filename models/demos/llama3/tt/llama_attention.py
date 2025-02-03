@@ -40,6 +40,7 @@ class TtLlamaAttention(LightweightModule):
         self.ccl_dtype = configuration.ccl_dtype
         self.num_reduce_scatter_links = configuration.num_reduce_scatter_links
         self.num_all_gather_links = configuration.num_all_gather_links
+        self.MAX_QKV_MM_SEQ_LEN = configuration.MAX_QKV_MM_SEQ_LEN
 
         self.num_device_groups = self.num_devices // self.n_kv_heads
         self.num_devices_per_group = self.n_kv_heads if self.TG else self.num_devices
@@ -280,7 +281,7 @@ class TtLlamaAttention(LightweightModule):
         # Reshape such that true unpadded batch is tracked in shape
         fqkv_shape = xqkv_fused.shape
         xqkv_fused = ttnn.reshape(
-            xqkv_fused, ttnn.Shape((1, 1, self.batch_size_per_device_group, fqkv_shape[3]), (1, 1, 32, fqkv_shape[3]))
+            xqkv_fused, (1, 1, self.batch_size_per_device_group, fqkv_shape[3]), (1, 1, 32, fqkv_shape[3])
         )
 
         ###
@@ -455,7 +456,16 @@ class TtLlamaAttention(LightweightModule):
 
             return dense_out_reduced
 
-    def forward_prefill(self, x_11SH, rot_mats, user_id: int = 0, page_table=None, kv_cache=None):
+    def forward_prefill(
+        self,
+        x_11SH,
+        rot_mats,
+        user_id: int = 0,
+        page_table=None,
+        chunk_page_table=None,
+        chunk_start_idx=None,
+        kv_cache=None,
+    ):
         seq_len = x_11SH.shape[-2]
         assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
         ###
@@ -463,8 +473,10 @@ class TtLlamaAttention(LightweightModule):
         ###
 
         # reshaping long sequence to matmul fit on device
-        if seq_len > 2048:
-            x_11SH = ttnn.reshape(x_11SH, [1, seq_len // 2048, 2048, -1])
+        if seq_len > self.MAX_QKV_MM_SEQ_LEN:
+            if seq_len % self.MAX_QKV_MM_SEQ_LEN != 0:
+                raise ValueError(f"seq_len {seq_len} must be divisible by {self.MAX_QKV_MM_SEQ_LEN}")
+            x_11SH = ttnn.reshape(x_11SH, [1, seq_len // self.MAX_QKV_MM_SEQ_LEN, self.MAX_QKV_MM_SEQ_LEN, -1])
 
         xqkv_fused = ttnn.linear(
             x_11SH,
@@ -485,7 +497,7 @@ class TtLlamaAttention(LightweightModule):
             dtype=self.ccl_dtype,
         )
 
-        if seq_len > 2048:
+        if seq_len > self.MAX_QKV_MM_SEQ_LEN:
             xqkv_fused = ttnn.reshape(xqkv_fused, [1, 1, seq_len, -1])
 
         ttnn.deallocate(x_11SH)
@@ -565,11 +577,14 @@ class TtLlamaAttention(LightweightModule):
             # In the case that the tokens have been padded along the seq len dimension, we need to fill the cache with the unpadded k/v values.
             # Assume that the page table does not have padding, so we can use it to get the unpadded page len.
             block_size = keys_BKSD.shape[2]
-            page_len = page_table.shape[1] * block_size
+            # If chunked prefill, use chunk_page_table if given, otherwise use page_table.
+            fill_page_table = chunk_page_table if chunk_page_table is not None else page_table
+
+            page_len = fill_page_table.shape[1] * block_size
             k_fill_sliced = k_fill[:, :, :page_len, :] if page_len < k_fill.shape[2] else k_fill
             v_fill_sliced = v_fill[:, :, :page_len, :] if page_len < v_fill.shape[2] else v_fill
-            ttnn.experimental.paged_fill_cache(keys_BKSD, k_fill_sliced, page_table, batch_idx=user_id)
-            ttnn.experimental.paged_fill_cache(values_BKSD, v_fill_sliced, page_table, batch_idx=user_id)
+            ttnn.experimental.paged_fill_cache(keys_BKSD, k_fill_sliced, fill_page_table, batch_idx=user_id)
+            ttnn.experimental.paged_fill_cache(values_BKSD, v_fill_sliced, fill_page_table, batch_idx=user_id)
         else:
             ttnn.fill_cache(
                 keys_BKSD,
@@ -587,32 +602,34 @@ class TtLlamaAttention(LightweightModule):
             ttnn.deallocate(v_fill)
 
         # SDPA
-
-        # reshaping to put group in batch dim to do sdpa on 8 MQAs in parallel
-        k_heads_K1SD_8b = ttnn.reshape(k_heads_1KSD_8b, [self.n_local_kv_heads, 1, -1, self.head_dim])
-        v_heads_V1SD_8b = ttnn.reshape(v_heads_1VSD_8b, [self.n_local_kv_heads, 1, -1, self.head_dim])
-
         q_heads_1QSD_8b = ttnn.typecast(q_heads_1QSD, dtype=ttnn.bfloat8_b)
         ttnn.deallocate(q_heads_1QSD)
 
-        q_heads_84SD_8b = ttnn.reshape(
-            q_heads_1QSD_8b, [self.n_local_kv_heads, self.n_local_heads // self.n_local_kv_heads, -1, self.head_dim]
-        )
-
-        attn_output_84SD = ttnn.transformer.scaled_dot_product_attention(
-            q_heads_84SD_8b,
-            k_heads_K1SD_8b,
-            v_heads_V1SD_8b,
-            is_causal=True,
-            scale=self.scale,
-            compute_kernel_config=self.compute_kernel_config_hifi4,
-            program_config=self.model_config["SDPA_PROGCFG"](seq_len),
-        )
+        if chunk_start_idx is not None:
+            attn_output_84SD = ttnn.transformer.chunked_scaled_dot_product_attention(
+                q_heads_1QSD_8b,
+                keys_BKSD,
+                values_BKSD,
+                page_table,
+                chunk_start_idx,
+                compute_kernel_config=self.compute_kernel_config_hifi4,
+                program_config=self.model_config["SDPA_PROGCFG"](seq_len),
+            )
+        else:
+            attn_output_84SD = ttnn.transformer.scaled_dot_product_attention(
+                q_heads_1QSD_8b,
+                k_heads_1KSD_8b,
+                v_heads_1VSD_8b,
+                is_causal=True,
+                scale=self.scale,
+                compute_kernel_config=self.compute_kernel_config_hifi4,
+                program_config=self.model_config["SDPA_PROGCFG"](seq_len),
+            )
 
         # deallocate keys and values
-        ttnn.deallocate(q_heads_84SD_8b)
-        ttnn.deallocate(k_heads_K1SD_8b)
-        ttnn.deallocate(v_heads_V1SD_8b)
+        ttnn.deallocate(q_heads_1QSD_8b)
+        ttnn.deallocate(k_heads_1KSD_8b)
+        ttnn.deallocate(v_heads_1VSD_8b)
 
         attn_output_1QSD = ttnn.reshape(attn_output_84SD, [1, self.n_local_heads, -1, self.head_dim])
 
@@ -674,10 +691,20 @@ class TtLlamaAttention(LightweightModule):
         user_id=0,
         mode="decode",
         page_table=None,
+        chunk_page_table=None,
+        chunk_start_idx=None,
         kv_cache=None,
     ):
         if mode == "prefill":
-            return self.forward_prefill(x, rot_mats, user_id, page_table=page_table, kv_cache=kv_cache)
+            return self.forward_prefill(
+                x,
+                rot_mats,
+                user_id,
+                page_table=page_table,
+                chunk_page_table=chunk_page_table,
+                chunk_start_idx=chunk_start_idx,
+                kv_cache=kv_cache,
+            )
         else:
             return self.forward_decode(x, current_pos, rot_mats, page_table=page_table, kv_cache=kv_cache)
 

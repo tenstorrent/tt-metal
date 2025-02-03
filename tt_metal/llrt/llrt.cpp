@@ -18,23 +18,19 @@
 #include <unordered_set>
 #include <utility>
 
-#include "tt_metal/common/assert.hpp"
-#include "tt_metal/common/logger.hpp"
+#include <assert.hpp>
+#include <logger.hpp>
 
 #include "llrt.hpp"
-#include "llrt/rtoptions.hpp"
+#include <rtoptions.hpp>
 #include "hal.hpp"
 
-#include "jit_build/settings.hpp"
+#include <settings.hpp>
 
 #include <fmt/base.h>
 #include <fmt/ranges.h>
 
-// FIXME: ARCH_NAME specific
-#include "dev_msgs.h" // RUN_MSG_DONE
-#include "dev_mem_map.h" // MEM_IERISC_FIRMWARE_BASE
-#include "eth_l1_address_map.h" // address_map
-
+#include <dev_msgs.h>
 
 namespace tt {
 
@@ -115,11 +111,6 @@ void write_launch_msg_to_core(chip_id_t chip, const CoreCoord core, launch_msg_t
     }
 }
 
-static const uint32_t ERISC_APP_FW_ON_CORE_FLAG = 0x1;
-void launch_erisc_app_fw_on_core(chip_id_t chip, CoreCoord core) {
-    llrt::write_hex_vec_to_core(chip, core, tt::stl::Span(&ERISC_APP_FW_ON_CORE_FLAG, 1), eth_l1_mem::address_map::LAUNCH_ERISC_APP_FLAG);
-}
-
 void print_worker_cores(chip_id_t chip_id) {
     std::cout << std::endl << "worker cores: " << std::endl;
     for (const CoreCoord &core : tt::Cluster::instance().get_soc_desc(chip_id).physical_workers) {
@@ -138,39 +129,6 @@ ll_api::memory read_mem_from_core(chip_id_t chip, const CoreCoord &core, const l
     return read_mem;
 }
 
-
-uint32_t generate_risc_startup_addr(bool is_eth_core) {
-    // Options for handling brisc fw not starting at mem[0]:
-    // 1) Program the register for the start address out of reset
-    // 2) Encode a jump in crt0 for mem[0]
-    // 3) Write the jump to mem[0] here
-    // This does #3.  #1 may be best, #2 gets messy (elf files
-    // drop any section before .init, crt0 needs ifdefs, etc)
-    constexpr uint32_t jal_opcode = 0x6f;
-    constexpr uint32_t jal_max_offset = 0x0007ffff;
-    uint32_t opcode = jal_opcode;
-    uint32_t firmware_base = is_eth_core ? MEM_IERISC_FIRMWARE_BASE : MEM_BRISC_FIRMWARE_BASE;
-    assert(firmware_base < jal_max_offset);
-    // See riscv spec for offset encoding below
-    uint32_t jal_offset_bit_20 = 0;
-    uint32_t jal_offset_bits_10_to_1 = (firmware_base & 0x7fe) << 20;
-    uint32_t jal_offset_bit_11 = (firmware_base & 0x800) << 9;
-    uint32_t jal_offset_bits_19_to_12 = (firmware_base & 0xff000) << 0;
-    uint32_t jal_offset =
-        jal_offset_bit_20 |
-        jal_offset_bits_10_to_1 |
-        jal_offset_bit_11 |
-        jal_offset_bits_19_to_12;
-
-    return jal_offset | opcode;
-}
-
-void program_risc_startup_addr(chip_id_t chip_id, const CoreCoord &core) {
-    std::vector<uint32_t> jump_to_fw;
-    jump_to_fw.push_back(generate_risc_startup_addr(tt::Cluster::instance().is_ethernet_core(core, chip_id)));
-    write_hex_vec_to_core(chip_id, core, tt::stl::Span<const uint32_t>(jump_to_fw.data(), jump_to_fw.size()), 0);
-}
-
 bool test_load_write_read_risc_binary(
     ll_api::memory const& mem,
     chip_id_t chip_id,
@@ -180,7 +138,7 @@ bool test_load_write_read_risc_binary(
     uint32_t processor_type_idx) {
     assert(tt::Cluster::instance().is_worker_core(core, chip_id) or tt::Cluster::instance().is_ethernet_core(core, chip_id));
 
-    uint64_t local_init_addr = tt::tt_metal::hal.get_binary_local_init_addr(core_type_idx, processor_class_idx, processor_type_idx);
+    uint64_t local_init_addr = tt::tt_metal::hal.get_jit_build_config(core_type_idx, processor_class_idx, processor_type_idx).local_init_addr;
 
     log_debug(tt::LogLLRuntime, "hex_vec size = {}, size_in_bytes = {}", mem.size(), mem.size()*sizeof(uint32_t));
     mem.process_spans([&](std::vector<uint32_t>::const_iterator mem_ptr, uint64_t addr, uint32_t len_words) {
@@ -209,7 +167,7 @@ void write_binary_to_address(ll_api::memory const& mem, chip_id_t chip_id, const
 }
 
 CoreCoord get_core_for_dram_channel(int dram_channel_id, chip_id_t chip_id) {
-    return tt::Cluster::instance().get_soc_desc(chip_id).get_preferred_worker_core_for_dram_channel(dram_channel_id);
+    return tt::Cluster::instance().get_soc_desc(chip_id).get_preferred_worker_core_for_dram_view(dram_channel_id);
 }
 
 namespace internal_ {
@@ -261,7 +219,9 @@ void wait_until_cores_done(
     // poll the cores until the set of not done cores is empty
     int loop_count = 1;
     auto start = std::chrono::high_resolution_clock::now();
-    if (std::getenv("TT_METAL_SIMULATOR_EN")) timeout_ms = 0;
+    bool is_simulator = llrt::RunTimeOptions::get_instance().get_simulator_enabled();
+
+    if (is_simulator) timeout_ms = 0;
     while (!not_done_phys_cores.empty()) {
         if (timeout_ms > 0) {
             auto now = std::chrono::high_resolution_clock::now();
@@ -295,6 +255,11 @@ void wait_until_cores_done(
             }
         }
         loop_count++;
+
+        // Continuously polling cores on simulator can cause it to run much slower than real hardware.
+        if (is_simulator)
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
         // Continuously polling cores here can cause other host-driven noc transactions (dprint, watcher) to drastically
         // slow down for remote devices. So when debugging with these features, add a small delay to allow other
         // host-driven transactions through.

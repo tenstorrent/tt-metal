@@ -7,15 +7,16 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "ttnn/cpp/pybind11/decorators.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded_pybind.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/sharded/reshard/reshard_pybind.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved_pybind.hpp"
+#include "cpp/pybind11/decorators.hpp"
+#include "cpp/ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded_pybind.hpp"
+#include "cpp/ttnn/operations/data_movement/sharded/reshard/reshard_pybind.hpp"
+#include "cpp/ttnn/operations/data_movement/sharded/sharded_to_interleaved/sharded_to_interleaved_pybind.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast_pybind.hpp"
 #include "ttnn/operations/data_movement/clone/clone_pybind.hpp"
 #include "ttnn/operations/data_movement/concat/concat_pybind.hpp"
 #include "ttnn/operations/data_movement/copy/copy_pybind.hpp"
 #include "ttnn/operations/data_movement/expand/expand_pybind.hpp"
+#include "ttnn/operations/data_movement/fill_pad/fill_pad_pybind.hpp"
 #include "ttnn/operations/data_movement/fill_rm/fill_rm_pybind.hpp"
 #include "ttnn/operations/data_movement/fold/fold_pybind.hpp"
 #include "ttnn/operations/data_movement/indexed_fill/indexed_fill_pybind.hpp"
@@ -48,6 +49,7 @@ namespace operations {
 namespace data_movement {
 
 void py_module(py::module& module) {
+    bind_fill_pad(module);
     bind_fill_rm(module);
     bind_fold_operation(module);
     bind_non_zero_indices(module);

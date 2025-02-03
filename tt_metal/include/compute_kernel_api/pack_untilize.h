@@ -56,7 +56,7 @@ ALWI void pack_untilize_block(uint32_t icb, uint32_t block_rt_dim, uint32_t ocb)
 /**
  * Uninitialize untilize operation, to allow initializing another operation.
  */
-ALWI void pack_untilize_uninit(uint32_t ocb = 16) {
+ALWI void pack_untilize_uninit(uint32_t ocb) {
     PACK((llk_pack_init(ocb)));
     PACK((llk_init_packer_dest_offset_registers<false>()));
 

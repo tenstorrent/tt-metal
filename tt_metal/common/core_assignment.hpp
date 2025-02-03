@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "core_coord.hpp"
-#include "tt_metal/llrt/tt_cluster.hpp"
+#include <tt_cluster.hpp>
 
 namespace tt {
 namespace tt_metal {

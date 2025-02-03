@@ -25,7 +25,7 @@ ALWI void REL() { release_dst(); }
 
 inline void tilize_in(
     uint32_t in_cb_id, uint32_t in_subblock_h, uint32_t in_block_w, uint32_t in_num_subblocks, uint32_t out_cb_id) {
-    tilize_init_short(in_cb_id, in_block_w);
+    tilize_init_short(in_cb_id, in_block_w, out_cb_id);
     for (uint32_t in_subblock = 0; in_subblock < in_num_subblocks; ++in_subblock) {
         for (uint32_t h = 0; h < in_subblock_h; ++h) {
             cb_wait_front(in_cb_id, in_block_w);
@@ -35,7 +35,7 @@ inline void tilize_in(
             cb_pop_front(in_cb_id, in_block_w);
         }
     }
-    tilize_uninit(in_cb_id);
+    tilize_uninit(in_cb_id, out_cb_id);
 }
 
 inline void eltwise_mul_and_add_block_v2(
@@ -61,7 +61,7 @@ inline void eltwise_mul_and_add_block_v2(
         cb_pop_front(in0_cb_id, 1);
         cb_pop_front(in1_cb_id, 1);
         if (idx == 0) {
-            copy_tile_to_dst_init_short();
+            copy_tile_to_dst_init_short(eltwise_mul_partials_cb_cb_id);
             ACQ();
             cb_wait_front(eltwise_mul_partials_cb_cb_id, 1);
             cb_reserve_back(out_cb_id, 1);
@@ -82,7 +82,7 @@ inline void eltwise_mul_and_add_block_v2(
             cb_pop_front(eltwise_mul_partials_cb_cb_id, 1);
             cb_pop_front(out_cb_id, 1);
 
-            copy_tile_to_dst_init_short();
+            copy_tile_to_dst_init_short(temp_sum_cb);
             ACQ();
             cb_wait_front(temp_sum_cb, 1);
             cb_reserve_back(out_cb_id, 1);

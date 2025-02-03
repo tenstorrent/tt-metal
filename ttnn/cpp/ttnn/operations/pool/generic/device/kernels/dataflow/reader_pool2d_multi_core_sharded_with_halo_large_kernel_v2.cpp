@@ -13,17 +13,7 @@
 
 #if ENABLE_DEBUG_PRINT == 1
 #include "debug/dprint.h"
-
-inline void print_pages(uint32_t l1_addr, uint32_t pagelen, uint32_t npages, uint32_t start = 0) {
-    volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr) + start * pagelen;
-    for (uint32_t page = 0; page < npages; ++page) {
-        DPRINT << start + page << ": ";
-        for (uint32_t j = 0; j < pagelen; ++j, ++ptr) {
-            DPRINT << BF16(*ptr) << " ";
-        }
-        DPRINT << ENDL();
-    }
-}
+#include "debug/dprint_pages.h"
 #endif
 
 #define ALWI inline __attribute__((always_inline))
@@ -70,6 +60,8 @@ void kernel_main() {
     constexpr uint32_t in_cb_sz = get_compile_time_arg_val(14);
     constexpr uint32_t max_rows_for_reduction = get_compile_time_arg_val(15);
 
+    constexpr uint32_t ceil_pad_w = get_compile_time_arg_val(15);
+
     constexpr uint32_t TILE_SIZE = 32 * 32;
     constexpr uint32_t MAX_TILES_PER_REDUCTION = 8;
     constexpr uint32_t MAX_ELE_PER_REDUCTION = 512;  // TILE_WIDTH * 8 * numbytes
@@ -97,15 +89,14 @@ void kernel_main() {
     volatile tt_l1_ptr uint16_t* reader_indices_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint16_t*>(reader_indices_l1_addr);
 
-    uint32_t in_w_padded = in_w + 2 * pad_w;
+    uint32_t in_w_padded = in_w + 2 * pad_w + ceil_pad_w;
 
-    uint32_t read_bytes = in_nbytes_c;
-    if (in_nbytes_c > MAX_ELE_PER_REDUCTION) {
-        read_bytes = MAX_ELE_PER_REDUCTION;  // for now, pow of 2 channels are only supported.
-    }
     uint32_t counter = reader_id;
     uint32_t total_elems_to_reduce = window_h * window_w;
     uint32_t remaining_elems = total_elems_to_reduce % max_rows_for_reduction;
+    bool wide_reduction = in_nblocks_c > 1;
+    uint32_t read_bytes =
+        wide_reduction ? MAX_ELE_PER_REDUCTION : in_nbytes_c;  // in_cb is MAX_ELE_PER_REDUCTION for wide reductions
     while (counter < reader_nindices) {
         for (uint32_t c_i = 0; c_i < in_nblocks_c; c_i++) {
             uint16_t top_left_local_index = reader_indices_ptr[counter];
@@ -113,10 +104,13 @@ void kernel_main() {
             cb_reserve_back(in_cb_id, 1);
             uint32_t out_l1_write_addr_base = get_write_ptr(in_cb_id);
             uint32_t out_l1_write_addr = out_l1_write_addr_base;
+<<<<<<< HEAD:ttnn/cpp/ttnn/operations/pool/generic/device/kernels/dataflow/reader_pool2d_multi_core_sharded_with_halo_large_kernel_v2.cpp
             // fill interm buffer with the init value if we have only one chunk
             if ((total_elems_to_reduce - processed_rows) < max_rows_for_reduction) {
                 fill_with_val(out_l1_write_addr, in_cb_sz, bf16_init_value);
             }
+=======
+>>>>>>> f7d847d8891c78cd3c532513ec1a81bb9398f64a:ttnn/cpp/ttnn/operations/pool/generic/device/kernels/dataflow/reader_max_pool_2d_multi_core_sharded_with_halo_large_kernel_v2.cpp
             for (uint32_t h = 0; h < window_h; ++h) {
                 for (uint32_t w = 0; w < window_w; w++) {
                     uint32_t stick_offset = top_left_local_index + w + h * in_w_padded;

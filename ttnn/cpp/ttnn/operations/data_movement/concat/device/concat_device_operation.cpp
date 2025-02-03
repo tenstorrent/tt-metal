@@ -2,14 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/operations/data_movement/concat/device/concat_device_operation.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/concat/device/concat_program_factory.hpp"
+#include "cpp/ttnn/operations/data_movement/concat/device/concat_device_operation.hpp"
+#include "cpp/ttnn/operations/data_movement/concat/device/concat_program_factory.hpp"
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/run_operation.hpp"
-#include "tt_metal/common/logger.hpp"
+#include <tt-metalium/logger.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -27,7 +27,7 @@ ConcatOpParallelizationStrategy ConcatDeviceOperation::get_parallelization_strat
 
 void ConcatDeviceOperation::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& first_input = input_tensors[0];
-    tt::tt_metal::LegacyShape shape_first = first_input.get_legacy_shape();
+    auto shape_first = first_input.get_padded_shape();
     TT_FATAL(this->dim < shape_first.rank(), "ConcatDeviceOperation dim specified is larger than input tensor rank.");
     shape_first[this->dim] = 0;
     bool shard_first = input_tensors[0].is_sharded();
@@ -40,11 +40,11 @@ void ConcatDeviceOperation::validate(const std::vector<Tensor>& input_tensors) c
         TT_FATAL(in_ref.device() == first_input.device(), "Operands to concat need to be on the same device.");
         TT_FATAL(in_ref.get_layout() == first_input.get_layout(), "All Tensors should have same layouts.");
         TT_FATAL(in_ref.get_dtype() == first_input.get_dtype(), "All Tensors should have same dtypes.");
-        tt::tt_metal::LegacyShape curr_shape = in_ref.get_legacy_shape();
+        auto curr_shape = in_ref.get_padded_shape();
         TT_FATAL(curr_shape.rank() == shape_first.rank(), "Input tensor ranks must be equal");
         curr_shape[this->dim] = 0;
         // last tensor can support without any kernel changes
-        if (in_ref.get_layout() == Layout::TILE and in_ref.get_shape().has_tile_padding(this->dim)) {
+        if (in_ref.get_layout() == Layout::TILE and in_ref.get_logical_shape()[dim] != in_ref.get_padded_shape()[dim]) {
             warn_about_alignment = true;
         }
         TT_FATAL(curr_shape == shape_first, "concat tensors differ in shape across non-concat dimensions.");
@@ -105,31 +105,19 @@ void ConcatDeviceOperation::validate(const std::vector<Tensor>& input_tensors) c
     }
 }
 
-std::vector<ttnn::SimpleShape> ConcatDeviceOperation::compute_output_shapes(
+std::vector<ttnn::TensorSpec> ConcatDeviceOperation::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
-    ttnn::SimpleShape shape_out = input_tensors[0].get_logical_shape();
+    const Tensor& ref_in_tensor = input_tensors.at(0);
+    ttnn::Shape shape_out = ref_in_tensor.get_logical_shape();
     shape_out[this->dim] = 0;
     for (const Tensor& in_ref : input_tensors) {
-        ttnn::SimpleShape curr_shape = in_ref.get_logical_shape();
+        ttnn::Shape curr_shape = in_ref.get_logical_shape();
         shape_out[this->dim] += curr_shape[this->dim];
     }
-    return {shape_out};
-}
 
-std::vector<Tensor> ConcatDeviceOperation::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    const Tensor& ref_in_tensor = input_tensors.at(0);
-
-    if (this->output_mem_config.is_sharded()) {
-        return {create_device_tensor(
-            this->compute_output_shapes(input_tensors).at(0),
-            ref_in_tensor.get_dtype(),
-            ref_in_tensor.get_layout(),
-            ref_in_tensor.device(),
-            this->output_mem_config)};
-    } else {
-        return operation::generic_create_output_tensors(
-            *this, input_tensors, ref_in_tensor.get_dtype(), ref_in_tensor.get_layout(), this->output_mem_config);
-    }
+    return {TensorSpec(
+        shape_out,
+        TensorLayout(ref_in_tensor.get_dtype(), PageConfig(ref_in_tensor.get_layout()), this->output_mem_config))};
 }
 
 operation::ProgramWithCallbacks ConcatDeviceOperation::create_program(
@@ -162,8 +150,8 @@ Tensor concat_impl(
                 return {ttnn::operations::experimental::auto_format::AutoFormat::move_tensor_to_mem_config(
                     input_tensors[0], output_mem_config)};
             }
-            uint32_t ref_rank = input_tensors[0].get_legacy_shape().rank();
-            uint32_t normalized_dim = input_tensors[0].get_legacy_shape().get_normalized_index(dim);
+            uint32_t ref_rank = input_tensors[0].get_padded_shape().rank();
+            uint32_t normalized_dim = input_tensors[0].get_padded_shape().get_normalized_index(dim);
 
             if (input_tensors[0].is_sharded()) {
                 return operation::run(
@@ -184,7 +172,7 @@ Tensor concat_impl(
                 // this should be dead code when instantiating layout to match the input
                 for (const auto& input_tensor : input_tensors) {
                     if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
-                        const auto& input_shape = input_tensor.get_legacy_shape();
+                        const auto& input_shape = input_tensor.get_padded_shape();
                         if (input_shape.rank() < 2 || input_shape[-2] % TILE_HEIGHT != 0 ||
                             input_shape[-1] % TILE_WIDTH != 0) {
                             target_layout = Layout::ROW_MAJOR;
@@ -197,13 +185,13 @@ Tensor concat_impl(
                 for (const auto& input_tensor : input_tensors) {
                     if (target_layout == Layout::ROW_MAJOR) {
                         input_format_params.push_back(ttnn::operations::experimental::auto_format::FormatParams{
-                            .pad_shape = input_tensor.get_legacy_shape(),
+                            .pad_shape = input_tensor.get_padded_shape(),
                             .pad_value = 0.0,
                             .target_layout = target_layout});
                     } else {
-                        tt::tt_metal::LegacyShape pad_shape =
+                        ttnn::Shape pad_shape =
                             ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(
-                                input_tensor.get_legacy_shape());
+                                input_tensor.get_padded_shape());
                         input_format_params.push_back(ttnn::operations::experimental::auto_format::FormatParams{
                             .pad_shape = pad_shape, .pad_value = 0.0, .target_layout = target_layout});
                     }

@@ -49,4 +49,4 @@ WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/
 WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/resnet50/tests/test_perf_e2e_resnet50.py::test_perf_trace_2cqs
 ```
 + This will generate a CSV with the timings and throughputs.
-+ **Expected end-to-end perf**: For batch = 16, it is about `4,100 fps` currently. This may vary machine to machine.
++ **Expected end-to-end perf**: For batch = 16, it is about `4,700 fps` currently. This may vary machine to machine.

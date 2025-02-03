@@ -79,26 +79,18 @@ def run_bert_large_matmul_test(
     B = torch.randn(b_shape) - 0.95
     BIAS = torch.randint(-20, 20, bias_shape, dtype=torch.float)
 
-    a_t = (
-        ttnn.Tensor(
-            A.flatten().tolist(),
-            a_shape,
-            in0_dtype,
-            ttnn.ROW_MAJOR_LAYOUT,
-        )
-        .to(ttnn.TILE_LAYOUT)
-        .to(device, in0_mem_config)
-    )
-    b_t = (
-        ttnn.Tensor(
-            B.flatten().tolist(),
-            b_shape,
-            in1_dtype,
-            ttnn.ROW_MAJOR_LAYOUT,
-        )
-        .to(ttnn.TILE_LAYOUT)
-        .to(device, in1_mem_config)
-    )
+    a_t = ttnn.Tensor(
+        A.flatten().tolist(),
+        a_shape,
+        in0_dtype,
+        ttnn.TILE_LAYOUT,
+    ).to(device, in0_mem_config)
+    b_t = ttnn.Tensor(
+        B.flatten().tolist(),
+        b_shape,
+        in1_dtype,
+        ttnn.TILE_LAYOUT,
+    ).to(device, in1_mem_config)
 
     if bias_mem_config is not None:
         bias_t = ttnn.from_torch(
@@ -128,9 +120,8 @@ def run_bert_large_matmul_test(
         logger.debug(f"bias ({bias_shape}): {bias_t.memory_config().buffer_type} and {bias_t.get_dtype()}")
     logger.debug(f"out ({expected_output_shape}): {t2.memory_config().buffer_type} and {t2.get_dtype()}")
 
-    assert t2.shape.with_tile_padding() == expected_output_shape
-    tt_host_rm = t2.cpu().to(ttnn.ROW_MAJOR_LAYOUT)
-    pyt_got_back_rm = tt_host_rm.to_torch()
+    assert t2.padded_shape == expected_output_shape
+    pyt_got_back_rm = ttnn.to_torch(t2)
 
     ref_bmm = torch.matmul(A, B)
     if bias_mem_config is not None:
@@ -184,26 +175,18 @@ def run_bert_large_bmm_test(
     A = torch.randn(a_shape)
     B = torch.randn(b_shape) - 0.95
 
-    a_t = (
-        ttnn.Tensor(
-            A.flatten().tolist(),
-            a_shape,
-            in0_dtype,
-            ttnn.ROW_MAJOR_LAYOUT,
-        )
-        .to(ttnn.TILE_LAYOUT)
-        .to(device, in0_mem_config)
-    )
-    b_t = (
-        ttnn.Tensor(
-            B.flatten().tolist(),
-            b_shape,
-            in1_dtype,
-            ttnn.ROW_MAJOR_LAYOUT,
-        )
-        .to(ttnn.TILE_LAYOUT)
-        .to(device, in1_mem_config)
-    )
+    a_t = ttnn.Tensor(
+        A.flatten().tolist(),
+        a_shape,
+        in0_dtype,
+        ttnn.TILE_LAYOUT,
+    ).to(device, in0_mem_config)
+    b_t = ttnn.Tensor(
+        B.flatten().tolist(),
+        b_shape,
+        in1_dtype,
+        ttnn.TILE_LAYOUT,
+    ).to(device, in1_mem_config)
 
     t2 = bert_large_op(a_t, b_t, out_mem_config, out_dtype)
 
@@ -218,9 +201,8 @@ def run_bert_large_bmm_test(
     logger.debug(f"in1 ({b_shape}): {b_t.memory_config().buffer_type} and {b_t.get_dtype()}")
     logger.debug(f"out ({expected_output_shape}): {t2.memory_config().buffer_type} and {t2.get_dtype()}")
 
-    assert t2.shape.with_tile_padding() == expected_output_shape
-    tt_host_rm = t2.cpu().to(ttnn.ROW_MAJOR_LAYOUT)
-    pyt_got_back_rm = tt_host_rm.to_torch()
+    assert t2.padded_shape == expected_output_shape
+    pyt_got_back_rm = ttnn.to_torch(t2)
 
     if bert_large_op == custom_matmuls.bert_large_pre_softmax_bmm:
         ref_bmm = torch.matmul(A, B).reshape(expected_output_shape)

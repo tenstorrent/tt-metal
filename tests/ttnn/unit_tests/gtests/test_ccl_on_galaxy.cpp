@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "common/bfloat16.hpp"
+#include <tt-metalium/bfloat16.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
 #include "ttnn/operations/ccl/reduce_scatter/device/reduce_scatter_op.hpp"
@@ -31,14 +31,8 @@ std::vector<Tensor> run_operation(
     static_assert(
         operation::detail::is_device_operation<OpConfig>(), "ttnn::run_operation can only dispatch Device Operations!");
     // Create output tensor vector by examining the number of output shapes created by the device operation
-    auto output_shapes = operation::DeviceOperation<operation::Tensors>(devop).compute_output_shapes(input_tensors, {});
-    size_t output_shapes_size = 0;
-    if (std::holds_alternative<std::vector<ttnn::SimpleShape>>(output_shapes)) {
-        output_shapes_size = std::get<std::vector<ttnn::SimpleShape>>(output_shapes).size();
-    } else {
-        output_shapes_size = std::get<std::vector<tt::tt_metal::LegacyShape>>(output_shapes).size();
-    }
-    std::vector<Tensor> outputs(output_shapes_size);
+    auto output_specs = operation::DeviceOperation<operation::Tensors>(devop).compute_output_specs(input_tensors, {});
+    std::vector<Tensor> outputs(output_specs.size());
     // Populate the workers of the output tensors, based on the input tensors. This is needed for the async engine.
     for (int i = 0; i < outputs.size(); i++) {
         outputs[i] = Tensor(operation::get_workers_for_op_output(input_tensors, optional_input_tensors));
@@ -125,7 +119,7 @@ TEST(GalaxyTests, TestAllGatherDeadlock) {
     // Setup input data and output data containers
     MemoryConfig mem_cfg = MemoryConfig{
         .memory_layout = TensorMemoryLayout::INTERLEAVED, .buffer_type = BufferType::DRAM, .shard_spec = std::nullopt};
-    ttnn::SimpleShape shape{1, 1, 32, 16384};
+    ttnn::Shape shape{1, 1, 32, 16384};
     const uint32_t buf_size_datums = 32 * 16384;
     const uint32_t datum_size_bytes = 2;
     auto host_data = std::shared_ptr<bfloat16[]>(new bfloat16[buf_size_datums]);
@@ -190,8 +184,8 @@ TEST(GalaxyTests, TestAllGatherDeadlock) {
             // Readback data and verify correctness.
             for (auto& tensor : output_tensors) {
                 ASSERT_EQ(
-                    tensor.get_shape(),
-                    ttnn::Shape(LegacyShape({1, 1, 32, static_cast<uint32_t>(16384 * device_ids.size())})));
+                    tensor.get_logical_shape(),
+                    Shape({1, 1, 32, static_cast<uint32_t>(16384 * device_ids.size())}));
                 ttnn::read_buffer(0, tensor, {readback_data});
                 for (int j = 0; j < device_ids.size() * 32 * 16384; j++) {
                     ASSERT_EQ(readback_data[j].to_float(), 1);
@@ -214,17 +208,17 @@ TEST(GalaxyTests, TestReduceScatterDeadlock) {
     // Create the outer ring on which Reduce Scatter will be run. This allows us to verify that there are no deadlocks
     // when we send CCLs to the first tunnel (forward path).
     auto view = ttnn::MeshDeviceView(*mesh);
-    std::vector<Device*> ring_devices = view.get_devices_on_row(0);  // Tunnel 0
-    std::vector<Device*> ring_devices_1 =
+    std::vector<IDevice*> ring_devices = view.get_devices_on_row(0);  // Tunnel 0
+    std::vector<IDevice*> ring_devices_1 =
         view.get_devices_on_column(mesh_shape.num_cols - 1);  // Orthogonal to tunnel .. no deadlocks
-    ring_devices_1 = std::vector<Device*>(ring_devices_1.begin() + 1, ring_devices_1.end());
-    std::vector<Device*> ring_devices_2 =
+    ring_devices_1 = std::vector<IDevice*>(ring_devices_1.begin() + 1, ring_devices_1.end());
+    std::vector<IDevice*> ring_devices_2 =
         view.get_devices_on_row(7);  // Tunnel 7 .. potential deadlocks with lack of buffering
     std::reverse(ring_devices_2.begin(), ring_devices_2.end());
-    ring_devices_2 = std::vector<Device*>(ring_devices_2.begin() + 1, ring_devices_2.end());
-    std::vector<Device*> ring_devices_3 = view.get_devices_on_column(0);  // Orthogonal to tunnel .. no deadlocks
+    ring_devices_2 = std::vector<IDevice*>(ring_devices_2.begin() + 1, ring_devices_2.end());
+    std::vector<IDevice*> ring_devices_3 = view.get_devices_on_column(0);  // Orthogonal to tunnel .. no deadlocks
     std::reverse(ring_devices_3.begin(), ring_devices_3.end());
-    ring_devices_3 = std::vector<Device*>(ring_devices_3.begin() + 1, ring_devices_3.end() - 1);
+    ring_devices_3 = std::vector<IDevice*>(ring_devices_3.begin() + 1, ring_devices_3.end() - 1);
 
     ring_devices.insert(ring_devices.end(), ring_devices_1.begin(), ring_devices_1.end());
     ring_devices.insert(ring_devices.end(), ring_devices_2.begin(), ring_devices_2.end());
@@ -233,7 +227,7 @@ TEST(GalaxyTests, TestReduceScatterDeadlock) {
     // Setup input data and output data containers
     MemoryConfig mem_cfg = MemoryConfig{
         .memory_layout = TensorMemoryLayout::INTERLEAVED, .buffer_type = BufferType::DRAM, .shard_spec = std::nullopt};
-    ttnn::SimpleShape shape{1, 2, 256, static_cast<uint32_t>(256 * ring_devices.size())};
+    ttnn::Shape shape{1, 2, 256, static_cast<uint32_t>(256 * ring_devices.size())};
     const uint32_t buf_size_datums = 2 * 256 * 256 * ring_devices.size();
     const uint32_t datum_size_bytes = 2;
     // Output of reduce scatter is input_numel / num_devices_used_in_scatter_op
@@ -300,7 +294,7 @@ TEST(GalaxyTests, TestReduceScatterDeadlock) {
         }
         // Readback data and verify correctness.
         for (auto& tensor : output_tensors) {
-            ASSERT_EQ(tensor.get_shape(), ttnn::Shape(LegacyShape({1, 2, 256, 256})));
+            ASSERT_EQ(tensor.get_logical_shape(), Shape({1, 2, 256, 256}));
             ttnn::read_buffer(0, tensor, {readback_data});
             for (int j = 0; j < 512 * 256; j++) {
                 ASSERT_EQ(readback_data[j].to_float(), ring_devices.size());

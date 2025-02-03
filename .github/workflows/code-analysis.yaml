@@ -3,20 +3,36 @@ name: "Code analysis"
 on:
   workflow_call:
     inputs:
-      os:
+      distro:
         required: false
         type: string
-        default: "ubuntu-22.04-amd64"
+        default: "ubuntu"
+      version:
+        required: false
+        type: string
+        default: "20.04"
+      architecture:
+        required: false
+        type: string
+        default: "amd64"
       full-scan:
         required: false
         type: boolean
         default: false
   workflow_dispatch:
     inputs:
-      os:
+      distro:
         required: false
         type: string
-        default: "ubuntu-22.04-amd64"
+        default: "ubuntu"
+      version:
+        required: false
+        type: string
+        default: "20.04"
+      architecture:
+        required: false
+        type: string
+        default: "amd64"
       full-scan:
         required: false
         type: boolean
@@ -27,13 +43,15 @@ jobs:
     uses: ./.github/workflows/build-docker-artifact.yaml
     secrets: inherit
     with:
-      os: ${{ inputs.os }}
-
+      distro: ${{ inputs.distro }}
+      version: ${{ inputs.version }}
+      architecture: ${{ inputs.architecture }}
 
   clang-tidy:
     needs: build-docker-image
     env:
       ARCH_NAME: wormhole_b0
+      IMAGE_PARAMS: "${{ inputs.distro }}-${{ inputs.version }}-${{ inputs.architecture }}"
     runs-on:
       - build
       - in-service
@@ -58,7 +76,7 @@ jobs:
         id: generate-docker-tag
         uses: ./.github/actions/generate-docker-tag
         with:
-          image: tt-metalium/${{ inputs.os }}
+          image: tt-metalium/${{ env.IMAGE_PARAMS }}
       - name: Docker login
         uses: docker/login-action@v3
         with:
@@ -94,7 +112,7 @@ jobs:
 
       - name: Create baseline
         if: github.ref_name != 'main' && !inputs.full-scan
-        uses: addnab/docker-run-action@v3
+        uses: tenstorrent/docker-run-action@v5
         with:
           image: ${{ env.TT_METAL_DOCKER_IMAGE_TAG }}
           options: |
@@ -125,7 +143,7 @@ jobs:
             # Suppress clang-tidy to first get an up-to-date build tree
             ln -sf /usr/bin/true ./clang-tidy-shim
 
-            cmake --preset clang-tidy -DCMAKE_CXX_CLANG_TIDY=$(pwd)/clang-tidy-shim -DCMAKE_C_CLANG_TIDY=$(pwd)/clang-tidy-shim
+            cmake --preset clang-tidy -DCMAKE_CXX_CLANG_TIDY="$(pwd)/clang-tidy-shim;--warnings-as-errors=*" -DCMAKE_C_CLANG_TIDY="$(pwd)/clang-tidy-shim;--warnings-as-errors=*"
             nice -n 19 cmake --build --preset clang-tidy
 
             mkdir -p out
@@ -146,7 +164,7 @@ jobs:
           clean: false
 
       - name: Analyze code with clang-tidy
-        uses: addnab/docker-run-action@v3
+        uses: tenstorrent/docker-run-action@v5
         with:
           image: ${{ env.TT_METAL_DOCKER_IMAGE_TAG }}
           options: |
@@ -178,6 +196,7 @@ jobs:
             # Symlink tomfoolery here so that Ninja believes the build command has not changed from the previous run
             ln -sf $(which clang-tidy-17) ./clang-tidy-shim
 
+            # Keep this line _exactly_ the same as the one in the "Create baseline" or it will not be incremental
             cmake --preset clang-tidy -DCMAKE_CXX_CLANG_TIDY="$(pwd)/clang-tidy-shim;--warnings-as-errors=*" -DCMAKE_C_CLANG_TIDY="$(pwd)/clang-tidy-shim;--warnings-as-errors=*"
             nice -n 19 cmake --build --preset clang-tidy
             mkdir -p out

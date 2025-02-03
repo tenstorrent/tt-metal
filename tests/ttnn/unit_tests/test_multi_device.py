@@ -55,11 +55,10 @@ def test_multi_device_open_close_full_mesh_device_fixture(mesh_device):
 
 def test_multi_device_open_close_using_context_manager(silicon_arch_name, silicon_arch_wormhole_b0):
     """Using context manager to open and close multi-device"""
-    pytest.skip("Issue #6983")
-    mesh_shape, device_ids = ttnn.MeshShape(2, 2), ttnn.get_device_ids()
-    if len(device_ids) <= 1:
+    if ttnn.get_num_devices() < 4:
         pytest.skip()
-    with ttnn.create_mesh_device(mesh_shape, device_ids) as mesh_device:
+    mesh_shape = ttnn.MeshShape(2, 2)
+    with ttnn.create_mesh_device(mesh_shape) as mesh_device:
         # Do something with multi_device
         pass
 
@@ -511,11 +510,16 @@ def test_sharded_matmul(t3k_mesh_device):
     q_heads_1B4D = ttnn.to_device(q_heads_1B4D, t3k_mesh_device)
     keys_1BDP = ttnn.to_device(keys_1BDP, t3k_mesh_device)
 
+    core_grid = ttnn.CoreGrid(y=4, x=8)
+    compute_grid_size = t3k_mesh_device.compute_with_storage_grid_size()
+    if (compute_grid_size.x < core_grid.x) or (compute_grid_size.y < core_grid.y):
+        pytest.skip("Test requires larger grid size")
+
     q_heads_1B4D = ttnn.to_memory_config(
         q_heads_1B4D,
         ttnn.create_sharded_memory_config(
             shape=(32, 128),
-            core_grid=ttnn.CoreGrid(y=4, x=8),
+            core_grid=core_grid,
             strategy=ttnn.ShardStrategy.HEIGHT,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
@@ -526,7 +530,7 @@ def test_sharded_matmul(t3k_mesh_device):
         keys_1BDP,
         ttnn.create_sharded_memory_config(
             shape=(128, 32),
-            core_grid=ttnn.CoreGrid(y=4, x=8),
+            core_grid=core_grid,
             strategy=ttnn.ShardStrategy.HEIGHT,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
@@ -542,7 +546,7 @@ def test_sharded_matmul(t3k_mesh_device):
         q_heads_1B4D,
         keys_1BDP,
         dtype=ttnn.bfloat16,
-        core_grid=ttnn.CoreGrid(y=4, x=8),
+        core_grid=core_grid,
         compute_kernel_config=compute_kernel_attn,
     )
 

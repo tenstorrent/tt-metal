@@ -61,6 +61,27 @@ def torch_random(shape, low, high, dtype):
     return torch.zeros(shape, dtype=dtype).uniform_(low, high)
 
 
+def torch_random_with_zeros(shape, low, high, dtype, zero_fraction=0.1):
+    total_elements = torch.prod(torch.tensor(shape)).item()
+    num_zeros = int(total_elements * zero_fraction)
+    num_random = total_elements - num_zeros
+
+    # Generate random values between low and high
+    random_values = torch.empty(num_random).uniform_(low, high)
+    zeros = torch.zeros(num_zeros)
+
+    # Combine zeros and random values
+    combined = torch.cat([zeros, random_values])
+
+    # Shuffle the tensor
+    shuffled = combined[torch.randperm(combined.size(0))]
+
+    # Reshape to the desired shape
+    result_tensor = shuffled.view(shape)
+    result_tensor.to(dtype)
+    return result_tensor
+
+
 ### Profiling ###
 class Profiler:
     def __init__(self):
@@ -292,7 +313,7 @@ def pad_by_zero(
 
 
 def unpad_from_zero(x, desired_shape):
-    if x.shape.with_tile_padding()[-1] == desired_shape[-1] and x.shape.with_tile_padding()[-2] == desired_shape[-2]:
+    if x.padded_shape[-1] == desired_shape[-1] and x.padded_shape[-2] == desired_shape[-2]:
         x = tt2torch_tensor(x)
     else:
         x = x.cpu()
@@ -842,17 +863,17 @@ def is_x2_harvested(device):
 
 
 def is_blackhole():
-    ARCH_NAME = os.environ.get("ARCH_NAME", os.environ.get("TT_ARCH_NAME", "")).lower()
+    ARCH_NAME = ttnn.get_arch_name()
     return "blackhole" in ARCH_NAME
 
 
 def is_wormhole_b0():
-    ARCH_NAME = os.environ.get("ARCH_NAME", os.environ.get("TT_ARCH_NAME", "")).lower()
+    ARCH_NAME = ttnn.get_arch_name()
     return "wormhole_b0" in ARCH_NAME
 
 
 def is_grayskull():
-    ARCH_NAME = os.environ.get("ARCH_NAME", os.environ.get("TT_ARCH_NAME", "")).lower()
+    ARCH_NAME = ttnn.get_arch_name()
     return "grayskull" in ARCH_NAME
 
 

@@ -12,7 +12,7 @@ namespace operations::data_movement {
 
 void NonZeroIndices::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
-    auto input_tensor_a_shape = input_tensor_a.get_legacy_shape();
+    auto input_tensor_a_shape = input_tensor_a.get_padded_shape();
     TT_FATAL(
         input_tensor_a_shape[0] == 1 and input_tensor_a_shape[1] == 1 and input_tensor_a_shape[2] == 1,
         "Input should be 1D");
@@ -24,14 +24,10 @@ void NonZeroIndices::validate(const std::vector<Tensor>& input_tensors) const {
         "Non-zero does not currently support sharding");
 }
 
-std::vector<ttnn::SimpleShape> NonZeroIndices::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-    ttnn::SimpleShape num_non_zero_shape({1, 1, 1, 8});
-    return {std::move(num_non_zero_shape), input_tensors.at(0).get_logical_shape()};
-}
-
-std::vector<Tensor> NonZeroIndices::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    return operation::generic_create_output_tensors(
-        *this, input_tensors, DataType::UINT32, Layout::ROW_MAJOR, this->output_mem_config);
+std::vector<ttnn::TensorSpec> NonZeroIndices::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
+    ttnn::Shape num_non_zero_shape({1, 1, 1, 8});
+    TensorLayout layout(DataType::UINT32, PageConfig(Layout::ROW_MAJOR), output_mem_config);
+    return {TensorSpec(num_non_zero_shape, layout), TensorSpec(input_tensors.at(0).get_logical_shape(), layout)};
 }
 
 operation::ProgramWithCallbacks NonZeroIndices::create_program(

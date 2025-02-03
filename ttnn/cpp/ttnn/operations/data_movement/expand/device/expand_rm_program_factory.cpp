@@ -6,14 +6,14 @@
 #include <string>
 #include <vector>
 
-#include "common/tt_backend_api_types.hpp"
-#include "common/work_split.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
+#include <tt-metalium/work_split.hpp>
 #include "expand_device_operation.hpp"
-#include "host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 #include "hostdevcommon/kernel_structs.h"
-#include "impl/buffers/buffer.hpp"
-#include "impl/buffers/circular_buffer_types.hpp"
-#include "impl/kernels/kernel_types.hpp"
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include "ttnn/tensor/types.hpp"
 
 using namespace tt::tt_metal;
@@ -30,7 +30,7 @@ ExpandOperation::ExpandRowMajorFactory::cached_program_t ExpandOperation::Expand
     Program program = CreateProgram();
 
     // Initialize data
-    auto input_shape_tmp = input.get_shape();
+    const auto& input_shape_tmp = input.get_logical_shape();
     std::vector<int64_t> input_shape;
 
     // Strip empty leading dimensions (for what we are doing next, this spell P-A-I-N)
@@ -49,7 +49,7 @@ ExpandOperation::ExpandRowMajorFactory::cached_program_t ExpandOperation::Expand
         input_shape.push_back(1);
     }
 
-    auto output_shape = output.get_shape();
+    const auto& output_shape = output.get_logical_shape();
     uint32_t data_size = input.element_size();
     tt::DataFormat data_format = datatype_to_dataformat_converter(input.get_dtype());
 

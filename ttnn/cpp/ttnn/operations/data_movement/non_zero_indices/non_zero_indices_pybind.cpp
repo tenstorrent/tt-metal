@@ -7,7 +7,7 @@
 
 #include "non_zero_indices_pybind.hpp"
 #include "non_zero_indices.hpp"
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "cpp/pybind11/decorators.hpp"
 
 namespace ttnn::operations::data_movement {
 namespace detail {

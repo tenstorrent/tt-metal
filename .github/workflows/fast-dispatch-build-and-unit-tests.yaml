@@ -73,7 +73,7 @@ jobs:
       - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
       - uses: actions/download-artifact@v4
         with:
-          name: eager-dist-${{ matrix.os }}-${{ inputs.arch }}
+          name: eager-dist-${{ matrix.os }}-any
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
         uses: ./.github/actions/docker-run
@@ -81,6 +81,8 @@ jobs:
           docker_os_arch: tt-metalium/${{ inputs.os }}-amd64
           install_wheel: true
           docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -e ARCH_NAME=${{ inputs.arch }}
           run_args: |
             ${{ matrix.test-group.cmd }}
       - uses: ./.github/actions/slack-report

@@ -40,10 +40,11 @@ enum DispatchPacketFlag : uint32_t {
 };
 
 enum DispatchRemoteNetworkType : uint8_t {
-    NOC0 = 0,
-    NOC1 = 1,
-    ETH = 2,
-    NONE = 3
+    DISABLE_QUEUE = 0, // Cheat to skip queue in process_queue
+    NOC0 = 1,
+    NOC1 = 2,
+    ETH = 3,
+    NONE = 4
 };
 
 inline bool is_remote_network_type_noc(DispatchRemoteNetworkType type) {
@@ -51,7 +52,6 @@ inline bool is_remote_network_type_noc(DispatchRemoteNetworkType type) {
 }
 
 struct dispatch_packet_header_t {
-
     uint32_t packet_size_bytes;
     uint16_t packet_src;
     uint16_t packet_dest;

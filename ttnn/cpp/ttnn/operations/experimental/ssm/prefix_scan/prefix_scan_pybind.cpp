@@ -8,7 +8,7 @@
 #include <pybind11/stl.h>
 
 #include "prefix_scan.hpp"
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "cpp/pybind11/decorators.hpp"
 
 namespace ttnn::operations::experimental::ssm::detail {
 

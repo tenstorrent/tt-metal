@@ -54,16 +54,15 @@ jobs:
           {name: All C++, cmd: ./tests/scripts/run_cpp_unit_tests.sh},
           {name: tools, cmd: ./tests/scripts/run_tools_tests.sh},
 
-          {name: user kernel path, cmd: "rm -rf /tmp/kernels && TT_METAL_KERNEL_PATH=/tmp/kernels ./build/test/tt_metal/unit_tests_api --gtest_filter=CompileProgramWithKernelPathEnvVarFixture.*"},
-          {name: api, cmd: "./build/test/tt_metal/unit_tests_api"},
-          {name: debug_tools, cmd: "./build/test/tt_metal/unit_tests_debug_tools"},
+          {name: user kernel path, cmd: "rm -rf /tmp/kernels && TT_METAL_KERNEL_PATH=/tmp/kernels ./build/test/tt_metal/unit_tests_api_${{ inputs.arch }} --gtest_filter=CompileProgramWithKernelPathEnvVarFixture.*"},
+          {name: api, cmd: "./build/test/tt_metal/unit_tests_api_${{ inputs.arch }}"},
+          {name: debug_tools, cmd: "./build/test/tt_metal/unit_tests_debug_tools_${{ inputs.arch }}"},
           {name: device, cmd: "./build/test/tt_metal/unit_tests_device"},
-          {name: dispatch, cmd: "./build/test/tt_metal/unit_tests_dispatch"},
-          {name: eth, cmd: "./build/test/tt_metal/unit_tests_eth"},
+          {name: dispatch, cmd: "./build/test/tt_metal/unit_tests_dispatch_${{ inputs.arch }}"},
+          {name: eth, cmd: "./build/test/tt_metal/unit_tests_eth_${{ inputs.arch }}"},
           {name: llk, cmd: "./build/test/tt_metal/unit_tests_llk"},
           {name: stl, cmd: "./build/test/tt_metal/unit_tests_stl"},
-          {name: distributed, cmd: "./build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter=MeshDeviceSuite.*"},
-
+          {name: distributed, cmd: "./build/test/tt_metal/distributed/distributed_unit_tests_${{ inputs.arch }} --gtest_filter=MeshDeviceSuite.*"},
           {name: FD2, cmd: ./tests/scripts/run_cpp_fd2_tests.sh},
         ]
     name: ${{ inputs.arch }} ${{ inputs.runner-label }} ${{ matrix.test-group.name }}
@@ -77,8 +76,6 @@ jobs:
     steps:
       - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
       - uses: ./.github/actions/prepare-metal-run
-        with:
-          arch: ${{ inputs.arch }}
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
         uses: ./.github/actions/docker-run

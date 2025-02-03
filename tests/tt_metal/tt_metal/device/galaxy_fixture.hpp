@@ -6,9 +6,9 @@
 
 #include <gtest/gtest.h>
 
-#include "host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/impl/device/device_pool.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/device_pool.hpp>
 #include "multi_device_fixture.hpp"
 
 class GalaxyFixture : public MultiDeviceFixture {
@@ -44,7 +44,7 @@ protected:
     }
 
 private:
-    std::map<chip_id_t, Device*> device_ids_to_devices_;
+    std::map<chip_id_t, IDevice*> device_ids_to_devices_;
 };
 
 class TGFixture : public GalaxyFixture {

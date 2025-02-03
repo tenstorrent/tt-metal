@@ -101,6 +101,8 @@ class TtTransformerBlock(LightweightModule):
         user_id=0,
         mode="decode",
         page_table=None,
+        chunk_page_table=None,
+        chunk_start_idx=None,
         kv_cache=None,
     ) -> ttnn.Tensor:
         TG = self.args.is_galaxy
@@ -119,6 +121,8 @@ class TtTransformerBlock(LightweightModule):
             user_id,
             mode,
             page_table=page_table,
+            chunk_page_table=chunk_page_table,
+            chunk_start_idx=chunk_start_idx,
             kv_cache=kv_cache,
         )
         # Here x and attn_out are both fractured across devices

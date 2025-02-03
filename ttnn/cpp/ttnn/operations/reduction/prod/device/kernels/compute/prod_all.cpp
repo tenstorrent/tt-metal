@@ -28,7 +28,7 @@ void MAIN {
             if (once) {
                 cb_reserve_back(tt::CBIndex::c_24, 1);
                 tile_regs_acquire();
-                copy_tile_to_dst_init_short();
+                copy_tile_to_dst_init_short(tt::CBIndex::c_0);
                 copy_tile(tt::CBIndex::c_0, 0, 0);  // copy from c_in[0] to DST[0]
                 tile_regs_commit();
                 tile_regs_wait();

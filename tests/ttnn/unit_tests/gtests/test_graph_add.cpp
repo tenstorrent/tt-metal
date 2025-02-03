@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "gtest/gtest.h"
-#include "tt_metal/common/logger.hpp"
+#include <tt-metalium/logger.hpp>
 #include "tests/tt_metal/tt_metal/common/dispatch_fixture.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"

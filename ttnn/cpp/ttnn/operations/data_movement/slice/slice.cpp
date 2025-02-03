@@ -7,11 +7,11 @@
 #include "device/slice_op.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/cpp/ttnn/operations/creation.hpp"
+#include "cpp/ttnn/operations/creation.hpp"
 #include "ttnn/common/constants.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/copy/copy.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/common/common.hpp"
+#include "cpp/ttnn/operations/data_movement/copy/copy.hpp"
+#include "cpp/ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
+#include "cpp/ttnn/operations/data_movement/common/common.hpp"
 
 namespace ttnn::operations::data_movement {
 
@@ -62,7 +62,7 @@ ttnn::Tensor SliceOperation::invoke(
     Tensor input = input_tensor;
     if (rm_only) {
         TT_FATAL(input.get_dtype() == DataType::BFLOAT16, "Strided slice is not supported for BFLOAT8 tensors");
-        input = ttnn::to_layout(input, Layout::ROW_MAJOR, std::nullopt, std::nullopt, (Device*)nullptr);
+        input = ttnn::to_layout(input, Layout::ROW_MAJOR, std::nullopt, std::nullopt, (IDevice*)nullptr);
     }
 
     // Unsqueeze tensor to 4D if necessary
@@ -107,9 +107,9 @@ ttnn::Tensor SliceOperation::invoke(
             tt::round_up(padded_ends[adjusted_rank - 1], tt::constants::TILE_WIDTH), tt::constants::TILE_WIDTH);
     }
 
-    ttnn::SmallVector<uint32_t> actual_shape, final_padded_shape;
-    actual_shape.reserve(input_rank);
-    final_padded_shape.reserve(input_rank);
+    ttnn::SmallVector<uint32_t> actual_shape_vec, final_padded_shape_vec;
+    actual_shape_vec.reserve(input_rank);
+    final_padded_shape_vec.reserve(input_rank);
     bool empty = false;
 
     // Compute actual and padded shapes for the original input rank
@@ -124,18 +124,18 @@ ttnn::Tensor SliceOperation::invoke(
         if (val == 0) {
             empty = true;
         }
-        actual_shape.push_back(val);
-        final_padded_shape.push_back(std::max(output_dim_i(idx, padded_ends), static_cast<uint32_t>(1)));
+        actual_shape_vec.push_back(val);
+        final_padded_shape_vec.push_back(std::max(output_dim_i(idx, padded_ends), static_cast<uint32_t>(1)));
     }
-
-    ttnn::Shape output_shape(actual_shape, final_padded_shape);
+    ttnn::Shape actual_shape(actual_shape_vec);
+    ttnn::Shape final_padded_shape(final_padded_shape_vec);
 
     if (empty) {
         TT_FATAL(
             input_tensor.storage_type() == StorageType::DEVICE,
             "Host tensor slice cannot return a scalar or empty tensor");
         return ttnn::empty(
-            ttnn::Shape(actual_shape, actual_shape),
+            actual_shape,
             input_tensor.dtype(),
             input_tensor.layout(),
             input_tensor.device(),
@@ -143,15 +143,15 @@ ttnn::Tensor SliceOperation::invoke(
     }
 
     // Early exit if slice is a no-op
-    if (ttnn::SimpleShape(final_padded_shape) == input.get_padded_shape() && no_step) {
+    if (final_padded_shape == input.get_padded_shape() && no_step) {
         if (input_tensor.storage_type() == StorageType::DEVICE) {
             auto memory_config = optional_output_tensor.has_value()
                                      ? optional_output_tensor.value().memory_config()
                                      : memory_config_arg.value_or(input_tensor.memory_config());
             auto res = ttnn::to_memory_config(input_tensor, memory_config, std::nullopt);
-            return ttnn::reshape(res, output_shape);
+            return ttnn::reshape(res, actual_shape, final_padded_shape);
         }
-        return ttnn::reshape(input_tensor, output_shape);
+        return ttnn::reshape(input_tensor, actual_shape, final_padded_shape);
     }
 
     if (input_tensor.storage_type() != StorageType::DEVICE) {
@@ -159,10 +159,10 @@ ttnn::Tensor SliceOperation::invoke(
         if (input_tensor.get_padded_shape() == actual_shape) {
             return input_tensor;
         } else {
-            input = ttnn::to_layout(input, Layout::ROW_MAJOR, std::nullopt, std::nullopt, (Device*)nullptr);
-            input = input.unpad(ttnn::SimpleShape(modified_begins), ttnn::SimpleShape(modified_ends));
-            input = ttnn::to_layout(input, input_tensor.get_layout(), std::nullopt, std::nullopt, (Device*)nullptr);
-            return ttnn::reshape(input, output_shape);
+            input = ttnn::to_layout(input, Layout::ROW_MAJOR, std::nullopt, std::nullopt, (IDevice*)nullptr);
+            input = input.unpad(ttnn::Shape(modified_begins), ttnn::Shape(modified_ends));
+            input = ttnn::to_layout(input, input_tensor.get_layout(), std::nullopt, std::nullopt, (IDevice*)nullptr);
+            return ttnn::reshape(input, actual_shape, final_padded_shape);
         }
     } else {
         const auto& input_tensor_shape = input.get_padded_shape();
@@ -183,23 +183,21 @@ ttnn::Tensor SliceOperation::invoke(
             i++;
             in_place_unpad &= modified_begins[i] == 0 && modified_ends[i] == input_tensor_shape[i];
             if (in_place_unpad) {
-                return ttnn::reshape(input_tensor, output_shape);
+                return ttnn::reshape(input_tensor, actual_shape, final_padded_shape);
             }
         }
 
-        auto res = operation::run(
-                       SliceDeviceOperation{
-                           tt::tt_metal::LegacyShape(modified_begins),
-                           tt::tt_metal::LegacyShape(padded_ends),
-                           tt::tt_metal::LegacyShape(modified_step),
-                           memory_config},
-                       {input},
-                       {},
-                       {optional_output_tensor},
-                       queue_id)
-                       .at(0);
-        res = ttnn::reshape(res, output_shape);
-        return rm_only ? ttnn::to_layout(res, input_tensor.get_layout(), std::nullopt, std::nullopt, (Device*)nullptr)
+        auto res =
+            operation::run(
+                SliceDeviceOperation{
+                    ttnn::Shape(modified_begins), ttnn::Shape(padded_ends), ttnn::Shape(modified_step), memory_config},
+                {input},
+                {},
+                {optional_output_tensor},
+                queue_id)
+                .at(0);
+        res = ttnn::reshape(res, actual_shape, final_padded_shape);
+        return rm_only ? ttnn::to_layout(res, input_tensor.get_layout(), std::nullopt, std::nullopt, (IDevice*)nullptr)
                        : res;
     }
 }
@@ -245,14 +243,14 @@ ttnn::Tensor SliceOperation::invoke<uint32_t, 4>(
     bool rm_only = !no_step && input_tensor.get_layout() == Layout::TILE;
     ttnn::Tensor input = input_tensor;
     if (rm_only) {
-        input = ttnn::to_layout(input_tensor, Layout::ROW_MAJOR, std::nullopt, std::nullopt, (Device*)nullptr);
+        input = ttnn::to_layout(input_tensor, Layout::ROW_MAJOR, std::nullopt, std::nullopt, (IDevice*)nullptr);
     }
 
     const bool tiled = input.get_layout() == Layout::TILE;
     bool on_device = input.storage_type() == StorageType::DEVICE;
 
-    std::array<uint32_t, 4> actual_shape;
-    std::array<uint32_t, 4> padded_shape;
+    std::array<uint32_t, 4> actual_shape_vec;
+    std::array<uint32_t, 4> padded_shape_vec;
     const std::array<uint32_t, 4> padded_ends =
         tiled ? std::array<uint32_t, 4>(
                     {ends[0],
@@ -266,28 +264,28 @@ ttnn::Tensor SliceOperation::invoke<uint32_t, 4>(
         uint32_t offset = step[i] - begins[i] - 1;
         uint32_t dim_size = (ends[i] + offset) / step[i];
         empty |= dim_size == 0;
-        actual_shape[i] = dim_size;
-        padded_shape[i] = std::max((padded_ends[i] + offset) / step[i], 1u);
+        actual_shape_vec[i] = dim_size;
+        padded_shape_vec[i] = std::max((padded_ends[i] + offset) / step[i], 1u);
     }
-
-    ttnn::Shape output_shape(actual_shape, padded_shape);
+    ttnn::Shape actual_shape(actual_shape_vec);
+    ttnn::Shape padded_shape(padded_shape_vec);
 
     if (empty) {
         TT_FATAL(on_device, "Host tensor slice cannot return a scalar or empty tensor");
         auto memory_config = optional_output_tensor.has_value() ? optional_output_tensor.value().memory_config()
                                                                 : memory_config_arg.value_or(input.memory_config());
-        return ttnn::empty(output_shape, input.dtype(), input_tensor.layout(), input.device(), memory_config);
+        return ttnn::empty(actual_shape, input.dtype(), input_tensor.layout(), input.device(), memory_config);
     }
 
     // Early exit if slice is a no-op
-    if (ttnn::Shape(padded_shape) == padded_input_shape && no_step) {
+    if (padded_shape == padded_input_shape && no_step) {
         if (input.storage_type() == StorageType::DEVICE) {
             auto memory_config = optional_output_tensor.has_value() ? optional_output_tensor.value().memory_config()
                                                                     : memory_config_arg.value_or(input.memory_config());
             auto res = ttnn::to_memory_config(input, memory_config, std::nullopt);
-            return ttnn::reshape(res, output_shape);
+            return ttnn::reshape(res, actual_shape, padded_shape);
         }
-        return ttnn::reshape(input, output_shape);  // change to view
+        return ttnn::reshape(input, actual_shape, padded_shape);  // change to view
     }
 
     if (on_device) {
@@ -306,18 +304,18 @@ ttnn::Tensor SliceOperation::invoke<uint32_t, 4>(
                                       tt::div_up(padded_input_shape[2], input.shard_spec().value().shape[0]);
             in_place_unpad &= begins[3] == 0 && ends[3] == padded_input_shape[3];
             if (in_place_unpad) {
-                return ttnn::reshape(input, output_shape);
+                return ttnn::reshape(input, actual_shape, padded_shape);
             }
         }
 
         input = operation::run(
-            SliceDeviceOperation{begins, padded_ends, step, memory_config},
+            SliceDeviceOperation{ttnn::Shape(begins), ttnn::Shape(padded_ends), ttnn::Shape(step), memory_config},
             {input},
             {},
             {optional_output_tensor},
             queue_id)[0];
-        input = ttnn::reshape(input, output_shape);
-        return rm_only ? ttnn::to_layout(input, input.get_layout(), std::nullopt, std::nullopt, (Device*)nullptr)
+        input = ttnn::reshape(input, actual_shape, padded_shape);
+        return rm_only ? ttnn::to_layout(input, input.get_layout(), std::nullopt, std::nullopt, (IDevice*)nullptr)
                        : input;
     }
 
@@ -326,11 +324,11 @@ ttnn::Tensor SliceOperation::invoke<uint32_t, 4>(
     if (input.get_padded_shape() == actual_shape) {
         return input;
     } else {
-        auto input_4d_rm = ttnn::to_layout(input, Layout::ROW_MAJOR, std::nullopt, std::nullopt, (Device*)nullptr);
-        auto output_4d = input_4d_rm.unpad(ttnn::SimpleShape(begins), ttnn::SimpleShape(ends));
+        auto input_4d_rm = ttnn::to_layout(input, Layout::ROW_MAJOR, std::nullopt, std::nullopt, (IDevice*)nullptr);
+        auto output_4d = input_4d_rm.unpad(ttnn::Shape(begins), ttnn::Shape(ends));
         auto output_4d_rm =
-            ttnn::to_layout(output_4d, input.get_layout(), std::nullopt, std::nullopt, (Device*)nullptr);
-        return ttnn::reshape(output_4d_rm, output_shape);
+            ttnn::to_layout(output_4d, input.get_layout(), std::nullopt, std::nullopt, (IDevice*)nullptr);
+        return ttnn::reshape(output_4d_rm, actual_shape, padded_shape);
     }
 }
 

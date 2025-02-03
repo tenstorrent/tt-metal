@@ -226,8 +226,10 @@ TEST_F(T3000ReshapeTest, From1x4To2x2Valid) {
     auto& system_mesh = tt::tt_metal::distributed::SystemMesh::instance();
 
     // Fetch the device ids for a physically connected 2x2 mesh.
-    auto physical_device_ids = system_mesh.get_mapped_physical_device_ids(
-        MeshDeviceConfig(MeshShape{2, 2}, ttnn::distributed::MeshType::Line));
+    auto physical_device_ids = system_mesh.get_mapped_physical_device_ids(MeshDeviceConfig{
+        .mesh_shape = MeshShape{2, 2},
+        .mesh_type = ttnn::distributed::MeshType::Line,
+    });
 
     // Supply the physical device ids to the mesh constructor that we know we know is 2x2 physically connected.
     // We will create a 1x4 mesh and then reshape it to 2x2.

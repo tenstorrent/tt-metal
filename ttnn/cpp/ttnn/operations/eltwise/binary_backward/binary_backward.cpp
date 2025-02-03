@@ -12,20 +12,19 @@
 #include "ttnn/operations/data_movement/copy/copy.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
 #include "ttnn/operations/eltwise/unary/device/unary_composite_op.hpp"
-#include "ttnn/cpp/ttnn/operations/eltwise/unary/unary_composite.hpp"
+#include "cpp/ttnn/operations/eltwise/unary/unary_composite.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "ttnn/operations/eltwise/unary_backward/unary_backward.hpp"
 #include "ttnn/operations/eltwise/binary_backward/binary_backward.hpp"
 #include "ttnn/operations/eltwise/complex_unary/complex_unary.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "ttnn/cpp/ttnn/common/constants.hpp"
+#include <tt-metalium/constants.hpp>
+#include "cpp/ttnn/common/constants.hpp"
 #include "ttnn/common/constants.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/tools/profiler/op_profiler.hpp"
 #include "ttnn/operations/eltwise/ternary/where.hpp"
 #include "ttnn/operations/creation.hpp"
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operations/eltwise/binary_backward/binary_backward.hpp"
+#include "tools/profiler/op_profiler.hpp"
 #include <magic_enum/magic_enum.hpp>
 #include <utility>
 
@@ -632,10 +631,7 @@ std::vector<std::optional<Tensor>> ExecuteBackwardConcat::invoke(
     if (are_required_outputs[0]) {
         ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
         ttnn::SmallVector<uint32_t> end_index = {
-            input.get_legacy_shape()[0],
-            input.get_legacy_shape()[1],
-            input.get_legacy_shape()[2],
-            input.get_legacy_shape()[3]};
+            input.padded_shape()[0], input.padded_shape()[1], input.padded_shape()[2], input.padded_shape()[3]};
         ttnn::SmallVector<uint32_t> step = {1, 1, 1, 1};
         ttnn::slice(queue_id, grad, start_index, end_index, step, std::nullopt, input_grad);
         grad_tensor[0] = input_grad;
@@ -644,19 +640,16 @@ std::vector<std::optional<Tensor>> ExecuteBackwardConcat::invoke(
     if (are_required_outputs[1]) {
         ttnn::SmallVector<uint32_t> start_index_2 = {0, 0, 0, 0};
         if (dim == 0) {
-            start_index_2 = {input.get_legacy_shape()[0], 0, 0, 0};
+            start_index_2 = {input.padded_shape()[0], 0, 0, 0};
         } else if (dim == 1) {
-            start_index_2 = {0, input.get_legacy_shape()[1], 0, 0};
+            start_index_2 = {0, input.padded_shape()[1], 0, 0};
         } else if (dim == 2) {
-            start_index_2 = {0, 0, input.get_legacy_shape()[2], 0};
+            start_index_2 = {0, 0, input.padded_shape()[2], 0};
         } else if (dim == 3) {
-            start_index_2 = {0, 0, 0, input.get_legacy_shape()[3]};
+            start_index_2 = {0, 0, 0, input.padded_shape()[3]};
         }
         ttnn::SmallVector<uint32_t> end_index_2 = {
-            grad.get_legacy_shape()[0],
-            grad.get_legacy_shape()[1],
-            grad.get_legacy_shape()[2],
-            grad.get_legacy_shape()[3]};
+            grad.padded_shape()[0], grad.padded_shape()[1], grad.padded_shape()[2], grad.padded_shape()[3]};
         ttnn::SmallVector<uint32_t> step_2 = {1, 1, 1, 1};
         ttnn::slice(queue_id, grad, start_index_2, end_index_2, step_2, std::nullopt, other_grad);
         grad_tensor[1] = other_grad;

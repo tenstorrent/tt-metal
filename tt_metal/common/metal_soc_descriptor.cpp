@@ -8,46 +8,57 @@
 #include <iostream>
 #include <string>
 
-#include "tt_metal/common/assert.hpp"
+#include <assert.hpp>
 #include "umd/device/cluster.h"
 #include "yaml-cpp/yaml.h"
 
-CoreCoord metal_SocDescriptor::get_preferred_worker_core_for_dram_channel(int dram_chan) const {
+CoreCoord metal_SocDescriptor::get_preferred_worker_core_for_dram_view(int dram_view) const {
     TT_ASSERT(
-        dram_chan < this->preferred_worker_dram_core.size(),
-        "dram_chan={} must be within range of preferred_worker_dram_core.size={}",
-        dram_chan,
-        this->preferred_worker_dram_core.size());
-    return this->preferred_worker_dram_core.at(dram_chan);
+        dram_view < this->dram_view_worker_cores.size(),
+        "dram_view={} must be within range of dram_view_worker_cores.size={}",
+        dram_view,
+        this->dram_view_worker_cores.size());
+    return this->dram_view_worker_cores.at(dram_view);
 };
 
-CoreCoord metal_SocDescriptor::get_preferred_eth_core_for_dram_channel(int dram_chan) const {
+CoreCoord metal_SocDescriptor::get_preferred_eth_core_for_dram_view(int dram_view) const {
     TT_ASSERT(
-        dram_chan < this->preferred_eth_dram_core.size(),
-        "dram_chan={} must be within range of preferred_eth_dram_core.size={}",
-        dram_chan,
-        this->preferred_eth_dram_core.size());
-    return this->preferred_eth_dram_core.at(dram_chan);
+        dram_view < this->dram_view_eth_cores.size(),
+        "dram_view={} must be within range of dram_view_eth_cores.size={}",
+        dram_view,
+        this->dram_view_eth_cores.size());
+    return this->dram_view_eth_cores.at(dram_view);
 };
 
-CoreCoord metal_SocDescriptor::get_logical_core_for_dram_channel(int dram_chan) const {
-    const uint32_t num_dram_channels = this->get_num_dram_channels();
+CoreCoord metal_SocDescriptor::get_logical_core_for_dram_view(int dram_view) const {
+    const uint32_t num_dram_views = this->get_num_dram_views();
     TT_FATAL(
-        dram_chan < num_dram_channels,
-        "dram_chan={} must be within range of num_dram_channels={}",
-        dram_chan,
-        num_dram_channels);
-    return CoreCoord(dram_chan, 0);
+        dram_view < num_dram_views,
+        "dram_view={} must be within range of num_dram_views={}",
+        dram_view,
+        num_dram_views);
+    return CoreCoord(dram_view, 0);
 }
 
-size_t metal_SocDescriptor::get_address_offset(int dram_chan) const {
+size_t metal_SocDescriptor::get_address_offset(int dram_view) const {
     TT_ASSERT(
-        dram_chan < this->dram_address_offsets.size(),
-        "dram_chan={} must be within range of dram_address_offsets.size={}",
-        dram_chan,
-        this->dram_address_offsets.size());
-    return this->dram_address_offsets.at(dram_chan);
+        dram_view < this->dram_view_address_offsets.size(),
+        "dram_view={} must be within range of dram_view_address_offsets.size={}",
+        dram_view,
+        this->dram_view_address_offsets.size());
+    return this->dram_view_address_offsets.at(dram_view);
 }
+
+size_t metal_SocDescriptor::get_channel_for_dram_view(int dram_view) const {
+    TT_ASSERT(
+        dram_view < this->dram_view_channels.size(),
+        "dram_view={} must be within range of dram_view_channels.size={}",
+        dram_view,
+        this->dram_view_channels.size());
+    return this->dram_view_channels.at(dram_view);
+}
+
+size_t metal_SocDescriptor::get_num_dram_views() const { return this->dram_view_eth_cores.size(); }
 
 bool metal_SocDescriptor::is_harvested_core(const CoreCoord& core) const {
     for (const auto& core_it : this->physical_harvested_workers) {
@@ -82,12 +93,12 @@ const std::vector<CoreCoord>& metal_SocDescriptor::get_logical_ethernet_cores() 
 }
 
 int metal_SocDescriptor::get_dram_channel_from_logical_core(const CoreCoord& logical_coord) const {
-    const uint32_t num_dram_channels = this->get_num_dram_channels();
+    const uint32_t num_dram_views = this->get_num_dram_views();
     TT_FATAL(
-        (logical_coord.x < num_dram_channels) and (logical_coord.y == 0),
+        (logical_coord.x < num_dram_views) and (logical_coord.y == 0),
         "Bounds-Error -- Logical_core={} is outside of logical_grid_size={}",
         logical_coord.str(),
-        CoreCoord(num_dram_channels, 1));
+        CoreCoord(num_dram_views, 1));
     return logical_coord.x;
 }
 
@@ -114,20 +125,13 @@ CoreCoord metal_SocDescriptor::get_logical_ethernet_core_from_physical(const Cor
 }
 
 CoreCoord metal_SocDescriptor::get_physical_tensix_core_from_logical(const CoreCoord& logical_coord) const {
-    TT_FATAL(
-        (logical_coord.x < this->worker_grid_size.x) and (logical_coord.y < this->worker_grid_size.y),
-        "Bounds-Error -- Logical_core={} is outside of logical_grid_size={}",
-        logical_coord.str(),
-        this->worker_grid_size.str());
-    CoreCoord physical_tensix_core({
-        static_cast<size_t>(this->worker_log_to_physical_routing_x.at(logical_coord.x)),
-        static_cast<size_t>(this->worker_log_to_physical_routing_y.at(logical_coord.y)),
-    });
-    return physical_tensix_core;
+    tt::umd::CoreCoord physical_coord =
+        translate_coord_to({logical_coord, CoreType::TENSIX, CoordSystem::LOGICAL}, CoordSystem::PHYSICAL);
+    return {physical_coord.x, physical_coord.y};
 }
 
 CoreCoord metal_SocDescriptor::get_physical_dram_core_from_logical(const CoreCoord& logical_coord) const {
-    return this->get_preferred_worker_core_for_dram_channel(this->get_dram_channel_from_logical_core(logical_coord));
+    return this->get_preferred_worker_core_for_dram_view(this->get_dram_channel_from_logical_core(logical_coord));
 }
 
 CoreCoord metal_SocDescriptor::get_physical_core_from_logical_core(
@@ -140,97 +144,63 @@ CoreCoord metal_SocDescriptor::get_physical_core_from_logical_core(
     }
 }
 
-CoreCoord metal_SocDescriptor::get_dram_grid_size() const { return CoreCoord(this->get_num_dram_channels(), 1); }
+CoreCoord metal_SocDescriptor::get_dram_grid_size() const { return CoreCoord(this->get_num_dram_views(), 1); }
 
 void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
     YAML::Node device_descriptor_yaml = YAML::LoadFile(this->device_descriptor_file_path);
-    int num_dram_channels = this->get_num_dram_channels();
-    this->preferred_eth_dram_core.clear();
-    for (const auto& core_node : device_descriptor_yaml["dram_preferred_eth_endpoint"]) {
-        if (core_node.IsScalar()) {
-            this->preferred_eth_dram_core.push_back(format_node(core_node.as<std::string>()));
-        } else {
-            TT_THROW("Only NOC coords supported for dram_preferred_eth_endpoint cores");
+    this->dram_view_size = device_descriptor_yaml["dram_view_size"].as<uint64_t>();
+    this->dram_core_size = device_descriptor_yaml["dram_views"].size() * this->dram_view_size;
+    this->dram_view_channels.clear();
+    this->dram_view_eth_cores.clear();
+    this->dram_view_worker_cores.clear();
+    this->dram_view_address_offsets.clear();
+
+    for (const auto& dram_view : device_descriptor_yaml["dram_views"]) {
+        size_t channel = dram_view["channel"].as<size_t>();
+        int eth_endpoint = dram_view["eth_endpoint"].as<int>();
+        int worker_endpoint = dram_view["worker_endpoint"].as<int>();
+        size_t address_offset = dram_view["address_offset"].as<size_t>();
+
+        if (channel >= dram_cores.size()) {
+            TT_THROW(
+                "DRAM channel {} does not exist in the device descriptor, but is specified in dram_view.channel",
+                channel);
         }
-    }
-    if (this->preferred_eth_dram_core.size() != num_dram_channels) {
-        TT_THROW(
-            "Expected to specify preferred DRAM endpoint for ethernet core for {} channels but yaml specifies {} "
-            "channels",
-            num_dram_channels,
-            this->preferred_eth_dram_core.size());
-    }
-
-    this->preferred_worker_dram_core.clear();
-    for (const auto& core_node : device_descriptor_yaml["dram_preferred_worker_endpoint"]) {
-        if (core_node.IsScalar()) {
-            this->preferred_worker_dram_core.push_back(format_node(core_node.as<std::string>()));
-        } else {
-            TT_THROW("Only NOC coords supported for dram_preferred_worker_endpoint");
+        if (eth_endpoint >= dram_cores[channel].size()) {
+            TT_THROW(
+                "DRAM subchannel {} does not exist in the device descriptor, but is specified in "
+                "dram_view.eth_endpoint",
+                eth_endpoint);
         }
-    }
-    if (this->preferred_worker_dram_core.size() != num_dram_channels) {
-        TT_THROW(
-            "Expected to specify preferred DRAM endpoint for worker core for {} channels but yaml specifies {} "
-            "channels",
-            num_dram_channels,
-            this->preferred_worker_dram_core.size());
-    }
-
-    this->dram_address_offsets = device_descriptor_yaml["dram_address_offsets"].as<std::vector<size_t>>();
-    if (this->dram_address_offsets.size() != num_dram_channels) {
-        TT_THROW(
-            "Expected DRAM offsets for {} channels but yaml specified {} channels",
-            num_dram_channels,
-            this->dram_address_offsets.size());
-    }
-
-    int dram_banks_per_prev_core = 0;
-    int dram_banks_per_core = 0;
-    for (int dram_channel = 0; dram_channel < this->dram_address_offsets.size(); dram_channel++) {
-        if (this->dram_address_offsets.at(dram_channel) == 0) {
-            if (dram_banks_per_prev_core > 0 and dram_banks_per_prev_core != dram_banks_per_core) {
-                TT_THROW("Expected {} DRAM banks per DRAM core", dram_banks_per_prev_core);
-            } else if (dram_banks_per_core != 0) {
-                dram_banks_per_prev_core = dram_banks_per_core;
-            }
-            dram_banks_per_core = 1;
-        } else {
-            dram_banks_per_core++;
+        if (worker_endpoint >= dram_cores[channel].size()) {
+            TT_THROW(
+                "DRAM subchannel {} does not exist in the device descriptor, but is specified in "
+                "dram_view.worker_endpoint",
+                worker_endpoint);
         }
-    }
 
-    this->dram_core_size = dram_banks_per_core * this->dram_bank_size;
+        this->dram_view_channels.push_back(channel);
+        this->dram_view_eth_cores.push_back(dram_cores[channel][eth_endpoint]);
+        this->dram_view_worker_cores.push_back(dram_cores[channel][worker_endpoint]);
+        this->dram_view_address_offsets.push_back(address_offset);
+    }
 }
 
 // UMD expects virtual NOC coordinates for worker cores
 tt_cxy_pair metal_SocDescriptor::convert_to_umd_coordinates(const tt_cxy_pair& physical_cxy) const {
-    CoreCoord physical_coord({physical_cxy.x, physical_cxy.y});
-    const CoreDescriptor& core_desc = this->physical_cores.at(physical_coord);
-    CoreCoord virtual_coord = physical_coord;
-    if (core_desc.type == CoreType::WORKER or core_desc.type == CoreType::HARVESTED) {
-        virtual_coord.x = static_cast<size_t>(this->physical_routing_to_virtual_routing_x.at(physical_cxy.x));
-        virtual_coord.y = static_cast<size_t>(this->physical_routing_to_virtual_routing_y.at(physical_cxy.y));
-    }
-    return tt_cxy_pair(physical_cxy.chip, virtual_coord);
+    CoordSystem target_system = (this->arch == tt::ARCH::GRAYSKULL) ? CoordSystem::PHYSICAL : CoordSystem::VIRTUAL;
+    tt::umd::CoreCoord virtual_coord =
+        translate_coord_to((tt_xy_pair)physical_cxy, CoordSystem::PHYSICAL, target_system);
+    return tt_cxy_pair(physical_cxy.chip, virtual_coord.x, virtual_coord.y);
 }
 
 void metal_SocDescriptor::generate_physical_descriptors_from_virtual(uint32_t harvesting_mask) {
     // No need to remap virtual descriptors to physical because Grayskull does not have translation tables enabled,
     // meaning UMD removes the physical harvested rows rather than using virtual coordinates
     if (harvesting_mask == 0 or (this->arch == tt::ARCH::GRAYSKULL)) {
-        this->worker_log_to_physical_routing_x = this->worker_log_to_routing_x;
-        this->worker_log_to_physical_routing_y = this->worker_log_to_routing_y;
         this->physical_cores = this->cores;
         this->physical_workers = this->workers;
         this->physical_harvested_workers = this->harvested_workers;
-
-        for (const auto& [virtual_noc_core, core_desc] : this->cores) {
-            if (core_desc.type == CoreType::WORKER or core_desc.type == CoreType::HARVESTED) {
-                this->physical_routing_to_virtual_routing_x.insert({virtual_noc_core.x, virtual_noc_core.x});
-                this->physical_routing_to_virtual_routing_y.insert({virtual_noc_core.y, virtual_noc_core.y});
-            }
-        }
 
         return;
     }
@@ -264,10 +234,8 @@ void metal_SocDescriptor::generate_physical_descriptors_from_virtual(uint32_t ha
     for (const auto& [virtual_noc_core, core_desc] : this->cores) {
         if (core_desc.type == CoreType::WORKER or core_desc.type == CoreType::HARVESTED) {
             virtual_y_coords.insert(virtual_noc_core.y);
-            this->physical_routing_to_virtual_routing_x.insert({virtual_noc_core.x, virtual_noc_core.x});
         }
     }
-    this->worker_log_to_physical_routing_x = this->worker_log_to_routing_x;
 
     std::unordered_map<int, int> virtual_routing_to_physical_routing_y;
     auto virtual_y_coord_it = virtual_y_coords.begin();
@@ -278,10 +246,12 @@ void metal_SocDescriptor::generate_physical_descriptors_from_virtual(uint32_t ha
         }
         int physical_y_coord = *virtual_y_coord_it;
         virtual_y_coord_it++;
-        this->worker_log_to_physical_routing_y.insert({logical_y_coord, physical_y_coord});
-        int virtual_y_coord = this->worker_log_to_routing_y.at(logical_y_coord);
-        this->physical_routing_to_virtual_routing_y.insert({physical_y_coord, virtual_y_coord});
-        virtual_routing_to_physical_routing_y.insert({virtual_y_coord, physical_y_coord});
+        // This branch will never be executed for Grayskull, but for completeness keeping it in here.
+        // This will go away in the next PR anyway.
+        CoordSystem target_system = (this->arch == tt::ARCH::GRAYSKULL) ? CoordSystem::PHYSICAL : CoordSystem::VIRTUAL;
+        tt::umd::CoreCoord virtual_coord =
+            translate_coord_to({0, logical_y_coord, CoreType::TENSIX, CoordSystem::LOGICAL}, target_system);
+        virtual_routing_to_physical_routing_y.insert({virtual_coord.y, physical_y_coord});
     }
 
     // map physical harvested rows to virtual harvested rows
@@ -290,7 +260,6 @@ void metal_SocDescriptor::generate_physical_descriptors_from_virtual(uint32_t ha
          v_it != virtual_harvested_rows.end() and p_it != row_coordinates_to_remove.end();
          ++v_it, ++p_it) {
         virtual_routing_to_physical_routing_y.insert({*v_it, *p_it});
-        this->physical_routing_to_virtual_routing_y.insert({*p_it, *v_it});
     }
 
     for (const auto& [virtual_noc_core, core_desc] : this->cores) {
@@ -309,11 +278,6 @@ void metal_SocDescriptor::generate_physical_descriptors_from_virtual(uint32_t ha
         }
         this->physical_cores.insert({physical_noc_core, phys_core_desc});
     }
-
-    TT_ASSERT(
-        this->physical_routing_to_virtual_routing_y.size() ==
-            this->worker_grid_size.y + row_coordinates_to_remove.size() and
-        this->physical_routing_to_virtual_routing_x.size() == this->worker_grid_size.x);
 }
 
 void metal_SocDescriptor::generate_logical_eth_coords_mapping() {
@@ -343,8 +307,8 @@ void metal_SocDescriptor::generate_physical_routing_to_profiler_flat_id() {
     }
 
     int coreCount = this->physical_routing_to_profiler_flat_id.size();
-    this->profiler_ceiled_core_count_perf_dram_bank = coreCount / this->get_num_dram_channels();
-    if ((coreCount % this->get_num_dram_channels()) > 0) {
+    this->profiler_ceiled_core_count_perf_dram_bank = coreCount / this->get_num_dram_views();
+    if ((coreCount % this->get_num_dram_views()) > 0) {
         this->profiler_ceiled_core_count_perf_dram_bank++;
     }
 
@@ -357,6 +321,7 @@ void metal_SocDescriptor::update_pcie_cores(const BoardType& board_type) {
         return;
     }
     switch (board_type) {
+        case P100:
         case UNKNOWN: {  // Workaround for BHs running FW that does not return board type in the cluster yaml
             this->pcie_cores = {CoreCoord(11, 0)};
         } break;

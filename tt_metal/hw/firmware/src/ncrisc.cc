@@ -68,7 +68,9 @@ inline __attribute__((always_inline)) void notify_brisc_and_wait() {
 #ifdef NCRISC_HAS_IRAM
     notify_brisc_and_halt(RUN_SYNC_MSG_DONE);
 #else
-    while (*ncrisc_run != RUN_SYNC_MSG_GO);
+    while (*ncrisc_run != RUN_SYNC_MSG_GO) {
+        invalidate_l1_cache();
+    }
 #endif
 }
 
@@ -79,7 +81,7 @@ inline __attribute__((always_inline)) void signal_ncrisc_completion() {
 }
 
 int main(int argc, char *argv[]) {
-    conditionally_disable_l1_cache();
+    configure_l1_data_cache();
     DIRTY_STACK_MEMORY();
     WAYPOINT("I");
 

@@ -6,15 +6,15 @@
 #include <functional>
 #include <random>
 
-#include "common/bfloat16.hpp"
-#include "common/constants.hpp"
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/constants.hpp>
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/host_buffer/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/functions.hpp"
 
 /*
@@ -44,36 +44,31 @@
 
 template <typename DataType>
 struct NDArray {
-    tt::tt_metal::LegacyShape shape;
+    ttnn::Shape shape;
     void* data;
 
-    NDArray(tt::tt_metal::LegacyShape shape) :
-        shape(shape), data(malloc(tt::tt_metal::compute_volume(shape) * sizeof(DataType))) {}
+    NDArray(const ttnn::Shape& shape) : shape(shape), data(malloc(shape.volume() * sizeof(DataType))) {}
     ~NDArray() { free(data); }
 
-    std::size_t size() const { return tt::tt_metal::compute_volume(shape); }
+    std::size_t size() const { return shape.volume(); }
 };
 
 void test_raw_host_memory_pointer() {
     using tt::tt_metal::BorrowedStorage;
     using tt::tt_metal::DataType;
-    using tt::tt_metal::LegacyShape;
     using tt::tt_metal::OwnedStorage;
     using tt::tt_metal::Tensor;
     using namespace tt::tt_metal::borrowed_buffer;
     using namespace tt::tt_metal::owned_buffer;
 
     int device_id = 0;
-    tt::tt_metal::Device* device = tt::tt_metal::CreateDevice(device_id);
+    tt::tt_metal::IDevice* device = tt::tt_metal::CreateDevice(device_id);
 
-    tt::tt_metal::LegacyShape shape = {1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH};
+    ttnn::Shape shape({1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH});
 
     // Host tensor to print the output
-    Tensor tensor_for_printing = Tensor(
-        OwnedStorage{owned_buffer::create<bfloat16>(tt::tt_metal::compute_volume(shape))},
-        shape,
-        DataType::BFLOAT16,
-        Layout::TILE);
+    Tensor tensor_for_printing =
+        Tensor(OwnedStorage{owned_buffer::create<bfloat16>(shape.volume())}, shape, DataType::BFLOAT16, Layout::TILE);
 
     /* Borrow Data from Numpy Start */
     // Create some
@@ -128,14 +123,12 @@ void test_raw_host_memory_pointer() {
     /* Alternative Way to Print Start */
     // Alternatively, we could allocate memory manually and create Tensors with BorrowedStorage on the fly to print the
     // data
-    void* storage_of_alternative_tensor_for_printing = malloc(tt::tt_metal::compute_volume(shape) * sizeof(bfloat16));
+    void* storage_of_alternative_tensor_for_printing = malloc(shape.volume() * sizeof(bfloat16));
     tt::tt_metal::memcpy(storage_of_alternative_tensor_for_printing, c_dev);
 
     Tensor alternative_tensor_for_printing = Tensor(
         BorrowedStorage{
-            borrowed_buffer::Buffer(
-                static_cast<bfloat16*>(storage_of_alternative_tensor_for_printing),
-                tt::tt_metal::compute_volume(shape)),
+            borrowed_buffer::Buffer(static_cast<bfloat16*>(storage_of_alternative_tensor_for_printing), shape.volume()),
             on_creation_callback,
             on_destruction_callback},
         shape,

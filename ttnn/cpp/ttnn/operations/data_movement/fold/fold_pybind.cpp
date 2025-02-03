@@ -8,7 +8,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "cpp/pybind11/decorators.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn::operations::data_movement {
@@ -33,7 +33,7 @@ void bind_fold_operation(py::module& module) {
                uint32_t stride_h,
                uint32_t stride_w,
                bool use_transpose_as_fold,
-               std::optional<SmallVector<uint32_t>> output_shape,
+               std::optional<ttnn::Shape> output_shape,
                uint32_t pad_c,
                uint32_t pad_h,
                uint32_t pad_w,

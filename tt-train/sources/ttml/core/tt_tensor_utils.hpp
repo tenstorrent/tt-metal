@@ -57,8 +57,9 @@ template <class T = float, DataType TensorType = DataType::BFLOAT16>
 template <class T = float>
 [[nodiscard]] xt::xarray<T> to_xtensor(const tt::tt_metal::Tensor& tensor) {
     auto vec = tensor.to_vector<T>();
-    const auto& shape = tensor.get_shape().logical_shape();
+    const auto& shape = tensor.get_logical_shape();
     std::vector<size_t> shape_vec(shape.cbegin(), shape.cend());
+    // adapt creates view of the vector, but return will copy this data anyway (by creation of xt::array)
     return xt::adapt(std::move(vec), shape_vec);
 }
 
@@ -75,21 +76,11 @@ auto to_xtensor(const tt::tt_metal::Tensor& tensor, const MeshToXTensorVariant<T
     return std::visit([&res](auto&& arg) { return arg.compose(res); }, composer);
 }
 
-template <class T = float>
+template <class T = float, DataType TensorType = DataType::BFLOAT16>
 tt::tt_metal::Tensor from_xtensor(
     const xt::xarray<T>& tensor,
     ttnn::distributed::MeshDevice* device,
     const XTensorToMeshVariant<T>& composer,
-    Layout layout = Layout::TILE) {
-    auto sharded_tensors = std::visit([&tensor](auto&& arg) { return arg.map(tensor); }, composer);
-    auto config = std::visit([](auto&& arg) { return arg.config(); }, composer);
-    auto output = from_xtensors_to_host(sharded_tensors, config);
-    MemoryConfig output_mem_config{};
-    output = ttnn::to_device(output, device, output_mem_config);
-    if (layout == Layout::TILE) {
-        output = ttnn::tilize_with_zero_padding(output, output_mem_config, std::nullopt, /* multicore */ true);
-    }
-    return output;
-}
+    Layout layout = Layout::TILE);
 
 }  // namespace ttml::core

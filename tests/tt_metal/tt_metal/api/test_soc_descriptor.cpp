@@ -9,8 +9,8 @@
 #include <random>
 
 #include "device_fixture.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "host_api.hpp"
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
 
 using namespace tt;
@@ -50,7 +50,7 @@ TEST(SOC, TensixValidateLogicalToPhysicalCoreCoordHostMapping) {
     tt::ARCH arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
     num_devices = (arch == tt::ARCH::GRAYSKULL) ? 1 : num_devices;
     for (int device_id = 0; device_id < num_devices; device_id++) {
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
         uint32_t harvested_rows_mask = tt::Cluster::instance().get_harvested_rows(device_id);
         const metal_SocDescriptor& soc_desc = tt::Cluster::instance().get_soc_desc(device_id);
         log_info(LogTest, "Device {} harvesting mask {}", device_id, harvested_rows_mask);

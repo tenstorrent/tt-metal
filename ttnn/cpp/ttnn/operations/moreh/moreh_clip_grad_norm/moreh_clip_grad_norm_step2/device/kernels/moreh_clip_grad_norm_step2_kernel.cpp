@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
+#include "cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
 
 namespace NAMESPACE {
 void MAIN {
@@ -44,7 +44,7 @@ void MAIN {
             cb_wait_front(cb_input, onetile);  // comes from the reader
             cb_reserve_back(cb_x, onetile);
 
-            copy_tile_init();
+            copy_tile_init(cb_input);
             copy_tile(cb_input, 0, dst0);
             cb_pop_front(cb_input, onetile);
             tile_regs_commit();

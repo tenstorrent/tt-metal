@@ -10,6 +10,7 @@ import pytest
 import subprocess
 
 import pandas as pd
+import numpy as np
 
 from tt_metal.tools.profiler.common import (
     TT_METAL_HOME,
@@ -49,7 +50,7 @@ def run_gtest_profiler_test(testbin, testname):
         get_device_data()
 
 
-def run_device_profiler_test(testName=None, setup=False, slowDispatch=False):
+def run_device_profiler_test(testName=None, setupAutoExtract=False, slowDispatch=False):
     name = inspect.stack()[1].function
     testCommand = f"build/{PROG_EXMP_DIR}/{name}"
     if testName:
@@ -63,7 +64,7 @@ def run_device_profiler_test(testName=None, setup=False, slowDispatch=False):
     assert profilerRun == 0
 
     setupStr = ""
-    if setup:
+    if setupAutoExtract:
         setupStr = f"-s {name}"
 
     return get_device_data(setupStr)
@@ -86,7 +87,7 @@ def test_multi_op():
     ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
     assert ENV_VAR_ARCH_NAME in REF_COUNT_DICT.keys()
 
-    devicesData = run_device_profiler_test(setup=True)
+    devicesData = run_device_profiler_test(setupAutoExtract=True)
 
     stats = devicesData["data"]["devices"]["0"]["cores"]["DEVICE"]["analysis"]
 
@@ -106,7 +107,7 @@ def test_custom_cycle_count_slow_dispatch():
     REF_CYCLE_COUNT_MAX = REF_CYCLE_COUNT * REF_CYCLE_COUNT_HIGH_MULTIPLIER
     REF_CYCLE_COUNT_MIN = REF_CYCLE_COUNT // REF_CYCLE_COUNT_LOW_MULTIPLIER
 
-    devicesData = run_device_profiler_test(setup=True, slowDispatch=True)
+    devicesData = run_device_profiler_test(setupAutoExtract=True, slowDispatch=True)
 
     stats = devicesData["data"]["devices"]["0"]["cores"]["DEVICE"]["analysis"]
 
@@ -128,7 +129,7 @@ def test_custom_cycle_count():
     REF_CYCLE_COUNT_MAX = REF_CYCLE_COUNT * REF_CYCLE_COUNT_HIGH_MULTIPLIER
     REF_CYCLE_COUNT_MIN = REF_CYCLE_COUNT // REF_CYCLE_COUNT_LOW_MULTIPLIER
 
-    devicesData = run_device_profiler_test(setup=True)
+    devicesData = run_device_profiler_test(setupAutoExtract=True)
 
     stats = devicesData["data"]["devices"]["0"]["cores"]["DEVICE"]["analysis"]
 
@@ -156,7 +157,7 @@ def test_full_buffer():
     ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
     assert ENV_VAR_ARCH_NAME in REF_COUNT_DICT.keys()
 
-    devicesData = run_device_profiler_test(setup=True)
+    devicesData = run_device_profiler_test(setupAutoExtract=True)
 
     stats = devicesData["data"]["devices"]["0"]["cores"]["DEVICE"]["analysis"]
     statName = "Marker Repeat"
@@ -195,7 +196,7 @@ def test_dispatch_cores():
 
     os.environ["TT_METAL_DEVICE_PROFILER_DISPATCH"] = "1"
 
-    devicesData = run_device_profiler_test(setup=True)
+    devicesData = run_device_profiler_test(setupAutoExtract=True)
 
     stats = devicesData["data"]["devices"]["0"]["cores"]["DEVICE"]["analysis"]
 
@@ -216,6 +217,37 @@ def test_dispatch_cores():
 
 
 @skip_for_grayskull()
+def test_ethernet_dispatch_cores():
+    REF_COUNT_DICT = {
+        "Ethernet CQ Dispatch": [17, 12, 3902],
+        "Ethernet CQ Prefetch": [18, 1954],
+    }
+    os.environ["TT_METAL_DEVICE_PROFILER_DISPATCH"] = "1"
+    devicesData = run_device_profiler_test(
+        testName="WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest ./tests/ttnn/tracy/test_dispatch_profiler.py::test_with_ops",
+        setupAutoExtract=True,
+    )
+    for device, deviceData in devicesData["data"]["devices"].items():
+        for ref, counts in REF_COUNT_DICT.items():
+            if ref in deviceData["cores"]["DEVICE"]["analysis"].keys():
+                assert (
+                    deviceData["cores"]["DEVICE"]["analysis"][ref]["stats"]["Count"] in counts
+                ), "Wrong ethernet dispatch zone count"
+
+    devicesData = run_device_profiler_test(
+        testName="WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest ./tests/ttnn/tracy/test_dispatch_profiler.py::test_all_devices",
+        setupAutoExtract=True,
+    )
+    for device, deviceData in devicesData["data"]["devices"].items():
+        for ref, counts in REF_COUNT_DICT.items():
+            if ref in deviceData["cores"]["DEVICE"]["analysis"].keys():
+                assert (
+                    deviceData["cores"]["DEVICE"]["analysis"][ref]["stats"]["Count"] in counts
+                ), "Wrong ethernet dispatch zone count"
+    os.environ["TT_METAL_DEVICE_PROFILER_DISPATCH"] = "0"
+
+
+@skip_for_grayskull()
 def test_profiler_host_device_sync():
     TOLERANCE = 0.1
 
@@ -229,10 +261,20 @@ def test_profiler_host_device_sync():
     syncinfoDF = pd.read_csv(syncInfoFile)
     devices = sorted(syncinfoDF["device id"].unique())
     for device in devices:
-        freq = float(syncinfoDF[syncinfoDF["device id"] == device].iloc[-1]["frequency"]) * 1e9
+        deviceFreq = syncinfoDF[syncinfoDF["device id"] == device].iloc[-1]["frequency"]
+        if not np.isnan(deviceFreq):  # host sync entry
+            freq = float(deviceFreq) * 1e9
 
-        assert freq < (reportedFreq * (1 + TOLERANCE)), f"Frequency too large on device {device}"
-        assert freq > (reportedFreq * (1 - TOLERANCE)), f"Frequency too small on device {device}"
+            assert freq < (reportedFreq * (1 + TOLERANCE)), f"Frequency {freq} is too large on device {device}"
+            assert freq > (reportedFreq * (1 - TOLERANCE)), f"Frequency {freq} is too small on device {device}"
+        else:  # device sync entry
+            deviceFreqRatio = syncinfoDF[syncinfoDF["device id"] == device].iloc[-1]["device_frequency_ratio"]
+            assert deviceFreqRatio < (
+                1 + TOLERANCE
+            ), f"Frequency ratio {deviceFreqRatio} is too large on device {device}"
+            assert deviceFreqRatio > (
+                1 - TOLERANCE
+            ), f"Frequency ratio {deviceFreqRatio} is too small on device {device}"
 
     deviceData = run_device_profiler_test(testName="pytest ./tests/ttnn/tracy/test_profiler_sync.py::test_with_ops")
     reportedFreq = deviceData["data"]["deviceInfo"]["freq"] * 1e6
@@ -241,10 +283,12 @@ def test_profiler_host_device_sync():
     syncinfoDF = pd.read_csv(syncInfoFile)
     devices = sorted(syncinfoDF["device id"].unique())
     for device in devices:
-        freq = float(syncinfoDF[syncinfoDF["device id"] == device].iloc[-1]["frequency"]) * 1e9
+        deviceFreq = syncinfoDF[syncinfoDF["device id"] == device].iloc[-1]["frequency"]
+        if not np.isnan(deviceFreq):  # host sync entry
+            freq = float(deviceFreq) * 1e9
 
-        assert freq < (reportedFreq * (1 + TOLERANCE)), f"Frequency too large on device {device}"
-        assert freq > (reportedFreq * (1 - TOLERANCE)), f"Frequency too small on device {device}"
+            assert freq < (reportedFreq * (1 + TOLERANCE)), f"Frequency {freq} is too large on device {device}"
+            assert freq > (reportedFreq * (1 - TOLERANCE)), f"Frequency {freq} is too small on device {device}"
 
     os.environ["TT_METAL_PROFILER_SYNC"] = "0"
 
@@ -272,7 +316,7 @@ def test_timestamped_events():
     ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
     assert ENV_VAR_ARCH_NAME in REF_COUNT_DICT.keys()
 
-    devicesData = run_device_profiler_test(setup=True)
+    devicesData = run_device_profiler_test(setupAutoExtract=True)
 
     if ENV_VAR_ARCH_NAME in REF_ERISC_COUNT.keys():
         eventCount = len(
@@ -288,16 +332,18 @@ def test_timestamped_events():
 
 
 def test_sub_device_profiler():
+    ARCH_NAME = os.getenv("ARCH_NAME")
     run_gtest_profiler_test(
-        "./build/test/tt_metal/unit_tests_dispatch", "CommandQueueSingleCardFixture.TensixTestSubDeviceBasicPrograms"
+        "./build/test/tt_metal/unit_tests_dispatch" + "_" + ARCH_NAME,
+        "CommandQueueSingleCardFixture.TensixTestSubDeviceBasicPrograms",
     )
     os.environ["TT_METAL_PROFILER_SYNC"] = "1"
     run_gtest_profiler_test(
-        "./build/test/tt_metal/unit_tests_dispatch",
+        "./build/test/tt_metal/unit_tests_dispatch" + "_" + ARCH_NAME,
         "CommandQueueSingleCardFixture.TensixActiveEthTestSubDeviceBasicEthPrograms",
     )
     os.environ["TT_METAL_PROFILER_SYNC"] = "0"
     run_gtest_profiler_test(
-        "./build/test/tt_metal/unit_tests_dispatch_trace",
+        "./build/test/tt_metal/unit_tests_dispatch" + "_" + ARCH_NAME,
         "CommandQueueSingleCardTraceFixture.TensixTestSubDeviceTraceBasicPrograms",
     )

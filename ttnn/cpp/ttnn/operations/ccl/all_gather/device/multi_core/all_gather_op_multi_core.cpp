@@ -4,20 +4,19 @@
 ///
 #include <algorithm>
 
-#include "tt_metal/common/core_coord.hpp"
-#include "eth_l1_address_map.h"
-#include "impl/buffers/buffer.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/buffer.hpp>
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/math.hpp"
-#include "tt_metal/common/work_split.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/host_api.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/host_api.hpp>
+#include "cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
 
 #include <sstream>
 #include <type_traits>
@@ -33,14 +32,15 @@ using namespace ccl;
 
 static std::tuple<CoreRangeSet, CoreRangeSet, std::map<std::pair<uint32_t, uint32_t>, std::vector<CoreRangeSet>>>
 get_all_worker_cores(
-    AllGatherConfig const& all_gather_config,
+    const AllGatherConfig& all_gather_config,
     uint32_t num_links,
     uint32_t num_full_send_directions,
-    CoreCoord const& core_grid_offset,
+    const CoreCoord& core_grid_offset,
     bool is_linear,
     uint32_t ring_size,
-    uint32_t ring_index) {
-    constexpr uint32_t worker_grid_width = 8;
+    uint32_t ring_index,
+    const CoreCoord& grid_size) {
+    uint32_t worker_grid_width = grid_size.x;
     const bool fit_sender_and_receiver_workers_on_same_row =
         (worker_grid_width / 2) >= all_gather_config.get_num_workers_per_link();
 
@@ -62,7 +62,7 @@ get_all_worker_cores(
         bool receiver_enabled = (!is_linear || !is_first_chip_in_chain);
 
         for (uint32_t link = 0; link < num_links; ++link) {
-            uint32_t max_cols = 8;
+            uint32_t max_cols = worker_grid_width;
             uint32_t curr_row = link * (((all_gather_config.get_num_workers_per_link() * 2 - 1) / max_cols) + 1) +
                                 (full_send_direction * num_links *
                                  (((all_gather_config.get_num_workers_per_link() * 2 - 1) / max_cols) + 1)) +
@@ -206,7 +206,7 @@ static std::vector<std::vector<uint32_t>> compute_worker_receiver_num_transfers(
     return worker_sender_num_transfers;
 }
 
-static void emit_sharded_tensor_kernel_rt_args(Device* d, Tensor const& tensor, std::vector<uint32_t>& args) {
+static void emit_sharded_tensor_kernel_rt_args(IDevice* d, Tensor const& tensor, std::vector<uint32_t>& args) {
     auto const& new_args = ShardedAddrGenArgBuilder::emit_rt_args(d, tensor);
     std::copy(std::begin(new_args), std::end(new_args), std::back_inserter(args));
 }
@@ -228,7 +228,7 @@ static bool shard_grid_is_transposed(Tensor const& t) {
 }
 
 static void emit_sharded_tensor_kernel_ct_args(
-    Device* d,
+    IDevice* d,
     Tensor const& tensor,
     std::vector<uint32_t>& args,
     std::size_t pages_per_shard_y,
@@ -364,7 +364,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
     log_trace(tt::LogOp, "max_buffer_per_chunk: {}", max_buffer_per_chunk);
     log_trace(tt::LogOp, "max_pages_per_chunk: {}", max_pages_per_chunk);
     bool rm = input_tensor.get_layout() == Layout::ROW_MAJOR;
-    bool width = input_tensor.get_legacy_shape().rank() - 1 == dim;
+    bool width = input_tensor.get_padded_shape().rank() - 1 == dim;
     tt::DataFormat df = datatype_to_dataformat_converter(input_tensor.get_dtype());
 
     std::map<string, string> worker_defines;
@@ -451,8 +451,15 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
     }
 
     // KERNEL CREATION
-    auto const& [all_receiver_workers, all_sender_workers, worker_core_map] = get_all_worker_cores(
-        all_gather_config, num_links, num_full_send_directions, core_grid_offset, is_linear, ring_size, ring_index);
+    const auto& [all_receiver_workers, all_sender_workers, worker_core_map] = get_all_worker_cores(
+        all_gather_config,
+        num_links,
+        num_full_send_directions,
+        core_grid_offset,
+        is_linear,
+        ring_size,
+        ring_index,
+        input_tensor.device()->compute_with_storage_grid_size());
     auto all_sender_worker_cores = corerange_to_cores(all_sender_workers, std::nullopt, true);
     auto all_receiver_worker_cores = corerange_to_cores(all_receiver_workers, std::nullopt, true);
 

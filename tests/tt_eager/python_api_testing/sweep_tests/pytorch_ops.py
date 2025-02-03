@@ -982,7 +982,7 @@ def prod(x, *args, all_dimensions, dim, **kwargs):
     if all_dimensions:
         result = torch.prod(x)
         return result.view(1, 1, 1, 1)
-    return torch.prod(x, dim, keepdim=True)
+    return torch.prod(x, dim, keepdim=kwargs["keepdim"])
 
 
 def ldexp(x, y, *args, **kwargs):

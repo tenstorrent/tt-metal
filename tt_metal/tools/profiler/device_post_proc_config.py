@@ -227,6 +227,12 @@ class test_dispatch_cores(default_setup):
             "start": {"risc": "NCRISC", "zone_name": "KERNEL-MAIN-HD"},
             "end": {"risc": "NCRISC", "zone_name": "KERNEL-MAIN-HD"},
         },
+    }
+    detectOps = False
+
+
+class test_ethernet_dispatch_cores(default_setup):
+    timerAnalysis = {
         "Ethernet CQ Dispatch": {
             "across": "core",
             "type": "adjacent",

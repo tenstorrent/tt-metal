@@ -36,14 +36,14 @@ void ArgMax::validate_with_output_tensors(
     }
 
     if (this->dim.has_value()) {
-        const uint32_t input_rank = input_tensor_a.get_legacy_shape().rank();
+        const uint32_t input_rank = input_tensor_a.get_padded_shape().rank();
         const uint32_t normalized_dim = dim.value() < 0 ? dim.value() + input_rank : dim.value();
 
         // TODO: Add support for normalized_dim = 0, 1, 2
         TT_FATAL(normalized_dim == (input_rank - 1), "Only argmax on last dim is supported!");
     }
 
-    auto input_shape = input_tensor_a.get_legacy_shape();
+    auto input_shape = input_tensor_a.get_padded_shape();
     TT_FATAL(input_shape[0] == 1, "dim 0 must be 1");
     TT_FATAL(input_shape[1] == 1, "dim 1 must be 1");
 }
@@ -55,10 +55,10 @@ std::vector<TensorSpec> ArgMax::compute_output_specs(
     }
 
     const auto& input_tensor = input_tensors[0];
-    ttnn::SimpleShape output_shape({1, 1, 1, 1});
+    ttnn::Shape output_shape({1, 1, 1, 1});
     if (this->dim.has_value()) {
         auto input_shape = input_tensors[0].get_logical_shape();
-        output_shape = ttnn::SimpleShape{input_shape[0], input_shape[1], 1, input_shape[2]};
+        output_shape = ttnn::Shape{input_shape[0], input_shape[1], 1, input_shape[2]};
     }
     return {
         TensorSpec(output_shape, TensorLayout(output_dtype, PageConfig(input_tensor.get_layout()), output_mem_config))};
@@ -77,7 +77,7 @@ operation::ProgramWithCallbacks ArgMax::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     const auto& output_tensor = output_tensors.at(0);
-    const auto normalized_dim = dim.has_value() ? *dim + input_tensor.get_legacy_shape().rank() * (*dim < 0) : dim;
+    const auto normalized_dim = dim.has_value() ? *dim + input_tensor.get_padded_shape().rank() * (*dim < 0) : dim;
     if (use_multicore) {
         return detail::argmax_multi_core(input_tensor, output_tensor, normalized_dim);
     }

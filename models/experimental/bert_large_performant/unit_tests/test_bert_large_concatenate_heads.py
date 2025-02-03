@@ -23,16 +23,12 @@ def run_bert_large_concatenate_heads_test(device, batch, dtype, in0_mem_config, 
 
     A = torch.randn(a_shape)
 
-    a_t = (
-        ttnn.Tensor(
-            A.flatten().tolist(),
-            a_shape,
-            dtype,
-            ttnn.ROW_MAJOR_LAYOUT,
-        )
-        .to(ttnn.TILE_LAYOUT)
-        .to(device, in0_mem_config)
-    )
+    a_t = ttnn.Tensor(
+        A.flatten().tolist(),
+        a_shape,
+        dtype,
+        ttnn.TILE_LAYOUT,
+    ).to(device, in0_mem_config)
 
     out = ttnn.experimental.concatenate_heads(a_t, ttnn.CoreCoord(12, 9), memory_config=out_mem_config)
 
@@ -43,9 +39,8 @@ def run_bert_large_concatenate_heads_test(device, batch, dtype, in0_mem_config, 
     logger.debug(f"in0: {a_t.memory_config().buffer_type} and {a_t.get_dtype()}")
     logger.debug(f"out: {out.memory_config().buffer_type} and {out.get_dtype()}")
 
-    assert out.shape.with_tile_padding() == [batch, 1, 384, 1024]
-    tt_host_rm_out = out.cpu().to(ttnn.ROW_MAJOR_LAYOUT)
-    pyt_got_back_rm_out = tt_host_rm_out.to_torch()
+    assert out.padded_shape == [batch, 1, 384, 1024]
+    pyt_got_back_rm_out = ttnn.to_torch(out)
 
     ref_out = torch.transpose(A, -3, -2).reshape([batch, 1, 384, 1024])
     passing_pcc, output_pcc = comp_pcc(pyt_got_back_rm_out, ref_out, 0.99)
@@ -98,13 +93,13 @@ def test_bert_large_concatenate_heads_with_program_cache(device, use_program_cac
         run_bert_large_concatenate_heads_test(device, 9, dtype, mem_config, mem_config)
         dummy_shape = [1, 1, 32, 32]
         py_dummy_tensor = torch.randn(dummy_shape)
-        tt_dummy_tensor = ttnn.Tensor(py_dummy_tensor, dtype).to(ttnn.TILE_LAYOUT).to(device, mem_config)
+        tt_dummy_tensor = ttnn.Tensor(py_dummy_tensor, dtype, device, ttnn.TILE_LAYOUT, mem_config)
 
     mem_config = ttnn.L1_MEMORY_CONFIG
     for _ in range(2):
         run_bert_large_concatenate_heads_test(device, 9, dtype, mem_config, mem_config)
         dummy_shape = [1, 1, 32, 32]
         py_dummy_tensor = torch.randn(dummy_shape)
-        tt_dummy_tensor = ttnn.Tensor(py_dummy_tensor, dtype).to(ttnn.TILE_LAYOUT).to(device, mem_config)
+        tt_dummy_tensor = ttnn.Tensor(py_dummy_tensor, dtype, device, ttnn.TILE_LAYOUT, mem_config)
 
     assert device.num_program_cache_entries() == 2

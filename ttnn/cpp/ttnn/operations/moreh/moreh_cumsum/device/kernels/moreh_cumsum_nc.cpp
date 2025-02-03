@@ -50,7 +50,7 @@ void MAIN {
             // copy tile from intermed0 to out0
             ACQ();
             cb_wait_front(cb_intermed0, onetile);
-            copy_tile_to_dst_init_short();
+            copy_tile_to_dst_init_short(tt::CBIndex::c_24);
             copy_tile(tt::CBIndex::c_24, first_tile, dst0);
             cb_reserve_back(cb_out0, onetile);
             pack_tile(dst0, cb_out0);

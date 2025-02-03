@@ -13,6 +13,7 @@ include(${PROJECT_SOURCE_DIR}/cmake/fetch_boost.cmake)
 fetch_boost_library(core)
 fetch_boost_library(smart_ptr)
 fetch_boost_library(container)
+fetch_boost_library(interprocess)
 
 add_library(span INTERFACE)
 target_link_libraries(span INTERFACE Boost::core)
@@ -25,6 +26,8 @@ CPMAddPackage(
     NAME yaml-cpp
     GITHUB_REPOSITORY jbeder/yaml-cpp
     GIT_TAG 0.8.0
+    PATCHES
+        yaml-cpp.patch
     OPTIONS
         "YAML_CPP_BUILD_TESTS OFF"
         "YAML_CPP_BUILD_TOOLS OFF"
@@ -78,36 +81,117 @@ CPMAddPackage(NAME magic_enum GITHUB_REPOSITORY Neargye/magic_enum GIT_TAG v0.9.
 # fmt : https://github.com/fmtlib/fmt
 ############################################################################################################################
 
-CPMAddPackage(NAME fmt GITHUB_REPOSITORY fmtlib/fmt GIT_TAG 11.0.1)
+CPMAddPackage(NAME fmt GITHUB_REPOSITORY fmtlib/fmt GIT_TAG 11.0.1 OPTIONS "CMAKE_MESSAGE_LOG_LEVEL NOTICE")
 
 ############################################################################################################################
 # range-v3 : https://github.com/ericniebler/range-v3
 ############################################################################################################################
 
-CPMAddPackage(NAME range-v3 GITHUB_REPOSITORY ericniebler/range-v3 GIT_TAG 0.12.0)
+CPMAddPackage(
+    NAME range-v3
+    GITHUB_REPOSITORY ericniebler/range-v3
+    GIT_TAG 0.12.0
+    PATCHES
+        range-v3.patch
+    OPTIONS
+        "CMAKE_BUILD_TYPE Release"
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+)
 
 ############################################################################################################################
 # pybind11 : https://github.com/pybind/pybind11
 ############################################################################################################################
 
-CPMAddPackage(NAME pybind11 GITHUB_REPOSITORY pybind/pybind11 GIT_TAG b8f28551cc3a98ea9fbfc15c05b513c8f2d23e84)
+CPMAddPackage(NAME pybind11 GITHUB_REPOSITORY pybind/pybind11 GIT_TAG v2.13.6 OPTIONS "CMAKE_MESSAGE_LOG_LEVEL NOTICE")
 
 ############################################################################################################################
 # nlohmann/json : https://github.com/nlohmann/json
 ############################################################################################################################
 
-CPMAddPackage(NAME json GITHUB_REPOSITORY nlohmann/json GIT_TAG v3.9.1)
+CPMAddPackage(NAME json GITHUB_REPOSITORY nlohmann/json GIT_TAG v3.11.3 OPTIONS "CMAKE_MESSAGE_LOG_LEVEL NOTICE")
 
 ############################################################################################################################
 # xtensor : https://github.com/xtensor-stack/xtensor
 ############################################################################################################################
 
-CPMAddPackage(NAME xtl GITHUB_REPOSITORY xtensor-stack/xtl GIT_TAG 0.7.7 OPTIONS "XTL_ENABLE_TESTS OFF")
-CPMAddPackage(NAME xtensor GITHUB_REPOSITORY xtensor-stack/xtensor GIT_TAG 0.25.0 OPTIONS "XTENSOR_ENABLE_TESTS OFF")
+CPMAddPackage(
+    NAME xtl
+    GITHUB_REPOSITORY xtensor-stack/xtl
+    GIT_TAG 0.7.7
+    OPTIONS
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+        "XTL_ENABLE_TESTS OFF"
+)
+CPMAddPackage(
+    NAME xtensor
+    GITHUB_REPOSITORY xtensor-stack/xtensor
+    GIT_TAG 0.25.0
+    OPTIONS
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+        "XTENSOR_ENABLE_TESTS OFF"
+)
 CPMAddPackage(
     NAME xtensor-blas
     GITHUB_REPOSITORY xtensor-stack/xtensor-blas
     GIT_TAG 0.21.0
     OPTIONS
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "XTENSOR_ENABLE_TESTS OFF"
 )
+
+############################################################################################################################
+# benchmark : https://github.com/google/benchmark
+############################################################################################################################
+
+CPMAddPackage(
+    NAME benchmark
+    GITHUB_REPOSITORY google/benchmark
+    GIT_TAG v1.9.1
+    OPTIONS
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+        "BENCHMARK_USE_LIBCXX ${ENABLE_LIBCXX}"
+        "BENCHMARK_ENABLE_TESTING OFF"
+)
+
+if(benchmark_ADDED)
+    set_target_properties(
+        benchmark
+        PROPERTIES
+            LIBRARY_OUTPUT_DIRECTORY
+                "${CMAKE_BINARY_DIR}/lib"
+    )
+endif()
+
+############################################################################################################################
+# taskflow : https://github.com/taskflow/taskflow
+############################################################################################################################
+
+CPMAddPackage(
+    NAME taskflow
+    GITHUB_REPOSITORY taskflow/taskflow
+    GIT_TAG v3.7.0
+    OPTIONS
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE" # Taskflow's CMakeLists.txt is super noisy
+)
+add_library(Taskflow::Taskflow ALIAS Taskflow)
+
+############################################################################################################################
+# flatbuffers : https://github.com/google/flatbuffers
+############################################################################################################################
+
+CPMAddPackage(
+    NAME flatbuffers
+    GITHUB_REPOSITORY google/flatbuffers
+    GIT_TAG v24.3.25
+    OPTIONS
+        "FLATBUFFERS_BUILD_FLATC ON"
+        "FLATBUFFERS_BUILD_TESTS OFF"
+        "FLATBUFFERS_SKIP_MONSTER_EXTRA ON"
+        "FLATBUFFERS_STRICT_MODE ON"
+)
+
+if(flatbuffers_ADDED)
+    # Few files including idl_gen_dart.cpp:175:18, Possibly related: https://gcc.gnu.org/bugzilla/show_bug.cgi?id=105329
+    target_compile_options(flatc PRIVATE -Wno-restrict)
+    target_compile_options(flatbuffers PRIVATE -Wno-restrict)
+endif()

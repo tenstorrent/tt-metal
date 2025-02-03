@@ -7,9 +7,8 @@
 #include <optional>
 
 #include "ttnn/operations/math.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -28,23 +27,23 @@ void GroupNorm::validate(
     TT_FATAL(a.get_dtype() == DataType::BFLOAT16, "Error");
     TT_FATAL(a.storage_type() == StorageType::DEVICE, "Operands to layernorm need to be on device!");
     TT_FATAL(a.buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
-    TT_FATAL(a.get_legacy_shape()[3] % this->num_groups == 0, "channel must be divisible by num_groups!");
-    TT_FATAL(a.get_legacy_shape()[1] == 1, "input tensor shape[1] must be 1!");
+    TT_FATAL(a.get_padded_shape()[3] % this->num_groups == 0, "channel must be divisible by num_groups!");
+    TT_FATAL(a.get_padded_shape()[1] == 1, "input tensor shape[1] must be 1!");
 
     if (gamma.has_value()) {
         if (gamma.value().get_layout() == Layout::TILE) {
             TT_FATAL(
-                a.get_legacy_shape()[3] == gamma.value().get_legacy_shape()[3],
+                a.get_padded_shape()[3] == gamma.value().get_padded_shape()[3],
                 "{} != {}",
-                a.get_legacy_shape()[3],
-                gamma.value().get_legacy_shape()[3]);
+                a.get_padded_shape()[3],
+                gamma.value().get_padded_shape()[3]);
             TT_FATAL(a.device() == gamma.value().device(), "Error");
             TT_FATAL(
                 gamma.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
-            TT_FATAL(gamma.value().get_legacy_shape()[2] == TILE_HEIGHT, "Error");
+            TT_FATAL(gamma.value().get_padded_shape()[2] == TILE_HEIGHT, "Error");
         } else {
             TT_FATAL(gamma.value().get_layout() == Layout::ROW_MAJOR, "Error");
-            TT_FATAL((gamma.value().get_legacy_shape()[3] == TILE_WIDTH), "Error");
+            TT_FATAL((gamma.value().get_padded_shape()[3] == TILE_WIDTH), "Error");
             TT_FATAL(a.device() == gamma.value().device(), "Error");
             TT_FATAL(
                 gamma.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
@@ -57,14 +56,14 @@ void GroupNorm::validate(
 
     if (beta.has_value()) {
         if (beta.value().get_layout() == Layout::TILE) {
-            TT_FATAL(a.get_legacy_shape()[3] == beta.value().get_legacy_shape()[3], "Error");
+            TT_FATAL(a.get_padded_shape()[3] == beta.value().get_padded_shape()[3], "Error");
             TT_FATAL(a.device() == beta.value().device(), "Error");
             TT_FATAL(
                 beta.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
-            TT_FATAL(beta.value().get_legacy_shape()[2] == TILE_HEIGHT, "Error");
+            TT_FATAL(beta.value().get_padded_shape()[2] == TILE_HEIGHT, "Error");
         } else {
             TT_FATAL(beta.value().get_layout() == Layout::ROW_MAJOR, "Error");
-            TT_FATAL(beta.value().get_legacy_shape()[3] == TILE_WIDTH, "Error");
+            TT_FATAL(beta.value().get_padded_shape()[3] == TILE_WIDTH, "Error");
             TT_FATAL(a.device() == beta.value().device(), "Error");
             TT_FATAL(
                 beta.value().buffer() != nullptr, "Operands to layernorm need to be allocated in buffers on device!");
@@ -74,9 +73,9 @@ void GroupNorm::validate(
 
     if (input_mask.has_value()) {
         TT_FATAL(input_mask.value().get_layout() == Layout::TILE, "Error");
-        TT_FATAL(input_mask.value().get_legacy_shape()[1] == this->num_groups, "Error");
-        TT_FATAL(input_mask.value().get_legacy_shape()[2] == TILE_HEIGHT, "Error");
-        TT_FATAL(input_mask.value().get_legacy_shape()[3] % TILE_WIDTH == 0, "Error");
+        TT_FATAL(input_mask.value().get_padded_shape()[1] == this->num_groups, "Error");
+        TT_FATAL(input_mask.value().get_padded_shape()[2] == TILE_HEIGHT, "Error");
+        TT_FATAL(input_mask.value().get_padded_shape()[3] % TILE_WIDTH == 0, "Error");
     }
 }
 std::vector<TensorSpec> GroupNorm::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
@@ -112,7 +111,7 @@ operation::ProgramWithCallbacks GroupNorm::create_program(
     uint32_t num_cores_y = this->program_config.compute_with_storage_grid_size.y;
     bool inplace = this->program_config.inplace;
     CoreCoord grid_size = CoreCoord(num_cores_x, num_cores_y);
-    uint32_t batch = a.get_legacy_shape()[0];
+    uint32_t batch = a.get_padded_shape()[0];
 
     return groupnorm_multi_core_sharded(
         a,

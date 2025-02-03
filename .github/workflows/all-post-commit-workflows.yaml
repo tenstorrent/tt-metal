@@ -18,6 +18,10 @@ on:
           - Debug
           - RelWithDebInfo
           - CI
+      with-retries:
+        default: false
+        type: boolean
+        description: "Re-run failed jobs (max 3)"
   push:
     branches: ["main"]
 
@@ -29,6 +33,7 @@ permissions:
   id-token: write
   packages: write
 
+run-name: All post-commit tests${{ (github.event_name == 'workflow_dispatch' && inputs.with-retries) && ' (with retries)' || ''}}
 jobs:
   static-checks:
     uses: ./.github/workflows/all-static-checks.yaml
@@ -40,11 +45,9 @@ jobs:
         # Since pre-compiled builds only run on 20.04, we can only test on 20.04 for now
         # The full 22.04 flow can be tested without precompiled
         os: [ubuntu-20.04]
-        arch: [grayskull, wormhole_b0]
     uses: ./.github/workflows/_build-wheels-impl.yaml
     with:
       os: ${{ matrix.os }}
-      arch: ${{ matrix.arch }}
       from-precompiled: true
     secrets: inherit
   test-wheels:
@@ -53,30 +56,16 @@ jobs:
     with:
       from-precompiled: true
     secrets: inherit
-  build-docker-image-2004:
-    uses: ./.github/workflows/build-docker-artifact.yaml
-    secrets: inherit
-    with:
-      os: ubuntu-20.04-amd64
-  build-docker-image-2204:
-    uses: ./.github/workflows/build-docker-artifact.yaml
-    secrets: inherit
-    with:
-      os: ubuntu-22.04-amd64
   build-artifact:
-    needs: build-docker-image-2004
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
     with:
-      build-docker: false
       build-type: ${{ inputs.build-type || 'Release' }}
   build-artifact-profiler:
-    needs: build-docker-image-2004
     uses: ./.github/workflows/build-artifact.yaml
     with:
-      tracy: true
-      build-docker: false
       build-type: ${{ inputs.build-type || 'Release' }}
+      tracy: true
     secrets: inherit
   # Slow Dispatch Unit Tests
   sd-unit-tests:
@@ -160,11 +149,10 @@ jobs:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
   code-analysis:
-    needs: build-docker-image-2204
     uses: ./.github/workflows/code-analysis.yaml
     secrets: inherit
     with:
-      os: ubuntu-22.04-amd64
+      version: 22.04
   tt-train-cpp-unit-tests:
     needs: build-artifact
     secrets: inherit
@@ -189,9 +177,40 @@ jobs:
     uses: ./.github/workflows/docs-latest-public.yaml
     secrets: inherit
   build:
-    needs: [build-artifact, build-docker-image-2204]
-    uses: ./.github/workflows/build.yaml
+    uses: ./.github/workflows/build-artifact.yaml
+    needs: build-artifact
     secrets: inherit
+    strategy:
+      matrix:
+        config:
+          - version: "20.04"
+            toolchain: "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
+            build-type: "Debug"
+            publish-artifact: false
+          - version: "20.04"
+            toolchain: "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
+            build-type: "RelWithDebInfo"
+            publish-artifact: false
+          - version: "22.04"
+            toolchain: "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
+            build-type: "Release"
+            publish-artifact: false
+          - version: "22.04"
+            toolchain: "cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
+            build-type: "Release"
+            publish-artifact: false
+            skip-tt-train: true
+          - version: "22.04"
+            toolchain: "cmake/x86_64-linux-gcc-12-toolchain.cmake"
+            build-type: "Release"
+            publish-artifact: false
+            skip-tt-train: true
+    with:
+      version: ${{ matrix.config.version }}
+      toolchain: ${{ matrix.config.toolchain }}
+      build-type: ${{ matrix.config.build-type }}
+      publish-artifact: ${{ matrix.config.publish-artifact }}
+      skip-tt-train: ${{ matrix.config.skip-tt-train || false }}
   # We used to use this for post-commit, but we didn't have enough runners
   # to support the number of developers running this workflow
   # build-and-test-measure-perf:

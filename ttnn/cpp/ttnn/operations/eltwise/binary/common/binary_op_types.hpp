@@ -29,6 +29,8 @@ enum class BinaryOpType {
     POWER,
     BITWISE_XOR,
     BITWISE_AND,
-    BITWISE_OR
+    BITWISE_OR,
+    LEFT_SHIFT,
+    RIGHT_SHIFT
 };
 }

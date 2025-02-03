@@ -28,7 +28,7 @@ def test_yolov4(device, reset_seeds, model_location_generator):
     else:
         weights_pth = str(model_path / "yolov4.pth")
 
-    ttnn_model = TtYOLOv4(weights_pth)
+    ttnn_model = TtYOLOv4(device, weights_pth)
 
     torch_input = torch.randn((1, 320, 320, 3), dtype=torch.bfloat16)
     ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16)
@@ -47,7 +47,7 @@ def test_yolov4(device, reset_seeds, model_location_generator):
     torch_model.load_state_dict(new_state_dict)
     torch_model.eval()
 
-    result_1, result_2, result_3 = ttnn_model(device, ttnn_input)
+    result_1, result_2, result_3 = ttnn_model(ttnn_input)
     result_1 = ttnn.to_torch(result_1)
     result_2 = ttnn.to_torch(result_2)
     result_3 = ttnn.to_torch(result_3)

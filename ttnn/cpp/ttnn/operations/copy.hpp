@@ -9,7 +9,7 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/unary/device/unary_device_operation.hpp"
-#include "ttnn/cpp/ttnn/operations/experimental/copy/typecast/typecast.hpp"
+#include "cpp/ttnn/operations/experimental/copy/typecast/typecast.hpp"
 
 namespace ttnn {
 namespace operations {

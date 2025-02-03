@@ -6,7 +6,7 @@
 
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
-#include "common/assert.hpp"
+#include <tt-metalium/assert.hpp>
 #include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/xtensor/partition.hpp"
@@ -18,14 +18,16 @@ class ReplicateTensorToMesh : public TensorToMesh {
 public:
     ReplicateTensorToMesh(size_t num_devices) : num_devices_(num_devices) {}
 
-    std::vector<Tensor> map(const Tensor& tensor) override {
+    std::vector<Tensor> map(const Tensor& tensor) const override {
         std::vector<Tensor> tensors;
         tensors.reserve(num_devices_);
         std::fill_n(std::back_inserter(tensors), num_devices_, tensor);
         return tensors;
     }
 
-    DistributedTensorConfig config() const override { return DistributedTensorConfig{ReplicateTensor{num_devices_}}; }
+    tt::tt_metal::DistributedTensorConfig config() const override {
+        return tt::tt_metal::DistributedTensorConfig{ReplicateTensor{num_devices_}};
+    }
 
 private:
     size_t num_devices_ = 0;
@@ -35,11 +37,13 @@ class ShardTensorToMesh : public TensorToMesh {
 public:
     ShardTensorToMesh(size_t num_devices, int dim) : num_devices_(num_devices), shard_dim_(dim) {}
 
-    std::vector<Tensor> map(const Tensor& tensor) override {
+    std::vector<Tensor> map(const Tensor& tensor) const override {
         return experimental::xtensor::chunk(tensor, num_devices_, shard_dim_);
     }
 
-    DistributedTensorConfig config() const override { return DistributedTensorConfig{ShardTensor{shard_dim_}}; }
+    tt::tt_metal::DistributedTensorConfig config() const override {
+        return tt::tt_metal::DistributedTensorConfig{ShardTensor{shard_dim_}};
+    }
 
 private:
     size_t num_devices_ = 0;
@@ -51,7 +55,7 @@ public:
     ShardTensorTo2dMesh(const MeshShape& mesh_shape, const Shard2dConfig& config) :
         mesh_shape_(mesh_shape), config_(config) {}
 
-    std::vector<Tensor> map(const Tensor& tensor) override {
+    std::vector<Tensor> map(const Tensor& tensor) const override {
         const auto [rows, cols] = mesh_shape_;
         const auto [row_dim, col_dim] = config_;
 
@@ -94,7 +98,7 @@ public:
         return tensor_shards;
     }
 
-    DistributedTensorConfig config() const override {
+    tt::tt_metal::DistributedTensorConfig config() const override {
         return DistributedTensorConfig{ShardTensor2D{ShardMesh{mesh_shape_.num_rows, mesh_shape_.num_cols}}};
     }
 
@@ -107,7 +111,7 @@ class ConcatMeshToTensor : public MeshToTensor {
 public:
     ConcatMeshToTensor(int dim) : concat_dim_(dim) {}
 
-    Tensor compose(const std::vector<Tensor>& tensors) override {
+    Tensor compose(const std::vector<Tensor>& tensors) const override {
         return experimental::xtensor::concat(tensors, concat_dim_);
     }
 
@@ -120,7 +124,7 @@ public:
     Concat2dMeshToTensor(MeshDevice& mesh_device, const Concat2dConfig& config) :
         mesh_shape_(mesh_device.shape()), config_(config) {}
 
-    Tensor compose(const std::vector<Tensor>& tensors) override {
+    Tensor compose(const std::vector<Tensor>& tensors) const override {
         const auto [rows, cols] = mesh_shape_;
         const auto [row_dim, col_dim] = config_;
 
@@ -176,17 +180,22 @@ std::unique_ptr<MeshToTensor> concat_2d_mesh_to_tensor_composer(MeshDevice& mesh
     return std::make_unique<Concat2dMeshToTensor>(mesh_device, config);
 }
 
-Tensor distribute_tensor(const Tensor& tensor, MeshDevice& mesh_device, TensorToMesh& mapper) {
+Tensor distribute_tensor(
+    const Tensor& tensor, const TensorToMesh& mapper, std::optional<std::reference_wrapper<MeshDevice>> mesh_device) {
     TT_FATAL(
-        tensor.storage_type() != StorageType::MULTI_DEVICE && tensor.storage_type() != StorageType::MULTI_DEVICE_HOST,
+        tensor.storage_type() != tt::tt_metal::StorageType::MULTI_DEVICE &&
+            tensor.storage_type() != tt::tt_metal::StorageType::MULTI_DEVICE_HOST,
         "TensorToMesh does not support multi-device or multi-device host tensors; got storage type: {}",
         tensor.storage_type());
     std::vector<Tensor> tensors = mapper.map(tensor);
     Tensor output = aggregate_as_tensor(tensors, mapper.config());
-    return output.to(&mesh_device);
+    if (mesh_device.has_value()) {
+        return output.to(&(mesh_device->get()));
+    }
+    return output;
 }
 
-Tensor aggregate_tensor(const Tensor& tensor, MeshToTensor& composer) {
+Tensor aggregate_tensor(const Tensor& tensor, const MeshToTensor& composer) {
     return is_multi_device_tensor(tensor) ? composer.compose(get_tensors_from_multi_device_storage(tensor))
                                           : composer.compose({tensor});
 }

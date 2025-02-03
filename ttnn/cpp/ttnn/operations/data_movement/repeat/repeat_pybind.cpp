@@ -5,7 +5,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "cpp/pybind11/decorators.hpp"
 
 #include "repeat.hpp"
 
@@ -22,7 +22,7 @@ void bind_repeat(py::module& module, const data_movement_operation_t& operation,
         ttnn::pybind_overload_t{
             [](const data_movement_operation_t& self,
                const ttnn::Tensor& input_tensor,
-               const Shape& repeat_dims,
+               const ttnn::Shape& repeat_dims,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                uint8_t queue_id) { return self(queue_id, input_tensor, repeat_dims, memory_config); },
             py::arg("input_tensor"),

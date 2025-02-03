@@ -7,9 +7,9 @@
 #include <magic_enum/magic_enum.hpp>
 #include <utility>
 
-#include "common/constants.hpp"
-#include "tt_metal/common/work_split.hpp"
-#include "tt_metal/detail/util.hpp"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/util.hpp>
 
 namespace ttnn {
 namespace operations {
@@ -299,7 +299,7 @@ void check_tensor(
 
 bool is_hw_dim(uint32_t dim, uint32_t rank) { return (dim >= rank - 2); }
 
-uint32_t compute_inner(tt::tt_metal::LegacyShape shape, uint32_t dim) {
+uint32_t compute_inner(const ttnn::Shape& shape, uint32_t dim) {
     uint32_t num_inner = 1;
     auto rank = shape.rank();
 
@@ -314,7 +314,7 @@ uint32_t compute_inner(tt::tt_metal::LegacyShape shape, uint32_t dim) {
     return num_inner;
 }
 
-uint32_t compute_outer(tt::tt_metal::LegacyShape shape, uint32_t dim) {
+uint32_t compute_outer(const ttnn::Shape& shape, uint32_t dim) {
     uint32_t num_outer = 1;
     auto rank = shape.rank();
 
@@ -328,7 +328,7 @@ uint32_t compute_outer(tt::tt_metal::LegacyShape shape, uint32_t dim) {
     return num_outer;
 }
 
-void expand_to_max_dim(ttnn::SmallVector<uint32_t>& dim, const ttnn::SimpleShape& shape) {
+void expand_to_max_dim(ttnn::SmallVector<uint32_t>& dim, const ttnn::Shape& shape) {
     const auto rank = shape.rank();
     for (auto i = 0; i < rank; ++i) {
         auto idx = rank - 1 - i;
@@ -337,7 +337,7 @@ void expand_to_max_dim(ttnn::SmallVector<uint32_t>& dim, const ttnn::SimpleShape
 }
 
 void validate_input_with_dim(const Tensor& input, const int64_t& dim) {
-    auto input_shape = input.get_legacy_shape();
+    auto input_shape = input.get_padded_shape();
     auto input_shape_wo_padding = input.get_logical_shape();
     const auto input_rank = input_shape.rank();
     log_debug(LogOp, "{}:{} input_rank {}", __func__, __LINE__, input_rank);
@@ -351,11 +351,12 @@ void validate_input_with_dim(const Tensor& input, const int64_t& dim) {
 void validate_output_with_keepdim(const Tensor& input, const Tensor& output, const int64_t& dim, const bool& keepdim) {
     auto input_shape = input.get_padded_shape();
     auto input_shape_wo_padding = input.get_logical_shape();
-    const auto input_rank = input_shape.rank();
+    const auto input_rank = input_shape_wo_padding.rank();
+    auto padded_dim = dim + input_shape.rank() - input_shape_wo_padding.rank();
 
     const auto output_shape = output.get_padded_shape();
     const auto output_shape_wo_padding = output.get_logical_shape();
-    const auto output_rank = output_shape.rank();
+    const auto output_rank = output_shape_wo_padding.rank();
 
     const bool is_tile_dim = (dim == input_rank - 1 || dim == input_rank - 2);
 
@@ -365,7 +366,7 @@ void validate_output_with_keepdim(const Tensor& input, const Tensor& output, con
 
     if (keepdim) {
         bool ranks_are_equal = (input_rank == output_rank);
-        input_shape[dim] = (is_tile_dim) ? (TILE_HEIGHT) : (1);
+        input_shape[padded_dim] = (is_tile_dim) ? (TILE_HEIGHT) : (1);
         input_shape_wo_padding[dim] = 1;
 
         if (!ranks_are_equal) {
@@ -387,31 +388,36 @@ void validate_output_with_keepdim(const Tensor& input, const Tensor& output, con
         expand_to_max_dim(input_dim_wo_padding, input_shape_wo_padding);
         expand_to_max_dim(output_dim_wo_padding, output_shape_wo_padding);
 
-        for (int i = 0; i < input_rank; ++i) {
+        for (int i = 0; i < input_shape.rank(); ++i) {
             TT_FATAL(input_dim[i] == output_dim[i], "Error");
+        }
+        for (int i = 0; i < input_shape_wo_padding.rank(); ++i) {
             TT_FATAL(input_dim_wo_padding[i] == output_dim_wo_padding[i], "Error");
         }
     } else {
         ttnn::SmallVector<uint32_t> expected_output_shape;
-        ttnn::SmallVector<uint32_t> expected_output_shape_wo_padding;
         for (int i = 0; i < output_shape.rank(); ++i) {
-            if (i == dim && !is_tile_dim) {
+            if (i == padded_dim && !is_tile_dim) {
                 expected_output_shape.push_back(1);
-                expected_output_shape_wo_padding.push_back(1);
             }
             expected_output_shape.push_back(output_shape[i]);
+        }
+        ttnn::SmallVector<uint32_t> expected_output_shape_wo_padding;
+        for (int i = 0; i < output_shape_wo_padding.rank(); ++i) {
+            if (i == dim && !is_tile_dim) {
+                expected_output_shape_wo_padding.push_back(1);
+            }
             expected_output_shape_wo_padding.push_back(output_shape_wo_padding[i]);
         }
 
         log_debug(LogOp, "{}:{} expected_output_shape {}", __func__, __LINE__, expected_output_shape);
         log_debug(
             LogOp, "{}:{} expected_output_shape_wo_padding {}", __func__, __LINE__, expected_output_shape_wo_padding);
-        for (int i = 0; i < input_rank; ++i) {
-            if (i == dim) {
-                continue;
-            }
-            TT_FATAL(input_shape[i] == expected_output_shape[i], "Error");
-            TT_FATAL(input_shape_wo_padding[i] == expected_output_shape_wo_padding[i], "Error");
+        for (int i = 0; i < expected_output_shape.size(); ++i) {
+            TT_FATAL(i == padded_dim || input_shape[i] == expected_output_shape[i], "Error");
+        }
+        for (int i = 0; i < expected_output_shape_wo_padding.size(); ++i) {
+            TT_FATAL(i == dim || input_shape_wo_padding[i] == expected_output_shape_wo_padding[i], "Error");
         }
     }
 }
@@ -438,7 +444,7 @@ ttnn::SmallVector<int64_t> get_dim(
     return dims;
 }
 
-std::tuple<uint32_t, uint32_t, uint32_t> extract_spatial_dims(const ttnn::SimpleShape& shape) {
+std::tuple<uint32_t, uint32_t, uint32_t> extract_spatial_dims(const ttnn::Shape& shape) {
     const auto rank = shape.rank();
 
     TT_FATAL(rank >= 2, "Shape must have at least two dims.");
@@ -454,7 +460,7 @@ std::tuple<uint32_t, uint32_t, uint32_t> extract_spatial_dims(const ttnn::Simple
 }
 
 std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_and_scale_spatial_dims(
-    const ttnn::SimpleShape& shape, uint32_t dim) {
+    const ttnn::Shape& shape, uint32_t dim) {
     const auto rank = shape.rank();
 
     TT_FATAL(rank >= 2, "Shape must have at least two dims.");

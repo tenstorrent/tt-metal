@@ -33,7 +33,7 @@ void validate(
     TT_FATAL(tensor_args.input.buffer() != nullptr, "Expand: Input tensor need to be allocated in buffers on device");
     if (output.has_value()) {
         TT_FATAL(
-            output->get_shape().logical_shape() == operation_attributes.output_shape,
+            output->get_logical_shape() == operation_attributes.output_shape,
             "Expand: Output shape must match operation attributes");
         TT_FATAL(input.get_layout() == output->get_layout(), "Expand: Input and output must have same layout");
         TT_FATAL(input.get_dtype() == output->get_dtype(), "Expand: Input and output must have same dtype");
@@ -51,9 +51,17 @@ void ExpandOperation::validate_on_program_cache_hit(
     validate(operation_attributes, tensor_args);
 };
 
-ExpandOperation::shape_return_value_t ExpandOperation::compute_output_shapes(
+ExpandOperation::spec_return_value_t ExpandOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return SimpleShape{operation_attributes.output_shape};
+    if (tensor_args.output.has_value()) {
+        return tensor_args.output->get_tensor_spec();
+    }
+    return TensorSpec(
+        Shape{operation_attributes.output_shape},
+        TensorLayout(
+            tensor_args.input.get_dtype(),
+            PageConfig(tensor_args.input.get_layout()),
+            operation_attributes.memory_config));
 };
 
 ExpandOperation::tensor_return_value_t ExpandOperation::create_output_tensors(
@@ -63,12 +71,7 @@ ExpandOperation::tensor_return_value_t ExpandOperation::create_output_tensors(
         return {tensor_args.output.value()};
     }
 
-    return create_device_tensor(
-        compute_output_shapes(operation_attributes, tensor_args),
-        tensor_args.input.get_dtype(),
-        tensor_args.input.get_layout(),
-        tensor_args.input.device(),
-        operation_attributes.memory_config);
+    return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 }
 
 std::tuple<ExpandOperation::operation_attributes_t, ExpandOperation::tensor_args_t> ExpandOperation::invoke(

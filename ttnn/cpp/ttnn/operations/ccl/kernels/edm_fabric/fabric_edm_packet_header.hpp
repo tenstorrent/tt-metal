@@ -29,7 +29,7 @@ enum CommandType : uint8_t {
 // 1 bit
 enum ChipSendType : uint8_t {
     CHIP_UNICAST = 0,
-    CHIP_MULTICAST = 1
+    CHIP_MULTICAST = 1,
 };
 enum NocSendType : uint8_t {
     NOC_UNICAST = 0,
@@ -53,6 +53,7 @@ union RoutingFields {
 static_assert(sizeof(RoutingFields) == sizeof(UnicastRoutingCommandHeader), "RoutingFields size is not 1 bytes");
 
 struct NocUnicastCommandHeader {
+    // TODO: just encode the noc_addr as uint64_t directly
     uint32_t address;
     uint32_t size;
     uint8_t noc_x;
@@ -120,7 +121,7 @@ struct PacketHeader {
     uint8_t reserved : 4;
 
     RoutingFields routing_fields;
-    uint16_t reserved2;
+    uint16_t reserved2; // can be tagged with src device for debug
     CommandFields command_fields;
 
     // Sort of hack to work-around DRAM read alignment issues that must be 32B aligned
@@ -201,6 +202,64 @@ struct PacketHeader {
         this->noc_send_type = NOC_MULTICAST;
         this->command_fields.mcast_seminc = noc_multicast_atomic_inc_command_header;
         return *this;
+    }
+    inline volatile PacketHeader* to_write() volatile { this->command_type = WRITE; return this; }
+    inline volatile PacketHeader* to_atomic_inc() volatile { this->command_type = ATOMIC_INC; return this; }
+
+    inline volatile PacketHeader *to_chip_unicast(UnicastRoutingCommandHeader const &chip_unicast_command_header) volatile {
+        this->chip_send_type = CHIP_UNICAST;
+        this->routing_fields.chip_unicast.distance_in_hops = chip_unicast_command_header.distance_in_hops;
+        return this;
+    }
+    inline volatile PacketHeader *to_chip_multicast(MulticastRoutingCommandHeader const &chip_multicast_command_header) volatile {
+        this->chip_send_type = CHIP_MULTICAST;
+        this->routing_fields.chip_mcast.range_hops = chip_multicast_command_header.range_hops;
+        this->routing_fields.chip_mcast.start_distance_in_hops = chip_multicast_command_header.start_distance_in_hops;
+        return this;
+    }
+    inline volatile PacketHeader *to_noc_unicast(NocUnicastCommandHeader const &noc_unicast_command_header) volatile {
+        this->noc_send_type = NOC_UNICAST;
+        this->command_fields.unicast_write.address = noc_unicast_command_header.address;
+        this->command_fields.unicast_write.size = noc_unicast_command_header.size;
+        this->command_fields.unicast_write.noc_x = noc_unicast_command_header.noc_x;
+        this->command_fields.unicast_write.noc_y = noc_unicast_command_header.noc_y;
+
+        return this;
+    }
+    inline volatile PacketHeader *to_noc_multicast(NocMulticastCommandHeader const &noc_multicast_command_header) volatile {
+        this->noc_send_type = NOC_MULTICAST;
+        this->command_fields.mcast_write.mcast_rect_size_x = noc_multicast_command_header.mcast_rect_size_x;
+        this->command_fields.mcast_write.mcast_rect_size_y = noc_multicast_command_header.mcast_rect_size_y;
+        this->command_fields.mcast_write.noc_x_start = noc_multicast_command_header.noc_x_start;
+        this->command_fields.mcast_write.noc_y_start = noc_multicast_command_header.noc_y_start;
+        this->command_fields.mcast_write.size = noc_multicast_command_header.size;
+        this->command_fields.mcast_write.address = noc_multicast_command_header.address;
+
+        return this;
+    }
+    inline volatile PacketHeader *to_noc_unicast_atomic_inc(
+        NocUnicastAtomicIncCommandHeader const &noc_unicast_atomic_inc_command_header) volatile {
+        this->noc_send_type = NOC_UNICAST;
+        this->command_fields.unicast_seminc.address = noc_unicast_atomic_inc_command_header.address;
+        this->command_fields.unicast_seminc.noc_x = noc_unicast_atomic_inc_command_header.noc_x;
+        this->command_fields.unicast_seminc.noc_y = noc_unicast_atomic_inc_command_header.noc_y;
+        this->command_fields.unicast_seminc.val = noc_unicast_atomic_inc_command_header.val;
+        this->command_fields.unicast_seminc.wrap = noc_unicast_atomic_inc_command_header.wrap;
+
+        return this;
+    }
+    inline volatile PacketHeader *to_noc_multicast_atomic_inc(
+        NocMulticastAtomicIncCommandHeader const &noc_multicast_atomic_inc_command_header) volatile {
+        this->noc_send_type = NOC_MULTICAST;
+        this->command_fields.mcast_seminc.address = noc_multicast_atomic_inc_command_header.address;
+        this->command_fields.mcast_seminc.noc_x_start = noc_multicast_atomic_inc_command_header.noc_x_start;
+        this->command_fields.mcast_seminc.noc_y_start = noc_multicast_atomic_inc_command_header.noc_y_start;
+        this->command_fields.mcast_seminc.size_x = noc_multicast_atomic_inc_command_header.size_x;
+        this->command_fields.mcast_seminc.size_y = noc_multicast_atomic_inc_command_header.size_y;
+        this->command_fields.mcast_seminc.val = noc_multicast_atomic_inc_command_header.val;
+        this->command_fields.mcast_seminc.wrap = noc_multicast_atomic_inc_command_header.wrap;
+
+        return this;
     }
 };
 

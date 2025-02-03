@@ -182,27 +182,13 @@ def close_mesh_device(mesh_device):
 
 
 @contextlib.contextmanager
-def create_mesh_device(
-    mesh_shape: ttnn.MeshShape,
-    device_ids: List[int],
-    l1_small_size: int = ttnn._ttnn.device.DEFAULT_L1_SMALL_SIZE,
-    trace_region_size: int = ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE,
-    num_command_queues: int = 1,
-    dispatch_core_config: ttnn._ttnn.device.DispatchCoreConfig = ttnn._ttnn.device.DispatchCoreConfig(),
-):
+def create_mesh_device(*args, **kwargs):
     """
-    create_mesh_device(mesh_shape: ttnn.MeshShape, device_ids: List[int]) -> ttnn.MeshDevice
+    create_mesh_device(*args, **kwargs) -> ttnn.MeshDevice
 
     Context manager for opening and closing a device.
     """
-    mesh_device = open_mesh_device(
-        mesh_shape=mesh_shape,
-        device_ids=device_ids,
-        l1_small_size=l1_small_size,
-        trace_region_size=trace_region_size,
-        num_command_queues=num_command_queues,
-        dispatch_core_type=dispatch_core_config,
-    )
+    mesh_device = open_mesh_device(*args, **kwargs)
     try:
         yield mesh_device
     finally:

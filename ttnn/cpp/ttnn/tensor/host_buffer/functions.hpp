@@ -8,7 +8,7 @@
 
 #include "ttnn/tensor/host_buffer/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "tt_metal/tt_stl/reflection.hpp"
+#include <tt-metalium/reflection.hpp>
 
 namespace tt {
 

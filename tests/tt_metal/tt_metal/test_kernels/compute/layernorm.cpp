@@ -98,7 +98,7 @@ void MAIN {
          */
         ACQ();
         cb_reserve_back(cb_ex, 1 * onetile);
-        reduce_init_delta<false>();
+        reduce_init_delta<false>(cb_x, cb_scaler, cb_ex);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             cb_wait_front(cb_x, wt + blk);
             for (uint32_t j = 0; j < blk; j++) {
@@ -107,7 +107,7 @@ void MAIN {
             // we don't pop cb_x until we compute Ex
         }
         pack_tile(dst0, cb_ex);
-        reduce_revert_delta();
+        reduce_revert_delta(cb_ex);
         REL();
 
         cb_push_back(cb_ex, 1);
@@ -118,7 +118,7 @@ void MAIN {
          */
         cb_wait_front(cb_ex, 1);  // should have 1 tile
         cb_reserve_back(cb_xmm, Wt);
-        sub_bcast_cols_init_short();
+        sub_bcast_cols_init_short(cb_x, cb_ex);
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             ACQ();
             for (uint32_t wtr = 0; wtr < blk; wtr++) {
@@ -154,7 +154,7 @@ void MAIN {
          * TODO(AP): can save space here by reusing CB
          */
         cb_reserve_back(cb_ex2, 1);
-        reduce_init_delta<false>();
+        reduce_init_delta<false>(cb_xmm2, cb_scaler, cb_ex2);
         ACQ();
         cb_wait_front(cb_xmm2, Wt);
         // cb_wait_front(cb_xmm, Wt);
@@ -167,7 +167,7 @@ void MAIN {
         }
         cb_pop_front(cb_xmm2, Wt);
         pack_tile(dst0, cb_ex2);
-        reduce_revert_delta();
+        reduce_revert_delta(cb_ex2);
         REL();
 
         cb_push_back(cb_ex2, 1);
@@ -202,7 +202,7 @@ void MAIN {
             cb_reserve_back(cb_im_or_out, blk);
 
             ACQ();
-            mul_bcast_cols_init_short();
+            mul_bcast_cols_init_short(cb_xmm, cb_ex2pe);
             for (uint32_t wtr = 0; wtr < blk; wtr++) {
                 // cb_xmm[wt+wtr] since we pop Wt from cb_xmm after the entire loop
                 mul_tiles_bcast_cols(cb_xmm, cb_ex2pe, wt + wtr, 0, wtr);  // tile *= 1/(sum(exp(x)))
@@ -214,7 +214,7 @@ void MAIN {
             if (do_gamma) {
                 ACQ();
                 uint32_t cb_outg = do_beta ? cb_fusion : tt::CBIndex::c_16;
-                mul_bcast_rows_init_short();
+                mul_bcast_rows_init_short(cb_fusion, cb_gamma);
                 cb_reserve_back(cb_outg, blk);
                 cb_wait_front(cb_gamma, wt + blk);  // we don't pop, TODO: only wait on first ht
                 cb_wait_front(cb_fusion, blk);
@@ -230,7 +230,7 @@ void MAIN {
             }
             if (do_beta) {
                 ACQ();
-                add_bcast_rows_init_short();
+                add_bcast_rows_init_short(cb_fusion, cb_beta);
                 cb_reserve_back(tt::CBIndex::c_16, blk);
                 cb_wait_front(cb_beta, wt + blk);  // TODO: optimization - only wait on first ht
                 cb_wait_front(cb_fusion, blk);

@@ -47,13 +47,15 @@ static inline Tensor move(uint8_t queue_id, const Tensor& input_tensor, const st
 
     DeallocateBuffer(*input_tensor.buffer());
     auto output_tensor = create_device_tensor(
-        input_tensor.get_legacy_shape(),
-        input_tensor.get_dtype(),
-        input_tensor.get_layout(),
-        input_tensor.device(),
-        output_mem_config);
-
-    bool tilized = input_tensor.get_layout() == Layout::TILE;
+        TensorSpec(
+            input_tensor.get_logical_shape(),
+            TensorLayout::fromPaddedShape(
+                input_tensor.get_dtype(),
+                PageConfig(input_tensor.get_layout()),
+                output_mem_config,
+                input_tensor.get_logical_shape(),
+                input_tensor.get_padded_shape())),
+        input_tensor.device());
 
     // get_parallelization_strategy
     bool move_within_same_mem_space = input_mem_config.buffer_type == output_mem_config.buffer_type;
@@ -70,7 +72,7 @@ static inline Tensor move(uint8_t queue_id, const Tensor& input_tensor, const st
 
     // Input and output addresses won't overlap if they are in different memory substrates
     bool non_overlap = not move_within_same_mem_space;
-    const auto num_banks = input_tensor.device()->num_banks(output_tensor.buffer()->buffer_type());
+    const auto num_banks = input_tensor.device()->allocator()->get_num_banks(output_tensor.buffer()->buffer_type());
     uint32_t size_per_bank = tt::tt_metal::detail::SizeBytesPerBank(
         output_tensor.buffer()->size(),
         output_tensor.buffer()->page_size(),
@@ -101,7 +103,7 @@ static inline Tensor move(uint8_t queue_id, const Tensor& input_tensor, const st
     }
 
     bool fits_in_cb =
-        (output_tensor.device()->get_base_allocator_addr(HalMemType::L1) + size_per_l1_bank) <=
+        (output_tensor.device()->allocator()->get_base_allocator_addr(HalMemType::L1) + size_per_l1_bank) <=
         (output_mem_config.buffer_type == tt::tt_metal::BufferType::L1 ? output_tensor.buffer()->address()
                                                                        : output_tensor.device()->l1_size_per_core());
 
@@ -148,7 +150,6 @@ static inline Tensor move_sharded(
             auto shard_spec = input_tensor.shard_spec().value();
             auto shard_shape = shard_spec.shape;
             auto shard_grid = shard_spec.grid;
-            auto input_shape = input_tensor.get_legacy_shape();
             auto input_dtype = input_tensor.get_dtype();
             auto input_layout = input_tensor.get_layout();
 
@@ -156,8 +157,16 @@ static inline Tensor move_sharded(
             // log_debug(LogOp, "OUTPUT SHARD SPEC: {}", out_shard_spec);
             auto shard_mem_config = output_mem_config;
             shard_mem_config.shard_spec = shard_spec;
-            auto output_tensor =
-                create_device_tensor(input_shape, input_dtype, input_layout, input_tensor.device(), shard_mem_config);
+            auto output_tensor = create_device_tensor(
+                TensorSpec(
+                    input_tensor.get_logical_shape(),
+                    TensorLayout::fromPaddedShape(
+                        input_dtype,
+                        PageConfig(input_layout),
+                        shard_mem_config,
+                        input_tensor.get_logical_shape(),
+                        input_tensor.get_padded_shape())),
+                input_tensor.device());
             if (input_tensor.buffer()->address() == output_tensor.buffer()->address()) {
                 tt::log_debug(
                     tt::LogOp,

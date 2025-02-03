@@ -10,20 +10,20 @@
 
 namespace ttnn::experimental::xtensor {
 
-// Returns the shape of the xtensor as `ttnn::SimpleShape`.
+// Returns the shape of the xtensor as `ttnn::Shape`.
 template <typename E>
-ttnn::SimpleShape get_shape_from_xarray(const E& xarr) {
+ttnn::Shape get_shape_from_xarray(const E& xarr) {
     ttnn::SmallVector<uint32_t> shape_dims;
     for (size_t i = 0; i < xarr.shape().size(); ++i) {
         shape_dims.push_back(xarr.shape()[i]);
     }
-    return ttnn::SimpleShape(shape_dims);
+    return ttnn::Shape(shape_dims);
 }
 
 // Converts a span to an xtensor view.
 // IMPORTANT: the lifetime of the returned xtensor view is tied to the lifetime of the underlying buffer.
 template <typename T>
-xt::xarray<T> span_to_xtensor_view(tt::stl::Span<const T> buffer, const ttnn::SimpleShape& shape) {
+xt::xarray<T> span_to_xtensor_view(tt::stl::Span<const T> buffer, const ttnn::Shape& shape) {
     std::vector<size_t> shape_vec(shape.cbegin(), shape.cend());
     return xt::adapt(buffer.data(), buffer.size(), xt::no_ownership(), shape_vec);
 }
@@ -31,7 +31,7 @@ xt::xarray<T> span_to_xtensor_view(tt::stl::Span<const T> buffer, const ttnn::Si
 // Converts a span to an xtensor view.
 // IMPORTANT: the lifetime of the returned xtensor view is tied to the lifetime of the underlying buffer.
 template <typename T>
-xt::xarray<T> span_to_xtensor_view(std::span<T> buffer, const ttnn::SimpleShape& shape) {
+xt::xarray<T> span_to_xtensor_view(std::span<T> buffer, const ttnn::Shape& shape) {
     std::vector<size_t> shape_vec(shape.cbegin(), shape.cend());
     return xt::adapt(buffer.data(), buffer.size(), xt::no_ownership(), shape_vec);
 }
@@ -59,7 +59,7 @@ tt::tt_metal::Tensor from_xtensor(const xt::xarray<T>& buffer, const TensorSpec&
 template <typename T>
 xt::xarray<T> to_xtensor(const tt::tt_metal::Tensor& tensor) {
     auto vec = tensor.to_vector<T>();
-    auto shape = tensor.get_shape().logical_shape();
+    auto shape = tensor.get_logical_shape();
     return xt::xarray<T>(span_to_xtensor_view(tt::stl::Span<const T>(vec.data(), vec.size()), shape));
 }
 

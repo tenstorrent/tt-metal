@@ -4,11 +4,18 @@
 
 #include "generic_pools.hpp"
 
-#include "impl/buffers/buffer_constants.hpp"
+#include <tt-metalium/buffer_constants.hpp>
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
+<<<<<<< HEAD
+=======
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/math.hpp>
+
+#include <limits>
+>>>>>>> f7d847d8891c78cd3c532513ec1a81bb9398f64a
 
 namespace ttnn {
 namespace operations::pool {
@@ -26,14 +33,16 @@ Tensor Pool2DOp<pool_type>::invoke(
     std::array<uint32_t, 2> padding,
     std::array<uint32_t, 2> dilation,
     const std::optional<const MemoryConfig>& memory_config,
-    const std::optional<const TensorMemoryLayout> applied_shard_scheme) {
+    const std::optional<const TensorMemoryLayout> applied_shard_scheme,
+    bool ceil_mode) {
     sliding_window::SlidingWindowConfig sliding_window_config{
             .batch_size = batch_size,
             .input_hw = {input_h, input_w},
             .window_hw = {kernel_size.at(0), kernel_size.at(1)},
             .stride_hw = {stride.at(0), stride.at(1)},
             .pad_hw = {padding.at(0), padding.at(1)},
-            .dilation_hw = {dilation.at(0), dilation.at(1)}
+            .dilation_hw = {dilation.at(0), dilation.at(1)},
+            .ceil_mode = ceil_mode,
     };
     auto output_shape = sliding_window_config.get_output_shape();   // last dim/width is 0
     auto input_tensor_sharded = input_tensor;
@@ -70,7 +79,7 @@ Tensor Pool2DOp<pool_type>::invoke(
                                             false);
         num_cores_nhw = conv::get_num_cores_nhw_from_parallel_config(parallel_config);
         num_cores_c = conv::get_num_cores_channels_from_parallel_config(parallel_config);
-        auto sharded_mem_config = conv::create_sharded_memory_config_from_parallel_config(input_tensor_sharded.shape(), parallel_config, is_in_tiled ? tt::constants::TILE_HEIGHT : 1);
+        auto sharded_mem_config = conv::create_sharded_memory_config_from_parallel_config(input_tensor_sharded.get_padded_shape(), parallel_config, is_in_tiled ? tt::constants::TILE_HEIGHT : 1);
         input_tensor_sharded = ttnn::to_memory_config(input_tensor_sharded, sharded_mem_config, std::nullopt); // this converts interleaved to sharded
         out_memory_config = input_tensor_sharded.memory_config();
     } else {
@@ -94,7 +103,7 @@ Tensor Pool2DOp<pool_type>::invoke(
     uint32_t output_nhw_padded = tt::round_up(output_nhw, num_cores_nhw * (is_out_tiled ? tt::constants::TILE_HEIGHT : 1));
     uint32_t output_shard_height_padded = output_nhw_padded / num_cores_nhw;
     log_debug(tt::LogOp, "output_nhw: {}, output_nhw_padded: {}, output_shard_height_padded: {}, output_shard_width_padded: {}", output_nhw, output_nhw_padded, output_shard_height_padded, output_shard_width_padded);
-    out_memory_config.shard_spec = ShardSpec{shard_spec.grid, {output_shard_height_padded, output_shard_width_padded}, ShardOrientation::ROW_MAJOR, false};
+    out_memory_config.shard_spec = ShardSpec{shard_spec.grid, {output_shard_height_padded, output_shard_width_padded}, ShardOrientation::ROW_MAJOR};
 
     sliding_window_config = sliding_window::SlidingWindowConfig{
             .batch_size = batch_size,
@@ -106,7 +115,8 @@ Tensor Pool2DOp<pool_type>::invoke(
             .num_cores_nhw = num_cores_nhw,
             .num_cores_c = num_cores_c,
             .core_range_set = parallel_config.grid,
-            .snap_to_tile = false
+            .snap_to_tile = false,
+            .ceil_mode = ceil_mode,
     };
 
     // Call the halo uop

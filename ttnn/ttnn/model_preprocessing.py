@@ -355,6 +355,14 @@ class Conv2dArgs(ModuleArgs):
         return super().__repr__()
 
 
+class ConvTranspose2dArgs(ModuleArgs):
+    __getattr__ = dict.__getitem__
+    __delattr__ = dict.__delitem__
+
+    def __repr__(self):
+        return super().__repr__()
+
+
 class MaxPool2dArgs(ModuleArgs):
     __getattr__ = dict.__getitem__
     __delattr__ = dict.__delitem__
@@ -388,6 +396,28 @@ def infer_ttnn_module_args(*, model, run_model, device):
                         kernel_size=operation.module.kernel_size,
                         stride=operation.module.stride,
                         padding=operation.module.padding,
+                        dilation=operation.module.dilation,
+                        groups=operation.module.groups,
+                        padding_mode=operation.module.padding_mode,
+                        batch_size=input_shape[0],
+                        input_height=input_shape[-2],
+                        input_width=input_shape[-1],
+                        math_fidelity=ttnn.MathFidelity.HiFi4,
+                        dtype=ttnn.bfloat16,
+                        weights_dtype=ttnn.bfloat16,
+                        use_1d_systolic_array=True,
+                        enable_auto_formatting=False,
+                        conv_blocking_and_parallelization_config_override={},
+                        device=device,
+                    )
+                elif isinstance(operation.module, torch.nn.ConvTranspose2d):
+                    ttnn_module_args[module_name] = ConvTranspose2dArgs(
+                        in_channels=operation.module.in_channels,
+                        out_channels=operation.module.out_channels,
+                        kernel_size=operation.module.kernel_size,
+                        stride=operation.module.stride,
+                        padding=operation.module.padding,
+                        output_padding=operation.module.output_padding,
                         dilation=operation.module.dilation,
                         groups=operation.module.groups,
                         padding_mode=operation.module.padding_mode,

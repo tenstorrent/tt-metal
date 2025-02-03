@@ -12,8 +12,8 @@ void IndexedFill::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(1);
     const auto& input_tensor_b = input_tensors.at(2);
     const auto& batch_ids = input_tensors.at(0);
-    auto input_tensor_a_shape = input_tensor_a.get_legacy_shape();
-    auto input_tensor_b_shape = input_tensor_b.get_legacy_shape();
+    auto input_tensor_a_shape = input_tensor_a.get_padded_shape();
+    auto input_tensor_b_shape = input_tensor_b.get_padded_shape();
     TT_FATAL(input_tensor_a.get_layout() == Layout::ROW_MAJOR, "Currently only supporting row major layout");
     TT_FATAL(input_tensor_b.get_layout() == input_tensor_a.get_layout(), "Inputs must be same layout");
     TT_FATAL(
@@ -21,7 +21,7 @@ void IndexedFill::validate(const std::vector<Tensor>& input_tensors) const {
             input_tensor_a_shape[3] == input_tensor_b_shape[3],
         "Dims except batch dim must be the same on inputs");
     TT_FATAL(
-        input_tensor_b_shape[0] == batch_ids.get_legacy_shape()[-1],
+        input_tensor_b_shape[0] == batch_ids.get_padded_shape()[-1],
         "Second input and batch ids must be same outer dim");
     TT_FATAL(batch_ids.get_layout() == Layout::ROW_MAJOR, "Batch IDs must be ROW MAJOR");
     TT_FATAL(this->dim == 0, "Currently only supporting batch dimension");
@@ -33,14 +33,11 @@ void IndexedFill::validate(const std::vector<Tensor>& input_tensors) const {
         "Index Fill does not currently support sharding");
 }
 
-std::vector<ttnn::SimpleShape> IndexedFill::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-    return {input_tensors.at(1).get_logical_shape()};
-}
-
-std::vector<Tensor> IndexedFill::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
+std::vector<ttnn::TensorSpec> IndexedFill::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(1);
-    return operation::generic_create_output_tensors(
-        *this, input_tensors, input_tensor.get_dtype(), input_tensor.get_layout(), this->output_mem_config);
+    return {TensorSpec(
+        input_tensor.get_logical_shape(),
+        TensorLayout(input_tensor.get_dtype(), PageConfig(input_tensor.get_layout()), output_mem_config))};
 }
 
 operation::ProgramWithCallbacks IndexedFill::create_program(

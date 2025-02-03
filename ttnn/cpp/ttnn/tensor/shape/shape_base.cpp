@@ -5,7 +5,7 @@
 #include "shape_base.hpp"
 #include <stdexcept>
 #include "fmt/color.h"
-#include "tt_metal/common/assert.hpp"
+#include <tt-metalium/assert.hpp>
 
 namespace tt::tt_metal {
 

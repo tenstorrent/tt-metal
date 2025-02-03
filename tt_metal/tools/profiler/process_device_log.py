@@ -314,40 +314,58 @@ def get_ops(timeseries):
 
     ops = []
 
+    ops.append({"timeseries": []})
     for opID in ordered_ops:
+        if opID == 0:
+            continue
         op = opsDict[opID]
-        ops.append({"timeseries": []})
-        coresOp = {}
+        opCores = {}
+
+        op.sort(key=lambda ts: ts[1])
+        for ts in op:
+            if len(ts) == 5:
+                timerID, tsValue, statData, risc, core = ts
+                opCores[core] = None
+
         for ts in op:
             timerID, *_ = ts
             if timerID["id"] == 0:
                 continue
+            opIsDone = False
             if len(ts) == 5:
                 timerID, tsValue, statData, risc, core = ts
-                if core in coresOp:
+                if opCores[core]:
                     if (risc == "BRISC" and timerID["zone_name"] == "BRISC-FW" and timerID["type"] == "ZONE_START") or (
                         risc == "ERISC" and timerID["zone_name"] == "ERISC-FW" and timerID["type"] == "ZONE_START"
                     ):
-                        assert len(coresOp[core]) == 2, "Unexpected FW end"
-                        ops.append({"timeseries": []})
-                        coresOp = {}
+                        assert False, "Unexpected FW start"
                     elif (risc == "BRISC" and timerID["zone_name"] == "BRISC-FW" and timerID["type"] == "ZONE_END") or (
                         risc == "ERISC" and timerID["zone_name"] == "ERISC-FW" and timerID["type"] == "ZONE_END"
                     ):
-                        assert len(coresOp[core]) == 1, "Unexpected FW end"
-                        coresOp[core] = (coresOp[core][0], timerID)
+                        assert len(opCores[core]) == 1, "Unexpected FW end"
+                        opCores[core] = (opCores[core][0], timerID)
+                        opIsDone = True
+                        for core, coreOp in opCores.items():
+                            if not coreOp or len(coreOp) != 2:
+                                opIsDone = False
+                                break
                 else:
                     if (risc == "BRISC" and timerID["zone_name"] == "BRISC-FW" and timerID["type"] == "ZONE_START") or (
                         risc == "ERISC" and timerID["zone_name"] == "ERISC-FW" and timerID["type"] == "ZONE_START"
                     ):
-                        coresOp[core] = (timerID,)
+                        opCores[core] = (timerID,)
             if len(ts) == 4:
                 timerID, tsValue, statData, risc = ts
                 if (risc == "BRISC" and timerID["zone_name"] == "BRISC-FW" and timerID["type"] == "ZONE_START") or (
                     risc == "ERISC" and timerID["zone_name"] == "ERISC-FW" and timerID["type"] == "ZONE_START"
                 ):
-                    ops.append({"timeseries": []})
+                    opIsDone = True
             ops[-1]["timeseries"].append(ts)
+            if opIsDone:
+                ops.append({"timeseries": []})
+                for core in opCores:
+                    opCores[core] = None
+    ops.pop()
     return ops
 
 

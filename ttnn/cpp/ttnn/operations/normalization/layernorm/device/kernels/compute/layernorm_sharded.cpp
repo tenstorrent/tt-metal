@@ -142,7 +142,7 @@ void MAIN {
 #ifndef RMSNORM
     // E[x],
     index_h_offset = 0;
-    reduce_init_delta<false>();
+    reduce_init_delta<false>(cb_in, cb_scaler, cb_ex_partial);
     cb_wait_front(cb_scaler, 1);
     cb_reserve_back(cb_ex_partial, block_h);
     for (uint32_t i = 0; i < block_h; i++) {
@@ -156,14 +156,14 @@ void MAIN {
         tile_regs_release();
         index_h_offset += block_w;
     }
-    reduce_revert_delta();
+    reduce_revert_delta(cb_ex_partial);
     cb_push_back(cb_ex_partial, block_h);
 
     reconfig_data_format_srca(cb_in, cb_ex_external);
 
     // global reduce, cb_ex <-- cb_ex_external, cb_ex_partial
     if constexpr (is_allgather_worker) {
-        reduce_init_delta<false>();
+        reduce_init_delta<false>(cb_ex_external, cb_scaler_global, cb_ex);
         cb_reserve_back(cb_ex, num_tiles_per_allgather_worker);
 
         for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
@@ -183,7 +183,7 @@ void MAIN {
             pack_tile(dst0, cb_ex);
             tile_regs_release();
         }
-        reduce_revert_delta();
+        reduce_revert_delta(cb_ex);
         cb_push_back(cb_ex, num_tiles_per_allgather_worker);
         cb_wait_front(cb_ex, num_tiles_per_allgather_worker);
     }
@@ -194,7 +194,7 @@ void MAIN {
     }
     index_h_offset = 0;
     reconfig_data_format_srca(cb_ex_external, cb_in);
-    sub_bcast_cols_init_short();
+    sub_bcast_cols_init_short(cb_in, cb_ex_global);
     cb_reserve_back(cb_xmm, num_tiles_per_block);
     for (uint32_t i = 0; i < block_h; i++) {
         index_subblock_w_offset = 0;
@@ -262,7 +262,7 @@ void MAIN {
     cb_wait_front(cb_scaler, 1);
 #endif
     cb_reserve_back(cb_ex_partial2, block_h);
-    reduce_init_delta<false>();
+    reduce_init_delta<false>(cb_xmm2, cb_scaler, cb_ex_partial2);
     index_h_offset = 0;
     for (uint32_t i = 0; i < block_h; i++) {
         tile_regs_acquire();
@@ -275,13 +275,13 @@ void MAIN {
         tile_regs_release();
         index_h_offset += block_w;
     }
-    reduce_revert_delta();
+    reduce_revert_delta(cb_ex_partial2);
     cb_pop_front(cb_xmm2, num_tiles_per_block);
     cb_push_back(cb_ex_partial2, block_h);
 
     // global reduce, cb_ex <-- cb_ex_external, cb_ex_partial
     if constexpr (is_allgather_worker) {
-        reduce_init_delta<false>();
+        reduce_init_delta<false>(cb_ex_external2, cb_scaler_global, cb_ex2);
         cb_reserve_back(cb_ex2, num_tiles_per_allgather_worker);
 
         for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
@@ -302,7 +302,7 @@ void MAIN {
             pack_tile(dst0, cb_ex2);
             tile_regs_release();
         }
-        reduce_revert_delta();
+        reduce_revert_delta(cb_ex2);
         cb_push_back(cb_ex2, num_tiles_per_allgather_worker);
 
         if (enable_sqrt) {
@@ -345,7 +345,7 @@ void MAIN {
         reconfig_data_format(cb_xmm, cb_ex_global);
     }
 #endif
-    mul_bcast_cols_init_short();
+    mul_bcast_cols_init_short(cb_xmm, cb_ex_global);
     index_h_offset = 0;
     cb_reserve_back(cb_im, num_tiles_per_block);
     for (uint32_t i = 0; i < block_h; i++) {
@@ -380,7 +380,7 @@ void MAIN {
         if constexpr (do_beta == 0) {
             pack_reconfig_data_format(cb_out);
         }
-        mul_bcast_rows_init_short();
+        mul_bcast_rows_init_short(cb_im, cb_gamma);
         cb_wait_front(cb_gamma, block_w);
         index_h_offset = 0;
         cb_reserve_back(cb_outgamma, num_tiles_per_block);
@@ -410,7 +410,7 @@ void MAIN {
     if constexpr (do_beta) {
         reconfig_data_format(cb_fusion, cb_beta);
         pack_reconfig_data_format(cb_out);
-        add_bcast_rows_init_short();
+        add_bcast_rows_init_short(cb_fusion, cb_beta);
         cb_wait_front(cb_beta, block_w);
         index_h_offset = 0;
         cb_reserve_back(cb_out, num_tiles_per_block);
