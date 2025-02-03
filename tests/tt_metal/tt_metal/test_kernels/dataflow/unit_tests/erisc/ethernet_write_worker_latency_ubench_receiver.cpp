@@ -2,33 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cstdint>
-#include <array>
-#include "eth_l1_address_map.h"
-#include "dataflow_api.h"
-#include "ethernet/dataflow_api.h"
-#include "debug/assert.h"
-#include "debug/dprint.h"
-
-// #define ENABLE_DEBUG 1
-
-struct eth_buffer_slot_sync_t {
-    volatile uint32_t bytes_sent;
-    volatile uint32_t receiver_ack;
-    volatile uint32_t src_id;
-
-    uint32_t reserved_2;
-};
-
-FORCE_INLINE void eth_setup_handshake(std::uint32_t handshake_register_address, bool is_sender) {
-    if (is_sender) {
-        eth_send_bytes(handshake_register_address, handshake_register_address, 16);
-        eth_wait_for_receiver_done();
-    } else {
-        eth_wait_for_bytes(16);
-        eth_receiver_channel_done(0);
-    }
-}
+#include "ethernet_write_worker_latency_ubench_common.hpp"
 
 static constexpr uint32_t NUM_BUFFER_SLOTS = get_compile_time_arg_val(0);
 static constexpr uint32_t MAX_NUM_TRANSACTION_ID =
@@ -38,12 +12,6 @@ static constexpr uint32_t worker_noc_y = get_compile_time_arg_val(2);
 static constexpr uint32_t worker_buffer_addr = get_compile_time_arg_val(3);
 static constexpr bool use_transaction_id = get_compile_time_arg_val(4) == 1;
 static constexpr uint32_t num_writes_skip_barrier = get_compile_time_arg_val(5);
-
-FORCE_INLINE void switch_context_if_debug() {
-#if ENABLE_DEBUG
-    internal_::risc_context_switch();
-#endif
-}
 
 FORCE_INLINE uint32_t advance_buffer_slot_ptr(uint32_t curr_ptr) { return (curr_ptr + 1) % NUM_BUFFER_SLOTS; }
 
