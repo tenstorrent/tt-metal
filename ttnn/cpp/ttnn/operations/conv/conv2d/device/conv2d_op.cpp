@@ -348,20 +348,24 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
         this->memory_config,
         has_bias,
         use_non_tile_height);
-    if (calc_CB_size != actual_cb_size) {
-        TT_FATAL(
-            actual_cb_size == calc_CB_size,
-            "Calculated CB size {} does not match with the actual CB size {}",
-            calc_CB_size,
-            actual_cb_size);
-    }
-    if (post_op_l1_stats != this->pre_op_l1_allocation_size_bytes + calc_output_size) {
-        TT_FATAL(
-            post_op_l1_stats == (this->pre_op_l1_allocation_size_bytes + calc_output_size),
-            "Mismatch!! L1 Allocation Pre Op =  {}, Post Op = {} Calculated Size = {}",
-            this->pre_op_l1_allocation_size_bytes,
-            post_op_l1_stats,
-            calc_output_size);
+    if (device->arch() != tt::ARCH::BLACKHOLE) {
+        // FIXME: This L1 calculation is not accurate for Blackhole due to different alignment.
+        // https://github.com/tenstorrent/tt-metal/issues/17216
+        if (calc_CB_size != actual_cb_size) {
+            TT_FATAL(
+                actual_cb_size == calc_CB_size,
+                "Calculated CB size {} does not match with the actual CB size {}",
+                calc_CB_size,
+                actual_cb_size);
+        }
+        if (post_op_l1_stats != this->pre_op_l1_allocation_size_bytes + calc_output_size) {
+            TT_FATAL(
+                post_op_l1_stats == (this->pre_op_l1_allocation_size_bytes + calc_output_size),
+                "Mismatch!! L1 Allocation Pre Op =  {}, Post Op = {} Calculated Size = {}",
+                this->pre_op_l1_allocation_size_bytes,
+                post_op_l1_stats,
+                calc_output_size);
+        }
     }
     return program_with_cbs;
 }
