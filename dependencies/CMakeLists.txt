@@ -47,6 +47,7 @@ endif()
 # googletest
 ############################################################################################################################
 
+set(CMAKE_INSTALL_DEFAULT_COMPONENT_NAME gtest)
 CPMAddPackage(
     NAME googletest
     GITHUB_REPOSITORY google/googletest
@@ -54,6 +55,7 @@ CPMAddPackage(
     VERSION 1.13.0
     OPTIONS
         "INSTALL_GTEST OFF"
+        "BUILD_SHARED_LIBS OFF"
 )
 
 if(googletest_ADDED)

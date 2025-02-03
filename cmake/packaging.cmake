@@ -43,4 +43,7 @@ cpack_add_component(umd-runtime GROUP metalium)
 cpack_add_component(dev GROUP metalium) # FIXME: delete this line when we bump UMD submodule
 cpack_add_component_group(metalium)
 
+cpack_add_component(gtest GROUP metalium-validation)
+cpack_add_component_group(metalium-validation)
+
 include(CPack)
