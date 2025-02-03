@@ -169,7 +169,7 @@ def test_Conv(device, input_tensor):
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
-@pytest.mark.parametrize("input_tensor", [(torch.rand((1, 1280, 20, 20)))], ids=["input_tensor1"])
+@pytest.mark.parametrize("input_tensor", [(torch.rand((1, 160, 160, 160)))], ids=["input_tensor1"])
 def test_C2f(device, input_tensor):
     disable_persistent_kernel_cache()
 
@@ -190,18 +190,18 @@ def test_C2f(device, input_tensor):
             device,
             ttnn_input,
             parameters,
-            "model.21",
+            "model.2",
             ttnn_input.shape[1],
             ttnn_input.shape[2],
             n=3,
-            shortcut=False,
+            shortcut=True,
             change_shard=True,
         )
         ttnn_model_output = ttnn.to_torch(ttnn_model_output)
         ttnn_model_output = ttnn_model_output.reshape((1, out_h, out_w, ttnn_model_output.shape[-1]))
         ttnn_model_output = ttnn_model_output.permute((0, 3, 1, 2))
 
-    submodule = torch_model.get_submodule("model.21")
+    submodule = torch_model.get_submodule("model.2")
 
     with torch.inference_mode():
         torch_model_output = submodule(input_tensor)
