@@ -32,36 +32,25 @@ void print_pkt_hdr_routing_fields(volatile tt::fabric::PacketHeader *const packe
 
 void print_pkt_header_noc_fields(volatile tt::fabric::PacketHeader *const packet_start) {
     switch (packet_start->noc_send_type) {
-        case tt::fabric::NocSendType::NOC_UNICAST: {
-            switch (packet_start->command_type) {
-                case tt::fabric::CommandType::WRITE: {
-                    DPRINT << "N_WR addr:"<<(uint32_t)packet_start->command_fields.unicast_write.address <<
-                        ", size:" << (uint32_t) packet_start->command_fields.unicast_write.size <<
-                        ", x:" << (uint32_t) packet_start->command_fields.unicast_write.noc_x <<
-                        ", y:" << (uint32_t) packet_start->command_fields.unicast_write.noc_y << "\n";
-                } break;
-                case tt::fabric::CommandType::ATOMIC_INC: {
-                    DPRINT << "N_WR addr:"<<(uint32_t)packet_start->command_fields.unicast_seminc.address <<
-                        ", val:" << (uint32_t) packet_start->command_fields.unicast_seminc.val <<
-                        ", x:" << (uint32_t) packet_start->command_fields.unicast_seminc.noc_x <<
-                        ", y:" << (uint32_t) packet_start->command_fields.unicast_seminc.noc_y << "\n";
+        case tt::fabric::NocSendType::NOC_UNICAST_WRITE: {
+                DPRINT << "N_WR addr:"<<(uint64_t)packet_start->command_fields.unicast_write.noc_address <<
+                    ", size:" << (uint32_t) packet_start->command_fields.unicast_write.size << "\n";
+        } break;
+        case tt::fabric::NocSendType::NOC_UNICAST_ATOMIC_INC: {
+            DPRINT << "N_WR addr:"<<(uint64_t)packet_start->command_fields.unicast_seminc.noc_address <<
+                ", val:" << (uint32_t) packet_start->command_fields.unicast_seminc.val << "\n";
 
-                } break;
-            }
-            break;
-        }
-        case tt::fabric::NocSendType::NOC_MULTICAST: {
-            ASSERT(false); // unimplemented
-            break;
-        }
-    }
+        } break;
+        default:
+        ASSERT(false); // unimplemented
+        break;
+    };
 }
 
 void print_pkt_header(volatile tt::fabric::PacketHeader *const packet_start) {
     auto const& header = *packet_start;
-    DPRINT << "PKT: cmd_t:" << (uint32_t) packet_start->command_type <<
+    DPRINT << "PKT: nsnd_t:" << (uint32_t) packet_start->noc_send_type <<
         ", csnd_t:" << (uint32_t) packet_start->chip_send_type <<
-        ", nsnd_t:" << (uint32_t) packet_start->noc_send_type <<
         ", src_chip:" << (uint32_t) packet_start->reserved2 << "\n";
     print_pkt_hdr_routing_fields(packet_start);
     print_pkt_header_noc_fields(packet_start);
@@ -73,73 +62,40 @@ void execute_chip_unicast_to_local_chip(volatile tt::fabric::PacketHeader *const
     auto const& header = *packet_start;
     uint32_t payload_start_address = reinterpret_cast<size_t>(packet_start) + sizeof(tt::fabric::PacketHeader);
 
-    tt::fabric::CommandType command_type = packet_start->command_type;
     tt::fabric::NocSendType noc_send_type = packet_start->noc_send_type;
-    switch (command_type) {
-        case tt::fabric::CommandType::WRITE: {
-            switch (noc_send_type) {
-                case tt::fabric::NocSendType::NOC_UNICAST: {
-                    DPRINT << "C_UNI to y|x" << (uint32_t)((header.command_fields.unicast_write.noc_y << 16) | header.command_fields.unicast_write.noc_x) <<
-                        ", " << (uint32_t)header.command_fields.unicast_write.address << "\n";
-                    auto const dest_address = get_noc_addr(
-                        header.command_fields.unicast_write.noc_x,
-                        header.command_fields.unicast_write.noc_y,
-                        header.command_fields.unicast_write.address);
-                    auto const size = header.command_fields.unicast_write.size - sizeof(tt::fabric::PacketHeader);
-                    noc_async_write_one_packet_with_trid(payload_start_address, dest_address, size, transaction_id);
+    switch (noc_send_type) {
+        case tt::fabric::NocSendType::NOC_UNICAST_WRITE: {
+            auto const dest_address = header.command_fields.unicast_write.noc_address;
+            auto const size = header.command_fields.unicast_write.size - sizeof(tt::fabric::PacketHeader);
+            noc_async_write_one_packet_with_trid(payload_start_address, dest_address, size, transaction_id);
 
-                }break;
-                case tt::fabric::NocSendType::NOC_MULTICAST: {
-                    // TODO: confirm if we need to adjust dest core count if we span eth or dram cores
-                    auto const mcast_dest_address = get_noc_multicast_addr(
-                        header.command_fields.mcast_write.noc_x_start,
-                        header.command_fields.mcast_write.noc_y_start,
-                        header.command_fields.mcast_write.noc_x_start + header.command_fields.mcast_write.mcast_rect_size_x,
-                        header.command_fields.mcast_write.noc_y_start + header.command_fields.mcast_write.mcast_rect_size_y,
-                        header.command_fields.mcast_write.address);
-                    auto const num_dests = header.command_fields.mcast_write.mcast_rect_size_x * header.command_fields.mcast_write.mcast_rect_size_y;
-                    auto const size = header.command_fields.mcast_write.size - sizeof(tt::fabric::PacketHeader);
-                    noc_async_write_one_packet_with_trid(payload_start_address, mcast_dest_address, size, num_dests, transaction_id);
+        } break;
 
-                }break;
-                default: {
-                    ASSERT(false);
-                }
-            }
-            break;
-        }
-        case tt::fabric::CommandType::ATOMIC_INC: {
-            DPRINT << "C_AT_INC\n";
-            switch (noc_send_type) {
-                case tt::fabric::NocSendType::NOC_UNICAST: {
-                    auto const dest_address = get_noc_addr(
-                        header.command_fields.unicast_seminc.noc_x,
-                        header.command_fields.unicast_seminc.noc_y,
-                        header.command_fields.unicast_seminc.address);
-                    auto const increment = header.command_fields.unicast_seminc.val;
-                    DPRINT << "\tx=" << (uint32_t)header.command_fields.unicast_seminc.noc_x <<
-                        ", y=" << (uint32_t)header.command_fields.unicast_seminc.noc_y <<
-                        ", addr=" << (uint32_t)header.command_fields.unicast_seminc.address <<
-                        ", inc=" << (uint32_t)increment << "\n";
-                    noc_semaphore_inc(dest_address, increment);
+        case tt::fabric::NocSendType::NOC_MULTICAST_WRITE: {
+            // TODO: confirm if we need to adjust dest core count if we span eth or dram cores
+            auto const mcast_dest_address = get_noc_multicast_addr(
+                header.command_fields.mcast_write.noc_x_start,
+                header.command_fields.mcast_write.noc_y_start,
+                header.command_fields.mcast_write.noc_x_start + header.command_fields.mcast_write.mcast_rect_size_x,
+                header.command_fields.mcast_write.noc_y_start + header.command_fields.mcast_write.mcast_rect_size_y,
+                header.command_fields.mcast_write.address);
+            auto const num_dests = header.command_fields.mcast_write.mcast_rect_size_x * header.command_fields.mcast_write.mcast_rect_size_y;
+            auto const size = header.command_fields.mcast_write.size - sizeof(tt::fabric::PacketHeader);
+            noc_async_write_one_packet_with_trid(payload_start_address, mcast_dest_address, size, num_dests, transaction_id);
 
-                }break;
-                case tt::fabric::NocSendType::NOC_MULTICAST: {
-                    ASSERT(false);
-                    // noc_async_write(payload_start_address, header.dest_address, header.size_bytes);
+        } break;
 
-                }break;
-                default: {
-                    ASSERT(false);
-                }
-            }
-            break;
+        case tt::fabric::NocSendType::NOC_UNICAST_ATOMIC_INC: {
+            uint64_t const dest_address = header.command_fields.unicast_seminc.noc_address;
+            auto const increment = header.command_fields.unicast_seminc.val;
+            noc_semaphore_inc(dest_address, increment);
 
-        };
+        } break;
 
+        case tt::fabric::NocSendType::NOC_MULTICAST_ATOMIC_INC:
         default: {
             ASSERT(false);
-        }
+        } break;
     };
 }
 

@@ -150,14 +150,13 @@ void kernel_main() {
     }
 
     // 2. mcast output ready semaphore
+    uint64_t out_ready_sem_noc_addr_in_pkt =
+        safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr, 0);
     auto* pkt_hdr = reinterpret_cast<tt::fabric::PacketHeader*>(packet_header_buffer_seminc);
-    pkt_hdr->to_atomic_inc();
     pkt_hdr->to_noc_unicast_atomic_inc(tt::fabric::NocUnicastAtomicIncCommandHeader{
-        out_ready_sem_bank_addr,
+        out_ready_sem_noc_addr_in_pkt,
         static_cast<uint16_t>(1),  // increment 1
-        32,
-        static_cast<uint8_t>(out_ready_sem_noc0_x),
-        static_cast<uint8_t>(out_ready_sem_noc0_y)});
+        32});
     // Write the mcast packet (forward)
     if (fabric_connection.has_forward_connection()) {
         fabric_connection.get_forward_connection().wait_for_empty_write_slot();
