@@ -40,7 +40,7 @@ Note the current compatability matrix:
 > immediately start using the API, you may install just the wheel or get the release Docker container.
 
 
-1. Clone the repo 
+1. Clone the repo
 
 ```sh
 git clone https://github.com/tenstorrent/tt-metal.git --recurse-submodules
@@ -71,7 +71,7 @@ export TT_METAL_HOME=$(pwd)
 export PYTHONPATH=$(pwd)
 ./build_metal.sh
 
-# See NOTE below on Python Environments for alternative to OOTB venv 
+# See NOTE below on Python Environments for alternative to OOTB venv
 ./create_venv.sh
 source python_env/bin/activate
 ```
@@ -105,8 +105,7 @@ to install with `pip`:
 ```sh
 pip install <wheel_file.whl>
 ```
-
-1. (For models users only) Set up environment for models
+#### (For models users only) Set up environment for models
 
 If you are going to try our pre-built models in `models/`, then you must execute
 the following to:
@@ -136,7 +135,7 @@ When inside of the container,
 python3 -c "import ttnn"
 ```
 
-2. Start coding
+## Start coding
 
 To verify your installation, try the executing an example:
 
@@ -148,7 +147,7 @@ You are all set! Visit the [TT-NN Basic examples page](https://docs.tenstorrent.
 
 ---
 
-### Step 5. (Optional) Software dependencies for codebase contributions
+### Step 4. (Optional) Software dependencies for codebase contributions
 
 Please follow the next additional steps if you want to contribute to the codebase.
 
