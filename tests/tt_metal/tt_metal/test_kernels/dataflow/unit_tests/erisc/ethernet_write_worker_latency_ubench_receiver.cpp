@@ -26,16 +26,7 @@ FORCE_INLINE bool write_worker_done(uint32_t trid) {
 FORCE_INLINE void ack_complete(volatile eth_buffer_slot_sync_t* buffer_slot_sync_addr) {
     buffer_slot_sync_addr->bytes_sent = 0;
 
-    // wait for txq to be ready, otherwise we'll
-    // hit a context switch in the send command
-    while (eth_txq_is_busy()) {
-        switch_context_if_debug();
-    }
-#if ENABLE_DEBUG
-    eth_send_bytes_over_channel_payload_only(
-#else
     eth_send_bytes_over_channel_payload_only_unsafe(
-#endif
         reinterpret_cast<uint32_t>(buffer_slot_sync_addr),
         reinterpret_cast<uint32_t>(buffer_slot_sync_addr),
         sizeof(eth_buffer_slot_sync_t),
@@ -83,7 +74,7 @@ FORCE_INLINE void check_write_worker_done_and_send_ack(
     bool buffer_not_empty = read_ptr != write_ptr;
     uint32_t curr_trid = get_buffer_slot_trid(read_ptr);
 
-    if (buffer_not_empty && write_worker_done(curr_trid)) {
+    if (buffer_not_empty && write_worker_done(curr_trid) && !eth_txq_is_busy()) {
         ack_complete(buffer_slot_sync_addrs[read_ptr]);
 
         read_ptr = advance_buffer_slot_ptr(read_ptr);

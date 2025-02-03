@@ -15,11 +15,7 @@ FORCE_INLINE void write_receiver(
     uint32_t full_payload_size_eth_words) {
     buffer_slot_sync_addr->bytes_sent = 1;
 
-#if ENABLE_DEBUG
-    eth_send_bytes_over_channel_payload_only(
-#else
     eth_send_bytes_over_channel_payload_only_unsafe(
-#endif
         buffer_slot_addr, buffer_slot_addr, full_payload_size, full_payload_size, full_payload_size_eth_words);
 }
 

@@ -83,7 +83,7 @@ def profile_results(sample_size, sample_count, channel_count):
 @pytest.mark.parametrize("channel_count", [16])
 @pytest.mark.parametrize(
     "sample_size_expected_latency",
-    [(16, 85.2), (128, 85.2), (256, 85.3), (512, 85.4), (1024, 87.2), (2048, 172.9), (4096, 339.9), (8192, 678.4)],
+    [(16, 86.2), (128, 86.2), (256, 86.4), (512, 86.5), (1024, 87.2), (2048, 172.9), (4096, 339.9), (8192, 678.4)],
 )
 def test_erisc_write_worker_latency(sample_count, sample_size_expected_latency, channel_count):
     os.system(f"rm -rf {os.environ['TT_METAL_HOME']}/generated/profiler/.logs/profile_log_device.csv")
