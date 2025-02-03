@@ -15,11 +15,14 @@
 */
 struct metal_SocDescriptor : public tt_SocDescriptor {
 public:
-    std::vector<CoreCoord> preferred_worker_dram_core;  // per channel preferred worker endpoint
-    std::vector<CoreCoord> preferred_eth_dram_core;     // per channel preferred eth endpoint
-    std::vector<size_t> dram_address_offsets;           // starting address offset
+    std::vector<size_t> dram_view_channels;
+    std::vector<CoreCoord> dram_view_worker_cores;  // per channel preferred worker endpoint
+    std::vector<CoreCoord> dram_view_eth_cores;     // per dram view preferred eth endpoint
+    std::vector<size_t> dram_view_address_offsets;  // starting address offset
+
     std::vector<CoreCoord> logical_ethernet_cores;
     uint64_t dram_core_size;
+    uint64_t dram_view_size;
 
     // in tt_SocDescriptor worker_log_to_routing_x and worker_log_to_routing_y map logical coordinates to NOC virtual
     // coordinates UMD accepts NOC virtual coordinates but Metal needs NOC physical coordinates to ensure a harvested
@@ -35,10 +38,12 @@ public:
     metal_SocDescriptor(const tt_SocDescriptor& other, uint32_t harvesting_mask, const BoardType& board_type);
     metal_SocDescriptor() = default;
 
-    CoreCoord get_preferred_worker_core_for_dram_channel(int dram_chan) const;
-    CoreCoord get_preferred_eth_core_for_dram_channel(int dram_chan) const;
-    CoreCoord get_logical_core_for_dram_channel(int dram_chan) const;
-    size_t get_address_offset(int dram_chan) const;
+    CoreCoord get_preferred_worker_core_for_dram_view(int dram_view) const;
+    CoreCoord get_preferred_eth_core_for_dram_view(int dram_view) const;
+    CoreCoord get_logical_core_for_dram_view(int dram_view) const;
+    size_t get_address_offset(int dram_view) const;
+    size_t get_channel_for_dram_view(int dram_view) const;
+    size_t get_num_dram_views() const;
 
     bool is_harvested_core(const CoreCoord& core) const;
     const std::vector<CoreCoord>& get_pcie_cores() const;

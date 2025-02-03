@@ -186,7 +186,7 @@ inline __attribute__((always_inline)) void configure_l1_data_cache() {
 #if defined(DISABLE_L1_DATA_CACHE)
     // Disables Blackhole's L1 cache. Grayskull and Wormhole do not have L1 cache
     // L1 cache can be disabled by setting `TT_METAL_DISABLE_L1_DATA_CACHE_RISCVS` env var
-    // export TT_METAL_DISABLE_L1_DATA_CACHE_RISCVS=<BR,NC,TR,ER>
+    // export TT_METAL_DISABLE_L1_DATA_CACHE_RISCVS=<BR,NC,TR*,ER*>
     asm(R"ASM(
         li t1, 0x8
         csrrs zero, 0x7c0, t1

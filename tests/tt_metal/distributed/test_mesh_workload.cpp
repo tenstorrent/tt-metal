@@ -360,7 +360,6 @@ std::vector<std::shared_ptr<Program>> create_eltwise_bin_programs(
                 auto src1_dram_buffer =
                     MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device.get());
                 src1_bufs.push_back(src1_dram_buffer);
-
                 auto dst_dram_buffer =
                     MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device.get());
                 output_bufs.push_back(dst_dram_buffer);
@@ -508,123 +507,23 @@ void validate_sems(
 
 using MeshWorkloadTest = T3000MultiDeviceFixture;
 
-TEST_F(MeshWorkloadTest, MeshWorkloadOnActiveEth) {
-    uint32_t num_workloads = 10;
-    auto random_seed = 0;
-    uint32_t num_iters = 500;
-    uint32_t seed = tt::parse_env("TT_METAL_SEED", random_seed);
-    std::vector<std::shared_ptr<MeshWorkload>> workloads = {};
-    log_info("Create {} workloads", num_workloads);
-    for (int i = 0; i < num_workloads; i++) {
-        std::shared_ptr<MeshWorkload> workload = std::make_shared<MeshWorkload>();
-        for (std::size_t logical_x = 0; logical_x < mesh_device_->num_cols(); logical_x++) {
-            for (std::size_t logical_y = 0; logical_y < mesh_device_->num_rows(); logical_y++) {
-                IDevice* device = mesh_device_->get_device(logical_y, logical_x);
-                auto programs = create_random_programs(
-                    1, mesh_device_->compute_with_storage_grid_size(), seed, device->get_active_ethernet_cores(true));
-                LogicalDeviceRange devices = {{logical_x, logical_y}, {logical_x, logical_y}};
-                AddProgramToMeshWorkload(*workload, *programs[0], devices);
-            }
-        }
-        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
-        workloads.push_back(workload);
-    }
-    for (int i = 0; i < num_iters; i++) {
-        if (i % 100 == 0) {
-            log_info(tt::LogTest, "Run MeshWorkloads for iteration {}", i);
-        }
-        for (auto& workload : workloads) {
-            EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
+TEST_F(MeshWorkloadTest, MeshWorkloadOnActiveEthAsserts) {
+    // A MeshWorkload cannot be run on ethernet core - Runtime should assert if the
+    // user tries this. Verify this functionality here.
+    std::shared_ptr<MeshWorkload> workload = std::make_shared<MeshWorkload>();
+    uint32_t x_end = mesh_device_->num_cols();
+    uint32_t y_end = mesh_device_->num_rows();
+    uint32_t seed = 0;
+    for (std::size_t logical_x = 0; logical_x < x_end; logical_x++) {
+        for (std::size_t logical_y = 0; logical_y < y_end; logical_y++) {
+            IDevice* device = mesh_device_->get_device(logical_y, logical_x);
+            auto programs = create_random_programs(
+                1, mesh_device_->compute_with_storage_grid_size(), seed, device->get_active_ethernet_cores(true));
+            LogicalDeviceRange devices = {{logical_x, logical_y}, {logical_x + 1, logical_y + 1}};
+            AddProgramToMeshWorkload(*workload, *programs[0], devices);
         }
     }
-    Finish(mesh_device_->mesh_command_queue());
-}
-
-TEST_F(MeshWorkloadTest, MeshWorkloadMixedTensixEth) {
-    uint32_t num_workloads = 20;
-    auto random_seed = 0;
-    uint32_t num_iters = 30;
-    uint32_t seed = tt::parse_env("TT_METAL_SEED", random_seed);
-    // Setup rng to query if first program in Mesh runs on ethernet
-    // cores or not. This allows devices to alternate running program
-    // on ethernet across loops
-    std::random_device rd;
-    std::mt19937 gen(rd());
-    std::bernoulli_distribution gen_run_on_eth(0.5);
-
-    std::vector<std::shared_ptr<MeshWorkload>> workloads = {};
-    log_info("Create {} workloads", num_workloads);
-    for (int i = 0; i < num_workloads; i++) {
-        bool run_on_eth = gen_run_on_eth(gen);
-        std::shared_ptr<MeshWorkload> workload = std::make_shared<MeshWorkload>();
-        for (std::size_t logical_x = 0; logical_x < mesh_device_->num_cols(); logical_x++) {
-            for (std::size_t logical_y = 0; logical_y < mesh_device_->num_rows(); logical_y++) {
-                IDevice* device = mesh_device_->get_device(logical_y, logical_x);
-                LogicalDeviceRange devices = {{logical_x, logical_y}, {logical_x, logical_y}};
-                if (run_on_eth) {
-                    auto programs = create_random_programs(
-                        1,
-                        mesh_device_->compute_with_storage_grid_size(),
-                        seed,
-                        device->get_active_ethernet_cores(true));
-                    AddProgramToMeshWorkload(*workload, *programs[0], devices);
-                } else {
-                    auto programs = create_random_programs(1, mesh_device_->compute_with_storage_grid_size(), seed);
-                    AddProgramToMeshWorkload(*workload, *programs[0], devices);
-                }
-                run_on_eth = !run_on_eth;
-            }
-        }
-        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
-        workloads.push_back(workload);
-    }
-
-    for (int i = 0; i < num_iters; i++) {
-        if (i % 10 == 0) {
-            log_info(tt::LogTest, "Run MeshWorkloads for iteration {}", i);
-        }
-        for (auto& workload : workloads) {
-            EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
-        }
-    }
-    Finish(mesh_device_->mesh_command_queue());
-}
-
-TEST_F(MeshWorkloadTest, MeshWorkloadOnActiveEthRandomGridSize) {
-    uint32_t num_workloads = 30;
-    auto random_seed = 0;
-    uint32_t num_iters = 500;
-    uint32_t seed = tt::parse_env("TT_METAL_SEED", random_seed);
-    std::vector<std::shared_ptr<MeshWorkload>> workloads = {};
-    std::mt19937 rng(seed);
-    std::uniform_int_distribution<int> gen_x(1, 4);
-    std::uniform_int_distribution<int> gen_y(1, 2);
-    log_info("Create {} randomized workloads", num_workloads);
-    for (int i = 0; i < num_workloads; i++) {
-        std::shared_ptr<MeshWorkload> workload = std::make_shared<MeshWorkload>();
-        uint32_t x_end = gen_x(rng);
-        uint32_t y_end = gen_y(rng);
-        for (std::size_t logical_x = 0; logical_x < x_end; logical_x++) {
-            for (std::size_t logical_y = 0; logical_y < y_end; logical_y++) {
-                IDevice* device = mesh_device_->get_device(logical_y, logical_x);
-                auto programs = create_random_programs(
-                    1, mesh_device_->compute_with_storage_grid_size(), seed, device->get_active_ethernet_cores(true));
-                LogicalDeviceRange devices = {{logical_x, logical_y}, {logical_x, logical_y}};
-                AddProgramToMeshWorkload(*workload, *programs[0], devices);
-            }
-        }
-        EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
-        workloads.push_back(workload);
-    }
-    for (int i = 0; i < num_iters; i++) {
-        if (i % 100 == 0) {
-            log_info(tt::LogTest, "Run MeshWorkloads for iteration {}", i);
-        }
-        for (auto& workload : workloads) {
-            EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false);
-        }
-    }
-    Finish(mesh_device_->mesh_command_queue());
+    EXPECT_THROW(EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false), std::exception);
 }
 
 TEST_F(MeshWorkloadTest, SimultaneousMeshWorkloads) {

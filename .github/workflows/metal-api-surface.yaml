@@ -1,0 +1,41 @@
+name: Compute Public API Surface
+
+on:
+  workflow_dispatch:
+  workflow_call:
+  push:
+    branches: ["main"]
+
+jobs:
+  compute_and_notify:
+    runs-on: ubuntu-latest
+    steps:
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.x'  # Ensures latest stable Python 3
+
+      - name: Install dependencies
+        run: python3 -m pip install tree-sitter tree-sitter-cpp
+
+      - name: Download script
+        run: |
+          wget -O compute_public_api_surface.py https://gist.githubusercontent.com/ayerofieiev-tt/ea5fe814bd6741b08708883669ed022d/raw/9e8b193cf26071877a6d663fb89b0223e709406f/compute_public_api_surface.py
+
+      - name: Run script
+        id: compute_api
+        run: |
+          python3 compute_public_api_surface.py > api_surface.json
+          cat api_surface.json
+
+      - name: Send Slack message to a channel
+        uses: slackapi/slack-github-action@v1.26.0
+        with:
+          payload-file-path: "./api_surface.json"
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          SLACK_CHANNEL_ID: C08BAGE4410
