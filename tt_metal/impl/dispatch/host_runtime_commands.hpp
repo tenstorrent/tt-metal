@@ -96,61 +96,6 @@ public:
     constexpr bool has_side_effects() { return true; }
 };
 
-class EnqueueRecordEventCommand : public Command {
-private:
-    uint32_t command_queue_id;
-    IDevice* device;
-    NOC noc_index;
-    SystemMemoryManager& manager;
-    uint32_t event_id;
-    tt::stl::Span<const uint32_t> expected_num_workers_completed;
-    tt::stl::Span<const SubDeviceId> sub_device_ids;
-    bool clear_count;
-    bool write_barrier;
-
-public:
-    EnqueueRecordEventCommand(
-        uint32_t command_queue_id,
-        IDevice* device,
-        NOC noc_index,
-        SystemMemoryManager& manager,
-        uint32_t event_id,
-        tt::stl::Span<const uint32_t> expected_num_workers_completed,
-        tt::stl::Span<const SubDeviceId> sub_device_ids,
-        bool clear_count = false,
-        bool write_barrier = true);
-
-    void process();
-
-    EnqueueCommandType type() { return EnqueueCommandType::ENQUEUE_RECORD_EVENT; }
-
-    constexpr bool has_side_effects() { return false; }
-};
-
-class EnqueueWaitForEventCommand : public Command {
-private:
-    uint32_t command_queue_id;
-    IDevice* device;
-    SystemMemoryManager& manager;
-    const Event& sync_event;
-    CoreType dispatch_core_type;
-    bool clear_count;
-
-public:
-    EnqueueWaitForEventCommand(
-        uint32_t command_queue_id,
-        IDevice* device,
-        SystemMemoryManager& manager,
-        const Event& sync_event,
-        bool clear_count = false);
-
-    void process();
-
-    EnqueueCommandType type() { return EnqueueCommandType::ENQUEUE_WAIT_FOR_EVENT; }
-
-    constexpr bool has_side_effects() { return false; }
-};
-
 class EnqueueTraceCommand : public Command {
 private:
     uint32_t command_queue_id;

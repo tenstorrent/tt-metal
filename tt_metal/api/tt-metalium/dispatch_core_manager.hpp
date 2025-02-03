@@ -143,6 +143,8 @@ class dispatch_core_manager {
 
     bool is_dispatcher_s_core_allocated(chip_id_t device_id, uint16_t channel, uint8_t cq_id);
 
+    bool is_dispatcher_d_core_allocated(chip_id_t device_id, uint16_t channel, uint8_t cq_id);
+
     /// @brief Gets the location of the kernel designated to relay fast dispatch commands to worker cores from a particular command queue
     /// @param device_id ID of the device that should be running the command
     /// @param channel assigned to the command queue where commands are enqueued
