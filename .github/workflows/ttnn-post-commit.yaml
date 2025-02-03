@@ -36,7 +36,7 @@ on:
         default: 45
 
 env:
-  NUM_GOUPS: "12"
+  NUM_GROUPS: "12"
 
 jobs:
   ttnn:
