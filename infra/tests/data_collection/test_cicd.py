@@ -145,3 +145,32 @@ def test_create_pipeline_json_for_run_github_timed_out_job(workflow_run_gh_envir
     for job in pipeline.jobs:
         if job.github_job_id == 30868260202:
             assert len(job.tests) > 0
+
+
+def test_create_pipeline_json_for_timeout_bad_testcase(workflow_run_gh_environment):
+    github_runner_environment = workflow_run_gh_environment
+    github_pipeline_json_filename = (
+        "tests/_data/data_collection/cicd/all_post_commit_timeout_bad_testcase_13077087562/workflow.json"
+    )
+    github_jobs_json_filename = (
+        "tests/_data/data_collection/cicd/all_post_commit_timeout_bad_testcase_13077087562/workflow_jobs.json"
+    )
+
+    workflow_outputs_dir = pathlib.Path(
+        "tests/_data/data_collection/cicd/all_post_commit_timeout_bad_testcase_13077087562/"
+    ).resolve()
+    assert workflow_outputs_dir.is_dir()
+    assert workflow_outputs_dir.exists()
+
+    pipeline = create_cicd_json_for_data_analysis(
+        workflow_outputs_dir,
+        github_runner_environment,
+        github_pipeline_json_filename,
+        github_jobs_json_filename,
+    )
+
+    assert pipeline.github_pipeline_id == 13077087562
+
+    for job in pipeline.jobs:
+        if job.github_job_id == 36492361640:
+            assert len(job.tests) > 0
