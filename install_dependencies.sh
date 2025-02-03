@@ -2,21 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (C) 2024 Tenstorrent, Inc. All rights reserved.
-#
-# This script is based on `xrtdeps.sh` from the Xilinx XRT project.
-# Original source: https://github.com/Xilinx/XRT/blob/master/src/runtime_src/tools/scripts/xrtdeps.sh
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
-#
-#     http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing, software
-# distributed under the License is distributed on an "AS IS" BASIS,
-# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-# See the License for the specific language governing permissions and
-# limitations under the License.
 
 set -e
 
@@ -193,7 +178,18 @@ install_llvm() {
     fi
 }
 
-# We don't really want to have this dependency
+# Install g++-12 if on Ubuntu 22.04
+install_gcc12() {
+    [[ "$VERSION" == "22.04" ]] || return
+    echo "Detected Ubuntu 22.04, installing g++-12..."
+    apt-get install -y --no-install-recommends g++-12 gcc-12
+    update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 12
+    update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 12
+    update-alternatives --set gcc /usr/bin/gcc-12
+    update-alternatives --set g++ /usr/bin/g++-12
+}
+
+# We don't really want to have hugepages dependency
 # This could be removed in the future
 
 configure_hugepages() {
@@ -213,36 +209,22 @@ install() {
 	case "$mode" in
             runtime)
                 prep_ubuntu_runtime
-                DEBIAN_FRONTEND="noninteractive" apt-get install -y --no-install-recommends "${PKG_LIST[@]}"
                 ;;
             build)
                 prep_ubuntu_build
                 install_llvm
-                if [[ "$VERSION" = "22.04" ]]; then
-	            echo "Detected Ubuntu 22.04, thus install g++-12"
-		    apt-get install -y --no-install-recommends g++-12 gcc-12 build-essential
-		    update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 12
-		    update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 12
-		    update-alternatives --set gcc /usr/bin/gcc-12
-		    update-alternatives --set g++ /usr/bin/g++-12
-                fi
-		DEBIAN_FRONTEND="noninteractive" apt-get install -y --no-install-recommends "${PKG_LIST[@]}"
+		install_gcc12
                 ;;
             baremetal)
                 prep_ubuntu_build
                 install_llvm
-                if [[ "$VERSION" = "22.04" ]]; then
-	            echo "Detected Ubuntu 22.04, thus install g++-12"
-		    apt-get install -y --no-install-recommeneds g++-12 gcc-12 build-essential
-		    update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 12
-		    update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 12
-		    update-alternatives --set gcc /usr/bin/gcc-12
-		    update-alternatives --set g++ /usr/bin/g++-12
-                fi
-		DEBIAN_FRONTEND="noninteractive" apt-get install -y --no-install-recommends "${PKG_LIST[@]}"
+		install_gcc12
                 configure_hugepages
                 ;;
         esac
+
+	DEBIAN_FRONTEND="noninteractive" apt-get install -y --no-install-recommends "${PKG_LIST[@]}"
+
     fi
 }
 
@@ -254,12 +236,12 @@ cleanup() {
 
 update_package_list
 
-if [ $validate == 1 ]; then
+if [ "$validate" -eq 1 ]; then
     validate_packages
 else
     install
 fi
 
-if [ $docker == 1 ]; then
+if [ "$docker" -eq 1 ]; then
     cleanup
 fi
