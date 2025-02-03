@@ -2920,3 +2920,143 @@ def test_dram_input_mm_conv(device, tiled_input, input_on_device):
     passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden_tensor, pcc=0.99)
     logger.info(f"PCC = {pcc_msg}. Threshold = 0.99")
     assert passing
+
+
+# fmt: off
+@pytest.mark.parametrize(
+    "batch, groups, input_channels, output_channels, input_height, input_width, num_input_slices, weights_dtype, activations_dtype, kernel, stride, padding, input_channels_alignment, act_block_h_override, act_block_w_div, deallocate_activation, math_fidelity, fp32_accum, packer_l1_acc, math_approx_mode, dst_full_sync_en",
+    (
+        (1, 1, 10, 64, 4096, 512, 2, ttnn.bfloat8_b, ttnn.bfloat8_b, (4, 4), (2, 2), (1, 1), 16, 64, 1, True , ttnn.MathFidelity.LoFi, True, False, True, False),
+        (1, 1, 64, 64, 2048, 256, 4, ttnn.bfloat8_b, ttnn.bfloat8_b, (4, 4), (2, 2), (1, 1), 32, 0 , 1, False, ttnn.MathFidelity.LoFi, True, False, True, False),
+        (1, 1, 64, 64, 1024, 128, 2, ttnn.bfloat8_b, ttnn.bfloat8_b, (4, 4), (2, 2), (1, 1), 32, 0 , 1, False, ttnn.MathFidelity.LoFi, True, False, True, False),
+        (1, 1, 64, 64, 512 , 64 , 2, ttnn.bfloat8_b, ttnn.bfloat8_b, (4, 4), (2, 2), (1, 1), 32, 0 , 1, False, ttnn.MathFidelity.LoFi, True, False, True, False),
+    ),
+)
+#fmt: on
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_height_split_conv2d(
+    device,
+    batch,
+    groups,
+    input_channels,
+    output_channels,
+    input_height,
+    input_width,
+    num_input_slices,
+    weights_dtype,
+    activations_dtype,
+    kernel,
+    stride,
+    padding,
+    input_channels_alignment,
+    act_block_h_override,
+    act_block_w_div,
+    deallocate_activation,
+    math_fidelity,
+    fp32_accum,
+    packer_l1_acc,
+    math_approx_mode,
+    dst_full_sync_en,
+):
+    torch.manual_seed(11234)
+
+    conv_input_shape = [batch, input_channels, input_height, input_width]
+    conv_weight_shape = [output_channels, input_channels // groups, kernel[0], kernel[1]]
+    conv_bias_shape = [1, 1, 1, output_channels]
+
+    torch_input_tensor_nchw = torch.randn(conv_input_shape, dtype=torch.bfloat16).float()
+    torch_input_tensor = torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1))
+
+    torch_weight_tensor = torch.randn(conv_weight_shape, dtype=torch.bfloat16).float()
+    torch_bias_tensor = torch.randn(conv_bias_shape, dtype=torch.bfloat16).float()
+
+    torch_out_golden_tensor = torch.nn.functional.conv2d(
+        torch_input_tensor_nchw,
+        torch_weight_tensor,
+        bias=torch_bias_tensor.reshape(-1),
+        stride=stride,
+        padding=padding,
+        dilation=(1, 1),
+        groups=groups,
+    )
+    torch_out_golden_tensor = torch.nn.functional.relu(torch_out_golden_tensor)
+
+    pad, hpad = 16, 0
+    if torch_input_tensor.shape[-1] < pad or torch_input_tensor.shape[-2] < hpad:
+        torch_input_tensor = torch.nn.functional.pad(
+            torch_input_tensor,
+            (
+                0,
+                max(0, pad - torch_input_tensor.shape[-1]),
+                0,
+                max(0, hpad - torch_input_tensor.shape[-2]),
+            ),
+        )
+
+    tt_input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, mesh_mapper=None)
+    tt_weight_tensor = ttnn.from_torch(
+        torch_weight_tensor, weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32, mesh_mapper=None)
+    tt_bias_tensor = ttnn.from_torch(
+        torch_bias_tensor, dtype=weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32, mesh_mapper=None)
+
+    conv_config = ttnn.Conv2dConfig(
+        dtype=activations_dtype,
+        weights_dtype=weights_dtype,
+        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        input_channels_alignment=input_channels_alignment,
+        activation="relu",
+        deallocate_activation=deallocate_activation,
+        enable_act_double_buffer=False,
+        enable_split_reader=False,
+        enable_subblock_padding=False,
+        output_layout=ttnn.TILE_LAYOUT,
+        act_block_h_override=act_block_h_override,
+        act_block_w_div=act_block_w_div,
+        override_sharding_config = False,
+    )
+
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=math_fidelity,
+        fp32_dest_acc_en=fp32_accum,
+        packer_l1_acc=packer_l1_acc,
+        math_approx_mode=math_approx_mode,
+        dst_full_sync_en=dst_full_sync_en,
+    )
+
+    tt_output_tensor, [out_height, out_width], [weight, bias] = ttnn.conv2d_sliced(
+        input_tensor = tt_input_tensor,
+        weight_tensor = tt_weight_tensor,
+        bias_tensor = tt_bias_tensor,
+        device = device,
+        in_channels = input_channels,
+        out_channels = output_channels,
+        batch_size = batch,
+        input_height = input_height,
+        input_width = input_width,
+        num_input_slices = num_input_slices,
+        kernel_size = kernel,
+        stride = stride,
+        padding = padding,
+        groups = groups,
+        conv_config = conv_config,
+        compute_config = compute_config,
+        conv_op_cache = {},
+        return_output_dim = True,
+        return_weights_and_bias = True,
+    )
+
+    tt_output_tensor = ttnn.from_device(tt_output_tensor)
+    torch_output_tensor = ttnn.to_torch(tt_output_tensor, mesh_composer=None)
+
+    # NHWC to NCHW
+    torch_output_tensor = torch_output_tensor.reshape(
+        batch, out_height, out_width, torch_output_tensor.shape[-1]
+    )
+    torch_output_tensor = torch_output_tensor[:, :, :, :output_channels]
+    torch_output_tensor = torch.permute(torch_output_tensor, (0, 3, 1, 2))
+
+    target_pcc = 0.995
+    passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden_tensor, pcc=target_pcc)
+    logger.info(f"PCC = {pcc_msg}. Threshold = {target_pcc}")
+    assert passing
