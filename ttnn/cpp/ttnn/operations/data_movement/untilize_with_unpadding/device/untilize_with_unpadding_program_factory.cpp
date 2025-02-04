@@ -221,7 +221,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_col_interleav
     IDevice* device = a.device();
     CoreCoord grid_size = device->compute_with_storage_grid_size();
 
-    uint32_t num_blocks = input_shape[-1] == 0 ? 0 : input_shape[-1] / TILE_WIDTH;
+    uint32_t num_blocks = input_shape[-1] / TILE_WIDTH;
     uint32_t num_tiles_per_row = a.get_padded_shape()[-1] / TILE_WIDTH;
     uint32_t num_tiles_per_col = a.get_padded_shape()[-2] / TILE_HEIGHT;
 
@@ -248,7 +248,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_col_interleav
 
     Buffer* src0_buffer = a.buffer();
     Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     // reader
 
