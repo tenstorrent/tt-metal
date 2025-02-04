@@ -641,7 +641,6 @@ void MeshDevice::synchronize() {
     // Nothing to synchronize, as all work is executed by MeshDevice is synchronous.
 }
 WorkExecutorMode MeshDevice::get_worker_mode() { return WorkExecutorMode::SYNCHRONOUS; }
-void MeshDevice::set_worker_queue_mode(const WorkerQueueMode& mode) {}
 bool MeshDevice::is_worker_queue_empty() const { return true; }
 void MeshDevice::push_work(std::function<void()> work, bool blocking) {
     // Execute inline synchronously.

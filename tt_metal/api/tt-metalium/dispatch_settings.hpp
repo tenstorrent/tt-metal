@@ -5,10 +5,12 @@
 #pragma once
 
 #include <cstdint>
+#include <magic_enum/magic_enum.hpp>
 #include <unordered_map>
 #include "hal.hpp"
 #include "tt_cluster.hpp"
 #include <tt-metalium/cq_commands.hpp>
+#include <utility>
 #include "umd/device/tt_core_coordinates.h"
 
 namespace tt::tt_metal {
@@ -16,7 +18,76 @@ namespace tt::tt_metal {
 //
 // Dispatch Kernel Settings
 //
-struct DispatchSettings {
+class DispatchSettings {
+private:
+    struct DispatchSettingsContainerKey {
+        CoreType core_type;
+        uint32_t num_hw_cqs;
+
+        bool operator==(const DispatchSettingsContainerKey& other) const {
+            return core_type == other.core_type && num_hw_cqs == other.num_hw_cqs;
+        }
+    };
+
+    struct DispatchSettingsContainerKeyHasher {
+        size_t operator()(const DispatchSettingsContainerKey& k) const {
+            const auto h1 = std::hash<uint32_t>{}(static_cast<int>(k.core_type));
+            const auto h2 = std::hash<uint32_t>{}(k.num_hw_cqs);
+            return h1 ^ (h2 << 1);
+        }
+    };
+
+    using DispatchSettingsContainer =
+        std::unordered_map<DispatchSettingsContainerKey, DispatchSettings, DispatchSettingsContainerKeyHasher>;
+
+    static DispatchSettingsContainer& get_store() {
+        static DispatchSettingsContainer store;
+        return store;
+    }
+
+public:
+    // Returns the default settings for WORKER cores
+    static DispatchSettings worker_defaults(const tt::Cluster& cluster, const uint32_t num_hw_cqs);
+
+    // Returns the default settings for ETH cores
+    static DispatchSettings eth_defaults(const tt::Cluster& cluster, const uint32_t num_hw_cqs);
+
+    // Returns the default settings
+    static DispatchSettings defaults(const CoreType& core_type, const tt::Cluster& cluster, const uint32_t num_hw_cqs);
+
+    // Returns the settings for a core type and number hw cqs. The values can be modified, but customization must occur
+    // before command queue kernels are created.
+    static DispatchSettings& get(const CoreType& core_type, const uint32_t num_hw_cqs) {
+        DispatchSettingsContainerKey k{core_type, num_hw_cqs};
+        auto& store = get_store();
+        if (!store.contains(k)) {
+            TT_THROW(
+                "DispatchSettings is not initialized for CoreType {}, {} CQs",
+                magic_enum::enum_name(core_type),
+                num_hw_cqs);
+        }
+        return store[k];
+    }
+
+    // Reset the settings
+    static void initialize(const tt::Cluster& cluster) {
+        static constexpr std::array<CoreType, 2> k_SupportedCoreTypes{CoreType::ETH, CoreType::WORKER};
+        auto& store = get_store();
+        for (const auto& core_type : k_SupportedCoreTypes) {
+            for (int hw_cqs = 1; hw_cqs <= MAX_NUM_HW_CQS; ++hw_cqs) {
+                DispatchSettingsContainerKey k{core_type, hw_cqs};
+                store[k] = DispatchSettings::defaults(core_type, cluster, hw_cqs);
+            }
+        }
+    }
+
+    // Reset the settings for a core type and number hw cqs to the provided settings
+    static void initialize(const DispatchSettings& other) {
+        auto& store = get_store();
+        DispatchSettingsContainerKey k{other.core_type_, other.num_hw_cqs_};
+        store[k] = other;
+    }
+
     //
     // Non Configurable Settings
     //
@@ -128,15 +199,6 @@ struct DispatchSettings {
         return !(*this == other);
     }
 
-    // Returns the default settings for WORKER cores
-    static DispatchSettings worker_defaults(const tt::Cluster& cluster, const uint32_t num_hw_cqs);
-
-    // Returns the default settings for ETH cores
-    static DispatchSettings eth_defaults(const tt::Cluster& cluster, const uint32_t num_hw_cqs);
-
-    // Returns the default settings
-    static DispatchSettings defaults(const CoreType& core_type, const tt::Cluster& cluster, const uint32_t num_hw_cqs);
-
     DispatchSettings& core_type(const CoreType& val) {
         this->core_type_ = val;
         return *this;
@@ -223,26 +285,4 @@ struct DispatchSettings {
     DispatchSettings& build();
 };
 
-struct DispatchSettingsContainerKey {
-    CoreType core_type;
-    uint32_t num_hw_cqs;
-
-    bool operator==(const DispatchSettingsContainerKey& other) const {
-        return core_type == other.core_type && num_hw_cqs == other.num_hw_cqs;
-    }
-};
-
-using DispatchSettingsContainer = std::unordered_map<DispatchSettingsContainerKey, DispatchSettings>;
-
 }  // namespace tt::tt_metal
-
-namespace std {
-template <>
-struct hash<tt::tt_metal::DispatchSettingsContainerKey> {
-    size_t operator()(const tt::tt_metal::DispatchSettingsContainerKey& k) const {
-        const auto h1 = std::hash<uint32_t>{}(static_cast<int>(k.core_type));
-        const auto h2 = std::hash<uint32_t>{}(k.num_hw_cqs);
-        return h1 ^ (h2 << 1);
-    }
-};
-}  // namespace std
