@@ -105,7 +105,7 @@ def run_all_reduce_impl(
             ttnn.BufferType.L1,
             ttnn.ShardSpec(
                 core_range_set,
-                [M, N_per_shard * 4],
+                [M, N_per_shard],
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
         )
@@ -121,20 +121,17 @@ def run_all_reduce_impl(
         )
 
         # All-Reduce Golden
-        # output_tensor_goldens_list = [
-        #     torch.sum(input_tensor, dim=cluster_axis)
-        #     for _ in range(num_iters)
-        # ]
+        output_tensor_goldens_list = [torch.sum(input_tensor, dim=cluster_axis) for _ in range(num_iters)]
 
-        # Interleaved All-Gather Golden
-        output_tensor_golden = input_tensor.transpose(cluster_axis, -2)
-        output_tensor_golden = (
-            output_tensor_golden.reshape(*output_tensor_golden.shape[:3], num_cores, N // num_cores)
-            .transpose(-3, -2)
-            .reshape(cluster_shape[0], M, num_cores, -1)
-            .reshape(cluster_shape[0], M, -1)
-        )
-        output_tensor_goldens_list = [output_tensor_golden for _ in range(num_iters)]
+        # # Interleaved All-Gather Golden
+        # output_tensor_golden = input_tensor.transpose(cluster_axis, -2)
+        # output_tensor_golden = (
+        #     output_tensor_golden.reshape(*output_tensor_golden.shape[:3], num_cores, N // num_cores)
+        #     .transpose(-3, -2)
+        #     .reshape(cluster_shape[0], M, num_cores, -1)
+        #     .reshape(cluster_shape[0], M, -1)
+        # )
+        # output_tensor_goldens_list = [output_tensor_golden for _ in range(num_iters)]
 
         ##################################
         ##### Run the op
@@ -211,7 +208,7 @@ def run_all_reduce_impl(
     "input_dtype",
     [
         ttnn.bfloat16,
-        # ttnn.bfloat8_b,
+        ttnn.bfloat8_b,
     ],
 )
 @pytest.mark.parametrize("num_iters", [1])
