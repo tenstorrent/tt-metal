@@ -11,12 +11,12 @@
 #include "noc_overlay_parameters.h"
 
 // Helper functions to convert NoC coordinates to NoC-0 coordinates, used in metal as "physical" coordinates.
-#define NOC_0_X(noc_index, noc_size_x, x) (noc_index == 0 ? (x) : (noc_size_x - 1 - (x)))
-#define NOC_0_Y(noc_index, noc_size_y, y) (noc_index == 0 ? (y) : (noc_size_y - 1 - (y)))
+#define NOC_0_X(noc_index, noc_size_x, x) x
+#define NOC_0_Y(noc_index, noc_size_y, y) y
 
-#define NOC_0_X_PHYS_COORD(noc_index, noc_size_x, x) NOC_0_X(noc_index, noc_size_x, x)
-#define NOC_0_Y_PHYS_COORD(noc_index, noc_size_y, y) NOC_0_Y(noc_index, noc_size_y, y)
-#define MY_NOC_ENCODING(noc_index) NOC_CMD_BUF_READ_REG(noc_index, 0, NOC_NODE_ID)
+#define NOC_0_X_PHYS_COORD(noc_index, noc_size_x, x) (noc_index == 0 ? (x) : (noc_size_x - 1 - (x)))
+#define NOC_0_Y_PHYS_COORD(noc_index, noc_size_y, y) (noc_index == 0 ? (y) : (noc_size_y - 1 - (y)))
+#define MY_NOC_ENCODING(noc_index) NOC_CMD_BUF_READ_REG(noc_index, 0, NOC_CFG(NOC_ID_LOGICAL))
 
 ////
 /*TODO: RT review this file, currently using wormhole b0 copy, check if any changes needed for BH*/
