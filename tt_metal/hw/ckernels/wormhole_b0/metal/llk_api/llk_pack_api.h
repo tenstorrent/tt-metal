@@ -201,16 +201,30 @@ inline void llk_pack_untilize_init(
     } else {
         TT_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
     }
+    // -------------- Issue tt-metal#17132 unblocker ---------------
     // Reconfigure pack_reads_per_xy_plane with the new face_r_dim
-    _llk_pack_hw_configure_<true, is_fp32_dest_acc_en>(
-        pack_src_format[output_id],
-        pack_dst_format[output_id],
-        get_local_cb_interface(output_id).fifo_page_size,
-        face_r_dim,
-        num_faces,
-        false /* partial_face */,
-        false /* narrow_tile */,
-        0 /* relu_config */);
+    // --------------------------------------------------------------
+    // Check why this cannot be done via the _llk_pack_hw_configure_:
+    //
+    // _llk_pack_hw_configure_<true, is_fp32_dest_acc_en>(
+    //     pack_src_format[output_id],
+    //     pack_dst_format[output_id],
+    //     get_local_cb_interface(output_id).fifo_page_size,
+    //     face_r_dim,
+    //     num_faces,
+    //     false /* partial_face */,
+    //     false /* narrow_tile */,
+    //     0 /* relu_config */);
+
+    volatile uint* cfg = get_cfg_pointer();  // Get pointer to registers for current state ID
+    pack_counters_u pack_counters;
+    pack_counters.val = 0;
+    pack_counters.f.pack_reads_per_xy_plane = face_r_dim;  // Number of reads per face
+                                                           // Used for resetting tile posistion generator for edge masks
+    for (uint i = 0; i < 4; i++) {
+        cfg[PACK_COUNTERS_SEC0_pack_per_xy_plane_ADDR32 + i] = pack_counters.val;  // disable auto last generation
+    }
+    // -------------- Issue tt-metal#17132 unblocker ---------------
 }
 
 template <
