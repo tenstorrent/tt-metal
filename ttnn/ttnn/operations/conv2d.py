@@ -33,6 +33,13 @@ def get_conv_output_dim(input, window, stride=1, pad=0, dilation=1):
     return (input + (2 * pad) - dilation * (window - 1) - 1) // stride + 1
 
 
+def get_conv_input_dim(output, window, stride=1, pad=0, dilation=1):
+    """
+    Returns the input dimension required to achieve a given output dimension in a convolution operation.
+    """
+    return (output - 1) * stride + dilation * (window - 1) + 1 - 2 * pad
+
+
 def prepare_conv_weights(
     *,
     weight_tensor,
@@ -175,6 +182,7 @@ def calculate_conv_height_split_params(
     output_slice_height = output_height // num_input_slices
     for output_slice_height_start in range(0, output_height, output_slice_height):
         output_slice_height_end = output_slice_height_start + output_slice_height
+        output_slice_height_end = min(output_slice_height_end, output_height)  # last slice may be smaller
 
         input_slice_height_start = output_slice_height_start * stride - padding
         input_slice_height_end = (output_slice_height_end - 1) * stride + kernel_size - padding
@@ -183,7 +191,12 @@ def calculate_conv_height_split_params(
         input_slice_height_start = max(0, input_slice_height_start)
         input_slice_height_end = min(input_height, input_slice_height_end)
         output_values.append((input_slice_height_start, input_slice_height_end, pad_top, pad_bottom))
-    return output_values
+
+    # TBD if we want this: merge last slice with previous it's less than H=32
+    # if output_values[-1][1] - output_values[-1][0] < 32:
+    #     output_values[-2] = (output_values[-2][0], output_values[-1][1], output_values[-2][2], output_values[-1][3])
+    #     output_values.pop()
+    return output_values, output_height
 
 
 @ttnn.register_python_operation(name="ttnn.conv2d")
@@ -311,7 +324,7 @@ def conv2d_sliced(
     if input_tensor.storage_type() != ttnn.StorageType.DEVICE:
         input_tensor = ttnn.to_device(input_tensor, device)
 
-    conv_height_split_params = calculate_conv_height_split_params(
+    conv_height_split_params, conv_output_height = calculate_conv_height_split_params(
         input_height,
         num_input_slices,
         kernel_size[0],
@@ -326,7 +339,6 @@ def conv2d_sliced(
     conv_output_tensor = None
     conv_prepared_device_weight = None
     conv_prepared_device_bias = None
-    conv_output_height = 0
     conv_output_width = 0
 
     for input_slice_height_start, input_slice_height_end, pad_top, pad_bottom in conv_height_split_params:
@@ -374,19 +386,19 @@ def conv2d_sliced(
             bias_tensor=bias_tensor if conv_prepared_device_bias is None else conv_prepared_device_bias,
             conv_config=conv2d_config_for_slices,
             compute_config=compute_config,
-            memory_config=memory_config,  # should be DRAM, but fails on PCC with that
+            memory_config=memory_config,  # should be ttnn.DRAM_MEMORY_CONFIG, but fails on PCC with that
         )
 
         # # temp workaround
-        conv_output_slice = ttnn.to_layout(
-            conv_output_slice, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
+        # print(f"PRE conv_output_slice.memory_config()={conv_output_slice.memory_config()}")
+        # to_layout with memory_config can override memory_config if sharded and on untilize with unpadding path
+        conv_output_slice = ttnn.to_layout(conv_output_slice, ttnn.ROW_MAJOR_LAYOUT)
+        conv_output_slice = ttnn.to_memory_config(conv_output_slice, ttnn.DRAM_MEMORY_CONFIG)
 
         if conv_output_tensor is None:
             conv_output_tensor = conv_output_slice
             conv_prepared_device_weight = prepared_device_weight
             conv_prepared_device_bias = prepared_device_bias
-            conv_output_height = conv_output_height_slice * num_input_slices
             conv_output_width = output_width
         else:
             conv_output_tensor = ttnn.concat([conv_output_tensor, conv_output_slice], dim=2)

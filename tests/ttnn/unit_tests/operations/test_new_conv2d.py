@@ -2930,8 +2930,42 @@ def test_dram_input_mm_conv(device, tiled_input, input_on_device):
         (1, 1, 64, 64, 2048, 256, 4, ttnn.bfloat8_b, ttnn.bfloat8_b, (4, 4), (2, 2), (1, 1), 32, 0 , 1, False, ttnn.MathFidelity.LoFi, True, False, True, False),
         (1, 1, 64, 64, 1024, 128, 2, ttnn.bfloat8_b, ttnn.bfloat8_b, (4, 4), (2, 2), (1, 1), 32, 0 , 1, False, ttnn.MathFidelity.LoFi, True, False, True, False),
         (1, 1, 64, 64, 512 , 64 , 2, ttnn.bfloat8_b, ttnn.bfloat8_b, (4, 4), (2, 2), (1, 1), 32, 0 , 1, False, ttnn.MathFidelity.LoFi, True, False, True, False),
+        (1, 1, 4, 32, 1024, 1024, 8, ttnn.bfloat8_b, ttnn.bfloat16, (5, 5), (1, 1), (0, 0), 16, 0, 1, True, ttnn.MathFidelity.LoFi, True, False, True, False),
+        # (1, 1, 32, 48, 1020, 1020, 8, ttnn.bfloat8_b, ttnn.bfloat8_b, (5, 5), (1, 1), (0, 0), 16, 0, 1, False, ttnn.MathFidelity.LoFi, True, False, True, False), # dillation required
+        # (1, 1, 48, 56, 1016, 1016, 8, ttnn.bfloat8_b, ttnn.bfloat8_b, (5, 5), (1, 1), (0, 0), 16, 0, 1, False, ttnn.MathFidelity.LoFi, True, False, True, False), # dillation required
+        # (1, 1, 56, 56, 1008, 1008, 8, ttnn.bfloat8_b, ttnn.bfloat8_b, (5, 5), (1, 1), (0, 0), 16, 0, 1, False, ttnn.MathFidelity.LoFi, True, False, True, False), # dillation required
+        (1, 1, 64, 128, 992, 992, 32, ttnn.bfloat8_b, ttnn.bfloat8_b, (5, 5), (1, 1), (0, 0), 32, 0, 1, False, ttnn.MathFidelity.LoFi, True, False, True, False),
+
     ),
 )
+
+# @skip_for_grayskull()
+# @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+# @pytest.mark.parametrize(
+#     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, dilation_h, dilation_w, groups, split_factor",
+#     (
+#         (1, 32, 4, 1024, 1024, 5, 5, 1, 1, 0, 0, 1, 1, 1, 1),  # 1
+#         (1, 48, 32, 1020, 1020, 3, 3, 1, 1, 0, 0, 2, 2, 1, 32 // 16),  # 2
+#         (1, 56, 48, 1016, 1016, 3, 3, 1, 1, 0, 0, 4, 4, 1, 48 // 16),  # 3
+#         (1, 64, 56, 1008, 1008, 3, 3, 1, 1, 0, 0, 8, 8, 1, 56 // 16),  # 4
+#         (1, 128, 64, 992, 992, 2, 2, 1, 1, 0, 0, 1, 1, 1, 64 // 16),  # 5
+#         (1, 256, 128, 991, 991, 1, 1, 1, 1, 0, 0, 1, 1, 1, 128 // 16),  # 6
+#         (1, 1, 256, 991, 991, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1),  # 7 Pass
+#         # quarter resolution
+#         (1, 32, 4, 512, 512, 5, 5, 1, 1, 0, 0, 1, 1, 1, 1),  # 1 Pass
+#         (1, 48, 32, 508, 508, 3, 3, 1, 1, 0, 0, 2, 2, 1, 1),  # 2 Pass
+#         (1, 56, 48, 504, 504, 3, 3, 1, 1, 0, 0, 4, 4, 1, 2),  # 3 Pass
+#         #  (added ttnn.deallocate); split=3 pcc fails badly
+#         (1, 64, 56, 496, 496, 3, 3, 1, 1, 0, 0, 8, 8, 1, 4),  # 4
+#         # => split 2 cannot fit, split 3 isnt divisible, split 4 fails pcc AssertionError: -0.0006819625298742717
+#         (1, 128, 64, 480, 480, 2, 2, 1, 1, 0, 0, 1, 1, 1, 4),  # 5
+#         # => split 2 out of space; split 4 AssertionError: 0.985573911170021
+#         (1, 256, 128, 479, 479, 1, 1, 1, 1, 0, 0, 1, 1, 1, 2),  # 6
+#         # => split=8 AssertionError: 0.8749055727907059, split 4 AssertionError: 0.9715589592838946, split 2 AssertionError: 0.996589061082462
+#         (1, 1, 256, 479, 479, 1, 1, 1, 1, 0, 0, 1, 1, 1, 1),  # 7 Pass
+#     ),
+# )
+
 #fmt: on
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_height_split_conv2d(
@@ -3013,6 +3047,7 @@ def test_height_split_conv2d(
         act_block_h_override=act_block_h_override,
         act_block_w_div=act_block_w_div,
         override_sharding_config = False,
+        reallocate_halo_output = True,
     )
 
     compute_config = ttnn.init_device_compute_kernel_config(
@@ -3059,4 +3094,4 @@ def test_height_split_conv2d(
     target_pcc = 0.995
     passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden_tensor, pcc=target_pcc)
     logger.info(f"PCC = {pcc_msg}. Threshold = {target_pcc}")
-    assert passing
+    assert passing, pcc_msg
