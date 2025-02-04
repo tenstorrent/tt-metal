@@ -157,10 +157,19 @@ operation::ProgramWithCallbacks fill_pad_sharded(const Tensor& input_tensor, flo
     constexpr uint32_t src0_cb_index = tt::CBIndex::c_0;
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(cb_page_size * 2, {{src0_cb_index, cb_data_format}})
-            .set_page_size(src0_cb_index, cb_page_size);
+            .set_page_size(src0_cb_index, cb_page_size)
+            .set_globally_allocated_address(*input_tensor.buffer());
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     bool src_is_dram = tens_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
+    std::cout << "src_is_dram: " << src_is_dram << std::endl;
+
+    constexpr uint32_t src1_cb_index = tt::CBIndex::c_1;
+    tt::tt_metal::CircularBufferConfig cb_src1_config =
+        tt::tt_metal::CircularBufferConfig(1024 * input_element_size_bytes, {{src1_cb_index, cb_data_format}})
+            .set_page_size(src1_cb_index, 1024 * input_element_size_bytes);
+    // .set_globally_allocated_address(*input_tensor.buffer());
+    auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
 
     // pack bf16 vals
     uint32_t packed_fill_value = (std::uint32_t)fill_value;
@@ -192,7 +201,7 @@ operation::ProgramWithCallbacks fill_pad_sharded(const Tensor& input_tensor, flo
 
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/dataflow/fill_pad_writer.cpp",
+        "ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/dataflow/fill_pad_sharded.cpp",
         all_cores,
         tt_metal::WriterDataMovementConfig(writer_compile_time_args));  // writer only for in-place operation
 
