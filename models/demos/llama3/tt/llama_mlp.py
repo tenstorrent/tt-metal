@@ -106,7 +106,9 @@ class TtLlamaMLP(LightweightModule):
             x,
             self.w3,
             compute_kernel_config=(
-                self.args.compute_kernel_config_lofi if self.four_bit_mlp else self.args.compute_kernel_config_hifi2
+                self.args.compute_kernel_config_lofi
+                if self.four_bit_mlp
+                else self.args.compute_kernel_config_hifi2_fp16
             ),
             core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_3 else None,
             dtype=ttnn.bfloat16,
