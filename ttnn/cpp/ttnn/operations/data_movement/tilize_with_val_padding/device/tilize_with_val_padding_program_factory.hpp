@@ -16,4 +16,13 @@ tt::tt_metal::operation::ProgramWithCallbacks tilize_with_val_padding_single_cor
 tt::tt_metal::operation::ProgramWithCallbacks tilize_with_val_padding_multi_core(
     const Tensor& a, Tensor& output, const ttnn::PadValue pad_value);
 
+tt::tt_metal::operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_col_interleaved(
+    const Tensor& a, Tensor& output, const ttnn::PadValue pad_value);
+
+tt::tt_metal::operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_row_interleaved(
+    const Tensor& a, Tensor& output, const ttnn::PadValue pad_value);
+
+tt::tt_metal::operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_sharded(
+    const Tensor& a, Tensor& output, const ttnn::PadValue pad_value);
+
 }  // namespace ttnn::operations::data_movement::detail

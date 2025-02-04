@@ -71,8 +71,9 @@ void kernel_main() {
             noc_async_read_barrier();
             l1_write_addr += width_size;
 
-            // pushing one tile at a time because the current LLK tilize implementation doesn't support tilizing more
-            // than one tile per column at the same time this needs to be fixed
+            // Pushing one tile at a time because the current LLK tilize implementation doesn't support tilizing more
+            // than one tile per column at the same time.
+            // This needs to be fixed in the future
             if (k > 0 && k % tile_width == 0) {
                 cb_push_back(cb_id_in0, onetile * has_rows);
                 cb_reserve_back(cb_id_in0, onetile * has_rows);
@@ -83,7 +84,7 @@ void kernel_main() {
         fill_with_val(l1_write_addr, padding_rows * (width_size >> 2), pad_value);
         l1_write_addr += padding_rows * width_size;
 
-        cb_push_back(cb_id_in0, 1 * has_rows);
+        cb_push_back(cb_id_in0, onetile * has_rows);
     };
 
     const uint32_t size_per_row_per_block = get_arg_val<uint32_t>(4);
