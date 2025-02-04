@@ -12,35 +12,6 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement {
 
-inline uint32_t get_estimated_size_of_cbs(
-    const Tensor& input_tensor_a,
-    const uint32_t input_single_tile_size,
-    const uint32_t output_single_tile_size,
-    const uint32_t num_tiles_per_row) {
-    uint32_t cb_src0_size = input_single_tile_size * num_tiles_per_row;
-    uint32_t cb_output_size = output_single_tile_size * num_tiles_per_row;
-    return cb_src0_size + cb_output_size;
-}
-
-inline uint32_t get_max_l1_space(const Tensor& input_tensor_a) {
-    auto device = input_tensor_a.device();
-    auto lowest_address = device->lowest_occupied_compute_l1_address();
-    uint32_t max_l1_space = lowest_address.has_value() ? lowest_address.value() : device->l1_size_per_core();
-    max_l1_space = max_l1_space - device->allocator()->get_base_allocator_addr(HalMemType::L1);
-    return max_l1_space;
-}
-
-inline bool enough_available_space(
-    const Tensor& input_tensor_a,
-    const uint32_t input_single_tile_size,
-    const uint32_t output_single_tile_size,
-    const uint32_t num_tiles_per_row) {
-    uint32_t max_l1_space = get_max_l1_space(input_tensor_a);
-    uint32_t estimated_size_of_cbs =
-        get_estimated_size_of_cbs(input_tensor_a, input_single_tile_size, output_single_tile_size, num_tiles_per_row);
-    return max_l1_space > estimated_size_of_cbs;
-}
-
 void TilizeWithValPadding::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_shape = input_tensor_a.get_padded_shape();
@@ -124,28 +95,13 @@ operation::ProgramWithCallbacks TilizeWithValPadding::create_program(
     if (!this->use_multicore) {
         return detail::tilize_with_val_padding_single_core(input_tensor_a, output_tensor, this->pad_value);
     }
-
-    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_a.get_dtype());
-    uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
-    tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.get_dtype());
-    uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
-
-    uint32_t num_tiles_per_row = output_tensor.get_padded_shape()[-1] / TILE_WIDTH;
-    uint32_t num_tiles_per_col = output_tensor.get_padded_shape()[-2] / TILE_HEIGHT;
-
-    bool enough_space_width =
-        enough_available_space(input_tensor_a, input_single_tile_size, output_single_tile_size, num_tiles_per_col);
-    bool enough_space_height =
-        enough_available_space(input_tensor_a, input_single_tile_size, output_single_tile_size, num_tiles_per_row);
-    if (!enough_space_width && !enough_space_height) {
+    if (!this->enough_space_width && !this->enough_space_height) {
         // Just for now. In the future, it should call the tilize with padding operation that does parallelization along
         // both dims
         return detail::tilize_with_val_padding_single_core(input_tensor_a, output_tensor, this->pad_value);
-    } else if (num_tiles_per_row > num_tiles_per_col) {
-        return detail::tilize_with_val_padding_multi_core_col_interleaved(
-            input_tensor_a, output_tensor, this->pad_value);
     }
-    return detail::tilize_with_val_padding_multi_core_row_interleaved(input_tensor_a, output_tensor, this->pad_value);
+
+    return detail::tilize_with_val_padding_multi_core_interleaved(input_tensor_a, output_tensor, this->pad_value);
 }
 
 }  // namespace ttnn::operations::data_movement

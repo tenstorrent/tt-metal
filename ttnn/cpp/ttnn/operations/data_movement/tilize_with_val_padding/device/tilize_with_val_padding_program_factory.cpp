@@ -239,7 +239,6 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_col_interleav
     uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
     uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
-
     IDevice* device = a.device();
     CoreCoord grid_size = device->compute_with_storage_grid_size();
 
@@ -389,7 +388,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_col_interleav
     return {std::move(program), override_runtime_args_callback};
 }
 
-operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_row_interleaved(
+operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
     const Tensor& a, Tensor& output, const ttnn::PadValue pad_value) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 

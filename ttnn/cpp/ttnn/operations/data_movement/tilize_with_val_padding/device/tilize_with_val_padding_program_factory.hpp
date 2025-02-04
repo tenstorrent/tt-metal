@@ -13,13 +13,7 @@ namespace ttnn::operations::data_movement::detail {
 tt::tt_metal::operation::ProgramWithCallbacks tilize_with_val_padding_single_core(
     const Tensor& a, Tensor& output, const ttnn::PadValue pad_value);
 
-tt::tt_metal::operation::ProgramWithCallbacks tilize_with_val_padding_multi_core(
-    const Tensor& a, Tensor& output, const ttnn::PadValue pad_value);
-
-tt::tt_metal::operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_col_interleaved(
-    const Tensor& a, Tensor& output, const ttnn::PadValue pad_value);
-
-tt::tt_metal::operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_row_interleaved(
+tt::tt_metal::operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
     const Tensor& a, Tensor& output, const ttnn::PadValue pad_value);
 
 tt::tt_metal::operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_sharded(
