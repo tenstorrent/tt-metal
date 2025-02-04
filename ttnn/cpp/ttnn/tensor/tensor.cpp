@@ -38,16 +38,9 @@ namespace {
 template <typename T>
 Tensor create_owned_tensor_from_row_major_data(
     std::vector<T>&& data, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device = std::nullopt) {
-    TensorSpec result_cpu_spec(
-        spec.logical_shape(),
-        TensorLayout(spec.data_type(), PageConfig(Layout::ROW_MAJOR, spec.tile()), MemoryConfig{}));
+    auto physical_data = tensor_impl::encode_tensor_data(std::move(data), spec);
 
-    Tensor output(OwnedStorage{owned_buffer::create(std::move(data))}, result_cpu_spec);
-
-    if (spec.layout() == Layout::TILE) {
-        // TODO: whenever possible, perform tiliziation on device.
-        output = output.to(Layout::TILE);
-    }
+    Tensor output(OwnedStorage{owned_buffer::create(std::move(physical_data))}, spec);
 
     if (device.has_value()) {
         output = output.to(device->get_devices(), spec.memory_config());
@@ -606,12 +599,8 @@ Tensor Tensor::from_span<float>(
             return create_owned_tensor_from_row_major_data(
                 std::vector<float>(buffer.begin(), buffer.end()), spec, device);
         case DataType::BFLOAT16: {
-            std::vector<bfloat16> bfloat16_data;
-            bfloat16_data.reserve(buffer.size());
-            std::transform(std::begin(buffer), std::end(buffer), std::back_inserter(bfloat16_data), [](float value) {
-                return bfloat16(value);
-            });
-            return create_owned_tensor_from_row_major_data(std::move(bfloat16_data), spec, device);
+            return create_owned_tensor_from_row_major_data(
+                std::vector<bfloat16>(buffer.begin(), buffer.end()), spec, device);
         }
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B: {
