@@ -53,6 +53,22 @@ auto wrap_increment(T val) -> T {
         return (val == static_cast<T>(LIMIT - 1)) ? static_cast<T>(0) : static_cast<T>(val + 1);
     }
 }
+template <size_t LIMIT, typename T>
+auto wrap_increment_n(T val, uint8_t increment) -> T {
+    static_assert(LIMIT != 0, "wrap_increment called with limit of 0; it must be greater than 0");
+    constexpr bool is_pow2 = (LIMIT & (LIMIT - 1)) == 0;
+    if constexpr (LIMIT == 1) {
+        return val;
+    } else if constexpr (LIMIT == 2) {
+        return 1 - val;
+    } else if constexpr (is_pow2) {
+        return (val + increment) & (LIMIT - 1);
+    } else {
+        T new_unadjusted_val = val + increment;
+        bool wraps = new_unadjusted_val >= LIMIT;
+        return wraps ? static_cast<T>(new_unadjusted_val - LIMIT) : static_cast<T>(new_unadjusted_val);
+    }
+}
 
 template <uint8_t NUM_BUFFERS>
 auto normalize_ptr(BufferPtr ptr) -> BufferIndex {
@@ -113,6 +129,9 @@ class ChannelBufferPointer {
         return BufferIndex{normalize_ptr<NUM_BUFFERS>(this->ptr)};
     }
 
+    void increment_n(uint8_t n) {
+        this->ptr = BufferPtr{wrap_increment_n<2*NUM_BUFFERS>(this->ptr.get(), n)};
+    }
     void increment() {
         this->ptr = wrap_increment<2*NUM_BUFFERS>(this->ptr);
     }

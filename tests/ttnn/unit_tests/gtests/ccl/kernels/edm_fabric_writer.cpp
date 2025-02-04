@@ -26,10 +26,14 @@ FORCE_INLINE void line_sync(
     mcast_fwd_packet_header->to_atomic_inc();
     mcast_bwd_packet_header->to_atomic_inc();
 
+    DPRINT << "sync_noc_x = " << (uint32_t)sync_noc_x << ", sync_noc_y = " << (uint32_t)sync_noc_y
+           << ", sync_bank_addr = " << (uint32_t)sync_bank_addr << ", sync_val = " << (uint32_t)sync_val << "\n";
     if (fabric_connection.has_forward_connection()) {
         mcast_fwd_packet_header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{
             sync_bank_addr, 1, 128, static_cast<uint8_t>(sync_noc_x), static_cast<uint8_t>(sync_noc_y)});
+        DPRINT << "EDMF WAIT\n";
         fabric_connection.get_forward_connection().wait_for_empty_write_slot();
+        DPRINT << "\tDone\n";
         fabric_connection.get_forward_connection().send_payload_flush_non_blocking_from_address(
             (uint32_t)mcast_fwd_packet_header, sizeof(tt::fabric::PacketHeader));
     }
@@ -37,7 +41,9 @@ FORCE_INLINE void line_sync(
     if (fabric_connection.has_backward_connection()) {
         mcast_bwd_packet_header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{
             sync_bank_addr, 1, 128, static_cast<uint8_t>(sync_noc_x), static_cast<uint8_t>(sync_noc_y)});
+        DPRINT << "EDMB WAIT\n";
         fabric_connection.get_backward_connection().wait_for_empty_write_slot();
+        DPRINT << "\tDone\n";
         fabric_connection.get_backward_connection().send_payload_flush_non_blocking_from_address(
             (uint32_t)mcast_bwd_packet_header, sizeof(tt::fabric::PacketHeader));
     }
@@ -91,6 +97,19 @@ void kernel_main() {
 
     fabric_connection.open();
 
+    if (fabric_connection.has_forward_connection()) {
+        DPRINT << "FWD Start wrptr = " << (uint32_t)*fabric_connection.get_forward_connection().buffer_slot_wrptr_ptr
+               << "\n";
+        DPRINT << "FWD Start rdptr = "
+               << (uint32_t)*fabric_connection.get_forward_connection().from_remote_buffer_slot_rdptr_ptr << "\n";
+    }
+    if (fabric_connection.has_backward_connection()) {
+        DPRINT << "BWD Start wrptr = " << (uint32_t)*fabric_connection.get_backward_connection().buffer_slot_wrptr_ptr
+               << "\n";
+        DPRINT << "BWD Start rdptr = "
+               << (uint32_t)*fabric_connection.get_backward_connection().from_remote_buffer_slot_rdptr_ptr << "\n";
+    }
+
     cb_reserve_back(source_l1_cb_index, 1);
     cb_reserve_back(packet_header_cb, packet_header_size_in_headers);
     const auto source_l1_buffer_address = get_write_ptr(source_l1_cb_index);
@@ -115,6 +134,7 @@ void kernel_main() {
             sync_noc_x,
             sync_noc_y,
             start_sync_val);
+        noc_async_writes_flushed();
         line_sync(
             fabric_connection,
             mcast_fwd_packet_header,
@@ -190,7 +210,7 @@ void kernel_main() {
         fabric_conn.wait_for_empty_write_slot();
         fabric_conn.send_payload_without_header_non_blocking_from_address(
             source_l1_buffer_address, packet_payload_size_bytes);
-        fabric_conn.send_payload_flush_blocking_from_address(
+        fabric_conn.send_payload_blocking_from_address(
             (uint32_t)unicast_packet_header, sizeof(tt::fabric::PacketHeader));
     }
 
@@ -203,6 +223,13 @@ void kernel_main() {
             sync_noc_x,
             sync_noc_y,
             finish_sync_val);
+
+        if (sync_noc_x == my_x[0] && sync_noc_y == my_y[0]) {
+            // reset the global semaphore in case it is used in a op/kernel
+            // invocation
+            *reinterpret_cast<volatile uint32_t*>(sync_bank_addr) = 0;
+            ;
+        }
     }
 
     {
