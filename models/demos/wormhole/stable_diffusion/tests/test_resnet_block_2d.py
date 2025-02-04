@@ -28,22 +28,39 @@ def ttnn_to_torch(input):
 @skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize(
-    "batch_size, in_channels, input_height, input_width, index1,index2,block_name,out_channels",
+    "batch_size, in_channels, input_height, input_width, index1, index2, block_name, out_channels",
     [
-        (2, 320, 64, 64, 0, 0, "down", None),
-        (2, 320, 32, 32, 0, 0, "down", None),
-        (2, 640, 32, 32, 1, 1, "down", None),
-        (2, 640, 16, 16, 1, 1, "down", None),
-        (2, 1280, 16, 16, 2, 1, "down", None),
-        (2, 1280, 8, 8, 2, 1, "down", None),
-        # (2, 2560, 8, 8, 0, 0, "up", 1280),
-        (2, 2560, 16, 16, 0, 0, "up", 1280),
-        # (2, 1920, 16, 16, 2, 0, "up", 640), # l1 allocation error
+        # down block 0
+        (2, 320, 64, 64, 0, 0, "down", 320),
+        (2, 320, 64, 64, 0, 1, "down", 320),
+        # down block 1
+        (2, 320, 32, 32, 1, 0, "down", 640),
+        (2, 640, 32, 32, 1, 1, "down", 640),
+        # down block 2
+        (2, 640, 16, 16, 2, 0, "down", 1280),
+        (2, 1280, 16, 16, 2, 1, "down", 1280),
+        # down block 3
+        (2, 1280, 8, 8, 3, 0, "down", 1280),
+        (2, 1280, 8, 8, 3, 1, "down", 1280),
+        # mid
+        (2, 1280, 8, 8, 0, 0, "mid", 1280),
+        (2, 1280, 8, 8, 0, 1, "mid", 1280),
+        # up block 0
+        (2, 2560, 8, 8, 0, 0, "up", 1280),
+        (2, 2560, 8, 8, 0, 1, "up", 1280),
+        (2, 2560, 8, 8, 0, 2, "up", 1280),
+        # up block 1
+        (2, 2560, 16, 16, 1, 0, "up", 1280),
+        (2, 2560, 16, 16, 1, 1, "up", 1280),
+        (2, 1920, 16, 16, 1, 2, "up", 1280),
+        # up block 2
         (2, 1920, 32, 32, 2, 0, "up", 640),
-        (2, 1280, 32, 32, 3, 0, "down", None),
-        # (2, 960, 32, 32, 3, 0, "up", 320), # l1 allocation error
-        # (2, 960, 64, 64, 3, 0, "up", 320),
+        (2, 1280, 32, 32, 2, 1, "up", 640),
+        (2, 960, 32, 32, 2, 2, "up", 640),
+        # up block 3
+        (2, 960, 64, 64, 3, 0, "up", 320),
         (2, 640, 64, 64, 3, 1, "up", 320),
+        (2, 640, 64, 64, 3, 2, "up", 320),
     ],
 )
 def test_resnet_block_2d_512x512(
