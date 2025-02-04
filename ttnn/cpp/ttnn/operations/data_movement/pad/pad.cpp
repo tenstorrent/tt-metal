@@ -1,8 +1,9 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "pad.hpp"
+#include <algorithm>  // for std::copy
 
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/core/core.hpp"
@@ -66,9 +67,9 @@ static ttnn::Tensor pad_impl(
         using ShardOrientation = tt::tt_metal::ShardOrientation;
         using Layout = tt::tt_metal::Layout;
 
-        auto output_memory_config = memory_config_arg.value_or(input_tensor.memory_config());
+        auto output_memory_config = memory_config_arg.value_or(input_tensor_4D.memory_config());
 
-        if (input_tensor.is_sharded()) {
+        if (input_tensor_4D.is_sharded()) {
             auto total_height = [](const auto& shape) {
                 return std::accumulate(shape.begin(), shape.end() - 1, 1, std::multiplies<uint32_t>());
             };
@@ -107,7 +108,7 @@ static ttnn::Tensor pad_impl(
                     // pad width
                     auto output_tensor_width_padded = pad_impl(
                         queue_id,
-                        input_tensor,
+                        input_tensor_4D,
                         output_shape_width_padded,
                         adjusted_input_tensor_start,
                         value,
@@ -142,7 +143,7 @@ static ttnn::Tensor pad_impl(
 
         auto output_w = output_padded_shape[3];
         TT_ASSERT(
-            !input_tensor.is_sharded() || output_w == output_memory_config.shard_spec->shape[1],
+            !input_tensor_4D.is_sharded() || output_w == output_memory_config.shard_spec->shape[1],
             "output_w != output_memory_config.shard_spec().shape[1]");
 
         ttnn::Shape output_shape{output_padded_shape};
@@ -153,7 +154,7 @@ static ttnn::Tensor pad_impl(
                                      value,
                                      output_memory_config,
                                      use_multicore},
-                                 {input_tensor},
+                                 {input_tensor_4D},
                                  {},
                                  {},
                                  queue_id)
