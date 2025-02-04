@@ -635,14 +635,13 @@ int main(int argc, char **argv) {
             auto samples = features->get_value().get_logical_shape()[0];
             gradient_accumulator_helper.update(loss_float, samples);
 
-            // synchronize gradients for multi-device case, no-op if single device
-            auto parameters = model->parameters();
-            ttml::core::distributed::synchronize_parameters(parameters);
-            if (config.use_clip_grad_norm) {
-                ttml::core::clip_grad_norm(parameters, config.clip_grad_norm_max_norm);
-            }
-
             if (gradient_accumulator_helper.should_step()) {
+                // synchronize gradients for multi-device case, no-op if single device
+                auto parameters = model->parameters();
+                ttml::core::distributed::synchronize_parameters(parameters);
+                if (config.use_clip_grad_norm) {
+                    ttml::core::clip_grad_norm(parameters, config.clip_grad_norm_max_norm);
+                }
                 optimizer->step();
                 scheduler->step();
                 auto global_step = optimizer->get_steps();
