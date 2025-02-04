@@ -55,7 +55,7 @@ jobs:
           tags: ${{ env.TAG_NAME }}
           context: .
           file: dockerfile/Dockerfile
-          target: dev
+          target: release
   smoke-test-docker-image:
     needs: create-docker-release-image
     strategy:
