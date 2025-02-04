@@ -877,7 +877,7 @@ class TtModelArgs:
             logger.info(f"MLP grid: {mlp_core_grid}")
             logger.info(f"MLP prefill grids @ 32: w1/w3: {mlp1_3_grid(32)}, w2: {mlp2_grid(32)}")
             logger.info(
-                f"MLP prefill grids @ max: w1/w3: {mlp1_3_grid(self.max_seq_len)}, w2: {mlp2_grid(self.max_seq_len)}"
+                f"MLP prefill grids @ max_seq_len({self.max_seq_len}): w1/w3: {mlp1_3_grid(self.max_seq_len)}, w2: {mlp2_grid(self.max_seq_len)}"
             )
             logger.info(f"LM head grid: {self.lm_head_core_grid}")
 
