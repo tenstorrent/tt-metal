@@ -130,6 +130,8 @@ void kernel_main() {
     uint32_t loop_count = 0;
     uint32_t total_words_procesed = 0;
 
+    uint32_t launch_msg_rd_ptr = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
+    tt_l1_ptr launch_msg_t* const launch_msg = GET_MAILBOX_ADDRESS_DEV(launch[launch_msg_rd_ptr]);
     while (1) {
         if (!fvc_req_buf_is_empty(fvc_consumer_req_buf) && fvc_req_valid(fvc_consumer_req_buf)) {
             uint32_t req_index = fvc_consumer_req_buf->rdptr.ptr & CHAN_REQ_BUF_SIZE_MASK;
@@ -218,6 +220,9 @@ void kernel_main() {
             if (loop_count >= 0x1000) {
                 break;
             }
+        }
+        if (launch_msg->kernel_config.exit_erisc_kernel) {
+            return;
         }
     }
     uint64_t cycles_elapsed = fvc_producer_state.packet_timestamp - start_timestamp;
