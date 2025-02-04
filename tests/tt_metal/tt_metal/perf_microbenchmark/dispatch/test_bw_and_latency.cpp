@@ -49,6 +49,7 @@ bool hammer_pcie_g = false;
 bool hammer_pcie_type_g = false;
 bool test_write = false;
 bool linked = false;
+uint32_t nop_count_g = 0;
 
 void init(int argc, char** argv) {
     std::vector<std::string> input_args(argv, argv + argc);
@@ -88,6 +89,7 @@ void init(int argc, char** argv) {
         log_info(LogTest, " -hp: hammer hugepage PCIe memory while executing (for PCIe test)");
         log_info(LogTest, " -hpt:hammer hugepage PCIe hammer type: 0:32bit writes 1:128bit non-temporal writes");
         log_info(LogTest, "  -psrta: pass page size as a runtime argument (default compile time define)");
+        log_info(LogTest, " -nop: time loop of <n> nops");
         exit(0);
     }
 
@@ -110,6 +112,8 @@ void init(int argc, char** argv) {
     page_size_g = test_args::get_command_option_uint32(input_args, "-p", DEFAULT_PAGE_SIZE);
     page_size_as_runtime_arg_g = test_args::has_command_option(input_args, "-psrta");
     read_one_packet_g = test_args::has_command_option(input_args, "-o");
+    nop_count_g = test_args::get_command_option_uint32(input_args, "-nop", 0);
+
     if (read_one_packet_g && page_size_g > 8192) {
         log_info(LogTest, "Page size must be <= 8K for read_one_packet\n");
         exit(-1);
@@ -270,7 +274,9 @@ int main(int argc, char** argv) {
             {"LINKED", std::to_string(linked)},
             {"NUM_MCAST_DESTS", std::to_string(num_mcast_dests)},
             {"MCAST_NOC_END_ADDR_X", std::to_string(mcast_noc_addr_end_x)},
-            {"MCAST_NOC_END_ADDR_Y", std::to_string(mcast_noc_addr_end_y)}};
+            {"MCAST_NOC_END_ADDR_Y", std::to_string(mcast_noc_addr_end_y)},
+            {"NOP_COUNT", std::to_string(nop_count_g)},
+        };
         if (!page_size_as_runtime_arg_g) {
             defines.insert(std::pair<string, string>("PAGE_SIZE", std::to_string(page_size_g)));
         }

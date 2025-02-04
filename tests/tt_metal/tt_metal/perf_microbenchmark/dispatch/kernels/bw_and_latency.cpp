@@ -3,6 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 void kernel_main() {
+#if NOP_COUNT
+    for (int i = 0; i < ITERATIONS; i++) {
+#pragma GCC unroll 4096
+        for (int j = 0; j < NOP_COUNT; j++) {
+            asm("nop");
+        }
+    }
+#else
 #ifdef PAGE_SIZE
     uint32_t page_size = PAGE_SIZE;
 #else
@@ -58,6 +66,7 @@ void kernel_main() {
     noc_async_write_barrier();
 #else
     noc_async_read_barrier();
+#endif
 #endif
 #endif
 }
