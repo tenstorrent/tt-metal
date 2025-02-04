@@ -122,24 +122,23 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
         CreateCircularBuffer(program, sender_worker_core_range, cb_reserved_packet_header_config);
 
     // Reduction kernel stuff
-    auto all_cores = input_tensor_cores.merge(sender_worker_core_range);
+    auto all_cores = output_tensor_cores.merge(sender_worker_core_range);
     auto reduction_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
 
     /* reduction cb */
-    uint32_t reduction_CB_single_tile_size = input_tensor.get_tensor_spec().tile().get_tile_size(df);
-    uint32_t reduction_CB_tiles = input_tensor_shard_num_pages * ring_size;
+    uint32_t reduction_CB_single_tile_size = output_tensor.get_tensor_spec().tile().get_tile_size(df);
+    uint32_t reduction_CB_tiles = output_tensor_shard_num_pages * ring_size;
     uint32_t reduction_CB_size = reduction_CB_tiles * reduction_CB_single_tile_size;
 
     uint32_t reduction_cb_index = tt::CBIndex::c_1;
     tt::tt_metal::CircularBufferConfig reduction_cb_config =
         tt::tt_metal::CircularBufferConfig(reduction_CB_size, {{reduction_cb_index, df}})
             .set_page_size(reduction_cb_index, reduction_CB_single_tile_size);
-    // .set_globally_allocated_address(*output_tensor.buffer()); // TODO: Remove once new cb attached for output
     auto cb_reduction = tt::tt_metal::CreateCircularBuffer(program, all_cores, reduction_cb_config);
 
     /* out cb */
-    uint32_t out_CB_single_tile_size = input_tensor.get_tensor_spec().tile().get_tile_size(df);
-    uint32_t out_CB_tiles = input_tensor_shard_num_pages;
+    uint32_t out_CB_single_tile_size = output_tensor.get_tensor_spec().tile().get_tile_size(df);
+    uint32_t out_CB_tiles = output_tensor_shard_num_pages;
     uint32_t out_CB_size = out_CB_tiles * out_CB_single_tile_size;
 
     uint32_t out_cb_index = tt::CBIndex::c_2;
@@ -148,7 +147,7 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
             .set_page_size(out_cb_index, out_CB_single_tile_size)
             .set_globally_allocated_address(*output_tensor.buffer());  // TODO: Remove once new cb attached for output
     auto cb_out = tt::tt_metal::CreateCircularBuffer(
-        program, input_tensor_cores, out_cb_config);  // TODO: This should be the output cores instead
+        program, output_tensor_cores, out_cb_config);  // TODO: This should be the output cores instead
 
     // Create reduction dataflow kernel
     auto reduction_reader_kernel_config = tt::tt_metal::ReaderDataMovementConfig{};
@@ -161,7 +160,7 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/all_reduce_async/device/kernels/"
         "reduction_dataflow.cpp",
-        input_tensor_cores,
+        output_tensor_cores,
         reduction_reader_kernel_config);
 
     // Create reduction dataflow kernel
@@ -174,13 +173,13 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/all_reduce_async/device/kernels/"
         "eltwise_binary_kernel.cpp",
-        input_tensor_cores,
+        output_tensor_cores,
         reduction_kernel_config);
     std::vector<uint32_t> reduction_kernel_rt_args = {
-        ring_size,                     // num_blocks
-        input_tensor_shard_num_pages,  // block_num_tiles
+        ring_size,                      // num_blocks
+        output_tensor_shard_num_pages,  // block_num_tiles
     };
-    tt::tt_metal::SetRuntimeArgs(program, reduction_kernel_id, input_tensor_cores, reduction_kernel_rt_args);
+    tt::tt_metal::SetRuntimeArgs(program, reduction_kernel_id, output_tensor_cores, reduction_kernel_rt_args);
 
     // KERNEL CREATION
     // Reader
@@ -230,7 +229,6 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
                                 // semaphore
     auto input_cores_vec = corerange_to_cores(input_tensor_cores, std::nullopt, true);
     auto output_cores_vec = corerange_to_cores(output_tensor_cores, std::nullopt, true);
-    auto cores_per_device = output_cores_vec.size() / ring_size;
 
     for (uint32_t link = 0; link < num_links; link++) {
         CoreCoord core = sender_worker_cores[link];
@@ -247,12 +245,21 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
 
         std::vector<uint32_t> input_tensor_cores_x;
         std::vector<uint32_t> input_tensor_cores_y;
+        std::vector<uint32_t> output_tensor_cores_x;
+        std::vector<uint32_t> output_tensor_cores_y;
         for (uint32_t i = input_tile_id_start / input_tensor_shard_num_pages;
              i < (input_tile_id_end + input_tensor_shard_num_pages - 1) / input_tensor_shard_num_pages;
              i++) {
             auto this_core = device->worker_core_from_logical_core(input_cores_vec[i]);
             input_tensor_cores_x.push_back(this_core.x);
             input_tensor_cores_y.push_back(this_core.y);
+        }
+        for (uint32_t i = input_tile_id_start / output_tensor_shard_num_pages;
+             i < (input_tile_id_end + output_tensor_shard_num_pages - 1) / output_tensor_shard_num_pages;
+             i++) {
+            auto this_core = device->worker_core_from_logical_core(output_cores_vec[i]);
+            output_tensor_cores_x.push_back(this_core.x);
+            output_tensor_cores_y.push_back(this_core.y);
         }
 
         tt::log_debug(tt::LogOp, "input_tile_id_start: {}", input_tile_id_start);
@@ -303,10 +310,10 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
         uint32_t out_ready_sem_wait_value = ring_size * num_links;
         std::vector<uint32_t> writer_rt_args = {
             reduction_cb_index,                   // tensor_address0
-            input_tensor_shard_num_pages,         // num_tiles_per_core
+            output_tensor_shard_num_pages,        // num_tiles_per_core
             worker_num_tiles_to_read,             // num_tiles_to_read
             output_first_core_tile_start_offset,  // first_core_tile_start_offset
-            input_tensor_cores_x.size(),          // num_cores
+            output_tensor_cores_x.size(),         // num_cores
             wait_output_semaphore,                // wait_output_semaphore
             reset_global_semaphore,               // reset_global_semaphore
             semaphore.address(),                  // out_ready_sem_bank_addr (absolute address)
@@ -318,8 +325,8 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
             mcast_end_core.x,                     // mcast_dest_noc_end_x
             mcast_end_core.y,                     // mcast_dest_noc_end_y
         };
-        writer_rt_args.insert(writer_rt_args.end(), input_tensor_cores_x.begin(), input_tensor_cores_x.end());
-        writer_rt_args.insert(writer_rt_args.end(), input_tensor_cores_y.begin(), input_tensor_cores_y.end());
+        writer_rt_args.insert(writer_rt_args.end(), output_tensor_cores_x.begin(), output_tensor_cores_x.end());
+        writer_rt_args.insert(writer_rt_args.end(), output_tensor_cores_y.begin(), output_tensor_cores_y.end());
         log_trace(tt::LogOp, "Writer Runtime Args:");
         for (const auto& arg : writer_rt_args) {
             log_trace(tt::LogOp, "\t{}", arg);
