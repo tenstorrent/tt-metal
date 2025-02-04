@@ -2057,7 +2057,18 @@ inline void noc_async_write_one_packet_with_trid(
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size);
 #ifndef ARCH_GRAYSKULL
     ncrisc_noc_fast_write_any_len<proc_type, noc_mode, true, true>(
-        noc, write_cmd_buf, src_local_l1_addr, dst_noc_addr, size, NOC_UNICAST_WRITE_VC, false, false, 1, true, trid);
+        noc,
+        write_cmd_buf,
+        src_local_l1_addr,
+        dst_noc_addr,
+        size,
+        NOC_UNICAST_WRITE_VC,
+        false /*mcast*/,
+        false /*linked*/,
+        1 /*num_dests*/,
+        false /*multicast_path_reserve*/,
+        false /*posted*/,
+        trid /*trid*/);
 #endif
     WAYPOINT("NAWD");
 }
