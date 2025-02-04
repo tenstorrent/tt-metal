@@ -18,8 +18,7 @@ typedef struct dispatch_static_config {
     std::optional<uint32_t> my_downstream_cb_sem_id;
 
     std::optional<uint32_t> split_dispatch_page_preamble_size;  // 14
-    std::optional<uint32_t> split_prefetch;
-    std::optional<uint32_t> prefetch_h_max_credits;
+    std::optional<uint32_t> prefetch_h_max_credits;             // Used if split_prefetch is true
 
     std::optional<uint32_t> packed_write_max_unicast_sub_cmds;  // 19
     std::optional<uint32_t> dispatch_s_sync_sem_base_addr;
@@ -50,8 +49,9 @@ typedef struct dispatch_dependent_config {
     std::optional<uint32_t> downstream_cb_size;    // Dependent
     std::optional<uint32_t> downstream_cb_sem_id;  // Dependant
 
-    std::optional<uint32_t> prefetch_h_noc_xy;                     // Dependent
-    std::optional<uint32_t> prefetch_h_local_downstream_sem_addr;  // Dependent
+    std::optional<uint32_t> split_prefetch;                        // If upstream is NOT a prefetch_HD
+    std::optional<uint32_t> prefetch_h_noc_xy;                     // Dependent. Used if split_prefetch is true
+    std::optional<uint32_t> prefetch_h_local_downstream_sem_addr;  // Dependent. Used if split_prefetch is true
 } dispatch_dependent_config_t;
 
 class DispatchKernel : public FDKernel {
