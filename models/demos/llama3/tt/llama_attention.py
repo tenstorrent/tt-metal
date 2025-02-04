@@ -125,17 +125,16 @@ class TtLlamaAttention(LightweightModule):
                 dim=-1,
             )
             # Expand bias to a whole tile - FIXME: we wouldn't need to do if matmul bias terms worked
-            qkv_bias = qkv_bias.unsqueeze(0).expand(32, -1)
             self.wqkv_bias = ttnn.as_tensor(
                 qkv_bias,
                 device=self.mesh_device,
                 mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
-                dtype=self.dtype,
+                dtype=ttnn.bfloat16,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 layout=ttnn.TILE_LAYOUT,
                 cache_file_name=cache_name("wqkv_bias_sharded"),
             )
-            self.wqkv_bias_prefill = ttnn.reshape(self.wqkv_bias, ttnn.Shape([1, 1, 32, self.wqkv_bias.shape[-1]]))
+            self.wqkv_bias = ttnn.unsqueeze_to_4D(self.wqkv_bias)
 
         # when splitting the devices, we need to make sure that the number of heads is divisible by the number of devices
         assert self.n_heads % self.num_devices_per_group == 0
@@ -531,11 +530,16 @@ class TtLlamaAttention(LightweightModule):
         xqkv_fused = ttnn.linear(
             x_11SH,
             self.wqkv,
+            # bias=self.wqkv_bias,
             dtype=self.ccl_dtype if self.TG else ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config_hifi2,
             program_config=self.model_config["XQKV_PREFILL_PROGCFG"](seq_len),
         )
+
+        # FIXME: surely ttnn.linear bias should work?
+        if self.wqkv_bias is not None:
+            xqkv_fused = xqkv_fused + self.wqkv_bias
 
         xqkv_fused = tt_all_reduce(
             xqkv_fused,
@@ -546,10 +550,6 @@ class TtLlamaAttention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             dtype=self.ccl_dtype,
         )
-
-        # FIXME: surely ttnn.linear bias should work?
-        if self.wqkv_bias is not None:
-            xqkv_fused = xqkv_fused + self.wqkv_bias_prefill
 
         if seq_len > self.MAX_QKV_MM_SEQ_LEN:
             xqkv_fused = ttnn.reshape(xqkv_fused, [1, 1, seq_len, -1])
