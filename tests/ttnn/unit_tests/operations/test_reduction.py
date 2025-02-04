@@ -9,6 +9,7 @@ import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import skip_for_grayskull
+from models.utility_functions import torch_random
 
 
 @pytest.mark.parametrize("batch_size", [1, 16])
@@ -304,3 +305,59 @@ def test_mean_2d_tensor_dims(device, h, w, dim, keepdim):
 
     output_tensor = ttnn.to_torch(output_tensor)
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
+
+
+# def run_maxpool(device, input_shape, kernel_size, stride, padding, dilation):
+#     torch_input = torch.rand(input_shape, dtype=torch.bfloat16)
+#     batch_size, in_c, in_h, in_w = input_shape
+
+#     input_tensor = torch.permute(torch_input, (0, 2, 3, 1))
+#     input_tensor = torch.reshape(input_tensor, (1, 1, -1, in_c))
+#     input_tensor = ttnn.from_torch(input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+#     output_tensor = ttnn.max_pool2d(
+#         input_tensor,
+#         batch_size,
+#         in_h,
+#         in_w,
+#         in_c,
+#         kernel_size,
+#         stride,
+#         padding,
+#         dilation,
+#     )
+
+#     expected_output = torch.nn.functional.max_pool2d(torch_input, kernel_size, stride, padding)
+
+#     output_tensor = ttnn.to_torch(output_tensor)
+#     _, out_c, out_h, out_w = expected_output.shape
+#     output_tensor = torch.reshape(output_tensor, (batch_size, out_h, out_w, out_c))
+#     output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
+#     print(output_tensor.shape)
+#     assert_with_pcc(output_tensor, expected_output)
+
+# def run_reduce_sum_h(device, batch_size, h, w, dim):
+#     torch_input_tensor = torch_random((batch_size, h, w), -1, 1, dtype=torch.bfloat16)
+
+#     # torch output
+#     torch_output_tensor = torch.mean(torch_input_tensor, dim=dim, keepdim=True, dtype=torch.bfloat16)
+
+#     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+#     # ttnn output
+#     output_tensor = ttnn.mean(input_tensor, dim=dim)
+
+#     output_tensor = ttnn.to_torch(output_tensor)
+#     assert_with_pcc(torch_output_tensor, output_tensor)
+
+# @pytest.mark.parametrize("input_shape",
+#     (1, 32, 2, 2),  # Single core
+#     (1, 32, 32, 32),  # Multi core face height default
+#     (1, 192, 56, 56),  # Multi core face height not default
+# )
+# @pytest.mark.parametrize("kernel_size",
+#     (2, 2),  # Small kernel
+#     (5, 5),  # Large kernel
+# )
+# def test_run_reduce_sum_h_after_max_pool(input_shape, kernel_size, device):
+#     device = ttnn.open_device(device_id=0, l1_small_size=4096)
+#     run_maxpool(device, input_shape, kernel_size, kernel_size, (0, 0), (1, 1))
+#     run_reduce_sum_h(device, 1, 32, 32, -2)
