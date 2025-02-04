@@ -39,7 +39,7 @@ on:
             - "amd64"
 jobs:
   build-docker-image:
-    name: "🐳️ Build ${{ inputs.distro }} {inputs.version }} image"
+    name: "🐳️ Build ${{ inputs.distro }} ${{inputs.version }} image"
     timeout-minutes: 30
     env:
       CONFIG: ci
