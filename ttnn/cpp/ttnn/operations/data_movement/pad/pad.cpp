@@ -37,6 +37,8 @@ static ttnn::Tensor pad_impl(
     const bool use_multicore,
     const std::optional<MemoryConfig>& memory_config_arg) {
     auto input_logical_shape = input_tensor.logical_shape().view();
+    const int original_rank = input_tensor.get_shape().rank();
+
     // on host
     if (input_tensor.storage_type() != StorageType::DEVICE) {
         if (eq_spans(input_logical_shape, output_padded_shape)) {
@@ -160,6 +162,28 @@ static ttnn::Tensor pad_impl(
                                  queue_id)
                                  .front();
 
+        if (original_rank <= 4) {
+            auto to_vec = [](const auto& arr) { return ttnn::SmallVector<uint32_t>{arr.begin(), arr.end()}; };
+            auto output_shape = to_vec(output_tensor.get_shape().value);
+            auto padded_shape = to_vec(output_tensor.get_shape().with_tile_padding().value);
+
+            if (const auto rank_diff = output_shape.size() - original_rank; rank_diff) {
+                auto remove_prefix = [](auto& source, size_t n) { source.erase(source.begin(), source.begin() + n); };
+                remove_prefix(output_shape, rank_diff);
+                remove_prefix(padded_shape, rank_diff);
+                auto squeezedShape = ttnn::Shape(tt::tt_metal::LegacyShape(output_shape, padded_shape));
+                output_tensor = ttnn::reshape(output_tensor, squeezedShape);
+                output_tensor = ttnn::reshape(output_tensor, ttnn::Shape(padded_shape));
+            }
+        } else {
+            auto to_vec = [](const auto& arr) { return ttnn::SmallVector<uint32_t>{arr.begin(), arr.end()}; };
+            auto output_shape = to_vec(output_tensor.get_shape().value);
+            auto padded_shape = to_vec(output_tensor.get_shape().with_tile_padding().value);
+
+            auto squeezedShape = ttnn::Shape(tt::tt_metal::LegacyShape(output_shape, padded_shape));
+            output_tensor =
+                ttnn::reshape(output_tensor, update_original_shape(squeezedShape, input_tensor.get_shape()));
+        }
         return output_tensor;
     }
 }
