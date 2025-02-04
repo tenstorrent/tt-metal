@@ -75,26 +75,21 @@ def run_all_reduce_impl(
         ##################################
 
         ##### FF2 Case #####
-        num_cores = 1  # 24 # matmul ring
+        num_cores = 24  # matmul ring
+        core_offset = 1
         M, N = output_shape[2:]
         N_per_shard = round_up(math.ceil(N / num_cores), ttnn.TILE_SIZE)
         input_shape = [*cluster_shape, M, N]
 
-        input_grid = num_cores_to_rectangle_grid(num_cores, mesh_device)
-        CORE_RANGE = [(x, y) for y in range(input_grid[1]) for x in range(input_grid[0])]
-        # core_range_set = ttnn.CoreRangeSet(
-        #     [
-        #         ttnn.CoreRange(
-        #             ttnn.CoreCoord(x, y),
-        #             ttnn.CoreCoord(x, y),
-        #         )
-        #         for x, y in CORE_RANGE
-        #     ]
-        # )
+        CORE_RANGE = [(x, y) for y in range(compute_grid_size.y) for x in range(compute_grid_size.x)]
         core_range_set = ttnn.CoreRangeSet(
-            {
-                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0)),
-            }
+            [
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(x, y),
+                    ttnn.CoreCoord(x, y),
+                )
+                for x, y in CORE_RANGE[core_offset : core_offset + num_cores]
+            ]
         )
         input_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
@@ -206,7 +201,7 @@ def run_all_reduce_impl(
 @pytest.mark.parametrize(
     "output_shape, cluster_axis, num_links",
     [
-        ([1, 1, 32, 32], 1, 1),
+        ([1, 1, 32, 3840], 1, 1),
     ],
 )
 @pytest.mark.parametrize(
