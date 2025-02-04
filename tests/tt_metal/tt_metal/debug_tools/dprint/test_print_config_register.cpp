@@ -112,7 +112,7 @@ static std::string generate_golden_output(const std::vector<std::string>& field_
 }
 
 // Performs DRAM --> Reader --> CB --> Datacopy --> CB --> Writer --> DRAM on a single core
-static bool print_config_reg(
+static void print_config_reg(
     DPrintFixture* fixture, tt_metal::IDevice* device, const ConfigRegPrintTestConfig& config) {
     // Create program
     tt_metal::Program program = tt_metal::CreateProgram();
@@ -124,14 +124,9 @@ static bool print_config_reg(
 
     // Run the program
     fixture->RunProgram(device, program);
-
-    //auto golden_output = generate_golden_output(input_data, config.data_format);
+    
     // Check the print log against golden output.
     EXPECT_TRUE(FilesMatchesString(DPrintFixture::dprint_file_name, golden_output));
-
-    // Compare input and output data
-    //return input_data == output_data;
-    return true;
 }
 
 TEST_F(DPrintFixture, ConfigRegTestPrint) {
