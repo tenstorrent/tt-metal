@@ -89,14 +89,6 @@ void kernel_main() {
     const size_t start_sync_val = total_workers_per_sync;
     const size_t finish_sync_val = 3 * total_workers_per_sync;
 
-    DPRINT << "Writing " << (uint32_t)num_mcasts << " mcasts\n";
-    DPRINT << "Writing " << (uint32_t)num_unicasts << " unicasts\n";
-    DPRINT << "Mcast fwd hops: " << (uint32_t)mcast_fwd_hops << "\n";
-    DPRINT << "Mcast bwd hops: " << (uint32_t)mcast_bwd_hops << "\n";
-    DPRINT << "Unicast hops: " << (uint32_t)unicast_hops << "\n";
-    DPRINT << "Has fwd conn: " << (uint32_t)fabric_connection.has_forward_connection() << "\n";
-    DPRINT << "Has bwd conn: " << (uint32_t)fabric_connection.has_backward_connection() << "\n";
-    DPRINT << "Open connection\n";
     fabric_connection.open();
 
     cb_reserve_back(source_l1_cb_index, 1);
