@@ -160,6 +160,7 @@ def run_interactive_demo_inference(device, num_inference_steps, image_size=(256,
                     data = json.load(f)
                     input_prompts = data["prompts"]
             except json.decoder.JSONDecodeError:
+                time.sleep(0.25)
                 continue
             else:
                 break
