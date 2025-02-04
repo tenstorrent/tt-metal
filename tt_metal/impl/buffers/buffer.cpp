@@ -21,6 +21,7 @@
 #include "fmt/base.h"
 #include <reflection.hpp>
 #include "lightmetal/host_api_capture_helpers.hpp"
+#include <host_api_call_guard.hpp>
 
 #include "tracy/Tracy.hpp"
 

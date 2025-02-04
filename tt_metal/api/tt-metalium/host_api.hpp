@@ -13,6 +13,7 @@
 #include "sub_device_types.hpp"
 #include "span.hpp"
 #include "lightmetal_binary.hpp"
+#include "host_api_call_guard.hpp"
 
 /** @file */
 
