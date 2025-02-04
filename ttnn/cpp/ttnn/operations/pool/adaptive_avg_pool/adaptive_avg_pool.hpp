@@ -8,6 +8,8 @@
 
 namespace ttnn {
 namespace operations::pool {
+ttnn::Tensor compute_adaptive_avg_pool(
+    const ttnn::Tensor& input, const ttnn::Shape& output_size, const std::optional<MemoryConfig>& mem_config);
 
 inline int64_t start_index(int64_t out_idx, int64_t out_size, int64_t in_size) {
     return (out_idx * in_size) / out_size;

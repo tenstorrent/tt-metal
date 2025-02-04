@@ -6,13 +6,13 @@
 #include "ttnn/operations/core/core.hpp"
 #include "cpp/ttnn/operations/data_movement/squeeze/squeeze.hpp"
 #include "cpp/ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
+#include <ttnn/tensor/types.hpp>
 
 namespace ttnn::operations::pool {
 
-ttnn::Tensor AdaptiveAvgPool2DOperation::invoke(
+template <typename T>
+ttnn::Tensor compute_adaptive_avg_pool(
     const ttnn::Tensor& input, const ttnn::Shape& output_size, const std::optional<MemoryConfig>& mem_config) {
-    TT_FATAL(input.storage_type() == StorageType::DEVICE, "Input tensor must be on device");
-
     auto input_mem_config = input.memory_config();
     auto input_shape = input.get_logical_shape();
     auto input_height = input_shape[-3];
@@ -28,15 +28,18 @@ ttnn::Tensor AdaptiveAvgPool2DOperation::invoke(
     output_shape[-2] = output_width;
 
     auto output_mem_config = mem_config.value_or(input_mem_config);
+    auto physical_volume = input.volume();
     // create output tensor
     auto output_tensor =
         create_device_tensor(output_shape, input.get_dtype(), input.get_layout(), input.device(), output_mem_config);
+    auto owned_buffer = tt::tt_metal::owned_buffer::create<T>(output_tensor.volume());
+    auto device_buffer = input.device_buffer();
+    uint32_t size_in_bytes = device_buffer->size();
+    std::vector<T> data_vec(size_in_bytes / sizeof(T));
+    tt::tt_metal::tensor_impl::read_data_from_device_buffer<T>(
+        input.device()->command_queue(), device_buffer, data_vec.data(), true);
 
-    std::vector<float> input_buffer(input.volume());
-    tt::tt_metal::tensor_impl::read_data_from_device_buffer<float>(
-        input.device()->command_queue(), input.device_buffer(), input_buffer.data(), true);
-
-    std::vector<float> output_buffer(output_tensor.volume(), 0.0f);
+    auto input_buffer = tt::tt_metal::owned_buffer::create<T>(std::move(data_vec));
 
     auto input_strides = input.strides();
     auto output_strides = output_tensor.strides();
@@ -51,35 +54,46 @@ ttnn::Tensor AdaptiveAvgPool2DOperation::invoke(
                 int64_t iw1 = end_index(ow, output_width, input_width);
                 int64_t kw = iw1 - iw0;
                 for (uint32_t c = 0; c < channels; ++c) {
-                    float sum = 0.0f;
+                    auto sum = static_cast<T>(0.0f);
                     for (int64_t ih = ih0; ih < ih1; ++ih) {
                         for (int64_t iw = iw0; iw < iw1; ++iw) {
                             size_t input_idx = n * input_strides[0] + ih * input_strides[1] + iw * input_strides[2] + c;
-                            sum += input_buffer[input_idx];
+                            sum = sum + (input_buffer[input_idx]);
                         }
                     }
-
                     size_t output_idx = n * output_strides[0] + oh * output_strides[1] + ow * output_strides[2] + c;
-                    output_buffer[output_idx] = sum / kh / kw;
+                    owned_buffer[output_idx] = sum / kh / kw;
                 }
             }
         }
     }
 
-    auto output_tensor_buffer = tt::tt_metal::owned_buffer::create<float>(output_buffer.size());
-    std::copy(output_buffer.begin(), output_buffer.end(), output_tensor_buffer.begin());
-
-    auto output_tensor_with_data =
-        Tensor(OwnedStorage{output_tensor_buffer}, output_shape, input.get_dtype(), input.get_layout());
+    auto output = Tensor(OwnedStorage{owned_buffer}, output_shape, input.get_dtype(), input.get_layout());
     if (input.device() != nullptr) {
-        output_tensor_with_data = output_tensor_with_data.to(input.device(), output_mem_config);
+        output = output.to(input.device(), output_mem_config);
     }
 
-    return output_tensor_with_data;
+    return output;
+}
+ttnn::Tensor AdaptiveAvgPool2DOperation::invoke(
+    const ttnn::Tensor& input, const ttnn::Shape& output_size, const std::optional<MemoryConfig>& mem_config) {
+    TT_FATAL(input.storage_type() == StorageType::DEVICE, "Input tensor must be on device");
+
+    ttnn::Tensor output;
+    switch (input.get_dtype()) {
+        case DataType::FLOAT32: output = compute_adaptive_avg_pool<float>(input, output_size, mem_config); break;
+        case DataType::BFLOAT16: output = compute_adaptive_avg_pool<bfloat16>(input, output_size, mem_config); break;
+        default: TT_FATAL(false, "Unsupported data type for adaptive_avg_pool2d");
+    }
+    return output;
 }
 
 ttnn::Tensor AdaptiveAvgPool1DOperation::invoke(
     const ttnn::Tensor& input, const ttnn::Shape& output_size, const std::optional<MemoryConfig>& mem_config) {
+    TT_FATAL(input.storage_type() == StorageType::DEVICE, "Input tensor must be on device");
+    auto input_dims = input.get_logical_shape().size();
+    TT_FATAL(input_dims >= 2 && input_dims < 4, "Input tensor must have dimensions between 2 and 4");
+    TT_FATAL(output_size.size() == 1, "Output size must be a 1D dimension");
     auto input_tensor = ttnn::unsqueeze(input, 1);
     ttnn::Shape out_size = {1, output_size[0]};
     auto output_tensor = ttnn::adaptive_avg_pool2d(input_tensor, out_size, mem_config);

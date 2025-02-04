@@ -22,12 +22,11 @@ shapes_and_output_sizes = [
 ]
 
 
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
 @pytest.mark.parametrize("input_shape, output_size", shapes_and_output_sizes)
-def test_run_adaptive_avg_pool2d(device, input_shape, output_size):
-    dtype = ttnn.float32
-
+def test_run_adaptive_avg_pool2d(device, input_shape, output_size, dtype):
     torch.manual_seed(0)
-    torch_input_tensor = torch.randn(input_shape)
+    torch_input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)
     torch_output_tensor = torch.nn.functional.adaptive_avg_pool2d(torch_input_tensor, output_size)
     torch_input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
     input_tensor = ttnn.from_torch(torch_input_tensor, dtype=dtype, device=device)
@@ -47,10 +46,9 @@ shapes_and_output_sizes_1d = [
 ]
 
 
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16])
 @pytest.mark.parametrize("input_shape, output_size", shapes_and_output_sizes_1d)
-def test_run_adaptive_avg_pool1d(device, input_shape, output_size):
-    dtype = ttnn.float32
-
+def test_run_adaptive_avg_pool1d(device, input_shape, output_size, dtype):
     torch.manual_seed(0)
     torch_input_tensor = torch.randn(input_shape)
 
