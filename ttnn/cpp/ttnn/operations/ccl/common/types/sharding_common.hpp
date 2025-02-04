@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 // File contains enumerations that are common to both kernel and program factories with regards to sharding
 
 namespace ttnn::ccl::common::shard_addr_gen_utils {

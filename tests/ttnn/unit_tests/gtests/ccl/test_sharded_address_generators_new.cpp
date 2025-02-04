@@ -7,6 +7,9 @@
 #include <cstddef>
 #include "gtest/gtest.h"
 #include "tt_metal/hw/inc/wormhole/noc/noc_parameters.h"
+
+#if !(defined(KERNEL_BUILD) || defined(FW_BUILD))
+
 #define FORCE_INLINE inline __attribute__((always_inline))
 #define noc_index 0
 #define NOC_XY_ADDR(x, y, addr)                                                                                      \
@@ -16,6 +19,9 @@
 #define NOC_0_Y(noc_index, noc_size_y, y) y
 #define DYNAMIC_NOC_X(noc, x) NOC_0_X(noc, noc_size_x, (x))
 #define DYNAMIC_NOC_Y(noc, y) NOC_0_Y(noc, noc_size_y, (y))
+
+#endif
+
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 mapping_table_t map[9] = {0x00000001, 0x00020003, 0x00040200, 0x02010202, 0x02030204, 0x03000301, 0x03020303, 0x04000401, 0x04020403};
 uint64_t real_core_x_vals [18] = {0x0, 0x0, 0x0, 0x0, 0x0, 0x2, 0x2, 0x2, 0x2, 0x2, 0x3, 0x3, 0x3, 0x3, 0x4, 0x4, 0x4, 0x4};
