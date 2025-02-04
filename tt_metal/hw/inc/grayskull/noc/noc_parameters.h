@@ -29,6 +29,9 @@
 #define NOC_INSTANCE_OFFSET_BIT 16
 #define NOC_CMD_BUF_INSTANCE_OFFSET(noc, buf) ((buf << NOC_CMD_BUF_OFFSET_BIT) + (noc << NOC_INSTANCE_OFFSET_BIT))
 
+#define PCIE_NOC_X 0
+#define PCIE_NOC_Y 4
+
 ////
 // NIU master IF control registers:
 

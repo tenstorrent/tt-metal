@@ -6,9 +6,9 @@
 #define _NOC_PARAMETERS_H_
 
 // Coordinate Virtualization is not currently supported on BH (requires syseng support for updating FW).
-#define VIRTUAL_TENSIX_START_X 0
-#define VIRTUAL_TENSIX_START_Y 0
-#define COORDINATE_VIRTUALIZATION_ENABLED 0
+#define VIRTUAL_TENSIX_START_X 1
+#define VIRTUAL_TENSIX_START_Y 2
+#define COORDINATE_VIRTUALIZATION_ENABLED 1
 
 #define NUM_NOCS 2
 #define NUM_TENSIXES 140
@@ -23,6 +23,9 @@
 #define NOC_INSTANCE_OFFSET 0x00010000
 #define NOC_INSTANCE_OFFSET_BIT 16
 #define NOC_CMD_BUF_INSTANCE_OFFSET(noc, buf) ((buf << NOC_CMD_BUF_OFFSET_BIT) + (noc << NOC_INSTANCE_OFFSET_BIT))
+
+#define PCIE_NOC_X 19
+#define PCIE_NOC_Y 24
 
 ////
 // NIU master IF control registers:
