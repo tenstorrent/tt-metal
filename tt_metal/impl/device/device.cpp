@@ -802,6 +802,8 @@ void Device::clear_l1_state() {
 
 void Device::compile_command_queue_programs() {
     ZoneScoped;
+    // KCM - This is called from under CreateDevice() in ttnn just like tt-metal
+    ENSURE_CALLED_FROM_API();
     auto command_queue_program_ptr = std::make_unique<Program>();
     auto mmio_command_queue_program_ptr = std::make_unique<Program>();
     if (this->is_mmio_capable()) {

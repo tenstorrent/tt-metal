@@ -222,6 +222,7 @@ void EnqueueReadBuffer(
     const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
     void* dst,
     bool blocking) {
+    PUBLIC_API_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureEnqueueReadBuffer, cq, buffer, dst, blocking);
     Buffer& buffer_obj = detail::GetBufferObject(buffer);
@@ -235,6 +236,7 @@ void EnqueueReadSubBuffer(
     void* dst,
     const BufferRegion& region,
     bool blocking) {
+    PUBLIC_API_ENTRY();
     detail::DispatchStateCheck(true);
     detail::ValidateBufferRegion(buffer, region);
 
@@ -254,6 +256,7 @@ void EnqueueWriteBuffer(
     const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
     HostDataType src,
     bool blocking) {
+    PUBLIC_API_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureEnqueueWriteBuffer, cq, buffer, src, blocking);
     Buffer& buffer_obj = detail::GetBufferObject(buffer);
@@ -269,12 +272,13 @@ void EnqueueWriteSubBuffer(
     bool blocking) {
     detail::DispatchStateCheck(true);
     detail::ValidateBufferRegion(buffer, region);
-
+    PUBLIC_API_ENTRY();
     cq.enqueue_write_buffer(std::move(buffer), std::move(src), region, blocking);
 }
 
 void EnqueueProgram(CommandQueue& cq, Program& program, bool blocking) {
     ZoneScoped;
+    PUBLIC_API_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureEnqueueProgram, cq, program, blocking);
     detail::DispatchStateCheck(true);
@@ -347,6 +351,7 @@ bool EventQuery(const std::shared_ptr<Event>& event) {
 }
 
 void Finish(CommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    PUBLIC_API_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureFinish, cq, sub_device_ids);
     detail::DispatchStateCheck(true);

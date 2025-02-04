@@ -32,6 +32,7 @@
 #include <tt_align.hpp>
 #include <tuple>
 #include "lightmetal/host_api_capture_helpers.hpp"
+#include <host_api_call_guard.hpp>
 
 namespace tt::tt_metal {
 

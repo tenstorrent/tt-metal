@@ -24,6 +24,7 @@
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/impl/trace/dispatch.hpp"
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
+#include <host_api_call_guard.hpp>
 
 namespace tt::tt_metal {
 namespace {
@@ -178,6 +179,7 @@ void HWCommandQueue::enqueue_read_buffer(
     const BufferRegion& region,
     bool blocking,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    ENSURE_CALLED_FROM_API();
     ZoneScopedN("HWCommandQueue_read_buffer");
     TT_FATAL(!this->manager.get_bypass_mode(), "Enqueue Read Buffer cannot be used with tracing");
     Buffer& buffer_obj = get_buffer_object(buffer);
@@ -232,6 +234,7 @@ void HWCommandQueue::enqueue_write_buffer(
     bool blocking,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
     ZoneScopedN("HWCommandQueue_write_buffer");
+    ENSURE_CALLED_FROM_API();
     TT_FATAL(!this->manager.get_bypass_mode(), "Enqueue Write Buffer cannot be used with tracing");
     // Top level API to accept different variants for buffer and src
     // For shared pointer variants, object lifetime is guaranteed at least till the end of this function
