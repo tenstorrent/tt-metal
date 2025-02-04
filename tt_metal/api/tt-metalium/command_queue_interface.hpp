@@ -34,7 +34,8 @@ enum class CommandQueueDeviceAddrType : uint8_t {
     COMPLETION_Q1_LAST_EVENT = 5,
     DISPATCH_S_SYNC_SEM = 6,
     DISPATCH_MESSAGE = 7,
-    UNRESERVED = 8
+    KERNEL_DEBUG_STATUS = 8,
+    UNRESERVED = 9
 };
 
 enum class CommandQueueHostAddrType : uint8_t {
@@ -167,6 +168,8 @@ private:
                 device_cq_addr_sizes_[dev_addr_idx] = settings.dispatch_s_sync_sem_;
             } else if (dev_addr_type == CommandQueueDeviceAddrType::DISPATCH_MESSAGE) {
                 device_cq_addr_sizes_[dev_addr_idx] = settings.dispatch_message_;
+            } else if (dev_addr_type == CommandQueueDeviceAddrType::KERNEL_DEBUG_STATUS) {
+                device_cq_addr_sizes_[dev_addr_idx] = 0x400;
             } else {
                 device_cq_addr_sizes_[dev_addr_idx] = settings.other_ptrs_size;
             }

@@ -327,9 +327,9 @@ void EthTunnelerKernel::CreateKernel() {
         false);
 }
 
-uint32_t EthTunnelerKernel::GetRouterQueueIdOffset(FDKernel* k, bool upstream) {
+uint32_t EthTunnelerKernel::GetRouterQueueIdOffset(const FDKernel* k, bool upstream) const {
     uint32_t queue_id = (upstream) ? 0 : static_config_.vc_count.value();
-    std::vector<FDKernel*>& kernels = (upstream) ? upstream_kernels_ : downstream_kernels_;
+    const std::vector<FDKernel*>& kernels = (upstream) ? upstream_kernels_ : downstream_kernels_;
     for (auto kernel : kernels) {
         if (auto router_kernel = dynamic_cast<EthRouterKernel*>(kernel)) {
             if (k == kernel) {
@@ -342,8 +342,8 @@ uint32_t EthTunnelerKernel::GetRouterQueueIdOffset(FDKernel* k, bool upstream) {
     TT_ASSERT(false, "Couldn't find router kernel");
     return queue_id;
 }
-uint32_t EthTunnelerKernel::GetRouterId(FDKernel* k, bool upstream) {
-    std::vector<FDKernel*>& search = (upstream) ? upstream_kernels_ : downstream_kernels_;
+uint32_t EthTunnelerKernel::GetRouterId(const FDKernel* k, bool upstream) const {
+    const std::vector<FDKernel*>& search = (upstream) ? upstream_kernels_ : downstream_kernels_;
     uint32_t router_id = 0;
     for (auto kernel : search) {
         if (auto router_kernel = dynamic_cast<EthRouterKernel*>(kernel)) {

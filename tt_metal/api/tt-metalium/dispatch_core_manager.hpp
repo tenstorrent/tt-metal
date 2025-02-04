@@ -338,12 +338,12 @@ class dispatch_core_manager {
         return assignment.dispatcher_s.value();
     }
 
-    CoreType get_dispatch_core_type(chip_id_t device_id) {
-        return this->dispatch_core_config_by_device[device_id].get_core_type();
+    CoreType get_dispatch_core_type(chip_id_t device_id) const {
+        return this->dispatch_core_config_by_device.at(device_id).get_core_type();
     }
 
-    DispatchCoreConfig get_dispatch_core_config(chip_id_t device_id) {
-        return this->dispatch_core_config_by_device[device_id];
+    DispatchCoreConfig get_dispatch_core_config(chip_id_t device_id) const {
+        return this->dispatch_core_config_by_device.at(device_id);
     }
 
     void add_dispatch_core_to_device(chip_id_t device_id, const CoreCoord& core) {
@@ -354,9 +354,11 @@ class dispatch_core_manager {
         }
     }
 
-    std::vector<CoreCoord> get_all_logical_dispatch_cores(chip_id_t device_id) {
-        return tt::get_logical_dispatch_cores(device_id, MAX_NUM_HW_CQS, this->dispatch_core_config_by_device[device_id]);
+    std::vector<CoreCoord> get_all_logical_dispatch_cores(chip_id_t device_id) const {
+        return tt::get_logical_dispatch_cores(
+            device_id, MAX_NUM_HW_CQS, this->dispatch_core_config_by_device.at(device_id));
     }
+
    private:
     /// @brief dispatch_core_manager constructor initializes a list of cores per device that are designated for any dispatch functionality
     ///         This list contains dispatch cores that have not been assigned to a particular dispatch function
