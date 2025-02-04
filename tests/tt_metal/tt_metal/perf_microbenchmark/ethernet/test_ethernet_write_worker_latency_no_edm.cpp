@@ -110,8 +110,11 @@ std::vector<Program> build(
     uint32_t worker_buffer_1_addr = worker_buffer_1->address();
 
     // eth core ct args
-    const std::vector<uint32_t>& eth_sender_receiver_ct_args = {
-        num_buffer_slots, worker_noc_x, worker_noc_y, worker_buffer_0_addr, worker_buffer_1_addr};
+    const std::vector<uint32_t>& eth_sender_ct_args = {
+        num_buffer_slots, worker_noc_x, worker_noc_y, worker_buffer_0_addr};
+
+    const std::vector<uint32_t>& eth_receiver_ct_args = {
+        num_buffer_slots, worker_noc_x, worker_noc_y, worker_buffer_1_addr};
 
     // eth core rt args
     const std::vector<uint32_t>& eth_sender_receiver_rt_args = {
@@ -131,7 +134,7 @@ std::vector<Program> build(
         eth_sender_core,
         tt_metal::EthernetConfig{
             .noc = tt_metal::NOC::RISCV_0_default,
-            .compile_args = eth_sender_receiver_ct_args,
+            .compile_args = eth_sender_ct_args,
             .defines = sender_receiver_defines});
     tt_metal::SetRuntimeArgs(program0, local_kernel, eth_sender_core, eth_sender_receiver_rt_args);
 
@@ -142,7 +145,7 @@ std::vector<Program> build(
         eth_receiver_core,
         tt_metal::EthernetConfig{
             .noc = tt_metal::NOC::RISCV_0_default,
-            .compile_args = eth_sender_receiver_ct_args,
+            .compile_args = eth_receiver_ct_args,
             .defines = sender_receiver_defines});
     tt_metal::SetRuntimeArgs(program1, remote_kernel, eth_receiver_core, eth_sender_receiver_rt_args);
 
@@ -167,7 +170,6 @@ void run(
     Program& program0,
     Program& program1,
     std::size_t num_directions,
-    ,
     std::shared_ptr<Buffer>& worker_buffer_0,
     std::shared_ptr<Buffer>& worker_buffer_1) {
     if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
