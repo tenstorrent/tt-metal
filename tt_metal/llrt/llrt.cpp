@@ -113,15 +113,6 @@ void write_launch_msg_to_core(chip_id_t chip, const CoreCoord core, launch_msg_t
     }
 }
 
-void print_worker_cores(chip_id_t chip_id) {
-    std::cout << std::endl << "worker cores: " << std::endl;
-    for (const CoreCoord& core : tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(chip_id).get_cores(
-             CoreType::TENSIX, CoordSystem::PHYSICAL)) {
-        std::cout << core.str() << " ";
-    }
-    std::cout << std::endl << std::endl;
-}
-
 ll_api::memory read_mem_from_core(chip_id_t chip, const CoreCoord &core, const ll_api::memory& mem, uint64_t local_init_addr) {
 
     ll_api::memory read_mem;
