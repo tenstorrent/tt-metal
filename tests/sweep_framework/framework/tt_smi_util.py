@@ -62,7 +62,7 @@ class ResetUtil:
         print(f"SWEEPS: tt-smi util initialized with command: {self.command}, args: {self.args}")
 
     def reset(self):
-        smi_process = subprocess.run([self.command, *self.args])
+        smi_process = subprocess.run([self.command, *self.args], stdout=subprocess.DEVNULL)
         if smi_process.returncode == 0:
             logger.info("TT-SMI Reset Complete Successfully")
             return
