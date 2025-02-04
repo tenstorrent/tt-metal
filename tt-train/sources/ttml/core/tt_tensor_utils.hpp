@@ -83,4 +83,10 @@ tt::tt_metal::Tensor from_xtensor(
     const XTensorToMeshVariant<T>& composer,
     Layout layout = Layout::TILE);
 
+// Unsqueeze tensor to specified rank by adding leading dimensions of size 1
+ttnn::Tensor unsqueeze_to_rank(const ttnn::Tensor& t, size_t rank);
+
+// Squeeze tensor to specified rank by removing leading dimensions of size 1
+ttnn::Tensor squeeze_to_rank(const ttnn::Tensor& t, size_t rank);
+
 }  // namespace ttml::core
