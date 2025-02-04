@@ -401,7 +401,7 @@ template <uint8_t SENDER_NUM_BUFFERS, uint8_t RECEIVER_NUM_BUFFERS>
 void send_next_data(
     tt::fabric::EthChannelBuffer<SENDER_NUM_BUFFERS> &sender_buffer_channel,
     tt::fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS> &sender_worker_interface,
-    tt::fabric::OutboundReceiverChannelPointers<RECEIVER_NUM_BUFFERS> &outbound_to_receiver_channel_pointers,
+    OutboundReceiverChannelPointers<RECEIVER_NUM_BUFFERS> &outbound_to_receiver_channel_pointers,
     tt::fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS> &receiver_buffer_channel) {
 
     auto &remote_receiver_wrptr = outbound_to_receiver_channel_pointers.wrptr;
@@ -601,7 +601,7 @@ template <bool enable_packet_header_recording, bool enable_fabric_counters, uint
 bool run_sender_channel_step(
     tt::fabric::EthChannelBuffer<SENDER_NUM_BUFFERS> &local_sender_channel,
     tt::fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS> &local_sender_channel_worker_interface,
-    tt::fabric::OutboundReceiverChannelPointers<RECEIVER_NUM_BUFFERS> &outbound_to_receiver_channel_pointers,
+    OutboundReceiverChannelPointers<RECEIVER_NUM_BUFFERS> &outbound_to_receiver_channel_pointers,
     tt::fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS> &remote_receiver_channel,
     volatile tt::fabric::EdmFabricSenderChannelCounters* sender_channel_counters,
     PacketHeaderRecorder &packet_header_recorder,
@@ -725,7 +725,7 @@ void run_receiver_channel_step(
     tt::fabric::WorkerToFabricEdmSender &downstream_edm_interface,
     volatile tt::fabric::EdmFabricReceiverChannelCounters *receiver_channel_counters_ptr,
     std::array<tt::fabric::ChannelBufferPointer<SENDER_NUM_BUFFERS>, NUM_SENDER_CHANNELS> &remote_eth_sender_wrptrs,
-    tt::fabric::ReceiverChannelPointers<RECEIVER_NUM_BUFFERS> &receiver_channel_pointers,
+    ReceiverChannelPointers<RECEIVER_NUM_BUFFERS> &receiver_channel_pointers,
     PacketHeaderRecorder &packet_header_recorder,
     ReceiverState *const receiver_state_out) {
 
@@ -847,8 +847,8 @@ void run_fabric_edm_main_loop(
     std::array<tt::fabric::ChannelBufferPointer<SENDER_NUM_BUFFERS>, NUM_SENDER_CHANNELS> remote_eth_sender_wrptrs {
         tt::fabric::ChannelBufferPointer<SENDER_NUM_BUFFERS>(),
         tt::fabric::ChannelBufferPointer<SENDER_NUM_BUFFERS>()};
-    tt::fabric::OutboundReceiverChannelPointers<RECEIVER_NUM_BUFFERS> outbound_to_receiver_channel_pointers;
-    tt::fabric::ReceiverChannelPointers<RECEIVER_NUM_BUFFERS> receiver_channel_pointers;
+    OutboundReceiverChannelPointers<RECEIVER_NUM_BUFFERS> outbound_to_receiver_channel_pointers;
+    ReceiverChannelPointers<RECEIVER_NUM_BUFFERS> receiver_channel_pointers;
     std::array<bool, NUM_SENDER_CHANNELS> channel_connection_established = {false, false};
 
     while (!got_immediate_termination_signal(termination_signal_ptr)) {
