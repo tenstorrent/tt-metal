@@ -1478,7 +1478,8 @@ bool TestMultiInputReaderKernel(
 ///  MESSAGE COUNT TERMINATION MODE
 ////////////////////////////////////////////////////////////////////
 
-TEST(WorkerFabricEdmDatapath, FabricEDMLoopback_With_Workers_SingleMessage) {
+// Disabled non persistent fabric tests - non-persistent fabric mode not supported
+TEST(WorkerFabricEdmDatapath, DISABLED_FabricEDMLoopback_With_Workers_SingleMessage) {
     const uint32_t page_size = 2048;
     const uint32_t num_pages_total = 1;
     const bool src_is_dram = true;
@@ -1489,7 +1490,8 @@ TEST(WorkerFabricEdmDatapath, FabricEDMLoopback_With_Workers_SingleMessage) {
 }
 
 // Will wrapp sender but not receiver buffers
-TEST(WorkerFabricEdmDatapath, FabricEDMLoopback_With_Workers_2_messages) {
+// Disabled non persistent fabric tests - non-persistent fabric mode not supported
+TEST(WorkerFabricEdmDatapath, DISABLED_FabricEDMLoopback_With_Workers_2_messages) {
     const uint32_t page_size = 2048;
     const uint32_t num_pages_total = 2;
     const bool src_is_dram = true;
@@ -1499,7 +1501,8 @@ TEST(WorkerFabricEdmDatapath, FabricEDMLoopback_With_Workers_2_messages) {
     ASSERT_EQ(result, 0);
 }
 // Will wrapp sender but not receiver buffers
-TEST(WorkerFabricEdmDatapath, FabricEDMLoopback_With_Workers_10_messages) {
+// Disabled non persistent fabric tests - non-persistent fabric mode not supported
+TEST(WorkerFabricEdmDatapath, DISABLED_FabricEDMLoopback_With_Workers_10_messages) {
     const uint32_t page_size = 2048;
     const uint32_t num_pages_total = 10;
     const bool src_is_dram = true;
@@ -1510,7 +1513,8 @@ TEST(WorkerFabricEdmDatapath, FabricEDMLoopback_With_Workers_10_messages) {
 }
 
 // Will wrapp sender and receiver buffers
-TEST(WorkerFabricEdmDatapath, FabricEDMLoopback_With_Workers_20_messages) {
+// Disabled non persistent fabric tests - non-persistent fabric mode not supported
+TEST(WorkerFabricEdmDatapath, DISABLED_FabricEDMLoopback_With_Workers_20_messages) {
     const uint32_t page_size = 2048;
     const uint32_t num_pages_total = 20;
     const bool src_is_dram = true;
@@ -1520,7 +1524,8 @@ TEST(WorkerFabricEdmDatapath, FabricEDMLoopback_With_Workers_20_messages) {
     ASSERT_EQ(result, 0);
 }
 
-TEST(WorkerFabricEdmDatapath, FabricEDMLoopback_With_Workers) {
+// Disabled non persistent fabric tests - non-persistent fabric mode not supported
+TEST(WorkerFabricEdmDatapath, DISABLED_FabricEDMLoopback_With_Workers) {
     const uint32_t page_size = 2048;
     const uint32_t num_pages_total = 10000;
     const bool src_is_dram = true;
@@ -1588,7 +1593,8 @@ TEST(WorkerFabricEdmDatapath, FabricEDMLoopback_With_Workers_PersistentFabric) {
 
 ////////////////////////////////
 
-TEST(WorkerFabricEdmDatapath, LineFabricMcast_SingleMessage_SingleSource) {
+// Disabled non persistent fabric tests - non-persistent fabric mode not supported
+TEST(WorkerFabricEdmDatapath, DISABLED_LineFabricMcast_SingleMessage_SingleSource) {
     const uint32_t page_size = 2048;
     const uint32_t num_pages_total = 1;
     const bool src_is_dram = true;
@@ -1603,7 +1609,8 @@ TEST(WorkerFabricEdmDatapath, LineFabricMcast_SingleMessage_SingleSource) {
 }
 
 // Non-functional on harvested parts. Needs testing on unharvested parts.
-TEST(WorkerFabricEdmDatapath, LineFabricMcast_ManyMessages_SingleSource) {
+// Disabled non persistent fabric tests - non-persistent fabric mode not supported
+TEST(WorkerFabricEdmDatapath, DISABLED_LineFabricMcast_ManyMessages_SingleSource) {
     const uint32_t page_size = 2048;
     const uint32_t num_pages_total = 10000;
     const bool src_is_dram = true;

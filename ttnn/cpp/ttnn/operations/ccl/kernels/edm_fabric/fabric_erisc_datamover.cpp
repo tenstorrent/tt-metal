@@ -803,8 +803,8 @@ bool all_channels_drained(tt::fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS> &lo
                           std::array<tt::fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS>, NUM_SENDER_CHANNELS> &local_sender_channel_worker_interfaces) {
 
     bool eth_buffers_drained =
-        local_sender_channel_worker_interfaces[0].has_unacked_sends() &&
-        local_sender_channel_worker_interfaces[1].has_unacked_sends() &&
+        !local_sender_channel_worker_interfaces[0].has_unacked_sends() &&
+        !local_sender_channel_worker_interfaces[1].has_unacked_sends() &&
         local_receiver_channel.all_buffers_drained();
 
     bool sender0_has_unsent_packets = local_sender_channel_worker_interfaces[0].has_unsent_payload();
