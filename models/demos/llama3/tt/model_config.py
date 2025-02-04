@@ -874,10 +874,6 @@ class TtModelArgs:
             logger.info(f"MLP grid: {mlp_core_grid}")
             logger.info(f"LM head grid: {self.lm_head_core_grid}")
 
-            logger.info(f"Attention grid: {attn_input_grid}")
-            logger.info(f"MLP grid: {mlp_core_grid}")
-            logger.info(f"LM head grid: {self.lm_head_core_grid}")
-
     def is_distributed_norm(self, mode):
         if not self.is_multichip:
             return False
