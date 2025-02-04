@@ -135,9 +135,7 @@ class TtLlamaAttention(LightweightModule):
                 layout=ttnn.TILE_LAYOUT,
                 cache_file_name=cache_name("wqkv_bias_sharded"),
             )
-            self.wqkv_bias_prefill = ttnn.reshape(
-                self.wqkv_bias, ttnn.Shape([1, 1, 1, self.wqkv_bias.shape[-1]], [1, 1, 32, self.wqkv_bias.shape[-1]])
-            )
+            self.wqkv_bias_prefill = ttnn.reshape(self.wqkv_bias, ttnn.Shape([1, 1, 32, self.wqkv_bias.shape[-1]]))
 
         # when splitting the devices, we need to make sure that the number of heads is divisible by the number of devices
         assert self.n_heads % self.num_devices_per_group == 0
