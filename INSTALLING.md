@@ -51,13 +51,15 @@ source.
 
 ### Option 1: From source
 
-- Note: Some advanced build configurations like unity builds require at least `CMake 3.20`.
+- Note: Building Metal requires at least `CMake 3.18` while some advanced build configurations require `CMake 3.20`.
   To upgrade Cmake run:
 ```sh
 # Option 1. with apt
 sudo apt update
 sudo apt install cmake
 ```
+
+- If that doesn't update CMake to the required version, try the following method:
 ```sh
 # Option 2. with pip
 pip install --upgrade cmake
