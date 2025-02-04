@@ -6,11 +6,7 @@ These instructions will guide you through the installation of Tenstorrent system
 >
 > If you are using a release version of this software, please check the installation instructions packaged with that version. You can find them in either the release assets for that version, or in the source files for that version tag.
 
----
-
-## Installation Steps
-
-### Step 1. Driver & Firmware
+## Step 1. Driver & Firmware
 
 Follow the Software Setup instructions for your specific board or system provided on our [general docs](https://docs.tenstorrent.com).
 
@@ -24,16 +20,13 @@ Note the current compatability matrix:
 | Wormhole            | Ubuntu 20.04    | 3.8.10   | v1.29              | fw_pack-80.13.0.0 (v80.13.0.0)             | v2.2.0 or above       | N/A                            |
 | T3000 (Wormhole)    | Ubuntu 20.04    | 3.8.10   | v1.29              | fw_pack-80.13.0.0 (v80.13.0.0)             | v2.2.0 or above       | v1.1.3 or above, `mesh` config |
 
----
-
-### Step 2. System-level dependencies
+## Step 2. System-level dependencies
 
 ```sh
 sudo ./install_dependencies.sh
 ```
----
 
-### Step 3. Install and start using TT-NN and TT-Metalium!
+## Step 3. Install and start using TT-NN and TT-Metalium!
 
 > [!NOTE]
 >
@@ -56,41 +49,38 @@ git clone https://github.com/tenstorrent/tt-metal.git --recurse-submodules
 going to try using the model demos, we highly recommend you install from
 source.
 
-#### Option 1: From source
+### Option 1: From source
 
-We use CMake for our build flows.
+- Note: Some advanced build configurations like unity builds require at least `CMake 3.20`.
+  To upgrade Cmake run:
+```sh
+# Option 1. with apt
+sudo apt update
+sudo apt install cmake
+```
+```sh
+# Option 2. with pip
+pip install --upgrade cmake
+```
 
-Set up the environment variables and invoke our build scripts. Note that for
+- Set up the environment variables and invoke our build scripts. Note that for
 source builds, you must set these environment variables every time.
 
 ```sh
-export ARCH_NAME=<ARCH_NAME>
 export TT_METAL_HOME=$(pwd)
 export PYTHONPATH=$(pwd)
 ./build_metal.sh
+```
 
-# If you would like an out-of-the-box virtual environment to use,
+- (Recomended) For an out-of-the-box virtual environment to use, run:
+```
 ./create_venv.sh
 source python_env/bin/activate
 ```
 
-where `ARCH_NAME` is one of `grayskull`, `wormhole_b0`, or `blackhole`,
-depending on your Tenstorrent card type.
+---
 
-> [!NOTE]
->
-> Note about Python environments: You do not have to use `create_venv.sh`. If you
-> are less familiar with Python and its various environment tools, just use
-> `create_venv.sh` as shown above and the pre-built environment. If you choose
-> to install in your custom environment, please note that you may run into
-> compatibility issues between dependencies. It is up to the user to ensure
-> that all the packages in their environment are compatible with each other.
->
-> If you do choose to manage your own environment, please note that you must
-> use Pip 20.1.1 or lower to install this project. This is the highest version
-> of Pip that supports editable installs in the way that we use it.
-
-#### Option 2: From wheel
+### Option 2: From wheel
 
 Download the latest wheel from our
 [releases](https://github.com/tenstorrent/tt-metal/releases/latest) page for
@@ -120,7 +110,9 @@ sudo apt-get install cpufrequtils
 sudo cpupower frequency-set -g performance
 ```
 
-#### Option 3: From Docker Release Image
+---
+
+### Option 3: From Docker Release Image
 
 Download the latest Docker release from our [Docker registry](https://github.com/orgs/tenstorrent/packages?q=tt-metalium-ubuntu&tab=packages&q=tt-metalium-ubuntu-20.04-amd64-release) page
 
@@ -142,11 +134,33 @@ To verify your installation, try the executing an example:
 python3 -m ttnn.examples.usage.run_op_on_device
 ```
 
-You are all set! Visit the [TT-NN Basic examples page](https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/usage.html#basic-examples) or get started with [simple kernels on TT-Metalium](https://docs.tenstorrent.com/tt-metal/latest/tt-metalium/tt_metal/examples/index.html).
+## You are all set!
 
----
+### Test your build:
 
-### Step 5. (Optional) Software dependencies for codebase contributions
+  - Run the appropriate command for the Tenstorrent card you have installed:
+
+  | Card             | Command                              |
+  |------------------|--------------------------------------|
+  | Grayskull        | ```export ARCH_NAME=grayskull```     |
+  | Wormhole         | ```export ARCH_NAME=wormhole_b0```   |
+  | Blackhole        | ```export ARCH_NAME=blackhole```     |
+
+  - Run:
+  ```
+  export TT_METAL_HOME=$(pwd)
+  export PYTHONPATH=$(pwd)
+  ```
+
+- Then, try running a programming example:
+```
+python3 -m ttnn.examples.usage.run_op_on_device
+```
+
+- For more programming examples to try, visit Tenstorrent's [TT-NN Basic Examples Page](https://docs.tenstorrent.com/ttnn/latest/ttnn/usage.html#basic-examples) or get started with [Simple Kernels on TT-Metalium](https://docs.tenstorrent.com/tt-metalium/latest/tt_metal/examples/index.html)
+
+
+## Step 5. (Optional) Software dependencies for codebase contributions
 
 Please follow the next additional steps if you want to contribute to the codebase.
 
