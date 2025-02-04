@@ -362,13 +362,16 @@ class TtModelArgs:
             else:
                 self.model_config["ATTN_ALL_GATHER_MATMUL_PROGCFG"] = None
 
+            prefill_rows = lambda seq_len: min(seq_len, 1024) // self.tile_size
             mlp1_3_grid = lambda seq_len: (
-                (8, min(min(seq_len, 1024) // 32, 4)) if self.is_galaxy else self.find_grid(self.dim // self.tile_size)
+                (8, min(min(seq_len, 1024) // 32, 4))
+                if self.is_galaxy
+                else self.find_prefill_grid(prefill_rows(seq_len), self.dim // self.tile_size)
             )
             mlp2_grid = lambda seq_len: (
                 (8, min(min(seq_len, 1024) // 32, 4))
                 if self.is_galaxy
-                else self.find_grid(self.hidden_dim // self.tile_size)
+                else self.find_prefill_grid(prefill_rows(seq_len), self.hidden_dim // self.tile_size)
             )
 
             self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"] = lambda seq_len: self.matmul_config(
@@ -386,11 +389,12 @@ class TtModelArgs:
 
             k_dim = self.dim // self.cluster_shape[0] if self.is_galaxy else self.dim
             n_dim = self.dim // self.cluster_shape[1] if self.is_galaxy else self.dim
+            num_rows = lambda seq_len: min(seq_len, 1024 if self.is_galaxy else 2048)
             self.model_config["WO_PREFILL_PROGCFG"] = lambda seq_len: self.matmul_config(
-                m=min(seq_len, 1024 if self.is_galaxy else 2048),
+                m=num_rows(seq_len),
                 k=k_dim,
                 n=n_dim,
-                grid_size=self.find_grid(k_dim // self.tile_size),
+                grid_size=self.find_prefill_grid(num_rows(seq_len), n_dim // self.tile_size),
                 in0_block_w=1,
                 fuse_batch=seq_len <= 1024,  # if self.is_galaxy else 2048),
             )
@@ -479,7 +483,6 @@ class TtModelArgs:
                 grid_by_batch = (1, 1)
             else:
                 raise ValueError(f"Batch size {self.max_batch_size} not supported")
-            core_grid_by_batch = ttnn.CoreGrid(y=grid_by_batch[1], x=grid_by_batch[0])
             core_range_set_by_batch = ttnn.CoreRangeSet(
                 {
                     ttnn.CoreRange(
@@ -872,6 +875,7 @@ class TtModelArgs:
 
             logger.info(f"Attention grid: {attn_input_grid}")
             logger.info(f"MLP grid: {mlp_core_grid}")
+            logger.info(f"MLP prefill grids: w1/w3: {mlp1_3_grid}, w2: {mlp2_grid}")
             logger.info(f"LM head grid: {self.lm_head_core_grid}")
 
     def is_distributed_norm(self, mode):
@@ -1259,6 +1263,31 @@ class TtModelArgs:
         raise AssertionError(
             f"Cannot find a grid configuration for {N} tiles that evenly divides into {max_cores} cores of max size {max_rows}x{max_cols}."
         )
+
+    def find_prefill_grid(self, row_tiles, col_tiles):
+        """Find a grid such that the number of row tiles evenly divides into the number
+        of rows and the number of column tiles evenly divides into the number of columns
+        """
+        max_rows = 8
+        max_cols = 8
+
+        # Find number of cols that evenly divides into the number of columns
+        cols = None
+        rows = None
+
+        for i in range(max_cols, 0, -1):
+            if col_tiles % i == 0:
+                cols = i
+                break
+
+        for i in range(max_rows, 0, -1):
+            if row_tiles % i == 0:
+                rows = i
+                break
+
+        assert cols is not None, f"Cannot find a number of columns that evenly divides into {col_tiles}, not even 1(!)."
+        assert rows is not None, f"Cannot find a number of rows that evenly divides into {row_tiles}, not even 1(!)."
+        return rows, cols
 
     def dram_shard_core_grid_for_k_and_n(self, k: int, n: int) -> Tuple[int, int]:
         rows, cols = self.find_grid_k_n(k // self.tile_size, n // self.tile_size)
