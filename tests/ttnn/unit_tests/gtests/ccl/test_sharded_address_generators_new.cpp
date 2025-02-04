@@ -39,11 +39,13 @@ static void run_full_width_test(ADDRgen addrgen, ADDRgenInfo constants, uint32_t
         uint32_t page = constants.pages_per_tensor_row * rows[i];
         uint32_t base_address = constants.pages_per_shard_width * rows[i] * constants.page_size_jump;
         for (int j = 0; j < constants.number_of_cores; j++) {
-            uint32_t l1_address = base_address;
+            uint64_t l1_address = base_address;
             for (int k = 0; k < constants.pages_per_shard_width; k++) {
                 if (j * constants.pages_per_shard_width + k < constants.pages_per_tensor_row) {
-                    uint64_t calculated_address = NOC_XY_ADDR(
-                        DYNAMIC_NOC_X(noc, real_core_x_vals[j]), DYNAMIC_NOC_Y(noc, real_core_y_vals[j]), l1_address);
+                    uint64_t calculated_address = bank_base_address + NOC_XY_ADDR(
+                                                                          DYNAMIC_NOC_X(noc, real_core_x_vals[j]),
+                                                                          DYNAMIC_NOC_Y(noc, real_core_y_vals[j]),
+                                                                          l1_address);
                     uint64_t retreived_address = addrgen.get_noc_addr(page);
                     ASSERT_EQ(calculated_address, retreived_address);
                     l1_address += constants.page_size_jump;
@@ -64,8 +66,10 @@ static void run_full_height_test(ADDRgen addrgen, ADDRgenInfo constants, uint32_
         for (int j = 0; j < constants.number_of_cores; j++) {
             uint32_t l1_address = base_address;
             for (int k = 0; k < constants.rows_per_shard_height; k++) {
-                uint64_t calculated_address = NOC_XY_ADDR(
-                    DYNAMIC_NOC_X(noc, real_core_x_vals[j]), DYNAMIC_NOC_Y(noc, real_core_y_vals[j]), l1_address);
+                uint64_t calculated_address =
+                    bank_base_address +
+                    NOC_XY_ADDR(
+                        DYNAMIC_NOC_X(noc, real_core_x_vals[j]), DYNAMIC_NOC_Y(noc, real_core_y_vals[j]), l1_address);
                 uint64_t retreived_address = addrgen.get_noc_addr(page);
                 ASSERT_EQ(calculated_address, retreived_address);
                 l1_address += constants.page_size_jump * constants.pages_per_tensor_row;
@@ -86,17 +90,17 @@ static void run_full_block_test(ADDRgen addrgen, ADDRgenInfo constants, uint32_t
         for (int j = 0; j < std::size(random_height_offsets); j++) {
             uint32_t outer_page = random_width_offsets[i] + random_height_offsets[j] * constants.pages_per_shard_width;
             uint32_t l1_address = outer_page * constants.page_size_jump;
-            uint32_t core_number = 0;
             for (int h = 0; h < cores_height; h++) {
                 uint32_t page = outer_page;
                 for (int w = 0; w < cores_per_block_row; w++) {
-                    uint64_t calculated_address = NOC_XY_ADDR(
-                        DYNAMIC_NOC_X(noc, real_core_x_vals[core_number]),
-                        DYNAMIC_NOC_Y(noc, real_core_y_vals[core_number]),
-                        l1_address);
+                    uint32_t core_number = w + h * cores_per_block_row;
+                    uint64_t calculated_address =
+                        bank_base_address + NOC_XY_ADDR(
+                                                DYNAMIC_NOC_X(noc, real_core_x_vals[core_number]),
+                                                DYNAMIC_NOC_Y(noc, real_core_y_vals[core_number]),
+                                                l1_address);
                     uint64_t retreived_address = addrgen.get_noc_addr(page);
                     ASSERT_EQ(calculated_address, retreived_address);
-                    core_number++;
                     page += constants.pages_per_shard_width;
                 }
                 outer_page += constants.pages_per_tensor_row * constants.rows_per_shard_height;
@@ -106,7 +110,7 @@ static void run_full_block_test(ADDRgen addrgen, ADDRgenInfo constants, uint32_t
     }
 }
 
-TEST(CclWidthShardedTensorSliceIndexer_Wormhole, width_sharded_test) {
+TEST(CclnewWidthShardedTensorSliceIndexer_Wormhole, width_sharded_test) {
     static constexpr std::size_t shard_type = static_cast<uint32_t>(ttnn::ccl::common::shard_addr_gen_utils::ShardingLayout::WIDTH_SHARDED);
     static constexpr std::size_t number_of_cores = 8;
     static constexpr std::size_t page_size_jump = 1024;
@@ -129,7 +133,7 @@ TEST(CclWidthShardedTensorSliceIndexer_Wormhole, width_sharded_test) {
     run_full_width_test(addrgen, info_var, tensor_address);
 }
 
-TEST(CclHeightShardedTensorSliceIndexer_Wormhole, height_sharded_test) {
+TEST(CclnewHeightShardedTensorSliceIndexer_Wormhole, height_sharded_test) {
     static constexpr std::size_t shard_type = static_cast<uint32_t>(ttnn::ccl::common::shard_addr_gen_utils::ShardingLayout::HEIGHT_SHARDED);
     static constexpr std::size_t number_of_cores = 4;
     static constexpr std::size_t page_size_jump = 1024;
@@ -152,7 +156,7 @@ TEST(CclHeightShardedTensorSliceIndexer_Wormhole, height_sharded_test) {
     run_full_height_test(addrgen, info_var, tensor_address);
 }
 
-TEST(CclBlockShardedTensorSliceIndexer_Wormhole, block_sharded_test) {
+TEST(CclnewBlockShardedTensorSliceIndexer_Wormhole, block_sharded_test) {
     static constexpr std::size_t shard_type = static_cast<uint32_t>(ttnn::ccl::common::shard_addr_gen_utils::ShardingLayout::HEIGHT_SHARDED);
     static constexpr std::size_t number_of_cores = 16;
     static constexpr std::size_t page_size_jump = 1024;
@@ -174,7 +178,6 @@ TEST(CclBlockShardedTensorSliceIndexer_Wormhole, block_sharded_test) {
             .bank_base_address = tensor_address, .shard_array=map};
     run_full_block_test(addrgen, info_var, tensor_address);
 }
-
 
 }  // namespace tt_metal
 }  // namespace tt
