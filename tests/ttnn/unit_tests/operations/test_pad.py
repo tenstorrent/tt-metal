@@ -451,3 +451,36 @@ def test_pad_conv2d_sweep(device, dtype, use_multicore, shape, padded_shape):
 
     out_torch = out_torch[: shape[0], : shape[1], : shape[2], : shape[3]]
     assert_with_pcc(in_torch, out_torch, 0.9999)
+
+
+@pytest.mark.parametrize(
+    "input_shape, pad_to_shape, input_tensor_start, pad_value",
+    [
+        [(10,), (20,), (1,), 1.0],  # 1D Test
+        [(2, 2), (4, 4), (1, 1), 1.0],  # 2D Test
+        [(1, 1, 1), (4, 4, 4), (0, 0, 0), 1.0],  # 3D Test
+        [(2, 2, 2, 2), (4, 4, 4, 4), (0, 0, 0, 0), 1.0],  # 4D Test
+    ],
+)
+def test_pad_dimension(device, input_shape, pad_to_shape, input_tensor_start, pad_value):
+    torch_input_tensor = torch.ones(input_shape, dtype=torch.float32)
+    ttnn_input_tensor = ttnn.from_torch(
+        torch_input_tensor, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+
+    padded_tensor = ttnn.pad(ttnn_input_tensor, pad_to_shape, input_tensor_start, pad_value, use_multicore=True)
+
+    tt_output_tensor = ttnn.from_device(padded_tensor)
+    torch_output_tensor = ttnn.to_torch(tt_output_tensor)
+    padspec = {
+        "input_shape": input_shape,
+        "pad_to_shape": pad_to_shape,
+        "input_tensor_start": input_tensor_start,
+    }
+
+    torch_padded_tensor = torch.nn.functional.pad(
+        torch_input_tensor, to_torch_padding(padspec), mode="constant", value=pad_value
+    )
+
+    assert torch_padded_tensor.shape == torch_output_tensor.shape
+    assert_with_pcc(torch_padded_tensor, torch_output_tensor, 0.99)
