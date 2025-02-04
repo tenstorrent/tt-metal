@@ -83,10 +83,27 @@ uint32_t rx_addr_hi;
 uint32_t gk_interface_addr_l;
 uint32_t gk_interface_addr_h;
 
+uint32_t controller_noc_offset;
+
 // flag to check if need to zero out notification addr
 bool reset_notif_addr = true;
 
 uint32_t time_seed;
+
+inline void notify_traffic_controller() {
+    // send semaphore increment to traffic controller kernel on this device.
+    uint64_t dest_addr = get_noc_addr_helper(controller_noc_offset, signal_address);
+    noc_fast_atomic_increment<DM_DYNAMIC_NOC>(
+        noc_index,
+        NCRISC_AT_CMD_BUF,
+        dest_addr,
+        NOC_UNICAST_WRITE_VC,
+        1,
+        31,
+        false,
+        false,
+        MEM_NOC_ATOMIC_RET_VAL_ADDR);
+}
 
 // generates packets with random size and payload on the input sideß
 inline bool test_buffer_handler_async_wr() {
@@ -363,6 +380,7 @@ void kernel_main() {
     time_seed = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     src_endpoint_id = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     noc_offset = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
+    controller_noc_offset = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     uint32_t router_x = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     uint32_t router_y = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     dest_device = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
@@ -421,9 +439,20 @@ void kernel_main() {
         max_packet_size_mask = (max_packet_size_mask << 1) + 1;
     }
 
-    // wait till test sends start signal. This is set by test
-    // once tt_fabric kernels have been launched on all the test devices.
-    while (*(tt_l1_ptr volatile uint32_t*)signal_address == 0);
+    bool all_packets_initialized = test_buffer_handler();
+
+    // notify the controller kernel that this worker is ready to proceed
+    notify_traffic_controller();
+
+    // wait till controllrer sends start signal. This is set by controller
+    // once tt_fabric kernels have been launched on all the test devices and
+    // all the tx workers are ready on this chip
+    while (*(volatile tt_l1_ptr uint32_t*)signal_address == 0) {
+#pragma GCC unroll 4
+        for (int i = 0; i < 4; i++) {
+            asm("nop");
+        }
+    }
 
     test_results[PQ_TEST_MISC_INDEX] = 0xff000001;
 
@@ -456,7 +485,7 @@ void kernel_main() {
         }
 #endif
 
-        bool all_packets_initialized = test_buffer_handler();
+        all_packets_initialized = test_buffer_handler();
 
         if (test_producer.get_curr_packet_valid<FVC_MODE_ENDPOINT>()) {
             curr_packet_size =
@@ -495,12 +524,15 @@ void kernel_main() {
         }
     }
 
-    uint64_t cycles_elapsed = get_timestamp() - start_timestamp;
+    uint64_t end_timestamp = get_timestamp();
+    uint64_t cycles_elapsed = end_timestamp - start_timestamp;
 
     uint64_t num_packets = input_queue_state.get_num_packets();
     set_64b_result(test_results, data_words_sent, PQ_TEST_WORD_CNT_INDEX);
     set_64b_result(test_results, cycles_elapsed, PQ_TEST_CYCLES_INDEX);
     set_64b_result(test_results, iter, PQ_TEST_ITER_INDEX);
+    set_64b_result(test_results, start_timestamp, PQ_TEST_START_TIME_INDEX);
+    set_64b_result(test_results, end_timestamp, PQ_TEST_END_TIME_INDEX);
     set_64b_result(test_results, total_data_words, TX_TEST_IDX_TOT_DATA_WORDS);
     set_64b_result(test_results, num_packets, TX_TEST_IDX_NPKT);
     set_64b_result(test_results, zero_data_sent_iter, TX_TEST_IDX_ZERO_DATA_WORDS_SENT_ITER);

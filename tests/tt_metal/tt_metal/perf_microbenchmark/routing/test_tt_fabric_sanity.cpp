@@ -44,6 +44,9 @@ uint32_t routing_table_addr;
 uint32_t gk_interface_addr;
 uint32_t socket_info_addr;
 
+uint32_t tx_signal_address;
+uint32_t host_sync_address;
+
 inline std::vector<uint32_t> get_random_numbers_from_range(uint32_t start, uint32_t end, uint32_t count) {
     std::vector<uint32_t> range(end - start + 1);
 
@@ -362,6 +365,8 @@ typedef struct test_device {
     std::vector<CoreCoord> worker_cores;
     std::vector<CoreCoord> router_logical_cores;
     std::vector<CoreCoord> router_physical_cores;
+    CoreCoord core_start_physical;
+    CoreCoord core_end_physical;
     CoreCoord gk_logical_core;
     CoreCoord gk_phys_core;
     mesh_id_t mesh_id;
@@ -369,6 +374,7 @@ typedef struct test_device {
     uint32_t mesh_chip_id = 0;
     uint32_t router_mask = 0;
     uint32_t gk_noc_offset;
+    int ai_clk_mhz;
 
     test_device(chip_id_t chip_id_, test_board_t* board_handle_) {
         physical_chip_id = chip_id_;
@@ -378,6 +384,7 @@ typedef struct test_device {
         program_handle = tt_metal::CreateProgram();
         std::tie(mesh_id, logical_chip_id) = board_handle->get_mesh_chip_id(physical_chip_id);
         mesh_chip_id = (mesh_id << 16 | logical_chip_id);
+        ai_clk_mhz = tt::Cluster::instance().get_device_aiclk(physical_chip_id);
 
         // initalize list of worker cores in 8X8 grid
         // TODO: remove hard-coding
@@ -386,6 +393,9 @@ typedef struct test_device {
                 worker_cores.push_back(CoreCoord({i, j}));
             }
         }
+
+        core_start_physical = device_handle->worker_core_from_logical_core(CoreCoord(0, 0));
+        core_end_physical = device_handle->worker_core_from_logical_core(CoreCoord(7, 7));
 
         // populate router cores
         auto neighbors = tt::Cluster::instance().get_ethernet_connected_device_ids(physical_chip_id);
@@ -548,6 +558,8 @@ typedef struct test_traffic {
     uint32_t num_tx_workers;
     uint32_t num_rx_workers;
     uint32_t target_address;
+    CoreCoord tx_controller_logical_core;
+    CoreCoord tx_controller_physical_core;
     std::vector<CoreCoord> tx_logical_cores;
     std::vector<CoreCoord> tx_physical_cores;
     std::vector<CoreCoord> rx_logical_cores;
@@ -594,6 +606,10 @@ typedef struct test_traffic {
         _generate_tx_to_rx_mapping();
         _generate_target_addresses();
 
+        tx_controller_logical_core = tx_device->select_random_worker_cores(1)[0];
+        tx_controller_physical_core =
+            tx_device->device_handle->worker_core_from_logical_core(tx_controller_logical_core);
+
         tx_logical_cores = tx_device->select_random_worker_cores(num_tx_workers);
         rx_logical_cores = rx_device->select_random_worker_cores(num_rx_workers);
 
@@ -621,6 +637,40 @@ typedef struct test_traffic {
         // update the test results address, which will be used later for polling, collecting results
         test_results_address = test_results_address_;
 
+        {
+            uint32_t mcast_encoding = tt::tt_metal::hal.noc_multicast_encoding(
+                tx_device->core_start_physical.x,
+                tx_device->core_start_physical.y,
+                tx_device->core_end_physical.x,
+                tx_device->core_end_physical.y);
+
+            // launch controller kernel
+            std::vector<uint32_t> runtime_args = {
+                time_seed,          // 0: time based seed
+                num_tx_workers,     // 1: src_endpoint_id
+                tx_signal_address,  // 2: dest_noc_offset
+                host_sync_address,  // 3: router_x
+                64,
+                mcast_encoding};
+
+            // zero out the signal address
+            tt::llrt::write_hex_vec_to_core(
+                tx_device->device_handle->id(), tx_controller_physical_core, zero_buf, tx_signal_address);
+
+            // zero out host sync address
+            tt::llrt::write_hex_vec_to_core(
+                tx_device->device_handle->id(), tx_controller_physical_core, zero_buf, host_sync_address);
+
+            auto kernel = tt_metal::CreateKernel(
+                tx_device->program_handle,
+                "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_controller.cpp",
+                {tx_controller_logical_core},
+                tt_metal::DataMovementConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+
+            tt_metal::SetRuntimeArgs(tx_device->program_handle, kernel, tx_controller_logical_core, runtime_args);
+        }
+
         // launch tx kernels
         for (auto i = 0; i < num_tx_workers; i++) {
             core = tx_logical_cores[i];
@@ -632,12 +682,13 @@ typedef struct test_traffic {
                 time_seed,                             // 0: time based seed
                 tx_device->get_endpoint_id(core),      // 1: src_endpoint_id
                 rx_device->get_noc_offset(dest_core),  // 2: dest_noc_offset
-                router_phys_core.x,                    // 3: router_x
-                router_phys_core.y,                    // 4: router_y
-                mesh_chip_id,                          // 5: mesh and chip id
-                rx_buf_size,                           // 6: space in rx's L1
-                gk_interface_addr,                     // 7: gk_message_addr_l
-                tx_device->gk_noc_offset,              // 8: gk_message_addr_h
+                tx_device->get_noc_offset(tx_controller_logical_core),
+                router_phys_core.x,        // 3: router_x
+                router_phys_core.y,        // 4: router_y
+                mesh_chip_id,              // 5: mesh and chip id
+                rx_buf_size,               // 6: space in rx's L1
+                gk_interface_addr,         // 7: gk_message_addr_l
+                tx_device->gk_noc_offset,  // 8: gk_message_addr_h
             };
 
             if (ASYNC_WR & fabric_command) {
@@ -722,6 +773,12 @@ typedef struct test_traffic {
 
             tt_metal::SetRuntimeArgs(rx_device->program_handle, kernel, core, runtime_args);
         }
+    }
+
+    void notify_tx_controller() {
+        std::vector<uint32_t> start_signal(1, 1);
+        tt::llrt::write_hex_vec_to_core(
+            tx_device->device_handle->id(), tx_controller_physical_core, start_signal, host_sync_address);
     }
 
     void notify_tx_workers(uint32_t address) {
@@ -810,21 +867,31 @@ typedef struct test_traffic {
             double tx_bw = ((double)tx_words_sent) * PACKET_WORD_SIZE_BYTES / tx_elapsed_cycles;
             total_tx_bw += tx_bw;
             uint64_t iter = get_64b_result(tx_results[i], PQ_TEST_ITER_INDEX);
+            uint64_t start_timestamp = get_64b_result(tx_results[i], PQ_TEST_START_TIME_INDEX);
+            uint64_t end_timestamp = get_64b_result(tx_results[i], PQ_TEST_END_TIME_INDEX);
             max_tx_elapsed_cycles = std::max(max_tx_elapsed_cycles, tx_elapsed_cycles);
-            // uint64_t zero_data_sent_iter = get_64b_result(tx_results[i], TX_TEST_IDX_ZERO_DATA_WORDS_SENT_ITER);
-            // uint64_t few_data_sent_iter = get_64b_result(tx_results[i], TX_TEST_IDX_FEW_DATA_WORDS_SENT_ITER);
-            // uint64_t many_data_sent_iter = get_64b_result(tx_results[i], TX_TEST_IDX_MANY_DATA_WORDS_SENT_ITER);
+            uint64_t zero_data_sent_iter = get_64b_result(tx_results[i], TX_TEST_IDX_ZERO_DATA_WORDS_SENT_ITER);
+            uint64_t few_data_sent_iter = get_64b_result(tx_results[i], TX_TEST_IDX_FEW_DATA_WORDS_SENT_ITER);
+            uint64_t many_data_sent_iter = get_64b_result(tx_results[i], TX_TEST_IDX_MANY_DATA_WORDS_SENT_ITER);
             // uint64_t num_packets = get_64b_result(tx_results[i], TX_TEST_IDX_NPKT);
             // double bytes_per_pkt = static_cast<double>(tx_words_sent) * PACKET_WORD_SIZE_BYTES /
             // static_cast<double>(num_packets);
 
             log_info(
                 LogTest,
-                "TX {} words sent = {}, elapsed cycles = {} -> BW = {:.2f} B/cycle",
+                "TX {} words sent: {}, start: {}, end: {}, elapsed cycles: {} -> BW: {:.2f} B/cycle",
                 i,
                 tx_words_sent,
+                start_timestamp,
+                end_timestamp,
                 tx_elapsed_cycles,
                 tx_bw);
+            log_info(
+                LogTest,
+                "Zero data iter: {}, few data iter: {}, many data iter: {}",
+                zero_data_sent_iter,
+                few_data_sent_iter,
+                many_data_sent_iter);
             // log_info(LogTest, "TX {} packets sent = {}, bytes/packet = {:.2f}, total iter = {}, zero data sent iter =
             // {}, few data sent iter = {}, many data sent iter = {}", i, num_packets, bytes_per_pkt, iter,
             // zero_data_sent_iter, few_data_sent_iter, many_data_sent_iter);
@@ -977,7 +1044,10 @@ int main(int argc, char **argv) {
     constexpr uint32_t default_tx_queue_size_bytes = 0x10000;
     constexpr uint32_t default_rx_queue_start_addr = 0xa0000;
     constexpr uint32_t default_rx_queue_size_bytes = 0x20000;
-    constexpr uint32_t default_tx_signal_address = 0x70000;
+
+    // if this is used for multicast, carefully set it to a value that
+    // doesnt interfere with rx payload checking
+    constexpr uint32_t default_tx_signal_address = 0x28000;
 
     constexpr uint32_t default_test_results_addr = 0x100000;
     constexpr uint32_t default_test_results_size = 0x40000;
@@ -1026,6 +1096,8 @@ int main(int argc, char **argv) {
     constexpr uint32_t default_num_packets = 0xFFFFFFFF;
 
     constexpr uint32_t default_num_links = 1;
+
+    constexpr uint32_t default_host_sync_address = 0x60000;
 
     std::vector<std::string> input_args(argv, argv + argc);
     if (test_args::has_command_option(input_args, "-h") ||
@@ -1121,7 +1193,8 @@ int main(int argc, char **argv) {
     allow_1st_noc_hop = test_args::has_command_option(input_args, "--allow_1st_noc_hop");
     bool bidirectional_traffic = test_args::has_command_option(input_args, "--bidirectional");
 
-    uint32_t tx_signal_address = default_tx_signal_address;
+    tx_signal_address = default_tx_signal_address;
+    host_sync_address = default_host_sync_address;
 
     std::string board_type = test_args::get_command_option(input_args, "--board_type", std::string(default_board_type));
 
@@ -1345,9 +1418,9 @@ int main(int argc, char **argv) {
             test_device->wait_for_gatekeeper_sync();
         }
 
-        // notify tx kernels to start transmitting
+        // notify tx controller to signal the tx workers
         for (auto& traffic : fabric_traffic) {
-            traffic.notify_tx_workers(tx_signal_address);
+            traffic.notify_tx_controller();
         }
 
         // wait for rx kernels to finish
