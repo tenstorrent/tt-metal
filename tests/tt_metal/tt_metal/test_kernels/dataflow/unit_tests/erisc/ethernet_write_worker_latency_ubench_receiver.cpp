@@ -42,7 +42,6 @@ FORCE_INLINE void main_loop_bi_dir(
     uint32_t message_size,
     uint32_t num_messages,
     uint64_t worker_noc_addr) {
-    uint32_t full_payload_size_eth_words = full_payload_size >> 4;
     uint32_t total_msgs = num_messages * NUM_BUFFER_SLOTS;
 
     DPRINT << "RECEIVER MAIN LOOP" << ENDL();
@@ -61,7 +60,6 @@ FORCE_INLINE void main_loop_bi_dir(
                 sender_buffer_slot_addrs,
                 sender_buffer_slot_sync_addrs,
                 full_payload_size,
-                full_payload_size_eth_words,
                 sender_num_messages_ack,
                 sender_buffer_read_ptr,
                 sender_buffer_write_ptr);

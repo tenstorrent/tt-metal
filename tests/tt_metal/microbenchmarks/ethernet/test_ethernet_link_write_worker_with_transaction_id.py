@@ -120,7 +120,7 @@ def test_erisc_write_worker_bw_uni_dir(sample_count, sample_size_expected_latenc
 
 # bi-direction test for eth-sender <---> eth-receiver ---> worker
 @pytest.mark.skipif(is_grayskull(), reason="Unsupported on GS")
-@pytest.mark.parametrize("sample_count", [256])
+@pytest.mark.parametrize("sample_count", [1000])
 @pytest.mark.parametrize("channel_count", [16])
 @pytest.mark.parametrize("num_directions", [2])
 @pytest.mark.parametrize(
