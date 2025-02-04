@@ -79,6 +79,10 @@
 
 For the latest model updates and features, please see [MODEL_UPDATES.md](models/MODEL_UPDATES.md)
 
+## Model Bring-Up and Testing
+
+For information on initial model procedures, please see [Model Bring-Up and Testing](https://github.com/tenstorrent/tt-metal/tree/main/models/bringup_testing)
+
 ## TT-NN Tech Reports
 
 - [Advanced Performance Optimizations for Models](./tech_reports/AdvancedPerformanceOptimizationsForModels/AdvancedPerformanceOptimizationsForModels.md) (updated Dec 4th, 2024)
