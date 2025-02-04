@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (C) 2024 Tenstorrent, Inc. All rights reserved.
 
-set -e
+set -ex
 
 usage()
 {
@@ -180,13 +180,14 @@ install_llvm() {
 
 # Install g++-12 if on Ubuntu 22.04
 install_gcc12() {
-    [[ "$VERSION" == "22.04" ]] || return
-    echo "Detected Ubuntu 22.04, installing g++-12..."
-    apt-get install -y --no-install-recommends g++-12 gcc-12
-    update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 12
-    update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 12
-    update-alternatives --set gcc /usr/bin/gcc-12
-    update-alternatives --set g++ /usr/bin/g++-12
+    if [ $VERSION == "22.04" ]; then
+        echo "Detected Ubuntu 22.04, installing g++-12..."
+        apt-get install -y --no-install-recommends g++-12 gcc-12
+        update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 12
+        update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-12 12
+        update-alternatives --set gcc /usr/bin/gcc-12
+        update-alternatives --set g++ /usr/bin/g++-12
+    fi
 }
 
 # We don't really want to have hugepages dependency
