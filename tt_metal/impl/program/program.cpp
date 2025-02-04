@@ -556,14 +556,12 @@ void detail::Program_::update_kernel_groups(uint32_t programmable_core_type_inde
                         if (not hal.get_supports_cbs(programmable_core_type_index)) continue;
                         auto core = CoreCoord({x, y});
                         auto local_val = per_core_local_cb_indices_.find(core);
-                        if (local_val != per_core_local_cb_indices_.end()) {
-                            max_local_cb_end_index = std::max(
-                                max_local_cb_end_index,
-                                NUM_CIRCULAR_BUFFERS - (uint32_t)__builtin_clz(local_val->second.to_ulong()));
-
+                        if (local_val != per_core_local_cb_indices_.end() && local_val->second.any()) {
                             uint32_t used_cbs = local_val->second.to_ulong();
-                            if (used_cbs > 0 && !logged_noncontiguous) {
-                                // Zeroso out the contiguous run of set bits starting at zero. Anything remaining is
+                            max_local_cb_end_index = std::max(
+                                max_local_cb_end_index, NUM_CIRCULAR_BUFFERS - (uint32_t)__builtin_clz(used_cbs));
+                            if (!logged_noncontiguous) {
+                                // Zeroes out the contiguous run of set bits starting at zero. Anything remaining is
                                 // above a zero bit.
                                 uint32_t non_contiguous_cbs = used_cbs & (used_cbs + 1);
                                 if (non_contiguous_cbs) {
@@ -618,7 +616,7 @@ void detail::Program_::update_kernel_groups(uint32_t programmable_core_type_inde
                             }
                         }
                         auto remote_val = per_core_remote_cb_indices_.find(core);
-                        if (remote_val != per_core_remote_cb_indices_.end()) {
+                        if (remote_val != per_core_remote_cb_indices_.end() && remote_val->second.any()) {
                             min_remote_cb_start_index = std::min(
                                 min_remote_cb_start_index, (uint32_t)__builtin_ctz(remote_val->second.to_ulong()));
                         }
