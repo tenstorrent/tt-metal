@@ -60,7 +60,6 @@ size_t metal_SocDescriptor::get_channel_for_dram_view(int dram_view) const {
 
 size_t metal_SocDescriptor::get_num_dram_views() const { return this->dram_view_eth_cores.size(); }
 
-
 const std::vector<CoreCoord>& metal_SocDescriptor::get_pcie_cores() const { return this->pcie_cores; }
 
 const std::vector<CoreCoord> metal_SocDescriptor::get_dram_cores() const {
@@ -201,7 +200,7 @@ void metal_SocDescriptor::generate_logical_eth_coords_mapping() {
 
 void metal_SocDescriptor::generate_physical_routing_to_profiler_flat_id() {
 #if defined(TRACY_ENABLE)
-    for (auto& core : this->physical_workers) {
+    for (auto& core : get_cores(CoreType::TENSIX, CoordSystem::PHYSICAL)) {
         this->physical_routing_to_profiler_flat_id.emplace((CoreCoord){core.x, core.y}, 0);
     }
 
