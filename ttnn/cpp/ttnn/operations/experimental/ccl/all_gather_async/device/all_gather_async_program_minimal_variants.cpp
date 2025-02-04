@@ -44,6 +44,7 @@ operation::ProgramWithCallbacks all_gather_async_minimal_interleaved_dim3_1_1_32
     const uint32_t ring_index,
     ccl::Topology topology,
     const GlobalSemaphore semaphore,
+    const std::optional<SubDeviceId>& sub_device_id,
     bool enable_persistent_fabric_mode) {
     tt::tt_metal::Program program{};
     const bool enable_async_output_tensor = false;
@@ -78,7 +79,7 @@ operation::ProgramWithCallbacks all_gather_async_minimal_interleaved_dim3_1_1_32
     // Get worker cores, assuming 1 worker per link
     uint32_t num_workers_per_link = 1;
     const auto [sender_worker_core_range, sender_worker_cores] =
-        choose_worker_cores(num_links, num_workers_per_link, enable_persistent_fabric_mode, device);
+        choose_worker_cores(num_links, num_workers_per_link, enable_persistent_fabric_mode, device, sub_device_id);
 
     // L1 Scratch CB Creation
     const size_t packet_size_bytes = local_fabric_handle->get_edm_buffer_size_bytes();
@@ -201,11 +202,11 @@ operation::ProgramWithCallbacks all_gather_async_minimal_interleaved_dim3_1_1_32
         uint32_t output_tile_id_end = ring_index * input_tensor_num_pages + input_tile_id_end;
         std::vector<uint32_t> writer_rt_args = {
             output_tensor.buffer()->address(),  // tensor_address0
+            semaphore.address(),                // out_ready_sem_bank_addr (absolute address)
             output_tile_id_start,               // tile_id_start
             output_tile_id_end,                 // tile_id_end
             wait_output_semaphore,              // wait_output_semaphore
             reset_global_semaphore,             // reset_global_semaphore
-            semaphore.address(),                // out_ready_sem_bank_addr (absolute address)
             drain_sync_core.x,                  // out_ready_sem_noc0_x
             drain_sync_core.y,                  // out_ready_sem_noc0_y
             out_ready_sem_wait_value,           // out_ready_sem_wait_value
@@ -251,6 +252,10 @@ operation::ProgramWithCallbacks all_gather_async_minimal_interleaved_dim3_1_1_32
             const auto& input = input_tensors[0];
             const auto& output = output_tensors[0];
 
+            auto semaphore = static_cast<const ttnn::AllGatherAsync*>(operation)->semaphore;
+
+            log_trace(tt::LogOp, "DEBUG: semaphore: {}", semaphore.address());
+
             // update senders
             auto& worker_reader_sender_runtime_args_by_core = GetRuntimeArgs(program, worker_sender_reader_kernel_id);
             auto& worker_writer_sender_runtime_args_by_core = GetRuntimeArgs(program, worker_sender_writer_kernel_id);
@@ -261,6 +266,7 @@ operation::ProgramWithCallbacks all_gather_async_minimal_interleaved_dim3_1_1_32
                 // writer
                 auto& worker_writer_sender_runtime_args = worker_writer_sender_runtime_args_by_core[core.x][core.y];
                 worker_writer_sender_runtime_args[0] = output.buffer()->address();
+                worker_writer_sender_runtime_args[1] = semaphore.address();
             }
         };
 
@@ -278,6 +284,7 @@ operation::ProgramWithCallbacks all_gather_async_llama_post_binary_matmul(
     const uint32_t ring_index,
     ccl::Topology topology,
     const GlobalSemaphore semaphore,
+    const std::optional<SubDeviceId>& sub_device_id,
     bool enable_persistent_fabric_mode) {
     tt::tt_metal::Program program{};
     const bool enable_async_output_tensor = false;
@@ -312,7 +319,7 @@ operation::ProgramWithCallbacks all_gather_async_llama_post_binary_matmul(
     // Get worker cores, assuming 1 worker per link
     uint32_t num_workers_per_link = 1;
     const auto [sender_worker_core_range, sender_worker_cores] =
-        choose_worker_cores(num_links, num_workers_per_link, enable_persistent_fabric_mode, device);
+        choose_worker_cores(num_links, num_workers_per_link, enable_persistent_fabric_mode, device, sub_device_id);
 
     // Tensor Info
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
@@ -489,13 +496,13 @@ operation::ProgramWithCallbacks all_gather_async_llama_post_binary_matmul(
         uint32_t out_ready_sem_wait_value = ring_size * num_links;
         std::vector<uint32_t> writer_rt_args = {
             output_tensor.buffer()->address(),    // tensor_address0
+            semaphore.address(),                  // out_ready_sem_bank_addr (absolute address)
             output_tensor_shard_num_pages,        // num_tiles_per_core
             worker_num_tiles_to_read,             // num_tiles_to_read
             output_first_core_tile_start_offset,  // first_core_tile_start_offset
             output_tensor_cores_x.size(),         // num_cores
             wait_output_semaphore,                // wait_output_semaphore
             reset_global_semaphore,               // reset_global_semaphore
-            semaphore.address(),                  // out_ready_sem_bank_addr (absolute address)
             drain_sync_core.x,                    // out_ready_sem_noc0_x
             drain_sync_core.y,                    // out_ready_sem_noc0_y
             out_ready_sem_wait_value,             // out_ready_sem_wait_value
@@ -543,6 +550,10 @@ operation::ProgramWithCallbacks all_gather_async_llama_post_binary_matmul(
             const auto& input = input_tensors[0];
             const auto& output = output_tensors[0];
 
+            auto semaphore = static_cast<const ttnn::AllGatherAsync*>(operation)->semaphore;
+
+            log_trace(tt::LogOp, "DEBUG: semaphore: {}", semaphore.address());
+
             // update senders
             auto& worker_reader_sender_runtime_args_by_core = GetRuntimeArgs(program, worker_sender_reader_kernel_id);
             auto& worker_writer_sender_runtime_args_by_core = GetRuntimeArgs(program, worker_sender_writer_kernel_id);
@@ -553,6 +564,7 @@ operation::ProgramWithCallbacks all_gather_async_llama_post_binary_matmul(
                 // writer
                 auto& worker_writer_sender_runtime_args = worker_writer_sender_runtime_args_by_core[core.x][core.y];
                 worker_writer_sender_runtime_args[0] = output.buffer()->address();
+                worker_writer_sender_runtime_args[1] = semaphore.address();
             }
         };
 

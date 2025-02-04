@@ -285,7 +285,7 @@ def test_line_reduce_scatter_sharded_on_TG_rows_llama(
 @pytest.mark.parametrize(
     "num_devices, num_links, per_chip_output_shape, layout",
     [
-        (4, 2, [1, 1, 32, 1280], ttnn.TILE_LAYOUT),  # AllReduce after QKV (~110 us)
+        (4, 1, [1, 1, 32, 1280], ttnn.TILE_LAYOUT),  # AllReduce after QKV (~110 us)
     ],
 )
 @pytest.mark.parametrize(

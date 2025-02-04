@@ -94,11 +94,11 @@ void kernel_main() {
     size_t arg_idx = 0;
     // Load the input tensor spec
     address_t tensor_address0 = get_arg_val<address_t>(arg_idx++);
+    const size_t out_ready_sem_bank_addr = get_arg_val<uint32_t>(arg_idx++);
     uint32_t tile_id_start = get_arg_val<uint32_t>(arg_idx++);
     uint32_t tile_id_end = get_arg_val<uint32_t>(arg_idx++);
     bool wait_output_semaphore = get_arg_val<uint32_t>(arg_idx++);
     bool reset_global_semaphore = get_arg_val<uint32_t>(arg_idx++);
-    const size_t out_ready_sem_bank_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
     uint32_t out_ready_sem_wait_value = get_arg_val<uint32_t>(arg_idx++);

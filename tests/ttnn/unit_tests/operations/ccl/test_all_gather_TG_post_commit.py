@@ -223,6 +223,7 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
         mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=shard_dims),
     )
     ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)
+    ttnn_tensor = ttnn.to_memory_config(ttnn_tensor, input_mem_config)
 
     sub_device_stall_group = []
     if use_all_gather_async:
@@ -249,7 +250,6 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
         ccl_semaphore_handles = [
             create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0) for _ in range(num_iters)
         ]
-
     try:
         # ttnn.visualize_mesh_device(mesh_device, tensor=ttnn_tensor)
         if trace_mode:
