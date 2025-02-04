@@ -933,3 +933,25 @@ def test_slice_index(device, input_shape, layout, input_memory_config, indices):
     ttnn_output = ttnn.to_torch(ttnn_output)
 
     assert_with_pcc(torch_output, ttnn_output, 0.99)
+
+
+TERMINAL_TEST_SHAPE = (2, 4, 1, 3, 7, 5)
+
+
+@pytest.mark.parametrize(
+    "input_memory_config",
+    (ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+)
+def test_slice_tiled_terminal(device, input_memory_config):
+    """Test the situation where the logical H,W is smaller than the tile size"""
+
+    torch_input = torch.randn(TERMINAL_TEST_SHAPE, dtype=torch.bfloat16)
+    torch_output = torch_input[:, :, :, :, TERMINAL_TEST_SHAPE[-2] - 1, TERMINAL_TEST_SHAPE[-1] - 1]
+
+    ttnn_input = ttnn.from_torch(
+        torch_input, device=device, dtype=ttnn.bfloat16, memory_config=input_memory_config, layout=ttnn.TILE_LAYOUT
+    )
+
+    ttnn_output = ttnn.to_torch(ttnn_input[:, :, :, :, TERMINAL_TEST_SHAPE[-2] - 1, TERMINAL_TEST_SHAPE[-1] - 1])
+
+    assert_with_pcc(torch_output, ttnn_output, 0.99)

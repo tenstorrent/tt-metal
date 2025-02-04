@@ -31,7 +31,7 @@ def __getitem__(input_tensor: ttnn.Tensor, slices) -> ttnn.Tensor:
     """
 
     # Gather some basic info
-    input_rank = len(input_tensor.logical_shape)
+    input_rank = len(input_tensor.shape)
     shape = input_tensor.shape  # Or input_tensor.logical_shape, depending on your library's conventions
 
     # 1) Normalize slices into a tuple.

@@ -80,7 +80,6 @@ void SliceDeviceOperation::validate_with_output_tensors(
 
     auto logical_shape = input_tensor_a.get_logical_shape();
     auto padded_shape = input_tensor_a.get_padded_shape();
-    TT_FATAL(logical_shape == padded_shape, "Slice does not support padded inputs");
     TT_FATAL(
         logical_shape.rank() == this->slice_start.rank() && this->slice_start.rank() == this->slice_end.rank(),
         "Error");
@@ -118,11 +117,13 @@ void SliceDeviceOperation::validate_with_output_tensors(
     if (input_tensor_a.get_layout() == Layout::TILE) {
         TT_FATAL(input_tensor_a.volume() % TILE_HW == 0, "Error");
         TT_FATAL(
-            (output_tensor_shape[-2] % TILE_HEIGHT == 0) && (this->slice_start[-2] % TILE_HEIGHT == 0),
-            "Can only unpad tilized tensor with full tiles");
+            ((output_tensor_shape[-2] % TILE_HEIGHT == 0) && (this->slice_start[-2] % TILE_HEIGHT == 0)) ||
+                logical_shape[-2] == this->slice_end[-2],
+            "Can only unpad tilized tensor with full tiles or terminal slice height");
         TT_FATAL(
-            (output_tensor_shape[-1] % TILE_WIDTH == 0) && (this->slice_start[-1] % TILE_WIDTH == 0),
-            "Can only unpad tilized tensor with full tiles");
+            ((output_tensor_shape[-1] % TILE_WIDTH == 0) && (this->slice_start[-1] % TILE_WIDTH == 0)) ||
+                logical_shape[-1] == this->slice_end[-1],
+            "Can only unpad tilized tensor with full tiles or terminal slice width");
     } else if (input_tensor_a.get_layout() == Layout::ROW_MAJOR) {
         if (has_step) {
             for (uint32_t i = 0; i < logical_shape.rank(); i++) {
