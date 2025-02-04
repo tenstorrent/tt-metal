@@ -1666,8 +1666,8 @@ void py_module(py::module& module) {
         R"doc(System memory is not supported.)doc");
     detail::bind_unary_composite(module, ttnn::cbrt, R"doc(Performs cbrt function on :attr:`input_tensor`.)doc");
     detail::bind_unary_composite(module, ttnn::cosh, R"doc(Performs cosh function on :attr:`input_tensor`.)doc", "[supported range -9 to 9]", R"doc(BFLOAT16, BFLOAT8_B)doc");
-    detail::bind_unary_composite(module, ttnn::digamma, R"doc(Performs digamma function on :attr:`input_tensor`.)doc", "[supported for values greater than 0].",
-        R"doc(BFLOAT16, BFLOAT8_B)doc", R"doc(TILE)doc", R"doc(2, 3, 4)doc", "", R"doc(torch.tensor([[2, 3], [4, 5]], dtype=torch.bfloat16))doc");
+    detail::bind_unary_composite(module, ttnn::digamma, R"doc(Performs digamma function on :attr:`input_tensor`.)doc", "[supported range 1 to inf].",
+        R"doc(BFLOAT16, BFLOAT8_B)doc", R"doc(TILE)doc", R"doc(2, 3, 4)doc", "For BFLOAT8_B, the padding value must be set to 1 due to BFLOAT8_B limitations.More information about the `BFLOAT8_B  <../tensor.html#limitation-of-bfloat8-b>`_.", R"doc(torch.tensor([[2, 3], [4, 5]], dtype=torch.bfloat16))doc");
     detail::bind_unary_composite(module, ttnn::lgamma, R"doc(Performs lgamma function on :attr:`input_tensor`.)doc", "[supported for value greater than 0].", R"doc(BFLOAT16)doc");
     detail::bind_unary_composite(module, ttnn::log1p, R"doc(Performs log1p function on :attr:`input_tensor`.)doc", "[supported range -1 to 1].", R"doc(BFLOAT16, BFLOAT8_B)doc");
     detail::bind_unary_composite(module, ttnn::mish, R"doc(Performs mish function on :attr:`input_tensor`.)doc", "[supported range -20 to inf].", R"doc(BFLOAT16, BFLOAT8_B)doc",
