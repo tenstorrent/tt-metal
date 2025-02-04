@@ -147,11 +147,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
 }
 
 operation::ProgramWithCallbacks slice_rm_multi_core(
-    const Tensor& a, 
-    Tensor& output, 
-    const ttnn::Shape& output_tensor_start, 
-    const ttnn::Shape& output_tensor_end) {
-
+    const Tensor& a, Tensor& output, const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end) {
     const ttnn::Shape output_shape = output.get_logical_shape();
 
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
@@ -440,7 +436,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     tt::tt_metal::IDevice* device = input_tensor.device();
 
     auto output_buffer = output_tensor.buffer();
-    auto input_shape = input_tensor.get_logical_shape();
+    auto input_shape = input_tensor.get_padded_shape();
     auto output_shape = output_tensor.get_logical_shape();
 
     uint32_t padded_row_size_bytes = input_shape[-1] * input_tensor.element_size();
@@ -584,10 +580,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
 }
 
 operation::ProgramWithCallbacks slice_rm_multi_core_sharded(
-    const Tensor& a, 
-    Tensor& output, 
-    const ttnn::Shape& output_tensor_start, 
-    const ttnn::Shape& output_tensor_end) {
+    const Tensor& a, Tensor& output, const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end) {
     const ttnn::Shape output_shape = output.get_logical_shape();
 
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
@@ -734,15 +727,15 @@ inline __attribute__((always_inline)) void set_slice_runtime_args_tile(
     std::vector<uint32_t>& accumulated_total_per_dim) {
     const auto input_buffer = input_tensor.buffer();
     const auto output_buffer = output_tensor.buffer();
-    const auto& input_shape = input_tensor.get_logical_shape();
-    const auto& output_shape = output_tensor.get_logical_shape();
+    const auto& input_shape = input_tensor.get_padded_shape();
+    const auto& output_shape = output_tensor.get_padded_shape();
 
     std::uint32_t num_dims = static_cast<std::uint32_t>(input_shape.rank());
 
-    uint32_t num_unpadded_Xt = output_shape[-1] / TILE_WIDTH;
+    uint32_t num_unpadded_Xt = std::max(static_cast<std::uint32_t>(1), output_shape[-1] / TILE_WIDTH);
     uint32_t num_total_Xt = input_shape[-1] / TILE_WIDTH;
     uint32_t num_padded_Xt = num_total_Xt - num_unpadded_Xt;
-    uint32_t num_unpadded_Yt = output_shape[-2] / TILE_HEIGHT;
+    uint32_t num_unpadded_Yt = std::max(static_cast<std::uint32_t>(1), output_shape[-2] / TILE_HEIGHT);
     uint32_t num_total_Yt = input_shape[-2] / TILE_HEIGHT;
     uint32_t num_padded_Yt = (num_total_Yt - num_unpadded_Yt) * num_total_Xt;
 
