@@ -127,7 +127,7 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
 
     /* reduction cb */
     uint32_t reduction_CB_single_tile_size = input_tensor.get_tensor_spec().tile().get_tile_size(df);
-    uint32_t reduction_CB_tiles = input_tensor_num_pages / input_tensor_cores.num_cores() * ring_size;
+    uint32_t reduction_CB_tiles = input_tensor_shard_num_pages * ring_size;
     uint32_t reduction_CB_size = reduction_CB_tiles * reduction_CB_single_tile_size;
 
     uint32_t reduction_cb_index = tt::CBIndex::c_1;
@@ -139,7 +139,7 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
 
     /* out cb */
     uint32_t out_CB_single_tile_size = input_tensor.get_tensor_spec().tile().get_tile_size(df);
-    uint32_t out_CB_tiles = input_tensor_num_pages / input_tensor_cores.num_cores();
+    uint32_t out_CB_tiles = input_tensor_shard_num_pages;
     uint32_t out_CB_size = out_CB_tiles * out_CB_single_tile_size;
 
     uint32_t out_cb_index = tt::CBIndex::c_2;
@@ -156,7 +156,6 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
         reduction_cb_index,      // reduction_cb_index
         reduction_CB_tiles,      // total_num_reduction_tiles
         reduction_semaphore_id,  // signal_semaphore_addr
-        out_cb_index,            // out_cb_index
     };
     auto reduction_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -164,6 +163,24 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
         "reduction_dataflow.cpp",
         input_tensor_cores,
         reduction_reader_kernel_config);
+
+    // Create reduction dataflow kernel
+    auto reduction_kernel_config = tt::tt_metal::ComputeConfig{};
+    reduction_kernel_config.compile_args = {
+        reduction_cb_index,  // reduction_cb_index
+        out_cb_index,        // out_cb_index
+    };
+    auto reduction_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/experimental/ccl/all_reduce_async/device/kernels/"
+        "eltwise_binary_kernel.cpp",
+        input_tensor_cores,
+        reduction_kernel_config);
+    std::vector<uint32_t> reduction_kernel_rt_args = {
+        ring_size,                     // num_blocks
+        input_tensor_shard_num_pages,  // block_num_tiles
+    };
+    tt::tt_metal::SetRuntimeArgs(program, reduction_kernel_id, input_tensor_cores, reduction_kernel_rt_args);
 
     // KERNEL CREATION
     // Reader
