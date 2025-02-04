@@ -93,7 +93,7 @@ TYPED_TEST(VectorConversionTest, TensorShape) {
         auto input = arange<TypeParam>(0, static_cast<int64_t>(shape.volume()), 1);
         Tensor output = Tensor::from_vector(input, get_tensor_spec(shape, convert_to_data_type<TypeParam>()));
 
-        EXPECT_THAT(output.get_tensor_spec().shape(), Eq(shape)) << "for shape: " << shape;
+        EXPECT_THAT(output.get_tensor_spec().logical_shape(), Eq(shape)) << "for shape: " << shape;
     }
 }
 
@@ -104,7 +104,7 @@ TYPED_TEST(VectorConversionTest, Roundtrip) {
 
         TensorSpec tensor_spec = tensor.get_tensor_spec();
 
-        EXPECT_THAT(tensor_spec.shape(), Eq(shape)) << "for shape: " << shape;
+        EXPECT_THAT(tensor_spec.logical_shape(), Eq(shape)) << "for shape: " << shape;
         EXPECT_THAT(tensor_spec.data_type(), Eq(convert_to_data_type<TypeParam>()));
 
         auto output = tensor.template to_vector<TypeParam>();
