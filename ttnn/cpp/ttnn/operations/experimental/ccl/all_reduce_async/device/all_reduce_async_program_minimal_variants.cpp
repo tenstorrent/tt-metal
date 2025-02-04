@@ -125,6 +125,46 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
     auto all_cores = input_tensor_cores.merge(sender_worker_core_range);
     auto reduction_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
 
+    /* reduction cb */
+    uint32_t reduction_CB_single_tile_size = input_tensor.get_tensor_spec().tile().get_tile_size(df);
+    uint32_t reduction_CB_tiles = input_tensor_num_pages / input_tensor_cores.num_cores() * ring_size;
+    uint32_t reduction_CB_size = reduction_CB_tiles * reduction_CB_single_tile_size;
+
+    uint32_t reduction_cb_index = tt::CBIndex::c_1;
+    tt::tt_metal::CircularBufferConfig reduction_cb_config =
+        tt::tt_metal::CircularBufferConfig(reduction_CB_size, {{reduction_cb_index, df}})
+            .set_page_size(reduction_cb_index, reduction_CB_single_tile_size);
+    // .set_globally_allocated_address(*output_tensor.buffer()); // TODO: Remove once new cb attached for output
+    auto cb_reduction = tt::tt_metal::CreateCircularBuffer(program, all_cores, reduction_cb_config);
+
+    /* out cb */
+    uint32_t out_CB_single_tile_size = input_tensor.get_tensor_spec().tile().get_tile_size(df);
+    uint32_t out_CB_tiles = input_tensor_num_pages / input_tensor_cores.num_cores();
+    uint32_t out_CB_size = out_CB_tiles * out_CB_single_tile_size;
+
+    uint32_t out_cb_index = tt::CBIndex::c_2;
+    tt::tt_metal::CircularBufferConfig out_cb_config =
+        tt::tt_metal::CircularBufferConfig(out_CB_size, {{out_cb_index, df}})
+            .set_page_size(out_cb_index, out_CB_single_tile_size)
+            .set_globally_allocated_address(*output_tensor.buffer());  // TODO: Remove once new cb attached for output
+    auto cb_out = tt::tt_metal::CreateCircularBuffer(
+        program, input_tensor_cores, out_cb_config);  // TODO: This should be the output cores instead
+
+    // Create reduction dataflow kernel
+    auto reduction_reader_kernel_config = tt::tt_metal::ReaderDataMovementConfig{};
+    reduction_reader_kernel_config.compile_args = {
+        reduction_cb_index,      // reduction_cb_index
+        reduction_CB_tiles,      // total_num_reduction_tiles
+        reduction_semaphore_id,  // signal_semaphore_addr
+        out_cb_index,            // out_cb_index
+    };
+    auto reduction_reader_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/experimental/ccl/all_reduce_async/device/kernels/"
+        "reduction_dataflow.cpp",
+        input_tensor_cores,
+        reduction_reader_kernel_config);
+
     // KERNEL CREATION
     // Reader
     auto reader_kernel_config = tt::tt_metal::ReaderDataMovementConfig{};
@@ -167,18 +207,6 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
         "llama_post_binary_matmul_shape_writer.cpp",
         sender_worker_core_range,
         writer_kernel_config);
-
-    // Create reduction dataflow kernel
-    auto reduction_reader_kernel_config = tt::tt_metal::ReaderDataMovementConfig{};
-    reduction_reader_kernel_config.compile_args = {
-        reduction_semaphore_id,  // signal_semaphore_addr
-    };
-    auto reduction_reader_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/all_reduce_async/device/kernels/"
-        "reduction_dataflow.cpp",
-        input_tensor_cores,
-        reduction_reader_kernel_config);
 
     // Kernel Runtime Args
     CoreCoord drain_sync_core;  // the first worker of each chip is the drain sync core, which contains the output ready
@@ -257,7 +285,7 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
         bool reset_global_semaphore = (link == 0) && !enable_async_output_tensor;
         uint32_t out_ready_sem_wait_value = ring_size * num_links;
         std::vector<uint32_t> writer_rt_args = {
-            output_tensor.buffer()->address(),    // tensor_address0
+            reduction_cb_index,                   // tensor_address0
             input_tensor_shard_num_pages,         // num_tiles_per_core
             worker_num_tiles_to_read,             // num_tiles_to_read
             output_first_core_tile_start_offset,  // first_core_tile_start_offset
