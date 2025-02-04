@@ -59,6 +59,7 @@ void print_pkt_header_noc_fields(volatile tt::fabric::PacketHeader *const packet
             break;
         }
         case tt::fabric::NocSendType::NOC_MULTICAST: {
+            ASSERT(false); // unimplemented
             break;
         }
     }
@@ -177,28 +178,23 @@ void update_packet_header_for_next_hop(volatile tt::fabric::PacketHeader * packe
 // Modifies the packet header (decrements hop counts) so ...
 //
 // !!!WARNING!!!
-// !!!WARNING!!! do NOT call before determining if the packet should be consumed locally or forwarded
+// !!!WARNING!!! * do NOT call before determining if the packet should be consumed locally or forwarded
+// !!!WARNING!!! * ENSURE DOWNSTREAM EDM HAS SPACE FOR PACKET BEFORE CALLING
 // !!!WARNING!!!
-tt::fabric::SendStatus forward_payload_to_downstream_edm(
+void forward_payload_to_downstream_edm(
     volatile tt::fabric::PacketHeader *packet_header,
     tt::fabric::WorkerToFabricEdmSender &downstream_edm_interface
     ) {
     DPRINT << "Fwding pkt to downstream\n";
     // TODO: PERF - this should already be getting checked by the caller so this should be redundant make it an ASSERT
-    bool safe_to_send = downstream_edm_interface.consumer_has_space();
-    if (!safe_to_send) {
-        return tt::fabric::SendStatus::NOT_SENT;
-    }
+    ASSERT(downstream_edm_interface.edm_has_space_for_packet()); // best effort check
 
     // This is a good place to print the packet header for debug if you are trying to inspect packets
     // because it is before we start manipulating the header for forwarding
     update_packet_header_for_next_hop(packet_header);
-
     downstream_edm_interface.send_payload_blocking_from_address(
         reinterpret_cast<size_t>(packet_header),
         packet_header->get_payload_size_including_header());
-
-    return tt::fabric::SendStatus::SENT_PAYLOAD_AND_SYNC;
 }
 
 

@@ -150,8 +150,6 @@ void kernel_main() {
             packet_header.reserved2 = 0x1111;  // debug only
         }
 
-        uint64_t buffer_address = sender.edm_buffer_addr +
-                                  (*sender.buffer_index_ptr * (sender.buffer_size_bytes + sizeof(eth_channel_sync_t)));
         sender.send_payload_blocking_from_address(packet_addr, packet_size);
         noc_async_writes_flushed();
         cb_pop_front(cb_id_in0, pages_to_send);
