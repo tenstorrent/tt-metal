@@ -343,7 +343,7 @@ void Cluster::generate_virtual_to_umd_coord_mapping() {
     for (auto chip_id : this->cluster_desc_->get_all_chips()) {
         this->virtual_worker_cores_[chip_id] = {};
         this->virtual_eth_cores_[chip_id] = {};
-        for (CoreCoord core : this->get_soc_desc(chip_id).get_all_cores(CoordSystem::PHYSICAL)) {
+        for (tt::umd::CoreCoord core : this->get_soc_desc(chip_id).get_all_cores(CoordSystem::PHYSICAL)) {
             CoreCoord virtual_coords = this->get_virtual_coordinate_from_physical_coordinates(chip_id, core);
             tt_cxy_pair virtual_core = tt_cxy_pair(chip_id, virtual_coords.x, virtual_coords.y);
             tt_cxy_pair umd_core =
