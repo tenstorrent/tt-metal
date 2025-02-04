@@ -15,7 +15,30 @@ namespace ttnn::operations::data_movement {
 
 namespace {
 
-bool eq_spans(const auto a, const auto b) { return std::equal(a.begin(), a.end(), b.begin(), b.end()); }
+static ttnn::Tensor convert_tensor_to_4d(ttnn::Tensor input_tensor) {
+    ttnn::Tensor input_tensor_4D;
+    if (input_tensor.get_shape().rank() < 4) {
+        input_tensor_4D = ttnn::unsqueeze_to_4D(input_tensor);
+    } else if (input_tensor.get_shape().rank() > 4) {
+        input_tensor_4D = squeeze_from_ND_to_4D(input_tensor);
+    }
+    return input_tensor_4D;
+}
+
+// TODO have to handle for all the cases.
+template <typename T>
+static std::vector<T> convert_span_to_4D(std::span<const T> span, int val) {
+    std::vector<T> vec(span.begin(), span.end());  // Convert span to vector to modify it
+    while (vec.size() < 4) {
+        vec.insert(vec.begin(), val);
+    }
+    return vec;
+}
+
+template <typename ArrayType>
+bool eq_spans(const ArrayType& a, const ArrayType& b) {
+    return std::equal(a.begin(), a.end(), b.begin(), b.end());
+}
 
 ttnn::Shape update_original_shape(const ttnn::Shape& padded_shape, const ttnn::Shape& input_shape) {
     ttnn::SmallVector<uint32_t> updated_shape;
@@ -50,21 +73,31 @@ static ttnn::Tensor pad_impl(
 
     // on device
     else {
-        auto input_tensor_shape = input_tensor.get_logical_shape();
+        // convert the Input Tensor to 4D
+        std::vector<uint32_t> output_padded_shape_vec;
+
+        std::vector<uint32_t> input_tensor_start_vec;
+
+    ttnn:
+        Tensor input_tensor_4D;
+
+        if (input_tensor.get_shape().rank() < 4) {
+            input_tensor_4D = convert_tensor_to_4d(input_tensor);
+
+            output_padded_shape_vec = convert_span_to_4D<uint32_t>(output_padded_shape, 1);
+            output_padded_shape = std::span<uint32_t>(output_padded_shape_vec.data(), output_padded_shape_vec.size());
+
+            input_tensor_start_vec = convert_span_to_4D<uint32_t>(input_tensor_start, 0);
+            input_tensor_start = std::span<uint32_t>(input_tensor_start_vec.data(), input_tensor_start_vec.size());
+
+        } else {
+            // No conversion required
+            input_tensor_4D = input_tensor;
+        }
+
+        auto input_tensor_shape = input_tensor_4D.get_shape();
         const auto rank = input_tensor_shape.rank();
 
-        TT_FATAL(rank == 4, "ttnn.pad: input tensor passed to pad_impl must have rank == 4, but got rank {}.", rank);
-        bool input_output_same = true;
-        for (size_t i = 0; i < rank; i++) {
-            if (input_tensor_shape[i] != output_padded_shape[i]) {
-                input_output_same = false;
-                break;
-            }
-        }
-        if (input_output_same) {
-            tt::log_debug("Pad Input and Output Shapes are the same. Skipping pad and returning input tensor.");
-            return input_tensor;
-        }
         using ShardStrategy = ttnn::operations::data_movement::ShardStrategy;
         using ShardOrientation = tt::tt_metal::ShardOrientation;
         using Layout = tt::tt_metal::Layout;
@@ -89,11 +122,11 @@ static ttnn::Tensor pad_impl(
                 std::array<uint32_t, 4> output_shape_width_padded{
                     input_logical_shape[0], input_logical_shape[1], input_logical_shape[2], output_w};
                 auto width_pad_memory_config = create_sharded_memory_config(
-                    ttnn::Shape{output_shape_width_padded},
-                    input_tensor.shard_spec()->grid,  // reuse input cores for now: FIXME: can we do better?
-                                                      // it's complicated because we need the input shards to be local
-                                                      // to the core holding the output shard currently.
-                    ShardStrategy::HEIGHT,            // stay height sharded
+                    ttnn::SimpleShape{output_shape_width_padded},
+                    input_tensor_4D.shard_spec()->grid,  // reuse input cores for now: FIXME: can we do better?
+                                                         // it's complicated because we need the input shards to be
+                                                         // local to the core holding the output shard currently.
+                    ShardStrategy::HEIGHT,               // stay height sharded
                     ShardOrientation::ROW_MAJOR);
                 output_memory_config = width_pad_memory_config;
 
@@ -123,8 +156,8 @@ static ttnn::Tensor pad_impl(
                         "infinite recursion");
 
                     auto height_pad_memory_config = create_sharded_memory_config(
-                        ttnn::Shape{output_padded_shape},
-                        input_tensor.shard_spec()->grid,
+                        ttnn::SimpleShape{output_padded_shape},
+                        input_tensor_4D.shard_spec()->grid,
                         ShardStrategy::HEIGHT,
                         ShardOrientation::ROW_MAJOR);
 
