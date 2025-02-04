@@ -37,4 +37,4 @@ jobs:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     uses: ./.github/workflows/build-artifact.yaml
     with:
-      os: "ubuntu-22.04-amd64"
+      version: "22.04"
