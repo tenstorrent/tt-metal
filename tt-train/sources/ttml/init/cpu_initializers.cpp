@@ -13,8 +13,7 @@ namespace ttml::init {
 xt::xarray<float> uniform_init(const ttnn::Shape& shape, UniformRange range) {
     std::vector<float> data(shape.volume());
     uniform_init(data, range);
-    auto shape_view = shape.view();
-    std::vector<uint32_t> shape_vec(shape_view.begin(), shape_view.end());
+    std::vector<uint32_t> shape_vec(shape.cbegin(), shape.cend());
     // adapt creates view of the vector, but return will copy this data anyway (by creation of xt::array)
     return xt::adapt(std::move(data), shape_vec);
 }
