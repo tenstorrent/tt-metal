@@ -120,19 +120,21 @@ def run_all_reduce_impl(
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
         )
 
+        # All-Reduce Golden
         # output_tensor_goldens_list = [
         #     torch.sum(input_tensor, dim=cluster_axis)
         #     for _ in range(num_iters)
         # ]
 
-        output_tensor_goldens_list = [
-            input_tensor.transpose(cluster_axis, -2)
-            .reshape(8, M, 4, num_cores, N // num_cores)
+        # Interleaved All-Gather Golden
+        output_tensor_golden = input_tensor.transpose(cluster_axis, -2)
+        output_tensor_golden = (
+            output_tensor_golden.reshape(*output_tensor_golden.shape[:3], num_cores, N // num_cores)
             .transpose(-3, -2)
             .reshape(cluster_shape[0], M, num_cores, -1)
             .reshape(cluster_shape[0], M, -1)
-            for _ in range(num_iters)
-        ]
+        )
+        output_tensor_goldens_list = [output_tensor_golden for _ in range(num_iters)]
 
         ##################################
         ##### Run the op
@@ -181,6 +183,7 @@ def run_all_reduce_impl(
             tt_out_tensor = tt_outs[tensor_index]
             output_tensor = output_tensor_goldens_list[tensor_index]
             for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
+                # get_device_tensors returns row major, so we need to select the correct golden tensor
                 output_tensor_ = output_tensor[i // cluster_shape[cluster_axis]].unsqueeze(0).unsqueeze(0)
                 tt_output_tensor = t.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
                 logger.info(f"Checking for device {t.device().id()}")
