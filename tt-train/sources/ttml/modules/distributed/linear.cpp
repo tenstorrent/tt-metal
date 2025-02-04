@@ -29,7 +29,7 @@ RowParallelLinear::RowParallelLinear(
 
 autograd::TensorPtr RowParallelLinear::operator()(autograd::TensorPtr tensor) {
     if (!m_input_is_parallel) {
-        tensor = ops::distributed::scatter(tensor, tensor->rank() - 1U);
+        tensor = ops::distributed::scatter(tensor, tensor->get_rank() - 1U);
     }
 
     // do not pass bias
@@ -85,7 +85,7 @@ ColumnParallelLinear::ColumnParallelLinear(
 autograd::TensorPtr ColumnParallelLinear::operator()(autograd::TensorPtr tensor) {
     tensor = ops::linear_op(tensor, m_weight, m_bias);
     if (m_gather_output) {
-        tensor = ops::distributed::all_gather(tensor, tensor->rank() - 1U);
+        tensor = ops::distributed::all_gather(tensor, tensor->get_rank() - 1U);
     }
     return tensor;
 }

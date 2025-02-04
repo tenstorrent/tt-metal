@@ -7,9 +7,7 @@
 #include <functional>
 #include <memory>
 #include <mnist/mnist_reader.hpp>
-#include <ttnn/operations/eltwise/ternary/where.hpp>
-#include <ttnn/tensor/tensor_utils.hpp>
-#include <ttnn/tensor/types.hpp>
+#include <variant>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
@@ -61,12 +59,12 @@ private:
 
 template <typename Model>
 float evaluate(DataLoader &test_dataloader, Model &model, size_t num_targets) {
-    model->eval();
+    std::visit([](auto &model) { model->eval(); }, model);
     float num_correct = 0;
     float num_samples = 0;
     auto *device = &ttml::autograd::ctx().get_device();
     for (const auto &[data, target] : test_dataloader) {
-        auto output = (*model)(data);
+        auto output = std::visit([&data](auto &model) { return (*model)(data); }, model);
         ttml::core::MeshToXTensorVariant<float> composer = ttml::core::VectorMeshToXTensor<float>(device->shape());
         auto output_xtensor = ttml::core::to_xtensor(output->get_value(), composer)[0];
         auto target_xtensor = ttml::core::to_xtensor(target->get_value(), composer)[0];
@@ -83,7 +81,7 @@ float evaluate(DataLoader &test_dataloader, Model &model, size_t num_targets) {
             num_samples++;
         }
     }
-    model->train();
+    std::visit([](auto &model) { model->train(); }, model);
     return num_correct / num_samples;
 };
 
@@ -114,20 +112,29 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     return config;
 }
 
+void initialize_device(bool enable_tp) {
+    if (enable_tp) {
+        // we support only N300 for now
+        ttml::autograd::ctx().set_mesh_shape({1, 2});
+    }
+}
+
 int main(int argc, char **argv) {
     CLI::App app{"Mnist Example"};
     argv = app.ensure_utf8(argv);
 
     std::string config_name = std::string(CONFIGS_FOLDER) + "/training_mnist_mlp.yaml";
     bool is_eval = false;
+    bool enable_tp = false;
     app.add_option("-c,--config", config_name, "Yaml Config name")->default_val(config_name);
     app.add_option("-e,--eval", is_eval, "Evaluate")->default_val(is_eval);
+    app.add_option("-p, --enable_tp", enable_tp, "Enable tensor parallelism")->default_val(enable_tp);
 
     CLI11_PARSE(app, argc, argv);
     auto yaml_config = YAML::LoadFile(config_name);
     TrainingConfig config = parse_config(yaml_config);
 
-    ttml::autograd::ctx().set_mesh_shape({1, 2});
+    initialize_device(enable_tp);
 
     // Load MNIST data
     const size_t num_targets = 10;
@@ -167,8 +174,12 @@ int main(int argc, char **argv) {
     auto train_dataloader = DataLoader(training_dataset, config.batch_size, /* shuffle */ true, collate_fn);
     auto test_dataloader = DataLoader(test_dataset, config.batch_size, /* shuffle */ false, collate_fn);
 
-    // auto model = ttml::models::mlp::create(config.mlp_config);
-    auto model = std::make_shared<MnistTP>();
+    std::variant<std::shared_ptr<ttml::modules::MultiLayerPerceptron>, std::shared_ptr<MnistTP>> model;
+    if (enable_tp) {
+        model = std::make_shared<MnistTP>();
+    } else {
+        model = ttml::models::mlp::create(config.mlp_config);
+    }
 
     const float learning_rate = config.learning_rate * (static_cast<float>(config.batch_size) / 128.F);
     const float momentum = config.momentum;
@@ -182,10 +193,15 @@ int main(int argc, char **argv) {
     fmt::print("    Dampening {}\n", sgd_config.dampening);
     fmt::print("    Weight decay: {}\n", sgd_config.weight_decay);
     fmt::print("    Nesterov: {}\n", sgd_config.nesterov);
-    auto optimizer = ttml::optimizers::SGD(model->parameters(), sgd_config);
+    auto parameters = std::visit([](auto &model) { return model->parameters(); }, model);
+    auto optimizer = ttml::optimizers::SGD(parameters, sgd_config);
     if (!config.model_path.empty() && std::filesystem::exists(config.model_path)) {
         fmt::print("Loading model from {}\n", config.model_path);
-        load_training_state(config.model_path, model, optimizer, model_name, optimizer_name);
+        std::visit(
+            [&config, &optimizer, model_name = model_name, optimizer_name = optimizer_name](auto &model) {
+                load_training_state(config.model_path, model, optimizer, model_name, optimizer_name);
+            },
+            model);
     }
 
     // evaluate model before training (sanity check to get reasonable accuracy
@@ -214,7 +230,7 @@ int main(int argc, char **argv) {
     for (size_t epoch = 0; epoch < config.num_epochs; ++epoch) {
         for (const auto &[data, target] : train_dataloader) {
             optimizer.zero_grad();
-            auto output = (*model)(data);
+            auto output = std::visit([&data](auto &model) { return (*model)(data); }, model);
             auto loss = ttml::ops::cross_entropy_loss(output, target);
             auto loss_float = get_loss_value(loss);
             loss_meter.update(loss_float, config.batch_size);
@@ -223,7 +239,11 @@ int main(int argc, char **argv) {
             }
             if (!config.model_path.empty() && training_step % config.model_save_interval == 0) {
                 fmt::print("Saving model to {}\n", config.model_path);
-                save_training_state(config.model_path, model, optimizer, model_name, optimizer_name);
+                std::visit(
+                    [&config, &optimizer, model_name = model_name, optimizer_name = optimizer_name](auto &model) {
+                        save_training_state(config.model_path, model, optimizer, model_name, optimizer_name);
+                    },
+                    model);
             }
 
             loss->backward();
@@ -243,7 +263,12 @@ int main(int argc, char **argv) {
 
     if (!config.model_path.empty()) {
         fmt::print("Saving model to {}\n", config.model_path);
-        save_training_state(config.model_path, model, optimizer, model_name, optimizer_name);
+        // save_training_state(config.model_path, model, optimizer, model_name, optimizer_name);
+        std::visit(
+            [&config, &optimizer, model_name = model_name, optimizer_name = optimizer_name](auto &model) {
+                save_training_state(config.model_path, model, optimizer, model_name, optimizer_name);
+            },
+            model);
     }
 
     return 0;

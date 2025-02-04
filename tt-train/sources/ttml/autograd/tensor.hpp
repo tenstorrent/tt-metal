@@ -42,7 +42,7 @@ public:
     bool get_requires_grad() const;
     const std::optional<NodeId> &get_node() const;
     const ttnn::Shape &get_shape() const;
-    uint32_t rank() const;
+    uint32_t get_rank() const;
 
     void backward(bool retain_graph = false);
 
