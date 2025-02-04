@@ -13,6 +13,7 @@ from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, s
 from models.utility_functions import torch_random
 
 TIMEOUT = 15
+TILE_HEIGHT = TILE_WIDTH = 32
 # seed for random
 random.seed(0)
 
@@ -55,7 +56,12 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     if test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT:
         if test_vector["dtype"] == ttnn.bfloat8_b:
             return True, "bfloat8_b not supported with ROW_MAJOR_LAYOUT"
-
+    elif test_vector["layout"] == ttnn.TILE_LAYOUT:
+        if test_vector["shard_specs"]["shard_shape"] is not None and (
+            test_vector["shard_specs"]["shard_shape"][-1] % TILE_HEIGHT != 0
+            or test_vector["shard_specs"]["shard_shape"][-1] % TILE_WIDTH != 0
+        ):
+            return True, "shard_shape not supported with TILE_LAYOUT"
     return False, None
 
 
