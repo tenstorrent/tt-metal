@@ -27,6 +27,8 @@ def run_all_reduce_impl(
     cluster_axis,
     input_dtype,
     num_links,
+    input_num_cores,
+    output_num_cores,
     num_iters=1,
     enable_async=False,
     trace_mode=False,
@@ -75,10 +77,10 @@ def run_all_reduce_impl(
         ##################################
 
         ##### FF2 Case #####
-        num_cores = 24  # matmul ring
         core_offset = 1
         M, N = output_shape[2:]
-        N_per_shard = round_up(math.ceil(N / num_cores), ttnn.TILE_SIZE)
+        N_per_shard = round_up(math.ceil(N / input_num_cores), ttnn.TILE_SIZE)
+        output_N_per_shard = round_up(math.ceil(N / output_num_cores), ttnn.TILE_SIZE)
         input_shape = [*cluster_shape, M, N]
 
         CORE_RANGE = [(x, y) for y in range(compute_grid_size.y) for x in range(compute_grid_size.x)]
@@ -88,7 +90,7 @@ def run_all_reduce_impl(
                     ttnn.CoreCoord(x, y),
                     ttnn.CoreCoord(x, y),
                 )
-                for x, y in CORE_RANGE[core_offset : core_offset + num_cores]
+                for x, y in CORE_RANGE[core_offset : core_offset + input_num_cores]
             ]
         )
         input_mem_config = ttnn.MemoryConfig(
@@ -100,12 +102,21 @@ def run_all_reduce_impl(
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
         )
+        output_core_range_set = ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(x, y),
+                    ttnn.CoreCoord(x, y),
+                )
+                for x, y in CORE_RANGE[core_offset : core_offset + output_num_cores]
+            ]
+        )
         output_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             ttnn.BufferType.L1,
             ttnn.ShardSpec(
-                core_range_set,
-                [M, N_per_shard],
+                output_core_range_set,
+                [M, output_N_per_shard],
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
         )
@@ -122,16 +133,6 @@ def run_all_reduce_impl(
 
         # All-Reduce Golden
         output_tensor_goldens_list = [torch.sum(input_tensor, dim=cluster_axis) for _ in range(num_iters)]
-
-        # # Interleaved All-Gather Golden
-        # output_tensor_golden = input_tensor.transpose(cluster_axis, -2)
-        # output_tensor_golden = (
-        #     output_tensor_golden.reshape(*output_tensor_golden.shape[:3], num_cores, N // num_cores)
-        #     .transpose(-3, -2)
-        #     .reshape(cluster_shape[0], M, num_cores, -1)
-        #     .reshape(cluster_shape[0], M, -1)
-        # )
-        # output_tensor_goldens_list = [output_tensor_golden for _ in range(num_iters)]
 
         ##################################
         ##### Run the op
@@ -181,7 +182,11 @@ def run_all_reduce_impl(
             output_tensor = output_tensor_goldens_list[tensor_index]
             for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
                 # get_device_tensors returns row major, so we need to select the correct golden tensor
-                output_tensor_ = output_tensor[i // cluster_shape[cluster_axis]].unsqueeze(0).unsqueeze(0)
+                if cluster_axis == 0:
+                    output_tensor_ = output_tensor[i % cluster_shape[not (cluster_axis)]].unsqueeze(0).unsqueeze(0)
+                else:
+                    output_tensor_ = output_tensor[i // cluster_shape[cluster_axis]].unsqueeze(0).unsqueeze(0)
+
                 tt_output_tensor = t.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
                 logger.info(f"Checking for device {t.device().id()}")
 
@@ -199,9 +204,12 @@ def run_all_reduce_impl(
 
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
-    "output_shape, cluster_axis, num_links",
+    "output_shape, cluster_axis, num_links, input_num_cores, output_num_cores",
     [
-        ([1, 1, 32, 3840], 1, 1),
+        ([1, 1, 32, 1536], 1, 1, 24, 8),  # QKV all reduce
+        ([1, 1, 32, 3840], 1, 1, 24, 24),  # FF1 all reduce
+        # TODO: Use unpadded shapes and output to 16
+        ([1, 1, 32, 2304], 0, 1, 24, 8),  # FF2/DO all reduce
     ],
 )
 @pytest.mark.parametrize(
@@ -231,6 +239,8 @@ def test_all_reduce(
     cluster_axis,
     input_dtype,
     num_links,
+    input_num_cores,
+    output_num_cores,
     num_iters,
     enable_async,
     use_program_cache,
@@ -242,6 +252,8 @@ def test_all_reduce(
         cluster_axis,
         input_dtype,
         num_links,
+        input_num_cores,
+        output_num_cores,
         num_iters=num_iters,
         enable_async=enable_async,
     )
