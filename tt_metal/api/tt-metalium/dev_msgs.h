@@ -315,23 +315,23 @@ struct addressable_core_t {
 };
 
 // TODO: This can move into the hal eventually, currently sized for WH.
-// This is the number of Ethernet cores on WH (Ethernet cores can be queried through Virtual Coordinates).
+// This is the max number of non tensix cores between WH and BH that can be queried through Virtual Coordinates.
 // All other Non Worker Cores are not accessible through virtual coordinates. Subject to change, depending on the arch.
-constexpr static std::uint32_t MAX_VIRTUAL_NON_WORKER_CORES = 18;
-// This is the total number of Non Worker Cores on WH (first term is DRAM, second term is PCIe and last term is
-// DRAM).
-constexpr static std::uint32_t MAX_NON_WORKER_CORES = 24 + 1 + 14;
-constexpr static std::uint32_t MAX_HARVESTED_ROWS = 2;
+// Currently sized for BH (first term is DRAM, second term is PCIe and last term is eth).
+constexpr static std::uint32_t MAX_VIRTUAL_NON_WORKER_CORES = 24 + 1 + 14;
+// This is the max number of Non Worker Cores across BH and WH
+constexpr static std::uint32_t MAX_PHYSICAL_NON_WORKER_CORES = 24 + 1 + 14;
+constexpr static std::uint32_t MAX_HARVESTED_ON_AXIS = 2;
 constexpr static std::uint8_t CORE_COORD_INVALID = 0xFF;
 struct core_info_msg_t {
     volatile uint64_t noc_pcie_addr_base;
     volatile uint64_t noc_pcie_addr_end;
     volatile uint64_t noc_dram_addr_base;
     volatile uint64_t noc_dram_addr_end;
-    addressable_core_t non_worker_cores[MAX_NON_WORKER_CORES];
+    addressable_core_t non_worker_cores[MAX_PHYSICAL_NON_WORKER_CORES];
     addressable_core_t virtual_non_worker_cores[MAX_VIRTUAL_NON_WORKER_CORES];
-    volatile uint8_t harvested_y[MAX_HARVESTED_ROWS];
-    volatile uint8_t virtual_harvested_y[MAX_HARVESTED_ROWS];
+    volatile uint8_t harvested_coords[MAX_HARVESTED_ON_AXIS];
+    volatile uint8_t virtual_harvested_coords[MAX_HARVESTED_ON_AXIS];
     volatile uint8_t noc_size_x;
     volatile uint8_t noc_size_y;
     volatile uint8_t worker_grid_size_x;
@@ -339,7 +339,6 @@ struct core_info_msg_t {
     volatile uint8_t absolute_logical_x;  // Logical X coordinate of this core
     volatile uint8_t absolute_logical_y;  // Logical Y coordinate of this core
     volatile uint32_t l1_unreserved_start;
-    volatile uint8_t pad[19];
 };
 
 constexpr uint32_t launch_msg_buffer_num_entries = 8;

@@ -137,6 +137,8 @@ void Hal::initialize_wh() {
     this->virtual_worker_start_x_ = VIRTUAL_TENSIX_START_X;
     this->virtual_worker_start_y_ = VIRTUAL_TENSIX_START_Y;
     this->eth_fw_is_cooperative_ = true;
+    this->virtualized_core_types_ = {AddressableCoreType::TENSIX, AddressableCoreType::ETH};
+    this->tensix_harvest_axis_ = static_cast<HalTensixHarvestAxis>(tensix_harvest_axis);
 
     this->eps_ = EPS_WHB0;
     this->nan_ = NAN_WHB0;
