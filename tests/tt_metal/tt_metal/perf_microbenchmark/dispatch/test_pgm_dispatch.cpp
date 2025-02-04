@@ -561,6 +561,19 @@ BENCHMARK_CAPTURE(
     TestInfo{.warmup_iterations = 5000, .n_kgs = 8, .use_trace = true, .use_all_cores = true})
     ->Apply(Max8192Args)
     ->UseManualTime();
+
+BENCHMARK_CAPTURE(
+    BM_pgm_dispatch,
+    10000_kernel_all_cores_all_processors_32_cbs_trace,
+    TestInfo{.warmup_iterations = 5000, .slow_kernel_cycles = 10000, .n_cbs = 32, .use_trace = true, .use_all_cores = true})
+    ->Apply(Max8192Args)
+    ->UseManualTime();
+BENCHMARK_CAPTURE(
+    BM_pgm_dispatch,
+    5000_kernel_all_cores_all_processors_32_cbs_trace,
+    TestInfo{.warmup_iterations = 5000, .slow_kernel_cycles = 5000, .n_cbs = 32, .use_trace = true, .use_all_cores = true})
+    ->Apply(Max8192Args)
+    ->UseManualTime();
 int main(int argc, char** argv) {
     std::vector<std::string> input_args(argv, argv + argc);
     if (test_args::has_command_option(input_args, "--custom")) {
