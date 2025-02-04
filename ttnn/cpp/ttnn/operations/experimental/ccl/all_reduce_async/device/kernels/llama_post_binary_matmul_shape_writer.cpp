@@ -89,6 +89,7 @@ void kernel_main() {
     ///////////////////////////////////////////////////
     // ARGS
     ///////////////////////////////////////////////////
+    uint32_t writer_semaphore_addr = get_semaphore(get_compile_time_arg_val(8));
 
     size_t arg_idx = 0;
     // Load the input tensor spec
@@ -103,6 +104,11 @@ void kernel_main() {
     const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
     uint32_t out_ready_sem_wait_value = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t mcast_dest_noc_start_x = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t mcast_dest_noc_start_y = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t mcast_dest_noc_end_x = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t mcast_dest_noc_end_y = get_arg_val<uint32_t>(arg_idx++);
+
     tt_l1_ptr uint32_t* core_noc_x = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
     arg_idx += num_cores;
     tt_l1_ptr uint32_t* core_noc_y = (tt_l1_ptr uint32_t*)(get_arg_addr(arg_idx));
@@ -236,11 +242,29 @@ void kernel_main() {
         while (*reinterpret_cast<volatile uint32_t*>(out_ready_sem_bank_addr) < out_ready_sem_wait_value);
         DPRINT << "waitval done\n";
     }
+    noc_async_write_barrier();
 
     /*
         reduction signal semaphore
         mcast to reduction cores (using noc_semaphore_set_multicast)
     */
+    const uint64_t writer_semaphore_noc_addr = get_noc_multicast_addr(
+        mcast_dest_noc_start_x,
+        mcast_dest_noc_start_y,
+        mcast_dest_noc_end_x,
+        mcast_dest_noc_end_y,
+        writer_semaphore_addr,
+        0);
+    DPRINT << "mcast_dest_noc_start_x: " << mcast_dest_noc_start_x << "\n";
+    DPRINT << "mcast_dest_noc_start_y: " << mcast_dest_noc_start_y << "\n";
+    DPRINT << "mcast_dest_noc_end_x: " << mcast_dest_noc_end_x << "\n";
+    DPRINT << "mcast_dest_noc_end_y: " << mcast_dest_noc_end_y << "\n";
+
+    // const uint64_t writer_semaphore_noc_addr = multicast_data_noc | writer_semaphore_addr;
+    volatile tt_l1_ptr uint32_t* writer_semaphore_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(writer_semaphore_addr);
+    *writer_semaphore_addr_ptr = VALID;
+    noc_semaphore_set_multicast(writer_semaphore_addr, writer_semaphore_noc_addr, num_cores, false, false, 0);
 
     // 4. global semaphore reset
     if (reset_global_semaphore) {
@@ -253,6 +277,5 @@ void kernel_main() {
         fabric_connection.close();
     }
 
-    noc_async_write_barrier();
     DPRINT << "DONE \n";
 }

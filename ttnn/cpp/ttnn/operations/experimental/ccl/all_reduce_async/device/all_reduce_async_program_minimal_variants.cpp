@@ -85,6 +85,8 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
     const auto [sender_worker_core_range, sender_worker_cores] =
         choose_worker_cores(num_links, num_workers_per_link, enable_persistent_fabric_mode, device);
 
+    std::cout << "sender worker x, y: " << sender_worker_cores[0].x << ", " << sender_worker_cores[0].y << std::endl;
+
     // Tensor Info
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
     const auto input_tensor_cores = input_tensor.memory_config().shard_spec->grid;
@@ -126,6 +128,10 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
     auto reserved_packet_header_CB_handle =
         CreateCircularBuffer(program, sender_worker_core_range, cb_reserved_packet_header_config);
 
+    auto all_cores = input_tensor_cores.merge(sender_worker_core_range);
+    // Mcast args
+    auto writer_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
+
     // KERNEL CREATION
     // Reader
     auto reader_kernel_config = tt::tt_metal::ReaderDataMovementConfig{};
@@ -156,6 +162,7 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
         op_config.get_page_size(),        // tensor0_page_size
         num_targets_forward,              // num_targets_forward_direction
         num_targets_backward,             // num_targets_backward_direction
+        writer_semaphore_id,              // writer_semaphore_addr
     };
     log_trace(tt::LogOp, "Writer Compile Args:");
     for (const auto& arg : writer_kernel_config.compile_args) {
@@ -167,6 +174,18 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
         "llama_post_binary_matmul_shape_writer.cpp",
         sender_worker_core_range,
         writer_kernel_config);
+
+    // Create reduction dataflow kernel
+    auto reduction_reader_kernel_config = tt::tt_metal::ReaderDataMovementConfig{};
+    reduction_reader_kernel_config.compile_args = {
+        writer_semaphore_id,  // writer_semaphore_addr
+    };
+    auto reduction_reader_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/experimental/ccl/all_reduce_async/device/kernels/"
+        "reduction_dataflow.cpp",
+        input_tensor_cores,
+        reduction_reader_kernel_config);
 
     // Kernel Runtime Args
     CoreCoord drain_sync_core;  // the first worker of each chip is the drain sync core, which contains the output ready
@@ -238,6 +257,9 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_reader_kernel_id, {core}, reader_rt_args);
 
         // Set writer runtime args
+        CoreCoord mcast_start_core = input_tensor_cores.bounding_box().start_coord;
+        CoreCoord mcast_end_core = input_tensor_cores.bounding_box().end_coord;
+
         bool wait_output_semaphore = (link == 0) && !enable_async_output_tensor;
         bool reset_global_semaphore = (link == 0) && !enable_async_output_tensor;
         uint32_t out_ready_sem_wait_value = ring_size * num_links;
@@ -253,6 +275,10 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
             drain_sync_core.x,                    // out_ready_sem_noc0_x
             drain_sync_core.y,                    // out_ready_sem_noc0_y
             out_ready_sem_wait_value,             // out_ready_sem_wait_value
+            mcast_start_core.x,                   // mcast_dest_noc_start_x
+            mcast_start_core.y,                   // mcast_dest_noc_start_y
+            mcast_end_core.x,                     // mcast_dest_noc_end_x
+            mcast_end_core.y,                     // mcast_dest_noc_end_y
         };
         writer_rt_args.insert(writer_rt_args.end(), input_tensor_cores_x.begin(), input_tensor_cores_x.end());
         writer_rt_args.insert(writer_rt_args.end(), input_tensor_cores_y.begin(), input_tensor_cores_y.end());
