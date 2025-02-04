@@ -13,7 +13,7 @@ from models.utility_functions import disable_persistent_kernel_cache
 from models.experimental.functional_yolov8x.tt.ttnn_yolov8x import YOLOv8x
 from models.experimental.functional_yolov8x.reference import yolov8x_utils
 
-from models.experimental.functional_yolov8x.tt.ttnn_yolov8x import Conv, C2f, SPPF, Detect_cv2, Detect, DFL
+from models.experimental.functional_yolov8x.tt.ttnn_yolov8x import conv, c2f, SPPF, Detect_cv2, Detect, DFL
 from models.experimental.functional_yolov8x.tt.ttnn_yolov8x_utils import (
     ttnn_decode_bboxes,
     custom_preprocessor,
@@ -142,7 +142,7 @@ def test_Conv(device, input_tensor):
     parameters = custom_preprocessor(device, state_dict)
 
     with torch.inference_mode():
-        ttnn_model_output, out_h, out_w = Conv(
+        ttnn_model_output, out_h, out_w = conv(
             device,
             ttnn_input,
             parameters,
@@ -186,7 +186,7 @@ def test_C2f(device, input_tensor):
     parameters = custom_preprocessor(device, state_dict)
 
     with torch.inference_mode():
-        ttnn_model_output, out_h, out_w = C2f(
+        ttnn_model_output, out_h, out_w = c2f(
             device,
             ttnn_input,
             parameters,
