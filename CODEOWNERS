@@ -80,7 +80,7 @@ tt_metal/hw/firmware/src/*erisc* @aliuTT @ubcheema
 tt_metal/hw/inc/ethernet/ @aliuTT @ubcheema
 tt_metal/hw/inc/wormhole/eth_l1_address_map.h @aliuTT @ubcheema
 tt_metal/third_party/tt_llk_* @rtawfik01 @ttmtrajkovic @rdjogoTT
-tt_metal/tt_stl/ @patrickroberts @yan-zaretskiy @eyonland @ayerofieiev-tt @dmakoviichuk-tt @sminakov-tt
+tt_metal/tt_stl/ @patrickroberts @yan-zaretskiy @ayerofieiev-tt @dmakoviichuk-tt @sminakov-tt
 
 sfpi/ @pgkeller
 
@@ -118,7 +118,7 @@ ttnn/cpp/ttnn/operations/data_movement/untilize_with_halo_v2/ @tenstorrent/metal
 ttnn/cpp/ttnn/operations/matmul/ @TT-BrianLiu @bbradelTT @yugaoTT @vsureshTT @edwinleeTT
 ttnn/cpp/ttnn/operations/experimental/ccl/ @SeanNijjar @jvegaTT @tt-aho
 ttnn/cpp/ttnn/operations/experimental/matmul/ @TT-BrianLiu @bbradelTT @yugaoTT @vsureshTT @edwinleeTT
-ttnn/cpp/ttnn/operations/eltwise/ @patrickroberts @yan-zaretskiy @eyonland
+ttnn/cpp/ttnn/operations/eltwise/ @patrickroberts @yan-zaretskiy
 ttnn/cpp/ttnn/operations/reduction/ @bbradelTT @sjameelTT @vsureshTT @edwinleeTT
 ttnn/cpp/ttnn/operations/normalization/ @yugaoTT @tt-aho @bbradelTT @vsureshTT @edwinleeTT
 ttnn/cpp/ttnn/operations/embedding/ @ntarafdar @tt-aho @TT-BrianLiu @yugi957 @sjameelTT @jaykru-tt @llongTT @nardoTT
@@ -130,14 +130,14 @@ ttnn/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads_decode/ @tens
 ttnn/cpp/ttnn/operations/experimental/transformer/nlp_create_qkv_heads_decode/ @tenstorrent/metallium-maintainers-llama-models
 ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/ @tenstorrent/metallium-maintainers-llama-models
 ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama_fused_qk/ @tenstorrent/metallium-maintainers-llama-models
-ttnn/ttnn/operations/eltwise @patrickroberts @yan-zaretskiy @eyonland
+ttnn/ttnn/operations/eltwise @patrickroberts @yan-zaretskiy
 tests/ttnn/ @ayerofieiev-tt @dmakoviichuk-tt @rfurko-tt @cfjchu @TT-BrianLiu @razorback3 @dongjin-na @bbradelTT
 tests/ttnn/unit_tests/gtests/ccl/ @SeanNijjar @jvegaTT @cfjchu @tt-aho
 tests/ttnn/unit_tests/operations/ccl/ @SeanNijjar @jvegaTT @tt-aho
-tests/ttnn/unit_tests/operations/eltwise/ @patrickroberts @yan-zaretskiy @eyonland
+tests/ttnn/unit_tests/operations/eltwise/ @patrickroberts @yan-zaretskiy
 tests/sweep_framework/ @xanderchin @jdesousa-TT @sjameelTT
 tests/sweep_framework/sweeps
-tests/sweep_framework/sweeps/eltwise/ @patrickroberts @yan-zaretskiy @eyonland
+tests/sweep_framework/sweeps/eltwise/ @patrickroberts @yan-zaretskiy
 tests/sweep_framework/sweeps/conv2d/  @tenstorrent/metalium-developers-convolutions
 tests/sweep_framework/sweeps/data_movement/  @sjameelTT @ntarafdar @jaykru-tt @yugi957 @llongTT @jvegaTT @nardoTT
 tests/sweep_framework/sweeps/fused/  @bbradelTT @sjameelTT @vsureshTT @edwinleeTT
@@ -183,8 +183,8 @@ models/perf/benchmarking_utils.py @skhorasganiTT
 
 # docs
 docs/Makefile @tenstorrent/metalium-developers-infra
-docs/source/ttnn/ttnn/dependencies/tt_lib.rst @eyonland @patrickroberts @yan-zaretskiy @ayerofieiev-tt
-docs/source/ttnn/ @eyonland @patrickroberts @yan-zaretskiy @ayerofieiev-tt @razorback3 @dongjin-na
+docs/source/ttnn/ttnn/dependencies/tt_lib.rst @patrickroberts @yan-zaretskiy @ayerofieiev-tt
+docs/source/ttnn/ @patrickroberts @yan-zaretskiy @ayerofieiev-tt @razorback3 @dongjin-na
 
 # misc
 tests/**/dtx/ @tenstorrent/metalium-developers-convolutions
