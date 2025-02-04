@@ -81,7 +81,6 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
         }
     }
 
-
     auto all_cores = shard_spec.grid;
     uint32_t input_cb_index = tt::CBIndex::c_0;
     uint32_t scratch_cb_index = tt::CBIndex::c_1;
@@ -252,9 +251,9 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
 
             uint32_t dram_alignment = hal.get_alignment(HalMemType::DRAM);
             uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
-            bool aligned = (src_is_dram ? curr_idx_w % dram_alignment == 0 : true);
+            bool aligned = (src_is_dram ? (curr_idx_w % dram_alignment == 0) && (padded_offset_bytes % dram_alignment == 0) : true);
             //for blackhole and keep_l1_aligned cases, always enforce unaligned kernel call
-            aligned = aligned and !(is_blackhole) and !(keep_l1_aligned);
+            aligned = aligned and !(is_blackhole);
             uint32_t aligned_width_offset, aligned_shard_width, aligned_offset;
             if (!aligned) {
                 //TODO: is this right, leaving non BH case the same for now, should investigate
