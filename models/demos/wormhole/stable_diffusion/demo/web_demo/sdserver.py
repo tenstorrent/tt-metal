@@ -151,9 +151,18 @@ def run_interactive_demo_inference(device, num_inference_steps, image_size=(256,
 
         ttnn_scheduler.set_timesteps(num_inference_steps)
 
-        with open(json_file_path, "r") as f:
-            data = json.load(f)
-            input_prompts = data["prompts"]
+        # attempt to read file multiple times as web server can write to the prompt queue
+        # while it is being read, leading to invalid JSON parsing
+        NUM_ATTEMPTS = 10
+        for _attempt in range(10):
+            try:
+                with open(json_file_path, "r") as f:
+                    data = json.load(f)
+                    input_prompts = data["prompts"]
+            except json.decoder.JSONDecodeError:
+                continue
+            else:
+                break
 
         new_prompt = ""
         currInd = 0
