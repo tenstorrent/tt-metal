@@ -2,20 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "generic_pools.hpp"
+#include <limits>
 
 #include <tt-metalium/buffer_constants.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/math.hpp>
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
-<<<<<<< HEAD
-=======
-#include <tt-metalium/bfloat16.hpp>
-#include <tt-metalium/math.hpp>
 
-#include <limits>
->>>>>>> f7d847d8891c78cd3c532513ec1a81bb9398f64a
+#include "generic_pools.hpp"
 
 namespace ttnn {
 namespace operations::pool {

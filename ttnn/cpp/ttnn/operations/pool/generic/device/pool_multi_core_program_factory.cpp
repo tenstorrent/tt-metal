@@ -2,23 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "pool_op.hpp"
-#include "ttnn/operations/reduction/generic/device/reduce_op.hpp"  // for reduce_op_utils
-<<<<<<< HEAD
-#include "tt_metal/common/bfloat16.hpp"
-#include "tt_metal/common/math.hpp"
-    == == ==
-    =
-#include <tt-metalium/math.hpp>
-        >>>>>>> f7d847d8891c78cd3c532513ec1a81bb9398f64a
-
 #include <limits>
 
-        /**
-         * Generic pool implementation that uses the new sliding window infrastructure.
-         */
+#include "pool_op.hpp"
+#include "ttnn/operations/reduction/generic/device/reduce_op.hpp"  // for reduce_op_utils
+#include <tt-metalium/math.hpp>
 
-        namespace ttnn::operations::pool {
+/**
+ * Generic pool implementation that uses the new sliding window infrastructure.
+ */
+namespace ttnn::operations::pool {
 
 namespace {
 
@@ -54,7 +47,7 @@ uint32_t get_bf16_pool_init_value(Pool2DType pool_type) {
 }
 
 Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_new(
-    Program & program,
+    Program& program,
     const Tensor& input,
     const Tensor& reader_indices,
     Tensor& output,
@@ -252,15 +245,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     log_debug(tt::LogOp, "CB {} :: PS = {}, NP = {}", out_cb_id, out_cb_pagesize, out_cb_npages);
 
     if (is_large_kernel) {
-<<<<<<< HEAD
-        uint32_t pool_partials_cb_id = tt::CBIndex::c_25;  // pool partials
-        uint32_t pool_partials_cb_pagesize = std::min(out_cb_pagesize, TILE_SIZE * 8 * out_nbytes);
-        uint32_t pool_partials_cb_npages = nblocks;
-        CircularBufferConfig pool_partials_cb_config =
-            CircularBufferConfig(pool_partials_cb_npages * pool_partials_cb_pagesize, {{pool_partials_cb_id, out_df}})
-                .set_page_size(pool_partials_cb_id, pool_partials_cb_pagesize);
-        auto pool_partials_cb = tt::tt_metal::CreateCircularBuffer(program, all_cores, pool_partials_cb_config);
-=======
         uint32_t max_pool_partials_cb_id = tt::CBIndex::c_25;  // max_pool partials
         uint32_t max_pool_partials_cb_pagesize = out_cb_pagesize;
         uint32_t max_pool_partials_cb_npages = nblocks;
@@ -269,13 +253,12 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
                 max_pool_partials_cb_npages * max_pool_partials_cb_pagesize, {{max_pool_partials_cb_id, out_df}})
                 .set_page_size(max_pool_partials_cb_id, max_pool_partials_cb_pagesize);
         auto max_pool_partials_cb = tt::tt_metal::CreateCircularBuffer(program, all_cores, max_pool_partials_cb_config);
->>>>>>> f7d847d8891c78cd3c532513ec1a81bb9398f64a
         log_debug(
             tt::LogOp,
             "CB {} :: PS = {}, NP = {}",
-            pool_partials_cb_id,
-            pool_partials_cb_pagesize,
-            pool_partials_cb_npages);
+            max_pool_partials_cb_id,
+            max_pool_partials_cb_pagesize,
+            max_pool_partials_cb_npages);
     }
     TT_FATAL(output.memory_config().is_sharded(), "Output memory config needs to be sharded");
 
