@@ -1376,7 +1376,9 @@ void py_module(py::module& module) {
         "Approximation type",
         "none",
         R"doc(Performs backward operations for gelu on :attr:`input_tensor`, with given :attr:`grad_tensor` using given :attr:`approximate` mode.
-        :attr:`approximate` mode can be 'none', 'tanh'.)doc");
+        :attr:`approximate` mode can be 'none', 'tanh'.)doc",
+        R"doc(BFLOAT16)doc",
+        R"doc(For more details about BFLOAT8_B, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.)doc");
 
     detail::bind_unary_backward_unary_optional_float(
         module,
