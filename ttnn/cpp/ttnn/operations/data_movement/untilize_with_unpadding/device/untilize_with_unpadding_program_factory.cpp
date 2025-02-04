@@ -410,7 +410,8 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
     Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
-    // reader
+    /** reader
+     */
 
     uint32_t src0_is_dram = src0_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
 
@@ -420,7 +421,8 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
         all_cores,
         ReaderDataMovementConfig({src0_is_dram}));
 
-    // writer
+    /** writer
+     */
 
     uint32_t out_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     uint32_t stick_size = unpadded_row_size_bytes;
@@ -439,7 +441,8 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
              (std::uint32_t)(
                  input_cb_data_format == tt::DataFormat::Float32 or input_cb_data_format == tt::DataFormat::UInt32)}));
 
-    // compute
+    /** compute
+     */
 
     std::string compute_kernel(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");

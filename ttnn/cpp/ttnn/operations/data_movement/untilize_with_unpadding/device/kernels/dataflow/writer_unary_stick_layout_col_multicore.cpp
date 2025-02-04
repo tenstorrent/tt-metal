@@ -52,20 +52,14 @@ void kernel_main() {
                 write_size = width_size - padded_size;
             }
 
-            // Read from DRAM to tmp buffer
-
             noc_async_write(l1_read_addr, dst_noc_addr + start_id + mul * size_per_row_per_block, write_size);
 
-            // Block before copying data from tmp to cb buffer
             noc_async_write_barrier();
 
-            // pushing one tile at a time because the current LLK tilize implementation doesn't support tilizing more
-            // than one tile per column at the same time this needs to be fixed
             if (k > 0 && (k % tile_width == 0)) {
                 cb_pop_front(cb_id_out0, onetile * has_rows);
                 cb_wait_front(cb_id_out0, onetile * has_rows);
             }
-            // increment by the unpadded size only
             l1_read_addr += width_size;
         }
 
