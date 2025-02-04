@@ -141,7 +141,6 @@ def run_interactive_demo_inference(device, num_inference_steps, image_size=(256,
 
     time_step = ttnn_scheduler.timesteps.tolist()
 
-    prevPrompt = ""
     json_file_path = "models/demos/wormhole/stable_diffusion/demo/web_demo/input_prompts.json"
 
     while True:
@@ -179,11 +178,8 @@ def run_interactive_demo_inference(device, num_inference_steps, image_size=(256,
             time.sleep(5)
             continue
 
-        if new_prompt == prevPrompt:
-            continue
         elif len(new_prompt) > 0:
             input_prompt = [new_prompt]
-            prevPrompt = new_prompt
         if input_prompt[0] == "q":
             break
 
