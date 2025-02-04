@@ -401,9 +401,9 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_row_interleav
     IDevice* device = a.device();
     CoreCoord grid_size = device->compute_with_storage_grid_size();
 
-    uint32_t num_blocks = output.volume() / output.get_legacy_shape()[-1] / TILE_HEIGHT;
-    uint32_t num_tiles_per_row = output.get_legacy_shape()[-1] / TILE_WIDTH;
-    uint32_t num_tiles_per_col = output.get_legacy_shape()[-2] / TILE_HEIGHT;
+    uint32_t num_blocks = output.volume() / output.get_padded_shape()[-1] / TILE_HEIGHT;
+    uint32_t num_tiles_per_row = output.get_padded_shape()[-1] / TILE_WIDTH;
+    uint32_t num_tiles_per_col = output.get_padded_shape()[-2] / TILE_HEIGHT;
     if (num_tiles_per_row > num_tiles_per_col) {
         return tilize_with_val_padding_multi_core_col_interleaved(a, output, pad_value);
     }
