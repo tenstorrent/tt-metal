@@ -40,7 +40,7 @@ def get_device_freq():
     return freq
 
 
-def profile_results(sample_size, sample_count, channel_count):
+def profile_results(sample_size, sample_count, channel_count, num_directions):
     freq = get_device_freq() / 1000.0
     setup = device_post_proc_config.default_setup()
     setup.deviceInputLog = profiler_log_path
@@ -65,6 +65,7 @@ def profile_results(sample_size, sample_count, channel_count):
     bw = sample_size / main_loop_latency
 
     header = [
+        "NUM_DIRECTIONS",
         "SAMPLE_SIZE",
         "BW (B/c)",
     ]
@@ -72,7 +73,7 @@ def profile_results(sample_size, sample_count, channel_count):
     append_to_csv(
         FILE_NAME,
         header,
-        [sample_size, bw],
+        [num_directions, sample_size, bw],
         write_header,
     )
     return main_loop_latency
@@ -98,7 +99,7 @@ def run_erisc_write_worker(sample_count, sample_size_expected_latency, channel_c
         logger.info("Error in running the test")
         assert False
 
-    main_loop_latency = profile_results(sample_size, sample_count, channel_count)
+    main_loop_latency = profile_results(sample_size, sample_count, channel_count, num_directions)
     logger.info(f"sender_loop_latency {main_loop_latency}")
     logger.info(f"result BW (B/c): {sample_size / main_loop_latency}")
 
@@ -112,7 +113,7 @@ def run_erisc_write_worker(sample_count, sample_size_expected_latency, channel_c
 @pytest.mark.parametrize("num_directions", [1])
 @pytest.mark.parametrize(
     "sample_size_expected_latency",
-    [(16, 86.2), (128, 86.2), (256, 86.4), (512, 86.5), (1024, 87.2), (2048, 172.9), (4096, 339.9), (8192, 678.4)],
+    [(16, 97.2), (128, 97.2), (256, 98.0), (512, 98.0), (1024, 99.0), (2048, 173.0), (4096, 340.0), (8192, 678.5)],
 )
 def test_erisc_write_worker_bw_uni_dir(sample_count, sample_size_expected_latency, channel_count, num_directions):
     run_erisc_write_worker(sample_count, sample_size_expected_latency, channel_count, num_directions)
@@ -125,7 +126,7 @@ def test_erisc_write_worker_bw_uni_dir(sample_count, sample_size_expected_latenc
 @pytest.mark.parametrize("num_directions", [2])
 @pytest.mark.parametrize(
     "sample_size_expected_latency",
-    [(16, 86.2), (128, 86.2), (256, 86.4), (512, 86.5), (1024, 87.2), (2048, 172.9), (4096, 339.9)],
+    [(16, 163.0), (128, 163.0), (256, 163.6), (512, 164.0), (1024, 164.0), (2048, 178.2), (4096, 344.2)],
 )
 def test_erisc_write_worker_bw_bi_dir(sample_count, sample_size_expected_latency, channel_count, num_directions):
     run_erisc_write_worker(sample_count, sample_size_expected_latency, channel_count, num_directions)
