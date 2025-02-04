@@ -26,16 +26,14 @@ void kernel_main() {
         4. Push back on interleaved all gather CB
         5. compute wait front on all gather cb
     */
+    uint32_t writer_semaphore_addr = get_semaphore(get_compile_time_arg_val(0));
 
-    size_t arg_idx = 0;
-    const size_t wait_signal_sem_addr = get_arg_val<uint32_t>(arg_idx++);
+    volatile tt_l1_ptr uint32_t* writer_semaphore_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(writer_semaphore_addr);
 
-    volatile tt_l1_ptr uint32_t* l1_wait_signal_sem =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(wait_signal_sem_addr);
-
+    DPRINT << "Wait \n";
     // 1. Wait for signal
-    noc_semaphore_wait(l1_wait_signal_sem, 1);
-    noc_semaphoer_reset(l1_wait_signal_sem, 0);
-
+    noc_semaphore_wait(writer_semaphore_addr_ptr, VALID);
+    DPRINT << " Wait Over \n";
     // 2. Synchronization
 }
