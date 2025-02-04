@@ -129,9 +129,6 @@ def run_yolov4_trace_2cqs_inference(
 ):
     test_infra = create_test_infra(
         device,
-        device_batch_size,
-        act_dtype,
-        weight_dtype,
         model_location_generator=model_location_generator,
     )
     tt_inputs_host, sharded_mem_config_DRAM, input_mem_config = test_infra.setup_dram_sharded_input(device)

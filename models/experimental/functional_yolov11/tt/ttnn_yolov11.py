@@ -155,6 +155,7 @@ class Bottleneck:
         input = x
         x = self.cv1(device, x)
         x = self.cv2(device, x)
+        # x = ttnn.add(input,x,memory_config=ttnn.L1_MEMORY_CONFIG)
         return input + x
 
 
@@ -213,17 +214,17 @@ class SPPF:
         )
 
         if x1.is_sharded():
-            x1 = ttnn.sharded_to_interleaved(x1, ttnn.DRAM_MEMORY_CONFIG)
+            x1 = ttnn.sharded_to_interleaved(x1, ttnn.L1_MEMORY_CONFIG)
         if m2.is_sharded():
-            m2 = ttnn.sharded_to_interleaved(m2, ttnn.DRAM_MEMORY_CONFIG)
+            m2 = ttnn.sharded_to_interleaved(m2, ttnn.L1_MEMORY_CONFIG)
         if m3.is_sharded():
-            m3 = ttnn.sharded_to_interleaved(m3, ttnn.DRAM_MEMORY_CONFIG)
+            m3 = ttnn.sharded_to_interleaved(m3, ttnn.L1_MEMORY_CONFIG)
         if m1.is_sharded():
-            m1 = ttnn.sharded_to_interleaved(m1, ttnn.DRAM_MEMORY_CONFIG)
-        y = ttnn.concat([x1, m1, m2, m3], dim=-1)
+            m1 = ttnn.sharded_to_interleaved(m1, ttnn.L1_MEMORY_CONFIG)
+        y = ttnn.concat([x1, m1, m2, m3], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         x = self.cv2(device, y)
-        x = x[:, :, :49, :]
+        x = x[:, :, : y.shape[2], :]
         ttnn.deallocate(x1)
         ttnn.deallocate(m1)
         ttnn.deallocate(m2)
@@ -283,10 +284,14 @@ class C3k2:
 
             y1 = ttnn.from_torch(y1, dtype=ttnn.bfloat16, device=device)
 
-            y2 = ttnn.from_torch(y2, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+            y2 = ttnn.from_torch(
+                y2, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG
+            )
 
             y3 = self.k(device, y2)
 
+            if y1.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+                y1 = ttnn.to_layout(y1, ttnn.ROW_MAJOR_LAYOUT)
             if y2.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
                 y2 = ttnn.to_layout(y2, ttnn.ROW_MAJOR_LAYOUT)
             if y3.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
@@ -295,7 +300,7 @@ class C3k2:
             x = ttnn.concat((y1, y2, y3), 3, memory_config=ttnn.L1_MEMORY_CONFIG)
 
             if x.get_layout() == ttnn.ROW_MAJOR_LAYOUT:
-                x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+                x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)  # TilizeWithValPadding
             x = self.cv2(device, x)
         else:
             x = self.cv1(device, x)
@@ -344,32 +349,34 @@ class Attention:
         self.scale = self.key_dim**-0.5
 
     def __call__(self, device, x, batch_size=1):
-        qkv = self.qkv(device, x)  # [1, 1, 49[64], 256]
-        qkv = ttnn.sharded_to_interleaved(qkv, memory_config=ttnn.L1_MEMORY_CONFIG)
-        qkv = ttnn.permute(qkv, (0, 3, 1, 2))  # [1,256,1,49]
+        qkv = self.qkv(device, x)
+        if qkv.is_sharded():
+            qkv = ttnn.sharded_to_interleaved(qkv, memory_config=ttnn.L1_MEMORY_CONFIG)
+        qkv = ttnn.permute(qkv, (0, 3, 1, 2))
         qkv = ttnn.to_torch(qkv)
-        qkv = ttnn.from_torch(qkv, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
-        qkv = ttnn.reshape(
-            qkv, (batch_size, self.num_heads, self.key_dim * 2 + self.head_dim, qkv.shape[-1])
-        )  # [1,2,128,49]
+        qkv = ttnn.from_torch(
+            qkv, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
+        qkv = ttnn.reshape(qkv, (batch_size, self.num_heads, self.key_dim * 2 + self.head_dim, qkv.shape[-1]))
         q, k, v = (
             qkv[:, :, : self.key_dim, :],
             qkv[:, :, self.key_dim : self.head_dim, :],
             qkv[:, :, self.head_dim :, :],
-        )  # ttnn.Shape([1, 2, 32, 49[64]]) ttnn.Shape([1, 2, 32, 49[64]]) ttnn.Shape([1, 2, 64, 49[64]])
+        )
 
-        q_permuted = ttnn.permute(q, (0, 1, 3, 2))  # ttnn.Shape([1, 2, 49[64]],32)
-        attn = ttnn.matmul(q_permuted, k)
-        attn = ttnn.multiply(attn, self.scale)  # ([1, 2, 49, 49])
+        q_permuted = ttnn.permute(q, (0, 1, 3, 2))
+        attn = ttnn.matmul(q_permuted, k, memory_config=ttnn.L1_MEMORY_CONFIG)
+        attn = ttnn.multiply(attn, self.scale)
         attn = ttnn.softmax(attn, dim=-1)
         attn = ttnn.permute(attn, (0, 1, 3, 2))
-        x1 = ttnn.matmul(v, attn)  # [1, 2, 64, 49[64]]
+        x1 = ttnn.matmul(v, attn, memory_config=ttnn.L1_MEMORY_CONFIG)
         x1 = ttnn.reshape(x1, (1, 1, (x1.shape[0] * x1.shape[1] * x1.shape[2]), x1.shape[3]))
         x1 = ttnn.permute(x1, (0, 1, 3, 2))
-        v = ttnn.reshape(v, (1, 1, (v.shape[0] * v.shape[1] * v.shape[2]), v.shape[3]))  # [1,1,128, 49[64]]
+        v = ttnn.reshape(v, (1, 1, (v.shape[0] * v.shape[1] * v.shape[2]), v.shape[3]))
         v = ttnn.permute(v, (0, 1, 3, 2))
         x2 = self.pe(device=device, x=v)
-        x2 = ttnn.sharded_to_interleaved(x2, memory_config=ttnn.L1_MEMORY_CONFIG)
+        if x2.is_sharded():
+            x2 = ttnn.sharded_to_interleaved(x2, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         x = x1 + x2
 
@@ -409,10 +416,11 @@ class C2PSA:
         self.psablock = PSABlock(device, parameter.m[0], conv_pt.m[0])
 
     def __call__(self, device, x):
-        x = self.cv1(device, x)  # (1,1,49,256)
+        x = self.cv1(device, x)
         a, b = x[:, :, :, : int(self.out_channel_0 / 2)], x[:, :, :, int(self.out_channel_0 / 2) :]
         x = self.psablock(device, b)
-        x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
+        if x.is_sharded():
+            x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
         x = ttnn.concat((a, x), dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
         x = self.cv2(device, x)
         ttnn.deallocate(a)
@@ -486,44 +494,55 @@ class Detect:
         x6 = self.cv3_2_1_1(device, x6)
         x6 = self.cv3_2_2_0(x6)  # 0.986
 
-        x1 = ttnn.sharded_to_interleaved(x1, memory_config=ttnn.L1_MEMORY_CONFIG)
-        x2 = ttnn.sharded_to_interleaved(x2, memory_config=ttnn.L1_MEMORY_CONFIG)
-        x3 = ttnn.sharded_to_interleaved(x3, memory_config=ttnn.L1_MEMORY_CONFIG)
-        x4 = ttnn.sharded_to_interleaved(x4, memory_config=ttnn.L1_MEMORY_CONFIG)
-        x5 = ttnn.sharded_to_interleaved(x5, memory_config=ttnn.L1_MEMORY_CONFIG)
-        x6 = ttnn.sharded_to_interleaved(x6, memory_config=ttnn.L1_MEMORY_CONFIG)
+        if x1.is_sharded():
+            x1 = ttnn.sharded_to_interleaved(x1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        if x2.is_sharded():
+            x2 = ttnn.sharded_to_interleaved(x2, memory_config=ttnn.L1_MEMORY_CONFIG)
+        if x3.is_sharded():
+            x3 = ttnn.sharded_to_interleaved(x3, memory_config=ttnn.L1_MEMORY_CONFIG)
+        if x4.is_sharded():
+            x4 = ttnn.sharded_to_interleaved(x4, memory_config=ttnn.L1_MEMORY_CONFIG)
+        if x5.is_sharded():
+            x5 = ttnn.sharded_to_interleaved(x5, memory_config=ttnn.L1_MEMORY_CONFIG)
+        if x6.is_sharded():
+            x6 = ttnn.sharded_to_interleaved(x6, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        y1 = ttnn.concat((x1, x4), -1)
-        y2 = ttnn.concat((x2, x5), -1)
-        y3 = ttnn.concat((x3, x6), -1)
+        y1 = ttnn.concat((x1, x4), -1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        y2 = ttnn.concat((x2, x5), -1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        y3 = ttnn.concat((x3, x6), -1, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         y1_reshaped = ttnn.reshape(y1, (y1.shape[0], y1.shape[2], y1.shape[-1]))  # 0.9992
         y2_reshaped = ttnn.reshape(y2, (y2.shape[0], y2.shape[2], y2.shape[-1]))  # 0.99908
         y3_reshaped = ttnn.reshape(y3, (y3.shape[0], y3.shape[2], y3.shape[-1]))  # 0.993
 
         y_all = [y1_reshaped, y2_reshaped, y3_reshaped]
-        y = ttnn.concat((y1_reshaped, y2_reshaped, y3_reshaped), dim=1)  # 0.998
+        y = ttnn.concat((y1_reshaped, y2_reshaped, y3_reshaped), dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)  # 0.998
         ya, yb = y[:, :, :64], y[:, :, 64:144]  # 0.991, 0.97
 
         ya = ttnn.permute(ya, (0, 2, 1))
         ya = ttnn.reshape(ya, (ya.shape[0], 4, 16, ya.shape[2]))
         ya = ttnn.permute(ya, (0, 2, 1, 3))  # 0.991
-        ya = ttnn.to_layout(ya, ttnn.TILE_LAYOUT)
+        if ya.get_layout() == ttnn.ROW_MAJOR_LAYOUT:
+            ya = ttnn.to_layout(ya, ttnn.TILE_LAYOUT)
         ya = ttnn.softmax(ya, dim=1)
         ya = ttnn.permute(ya, (0, 2, 3, 1))
         c = self.dfl(ya)  # 0.968
-        c = ttnn.sharded_to_interleaved(c, memory_config=ttnn.L1_MEMORY_CONFIG)
-
-        c = ttnn.to_layout(c, layout=ttnn.ROW_MAJOR_LAYOUT)
+        if c.is_sharded():
+            c = ttnn.sharded_to_interleaved(c, memory_config=ttnn.L1_MEMORY_CONFIG)
+        if c.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+            c = ttnn.to_layout(c, layout=ttnn.ROW_MAJOR_LAYOUT)
         c = ttnn.permute(c, (0, 3, 1, 2))
         c = ttnn.reshape(c, (c.shape[0], 1, 4, int(c.shape[3] / 4)))
         c = ttnn.reshape(c, (c.shape[0], c.shape[1] * c.shape[2], c.shape[3]))
         c1, c2 = c[:, :2, :], c[:, 2:4, :]
 
         anchor, strides = self.anchors, self.strides
-
-        c1 = ttnn.to_layout(c1, layout=ttnn.TILE_LAYOUT)
-        c2 = ttnn.to_layout(c2, layout=ttnn.TILE_LAYOUT)
+        anchor = ttnn.to_memory_config(anchor, memory_config=ttnn.L1_MEMORY_CONFIG)
+        strides = ttnn.to_memory_config(strides, memory_config=ttnn.L1_MEMORY_CONFIG)
+        if c1.get_layout() == ttnn.ROW_MAJOR_LAYOUT:
+            c1 = ttnn.to_layout(c1, layout=ttnn.TILE_LAYOUT)
+        if c2.get_layout() == ttnn.ROW_MAJOR_LAYOUT:
+            c2 = ttnn.to_layout(c2, layout=ttnn.TILE_LAYOUT)
 
         c1 = anchor - c1  # 0.998
         c2 = anchor + c2  # 0.997
@@ -532,12 +551,32 @@ class Detect:
         z2 = c1 + c2
         z2 = ttnn.div(z2, 2)  # 0.9995
 
-        z = ttnn.concat((z2, z1), dim=1)
+        z = ttnn.concat((z2, z1), dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)
         z = ttnn.multiply(z, strides)  # 0.9998
+
+        # yb = ttnn.to_layout(yb, layout=ttnn.TILE_LAYOUT)
+        # return yb
+        # yb = ttnn.to_torch(yb)
+        # torch.save(yb, "yb.pt")
+        # yb = torch.sigmoid(yb)
+        # yb = ttnn.from_torch(yb, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        # a = torch.load("yb.pt")
+        # yb = ttnn.from_torch(a, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        # a_ttnn = ttnn.sigmoid(a_ttnn)
+        # print(yb.shape, yb.memory_config(), yb.get_layout(), yb.get_dtype())
+        # yb = ttnn.to_device(yb, device = device)
 
         yb = ttnn.permute(yb, (0, 2, 1))
         yb = ttnn.sigmoid(yb)
-        out = ttnn.concat((z, yb), dim=1)
+        if z.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+            z = ttnn.to_layout(z, layout=ttnn.ROW_MAJOR_LAYOUT)
+        if yb.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+            yb = ttnn.to_layout(yb, layout=ttnn.ROW_MAJOR_LAYOUT)
+        print(
+            z.shape,
+            yb.shape,
+        )
+        out = ttnn.concat((z, yb), dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)
         return out
 
 
@@ -585,6 +624,7 @@ class YoloV11:
         self.detect = Detect(device, parameters.model_args.model[23], parameters.model[23])
 
     def __call__(self, x):
+        print(x.memory_config())
         x = self.conv1(self.device, x)
         x = self.conv2(self.device, x)
         x = self.c3k2_1(self.device, x)
@@ -599,38 +639,52 @@ class YoloV11:
         x = self.sppf(self.device, x)  # 9 #0.986
         x = self.c2psa(self.device, x)  # 10
         x = ttnn.to_torch(x)
-        x = ttnn.from_torch(x, dtype=ttnn.bfloat16, device=self.device, layout=ttnn.ROW_MAJOR_LAYOUT)
+        x = ttnn.from_torch(
+            x,
+            dtype=ttnn.bfloat16,
+            device=self.device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
         x10 = x
         x = ttnn.reshape(x, (x.shape[0], int(math.sqrt(x.shape[2])), int(math.sqrt(x.shape[2])), x.shape[3]))
         x = ttnn.upsample(x, scale_factor=2)  # 11
         x = ttnn.reshape(x, (1, 1, x.shape[0] * x.shape[1] * x.shape[2], x.shape[3]))
-        x6 = ttnn.to_layout(x6, layout=ttnn.ROW_MAJOR_LAYOUT)
-        x = ttnn.concat((x, x6), -1)  # 12
-        x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)
+        if x6.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+            x6 = ttnn.to_layout(x6, layout=ttnn.ROW_MAJOR_LAYOUT)
+        x = ttnn.concat((x, x6), -1, memory_config=ttnn.L1_MEMORY_CONFIG)  # 12
+        if x.get_layout() == ttnn.ROW_MAJOR_LAYOUT:
+            x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)
         x = self.c3k2_5(self.device, x)  # 13
         x13 = x
-        x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
+        if x.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+            x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
         x = ttnn.reshape(x, (x.shape[0], int(math.sqrt(x.shape[2])), int(math.sqrt(x.shape[2])), x.shape[3]))
         x = ttnn.upsample(x, scale_factor=2)  # 14
         x = ttnn.reshape(x, (1, 1, x.shape[0] * x.shape[1] * x.shape[2], x.shape[3]))
-        x4 = ttnn.to_layout(x4, layout=ttnn.ROW_MAJOR_LAYOUT)
-        x = ttnn.concat((x, x4), -1)  # 15
-        x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)
+        if x4.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+            x4 = ttnn.to_layout(x4, layout=ttnn.ROW_MAJOR_LAYOUT)
+        x = ttnn.concat((x, x4), -1, memory_config=ttnn.L1_MEMORY_CONFIG)  # 15
+        if x.get_layout() == ttnn.ROW_MAJOR_LAYOUT:
+            x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)
         x = self.c3k2_6(self.device, x)  # 16
         x16 = x
         x = self.conv7(self.device, x)  # 17
         x13 = ttnn.from_device(x13)
-        x13 = ttnn.to_dtype(x13, ttnn.bfloat8_b)
+        if x13.get_dtype() != ttnn.bfloat8_b:
+            x13 = ttnn.to_dtype(x13, ttnn.bfloat8_b)
         x13 = ttnn.to_device(x13, self.device)
-        x = ttnn.concat((x, x13), -1)  # 18
+        x = ttnn.concat((x, x13), -1, memory_config=ttnn.L1_MEMORY_CONFIG)  # 18
         x = self.c3k2_7(self.device, x)  # 19
         x19 = x
         x = self.conv8(self.device, x)  # 20
-        x10 = ttnn.to_layout(x10, ttnn.TILE_LAYOUT)
+        if x10.get_layout() == ttnn.ROW_MAJOR_LAYOUT:
+            x10 = ttnn.to_layout(x10, ttnn.TILE_LAYOUT)
         x10 = ttnn.from_device(x10)
-        x10 = ttnn.to_dtype(x10, ttnn.bfloat8_b)
+        if x10.get_dtype() != ttnn.bfloat8_b:
+            x10 = ttnn.to_dtype(x10, ttnn.bfloat8_b)
         x10 = ttnn.to_device(x10, self.device)
-        x = ttnn.concat((x, x10), -1)  # 21
+        x = ttnn.concat((x, x10), -1, memory_config=ttnn.L1_MEMORY_CONFIG)  # 21
         x = self.c3k2_8(self.device, x)  # 22
         x22 = x
         x = self.detect(self.device, x16, x19, x22)

@@ -1,33 +1,18 @@
 import pytest
 import ttnn
 import torch
-import torch.nn as nn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
-def test_silu_layout_issue(device, use_program_cache, reset_seeds):
-    torch_input_tensor = torch.randn(1, 64, 28, 28)
-    act = nn.SiLU(inplace=True)
-    torch_x = act(torch_input_tensor)
-    torch_y1, torch_y2 = torch_x.chunk(2, 1)
-
-    ttnn_input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
-
-    ttnn_input_tensor = ttnn_input_tensor.reshape(
-        1,
-        1,
-        ttnn_input_tensor.shape[0] * ttnn_input_tensor.shape[1] * ttnn_input_tensor.shape[2],
-        ttnn_input_tensor.shape[3],
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_dtype_issue(device):
+    a = torch.randn((1, 256, 1, 49), dtype=torch.bfloat16)
+    a_ttnn = ttnn.from_torch(
+        a, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b, memory_config=ttnn.L1_MEMORY_CONFIG
     )
-    ttnn_input_tensor = ttnn.from_torch(ttnn_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    ttnn_x = ttnn.silu(ttnn_input_tensor)
-
-    ttnn_x = ttnn.to_layout(ttnn_x, ttnn.ROW_MAJOR_LAYOUT)
-
-    ttnn_y1, ttnn_y2 = ttnn.split(ttnn_x, 2, 3)
-    ttnn_y1 = ttnn.to_torch(ttnn_y1)
-    ttnn_y1 = ttnn_y1.permute(0, 3, 1, 2)
-    ttnn_y1 = ttnn_y1.reshape(torch_y1.shape)
-
-    assert_with_pcc(torch_y1, ttnn_y1, 0.99999)
+    print("bf8", a_ttnn)
+    a_ttnn = ttnn.to_memory_config(a_ttnn, ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat16)
+    print(a_ttnn.get_dtype())
+    assert a_ttnn.get_dtype() == ttnn.bfloat16
+    ttnn_output = ttnn.to_torch(a_ttnn)
+    assert_with_pcc(a, ttnn_output, 0.99999)

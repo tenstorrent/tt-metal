@@ -45,12 +45,14 @@ def run_yolov11_trace_inference(
     dtype = test_infra.input_tensor.dtype
     layout = test_infra.input_tensor.layout
     test_infra.run()
+    print("run1")
     test_infra.validate()
     test_infra.dealloc_output()
 
     # Optimized run
     test_infra.input_tensor = tt_inputs_host.to(device, input_mem_config)
     test_infra.run()
+    print("run2")
     test_infra.validate()
 
     # Capture
@@ -59,6 +61,7 @@ def run_yolov11_trace_inference(
     trace_input_addr = ttnn.buffer_address(test_infra.input_tensor)
     tid = ttnn.begin_trace_capture(device, cq_id=0)
     test_infra.run()
+    print("run3")
     tt_image_res = ttnn.allocate_tensor_on_device(
         shape,
         dtype,
@@ -80,3 +83,83 @@ def run_yolov11_trace_inference(
 
     ttnn.release_trace(device, tid)
     test_infra.dealloc_output()
+
+
+def run_yolov11_trace_2cqs_inference(
+    device,
+    model_location_generator,
+):
+    test_infra = create_test_infra(
+        device,
+        model_location_generator=model_location_generator,
+    )
+    tt_inputs_host, sharded_mem_config_DRAM, input_mem_config = test_infra.setup_dram_sharded_input(device)
+    tt_image_res = tt_inputs_host.to(device, sharded_mem_config_DRAM)
+    op_event = ttnn.create_event(device)
+    write_event = ttnn.create_event(device)
+    # Initialize the op event so we can write
+    ttnn.record_event(0, op_event)
+
+    # First run configures convs JIT
+    ttnn.wait_for_event(1, op_event)
+    ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 1)
+    ttnn.record_event(1, write_event)
+    ttnn.wait_for_event(0, write_event)
+    test_infra.input_tensor = ttnn.to_memory_config(tt_image_res, input_mem_config)
+    shape = test_infra.input_tensor.shape
+    dtype = test_infra.input_tensor.dtype
+    layout = test_infra.input_tensor.layout
+    ttnn.record_event(0, op_event)
+    test_infra.run()
+    test_infra.validate()
+    test_infra.dealloc_output()
+
+    # Optimized run
+    ttnn.wait_for_event(1, op_event)
+    ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 1)
+    ttnn.record_event(1, write_event)
+    ttnn.wait_for_event(0, write_event)
+    test_infra.input_tensor = ttnn.to_memory_config(tt_image_res, input_mem_config)
+    ttnn.record_event(0, op_event)
+    test_infra.run()
+    test_infra.validate()
+
+    # Capture
+    ttnn.wait_for_event(1, op_event)
+    ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 1)
+    ttnn.record_event(1, write_event)
+    ttnn.wait_for_event(0, write_event)
+    test_infra.input_tensor = ttnn.to_memory_config(tt_image_res, input_mem_config)
+    ttnn.record_event(0, op_event)
+    test_infra.dealloc_output()
+    trace_input_addr = ttnn.buffer_address(test_infra.input_tensor)
+    tid = ttnn.begin_trace_capture(device, cq_id=0)
+    test_infra.run()
+    input_tensor = ttnn.allocate_tensor_on_device(
+        shape,
+        dtype,
+        layout,
+        device,
+        input_mem_config,
+    )
+    ttnn.end_trace_capture(device, tid, cq_id=0)
+    assert trace_input_addr == ttnn.buffer_address(input_tensor)
+
+    # More optimized run with caching
+    if use_signpost:
+        signpost(header="start")
+    for iter in range(0, 2):
+        ttnn.wait_for_event(1, op_event)
+        ttnn.copy_host_to_device_tensor(tt_inputs_host, tt_image_res, 1)
+        ttnn.record_event(1, write_event)
+        ttnn.wait_for_event(0, write_event)
+        # TODO: Add in place support to ttnn to_memory_config
+        input_tensor = ttnn.reshard(tt_image_res, input_mem_config, input_tensor)
+        ttnn.record_event(0, op_event)
+        ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
+    ttnn.synchronize_devices(device)
+
+    if use_signpost:
+        signpost(header="stop")
+
+    ttnn.release_trace(device, tid)
