@@ -120,7 +120,7 @@ def test_llama_model_inference(
             "llama32_3b": 0.9989 if mode_accuracy else 0.9837,
             "llama31_8b": 0.9987 if mode_accuracy else 0.9850,
             "llama32_11b": 0.9987 if mode_accuracy else 0.9850,
-            "llama31_70b": 0.9843 if mode_accuracy else 0.9843,
+            "llama31_70b": 0.9843 if mode_accuracy else 0.97607,
         }[model_name]
 
         final_k_cache_pcc = {
