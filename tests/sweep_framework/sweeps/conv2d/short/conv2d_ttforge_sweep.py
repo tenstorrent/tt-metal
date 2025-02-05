@@ -416,19 +416,16 @@ def test_conv2d_localrun(device, input_spec):
 # fmt: off
 failing_parameters = [
     # [batch_size, output_channels, input_channels, input_height, input_width, kernel_height, kernel_width, stride_h, stride_w, pad_h, pad_w, groups, dilation_h, dilation_w, bias, [input_layout, input_memory_config, input_datatype], [weight_layout, weight_memory_config, weight_datatype], [output_layout, output_memory_config, output_datatype]]
+    [1, 128, 128, 180, 320, 3, 3, 2, 2, 1, 1, 1, 1, 1, False, [int(ttnn.TILE_LAYOUT), "dram", int(ttnn.bfloat16)], [int(ttnn.ROW_MAJOR_LAYOUT), "system_memory", int(ttnn.bfloat16)], [int(ttnn.TILE_LAYOUT), "dram", int(ttnn.bfloat16)], ], #37
     [1, 512, 256, 180, 320, 1, 1, 2, 2, 0, 0, 1, 1, 1, False, [int(ttnn.TILE_LAYOUT), "dram", int(ttnn.bfloat16)], [int(ttnn.ROW_MAJOR_LAYOUT), "system_memory", int(ttnn.bfloat16)], [int(ttnn.TILE_LAYOUT), "dram", int(ttnn.bfloat16)], ], #132
-    [1, 320, 320, 64, 64, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, [int(ttnn.TILE_LAYOUT), "dram", int(ttnn.bfloat16)], [int(ttnn.ROW_MAJOR_LAYOUT), "system_memory", int(ttnn.bfloat16)], [int(ttnn.TILE_LAYOUT), "dram", int(ttnn.bfloat16)], ], #178
     [1, 1024, 3, 224, 224, 16, 16, 16, 16, 0, 0, 1, 1, 1, False, [int(ttnn.TILE_LAYOUT), "dram", int(ttnn.bfloat16)], [int(ttnn.ROW_MAJOR_LAYOUT), "system_memory", int(ttnn.bfloat16)], [int(ttnn.TILE_LAYOUT), "dram", int(ttnn.bfloat16)], ], #207
     [1, 768, 3, 224, 224, 16, 16, 16, 16, 0, 0, 1, 1, 1, False, [int(ttnn.TILE_LAYOUT), "dram", int(ttnn.bfloat16)], [int(ttnn.ROW_MAJOR_LAYOUT), "system_memory", int(ttnn.bfloat16)], [int(ttnn.TILE_LAYOUT), "dram", int(ttnn.bfloat16)], ], #211
     [1, 768, 3, 224, 224, 32, 32, 32, 32, 0, 0, 1, 1, 1, False, [int(ttnn.TILE_LAYOUT), "dram", int(ttnn.bfloat16)], [int(ttnn.ROW_MAJOR_LAYOUT), "system_memory", int(ttnn.bfloat16)], [int(ttnn.TILE_LAYOUT), "dram", int(ttnn.bfloat16)], ], #212
     [1, 768, 3, 384, 512, 32, 32, 32, 32, 0, 0, 1, 1, 1, False, [int(ttnn.TILE_LAYOUT), "dram", int(ttnn.bfloat16)], [int(ttnn.ROW_MAJOR_LAYOUT), "system_memory", int(ttnn.bfloat16)], [int(ttnn.TILE_LAYOUT), "dram", int(ttnn.bfloat16)], ], #215
     [1, 192, 3, 512, 672, 16, 16, 16, 16, 0, 0, 1, 1, 1, False, [int(ttnn.TILE_LAYOUT), "dram", int(ttnn.bfloat16)], [int(ttnn.ROW_MAJOR_LAYOUT), "system_memory", int(ttnn.bfloat16)], [int(ttnn.TILE_LAYOUT), "dram", int(ttnn.bfloat16)], ], #219
     [1, 64, 3, 720, 1280, 7, 7, 2, 2, 3, 3, 1, 1, 1, False, [int(ttnn.TILE_LAYOUT), "dram", int(ttnn.bfloat16)], [int(ttnn.ROW_MAJOR_LAYOUT), "system_memory", int(ttnn.bfloat16)], [int(ttnn.TILE_LAYOUT), "dram", int(ttnn.bfloat16)], ], #220
-    [1, 320, 640, 64, 64, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, [int(ttnn.TILE_LAYOUT), "dram", int(ttnn.bfloat16)], [int(ttnn.ROW_MAJOR_LAYOUT), "system_memory", int(ttnn.bfloat16)], [int(ttnn.TILE_LAYOUT), "dram", int(ttnn.bfloat16)], ], #285
     [1, 1, 64, 480, 640, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, [int(ttnn.TILE_LAYOUT), "dram", int(ttnn.bfloat16)], [int(ttnn.ROW_MAJOR_LAYOUT), "system_memory", int(ttnn.bfloat16)], [int(ttnn.TILE_LAYOUT), "dram", int(ttnn.bfloat16)], ], #308
     [1, 64, 64, 480, 640, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, [int(ttnn.TILE_LAYOUT), "dram", int(ttnn.bfloat16)], [int(ttnn.ROW_MAJOR_LAYOUT), "system_memory", int(ttnn.bfloat16)], [int(ttnn.TILE_LAYOUT), "dram", int(ttnn.bfloat16)], ], #309
-    [1, 672, 672, 20, 20, 5, 5, 2, 2, 2, 2, 672, 1, 1, False, [int(ttnn.TILE_LAYOUT), "dram", int(ttnn.float32)], [int(ttnn.ROW_MAJOR_LAYOUT), "system_memory", int(ttnn.float32)], [int(ttnn.TILE_LAYOUT), "dram", int(ttnn.float32)], ], #329
-    [1, 320, 960, 64, 64, 3, 3, 1, 1, 1, 1, 1, 1, 1, False, [int(ttnn.TILE_LAYOUT), "dram", int(ttnn.bfloat16)], [int(ttnn.ROW_MAJOR_LAYOUT), "system_memory", int(ttnn.bfloat16)], [int(ttnn.TILE_LAYOUT), "dram", int(ttnn.bfloat16)], ], #351
 ]
 # fmt: on
 

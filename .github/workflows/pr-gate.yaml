@@ -12,14 +12,14 @@ name: PR Gate
 
 on:
   workflow_dispatch:
-#  pull_request:
-#    types:
-#      - opened
-#      - reopened
-#      - synchronize
-#      - ready_for_review
-#    branches:
-#      - "main"
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - ready_for_review
+    branches:
+      - "main"
 
 concurrency:
   # Use github.run_id on main branch (or any protected branch)
@@ -37,4 +37,4 @@ jobs:
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     uses: ./.github/workflows/build-artifact.yaml
     with:
-      os: "ubuntu-22.04-amd64"
+      version: "22.04"

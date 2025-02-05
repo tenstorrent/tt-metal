@@ -12,6 +12,8 @@
 #include <set>
 #include <utility>
 
+#include "dispatch_core_manager.hpp"
+#include "dispatch_settings.hpp"
 #include "dprint_server.hpp"
 #include "host_api.hpp"
 #include <tt_metal.hpp>
@@ -203,6 +205,8 @@ void DevicePool::initialize(
     tt::tt_metal::dispatch_core_manager::initialize(dispatch_core_config, num_hw_cqs);
     // Initialize the dispatch query layer, used by runtime command generation
     tt_metal::DispatchQueryManager::initialize(num_hw_cqs);
+    // Initialize DispatchSettings with defaults
+    tt_metal::DispatchSettings::initialize(tt::Cluster::instance());
 
     if (_inst == nullptr) {
         static DevicePool device_pool{};

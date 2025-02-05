@@ -21,39 +21,7 @@ def is_tile_dim_alligned(dim):
 
 
 def pre_process_input(device, tensor):
-    batch_size = tensor.shape[0]
-    input_channels = tensor.shape[1]
-    input_height = tensor.shape[2]
-    input_width = tensor.shape[3]
-    tensor = fallback_ops.permute(tensor, (0, 2, 3, 1), output_layout=ttnn.ROW_MAJOR_LAYOUT, output_on_device=False)
-    tensor = ttnn.to_device(tensor, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    tensor = ttnn.to_layout(tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
-    return tensor
-    import math
-
-    assert input_channels == tensor.padded_shape[3]
-    padded_input_channels = math.ceil(input_channels / 32) * 32
-    if padded_input_channels != input_channels:
-        tensor = fallback_ops.pad(
-            tensor,
-            (0, padded_input_channels - input_channels, 0, 0, 0, 0),
-            output_layout=ttnn.ROW_MAJOR_LAYOUT,
-            output_on_device=False,
-        )
-    # Reshape 4d to 2d
-    tensor = fallback_ops.reshape(
-        tensor,
-        1,
-        1,
-        batch_size * input_height * input_width,
-        padded_input_channels,
-        output_layout=ttnn.ROW_MAJOR_LAYOUT,
-        output_on_device=False,
-    )
-    tensor = ttnn.Tensor(tensor)
-    tensor = ttnn.to_device(tensor, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    tensor = ttnn.to_layout(tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
-    return tensor
+    return ttnn.permute(tensor, (0, 2, 3, 1))
 
 
 def pad_encoder_hidden_states(device, tensor, required_sequence_length):
