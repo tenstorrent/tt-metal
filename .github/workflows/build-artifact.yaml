@@ -12,6 +12,11 @@ on:
         type: boolean
         default: false
         description: "Build with tracy enabled"
+      build_wheel:
+        required: false
+        type: boolean
+        default: false
+        description: "Build Python Wheel"
       distro:
         required: false
         type: string
@@ -55,6 +60,11 @@ on:
         type: boolean
         default: false
         description: "Build with tracy enabled"
+      build_wheel:
+        required: false
+        type: boolean
+        default: false
+        description: "Build Python Wheel"
       distro:
         required: false
         type: string
@@ -169,9 +179,14 @@ jobs:
               { echo "!!! ALERT !!! This should never happen, but does explain an issue we've been hunting. Please send a link to this job to Metal Infra.  kthxbye."; exit 1; }
 
             nice -n 19 $build_command
-            nice -n 19 python3 -m build
+
+            echo "Build wheel: ${{ inputs.build_wheel }}"
+            if [ "${{ inputs.build_wheel }}" = "true" ]; then
+              nice -n 19 python3 -m build
+            fi
             ccache -s > build/ccache.stats
       - name: Upload distribution as artifact
+        if: ${{ inputs.build_wheel }}
         uses: actions/upload-artifact@v4
         with:
           name: eager-dist-${{ inputs.os }}-any
