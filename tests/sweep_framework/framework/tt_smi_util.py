@@ -57,6 +57,8 @@ class ResetUtil:
                 if smi_process.returncode == 0:
                     self.command = executable
                     self.args = args
+                    break
+
         if self.command is None:
             raise Exception(f"SWEEPS: Unable to location tt-smi executable")
         print(f"SWEEPS: tt-smi util initialized with command: {self.command}, args: {self.args}")
