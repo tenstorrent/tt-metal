@@ -2,20 +2,22 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import torch
-import ttnn
 import pytest
+import torch
 
+import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 def run_once(device, input_shape, kernel_size, stride, padding, dilation, shard_scheme=None):
-    batch_size, in_c, in_h, in_w = input_shape
     torch_input = torch.rand(input_shape, dtype=torch.bfloat16)
 
     input_tensor = torch.permute(torch_input, (0, 2, 3, 1))
     input_tensor = torch.reshape(input_tensor, (1, 1, -1, in_c))
     input_tensor = ttnn.from_torch(input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    batch_size, in_c, in_h, in_w = input_shape
+
+    # Function under test
     output_tensor = ttnn.avg_pool2d(
         input_tensor,
         batch_size,
