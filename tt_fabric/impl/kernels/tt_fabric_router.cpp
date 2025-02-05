@@ -17,8 +17,6 @@ fvcc_outbound_state_t fvcc_outbound_state __attribute__((aligned(16)));  // outb
 #endif
 volatile local_pull_request_t local_pull_request_temp __attribute__((aligned(16)));  // replicate for each fvc
 volatile local_pull_request_t* local_pull_request = &local_pull_request_temp;        // replicate for each fvc
-chan_payload_ptr inbound_rdptr_ack __attribute__((aligned(16)));
-volatile chan_payload_ptr remote_rdptr __attribute__((aligned(16)));
 
 constexpr uint32_t fvc_data_buf_size_words = get_compile_time_arg_val(0);
 constexpr uint32_t fvc_data_buf_size_bytes = fvc_data_buf_size_words * PACKET_WORD_SIZE_BYTES;
@@ -100,10 +98,6 @@ void kernel_main() {
 
     router_state.sync_in = 0;
     router_state.sync_out = 0;
-    inbound_rdptr_ack.ptr = 0;
-    inbound_rdptr_ack.ptr_cleared = 0;
-    inbound_rdptr_ack.pad[0] = 0;
-    inbound_rdptr_ack.pad[1] = 0;
 
     zero_l1_buf((tt_l1_ptr uint32_t*)fvc_consumer_req_buf, sizeof(chan_req_buf));
     zero_l1_buf((tt_l1_ptr uint32_t*)FVCC_IN_BUF_START, FVCC_IN_BUF_SIZE);
@@ -112,12 +106,10 @@ void kernel_main() {
     write_kernel_status(kernel_status, PQ_TEST_WORD_CNT_INDEX + 1, (uint32_t)&fvc_consumer_state);
     write_kernel_status(kernel_status, PQ_TEST_STATUS_INDEX + 1, (uint32_t)&fvc_producer_state);
 
-    fvc_consumer_state.init(
-        FABRIC_ROUTER_DATA_BUF_START, fvc_data_buf_size_words / 2, (uint32_t)&fvc_producer_state.inbound_wrptr);
+    fvc_consumer_state.init(FABRIC_ROUTER_DATA_BUF_START, fvc_data_buf_size_words / 2);
     fvc_producer_state.init(
         FABRIC_ROUTER_DATA_BUF_START + (fvc_data_buf_size_words * PACKET_WORD_SIZE_BYTES / 2),
-        fvc_data_buf_size_words / 2,
-        (uint32_t)&remote_rdptr);
+        fvc_data_buf_size_words / 2);
 
 #ifdef FVCC_SUPPORT
     fvcc_outbound_state.init(
@@ -149,7 +141,7 @@ void kernel_main() {
             pull_request_t* pull_req = &req->pull_request;
             if (req->bytes[47] == FORWARD) {
                 // Data is packetized.
-                pull_data_to_fvc_buffer(pull_req, &fvc_consumer_state);
+                fvc_consumer_state.pull_data_to_fvc_buffer(pull_req);
                 if (fvc_consumer_state.packet_words_remaining == 0 ||
                     fvc_consumer_state.pull_words_in_flight >= FVC_SYNC_THRESHOLD) {
                     fvc_consumer_state.total_words_to_forward += fvc_consumer_state.pull_words_in_flight;
@@ -159,7 +151,7 @@ void kernel_main() {
                     update_pull_request_words_cleared(pull_req);
                 }
             } else if (req->bytes[47] == INLINE_FORWARD) {
-                move_data_to_fvc_buffer(pull_req, &fvc_consumer_state);
+                fvc_consumer_state.move_data_to_fvc_buffer(pull_req);
             }
 
             if (fvc_consumer_state.packet_in_progress == 1 and fvc_consumer_state.packet_words_remaining == 0) {
@@ -176,7 +168,6 @@ void kernel_main() {
         }
 
         // Handle Ethernet Inbound Data
-        fvc_producer_state.update_remote_rdptr_sent();
         if (fvc_producer_state.get_curr_packet_valid()) {
             fvc_producer_state.process_inbound_packet();
             loop_count = 0;

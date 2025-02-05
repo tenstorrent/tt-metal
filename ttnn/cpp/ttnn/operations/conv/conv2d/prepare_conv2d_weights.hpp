@@ -78,6 +78,7 @@ ttnn::Tensor prepare_conv_weights(
     std::array<uint32_t, 2> stride,
     std::array<uint32_t, 2> padding,
     std::array<uint32_t, 2> dilation,
+    const bool has_bias,
     uint32_t groups,
     T* device,
     const std::optional<const Conv2dConfig>& conv_config_,

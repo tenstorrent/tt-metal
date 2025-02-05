@@ -12,10 +12,12 @@
 #include <tt-metalium/constants.hpp>
 
 #include <tt-metalium/work_split.hpp>
+#include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
+#include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 
 using namespace tt::constants;
@@ -289,12 +291,7 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
     auto& output_tensor = output_tensors.at(0);
     tt::tt_metal::IDevice* device = input_tensor_a.device();
 
-    const auto arch = device->arch();
     const auto has_bias = input_tensor_bias.has_value();
-
-    const auto input_dtype = input_tensor_a.dtype();
-    const auto weights_dtype = input_tensor_b.dtype();
-    const auto output_dtype = output_tensor.dtype();
 
     const auto weights_shape = input_tensor_b.get_padded_shape();
 
@@ -320,26 +317,22 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
         enable_subblock_padding,
         use_non_tile_height);
 
-    const uint32_t post_op_l1_stats =
+    const uint32_t post_op_l1_allocation_size =
         device->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
     auto actual_cb_size = program_with_cbs.program.get_cb_memory_size();
 
-    auto [calc_output_size, calc_CB_size] = calculate_L1_usage(
-        arch,
-        this->memory_config.memory_layout,
-        input_dtype,
-        weights_dtype,
-        output_dtype,
+    auto kernel_dims =
+        std::array<uint32_t, 2>({sliding_window_config.window_hw.first, sliding_window_config.window_hw.second});
+    conv_op_l1_usage l1_usage = calculate_L1_usage(
         compute_kernel_config,
         block_config,
         parallelization_config,
-        ttnn::Shape(input_tensor_shape),
         weights_shape,
-        sliding_window_config.get_output_shape(),
-        output_channels,
-        groups,
         std::array<uint32_t, 2>({sliding_window_config.window_hw.first, sliding_window_config.window_hw.second}),
         Conv2dConfig{
+            .dtype = output_tensor.dtype(),
+            .weights_dtype = input_tensor_b.dtype(),
+            .shard_layout = this->memory_config.memory_layout,
             .output_layout = (untilize_out ? Layout::ROW_MAJOR : Layout::TILE),
             .enable_act_double_buffer = enable_act_double_buffer,
             .enable_weights_double_buffer = enable_weights_double_buffer,
@@ -347,21 +340,29 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
             .enable_subblock_padding = enable_subblock_padding},
         this->memory_config,
         has_bias,
-        use_non_tile_height);
-    if (calc_CB_size != actual_cb_size) {
+        use_non_tile_height,
+        is_1d_deptwise_conv(
+            groups,
+            input_tensor_shape[3],
+            output_channels,
+            kernel_dims[1],
+            sliding_window_config.get_output_shape()[2]));
+
+    if (device->arch() != tt::ARCH::BLACKHOLE) {
+        // FIXME: This L1 calculation is not accurate for Blackhole due to different alignment.
+        // https://github.com/tenstorrent/tt-metal/issues/17216
         TT_FATAL(
-            actual_cb_size == calc_CB_size,
+            actual_cb_size == l1_usage.CB_allocation_size,
             "Calculated CB size {} does not match with the actual CB size {}",
-            calc_CB_size,
+            l1_usage.CB_allocation_size,
             actual_cb_size);
-    }
-    if (post_op_l1_stats != this->pre_op_l1_allocation_size_bytes + calc_output_size) {
+
         TT_FATAL(
-            post_op_l1_stats == (this->pre_op_l1_allocation_size_bytes + calc_output_size),
+            post_op_l1_allocation_size == (this->pre_op_l1_allocation_size_bytes + l1_usage.tensor_allocation_size),
             "Mismatch!! L1 Allocation Pre Op =  {}, Post Op = {} Calculated Size = {}",
             this->pre_op_l1_allocation_size_bytes,
-            post_op_l1_stats,
-            calc_output_size);
+            post_op_l1_allocation_size,
+            l1_usage.tensor_allocation_size);
     }
     return program_with_cbs;
 }

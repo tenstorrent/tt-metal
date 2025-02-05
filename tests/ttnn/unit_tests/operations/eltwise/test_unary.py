@@ -321,6 +321,22 @@ def run_unary_test_with_float(device, h, w, scalar, ttnn_function, pcc=0.9999):
     assert_with_pcc(torch_output_tensor, output_tensor, pcc)
 
 
+def run_unary_test_with_float_remainder(device, h, w, scalar, ttnn_function, pcc=0.9999):
+    torch.manual_seed(0)
+
+    torch_input_tensor = torch.rand((h, w), dtype=torch.bfloat16)
+    golden_function = ttnn.get_golden_function(ttnn.remainder)
+    torch_output_tensor = golden_function(torch_input_tensor, scalar, device=device)
+
+    input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn_function(input_tensor, scalar)
+    output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.from_device(output_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+
+
 @pytest.mark.parametrize("scalar", [1, 2])
 @pytest.mark.parametrize("h", [64])
 @pytest.mark.parametrize("w", [128])
@@ -389,7 +405,7 @@ def test_relu_max(device, h, w, upper_limit):
 @pytest.mark.parametrize("w", [128])
 @skip_for_grayskull("Op not supported for Grayskull, supported for wormhole_b0")
 def test_remainder(device, h, w, scalar):
-    run_unary_test_with_float(device, h, w, scalar, ttnn.remainder)
+    run_unary_test_with_float_remainder(device, h, w, scalar, ttnn.remainder)
 
 
 @pytest.mark.parametrize("scalar", [1.5, 2.0])

@@ -127,6 +127,7 @@ class upsample2d:
                 weights_format="OIHW",
                 input_layout=tt_out.get_layout(),
                 input_memory_config=tt_out.memory_config(),
+                has_bias=True,
                 **conv_kwargs,
             )
             self.conv_bias_tensor = ttnn.prepare_conv_bias(

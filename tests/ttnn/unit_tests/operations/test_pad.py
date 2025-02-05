@@ -226,8 +226,10 @@ def test_pad_rm_sharded_stickwise(
     ttnn_input_tensor = ttnn.from_torch(
         torch_input_tensor, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
     )
-    ttnn_sharded_input_tensor = ttnn.to_memory_config(ttnn_input_tensor, input_shard_memory_config)
-
+    # Still relay on keep_l1_aligned = True to make it work with the current implementation
+    ttnn_sharded_input_tensor = ttnn.interleaved_to_sharded(
+        ttnn_input_tensor, input_shard_memory_config, keep_l1_aligned=True
+    )
     padded_tensor = ttnn.pad(ttnn_sharded_input_tensor, pad_to_shape, input_tensor_start, pad_value)
 
     tt_output_tensor = ttnn.to_memory_config(padded_tensor, ttnn.L1_MEMORY_CONFIG)
