@@ -50,6 +50,9 @@ constexpr uint32_t worker_noc_x = get_compile_time_arg_val(1);
 constexpr uint32_t worker_noc_y = get_compile_time_arg_val(2);
 constexpr uint32_t worker_buffer_addr = get_compile_time_arg_val(3);
 
+constexpr uint32_t SENDER_QNUM = 1;
+constexpr uint32_t RECEIVER_QNUM = 1;
+
 // ******************************* Sender APIs ***************************************************
 
 FORCE_INLINE uint32_t setup_sender_buffer(
@@ -110,10 +113,9 @@ FORCE_INLINE void check_buffer_full_and_send_packet(
     uint64_t full_payload_size) {
     uint32_t next_write_ptr = advance_buffer_slot_ptr(write_ptr);
     bool buffer_not_full = next_write_ptr != read_ptr;
-    uint32_t qnum = 0;
 
     if (buffer_not_full) {
-        write_receiver(buffer_slot_addrs[write_ptr], buffer_slot_sync_addrs[write_ptr], full_payload_size, qnum);
+        write_receiver(buffer_slot_addrs[write_ptr], buffer_slot_sync_addrs[write_ptr], full_payload_size, SENDER_QNUM);
 
         write_ptr = next_write_ptr;
     }
@@ -226,10 +228,9 @@ FORCE_INLINE void check_write_worker_done_and_send_ack(
     uint32_t& num_messages_ack) {
     bool buffer_not_empty = read_ptr != write_ptr;
     uint32_t curr_trid = get_buffer_slot_trid(read_ptr);
-    uint32_t qnum = 1;
 
     if (buffer_not_empty && write_worker_done(curr_trid)) {
-        ack_complete(buffer_slot_sync_addrs[read_ptr], qnum);
+        ack_complete(buffer_slot_sync_addrs[read_ptr], RECEIVER_QNUM);
 
         read_ptr = advance_buffer_slot_ptr(read_ptr);
 
