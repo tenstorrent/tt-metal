@@ -12,7 +12,7 @@ on:
         type: boolean
         default: false
         description: "Build with tracy enabled"
-      build_wheel:
+      build-wheel:
         required: false
         type: boolean
         default: false
@@ -60,7 +60,7 @@ on:
         type: boolean
         default: false
         description: "Build with tracy enabled"
-      build_wheel:
+      build-wheel:
         required: false
         type: boolean
         default: false
@@ -180,13 +180,13 @@ jobs:
 
             nice -n 19 $build_command
 
-            echo "Build wheel: ${{ inputs.build_wheel }}"
-            if [ "${{ inputs.build_wheel }}" = "true" ]; then
+            echo "Build wheel: ${{ inputs.build-wheel }}"
+            if [ "${{ inputs.build-wheel }}" = "true" ]; then
               nice -n 19 python3 -m build
             fi
             ccache -s > build/ccache.stats
       - name: Upload distribution as artifact
-        if: ${{ inputs.build_wheel }}
+        if: ${{ inputs.build-wheel }}
         uses: actions/upload-artifact@v4
         with:
           name: eager-dist-${{ inputs.distro }}-${{ inputs.version }}-any
