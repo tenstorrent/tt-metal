@@ -105,7 +105,11 @@ def run_conv(
             mesh_mapper=weight_mesh_mapper,
         )
 
-    tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16, mesh_mapper=input_mesh_mapper)
+    tt_input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        activations_dtype if activations_dtype == ttnn.float32 else ttnn.bfloat16,
+        mesh_mapper=input_mesh_mapper,
+    )
 
     if shard_layout is None and not auto_shard:
         shard_layout = (
@@ -940,27 +944,8 @@ def test_resnet50_conv_wh(
 ):
     if device.core_grid.y == 7:
         pytest.skip("Issue #6992: Statically allocated circular buffers in program clash with L1 buffers on core range")
-    if batch_size > 8 and (activations_dtype != ttnn.bfloat8_b or weights_dtype != ttnn.bfloat8_b):
-        pytest.skip("Batch > 8 must be run fully bfp8")
 
-    if (
-        (
-            activations_dtype == ttnn.bfloat16
-            and batch_size == 20
-            and (
-                output_channels == 64
-                or (
-                    stride_h == 2
-                    and (output_channels == 256 or (output_channels == 128 and weights_dtype == ttnn.bfloat16))
-                )
-            )
-        )
-        # packer l1 acc has separate buffers when interm != output df, cannot fit into L1
-        or (batch_size == 20 and activations_dtype == ttnn.bfloat8_b and packer_l1_acc and input_height >= 64)
-    ):
-        pytest.skip("Skipping test because it won't fit in L1!")
-
-    use_shallow_conv_variant = (input_channels == 16) and device.arch() != ttnn.device.Arch.WORMHOLE_B0
+    use_shallow_conv_variant = (input_channels == 16) and device.arch() == ttnn.device.Arch.GRAYSKULL
     run_conv(
         device,
         math_fidelity,
@@ -2758,7 +2743,7 @@ def test_non_tile_multiple_height_conv_wh(
     ):
         pytest.skip("Skipping test because it won't fit in L1!")
 
-    if activations_dtype == ttnn.float32 and (batch_size >= 16 or (output_channels == 64 and input_height == 240)):
+    if activations_dtype == ttnn.float32 and (batch_size >= 16 or (output_channels == 64 or input_height >= 240)):
         pytest.skip("Skipping test because it won't fit in L1!")
 
     if (

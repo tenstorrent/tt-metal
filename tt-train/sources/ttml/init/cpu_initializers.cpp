@@ -7,9 +7,16 @@
 #include <random>
 
 #include "autograd/auto_context.hpp"
-#include "fmt/core.h"
 
 namespace ttml::init {
+
+xt::xarray<float> uniform_init(const ttnn::Shape& shape, UniformRange range) {
+    std::vector<float> data(shape.volume());
+    uniform_init(data, range);
+    std::vector<uint32_t> shape_vec(shape.cbegin(), shape.cend());
+    // adapt creates view of the vector, but return will copy this data anyway (by creation of xt::array)
+    return xt::adapt(std::move(data), shape_vec);
+}
 
 void uniform_init(std::vector<float>& vec, UniformRange range) {
     auto& [a, b] = range;

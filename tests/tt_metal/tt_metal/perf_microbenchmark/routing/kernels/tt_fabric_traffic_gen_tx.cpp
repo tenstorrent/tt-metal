@@ -405,7 +405,7 @@ void kernel_main() {
         input_queue_state.init(src_endpoint_id, prng_seed);
     }
 
-    test_producer.init(data_buffer_start_addr, data_buffer_size_words, 0x0);
+    test_producer.init(data_buffer_start_addr, data_buffer_size_words);
     fvcc_test_producer.init(data_buffer_start_addr, 0x0, 0x0);
 
     uint32_t temp = max_packet_size_words;

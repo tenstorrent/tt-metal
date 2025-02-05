@@ -343,18 +343,17 @@ void Cluster::generate_virtual_to_umd_coord_mapping() {
     for (auto chip_id : this->cluster_desc_->get_all_chips()) {
         this->virtual_worker_cores_[chip_id] = {};
         this->virtual_eth_cores_[chip_id] = {};
-        for (auto& core_desc : this->get_soc_desc(chip_id).physical_cores) {
-            if (core_desc.second.type != CoreType::HARVESTED) {
-                CoreCoord virtual_coords =
-                    this->get_virtual_coordinate_from_physical_coordinates(chip_id, core_desc.first);
-                tt_cxy_pair virtual_core = tt_cxy_pair(chip_id, virtual_coords.x, virtual_coords.y);
-                tt_cxy_pair umd_core = this->get_soc_desc(chip_id).convert_to_umd_coordinates(tt_cxy_pair(chip_id, core_desc.first.x, core_desc.first.y));
-                this->virtual_to_umd_coord_mapping_[virtual_core] = umd_core;
-                if (core_desc.second.type == CoreType::WORKER) {
-                    this->virtual_worker_cores_[chip_id].insert(virtual_coords);
-                } else if (core_desc.second.type == CoreType::ETH) {
-                    this->virtual_eth_cores_[chip_id].insert(virtual_coords);
-                }
+        for (tt::umd::CoreCoord core : this->get_soc_desc(chip_id).get_all_cores(CoordSystem::PHYSICAL)) {
+            CoreCoord virtual_coords =
+                this->get_virtual_coordinate_from_physical_coordinates(chip_id, {core.x, core.y});
+            tt_cxy_pair virtual_core = tt_cxy_pair(chip_id, virtual_coords.x, virtual_coords.y);
+            tt_cxy_pair umd_core =
+                this->get_soc_desc(chip_id).convert_to_umd_coordinates(tt_cxy_pair(chip_id, core.x, core.y));
+            this->virtual_to_umd_coord_mapping_[virtual_core] = umd_core;
+            if (core.core_type == CoreType::TENSIX) {
+                this->virtual_worker_cores_[chip_id].insert(virtual_coords);
+            } else if (core.core_type == CoreType::ETH) {
+                this->virtual_eth_cores_[chip_id].insert(virtual_coords);
             }
         }
     }

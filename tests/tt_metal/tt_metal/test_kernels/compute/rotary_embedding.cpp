@@ -30,7 +30,7 @@ ALWI void MUL_TILES(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t 
 // We don't pop in1 in decode which is sin/cos since we don't stream
 #else
     ACQ();
-    mul_tiles_init();
+    mul_tiles_init(in0_cb, in1_cb);
     mul_tiles(in0_cb, in1_cb, 0, 0, 0);
     pack_tile(0, out_cb);
     REL();
@@ -80,7 +80,7 @@ void MAIN {
     constexpr uint32_t Wt = get_compile_time_arg_val(10);
     constexpr uint32_t half_Wt = get_compile_time_arg_val(11);
 
-    binary_op_init_common(in_cb, cos_cb);
+    binary_op_init_common(in_cb, cos_cb, out_cb);
 
     cb_wait_front(scalar_cb, onetile);
 
@@ -134,7 +134,7 @@ void MAIN {
             cb_reserve_back(out_cb, onetile);
 
             ACQ();
-            add_tiles_init();
+            add_tiles_init(cos_interm_cb, sin_interm_cb);
             add_tiles(cos_interm_cb, sin_interm_cb, 0, 0, 0);
             pack_tile(0, out_cb);
             REL();
