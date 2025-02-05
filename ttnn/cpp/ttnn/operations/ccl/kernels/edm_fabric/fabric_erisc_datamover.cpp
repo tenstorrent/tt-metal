@@ -550,7 +550,6 @@ PacketLocalForwardType get_packet_local_forward_type(const volatile tt::fabric::
     const bool packet_needs_forwarding = packet_must_be_forwarded_to_next_chip(packet_header);
     PacketLocalForwardType forward_type =
         static_cast<PacketLocalForwardType>(packet_needs_forwarding << 1 | local_chip_is_packet_destination);
-    DPRINT << "Forward type: " << (uint32_t)forward_type << "\n";
     return forward_type;
 }
 
@@ -636,7 +635,6 @@ bool run_sender_channel_step(
                     outbound_to_receiver_channel_pointers,
                     remote_receiver_channel,
                     sender_channel_index);
-                DPRINT << "\tSent\n";
             }
         }
     }
@@ -645,12 +643,9 @@ bool run_sender_channel_step(
     int32_t completions_since_last_check = get_ptr_val(to_sender_packets_completed_streams[sender_channel_index]);
     if (completions_since_last_check > 0) {
         auto& sender_rdptr = local_sender_channel_worker_interface.local_rdptr;
-        DPRINT << "EDMS got " << (uint32_t)completions_since_last_check << " completions since last check. Incrementing.\n";
         outbound_to_receiver_channel_pointers.completion_ptr.increment_n(completions_since_last_check);
         sender_rdptr.increment_n(completions_since_last_check);
-        DPRINT << "\tnew sendptr: " << (uint32_t)sender_rdptr.get_ptr() << "\n";
         increment_local_update_ptr_val(to_sender_packets_completed_streams[sender_channel_index], -completions_since_last_check);
-        DPRINT << "\tnew sendptr (compl) after decrement: " << (uint32_t)get_ptr_val(to_sender_packets_completed_streams[sender_channel_index]) << "\n";
     }
 
     // Process ACKs from receiver
@@ -661,12 +656,10 @@ bool run_sender_channel_step(
     auto& sender_ackptr = local_sender_channel_worker_interface.local_ackptr;
     if (acks_since_last_check > 0) {
         sender_ackptr.increment_n(acks_since_last_check);
-        DPRINT << "EDMS got " << (uint32_t)acks_since_last_check << " acks since last check. Incrementing.\n";
         if (channel_connection_established) {
             local_sender_channel_worker_interface.update_worker_copy_of_read_ptr();
         }
         increment_local_update_ptr_val(to_sender_packets_acked_streams[sender_channel_index], -acks_since_last_check);
-        DPRINT << "\tnew sender ackptr after decrement: " << (uint32_t)get_ptr_val(to_sender_packets_acked_streams[sender_channel_index]) << "\n";
     }
     did_something = did_something || (completions_since_last_check + acks_since_last_check) > 0;
 
@@ -736,7 +729,6 @@ void run_receiver_channel_step(
         bool can_send_to_all_local_chip_receivers =
             can_forward_packet_completely(packet_header, downstream_edm_interface);
         if (can_send_to_all_local_chip_receivers) {
-            DPRINT << "EDMR Forwarding packet\n";
             receiver_forward_packet(packet_header, downstream_edm_interface);
             wr_sent_ptr.increment();
         }
@@ -745,10 +737,8 @@ void run_receiver_channel_step(
     auto &wr_flush_ptr = receiver_channel_pointers.wr_flush_ptr;
     bool unflushed_writes = !wr_flush_ptr.is_caught_up_to(wr_sent_ptr);
     if (unflushed_writes) {
-        DPRINT << "Unflushed writes\n";
         bool writes_flushed = ncrisc_noc_nonposted_writes_sent(noc_index);
         if (writes_flushed) {
-            DPRINT << "EDMR packet write flushed\n";
             auto receiver_buffer_index = wr_flush_ptr.get_buffer_index();
             local_receiver_channel.eth_clear_sender_channel_ack(receiver_buffer_index);
             wr_flush_ptr.increment();
@@ -758,10 +748,8 @@ void run_receiver_channel_step(
     auto &completion_ptr = receiver_channel_pointers.completion_ptr;
     bool unsent_completions = !completion_ptr.is_caught_up_to(wr_flush_ptr);
     if (unsent_completions) {
-        DPRINT << "Unsent completions\n";
         bool can_send_without_blocking = !eth_txq_is_busy();
         if (can_send_without_blocking) {
-            DPRINT << "EDMR sending completion ack\n";
             // completion ptr incremented in callee
             receiver_send_completion_ack(
                 remote_eth_sender_wrptrs,

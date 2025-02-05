@@ -2977,10 +2977,6 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
     using namespace ttnn::ccl;
     TT_FATAL(num_devices_with_workers <= line_size, "num_devices_with_workers must be less than or equal to num_links");
 
-    // if (params.line_sync) {
-    //     TT_FATAL(num_op_invocations == 1, "Performance reporting only supported for 1 invocation per test");
-    // }
-
     auto worker_core_logical = [](size_t link) { return CoreCoord(link, 0); };
 
     // static constexpr size_t source_l1_buffer_address = 1000000;
