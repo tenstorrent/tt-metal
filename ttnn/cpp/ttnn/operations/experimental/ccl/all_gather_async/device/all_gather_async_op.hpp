@@ -25,6 +25,12 @@ namespace ttnn {
 
 using ccl::EriscDatamoverBuilder;
 
+enum class AllGatherAsyncVersion {
+    GENERIC = 0,
+    MINIMAL_INTERLEAVED_32 = 1,
+    LLAMA_POST_BINARY_MATMUL = 2,
+};
+
 struct AllGatherAsync {
     std::optional<IDevice*> forward_device;
     std::optional<IDevice*> backward_device;
@@ -83,6 +89,8 @@ struct AllGatherAsync {
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
     const operation::Hash compute_program_hash(const std::vector<Tensor>& input_tensors) const;
+
+    AllGatherAsyncVersion select_version(const Tensor& input_tensor) const;
 };
 
 namespace ccl {
@@ -101,6 +109,8 @@ AllGatherAsync create_all_gather_async_struct(
 }  // namespace ccl
 
 // All Gather Variants
+std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
+    size_t num_links, size_t num_workers_per_link, bool persistent_fabric_mode, IDevice* device, const std::optional<SubDeviceId>& sub_device_id);
 operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
     const Tensor& input_tensor,
     std::optional<IDevice*> forward_device,
@@ -112,6 +122,32 @@ operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
     const uint32_t ring_index,
     ccl::Topology topology,
     const GlobalSemaphore semaphore,
+    const std::optional<SubDeviceId>& sub_device_id,
+    bool enable_persistent_fabric_mode);
+operation::ProgramWithCallbacks all_gather_async_minimal_interleaved_dim3_1_1_32_any(
+    const Tensor& input_tensor,
+    std::optional<IDevice*> forward_device,
+    std::optional<IDevice*> backward_device,
+    Tensor& output_tensor,
+    const uint32_t dim,
+    const uint32_t num_links,
+    const uint32_t ring_size,
+    const uint32_t ring_index,
+    ccl::Topology topology,
+    const GlobalSemaphore& semaphore,
+    const std::optional<SubDeviceId>& sub_device_id,
+    bool enable_persistent_fabric_mode);
+operation::ProgramWithCallbacks all_gather_async_llama_post_binary_matmul(
+    const Tensor& input_tensor,
+    std::optional<IDevice*> forward_device,
+    std::optional<IDevice*> backward_device,
+    Tensor& output_tensor,
+    const uint32_t dim,
+    const uint32_t num_links,
+    const uint32_t ring_size,
+    const uint32_t ring_index,
+    ccl::Topology topology,
+    const GlobalSemaphore& semaphore,
     const std::optional<SubDeviceId>& sub_device_id,
     bool enable_persistent_fabric_mode);
 
