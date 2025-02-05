@@ -79,6 +79,7 @@ template <bool untilize = false, bool is_fp32_dest_acc_en = false, bool tilize =
 inline void llk_pack_untilize_hw_configure(
     const llk_pack_params_t* pack_params, const std::uint32_t face_r_dim, const std::uint32_t num_faces) {
     const std::uint32_t output_id = get_output_id(pack_params->pack_output);
+    const std::uint32_t tile_c_dim = get_output_tile_c_dim(output_id);
     const bool partial_face = get_output_partial_face(output_id);
     const bool narrow_tile = get_output_narrow_tile(output_id);
 
@@ -89,6 +90,7 @@ inline void llk_pack_untilize_hw_configure(
         pack_dst_format[output_id],
         tile_size,
         face_r_dim,
+        tile_c_dim,
         num_faces,
         partial_face,
         narrow_tile,
