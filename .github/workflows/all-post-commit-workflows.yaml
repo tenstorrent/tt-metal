@@ -156,10 +156,21 @@ jobs:
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
-  profiler-regression:
+  run-profiler-regression:
     needs: build-artifact-profiler
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          { arch: grayskull, runner-label: E150 },
+          { arch: wormhole_b0, runner-label: N150 },
+          { arch: wormhole_b0, runner-label: N300 },
+        ]
     uses: ./.github/workflows/run-profiler-regression.yaml
     secrets: inherit
+    with:
+      arch: ${{ matrix.test-group.arch}}
+      runner-label: ${{ matrix.test-group.runner-label}}
   build-docs:
     needs: build-artifact
     uses: ./.github/workflows/docs-latest-public.yaml

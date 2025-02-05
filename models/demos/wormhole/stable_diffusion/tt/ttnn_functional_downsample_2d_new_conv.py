@@ -167,6 +167,7 @@ class downsample_2d:
                 weights_format="OIHW",
                 input_memory_config=hidden_states.memory_config(),
                 input_layout=hidden_states.get_layout(),
+                has_bias=True,
                 **conv_kwargs,
             )
             self.conv_bias = ttnn.prepare_conv_bias(
