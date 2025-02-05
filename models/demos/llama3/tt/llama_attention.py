@@ -136,7 +136,7 @@ class TtLlamaAttention(LightweightModule):
                 dtype=self.dtype,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 layout=ttnn.TILE_LAYOUT,
-                cache_file_name=cache_name("wqkv_bias_sharded"),
+                # cache_file_name=cache_name("wqkv_bias_sharded"),
             )
             self.wqkv_bias_prefill = ttnn.reshape(self.wqkv_bias, ttnn.Shape([1, 1, 1, self.wqkv_bias.shape[-1]]))
 
