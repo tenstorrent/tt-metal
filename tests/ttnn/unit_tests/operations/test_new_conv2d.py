@@ -58,6 +58,7 @@ def run_conv(
     config_override,
     dilation=1,
     use_shallow_conv_variant=False,
+    transpose_shards=True,
     fp32_accum=False,
     packer_l1_acc=False,
     output_layout=ttnn.TILE_LAYOUT,
@@ -135,6 +136,7 @@ def run_conv(
         enable_split_reader=enable_split_reader,
         enable_subblock_padding=False,
         output_layout=output_layout,
+        transpose_shards=transpose_shards,
         preprocess_weights_on_device=preprocess_weights_on_device,
     )
     compute_config = ttnn.init_device_compute_kernel_config(
@@ -967,6 +969,7 @@ def test_resnet50_conv_wh(
         pad_w,
         config_override=config_override,
         use_shallow_conv_variant=use_shallow_conv_variant,
+        transpose_shards=use_1d_systolic_array,  ## use RM (transpose_mcast=False) with 2D on WH
         packer_l1_acc=packer_l1_acc,
         fp32_accum=False,
         has_bias=has_bias,
@@ -1028,6 +1031,7 @@ def test_conv_mem_config_wh(
         shard_layout=shard_layout,
         config_override=config_override,
         use_shallow_conv_variant=use_shallow_conv_variant,
+        transpose_shards=use_1d_systolic_array,  ## use RM (transpose_mcast=False) with 2D on WH
         packer_l1_acc=True,
         fp32_accum=False,
         has_bias=True,
@@ -1648,6 +1652,7 @@ def test_unet_conv_wh(
         config_override,
         shard_layout=shard_layout,
         use_shallow_conv_variant=use_shallow_conv_variant,
+        transpose_shards=use_1d_systolic_array,  ## use RM (transpose_mcast=False) with 2D on WH
         output_layout=output_layout,
         auto_shard=auto_shard,
     )
@@ -1746,6 +1751,7 @@ def test_unet_conv_groups_2_wh(
         config_override,
         shard_layout=shard_layout,
         use_shallow_conv_variant=use_shallow_conv_variant,
+        transpose_shards=use_1d_systolic_array,  ## use RM (transpose_mcast=False) with 2D on WH
         output_layout=output_layout,
         auto_shard=auto_shard,
         groups=groups,
@@ -1843,6 +1849,7 @@ def test_unet_conv_groups_4_6_wh(
         config_override,
         shard_layout=shard_layout,
         use_shallow_conv_variant=use_shallow_conv_variant,
+        transpose_shards=use_1d_systolic_array,  ## use RM (transpose_mcast=False) with 2D on WH
         output_layout=output_layout,
         groups=groups,
     )
@@ -1941,6 +1948,7 @@ def test_unet_conv_groups_8_wh(
         config_override,
         shard_layout=shard_layout,
         use_shallow_conv_variant=use_shallow_conv_variant,
+        transpose_shards=use_1d_systolic_array,  ## use RM (transpose_mcast=False) with 2D on WH
         output_layout=output_layout,
         auto_shard=auto_shard,
         groups=groups,
