@@ -505,7 +505,7 @@ def test_all_gather(
         ),
     ],
 )
-@pytest.mark.parametrize("num_links", [1])
+@pytest.mark.parametrize("num_links", [2])
 @pytest.mark.parametrize(
     "input_dtype",
     [

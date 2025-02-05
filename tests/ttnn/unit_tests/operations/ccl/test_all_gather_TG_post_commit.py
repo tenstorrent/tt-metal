@@ -74,7 +74,9 @@ def run_with_trace(
             cluster_axis=cluster_axis,
             mesh_device=mesh_device,
             topology=ttnn.Topology.Linear,
-            multi_device_global_semaphore=ccl_semaphore_handles[0] if type(ccl_semaphore_handles) == list else ccl_semaphore_handles,
+            multi_device_global_semaphore=ccl_semaphore_handles[0]
+            if type(ccl_semaphore_handles) == list
+            else ccl_semaphore_handles,
             num_links=num_links,
             memory_config=output_mem_config,
             subdevice_id=worker_sub_device_id,
@@ -105,7 +107,9 @@ def run_with_trace(
                 cluster_axis=cluster_axis,
                 mesh_device=mesh_device,
                 topology=ttnn.Topology.Linear,
-                multi_device_global_semaphore=ccl_semaphore_handles[i] if type(ccl_semaphore_handles) == list else ccl_semaphore_handles,
+                multi_device_global_semaphore=ccl_semaphore_handles[i]
+                if type(ccl_semaphore_handles) == list
+                else ccl_semaphore_handles,
                 num_links=num_links,
                 memory_config=output_mem_config,
                 subdevice_id=worker_sub_device_id,

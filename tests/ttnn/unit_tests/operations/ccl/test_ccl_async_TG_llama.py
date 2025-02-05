@@ -78,9 +78,8 @@ def get_core_range_set(output_core_grid):
 @pytest.mark.parametrize(
     "num_devices, num_links",
     [
-        (4, 1),
+        (4, 2),
     ],
-    # [(4, 3), (4, 2)], Multi-links fails https://github.com/tenstorrent/tt-metal/issues/16699
 )
 @pytest.mark.parametrize(
     "input_dtype",

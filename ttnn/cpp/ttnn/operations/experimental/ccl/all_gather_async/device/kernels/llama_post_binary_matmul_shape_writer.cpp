@@ -159,7 +159,7 @@ void kernel_main() {
     while (tiles_read < num_tiles_to_read) {
         DPRINT << "tiles_read: " << tiles_read << "\n";
         uint32_t num_tiles_to_read_this_core = std::min(num_tiles_per_core - shard_tile_id, packet_size_in_pages);
-        num_tiles_to_read_this_core = 1;  // std::min(num_tiles_to_read-tiles_read, num_tiles_to_read_this_core);
+        num_tiles_to_read_this_core = std::min(num_tiles_to_read - tiles_read, num_tiles_to_read_this_core);
         cb_wait_front(cb0_id, num_tiles_to_read_this_core);
         size_t l1_read_addr = get_read_ptr(cb0_id);
 
