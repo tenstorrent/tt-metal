@@ -218,7 +218,6 @@ inline void llk_pack(std::uint32_t tile_index, std::uint32_t output, std::uint32
  *************************************************************************/
 
 template <
-    bool is_fp32_dest_acc_en,
     std::uint32_t block_ct_dim = 8,
     std::uint32_t full_ct_dim = block_ct_dim,
     bool diagonal = false,
