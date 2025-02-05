@@ -108,6 +108,9 @@ auto map_launch_op_args_to_execute_on_worker_thread_args(
                        &optional_output_tensor_index,
                        &optional_output_tensors](auto&& arg) {
         using T = std::decay_t<decltype(arg)>;
+        if constexpr (std::is_same_v<T, std::vector<Tensor>>) {
+            return input_tensors;
+        }
         if constexpr (std::is_same_v<T, Tensor>) {
             return input_tensors.at(input_tensor_index++);
         } else if constexpr (std::is_same_v<T, std::optional<const Tensor>>) {
@@ -307,9 +310,22 @@ private:
 
         using execute_on_worker_thread_return_t = decltype(operation_t::invoke(args...));
 
-        const Tensors input_tensors = detail::extract_args_to_vector<ttnn::Tensor>(args...);
+        Tensors ten_input_tensors = detail::extract_args_to_vector<ttnn::Tensor>(args...);
         const OptionalConstTensors optional_input_tensors =
             detail::extract_args_to_vector<std::optional<const ttnn::Tensor>>(args...);
+        std::vector<std::vector<ttnn::Tensor>> vec_input_tensors =
+            detail::extract_args_to_vector<std::vector<ttnn::Tensor>>(args...);
+        if (ten_input_tensors.size() > 0 && vec_input_tensors.size() > 0) {
+            TT_THROW("Only one of input_tensors or vec_input_tensors can be specified.
+            It means in the invoke function you have both Tensor and std::vector<Tensor> as inoput parameters");
+        }
+        if (ten_input_tensors.size() == 0 && vec_input_tensors.size() > 2) {
+            TT_THROW(
+                "You have more than one std::vector<Tensor> input parameters in the invoke. Only one vector is "
+                "allowed");
+        }
+
+        auto& input_tensors = ten_input_tensors.size() > 0 ? ten_input_tensors : vec_input_tensors[0];
 
         auto output_tensors = detail::create_async_output_tensors<operation_t, execute_on_worker_thread_return_t>(
             input_tensors, optional_input_tensors, args...);
