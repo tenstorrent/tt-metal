@@ -935,7 +935,7 @@ def run_llama3_demo(
         ),
     ],
     ids=[
-        "reasoning-1",
+        "reasoning-1",  # reasoning
         "batch-1",  # latency
         "batch-32",  # throughput
         "long-context",  # max-length
@@ -974,7 +974,9 @@ def test_llama_demo(
     is_ci_env,
     reset_seeds,
 ):
-    if is_ci_env and ("long" in input_prompts or optimizations == LlamaOptimizations.accuracy):
+    if is_ci_env and (
+        "long" in input_prompts or "reasoning" in input_prompts or optimizations == LlamaOptimizations.accuracy
+    ):
         pytest.skip("Do not run the 'long-context' or accuracy tests on CI to reduce load")
 
     # TODO: Remove this once all batch sizes are supported on TG
