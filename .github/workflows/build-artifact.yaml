@@ -139,6 +139,7 @@ jobs:
             -v /home/ubuntu/.ccache-ci:/home/ubuntu/.ccache
             -v /mnt/MLPerf/ccache:/mnt/MLPerf/ccache
             -e CARGO_HOME=${{ github.workspace }}/.cargo
+            -e TT_FROM_PRECOMPILED_DIR=${{ github.workspace }}
             -w ${{ github.workspace }}
           run: |
             set -eu # basic shell hygiene
@@ -163,7 +164,13 @@ jobs:
               { echo "!!! ALERT !!! This should never happen, but does explain an issue we've been hunting. Please send a link to this job to Metal Infra.  kthxbye."; exit 1; }
 
             nice -n 19 $build_command
+            nice -n 19 python -m build
             ccache -s > build/ccache.stats
+      - name: Upload distribution as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: eager-dist-${{ inputs.os }}-any
+          path: dist/
       - name: Publish Ccache summary
         run: |
           echo '## CCache Summary' >> $GITHUB_STEP_SUMMARY
