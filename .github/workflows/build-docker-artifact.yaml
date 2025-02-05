@@ -15,6 +15,10 @@ on:
         required: false
         type: string
         default: "amd64"
+      target:
+        required: false
+        type: string
+        default: "ci-test"
     outputs:
       ci-build-tag:
         description: "Docker tag for the CI Build Docker image for building TT-Metalium et al"
@@ -44,6 +48,16 @@ on:
         default: "amd64"
         options:
             - "amd64"
+      target:
+        required: false
+        type: choice
+        default: "ci-test"
+        options:
+            - "base"
+            - "ci-build"
+            - "ci-test"
+            - "dev"
+            - "release"
 
 env:
   IMAGE_NAME: ${{ inputs.distro }}-${{ inputs.version }}-${{ inputs.architecture }}
@@ -111,7 +125,7 @@ jobs:
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile
-          target: dev
+          target: ${{ inputs.target }}
           push: true
           tags: ${{ needs.check-docker-images.outputs.ci-build-tag }}
           build-args: UBUNTU_VERSION=${{ inputs.version }}
