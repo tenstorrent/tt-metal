@@ -14,6 +14,7 @@ from ttnn.device import (
     is_wormhole_b0,
 )
 import copy
+from enum import Enum
 
 
 def _nearest_32(x):
@@ -168,8 +169,8 @@ def convert_conv_weight_tensor_to_grouped_layout(conv_weight_tensor, num_groups,
     )
 
 
-def calculate_conv_height_split_params(
-    input_height: int,
+def calculate_conv_split_params(
+    input: int,
     num_input_slices: int,
     kernel_size: int,
     stride: int,
@@ -178,7 +179,8 @@ def calculate_conv_height_split_params(
 ) -> List[Tuple[int, int, int, int]]:
     # if input is sliced into num_input_slices, so is output
     # we use output slices to figure out where are they coming from input image
-    output_height = get_conv_output_dim(input_height, kernel_size, stride, padding, dilation)
+    # same calculus applies for width and height slicing
+    output_height = get_conv_output_dim(input, kernel_size, stride, padding, dilation)
     kernel_size_w_dilation = kernel_size + (kernel_size - 1) * (dilation - 1)
     output_values = []
     output_slice_height = output_height // num_input_slices
@@ -188,16 +190,12 @@ def calculate_conv_height_split_params(
 
         input_slice_height_start = output_slice_height_start * stride - padding
         input_slice_height_end = (output_slice_height_end - 1) * stride + kernel_size_w_dilation - padding
-        pad_top = max(0, -input_slice_height_start)
-        pad_bottom = max(0, input_slice_height_end - input_height)
+        pad_top_or_left = max(0, -input_slice_height_start)
+        pad_bottom_or_right = max(0, input_slice_height_end - input)
         input_slice_height_start = max(0, input_slice_height_start)
-        input_slice_height_end = min(input_height, input_slice_height_end)
-        output_values.append((input_slice_height_start, input_slice_height_end, pad_top, pad_bottom))
+        input_slice_height_end = min(input, input_slice_height_end)
+        output_values.append((input_slice_height_start, input_slice_height_end, pad_top_or_left, pad_bottom_or_right))
 
-    # TBD if we want this: merge last slice with previous it's less than H=32
-    # if output_values[-1][1] - output_values[-1][0] < 32:
-    #     output_values[-2] = (output_values[-2][0], output_values[-1][1], output_values[-2][2], output_values[-1][3])
-    #     output_values.pop()
     return output_values, output_height
 
 
@@ -262,8 +260,13 @@ def conv2d(
         return conv_output
 
 
-@ttnn.register_python_operation(name="ttnn.conv2d_sliced")
-def conv2d_sliced(
+class DramSlice(Enum):
+    Width = "width"
+    Height = "height"
+
+
+@ttnn.register_python_operation(name="ttnn.conv2d_dram_slice")
+def conv2d_dram_slice(
     *,
     input_tensor: ttnn.Tensor,  # may or may not be sharded
     weight_tensor: ttnn.Tensor,
@@ -274,6 +277,7 @@ def conv2d_sliced(
     input_height: int,
     input_width: int,
     num_input_slices: int,
+    dram_slice: DramSlice = DramSlice.Height,
     kernel_size: Union[int, Tuple[int, int]],
     stride: Union[int, Tuple[int, int]],
     padding: Union[int, Tuple[int, int]],
@@ -325,9 +329,16 @@ def conv2d_sliced(
     if input_tensor.storage_type() != ttnn.StorageType.DEVICE:
         input_tensor = ttnn.to_device(input_tensor, device)
 
-    conv_height_split_params, conv_output_height = calculate_conv_height_split_params(
-        input_height, num_input_slices, kernel_size[0], stride[0], padding[0], dilation[0]
-    )
+    if dram_slice == DramSlice.Height:
+        conv_slice_params, conv_output_height = calculate_conv_split_params(
+            input_height, num_input_slices, kernel_size[0], stride[0], padding[0], dilation[0]
+        )
+        conv_output_width = get_conv_output_dim(input_width, kernel_size[1], stride[1], padding[1], dilation[1])
+    else:
+        conv_slice_params, conv_output_width = calculate_conv_split_params(
+            input_width, num_input_slices, kernel_size[1], stride[1], padding[1], dilation[0]
+        )
+        conv_output_height = get_conv_output_dim(input_height, kernel_size[0], stride[0], padding[0], dilation[0])
 
     # Prepare conv config for slices
     # conv2d_config_for_slices = copy.deepcopy(conv_config) # this is impossible
@@ -336,20 +347,38 @@ def conv2d_sliced(
     conv_output_tensor = None
     conv_prepared_device_weight = None
     conv_prepared_device_bias = None
-    conv_output_width = 0
 
-    for input_slice_height_start, input_slice_height_end, pad_top, pad_bottom in conv_height_split_params:
+    for input_slice_start, input_slice_end, pad_start, pad_end in conv_slice_params:
+        if dram_slice == DramSlice.Height:
+            slice_starts = (0, input_slice_start, 0, 0)
+            slice_ends = (batch_size, input_slice_end, input_width, in_channels)
+            pad_width = (0, 0)
+            pad_height = (pad_start, pad_end)
+            extra_padding = pad_start + pad_end
+            input_slice_height = input_slice_end - input_slice_start + pad_start + pad_end
+            input_slice_width = input_width
+            input_slice_padding = (0, padding[1])
+        else:
+            slice_starts = (0, 0, input_slice_start, 0)
+            slice_ends = (batch_size, input_height, input_slice_end, in_channels)
+            pad_width = (pad_start, pad_end)
+            pad_height = (0, 0)
+            extra_padding = pad_start + pad_end
+            input_slice_height = input_height
+            input_slice_width = input_slice_end - input_slice_start + pad_start + pad_end
+            input_slice_padding = (padding[0], 0)
+
         input_tensor_slice = ttnn.slice(
             input_tensor,
-            starts=(0, input_slice_height_start, 0, 0),
-            ends=(batch_size, input_slice_height_end, input_width, in_channels),
+            starts=slice_starts,
+            ends=slice_ends,
             steps=(1, 1, 1, 1),
         )
 
-        if pad_top or pad_bottom:
+        if extra_padding > 0:
             input_tensor_slice = ttnn.pad(
                 input_tensor_slice,
-                padding=((0, 0), (pad_top, pad_bottom), (0, 0), (0, 0)),
+                padding=((0, 0), pad_height, pad_width, (0, 0)),
                 value=0,
             )
         # Move to [1, 1, N * H * W, C] format
@@ -363,7 +392,7 @@ def conv2d_sliced(
         (
             conv_output_slice,
             conv_output_height_slice,
-            output_width,
+            conv_output_width_slice,
             prepared_device_weight,
             prepared_device_bias,
         ) = ttnn._ttnn.operations.conv.conv2d(
@@ -373,11 +402,11 @@ def conv2d_sliced(
             in_channels=in_channels,
             out_channels=out_channels,
             batch_size=batch_size,
-            input_height=input_slice_height_end - input_slice_height_start + pad_top + pad_bottom,
-            input_width=input_width,
+            input_height=input_slice_height,
+            input_width=input_slice_width,
             kernel_size=kernel_size,
             stride=stride,
-            padding=(0, padding[1]),
+            padding=input_slice_padding,
             dilation=dilation,
             groups=groups,
             bias_tensor=bias_tensor if conv_prepared_device_bias is None else conv_prepared_device_bias,
@@ -392,13 +421,28 @@ def conv2d_sliced(
         conv_output_slice = ttnn.to_layout(conv_output_slice, ttnn.ROW_MAJOR_LAYOUT)
         conv_output_slice = ttnn.to_memory_config(conv_output_slice, ttnn.DRAM_MEMORY_CONFIG)
 
+        if dram_slice == DramSlice.Width:
+            # As it is width sliced, restore it back to [N, H, W, C] format to allow mid results concat
+            # Expect conv_output_slice tensor to be in [1, 1, N * H * W, C] format
+            conv_output_slice = conv_output_slice.reshape(
+                batch_size, conv_output_height_slice, conv_output_width_slice, -1
+            )
+
         if conv_output_tensor is None:
             conv_output_tensor = conv_output_slice
             conv_prepared_device_weight = prepared_device_weight
             conv_prepared_device_bias = prepared_device_bias
-            conv_output_width = output_width
         else:
             conv_output_tensor = ttnn.concat([conv_output_tensor, conv_output_slice], dim=2)
+
+    if dram_slice == DramSlice.Width:
+        # Set output tensor to be in [1, 1, N * H * W, C] format
+        conv_output_tensor = conv_output_tensor.reshape(
+            1,
+            1,
+            conv_output_tensor.shape[0] * conv_output_tensor.shape[1] * conv_output_tensor.shape[2],
+            conv_output_tensor.shape[3],
+        )
 
     # Restore input tensor to be in [1, 1, N * H * W, C] format
     input_tensor = input_tensor.reshape(
