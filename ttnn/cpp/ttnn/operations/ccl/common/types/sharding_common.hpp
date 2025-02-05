@@ -4,9 +4,9 @@
 
 // File contains enumerations that are common to both kernel and program factories with regards to sharding
 
-namespace ttnn::ccl::common::shard_addr_gen_utils {
+namespace shard_addr_gen_consts {
 
-enum class Contiguity_types {
+enum class ContiguityType {
     // Indicates logical sharding placed padding between pages so no contiguous pages exist
     PADDING_BETWEEN_PAGES = 0,
     // Indicates some padding exists in the rightmost shard since the pages did not divide evenly into shards
@@ -22,4 +22,4 @@ enum class ShardingLayout {
     BLOCK_SHARDED,
 };
 
-}  // namespace ttnn::ccl::common::shard_addr_gen_utils
+}  // namespace shard_addr_gen_consts

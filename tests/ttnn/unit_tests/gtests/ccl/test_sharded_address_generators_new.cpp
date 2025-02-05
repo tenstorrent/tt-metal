@@ -111,17 +111,15 @@ void run_full_block_test(ADDRgen addrgen, ADDRgenInfo constants, uint32_t bank_b
 }
 
 TEST(CclnewWidthShardedTensorSliceIndexer_Wormhole, width_sharded_test) {
-    constexpr std::size_t shard_type =
-        static_cast<uint32_t>(ttnn::ccl::common::shard_addr_gen_utils::ShardingLayout::WIDTH_SHARDED);
+    constexpr std::size_t shard_type = static_cast<uint32_t>(shard_addr_gen_consts::ShardingLayout::WIDTH_SHARDED);
     constexpr std::size_t number_of_cores = 8;
     constexpr std::size_t page_size_jump = 1024;
     constexpr std::size_t pages_per_tensor_row = 32;
-    constexpr std::size_t contiguity =
-        static_cast<uint32_t>(ttnn::ccl::common::shard_addr_gen_utils::Contiguity_types::NO_SHARD_PADDING);
+    constexpr std::size_t contiguity = static_cast<uint32_t>(shard_addr_gen_consts::ContiguityType::NO_SHARD_PADDING);
     constexpr std::size_t pages_per_shard_width = 6;
     constexpr std::size_t rows_per_shard_height = 1;
     constexpr std::size_t tensor_address = 0x100000;
-    using ct_shard_info = Sharded_Info<
+    using ct_shard_info = ShardedInfo<
         shard_type,
         number_of_cores,
         page_size_jump,
@@ -136,22 +134,25 @@ TEST(CclnewWidthShardedTensorSliceIndexer_Wormhole, width_sharded_test) {
 }
 
 TEST(CclnewHeightShardedTensorSliceIndexer_Wormhole, height_sharded_test) {
-    static constexpr std::size_t shard_type = static_cast<uint32_t>(ttnn::ccl::common::shard_addr_gen_utils::ShardingLayout::HEIGHT_SHARDED);
+    static constexpr std::size_t shard_type =
+        static_cast<uint32_t>(shard_addr_gen_consts::ShardingLayout::HEIGHT_SHARDED);
     static constexpr std::size_t number_of_cores = 4;
     static constexpr std::size_t page_size_jump = 1024;
     static constexpr std::size_t pages_per_tensor_row = 32;
-    static constexpr std::size_t contiguity = static_cast<uint32_t>(ttnn::ccl::common::shard_addr_gen_utils::Contiguity_types::NO_SHARD_PADDING);
+    static constexpr std::size_t contiguity =
+        static_cast<uint32_t>(shard_addr_gen_consts::ContiguityType::NO_SHARD_PADDING);
     static constexpr std::size_t pages_per_shard_width = 1;
     static constexpr std::size_t rows_per_shard_height = 8;
     static constexpr std::size_t tensor_address = 0x100000;
-    typedef Sharded_Info<
+    typedef ShardedInfo<
         shard_type,
         number_of_cores,
         page_size_jump,
         pages_per_tensor_row,
         contiguity,
         pages_per_shard_width,
-        rows_per_shard_height> ct_shard_info;
+        rows_per_shard_height>
+        ct_shard_info;
     auto info_var = ct_shard_info{};
     experimental::ShardedAddrGen<ct_shard_info> addrgen = {
         .bank_base_address = tensor_address, .shard_array = sharding_testing_parameters::map};
@@ -160,22 +161,24 @@ TEST(CclnewHeightShardedTensorSliceIndexer_Wormhole, height_sharded_test) {
 
 TEST(CclnewBlockShardedTensorSliceIndexer_Wormhole, block_sharded_test) {
     static constexpr std::size_t shard_type =
-        static_cast<uint32_t>(ttnn::ccl::common::shard_addr_gen_utils::ShardingLayout::BLOCK_SHARDED);
+        static_cast<uint32_t>(shard_addr_gen_consts::ShardingLayout::BLOCK_SHARDED);
     static constexpr std::size_t number_of_cores = 16;
     static constexpr std::size_t page_size_jump = 1024;
     static constexpr std::size_t pages_per_tensor_row = 32;
-    static constexpr std::size_t contiguity = static_cast<uint32_t>(ttnn::ccl::common::shard_addr_gen_utils::Contiguity_types::NO_SHARD_PADDING);
+    static constexpr std::size_t contiguity =
+        static_cast<uint32_t>(shard_addr_gen_consts::ContiguityType::NO_SHARD_PADDING);
     static constexpr std::size_t pages_per_shard_width = 8;
     static constexpr std::size_t rows_per_shard_height = 8;
     static constexpr std::size_t tensor_address = 0x1000000;
-    typedef Sharded_Info<
+    typedef ShardedInfo<
         shard_type,
         number_of_cores,
         page_size_jump,
         pages_per_tensor_row,
         contiguity,
         pages_per_shard_width,
-        rows_per_shard_height> ct_shard_info;
+        rows_per_shard_height>
+        ct_shard_info;
     auto info_var = ct_shard_info{};
     experimental::ShardedAddrGen<ct_shard_info> addrgen = {
         .bank_base_address = tensor_address, .shard_array = sharding_testing_parameters::map};

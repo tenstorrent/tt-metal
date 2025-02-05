@@ -60,63 +60,63 @@ constexpr uint32_t cb1_id = get_compile_time_arg_val(9);
 #ifdef TENSOR0_SHARDED_MEM_LAYOUT
 #ifdef SINGLE_TENSOR
 // SINGLE INPUT MODE - SHARDED
-    typedef Sharded_Info<
+    using Tensor0ShardInfo = ShardedInfo<
         get_compile_time_arg_val(6),
         get_compile_time_arg_val(7),
         get_compile_time_arg_val(8),
         get_compile_time_arg_val(9),
         get_compile_time_arg_val(10),
         get_compile_time_arg_val(11),
-        get_compile_time_arg_val(12)> tensor0_shard_info;
+        get_compile_time_arg_val(12)>;
 #else
 // TWO INPUT MODE
-    typedef Sharded_Info<
+    using Tensor0ShardInfo = ShardedInfo<
         get_compile_time_arg_val(10),
         get_compile_time_arg_val(11),
         get_compile_time_arg_val(12),
         get_compile_time_arg_val(13),
         get_compile_time_arg_val(14),
         get_compile_time_arg_val(15),
-        get_compile_time_arg_val(16)> tensor0_shard_info;
+        get_compile_time_arg_val(16)>;
 
 #endif
-constexpr tensor0_shard_info test_object {};
+constexpr Tensor0ShardInfo test_object {};
 static_assert(test_object.number_of_cores > 0, "Misconfigured sharded addrgen fields for tensor0. Field \"number_of_cores\" was resolved to 0 but it must not be 0.");
 static_assert(test_object.page_size_jump > 0, "Misconfigured sharded addrgen fields for tensor0. Field \"page_size_jump\" was resolved to 0 but it must not be 0.");
 static_assert(test_object.pages_per_tensor_row > 0, "Misconfigured sharded addrgen fields for tensor0. Field \"pages_per_tensor_row\" was resolved to 0 but it must not be 0.");
 #else
-typedef Sharded_Info<0,0,0,0,0,0,0> tensor0_shard_info;
+using Tensor0ShardInfo = ShardedInfo<0,0,0,0,0,0,0>;
 #endif
 
 #ifndef SINGLE_TENSOR
 #if defined(TENSOR1_SHARDED_MEM_LAYOUT)
 #if defined(TENSOR0_SHARDED_MEM_LAYOUT)
-  typedef Sharded_Info<
+  using Tensor1ShardInfo = ShardedInfo<
         get_compile_time_arg_val(17),
         get_compile_time_arg_val(18),
         get_compile_time_arg_val(19),
         get_compile_time_arg_val(20),
         get_compile_time_arg_val(21),
         get_compile_time_arg_val(22),
-        get_compile_time_arg_val(23)> tensor1_shard_info;
+        get_compile_time_arg_val(23)>;
 #else
 // Then we are only consuming ct args for second operand and we resume from operation 8
-    typedef Sharded_Info<
+    using Tensor1ShardInfo = ShardedInfo<
         get_compile_time_arg_val(10),
         get_compile_time_arg_val(11),
         get_compile_time_arg_val(12),
         get_compile_time_arg_val(13),
         get_compile_time_arg_val(14),
         get_compile_time_arg_val(15),
-        get_compile_time_arg_val(16)> tensor1_shard_info;
+        get_compile_time_arg_val(16)>;
 #endif
 
-constexpr tensor1_shard_info test_object2 {};
+constexpr Tensor1ShardInfo test_object2 {};
 static_assert(test_object2.number_of_cores > 0, "Misconfigured sharded addrgen fields for tensor1. Field \"number_of_cores\" was resolved to 0 but it must not be 0.");
 static_assert(test_object2.page_size_jump > 0, "Misconfigured sharded addrgen fields for tensor1. Field \"page_size_jump\" was resolved to 0 but it must not be 0.");
 static_assert(test_object2.pages_per_tensor_row > 0, "Misconfigured sharded addrgen fields for tensor1. Field \"pages_per_tensor_row\" was resolved to 0 but it must not be 0.");
 #else
-typedef Sharded_Info<0,0,0,0,0,0,0> tensor1_shard_info;
+typedef ShardedInfo<0,0,0,0,0,0,0> Tensor1ShardInfo;
 #endif
 #endif
 
@@ -928,8 +928,9 @@ void kernel_main() {
 
     auto tensor0_addrgen =
 #ifndef NO_TENSOR_MODE
-        build_source_address_generator<tensor0_layout, buffer0_type, tensor0_page_layout,tensor0_shard_info>(
-            arg_idx, tensor_address0, tensor0_page_size, cb0_id);
+        build_source_address_generator
+            <tensor0_layout, buffer0_type, tensor0_page_layout,Tensor0ShardInfo>
+            (arg_idx, tensor_address0, tensor0_page_size, cb0_id);
 #else
         no_addrgen{};
 #endif
@@ -937,8 +938,9 @@ void kernel_main() {
 #if !defined(SINGLE_INPUT_MODE)
     auto tensor1_addrgen =
 #if !defined(NO_TENSOR_MODE) && !defined(SINGLE_TENSOR)
-        build_source_address_generator<tensor1_layout, buffer1_type, tensor1_page_layout,tensor1_shard_info>(
-            arg_idx, tensor_address1, tensor1_page_size, cb1_id);
+        build_source_address_generator
+            <tensor1_layout, buffer1_type, tensor1_page_layout, Tensor1ShardInfo>
+            (arg_idx, tensor_address1, tensor1_page_size, cb1_id);
 #else
         no_addrgen{};
 #endif

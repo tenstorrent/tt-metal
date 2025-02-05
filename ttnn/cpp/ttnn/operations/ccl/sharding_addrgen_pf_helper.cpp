@@ -6,7 +6,7 @@
 #include "cpp/ttnn/tensor/tensor.hpp"
 #include "cpp/ttnn/operations/ccl/sharding_addrgen_pf_helper.hpp"
 
-enum class Contiguity_types {
+enum class ContiguityType {
     PADDING_BETWEEN_PAGES = 0,
     PADDING_IN_RIGHTMOST_SHARD,
     NO_SHARD_PADDING,
@@ -156,12 +156,12 @@ std::vector<uint32_t> sharding_ct_table_builder(const tt::tt_metal::IDevice* dev
     const auto& [pages_per_shard_y, pages_per_shard_x] = buf_shard_spec.shape_in_pages();
     // contiguity is 0 if there is padding between unaligned page, 1 if there is padding in the rightmost shard, and 2
     // otherwise
-    ttnn::ccl::common::shard_addr_gen_utils::Contiguity_types contiguity =
+    shard_addr_gen_consts::ContiguityType contiguity =
         (t.buffer()->aligned_page_size() != t.buffer()->page_size())
-            ? ttnn::ccl::common::shard_addr_gen_utils::Contiguity_types::PADDING_BETWEEN_PAGES
+            ? shard_addr_gen_consts::ContiguityType::PADDING_BETWEEN_PAGES
         : (buf_shard_spec.tensor2d_shape[1] == (pages_per_shard_x * get_sharding_core_count(t)))
-            ? ttnn::ccl::common::shard_addr_gen_utils::Contiguity_types::NO_SHARD_PADDING
-            : ttnn::ccl::common::shard_addr_gen_utils::Contiguity_types::PADDING_IN_RIGHTMOST_SHARD;
+            ? shard_addr_gen_consts::ContiguityType::NO_SHARD_PADDING
+            : shard_addr_gen_consts::ContiguityType::PADDING_IN_RIGHTMOST_SHARD;
     args.push_back(static_cast<uint32_t>(t.memory_config().memory_layout));  // Memory layout
     args.push_back(static_cast<uint32_t>(get_sharding_core_count(t)));       // The number of sharding cores
     args.push_back(static_cast<uint32_t>(t.buffer()->aligned_page_size()));  // The page size we offset each write to
