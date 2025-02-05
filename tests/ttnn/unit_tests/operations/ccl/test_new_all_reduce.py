@@ -121,6 +121,7 @@ def run_all_reduce_impl(
             ),
         )
 
+        logger.info(f"Input shape: {input_shape[2:]}, Padded shape: {[M, N_per_shard * input_num_cores]}")
         input_tensor = torch.randn(input_shape)
         tt_input_tensor = ttnn.from_torch(
             input_tensor,
@@ -206,10 +207,9 @@ def run_all_reduce_impl(
 @pytest.mark.parametrize(
     "output_shape, cluster_axis, num_links, input_num_cores, output_num_cores",
     [
-        ([1, 1, 32, 1536], 1, 1, 24, 8),  # QKV all reduce
-        ([1, 1, 32, 3840], 1, 1, 24, 24),  # FF1 all reduce
-        # TODO: Use unpadded shapes and output to 16
-        ([1, 1, 32, 2304], 0, 1, 24, 8),  # FF2/DO all reduce
+        ([1, 1, 32, 1280], 1, 1, 24, 8),  # QKV all reduce
+        ([1, 1, 32, 3584], 1, 1, 24, 24),  # FF1 all reduce
+        ([1, 1, 32, 2048], 0, 1, 24, 16),  # FF2/DO all reduce
     ],
 )
 @pytest.mark.parametrize(
