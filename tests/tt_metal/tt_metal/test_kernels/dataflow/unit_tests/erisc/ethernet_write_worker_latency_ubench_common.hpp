@@ -196,7 +196,8 @@ FORCE_INLINE void write_worker(
     uint32_t message_size,
     uint32_t curr_trid_to_write) {
     // write to local
-    noc_async_write_one_packet_with_trid(buffer_slot_addr, worker_noc_addr, message_size, curr_trid_to_write);
+    noc_async_write_one_packet_with_trid_with_state(
+        buffer_slot_addr, worker_noc_addr, message_size, curr_trid_to_write);
 
     // reset sync
     buffer_slot_sync_addr->bytes_sent = 0;

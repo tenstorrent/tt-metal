@@ -18,6 +18,8 @@ FORCE_INLINE void main_loop_uni_dir(
     uint32_t receiver_buffer_write_ptr = 0;
     uint32_t receiver_num_messages_ack = 0;
 
+    noc_async_write_one_packet_with_trid_set_state(worker_noc_addr);
+
     while (receiver_num_messages_ack < total_msgs) {
         update_receiver_state(
             receiver_buffer_slot_addrs,
@@ -53,6 +55,8 @@ FORCE_INLINE void main_loop_bi_dir(
     uint32_t receiver_buffer_write_ptr = 0;
 
     uint32_t num_messages_ack = 0;
+
+    noc_async_write_one_packet_with_trid_set_state(worker_noc_addr);
 
     while (num_messages_ack < total_msgs) {
         update_sender_state(
