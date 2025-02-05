@@ -197,8 +197,8 @@ class resnet50Bottleneck:
                     enable_subblock_padding=enable_subblock_padding,
                 ),
             }
-            if is_blackhole():
-                conv_kwargs["conv_config"].enable_split_reader = False
+            # if is_blackhole():
+            #     conv_kwargs["conv_config"].enable_split_reader = False
 
             if not ttnn.is_tensor_storage_on_device(self.ds_conv_weight_tensor):
                 self.ds_conv_weight_tensor = ttnn.prepare_conv_weights(
@@ -292,8 +292,8 @@ class resnet50Bottleneck:
                 transpose_shards=transpose_shards,
             ),
         }
-        if is_blackhole():
-            conv_kwargs_1["conv_config"].enable_split_reader = False
+        # if is_blackhole():
+        #     conv_kwargs_1["conv_config"].enable_split_reader = False
 
         if not ttnn.is_tensor_storage_on_device(self.conv1_weight_tensor):
             self.conv1_weight_tensor = ttnn.prepare_conv_weights(
@@ -415,7 +415,7 @@ class resnet50Bottleneck:
         if is_blackhole():
             conv_kwargs_2["conv_config"].act_block_h_override = 2 * 32
             conv_kwargs_2["conv_config"].enable_subblock_padding = False
-            conv_kwargs_2["conv_config"].enable_split_reader = False
+            # conv_kwargs_2["conv_config"].enable_split_reader = False
 
         if not ttnn.is_tensor_storage_on_device(self.conv2_weight_tensor):
             self.conv2_weight_tensor = ttnn.prepare_conv_weights(
@@ -485,8 +485,8 @@ class resnet50Bottleneck:
                 transpose_shards=transpose_shards,
             ),
         }
-        if is_blackhole():
-            conv_kwargs_3["conv_config"].enable_split_reader = False
+        # if is_blackhole():
+        #     conv_kwargs_3["conv_config"].enable_split_reader = False
 
         if not ttnn.is_tensor_storage_on_device(self.conv3_weight_tensor):
             self.conv3_weight_tensor = ttnn.prepare_conv_weights(
@@ -699,10 +699,10 @@ class resnet50:
                 self.conv1_config.act_block_h_override = 64
             else:
                 self.conv1_config.act_block_h_override = 49 * 32
-        if is_blackhole():
-            # self.conv1_config.act_block_h_override = 7 * 32
-            # self.conv1_config.act_block_h_override = 2 * 32
-            self.conv1_config.enable_split_reader = False
+        # if is_blackhole():
+        #     # self.conv1_config.act_block_h_override = 7 * 32
+        #     # self.conv1_config.act_block_h_override = 2 * 32
+        #     self.conv1_config.enable_split_reader = False
 
         self.conv1_kernel_size = (4, 4)
         self.conv1_stride = (1, 1)
