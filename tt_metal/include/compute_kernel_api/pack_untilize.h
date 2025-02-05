@@ -25,7 +25,7 @@ ALWI void pack_untilize_init(uint32_t icb, uint32_t ocb) {
     MATH((llk_math_hw_configure_disaggregated<true>(icb, icb)));
 
     PACK((llk_pack_hw_configure_disaggregated<false, DST_ACCUM_MODE>(ocb)));
-    PACK((llk_pack_untilize_init<DST_ACCUM_MODE, block_ct_dim, full_ct_dim>(ocb)));
+    PACK((llk_pack_untilize_init<block_ct_dim, full_ct_dim>(ocb)));
     PACK((llk_pack_dest_init<true, DST_ACCUM_MODE>()));
 
     UNPACK((llk_unpack_A_hw_configure_disaggregated<DST_ACCUM_MODE>(icb)));
