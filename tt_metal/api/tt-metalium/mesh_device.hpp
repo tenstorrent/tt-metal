@@ -154,7 +154,6 @@ public:
     void initialize_and_launch_firmware() override;
     void init_command_queue_host() override;
     void init_command_queue_device() override;
-    void update_dispatch_cores_for_multi_cq_eth_dispatch() override;
     bool close() override;
     void enable_async(bool enable) override;
     void synchronize() override;
