@@ -184,9 +184,8 @@ jobs:
           nice -19 cmake --build build --target install
 
       - name: 📦 Package
-        if: false # Packaging coming later
         run: |
-          nice -19 cmake --build $build_dir --target package
+          nice -n 19 cmake --build build --target package
 
       - name: 🐍 Build wheel
         if: ${{ inputs.build-wheel }}

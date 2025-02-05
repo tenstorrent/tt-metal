@@ -47,6 +47,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     clang-tidy-17 \
     curl \
     dialog \
+    file \
     graphviz \
     jq \
     pandoc \
