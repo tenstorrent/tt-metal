@@ -134,7 +134,7 @@ operation::ProgramWithCallbacks all_gather_async_minimal_interleaved_dim3_1_1_32
     const uint32_t ring_size,
     const uint32_t ring_index,
     ccl::Topology topology,
-    const GlobalSemaphore semaphore,
+    const GlobalSemaphore& semaphore,
     const std::optional<SubDeviceId>& sub_device_id,
     bool enable_persistent_fabric_mode);
 operation::ProgramWithCallbacks all_gather_async_llama_post_binary_matmul(
@@ -147,7 +147,7 @@ operation::ProgramWithCallbacks all_gather_async_llama_post_binary_matmul(
     const uint32_t ring_size,
     const uint32_t ring_index,
     ccl::Topology topology,
-    const GlobalSemaphore semaphore,
+    const GlobalSemaphore& semaphore,
     const std::optional<SubDeviceId>& sub_device_id,
     bool enable_persistent_fabric_mode);
 

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 ///
@@ -33,6 +33,25 @@ namespace ttnn {
 
 using namespace ccl;
 
+void append_fabric_connection_rt_args(
+    const std::optional<ttnn::ccl::SenderWorkerAdapterSpec>& connection,
+    const CoreCoord& core,
+    tt::tt_metal::Program& program,
+    std::vector<uint32_t>& writer_rt_args) {
+    writer_rt_args.push_back(connection.has_value());
+    if (connection.has_value()) {
+        auto sender_worker_flow_control_semaphore_id = CreateSemaphore(program, {core}, 0);
+        auto sender_worker_teardown_semaphore_id = CreateSemaphore(program, {core}, 0);
+        auto sender_worker_buffer_index_semaphore_id = CreateSemaphore(program, {core}, 0);
+        append_worker_to_fabric_edm_sender_rt_args(
+            connection.value(),
+            sender_worker_flow_control_semaphore_id,
+            sender_worker_teardown_semaphore_id,
+            sender_worker_buffer_index_semaphore_id,
+            writer_rt_args);
+    }
+}
+
 operation::ProgramWithCallbacks all_gather_async_minimal_interleaved_dim3_1_1_32_any(
     const Tensor& input_tensor,
     std::optional<IDevice*> forward_device,
@@ -43,7 +62,7 @@ operation::ProgramWithCallbacks all_gather_async_minimal_interleaved_dim3_1_1_32
     const uint32_t ring_size,
     const uint32_t ring_index,
     ccl::Topology topology,
-    const GlobalSemaphore semaphore,
+    const GlobalSemaphore& semaphore,
     const std::optional<SubDeviceId>& sub_device_id,
     bool enable_persistent_fabric_mode) {
     tt::tt_metal::Program program{};
@@ -98,7 +117,7 @@ operation::ProgramWithCallbacks all_gather_async_minimal_interleaved_dim3_1_1_32
             .set_page_size(src0_cb_index, l1_scratch_cb_page_size_bytes);
     CBHandle cb_src0_workers = CreateCircularBuffer(program, sender_worker_core_range, cb_src0_config);
     // Set aside a buffer we can use for storing packet headers in (particularly for atomic incs)
-    const auto reserved_packet_header_CB_index = tt::CB::c_in6;
+    const auto reserved_packet_header_CB_index = tt::CB::c_in1;
     static constexpr auto num_packet_headers_storable = 8;
     static constexpr auto packet_header_size_bytes = sizeof(tt::fabric::PacketHeader);
     tt::tt_metal::CircularBufferConfig cb_reserved_packet_header_config =
@@ -220,30 +239,8 @@ operation::ProgramWithCallbacks all_gather_async_minimal_interleaved_dim3_1_1_32
         for (const auto& arg : writer_rt_args) {
             log_trace(tt::LogOp, "\t{}", arg);
         }
-        writer_rt_args.push_back(forward_fabric_connection.has_value());
-        if (forward_fabric_connection.has_value()) {
-            auto sender_worker_flow_control_semaphore_id = CreateSemaphore(program, {core}, 0);
-            auto sender_worker_teardown_semaphore_id = CreateSemaphore(program, {core}, 0);
-            auto sender_worker_buffer_index_semaphore_id = CreateSemaphore(program, {core}, 0);
-            append_worker_to_fabric_edm_sender_rt_args(
-                forward_fabric_connection.value(),
-                sender_worker_flow_control_semaphore_id,
-                sender_worker_teardown_semaphore_id,
-                sender_worker_buffer_index_semaphore_id,
-                writer_rt_args);
-        }
-        writer_rt_args.push_back(backward_fabric_connection.has_value());
-        if (backward_fabric_connection.has_value()) {
-            auto sender_worker_flow_control_semaphore_id = CreateSemaphore(program, {core}, 0);
-            auto sender_worker_teardown_semaphore_id = CreateSemaphore(program, {core}, 0);
-            auto sender_worker_buffer_index_semaphore_id = CreateSemaphore(program, {core}, 0);
-            append_worker_to_fabric_edm_sender_rt_args(
-                backward_fabric_connection.value(),
-                sender_worker_flow_control_semaphore_id,
-                sender_worker_teardown_semaphore_id,
-                sender_worker_buffer_index_semaphore_id,
-                writer_rt_args);
-        }
+        append_fabric_connection_rt_args(forward_fabric_connection, core, program, writer_rt_args);
+        append_fabric_connection_rt_args(backward_fabric_connection, core, program, writer_rt_args);
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
     }
 
@@ -288,7 +285,7 @@ operation::ProgramWithCallbacks all_gather_async_llama_post_binary_matmul(
     const uint32_t ring_size,
     const uint32_t ring_index,
     ccl::Topology topology,
-    const GlobalSemaphore semaphore,
+    const GlobalSemaphore& semaphore,
     const std::optional<SubDeviceId>& sub_device_id,
     bool enable_persistent_fabric_mode) {
     tt::tt_metal::Program program{};
@@ -361,7 +358,7 @@ operation::ProgramWithCallbacks all_gather_async_llama_post_binary_matmul(
             .set_page_size(src0_cb_index, l1_scratch_cb_page_size_bytes);
     CBHandle cb_src0_workers = CreateCircularBuffer(program, sender_worker_core_range, cb_src0_config);
     // Set aside a buffer we can use for storing packet headers in (particularly for atomic incs)
-    const auto reserved_packet_header_CB_index = tt::CB::c_in6;
+    const auto reserved_packet_header_CB_index = tt::CB::c_in1;
     static constexpr auto num_packet_headers_storable = 8;
     static constexpr auto packet_header_size_bytes = sizeof(tt::fabric::PacketHeader);
     tt::tt_metal::CircularBufferConfig cb_reserved_packet_header_config =
@@ -523,30 +520,8 @@ operation::ProgramWithCallbacks all_gather_async_llama_post_binary_matmul(
         for (const auto& arg : writer_rt_args) {
             log_trace(tt::LogOp, "\t{}", arg);
         }
-        writer_rt_args.push_back(forward_fabric_connection.has_value());
-        if (forward_fabric_connection.has_value()) {
-            auto sender_worker_flow_control_semaphore_id = CreateSemaphore(program, {core}, 0);
-            auto sender_worker_teardown_semaphore_id = CreateSemaphore(program, {core}, 0);
-            auto sender_worker_buffer_index_semaphore_id = CreateSemaphore(program, {core}, 0);
-            append_worker_to_fabric_edm_sender_rt_args(
-                forward_fabric_connection.value(),
-                sender_worker_flow_control_semaphore_id,
-                sender_worker_teardown_semaphore_id,
-                sender_worker_buffer_index_semaphore_id,
-                writer_rt_args);
-        }
-        writer_rt_args.push_back(backward_fabric_connection.has_value());
-        if (backward_fabric_connection.has_value()) {
-            auto sender_worker_flow_control_semaphore_id = CreateSemaphore(program, {core}, 0);
-            auto sender_worker_teardown_semaphore_id = CreateSemaphore(program, {core}, 0);
-            auto sender_worker_buffer_index_semaphore_id = CreateSemaphore(program, {core}, 0);
-            append_worker_to_fabric_edm_sender_rt_args(
-                backward_fabric_connection.value(),
-                sender_worker_flow_control_semaphore_id,
-                sender_worker_teardown_semaphore_id,
-                sender_worker_buffer_index_semaphore_id,
-                writer_rt_args);
-        }
+        append_fabric_connection_rt_args(forward_fabric_connection, core, program, writer_rt_args);
+        append_fabric_connection_rt_args(backward_fabric_connection, core, program, writer_rt_args);
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
     }
 
