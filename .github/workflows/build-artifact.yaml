@@ -189,7 +189,7 @@ jobs:
         if: ${{ inputs.build_wheel }}
         uses: actions/upload-artifact@v4
         with:
-          name: eager-dist-${{ inputs.os }}-any
+          name: eager-dist-${{ inputs.distro }}-${{ inputs.version }}-any
           path: dist/
       - name: Publish Ccache summary
         run: |
