@@ -62,6 +62,8 @@ def test_tt_final_layer_inference(mesh_device, use_program_cache, reset_seeds):
         weight_cache_path=weight_cache_path,
         dtype=dtype,
         hidden_size=hidden_size,
+        patch_size=patch_size,
+        out_channels=out_channels,
     )
 
     # Create input tensors
@@ -91,7 +93,10 @@ def test_tt_final_layer_inference(mesh_device, use_program_cache, reset_seeds):
 
     # Output is already replicated
     tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[0:1]
-
+    # Shuffle output to match reference model
+    # (c p p) -> (p p c)
+    tt_output_torch = tt_output_torch.reshape(batch_size, seq_len, out_channels, patch_size, patch_size)
+    tt_output_torch = tt_output_torch.permute(0, 1, 3, 4, 2).reshape(batch_size, seq_len, -1)
     # Get reference output
     reference_output = reference_model(torch_x, torch_c)
 

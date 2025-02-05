@@ -74,7 +74,7 @@ class TtFeedForward(LightweightModule):
             compute_kernel_config=self.compute_kernel_config_hifi2,
             dtype=ttnn.bfloat16,
             memory_config=x_1BSD.memory_config(),
-            program_config=self.w13_config(m=S, n=D),
+            program_config=self.w13_config(m=S),
         )
         w3_out_1BSF = ttnn.linear(
             x_1BSD,

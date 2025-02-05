@@ -1,7 +1,8 @@
 import ttnn
+import torch
 from models.common.lightweightmodule import LightweightModule
 
-from models.experimental.mochi.common import col_parallel_linear, create_linear_layer
+from models.experimental.mochi.common import col_parallel_linear, create_linear_layer, as_replicated_tensor
 
 
 class TtFinalLayer(LightweightModule):
@@ -15,6 +16,8 @@ class TtFinalLayer(LightweightModule):
         weight_cache_path,
         dtype,
         hidden_size: int,
+        patch_size,
+        out_channels,
     ):
         super().__init__()
         self.mesh_device = mesh_device
@@ -43,14 +46,38 @@ class TtFinalLayer(LightweightModule):
             mesh_device=mesh_device,
         )
 
+        # Weight shape is (hidden_size (p p C))
+        # It should be (hidden_size (C p p))
+        # We transform it so the output dims match the input dims, allowing
+        # us to avoid more reshapes.
         # Create final linear layer
-        self.linear, self.linear_bias = create_linear_layer(
-            "linear",
-            weight_cache_path=weight_cache_path,
-            state_dict=state_dict,
-            state_dict_prefix=state_dict_prefix,
-            mesh_device=mesh_device,
+        linear_name = "linear"
+        weight_key = f"{state_dict_prefix}.{linear_name}.weight"
+        weight = torch.transpose(state_dict[weight_key], -2, -1)
+        weight = weight.reshape(hidden_size, patch_size, patch_size, out_channels)
+        weight = weight.permute(0, 3, 1, 2)
+        weight = weight.reshape(hidden_size, patch_size**2 * out_channels)
+
+        self.linear = as_replicated_tensor(
+            weight,
+            mesh_device,
+            cache_file_name=weight_cache_path / (state_dict_prefix + f".{linear_name}.weight"),
         )
+
+        bias_key = f"{state_dict_prefix}.{linear_name}.bias"
+        bias = state_dict.get(bias_key)  # Returns None if key doesn't exist
+
+        if bias is not None:
+            bias = bias.reshape(patch_size, patch_size, out_channels)
+            bias = bias.permute(2, 0, 1)
+            bias = bias.reshape(patch_size**2 * out_channels)
+            self.linear_bias = as_replicated_tensor(
+                bias,
+                mesh_device,
+                cache_file_name=weight_cache_path / (state_dict_prefix + f".{linear_name}.bias"),
+            )
+        else:
+            self.linear_bias = None
 
     def forward(self, x: ttnn.Tensor, c: ttnn.Tensor) -> ttnn.Tensor:
         """Forward pass of the final layer.

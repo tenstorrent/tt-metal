@@ -20,6 +20,7 @@ from genmo.mochi_preview.dit.joint_model.rope_mixed import (
     compute_mixed_rotation,
     create_position_matrix,
 )
+from models.experimental.mochi.embed import TtPatchEmbed
 
 
 class TtAsymmDiTJoint(LightweightModule):
@@ -68,16 +69,17 @@ class TtAsymmDiTJoint(LightweightModule):
         self.rope_theta = rope_theta
 
         # Create PyTorch embedders (these run on CPU) and load their weights
-        self.x_embedder = PatchEmbed(
+        self.x_embedder = TtPatchEmbed(
+            mesh_device=mesh_device,
+            state_dict=state_dict,
+            weight_cache_path=weight_cache_path,
+            dtype=ttnn.bfloat16,
             patch_size=patch_size,
             in_chans=in_channels,
             embed_dim=hidden_size_x,
             bias=patch_embed_bias,
+            state_dict_prefix="x_embedder",
         )
-        x_embedder_state_dict = {
-            k[len("x_embedder.") :]: v for k, v in state_dict.items() if k.startswith("x_embedder.")
-        }
-        self.x_embedder.load_state_dict(x_embedder_state_dict)
 
         self.t_embedder = TimestepEmbedder(hidden_size_x, bias=timestep_mlp_bias, timestep_scale=timestep_scale)
         t_embedder_state_dict = {
@@ -128,16 +130,119 @@ class TtAsymmDiTJoint(LightweightModule):
             weight_cache_path=weight_cache_path,
             dtype=ttnn.bfloat16,
             hidden_size=hidden_size_x,
+            patch_size=patch_size,
+            out_channels=in_channels,
         )
 
-    def prepare(
+    def prepare_text_features(self, t5_feat, t5_mask):
+        """
+        Prepare text features for the model.
+        """
+        assert t5_feat.size(1) == self.t5_token_length
+        t5_y_pool = self.t5_y_embedder(t5_feat, t5_mask)
+        y_feat_BLY = self.t5_yproj(t5_feat)
+
+        tt_y_feat_1BLY = to_tt_tensor(unsqueeze_to_4d(y_feat_BLY), self.mesh_device)  # Add dim for ttnn format
+        tt_y_pool_11BX = to_tt_tensor(unsqueeze_to_4d(t5_y_pool), self.mesh_device)
+
+        return tt_y_feat_1BLY, tt_y_pool_11BX
+
+    def prepare_rope_features(self, T, H, W):
+        pH, pW = H // self.patch_size, W // self.patch_size
+        N = T * pH * pW
+        pos = create_position_matrix(T, pH=pH, pW=pW, device="cpu", dtype=torch.float32)
+        rope_cos_NHD, rope_sin_NHD = compute_mixed_rotation(freqs=self.pos_frequencies, pos=pos)
+        rope_cos_1HND, rope_sin_1HND = stack_cos_sin(
+            rope_cos_NHD.unsqueeze(0).permute(0, 2, 1, 3), rope_sin_NHD.unsqueeze(0).permute(0, 2, 1, 3)
+        )
+
+        trans_mat = get_rot_transformation_mat(None)
+
+        tt_rope_cos_1HND = to_tt_tensor(unsqueeze_to_4d(rope_cos_1HND), self.mesh_device, shard_dim=-3)
+        tt_rope_sin_1HND = to_tt_tensor(unsqueeze_to_4d(rope_sin_1HND), self.mesh_device, shard_dim=-3)
+        tt_trans_mat = to_tt_tensor(trans_mat, self.mesh_device)
+
+        return tt_rope_cos_1HND, tt_rope_sin_1HND, tt_trans_mat
+
+    def prepare_step_independent(
+        self,
+        T,
+        H,
+        W,
+        t5_feat: torch.Tensor,
+        t5_mask: torch.Tensor,
+    ):
+        """
+        Prepare inputs for the model which don't change across steps.
+        - rope cos/sin
+        - transformation mat
+        - y_feat
+        - y_pool
+
+        Returns ttnn tensors
+        """
+        # Construct position array
+        pH, pW = H // self.patch_size, W // self.patch_size
+        N = T * pH * pW
+        pos = create_position_matrix(T, pH=pH, pW=pW, device="cpu", dtype=torch.float32)
+        rope_cos_NHD, rope_sin_NHD = compute_mixed_rotation(freqs=self.pos_frequencies, pos=pos)
+        rope_cos_1HND, rope_sin_1HND = stack_cos_sin(
+            rope_cos_NHD.unsqueeze(0).permute(0, 2, 1, 3), rope_sin_NHD.unsqueeze(0).permute(0, 2, 1, 3)
+        )
+
+        trans_mat = get_rot_transformation_mat(None)
+
+        assert t5_feat.size(1) == self.t5_token_length
+        t5_y_pool = self.t5_y_embedder(t5_feat, t5_mask)
+        y_feat_BLY = self.t5_yproj(t5_feat)
+
+        tt_y_feat_1BLY = to_tt_tensor(unsqueeze_to_4d(y_feat_BLY), self.mesh_device)  # Add dim for ttnn format
+        tt_y_pool_11BX = to_tt_tensor(unsqueeze_to_4d(t5_y_pool), self.mesh_device)
+        tt_rope_cos_1HND = to_tt_tensor(unsqueeze_to_4d(rope_cos_1HND), self.mesh_device, shard_dim=-3)
+        tt_rope_sin_1HND = to_tt_tensor(unsqueeze_to_4d(rope_sin_1HND), self.mesh_device, shard_dim=-3)
+        tt_trans_mat = to_tt_tensor(trans_mat, self.mesh_device)
+
+        return tt_y_feat_1BLY, tt_y_pool_11BX, tt_rope_cos_1HND, tt_rope_sin_1HND, tt_trans_mat
+
+    def prepare_step_dependent(
+        self,
+        x: torch.Tensor,
+        sigma: float,
+        tt_y_pool: ttnn.Tensor,
+    ):
+        """
+        Prepare inputs for the model which change across steps.
+        Accepts x as torch Tensor. TODO: Process x_embedder on device.
+        - x
+        - c
+        """
+        # Visual patch embeddings with positional encoding
+        B, C, T, H, W = x.shape
+
+        pH, pW = H // self.patch_size, W // self.patch_size
+        # Flatten x for embedding
+        x = x.reshape(C, T, pH, self.patch_size, pW, self.patch_size)
+        x_1BNI = x.permute(1, 2, 4, 0, 3, 5).reshape(1, B, T * pH * pW, C * self.patch_size * self.patch_size)
+        x_1BNI = to_tt_tensor(x_1BNI, self.mesh_device)
+        x_1BNX = self.x_embedder(x_1BNI)
+
+        # Global vector embedding for conditionings
+        c_t_BX = self.t_embedder(1 - sigma)
+        c_t_11BX = to_tt_tensor(unsqueeze_to_4d(c_t_BX), self.mesh_device)  # Add dims for ttnn format
+        c_11BX = c_t_11BX + tt_y_pool
+
+        return x_1BNX, c_11BX
+
+    def _prepare(
         self,
         x: torch.Tensor,
         sigma: torch.Tensor,
         t5_feat: torch.Tensor,
         t5_mask: torch.Tensor,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Prepare input tensors (runs in PyTorch on CPU)."""
+        """
+        Deprecated. Prepare input tensors (runs in PyTorch on CPU).
+        """
 
         # Visual patch embeddings with positional encoding
         T, H, W = x.shape[-3:]
@@ -163,6 +268,87 @@ class TtAsymmDiTJoint(LightweightModule):
 
         return x, c, y_feat, rope_cos, rope_sin
 
+    def preprocess_input(self, x):
+        B, C, T, H, W = x.shape
+        assert B == 1, "Batch size must be 1"
+        pH, pW = H // self.patch_size, W // self.patch_size
+        x = x.reshape(B, C, T, pH, self.patch_size, pW, self.patch_size)
+        x = x.permute(0, 2, 3, 5, 1, 4, 6).reshape(1, B, T * pH * pW, C * self.patch_size * self.patch_size)
+        x = to_tt_tensor(x, self.mesh_device)
+        return x
+
+    def reverse_preprocess(self, x, T, H, W):
+        """
+        This is the reverse of preprocess_input. It differs from postprocess_output
+        in that the input x is of shape: B (T pH pW) (C p p)
+        returns shape: B C T (pH p) (pW p)
+        """
+        assert len(x.shape) == 4
+        assert x.shape[0] == 1
+        B = x.shape[1]
+        pH, pW = H // self.patch_size, W // self.patch_size
+        x = ttnn.to_torch(ttnn.get_device_tensors(x)[0]).squeeze(0)
+        x = x.reshape(B, T, pH, pW, self.out_channels, self.patch_size, self.patch_size)
+        x = x.permute(0, 4, 1, 2, 5, 3, 6).reshape(B, self.out_channels, T, H, W)
+        return x
+
+    def prepare(
+        self,
+        x: torch.Tensor,
+        sigma: torch.Tensor,
+        t5_feat: torch.Tensor,
+        t5_mask: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Given torch inputs, compose step-independent and step-dependent input preparation.
+        Returns ttnn tensors on device.
+        """
+        T, H, W = x.shape[-3:]
+        tt_y_feat, tt_y_pool, tt_rope_cos, tt_rope_sin, tt_trans_mat = self.prepare_step_independent(
+            T, H, W, t5_feat, t5_mask
+        )
+        x_1BNX, c_11BX = self.prepare_step_dependent(x, sigma, tt_y_pool)
+        return x_1BNX, c_11BX, tt_y_feat, tt_rope_cos, tt_rope_sin, tt_trans_mat
+
+    def forward_inner(
+        self,
+        x_1BNI: ttnn.Tensor,
+        sigma: float,
+        y_feat_1BLY: ttnn.Tensor,
+        y_pool_11BX: ttnn.Tensor,
+        rope_cos_1HND: ttnn.Tensor,
+        rope_sin_1HND: ttnn.Tensor,
+        trans_mat: ttnn.Tensor,
+        uncond: bool = False,
+    ):
+        """
+        Optimized forward pass which depends on outer loop to prepare inputs.
+        Returns
+        """
+        x_1BNX = self.x_embedder(x_1BNI)
+
+        # Global vector embedding for conditionings
+        c_t_BX = self.t_embedder(1 - sigma)
+        c_t_11BX = to_tt_tensor(unsqueeze_to_4d(c_t_BX), self.mesh_device)  # Add dims for ttnn format
+        c_11BX = c_t_11BX + y_pool_11BX
+
+        # Run blocks
+        for block in self.blocks:
+            x_1BNX, y_feat_1BLY = block(
+                x_1BNX,
+                c_11BX,
+                y_feat_1BLY,
+                rope_cos=rope_cos_1HND,
+                rope_sin=rope_sin_1HND,
+                trans_mat=trans_mat,
+                uncond=uncond,
+            )
+
+        # Run final layer
+        x_1BNI = self.final_layer(x_1BNX, c_11BX)
+
+        return x_1BNI
+
     def forward(
         self,
         x: torch.Tensor,
@@ -171,59 +357,32 @@ class TtAsymmDiTJoint(LightweightModule):
         y_mask: List[torch.Tensor],
         uncond: bool = False,
     ) -> torch.Tensor:
-        """Forward pass of DiT."""
-        B, _, T, H, W = x.shape
+        """
+        Forward pass of DiT.
+        User-friendly, unoptimized forward.
+        """
+        _, _, T, H, W = x.shape
 
-        # Run prepare() in PyTorch on CPU
-        x_BNX, c_BX, y_feat_BLY, rope_cos_NHD, rope_sin_NHD = self.prepare(x, sigma, y_feat[0], y_mask[0])
-        x_N = x_BNX.shape[1]
-
-        rope_cos_1HND, rope_sin_1HND = stack_cos_sin(
-            rope_cos_NHD.unsqueeze(0).permute(0, 2, 1, 3), rope_sin_NHD.unsqueeze(0).permute(0, 2, 1, 3)
+        x_1BNX, c_11BX, y_feat_1BLY, rope_cos_1HND, rope_sin_1HND, trans_mat = self.prepare(
+            x, sigma, y_feat[0], y_mask[0]
         )
-
-        trans_mat = get_rot_transformation_mat(None)
-
         # TODO: c shape should be broadcastable to x shape, with batch dim matching. It currently doesn't.
-        # Convert tensors to ttnn format using common function
-        tt_x_1BNX = to_tt_tensor(unsqueeze_to_4d(x_BNX), self.mesh_device)
-        tt_c_11BX = to_tt_tensor(unsqueeze_to_4d(c_BX), self.mesh_device)  # Add dims for ttnn format
-        tt_y_feat_1BLY = to_tt_tensor(unsqueeze_to_4d(y_feat_BLY), self.mesh_device)  # Add dim for ttnn format
-        tt_rope_cos_1HND = to_tt_tensor(unsqueeze_to_4d(rope_cos_1HND), self.mesh_device, shard_dim=-3)
-        tt_rope_sin_1HND = to_tt_tensor(unsqueeze_to_4d(rope_sin_1HND), self.mesh_device, shard_dim=-3)
-        tt_trans_mat = to_tt_tensor(trans_mat, self.mesh_device)
+
         # Run blocks
         for block in self.blocks:
-            tt_x_1BNX, tt_y_feat_1BLY = block(
-                tt_x_1BNX,
-                tt_c_11BX,
-                tt_y_feat_1BLY,
-                rope_cos=tt_rope_cos_1HND,
-                rope_sin=tt_rope_sin_1HND,
-                trans_mat=tt_trans_mat,
+            x_1BNX, y_feat_1BLY = block(
+                x_1BNX,
+                c_11BX,
+                y_feat_1BLY,
+                rope_cos=rope_cos_1HND,
+                rope_sin=rope_sin_1HND,
+                trans_mat=trans_mat,
                 uncond=uncond,
             )
 
         # Run final layer
-        tt_x_1BND = self.final_layer(tt_x_1BNX, tt_c_11BX)
+        x_1BND = self.final_layer(x_1BNX, c_11BX)
 
-        # Convert output back to PyTorch
-        # output is already replicated.
-        # TODO: Don't do this concat here, just get a ref to single device tensor
-        x_1BND = ttnn.to_torch(tt_x_1BND, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0))[0:1]
-        x_D = self.patch_size**2 * self.out_channels
-        x_BND = x_1BND[..., :x_N, :].reshape(B, x_N, x_D)
-
-        # Rearrange output in PyTorch on CPU
-        x_BCTHW = rearrange(
-            x_BND,
-            "B (T hp wp) (p1 p2 c) -> B c T (hp p1) (wp p2)",
-            T=T,
-            hp=H // self.patch_size,
-            wp=W // self.patch_size,
-            p1=self.patch_size,
-            p2=self.patch_size,
-            c=self.out_channels,
-        )
-
+        # Converts output back to torch and expected shape
+        x_BCTHW = self.reverse_preprocess(x_1BND, T, H, W)
         return x_BCTHW

@@ -57,7 +57,7 @@ def test_modulated_rmsnorm(mesh_device, use_program_cache, reset_seeds, S, D):
 
     # Run TT implementation
     tt_output = modulated_rmsnorm(tt_input, tt_scale)
-    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
+    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[0:1]
 
     # Reference implementation in PyTorch
     def reference_modulated_rmsnorm(x, scale, eps=1e-6):
