@@ -13,10 +13,10 @@ from genmo.lib.progress import progress_bar
 from genmo.lib.utils import save_video
 from genmo.mochi_preview.pipelines import (
     DecoderModelFactory,
-    MochiSingleGPUPipeline,
     T5ModelFactory,
     linear_quadratic_schedule,
 )
+from models.experimental.mochi.pipelines_tt import TTPipeline
 from models.experimental.mochi.factory import TtDiTModelFactory
 
 pipeline = None
@@ -31,7 +31,7 @@ def load_model(mesh_device):
     if pipeline is None:
         MOCHI_DIR = model_dir_path
         print(f"Launching with {num_gpus} GPUs.")
-        pipeline = MochiSingleGPUPipeline(
+        pipeline = TTPipeline(
             text_encoder_factory=T5ModelFactory(),
             dit_factory=TtDiTModelFactory(
                 model_path=f"{MOCHI_DIR}/dit.safetensors",

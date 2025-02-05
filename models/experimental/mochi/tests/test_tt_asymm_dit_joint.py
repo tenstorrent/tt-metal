@@ -193,6 +193,23 @@ def test_tt_asymm_dit_joint_prepare(mesh_device, use_program_cache, reset_seeds)
     tt_outputs = tt_model.prepare(x, sigma, t5_feat, t5_mask)
     ref_outputs = reference_model.prepare(x, sigma, t5_feat, t5_mask)
 
+    x, c, y_feat, rope_cos, rope_sin, _ = tt_outputs
+    x = ttnn.to_torch(x, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[0:1]
+    c = ttnn.to_torch(c, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[0:1]
+    y_feat = ttnn.to_torch(y_feat, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[0:1]
+    rope_cos = ttnn.to_torch(rope_cos, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-3))
+    rope_sin = ttnn.to_torch(rope_sin, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-3))
+
+    # Undo cos/sin permutation and stacking
+    def unstack(x):
+        x = x.permute(0, 2, 1, 3).squeeze(0)  # N, num_heads, head_dim
+        x = x.reshape(*x.shape[:-1], -1, 2)
+        return x[..., 0]
+
+    rope_cos = unstack(rope_cos)
+    rope_sin = unstack(rope_sin)
+    tt_outputs = [x, c, y_feat, rope_cos, rope_sin]
+
     # Check each output tensor
     for tt_out, ref_out, name in zip(tt_outputs, ref_outputs, ["x", "c", "y_feat", "rope_cos", "rope_sin"]):
         pcc = torch.corrcoef(torch.stack([tt_out.flatten(), ref_out.flatten()]))[0, 1].item()
@@ -218,12 +235,14 @@ def test_tt_asymm_dit_joint_model_fn(mesh_device, use_program_cache, reset_seeds
     """Test the model with real inputs processed just like in the pipeline."""
     dtype = ttnn.bfloat16
     cfg_scale = 6.0
+    sigma_schedule = [0.2, 0.1]
+    dsigma = sigma_schedule[0] - sigma_schedule[1]
     mesh_device.enable_async(True)
 
     # Create models using common function
-    reference_model, tt_model, state_dict = create_models(mesh_device, n_layers)
+    reference_model, tt_model, _ = create_models(mesh_device, n_layers)
 
-    def model_fn(model, x, sigma, cond, is_tt_model):
+    def model_fn(model, x, sigma, cond):
         """Function to run model with both conditional and unconditional inputs.
 
         Args:
@@ -235,39 +254,81 @@ def test_tt_asymm_dit_joint_model_fn(mesh_device, use_program_cache, reset_seeds
         Returns:
             Combined output using cfg_scale=1.0
         """
-        # Run unconditional
-        if is_tt_model:
-            uncond_out = model(
-                x=x,
-                sigma=sigma,
-                y_feat=cond["null"]["y_feat"],
-                y_mask=cond["null"]["y_mask"],
-                uncond=True,
-            )
-            cond_out = model(
-                x=x,
-                sigma=sigma,
-                y_feat=cond["cond"]["y_feat"],
-                y_mask=cond["cond"]["y_mask"],
-            )
-        else:
-            uncond_out = model(
-                x=x,
-                sigma=sigma,
-                y_feat=cond["null"]["y_feat"],
-                y_mask=cond["null"]["y_mask"],
-                packed_indices=cond["null"]["packed_indices"],
-            )
-            cond_out = model(
-                x=x,
-                sigma=sigma,
-                y_feat=cond["cond"]["y_feat"],
-                y_mask=cond["cond"]["y_mask"],
-                packed_indices=cond["cond"]["packed_indices"],
-            )
+        uncond_out = model(
+            x=x,
+            sigma=sigma,
+            y_feat=cond["null"]["y_feat"],
+            y_mask=cond["null"]["y_mask"],
+            packed_indices=cond["null"]["packed_indices"],
+        )
+        cond_out = model(
+            x=x,
+            sigma=sigma,
+            y_feat=cond["cond"]["y_feat"],
+            y_mask=cond["cond"]["y_mask"],
+            packed_indices=cond["cond"]["packed_indices"],
+        )
 
         # Combine outputs with cfg_scale=1.0 as in pipeline
-        return uncond_out + cfg_scale * (cond_out - uncond_out), cond_out, uncond_out
+        pred = uncond_out + cfg_scale * (cond_out - uncond_out)
+        z = x + dsigma * pred
+        return z, pred, cond_out, uncond_out
+
+    def model_fn_tt(model, z_BCTHW, sigma, cond):
+        T, H, W = z_BCTHW.shape[-3:]
+        cond_text = cond["cond"]
+        cond_null = cond["null"]
+        rope_cos_1HND, rope_sin_1HND, trans_mat = model.prepare_rope_features(T=latent_t, H=latent_h, W=latent_w)
+        # Note that conditioning contains list of len 1 to index into
+        cond_y_feat_1BLY, cond_y_pool_11BX = model.prepare_text_features(
+            t5_feat=cond_text["y_feat"][0], t5_mask=cond_text["y_mask"][0]
+        )
+        uncond_y_feat_1BLY, uncond_y_pool_11BX = model.prepare_text_features(
+            t5_feat=cond_null["y_feat"][0], t5_mask=cond_null["y_mask"][0]
+        )
+        z_1BNI = model.preprocess_input(z_BCTHW)
+
+        cond_z_1BNI = model.forward_inner(
+            x_1BNI=z_1BNI,
+            sigma=sigma,
+            y_feat_1BLY=cond_y_feat_1BLY,
+            y_pool_11BX=cond_y_pool_11BX,
+            rope_cos_1HND=rope_cos_1HND,
+            rope_sin_1HND=rope_sin_1HND,
+            trans_mat=trans_mat,
+            uncond=False,
+        )
+
+        uncond_z_1BNI = model.forward_inner(
+            x_1BNI=z_1BNI,
+            sigma=sigma,
+            y_feat_1BLY=uncond_y_feat_1BLY,
+            y_pool_11BX=uncond_y_pool_11BX,
+            rope_cos_1HND=rope_cos_1HND,
+            rope_sin_1HND=rope_sin_1HND,
+            trans_mat=trans_mat,
+            uncond=True,
+        )
+
+        assert cond_z_1BNI.shape == uncond_z_1BNI.shape
+
+        # TODO: need to update pred in fp32 for correctness?
+        # Push to float32 for higher precision
+        # cond_z_1BNI = ttnn.typecast(cond_z_1BNI, dtype=ttnn.float32)
+        # uncond_z_1BNI = ttnn.typecast(uncond_z_1BNI, dtype=ttnn.float32)
+        pred = uncond_z_1BNI + cfg_scale * (cond_z_1BNI - uncond_z_1BNI)
+
+        print(pred.shape)
+        print(z_1BNI.shape)
+        # z_1BNI = ttnn.typecast(z_1BNI, dtype=ttnn.float32)
+        z = z_1BNI + dsigma * pred
+
+        torch_output = model.reverse_preprocess(z, T, H, W)
+
+        torch_pred = model.reverse_preprocess(pred, T, H, W)
+        torch_cond = model.reverse_preprocess(cond_z_1BNI, T, H, W)
+        torch_uncond = model.reverse_preprocess(uncond_z_1BNI, T, H, W)
+        return torch_output, torch_pred, torch_cond, torch_uncond
 
     # Default arguments from cli.py
     width = 848
@@ -316,19 +377,22 @@ def test_tt_asymm_dit_joint_model_fn(mesh_device, use_program_cache, reset_seeds
         )
 
     # Create sigma (timestep)
-    sigma = torch.ones(batch_size)
+    sigma = torch.full((batch_size,), sigma_schedule[0])
 
     logger.info("Run TtAsymmDiTJoint")
-    tt_output, tt_cond_out, tt_uncond_out = model_fn(tt_model, z, sigma, conditioning, is_tt_model=True)
+    tt_output, tt_pred, tt_cond_out, tt_uncond_out = model_fn_tt(tt_model, z, sigma, conditioning)
+
+    torch_tt_output = z + dsigma * tt_pred
 
     logger.info("Run reference model")
-    reference_output, reference_cond_out, reference_uncond_out = model_fn(
-        reference_model, z, sigma, conditioning, is_tt_model=False
+    reference_output, reference_pred, reference_cond_out, reference_uncond_out = model_fn(
+        reference_model, z, sigma, conditioning
     )
-
     # Compute metrics for all outputs
     outputs = [
+        (reference_output, torch_tt_output, "combined_tt_on_host"),
         (reference_output, tt_output, "combined"),
+        (reference_pred, tt_pred, "pred"),
         (reference_cond_out, tt_cond_out, "conditional"),
         (reference_uncond_out, tt_uncond_out, "unconditional"),
     ]
@@ -357,3 +421,27 @@ def test_tt_asymm_dit_joint_model_fn(mesh_device, use_program_cache, reset_seeds
         logger.warning("\nSome TtAsymmDiTJoint outputs with real inputs Failed!")
 
     assert passing, "One or more TtAsymmDiTJoint outputs did not meet PCC requirements"
+
+
+@torch.no_grad()
+@skip_for_grayskull("Requires wormhole_b0 to run")
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
+            os.environ.get("FAKE_DEVICE"), len(ttnn.get_device_ids())
+        )
+    ],
+    indirect=True,
+)
+def test_tt_asymm_dit_joint_preprocess(mesh_device, use_program_cache, reset_seeds):
+    """Test that we can reverse the preprocessing of input"""
+    mesh_device.enable_async(True)
+    _, tt_model, _ = create_models(mesh_device, n_layers=0)
+    B, C, T, H, W = 1, 12, 28, 60, 106
+    x = torch.randn(B, C, T, H, W)
+    x_1BNI = tt_model.preprocess_input(x)
+    x_back = tt_model.reverse_preprocess(x_1BNI, T, H, W)
+    pcc, mse, mae = compute_metrics(x, x_back)
+    logger.info(f"PCC: {pcc}, MSE: {mse}, MAE: {mae}")
+    assert pcc >= 0.99

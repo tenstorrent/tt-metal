@@ -68,7 +68,7 @@ def test_residual_tanh_gated_rmsnorm(mesh_device, use_program_cache, reset_seeds
 
     # Run TT implementation
     tt_output = residual_tanh_gated_rmsnorm(tt_x, tt_x_res, tt_gate)
-    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
+    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[0:1]
 
     # Run reference implementation
     reference_output = ref_residual_tanh_gated_rmsnorm(torch_x, torch_x_res, torch_gate)
