@@ -93,7 +93,7 @@ void kernel_main() {
                     uint32_t l1_old_running_mean_write_addr = get_write_ptr(cb_id_old_running_mean);
                     noc_async_read_tile(tile_offset, old_running_mean, l1_old_running_mean_write_addr);
                     noc_async_read_barrier();
-                    fill_tile_with_first_element_bfloat16(cb_id_old_running_mean);
+                    FILL_TILE_WITH_FIRST_ELEMENT(cb_id_old_running_mean);
                     cb_push_back(cb_id_old_running_mean, onetile);
 
                     // write data
@@ -110,7 +110,7 @@ void kernel_main() {
                     uint32_t l1_old_running_var_write_addr = get_write_ptr(cb_id_old_running_var);
                     noc_async_read_tile(tile_offset, old_running_var, l1_old_running_var_write_addr);
                     noc_async_read_barrier();
-                    fill_tile_with_first_element_bfloat16(cb_id_old_running_var);
+                    FILL_TILE_WITH_FIRST_ELEMENT(cb_id_old_running_var);
                     cb_push_back(cb_id_old_running_var, onetile);
 
                     // write data

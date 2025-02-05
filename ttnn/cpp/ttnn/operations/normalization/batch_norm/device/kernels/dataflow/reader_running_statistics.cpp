@@ -46,12 +46,19 @@ void kernel_main() {
     union {
         float f;
         uint32_t u;
-    } scalar;
-    scalar.f = 1.0f;
-    fill_cb_with_value(cb_id_one, scalar.u);
+    } scalar_one, scalar_momentum;
+    scalar_one.f = 1.0f;
+    fill_cb_with_value(cb_id_one, scalar_one.u);
 
+    // momentum
+    scalar_momentum.u = momentum;
     cb_reserve_back(cb_id_momentum, onetile);
-    fill_with_val_bfloat16(cb_id_momentum, momentum);
+#ifdef FILL_WITH_VALUE_FLOAT
+    FILL_WITH_VALUE_FLOAT(cb_id_momentum, scalar_momentum.f);
+#endif
+#ifdef FILL_WITH_VALUE
+    FILL_WITH_VALUE(cb_id_momentum, momentum);
+#endif
     cb_push_back(cb_id_momentum, onetile);
 
     uint32_t num_tiles_read = 0;
