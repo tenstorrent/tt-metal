@@ -11,7 +11,7 @@ import ttnn
 from loguru import logger
 from models.utility_functions import is_grayskull, is_blackhole, torch_random
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_equal
-from models.utility_functions import skip_for_grayskull, skip_for_blackhole
+from models.utility_functions import skip_for_grayskull, skip_for_blackhole, run_for_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
@@ -54,6 +54,29 @@ def transpose(
 
     if expected_program_cache_size != None:
         assert device.num_program_cache_entries() == expected_program_cache_size
+
+
+@run_for_blackhole()
+def test_fold_transpose(device, use_program_cache):
+    N = 32
+    C = 4
+    H = 256
+    W = 224
+    input_shape = (N, C, H, W)
+    ## 128
+    grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(12, 8)),
+            ttnn.CoreRange(ttnn.CoreCoord(0, 9), ttnn.CoreCoord(10, 9)),
+        }
+    )
+    sharded_config = ttnn.create_sharded_memory_config_(
+        input_shape,
+        grid,
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    transpose(input_shape, device, dim0=2, dim1=3, input_mem_config=sharded_config, output_mem_config=sharded_config)
 
 
 @pytest.mark.parametrize(
