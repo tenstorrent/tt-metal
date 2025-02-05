@@ -325,7 +325,7 @@ private:
                 "allowed");
         }
 
-        auto& input_tensors = ten_input_tensors.size() > 0 ? ten_input_tensors : vec_input_tensors[0];
+        auto& input_tensors = vec_input_tensors.size() > 0 ? vec_input_tensors[0] : ten_input_tensors;
 
         auto output_tensors = detail::create_async_output_tensors<operation_t, execute_on_worker_thread_return_t>(
             input_tensors, optional_input_tensors, args...);
