@@ -124,7 +124,7 @@ template <
     tt::tt_metal::TensorMemoryLayout tensor_layout,
     tt::tt_metal::BufferType buffer_type,
     tt::tt_metal::Layout page_layout,
-    typename SHARDING_INFO_OBJECT>
+    typename ShardingInfoType>
 FORCE_INLINE auto build_source_address_generator(
     std::size_t& arg_idx,
     address_t tensor_address,
@@ -154,13 +154,13 @@ FORCE_INLINE auto build_source_address_generator(
         tensor_layout == tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED ||
         tensor_layout == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED ||
         tensor_layout == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED) {
-        std::pair<const mapping_table_t* const, uint32_t> map = experimental::shard_addr_gen_utils::get_shard_map<SHARDING_INFO_OBJECT>(get_arg_addr(arg_idx));
+        const auto [mapping_table, rt_increment] = experimental::shard_addr_gen_utils::get_shard_map<ShardingInfoType>(get_arg_addr(arg_idx));
         if (addrgen_enabled)
         {
-            arg_idx += map.second;
+            arg_idx += rt_increment;
         }
-        experimental::ShardedAddrGen<SHARDING_INFO_OBJECT> ret_val = {
-            .bank_base_address = tensor_address, .shard_array=map.first};
+        experimental::ShardedAddrGen<ShardingInfoType> ret_val = {
+            .bank_base_address = tensor_address, .shard_array=mapping_table};
         return ret_val;
     } else {
         ASSERT(false);
@@ -533,7 +533,7 @@ FORCE_INLINE void try_advance_read_tensor_to_cb(command_context_t<Addrgen>& cmd_
     uint32_t l1_write_addr = l1_write_addr_base;
 
     for (uint16_t i = 0; i < max_pages_readable; i += contig_pages_advanced) {
-        auto const [noc_addr, contig_pages_] = get_noc_addr_and_contiguous_pages<TENSOR_LAYOUT,MEM_LAYOUT>(
+        const auto [noc_addr, contig_pages_] = get_noc_addr_and_contiguous_pages<TENSOR_LAYOUT,MEM_LAYOUT>(
             cmd_specific_ctx.curr_tile_id,
             cmd_specific_ctx.offset_into_worker_slice,
             cmd_ctx.command_tensor.worker_start_offset_in_slice,

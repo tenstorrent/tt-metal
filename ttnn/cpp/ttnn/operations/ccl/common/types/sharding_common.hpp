@@ -4,6 +4,8 @@
 
 // File contains enumerations that are common to both kernel and program factories with regards to sharding
 
+#pragma once
+
 namespace shard_addr_gen_consts {
 
 enum class ContiguityType {

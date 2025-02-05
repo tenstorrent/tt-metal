@@ -124,12 +124,12 @@ experimental::shard_addr_gen_utils::ShardCoordInfo get_block_sharded_coordinates
  * Representation is placed in a uint32_t array in a big endian ordering
  */
 
-template <typename SHARDING_INFO_OBJECT>
+template <typename ShardingInfoType>
 std::pair<const mapping_table_t* const, uint32_t> get_shard_map(uint32_t L1_address) {
     // Gets the shard_array from the runtime arguments
     // returns a pair where .first holds the shard array map
     // and .second holds the size of the map
-    constexpr SHARDING_INFO_OBJECT CONSTANT_ARGS{};
+    constexpr ShardingInfoType CONSTANT_ARGS{};
     const mapping_table_t* const map = reinterpret_cast<const mapping_table_t* const>(L1_address);
     constexpr uint32_t incrementation = (CONSTANT_ARGS.number_of_cores - 1) / 2 + 1;
     return std::pair<const mapping_table_t* const, uint32_t>(map, incrementation);
@@ -138,7 +138,7 @@ std::pair<const mapping_table_t* const, uint32_t> get_shard_map(uint32_t L1_addr
 }  // namespace shard_addr_gen_utils
 
 /*
-* ShardedAddrGen requires the type definition of a ShardedInfo class object who's templates hold the CT information
+* ShardedAddrGen requires the type definition of a ShardedInfo class object whose templates hold the CT information
     ex.
     typedef ShardedInfo <
     SHARD_TYPE,
@@ -151,18 +151,19 @@ std::pair<const mapping_table_t* const, uint32_t> get_shard_map(uint32_t L1_addr
 
     The above parameters are usually obtained using get_compile_time_arg_val.
     In the program factory you can create an vector containing the above parameters in order using the function
-    shard_pf_builder:sharding_ct_table_builder(const tt::tt_metal::IDevice* device, const tt::tt_metal::Tensor& t)
-    defined in ttnn/cpp/ttnn/operations/ccl/sharding_addrgen_pf_helper.cpp
+    shard_builder:sharding_ct_table_builder(const tt::tt_metal::IDevice* device, const tt::tt_metal::Tensor& t)
+    defined in ttnn/cpp/ttnn/operations/ccl/sharding_addrgen_helper.cpp
 
     It also needs a shard array map which can be extracted from the RT args using shard_addr_gen_utils::get_shard_map
-function which requires the ShardedInfo class object ex. auto mapping = get_shard_map<tensor_1_shard_info>(rt_index);
-const mapping_table_t* const shard_array_map = mapping.first;
+function which requires the ShardedInfo class object ex. auto mapping =
+experimental::shard_addr_gen_utils::get_shard_map<ShardingInfoType>(get_arg_addr(rt_index)); const mapping_table_t*
+const shard_array_map = mapping.first;
 //Contains the shard array map
 rt_index += mapping.second;//contains the size of the map hence how much to increment the rt values
 
 In the program factory you can create an vector containing the runtime arguments extracted by this function using the
-function shard_pf_builder:get_linear_shard_list(const tt::tt_metal::IDevice* device, const tt::tt_metal::Tensor& t)
-    defined in ttnn/cpp/ttnn/operations/ccl/sharding_addrgen_pf_helper.cpp
+function shard_builder:get_linear_shard_list(const tt::tt_metal::IDevice* device, const tt::tt_metal::Tensor& t)
+    defined in ttnn/cpp/ttnn/operations/ccl/sharding_addrgen_helper.cpp
 
 
 
@@ -172,11 +173,11 @@ function shard_pf_builder:get_linear_shard_list(const tt::tt_metal::IDevice* dev
     s = ShardedAddrGen <tensor_1_shard_info> {.bank_base_address = bank_base_address, .shard_array=shard_array_map};
     This object can then be used by the get_noc_addr api.
 */
-template <typename SHARDING_INFO_OBJECT>
+template <typename ShardingInfoType>
 struct ShardedAddrGen {
     // Use this address generator for sharded tensors
 
-    constexpr static SHARDING_INFO_OBJECT CONSTANT_ARGS{};
+    constexpr static ShardingInfoType CONSTANT_ARGS{};
     // Sharded Info Class is a ShardedInfo class object that is appropriately templated
     // including all the compile time parameters
     uint32_t bank_base_address;

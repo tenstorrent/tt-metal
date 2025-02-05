@@ -4,15 +4,9 @@
 
 #include <tt-metalium/host_api.hpp>
 #include "cpp/ttnn/tensor/tensor.hpp"
-#include "cpp/ttnn/operations/ccl/sharding_addrgen_pf_helper.hpp"
+#include "cpp/ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 
-enum class ContiguityType {
-    PADDING_BETWEEN_PAGES = 0,
-    PADDING_IN_RIGHTMOST_SHARD,
-    NO_SHARD_PADDING,
-};
-
-namespace shard_pf_builder {
+namespace shard_builder {
 
 uint32_t get_sharding_core_count(const tt::tt_metal::Tensor& t) {
     uint32_t core_count = 0;
@@ -135,8 +129,7 @@ std::vector<uint32_t> get_linear_shard_list(const tt::tt_metal::IDevice* device,
     return args;
 }
 
-static void add_sharding_rt_to_existing_rt(
-    const IDevice* d, const tt::tt_metal::Tensor& t, std::vector<uint32_t>& args) {
+void add_sharding_rt_to_existing_rt(const IDevice* d, const tt::tt_metal::Tensor& t, std::vector<uint32_t>& args) {
     const auto& new_args = get_linear_shard_list(d, t);
     std::copy(std::begin(new_args), std::end(new_args), std::back_inserter(args));
 }
@@ -151,8 +144,8 @@ std::vector<uint32_t> sharding_ct_table_builder(const tt::tt_metal::IDevice* dev
         "ShardedAddrGenArgBuilder::emit_ct_args was invoked with a tensor containing an unsupported (Sharded) Tensor "
         "Memory Layout: {}",
         t.memory_config().memory_layout);
-    struct ShardSpec shard_spec = t.shard_spec().value();
-    struct ShardSpecBuffer buf_shard_spec = t.buffer()->shard_spec();
+    ShardSpec shard_spec = t.shard_spec().value();
+    ShardSpecBuffer buf_shard_spec = t.buffer()->shard_spec();
     const auto& [pages_per_shard_y, pages_per_shard_x] = buf_shard_spec.shape_in_pages();
     // contiguity is 0 if there is padding between unaligned page, 1 if there is padding in the rightmost shard, and 2
     // otherwise
@@ -165,20 +158,19 @@ std::vector<uint32_t> sharding_ct_table_builder(const tt::tt_metal::IDevice* dev
     args.push_back(static_cast<uint32_t>(t.memory_config().memory_layout));  // Memory layout
     args.push_back(static_cast<uint32_t>(get_sharding_core_count(t)));       // The number of sharding cores
     args.push_back(static_cast<uint32_t>(t.buffer()->aligned_page_size()));  // The page size we offset each write to
-    TT_FATAL(t.buffer()->aligned_page_size() > 0, "algined page size is 0");
+    TT_FATAL(t.buffer()->aligned_page_size() > 0, "aligned page size is 0");
+    TT_FATAL(buf_shard_spec.tensor2d_shape[1] > 0, "the page is empty");
     args.push_back(static_cast<uint32_t>(
         buf_shard_spec.tensor2d_shape[1]));  // The number of pages in each sharding row not including padding pages
-    TT_FATAL(buf_shard_spec.tensor2d_shape[1], "the page is empty");
     args.push_back(static_cast<uint32_t>(contiguity));  // This defines times when contiguous pages can't be calculated
     args.push_back(pages_per_shard_x);
     args.push_back(pages_per_shard_y);
     return args;
 }
 
-static void add_sharding_ct_to_existing_ct(
-    const IDevice* d, const tt::tt_metal::Tensor& t, std::vector<uint32_t>& args) {
+void add_sharding_ct_to_existing_ct(const IDevice* d, const tt::tt_metal::Tensor& t, std::vector<uint32_t>& args) {
     const auto& new_args = sharding_ct_table_builder(d, t);
     std::copy(std::begin(new_args), std::end(new_args), std::back_inserter(args));
 }
 
-}  // namespace shard_pf_builder
+}  // namespace shard_builder
