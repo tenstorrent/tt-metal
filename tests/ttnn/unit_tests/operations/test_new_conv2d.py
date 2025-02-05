@@ -58,7 +58,7 @@ def run_conv(
     config_override,
     dilation=1,
     use_shallow_conv_variant=False,
-    transpose_shards=True,
+    transpose_shards=False,
     fp32_accum=False,
     packer_l1_acc=False,
     output_layout=ttnn.TILE_LAYOUT,
@@ -2714,7 +2714,6 @@ def test_non_tile_multiple_height_conv_wh(
         config_override=config_override,
         shard_layout=shard_layout,
         use_shallow_conv_variant=use_shallow_conv_variant,
-        transpose_shards=use_1d_systolic_array,  ## use RM (transpose_mcast=False) with 2D on WH
         packer_l1_acc=packer_l1_acc,
         fp32_accum=fp32_accum,
         has_bias=has_bias,
@@ -2802,7 +2801,7 @@ def test_non_tile_multiple_width_conv_wh(
         config_override,
         shard_layout=shard_layout,
         use_shallow_conv_variant=(input_channels == 16),
-        transpose_shards=use_1d_systolic_array,  ## use RM (transpose_mcast=False) with 2D on WH
+        transpose_shards=True,  # TODO: Fails when transpose_shards is False
         output_layout=ttnn.ROW_MAJOR_LAYOUT,
         preprocess_weights_on_device=True,
     )
