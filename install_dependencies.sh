@@ -86,8 +86,9 @@ ub_runtime_packages()
 ub_buildtime_packages()
 {
     UB_BUILDTIME_LIST=(\
-     libpython3-dev \
-     python3-pip \
+     git \
+     python3-dev \
+     pkg-config \
      cmake \
      ninja-build \
      libhwloc-dev \

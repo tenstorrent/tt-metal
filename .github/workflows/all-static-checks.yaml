@@ -108,19 +108,9 @@ jobs:
     - name: Check CMake version
       if: steps.changed-cmake-files.outputs.any_changed == 'true'
       run: cmake --version
-    - name: Install LLVM and Clang
+    - name: Install Build Dependencies
       if: steps.changed-cmake-files.outputs.any_changed == 'true'
-      run: |
-        wget https://apt.llvm.org/llvm.sh
-        chmod u+x llvm.sh
-        sudo ./llvm.sh 17
-    - name: Install deps
-      if: steps.changed-cmake-files.outputs.any_changed == 'true'
-      env:
-        DEBIAN_FRONTEND: noninteractive
-      run: |
-        sudo apt update
-        sudo xargs -a scripts/docker/requirements-22.04.txt apt install -y --no-install-recommends
+      run: sudo ./install_dependencies.sh --mode build
     - name: Check CMake compatibility
       if: steps.changed-cmake-files.outputs.any_changed == 'true'
       env:
