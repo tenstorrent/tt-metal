@@ -84,6 +84,7 @@ class Conv:
                 weights_format="OIHW",
                 input_memory_config=input_tensor.memory_config(),
                 input_layout=input_tensor.get_layout(),
+                has_bias=True,
                 **conv_kwargs,
             )
             self.bias = ttnn.prepare_conv_bias(

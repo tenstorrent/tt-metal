@@ -24,11 +24,10 @@ std::shared_ptr<MeshDevice> open_mesh_device(
     size_t trace_region_size,
     size_t num_command_queues,
     const DispatchCoreConfig& dispatch_core_config,
-    MeshType mesh_type,
     const MeshOffset& offset,
     const std::vector<int>& physical_device_ids) {
-    auto config = MeshDeviceConfig{
-        .mesh_shape = mesh_shape, .offset = offset, .physical_device_ids = physical_device_ids, .mesh_type = mesh_type};
+    auto config =
+        MeshDeviceConfig{.mesh_shape = mesh_shape, .offset = offset, .physical_device_ids = physical_device_ids};
     return MeshDevice::create(config, l1_small_size, trace_region_size, num_command_queues, dispatch_core_config);
 }
 
@@ -136,8 +135,7 @@ std::vector<int> get_t3k_physical_device_ids_ring() {
 std::vector<IDevice*> get_mapped_devices(const Tensor& tensor, MeshDevice& mesh_device) {
     // For multi-device tensors, returns the number of workers capped by the number of buffers
     // Otherwise, returns all available workes from mesh_device.
-    auto get_workers_for_tensor = [&tensor, &mesh_device]() {
-        const auto& workers = mesh_device.get_devices();
+    auto get_workers_for_tensor = [&tensor](const auto& workers) {
         if (std::holds_alternative<MultiDeviceStorage>(tensor.get_storage()) or
             std::holds_alternative<MultiDeviceHostStorage>(tensor.get_storage())) {
             return std::vector<IDevice*>(workers.begin(), workers.begin() + num_buffers_in_tensor(tensor));
@@ -147,17 +145,21 @@ std::vector<IDevice*> get_mapped_devices(const Tensor& tensor, MeshDevice& mesh_
     if (std::holds_alternative<MultiDeviceHostStorage>(tensor.get_storage())) {
         const auto& host_storage = std::get<tt::tt_metal::MultiDeviceHostStorage>(tensor.get_storage());
 
+        // Given a MeshDevice, this linearizes the set of mapped devices for a tensor specified with some
+        // distributed tensor strategy. The different strategies map to different policies on how
+        // this distribution is mapped to physical devices.
         return std::visit(
             tt::stl::overloaded{
                 [&](const ShardTensor2D& s) {
                     return mesh_device.get_view().get_devices(MeshShape{s.shard_mesh.y, s.shard_mesh.x});
                 },
-                [&](const auto&) { return get_workers_for_tensor(); }},
+                [&](const ShardTensor& s) { return get_workers_for_tensor(mesh_device.get_view().get_line_devices()); },
+                [&](const auto&) { return get_workers_for_tensor(mesh_device.get_devices()); }},
             host_storage.strategy);
     } else if (std::holds_alternative<MultiDeviceStorage>(tensor.get_storage())) {
         return tensor.workers;
     } else {
-        return get_workers_for_tensor();
+        return get_workers_for_tensor(mesh_device.get_devices());
     }
 }
 

@@ -299,9 +299,13 @@ std::unique_ptr<Allocator> Device::initialize_allocator(size_t l1_small_size, si
         config.dram_bank_offsets.push_back(soc_desc.get_address_offset(channel));
     }
     // Initialize core_type_from_noc_coord_table table
-    for (const auto& core: soc_desc.physical_cores) {
+    for (const CoreCoord& core : soc_desc.get_all_cores(CoordSystem::PHYSICAL)) {
         config.core_type_from_noc_coord_table.insert(
-            {this->virtual_core_from_physical_core(core.first), AllocCoreType::Invalid});
+            {this->virtual_core_from_physical_core({core.x, core.y}), AllocCoreType::Invalid});
+    }
+    for (const CoreCoord& core : soc_desc.get_all_harvested_cores(CoordSystem::PHYSICAL)) {
+        config.core_type_from_noc_coord_table.insert(
+            {this->virtual_core_from_physical_core({core.x, core.y}), AllocCoreType::Invalid});
     }
 
     for (const CoreCoord& core : tt::get_logical_compute_cores(id_, num_hw_cqs_, dispatch_core_config)) {
@@ -1405,42 +1409,54 @@ bool Device::using_fast_dispatch() const {
 }
 
 void Device::begin_trace(const uint8_t cq_id, const uint32_t tid) {
-    ZoneScoped;
-    TracyTTMetalBeginTrace(this->id(), tid);
-    TT_FATAL(
-        !this->command_queues_[cq_id]->tid().has_value(),
-        "CQ {} is already being used for tracing tid {}",
-        (uint32_t)cq_id,
-        tid);
-    this->mark_allocations_safe();
-    // Create an empty trace buffer here. This will get initialized in end_trace
-    auto* active_sub_device_manager = sub_device_manager_tracker_->get_active_sub_device_manager();
-    TT_FATAL(
-        active_sub_device_manager->get_trace(tid) == nullptr,
-        "Trace already exists for tid {} on device {}'s active sub-device manager {}",
-        tid,
-        this->id_,
-        active_sub_device_manager->id());
-    auto& trace_buffer = active_sub_device_manager->create_trace(tid);
-    this->command_queues_[cq_id]->record_begin(tid, trace_buffer->desc);
+    this->push_work(
+        [this, cq_id, tid]() mutable {
+            ZoneScoped;
+
+            TracyTTMetalBeginTrace(this->id(), tid);
+            TT_FATAL(
+                !this->command_queues_[cq_id]->tid().has_value(),
+                "CQ {} is already being used for tracing tid {}",
+                (uint32_t)cq_id,
+                tid);
+            this->mark_allocations_safe();
+            // Create an empty trace buffer here. This will get initialized in end_trace
+            auto* active_sub_device_manager = sub_device_manager_tracker_->get_active_sub_device_manager();
+            TT_FATAL(
+                active_sub_device_manager->get_trace(tid) == nullptr,
+                "Trace already exists for tid {} on device {}'s active sub-device manager {}",
+                tid,
+                this->id_,
+                active_sub_device_manager->id());
+            auto& trace_buffer = active_sub_device_manager->create_trace(tid);
+            this->command_queues_[cq_id]->record_begin(tid, trace_buffer->desc);
+        },
+        false /* blocking */);
 }
 
 void Device::end_trace(const uint8_t cq_id, const uint32_t tid) {
-    ZoneScoped;
-    TracyTTMetalEndTrace(this->id(), tid);
-    TT_FATAL(
-        this->command_queues_[cq_id]->tid() == tid, "CQ {} is not being used for tracing tid {}", (uint32_t)cq_id, tid);
-    auto* active_sub_device_manager = sub_device_manager_tracker_->get_active_sub_device_manager();
-    auto trace_buffer = active_sub_device_manager->get_trace(tid);
-    TT_FATAL(
-        trace_buffer != nullptr,
-        "Trace instance {} must exist on device {}'s active sub-device manager {}",
-        tid,
-        this->id_,
-        active_sub_device_manager->id());
-    this->command_queues_[cq_id]->record_end();
-    Trace::initialize_buffer(this->command_queue(cq_id), trace_buffer);
-    this->mark_allocations_unsafe();
+    this->push_work(
+        [this, cq_id, tid]() mutable {
+            ZoneScoped;
+            TracyTTMetalEndTrace(this->id(), tid);
+            TT_FATAL(
+                this->command_queues_[cq_id]->tid() == tid,
+                "CQ {} is not being used for tracing tid {}",
+                (uint32_t)cq_id,
+                tid);
+            auto* active_sub_device_manager = sub_device_manager_tracker_->get_active_sub_device_manager();
+            auto trace_buffer = active_sub_device_manager->get_trace(tid);
+            TT_FATAL(
+                trace_buffer != nullptr,
+                "Trace instance {} must exist on device {}'s active sub-device manager {}",
+                tid,
+                this->id_,
+                active_sub_device_manager->id());
+            this->command_queues_[cq_id]->record_end();
+            Trace::initialize_buffer(this->command_queue(cq_id), trace_buffer);
+            this->mark_allocations_unsafe();
+        },
+        false /* blocking */);
 }
 
 // Load the TraceDescriptor for a given trace_id to the device. A combination of logic from begin/end_trace.
@@ -1462,33 +1478,47 @@ void Device::load_trace(const uint8_t cq_id, const uint32_t trace_id, const Trac
 }
 
 void Device::replay_trace(const uint8_t cq_id, const uint32_t tid, const bool blocking) {
-    ZoneScoped;
-    TracyTTMetalReplayTrace(this->id(), tid);
-    constexpr bool check = false;
-    auto* active_sub_device_manager = sub_device_manager_tracker_->get_active_sub_device_manager();
-    const auto& trace_buffer = active_sub_device_manager->get_trace(tid);
-    TT_FATAL(
-        trace_buffer != nullptr,
-        "Trace instance {} must exist on device {}'s active sub-device manager {}",
-        tid,
-        this->id_,
-        active_sub_device_manager->id());
-    if constexpr (check) {
-        Trace::validate_instance(*trace_buffer);
+    // If blocking, ensure that worker thread blocks until trace is completed
+    this->push_work(
+        [this, cq_id, tid, blocking]() mutable {
+            ZoneScoped;
+            TracyTTMetalReplayTrace(this->id(), tid);
+            constexpr bool check = false;
+            auto* active_sub_device_manager = sub_device_manager_tracker_->get_active_sub_device_manager();
+            const auto& trace_buffer = active_sub_device_manager->get_trace(tid);
+            TT_FATAL(
+                trace_buffer != nullptr,
+                "Trace instance {} must exist on device {}'s active sub-device manager {}",
+                tid,
+                this->id_,
+                active_sub_device_manager->id());
+            if constexpr (check) {
+                Trace::validate_instance(*trace_buffer);
+            }
+            EnqueueTrace(this->command_queue(cq_id), tid, blocking);
+        },
+        blocking);
+
+    // If blocking, wait until worker threads have completed
+    if (blocking) {
+        this->synchronize();
     }
-    EnqueueTrace(this->command_queue(cq_id), tid, blocking);
 }
 
 void Device::release_trace(const uint32_t tid) {
-    ZoneScoped;
-    TracyTTMetalReleaseTrace(this->id(), tid);
+    this->push_work(
+        [this, tid]() mutable {
+            ZoneScoped;
+            TracyTTMetalReleaseTrace(this->id(), tid);
 
-    sub_device_manager_tracker_->get_active_sub_device_manager()->release_trace(tid);
+            sub_device_manager_tracker_->get_active_sub_device_manager()->release_trace(tid);
 
-    // Only enable allocations once all captured traces are released
-    if (this->trace_buffers_size_ == 0) {
-        this->mark_allocations_safe();
-    }
+            // Only enable allocations once all captured traces are released
+            if (this->trace_buffers_size_ == 0) {
+                this->mark_allocations_safe();
+            }
+        },
+        false /* blocking */);
 }
 
 std::shared_ptr<TraceBuffer> Device::get_trace(uint32_t tid) {

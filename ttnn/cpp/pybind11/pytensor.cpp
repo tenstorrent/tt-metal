@@ -22,6 +22,7 @@
 
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/tensor/types.hpp"
 
 using namespace tt::tt_metal;
 
@@ -69,19 +70,40 @@ void log_external_operation(
 #endif
 
 template <typename T>
-Tensor create_owned_tensor(T* data_ptr, const ttnn::TensorSpec& tensor_spec) {
+Tensor create_typed_tt_tensor_from_py_data(
+    std::size_t py_data_ptr,
+    const TensorSpec& tensor_spec,
+    IDevice* device,
+    const std::function<void()>& on_creation_callback,
+    const std::function<void()>& on_destruction_callback,
+    const bool force_disable_borrow) {
+    auto layout = tensor_spec.layout();
+
+    const bool requires_padding = tensor_spec.logical_2d_shape() != tensor_spec.physical_shape();
+    const bool requires_tilization = layout != Layout::ROW_MAJOR;
+    const bool enable_borrow = !requires_padding and !requires_tilization and !force_disable_borrow;
+
     TT_FATAL(
         !tensor_spec.memory_config().is_sharded() or tensor_spec.memory_config().shard_spec.has_value(),
         "Sharded tensors must have a shard spec when converting to tt tensors!");
+
+    auto* data_ptr = reinterpret_cast<T*>(py_data_ptr);
+
+    auto data_type = tensor_spec.data_type();
     std::size_t num_elements = tensor_spec.logical_shape().volume();
-    auto logical_data = std::vector<T>(data_ptr, data_ptr + num_elements);
 
-    // See implementation for documentation
-    auto physical_data = tensor_impl::encode_tensor_data(std::move(logical_data), tensor_spec);
+    if (enable_borrow and !(data_type == DataType::BFLOAT8_B || data_type == DataType::BFLOAT4_B)) {
+        auto storage = BorrowedStorage(
+            borrowed_buffer::Buffer(data_ptr, num_elements), on_creation_callback, on_destruction_callback);
+        return Tensor(std::move(storage), tensor_spec);
+    } else {
+        auto logical_data = std::vector<T>(data_ptr, data_ptr + num_elements);
 
-    auto buffer = owned_buffer::create(std::move(physical_data));
-    auto storage = OwnedStorage{std::move(buffer)};
-    return Tensor(std::move(storage), tensor_spec);
+        return Tensor::from_vector(
+            std::move(logical_data),
+            tensor_spec,
+            device == nullptr ? std::nullopt : std::optional<ttnn::AnyDevice>(device));
+    }
 }
 
 Tensor create_tt_tensor_from_py_data(
@@ -93,97 +115,45 @@ Tensor create_tt_tensor_from_py_data(
     const std::function<void()>& on_destruction_callback) {
     auto layout = tensor_spec.layout();
 
-    const bool requires_padding = tensor_spec.logical_2d_shape() != tensor_spec.physical_shape();
-    const bool requires_tilization = layout != Layout::ROW_MAJOR;
-    const bool enable_borrow = !requires_padding and !requires_tilization and !force_disable_borrow;
-
     auto data_type = tensor_spec.data_type();
     std::size_t num_elements = tensor_spec.logical_shape().volume();
     switch (data_type) {
         case DataType::UINT8: {
-            auto data_ptr = reinterpret_cast<uint8_t*>(py_data_ptr);
-            if (enable_borrow) {
-                auto storage = BorrowedStorage(
-                    borrowed_buffer::Buffer(data_ptr, num_elements), on_creation_callback, on_destruction_callback);
-                return Tensor(std::move(storage), tensor_spec);
-            } else {
-                return create_owned_tensor(data_ptr, tensor_spec);
-            }
+            return create_typed_tt_tensor_from_py_data<uint8_t>(
+                py_data_ptr, tensor_spec, device, on_creation_callback, on_destruction_callback, force_disable_borrow);
         }
         case DataType::UINT16: {
-            auto data_ptr = reinterpret_cast<uint16_t*>(py_data_ptr);
-            if (enable_borrow) {
-                auto storage = BorrowedStorage(
-                    borrowed_buffer::Buffer(data_ptr, num_elements), on_creation_callback, on_destruction_callback);
-                return Tensor(std::move(storage), tensor_spec);
-            } else {
-                return create_owned_tensor(data_ptr, tensor_spec);
-            }
+            return create_typed_tt_tensor_from_py_data<uint16_t>(
+                py_data_ptr, tensor_spec, device, on_creation_callback, on_destruction_callback, force_disable_borrow);
         }
         case DataType::INT32: {
-            auto data_ptr = reinterpret_cast<int32_t*>(py_data_ptr);
-            if (enable_borrow) {
-                auto storage = BorrowedStorage(
-                    borrowed_buffer::Buffer(data_ptr, num_elements), on_creation_callback, on_destruction_callback);
-                return Tensor(std::move(storage), tensor_spec);
-            } else {
-                return create_owned_tensor(data_ptr, tensor_spec);
-            }
+            return create_typed_tt_tensor_from_py_data<int32_t>(
+                py_data_ptr, tensor_spec, device, on_creation_callback, on_destruction_callback, force_disable_borrow);
         }
         case DataType::UINT32: {
-            auto data_ptr = reinterpret_cast<uint32_t*>(py_data_ptr);
-            if (enable_borrow) {
-                auto storage = BorrowedStorage(
-                    borrowed_buffer::Buffer(data_ptr, num_elements), on_creation_callback, on_destruction_callback);
-                return Tensor(std::move(storage), tensor_spec);
-            } else {
-                return create_owned_tensor(data_ptr, tensor_spec);
-            }
+            return create_typed_tt_tensor_from_py_data<uint32_t>(
+                py_data_ptr, tensor_spec, device, on_creation_callback, on_destruction_callback, force_disable_borrow);
         }
         case DataType::FLOAT32: {
-            auto data_ptr = reinterpret_cast<float*>(py_data_ptr);
-            if (enable_borrow) {
-                auto storage = BorrowedStorage(
-                    borrowed_buffer::Buffer(data_ptr, num_elements), on_creation_callback, on_destruction_callback);
-                return Tensor(std::move(storage), tensor_spec);
-            } else {
-                return create_owned_tensor(data_ptr, tensor_spec);
-            }
+            return create_typed_tt_tensor_from_py_data<float>(
+                py_data_ptr, tensor_spec, device, on_creation_callback, on_destruction_callback, force_disable_borrow);
         }
         // TODO: This is not supported for numpy
         case DataType::BFLOAT16: {
-            auto data_ptr = reinterpret_cast<::bfloat16*>(py_data_ptr);
-            if (enable_borrow) {
-                auto storage = BorrowedStorage(
-                    borrowed_buffer::Buffer(data_ptr, num_elements), on_creation_callback, on_destruction_callback);
-                return Tensor(std::move(storage), tensor_spec);
-            } else {
-                return create_owned_tensor(data_ptr, tensor_spec);
-            }
+            return create_typed_tt_tensor_from_py_data<bfloat16>(
+                py_data_ptr, tensor_spec, device, on_creation_callback, on_destruction_callback, force_disable_borrow);
         }
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B: {
-            auto data_ptr = reinterpret_cast<float*>(py_data_ptr);
-            auto float_tensor_spec = TensorSpec(
-                tensor_spec.logical_shape(),
-                TensorLayout(DataType::FLOAT32, tensor_spec.page_config(), tensor_spec.memory_config()));
-            auto float_tensor = create_owned_tensor(data_ptr, float_tensor_spec);
-
-            auto tile = tensor_spec.tensor_layout().get_page_config().get_tile();
-            auto output_float_data = owned_buffer::get_as<float>(float_tensor).get();
-            auto output_packed_data = data_type == DataType::BFLOAT8_B
-                                          ? pack_fp32_vec_as_bfp8_tiles(
-                                                output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false, tile)
-                                          : pack_fp32_vec_as_bfp4_tiles(
-                                                output_float_data, /*row_major_input=*/false, /*is_exp_a=*/false, tile);
-            auto output_buffer = owned_buffer::create<uint32_t>(std::move(output_packed_data));
-            return Tensor(std::move(OwnedStorage{std::move(output_buffer)}), tensor_spec);
+            return create_typed_tt_tensor_from_py_data<float>(
+                py_data_ptr, tensor_spec, device, on_creation_callback, on_destruction_callback, force_disable_borrow);
         }
-        default: {
+        case DataType::INVALID: {
             TT_THROW("Unsupported DataType: {}", data_type);
-            break;
         }
     }
+
+    TT_THROW("Unsupported DataType: {}", data_type);
 }
 
 Tensor convert_python_tensor_to_tt_tensor(

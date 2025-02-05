@@ -7,6 +7,7 @@
 #include <magic_enum/magic_enum.hpp>
 #include <mutex>
 #include <tt-metalium/tt_align.hpp>
+#include <unordered_map>
 
 #include "cq_commands.hpp"
 #include "dispatch_core_manager.hpp"
@@ -16,6 +17,7 @@
 #include "dispatch_settings.hpp"
 #include "helpers.hpp"
 #include "buffer.hpp"
+#include "umd/device/tt_core_coordinates.h"
 
 // FIXME: Don't do this in header files
 using namespace tt::tt_metal;
@@ -58,51 +60,61 @@ public:
     DispatchMemMap(const DispatchMemMap&) = delete;
     DispatchMemMap(DispatchMemMap&& other) noexcept = delete;
 
-    // Returns an instance of the memory map for the provided core_type. If the number of HW CQs is not provided then
-    // the previous one will be used.
-    static const DispatchMemMap& get(const CoreType& core_type, const uint32_t num_hw_cqs = 0) {
-        static DispatchMemMap instance;
+    //
+    // Returns the instance. The instance is reset if the core_type and/or num_hw_cqs changed from
+    // the last call. The memory region sizes can be configured using DispatchSettings.
+    //
+    // If the settings changed, then force_reinit_with_settings will recreate the instance with
+    // the settings for the given core_type / num_hw_cqs.
+    //
+    static const DispatchMemMap& get(
+        const CoreType& core_type, const uint32_t num_hw_cqs = 0, const bool force_reinit_with_settings = false) {
+        auto& instance = get_instance();
 
-        if (num_hw_cqs > 0 && (core_type != instance.last_core_type || num_hw_cqs != instance.hw_cqs)) {
+        if (num_hw_cqs > 0 && (core_type != instance.last_core_type || num_hw_cqs != instance.hw_cqs) ||
+            force_reinit_with_settings) {
             instance.reset(core_type, num_hw_cqs);
         }
 
-        TT_FATAL(instance.hw_cqs > 0, "Command Queue is not initialized. Call DispatchMemMap::get with non zero num_hw_cqs.");
+        TT_FATAL(
+            instance.hw_cqs > 0,
+            "Command Queue is not initialized. Call DispatchMemMap::get with non zero num_hw_cqs.");
         return instance;
     }
 
-    uint32_t prefetch_q_entries() const { return prefetch_q_entries_; }
+    uint32_t prefetch_q_entries() const { return settings.prefetch_q_entries_; }
 
-    uint32_t prefetch_q_size() const { return prefetch_q_size_; }
+    uint32_t prefetch_q_size() const { return settings.prefetch_q_size_; }
 
-    uint32_t max_prefetch_command_size() const { return max_prefetch_command_size_; }
+    uint32_t max_prefetch_command_size() const { return settings.prefetch_max_cmd_size_; }
 
     uint32_t cmddat_q_base() const { return cmddat_q_base_; }
 
-    uint32_t cmddat_q_size() const { return cmddat_q_size_; }
+    uint32_t cmddat_q_size() const { return settings.prefetch_cmddat_q_size_; }
 
     uint32_t scratch_db_base() const { return scratch_db_base_; }
 
-    uint32_t scratch_db_size() const { return scratch_db_size_; }
+    uint32_t scratch_db_size() const { return settings.prefetch_scratch_db_size_; }
 
     uint32_t dispatch_buffer_block_size_pages() const { return dispatch_buffer_block_size_pages_; }
 
     uint32_t dispatch_buffer_base() const { return dispatch_buffer_base_; }
 
-    uint32_t dispatch_buffer_pages() const { return dispatch_buffer_pages_; }
+    uint32_t dispatch_buffer_pages() const { return settings.dispatch_pages_; }
 
-    uint32_t prefetch_d_buffer_size() const { return prefetch_d_buffer_size_; }
+    uint32_t prefetch_d_buffer_size() const { return settings.prefetch_d_buffer_size_; }
 
-    uint32_t prefetch_d_buffer_pages() const { return prefetch_d_buffer_pages_; }
+    uint32_t prefetch_d_buffer_pages() const { return settings.prefetch_d_pages_; }
 
-    uint32_t mux_buffer_size(uint8_t num_hw_cqs = 1) const { return prefetch_d_buffer_size_ / num_hw_cqs; }
+    uint32_t mux_buffer_size(uint8_t num_hw_cqs = 1) const { return settings.tunneling_buffer_size_ / num_hw_cqs; }
 
-    uint32_t mux_buffer_pages(uint8_t num_hw_cqs = 1) const { return prefetch_d_buffer_pages_ / num_hw_cqs; }
+    uint32_t mux_buffer_pages(uint8_t num_hw_cqs = 1) const { return settings.tunneling_buffer_pages_ / num_hw_cqs; }
 
-    uint32_t dispatch_s_buffer_size() const { return dispatch_s_buffer_size_; }
+    uint32_t dispatch_s_buffer_size() const { return settings.dispatch_s_buffer_size_; }
 
     uint32_t dispatch_s_buffer_pages() const {
-        return dispatch_s_buffer_size_ / (1 << tt::tt_metal::DispatchSettings::DISPATCH_S_BUFFER_LOG_PAGE_SIZE);
+        return settings.dispatch_s_buffer_size_ /
+               (1 << tt::tt_metal::DispatchSettings::DISPATCH_S_BUFFER_LOG_PAGE_SIZE);
     }
 
     uint32_t get_device_command_queue_addr(const CommandQueueDeviceAddrType& device_addr_type) const {
@@ -125,30 +137,25 @@ public:
 private:
     DispatchMemMap() = default;
 
-    // Reset the instance using the default settings for the core_type and num_hw_cqs.
-    void reset(const CoreType& core_type, const uint32_t num_hw_cqs) {
-        const auto settings = DispatchSettings::defaults(core_type, tt::Cluster::instance(), num_hw_cqs);
-        reset(settings);
+    static DispatchMemMap& get_instance() {
+        static DispatchMemMap instance;
+        return instance;
     }
 
-    // Reset the instance using the provided settings
-    void reset(const DispatchSettings& settings) {
+    // Reset the instance using the settings for the core_type and num_hw_cqs.
+    void reset(const CoreType& core_type, const uint32_t num_hw_cqs) {
+        const auto dispatch_settings = DispatchSettings::get(core_type, num_hw_cqs);
+        this->settings = dispatch_settings;
         last_core_type = settings.core_type_;
         hw_cqs = settings.num_hw_cqs_;
 
-        prefetch_q_entries_ = settings.prefetch_q_entries_;
-        max_prefetch_command_size_ = settings.prefetch_max_cmd_size_;
-        cmddat_q_size_ = settings.prefetch_cmddat_q_size_;
-        scratch_db_size_ = settings.prefetch_scratch_db_size_;
-        prefetch_d_buffer_size_ = settings.prefetch_d_buffer_size_;
-        dispatch_s_buffer_size_ = settings.dispatch_s_buffer_size_;
         const auto dispatch_buffer_block_size = settings.dispatch_size_;
         const auto [l1_base, l1_size] = get_device_l1_info(settings.core_type_);
         const auto pcie_alignment = tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::HOST);
         const auto l1_alignment = tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::L1);
 
-        TT_ASSERT(cmddat_q_size_ >= 2 * max_prefetch_command_size_);
-        TT_ASSERT(scratch_db_size_ % 2 == 0);
+        TT_ASSERT(settings.prefetch_cmddat_q_size_ >= 2 * settings.prefetch_max_cmd_size_);
+        TT_ASSERT(settings.prefetch_scratch_db_size_ % 2 == 0);
         TT_ASSERT((dispatch_buffer_block_size & (dispatch_buffer_block_size - 1)) == 0);
         TT_ASSERT(
             DispatchSettings::DISPATCH_MESSAGE_ENTRIES <= DispatchSettings::DISPATCH_MESSAGES_MAX_OFFSET / l1_alignment + 1,
@@ -183,20 +190,17 @@ private:
             }
         }
 
-        prefetch_q_size_ = prefetch_q_entries_ * sizeof(DispatchSettings::prefetch_q_entry_type);
         uint32_t prefetch_dispatch_unreserved_base =
             device_cq_addrs_[tt::utils::underlying_type<CommandQueueDeviceAddrType>(
                 CommandQueueDeviceAddrType::UNRESERVED)];
-        cmddat_q_base_ = prefetch_dispatch_unreserved_base + round_size(prefetch_q_size_, pcie_alignment);
-        scratch_db_base_ = cmddat_q_base_ + round_size(cmddat_q_size_, pcie_alignment);
-
-        TT_ASSERT(scratch_db_base_ + scratch_db_size_ < l1_size);
+        cmddat_q_base_ = prefetch_dispatch_unreserved_base + round_size(settings.prefetch_q_size_, pcie_alignment);
+        scratch_db_base_ = cmddat_q_base_ + round_size(settings.prefetch_cmddat_q_size_, pcie_alignment);
         dispatch_buffer_base_ = align(prefetch_dispatch_unreserved_base, 1 << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE);
-        dispatch_buffer_pages_ = dispatch_buffer_block_size / (1 << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE);
-        dispatch_buffer_block_size_pages_ = dispatch_buffer_pages_ / DispatchSettings::DISPATCH_BUFFER_SIZE_BLOCKS;
+        dispatch_buffer_block_size_pages_ = settings.dispatch_pages_ / DispatchSettings::DISPATCH_BUFFER_SIZE_BLOCKS;
         const uint32_t dispatch_cb_end = dispatch_buffer_base_ + settings.dispatch_size_;
+
+        TT_ASSERT(scratch_db_base_ + settings.prefetch_scratch_db_size_ < l1_size);
         TT_ASSERT(dispatch_cb_end < l1_size);
-        prefetch_d_buffer_pages_ = settings.prefetch_d_pages_;
     }
 
     std::pair<uint32_t, uint32_t> get_device_l1_info(const CoreType& core_type) const {
@@ -219,20 +223,14 @@ private:
         return {l1_base, l1_size};
     }
 
-    uint32_t prefetch_q_entries_;
-    uint32_t prefetch_q_size_;
-    uint32_t max_prefetch_command_size_;
     uint32_t cmddat_q_base_;
-    uint32_t cmddat_q_size_;
     uint32_t scratch_db_base_;
-    uint32_t scratch_db_size_;
     uint32_t dispatch_buffer_base_;
+
     uint32_t dispatch_buffer_block_size_pages_;
-    uint32_t dispatch_buffer_pages_;
-    uint32_t prefetch_d_buffer_size_;
-    uint32_t prefetch_d_buffer_pages_;
-    uint32_t dispatch_s_buffer_size_;
     std::vector<uint32_t> device_cq_addrs_;
+
+    DispatchSettings settings;
 
     uint32_t hw_cqs{0}; // 0 means uninitialized
     CoreType last_core_type{CoreType::WORKER};
