@@ -479,6 +479,7 @@ void ControlPlane::write_routing_tables_to_chip(mesh_id_t mesh_id, chip_id_t chi
                 false);
         }
     }
+    tt::Cluster::instance().l1_barrier(physical_chip_id);
 }
 
 std::pair<mesh_id_t, chip_id_t> ControlPlane::get_mesh_chip_id_from_physical_chip_id(chip_id_t physical_chip_id) const {

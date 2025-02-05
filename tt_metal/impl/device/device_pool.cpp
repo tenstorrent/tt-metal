@@ -192,6 +192,7 @@ void DevicePool::initialize(
     tt::stl::Span<const std::uint32_t> l1_bank_remap) noexcept {
     ZoneScoped;
     log_debug(tt::LogMetal, "DevicePool initialize");
+
     tt::tt_metal::dispatch_core_manager::initialize(dispatch_core_config, num_hw_cqs);
 
     if (_inst == nullptr) {
@@ -233,6 +234,21 @@ void DevicePool::initialize(
 
     _inst->add_devices_to_pool(device_ids);
     _inst->init_firmware_on_active_devices();
+
+    bool initialize_fabric = true;
+    for (int i = 0; i < tt::Cluster::instance().number_of_devices(); i++) {
+        if (not _inst->is_device_active(i)) {
+            initialize_fabric = false;
+            break;
+        }
+    }
+    if (initialize_fabric) {
+        // Initialize control plane, which writes routing tables to all ethernet cores
+        _inst->initialize_control_plane();
+        // Launch fabric programs on all active devices
+        _inst->initialize_fabric_on_all_devices();
+    }
+
     tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true, target_mmio_ids);
     _inst->init_profiler_devices();
 }
@@ -438,6 +454,19 @@ void DevicePool::init_firmware_on_active_devices() const {
         }
     }
 }
+
+void DevicePool::initialize_control_plane() {
+    // Default mode, auto select mesh graph descriptor. In future, we can add a way for user to specify custom
+    // descriptors
+    std::string mesh_graph_descriptor = "t3k_mesh_graph_descriptor.yaml";
+    const std::filesystem::path mesh_graph_desc_path =
+        std::filesystem::path(tt::llrt::RunTimeOptions::get_instance().get_root_dir()) /
+        "tt_metal/fabric/mesh_graph_descriptors" / mesh_graph_descriptor;
+
+    this->control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(mesh_graph_desc_path.string());
+}
+
+void DevicePool::initialize_fabric_on_all_devices() {}
 
 DevicePool::DevicePool() {
     ZoneScoped;

@@ -8,6 +8,8 @@
 #include "host_api.hpp"
 #include "dprint_server.hpp"
 #include "device.hpp"
+#include "tt_metal/fabric/control_plane.hpp"
+
 namespace tt {
 namespace tt_metal::detail {
 
@@ -46,6 +48,8 @@ public:
     void unregister_worker_thread_for_device(IDevice* device);
     const std::unordered_set<std::thread::id>& get_worker_thread_ids() const;
 
+    std::unique_ptr<tt::tt_fabric::ControlPlane> control_plane;
+
 private:
     ~DevicePool();
     DevicePool();
@@ -75,6 +79,11 @@ private:
     void initialize_device(IDevice* dev) const;
     void add_devices_to_pool(const std::vector<chip_id_t>& device_ids);
     IDevice* get_device(chip_id_t id) const;
+
+    // Fabric setup helper functions
+    void initialize_control_plane();
+    void initialize_fabric_on_all_devices();
+
     static DevicePool* _inst;
 };
 

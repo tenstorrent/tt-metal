@@ -1022,6 +1022,20 @@ void Device::initialize_synchronous_sw_cmd_queue() {
     }
 }
 
+void Device::initialize_fabric_program() { fabric_program_ = create_and_compile_fabric_program(this); }
+
+void Device::configure_fabric_program() {
+    configure_fabric_cores(this);
+    program_dispatch::finalize_program_offsets(*fabric_program_, this);
+
+    detail::WriteRuntimeArgsToDevice(this, *fabric_program_);
+    detail::ConfigureDeviceWithProgram(this, *fabric_program_);
+
+    // Note: the l1_barrier below is needed to be sure writes to cores that
+    // don't get the GO mailbox (eg, storage cores) have all landed
+    tt::Cluster::instance().l1_barrier(this->id());
+}
+
 bool Device::initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap, bool minimal) {
     ZoneScoped;
     log_info(tt::LogMetal, "Initializing device {}. Program cache is {}enabled", this->id_, this->program_cache_.is_enabled() ? "": "NOT ");

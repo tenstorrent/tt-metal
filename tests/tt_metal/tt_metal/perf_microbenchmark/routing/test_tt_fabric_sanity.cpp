@@ -4,6 +4,7 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/device_impl.hpp>
 #include <tt-metalium/rtoptions.hpp>
 #include "tt_metal/fabric/mesh_graph.hpp"
@@ -61,11 +62,13 @@ typedef struct test_board {
     std::vector<chip_id_t> physical_chip_ids;
     std::vector<std::pair<chip_id_t, chip_id_t>> unicast_map;
     std::map<chip_id_t, IDevice*> device_handle_map;
-    std::unique_ptr<tt::tt_fabric::ControlPlane> control_plane;
+    tt::tt_fabric::ControlPlane* control_plane;
     uint32_t num_chips_to_use;
     std::string mesh_graph_descriptor;
+    uint32_t metal_fabric_init_level;
 
-    test_board(std::string& board_type_) {
+    test_board(std::string& board_type_, uint32_t metal_fabric_init_level_) {
+        metal_fabric_init_level = metal_fabric_init_level_;
         if ("n300" == board_type_) {
             mesh_graph_descriptor = "n300_mesh_graph_descriptor.yaml";
             num_chips_to_use = 2;
@@ -103,7 +106,9 @@ typedef struct test_board {
             throw std::runtime_error("Odd number of chips detected, not supported currently");
         }
 
-        _init_control_plane(mesh_graph_descriptor);
+        if (metal_fabric_init_level == 0) {
+            _init_control_plane(mesh_graph_descriptor);
+        }
         device_handle_map = tt::tt_metal::detail::CreateDevices(available_chip_ids);
 
         if (num_chips_to_use != available_chip_ids.size()) {
@@ -1045,7 +1050,10 @@ int main(int argc, char **argv) {
         log_info(
             LogTest, "  --device_id: Device on which the test will be run, default = {}", default_test_device_id_l);
         log_info(
-            LogTest, "  --device_id_r: Device on which the test will be run, default = {}", default_test_device_id_r);
+            LogTest, "  --device_id_r: DDevice on which the test will be run, default = {}", default_test_device_id_r);
+
+        log_info(
+            LogTest, "  --metal_fabric_init_level: use Metal runtime to load fabric, 0 is disable, 1 is enable", 0);
         return 0;
     }
 
@@ -1117,6 +1125,8 @@ int main(int argc, char **argv) {
 
     bool fixed_async_wr_notif_addr = test_args::has_command_option(input_args, "--fixed_async_wr_notif_addr");
 
+    uint32_t metal_fabric_init_level = test_args::has_command_option(input_args, "--metal_fabric_init_level");
+
     bool pass = true;
     uint32_t num_available_devices, num_allocated_devices = 0;
 
@@ -1139,7 +1149,7 @@ int main(int argc, char **argv) {
     }
 
     try {
-        test_board_t test_board(board_type);
+        test_board_t test_board(board_type, metal_fabric_init_level);
         num_available_devices = test_board.get_num_available_devices();
 
         // keep the number of test devices even
@@ -1227,36 +1237,38 @@ int main(int argc, char **argv) {
             throw std::runtime_error("Test cannot run on specified device.");
         } */
 
-        if (run_gk_on_idle_ethernet) {
-            routing_table_addr = hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
-        } else {
-            routing_table_addr = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
-        }
-        gk_interface_addr = routing_table_addr + sizeof(fabric_router_l1_config_t) * 4;
-        socket_info_addr = gk_interface_addr + sizeof(gatekeeper_info_t);
+        if (metal_fabric_init_level == 0) {
+            if (run_gk_on_idle_ethernet) {
+                routing_table_addr = hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
+            } else {
+                routing_table_addr = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
+            }
+            gk_interface_addr = routing_table_addr + sizeof(fabric_router_l1_config_t) * 4;
+            socket_info_addr = gk_interface_addr + sizeof(gatekeeper_info_t);
 
-        // create router kernels
-        std::vector<uint32_t> router_compile_args = {
-            (tunneler_queue_size_bytes >> 4),  // 0: rx_queue_size_words
-            tunneler_test_results_addr,        // 1: test_results_addr
-            tunneler_test_results_size,        // 2: test_results_size
-            0,                                 // timeout_mcycles * 1000 * 1000 * 4, // 3: timeout_cycles
-        };
-        for (auto& [chip_id, test_device] : test_devices) {
-            test_device->create_router_kernels(router_compile_args, defines);
-        }
+            // create router kernels
+            std::vector<uint32_t> router_compile_args = {
+                (tunneler_queue_size_bytes >> 4),  // 0: rx_queue_size_words
+                tunneler_test_results_addr,        // 1: test_results_addr
+                tunneler_test_results_size,        // 2: test_results_size
+                0,                                 // timeout_mcycles * 1000 * 1000 * 4, // 3: timeout_cycles
+            };
+            for (auto& [chip_id, test_device] : test_devices) {
+                test_device->create_router_kernels(router_compile_args, defines);
+            }
 
-        // create gatekeeper kernel
-        std::vector<uint32_t> gatekeeper_compile_args = {
-            gk_interface_addr,   // 0: gk info addr
-            socket_info_addr,    // 1:
-            routing_table_addr,  // 2:
-            test_results_addr,   // 3: test_results_addr
-            test_results_size,   // 4: test_results_size
-            0,                   // 5: timeout_cycles
-        };
-        for (auto& [chip_id, test_device] : test_devices) {
-            test_device->create_gatekeeper_kernel(gatekeeper_compile_args, defines);
+            // create gatekeeper kernel
+            std::vector<uint32_t> gatekeeper_compile_args = {
+                gk_interface_addr,   // 0: gk info addr
+                socket_info_addr,    // 1:
+                routing_table_addr,  // 2:
+                test_results_addr,   // 3: test_results_addr
+                test_results_size,   // 4: test_results_size
+                0,                   // 5: timeout_cycles
+            };
+            for (auto& [chip_id, test_device] : test_devices) {
+                test_device->create_gatekeeper_kernel(gatekeeper_compile_args, defines);
+            }
         }
 
         if (check_txrx_timeout) {

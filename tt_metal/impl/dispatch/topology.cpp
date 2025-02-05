@@ -389,7 +389,7 @@ std::vector<DispatchKernelNode> generate_nodes(const std::set<chip_id_t>& device
     uint32_t total_devices = tt::Cluster::instance().number_of_devices();
     TT_ASSERT(
         total_devices == 1 or total_devices == 2 or total_devices == 4 or total_devices == 8 or total_devices == 36,
-        "UneXpected target.");
+        "Unexpected target.");
     uint32_t num_devices = device_ids.size();
     TT_ASSERT(num_devices > 0, "Can't determine dispatch architecture with no active devices.");
     TT_ASSERT(num_devices <= total_devices);
