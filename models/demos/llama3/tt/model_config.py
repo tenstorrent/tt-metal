@@ -1054,6 +1054,10 @@ class TtModelArgs:
         self.vision_in_channels = 3
 
     @property
+    def use_scaled_rope(self):
+        return self.rope_scaling_factor is not None
+
+    @property
     def base_model_name(self):
         return self.model_name.split("B-")[0] + "B" if "B-" in self.model_name else self.model_name
 
