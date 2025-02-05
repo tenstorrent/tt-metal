@@ -302,8 +302,8 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_reader_kernel_id, {core}, reader_rt_args);
 
         // Set writer runtime args
-        auto mcast_start_core = device->worker_core_from_logical_core(input_tensor_cores.bounding_box().start_coord);
-        auto mcast_end_core = device->worker_core_from_logical_core(input_tensor_cores.bounding_box().end_coord);
+        auto mcast_start_core = device->worker_core_from_logical_core(output_tensor_cores.bounding_box().start_coord);
+        auto mcast_end_core = device->worker_core_from_logical_core(output_tensor_cores.bounding_box().end_coord);
 
         bool wait_output_semaphore = (link == 0) && !enable_async_output_tensor;
         bool reset_global_semaphore = (link == 0) && !enable_async_output_tensor;
