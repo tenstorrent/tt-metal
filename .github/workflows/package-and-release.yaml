@@ -192,6 +192,7 @@ jobs:
     uses: ./.github/workflows/publish-release-image.yaml
     secrets: inherit
     with:
+      base-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
       version: ${{ needs.create-tag.outputs.version }}
       is_major_version:  ${{ needs.get-params.outputs.is-release-candidate !='true' && needs.get-params.outputs.should-create-release == 'true' }}
   release-docs:

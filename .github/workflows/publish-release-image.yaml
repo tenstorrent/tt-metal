@@ -3,6 +3,10 @@ name: "[internal] Create and Publish Release Docker Image"
 on:
   workflow_call:
     inputs:
+      base-image:
+        description: "Base image to build on top of"
+        required: true
+        type: string
       version:
         required: true
         type: string
@@ -51,7 +55,7 @@ jobs:
           push: true
           build-args: |
             WHEEL_FILENAME=${{ env.WHEEL_FILENAME }}
-            BASE_IMAGE_NAME=tt-metalium/${{ matrix.os }}-amd64
+            BASE_IMAGE=${{ inputs.base-image }}
           tags: ${{ env.TAG_NAME }}
           context: .
           file: dockerfile/release.Dockerfile
@@ -85,7 +89,7 @@ jobs:
         timeout-minutes: ${{ inputs.timeout }}
         uses: ./.github/actions/docker-run
         with:
-          image: ghcr.io/${{ github.repository }}/tt-metalium-${{ matrix.os }}-amd64-release:${{ inputs.version }}
+          docker_image: ghcr.io/${{ github.repository }}/tt-metalium-${{ matrix.os }}-amd64-release:${{ inputs.version }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           run_args: |
             ${{ matrix.test_group.cmd }}

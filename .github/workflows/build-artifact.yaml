@@ -43,10 +43,10 @@ on:
         type: boolean
         default: false
     outputs:
-      docker-image-ci-build-tag:
+      ci-build-docker-image:
         description: "Docker tag for the CI Build Docker image for building TT-Metalium et al"
         value: ${{ jobs.build-docker-image.outputs.ci-build-tag }}
-      #docker-image-ci-test-tag:
+      #ci-test-docker-image:
       #  description: "Docker tag for the CI Test Docker image for testing TT-Metalium et al"
       #  value: ${{ jobs.build-docker-image.outputs.ci-test-tag }}
 
