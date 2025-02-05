@@ -53,29 +53,28 @@ public:
     WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) { return config_buffer_mgr_[index]; };
     void enqueue_mesh_workload(MeshWorkload& mesh_workload, bool blocking);
 
+    // Specifies host data to be written to or read from a MeshBuffer shard.
+    struct ShardDataTransfer {
+        Coordinate shard_coord;
+        void* host_data = nullptr;
+        std::optional<BufferRegion> region;
+    };
+
     // MeshBuffer Write APIs
-    void enqueue_write_shard(
-        const std::shared_ptr<MeshBuffer>& mesh_buffer,
-        const void* host_data,
-        const Coordinate& coord,
-        bool blocking,
-        const std::optional<BufferRegion>& region = std::nullopt);
     void enqueue_write_shard_to_sub_grid(
         const MeshBuffer& buffer, const void* host_data, const LogicalDeviceRange& device_range, bool blocking);
     void enqueue_write_mesh_buffer(const std::shared_ptr<MeshBuffer>& buffer, const void* host_data, bool blocking);
     void enqueue_write_shards(
-        const std::shared_ptr<MeshBuffer>& mesh_buffer, const std::vector<const void*>& host_data, bool blocking);
+        const std::shared_ptr<MeshBuffer>& mesh_buffer,
+        const std::vector<ShardDataTransfer>& shard_data_transfers,
+        bool blocking);
 
     // MeshBuffer Read APIs
-    void enqueue_read_shard(
-        void* host_data,
-        const std::shared_ptr<MeshBuffer>& mesh_buffer,
-        const Coordinate& coord,
-        bool blocking,
-        const std::optional<BufferRegion>& region = std::nullopt);
     void enqueue_read_mesh_buffer(void* host_data, const std::shared_ptr<MeshBuffer>& buffer, bool blocking);
     void enqueue_read_shards(
-        const std::vector<void*>& host_data, const std::shared_ptr<MeshBuffer>& mesh_buffer, bool blocking);
+        const std::vector<ShardDataTransfer>& shard_data_transfers,
+        const std::shared_ptr<MeshBuffer>& mesh_buffer,
+        bool blocking);
 
     void finish();
     void reset_worker_state(

@@ -217,31 +217,6 @@ void MeshCommandQueue::read_shard_from_device(
     }
 }
 
-void MeshCommandQueue::enqueue_write_shard(
-    const std::shared_ptr<MeshBuffer>& mesh_buffer,
-    const void* host_data,
-    const Coordinate& coord,
-    bool blocking,
-    const std::optional<BufferRegion>& region) {
-    auto shard = mesh_buffer->get_device_buffer(coord);
-    this->write_shard_to_device(shard, host_data, region.value_or(BufferRegion(0, shard->size())));
-
-    if (blocking) {
-        this->finish();
-    }
-}
-
-void MeshCommandQueue::enqueue_read_shard(
-    void* host_data,
-    const std::shared_ptr<MeshBuffer>& mesh_buffer,
-    const Coordinate& coord,
-    bool blocking,
-    const std::optional<BufferRegion>& region) {
-    TT_FATAL(blocking, "Only blocking reads are currently supported from MeshBuffer shards.");
-    auto shard = mesh_buffer->get_device_buffer(coord);
-    this->read_shard_from_device(shard, host_data, region.value_or(BufferRegion(0, shard->size())));
-}
-
 void MeshCommandQueue::write_sharded_buffer(const MeshBuffer& buffer, const void* src) {
     auto global_buffer_shape = buffer.global_shard_spec().global_buffer_shape;
     auto global_buffer_size = buffer.global_shard_spec().global_size;
@@ -409,32 +384,36 @@ void MeshCommandQueue::enqueue_read_mesh_buffer(
 }
 
 void MeshCommandQueue::enqueue_write_shards(
-    const std::shared_ptr<MeshBuffer>& buffer, const std::vector<const void*>& host_data, bool blocking) {
+    const std::shared_ptr<MeshBuffer>& buffer,
+    const std::vector<ShardDataTransfer>& shard_data_transfers,
+    bool blocking) {
     // TODO: #17215 - this API is used by TTNN, as it currently implements rich ND sharding API for multi-devices.
     // In the long run, the multi-device sharding API in Metal will change, and this will most likely be replaced.
-    const auto [num_rows, num_cols] = buffer->device()->shape();
-    TT_FATAL(host_data.size() == num_rows * num_cols, "Expected number of shards to match the number of devices.");
-    for (std::size_t shard_y = 0; shard_y < num_rows; ++shard_y) {
-        for (std::size_t shard_x = 0; shard_x < num_cols; ++shard_x) {
-            auto device_shard_view = buffer->get_device_buffer(Coordinate(shard_y, shard_x));
-            const BufferRegion region(0, device_shard_view->size());
-            write_shard_to_device(device_shard_view, host_data[shard_y * num_cols + shard_x], region);
-        }
+    for (const auto& shard_data_transfer : shard_data_transfers) {
+        auto device_shard_view = buffer->get_device_buffer(shard_data_transfer.shard_coord);
+        write_shard_to_device(
+            device_shard_view,
+            shard_data_transfer.host_data,
+            shard_data_transfer.region.value_or(BufferRegion(0, device_shard_view->size())));
+    }
+    if (blocking) {
+        this->finish();
     }
 }
 
 void MeshCommandQueue::enqueue_read_shards(
-    const std::vector<void*>& host_data, const std::shared_ptr<MeshBuffer>& buffer, bool blocking) {
+    const std::vector<ShardDataTransfer>& shard_data_transfers,
+    const std::shared_ptr<MeshBuffer>& buffer,
+    bool blocking) {
     // TODO: #17215 - this API is used by TTNN, as it currently implements rich ND sharding API for multi-devices.
     // In the long run, the multi-device sharding API in Metal will change, and this will most likely be replaced.
     const auto [num_rows, num_cols] = buffer->device()->shape();
-    TT_FATAL(host_data.size() == num_rows * num_cols, "Expected number of shards to match the number of devices.");
-    for (std::size_t shard_y = 0; shard_y < num_rows; ++shard_y) {
-        for (std::size_t shard_x = 0; shard_x < num_cols; ++shard_x) {
-            auto device_shard_view = buffer->get_device_buffer(Coordinate(shard_y, shard_x));
-            const BufferRegion region(0, device_shard_view->size());
-            read_shard_from_device(device_shard_view, host_data[shard_y * num_cols + shard_x], region);
-        }
+    for (const auto& shard_data_transfer : shard_data_transfers) {
+        auto device_shard_view = buffer->get_device_buffer(shard_data_transfer.shard_coord);
+        read_shard_from_device(
+            device_shard_view,
+            shard_data_transfer.host_data,
+            shard_data_transfer.region.value_or(BufferRegion(0, device_shard_view->size())));
     }
 }
 

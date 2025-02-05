@@ -584,28 +584,35 @@ Tensor to_host_mesh_tensor(const Tensor& tensor, bool blocking) {
     ttnn::MeshDevice* device = mesh_buffer->device();
     distributed::MeshCommandQueue& mesh_cq = device->mesh_command_queue();
     const auto [num_rows, num_cols] = device->shape();
+    const auto num_buffers = storage.buffers.size();
 
+    std::vector<distributed::MeshCommandQueue::ShardDataTransfer> shard_data_transfers;
     std::vector<TensorSpec> specs;
     std::vector<OwnedBuffer> buffers;
-    specs.reserve(device->num_devices());
-    buffers.reserve(device->num_devices());
+    specs.reserve(num_buffers);
+    buffers.reserve(num_buffers);
+    shard_data_transfers.reserve(num_buffers);
     distributed::Coordinate shard_coord = {0, 0};
     for (int id : storage.ordered_device_ids) {
         std::vector<T> host_buffer;
         const auto& shard_tensor_spec = storage.specs.at(id);
         const auto tensor_size_bytes = shard_tensor_spec.compute_packed_buffer_size_bytes();
         host_buffer.resize(tensor_size_bytes / sizeof(T));
-
-        mesh_cq.enqueue_read_shard(
-            host_buffer.data(), mesh_buffer, shard_coord, /*blocking=*/true, BufferRegion(0, tensor_size_bytes));
-
         specs.push_back(shard_tensor_spec);
         buffers.push_back(owned_buffer::create<T>(std::move(host_buffer)));
+
+        shard_data_transfers.push_back(distributed::MeshCommandQueue::ShardDataTransfer{
+            .shard_coord = shard_coord,
+            .host_data = std::visit([](auto& b) { return b.data(); }, buffers.back()),
+            .region = BufferRegion(0, tensor_size_bytes)});
+
         if (++shard_coord.col == num_cols) {
             shard_coord.col = 0;
             ++shard_coord.row;
         }
     }
+
+    mesh_cq.enqueue_read_shards(shard_data_transfers, mesh_buffer, /*blocking=*/true);
 
     MultiDeviceHostStorage host_storage(storage.strategy, std::move(buffers), std::move(specs));
     return Tensor(std::move(host_storage), tensor.get_tensor_spec());
@@ -768,10 +775,13 @@ MultiDeviceStorage shard_to_mesh_buffer(
 
     const auto [num_rows, num_cols] = mesh_device->shape();
     TT_FATAL(
-        storage.buffers.size() < mesh_device->num_devices(),
+        storage.buffers.size() <= mesh_device->num_devices(),
         "Number of host buffers {} exceeds the number of shards {}",
         storage.buffers.size(),
         mesh_device->num_devices());
+
+    std::vector<distributed::MeshCommandQueue::ShardDataTransfer> shard_data_transfers;
+    shard_data_transfers.reserve(storage.buffers.size());
     distributed::Coordinate shard_coord = {0, 0};
     for (int i = 0; i < storage.buffers.size(); i++) {
         TensorSpec shard_tensor_spec(
@@ -795,17 +805,17 @@ MultiDeviceStorage shard_to_mesh_buffer(
         TT_FATAL(
             expected_packed_buffer_size_bytes <= tensor_spec.compute_packed_buffer_size_bytes(),
             "Shard tensor size exceeds the global tensor size!");
-        mesh_device->mesh_command_queue().enqueue_write_shard(
-            mesh_buffer,
-            data_to_write.data(),
-            shard_coord,
-            /*blocking=*/false,
-            BufferRegion(0, input_size_bytes));
+        shard_data_transfers.push_back(distributed::MeshCommandQueue::ShardDataTransfer{
+            .shard_coord = shard_coord,
+            .host_data = data_to_write.data(),
+            .region = BufferRegion(0, input_size_bytes)});
         if (++shard_coord.col == num_cols) {
             shard_coord.col = 0;
             ++shard_coord.row;
         }
     }
+
+    mesh_device->mesh_command_queue().enqueue_write_shards(mesh_buffer, shard_data_transfers, /*blocking=*/false);
 
     return MultiDeviceStorage(
         storage.strategy, std::move(ordered_device_ids), std::move(buffers), std::move(specs), mesh_buffer);
