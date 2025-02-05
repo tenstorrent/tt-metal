@@ -6,12 +6,19 @@
 #include "ttnn/operations/core/core.hpp"
 #include "cpp/ttnn/operations/data_movement/squeeze/squeeze.hpp"
 #include "cpp/ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
-#include <ttnn/tensor/types.hpp>
 
 namespace ttnn::operations::pool {
 
+inline int64_t start_index(int64_t out_idx, int64_t out_size, int64_t in_size) {
+    return (out_idx * in_size) / out_size;
+}
+
+inline int64_t end_index(int64_t out_idx, int64_t out_size, int64_t in_size) {
+    return ((out_idx + 1) * in_size + out_size - 1) / out_size;
+}
+
 template <typename T>
-ttnn::Tensor compute_adaptive_avg_pool(
+static ttnn::Tensor compute_adaptive_avg_pool(
     const ttnn::Tensor& input, const ttnn::Shape& output_size, const std::optional<MemoryConfig>& mem_config) {
     auto input_mem_config = input.memory_config();
     auto input_shape = input.get_logical_shape();
