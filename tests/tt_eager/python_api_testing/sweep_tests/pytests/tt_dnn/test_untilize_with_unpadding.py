@@ -21,13 +21,44 @@ def create_grid(x, y):
 
 
 params = [
-    pytest.param([[5, 5, 32, 32]], untilize_with_unpadding_args)
-    for untilize_with_unpadding_args in generation_funcs.gen_untilize_with_unpadding_args([[5, 5, 32, 32]])
+    pytest.param(
+        [[5, 5, 32, 32]],
+        {
+            "dtype": [ttnn.bfloat16],
+            "layout": [ttnn.TILE_LAYOUT],
+            "input_mem_config": [ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)],
+            "output_mem_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+            "output_tensor_end": [4, 4, 31, 28],
+        },
+    )
 ]
+
 params += [
-    pytest.param([[5, 5, 64, 96]], untilize_with_unpadding_args)
-    for untilize_with_unpadding_args in generation_funcs.gen_untilize_with_unpadding_args([[5, 5, 64, 96]])
+    pytest.param(
+        [[5, 5, 64, 96]],
+        {
+            "dtype": [ttnn.bfloat16],
+            "layout": [ttnn.TILE_LAYOUT],
+            "input_mem_config": [ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)],
+            "output_mem_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            "output_tensor_end": [4, 4, 60, 90],
+        },
+    )
 ]
+
+params += [
+    pytest.param(
+        [[5, 5, 64, 96]],
+        {
+            "dtype": [ttnn.bfloat16],
+            "layout": [ttnn.TILE_LAYOUT],
+            "input_mem_config": [ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)],
+            "output_mem_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            "output_tensor_end": [4, 4, 60, 90],
+        },
+    )
+]
+
 
 params += [
     pytest.param(
@@ -35,8 +66,8 @@ params += [
         {
             "dtype": [ttnn.bfloat16],
             "layout": [ttnn.TILE_LAYOUT],
-            "input_mem_config": [ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)],
-            "output_mem_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            "input_mem_config": [ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)],
+            "output_mem_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
             "output_tensor_end": [0, 0, 119, 7299],
         },
     )
