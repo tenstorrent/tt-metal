@@ -810,15 +810,11 @@ Tensor _softshrink(const Tensor& a, float param, const std::optional<MemoryConfi
 
 // logit(input, eps)=log(input / 1 - input)
 Tensor _logit(const Tensor& input_a, float eps, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor t_eps = ttnn::full_like(input_a, eps);
-    Tensor t1m_eps = ttnn::full_like(input_a, (1 - eps));
+    float t1m_eps = 1 - eps;
     Tensor logit_input = ttnn::where(
-        ttnn::ltz(t_eps, output_mem_config),
-        input_a,
-        ttnn::where(
-            ttnn::lt(input_a, t_eps, std::nullopt, output_mem_config),
-            t_eps,
-            ttnn::where(ttnn::gt(input_a, t1m_eps, std::nullopt, output_mem_config), t1m_eps, input_a)));
+        ttnn::lt(input_a, eps, std::nullopt, output_mem_config),
+        eps,
+        ttnn::where(ttnn::gt(input_a, t1m_eps, std::nullopt, output_mem_config), t1m_eps, input_a));
     Tensor linput_m1 = ttnn::rsub(logit_input, 1.0, output_mem_config);
     Tensor log_input =
         ttnn::multiply(logit_input, ttnn::reciprocal(linput_m1, output_mem_config), std::nullopt, output_mem_config);
