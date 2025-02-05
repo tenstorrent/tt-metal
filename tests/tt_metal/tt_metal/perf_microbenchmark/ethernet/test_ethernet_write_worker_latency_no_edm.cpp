@@ -98,7 +98,9 @@ std::vector<Program> build(
     KernelHandle& local_kernel,
     KernelHandle& remote_kernel,
     std::shared_ptr<Buffer>& worker_buffer_0,
-    std::shared_ptr<Buffer>& worker_buffer_1) {
+    std::shared_ptr<Buffer>& worker_buffer_1,
+    bool test_latency,
+    bool enable_worker) {
     Program program0;
     Program program1;
 
@@ -125,6 +127,12 @@ std::vector<Program> build(
     std::map<string, string> sender_receiver_defines;
     if (num_directions == 2) {
         sender_receiver_defines["ENABLE_BI_DIRECTION"] = "1";
+    }
+    if (test_latency) {
+        sender_receiver_defines["TEST_LATENCY"] = "1";
+    }
+    if (enable_worker) {
+        sender_receiver_defines["ENABLE_WORKER"] = "1";
     }
 
     local_kernel = tt_metal::CreateKernel(
@@ -171,7 +179,8 @@ void run(
     Program& program1,
     std::size_t num_directions,
     std::shared_ptr<Buffer>& worker_buffer_0,
-    std::shared_ptr<Buffer>& worker_buffer_1) {
+    std::shared_ptr<Buffer>& worker_buffer_1,
+    bool enable_worker) {
     if (std::getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
         std::thread th2 = std::thread([&] { tt_metal::detail::LaunchProgram(device0, program0); });
         std::thread th1 = std::thread([&] { tt_metal::detail::LaunchProgram(device1, program1); });
@@ -189,9 +198,11 @@ void run(
     tt::tt_metal::detail::DumpDeviceProfileResults(device0);
     tt::tt_metal::detail::DumpDeviceProfileResults(device1);
 
-    validation(worker_buffer_1);
-    if (num_directions == 2) {
-        validation(worker_buffer_0);
+    if (enable_worker) {
+        validation(worker_buffer_1);
+        if (num_directions == 2) {
+            validation(worker_buffer_0);
+        }
     }
 }
 
@@ -201,6 +212,8 @@ int main(int argc, char** argv) {
     std::size_t sample_page_size = std::stoi(argv[arg_idx++]);
     std::size_t num_buffer_slots = std::stoi(argv[arg_idx++]);
     std::size_t num_directions = std::stoi(argv[arg_idx++]);
+    bool test_latency = std::stoi(argv[arg_idx++]);
+    bool enable_worker = std::stoi(argv[arg_idx++]);
     TT_FATAL(num_directions == 1 or num_directions == 2, "either uni-dir or bi-dir test");
 
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
@@ -287,8 +300,17 @@ int main(int argc, char** argv) {
                 local_kernel,
                 remote_kernel,
                 worker_buffer_0,
-                worker_buffer_1);
-            run(device_0, device_1, programs[0], programs[1], num_directions, worker_buffer_0, worker_buffer_1);
+                worker_buffer_1,
+                test_latency,
+                enable_worker);
+            run(device_0,
+                device_1,
+                programs[0],
+                programs[1],
+                num_directions,
+                worker_buffer_0,
+                worker_buffer_1,
+                enable_worker);
         } catch (std::exception& e) {
             log_error(tt::LogTest, "Caught exception: {}", e.what());
             test_fixture.TearDown();

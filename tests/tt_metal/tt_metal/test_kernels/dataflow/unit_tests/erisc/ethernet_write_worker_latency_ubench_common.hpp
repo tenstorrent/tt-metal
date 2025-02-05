@@ -214,10 +214,11 @@ FORCE_INLINE void check_incomping_packet_and_write_worker(
     bool buffer_not_full = next_write_ptr != read_ptr;
 
     if (buffer_not_full && has_incoming_packet(buffer_slot_sync_addrs[write_ptr])) {
+#ifdef ENABLE_WORKER
         uint32_t curr_trid = get_buffer_slot_trid(write_ptr);
         write_worker(
             buffer_slot_addrs[write_ptr], buffer_slot_sync_addrs[write_ptr], worker_noc_addr, message_size, curr_trid);
-
+#endif
         write_ptr = next_write_ptr;
     }
 }
@@ -230,7 +231,11 @@ FORCE_INLINE void check_write_worker_done_and_send_ack(
     bool buffer_not_empty = read_ptr != write_ptr;
     uint32_t curr_trid = get_buffer_slot_trid(read_ptr);
 
+#ifdef ENABLE_WORKER
     if (buffer_not_empty && write_worker_done(curr_trid)) {
+#else
+    if (buffer_not_empty) {
+#endif
         ack_complete(buffer_slot_sync_addrs[read_ptr]);
 
         read_ptr = advance_buffer_slot_ptr(read_ptr);

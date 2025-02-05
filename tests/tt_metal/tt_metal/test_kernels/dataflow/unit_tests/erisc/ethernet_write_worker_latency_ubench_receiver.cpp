@@ -10,7 +10,12 @@ FORCE_INLINE void main_loop_uni_dir(
     uint32_t message_size,
     uint32_t num_messages,
     uint64_t worker_noc_addr) {
-    uint32_t total_msgs = num_messages * NUM_BUFFER_SLOTS;
+    uint32_t total_msgs =
+#ifdef TEST_LATENCY
+        num_messages;
+#else
+        num_messages * NUM_BUFFER_SLOTS;
+#endif
 
     DPRINT << "RECEIVER MAIN LOOP" << ENDL();
 
@@ -44,7 +49,12 @@ FORCE_INLINE void main_loop_bi_dir(
     uint32_t message_size,
     uint32_t num_messages,
     uint64_t worker_noc_addr) {
-    uint32_t total_msgs = num_messages * NUM_BUFFER_SLOTS * 2;
+    uint32_t total_msgs =
+#ifdef TEST_LATENCY
+        num_messages * 2;
+#else
+        num_messages * NUM_BUFFER_SLOTS * 2;
+#endif
 
     DPRINT << "RECEIVER MAIN LOOP" << ENDL();
 
@@ -55,7 +65,12 @@ FORCE_INLINE void main_loop_bi_dir(
     uint32_t receiver_buffer_write_ptr = 0;
 
     uint32_t num_messages_ack = 0;
-    uint32_t sender_num_messages_send = total_msgs;
+    uint32_t sender_num_messages_send =
+#ifdef TEST_LATENCY
+        num_messages;
+#else
+        num_messages * NUM_BUFFER_SLOTS;
+#endif
 
     noc_async_write_one_packet_with_trid_set_state(worker_noc_addr);
 

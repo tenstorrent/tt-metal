@@ -17,11 +17,6 @@ from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SI
 
 profiler_log_path = PROFILER_LOGS_DIR / PROFILER_DEVICE_SIDE_LOG
 
-FILE_NAME = PROFILER_LOGS_DIR / "test_ethernet_link_write_worker_latency.csv"
-
-if os.path.exists(FILE_NAME):
-    os.remove(FILE_NAME)
-
 
 def append_to_csv(file_path, header, data, write_header=True):
     file_exists = os.path.isfile(file_path)
@@ -40,7 +35,7 @@ def get_device_freq():
     return freq
 
 
-def profile_results(sample_size, sample_count, channel_count, num_directions):
+def profile_results(sample_size, sample_count, channel_count, num_directions, test_latency, file_name):
     freq = get_device_freq() / 1000.0
     setup = device_post_proc_config.default_setup()
     setup.deviceInputLog = profiler_log_path
@@ -61,25 +56,37 @@ def profile_results(sample_size, sample_count, channel_count, num_directions):
     main_loop_cycle = devices_data["devices"][device_0]["cores"]["DEVICE"]["analysis"][main_test_body_string]["stats"][
         "Average"
     ]
-    main_loop_latency = main_loop_cycle / freq / sample_count / channel_count
-    bw = sample_size / main_loop_latency
 
-    header = [
-        "NUM_DIRECTIONS",
-        "SAMPLE_SIZE",
-        "BW (B/c)",
-    ]
-    write_header = not os.path.exists(FILE_NAME)
+    if test_latency == 1:
+        main_loop_latency = main_loop_cycle / freq
+        header = [
+            "NUM_DIRECTIONS",
+            "SAMPLE_SIZE",
+            "LATENCY (ns)",
+        ]
+        res = main_loop_latency
+    else:
+        main_loop_latency = main_loop_cycle / freq / sample_count / channel_count
+        bw = sample_size / main_loop_latency
+        header = [
+            "NUM_DIRECTIONS",
+            "SAMPLE_SIZE",
+            "BW (B/c)",
+        ]
+        res = bw
+    write_header = not os.path.exists(file_name)
     append_to_csv(
-        FILE_NAME,
+        file_name,
         header,
-        [num_directions, sample_size, main_loop_latency],
+        [num_directions, sample_size, res],
         write_header,
     )
     return main_loop_latency
 
 
-def run_erisc_write_worker(sample_count, sample_size_expected_latency, channel_count, num_directions):
+def run_erisc_write_worker(
+    sample_count, sample_size_expected_latency, channel_count, num_directions, test_latency, enable_worker, file_name
+):
     os.system(f"rm -rf {os.environ['TT_METAL_HOME']}/generated/profiler/.logs/profile_log_device.csv")
 
     sample_size = sample_size_expected_latency[0]
@@ -93,40 +100,19 @@ def run_erisc_write_worker(sample_count, sample_size_expected_latency, channel_c
                 {sample_count} \
                 {sample_size} \
                 {channel_count} \
-                {num_directions} "
+                {num_directions} \
+                {test_latency} \
+                {enable_worker}"
     rc = os.system(cmd)
     if rc != 0:
         logger.info("Error in running the test")
         assert False
 
-    main_loop_latency = profile_results(sample_size, sample_count, channel_count, num_directions)
+    main_loop_latency = profile_results(
+        sample_size, sample_count, channel_count, num_directions, test_latency, file_name
+    )
     logger.info(f"sender_loop_latency {main_loop_latency}")
-    logger.info(f"result BW (B/c): {sample_size / main_loop_latency}")
+    if test_latency != 1:
+        logger.info(f"sender_loop_bw {sample_size / main_loop_latency}")
 
     assert expected_latency_lower_bound <= main_loop_latency <= expected_latency_upper_bound
-
-
-# uni-direction test for eth-sender <---> eth-receiver ---> worker
-@pytest.mark.skipif(is_grayskull(), reason="Unsupported on GS")
-@pytest.mark.parametrize("sample_count", [256])
-@pytest.mark.parametrize("channel_count", [16])
-@pytest.mark.parametrize("num_directions", [1])
-@pytest.mark.parametrize(
-    "sample_size_expected_latency",
-    [(16, 97.2), (128, 97.2), (256, 98.0), (512, 98.0), (1024, 99.0), (2048, 173.0), (4096, 340.0), (8192, 678.5)],
-)
-def test_erisc_write_worker_bw_uni_dir(sample_count, sample_size_expected_latency, channel_count, num_directions):
-    run_erisc_write_worker(sample_count, sample_size_expected_latency, channel_count, num_directions)
-
-
-# bi-direction test for eth-sender <---> eth-receiver ---> worker
-@pytest.mark.skipif(is_grayskull(), reason="Unsupported on GS")
-@pytest.mark.parametrize("sample_count", [1000])
-@pytest.mark.parametrize("channel_count", [16])
-@pytest.mark.parametrize("num_directions", [2])
-@pytest.mark.parametrize(
-    "sample_size_expected_latency",
-    [(16, 148.0), (128, 148.0), (256, 148.7), (512, 148.8), (1024, 149.2), (2048, 178.2), (4096, 344.2)],
-)
-def test_erisc_write_worker_bw_bi_dir(sample_count, sample_size_expected_latency, channel_count, num_directions):
-    run_erisc_write_worker(sample_count, sample_size_expected_latency, channel_count, num_directions)
