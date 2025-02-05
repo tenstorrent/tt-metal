@@ -27,6 +27,8 @@ This configuration uses bfp4 MLP FF1+FF3 for all models.
 | Llama3.2-11B   | TG     |           |           | 40.9          |
 | Llama3.1-70B   | T3K    | 96        | 100       | 16.1          |
 | Llama3.1-70B   | TG     |           |           |               |
+| Qwen2.5-7B     | N300   | 81        | 96        | 37.9          |
+| Qwen2.5-72B    | T3K    | 99        | 100       | 12.8          |
 
 ## Accuracy
 
@@ -49,7 +51,7 @@ This configuration uses bfp4 MLP FF1+FF3 only for the Llama-3.1-70B model and th
 | Llama3.2-11B   | N300   | 95        | 100       | 33.8          |
 | Llama3.2-11B   | T3K    | 95        | 100       | 52.6          |
 | Llama3.2-11B   | TG     | 88        | 100       | 29.5          |
-| Llama3.1-70B   | T3K    | 98        | 100        | 14.7          |
+| Llama3.1-70B   | T3K    | 98        | 100       | 14.7          |
 | Llama3.1-70B   | TG     | 95        | 100       | 12.7          |
 | Qwen2.5-7B     | N300   | 81        | 96        | 33.4          |
 | Qwen2.5-72B    | T3K    | 99        | 100       | 12.8          |

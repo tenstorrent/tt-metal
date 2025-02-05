@@ -1023,19 +1023,15 @@ class TtModelArgs:
 
         # RoPE params
         self.rope_theta = params.get("rope_theta")
-        self.use_scaled_rope = params.get("use_scaled_rope", False)
-        if "rope_scaling" in params:
+        # If use_scaled_rope is not present, assume setting rope_scaling means use scaled rope
+        # If it is present and is set to false, do not use scaled rope
+        # Setting self.rope_scaling_factor to None is our way of saying do not use scaled rope
+        if "rope_scaling" in params and params.get("use_scaled_rope", True):
             self.rope_scaling_factor = params.get("factor", None)
             self.orig_context_len = params.get("original_max_position_embeddings", None)
-            if not "use_scaled_rope" in params:
-                self.use_scaled_rope = True
         else:
-            if "Qwen" in self.model_name:
-                self.rope_scaling_factor = 4.0
-                self.orig_context_len = 32768
-            else:
-                self.rope_scaling_factor = None
-                self.orig_context_len = None
+            self.rope_scaling_factor = None
+            self.orig_context_len = None
 
         # Vision params (Meta-specific)
         self.vision_chunk_size = params.get("vision_chunk_size", -1)
@@ -1103,7 +1099,6 @@ class TtModelArgs:
             self.is_70b = True  # self.dim == 8192 and self.n_layers == 80
         else:
             self.model_name = "Unknown"
-            self.rope_scaling_factor = 4
             logger.warning(f"Unknown Meta-style model: {checkpoint_dir}")
         self.orig_context_len = 8192
 
@@ -1125,7 +1120,7 @@ class TtModelArgs:
     ffn_dim_multiplier={self.ffn_dim_multiplier},
     norm_eps={self.norm_eps},
     rope_theta={self.rope_theta},
-    use_scaled_rope={self.use_scaled_rope},
+    rope_scaling_factor={self.rope_scaling_factor},
     max_batch_size={self.max_batch_size},
     max_seq_len={self.max_seq_len},
     vision_chunk_size={self.vision_chunk_size},
