@@ -47,12 +47,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     clang-tidy-17 \
     curl \
     dialog \
-    git \
     graphviz \
     jq \
     pandoc \
-    pkg-config \
-    python3-dev \
     sudo \
     wget \
     libtbb-dev \
