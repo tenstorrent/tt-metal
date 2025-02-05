@@ -528,7 +528,6 @@ FORCE_INLINE void try_advance_inline_write_or_atomic_inc(command_context_t<Addrg
             case ttnn::ccl::cmd::CclCommandDestType::CHIP_MULTICAST: {
                 const auto& mcast_args = cmd_ctx.current_cmd_header.get_multicast_dest_args();
                 if (cmd_ctx.fabric_connection.has_forward_connection()) {
-                    DeviceZoneScopedN("SEND-FWD");
                     cmd_ctx.fabric_connection.get_forward_connection().wait_for_empty_write_slot();
                     pkt_hdr->to_chip_multicast(tt::fabric::MulticastRoutingCommandHeader{
                         1, static_cast<uint8_t>(mcast_args.num_targets_forward_direction)});
@@ -538,7 +537,6 @@ FORCE_INLINE void try_advance_inline_write_or_atomic_inc(command_context_t<Addrg
 
                 // Write the mcast packet (backward)
                 if (cmd_ctx.fabric_connection.has_backward_connection()) {
-                    DeviceZoneScopedN("SEND-BWD");
                     pkt_hdr->to_chip_multicast(tt::fabric::MulticastRoutingCommandHeader{
                         1, static_cast<uint8_t>(mcast_args.num_targets_backward_direction)});
                     cmd_ctx.fabric_connection.get_backward_connection().wait_for_empty_write_slot();
