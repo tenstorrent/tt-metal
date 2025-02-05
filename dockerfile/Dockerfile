@@ -16,7 +16,6 @@ RUN /bin/bash /opt/tt_metal_infra/scripts/docker/install_dependencies.sh --docke
 
 FROM base AS ci-build
 
-COPY /install_dependencies.sh /opt/tt_metal_infra/scripts/docker/install_dependencies.sh
 RUN /bin/bash /opt/tt_metal_infra/scripts/docker/install_dependencies.sh --docker --mode build
 
 # Install ccache from upstream; Apt's version for 20.04 predates remote_storage support
