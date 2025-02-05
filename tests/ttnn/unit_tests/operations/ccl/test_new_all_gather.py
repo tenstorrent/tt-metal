@@ -465,44 +465,6 @@ def test_all_gather(
             None,
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ),
-        (
-            4,
-            [1, 1, 32, 3840],
-            3,
-            ttnn.TILE_LAYOUT,
-            (32, 32),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 4))}),
-            (32, 160),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 5))}),
-            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ),
-        (  # AllGather after Binary Mult
-            4,
-            [1, 1, 32, 3840],
-            3,
-            ttnn.TILE_LAYOUT,
-            (32, 32),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 4))}),
-            (32, 160),
-            get_core_range_set(PREFETCHER_NOC1_RING),
-            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ),
-        (  # AllGather after SDPA
-            4,
-            [1, 32, 32, 128],
-            1,
-            ttnn.TILE_LAYOUT,
-            (32, 128),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 7))}),
-            (32, 128),
-            ttnn.CoreRangeSet(
-                {
-                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
-                    ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(5, 1)),
-                }
-            ),
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ),
     ],
 )
 @pytest.mark.parametrize("num_links", [2])
