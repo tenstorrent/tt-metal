@@ -108,7 +108,6 @@ struct PacketHeader {
     // but for our purposes we shouldn't need read so we should be able to omit the support
     NocSendType noc_send_type : 2;
     ChipSendType chip_send_type : 1;
-    NocSendType noc_send_type : 1;
     uint8_t reserved : 4;
 
     RoutingFields routing_fields;
@@ -141,6 +140,9 @@ struct PacketHeader {
             } break;
             case NOC_UNICAST_ATOMIC_INC:
             case NOC_MULTICAST_ATOMIC_INC:
+                return 0;
+            default:
+                ASSERT(false);
                 return 0;
         };
     }

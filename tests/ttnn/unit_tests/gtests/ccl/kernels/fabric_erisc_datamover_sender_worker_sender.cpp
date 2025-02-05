@@ -122,31 +122,23 @@ void kernel_main() {
 
         // bit of a hack to extract X/Y
         const auto dest_noc_address = get_noc_addr(p, dest_addr_gen, 0, NORMALIZED_NOC_INDEX);
-        const size_t dest_addr = dest_noc_address & 0xFFFFFFFF;
-        const size_t dest_noc_x = (dest_noc_address >> NOC_ADDR_LOCAL_BITS) & ((1 << NOC_ADDR_NODE_ID_BITS) - 1);
-        const size_t dest_noc_y =
-            (dest_noc_address >> (NOC_ADDR_LOCAL_BITS + NOC_ADDR_NODE_ID_BITS)) & ((1 << NOC_ADDR_NODE_ID_BITS) - 1);
+        // const size_t dest_addr = dest_noc_address & 0xFFFFFFFF;
+        // const size_t dest_noc_x = (dest_noc_address >> NOC_ADDR_LOCAL_BITS) & ((1 << NOC_ADDR_NODE_ID_BITS) - 1);
+        // const size_t dest_noc_y =
+        //     (dest_noc_address >> (NOC_ADDR_LOCAL_BITS + NOC_ADDR_NODE_ID_BITS)) & ((1 << NOC_ADDR_NODE_ID_BITS) - 1);
         const size_t packet_size = page_size + sizeof(tt::fabric::PacketHeader);
-
         auto packet_addr = get_read_ptr(cb_id_in0);
         auto& packet_header = *reinterpret_cast<tt::fabric::PacketHeader*>(packet_addr);
         if constexpr (mcast_mode) {
-            packet_header.to_write()
+            packet_header
                 .to_chip_multicast(tt::fabric::MulticastRoutingCommandHeader{config.mcast.distance, config.mcast.range})
                 .to_noc_unicast(tt::fabric::NocUnicastCommandHeader{
-                    dest_addr,
-                    (pages_to_send * page_size) + sizeof(tt::fabric::PacketHeader),
-                    static_cast<uint8_t>(dest_noc_x),
-                    static_cast<uint8_t>(dest_noc_y)});
+                    dest_noc_address, (pages_to_send * page_size) + sizeof(tt::fabric::PacketHeader)});
             packet_header.reserved2 = 0x1111;  // debug only
         } else {
-            packet_header.to_write()
-                .to_chip_unicast(tt::fabric::UnicastRoutingCommandHeader{config.unicast.distance})
+            packet_header.to_chip_unicast(tt::fabric::UnicastRoutingCommandHeader{config.unicast.distance})
                 .to_noc_unicast(tt::fabric::NocUnicastCommandHeader{
-                    dest_addr,
-                    (pages_to_send * page_size) + sizeof(tt::fabric::PacketHeader),
-                    static_cast<uint8_t>(dest_noc_x),
-                    static_cast<uint8_t>(dest_noc_y)});
+                    dest_noc_address, (pages_to_send * page_size) + sizeof(tt::fabric::PacketHeader)});
             packet_header.reserved2 = 0x1111;  // debug only
         }
 
@@ -160,7 +152,6 @@ void kernel_main() {
 
         auto& packet_header = *reinterpret_cast<tt::fabric::PacketHeader*>(a_packet_header_addr);
         ASSERT(*last_message_semaphore_address == 0);
-        packet_header.to_atomic_inc();
         packet_header.to_chip_unicast(tt::fabric::UnicastRoutingCommandHeader{2});
         packet_header.to_noc_unicast_atomic_inc(tt::fabric::NocUnicastAtomicIncCommandHeader(
             reinterpret_cast<size_t>(last_message_semaphore_address), 1, 32, my_x[0], my_y[0]));
