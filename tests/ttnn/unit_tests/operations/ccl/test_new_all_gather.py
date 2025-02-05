@@ -446,7 +446,7 @@ def test_all_gather(
 @pytest.mark.parametrize("num_iters", [8])
 @pytest.mark.parametrize("enable_async", [True])
 def test_all_gather_sharded(
-    pcie_mesh_device,
+    t3k_mesh_device,
     num_devices,
     output_shape,
     dim,
@@ -461,8 +461,11 @@ def test_all_gather_sharded(
     shard_grid,
     tensor_mem_layout,
 ):
+    if num_links > 1:
+        assert f"num_links > 1 not supported for sharded all gather test function which is currently using the t3k_mesh_device (and hence only has 1 link available for use)"
+
     run_all_gather_impl(
-        pcie_mesh_device,
+        t3k_mesh_device,
         num_devices,
         output_shape,
         dim,
