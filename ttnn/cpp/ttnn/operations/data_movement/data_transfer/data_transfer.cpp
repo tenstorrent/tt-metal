@@ -27,7 +27,7 @@ Tensor DataTransferToDeviceOperation::invoke(
         return {input_tensor};
     }
 
-    return input_tensor.to(device, memory_config);
+    return input_tensor.to_device(device, memory_config);
 }
 
 }  // namespace ttnn::operations::data_movement

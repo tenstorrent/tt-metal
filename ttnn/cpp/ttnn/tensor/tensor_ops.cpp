@@ -27,7 +27,8 @@
 
 namespace tt::tt_metal::tensor_ops {
 
-Tensor tensor_to(const Tensor& input_tensor, IDevice* target_device, const MemoryConfig& mem_config, uint8_t cq_id) {
+Tensor tensor_to_device(
+    const Tensor& input_tensor, IDevice* target_device, const MemoryConfig& mem_config, uint8_t cq_id) {
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::to", input_tensor, target_device, mem_config);
     // Tensor can be using borrowed storage. If so, when running in async mode, copy this tensor to owned storage.
@@ -63,7 +64,7 @@ Tensor tensor_to(const Tensor& input_tensor, IDevice* target_device, const Memor
     return device_tensor;
 }
 
-Tensor tensor_to(
+Tensor tensor_to_device(
     const Tensor& input_tensor, const std::vector<IDevice*>& workers, const MemoryConfig& mem_config, uint8_t cq_id) {
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::to", input_tensor, workers, mem_config);
@@ -141,7 +142,7 @@ Tensor tensor_cpu(const Tensor& input_tensor, bool blocking, uint8_t cq_id) {
     return host_tensor;
 }
 
-Tensor tensor_to(const Tensor& input_tensor, Layout target_layout, IDevice* worker) {
+Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout, IDevice* worker) {
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::to", input_tensor, target_layout, worker);
     // Only push layout conversion to worker if running in async mode
@@ -173,7 +174,7 @@ Tensor tensor_to(const Tensor& input_tensor, Layout target_layout, IDevice* work
     return output;
 }
 
-Tensor tensor_to(const Tensor& input_tensor, Layout target_layout, distributed::MeshDevice* mesh_device) {
+Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout, distributed::MeshDevice* mesh_device) {
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::to", input_tensor, target_layout, mesh_device);
     if (mesh_device) {

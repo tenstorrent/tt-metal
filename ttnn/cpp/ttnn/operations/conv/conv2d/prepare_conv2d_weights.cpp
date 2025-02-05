@@ -69,7 +69,7 @@ Tensor create_tensor_from_owned_buffer(
         if (output_dtype == DataType::BFLOAT8_B || output_dtype == DataType::BFLOAT4_B) {
             auto tensor =
                 Tensor(std::move(OwnedStorage{std::move(buf)}), output_shape, DataType::FLOAT32, Layout::ROW_MAJOR)
-                    .to(Layout::TILE);
+                    .to_layout(Layout::TILE);
             auto output_float_data = owned_buffer::get_as<float>(tensor).get();
             auto output_packed_data =
                 output_dtype == DataType::BFLOAT8_B
@@ -85,7 +85,7 @@ Tensor create_tensor_from_owned_buffer(
             "Unsupported output datatype");
     }
     auto rm_tensor = Tensor(std::move(OwnedStorage{std::move(buf)}), output_shape, output_dtype, Layout::ROW_MAJOR);
-    return rm_tensor.to(Layout::TILE);
+    return rm_tensor.to_layout(Layout::TILE);
 }
 
 template <typename T>

@@ -353,7 +353,7 @@ Tensor load_tensor_helper(const std::string& file_name, T device) {
                 TensorLayout::fromPaddedShape(
                     data_type, layout, MemoryConfig{}, shape.logical_shape(), shape.padded_shape())));
         if (device != nullptr) {
-            tensor = tensor.to(device, memory_config);
+            tensor = tensor.to_device(device, memory_config);
         } else if (has_memory_config) {
             tt::log_warning("Memory config is ignored when loading the tensor because device is not provided");
         }
@@ -377,7 +377,7 @@ Tensor load_tensor_helper(const std::string& file_name, T device) {
                 TensorLayout::fromPaddedShape(
                     data_type, layout, MemoryConfig{}, shape.logical_shape(), shape.padded_shape())));
         if (device != nullptr) {
-            tensor = tensor.to(device);
+            tensor = tensor.to_device(device);
         }
         return tensor;
     }

@@ -129,7 +129,7 @@ Tensor AutoFormat::format_input_tensor(
     // Host side conversions
     if (pad_input) {
         if (formatted_input.get_layout() != Layout::ROW_MAJOR) {
-            formatted_input = formatted_input.to(Layout::ROW_MAJOR);
+            formatted_input = formatted_input.to_layout(Layout::ROW_MAJOR);
             convert_layout = formatted_input.get_layout() != target_layout;
         }
         formatted_input = ttnn::pad(
@@ -140,7 +140,7 @@ Tensor AutoFormat::format_input_tensor(
     }
 
     if (convert_layout) {
-        formatted_input = formatted_input.to(target_layout);
+        formatted_input = formatted_input.to_layout(target_layout);
     }
 
     return AutoFormat::move_tensor_to_device(formatted_input, device, mem_config);
@@ -225,7 +225,7 @@ Tensor AutoFormat::format_output_tensor(
     if (unpad_output) {
         // Requires RM for unpad
         if (formatted_output.get_layout() != Layout::ROW_MAJOR) {
-            formatted_output = formatted_output.to(Layout::ROW_MAJOR);
+            formatted_output = formatted_output.to_layout(Layout::ROW_MAJOR);
             convert_layout = formatted_output.get_layout() != target_layout;
         }
         auto begins = std::array<uint32_t, 4>({0, 0, 0, 0});
@@ -238,10 +238,10 @@ Tensor AutoFormat::format_output_tensor(
         // Default to RM layout if we can't match the formatted_input layout
         if (target_layout == Layout::TILE && !AutoFormat::legal_tile_shape(formatted_output.get_padded_shape())) {
             if (formatted_output.get_layout() != Layout::ROW_MAJOR) {
-                formatted_output = formatted_output.to(Layout::ROW_MAJOR);
+                formatted_output = formatted_output.to_layout(Layout::ROW_MAJOR);
             }
         } else {
-            formatted_output = formatted_output.to(target_layout);
+            formatted_output = formatted_output.to_layout(target_layout);
         }
     }
 

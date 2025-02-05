@@ -20,14 +20,15 @@ class IDevice;
 
 namespace tt::tt_metal::tensor_ops {
 
-Tensor tensor_to(const Tensor& input_tensor, IDevice* target_device, const MemoryConfig& mem_config, uint8_t cq_id);
+Tensor tensor_to_device(
+    const Tensor& input_tensor, IDevice* target_device, const MemoryConfig& mem_config, uint8_t cq_id);
 
-Tensor tensor_to(
+Tensor tensor_to_device(
     const Tensor& input_tensor, const std::vector<IDevice*>& workers, const MemoryConfig& mem_config, uint8_t cq_id);
 
-Tensor tensor_to(const Tensor& input_tensor, Layout target_layout, IDevice* worker);
+Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout, IDevice* worker);
 
-Tensor tensor_to(const Tensor& input_tensor, Layout target_layout, distributed::MeshDevice* mesh_device);
+Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout, distributed::MeshDevice* mesh_device);
 
 Tensor tensor_cpu(const Tensor& input_tensor, bool blocking, uint8_t cq_id);
 

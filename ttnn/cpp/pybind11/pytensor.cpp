@@ -340,7 +340,7 @@ Tensor convert_python_tensor_to_tt_tensor(
         py_data_ptr, tensor_spec, device, force_disable_borrow, on_creation_callback, on_destruction_callback);
 
     if (device) {
-        output = output.to(device, memory_config);
+        output = output.to_device(device, memory_config);
     }
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
@@ -643,10 +643,10 @@ auto parse_external_operation(
 }  // namespace detail
 
 void pytensor_module_types(py::module& m_tensor) {
-    // Tensor constructors that accept device and .to(device) function use keep alive call policy to communicate that
+    // Tensor constructors that accept device and .to_device() function use keep alive call policy to communicate that
     // Device needs to outlive Tensor. This is because when tensors on device are destroyed they need to deallocate
     // their buffers via device. keep_alive increases the ref count of the Device object being passed into the
-    // constructor and .to() function. For additional info see:
+    // constructor and .to_device() function. For additional info see:
     // https://pybind11.readthedocs.io/en/stable/advanced/functions.html#keep-alive
     auto pyTensor = py::class_<Tensor>(m_tensor, "Tensor", R"doc(
 
@@ -968,7 +968,7 @@ void pytensor_module(py::module& m_tensor) {
             )doc")
         .def(
             "to",
-            py::overload_cast<IDevice*, const MemoryConfig&, uint8_t>(&Tensor::to, py::const_),
+            py::overload_cast<IDevice*, const MemoryConfig&, uint8_t>(&Tensor::to_device, py::const_),
             py::arg("device").noconvert(),
             py::arg("mem_config").noconvert() = MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED},
             py::arg("cq_id") = ttnn::DefaultQueueId,
@@ -1002,7 +1002,7 @@ void pytensor_module(py::module& m_tensor) {
             )doc")
         .def(
             "to",
-            py::overload_cast<MeshDevice*, const MemoryConfig&, uint8_t>(&Tensor::to, py::const_),
+            py::overload_cast<MeshDevice*, const MemoryConfig&, uint8_t>(&Tensor::to_device, py::const_),
             py::arg("mesh_device").noconvert(),
             py::arg("mem_config").noconvert() = MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED},
             py::arg("cq_id") = ttnn::DefaultQueueId,
@@ -1089,7 +1089,7 @@ void pytensor_module(py::module& m_tensor) {
         )doc")
         .def(
             "to",
-            py::overload_cast<Layout, IDevice*>(&Tensor::to, py::const_),
+            py::overload_cast<Layout, IDevice*>(&Tensor::to_layout, py::const_),
             py::arg("target_layout").noconvert(),
             py::arg("worker") = nullptr,
             R"doc(
@@ -1113,7 +1113,7 @@ void pytensor_module(py::module& m_tensor) {
         )doc")
         .def(
             "to",
-            py::overload_cast<Layout, MeshDevice*>(&Tensor::to, py::const_),
+            py::overload_cast<Layout, MeshDevice*>(&Tensor::to_layout, py::const_),
             py::arg("target_layout").noconvert(),
             py::arg("mesh_device") = nullptr,
             R"doc(

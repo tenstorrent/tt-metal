@@ -48,9 +48,9 @@ static Tensor manual_insertion(
                 logical_shape,
                 TensorLayout::fromPaddedShape(
                     DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}, logical_shape, padded_shape)))
-            .to(Layout::ROW_MAJOR);
+            .to_layout(Layout::ROW_MAJOR);
     if (device != nullptr) {
-        output = output.to(device, output_mem_config);
+        output = output.to_device(device, output_mem_config);
     }
     return output;
 }

@@ -39,10 +39,11 @@ bool run_test(const ttnn::Shape& shape, const DeviceFunction& device_function, I
     auto input_tensor_b = ttnn::random::random(shape, DataType::BFLOAT16);
 
     auto host_output = HostFunction(input_tensor_a, input_tensor_b);
-    auto device_output =
-        device_function(input_tensor_a.to(Layout::TILE).to(device), input_tensor_b.to(Layout::TILE).to(device))
-            .cpu()
-            .to(Layout::ROW_MAJOR);
+    auto device_output = device_function(
+                             input_tensor_a.to_layout(Layout::TILE).to_device(device),
+                             input_tensor_b.to_layout(Layout::TILE).to_device(device))
+                             .cpu()
+                             .to_layout(Layout::ROW_MAJOR);
 
     return ttnn::allclose<bfloat16>(host_output, device_output, args...);
 }
@@ -111,8 +112,9 @@ int main() {
     run_binary_ops();
 
     // Allocate a tensor to show that the addresses aren't cached
-    auto input_tensor =
-        ttnn::random::uniform(bfloat16(0.0f), bfloat16(0.0f), Shape({1, 1, 32, 32})).to(Layout::TILE).to(device);
+    auto input_tensor = ttnn::random::uniform(bfloat16(0.0f), bfloat16(0.0f), Shape({1, 1, 32, 32}))
+                            .to_layout(Layout::TILE)
+                            .to_device(device);
 
     run_binary_ops();
 

@@ -1886,8 +1886,8 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
             if (updated_grad.storage_type() != StorageType::DEVICE &&
                 updated_grad.storage_type() != StorageType::MULTI_DEVICE) {
                 Tensor pad_updated_grad = updated_grad.pad_to_tile(1.0f);
-                pad_updated_grad = pad_updated_grad.to(Layout::TILE);
-                updated_grad = pad_updated_grad.to(input.device());
+                pad_updated_grad = pad_updated_grad.to_layout(Layout::TILE);
+                updated_grad = pad_updated_grad.to_device(input.device());
             }
         } else if (dim == 2 || dim == -2) {
             ttnn::SmallVector<int64_t> after_permute_dims = {0, 2, 1, 3};

@@ -28,14 +28,14 @@
 07: a_cpu = np.array([[1,2,3,4],[5,6,7,8]], dtype=np.bfloat16)
 08:
 09: // define tensors on the device with CPU tensors
-10: a_dev = torch.from_numpy(a_cpu).to(device)
+10: a_dev = torch.from_numpy(a_cpu).to_device(device)
 11:
 12: c_dev = torch.sqrt(a_dev)
 13:
 14: print(c_dev[1][0])
 15:
 16: d_cpu = np.array([[11,12,13,14],[15,16,17,18]])
-17: d_dev = d_cpu.to(device)
+17: d_dev = d_cpu.to_device(device)
 18:
 19: e_dev = c_dev + d_dev
 20: print(e_dev)
@@ -105,7 +105,7 @@ void test_raw_host_memory_pointer() {
     /* Sanity Check End */
 
     /*  Run and Print Start   */
-    Tensor a_dev = a_cpu.to(device);
+    Tensor a_dev = a_cpu.to_device(device);
 
     Tensor c_dev = ttnn::sqrt(a_dev);
 

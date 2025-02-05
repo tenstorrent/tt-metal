@@ -68,7 +68,7 @@ Tensor ArgmaxOperation::invoke(
                             output_memory_config);
                         max_tensor = ttnn::add(max_tensor, max_val, std::nullopt, output_memory_config);
                     }
-                    tindex = tindex.to(input_a.device());
+                    tindex = tindex.to_device(input_a.device());
                     max_val.deallocate();
                     Tensor cmp_results = ttnn::eq(input_a, max_tensor, std::nullopt, output_memory_config);
                     Tensor max_indices = ttnn::multiply(cmp_results, tindex, std::nullopt, output_memory_config);
@@ -119,7 +119,7 @@ Tensor ArgmaxOperation::invoke(
                             input_a.device(),
                             output_memory_config);
                     }
-                    tindex = tindex.to(input_a.device());
+                    tindex = tindex.to_device(input_a.device());
                     Tensor max_indices = ttnn::multiply(cmp_results, tindex, std::nullopt, output_memory_config);
                     cmp_results.deallocate();
                     Tensor midx = full_like(max_indices, size);

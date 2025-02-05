@@ -75,10 +75,10 @@ std::vector<Tensor> split_dim_n_chunks_rm(
             output_chunk = output_chunk.pad_to_tile(0.0);
         }
 
-        output_chunk = output_chunk.to(layout);
+        output_chunk = output_chunk.to_layout(layout);
 
         if (device) {
-            output_chunk = output_chunk.to(*device);
+            output_chunk = output_chunk.to_device(*device);
         }
 
         output_tensors.push_back(output_chunk);

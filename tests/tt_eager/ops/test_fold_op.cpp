@@ -16,7 +16,7 @@ using namespace tt::tt_metal;
 using namespace constants;
 
 void run_fold(IDevice* device, const ttnn::Shape& shape) {
-    Tensor input_tensor = ttnn::random::random(shape).to(Layout::ROW_MAJOR).to(device);
+    Tensor input_tensor = ttnn::random::random(shape).to_layout(Layout::ROW_MAJOR).to_device(device);
     uint32_t stride_h = 2;
     uint32_t stride_w = 2;
     uint8_t queue_id = 0;
