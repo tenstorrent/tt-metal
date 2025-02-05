@@ -67,6 +67,11 @@ on:
         required: false
         type: string
         default: "amd64"
+      toolchain:
+        required: false
+        type: string
+        default: "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
+        description: "Toolchain file to use for build"
 
 
 jobs:
