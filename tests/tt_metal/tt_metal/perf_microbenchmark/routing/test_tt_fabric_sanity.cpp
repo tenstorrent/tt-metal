@@ -50,9 +50,14 @@ bool bidirectional_traffic;
 // benchmark test mode
 bool benchmark_mode;
 
+uint32_t tx_signal_address;
+uint32_t host_signal_address;
+
 // kernels
 const std::string gatekeeper_kernel_src = "tt_fabric/impl/kernels/tt_fabric_gatekeeper.cpp";
 const std::string router_kernel_src = "tt_fabric/impl/kernels/tt_fabric_router.cpp";
+const std::string traffic_controller_src =
+    "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_controller.cpp";
 const std::string rx_kernel_src =
     "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen_rx.cpp";
 std::string tx_kernel_src;
@@ -390,6 +395,8 @@ typedef struct test_device {
     std::vector<CoreCoord> worker_logical_cores;
     std::vector<CoreCoord> router_logical_cores;
     std::vector<CoreCoord> router_virtual_cores;
+    CoreCoord core_range_start_virtual;
+    CoreCoord core_range_end_virtual;
     CoreCoord gk_logical_core;
     CoreCoord gk_phys_core;
     mesh_id_t mesh_id;
@@ -418,6 +425,9 @@ typedef struct test_device {
                 worker_logical_cores.push_back(CoreCoord({i, j}));
             }
         }
+
+        core_range_start_virtual = device_handle->worker_core_from_logical_core(CoreCoord(0, 0));
+        core_range_end_virtual = device_handle->worker_core_from_logical_core(CoreCoord(7, 7));
 
         // populate router cores
         auto neighbors = tt::Cluster::instance().get_ethernet_connected_device_ids(physical_chip_id);
@@ -730,6 +740,8 @@ typedef struct test_traffic {
     std::vector<std::tuple<CoreCoord, uint32_t, CoreCoord>> rx_workers;
     std::vector<CoreCoord> tx_virtual_cores;
     std::vector<CoreCoord> rx_virtual_cores;
+    CoreCoord controller_logical_core;
+    CoreCoord controller_virtual_core;
     std::vector<uint32_t> tx_to_rx_map;
     std::vector<std::vector<uint32_t>> rx_to_tx_map;
     std::vector<uint32_t> tx_to_rx_address_map;
@@ -781,6 +793,10 @@ typedef struct test_traffic {
         }
         rx_workers = rx_device->select_worker_cores(dest_routers, num_links_to_use, num_rx_workers, num_cores_to_skip);
 
+        // TODO: not the most optimum selection, might impact somewhat in bidirectional mode
+        controller_logical_core = tx_device->select_random_worker_cores(1)[0];
+        controller_virtual_core = tx_device->device_handle->worker_core_from_logical_core(controller_logical_core);
+
         for (auto& [router, noc, worker] : tx_workers) {
             tx_virtual_cores.push_back(tx_device->device_handle->worker_core_from_logical_core(worker));
         }
@@ -795,7 +811,6 @@ typedef struct test_traffic {
         std::vector<uint32_t>& rx_compile_args,
         std::map<string, string>& defines,
         uint32_t fabric_command,
-        uint32_t tx_signal_address,
         uint32_t test_results_address_) {
         CoreCoord tx_core, rx_core;
         tt_metal::NOC noc_id;
@@ -806,6 +821,42 @@ typedef struct test_traffic {
         // update the test results address, which will be used later for polling, collecting results
         test_results_address = test_results_address_;
 
+        {
+            uint32_t mcast_encoding = tt::tt_metal::hal.noc_multicast_encoding(
+                tx_device->core_range_start_virtual.x,
+                tx_device->core_range_start_virtual.y,
+                tx_device->core_range_end_virtual.x,
+                tx_device->core_range_end_virtual.y);
+
+            // launch controller kernel
+            // TODO: remove hardcoding
+            std::vector<uint32_t> runtime_args = {
+                time_seed,            // 0: time based seed
+                num_tx_workers,       // 1: number of workers for mcast
+                tx_signal_address,    // 2: address to send signal on to workers
+                host_signal_address,  // 3: address to receive signal from host
+                64,                   // 4: num mcast dest
+                mcast_encoding,       // 5: mcast dest noc encoding
+            };
+
+            // zero out the signal address
+            tt::llrt::write_hex_vec_to_core(
+                tx_device->device_handle->id(), controller_virtual_core, zero_buf, tx_signal_address);
+
+            // zero out host sync address
+            tt::llrt::write_hex_vec_to_core(
+                tx_device->device_handle->id(), controller_virtual_core, zero_buf, host_signal_address);
+
+            auto kernel = tt_metal::CreateKernel(
+                tx_device->program_handle,
+                traffic_controller_src,
+                {controller_logical_core},
+                tt_metal::DataMovementConfig{
+                    .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
+
+            tt_metal::SetRuntimeArgs(tx_device->program_handle, kernel, controller_logical_core, runtime_args);
+        }
+
         // launch tx kernels
         for (auto i = 0; i < num_tx_workers; i++) {
             router_virtual_core = std::get<0>(tx_workers[i]);
@@ -815,15 +866,16 @@ typedef struct test_traffic {
 
             // setup runtime args
             std::vector<uint32_t> runtime_args = {
-                time_seed,                            // 0: time based seed
-                tx_device->get_endpoint_id(tx_core),  // 1: src_endpoint_id
-                rx_device->get_noc_offset(rx_core),   // 2: dest_noc_offset
-                router_virtual_core.x,                // 3: router_x
-                router_virtual_core.y,                // 4: router_y
-                mesh_chip_id,                         // 5: mesh and chip id
-                rx_buf_size,                          // 6: space in rx's L1
-                gk_interface_addr,                    // 7: gk_message_addr_l
-                tx_device->gk_noc_offset,             // 8: gk_message_addr_h
+                time_seed,                                           // 0: time based seed
+                tx_device->get_endpoint_id(tx_core),                 // 1: src_endpoint_id
+                rx_device->get_noc_offset(rx_core),                  // 2: dest_noc_offset
+                tx_device->get_noc_offset(controller_logical_core),  // 3: controller noc offset
+                router_virtual_core.x,                               // 4: router_x
+                router_virtual_core.y,                               // 5: router_y
+                mesh_chip_id,                                        // 6: mesh and chip id
+                rx_buf_size,                                         // 7: space in rx's L1
+                gk_interface_addr,                                   // 8: gk_message_addr_l
+                tx_device->gk_noc_offset,                            // 9: gk_message_addr_h
             };
 
             if (ASYNC_WR & fabric_command) {
@@ -836,7 +888,8 @@ typedef struct test_traffic {
 
             log_info(
                 LogTest,
-                "run traffic_gen_tx at logical: x={},y={}; virtual: x={},y={}",
+                "Device: {}, TX kernel running on: logical: x={},y={}; virtual: x={},y={}",
+                tx_device->physical_chip_id,
                 tx_core.x,
                 tx_core.y,
                 tx_virtual_cores[i].x,
@@ -887,7 +940,8 @@ typedef struct test_traffic {
 
             log_info(
                 LogTest,
-                "run traffic_gen_rx at logical: x={},y={}; virtual: x={},y={}",
+                "Device: {}, RX kernel running on: logical: x={},y={}; virtual: x={},y={}",
+                rx_device->physical_chip_id,
                 rx_core.x,
                 rx_core.y,
                 rx_virtual_cores[i].x,
@@ -904,6 +958,12 @@ typedef struct test_traffic {
 
             tt_metal::SetRuntimeArgs(rx_device->program_handle, kernel, rx_core, runtime_args);
         }
+    }
+
+    void notify_tx_controller() {
+        std::vector<uint32_t> start_signal(1, 1);
+        tt::llrt::write_hex_vec_to_core(
+            tx_device->device_handle->id(), controller_virtual_core, start_signal, host_signal_address);
     }
 
     void notify_tx_workers(uint32_t address) {
@@ -1002,7 +1062,8 @@ typedef struct test_traffic {
 
             log_info(
                 LogTest,
-                "TX {} words sent = {}, elapsed cycles = {} -> BW = {:.2f} B/cycle",
+                "Device: {}, TX {} words sent: {}, elapsed cycles: {} -> BW: {:.2f} B/cycle",
+                tx_device->physical_chip_id,
                 i,
                 tx_words_sent,
                 tx_elapsed_cycles,
@@ -1025,7 +1086,13 @@ typedef struct test_traffic {
         for (uint32_t i = 0; i < num_rx_workers; i++) {
             uint64_t words_received = get_64b_result(rx_results[i], PQ_TEST_WORD_CNT_INDEX);
             uint32_t num_tx = rx_to_tx_map[i].size();
-            log_info(LogTest, "RX {}, num producers = {}, words received = {}", i, num_tx, words_received);
+            log_info(
+                LogTest,
+                "Device: {}, RX {}, num producers = {}, words received = {}",
+                rx_device->physical_chip_id,
+                i,
+                num_tx,
+                words_received);
         }
         // log_info(LogTest, "Total TX BW = {:.2f} B/cycle", total_tx_bw);
         log_info(LogTest, "Total TX BW = {:.2f} B/cycle", total_tx_bw_2);
@@ -1110,7 +1177,10 @@ int main(int argc, char **argv) {
     constexpr uint32_t default_tx_queue_size_bytes = 0x10000;
     constexpr uint32_t default_rx_queue_start_addr = 0xa0000;
     constexpr uint32_t default_rx_queue_size_bytes = 0x20000;
-    constexpr uint32_t default_tx_signal_address = 0x70000;
+
+    // if this is used for multicast on all workers, carefully set it to a value that
+    // doesnt interfere with rx payload checking
+    constexpr uint32_t default_tx_signal_address = 0x28000;
 
     constexpr uint32_t default_test_results_addr = 0x100000;
     constexpr uint32_t default_test_results_size = 0x40000;
@@ -1161,6 +1231,8 @@ int main(int argc, char **argv) {
     constexpr uint32_t default_num_links = 1;
 
     constexpr uint32_t default_packet_size_kb = 4;
+
+    constexpr uint32_t default_host_signal_address = 0x60000;
 
     std::vector<std::string> input_args(argv, argv + argc);
     if (test_args::has_command_option(input_args, "-h") ||
@@ -1255,7 +1327,8 @@ int main(int argc, char **argv) {
     allow_1st_noc_hop = test_args::has_command_option(input_args, "--allow_1st_noc_hop");
     bidirectional_traffic = test_args::has_command_option(input_args, "--bidirectional");
 
-    uint32_t tx_signal_address = default_tx_signal_address;
+    tx_signal_address = default_tx_signal_address;
+    host_signal_address = default_host_signal_address;
 
     std::string board_type = test_args::get_command_option(input_args, "--board_type", std::string(default_board_type));
 
@@ -1478,8 +1551,7 @@ int main(int argc, char **argv) {
 
         // TODO: launch traffic kernels
         for (auto& traffic : fabric_traffic) {
-            traffic.create_kernels(
-                tx_compile_args, rx_compile_args, defines, fabric_command, tx_signal_address, test_results_addr);
+            traffic.create_kernels(tx_compile_args, rx_compile_args, defines, fabric_command, test_results_addr);
         }
 
         if (check_txrx_timeout) {
@@ -1498,9 +1570,9 @@ int main(int argc, char **argv) {
             test_device->wait_for_gatekeeper_sync();
         }
 
-        // notify tx kernels to start transmitting
+        // notify tx controller to signal the tx workers
         for (auto& traffic : fabric_traffic) {
-            traffic.notify_tx_workers(tx_signal_address);
+            traffic.notify_tx_controller();
         }
 
         // wait for rx kernels to finish
