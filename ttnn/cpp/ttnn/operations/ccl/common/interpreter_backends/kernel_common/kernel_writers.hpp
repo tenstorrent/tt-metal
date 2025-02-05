@@ -26,7 +26,6 @@ FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
     FabricConnectionManager& fabric_connection,
     size_t& l1_read_addr,
     uint32_t payload_size_bytes) {
-    const auto [dest_noc_xy, dest_addr] = get_noc_address_components(noc0_dest_noc_addr);
     const size_t payload_l1_address = l1_read_addr;
 
     auto pkt_hdr = reinterpret_cast<volatile tt::fabric::PacketHeader*>(packet_header_buffer_addr);
@@ -35,8 +34,7 @@ FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
 #endif
 
     size_t packet_send_size_bytes = payload_size_bytes + sizeof(tt::fabric::PacketHeader);
-    pkt_hdr->to_write()->to_noc_unicast(tt::fabric::NocUnicastCommandHeader{
-        dest_addr, packet_send_size_bytes, static_cast<uint8_t>(dest_noc_xy.x), static_cast<uint8_t>(dest_noc_xy.y)});
+    pkt_hdr->to_noc_unicast(tt::fabric::NocUnicastCommandHeader{noc0_dest_noc_addr, packet_send_size_bytes});
 
     switch (current_cmd_header.dest_type) {
         case ttnn::ccl::cmd::CclCommandDestType::CHIP_UNICAST: {

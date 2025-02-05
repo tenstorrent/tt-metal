@@ -84,7 +84,7 @@ std::pair<WorkerXY, uint32_t> get_noc_address_components(uint64_t noc_addr) {
 //------------------------------------------------------------------------------
 
 void mcast_contig_pages_to_noc_address(
-    uint64_t noc_addr,
+    uint64_t noc0_dest_addr,
     size_t l1_read_addr,
     size_t contig_pages_advanced,
     size_t payload_page_size,
@@ -95,12 +95,17 @@ void mcast_contig_pages_to_noc_address(
     size_t forward_direction_num_hops,
     size_t backward_direction_num_hops) {
     const size_t payload_size_bytes = contig_pages_advanced * payload_page_size;
-    const auto [dest_noc_xy, dest_addr] = get_noc_address_components(noc_addr);
+    const auto [dest_noc_xy, dest_addr] = get_noc_address_components(noc0_dest_addr);
     const size_t payload_l1_address = l1_read_addr + sizeof(tt::fabric::PacketHeader);
 
     // Local chip write
     noc_async_write(
-        payload_l1_address, get_noc_addr(dest_noc_xy.x, dest_noc_xy.y, dest_addr, noc_index), payload_size_bytes);
+        payload_l1_address,
+        // We are writing out from local core so we need to normalize to our noc
+        // if the target is a virtual coord this is actually redundant but for DRAM
+        // coords it is necessary
+        get_noc_addr(dest_noc_xy.x, dest_noc_xy.y, dest_addr, noc_index),
+        payload_size_bytes);
     size_t packet_send_size_bytes = payload_size_bytes + sizeof(tt::fabric::PacketHeader);
 
     // Forward fabric connection
@@ -110,14 +115,12 @@ void mcast_contig_pages_to_noc_address(
             "sizeof(sizeof(tt::fabric::PacketHeader)) is not a power of two which violates the below assertion");
 
         auto& pkt_hdr = *reinterpret_cast<tt::fabric::PacketHeader*>(l1_read_addr);
-        pkt_hdr.to_write()
+        pkt_hdr
             .to_chip_multicast(
                 tt::fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(forward_direction_num_hops)})
             .to_noc_unicast(tt::fabric::NocUnicastCommandHeader{
-                dest_addr,
-                packet_send_size_bytes,
-                static_cast<uint8_t>(dest_noc_xy.x),
-                static_cast<uint8_t>(dest_noc_xy.y)});
+                noc0_dest_addr,
+                packet_send_size_bytes});
         forward_fabric_sender.wait_for_empty_write_slot();
         forward_fabric_sender.send_payload_flush_blocking_from_address(l1_read_addr, packet_send_size_bytes);
     }
@@ -125,14 +128,12 @@ void mcast_contig_pages_to_noc_address(
     // Backward fabric connection
     if (has_backward_fabric_connection) {
         auto& pkt_hdr = *reinterpret_cast<tt::fabric::PacketHeader*>(l1_read_addr);
-        pkt_hdr.to_write()
+        pkt_hdr
             .to_chip_multicast(
                 tt::fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(backward_direction_num_hops)})
             .to_noc_unicast(tt::fabric::NocUnicastCommandHeader{
-                dest_addr,
-                packet_send_size_bytes,
-                static_cast<uint8_t>(dest_noc_xy.x),
-                static_cast<uint8_t>(dest_noc_xy.y)});
+                noc0_dest_addr,
+                packet_send_size_bytes});
         backward_fabric_sender.wait_for_empty_write_slot();
         backward_fabric_sender.send_payload_non_blocking_from_address(l1_read_addr, packet_send_size_bytes);
     }
@@ -159,7 +160,7 @@ void mcast_payload_chunk_to_output_tensor_address(
     size_t contig_pages_advanced = 1;
 
     for (size_t i = 0; i < n_pages; i += contig_pages_advanced) {
-        auto const [noc_addr, contig_pages] =
+        auto const [noc0_dest_addr, contig_pages] =
             get_noc_addr_and_contiguous_pages_for_fabric_write<TENSOR_LAYOUT, MEM_LAYOUT>(
                 curr_page_idx,
                 offset_into_worker_slice,
@@ -170,7 +171,7 @@ void mcast_payload_chunk_to_output_tensor_address(
         contig_pages_advanced = std::min<size_t>(contig_pages, n_pages);
 
         mcast_contig_pages_to_noc_address(
-            noc_addr,
+            noc0_dest_addr,
             l1_read_addr,
             contig_pages_advanced,
             payload_page_size,
@@ -294,7 +295,7 @@ void mcast_sync_signal_to_addr(
         ASSERT((pkt_addr & (sizeof(tt::fabric::PacketHeader) - 1)) == 0);
 
         auto& pkt_hdr = *reinterpret_cast<tt::fabric::PacketHeader*>(pkt_addr);
-        pkt_hdr.to_atomic_inc()
+        pkt_hdr
             .to_chip_multicast(tt::fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(directional_num_hops)})
             .to_noc_unicast_atomic_inc(tt::fabric::NocUnicastAtomicIncCommandHeader{
                 remote_sem_l1_addr,
