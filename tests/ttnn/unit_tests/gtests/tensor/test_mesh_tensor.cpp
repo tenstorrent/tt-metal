@@ -102,8 +102,8 @@ TEST_F(MeshTensorDeviceTest, ReplicateHostTensor) {
 TEST_F(MeshTensorDeviceTest, WriteMultiDeviceHostTensor) {
     const int num_devices = mesh_device_->num_devices();
     ASSERT_EQ(num_devices, 8);
-    const ttnn::Shape shape{1, 8, 32, 32};
-    const ttnn::Shape shard_shape{1, 1, 32, 32};
+    // Test uneven shard shapes.
+    const ttnn::Shape shape{1, 9, 32, 32};
     const TensorSpec tensor_spec =
         TensorSpec(shape, TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));
 
@@ -114,14 +114,10 @@ TEST_F(MeshTensorDeviceTest, WriteMultiDeviceHostTensor) {
     Tensor input_host_tensor_sharded = distribute_tensor(
         Tensor::from_vector(host_data, tensor_spec), *shard_tensor_to_mesh_mapper(*mesh_device_, /*dim=*/1));
     EXPECT_TRUE(input_host_tensor_sharded.storage_type() == StorageType::MULTI_DEVICE_HOST);
-    EXPECT_EQ(input_host_tensor_sharded.get_tensor_spec().logical_shape(), shard_shape);
 
     auto* multi_device_host_storage =
         std::get_if<tt::tt_metal::MultiDeviceHostStorage>(&input_host_tensor_sharded.get_storage());
     ASSERT_NE(multi_device_host_storage, nullptr);
-    for (const auto& shard_spec : multi_device_host_storage->specs) {
-        EXPECT_EQ(shard_spec.logical_shape(), shard_shape);
-    }
     const auto* strategy = std::get_if<tt::tt_metal::ShardTensor>(&multi_device_host_storage->strategy);
     ASSERT_NE(strategy, nullptr);
     EXPECT_EQ(strategy->shard_dimension, 1);
@@ -130,13 +126,9 @@ TEST_F(MeshTensorDeviceTest, WriteMultiDeviceHostTensor) {
     Tensor device_tensor =
         tensor_impl::to_device_mesh_tensor_wrapper(input_host_tensor_sharded, mesh_device_.get(), MemoryConfig{});
     EXPECT_TRUE(distributed::is_mesh_buffer_tensor(device_tensor));
-    EXPECT_EQ(device_tensor.get_tensor_spec().logical_shape(), shard_shape);
 
     auto* multi_device_storage = std::get_if<tt::tt_metal::MultiDeviceStorage>(&device_tensor.get_storage());
     ASSERT_NE(multi_device_storage, nullptr);
-    for (const auto& [_, shard_spec] : multi_device_storage->specs) {
-        EXPECT_EQ(shard_spec.logical_shape(), shard_shape);
-    }
     const auto* device_tensor_strategy = std::get_if<tt::tt_metal::ShardTensor>(&multi_device_storage->strategy);
     ASSERT_NE(device_tensor_strategy, nullptr);
     EXPECT_EQ(device_tensor_strategy->shard_dimension, 1);

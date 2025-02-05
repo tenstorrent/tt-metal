@@ -17,14 +17,13 @@ std::vector<std::shared_ptr<Buffer>> MultiDeviceStorage::get_buffers() const {
 }
 
 MultiDeviceStorage::MultiDeviceStorage(
-    const DistributedTensorConfig& strategy_,
-    const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer_,
-    const TensorSpec& tensor_spec) :
-    strategy(strategy_),
+    const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer_, const TensorSpec& tensor_spec) :
+    strategy(ReplicateTensor{}),
     mesh_buffer(mesh_buffer_)  //
 {
-    // In the long term, this code won't exist: no interactions will be made with individual Buffers, and instead the
-    // APIs will use MeshBuffer directly. MeshBuffer will also guarantee that all shards have the same tensor spec.
+    // TODO: #17215 - In the long term, this code won't exist: no interactions will be made with individual Buffers, and
+    // instead the APIs will use MeshBuffer directly. MeshBuffer will also guarantee that all shards have the same
+    // tensor spec.
     //
     // For now, this code ensures MeshBuffer backed tensors are compatible with the rest of the ops infra.
     const auto [num_rows, num_cols] = mesh_buffer->device()->shape();

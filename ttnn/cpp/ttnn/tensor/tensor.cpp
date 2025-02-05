@@ -1016,7 +1016,7 @@ Tensor allocate_tensor_on_mesh(const TensorSpec& tensor_spec, distributed::MeshD
     TT_FATAL(
         tt::tt_metal::detail::InMainThread(), "Allocation of a tensor on mesh must be called from the main thread");
     auto mesh_buffer = tensor_impl::allocate_mesh_buffer_on_device(mesh_device, tensor_spec);
-    MultiDeviceStorage multi_device_storage(ReplicateTensor{}, std::move(mesh_buffer), tensor_spec);
+    MultiDeviceStorage multi_device_storage(std::move(mesh_buffer), tensor_spec);
     return Tensor(std::move(multi_device_storage), tensor_spec);
 }
 

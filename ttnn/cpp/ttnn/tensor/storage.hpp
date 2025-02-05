@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <memory>
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
 
@@ -248,17 +249,16 @@ struct MultiDeviceStorage {
         DistributedTensorConfig strategy_,
         std::vector<int> ordered_device_ids_,
         std::unordered_map<int, std::shared_ptr<Buffer>> buffers_,
-        std::unordered_map<int, TensorSpec> specs_) :
+        std::unordered_map<int, TensorSpec> specs_,
+        std::shared_ptr<distributed::MeshBuffer> mesh_buffer_) :
         strategy(std::move(strategy_)),
         ordered_device_ids(std::move(ordered_device_ids_)),
         buffers(std::move(buffers_)),
-        specs(std::move(specs_)) {}
+        specs(std::move(specs_)),
+        mesh_buffer(std::move(mesh_buffer_)) {}
 
-    // Constructs a multi-device tensor backed by mesh buffer.
-    MultiDeviceStorage(
-        const DistributedTensorConfig& strategy_,
-        const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer_,
-        const TensorSpec& tensor_spec);
+    // Constructs a replicated multi-device tensor backed by mesh buffer.
+    MultiDeviceStorage(const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer_, const TensorSpec& tensor_spec);
 
     MultiDeviceStorage(MultiDeviceStorage&& other) { swap(*this, other); }
 

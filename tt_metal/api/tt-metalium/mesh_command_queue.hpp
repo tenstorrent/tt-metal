@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <optional>
+#include "buffer.hpp"
 #include "command_queue_interface.hpp"
 #include "mesh_buffer.hpp"
 #include "mesh_device.hpp"
@@ -24,9 +26,15 @@ private:
 
     // Helper functions for reading and writing individual shards
     void write_shard_to_device(
-        std::shared_ptr<Buffer>& shard_view, const void* src, tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+        std::shared_ptr<Buffer>& shard_view,
+        const void* src,
+        const BufferRegion& region,
+        tt::stl::Span<const SubDeviceId> sub_device_ids = {});
     void read_shard_from_device(
-        std::shared_ptr<Buffer>& shard_view, void* dst, tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+        std::shared_ptr<Buffer>& shard_view,
+        void* dst,
+        const BufferRegion& region,
+        tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
     // Helper functions for read and write entire Sharded-MeshBuffers
     void write_sharded_buffer(const MeshBuffer& buffer, const void* src);
@@ -47,7 +55,11 @@ public:
 
     // MeshBuffer Write APIs
     void enqueue_write_shard(
-        const std::shared_ptr<MeshBuffer>& mesh_buffer, const void* host_data, const Coordinate& coord, bool blocking);
+        const std::shared_ptr<MeshBuffer>& mesh_buffer,
+        const void* host_data,
+        const Coordinate& coord,
+        bool blocking,
+        const std::optional<BufferRegion>& region = std::nullopt);
     void enqueue_write_shard_to_sub_grid(
         const MeshBuffer& buffer, const void* host_data, const LogicalDeviceRange& device_range, bool blocking);
     void enqueue_write_mesh_buffer(const std::shared_ptr<MeshBuffer>& buffer, const void* host_data, bool blocking);
@@ -56,7 +68,11 @@ public:
 
     // MeshBuffer Read APIs
     void enqueue_read_shard(
-        void* host_data, const std::shared_ptr<MeshBuffer>& mesh_buffer, const Coordinate& coord, bool blocking);
+        void* host_data,
+        const std::shared_ptr<MeshBuffer>& mesh_buffer,
+        const Coordinate& coord,
+        bool blocking,
+        const std::optional<BufferRegion>& region = std::nullopt);
     void enqueue_read_mesh_buffer(void* host_data, const std::shared_ptr<MeshBuffer>& buffer, bool blocking);
     void enqueue_read_shards(
         const std::vector<void*>& host_data, const std::shared_ptr<MeshBuffer>& mesh_buffer, bool blocking);

@@ -205,7 +205,7 @@ Tensor to_device(
 // TODO: #17215 - This will eventually subsume `to_device`, when "mesh buffer" backed tensors become the default.
 template <typename T>
 Tensor to_device_mesh_tensor(
-    const Tensor& tensor, distributed::MeshDevice* target_device, const MemoryConfig& memory_config);
+    const Tensor& tensor, distributed::MeshDevice* mesh_device, const MemoryConfig& memory_config);
 
 // ======================================================================================
 //                                  .to_layout()
