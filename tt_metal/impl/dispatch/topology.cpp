@@ -14,8 +14,7 @@
 #include "kernel_config/demux.hpp"
 #include "kernel_config/eth_router.hpp"
 #include "kernel_config/eth_tunneler.hpp"
-#include "tt_metal/fabric/host_interface.h"
-#include "tt_metal/fabric/hw/inc/routing_table.h"
+#include "fabric_host_interface.h"
 
 namespace tt::tt_metal {
 

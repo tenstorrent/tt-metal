@@ -8,7 +8,7 @@
 #include "host_api.hpp"
 #include "dprint_server.hpp"
 #include "device.hpp"
-#include "tt_metal/fabric/control_plane.hpp"
+#include "control_plane.hpp"
 
 namespace tt {
 namespace tt_metal::detail {

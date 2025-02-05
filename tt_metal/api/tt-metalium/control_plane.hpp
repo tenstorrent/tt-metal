@@ -8,7 +8,7 @@
 #include <tt-metalium/rtoptions.hpp>
 
 #include "routing_table_generator.hpp"
-#include "fabric/hw/inc/routing_table.h"
+#include "fabric_host_interface.h"
 
 namespace tt::tt_fabric {
 

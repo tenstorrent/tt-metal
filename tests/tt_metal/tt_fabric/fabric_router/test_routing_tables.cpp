@@ -4,9 +4,9 @@
 
 #include <memory>
 #include "fabric_fixture.hpp"
-#include "tt_metal/fabric/control_plane.hpp"
-#include "tt_metal/fabric/mesh_graph.hpp"
-#include "tt_metal/fabric/routing_table_generator.hpp"
+#include <tt-metalium/control_plane.hpp>
+#include <tt-metalium/mesh_graph.hpp>
+#include <tt-metalium/routing_table_generator.hpp>
 
 namespace tt::tt_fabric {
 namespace fabric_router_tests {
