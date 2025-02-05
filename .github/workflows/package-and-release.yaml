@@ -186,6 +186,7 @@ jobs:
           fail_on_unmatched_files: true
   create-docker-release-image:
     needs: [
+      build-artifact,
       create-tag,
       create-and-upload-draft-release
     ]
