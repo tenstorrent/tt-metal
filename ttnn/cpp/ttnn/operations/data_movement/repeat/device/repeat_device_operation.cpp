@@ -23,11 +23,6 @@ void RepeatDeviceOperation::validate(const std::vector<Tensor>& input_tensors) c
     TT_FATAL(
         this->m_output_mem_config.memory_layout == input_tensor_a.memory_config().memory_layout,
         "Output tensor must have the same memory layout as input tensor");
-    if (input_tensor_a.get_dtype() == DataType::BFLOAT16) {
-        TT_FATAL(
-            input_tensor_a.get_logical_shape()[-1] >= 2 || (m_is_last_dim && m_num_repeats >= 2),
-            "bfloat16 needs 4 byte inner dim on the output.");
-    }
 }
 
 std::vector<TensorSpec> RepeatDeviceOperation::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
