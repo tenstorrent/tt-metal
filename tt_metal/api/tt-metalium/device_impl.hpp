@@ -149,7 +149,6 @@ public:
     void initialize_and_launch_firmware() override;
     void init_command_queue_host() override;
     void init_command_queue_device() override;
-    void update_dispatch_cores_for_multi_cq_eth_dispatch() override;
 
     // Puts device into reset
     bool close() override;
@@ -210,6 +209,8 @@ private:
     void initialize_firmware(const HalProgrammableCoreType &core_type, CoreCoord virtual_core, launch_msg_t *launch_msg, go_msg_t* go_msg);
 
     void initialize_default_sub_device_state(size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap);
+
+    void update_dispatch_cores_for_multi_cq_eth_dispatch();
 
     void compile_command_queue_programs();
     void configure_command_queue_programs();

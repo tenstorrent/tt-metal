@@ -1012,6 +1012,13 @@ bool Device::initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t t
     log_debug(tt::LogMetal, "Running with {} cqs ", num_hw_cqs);
     TT_FATAL(num_hw_cqs > 0 and num_hw_cqs <= dispatch_core_manager::MAX_NUM_HW_CQS, "num_hw_cqs can be between 1 and {}", dispatch_core_manager::MAX_NUM_HW_CQS);
     this->using_fast_dispatch_ = false;
+    // Trying to preserve logic that was in device_pool.cpp
+    // However, I honestly don't understand it
+    if (!initialized_ && (num_hw_cqs_ != num_hw_cqs)) {
+        // The dispatch core manager was reset, since the number of CQs was toggled.
+        // Account for chip specific idle eth dispatch cores.
+        update_dispatch_cores_for_multi_cq_eth_dispatch();
+    }
     this->num_hw_cqs_ = num_hw_cqs;
     constexpr uint32_t harvesting_map_bits = 12;
     constexpr uint32_t num_hw_cq_bits = 8;
