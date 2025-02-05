@@ -240,7 +240,7 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
         uint32_t input_tile_id_end = (link + 1) * base_pages_per_worker + std::min(link + 1, remainder);
 
         uint32_t worker_num_tiles_to_read = input_tile_id_end - input_tile_id_start;
-        uint32_t input_first_core_tile_start_offset = worker_num_tiles_to_read % input_tensor_shard_num_pages;
+        uint32_t input_first_core_tile_start_offset = 0;   // worker_num_tiles_to_read % input_tensor_shard_num_pages;
         uint32_t output_first_core_tile_start_offset = 0;  // worker_num_tiles_to_read % output_tensor_shard_num_pages;
 
         std::vector<uint32_t> input_tensor_cores_x;
