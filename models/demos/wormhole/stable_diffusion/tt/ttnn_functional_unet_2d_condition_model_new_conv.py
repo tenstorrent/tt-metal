@@ -418,6 +418,7 @@ class UNet2DConditionModel:
                 weights_format="OIHW",
                 input_memory_config=sample.memory_config(),
                 input_layout=sample.get_layout(),
+                has_bias=True,
                 **conv_kwargs,
             )
             self.conv_in_bias = ttnn.prepare_conv_bias(
@@ -709,6 +710,7 @@ class UNet2DConditionModel:
                 weights_format="OIHW",
                 input_memory_config=sample.memory_config(),
                 input_layout=sample.get_layout(),
+                has_bias=True,
                 **conv_kwargs_1,
             )
             self.conv_out_bias = ttnn.prepare_conv_bias(

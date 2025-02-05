@@ -119,13 +119,9 @@ uint32_t MeshDevice::dram_size_per_channel() const {
 IDevice* MeshDevice::reference_device() const { return this->get_devices().at(0); }
 
 MeshDevice::MeshDevice(
-    std::shared_ptr<ScopedDevices> mesh_handle,
-    const MeshShape& mesh_shape,
-    MeshType type,
-    std::weak_ptr<MeshDevice> parent_mesh) :
+    std::shared_ptr<ScopedDevices> mesh_handle, const MeshShape& mesh_shape, std::weak_ptr<MeshDevice> parent_mesh) :
     scoped_devices_(std::move(mesh_handle)),
     mesh_shape_(mesh_shape),
-    type_(type),
     mesh_id_(generate_unique_mesh_id()),
     parent_mesh_(std::move(parent_mesh)) {}
 
@@ -137,16 +133,15 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
     const DispatchCoreConfig& dispatch_core_config,
     tt::stl::Span<const std::uint32_t> l1_bank_remap) {
     auto mesh_device = std::make_shared<MeshDevice>(
-        std::make_shared<ScopedDevices>(l1_small_size, trace_region_size, num_command_queues, dispatch_core_config, config),
-        config.mesh_shape,
-        config.mesh_type);
+        std::make_shared<ScopedDevices>(
+            l1_small_size, trace_region_size, num_command_queues, dispatch_core_config, config),
+        config.mesh_shape);
 
     mesh_device->initialize(num_command_queues, l1_small_size, trace_region_size, l1_bank_remap);
     return mesh_device;
 }
 
-std::shared_ptr<MeshDevice> MeshDevice::create_submesh(
-    const MeshShape& submesh_shape, const MeshOffset& offset, MeshType type) {
+std::shared_ptr<MeshDevice> MeshDevice::create_submesh(const MeshShape& submesh_shape, const MeshOffset& offset) {
     if (submesh_shape.num_rows <= 0 || submesh_shape.num_cols <= 0) {
         TT_THROW(
             "Invalid submesh shape: ({}, {}). Both dimensions must be positive.",
@@ -170,7 +165,7 @@ std::shared_ptr<MeshDevice> MeshDevice::create_submesh(
             mesh_shape_.num_cols);
     }
 
-    auto submesh = std::make_shared<MeshDevice>(scoped_devices_, submesh_shape, type, shared_from_this());
+    auto submesh = std::make_shared<MeshDevice>(scoped_devices_, submesh_shape, shared_from_this());
     auto start_coordinate = Coordinate{offset.row, offset.col};
     auto end_coordinate = Coordinate{offset.row + submesh_shape.num_rows - 1, offset.col + submesh_shape.num_cols - 1};
 
@@ -191,11 +186,11 @@ std::shared_ptr<MeshDevice> MeshDevice::create_submesh(
     return submesh;
 }
 
-std::vector<std::shared_ptr<MeshDevice>> MeshDevice::create_submeshes(const MeshShape& submesh_shape, MeshType type) {
+std::vector<std::shared_ptr<MeshDevice>> MeshDevice::create_submeshes(const MeshShape& submesh_shape) {
     std::vector<std::shared_ptr<MeshDevice>> submeshes;
     for (int row = 0; row < this->num_rows(); row += submesh_shape.num_rows) {
         for (int col = 0; col < this->num_cols(); col += submesh_shape.num_cols) {
-            auto submesh = this->create_submesh(submesh_shape, MeshOffset{row, col}, type);
+            auto submesh = this->create_submesh(submesh_shape, MeshOffset{row, col});
             submeshes.push_back(submesh);
         }
     }
@@ -219,9 +214,7 @@ IDevice* MeshDevice::get_device(chip_id_t physical_device_id) const {
     TT_THROW("Physical Device ID: {} not found in assigned devices", physical_device_id);
 }
 
-std::vector<IDevice*> MeshDevice::get_devices(const std::optional<MeshType>& requested_type) const {
-    return view_->get_devices(requested_type.value_or(type_));
-}
+std::vector<IDevice*> MeshDevice::get_devices() const { return view_->get_devices(); }
 
 // TODO: Remove this function once we have a proper view interface
 IDevice* MeshDevice::get_device(size_t row_idx, size_t col_idx) const {
@@ -552,20 +545,24 @@ CommandQueue& MeshDevice::command_queue(size_t cq_id) {
 
 // Trace management
 void MeshDevice::begin_trace(const uint8_t cq_id, const uint32_t tid) {
-    TT_THROW("begin_trace() is not supported on MeshDevice - use individual devices instead");
-    reference_device()->begin_trace(cq_id, tid);
+    for (auto& device : scoped_devices_->get_devices()) {
+        device->begin_trace(cq_id, tid);
+    }
 }
 void MeshDevice::end_trace(const uint8_t cq_id, const uint32_t tid) {
-    TT_THROW("end_trace() is not supported on MeshDevice - use individual devices instead");
-    reference_device()->end_trace(cq_id, tid);
+    for (auto& device : scoped_devices_->get_devices()) {
+        device->end_trace(cq_id, tid);
+    }
 }
 void MeshDevice::replay_trace(const uint8_t cq_id, const uint32_t tid, const bool blocking) {
-    TT_THROW("replay_trace() is not supported on MeshDevice - use individual devices instead");
-    reference_device()->replay_trace(cq_id, tid, blocking);
+    for (auto& device : scoped_devices_->get_devices()) {
+        device->replay_trace(cq_id, tid, blocking);
+    }
 }
 void MeshDevice::release_trace(const uint32_t tid) {
-    TT_THROW("release_trace() is not supported on MeshDevice - use individual devices instead");
-    reference_device()->release_trace(tid);
+    for (auto& device : scoped_devices_->get_devices()) {
+        device->release_trace(tid);
+    }
 }
 std::shared_ptr<TraceBuffer> MeshDevice::get_trace(uint32_t tid) {
     TT_THROW("get_trace() is not supported on MeshDevice - use individual devices instead");
@@ -641,7 +638,6 @@ void MeshDevice::synchronize() {
     // Nothing to synchronize, as all work is executed by MeshDevice is synchronous.
 }
 WorkExecutorMode MeshDevice::get_worker_mode() { return WorkExecutorMode::SYNCHRONOUS; }
-void MeshDevice::set_worker_queue_mode(const WorkerQueueMode& mode) {}
 bool MeshDevice::is_worker_queue_empty() const { return true; }
 void MeshDevice::push_work(std::function<void()> work, bool blocking) {
     // Execute inline synchronously.

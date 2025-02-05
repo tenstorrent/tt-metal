@@ -54,7 +54,6 @@ private:
     std::shared_ptr<ScopedDevices> scoped_devices_;
     MeshDeviceID mesh_id_;
     MeshShape mesh_shape_;
-    MeshType type_;
     std::unique_ptr<MeshDeviceView> view_;
     std::vector<std::shared_ptr<MeshDevice>>
         submeshes_;                          // Parent owns submeshes and is responsible for their destruction
@@ -69,7 +68,6 @@ public:
     MeshDevice(
         std::shared_ptr<ScopedDevices> mesh_handle,
         const MeshShape& mesh_shape,
-        MeshType type,
         std::weak_ptr<MeshDevice> parent_mesh = {});
     ~MeshDevice() override;
 
@@ -161,7 +159,6 @@ public:
     void enable_async(bool enable) override;
     void synchronize() override;
     WorkExecutorMode get_worker_mode() override;
-    void set_worker_queue_mode(const WorkerQueueMode& mode) override;
     bool is_worker_queue_empty() const override;
     void push_work(std::function<void()> work, bool blocking) override;
     void enable_program_cache() override;
@@ -195,9 +192,9 @@ public:
 
     // A MeshDevice is a collection of devices arranged in a 2D grid.
     // The type parameter allows the caller to specify how to linearize the devices in the mesh.
-    // If type is not provided, the default behavior is to return the devices based on the MeshType of the MeshDevice.
 
-    std::vector<IDevice*> get_devices(const std::optional<MeshType>& type = std::nullopt) const;
+    // Returns the devices in the mesh in row-major order.
+    std::vector<IDevice*> get_devices() const;
     IDevice* get_device_index(size_t logical_device_id) const;
     IDevice* get_device(chip_id_t physical_device_id) const;
     IDevice* get_device(size_t row_idx, size_t col_idx) const;
@@ -233,12 +230,9 @@ public:
     std::vector<std::shared_ptr<MeshDevice>> get_submeshes() const;
 
     std::shared_ptr<MeshDevice> create_submesh(
-        const MeshShape& submesh_shape,
-        const MeshOffset& offset = MeshOffset{0, 0},
-        MeshType type = MeshType::RowMajor);
+        const MeshShape& submesh_shape, const MeshOffset& offset = MeshOffset{0, 0});
 
-    std::vector<std::shared_ptr<MeshDevice>> create_submeshes(
-        const MeshShape& submesh_shape, MeshType type = MeshType::RowMajor);
+    std::vector<std::shared_ptr<MeshDevice>> create_submeshes(const MeshShape& submesh_shape);
 
     // These methods will get removed once in favour of the ones in IDevice* and TT-Mesh bringup
     // These are prefixed with "mesh_" to avoid conflicts with the IDevice* methods

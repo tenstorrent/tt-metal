@@ -6,7 +6,7 @@
 import sys
 import argparse
 import re
-from typing import Any, Optional
+from typing import Any, Optional, Union
 from collections import defaultdict
 import pandas as pd
 
@@ -280,7 +280,7 @@ def analyze_op(row, prev_row):
     op_code = Cell(row["OP CODE"])
     cores = Cell(int(row["CORE COUNT"]) if pd.notna(row["CORE COUNT"]) else None)
     device_time = Cell(
-        row["DEVICE FW DURATION [ns]"] / 1000 if pd.notna(row["DEVICE FW DURATION [ns]"]) else None,
+        row["DEVICE KERNEL DURATION [ns]"] / 1000 if pd.notna(row["DEVICE KERNEL DURATION [ns]"]) else None,
         unit="us",
         decimals=0,
     )
@@ -294,12 +294,16 @@ def analyze_op(row, prev_row):
     else:
         op_to_op_gap = Cell(None, unit="us", decimals=0)
 
-    output_datatype = row["OUTPUT_0_DATATYPE"]
-    input_0_datatype = row["INPUT_0_DATATYPE"]
-    input_1_datatype = row["INPUT_1_DATATYPE"]
+    def get_entry(k: str) -> Union[str, None]:
+        return row[k] if k in row else None
+
+    output_datatype = get_entry("OUTPUT_0_DATATYPE")
+    input_0_datatype = get_entry("INPUT_0_DATATYPE")
+    input_1_datatype = get_entry("INPUT_1_DATATYPE")
     output_datatype_cell = Cell(output_datatype)
     input_0_datatype_cell = Cell(input_0_datatype)
     input_1_datatype_cell = Cell(input_1_datatype)
+
     short_name = lambda n: {"BFLOAT16": "BF16", "BFLOAT8_B": "BFP8", "BFLOAT4_B": "BFP4"}.get(n, n)
 
     if "Matmul" in op_code.raw_value:
@@ -682,11 +686,11 @@ def merge_device_rows(df):
 
         if "AllGather" in op_name or "ReduceScatter" in op_name:
             # For collective ops, take the row with minimum duration
-            min_duration_block = min(blocks, key=lambda x: x[1]["DEVICE FW DURATION [ns]"])
+            min_duration_block = min(blocks, key=lambda x: x[1]["DEVICE KERNEL DURATION [ns]"])
             merged_blocks.append(min_duration_block[1])
         else:
             # For non-collective ops, take the row with maximum duration
-            max_duration_block = max(blocks, key=lambda x: x[1]["DEVICE FW DURATION [ns]"])
+            max_duration_block = max(blocks, key=lambda x: x[1]["DEVICE KERNEL DURATION [ns]"])
             merged_blocks.append(max_duration_block[1])
 
     return pd.DataFrame(merged_blocks)
@@ -727,14 +731,15 @@ def filter_by_id_range(rows, id_range):
     return rows
 
 
-def main(csv_file, signpost, ignore_signposts, min_percentage, id_range, csv_output_file, no_advice):
+def main(csv_file, signpost, ignore_signposts, min_percentage, id_range, csv_output_file, no_advice, tracing_mode):
     df = pd.read_csv(csv_file, low_memory=False)
 
     # Add a column for original row numbers
     df["ORIGINAL_ROW"] = df.index + 2  # +2 to match Excel row numbers (1-based + header)
 
     # Sort the DataFrame by "HOST START TS" column
-    if "HOST START TS" in df.columns:
+    # Sorting by HOST START TS is incorrect when using tracing mode since the tracing ops timestamps are the ones when captured and not executed
+    if "HOST START TS" in df.columns and not tracing_mode:
         print(colored("Sorting CSV by 'HOST START TS' column...", "cyan"))
         df = df.sort_values(by="HOST START TS")
     else:
@@ -832,6 +837,7 @@ if __name__ == "__main__":
     parser.add_argument("--no-color", action="store_true", help="Force output without color")
     parser.add_argument("--csv", type=str, help="Output filename for CSV format", metavar="OUTPUT_FILE")
     parser.add_argument("--no-advice", action="store_true", help="Only show the table section of the report")
+    parser.add_argument("--tracing-mode", action="store_true", help="Do not sort when in tracing mode")
     args = parser.parse_args()
 
     # Set the global color_output variable
@@ -844,4 +850,13 @@ if __name__ == "__main__":
         print(colored("Invalid --id-range format. Please use 'START-END', 'START-', or '-END'.", "red"))
         exit(1)
 
-    main(args.csv_file, args.signpost, args.ignore_signposts, args.min_percentage, id_range, args.csv, args.no_advice)
+    main(
+        args.csv_file,
+        args.signpost,
+        args.ignore_signposts,
+        args.min_percentage,
+        id_range,
+        args.csv,
+        args.no_advice,
+        args.tracing_mode,
+    )

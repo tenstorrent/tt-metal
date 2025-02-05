@@ -215,6 +215,7 @@ def run_test_create_min_width_shard(
     overlap_coregrid,
     batch_offset=None,
     slice_size=None,
+    sub_core_grids=None,
 ):
     # Split Heads
     if not overlap_coregrid and batch >= 32:
@@ -231,14 +232,31 @@ def run_test_create_min_width_shard(
     proj_output = torch.rand(1, seq_len, batch, head_dim * total_heads)
 
     # TT configs
-    shard_spec_n_cores_grid = ttnn.CoreRangeSet(
-        {
-            ttnn.CoreRange(
-                ttnn.CoreCoord(0, 0),
-                ttnn.CoreCoord(core_x - 1, core_y - 1),
-            ),
-        }
-    )
+    if sub_core_grids is None:
+        shard_spec_n_cores_grid = ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(
+                    ttnn.CoreCoord(0, 0),
+                    ttnn.CoreCoord(core_x - 1, core_y - 1),
+                ),
+            }
+        )
+    else:
+        device_core_grid_size = device.compute_with_storage_grid_size()
+        sub_core_grids_bounds = sub_core_grids.bounding_box()
+        if (
+            sub_core_grids_bounds.start.x < 0
+            or sub_core_grids_bounds.start.y < 0
+            or sub_core_grids_bounds.end.x >= device_core_grid_size.x
+            or sub_core_grids_bounds.end.y >= device_core_grid_size.y
+        ):
+            pytest.skip("Sub core grid is out of bounds")
+
+        grid_start_coord = sub_core_grids_bounds.start
+        shard_spec_n_cores_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+            grid_start_coord, total_cores, sub_core_grids, True
+        )
+
     CREATE_HEAD_SHARD_SPEC = ttnn.ShardSpec(
         shard_spec_n_cores_grid,
         [
@@ -334,12 +352,12 @@ def test_create_min_width_shard(
     for i in range(3):
         # multiple loops to test program caching
         run_test_create_min_width_shard(
-            device,
-            batch,
-            n_local_heads,
-            n_local_kv_heads,
-            head_dim,
-            overlap_coregrid,
+            device=device,
+            batch=batch,
+            n_local_heads=n_local_heads,
+            n_local_kv_heads=n_local_kv_heads,
+            head_dim=head_dim,
+            overlap_coregrid=overlap_coregrid,
         )
 
     # BH does s2i and i2s inside of to_device and from_device as device ops
@@ -382,18 +400,70 @@ def test_create_heads_with_slice(
     for i in range(3):
         # multiple loops to test program caching
         run_test_create_min_width_shard(
-            device,
-            batch,
-            n_local_heads,
-            n_local_kv_heads,
-            head_dim,
-            overlap_coregrid,
-            batch_offset_tensor_tt,
-            slice_size,
+            device=device,
+            batch=batch,
+            n_local_heads=n_local_heads,
+            n_local_kv_heads=n_local_kv_heads,
+            head_dim=head_dim,
+            overlap_coregrid=overlap_coregrid,
+            batch_offset=batch_offset_tensor_tt,
+            slice_size=slice_size,
         )
     # BH does s2i and i2s inside of to_device and from_device as device ops
     expected_entries = 1 if not is_blackhole() else 4 if overlap_coregrid else 5
     assert device.num_program_cache_entries() == expected_entries
+
+
+@pytest.fixture()
+def set_dispatch_col(device_params):
+    device_params["dispatch_core_axis"] = ttnn.DispatchCoreAxis.COL
+    return device_params
+
+
+@skip_for_blackhole("Requires eth connected devices to run, see #12349")
+@skip_for_grayskull("Requires eth connected devices to run")
+@pytest.mark.parametrize("batch", (1, 8, 16))
+@pytest.mark.parametrize(
+    "n_local_heads, n_local_kv_heads, head_dim",
+    ((8, 1, 128), (16, 2, 64)),
+)
+@pytest.mark.parametrize("overlap_coregrid", (True, False))
+@pytest.mark.parametrize(
+    "sub_core_grids",
+    (
+        ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
+                ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
+            }
+        ),
+    ),
+)
+def test_create_min_width_shard_subcoregrid(
+    set_dispatch_col,
+    device,
+    batch,
+    n_local_heads,
+    n_local_kv_heads,
+    head_dim,
+    overlap_coregrid,
+    use_program_cache,
+    sub_core_grids,
+):
+    torch.manual_seed(0)
+
+    for i in range(3):
+        # multiple loops to test program caching
+        run_test_create_min_width_shard(
+            device=device,
+            batch=batch,
+            n_local_heads=n_local_heads,
+            n_local_kv_heads=n_local_kv_heads,
+            head_dim=head_dim,
+            overlap_coregrid=overlap_coregrid,
+            sub_core_grids=sub_core_grids,
+        )
+    assert device.num_program_cache_entries() == 1, "Only one Op program cache should exist"
 
 
 def run_test_create_width_shard_by_head(

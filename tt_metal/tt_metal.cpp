@@ -921,6 +921,7 @@ IDevice* CreateDeviceMinimal(
     ZoneScoped;
     tt::tt_metal::dispatch_core_manager::initialize(dispatch_core_config, num_hw_cqs);
     tt_metal::DispatchQueryManager::initialize(num_hw_cqs);
+    tt_metal::DispatchSettings::initialize(tt::Cluster::instance());
     auto dev = new Device(device_id, num_hw_cqs, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, {}, true);
     tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true);
     return dev;
