@@ -344,6 +344,7 @@ def run_reduce_sum_h(device, batch_size, h, w, dim):
     assert_with_pcc(torch_output_tensor, output_tensor)
 
 
+@skip_for_grayskull("Not a tile size multiple, will fail on GS. #17132")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4096}], indirect=True)
 @pytest.mark.parametrize(
     "input_shape",
