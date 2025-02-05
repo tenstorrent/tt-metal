@@ -121,7 +121,8 @@ def test_fill_pad(
     ],
 )
 @pytest.mark.parametrize("shard_scheme", [ttnn.TensorMemoryLayout.HEIGHT_SHARDED])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+# @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("dtype", [ttnn.uint32])
 def test_fill_pad_sharded(device, fill_value, shape, shard_scheme, dtype):
     torch.manual_seed(1234)
     torch_input_tensor, padded_torch_tensor = create_nd_padded_tiled_tensor(

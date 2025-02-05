@@ -50,19 +50,20 @@ void print_face_row(volatile tt_l1_ptr uint32_t* input_l1_ptr) {
 
 void kernel_main() {
     constexpr uint32_t cb_id_0 = get_compile_time_arg_val(0);
-    constexpr bool tensor_in_dram = get_compile_time_arg_val(1) == 1;
-    const uint32_t fill_value = get_compile_time_arg_val(2);
-    const uint32_t element_size_bytes = get_compile_time_arg_val(3);
-    uint32_t logical_height = get_compile_time_arg_val(4);
-    uint32_t logical_width = get_compile_time_arg_val(5);
-    uint32_t padded_height = get_compile_time_arg_val(6);
-    uint32_t padded_width = get_compile_time_arg_val(7);
-    uint32_t tiles_per_2d_tensor = get_compile_time_arg_val(8);
-    uint32_t tiles_per_tile_row = get_compile_time_arg_val(9);
+    constexpr uint32_t cb_id_1 = get_compile_time_arg_val(1);
+    constexpr bool tensor_in_dram = get_compile_time_arg_val(2) == 1;
+    const uint32_t fill_value = get_compile_time_arg_val(3);
+    const uint32_t element_size_bytes = get_compile_time_arg_val(4);
+    uint32_t logical_height = get_compile_time_arg_val(5);
+    uint32_t logical_width = get_compile_time_arg_val(6);
+    uint32_t padded_height = get_compile_time_arg_val(7);
+    uint32_t padded_width = get_compile_time_arg_val(8);
+    uint32_t tiles_per_2d_tensor = get_compile_time_arg_val(9);
+    uint32_t tiles_per_tile_row = get_compile_time_arg_val(10);
     // hardware constraints
-    constexpr uint32_t tile_size = get_compile_time_arg_val(10);
+    constexpr uint32_t tile_size = get_compile_time_arg_val(11);
     constexpr uint32_t tile_hw = tile_size * tile_size;
-    constexpr uint32_t face_size = get_compile_time_arg_val(11);
+    constexpr uint32_t face_size = get_compile_time_arg_val(12);
     constexpr uint32_t face_hw = face_size * face_size;
     constexpr uint32_t alignment_adjustor = 16;
 
@@ -79,13 +80,13 @@ void kernel_main() {
     };
 
     // Reserve and push the fill value into the circular buffer
-    cb_reserve_back(1, 1);
+    cb_reserve_back(cb_id_1, 1);
     uint32_t l1_fill_addr = get_write_ptr(1);
     volatile tt_l1_ptr uint32_t* l1_fill_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_fill_addr);
     for (uint32_t i = 0; i < cb_page_size; i++) {
         l1_fill_ptr[i] = fill_value;
     }
-    cb_push_back(1, 1);
+    cb_push_back(cb_id_1, 1);
 
     cb_reserve_back(cb_id_0, 1);
     uint32_t l1_read_addr = get_read_ptr(0);
