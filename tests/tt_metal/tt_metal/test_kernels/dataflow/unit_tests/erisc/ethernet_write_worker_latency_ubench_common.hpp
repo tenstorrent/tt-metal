@@ -103,14 +103,16 @@ FORCE_INLINE void check_buffer_full_and_send_packet(
     const std::array<volatile eth_buffer_slot_sync_t*, NUM_BUFFER_SLOTS>& buffer_slot_sync_addrs,
     uint32_t read_ptr,
     uint32_t& write_ptr,
-    uint64_t full_payload_size) {
+    uint64_t full_payload_size,
+    uint32_t& num_messages_send) {
     uint32_t next_write_ptr = advance_buffer_slot_ptr(write_ptr);
     bool buffer_not_full = next_write_ptr != read_ptr;
 
-    if (buffer_not_full) {
+    if (buffer_not_full && num_messages_send != 0) {
         write_receiver(buffer_slot_addrs[write_ptr], buffer_slot_sync_addrs[write_ptr], full_payload_size);
 
         write_ptr = next_write_ptr;
+        num_messages_send--;
     }
 }
 
@@ -129,11 +131,17 @@ FORCE_INLINE void update_sender_state(
     const std::array<volatile eth_buffer_slot_sync_t*, NUM_BUFFER_SLOTS>& buffer_slot_sync_addrs,
     uint32_t full_payload_size,
     uint32_t& num_messages_ack,
+    uint32_t& num_messages_send,
     uint32_t& buffer_read_ptr,
     uint32_t& buffer_write_ptr) {
     // Check if current buffer slot is ready and send packet to receiver
     check_buffer_full_and_send_packet(
-        buffer_slot_addrs, buffer_slot_sync_addrs, buffer_read_ptr, buffer_write_ptr, full_payload_size);
+        buffer_slot_addrs,
+        buffer_slot_sync_addrs,
+        buffer_read_ptr,
+        buffer_write_ptr,
+        full_payload_size,
+        num_messages_send);
     // Check if the write for trid is done, and ack sender if the current buffer slot is done
     check_receiver_done(buffer_slot_sync_addrs, buffer_read_ptr, num_messages_ack);
 }

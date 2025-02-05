@@ -16,6 +16,7 @@ FORCE_INLINE void main_loop_uni_dir(
     uint32_t sender_buffer_read_ptr = 0;
     uint32_t sender_buffer_write_ptr = 0;
     uint32_t sender_num_messages_ack = 0;
+    uint32_t sender_num_messages_send = total_msgs;
 
     while (sender_num_messages_ack < total_msgs) {
         update_sender_state(
@@ -23,6 +24,7 @@ FORCE_INLINE void main_loop_uni_dir(
             buffer_slot_sync_addrs,
             full_payload_size,
             sender_num_messages_ack,
+            sender_num_messages_send,
             sender_buffer_read_ptr,
             sender_buffer_write_ptr);
 
@@ -51,6 +53,7 @@ FORCE_INLINE void main_loop_bi_dir(
     uint32_t receiver_buffer_write_ptr = 0;
 
     uint32_t num_messages_ack = 0;
+    uint32_t sender_num_messages_send = total_msgs;
 
     noc_async_write_one_packet_with_trid_set_state(worker_noc_addr);
 
@@ -60,6 +63,7 @@ FORCE_INLINE void main_loop_bi_dir(
             sender_buffer_slot_sync_addrs,
             full_payload_size,
             num_messages_ack,
+            sender_num_messages_send,
             sender_buffer_read_ptr,
             sender_buffer_write_ptr);
 
@@ -129,9 +133,8 @@ void kernel_main() {
 #endif
     }
 
-    // for some reason unknown, not delaying before reset noc counters caused hang. Need investigate.
+    // need to do a delay as trid writes are not waiting for acks, so need to make sure noc response is back.
     for (int i = 0; i < 1000; ++i) {
         asm volatile("nop");
     }
-    ncrisc_noc_counters_init();
 }
