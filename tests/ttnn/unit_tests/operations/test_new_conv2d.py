@@ -58,7 +58,7 @@ def run_conv(
     config_override,
     dilation=1,
     use_shallow_conv_variant=False,
-    transpose_shards=True,
+    transpose_shards=False,
     fp32_accum=False,
     packer_l1_acc=False,
     output_layout=ttnn.TILE_LAYOUT,
