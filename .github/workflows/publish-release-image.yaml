@@ -85,8 +85,7 @@ jobs:
         timeout-minutes: ${{ inputs.timeout }}
         uses: ./.github/actions/docker-run
         with:
-          docker_os_arch: tt-metalium-${{ matrix.os }}-amd64-release
-          docker_version: ${{ inputs.version }}
+          image: ghcr.io/${{ github.repository }}/tt-metalium-${{ matrix.os }}-amd64-release:${{ inputs.version }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           run_args: |
             ${{ matrix.test_group.cmd }}
