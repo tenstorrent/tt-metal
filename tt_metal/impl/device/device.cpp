@@ -296,9 +296,13 @@ std::unique_ptr<Allocator> Device::initialize_allocator(size_t l1_small_size, si
         config.dram_bank_offsets.push_back(soc_desc.get_address_offset(channel));
     }
     // Initialize core_type_from_noc_coord_table table
-    for (const auto& core: soc_desc.physical_cores) {
+    for (const CoreCoord& core : soc_desc.get_all_cores(CoordSystem::PHYSICAL)) {
         config.core_type_from_noc_coord_table.insert(
-            {this->virtual_core_from_physical_core(core.first), AllocCoreType::Invalid});
+            {this->virtual_core_from_physical_core({core.x, core.y}), AllocCoreType::Invalid});
+    }
+    for (const CoreCoord& core : soc_desc.get_all_harvested_cores(CoordSystem::PHYSICAL)) {
+        config.core_type_from_noc_coord_table.insert(
+            {this->virtual_core_from_physical_core({core.x, core.y}), AllocCoreType::Invalid});
     }
 
     for (const CoreCoord& core : tt::get_logical_compute_cores(id_, num_hw_cqs_, dispatch_core_config)) {
