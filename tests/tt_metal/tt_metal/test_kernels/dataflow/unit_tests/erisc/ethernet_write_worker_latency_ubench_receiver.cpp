@@ -42,39 +42,35 @@ FORCE_INLINE void main_loop_bi_dir(
     uint32_t message_size,
     uint32_t num_messages,
     uint64_t worker_noc_addr) {
-    uint32_t total_msgs = num_messages * NUM_BUFFER_SLOTS;
+    uint32_t total_msgs = num_messages * NUM_BUFFER_SLOTS * 2;
 
     DPRINT << "RECEIVER MAIN LOOP" << ENDL();
 
     uint32_t sender_buffer_read_ptr = 0;
     uint32_t sender_buffer_write_ptr = 0;
-    uint32_t sender_num_messages_ack = 0;
 
     uint32_t receiver_buffer_read_ptr = 0;
     uint32_t receiver_buffer_write_ptr = 0;
-    uint32_t receiver_num_messages_ack = 0;
 
-    while (sender_num_messages_ack < total_msgs || receiver_num_messages_ack < total_msgs) {
-        if (sender_num_messages_ack < total_msgs) {
-            update_sender_state(
-                sender_buffer_slot_addrs,
-                sender_buffer_slot_sync_addrs,
-                full_payload_size,
-                sender_num_messages_ack,
-                sender_buffer_read_ptr,
-                sender_buffer_write_ptr);
-        }
+    uint32_t num_messages_ack = 0;
 
-        if (receiver_num_messages_ack < total_msgs) {
-            update_receiver_state(
-                receiver_buffer_slot_addrs,
-                receiver_buffer_slot_sync_addrs,
-                worker_noc_addr,
-                message_size,
-                receiver_num_messages_ack,
-                receiver_buffer_read_ptr,
-                receiver_buffer_write_ptr);
-        }
+    while (num_messages_ack < total_msgs) {
+        update_sender_state(
+            sender_buffer_slot_addrs,
+            sender_buffer_slot_sync_addrs,
+            full_payload_size,
+            num_messages_ack,
+            sender_buffer_read_ptr,
+            sender_buffer_write_ptr);
+
+        update_receiver_state(
+            receiver_buffer_slot_addrs,
+            receiver_buffer_slot_sync_addrs,
+            worker_noc_addr,
+            message_size,
+            num_messages_ack,
+            receiver_buffer_read_ptr,
+            receiver_buffer_write_ptr);
 
         // not called in normal execution mode
         switch_context_if_debug();
