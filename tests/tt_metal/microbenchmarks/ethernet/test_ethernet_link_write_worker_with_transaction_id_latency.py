@@ -74,3 +74,53 @@ def test_erisc_write_worker_latency_bi_dir(
         enable_worker,
         FILE_NAME,
     )
+
+
+# uni-direction test for eth-sender <---> eth-receiver
+@pytest.mark.skipif(is_grayskull(), reason="Unsupported on GS")
+@pytest.mark.parametrize("sample_count", [1])
+@pytest.mark.parametrize("channel_count", [16])
+@pytest.mark.parametrize("num_directions", [1])
+@pytest.mark.parametrize("test_latency", [1])
+@pytest.mark.parametrize("enable_worker", [0])
+@pytest.mark.parametrize(
+    "sample_size_expected_latency",
+    [(16, 97.2), (128, 97.2), (256, 98.0), (512, 98.0), (1024, 99.0), (2048, 173.0), (4096, 340.0), (8192, 678.5)],
+)
+def test_erisc_latency_uni_dir(
+    sample_count, sample_size_expected_latency, channel_count, num_directions, test_latency, enable_worker
+):
+    run_erisc_write_worker(
+        sample_count,
+        sample_size_expected_latency,
+        channel_count,
+        num_directions,
+        test_latency,
+        enable_worker,
+        FILE_NAME,
+    )
+
+
+# bi-direction test for eth-sender <---> eth-receiver ---> worker
+@pytest.mark.skipif(is_grayskull(), reason="Unsupported on GS")
+@pytest.mark.parametrize("sample_count", [1])
+@pytest.mark.parametrize("channel_count", [16])
+@pytest.mark.parametrize("num_directions", [2])
+@pytest.mark.parametrize("test_latency", [1])
+@pytest.mark.parametrize("enable_worker", [0])
+@pytest.mark.parametrize(
+    "sample_size_expected_latency",
+    [(16, 148.0), (128, 148.0), (256, 148.7), (512, 148.8), (1024, 149.2), (2048, 178.2), (4096, 344.2)],
+)
+def test_erisc_latency_bi_dir(
+    sample_count, sample_size_expected_latency, channel_count, num_directions, enable_worker, test_latency
+):
+    run_erisc_write_worker(
+        sample_count,
+        sample_size_expected_latency,
+        channel_count,
+        num_directions,
+        test_latency,
+        enable_worker,
+        FILE_NAME,
+    )

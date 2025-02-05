@@ -122,6 +122,8 @@ FORCE_INLINE void check_receiver_done(
     uint32_t& num_messages_ack) {
     if (has_receiver_ack(buffer_slot_sync_addrs[read_ptr])) {
         read_ptr = advance_buffer_slot_ptr(read_ptr);
+
+        buffer_slot_sync_addrs[read_ptr]->bytes_sent = 1;
         num_messages_ack++;
     }
 }
@@ -229,9 +231,9 @@ FORCE_INLINE void check_write_worker_done_and_send_ack(
     uint32_t write_ptr,
     uint32_t& num_messages_ack) {
     bool buffer_not_empty = read_ptr != write_ptr;
-    uint32_t curr_trid = get_buffer_slot_trid(read_ptr);
 
 #ifdef ENABLE_WORKER
+    uint32_t curr_trid = get_buffer_slot_trid(read_ptr);
     if (buffer_not_empty && write_worker_done(curr_trid)) {
 #else
     if (buffer_not_empty) {
