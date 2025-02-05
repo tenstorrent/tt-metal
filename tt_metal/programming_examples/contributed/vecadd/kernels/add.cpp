@@ -32,7 +32,7 @@ void MAIN {
     // And we are going to add tiles. This function is only called if we ever need to
     // switch operation to something else. Since we are only adding tiles, this function
     // is only called once before the loop.
-    add_tiles_init();
+    add_tiles_init(cb_in0, cb_in1);
 
     // Loop over all the tiles and perform the computation
     for (uint32_t i = 0; i < n_tiles; i++) {
