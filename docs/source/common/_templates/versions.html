@@ -25,7 +25,7 @@ async function loadVersions() {
         data.versions.forEach(version => {
             const dd = document.createElement('dd');
             const link = document.createElement('a');
-            link.href = `https://tenstorrent.github.io/tt-metal/${version}/${projectCode}/index.html`;
+            link.href = `https://tenstorrent-docs-test.github.io/tt-metal/${version}/${projectCode}/index.html`;
             link.textContent = version;
             dd.appendChild(link);
             versionList.appendChild(dd);
