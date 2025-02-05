@@ -18,9 +18,10 @@ jobs:
       os: ${{ matrix.os }}
       from-precompiled: true
   publish-release-image:
-    needs: build-wheels
+    needs: [ build-wheels, build-artifact ]
     uses: ./.github/workflows/publish-release-image.yaml
     secrets: inherit
     with:
+      base-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
       version: dev-${GITHUB_REF_NAME//\//-}
       is_major_version: false
