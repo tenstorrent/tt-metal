@@ -265,7 +265,7 @@ class DramSlice(Enum):
     Height = "height"
 
 
-@ttnn.register_python_operation(name="ttnn.conv2d_dram_slice")
+@ttnn.register_python_operation(name="ttnn.experimental.conv2d_dram_slice")
 def conv2d_dram_slice(
     *,
     input_tensor: ttnn.Tensor,  # may or may not be sharded

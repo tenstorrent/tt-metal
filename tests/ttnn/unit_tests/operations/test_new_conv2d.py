@@ -3038,7 +3038,7 @@ def test_dram_slice_conv2d(
         dst_full_sync_en=dst_full_sync_en,
     )
 
-    tt_output_tensor, [out_height, out_width], [weight, bias] = ttnn.conv2d_dram_slice(
+    tt_output_tensor, [out_height, out_width], [weight, bias] = ttnn.experimental.conv2d_dram_slice(
         input_tensor = tt_input_tensor,
         weight_tensor = tt_weight_tensor,
         bias_tensor = tt_bias_tensor,
