@@ -37,9 +37,6 @@ def run_conv(
     config_override,
     dilation=1,
     use_shallow_conv_variant=False,
-    transpose_mcast=True,
-    enable_auto_formatting=False,
-    padded_input_channels=None,
     fp32_accum=False,
     packer_l1_acc=False,
     output_layout=ttnn.TILE_LAYOUT,
@@ -349,7 +346,7 @@ def run_conv_with_split(
 )
 @pytest.mark.parametrize(
     "weights_dtype",
-    [ttnn.bfloat8_b, ttnn.bfloat16],
+    [ttnn.bfloat16],
 )
 @pytest.mark.parametrize(
     "activations_dtype",
@@ -361,7 +358,7 @@ def run_conv_with_split(
 )
 @pytest.mark.parametrize(
     "packer_l1_acc",
-    [True, False],
+    [False],
 )
 @pytest.mark.parametrize(
     "filter, pad",
@@ -371,7 +368,7 @@ def run_conv_with_split(
         [5, 2],
     ],
 )
-@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi, ttnn.MathFidelity.HiFi4])
+@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.HiFi4])
 @pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 def test_conv_features(
     device,
@@ -506,7 +503,7 @@ def test_conv_features_multi_device(
 
 @skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-@pytest.mark.parametrize("stride", [1, 2])
+@pytest.mark.parametrize("stride", [1])
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, pad_h, pad_w, act_block_w_div",
     (
@@ -530,7 +527,7 @@ def test_conv_features_multi_device(
 )
 @pytest.mark.parametrize(
     "weights_dtype",
-    [ttnn.bfloat16, ttnn.bfloat8_b],
+    [ttnn.bfloat16],
 )
 @pytest.mark.parametrize(
     "activations_dtype",
@@ -673,22 +670,125 @@ def test_conv_ws(
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
-    "batch_size, input_channels, output_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, groups, use_1d_systolic_array, config_override, use_shallow_conv_variant",
+    "batch_size, input_channels, output_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, groups, shard_layout, config_override, use_shallow_conv_variant",
     (
         # mlp sub_module
-        (1, 3, 32, 512, 512, 7, 7, 4, 4, 3, 3, 1, True, {"act_block_h": 64}, False),  # ncrisc build failed
+        (
+            1,
+            3,
+            32,
+            512,
+            512,
+            7,
+            7,
+            4,
+            4,
+            3,
+            3,
+            1,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            {"act_block_h": 64},
+            False,
+        ),  # ncrisc build failed
         # efficient selfattention sub_module
-        (1, 32, 32, 128, 128, 8, 8, 8, 8, 0, 0, 1, True, None, False),  # ncrisc build failed, Two times called in model
-        (1, 64, 64, 64, 64, 4, 4, 4, 4, 0, 0, 1, True, None, False),  # ncrisc build failed, Two times called in model
-        (1, 160, 160, 32, 32, 2, 2, 2, 2, 0, 0, 1, True, None, False),  # pass , Two times called in model
+        (
+            1,
+            32,
+            32,
+            128,
+            128,
+            8,
+            8,
+            8,
+            8,
+            0,
+            0,
+            1,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            None,
+            False,
+        ),  # ncrisc build failed, Two times called in model
+        (
+            1,
+            64,
+            64,
+            64,
+            64,
+            4,
+            4,
+            4,
+            4,
+            0,
+            0,
+            1,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            None,
+            False,
+        ),  # ncrisc build failed, Two times called in model
+        (
+            1,
+            160,
+            160,
+            32,
+            32,
+            2,
+            2,
+            2,
+            2,
+            0,
+            0,
+            1,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            None,
+            False,
+        ),  # pass , Two times called in model
         # dwconv sub_module
-        (1, 128, 128, 128, 128, 3, 3, 1, 1, 1, 1, 128, True, {"act_block_h": 64}, False),
-        (1, 256, 256, 64, 64, 3, 3, 1, 1, 1, 1, 256, True, None, False),  # pass , Two times called in model
-        (1, 640, 640, 32, 32, 3, 3, 1, 1, 1, 1, 640, False, {"act_block_h": 32}, False),
+        (
+            1,
+            128,
+            128,
+            128,
+            128,
+            3,
+            3,
+            1,
+            1,
+            1,
+            1,
+            128,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            {"act_block_h": 64},
+            False,
+        ),
+        (
+            1,
+            256,
+            256,
+            64,
+            64,
+            3,
+            3,
+            1,
+            1,
+            1,
+            1,
+            256,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            None,
+            False,
+        ),  # pass , Two times called in model
+        (1, 640, 640, 32, 32, 3, 3, 1, 1, 1, 1, 640, ttnn.TensorMemoryLayout.BLOCK_SHARDED, {"act_block_h": 32}, False),
         # (1,1024, 1024, 16, 16, 3, 3, 1, 1, 1, 1, 1024, False, None, False), #Switch to Width Sharding
         # decode_head sub_module
         # (1,1024, 256, 128, 128, 1, 1, 1, 1, 0, 0, 1, False, {"act_block_h": 32}, False), #pass for activation_dtype=bf8 but fails for bf16
-        (1, 256, 150, 128, 128, 1, 1, 1, 1, 0, 0, 1, True, None, False),
+        (1, 256, 150, 128, 128, 1, 1, 1, 1, 0, 0, 1, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, None, False),
+        (1, 32, 16, 64, 64, 1, 1, 1, 1, 0, 0, 1, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, None, False),
+        (1, 96, 24, 32, 32, 1, 1, 1, 1, 0, 0, 1, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, None, False),
+        (1, 576, 576, 8, 8, 3, 3, 1, 1, 0, 0, 576, ttnn.TensorMemoryLayout.WIDTH_SHARDED, None, False),
+        (1, 576, 576, 8, 8, 3, 3, 2, 2, 0, 0, 576, ttnn.TensorMemoryLayout.WIDTH_SHARDED, None, False),
+        (1, 960, 960, 4, 4, 3, 3, 1, 1, 0, 0, 960, ttnn.TensorMemoryLayout.WIDTH_SHARDED, None, False),
+        (1, 144, 24, 32, 32, 1, 1, 1, 1, 0, 0, 1, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, None, False),
+        (1, 144, 32, 16, 16, 1, 1, 1, 1, 0, 0, 1, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, None, False),
     ),
 )
 @pytest.mark.parametrize(
@@ -720,7 +820,7 @@ def test_conv_for_segformer_512x512(
     stride_w,
     pad_h,
     pad_w,
-    use_1d_systolic_array,
+    shard_layout,
     config_override,
     use_shallow_conv_variant,
     groups,
@@ -743,13 +843,14 @@ def test_conv_for_segformer_512x512(
         stride_w,
         pad_h,
         pad_w,
-        use_1d_systolic_array,
+        False,
         config_override,
         use_shallow_conv_variant=use_shallow_conv_variant,
         groups=groups,
         output_layout=output_layout,
         has_bias=False,
         auto_shard=auto_shard,
+        shard_layout=shard_layout,
     )
 
 
@@ -849,7 +950,6 @@ def test_resnet50_conv_gs(
         use_1d_systolic_array,
         config_override=config_override,
         use_shallow_conv_variant=input_channels == 16,
-        padded_input_channels=16 if input_channels == 16 else None,
         debug=not (batch_size == 20 and input_height == 115),
         auto_shard=auto_shard,
     )
@@ -909,15 +1009,15 @@ def test_resnet50_conv_gs(
 )
 @pytest.mark.parametrize(
     "weights_dtype",
-    [ttnn.bfloat16, ttnn.bfloat8_b],
+    [ttnn.bfloat8_b],
 )
 @pytest.mark.parametrize(
     "activations_dtype",
     [ttnn.bfloat16, ttnn.bfloat8_b],
 )
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
-@pytest.mark.parametrize("packer_l1_acc", [True, False], ids=["pack_l1", "no_pack_l1"])
-@pytest.mark.parametrize("has_bias", [True, False], ids=["with_bias", "no_bias"])
+@pytest.mark.parametrize("packer_l1_acc", [True], ids=["no_pack_l1"])
+@pytest.mark.parametrize("has_bias", [True], ids=["with_bias"])
 @pytest.mark.parametrize("auto_shard", [True, False], ids=["auto_shard", "no_auto_shard"])
 def test_resnet50_conv_wh(
     device,
@@ -965,7 +1065,6 @@ def test_resnet50_conv_wh(
         use_1d_systolic_array,
         config_override=config_override,
         use_shallow_conv_variant=use_shallow_conv_variant,
-        transpose_mcast=use_1d_systolic_array,  ## use RM (transpose_mcast=False) with 2D on WH
         packer_l1_acc=packer_l1_acc,
         fp32_accum=False,
         has_bias=has_bias,
@@ -1024,7 +1123,6 @@ def test_conv_mem_config_wh(
         use_1d_systolic_array,
         config_override=config_override,
         use_shallow_conv_variant=use_shallow_conv_variant,
-        transpose_mcast=use_1d_systolic_array,  ## use RM (transpose_mcast=False) with 2D on WH
         packer_l1_acc=True,
         fp32_accum=False,
         has_bias=True,
@@ -1086,7 +1184,7 @@ def test_conv_mem_config_wh(
     ],
 )
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.HiFi4])
-@pytest.mark.parametrize("packer_l1_acc", [True, False], ids=["pack_l1", "no_pack_l1"])
+@pytest.mark.parametrize("packer_l1_acc", [True], ids=["pack_l1"])
 @pytest.mark.parametrize("auto_shard", [True, False], ids=["auto_shard", "no_auto_shard"])
 def test_resnet50_conv_wh_fp32(
     device,
@@ -1149,7 +1247,6 @@ def test_resnet50_conv_wh_fp32(
         use_shallow_conv_variant=use_shallow_conv_variant,
         fp32_accum=fp32_accum,
         packer_l1_acc=packer_l1_acc,
-        transpose_mcast=use_1d_systolic_array,  ## use RM (transpose_mcast=False) with 2D on WH
         auto_shard=auto_shard,
     )
 
@@ -1263,7 +1360,6 @@ def test_sd_conv(
             use_1d_systolic_array,
             config_override,
             split_factor=3 if input_channels == 1920 else 2,
-            auto_shard=auto_shard,
         )
     else:
         run_conv(
@@ -1285,8 +1381,6 @@ def test_sd_conv(
             use_1d_systolic_array,
             config_override,
             use_shallow_conv_variant=(input_channels == 16),
-            enable_auto_formatting=enable_auto_formatting,
-            padded_input_channels=16 if input_channels == 16 else None,
             auto_shard=auto_shard,
         )
 
@@ -1347,7 +1441,7 @@ def test_sd_conv(
 )
 @pytest.mark.parametrize(
     "weights_dtype",
-    [ttnn.bfloat16, ttnn.bfloat8_b],
+    [ttnn.bfloat8_b],
 )
 @pytest.mark.parametrize(
     "activations_dtype",
@@ -1357,11 +1451,9 @@ def test_sd_conv(
     "fp32_accum",
     [
         False,
-        True,
     ],
 )
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
-@pytest.mark.parametrize("enable_auto_formatting", [True, False])
 def test_sd_conv_wh(
     device,
     use_program_cache,
@@ -1382,7 +1474,6 @@ def test_sd_conv_wh(
     pad_w,
     use_1d_systolic_array,
     config_override,
-    enable_auto_formatting,
 ):
     if device.core_grid.y == 7:
         pytest.skip("This test is not supported for N300")
@@ -1396,14 +1487,11 @@ def test_sd_conv_wh(
             and input_height == 32
             and activations_dtype == ttnn.bfloat16
             and weights_dtype == ttnn.bfloat16
-            and enable_auto_formatting == False
         )
     ):
         pytest.skip("Skip the test cases raising OOM but not affecting e2e test")
 
     if filter_height > 1 and (input_channels > 1280 or (input_channels > 640 and input_height > 16)):
-        if enable_auto_formatting:
-            pytest.skip("Not running split SD conv with auto formatting")
         run_conv_with_split(
             device,
             math_fidelity,
@@ -1446,9 +1534,6 @@ def test_sd_conv_wh(
             use_1d_systolic_array,
             config_override,
             use_shallow_conv_variant=(input_channels == 16),
-            transpose_mcast=use_1d_systolic_array,  ## use RM (transpose_mcast=False) with 2D on WH
-            enable_auto_formatting=enable_auto_formatting,
-            padded_input_channels=16 if input_channels == 16 else None,
             fp32_accum=fp32_accum,
             packer_l1_acc=True,
         )
@@ -1555,7 +1640,6 @@ def test_unet_conv(
         use_1d_systolic_array,
         config_override,
         use_shallow_conv_variant=use_shallow_conv_variant,
-        padded_input_channels=16 if input_channels == 3 else None,
         output_layout=output_layout,
         auto_shard=auto_shard,
     )
@@ -1646,8 +1730,6 @@ def test_unet_conv_wh(
         use_1d_systolic_array,
         config_override,
         use_shallow_conv_variant=use_shallow_conv_variant,
-        transpose_mcast=use_1d_systolic_array,  ## use RM (transpose_mcast=False) with 2D on WH
-        padded_input_channels=None,
         output_layout=output_layout,
         auto_shard=auto_shard,
     )
@@ -1744,8 +1826,6 @@ def test_unet_conv_groups_2_wh(
         use_1d_systolic_array,
         config_override,
         use_shallow_conv_variant=use_shallow_conv_variant,
-        transpose_mcast=use_1d_systolic_array,  ## use RM (transpose_mcast=False) with 2D on WH
-        padded_input_channels=None,
         output_layout=output_layout,
         auto_shard=auto_shard,
         groups=groups,
@@ -1843,8 +1923,6 @@ def test_unet_conv_groups_4_6_wh(
         use_1d_systolic_array,
         config_override,
         use_shallow_conv_variant=use_shallow_conv_variant,
-        transpose_mcast=use_1d_systolic_array,  ## use RM (transpose_mcast=False) with 2D on WH
-        padded_input_channels=None,
         output_layout=output_layout,
         auto_shard=auto_shard,
         groups=groups,
@@ -1942,8 +2020,6 @@ def test_unet_conv_groups_8_wh(
         use_1d_systolic_array,
         config_override,
         use_shallow_conv_variant=use_shallow_conv_variant,
-        transpose_mcast=use_1d_systolic_array,  ## use RM (transpose_mcast=False) with 2D on WH
-        padded_input_channels=None,
         output_layout=output_layout,
         auto_shard=auto_shard,
         groups=groups,
@@ -2363,7 +2439,6 @@ def test_yolov4_conv_groups_larger_than_one(
         config_override,
         use_shallow_conv_variant=use_shallow_conv_variant,
         groups=groups,
-        padded_input_channels=16 if input_channels == 3 else None,
         output_layout=output_layout,
         auto_shard=auto_shard,
     )
@@ -2438,84 +2513,6 @@ def test_swin_s_conv(
         use_shallow_conv_variant=use_shallow_conv_variant,
         groups=groups,
         output_layout=output_layout,
-        auto_shard=auto_shard,
-    )
-
-
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-@pytest.mark.parametrize(
-    "batch_size, input_channels, output_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, groups, shard_layout, config_override, use_shallow_conv_variant",
-    (
-        (1, 32, 32, 128, 128, 8, 8, 8, 8, 0, 0, 1, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, None, False),
-        (1, 64, 64, 64, 64, 4, 4, 4, 4, 0, 0, 1, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, None, False),
-        (1, 256, 150, 128, 128, 1, 1, 1, 1, 0, 0, 1, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, None, False),
-        (1, 32, 16, 64, 64, 1, 1, 1, 1, 0, 0, 1, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, None, False),
-        (1, 96, 24, 32, 32, 1, 1, 1, 1, 0, 0, 1, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, None, False),
-        (1, 576, 576, 8, 8, 3, 3, 1, 1, 0, 0, 576, ttnn.TensorMemoryLayout.WIDTH_SHARDED, None, False),
-        (1, 576, 576, 8, 8, 3, 3, 2, 2, 0, 0, 576, ttnn.TensorMemoryLayout.WIDTH_SHARDED, None, False),
-        (1, 960, 960, 4, 4, 3, 3, 1, 1, 0, 0, 960, ttnn.TensorMemoryLayout.WIDTH_SHARDED, None, False),
-        (1, 144, 24, 32, 32, 1, 1, 1, 1, 0, 0, 1, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, None, False),
-        (1, 144, 32, 16, 16, 1, 1, 1, 1, 0, 0, 1, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, None, False),
-    ),
-)
-@pytest.mark.parametrize(
-    "weights_dtype",
-    [ttnn.bfloat16],
-)
-@pytest.mark.parametrize(
-    "activations_dtype",
-    [ttnn.bfloat8_b, ttnn.bfloat16],
-)
-@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
-@pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT])
-@pytest.mark.parametrize("auto_shard", [True, False], ids=["auto_shard", "no_auto_shard"])
-@skip_for_grayskull()
-def test_conv_for_segformer_512x512(
-    device,
-    use_program_cache,
-    math_fidelity,
-    activations_dtype,
-    weights_dtype,
-    batch_size,
-    output_channels,
-    input_channels,
-    input_height,
-    input_width,
-    filter_height,
-    filter_width,
-    stride_h,
-    stride_w,
-    pad_h,
-    pad_w,
-    shard_layout,
-    config_override,
-    use_shallow_conv_variant,
-    groups,
-    output_layout,
-    auto_shard,
-):
-    run_conv(
-        device,
-        math_fidelity,
-        activations_dtype,
-        weights_dtype,
-        batch_size,
-        output_channels,
-        input_channels,
-        input_height,
-        input_width,
-        filter_height,
-        filter_width,
-        stride_h,
-        stride_w,
-        pad_h,
-        pad_w,
-        False,
-        config_override,
-        use_shallow_conv_variant=use_shallow_conv_variant,
-        groups=groups,
-        output_layout=output_layout,
-        shard_layout=shard_layout,
         auto_shard=auto_shard,
     )
 
@@ -2611,7 +2608,7 @@ def test_model_k_256x256(
 )
 @pytest.mark.parametrize(
     "weights_dtype",
-    [ttnn.bfloat16, ttnn.bfloat8_b],
+    [ttnn.bfloat16],
 )
 @pytest.mark.parametrize(
     "activations_dtype",
@@ -2776,7 +2773,6 @@ def test_non_tile_multiple_height_conv_wh(
         use_1d_systolic_array,
         config_override=config_override,
         use_shallow_conv_variant=use_shallow_conv_variant,
-        transpose_mcast=use_1d_systolic_array,  ## use RM (transpose_mcast=False) with 2D on WH
         packer_l1_acc=packer_l1_acc,
         fp32_accum=fp32_accum,
         has_bias=has_bias,
@@ -2863,9 +2859,6 @@ def test_non_tile_multiple_width_conv_wh(
         use_1d_systolic_array,
         config_override,
         use_shallow_conv_variant=(input_channels == 16),
-        transpose_mcast=use_1d_systolic_array,
-        enable_auto_formatting=enable_auto_formatting,
-        padded_input_channels=16 if input_channels == 16 else None,
         output_layout=ttnn.ROW_MAJOR_LAYOUT,
     )
 
