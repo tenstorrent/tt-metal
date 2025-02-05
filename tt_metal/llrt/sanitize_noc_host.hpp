@@ -68,9 +68,9 @@ static void watcher_sanitize_host_noc(
     const CoreCoord& core,
     uint64_t addr,
     uint32_t lbytes) {
-    if (coord_found_p(soc_d.get_pcie_cores(), core)) {
+    if (coord_found_p(soc_d.get_cores(CoreType::PCIE, soc_d.get_umd_coord_system()), core)) {
         TT_THROW("Host watcher: bad {} NOC coord {}", what, core.str());
-    } else if (coord_found_p(soc_d.get_dram_cores(), core)) {
+    } else if (coord_found_p(soc_d.get_cores(CoreType::DRAM, soc_d.get_umd_coord_system()), core)) {
         uint64_t dram_addr_base = 0;
         uint64_t dram_addr_size = soc_d.dram_core_size;
         uint64_t dram_addr_end = dram_addr_size - dram_addr_base;

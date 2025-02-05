@@ -357,7 +357,7 @@ void Device::initialize_device_kernel_defines()
     // TODO (abhullar): Until we switch to virtual coordinates, we need to pass physical PCIe coordinates to device
     //  because Blackhole PCIe endpoint is dependent on board type
     const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(this->id());
-    auto pcie_cores = soc_d.get_pcie_cores();
+    auto pcie_cores = soc_d.get_cores(CoreType::PCIE, soc_d.get_umd_coord_system());
     auto grid_size = this->grid_size();
 
     CoreCoord pcie_core = pcie_cores.empty() ? grid_size : pcie_cores[0];
@@ -708,8 +708,8 @@ void Device::initialize_and_launch_firmware() {
     core_info->noc_dram_addr_base = 0;
     core_info->noc_dram_addr_end = soc_d.dram_core_size;
 
-    const std::vector<CoreCoord> &pcie_cores = soc_d.get_pcie_cores();
-    const std::vector<CoreCoord> &dram_cores = soc_d.get_dram_cores();
+    const std::vector<CoreCoord>& pcie_cores = soc_d.get_cores(CoreType::PCIE, soc_d.get_umd_coord_system());
+    const std::vector<CoreCoord>& dram_cores = soc_d.get_cores(CoreType::DRAM, soc_d.get_umd_coord_system());
     const std::vector<CoreCoord> &eth_cores = soc_d.get_physical_ethernet_cores();
     // The SOC descriptor can list a dram core multiple times, depending on how GDDR is assigned to banks
     // Get a list of unique DRAM cores.

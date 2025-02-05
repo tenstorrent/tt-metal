@@ -119,7 +119,7 @@ DeviceData::DeviceData(
     this->amt_written = 0;
 
     const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(device->id());
-    const std::vector<CoreCoord>& pcie_cores = soc_d.get_pcie_cores();
+    const std::vector<CoreCoord>& pcie_cores = soc_d.get_cores(CoreType::PCIE, soc_d.get_umd_coord_system());
     for (CoreCoord core : pcie_cores) {
         // TODO: make this all work w/ phys coords
         // this is really annoying

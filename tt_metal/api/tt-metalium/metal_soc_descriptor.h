@@ -39,8 +39,6 @@ public:
     size_t get_channel_for_dram_view(int dram_view) const;
     size_t get_num_dram_views() const;
 
-    const std::vector<CoreCoord>& get_pcie_cores() const;
-    const std::vector<CoreCoord> get_dram_cores() const;
     const std::vector<CoreCoord>& get_logical_ethernet_cores() const;
     const std::vector<CoreCoord>& get_physical_ethernet_cores() const;
 
@@ -68,7 +66,4 @@ private:
     void load_dram_metadata_from_device_descriptor();
     void generate_logical_eth_coords_mapping();
     void generate_physical_routing_to_profiler_flat_id();
-    // This is temporary until virtual coordinates are enabled because BH chips on
-    //  different cards use different physical PCIe NoC endpoints
-    void update_pcie_cores(const BoardType& board_type);
 };
