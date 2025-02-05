@@ -34,6 +34,7 @@ show_help() {
     echo "  --c-compiler-path                Set path to C++ compiler."
     echo "  --ttnn-shared-sub-libs           Use shared libraries for ttnn."
     echo "  --toolchain-path                 Set path to CMake toolchain file."
+    echo "  --configure-only                 Only configure the project, do not build."
 }
 
 clean() {
@@ -65,6 +66,7 @@ cxx_compiler_path=""
 c_compiler_path=""
 ttnn_shared_sub_libs="OFF"
 toolchain_path="cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
+configure_only="OFF"
 
 declare -a cmake_args
 
@@ -99,6 +101,7 @@ cxx-compiler-path:
 c-compiler-path:
 ttnn-shared-sub-libs
 toolchain-path:
+configure-only
 "
 
 # Flatten LONGOPTIONS into a comma-separated string for getopt
@@ -156,6 +159,8 @@ while true; do
             build_all="ON";;
         --ttnn-shared-sub-libs)
             ttnn_shared_sub_libs="ON";;
+        --configure-only)
+            configure_only="ON";;
         --disable-unity-builds)
 	    unity_builds="OFF";;
         --disable-light-metal-trace)
@@ -343,5 +348,7 @@ echo "INFO: Running: cmake "${cmake_args[@]}""
 cmake "${cmake_args[@]}"
 
 # Build libraries and cpp tests
-echo "INFO: Building Project"
-cmake --build $build_dir --target install
+if [ "$configure_only" = "OFF" ]; then
+    echo "INFO: Building Project"
+    cmake --build $build_dir --target install
+fi
