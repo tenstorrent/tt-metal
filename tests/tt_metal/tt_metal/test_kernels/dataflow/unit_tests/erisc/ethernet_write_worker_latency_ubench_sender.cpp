@@ -128,4 +128,10 @@ void kernel_main() {
         main_loop_uni_dir(sender_buffer_slot_addrs, sender_buffer_slot_sync_addrs, full_payload_size, num_messages);
 #endif
     }
+
+    // for some reason unknown, not delaying before reset noc counters caused hang. Need investigate.
+    for (int i = 0; i < 1000; ++i) {
+        asm volatile("nop");
+    }
+    ncrisc_noc_counters_init();
 }
