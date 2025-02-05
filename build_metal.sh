@@ -334,6 +334,8 @@ if [ "$cxx_compiler_path" == "" ]; then
     cmake_args+=("-DCMAKE_TOOLCHAIN_FILE=${toolchain_path}")
 fi
 
+cmake_args+=("-DCPM_USE_LOCAL_PACKAGES=ON")
+
 # Create and link the build directory
 mkdir -p $build_dir
 ln -nsf $build_dir build
