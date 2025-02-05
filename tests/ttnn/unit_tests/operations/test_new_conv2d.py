@@ -105,7 +105,11 @@ def run_conv(
             mesh_mapper=weight_mesh_mapper,
         )
 
-    tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16, mesh_mapper=input_mesh_mapper)
+    tt_input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        activations_dtype if activations_dtype == ttnn.float32 else ttnn.bfloat16,
+        mesh_mapper=input_mesh_mapper,
+    )
 
     if shard_layout is None and not auto_shard:
         shard_layout = (
@@ -2758,7 +2762,7 @@ def test_non_tile_multiple_height_conv_wh(
     ):
         pytest.skip("Skipping test because it won't fit in L1!")
 
-    if activations_dtype == ttnn.float32 and (batch_size >= 16 or (output_channels == 64 and input_height == 240)):
+    if activations_dtype == ttnn.float32 and (batch_size >= 16 or (output_channels == 64 or input_height >= 240)):
         pytest.skip("Skipping test because it won't fit in L1!")
 
     if (
