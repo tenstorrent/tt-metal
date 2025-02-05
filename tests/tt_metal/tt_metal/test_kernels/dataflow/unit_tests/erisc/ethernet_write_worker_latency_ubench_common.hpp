@@ -50,9 +50,6 @@ constexpr uint32_t worker_noc_x = get_compile_time_arg_val(1);
 constexpr uint32_t worker_noc_y = get_compile_time_arg_val(2);
 constexpr uint32_t worker_buffer_addr = get_compile_time_arg_val(3);
 
-constexpr uint32_t SENDER_QNUM = 1;
-constexpr uint32_t RECEIVER_QNUM = 1;
-
 // ******************************* Sender APIs ***************************************************
 
 FORCE_INLINE uint32_t setup_sender_buffer(
@@ -87,18 +84,14 @@ FORCE_INLINE uint32_t setup_sender_buffer(
 FORCE_INLINE uint32_t advance_buffer_slot_ptr(uint32_t curr_ptr) { return (curr_ptr + 1) % NUM_BUFFER_SLOTS; }
 
 FORCE_INLINE void write_receiver(
-    uint32_t buffer_slot_addr,
-    volatile eth_buffer_slot_sync_t* buffer_slot_sync_addr,
-    uint32_t full_payload_size,
-    uint32_t qnum) {
+    uint32_t buffer_slot_addr, volatile eth_buffer_slot_sync_t* buffer_slot_sync_addr, uint32_t full_payload_size) {
     buffer_slot_sync_addr->bytes_sent = 1;
 
-    while (eth_txq_is_busy(qnum)) {
+    while (eth_txq_is_busy()) {
         switch_context_if_debug();
     }
 
-    eth_send_bytes_over_channel_payload_only_unsafe_one_packet(
-        buffer_slot_addr, buffer_slot_addr, full_payload_size, qnum);
+    eth_send_bytes_over_channel_payload_only_unsafe_one_packet(buffer_slot_addr, buffer_slot_addr, full_payload_size);
 }
 
 FORCE_INLINE bool has_receiver_ack(volatile eth_buffer_slot_sync_t* buffer_slot_sync_addr) {
@@ -115,7 +108,7 @@ FORCE_INLINE void check_buffer_full_and_send_packet(
     bool buffer_not_full = next_write_ptr != read_ptr;
 
     if (buffer_not_full) {
-        write_receiver(buffer_slot_addrs[write_ptr], buffer_slot_sync_addrs[write_ptr], full_payload_size, SENDER_QNUM);
+        write_receiver(buffer_slot_addrs[write_ptr], buffer_slot_sync_addrs[write_ptr], full_payload_size);
 
         write_ptr = next_write_ptr;
     }
@@ -175,18 +168,17 @@ FORCE_INLINE bool write_worker_done(uint32_t trid) {
     return ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc_index, trid);
 }
 
-FORCE_INLINE void ack_complete(volatile eth_buffer_slot_sync_t* buffer_slot_sync_addr, uint32_t qnum) {
+FORCE_INLINE void ack_complete(volatile eth_buffer_slot_sync_t* buffer_slot_sync_addr) {
     buffer_slot_sync_addr->bytes_sent = 0;
 
-    while (eth_txq_is_busy(qnum)) {
+    while (eth_txq_is_busy()) {
         switch_context_if_debug();
     }
 
     eth_send_bytes_over_channel_payload_only_unsafe_one_packet(
         reinterpret_cast<uint32_t>(buffer_slot_sync_addr),
         reinterpret_cast<uint32_t>(buffer_slot_sync_addr),
-        sizeof(eth_buffer_slot_sync_t),
-        qnum);
+        sizeof(eth_buffer_slot_sync_t));
 }
 
 FORCE_INLINE void write_worker(
@@ -231,7 +223,7 @@ FORCE_INLINE void check_write_worker_done_and_send_ack(
     uint32_t curr_trid = get_buffer_slot_trid(read_ptr);
 
     if (buffer_not_empty && write_worker_done(curr_trid)) {
-        ack_complete(buffer_slot_sync_addrs[read_ptr], RECEIVER_QNUM);
+        ack_complete(buffer_slot_sync_addrs[read_ptr]);
 
         read_ptr = advance_buffer_slot_ptr(read_ptr);
 

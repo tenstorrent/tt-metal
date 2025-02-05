@@ -22,7 +22,7 @@
  * Return value: bool: true if the queue is ingesting a command and cannot accept a new one
  * at this specific moment
  */
-FORCE_INLINE bool eth_txq_is_busy(uint32_t q_num = 0) { return internal_::eth_txq_is_busy(q_num); }
+FORCE_INLINE bool eth_txq_is_busy() { return internal_::eth_txq_is_busy(0); }
 
 /**
  * Wait until the ethernet transaction queue is no longer busy ingesting a command
@@ -217,8 +217,8 @@ void eth_send_bytes_over_channel_payload_only_unsafe(
 
 FORCE_INLINE
 void eth_send_bytes_over_channel_payload_only_unsafe_one_packet(
-    uint32_t src_addr, uint32_t dst_addr, uint32_t num_bytes, uint32_t q_num = 0) {
-    internal_::eth_send_packet_bytes_unsafe(q_num, src_addr, dst_addr, num_bytes);
+    uint32_t src_addr, uint32_t dst_addr, uint32_t num_bytes) {
+    internal_::eth_send_packet_bytes_unsafe(0, src_addr, dst_addr, num_bytes);
 }
 
 /*
