@@ -25,8 +25,8 @@ ReduceScatterAsync create_reduce_scatter_struct(
     std::optional<std::vector<Tensor>> forward_output_tensors,
     std::optional<std::vector<Tensor>> backward_output_tensors,
     std::optional<size_t> num_links_preferred,
-    const std::vector<std::shared_ptr<const GlobalSemaphore>>& from_remote_sems,
-    const std::vector<std::shared_ptr<const GlobalSemaphore>>& to_remote_sems,
+    const std::vector<const GlobalSemaphore>& from_remote_sems,
+    const std::vector<const GlobalSemaphore>& to_remote_sems,
     std::optional<SubDeviceId> sub_device_id,
     std::optional<ttnn::ccl::EdmLineFabricOpInterface>& fabric_handle) {
     uint32_t num_devices = devices.size();
@@ -54,8 +54,8 @@ ReduceScatterAsync create_reduce_scatter_struct(
         return *device;
     };
 
-    std::shared_ptr<const GlobalSemaphore> from_remote_sem = from_remote_sems.at(device_index);
-    std::shared_ptr<const GlobalSemaphore> to_remote_sem = to_remote_sems.at(device_index);
+    const GlobalSemaphore from_remote_sem = from_remote_sems.at(device_index);
+    const GlobalSemaphore to_remote_sem = to_remote_sems.at(device_index);
 
     return ttnn::ReduceScatterAsync{
         binary_op_type,
@@ -227,14 +227,14 @@ Tensor reduce_scatter(
         dim);
 
     // get shared_ptr from multi_device_global_semaphore
-    std::vector<std::shared_ptr<const tt::tt_metal::GlobalSemaphore>> from_remote_inputs_semaphores;
+    std::vector<const tt::tt_metal::GlobalSemaphore> from_remote_inputs_semaphores;
     for (auto& sem : from_remote_multi_device_global_semaphore.global_semaphores) {
-        from_remote_inputs_semaphores.push_back(std::make_shared<tt::tt_metal::GlobalSemaphore>(sem));
+        from_remote_inputs_semaphores.push_back(tt::tt_metal::GlobalSemaphore(sem));
     }
 
-    std::vector<std::shared_ptr<const tt::tt_metal::GlobalSemaphore>> to_remote_inputs_semaphores;
+    std::vector<const tt::tt_metal::GlobalSemaphore> to_remote_inputs_semaphores;
     for (auto& sem : to_remote_multi_device_global_semaphore.global_semaphores) {
-        to_remote_inputs_semaphores.push_back(std::make_shared<tt::tt_metal::GlobalSemaphore>(sem));
+        to_remote_inputs_semaphores.push_back(tt::tt_metal::GlobalSemaphore(sem));
     }
 
     std::vector<Tensor> output_tensors = {
@@ -307,14 +307,14 @@ Tensor reduce_scatter(
     auto devices = input_tensor.get_workers();
 
     // get shared_ptr from multi_device_global_semaphore
-    std::vector<std::shared_ptr<const tt::tt_metal::GlobalSemaphore>> from_remote_inputs_semaphores;
+    std::vector<const tt::tt_metal::GlobalSemaphore> from_remote_inputs_semaphores;
     for (auto& sem : from_remote_multi_device_global_semaphore.global_semaphores) {
-        from_remote_inputs_semaphores.push_back(std::make_shared<tt::tt_metal::GlobalSemaphore>(sem));
+        from_remote_inputs_semaphores.push_back(tt::tt_metal::GlobalSemaphore(sem));
     }
 
-    std::vector<std::shared_ptr<const tt::tt_metal::GlobalSemaphore>> to_remote_inputs_semaphores;
+    std::vector<const tt::tt_metal::GlobalSemaphore> to_remote_inputs_semaphores;
     for (auto& sem : to_remote_multi_device_global_semaphore.global_semaphores) {
-        to_remote_inputs_semaphores.push_back(std::make_shared<tt::tt_metal::GlobalSemaphore>(sem));
+        to_remote_inputs_semaphores.push_back(tt::tt_metal::GlobalSemaphore(sem));
     }
 
     std::vector<Tensor> output_tensors = {
