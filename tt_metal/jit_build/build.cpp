@@ -473,7 +473,8 @@ JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const Jit
             this->defines_ +=
                 "-DCOMPILE_FOR_ERISC "
                 "-DERISC "
-                "-DRISC_B0_HW ";
+                "-DRISC_B0_HW "
+                "-DCOOPERATIVE_ERISC ";
 
             this->includes_ += "-I " + env_.root_ + "tt_metal/hw/inc/ethernet ";
 
