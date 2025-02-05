@@ -66,7 +66,7 @@ jobs:
         id: tags
         run: |
           BUILD_TAG=$(cat \
-            install_dependencies.sh
+            install_dependencies.sh \
             dockerfile/Dockerfile \
             tt_metal/python_env/requirements-dev.txt \
             docs/requirements-docs.txt \
