@@ -362,9 +362,7 @@ OptimizedConvBlockConfig determine_per_core_conv_block_config(
     }
 
     auto grid_size = parallel_config.grid.bounding_box().grid_size();
-    uint32_t act_c_num_blocks = parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED ? 1
-                                : parallel_config.shard_orientation == ShardOrientation::COL_MAJOR ? grid_size.y
-                                                                                                   : grid_size.x;
+    uint32_t act_c_num_blocks = get_num_cores_channels_from_parallel_config(parallel_config);
     TT_ASSERT(padded_in_channels % act_c_num_blocks == 0);
     uint32_t act_block_w =
         parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED
