@@ -12,6 +12,11 @@ on:
         type: boolean
         default: false
         description: "Build with tracy enabled"
+      build-wheel:
+        required: false
+        type: boolean
+        default: false
+        description: "Build Python Wheel"
       distro:
         required: false
         type: string
@@ -62,6 +67,11 @@ on:
         type: boolean
         default: false
         description: "Build with tracy enabled"
+      build-wheel:
+        required: false
+        type: boolean
+        default: false
+        description: "Build Python Wheel"
       distro:
         required: false
         type: string
@@ -146,6 +156,7 @@ jobs:
             -v /home/ubuntu/.ccache-ci:/home/ubuntu/.ccache
             -v /mnt/MLPerf/ccache:/mnt/MLPerf/ccache
             -e CARGO_HOME=${{ github.workspace }}/.cargo
+            -e TT_FROM_PRECOMPILED_DIR=${{ github.workspace }}
             -w ${{ github.workspace }}
           run: |
             set -eu # basic shell hygiene
@@ -170,7 +181,18 @@ jobs:
               { echo "!!! ALERT !!! This should never happen, but does explain an issue we've been hunting. Please send a link to this job to Metal Infra.  kthxbye."; exit 1; }
 
             nice -n 19 $build_command
+
+            echo "Build wheel: ${{ inputs.build-wheel }}"
+            if [ "${{ inputs.build-wheel }}" = "true" ]; then
+              nice -n 19 python3 -m build
+            fi
             ccache -s > build/ccache.stats
+      - name: Upload distribution as artifact
+        if: ${{ inputs.build-wheel }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: eager-dist-${{ inputs.distro }}-${{ inputs.version }}-any
+          path: dist/
       - name: Publish Ccache summary
         run: |
           echo '## CCache Summary' >> $GITHUB_STEP_SUMMARY
