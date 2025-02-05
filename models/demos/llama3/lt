@@ -338,7 +338,7 @@ def main(stdscr):
     # Input fields positions (reordered)
     input_fields = [
         {"label": "Command [demo]", "value": "", "x": 0, "y": 0},
-        {"label": "Model (1b, 3b, 8b, 11b, 70b, q7b, q72b) [all]", "value": "", "x": 0, "y": 1},
+        {"label": "Model (1b, 3b, 8b, 11b, 70b, 70b-r1, q7b, q72b) [all]", "value": "", "x": 0, "y": 1},
         {
             "label": f"Device ({list_supported_devices(host_device)}) [all]",
             "value": "",
@@ -453,7 +453,7 @@ def main(stdscr):
                     if current_field == len(input_fields) - 1:
                         # Submit command
                         command_input = input_fields[0]["value"] or "demo"
-                        model_input = input_fields[1]["value"] or "1b,3b,8b,11b,70b,q7b,q72b"
+                        model_input = input_fields[1]["value"] or "1b,3b,8b,11b,70b,70b-r1,q7b,q72b"
                         device_input = input_fields[2]["value"] or list_supported_devices(host_device)
 
                         if command_input == "modules":
@@ -485,6 +485,7 @@ def main(stdscr):
                             if not (
                                 (m in ["11b", "11b-b"] and d == "n150")
                                 or (m == "70b" and d in ["n150", "n300"])
+                                or (m == "70b-r1" and d in ["n150", "n300"])
                                 or (m == "q72b" and d in ["n150", "n300"])
                                 or (m == "q7b" and d != "n300")
                                 or ("vision" in c and m not in ["11b", "11b-b"])
@@ -1041,7 +1042,10 @@ def get_llama_dir(model):
         "8b": os.environ.get("LLAMA_31_8B_DIR", "/proj_sw/user_dev/llama31-8b-data/Meta-Llama-3.1-8B-Instruct"),
         "11b": os.environ.get("LLAMA_32_11B_DIR", "/proj_sw/user_dev/llama32-data/Llama3.2-11B-Vision-Instruct"),
         "11b-b": os.environ.get("LLAMA_32_11B_BASE_DIR", "/proj_sw/user_dev/llama32-data/Llama3.2-11B-Vision"),
-        "70b": os.environ.get("LLAMA_31_70B_DIR", "/proj_sw/llama3_1-weights/Meta-Llama-3.1-70B-Instruct/repacked"),
+        "70b": os.environ.get(
+            "DEEPSEEK_R1_LLAMA_70B_DIR", "/proj_sw/llama3_1-weights/Meta-Llama-3.1-70B-Instruct/repacked"
+        ),
+        "70b-r1": os.environ.get("LLAMA_31_70B_DIR", "/proj_sw/deepseek/DeepSeek-R1-Distill-Llama-70B"),
         "q7b": os.environ.get("QWEN_7B_DIR", "/proj_sw/user_dev/Qwen/Qwen2.5-7B-Instruct"),
         "q72b": os.environ.get("QWEN_72B_DIR", "/proj_sw/user_dev/Qwen/Qwen2.5-72B-Instruct"),
     }.get(model.lower(), "")
@@ -1054,6 +1058,7 @@ def get_llama_dir(model):
         print("  - LLAMA_31_8B_DIR for 8b model")
         print("  - LLAMA_32_11B_DIR for 11b model")
         print("  - LLAMA_31_70B_DIR for 70b model")
+        print("  - DEEPSEEK_R1_LLAMA_70B_DIR for DeepSeek R1 Llama 70b distill model")
         print("  - QWEN_7B_DIR for 7b Qwen2.5 model")
         print("  - QWEN_72B_DIR for 72b Qwen2.5 model")
         sys.exit(1)
@@ -1268,6 +1273,7 @@ def export_results_to_markdown(output_entries, stdscr):
         "8b": "Llama-3.1-8B",
         "11b": "Llama-3.2-11B",
         "70b": "Llama-3.1-70B",
+        "70b-r1": "DeepSeek-R1-Llama-70B",
         "q7b": "Qwen-2.5-7B",
         "q72b": "Qwen-2.5-72B",
     }
