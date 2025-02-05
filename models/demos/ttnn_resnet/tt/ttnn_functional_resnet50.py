@@ -701,10 +701,10 @@ class resnet50:
                 # Todo: restore after issue #16895 is fixed
                 # self.conv1_config.act_block_h_override = 49 * 32
                 self.conv1_config.act_block_h_override = 2 * 32
-        # if is_blackhole():
-        #     # self.conv1_config.act_block_h_override = 7 * 32
-        #     # self.conv1_config.act_block_h_override = 2 * 32
-        #     self.conv1_config.enable_split_reader = False
+        if is_blackhole():
+            # self.conv1_config.act_block_h_override = 7 * 32
+            self.conv1_config.act_block_h_override = 2 * 32
+            # self.conv1_config.enable_split_reader = False
 
         self.conv1_kernel_size = (4, 4)
         self.conv1_stride = (1, 1)
@@ -748,8 +748,8 @@ class resnet50:
                 num_cores_x = 8
                 num_cores_y = 5
             elif is_blackhole():
-                num_cores_x = 8
-                num_cores_y = 10
+                num_cores_x = 10
+                num_cores_y = 8
         self.fold_compute_grid_size = (num_cores_x, num_cores_y)
 
         conv_dummy_tensor = torch.rand((self.fold_output_shape), dtype=torch.bfloat16)
