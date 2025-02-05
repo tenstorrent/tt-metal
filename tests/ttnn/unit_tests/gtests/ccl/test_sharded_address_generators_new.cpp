@@ -21,17 +21,17 @@
 #define DYNAMIC_NOC_Y(noc, y) NOC_0_Y(noc, noc_size_y, (y))
 
 #endif
-
 #include "ttnn/cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
+namespace sharding_testing_parameters {
 mapping_table_t map[9] = {0x00000001, 0x00020003, 0x00040200, 0x02010202, 0x02030204, 0x03000301, 0x03020303, 0x04000401, 0x04020403};
 uint64_t real_core_x_vals [18] = {0x0, 0x0, 0x0, 0x0, 0x0, 0x2, 0x2, 0x2, 0x2, 0x2, 0x3, 0x3, 0x3, 0x3, 0x4, 0x4, 0x4, 0x4};
 uint64_t real_core_y_vals [18] = {0x0, 0x1, 0x2, 0x3, 0x4, 0x0, 0x1, 0x2, 0x3, 0x4, 0x0, 0x1, 0x2, 0x3, 0x0, 0x1, 0x2, 0x3};
-
+}  // namespace sharding_testing_parameters
 namespace tt {
 namespace tt_metal {
 
 template <typename ADDRgen, typename ADDRgenInfo>
-static void run_full_width_test(ADDRgen addrgen, ADDRgenInfo constants, uint32_t bank_base_address) {
+void run_full_width_test(ADDRgen addrgen, ADDRgenInfo constants, uint32_t bank_base_address) {
     uint32_t rows[7] = {0, 1, 31, 32, 33, 66, 10000};
     for (int i = 0; i < std::size(rows); i++) {
         uint32_t page = constants.pages_per_tensor_row * rows[i];
@@ -40,23 +40,23 @@ static void run_full_width_test(ADDRgen addrgen, ADDRgenInfo constants, uint32_t
             uint64_t l1_address = base_address;
             for (int k = 0; k < constants.pages_per_shard_width; k++) {
                 if (j * constants.pages_per_shard_width + k < constants.pages_per_tensor_row) {
-                    uint64_t calculated_address = bank_base_address + NOC_XY_ADDR(
-                                                                          DYNAMIC_NOC_X(noc, real_core_x_vals[j]),
-                                                                          DYNAMIC_NOC_Y(noc, real_core_y_vals[j]),
-                                                                          l1_address);
-                    uint64_t retreived_address = addrgen.get_noc_addr(page);
-                    ASSERT_EQ(calculated_address, retreived_address);
+                    uint64_t calculated_address =
+                        bank_base_address + NOC_XY_ADDR(
+                                                DYNAMIC_NOC_X(noc, sharding_testing_parameters::real_core_x_vals[j]),
+                                                DYNAMIC_NOC_Y(noc, sharding_testing_parameters::real_core_y_vals[j]),
+                                                l1_address);
+                    uint64_t retrieved_address = addrgen.get_noc_addr(page);
+                    ASSERT_EQ(calculated_address, retrieved_address);
                     l1_address += constants.page_size_jump;
                 }
                 page++;
             }
         }
-        // In width sharded the height only affects the page offset
     }
 }
 
 template <typename ADDRgen, typename ADDRgenInfo>
-static void run_full_height_test(ADDRgen addrgen, ADDRgenInfo constants, uint32_t bank_base_address) {
+void run_full_height_test(ADDRgen addrgen, ADDRgenInfo constants, uint32_t bank_base_address) {
     uint32_t width_pages[5] = {0, 1, 31, 30, 14};
     for (int i = 0; i < std::size(width_pages); i++) {
         uint32_t page = width_pages[i];
@@ -65,21 +65,21 @@ static void run_full_height_test(ADDRgen addrgen, ADDRgenInfo constants, uint32_
             uint32_t l1_address = base_address;
             for (int k = 0; k < constants.rows_per_shard_height; k++) {
                 uint64_t calculated_address =
-                    bank_base_address +
-                    NOC_XY_ADDR(
-                        DYNAMIC_NOC_X(noc, real_core_x_vals[j]), DYNAMIC_NOC_Y(noc, real_core_y_vals[j]), l1_address);
-                uint64_t retreived_address = addrgen.get_noc_addr(page);
-                ASSERT_EQ(calculated_address, retreived_address);
+                    bank_base_address + NOC_XY_ADDR(
+                                            DYNAMIC_NOC_X(noc, sharding_testing_parameters::real_core_x_vals[j]),
+                                            DYNAMIC_NOC_Y(noc, sharding_testing_parameters::real_core_y_vals[j]),
+                                            l1_address);
+                uint64_t retrieved_address = addrgen.get_noc_addr(page);
+                ASSERT_EQ(calculated_address, retrieved_address);
                 l1_address += constants.page_size_jump * constants.pages_per_tensor_row;
                 page = page + constants.pages_per_tensor_row;
             }
         }
-        // In width sharded the height only affects the page offset
     }
 }
 
 template <typename ADDRgen, typename ADDRgenInfo>
-static void run_full_block_test(ADDRgen addrgen, ADDRgenInfo constants, uint32_t bank_base_address) {
+void run_full_block_test(ADDRgen addrgen, ADDRgenInfo constants, uint32_t bank_base_address) {
     uint32_t random_width_offsets[4] = {0, 1, 5, 7};
     uint32_t random_height_offsets[4] = {0, 1, 5, 7};
     uint32_t cores_per_block_row = (constants.pages_per_tensor_row - 1) / constants.pages_per_shard_width + 1;
@@ -95,41 +95,43 @@ static void run_full_block_test(ADDRgen addrgen, ADDRgenInfo constants, uint32_t
                 for (int w = 0; w < cores_per_block_row; w++) {
                     uint32_t core_number = w + h * cores_per_block_row;
                     uint64_t calculated_address =
-                        bank_base_address + NOC_XY_ADDR(
-                                                DYNAMIC_NOC_X(noc, real_core_x_vals[core_number]),
-                                                DYNAMIC_NOC_Y(noc, real_core_y_vals[core_number]),
-                                                l1_address);
-                    uint64_t retreived_address = addrgen.get_noc_addr(page);
-                    ASSERT_EQ(calculated_address, retreived_address);
+                        bank_base_address +
+                        NOC_XY_ADDR(
+                            DYNAMIC_NOC_X(noc, sharding_testing_parameters::real_core_x_vals[core_number]),
+                            DYNAMIC_NOC_Y(noc, sharding_testing_parameters::real_core_y_vals[core_number]),
+                            l1_address);
+                    uint64_t retrieved_address = addrgen.get_noc_addr(page);
+                    ASSERT_EQ(calculated_address, retrieved_address);
                     page += constants.pages_per_shard_width;
                 }
                 outer_page += constants.pages_per_tensor_row * constants.rows_per_shard_height;
             }
         }
-        // In width sharded the height only affects the page offset
     }
 }
 
 TEST(CclnewWidthShardedTensorSliceIndexer_Wormhole, width_sharded_test) {
-    static constexpr std::size_t shard_type = static_cast<uint32_t>(ttnn::ccl::common::shard_addr_gen_utils::ShardingLayout::WIDTH_SHARDED);
-    static constexpr std::size_t number_of_cores = 8;
-    static constexpr std::size_t page_size_jump = 1024;
-    static constexpr std::size_t pages_per_tensor_row = 32;
-    static constexpr std::size_t contiguity = static_cast<uint32_t>(ttnn::ccl::common::shard_addr_gen_utils::Contiguity_types::NO_SHARD_PADDING);
-    static constexpr std::size_t pages_per_shard_width = 6;
-    static constexpr std::size_t rows_per_shard_height = 1;
-    static constexpr std::size_t tensor_address = 0x100000;
-    typedef Sharded_Info<
+    constexpr std::size_t shard_type =
+        static_cast<uint32_t>(ttnn::ccl::common::shard_addr_gen_utils::ShardingLayout::WIDTH_SHARDED);
+    constexpr std::size_t number_of_cores = 8;
+    constexpr std::size_t page_size_jump = 1024;
+    constexpr std::size_t pages_per_tensor_row = 32;
+    constexpr std::size_t contiguity =
+        static_cast<uint32_t>(ttnn::ccl::common::shard_addr_gen_utils::Contiguity_types::NO_SHARD_PADDING);
+    constexpr std::size_t pages_per_shard_width = 6;
+    constexpr std::size_t rows_per_shard_height = 1;
+    constexpr std::size_t tensor_address = 0x100000;
+    using ct_shard_info = Sharded_Info<
         shard_type,
         number_of_cores,
         page_size_jump,
         pages_per_tensor_row,
         contiguity,
         pages_per_shard_width,
-        rows_per_shard_height> ct_shard_info;
+        rows_per_shard_height>;
     auto info_var = ct_shard_info{};
     experimental::ShardedAddrGen<ct_shard_info> addrgen = {
-            .bank_base_address = tensor_address, .shard_array=map};
+        .bank_base_address = tensor_address, .shard_array = sharding_testing_parameters::map};
     run_full_width_test(addrgen, info_var, tensor_address);
 }
 
@@ -152,7 +154,7 @@ TEST(CclnewHeightShardedTensorSliceIndexer_Wormhole, height_sharded_test) {
         rows_per_shard_height> ct_shard_info;
     auto info_var = ct_shard_info{};
     experimental::ShardedAddrGen<ct_shard_info> addrgen = {
-            .bank_base_address = tensor_address, .shard_array=map};
+        .bank_base_address = tensor_address, .shard_array = sharding_testing_parameters::map};
     run_full_height_test(addrgen, info_var, tensor_address);
 }
 
@@ -176,7 +178,7 @@ TEST(CclnewBlockShardedTensorSliceIndexer_Wormhole, block_sharded_test) {
         rows_per_shard_height> ct_shard_info;
     auto info_var = ct_shard_info{};
     experimental::ShardedAddrGen<ct_shard_info> addrgen = {
-            .bank_base_address = tensor_address, .shard_array=map};
+        .bank_base_address = tensor_address, .shard_array = sharding_testing_parameters::map};
     run_full_block_test(addrgen, info_var, tensor_address);
 }
 

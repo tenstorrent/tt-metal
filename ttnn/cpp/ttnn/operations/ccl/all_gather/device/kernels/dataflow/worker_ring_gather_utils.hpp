@@ -598,8 +598,9 @@ FORCE_INLINE std::pair<uint64_t, size_t> get_noc_addr_and_contiguous_pages(
     const AddrGen& address_generator,
     const ttnn::ccl::Shape4D<uint32_t>& tensor_slice_shape,
     uint8_t noc_id = noc_index) {
-        static constexpr uint32_t offset = 0;
-        std::pair<uint64_t, size_t> ret_val = get_contiguous_noc_addr(curr_page_idx,address_generator,offset,noc_id);
+        constexpr uint32_t offset = 0;
+        std::pair<uint64_t, size_t> ret_val =
+            get_contiguous_noc_addr(curr_page_idx,address_generator,offset,noc_id);
         uint32_t flattened_offset_worker_slice = ttnn::ccl::v2::flattened_index(tensor_slice_shape, offset_worker_slice);
         uint32_t contig_until_edge_of_tensor_slice = tensor_slice_shape.x - ((flattened_offset_worker_slice + offset_into_worker_slice) % tensor_slice_shape.x);
         size_t contig_pages = std::min<int32_t>(ret_val.second, contig_until_edge_of_tensor_slice);
