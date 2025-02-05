@@ -124,6 +124,7 @@ class TtModelArgs:
             self.DEFAULT_CKPT_DIR = LLAMA_DIR
             self.DEFAULT_TOKENIZER_PATH = LLAMA_DIR
             self.DEFAULT_CACHE_PATH = os.path.join(LLAMA_DIR, self.device_name)
+            self.model_name = os.path.basename(LLAMA_DIR)  # May be overridden by config
         else:
             assert "Please set $LLAMA_DIR to a valid checkpoint directory"
 
@@ -992,7 +993,7 @@ class TtModelArgs:
             self.hidden_dim = calculate_hidden_dim(self.dim, self.ffn_dim_multiplier, self.multiple_of)
 
         if "_name_or_path" in params:
-            self.model_name = params["_name_or_path"].split("/")[-1]
+            self.model_name = os.path.basename(params["_name_or_path"])
 
         if self.base_model_name == "Qwen2.5-7B" and self.num_devices not in [0, 2, 4]:
             raise AssertionError(
@@ -1098,7 +1099,6 @@ class TtModelArgs:
             self.rope_scaling_factor = 8
             self.is_70b = True  # self.dim == 8192 and self.n_layers == 80
         else:
-            self.model_name = "Unknown"
             logger.warning(f"Unknown Meta-style model: {checkpoint_dir}")
         self.orig_context_len = 8192
 
