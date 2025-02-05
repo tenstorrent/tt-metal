@@ -28,7 +28,6 @@ from models.demos.llama3.tt.multimodal.llama_cross_attention_transformer_text im
 from models.demos.llama3.tt.llama_common import (
     get_prefill_rot_mat,
     get_rot_transformation_mat,
-    get_single_rot_mat,
     copy_host_to_device,
     get_padded_prefill_len,
 )
