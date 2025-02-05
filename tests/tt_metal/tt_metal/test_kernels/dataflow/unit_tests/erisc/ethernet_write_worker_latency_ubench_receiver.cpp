@@ -21,7 +21,6 @@ FORCE_INLINE void main_loop_uni_dir(
     noc_async_write_one_packet_with_trid_set_state(worker_noc_addr);
 
     while (receiver_num_messages_ack < total_msgs) {
-        // DPRINT << "receiver_num_messages_ack: " << receiver_num_messages_ack <<ENDL();
         update_receiver_state(
             receiver_buffer_slot_addrs,
             receiver_buffer_slot_sync_addrs,

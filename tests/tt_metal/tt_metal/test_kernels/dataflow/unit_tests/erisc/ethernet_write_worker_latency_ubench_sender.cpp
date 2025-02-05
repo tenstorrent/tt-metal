@@ -137,4 +137,5 @@ void kernel_main() {
     for (int i = 0; i < 1000; ++i) {
         asm volatile("nop");
     }
+    ncrisc_noc_counters_init();
 }
