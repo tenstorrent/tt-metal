@@ -17,7 +17,6 @@
 #include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 
 #include "noc_overlay_parameters.h"
-// #include "tt_metal/hw/inc/wormhole/stream_interface.h"
 
 #include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/edm_fabric_counters.hpp"
 
@@ -293,9 +292,6 @@ void remote_update_ptr_val(uint32_t stream_id, int32_t val) {
 template <uint32_t stream_id>
 void init_ptr_val(int32_t val) {
     NOC_STREAM_WRITE_REG(stream_id, STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX, val);
-    // static constexpr uint32_t addr = STREAM_REG_ADDR(stream_id, STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX);
-    // *reinterpret_cast<volatile uint32_t*>(addr) = val;
-
 }
 
 constexpr std::array<uint32_t, 2> to_sender_packets_acked_streams = {{
