@@ -174,10 +174,12 @@ def calculate_conv_height_split_params(
     kernel_size: int,
     stride: int,
     padding: int,
+    dilation: int,
 ) -> List[Tuple[int, int, int, int]]:
     # if input is sliced into num_input_slices, so is output
     # we use output slices to figure out where are they coming from input image
-    output_height = get_conv_output_dim(input_height, kernel_size, stride, padding)
+    output_height = get_conv_output_dim(input_height, kernel_size, stride, padding, dilation)
+    kernel_size_w_dilation = kernel_size + (kernel_size - 1) * (dilation - 1)
     output_values = []
     output_slice_height = output_height // num_input_slices
     for output_slice_height_start in range(0, output_height, output_slice_height):
@@ -185,7 +187,7 @@ def calculate_conv_height_split_params(
         output_slice_height_end = min(output_slice_height_end, output_height)  # last slice may be smaller
 
         input_slice_height_start = output_slice_height_start * stride - padding
-        input_slice_height_end = (output_slice_height_end - 1) * stride + kernel_size - padding
+        input_slice_height_end = (output_slice_height_end - 1) * stride + kernel_size_w_dilation - padding
         pad_top = max(0, -input_slice_height_start)
         pad_bottom = max(0, input_slice_height_end - input_height)
         input_slice_height_start = max(0, input_slice_height_start)
@@ -311,7 +313,6 @@ def conv2d_sliced(
             return_weights_and_bias=return_weights_and_bias,
         )
 
-    assert dilation == (1, 1), "Dilatation != (1, 1) is not supported for sliced conv2d at the moment"
     assert groups == 1, "Groups != 1 is not supported for sliced conv2d t the moment"
     assert batch_size == 1, "Batch size != 1 is not supported for sliced conv2d at the moment"
     # What to do with output mem config?
@@ -325,11 +326,7 @@ def conv2d_sliced(
         input_tensor = ttnn.to_device(input_tensor, device)
 
     conv_height_split_params, conv_output_height = calculate_conv_height_split_params(
-        input_height,
-        num_input_slices,
-        kernel_size[0],
-        stride[0],
-        padding[0],
+        input_height, num_input_slices, kernel_size[0], stride[0], padding[0], dilation[0]
     )
 
     # Prepare conv config for slices
