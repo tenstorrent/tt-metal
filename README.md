@@ -40,9 +40,9 @@
 | [Falcon 7B (DP=32)](./models/demos/tg/falcon7b)               | 1024  | [Galaxy](https://tenstorrent.com/hardware/galaxy)        | 223       | 4.8   | 26              | 4915.2 | [v0.55.0-rc18](https://github.com/tenstorrent/tt-metal/tree/v0.55.0-rc18) |                                                                                                   |
 | [Llama 3.1 70B (DP=4, TP=8)](./models/demos/t3000/llama3_70b) | 128   | [Galaxy](https://tenstorrent.com/hardware/galaxy)        | 190       | 14.3  | 20              | 1835.5 | [v0.52.0-rc31](https://github.com/tenstorrent/tt-metal/tree/v0.52.0-rc31) |                                                                                                   |
 | [Llama 3.1 70B (TP=32)](./models/demos/llama3)                | 32   | [Galaxy](https://tenstorrent.com/hardware/galaxy)        | 763       | 13.5  | 80              | 432.0 | [v0.55.0-rc12](https://github.com/tenstorrent/tt-metal/tree/v0.55.0-rc12) | [2f33504](https://github.com/tenstorrent/vllm/tree/2f33504bad49a6202d3685155107a6126a5b5e6e) |
-| [DeepSeek R1 Distill Llama 3.3 70B (TP=8)](https://github.com/tenstorrent/tt-metal/tree/hf-llama/models/demos/llama3)       | 32    | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox) | 1113       | 16.4  | 33              |524.8 | [hf-llama](https://github.com/tenstorrent/tt-metal/tree/hf-llama) | [b9564bf](https://github.com/tenstorrent/vllm/tree/b9564bf364e95a3850619fc7b2ed968cc71e30b7)      |
+| [DeepSeek R1 Distill Llama 3.3 70B (TP=8)](https://github.com/tenstorrent/tt-metal/tree/main/models/demos/llama3)       | 32    | [QuietBox](https://tenstorrent.com/hardware/tt-quietbox) | 1113       | 16.4  | 33              |524.8 | [main](https://github.com/tenstorrent/tt-metal/) | [b9564bf](https://github.com/tenstorrent/vllm/tree/b9564bf364e95a3850619fc7b2ed968cc71e30b7)      |
 
-> **Last Update:** January 27, 2025
+> **Last Update:** February 5, 2025
 >
 > **Notes:**
 >
