@@ -73,6 +73,44 @@ inline void llk_pack_hw_configure_disaggregated(std::uint32_t pack_output) {
     llk_pack_hw_configure<untilize, is_fp32_dest_acc_en>(&llk_pack_params);
 }
 
+template <bool untilize = false, bool is_fp32_dest_acc_en = false>
+inline void llk_pack_untilize_hw_configure(
+    const llk_pack_params_t* pack_params, const std::uint32_t face_r_dim, const std::uint32_t num_faces) {
+    const std::uint32_t output_id = get_output_id(pack_params->pack_output);
+    const bool partial_face = get_output_partial_face(output_id);
+    const bool narrow_tile = get_output_narrow_tile(output_id);
+
+    const std::uint32_t tile_size = get_local_cb_interface(output_id).fifo_page_size;
+
+    _llk_pack_hw_configure_<untilize, is_fp32_dest_acc_en>(
+        pack_src_format[output_id],
+        pack_dst_format[output_id],
+        tile_size,
+        face_r_dim,
+        num_faces,
+        partial_face,
+        narrow_tile,
+        pack_params->relu_config.val);
+}
+
+template <
+    bool untilize = false,
+    bool is_fp32_dest_acc_en = false,
+    ReluType relu_type = ReluType::NO_RELU,
+    std::uint32_t relu_threshold = 0,
+    bool tilize = false /*unused*/>
+inline void llk_pack_untilize_hw_configure_disaggregated(
+    std::uint32_t pack_output, std::uint32_t face_r_dim = 16, std::uint32_t num_faces = 4) {
+    llk_pack_params_t llk_pack_params = {
+        .pack_output = pack_output,
+        .relu_config = {
+            .f = {
+                .ApplyRelu = (std::uint32_t)relu_type,
+                .Threshold = relu_threshold,
+            }}};
+    llk_pack_untilize_hw_configure<untilize, is_fp32_dest_acc_en>(&llk_pack_params, face_r_dim, num_faces);
+}
+
 template <bool untilize = false, PoolType type, ReduceDim dim, bool is_fp32_dest_acc_en = false>
 inline void llk_pack_reduce_hw_configure(const llk_pack_params_t* pack_params) {
     const std::uint32_t output_id = get_output_id(pack_params->pack_output);
@@ -192,19 +230,6 @@ inline void llk_pack_untilize_init(
 
     _llk_pack_untilize_init_<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums>(
         pack_dst_format[output_id], face_r_dim, num_faces);
-
-    // Reconfigure pack_reads_per_xy_plane with the new face_r_dim.
-    // Has to be called before the next code block to ensure
-    // proper Z and W counter configuration
-    _llk_pack_hw_configure_<true, is_fp32_dest_acc_en>(
-        pack_src_format[output_id],
-        pack_dst_format[output_id],
-        get_local_cb_interface(output_id).fifo_page_size,
-        face_r_dim,
-        num_faces,
-        false /* partial_face */,
-        false /* narrow_tile */,
-        0 /* relu_config */);
 
     // Pack row by row
     if constexpr (diagonal) {
