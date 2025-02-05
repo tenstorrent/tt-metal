@@ -45,9 +45,9 @@ class LlamaOptimizations:
     @classmethod
     def accuracy(cls, model_name):
         """Configuration optimized for accuracy
-        Only 3.1-70B uses bfp4 MLPs in this configuration
+        Only 70B models uses bfp4 MLPs in this configuration
         """
-        bfp4 = model_name in ["Llama3.1-70B", "Qwen2.5-72B"]
+        bfp4 = model_name in ["Llama3.1-70B", "DeepSeek-R1-Distill-Llama-70B", "Qwen2.5-72B"]
         return cls(bfp4_mlp=bfp4)
 
     @classmethod
@@ -187,9 +187,9 @@ class TtModelArgs:
                 "Llama3.1-8B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128},
                 "Llama3.2-11B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128},
                 "Llama3.1-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128},
+                "DeepSeek-R1-Distill-Llama-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128},
                 "Qwen2.5-7B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128},
                 "Qwen2.5-72B": {"N150": None, "N300": None, "T3K": 32, "TG": 128},
-                "DeepSeek-R1-Distill-Llama-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128},
             }
             try:
                 max_prefill_chunk_size_div1024 = MAX_PREFILL_CHUNK_SIZES_DIV1024[self.base_model_name][self.device_name]

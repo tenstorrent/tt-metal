@@ -465,6 +465,9 @@ def main(stdscr):
                         if command_input == "table":
                             command_input = "accuracy,demo,accuracy-acc,demo-acc"
 
+                        if command_input == "vision":
+                            command_input = "vision-mlp,vision-attn,vision-block,vision-xfmr,vision-xattn,vision-xblock,vision-conv,vision-class,vision-tile-pos,vision-pos,vision-encoder,vision-text-xfmr,vision-vision-xfmr"
+
                         # Parse models, devices, and commands
                         models = parse_list(model_input)
                         devices = parse_list(device_input)
@@ -473,7 +476,7 @@ def main(stdscr):
                         # Generate combinations (reordered)
                         # Ignore invalid combinations:
                         # - 11b and 11b-b models on n150 device
-                        # - 70b model on n150 and n300 devices
+                        # - 70b and 70b-r1 model on n150 and n300 devices
                         # - 72b model on n150 and n300 devices
                         # - q7b on anything other than N300
                         # - Vision commands on non-vision (11b) models
@@ -1042,10 +1045,8 @@ def get_llama_dir(model):
         "8b": os.environ.get("LLAMA_31_8B_DIR", "/proj_sw/user_dev/llama31-8b-data/Meta-Llama-3.1-8B-Instruct"),
         "11b": os.environ.get("LLAMA_32_11B_DIR", "/proj_sw/user_dev/llama32-data/Llama3.2-11B-Vision-Instruct"),
         "11b-b": os.environ.get("LLAMA_32_11B_BASE_DIR", "/proj_sw/user_dev/llama32-data/Llama3.2-11B-Vision"),
-        "70b": os.environ.get(
-            "DEEPSEEK_R1_LLAMA_70B_DIR", "/proj_sw/llama3_1-weights/Meta-Llama-3.1-70B-Instruct/repacked"
-        ),
-        "70b-r1": os.environ.get("LLAMA_31_70B_DIR", "/proj_sw/deepseek/DeepSeek-R1-Distill-Llama-70B"),
+        "70b": os.environ.get("LLAMA_31_70B_DIR", "/proj_sw/llama3_1-weights/Meta-Llama-3.1-70B-Instruct/repacked"),
+        "70b-r1": os.environ.get("DEEPSEEK_R1_LLAMA_70B_DIR", "/proj_sw/deepseek/DeepSeek-R1-Distill-Llama-70B"),
         "q7b": os.environ.get("QWEN_7B_DIR", "/proj_sw/user_dev/Qwen/Qwen2.5-7B-Instruct"),
         "q72b": os.environ.get("QWEN_72B_DIR", "/proj_sw/user_dev/Qwen/Qwen2.5-72B-Instruct"),
     }.get(model.lower(), "")
