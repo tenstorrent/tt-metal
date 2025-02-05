@@ -351,7 +351,7 @@ def conv2d_dram_slice(
     for input_slice_start, input_slice_end, pad_start, pad_end in conv_slice_params:
         if dram_slice == DramSlice.Height:
             slice_starts = (0, input_slice_start, 0, 0)
-            slice_ends = (batch_size, input_slice_end, input_width, in_channels)
+            slice_ends = (batch_size, input_slice_end, input_width, input_tensor.shape[-1])
             pad_width = (0, 0)
             pad_height = (pad_start, pad_end)
             extra_padding = pad_start + pad_end
@@ -360,7 +360,7 @@ def conv2d_dram_slice(
             input_slice_padding = (0, padding[1])
         else:
             slice_starts = (0, 0, input_slice_start, 0)
-            slice_ends = (batch_size, input_height, input_slice_end, in_channels)
+            slice_ends = (batch_size, input_height, input_slice_end, input_tensor.shape[-1])
             pad_width = (pad_start, pad_end)
             pad_height = (0, 0)
             extra_padding = pad_start + pad_end
