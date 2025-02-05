@@ -135,8 +135,7 @@ std::vector<uint32_t> get_linear_shard_list(const tt::tt_metal::IDevice* device,
     return args;
 }
 
-static void add_sharding_rt_to_existing_rt(
-    const IDevice* d, const tt::tt_metal::Tensor& t, std::vector<uint32_t>& args) {
+void add_sharding_rt_to_existing_rt(const IDevice* d, const tt::tt_metal::Tensor& t, std::vector<uint32_t>& args) {
     const auto& new_args = get_linear_shard_list(d, t);
     std::copy(std::begin(new_args), std::end(new_args), std::back_inserter(args));
 }
@@ -165,6 +164,7 @@ std::vector<uint32_t> sharding_ct_table_builder(const tt::tt_metal::IDevice* dev
     args.push_back(static_cast<uint32_t>(t.memory_config().memory_layout));  // Memory layout
     args.push_back(static_cast<uint32_t>(get_sharding_core_count(t)));       // The number of sharding cores
     args.push_back(static_cast<uint32_t>(t.buffer()->aligned_page_size()));  // The page size we offset each write to
+    std::cout << "aligned page size: " << t.buffer()->aligned_page_size() << std::endl;
     TT_FATAL(t.buffer()->aligned_page_size() > 0, "algined page size is 0");
     args.push_back(static_cast<uint32_t>(
         buf_shard_spec.tensor2d_shape[1]));  // The number of pages in each sharding row not including padding pages
@@ -175,8 +175,7 @@ std::vector<uint32_t> sharding_ct_table_builder(const tt::tt_metal::IDevice* dev
     return args;
 }
 
-static void add_sharding_ct_to_existing_ct(
-    const IDevice* d, const tt::tt_metal::Tensor& t, std::vector<uint32_t>& args) {
+void add_sharding_ct_to_existing_ct(const IDevice* d, const tt::tt_metal::Tensor& t, std::vector<uint32_t>& args) {
     const auto& new_args = sharding_ct_table_builder(d, t);
     std::copy(std::begin(new_args), std::end(new_args), std::back_inserter(args));
 }

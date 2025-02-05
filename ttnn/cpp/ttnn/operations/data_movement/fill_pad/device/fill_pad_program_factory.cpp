@@ -9,7 +9,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/tt_log.h>
-// #include "ttnn/cpp/ttnn/operations/ccl/sharding_addrgen_pf_helper.hpp"
+#include "ttnn/operations/ccl/sharding_addrgen_pf_helper.hpp"
 
 bool is_power_of_two_at_least_32(uint32_t value) { return value >= 32 && (value & (value - 1)) == 0; }
 
@@ -55,6 +55,12 @@ operation::ProgramWithCallbacks fill_pad_multi_core(const Tensor& input_tensor, 
             .set_page_size(src0_cb_index, cb_page_size);
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
+    constexpr uint32_t src1_cb_index = tt::CBIndex::c_1;
+    tt::tt_metal::CircularBufferConfig cb_src1_config =
+        tt::tt_metal::CircularBufferConfig(1024 * input_element_size_bytes * 2, {{src1_cb_index, cb_data_format}})
+            .set_page_size(src1_cb_index, 1024 * input_element_size_bytes * 2);
+    auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
+
     bool src_is_dram = tens_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
 
     // pack bf16 vals
@@ -68,6 +74,11 @@ operation::ProgramWithCallbacks fill_pad_multi_core(const Tensor& input_tensor, 
     uint32_t tiles_per_2d_tensor =
         padded_height / tt::constants::TILE_HEIGHT * padded_width / tt::constants::TILE_HEIGHT;
     uint32_t tiles_per_tile_row = padded_width / tt::constants::TILE_HEIGHT;
+
+    uint32_t sharded = 0;
+    if (input_tensor.memory_config().memory_layout != TensorMemoryLayout::INTERLEAVED) {
+        sharded = 1;
+    }
 
     // create kernel
     // reader compile time args
@@ -83,7 +94,12 @@ operation::ProgramWithCallbacks fill_pad_multi_core(const Tensor& input_tensor, 
         (std::uint32_t)tiles_per_2d_tensor,
         (std::uint32_t)tiles_per_tile_row,
         (std::uint32_t)tt::constants::TILE_HEIGHT,
-        (std::uint32_t)tt::constants::FACE_HEIGHT};
+        (std::uint32_t)tt::constants::FACE_HEIGHT,
+        (std::uint32_t)sharded};
+
+    if (sharded) {
+        shard_pf_builder::add_sharding_ct_to_existing_ct(device, input_tensor, writer_compile_time_args);
+    }
 
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -103,6 +119,9 @@ operation::ProgramWithCallbacks fill_pad_multi_core(const Tensor& input_tensor, 
         {
             writer_runtime_args[2] = tile_offset;
             writer_runtime_args[3] = local_num_2d_tensors;
+            if (sharded) {
+                shard_pf_builder::add_sharding_rt_to_existing_rt(device, input_tensor, writer_runtime_args);
+            }
             tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
         }
 
@@ -135,7 +154,6 @@ operation::ProgramWithCallbacks fill_pad_sharded(const Tensor& input_tensor, flo
 
     tt::tt_metal::IDevice* device = input_tensor.device();
     auto shard_spec = input_tensor.shard_spec().value();
-    std::cout << "Shard spec: " << shard_spec.shape << std::endl;
 
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
@@ -253,7 +271,6 @@ operation::ProgramWithCallbacks fill_pad_sharded(const Tensor& input_tensor, flo
 operation::ProgramWithCallbacks fill_pad_auto_sharded(const Tensor& input_tensor, float fill_value) {
     tt::tt_metal::IDevice* device = input_tensor.device();
     auto shard_spec = input_tensor.shard_spec().value();
-    std::cout << "Shard spec: " << shard_spec.shape << std::endl;
 
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
@@ -283,6 +300,12 @@ operation::ProgramWithCallbacks fill_pad_auto_sharded(const Tensor& input_tensor
         tt::tt_metal::CircularBufferConfig(cb_page_size * 2, {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, cb_page_size);
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
+
+    constexpr uint32_t src1_cb_index = tt::CBIndex::c_1;
+    tt::tt_metal::CircularBufferConfig cb_src1_config =
+        tt::tt_metal::CircularBufferConfig(1024 * input_element_size_bytes * 2, {{src1_cb_index, cb_data_format}})
+            .set_page_size(src1_cb_index, 1024 * input_element_size_bytes * 2);
+    auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
 
     bool src_is_dram = tens_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
 
@@ -314,7 +337,7 @@ operation::ProgramWithCallbacks fill_pad_auto_sharded(const Tensor& input_tensor
         (std::uint32_t)tt::constants::TILE_HEIGHT,
         (std::uint32_t)tt::constants::FACE_HEIGHT};
 
-    add_sharding_ct_to_existing_ct(device, input_tensor, writer_compile_time_args);
+    shard_pf_builder::add_sharding_ct_to_existing_ct(device, input_tensor, writer_compile_time_args);
 
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -334,7 +357,7 @@ operation::ProgramWithCallbacks fill_pad_auto_sharded(const Tensor& input_tensor
         {
             writer_runtime_args[2] = tile_offset;
             writer_runtime_args[3] = local_num_2d_tensors;
-            // add_sharding_rt_to_existing_rt(device, input_tensor, writer_runtime_args);
+            shard_pf_builder::add_sharding_rt_to_existing_rt(device, input_tensor, writer_runtime_args);
             tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
         }
 
@@ -361,10 +384,10 @@ operation::ProgramWithCallbacks fill_pad_auto_sharded(const Tensor& input_tensor
 }
 
 operation::ProgramWithCallbacks fill_pad(const Tensor& input_tensor, float fill_value) {
-    if (input_tensor.memory_config().memory_layout != TensorMemoryLayout::INTERLEAVED) {
-        // return fill_pad_sharded(input_tensor, fill_value);
-        return fill_pad_auto_sharded(input_tensor, fill_value);
-    }
+    // if (input_tensor.memory_config().memory_layout != TensorMemoryLayout::INTERLEAVED) {
+    //     // return fill_pad_sharded(input_tensor, fill_value);
+    //     return fill_pad_auto_sharded(input_tensor, fill_value);
+    // }
     return fill_pad_multi_core(input_tensor, fill_value);
 }
 
