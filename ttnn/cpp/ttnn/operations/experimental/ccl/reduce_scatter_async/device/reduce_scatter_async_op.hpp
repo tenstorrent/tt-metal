@@ -123,8 +123,8 @@ ReduceScatterAsync create_reduce_scatter_struct(
     std::optional<std::vector<Tensor>> foreward_output_tensors,
     std::optional<std::vector<Tensor>> backward_output_tensors,
     std::optional<size_t> num_links_preferred,
-    const std::vector<const GlobalSemaphore>& from_remote_sems,
-    const std::vector<const GlobalSemaphore>& to_remote_sems,
+    const std::vector<GlobalSemaphore>& from_remote_sems,
+    const std::vector<GlobalSemaphore>& to_remote_sems,
     std::optional<SubDeviceId> sub_device_id,
     std::optional<ttnn::ccl::EdmLineFabricOpInterface>& fabric_handle);
 }  // namespace reduce_scatter_detail
