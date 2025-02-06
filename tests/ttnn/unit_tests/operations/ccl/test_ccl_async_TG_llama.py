@@ -78,7 +78,9 @@ def get_core_range_set(output_core_grid):
 @pytest.mark.parametrize(
     "num_devices, num_links",
     [
+        (4, 3),
         (4, 2),
+        (4, 1),
     ],
 )
 @pytest.mark.parametrize(

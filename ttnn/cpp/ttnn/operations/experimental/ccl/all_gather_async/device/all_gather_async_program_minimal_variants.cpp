@@ -349,8 +349,9 @@ operation::ProgramWithCallbacks all_gather_async_llama_post_binary_matmul(
     const size_t packet_size_bytes = local_fabric_handle->get_edm_buffer_size_bytes();
     uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size();
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
-    uint32_t cb_base_num_pages = std::lcm(input_tensor_shard_num_pages, output_tensor_shard_num_pages);
-    uint32_t cb_num_pages = std::lcm(num_pages_per_packet, cb_base_num_pages);
+    uint32_t cb_num_pages =
+        input_tensor_num_pages / num_links +
+        1;  // We are dealing with small shapes, so assuming all pages for a worker can be fit into the CB
     uint32_t src0_cb_index = tt::CB::c_in0;
     tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
     tt::tt_metal::CircularBufferConfig cb_src0_config =
@@ -434,8 +435,9 @@ operation::ProgramWithCallbacks all_gather_async_llama_post_binary_matmul(
         uint32_t input_tile_id_end = (link + 1) * base_pages_per_worker + std::min(link + 1, remainder);
 
         uint32_t worker_num_tiles_to_read = input_tile_id_end - input_tile_id_start;
-        uint32_t input_first_core_tile_start_offset = worker_num_tiles_to_read % input_tensor_shard_num_pages;
-        uint32_t output_first_core_tile_start_offset = worker_num_tiles_to_read % output_tensor_shard_num_pages;
+        uint32_t input_first_core_tile_start_offset = input_tile_id_start % input_tensor_shard_num_pages;
+        uint32_t output_first_core_tile_start_offset =
+            (input_tensor_num_pages * ring_index + input_tile_id_start) % output_tensor_shard_num_pages;
 
         std::vector<uint32_t> input_tensor_cores_x;
         std::vector<uint32_t> input_tensor_cores_y;
