@@ -8,42 +8,49 @@
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::normalization {
+
+namespace {
+inline void check_tensor_BN(const Tensor& tensor, std::string_view name, std::uint32_t input_c_dim) {
+    TT_FATAL(
+        tensor.get_layout() == Layout::TILE, "batch_norm only supports tiled layout. Got: {}", tensor.get_layout());
+    TT_FATAL(
+        tensor.get_dtype() == DataType::BFLOAT16 || tensor.get_dtype() == DataType::FLOAT32,
+        "batch_norm only supports bfloat16, float32. Got: {}",
+        tensor.get_dtype());
+    TT_FATAL(
+        tensor.storage_type() == StorageType::DEVICE,
+        "Operands to batch_norm need to be on device! Got: {}",
+        tensor.storage_type());
+    TT_FATAL(tensor.buffer() != nullptr, "Operands to batch_norm need to be allocated in buffers on device!");
+    TT_FATAL(tensor.get_logical_shape().rank() == 4, "batch_norm supports tensors of rank 4");
+    TT_FATAL(tensor.get_logical_shape()[1] == input_c_dim, "{}[1] must be the same as input's channel size.", name);
+}
+}  // namespace
+
 void BatchNormOperation::validate_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& [input, batch_mean, batch_var, weight, bias, output] = tensor_args;
 
-    check_tensor(input, "batch_norm", "input");
-    check_tensor(batch_mean, "batch_norm", "batch_mean");
-    check_tensor(batch_var, "batch_norm", "batch_var");
-    check_tensor(weight, "batch_norm", "weight");
-    check_tensor(bias, "batch_norm", "bias");
-    check_tensor(output, "batch_norm", "output");
-
     // input (N, C, H, W)
     auto C = input.get_logical_shape()[1];
+
+    check_tensor_BN(input, "input_shape", C);
+    check_tensor_BN(batch_mean, "batch_mean_shape", C);
+    check_tensor_BN(batch_var, "batch_mean_shape", C);
+
     // output (N, C, H, W)
     if (output.has_value()) {
-        auto check_C = output.value().get_logical_shape()[1];
-        TT_FATAL(C == check_C, "output_shape[1] must be the same as input's channel size.");
+        check_tensor_BN(output.value(), "output_shape", C);
     }
-
-    // mean (1, C, 1, 1)
-    TT_FATAL(batch_mean.get_logical_shape()[1] == C, "batch_mean_shape[1] must be the same as input's channel size.");
-    // var (1, C, 1, 1)
-    TT_FATAL(batch_var.get_logical_shape()[1] == C, "batch_var_shape[1] must be the same as input's channel size.");
 
     // weight (1, C, 1, 1)
     if (weight.has_value()) {
-        TT_FATAL(
-            weight.value().get_logical_shape()[1] == C, "weight_shape[1] must be the same as input's channel size.");
-        TT_FATAL(
-            weight.value().get_logical_shape()[1] == C, "weight_shape[1] must be the same as input's channel size.");
+        check_tensor_BN(weight.value(), "weight_shape", C);
     }
 
     // bias (1, C, 1, 1)
     if (bias.has_value()) {
-        TT_FATAL(bias.value().get_logical_shape()[1] == C, "bias_shape[1] must be the same as input's channel size.");
-        TT_FATAL(bias.value().get_logical_shape()[1] == C, "bias_shape[1] must be the same as input's channel size.");
+        check_tensor_BN(bias.value(), "bias_shape", C);
     }
 }
 
@@ -127,7 +134,7 @@ std::tuple<BatchNormOperation::operation_attributes_t, BatchNormOperation::tenso
     std::optional<Tensor> bias,
     std::optional<Tensor> output,
     const std::optional<MemoryConfig>& memory_config) {
-    operation_attributes_t operation_attributes{eps, memory_config.value_or(input.memory_config())};
+    operation_attributes_t operation_attributes{eps, memory_config.value_or(input.memory_config()), input.get_dtype()};
     tensor_args_t tensor_args{input, batch_mean, batch_var, std::move(weight), std::move(bias), std::move(output)};
     return {operation_attributes, tensor_args};
 }

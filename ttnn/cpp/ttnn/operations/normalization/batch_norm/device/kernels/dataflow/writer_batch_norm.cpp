@@ -89,7 +89,7 @@ void kernel_main() {
             uint32_t l1_write_addr = get_write_ptr(cb_id_src);
             noc_async_read_tile(tile_offset, src, l1_write_addr);
             noc_async_read_barrier();
-            fill_tile_with_first_element_bfloat16(cb_id_src);
+            FILL_TILE_WITH_FIRST_ELEMENT(cb_id_src);
             cb_push_back(cb_id_src, onetile);
 
             // read a tile from batch variance
@@ -97,7 +97,7 @@ void kernel_main() {
             uint32_t l1_batch_var_write_addr = get_write_ptr(cb_id_batch_var);
             noc_async_read_tile(tile_offset, batch_var, l1_batch_var_write_addr);
             noc_async_read_barrier();
-            fill_tile_with_first_element_bfloat16(cb_id_batch_var);
+            FILL_TILE_WITH_FIRST_ELEMENT(cb_id_batch_var);
             cb_push_back(cb_id_batch_var, onetile);
 
             if constexpr (weight_has_value) {  // read a tile from weight tensor
@@ -105,7 +105,7 @@ void kernel_main() {
                 uint32_t l1_weight_write_addr = get_write_ptr(cb_id_weight);
                 noc_async_read_tile(tile_offset, weight, l1_weight_write_addr);
                 noc_async_read_barrier();
-                fill_tile_with_first_element_bfloat16(cb_id_weight);
+                FILL_TILE_WITH_FIRST_ELEMENT(cb_id_weight);
                 cb_push_back(cb_id_weight, onetile);
             }
 
@@ -114,7 +114,7 @@ void kernel_main() {
                 uint32_t l1_bias_write_addr = get_write_ptr(cb_id_bias);
                 noc_async_read_tile(tile_offset, bias, l1_bias_write_addr);
                 noc_async_read_barrier();
-                fill_tile_with_first_element_bfloat16(cb_id_bias);
+                FILL_TILE_WITH_FIRST_ELEMENT(cb_id_bias);
                 cb_push_back(cb_id_bias, onetile);
             }
 
