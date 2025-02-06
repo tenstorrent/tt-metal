@@ -443,7 +443,6 @@ void write_interleaved_buffer_to_device(
     uint32_t byte_offset_in_cq =
         hal.get_alignment(HalMemType::HOST);  // data appended after CQ_PREFETCH_CMD_RELAY_INLINE
                                               // + CQ_DISPATCH_CMD_WRITE_PAGED
-    const uint32_t num_banks = buffer.device()->allocator()->get_num_banks(buffer.buffer_type());
     while (dispatch_params.total_pages_to_write > 0) {
         dispatch_params.calculate_issue_wait();
         update_byte_offset_in_cq(byte_offset_in_cq, dispatch_params.issue_wait);
