@@ -73,6 +73,13 @@ def get_core_range_set(output_core_grid):
     return output_core_range_set
 
 
+CORE_RANGE_SET_1x1 = ttnn.CoreRangeSet(
+    {
+        ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0)),
+    }
+)
+
+
 # Enumerate the post-commit cases explicitly
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
@@ -115,6 +122,16 @@ def get_core_range_set(output_core_grid):
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(5, 4))}),
             (32, 160),
             get_core_range_set(PREFETCHER_NOC1_RING),
+            ttnn.TILE_LAYOUT,
+        ),
+        (  # AllGather for layernorm
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            (1, 1, 32, 128),
+            3,
+            (32, 32),
+            CORE_RANGE_SET_1x1,
+            (32, 128),
+            CORE_RANGE_SET_1x1,
             ttnn.TILE_LAYOUT,
         ),
     ),
