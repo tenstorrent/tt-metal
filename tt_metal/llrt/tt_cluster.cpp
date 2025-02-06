@@ -391,7 +391,7 @@ CoreCoord Cluster::get_virtual_coordinate_from_logical_coordinates(
     }
 
     tt::umd::CoreCoord translated_coord =
-        soc_desc.translate_coord_to(logical_coord, CoordSystem::LOGICAL, CoordSystem::TRANSLATED);
+        soc_desc.translate_coord_to({logical_coord, core_type, CoordSystem::LOGICAL}, CoordSystem::TRANSLATED);
     return {translated_coord.x, translated_coord.y};
 }
 
