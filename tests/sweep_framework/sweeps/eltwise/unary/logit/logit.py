@@ -14,10 +14,6 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
 
-# Override the default timeout in seconds for hang detection.
-TIMEOUT = 30
-
-random.seed(0)
 
 # Parameters provided to the test vector generator are defined here.
 # They are defined as dict-type suites that contain the arguments to the run function as keys, and lists of possible inputs as values.
@@ -61,13 +57,13 @@ def run(
     *,
     device,
 ) -> list:
-    data_seed = random.randint(0, 20000000)
-    torch.manual_seed(data_seed)
+    torch.manual_seed(0)
 
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(input_shape)
-    torch_output_tensor = torch.logit(torch_input_tensor_a, eps)
+    golden_function = ttnn.get_golden_function(ttnn.logit)
+    torch_output_tensor = golden_function(torch_input_tensor_a, eps=eps, device=device)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -83,5 +79,4 @@ def run(
     e2e_perf = stop_measuring_time(start_time)
 
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.99)
-    # print(f"eps {eps} pcc {pcc}")
     return [pcc, e2e_perf]

@@ -828,13 +828,24 @@ Tensor _logit(const Tensor& input_a, float eps, const std::optional<MemoryConfig
         tt::tt_metal::experimental::hal::get_inf(),
         std::nullopt,
         output_mem_config);
-    Tensor logit_result = ttnn::where(
-        ttnn::eq(logit_input, 1.0, std::nullopt, output_mem_config),
-        t_inf,
-        ttnn::where(
-            ttnn::ltz(log_input, output_mem_config),
-            tt::tt_metal::experimental::hal::get_nan(),
-            ttnn::log(log_input, output_mem_config)));
+    Tensor logit_result;
+    if (eps == 0.0 || eps == 1.0) {
+        logit_result = ttnn::where(
+            ttnn::eqz(logit_input, output_mem_config),
+            t_inf,
+            ttnn::where(
+                ttnn::eq(logit_input, 1.0, std::nullopt, output_mem_config),
+                tt::tt_metal::experimental::hal::get_inf(),
+                ttnn::log(log_input, output_mem_config)));
+    } else {
+        logit_result = ttnn::where(
+            ttnn::eq(logit_input, 1.0, std::nullopt, output_mem_config),
+            t_inf,
+            ttnn::where(
+                ttnn::ltz(log_input, output_mem_config),
+                tt::tt_metal::experimental::hal::get_nan(),
+                ttnn::log(log_input, output_mem_config)));
+    }
     return logit_result;
 }
 
