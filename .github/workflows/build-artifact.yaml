@@ -209,14 +209,15 @@ jobs:
 
       - name: 'Tar files'
         if: ${{ inputs.publish-artifact }}
-        run: tar -cvhf ttm_any.tar ttnn/ttnn/*.so build/lib ttnn/ttnn/*.so build/programming_examples build/test build/tools build/tt-train data runtime
+        run: tar -cvhf /work/ttm_any.tar ttnn/ttnn/*.so build/lib ttnn/ttnn/*.so build/programming_examples build/test build/tools build/tt-train data runtime
 
       - name: ☁️ Upload tarball
         if: ${{ inputs.publish-artifact }}
         uses: actions/upload-artifact@v4
         with:
           name: TTMetal_build_any${{ (inputs.tracy && '_profiler') || '' }}
-          path: ttm_any.tar
+          path: /work/ttm_any.tar
+          if-no-files-found: error
 
       - name: Cleanup
         if: always()
