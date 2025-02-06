@@ -11,13 +11,13 @@ import os
 import torch
 from typing import Optional, Dict
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
-    pre_process_input,
-    post_process_output,
     permute_conv_parameters,
     weight_to_bfp8,
-    dealloc_input,
 )
-from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import conv_cache
+from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
+    conv_cache,
+    get_default_compute_config,
+)
 from loguru import logger
 
 
@@ -721,13 +721,7 @@ class resnetBlock2D:
             transpose_shards=False,
             reshard_if_not_optimal=False,
         )
-        compute_config = ttnn.init_device_compute_kernel_config(
-            self.device.arch(),
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=True,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=False,
-        )
+        compute_config = get_default_compute_config(self.device)
         if self.conv2_config_override and "act_block_h" in self.conv2_config_override:
             conv_config.act_block_h_override = self.conv2_config_override["act_block_h"]
 

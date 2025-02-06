@@ -20,8 +20,30 @@ def is_tile_dim_alligned(dim):
     return dim % 32 == 0
 
 
-def pre_process_input(device, tensor):
+def pre_process_input(tensor):
     return ttnn.permute(tensor, (0, 2, 3, 1))
+
+
+# This function takes torch tensor in [N, Ci, H, W] format, transforms it to
+# [1, 1, N*H*W, Ci] format and applies needed layout, type and memory config
+def preprocess_and_push_input_to_device(
+    device, input, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+):
+    input = torch.permute(input, (0, 2, 3, 1))
+    input = torch.reshape(
+        input,
+        (
+            1,
+            1,
+            input.shape[0] * input.shape[1] * input.shape[2],
+            input.shape[3],
+        ),
+    )
+
+    input = ttnn.from_torch(input, ttnn.bfloat16)
+    input = ttnn.to_layout(input, layout)
+    input = ttnn.to_dtype(input, dtype)
+    return ttnn.to_device(input, device, memory_config=memory_config)
 
 
 def pad_encoder_hidden_states(device, tensor, required_sequence_length):
@@ -60,36 +82,21 @@ def pad_encoder_hidden_states(device, tensor, required_sequence_length):
     return tensor
 
 
-def post_process_output(device, tensor, batch_size, output_height, output_width, output_channels):
-    tensor = ttnn.to_layout(
-        tensor,
-        ttnn.ROW_MAJOR_LAYOUT,  # use_multicore=ttnn.get_memory_config(tensor).shard_spec is not None
-    )
-    tensor = ttnn.from_device(tensor)
+def post_process_output_and_move_to_host(tensor, batch_size, output_height, output_width, output_channels):
     assert output_channels == tensor.shape[3]
-    tensor = fallback_ops.reshape(
-        tensor,
-        batch_size,
-        output_height,
-        output_width,
-        output_channels,
-        output_layout=ttnn.ROW_MAJOR_LAYOUT,
-        output_on_device=False,
+
+    torch_tensor = ttnn.to_torch(tensor)
+    torch_tensor = torch.reshape(
+        torch_tensor,
+        (
+            batch_size,
+            output_height,
+            output_width,
+            output_channels,
+        ),
     )
-    tensor = fallback_ops.permute(tensor, (0, 3, 1, 2), output_layout=ttnn.ROW_MAJOR_LAYOUT, output_on_device=False)
-    tensor = ttnn.to_layout(tensor, ttnn.TILE_LAYOUT)
-    tensor = ttnn.to_device(tensor, device)
-    return tensor
-
-
-def run_ttnn_conv_with_pre_and_post_tensor_formatting(
-    device, ttnn_conv_op, tensor: ttnn.Tensor, batch_size, output_height, output_width, output_channels
-) -> ttnn.Tensor:
-    tensor = pre_process_input(device, tensor)
-    # print("Running conv op")
-    tensor = ttnn_conv_op(tensor)
-    tensor = post_process_output(device, tensor, batch_size, output_height, output_width, output_channels)
-    return tensor
+    torch_tensor = torch.permute(torch_tensor, (0, 3, 1, 2))
+    return torch_tensor
 
 
 def ttnn_to_torch(input):
@@ -267,3 +274,13 @@ def reshard_to(tensor, grid_size, layout, col_major=False, shape=None):
             ttnn.ShardOrientation.ROW_MAJOR,
         )
     return tensor
+
+
+def get_default_compute_config(device):
+    return ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=True,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )

@@ -19,7 +19,7 @@ from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_upblock_2d_new_co
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
 from ttnn.model_preprocessing import preprocess_model_parameters
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
-    post_process_output,
+    post_process_output_and_move_to_host,
     weight_to_bfp8,
 )
 
@@ -100,6 +100,6 @@ def test_upblock_512x512(reset_seeds, device, res_hidden_states_tuple, hidden_st
         upsample_size=None,
     )
 
-    op = post_process_output(device, op, N, H * 2, W * 2, in_channels)
-    op = ttnn.to_torch(op)
+    op = post_process_output_and_move_to_host(op, N, H * 2, W * 2, in_channels)
+
     assert_with_pcc(torch_output, op, 0.95)
