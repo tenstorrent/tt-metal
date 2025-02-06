@@ -25,6 +25,7 @@
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/jit_build/genfiles.hpp"
+#include "tt_metal/jit_build/build_env_manager.hpp"
 #include "llrt.hpp"
 #include "tt_metal/program.hpp"
 #include "tracy/Tracy.hpp"
@@ -41,7 +42,7 @@ void GenerateBinaries(IDevice* device, JitBuildOptions &build_options, const std
     //const std::string tracyPrefix = "GenerateBinaries_";
     //ZoneName((tracyPrefix + build_options.name).c_str(), build_options.name.length() + tracyPrefix.length());
     try {
-        jit_build_genfiles_descriptors(device->build_env(), build_options);
+        jit_build_genfiles_descriptors(BuildEnvManager::get_instance().get_build_env(device->id()), build_options);
         kernel->generate_binaries(device, build_options);
     } catch (std::runtime_error &ex) {
         TT_THROW("Failed to generate binaries for {} {}", kernel->name(), ex.what());
@@ -1114,7 +1115,7 @@ void detail::Program_::populate_dispatch_data(IDevice* device) {
             } else {
                 sub_kernels = {kernel->processor()};
             }
-            const auto &binaries = kernel->binaries(device->build_key());
+            const auto& binaries = kernel->binaries(BuildEnvManager::get_instance().get_build_key(device->id()));
             std::vector<uint32_t> dst_base_addrs;
             std::vector<uint32_t> page_offsets;
             std::vector<uint32_t> lengths;
@@ -1307,7 +1308,7 @@ void Program::populate_dispatch_data(IDevice* device) { pimpl_->populate_dispatc
 
 void Program::generate_dispatch_commands(IDevice* device) {
     bool is_cached = this->is_cached();
-    uint64_t command_hash = device->build_key();
+    uint64_t command_hash = BuildEnvManager::get_instance().get_build_key(device->id());
     if (not hal.is_coordinate_virtualization_enabled()) {
         // When coordinate virtualization is not enabled, explicitly encode the device
         // id into the command hash, to always assert on programs being reused across devices.
@@ -1333,7 +1334,7 @@ void Program::allocate_kernel_bin_buf_on_device(IDevice* device) { pimpl_->alloc
 
 void detail::Program_::compile(IDevice* device, bool fd_bootloader_mode) {
     //ZoneScoped;
-    if (compiled_.contains(device->build_key())) {
+    if (compiled_.contains(BuildEnvManager::get_instance().get_build_key(device->id()))) {
         return;
     }
     // Clear the determined sub_device_ids when we compile the program for the first time
@@ -1393,7 +1394,7 @@ void detail::Program_::compile(IDevice* device, bool fd_bootloader_mode) {
             validate_kernel_placement(kernel);
             launch_build_step(
                 [kernel, device, this] {
-                    JitBuildOptions build_options(device->build_env());
+                    JitBuildOptions build_options(BuildEnvManager::get_instance().get_build_env(device->id()));
                     kernel->set_build_options(build_options);
                     if (this->compiled_.empty()) {
                         this->set_remote_circular_buffer_init(kernel);
@@ -1401,7 +1402,11 @@ void detail::Program_::compile(IDevice* device, bool fd_bootloader_mode) {
                     this->set_cb_data_fmt(kernel->logical_coreranges(), build_options);
                     this->set_cb_tile_dims(kernel->logical_coreranges(), build_options);
 
-                    auto kernel_hash = KernelCompileHash(kernel, build_options, device->build_key(), device->get_device_kernel_defines_hash());
+                    auto kernel_hash = KernelCompileHash(
+                        kernel,
+                        build_options,
+                        BuildEnvManager::get_instance().get_build_key(device->id()),
+                        device->get_device_kernel_defines_hash());
                     std::string kernel_path_suffix = kernel->name() + "/" + std::to_string(kernel_hash) + "/";
                     kernel->set_full_name(kernel_path_suffix);
                     build_options.set_name(kernel_path_suffix);
@@ -1446,7 +1451,7 @@ void detail::Program_::compile(IDevice* device, bool fd_bootloader_mode) {
     if (detail::MemoryReporter::enabled()) {
         detail::MemoryReporter::inst().flush_program_memory_usage(get_id(), device);
     }
-    compiled_.insert(device->build_key());
+    compiled_.insert(BuildEnvManager::get_instance().get_build_key(device->id()));
 }
 
 void Program::compile(IDevice* device, bool fd_bootloader_mode) { pimpl_->compile(device, fd_bootloader_mode); }
