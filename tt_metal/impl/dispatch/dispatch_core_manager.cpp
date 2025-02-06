@@ -25,9 +25,9 @@ void dispatch_core_manager::initialize(const DispatchCoreConfig& dispatch_core_c
     }
 }
 
-static dispatch_core_manager::dispatch_core_manager& instance() {
-    TT_ASSERT(_inst != nullptr, "Trying to get dispatch_core_manager without initializing it");
-    return *_inst;
+static dispatch_core_manager& dispatch_core_manager::instance() {
+    TT_ASSERT(dispatch_core_manager::_inst != nullptr, "Trying to get dispatch_core_manager without initializing it");
+    return *dispatch_core_manager::_inst;
 }
 
 const tt_cxy_pair& dispatch_core_manager::prefetcher_core(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
