@@ -59,7 +59,7 @@ void kernel_main() {
     uint32_t shard_tile_id = 0;  // first_core_tile_start_offset;
     uint32_t core_id = 0;
     while (tiles_read < num_tiles_to_read) {
-        DPRINT << "tiles_read: " << tiles_read << "\n";
+        // DPRINT << "tiles_read: " << tiles_read << "\n";
         uint32_t num_tiles_to_read_this_core =
             std::min(num_tiles_per_core - shard_tile_id, num_tiles_to_read - tiles_read);
         cb_reserve_back(cb0_id, num_tiles_to_read_this_core);
