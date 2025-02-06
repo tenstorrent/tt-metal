@@ -22,7 +22,7 @@ uint32_t router_mask;
 
 // careful, may be null
 tt_l1_ptr uint32_t* const kernel_status = reinterpret_cast<tt_l1_ptr uint32_t*>(kernel_status_buf_addr);
-volatile tt_l1_ptr fabric_router_l1_config_t* routing_table =
+volatile fabric_router_l1_config_t* routing_table =
     reinterpret_cast<tt_l1_ptr fabric_router_l1_config_t*>(routing_table_addr);
 
 volatile gatekeeper_info_t* gk_info = (volatile gatekeeper_info_t*)gatekeeper_info_addr;

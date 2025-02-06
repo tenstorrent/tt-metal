@@ -70,10 +70,14 @@ uint32_t max_packet_size_mask;
 
 auto input_queue_state = select_input_queue<pkt_dest_size_choice>();
 volatile local_pull_request_t *local_pull_request = (volatile local_pull_request_t *)(data_buffer_start_addr - 1024);
-volatile tt_l1_ptr fabric_router_l1_config_t* routing_table;
+volatile fabric_router_l1_config_t* routing_table;
 volatile fabric_client_interface_t* client_interface;
 
+#ifdef FVC_MODE_PULL
 fvc_producer_state_t test_producer __attribute__((aligned(16)));
+#else
+fvc_inbound_push_state_t test_producer __attribute__((aligned(16)));
+#endif
 fvcc_inbound_state_t fvcc_test_producer __attribute__((aligned(16)));
 
 uint64_t xy_local_addr;
@@ -403,11 +407,11 @@ void kernel_main() {
     rx_addr_hi = base_target_address + rx_buf_size;
 
     zero_l1_buf(test_results, test_results_size_bytes);
-    test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_STARTED;
-    test_results[PQ_TEST_STATUS_INDEX+1] = (uint32_t) local_pull_request;
+    test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_STARTED;
+    test_results[TT_FABRIC_STATUS_INDEX + 1] = (uint32_t)local_pull_request;
 
-    test_results[PQ_TEST_MISC_INDEX] = 0xff000000;
-    test_results[PQ_TEST_MISC_INDEX + 1] = 0xcc000000 | src_endpoint_id;
+    test_results[TT_FABRIC_MISC_INDEX] = 0xff000000;
+    test_results[TT_FABRIC_MISC_INDEX + 1] = 0xcc000000 | src_endpoint_id;
 
     zero_l1_buf(reinterpret_cast<tt_l1_ptr uint32_t*>(data_buffer_start_addr), data_buffer_size_words * PACKET_WORD_SIZE_BYTES);
     zero_l1_buf((uint32_t*)local_pull_request, sizeof(local_pull_request_t));
@@ -421,7 +425,15 @@ void kernel_main() {
         input_queue_state.init(src_endpoint_id, prng_seed);
     }
 
+#ifdef FVC_MODE_PULL
     test_producer.init(data_buffer_start_addr, data_buffer_size_words);
+#else
+    test_producer.init(
+        data_buffer_start_addr,
+        data_buffer_size_words,
+        FABRIC_ROUTER_DATA_BUF_START,
+        FABRIC_ROUTER_OUTBOUND_BUF_SIZE / PACKET_WORD_SIZE_BYTES);
+#endif
     fvcc_test_producer.init(data_buffer_start_addr, 0x0, 0x0);
 
     uint32_t temp = max_packet_size_words;
@@ -445,7 +457,7 @@ void kernel_main() {
     // all the tx workers are ready on this chip
     while (*(volatile tt_l1_ptr uint32_t*)signal_address == 0);
 
-    test_results[PQ_TEST_MISC_INDEX] = 0xff000001;
+    test_results[TT_FABRIC_MISC_INDEX] = 0xff000001;
 
     uint64_t data_words_sent = 0;
     uint64_t iter = 0;
@@ -483,7 +495,11 @@ void kernel_main() {
         if (test_producer.get_curr_packet_valid<FVC_MODE_ENDPOINT>()) {
             curr_packet_size =
                 (test_producer.current_packet_header.routing.packet_size_bytes + PACKET_WORD_SIZE_BYTES - 1) >> 4;
+#ifdef FVC_MODE_PULL
             uint32_t curr_data_words_sent = test_producer.pull_data_from_fvc_buffer<FVC_MODE_ENDPOINT>();
+#else
+            uint32_t curr_data_words_sent = test_producer.push_data_to_eth_router<FVC_MODE_ENDPOINT>();
+#endif
             curr_packet_words_sent += curr_data_words_sent;
             data_words_sent += curr_data_words_sent;
             if constexpr (!(data_sent_per_iter_low == 0 && data_sent_per_iter_high == 0)) {
@@ -520,9 +536,9 @@ void kernel_main() {
     uint64_t cycles_elapsed = get_timestamp() - start_timestamp;
 
     uint64_t num_packets = input_queue_state.get_num_packets();
-    set_64b_result(test_results, data_words_sent, PQ_TEST_WORD_CNT_INDEX);
-    set_64b_result(test_results, cycles_elapsed, PQ_TEST_CYCLES_INDEX);
-    set_64b_result(test_results, iter, PQ_TEST_ITER_INDEX);
+    set_64b_result(test_results, data_words_sent, TT_FABRIC_WORD_CNT_INDEX);
+    set_64b_result(test_results, cycles_elapsed, TT_FABRIC_CYCLES_INDEX);
+    set_64b_result(test_results, iter, TT_FABRIC_ITER_INDEX);
     set_64b_result(test_results, total_data_words, TX_TEST_IDX_TOT_DATA_WORDS);
     set_64b_result(test_results, num_packets, TX_TEST_IDX_NPKT);
     set_64b_result(test_results, zero_data_sent_iter, TX_TEST_IDX_ZERO_DATA_WORDS_SENT_ITER);
@@ -530,13 +546,13 @@ void kernel_main() {
     set_64b_result(test_results, many_data_sent_iter, TX_TEST_IDX_MANY_DATA_WORDS_SENT_ITER);
 
     if (test_producer.packet_corrupted) {
-        test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_BAD_HEADER;
-        test_results[PQ_TEST_MISC_INDEX] = packet_count;
+        test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_BAD_HEADER;
+        test_results[TT_FABRIC_MISC_INDEX] = packet_count;
     } else if (!timeout) {
-        test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_PASS;
-        test_results[PQ_TEST_MISC_INDEX] = packet_count;
+        test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_PASS;
+        test_results[TT_FABRIC_MISC_INDEX] = packet_count;
     } else {
-        test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_TIMEOUT;
+        test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_TIMEOUT;
         set_64b_result(test_results, words_flushed, TX_TEST_IDX_WORDS_FLUSHED);
     }
 }
