@@ -8,7 +8,7 @@ import torch
 
 from tests.didt.op_test_base import OpTestBase, get_blackhole_grid_size
 import ttnn
-from models.utility_functions import skip_for_blackhole, is_blackhole
+from models.utility_functions import skip_for_blackhole, is_blackhole, skip_for_wormhole_b0
 
 
 class LMHeadTest(OpTestBase):
@@ -78,11 +78,10 @@ def test_lm_head_matmul(
     out_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
 
     # Initialize matmul configurations
-    compute_grid = (
-        get_blackhole_grid_size(simulate_bh_harvesting)
-        if is_blackhole()
-        else ttnn.CoreCoord(grid_size[0], grid_size[1])
-    )
+    if simulate_bh_harvesting:
+        compute_grid = get_blackhole_grid_size(simulate_bh_harvesting)
+    else:
+        compute_grid = ttnn.CoreCoord(grid_size[0], grid_size[1])
 
     in1_dtype = ttnn.DataType.BFLOAT8_B
     seq_len = 32
@@ -194,7 +193,7 @@ def test_specific_board_lm_head_matmul(board_mesh_device, iterations, determinis
     test_lm_head_matmul(board_mesh_device, iterations, determinism_check_iterations, use_program_cache, False)
 
 
-@skip_for_blackhole("Grid size reduction for Blackhole has not been tested")
+@skip_for_blackhole("Use test_blackhole_grid_size_lm_head_matmul test for blackhole!")
 @pytest.mark.parametrize(
     "grid_size",
     [(i, 8) for i in range(1, 9)] + [(8, i) for i in range(1, 8)],
@@ -211,6 +210,31 @@ def test_specific_board_lm_head_matmul(board_mesh_device, iterations, determinis
     indirect=["mesh_device"],
 )
 def test_grid_size_lm_head_matmul(mesh_device, grid_size, iterations, determinism_check_iterations, use_program_cache):
+    test_lm_head_matmul(
+        mesh_device, iterations, determinism_check_iterations, use_program_cache, False, grid_size=grid_size
+    )
+
+
+@skip_for_wormhole_b0("Use test_grid_size_lm_head_matmul for blackhole!")
+@pytest.mark.parametrize(
+    "grid_size",
+    [(i, 10) for i in range(1, 14)] + [(13, i) for i in range(1, 10)],
+    ids=[f"{i}x10" for i in range(1, 14)]
+    + [f"13x{i}" for i in range(1, 10)],  # 1x10, 2x10 ..., 13x10, 13x1, 13x2, 13x9
+)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        pytest.param(1, id="1chips"),
+        pytest.param(2, id="2chips"),
+        pytest.param(8, id="8chips"),
+        pytest.param((8, 4), id="galaxy"),
+    ],
+    indirect=["mesh_device"],
+)
+def test_blackhole_grid_size_lm_head_matmul(
+    mesh_device, grid_size, iterations, determinism_check_iterations, use_program_cache
+):
     test_lm_head_matmul(
         mesh_device, iterations, determinism_check_iterations, use_program_cache, False, grid_size=grid_size
     )
