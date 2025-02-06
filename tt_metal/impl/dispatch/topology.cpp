@@ -386,7 +386,8 @@ std::vector<DispatchKernelNode> generate_nodes(const std::set<chip_id_t>& device
     // of active devices. TODO: read this out of YAML instead of the structs above?
     uint32_t total_devices = tt::Cluster::instance().number_of_devices();
     TT_ASSERT(
-        total_devices == 1 or total_devices == 2 or total_devices == 4 or total_devices == 8 or total_devices == 36,
+        total_devices == 1 or total_devices == 2 or total_devices == 4 or total_devices == 8 or total_devices == 32 or
+            total_devices == 36,
         "Unexpected target.");
     uint32_t num_devices = device_ids.size();
     TT_ASSERT(num_devices > 0, "Can't determine dispatch architecture with no active devices.");
@@ -692,7 +693,7 @@ void configure_dispatch_cores(IDevice* device) {
     // Set up completion_queue_writer core. This doesn't actually have a kernel so keep it out of the struct and config
     // it here. TODO: should this be in the struct?
     CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
-    auto& my_dispatch_constants = dispatch_constants::get(dispatch_core_type);
+    auto& my_dispatch_constants = DispatchMemMap::get(dispatch_core_type);
     uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
     uint32_t cq_size = device->sysmem_manager().get_cq_size();
     std::vector<uint32_t> zero = {0x0};

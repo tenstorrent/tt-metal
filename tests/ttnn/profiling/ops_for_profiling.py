@@ -1135,7 +1135,7 @@ def threshold(x):
 
 
 def reshape(x):
-    shape = x.shape.with_tile_padding()
+    shape = x.padded_shape
     ttnn.reshape(x, [shape[-4], shape[-3], shape[-1], shape[-2]])
 
 
@@ -1172,7 +1172,7 @@ def tilize(x):
 
 
 def tilize_with_val_padding(x):
-    shape = x.shape.with_tile_padding()
+    shape = x.padded_shape
 
     output_tensor_shape = [shape[-4], shape[-3], shape[-2] + 32, shape[-1] + 32]
 
@@ -1180,7 +1180,7 @@ def tilize_with_val_padding(x):
 
 
 def untilize_with_unpadding(x):
-    shape = x.shape.with_tile_padding()
+    shape = x.padded_shape
 
     unpadded_shape_end = [
         shape[0] - 1,
@@ -1193,7 +1193,7 @@ def untilize_with_unpadding(x):
 
 
 def pad(x):
-    shape = x.shape.with_tile_padding()
+    shape = x.padded_shape
 
     padding = [
         (0, 0),
@@ -1206,7 +1206,7 @@ def pad(x):
 
 
 def ttnn_slice(x):
-    shape = x.shape.with_tile_padding()
+    shape = x.padded_shape
 
     output_tensor_end = (
         shape[0],
@@ -1227,9 +1227,7 @@ def arange(x):
 
 
 def full(x):
-    ttnn.full(
-        shape=x.shape.with_tile_padding(), fill_value=2, dtype=x.get_dtype(), layout=x.get_layout(), device=x.device()
-    )
+    ttnn.full(shape=x.padded_shape, fill_value=2, dtype=x.get_dtype(), layout=x.get_layout(), device=x.device())
 
 
 def full_like(x):
@@ -1237,15 +1235,15 @@ def full_like(x):
 
 
 def ones(x):
-    ttnn.ones(shape=x.shape.with_tile_padding(), dtype=x.get_dtype(), layout=x.get_layout(), device=x.device())
+    ttnn.ones(shape=x.padded_shape, dtype=x.get_dtype(), layout=x.get_layout(), device=x.device())
 
 
 def zeros(x):
-    ttnn.zeros(shape=x.shape.with_tile_padding(), dtype=x.get_dtype(), layout=x.get_layout(), device=x.device())
+    ttnn.zeros(shape=x.padded_shape, dtype=x.get_dtype(), layout=x.get_layout(), device=x.device())
 
 
 def empty(x):
-    ttnn.empty(shape=x.shape.with_tile_padding(), dtype=x.get_dtype(), layout=x.get_layout(), device=x.device())
+    ttnn.empty(shape=x.padded_shape, dtype=x.get_dtype(), layout=x.get_layout(), device=x.device())
 
 
 def sum_dim_0(x):
@@ -1317,7 +1315,7 @@ def rsqrt_slow(x):
 
 
 def fill_rm(x):
-    shape = x.shape.with_tile_padding()
+    shape = x.padded_shape
 
     ttnn.fill_rm(
         N=shape[0],
@@ -1333,7 +1331,7 @@ def fill_rm(x):
 
 
 def fill_ones_rm(x):
-    shape = x.shape.with_tile_padding()
+    shape = x.padded_shape
 
     ttnn.fill_ones_rm(N=shape[0], C=shape[1], H=shape[2], W=shape[3], hOnes=shape[2] - 32, wOnes=shape[3] - 32, any=x)
 

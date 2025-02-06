@@ -338,16 +338,10 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
 
     bool interface_with_dram = (remote_core_type == CoreType::DRAM);
     tt::tt_metal::KernelHandle kernel_id_0 = tt::tt_metal::CreateKernel(
-        program,
-        kernel_name,
-        all_cores,
-        tt::tt_metal::ReaderDataMovementConfig({cb_index, interface_with_dram}));
+        program, kernel_name, all_cores, tt::tt_metal::ReaderDataMovementConfig({cb_index, interface_with_dram}));
 
     tt::tt_metal::KernelHandle kernel_id_1 = tt::tt_metal::CreateKernel(
-        program,
-        kernel_name,
-        all_cores,
-        tt::tt_metal::WriterDataMovementConfig({cb_index, interface_with_dram}));
+        program, kernel_name, all_cores, tt::tt_metal::WriterDataMovementConfig({cb_index, interface_with_dram}));
 
     tt::tt_metal::CircularBufferConfig cb_config =
         tt::tt_metal::CircularBufferConfig(total_size, {{cb_index, data_format}})
@@ -359,8 +353,9 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
     uint32_t remote_core_units_rem = remote_units_per_shard;
     uint32_t remote_address = remote_tensor.buffer()->address();
     auto remote_buffer_type = remote_tensor.buffer()->buffer_type();
-    auto bank_id = device->bank_ids_from_logical_core(remote_buffer_type, remote_cores[remote_core_idx])[0];
-    uint32_t bank_offset = device->bank_offset(remote_buffer_type, bank_id);
+    auto bank_id =
+        device->allocator()->get_bank_ids_from_logical_core(remote_buffer_type, remote_cores[remote_core_idx])[0];
+    uint32_t bank_offset = device->allocator()->get_bank_offset(remote_buffer_type, bank_id);
 
     std::array<tt::tt_metal::KernelHandle, 2> kernels = {kernel_id_0, kernel_id_1};
     uint32_t local_units_left = num_units;
@@ -380,12 +375,13 @@ operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& inpu
                     if (remote_core_units_rem == 0) {
                         remote_core_idx++;
                         remote_core_units_rem = remote_units_per_shard;
-                        bank_id =
-                            device->bank_ids_from_logical_core(remote_buffer_type, remote_cores[remote_core_idx])[0];
-                        bank_offset = device->bank_offset(remote_buffer_type, bank_id);
+                        bank_id = device->allocator()->get_bank_ids_from_logical_core(
+                            remote_buffer_type, remote_cores[remote_core_idx])[0];
+                        bank_offset = device->allocator()->get_bank_offset(remote_buffer_type, bank_id);
                     }
                     uint32_t units_to_transfer = std::min(remote_core_units_rem, local_units_to_transfer);
-                    bank_id = device->bank_ids_from_logical_core(remote_buffer_type, remote_cores[remote_core_idx])[0];
+                    bank_id = device->allocator()->get_bank_ids_from_logical_core(
+                        remote_buffer_type, remote_cores[remote_core_idx])[0];
                     kernel_args.insert(
                         kernel_args.end(),
                         {bank_id,
@@ -583,9 +579,9 @@ compute_width_sharded_reshard_runtime_args(
             const uint32_t remaining_output = remote_shard_width - remote_shard_offset;
             const uint32_t transfer_size = std::min(remaining_input, remaining_output);
 
-            const auto bank_id =
-                device->bank_ids_from_logical_core(remote_buffer_type, remote_cores[current_remote_core_idx])[0];
-            const auto bank_offset = device->bank_offset(remote_buffer_type, bank_id);
+            const auto bank_id = device->allocator()->get_bank_ids_from_logical_core(
+                remote_buffer_type, remote_cores[current_remote_core_idx])[0];
+            const auto bank_offset = device->allocator()->get_bank_offset(remote_buffer_type, bank_id);
             core_args.emplace_back(
                 element_size * transfer_size,
                 element_size * local_shard_offset,

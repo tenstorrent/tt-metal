@@ -118,7 +118,7 @@ static Tensor create_config_tensor(
      */
     const uint32_t config_buffer_entry_size = 2;
     uint32_t elems_per_core = config_buffer_entry_size * scale_factor_h * input_nsticks_per_core;
-    ttnn::SimpleShape config_shape({config_vector.size() / elems_per_core, elems_per_core});
+    ttnn::Shape config_shape({config_vector.size() / elems_per_core, elems_per_core});
     auto config_buffer = owned_buffer::create<uint16_t>(std::move(config_vector));
     return Tensor(OwnedStorage{config_buffer}, config_shape, DataType::UINT16, Layout::ROW_MAJOR);
 }
@@ -241,7 +241,7 @@ operation::ProgramWithCallbacks upsample_multi_core(
                                                : shard_spec.orientation;
     ShardSpec config_shard_spec(input.shard_spec().value().grid, shard_shape, config_tensor_shard_orientation);
     MemoryConfig memory_config{TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1_SMALL, config_shard_spec};
-    auto config_tensor_device = config_tensor.to(device, memory_config);
+    auto config_tensor_device = config_tensor.to_device(device, memory_config);
 
     tt::DataFormat config_df = tt::DataFormat::RawUInt16;
     auto config_buffer = config_tensor_device.device_buffer();

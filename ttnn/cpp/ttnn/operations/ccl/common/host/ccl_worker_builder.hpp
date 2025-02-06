@@ -62,6 +62,12 @@ void generate_ccl_command_stream_to_kernel_args(
     ttnn::ccl::tensor_address_runtime_args_overrider *rt_args_overrider_out,
     std::vector<uint32_t>& rt_args_out);
 
+/*
+ * @return the runtime args
+ */
+std::vector<uint32_t> generate_edm_connection_rt_args(
+    const ttnn::ccl::SenderWorkerAdapterSpec& connection_info, Program& program, CoreRangeSet worker_cores);
+
 // TODO: eventually take a fabric handle
 void generate_multi_input_command_stream_kernel_rt_args(
     Program& program,

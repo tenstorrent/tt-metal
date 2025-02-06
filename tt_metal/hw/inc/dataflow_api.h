@@ -119,6 +119,25 @@ FORCE_INLINE uint32_t get_bank_offset(uint32_t bank_index) {
     }
 }
 
+template <bool DRAM>
+FORCE_INLINE
+constexpr uint32_t get_allocator_alignment() {
+    if constexpr (DRAM) {
+        return DRAM_ALIGNMENT;
+    } else {
+        return L1_ALIGNMENT;
+    }
+}
+
+template <bool DRAM>
+FORCE_INLINE
+constexpr uint32_t get_log_base2_of_allocator_alignment() {
+    if constexpr (DRAM) {
+        return LOG_BASE_2_OF_DRAM_ALIGNMENT;
+    } else {
+        return LOG_BASE_2_OF_L1_ALIGNMENT;
+    }
+}
 }  // namespace interleaved_addr_gen
 
 // clang-format off
@@ -630,8 +649,9 @@ uint64_t get_dram_noc_addr(
     uint8_t noc = noc_index) {
     uint32_t bank_offset_index = interleaved_addr_gen::get_bank_offset_index<true>(id);
     uint32_t bank_index = interleaved_addr_gen::get_bank_index<true>(id, bank_offset_index);
-    uint32_t addr = (bank_offset_index * align_power_of_2(page_size, ALLOCATOR_ALIGNMENT)) + bank_base_address +
-                    offset + bank_to_dram_offset[bank_index];
+    uint32_t addr =
+        (bank_offset_index * align_power_of_2(page_size, interleaved_addr_gen::get_allocator_alignment<true>())) +
+        bank_base_address + offset + bank_to_dram_offset[bank_index];
     uint32_t noc_xy = interleaved_addr_gen::get_noc_xy<true>(bank_index, noc);
     uint64_t noc_addr = get_noc_addr_helper(noc_xy, addr);
     return noc_addr;
@@ -645,8 +665,9 @@ uint64_t get_l1_noc_addr(
     uint8_t noc = noc_index) {
     uint32_t bank_offset_index = interleaved_addr_gen::get_bank_offset_index<false>(id);
     uint32_t bank_index = interleaved_addr_gen::get_bank_index<false>(id, bank_offset_index);
-    uint32_t addr = (bank_offset_index * align_power_of_2(page_size, ALLOCATOR_ALIGNMENT)) + bank_base_address +
-                    offset + bank_to_dram_offset[bank_index];
+    uint32_t addr =
+        (bank_offset_index * align_power_of_2(page_size, interleaved_addr_gen::get_allocator_alignment<false>())) +
+        bank_base_address + offset + bank_to_dram_offset[bank_index];
     uint32_t noc_xy = interleaved_addr_gen::get_noc_xy<false>(bank_index, noc);
     uint64_t noc_addr = get_noc_addr_helper(noc_xy, addr);
     return noc_addr;
@@ -1018,7 +1039,7 @@ template <bool DRAM>
 struct InterleavedAddrGen {
     uint32_t bank_base_address;  // Base address for the whole tensor.
     const uint32_t page_size;    // Num bytes in page.
-    const uint32_t aligned_page_size = align_power_of_2(page_size, ALLOCATOR_ALIGNMENT);
+    const uint32_t aligned_page_size = align_power_of_2(page_size, interleaved_addr_gen::get_allocator_alignment<DRAM>());
 
     FORCE_INLINE
     uint32_t get_addr(
@@ -1053,9 +1074,11 @@ struct InterleavedPow2AddrGen {
     const uint32_t bank_base_address;
     const uint32_t log_base_2_of_page_size;  // WARNING: This struct is used for optimized get_noc_addr in which case
                                              // you know that bank_unit_size is a power of 2
-    const uint32_t aligned_log_base_2_of_page_size = this->log_base_2_of_page_size > LOG_BASE_2_OF_ALLOCATOR_ALIGNMENT
+    static constexpr uint32_t log_base_2_of_allocator_alignment =
+        interleaved_addr_gen::get_log_base2_of_allocator_alignment<DRAM>();
+    const uint32_t aligned_log_base_2_of_page_size = this->log_base_2_of_page_size > log_base_2_of_allocator_alignment
                                                          ? this->log_base_2_of_page_size
-                                                         : LOG_BASE_2_OF_ALLOCATOR_ALIGNMENT;
+                                                         : log_base_2_of_allocator_alignment;
 
     FORCE_INLINE
     uint32_t get_addr(
@@ -1168,9 +1191,11 @@ template <bool DRAM>
 struct InterleavedPow2AddrGenFast {
     uint32_t bank_base_address;              // Base address for the whole tensor.
     const uint32_t log_base_2_of_page_size;  // Num bytes in bank unit.
-    const uint32_t aligned_log_base_2_of_page_size = this->log_base_2_of_page_size > LOG_BASE_2_OF_ALLOCATOR_ALIGNMENT
+    static constexpr uint32_t log_base_2_of_allocator_alignment =
+        interleaved_addr_gen::get_log_base2_of_allocator_alignment<DRAM>();
+    const uint32_t aligned_log_base_2_of_page_size = this->log_base_2_of_page_size > log_base_2_of_allocator_alignment
                                                          ? this->log_base_2_of_page_size
-                                                         : LOG_BASE_2_OF_ALLOCATOR_ALIGNMENT;
+                                                         : log_base_2_of_allocator_alignment;
 
     FORCE_INLINE
     uint32_t get_addr(
@@ -1741,6 +1766,18 @@ void noc_async_writes_flushed(uint8_t noc = noc_index) {
 }
 
 /**
+ * This blocking call waits for all outstanding enqueued posted *noc_async_write*
+ * calls issued on the current Tensix core to depart, but will not wait
+ * for them to complete
+ */
+FORCE_INLINE
+void noc_async_posted_writes_flushed(uint8_t noc = noc_index) {
+    WAYPOINT("NPWW");
+    while (!ncrisc_noc_posted_writes_sent(noc));
+    WAYPOINT("NPWD");
+}
+
+/**
  * This blocking call waits for all the outstanding enqueued *noc_async_write*
  * calls issued on the current Tensix core to complete. After returning from
  * this call the *noc_async_write* queue will be empty for the current Tensix
@@ -1877,7 +1914,7 @@ void noc_inline_dw_write(uint64_t addr, uint32_t val, uint8_t be = 0xF, uint8_t 
     DEBUG_SANITIZE_NOC_ADDR(noc, addr, 4);
     noc_fast_write_dw_inline<proc_type, noc_mode>(
         noc,
-        write_reg_cmd_buf,
+        write_at_cmd_buf,
         val,
         addr,
         be,  // byte-enable
@@ -2008,6 +2045,31 @@ void noc_async_read_barrier_with_trid(uint32_t trid, uint8_t noc = noc_index) {
 #endif
     invalidate_l1_cache();
     WAYPOINT("NBTD");
+}
+
+inline void noc_async_write_one_packet_with_trid(
+    std::uint32_t src_local_l1_addr,
+    std::uint64_t dst_noc_addr,
+    std::uint32_t size,
+    std::uint32_t trid,
+    uint8_t noc = noc_index) {
+    WAYPOINT("NAWW");
+    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size);
+#ifndef ARCH_GRAYSKULL
+    ncrisc_noc_fast_write_any_len<proc_type, noc_mode, true, true>(
+        noc, write_cmd_buf, src_local_l1_addr, dst_noc_addr, size, NOC_UNICAST_WRITE_VC, false, false, 1, true, trid);
+#endif
+    WAYPOINT("NAWD");
+}
+
+FORCE_INLINE
+void noc_async_write_barrier_with_trid(uint32_t trid, uint8_t noc = noc_index) {
+    WAYPOINT("NWTW");
+#ifndef ARCH_GRAYSKULL
+    while (!ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc, trid));
+#endif
+    invalidate_l1_cache();
+    WAYPOINT("NWTD");
 }
 
 template <bool DRAM>

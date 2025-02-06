@@ -47,10 +47,10 @@ void ttnn_linear_backward(
     const auto& tensor_value = tensor->get_value();
     auto volume_without_features = tensor_value.get_logical_volume() / tensor_value.get_logical_shape()[-1];
     auto reshaped_tensor =
-        ttnn::reshape(tensor_value, ttnn::SimpleShape({volume_without_features, tensor_value.get_logical_shape()[-1]}));
+        ttnn::reshape(tensor_value, ttnn::Shape({volume_without_features, tensor_value.get_logical_shape()[-1]}));
 
-    auto reshaped_grad = ttnn::reshape(
-        out->get_grad(), ttnn::SimpleShape({volume_without_features, out->get_grad().get_logical_shape()[-1]}));
+    auto reshaped_grad =
+        ttnn::reshape(out->get_grad(), ttnn::Shape({volume_without_features, out->get_grad().get_logical_shape()[-1]}));
     auto reshaped_weight_grad =
         matmul(reshaped_grad, reshaped_tensor, /* transpose_a */ true, /* transpose_b */ false, config);
     auto reshaped_tensor_grad =

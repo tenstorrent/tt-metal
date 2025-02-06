@@ -165,6 +165,7 @@ def test_prepare_conv_weights(
         weight_tensor=tt_weight_tensor,
         weights_format="OIHW",
         input_memory_config=ttnn.L1_MEMORY_CONFIG,
+        has_bias=has_bias,
         **conv_kwargs,
     )
     tt_bias_tensor_formatted = (

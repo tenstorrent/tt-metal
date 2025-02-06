@@ -241,7 +241,7 @@ void BinaryNgDeviceOperation::validate_on_program_cache_hit(
     }
 
     const auto& input_shape_a = input_tensor_a.get_logical_shape();
-    const auto input_shape_b = input_tensor_b.has_value() ? input_tensor_b->get_logical_shape() : ttnn::Shape{1, 1};
+    const auto input_shape_b = input_tensor_b.has_value() ? input_tensor_b->get_logical_shape() : ttnn::Shape({1, 1});
 
     const int rank_a = input_shape_a.rank();
     const int rank_b = input_shape_b.rank();
@@ -274,7 +274,7 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto input_shape_a = input_tensor_a.logical_shape();
     const auto& tensor_b = tensor_args.input_tensor_b;
-    const auto input_shape_b = tensor_b.has_value() ? tensor_b->logical_shape() : ttnn::SimpleShape{};
+    const auto input_shape_b = tensor_b.has_value() ? tensor_b->logical_shape() : ttnn::Shape{};
 
     const int rank_a = input_shape_a.rank();
     const int rank_b = input_shape_b.rank();
@@ -297,7 +297,7 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
                 output_shape[i + larger_rank] = dim_a + dim_b - 1;
             }
         }
-        return ttnn::SimpleShape(output_shape);
+        return ttnn::Shape(output_shape);
     };
 
     auto output_shape = compute_broadcasted_output(input_shape_a, input_shape_b);

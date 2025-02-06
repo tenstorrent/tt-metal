@@ -119,8 +119,8 @@ Cluster::Cluster() {
 }
 
 void Cluster::detect_arch_and_target() {
-
-    this->target_type_ = (std::getenv("TT_METAL_SIMULATOR")) ? TargetDevice::Simulator : TargetDevice::Silicon;
+    this->target_type_ = (llrt::RunTimeOptions::get_instance().get_simulator_enabled()) ? TargetDevice::Simulator
+                                                                                        : TargetDevice::Silicon;
 
     this->arch_ = tt_metal::get_platform_architecture();
 
@@ -267,7 +267,7 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
         // that is later expected to be populated by unrelated APIs
         // TT_FATAL(device_driver->get_target_mmio_device_ids().size() == 1, "Only one target mmio device id allowed.");
     } else if (this->target_type_ == TargetDevice::Simulator) {
-        auto simulator_directory = std::getenv("TT_METAL_SIMULATOR");
+        auto simulator_directory = llrt::RunTimeOptions::get_instance().get_simulator_path();
         device_driver = std::make_unique<tt_SimulationDevice>(simulator_directory);
     }
 
@@ -343,18 +343,17 @@ void Cluster::generate_virtual_to_umd_coord_mapping() {
     for (auto chip_id : this->cluster_desc_->get_all_chips()) {
         this->virtual_worker_cores_[chip_id] = {};
         this->virtual_eth_cores_[chip_id] = {};
-        for (auto& core_desc : this->get_soc_desc(chip_id).physical_cores) {
-            if (core_desc.second.type != CoreType::HARVESTED) {
-                CoreCoord virtual_coords =
-                    this->get_virtual_coordinate_from_physical_coordinates(chip_id, core_desc.first);
-                tt_cxy_pair virtual_core = tt_cxy_pair(chip_id, virtual_coords.x, virtual_coords.y);
-                tt_cxy_pair umd_core = this->get_soc_desc(chip_id).convert_to_umd_coordinates(tt_cxy_pair(chip_id, core_desc.first.x, core_desc.first.y));
-                this->virtual_to_umd_coord_mapping_[virtual_core] = umd_core;
-                if (core_desc.second.type == CoreType::WORKER) {
-                    this->virtual_worker_cores_[chip_id].insert(virtual_coords);
-                } else if (core_desc.second.type == CoreType::ETH) {
-                    this->virtual_eth_cores_[chip_id].insert(virtual_coords);
-                }
+        for (tt::umd::CoreCoord core : this->get_soc_desc(chip_id).get_all_cores(CoordSystem::PHYSICAL)) {
+            CoreCoord virtual_coords =
+                this->get_virtual_coordinate_from_physical_coordinates(chip_id, {core.x, core.y});
+            tt_cxy_pair virtual_core = tt_cxy_pair(chip_id, virtual_coords.x, virtual_coords.y);
+            tt_cxy_pair umd_core =
+                this->get_soc_desc(chip_id).convert_to_umd_coordinates(tt_cxy_pair(chip_id, core.x, core.y));
+            this->virtual_to_umd_coord_mapping_[virtual_core] = umd_core;
+            if (core.core_type == CoreType::TENSIX) {
+                this->virtual_worker_cores_[chip_id].insert(virtual_coords);
+            } else if (core.core_type == CoreType::ETH) {
+                this->virtual_eth_cores_[chip_id].insert(virtual_coords);
             }
         }
     }
@@ -504,37 +503,39 @@ void Cluster::assert_risc_reset_at_core(const tt_cxy_pair &core) const {
 }
 
 void Cluster::write_dram_vec(std::vector<uint32_t> &vec, tt_target_dram dram, uint64_t addr, bool small_access) const {
-    int chip_id, d_chan, d_subchannel;
-    std::tie(chip_id, d_chan, d_subchannel) = dram;
+    int chip_id, d_view, d_subchannel;
+    std::tie(chip_id, d_view, d_subchannel) = dram;
     const metal_SocDescriptor &desc_to_use = get_soc_desc(chip_id);
     TT_FATAL(
-        d_chan < desc_to_use.dram_cores.size(),
-        "Bounds-Error -- dram_channel={} is outside of num_dram_channels={}",
-        d_chan,
-        desc_to_use.dram_cores.size());
+        d_view < desc_to_use.get_num_dram_views(),
+        "Bounds-Error -- dram_view={} is outside of num_dram_views={}",
+        d_view,
+        desc_to_use.get_num_dram_views());
+    int d_chan = desc_to_use.get_channel_for_dram_view(d_view);
     TT_ASSERT(
         d_subchannel < desc_to_use.dram_cores.at(d_chan).size(),
         "Trying to address dram sub channel that doesnt exist in the device descriptor");
     tt_cxy_pair dram_core = tt_cxy_pair(chip_id, desc_to_use.get_core_for_dram_channel(d_chan, d_subchannel));
-    size_t offset = desc_to_use.get_address_offset(d_chan);
+    size_t offset = desc_to_use.get_address_offset(d_view);
     write_core(vec.data(), vec.size() * sizeof(uint32_t), dram_core, addr + offset, small_access);
 }
 
 void Cluster::read_dram_vec(
     std::vector<uint32_t> &vec, uint32_t sz_in_bytes, tt_target_dram dram, uint64_t addr, bool small_access) const {
-    int chip_id, d_chan, d_subchannel;
-    std::tie(chip_id, d_chan, d_subchannel) = dram;
+    int chip_id, d_view, d_subchannel;
+    std::tie(chip_id, d_view, d_subchannel) = dram;
     const metal_SocDescriptor &desc_to_use = get_soc_desc(chip_id);
     TT_FATAL(
-        d_chan < desc_to_use.dram_cores.size(),
-        "Bounds-Error -- dram_channel={} is outside of num_dram_channels={}",
-        d_chan,
-        desc_to_use.dram_cores.size());
+        d_view < desc_to_use.get_num_dram_views(),
+        "Bounds-Error -- dram_view={} is outside of num_dram_views={}",
+        d_view,
+        desc_to_use.get_num_dram_views());
+    int d_chan = desc_to_use.get_channel_for_dram_view(d_view);
     TT_ASSERT(
         d_subchannel < desc_to_use.dram_cores.at(d_chan).size(),
         "Trying to address dram sub channel that doesnt exist in the device descriptor");
     tt_cxy_pair dram_core = tt_cxy_pair(chip_id, desc_to_use.get_core_for_dram_channel(d_chan, d_subchannel));
-    size_t offset = desc_to_use.get_address_offset(d_chan);
+    size_t offset = desc_to_use.get_address_offset(d_view);
     read_core(vec, sz_in_bytes, dram_core, addr + offset, small_access);
 }
 
@@ -1112,7 +1113,6 @@ uint32_t Cluster::get_device_tunnel_depth(chip_id_t chip_id) const {
 }  // namespace tt
 
 std::ostream &operator<<(std::ostream &os, tt_target_dram const &dram) {
-    os << "Target DRAM chip = " << std::get<0>(dram) << ", chan = " << std::get<1>(dram)
-       << ", subchan = " << std::get<2>(dram);
+    os << "Target DRAM chip = " << std::get<0>(dram) << ", chan = " << std::get<1>(dram);
     return os;
 }

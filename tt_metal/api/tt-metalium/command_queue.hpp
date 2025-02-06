@@ -1,217 +1,99 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include <algorithm>
-#include <chrono>
 #include <condition_variable>
-#include <fstream>
+#include <cstdint>
 #include <memory>
-#include <span>
 #include <thread>
-#include <utility>
-#include <vector>
 
-#include "env_lib.hpp"
-#include "command_queue_interface.hpp"
-#include "device_command.hpp"
-#include "lock_free_queue.hpp"
-#include "program_command_sequence.hpp"
 #include "worker_config_buffer.hpp"
-#include "program_impl.hpp"
 #include "trace_buffer.hpp"
-#include "hardware_command_queue.hpp"
+#include "memcpy.hpp"
+#include "command_queue_interface.hpp"
 
 namespace tt::tt_metal {
+
 inline namespace v0 {
-
-class BufferRegion;
 class Event;
-class Trace;
-using RuntimeArgs = std::vector<std::variant<Buffer*, uint32_t>>;
-
+class Program;
+class Kernel;
 }  // namespace v0
 
-// Only contains the types of commands which are enqueued onto the device
-enum class EnqueueCommandType {
-    ENQUEUE_READ_BUFFER,
-    ENQUEUE_WRITE_BUFFER,
-    GET_BUF_ADDR,
-    ADD_BUFFER_TO_PROGRAM,
-    SET_RUNTIME_ARGS,
-    ENQUEUE_PROGRAM,
-    ENQUEUE_TRACE,
-    ENQUEUE_RECORD_EVENT,
-    ENQUEUE_WAIT_FOR_EVENT,
-    FINISH,
-    FLUSH,
-    TERMINATE,
-    INVALID
-};
+class CommandQueue {
+public:
+    virtual ~CommandQueue() = default;
 
-string EnqueueCommandTypeToString(EnqueueCommandType ctype);
+    virtual const CoreCoord& virtual_enqueue_program_dispatch_core() const = 0;
+    virtual const CoreCoord& completion_queue_writer_core() const = 0;
 
-class Command {
-   public:
-    Command() {}
-    virtual void process() {};
-    virtual EnqueueCommandType type() = 0;
-};
+    virtual volatile bool is_dprint_server_hung() = 0;
+    virtual volatile bool is_noc_hung() = 0;
 
-class EnqueueProgramCommand : public Command {
-   private:
-    uint32_t command_queue_id;
-    IDevice* device;
-    NOC noc_index;
-    Program& program;
-    SystemMemoryManager& manager;
-    WorkerConfigBufferMgr& config_buffer_mgr;
-    CoreCoord dispatch_core;
-    CoreType dispatch_core_type;
-    uint32_t expected_num_workers_completed;
-    uint32_t packed_write_max_unicast_sub_cmds;
-    uint32_t dispatch_message_addr;
-    uint32_t multicast_cores_launch_message_wptr = 0;
-    uint32_t unicast_cores_launch_message_wptr = 0;
-    // TODO: There will be multiple ids once programs support spanning multiple sub_devices
-    SubDeviceId sub_device_id = SubDeviceId{0};
+    virtual void record_begin(const uint32_t tid, const std::shared_ptr<TraceDescriptor>& ctx) = 0;
+    virtual void record_end() = 0;
 
-   public:
-    EnqueueProgramCommand(
-        uint32_t command_queue_id,
-        IDevice* device,
-        NOC noc_index,
-        Program& program,
-        CoreCoord& dispatch_core,
-        SystemMemoryManager& manager,
-        WorkerConfigBufferMgr& config_buffer_mgr,
-        uint32_t expected_num_workers_completed,
-        uint32_t multicast_cores_launch_message_wptr,
-        uint32_t unicast_cores_launch_message_wptr,
-        SubDeviceId sub_device_id);
+    virtual void reset_worker_state(
+        bool reset_launch_msg_state,
+        uint32_t num_sub_devices,
+        const vector_memcpy_aligned<uint32_t>& go_signal_noc_data) = 0;
 
-    void process();
+    virtual void set_go_signal_noc_data_and_dispatch_sems(
+        uint32_t num_dispatch_sems, const vector_memcpy_aligned<uint32_t>& noc_mcast_unicast_data) = 0;
 
-    EnqueueCommandType type() { return EnqueueCommandType::ENQUEUE_PROGRAM; }
+    virtual uint32_t id() const = 0;
+    virtual std::optional<uint32_t> tid() const = 0;
 
-    constexpr bool has_side_effects() { return true; }
-};
+    virtual SystemMemoryManager& sysmem_manager() = 0;
 
-class EnqueueRecordEventCommand : public Command {
-   private:
-    uint32_t command_queue_id;
-    IDevice* device;
-    NOC noc_index;
-    SystemMemoryManager& manager;
-    uint32_t event_id;
-    tt::stl::Span<const uint32_t> expected_num_workers_completed;
-    tt::stl::Span<const SubDeviceId> sub_device_ids;
-    bool clear_count;
-    bool write_barrier;
+    virtual void terminate() = 0;
 
-   public:
-    EnqueueRecordEventCommand(
-        uint32_t command_queue_id,
-        IDevice* device,
-        NOC noc_index,
-        SystemMemoryManager& manager,
-        uint32_t event_id,
-        tt::stl::Span<const uint32_t> expected_num_workers_completed,
-        tt::stl::Span<const SubDeviceId> sub_device_ids,
-        bool clear_count = false,
-        bool write_barrier = true);
+    virtual IDevice* device() = 0;
 
-    void process();
+    // These functions are temporarily needed since MeshCommandQueue relies on the CommandQueue object
+    virtual uint32_t get_expected_num_workers_completed_for_sub_device(uint32_t sub_device_index) const = 0;
+    virtual void set_expected_num_workers_completed_for_sub_device(uint32_t sub_device_index, uint32_t num_workers) = 0;
+    virtual WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) = 0;
 
-    EnqueueCommandType type() { return EnqueueCommandType::ENQUEUE_RECORD_EVENT; }
+    virtual void enqueue_trace(const uint32_t trace_id, bool blocking) = 0;
 
-    constexpr bool has_side_effects() { return false; }
-};
+    virtual void enqueue_program(Program& program, bool blocking) = 0;
 
-class EnqueueWaitForEventCommand : public Command {
-   private:
-    uint32_t command_queue_id;
-    IDevice* device;
-    SystemMemoryManager& manager;
-    const Event& sync_event;
-    CoreType dispatch_core_type;
-    bool clear_count;
-
-   public:
-    EnqueueWaitForEventCommand(
-        uint32_t command_queue_id,
-        IDevice* device,
-        SystemMemoryManager& manager,
-        const Event& sync_event,
-        bool clear_count = false);
-
-    void process();
-
-    EnqueueCommandType type() { return EnqueueCommandType::ENQUEUE_WAIT_FOR_EVENT; }
-
-    constexpr bool has_side_effects() { return false; }
-};
-
-class EnqueueTraceCommand : public Command {
-   private:
-    uint32_t command_queue_id;
-    Buffer& buffer;
-    IDevice* device;
-    SystemMemoryManager& manager;
-    std::shared_ptr<TraceDescriptor>& descriptor;
-    std::array<uint32_t, dispatch_constants::DISPATCH_MESSAGE_ENTRIES>& expected_num_workers_completed;
-    bool clear_count;
-    NOC noc_index;
-    CoreCoord dispatch_core;
-   public:
-    EnqueueTraceCommand(
-        uint32_t command_queue_id,
-        IDevice* device,
-        SystemMemoryManager& manager,
-        std::shared_ptr<TraceDescriptor>& descriptor,
+    virtual void enqueue_read_buffer(
+        std::shared_ptr<Buffer>& buffer,
+        void* dst,
+        const BufferRegion& region,
+        bool blocking,
+        tt::stl::Span<const SubDeviceId> sub_device_ids = {}) = 0;
+    virtual void enqueue_read_buffer(
         Buffer& buffer,
-        std::array<uint32_t, dispatch_constants::DISPATCH_MESSAGE_ENTRIES>& expected_num_workers_completed,
-        NOC noc_index,
-        CoreCoord dispatch_core);
+        void* dst,
+        const BufferRegion& region,
+        bool blocking,
+        tt::stl::Span<const SubDeviceId> sub_device_ids = {}) = 0;
 
-    void process();
+    virtual void enqueue_record_event(
+        const std::shared_ptr<Event>& event,
+        bool clear_count = false,
+        tt::stl::Span<const SubDeviceId> sub_device_ids = {}) = 0;
+    virtual void enqueue_wait_for_event(const std::shared_ptr<Event>& sync_event, bool clear_count = false) = 0;
 
-    EnqueueCommandType type() { return EnqueueCommandType::ENQUEUE_TRACE; }
+    virtual void enqueue_write_buffer(
+        const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
+        HostDataType src,
+        const BufferRegion& region,
+        bool blocking,
+        tt::stl::Span<const SubDeviceId> sub_device_ids = {}) = 0;
+    virtual void enqueue_write_buffer(
+        Buffer& buffer,
+        const void* src,
+        const BufferRegion& region,
+        bool blocking,
+        tt::stl::Span<const SubDeviceId> sub_device_ids = {}) = 0;
 
-    constexpr bool has_side_effects() { return true; }
+    virtual void finish(tt::stl::Span<const SubDeviceId> sub_device_ids) = 0;
 };
-
-class EnqueueTerminateCommand : public Command {
-   private:
-    uint32_t command_queue_id;
-    IDevice* device;
-    SystemMemoryManager& manager;
-
-   public:
-    EnqueueTerminateCommand(uint32_t command_queue_id, IDevice* device, SystemMemoryManager& manager);
-
-    void process();
-
-    EnqueueCommandType type() { return EnqueueCommandType::TERMINATE; }
-
-    constexpr bool has_side_effects() { return false; }
-};
-
-// Primitives used to place host only operations on the SW Command Queue.
-// These are used in functions exposed through tt_metal.hpp or host_api.hpp
-void EnqueueGetBufferAddr(uint32_t* dst_buf_addr, const Buffer* buffer, bool blocking);
-void EnqueueSetRuntimeArgs(
-    const std::shared_ptr<Kernel>& kernel,
-    const CoreCoord& core_coord,
-    std::shared_ptr<RuntimeArgs> runtime_args_ptr,
-    bool blocking);
-void EnqueueAddBufferToProgram(
-    const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
-    Program& program,
-    bool blocking);
 
 }  // namespace tt::tt_metal
-
-std::ostream& operator<<(std::ostream& os, const tt::tt_metal::EnqueueCommandType& type);

@@ -5,6 +5,7 @@
 #pragma once
 
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/global_semaphore.hpp>
 
 // TODO: ARCH_NAME specific, must remove
 #include "eth_l1_address_map.h"

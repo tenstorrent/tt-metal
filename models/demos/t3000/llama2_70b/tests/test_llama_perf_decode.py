@@ -296,7 +296,7 @@ def run_test_LlamaModel_end_to_end_hybrid_data_tensor_parallel(
     profiler.clear()
 
     submesh_to_metadata = defaultdict(dict)
-    submeshes = mesh_device.create_submeshes((2, 4), ttnn.MeshType.Ring)
+    submeshes = mesh_device.create_submeshes((2, 4))
     for submesh in submeshes:
         # Set up model -----------------------------------------------------------------------
         logger.info("Moving weights to devices; might take some time...")

@@ -18,11 +18,11 @@
 #include <allocator.hpp>
 #include <circular_buffer.hpp>
 #include <semaphore.hpp>
-#include <dprint_server.hpp>
+#include "dprint_server.hpp"
 #include <device.hpp>
 #include <command_queue.hpp>
-#include <hardware_command_queue.hpp>
 #include <device_command.hpp>
+#include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/jit_build/genfiles.hpp"
 #include "llrt.hpp"
@@ -556,14 +556,12 @@ void detail::Program_::update_kernel_groups(uint32_t programmable_core_type_inde
                         if (not hal.get_supports_cbs(programmable_core_type_index)) continue;
                         auto core = CoreCoord({x, y});
                         auto local_val = per_core_local_cb_indices_.find(core);
-                        if (local_val != per_core_local_cb_indices_.end()) {
-                            max_local_cb_end_index = std::max(
-                                max_local_cb_end_index,
-                                NUM_CIRCULAR_BUFFERS - (uint32_t)__builtin_clz(local_val->second.to_ulong()));
-
+                        if (local_val != per_core_local_cb_indices_.end() && local_val->second.any()) {
                             uint32_t used_cbs = local_val->second.to_ulong();
-                            if (used_cbs > 0 && !logged_noncontiguous) {
-                                // Zeroso out the contiguous run of set bits starting at zero. Anything remaining is
+                            max_local_cb_end_index = std::max(
+                                max_local_cb_end_index, NUM_CIRCULAR_BUFFERS - (uint32_t)__builtin_clz(used_cbs));
+                            if (!logged_noncontiguous) {
+                                // Zeroes out the contiguous run of set bits starting at zero. Anything remaining is
                                 // above a zero bit.
                                 uint32_t non_contiguous_cbs = used_cbs & (used_cbs + 1);
                                 if (non_contiguous_cbs) {
@@ -618,7 +616,7 @@ void detail::Program_::update_kernel_groups(uint32_t programmable_core_type_inde
                             }
                         }
                         auto remote_val = per_core_remote_cb_indices_.find(core);
-                        if (remote_val != per_core_remote_cb_indices_.end()) {
+                        if (remote_val != per_core_remote_cb_indices_.end() && remote_val->second.any()) {
                             min_remote_cb_start_index = std::min(
                                 min_remote_cb_start_index, (uint32_t)__builtin_ctz(remote_val->second.to_ulong()));
                         }
@@ -837,7 +835,7 @@ void detail::Program_::allocate_circular_buffers(const IDevice* device) {
         return;
     }
 
-    uint64_t base_cb_address = device->get_base_allocator_addr(HalMemType::L1);
+    uint64_t base_cb_address = device->allocator()->get_base_allocator_addr(HalMemType::L1);
     for (const auto& circular_buffer : this->circular_buffers_) {
         if (circular_buffer->globally_allocated()) {
             continue;
@@ -853,7 +851,7 @@ void detail::Program_::allocate_circular_buffers(const IDevice* device) {
                 }
             }
         }
-        computed_addr = tt::align(computed_addr, device->get_allocator_alignment());
+        computed_addr = align(computed_addr, device->allocator()->get_alignment(BufferType::DRAM));
         for (const CoreRange &core_range : circular_buffer->core_ranges().ranges()) {
             for (CircularBufferAllocator &cb_allocator : this->cb_allocators_) {
                 if (cb_allocator.core_range.intersects(core_range)) {
@@ -1333,7 +1331,7 @@ void Program::generate_dispatch_commands(IDevice* device) {
 
 void Program::allocate_kernel_bin_buf_on_device(IDevice* device) { pimpl_->allocate_kernel_bin_buf_on_device(device); }
 
-void detail::Program_::compile(IDevice*device, bool fd_bootloader_mode) {
+void detail::Program_::compile(IDevice* device, bool fd_bootloader_mode) {
     //ZoneScoped;
     if (compiled_.contains(device->build_key())) {
         return;
@@ -1366,9 +1364,11 @@ void detail::Program_::compile(IDevice*device, bool fd_bootloader_mode) {
         //      - eth kernels cannot be on idle eth cores
         bool slow_dispatch = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") != nullptr;
 
-        const auto &dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config(device->id());
+        const auto& dispatch_core_config = DispatchQueryManager::instance().get_dispatch_core_config();
         CoreType dispatch_core_type = dispatch_core_config.get_core_type();
-        const std::vector<CoreCoord> &storage_cores = tt::get_logical_storage_cores(device->id(), device->num_hw_cqs(), dispatch_core_config);
+        auto physical_device_id = device->id() % tt::Cluster::instance().number_of_devices();
+        const std::vector<CoreCoord>& storage_cores =
+            DispatchQueryManager::instance().get_logical_storage_cores(physical_device_id);
         bool on_storage_only_core =  std::any_of(storage_cores.begin(), storage_cores.end(), [&kernel](const CoreCoord& storage_core) {
             return kernel->is_on_logical_core(storage_core);
         });
@@ -1376,8 +1376,8 @@ void detail::Program_::compile(IDevice*device, bool fd_bootloader_mode) {
 
         // Kernels used to implement fast dispatch can be placed on dispatch cores
         if (not slow_dispatch and not fd_bootloader_mode) {
-            const std::vector<CoreCoord> &dispatch_cores = tt::get_logical_dispatch_cores(device->id(), device->num_hw_cqs(), dispatch_core_config);
-
+            const std::vector<CoreCoord>& dispatch_cores =
+                DispatchQueryManager::instance().get_logical_dispatch_cores(physical_device_id);
             bool on_dispatch_core = std::any_of(dispatch_cores.begin(), dispatch_cores.end(), [&kernel, &dispatch_core_type](const CoreCoord &dispatch_core) {
                 if (kernel->get_kernel_core_type() != dispatch_core_type) {
                     return false;

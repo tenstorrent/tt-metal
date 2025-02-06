@@ -79,23 +79,6 @@ constexpr inline size_t packed_buffer_size_bytes<bfloat4_b>(size_t volume_unpack
 // ======================================================================================
 //                                  Layout converters
 // ======================================================================================
-namespace detail {
-static ttnn::SmallVector<uint32_t> to_4D_shape(const tt::tt_metal::LegacyShape& shape) {
-    if (shape.rank() == 1) {
-        return {1, 1, 1, shape[-1]};
-    } else if (shape.rank() == 2) {
-        return {1, 1, shape[-2], shape[-1]};
-    } else if (shape.rank() == 3) {
-        return {1, shape[-3], shape[-2], shape[-1]};
-    } else if (shape.rank() == 4) {
-        return {shape[-4], shape[-3], shape[-2], shape[-1]};
-    } else {
-        TT_THROW("Rank {} is not supported!", shape.rank());
-    }
-}
-
-}  // namespace detail
-
 template <typename T, template <typename...> typename BufferType>
 inline std::vector<T> convert_layout_row_major_to_tile(
     const Shape2D& shape, const Tile& tile, const BufferType<T>& data_to_convert) {
@@ -173,8 +156,7 @@ std::vector<T> decode_tensor_data(std::vector<T>&& physical_data, const TensorSp
 // ======================================================================================
 //                                      Validators
 // ======================================================================================
-void validate_on_device_dtype_and_layout(
-    IDevice* device, const ttnn::SimpleShape& shape, DataType dtype, Layout layout);
+void validate_on_device_dtype_and_layout(IDevice* device, const ttnn::Shape& shape, DataType dtype, Layout layout);
 // -----------------------------------------------------------------------------------------------------------------------------------------------
 // ===============================================================================================================================================
 //                                                              High Level APIs
@@ -185,16 +167,19 @@ void validate_on_device_dtype_and_layout(
 //                           Data reader, writer, and initializers
 // ======================================================================================
 
-DeviceBuffer allocate_buffer_on_device(IDevice* device, const TensorSpec& tensor_spec);
+std::shared_ptr<Buffer> allocate_buffer_on_device(IDevice* device, const TensorSpec& tensor_spec);
+
+std::shared_ptr<distributed::MeshBuffer> allocate_mesh_buffer_on_device(
+    distributed::MeshDevice* mesh_device, const TensorSpec& tensor_spec);
 
 template <typename T>
 inline void read_data_from_device_buffer(
-    CommandQueue& cq, DeviceBuffer device_buffer, void* host_buffer_data, bool blocking) {
+    CommandQueue& cq, std::shared_ptr<Buffer> device_buffer, void* host_buffer_data, bool blocking) {
     EnqueueReadBuffer(cq, device_buffer, host_buffer_data, blocking);
 }
 
 template <typename T>
-inline void read_data_from_device_buffer(DeviceBuffer device_buffer, std::vector<T>& host_buffer) {
+inline void read_data_from_device_buffer(std::shared_ptr<Buffer> device_buffer, std::vector<T>& host_buffer) {
     ::tt::tt_metal::detail::ReadFromBuffer(device_buffer, host_buffer);
 }
 
@@ -224,13 +209,12 @@ Tensor to_layout_bfloat(const Tensor& tensor, Layout target_layout);
 template <typename T>
 Tensor pad(
     const Tensor& tensor,
-    const ttnn::SimpleShape& output_padded_shape,
-    const ttnn::SimpleShape& input_tensor_start,
+    const ttnn::Shape& output_padded_shape,
+    const ttnn::Shape& input_tensor_start,
     float pad_value);
 
 template <typename T>
-Tensor unpad(
-    const Tensor& tensor, const ttnn::SimpleShape& output_tensor_start, const ttnn::SimpleShape& output_tensor_end);
+Tensor unpad(const Tensor& tensor, const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end);
 
 // ======================================================================================
 //                                         Print

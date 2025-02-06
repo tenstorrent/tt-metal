@@ -45,7 +45,7 @@ BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::create(
     auto& output = tensor_return_value;
     auto bcast_math = binary_op_type_to_bcast_op_math(operation_attributes.binary_op_type);
     const auto ashape = a.padded_shape();
-    const auto bshape = b.has_value() ? b->padded_shape() : Shape{1, 1};
+    const auto bshape = b.has_value() ? b->padded_shape() : ttnn::Shape({1, 1});
     uint32_t N = ashape.rank() >= 4 ? ashape[-4] : 1;
     uint32_t C = ashape.rank() >= 3 ? ashape[-3] : 1;
     uint32_t H = ashape[-2];
@@ -299,7 +299,7 @@ void BinaryDeviceOperation::BroadcastHeightAndWidthMultiCore::override_runtime_a
     auto dst_buffer = output_tensor.buffer();
 
     const auto ashape = input_tensor_a.padded_shape();
-    const auto bshape = input_tensor_b.has_value() ? input_tensor_b->padded_shape() : Shape{1, 1};
+    const auto bshape = input_tensor_b.has_value() ? input_tensor_b->padded_shape() : ttnn::Shape({1, 1});
     uint32_t N = ashape.rank() >= 4 ? ashape[-4] : 1;
     uint32_t C = ashape.rank() >= 3 ? ashape[-3] : 1;
     uint32_t H = ashape[-2];

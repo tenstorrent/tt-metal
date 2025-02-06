@@ -38,13 +38,13 @@ struct OwnedStorage {
     }
 };
 
-using DeviceBuffer = std::shared_ptr<Buffer>;
+// TODO: #17215 - Replace `DeviceStorage` with "mesh storage".
 struct DeviceStorage {
-    DeviceBuffer buffer;
+    std::shared_ptr<Buffer> buffer;
     DeviceStorage() = default;
-    DeviceStorage(DeviceBuffer buffer_) : buffer(std::move(buffer_)) {}
+    DeviceStorage(std::shared_ptr<Buffer> buffer_) : buffer(std::move(buffer_)) {}
 
-    const MemoryConfig memory_config() const {
+    MemoryConfig memory_config() const {
         if (this->buffer.get() == nullptr) {
             TT_THROW("MemoryConfig can only be obtained if the buffer is not null");
         }
@@ -59,9 +59,9 @@ struct DeviceStorage {
             .shard_spec = shard_spec};
     }
 
-    inline void insert_buffer(DeviceBuffer buffer_) { this->buffer = buffer_; }
+    inline void insert_buffer(const std::shared_ptr<Buffer>& buffer_) { this->buffer = buffer_; }
 
-    inline DeviceBuffer get_buffer() const { return this->buffer; }
+    inline std::shared_ptr<Buffer> get_buffer() const { return this->buffer; }
     static constexpr auto attribute_names = std::forward_as_tuple("memory_config");
     const auto attribute_values() const { return std::make_tuple(this->memory_config()); }
 
@@ -149,7 +149,7 @@ struct MultiDeviceHostStorage {
     MultiDeviceHostStorage() = default;
     MultiDeviceHostStorage(
         DistributedTensorConfig strategy_, std::vector<OwnedBuffer> buffers_, std::vector<TensorSpec> specs_) :
-        strategy(strategy_), buffers(buffers_), specs(specs_) {}
+        strategy(strategy_), buffers(std::move(buffers_)), specs(std::move(specs_)) {}
     MultiDeviceHostStorage(MultiDeviceHostStorage&& other) { swap(*this, other); }
     // unfotunately we need to have this code written manually.
     MultiDeviceHostStorage(const MultiDeviceHostStorage& other) {
@@ -222,8 +222,13 @@ struct MultiDeviceHostStorage {
 struct MultiDeviceStorage {
     DistributedTensorConfig strategy;
     std::vector<int> ordered_device_ids;
-    std::unordered_map<int, DeviceBuffer> buffers;
+    std::unordered_map<int, std::shared_ptr<Buffer>> buffers;
     std::unordered_map<int, TensorSpec> specs;
+
+    // TODO: #17215 - This isn't populated by default. Switch to creating MeshBuffer backed storage, when TTNN is ready
+    // to consume it.
+    // Eventually, `MultiDeviceStorage` will be renamed to `MeshDeviceStorage`, and unified with `DeviceStorage`.
+    std::shared_ptr<distributed::MeshBuffer> mesh_buffer;
     mutable std::mutex buffer_mtx;
     mutable std::mutex shape_mtx;
     MultiDeviceStorage() = default;
@@ -235,17 +240,20 @@ struct MultiDeviceStorage {
         swap(first.ordered_device_ids, second.ordered_device_ids);
         swap(first.buffers, second.buffers);
         swap(first.specs, second.specs);
+        swap(first.mesh_buffer, second.mesh_buffer);
     }
 
     MultiDeviceStorage(
         DistributedTensorConfig strategy_,
         std::vector<int> ordered_device_ids_,
-        std::unordered_map<int, DeviceBuffer> buffers_,
-        std::unordered_map<int, TensorSpec> specs_) :
+        std::unordered_map<int, std::shared_ptr<Buffer>> buffers_,
+        std::unordered_map<int, TensorSpec> specs_,
+        std::shared_ptr<distributed::MeshBuffer> mesh_buffer_) :
         strategy(std::move(strategy_)),
         ordered_device_ids(std::move(ordered_device_ids_)),
         buffers(std::move(buffers_)),
-        specs(std::move(specs_)) {}
+        specs(std::move(specs_)),
+        mesh_buffer(std::move(mesh_buffer_)) {}
 
     MultiDeviceStorage(MultiDeviceStorage&& other) { swap(*this, other); }
 
@@ -255,6 +263,7 @@ struct MultiDeviceStorage {
         strategy = other.strategy;
         buffers = other.buffers;
         specs = other.specs;
+        mesh_buffer = other.mesh_buffer;
     }
 
     MultiDeviceStorage& operator=(const MultiDeviceStorage& other) {
@@ -270,10 +279,10 @@ struct MultiDeviceStorage {
 
     bool operator==(const MultiDeviceStorage& other) {
         return this->ordered_device_ids == other.ordered_device_ids and this->strategy == other.strategy and
-               this->buffers == other.buffers and this->specs == other.specs;
+               this->buffers == other.buffers and this->specs == other.specs and this->mesh_buffer == other.mesh_buffer;
     }
 
-    inline const MemoryConfig memory_config() const {
+    MemoryConfig memory_config() const {
         std::lock_guard<std::mutex> lock(buffer_mtx);
         TT_FATAL(
             !this->ordered_device_ids.empty(), "No device ids in list. Please ensure fields are initialized properly.");
@@ -296,10 +305,12 @@ struct MultiDeviceStorage {
 
     // Helper Functions - Getters and setters to get/modify storage attributes. These are needed to
     // preinitialize empty tensor handles and use/populate them in the worker threads.
-    std::vector<DeviceBuffer> get_buffers() const;
+    std::vector<std::shared_ptr<Buffer>> get_buffers() const;
 
-    inline void insert_buffer_and_spec_for_device(IDevice* device, const DeviceBuffer buffer, TensorSpec spec) {
+    inline void insert_buffer_and_spec_for_device(
+        IDevice* device, const std::shared_ptr<Buffer>& buffer, TensorSpec spec) {
         std::scoped_lock lock(buffer_mtx, shape_mtx);
+        TT_FATAL(mesh_buffer == nullptr, "MeshBuffer backed storage does not support inserting individual buffers");
         TT_ASSERT(
             device == buffer->device(),
             "Mismatch between device derived from buffer and device derived from MultiDeviceStorage.");
@@ -307,7 +318,7 @@ struct MultiDeviceStorage {
         specs.insert({device->id(), std::move(spec)});
     }
 
-    inline DeviceBuffer get_buffer_for_device(IDevice* device) const {
+    inline std::shared_ptr<Buffer> get_buffer_for_device(IDevice* device) const {
         std::lock_guard<std::mutex> lock(buffer_mtx);
         TT_ASSERT(buffers.find(device->id()) != buffers.end(), "Buffer not found for device {}", device->id());
         TT_ASSERT(
@@ -316,7 +327,7 @@ struct MultiDeviceStorage {
         return buffers.at(device->id());
     }
 
-    inline DeviceBuffer& get_buffer_for_device(IDevice* device) {
+    inline std::shared_ptr<Buffer>& get_buffer_for_device(IDevice* device) {
         std::lock_guard<std::mutex> lock(buffer_mtx);
         TT_ASSERT(buffers.find(device->id()) != buffers.end(), "Buffer not found for device {}", device->id());
         TT_ASSERT(
@@ -325,7 +336,7 @@ struct MultiDeviceStorage {
         return buffers.at(device->id());
     }
 
-    inline DeviceBuffer get_buffer_for_device_id(uint32_t device_id) const {
+    inline std::shared_ptr<Buffer> get_buffer_for_device_id(uint32_t device_id) const {
         std::lock_guard<std::mutex> lock(buffer_mtx);
         return buffers.at(device_id);
     }
@@ -352,13 +363,16 @@ struct MultiDeviceStorage {
     }
 
     inline bool is_allocated() const {
-        std::lock_guard<std::mutex> lock(buffer_mtx);
-
-        return std::all_of(
-            ordered_device_ids.begin(), ordered_device_ids.end(), [&buffers = this->buffers](auto&& device_id) {
-                const auto& buffer = buffers.at(device_id);
-                return buffer && buffer->is_allocated();
-            });
+        if (mesh_buffer != nullptr) {
+            return mesh_buffer->is_allocated();
+        } else {
+            std::lock_guard<std::mutex> lock(buffer_mtx);
+            return std::all_of(
+                ordered_device_ids.begin(), ordered_device_ids.end(), [&buffers = this->buffers](auto&& device_id) {
+                    const auto& buffer = buffers.at(device_id);
+                    return buffer && buffer->is_allocated();
+                });
+        }
     }
 };
 

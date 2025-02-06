@@ -299,6 +299,7 @@ Tensor optimized_conv_new(
 // For bias, last iteration of l1 acc remains in intermediate buffer, does not spill and reload
 bool determine_packer_l1_acc(bool packer_l1_acc, bool enable_bias, uint32_t in0_num_blocks_w);
 
+// Both CB and tensor allocation sizes are per per tensix core and in bytes.
 struct conv_op_l1_usage {
     uint32_t tensor_allocation_size;
     uint32_t CB_allocation_size;
@@ -308,24 +309,16 @@ struct conv_op_l1_usage {
 // L1 allocation is either for the output tensor or for Circular Buffers.
 // This doesn't include Circular Buffers that use globally allocated addresses, as these don't need memory allocation.
 conv_op_l1_usage calculate_L1_usage(
-    tt::ARCH arch,
-    TensorMemoryLayout shard_layout,
-    const DataType input_dtype,
-    const DataType weights_dtype,
-    const DataType output_dtype,
     const DeviceComputeKernelConfig& compute_kernel_config,
     const OptimizedConvBlockConfig& block_config,
     const OptimizedConvParallelizationConfig& pconfig,
-    const Shape& input_shape,
-    const Shape& weights_shape,
-    const Shape& output_shape,
-    uint32_t output_channels,
-    uint32_t groups,
+    const ttnn::Shape& weights_shape,
     std::array<uint32_t, 2> kernel_size,
     const Conv2dConfig& conv_config,
     const MemoryConfig& output_memory_config,
     bool enable_bias,
-    bool use_non_tile_height);
+    bool use_non_tile_height,
+    bool is_1d_depthwise_conv);
 
 }  // namespace conv2d
 
@@ -338,7 +331,7 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 std::pair<std::vector<uint32_t>, std::vector<uint32_t>> compute_opt_conv_activation_as_mm_shape(
-    const ttnn::SimpleShape& conv_activation_shape,
+    const ttnn::Shape& conv_activation_shape,
     const ttnn::operations::sliding_window::SlidingWindowConfig& sliding_window_config,
     uint32_t num_cores_nhw,
     uint32_t act_block_h_ntiles);

@@ -939,7 +939,7 @@ void bind_unary_backward_shape(
             [](const unary_backward_operation_t& self,
                const ttnn::Tensor& grad_tensor,
                const ttnn::Tensor& input_tensor,
-               const tt::tt_metal::LegacyShape& parameter_a,
+               const ttnn::Shape& parameter_a,
                const std::optional<MemoryConfig>& memory_config) {
                 return self(grad_tensor, input_tensor, parameter_a, memory_config);
             },
@@ -1376,7 +1376,9 @@ void py_module(py::module& module) {
         "Approximation type",
         "none",
         R"doc(Performs backward operations for gelu on :attr:`input_tensor`, with given :attr:`grad_tensor` using given :attr:`approximate` mode.
-        :attr:`approximate` mode can be 'none', 'tanh'.)doc");
+        :attr:`approximate` mode can be 'none', 'tanh'.)doc",
+        R"doc(BFLOAT16)doc",
+        R"doc(For more details about BFLOAT8_B, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.)doc");
 
     detail::bind_unary_backward_unary_optional_float(
         module,

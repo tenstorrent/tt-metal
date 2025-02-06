@@ -145,6 +145,7 @@ void tt_fabric_add_header_checksum(packet_header_t* p_header) {
 }
 
 bool tt_fabric_is_header_valid(packet_header_t* p_header) {
+#ifdef TT_FABRIC_DEBUG
     uint16_t* ptr = (uint16_t*)p_header;
     uint32_t sum = 0;
     for (uint32_t i = 2; i < sizeof(packet_header_t) / 2; i++) {
@@ -153,6 +154,9 @@ bool tt_fabric_is_header_valid(packet_header_t* p_header) {
     sum = ~sum;
     sum += sum;
     return (p_header->packet_parameters.misc_parameters.words[0] == sum);
+#else
+    return true;
+#endif
 }
 
 // This is a pull request entry for a fabric router.
@@ -176,7 +180,9 @@ typedef struct _pull_request {
     uint64_t buffer_start;  // Producer local buffer start. Used for wrapping rd/wr_ptr at the end of buffer.
     uint64_t ack_addr;  // Producer local address to send rd_ptr updates. fabric router pushes its rd_ptr to requestor
                         // at this address.
-    uint8_t padding[15];
+    uint32_t words_written;
+    uint32_t words_read;
+    uint8_t padding[7];
     uint8_t flags;  // Router command.
 } pull_request_t;
 

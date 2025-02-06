@@ -28,9 +28,7 @@ def ttnn_to_torch(input):
 
 
 class transformer_2d_model:
-    def __init__(
-        self, device, parameters, reader_patterns_cache, batch_size, input_height, input_width, compute_kernel_config
-    ):
+    def __init__(self, device, parameters, batch_size, input_height, input_width, compute_kernel_config):
         self.device = device
         self.compute_kernel_config = compute_kernel_config
         parameters.proj_in.weight, parameters.proj_in.bias = permute_conv_parameters(
@@ -274,6 +272,7 @@ class transformer_2d_model:
                 weights_format="OIHW",
                 input_memory_config=hidden_states.memory_config(),
                 input_layout=hidden_states.get_layout(),
+                has_bias=True,
                 **conv_kwargs,
             )
             self.proj_in_conv_bias = ttnn.prepare_conv_bias(
@@ -341,6 +340,7 @@ class transformer_2d_model:
                         weights_format="OIHW",
                         input_memory_config=hidden_states.memory_config(),
                         input_layout=hidden_states.get_layout(),
+                        has_bias=True,
                         **conv_kwargs_1,
                     )
                     self.proj_out_conv_bias = ttnn.prepare_conv_bias(

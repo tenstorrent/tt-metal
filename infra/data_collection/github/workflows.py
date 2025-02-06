@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pathlib
+import json
 from datetime import datetime
 from functools import partial
 from typing import List
@@ -108,6 +109,25 @@ def get_github_job_id_to_test_reports(workflow_outputs_dir, workflow_run_id: int
     return github_job_id_to_test_reports
 
 
+def get_github_job_id_to_annotations(workflow_outputs_dir, workflow_run_id: int):
+    # Read <job_id>_annotations.json inside the logs dir
+    logs_dir = workflow_outputs_dir / str(workflow_run_id) / "logs"
+    annot_json_files = logs_dir.glob("*_annotations.json")
+
+    github_job_ids_to_annotation_jsons = {}
+    for annot_json_file in annot_json_files:
+        annot_json_info = None
+        with open(annot_json_file, "r") as f:
+            annot_json_info = json.load(f)
+        if annot_json_info:
+            # Map job id to annotation info (list of dict)
+            github_job_id = annot_json_file.name.replace("_annotations.json", "")
+            assert github_job_id.isnumeric(), f"{github_job_id}"
+            github_job_id = int(github_job_id)
+            github_job_ids_to_annotation_jsons[github_job_id] = annot_json_info
+    return github_job_ids_to_annotation_jsons
+
+
 def get_pydantic_test_from_pytest_testcase_(testcase, default_timestamp=datetime.now()):
     skipped = junit_xml_utils.get_pytest_testcase_is_skipped(testcase)
     failed = junit_xml_utils.get_pytest_testcase_is_failed(testcase)
@@ -126,8 +146,13 @@ def get_pydantic_test_from_pytest_testcase_(testcase, default_timestamp=datetime
     # Error at the beginning of a test can prevent pytest from recording timestamps at all
     if not (skipped or error):
         properties = junit_xml_utils.get_pytest_testcase_properties(testcase)
-        test_start_ts = datetime.strptime(properties["start_timestamp"], "%Y-%m-%dT%H:%M:%S")
-        test_end_ts = datetime.strptime(properties["end_timestamp"], "%Y-%m-%dT%H:%M:%S")
+        # Check if properties is none to see if pytest recorded the timestamps
+        if properties is not None:
+            test_start_ts = datetime.strptime(properties["start_timestamp"], "%Y-%m-%dT%H:%M:%S")
+            test_end_ts = datetime.strptime(properties["end_timestamp"], "%Y-%m-%dT%H:%M:%S")
+        else:
+            test_start_ts = default_timestamp
+            test_end_ts = default_timestamp
     else:
         test_start_ts = default_timestamp
         test_end_ts = default_timestamp

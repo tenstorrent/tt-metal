@@ -7,10 +7,20 @@
 
 #include <numa.h>
 
+#include <algorithm>
+#include <cstdlib>
+#include <set>
+#include <utility>
+
+#include "dispatch_core_manager.hpp"
+#include "dispatch_settings.hpp"
+#include "dprint_server.hpp"
+#include "host_api.hpp"
 #include <tt_metal.hpp>
 #include "tt_metal/impl/debug/noc_logging.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
+#include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
 
 using namespace tt::tt_metal;
 
@@ -191,7 +201,12 @@ void DevicePool::initialize(
     tt::stl::Span<const std::uint32_t> l1_bank_remap) noexcept {
     ZoneScoped;
     log_debug(tt::LogMetal, "DevicePool initialize");
+    // Initialize the dispatch core manager, responsible for assigning dispatch cores
     tt::tt_metal::dispatch_core_manager::initialize(dispatch_core_config, num_hw_cqs);
+    // Initialize the dispatch query layer, used by runtime command generation
+    tt_metal::DispatchQueryManager::initialize(num_hw_cqs);
+    // Initialize DispatchSettings with defaults
+    tt_metal::DispatchSettings::initialize(tt::Cluster::instance());
 
     if (_inst == nullptr) {
         static DevicePool device_pool{};
@@ -291,7 +306,6 @@ void DevicePool::activate_device(chip_id_t id) {
             false,
             worker_core_thread_core,
             completion_queue_reader_core);
-        device->update_dispatch_cores_for_multi_cq_eth_dispatch();
         if (!this->firmware_built_keys.contains(device->build_key())) {
             device->build_firmware();
             this->firmware_built_keys.insert(device->build_key());
@@ -300,11 +314,6 @@ void DevicePool::activate_device(chip_id_t id) {
     } else {
         log_debug(tt::LogMetal, "DevicePool re-initialize device {}", id);
         if (not device->is_initialized()) {
-            if (device->num_hw_cqs() != num_hw_cqs) {
-                // The dispatch core manager was reset, since the number of CQs was toggled.
-                // Account for chip specific idle eth dispatch cores.
-                device->update_dispatch_cores_for_multi_cq_eth_dispatch();
-            }
             device->initialize(num_hw_cqs, this->l1_small_size, this->trace_region_size, this->l1_bank_remap);
             if (!this->firmware_built_keys.contains(device->build_key())) {
                 device->build_firmware();
@@ -549,9 +558,9 @@ DevicePool::~DevicePool() {
     log_debug(tt::LogMetal, "DevicePool destructor");
     for (const auto& dev : this->devices) {
         if (dev != nullptr and dev->is_initialized()) {
-            // TODO: #13876, Was encountering issues with the dispatch_constants being destroyed before the DevicePool
+            // TODO: #13876, Was encountering issues with the DispatchMemMap being destroyed before the DevicePool
             // destructor, which leads to device->close() hitting asserts. We need to move the ownership of
-            // dispatch_constants to the device, so it doesn't go out of scope before the device is closed.
+            // DispatchMemMap to the device, so it doesn't go out of scope before the device is closed.
             dev->close();
         }
     }

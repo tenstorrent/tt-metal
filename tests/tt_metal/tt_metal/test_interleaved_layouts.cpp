@@ -13,7 +13,7 @@
 
 #include "llrt.hpp"
 
-#include <tt-metalium/dprint_server.hpp>
+#include "dprint_server.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does

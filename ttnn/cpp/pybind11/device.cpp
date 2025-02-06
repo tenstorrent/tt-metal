@@ -89,7 +89,13 @@ void py_device_module_types(py::module& m_device) {
 
     py::class_<tt::tt_metal::DispatchCoreConfig>(
         m_device, "DispatchCoreConfig", "Class representing dispatch core configuration.")
-        .def(py::init<>(), "Default constructor initializing type to WORKER and axis to ROW.")
+        .def(
+            py::init<>(),
+            "Default constructor initializing type to WORKER and axis to default value on platform architecture.")
+        .def(
+            py::init<tt::tt_metal::DispatchCoreType>(),
+            "Constructor with specified dispatch core type and default axis on platform architecture.",
+            py::arg("type"))
         .def(
             py::init<tt::tt_metal::DispatchCoreType, tt::tt_metal::DispatchCoreAxis>(),
             "Constructor with specified dispatch core type and axis.",
@@ -450,7 +456,7 @@ void device_module(py::module& m_device) {
            Layout target_layout,
            std::optional<MemoryConfig> target_mem_config) {
             return operations::experimental::auto_format::AutoFormat::format_output_tensor(
-                output, ttnn::SimpleShape(shape), device, target_layout, std::move(target_mem_config));
+                output, ttnn::Shape(shape), device, target_layout, std::move(target_mem_config));
         },
         py::arg("output").noconvert(),
         py::arg("shape"),
@@ -486,7 +492,7 @@ void device_module(py::module& m_device) {
            bool pad_h = true,
            bool pad_w = true) -> std::vector<uint32_t> {
             auto result = ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(
-                ttnn::SimpleShape(unpadded_shape), pad_c, pad_n, pad_h, pad_w);
+                ttnn::Shape(unpadded_shape), pad_c, pad_n, pad_h, pad_w);
             return std::vector<uint32_t>(result.cbegin(), result.cend());
         },
         py::arg("unpadded_shape"),
@@ -505,7 +511,7 @@ void device_module(py::module& m_device) {
             pad_w (bool, optional): Pad the width dimension. Defaults to `True`.
 
         Returns:
-            ttnn.tt_metal.LegacyShape: The padded shape.
+            List of [int]: The padded shape.
 
         Note:
             This functionality is planned for deprecation in the future.

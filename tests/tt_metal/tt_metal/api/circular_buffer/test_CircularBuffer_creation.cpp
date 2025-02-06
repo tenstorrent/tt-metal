@@ -63,7 +63,7 @@ TEST_F(DeviceFixture, TensixTestCreateCircularBufferAtValidIndices) {
     Program program;
     initialize_program(program, cr_set);
 
-    uint32_t l1_unreserved_base = devices_.at(0)->get_base_allocator_addr(HalMemType::L1);
+    uint32_t l1_unreserved_base = devices_.at(0)->allocator()->get_base_allocator_addr(HalMemType::L1);
     std::map<uint8_t, std::vector<uint32_t>> golden_cb_config = {
         {0, {l1_unreserved_base, cb_config.page_size, cb_config.num_pages}},
         {2, {l1_unreserved_base, cb_config.page_size, cb_config.num_pages}},

@@ -7,7 +7,6 @@
 
 #include <hal.hpp>
 #include <host_api.hpp>
-#include <dprint_server.hpp>
 
 #include <profiler.hpp>
 #include "hostdevcommon/profiler_common.h"
@@ -20,6 +19,8 @@
 #include <tt_cluster.hpp>
 
 #include "llrt.hpp"
+
+#include "dprint_server.hpp"
 
 namespace tt {
 
@@ -588,7 +589,7 @@ void InitDeviceProfiler(IDevice* device) {
             }
         }
 
-        uint32_t dramBankCount = tt::Cluster::instance().get_soc_desc(device_id).get_num_dram_channels();
+        uint32_t dramBankCount = tt::Cluster::instance().get_soc_desc(device_id).get_num_dram_views();
         uint32_t coreCountPerDram =
             tt::Cluster::instance().get_soc_desc(device_id).profiler_ceiled_core_count_perf_dram_bank;
 

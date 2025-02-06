@@ -393,6 +393,7 @@ void kernel_main() {
     zero_l1_buf((uint32_t*)local_pull_request, sizeof(local_pull_request_t));
     zero_l1_buf((uint32_t*)&packet_header, sizeof(packet_header_t));
     zero_l1_buf((uint32_t*)client_interface, sizeof(fabric_client_interface_t));
+    client_interface->gk_interface_addr = ((uint64_t)gk_interface_addr_h << 32) | gk_interface_addr_l;
     client_interface->gk_msg_buf_addr =
         (((uint64_t)gk_interface_addr_h << 32) | gk_interface_addr_l) + offsetof(gatekeeper_info_t, gk_msg_buf);
 
@@ -404,7 +405,7 @@ void kernel_main() {
         input_queue_state.init(src_endpoint_id, prng_seed);
     }
 
-    test_producer.init(data_buffer_start_addr, data_buffer_size_words, 0x0);
+    test_producer.init(data_buffer_start_addr, data_buffer_size_words);
     fvcc_test_producer.init(data_buffer_start_addr, 0x0, 0x0);
 
     uint32_t temp = max_packet_size_words;
@@ -440,6 +441,9 @@ void kernel_main() {
     uint32_t curr_packet_words_sent = 0;
     uint32_t packet_count = 0;
 
+    // make sure fabric node gatekeeper is available.
+    fabric_endpoint_init();
+
     while (true) {
         iter++;
 #ifdef CHECK_TIMEOUT
@@ -454,7 +458,7 @@ void kernel_main() {
 
         bool all_packets_initialized = test_buffer_handler();
 
-        if (test_producer.get_curr_packet_valid()) {
+        if (test_producer.get_curr_packet_valid<FVC_MODE_ENDPOINT>()) {
             curr_packet_size =
                 (test_producer.current_packet_header.routing.packet_size_bytes + PACKET_WORD_SIZE_BYTES - 1) >> 4;
             uint32_t curr_data_words_sent = test_producer.pull_data_from_fvc_buffer<FVC_MODE_ENDPOINT>();

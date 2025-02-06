@@ -299,7 +299,7 @@ void check_tensor(
 
 bool is_hw_dim(uint32_t dim, uint32_t rank) { return (dim >= rank - 2); }
 
-uint32_t compute_inner(tt::tt_metal::LegacyShape shape, uint32_t dim) {
+uint32_t compute_inner(const ttnn::Shape& shape, uint32_t dim) {
     uint32_t num_inner = 1;
     auto rank = shape.rank();
 
@@ -314,7 +314,7 @@ uint32_t compute_inner(tt::tt_metal::LegacyShape shape, uint32_t dim) {
     return num_inner;
 }
 
-uint32_t compute_outer(tt::tt_metal::LegacyShape shape, uint32_t dim) {
+uint32_t compute_outer(const ttnn::Shape& shape, uint32_t dim) {
     uint32_t num_outer = 1;
     auto rank = shape.rank();
 
@@ -328,7 +328,7 @@ uint32_t compute_outer(tt::tt_metal::LegacyShape shape, uint32_t dim) {
     return num_outer;
 }
 
-void expand_to_max_dim(ttnn::SmallVector<uint32_t>& dim, const ttnn::SimpleShape& shape) {
+void expand_to_max_dim(ttnn::SmallVector<uint32_t>& dim, const ttnn::Shape& shape) {
     const auto rank = shape.rank();
     for (auto i = 0; i < rank; ++i) {
         auto idx = rank - 1 - i;
@@ -444,7 +444,7 @@ ttnn::SmallVector<int64_t> get_dim(
     return dims;
 }
 
-std::tuple<uint32_t, uint32_t, uint32_t> extract_spatial_dims(const ttnn::SimpleShape& shape) {
+std::tuple<uint32_t, uint32_t, uint32_t> extract_spatial_dims(const ttnn::Shape& shape) {
     const auto rank = shape.rank();
 
     TT_FATAL(rank >= 2, "Shape must have at least two dims.");
@@ -460,7 +460,7 @@ std::tuple<uint32_t, uint32_t, uint32_t> extract_spatial_dims(const ttnn::Simple
 }
 
 std::tuple<uint32_t, uint32_t, uint32_t, uint32_t> extract_and_scale_spatial_dims(
-    const ttnn::SimpleShape& shape, uint32_t dim) {
+    const ttnn::Shape& shape, uint32_t dim) {
     const auto rank = shape.rank();
 
     TT_FATAL(rank >= 2, "Shape must have at least two dims.");

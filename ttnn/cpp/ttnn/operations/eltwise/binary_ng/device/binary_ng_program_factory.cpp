@@ -46,7 +46,7 @@ struct AllShardSpecs {
 };
 
 ShardSpec adjust_to_shape(
-    const ShardSpec& shard_spec, const ttnn::SimpleShape& from_shape, const ttnn::SimpleShape& to_shape) {
+    const ShardSpec& shard_spec, const ttnn::Shape& from_shape, const ttnn::Shape& to_shape) {
     auto ret = shard_spec;
 
     ret.shape[0] = (ret.shape[0] * to_shape[-2]) / from_shape[-2];
@@ -78,7 +78,7 @@ std::optional<AllShardSpecs> get_shard_specs(const Tensor& a, const std::optiona
     }
 
     auto a_shape = a.padded_shape();
-    auto b_shape = b.has_value() ? b->padded_shape() : ttnn::SimpleShape{1, 1};
+    auto b_shape = b.has_value() ? b->padded_shape() : ttnn::Shape{1, 1};
     auto c_shape = c.padded_shape();
 
     ShardSpec c_shard_spec = c_sharded   ? *c.shard_spec()
@@ -293,8 +293,10 @@ void set_or_update_runtime_arguments(
         handle_args(program, reader_kernel_id, core, reader_runtime_args);
 
         if (b.has_value()) {
-            auto b_shard_shape = b_shard_shape_generator(core);
-            b_num_tiles = b_shard_shape[0] * b_shard_shape[1];
+            if (has_sharding) {
+                auto b_shard_shape = b_shard_shape_generator(core);
+                b_num_tiles = b_shard_shape[0] * b_shard_shape[1];
+            }
             std::array writer_runtime_args = {
                 b->buffer()->address(),
                 c.buffer()->address(),
