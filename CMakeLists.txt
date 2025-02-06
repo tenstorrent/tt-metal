@@ -111,6 +111,7 @@ message(STATUS "Build TT METAL Tests: ${TT_METAL_BUILD_TESTS}")
 message(STATUS "Build TTNN Tests: ${TTNN_BUILD_TESTS}")
 message(STATUS "Build with Unity builds: ${TT_UNITY_BUILDS}")
 message(STATUS "Build with Shared TTNN Sublibraries: ${ENABLE_TTNN_SHARED_SUBLIBS}")
+message(STATUS "Build with LightMetal Trace Enabled: ${TT_ENABLE_LIGHT_METAL_TRACE}")
 
 ############################################################################################################################
 
@@ -145,7 +146,6 @@ unset(SANITIZER_ENABLED)
 ############################################################################################################################
 # Find all required libraries to build
 ############################################################################################################################
-set(ENV{CPM_SOURCE_CACHE} "${PROJECT_SOURCE_DIR}/.cpmcache")
 include(CPM)
 if(CMAKE_VERSION VERSION_LESS 3.25)
     # FIXME(14681): `SYSTEM` was introduced in v3.25; remove this when we can require v3.25
@@ -231,6 +231,13 @@ add_link_options(
     "$<$<BOOL:${ENABLE_TSAN}>:-fsanitize=thread>"
     "$<$<BOOL:${ENABLE_UBSAN}>:-fsanitize=undefined>"
 )
+
+# Planned to be temporary, remove later.
+if(TT_ENABLE_LIGHT_METAL_TRACE)
+    add_compile_definitions(TT_ENABLE_LIGHT_METAL_TRACE=1)
+else()
+    add_compile_definitions(TT_ENABLE_LIGHT_METAL_TRACE=0)
+endif()
 
 if(ENABLE_CODE_TIMERS)
     add_compile_definitions(TT_ENABLE_CODE_TIMERS)

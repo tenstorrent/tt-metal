@@ -61,7 +61,7 @@ void MAIN {
     cb_wait_front(cb_beta1_exponent, onetile);
     cb_wait_front(cb_beta2_exponent, onetile);
 
-    binary_op_init_common(cb_param_in, cb_scalar_args);
+    binary_op_init_common(cb_param_in, cb_scalar_args, cb_param_out);
 
     for (uint32_t b = 0; b < per_core_tile_cnt; ++b) {
         cb_wait_front(cb_param_in, onetile);

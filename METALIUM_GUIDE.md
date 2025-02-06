@@ -372,7 +372,7 @@ void MAIN {
     constexpr auto cb_out0 =  tt::CBIndex::c_16;
 
     binary_op_init_common(cb_in0, cb_in1, cb_out0);
-    add_tiles_init();
+    add_tiles_init(cb_in0, cb_in1);
 
     for(uint32_t block = 0; block < per_core_block_cnt; ++block) {
 

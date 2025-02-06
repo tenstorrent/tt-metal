@@ -107,29 +107,166 @@ std::vector<ttnn::TensorSpec> AllGatherAsync::compute_output_specs(const std::ve
         TensorLayout(input_tensor.get_dtype(), input_tensor.get_tensor_spec().page_config(), output_mem_config))};
 }
 
+AllGatherAsyncVersion AllGatherAsync::select_version(const Tensor& input_tensor) const {
+    auto input_tensor_shape = input_tensor.get_padded_shape();
+    auto input_tensor_buffer_layout = input_tensor.buffer()->buffer_layout();
+    auto input_tensor_page_layout = input_tensor.layout();
+    auto input_tensor_memory_config = input_tensor.memory_config();
+    bool input_is_sharded = input_tensor_memory_config.shard_spec.has_value();
+    bool output_is_sharded = output_mem_config.shard_spec.has_value();
+    uint32_t input_shard_num_cores = 0;
+    uint32_t output_shard_num_cores = 0;
+    if (input_is_sharded) {
+        input_shard_num_cores = input_tensor_memory_config.shard_spec->grid.num_cores();
+        log_trace(
+            tt::LogOp,
+            "[select_version] input_tensor_memory_config.shard_spec->shape: {}",
+            input_tensor_memory_config.shard_spec->shape);
+    }
+    if (output_is_sharded) {
+        output_shard_num_cores = output_mem_config.shard_spec->grid.num_cores();
+        log_trace(tt::LogOp, "[select_version] output_mem_config.shard_spec->shape: {}", output_mem_config.shard_spec->shape);
+    }
+
+    log_trace(tt::LogOp, "[select_version] input_tensor_shape: {}", input_tensor_shape);
+    log_trace(tt::LogOp, "[select_version] input_tensor_memory_config: {}", input_tensor_memory_config);
+    log_trace(tt::LogOp, "[select_version] output_mem_config: {}", output_mem_config);
+    log_trace(tt::LogOp, "[select_version] input_shard_num_cores: {}", input_shard_num_cores);
+    log_trace(tt::LogOp, "[select_version] output_shard_num_cores: {}", output_shard_num_cores);
+
+    // Check for minimal interleaved case
+    if (input_tensor_shape[0] == 1 && input_tensor_shape[1] == 1 && input_tensor_shape[2] == 32 &&
+        input_tensor_buffer_layout == tt::tt_metal::TensorMemoryLayout::INTERLEAVED &&
+        input_tensor_page_layout == tt::tt_metal::Layout::TILE && this->enable_persistent_fabric_mode) {
+        return AllGatherAsyncVersion::MINIMAL_INTERLEAVED_32;
+    }
+
+    log_trace(tt::LogOp, "[select_version] input_is_sharded: {}", input_is_sharded);
+    log_trace(tt::LogOp, "[select_version] output_is_sharded: {}", output_is_sharded);
+
+    if (input_is_sharded && output_is_sharded) {
+        // Check for first llama post binary matmul case
+        if (input_tensor_shape[0] == 1 && input_tensor_shape[1] == 1 && input_tensor_shape[2] == 32 &&
+            input_tensor_shape[3] == 960 && input_tensor_memory_config.buffer_type == BufferType::L1 &&
+            output_mem_config.buffer_type == BufferType::L1 &&
+            input_tensor_memory_config.memory_layout == TensorMemoryLayout::WIDTH_SHARDED &&
+            output_mem_config.memory_layout == TensorMemoryLayout::WIDTH_SHARDED &&
+            input_tensor_memory_config.shard_spec->shape[0] == 32 &&
+            input_tensor_memory_config.shard_spec->shape[1] == 32 &&
+            output_mem_config.shard_spec->shape[0] == 32 &&
+            output_mem_config.shard_spec->shape[1] == 160 && input_shard_num_cores == 30 &&
+            output_shard_num_cores == 24) {
+            return AllGatherAsyncVersion::LLAMA_POST_BINARY_MATMUL;
+        }
+
+        // Check for second llama post binary matmul case
+        if (input_tensor_shape[0] == 1 && input_tensor_shape[1] == 8 && input_tensor_shape[2] == 32 &&
+            input_tensor_shape[3] == 128 && input_tensor_memory_config.buffer_type == BufferType::L1 &&
+            output_mem_config.buffer_type == BufferType::L1 &&
+            input_tensor_memory_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED &&
+            output_mem_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED &&
+            input_tensor_memory_config.shard_spec->shape[0] == 32 &&
+            input_tensor_memory_config.shard_spec->shape[1] == 128 &&
+            output_mem_config.shard_spec->shape[0] == 32 &&
+            output_mem_config.shard_spec->shape[1] == 128 && input_shard_num_cores == 8 &&
+            output_shard_num_cores == 32) {
+            log_trace(tt::LogOp, "All conditions matched for LLAMA_POST_BINARY_MATMUL case");
+            return AllGatherAsyncVersion::LLAMA_POST_BINARY_MATMUL;
+        }
+    }
+    log_trace(tt::LogOp, "All conditions matched for generic case");
+    return AllGatherAsyncVersion::GENERIC;
+}
+
 operation::ProgramWithCallbacks AllGatherAsync::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     tt::log_debug(tt::LogOp, "DEBUG: create_program is called");
-    return all_gather_async_multi_core_with_workers(
-        input_tensors[0],
-        this->forward_device,
-        this->backward_device,
-        output_tensors[0],
-        this->dim,
-        this->num_links,
-        this->ring_size,
-        this->ring_index,
-        this->topology,
-        this->semaphore,
-        this->sub_device_id,
-        this->enable_persistent_fabric_mode);
+
+    AllGatherAsyncVersion version = select_version(input_tensors[0]);
+
+    log_trace(tt::LogOp, "version: {}", static_cast<uint32_t>(version));
+
+    switch (version) {
+        case AllGatherAsyncVersion::MINIMAL_INTERLEAVED_32:
+            log_trace(
+                tt::LogOp,
+                "Detected all gather specialized shape. all_gather_async_minimal_interleaved_dim3_1_1_32_any is "
+                "called");
+            return all_gather_async_minimal_interleaved_dim3_1_1_32_any(
+                input_tensors[0],
+                this->forward_device,
+                this->backward_device,
+                output_tensors[0],
+                this->dim,
+                this->num_links,
+                this->ring_size,
+                this->ring_index,
+                this->topology,
+                this->semaphore,
+                this->sub_device_id,
+                this->enable_persistent_fabric_mode);
+
+        case AllGatherAsyncVersion::LLAMA_POST_BINARY_MATMUL:
+            log_trace(
+                tt::LogOp,
+                "Detected all gather specialized shape. all_gather_async_llama_post_binary_matmul is called");
+            return all_gather_async_llama_post_binary_matmul(
+                input_tensors[0],
+                this->forward_device,
+                this->backward_device,
+                output_tensors[0],
+                this->dim,
+                this->num_links,
+                this->ring_size,
+                this->ring_index,
+                this->topology,
+                this->semaphore,
+                this->sub_device_id,
+                this->enable_persistent_fabric_mode);
+
+        case AllGatherAsyncVersion::GENERIC:
+        default:
+            log_trace(tt::LogOp, "Running generic all_gather_async_multi_core_with_workers");
+            return all_gather_async_multi_core_with_workers(
+                input_tensors[0],
+                this->forward_device,
+                this->backward_device,
+                output_tensors[0],
+                this->dim,
+                this->num_links,
+                this->ring_size,
+                this->ring_index,
+                this->topology,
+                this->semaphore,
+                this->sub_device_id,
+                this->enable_persistent_fabric_mode);
+    }
 }
 
 const operation::Hash AllGatherAsync::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
+    log_trace(tt::LogOp, "compute_program_hash is called");
+    AllGatherAsyncVersion version = select_version(input_tensors[0]);
+    log_trace(tt::LogOp, "version: {}", static_cast<uint32_t>(version));
     auto input_shape = input_tensors[0].get_padded_shape();
     auto input_memory_layout = input_tensors[0].get_layout();
     auto input_dtype = input_tensors[0].get_dtype();
     auto input_memory_config = input_tensors[0].memory_config();
+    if (version == AllGatherAsyncVersion::GENERIC) {
+        // Generic version should hash semaphore address as well
+        uint32_t semaphore_address = this->semaphore.address();
+        return operation::hash_operation<AllGatherAsync>(
+            this->dim,
+            this->num_links,
+            this->ring_size,
+            this->ring_index,
+            this->output_mem_config,
+            this->topology,
+            input_shape,
+            input_memory_layout,
+            input_dtype,
+            input_memory_config,
+            semaphore_address);
+    }
     return operation::hash_operation<AllGatherAsync>(
         this->dim,
         this->num_links,
@@ -142,8 +279,6 @@ const operation::Hash AllGatherAsync::compute_program_hash(const std::vector<Ten
         input_dtype,
         input_memory_config);
 }
-
-
 
 namespace operations {
 namespace experimental {
