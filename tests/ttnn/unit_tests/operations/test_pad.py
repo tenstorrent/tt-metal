@@ -457,6 +457,9 @@ def test_pad_conv2d_sweep(device, dtype, use_multicore, shape, padded_shape):
         [(2, 2), (4, 4), (1, 1), 1.0],  # 2D Test
         [(1, 1, 1), (4, 4, 4), (0, 0, 0), 1.0],  # 3D Test
         [(2, 2, 2, 2), (4, 4, 4, 4), (0, 0, 0, 0), 1.0]  # 4D Test
+        [
+            (2, 2, 2, 2),
+        ]
         # [ #1D Test
         #     (10,),
         #     (100,),
