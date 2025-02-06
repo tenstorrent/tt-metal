@@ -14,7 +14,7 @@
 
 #include "ttnn/cpp/ttnn/operations/ccl/common/types/sharding_common.hpp"
 
-typedef uint32_t mapping_table_t;
+using mapping_table_t = uint32_t;
 
 template <
     uint32_t SHARD_TYPE,
