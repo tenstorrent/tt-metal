@@ -21,6 +21,16 @@ namespace tt {
     ((((a) >= HAL_MEM_ETH_BASE) && ((a) + (l) <= HAL_MEM_ETH_BASE + HAL_MEM_ETH_SIZE)) || \
      (DEBUG_VALID_REG_ADDR(a) && (l) == 4))
 
+static bool coord_found_p(std::vector<tt::umd::CoreCoord> coords, CoreCoord core) {
+    for (const tt::umd::CoreCoord& core_coord : coords) {
+        CoreCoord item = {core_coord.x, core_coord.y};
+        if (item == core) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool coord_found_p(std::vector<CoreCoord> coords, CoreCoord core) {
     for (CoreCoord item : coords) {
         if (item == core) {
