@@ -76,7 +76,7 @@ void py_bind_bcast(py::module& module) {
             py::kw_only(),
             py::arg("output_tensor") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
-            py::arg("queue_id").noconvert() = 0});
+            py::arg("queue_id") = DefaultQueueId});
 }
 
 }  // namespace ttnn::operations::data_movement::detail
