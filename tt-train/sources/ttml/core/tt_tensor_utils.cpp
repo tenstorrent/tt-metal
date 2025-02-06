@@ -184,19 +184,17 @@ tt::tt_metal::Tensor from_vector<float, DataType::BFLOAT16>(
     // remove possible paddings from the shape (it conflicts with ROW MAJOR)
     auto output = tt::tt_metal::Tensor(OwnedStorage{owned_buffer}, shape, data_type, Layout::ROW_MAJOR);
 
-    const size_t MAX_TILE_DIMENSION = 16384;
+    const size_t MAX_TILE_DIMENSION = 16384 * 4;
     // Temporary workaround for the issue with tilize for large size
     // https://github.com/tenstorrent/tt-metal/issues/15950
-    if (shape[-1] >= MAX_TILE_DIMENSION && layout == Layout::TILE) {
-        output = ttnn::to_layout(output, Layout::TILE, std::nullopt, output_mem_config, device);
-        output = ttnn::to_device(output, device, output_mem_config);
-    } else {
-        output = ttnn::to_device(output, device, output_mem_config);
-        if (layout == Layout::TILE) {
-            output = ttnn::tilize_with_zero_padding(output, output_mem_config, std::nullopt, /* multicore */ true);
-        }
-    }
+    auto pad_tile = [](uint32_t val) { return (val + 32 - 1) / 32 * 32; };
+    auto padded_shape = pad_tile(shape[-1]) * pad_tile(shape[-2]);
+    bool multicore = padded_shape <= MAX_TILE_DIMENSION;
+    output = ttnn::to_device(output, device, output_mem_config);
 
+    if (layout == Layout::TILE) {
+        output = ttnn::tilize_with_zero_padding(output, output_mem_config, std::nullopt, /* multicore */ multicore);
+    }
     return output;
 }
 

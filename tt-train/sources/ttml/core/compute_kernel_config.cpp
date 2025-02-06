@@ -11,16 +11,16 @@ ttnn::WormholeComputeKernelConfig ComputeKernelConfig::precise() {
     config.fp32_dest_acc_en = true;
     config.math_approx_mode = false;
     config.math_fidelity = MathFidelity::HiFi4;
-    config.packer_l1_acc = true;
+    config.packer_l1_acc = false;
     return config;
 }
 
 ttnn::WormholeComputeKernelConfig ComputeKernelConfig::softmax() {
     ttnn::WormholeComputeKernelConfig config;
-    config.fp32_dest_acc_en = true;
+    config.fp32_dest_acc_en = false;
     config.math_approx_mode = false;
     config.math_fidelity = MathFidelity::HiFi4;
-    config.packer_l1_acc = true;
+    config.packer_l1_acc = false;
     return config;
 }
 
@@ -29,7 +29,7 @@ ttnn::WormholeComputeKernelConfig ComputeKernelConfig::matmul() {
     config.fp32_dest_acc_en = true;
     config.math_approx_mode = false;
     config.math_fidelity = MathFidelity::HiFi4;
-    config.packer_l1_acc = true;
+    config.packer_l1_acc = false;
     return config;
 }
 

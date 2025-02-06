@@ -1,16 +1,21 @@
 training_config:
   project_name: "tt_train_nano_gpt"
+  model_path: "nano_codegen_8k_256.msgpack"
   seed: 5489
   model_save_interval: 500
   batch_size: 64
   num_epochs: 1
   max_steps: 5000
-  learning_rate: 0.0003
+  learning_rate: 0.0001
   weight_decay: 0.01
   use_moreh_adamw: true
   use_kahan_summation: false
-  use_clip_grad_norm: false
+  use_clip_grad_norm: true
   clip_grad_norm_max_norm: 1.0
+  gradient_accumulation_steps: 1
+  tokenizer_path: "data/train_ttnn/tokenizer.json"
+  tokenizer_type: bpe
+  data_path: "data/train_ttnn/tokens.dat"
   transformer_config:
     num_heads: 6
     embedding_dim: 384
@@ -18,6 +23,7 @@ training_config:
     num_blocks: 6
     vocab_size: 96
     max_sequence_length: 256
+    weight_tying: enabled
     positional_embedding_type: trainable
     runner_type: default
     experimental:

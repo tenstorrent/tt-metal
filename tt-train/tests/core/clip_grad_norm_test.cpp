@@ -13,6 +13,7 @@
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "fmt/base.h"
 
 class ClipGradNormTest : public ::testing::Test {
 protected:
@@ -77,7 +78,9 @@ TEST_F(ClipGradNormTest, ClipGradNorm_GENEROUS_TOLERANCE) {
     }
     auto result = core::clip_grad_norm(named_params, max_norm, 2.0F);
     float computed_total_norm = core::to_vector(result->get_value()).front();
-
+    fmt::print("Computed total norm: {}\n", computed_total_norm);
+    fmt::print("Expected total norm: {}\n", expected_total_p2_norm);
+    EXPECT_TRUE(false);
     // Verify total norm is approx. correct
     // Total norm is a lot further off due to compounded bf16 errors
     EXPECT_NEAR(computed_total_norm, expected_total_p2_norm, 4e-1F);

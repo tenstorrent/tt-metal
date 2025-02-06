@@ -12,22 +12,6 @@
 
 namespace ttml::ops {
 
-tt::tt_metal::Tensor matmul(
-    const tt::tt_metal::Tensor& a, const tt::tt_metal::Tensor& b, bool transpose_a, bool transpose_b) {
-    return ttnn::matmul(
-        a,
-        b,
-        transpose_a,
-        transpose_b,
-        /* memory_config */ std::nullopt,
-        /* dtype */ std::nullopt,
-        /* program_config */ std::nullopt,
-        /* activation */ std::nullopt,
-        /* compute_kernel_config */ core::ComputeKernelConfig::matmul(),
-        /* core_grid */ ttnn::CoreGrid{7, 8},
-        /* output_tile */ std::nullopt);
-}
-
 autograd::TensorPtr scaled_dot_product_attention(
     const autograd::TensorPtr& query,
     const autograd::TensorPtr& key,
@@ -36,7 +20,12 @@ autograd::TensorPtr scaled_dot_product_attention(
     const float scale = 1.0F / std::sqrtf(static_cast<float>(query->get_value().get_logical_shape()[-1]));
     // (B, H, S, E) x (B, H, E, S) -> (B, H, S, S)
     auto q_scaled = ttnn::multiply(query->get_value(), scale);
-    auto qk_scaled = matmul(q_scaled, key->get_value(), /* transpose_a */ false, /* transpose_b */ true);
+    auto qk_scaled = ttnn_fixed::matmul(
+        q_scaled,
+        key->get_value(),
+        /* transpose_a */ false,
+        /* transpose_b */ true,
+        /* compute_kernel_config */ core::ComputeKernelConfig::matmul());
 
     if (mask.has_value()) {
         qk_scaled = ttnn::where(mask.value()->get_value(), qk_scaled, /* other */ -1e9F);
@@ -46,16 +35,29 @@ autograd::TensorPtr scaled_dot_product_attention(
     // TODO: add dropout here
 
     // (B, H, S, S) x (B, H, S, E) -> (B, H, S, E)
-    auto attention_qkv =
-        matmul(attention_weights, value->get_value(), /* transpose_a */ false, /* transpose_b */ false);
+    auto attention_qkv = ttnn_fixed::matmul(
+        attention_weights,
+        value->get_value(),
+        /* transpose_a */ false,
+        /* transpose_b */ false,
+        /* compute_kernel_config */ core::ComputeKernelConfig::matmul());
     auto out = ttml::autograd::create_tensor(attention_qkv);
 
     ttml::autograd::GradFunction grad = [scale, query, key, value, attention_weights, out, mask]() {
         auto grad_output = out->get_grad();
         // (B, H, S, S) x (B, H, S, E) -> (B, H, S, E)
-        auto grad_v = matmul(attention_weights, grad_output, /* transpose_a */ true, /* transpose_b */ false);
-        auto grad_attention_weights =
-            matmul(grad_output, value->get_value(), /* transpose_a */ false, /* transpose_b */ true);
+        auto grad_v = ttnn_fixed::matmul(
+            attention_weights,
+            grad_output,
+            /* transpose_a */ true,
+            /* transpose_b */ false,
+            /* compute_kernel_config */ core::ComputeKernelConfig::matmul());
+        auto grad_attention_weights = ttnn_fixed::matmul(
+            grad_output,
+            value->get_value(),
+            /* transpose_a */ false,
+            /* transpose_b */ true,
+            /* compute_kernel_config */ core::ComputeKernelConfig::matmul());
         auto grad_scaled_dot = ttnn::moreh_softmax_backward(
             attention_weights,
             grad_attention_weights,
@@ -67,17 +69,19 @@ autograd::TensorPtr scaled_dot_product_attention(
             /* compute_kernel_config */ core::ComputeKernelConfig::precise());
 
         grad_scaled_dot = ttnn::multiply(grad_scaled_dot, scale);
-        auto grad_q = matmul(
+        auto grad_q = ttnn_fixed::matmul(
             grad_scaled_dot,
             key->get_value(),
             /* transpose_a */ false,
-            /* transpose_b */ false);
+            /* transpose_b */ false,
+            /* compute_kernel_config */ core::ComputeKernelConfig::matmul());
 
-        auto grad_k = matmul(
+        auto grad_k = ttnn_fixed::matmul(
             grad_scaled_dot,
             query->get_value(),
             /* transpose_a */ true,
-            /* transpose_b */ false);
+            /* transpose_b */ false,
+            /* compute_kernel_config */ core::ComputeKernelConfig::matmul());
 
         query->add_grad(grad_q);
         key->add_grad(grad_k);
@@ -97,7 +101,12 @@ autograd::TensorPtr scaled_sigmoid_dot_product_attention(
     const std::optional<autograd::TensorPtr>& mask) {
     const float scale = 1.0F / std::sqrtf(static_cast<float>(query->get_value().get_logical_shape()[-1]));
     // (B, H, S, E) x (B, H, E, S) -> (B, H, S, S)
-    auto qk_t = matmul(query->get_value(), key->get_value(), /* transpose_a */ false, /* transpose_b */ true);
+    auto qk_t = ttnn_fixed::matmul(
+        query->get_value(),
+        key->get_value(),
+        /* transpose_a */ false,
+        /* transpose_b */ true,
+        /* compute_kernel_config */ core::ComputeKernelConfig::matmul());
     // (B, H, S, S) * scale
     auto qk_scaled = ttnn::multiply(qk_t, scale);
     if (mask.has_value()) {
@@ -109,17 +118,30 @@ autograd::TensorPtr scaled_sigmoid_dot_product_attention(
         ttnn::subtract(qk_scaled, std::logf(static_cast<float>(query->get_value().get_logical_shape()[-2]))));
 
     // (B, H, S, S) x (B, H, S, E) -> (B, H, S, E)
-    auto attention_qkv =
-        matmul(attention_weights, value->get_value(), /* transpose_a */ false, /* transpose_b */ false);
+    auto attention_qkv = ttnn_fixed::matmul(
+        attention_weights,
+        value->get_value(),
+        /* transpose_a */ false,
+        /* transpose_b */ false,
+        /* compute_kernel_config */ core::ComputeKernelConfig::matmul());
     auto out = ttml::autograd::create_tensor(attention_qkv);
 
     ttml::autograd::GradFunction grad =
         [scale, query, key, value, qk_t, qk_scaled, attention_weights, attention_qkv, out, mask]() {
             auto grad_output = out->get_grad();
             // (B, H, S, S) x (B, H, S, E) -> (B, H, S, E)
-            auto grad_v = matmul(attention_weights, grad_output, /* transpose_a */ true, /* transpose_b */ false);
-            auto grad_attention_weights =
-                matmul(grad_output, value->get_value(), /* transpose_a */ false, /* transpose_b */ true);
+            auto grad_v = ttnn_fixed::matmul(
+                attention_weights,
+                grad_output,
+                /* transpose_a */ true,
+                /* transpose_b */ false,
+                /* compute_kernel_config */ core::ComputeKernelConfig::matmul());
+            auto grad_attention_weights = ttnn_fixed::matmul(
+                grad_output,
+                value->get_value(),
+                /* transpose_a */ false,
+                /* transpose_b */ true,
+                /* compute_kernel_config */ core::ComputeKernelConfig::matmul());
             auto grad_scaled_dot =
                 ttnn::sigmoid_bw(
                     grad_attention_weights,
@@ -131,18 +153,20 @@ autograd::TensorPtr scaled_sigmoid_dot_product_attention(
                 grad_scaled_dot = ttnn::where(mask.value()->get_value(), grad_scaled_dot, /* other */ 0.0F);
             }
 
-            auto grad_q = matmul(
+            auto grad_q = ttnn_fixed::matmul(
                 grad_scaled_dot,
                 key->get_value(),
                 /* transpose_a */ false,
-                /* transpose_b */ false);
+                /* transpose_b */ false,
+                /* compute_kernel_config */ core::ComputeKernelConfig::matmul());
             grad_q = ttnn::multiply(grad_q, scale);
 
-            auto grad_k = matmul(
+            auto grad_k = ttnn_fixed::matmul(
                 grad_scaled_dot,
                 query->get_value(),
                 /* transpose_a */ true,
-                /* transpose_b */ false);
+                /* transpose_b */ false,
+                /* compute_kernel_config */ core::ComputeKernelConfig::matmul());
             grad_k = ttnn::multiply(grad_k, scale);
 
             query->add_grad(grad_q);
