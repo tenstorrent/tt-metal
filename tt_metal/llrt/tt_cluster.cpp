@@ -240,8 +240,8 @@ void Cluster::assign_mem_channels_to_devices(
     }
 }
 
-void Cluster::get_metal_desc_from_tt_desc(const std::set<chip_id_t>& chip_ids) {
-    for (const auto& id : chip_ids) {
+void Cluster::get_metal_desc_from_tt_desc() {
+    for (const auto& id : this->driver_->get_target_device_ids()) {
         this->sdesc_per_chip_.emplace(
             id, metal_SocDescriptor(this->driver_->get_soc_descriptor(id), this->cluster_desc_->get_board_type(id)));
     }
@@ -295,8 +295,8 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
     }
     device_driver->set_barrier_address_params(barrier_params);
 
-    this->get_metal_desc_from_tt_desc(device_driver->get_target_device_ids());
     this->driver_ = std::move(device_driver);
+    this->get_metal_desc_from_tt_desc();
 }
 
 void Cluster::start_driver(tt_device_params &device_params) const {
