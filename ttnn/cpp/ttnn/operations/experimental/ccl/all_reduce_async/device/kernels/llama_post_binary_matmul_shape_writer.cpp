@@ -89,7 +89,6 @@ void kernel_main() {
     ///////////////////////////////////////////////////
     // ARGS
     ///////////////////////////////////////////////////
-    uint32_t reduction_semaphore_send_addr = get_semaphore(get_compile_time_arg_val(8));
 
     size_t arg_idx = 0;
     // Load the input tensor spec
@@ -106,10 +105,13 @@ void kernel_main() {
     const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
     uint32_t out_ready_sem_wait_value = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t reduction_semaphore_send_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
     const uint32_t mcast_dest_noc_start_x = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t mcast_dest_noc_start_y = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t mcast_dest_noc_end_x = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t mcast_dest_noc_end_y = get_arg_val<uint32_t>(arg_idx++);
+
+    DPRINT << "reduction_output_cb_id: " << reduction_semaphore_send_addr << "\n";
 
     volatile tt_l1_ptr uint32_t* reduction_semaphore_send_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reduction_semaphore_send_addr);
@@ -199,6 +201,7 @@ void kernel_main() {
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr);
     noc_semaphore_inc(out_ready_sem_noc_addr, 1);
 
+    DPRINT << "wait for output semphore \n";
     // 3. wait for mcast output ready semaphore
     if (wait_output_semaphore) {
         while (*reinterpret_cast<volatile uint32_t*>(out_ready_sem_bank_addr) < out_ready_sem_wait_value);
@@ -220,6 +223,8 @@ void kernel_main() {
             0);
     }
 
+    DPRINT << "wait done for output semphore \n";
+
     // 4. global semaphore reset
     if (reset_global_semaphore) {
         const uint64_t dest_noc_addr = get_noc_addr(my_x[0], my_y[0], out_ready_sem_bank_addr);
@@ -231,4 +236,6 @@ void kernel_main() {
     }
 
     noc_async_write_barrier();
+
+    DPRINT << "writer done \n";
 }
