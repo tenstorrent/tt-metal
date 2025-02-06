@@ -205,7 +205,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: eager-dist-${{ inputs.distro }}-${{ inputs.version }}-any
-          path: dist/
+          path: /work/dist/
+          if-no-files-found: error
 
       - name: 'Tar files'
         if: ${{ inputs.publish-artifact }}
