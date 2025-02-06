@@ -617,13 +617,13 @@ std::shared_ptr<Buffer> to_device_buffer(
             using StorageType = std::decay_t<decltype(storage)>;
             if constexpr (std::is_same_v<StorageType, OwnedStorage> or std::is_same_v<StorageType, BorrowedStorage>) {
                 auto data_to_write = host_buffer::get_as<T>(storage.buffer);
-                auto expected_packed_buffer_size_bytes = tensor_spec.compute_packed_buffer_size_bytes();
+                auto expected_host_buffer_size_bytes = tensor_spec.compute_packed_buffer_size_bytes();
                 auto input_size_bytes = data_to_write.size() * sizeof(T);
                 TT_FATAL(
-                    input_size_bytes == expected_packed_buffer_size_bytes,
-                    "Host data with total size {}B does not match expected size {}B of device buffer!",
+                    input_size_bytes == expected_host_buffer_size_bytes,
+                    "Host data with total size {}B does not match expected size {}B of physical host buffer!",
                     input_size_bytes,
-                    expected_packed_buffer_size_bytes);
+                    expected_host_buffer_size_bytes);
                 return initialize_data_on_device<T>(data_to_write, device, tensor_spec, cq_id);
             } else if constexpr (std::is_same_v<StorageType, DeviceStorage>) {
                 TT_THROW("Device storage doesn't support to_device_buffer");

@@ -197,6 +197,63 @@ std::optional<ShardSpecBuffer> TensorLayout::compute_shard_spec_buffer(const ttn
     return shard_spec_buffer;
 }
 
+/*
+size_t TensorLayout::compute_packed_buffer_size_bytes(const ttnn::Shape& shape) const {
+    return compute_host_buffer_size_bytes(shape);
+    Shape2D physical_size = compute_physical_shape(shape);
+    // LOGICAL SHARDING
+    if (memory_config_.shard_spec.has_value()) {
+        const int rank = static_cast<int>(shape.rank());
+        const int alignment_rank = static_cast<int>(alignment_.size());
+
+        size_t width = 1;
+        size_t height = 1;
+
+        // Iterate dims in reverse order
+        for (int i = -1; i >= -rank; --i) {
+            auto& dim = i == -1 ? width : height;
+            dim *= shape[i];
+        }
+
+        const auto& logical_shard_shape = get_logical_shard_shape();
+        const auto& physical_shard_shape = get_physical_shard_shape();
+
+        auto get_physical_size =
+            [](auto original_size, auto logical_shard_size, auto physical_shard_size, auto alignment) -> uint32_t {
+            if (logical_shard_size == 0) {
+                return 0;
+            }
+            // For total device buffer size, return the size where partial shards are padded to physical shard sizes:
+            auto num_shards = tt::div_up(original_size, logical_shard_size);
+            return (uint32_t)physical_shard_size * num_shards;
+        };
+
+        auto physical_height =
+            get_physical_size(height, logical_shard_shape.height(), physical_shard_shape.height(), alignment_[-2]);
+        auto physical_width =
+            get_physical_size(width, logical_shard_shape.width(), physical_shard_shape.width(), alignment_[-1]);
+
+        physical_size = Shape2D(physical_height, physical_width);
+    }
+    const Shape2D page_shape = compute_page_shape(physical_size);
+    const auto width_remainder = physical_size.width() % page_shape.width();
+    const auto height_remainder = physical_size.height() % page_shape.height();
+    TT_FATAL(
+        (width_remainder == 0 && height_remainder == 0) || ((physical_size.width() * physical_size.height()) == 0),
+        "Physical size {} must be multiple of page size {}",
+        physical_size,
+        page_shape);
+
+    const size_t physical_area = physical_size.height() * physical_size.width();
+    const size_t page_area = page_shape.height() * page_shape.width();
+
+    const size_t page_count = physical_area / page_area;
+    const size_t page_size_bytes = compute_page_size_bytes(page_shape);
+
+    return page_count * page_size_bytes;
+}
+*/
+
 size_t TensorLayout::compute_packed_buffer_size_bytes(const ttnn::Shape& shape) const {
     const Shape2D physical_size = compute_physical_shape(shape);
     const Shape2D page_shape = compute_page_shape(physical_size);

@@ -535,6 +535,10 @@ void write_to_device_buffer(
     CoreType dispatch_core_type,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
     validate_buffer_region_conditions(buffer, region);
+    // std::cout << "write to device buffer (size): " << buffer.size() << std::endl;
+    // std::cout << "write to device buffer (dev pages): " <<  buffer.num_pages() << std::endl;
+    // std::cout << "write to device buffer (shard spec): " <<  buffer.shard_spec().size() << std::endl;
+    // std::cout << "write to device buffer (num cores): " <<  buffer.num_cores().value() << std::endl;
 
     SystemMemoryManager& sysmem_manager = buffer.device()->sysmem_manager();
     const BufferDispatchConstants buf_dispatch_constants =

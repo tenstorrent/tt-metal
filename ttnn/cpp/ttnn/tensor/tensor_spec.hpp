@@ -38,6 +38,9 @@ public:
     size_t compute_packed_buffer_size_bytes() const {
         return tensor_layout_.compute_packed_buffer_size_bytes(logical_shape_);
     }
+    // size_t compute_host_buffer_size_bytes() const {
+    //     return tensor_layout_.compute_host_buffer_size_bytes(logical_shape_);
+    // }
     size_t compute_page_size_bytes() const { return tensor_layout_.compute_page_size_bytes(logical_shape_); }
 
     static constexpr auto attribute_names = std::forward_as_tuple("logical_shape", "tensor_layout");
