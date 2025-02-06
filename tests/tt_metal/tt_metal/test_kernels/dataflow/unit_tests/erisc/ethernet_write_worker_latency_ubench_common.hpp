@@ -199,9 +199,13 @@ FORCE_INLINE void write_worker(
     uint32_t message_size,
     uint32_t curr_trid_to_write) {
     // write to local
+#ifdef DISABLE_TRID
+    noc_async_write(buffer_slot_addr, worker_noc_addr, message_size);
+    noc_async_writes_flushed();
+#else
     noc_async_write_one_packet_with_trid_with_state(
         buffer_slot_addr, worker_noc_addr, message_size, curr_trid_to_write);
-
+#endif
     // reset sync
     buffer_slot_sync_addr->bytes_sent = 0;
 }
@@ -233,7 +237,7 @@ FORCE_INLINE void check_write_worker_done_and_send_ack(
     uint32_t& num_messages_ack) {
     bool buffer_not_empty = read_ptr != write_ptr;
 
-#ifdef ENABLE_WORKER
+#if defined(ENABLE_WORKER) and !defined(DISABLE_TRID)
     uint32_t curr_trid = get_buffer_slot_trid(read_ptr);
     if (buffer_not_empty && write_worker_done(curr_trid)) {
 #else

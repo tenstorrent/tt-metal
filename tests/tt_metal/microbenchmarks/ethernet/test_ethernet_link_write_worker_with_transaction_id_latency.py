@@ -27,7 +27,7 @@ if os.path.exists(FILE_NAME):
 
 
 def run_erisc_write_worker_latency(
-    sample_count, sample_size_expected_latency, channel_count, num_directions, enable_worker, file_name
+    sample_count, sample_size_expected_latency, channel_count, num_directions, enable_worker, disable_trid, file_name
 ):
     os.system(f"rm -rf {os.environ['TT_METAL_HOME']}/generated/profiler/.logs/profile_log_device.csv")
 
@@ -46,7 +46,8 @@ def run_erisc_write_worker_latency(
                 {channel_count} \
                 {num_directions} \
                 {test_latency} \
-                {enable_worker}"
+                {enable_worker} \
+                {disable_trid} "
     rc = os.system(cmd)
     if rc != 0:
         logger.info("Error in running the test")
@@ -66,6 +67,7 @@ def run_erisc_write_worker_latency(
 @pytest.mark.parametrize("channel_count", [16])
 @pytest.mark.parametrize("num_directions", [1])
 @pytest.mark.parametrize("enable_worker", [1])
+@pytest.mark.parametrize("disable_trid", [0])
 @pytest.mark.parametrize(
     "sample_size_expected_latency",
     [
@@ -80,7 +82,7 @@ def run_erisc_write_worker_latency(
     ],
 )
 def test_erisc_write_worker_latency_uni_dir(
-    sample_count, sample_size_expected_latency, channel_count, num_directions, enable_worker
+    sample_count, sample_size_expected_latency, channel_count, num_directions, enable_worker, disable_trid
 ):
     run_erisc_write_worker_latency(
         sample_count,
@@ -88,6 +90,7 @@ def test_erisc_write_worker_latency_uni_dir(
         channel_count,
         num_directions,
         enable_worker,
+        disable_trid,
         FILE_NAME,
     )
 
@@ -98,12 +101,13 @@ def test_erisc_write_worker_latency_uni_dir(
 @pytest.mark.parametrize("channel_count", [16])
 @pytest.mark.parametrize("num_directions", [2])
 @pytest.mark.parametrize("enable_worker", [1])
+@pytest.mark.parametrize("disable_trid", [0])
 @pytest.mark.parametrize(
     "sample_size_expected_latency",
     [(16, 1077.0), (128, 1079.0), (256, 1077.0), (512, 1175.0), (1024, 1231.0), (2048, 1389.0), (4096, 1596.0)],
 )
 def test_erisc_write_worker_latency_bi_dir(
-    sample_count, sample_size_expected_latency, channel_count, num_directions, enable_worker
+    sample_count, sample_size_expected_latency, channel_count, num_directions, enable_worker, disable_trid
 ):
     run_erisc_write_worker_latency(
         sample_count,
@@ -111,6 +115,7 @@ def test_erisc_write_worker_latency_bi_dir(
         channel_count,
         num_directions,
         enable_worker,
+        disable_trid,
         FILE_NAME,
     )
 
@@ -121,6 +126,7 @@ def test_erisc_write_worker_latency_bi_dir(
 @pytest.mark.parametrize("channel_count", [16])
 @pytest.mark.parametrize("num_directions", [1])
 @pytest.mark.parametrize("enable_worker", [0])
+@pytest.mark.parametrize("disable_trid", [0])
 @pytest.mark.parametrize(
     "sample_size_expected_latency",
     [
@@ -135,7 +141,7 @@ def test_erisc_write_worker_latency_bi_dir(
     ],
 )
 def test_erisc_latency_uni_dir(
-    sample_count, sample_size_expected_latency, channel_count, num_directions, enable_worker
+    sample_count, sample_size_expected_latency, channel_count, num_directions, enable_worker, disable_trid
 ):
     run_erisc_write_worker_latency(
         sample_count,
@@ -143,6 +149,7 @@ def test_erisc_latency_uni_dir(
         channel_count,
         num_directions,
         enable_worker,
+        disable_trid,
         FILE_NAME,
     )
 
@@ -153,16 +160,20 @@ def test_erisc_latency_uni_dir(
 @pytest.mark.parametrize("channel_count", [16])
 @pytest.mark.parametrize("num_directions", [2])
 @pytest.mark.parametrize("enable_worker", [0])
+@pytest.mark.parametrize("disable_trid", [0])
 @pytest.mark.parametrize(
     "sample_size_expected_latency",
     [(16, 918.0), (128, 919.0), (256, 952.0), (512, 988.0), (1024, 1122.0), (2048, 1224.0), (4096, 1394.0)],
 )
-def test_erisc_latency_bi_dir(sample_count, sample_size_expected_latency, channel_count, num_directions, enable_worker):
+def test_erisc_latency_bi_dir(
+    sample_count, sample_size_expected_latency, channel_count, num_directions, enable_worker, disable_trid
+):
     run_erisc_write_worker_latency(
         sample_count,
         sample_size_expected_latency,
         channel_count,
         num_directions,
         enable_worker,
+        disable_trid,
         FILE_NAME,
     )

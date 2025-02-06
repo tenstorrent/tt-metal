@@ -100,7 +100,8 @@ std::vector<Program> build(
     std::shared_ptr<Buffer>& worker_buffer_0,
     std::shared_ptr<Buffer>& worker_buffer_1,
     bool test_latency,
-    bool enable_worker) {
+    bool enable_worker,
+    bool disable_trid) {
     Program program0;
     Program program1;
 
@@ -133,6 +134,9 @@ std::vector<Program> build(
     }
     if (enable_worker) {
         sender_receiver_defines["ENABLE_WORKER"] = "1";
+    }
+    if (disable_trid) {
+        sender_receiver_defines["DISABLE_TRID"] = "1";
     }
 
     local_kernel = tt_metal::CreateKernel(
@@ -214,6 +218,7 @@ int main(int argc, char** argv) {
     std::size_t num_directions = std::stoi(argv[arg_idx++]);
     bool test_latency = std::stoi(argv[arg_idx++]);
     bool enable_worker = std::stoi(argv[arg_idx++]);
+    bool disable_trid = std::stoi(argv[arg_idx++]);
     TT_FATAL(num_directions == 1 or num_directions == 2, "either uni-dir or bi-dir test");
 
     auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
@@ -302,7 +307,8 @@ int main(int argc, char** argv) {
                 worker_buffer_0,
                 worker_buffer_1,
                 test_latency,
-                enable_worker);
+                enable_worker,
+                disable_trid);
             run(device_0,
                 device_1,
                 programs[0],
