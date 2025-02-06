@@ -152,7 +152,7 @@ def Yolov11_shard_upsample(device, x):
     out_sharded_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec_out
     )
-    x = ttnn.upsample(x, scale_factor=2, memory_config=out_sharded_mem_config)  # 11
+    x = ttnn.upsample(x, scale_factor=2, memory_config=out_sharded_mem_config)
     x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
     return x
 
@@ -167,12 +167,7 @@ class Conv:
             x = self.conv(x)
             if x.is_sharded():
                 x = ttnn.sharded_to_interleaved(x, ttnn.L1_MEMORY_CONFIG)
-            # dtype_req = x.dtype
-            # x = ttnn.to_torch(x)
-            # x = torch.nn.SiLU(inplace=True)(x)
-            # x = ttnn.from_torch(x,dtype=dtype_req,layout=ttnn.TILE_LAYOUT,device=device,memory_config=ttnn.L1_MEMORY_CONFIG)
             x = ttnn.silu(x)
-            # print("silu dtype is ",x.dtype)
 
         else:
             x = self.conv(x)
@@ -188,7 +183,6 @@ class Bottleneck:
         input = x
         x = self.cv1(device, x)
         x = self.cv2(device, x)
-        # x = ttnn.add(input,x,memory_config=ttnn.L1_MEMORY_CONFIG)
         return input + x
 
 
@@ -197,7 +191,6 @@ class SPPF:
         self.parameter = parameter
         self.cv1 = Conv(device, parameter.cv1, conv_pt.cv1)
         self.cv2 = Conv(device, parameter.cv2, conv_pt.cv2)
-        # self.m = nn.MaxPool2d(kernel_size=5, stride=1, padding=2)
 
     def __call__(self, device, x):
         x = self.cv1(device, x)
@@ -214,8 +207,6 @@ class SPPF:
             stride=[1, 1],
             padding=[2, 2],
             dilation=[1, 1],
-            # memory_config=ttnn.L1_MEMORY_CONFIG,
-            # applied_shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         )
 
         m2 = ttnn.max_pool2d(
@@ -228,8 +219,6 @@ class SPPF:
             stride=[1, 1],
             padding=[2, 2],
             dilation=[1, 1],
-            # memory_config=ttnn.L1_MEMORY_CONFIG,
-            # applied_shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         )
 
         m3 = ttnn.max_pool2d(
@@ -242,8 +231,6 @@ class SPPF:
             stride=[1, 1],
             padding=[2, 2],
             dilation=[1, 1],
-            # memory_config=ttnn.L1_MEMORY_CONFIG,
-            # applied_shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         )
 
         if x1.is_sharded():
@@ -257,7 +244,10 @@ class SPPF:
         y = ttnn.concat([x1, m1, m2, m3], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         x = self.cv2(device, y)
-        x = x[:, :, :49, :]
+        print("shape before slice is ", x.shape)
+        if x.shape[2] != y.shape[2]:
+            x = x[:, :, :49, :]
+        print("shape after slice is ", x.shape)
         ttnn.deallocate(x1)
         ttnn.deallocate(m1)
         ttnn.deallocate(m2)
@@ -280,10 +270,10 @@ class C3K:
         k1 = self.k1(device, x1)
         k2 = self.k2(device, k1)
 
-        if x2.is_sharded():
-            x2 = ttnn.sharded_to_interleaved(x2, ttnn.L1_MEMORY_CONFIG)
-        if k2.is_sharded():
-            k2 = ttnn.sharded_to_interleaved(k2, ttnn.L1_MEMORY_CONFIG)
+        # if x2.is_sharded():
+        #     x2 = ttnn.sharded_to_interleaved(x2, ttnn.L1_MEMORY_CONFIG)
+        # if k2.is_sharded():
+        #     k2 = ttnn.sharded_to_interleaved(k2, ttnn.L1_MEMORY_CONFIG)
 
         x = ttnn.concat((k2, x2), 3, memory_config=ttnn.L1_MEMORY_CONFIG)
         x = self.cv3(device, x)
@@ -309,88 +299,51 @@ class C3k2:
             self.c3k = C3K(device, parameter[0], conv_pt.m[0])
 
     def __call__(self, device, x):
+        # if self.is_bk_enabled:
+        x = self.cv1(device, x)
+        x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
+        y1 = x[:, :, :, : x.shape[-1] // 2]
+        y2 = x[:, :, :, x.shape[-1] // 2 : x.shape[-1]]
+        y2 = ttnn.to_layout(y2, layout=ttnn.TILE_LAYOUT)
         if self.is_bk_enabled:
-            x = self.cv1(device, x)
-
-            # x = ttnn.to_torch(x)
-            # x = ttnn.from_torch(
-            #     x, device=device, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG, layout=ttnn.TILE_LAYOUT
-            # )
-            # print("dtype before ",x.dtype)
-            # if x.dtype == ttnn.bfloat8_b:
-            #     x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-            # print("dtype after ",x.dtype)
-            # y1, y2 = x.chunk(2, -1)
-            # y1 = ttnn.from_torch(y1, dtype=ttnn.bfloat16, device=device)
-            # y2 = ttnn.from_torch(y2, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
-            # torch.save(ttnn.to_torch(x).reshape(x.shape[0],int(torch.sqrt(torch.tensor(x.shape[2], dtype=torch.float32))),int(torch.sqrt(torch.tensor(x.shape[2], dtype=torch.float32))),x.shape[-1]).permute(0,3,1,2),"/home/ubuntu/tt-metal/models/experimental/functional_yolov11/dumps/spcl.pth")
-            # x = ttnn.to_memory_config(x,ttnn.L1_MEMORY_CONFIG,layout=ttnn.ROW_MAJOR_LAYOUT)
-            # print(x.shape, x.memory_config(), x.get_layout(), x.get_dtype())
-            x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
-            y1 = x[:, :, :, : x.shape[-1] // 2]
-            y2 = x[:, :, :, x.shape[-1] // 2 : x.shape[-1]]
-            y2 = ttnn.to_layout(y2, layout=ttnn.TILE_LAYOUT)
-
             y3 = self.k(device, y2)
-
-            if y2.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
-                y2 = ttnn.to_layout(y2, ttnn.ROW_MAJOR_LAYOUT)
-            if y3.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
-                y3 = ttnn.to_layout(y3, ttnn.ROW_MAJOR_LAYOUT)
-
-            x = ttnn.concat((y1, y2, y3), 3, memory_config=ttnn.L1_MEMORY_CONFIG)
-
-            if x.get_layout() == ttnn.ROW_MAJOR_LAYOUT:
-                x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-            x = self.cv2(device, x)
         else:
-            x = self.cv1(device, x)
-
-            # torch.save(
-            #     ttnn.to_torch(x)
-            #     .reshape(
-            #         x.shape[0],
-            #         int(torch.sqrt(torch.tensor(x.shape[2], dtype=torch.float32))),
-            #         int(torch.sqrt(torch.tensor(x.shape[2], dtype=torch.float32))),
-            #         x.shape[-1],
-            #     )
-            #     .permute(0, 3, 1, 2),
-            #     "/home/ubuntu/tt-metal/models/experimental/functional_yolov11/dumps/spcl.pth",
-            # )
-            # x = ttnn.to_torch(x)
-            # y1, y2 = x.chunk(2, -1)
-            # y1 = ttnn.from_torch(y1, dtype=ttnn.bfloat16, device=device)
-            # y2 = ttnn.from_torch(y2, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
-            # print("dtype before ",x.dtype)
-            # x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
-            # print("dtype after ",x.dtype)
-            # x = ttnn.to_torch(x)
-            # x = ttnn.from_torch(
-            #     x, device=device, dtype=ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG, layout=ttnn.TILE_LAYOUT
-            # )
-            x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
-            y1 = x[:, :, :, : x.shape[-1] // 2]
-            y2 = x[:, :, :, x.shape[-1] // 2 : x.shape[-1]]
-            y2 = ttnn.to_layout(y2, layout=ttnn.TILE_LAYOUT)
-
             y3 = self.c3k(device, y2)
+        if y2.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+            y2 = ttnn.to_layout(y2, ttnn.ROW_MAJOR_LAYOUT)
+        if y3.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+            y3 = ttnn.to_layout(y3, ttnn.ROW_MAJOR_LAYOUT)
 
-            if y1.is_sharded():
-                y1 = ttnn.sharded_to_interleaved(y1, ttnn.L1_MEMORY_CONFIG)
-            if y2.is_sharded():
-                y2 = ttnn.sharded_to_interleaved(y2, ttnn.L1_MEMORY_CONFIG)
-            if y3.is_sharded():
-                y3 = ttnn.sharded_to_interleaved(y3, ttnn.L1_MEMORY_CONFIG)
+        x = ttnn.concat((y1, y2, y3), 3, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-            if y2.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
-                y2 = ttnn.to_layout(y2, ttnn.ROW_MAJOR_LAYOUT)
-            if y3.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
-                y3 = ttnn.to_layout(y3, ttnn.ROW_MAJOR_LAYOUT)
+        if x.get_layout() == ttnn.ROW_MAJOR_LAYOUT:
+            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+        x = self.cv2(device, x)
+        # else:
+        #     x = self.cv1(device, x)
+        #     x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
+        #     y1 = x[:, :, :, : x.shape[-1] // 2]
+        #     y2 = x[:, :, :, x.shape[-1] // 2 : x.shape[-1]]
+        #     y2 = ttnn.to_layout(y2, layout=ttnn.TILE_LAYOUT)
 
-            x = ttnn.concat((y1, y2, y3), 3, memory_config=ttnn.L1_MEMORY_CONFIG)
-            if x.get_layout() == ttnn.ROW_MAJOR_LAYOUT:
-                x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-            x = self.cv2(device, x)
+        #     y3 = self.c3k(device, y2)
+
+        #     # if y1.is_sharded():
+        #     #     y1 = ttnn.sharded_to_interleaved(y1, ttnn.L1_MEMORY_CONFIG)
+        #     # if y2.is_sharded():
+        #     #     y2 = ttnn.sharded_to_interleaved(y2, ttnn.L1_MEMORY_CONFIG)
+        #     # if y3.is_sharded():
+        #     #     y3 = ttnn.sharded_to_interleaved(y3, ttnn.L1_MEMORY_CONFIG)
+
+        #     if y2.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+        #         y2 = ttnn.to_layout(y2, ttnn.ROW_MAJOR_LAYOUT)
+        #     if y3.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+        #         y3 = ttnn.to_layout(y3, ttnn.ROW_MAJOR_LAYOUT)
+
+        #     x = ttnn.concat((y1, y2, y3), 3, memory_config=ttnn.L1_MEMORY_CONFIG)
+        #     if x.get_layout() == ttnn.ROW_MAJOR_LAYOUT:
+        #         x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+        #     x = self.cv2(device, x)
 
         ttnn.deallocate(y1)
         ttnn.deallocate(y2)
@@ -687,8 +640,8 @@ class YoloV11:
         x10 = x
         x = ttnn.reshape(x, (x.shape[0], int(math.sqrt(x.shape[2])), int(math.sqrt(x.shape[2])), x.shape[3]))
         print("ttnn input to upsample1 is ", x.shape, x.layout, x.dtype)
-        x = Yolov11_shard_upsample(self.device, x)
-        # x = ttnn.upsample(x, scale_factor=2)
+        # x = Yolov11_shard_upsample(self.device, x)
+        x = ttnn.upsample(x, scale_factor=2)
         print("output of 1st upsample", x.shape)
         x = ttnn.reshape(x, (1, 1, x.shape[0] * x.shape[1] * x.shape[2], x.shape[3]))
         x6 = ttnn.to_layout(x6, layout=ttnn.ROW_MAJOR_LAYOUT)
@@ -699,8 +652,8 @@ class YoloV11:
         x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
         x = ttnn.reshape(x, (x.shape[0], int(math.sqrt(x.shape[2])), int(math.sqrt(x.shape[2])), x.shape[3]))
         print("ttnn input to upsample2 is ", x.shape, x.layout, x.dtype)
-        # x = ttnn.upsample(x, scale_factor=2)  # 14
-        x = Yolov11_shard_upsample(self.device, x)
+        x = ttnn.upsample(x, scale_factor=2)  # 14
+        # x = Yolov11_shard_upsample(self.device, x)
         print("output of 2nd upsample", x.shape)
         x = ttnn.reshape(x, (1, 1, x.shape[0] * x.shape[1] * x.shape[2], x.shape[3]))
         x4 = ttnn.to_layout(x4, layout=ttnn.ROW_MAJOR_LAYOUT)
