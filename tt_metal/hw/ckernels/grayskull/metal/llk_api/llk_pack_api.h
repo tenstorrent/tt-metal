@@ -45,7 +45,7 @@ inline void llk_pack_hw_configure(const llk_pack_params_t* pack_params) {
 
 template <
     bool untilize = false,
-    bool is_fp32_dest_acc_en = false /*not used*/,
+    bool is_fp32_dest_acc_en = false /*unused*/,
     ReluType relu_type = ReluType::NO_RELU,
     std::uint32_t relu_threshold = 0,
     bool tilize = false /*unused*/>
