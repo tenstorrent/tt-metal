@@ -160,7 +160,7 @@ static void RunTest(WatcherFixture *fixture, IDevice* device, riscv_id_t riscv_t
     string expected = fmt::format(
         "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} tripped an assert on line {}. Current kernel: {}.",
         device->id(),
-        (riscv_type == DebugErisc) ? "ethnet" : "worker",
+        (riscv_type == DebugErisc) ? "active ethnet" : "worker",
         logical_core.x,
         logical_core.y,
         virtual_core.x,

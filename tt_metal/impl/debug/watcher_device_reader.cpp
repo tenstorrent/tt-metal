@@ -311,7 +311,7 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor& logical_core, bool is_active_
     virtual_core.type = logical_core.type;
 
     // Print device id, core coords (logical)
-    string core_type = is_eth_core ? "ethnet" : "worker";
+    string core_type = is_eth_core ? (is_active_eth_core ? "active ethnet" : "idle ethnet") : "worker";
     string core_coord_str = fmt::format(
         "core(x={:2},y={:2}) virtual(x={:2},y={:2})",
         logical_core.coord.x,
@@ -343,6 +343,13 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor& logical_core, bool is_active_
     // For more accurate reporting of launch messages and running kernel ids, dump data from the previous valid
     // program (one entry before), if the current program is invalid (enables == 0)
     uint32_t launch_msg_read_ptr = mbox_data->launch_msg_rd_ptr;
+    if (launch_msg_read_ptr > launch_msg_buffer_num_entries) {
+        TT_THROW(
+            "Watcher read invalid launch_msg_read_ptr on {}: read {}, max valid {}!",
+            core_str,
+            launch_msg_read_ptr,
+            launch_msg_buffer_num_entries);
+    }
     if (mbox_data->launch[launch_msg_read_ptr].kernel_config.enables == 0) {
         launch_msg_read_ptr = (launch_msg_read_ptr - 1 + launch_msg_buffer_num_entries) % launch_msg_buffer_num_entries;
     }

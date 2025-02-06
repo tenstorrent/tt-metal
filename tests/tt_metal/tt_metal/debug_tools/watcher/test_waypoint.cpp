@@ -159,8 +159,9 @@ static void RunTest(WatcherFixture* fixture, IDevice* device) {
                     k_id_s = "";
                 }
                 expected = fmt::format(
-                    "Device {} ethnet core(x={:2},y={:2}) virtual(x={:2},y={:2}): {},{},   X,   X,   X  ",
+                    "Device {} {} ethnet core(x={:2},y={:2}) virtual(x={:2},y={:2}): {},{},   X,   X,   X  ",
                     device->id(),
+                    is_active ? "active" : "idle",
                     logical_core.x,
                     logical_core.y,
                     virtual_core.x,
