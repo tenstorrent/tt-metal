@@ -82,4 +82,4 @@ jobs:
         uses: geekyeggo/delete-artifact@v5
         continue-on-error: true
         with:
-            name: gh_pages
+            name: github-pages
