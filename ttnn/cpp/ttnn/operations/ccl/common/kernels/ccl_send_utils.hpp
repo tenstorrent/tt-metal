@@ -16,7 +16,7 @@
 //------------------------------------------------------------------------------
 
 template <tt::tt_metal::TensorMemoryLayout TENSOR_LAYOUT, tt::tt_metal::Layout MEM_LAYOUT, typename AddrGen>
-std::pair<uint64_t, size_t> get_noc_addr_and_contiguous_pages(
+std::pair<uint64_t, size_t> legacy_get_noc_addr_and_contiguous_pages(
     uint32_t curr_page_idx,
     const uint32_t offset_into_worker_slice,
     const ttnn::ccl::Shape4D<uint32_t>& offset_worker_slice,
@@ -61,13 +61,13 @@ std::pair<uint64_t, size_t> get_noc_addr_and_contiguous_pages(
 }
 
 template <tt::tt_metal::TensorMemoryLayout TENSOR_LAYOUT, tt::tt_metal::Layout MEM_LAYOUT, typename AddrGen>
-FORCE_INLINE std::pair<uint64_t, size_t> get_noc_addr_and_contiguous_pages_for_fabric_write(
+FORCE_INLINE std::pair<uint64_t, size_t> legacy_get_noc_addr_and_contiguous_pages_for_fabric_write(
     uint32_t curr_page_idx,
     const uint32_t offset_into_worker_slice,
     const ttnn::ccl::Shape4D<uint32_t>& offset_worker_slice,
     const AddrGen& address_generator,
     const ttnn::ccl::Shape4D<uint32_t>& tensor_slice_shape) {
-    return get_noc_addr_and_contiguous_pages<TENSOR_LAYOUT, MEM_LAYOUT, AddrGen>(
+    return legacy_get_noc_addr_and_contiguous_pages<TENSOR_LAYOUT, MEM_LAYOUT, AddrGen>(
         curr_page_idx, offset_into_worker_slice, offset_worker_slice, address_generator, tensor_slice_shape, 0);
 }
 
@@ -160,7 +160,7 @@ void mcast_payload_chunk_to_output_tensor_address(
 
     for (size_t i = 0; i < n_pages; i += contig_pages_advanced) {
         auto const [noc_addr, contig_pages] =
-            get_noc_addr_and_contiguous_pages_for_fabric_write<TENSOR_LAYOUT, MEM_LAYOUT>(
+            legacy_get_noc_addr_and_contiguous_pages_for_fabric_write<TENSOR_LAYOUT, MEM_LAYOUT>(
                 curr_page_idx,
                 offset_into_worker_slice,
                 worker_slice_offset,

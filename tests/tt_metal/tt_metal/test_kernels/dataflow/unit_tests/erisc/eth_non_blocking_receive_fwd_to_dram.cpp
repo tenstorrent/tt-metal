@@ -18,7 +18,7 @@
 
 // Initiate DRAM write -> advances  write pointer
 template <bool dest_is_dram>
-void write_chunk(
+void write_chunk_legacy(
     const uint32_t eth_l1_buffer_address_base,
     const uint32_t num_pages,
     const uint32_t num_pages_per_l1_buffer,
@@ -62,7 +62,7 @@ bool eth_initiate_noc_write_sequence(
             // and the receiver ackptr != next write pointer
             // // DPRINT << "rx: accepting payload, sending receive ack on channel " <<
             // (uint32_t)noc_writer_buffer_wrptr << "\n";
-            write_chunk<dest_is_dram>(
+            write_chunk_legacy<dest_is_dram>(
                 transaction_channel_receiver_buffer_addresses[noc_writer_buffer_wrptr.index()],
                 num_pages,
                 num_pages_per_l1_buffer,
