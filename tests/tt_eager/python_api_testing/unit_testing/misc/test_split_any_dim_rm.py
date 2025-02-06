@@ -35,6 +35,7 @@ two_chunk_dim_two_ids = [
 ]
 
 
+@pytest.mark.skip("Replaced in https://github.com/tenstorrent/tt-metal/pull/17461")
 @pytest.mark.parametrize(
     "in_mem_config",
     (
