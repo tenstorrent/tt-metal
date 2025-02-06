@@ -459,9 +459,21 @@ typedef struct fvc_producer_state {
 
     template <uint8_t fvc_mode = FVC_MODE_ROUTER>
     FORCE_INLINE void advance_next_packet() {
+        // The following code makes the following assumptions regarding packet header structure
+        // 1 - packet_parameters is always the first word of the packet header, and doesn't span across packet word
+        // boundary.
+        // 2 - routing is always the last word of the packet header doesn't span across packet word boundary.
+        static_assert(
+            offsetof(packet_header_t, packet_parameters) == 0 && sizeof(packet_params) <= PACKET_WORD_SIZE_BYTES);
+        static_assert(
+            offsetof(packet_header_t, routing) >= (PACKET_HEADER_SIZE_BYTES - PACKET_WORD_SIZE_BYTES) &&
+            offsetof(packet_header_t, routing) % PACKET_WORD_SIZE_BYTES + sizeof(tt_routing) <= PACKET_WORD_SIZE_BYTES);
         tt_l1_ptr uint32_t* packet_header_ptr = (uint32_t*)&current_packet_header;
         volatile tt_l1_ptr uint32_t* next_header_ptr =
             reinterpret_cast<tt_l1_ptr uint32_t*>(get_local_buffer_read_addr());
+        // TODO: Should we just extract the specific field we want here (mcast_params)
+        packet_params* next_packet_params_ptr = (packet_params*)(next_header_ptr);
+        tt_routing* next_routing_ptr;
         uint32_t words_before_wrap = words_before_buffer_wrap(fvc_out_rdptr);
         uint32_t dwords_to_copy = PACKET_HEADER_SIZE_BYTES / 4;
         if (words_before_wrap < PACKET_HEADER_SIZE_WORDS) {
@@ -476,11 +488,14 @@ typedef struct fvc_producer_state {
             for (uint32_t i = 0; i < dwords_after_wrap; i++) {
                 packet_header_ptr[i + dwords_before_wrap] = next_header_ptr[i];
             }
+            next_routing_ptr =
+                (tt_routing*)(next_header_ptr + packet_header_routing_offset_dwords - dwords_before_wrap);
         } else {
 #pragma GCC unroll 12
             for (uint32_t i = 0; i < dwords_to_copy; i++) {
                 packet_header_ptr[i] = next_header_ptr[i];
             }
+            next_routing_ptr = (tt_routing*)(next_header_ptr + packet_header_routing_offset_dwords);
         }
 
         this->packet_words_remaining =
@@ -493,7 +508,7 @@ typedef struct fvc_producer_state {
                     // Packet arrival on this router accounts for 1 hop.
                     // Decrement respective direction hop count and determine
                     // whether mcast needs further hops.
-                    update_mcast_hops((packet_header_t*)next_header_ptr);
+                    update_mcast_hops(next_packet_params_ptr, next_routing_ptr);
                 }
                 // After updating mcast hop counts, we check whether the mcast packet still qualifies to be
                 // an mcast packet.
@@ -510,7 +525,7 @@ typedef struct fvc_producer_state {
 
                     // If mcast is active, update the hop count.
                     // Decrement hop count.
-                    update_mcast_hops((packet_header_t*)next_header_ptr);
+                    update_mcast_hops(next_packet_params_ptr, next_routing_ptr);
                     // After decrementing hop count, check whether mcast is stil active.
                     // If mcast has been deactivated here, that means this chip is the last hop for mcast packet.
                     // If so, we service the last hop as unicast dest.
@@ -635,49 +650,49 @@ typedef struct fvc_producer_state {
 
     inline bool packet_mcast_is_required() { return (current_packet_header.routing.flags & MCAST_DATA) != 0; }
 
-    inline void update_mcast_hops(packet_header_t* packet_header) {
+    inline void update_mcast_hops(packet_params* packet_parameters, tt_routing* routing) {
         uint32_t hop_count = 0;
         if (mcast_direction == 0) {
             hop_count = current_packet_header.packet_parameters.mcast_parameters.east;
             if (hop_count) {
                 hop_count--;
                 current_packet_header.packet_parameters.mcast_parameters.east = hop_count;
-                packet_header->packet_parameters.mcast_parameters.east = hop_count;
+                packet_parameters->mcast_parameters.east = hop_count;
             }
         } else if (mcast_direction == 1) {
             hop_count = current_packet_header.packet_parameters.mcast_parameters.west;
             if (hop_count) {
                 hop_count--;
                 current_packet_header.packet_parameters.mcast_parameters.west = hop_count;
-                packet_header->packet_parameters.mcast_parameters.west = hop_count;
+                packet_parameters->mcast_parameters.west = hop_count;
             }
         } else if (mcast_direction == 2) {
             hop_count = current_packet_header.packet_parameters.mcast_parameters.north;
             if (hop_count) {
                 hop_count--;
                 current_packet_header.packet_parameters.mcast_parameters.north = hop_count;
-                packet_header->packet_parameters.mcast_parameters.north = hop_count;
+                packet_parameters->mcast_parameters.north = hop_count;
             }
         } else if (mcast_direction == 3) {
             hop_count = current_packet_header.packet_parameters.mcast_parameters.south;
             if (hop_count) {
                 hop_count--;
                 current_packet_header.packet_parameters.mcast_parameters.south = hop_count;
-                packet_header->packet_parameters.mcast_parameters.south = hop_count;
+                packet_parameters->mcast_parameters.south = hop_count;
             }
         }
         if (hop_count == 0) {
             // on last hop clear the mcast flag bits.
             // last hop treats packet as normal ucast async write.
             current_packet_header.routing.flags &= ~(MCAST_ACTIVE | MCAST_DATA);
-            packet_header->routing.flags &= ~(MCAST_ACTIVE | MCAST_DATA);
+            routing->flags &= ~(MCAST_ACTIVE | MCAST_DATA);
         } else {
             current_packet_header.routing.flags |= MCAST_ACTIVE;
-            packet_header->routing.flags |= MCAST_ACTIVE;
+            routing->flags |= MCAST_ACTIVE;
             // calculate new header checksum after mcast updates.
             tt_fabric_add_header_checksum(&current_packet_header);
             // copy new checksum to packet header in fvc buffer.
-            packet_header->packet_parameters.misc_parameters.words[0] =
+            packet_parameters->misc_parameters.words[0] =
                 current_packet_header.packet_parameters.misc_parameters.words[0];
         }
     }

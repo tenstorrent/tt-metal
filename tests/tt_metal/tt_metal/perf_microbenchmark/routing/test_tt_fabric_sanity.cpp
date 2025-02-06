@@ -915,11 +915,11 @@ typedef struct test_traffic {
 
             // zero out the signal address
             tt::llrt::write_hex_vec_to_core(
-                tx_device->device_handle->id(), controller_virtual_core, zero_buf, tx_signal_address);
+                tx_device->physical_chip_id, controller_virtual_core, zero_buf, tx_signal_address);
 
             // zero out host sync address
             tt::llrt::write_hex_vec_to_core(
-                tx_device->device_handle->id(), controller_virtual_core, zero_buf, host_signal_address);
+                tx_device->physical_chip_id, controller_virtual_core, zero_buf, host_signal_address);
 
             auto kernel = tt_metal::CreateKernel(
                 tx_device->program_handle,
@@ -958,7 +958,7 @@ typedef struct test_traffic {
 
             // zero out the signal address
             tt::llrt::write_hex_vec_to_core(
-                tx_device->device_handle->id(), tx_virtual_cores[i], zero_buf, tx_signal_address);
+                tx_device->physical_chip_id, tx_virtual_cores[i], zero_buf, tx_signal_address);
 
             log_info(
                 LogTest,
@@ -1006,14 +1006,14 @@ typedef struct test_traffic {
             } else if (ATOMIC_INC == fabric_command) {
                 for (const auto& rx_device : rx_devices) {
                     tt::llrt::write_hex_vec_to_core(
-                        rx_device->device_handle->id(), rx_virtual_cores[i], zero_buf, target_address);
+                        rx_device->physical_chip_id, rx_virtual_cores[i], zero_buf, target_address);
                 }
             }
 
             for (const auto& rx_device : rx_devices) {
                 // zero out the test results address, which will be used for polling
                 tt::llrt::write_hex_vec_to_core(
-                    rx_device->device_handle->id(), rx_virtual_cores[i], zero_buf, test_results_address);
+                    rx_device->physical_chip_id, rx_virtual_cores[i], zero_buf, test_results_address);
 
                 log_info(
                     LogTest,
@@ -1041,13 +1041,13 @@ typedef struct test_traffic {
     void notify_tx_controller() {
         std::vector<uint32_t> start_signal(1, 1);
         tt::llrt::write_hex_vec_to_core(
-            tx_device->device_handle->id(), controller_virtual_core, start_signal, host_signal_address);
+            tx_device->physical_chip_id, controller_virtual_core, start_signal, host_signal_address);
     }
 
     void notify_tx_workers(uint32_t address) {
         std::vector<uint32_t> start_signal(1, 1);
         for (auto core : tx_virtual_cores) {
-            tt::llrt::write_hex_vec_to_core(tx_device->device_handle->id(), core, start_signal, address);
+            tt::llrt::write_hex_vec_to_core(tx_device->physical_chip_id, core, start_signal, address);
         }
     }
 
@@ -1056,7 +1056,7 @@ typedef struct test_traffic {
             for (auto& rx_core : rx_virtual_cores) {
                 while (true) {
                     auto tx_status =
-                        tt::llrt::read_hex_vec_from_core(rx_device->device_handle->id(), rx_core, test_results_address, 4);
+                        tt::llrt::read_hex_vec_from_core(rx_device->physical_chip_id, rx_core, test_results_address, 4);
                     if ((tx_status[0] & 0xFFFF) != 0) {
                         break;
                     }
@@ -1071,10 +1071,11 @@ typedef struct test_traffic {
         // collect tx results
         for (uint32_t i = 0; i < num_tx_workers; i++) {
             tx_results.push_back(tt::llrt::read_hex_vec_from_core(
-                tx_device->device_handle->id(), tx_virtual_cores[i], test_results_address, 128));
+                tx_device->physical_chip_id, tx_virtual_cores[i], test_results_address, 128));
             log_info(
                 LogTest,
-                "TX{} status = {}",
+                "Device {} TX{} status = {}",
+                tx_device->physical_chip_id,
                 i,
                 packet_queue_test_status_to_string(tx_results[i][PQ_TEST_STATUS_INDEX]));
             pass &= (tx_results[i][PQ_TEST_STATUS_INDEX] == PACKET_QUEUE_TEST_PASS);
@@ -1085,11 +1086,11 @@ typedef struct test_traffic {
         for (uint32_t d = 0; d < rx_devices.size(); d++) {
             for (uint32_t i = 0; i < num_rx_workers; i++) {
                 rx_results[d].push_back(tt::llrt::read_hex_vec_from_core(
-                    rx_devices[d]->device_handle->id(), rx_virtual_cores[i], test_results_address, 128));
+                    rx_devices[d]->physical_chip_id, rx_virtual_cores[i], test_results_address, 128));
                 log_info(
                     LogTest,
                     "Device {} RX{} status = {}",
-                    rx_devices[d]->device_handle->id(),
+                    rx_devices[d]->physical_chip_id,
                     i,
                     packet_queue_test_status_to_string(rx_results[d][i][PQ_TEST_STATUS_INDEX]));
                 pass &= (rx_results[d][i][PQ_TEST_STATUS_INDEX] == PACKET_QUEUE_TEST_PASS);
