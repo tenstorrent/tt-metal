@@ -59,7 +59,7 @@ args_list_t emit_address_generator_runtime_args(const tt::tt_metal::IDevice* con
     switch (t.buffer()->buffer_layout()) {
         case tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED:
         case tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED:
-        case tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED: return shard_builder::get_linear_shard_list(t); break;
+        case tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED: return shard_builder::generate_run_time_args(t); break;
 
         case tt::tt_metal::TensorMemoryLayout::INTERLEAVED:
             TT_ASSERT(t.buffer()->page_size() != 1024);

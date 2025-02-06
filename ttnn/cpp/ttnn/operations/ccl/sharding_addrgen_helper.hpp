@@ -9,8 +9,8 @@
 namespace shard_builder {
 void extend_sharding_compile_time_args(const tt::tt_metal::Tensor& t, std::vector<uint32_t>& args);
 void extend_sharding_run_time_args(const tt::tt_metal::Tensor& t, std::vector<uint32_t>& args);
-std::vector<uint32_t> get_linear_shard_list(const tt::tt_metal::Tensor& t);
+std::vector<uint32_t> generate_run_time_args(const tt::tt_metal::Tensor& t);
 uint32_t get_sharding_core_count(const tt::tt_metal::Tensor& t);
-std::vector<uint32_t> sharding_ct_table_builder(const tt::tt_metal::Tensor& t);
+std::vector<uint32_t> generate_compile_time_args(const tt::tt_metal::Tensor& t);
 std::vector<CoreCoord> get_shard_cores(const tt::tt_metal::Tensor& t);
 }  // namespace shard_builder
