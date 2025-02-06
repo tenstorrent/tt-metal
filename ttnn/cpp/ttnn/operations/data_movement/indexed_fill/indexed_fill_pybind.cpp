@@ -60,7 +60,7 @@ void bind_indexed_fill(pybind11::module& module) {
             pybind11::kw_only(),
             pybind11::arg("memory_config") = std::nullopt,
             pybind11::arg("dim") = 0,
-            pybind11::arg("queue_id") = 0});
+            pybind11::arg("queue_id") = DefaultQueueId});
 }
 
 }  // namespace detail

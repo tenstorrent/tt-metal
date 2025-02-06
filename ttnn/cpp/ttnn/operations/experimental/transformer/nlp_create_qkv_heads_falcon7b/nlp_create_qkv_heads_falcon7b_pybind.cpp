@@ -26,6 +26,6 @@ void bind_nlp_create_qkv_heads_falcon7b(pybind11::module& module) {
             pybind11::kw_only(),
             pybind11::arg("memory_config").noconvert() = std::nullopt,
             pybind11::arg("output_tensors").noconvert() = std::nullopt,
-            pybind11::arg("queue_id") = 0});
+            pybind11::arg("queue_id") = DefaultQueueId});
 };
 }  // namespace ttnn::operations::experimental::transformer::detail

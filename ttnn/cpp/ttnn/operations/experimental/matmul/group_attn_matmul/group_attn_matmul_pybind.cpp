@@ -47,7 +47,7 @@ void bind_group_attn_matmul(pybind11::module& module) {
             pybind11::arg("dtype").noconvert() = std::nullopt,
             pybind11::arg("compute_kernel_config").noconvert() = std::nullopt,
             pybind11::arg("optional_output_tensor").noconvert() = std::nullopt,
-            pybind11::arg("queue_id").noconvert() = 0});
+            pybind11::arg("queue_id") = DefaultQueueId});
 }
 
 }  // namespace ttnn::operations::experimental::matmul::detail

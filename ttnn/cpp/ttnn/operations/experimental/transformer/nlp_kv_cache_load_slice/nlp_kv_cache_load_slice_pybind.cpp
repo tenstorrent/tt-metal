@@ -33,7 +33,7 @@ void bind_nlp_kv_cache_load_slice(pybind11::module& module) {
             pybind11::arg("seq_len_end").noconvert(),
             pybind11::arg("memory_config") = std::nullopt,
             pybind11::arg("output_tensor") = std::nullopt,
-            pybind11::arg("queue_id") = 0});
+            pybind11::arg("queue_id") = DefaultQueueId});
 }
 
 }  // namespace ttnn::operations::experimental::transformer::detail
