@@ -340,7 +340,7 @@ ttnn::Tensor unsqueeze_to_rank(const ttnn::Tensor& t, size_t rank) {
     auto rank_diff = rank - t_rank;
     std::copy(logical_shape.cbegin(), logical_shape.cend(), result_logical_shape.begin() + rank_diff);
     std::copy(physical_shape.cbegin(), physical_shape.cend(), result_physical_shape.begin() + rank_diff);
-    return ttnn::reshape(t, ttnn::Shape{result_logical_shape, result_physical_shape});
+    return ttnn::reshape(t, ttnn::Shape{result_logical_shape}, ttnn::Shape{result_physical_shape});
 }
 
 ttnn::Tensor squeeze_to_rank(const ttnn::Tensor& t, size_t rank) {
@@ -362,7 +362,7 @@ ttnn::Tensor squeeze_to_rank(const ttnn::Tensor& t, size_t rank) {
     std::copy(logical_shape.cbegin() + rank_diff, logical_shape.cend(), result_logical_shape.begin());
     std::copy(physical_shape.cbegin() + rank_diff, physical_shape.cend(), result_physical_shape.begin());
 
-    return ttnn::reshape(t, ttnn::Shape{result_logical_shape, result_physical_shape});
+    return ttnn::reshape(t, ttnn::Shape{result_logical_shape}, ttnn::Shape{result_physical_shape});
 }
 
 }  // namespace ttml::core
