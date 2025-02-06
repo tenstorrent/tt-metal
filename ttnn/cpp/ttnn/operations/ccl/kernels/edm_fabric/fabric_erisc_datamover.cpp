@@ -472,8 +472,6 @@ void send_next_data(
     payload_size = pkt_header->get_payload_size_including_header();
     pkt_header->src_ch_id = sender_channel_index;
 
-    ASSERT(*sender_buffer_channel.get_src_id_address(local_sender_wrptr_buffer_index) < 2);
-
     auto src_addr = sender_buffer_channel.get_buffer_address(local_sender_wrptr_buffer_index);
     auto dest_addr = receiver_buffer_channel.get_buffer_address(remote_receiver_wrptr.get_buffer_index());
     eth_send_bytes_over_channel_payload_only_unsafe(
@@ -515,7 +513,6 @@ void receiver_send_received_ack(
     // Set the acknowledgement bits. We have a different location than the
 
     auto receiver_buffer_index = receiver_channel_ptr.get_buffer_index();
-    ASSERT(src_id < NUM_SENDER_CHANNELS);
     auto volatile *pkt_header = reinterpret_cast<volatile tt::fabric::PacketHeader *>(local_receiver_buffer_channel.get_buffer_address(receiver_buffer_index));
     const auto src_id = pkt_header->src_ch_id;
     remote_update_ptr_val(to_sender_packets_acked_streams[src_id], 1);
@@ -531,7 +528,6 @@ FORCE_INLINE void receiver_send_completion_ack(
 
     auto receiver_buffer_index = receiver_channel_ptr.get_buffer_index();
 
-    ASSERT(src_id < NUM_SENDER_CHANNELS);
     auto volatile *pkt_header = reinterpret_cast<volatile tt::fabric::PacketHeader *>(local_receiver_buffer_channel.get_buffer_address(receiver_buffer_index));
     const auto src_id = pkt_header->src_ch_id;
     remote_update_ptr_val(to_sender_packets_completed_streams[src_id], 1);
