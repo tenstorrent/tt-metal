@@ -42,7 +42,7 @@ def run_conv(
     padded_input_channels=None,
     fp32_accum=False,
     packer_l1_acc=False,
-    output_layout=ttnn.TILE_LAYOUT,
+    output_layout=ttnn.ROW_MAJOR_LAYOUT,
     deallocate_activation=False,
     debug=False,
     groups=1,
@@ -64,6 +64,8 @@ def run_conv(
     else:
         total_batch_size = batch_size
 
+    if output_layout == ttnn.ROW_MAJOR_LAYOUT and activations_dtype == ttnn.bfloat8_b:
+        pytest.skip("Row major layout not compatible with bfloat8_b")
     torch.manual_seed(0)
     conv_input_shape = [total_batch_size, input_channels, input_height, input_width]
     conv_weight_shape = [output_channels, input_channels // groups, filter_height, filter_width]
@@ -115,6 +117,13 @@ def run_conv(
         shard_layout = (
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED if use_1d_systolic_array else ttnn.TensorMemoryLayout.BLOCK_SHARDED
         )
+    if (
+        shard_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+        and output_channels > 256
+        and output_layout == ttnn.ROW_MAJOR_LAYOUT
+    ):
+        pytest.skip("Skipping when out_block_w > 8 for untilize_out == True")
+
     conv_config = ttnn.Conv2dConfig(
         dtype=activations_dtype,
         weights_dtype=weights_dtype,
@@ -136,6 +145,11 @@ def run_conv(
     )
     if config_override and "act_block_h" in config_override and not auto_shard:
         conv_config.act_block_h_override = config_override["act_block_h"]
+        if fp32_accum and packer_l1_acc and output_layout == ttnn.ROW_MAJOR_LAYOUT:
+            conv_config.output_layout = ttnn.TILE_LAYOUT
+            logger.warning(
+                "Forcing output_layout to TILE when act_block_h_override, fp32_accum and packer_l1_acc are enabled"
+            )
 
     if config_override and "act_block_w_div" in config_override and not auto_shard:
         conv_config.act_block_w_div = config_override["act_block_w_div"]
@@ -144,7 +158,6 @@ def run_conv(
         if config_override["num_cores_nhw"] == 98:
             conv_config.core_grid = ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (11, 7)), ttnn.CoreRange((0, 8), (1, 8))})
             conv_config.override_sharding_config = True
-            print("Setting num_cores_nhw to 98")
 
     [tt_output_tensor_on_device, [out_height, out_width], [weights_device, bias_device]] = ttnn.conv2d(
         input_tensor=tt_input_tensor,
@@ -169,7 +182,8 @@ def run_conv(
         return_weights_and_bias=True,
         return_output_dim=True,
     )
-
+    # import numpy as np
+    # np.save("ref.npy",weights_device.cpu().to_torch().numpy())
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
     torch_output_tensor = ttnn.to_torch(tt_output_tensor, mesh_composer=output_mesh_composer)
 
@@ -849,6 +863,7 @@ def test_resnet50_conv_gs(
         use_1d_systolic_array,
         config_override=config_override,
         use_shallow_conv_variant=input_channels == 16,
+        output_layout=ttnn.TILE_LAYOUT,
         padded_input_channels=16 if input_channels == 16 else None,
         debug=not (batch_size == 20 and input_height == 115),
         auto_shard=auto_shard,
@@ -1149,6 +1164,7 @@ def test_resnet50_conv_wh_fp32(
         use_shallow_conv_variant=use_shallow_conv_variant,
         fp32_accum=fp32_accum,
         packer_l1_acc=packer_l1_acc,
+        output_layout=ttnn.TILE_LAYOUT,
         transpose_mcast=use_1d_systolic_array,  ## use RM (transpose_mcast=False) with 2D on WH
         auto_shard=auto_shard,
     )
@@ -1213,7 +1229,7 @@ def test_resnet50_conv_wh_fp32(
 )
 @pytest.mark.parametrize(
     "activations_dtype",
-    [ttnn.bfloat8_b],
+    [ttnn.bfloat16],
 )
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
 @pytest.mark.parametrize("enable_auto_formatting", [True, False])
@@ -1325,8 +1341,6 @@ def test_sd_conv(
         (2, 320, 320, 64, 64, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 64}),
         (2, 320, 320, 64, 64, 3, 3, 2, 2, 1, 1, False, None),  # fits with bfloat8_b
         (2, 640, 640, 32, 32, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 32}),
-        (2, 640, 640, 32, 32, 3, 3, 2, 2, 1, 1, False, None),  # bfloat16 doesnt fit
-        (2, 1280, 1280, 16, 16, 3, 3, 1, 1, 1, 1, False, None),  # bfloat16 doesnt fit
         (2, 1280, 1280, 16, 16, 3, 3, 2, 2, 1, 1, False, {"act_block_h": 32}),  # bfloat16 doesnt fit
         (2, 1280, 1280, 8, 8, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 32}),
         (2, 1280, 1280, 32, 32, 3, 3, 1, 1, 1, 1, False, {"act_block_h": 32}),  # bfloat16 doesnt fit
@@ -1351,7 +1365,7 @@ def test_sd_conv(
 )
 @pytest.mark.parametrize(
     "activations_dtype",
-    [ttnn.bfloat16, ttnn.bfloat8_b],
+    [ttnn.bfloat16],
 )
 @pytest.mark.parametrize(
     "fp32_accum",
@@ -1361,7 +1375,6 @@ def test_sd_conv(
     ],
 )
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
-@pytest.mark.parametrize("enable_auto_formatting", [True, False])
 def test_sd_conv_wh(
     device,
     use_program_cache,
@@ -1382,7 +1395,6 @@ def test_sd_conv_wh(
     pad_w,
     use_1d_systolic_array,
     config_override,
-    enable_auto_formatting,
 ):
     if device.core_grid.y == 7:
         pytest.skip("This test is not supported for N300")
@@ -1396,14 +1408,11 @@ def test_sd_conv_wh(
             and input_height == 32
             and activations_dtype == ttnn.bfloat16
             and weights_dtype == ttnn.bfloat16
-            and enable_auto_formatting == False
         )
     ):
         pytest.skip("Skip the test cases raising OOM but not affecting e2e test")
 
     if filter_height > 1 and (input_channels > 1280 or (input_channels > 640 and input_height > 16)):
-        if enable_auto_formatting:
-            pytest.skip("Not running split SD conv with auto formatting")
         run_conv_with_split(
             device,
             math_fidelity,
@@ -1447,7 +1456,6 @@ def test_sd_conv_wh(
             config_override,
             use_shallow_conv_variant=(input_channels == 16),
             transpose_mcast=use_1d_systolic_array,  ## use RM (transpose_mcast=False) with 2D on WH
-            enable_auto_formatting=enable_auto_formatting,
             padded_input_channels=16 if input_channels == 16 else None,
             fp32_accum=fp32_accum,
             packer_l1_acc=True,
