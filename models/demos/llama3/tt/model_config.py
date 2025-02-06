@@ -1000,6 +1000,7 @@ class TtModelArgs:
                 "Qwen2.5-7B is only supported on 2 or 4 devices, run on an N300 or use FAKE_DEVICE=N150x4"
             )
 
+        self.unpadded_hidden_dim = self.hidden_dim
         # Don't need to pad for CPU runs
         if self.num_devices:
             # Default padding cores for each model, 0 if not set here

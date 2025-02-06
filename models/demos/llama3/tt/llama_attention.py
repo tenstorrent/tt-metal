@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import math
 import torch
 
 import ttnn
@@ -42,7 +43,7 @@ class TtLlamaAttention(LightweightModule):
         self.num_reduce_scatter_links = configuration.num_reduce_scatter_links
         self.num_all_gather_links = configuration.num_all_gather_links
         self.MAX_QKV_MM_SEQ_LEN = configuration.MAX_QKV_MM_SEQ_LEN
-
+        self.tile_size = configuration.tile_size
         self.num_device_groups = self.num_devices // self.n_kv_heads
         self.num_devices_per_group = self.n_kv_heads if self.TG else self.num_devices
         self.batch_size_per_device_group = (
@@ -106,7 +107,7 @@ class TtLlamaAttention(LightweightModule):
         wo_str = f"{layer_name}.wo"
 
         # Initialize bias tensors as None
-        self.wqkv_bias = None
+        self.wqkv_bias_decode = None
         self.wqkv_bias_prefill = None
 
         # Create combined QKV bias if present in state dict
@@ -125,20 +126,40 @@ class TtLlamaAttention(LightweightModule):
                 ],
                 dim=-1,
             )
-            # Expand bias to a whole tile - FIXME: we wouldn't need to do if matmul bias terms worked
-            # Seems necessary to do this and then for prefill *only* to reshape to a 1x1x1xN tensor
-            # so the add broadcasts it properly. Only this combination works.
-            qkv_bias = qkv_bias.unsqueeze(0).expand(configuration.tile_size, -1)
-            self.wqkv_bias = ttnn.as_tensor(
+            # Prefill can use broadcasting on the bias add so wants a 1d tensor
+            self.wqkv_bias_prefill = ttnn.as_tensor(
                 qkv_bias,
                 device=self.mesh_device,
                 mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
                 dtype=self.dtype,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 layout=ttnn.TILE_LAYOUT,
-                cache_file_name=cache_name("wqkv_bias_sharded"),
+                cache_file_name=cache_name("wqkv_bias_prefill_sharded"),
             )
-            self.wqkv_bias_prefill = ttnn.reshape(self.wqkv_bias, ttnn.Shape([1, 1, 1, self.wqkv_bias.shape[-1]]))
+            # as_tensor returns (32, dim) which is incorrect, this reshape updates the padded size to the correct size
+            self.wqkv_bias_prefill = ttnn.reshape(
+                self.wqkv_bias_prefill, ttnn.Shape([1, 1, 1, self.wqkv_bias_prefill.shape[-1]])
+            )
+
+            # Broadcasting does not seem to be supported inside execute_trace so expand to the whole batch size
+            # Create a list of bias tensors for each multiple of tile_size up to max_batch_size
+            self.wqkv_bias_decode = []
+            for batch_size in range(
+                configuration.tile_size,
+                configuration.tile_padded_batch_rows + configuration.tile_size,
+                configuration.tile_size,
+            ):
+                qkv_bias_decode = qkv_bias.unsqueeze(0).expand(batch_size, -1)
+                bias_tensor = ttnn.as_tensor(
+                    qkv_bias_decode,
+                    device=self.mesh_device,
+                    mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
+                    dtype=self.dtype,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    layout=ttnn.TILE_LAYOUT,
+                    cache_file_name=cache_name(f"wqkv_bias_decode_sharded_{batch_size}"),
+                )
+                self.wqkv_bias_decode.append(bias_tensor)
 
         # when splitting the devices, we need to make sure that the number of heads is divisible by the number of devices
         assert self.n_heads % self.num_devices_per_group == 0
@@ -299,8 +320,11 @@ class TtLlamaAttention(LightweightModule):
             dtype=self.ccl_dtype if self.TG else ttnn.bfloat16,
         )
         # FIXME: File bug against dram-sharded matmuls with bias
-        if self.wqkv_bias is not None:
-            xqkv_fused_sharded = xqkv_fused_sharded + self.wqkv_bias
+        if self.wqkv_bias_decode:
+            # select the bias tensor based on the number of tiles in the rows
+            # WARNING: must not change the batch size between compiling and executing a trace
+            num_tiles = int(math.ceil(xqkv_fused_sharded.shape[-2] / self.tile_size))
+            xqkv_fused_sharded = xqkv_fused_sharded + self.wqkv_bias_decode[num_tiles - 1]
 
         ttnn.deallocate(x)
         xqkv_fused = tt_all_reduce(
@@ -534,7 +558,7 @@ class TtLlamaAttention(LightweightModule):
         xqkv_fused = ttnn.linear(
             x_11SH,
             self.wqkv,
-            # bias=self.wqkv_bias,
+            # bias=self.wqkv_bias_prefill,
             dtype=self.ccl_dtype if self.TG else ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config_hifi2,
