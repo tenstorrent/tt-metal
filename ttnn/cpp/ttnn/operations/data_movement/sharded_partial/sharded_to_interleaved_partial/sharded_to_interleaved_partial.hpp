@@ -11,7 +11,7 @@ namespace operations::data_movement {
 
 struct ShardedToInterleavedPartialOperation {
     static ttnn::Tensor invoke(
-        uint8_t queue_id,
+        QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& cache_tensor,
         int64_t& num_slices,

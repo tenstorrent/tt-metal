@@ -45,11 +45,11 @@ void bind_non_zero(py::module& module) {
             [](const OperationType& self,
                const ttnn::Tensor& input_tensor,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               uint8_t queue_id) { return self(queue_id, input_tensor, memory_config); },
+               QueueId queue_id) { return self(queue_id, input_tensor, memory_config); },
             py::arg("input_tensor").noconvert(),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
-            py::arg("queue_id") = 0});
+            py::arg("queue_id") = DefaultQueueId});
 }
 
 }  // namespace detail

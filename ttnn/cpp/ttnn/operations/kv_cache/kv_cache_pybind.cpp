@@ -88,7 +88,7 @@ void bind_update_cache_for_token_(py::module& module, const kv_cache_operation_t
             py::arg("cache"),
             py::arg("input"),
             py::arg("update_index"),
-            py::arg("batch_offset") = 0});
+            py::arg("batch_offset") = DefaultQueueId});
 }
 
 template <typename update_cache_operation_t>

@@ -5,7 +5,7 @@
 #include "untilize.hpp"
 
 #include "device/untilize_op.hpp"
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
@@ -38,7 +38,7 @@ MassagedUntilize build_ndiml_untilize(BaseUntilizeType base_untilize) {
 }
 
 ttnn::Tensor ExecuteUntilize::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
     bool use_multicore,

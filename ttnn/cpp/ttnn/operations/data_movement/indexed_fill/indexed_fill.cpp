@@ -4,14 +4,14 @@
 
 #include "ttnn/operations/data_movement/indexed_fill/indexed_fill.hpp"
 #include "ttnn/operations/data_movement/indexed_fill/device/indexed_fill_op.hpp"
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement {
 
 ttnn::Tensor IndexedFillOperation::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& batch_id,
     const ttnn::Tensor& input_tensor_a,
     const ttnn::Tensor& input_tensor_b,

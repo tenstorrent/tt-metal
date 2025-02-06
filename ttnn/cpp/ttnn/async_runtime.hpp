@@ -10,16 +10,15 @@
 #include "types.hpp"
 
 namespace ttnn {
-using queue_id = uint8_t;
 
 void write_buffer(
-    queue_id cq_id,
+    QueueId cq_id,
     Tensor& dst,
     std::vector<std::shared_ptr<void>> src,
     const std::optional<BufferRegion>& region = std::nullopt);
 
 void read_buffer(
-    queue_id cq_id,
+    QueueId cq_id,
     Tensor& src,
     std::vector<std::shared_ptr<void>> dst,
     const std::optional<BufferRegion>& region = std::nullopt,

@@ -4,7 +4,7 @@
 
 #include "view.hpp"
 
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/run_operation.hpp"
 #include <tt-metalium/constants.hpp>
 #include <ttnn/operations/functions.hpp>

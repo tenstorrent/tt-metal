@@ -9,7 +9,7 @@
 namespace ttnn::operations::experimental::transformer {
 
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> NlpCreateHeadsOperation::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& input_tensor_q,
     const std::optional<Tensor>& input_tensor_kv,
     const uint32_t num_q_heads,

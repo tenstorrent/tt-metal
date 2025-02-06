@@ -56,7 +56,7 @@ void py_bind_sdpa(py::module& module) {
                const std::optional<MemoryConfig>& memory_config,
                std::optional<SDPAProgramConfig> program_config,
                std::optional<DeviceComputeKernelConfig> compute_kernel_config,
-               uint8_t queue_id) {
+               QueueId queue_id) {
                 return self(
                     queue_id,
                     input_tensor_q,
@@ -79,7 +79,7 @@ void py_bind_sdpa(py::module& module) {
             py::arg("memory_config").noconvert() = std::nullopt,
             py::arg("program_config").noconvert() = std::nullopt,
             py::arg("compute_kernel_config").noconvert() = std::nullopt,
-            py::arg("queue_id") = 0,
+            py::arg("queue_id") = DefaultQueueId,
         });
 
     auto chunked_doc =
@@ -124,7 +124,7 @@ void py_bind_sdpa(py::module& module) {
                const std::optional<MemoryConfig>& memory_config,
                std::optional<SDPAProgramConfig> program_config,
                std::optional<DeviceComputeKernelConfig> compute_kernel_config,
-               uint8_t queue_id) {
+               QueueId queue_id) {
                 return self(
                     queue_id,
                     input_tensor_q,
@@ -147,7 +147,7 @@ void py_bind_sdpa(py::module& module) {
             py::arg("memory_config").noconvert() = std::nullopt,
             py::arg("program_config").noconvert() = std::nullopt,
             py::arg("compute_kernel_config").noconvert() = std::nullopt,
-            py::arg("queue_id") = 0,
+            py::arg("queue_id") = DefaultQueueId,
         });
 
     auto joint_doc = R"doc(
@@ -200,7 +200,7 @@ void py_bind_sdpa(py::module& module) {
                SDPAProgramConfig program_config,
                std::optional<float> scale,
                std::optional<DeviceComputeKernelConfig> compute_kernel_config,
-               uint8_t queue_id) {
+               QueueId queue_id) {
                 auto outputs = self(
                     queue_id,
                     input_tensor_q,
@@ -226,6 +226,6 @@ void py_bind_sdpa(py::module& module) {
             py::arg("program_config").noconvert(),
             py::arg("scale").noconvert() = std::nullopt,
             py::arg("compute_kernel_config").noconvert() = std::nullopt,
-            py::arg("queue_id") = 0});
+            py::arg("queue_id") = DefaultQueueId});
 }
 }  // namespace ttnn::operations::transformer

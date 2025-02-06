@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/run_operation.hpp"
 #include "device/split_op.hpp"
@@ -140,7 +140,7 @@ std::vector<Tensor> split_dim_n_chunks_tiled(
 }  // namespace detail
 
 std::vector<ttnn::Tensor> SplitOperation::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     int64_t& num_splits,
     int64_t& dim,

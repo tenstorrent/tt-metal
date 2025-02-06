@@ -70,11 +70,11 @@ void py_bind_copy(py::module& module) {
             [](const decltype(ttnn::copy)& self,
                const ttnn::Tensor& input_a,
                const ttnn::Tensor& input_b,
-               uint8_t queue_id) { return self(queue_id, input_a, input_b); },
+               QueueId queue_id) { return self(queue_id, input_a, input_b); },
             py::arg("input_a").noconvert(),
             py::arg("input_b").noconvert(),
             py::kw_only(),
-            py::arg("queue_id") = 0});
+            py::arg("queue_id") = DefaultQueueId});
 }
 
 void py_bind_assign(py::module& module) {
@@ -108,21 +108,21 @@ void py_bind_assign(py::module& module) {
                const ttnn::MemoryConfig& memory_config,
                const std::optional<const ttnn::DataType> dtype,
                std::optional<ttnn::Tensor>& optional_output_tensor,
-               uint8_t queue_id) { return self(queue_id, input, memory_config, dtype, optional_output_tensor); },
+               QueueId queue_id) { return self(queue_id, input, memory_config, dtype, optional_output_tensor); },
             py::arg("input_tensor").noconvert(),
             py::kw_only(),
             py::arg("memory_config"),
             py::arg("dtype") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("queue_id") = 0},
+            py::arg("queue_id") = DefaultQueueId},
         ttnn::pybind_overload_t{
             [](const decltype(ttnn::assign)& self,
                const ttnn::Tensor& input_a,
                const ttnn::Tensor& input_b,
-               uint8_t queue_id) { return self(queue_id, input_a, input_b); },
+               QueueId queue_id) { return self(queue_id, input_a, input_b); },
             py::arg("input_a").noconvert(),
             py::arg("input_b").noconvert(),
-            py::arg("queue_id") = 0});
+            py::arg("queue_id") = DefaultQueueId});
 }
 
 }  // namespace ttnn::operations::data_movement::detail

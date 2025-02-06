@@ -6,7 +6,7 @@
 #include "device/fill_pad_op.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/decorators.hpp"
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include <utility>
 
@@ -15,7 +15,7 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::data_movement {
 
 ttnn::Tensor FillPadOperation::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     float fill_value,
     const std::optional<ttnn::MemoryConfig>& memory_config) {

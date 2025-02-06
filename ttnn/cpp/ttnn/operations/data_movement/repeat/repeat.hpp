@@ -14,7 +14,7 @@ struct RepeatOperation {
         const ttnn::Tensor& input_tensor,
         const ttnn::SmallVector<uint32_t>& repetition_vector,
         const std::optional<MemoryConfig>& provided_output_mem_config,
-        uint8_t queue_id);
+        QueueId queue_id);
 
     static ttnn::Tensor invoke(const ttnn::Tensor& input_tensor, const ttnn::Shape& repeat_dims);
 };

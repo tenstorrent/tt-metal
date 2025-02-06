@@ -5,7 +5,7 @@
 #include "untilize_with_halo_v2.hpp"
 
 #include "device/untilize_with_halo_v2_op.hpp"
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/run_operation.hpp"
 
 using namespace tt::tt_metal;
@@ -13,7 +13,7 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::data_movement {
 
 ttnn::Tensor ExecuteUntilizeWithHaloV2::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const Tensor& padding_config,
     const Tensor& local_config,

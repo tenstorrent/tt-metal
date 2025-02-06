@@ -74,7 +74,7 @@ void py_module(py::module& module) {
                const std::optional<const DataType> dtype,
                std::optional<ttnn::Tensor>& optional_output_tensor,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               uint8_t queue_id) {
+               QueueId queue_id) {
                 return self(
                     queue_id,
                     input_tensor,
@@ -95,7 +95,7 @@ void py_module(py::module& module) {
             py::arg("dtype").noconvert() = std::nullopt,
             py::arg("output_tensor").noconvert() = std::nullopt,
             py::arg("memory_config") = std::nullopt,
-            py::arg("queue_id") = 0});
+            py::arg("queue_id") = DefaultQueueId});
 }
 
 }  // namespace ttnn::operations::embedding

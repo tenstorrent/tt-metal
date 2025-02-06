@@ -51,7 +51,7 @@ void bind_indexed_fill(pybind11::module& module) {
                const ttnn::Tensor& input_tensor_b,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                int64_t dim,
-               uint8_t queue_id) {
+               QueueId queue_id) {
                 return self(queue_id, batch_id, input_tensor_a, input_tensor_b, memory_config, dim);
             },
             pybind11::arg("batch_id").noconvert(),
@@ -60,7 +60,7 @@ void bind_indexed_fill(pybind11::module& module) {
             pybind11::kw_only(),
             pybind11::arg("memory_config") = std::nullopt,
             pybind11::arg("dim") = 0,
-            pybind11::arg("queue_id") = 0});
+            pybind11::arg("queue_id") = DefaultQueueId});
 }
 
 }  // namespace detail

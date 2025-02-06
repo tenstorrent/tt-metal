@@ -12,20 +12,20 @@ using namespace tt::tt_metal;
 namespace ttnn {
 
 void write_buffer(
-    queue_id cq_id, Tensor& dst, std::vector<std::shared_ptr<void>> src, const std::optional<BufferRegion>& region) {
+    QueueId cq_id, Tensor& dst, std::vector<std::shared_ptr<void>> src, const std::optional<BufferRegion>& region) {
     uint32_t dst_ref_count = dst.tensor_attributes->record_main_thread_ref_count();
     for (const auto worker : dst.get_workers()) {
         auto src_for_device = (src.size() == 1) ? src.at(0) : src.at(worker->id());
         worker->push_work([worker, src_for_device, dst, cq_id, region]() {
             auto shard = tt::tt_metal::get_shard_for_device(dst, worker);
-            tt::tt_metal::memcpy(worker->command_queue(cq_id), shard, src_for_device.get(), region);
+            tt::tt_metal::memcpy(worker->command_queue(*cq_id), shard, src_for_device.get(), region);
         });
     }
     dst.tensor_attributes->update_main_thread_ref_count(dst.workers.at(0), dst_ref_count);
 }
 
 void read_buffer(
-    queue_id cq_id,
+    QueueId cq_id,
     Tensor& src,
     std::vector<std::shared_ptr<void>> dst,
     const std::optional<BufferRegion>& region,
@@ -37,7 +37,7 @@ void read_buffer(
         auto dst_for_device = (dst.size() == 1) ? dst.at(0) : dst.at(worker->id());
         worker->push_work([worker, dst_for_device, src, cq_id, region, src_offset, blocking]() {
             const auto& shard = tt::tt_metal::get_shard_for_device(src, worker);
-            tt::tt_metal::memcpy(worker->command_queue(cq_id), dst_for_device.get(), shard, region, blocking);
+            tt::tt_metal::memcpy(worker->command_queue(*cq_id), dst_for_device.get(), shard, region, blocking);
         });
     }
     if (blocking) {

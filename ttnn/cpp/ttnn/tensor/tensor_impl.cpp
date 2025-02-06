@@ -512,7 +512,7 @@ std::string to_string<bfloat4_b>(
 // ======================================================================================
 
 template <typename T>
-Tensor to_host_helper(const Tensor& tensor, bool blocking = true, uint8_t cq_id = ttnn::DefaultQueueId) {
+Tensor to_host_helper(const Tensor& tensor, bool blocking = true, ttnn::QueueId cq_id = ttnn::DefaultQueueId) {
     TT_ASSERT(tensor.is_allocated(), "Buffer must be allocated on device!");
     auto device_buffer = tensor.device_buffer();
     auto device = tensor.device();
@@ -522,7 +522,7 @@ Tensor to_host_helper(const Tensor& tensor, bool blocking = true, uint8_t cq_id 
     const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
         data_vec.resize(size_in_bytes / sizeof(T));
-        read_data_from_device_buffer<T>(device->command_queue(cq_id), device_buffer, data_vec.data(), blocking);
+        read_data_from_device_buffer<T>(device->command_queue(*cq_id), device_buffer, data_vec.data(), blocking);
     } else {
         read_data_from_device_buffer<T>(device_buffer, data_vec);
     }
@@ -531,7 +531,7 @@ Tensor to_host_helper(const Tensor& tensor, bool blocking = true, uint8_t cq_id 
 }
 
 template <typename T>
-Tensor to_host(const Tensor& tensor, bool blocking, uint8_t cq_id) {
+Tensor to_host(const Tensor& tensor, bool blocking, ttnn::QueueId cq_id) {
     if (tensor.storage_type() == StorageType::DEVICE) {
         return to_host_helper<T>(tensor, blocking, cq_id);
     } else if (tensor.storage_type() == StorageType::MULTI_DEVICE) {
@@ -550,20 +550,20 @@ Tensor to_host(const Tensor& tensor, bool blocking, uint8_t cq_id) {
     }
 }
 
-template Tensor to_host<bfloat16>(const Tensor& tensor, bool blocking, uint8_t cq_id);
-template Tensor to_host<float>(const Tensor& tensor, bool blocking, uint8_t cq_id);
-template Tensor to_host<int32_t>(const Tensor& tensor, bool blocking, uint8_t cq_id);
-template Tensor to_host<uint32_t>(const Tensor& tensor, bool blocking, uint8_t cq_id);
-template Tensor to_host<uint16_t>(const Tensor& tensor, bool blocking, uint8_t cq_id);
-template Tensor to_host<uint8_t>(const Tensor& tensor, bool blocking, uint8_t cq_id);
+template Tensor to_host<bfloat16>(const Tensor& tensor, bool blocking, ttnn::QueueId cq_id);
+template Tensor to_host<float>(const Tensor& tensor, bool blocking, ttnn::QueueId cq_id);
+template Tensor to_host<int32_t>(const Tensor& tensor, bool blocking, ttnn::QueueId cq_id);
+template Tensor to_host<uint32_t>(const Tensor& tensor, bool blocking, ttnn::QueueId cq_id);
+template Tensor to_host<uint16_t>(const Tensor& tensor, bool blocking, ttnn::QueueId cq_id);
+template Tensor to_host<uint8_t>(const Tensor& tensor, bool blocking, ttnn::QueueId cq_id);
 
 template <>
-Tensor to_host<bfloat4_b>(const Tensor& tensor, bool blocking, uint8_t cq_id) {
+Tensor to_host<bfloat4_b>(const Tensor& tensor, bool blocking, ttnn::QueueId cq_id) {
     return to_host<uint32_t>(tensor, blocking, cq_id);
 }
 
 template <>
-Tensor to_host<bfloat8_b>(const Tensor& tensor, bool blocking, uint8_t cq_id) {
+Tensor to_host<bfloat8_b>(const Tensor& tensor, bool blocking, ttnn::QueueId cq_id) {
     return to_host<uint32_t>(tensor, blocking, cq_id);
 }
 
@@ -594,7 +594,7 @@ std::shared_ptr<Buffer> initialize_data_on_device(
     BufferType<T>& data_to_write,
     IDevice* device,
     const TensorSpec& tensor_spec,
-    uint8_t cq_id = ttnn::DefaultQueueId) {
+    ttnn::QueueId cq_id = ttnn::DefaultQueueId) {
     ZoneScoped;
     TT_ASSERT(device != nullptr);
 
@@ -602,7 +602,7 @@ std::shared_ptr<Buffer> initialize_data_on_device(
 
     const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
-        write_data_to_device_buffer<T>(device->command_queue(cq_id), data_to_write, device_buffer);
+        write_data_to_device_buffer<T>(device->command_queue(*cq_id), data_to_write, device_buffer);
     } else {
         write_data_to_device_buffer<T>(data_to_write, *device_buffer);
     }
@@ -611,7 +611,7 @@ std::shared_ptr<Buffer> initialize_data_on_device(
 
 template <typename T>
 std::shared_ptr<Buffer> to_device_buffer(
-    const Storage& storage, IDevice* device, const TensorSpec& tensor_spec, uint8_t cq_id) {
+    const Storage& storage, IDevice* device, const TensorSpec& tensor_spec, ttnn::QueueId cq_id) {
     return std::visit(
         [&device, &tensor_spec, cq_id](auto&& storage) -> std::shared_ptr<Buffer> {
             using StorageType = std::decay_t<decltype(storage)>;
@@ -643,7 +643,7 @@ std::shared_ptr<Buffer> to_device_buffer(
 // ======================================================================================
 
 template <typename T>
-Tensor to_device(const Tensor& tensor, IDevice* target_device, const MemoryConfig& memory_config, uint8_t cq_id) {
+Tensor to_device(const Tensor& tensor, IDevice* target_device, const MemoryConfig& memory_config, ttnn::QueueId cq_id) {
     TT_FATAL(tensor.storage_type() != StorageType::DEVICE, "Tensor is already on device!");
     if (tensor.storage_type() == StorageType::OWNED) {
         TT_FATAL(tensor.is_allocated(), "Need host buffer on device to exist to copy data to device!");
@@ -658,27 +658,27 @@ Tensor to_device(const Tensor& tensor, IDevice* target_device, const MemoryConfi
 }
 
 template Tensor to_device<bfloat16>(
-    const Tensor& tensor, IDevice* target_device, const MemoryConfig& memory_config, uint8_t cq_id);
+    const Tensor& tensor, IDevice* target_device, const MemoryConfig& memory_config, ttnn::QueueId cq_id);
 template Tensor to_device<float>(
-    const Tensor& tensor, IDevice* target_device, const MemoryConfig& memory_config, uint8_t cq_id);
+    const Tensor& tensor, IDevice* target_device, const MemoryConfig& memory_config, ttnn::QueueId cq_id);
 template Tensor to_device<int32_t>(
-    const Tensor& tensor, IDevice* target_device, const MemoryConfig& memory_config, uint8_t cq_id);
+    const Tensor& tensor, IDevice* target_device, const MemoryConfig& memory_config, ttnn::QueueId cq_id);
 template Tensor to_device<uint32_t>(
-    const Tensor& tensor, IDevice* target_device, const MemoryConfig& memory_config, uint8_t cq_id);
+    const Tensor& tensor, IDevice* target_device, const MemoryConfig& memory_config, ttnn::QueueId cq_id);
 template Tensor to_device<uint16_t>(
-    const Tensor& tensor, IDevice* target_device, const MemoryConfig& memory_config, uint8_t cq_id);
+    const Tensor& tensor, IDevice* target_device, const MemoryConfig& memory_config, ttnn::QueueId cq_id);
 template Tensor to_device<uint8_t>(
-    const Tensor& tensor, IDevice* target_device, const MemoryConfig& memory_config, uint8_t cq_id);
+    const Tensor& tensor, IDevice* target_device, const MemoryConfig& memory_config, ttnn::QueueId cq_id);
 
 template <>
 Tensor to_device<bfloat4_b>(
-    const Tensor& tensor, IDevice* target_device, const MemoryConfig& memory_config, uint8_t cq_id) {
+    const Tensor& tensor, IDevice* target_device, const MemoryConfig& memory_config, ttnn::QueueId cq_id) {
     return to_device<uint32_t>(tensor, target_device, memory_config, cq_id);
 }
 
 template <>
 Tensor to_device<bfloat8_b>(
-    const Tensor& tensor, IDevice* target_device, const MemoryConfig& memory_config, uint8_t cq_id) {
+    const Tensor& tensor, IDevice* target_device, const MemoryConfig& memory_config, ttnn::QueueId cq_id) {
     return to_device<uint32_t>(tensor, target_device, memory_config, cq_id);
 }
 

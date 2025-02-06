@@ -18,7 +18,7 @@ namespace operations::pool {
 template <Pool2DType pool_type>
 struct Pool2DOp {
     static Tensor invoke(
-        uint8_t queue_id,
+        QueueId queue_id,
         const Tensor& input_tensor,
         uint32_t batch_size,
         uint32_t input_h,

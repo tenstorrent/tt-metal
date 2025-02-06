@@ -11,7 +11,7 @@ namespace operations::data_movement {
 
 struct ExecuteTranspose {
     static ttnn::Tensor invoke(
-        uint8_t queue_id,
+        QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         const int64_t& dim1,
         const int64_t& dim2,

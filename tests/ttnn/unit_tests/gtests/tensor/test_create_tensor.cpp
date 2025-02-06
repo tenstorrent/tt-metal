@@ -24,7 +24,7 @@ void run_create_tensor_test(tt::tt_metal::IDevice* device, const ttnn::Shape& in
         .buffer_type = BufferType::DRAM,
         .shard_spec = std::nullopt};
 
-    const uint32_t io_cq = 0;
+    const ttnn::QueueId io_cq = ttnn::DefaultQueueId;
     constexpr DataType dtype = DataType::BFLOAT16;
     constexpr uint32_t datum_size_bytes = 2;
 

@@ -95,7 +95,7 @@ void bind_fill_rm_op(py::module& module) {
                const float val_hi,
                const float val_lo,
                const std::optional<MemoryConfig>& memory_config,
-               uint8_t queue_id) {
+               QueueId queue_id) {
                 return self(queue_id, N, C, H, W, hOnes, wOnes, any, val_hi, val_lo, memory_config);
             },
             py::arg("N"),
@@ -109,7 +109,7 @@ void bind_fill_rm_op(py::module& module) {
             py::arg("val_lo"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
-            py::arg("queue_id") = 0});
+            py::arg("queue_id") = DefaultQueueId});
 }
 
 void bind_fill_ones_rm_op(py::module& module) {
@@ -169,7 +169,7 @@ void bind_fill_ones_rm_op(py::module& module) {
                uint32_t wOnes,
                const Tensor& any,
                const std::optional<MemoryConfig>& memory_config,
-               uint8_t queue_id) { return self(queue_id, N, C, H, W, hOnes, wOnes, any, memory_config); },
+               QueueId queue_id) { return self(queue_id, N, C, H, W, hOnes, wOnes, any, memory_config); },
             py::arg("N"),
             py::arg("C"),
             py::arg("H"),
@@ -179,7 +179,7 @@ void bind_fill_ones_rm_op(py::module& module) {
             py::arg("any"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
-            py::arg("queue_id") = 0});
+            py::arg("queue_id") = DefaultQueueId});
 }
 
 }  // namespace detail

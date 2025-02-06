@@ -56,7 +56,7 @@ void bind_reduction_moe_operation(py::module& module) {
                const uint16_t k,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                std::optional<ttnn::Tensor> optional_output_tensor,
-               uint8_t queue_id) {
+               QueueId queue_id) {
                 return self(
                     queue_id,
                     input_tensor,
@@ -73,7 +73,7 @@ void bind_reduction_moe_operation(py::module& module) {
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("queue_id") = 0});
+            py::arg("queue_id") = DefaultQueueId});
 }
 
 }  // namespace ttnn::operations::reduction::detail

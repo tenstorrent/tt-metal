@@ -91,7 +91,7 @@ void bind_reduction_sampling_operation(py::module& module) {
                const uint32_t seed,
                const std::optional<CoreRangeSet>& sub_core_grids,
                std::optional<ttnn::Tensor> optional_output_tensor,
-               uint8_t queue_id) {
+               QueueId queue_id) {
                 return self(
                     queue_id,
                     input_values_tensor,
@@ -110,7 +110,7 @@ void bind_reduction_sampling_operation(py::module& module) {
             py::arg("seed").noconvert() = 0,
             py::arg("sub_core_grids") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("queue_id") = 0});
+            py::arg("queue_id") = DefaultQueueId});
 }
 
 }  // namespace ttnn::operations::reduction::detail

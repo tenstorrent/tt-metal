@@ -21,7 +21,7 @@ namespace binary {
 template <BinaryOpType binary_op_type>
 struct BinaryOperation {
     static Tensor invoke(
-        uint8_t queue_id,
+        QueueId queue_id,
         const Tensor& input_tensor_a_arg,
         const Tensor& input_tensor_b_arg,
         const std::optional<const DataType>& output_dtype = std::nullopt,
@@ -40,7 +40,7 @@ struct BinaryOperation {
         const std::optional<unary::UnaryWithParam>& input_tensor_a_activation = std::nullopt);
 
     static Tensor invoke(
-        uint8_t queue_id,
+        QueueId queue_id,
         const ttnn::Tensor& input_tensor_a,
         float scalar,
         const std::optional<const DataType>& output_dtype = std::nullopt,
@@ -62,7 +62,7 @@ struct BinaryOperation {
 template <BinaryOpType binary_op_type>
 struct RelationalBinary {
     static Tensor invoke(
-        uint8_t queue_id,
+        QueueId queue_id,
         const Tensor& input_tensor_a_arg,
         const Tensor& input_tensor_b_arg,
         const std::optional<const DataType>& output_dtype = std::nullopt,
@@ -90,7 +90,7 @@ struct RelationalBinary {
         const std::optional<unary::UnaryWithParam>& input_tensor_a_activation = std::nullopt);
 
     static Tensor invoke(
-        uint8_t queue_id,
+        QueueId queue_id,
         const ttnn::Tensor& input_tensor_a,
         const float scalar,
         const std::optional<const DataType>& dtype = std::nullopt,
@@ -101,7 +101,7 @@ struct RelationalBinary {
 
     // scalar - tensor combination not available on Pytorch for this op
     static Tensor invoke(
-        uint8_t queue_id,
+        QueueId queue_id,
         const float scalar,
         const ttnn::Tensor& input_tensor_a,
         const std::optional<const DataType>& dtype = std::nullopt,
@@ -139,7 +139,7 @@ struct InplaceBinaryOperation {
 template <BinaryOpType binary_op_type>
 struct BinaryOperationSfpu {
     static Tensor invoke(
-        uint8_t queue_id,
+        QueueId queue_id,
         const Tensor& input_tensor_a_arg,
         const Tensor& input_tensor_b_arg,
         const std::optional<const DataType>& output_dtype = std::nullopt,

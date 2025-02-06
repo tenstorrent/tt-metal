@@ -55,7 +55,7 @@ void bind_untilize_with_halo_v2(py::module& module) {
                const std::optional<MemoryConfig>& memory_config,
                const bool remote_read,
                const bool transpose_mcast,
-               uint8_t queue_id) {
+               QueueId queue_id) {
                 return self(
                     queue_id,
                     input_tensor,
@@ -80,7 +80,7 @@ void bind_untilize_with_halo_v2(py::module& module) {
             py::arg("memory_config") = std::nullopt,
             py::arg("remote_read") = false,
             py::arg("transpose_mcast") = false,
-            py::arg("queue_id") = 0,
+            py::arg("queue_id") = DefaultQueueId,
         });
 }
 }  // namespace ttnn::operations::data_movement::detail

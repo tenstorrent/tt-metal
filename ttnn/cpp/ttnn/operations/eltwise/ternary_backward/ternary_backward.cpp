@@ -70,7 +70,7 @@ std::vector<Tensor> AddcdivBackwardOperation::invoke(
 }
 
 std::vector<OptionalTensor> WhereBackwardOperation::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& grad,
     const Tensor& condition,
     const Tensor& input,

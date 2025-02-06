@@ -14,7 +14,7 @@ namespace operations::reduction {
 
 struct MoeOperation {
     static ttnn::Tensor invoke(
-        uint8_t queue_id,
+        QueueId queue_id,
         const Tensor& input_tensor,
         const Tensor& expert_mask_tensor,
         const Tensor& topk_mask_tensor,

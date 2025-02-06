@@ -109,7 +109,7 @@ void py_bind_conv_transpose2d(py::module& module) {
                const std::optional<const DeviceComputeKernelConfig>& compute_config,
                const std::optional<const MemoryConfig>& memory_config,
                bool mirror_kernel,
-               const uint8_t& queue_id) -> Result {
+               QueueId queue_id) -> Result {
                 return self(
                     queue_id,
                     input_tensor,
@@ -152,7 +152,7 @@ void py_bind_conv_transpose2d(py::module& module) {
             py::arg("compute_config") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("mirror_kernel") = true,
-            py::arg("queue_id") = 0},
+            py::arg("queue_id") = DefaultQueueId},
 
         ttnn::pybind_overload_t{
             [](const decltype(ttnn::conv_transpose2d)& self,
@@ -175,7 +175,7 @@ void py_bind_conv_transpose2d(py::module& module) {
                const std::optional<const DeviceComputeKernelConfig>& compute_config,
                const std::optional<const MemoryConfig>& memory_config,
                bool mirror_kernel,
-               const uint8_t& queue_id) -> Result {
+               QueueId queue_id) -> Result {
                 return self(
                     queue_id,
                     input_tensor,
@@ -218,7 +218,7 @@ void py_bind_conv_transpose2d(py::module& module) {
             py::arg("compute_config") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("mirror_kernel") = true,
-            py::arg("queue_id") = 0});
+            py::arg("queue_id") = DefaultQueueId});
 }
 
 }  // namespace conv_transpose2d

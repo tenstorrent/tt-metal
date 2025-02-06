@@ -5,6 +5,7 @@
 #pragma once
 
 #include <utility>
+#include <ostream>
 
 namespace tt::stl {
 
