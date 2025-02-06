@@ -379,10 +379,12 @@ void Cluster::generate_logical_to_virtual_coord_mapping() {
             CoreCoord virtual_coords = this->get_virtual_coordinate_from_physical_coordinates(chip_id, phys_core);
             this->worker_logical_to_virtual_y_.at(board_type).insert({y_coords.first, virtual_coords.y});
         }
-        for (std::size_t log_eth_core_y = 0; log_eth_core_y < soc_desc.physical_ethernet_cores.size(); log_eth_core_y++) {
+        for (std::size_t log_eth_core_y = 0; log_eth_core_y < soc_desc.get_cores(CoreType::ETH).size();
+             log_eth_core_y++) {
             CoreCoord logical_eth_core = {0, log_eth_core_y};
             CoreCoord virtual_coords = this->get_virtual_coordinate_from_physical_coordinates(
-                chip_id, soc_desc.physical_ethernet_cores.at(log_eth_core_y));
+                chip_id,
+                soc_desc.translate_coord_to(soc_desc.get_eth_core_for_channel(log_eth_core_y), CoordSystem::PHYSICAL));
             this->eth_logical_to_virtual_.at(board_type).insert({logical_eth_core, virtual_coords});
         }
     }
@@ -696,7 +698,7 @@ std::unordered_map<chip_id_t, std::vector<CoreCoord>> Cluster::get_ethernet_core
                  this->cluster_desc_->get_directly_connected_ethernet_channels_between_chips(chip_id, other_chip_id)) {
                 ethernet_channel_t local_chip_chan = std::get<0>(channel_pair);
                 active_ethernet_cores.emplace_back(
-                    get_soc_desc(chip_id).chan_to_logical_eth_core_map.at(local_chip_chan));
+                    get_soc_desc(chip_id).get_eth_core_for_channel(local_chip_chan, CoordSystem::LOGICAL));
             }
             connected_chips.insert({other_chip_id, active_ethernet_cores});
         } else {
@@ -959,7 +961,8 @@ std::tuple<chip_id_t, CoreCoord> Cluster::get_connected_ethernet_core(std::tuple
     auto connected_eth_core =
         this->cluster_desc_->get_chip_and_channel_of_remote_ethernet_core(std::get<0>(eth_core), eth_chan);
     return std::make_tuple(
-        std::get<0>(connected_eth_core), soc_desc.chan_to_logical_eth_core_map.at(std::get<1>(connected_eth_core)));
+        std::get<0>(connected_eth_core),
+        soc_desc.get_eth_core_for_channel(std::get<1>(connected_eth_core), CoordSystem::LOGICAL));
 }
 
 std::vector<CoreCoord> Cluster::get_ethernet_sockets(chip_id_t local_chip, chip_id_t remote_chip) const {
@@ -978,7 +981,7 @@ CoreCoord Cluster::ethernet_core_from_logical_core(chip_id_t chip_id, const Core
 }
 
 CoreCoord Cluster::get_virtual_eth_core_from_channel(chip_id_t chip_id, int channel) const {
-    CoreCoord logical_coord = this->get_soc_desc(chip_id).chan_to_logical_eth_core_map.at(channel);
+    CoreCoord logical_coord = this->get_soc_desc(chip_id).get_eth_core_for_channel(channel, CoordSystem::LOGICAL);
     return this->get_virtual_coordinate_from_logical_coordinates(chip_id, logical_coord, CoreType::ETH);
 }
 
