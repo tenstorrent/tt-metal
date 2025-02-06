@@ -20,4 +20,27 @@ tt::tt_metal::Tensor mean_ttnn(const tt::tt_metal::Tensor& t, int dim, bool keep
 
 tt::tt_metal::Tensor sum_moreh(const tt::tt_metal::Tensor& t, int dim, bool keep_dim);
 tt::tt_metal::Tensor sum_ttnn(const tt::tt_metal::Tensor& t, int dim, bool keep_dim);
+
+tt::tt_metal::Tensor ttnn_matmul(
+    const tt::tt_metal::Tensor& a,
+    const tt::tt_metal::Tensor& b,
+    bool transpose_a,
+    bool transpose_b,
+    const ttnn::WormholeComputeKernelConfig& config);
+
+tt::tt_metal::Tensor moreh_matmul(
+    const tt::tt_metal::Tensor& a,
+    const tt::tt_metal::Tensor& b,
+    bool transpose_a,
+    bool transpose_b,
+    const ttnn::WormholeComputeKernelConfig& config);
+
+tt::tt_metal::Tensor matmul(
+    const tt::tt_metal::Tensor& a,
+    const tt::tt_metal::Tensor& b,
+    bool transpose_a,
+    bool transpose_b,
+    const ttnn::WormholeComputeKernelConfig& config,
+    bool use_moreh = false);
+
 }  // namespace ttml::ttnn_fixed

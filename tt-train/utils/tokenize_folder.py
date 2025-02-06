@@ -15,11 +15,12 @@ def gather_source_files(folder):
     Recursively walk `folder`, yielding paths to files with
     extensions in ('.hpp', '.cpp', '.h', '.c').
     """
-    valid_exts = {".hpp", ".cpp", ".h", ".c"}
+    valid_exts = {".hpp", ".cpp", ".h", ".c", ".cxx", ".hxx", ".py", ".md"}
     for root, _, files in os.walk(folder):
         for fname in files:
             _, ext = os.path.splitext(fname)
             if ext.lower() in valid_exts:
+                print(f"Found file: {fname}")
                 yield os.path.join(root, fname)
 
 
@@ -58,7 +59,7 @@ def train_bpe_tokenizer(text_file, output_tokenizer="tokenizer.json", vocab_size
     # tokenizer.pre_tokenizer = Whitespace()
 
     # 3. Setup BPE trainer with desired vocab size + special tokens
-    trainer = BpeTrainer(vocab_size=vocab_size, special_tokens=["[PAD]", "[UNK]", "[CLS]", "[SEP]", "[MASK]"])
+    trainer = BpeTrainer(vocab_size=vocab_size, special_tokens=["[PAD]", "[UNK]", "[CLS]", "[SEP]", "[MASK]", "\n"])
 
     # 4. Train on the merged text file
     tokenizer.train([text_file], trainer)

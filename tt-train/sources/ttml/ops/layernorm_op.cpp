@@ -29,7 +29,11 @@ autograd::TensorPtr layernorm(
         tensor->get_value().memory_config());
     auto rstd = ttnn::empty_like(mean);
     auto output = ttnn::empty_like(tensor->get_value());
-
+    ttnn::WormholeComputeKernelConfig config;
+    config.fp32_dest_acc_en = true;
+    config.math_approx_mode = false;
+    config.math_fidelity = MathFidelity::HiFi4;
+    config.packer_l1_acc = false;
     auto out_tensors = ttnn::moreh_layer_norm(
         tensor->get_value(),
         1,
@@ -40,14 +44,14 @@ autograd::TensorPtr layernorm(
         mean,
         rstd,
         /* memory_config */ std::nullopt,
-        /* compute_kernel_config */ std::nullopt);
+        /* compute_kernel_config */ config);
 
     auto out = autograd::create_tensor();
     out->set_value(out_tensors[0].value());
     mean = out_tensors[1].value();
     rstd = out_tensors[2].value();
 
-    autograd::GradFunction grad = [tensor, out, mean, rstd, gamma, beta]() {
+    autograd::GradFunction grad = [tensor, out, mean, rstd, gamma, beta, config]() {
         auto input_grad = ttnn::empty_like(tensor->get_value());
         auto gamma_grad = ttnn::empty_like(gamma->get_value());
         auto beta_grad = ttnn::empty_like(beta->get_value());
@@ -63,7 +67,7 @@ autograd::TensorPtr layernorm(
             gamma_grad,
             beta_grad,
             /* memory_config */ std::nullopt,
-            /* compute_kernel_config */ std::nullopt);
+            /* compute_kernel_config */ config);
 
         tensor->add_grad(res[0].value());
         gamma->add_grad(res[1].value());

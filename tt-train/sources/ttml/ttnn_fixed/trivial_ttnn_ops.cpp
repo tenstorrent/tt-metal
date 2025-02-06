@@ -78,4 +78,56 @@ tt::tt_metal::Tensor sum_ttnn(const tt::tt_metal::Tensor& t, int dim, bool keep_
     return ttnn::sum(t, dim, keep_dim, std::nullopt, core::ComputeKernelConfig::precise());
 }
 
+tt::tt_metal::Tensor ttnn_matmul(
+    const tt::tt_metal::Tensor& a,
+    const tt::tt_metal::Tensor& b,
+    bool transpose_a,
+    bool transpose_b,
+    const ttnn::WormholeComputeKernelConfig& config) {
+    return ttnn::matmul(
+        a,
+        b,
+        transpose_a,
+        transpose_b,
+        /* memory_config */ std::nullopt,
+        /* dtype */ std::nullopt,
+        /* program_config */ std::nullopt,
+        /* activation */ std::nullopt,
+        /* compute_kernel_config */
+        config,
+        /* core_grid */ ttnn::CoreGrid{7, 8},
+        /* output_tile */ std::nullopt);
+}
+
+tt::tt_metal::Tensor moreh_matmul(
+    const tt::tt_metal::Tensor& a,
+    const tt::tt_metal::Tensor& b,
+    bool transpose_a,
+    bool transpose_b,
+    const ttnn::WormholeComputeKernelConfig& config) {
+    return ttnn::moreh_matmul(
+        a,
+        b,
+        transpose_a,
+        transpose_b,
+        /* memory_config */ std::nullopt,
+        std::nullopt,
+        std::nullopt,
+        config);
+}
+
+tt::tt_metal::Tensor matmul(
+    const tt::tt_metal::Tensor& a,
+    const tt::tt_metal::Tensor& b,
+    bool transpose_a,
+    bool transpose_b,
+    const ttnn::WormholeComputeKernelConfig& config,
+    bool use_moreh) {
+    if (use_moreh) {
+        return moreh_matmul(a, b, transpose_a, transpose_b, config);
+    } else {
+        return ttnn_matmul(a, b, transpose_a, transpose_b, config);
+    }
+}
+
 }  // namespace ttml::ttnn_fixed
