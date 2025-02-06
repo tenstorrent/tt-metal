@@ -155,6 +155,12 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
     const auto& input_tensor_b = tensor_args.input_tensor_b;
     const auto& output_tensor = tensor_args.output_tensor;
 
+    TT_FATAL(input_tensor_a.get_logical_shape().rank() <= 4, "Tensor a does not support rank >= 5");
+
+    if (input_tensor_b.has_value()) {
+        TT_FATAL(input_tensor_b->get_logical_shape().rank() <= 4, "Tensor b does not support rank >= 5");
+    }
+
     TT_FATAL(
         input_tensor_b.has_value() != attributes.scalar.has_value(), "Either the tensor b or scalar should be set");
 
@@ -246,6 +252,9 @@ void BinaryNgDeviceOperation::validate_on_program_cache_hit(
     const int rank_a = input_shape_a.rank();
     const int rank_b = input_shape_b.rank();
     const int larger_rank = std::max(rank_a, rank_b);
+
+    TT_FATAL(larger_rank <= 4, "Broadcasting currently only supporting ranks <= 4");
+
     for (int i = -1; i >= -larger_rank; --i) {
         auto a_dim = (i >= -rank_a) ? input_shape_a[i] : 1;
         auto b_dim = (i >= -rank_b) ? input_shape_b[i] : 1;
