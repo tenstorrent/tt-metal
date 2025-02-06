@@ -584,6 +584,12 @@ void MeshDevice::replay_trace(const uint8_t cq_id, const uint32_t tid, const boo
     for (auto& device : scoped_devices_->get_devices()) {
         device->replay_trace(cq_id, tid, blocking);
     }
+    // If blocking, wait until worker threads have completed
+    if (blocking) {
+        for (auto& device : scoped_devices_->get_devices()) {
+            device->synchronize();
+        }
+    }
 }
 void MeshDevice::release_trace(const uint32_t tid) {
     for (auto& device : scoped_devices_->get_devices()) {
