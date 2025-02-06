@@ -105,15 +105,13 @@ const std::pair<ConfigBufferSync, std::vector<ConfigBufferEntry>&> WorkerConfigB
                 } else {
                     sync_info.sync_count = this->entries_[free_index][idx].sync_count;
                 }
-            } else if (
-                alloc_index + 1 == free_index || (alloc_index + 1 == kernel_config_entry_count && free_index == 0)) {
-                // We need a sync because the table of entries is too small
-                sync_info.need_sync = true;
-                if (had_sync) {
-                    sync_info.sync_count = std::max(sync_info.sync_count, this->entries_[free_index][idx].sync_count);
-                } else {
-                    sync_info.sync_count = this->entries_[free_index][idx].sync_count;
-                }
+            } else {
+                // This shouldn't fire since we are limited by the number of launch_msgs
+                // If it does, make kernel_config_entry_count larger
+                TT_ASSERT(
+                    !(alloc_index + 1 == free_index ||
+                      (alloc_index + 1 == kernel_config_entry_count && free_index == 0)),
+                    "kernel_config_buffer has too few entries");
             }
             this->reservation_[idx].addr = addr;
         }
