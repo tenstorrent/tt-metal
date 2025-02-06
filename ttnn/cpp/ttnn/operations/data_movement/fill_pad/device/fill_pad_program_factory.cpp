@@ -55,12 +55,6 @@ operation::ProgramWithCallbacks fill_pad_multi_core(const Tensor& input_tensor, 
             .set_page_size(src0_cb_index, cb_page_size);
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
-    constexpr uint32_t src1_cb_index = tt::CBIndex::c_1;
-    tt::tt_metal::CircularBufferConfig cb_src1_config =
-        tt::tt_metal::CircularBufferConfig(1024 * input_element_size_bytes * 2, {{src1_cb_index, cb_data_format}})
-            .set_page_size(src1_cb_index, 1024 * input_element_size_bytes * 2);
-    auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
-
     bool src_is_dram = tens_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
 
     // pack bf16 vals

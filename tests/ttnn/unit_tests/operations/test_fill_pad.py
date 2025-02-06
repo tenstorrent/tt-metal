@@ -92,7 +92,6 @@ def test_fill_pad(
     torch_input_tensor, padded_torch_tensor = create_nd_padded_tiled_tensor(
         shape, 32, fill_value, ttnn_dtype_to_torch_dtype[dtype]
     )
-    print(padded_torch_tensor.shape)
     input_tensor = ttnn.to_device(
         ttnn.from_torch(torch_input_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT),
         device,
