@@ -15,6 +15,9 @@
 
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
 
+#include "dataflow_api.h"
+// #include "debug/dprint.h"
+
 // Please update
 // tests/tt_metal/tt_metal/perf_microbenchmark/1_compute_mm/kernels/bmm_large_block_zm_fused_bias_activation_copy.cpp
 // when making any changes to this file.
@@ -109,6 +112,27 @@ void MAIN {
     constexpr uint32_t out_block_num_tiles = get_compile_time_arg_val(14);     // number of tiles in out_block
     constexpr bool untilize_out = get_compile_time_arg_val(15);                // untilize output
 
+    uint32_t didt_semaphore_addr = get_semaphore(get_compile_time_arg_val(16));  // didt sem
+    const uint32_t core_wait = get_arg_val<uint32_t>(0);  // set to either 0 or 1 for each core pair
+    const uint32_t core_x = get_arg_val<uint32_t>(1);     // x coord of paried core
+    const uint32_t core_y = get_arg_val<uint32_t>(2);     // y coord of paried core
+
+    volatile tt_l1_ptr uint32_t* didt_semaphore_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(didt_semaphore_addr);
+
+    const uint64_t didt_semaphore_noc_addr = get_noc_addr(core_x, core_y, didt_semaphore_addr);
+
+    // DPRINT_UNPACK(DPRINT << "Sem id: " << didt_semaphore_addr << ENDL());
+    // DPRINT_UNPACK(DPRINT << "core_wait:" << core_wait << " - core (x;y)=(" << core_x << ";" << core_y << ")" <<
+    // ENDL()); DPRINT_UNPACK(DPRINT << "Sem noc addr: " << didt_semaphore_noc_addr << ENDL());
+
+    // DPRINT << "sem addr:" << (uint)didt_semaphore_addr_ptr << " val:" << (uint)(*didt_semaphore_addr_ptr) << ENDL();
+
+    // set compute_token semaphore value VALID (1) if not core_wait to unblock compute
+    if (core_wait == false) {
+        UNPACK((noc_semaphore_set(didt_semaphore_addr_ptr, VALID)));
+    }
+
     constexpr uint32_t out_block_w = out_subblock_w * in1_num_subblocks;
 
     constexpr uint32_t in0_cb_id = tt::CBIndex::c_0;
@@ -168,6 +192,12 @@ void MAIN {
 
                     cb_wait_front(in0_cb_id, in0_block_num_tiles);
                     cb_wait_front(in1_cb_id, in1_block_num_tiles);
+
+                    // wait on compute_token semaphore value to become VALID (set by paired core after it completes
+                    // compute)
+                    UNPACK((noc_semaphore_wait(didt_semaphore_addr_ptr, VALID)));
+                    // set compute_token semaphore value to INVALID (0) to wait for paired core to complete compute
+                    UNPACK((noc_semaphore_set(didt_semaphore_addr_ptr, INVALID)));
 
                     int in0_index_subblock_offset = 0;
                     for (uint32_t in0_subblock = 0; in0_subblock < in0_num_subblocks; in0_subblock++) {
@@ -309,6 +339,9 @@ void MAIN {
 
                     cb_pop_front(in0_cb_id, in0_block_num_tiles);
                     cb_pop_front(in1_cb_id, in1_block_num_tiles);
+
+                    // atomic increment to transfer compute_token to paired core
+                    PACK((noc_semaphore_inc(didt_semaphore_noc_addr, 1)));
                 }
 
 #ifdef FUSE_BIAS

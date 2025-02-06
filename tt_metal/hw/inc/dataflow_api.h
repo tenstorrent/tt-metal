@@ -121,6 +121,7 @@ FORCE_INLINE uint32_t get_bank_offset(uint32_t bank_index) {
 
 }  // namespace interleaved_addr_gen
 
+#if not defined(COMPILE_FOR_TRISC)
 // clang-format off
 /**
  * Returns the address in L1 for a given runtime argument index for unique (per core) runtime arguments set via
@@ -187,6 +188,7 @@ FORCE_INLINE T get_common_arg_val(int arg_idx) {
     static_assert("Error: only 4B args are supported" && sizeof(T) == 4);
     return *((tt_l1_ptr T*)(get_common_arg_addr(arg_idx)));
 }
+#endif
 
 // clang-format off
 /**
@@ -1807,11 +1809,13 @@ void noc_async_full_barrier(uint8_t noc_idx = noc_index) {
  * | val       | The target value of the semaphore      | uint32_t | Any uint32_t value | True     |
  */
 // clang-format on
+// #include "debug/dprint.h"
 FORCE_INLINE
 void noc_semaphore_wait(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val) {
     WAYPOINT("NSW");
     do {
         invalidate_l1_cache();
+        // DPRINT << "waiting:" << (uint32_t)(*sem_addr) << ENDL();
     } while ((*sem_addr) != val);
     WAYPOINT("NSD");
 }
@@ -1935,6 +1939,7 @@ void noc_semaphore_inc(uint64_t addr, uint32_t incr, uint8_t noc_id = noc_index)
         false /*posted*/,
         MEM_NOC_ATOMIC_RET_VAL_ADDR);
     WAYPOINT("NSID");
+    // DPRINT << "incrementing" << ENDL();
 }
 
 inline void RISC_POST_HEARTBEAT(uint32_t& heartbeat) {

@@ -565,7 +565,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
         B,                       // batch
         out_block_tiles,         // out_block_num_tiles
 
-        untilize_out  // untilize_out
+        untilize_out,                                  // untilize_out
+        (std::uint32_t)in0_mcast_sender_semaphore_id,  // didt workaround sem
     };
 
     // Create compute kernel
@@ -881,6 +882,28 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
             tt_metal::SetRuntimeArgs(
                 program, mm_kernel_in1_sender_writer_id, core, mm_in1_sender_writer_args);  // RISCV_0_default
         }
+
+        /* didt compute */
+        CoreCoord paired_core = {(core.x + 4) % 8, core.y};  // pairs up cores {x,y} and {x+4,y}
+        auto paired_core_physical =
+            device->worker_core_from_logical_core(paired_core);  // convert to physical core coord
+        uint32_t wait_core = (core.x + 4) / 8;                   // 1 if in 2nd half of cores
+        // if (core.x == 0 && core.y == 0) {
+        //     paired_core_physical.x = 18;
+        //     paired_core_physical.y = 19;
+        //     wait_core = 0;
+        // } else if (core.x == 0 && core.y == 1) {
+        //     paired_core_physical.x = 18;
+        //     paired_core_physical.y = 18;
+        //     wait_core = 1;
+        // } else {
+        //     paired_core_physical.x = 18;
+        //     paired_core_physical.y = 18;
+        //     wait_core = 0;
+        // }
+        std::vector<uint32_t> mm_kernel_compute_args = {
+            (std::uint32_t)wait_core, (std::uint32_t)paired_core_physical.x, (std::uint32_t)paired_core_physical.y};
+        tt_metal::SetRuntimeArgs(program, mm_kernel, core, mm_kernel_compute_args);
     }
 
     auto override_runtime_arguments_callback =

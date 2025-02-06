@@ -33,6 +33,11 @@ void kernel_main() {
     const uint64_t in0_mcast_sender_semaphore_noc_addr =
         get_noc_addr(in0_mcast_sender_noc_x, in0_mcast_sender_noc_y, in0_mcast_sender_semaphore_addr);
 
+    // volatile tt_l1_ptr uint32_t* in0_mcast_sender_semaphore_addr_ptr =
+    //     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in0_mcast_sender_semaphore_addr);
+    // DPRINT << "sem addr:" << (uint)in0_mcast_sender_semaphore_addr_ptr << " val:" <<
+    // (uint)(*in0_mcast_sender_semaphore_addr_ptr) << ENDL();
+
     for (uint32_t b = 0; b < batch; ++b) {
         for (uint32_t bh = 0; bh < num_blocks_h_dim; ++bh) {
             for (uint32_t bw = 0; bw < num_blocks_w_dim; ++bw) {
@@ -41,13 +46,13 @@ void kernel_main() {
                     cb_reserve_back(cb_id_in0, in0_block_num_tiles);
 
                     // Set in0 semaphore value to INVALID
-                    noc_semaphore_set(in0_mcast_receiver_semaphore_addr_ptr, INVALID);
+                    // noc_semaphore_set(in0_mcast_receiver_semaphore_addr_ptr, INVALID);
 
                     // Atomic increment source core counter
-                    noc_semaphore_inc(in0_mcast_sender_semaphore_noc_addr, 1);
+                    // noc_semaphore_inc(in0_mcast_sender_semaphore_noc_addr, 1);
 
                     // wait on in0 semaphore value to become VALID (set by mcast sender after it multicasts data)
-                    noc_semaphore_wait(in0_mcast_receiver_semaphore_addr_ptr, VALID);
+                    // noc_semaphore_wait(in0_mcast_receiver_semaphore_addr_ptr, VALID);
 
                     cb_push_back(cb_id_in0, in0_block_num_tiles);
                 }

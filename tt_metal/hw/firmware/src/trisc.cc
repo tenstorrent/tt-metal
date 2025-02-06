@@ -32,6 +32,9 @@ namespace kernel_profiler {
 
 uint32_t tt_l1_ptr *rta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr *crta_l1_base __attribute__((used));
+uint32_t tt_l1_ptr* sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
+
+uint32_t noc_nonposted_atomics_acked[NUM_NOCS] __attribute__((used));
 
 namespace ckernel {
 
@@ -112,6 +115,9 @@ int main(int argc, char *argv[]) {
         experimental::setup_remote_cb_interfaces(cb_l1_base, end_cb_index);
 #endif
 
+        sem_l1_base[ProgrammableCoreType::TENSIX] =
+            (uint32_t tt_l1_ptr*)(kernel_config_base +
+                                  launch_msg->kernel_config.sem_offset[ProgrammableCoreType::TENSIX]);
         rta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +
             launch_msg->kernel_config.rta_offset[DISPATCH_CLASS_TENSIX_COMPUTE].rta_offset);
         crta_l1_base = (uint32_t tt_l1_ptr *)(kernel_config_base +

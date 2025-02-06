@@ -128,8 +128,8 @@ void kernel_main() {
                 uint32_t in0_tensor_current_inner_dim_block_start_tile_id = in0_tensor_current_h_dim_block_tile_id;
                 for (uint32_t block = 0; block < num_blocks_inner_dim; ++block) {
                     if constexpr (fuse_op) {
-                        fused_op_receiver.update_current_block_start_tile_id(
-                            block, in0_tensor_current_inner_dim_block_start_tile_id, in0_tensor_start_tile_id);
+                        // fused_op_receiver.update_current_block_start_tile_id(
+                        //     block, in0_tensor_current_inner_dim_block_start_tile_id, in0_tensor_start_tile_id);
                     }
 #ifndef IN0_SHARDED
                     // Operand 0
@@ -147,7 +147,7 @@ void kernel_main() {
                         uint32_t in0_tensor_tile_id = in0_tensor_row_start_tile_id;
                         for (uint32_t w = 0; w < in0_block_w; ++w) {
                             if (bh < num_blocks_h_dim - 1 || h < last_block_h) {
-                                noc_async_read_tile(in0_tensor_tile_id, s0, l1_write_addr_in0);
+                                // noc_async_read_tile(in0_tensor_tile_id, s0, l1_write_addr_in0);
                             }
                             l1_write_addr_in0 += in0_single_tile_size_bytes;
                             in0_tensor_tile_id += in0_tensor_stride_w;
@@ -157,7 +157,7 @@ void kernel_main() {
                     in0_tensor_current_inner_dim_block_start_tile_id += in0_tensor_next_inner_dim_block_stride;
 
                     // Barrier! make sure the reads are done
-                    noc_async_read_barrier();
+                    // noc_async_read_barrier();
 #else
                     if constexpr (extract_shard_sub_blocks) {
                         // Operand 0
@@ -171,14 +171,14 @@ void kernel_main() {
                         uint64_t noc_shard_read_addr = get_noc_addr(in0_tensor_current_inner_dim_block_start_addr);
 
                         for (uint32_t i = 0; i < in0_block_h; i++) {
-                            noc_async_read(noc_shard_read_addr, l1_write_addr_in0, shard_read_width);
+                            // noc_async_read(noc_shard_read_addr, l1_write_addr_in0, shard_read_width);
 
                             l1_write_addr_in0 += shard_read_width;
                             noc_shard_read_addr += shard_read_stride;
                         }
 
                         in0_tensor_current_inner_dim_block_start_addr += shard_read_width;
-                        noc_async_read_barrier();
+                        // noc_async_read_barrier();
                     }
 #endif
 
@@ -186,20 +186,20 @@ void kernel_main() {
                     // wait until all in0 mcast destinations have atomically incremented the in0 semaphore_addr (i.e.
                     // its value should be in0_mcast_num_dests), then reset the semaphore_addr value back to zero for
                     // the next block
-                    noc_semaphore_wait(in0_mcast_sender_semaphore_addr_ptr, in0_mcast_num_dests);
-                    noc_semaphore_set(in0_mcast_sender_semaphore_addr_ptr, 0);
+                    // noc_semaphore_wait(in0_mcast_sender_semaphore_addr_ptr, in0_mcast_num_dests);
+                    // noc_semaphore_set(in0_mcast_sender_semaphore_addr_ptr, 0);
 
                     // Now we have the block in the CB address, we can mcast to dests!
                     uint64_t in0_multicast_data_addr = in0_multicast_data_noc | in0_start_address;
 
                     // num_dests must not include source, since we are NOT really doing a local copy!
-                    noc_async_write_multicast(
-                        in0_start_address,
-                        in0_multicast_data_addr,
-                        in0_block_size_bytes,
-                        in0_mcast_num_cores,
-                        true,
-                        true);
+                    // noc_async_write_multicast(
+                    //     in0_start_address,
+                    //     in0_multicast_data_addr,
+                    //     in0_block_size_bytes,
+                    //     in0_mcast_num_cores,
+                    //     true,
+                    //     true);
 
                     // Note: no need for write barrier, since these two multicasts are done on the same noc id, same vc,
                     // same cmd_buf Also, this only works because we are setting VCs statically (using
@@ -207,13 +207,14 @@ void kernel_main() {
 #ifdef ARCH_BLACKHOLE
                     // On Blackhole the flush is needed because NoC latency is higherthan L1 <-> RISCV
                     // latency which means data could be changed before write is issued.
-                    noc_async_writes_flushed();
+                    // noc_async_writes_flushed();
 #endif
 
                     // We should also multicast the flag to destinations
                     // num_dests must not include source, since we are NOT really doing a local copy!
-                    noc_semaphore_set_multicast(
-                        in0_mcast_receiver_semaphore_addr, in0_mcast_receiver_semaphore_noc_addr, in0_mcast_num_cores);
+                    // noc_semaphore_set_multicast(
+                    //     in0_mcast_receiver_semaphore_addr, in0_mcast_receiver_semaphore_noc_addr,
+                    //     in0_mcast_num_cores);
 #endif
 
 #ifndef IN0_SHARDED
@@ -232,5 +233,5 @@ void kernel_main() {
         }
         in0_tensor_start_tile_id += MtKt;
     }
-    noc_async_write_barrier();
+    // noc_async_write_barrier();
 }

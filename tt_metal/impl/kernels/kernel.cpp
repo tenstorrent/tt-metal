@@ -129,6 +129,7 @@ void ComputeKernel::process_defines(
         callback(define, value);
     }
     // pass default noc mode as compute does not need it, just for compile to pass
+    callback("NOC_INDEX", std::to_string(NOC::NOC_0));
     callback("NOC_MODE", std::to_string(NOC_MODE::DM_DEDICATED_NOC));
 }
 
