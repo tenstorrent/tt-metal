@@ -29,7 +29,7 @@ download_logs_for_all_jobs() {
     local workflow_run_id=$2
     local attempt_number=$3
 
-    echo "[info] Downloading logs for job with id $job_id for attempt $attempt_number"
+    echo "[info] Downloading logs for workflow with id $workflow_run_id for attempt $attempt_number"
     gh api /repos/$repo/actions/runs/$workflow_run_id/attempts/$attempt_number/jobs --paginate | jq -c '.jobs[] | {id: .id, conclusion: .conclusion}' | while read -r job; do
         job_id=$(echo "$job" | jq -r '.id')
         job_conclusion=$(echo "$job" | jq -r '.conclusion')
