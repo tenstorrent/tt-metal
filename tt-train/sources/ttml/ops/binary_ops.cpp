@@ -87,7 +87,7 @@ autograd::TensorPtr operator-(const autograd::TensorPtr& a, const autograd::Tens
         b->add_grad(ttnn::neg(out->get_grad()));
     };
     auto links = autograd::get_links(a, b);
-
+ 
     out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
 
     return out;
@@ -104,7 +104,7 @@ autograd::TensorPtr operator*(const autograd::TensorPtr& a, const autograd::Tens
         auto b_grad = ttnn::multiply(out->get_grad(), a->get_value());
 
         auto clamp_to_rank = [](const ttnn::Tensor& tensor, size_t rank) {
-            auto tensor_rank = tensor.shape().rank();
+            auto tensor_rank = tensor.logical_shape().rank();
             if (tensor_rank == rank) {
                 return tensor;
             } else if (tensor_rank > rank) {
@@ -127,15 +127,15 @@ autograd::TensorPtr operator*(const autograd::TensorPtr& a, const autograd::Tens
             return true;
         };
 
-        if (a->get_value().shape().rank() != a_grad.shape().rank()) {
+        if (a->get_value().logical_shape().rank() != a_grad.logical_shape().rank()) {
             if (logical_suffixes_match(a->get_value(), a_grad)) {
-                a_grad = clamp_to_rank(a_grad, a->get_value().shape().rank());
+                a_grad = clamp_to_rank(a_grad, a->get_value().logical_shape().rank());
             }
         }
 
-        if (b->get_value().shape().rank() != b_grad.shape().rank()) {
+        if (b->get_value().logical_shape().rank() != b_grad.logical_shape().rank()) {
             if (logical_suffixes_match(b->get_value(), b_grad)) {
-                b_grad = clamp_to_rank(b_grad, b->get_value().shape().rank());
+                b_grad = clamp_to_rank(b_grad, b->get_value().logical_shape().rank());
             }
         }
 
