@@ -69,7 +69,7 @@ def get_atol_rtol_pcc(golden, calculated):
 
             # If both tensors are constant (or there is only single element)
             if torch.max(golden) == torch.min(golden) and torch.max(calculated) == torch.min(calculated):
-                return 1 - cal_rtol
+                return torch.isclose(torch.max(golden), torch.max(calculated)).item()
 
             cal_pcc = np.ma.corrcoef(
                 np.ma.masked_invalid(torch.squeeze(golden).detach().numpy()).flatten(),
