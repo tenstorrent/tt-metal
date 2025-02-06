@@ -1513,6 +1513,9 @@ void reserve_space_in_kernel_config_buffer(
             dispatch_md.stall_first = false;
             dispatch_md.stall_before_program = true;
         }
+
+        // TODO: config_buffer_mgr is stateful so code below restores original reservation state
+        // pull state out of the config_buffer_mgr
         reservation = config_buffer_mgr.reserve(program_config_sizes);
     }
 
@@ -1527,6 +1530,10 @@ void reserve_space_in_kernel_config_buffer(
     }
     config_buffer_mgr.alloc(expected_num_workers_completed + num_program_workers);
 
+    // TODO.  This code is needlessly complex due to enqueue program and
+    // binary writing being intertwined.  Separate out writing kernel
+    // binaries into program compile/finalize.  The sync below is confusing
+    // and not needed (just need a barrier on DRAM write)
     if (program_binary_status != ProgramBinaryStatus::Committed) {
         // Insert a stall before writing any program configs when binaries are in flight
         dispatch_md.stall_first = true;
