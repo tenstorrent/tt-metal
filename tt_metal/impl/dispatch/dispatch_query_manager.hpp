@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <dispatch_core_manager.hpp>
-#include <tt-metalium/tt_cluster.hpp>
 
 namespace tt::tt_metal {
 
