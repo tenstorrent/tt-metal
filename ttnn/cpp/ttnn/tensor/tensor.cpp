@@ -1016,29 +1016,7 @@ Tensor allocate_tensor_on_mesh(const TensorSpec& tensor_spec, distributed::MeshD
     TT_FATAL(
         tt::tt_metal::detail::InMainThread(), "Allocation of a tensor on mesh must be called from the main thread");
     auto mesh_buffer = tensor_impl::allocate_mesh_buffer_on_device(mesh_device, tensor_spec);
-
-    const auto [num_rows, num_cols] = mesh_device->shape();
-    std::vector<int> ordered_device_ids;
-    std::unordered_map<int, std::shared_ptr<Buffer>> buffers;
-    std::unordered_map<int, TensorSpec> specs;
-
-    ordered_device_ids.reserve(num_rows * num_cols);
-    buffers.reserve(num_rows * num_cols);
-    specs.reserve(num_rows * num_cols);
-
-    for (int row = 0; row < num_rows; ++row) {
-        for (int col = 0; col < num_cols; ++col) {
-            auto buffer = mesh_buffer->get_device_buffer(distributed::Coordinate{row, col});
-            const int device_id = buffer->device()->id();
-            ordered_device_ids.push_back(device_id);
-            buffers.emplace(device_id, std::move(buffer));
-            specs.emplace(device_id, tensor_spec);
-        }
-    }
-
-    MultiDeviceStorage multi_device_storage(
-        ReplicateTensor{}, std::move(ordered_device_ids), std::move(buffers), std::move(specs), std::move(mesh_buffer));
-
+    MultiDeviceStorage multi_device_storage(std::move(mesh_buffer), tensor_spec);
     return Tensor(std::move(multi_device_storage), tensor_spec);
 }
 
