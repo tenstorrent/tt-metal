@@ -67,7 +67,11 @@ def get_atol_rtol_pcc(golden, calculated):
                 golden = golden.type(torch.float32)
                 calculated = calculated.type(torch.float32)
 
-            # If both tensors are constant (or there is only single element)
+            # Single element case
+            if golden.numel() == 1:
+                return float(torch.equal(golden, calculated))
+
+            # If both tensors are contant
             if torch.max(golden) == torch.min(golden) and torch.max(calculated) == torch.min(calculated):
                 return torch.isclose(torch.max(golden), torch.max(calculated)).item()
 
@@ -134,7 +138,6 @@ def comp_pcc(golden, calculated, pcc=0.99):
     if golden.dtype != calculated.dtype:
         calculated = calculated.type(golden.dtype)
     _, _, cal_pcc, output_str = get_atol_rtol_pcc(golden, calculated)
-
     passing = cal_pcc >= pcc
     if not passing:
         output_str += ", PCC check failed"
