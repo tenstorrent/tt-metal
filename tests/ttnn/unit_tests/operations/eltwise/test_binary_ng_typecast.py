@@ -74,7 +74,7 @@ def test_opt_output_no_typecast(input_shapes, dtype, ttnn_fn, device):
     out_tt = ttnn.from_torch(
         out, dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
-    cq_id = 0
+    cq_id = DefaultQueueId
     ttnn_op(input_tensor_a, input_tensor_b, queue_id=cq_id, output_tensor=out_tt)
     output_tensor = ttnn.to_torch(out_tt)
 
@@ -125,7 +125,7 @@ def test_opt_output_bf8b(input_shapes, dtype, ttnn_fn, device):
     out_tt = ttnn.from_torch(
         out, dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
-    cq_id = 0
+    cq_id = DefaultQueueId
     ttnn_op(input_tensor_a, input_tensor_b, queue_id=cq_id, output_tensor=out_tt)
     output_tensor = ttnn.to_torch(out_tt)
 
@@ -170,7 +170,7 @@ def test_sub_typecast(input_shapes, device):
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    cq_id = 0
+    cq_id = DefaultQueueId
     output_tensor = ttnn.experimental.sub(input_tensor_a, input_tensor_b, queue_id=cq_id)
     output_tensor = ttnn.to_torch(output_tensor)
 
@@ -215,7 +215,7 @@ def test_sub_typecast_a(input_shapes, device):
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    cq_id = 0
+    cq_id = DefaultQueueId
     output_tensor = ttnn.experimental.sub(input_tensor_a, input_tensor_b, queue_id=cq_id)
     output_tensor = ttnn.to_torch(output_tensor)
 
@@ -260,7 +260,7 @@ def test_sub_typecast_b(input_shapes, device):
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    cq_id = 0
+    cq_id = DefaultQueueId
     output_tensor = ttnn.experimental.sub(input_tensor_a, input_tensor_b, queue_id=cq_id)
     output_tensor = ttnn.to_torch(output_tensor)
 
@@ -309,7 +309,7 @@ def test_sub_opt_output_typecast_inputs(input_shapes, device):
     out_tt = ttnn.from_torch(
         out, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
-    cq_id = 0
+    cq_id = DefaultQueueId
     ttnn.experimental.sub(input_tensor_a, input_tensor_b, queue_id=cq_id, output_tensor=out_tt)
     output_tensor = ttnn.to_torch(out_tt)
 
@@ -358,7 +358,7 @@ def test_sub_opt_output_typecast_out(input_shapes, device):
     out_tt = ttnn.from_torch(
         out, dtype=ttnn.bfloat8_b, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
-    cq_id = 0
+    cq_id = DefaultQueueId
     ttnn.experimental.sub(input_tensor_a, input_tensor_b, queue_id=cq_id, output_tensor=out_tt)
     output_tensor = ttnn.to_torch(out_tt)
 
@@ -407,7 +407,7 @@ def test_sub_opt_output_typecast_a(input_shapes, device):
     out_tt = ttnn.from_torch(
         out, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
-    cq_id = 0
+    cq_id = DefaultQueueId
     ttnn.experimental.sub(input_tensor_a, input_tensor_b, queue_id=cq_id, output_tensor=out_tt)
     output_tensor = ttnn.to_torch(out_tt)
 
@@ -456,7 +456,7 @@ def test_sub_opt_output_typecast_b(input_shapes, device):
     out_tt = ttnn.from_torch(
         out, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
-    cq_id = 0
+    cq_id = DefaultQueueId
     ttnn.experimental.sub(input_tensor_a, input_tensor_b, queue_id=cq_id, output_tensor=out_tt)
     output_tensor = ttnn.to_torch(out_tt)
 
@@ -501,7 +501,7 @@ def test_inplace_sub_typecast(input_shapes, device):
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    cq_id = 0
+    cq_id = DefaultQueueId
     ttnn.experimental.sub_(input_tensor_a, input_tensor_b, queue_id=cq_id)
     output_tensor = ttnn.to_torch(input_tensor_a)
 
@@ -546,7 +546,7 @@ def test_inplace_sub_typecast_a(input_shapes, device):
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    cq_id = 0
+    cq_id = DefaultQueueId
     ttnn.experimental.sub_(input_tensor_a, input_tensor_b, queue_id=cq_id)
     output_tensor = ttnn.to_torch(input_tensor_a)
 
@@ -591,7 +591,7 @@ def test_inplace_sub_typecast_b(input_shapes, device):
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    cq_id = 0
+    cq_id = DefaultQueueId
     ttnn.experimental.sub_(input_tensor_a, input_tensor_b, queue_id=cq_id)
     output_tensor = ttnn.to_torch(input_tensor_a)
 
@@ -651,7 +651,7 @@ def test_opt_output_scalar(input_shapes, ttnn_fn, scalar, device):
         out, dtype=ttnn.bfloat8_b, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
 
-    cq_id = 0
+    cq_id = DefaultQueueId
     ttnn_op(input_tensor_a, scalar, queue_id=cq_id, output_tensor=out_tt)
     output_tensor = ttnn.to_torch(out_tt)
 

@@ -38,7 +38,7 @@ MassagedUntilize build_ndiml_untilize(BaseUntilizeType base_untilize) {
 }
 
 ttnn::Tensor ExecuteUntilize::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
     bool use_multicore,

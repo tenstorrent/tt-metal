@@ -13,7 +13,7 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::data_movement {
 
 ttnn::Tensor ExecuteUntilizeWithHaloV2::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const Tensor& padding_config,
     const Tensor& local_config,

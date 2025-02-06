@@ -46,7 +46,7 @@ def test_bw_tanh_with_output(input_shapes, device):
 
     _, input_grad = data_gen_with_range(input_shapes, -1, 1, device)
 
-    cq_id = 0
+    cq_id = DefaultQueueId
     tt_output_tensor_on_device = ttnn.tanh_bw(
         grad_tensor,
         input_tensor,

@@ -80,7 +80,7 @@ def test_bw_gelu_opt_output(input_shapes, approximate, device):
         input_grad, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
     )
 
-    cq_id = 0
+    cq_id = DefaultQueueId
     pages_before = ttnn._ttnn.reports.get_buffer_pages()
     ttnn.gelu_bw(grad_tensor, input_tensor, approximate=approximate, input_grad=input_grad, queue_id=cq_id)
     assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages())
@@ -110,7 +110,7 @@ def test_bw_gelu_default_opt_output(input_shapes, device):
         input_grad, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
     )
 
-    cq_id = 0
+    cq_id = DefaultQueueId
     pages_before = ttnn._ttnn.reports.get_buffer_pages()
     ttnn.gelu_bw(grad_tensor, input_tensor, input_grad=input_grad, queue_id=cq_id)
     assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages())

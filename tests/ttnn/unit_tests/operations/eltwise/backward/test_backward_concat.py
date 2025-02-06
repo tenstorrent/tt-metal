@@ -118,7 +118,7 @@ def test_bw_concat_Default_with_output(input_shapes, input_shapes_2, device, are
         other_grad = ttnn.from_torch(
             opt_tensor2, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
         )
-    cq_id = 0
+    cq_id = DefaultQueueId
 
     pages_before = ttnn._ttnn.reports.get_buffer_pages()
     ttnn.concat_bw(
@@ -187,7 +187,7 @@ def test_bw_concat_with_output(input_shapes, input_shapes_2, dimension, device, 
             opt_tensor2, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
         )
 
-    cq_id = 0
+    cq_id = DefaultQueueId
 
     pages_before = ttnn._ttnn.reports.get_buffer_pages()
     ttnn.concat_bw(

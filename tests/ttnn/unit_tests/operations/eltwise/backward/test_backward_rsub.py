@@ -55,7 +55,7 @@ def test_bw_rsub_opt(input_shapes, device, are_required_outputs):
     if are_required_outputs[1]:
         _, other_grad = data_gen_with_range(input_shapes, -1, 1, device)
 
-    cq_id = 0
+    cq_id = DefaultQueueId
 
     pages_before = ttnn._ttnn.reports.get_buffer_pages()
     ttnn.rsub_bw(

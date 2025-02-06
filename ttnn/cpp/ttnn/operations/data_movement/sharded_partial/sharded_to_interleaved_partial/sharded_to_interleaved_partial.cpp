@@ -10,7 +10,7 @@
 namespace ttnn::operations::data_movement {
 
 ttnn::Tensor ShardedToInterleavedPartialOperation::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& cache_tensor,
     int64_t& num_slices,

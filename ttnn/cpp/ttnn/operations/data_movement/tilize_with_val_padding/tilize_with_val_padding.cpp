@@ -58,7 +58,7 @@ ttnn::Shape squeeze_output_shape(const ttnn::Shape& output_shape) {
 }
 
 ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Shape& output_padded_shape,
     const PadValue pad_value,
@@ -94,7 +94,7 @@ ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
 }
 
 ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::SmallVector<uint32_t>& output_padded_shape,
     const PadValue pad_value,
@@ -123,7 +123,7 @@ ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
 }
 
 ttnn::Tensor ExecuteTilizeWithZeroPadding::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DataType> output_dtype,

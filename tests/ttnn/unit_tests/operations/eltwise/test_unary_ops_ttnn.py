@@ -21,7 +21,7 @@ def test_unary_square_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
-    cq_id = 0
+    cq_id = DefaultQueueId
     ttnn.square(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.square(in_data)
 
@@ -42,7 +42,7 @@ def test_unary_pow_ttnn(input_shapes, exponent, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
-    cq_id = 0
+    cq_id = DefaultQueueId
     ttnn.pow(input_tensor, exponent, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.pow(in_data, exponent)
 
@@ -62,7 +62,7 @@ def test_unary_abs_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
-    cq_id = 0
+    cq_id = DefaultQueueId
     ttnn.abs(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.abs(in_data)
 
@@ -82,7 +82,7 @@ def test_unary_asin_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -1, 1, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
-    cq_id = 0
+    cq_id = DefaultQueueId
     ttnn.asin(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.asin(in_data)
 
@@ -102,7 +102,7 @@ def test_unary_acos_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -1, 1, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
-    cq_id = 0
+    cq_id = DefaultQueueId
     ttnn.acos(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.acos(in_data)
 
@@ -122,7 +122,7 @@ def test_unary_atan_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -1, 1, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
-    cq_id = 0
+    cq_id = DefaultQueueId
     ttnn.atan(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.atan(in_data)
 
@@ -142,7 +142,7 @@ def test_unary_cos_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -1, 1, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
-    cq_id = 0
+    cq_id = DefaultQueueId
     ttnn.cos(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.cos(in_data)
 
@@ -162,7 +162,7 @@ def test_unary_eqz_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
-    cq_id = 0
+    cq_id = DefaultQueueId
     ttnn.eqz(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = in_data == 0
 
@@ -182,7 +182,7 @@ def test_unary_eqz_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
-    cq_id = 0
+    cq_id = DefaultQueueId
     ttnn.eqz(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = in_data == 0
 
@@ -202,7 +202,7 @@ def test_unary_nez_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
-    cq_id = 0
+    cq_id = DefaultQueueId
     ttnn.nez(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = in_data != 0
 
@@ -222,7 +222,7 @@ def test_unary_gez_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
-    cq_id = 0
+    cq_id = DefaultQueueId
     ttnn.gez(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = in_data >= 0
 
@@ -242,7 +242,7 @@ def test_unary_lez_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
-    cq_id = 0
+    cq_id = DefaultQueueId
     ttnn.lez(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = in_data <= 0
 
@@ -262,7 +262,7 @@ def test_unary_ltz_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
-    cq_id = 0
+    cq_id = DefaultQueueId
     ttnn.ltz(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = in_data < 0
 
@@ -282,7 +282,7 @@ def test_unary_gtz_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
-    cq_id = 0
+    cq_id = DefaultQueueId
     ttnn.gtz(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = in_data > 0
 
@@ -303,7 +303,7 @@ def test_unary_elu_ttnn(input_shapes, alpha, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
-    cq_id = 0
+    cq_id = DefaultQueueId
     ttnn.elu(input_tensor, alpha=alpha, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.nn.functional.elu(in_data, alpha)
 
@@ -324,7 +324,7 @@ def test_unary_erf_ttnn(input_shapes, fast_and_approx, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
-    cq_id = 0
+    cq_id = DefaultQueueId
     ttnn.erf(input_tensor, fast_and_approximate_mode=fast_and_approx, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.erf(in_data)
 
@@ -345,7 +345,7 @@ def test_unary_erfc_ttnn(input_shapes, fast_and_approx, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
-    cq_id = 0
+    cq_id = DefaultQueueId
     ttnn.erfc(input_tensor, fast_and_approximate_mode=fast_and_approx, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.erfc(in_data)
 
@@ -365,7 +365,7 @@ def test_unary_erfinv_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
-    cq_id = 0
+    cq_id = DefaultQueueId
     ttnn.erfinv(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.erfinv(in_data)
 
@@ -385,7 +385,7 @@ def test_unary_exp_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
-    cq_id = 0
+    cq_id = DefaultQueueId
     ttnn.exp(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.exp(in_data)
 
@@ -405,7 +405,7 @@ def test_unary_exp2_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
-    cq_id = 0
+    cq_id = DefaultQueueId
     ttnn.exp2(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.exp2(in_data)
 
@@ -425,7 +425,7 @@ def test_unary_expm1_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
-    cq_id = 0
+    cq_id = DefaultQueueId
     ttnn.expm1(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.expm1(in_data)
 
@@ -446,7 +446,7 @@ def test_unary_gelu_ttnn(input_shapes, fast_and_approx, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
-    cq_id = 0
+    cq_id = DefaultQueueId
     ttnn.gelu(input_tensor, fast_and_approximate_mode=fast_and_approx, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.nn.functional.gelu(in_data)
 
@@ -467,7 +467,7 @@ def test_unary_leaky_relu_ttnn(input_shapes, negative_slope, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
-    cq_id = 0
+    cq_id = DefaultQueueId
     ttnn.leaky_relu(input_tensor, negative_slope=negative_slope, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.nn.functional.leaky_relu(in_data, negative_slope)
 
@@ -487,7 +487,7 @@ def test_unary_logical_not_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
-    cq_id = 0
+    cq_id = DefaultQueueId
     ttnn.logical_not(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.logical_not(in_data)
 
@@ -507,7 +507,7 @@ def test_unary_i0_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
-    cq_id = 0
+    cq_id = DefaultQueueId
     ttnn.i0(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.i0(in_data)
 
@@ -527,7 +527,7 @@ def test_unary_isfinite_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
-    cq_id = 0
+    cq_id = DefaultQueueId
     ttnn.isfinite(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.isfinite(in_data)
 
@@ -547,7 +547,7 @@ def test_unary_isinf_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
-    cq_id = 0
+    cq_id = DefaultQueueId
     ttnn.isinf(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.isinf(in_data)
 
@@ -567,7 +567,7 @@ def test_unary_isposinf_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
-    cq_id = 0
+    cq_id = DefaultQueueId
     ttnn.isposinf(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.isposinf(in_data)
 
@@ -587,7 +587,7 @@ def test_unary_isneginf_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
-    cq_id = 0
+    cq_id = DefaultQueueId
     ttnn.isneginf(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.isneginf(in_data)
 
@@ -607,7 +607,7 @@ def test_unary_isnan_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
-    cq_id = 0
+    cq_id = DefaultQueueId
     ttnn.isnan(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.isnan(in_data)
 
@@ -627,7 +627,7 @@ def test_unary_neg_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
-    cq_id = 0
+    cq_id = DefaultQueueId
     ttnn.neg(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.neg(in_data)
 
@@ -647,7 +647,7 @@ def test_unary_relu_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
-    cq_id = 0
+    cq_id = DefaultQueueId
     ttnn.relu(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.relu(in_data)
 
@@ -667,7 +667,7 @@ def test_unary_relu6_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
-    cq_id = 0
+    cq_id = DefaultQueueId
     ttnn.relu6(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.nn.functional.relu6(in_data)
 
@@ -687,7 +687,7 @@ def test_unary_tan_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -1, 1, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
-    cq_id = 0
+    cq_id = DefaultQueueId
     ttnn.tan(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.tan(in_data)
 
@@ -707,7 +707,7 @@ def test_unary_tanh_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
-    cq_id = 0
+    cq_id = DefaultQueueId
     ttnn.tanh(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.tanh(in_data)
 
@@ -727,7 +727,7 @@ def test_unary_rsqrt_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
-    cq_id = 0
+    cq_id = DefaultQueueId
     ttnn.rsqrt(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.rsqrt(in_data)
 
@@ -747,7 +747,7 @@ def test_unary_sign_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
-    cq_id = 0
+    cq_id = DefaultQueueId
     ttnn.sign(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.sign(in_data)
 
@@ -767,7 +767,7 @@ def test_unary_signbit_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
-    cq_id = 0
+    cq_id = DefaultQueueId
     ttnn.signbit(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.signbit(in_data)
 
@@ -787,7 +787,7 @@ def test_unary_silu_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
-    cq_id = 0
+    cq_id = DefaultQueueId
     ttnn.silu(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.nn.functional.silu(in_data)
 
@@ -807,7 +807,7 @@ def test_unary_log_sigmoid_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -1, 1, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
-    cq_id = 0
+    cq_id = DefaultQueueId
     ttnn.log_sigmoid(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.nn.functional.logsigmoid(in_data)
 
@@ -827,7 +827,7 @@ def test_unary_rsqrt_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
-    cq_id = 0
+    cq_id = DefaultQueueId
     ttnn.rsqrt(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.rsqrt(in_data)
 
@@ -847,7 +847,7 @@ def test_unary_sigmoid_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -1, 1, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
-    cq_id = 0
+    cq_id = DefaultQueueId
     ttnn.sigmoid(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.sigmoid(in_data)
 
@@ -867,7 +867,7 @@ def test_unary_recip_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, 1, 10, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
-    cq_id = 0
+    cq_id = DefaultQueueId
     ttnn.reciprocal(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.reciprocal(in_data)
 
@@ -888,7 +888,7 @@ def test_unary_heaviside_ttnn(input_shapes, value, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -10, 10, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
-    cq_id = 0
+    cq_id = DefaultQueueId
     ttnn.heaviside(input_tensor, value=value, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.heaviside(in_data, torch.tensor(value, dtype=in_data.dtype))
 
@@ -908,7 +908,7 @@ def test_unary_log_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, 1e-6, 1, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
-    cq_id = 0
+    cq_id = DefaultQueueId
     ttnn.log(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.log(in_data)
 
@@ -928,7 +928,7 @@ def test_unary_log2_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, 1e-6, 1, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
-    cq_id = 0
+    cq_id = DefaultQueueId
     ttnn.log2(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.log2(in_data)
 
@@ -948,7 +948,7 @@ def test_unary_log10_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, 1e-6, 1, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
-    cq_id = 0
+    cq_id = DefaultQueueId
     ttnn.log10(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.log10(in_data)
 
@@ -968,7 +968,7 @@ def test_unary_sqrt_ttnn(input_shapes, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, 0, 100, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
-    cq_id = 0
+    cq_id = DefaultQueueId
     ttnn.sqrt(input_tensor, output_tensor=output_tensor, queue_id=cq_id)
     golden_tensor = torch.sqrt(in_data)
 

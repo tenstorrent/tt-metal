@@ -11,7 +11,7 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::data_movement {
 
 ttnn::Tensor IndexedFillOperation::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& batch_id,
     const ttnn::Tensor& input_tensor_a,
     const ttnn::Tensor& input_tensor_b,

@@ -13,7 +13,7 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::data_movement {
 
 ttnn::Tensor FillRMOperation::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     uint32_t N,
     uint32_t C,
     uint32_t H,
@@ -45,7 +45,7 @@ ttnn::Tensor FillRMOperation::invoke(
 }
 
 ttnn::Tensor FillOnesRMOperation::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     uint32_t N,
     uint32_t C,
     uint32_t H,

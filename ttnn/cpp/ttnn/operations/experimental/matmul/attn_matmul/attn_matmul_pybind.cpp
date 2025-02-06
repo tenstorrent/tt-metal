@@ -26,7 +26,7 @@ void bind_attn_matmul(pybind11::module& module) {
                std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<Tensor> optional_output_tensor,
-               uint8_t queue_id) {
+               QueueId queue_id) {
                 return self(
                     queue_id,
                     input_tensor_a,
@@ -66,7 +66,7 @@ void bind_attn_matmul_from_cache(pybind11::module& module) {
                const std::optional<MemoryConfig>& memory_config,
                std::optional<const DataType> dtype,
                std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-               uint8_t queue_id) {
+               QueueId queue_id) {
                 return self(
                     queue_id,
                     input_tensor_a,

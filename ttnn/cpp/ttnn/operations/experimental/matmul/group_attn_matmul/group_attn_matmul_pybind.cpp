@@ -28,7 +28,7 @@ void bind_group_attn_matmul(pybind11::module& module) {
                std::optional<const DataType> output_dtype,
                std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
                std::optional<Tensor> optional_output_tensor,
-               uint8_t queue_id) {
+               QueueId queue_id) {
                 return self(
                     queue_id,
                     input_tensor_a,

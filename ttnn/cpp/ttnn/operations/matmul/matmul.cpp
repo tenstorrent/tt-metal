@@ -82,7 +82,7 @@ ttnn::Tensor bound_matmul(
         input_tensor_b_adjusted,
         post_process_bias ? std::nullopt : bias,
         parameters,
-        0,
+        DefaultQueueId,
         optional_output_tensor = optional_output_tensor);
 
     if (post_process_bias) {

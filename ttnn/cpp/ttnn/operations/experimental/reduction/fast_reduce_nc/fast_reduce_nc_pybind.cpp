@@ -24,7 +24,7 @@ void bind_fast_reduce_nc(pybind11::module& module) {
                const std::optional<const Tensor>& output,
                const ttnn::MemoryConfig& memory_config,
                std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-               uint8_t queue_id) { return self(queue_id, input, dims, output, memory_config, compute_kernel_config); },
+               QueueId queue_id) { return self(queue_id, input, dims, output, memory_config, compute_kernel_config); },
             pybind11::arg("input").noconvert(),
             pybind11::kw_only(),
             pybind11::arg("dims").noconvert() = ttnn::SmallVector<int32_t>(),

@@ -188,14 +188,14 @@ inline void read_data_from_device_buffer(std::shared_ptr<Buffer> device_buffer, 
 // ======================================================================================
 
 template <typename T>
-Tensor to_host(const Tensor& tensor, bool blocking = true, uint8_t cq_id = ttnn::DefaultQueueId);
+Tensor to_host(const Tensor& tensor, bool blocking = true, ttnn::QueueId cq_id = ttnn::DefaultQueueId);
 
 template <typename T>
 Tensor to_device(
     const Tensor& tensor,
     IDevice* target_device,
     const MemoryConfig& memory_config,
-    uint8_t cq_id = ttnn::DefaultQueueId);
+    ttnn::QueueId cq_id = ttnn::DefaultQueueId);
 
 template <typename T>
 Tensor to_layout(const Tensor& tensor, Layout target_layout);

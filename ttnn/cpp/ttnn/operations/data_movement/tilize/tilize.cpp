@@ -38,7 +38,7 @@ MassagedTilize build_ndiml_tilize(BaseTilizeType base_tilize) {
 }
 
 ttnn::Tensor ExecuteTilize::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DataType> output_dtype,

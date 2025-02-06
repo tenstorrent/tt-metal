@@ -80,7 +80,7 @@ ttnn::Tensor transpose_nd(
 }  // namespace detail
 
 ttnn::Tensor ExecuteTranspose::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const int64_t& dim1,
     const int64_t& dim2,

@@ -682,6 +682,7 @@ set(TTNN_PUBLIC_INCLUDE_DIRS
 set(TTNN_PUBLIC_LINK_LIBRARIES
     metal_common_libs
     Metalium::Metal
+    Metalium::Metal::STL
     Boost::container
     xtensor
     xtensor-blas
@@ -709,6 +710,7 @@ if(WITH_PYTHON_BINDINGS)
         APPEND
         TTNN_BASE_SRCS
         ${PROJECT_SOURCE_DIR}/ttnn/cpp/pybind11/__init__.cpp
+        ${PROJECT_SOURCE_DIR}/ttnn/cpp/pybind11/types.cpp
         ${TT_LIB_SRCS}
         ${PYBIND_SRC}
     ) # TT_LIB_SRCS from tt_eager/tt_lib/CMakeLists.txt for python bindigns

@@ -177,17 +177,17 @@ public:
     Tensor to_device(
         IDevice* target_device,
         const MemoryConfig& mem_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED},
-        uint8_t cq_id = ttnn::DefaultQueueId) const;
+        ttnn::QueueId cq_id = ttnn::DefaultQueueId) const;
 
     Tensor to_device(
         distributed::MeshDevice* mesh_device,
         const MemoryConfig& mem_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED},
-        uint8_t cq_id = ttnn::DefaultQueueId) const;
+        ttnn::QueueId cq_id = ttnn::DefaultQueueId) const;
 
     Tensor to_device(
         const std::vector<IDevice*>& workers,
         const MemoryConfig& mem_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED},
-        uint8_t cq_id = ttnn::DefaultQueueId) const;
+        ttnn::QueueId cq_id = ttnn::DefaultQueueId) const;
 
     Tensor to_layout(Layout target_layout, IDevice* worker = nullptr) const;
 
@@ -195,7 +195,7 @@ public:
 
     Tensor pad(const ttnn::Shape& output_padded_shape, const ttnn::Shape& input_tensor_start, float pad_value) const;
 
-    Tensor cpu(bool blocking = true, uint8_t cq_id = ttnn::DefaultQueueId) const;
+    Tensor cpu(bool blocking = true, ttnn::QueueId cq_id = ttnn::DefaultQueueId) const;
 
     Tensor unpad(const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end) const;
 
@@ -382,7 +382,7 @@ Tensor allocate_tensor_on_devices(const TensorSpec& spec, const std::vector<IDev
 // Allocates a tensor on a mesh device through mesh buffer.
 Tensor allocate_tensor_on_mesh(const TensorSpec& tensor_spec, distributed::MeshDevice* mesh_device);
 
-void write_tensor(const Tensor& host_tensor, Tensor device_tensor, uint8_t cq_id = ttnn::DefaultQueueId);
+void write_tensor(const Tensor& host_tensor, Tensor device_tensor, ttnn::QueueId cq_id = ttnn::DefaultQueueId);
 
 Tensor set_tensor_id(const Tensor& tensor);
 

@@ -17,7 +17,7 @@ namespace operations::loss {
 
 struct MseLossOperation {
     static Tensor invoke(
-        uint8_t queue_id,
+        QueueId queue_id,
         const Tensor& ref,
         const Tensor& prediction,
         const LossReductionMode mode = LossReductionMode::NONE,
@@ -36,7 +36,7 @@ struct MseLossOperation {
 
 struct MaeLossOperation {
     static Tensor invoke(
-        uint8_t queue_id,
+        QueueId queue_id,
         const Tensor& ref,
         const Tensor& prediction,
         const LossReductionMode mode = LossReductionMode::NONE,

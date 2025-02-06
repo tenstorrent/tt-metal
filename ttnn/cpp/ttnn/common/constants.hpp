@@ -2,9 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
+
 #include <cstdint>
 
-#pragma once
+#include <strong_type.hpp>
 
 #define MAX_PACK_UNTILIZE_WIDTH 8  // pack untilize currently does not support > 8 width
 
@@ -17,6 +19,11 @@ namespace ttnn {
    are 0 and 1.
 */
 
-constexpr uint8_t DefaultQueueId = 0;
+using QueueId = tt::stl::StrongType<uint8_t, struct QueueIdTag>;
+static const QueueId DefaultQueueId = QueueId(0);
 
 }  // namespace ttnn
+
+namespace tt::tt_metal {
+using QueueId = ttnn::QueueId;
+}

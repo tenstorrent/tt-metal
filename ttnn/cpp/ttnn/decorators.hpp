@@ -218,7 +218,7 @@ struct registered_operation_t {
 
     template <typename... args_t>
         requires PrimitiveOperationConcept<operation_t>
-    auto invoke(uint8_t queue_id, args_t&&... args) const {
+    auto invoke(QueueId queue_id, args_t&&... args) const {
         static_assert(
             requires { operation_t::invoke(std::forward<decltype(args)>(args)...); },
             "Primitive Operation must implement operator() method to be invoked.");

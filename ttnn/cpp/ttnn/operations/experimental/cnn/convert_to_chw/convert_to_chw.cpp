@@ -10,7 +10,7 @@
 namespace ttnn::operations::experimental::cnn {
 
 ttnn::Tensor ExecuteConvertToCHW::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& a,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DataType>& dtype) {

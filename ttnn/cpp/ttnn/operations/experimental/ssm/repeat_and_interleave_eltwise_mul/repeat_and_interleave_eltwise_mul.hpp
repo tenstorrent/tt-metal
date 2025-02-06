@@ -12,7 +12,7 @@ namespace ttnn::operations::experimental::ssm {
 
 struct ExecuteRepeatAndInterleaveEltwiseMul {
     static ttnn::Tensor invoke(
-        uint8_t queue_id,
+        QueueId queue_id,
         const Tensor& a,
         const Tensor& b,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,

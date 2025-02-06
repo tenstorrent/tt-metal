@@ -3604,7 +3604,7 @@ def eltwise_rdiv(
     **kwargs,
 ):
     factor = kwargs["factor"]
-    queue_id = 0
+    queue_id = DefaultQueueId
     t0 = setup_ttnn_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttnn.rdiv(t0, factor, memory_config=output_mem_config, queue_id=queue_id)
 

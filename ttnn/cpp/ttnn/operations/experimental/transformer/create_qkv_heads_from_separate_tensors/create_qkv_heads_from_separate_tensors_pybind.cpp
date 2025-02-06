@@ -27,7 +27,7 @@ void bind_create_qkv_heads_from_separate_tensors_template(
                const bool transpose_k_heads,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                std::optional<std::array<Tensor, 3>> optional_output_tensors,
-               uint8_t queue_id) {
+               QueueId queue_id) {
                 return self(
                     queue_id,
                     input_tensor_q,

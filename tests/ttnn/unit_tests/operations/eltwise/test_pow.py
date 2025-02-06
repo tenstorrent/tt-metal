@@ -23,7 +23,7 @@ def test_unary_pow_ttnn(input_shapes, exponent, device):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
-    cq_id = 0
+    cq_id = DefaultQueueId
     ttnn.pow(input_tensor, exponent, output_tensor=output_tensor, queue_id=cq_id)
     golden_fn = ttnn.get_golden_function(ttnn.pow)
     golden_tensor = golden_fn(in_data, exponent)
@@ -47,7 +47,7 @@ def test_binary_pow_scalar_input(input_shapes, input, exponent, device):
     golden_fn = ttnn.get_golden_function(ttnn.pow)
     torch_output_tensor = golden_fn(input, torch_input_tensor_b)
 
-    cq_id = 0
+    cq_id = DefaultQueueId
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
     output = ttnn.pow(input, input_tensor_b, queue_id=cq_id)
     output = ttnn.to_torch(output)

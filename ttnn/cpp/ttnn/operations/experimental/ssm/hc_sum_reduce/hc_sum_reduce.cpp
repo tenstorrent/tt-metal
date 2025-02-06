@@ -12,7 +12,7 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::experimental::ssm {
 
 ttnn::Tensor ExecuteHCSumReduce::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& input,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DataType> dtype,

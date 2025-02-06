@@ -656,7 +656,7 @@ def test_unary_composite_trunc_ttnn(input_shapes, device):
 def test_unary_composite_trunc_ttnn_opt(input_shapes, device):
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
-    cq_id = 0
+    cq_id = DefaultQueueId
     ttnn.trunc(input_tensor1, output_tensor=output_tensor, queue_id=cq_id)
     golden_function = ttnn.get_golden_function(ttnn.trunc)
     golden_tensor = golden_function(in_data1)

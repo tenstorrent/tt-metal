@@ -31,7 +31,7 @@ ttnn::Shape update_original_shape(const ttnn::Shape& padded_shape, const ttnn::S
 }
 
 static ttnn::Tensor pad_impl(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     std::span<const uint32_t> output_padded_shape,
     std::span<const uint32_t> input_tensor_start,
@@ -157,7 +157,7 @@ static ttnn::Tensor pad_impl(
 }
 
 static ttnn::Tensor pad_impl(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     ttnn::SmallVector<std::pair<uint32_t, uint32_t>> padding,
     const float value,
@@ -228,7 +228,7 @@ static ttnn::Tensor pad_impl(
 // Any rank tensor supported
 
 ttnn::Tensor ExecutePad::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     tt::stl::Span<const std::pair<uint32_t, uint32_t>> padding,
     const float value,
@@ -263,7 +263,7 @@ ttnn::Tensor ExecutePad::invoke(
 
 #define PAD_OVERLOAD_DIM_IMPL(ShapeType)                                                                               \
     ttnn::Tensor ExecutePad::invoke(                                                                                   \
-        uint8_t queue_id,                                                                                              \
+        QueueId queue_id,                                                                                              \
         const ttnn::Tensor& input_tensor,                                                                              \
         const ShapeType& output_padded_shape,                                                                          \
         const ShapeType& input_tensor_start,                                                                           \

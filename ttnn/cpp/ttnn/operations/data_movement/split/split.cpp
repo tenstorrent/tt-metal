@@ -140,7 +140,7 @@ std::vector<Tensor> split_dim_n_chunks_tiled(
 }  // namespace detail
 
 std::vector<ttnn::Tensor> SplitOperation::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     int64_t& num_splits,
     int64_t& dim,

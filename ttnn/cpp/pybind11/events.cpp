@@ -32,7 +32,7 @@ void py_module(py::module& module) {
 
     module.def(
         "record_event",
-        py::overload_cast<uint8_t, const std::shared_ptr<Event>&, const std::vector<SubDeviceId>&>(&record_event),
+        py::overload_cast<QueueId, const std::shared_ptr<Event>&, const std::vector<SubDeviceId>&>(&record_event),
         py::arg("cq_id"),
         py::arg("event"),
         py::arg("sub_device_ids") = std::vector<SubDeviceId>(),
@@ -47,7 +47,7 @@ void py_module(py::module& module) {
 
     module.def(
         "wait_for_event",
-        py::overload_cast<uint8_t, const std::shared_ptr<Event>&>(&wait_for_event),
+        py::overload_cast<QueueId, const std::shared_ptr<Event>&>(&wait_for_event),
         py::arg("cq_id"),
         py::arg("event"),
         R"doc(
@@ -72,7 +72,7 @@ void py_module(py::module& module) {
 
     module.def(
         "record_event",
-        py::overload_cast<uint8_t, const MultiDeviceEvent&, const std::vector<SubDeviceId>&>(&record_event),
+        py::overload_cast<QueueId, const MultiDeviceEvent&, const std::vector<SubDeviceId>&>(&record_event),
         py::arg("cq_id"),
         py::arg("multi_device_event"),
         py::arg("sub_device_ids") = std::vector<SubDeviceId>(),
@@ -86,7 +86,7 @@ void py_module(py::module& module) {
 
     module.def(
         "wait_for_event",
-        py::overload_cast<uint8_t, const MultiDeviceEvent&>(&wait_for_event),
+        py::overload_cast<QueueId, const MultiDeviceEvent&>(&wait_for_event),
         py::arg("cq_id"),
         py::arg("multi_device_event"),
         R"doc(

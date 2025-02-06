@@ -18,7 +18,7 @@ namespace copy {
 namespace detail {
 
 inline Tensor copy_impl(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& input_tensor,
     const std::vector<ttnn::operations::unary::UnaryWithParam>& op_chain,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
@@ -52,7 +52,7 @@ inline Tensor copy_impl(
 
 struct Typecast {
     static Tensor invoke(
-        const uint8_t queue_id,
+        const QueueId queue_id,
         const Tensor& input,
         const DataType& output_dtype,
         const std::optional<MemoryConfig>& memory_config_arg = std::nullopt,
@@ -94,7 +94,7 @@ struct Typecast {
     //     const MemoryConfig& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG)
 
     static ttnn::Tensor invoke(
-        const uint8_t queue_id,
+        const QueueId queue_id,
         const Tensor& input_tensor,
         const DataType& tt_input_dtype,
         const DataType& tt_output_dtype,

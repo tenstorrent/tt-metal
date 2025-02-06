@@ -32,7 +32,7 @@ void py_bind_move(pybind11::module& module) {
             [](const decltype(ttnn::move)& self,
                const ttnn::Tensor& input_tensor,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               uint8_t queue_id) { return self(queue_id, input_tensor, memory_config); },
+               QueueId queue_id) { return self(queue_id, input_tensor, memory_config); },
             pybind11::arg("input_tensor").noconvert(),
             pybind11::kw_only(),
             pybind11::arg("memory_config") = std::nullopt,

@@ -65,7 +65,7 @@ void py_bind_bcast(py::module& module) {
                ttnn::BcastOpDim bcast_dim,
                std::optional<Tensor> output_tensor,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               uint8_t queue_id) {
+               QueueId queue_id) {
                 return self(
                     queue_id, input_tensor_a, input_tensor_b, bcast_op, bcast_dim, memory_config, output_tensor);
             },

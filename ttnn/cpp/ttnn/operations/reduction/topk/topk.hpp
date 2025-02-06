@@ -24,7 +24,7 @@ namespace operations::reduction {
 
 struct ExecuteTopK {
     static inline std::vector<Tensor> invoke(
-        uint8_t queue_id,
+        QueueId queue_id,
         const Tensor& input_tensor,
         const uint16_t k,
         const int8_t dim,

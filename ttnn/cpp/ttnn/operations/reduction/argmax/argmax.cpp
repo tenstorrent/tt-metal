@@ -14,7 +14,7 @@
 namespace ttnn::operations::reduction {
 
 ttnn::Tensor ArgMaxOperation::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& input_tensor,
     const std::optional<int> dim,
     const bool use_muticore,

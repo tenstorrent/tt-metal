@@ -17,7 +17,7 @@ namespace ttnn::operations::data_movement {
 
 template <typename T>
 ttnn::Tensor SliceOperation::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     tt::stl::Span<const T> begins,
     tt::stl::Span<const T> ends,
@@ -216,7 +216,7 @@ ttnn::Tensor SliceOperation::invoke(
 // Specialization for uint32_t and N=4
 template <>
 ttnn::Tensor SliceOperation::invoke<uint32_t, 4>(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const std::array<uint32_t, 4>& begins,
     const std::array<uint32_t, 4>& ends,
@@ -334,7 +334,7 @@ ttnn::Tensor SliceOperation::invoke<uint32_t, 4>(
 
 template <typename T, std::size_t N>
 ttnn::Tensor SliceOperation::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const std::array<T, N>& output_tensor_start,
     const std::array<T, N>& output_tensor_end,
@@ -360,7 +360,7 @@ ttnn::Tensor SliceOperation::invoke(
 }
 
 template ttnn::Tensor SliceOperation::invoke<int>(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     tt::stl::Span<const int> begins,
     tt::stl::Span<const int> ends,
@@ -377,7 +377,7 @@ template ttnn::Tensor SliceOperation::invoke<int>(
     const std::optional<Tensor>& optional_output_tensor);
 
 template ttnn::Tensor SliceOperation::invoke<uint32_t>(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     tt::stl::Span<const uint32_t> begins,
     tt::stl::Span<const uint32_t> ends,
@@ -402,7 +402,7 @@ template ttnn::Tensor SliceOperation::invoke<uint32_t, 4>(
     const std::optional<Tensor>& optional_output_tensor);
 
 template ttnn::Tensor SliceOperation::invoke<uint32_t, 1>(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const std::array<uint32_t, 1>& output_tensor_start,
     const std::array<uint32_t, 1>& output_tensor_end,

@@ -32,7 +32,7 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import data
 def test_binary_scalar_ops(input_shapes, device, ttnn_fn):
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
-    cq_id = 0
+    cq_id = DefaultQueueId
     scalar = random.randint(-80, 80)
     ttnn_fn(input_tensor, scalar, output_tensor=output_tensor, queue_id=cq_id)
     golden_fn = ttnn.get_golden_function(ttnn_fn)
