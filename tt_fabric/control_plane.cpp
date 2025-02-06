@@ -484,6 +484,7 @@ void ControlPlane::write_routing_tables_to_chip(mesh_id_t mesh_id, chip_id_t chi
                 tt_metal::hal.get_dev_addr(
                     tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::FABRIC_ROUTER_CONFIG),
                 false);
+            tt::Cluster::instance().l1_barrier(physical_chip_id);
         }
     }
 }
