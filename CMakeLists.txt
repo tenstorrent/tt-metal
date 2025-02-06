@@ -146,7 +146,6 @@ unset(SANITIZER_ENABLED)
 ############################################################################################################################
 # Find all required libraries to build
 ############################################################################################################################
-set(ENV{CPM_SOURCE_CACHE} "${PROJECT_SOURCE_DIR}/.cpmcache")
 include(CPM)
 if(CMAKE_VERSION VERSION_LESS 3.25)
     # FIXME(14681): `SYSTEM` was introduced in v3.25; remove this when we can require v3.25

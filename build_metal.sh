@@ -32,6 +32,7 @@ show_help() {
     echo "  --disable-light-metal-trace      Disable Light Metal tracing to binary."
     echo "  --cxx-compiler-path              Set path to C++ compiler."
     echo "  --c-compiler-path                Set path to C++ compiler."
+    echo "  --cpm-source-cache               Set path to CPM Source Cache."
     echo "  --ttnn-shared-sub-libs           Use shared libraries for ttnn."
     echo "  --toolchain-path                 Set path to CMake toolchain file."
 }
@@ -62,6 +63,7 @@ unity_builds="ON"
 light_metal_trace="ON"
 build_all="OFF"
 cxx_compiler_path=""
+cpm_source_cache=""
 c_compiler_path=""
 ttnn_shared_sub_libs="OFF"
 toolchain_path="cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
@@ -96,6 +98,7 @@ development
 debug
 clean
 cxx-compiler-path:
+cpm-source-cache:
 c-compiler-path:
 ttnn-shared-sub-libs
 toolchain-path:
@@ -162,6 +165,8 @@ while true; do
             light_metal_trace="OFF";;
         --cxx-compiler-path)
             cxx_compiler_path="$2";shift;;
+        --cpm-source-cache)
+            cpm_source_cache="$2";shift;;
         --c-compiler-path)
             c_compiler_path="$2";shift;;
         --toolchain-path)
@@ -238,6 +243,11 @@ fi
 if [ "$c_compiler_path" != "" ]; then
     echo "INFO: C compiler: $c_compiler_path"
     cmake_args+=("-DCMAKE_C_COMPILER=$c_compiler_path")
+fi
+
+if [ "$cpm_source_cache" != "" ]; then
+    echo "INFO: CPM_SOURCE_CACHE: $cpm_source_cache"
+    cmake_args+=("-DCPM_SOURCE_CACHE=$cpm_source_cache")
 fi
 
 if [ "$enable_ccache" = "ON" ]; then
