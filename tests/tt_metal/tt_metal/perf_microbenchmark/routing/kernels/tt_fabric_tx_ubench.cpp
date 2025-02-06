@@ -65,6 +65,7 @@ volatile tt_l1_ptr fabric_router_l1_config_t* routing_table =
     reinterpret_cast<tt_l1_ptr fabric_router_l1_config_t*>(routing_table_start_addr);
 volatile fabric_client_interface_t* client_interface = (volatile fabric_client_interface_t*)client_interface_addr;
 
+fabric_client_push_interface_t client_push_interface;
 uint64_t xy_local_addr;
 uint32_t target_address;
 uint32_t noc_offset;
@@ -114,6 +115,8 @@ void kernel_main() {
 
     uint64_t dst_addr = ((uint64_t)noc_offset << 32 | target_address);
 
+    volatile uint32_t* temp = (volatile uint32_t*)(data_buffer_start_addr + 8188);
+    *temp = 0xC0DE0000;
     fabric_async_write_add_header(
         data_buffer_start_addr,  // source address in sender’s memory
         dest_device >> 16,
@@ -129,6 +132,7 @@ void kernel_main() {
     // once tt_fabric kernels have been launched on all the test devices.
     while (*(volatile tt_l1_ptr uint32_t*)signal_address == 0);
 
+#ifdef FVC_MODE_PULL
     uint64_t start_timestamp = get_timestamp();
     fabric_setup_pull_request(
         data_buffer_start_addr,     // source address in sender’s memory
@@ -158,7 +162,29 @@ void kernel_main() {
             break;
         }
     }
+#else
+    fabric_client_router_reserve(0, dest_device >> 16, dest_device & 0xFFFF);
+    uint64_t start_timestamp = get_timestamp();
 
+    while (true) {
+        fabric_async_write<ASYNC_WR_SEND>(
+            0,                       // the network plane to use for this transaction
+            data_buffer_start_addr,  // source address in sender’s memory
+            dest_device >> 16,
+            dest_device & 0xFFFF,
+            dst_addr,                   // destination write address
+            max_packet_size_words * 16  // number of bytes to write to remote destination
+        );
+        data_words_sent += max_packet_size_words;
+        packet_count++;
+        noc_async_writes_flushed();
+        *temp = *temp + 1;
+
+        if (data_words_sent >= total_data_words) {
+            break;
+        }
+    }
+#endif
     uint64_t cycles_elapsed = get_timestamp() - start_timestamp;
 
     uint64_t num_packets = packet_count;

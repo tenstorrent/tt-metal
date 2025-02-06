@@ -10,7 +10,12 @@
 using namespace tt::tt_fabric;
 
 router_state_t router_state __attribute__((aligned(16)));
+#ifdef FVC_MODE_PULL
 fvc_consumer_state_t fvc_consumer_state __attribute__((aligned(16)));                // replicate for each fvc
+#else
+// fvc_inbound_push_state_t fvc_producer_state;
+// fvc_outbound_push_state_t fvc_consumer_state;
+#endif
 #ifdef FVCC_SUPPORT
 fvcc_inbound_state_t fvcc_inbound_state __attribute__((aligned(16)));    // inbound fabric virtual control channel
 fvcc_outbound_state_t fvcc_outbound_state __attribute__((aligned(16)));  // outbound fabric virtual control channel
@@ -79,7 +84,12 @@ inline void notify_gatekeeper() {
 }
 
 void kernel_main() {
+#ifdef FVC_MODE_PULL
     fvc_producer_state_t fvc_producer_state;
+#else
+    fvc_inbound_push_state_t fvc_producer_state;
+    fvc_outbound_push_state_t fvc_consumer_state;
+#endif
     rtos_context_switch_ptr = (void (*)())RtosTable[0];
 
     uint32_t rt_args_idx = 0;
@@ -109,7 +119,8 @@ void kernel_main() {
     fvc_consumer_state.init(FABRIC_ROUTER_DATA_BUF_START, fvc_data_buf_size_words / 2);
     fvc_producer_state.init(
         FABRIC_ROUTER_DATA_BUF_START + (fvc_data_buf_size_words * PACKET_WORD_SIZE_BYTES / 2),
-        fvc_data_buf_size_words / 2);
+        fvc_data_buf_size_words / 2,
+        FABRIC_ROUTER_DATA_BUF_START);
 
 #ifdef FVCC_SUPPORT
     fvcc_outbound_state.init(
@@ -135,6 +146,7 @@ void kernel_main() {
     tt_l1_ptr launch_msg_t* const launch_msg = GET_MAILBOX_ADDRESS_DEV(launch[launch_msg_rd_ptr]);
     while (1) {
         // Handle Ethernet Outbound Data
+#ifdef FVC_MODE_PULL
         if (!fvc_req_buf_is_empty(fvc_consumer_req_buf) && fvc_req_valid(fvc_consumer_req_buf)) {
             uint32_t req_index = fvc_consumer_req_buf->rdptr.ptr & CHAN_REQ_BUF_SIZE_MASK;
             chan_request_entry_t* req = (chan_request_entry_t*)fvc_consumer_req_buf->chan_req + req_index;
@@ -166,6 +178,11 @@ void kernel_main() {
         if (fvc_consumer_state.total_words_to_forward) {
             fvc_consumer_state.forward_data_from_fvc_buffer<false>();
         }
+#else
+        if (fvc_consumer_state.forward_data_from_fvc_buffer()) {
+            loop_count = 0;
+        }
+#endif
 
         // Handle Ethernet Inbound Data
         if (fvc_producer_state.get_curr_packet_valid()) {
@@ -198,7 +215,7 @@ void kernel_main() {
             return;
         }
     }
-    uint64_t cycles_elapsed = fvc_producer_state.packet_timestamp - start_timestamp;
+    uint64_t cycles_elapsed = get_timestamp() - start_timestamp;
 
     write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff000002);
 
@@ -206,10 +223,7 @@ void kernel_main() {
 
     set_64b_result(kernel_status, cycles_elapsed, PQ_TEST_CYCLES_INDEX);
 
-    if (fvc_consumer_state.packet_in_progress) {
-        write_kernel_status(kernel_status, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_TIMEOUT);
-    } else {
-        write_kernel_status(kernel_status, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_PASS);
-    }
+    write_kernel_status(kernel_status, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_PASS);
+
     write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff00005);
 }

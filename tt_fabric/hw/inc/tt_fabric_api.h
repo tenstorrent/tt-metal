@@ -15,6 +15,7 @@ using namespace tt::tt_fabric;
 
 extern volatile local_pull_request_t* local_pull_request;
 extern volatile fabric_client_interface_t* client_interface;
+extern fabric_client_push_interface_t client_push_interface;
 
 #define ASYNC_WR_ALL 1
 #define ASYNC_WR_ADD_PR 2
@@ -68,6 +69,8 @@ inline void fabric_async_write_add_header(
     packet_header->session.target_offset_h = dst_addr >> 32;
     tt_fabric_add_header_checksum(packet_header);
 }
+
+#ifdef FVC_MODE_PULL
 // Write packetized data over fabric to dst_mesh, dst_dev.
 // Packet is at src_addr in sender L1.
 template <uint8_t mode = ASYNC_WR_ALL>
@@ -91,6 +94,72 @@ inline void fabric_async_write(
         fabric_send_pull_request(routing_plane, dst_mesh_id, dst_dev_id);
     }
 }
+#else
+inline void fabric_client_router_reserve(int32_t routing_plane, uint16_t dst_mesh_id, uint16_t dst_dev_id) {
+    uint32_t router_addr_h = get_next_hop_router_noc_xy(routing_plane, dst_mesh_id, dst_dev_id);
+    uint64_t router_addr = ((uint64_t)router_addr_h << 32) | FABRIC_ROUTER_REQ_QUEUE_START;
+    router_addr += 32;  // first 4 entries are for the four edge routers.
+    // stream register to receive router buffer space available updates.
+    noc_inline_dw_write(router_addr, (STREAM_REG_ADDR(0, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX)));
+    noc_inline_dw_write(router_addr + 4, xy_local_addr >> 32);
+    client_push_interface.router_addr_h = router_addr_h;
+    client_push_interface.buffer_size = 0x400;
+    client_push_interface.wr_ptr = 0;
+    client_push_interface.buffer_start = 0x1A380;
+    client_push_interface.router_push_addr =
+        (STREAM_REG_ADDR(3, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX));
+    client_push_interface.router_space =
+        reinterpret_cast<uint32_t*>(STREAM_REG_ADDR(0, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX));
+    client_push_interface.update_router_space =
+        reinterpret_cast<uint32_t*>(STREAM_REG_ADDR(0, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX));
+    *(uint32_t*)(STREAM_REG_ADDR(0, STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX)) = client_push_interface.buffer_size;
+}
+
+inline void fabric_async_write_push_data(uint32_t src_addr, uint32_t size) {
+    uint32_t total_words_to_send = (size + PACKET_WORD_SIZE_BYTES - 1) >> 4;
+    uint64_t push_addr =
+        ((uint64_t)client_push_interface.router_addr_h << 32) | (client_push_interface.router_push_addr);
+
+    while (total_words_to_send > 0) {
+        uint32_t router_buf_space = *client_push_interface.router_space;
+        uint32_t words_before_wrap = client_push_interface.buffer_size - client_push_interface.wr_ptr;
+        uint32_t words_to_send = min(total_words_to_send, words_before_wrap);
+        words_to_send = min(router_buf_space, words_to_send);
+        if (words_to_send) {
+            uint64_t buffer_wr_addr =
+                ((uint64_t)client_push_interface.router_addr_h << 32) |
+                (client_push_interface.buffer_start + (client_push_interface.wr_ptr * PACKET_WORD_SIZE_BYTES));
+            noc_async_write_one_packet(src_addr, buffer_wr_addr, words_to_send * PACKET_WORD_SIZE_BYTES, noc_index);
+            noc_inline_dw_write(push_addr, words_to_send << REMOTE_DEST_BUF_WORDS_FREE_INC);
+            client_push_interface.wr_ptr += words_to_send;
+            *client_push_interface.update_router_space = (-words_to_send) << REMOTE_DEST_BUF_WORDS_FREE_INC;
+            if (client_push_interface.wr_ptr >= client_push_interface.buffer_size) {
+                client_push_interface.wr_ptr -= client_push_interface.buffer_size;
+            }
+            total_words_to_send -= words_to_send;
+            src_addr += words_to_send * PACKET_WORD_SIZE_BYTES;
+        }
+    }
+}
+
+template <uint8_t mode = ASYNC_WR_ALL>
+inline void fabric_async_write(
+    uint32_t routing_plane,  // the network plane to use for this transaction
+    uint32_t src_addr,       // source address in sender’s memory
+    uint16_t dst_mesh_id,
+    uint16_t dst_dev_id,
+    uint64_t dst_addr,
+    uint32_t size  // number of bytes to write to remote destination
+) {
+    if constexpr (mode == ASYNC_WR_ALL or mode == ASYNC_WR_ADD_HEADER) {
+        fabric_async_write_add_header(src_addr, dst_mesh_id, dst_dev_id, dst_addr, size);
+    }
+
+    if constexpr (mode == ASYNC_WR_ALL or mode == ASYNC_WR_SEND) {
+        fabric_async_write_push_data(src_addr, size);
+    }
+}
+#endif
 
 inline void send_message_to_gk() {
     uint64_t gk_noc_base = client_interface->gk_msg_buf_addr;
