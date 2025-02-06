@@ -1,28 +1,15 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// NOTE: This should ideally be merged with `ccl_send_reader` when we are able to support compile time args
-//       that don't require macros to function
-
 #include "dataflow_api.h"
 #include <tt-metalium/buffer_constants.hpp>
-#include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
-#include <tt-metalium/buffer_constants.hpp>
-#include "cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
-#include "cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_ring_gather_utils.hpp"
-
-#include "cpp/ttnn/operations/ccl/common/kernels/command_processor.hpp"
-
-#include "cpp/ttnn/operations/ccl/kernels/edm_fabric/edm_fabric_worker_adapters.hpp"
-#include "cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
-
-#include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/fabric_connection_manager.hpp"
-#include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/io_descriptors.hpp"
-#include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
-#include "cpp/ttnn/tensor/enum_types.hpp"
+#include "cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/minimal_ccl_common.hpp"
 #include <cstdint>
 #include <utility>
+
+using address_t = uint32_t;
+using tt::tt_metal::BufferType;
 
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS
@@ -36,50 +23,6 @@ constexpr uint32_t packet_size_in_pages = get_compile_time_arg_val(4);
 constexpr uint32_t tensor0_page_size = get_compile_time_arg_val(5);
 constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(6);
 constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(7);
-
-FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
-    uint64_t noc0_dest_noc_addr,
-    size_t packet_header_buffer_addr,
-    uint32_t num_targets_forward_direction,
-    uint32_t num_targets_backward_direction,
-    FabricConnectionManager& fabric_connection,
-    size_t& l1_read_addr,
-    uint32_t payload_size_bytes) {
-    const auto [dest_noc_xy, dest_addr] = get_noc_address_components(noc0_dest_noc_addr);
-    const size_t payload_l1_address = l1_read_addr;
-
-    auto pkt_hdr = reinterpret_cast<volatile tt::fabric::PacketHeader*>(packet_header_buffer_addr);
-#ifdef DEBUG_PRINT_ENABLED
-    pkt_hdr->reserved2 = my_chip_id;
-#endif
-
-    size_t packet_send_size_bytes = payload_size_bytes + sizeof(tt::fabric::PacketHeader);
-    pkt_hdr->to_write()->to_noc_unicast(tt::fabric::NocUnicastCommandHeader{
-        dest_addr, packet_send_size_bytes, static_cast<uint8_t>(dest_noc_xy.x), static_cast<uint8_t>(dest_noc_xy.y)});
-
-    noc_async_write(payload_l1_address, safe_get_noc_addr(dest_noc_xy.x, dest_noc_xy.y, dest_addr), payload_size_bytes);
-    if (fabric_connection.has_forward_connection()) {
-        pkt_hdr->to_chip_multicast(
-            tt::fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_forward_direction)});
-        fabric_connection.get_forward_connection().wait_for_empty_write_slot();
-        fabric_connection.get_forward_connection().send_payload_without_header_non_blocking_from_address(
-            l1_read_addr, payload_size_bytes);
-        fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
-            (uint32_t)pkt_hdr, sizeof(tt::fabric::PacketHeader));
-    }
-
-    if (fabric_connection.has_backward_connection()) {
-        pkt_hdr->to_chip_multicast(
-            tt::fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_backward_direction)});
-        fabric_connection.get_backward_connection().wait_for_empty_write_slot();
-        fabric_connection.get_backward_connection().send_payload_without_header_non_blocking_from_address(
-            l1_read_addr, payload_size_bytes);
-        fabric_connection.get_backward_connection().send_payload_flush_blocking_from_address(
-            (uint32_t)pkt_hdr, sizeof(tt::fabric::PacketHeader));
-    }
-
-    l1_read_addr += payload_size_bytes;
-}
 
 /*
  * CCL Send will present various operating modes. Although there is only a single send kernel, it may (compile time)
@@ -95,13 +38,13 @@ void kernel_main() {
     uint32_t reduction_output_cb_id = get_arg_val<address_t>(arg_idx++);
     address_t tensor_address0 = get_write_ptr(reduction_output_cb_id);
 
+    const size_t out_ready_sem_bank_addr = get_arg_val<uint32_t>(arg_idx++);
     uint32_t num_tiles_per_core = get_arg_val<uint32_t>(arg_idx++);
     uint32_t num_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
     uint32_t first_core_tile_start_offset = get_arg_val<uint32_t>(arg_idx++);
     uint32_t num_cores = get_arg_val<uint32_t>(arg_idx++);
     bool wait_output_semaphore = get_arg_val<uint32_t>(arg_idx++);
     bool reset_global_semaphore = get_arg_val<uint32_t>(arg_idx++);
-    const size_t out_ready_sem_bank_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
     uint32_t out_ready_sem_wait_value = get_arg_val<uint32_t>(arg_idx++);
@@ -126,8 +69,25 @@ void kernel_main() {
     auto fabric_connection = FabricConnectionManager::build_from_args(arg_idx);
 
     // packet header cb
-    cb_reserve_back(reserved_packet_header_cb_id, num_packet_headers_storable);
-    auto packet_header_buffer_addr = get_write_ptr(reserved_packet_header_cb_id);
+    cb_reserve_back(reserved_packet_header_cb_id, 1);
+    auto packet_header_buffer_addr_forward = get_write_ptr(reserved_packet_header_cb_id);
+    cb_push_back(reserved_packet_header_cb_id, 1);
+    cb_reserve_back(reserved_packet_header_cb_id, 1);
+    auto packet_header_buffer_addr_backward = get_write_ptr(reserved_packet_header_cb_id);
+    cb_push_back(reserved_packet_header_cb_id, 1);
+    cb_reserve_back(reserved_packet_header_cb_id, 1);
+    auto packet_header_buffer_seminc = get_write_ptr(reserved_packet_header_cb_id);
+    cb_push_back(reserved_packet_header_cb_id, 1);
+
+    // pre-populate packet headers
+    volatile tt::fabric::PacketHeader* pkt_hdr_forward =
+        reinterpret_cast<volatile tt::fabric::PacketHeader*>(packet_header_buffer_addr_forward);
+    volatile tt::fabric::PacketHeader* pkt_hdr_backward =
+        reinterpret_cast<volatile tt::fabric::PacketHeader*>(packet_header_buffer_addr_backward);
+    pkt_hdr_forward->to_chip_multicast(
+        tt::fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_forward_direction)});
+    pkt_hdr_backward->to_chip_multicast(
+        tt::fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_backward_direction)});
 
     if (fabric_connection.is_logically_connected()) {
         fabric_connection.open();
@@ -155,9 +115,8 @@ void kernel_main() {
 
         write_and_advance_local_read_address_for_fabric_write(
             noc0_dest_noc_addr,
-            packet_header_buffer_addr,
-            num_targets_forward_direction,
-            num_targets_backward_direction,
+            pkt_hdr_forward,
+            pkt_hdr_backward,
             fabric_connection,
             l1_read_addr,
             num_tiles_to_read_this_core * tensor0_page_size);
@@ -173,7 +132,7 @@ void kernel_main() {
     }
 
     // 2. mcast output ready semaphore
-    auto* pkt_hdr = reinterpret_cast<tt::fabric::PacketHeader*>(packet_header_buffer_addr);
+    auto* pkt_hdr = reinterpret_cast<tt::fabric::PacketHeader*>(packet_header_buffer_seminc);
     pkt_hdr->to_atomic_inc();
     pkt_hdr->to_noc_unicast_atomic_inc(tt::fabric::NocUnicastAtomicIncCommandHeader{
         out_ready_sem_bank_addr,
@@ -187,7 +146,7 @@ void kernel_main() {
         pkt_hdr->to_chip_multicast(
             tt::fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_forward_direction)});
         fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
-            packet_header_buffer_addr, sizeof(tt::fabric::PacketHeader));
+            packet_header_buffer_seminc, sizeof(tt::fabric::PacketHeader));
     }
     // Write the mcast packet (backward)
     if (fabric_connection.has_backward_connection()) {
@@ -195,7 +154,7 @@ void kernel_main() {
             tt::fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_backward_direction)});
         fabric_connection.get_backward_connection().wait_for_empty_write_slot();
         fabric_connection.get_backward_connection().send_payload_non_blocking_from_address(
-            packet_header_buffer_addr, sizeof(tt::fabric::PacketHeader));
+            packet_header_buffer_seminc, sizeof(tt::fabric::PacketHeader));
     }
     // increment locally
     uint64_t out_ready_sem_noc_addr =

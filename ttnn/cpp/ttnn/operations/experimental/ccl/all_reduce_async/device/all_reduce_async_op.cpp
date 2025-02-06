@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -56,10 +56,10 @@ AllReduceAsync create_all_reduce_async_struct(
         enable_persistent_fabric_mode};
 }
 
-uint32_t find_scatter_dim(const ttnn::SimpleShape& input_tensor_padded_shape, size_t num_workers) {
+uint32_t find_scatter_dim(const ttnn::Shape& input_tensor_padded_shape, size_t num_workers) {
     // iterate until we find a dimension that is divisible by num_workers
     TT_FATAL(input_tensor_padded_shape.size() == 4, "Expected input tensor to have 4 dimensions");
-    ttnn::SimpleShape input_tensor_shape_in_tiles{
+    ttnn::Shape input_tensor_shape_in_tiles{
         input_tensor_padded_shape[0],
         input_tensor_padded_shape[1],
         input_tensor_padded_shape[2] / tt::constants::TILE_HEIGHT,
