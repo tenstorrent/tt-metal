@@ -81,7 +81,7 @@ int main() {
         // processing
         tt::tt_metal::Layout::TILE);
     // Once created, the tensor "on host" and we must move it to the device to perform operations on it
-    x = x.to(device);
+    x = x.to_device(device);
 
     // Print the tensor to see what it looks like
     std::cout << "Tensot x:\n";

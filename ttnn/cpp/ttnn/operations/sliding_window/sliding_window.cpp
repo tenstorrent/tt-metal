@@ -689,7 +689,7 @@ Tensor move_config_tensor_to_device(
                          : ShardOrientation::ROW_MAJOR;
     ShardSpec shard_spec(p_config.grid, shard_shape, config_shard_orientation);
     MemoryConfig memory_config{TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1_SMALL, shard_spec};
-    return config_tensor.to(device, memory_config);
+    return config_tensor.to_device(device, memory_config);
 }
 
 std::string SlidingWindowConfig::to_string() const {

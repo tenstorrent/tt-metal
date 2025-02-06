@@ -99,9 +99,9 @@ static Tensor arange_impl(
     auto output =
         Tensor(
             OwnedStorage{owned_buffer}, ttnn::Shape{1, 1, 1, static_cast<uint32_t>(size)}, data_type, Layout::ROW_MAJOR)
-            .to(layout);
+            .to_layout(layout);
     if (device.has_value()) {
-        output = output.to(device->get_devices(), output_mem_config);
+        output = output.to_device(device->get_devices(), output_mem_config);
     }
     return output;
 }
@@ -125,7 +125,7 @@ static Tensor full_impl(
     if (!optional_output_tensor.has_value()) {
         auto output = Tensor(OwnedStorage{owned_buffer}, shape, data_type, layout);
         if (!devices.empty()) {
-            output = output.to(devices, output_mem_config);
+            output = output.to_device(devices, output_mem_config);
         }
         return output;
     } else {

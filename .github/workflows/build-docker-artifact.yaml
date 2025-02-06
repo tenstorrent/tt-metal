@@ -91,7 +91,7 @@ jobs:
 
 
   build-docker-image:
-    name: "🐳️ Build ${{ inputs.distro }} ${{inputs.version }} image"
+    name: "🐳️ Build image"
     needs: check-docker-images
     if: needs.check-docker-images.outputs.ci-build-exists != 'true'
     timeout-minutes: 30
