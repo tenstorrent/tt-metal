@@ -414,12 +414,12 @@ def conv2d_dram_slice(
             compute_config=compute_config,
             memory_config=memory_config,  # should be ttnn.DRAM_MEMORY_CONFIG, but fails on PCC with that
         )
-
         # # temp workaround
         # print(f"PRE conv_output_slice.memory_config()={conv_output_slice.memory_config()}")
         # to_layout with memory_config can override memory_config if sharded and on untilize with unpadding path
-        conv_output_slice = ttnn.to_layout(conv_output_slice, ttnn.ROW_MAJOR_LAYOUT)
+        # also if to_layout is called with memory_config, it will cause PCC on the case with a 56 output channels
         conv_output_slice = ttnn.to_memory_config(conv_output_slice, ttnn.DRAM_MEMORY_CONFIG)
+        conv_output_slice = ttnn.to_layout(conv_output_slice, ttnn.ROW_MAJOR_LAYOUT)
 
         if dram_slice == DramSlice.Width:
             # As it is width sliced, restore it back to [N, H, W, C] format to allow mid results concat

@@ -2937,7 +2937,7 @@ def test_dram_input_mm_conv(device, tiled_input, input_on_device):
         (1, 1, 4, 32, 1024, 1024, 5, DramSlice.Width, ttnn.bfloat8_b, ttnn.bfloat8_b, (5, 5), (1, 1), (0, 0), (1, 1), 16, 0, 1, True, ttnn.MathFidelity.LoFi, True, False, True, False),
         (1, 1, 32, 48, 1020, 1020, 7, DramSlice.Height, ttnn.bfloat8_b, ttnn.bfloat8_b, (3, 3), (1, 1), (0, 0), (2, 2), 32, 0, 1, True, ttnn.MathFidelity.LoFi, True, False, True, False),
         (1, 1, 32, 48, 1020, 1020, 6, DramSlice.Width, ttnn.bfloat8_b, ttnn.bfloat8_b, (3, 3), (1, 1), (0, 0), (2, 2), 32, 0, 1, True, ttnn.MathFidelity.LoFi, True, False, True, False),
-        # (1, 1, 48, 56, 1016, 1016, 11, DramSlice.Width, ttnn.bfloat8_b, ttnn.bfloat8_b, (3, 3), (1, 1), (0, 0), (4, 4), 32, 0, 1, True, ttnn.MathFidelity.LoFi, True, False, True, False), # PCC
+        (1, 1, 48, 56, 1016, 1016, 11, DramSlice.Width, ttnn.bfloat8_b, ttnn.bfloat8_b, (3, 3), (1, 1), (0, 0), (4, 4), 32, 0, 1, True, ttnn.MathFidelity.LoFi, True, False, True, False),
         (1, 1, 56, 64, 1008, 1008, 11, DramSlice.Width, ttnn.bfloat8_b, ttnn.bfloat8_b, (3, 3), (1, 1), (0, 0), (8, 8), 32, 0, 1, True, ttnn.MathFidelity.LoFi, True, False, True, False),
         (1, 1, 64, 128, 992, 992, 12, DramSlice.Width, ttnn.bfloat8_b, ttnn.bfloat8_b, (2, 2), (1, 1), (0, 0), (1, 1), 32, 0, 1, True, ttnn.MathFidelity.LoFi, True, False, True, False),
     ),
