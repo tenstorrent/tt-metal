@@ -28,8 +28,8 @@ struct ShardedInfo {
 public:
     // The isX types are correctly templated shard_grid_info class objects containing the information of the respective
     // grid
-    constexpr static shard_addr_gen_consts::ShardingLayout shard_type =
-        static_cast<shard_addr_gen_consts::ShardingLayout>(SHARD_TYPE);
+    constexpr static tt::tt_metal::TensorMemoryLayout shard_type =
+        static_cast<tt::tt_metal::TensorMemoryLayout>(SHARD_TYPE);
     constexpr static uint32_t number_of_cores = NUMBER_OF_CORES;
     constexpr static uint32_t page_size_jump = PAGE_SIZE_JUMP;
     constexpr static uint32_t pages_per_tensor_row = PAGES_PER_TENSOR_ROW;
@@ -210,12 +210,12 @@ struct ShardedAddrGen {
         // Resolve linear core id/bank address, the page offset in the core,
         // and the number of contiguous pages within that core
         experimental::shard_addr_gen_utils::ShardCoordInfo sharding_coordinates{};
-        if constexpr (CONSTANT_ARGS.shard_type == shard_addr_gen_consts::ShardingLayout::WIDTH_SHARDED) {
+        if constexpr (CONSTANT_ARGS.shard_type == tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED) {
             sharding_coordinates = experimental::shard_addr_gen_utils::get_width_sharded_coordinates<
                 CONSTANT_ARGS.pages_per_shard_width,
                 CONSTANT_ARGS.pages_per_tensor_row,
                 CONSTANT_ARGS.contiguity>(id);
-        } else if constexpr (CONSTANT_ARGS.shard_type == shard_addr_gen_consts::ShardingLayout::HEIGHT_SHARDED) {
+        } else if constexpr (CONSTANT_ARGS.shard_type == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED) {
             sharding_coordinates = experimental::shard_addr_gen_utils::get_height_sharded_coordinates<
                 CONSTANT_ARGS.rows_per_shard_height,
                 CONSTANT_ARGS.pages_per_tensor_row,

@@ -111,7 +111,7 @@ void run_full_block_test(ADDRgen addrgen, ADDRgenInfo constants, uint32_t bank_b
 }
 
 TEST(CclnewWidthShardedTensorSliceIndexer_Wormhole, width_sharded_test) {
-    constexpr std::size_t shard_type = static_cast<uint32_t>(shard_addr_gen_consts::ShardingLayout::WIDTH_SHARDED);
+    constexpr std::size_t shard_type = static_cast<uint32_t>(tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED);
     constexpr std::size_t number_of_cores = 8;
     constexpr std::size_t page_size_jump = 1024;
     constexpr std::size_t pages_per_tensor_row = 32;
@@ -134,8 +134,7 @@ TEST(CclnewWidthShardedTensorSliceIndexer_Wormhole, width_sharded_test) {
 }
 
 TEST(CclnewHeightShardedTensorSliceIndexer_Wormhole, height_sharded_test) {
-    static constexpr std::size_t shard_type =
-        static_cast<uint32_t>(shard_addr_gen_consts::ShardingLayout::HEIGHT_SHARDED);
+    static constexpr std::size_t shard_type = static_cast<uint32_t>(tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED);
     static constexpr std::size_t number_of_cores = 4;
     static constexpr std::size_t page_size_jump = 1024;
     static constexpr std::size_t pages_per_tensor_row = 32;
@@ -160,8 +159,7 @@ TEST(CclnewHeightShardedTensorSliceIndexer_Wormhole, height_sharded_test) {
 }
 
 TEST(CclnewBlockShardedTensorSliceIndexer_Wormhole, block_sharded_test) {
-    static constexpr std::size_t shard_type =
-        static_cast<uint32_t>(shard_addr_gen_consts::ShardingLayout::BLOCK_SHARDED);
+    static constexpr std::size_t shard_type = static_cast<uint32_t>(tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED);
     static constexpr std::size_t number_of_cores = 16;
     static constexpr std::size_t page_size_jump = 1024;
     static constexpr std::size_t pages_per_tensor_row = 32;

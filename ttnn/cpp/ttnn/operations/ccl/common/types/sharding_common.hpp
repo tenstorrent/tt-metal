@@ -6,6 +6,8 @@
 
 #pragma once
 
+#include <tt-metalium/buffer_constants.hpp>
+
 namespace shard_addr_gen_consts {
 
 enum class ContiguityType {
@@ -16,12 +18,6 @@ enum class ContiguityType {
     // Indicates no sharding based padding exists so all pages within the same shard are contiguous
     // This is useful for height sharded tensors as multiple rows of the tensor can be contiguous.
     NO_SHARD_PADDING,
-};
-
-enum class ShardingLayout {
-    HEIGHT_SHARDED = 0,
-    WIDTH_SHARDED,
-    BLOCK_SHARDED,
 };
 
 }  // namespace shard_addr_gen_consts
