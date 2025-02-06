@@ -90,12 +90,6 @@ MeshDevice::ScopedDevices::~ScopedDevices() {
 
 const std::vector<IDevice*>& MeshDevice::ScopedDevices::get_devices() const { return devices_; }
 
-uint32_t MeshDevice::build_key() const {
-    TT_FATAL(tt::tt_metal::hal.is_coordinate_virtualization_enabled(), "MeshDevice::build_key() expects coordinate virtualization to be enabled");
-    return validate_and_get_reference_value(
-        scoped_devices_->get_devices(), [](const auto& device) { return device->build_key(); });
-}
-
 uint8_t MeshDevice::num_hw_cqs() const {
     return validate_and_get_reference_value(
         scoped_devices_->get_devices(), [](const auto& device) { return device->num_hw_cqs(); });
@@ -536,28 +530,6 @@ uint32_t MeshDevice::get_noc_multicast_encoding(uint8_t noc_index, const CoreRan
     });
 }
 
-// Floating point and build environment
-const JitBuildEnv& MeshDevice::build_env() const { return reference_device()->build_env(); }
-
-// Build and firmware paths
-const string MeshDevice::build_firmware_target_path(uint32_t programmable_core, uint32_t processor_class, int i) const {
-    return reference_device()->build_firmware_target_path(programmable_core, processor_class, i);
-}
-const string MeshDevice::build_kernel_target_path(
-    uint32_t programmable_core, uint32_t processor_class, int i, const string& kernel_name) const {
-    return reference_device()->build_kernel_target_path(programmable_core, processor_class, i, kernel_name);
-}
-const JitBuildState& MeshDevice::build_firmware_state(
-    uint32_t programmable_core, uint32_t processor_class, int i) const {
-    return reference_device()->build_firmware_state(programmable_core, processor_class, i);
-}
-const JitBuildState& MeshDevice::build_kernel_state(uint32_t programmable_core, uint32_t processor_class, int i) const {
-    return reference_device()->build_kernel_state(programmable_core, processor_class, i);
-}
-const JitBuildStateSubset MeshDevice::build_kernel_states(uint32_t programmable_core, uint32_t processor_class) const {
-    return reference_device()->build_kernel_states(programmable_core, processor_class);
-}
-
 // System memory and command queue management
 SystemMemoryManager& MeshDevice::sysmem_manager() {
     TT_THROW("sysmem_manager() is not supported on MeshDevice - use individual devices instead");
@@ -636,10 +608,6 @@ bool MeshDevice::initialize(
     return true;
 }
 
-void MeshDevice::build_firmware() {
-    TT_THROW("build_firmware() is not supported on MeshDevice - use individual devices instead");
-    reference_device()->build_firmware();
-}
 void MeshDevice::reset_cores() {
     TT_THROW("reset_cores() is not supported on MeshDevice - use individual devices instead");
     reference_device()->reset_cores();
