@@ -329,7 +329,7 @@ struct core_info_msg_t {
     volatile uint8_t pad[25];
 };
 
-constexpr uint32_t launch_msg_buffer_num_entries = 4;
+constexpr uint32_t launch_msg_buffer_num_entries = 8;
 struct mailboxes_t {
     struct ncrisc_halt_msg_t ncrisc_halt;
     struct slave_sync_msg_t slave_sync;

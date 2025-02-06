@@ -681,6 +681,7 @@ void process_write_packed_large(
     volatile CQDispatchCmd tt_l1_ptr* cmd = (volatile CQDispatchCmd tt_l1_ptr*)cmd_ptr;
 
     uint32_t count = cmd->write_packed_large.count;
+    DPRINT << count << ENDL();
     uint32_t alignment = cmd->write_packed_large.alignment;
     uint32_t write_offset_index = cmd->write_packed_large.write_offset_index;
     uint32_t local_write_offset = write_offset[write_offset_index];
