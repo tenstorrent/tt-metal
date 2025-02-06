@@ -37,26 +37,70 @@ from models.tt_transformers.tt.load_checkpoints import (
 
 @dataclass
 class ModelOptimizations:
-    bfp4_mlp: bool
-    # Future fields will go here:
-    # bfp8_activations: bool
-    # bfp8_layernorm: bool
-    # bfp8_ccl: bool
+    def _default_layer_settings():
+        return {
+            "w1": {
+                "dtype": ttnn.bfloat8_b,
+                "compute_kernel_config": ttnn.WormholeComputeKernelConfig(
+                    math_fidelity=ttnn.MathFidelity.HiFi2,
+                    math_approx_mode=False,
+                    fp32_dest_acc_en=False,
+                    packer_l1_acc=True,
+                ),
+            },
+            "w2": {
+                "dtype": ttnn.bfloat8_b,
+                "compute_kernel_config": ttnn.WormholeComputeKernelConfig(
+                    math_fidelity=ttnn.MathFidelity.HiFi2,
+                    math_approx_mode=False,
+                    fp32_dest_acc_en=False,
+                    packer_l1_acc=True,
+                ),
+            },
+            "w3": {
+                "dtype": ttnn.bfloat8_b,
+                "compute_kernel_config": ttnn.WormholeComputeKernelConfig(
+                    math_fidelity=ttnn.MathFidelity.HiFi2,
+                    math_approx_mode=False,
+                    fp32_dest_acc_en=False,
+                    packer_l1_acc=True,
+                ),
+            },
+        }
+
+    layer_settings: dict = field(default_factory=_default_layer_settings)
 
     @classmethod
     def accuracy(cls, model_name):
         """Configuration optimized for accuracy
         Only 70B models uses bfp4 MLPs in this configuration
         """
-        bfp4 = model_name in ["Llama3.1-70B", "DeepSeek-R1-Distill-Llama-70B", "Qwen2.5-72B"]
-        return cls(bfp4_mlp=bfp4)
+        if model_name in ["Llama3.1-70B", "DeepSeek-R1-Distill-Llama-70B", "Qwen2.5-72B"]:
+            return ModelOptimizations.performance(model_name)
+
+        return cls()
 
     @classmethod
     def performance(cls, model_name):
         """Configuration optimized for performance
         All models use bfp4 MLPs in this configuration
         """
-        return cls(bfp4_mlp=True)
+        inst = cls()
+        inst.layer_settings["w1"]["dtype"] = ttnn.bfloat4_b
+        inst.layer_settings["w1"]["compute_kernel_config"] = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+        inst.layer_settings["w3"]["dtype"] = ttnn.bfloat4_b
+        inst.layer_settings["w3"]["compute_kernel_config"] = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.LoFi,
+            math_approx_mode=False,
+            fp32_dest_acc_en=False,
+            packer_l1_acc=True,
+        )
+        return inst
 
 
 class CheckpointType(Enum):
@@ -317,6 +361,7 @@ class ModelArgs:
                 fp32_dest_acc_en=True,
                 packer_l1_acc=True,
             )
+            # NOTE: compute_kernel_config_sdpa seems not used in the any of the model files
             self.compute_kernel_config_sdpa = ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi4,
                 math_approx_mode=False,
