@@ -504,7 +504,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         }
     }
 
-    // assert(out_block_h_ntiles == act_block_h_ntiles); // TODO: fix output block sizing
+    // TT_FATAL(out_block_h_ntiles == act_block_h_ntiles); // TODO: fix output block sizing
     TT_FATAL(
         out_block_h_ntiles >= act_block_h_ntiles,
         "Output block height (in # of tiles) ({}) should be greater than or equal to activation block height (in # of "
@@ -607,8 +607,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
             sliding_window_config,
             parallelization_config.num_cores_nhw,
             out_block_h_ntiles);
-    assert(act_matrix_shape.size() == 3);
-    assert(act_matrix_shape[0] == 1);
+    TT_FATAL(act_matrix_shape.size() == 3, "act_matrix_shape should have be of size 3");
+    TT_FATAL(act_matrix_shape[0] == 1, "act_matrix_shape should have 1 as the first dimension");
     uint32_t act_matrix_height = (uint32_t)act_matrix_shape[1];
     uint32_t act_matrix_width = (uint32_t)act_matrix_shape[2];
     if (block_sharded) {
@@ -618,7 +618,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     uint32_t act_matrix_height_unpadded = (uint32_t)act_matrix_shape_unpadded[1];
     uint32_t act_matrix_width_unpadded = (uint32_t)act_matrix_shape_unpadded[2];
 
-    // TODO: Move all these asserts/checks to validate?
+    // TODO: Move all these TT_FATALs/checks to validate?
 
     uint32_t input_width = ashape[2];
     uint32_t input_channels = ashape[3];
@@ -640,7 +640,10 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     // matrix multiplication shape check valid for all convs except depthwise conv1d
     if (!is_conv_1d_depthwise_conv) {
         TT_FATAL(
-            act_matrix_width == weight_matrix_height, "The width of tensor a needs to match the height of tensor b");
+            act_matrix_width == weight_matrix_height,
+            "The width of tensor a {} needs to match the height of tensor b {}",
+            act_matrix_width,
+            weight_matrix_height);
     }
     // Tile size divisibility checks
     TT_FATAL(act_matrix_height % TILE_HEIGHT == 0, "Height of activation matrix needs to be divisible by 32");
@@ -664,10 +667,26 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     uint32_t act_matrix_height_ntiles = act_matrix_height / TILE_HEIGHT;
     uint32_t act_matrix_width_ntiles = act_matrix_width / TILE_WIDTH;
 
-    assert(act_matrix_height_ntiles % act_block_h_ntiles == 0);
-    assert(act_matrix_width_ntiles % act_block_w_ntiles == 0);
-    assert(weight_matrix_width_ntiles % weight_block_w_ntiles == 0);
-    assert(act_matrix_height_ntiles % out_block_h_ntiles == 0);
+    TT_FATAL(
+        act_matrix_height_ntiles % act_block_h_ntiles == 0,
+        "act_matrix_height_ntiles {} should be divisible by act_block_h_ntiles {}",
+        act_matrix_height_ntiles,
+        act_block_h_ntiles);
+    TT_FATAL(
+        act_matrix_width_ntiles % act_block_w_ntiles == 0,
+        "act_matrix_width_ntiles {} should be divisible by act_block_w_ntiles {}",
+        act_matrix_width_ntiles,
+        act_block_w_ntiles);
+    TT_FATAL(
+        weight_matrix_width_ntiles % weight_block_w_ntiles == 0,
+        "weight_matrix_width_ntiles {} should be divisible by weight_block_w_ntiles {}",
+        weight_matrix_width_ntiles,
+        weight_block_w_ntiles);
+    TT_FATAL(
+        act_matrix_height_ntiles % out_block_h_ntiles == 0,
+        "act_matrix_height_ntiles {} should be divisible by out_block_h_ntiles {}",
+        act_matrix_height_ntiles,
+        out_block_h_ntiles);
 
     uint32_t num_blocks_act_h = act_matrix_height_ntiles / act_block_h_ntiles;
     uint32_t num_blocks_out_h = act_matrix_height_ntiles / out_block_h_ntiles;
@@ -701,7 +720,11 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
 
     // weight block info
     uint32_t weight_block_w_datums = weight_matrix_width / num_blocks_weight_w;
-    assert(weight_block_w_ntiles % out_subblock_w_ntiles == 0);
+    TT_FATAL(
+        weight_block_w_ntiles % out_subblock_w_ntiles == 0,
+        "weight_block_w_ntiles {} should be divisible by weight_block_w_ntiles {}",
+        weight_block_w_ntiles,
+        out_subblock_w_ntiles);
     uint32_t weight_num_subblocks = weight_block_w_ntiles / out_subblock_w_ntiles;
     uint32_t weight_block_h_ntiles = is_conv_1d_depthwise_conv ? act_block_h_ntiles : act_block_w_ntiles;
     uint32_t weight_block_num_tiles = weight_block_w_ntiles * weight_block_h_ntiles;
@@ -710,14 +733,21 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     // writer of conv op partially removes padding on the width
     // it removes the padding done for block width but it doesn't remove padding done for tiled width
     uint32_t output_channels_padded_to_tile_width = round_up(output_channels, TILE_WIDTH);
-    assert(output_channels_padded_to_tile_width <= weight_matrix_width);
+    TT_FATAL(
+        output_channels_padded_to_tile_width <= weight_matrix_width,
+        "output_channels_padded_to_tile_width {} should be less than or equal to weight_matrix_width {}",
+        output_channels_padded_to_tile_width,
+        weight_matrix_width);
     uint32_t output_width_num_tiles = output_channels_padded_to_tile_width / TILE_WIDTH;
     uint32_t num_blocks_output_w =
         (uint32_t)std::ceil((double)output_channels_padded_to_tile_width / (double)weight_block_w_datums);
     uint32_t last_block_width_datums = (output_channels_padded_to_tile_width % weight_block_w_datums == 0)
                                            ? weight_block_w_datums
                                            : (output_channels_padded_to_tile_width % weight_block_w_datums);
-    assert(last_block_width_datums % TILE_WIDTH == 0);
+    TT_FATAL(
+        last_block_width_datums % TILE_WIDTH == 0,
+        "last_block_width_datums {} should be divisible by TILE_WIDTH",
+        last_block_width_datums);
 
     uint32_t out_block_h_datums = out_block_h_ntiles * TILE_HEIGHT;
 
@@ -735,9 +765,12 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     // act
     uint32_t act_dram_addr = src0_dram_buffer->address();
 
-    assert(act_matrix_width_ntiles % act_block_w_ntiles == 0);
-    assert(act_block_h_ntiles % out_subblock_h_ntiles == 0);
-    // assert(out_block_h_ntiles % out_subblock_h_ntiles == 0);
+    TT_FATAL(
+        act_block_h_ntiles % out_subblock_h_ntiles == 0,
+        "act_block_h_ntiles {} should be divisible by out_subblock_h_ntiles {}",
+        act_block_h_ntiles,
+        out_subblock_h_ntiles);
+    // TT_FATAL(out_block_h_ntiles % out_subblock_h_ntiles == 0);
     uint32_t act_num_subblocks = act_block_h_ntiles / out_subblock_h_ntiles;
     uint32_t act_block_num_tiles = act_block_h_ntiles * act_block_w_ntiles;
     uint32_t act_subblock_h_ntiles = out_subblock_h_ntiles;
@@ -772,7 +805,11 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
 
     uint32_t output_height_padded_to_tile_height = round_up(act_matrix_height_unpadded, TILE_HEIGHT);
     uint32_t output_height_num_tiles = output_height_padded_to_tile_height / TILE_HEIGHT;
-    assert(output_height_num_tiles <= act_matrix_height_ntiles);
+    TT_FATAL(
+        output_height_num_tiles <= act_matrix_height_ntiles,
+        "output_height_num_tiles {} should be less than or equal to act_matrix_height_ntiles {}",
+        output_height_num_tiles,
+        act_matrix_height_ntiles);
 
     uint32_t src_dram_act_buffer_size_bytes = src0_dram_buffer->size();
     uint32_t src_dram_weight_buffer_size_bytes = src1_dram_buffer->size();
@@ -869,46 +906,94 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     reader_defines["WINDOW_INNER"] = std::to_string(window_inner);
     log_debug(LogOp, "window_outer: {}, window_inner: {}", window_outer, window_inner);
 
-    assert(weight_matrix_width_ntiles % per_core_out_matrix_width_ntiles == 0);
-    assert(per_core_out_matrix_width_ntiles % weight_block_w_ntiles == 0);
+    TT_FATAL(
+        weight_matrix_width_ntiles % per_core_out_matrix_width_ntiles == 0,
+        "weight_matrix_width_ntiles {} should be divisible by per_core_out_matrix_width_ntiles {}",
+        weight_matrix_width_ntiles,
+        per_core_out_matrix_width_ntiles);
+    TT_FATAL(
+        per_core_out_matrix_width_ntiles % weight_block_w_ntiles == 0,
+        "per_core_out_matrix_width_ntiles {} should be divisible by weight_block_w_ntiles {}",
+        per_core_out_matrix_width_ntiles,
+        weight_block_w_ntiles);
     uint32_t num_blocks_weight_w_per_core = per_core_out_matrix_width_ntiles / weight_block_w_ntiles;
     if (not weight_width_sliced) {
-        assert(num_blocks_weight_w_per_core == num_blocks_weight_w);
+        TT_FATAL(
+            num_blocks_weight_w_per_core == num_blocks_weight_w,
+            "num_blocks_weight_w_per_core {} should be equal to num_blocks_weight_w {}",
+            num_blocks_weight_w_per_core,
+            num_blocks_weight_w);
     }
     uint32_t num_weight_slices_width = weight_matrix_width_ntiles / per_core_out_matrix_width_ntiles;
     uint32_t total_num_cores_per_weight_slice = 0;
     uint32_t total_num_cores_per_act_slice = 0;  // only used when (BLOCK_SHARDING && !transpose_mcast)
     if (weight_width_sliced) {
         if (transpose_mcast) {
-            assert(num_cores_y % num_weight_slices_width == 0);
+            TT_FATAL(
+                num_cores_y % num_weight_slices_width == 0,
+                "num_cores_y {} should be divisible by num_weight_slices_width {}",
+                num_cores_y,
+                num_weight_slices_width);
             uint32_t num_cores_y_per_weight_slice_width = num_cores_y / num_weight_slices_width;
             total_num_cores_per_weight_slice = num_cores_y_per_weight_slice_width * num_cores_x;
         } else {
-            assert(num_cores_x % num_weight_slices_width == 0);
+            TT_FATAL(
+                num_cores_x % num_weight_slices_width == 0,
+                "num_cores_x {} should be divisible by num_weight_slices_width {}",
+                num_cores_x,
+                num_weight_slices_width);
             uint32_t num_cores_x_per_weight_slice_width = num_cores_x / num_weight_slices_width;
             uint32_t num_act_slices_height = act_matrix_height_ntiles / per_core_out_matrix_height_ntiles;
             total_num_cores_per_act_slice = num_cores_x * num_cores_y / num_act_slices_height;
             log_debug(LogOp, "total_num_cores_per_act_slice: {}", total_num_cores_per_act_slice);
             total_num_cores_per_weight_slice = num_cores_x_per_weight_slice_width * num_cores_y;
         }
-        assert(total_num_cores_per_weight_slice * per_core_out_matrix_height_ntiles == act_matrix_height_ntiles);
+        TT_FATAL(
+            total_num_cores_per_weight_slice * per_core_out_matrix_height_ntiles == act_matrix_height_ntiles,
+            "total_num_cores_per_weight_slice {} * per_core_out_matrix_height_ntiles {} should be equal to "
+            "act_matrix_height_ntiles {}",
+            total_num_cores_per_weight_slice,
+            per_core_out_matrix_height_ntiles,
+            act_matrix_height_ntiles);
     } else {
-        assert(num_cores_y % num_weight_slices_width == 0);
+        TT_FATAL(
+            num_cores_y % num_weight_slices_width == 0,
+            "num_cores_y {} should be divisible by num_weight_slices_width {}",
+            num_cores_y,
+            num_weight_slices_width);
         uint32_t num_cores_y_per_weight_slice_width = num_cores_y / num_weight_slices_width;
         total_num_cores_per_weight_slice = num_cores_y_per_weight_slice_width * num_cores_x;
-        assert(total_num_cores * per_core_out_matrix_height_ntiles >= act_matrix_height_ntiles);
+        TT_FATAL(
+            total_num_cores * per_core_out_matrix_height_ntiles >= act_matrix_height_ntiles,
+            "total_num_cores {} * per_core_out_matrix_height_ntiles {} should be greater than or equal to "
+            "act_matrix_height_ntiles {}",
+            total_num_cores,
+            per_core_out_matrix_height_ntiles,
+            act_matrix_height_ntiles);
     }
-    assert(per_core_out_matrix_height_ntiles % act_block_h_ntiles == 0);
+    TT_FATAL(
+        per_core_out_matrix_height_ntiles % act_block_h_ntiles == 0,
+        "per_core_out_matrix_height_ntiles {} should be divisible by act_block_h_ntiles {}",
+        per_core_out_matrix_height_ntiles,
+        act_block_h_ntiles);
     uint32_t num_blocks_act_h_per_core = per_core_out_matrix_height_ntiles / act_block_h_ntiles;
-    // assert(per_core_out_matrix_height_ntiles % out_block_h_ntiles == 0);
+    // TT_FATAL(per_core_out_matrix_height_ntiles % out_block_h_ntiles == 0);
     // uint32_t num_blocks_out_h_per_core = per_core_out_matrix_height_ntiles / out_block_h_ntiles;
     uint32_t num_blocks_out_h_per_core =
         (per_core_out_matrix_height_ntiles + out_block_h_ntiles - 1) / out_block_h_ntiles;
     bool act_height_sliced = per_core_out_matrix_height_ntiles < act_matrix_height_ntiles;
     if (not act_height_sliced) {
-        TT_FATAL(num_blocks_act_h_per_core == num_blocks_act_h, "Error");
-        TT_FATAL(num_blocks_out_h_per_core == num_blocks_out_h, "Error");
-        TT_FATAL(num_cores_x == 1, "Error");
+        TT_FATAL(
+            num_blocks_act_h_per_core == num_blocks_act_h,
+            "num_blocks_act_h_per_core {} should be equal to num_blocks_act_h {}",
+            num_blocks_act_h_per_core,
+            num_blocks_act_h);
+        TT_FATAL(
+            num_blocks_out_h_per_core == num_blocks_out_h,
+            "num_blocks_out_h_per_core {} should be equal to num_blocks_out_h {}",
+            num_blocks_out_h_per_core,
+            num_blocks_out_h);
+        TT_FATAL(num_cores_x == 1, "num_cores_x {} should be equal to 1", num_cores_x);
     }
     uint32_t act_block_h_datums_last_block =
         (per_core_out_matrix_height_ntiles - (num_blocks_act_h_per_core - 1) * act_block_h_ntiles) * TILE_HEIGHT;
@@ -1173,7 +1258,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     if (filter_h >= 1 and filter_w >= 1) {
         if (!is_conv1d and weight_width_sliced) {
             // 2D conv
-            assert(read_window_in_inner_loop == true);
+            TT_FATAL(read_window_in_inner_loop == true, "read_window_in_inner_loop should be true for this conv");
             reader_kernel =
                 "ttnn/cpp/ttnn/operations/conv/conv2d/device/kernels/"
                 "reader_conv_activations_2d_mcast_padded_with_halo_3x3_weights_v2.cpp";
@@ -1499,7 +1584,11 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         uint32_t out_start_tile_id_w = weight_slice_i * per_core_out_matrix_width_ntiles;
         uint32_t bias_tile_offset = weight_slice_i * per_core_out_matrix_width_ntiles;
         if (has_bias) {
-            assert(bias_tile_offset < bias_ntiles);
+            TT_FATAL(
+                bias_tile_offset < bias_ntiles,
+                "bias_tile_offset {} should be less than bias_ntiles {}",
+                bias_tile_offset,
+                bias_ntiles);
         }
 
         if (weight_width_sliced) {

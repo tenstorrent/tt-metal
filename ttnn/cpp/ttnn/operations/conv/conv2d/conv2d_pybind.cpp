@@ -333,6 +333,7 @@ void py_bind_conv2d(py::module& module) {
             std::optional<CoreRangeSet>,
             bool,
             Layout,
+            std::optional<bool>,
             bool,
             bool,
             bool,
@@ -352,6 +353,7 @@ void py_bind_conv2d(py::module& module) {
         py::arg("core_grid") = std::nullopt,
         py::arg("transpose_shards") = true,
         py::arg("output_layout") = Layout::TILE,
+        py::arg("preprocess_weights_on_device") = std::nullopt,
         py::arg("enable_act_double_buffer") = false,
         py::arg("enable_weights_double_buffer") = false,
         py::arg("enable_split_reader") = false,
@@ -370,6 +372,7 @@ void py_bind_conv2d(py::module& module) {
     py_conv_config.def_readwrite("core_grid", &Conv2dConfig::core_grid);
     py_conv_config.def_readwrite("transpose_shards", &Conv2dConfig::transpose_shards);
     py_conv_config.def_readwrite("output_layout", &Conv2dConfig::output_layout);
+    py_conv_config.def_readwrite("preprocess_weights_on_device", &Conv2dConfig::preprocess_weights_on_device);
     py_conv_config.def_readwrite("enable_act_double_buffer", &Conv2dConfig::enable_act_double_buffer);
     py_conv_config.def_readwrite("enable_weights_double_buffer", &Conv2dConfig::enable_weights_double_buffer);
     py_conv_config.def_readwrite("enable_split_reader", &Conv2dConfig::enable_split_reader);
