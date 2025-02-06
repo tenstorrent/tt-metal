@@ -341,8 +341,7 @@ void Cluster::generate_virtual_to_umd_coord_mapping() {
             this->virtual_worker_cores_[chip_id].insert({core.x, core.y});
         }
         this->virtual_eth_cores_[chip_id] = {};
-        for (const tt::umd::CoreCoord& core :
-             get_soc_desc(chip_id).get_cores(CoreType::ACTIVE_ETH, CoordSystem::TRANSLATED)) {
+        for (const tt::umd::CoreCoord& core : get_soc_desc(chip_id).get_cores(CoreType::ETH, CoordSystem::TRANSLATED)) {
             this->virtual_eth_cores_[chip_id].insert({core.x, core.y});
         }
     }
