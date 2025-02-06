@@ -64,6 +64,9 @@ private:
     // This is a reference device used to query properties that are the same for all devices in the mesh.
     IDevice* reference_device() const;
 
+    // Returns the devices in row-major order for the new mesh shape
+    std::vector<IDevice*> get_row_major_devices(const MeshShape& new_shape) const;
+
 public:
     MeshDevice(
         std::shared_ptr<ScopedDevices> mesh_handle,
