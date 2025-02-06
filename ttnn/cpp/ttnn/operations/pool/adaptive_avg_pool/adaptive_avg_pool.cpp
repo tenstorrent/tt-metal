@@ -77,7 +77,7 @@ static ttnn::Tensor compute_adaptive_avg_pool(
 
     auto output = Tensor(OwnedStorage{owned_buffer}, output_shape, input.get_dtype(), input.get_layout());
     if (input.device() != nullptr) {
-        output = output.to(input.device(), output_mem_config);
+        output = output.to_device(input.device(), output_mem_config);
     }
 
     return output;
@@ -102,7 +102,7 @@ ttnn::Tensor AdaptiveAvgPool1DOperation::invoke(
     TT_FATAL(input_dims >= 2 && input_dims < 4, "Input tensor must have dimensions between 2 and 4");
     TT_FATAL(output_size.size() == 1, "Output size must be a 1D dimension");
     auto input_tensor = ttnn::unsqueeze(input, 1);
-    ttnn::Shape out_size = {1, output_size[0]};
+    ttnn::Shape out_size{1, output_size[0]};
     auto output_tensor = ttnn::adaptive_avg_pool2d(input_tensor, out_size, mem_config);
     output_tensor = ttnn::squeeze(output_tensor, 1);
     return output_tensor;
