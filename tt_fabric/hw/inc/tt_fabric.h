@@ -404,6 +404,9 @@ typedef struct fvc_producer_state {
     FORCE_INLINE uint32_t get_num_words_available() {
         if constexpr (fvc_mode == FVC_MODE_ROUTER) {
             uint32_t new_words = *words_received;
+            if (new_words == 0) {
+                return words_inbound;
+            }
             *words_received_local_update = (-new_words) << REMOTE_DEST_BUF_WORDS_FREE_INC;
             words_inbound += new_words;
             uint32_t temp = inbound_wrptr.ptr + new_words;
