@@ -772,15 +772,14 @@ Conv2dConfig determine_conv_config_for_auto_shard(
         Conv2dConfig conv_config = conv_config_in;
         conv_config.shard_layout = shard_layout;
         if (conv_config.act_block_h_override == 0) {
-            if (in_channels <= constants::TILE_WIDTH / 2 &&
-                conv_config.input_channels_alignment == constants::TILE_WIDTH && !is_mm_conv &&
-                conv_config.shard_layout == TensorMemoryLayout::HEIGHT_SHARDED &&
+            if (in_channels < constants::TILE_WIDTH && conv_config.input_channels_alignment == constants::TILE_WIDTH &&
+                !is_mm_conv && conv_config.shard_layout == TensorMemoryLayout::HEIGHT_SHARDED &&
                 input_tensor_layout == Layout::ROW_MAJOR) {
                 log_debug(LogOp, "Auto shard, enable shallow conv");
-                // height sharded, non matmul conv, with input channels <= 16, and default setting for
+                // height sharded, non matmul conv, with input channels < 32, and default setting for
                 // input_channels_alignment
                 // Currently data-movement ops have too many restrictions to support shallow convs with tiled input.
-                conv_config.input_channels_alignment = constants::TILE_WIDTH / 2;
+                conv_config.input_channels_alignment = 8;
             } else if (conv_config.shard_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
                 conv_config.input_channels_alignment = constants::TILE_WIDTH;
             }
