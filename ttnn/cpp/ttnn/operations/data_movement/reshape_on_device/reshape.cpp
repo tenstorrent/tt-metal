@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/common/queue_id.hpp"
+#include "ttnn/common/constants.hpp"
 #include "ttnn/run_operation.hpp"
 #include "reshape.hpp"
 #include <tt-metalium/constants.hpp>
@@ -102,17 +102,6 @@ ttnn::Tensor ReshapeOperation::invoke(
     const ttnn::Shape& logical_output_shape,
     const std::optional<MemoryConfig>& memory_config_arg) {
     return invoke(queue_id, input_tensor, logical_output_shape, logical_output_shape, memory_config_arg);
-}
-
-ttnn::Tensor ReshapeOperation::invoke(
-    const ttnn::Tensor& input_tensor,
-    const ttnn::Shape& logical_shape,
-    const std::optional<MemoryConfig>& memory_config) {
-    return invoke(input_tensor, logical_shape, logical_shape, memory_config);
-}
-
-ttnn::Tensor ReshapeOperation::invoke(const ttnn::Tensor& input_tensor, const ttnn::Shape& logical_shape) {
-    return invoke(input_tensor, logical_shape, logical_shape);
 }
 
 ttnn::Tensor ReshapeOperation::invoke(

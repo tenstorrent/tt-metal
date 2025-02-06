@@ -279,16 +279,6 @@ std::vector<std::optional<Tensor>> ExecuteUnaryBackwardPow::invoke(
     return grad_tensor;
 }
 
-std::vector<std::optional<Tensor>> ExecuteUnaryBackwardPow::invoke(
-    const Tensor& grad,
-    const Tensor& input,
-    float exponent,
-    const std::optional<MemoryConfig>& output_mem_config,
-    std::optional<Tensor> input_grad) {
-    return ExecuteUnaryBackwardPow::invoke(
-        DefaultQueueId, grad, input, exponent, output_mem_config, std::move(input_grad));
-}
-
 std::vector<std::optional<Tensor>> ExecuteUnaryBackwardExp::invoke(
     QueueId queue_id,
     const Tensor& grad,
@@ -1702,16 +1692,6 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteUnaryBackwardGelu::invoke(
     }
 
     return result;
-}
-
-std::vector<std::optional<ttnn::Tensor>> ExecuteUnaryBackwardGelu::invoke(
-    const Tensor& grad,
-    const Tensor& input,
-    const string& approximate,
-    const std::optional<MemoryConfig>& output_mem_config,
-    std::optional<Tensor> input_grad) {
-    return ExecuteUnaryBackwardGelu::invoke(
-        DefaultQueueId, grad, input, std::move(approximate), output_mem_config, std::move(input_grad));
 }
 
 std::vector<Tensor> ExecuteUnaryBackwardRepeat::invoke(
