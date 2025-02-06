@@ -27,8 +27,6 @@ args_list_t emit_compile_time(WorkerEdmInterfaceArgs const& edm_interface_args) 
 
 args_list_t legacy_emit_address_generator_runtime_args(
     const tt::tt_metal::IDevice* const d, const tt::tt_metal::Tensor& t) {
-args_list_t legacy_emit_address_generator_runtime_args(
-    const tt::tt_metal::IDevice* const d, const tt::tt_metal::Tensor& t) {
     args_list_t args;
     switch (t.buffer()->buffer_layout()) {
         case tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED:
