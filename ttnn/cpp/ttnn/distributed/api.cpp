@@ -153,7 +153,6 @@ std::vector<IDevice*> get_mapped_devices(const Tensor& tensor, MeshDevice& mesh_
                 [&](const ShardTensor2D& s) {
                     return mesh_device.get_view().get_devices(MeshShape{s.shard_mesh.y, s.shard_mesh.x});
                 },
-                [&](const ShardTensor& s) { return get_workers_for_tensor(mesh_device.get_view().get_line_devices()); },
                 [&](const auto&) { return get_workers_for_tensor(mesh_device.get_devices()); }},
             host_storage.strategy);
     } else if (std::holds_alternative<MultiDeviceStorage>(tensor.get_storage())) {

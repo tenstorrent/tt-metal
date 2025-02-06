@@ -258,6 +258,7 @@ def pcie_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, devic
         **updated_device_params,
         offset=ttnn.MeshOffset(0, 1),
     )
+    mesh_device.reshape(ttnn.MeshShape(1, 4))
 
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
     yield mesh_device
