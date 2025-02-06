@@ -17,7 +17,9 @@ MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig = (
 )
 
 
-def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
+def _golden_function(
+    input_tensor_a, input_tensor_b, transpose_a=False, transpose_b=False, *, bias=None, activation=None, **kwargs
+):
     import torch
 
     if transpose_a:
