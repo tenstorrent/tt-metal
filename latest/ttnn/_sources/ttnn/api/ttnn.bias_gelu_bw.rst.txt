@@ -1,0 +1,8 @@
+﻿ttnn.bias\_gelu\_bw
+===================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.bias_gelu_bw:
+
+.. autofastoperation:: ttnn.bias_gelu_bw

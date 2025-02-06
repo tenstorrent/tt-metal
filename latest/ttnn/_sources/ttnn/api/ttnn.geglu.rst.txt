@@ -1,0 +1,8 @@
+﻿ttnn.geglu
+==========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.geglu:
+
+.. autofastoperation:: ttnn.geglu

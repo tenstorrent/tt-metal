@@ -1,0 +1,8 @@
+﻿ttnn.transformer.concatenate\_heads
+===================================
+
+.. currentmodule:: ttnn.transformer
+
+.. _ttnn.transformer.concatenate_heads:
+
+.. autofastoperation:: ttnn.transformer.concatenate_heads

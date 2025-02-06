@@ -1,0 +1,8 @@
+﻿ttnn.heaviside
+==============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.heaviside:
+
+.. autofastoperation:: ttnn.heaviside

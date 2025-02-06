@@ -1,0 +1,8 @@
+﻿ttnn.floor\_div
+===============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.floor_div:
+
+.. autofastoperation:: ttnn.floor_div

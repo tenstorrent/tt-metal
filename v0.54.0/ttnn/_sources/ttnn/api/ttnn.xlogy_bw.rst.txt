@@ -1,0 +1,8 @@
+﻿ttnn.xlogy\_bw
+==============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.xlogy_bw:
+
+.. autofastoperation:: ttnn.xlogy_bw

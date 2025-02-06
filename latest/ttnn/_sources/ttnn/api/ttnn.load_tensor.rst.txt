@@ -1,0 +1,8 @@
+﻿ttnn.load\_tensor
+=================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.load_tensor:
+
+.. autofastoperation:: ttnn.load_tensor

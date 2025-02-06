@@ -1,0 +1,8 @@
+﻿ttnn.indexed\_fill
+==================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.indexed_fill:
+
+.. autofastoperation:: ttnn.indexed_fill

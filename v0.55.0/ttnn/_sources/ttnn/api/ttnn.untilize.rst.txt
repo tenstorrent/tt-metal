@@ -1,0 +1,8 @@
+﻿ttnn.untilize
+=============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.untilize:
+
+.. autofastoperation:: ttnn.untilize

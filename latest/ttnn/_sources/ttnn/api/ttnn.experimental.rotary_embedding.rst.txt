@@ -1,0 +1,8 @@
+﻿ttnn.experimental.rotary\_embedding
+===================================
+
+.. currentmodule:: ttnn.experimental
+
+.. _ttnn.experimental.rotary_embedding:
+
+.. autofastoperation:: ttnn.experimental.rotary_embedding

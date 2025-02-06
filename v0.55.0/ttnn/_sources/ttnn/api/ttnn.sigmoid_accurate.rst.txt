@@ -1,0 +1,8 @@
+﻿ttnn.sigmoid\_accurate
+======================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.sigmoid_accurate:
+
+.. autofastoperation:: ttnn.sigmoid_accurate

@@ -1,0 +1,8 @@
+﻿ttnn.selu\_bw
+=============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.selu_bw:
+
+.. autofastoperation:: ttnn.selu_bw

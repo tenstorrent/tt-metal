@@ -1,0 +1,8 @@
+﻿ttnn.cbrt
+=========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.cbrt:
+
+.. autofastoperation:: ttnn.cbrt

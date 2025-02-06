@@ -1,0 +1,8 @@
+﻿ttnn.logical\_not
+=================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.logical_not:
+
+.. autofastoperation:: ttnn.logical_not

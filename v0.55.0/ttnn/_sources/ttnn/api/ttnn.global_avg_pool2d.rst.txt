@@ -1,0 +1,8 @@
+﻿ttnn.global\_avg\_pool2d
+========================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.global_avg_pool2d:
+
+.. autofastoperation:: ttnn.global_avg_pool2d

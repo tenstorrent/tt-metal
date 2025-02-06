@@ -1,0 +1,8 @@
+﻿ttnn.experimental.all\_reduce
+=============================
+
+.. currentmodule:: ttnn.experimental
+
+.. _ttnn.experimental.all_reduce:
+
+.. autofastoperation:: ttnn.experimental.all_reduce

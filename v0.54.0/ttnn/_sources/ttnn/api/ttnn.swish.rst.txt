@@ -1,0 +1,8 @@
+﻿ttnn.swish
+==========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.swish:
+
+.. autofastoperation:: ttnn.swish

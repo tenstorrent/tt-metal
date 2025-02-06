@@ -1,0 +1,8 @@
+﻿ttnn.clip\_bw
+=============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.clip_bw:
+
+.. autofastoperation:: ttnn.clip_bw

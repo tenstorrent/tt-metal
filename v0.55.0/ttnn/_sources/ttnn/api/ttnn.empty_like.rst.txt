@@ -1,0 +1,8 @@
+﻿ttnn.empty\_like
+================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.empty_like:
+
+.. autofastoperation:: ttnn.empty_like

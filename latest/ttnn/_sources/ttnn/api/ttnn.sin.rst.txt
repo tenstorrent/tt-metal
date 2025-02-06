@@ -1,0 +1,8 @@
+﻿ttnn.sin
+========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.sin:
+
+.. autofastoperation:: ttnn.sin

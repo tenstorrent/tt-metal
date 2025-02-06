@@ -1,0 +1,8 @@
+﻿ttnn.ones\_like
+===============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.ones_like:
+
+.. autofastoperation:: ttnn.ones_like

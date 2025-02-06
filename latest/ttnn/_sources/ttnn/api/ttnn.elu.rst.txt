@@ -1,0 +1,8 @@
+﻿ttnn.elu
+========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.elu:
+
+.. autofastoperation:: ttnn.elu

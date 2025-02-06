@@ -1,0 +1,8 @@
+﻿ttnn.sign
+=========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.sign:
+
+.. autofastoperation:: ttnn.sign

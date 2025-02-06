@@ -1,0 +1,8 @@
+﻿ttnn.trunc
+==========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.trunc:
+
+.. autofastoperation:: ttnn.trunc

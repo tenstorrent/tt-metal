@@ -1,0 +1,8 @@
+﻿ttnn.lerp\_bw
+=============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.lerp_bw:
+
+.. autofastoperation:: ttnn.lerp_bw

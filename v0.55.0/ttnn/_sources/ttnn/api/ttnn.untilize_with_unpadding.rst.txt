@@ -1,0 +1,8 @@
+﻿ttnn.untilize\_with\_unpadding
+==============================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.untilize_with_unpadding:
+
+.. autofastoperation:: ttnn.untilize_with_unpadding

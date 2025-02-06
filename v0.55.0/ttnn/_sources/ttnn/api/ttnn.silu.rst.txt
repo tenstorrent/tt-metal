@@ -1,0 +1,8 @@
+﻿ttnn.silu
+=========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.silu:
+
+.. autofastoperation:: ttnn.silu

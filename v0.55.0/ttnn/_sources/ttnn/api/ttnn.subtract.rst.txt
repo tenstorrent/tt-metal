@@ -1,0 +1,8 @@
+﻿ttnn.subtract
+=============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.subtract:
+
+.. autofastoperation:: ttnn.subtract

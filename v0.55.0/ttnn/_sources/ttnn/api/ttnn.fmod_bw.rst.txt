@@ -1,0 +1,8 @@
+﻿ttnn.fmod\_bw
+=============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.fmod_bw:
+
+.. autofastoperation:: ttnn.fmod_bw

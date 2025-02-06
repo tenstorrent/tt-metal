@@ -1,0 +1,8 @@
+﻿ttnn.gt\_
+=========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.gt_:
+
+.. autofastoperation:: ttnn.gt_

@@ -1,0 +1,8 @@
+﻿ttnn.erf\_bw
+============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.erf_bw:
+
+.. autofastoperation:: ttnn.erf_bw

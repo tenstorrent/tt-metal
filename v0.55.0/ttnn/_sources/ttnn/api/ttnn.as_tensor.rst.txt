@@ -1,0 +1,8 @@
+﻿ttnn.as\_tensor
+===============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.as_tensor:
+
+.. autofastoperation:: ttnn.as_tensor

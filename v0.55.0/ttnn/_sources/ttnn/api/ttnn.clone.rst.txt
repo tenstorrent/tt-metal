@@ -1,0 +1,8 @@
+﻿ttnn.clone
+==========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.clone:
+
+.. autofastoperation:: ttnn.clone

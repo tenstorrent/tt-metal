@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>tt-gdb &mdash; TT-Metalium  documentation</title>
+      <link rel="stylesheet" href="../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../_static/tt_theme.css" type="text/css" />
+    <link rel="shortcut icon" href="../_static/favicon.png"/>
+    <link rel="canonical" href="/tt-metalium/latest/tools/tt_gdb.html" />
+  <!--[if lt IE 9]>
+    <script src="../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../_static/jquery.js?v=5d32c60e"></script>
+        <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js?v=b3ba4146"></script>
+        <script src="../_static/doctools.js?v=888ff710"></script>
+        <script src="../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+
+
+<a href="https://docs.tenstorrent.com/">
+    <img src="../_static/tt_logo.svg" class="logo" alt="Logo"/>
+</a>
+
+<a href="../index.html">
+    TT-Metalium
+</a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Get Started</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../get_started/get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../installing.html">Install</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">TT-Metalium</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../tt_metal/programming_model/index.html">Programming Model</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../tt_metal/apis/index.html">APIs</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../tt_metal/examples/index.html">Programming Examples</a></li>
+<li class="toctree-l1"><a class="reference internal" href="index.html">Tools</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Resources</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../resources/support.html">Support</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../resources/contributing.html">Contributing as a developer</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../index.html">TT-Metalium</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">tt-gdb</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../_sources/tools/tt_gdb.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="tt-gdb">
+<h1>tt-gdb<a class="headerlink" href="#tt-gdb" title="Permalink to this heading"></a>
+</h1>
+<video width="800" height="600" controls>
+    <source src="../_static/DebuggerTutorial.mp4" type="video/mp4">
+<p>Your browser does not support the video tag.</p>
+</source></video><section id="enabling-the-breakpoint-server">
+<h2>Enabling the breakpoint server<a class="headerlink" href="#enabling-the-breakpoint-server" title="Permalink to this heading"></a>
+</h2>
+<p>To enable the breakpoint server, in your test, you must include <cite>tools/tt_gdb/tt_gdb.hpp</cite>, and call it right before calling your test function.</p>
+<p>For example, below is a snippet of enabling tt_gdb in <cite>test_run_datacopy</cite>.</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="k">const</span><span class="w"> </span><span class="n">vector</span><span class="o">&lt;</span><span class="n">CoreCoord</span><span class="o">&gt;</span><span class="w"> </span><span class="n">cores</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="n">core</span><span class="p">};</span>
+<span class="k">const</span><span class="w"> </span><span class="n">vector</span><span class="o">&lt;</span><span class="n">string</span><span class="o">&gt;</span><span class="w"> </span><span class="n">ops</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="n">op</span><span class="p">};</span>
+
+<span class="n">tt_gdb</span><span class="p">(</span><span class="n">cluster</span><span class="p">,</span><span class="w"> </span><span class="n">chip_id</span><span class="p">,</span><span class="w"> </span><span class="n">cores</span><span class="p">,</span><span class="w"> </span><span class="n">ops</span><span class="p">);</span>
+<span class="n">pass</span><span class="w"> </span><span class="o">&amp;=</span><span class="w"> </span><span class="n">run_data_copy_multi_tile</span><span class="p">(</span><span class="n">cluster</span><span class="p">,</span><span class="w"> </span><span class="n">chip_id</span><span class="p">,</span><span class="w"> </span><span class="n">core</span><span class="p">,</span><span class="w"> </span><span class="mi">2048</span><span class="p">);</span>
+</pre></div>
+</div>
+<p>where cluster was defined earlier in the file.</p>
+</section>
+<section id="installing-python-packages">
+<h2>Installing python packages<a class="headerlink" href="#installing-python-packages" title="Permalink to this heading"></a>
+</h2>
+<p>Within the <code class="docutils literal notranslate"><span class="pre">tools/tt_gdb</span></code> directory,
+<code class="docutils literal notranslate"><span class="pre">pip3</span> <span class="pre">install</span> <span class="pre">-r</span> <span class="pre">requirements.txt</span></code></p>
+</section>
+<section id="compiling-under-debug-mode">
+<h2>Compiling under debug mode<a class="headerlink" href="#compiling-under-debug-mode" title="Permalink to this heading"></a>
+</h2>
+<p>To get the most out of <cite>tt_gdb</cite>, you must compile under debug mode. This will use different debug ld files for the RISCs, and will enable debug symbols. To enable under debug mode, use
+<cite>DEBUG_MODE=1</cite> when compiling a test.</p>
+<p>For example, below is a snippet of compiling with <cite>DEBUG_MODE=1</cite> for compilation of the datacopy op.</p>
+<p><code class="docutils literal notranslate"><span class="pre">DEBUG_MODE=1</span> <span class="pre">./build/test/build_kernels_for_riscv/tests/test_compile_datacopy</span></code></p>
+</section>
+<section id="limitations">
+<h2>Limitations<a class="headerlink" href="#limitations" title="Permalink to this heading"></a>
+</h2>
+<p>So far, debug mode only compiles BRISC with proper debug symbols, therefore the <cite>p</cite> functionality will only work for BRISC; however, the breakpoint function should work for any RISC if your goal is just to hang a program.</p>
+<p>Additionally, unit testing needs to be added for the debugger. If you have any issues,
+please create an issue under the debugger board.</p>
+<p>## Using breakpoints in your code
+<cite>breakpoint</cite> is a macro part of <cite>riscv/common</cite>, which means that you don’t need to include any special header files in your kernels. It compiles differently for each of brisc, ncrisc, and triscs, which means you can use it generically. Just insert <cite>breakpoint();</cite> into your code wherever you need it.</p>
+<p>For example, below is a dummy brisc kernel running on core 1-1:</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="cp">#include</span><span class="w"> </span><span class="cpf">"dataflow_api.h"</span>
+
+<span class="kt">void</span><span class="w"> </span><span class="nf">kernel_main</span><span class="p">()</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="k">volatile</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">dst_addr</span><span class="w">  </span><span class="o">=</span><span class="w"> </span><span class="n">get_arg_val</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">0</span><span class="p">);</span>
+<span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">dst_noc_x</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_arg_val</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">1</span><span class="p">);</span>
+<span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">dst_noc_y</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_arg_val</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">2</span><span class="p">);</span>
+<span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">num_tiles</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_arg_val</span><span class="o">&lt;</span><span class="kt">uint32_t</span><span class="o">&gt;</span><span class="p">(</span><span class="mi">3</span><span class="p">);</span>
+
+<span class="w">    </span><span class="k">constexpr</span><span class="w"> </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">cb_id_out0</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">16</span><span class="p">;</span>
+
+<span class="w">    </span><span class="c1">// single-tile ublocks</span>
+<span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">ublock_size_bytes</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">get_tile_size</span><span class="p">(</span><span class="n">cb_id_out0</span><span class="p">);</span>
+<span class="w">    </span><span class="kt">uint32_t</span><span class="w"> </span><span class="n">ublock_size_tiles</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="p">;</span>
+
+
+
+
+<span class="w">    </span><span class="n">breakpoint</span><span class="p">();</span>
+<span class="w">    </span><span class="p">...</span>
+</pre></div>
+</div>
+<p>When I run my test, as soon as this breakpoint is reached, it opens up an interactive debugger. You will be greeted with this prompt:</p>
+<a class="reference internal image-reference" href="../_images/grid-debugger.png"><img alt="First login" src="../_images/grid-debugger.png" style="width: 400px;"></a>
+<p>The blue core represents the core you are currently hovering over, and the red cores represent cores in which a breakpoint was hit. If you are hovering over a core that has a breakpoint, it will appear as grey.</p>
+<p>You can move around the grid with the arrow keys, and when you would like to debug a particular core, press enter on that core. For example, if I move to core 1-1 and press enter, I will see this prompt:</p>
+<a class="reference internal image-reference" href="../_images/core-view.png"><img alt="First login" src="../_images/core-view.png" style="width: 400px;"></a>
+<p>Gray will represent your current cursor, so in this image, we are hovering over trisc0. Just like before, you can use the arrow keys to move around. Since we hit a breakpoint for brisc, you will see a message notifying you that a breakpoint has been hit, as well as which line the breakpoint was on.</p>
+<p>TODO(agrebenisan): In the future, would like to make this a hyperlink that brings you directly to the file and line number.</p>
+<p>From this screen, we can select a particular thread to debug. For example, if we move to the brisc thread and press enter, we will see this prompt:</p>
+<div class="highlight-bash notranslate">
+<div class="highlight"><pre><span></span><span class="o">(</span>tt_gdb<span class="o">)</span>
+</pre></div>
+</div>
+<p>Here, you can write <cite>help</cite> or <cite>h</cite> to display available commands:</p>
+<div class="highlight-bash notranslate">
+<div class="highlight"><pre><span></span><span class="o">(</span>tt_gdb<span class="o">)</span><span class="w"> </span><span class="nb">help</span>
+Documented<span class="w"> </span>commands<span class="w"> </span><span class="o">(</span><span class="nb">type</span><span class="w"> </span><span class="nb">help</span><span class="w"> </span>&lt;topic&gt;<span class="o">)</span>:
+<span class="o">========================================</span>
+
+c<span class="w">       </span>e<span class="w">       </span>h<span class="w">    </span><span class="nb">help</span><span class="w">    </span>p<span class="w">       </span>q
+</pre></div>
+</div>
+<p>You can get more info by following the above instructions, however here is one example of printing a local variable:</p>
+<div class="highlight-bash notranslate">
+<div class="highlight"><pre><span></span><span class="o">(</span>tt_gdb<span class="o">)</span><span class="w"> </span>p<span class="w"> </span>dst_addr
+<span class="m">536870912</span>
+</pre></div>
+</div>
+<p>You may notice I specifically chose to print out a volatile variable, since volatile variables live in L1. So far, non-L1 variable printing is not supported, so you may need to modify your code to make local variables volatile for the time being.</p>
+</section>
+</section>
+
+
+
+           </div>
+          </div>
+          <footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright Tenstorrent.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
+    <span class="rst-current-version" data-toggle="rst-current-version">
+        Version: <span id="current-version">latest</span>
+        <span class="fa fa-caret-down"></span>
+    </span>
+    <div class="rst-other-versions">
+        <dl id="version-list">
+            <dt>Versions</dt>
+        </dl>
+        <br>
+        </dl>
+    </div>
+</div>
+
+<script>
+const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/dimitri/test-versioned-docs/docs/published_versions.json';
+
+async function loadVersions() {
+    try {
+        const response = await fetch(VERSIONS_URL);
+        const data = await response.json();
+        const versionList = document.getElementById('version-list');
+        const projectCode = location.pathname.split('/')[3];
+
+        data.versions.forEach(version => {
+            const dd = document.createElement('dd');
+            const link = document.createElement('a');
+            link.href = `https://tenstorrent-docs-test.github.io/tt-metal/${version}/${projectCode}/index.html`;
+            link.textContent = version;
+            dd.appendChild(link);
+            versionList.appendChild(dd);
+        });
+    } catch (error) {
+        console.error('Error loading versions:', error);
+    }
+}
+
+loadVersions();
+
+function getCurrentVersion() {
+    return window.location.pathname.split('/')[2];
+}
+document.getElementById('current-version').textContent = getCurrentVersion();
+
+</script><script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

@@ -1,0 +1,8 @@
+﻿ttnn.neg\_bw
+============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.neg_bw:
+
+.. autofastoperation:: ttnn.neg_bw

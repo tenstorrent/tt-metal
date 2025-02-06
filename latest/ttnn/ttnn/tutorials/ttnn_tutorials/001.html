@@ -1,0 +1,676 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tensor and Add Operation &mdash; TT-NN  documentation</title>
+      <link rel="stylesheet" href="../../../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../../_static/tt_theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../../_static/nbsphinx-code-cells.css" type="text/css" />
+    <link rel="shortcut icon" href="../../../_static/favicon.png"/>
+    <link rel="canonical" href="/ttnn/latest/ttnn/tutorials/ttnn_tutorials/001.html" />
+  <!--[if lt IE 9]>
+    <script src="../../../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../../../_static/jquery.js?v=5d32c60e"></script>
+        <script src="../../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=b3ba4146"></script>
+        <script src="../../../_static/doctools.js?v=888ff710"></script>
+        <script src="../../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script>window.MathJax = {"tex": {"inlineMath": [["$", "$"], ["\\(", "\\)"]], "processEscapes": true}, "options": {"ignoreHtmlClass": "tex2jax_ignore|mathjax_ignore|document", "processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
+        <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    <script src="../../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" />
+    <link rel="next" title="Matmul Operation" href="../matmul.html" />
+    <link rel="prev" title="Tensor and Add Operation" href="../tensor_and_add_operation.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+
+
+<a href="https://docs.tenstorrent.com/">
+    <img src="../../../_static/tt_logo.svg" class="logo" alt="Logo"/>
+</a>
+
+<a href="../../../index.html">
+    TT-NN
+</a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">TTNN</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../../about.html">What is ttnn?</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../installing.html">Install</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../usage.html">Using ttnn</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../tensor.html">Tensor</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../api.html">APIs</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="../../tutorials.html">Tutorials</a><ul class="current">
+<li class="toctree-l2 current"><a class="reference internal" href="../tensor_and_add_operation.html">Tensor and Add Operation</a><ul class="current">
+<li class="toctree-l3 current"><a class="current reference internal" href="#">Tensor and Add Operation</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#Creating-a-tensor">Creating a tensor</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#Host-Storage:-Borrowed-vs-Owned">Host Storage: Borrowed vs Owned</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#Data-Type">Data Type</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#Layout">Layout</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#Device-storage">Device storage</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#Open-the-device">Open the device</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#Initialize-tensors-a-and-b-with-random-values-using-torch">Initialize tensors a and b with random values using torch</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#Add-tensor-a-and-b">Add tensor a and b</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#Inspect-the-output-tensor-of-the-add-in-ttnn">Inspect the output tensor of the add in ttnn</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#Convert-to-torch-and-inspect-the-attributes-of-the-torch-tensor">Convert to torch and inspect the attributes of the torch tensor</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#Close-the-device">Close the device</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../matmul.html">Matmul Operation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../multihead-attention.html">Multi-Head Attention</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../ttnn-tracer.html">ttnn Tracer</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../profiling.html">ttnn Profiling</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../resnet-basic-block.html">Resnet Basic Block</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../graphing_torch_dit.html">Graphing Torch DiT_XL_2 With TTNN</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../../onboarding.html">Onboarding New Functionality</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../converting_torch_model_to_ttnn.html">Converting torch Model to ttnn</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../adding_new_ttnn_operation.html">Adding New ttnn Operation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../profiling_ttnn_operations.html">Profiling ttnn Operations</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../dependencies/index.html">Dependencies</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../demos.html">Building and Uplifting Demos</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Models</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../tt_metal_models/get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../tt_metal_models/get_performance.html">Performance</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Resources</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../resources/support.html">Support</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../resources/contributing.html">Contributing as a developer</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../../index.html">TT-NN</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../../tutorials.html">Tutorials</a></li>
+          <li class="breadcrumb-item"><a href="../tensor_and_add_operation.html">Tensor and Add Operation</a></li>
+      <li class="breadcrumb-item active">Tensor and Add Operation</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../../_sources/ttnn/tutorials/ttnn_tutorials/001.ipynb.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="Tensor-and-Add-Operation">
+<h1>Tensor and Add Operation<a class="headerlink" href="#Tensor-and-Add-Operation" title="Permalink to this heading"></a>
+</h1>
+<p>ttnn.Tensor is the central type of ttnn.</p>
+<p>It is similar to torch.Tensor in the sense that it represents multi-dimensional matrix containing elements of a single data type.</p>
+<p>The are a few key differences:</p>
+<ul class="simple">
+<li><p>ttnn.Tensor can be stored in the SRAM or DRAM of TensTorrent devices</p></li>
+<li><p>ttnn.Tensor doesn’t have a concept of the strides, however it has a concept of row-major and tile layout</p></li>
+<li><p>ttnn.Tensor has support for data types not supported by torch such as <code class="docutils literal notranslate"><span class="pre">bfp8</span></code> for example</p></li>
+<li><p>ttnn.Tensor’s shape stores the padding added to the tensor due to TILE_LAYOUT</p></li>
+</ul>
+<section id="Creating-a-tensor">
+<h2>Creating a tensor<a class="headerlink" href="#Creating-a-tensor" title="Permalink to this heading"></a>
+</h2>
+<p>The recommended way to create a tensor is by using torch create function and then simply calling <code class="docutils literal notranslate"><span class="pre">ttnn.from_torch</span></code>. So, let’s import both <code class="docutils literal notranslate"><span class="pre">torch</span></code> and <code class="docutils literal notranslate"><span class="pre">ttnn</span></code></p>
+<div class="nbinput docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[1]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">ttnn</span>
+</pre></div>
+</div>
+</div>
+<div class="nboutput nblast docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area stderr docutils container">
+<div class="highlight"><pre>
+2024-07-11 18:12:48.818 | DEBUG    | ttnn:&lt;module&gt;:136 - Initial ttnn.CONFIG:
+{'cache_path': PosixPath('/home/ubuntu/.cache/ttnn'),
+ 'comparison_mode_pcc': 0.9999,
+ 'enable_comparison_mode': False,
+ 'enable_detailed_buffer_report': False,
+ 'enable_detailed_tensor_report': False,
+ 'enable_fast_runtime_mode': True,
+ 'enable_graph_report': False,
+ 'enable_logging': False,
+ 'enable_model_cache': False,
+ 'model_cache_path': PosixPath('/home/ubuntu/.cache/ttnn/models'),
+ 'report_name': None,
+ 'root_report_path': PosixPath('generated/ttnn/reports'),
+ 'throw_exception_on_fallback': False,
+ 'tmp_dir': PosixPath('/tmp/ttnn')}
+2024-07-11 18:12:48.905 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.logical_xor be migrated to C++?
+2024-07-11 18:12:48.906 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.xlogy be migrated to C++?
+2024-07-11 18:12:48.906 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.maximum be migrated to C++?
+2024-07-11 18:12:48.907 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.minimum be migrated to C++?
+2024-07-11 18:12:48.908 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.atan2 be migrated to C++?
+2024-07-11 18:12:48.909 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.hypot be migrated to C++?
+2024-07-11 18:12:48.910 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.nextafter be migrated to C++?
+2024-07-11 18:12:48.911 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.polyval be migrated to C++?
+2024-07-11 18:12:48.911 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.isclose be migrated to C++?
+2024-07-11 18:12:48.914 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.all_gather be migrated to C++?
+2024-07-11 18:12:48.915 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.pearson_correlation_coefficient be migrated to C++?
+2024-07-11 18:12:48.919 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.conv2d be migrated to C++?
+2024-07-11 18:12:48.920 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.reshape be migrated to C++?
+2024-07-11 18:12:48.921 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.unsqueeze_to_4D be migrated to C++?
+2024-07-11 18:12:48.922 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.squeeze be migrated to C++?
+2024-07-11 18:12:48.923 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.from_torch be migrated to C++?
+2024-07-11 18:12:48.923 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.to_torch be migrated to C++?
+2024-07-11 18:12:48.924 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.to_device be migrated to C++?
+2024-07-11 18:12:48.925 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.from_device be migrated to C++?
+2024-07-11 18:12:48.926 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.allocate_tensor_on_device be migrated to C++?
+2024-07-11 18:12:48.926 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.copy_host_to_device_tensor be migrated to C++?
+2024-07-11 18:12:48.927 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.deallocate be migrated to C++?
+2024-07-11 18:12:48.928 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.clone be migrated to C++?
+2024-07-11 18:12:48.929 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.reallocate be migrated to C++?
+2024-07-11 18:12:48.929 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.load_tensor be migrated to C++?
+2024-07-11 18:12:48.930 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.dump_tensor be migrated to C++?
+2024-07-11 18:12:48.931 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.as_tensor be migrated to C++?
+2024-07-11 18:12:48.934 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.arange be migrated to C++?
+2024-07-11 18:12:48.935 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.mse_loss be migrated to C++?
+2024-07-11 18:12:48.936 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.l1_loss be migrated to C++?
+2024-07-11 18:12:48.937 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.matmul be migrated to C++?
+2024-07-11 18:12:48.938 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.linear be migrated to C++?
+2024-07-11 18:12:48.941 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.mac be migrated to C++?
+2024-07-11 18:12:48.942 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.addcmul be migrated to C++?
+2024-07-11 18:12:48.942 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.addcdiv be migrated to C++?
+2024-07-11 18:12:48.943 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.lerp be migrated to C++?
+2024-07-11 18:12:48.948 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.logit be migrated to C++?
+2024-07-11 18:12:48.949 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.polygamma be migrated to C++?
+2024-07-11 18:12:48.950 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.hardshrink be migrated to C++?
+2024-07-11 18:12:48.950 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.celu be migrated to C++?
+2024-07-11 18:12:48.951 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.softshrink be migrated to C++?
+2024-07-11 18:12:48.952 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.clip be migrated to C++?
+2024-07-11 18:12:48.952 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.threshold be migrated to C++?
+2024-07-11 18:12:48.953 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.glu be migrated to C++?
+2024-07-11 18:12:48.954 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.reglu be migrated to C++?
+2024-07-11 18:12:48.955 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.swiglu be migrated to C++?
+2024-07-11 18:12:48.955 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.geglu be migrated to C++?
+2024-07-11 18:12:48.958 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.matmul be migrated to C++?
+2024-07-11 18:12:48.959 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.linear be migrated to C++?
+2024-07-11 18:12:48.960 | WARNING  | ttnn.decorators:operation_decorator:758 - Should ttnn.conv2d be migrated to C++?
+</pre></div>
+</div>
+</div>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[2]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
+<br></pre></div>
+</div>
+</div>
+<p>And now let’s create a torch Tensor and convert it to ttnn Tensor</p>
+<div class="nbinput docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[3]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="n">torch_tensor</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">)</span>
+<span class="n">ttnn_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch_tensor</span><span class="p">)</span>
+
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"shape: </span><span class="si">{</span><span class="n">ttnn_tensor</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"layout: </span><span class="si">{</span><span class="n">ttnn_tensor</span><span class="o">.</span><span class="n">layout</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"dtype: </span><span class="si">{</span><span class="n">ttnn_tensor</span><span class="o">.</span><span class="n">dtype</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<div class="nboutput nblast docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area docutils container">
+<div class="highlight"><pre>
+shape: ttnn.Shape([3, 4])
+layout: Layout.ROW_MAJOR
+dtype: DataType.FLOAT32
+</pre></div>
+</div>
+</div>
+<p>As expected we get a tensor of shape [3, 4] in row-major layout with a data type of float32.</p>
+</section>
+<section id="Host-Storage:-Borrowed-vs-Owned">
+<h2>Host Storage: Borrowed vs Owned<a class="headerlink" href="#Host-Storage:-Borrowed-vs-Owned" title="Permalink to this heading"></a>
+</h2>
+<p>In this particular case, ttnn Tensor will borrow the data of the torch Tensor because ttnn Tensor is in row-major layout, torch tensor is contiguous and their data type matches.</p>
+<p>Let’s print the current ttnn tensor, set element of torch tensor to 1234 and print the ttnn Tensor again to see borrowed storage in action</p>
+<div class="nbinput docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[4]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Original values:</span><span class="se">\n</span><span class="si">{</span><span class="n">ttnn_tensor</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="n">torch_tensor</span><span class="p">[:]</span> <span class="o">=</span> <span class="mi">1234</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"New values are all going to be 1234:</span><span class="se">\n</span><span class="si">{</span><span class="n">ttnn_tensor</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<div class="nboutput nblast docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area docutils container">
+<div class="highlight"><pre>
+Original values:
+ttnn.Tensor([[ 0.98300,  0.11301,  ...,  0.37592,  0.64318],
+             [ 0.53437,  0.59434,  ...,  0.69190,  0.04268],
+             [ 0.33346,  0.20231,  ...,  0.15127,  0.58303]], shape=Shape([3, 4]), dtype=DataType::FLOAT32, layout=Layout::ROW_MAJOR)
+New values are all going to be 1234:
+ttnn.Tensor([[1234.00000, 1234.00000,  ..., 1234.00000, 1234.00000],
+             [1234.00000, 1234.00000,  ..., 1234.00000, 1234.00000],
+             [1234.00000, 1234.00000,  ..., 1234.00000, 1234.00000]], shape=Shape([3, 4]), dtype=DataType::FLOAT32, layout=Layout::ROW_MAJOR)
+</pre></div>
+</div>
+</div>
+<p>We try our best to use borrowed storage but if the torch data type is not supported in ttnn, then we don’t have a choice but to automatically pick a different data type and copy data</p>
+<div class="nbinput docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[5]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="n">torch_tensor</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+<span class="n">ttnn_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch_tensor</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="s2">"torch_tensor.dtype:"</span><span class="p">,</span> <span class="n">torch_tensor</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="s2">"ttnn_tensor.dtype:"</span><span class="p">,</span> <span class="n">ttnn_tensor</span><span class="o">.</span><span class="n">dtype</span><span class="p">)</span>
+
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Original values:</span><span class="se">\n</span><span class="si">{</span><span class="n">ttnn_tensor</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="n">torch_tensor</span><span class="p">[</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">]</span> <span class="o">=</span> <span class="mi">1234</span>
+<span class="c1">#print(f"Original values again because the tensor doesn't use borrowed storage:\n{ttnn_tensor}")</span>
+</pre></div>
+</div>
+</div>
+<div class="nboutput nblast docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area docutils container">
+<div class="highlight"><pre>
+torch_tensor.dtype: torch.float16
+ttnn_tensor.dtype: DataType.BFLOAT16
+Original values:
+ttnn.Tensor([[ 0.80078,  0.69531,  ...,  0.71484,  0.33398],
+             [ 0.60156,  0.36523,  ...,  0.73047,  0.90625],
+             [ 0.59766,  0.83203,  ...,  0.61719,  0.53516]], shape=Shape([3, 4]), dtype=DataType::BFLOAT16, layout=Layout::ROW_MAJOR)
+</pre></div>
+</div>
+</div>
+</section>
+<section id="Data-Type">
+<h2>Data Type<a class="headerlink" href="#Data-Type" title="Permalink to this heading"></a>
+</h2>
+<p>The data type of the ttnn tensor can be controlled explicitly when conversion from torch.</p>
+<div class="nbinput docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[6]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="n">torch_tensor</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
+<span class="n">ttnn_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch_tensor</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"torch_tensor.dtype: </span><span class="si">{</span><span class="n">torch_tensor</span><span class="o">.</span><span class="n">dtype</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"ttnn_tensor.dtype: </span><span class="si">{</span><span class="n">ttnn_tensor</span><span class="o">.</span><span class="n">dtype</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<div class="nboutput nblast docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area docutils container">
+<div class="highlight"><pre>
+torch_tensor.dtype: torch.float32
+ttnn_tensor.dtype: DataType.BFLOAT16
+</pre></div>
+</div>
+</div>
+</section>
+<section id="Layout">
+<h2>Layout<a class="headerlink" href="#Layout" title="Permalink to this heading"></a>
+</h2>
+<p>TensTorrent hardware is most efficiently utilized when running tensors using <a class="reference external" href="https://tenstorrent.github.io/tt-metal/latest/ttnn/ttnn/tensor.html#layout">tile layout</a>. The current tile size is hard-coded to [32, 32]. It was determined to be the optimal size for a tile given the compute, memory and data transfer constraints.</p>
+<p>ttnn provides easy and intuitive way to convert from row-major layout to tile layout and back.</p>
+<div class="nbinput docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[7]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="n">torch_tensor</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+<span class="n">ttnn_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch_tensor</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Tensor in row-major layout:</span><span class="se">\n</span><span class="s2">Shape </span><span class="si">{</span><span class="n">ttnn_tensor</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="se">\n</span><span class="s2">Layout: </span><span class="si">{</span><span class="n">ttnn_tensor</span><span class="o">.</span><span class="n">layout</span><span class="si">}</span><span class="se">\n</span><span class="si">{</span><span class="n">ttnn_tensor</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="n">ttnn_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_layout</span><span class="p">(</span><span class="n">ttnn_tensor</span><span class="p">,</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Tensor in tile layout:</span><span class="se">\n</span><span class="s2">Shape </span><span class="si">{</span><span class="n">ttnn_tensor</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="se">\n</span><span class="s2">Layout: </span><span class="si">{</span><span class="n">ttnn_tensor</span><span class="o">.</span><span class="n">layout</span><span class="si">}</span><span class="se">\n</span><span class="si">{</span><span class="n">ttnn_tensor</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="n">ttnn_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_layout</span><span class="p">(</span><span class="n">ttnn_tensor</span><span class="p">,</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">ROW_MAJOR_LAYOUT</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Tensor back in row-major layout:</span><span class="se">\n</span><span class="s2">Shape </span><span class="si">{</span><span class="n">ttnn_tensor</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="se">\n</span><span class="s2">Layout: </span><span class="si">{</span><span class="n">ttnn_tensor</span><span class="o">.</span><span class="n">layout</span><span class="si">}</span><span class="se">\n</span><span class="si">{</span><span class="n">ttnn_tensor</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<div class="nboutput nblast docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area docutils container">
+<div class="highlight"><pre>
+Tensor in row-major layout:
+Shape ttnn.Shape([3, 4])
+Layout: Layout.ROW_MAJOR
+ttnn.Tensor([[ 0.21680,  0.24316,  ...,  0.19336,  0.40625],
+             [ 0.81641,  0.50781,  ...,  0.09961,  0.54688],
+             [ 0.70703,  0.93359,  ...,  0.06787,  0.75781]], shape=Shape([3, 4]), dtype=DataType::BFLOAT16, layout=Layout::ROW_MAJOR)
+Tensor in tile layout:
+Shape ttnn.Shape([3[32], 4[32]])
+Layout: Layout.TILE
+ttnn.Tensor([[ 0.21680,  0.24316,  ...,  0.00000,  0.00000],
+             [ 0.70703,  0.93359,  ...,  0.00000,  0.00000],
+             ...,
+             [ 0.00000,  0.00000,  ...,  0.00000,  0.00000],
+             [ 0.00000,  0.00000,  ...,  0.00000,  0.00000]], shape=Shape([3[32], 4[32]]), dtype=DataType::BFLOAT16, layout=Layout::TILE)
+Tensor back in row-major layout:
+Shape ttnn.Shape([3, 4])
+Layout: Layout.ROW_MAJOR
+ttnn.Tensor([[ 0.21680,  0.24316,  ...,  0.19336,  0.40625],
+             [ 0.81641,  0.50781,  ...,  0.09961,  0.54688],
+             [ 0.70703,  0.93359,  ...,  0.06787,  0.75781]], shape=Shape([3, 4]), dtype=DataType::BFLOAT16, layout=Layout::ROW_MAJOR)
+</pre></div>
+</div>
+</div>
+<p>Note that padding is automatically inserted to put the tensor into tile layout and it automatically removed after the tensor is converted back to row-major layout</p>
+<p>The conversion to tile layout can be done when caling <code class="docutils literal notranslate"><span class="pre">ttnn.from_torch</span></code></p>
+<div class="nbinput docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[8]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="n">torch_tensor</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span>
+<span class="n">ttnn_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch_tensor</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Tensor in row-major layout:</span><span class="se">\n</span><span class="s2">Shape </span><span class="si">{</span><span class="n">ttnn_tensor</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">; Layout: </span><span class="si">{</span><span class="n">ttnn_tensor</span><span class="o">.</span><span class="n">layout</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<div class="nboutput nblast docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area docutils container">
+<div class="highlight"><pre>
+Tensor in row-major layout:
+Shape ttnn.Shape([3, 4]); Layout: Layout.ROW_MAJOR
+</pre></div>
+</div>
+</div>
+<p>Note that <code class="docutils literal notranslate"><span class="pre">ttnn.to_torch</span></code> will always convert to row-major layout</p>
+</section>
+<section id="Device-storage">
+<h2>Device storage<a class="headerlink" href="#Device-storage" title="Permalink to this heading"></a>
+</h2>
+<p>Finally, in order to actually utilize the tensor, we need to put it on the device. So, that we can run <code class="docutils literal notranslate"><span class="pre">ttnn</span></code> operations on it</p>
+</section>
+<section id="Open-the-device">
+<h2>Open the device<a class="headerlink" href="#Open-the-device" title="Permalink to this heading"></a>
+</h2>
+<p>Use <code class="docutils literal notranslate"><span class="pre">ttnn.open</span></code> to get a handle to the device</p>
+<div class="nbinput docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[9]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="n">device_id</span> <span class="o">=</span> <span class="mi">0</span>
+<span class="n">device</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">open_device</span><span class="p">(</span><span class="n">device_id</span><span class="o">=</span><span class="n">device_id</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<div class="nboutput nblast docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area docutils container">
+<div class="highlight"><pre>
+<span style="color: rgb(0,128,0)">                 Device</span> | <span class="ansi-bold" style="color: rgb(100,149,237)">INFO    </span> | Opening user mode device driver
+
+<span class="ansi-green-fg">2024-07-11 18:12:49.027</span> | <span class="ansi-bold" style="color: rgb(100,149,237)">INFO    </span> | <span class="ansi-cyan-fg">SiliconDriver  </span> - Detected 1 PCI device : {0}
+<span class="ansi-green-fg">2024-07-11 18:12:49.040</span> | <span class="ansi-bold" style="color: rgb(255,165,0)">WARNING </span> | <span class="ansi-cyan-fg">SiliconDriver  </span> - init_detect_tt_device_numanodes(): Could not determine NumaNodeSet for TT device (physical_device_id: 0 pci_bus_id: 0000:07:00.0)
+<span class="ansi-green-fg">2024-07-11 18:12:49.040</span> | <span class="ansi-bold" style="color: rgb(255,165,0)">WARNING </span> | <span class="ansi-cyan-fg">SiliconDriver  </span> - Could not find NumaNodeSet for TT Device (physical_device_id: 0 pci_bus_id: 0000:07:00.0)
+<span class="ansi-green-fg">2024-07-11 18:12:49.041</span> | <span class="ansi-bold" style="color: rgb(255,165,0)">WARNING </span> | <span class="ansi-cyan-fg">SiliconDriver  </span> - bind_area_memory_nodeset(): Unable to determine TT Device to NumaNode mapping for physical_device_id: 0. Skipping membind.
+<span class="ansi-yellow-fg">---- ttSiliconDevice::init_hugepage: bind_area_to_memory_nodeset() failed (physical_device_id: 0 ch: 0). Hugepage allocation is not on NumaNode matching TT Device. Side-Effect is decreased Device-&gt;Host perf (Issue #893).
+</span><span class="ansi-green-fg">2024-07-11 18:12:49.082</span> | <span class="ansi-bold" style="color: rgb(100,149,237)">INFO    </span> | <span class="ansi-cyan-fg">SiliconDriver  </span> - Software version 6.0.0, Ethernet FW version 6.9.0 (Device 0)
+<span style="color: rgb(0,128,0)">                  Metal</span> | <span class="ansi-bold" style="color: rgb(100,149,237)">INFO    </span> | Initializing device 0. Program cache is NOT enabled
+<span style="color: rgb(0,128,0)">                  Metal</span> | <span class="ansi-bold" style="color: rgb(100,149,237)">INFO    </span> | AI CLK for device 0 is:   800 MHz
+</pre></div>
+</div>
+</div>
+</section>
+<section id="Initialize-tensors-a-and-b-with-random-values-using-torch">
+<h2>Initialize tensors a and b with random values using torch<a class="headerlink" href="#Initialize-tensors-a-and-b-with-random-values-using-torch" title="Permalink to this heading"></a>
+</h2>
+<p>To create a tensor that can be used by a <code class="docutils literal notranslate"><span class="pre">ttnn</span></code> operation: 1. Create a tensor using torch 2. Use <code class="docutils literal notranslate"><span class="pre">ttnn.from_torch</span></code> to convert the tensor from <code class="docutils literal notranslate"><span class="pre">torch.Tensor</span></code> to <code class="docutils literal notranslate"><span class="pre">ttnn.Tensor</span></code>, change the layout to <code class="docutils literal notranslate"><span class="pre">ttnn.TILE_LAYOUT</span></code> and put the tensor on the <code class="docutils literal notranslate"><span class="pre">device</span></code></p>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[10]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="n">torch</span><span class="o">.</span><span class="n">manual_seed</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
+
+<span class="n">torch_input_tensor_a</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">((</span><span class="mi">32</span><span class="p">,</span> <span class="mi">32</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">)</span>
+<span class="n">torch_input_tensor_b</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">rand</span><span class="p">((</span><span class="mi">32</span><span class="p">,</span> <span class="mi">32</span><span class="p">),</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bfloat16</span><span class="p">)</span>
+
+<span class="n">input_tensor_a</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch_input_tensor_a</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+<span class="n">input_tensor_b</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">from_torch</span><span class="p">(</span><span class="n">torch_input_tensor_b</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">TILE_LAYOUT</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="n">device</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+</section>
+<section id="Add-tensor-a-and-b">
+<h2>Add tensor a and b<a class="headerlink" href="#Add-tensor-a-and-b" title="Permalink to this heading"></a>
+</h2>
+<p><code class="docutils literal notranslate"><span class="pre">ttnn</span></code> supports operator overloading, therefore operator <code class="docutils literal notranslate"><span class="pre">+</span></code> can be used instead of <code class="docutils literal notranslate"><span class="pre">torch.add</span></code></p>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[11]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="n">output_tensor</span> <span class="o">=</span> <span class="n">input_tensor_a</span> <span class="o">+</span> <span class="n">input_tensor_b</span>
+</pre></div>
+</div>
+</div>
+</section>
+<section id="Inspect-the-output-tensor-of-the-add-in-ttnn">
+<h2>Inspect the output tensor of the add in ttnn<a class="headerlink" href="#Inspect-the-output-tensor-of-the-add-in-ttnn" title="Permalink to this heading"></a>
+</h2>
+<p>As can be seen the tensor of the same shape, layout and dtype is produced</p>
+<div class="nbinput docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[12]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"shape: </span><span class="si">{</span><span class="n">output_tensor</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"dtype: </span><span class="si">{</span><span class="n">output_tensor</span><span class="o">.</span><span class="n">dtype</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"layout: </span><span class="si">{</span><span class="n">output_tensor</span><span class="o">.</span><span class="n">layout</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<div class="nboutput nblast docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area docutils container">
+<div class="highlight"><pre>
+shape: ttnn.Shape([32, 32])
+dtype: DataType.BFLOAT16
+layout: Layout.TILE
+</pre></div>
+</div>
+</div>
+<p>In general we expect layout and dtype to stay the same when running most operations unless explicit arguments to modify them are passed in. However, there are obvious exceptions like an embedding operation that takes in <code class="docutils literal notranslate"><span class="pre">ttnn.uint32</span></code> and produces <code class="docutils literal notranslate"><span class="pre">ttnn.bfloat16</span></code></p>
+</section>
+<section id="Convert-to-torch-and-inspect-the-attributes-of-the-torch-tensor">
+<h2>Convert to torch and inspect the attributes of the torch tensor<a class="headerlink" href="#Convert-to-torch-and-inspect-the-attributes-of-the-torch-tensor" title="Permalink to this heading"></a>
+</h2>
+<p>When converting the tensor to torch, <code class="docutils literal notranslate"><span class="pre">ttnn.to_torch</span></code> will move the tensor from the device, convert to tile layout and figure out the best data type to use on the torch side</p>
+<div class="nbinput docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[13]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="n">output_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">to_torch</span><span class="p">(</span><span class="n">output_tensor</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"shape: </span><span class="si">{</span><span class="n">output_tensor</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">"dtype: </span><span class="si">{</span><span class="n">output_tensor</span><span class="o">.</span><span class="n">dtype</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<div class="nboutput nblast docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area docutils container">
+<div class="highlight"><pre>
+shape: torch.Size([32, 32])
+dtype: torch.bfloat16
+</pre></div>
+</div>
+</div>
+</section>
+<section id="Close-the-device">
+<h2>Close the device<a class="headerlink" href="#Close-the-device" title="Permalink to this heading"></a>
+</h2>
+<p>Close the handle the device. This is a very important step as the device can hang currently if not closed properly</p>
+<div class="nbinput docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[14]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="n">ttnn</span><span class="o">.</span><span class="n">close_device</span><span class="p">(</span><span class="n">device</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<div class="nboutput nblast docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area docutils container">
+<div class="highlight"><pre>
+<span style="color: rgb(0,128,0)">                  Metal</span> | <span class="ansi-bold" style="color: rgb(100,149,237)">INFO    </span> | Closing device 0
+<span style="color: rgb(0,128,0)">                  Metal</span> | <span class="ansi-bold" style="color: rgb(100,149,237)">INFO    </span> | Disabling and clearing program cache on device 0
+</pre></div>
+</div>
+</div>
+</section>
+</section>
+
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="../tensor_and_add_operation.html" class="btn btn-neutral float-left" title="Tensor and Add Operation" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="../matmul.html" class="btn btn-neutral float-right" title="Matmul Operation" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright Tenstorrent.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
+    <span class="rst-current-version" data-toggle="rst-current-version">
+        Version: <span id="current-version">latest</span>
+        <span class="fa fa-caret-down"></span>
+    </span>
+    <div class="rst-other-versions">
+        <dl id="version-list">
+            <dt>Versions</dt>
+        </dl>
+        <br>
+        </dl>
+    </div>
+</div>
+
+<script>
+const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/dimitri/test-versioned-docs/docs/published_versions.json';
+
+async function loadVersions() {
+    try {
+        const response = await fetch(VERSIONS_URL);
+        const data = await response.json();
+        const versionList = document.getElementById('version-list');
+        const projectCode = location.pathname.split('/')[3];
+
+        data.versions.forEach(version => {
+            const dd = document.createElement('dd');
+            const link = document.createElement('a');
+            link.href = `https://tenstorrent-docs-test.github.io/tt-metal/${version}/${projectCode}/index.html`;
+            link.textContent = version;
+            dd.appendChild(link);
+            versionList.appendChild(dd);
+        });
+    } catch (error) {
+        console.error('Error loading versions:', error);
+    }
+}
+
+loadVersions();
+
+function getCurrentVersion() {
+    return window.location.pathname.split('/')[2];
+}
+document.getElementById('current-version').textContent = getCurrentVersion();
+
+</script><script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

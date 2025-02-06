@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Install &mdash; TT-Metalium  documentation</title>
+      <link rel="stylesheet" href="_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="_static/tt_theme.css" type="text/css" />
+    <link rel="shortcut icon" href="_static/favicon.png"/>
+    <link rel="canonical" href="/tt-metalium/latest/installing.html" />
+  <!--[if lt IE 9]>
+    <script src="_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="_static/jquery.js?v=5d32c60e"></script>
+        <script src="_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script data-url_root="./" id="documentation_options" src="_static/documentation_options.js?v=b3ba4146"></script>
+        <script src="_static/doctools.js?v=888ff710"></script>
+        <script src="_static/sphinx_highlight.js?v=4825356b"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="genindex.html" />
+    <link rel="search" title="Search" href="search.html" />
+    <link rel="next" title="Programming Model" href="tt_metal/programming_model/index.html" />
+    <link rel="prev" title="Getting Started" href="get_started/get_started.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+
+
+<a href="https://docs.tenstorrent.com/">
+    <img src="_static/tt_logo.svg" class="logo" alt="Logo"/>
+</a>
+
+<a href="index.html">
+    TT-Metalium
+</a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Get Started</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="get_started/get_started.html">Getting Started</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Install</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#installation-steps">Installation Steps</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#step-1-driver-firmware">Step 1. Driver &amp; Firmware</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#step-2-system-level-dependencies">Step 2. System-level dependencies</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#step-3-install-and-start-using-tt-nn-and-tt-metalium">Step 3. Install and start using TT-NN and TT-Metalium!</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#option-1-from-source">Option 1: From source</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#option-2-from-wheel">Option 2: From wheel</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#option-3-from-docker-release-image">Option 3: From Docker Release Image</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#step-5-optional-software-dependencies-for-codebase-contributions">Step 5. (Optional) Software dependencies for codebase contributions</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">TT-Metalium</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="tt_metal/programming_model/index.html">Programming Model</a></li>
+<li class="toctree-l1"><a class="reference internal" href="tt_metal/apis/index.html">APIs</a></li>
+<li class="toctree-l1"><a class="reference internal" href="tt_metal/examples/index.html">Programming Examples</a></li>
+<li class="toctree-l1"><a class="reference internal" href="tools/index.html">Tools</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Resources</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="resources/support.html">Support</a></li>
+<li class="toctree-l1"><a class="reference internal" href="resources/contributing.html">Contributing as a developer</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="index.html">TT-Metalium</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">Install</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="_sources/installing.md.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="install">
+<h1>Install<a class="headerlink" href="#install" title="Permalink to this heading"></a>
+</h1>
+<p>These instructions will guide you through the installation of Tenstorrent system tools and drivers, followed by the installation of TT-Metalium and TT-NN.</p>
+<blockquote>
+<div>
+<p>[!IMPORTANT]</p>
+<p>If you are using a release version of this software, please check the installation instructions packaged with that version. You can find them in either the release assets for that version, or in the source files for that version tag.</p>
+</div>
+</blockquote>
+<hr class="docutils">
+<section id="installation-steps">
+<h2>Installation Steps<a class="headerlink" href="#installation-steps" title="Permalink to this heading"></a>
+</h2>
+<section id="step-1-driver-firmware">
+<h3>Step 1. Driver &amp; Firmware<a class="headerlink" href="#step-1-driver-firmware" title="Permalink to this heading"></a>
+</h3>
+<p>Follow the Software Setup instructions for your specific board or system provided on our <a class="reference external" href="https://docs.tenstorrent.com">general docs</a>.</p>
+<p>If you have purchased a Grayskull card, you will find the instructions <a class="reference external" href="https://docs.tenstorrent.com/aibs/grayskull/installation.html">here</a>.</p>
+<p>Note the current compatability matrix:</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Device</p></th>
+<th class="head"><p>OS</p></th>
+<th class="head"><p>Python</p></th>
+<th class="head"><p>Driver (TT-KMD)</p></th>
+<th class="head"><p>Firmware (TT-Flash)</p></th>
+<th class="head"><p>TT-SMI</p></th>
+<th class="head"><p>TT-Topology</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>Grayskull</p></td>
+<td><p>Ubuntu 20.04</p></td>
+<td><p>3.8.10</p></td>
+<td><p>v1.29</p></td>
+<td><p>fw_pack-80.9.0.0 (v80.9.0.0)</p></td>
+<td><p>v2.2.0 or above</p></td>
+<td><p>N/A</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>Wormhole</p></td>
+<td><p>Ubuntu 20.04</p></td>
+<td><p>3.8.10</p></td>
+<td><p>v1.29</p></td>
+<td><p>fw_pack-80.13.0.0 (v80.13.0.0)</p></td>
+<td><p>v2.2.0 or above</p></td>
+<td><p>N/A</p></td>
+</tr>
+<tr class="row-even">
+<td><p>T3000 (Wormhole)</p></td>
+<td><p>Ubuntu 20.04</p></td>
+<td><p>3.8.10</p></td>
+<td><p>v1.29</p></td>
+<td><p>fw_pack-80.13.0.0 (v80.13.0.0)</p></td>
+<td><p>v2.2.0 or above</p></td>
+<td><p>v1.1.3 or above, <code class="docutils literal notranslate"><span class="pre">mesh</span></code> config</p></td>
+</tr>
+</tbody>
+</table>
+</section>
+<hr class="docutils">
+<section id="step-2-system-level-dependencies">
+<h3>Step 2. System-level dependencies<a class="headerlink" href="#step-2-system-level-dependencies" title="Permalink to this heading"></a>
+</h3>
+<div class="highlight-sh notranslate">
+<div class="highlight"><pre><span></span>sudo<span class="w"> </span>./install_dependencies.sh
+</pre></div>
+</div>
+<ul class="simple">
+<li>
+<p>Note: <code class="docutils literal notranslate"><span class="pre">CMake</span> <span class="pre">3.16</span></code> is the targetted required version of <code class="docutils literal notranslate"><span class="pre">CMake</span></code> as it aligns with the default from <code class="docutils literal notranslate"><span class="pre">Ubuntu</span> <span class="pre">20.04</span></code>. Some advanced build configurations like unity builds require <code class="docutils literal notranslate"><span class="pre">CMake</span> <span class="pre">3.20</span></code>.</p>
+<ul>
+<li><p>To install <code class="docutils literal notranslate"><span class="pre">CMake</span> <span class="pre">3.20</span></code> see: https://github.com/tenstorrent/tt-metal/blob/4d7730d3e2d22c51d62baa1bfed861b557d9a3c0/dockerfile/ubuntu-20.04-amd64.Dockerfile#L9-L14</p></li>
+</ul>
+</li>
+</ul>
+</section>
+<hr class="docutils">
+<section id="step-3-install-and-start-using-tt-nn-and-tt-metalium">
+<h3>Step 3. Install and start using TT-NN and TT-Metalium!<a class="headerlink" href="#step-3-install-and-start-using-tt-nn-and-tt-metalium" title="Permalink to this heading"></a>
+</h3>
+<blockquote>
+<div>
+<p>[!NOTE]</p>
+<p>You may choose to install from either source, a Python wheel, or Docker release image.</p>
+<p>However, no matter your method, in order to use our pre-built models or to
+follow along with the documentation and tutorials to get started, you will
+still need the source code.</p>
+<p>If you do not want to use the models or follow the tutorials and want to
+immediately start using the API, you may install just the wheel or get the release Docker container.</p>
+</div>
+</blockquote>
+<ol class="arabic simple">
+<li><p>Install git and git-lfs.</p></li>
+</ol>
+<div class="highlight-sh notranslate">
+<div class="highlight"><pre><span></span>sudo<span class="w"> </span>apt<span class="w"> </span>install<span class="w"> </span>git<span class="w"> </span>git-lfs
+</pre></div>
+</div>
+<ol class="arabic simple" start="2">
+<li><p>Clone the repo.</p></li>
+</ol>
+<div class="highlight-sh notranslate">
+<div class="highlight"><pre><span></span>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/tenstorrent/tt-metal.git<span class="w"> </span>--recurse-submodules
+<span class="nb">cd</span><span class="w"> </span>tt-metal
+git<span class="w"> </span>submodule<span class="w"> </span>foreach<span class="w"> </span><span class="s1">'git lfs fetch --all &amp;&amp; git lfs pull'</span>
+</pre></div>
+</div>
+<ol class="arabic simple" start="3">
+<li><p>Install either from source, or from our release wheel. Note that if you are
+going to try using the model demos, we highly recommend you install from
+source.</p></li>
+</ol>
+<section id="option-1-from-source">
+<h4>Option 1: From source<a class="headerlink" href="#option-1-from-source" title="Permalink to this heading"></a>
+</h4>
+<p>We use CMake for our build flows.</p>
+<p>Set up the environment variables and invoke our build scripts. Note that for
+source builds, you must set these environment variables every time.</p>
+<div class="highlight-sh notranslate">
+<div class="highlight"><pre><span></span><span class="nb">export</span><span class="w"> </span><span class="nv">ARCH_NAME</span><span class="o">=</span>&lt;ARCH_NAME&gt;
+<span class="nb">export</span><span class="w"> </span><span class="nv">TT_METAL_HOME</span><span class="o">=</span><span class="k">$(</span><span class="nb">pwd</span><span class="k">)</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">PYTHONPATH</span><span class="o">=</span><span class="k">$(</span><span class="nb">pwd</span><span class="k">)</span>
+./build_metal.sh
+
+<span class="c1"># If you would like an out-of-the-box virtual environment to use,</span>
+./create_venv.sh
+<span class="nb">source</span><span class="w"> </span>python_env/bin/activate
+</pre></div>
+</div>
+<p>where <code class="docutils literal notranslate"><span class="pre">ARCH_NAME</span></code> is one of <code class="docutils literal notranslate"><span class="pre">grayskull</span></code>, <code class="docutils literal notranslate"><span class="pre">wormhole_b0</span></code>, or <code class="docutils literal notranslate"><span class="pre">blackhole</span></code>,
+depending on your Tenstorrent card type.</p>
+<blockquote>
+<div>
+<p>[!NOTE]</p>
+<p>Note about Python environments: You do not have to use <code class="docutils literal notranslate"><span class="pre">create_venv.sh</span></code>. If you
+are less familiar with Python and its various environment tools, just use
+<code class="docutils literal notranslate"><span class="pre">create_venv.sh</span></code> as shown above and the pre-built environment. If you choose
+to install in your custom environment, please note that you may run into
+compatibility issues between dependencies. It is up to the user to ensure
+that all the packages in their environment are compatible with each other.</p>
+<p>If you do choose to manage your own environment, please note that you must
+use Pip 20.1.1 or lower to install this project. This is the highest version
+of Pip that supports editable installs in the way that we use it.</p>
+</div>
+</blockquote>
+</section>
+<section id="option-2-from-wheel">
+<h4>Option 2: From wheel<a class="headerlink" href="#option-2-from-wheel" title="Permalink to this heading"></a>
+</h4>
+<p>Download the latest wheel from our
+<a class="reference external" href="https://github.com/tenstorrent/tt-metal/releases/latest">releases</a> page for
+the particular Tenstorrent card architecture that you have installed on your
+system. (ie. Grayskull, Wormhole, etc)</p>
+<p>Install the wheel using your Python environment manager of choice. For example,
+to install with <code class="docutils literal notranslate"><span class="pre">pip</span></code>:</p>
+<div class="highlight-sh notranslate">
+<div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span>&lt;wheel_file.whl&gt;
+</pre></div>
+</div>
+<ol class="arabic simple">
+<li><p>(For models users only) Set up environment for models</p></li>
+</ol>
+<p>If you are going to try our pre-built models in <code class="docutils literal notranslate"><span class="pre">models/</span></code>, then you must execute
+the following to:</p>
+<ul class="simple">
+<li><p>install their required dependencies</p></li>
+<li><p>set appropriate environment variables</p></li>
+<li><p>set the CPU performance governor to ensure high performance on the host</p></li>
+</ul>
+<div class="highlight-sh notranslate">
+<div class="highlight"><pre><span></span><span class="nb">export</span><span class="w"> </span><span class="nv">PYTHONPATH</span><span class="o">=</span><span class="k">$(</span><span class="nb">pwd</span><span class="k">)</span>
+pip<span class="w"> </span>install<span class="w"> </span>-r<span class="w"> </span>tt_metal/python_env/requirements-dev.txt
+sudo<span class="w"> </span>apt-get<span class="w"> </span>install<span class="w"> </span>cpufrequtils
+sudo<span class="w"> </span>cpupower<span class="w"> </span>frequency-set<span class="w"> </span>-g<span class="w"> </span>performance
+</pre></div>
+</div>
+</section>
+<section id="option-3-from-docker-release-image">
+<h4>Option 3: From Docker Release Image<a class="headerlink" href="#option-3-from-docker-release-image" title="Permalink to this heading"></a>
+</h4>
+<p>Download the latest Docker release from our <a class="reference external" href="https://github.com/orgs/tenstorrent/packages?q=tt-metalium-ubuntu&amp;amp;tab=packages&amp;amp;q=tt-metalium-ubuntu-20.04-amd64-release">Docker registry</a> page for
+the particular Tenstorrent card architecture that you have installed on your
+system. (ie. Grayskull, Wormhole, etc)</p>
+<div class="highlight-sh notranslate">
+<div class="highlight"><pre><span></span>docker<span class="w"> </span>pull<span class="w"> </span>ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-20.04-amd64-release/&lt;arch_name&gt;:latest-rc
+docker<span class="w"> </span>run<span class="w"> </span>--it<span class="w"> </span>--rm<span class="w"> </span>-v<span class="w"> </span>/dev/hugepages-1G:/dev/hugepages-1G<span class="w"> </span>--device<span class="w"> </span>/dev/tenstorrent<span class="w"> </span>ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-20.04-amd64-release/&lt;arch_name&gt;:latest-rc<span class="w"> </span>bash
+</pre></div>
+</div>
+<p>where <code class="docutils literal notranslate"><span class="pre">arch_name</span></code> is one of <code class="docutils literal notranslate"><span class="pre">grayskull</span></code>, <code class="docutils literal notranslate"><span class="pre">wormhole_b0</span></code>, or <code class="docutils literal notranslate"><span class="pre">blackhole</span></code>,
+depending on your Tenstorrent card type.</p>
+<p>When inside of the container,</p>
+<div class="highlight-sh notranslate">
+<div class="highlight"><pre><span></span>python3<span class="w"> </span>-c<span class="w"> </span><span class="s2">"import ttnn"</span>
+</pre></div>
+</div>
+<ol class="arabic simple" start="2">
+<li><p>Start coding</p></li>
+</ol>
+<p>To verify your installation, try the executing an example:</p>
+<div class="highlight-default notranslate">
+<div class="highlight"><pre><span></span><span class="n">python3</span> <span class="o">-</span><span class="n">m</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">examples</span><span class="o">.</span><span class="n">usage</span><span class="o">.</span><span class="n">run_op_on_device</span>
+</pre></div>
+</div>
+<p>You are all set! Visit the <a class="reference external" href="https://docs.tenstorrent.com/ttnn/latest/ttnn/usage.html#basic-examples">TT-NN Basic examples page</a> or get started with <a class="reference external" href="https://docs.tenstorrent.com/tt-metalium/latest/tt_metal/examples/index.html">simple kernels on TT-Metalium</a>.</p>
+</section>
+</section>
+<hr class="docutils">
+<section id="step-5-optional-software-dependencies-for-codebase-contributions">
+<h3>Step 5. (Optional) Software dependencies for codebase contributions<a class="headerlink" href="#step-5-optional-software-dependencies-for-codebase-contributions" title="Permalink to this heading"></a>
+</h3>
+<p>Please follow the next additional steps if you want to contribute to the codebase.</p>
+<ol class="arabic simple">
+<li><p>Install dependencies</p></li>
+</ol>
+<div class="highlight-sh notranslate">
+<div class="highlight"><pre><span></span>sudo<span class="w"> </span>apt<span class="w"> </span>install<span class="w"> </span>pandoc<span class="w"> </span>libtbb-dev<span class="w"> </span>libcapstone-dev<span class="w"> </span>pkg-config
+</pre></div>
+</div>
+<ol class="arabic simple" start="2">
+<li><p>Download and install <a class="reference external" href="https://www.doxygen.nl/download.html">Doxygen</a>, (v1.9 or higher, but less than v1.10)</p></li>
+</ol>
+</section>
+</section>
+</section>
+
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="get_started/get_started.html" class="btn btn-neutral float-left" title="Getting Started" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="tt_metal/programming_model/index.html" class="btn btn-neutral float-right" title="Programming Model" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright Tenstorrent.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
+    <span class="rst-current-version" data-toggle="rst-current-version">
+        Version: <span id="current-version">latest</span>
+        <span class="fa fa-caret-down"></span>
+    </span>
+    <div class="rst-other-versions">
+        <dl id="version-list">
+            <dt>Versions</dt>
+        </dl>
+        <br>
+        </dl>
+    </div>
+</div>
+
+<script>
+const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/dimitri/test-versioned-docs/docs/published_versions.json';
+
+async function loadVersions() {
+    try {
+        const response = await fetch(VERSIONS_URL);
+        const data = await response.json();
+        const versionList = document.getElementById('version-list');
+        const projectCode = location.pathname.split('/')[3];
+
+        data.versions.forEach(version => {
+            const dd = document.createElement('dd');
+            const link = document.createElement('a');
+            link.href = `https://tenstorrent-docs-test.github.io/tt-metal/${version}/${projectCode}/index.html`;
+            link.textContent = version;
+            dd.appendChild(link);
+            versionList.appendChild(dd);
+        });
+    } catch (error) {
+        console.error('Error loading versions:', error);
+    }
+}
+
+loadVersions();
+
+function getCurrentVersion() {
+    return window.location.pathname.split('/')[2];
+}
+document.getElementById('current-version').textContent = getCurrentVersion();
+
+</script><script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

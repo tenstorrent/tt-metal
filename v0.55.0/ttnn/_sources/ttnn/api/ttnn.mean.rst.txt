@@ -1,0 +1,8 @@
+﻿ttnn.mean
+=========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.mean:
+
+.. autofastoperation:: ttnn.mean

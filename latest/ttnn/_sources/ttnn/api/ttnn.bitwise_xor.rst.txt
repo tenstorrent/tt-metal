@@ -1,0 +1,8 @@
+﻿ttnn.bitwise\_xor
+=================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.bitwise_xor:
+
+.. autofastoperation:: ttnn.bitwise_xor

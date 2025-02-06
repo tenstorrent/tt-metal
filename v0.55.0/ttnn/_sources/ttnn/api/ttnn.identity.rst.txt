@@ -1,0 +1,8 @@
+﻿ttnn.identity
+=============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.identity:
+
+.. autofastoperation:: ttnn.identity

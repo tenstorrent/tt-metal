@@ -1,0 +1,8 @@
+﻿ttnn.upsample
+=============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.upsample:
+
+.. autofastoperation:: ttnn.upsample

@@ -1,0 +1,8 @@
+﻿ttnn.assign\_bw
+===============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.assign_bw:
+
+.. autofastoperation:: ttnn.assign_bw

@@ -1,0 +1,8 @@
+﻿ttnn.log
+========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.log:
+
+.. autofastoperation:: ttnn.log

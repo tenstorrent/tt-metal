@@ -1,0 +1,8 @@
+﻿ttnn.leaky\_relu
+================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.leaky_relu:
+
+.. autofastoperation:: ttnn.leaky_relu

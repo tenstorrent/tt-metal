@@ -1,0 +1,8 @@
+﻿ttnn.trunc\_bw
+==============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.trunc_bw:
+
+.. autofastoperation:: ttnn.trunc_bw

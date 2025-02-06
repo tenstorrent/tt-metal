@@ -1,0 +1,8 @@
+﻿ttnn.bitwise\_right\_shift
+==========================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.bitwise_right_shift:
+
+.. autofastoperation:: ttnn.bitwise_right_shift

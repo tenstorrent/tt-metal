@@ -1,0 +1,2461 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TT-LIB &mdash; TT-NN  documentation</title>
+      <link rel="stylesheet" href="../../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../_static/tt_theme.css" type="text/css" />
+    <link rel="shortcut icon" href="../../_static/favicon.png"/>
+    <link rel="canonical" href="/ttnn/latest/ttnn/dependencies/tt_lib.html" />
+  <!--[if lt IE 9]>
+    <script src="../../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../../_static/jquery.js?v=5d32c60e"></script>
+        <script src="../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script data-url_root="../../" id="documentation_options" src="../../_static/documentation_options.js?v=b3ba4146"></script>
+        <script src="../../_static/doctools.js?v=888ff710"></script>
+        <script src="../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script>window.MathJax = {"tex": {"inlineMath": [["$", "$"], ["\\(", "\\)"]], "processEscapes": true}, "options": {"ignoreHtmlClass": "tex2jax_ignore|mathjax_ignore|document", "processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
+        <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    <script src="../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+    <link rel="next" title="Tensor" href="tensor.html" />
+    <link rel="prev" title="Dependencies" href="index.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+
+
+<a href="https://docs.tenstorrent.com/">
+    <img src="../../_static/tt_logo.svg" class="logo" alt="Logo"/>
+</a>
+
+<a href="../../index.html">
+    TT-NN
+</a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">TTNN</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../about.html">What is ttnn?</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../installing.html">Install</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../usage.html">Using ttnn</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../tensor.html">Tensor</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../api.html">APIs</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../tutorials.html">Tutorials</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../onboarding.html">Onboarding New Functionality</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../converting_torch_model_to_ttnn.html">Converting torch Model to ttnn</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../adding_new_ttnn_operation.html">Adding New ttnn Operation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../profiling_ttnn_operations.html">Profiling ttnn Operations</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="index.html">Dependencies</a><ul class="current">
+<li class="toctree-l2 current"><a class="current reference internal" href="#">TT-LIB</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#overview">Overview</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#operation-infrastructure">Operation Infrastructure</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#profiler">Profiler</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#fast-dispatch">Fast Dispatch</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#program-caching">Program Caching</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#logs">Logs</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#tt-lib-api-through-tt-lib">TT-LIB API through <code class="docutils literal notranslate"><span class="pre">tt_lib</span></code></a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#primary-operations">Primary Operations</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#enums">Enums</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#fallback-operations">Fallback Operations</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#tt_lib.fallback_ops.full"><code class="docutils literal notranslate"><span class="pre">full()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#tt_lib.fallback_ops.tensor_slice"><code class="docutils literal notranslate"><span class="pre">tensor_slice()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#tt_lib.fallback_ops.reshape"><code class="docutils literal notranslate"><span class="pre">reshape()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#tt_lib.fallback_ops.chunk"><code class="docutils literal notranslate"><span class="pre">chunk()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#tt_lib.fallback_ops.conv2d"><code class="docutils literal notranslate"><span class="pre">conv2d()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#tt_lib.fallback_ops.group_norm"><code class="docutils literal notranslate"><span class="pre">group_norm()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#tt_lib.fallback_ops.layer_norm"><code class="docutils literal notranslate"><span class="pre">layer_norm()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#tt_lib.fallback_ops.pad"><code class="docutils literal notranslate"><span class="pre">pad()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#tt_lib.fallback_ops.interpolate"><code class="docutils literal notranslate"><span class="pre">interpolate()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#tt_lib.fallback_ops.repeat"><code class="docutils literal notranslate"><span class="pre">repeat()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#tt_lib.fallback_ops.repeat_interleave"><code class="docutils literal notranslate"><span class="pre">repeat_interleave()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#tt_lib.fallback_ops.concat"><code class="docutils literal notranslate"><span class="pre">concat()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#tt_lib.fallback_ops.silu"><code class="docutils literal notranslate"><span class="pre">silu()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#tt_lib.fallback_ops.softmax"><code class="docutils literal notranslate"><span class="pre">softmax()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#tt_lib.fallback_ops.Conv2d"><code class="docutils literal notranslate"><span class="pre">Conv2d</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#tt_lib.fallback_ops.BatchNorm2d"><code class="docutils literal notranslate"><span class="pre">BatchNorm2d</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#tt_lib.fallback_ops.GroupNorm"><code class="docutils literal notranslate"><span class="pre">GroupNorm</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#tt_lib.fallback_ops.LayerNorm"><code class="docutils literal notranslate"><span class="pre">LayerNorm</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#tt_lib.fallback_ops.MaxPool2d"><code class="docutils literal notranslate"><span class="pre">MaxPool2d</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#tt_lib.fallback_ops.AdaptiveAvgPool2d"><code class="docutils literal notranslate"><span class="pre">AdaptiveAvgPool2d</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#tt_lib.fallback_ops.ceil"><code class="docutils literal notranslate"><span class="pre">ceil</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#tt_lib.fallback_ops.floor"><code class="docutils literal notranslate"><span class="pre">floor</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#tt_lib.fallback_ops.trunc"><code class="docutils literal notranslate"><span class="pre">trunc</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#tt_lib.fallback_ops.unary_fmod"><code class="docutils literal notranslate"><span class="pre">unary_fmod</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#tt_lib.fallback_ops.binary_fmod"><code class="docutils literal notranslate"><span class="pre">binary_fmod</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#tt_lib.fallback_ops.bitwise_not"><code class="docutils literal notranslate"><span class="pre">bitwise_not</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#tt_lib.fallback_ops.unary_bitwise_or"><code class="docutils literal notranslate"><span class="pre">unary_bitwise_or</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#tt_lib.fallback_ops.unary_bitwise_and"><code class="docutils literal notranslate"><span class="pre">unary_bitwise_and</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#tt_lib.fallback_ops.unary_bitwise_xor"><code class="docutils literal notranslate"><span class="pre">unary_bitwise_xor</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#tt_lib.fallback_ops.binary_bitwise_or"><code class="docutils literal notranslate"><span class="pre">binary_bitwise_or</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#tt_lib.fallback_ops.binary_bitwise_and"><code class="docutils literal notranslate"><span class="pre">binary_bitwise_and</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#tt_lib.fallback_ops.binary_bitwise_xor"><code class="docutils literal notranslate"><span class="pre">binary_bitwise_xor</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#tt_lib.fallback_ops.unary_bitwise_left_shift"><code class="docutils literal notranslate"><span class="pre">unary_bitwise_left_shift</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#tt_lib.fallback_ops.unary_bitwise_right_shift"><code class="docutils literal notranslate"><span class="pre">unary_bitwise_right_shift</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#tt_lib.fallback_ops.binary_bitwise_left_shift"><code class="docutils literal notranslate"><span class="pre">binary_bitwise_left_shift</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#tt_lib.fallback_ops.binary_bitwise_right_shift"><code class="docutils literal notranslate"><span class="pre">binary_bitwise_right_shift</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#tt_lib.fallback_ops.torch_argmax"><code class="docutils literal notranslate"><span class="pre">torch_argmax</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="#tt_lib.fallback_ops.torch_argmin"><code class="docutils literal notranslate"><span class="pre">torch_argmin</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#experimental-operations">Experimental Operations</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#fused-operations-from-tt-lib-mini-graph-library">Fused Operations from <code class="docutils literal notranslate"><span class="pre">tt_lib</span></code> Mini-Graph Library</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#complex-operations-type-2">Complex Operations (Type 2)</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="tensor.html">Tensor</a></li>
+<li class="toctree-l2"><a class="reference internal" href="examples.html">Examples of Tensor and TT-LIB Use</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../demos.html">Building and Uplifting Demos</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Models</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../tt_metal_models/get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../tt_metal_models/get_performance.html">Performance</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Resources</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../resources/support.html">Support</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../resources/contributing.html">Contributing as a developer</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../index.html">TT-NN</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="index.html">Dependencies</a></li>
+      <li class="breadcrumb-item active">TT-LIB</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../_sources/ttnn/dependencies/tt_lib.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="tt-lib">
+<span id="id1"></span><h1>TT-LIB<a class="headerlink" href="#tt-lib" title="Permalink to this heading"></a>
+</h1>
+<section id="overview">
+<h2>Overview<a class="headerlink" href="#overview" title="Permalink to this heading"></a>
+</h2>
+<p>The <code class="docutils literal notranslate"><span class="pre">tt_lib</span></code> Python module is a
+unified Python interface to the Tensor library located within <code class="docutils literal notranslate"><span class="pre">tt_eager</span></code>. This library currently only supports 4 dimensional tensors with shape <code class="docutils literal notranslate"><span class="pre">[W,</span> <span class="pre">Z,</span> <span class="pre">Y,</span> <span class="pre">X]</span></code>, in ROW_MAJOR layout, and with BFLOAT16 data type.</p>
+<p>Some OPs in this library might change layout of input tensors and pad them to better match expectations of execution kernels on TT Accelerator device.
+These OPs will unpad the result tensor before it is returned to caller.</p>
+<p>There is a limitation that tensor in ROW_MAJOR layout on TT Accelerator device must have the size of last dimension <code class="docutils literal notranslate"><span class="pre">X</span></code> be divisible by 2.
+You can’t create these type of tensors on TT Accelerator device or send them to TT Accelerator device with <code class="docutils literal notranslate"><span class="pre">`ttnn.Tensor.to()</span></code>.
+However, you can supply these type of tensors to OPs from TT-LIB library as they can automatically pad the last dimension before moving the tensor
+to TT Accelerator device. To use this functionality, you must call <cite>ttnn.SetDefaultDevice(tt_device)</cite> to set your TT Accelerator device
+as the default device that will be used to execute operations on tensors that are on host machine.</p>
+<section id="operation-infrastructure">
+<h3>Operation Infrastructure<a class="headerlink" href="#operation-infrastructure" title="Permalink to this heading"></a>
+</h3>
+<p>TT-LIB has operation infrastructure which is used to launch, profile and cache operations generically.</p>
+<p>To add a new operation that can plug in to the infrastructure, all that’s needed is a struct that implements methods needed by operation interface.
+Below, is an example of how to declare a new on-device operation with all of the methods required by the interface.</p>
+<section id="new-device-operation">
+<h4>New Device Operation<a class="headerlink" href="#new-device-operation" title="Permalink to this heading"></a>
+</h4>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="k">struct</span><span class="w"> </span><span class="o">&lt;</span><span class="n">NewOperation</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kt">void</span><span class="w"> </span><span class="nf">validate</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">Tensor</span><span class="o">&gt;</span><span class="w"> </span><span class="o">&amp;</span><span class="n">input_tensors</span><span class="p">)</span><span class="w"> </span><span class="k">const</span><span class="p">;</span>
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">ttnn</span><span class="o">::</span><span class="n">SimpleShape</span><span class="o">&gt;</span><span class="w"> </span><span class="n">compute_output_shapes</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">Tensor</span><span class="o">&gt;</span><span class="w"> </span><span class="o">&amp;</span><span class="n">input_tensors</span><span class="p">)</span><span class="w"> </span><span class="k">const</span><span class="p">;</span>
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">Tensor</span><span class="o">&gt;</span><span class="w"> </span><span class="n">create_output_tensors</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">Tensor</span><span class="o">&gt;</span><span class="w"> </span><span class="o">&amp;</span><span class="n">input_tensors</span><span class="p">)</span><span class="w"> </span><span class="k">const</span><span class="p">;</span>
+<span class="w">    </span><span class="n">operation</span><span class="o">::</span><span class="n">ProgramWithCallbacks</span><span class="w"> </span><span class="nf">create_program</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">Tensor</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">input_tensors</span><span class="p">,</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">Tensor</span><span class="o">&gt;</span><span class="w"> </span><span class="o">&amp;</span><span class="n">output_tensors</span><span class="p">)</span><span class="w"> </span><span class="k">const</span><span class="p">;</span>
+<span class="p">};</span>
+</pre></div>
+</div>
+</section>
+<section id="new-device-operation-with-a-member">
+<h4>New Device Operation with a member<a class="headerlink" href="#new-device-operation-with-a-member" title="Permalink to this heading"></a>
+</h4>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="k">struct</span><span class="w"> </span><span class="o">&lt;</span><span class="n">NewOperation</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kt">int</span><span class="w"> </span><span class="n">some_member</span>
+
+<span class="w">    </span><span class="kt">void</span><span class="w"> </span><span class="n">validate</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">Tensor</span><span class="o">&gt;</span><span class="w"> </span><span class="o">&amp;</span><span class="n">input_tensors</span><span class="p">)</span><span class="w"> </span><span class="k">const</span><span class="p">;</span>
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">ttnn</span><span class="o">::</span><span class="n">SimpleShape</span><span class="o">&gt;</span><span class="w"> </span><span class="n">compute_output_shapes</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">Tensor</span><span class="o">&gt;</span><span class="w"> </span><span class="o">&amp;</span><span class="n">input_tensors</span><span class="p">)</span><span class="w"> </span><span class="k">const</span><span class="p">;</span>
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">Tensor</span><span class="o">&gt;</span><span class="w"> </span><span class="n">create_output_tensors</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">Tensor</span><span class="o">&gt;</span><span class="w"> </span><span class="o">&amp;</span><span class="n">input_tensors</span><span class="p">)</span><span class="w"> </span><span class="k">const</span><span class="p">;</span>
+<span class="w">    </span><span class="n">operation</span><span class="o">::</span><span class="n">ProgramWithCallbacks</span><span class="w"> </span><span class="nf">create_program</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">Tensor</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">input_tensors</span><span class="p">,</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">Tensor</span><span class="o">&gt;</span><span class="w"> </span><span class="o">&amp;</span><span class="n">output_tensors</span><span class="p">)</span><span class="w"> </span><span class="k">const</span><span class="p">;</span>
+<span class="p">};</span>
+</pre></div>
+</div>
+</section>
+<section id="new-device-operation-with-optional-input-tensors">
+<h4>New Device Operation with Optional Input Tensors<a class="headerlink" href="#new-device-operation-with-optional-input-tensors" title="Permalink to this heading"></a>
+</h4>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="k">struct</span><span class="w"> </span><span class="o">&lt;</span><span class="n">NewOperation</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kt">void</span><span class="w"> </span><span class="nf">validate</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">Tensor</span><span class="o">&gt;</span><span class="w"> </span><span class="o">&amp;</span><span class="n">input_tensors</span><span class="p">,</span>
+<span class="w">        </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">optional</span><span class="o">&lt;</span><span class="k">const</span><span class="w"> </span><span class="n">Tensor</span><span class="o">&gt;&gt;&amp;</span><span class="w"> </span><span class="n">optional_input_tensors</span><span class="p">)</span><span class="w"> </span><span class="k">const</span><span class="p">;</span>
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">ttnn</span><span class="o">::</span><span class="n">SimpleShape</span><span class="o">&gt;</span><span class="w"> </span><span class="n">compute_output_shapes</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">Tensor</span><span class="o">&gt;</span><span class="w"> </span><span class="o">&amp;</span><span class="n">input_tensors</span><span class="p">)</span><span class="w"> </span><span class="k">const</span><span class="p">;</span>
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">Tensor</span><span class="o">&gt;</span><span class="w"> </span><span class="n">create_output_tensors</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">Tensor</span><span class="o">&gt;</span><span class="w"> </span><span class="o">&amp;</span><span class="n">input_tensors</span><span class="p">)</span><span class="w"> </span><span class="k">const</span><span class="p">;</span>
+<span class="w">    </span><span class="n">operation</span><span class="o">::</span><span class="n">ProgramWithCallbacks</span><span class="w"> </span><span class="nf">create_program</span><span class="p">(</span>
+<span class="w">        </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">Tensor</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">input_tensors</span><span class="p">,</span>
+<span class="w">        </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">optional</span><span class="o">&lt;</span><span class="k">const</span><span class="w"> </span><span class="n">Tensor</span><span class="o">&gt;&gt;&amp;</span><span class="w"> </span><span class="n">optional_input_tensors</span><span class="p">,</span>
+<span class="w">        </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">Tensor</span><span class="o">&gt;</span><span class="w"> </span><span class="o">&amp;</span><span class="n">output_tensors</span><span class="p">)</span><span class="w"> </span><span class="k">const</span><span class="p">;</span>
+
+<span class="p">};</span>
+</pre></div>
+</div>
+</section>
+<section id="new-device-operation-with-optional-output-tensors">
+<h4>New Device Operation with Optional Output Tensors<a class="headerlink" href="#new-device-operation-with-optional-output-tensors" title="Permalink to this heading"></a>
+</h4>
+<p>If an operation is expected to leverage optional output tensors, please use instead the validate_with_output_tensors
+and create_output_tensors with the additional parameter for the output_tensors.</p>
+<div class="highlight-cpp notranslate">
+<div class="highlight"><pre><span></span><span class="k">struct</span><span class="w"> </span><span class="o">&lt;</span><span class="n">NewOperation</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kt">void</span><span class="w"> </span><span class="nf">validate_with_output_tensors</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">Tensor</span><span class="o">&gt;</span><span class="w"> </span><span class="o">&amp;</span><span class="n">input_tensors</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">optional</span><span class="o">&lt;</span><span class="n">Tensor</span><span class="o">&gt;&gt;&amp;</span><span class="w"> </span><span class="n">output_tensors</span><span class="p">)</span><span class="w"> </span><span class="k">const</span><span class="p">;</span>
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">ttnn</span><span class="o">::</span><span class="n">SimpleShape</span><span class="o">&gt;</span><span class="w"> </span><span class="n">compute_output_shapes</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">Tensor</span><span class="o">&gt;</span><span class="w"> </span><span class="o">&amp;</span><span class="n">input_tensors</span><span class="p">)</span><span class="w"> </span><span class="k">const</span><span class="p">;</span>
+<span class="w">    </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">optional</span><span class="o">&lt;</span><span class="n">Tensor</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="n">create_output_tensors</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">Tensor</span><span class="o">&gt;</span><span class="w"> </span><span class="o">&amp;</span><span class="n">input_tensors</span><span class="p">,</span><span class="w"> </span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">optional</span><span class="o">&lt;</span><span class="n">Tensor</span><span class="o">&gt;&gt;&amp;</span><span class="w"> </span><span class="n">output_tensors</span><span class="p">)</span><span class="w"> </span><span class="k">const</span><span class="p">;</span>
+<span class="w">    </span><span class="n">operation</span><span class="o">::</span><span class="n">ProgramWithOptionalOutputTensors</span><span class="w"> </span><span class="nf">create_program</span><span class="p">(</span><span class="k">const</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">Tensor</span><span class="o">&gt;&amp;</span><span class="w"> </span><span class="n">input_tensors</span><span class="p">,</span><span class="w"> </span><span class="n">std</span><span class="o">::</span><span class="n">vector</span><span class="o">&lt;</span><span class="n">std</span><span class="o">::</span><span class="n">optional</span><span class="o">&lt;</span><span class="n">Tensor</span><span class="o">&gt;&gt;</span><span class="w"> </span><span class="o">&amp;</span><span class="n">output_tensors</span><span class="p">)</span><span class="w"> </span><span class="k">const</span><span class="p">;</span>
+
+<span class="p">};</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="profiler">
+<h3>Profiler<a class="headerlink" href="#profiler" title="Permalink to this heading"></a>
+</h3>
+<p>Profiler is supported out of the box for any op.</p>
+<p>And there are 2 special methods that can be optionally implemented to set the preferred_name and parallelization_strategy.</p>
+<div class="highlight-default notranslate">
+<div class="highlight"><pre><span></span>// Implement `get_parallelization_strategy` to set the parallelization strategy on the profiler
+struct &lt;NewOperation&gt; {
+    &lt;ParallelizationStrategyEnum&gt; get_parallelization_strategy(const std::vector&lt;Tensor&gt; &amp;input_tensors) const;
+};
+</pre></div>
+</div>
+</section>
+<section id="fast-dispatch">
+<h3>Fast Dispatch<a class="headerlink" href="#fast-dispatch" title="Permalink to this heading"></a>
+</h3>
+<p>Fast dispatch allows programs/kernels to be enqueued to run, so host code does not have to wait for ops/programs to finish running.
+The enqueued programs run asynchronously to the host code.
+To wait for kernels to complete, either read a tensor from device to host with tensor.cpu:</p>
+<dl class="py function">
+<dt class="sig sig-object py" id="ttnn.Tensor.cpu">
+<span class="sig-prename descclassname"><span class="pre">ttnn.Tensor.</span></span><span class="sig-name descname"><span class="pre">cpu</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">self</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">ttnn._ttnn.tensor.Tensor</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">blocking</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">cq_id</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sub_device_ids</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">ttnn._ttnn.device.SubDeviceId</span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">[]</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">ttnn._ttnn.tensor.Tensor</span></a></span></span><a class="headerlink" href="#ttnn.Tensor.cpu" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Move TT Tensor from TT accelerator device to host device.</p>
+<p><code class="docutils literal notranslate"><span class="pre">sub_device_ids</span></code> can be used to specify which specific sub devices to wait on before reading the tensor from device memory.</p>
+<p>If it is not provided, device will stall waiting for all programs of the specified cq to finish before reading the tensor from device memory.</p>
+<div class="highlight-python notranslate">
+<div class="highlight"><pre><span></span><span class="n">tt_tensor</span> <span class="o">=</span> <span class="n">tt_tensor</span><span class="o">.</span><span class="n">cpu</span><span class="p">()</span>
+</pre></div>
+</div>
+</dd>
+</dl>
+
+<p>or to perform only a wait, use:</p>
+</section>
+<section id="program-caching">
+<h3>Program Caching<a class="headerlink" href="#program-caching" title="Permalink to this heading"></a>
+</h3>
+<p>Program caching provides an ability for an operation to cache the program and simply reload it the next time the same operation is used.</p>
+<p>It can be enabled by running:</p>
+<div class="highlight-default notranslate">
+<div class="highlight"><pre><span></span><span class="n">tt</span><span class="p">::</span><span class="n">tt_metal</span><span class="p">::</span><span class="n">program_cache</span><span class="p">::</span><span class="n">enable</span><span class="p">()</span>
+</pre></div>
+</div>
+<p>And it can be disabled by running:</p>
+<div class="highlight-default notranslate">
+<div class="highlight"><pre><span></span><span class="n">tt</span><span class="p">::</span><span class="n">tt_metal</span><span class="p">::</span><span class="n">program_cache</span><span class="p">::</span><span class="n">disable_and_clear</span><span class="p">()</span>
+</pre></div>
+</div>
+<p>Number of entries can be queried using:</p>
+<div class="highlight-default notranslate">
+<div class="highlight"><pre><span></span><span class="n">tt</span><span class="p">::</span><span class="n">tt_metal</span><span class="p">::</span><span class="n">program_cache</span><span class="p">::</span><span class="n">num_entries</span><span class="p">()</span>
+</pre></div>
+</div>
+<p>In order for an op to be cachable, it needs to implement the following:</p>
+<div class="highlight-default notranslate">
+<div class="highlight"><pre><span></span>struct &lt;NewOperation&gt; {
+   // Mandatory methods
+
+    // Return type of `create_program` needs to implement override_runtime_args_callback
+    // i.e.:
+    operation::ProgramWithCallbacks create_program(const std::vector&lt;Tensor&gt; &amp;input_tensors) const {
+
+        Program program{};
+
+        // ...
+
+        auto override_runtime_args_callback = [unary_reader_kernel_id, unary_writer_kernel_id](
+            const Program &amp;program,
+            const std::vector&lt;Buffer*&gt;&amp; input_buffers,
+            const std::vector&lt;Buffer*&gt;&amp; output_buffers
+        ) {
+
+            auto src_dram_buffer = input_buffers.at(0);
+            auto dst_dram_buffer = output_buffers.at(0);
+
+            CoreCoord core = {0, 0};
+
+            {
+                auto &amp;runtime_args = GetRuntimeArgs(program, unary_reader_kernel_id, core);
+                runtime_args[0] = src_dram_buffer-&gt;address();
+            }
+
+            {
+                auto &amp;runtime_args = GetRuntimeArgs(program, unary_writer_kernel_id, core);
+                runtime_args[0] = dst_dram_buffer-&gt;address();
+            }
+        };
+
+        return {std::move(program), override_runtime_args_callback};
+    }
+};
+</pre></div>
+</div>
+</section>
+<section id="logs">
+<h3>Logs<a class="headerlink" href="#logs" title="Permalink to this heading"></a>
+</h3>
+<p>To see logs related to operation infrastructure, use the following environment variables:</p>
+<div class="highlight-default notranslate">
+<div class="highlight"><pre><span></span><span class="n">export</span> <span class="n">TT_METAL_LOGGER_TYPES</span><span class="o">=</span><span class="n">Op</span>
+<span class="n">export</span> <span class="n">TT_METAL_LOGGER_LEVEL</span><span class="o">=</span><span class="n">Debug</span>
+</pre></div>
+</div>
+<p>The logs will print currently running op and information related to program caching. i.e.:</p>
+<div class="highlight-default notranslate">
+<div class="highlight"><pre><span></span><span class="n">Op</span> <span class="o">|</span> <span class="n">DEBUG</span>    <span class="o">|</span> <span class="n">Operation</span> <span class="n">Type</span><span class="p">:</span> <span class="n">silu</span> <span class="p">(</span><span class="n">fallback</span> <span class="n">operation</span><span class="p">)</span>
+<span class="n">Op</span> <span class="o">|</span> <span class="n">DEBUG</span>    <span class="o">|</span> <span class="n">Operation</span> <span class="n">Attributes</span><span class="p">:</span> <span class="p">()</span>
+<span class="n">Op</span> <span class="o">|</span> <span class="n">DEBUG</span>    <span class="o">|</span> <span class="n">Input</span> <span class="n">Tensors</span><span class="p">:</span> <span class="p">{</span><span class="n">tt</span><span class="p">::</span><span class="n">tt_metal</span><span class="p">::</span><span class="n">Tensor</span><span class="p">(</span><span class="n">storage</span><span class="o">=</span><span class="n">tt</span><span class="p">::</span><span class="n">tt_metal</span><span class="p">::</span><span class="n">DeviceStorage</span><span class="p">(</span><span class="n">memory_config</span><span class="o">=</span><span class="n">tt</span><span class="p">::</span><span class="n">tt_metal</span><span class="p">::</span><span class="n">MemoryConfig</span><span class="p">(</span><span class="n">memory_layout</span><span class="o">=</span><span class="n">tt</span><span class="p">::</span><span class="n">tt_metal</span><span class="p">::</span><span class="n">TensorMemoryLayout</span><span class="p">::</span><span class="n">INTERLEAVED</span><span class="p">,</span> <span class="n">buffer_type</span><span class="o">=</span><span class="n">tt</span><span class="p">::</span><span class="n">tt_metal</span><span class="p">::</span><span class="n">BufferType</span><span class="p">::</span><span class="n">DRAM</span><span class="p">)),</span> <span class="n">shape</span><span class="o">=</span><span class="p">{</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1280</span><span class="p">},</span> <span class="n">dtype</span><span class="o">=</span><span class="n">tt</span><span class="p">::</span><span class="n">tt_metal</span><span class="p">::</span><span class="n">DataType</span><span class="p">::</span><span class="n">BFLOAT16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">tt</span><span class="p">::</span><span class="n">tt_metal</span><span class="p">::</span><span class="n">Layout</span><span class="p">::</span><span class="n">ROW_MAJOR</span><span class="p">)}</span>
+<span class="n">Op</span> <span class="o">|</span> <span class="n">DEBUG</span>    <span class="o">|</span> <span class="n">Operation</span> <span class="n">Type</span><span class="p">:</span> <span class="n">tt</span><span class="p">::</span><span class="n">tt_metal</span><span class="p">::</span><span class="n">LayoutConversionOnHost</span>
+<span class="n">Op</span> <span class="o">|</span> <span class="n">DEBUG</span>    <span class="o">|</span> <span class="n">Operation</span> <span class="n">Attributes</span><span class="p">:</span> <span class="p">(</span><span class="n">target_layout</span><span class="o">=</span><span class="n">tt</span><span class="p">::</span><span class="n">tt_metal</span><span class="p">::</span><span class="n">Layout</span><span class="p">::</span><span class="n">TILE</span><span class="p">)</span>
+<span class="n">Op</span> <span class="o">|</span> <span class="n">DEBUG</span>    <span class="o">|</span> <span class="n">Input</span> <span class="n">Tensors</span><span class="p">:</span> <span class="p">{</span><span class="n">tt</span><span class="p">::</span><span class="n">tt_metal</span><span class="p">::</span><span class="n">Tensor</span><span class="p">(</span><span class="n">storage</span><span class="o">=</span><span class="n">tt</span><span class="p">::</span><span class="n">tt_metal</span><span class="p">::</span><span class="n">OwnedStorage</span><span class="p">(),</span> <span class="n">shape</span><span class="o">=</span><span class="p">{</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">320</span><span class="p">,</span> <span class="mi">1280</span><span class="p">},</span> <span class="n">dtype</span><span class="o">=</span><span class="n">tt</span><span class="p">::</span><span class="n">tt_metal</span><span class="p">::</span><span class="n">DataType</span><span class="p">::</span><span class="n">BFLOAT16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">tt</span><span class="p">::</span><span class="n">tt_metal</span><span class="p">::</span><span class="n">Layout</span><span class="p">::</span><span class="n">ROW_MAJOR</span><span class="p">)}</span>
+<span class="o">...</span>
+<span class="n">Op</span> <span class="o">|</span> <span class="n">DEBUG</span>    <span class="o">|</span> <span class="n">Program</span> <span class="n">Cache</span><span class="p">:</span> <span class="n">MISS</span> <span class="o">-</span> <span class="n">Compiling</span> <span class="n">new</span> <span class="n">program</span> <span class="s2">"tt::tt_metal::EltwiseUnary(op_type=tt::tt_metal::UnaryOpType::Enum::GELU, param=1)_tt::tt_metal::Tensor(storage=tt::tt_metal::DeviceStorage(memory_config=tt::tt_metal::MemoryConfig(memory_layout=tt::tt_metal::TensorMemoryLayout::INTERLEAVED, buffer_type=tt::tt_metal::BufferType::DRAM)), shape={1, 1, 32, 32}, dtype=tt::tt_metal::DataType::BFLOAT16, layout=tt::tt_metal::Layout::TILE)"</span>
+<span class="n">Op</span> <span class="o">|</span> <span class="n">DEBUG</span>    <span class="o">|</span> <span class="n">Operation</span> <span class="n">Name</span><span class="p">:</span> <span class="n">tt</span><span class="p">::</span><span class="n">tt_metal</span><span class="p">::</span><span class="n">EltwiseUnary</span>
+<span class="n">Op</span> <span class="o">|</span> <span class="n">DEBUG</span>    <span class="o">|</span> <span class="n">Operation</span> <span class="n">Attributes</span><span class="p">:</span> <span class="p">(</span><span class="n">op_type</span><span class="o">=</span><span class="n">tt</span><span class="p">::</span><span class="n">tt_metal</span><span class="p">::</span><span class="n">UnaryOpType</span><span class="p">::</span><span class="n">Enum</span><span class="p">::</span><span class="n">GELU</span><span class="p">,</span> <span class="n">param</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+<span class="n">Op</span> <span class="o">|</span> <span class="n">DEBUG</span>    <span class="o">|</span> <span class="n">Input</span> <span class="n">Tensors</span><span class="p">:</span> <span class="p">{</span><span class="n">tt</span><span class="p">::</span><span class="n">tt_metal</span><span class="p">::</span><span class="n">Tensor</span><span class="p">(</span><span class="n">storage</span><span class="o">=</span><span class="n">tt</span><span class="p">::</span><span class="n">tt_metal</span><span class="p">::</span><span class="n">DeviceStorage</span><span class="p">(</span><span class="n">memory_config</span><span class="o">=</span><span class="n">tt</span><span class="p">::</span><span class="n">tt_metal</span><span class="p">::</span><span class="n">MemoryConfig</span><span class="p">(</span><span class="n">memory_layout</span><span class="o">=</span><span class="n">tt</span><span class="p">::</span><span class="n">tt_metal</span><span class="p">::</span><span class="n">TensorMemoryLayout</span><span class="p">::</span><span class="n">INTERLEAVED</span><span class="p">,</span> <span class="n">buffer_type</span><span class="o">=</span><span class="n">tt</span><span class="p">::</span><span class="n">tt_metal</span><span class="p">::</span><span class="n">BufferType</span><span class="p">::</span><span class="n">DRAM</span><span class="p">)),</span> <span class="n">shape</span><span class="o">=</span><span class="p">{</span><span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">32</span><span class="p">,</span> <span class="mi">32</span><span class="p">},</span> <span class="n">dtype</span><span class="o">=</span><span class="n">tt</span><span class="p">::</span><span class="n">tt_metal</span><span class="p">::</span><span class="n">DataType</span><span class="p">::</span><span class="n">BFLOAT16</span><span class="p">,</span> <span class="n">layout</span><span class="o">=</span><span class="n">tt</span><span class="p">::</span><span class="n">tt_metal</span><span class="p">::</span><span class="n">Layout</span><span class="p">::</span><span class="n">TILE</span><span class="p">)}</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="tt-lib-api-through-tt-lib">
+<h2>TT-LIB API through <code class="docutils literal notranslate"><span class="pre">tt_lib</span></code><a class="headerlink" href="#tt-lib-api-through-tt-lib" title="Permalink to this heading"></a>
+</h2>
+<section id="primary-operations">
+<h3>Primary Operations<a class="headerlink" href="#primary-operations" title="Permalink to this heading"></a>
+</h3>
+<dl class="py function">
+<dt class="sig sig-object py" id="ttnn.operations.moreh.softmax">
+<span class="sig-prename descclassname"><span class="pre">ttnn.operations.moreh.</span></span><span class="sig-name descname"><span class="pre">softmax</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#ttnn.operations.moreh.softmax" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Moreh Softmax Operation</p>
+</dd>
+</dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="ttnn.operations.moreh.softmax_backward">
+<span class="sig-prename descclassname"><span class="pre">ttnn.operations.moreh.</span></span><span class="sig-name descname"><span class="pre">softmax_backward</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#ttnn.operations.moreh.softmax_backward" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Moreh Softmax Backward Operation</p>
+</dd>
+</dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="ttnn.operations.moreh.softmin">
+<span class="sig-prename descclassname"><span class="pre">ttnn.operations.moreh.</span></span><span class="sig-name descname"><span class="pre">softmin</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#ttnn.operations.moreh.softmin" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Moreh Softmin Operation</p>
+</dd>
+</dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="ttnn.operations.moreh.softmin_backward">
+<span class="sig-prename descclassname"><span class="pre">ttnn.operations.moreh.</span></span><span class="sig-name descname"><span class="pre">softmin_backward</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#ttnn.operations.moreh.softmin_backward" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Moreh Softmin Backward Operation</p>
+</dd>
+</dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="ttnn.operations.moreh.logsoftmax">
+<span class="sig-prename descclassname"><span class="pre">ttnn.operations.moreh.</span></span><span class="sig-name descname"><span class="pre">logsoftmax</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#ttnn.operations.moreh.logsoftmax" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Moreh LogSoftmax Operation</p>
+</dd>
+</dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="ttnn.operations.moreh.logsoftmax_backward">
+<span class="sig-prename descclassname"><span class="pre">ttnn.operations.moreh.</span></span><span class="sig-name descname"><span class="pre">logsoftmax_backward</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#ttnn.operations.moreh.logsoftmax_backward" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Moreh LogSoftmax Backward Operation</p>
+</dd>
+</dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="ttnn.operations.moreh.mean">
+<span class="sig-prename descclassname"><span class="pre">ttnn.operations.moreh.</span></span><span class="sig-name descname"><span class="pre">mean</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#ttnn.operations.moreh.mean" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Moreh Mean Operation</p>
+</dd>
+</dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="ttnn.operations.moreh.mean_backward">
+<span class="sig-prename descclassname"><span class="pre">ttnn.operations.moreh.</span></span><span class="sig-name descname"><span class="pre">mean_backward</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#ttnn.operations.moreh.mean_backward" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Moreh Mean Backward Operation</p>
+</dd>
+</dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="ttnn.operations.moreh.group_norm">
+<span class="sig-prename descclassname"><span class="pre">ttnn.operations.moreh.</span></span><span class="sig-name descname"><span class="pre">group_norm</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#ttnn.operations.moreh.group_norm" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Moreh Group Norm Operation</p>
+</dd>
+</dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="ttnn.operations.moreh.group_norm_backward">
+<span class="sig-prename descclassname"><span class="pre">ttnn.operations.moreh.</span></span><span class="sig-name descname"><span class="pre">group_norm_backward</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#ttnn.operations.moreh.group_norm_backward" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Moreh Group Norm Backward Operation</p>
+</dd>
+</dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="ttnn.operations.moreh.norm">
+<span class="sig-prename descclassname"><span class="pre">ttnn.operations.moreh.</span></span><span class="sig-name descname"><span class="pre">norm</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#ttnn.operations.moreh.norm" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Moreh Norm Operation</p>
+</dd>
+</dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="ttnn.operations.moreh.norm_backward">
+<span class="sig-prename descclassname"><span class="pre">ttnn.operations.moreh.</span></span><span class="sig-name descname"><span class="pre">norm_backward</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#ttnn.operations.moreh.norm_backward" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Moreh Norm Backward Operation</p>
+</dd>
+</dl>
+
+</section>
+<section id="enums">
+<h3>Enums<a class="headerlink" href="#enums" title="Permalink to this heading"></a>
+</h3>
+<dl class="py class">
+<dt class="sig sig-object py" id="ttnn.BcastOpMath">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">BcastOpMath</span></span><a class="headerlink" href="#ttnn.BcastOpMath" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Members:</p>
+<p>ADD</p>
+<p>SUB</p>
+<p>MUL</p>
+</dd>
+</dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="ttnn.BcastOpDim">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">BcastOpDim</span></span><a class="headerlink" href="#ttnn.BcastOpDim" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Members:</p>
+<p>H</p>
+<p>W</p>
+<p>HW</p>
+</dd>
+</dl>
+
+</section>
+</section>
+<section id="fallback-operations">
+<h2>Fallback Operations<a class="headerlink" href="#fallback-operations" title="Permalink to this heading"></a>
+</h2>
+<p>These operations are currently not supported on TT accelerator device and will execute on host machine using Pytorch.</p>
+<dl class="py function">
+<dt class="sig sig-object py" id="tt_lib.fallback_ops.full">
+<span class="sig-prename descclassname"><span class="pre">tt_lib.fallback_ops.</span></span><span class="sig-name descname"><span class="pre">full</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">size</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">fill_value</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a></span></span><a class="headerlink" href="#tt_lib.fallback_ops.full" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Creates a <code class="docutils literal notranslate"><span class="pre">ttnn.Tensor</span></code> of shape <code class="docutils literal notranslate"><span class="pre">size</span></code> filled with <code class="docutils literal notranslate"><span class="pre">fill_value</span></code> value.</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Argument</p></th>
+<th class="head"><p>Description</p></th>
+<th class="head"><p>Data type</p></th>
+<th class="head"><p>Valid range</p></th>
+<th class="head"><p>Required</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>size</p></td>
+<td><p>Shape of output tensor</p></td>
+<td><p>List[int]</p></td>
+<td><p>list of 4 ints</p></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>fill_value</p></td>
+<td><p>Value with which to fill output tensor</p></td>
+<td><p>float</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+</tbody>
+</table>
+</dd>
+</dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="tt_lib.fallback_ops.tensor_slice">
+<span class="sig-prename descclassname"><span class="pre">tt_lib.fallback_ops.</span></span><span class="sig-name descname"><span class="pre">tensor_slice</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">slices</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">slice</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">ellipsis</span><span class="p"><span class="pre">]</span></span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a></span></span><a class="headerlink" href="#tt_lib.fallback_ops.tensor_slice" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Creates a <code class="docutils literal notranslate"><span class="pre">ttnn.Tensor</span></code> from <code class="docutils literal notranslate"><span class="pre">input</span></code> using <code class="docutils literal notranslate"><span class="pre">slices</span></code>.
+To use <code class="docutils literal notranslate"><span class="pre">...</span></code>, pass in <code class="docutils literal notranslate"><span class="pre">...</span></code> or <code class="docutils literal notranslate"><span class="pre">Ellipsis</span></code>.
+To use <code class="docutils literal notranslate"><span class="pre">:</span></code>, pass in <code class="docutils literal notranslate"><span class="pre">slice(None)</span></code>.</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Argument</p></th>
+<th class="head"><p>Description</p></th>
+<th class="head"><p>Data type</p></th>
+<th class="head"><p>Valid range</p></th>
+<th class="head"><p>Required</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>input</p></td>
+<td><p>Input tensor</p></td>
+<td><p>Tensor</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>slices</p></td>
+<td><p>List of slices to slice the input tensor</p></td>
+<td><p>List[slice, Ellipsis]</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+</tbody>
+</table>
+</dd>
+</dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="tt_lib.fallback_ops.reshape">
+<span class="sig-prename descclassname"><span class="pre">tt_lib.fallback_ops.</span></span><span class="sig-name descname"><span class="pre">reshape</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input:</span> <span class="pre">~ttnn._ttnn.tensor.Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">N:</span> <span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">C:</span> <span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">H:</span> <span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">W:</span> <span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_layout:</span> <span class="pre">~ttnn._ttnn.tensor.Layout</span> <span class="pre">|</span> <span class="pre">None</span> <span class="pre">=</span> <span class="pre">&lt;Layout.TILE:</span> <span class="pre">1&gt;</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_on_device:</span> <span class="pre">bool</span> <span class="pre">|</span> <span class="pre">None</span> <span class="pre">=</span> <span class="pre">True</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a></span></span><a class="headerlink" href="#tt_lib.fallback_ops.reshape" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Returns a new <code class="docutils literal notranslate"><span class="pre">ttnn.Tensor</span></code> with the same data and number of elements as <code class="docutils literal notranslate"><span class="pre">input</span></code>, but with the specified shape <code class="docutils literal notranslate"><span class="pre">[N,</span> <span class="pre">C,</span> <span class="pre">H,</span> <span class="pre">W]</span></code>.</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Argument</p></th>
+<th class="head"><p>Description</p></th>
+<th class="head"><p>Data type</p></th>
+<th class="head"><p>Valid range</p></th>
+<th class="head"><p>Required</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>input</p></td>
+<td><p>Input tensor</p></td>
+<td><p>Tensor</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>N</p></td>
+<td><p>Size of the first dimension of output tensor</p></td>
+<td><p>int</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-even">
+<td><p>C</p></td>
+<td><p>Size of the second dimension of output tensor</p></td>
+<td><p>int</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>H</p></td>
+<td><p>Size of the third dimension of output tensor</p></td>
+<td><p>int</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-even">
+<td><p>W</p></td>
+<td><p>Size of the fourth dimension of output tensor</p></td>
+<td><p>int</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>output_layout</p></td>
+<td><p>Output layout</p></td>
+<td><p>Layout</p></td>
+<td><p>default is TILE</p></td>
+<td><p>No</p></td>
+</tr>
+<tr class="row-even">
+<td><p>output_on_device</p></td>
+<td><p>Output on device</p></td>
+<td><p>bool</p></td>
+<td><p>default is True</p></td>
+<td><p>No</p></td>
+</tr>
+</tbody>
+</table>
+</dd>
+</dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="tt_lib.fallback_ops.chunk">
+<span class="sig-prename descclassname"><span class="pre">tt_lib.fallback_ops.</span></span><span class="sig-name descname"><span class="pre">chunk</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">chunks</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dim</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">List</span><span class="p"><span class="pre">[</span></span><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a><span class="p"><span class="pre">]</span></span></span></span><a class="headerlink" href="#tt_lib.fallback_ops.chunk" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Attempts to split a <code class="docutils literal notranslate"><span class="pre">ttnn.Tensor</span></code> into the specified number of chunks. Each chunk is a new copy of part of the input tensor.</p>
+<p>If the tensor size along the given dimension <code class="docutils literal notranslate"><span class="pre">dim</span></code> is divisible by <code class="docutils literal notranslate"><span class="pre">chunks</span></code>, all returned chunks will be the same size.</p>
+<p>If the tensor size along the given dimension <code class="docutils literal notranslate"><span class="pre">dim</span></code> is not divisible by <code class="docutils literal notranslate"><span class="pre">chunks</span></code>, all returned chunks will be the same size, except the last one. If such division is not possible, this function may return fewer than the specified number of chunks.</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Argument</p></th>
+<th class="head"><p>Description</p></th>
+<th class="head"><p>Data type</p></th>
+<th class="head"><p>Valid range</p></th>
+<th class="head"><p>Required</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>input</p></td>
+<td><p>Input tensor</p></td>
+<td><p>Tensor</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>chunks</p></td>
+<td><p>Number of chunks to return</p></td>
+<td><p>int</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-even">
+<td><p>dim</p></td>
+<td><p>Dimension along which to split the tensor</p></td>
+<td><p>int</p></td>
+<td><p>0, 1, 2, 3 (default is 0)</p></td>
+<td><p>No</p></td>
+</tr>
+</tbody>
+</table>
+</dd>
+</dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="tt_lib.fallback_ops.conv2d">
+<span class="sig-prename descclassname"><span class="pre">tt_lib.fallback_ops.</span></span><span class="sig-name descname"><span class="pre">conv2d</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">weight</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">bias</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">stride</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">Tuple</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">padding</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">Tuple</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dilation</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">Tuple</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">groups</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">1</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a></span></span><a class="headerlink" href="#tt_lib.fallback_ops.conv2d" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Applies a 2D convolution over an input image composed of several input planes.</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Argument</p></th>
+<th class="head"><p>Description</p></th>
+<th class="head"><p>Data type</p></th>
+<th class="head"><p>Valid range</p></th>
+<th class="head"><p>Required</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>input</p></td>
+<td><p>Input tensor</p></td>
+<td><p>Tensor</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>weight</p></td>
+<td><p>Weights tensor</p></td>
+<td><p>Tensor</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-even">
+<td><p>bias</p></td>
+<td><p>Bias tensor</p></td>
+<td><p>Tensor</p></td>
+<td></td>
+<td><p>No</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>strides</p></td>
+<td><p>Stride of the convolution</p></td>
+<td><p>int or tuple[int] (size 2)</p></td>
+<td><p>positive ints (default value is 1)</p></td>
+<td><p>No</p></td>
+</tr>
+<tr class="row-even">
+<td><p>padding</p></td>
+<td><p>Padding added to all four sides of the input</p></td>
+<td>
+<p>int or tuple[int] (size 2)</p>
+<p>or string</p>
+</td>
+<td>
+<p>positive ints (default value is 0)</p>
+<p>for string <cite>valid</cite> or <cite>same</cite></p>
+</td>
+<td><p>No</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>dilation</p></td>
+<td><p>Spacing between kernel elements</p></td>
+<td><p>int or (int, int)</p></td>
+<td><p>positive ints (default value is 1)</p></td>
+<td><p>No</p></td>
+</tr>
+<tr class="row-even">
+<td><p>groups</p></td>
+<td><p>Number of blocked connections from input channels to output channels</p></td>
+<td><p>int</p></td>
+<td><p>positive ints (default value is 1)</p></td>
+<td><p>No</p></td>
+</tr>
+</tbody>
+</table>
+</dd>
+</dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="tt_lib.fallback_ops.group_norm">
+<span class="sig-prename descclassname"><span class="pre">tt_lib.fallback_ops.</span></span><span class="sig-name descname"><span class="pre">group_norm</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">num_groups</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">weight</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">bias</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">eps</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">1e-05</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a></span></span><a class="headerlink" href="#tt_lib.fallback_ops.group_norm" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Applies Group Normalization over a mini-batch of inputs as described in the paper <a class="reference external" href="https://arxiv.org/abs/1803.08494">Group Normalization</a>.</p>
+<div class="math notranslate nohighlight">
+\[y = \frac{x - \mathrm{E}[x]}{ \sqrt{\mathrm{Var}[x] + \epsilon}} * \gamma + \beta\]</div>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Argument</p></th>
+<th class="head"><p>Description</p></th>
+<th class="head"><p>Data type</p></th>
+<th class="head"><p>Valid range</p></th>
+<th class="head"><p>Required</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>input</p></td>
+<td><p>Input tensor</p></td>
+<td><p>Tensor</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>num_groups</p></td>
+<td><p>Number of groups to separate the input channels into</p></td>
+<td><p>int</p></td>
+<td><p>int, such that number of channels in input is divisble by it</p></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-even">
+<td><p>weight</p></td>
+<td><p>Weight tensor <span class="math notranslate nohighlight">\(\gamma\)</span></p></td>
+<td><p>Tensor</p></td>
+<td></td>
+<td><p>No</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>bias</p></td>
+<td><p>Bias tensor <span class="math notranslate nohighlight">\(\beta\)</span></p></td>
+<td><p>Tensor</p></td>
+<td></td>
+<td><p>No</p></td>
+</tr>
+<tr class="row-even">
+<td><p>eps</p></td>
+<td><p>A value added to the denominator for numerical stability</p></td>
+<td><p>float</p></td>
+<td><p>default value is 1e-05</p></td>
+<td><p>No</p></td>
+</tr>
+</tbody>
+</table>
+</dd>
+</dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="tt_lib.fallback_ops.layer_norm">
+<span class="sig-prename descclassname"><span class="pre">tt_lib.fallback_ops.</span></span><span class="sig-name descname"><span class="pre">layer_norm</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">normalized_shape</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">weight</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">bias</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">eps</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">1e-05</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a></span></span><a class="headerlink" href="#tt_lib.fallback_ops.layer_norm" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Applies Layer Normalization over a mini-batch of inputs as described in the paper <a class="reference external" href="https://arxiv.org/abs/1607.06450">Layer Normalization</a></p>
+<div class="math notranslate nohighlight">
+\[y = \frac{x - \text{E}[x]}{\sqrt{\text{Var}[x] + \epsilon}} * \gamma + \beta\]</div>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Argument</p></th>
+<th class="head"><p>Description</p></th>
+<th class="head"><p>Data type</p></th>
+<th class="head"><p>Valid range</p></th>
+<th class="head"><p>Required</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>input</p></td>
+<td><p>Input tensor</p></td>
+<td><p>Tensor</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>normalized_shape</p></td>
+<td><p>Shape over which to normalize</p></td>
+<td><p>int or List[int]</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-even">
+<td><p>weight</p></td>
+<td><p>Weight tensor <span class="math notranslate nohighlight">\(\gamma\)</span></p></td>
+<td><p>Tensor</p></td>
+<td></td>
+<td><p>No</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>bias</p></td>
+<td><p>Bias tensor <span class="math notranslate nohighlight">\(\beta\)</span></p></td>
+<td><p>Tensor</p></td>
+<td></td>
+<td><p>No</p></td>
+</tr>
+<tr class="row-even">
+<td><p>eps</p></td>
+<td><p>A value added to the denominator for numerical stability</p></td>
+<td><p>float</p></td>
+<td><p>default value is 1e-05</p></td>
+<td><p>No</p></td>
+</tr>
+</tbody>
+</table>
+</dd>
+</dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="tt_lib.fallback_ops.pad">
+<span class="sig-prename descclassname"><span class="pre">tt_lib.fallback_ops.</span></span><span class="sig-name descname"><span class="pre">pad</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="pre">input:</span> <span class="pre">~ttnn._ttnn.tensor.Tensor,</span> <span class="pre">pad:</span> <span class="pre">~typing.Tuple[int],</span> <span class="pre">mode:</span> <span class="pre">str</span> <span class="pre">=</span> <span class="pre">'constant',</span> <span class="pre">value:</span> <span class="pre">int</span> <span class="pre">|</span> <span class="pre">None</span> <span class="pre">=</span> <span class="pre">None,</span> <span class="pre">output_layout:</span> <span class="pre">~ttnn._ttnn.tensor.Layout</span> <span class="pre">|</span> <span class="pre">None</span> <span class="pre">=</span> <span class="pre">&lt;Layout.TILE:</span> <span class="pre">1&gt;,</span> <span class="pre">output_on_device:</span> <span class="pre">bool</span> <span class="pre">|</span> <span class="pre">None</span> <span class="pre">=</span> <span class="pre">True</span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a></span></span><a class="headerlink" href="#tt_lib.fallback_ops.pad" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Pads tensor.</p>
+<p><code class="docutils literal notranslate"><span class="pre">pad</span></code> determines how much padding to add.</p>
+<p>Values in <code class="docutils literal notranslate"><span class="pre">pad</span></code> specify padding starting from the last dimension of input tensor <code class="docutils literal notranslate"><span class="pre">input</span></code> and moving forward.</p>
+<p><code class="docutils literal notranslate"><span class="pre">pad</span></code> is and m-elements tuple, where m/2 is less of equal to  input dimensions and m is even.</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Argument</p></th>
+<th class="head"><p>Description</p></th>
+<th class="head"><p>Data type</p></th>
+<th class="head"><p>Valid range</p></th>
+<th class="head"><p>Required</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>input</p></td>
+<td><p>Input tensor</p></td>
+<td><p>Tensor</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>pad</p></td>
+<td><p>The padding size by which to pad some dimensions of input</p></td>
+<td><p>Tuple[int]</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-even">
+<td><p>mode</p></td>
+<td><p>Padding mode</p></td>
+<td><p>string</p></td>
+<td><p><cite>constant</cite>, <cite>reflect</cite>, <cite>replicate</cite>, or <cite>circular</cite> (default is <cite>constant</cite>)</p></td>
+<td><p>No</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>value</p></td>
+<td><p>Fill value for <cite>constant</cite> padding</p></td>
+<td><p>int</p></td>
+<td><p>default is 0</p></td>
+<td><p>No</p></td>
+</tr>
+<tr class="row-even">
+<td><p>output_layout</p></td>
+<td><p>Output layout</p></td>
+<td><p>Layout</p></td>
+<td><p>default is TILE</p></td>
+<td><p>No</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>output_on_device</p></td>
+<td><p>Output on device</p></td>
+<td><p>bool</p></td>
+<td><p>default is True</p></td>
+<td><p>No</p></td>
+</tr>
+</tbody>
+</table>
+</dd>
+</dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="tt_lib.fallback_ops.interpolate">
+<span class="sig-prename descclassname"><span class="pre">tt_lib.fallback_ops.</span></span><span class="sig-name descname"><span class="pre">interpolate</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">size</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">Tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">scale_factor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">Tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">float</span><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">mode</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">'nearest'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">align_corners</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">recompute_scale_factor</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">antialias</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a></span></span><a class="headerlink" href="#tt_lib.fallback_ops.interpolate" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Down/up samples the input to either the given size or the given scale_factor</p>
+<p>The algorithm used for interpolation is determined by mode.</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Argument</p></th>
+<th class="head"><p>Description</p></th>
+<th class="head"><p>Data type</p></th>
+<th class="head"><p>Valid range</p></th>
+<th class="head"><p>Required</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>input</p></td>
+<td><p>Input tensor</p></td>
+<td><p>Tensor</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>size</p></td>
+<td><p>Output spatial size</p></td>
+<td><p>Tuple[int]</p></td>
+<td><p>default is None</p></td>
+<td><p>No</p></td>
+</tr>
+<tr class="row-even">
+<td><p>scale_factor</p></td>
+<td><p>Multiplier for spatial size</p></td>
+<td><p>Tuple[float]</p></td>
+<td><p>default is None</p></td>
+<td><p>No</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>mode</p></td>
+<td><p>algorithm used for upsampling</p></td>
+<td><p>string</p></td>
+<td><p><cite>nearest</cite>, <cite>linear</cite>, <cite>bilinear</cite>, <cite>bicubic</cite>, <cite>trilinear</cite>,
+<cite>area</cite>, or <cite>nearest-exact</cite> (default is <cite>nearest</cite>)</p></td>
+<td><p>No</p></td>
+</tr>
+<tr class="row-even">
+<td><p>align_corners</p></td>
+<td><p>Whether to align center or corner points of corner pixels</p></td>
+<td><p>bool</p></td>
+<td><p>default is None</p></td>
+<td><p>No</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>recompute_scale_factor</p></td>
+<td><p>Recompute the scale_factor for use in interpolation</p></td>
+<td><p>bool</p></td>
+<td><p>default is None</p></td>
+<td><p>No</p></td>
+</tr>
+<tr class="row-even">
+<td><p>antialias</p></td>
+<td><p>Flag to apply anti-aliasing</p></td>
+<td><p>bool</p></td>
+<td><p>default is False</p></td>
+<td><p>No</p></td>
+</tr>
+</tbody>
+</table>
+</dd>
+</dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="tt_lib.fallback_ops.repeat">
+<span class="sig-prename descclassname"><span class="pre">tt_lib.fallback_ops.</span></span><span class="sig-name descname"><span class="pre">repeat</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">sizes</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">]</span></span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a></span></span><a class="headerlink" href="#tt_lib.fallback_ops.repeat" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Returns the input tensor <code class="docutils literal notranslate"><span class="pre">input</span></code> repeated along the specified dims.</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Argument</p></th>
+<th class="head"><p>Description</p></th>
+<th class="head"><p>Data type</p></th>
+<th class="head"><p>Valid range</p></th>
+<th class="head"><p>Required</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>input</p></td>
+<td><p>Input tensor</p></td>
+<td><p>Tensor</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>sizes</p></td>
+<td><p>The number of times to repeat the tensor along each dim</p></td>
+<td><p>int</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+</tbody>
+</table>
+</dd>
+</dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="tt_lib.fallback_ops.repeat_interleave">
+<span class="sig-prename descclassname"><span class="pre">tt_lib.fallback_ops.</span></span><span class="sig-name descname"><span class="pre">repeat_interleave</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">repeats</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dim</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">output_size</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a></span></span><a class="headerlink" href="#tt_lib.fallback_ops.repeat_interleave" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Returns a tensor with repeated elements of input tensor <code class="docutils literal notranslate"><span class="pre">input</span></code>.</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Argument</p></th>
+<th class="head"><p>Description</p></th>
+<th class="head"><p>Data type</p></th>
+<th class="head"><p>Valid range</p></th>
+<th class="head"><p>Required</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>input</p></td>
+<td><p>Input tensor</p></td>
+<td><p>Tensor</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>repeats</p></td>
+<td><p>The number of repetitions for each element</p></td>
+<td><p>Tensor or int</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-even">
+<td><p>dim</p></td>
+<td><p>The dimension along which to repeat values</p></td>
+<td><p>int</p></td>
+<td></td>
+<td><p>No</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>output_size</p></td>
+<td><p>Total output size for the given axis ( e.g. sum of repeats)</p></td>
+<td><p>int</p></td>
+<td></td>
+<td><p>No</p></td>
+</tr>
+</tbody>
+</table>
+</dd>
+</dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="tt_lib.fallback_ops.concat">
+<span class="sig-prename descclassname"><span class="pre">tt_lib.fallback_ops.</span></span><span class="sig-name descname"><span class="pre">concat</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">tensors</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">List</span><span class="p"><span class="pre">[</span></span><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dim</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a></span></span><a class="headerlink" href="#tt_lib.fallback_ops.concat" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Concatenates input tensors in list <code class="docutils literal notranslate"><span class="pre">tensors</span></code> on provided dimension <code class="docutils literal notranslate"><span class="pre">dim</span></code>.</p>
+<p>All tensors must either have the same shape (except in the concatenating dimension) or be empty.</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Argument</p></th>
+<th class="head"><p>Description</p></th>
+<th class="head"><p>Data type</p></th>
+<th class="head"><p>Valid range</p></th>
+<th class="head"><p>Required</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>tensors</p></td>
+<td><p>Input tensors</p></td>
+<td><p>List[Tensor]</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>dim</p></td>
+<td><p>The dimension along which to concatenate</p></td>
+<td><p>int</p></td>
+<td><p>0, 1, 2, or 3 (default is 0)</p></td>
+<td><p>No</p></td>
+</tr>
+</tbody>
+</table>
+</dd>
+</dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="tt_lib.fallback_ops.silu">
+<span class="sig-prename descclassname"><span class="pre">tt_lib.fallback_ops.</span></span><span class="sig-name descname"><span class="pre">silu</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a></span></span><a class="headerlink" href="#tt_lib.fallback_ops.silu" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Applies the Sigmoid Linear Unit (SiLU) function, element-wise.
+The SiLU function is also known as the swish function.</p>
+<div class="math notranslate nohighlight">
+\[\text{silu}(x) = x * \sigma(x), \text{where } \sigma(x) \text{ is the logistic sigmoid.}\]</div>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Argument</p></th>
+<th class="head"><p>Description</p></th>
+<th class="head"><p>Data type</p></th>
+<th class="head"><p>Valid range</p></th>
+<th class="head"><p>Required</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>input</p></td>
+<td><p>Input tensor</p></td>
+<td><p>Tensor</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+</tbody>
+</table>
+</dd>
+</dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="tt_lib.fallback_ops.softmax">
+<span class="sig-prename descclassname"><span class="pre">tt_lib.fallback_ops.</span></span><span class="sig-name descname"><span class="pre">softmax</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">dim</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a></span></span><a class="headerlink" href="#tt_lib.fallback_ops.softmax" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Applies a softmax function to input tensor <code class="docutils literal notranslate"><span class="pre">input</span></code>.</p>
+<p>Softmax is defined as:</p>
+<div class="math notranslate nohighlight">
+\[\text{Softmax}(x_{i}) = \frac{\exp(x_i)}{\sum_j \exp(x_j)}\]</div>
+<p>It is applied to all slices along dim, and will re-scale them so that the elements lie in the range <cite>[0, 1]</cite> and sum to 1.</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Argument</p></th>
+<th class="head"><p>Description</p></th>
+<th class="head"><p>Data type</p></th>
+<th class="head"><p>Valid range</p></th>
+<th class="head"><p>Required</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>input</p></td>
+<td><p>Input tensor</p></td>
+<td><p>Tensor</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>dim</p></td>
+<td><p>A dimension along which Softmax will be computed</p></td>
+<td><p>int</p></td>
+<td><p>0, 1, 2, or 3</p></td>
+<td><p>No</p></td>
+</tr>
+</tbody>
+</table>
+</dd>
+</dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="tt_lib.fallback_ops.Conv2d">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">tt_lib.fallback_ops.</span></span><span class="sig-name descname"><span class="pre">Conv2d</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">weights</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">biases</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">in_channels</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">out_channels</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">kernel_size</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">Tuple</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">stride</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">Tuple</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">padding</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">Tuple</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dilation</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">Tuple</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">groups</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">bias</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">padding_mode</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">'zeros'</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#tt_lib.fallback_ops.Conv2d" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Applies a 2D convolution over an input signal composed of several input planes.</p>
+<p>In the simplest case, the output value of the layer with input size
+<span class="math notranslate nohighlight">\((N, C_{\text{in}}, H, W)\)</span> and output <span class="math notranslate nohighlight">\((N, C_{\text{out}}, H_{\text{out}}, W_{\text{out}})\)</span>
+can be precisely described as:</p>
+<div class="math notranslate nohighlight">
+\[\text{out}(N_i, C_{\text{out}_j}) = \text{bias}(C_{\text{out}_j}) +
+\sum_{k = 0}^{C_{\text{in}} - 1} \text{weight}(C_{\text{out}_j}, k) \star \text{input}(N_i, k)\]</div>
+<p>where <span class="math notranslate nohighlight">\(\star\)</span> is a valid 2D cross-correlation operator, <span class="math notranslate nohighlight">\(N\)</span> is batch size, <span class="math notranslate nohighlight">\(C\)</span> denotes the number of channels,
+<span class="math notranslate nohighlight">\(H\)</span> is a height of input planes in pixels, and <span class="math notranslate nohighlight">\(W\)</span> is width in pixels.</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Argument</p></th>
+<th class="head"><p>Description</p></th>
+<th class="head"><p>Data type</p></th>
+<th class="head"><p>Valid range</p></th>
+<th class="head"><p>Required</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>weights</p></td>
+<td><p>Weights tensor</p></td>
+<td><p>Tensor</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>biases</p></td>
+<td><p>Bias tensor</p></td>
+<td><p>Tensor</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-even">
+<td><p>in_channels</p></td>
+<td><p>Number of channels in the input image</p></td>
+<td><p>int</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>out_channels</p></td>
+<td><p>Number of channels produced by the convolution</p></td>
+<td><p>int</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-even">
+<td><p>kernel_size</p></td>
+<td><p>Size of the convolving kernel</p></td>
+<td><p>int or Tuple[int]</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>stride</p></td>
+<td><p>Stride of the convolution</p></td>
+<td><p>int or Tuple[int]</p></td>
+<td><p>default is 1</p></td>
+<td><p>No</p></td>
+</tr>
+<tr class="row-even">
+<td><p>padding</p></td>
+<td><p>Padding added to all four sides of the input</p></td>
+<td>
+<p>int or Tuple[int]</p>
+<p>or string</p>
+</td>
+<td>
+<p>default is 0</p>
+<p>‘valid’ or ‘same’</p>
+</td>
+<td><p>No</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>dilation</p></td>
+<td><p>Spacing between kernel elements</p></td>
+<td><p>int or Tuple[int]</p></td>
+<td><p>default is 1</p></td>
+<td><p>No</p></td>
+</tr>
+<tr class="row-even">
+<td><p>groups</p></td>
+<td><p>Number of blocked connections from input channels to output channels</p></td>
+<td><p>int</p></td>
+<td><p>default is 1</p></td>
+<td><p>No</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>bias</p></td>
+<td><p>If <cite>True</cite>, adds a learnable bias to the output</p></td>
+<td><p>bool</p></td>
+<td><p>default is <cite>True</cite></p></td>
+<td><p>No</p></td>
+</tr>
+<tr class="row-even">
+<td><p>padding_mode</p></td>
+<td><p>Padding mode</p></td>
+<td><p>string</p></td>
+<td>
+<p><cite>zeros</cite>, <cite>reflect</cite>, <cite>replicate</cite>, or <cite>circular</cite></p>
+<p>default is <cite>zeros</cite></p>
+</td>
+<td><p>No</p></td>
+</tr>
+</tbody>
+</table>
+</dd>
+</dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="tt_lib.fallback_ops.BatchNorm2d">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">tt_lib.fallback_ops.</span></span><span class="sig-name descname"><span class="pre">BatchNorm2d</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">weights</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">biases</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">running_mean</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">running_var</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">num_batches_tracked</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">num_features</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">eps</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">1e-05</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">momentum</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0.1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">affine</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">track_running_stats</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">True</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#tt_lib.fallback_ops.BatchNorm2d" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Applies Batch Normalization over a 4D input (a mini-batch of 2D inputs
+with additional channel dimension) as described in the paper
+<a class="reference external" href="https://arxiv.org/abs/1502.03167">Batch Normalization: Accelerating Deep Network Training by Reducing
+Internal Covariate Shift</a> .</p>
+<div class="math notranslate nohighlight">
+\[y = \frac{x - \mathrm{E}[x]}{ \sqrt{\mathrm{Var}[x] + \epsilon}} * \gamma + \beta\]</div>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Argument</p></th>
+<th class="head"><p>Description</p></th>
+<th class="head"><p>Data type</p></th>
+<th class="head"><p>Valid range</p></th>
+<th class="head"><p>Required</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>weights</p></td>
+<td><p>Weights tensor</p></td>
+<td><p>Tensor</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>biases</p></td>
+<td><p>Bias tensor</p></td>
+<td><p>Tensor</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-even">
+<td><p>running_mean</p></td>
+<td><p>Tracked Running Mean tensor</p></td>
+<td><p>Tensor</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>running_var</p></td>
+<td><p>Tracked Running Variances tensor</p></td>
+<td><p>Tensor</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-even">
+<td><p>num_batches_tracked</p></td>
+<td><p>Number of Batches Tracked tensor</p></td>
+<td><p>Tensor</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>num_features</p></td>
+<td><p>C from an expected input of size (N, C, H, W)</p></td>
+<td><p>int</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-even">
+<td><p>eps</p></td>
+<td><p>A value added to the denominator for numerical stability</p></td>
+<td><p>float</p></td>
+<td><p>default is 1e-05</p></td>
+<td><p>No</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>momentum</p></td>
+<td><p>The value used for the running_mean and running_var computation.</p></td>
+<td><p>float/None</p></td>
+<td><p>default is 0.1</p></td>
+<td><p>No</p></td>
+</tr>
+<tr class="row-even">
+<td><p>affine</p></td>
+<td><p>Controls initialization of weights and biases</p></td>
+<td><p>bool</p></td>
+<td><p>default is <cite>True</cite></p></td>
+<td><p>No</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>track_running_stats</p></td>
+<td><p>Whether to track the running mean and variance</p></td>
+<td><p>bool</p></td>
+<td><p>default is <cite>True</cite></p></td>
+<td><p>No</p></td>
+</tr>
+</tbody>
+</table>
+</dd>
+</dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="tt_lib.fallback_ops.GroupNorm">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">tt_lib.fallback_ops.</span></span><span class="sig-name descname"><span class="pre">GroupNorm</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">weights</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">biases</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">num_groups</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">num_channels</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">eps</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">1e-05</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">affine</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">True</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#tt_lib.fallback_ops.GroupNorm" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Applies Group Normalization over a mini-batch of inputs as described in
+the paper <a class="reference external" href="https://arxiv.org/abs/1803.08494">Group Normalization</a></p>
+<div class="math notranslate nohighlight">
+\[y = \frac{x - \mathrm{E}[x]}{ \sqrt{\mathrm{Var}[x] + \epsilon}} * \gamma + \beta\]</div>
+<p><code class="docutils literal notranslate"><span class="pre">affine</span></code> is a boolean value that when set to <cite>True</cite>, this module has lernable per-channel affine parameters initialized to ones (for weights) and zeros (for biases).</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Argument</p></th>
+<th class="head"><p>Description</p></th>
+<th class="head"><p>Data type</p></th>
+<th class="head"><p>Valid range</p></th>
+<th class="head"><p>Required</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>weights</p></td>
+<td><p>Weights tensor</p></td>
+<td><p>Tensor</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>biases</p></td>
+<td><p>Bias tensor</p></td>
+<td><p>Tensor</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-even">
+<td><p>num_groups</p></td>
+<td><p>Number of groups to separate the channels into</p></td>
+<td><p>int</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>num_channels</p></td>
+<td><p>Number of channels expected in input</p></td>
+<td><p>int</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-even">
+<td><p>eps</p></td>
+<td><p>A value added to the denominator for numerical stability</p></td>
+<td><p>float</p></td>
+<td><p>default is 1e-05</p></td>
+<td><p>No</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>affine</p></td>
+<td><p>Controls initialization of weights and biases</p></td>
+<td><p>bool</p></td>
+<td><p>default is <cite>True</cite></p></td>
+<td><p>No</p></td>
+</tr>
+</tbody>
+</table>
+</dd>
+</dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="tt_lib.fallback_ops.LayerNorm">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">tt_lib.fallback_ops.</span></span><span class="sig-name descname"><span class="pre">LayerNorm</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">weights</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">biases</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">normalized_shape</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">eps</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">1e-05</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">elementwise_affine</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">True</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#tt_lib.fallback_ops.LayerNorm" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Applies Layer Normalization over a mini-batch of inputs as described in the paper <a class="reference external" href="https://arxiv.org/abs/1607.06450">Layer Normalization</a></p>
+<div class="math notranslate nohighlight">
+\[y = \frac{x - \text{E}[x]}{\sqrt{\text{Var}[x] + \epsilon}} * \gamma + \beta\]</div>
+<p><code class="docutils literal notranslate"><span class="pre">elementwise_affine</span></code> is a boolean value that when set to <cite>True</cite>, this module has learnable per-element affine parameters initialized to ones (for weights) and zeros (for biases).</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Argument</p></th>
+<th class="head"><p>Description</p></th>
+<th class="head"><p>Data type</p></th>
+<th class="head"><p>Valid range</p></th>
+<th class="head"><p>Required</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>weights</p></td>
+<td><p>Weights tensor</p></td>
+<td><p>Tensor</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>biases</p></td>
+<td><p>Bias tensor</p></td>
+<td><p>Tensor</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-even">
+<td><p>normalized_shape</p></td>
+<td><p>Shape over which to normalize</p></td>
+<td><p>int or List[int]</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>eps</p></td>
+<td><p>A value added to the denominator for numerical stability</p></td>
+<td><p>float</p></td>
+<td><p>default is 1e-05</p></td>
+<td><p>No</p></td>
+</tr>
+<tr class="row-even">
+<td><p>elementwise_affine</p></td>
+<td><p>Controls initialization of weights and biases</p></td>
+<td><p>bool</p></td>
+<td><p>default is <cite>True</cite></p></td>
+<td><p>No</p></td>
+</tr>
+</tbody>
+</table>
+</dd>
+</dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="tt_lib.fallback_ops.MaxPool2d">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">tt_lib.fallback_ops.</span></span><span class="sig-name descname"><span class="pre">MaxPool2d</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">kernel_size</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">Tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">int</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">stride</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">Tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">int</span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">padding</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">Tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">int</span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dilation</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">Tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">int</span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">return_indices</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ceil_mode</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">channels_last</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">reshape_2d</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#tt_lib.fallback_ops.MaxPool2d" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Applies a 2D max pooling over an input signal composed of several input planes.</p>
+<p>In the simplest case, the output value of the layer with input size <span class="math notranslate nohighlight">\((N, C, H, W)\)</span>,
+output <span class="math notranslate nohighlight">\((N, C, H_{out}, W_{out})\)</span> and <code class="xref py py-attr docutils literal notranslate"><span class="pre">kernel_size</span></code> <span class="math notranslate nohighlight">\((kH, kW)\)</span>
+can be precisely described as:</p>
+<div class="math notranslate nohighlight">
+\[\begin{split}\begin{aligned}
+    out(N_i, C_j, h, w) ={} &amp; \max_{m=0, \ldots, kH-1} \max_{n=0, \ldots, kW-1} \\
+                            &amp; \text{input}(N_i, C_j, \text{stride[0]} \times h + m,
+                                           \text{stride[1]} \times w + n)
+\end{aligned}\end{split}\]</div>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Argument</p></th>
+<th class="head"><p>Description</p></th>
+<th class="head"><p>Data type</p></th>
+<th class="head"><p>Valid range</p></th>
+<th class="head"><p>Required</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>kernel_size</p></td>
+<td><p>The size of the window to take a max over</p></td>
+<td><p>int or Tuple[int]</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>stride</p></td>
+<td><p>The stride of the window. Default value is kernel_size</p></td>
+<td><p>int or Tuple[int]</p></td>
+<td><p>default is kernel_size</p></td>
+<td><p>No</p></td>
+</tr>
+<tr class="row-even">
+<td><p>padding</p></td>
+<td><p>Implicit negative infinity padding to be added on both sides</p></td>
+<td><p>int or Tuple[int]</p></td>
+<td><p>default is 0</p></td>
+<td><p>No</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>dilation</p></td>
+<td><p>A parameter that controls the stride of elements in the window</p></td>
+<td><p>int or Tuple[int]</p></td>
+<td><p>default is 1</p></td>
+<td><p>No</p></td>
+</tr>
+<tr class="row-even">
+<td><p>return_indices</p></td>
+<td><p>If True, will return the max indices along with the outputs.</p></td>
+<td><p>bool</p></td>
+<td><p>default is <cite>False</cite></p></td>
+<td><p>No</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>ceil_mode</p></td>
+<td><p>If True, will use ceil instead of floor to compute the output shape</p></td>
+<td><p>bool</p></td>
+<td><p>default is <cite>False</cite></p></td>
+<td><p>No</p></td>
+</tr>
+</tbody>
+</table>
+</dd>
+</dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="tt_lib.fallback_ops.AdaptiveAvgPool2d">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">tt_lib.fallback_ops.</span></span><span class="sig-name descname"><span class="pre">AdaptiveAvgPool2d</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">output_size</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">Tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">channels_last</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#tt_lib.fallback_ops.AdaptiveAvgPool2d" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Applies a 2D adaptive average pooling over an input signal composed of several input planes.</p>
+<p>The output is of size H x W, for any input size.
+The number of output features is equal to the number of input planes.</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Argument</p></th>
+<th class="head"><p>Description</p></th>
+<th class="head"><p>Data type</p></th>
+<th class="head"><p>Valid range</p></th>
+<th class="head"><p>Required</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>output_size</p></td>
+<td><p>The target output size of the image</p></td>
+<td><p>int</p></td>
+<td><p>int/None or tuple
+of int/None (size 2)</p></td>
+<td><p>yes</p></td>
+</tr>
+</tbody>
+</table>
+</dd>
+</dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="tt_lib.fallback_ops.ceil">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">tt_lib.fallback_ops.</span></span><span class="sig-name descname"><span class="pre">ceil</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a></span></em><span class="sig-paren">)</span><a class="headerlink" href="#tt_lib.fallback_ops.ceil" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Returns a new tensor with the ceil of the elements of <code class="docutils literal notranslate"><span class="pre">input</span></code>, the smallest integer greater than or equal to each element.</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Argument</p></th>
+<th class="head"><p>Description</p></th>
+<th class="head"><p>Data type</p></th>
+<th class="head"><p>Valid range</p></th>
+<th class="head"><p>Required</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>input</p></td>
+<td><p>Input tensor for ceil</p></td>
+<td><p>Tensor</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+</tbody>
+</table>
+</dd>
+</dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="tt_lib.fallback_ops.floor">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">tt_lib.fallback_ops.</span></span><span class="sig-name descname"><span class="pre">floor</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a></span></em><span class="sig-paren">)</span><a class="headerlink" href="#tt_lib.fallback_ops.floor" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Returns a new tensor with the floor of the elements of <code class="docutils literal notranslate"><span class="pre">input</span></code>, the largest integer less than or equal to each element.</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Argument</p></th>
+<th class="head"><p>Description</p></th>
+<th class="head"><p>Data type</p></th>
+<th class="head"><p>Valid range</p></th>
+<th class="head"><p>Required</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>input</p></td>
+<td><p>Input tensor for floor</p></td>
+<td><p>Tensor</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+</tbody>
+</table>
+</dd>
+</dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="tt_lib.fallback_ops.trunc">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">tt_lib.fallback_ops.</span></span><span class="sig-name descname"><span class="pre">trunc</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a></span></em><span class="sig-paren">)</span><a class="headerlink" href="#tt_lib.fallback_ops.trunc" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Returns a new tensor with the truncated integer values of the elements of <code class="docutils literal notranslate"><span class="pre">input</span></code>.</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Argument</p></th>
+<th class="head"><p>Description</p></th>
+<th class="head"><p>Data type</p></th>
+<th class="head"><p>Valid range</p></th>
+<th class="head"><p>Required</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>input</p></td>
+<td><p>Input tensor for trunc</p></td>
+<td><p>Tensor</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+</tbody>
+</table>
+</dd>
+</dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="tt_lib.fallback_ops.unary_fmod">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">tt_lib.fallback_ops.</span></span><span class="sig-name descname"><span class="pre">unary_fmod</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">other</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#tt_lib.fallback_ops.unary_fmod" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Applies mod operations and the result has the same sign as the dividend <code class="docutils literal notranslate"><span class="pre">input</span></code> and
+its absolute value is less than that of <code class="docutils literal notranslate"><span class="pre">other</span></code>.</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Argument</p></th>
+<th class="head"><p>Description</p></th>
+<th class="head"><p>Data type</p></th>
+<th class="head"><p>Valid range</p></th>
+<th class="head"><p>Required</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>input</p></td>
+<td><p>Input tensor</p></td>
+<td><p>Tensor</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>Other</p></td>
+<td><p>Scalar</p></td>
+<td><p>float</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+</tbody>
+</table>
+</dd>
+</dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="tt_lib.fallback_ops.binary_fmod">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">tt_lib.fallback_ops.</span></span><span class="sig-name descname"><span class="pre">binary_fmod</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">other</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a></span></em><span class="sig-paren">)</span><a class="headerlink" href="#tt_lib.fallback_ops.binary_fmod" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Applies mod operations and the result has the same sign as the dividend <code class="docutils literal notranslate"><span class="pre">input</span></code> and
+its absolute value is less than that of <code class="docutils literal notranslate"><span class="pre">other</span></code>.</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Argument</p></th>
+<th class="head"><p>Description</p></th>
+<th class="head"><p>Data type</p></th>
+<th class="head"><p>Valid range</p></th>
+<th class="head"><p>Required</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>input</p></td>
+<td><p>First tensor</p></td>
+<td><p>Tensor</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>Other</p></td>
+<td><p>Second tensor</p></td>
+<td><p>Tensor</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+</tbody>
+</table>
+</dd>
+</dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="tt_lib.fallback_ops.bitwise_not">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">tt_lib.fallback_ops.</span></span><span class="sig-name descname"><span class="pre">bitwise_not</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a></span></em><span class="sig-paren">)</span><a class="headerlink" href="#tt_lib.fallback_ops.bitwise_not" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Computes the bitwise NOT of the given <code class="docutils literal notranslate"><span class="pre">input</span></code> tensor.</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Argument</p></th>
+<th class="head"><p>Description</p></th>
+<th class="head"><p>Data type</p></th>
+<th class="head"><p>Valid range</p></th>
+<th class="head"><p>Required</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>input</p></td>
+<td><p>Input tensor</p></td>
+<td><p>Tensor</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+</tbody>
+</table>
+</dd>
+</dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="tt_lib.fallback_ops.unary_bitwise_or">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">tt_lib.fallback_ops.</span></span><span class="sig-name descname"><span class="pre">unary_bitwise_or</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">other</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#tt_lib.fallback_ops.unary_bitwise_or" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Computes the bitwise OR of <code class="docutils literal notranslate"><span class="pre">input</span></code> and <code class="docutils literal notranslate"><span class="pre">other</span></code>.</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Argument</p></th>
+<th class="head"><p>Description</p></th>
+<th class="head"><p>Data type</p></th>
+<th class="head"><p>Valid range</p></th>
+<th class="head"><p>Required</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>input</p></td>
+<td><p>Input tensor</p></td>
+<td><p>Tensor</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>other</p></td>
+<td><p>Immediate value</p></td>
+<td><p>int</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+</tbody>
+</table>
+</dd>
+</dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="tt_lib.fallback_ops.unary_bitwise_and">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">tt_lib.fallback_ops.</span></span><span class="sig-name descname"><span class="pre">unary_bitwise_and</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">other</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#tt_lib.fallback_ops.unary_bitwise_and" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Computes the bitwise AND of <code class="docutils literal notranslate"><span class="pre">input</span></code> and <code class="docutils literal notranslate"><span class="pre">other</span></code>.</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Argument</p></th>
+<th class="head"><p>Description</p></th>
+<th class="head"><p>Data type</p></th>
+<th class="head"><p>Valid range</p></th>
+<th class="head"><p>Required</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>input</p></td>
+<td><p>Input tensor</p></td>
+<td><p>Tensor</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>other</p></td>
+<td><p>Immediate value</p></td>
+<td><p>int</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+</tbody>
+</table>
+</dd>
+</dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="tt_lib.fallback_ops.unary_bitwise_xor">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">tt_lib.fallback_ops.</span></span><span class="sig-name descname"><span class="pre">unary_bitwise_xor</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">other</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#tt_lib.fallback_ops.unary_bitwise_xor" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Computes the bitwise XOR of <code class="docutils literal notranslate"><span class="pre">input</span></code> and <code class="docutils literal notranslate"><span class="pre">other</span></code>.</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Argument</p></th>
+<th class="head"><p>Description</p></th>
+<th class="head"><p>Data type</p></th>
+<th class="head"><p>Valid range</p></th>
+<th class="head"><p>Required</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>input</p></td>
+<td><p>Input tensor</p></td>
+<td><p>Tensor</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>other</p></td>
+<td><p>Immediate value</p></td>
+<td><p>int</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+</tbody>
+</table>
+</dd>
+</dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="tt_lib.fallback_ops.binary_bitwise_or">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">tt_lib.fallback_ops.</span></span><span class="sig-name descname"><span class="pre">binary_bitwise_or</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">other</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a></span></em><span class="sig-paren">)</span><a class="headerlink" href="#tt_lib.fallback_ops.binary_bitwise_or" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Computes the bitwise OR of <code class="docutils literal notranslate"><span class="pre">input</span></code> and <code class="docutils literal notranslate"><span class="pre">other</span></code>.</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Argument</p></th>
+<th class="head"><p>Description</p></th>
+<th class="head"><p>Data type</p></th>
+<th class="head"><p>Valid range</p></th>
+<th class="head"><p>Required</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>input</p></td>
+<td><p>First tensor</p></td>
+<td><p>Tensor</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>other</p></td>
+<td><p>Second tensor</p></td>
+<td><p>Tensor</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+</tbody>
+</table>
+</dd>
+</dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="tt_lib.fallback_ops.binary_bitwise_and">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">tt_lib.fallback_ops.</span></span><span class="sig-name descname"><span class="pre">binary_bitwise_and</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">other</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a></span></em><span class="sig-paren">)</span><a class="headerlink" href="#tt_lib.fallback_ops.binary_bitwise_and" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Computes the bitwise AND of <code class="docutils literal notranslate"><span class="pre">input</span></code> and <code class="docutils literal notranslate"><span class="pre">other</span></code>.</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Argument</p></th>
+<th class="head"><p>Description</p></th>
+<th class="head"><p>Data type</p></th>
+<th class="head"><p>Valid range</p></th>
+<th class="head"><p>Required</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>input</p></td>
+<td><p>First tensor</p></td>
+<td><p>Tensor</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>other</p></td>
+<td><p>Second Tensor</p></td>
+<td><p>Tensor</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+</tbody>
+</table>
+</dd>
+</dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="tt_lib.fallback_ops.binary_bitwise_xor">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">tt_lib.fallback_ops.</span></span><span class="sig-name descname"><span class="pre">binary_bitwise_xor</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">other</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a></span></em><span class="sig-paren">)</span><a class="headerlink" href="#tt_lib.fallback_ops.binary_bitwise_xor" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Computes the bitwise XOR of <code class="docutils literal notranslate"><span class="pre">input</span></code> and <code class="docutils literal notranslate"><span class="pre">other</span></code>.</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Argument</p></th>
+<th class="head"><p>Description</p></th>
+<th class="head"><p>Data type</p></th>
+<th class="head"><p>Valid range</p></th>
+<th class="head"><p>Required</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>input</p></td>
+<td><p>First tensor</p></td>
+<td><p>Tensor</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>other</p></td>
+<td><p>Second tensor</p></td>
+<td><p>Tensor</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+</tbody>
+</table>
+</dd>
+</dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="tt_lib.fallback_ops.unary_bitwise_left_shift">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">tt_lib.fallback_ops.</span></span><span class="sig-name descname"><span class="pre">unary_bitwise_left_shift</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">other</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#tt_lib.fallback_ops.unary_bitwise_left_shift" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Computes the left arithmetic shift of <code class="docutils literal notranslate"><span class="pre">input</span></code> by <code class="docutils literal notranslate"><span class="pre">other</span></code> bits. The input tensor must be of integral type.</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Argument</p></th>
+<th class="head"><p>Description</p></th>
+<th class="head"><p>Data type</p></th>
+<th class="head"><p>Valid range</p></th>
+<th class="head"><p>Required</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>input</p></td>
+<td><p>Input tensor</p></td>
+<td><p>Tensor</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>other</p></td>
+<td><p>Immediate value</p></td>
+<td><p>int</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+</tbody>
+</table>
+</dd>
+</dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="tt_lib.fallback_ops.unary_bitwise_right_shift">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">tt_lib.fallback_ops.</span></span><span class="sig-name descname"><span class="pre">unary_bitwise_right_shift</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">other</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#tt_lib.fallback_ops.unary_bitwise_right_shift" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Computes the right arithmetic shift of <code class="docutils literal notranslate"><span class="pre">input</span></code> by <code class="docutils literal notranslate"><span class="pre">other</span></code> bits. The input tensor must be of integral type.
+In any case, if the value of the right operand is negative or is greater or equal to the number of bits in the
+promoted left operand, the behavior is undefined.</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Argument</p></th>
+<th class="head"><p>Description</p></th>
+<th class="head"><p>Data type</p></th>
+<th class="head"><p>Valid range</p></th>
+<th class="head"><p>Required</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>input</p></td>
+<td><p>Input tensor</p></td>
+<td><p>Tensor</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>other</p></td>
+<td><p>Immediate value</p></td>
+<td><p>int</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+</tbody>
+</table>
+</dd>
+</dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="tt_lib.fallback_ops.binary_bitwise_left_shift">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">tt_lib.fallback_ops.</span></span><span class="sig-name descname"><span class="pre">binary_bitwise_left_shift</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">other</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a></span></em><span class="sig-paren">)</span><a class="headerlink" href="#tt_lib.fallback_ops.binary_bitwise_left_shift" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Computes the left arithmetic shift of <code class="docutils literal notranslate"><span class="pre">input</span></code> by <code class="docutils literal notranslate"><span class="pre">other</span></code> bits. The input tensor must be of integral type.</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Argument</p></th>
+<th class="head"><p>Description</p></th>
+<th class="head"><p>Data type</p></th>
+<th class="head"><p>Valid range</p></th>
+<th class="head"><p>Required</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>input</p></td>
+<td><p>First tensor</p></td>
+<td><p>Tensor</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>other</p></td>
+<td><p>Second tensor</p></td>
+<td><p>Tensor</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+</tbody>
+</table>
+</dd>
+</dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="tt_lib.fallback_ops.binary_bitwise_right_shift">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">tt_lib.fallback_ops.</span></span><span class="sig-name descname"><span class="pre">binary_bitwise_right_shift</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">other</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a></span></em><span class="sig-paren">)</span><a class="headerlink" href="#tt_lib.fallback_ops.binary_bitwise_right_shift" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Computes the right arithmetic shift of <code class="docutils literal notranslate"><span class="pre">input</span></code> by <code class="docutils literal notranslate"><span class="pre">other</span></code> bits. The input tensor must be of integral type.
+In any case, if the value of the right operand is negative or is greater or equal to the number of bits in the
+promoted left operand, the behavior is undefined.</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Argument</p></th>
+<th class="head"><p>Description</p></th>
+<th class="head"><p>Data type</p></th>
+<th class="head"><p>Valid range</p></th>
+<th class="head"><p>Required</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>input</p></td>
+<td><p>First tensor</p></td>
+<td><p>Tensor</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>other</p></td>
+<td><p>Second tensor</p></td>
+<td><p>Tensor</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+</tbody>
+</table>
+</dd>
+</dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="tt_lib.fallback_ops.torch_argmax">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">tt_lib.fallback_ops.</span></span><span class="sig-name descname"><span class="pre">torch_argmax</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">dim</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">keepdim</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#tt_lib.fallback_ops.torch_argmax" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Returns the indices of the maximum values of a tensor along a dimension.</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Argument</p></th>
+<th class="head"><p>Description</p></th>
+<th class="head"><p>Data type</p></th>
+<th class="head"><p>Valid range</p></th>
+<th class="head"><p>Required</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>input</p></td>
+<td><p>Input tensor</p></td>
+<td><p>Tensor</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>dim</p></td>
+<td><p>Dimension along which to compute the argmax</p></td>
+<td><p>int</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-even">
+<td><p>keepdim</p></td>
+<td><p>Whether to retain the dimensionality of input</p></td>
+<td><p>bool</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+</tbody>
+</table>
+</dd>
+</dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="tt_lib.fallback_ops.torch_argmin">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">tt_lib.fallback_ops.</span></span><span class="sig-name descname"><span class="pre">torch_argmin</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">input</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">dim</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">keepdim</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#tt_lib.fallback_ops.torch_argmin" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Returns the indices of the minimum values of a tensor along a dimension.</p>
+<table class="docutils align-default">
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Argument</p></th>
+<th class="head"><p>Description</p></th>
+<th class="head"><p>Data type</p></th>
+<th class="head"><p>Valid range</p></th>
+<th class="head"><p>Required</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>input</p></td>
+<td><p>Input tensor</p></td>
+<td><p>Tensor</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-odd">
+<td><p>dim</p></td>
+<td><p>Dimension along which to compute the argmin</p></td>
+<td><p>int</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+<tr class="row-even">
+<td><p>keepdim</p></td>
+<td><p>Whether to retain the dimensionality of input</p></td>
+<td><p>bool</p></td>
+<td></td>
+<td><p>Yes</p></td>
+</tr>
+</tbody>
+</table>
+</dd>
+</dl>
+
+</section>
+<section id="experimental-operations">
+<h2>Experimental Operations<a class="headerlink" href="#experimental-operations" title="Permalink to this heading"></a>
+</h2>
+<p>Operations in this section are experimental, don’t have full support, and may behave in unexpected ways.</p>
+<section id="fused-operations-from-tt-lib-mini-graph-library">
+<h3>Fused Operations from <code class="docutils literal notranslate"><span class="pre">tt_lib</span></code> Mini-Graph Library<a class="headerlink" href="#fused-operations-from-tt-lib-mini-graph-library" title="Permalink to this heading"></a>
+</h3>
+<p>We have a variety of common operations that require fusion of multiple
+base operations together.</p>
+<dl class="py function">
+<dt class="sig sig-object py" id="tt_lib.fused_ops.linear.Linear">
+<span class="sig-prename descclassname"><span class="pre">tt_lib.fused_ops.linear.</span></span><span class="sig-name descname"><span class="pre">Linear</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">in_features</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">out_features</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">weight</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">float</span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">bias</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">device</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#tt_lib.fused_ops.linear.Linear" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Returns a function that performs a Linear operation with optional bias.</p>
+<p><code class="docutils literal notranslate"><span class="pre">weight</span></code> must be the weight as a tilized list of values.</p>
+</dd>
+</dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="tt_lib.fused_ops.layernorm.Layernorm">
+<span class="sig-prename descclassname"><span class="pre">tt_lib.fused_ops.layernorm.</span></span><span class="sig-name descname"><span class="pre">Layernorm</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">gamma</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">beta</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">epsilon</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">H</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">W</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">device</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">num_dims</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">2</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#tt_lib.fused_ops.layernorm.Layernorm" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Returns a function that performs LayerNorm with parameters.</p>
+<p>H, W correspond to normalized_shape in pytorch Layernorm spec</p>
+<p><em>Note</em>: Note that the only <code class="docutils literal notranslate"><span class="pre">num_dims</span></code> supported at the moment is <code class="docutils literal notranslate"><span class="pre">2</span></code>.</p>
+</dd>
+</dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="tt_lib.fused_ops.add_and_norm.AddAndNorm">
+<span class="sig-prename descclassname"><span class="pre">tt_lib.fused_ops.add_and_norm.</span></span><span class="sig-name descname"><span class="pre">AddAndNorm</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">gamma</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">beta</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="tensor.html#ttnn.Tensor" title="ttnn._ttnn.tensor.Tensor"><span class="pre">Tensor</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">epsilon</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">H</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">W</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">device</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#tt_lib.fused_ops.add_and_norm.AddAndNorm" title="Permalink to this definition"></a>
+</dt>
+<dd>
+<p>Returns a function that performs Eltwise-binary add two
+<code class="docutils literal notranslate"><span class="pre">ttnn.Tensor</span></code> s and then LayerNorm the result.</p>
+</dd>
+</dl>
+
+</section>
+<section id="complex-operations-type-2">
+<h3>Complex Operations (Type 2)<a class="headerlink" href="#complex-operations-type-2" title="Permalink to this heading"></a>
+</h3>
+<p>Type 2 Complex representation allows for more flexible storage than earlier one while providing same set of
+operations; specifically this storage allows for compute without the cost of split-concat implicit in
+the Type 1 contiguous representations.</p>
+</section>
+</section>
+</section>
+
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="index.html" class="btn btn-neutral float-left" title="Dependencies" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="tensor.html" class="btn btn-neutral float-right" title="Tensor" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright Tenstorrent.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
+    <span class="rst-current-version" data-toggle="rst-current-version">
+        Version: <span id="current-version">latest</span>
+        <span class="fa fa-caret-down"></span>
+    </span>
+    <div class="rst-other-versions">
+        <dl id="version-list">
+            <dt>Versions</dt>
+        </dl>
+        <br>
+        </dl>
+    </div>
+</div>
+
+<script>
+const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/dimitri/test-versioned-docs/docs/published_versions.json';
+
+async function loadVersions() {
+    try {
+        const response = await fetch(VERSIONS_URL);
+        const data = await response.json();
+        const versionList = document.getElementById('version-list');
+        const projectCode = location.pathname.split('/')[3];
+
+        data.versions.forEach(version => {
+            const dd = document.createElement('dd');
+            const link = document.createElement('a');
+            link.href = `https://tenstorrent-docs-test.github.io/tt-metal/${version}/${projectCode}/index.html`;
+            link.textContent = version;
+            dd.appendChild(link);
+            versionList.appendChild(dd);
+        });
+    } catch (error) {
+        console.error('Error loading versions:', error);
+    }
+}
+
+loadVersions();
+
+function getCurrentVersion() {
+    return window.location.pathname.split('/')[2];
+}
+document.getElementById('current-version').textContent = getCurrentVersion();
+
+</script><script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

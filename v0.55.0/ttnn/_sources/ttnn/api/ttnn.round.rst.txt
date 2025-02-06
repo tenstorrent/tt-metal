@@ -1,0 +1,8 @@
+﻿ttnn.round
+==========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.round:
+
+.. autofastoperation:: ttnn.round

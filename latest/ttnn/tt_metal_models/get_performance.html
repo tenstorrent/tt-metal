@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Performance &mdash; TT-NN  documentation</title>
+      <link rel="stylesheet" href="../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../_static/tt_theme.css" type="text/css" />
+    <link rel="shortcut icon" href="../_static/favicon.png"/>
+    <link rel="canonical" href="/ttnn/latest/tt_metal_models/get_performance.html" />
+  <!--[if lt IE 9]>
+    <script src="../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../_static/jquery.js?v=5d32c60e"></script>
+        <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js?v=b3ba4146"></script>
+        <script src="../_static/doctools.js?v=888ff710"></script>
+        <script src="../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="Support" href="../resources/support.html" />
+    <link rel="prev" title="Getting Started" href="get_started.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+
+
+<a href="https://docs.tenstorrent.com/">
+    <img src="../_static/tt_logo.svg" class="logo" alt="Logo"/>
+</a>
+
+<a href="../index.html">
+    TT-NN
+</a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">TTNN</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../ttnn/about.html">What is ttnn?</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../ttnn/get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../ttnn/installing.html">Install</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../ttnn/usage.html">Using ttnn</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../ttnn/tensor.html">Tensor</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../ttnn/api.html">APIs</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../ttnn/tutorials.html">Tutorials</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../ttnn/onboarding.html">Onboarding New Functionality</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../ttnn/converting_torch_model_to_ttnn.html">Converting torch Model to ttnn</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../ttnn/adding_new_ttnn_operation.html">Adding New ttnn Operation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../ttnn/profiling_ttnn_operations.html">Profiling ttnn Operations</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../ttnn/dependencies/index.html">Dependencies</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../ttnn/demos.html">Building and Uplifting Demos</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Models</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="get_started.html">Getting Started</a></li>
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Performance</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#prerequisites">Prerequisites</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#running-a-perf-file">Running a perf file</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#running-all-the-perf-files">Running all the perf files</a></li>
+</ul>
+</li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Resources</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../resources/support.html">Support</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../resources/contributing.html">Contributing as a developer</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../index.html">TT-NN</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">Performance</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../_sources/tt_metal_models/get_performance.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="performance">
+<span id="tt-metal-models-performance"></span><h1>Performance<a class="headerlink" href="#performance" title="Permalink to this heading"></a>
+</h1>
+<section id="prerequisites">
+<h2>Prerequisites<a class="headerlink" href="#prerequisites" title="Permalink to this heading"></a>
+</h2>
+<p>Ensure that you have the base TT-Metalium source and environment configuration, and all the requirements for the models are installed. Follow
+<a class="reference internal" href="get_started.html#tt-metalium-models-get-started"><span class="std std-ref">these instructions</span></a>.</p>
+</section>
+<section id="running-a-perf-file">
+<h2>Running a perf file<a class="headerlink" href="#running-a-perf-file" title="Permalink to this heading"></a>
+</h2>
+<p>Each model ready for profiling comes with a perf file, typically found under <code class="docutils literal notranslate"><span class="pre">models/YOUR_MODEL/perf_MODEL.py</span></code>. To profile a model use</p>
+<div class="highlight-default notranslate">
+<div class="highlight"><pre><span></span><span class="n">pytest</span> <span class="n">tests</span><span class="o">/</span><span class="n">python_api_testing</span><span class="o">/</span><span class="n">models</span><span class="o">/</span><span class="n">YOUR_MODEL</span><span class="o">/</span><span class="n">tests</span><span class="o">/</span><span class="n">perf_YOUR_MODEL</span><span class="o">.</span><span class="n">py</span>
+</pre></div>
+</div>
+<p>Perf files will write the results in a csv file <code class="docutils literal notranslate"><span class="pre">perf_YOUR_MODEL_date.csv</span></code>. This file contains a table with two rows, headers and results</p>
+<table class="docutils align-default">
+<colgroup>
+<col style="width: 10%">
+<col style="width: 10%">
+<col style="width: 10%">
+<col style="width: 10%">
+<col style="width: 10%">
+<col style="width: 10%">
+<col style="width: 10%">
+<col style="width: 10%">
+<col style="width: 10%">
+<col style="width: 10%">
+</colgroup>
+<thead>
+<tr class="row-odd">
+<th class="head"><p>Model</p></th>
+<th class="head"><p>Setting</p></th>
+<th class="head"><p>Batch</p></th>
+<th class="head"><p>First Run (sec)</p></th>
+<th class="head"><p>Second Run (sec)</p></th>
+<th class="head"><p>Compile Time (sec)</p></th>
+<th class="head"><p>Inference Time GS (sec)</p></th>
+<th class="head"><p>Throughput GS (batch*inf/sec)</p></th>
+<th class="head"><p>Inference Time CPU (sec)</p></th>
+<th class="head"><p>Throughput CPU (batch*inf/sec)</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even">
+<td><p>vit</p></td>
+<td><p>base-patch16</p></td>
+<td><p>1</p></td>
+<td><p>30.51</p></td>
+<td><p>16.05</p></td>
+<td><p>14.46</p></td>
+<td><p>16.05</p></td>
+<td><p>0.0623</p></td>
+<td><p>0.29</p></td>
+<td><p>3.4960</p></td>
+</tr>
+</tbody>
+</table>
+<ul class="simple">
+<li><p><strong>First Run</strong>: Includes compilation time and inference time; without any caching enabled.</p></li>
+<li><p><strong>Second Run</strong> and <strong>Inference Time GS</strong>: Inference time of abovementioned model on Grayskull. It is referred to as Second Run since during the first run we cache the compile program and do not pay for the compilation at the second run.</p></li>
+<li><p><strong>Compile Time</strong>: Compile time as the name suggest, calculated by subtracting Second Run from the First Run.</p></li>
+<li><p><strong>Throughput GS</strong> Throughput of the model on Grayskull, computed as (batch*inf/sec) where inf is inference time on Grayskull.</p></li>
+<li><p><strong>Inference Time CPU</strong> Inference time of abovementioned model on CPU.</p></li>
+<li><p><strong>Throughput cpu</strong> Throughput of the model’s implementation of pytorch on CPU, computed as (batch*inf/sec) where inf inference time on CPU.</p></li>
+</ul>
+</section>
+<section id="running-all-the-perf-files">
+<h2>Running all the perf files<a class="headerlink" href="#running-all-the-perf-files" title="Permalink to this heading"></a>
+</h2>
+<p>We also maintain <code class="docutils literal notranslate"><span class="pre">tests/scripts/run_performance.sh</span></code> to facilitate an easy way to profile all the models. Our attempt is to have the fastest commands for each perf file in this script. You can execute this file</p>
+<div class="highlight-default notranslate">
+<div class="highlight"><pre><span></span><span class="o">./</span><span class="n">tests</span><span class="o">/</span><span class="n">scripts</span><span class="o">/</span><span class="n">run_performance</span><span class="o">.</span><span class="n">sh</span>
+</pre></div>
+</div>
+<p>This script will run all the perf files and merge the output csv files into on <code class="docutils literal notranslate"><span class="pre">perf.csv</span></code> file.</p>
+</section>
+</section>
+
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="get_started.html" class="btn btn-neutral float-left" title="Getting Started" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="../resources/support.html" class="btn btn-neutral float-right" title="Support" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright Tenstorrent.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
+    <span class="rst-current-version" data-toggle="rst-current-version">
+        Version: <span id="current-version">latest</span>
+        <span class="fa fa-caret-down"></span>
+    </span>
+    <div class="rst-other-versions">
+        <dl id="version-list">
+            <dt>Versions</dt>
+        </dl>
+        <br>
+        </dl>
+    </div>
+</div>
+
+<script>
+const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/dimitri/test-versioned-docs/docs/published_versions.json';
+
+async function loadVersions() {
+    try {
+        const response = await fetch(VERSIONS_URL);
+        const data = await response.json();
+        const versionList = document.getElementById('version-list');
+        const projectCode = location.pathname.split('/')[3];
+
+        data.versions.forEach(version => {
+            const dd = document.createElement('dd');
+            const link = document.createElement('a');
+            link.href = `https://tenstorrent-docs-test.github.io/tt-metal/${version}/${projectCode}/index.html`;
+            link.textContent = version;
+            dd.appendChild(link);
+            versionList.appendChild(dd);
+        });
+    } catch (error) {
+        console.error('Error loading versions:', error);
+    }
+}
+
+loadVersions();
+
+function getCurrentVersion() {
+    return window.location.pathname.split('/')[2];
+}
+document.getElementById('current-version').textContent = getCurrentVersion();
+
+</script><script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

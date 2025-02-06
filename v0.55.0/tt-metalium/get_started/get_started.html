@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Getting Started &mdash; TT-Metalium  documentation</title>
+      <link rel="stylesheet" href="../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../_static/tt_theme.css" type="text/css" />
+    <link rel="shortcut icon" href="../_static/favicon.png"/>
+    <link rel="canonical" href="/tt-metalium/latest/get_started/get_started.html" />
+  <!--[if lt IE 9]>
+    <script src="../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../_static/jquery.js?v=5d32c60e"></script>
+        <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script data-url_root="../" id="documentation_options" src="../_static/documentation_options.js?v=b3ba4146"></script>
+        <script src="../_static/doctools.js?v=888ff710"></script>
+        <script src="../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script src="../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="Install" href="../installing.html" />
+    <link rel="prev" title="Welcome to TT-Metalium documentation!" href="../index.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+
+
+<a href="https://docs.tenstorrent.com/">
+    <img src="../_static/tt_logo.svg" class="logo" alt="Logo"/>
+</a>
+
+<a href="../index.html">
+    TT-Metalium
+</a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">Get Started</span></p>
+<ul class="current">
+<li class="toctree-l1 current"><a class="current reference internal" href="#">Getting Started</a><ul>
+<li class="toctree-l2"><a class="reference internal" href="#quick-start-guide">Quick Start Guide</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#install-and-build">1. Install and Build</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#beginner-metalium-usage-dram-loopback">2. Beginner Metalium Usage: DRAM Loopback</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#beginner-metalium-usage-eltwise-binary-kernel">3. Beginner Metalium Usage: Eltwise Binary Kernel</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#beginner-metalium-usage-single-core-matrix-multiplication-kernel">4. Beginner Metalium Usage: Single-core Matrix Multiplication Kernel</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#advanced-metalium-usage-multi-core-matrix-multiplication-kernel">5. Advanced Metalium Usage: Multi-core Matrix Multiplication Kernel</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#where-to-go-from-here">Where to go from here</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../installing.html">Install</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">TT-Metalium</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../tt_metal/programming_model/index.html">Programming Model</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../tt_metal/apis/index.html">APIs</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../tt_metal/examples/index.html">Programming Examples</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../tools/index.html">Tools</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Resources</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../resources/support.html">Support</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../resources/contributing.html">Contributing as a developer</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../index.html">TT-Metalium</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">Getting Started</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../_sources/get_started/get_started.rst.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="getting-started">
+<span id="id1"></span><h1>Getting Started<a class="headerlink" href="#getting-started" title="Permalink to this heading"></a>
+</h1>
+<p>TT-Metalium is designed with the needs for non-ML and ML use cases.</p>
+<p>The GitHub page for the project is located here:
+<a class="reference external" href="https://github.com/tenstorrent/tt-metal">https://github.com/tenstorrent/tt-metal</a></p>
+<p>Installation and environment setup instructions are in the GitHub repository
+front-page README: <a class="reference external" href="https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md">https://github.com/tenstorrent/tt-metal/blob/main/INSTALLING.md</a></p>
+<section id="quick-start-guide">
+<h2>Quick Start Guide<a class="headerlink" href="#quick-start-guide" title="Permalink to this heading"></a>
+</h2>
+<p>Metalium provides developers to do more than running models, facilitating a
+transition from running models effortlessly out of the box, engaging in
+lightweight optimizations, and progressing into more sophisticated, heavyweight
+optimizations. This series of steps serves as an illustrative example,
+showcasing the available tools for optimizing performance on Tenstorrent
+hardware.</p>
+<section id="install-and-build">
+<h3>1. Install and Build<a class="headerlink" href="#install-and-build" title="Permalink to this heading"></a>
+</h3>
+<p>Install and build the project by following the instructions in the
+<a class="reference external" href="../installing.html">installation guide</a>.</p>
+</section>
+<section id="beginner-metalium-usage-dram-loopback">
+<h3>2. Beginner Metalium Usage: DRAM Loopback<a class="headerlink" href="#beginner-metalium-usage-dram-loopback" title="Permalink to this heading"></a>
+</h3>
+<p>Try creating a <a class="reference internal" href="../tt_metal/examples/dram_loopback.html#dram-loopback-example"><span class="std std-ref">basic kernel example</span></a> that uses
+the L1 and DRAM memory structures of the Tenstorrent device.</p>
+</section>
+<section id="beginner-metalium-usage-eltwise-binary-kernel">
+<h3>3. Beginner Metalium Usage: Eltwise Binary Kernel<a class="headerlink" href="#beginner-metalium-usage-eltwise-binary-kernel" title="Permalink to this heading"></a>
+</h3>
+<p>Augment your loopback example an <a class="reference internal" href="../tt_metal/examples/eltwise_binary.html#eltwise-binary-example"><span class="std std-ref">additional kernel</span></a> that will use the compute engine of the Tensix core to add values in
+two buffers.</p>
+</section>
+<section id="beginner-metalium-usage-single-core-matrix-multiplication-kernel">
+<h3>4. Beginner Metalium Usage: Single-core Matrix Multiplication Kernel<a class="headerlink" href="#beginner-metalium-usage-single-core-matrix-multiplication-kernel" title="Permalink to this heading"></a>
+</h3>
+<p>Use TT-Metalium to define your own matrix multiplication kernels. Refer to our
+simpler <a class="reference internal" href="../tt_metal/examples/matmul_single_core.html#matmul-single-core-example"><span class="std std-ref">single-core</span></a> example as a starting
+point.</p>
+</section>
+<section id="advanced-metalium-usage-multi-core-matrix-multiplication-kernel">
+<h3>5. Advanced Metalium Usage: Multi-core Matrix Multiplication Kernel<a class="headerlink" href="#advanced-metalium-usage-multi-core-matrix-multiplication-kernel" title="Permalink to this heading"></a>
+</h3>
+<p>Explore expert-level usage by building on the previous example to create a
+<a class="reference internal" href="../tt_metal/examples/matmul_multi_core.html#matmul-multi-core-example"><span class="std std-ref">multi-core</span></a> implementation.</p>
+</section>
+<section id="where-to-go-from-here">
+<h3>Where to go from here<a class="headerlink" href="#where-to-go-from-here" title="Permalink to this heading"></a>
+</h3>
+<p>If you’re an ML developer and looking for a simpler Python API to build models,
+take a look at our higher-level API <a class="reference external" href="../../ttnn">TT-NN</a>.</p>
+<p>If you’re an internal TT-Metalium developer, please now read and review the
+<a class="reference external" href="https://github.com/tenstorrent/tt-metal/blob/main/CONTRIBUTING.md">contribution standards</a>.</p>
+</section>
+</section>
+</section>
+
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="../index.html" class="btn btn-neutral float-left" title="Welcome to TT-Metalium documentation!" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="../installing.html" class="btn btn-neutral float-right" title="Install" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright Tenstorrent.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
+    <span class="rst-current-version" data-toggle="rst-current-version">
+        Version: <span id="current-version">latest</span>
+        <span class="fa fa-caret-down"></span>
+    </span>
+    <div class="rst-other-versions">
+        <dl id="version-list">
+            <dt>Versions</dt>
+        </dl>
+        <br>
+        </dl>
+    </div>
+</div>
+
+<script>
+const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/dimitri/test-versioned-docs/docs/published_versions.json';
+
+async function loadVersions() {
+    try {
+        const response = await fetch(VERSIONS_URL);
+        const data = await response.json();
+        const versionList = document.getElementById('version-list');
+        const projectCode = location.pathname.split('/')[3];
+
+        data.versions.forEach(version => {
+            const dd = document.createElement('dd');
+            const link = document.createElement('a');
+            link.href = `https://tenstorrent-docs-test.github.io/tt-metal/${version}/${projectCode}/index.html`;
+            link.textContent = version;
+            dd.appendChild(link);
+            versionList.appendChild(dd);
+        });
+    } catch (error) {
+        console.error('Error loading versions:', error);
+    }
+}
+
+loadVersions();
+
+function getCurrentVersion() {
+    return window.location.pathname.split('/')[2];
+}
+document.getElementById('current-version').textContent = getCurrentVersion();
+
+</script><script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

@@ -1,0 +1,8 @@
+﻿ttnn.isposinf
+=============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.isposinf:
+
+.. autofastoperation:: ttnn.isposinf

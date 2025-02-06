@@ -1,0 +1,8 @@
+﻿ttnn.imag
+=========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.imag:
+
+.. autofastoperation:: ttnn.imag

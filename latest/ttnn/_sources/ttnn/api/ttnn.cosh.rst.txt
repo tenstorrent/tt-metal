@@ -1,0 +1,8 @@
+﻿ttnn.cosh
+=========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.cosh:
+
+.. autofastoperation:: ttnn.cosh

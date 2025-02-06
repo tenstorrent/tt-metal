@@ -1,0 +1,8 @@
+﻿ttnn.logit\_bw
+==============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.logit_bw:
+
+.. autofastoperation:: ttnn.logit_bw

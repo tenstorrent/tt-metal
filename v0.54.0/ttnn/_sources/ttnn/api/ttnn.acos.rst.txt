@@ -1,0 +1,8 @@
+﻿ttnn.acos
+=========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.acos:
+
+.. autofastoperation:: ttnn.acos

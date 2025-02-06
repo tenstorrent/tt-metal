@@ -1,0 +1,8 @@
+﻿ttnn.reciprocal\_bw
+===================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.reciprocal_bw:
+
+.. autofastoperation:: ttnn.reciprocal_bw

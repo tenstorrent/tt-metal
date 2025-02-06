@@ -1,0 +1,1348 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+  <meta charset="utf-8" /><meta name="generator" content="Docutils 0.18.1: http://docutils.sourceforge.net/" />
+
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Profiling ttnn operations &mdash; TT-NN  documentation</title>
+      <link rel="stylesheet" href="../../../_static/pygments.css" type="text/css" />
+      <link rel="stylesheet" href="../../../_static/css/theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../../_static/tt_theme.css" type="text/css" />
+      <link rel="stylesheet" href="../../../_static/nbsphinx-code-cells.css" type="text/css" />
+    <link rel="shortcut icon" href="../../../_static/favicon.png"/>
+    <link rel="canonical" href="/ttnn/latest/ttnn/tutorials/ttnn_tutorials/005.html" />
+  <!--[if lt IE 9]>
+    <script src="../../../_static/js/html5shiv.min.js"></script>
+  <![endif]-->
+  
+        <script src="../../../_static/jquery.js?v=5d32c60e"></script>
+        <script src="../../../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+        <script data-url_root="../../../" id="documentation_options" src="../../../_static/documentation_options.js?v=b3ba4146"></script>
+        <script src="../../../_static/doctools.js?v=888ff710"></script>
+        <script src="../../../_static/sphinx_highlight.js?v=4825356b"></script>
+        <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+        <script>window.MathJax = {"tex": {"inlineMath": [["$", "$"], ["\\(", "\\)"]], "processEscapes": true}, "options": {"ignoreHtmlClass": "tex2jax_ignore|mathjax_ignore|document", "processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
+        <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    <script src="../../../_static/js/theme.js"></script>
+    <link rel="index" title="Index" href="../../../genindex.html" />
+    <link rel="search" title="Search" href="../../../search.html" />
+    <link rel="next" title="Resnet Basic Block" href="../resnet-basic-block.html" />
+    <link rel="prev" title="ttnn Profiling" href="../profiling.html" /> 
+</head>
+
+<body class="wy-body-for-nav"> 
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side">
+      <div class="wy-side-scroll">
+        <div class="wy-side-nav-search" >
+
+
+
+<a href="https://docs.tenstorrent.com/">
+    <img src="../../../_static/tt_logo.svg" class="logo" alt="Logo"/>
+</a>
+
+<a href="../../../index.html">
+    TT-NN
+</a>
+<div role="search">
+  <form id="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="hidden" name="check_keywords" value="yes" />
+    <input type="hidden" name="area" value="default" />
+  </form>
+</div>
+        </div><div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <p class="caption" role="heading"><span class="caption-text">TTNN</span></p>
+<ul class="current">
+<li class="toctree-l1"><a class="reference internal" href="../../about.html">What is ttnn?</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../installing.html">Install</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../usage.html">Using ttnn</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../tensor.html">Tensor</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../api.html">APIs</a></li>
+<li class="toctree-l1 current"><a class="reference internal" href="../../tutorials.html">Tutorials</a><ul class="current">
+<li class="toctree-l2"><a class="reference internal" href="../tensor_and_add_operation.html">Tensor and Add Operation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../matmul.html">Matmul Operation</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../multihead-attention.html">Multi-Head Attention</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../ttnn-tracer.html">ttnn Tracer</a></li>
+<li class="toctree-l2 current"><a class="reference internal" href="../profiling.html">ttnn Profiling</a><ul class="current">
+<li class="toctree-l3 current"><a class="current reference internal" href="#">Profiling ttnn operations</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="../resnet-basic-block.html">Resnet Basic Block</a></li>
+<li class="toctree-l2"><a class="reference internal" href="../graphing_torch_dit.html">Graphing Torch DiT_XL_2 With TTNN</a></li>
+</ul>
+</li>
+<li class="toctree-l1"><a class="reference internal" href="../../onboarding.html">Onboarding New Functionality</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../converting_torch_model_to_ttnn.html">Converting torch Model to ttnn</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../adding_new_ttnn_operation.html">Adding New ttnn Operation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../profiling_ttnn_operations.html">Profiling ttnn Operations</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../dependencies/index.html">Dependencies</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../demos.html">Building and Uplifting Demos</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Models</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../tt_metal_models/get_started.html">Getting Started</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../tt_metal_models/get_performance.html">Performance</a></li>
+</ul>
+<p class="caption" role="heading"><span class="caption-text">Resources</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../../../resources/support.html">Support</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../../resources/contributing.html">Contributing as a developer</a></li>
+</ul>
+
+        </div>
+      </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap"><nav class="wy-nav-top" aria-label="Mobile navigation menu" >
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../../index.html">TT-NN</a>
+      </nav>
+
+      <div class="wy-nav-content">
+        <div class="rst-content">
+          <div role="navigation" aria-label="Page navigation">
+  <ul class="wy-breadcrumbs">
+      <li><a href="../../../index.html" class="icon icon-home" aria-label="Home"></a></li>
+          <li class="breadcrumb-item"><a href="../../tutorials.html">Tutorials</a></li>
+          <li class="breadcrumb-item"><a href="../profiling.html">ttnn Profiling</a></li>
+      <li class="breadcrumb-item active">Profiling ttnn operations</li>
+      <li class="wy-breadcrumbs-aside">
+            <a href="../../../_sources/ttnn/tutorials/ttnn_tutorials/005.ipynb.txt" rel="nofollow"> View page source</a>
+      </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+           <div itemprop="articleBody">
+             
+  <section id="Profiling-ttnn-operations">
+<h1>Profiling ttnn operations<a class="headerlink" href="#Profiling-ttnn-operations" title="Permalink to this heading"></a>
+</h1>
+<p>See the documentation on <a class="reference external" href="https://tenstorrent.github.io/tt-metal/latest/ttnn/ttnn/profiling_ttnn_operations.html">profiling</a> !</p>
+<div class="nbinput docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[8]:
+</pre></div>
+</div>
+<div class="input_area highlight-bash notranslate">
+<div class="highlight"><pre><span></span>%%bash
+<span class="nb">cd</span><span class="w"> </span><span class="nv">$TT_METAL_HOME</span>
+<span class="nb">unset</span><span class="w"> </span>SILENT
+make<span class="w"> </span>nuke
+build_metal.sh<span class="w"> </span>--enable-profiler
+<br></pre></div>
+</div>
+</div>
+<div class="nboutput docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area stderr docutils container">
+<div class="highlight"><pre>
+make[1]: warning: jobserver unavailable: using -j1.  Add '+' to parent make rule.
+</pre></div>
+</div>
+</div>
+<div class="nboutput docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area docutils container">
+<div class="highlight"><pre>
+Removed all profiler artifacts
+</pre></div>
+</div>
+</div>
+<div class="nboutput docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area stderr docutils container">
+<div class="highlight"><pre>
+make[1]: warning: jobserver unavailable: using -j1.  Add '+' to parent make rule.
+make[1]: warning: jobserver unavailable: using -j1.  Add '+' to parent make rule.
+</pre></div>
+</div>
+</div>
+<div class="nboutput nblast docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area docutils container">
+<div class="highlight"><pre>
+Writing to /home/ubuntu/.config/pip/pip.conf
+Installing python env build backend requirements...
+Looking in indexes: https://pypi.org/simple, https://download.pytorch.org/whl/cpu
+Requirement already satisfied: setuptools in ./build/python_env/lib/python3.8/site-packages (44.0.0)
+Collecting wheel
+  Using cached wheel-0.42.0-py3-none-any.whl (65 kB)
+Installing collected packages: wheel
+Successfully installed wheel-0.42.0
+Installing editable dev version of tt_eager packages...
+Looking in indexes: https://pypi.org/simple, https://download.pytorch.org/whl/cpu
+Obtaining file:///home/ubuntu/git/tt-metal
+  Installing build dependencies: started
+  Installing build dependencies: finished with status 'done'
+  Getting requirements to build wheel: started
+  Getting requirements to build wheel: finished with status 'done'
+    Preparing wheel metadata: started
+    Preparing wheel metadata: finished with status 'done'
+Collecting click==8.1.3
+  Using cached click-8.1.3-py3-none-any.whl (96 kB)
+Collecting loguru==0.6.0
+  Using cached loguru-0.6.0-py3-none-any.whl (58 kB)
+Collecting ipywidgets==8.1.1
+  Using cached ipywidgets-8.1.1-py3-none-any.whl (139 kB)
+Processing /home/ubuntu/.cache/pip/wheels/13/90/db/290ab3a34f2ef0b5a0f89235dc2d40fea83e77de84ed2dc05c/PyYAML-5.3.1-cp38-cp38-linux_x86_64.whl
+Collecting jupyterlab==4.0.7
+  Using cached jupyterlab-4.0.7-py3-none-any.whl (9.2 MB)
+Collecting pyelftools==0.29
+  Using cached pyelftools-0.29-py2.py3-none-any.whl (174 kB)
+Processing /home/ubuntu/.cache/pip/wheels/45/4f/ed/863cf4386fe6db3c09333712009ec1c5146a36f3904b469d13/curtsies-0.4.1-py3-none-any.whl
+Processing /home/ubuntu/.cache/pip/wheels/91/b7/13/0c117d73912c6c2beb1eb0d7d6884f4e79e6e5b5e91eeb34f5/torchtrail-0.0.8-py3-none-any.whl
+Collecting numpy==1.20.3
+  Using cached numpy-1.20.3-cp38-cp38-manylinux_2_12_x86_64.manylinux2010_x86_64.whl (15.4 MB)
+Collecting matplotlib==3.7.1
+  Using cached matplotlib-3.7.1-cp38-cp38-manylinux_2_12_x86_64.manylinux2010_x86_64.whl (9.2 MB)
+Collecting toolz==0.12.0
+  Using cached toolz-0.12.0-py3-none-any.whl (55 kB)
+Collecting Pillow==9.5.0
+  Using cached Pillow-9.5.0-cp38-cp38-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (3.3 MB)
+Collecting pandas==1.5.3
+  Using cached pandas-1.5.3-cp38-cp38-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (12.2 MB)
+Collecting torch==1.13.1+cpu
+  Using cached https://download.pytorch.org/whl/cpu/torch-1.13.1%2Bcpu-cp38-cp38-linux_x86_64.whl (199.1 MB)
+Collecting dash==2.8.1
+  Using cached dash-2.8.1-py3-none-any.whl (9.9 MB)
+Collecting rich==13.3.3
+  Using cached rich-13.3.3-py3-none-any.whl (238 kB)
+Collecting seaborn==0.12.2
+  Using cached seaborn-0.12.2-py3-none-any.whl (293 kB)
+Collecting plotly==5.13.0
+  Using cached plotly-5.13.0-py2.py3-none-any.whl (15.2 MB)
+Collecting traitlets&gt;=4.3.1
+  Using cached traitlets-5.14.1-py3-none-any.whl (85 kB)
+Collecting widgetsnbextension~=4.0.9
+  Using cached widgetsnbextension-4.0.10-py3-none-any.whl (2.3 MB)
+Collecting ipython&gt;=6.1.0
+  Using cached ipython-8.12.3-py3-none-any.whl (798 kB)
+Collecting jupyterlab-widgets~=3.0.9
+  Using cached jupyterlab_widgets-3.0.10-py3-none-any.whl (215 kB)
+Collecting comm&gt;=0.1.3
+  Using cached comm-0.2.1-py3-none-any.whl (7.2 kB)
+Collecting async-lru&gt;=1.0.0
+  Using cached async_lru-2.0.4-py3-none-any.whl (6.1 kB)
+Collecting tomli; python_version &lt; "3.11"
+  Using cached tomli-2.0.1-py3-none-any.whl (12 kB)
+Collecting jupyter-server&lt;3,&gt;=2.4.0
+  Using cached jupyter_server-2.12.5-py3-none-any.whl (380 kB)
+Collecting jinja2&gt;=3.0.3
+  Using cached Jinja2-3.1.3-py3-none-any.whl (133 kB)
+Collecting ipykernel
+  Using cached ipykernel-6.29.2-py3-none-any.whl (116 kB)
+Collecting notebook-shim&gt;=0.2
+  Using cached notebook_shim-0.2.3-py3-none-any.whl (13 kB)
+Collecting jupyterlab-server&lt;3,&gt;=2.19.0
+  Using cached jupyterlab_server-2.25.2-py3-none-any.whl (58 kB)
+Collecting jupyter-lsp&gt;=2.0.0
+  Using cached jupyter_lsp-2.2.2-py3-none-any.whl (68 kB)
+Collecting packaging
+  Using cached packaging-23.2-py3-none-any.whl (53 kB)
+Collecting importlib-resources&gt;=1.4; python_version &lt; "3.9"
+  Using cached importlib_resources-6.1.1-py3-none-any.whl (33 kB)
+Collecting importlib-metadata&gt;=4.8.3; python_version &lt; "3.10"
+  Using cached importlib_metadata-7.0.1-py3-none-any.whl (23 kB)
+Collecting jupyter-core
+  Using cached jupyter_core-5.7.1-py3-none-any.whl (28 kB)
+Collecting tornado&gt;=6.2.0
+  Using cached tornado-6.4-cp38-abi3-manylinux_2_5_x86_64.manylinux1_x86_64.manylinux_2_17_x86_64.manylinux2014_x86_64.whl (435 kB)
+Collecting blessed&gt;=1.5
+  Using cached blessed-1.20.0-py2.py3-none-any.whl (58 kB)
+Collecting cwcwidth
+  Using cached cwcwidth-0.1.9-cp38-cp38-manylinux_2_5_x86_64.manylinux1_x86_64.manylinux_2_17_x86_64.manylinux2014_x86_64.whl (92 kB)
+Collecting pyrsistent==0.20.0
+  Using cached pyrsistent-0.20.0-cp38-cp38-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (121 kB)
+Collecting graphviz==0.20.1
+  Using cached graphviz-0.20.1-py3-none-any.whl (47 kB)
+Collecting networkx==3.1
+  Using cached networkx-3.1-py3-none-any.whl (2.1 MB)
+Collecting pyparsing&gt;=2.3.1
+  Using cached pyparsing-3.1.1-py3-none-any.whl (103 kB)
+Collecting kiwisolver&gt;=1.0.1
+  Using cached kiwisolver-1.4.5-cp38-cp38-manylinux_2_5_x86_64.manylinux1_x86_64.whl (1.2 MB)
+Collecting contourpy&gt;=1.0.1
+  Using cached contourpy-1.1.1-cp38-cp38-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (301 kB)
+Collecting fonttools&gt;=4.22.0
+  Using cached fonttools-4.48.1-cp38-cp38-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (4.7 MB)
+Collecting python-dateutil&gt;=2.7
+  Using cached python_dateutil-2.8.2-py2.py3-none-any.whl (247 kB)
+Collecting cycler&gt;=0.10
+  Using cached cycler-0.12.1-py3-none-any.whl (8.3 kB)
+Collecting pytz&gt;=2020.1
+  Using cached pytz-2024.1-py2.py3-none-any.whl (505 kB)
+Collecting typing-extensions
+  Using cached typing_extensions-4.9.0-py3-none-any.whl (32 kB)
+Collecting dash-html-components==2.0.0
+  Using cached dash_html_components-2.0.0-py3-none-any.whl (4.1 kB)
+Collecting dash-table==5.0.0
+  Using cached dash_table-5.0.0-py3-none-any.whl (3.9 kB)
+Collecting Flask&gt;=1.0.4
+  Using cached flask-3.0.2-py3-none-any.whl (101 kB)
+Collecting dash-core-components==2.0.0
+  Using cached dash_core_components-2.0.0-py3-none-any.whl (3.8 kB)
+Collecting pygments&lt;3.0.0,&gt;=2.13.0
+  Using cached pygments-2.17.2-py3-none-any.whl (1.2 MB)
+Collecting markdown-it-py&lt;3.0.0,&gt;=2.2.0
+  Using cached markdown_it_py-2.2.0-py3-none-any.whl (84 kB)
+Collecting tenacity&gt;=6.2.0
+  Using cached tenacity-8.2.3-py3-none-any.whl (24 kB)
+Collecting pickleshare
+  Using cached pickleshare-0.7.5-py2.py3-none-any.whl (6.9 kB)
+Collecting prompt-toolkit!=3.0.37,&lt;3.1.0,&gt;=3.0.30
+  Using cached prompt_toolkit-3.0.43-py3-none-any.whl (386 kB)
+Collecting stack-data
+  Using cached stack_data-0.6.3-py3-none-any.whl (24 kB)
+Collecting decorator
+  Using cached decorator-5.1.1-py3-none-any.whl (9.1 kB)
+Collecting backcall
+  Using cached backcall-0.2.0-py2.py3-none-any.whl (11 kB)
+Collecting jedi&gt;=0.16
+  Using cached jedi-0.19.1-py2.py3-none-any.whl (1.6 MB)
+Collecting pexpect&gt;4.3; sys_platform != "win32"
+  Using cached pexpect-4.9.0-py2.py3-none-any.whl (63 kB)
+Collecting matplotlib-inline
+  Using cached matplotlib_inline-0.1.6-py3-none-any.whl (9.4 kB)
+Collecting send2trash&gt;=1.8.2
+  Using cached Send2Trash-1.8.2-py3-none-any.whl (18 kB)
+Collecting anyio&gt;=3.1.0
+  Using cached anyio-4.2.0-py3-none-any.whl (85 kB)
+Collecting jupyter-server-terminals
+  Using cached jupyter_server_terminals-0.5.2-py3-none-any.whl (13 kB)
+Collecting jupyter-client&gt;=7.4.4
+  Using cached jupyter_client-8.6.0-py3-none-any.whl (105 kB)
+Collecting nbformat&gt;=5.3.0
+  Using cached nbformat-5.9.2-py3-none-any.whl (77 kB)
+Collecting overrides
+  Using cached overrides-7.7.0-py3-none-any.whl (17 kB)
+Collecting nbconvert&gt;=6.4.4
+  Using cached nbconvert-7.16.0-py3-none-any.whl (257 kB)
+Collecting jupyter-events&gt;=0.9.0
+  Using cached jupyter_events-0.9.0-py3-none-any.whl (18 kB)
+Collecting websocket-client
+  Using cached websocket_client-1.7.0-py3-none-any.whl (58 kB)
+Collecting pyzmq&gt;=24
+  Using cached pyzmq-25.1.2-cp38-cp38-manylinux_2_12_x86_64.manylinux2010_x86_64.whl (1.1 MB)
+Collecting prometheus-client
+  Using cached prometheus_client-0.19.0-py3-none-any.whl (54 kB)
+Collecting argon2-cffi
+  Using cached argon2_cffi-23.1.0-py3-none-any.whl (15 kB)
+Collecting terminado&gt;=0.8.3
+  Using cached terminado-0.18.0-py3-none-any.whl (14 kB)
+Collecting MarkupSafe&gt;=2.0
+  Using cached MarkupSafe-2.1.5-cp38-cp38-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (26 kB)
+Collecting nest-asyncio
+  Using cached nest_asyncio-1.6.0-py3-none-any.whl (5.2 kB)
+Collecting psutil
+  Using cached psutil-5.9.8-cp36-abi3-manylinux_2_12_x86_64.manylinux2010_x86_64.manylinux_2_17_x86_64.manylinux2014_x86_64.whl (288 kB)
+Collecting debugpy&gt;=1.6.5
+  Using cached debugpy-1.8.1-cp38-cp38-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (3.1 MB)
+Collecting babel&gt;=2.10
+  Using cached Babel-2.14.0-py3-none-any.whl (11.0 MB)
+Collecting requests&gt;=2.31
+  Using cached requests-2.31.0-py3-none-any.whl (62 kB)
+Collecting jsonschema&gt;=4.18.0
+  Using cached jsonschema-4.21.1-py3-none-any.whl (85 kB)
+Collecting json5&gt;=0.9.0
+  Using cached json5-0.9.14-py2.py3-none-any.whl (19 kB)
+Collecting zipp&gt;=3.1.0; python_version &lt; "3.10"
+  Using cached zipp-3.17.0-py3-none-any.whl (7.4 kB)
+Collecting platformdirs&gt;=2.5
+  Using cached platformdirs-4.2.0-py3-none-any.whl (17 kB)
+Collecting six&gt;=1.9.0
+  Using cached six-1.16.0-py2.py3-none-any.whl (11 kB)
+Collecting wcwidth&gt;=0.1.4
+  Using cached wcwidth-0.2.13-py2.py3-none-any.whl (34 kB)
+Collecting itsdangerous&gt;=2.1.2
+  Using cached itsdangerous-2.1.2-py3-none-any.whl (15 kB)
+Collecting blinker&gt;=1.6.2
+  Using cached blinker-1.7.0-py3-none-any.whl (13 kB)
+Collecting Werkzeug&gt;=3.0.0
+  Using cached werkzeug-3.0.1-py3-none-any.whl (226 kB)
+Collecting mdurl~=0.1
+  Using cached mdurl-0.1.2-py3-none-any.whl (10.0 kB)
+Collecting pure-eval
+  Using cached pure_eval-0.2.2-py3-none-any.whl (11 kB)
+Collecting asttokens&gt;=2.1.0
+  Using cached asttokens-2.4.1-py2.py3-none-any.whl (27 kB)
+Collecting executing&gt;=1.2.0
+  Using cached executing-2.0.1-py2.py3-none-any.whl (24 kB)
+Collecting parso&lt;0.9.0,&gt;=0.8.3
+  Using cached parso-0.8.3-py2.py3-none-any.whl (100 kB)
+Collecting ptyprocess&gt;=0.5
+  Using cached ptyprocess-0.7.0-py2.py3-none-any.whl (13 kB)
+Collecting exceptiongroup&gt;=1.0.2; python_version &lt; "3.11"
+  Using cached exceptiongroup-1.2.0-py3-none-any.whl (16 kB)
+Collecting idna&gt;=2.8
+  Using cached idna-3.6-py3-none-any.whl (61 kB)
+Collecting sniffio&gt;=1.1
+  Using cached sniffio-1.3.0-py3-none-any.whl (10 kB)
+Collecting fastjsonschema
+  Using cached fastjsonschema-2.19.1-py3-none-any.whl (23 kB)
+Collecting defusedxml
+  Using cached defusedxml-0.7.1-py2.py3-none-any.whl (25 kB)
+Collecting beautifulsoup4
+  Using cached beautifulsoup4-4.12.3-py3-none-any.whl (147 kB)
+Collecting jupyterlab-pygments
+  Using cached jupyterlab_pygments-0.3.0-py3-none-any.whl (15 kB)
+Collecting pandocfilters&gt;=1.4.1
+  Using cached pandocfilters-1.5.1-py2.py3-none-any.whl (8.7 kB)
+Collecting mistune&lt;4,&gt;=2.0.3
+  Using cached mistune-3.0.2-py3-none-any.whl (47 kB)
+Collecting tinycss2
+  Using cached tinycss2-1.2.1-py3-none-any.whl (21 kB)
+Collecting bleach!=5.0.0
+  Using cached bleach-6.1.0-py3-none-any.whl (162 kB)
+Collecting nbclient&gt;=0.5.0
+  Using cached nbclient-0.9.0-py3-none-any.whl (24 kB)
+Collecting rfc3986-validator&gt;=0.1.1
+  Using cached rfc3986_validator-0.1.1-py2.py3-none-any.whl (4.2 kB)
+Collecting python-json-logger&gt;=2.0.4
+  Using cached python_json_logger-2.0.7-py3-none-any.whl (8.1 kB)
+Collecting referencing
+  Using cached referencing-0.33.0-py3-none-any.whl (26 kB)
+Collecting rfc3339-validator
+  Using cached rfc3339_validator-0.1.4-py2.py3-none-any.whl (3.5 kB)
+Collecting argon2-cffi-bindings
+  Using cached argon2_cffi_bindings-21.2.0-cp36-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (86 kB)
+Collecting urllib3&lt;3,&gt;=1.21.1
+  Using cached urllib3-2.2.0-py3-none-any.whl (120 kB)
+Collecting charset-normalizer&lt;4,&gt;=2
+  Using cached charset_normalizer-3.3.2-cp38-cp38-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (141 kB)
+Collecting certifi&gt;=2017.4.17
+  Using cached certifi-2024.2.2-py3-none-any.whl (163 kB)
+Collecting jsonschema-specifications&gt;=2023.03.6
+  Using cached jsonschema_specifications-2023.12.1-py3-none-any.whl (18 kB)
+Collecting pkgutil-resolve-name&gt;=1.3.10; python_version &lt; "3.9"
+  Using cached pkgutil_resolve_name-1.3.10-py3-none-any.whl (4.7 kB)
+Collecting attrs&gt;=22.2.0
+  Using cached attrs-23.2.0-py3-none-any.whl (60 kB)
+Collecting rpds-py&gt;=0.7.1
+  Using cached rpds_py-0.17.1-cp38-cp38-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (1.2 MB)
+Collecting soupsieve&gt;1.2
+  Using cached soupsieve-2.5-py3-none-any.whl (36 kB)
+Collecting webencodings&gt;=0.4
+  Using cached webencodings-0.5.1-py2.py3-none-any.whl (11 kB)
+Collecting cffi&gt;=1.0.1
+  Using cached cffi-1.16.0-cp38-cp38-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (444 kB)
+Collecting pycparser
+  Using cached pycparser-2.21-py2.py3-none-any.whl (118 kB)
+Installing collected packages: click, loguru, traitlets, widgetsnbextension, pygments, pickleshare, wcwidth, prompt-toolkit, pure-eval, six, asttokens, executing, stack-data, typing-extensions, decorator, backcall, parso, jedi, ptyprocess, pexpect, matplotlib-inline, ipython, jupyterlab-widgets, comm, ipywidgets, pyyaml, async-lru, tomli, send2trash, exceptiongroup, idna, sniffio, anyio, tornado, terminado, jupyter-server-terminals, pyzmq, platformdirs, jupyter-core, zipp, importlib-metadata, python-dateutil, jupyter-client, fastjsonschema, importlib-resources, rpds-py, attrs, referencing, jsonschema-specifications, pkgutil-resolve-name, jsonschema, nbformat, overrides, packaging, defusedxml, soupsieve, beautifulsoup4, jupyterlab-pygments, pandocfilters, mistune, webencodings, tinycss2, MarkupSafe, bleach, jinja2, nbclient, nbconvert, rfc3986-validator, python-json-logger, rfc3339-validator, jupyter-events, websocket-client, prometheus-client, pycparser, cffi, argon2-cffi-bindings, argon2-cffi, jupyter-server, nest-asyncio, psutil, debugpy, ipykernel, notebook-shim, pytz, babel, urllib3, charset-normalizer, certifi, requests, json5, jupyterlab-server, jupyter-lsp, jupyterlab, pyelftools, blessed, cwcwidth, curtsies, pyrsistent, graphviz, networkx, torch, torchtrail, numpy, pyparsing, kiwisolver, contourpy, fonttools, cycler, Pillow, matplotlib, toolz, pandas, dash-html-components, tenacity, plotly, dash-table, itsdangerous, blinker, Werkzeug, Flask, dash-core-components, dash, mdurl, markdown-it-py, rich, seaborn, metal-libs
+  Running setup.py develop for metal-libs
+Successfully installed Flask-3.0.2 MarkupSafe-2.1.5 Pillow-9.5.0 Werkzeug-3.0.1 anyio-4.2.0 argon2-cffi-23.1.0 argon2-cffi-bindings-21.2.0 asttokens-2.4.1 async-lru-2.0.4 attrs-23.2.0 babel-2.14.0 backcall-0.2.0 beautifulsoup4-4.12.3 bleach-6.1.0 blessed-1.20.0 blinker-1.7.0 certifi-2024.2.2 cffi-1.16.0 charset-normalizer-3.3.2 click-8.1.3 comm-0.2.1 contourpy-1.1.1 curtsies-0.4.1 cwcwidth-0.1.9 cycler-0.12.1 dash-2.8.1 dash-core-components-2.0.0 dash-html-components-2.0.0 dash-table-5.0.0 debugpy-1.8.1 decorator-5.1.1 defusedxml-0.7.1 exceptiongroup-1.2.0 executing-2.0.1 fastjsonschema-2.19.1 fonttools-4.48.1 graphviz-0.20.1 idna-3.6 importlib-metadata-7.0.1 importlib-resources-6.1.1 ipykernel-6.29.2 ipython-8.12.3 ipywidgets-8.1.1 itsdangerous-2.1.2 jedi-0.19.1 jinja2-3.1.3 json5-0.9.14 jsonschema-4.21.1 jsonschema-specifications-2023.12.1 jupyter-client-8.6.0 jupyter-core-5.7.1 jupyter-events-0.9.0 jupyter-lsp-2.2.2 jupyter-server-2.12.5 jupyter-server-terminals-0.5.2 jupyterlab-4.0.7 jupyterlab-pygments-0.3.0 jupyterlab-server-2.25.2 jupyterlab-widgets-3.0.10 kiwisolver-1.4.5 loguru-0.6.0 markdown-it-py-2.2.0 matplotlib-3.7.1 matplotlib-inline-0.1.6 mdurl-0.1.2 metal-libs mistune-3.0.2 nbclient-0.9.0 nbconvert-7.16.0 nbformat-5.9.2 nest-asyncio-1.6.0 networkx-3.1 notebook-shim-0.2.3 numpy-1.20.3 overrides-7.7.0 packaging-23.2 pandas-1.5.3 pandocfilters-1.5.1 parso-0.8.3 pexpect-4.9.0 pickleshare-0.7.5 pkgutil-resolve-name-1.3.10 platformdirs-4.2.0 plotly-5.13.0 prometheus-client-0.19.0 prompt-toolkit-3.0.43 psutil-5.9.8 ptyprocess-0.7.0 pure-eval-0.2.2 pycparser-2.21 pyelftools-0.29 pygments-2.17.2 pyparsing-3.1.1 pyrsistent-0.20.0 python-dateutil-2.8.2 python-json-logger-2.0.7 pytz-2024.1 pyyaml-5.3.1 pyzmq-25.1.2 referencing-0.33.0 requests-2.31.0 rfc3339-validator-0.1.4 rfc3986-validator-0.1.1 rich-13.3.3 rpds-py-0.17.1 seaborn-0.12.2 send2trash-1.8.2 six-1.16.0 sniffio-1.3.0 soupsieve-2.5 stack-data-0.6.3 tenacity-8.2.3 terminado-0.18.0 tinycss2-1.2.1 tomli-2.0.1 toolz-0.12.0 torch-1.13.1+cpu torchtrail-0.0.8 tornado-6.4 traitlets-5.14.1 typing-extensions-4.9.0 urllib3-2.2.0 wcwidth-0.2.13 webencodings-0.5.1 websocket-client-1.7.0 widgetsnbextension-4.0.10 zipp-3.17.0
+Installing dev environment packages...
+Looking in indexes: https://pypi.org/simple, https://download.pytorch.org/whl/cpu
+Collecting platformdirs&lt;4.0.0
+  Using cached platformdirs-3.11.0-py3-none-any.whl (17 kB)
+Collecting pre-commit==3.0.4
+  Using cached pre_commit-3.0.4-py2.py3-none-any.whl (202 kB)
+Collecting black==23.10.1
+  Using cached black-23.10.1-cp38-cp38-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (1.6 MB)
+Collecting build==0.10.0
+  Using cached build-0.10.0-py3-none-any.whl (17 kB)
+Collecting twine==4.0.2
+  Using cached twine-4.0.2-py3-none-any.whl (36 kB)
+Collecting yamllint==1.32.0
+  Using cached yamllint-1.32.0-py3-none-any.whl (65 kB)
+Collecting docutils==0.18.1
+  Using cached docutils-0.18.1-py2.py3-none-any.whl (570 kB)
+Collecting sphinx==7.1.2
+  Using cached sphinx-7.1.2-py3-none-any.whl (3.2 MB)
+Collecting sphinx-rtd-theme==1.3.0
+  Using cached sphinx_rtd_theme-1.3.0-py2.py3-none-any.whl (2.8 MB)
+Collecting sphinxcontrib-email==0.3.5
+  Using cached sphinxcontrib_email-0.3.5-py3-none-any.whl (6.3 kB)
+Collecting lxml==4.9.4
+  Using cached lxml-4.9.4-cp38-cp38-manylinux_2_17_x86_64.manylinux2014_x86_64.manylinux_2_24_x86_64.whl (7.1 MB)
+Collecting breathe==4.35.0
+  Using cached breathe-4.35.0-py3-none-any.whl (92 kB)
+Collecting nbsphinx==0.9.3
+  Using cached nbsphinx-0.9.3-py3-none-any.whl (31 kB)
+Collecting sphinxcontrib-jquery==4.1
+  Using cached sphinxcontrib_jquery-4.1-py2.py3-none-any.whl (121 kB)
+Requirement already satisfied: ipython==8.12.3 in ./build/python_env/lib/python3.8/site-packages (from -r tt_metal/python_env/../../docs/requirements-docs.txt (line 9)) (8.12.3)
+Processing /home/ubuntu/.cache/pip/wheels/90/3a/a8/3237a93e3a6261bd24edabf3277ca59f64c1710b3d8c7c72a0/pandoc-2.3-py3-none-any.whl
+Collecting pytest==7.2.2
+  Using cached pytest-7.2.2-py3-none-any.whl (317 kB)
+Collecting pytest-timeout==2.2.0
+  Using cached pytest_timeout-2.2.0-py3-none-any.whl (13 kB)
+Processing /home/ubuntu/.cache/pip/wheels/6c/40/1d/5706d21e6b4dff52e7af12bff9ca126a3f15beb4dff386aa29/jsbeautifier-1.14.7-py3-none-any.whl
+Collecting datasets==2.9.0
+  Using cached datasets-2.9.0-py3-none-any.whl (462 kB)
+Collecting torchvision==0.14.1+cpu
+  Using cached https://download.pytorch.org/whl/cpu/torchvision-0.14.1%2Bcpu-cp38-cp38-linux_x86_64.whl (16.8 MB)
+Collecting transformers==4.28.1
+  Using cached transformers-4.28.1-py3-none-any.whl (7.0 MB)
+Collecting xlsxwriter==3.0.8
+  Using cached XlsxWriter-3.0.8-py3-none-any.whl (152 kB)
+Collecting tiktoken==0.3.3
+  Using cached tiktoken-0.3.3-cp38-cp38-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (1.7 MB)
+Collecting tqdm==4.65.0
+  Using cached tqdm-4.65.0-py3-none-any.whl (77 kB)
+Collecting sentencepiece==0.1.97
+  Using cached sentencepiece-0.1.97-cp38-cp38-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (1.3 MB)
+Collecting numba==0.56.4
+  Using cached numba-0.56.4-cp38-cp38-manylinux2014_x86_64.manylinux_2_17_x86_64.whl (3.5 MB)
+Collecting librosa==0.10.0
+  Using cached librosa-0.10.0-py3-none-any.whl (252 kB)
+Collecting timm==0.6.13
+  Using cached timm-0.6.13-py3-none-any.whl (549 kB)
+Collecting opencv-python-headless==4.8.0.74
+  Using cached opencv_python_headless-4.8.0.74-cp37-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (49.1 MB)
+Collecting diffusers==0.12.1
+  Using cached diffusers-0.12.1-py3-none-any.whl (604 kB)
+Collecting accelerate==0.19.0
+  Using cached accelerate-0.19.0-py3-none-any.whl (219 kB)
+Collecting ftfy==6.1.1
+  Using cached ftfy-6.1.1-py3-none-any.whl (53 kB)
+Collecting gitpython==3.1.32
+  Using cached GitPython-3.1.32-py3-none-any.whl (188 kB)
+Collecting einops==0.6.1
+  Using cached einops-0.6.1-py3-none-any.whl (42 kB)
+Collecting multiprocess==0.70.14
+  Using cached multiprocess-0.70.14-py38-none-any.whl (132 kB)
+Collecting evaluate==0.4.0
+  Using cached evaluate-0.4.0-py3-none-any.whl (81 kB)
+Collecting bert-score==0.3.12
+  Using cached bert_score-0.3.12-py3-none-any.whl (60 kB)
+Collecting fsspec==2023.9.2
+  Using cached fsspec-2023.9.2-py3-none-any.whl (173 kB)
+Collecting nodeenv&gt;=0.11.1
+  Using cached nodeenv-1.8.0-py2.py3-none-any.whl (22 kB)
+Collecting cfgv&gt;=2.0.0
+  Using cached cfgv-3.4.0-py2.py3-none-any.whl (7.2 kB)
+Collecting identify&gt;=1.0.0
+  Using cached identify-2.5.33-py2.py3-none-any.whl (98 kB)
+Collecting virtualenv&gt;=20.10.0
+  Using cached virtualenv-20.25.0-py3-none-any.whl (3.8 MB)
+Requirement already satisfied: pyyaml&gt;=5.1 in ./build/python_env/lib/python3.8/site-packages (from pre-commit==3.0.4-&gt;-r tt_metal/python_env/requirements-dev.txt (line 9)) (5.3.1)
+Requirement already satisfied: packaging&gt;=22.0 in ./build/python_env/lib/python3.8/site-packages (from black==23.10.1-&gt;-r tt_metal/python_env/requirements-dev.txt (line 10)) (23.2)
+Collecting pathspec&gt;=0.9.0
+  Using cached pathspec-0.12.1-py3-none-any.whl (31 kB)
+Requirement already satisfied: click&gt;=8.0.0 in ./build/python_env/lib/python3.8/site-packages (from black==23.10.1-&gt;-r tt_metal/python_env/requirements-dev.txt (line 10)) (8.1.3)
+Requirement already satisfied: typing-extensions&gt;=4.0.1; python_version &lt; "3.11" in ./build/python_env/lib/python3.8/site-packages (from black==23.10.1-&gt;-r tt_metal/python_env/requirements-dev.txt (line 10)) (4.9.0)
+Requirement already satisfied: tomli&gt;=1.1.0; python_version &lt; "3.11" in ./build/python_env/lib/python3.8/site-packages (from black==23.10.1-&gt;-r tt_metal/python_env/requirements-dev.txt (line 10)) (2.0.1)
+Collecting mypy-extensions&gt;=0.4.3
+  Using cached mypy_extensions-1.0.0-py3-none-any.whl (4.7 kB)
+Collecting pyproject_hooks
+  Using cached pyproject_hooks-1.0.0-py3-none-any.whl (9.3 kB)
+Collecting readme-renderer&gt;=35.0
+  Using cached readme_renderer-42.0-py3-none-any.whl (13 kB)
+Requirement already satisfied: rich&gt;=12.0.0 in ./build/python_env/lib/python3.8/site-packages (from twine==4.0.2-&gt;-r tt_metal/python_env/requirements-dev.txt (line 12)) (13.3.3)
+Requirement already satisfied: requests&gt;=2.20 in ./build/python_env/lib/python3.8/site-packages (from twine==4.0.2-&gt;-r tt_metal/python_env/requirements-dev.txt (line 12)) (2.31.0)
+Requirement already satisfied: importlib-metadata&gt;=3.6 in ./build/python_env/lib/python3.8/site-packages (from twine==4.0.2-&gt;-r tt_metal/python_env/requirements-dev.txt (line 12)) (7.0.1)
+Collecting pkginfo&gt;=1.8.1
+  Using cached pkginfo-1.9.6-py3-none-any.whl (30 kB)
+Collecting requests-toolbelt!=0.9.0,&gt;=0.8.0
+  Using cached requests_toolbelt-1.0.0-py2.py3-none-any.whl (54 kB)
+Requirement already satisfied: urllib3&gt;=1.26.0 in ./build/python_env/lib/python3.8/site-packages (from twine==4.0.2-&gt;-r tt_metal/python_env/requirements-dev.txt (line 12)) (2.2.0)
+Collecting keyring&gt;=15.1
+  Using cached keyring-24.3.0-py3-none-any.whl (38 kB)
+Collecting rfc3986&gt;=1.4.0
+  Using cached rfc3986-2.0.0-py2.py3-none-any.whl (31 kB)
+Collecting imagesize&gt;=1.3
+  Using cached imagesize-1.4.1-py2.py3-none-any.whl (8.8 kB)
+Collecting sphinxcontrib-serializinghtml&gt;=1.1.5
+  Using cached sphinxcontrib_serializinghtml-1.1.5-py2.py3-none-any.whl (94 kB)
+Collecting sphinxcontrib-jsmath
+  Using cached sphinxcontrib_jsmath-1.0.1-py2.py3-none-any.whl (5.1 kB)
+Collecting snowballstemmer&gt;=2.0
+  Using cached snowballstemmer-2.2.0-py2.py3-none-any.whl (93 kB)
+Requirement already satisfied: babel&gt;=2.9 in ./build/python_env/lib/python3.8/site-packages (from sphinx==7.1.2-&gt;-r tt_metal/python_env/../../docs/requirements-docs.txt (line 2)) (2.14.0)
+Collecting sphinxcontrib-htmlhelp&gt;=2.0.0
+  Using cached sphinxcontrib_htmlhelp-2.0.1-py3-none-any.whl (99 kB)
+Requirement already satisfied: Pygments&gt;=2.13 in ./build/python_env/lib/python3.8/site-packages (from sphinx==7.1.2-&gt;-r tt_metal/python_env/../../docs/requirements-docs.txt (line 2)) (2.17.2)
+Collecting alabaster&lt;0.8,&gt;=0.7
+  Using cached alabaster-0.7.13-py3-none-any.whl (13 kB)
+Collecting sphinxcontrib-applehelp
+  Using cached sphinxcontrib_applehelp-1.0.4-py3-none-any.whl (120 kB)
+Requirement already satisfied: Jinja2&gt;=3.0 in ./build/python_env/lib/python3.8/site-packages (from sphinx==7.1.2-&gt;-r tt_metal/python_env/../../docs/requirements-docs.txt (line 2)) (3.1.3)
+Collecting sphinxcontrib-devhelp
+  Using cached sphinxcontrib_devhelp-1.0.2-py2.py3-none-any.whl (84 kB)
+Collecting sphinxcontrib-qthelp
+  Using cached sphinxcontrib_qthelp-1.0.3-py2.py3-none-any.whl (90 kB)
+Requirement already satisfied: traitlets&gt;=5 in ./build/python_env/lib/python3.8/site-packages (from nbsphinx==0.9.3-&gt;-r tt_metal/python_env/../../docs/requirements-docs.txt (line 7)) (5.14.1)
+Requirement already satisfied: nbconvert!=5.4 in ./build/python_env/lib/python3.8/site-packages (from nbsphinx==0.9.3-&gt;-r tt_metal/python_env/../../docs/requirements-docs.txt (line 7)) (7.16.0)
+Requirement already satisfied: nbformat in ./build/python_env/lib/python3.8/site-packages (from nbsphinx==0.9.3-&gt;-r tt_metal/python_env/../../docs/requirements-docs.txt (line 7)) (5.9.2)
+Requirement already satisfied: backcall in ./build/python_env/lib/python3.8/site-packages (from ipython==8.12.3-&gt;-r tt_metal/python_env/../../docs/requirements-docs.txt (line 9)) (0.2.0)
+Requirement already satisfied: prompt-toolkit!=3.0.37,&lt;3.1.0,&gt;=3.0.30 in ./build/python_env/lib/python3.8/site-packages (from ipython==8.12.3-&gt;-r tt_metal/python_env/../../docs/requirements-docs.txt (line 9)) (3.0.43)
+Requirement already satisfied: pickleshare in ./build/python_env/lib/python3.8/site-packages (from ipython==8.12.3-&gt;-r tt_metal/python_env/../../docs/requirements-docs.txt (line 9)) (0.7.5)
+Requirement already satisfied: jedi&gt;=0.16 in ./build/python_env/lib/python3.8/site-packages (from ipython==8.12.3-&gt;-r tt_metal/python_env/../../docs/requirements-docs.txt (line 9)) (0.19.1)
+Requirement already satisfied: decorator in ./build/python_env/lib/python3.8/site-packages (from ipython==8.12.3-&gt;-r tt_metal/python_env/../../docs/requirements-docs.txt (line 9)) (5.1.1)
+Requirement already satisfied: stack-data in ./build/python_env/lib/python3.8/site-packages (from ipython==8.12.3-&gt;-r tt_metal/python_env/../../docs/requirements-docs.txt (line 9)) (0.6.3)
+Requirement already satisfied: pexpect&gt;4.3; sys_platform != "win32" in ./build/python_env/lib/python3.8/site-packages (from ipython==8.12.3-&gt;-r tt_metal/python_env/../../docs/requirements-docs.txt (line 9)) (4.9.0)
+Requirement already satisfied: matplotlib-inline in ./build/python_env/lib/python3.8/site-packages (from ipython==8.12.3-&gt;-r tt_metal/python_env/../../docs/requirements-docs.txt (line 9)) (0.1.6)
+Collecting ply
+  Using cached ply-3.11-py2.py3-none-any.whl (49 kB)
+Collecting plumbum
+  Using cached plumbum-1.8.2-py3-none-any.whl (127 kB)
+Collecting iniconfig
+  Using cached iniconfig-2.0.0-py3-none-any.whl (5.9 kB)
+Requirement already satisfied: attrs&gt;=19.2.0 in ./build/python_env/lib/python3.8/site-packages (from pytest==7.2.2-&gt;-r tt_metal/python_env/requirements-dev.txt (line 19)) (23.2.0)
+Collecting pluggy&lt;2.0,&gt;=0.12
+  Using cached pluggy-1.4.0-py3-none-any.whl (20 kB)
+Requirement already satisfied: exceptiongroup&gt;=1.0.0rc8; python_version &lt; "3.11" in ./build/python_env/lib/python3.8/site-packages (from pytest==7.2.2-&gt;-r tt_metal/python_env/requirements-dev.txt (line 19)) (1.2.0)
+Collecting editorconfig&gt;=0.12.2
+  Using cached EditorConfig-0.12.3-py3-none-any.whl (16 kB)
+Requirement already satisfied: six&gt;=1.13.0 in ./build/python_env/lib/python3.8/site-packages (from jsbeautifier==1.14.7-&gt;-r tt_metal/python_env/requirements-dev.txt (line 21)) (1.16.0)
+Collecting responses&lt;0.19
+  Using cached responses-0.18.0-py3-none-any.whl (38 kB)
+Collecting pyarrow&gt;=6.0.0
+  Using cached pyarrow-15.0.0-cp38-cp38-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (38.5 MB)
+Collecting xxhash
+  Using cached xxhash-3.4.1-cp38-cp38-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (194 kB)
+Collecting huggingface-hub&lt;1.0.0,&gt;=0.2.0
+  Using cached huggingface_hub-0.20.3-py3-none-any.whl (330 kB)
+Requirement already satisfied: pandas in ./build/python_env/lib/python3.8/site-packages (from datasets==2.9.0-&gt;-r tt_metal/python_env/requirements-dev.txt (line 22)) (1.5.3)
+Requirement already satisfied: numpy&gt;=1.17 in ./build/python_env/lib/python3.8/site-packages (from datasets==2.9.0-&gt;-r tt_metal/python_env/requirements-dev.txt (line 22)) (1.20.3)
+Collecting aiohttp
+  Using cached aiohttp-3.9.3-cp38-cp38-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (1.3 MB)
+Collecting dill&lt;0.3.7
+  Using cached dill-0.3.6-py3-none-any.whl (110 kB)
+Requirement already satisfied: pillow!=8.3.*,&gt;=5.3.0 in ./build/python_env/lib/python3.8/site-packages (from torchvision==0.14.1+cpu-&gt;-r tt_metal/python_env/requirements-dev.txt (line 23)) (9.5.0)
+Requirement already satisfied: torch==1.13.1 in ./build/python_env/lib/python3.8/site-packages (from torchvision==0.14.1+cpu-&gt;-r tt_metal/python_env/requirements-dev.txt (line 23)) (1.13.1+cpu)
+Collecting tokenizers!=0.11.3,&lt;0.14,&gt;=0.11.1
+  Using cached tokenizers-0.13.3-cp38-cp38-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (7.8 MB)
+Collecting regex!=2019.12.17
+  Using cached regex-2023.12.25-cp38-cp38-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (777 kB)
+Collecting filelock
+  Using cached filelock-3.13.1-py3-none-any.whl (11 kB)
+Collecting llvmlite&lt;0.40,&gt;=0.39.0dev0
+  Using cached llvmlite-0.39.1-cp38-cp38-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (34.6 MB)
+Requirement already satisfied: setuptools in ./build/python_env/lib/python3.8/site-packages (from numba==0.56.4-&gt;-r tt_metal/python_env/requirements-dev.txt (line 29)) (44.0.0)
+Collecting soxr&gt;=0.3.2
+  Using cached soxr-0.3.7-cp38-cp38-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (1.3 MB)
+Collecting soundfile&gt;=0.12.1
+  Using cached soundfile-0.12.1-py2.py3-none-any.whl (24 kB)
+Collecting pooch&gt;=1.0
+  Using cached pooch-1.8.0-py3-none-any.whl (62 kB)
+Collecting lazy-loader&gt;=0.1
+  Using cached lazy_loader-0.3-py3-none-any.whl (9.1 kB)
+Collecting scipy&gt;=1.2.0
+  Using cached scipy-1.10.1-cp38-cp38-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (34.5 MB)
+Collecting joblib&gt;=0.14
+  Using cached joblib-1.3.2-py3-none-any.whl (302 kB)
+Collecting audioread&gt;=2.1.9
+  Using cached audioread-3.0.1-py3-none-any.whl (23 kB)
+Collecting scikit-learn&gt;=0.20.0
+  Using cached scikit_learn-1.3.2-cp38-cp38-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (11.1 MB)
+Collecting msgpack&gt;=1.0
+  Using cached msgpack-1.0.7-cp38-cp38-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (534 kB)
+Requirement already satisfied: psutil in ./build/python_env/lib/python3.8/site-packages (from accelerate==0.19.0-&gt;-r tt_metal/python_env/requirements-dev.txt (line 34)) (5.9.8)
+Requirement already satisfied: wcwidth&gt;=0.2.5 in ./build/python_env/lib/python3.8/site-packages (from ftfy==6.1.1-&gt;-r tt_metal/python_env/requirements-dev.txt (line 35)) (0.2.13)
+Collecting gitdb&lt;5,&gt;=4.0.1
+  Using cached gitdb-4.0.11-py3-none-any.whl (62 kB)
+Requirement already satisfied: matplotlib in ./build/python_env/lib/python3.8/site-packages (from bert-score==0.3.12-&gt;-r tt_metal/python_env/requirements-dev.txt (line 43)) (3.7.1)
+Collecting distlib&lt;1,&gt;=0.3.7
+  Using cached distlib-0.3.8-py2.py3-none-any.whl (468 kB)
+Collecting nh3&gt;=0.2.14
+  Using cached nh3-0.2.15-cp37-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (1.7 MB)
+Requirement already satisfied: markdown-it-py&lt;3.0.0,&gt;=2.2.0 in ./build/python_env/lib/python3.8/site-packages (from rich&gt;=12.0.0-&gt;twine==4.0.2-&gt;-r tt_metal/python_env/requirements-dev.txt (line 12)) (2.2.0)
+Requirement already satisfied: idna&lt;4,&gt;=2.5 in ./build/python_env/lib/python3.8/site-packages (from requests&gt;=2.20-&gt;twine==4.0.2-&gt;-r tt_metal/python_env/requirements-dev.txt (line 12)) (3.6)
+Requirement already satisfied: charset-normalizer&lt;4,&gt;=2 in ./build/python_env/lib/python3.8/site-packages (from requests&gt;=2.20-&gt;twine==4.0.2-&gt;-r tt_metal/python_env/requirements-dev.txt (line 12)) (3.3.2)
+Requirement already satisfied: certifi&gt;=2017.4.17 in ./build/python_env/lib/python3.8/site-packages (from requests&gt;=2.20-&gt;twine==4.0.2-&gt;-r tt_metal/python_env/requirements-dev.txt (line 12)) (2024.2.2)
+Requirement already satisfied: zipp&gt;=0.5 in ./build/python_env/lib/python3.8/site-packages (from importlib-metadata&gt;=3.6-&gt;twine==4.0.2-&gt;-r tt_metal/python_env/requirements-dev.txt (line 12)) (3.17.0)
+Requirement already satisfied: importlib-resources; python_version &lt; "3.9" in ./build/python_env/lib/python3.8/site-packages (from keyring&gt;=15.1-&gt;twine==4.0.2-&gt;-r tt_metal/python_env/requirements-dev.txt (line 12)) (6.1.1)
+Collecting SecretStorage&gt;=3.2; sys_platform == "linux"
+  Using cached SecretStorage-3.3.3-py3-none-any.whl (15 kB)
+Collecting jeepney&gt;=0.4.2; sys_platform == "linux"
+  Using cached jeepney-0.8.0-py3-none-any.whl (48 kB)
+Collecting jaraco.classes
+  Using cached jaraco.classes-3.3.1-py3-none-any.whl (6.8 kB)
+Requirement already satisfied: pytz&gt;=2015.7; python_version &lt; "3.9" in ./build/python_env/lib/python3.8/site-packages (from babel&gt;=2.9-&gt;sphinx==7.1.2-&gt;-r tt_metal/python_env/../../docs/requirements-docs.txt (line 2)) (2024.1)
+Requirement already satisfied: MarkupSafe&gt;=2.0 in ./build/python_env/lib/python3.8/site-packages (from Jinja2&gt;=3.0-&gt;sphinx==7.1.2-&gt;-r tt_metal/python_env/../../docs/requirements-docs.txt (line 2)) (2.1.5)
+Requirement already satisfied: mistune&lt;4,&gt;=2.0.3 in ./build/python_env/lib/python3.8/site-packages (from nbconvert!=5.4-&gt;nbsphinx==0.9.3-&gt;-r tt_metal/python_env/../../docs/requirements-docs.txt (line 7)) (3.0.2)
+Requirement already satisfied: jupyterlab-pygments in ./build/python_env/lib/python3.8/site-packages (from nbconvert!=5.4-&gt;nbsphinx==0.9.3-&gt;-r tt_metal/python_env/../../docs/requirements-docs.txt (line 7)) (0.3.0)
+Requirement already satisfied: tinycss2 in ./build/python_env/lib/python3.8/site-packages (from nbconvert!=5.4-&gt;nbsphinx==0.9.3-&gt;-r tt_metal/python_env/../../docs/requirements-docs.txt (line 7)) (1.2.1)
+Requirement already satisfied: nbclient&gt;=0.5.0 in ./build/python_env/lib/python3.8/site-packages (from nbconvert!=5.4-&gt;nbsphinx==0.9.3-&gt;-r tt_metal/python_env/../../docs/requirements-docs.txt (line 7)) (0.9.0)
+Requirement already satisfied: beautifulsoup4 in ./build/python_env/lib/python3.8/site-packages (from nbconvert!=5.4-&gt;nbsphinx==0.9.3-&gt;-r tt_metal/python_env/../../docs/requirements-docs.txt (line 7)) (4.12.3)
+Requirement already satisfied: jupyter-core&gt;=4.7 in ./build/python_env/lib/python3.8/site-packages (from nbconvert!=5.4-&gt;nbsphinx==0.9.3-&gt;-r tt_metal/python_env/../../docs/requirements-docs.txt (line 7)) (5.7.1)
+Requirement already satisfied: pandocfilters&gt;=1.4.1 in ./build/python_env/lib/python3.8/site-packages (from nbconvert!=5.4-&gt;nbsphinx==0.9.3-&gt;-r tt_metal/python_env/../../docs/requirements-docs.txt (line 7)) (1.5.1)
+Requirement already satisfied: bleach!=5.0.0 in ./build/python_env/lib/python3.8/site-packages (from nbconvert!=5.4-&gt;nbsphinx==0.9.3-&gt;-r tt_metal/python_env/../../docs/requirements-docs.txt (line 7)) (6.1.0)
+Requirement already satisfied: defusedxml in ./build/python_env/lib/python3.8/site-packages (from nbconvert!=5.4-&gt;nbsphinx==0.9.3-&gt;-r tt_metal/python_env/../../docs/requirements-docs.txt (line 7)) (0.7.1)
+Requirement already satisfied: fastjsonschema in ./build/python_env/lib/python3.8/site-packages (from nbformat-&gt;nbsphinx==0.9.3-&gt;-r tt_metal/python_env/../../docs/requirements-docs.txt (line 7)) (2.19.1)
+Requirement already satisfied: jsonschema&gt;=2.6 in ./build/python_env/lib/python3.8/site-packages (from nbformat-&gt;nbsphinx==0.9.3-&gt;-r tt_metal/python_env/../../docs/requirements-docs.txt (line 7)) (4.21.1)
+Requirement already satisfied: parso&lt;0.9.0,&gt;=0.8.3 in ./build/python_env/lib/python3.8/site-packages (from jedi&gt;=0.16-&gt;ipython==8.12.3-&gt;-r tt_metal/python_env/../../docs/requirements-docs.txt (line 9)) (0.8.3)
+Requirement already satisfied: pure-eval in ./build/python_env/lib/python3.8/site-packages (from stack-data-&gt;ipython==8.12.3-&gt;-r tt_metal/python_env/../../docs/requirements-docs.txt (line 9)) (0.2.2)
+Requirement already satisfied: asttokens&gt;=2.1.0 in ./build/python_env/lib/python3.8/site-packages (from stack-data-&gt;ipython==8.12.3-&gt;-r tt_metal/python_env/../../docs/requirements-docs.txt (line 9)) (2.4.1)
+Requirement already satisfied: executing&gt;=1.2.0 in ./build/python_env/lib/python3.8/site-packages (from stack-data-&gt;ipython==8.12.3-&gt;-r tt_metal/python_env/../../docs/requirements-docs.txt (line 9)) (2.0.1)
+Requirement already satisfied: ptyprocess&gt;=0.5 in ./build/python_env/lib/python3.8/site-packages (from pexpect&gt;4.3; sys_platform != "win32"-&gt;ipython==8.12.3-&gt;-r tt_metal/python_env/../../docs/requirements-docs.txt (line 9)) (0.7.0)
+Requirement already satisfied: python-dateutil&gt;=2.8.1 in ./build/python_env/lib/python3.8/site-packages (from pandas-&gt;datasets==2.9.0-&gt;-r tt_metal/python_env/requirements-dev.txt (line 22)) (2.8.2)
+Collecting frozenlist&gt;=1.1.1
+  Using cached frozenlist-1.4.1-cp38-cp38-manylinux_2_5_x86_64.manylinux1_x86_64.manylinux_2_17_x86_64.manylinux2014_x86_64.whl (240 kB)
+Collecting async-timeout&lt;5.0,&gt;=4.0; python_version &lt; "3.11"
+  Using cached async_timeout-4.0.3-py3-none-any.whl (5.7 kB)
+Collecting aiosignal&gt;=1.1.2
+  Using cached aiosignal-1.3.1-py3-none-any.whl (7.6 kB)
+Collecting yarl&lt;2.0,&gt;=1.0
+  Using cached yarl-1.9.4-cp38-cp38-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (308 kB)
+Collecting multidict&lt;7.0,&gt;=4.5
+  Using cached multidict-6.0.5-cp38-cp38-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (129 kB)
+Requirement already satisfied: cffi&gt;=1.0 in ./build/python_env/lib/python3.8/site-packages (from soundfile&gt;=0.12.1-&gt;librosa==0.10.0-&gt;-r tt_metal/python_env/requirements-dev.txt (line 30)) (1.16.0)
+Collecting threadpoolctl&gt;=2.0.0
+  Using cached threadpoolctl-3.2.0-py3-none-any.whl (15 kB)
+Collecting smmap&lt;6,&gt;=3.0.1
+  Using cached smmap-5.0.1-py3-none-any.whl (24 kB)
+Requirement already satisfied: contourpy&gt;=1.0.1 in ./build/python_env/lib/python3.8/site-packages (from matplotlib-&gt;bert-score==0.3.12-&gt;-r tt_metal/python_env/requirements-dev.txt (line 43)) (1.1.1)
+Requirement already satisfied: kiwisolver&gt;=1.0.1 in ./build/python_env/lib/python3.8/site-packages (from matplotlib-&gt;bert-score==0.3.12-&gt;-r tt_metal/python_env/requirements-dev.txt (line 43)) (1.4.5)
+Requirement already satisfied: pyparsing&gt;=2.3.1 in ./build/python_env/lib/python3.8/site-packages (from matplotlib-&gt;bert-score==0.3.12-&gt;-r tt_metal/python_env/requirements-dev.txt (line 43)) (3.1.1)
+Requirement already satisfied: fonttools&gt;=4.22.0 in ./build/python_env/lib/python3.8/site-packages (from matplotlib-&gt;bert-score==0.3.12-&gt;-r tt_metal/python_env/requirements-dev.txt (line 43)) (4.48.1)
+Requirement already satisfied: cycler&gt;=0.10 in ./build/python_env/lib/python3.8/site-packages (from matplotlib-&gt;bert-score==0.3.12-&gt;-r tt_metal/python_env/requirements-dev.txt (line 43)) (0.12.1)
+Requirement already satisfied: mdurl~=0.1 in ./build/python_env/lib/python3.8/site-packages (from markdown-it-py&lt;3.0.0,&gt;=2.2.0-&gt;rich&gt;=12.0.0-&gt;twine==4.0.2-&gt;-r tt_metal/python_env/requirements-dev.txt (line 12)) (0.1.2)
+Collecting cryptography&gt;=2.0
+  Using cached cryptography-42.0.2-cp37-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (4.6 MB)
+Collecting more-itertools
+  Using cached more_itertools-10.2.0-py3-none-any.whl (57 kB)
+Requirement already satisfied: webencodings&gt;=0.4 in ./build/python_env/lib/python3.8/site-packages (from tinycss2-&gt;nbconvert!=5.4-&gt;nbsphinx==0.9.3-&gt;-r tt_metal/python_env/../../docs/requirements-docs.txt (line 7)) (0.5.1)
+Requirement already satisfied: jupyter-client&gt;=6.1.12 in ./build/python_env/lib/python3.8/site-packages (from nbclient&gt;=0.5.0-&gt;nbconvert!=5.4-&gt;nbsphinx==0.9.3-&gt;-r tt_metal/python_env/../../docs/requirements-docs.txt (line 7)) (8.6.0)
+Requirement already satisfied: soupsieve&gt;1.2 in ./build/python_env/lib/python3.8/site-packages (from beautifulsoup4-&gt;nbconvert!=5.4-&gt;nbsphinx==0.9.3-&gt;-r tt_metal/python_env/../../docs/requirements-docs.txt (line 7)) (2.5)
+Requirement already satisfied: pkgutil-resolve-name&gt;=1.3.10; python_version &lt; "3.9" in ./build/python_env/lib/python3.8/site-packages (from jsonschema&gt;=2.6-&gt;nbformat-&gt;nbsphinx==0.9.3-&gt;-r tt_metal/python_env/../../docs/requirements-docs.txt (line 7)) (1.3.10)
+Requirement already satisfied: referencing&gt;=0.28.4 in ./build/python_env/lib/python3.8/site-packages (from jsonschema&gt;=2.6-&gt;nbformat-&gt;nbsphinx==0.9.3-&gt;-r tt_metal/python_env/../../docs/requirements-docs.txt (line 7)) (0.33.0)
+Requirement already satisfied: jsonschema-specifications&gt;=2023.03.6 in ./build/python_env/lib/python3.8/site-packages (from jsonschema&gt;=2.6-&gt;nbformat-&gt;nbsphinx==0.9.3-&gt;-r tt_metal/python_env/../../docs/requirements-docs.txt (line 7)) (2023.12.1)
+Requirement already satisfied: rpds-py&gt;=0.7.1 in ./build/python_env/lib/python3.8/site-packages (from jsonschema&gt;=2.6-&gt;nbformat-&gt;nbsphinx==0.9.3-&gt;-r tt_metal/python_env/../../docs/requirements-docs.txt (line 7)) (0.17.1)
+Requirement already satisfied: pycparser in ./build/python_env/lib/python3.8/site-packages (from cffi&gt;=1.0-&gt;soundfile&gt;=0.12.1-&gt;librosa==0.10.0-&gt;-r tt_metal/python_env/requirements-dev.txt (line 30)) (2.21)
+Requirement already satisfied: pyzmq&gt;=23.0 in ./build/python_env/lib/python3.8/site-packages (from jupyter-client&gt;=6.1.12-&gt;nbclient&gt;=0.5.0-&gt;nbconvert!=5.4-&gt;nbsphinx==0.9.3-&gt;-r tt_metal/python_env/../../docs/requirements-docs.txt (line 7)) (25.1.2)
+Requirement already satisfied: tornado&gt;=6.2 in ./build/python_env/lib/python3.8/site-packages (from jupyter-client&gt;=6.1.12-&gt;nbclient&gt;=0.5.0-&gt;nbconvert!=5.4-&gt;nbsphinx==0.9.3-&gt;-r tt_metal/python_env/../../docs/requirements-docs.txt (line 7)) (6.4)
+Installing collected packages: platformdirs, nodeenv, cfgv, identify, distlib, filelock, virtualenv, pre-commit, pathspec, mypy-extensions, black, pyproject-hooks, build, nh3, docutils, readme-renderer, pkginfo, requests-toolbelt, jeepney, cryptography, SecretStorage, more-itertools, jaraco.classes, keyring, rfc3986, twine, yamllint, imagesize, sphinxcontrib-serializinghtml, sphinxcontrib-jsmath, snowballstemmer, sphinxcontrib-htmlhelp, alabaster, sphinxcontrib-applehelp, sphinxcontrib-devhelp, sphinxcontrib-qthelp, sphinx, sphinxcontrib-jquery, sphinx-rtd-theme, lxml, sphinxcontrib-email, breathe, nbsphinx, ply, plumbum, pandoc, iniconfig, pluggy, pytest, pytest-timeout, editorconfig, jsbeautifier, responses, dill, multiprocess, pyarrow, xxhash, tqdm, fsspec, huggingface-hub, frozenlist, async-timeout, aiosignal, multidict, yarl, aiohttp, datasets, torchvision, tokenizers, regex, transformers, xlsxwriter, tiktoken, sentencepiece, llvmlite, numba, soxr, soundfile, pooch, lazy-loader, scipy, joblib, audioread, threadpoolctl, scikit-learn, msgpack, librosa, timm, opencv-python-headless, diffusers, accelerate, ftfy, smmap, gitdb, gitpython, einops, evaluate, bert-score
+  Attempting uninstall: platformdirs
+    Found existing installation: platformdirs 4.2.0
+    Uninstalling platformdirs-4.2.0:
+      Successfully uninstalled platformdirs-4.2.0
+Successfully installed SecretStorage-3.3.3 accelerate-0.19.0 aiohttp-3.9.3 aiosignal-1.3.1 alabaster-0.7.13 async-timeout-4.0.3 audioread-3.0.1 bert-score-0.3.12 black-23.10.1 breathe-4.35.0 build-0.10.0 cfgv-3.4.0 cryptography-42.0.2 datasets-2.9.0 diffusers-0.12.1 dill-0.3.6 distlib-0.3.8 docutils-0.18.1 editorconfig-0.12.3 einops-0.6.1 evaluate-0.4.0 filelock-3.13.1 frozenlist-1.4.1 fsspec-2023.9.2 ftfy-6.1.1 gitdb-4.0.11 gitpython-3.1.32 huggingface-hub-0.20.3 identify-2.5.33 imagesize-1.4.1 iniconfig-2.0.0 jaraco.classes-3.3.1 jeepney-0.8.0 joblib-1.3.2 jsbeautifier-1.14.7 keyring-24.3.0 lazy-loader-0.3 librosa-0.10.0 llvmlite-0.39.1 lxml-4.9.4 more-itertools-10.2.0 msgpack-1.0.7 multidict-6.0.5 multiprocess-0.70.14 mypy-extensions-1.0.0 nbsphinx-0.9.3 nh3-0.2.15 nodeenv-1.8.0 numba-0.56.4 opencv-python-headless-4.8.0.74 pandoc-2.3 pathspec-0.12.1 pkginfo-1.9.6 platformdirs-3.11.0 pluggy-1.4.0 plumbum-1.8.2 ply-3.11 pooch-1.8.0 pre-commit-3.0.4 pyarrow-15.0.0 pyproject-hooks-1.0.0 pytest-7.2.2 pytest-timeout-2.2.0 readme-renderer-42.0 regex-2023.12.25 requests-toolbelt-1.0.0 responses-0.18.0 rfc3986-2.0.0 scikit-learn-1.3.2 scipy-1.10.1 sentencepiece-0.1.97 smmap-5.0.1 snowballstemmer-2.2.0 soundfile-0.12.1 soxr-0.3.7 sphinx-7.1.2 sphinx-rtd-theme-1.3.0 sphinxcontrib-applehelp-1.0.4 sphinxcontrib-devhelp-1.0.2 sphinxcontrib-email-0.3.5 sphinxcontrib-htmlhelp-2.0.1 sphinxcontrib-jquery-4.1 sphinxcontrib-jsmath-1.0.1 sphinxcontrib-qthelp-1.0.3 sphinxcontrib-serializinghtml-1.1.5 threadpoolctl-3.2.0 tiktoken-0.3.3 timm-0.6.13 tokenizers-0.13.3 torchvision-0.14.1+cpu tqdm-4.65.0 transformers-4.28.1 twine-4.0.2 virtualenv-20.25.0 xlsxwriter-3.0.8 xxhash-3.4.1 yamllint-1.32.0 yarl-1.9.4
+Installing editable dev version of ttnn package...
+pre-commit installed at .git/hooks/pre-commit
+pre-commit installed at .git/hooks/commit-msg
+Looking in indexes: https://pypi.org/simple, https://download.pytorch.org/whl/cpu
+Obtaining file:///home/ubuntu/git/tt-metal/ttnn
+Installing collected packages: ttnn
+  Running setup.py develop for ttnn
+Successfully installed ttnn
+</pre></div>
+</div>
+</div>
+<div class="nbinput docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-bash notranslate">
+<div class="highlight"><pre><span></span>%%bash
+<span class="nb">cd</span><span class="w"> </span><span class="nv">$TT_METAL_HOME</span>
+./tt_metal/tools/profiler/profile_this.py<span class="w"> </span>-n<span class="w"> </span>t5<span class="w"> </span>-c<span class="w"> </span><span class="s2">"pytest tests/ttnn/integration_tests/t5/test_performance.py::test_t5_for_conditional_generation[functional_t5=models.experimental.functional_t5.tt.ttnn_functional_t5-sequence_size=64-batch_size=8-model_name=t5-small]"</span>
+<br></pre></div>
+</div>
+</div>
+<div class="nboutput docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area stderr docutils container">
+<div class="highlight"><pre>
+2024-02-09 02:39:39.373 | INFO     | __main__:main:68 - Profiler build flag is set
+</pre></div>
+</div>
+</div>
+<div class="nboutput docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area docutils container">
+<div class="highlight"><pre>
+<span style="color: rgb(0,128,0)">                 Always</span> | <span class="ansi-bold" style="color: rgb(100,149,237)">INFO    </span> | Device profiling detected, logs folder location changed to generated/profiler/.logs//ops_device
+<span class="ansi-bold">============================= test session starts ==============================</span>
+platform linux -- Python 3.8.10, pytest-7.2.2, pluggy-1.4.0 -- /home/ubuntu/git/tt-metal/build/python_env/bin/python
+cachedir: .pytest_cache
+rootdir: /home/ubuntu/git/tt-metal, configfile: pytest.ini
+plugins: anyio-4.2.0, dash-2.8.1, timeout-2.2.0
+timeout: 600.0s
+timeout method: signal
+timeout func_only: False
+<span class="ansi-bold">collecting ... </span>collected 1 item
+
+tests/ttnn/integration_tests/t5/test_performance.py::test_t5_for_conditional_generation[functional_t5=models.experimental.functional_t5.tt.ttnn_functional_t5-sequence_size=64-batch_size=8-model_name=t5-small] <span style="color: rgb(0,128,0)">                  Metal</span> | <span class="ansi-bold" style="color: rgb(100,149,237)">INFO    </span> | Initializing device 0
+<span style="color: rgb(0,128,0)">                 Device</span> | <span class="ansi-bold" style="color: rgb(100,149,237)">INFO    </span> | Opening user mode device driver
+<span class="ansi-green-fg">2024-02-09 02:39:43.670</span> | <span class="ansi-bold" style="color: rgb(100,149,237)">INFO    </span> | <span class="ansi-cyan-fg">SiliconDriver  </span> - Detected 1 PCI device : {0}
+<span class="ansi-green-fg">2024-02-09 02:39:43.681</span> | <span class="ansi-bold" style="color: rgb(255,165,0)">WARNING </span> | <span class="ansi-cyan-fg">SiliconDriver  </span> - init_detect_tt_device_numanodes(): Could not determine NumaNodeSet for TT device (physical_device_id: 0 pci_bus_id: 0000:00:08.0)
+<span class="ansi-green-fg">2024-02-09 02:39:43.681</span> | <span class="ansi-bold" style="color: rgb(255,165,0)">WARNING </span> | <span class="ansi-cyan-fg">SiliconDriver  </span> - Could not find NumaNodeSet for TT Device (physical_device_id: 0 pci_bus_id: 0000:00:08.0)
+<span class="ansi-green-fg">2024-02-09 02:39:43.684</span> | <span class="ansi-bold" style="color: rgb(255,165,0)">WARNING </span> | <span class="ansi-cyan-fg">SiliconDriver  </span> - bind_area_memory_nodeset(): Unable to determine TT Device to NumaNode mapping for physical_device_id: 0. Skipping membind.
+<span class="ansi-yellow-fg">---- ttSiliconDevice::init_hugepage: bind_area_to_memory_nodeset() failed (physical_device_id: 0 ch: 0). Hugepage allocation is not on NumaNode matching TT Device. Side-Effect is decreased Device-&gt;Host perf (Issue #893).
+</span><span style="color: rgb(0,128,0)">                  Metal</span> | <span class="ansi-bold" style="color: rgb(100,149,237)">INFO    </span> | AI CLK for device 0 is:   1202 MHz
+<span style="color: rgb(0,128,0)">              LLRuntime</span> | <span class="ansi-bold" style="color: rgb(100,149,237)">INFO    </span> | Watcher log file: /home/ubuntu/git/tt-metal/built/watcher.log
+<span style="color: rgb(0,128,0)">              LLRuntime</span> | <span class="ansi-bold" style="color: rgb(100,149,237)">INFO    </span> | Watcher attached device 0
+<span style="color: rgb(0,128,0)">              LLRuntime</span> | <span class="ansi-bold" style="color: rgb(100,149,237)">INFO    </span> | Watcher thread watching...
+<span style="color: rgb(0,128,0)">                     Op</span> | <span class="ansi-bold" style="color: rgb(100,149,237)">INFO    </span> | Program Cache: enabled.
+</pre></div>
+</div>
+</div>
+<div class="nboutput docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area stderr docutils container">
+<div class="highlight"><pre>
+2024-02-09 02:39:45.109 | INFO     | ttnn.model_preprocessing:preprocess_model:465 - Saving model weights to cache: /home/ubuntu/.cache/ttnn/models/ttnn_t5-small (version "6ba823894")
+2024-02-09 02:39:48.149 | INFO     | ttnn.model_preprocessing:preprocess_model:484 - Saved model weights to cache: /home/ubuntu/.cache/ttnn/models/ttnn_t5-small (version "6ba823894")
+2024-02-09 02:39:48.149 | INFO     | ttnn.model_preprocessing:preprocess_model:487 - Moving model weights to device
+2024-02-09 02:39:48.216 | INFO     | ttnn.model_preprocessing:preprocess_model:489 - Moved model weights to device
+</pre></div>
+</div>
+</div>
+<div class="nboutput docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area docutils container">
+<div class="highlight"><pre>
+<span style="color: rgb(0,128,0)">              LLRuntime</span> | <span class="ansi-bold" style="color: rgb(100,149,237)">INFO    </span> | Watcher checking device 0
+<span style="color: rgb(0,128,0)">              LLRuntime</span> | <span class="ansi-bold" style="color: rgb(100,149,237)">INFO    </span> | Watcher checking device 0
+</pre></div>
+</div>
+</div>
+<div class="nboutput docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area stderr docutils container">
+<div class="highlight"><pre>
+2024-02-09 02:40:39.721 | INFO     | tests.ttnn.integration_tests.t5.test_performance:test_t5_for_conditional_generation:100 - Compile time: 15.359902381896973
+2024-02-09 02:40:39.721 | INFO     | tests.ttnn.integration_tests.t5.test_performance:test_t5_for_conditional_generation:101 - Inference time: 18.07123565673828
+2024-02-09 02:40:39.722 | INFO     | tests.ttnn.integration_tests.t5.test_performance:test_t5_for_conditional_generation:102 - Tokens per second: 0.44269247283137575
+</pre></div>
+</div>
+</div>
+<div class="nboutput docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area docutils container">
+<div class="highlight"><pre>
+<span class="ansi-green-fg">PASSED</span><span style="color: rgb(0,128,0)">                  Metal</span> | <span class="ansi-bold" style="color: rgb(100,149,237)">INFO    </span> | Closing device 0
+<span style="color: rgb(0,128,0)">              LLRuntime</span> | <span class="ansi-bold" style="color: rgb(100,149,237)">INFO    </span> | Watcher detached device 0
+<span style="color: rgb(0,128,0)">                     Op</span> | <span class="ansi-bold" style="color: rgb(100,149,237)">INFO    </span> | Program Cache: disabled and cleared.
+
+
+==================================== PASSES ====================================
+<span class="ansi-cyan-intense-fg ansi-bold">=========================== short test summary info ============================</span>
+<span class="ansi-green-fg">PASSED</span> tests/ttnn/integration_tests/t5/test_performance.py::<span class="ansi-bold">test_t5_for_conditional_generation[functional_t5=models.experimental.functional_t5.tt.ttnn_functional_t5-sequence_size=64-batch_size=8-model_name=t5-small]</span>
+<span class="ansi-green-fg">============================== </span><span class="ansi-green-intense-fg ansi-bold">1 passed</span><span class="ansi-green-fg"> in 56.44s</span><span class="ansi-green-fg"> ==============================</span>
+<span style="color: rgb(0,128,0)">                 Device</span> | <span class="ansi-bold" style="color: rgb(100,149,237)">INFO    </span> | Closing user mode device drivers
+<span class="ansi-bold">============================= test session starts ==============================</span>
+platform linux -- Python 3.8.10, pytest-7.2.2, pluggy-1.4.0 -- /home/ubuntu/git/tt-metal/build/python_env/bin/python
+cachedir: .pytest_cache
+rootdir: /home/ubuntu/git/tt-metal, configfile: pytest.ini
+plugins: anyio-4.2.0, dash-2.8.1, timeout-2.2.0
+timeout: 600.0s
+timeout method: signal
+timeout func_only: False
+<span class="ansi-bold">collecting ... </span>collected 1 item
+
+tests/ttnn/integration_tests/t5/test_performance.py::test_t5_for_conditional_generation[functional_t5=models.experimental.functional_t5.tt.ttnn_functional_t5-sequence_size=64-batch_size=8-model_name=t5-small] <span style="color: rgb(0,128,0)">                  Metal</span> | <span class="ansi-bold" style="color: rgb(100,149,237)">INFO    </span> | Initializing device 0
+<span style="color: rgb(0,128,0)">                 Device</span> | <span class="ansi-bold" style="color: rgb(100,149,237)">INFO    </span> | Opening user mode device driver
+<span class="ansi-green-fg">2024-02-09 02:40:44.627</span> | <span class="ansi-bold" style="color: rgb(100,149,237)">INFO    </span> | <span class="ansi-cyan-fg">SiliconDriver  </span> - Detected 1 PCI device : {0}
+<span class="ansi-green-fg">2024-02-09 02:40:44.638</span> | <span class="ansi-bold" style="color: rgb(255,165,0)">WARNING </span> | <span class="ansi-cyan-fg">SiliconDriver  </span> - init_detect_tt_device_numanodes(): Could not determine NumaNodeSet for TT device (physical_device_id: 0 pci_bus_id: 0000:00:08.0)
+<span class="ansi-green-fg">2024-02-09 02:40:44.638</span> | <span class="ansi-bold" style="color: rgb(255,165,0)">WARNING </span> | <span class="ansi-cyan-fg">SiliconDriver  </span> - Could not find NumaNodeSet for TT Device (physical_device_id: 0 pci_bus_id: 0000:00:08.0)
+<span class="ansi-green-fg">2024-02-09 02:40:44.639</span> | <span class="ansi-bold" style="color: rgb(255,165,0)">WARNING </span> | <span class="ansi-cyan-fg">SiliconDriver  </span> - bind_area_memory_nodeset(): Unable to determine TT Device to NumaNode mapping for physical_device_id: 0. Skipping membind.
+<span class="ansi-yellow-fg">---- ttSiliconDevice::init_hugepage: bind_area_to_memory_nodeset() failed (physical_device_id: 0 ch: 0). Hugepage allocation is not on NumaNode matching TT Device. Side-Effect is decreased Device-&gt;Host perf (Issue #893).
+</span><span style="color: rgb(0,128,0)">                  Metal</span> | <span class="ansi-bold" style="color: rgb(100,149,237)">INFO    </span> | AI CLK for device 0 is:   1202 MHz
+<span style="color: rgb(0,128,0)">              LLRuntime</span> | <span class="ansi-bold" style="color: rgb(100,149,237)">INFO    </span> | Watcher log file: /home/ubuntu/git/tt-metal/built/watcher.log
+<span style="color: rgb(0,128,0)">              LLRuntime</span> | <span class="ansi-bold" style="color: rgb(100,149,237)">INFO    </span> | Watcher attached device 0
+<span style="color: rgb(0,128,0)">              LLRuntime</span> | <span class="ansi-bold" style="color: rgb(100,149,237)">INFO    </span> | Watcher thread watching...
+<span style="color: rgb(0,128,0)">                     Op</span> | <span class="ansi-bold" style="color: rgb(100,149,237)">INFO    </span> | Program Cache: enabled.
+</pre></div>
+</div>
+</div>
+<div class="nboutput docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area stderr docutils container">
+<div class="highlight"><pre>
+2024-02-09 02:40:46.109 | INFO     | ttnn.model_preprocessing:preprocess_model:458 - Loading model weights from cache: /home/ubuntu/.cache/ttnn/models/ttnn_t5-small  (version "6ba823894")
+2024-02-09 02:40:46.224 | INFO     | ttnn.model_preprocessing:preprocess_model:460 - Loaded model weights from cache: /home/ubuntu/.cache/ttnn/models/ttnn_t5-small  (version "6ba823894")
+2024-02-09 02:40:46.224 | INFO     | ttnn.model_preprocessing:preprocess_model:487 - Moving model weights to device
+2024-02-09 02:40:46.292 | INFO     | ttnn.model_preprocessing:preprocess_model:489 - Moved model weights to device
+</pre></div>
+</div>
+</div>
+<div class="nboutput docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area docutils container">
+<div class="highlight"><pre>
+<span style="color: rgb(0,128,0)">              LLRuntime</span> | <span class="ansi-bold" style="color: rgb(100,149,237)">INFO    </span> | Watcher checking device 0
+</pre></div>
+</div>
+</div>
+<div class="nboutput docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area stderr docutils container">
+<div class="highlight"><pre>
+2024-02-09 02:41:08.164 | INFO     | tests.ttnn.integration_tests.t5.test_performance:test_t5_for_conditional_generation:100 - Compile time: 15.22393798828125
+2024-02-09 02:41:08.165 | INFO     | tests.ttnn.integration_tests.t5.test_performance:test_t5_for_conditional_generation:101 - Inference time: 3.322504758834839
+2024-02-09 02:41:08.165 | INFO     | tests.ttnn.integration_tests.t5.test_performance:test_t5_for_conditional_generation:102 - Tokens per second: 2.407821983919596
+</pre></div>
+</div>
+</div>
+<div class="nboutput nblast docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area docutils container">
+<div class="highlight"><pre>
+<span class="ansi-green-fg">PASSED</span><span style="color: rgb(0,128,0)">                  Metal</span> | <span class="ansi-bold" style="color: rgb(100,149,237)">INFO    </span> | Closing device 0
+<span style="color: rgb(0,128,0)">              LLRuntime</span> | <span class="ansi-bold" style="color: rgb(100,149,237)">INFO    </span> | Watcher detached device 0
+<span style="color: rgb(0,128,0)">                     Op</span> | <span class="ansi-bold" style="color: rgb(100,149,237)">INFO    </span> | Program Cache: disabled and cleared.
+
+
+==================================== PASSES ====================================
+<span class="ansi-cyan-intense-fg ansi-bold">=========================== short test summary info ============================</span>
+<span class="ansi-green-fg">PASSED</span> tests/ttnn/integration_tests/t5/test_performance.py::<span class="ansi-bold">test_t5_for_conditional_generation[functional_t5=models.experimental.functional_t5.tt.ttnn_functional_t5-sequence_size=64-batch_size=8-model_name=t5-small]</span>
+<span class="ansi-green-fg">============================== </span><span class="ansi-green-intense-fg ansi-bold">1 passed</span><span class="ansi-green-fg"> in 23.91s</span><span class="ansi-green-fg"> ==============================</span>
+<span style="color: rgb(0,128,0)">                 Device</span> | <span class="ansi-bold" style="color: rgb(100,149,237)">INFO    </span> | Closing user mode device drivers
+</pre></div>
+</div>
+</div>
+<div class="nbinput docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[15]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">glob</span>
+
+<span class="n">TT_METAL_HOME</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">getenv</span><span class="p">(</span><span class="s1">'TT_METAL_HOME'</span><span class="p">)</span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">get_latest_report</span><span class="p">(</span><span class="n">base_path</span><span class="p">):</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="n">latest_dir</span> <span class="o">=</span> <span class="nb">max</span><span class="p">([</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">base_path</span><span class="p">,</span> <span class="n">d</span><span class="p">)</span> <span class="k">for</span> <span class="n">d</span> <span class="ow">in</span> <span class="n">os</span><span class="o">.</span><span class="n">listdir</span><span class="p">(</span><span class="n">base_path</span><span class="p">)</span> <span class="k">if</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">isdir</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">base_path</span><span class="p">,</span> <span class="n">d</span><span class="p">))],</span> <span class="n">key</span><span class="o">=</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">getmtime</span><span class="p">)</span>
+        <span class="k">return</span> <span class="nb">max</span><span class="p">(</span><span class="n">glob</span><span class="o">.</span><span class="n">glob</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">latest_dir</span><span class="p">,</span> <span class="s1">'*'</span><span class="p">)),</span> <span class="n">key</span><span class="o">=</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">getmtime</span><span class="p">)</span>
+    <span class="k">except</span> <span class="ne">ValueError</span><span class="p">:</span>
+        <span class="k">return</span> <span class="kc">None</span>
+
+<span class="n">latest_profile_report</span> <span class="o">=</span> <span class="n">get_latest_report</span><span class="p">(</span><span class="sa">f</span><span class="s1">'</span><span class="si">{</span><span class="n">TT_METAL_HOME</span><span class="si">}</span><span class="s1">/generated/profiler/reports/t5/ops/'</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s1">'Found </span><span class="si">{</span><span class="n">latest_profile_report</span><span class="si">}</span><span class="s1">'</span><span class="p">)</span>
+
+<span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">latest_profile_report</span><span class="p">)</span>
+<span class="n">df</span>
+<br><br></pre></div>
+</div>
+</div>
+<div class="nboutput docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area docutils container">
+<div class="highlight"><pre>
+Found /home/ubuntu/git/tt-metal/generated/profiler/reports/resnet/ops/2024_02_09_01_38_37/ops_perf_results_resnet_2024_02_09_01_38_37.csv
+</pre></div>
+</div>
+</div>
+<div class="nboutput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[15]:
+</pre></div>
+</div>
+<div class="output_area rendered_html docutils container">
+<div>
+<style scoped>
+    .dataframe tbody tr th:only-of-type {
+        vertical-align: middle;
+    }
+
+    .dataframe tbody tr th {
+        vertical-align: top;
+    }
+
+    .dataframe thead th {
+        text-align: right;
+    }
+</style>
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>OP CODE</th>
+      <th>OP TYPE</th>
+      <th>GLOBAL CALL COUNT</th>
+      <th>ATTRIBUTES</th>
+      <th>MATH FIDELITY</th>
+      <th>CORE COUNT</th>
+      <th>PARALLELIZATION STRATEGY</th>
+      <th>HOST START TS</th>
+      <th>HOST END TS</th>
+      <th>HOST DURATION [ns]</th>
+      <th>...</th>
+      <th>OUTPUT_0_W</th>
+      <th>OUTPUT_0_Z</th>
+      <th>OUTPUT_0_Y</th>
+      <th>OUTPUT_0_X</th>
+      <th>OUTPUT_0_LAYOUT</th>
+      <th>OUTPUT_0_DATA TYPE</th>
+      <th>OUTPUT_0_MEMORY</th>
+      <th>CALL DEPTH</th>
+      <th>CompileProgram 0 Count</th>
+      <th>CompileProgram 0 Average [ns]</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>ttnn.load_tensor_ttnn.load_tensor</td>
+      <td>python_fallback</td>
+      <td>1</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>-</td>
+      <td>NaN</td>
+      <td>137428381893955</td>
+      <td>137428382188762</td>
+      <td>294807</td>
+      <td>...</td>
+      <td>-</td>
+      <td>-</td>
+      <td>-</td>
+      <td>-</td>
+      <td>-</td>
+      <td>-</td>
+      <td>-</td>
+      <td>1</td>
+      <td>0</td>
+      <td>0</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>ttnn.load_tensor_ttnn.load_tensor</td>
+      <td>python_fallback</td>
+      <td>2</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>-</td>
+      <td>NaN</td>
+      <td>137428382500949</td>
+      <td>137428399402163</td>
+      <td>16901214</td>
+      <td>...</td>
+      <td>-</td>
+      <td>-</td>
+      <td>-</td>
+      <td>-</td>
+      <td>-</td>
+      <td>-</td>
+      <td>-</td>
+      <td>1</td>
+      <td>0</td>
+      <td>0</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>ttnn.load_tensor_ttnn.load_tensor</td>
+      <td>python_fallback</td>
+      <td>3</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>-</td>
+      <td>NaN</td>
+      <td>137428399802068</td>
+      <td>137428399873758</td>
+      <td>71690</td>
+      <td>...</td>
+      <td>-</td>
+      <td>-</td>
+      <td>-</td>
+      <td>-</td>
+      <td>-</td>
+      <td>-</td>
+      <td>-</td>
+      <td>1</td>
+      <td>0</td>
+      <td>0</td>
+    </tr>
+    <tr>
+      <th>3</th>
+      <td>ttnn.load_tensor_ttnn.load_tensor</td>
+      <td>python_fallback</td>
+      <td>4</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>-</td>
+      <td>NaN</td>
+      <td>137428400102635</td>
+      <td>137428400351033</td>
+      <td>248398</td>
+      <td>...</td>
+      <td>-</td>
+      <td>-</td>
+      <td>-</td>
+      <td>-</td>
+      <td>-</td>
+      <td>-</td>
+      <td>-</td>
+      <td>1</td>
+      <td>0</td>
+      <td>0</td>
+    </tr>
+    <tr>
+      <th>4</th>
+      <td>ttnn.load_tensor_ttnn.load_tensor</td>
+      <td>python_fallback</td>
+      <td>5</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>-</td>
+      <td>NaN</td>
+      <td>137428400548071</td>
+      <td>137428400792528</td>
+      <td>244457</td>
+      <td>...</td>
+      <td>-</td>
+      <td>-</td>
+      <td>-</td>
+      <td>-</td>
+      <td>-</td>
+      <td>-</td>
+      <td>-</td>
+      <td>1</td>
+      <td>0</td>
+      <td>0</td>
+    </tr>
+    <tr>
+      <th>...</th>
+      <td>...</td>
+      <td>...</td>
+      <td>...</td>
+      <td>...</td>
+      <td>...</td>
+      <td>...</td>
+      <td>...</td>
+      <td>...</td>
+      <td>...</td>
+      <td>...</td>
+      <td>...</td>
+      <td>...</td>
+      <td>...</td>
+      <td>...</td>
+      <td>...</td>
+      <td>...</td>
+      <td>...</td>
+      <td>...</td>
+      <td>...</td>
+      <td>...</td>
+      <td>...</td>
+    </tr>
+    <tr>
+      <th>4391</th>
+      <td>ttnn.reshape_ttnn.reshape</td>
+      <td>python_fallback</td>
+      <td>4392</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>-</td>
+      <td>NaN</td>
+      <td>137450414555424</td>
+      <td>137450414599894</td>
+      <td>44470</td>
+      <td>...</td>
+      <td>-</td>
+      <td>-</td>
+      <td>-</td>
+      <td>-</td>
+      <td>-</td>
+      <td>-</td>
+      <td>-</td>
+      <td>1</td>
+      <td>0</td>
+      <td>0</td>
+    </tr>
+    <tr>
+      <th>4392</th>
+      <td>ttnn.reshape_ttnn.reshape</td>
+      <td>python_fallback</td>
+      <td>4393</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>-</td>
+      <td>NaN</td>
+      <td>137450414740752</td>
+      <td>137450414782422</td>
+      <td>41670</td>
+      <td>...</td>
+      <td>-</td>
+      <td>-</td>
+      <td>-</td>
+      <td>-</td>
+      <td>-</td>
+      <td>-</td>
+      <td>-</td>
+      <td>1</td>
+      <td>0</td>
+      <td>0</td>
+    </tr>
+    <tr>
+      <th>4393</th>
+      <td>Matmul</td>
+      <td>tt_dnn_device</td>
+      <td>4394</td>
+      <td>(bcast_batch=true; output_mem_config=tt::tt_me...</td>
+      <td>HiFi4-HiFi4</td>
+      <td>108</td>
+      <td>MatmulParallelizationStrategy::MULTI_CORE</td>
+      <td>137450414881851</td>
+      <td>137450414983440</td>
+      <td>101589</td>
+      <td>...</td>
+      <td>1</td>
+      <td>8</td>
+      <td>64</td>
+      <td>32128</td>
+      <td>TILE</td>
+      <td>BFLOAT16</td>
+      <td>DEV_0_DRAM_INTERLEAVED</td>
+      <td>1</td>
+      <td>0</td>
+      <td>0</td>
+    </tr>
+    <tr>
+      <th>4394</th>
+      <td>ttnn.reshape_ttnn.reshape</td>
+      <td>python_fallback</td>
+      <td>4395</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>-</td>
+      <td>NaN</td>
+      <td>137450415113099</td>
+      <td>137450415158748</td>
+      <td>45649</td>
+      <td>...</td>
+      <td>-</td>
+      <td>-</td>
+      <td>-</td>
+      <td>-</td>
+      <td>-</td>
+      <td>-</td>
+      <td>-</td>
+      <td>1</td>
+      <td>0</td>
+      <td>0</td>
+    </tr>
+    <tr>
+      <th>4395</th>
+      <td>ttnn.from_device_ttnn.from_device</td>
+      <td>python_fallback</td>
+      <td>4396</td>
+      <td>NaN</td>
+      <td>NaN</td>
+      <td>-</td>
+      <td>NaN</td>
+      <td>137450415235897</td>
+      <td>137450453493048</td>
+      <td>38257151</td>
+      <td>...</td>
+      <td>-</td>
+      <td>-</td>
+      <td>-</td>
+      <td>-</td>
+      <td>-</td>
+      <td>-</td>
+      <td>-</td>
+      <td>1</td>
+      <td>0</td>
+      <td>0</td>
+    </tr>
+  </tbody>
+</table>
+<p>4396 rows × 44 columns</p>
+</div>
+</div>
+</div>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate">
+<div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate">
+<div class="highlight"><pre><span></span>
+</pre></div>
+</div>
+</div>
+</section>
+
+
+
+           </div>
+          </div>
+          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
+        <a href="../profiling.html" class="btn btn-neutral float-left" title="ttnn Profiling" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="../resnet-basic-block.html" class="btn btn-neutral float-right" title="Resnet Basic Block" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
+    </div>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <p>&#169; Copyright Tenstorrent.</p>
+  </div>
+
+  Built with <a href="https://www.sphinx-doc.org/">Sphinx</a> using a
+    <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a>
+    provided by <a href="https://readthedocs.org">Read the Docs</a>.
+   
+
+</footer>
+        </div>
+      </div>
+    </section>
+  </div>
+  <div class="rst-versions" data-toggle="rst-versions" role="note" aria-label="versions">
+    <span class="rst-current-version" data-toggle="rst-current-version">
+        Version: <span id="current-version">latest</span>
+        <span class="fa fa-caret-down"></span>
+    </span>
+    <div class="rst-other-versions">
+        <dl id="version-list">
+            <dt>Versions</dt>
+        </dl>
+        <br>
+        </dl>
+    </div>
+</div>
+
+<script>
+const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/dimitri/test-versioned-docs/docs/published_versions.json';
+
+async function loadVersions() {
+    try {
+        const response = await fetch(VERSIONS_URL);
+        const data = await response.json();
+        const versionList = document.getElementById('version-list');
+        const projectCode = location.pathname.split('/')[3];
+
+        data.versions.forEach(version => {
+            const dd = document.createElement('dd');
+            const link = document.createElement('a');
+            link.href = `https://tenstorrent-docs-test.github.io/tt-metal/${version}/${projectCode}/index.html`;
+            link.textContent = version;
+            dd.appendChild(link);
+            versionList.appendChild(dd);
+        });
+    } catch (error) {
+        console.error('Error loading versions:', error);
+    }
+}
+
+loadVersions();
+
+function getCurrentVersion() {
+    return window.location.pathname.split('/')[2];
+}
+document.getElementById('current-version').textContent = getCurrentVersion();
+
+</script><script>
+      jQuery(function () {
+          SphinxRtdTheme.Navigation.enable(true);
+      });
+  </script> 
+
+</body>
+</html>

@@ -1,0 +1,8 @@
+﻿ttnn.pad
+========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.pad:
+
+.. autofastoperation:: ttnn.pad

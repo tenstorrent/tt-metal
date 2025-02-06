@@ -1,0 +1,8 @@
+﻿ttnn.normalize\_global
+======================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.normalize_global:
+
+.. autofastoperation:: ttnn.normalize_global

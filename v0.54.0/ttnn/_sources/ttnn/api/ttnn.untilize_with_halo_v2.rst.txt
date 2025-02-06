@@ -1,0 +1,8 @@
+﻿ttnn.untilize\_with\_halo\_v2
+=============================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.untilize_with_halo_v2:
+
+.. autofastoperation:: ttnn.untilize_with_halo_v2

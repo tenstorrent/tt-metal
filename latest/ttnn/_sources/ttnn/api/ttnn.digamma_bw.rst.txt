@@ -1,0 +1,8 @@
+﻿ttnn.digamma\_bw
+================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.digamma_bw:
+
+.. autofastoperation:: ttnn.digamma_bw

@@ -1,0 +1,8 @@
+﻿ttnn.tan
+========
+
+.. currentmodule:: ttnn
+
+.. _ttnn.tan:
+
+.. autofastoperation:: ttnn.tan

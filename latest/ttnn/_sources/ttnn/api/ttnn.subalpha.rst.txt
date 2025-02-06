@@ -1,0 +1,8 @@
+﻿ttnn.subalpha
+=============
+
+.. currentmodule:: ttnn
+
+.. _ttnn.subalpha:
+
+.. autofastoperation:: ttnn.subalpha
