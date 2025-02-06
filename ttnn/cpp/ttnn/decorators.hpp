@@ -201,6 +201,16 @@ concept PrimitiveOperationConcept = device_operation::DeviceOperationConcept<ope
 template <typename operation_t>
 concept CompositeOperationConcept = !PrimitiveOperationConcept<operation_t>;
 
+template <typename Op, typename... Args>
+concept HasInvokeWithoutQueue = requires {
+    { Op::invoke(std::declval<Args>()...) };
+};
+
+template <typename Op, typename... Args>
+concept HasInvokeWithQueue = requires {
+    { Op::invoke(std::declval<QueueId>(), std::declval<Args>()...) };
+};
+
 template <reflect::fixed_string cpp_fully_qualified_name, typename operation_t, bool auto_launch_op>
 struct registered_operation_t {
     static constexpr auto is_primitive = PrimitiveOperationConcept<operation_t>;
@@ -307,21 +317,43 @@ struct registered_operation_t {
         return invoke_composite(std::forward<args_t>(args)...);
     }
 
-    template <typename... args_t>
-    auto operator()(args_t&&... args) const {
-        tt::log_debug(tt::LogOp, "Started   C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});
-        tt::tt_metal::GraphTracker::instance().track_function_start(cpp_fully_qualified_name, args...);
-        auto output = invoke(std::forward<args_t>(args)...);
+    // --- operator() Overloads ---
 
-        // Should every output tensor be tracked?
-        /*
-        if (GraphTracker::instance().is_enabled()) {
-            output = tt::stl::reflection::transform_object_of_type<Tensor>(tt::tt_metal::set_tensor_id, output);
-        }
-        */
+    // (1) Overload when the first argument is a QueueId.
+    template <typename First, typename... Rest>
+    auto operator()(First&& first, Rest&&... rest) const
+        requires std::same_as<std::decay_t<First>, QueueId>
+    {
+        tt::log_debug("log", "Started operation (explicit queue)");
+        auto output = invoke(std::forward<First>(first), std::forward<Rest>(rest)...);
+        tt::log_debug("log", "Finished operation (explicit queue)");
+        return output;
+    }
 
-        tt::tt_metal::GraphTracker::instance().track_function_end(output);
-        tt::log_debug(tt::LogOp, "Finished  C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});
+    // (2a) Overload when no QueueId is provided AND the operation is invocable without a QueueId.
+    template <typename... Args>
+    auto operator()(Args&&... args) const
+        requires(sizeof...(Args) == 0 ||
+                 !std::same_as<std::decay_t<std::tuple_element_t<0, std::tuple<Args && ...>>>, QueueId>) &&
+                HasInvokeWithoutQueue<operation_t, Args&&...>
+    {
+        tt::log_debug("log", "Started operation (default queue; non-queue overload available)");
+        auto output = invoke(std::forward<Args>(args)...);
+        tt::log_debug("log", "Finished operation (default queue; non-queue overload available)");
+        return output;
+    }
+
+    // (2b) Overload when no QueueId is provided but the operation is NOT invocable without a QueueId,
+    // so we inject DefaultQueueId.
+    template <typename... Args>
+    auto operator()(Args&&... args) const
+        requires(sizeof...(Args) == 0 ||
+                 !std::same_as<std::decay_t<std::tuple_element_t<0, std::tuple<Args && ...>>>, QueueId>) &&
+                (!HasInvokeWithoutQueue<operation_t, Args && ...>) && HasInvokeWithQueue<operation_t, Args&&...>
+    {
+        tt::log_debug("log", "Started operation (default queue; injecting DefaultQueueId)");
+        auto output = invoke(DefaultQueueId, std::forward<Args>(args)...);
+        tt::log_debug("log", "Finished operation (default queue; injecting DefaultQueueId)");
         return output;
     }
 };

@@ -1937,7 +1937,7 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
         if (reciprocal_input.padded_shape()[1] % 32 != 0) {
             ttnn::SmallVector<std::pair<uint32_t, uint32_t>> padding = {
                 {0, 0}, {0, 32 - (reciprocal_input.padded_shape()[1] % 32)}, {0, 0}, {0, 0}};
-            tensor_1_temp = ttnn::pad(ttnn::DefaultQueueId, reciprocal_input, padding, 0, true, std::nullopt);
+            tensor_1_temp = ttnn::pad(reciprocal_input, padding, 0, true, std::nullopt);
         }
         ttnn::SmallVector<int64_t> after_permute_dims = {0, 2, 3, 1};
         Tensor tensor_1 = ttnn::permute(tensor_1_temp, after_permute_dims, output_memory_config);
@@ -1975,7 +1975,7 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
     if (reciprocal_input.padded_shape()[0] % 32 != 0) {
         ttnn::SmallVector<std::pair<uint32_t, uint32_t>> padding = {
             {0, (32 - (reciprocal_input.padded_shape()[0] % 32))}, {0, 0}, {0, 0}, {0, 0}};
-        tensor_1_temp = ttnn::pad(ttnn::DefaultQueueId, reciprocal_input, padding, 0, false, std::nullopt);
+        tensor_1_temp = ttnn::pad(reciprocal_input, padding, 0, false, std::nullopt);
     }
     ttnn::SmallVector<int64_t> after_permute_dims = {3, 1, 2, 0};
     Tensor tensor_1 = ttnn::permute(tensor_1_temp, after_permute_dims, output_memory_config);
