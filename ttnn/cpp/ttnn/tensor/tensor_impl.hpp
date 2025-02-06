@@ -8,16 +8,18 @@
 
 #include <tt-metalium/bfloat4.hpp>
 #include <tt-metalium/bfloat8.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/command_queue.hpp>
+#include <tt-metalium/device_impl.hpp>
+#include <tracy/Tracy.hpp>
+
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/command_queue.hpp>
-#include <tracy/Tracy.hpp>
-#include <tt-metalium/device_impl.hpp>
+#include "ttnn/types.hpp"
 
 namespace tt {
 
@@ -188,14 +190,14 @@ inline void read_data_from_device_buffer(std::shared_ptr<Buffer> device_buffer, 
 // ======================================================================================
 
 template <typename T>
-Tensor to_host(const Tensor& tensor, bool blocking = true, ttnn::QueueId cq_id = ttnn::DefaultQueueId);
+Tensor to_host(const Tensor& tensor, bool blocking = true, QueueId cq_id = ttnn::DefaultQueueId);
 
 template <typename T>
 Tensor to_device(
     const Tensor& tensor,
     IDevice* target_device,
     const MemoryConfig& memory_config,
-    ttnn::QueueId cq_id = ttnn::DefaultQueueId);
+    QueueId cq_id = ttnn::DefaultQueueId);
 
 template <typename T>
 Tensor to_layout(const Tensor& tensor, Layout target_layout);

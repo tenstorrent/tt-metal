@@ -20,7 +20,7 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "tools/profiler/op_profiler.hpp"
 
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/tensor/types.hpp"
 

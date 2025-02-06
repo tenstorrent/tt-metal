@@ -75,7 +75,7 @@ def test_bw_addalpha_with_opt_output(input_shapes, alpha, device, are_required_o
     if are_required_outputs[1]:
         _, other_grad = data_gen_with_range(input_shapes, -1, 1, device)
 
-    cq_id = DefaultQueueId
+    cq_id = 0
 
     pages_before = ttnn._ttnn.reports.get_buffer_pages()
     ttnn.addalpha_bw(
@@ -123,7 +123,7 @@ def test_bw_addalpha_with_opt_output_wo_alpha(input_shapes, device, are_required
     if are_required_outputs[1]:
         _, other_grad = data_gen_with_range(input_shapes, -1, 1, device)
 
-    cq_id = DefaultQueueId
+    cq_id = 0
     tt_output_tensor_on_device = ttnn.addalpha_bw(
         grad_tensor,
         input_tensor,

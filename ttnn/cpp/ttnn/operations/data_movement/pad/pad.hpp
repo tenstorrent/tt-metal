@@ -7,7 +7,7 @@
 #include "ttnn/tensor/types.hpp"
 #include <ranges>
 #include "ttnn/decorators.hpp"
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 
 namespace ttnn {
 namespace operations::data_movement {

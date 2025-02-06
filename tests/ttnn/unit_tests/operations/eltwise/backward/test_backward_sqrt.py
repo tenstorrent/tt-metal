@@ -43,7 +43,7 @@ def test_bw_sqrt_output(input_shapes, device):
 
     _, input_grad = data_gen_with_range(input_shapes, -1, 1, device)
 
-    cq_id = DefaultQueueId
+    cq_id = 0
     tt_output_tensor_on_device = ttnn.sqrt_bw(
         grad_tensor,
         input_tensor,

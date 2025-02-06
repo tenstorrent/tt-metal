@@ -5,7 +5,7 @@
 #include "ttnn/operations/data_movement/move/move.hpp"
 
 #include "device/move_device_operation.hpp"
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/distributed/api.hpp"

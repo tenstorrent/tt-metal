@@ -62,7 +62,7 @@ def test_bw_where_output(input_shapes, are_required_outputs, device):
     if are_required_outputs[1]:
         _, other_grad = data_gen_with_range(input_shapes, -1, 1, device)
 
-    cq_id = DefaultQueueId
+    cq_id = 0
 
     ttnn.where_bw(
         grad_tensor,

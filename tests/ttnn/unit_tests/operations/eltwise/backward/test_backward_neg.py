@@ -69,7 +69,7 @@ def test_bw_neg_opt_id(input_shapes, device):
     grad_data, grad_tensor = data_gen_with_range(input_shapes, -100, 100, device)
     _, input_grad = data_gen_with_range(input_shapes, -1, 1, device)
     input_grad = ttnn.to_memory_config(input_grad, ttnn.L1_MEMORY_CONFIG)
-    cq_id = DefaultQueueId
+    cq_id = 0
 
     pages_before = ttnn._ttnn.reports.get_buffer_pages()
     ttnn.neg_bw(grad_tensor, input_tensor, input_grad=input_grad, queue_id=cq_id)

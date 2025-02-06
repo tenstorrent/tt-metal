@@ -8,7 +8,7 @@
 #include "device/create_qkv_heads_device_operation.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 
 namespace ttnn::operations::experimental::transformer {
 

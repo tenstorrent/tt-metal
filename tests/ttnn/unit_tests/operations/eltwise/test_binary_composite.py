@@ -353,7 +353,7 @@ def test_binary_div_ttnn_opt(accurate_mode, round_mode, input_shapes, device):
 
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
-    cq_id = DefaultQueueId
+    cq_id = 0
     ttnn.div(
         input_tensor1,
         input_tensor2,
@@ -412,7 +412,7 @@ def test_binary_div_scalar_ttnn_opt(accurate_mode, round_mode, input_shapes, val
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, -100, 100, device)
     _, output_tensor = data_gen_with_range(input_shapes, -1, 1, device)
 
-    cq_id = DefaultQueueId
+    cq_id = 0
     ttnn.div(input_tensor1, value, accurate_mode=accurate_mode, round_mode=round_mode, output_tensor=output_tensor)
     golden_function = ttnn.get_golden_function(ttnn.div)
     golden_tensor = golden_function(in_data1, value, round_mode)

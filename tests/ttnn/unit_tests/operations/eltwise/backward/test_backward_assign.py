@@ -159,7 +159,7 @@ def test_bw_binary_assign_opt_output(input_shapes, device, are_required_outputs)
             opt_tensor, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
         )
 
-    cq_id = DefaultQueueId
+    cq_id = 0
     pages_before = ttnn._ttnn.reports.get_buffer_pages()
     ttnn.assign_bw(
         grad_tensor,

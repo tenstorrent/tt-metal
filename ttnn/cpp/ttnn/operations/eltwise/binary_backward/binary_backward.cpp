@@ -19,10 +19,10 @@
 #include "ttnn/operations/eltwise/complex_unary/complex_unary.hpp"
 #include <tt-metalium/constants.hpp>
 #include "cpp/ttnn/common/constants.hpp"
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/eltwise/ternary/where.hpp"
 #include "ttnn/operations/creation.hpp"
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/eltwise/binary_backward/binary_backward.hpp"
 #include "tools/profiler/op_profiler.hpp"
 #include <magic_enum/magic_enum.hpp>

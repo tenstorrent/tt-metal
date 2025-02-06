@@ -5,7 +5,7 @@
 #include "prefix_scan.hpp"
 
 #include "device/prefix_scan_op.hpp"
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 
 using namespace tt::tt_metal;
 

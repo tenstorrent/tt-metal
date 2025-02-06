@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/run_operation.hpp"
 #include "device/interleaved_to_sharded_partial_op.hpp"
 #include "interleaved_to_sharded_partial.hpp"

@@ -6,7 +6,7 @@
 
 #include <utility>
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/embedding/device/embedding_device_operation.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"

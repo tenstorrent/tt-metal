@@ -5,7 +5,7 @@
 #include "convert_to_chw.hpp"
 
 #include "device/convert_to_chw_op.hpp"
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 
 namespace ttnn::operations::experimental::cnn {
 

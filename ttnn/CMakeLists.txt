@@ -649,6 +649,8 @@ set(TTNN_SUBLIBRARIES
 set(TTNN_SRC)
 
 set(PYBIND_SRC
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/__init__.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/types.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/events.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/global_circular_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/global_semaphore.cpp
@@ -709,8 +711,6 @@ if(WITH_PYTHON_BINDINGS)
     list(
         APPEND
         TTNN_BASE_SRCS
-        ${PROJECT_SOURCE_DIR}/ttnn/cpp/pybind11/__init__.cpp
-        ${PROJECT_SOURCE_DIR}/ttnn/cpp/pybind11/types.cpp
         ${TT_LIB_SRCS}
         ${PYBIND_SRC}
     ) # TT_LIB_SRCS from tt_eager/tt_lib/CMakeLists.txt for python bindigns

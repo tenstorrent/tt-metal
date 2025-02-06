@@ -16,7 +16,7 @@
 #include <tt-metalium/test_tiles.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "ttnn/any_device.hpp"
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/storage.hpp"

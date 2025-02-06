@@ -249,7 +249,7 @@ def test_binary_scalar_ops_invalid_bcast(a_shape, b_shape, ttnn_fn, device):
     _, b_tt = rand_bf16_gen(b_shape, device)
 
     with pytest.raises(RuntimeError) as e:
-        cq_id = DefaultQueueId
+        cq_id = 0
         _ = ttnn_op(a_tt, b_tt, queue_id=cq_id)
         assert "Broadcasting rule violation" in str(e.value)
 
@@ -425,7 +425,7 @@ def test_binary_sfpu_ops(input_shapes, dtype, ttnn_fn, device):
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    cq_id = DefaultQueueId
+    cq_id = 0
     out_tt = ttnn_fn(a_tt, b_tt, queue_id=cq_id)
     tt_out = ttnn.to_torch(out_tt)
 
@@ -501,7 +501,7 @@ def test_binary_sfpu_opt_out(input_shapes, dtype, ttnn_fn, device):
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    cq_id = DefaultQueueId
+    cq_id = 0
     ttnn_fn(a_tt, b_tt, queue_id=cq_id, output_tensor=out_tt)
     tt_out = ttnn.to_torch(out_tt)
 
@@ -555,7 +555,7 @@ def test_binary_sfpu_bitwise_ops(input_shapes, dtype, ttnn_fn, device):
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    cq_id = DefaultQueueId
+    cq_id = 0
     out_tt = ttnn_fn(a_tt, b_tt, queue_id=cq_id)
     tt_out = ttnn.to_torch(out_tt)
 
@@ -618,7 +618,7 @@ def test_bitwise_opt_output(input_shapes, dtype, ttnn_fn, device):
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    cq_id = DefaultQueueId
+    cq_id = 0
     ttnn_fn(a_tt, b_tt, queue_id=cq_id, output_tensor=out_tt)
     tt_out = ttnn.to_torch(out_tt)
 
@@ -846,7 +846,7 @@ def test_inplace_binary_ops_fp32(input_shapes, ttnn_fn, device):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
-    cq_id = DefaultQueueId
+    cq_id = 0
     ttnn_op(input_tensor_a, input_tensor_b, queue_id=cq_id)
     output_tensor = ttnn.to_torch(input_tensor_a)
 
@@ -876,7 +876,7 @@ def test_inplace_binary_ops_invalid_bcast(a_shape, b_shape, ttnn_fn, device):
     _, input_tensor_b = rand_bf16_gen(b_shape, device)
 
     with pytest.raises(RuntimeError):
-        cq_id = DefaultQueueId
+        cq_id = 0
         ttnn_op(input_tensor_a, input_tensor_b, queue_id=cq_id)
 
 
@@ -955,7 +955,7 @@ def test_binary_opt_output_invalid_bcast(a_shape, b_shape, out_shape, ttnn_fn, d
     with pytest.raises(
         RuntimeError, match=r"Shape of Output tensor.+ provided does not match the broadcasted output shape .+"
     ):
-        cq_id = DefaultQueueId
+        cq_id = 0
         ttnn_op(input_tensor_a, input_tensor_b, queue_id=cq_id, output_tensor=out_tt)
 
 

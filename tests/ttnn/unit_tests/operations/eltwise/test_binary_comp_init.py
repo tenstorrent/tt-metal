@@ -42,7 +42,7 @@ def test_binary_comp_ops(input_shapes, out_dtype, mem_configs, ttnn_function, de
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
     other_data, other_tensor = data_gen_with_range(input_shapes, -90, 100, device, True)
 
-    cq_id = DefaultQueueId
+    cq_id = 0
     mem_cfg = mem_configs
 
     tt_output_tensor_on_device = ttnn_function(
@@ -89,7 +89,7 @@ def test_binary_comp_opt_out(input_shapes, out_dtype, mem_configs, ttnn_function
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
     other_data, other_tensor = data_gen_with_range(input_shapes, -90, 100, device, True)
 
-    cq_id = DefaultQueueId
+    cq_id = 0
     mem_cfg = mem_configs
     _, output_tensor = data_gen_with_range_dtype(input_shapes, -1, 1, device, False, False, out_dtype)
     ttnn_function(
@@ -146,7 +146,7 @@ def test_binary_comp_ops_scalar(input_shapes, scalar, out_dtype, mem_configs, tt
 
     in_data, input_tensor = data_gen_with_range(input_shapes, -100, 100, device, True)
 
-    cq_id = DefaultQueueId
+    cq_id = 0
     mem_cfg = mem_configs
 
     tt_output_tensor_on_device = ttnn_function(

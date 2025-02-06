@@ -7,7 +7,7 @@
 #include <utility>
 
 #include "device/sdpa_decode_op.hpp"
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/run_operation.hpp"
 
 using namespace tt::tt_metal;

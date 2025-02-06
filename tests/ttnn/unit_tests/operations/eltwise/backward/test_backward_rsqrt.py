@@ -45,7 +45,7 @@ def test_bw_rsqrt_opt_output(input_shapes, device):
     input_grad = ttnn.from_torch(
         input_grad, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
     )
-    cq_id = DefaultQueueId
+    cq_id = 0
     pages_before = ttnn._ttnn.reports.get_buffer_pages()
     ttnn.rsqrt_bw(grad_tensor, input_tensor, input_grad=input_grad, queue_id=cq_id)
     assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages())

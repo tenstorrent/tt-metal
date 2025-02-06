@@ -8,7 +8,7 @@
 #include <variant>
 
 #include <tt-metalium/command_queue.hpp>
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/core.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/distributed/types.hpp"

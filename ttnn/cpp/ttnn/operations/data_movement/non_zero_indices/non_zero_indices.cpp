@@ -6,7 +6,7 @@
 #include "device/non_zero_indices_op.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/decorators.hpp"
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 
 using namespace tt::tt_metal;
 

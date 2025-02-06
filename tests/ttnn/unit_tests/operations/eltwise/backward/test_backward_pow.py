@@ -152,7 +152,7 @@ def test_bw_unary_pow_output(input_shapes, exponent_and_pcc, device):
 
     _, input_grad = data_gen_with_range(input_shapes, -1, 1, device)
 
-    cq_id = DefaultQueueId
+    cq_id = 0
     tt_output_tensor_on_device = ttnn.pow_bw(
         grad_tensor,
         input_tensor,

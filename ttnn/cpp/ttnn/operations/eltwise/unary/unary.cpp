@@ -4,7 +4,7 @@
 
 #include "unary.hpp"
 
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "device/unary_device_operation.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/pool/downsample/device/downsample_op.hpp"

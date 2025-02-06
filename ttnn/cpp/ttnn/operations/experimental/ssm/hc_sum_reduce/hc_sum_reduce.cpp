@@ -5,7 +5,7 @@
 #include "hc_sum_reduce.hpp"
 
 #include "device/hc_sum_reduce_op.hpp"
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 
 using namespace tt::tt_metal;
 

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/run_operation.hpp"
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/decorators.hpp"
 #include "device/transpose_op.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"

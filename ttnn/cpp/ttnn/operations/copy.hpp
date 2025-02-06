@@ -5,7 +5,7 @@
 #pragma once
 
 #include "ttnn/decorators.hpp"
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/unary/device/unary_device_operation.hpp"

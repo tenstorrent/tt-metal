@@ -127,7 +127,7 @@ def test_full_like_opt_tensor(device, input_shape, fill_value, layout):
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout)
     input_tensor = ttnn.to_device(input_tensor, device)
 
-    cq_id = DefaultQueueId
+    cq_id = 0
     pages_before = ttnn._ttnn.reports.get_buffer_pages()
     ttnn.full_like(input_tensor, fill_value=fill_value, optional_tensor=opt_tensor, queue_id=cq_id)
     assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages())
@@ -226,7 +226,7 @@ def test_full_with_opt_tensor(device, input_shape, layout, fill_value):
         opt_tensor, ttnn.bfloat16, layout=layout, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
     )
 
-    cq_id = DefaultQueueId
+    cq_id = 0
     pages_before = ttnn._ttnn.reports.get_buffer_pages()
     ttnn.full(input_shape, device=device, fill_value=fill_value, optional_tensor=opt_tensor, queue_id=cq_id)
     assert len(pages_before) == len(ttnn._ttnn.reports.get_buffer_pages())

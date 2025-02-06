@@ -4,7 +4,7 @@
 
 #include "ttnn/operations/data_movement/indexed_fill/indexed_fill.hpp"
 #include "ttnn/operations/data_movement/indexed_fill/device/indexed_fill_op.hpp"
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 
 using namespace tt::tt_metal;
 

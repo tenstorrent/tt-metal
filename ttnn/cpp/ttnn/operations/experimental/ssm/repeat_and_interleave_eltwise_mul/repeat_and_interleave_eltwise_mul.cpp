@@ -5,7 +5,7 @@
 #include "repeat_and_interleave_eltwise_mul.hpp"
 
 #include "device/repeat_and_interleave_eltwise_mul_op.hpp"
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 
 using namespace tt::tt_metal;
 

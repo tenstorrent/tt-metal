@@ -7,7 +7,7 @@
 #include <optional>
 
 #include "ttnn/decorators.hpp"
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 
 namespace ttnn {
 
