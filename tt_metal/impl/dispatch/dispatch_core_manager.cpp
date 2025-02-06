@@ -25,7 +25,7 @@ void dispatch_core_manager::initialize(const DispatchCoreConfig& dispatch_core_c
     }
 }
 
-static dispatch_core_manager& dispatch_core_manager::instance() {
+dispatch_core_manager& dispatch_core_manager::instance() {
     TT_ASSERT(dispatch_core_manager::_inst != nullptr, "Trying to get dispatch_core_manager without initializing it");
     return *dispatch_core_manager::_inst;
 }
@@ -318,12 +318,7 @@ CoreCoord dispatch_core_manager::get_next_available_dispatch_core(chip_id_t devi
 }
 
 void dispatch_core_manager::log_dispatch_assignment(
-    std::string name,
-    tt_cxy_pair& cxy,
-    chip_id_t device_id,
-    uint16_t channel,
-    uint8_t cq_id,
-    bool force_ethernet = false) {
+    std::string name, tt_cxy_pair& cxy, chip_id_t device_id, uint16_t channel, uint8_t cq_id, bool force_ethernet) {
     log_debug(
         tt::LogMetal,
         "Allocated {} Core: {}({}) for Device {} Channel {} CQ ID {}",
