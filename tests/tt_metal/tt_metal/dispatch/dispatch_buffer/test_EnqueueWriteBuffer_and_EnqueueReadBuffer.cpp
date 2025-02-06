@@ -548,7 +548,7 @@ TEST_F(CommandQueueSingleCardBufferFixture, TestMultiplePagesLargerThanMaxPrefet
         const uint32_t page_size = max_prefetch_command_size + 2048;
         const uint32_t buffer_size = 40 * page_size;
         const uint32_t region_size = 5 * page_size;
-        const uint32_t region_offset = 30 * page_size;
+        const uint32_t region_offset = 3 * page_size;
 
         const BufferRegion region(region_offset, region_size);
         auto buffer = Buffer::create(device, buffer_size, page_size, BufferType::DRAM);
