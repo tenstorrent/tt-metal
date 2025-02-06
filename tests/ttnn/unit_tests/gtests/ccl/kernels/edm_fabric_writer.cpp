@@ -115,6 +115,7 @@ void kernel_main() {
             sync_noc_x,
             sync_noc_y,
             start_sync_val);
+        noc_async_writes_flushed();
         line_sync(
             fabric_connection,
             mcast_fwd_packet_header,
@@ -190,7 +191,7 @@ void kernel_main() {
         fabric_conn.wait_for_empty_write_slot();
         fabric_conn.send_payload_without_header_non_blocking_from_address(
             source_l1_buffer_address, packet_payload_size_bytes);
-        fabric_conn.send_payload_flush_blocking_from_address(
+        fabric_conn.send_payload_blocking_from_address(
             (uint32_t)unicast_packet_header, sizeof(tt::fabric::PacketHeader));
     }
 
@@ -203,6 +204,13 @@ void kernel_main() {
             sync_noc_x,
             sync_noc_y,
             finish_sync_val);
+
+        if (sync_noc_x == my_x[0] && sync_noc_y == my_y[0]) {
+            // reset the global semaphore in case it is used in a op/kernel
+            // invocation
+            *reinterpret_cast<volatile uint32_t*>(sync_bank_addr) = 0;
+            ;
+        }
     }
 
     {
