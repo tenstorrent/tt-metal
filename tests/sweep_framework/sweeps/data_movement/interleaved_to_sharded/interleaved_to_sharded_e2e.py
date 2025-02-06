@@ -62,9 +62,6 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
             test_vector["shard_specs"]["shard_shape"][-2] % TILE_HEIGHT != 0
             or test_vector["shard_specs"]["shard_shape"][-1] % TILE_WIDTH != 0
         ):
-            print(
-                f"shard_shape {test_vector['shard_specs']['shard_shape']} is not divisible by TILE_HEIGHT and TILE_WIDTH"
-            )
             return True, "shard_shape not supported with TILE_LAYOUT"
         elif test_vector["shard_specs"]["shard_shape"] is None:
             ncores = test_vector["core_grid"].x * test_vector["core_grid"].y
@@ -78,15 +75,7 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
                 if test_vector["strategy"] == ttnn.ShardStrategy.WIDTH
                 else test_vector["shard_specs"]["shape"][-1]
             )
-            print("*" * 8)
-            print(
-                f"shape {test_vector['shard_specs']['shape']}, sizex {sizex} and sizey {sizey}, corex { test_vector['core_grid'].x} and corey { test_vector['core_grid'].y}"
-            )
             if sizex % TILE_HEIGHT != 0 or sizey % TILE_WIDTH != 0:
-                print(
-                    f"sizex {sizex} and sizey {sizey} do not evenly divide the shape {test_vector['shard_specs']['shape']}"
-                )
-                print(f"shape {test_vector['shard_specs']['shape']} is not divisible by TILE_HEIGHT and TILE_WIDTH")
                 return True, "shard_shape not supported with TILE_LAYOUT"
     return False, None
 
@@ -134,27 +123,19 @@ def run(
         device=device,
         layout=layout,
         memory_config=input_buffer_type,
-        dtype=ttnn.bfloat16,
+        dtype=dtype,
     )
 
     # Measure performance of the split operation in ttnn
-    try:
-        start_time = start_measuring_time()
+    start_time = start_measuring_time()
 
-        sharded_data = ttnn.to_memory_config(interleaved_data, shard_config)
-        interleaved_output = ttnn.to_memory_config(sharded_data, output_buffer_type)
+    sharded_data = ttnn.to_memory_config(interleaved_data, shard_config)
+    interleaved_output = ttnn.to_memory_config(sharded_data, output_buffer_type)
 
-        e2e_perf = stop_measuring_time(start_time)
+    e2e_perf = stop_measuring_time(start_time)
 
-        output_data = ttnn.from_device(interleaved_output)
-        output_data = ttnn.to_torch(output_data)
-    except Exception as e:
-        print(f"Exception: {e}")
-        traceback.print_exc()
-        print(
-            f"Parameters: shard_specs={shard_specs}, strategy={strategy}, orientation={orientation}, core_grid={core_grid}, dtype={dtype}, layout={layout}, input_buffer_type={input_buffer_type}, output_buffer_type={output_buffer_type}, device={device}"
-        )
-        return [False, None]
+    output_data = ttnn.from_device(interleaved_output)
+    output_data = ttnn.to_torch(output_data)
 
     # Compare the concatenated tensors and return performance and accuracy check
     result = check_with_pcc(input_data, output_data, 0.999)
