@@ -12,6 +12,7 @@
 #endif
 #include <noc/noc_parameters.h>
 
+#include <algorithm>
 #include <stdint.h>
 
 #include "core_config.h"
