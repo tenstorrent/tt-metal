@@ -9,8 +9,10 @@ import os
 import pathlib
 import re
 from types import ModuleType
+from typing import List
 
 from loguru import logger
+import torch
 
 # Sets env and updates shared libs rpath
 # This is a tweak required for a proper wheel functioning
@@ -99,7 +101,10 @@ from ttnn._ttnn.multi_device import (
     get_device_tensors,
     aggregate_as_tensor,
     get_t3k_physical_device_ids_ring,
+    sharded_tensor_to_tensor_list,
 )
+
+import contextlib
 
 from ttnn._ttnn.events import create_event, record_event, wait_for_event
 
@@ -280,6 +285,15 @@ ttnn.Tensor.__ge__ = lambda self, *args, **kwargs: ttnn.ge(self, *args, **kwargs
 ttnn.Tensor.__lt__ = lambda self, *args, **kwargs: ttnn.lt(self, *args, **kwargs)
 ttnn.Tensor.__le__ = lambda self, *args, **kwargs: ttnn.le(self, *args, **kwargs)
 ttnn.Tensor.__getitem__ = lambda self, *args, **kwargs: ttnn.operations.core.__getitem__(self, *args, **kwargs)
+
+_original_sharded_tensor_to_tensor_list = ttnn.sharded_tensor_to_tensor_list
+
+
+def sharded_tensor_to_tensor_list_helper(tensor: ttnn.Tensor) -> List["torch.Tensor"]:
+    return [ttnn.to_torch(shard) for shard in ttnn._original_sharded_tensor_to_tensor_list(tensor)]
+
+
+ttnn.sharded_tensor_to_tensor_list = sharded_tensor_to_tensor_list_helper
 
 from ttnn.operations.matmul import (
     MatmulMultiCoreReuseProgramConfig,
