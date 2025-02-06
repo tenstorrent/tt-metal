@@ -22,7 +22,6 @@
 #include "eth_l1_address_map.h"
 #include "hostdevcommon/common_values.hpp"
 #include "risc_attribs.h"
-#include "umd/device/tt_silicon_driver_common.hpp"
 #include "utils/utils.h"
 #include "debug/assert.h"
 #include "dev_msgs.h"
