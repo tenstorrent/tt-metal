@@ -264,6 +264,7 @@ void MeshDevice::reshape(const MeshShape& new_shape) {
 
     // From an MxN mesh, we can always reduce rank to a 1xM*N Line mesh.
     // However, going from a Line mesh to an MxN mesh is not always possible.
+    std::vector<IDevice*> new_device_order;
     if (new_shape.num_rows != 1 and new_shape.num_cols != 1) {
         auto new_physical_device_ids =
             SystemMesh::instance().request_available_devices(
@@ -285,10 +286,31 @@ void MeshDevice::reshape(const MeshShape& new_shape) {
                     this->num_cols());
             }
         }
+        for (size_t i = 0; i < new_physical_device_ids.size(); i++) {
+            new_device_order.push_back(this->get_device(new_physical_device_ids[i]));
+        }
+    } else {
+        new_device_order = view_->get_line_devices();
     }
 
+    // MeshDeviceView requires devices to be provided as a 1D array in row-major order for the target mesh shape.
+    // The physical connectivity between devices must be preserved when reshaping.
+    //
+    // Example:
+    // Given 4 devices physically connected in a 2x2 grid like this:
+    //   [0]--[1]
+    //    |    |
+    //   [3]--[2]
+    //
+    // For a 1x4 mesh shape:
+    // - Devices must form a line: 0->1->2->3
+    // - Row-major order will be: [0,1,2,3]
+    //
+    // For a 2x2 mesh shape:
+    // - Preserves original 2x2 physical connectivity
+    // - Row-major order will be: [0,1,3,2]
     mesh_shape_ = new_shape;
-    view_ = std::make_unique<MeshDeviceView>(scoped_devices_->get_devices(), mesh_shape_);
+    view_ = std::make_unique<MeshDeviceView>(new_device_order, new_shape);
 }
 
 bool MeshDevice::close() {
