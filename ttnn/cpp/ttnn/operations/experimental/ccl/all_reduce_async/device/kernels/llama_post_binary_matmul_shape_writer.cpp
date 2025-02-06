@@ -110,8 +110,9 @@ void kernel_main() {
     const uint32_t mcast_dest_noc_start_y = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t mcast_dest_noc_end_x = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t mcast_dest_noc_end_y = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t link = get_arg_val<uint32_t>(arg_idx++);
 
-    DPRINT << "reduction_output_cb_id: " << reduction_semaphore_send_addr << "\n";
+    // DPRINT << "reduction_output_cb_id: " << reduction_semaphore_send_addr << "\n";
 
     volatile tt_l1_ptr uint32_t* reduction_semaphore_send_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reduction_semaphore_send_addr);
@@ -140,7 +141,7 @@ void kernel_main() {
 
     while (tiles_read < num_tiles_to_read) {
         uint32_t num_tiles_to_read_this_core = std::min(num_tiles_per_core - shard_tile_id, packet_size_in_pages);
-        num_tiles_to_read_this_core = 1;  // std::min(num_tiles_to_read-tiles_read, num_tiles_to_read_this_core);
+        num_tiles_to_read_this_core = std::min(num_tiles_to_read - tiles_read, num_tiles_to_read_this_core);
         cb_wait_front(cb0_id, num_tiles_to_read_this_core);
         size_t l1_read_addr = get_read_ptr(cb0_id);
 
@@ -201,29 +202,29 @@ void kernel_main() {
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr);
     noc_semaphore_inc(out_ready_sem_noc_addr, 1);
 
-    DPRINT << "wait for output semphore \n";
+    // DPRINT << "wait for output semphore \n";
     // 3. wait for mcast output ready semaphore
     if (wait_output_semaphore) {
         while (*reinterpret_cast<volatile uint32_t*>(out_ready_sem_bank_addr) < out_ready_sem_wait_value);
-
-        // Signal the reduction workers
-        const uint64_t reduction_semaphore_recv_noc_addr = get_noc_multicast_addr(
-            mcast_dest_noc_start_x,
-            mcast_dest_noc_start_y,
-            mcast_dest_noc_end_x,
-            mcast_dest_noc_end_y,
-            reduction_semaphore_send_addr);
-
-        noc_semaphore_set_multicast(
-            reduction_semaphore_send_addr,
-            reduction_semaphore_recv_noc_addr,
-            num_cores,
-            false,
-            false,  // TODO: Why?
-            0);
     }
 
-    DPRINT << "wait done for output semphore \n";
+    // Signal the reduction workers
+    const uint64_t reduction_semaphore_recv_noc_addr = get_noc_multicast_addr(
+        mcast_dest_noc_start_x,
+        mcast_dest_noc_start_y,
+        mcast_dest_noc_end_x,
+        mcast_dest_noc_end_y,
+        reduction_semaphore_send_addr);
+
+    noc_semaphore_set_multicast(
+        reduction_semaphore_send_addr,
+        reduction_semaphore_recv_noc_addr,
+        num_cores,
+        false,  // TODO: Why?
+        false,  // TODO: Why?
+        0);
+
+    // DPRINT << "wait done for output semphore \n";
 
     // 4. global semaphore reset
     if (reset_global_semaphore) {
@@ -237,5 +238,5 @@ void kernel_main() {
 
     noc_async_write_barrier();
 
-    DPRINT << "writer done \n";
+    // DPRINT << "writer done \n";
 }

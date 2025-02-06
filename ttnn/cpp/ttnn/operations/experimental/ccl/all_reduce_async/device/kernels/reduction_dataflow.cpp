@@ -14,16 +14,17 @@ void kernel_main() {
     // runtime args
     size_t arg_idx = 0;
     const uint32_t signal_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(arg_idx++));
-    DPRINT << "signal_semaphore_addr: " << signal_semaphore_addr << "\n";
+    // DPRINT << "signal_semaphore_addr: " << signal_semaphore_addr << "\n";
 
     volatile tt_l1_ptr uint32_t* signal_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(signal_semaphore_addr);
 
-    DPRINT << "WAIT for Reduction Signal \n";
+    // DPRINT << "WAIT for Reduction Signal \n";
+    // DPRINT << "signal_semaphore_addr_ptr: " << *signal_semaphore_addr_ptr << "\n";
     // 1. Wait for signal from All-Gather worker
     noc_semaphore_wait(signal_semaphore_addr_ptr, VALID);
     noc_semaphore_set(signal_semaphore_addr_ptr, 0);
-    DPRINT << "Pushing Tiles \n";
+    // DPRINT << "Pushing Tiles \n";
 
     // 2. Signal compute kernel to start processing
     cb_push_back(cb_id, total_num_reduction_tiles);
