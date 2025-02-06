@@ -196,7 +196,7 @@ def run_test_FalconModel_inference(
                 use_cache=use_cache,
             )
             # output of model is replicated
-            tensors = ttnn._ttnn.multi_device.shardedtensor_to_tensorlist(tt_out)
+            tensors = ttnn.sharded_tensor_to_tensor_list(tt_out)
             tt_outs.append(tensors[0].squeeze(1))
 
         tt_out = torch.vstack(tt_outs)
@@ -213,7 +213,7 @@ def run_test_FalconModel_inference(
             use_cache=use_cache,
         )
         # Output of model is replicated
-        tensors = ttnn._ttnn.multi_device.shardedtensor_to_tensorlist(tt_out)
+        tensors = ttnn.sharded_tensor_to_tensor_list(tt_out)
         tt_out = tensors[0].squeeze(1).transpose(0, 1)
 
     # check outputs ----------------------------------------------------------------------
