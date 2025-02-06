@@ -186,6 +186,7 @@ public:
     void init_command_queue_device() override;
     void initialize_synchronous_sw_cmd_queue() override;
     void update_dispatch_cores_for_multi_cq_eth_dispatch() override;
+    void init_fabric() override;
     bool close() override;
     void enable_async(bool enable) override;
     void synchronize() override;

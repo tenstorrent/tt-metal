@@ -234,20 +234,6 @@ void DevicePool::initialize(
     _inst->add_devices_to_pool(device_ids);
     _inst->init_firmware_on_active_devices();
 
-    bool initialize_fabric = true;
-    for (int i = 0; i < tt::Cluster::instance().number_of_devices(); i++) {
-        if (not _inst->is_device_active(i)) {
-            initialize_fabric = false;
-            break;
-        }
-    }
-    if (initialize_fabric) {
-        // Initialize control plane, which writes routing tables to all ethernet cores
-        _inst->initialize_control_plane();
-        // Launch fabric programs on all active devices
-        _inst->initialize_fabric_on_all_devices();
-    }
-
     tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true, target_mmio_ids);
     _inst->init_profiler_devices();
 }
@@ -277,6 +263,10 @@ void DevicePool::initialize_device(IDevice* dev) const {
     dev->initialize_and_launch_firmware();
 
     watcher_attach(dev);
+
+    if (this->using_fabric) {
+        dev->init_fabric();
+    }
 
     // Set up HW command queues on device for FD
     if (this->using_fast_dispatch) {
@@ -376,6 +366,19 @@ void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
             this->activate_device(device_id);
         }
     }
+    // Launch Fabric if all devices are active
+    // TODO: add api for user to toggle Fabric level
+    for (int i = 0; i < tt::Cluster::instance().number_of_devices(); i++) {
+        if (not _inst->is_device_active(i)) {
+            this->using_fabric = false;
+            break;
+        }
+    }
+
+    if (using_fabric) {
+        // Initialize control plane, which writes routing tables to all ethernet cores
+        _inst->initialize_control_plane();
+    }
     this->using_fast_dispatch = (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr);
     if (this->using_fast_dispatch) {
         populate_fd_kernels(devices_to_activate, this->num_hw_cqs);
@@ -462,10 +465,11 @@ void DevicePool::initialize_control_plane() {
         std::filesystem::path(tt::llrt::RunTimeOptions::get_instance().get_root_dir()) /
         "tt_metal/fabric/mesh_graph_descriptors" / mesh_graph_descriptor;
 
+    std::cout << "initialize control plane with mesh graph descriptor: " << mesh_graph_desc_path << std::endl;
     this->control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(mesh_graph_desc_path.string());
 }
 
-void DevicePool::initialize_fabric_on_all_devices() {}
+tt::tt_fabric::ControlPlane* DevicePool::get_control_plane() const { return this->control_plane.get(); }
 
 DevicePool::DevicePool() {
     ZoneScoped;
