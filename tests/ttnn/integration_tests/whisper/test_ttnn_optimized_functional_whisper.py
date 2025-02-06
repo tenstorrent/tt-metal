@@ -18,13 +18,15 @@ from models.utility_functions import is_wormhole_b0, is_blackhole
 MODEL_NAME = "openai/whisper-base"
 
 
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [1500])
 @pytest.mark.parametrize("use_key_value_states", [False, True])
-def test_whisper_attention(device, ttnn_model, model_name, batch_size, sequence_size, use_key_value_states):
+@pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
+def test_whisper_attention(
+    device, ttnn_model, model_name, batch_size, sequence_size, use_key_value_states, enable_async_mode
+):
     torch.manual_seed(0)
     config = transformers.WhisperConfig.from_pretrained(model_name)
     model = transformers.models.whisper.modeling_whisper.WhisperAttention(
@@ -82,12 +84,12 @@ def test_whisper_attention(device, ttnn_model, model_name, batch_size, sequence_
     assert_with_pcc(torch_output, output, 0.98)
 
 
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [1500])
-def test_encoder_layer(device, ttnn_model, model_name, batch_size, sequence_size):
+@pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
+def test_encoder_layer(device, ttnn_model, model_name, batch_size, sequence_size, enable_async_mode):
     torch.manual_seed(0)
     config = transformers.WhisperConfig.from_pretrained(model_name)
     model = transformers.models.whisper.modeling_whisper.WhisperEncoderLayer(config).eval()
@@ -119,13 +121,13 @@ def test_encoder_layer(device, ttnn_model, model_name, batch_size, sequence_size
     assert_with_pcc(torch_output, output, pcc=0.99)
 
 
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("feature_size", [80])
 @pytest.mark.parametrize("sequence_length", [3000])
-def test_encoder(device, ttnn_model, model_name, batch_size, feature_size, sequence_length):
+@pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
+def test_encoder(device, ttnn_model, model_name, batch_size, feature_size, sequence_length, enable_async_mode):
     torch.manual_seed(0)
     config = transformers.WhisperConfig.from_pretrained(model_name)
     model = transformers.models.whisper.modeling_whisper.WhisperEncoder(config).eval()
@@ -172,12 +174,12 @@ def test_encoder(device, ttnn_model, model_name, batch_size, feature_size, seque
     assert_with_pcc(torch_output, output, 0.968)
 
 
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [1500])
-def test_decoder_layer(device, ttnn_model, model_name, batch_size, sequence_size):
+@pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
+def test_decoder_layer(device, ttnn_model, model_name, batch_size, sequence_size, enable_async_mode):
     torch.manual_seed(0)
     config = transformers.WhisperConfig.from_pretrained(model_name)
     model = transformers.models.whisper.modeling_whisper.WhisperDecoderLayer(config).eval()
@@ -229,12 +231,12 @@ def test_decoder_layer(device, ttnn_model, model_name, batch_size, sequence_size
     assert_with_pcc(torch_output, output, 0.97)
 
 
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [1500])
-def test_decoder(device, ttnn_model, model_name, batch_size, sequence_size):
+@pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
+def test_decoder(device, ttnn_model, model_name, batch_size, sequence_size, enable_async_mode):
     torch.manual_seed(0)
     config = transformers.WhisperConfig.from_pretrained(model_name)
     model = transformers.models.whisper.modeling_whisper.WhisperDecoder(config).eval()
@@ -301,10 +303,9 @@ def test_decoder(device, ttnn_model, model_name, batch_size, sequence_size):
     assert_with_pcc(torch_output, output, pcc=0.99)
 
 
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
-@pytest.mark.requires_fast_runtime_mode_off
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
-def test_ttnn_whisper(tmp_path, device, ttnn_model):
+@pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
+def test_ttnn_whisper(tmp_path, device, ttnn_model, enable_async_mode):
     torch.manual_seed(0)
     model_name = "openai/whisper-base"
     config = WhisperConfig.from_pretrained(model_name)
@@ -346,24 +347,22 @@ def test_ttnn_whisper(tmp_path, device, ttnn_model):
         device=device,
     )
 
-    with ttnn.tracer.trace():
-        (input_embeds, decoder_hidden_states, decoder_attention_mask) = ttnn_model.preprocess_inputs(
-            config=config,
-            input_features=input_features,
-            input_ids=decoder_input_ids,
-            attention_mask=attention_mask,
-            parameters=ttnn_parameters,
-            device=device,
-        )
+    (input_embeds, decoder_hidden_states, decoder_attention_mask) = ttnn_model.preprocess_inputs(
+        config=config,
+        input_features=input_features,
+        input_ids=decoder_input_ids,
+        attention_mask=attention_mask,
+        parameters=ttnn_parameters,
+        device=device,
+    )
 
-        last_hidden_state = ttnn_model.whisper(
-            config,
-            input_embeds,
-            decoder_hidden_states,
-            decoder_attention_mask=decoder_attention_mask,
-            parameters=ttnn_parameters,
-        )
-        last_hidden_state = ttnn.to_torch(last_hidden_state)
-    ttnn.tracer.visualize(last_hidden_state, file_name=tmp_path / "whisper.svg")
+    last_hidden_state = ttnn_model.whisper(
+        config,
+        input_embeds,
+        decoder_hidden_states,
+        decoder_attention_mask=decoder_attention_mask,
+        parameters=ttnn_parameters,
+    )
+    last_hidden_state = ttnn.to_torch(last_hidden_state)
 
     assert_with_pcc(expected_last_hidden_state, last_hidden_state, 0.964)
