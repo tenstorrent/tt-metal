@@ -4,12 +4,17 @@
 
 #pragma once
 
+#include <queue>
+
 #include "command_queue_interface.hpp"
 #include "mesh_buffer.hpp"
 #include "mesh_device.hpp"
+#include "mesh_event.hpp"
 #include "mesh_workload.hpp"
 
 namespace tt::tt_metal::distributed {
+
+struct MeshReadEventDescriptor;
 
 class MeshCommandQueue {
     // Main interface to dispatch data and workloads to a MeshDevice
@@ -29,12 +34,18 @@ private:
     // Helper functions for read and write entire Sharded-MeshBuffers
     void write_sharded_buffer(const MeshBuffer& buffer, const void* src);
     void read_sharded_buffer(MeshBuffer& buffer, void* dst);
+    void enqueue_record_event_helper(
+        const std::shared_ptr<MeshEvent>& event,
+        tt::stl::Span<const SubDeviceId> sub_device_ids,
+        bool notify_host,
+        const std::optional<LogicalDeviceRange>& device_range = std::nullopt);
     std::array<tt::tt_metal::WorkerConfigBufferMgr, DispatchSettings::DISPATCH_MESSAGE_ENTRIES> config_buffer_mgr_;
     std::array<uint32_t, DispatchSettings::DISPATCH_MESSAGE_ENTRIES> expected_num_workers_completed_;
     MeshDevice* mesh_device_;
     uint32_t id_;
     CoreCoord dispatch_core_;
     CoreType dispatch_core_type_;
+    std::queue<std::shared_ptr<MeshReadEventDescriptor>> event_descriptors_;
 
 public:
     MeshCommandQueue(MeshDevice* mesh_device, uint32_t id);
@@ -52,7 +63,18 @@ public:
     void enqueue_read_shard(
         void* host_data, const std::shared_ptr<MeshBuffer>& mesh_buffer, const Coordinate& coord, bool blocking);
     void enqueue_read_mesh_buffer(void* host_data, const std::shared_ptr<MeshBuffer>& buffer, bool blocking);
-    void finish();
+    void enqueue_record_event(
+        const std::shared_ptr<MeshEvent>& event,
+        tt::stl::Span<const SubDeviceId> sub_device_ids = {},
+        const std::optional<LogicalDeviceRange>& device_range = std::nullopt);
+    void enqueue_record_event_to_host(
+        const std::shared_ptr<MeshEvent>& event,
+        tt::stl::Span<const SubDeviceId> sub_device_ids = {},
+        const std::optional<LogicalDeviceRange>& device_range = std::nullopt);
+    void enqueue_wait_for_event(const std::shared_ptr<MeshEvent>& sync_event);
+    void drain_events_from_completion_queue();
+    void verify_reported_events_after_draining(const std::shared_ptr<MeshEvent>& event);
+    void finish(tt::stl::Span<const SubDeviceId> sub_device_ids = {});
     void reset_worker_state(
         bool reset_launch_msg_state,
         uint32_t num_sub_devices,
