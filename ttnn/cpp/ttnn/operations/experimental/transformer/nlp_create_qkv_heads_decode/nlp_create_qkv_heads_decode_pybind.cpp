@@ -48,7 +48,7 @@ void bind_nlp_create_qkv_heads_decode(pybind11::module& module) {
             pybind11::arg("slice_size").noconvert() = std::nullopt,
             pybind11::arg("memory_config") = std::nullopt,
             pybind11::arg("output_tensors") = std::nullopt,
-            pybind11::arg("queue_id") = 0});
+            pybind11::arg("queue_id") = DefaultQueueId});
 }
 
 }  // namespace ttnn::operations::experimental::transformer::detail

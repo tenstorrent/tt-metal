@@ -36,7 +36,7 @@ void py_bind_move(pybind11::module& module) {
             pybind11::arg("input_tensor").noconvert(),
             pybind11::kw_only(),
             pybind11::arg("memory_config") = std::nullopt,
-            pybind11::arg("queue_id") = 0});
+            pybind11::arg("queue_id") = DefaultQueueId});
 }
 
 }  // namespace ttnn::operations::data_movement::detail
