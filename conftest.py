@@ -143,6 +143,13 @@ def device(request, device_params):
     ttnn.close_device(device)
 
 
+@pytest.fixture(scope="module")
+def torch_tensor_map(request):
+    torch_tensor_map = {}
+
+    return torch_tensor_map
+
+
 @pytest.fixture(scope="function")
 def pcie_devices(request, device_params):
     import ttnn
