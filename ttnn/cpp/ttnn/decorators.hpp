@@ -316,8 +316,9 @@ private:
         std::vector<std::vector<ttnn::Tensor>> vec_input_tensors =
             detail::extract_args_to_vector<std::vector<ttnn::Tensor>>(args...);
         if (ten_input_tensors.size() > 0 && vec_input_tensors.size() > 0) {
-            TT_THROW("Only one of input_tensors or vec_input_tensors can be specified.
-            It means in the invoke function you have both Tensor and std::vector<Tensor> as inoput parameters");
+            TT_THROW(
+                "Only one of input_tensors or vec_input_tensors can be specified."
+                "It means in the invoke function you have both Tensor and std::vector<Tensor> as inoput parameters");
         }
         if (ten_input_tensors.size() == 0 && vec_input_tensors.size() > 2) {
             TT_THROW(
