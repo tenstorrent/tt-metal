@@ -230,7 +230,7 @@ class TtModelArgs:
         )  # for prefill
         self.rot_emb = freqs_to_rotation_matrix(self.cos, self.sin)  # for decode
 
-        self.tokenizer = self.create_tokenizer()
+        self.tokenizer = None if dummy_weights else self.create_tokenizer()
 
         device = mesh_device.get_devices()[0] if mesh_device is not None else None
         self.cluster_shape = list(mesh_device.shape)
