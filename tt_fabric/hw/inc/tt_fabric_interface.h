@@ -128,10 +128,14 @@ typedef struct _packet_header {
     tt_routing routing;
 } packet_header_t;
 
-const uint32_t PACKET_HEADER_SIZE_BYTES = 48;
-const uint32_t PACKET_HEADER_SIZE_WORDS = PACKET_HEADER_SIZE_BYTES / PACKET_WORD_SIZE_BYTES;
+constexpr uint32_t PACKET_HEADER_SIZE_BYTES = 48;
+constexpr uint32_t PACKET_HEADER_SIZE_WORDS = PACKET_HEADER_SIZE_BYTES / PACKET_WORD_SIZE_BYTES;
 
 static_assert(sizeof(packet_header_t) == PACKET_HEADER_SIZE_BYTES);
+
+static_assert(offsetof(packet_header_t, routing) % 4 == 0);
+
+constexpr uint32_t packet_header_routing_offset_dwords = offsetof(packet_header_t, routing) / 4;
 
 void tt_fabric_add_header_checksum(packet_header_t* p_header) {
     uint16_t* ptr = (uint16_t*)p_header;
@@ -186,7 +190,7 @@ typedef struct _pull_request {
     uint8_t flags;  // Router command.
 } pull_request_t;
 
-const uint32_t PULL_REQ_SIZE_BYTES = 48;
+constexpr uint32_t PULL_REQ_SIZE_BYTES = 48;
 
 static_assert(sizeof(pull_request_t) == PULL_REQ_SIZE_BYTES);
 static_assert(sizeof(pull_request_t) == sizeof(packet_header_t));
@@ -197,18 +201,18 @@ typedef union _chan_request_entry {
     uint8_t bytes[48];
 } chan_request_entry_t;
 
-const uint32_t CHAN_PTR_SIZE_BYTES = 16;
+constexpr uint32_t CHAN_PTR_SIZE_BYTES = 16;
 typedef struct _chan_ptr {
     uint32_t ptr;
     uint32_t pad[3];
 } chan_ptr;
 static_assert(sizeof(chan_ptr) == CHAN_PTR_SIZE_BYTES);
 
-const uint32_t CHAN_REQ_BUF_LOG_SIZE = 4;  // must be 2^N
-const uint32_t CHAN_REQ_BUF_SIZE = 16;     // must be 2^N
-const uint32_t CHAN_REQ_BUF_SIZE_MASK = (CHAN_REQ_BUF_SIZE - 1);
-const uint32_t CHAN_REQ_BUF_PTR_MASK = ((CHAN_REQ_BUF_SIZE << 1) - 1);
-const uint32_t CHAN_REQ_BUF_SIZE_BYTES = 2 * CHAN_PTR_SIZE_BYTES + CHAN_REQ_BUF_SIZE * PULL_REQ_SIZE_BYTES;
+constexpr uint32_t CHAN_REQ_BUF_LOG_SIZE = 4;  // must be 2^N
+constexpr uint32_t CHAN_REQ_BUF_SIZE = 16;     // must be 2^N
+constexpr uint32_t CHAN_REQ_BUF_SIZE_MASK = (CHAN_REQ_BUF_SIZE - 1);
+constexpr uint32_t CHAN_REQ_BUF_PTR_MASK = ((CHAN_REQ_BUF_SIZE << 1) - 1);
+constexpr uint32_t CHAN_REQ_BUF_SIZE_BYTES = 2 * CHAN_PTR_SIZE_BYTES + CHAN_REQ_BUF_SIZE * PULL_REQ_SIZE_BYTES;
 
 typedef struct _chan_req_buf {
     chan_ptr wrptr;
@@ -236,12 +240,12 @@ static_assert(sizeof(chan_payload_ptr) == CHAN_PTR_SIZE_BYTES);
 // Each control channel message is 48 Bytes.
 // FVCC buffer is a 16 message buffer each for incoming and outgoing messages.
 // Control message capacity can be increased by increasing FVCC_BUF_SIZE.
-const uint32_t FVCC_BUF_SIZE = 16;     // must be 2^N
-const uint32_t FVCC_BUF_LOG_SIZE = 4;  // must be log2(FVCC_BUF_SIZE)
-const uint32_t FVCC_SIZE_MASK = (FVCC_BUF_SIZE - 1);
-const uint32_t FVCC_PTR_MASK = ((FVCC_BUF_SIZE << 1) - 1);
-const uint32_t FVCC_BUF_SIZE_BYTES = PULL_REQ_SIZE_BYTES * FVCC_BUF_SIZE + 2 * CHAN_PTR_SIZE_BYTES;
-const uint32_t FVCC_SYNC_BUF_SIZE_BYTES = CHAN_PTR_SIZE_BYTES * FVCC_BUF_SIZE;
+constexpr uint32_t FVCC_BUF_SIZE = 16;     // must be 2^N
+constexpr uint32_t FVCC_BUF_LOG_SIZE = 4;  // must be log2(FVCC_BUF_SIZE)
+constexpr uint32_t FVCC_SIZE_MASK = (FVCC_BUF_SIZE - 1);
+constexpr uint32_t FVCC_PTR_MASK = ((FVCC_BUF_SIZE << 1) - 1);
+constexpr uint32_t FVCC_BUF_SIZE_BYTES = PULL_REQ_SIZE_BYTES * FVCC_BUF_SIZE + 2 * CHAN_PTR_SIZE_BYTES;
+constexpr uint32_t FVCC_SYNC_BUF_SIZE_BYTES = CHAN_PTR_SIZE_BYTES * FVCC_BUF_SIZE;
 
 inline bool fvcc_buf_ptrs_empty(uint32_t wrptr, uint32_t rdptr) { return (wrptr == rdptr); }
 
