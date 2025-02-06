@@ -682,7 +682,6 @@ set(TTNN_PUBLIC_INCLUDE_DIRS
 set(TTNN_PUBLIC_LINK_LIBRARIES
     metal_common_libs
     Metalium::Metal
-    Boost::container
     xtensor
     xtensor-blas
     xtl
@@ -757,11 +756,6 @@ function(add_ttnn_sublibrary SUBLIBRARY_NAME)
         add_library(${SUBLIBRARY_NAME} OBJECT ${ARGN})
     endif()
     TT_ENABLE_UNITY_BUILD(${SUBLIBRARY_NAME})
-    if(WITH_PYTHON_BINDINGS)
-        target_compile_definitions(${SUBLIBRARY_NAME} PUBLIC TTNN_WITH_PYTHON_BINDINGS=1)
-    else()
-        target_compile_definitions(${SUBLIBRARY_NAME} PUBLIC TTNN_WITH_PYTHON_BINDINGS=0)
-    endif()
     target_include_directories(${SUBLIBRARY_NAME} PUBLIC ${TTNN_PUBLIC_INCLUDE_DIRS})
     target_link_libraries(${SUBLIBRARY_NAME} PUBLIC ${TTNN_PUBLIC_LINK_LIBRARIES})
     target_link_directories(${SUBLIBRARY_NAME} PUBLIC ${TTNN_PUBLIC_LINK_DIRS})
@@ -824,12 +818,6 @@ target_compile_options(
         -Wno-int-to-pointer-cast
         -fno-var-tracking
 )
-
-if(WITH_PYTHON_BINDINGS)
-    target_compile_definitions(ttnn PUBLIC TTNN_WITH_PYTHON_BINDINGS=1)
-else()
-    target_compile_definitions(ttnn PUBLIC TTNN_WITH_PYTHON_BINDINGS=0)
-endif()
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     target_compile_definitions(ttnn PUBLIC DISABLE_NAMESPACE_STATIC_ASSERT)

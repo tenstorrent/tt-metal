@@ -8,12 +8,22 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
+#include <tt-metalium/small_vector.hpp>
+
 #include "export_enum.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast_types.hpp"
 
 namespace py = pybind11;
+
+namespace PYBIND11_NAMESPACE {
+namespace detail {
+template <typename T, size_t PREALLOCATED_SIZE>
+struct type_caster<ttnn::SmallVector<T, PREALLOCATED_SIZE>> : list_caster<ttnn::SmallVector<T, PREALLOCATED_SIZE>, T> {
+};
+}  // namespace detail
+}  // namespace PYBIND11_NAMESPACE
 
 namespace ttnn {
 namespace types {

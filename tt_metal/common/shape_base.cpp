@@ -2,10 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "assert.hpp"
 #include "shape_base.hpp"
+
 #include <stdexcept>
 #include "fmt/color.h"
-#include <tt-metalium/assert.hpp>
 
 namespace tt::tt_metal {
 
