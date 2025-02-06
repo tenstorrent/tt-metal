@@ -1,28 +1,14 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// NOTE: This should ideally be merged with `ccl_send_reader` when we are able to support compile time args
-//       that don't require macros to function
-
 #include "dataflow_api.h"
 #include <tt-metalium/buffer_constants.hpp>
-#include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
-#include <tt-metalium/buffer_constants.hpp>
-#include "cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
-#include "cpp/ttnn/operations/ccl/all_gather/device/kernels/dataflow/worker_ring_gather_utils.hpp"
-
-#include "cpp/ttnn/operations/ccl/common/kernels/command_processor.hpp"
-
-#include "cpp/ttnn/operations/ccl/kernels/edm_fabric/edm_fabric_worker_adapters.hpp"
-#include "cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
-
-#include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/fabric_connection_manager.hpp"
-#include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/io_descriptors.hpp"
-#include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
-#include "cpp/ttnn/tensor/enum_types.hpp"
 #include <cstdint>
 #include <utility>
+
+using address_t = uint32_t;
+using tt::tt_metal::BufferType;
 
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS

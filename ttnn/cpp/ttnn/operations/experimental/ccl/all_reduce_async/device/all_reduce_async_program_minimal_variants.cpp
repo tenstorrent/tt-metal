@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 ///
@@ -51,7 +51,7 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
     const uint32_t ring_size,
     const uint32_t ring_index,
     ccl::Topology topology,
-    const GlobalSemaphore semaphore,
+    const GlobalSemaphore& semaphore,
     const std::optional<SubDeviceId>& sub_device_id,
     bool enable_persistent_fabric_mode) {
     tt::tt_metal::Program program{};
@@ -72,7 +72,12 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
 
     std::optional<ttnn::ccl::EdmLineFabricOpInterface> local_fabric_handle =
         ttnn::ccl::EdmLineFabricOpInterface::build_program_builder_worker_connection_fabric(
-            device, forward_device, backward_device, &program, enable_persistent_fabric_mode, num_links);
+            device,
+            forward_device.value_or(nullptr),
+            backward_device.value_or(nullptr),
+            &program,
+            enable_persistent_fabric_mode,
+            num_links);
 
     // Get OP Config, topology config
     std::vector<Tensor> input_tensors = {input_tensor};
@@ -86,8 +91,8 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
 
     // Get worker cores, assuming 1 worker per link
     uint32_t num_workers_per_link = 1;
-    const auto [sender_worker_core_range, sender_worker_cores] =
-        choose_worker_cores(num_links, num_workers_per_link, enable_persistent_fabric_mode, device);
+    const auto [sender_worker_core_range, sender_worker_cores] = choose_worker_cores(
+        num_links, num_workers_per_link, enable_persistent_fabric_mode, device, device->get_sub_device_ids().at(0));
 
     // Tensor Info
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
@@ -115,14 +120,14 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
     uint32_t cb_base_num_pages = std::lcm(input_tensor_shard_num_pages, output_tensor_shard_num_pages);
     uint32_t cb_num_pages = std::lcm(num_pages_per_packet, cb_base_num_pages);
-    uint32_t src0_cb_index = tt::CB::c_in0;
+    uint32_t src0_cb_index = tt::CBIndex::c_0;
     tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(cb_num_pages * l1_scratch_cb_page_size_bytes, {{src0_cb_index, df}})
             .set_page_size(src0_cb_index, l1_scratch_cb_page_size_bytes);
     CBHandle cb_src0_workers = CreateCircularBuffer(program, sender_worker_core_range, cb_src0_config);
     // Set aside a buffer we can use for storing packet headers in (particularly for atomic incs)
-    const auto reserved_packet_header_CB_index = tt::CB::c_in6;
+    const auto reserved_packet_header_CB_index = tt::CBIndex::c_3;
     static constexpr auto num_packet_headers_storable = 8;
     static constexpr auto packet_header_size_bytes = sizeof(tt::fabric::PacketHeader);
     tt::tt_metal::CircularBufferConfig cb_reserved_packet_header_config =
@@ -212,8 +217,8 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
     };
     auto reduction_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/all_reduce_async/device/kernels/"
-        "reduction_dataflow.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/ccl/all_reduce_async/device/kernels/dataflow/"
+        "reduction_receiver.cpp",
         output_tensor_cores,
         reduction_reader_kernel_config);
 
@@ -225,8 +230,8 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
     };
     auto reduction_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/all_reduce_async/device/kernels/"
-        "eltwise_binary_kernel.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/ccl/all_reduce_async/device/kernels/compute/"
+        "reduction.cpp",
         output_tensor_cores,
         reduction_kernel_config);
     std::vector<uint32_t> reduction_kernel_rt_args = {
@@ -249,8 +254,8 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
     }
     auto worker_sender_reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/all_reduce_async/device/kernels/"
-        "llama_post_binary_matmul_shape_reader.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/ccl/all_reduce_async/device/kernels/dataflow/"
+        "worker_reader.cpp",
         sender_worker_core_range,
         reader_kernel_config);
 
@@ -272,8 +277,8 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
     }
     auto worker_sender_writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/all_reduce_async/device/kernels/"
-        "llama_post_binary_matmul_shape_writer.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/ccl/all_reduce_async/device/kernels/dataflow/"
+        "worker_writer.cpp",
         sender_worker_core_range,
         writer_kernel_config);
 
@@ -349,13 +354,13 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
         uint32_t out_ready_sem_wait_value = ring_size;
         std::vector<uint32_t> writer_rt_args = {
             reduction_cb_index,                   // tensor_address0
+            semaphore.address(),                  // out_ready_sem_bank_addr (absolute address)
             output_tensor_shard_num_pages,        // num_tiles_per_core
             worker_num_tiles_to_read,             // num_tiles_to_read
             output_first_core_tile_start_offset,  // first_core_tile_start_offset
             output_tensor_cores_x.size(),         // num_cores
             wait_output_semaphore,                // wait_output_semaphore
             reset_global_semaphore,               // reset_global_semaphore
-            semaphore.address(),                  // out_ready_sem_bank_addr (absolute address)
             drain_sync_core.x,                    // out_ready_sem_noc0_x
             drain_sync_core.y,                    // out_ready_sem_noc0_y
             out_ready_sem_wait_value,             // out_ready_sem_wait_value
@@ -406,7 +411,7 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
     }
 
     auto override_runtime_arguments_callback =
-        [worker_sender_reader_kernel_id, worker_sender_writer_kernel_id, semaphore, sender_worker_cores](
+        [worker_sender_reader_kernel_id, worker_sender_writer_kernel_id, semaphore, sender_worker_cores, cb_out](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
@@ -414,6 +419,8 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
             const std::vector<Tensor>& output_tensors) {
             const auto& input = input_tensors[0];
             const auto& output = output_tensors[0];
+
+            auto semaphore = static_cast<const ttnn::AllReduceAsync*>(operation)->semaphore;
 
             // update senders
             auto& worker_reader_sender_runtime_args_by_core = GetRuntimeArgs(program, worker_sender_reader_kernel_id);
@@ -424,7 +431,9 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
                 worker_reader_sender_runtime_args[0] = input.buffer()->address();
                 // writer
                 auto& worker_writer_sender_runtime_args = worker_writer_sender_runtime_args_by_core[core.x][core.y];
-                worker_writer_sender_runtime_args[0] = output.buffer()->address();
+                worker_writer_sender_runtime_args[1] = semaphore.address();
+
+                UpdateDynamicCircularBufferAddress(program, cb_out, *output.buffer());
             }
         };
 

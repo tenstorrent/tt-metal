@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -17,7 +17,7 @@ void MAIN {
     const uint32_t block_num_tiles = get_arg_val<uint32_t>(rt_args_idx++);
     const uint32_t copy_first_block = num_blocks % 2 != 0;
 
-    constexpr uint32_t max_dst_tiles = 8;
+    constexpr uint32_t max_dst_tiles = 8;  // TODO: Make general
 
     cb_wait_front(cb_in0, num_blocks * block_num_tiles);
     cb_reserve_back(cb_out0, block_num_tiles);
