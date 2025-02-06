@@ -91,16 +91,12 @@ struct InterleavedBufferWriteDispatchParams : BufferWriteDispatchParams {
         this->total_pages_to_write -= this->pages_per_txn;
         this->total_pages_written += this->pages_per_txn;
         this->dst_page_index += this->pages_per_txn;
-        this->address += this->page_size_to_write;
     }
 
     virtual bool write_large_pages() const { return false; }
 
-    virtual bool are_num_pages_available_in_cq_enough_for_transaction(uint32_t num_pages) const {
-        return num_pages > 0;
-    }
-
     virtual uint32_t num_full_pages_written() const { return this->total_pages_written; }
+
     virtual uint32_t num_partial_pages_per_full_page() const { return 1; }
 };
 
@@ -122,7 +118,9 @@ struct InterleavedBufferWriteLargePageDispatchParams : InterleavedBufferWriteDis
     }
 
     void calculate_num_pages_for_write_transaction(uint32_t num_pages_available_in_cq) override {
-        this->pages_per_txn = std::min({this->full_pages_to_write, this->num_banks, num_pages_available_in_cq});
+        TT_ASSERT(this->num_banks > this->dst_page_index);
+        this->pages_per_txn =
+            std::min({this->full_pages_to_write, this->num_banks - this->dst_page_index, num_pages_available_in_cq});
     }
 
     bool is_page_offset_out_of_bounds() const override { return this->dst_page_index >= this->num_banks; }
@@ -140,16 +138,15 @@ struct InterleavedBufferWriteLargePageDispatchParams : InterleavedBufferWriteDis
         if (this->were_full_pages_written_in_last_write_transaction()) {
             this->full_pages_to_write -= this->pages_per_txn;
             this->full_pages_written += this->pages_per_txn;
+            if (!this->will_next_full_page_be_round_robined()) {
+                this->address -= this->full_page_size;
+            }
             this->dst_page_index += this->pages_per_txn;
             this->dst_page_index %= this->num_banks;
         }
     }
 
     bool write_large_pages() const override { return true; }
-
-    bool are_num_pages_available_in_cq_enough_for_transaction(uint32_t num_pages) const override {
-        return num_pages >= std::min(this->num_banks, this->full_pages_to_write);
-    }
 
     uint32_t num_full_pages_written() const override { return this->full_pages_written; }
 
@@ -164,6 +161,11 @@ private:
     bool were_full_pages_written_in_last_write_transaction() const {
         const uint32_t page_size = this->address - this->buffer.address();
         return page_size > 0 && page_size % this->full_page_size == 0;
+    }
+
+    bool will_next_full_page_be_round_robined() const {
+        const uint32_t dst_page_index_next_txn = this->dst_page_index + this->pages_per_txn;
+        return dst_page_index_next_txn != (dst_page_index_next_txn % this->num_banks);
     }
 };
 
@@ -301,10 +303,6 @@ void populate_interleaved_buffer_write_dispatch_cmds(
 
     // TODO: Consolidate
     if (dispatch_params.write_large_pages()) {
-        // const uint32_t num_partial_pages_per_full_page =
-        //     buffer.aligned_page_size() / dispatch_params.page_size_to_write;
-        // const uint32_t num_full_pages_written = dispatch_params.total_pages_written /
-        // num_partial_pages_per_full_page;
         const uint32_t num_full_pages_written = dispatch_params.num_full_pages_written();
         const uint32_t num_partial_pages_written = dispatch_params.total_pages_written;
         const uint32_t num_partial_pages_per_full_page = dispatch_params.num_partial_pages_per_full_page();
@@ -326,7 +324,6 @@ void populate_interleaved_buffer_write_dispatch_cmds(
             }
             command_sequence.add_data(
                 (char*)src + src_address_offset, page_size_to_copy, dispatch_params.page_size_to_write);
-            // src_address_offset += page_size_to_copy;
             num_partial_pages_written_curr_txn += 1;
         }
     } else {
@@ -453,84 +450,27 @@ void write_interleaved_buffer_to_device(
                                               // + CQ_DISPATCH_CMD_WRITE_PAGED
     const uint32_t num_banks = buffer.device()->allocator()->get_num_banks(buffer.buffer_type());
     while (dispatch_params.total_pages_to_write > 0) {
-        // calculate issue wait
-        // dispatch_params.issue_wait =
-        //     dispatch_params.total_pages_written == 0;  // only stall for the first write of the buffer
         dispatch_params.calculate_issue_wait();
 
-        // calculate num pages available in cq
-        // if (dispatch_params.issue_wait) {
-        //     byte_offset_in_cq *= 2;  // commands prefixed with CQ_PREFETCH_CMD_RELAY_INLINE + CQ_DISPATCH_CMD_WAIT
-        // }
         update_offset_on_issue_wait_cmd(byte_offset_in_cq, dispatch_params.issue_wait, sub_device_ids.size());
 
-        // uint32_t space_availableB = std::min(
-        //     buf_dispatch_constants.issue_queue_cmd_limit -
-        //         sysmem_manager.get_issue_queue_write_ptr(dispatch_params.cq_id),
-        //     buf_dispatch_constants.max_prefetch_cmd_size);
-        // int32_t num_pages_available =
-        //     (int32_t(space_availableB) - int32_t(data_offsetB)) / int32_t(dispatch_params.page_size_to_write);
+        if (dispatch_params.is_page_offset_out_of_bounds()) {
+            dispatch_params.update_params_to_be_within_bounds();
+        }
 
         const int32_t num_pages_available_in_cq =
             calculate_num_pages_available_in_cq(dispatch_params, buf_dispatch_constants, byte_offset_in_cq);
-        if (!dispatch_params.are_num_pages_available_in_cq_enough_for_transaction(num_pages_available_in_cq)) {
+        if (num_pages_available_in_cq <= 0) {
             SystemMemoryManager& sysmem_manager = dispatch_params.device->sysmem_manager();
             sysmem_manager.wrap_issue_queue_wr_ptr(dispatch_params.cq_id);
             continue;
         }
 
-        // calculate num pages for current write transaction
-        // dispatch_params.pages_per_txn = std::min({(uint32_t)num_pages_available,
-        // dispatch_params.total_pages_to_write});
-
-        // if (dispatch_params.write_partial_pages) {
-        //     dispatch_params.pages_per_txn = std::min(dispatch_params.pages_per_txn, num_banks);
-        // }
-        dispatch_params.calculate_num_pages_for_write_transaction(num_pages_available_in_cq);
-
-        // Page offset in CQ_DISPATCH_CMD_WRITE_PAGED is uint16_t
-        // To handle larger page offsets move bank base address up and update page offset to be relative to the new
-        // bank address
-        // if page offset out of bounds, update_dispatch_params_for_out_bounds
-        if (dispatch_params.is_page_offset_out_of_bounds()) {
-            // TT_ASSERT(!dispatch_params.write_partial_pages);
-            // uint32_t residual = dispatch_params.dst_page_index % num_banks;
-            // uint32_t num_pages_written_per_bank = dispatch_params.dst_page_index / num_banks;
-            // dispatch_params.address += num_pages_written_per_bank * dispatch_params.page_size_to_write;
-            // dispatch_params.dst_page_index = residual;
-            dispatch_params.update_params_to_be_within_bounds();
-        }
-
         tt::log_debug(tt::LogDispatch, "EnqueueWriteBuffer for command queue {}", dispatch_params.cq_id);
 
+        dispatch_params.calculate_num_pages_for_write_transaction(num_pages_available_in_cq);
         issue_buffer_dispatch_command_sequence(src, buffer, dispatch_params, sub_device_ids, dispatch_core_type);
-        // update dispatch params after write transaction
         dispatch_params.update_params_after_write_transaction();
-
-        // dispatch_params.total_pages_written += dispatch_params.pages_per_txn;
-
-        // dispatch_params.total_pages_to_write -= dispatch_params.pages_per_txn;
-        // if (dispatch_params.write_large_pages()) {
-        //     const uint32_t num_partial_pages_per_full_page =
-        //         buffer.aligned_page_size() / dispatch_params.page_size_to_write;
-        //     dispatch_params.address += dispatch_params.page_size_to_write;
-        //     const bool have_full_pages_been_written =
-        //         dispatch_params.total_pages_written > 0 &&
-        //         dispatch_params.total_pages_written % num_partial_pages_per_full_page == 0;
-        //     if (have_full_pages_been_written) {
-        //         dispatch_params.dst_page_index += dispatch_params.pages_per_txn;
-        //         const bool will_next_page_be_round_robined =
-        //             (dispatch_params.dst_page_index / num_banks) !=
-        //             ((dispatch_params.dst_page_index - dispatch_params.pages_per_txn) / num_banks);
-        //         if (will_next_page_be_round_robined) {
-        //             dispatch_params.dst_page_index = 0;
-        //         } else {
-        //             dispatch_params.address -= buffer.aligned_page_size();
-        //         }
-        //     }
-        // } else {
-        // dispatch_params.dst_page_index += dispatch_params.pages_per_txn;
-        // }
     }
 }
 
