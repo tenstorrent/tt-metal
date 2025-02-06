@@ -103,13 +103,15 @@ class LMHead(LightweightModule):
         )
         if args.is_galaxy:
             self.program_configs = [
-                None
-                if args.dim == 2048
-                else args.dram_matmul_config(
-                    args.tile_padded_batch_rows,  # (8k, 128k) -> (2k, 16k)
-                    args.dim // 4,
-                    16 * 1024,
-                    args.lm_head_core_grid.num_cores,
+                (
+                    None
+                    if args.dim == 2048
+                    else args.dram_matmul_config(
+                        args.tile_padded_batch_rows,  # (8k, 128k) -> (2k, 16k)
+                        args.dim // 4,
+                        16 * 1024,
+                        args.lm_head_core_grid.num_cores,
+                    )
                 )
             ]
 

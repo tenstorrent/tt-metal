@@ -108,7 +108,7 @@ def test_llama_multimodal_demo_text(
     mesh_device.enable_async(True)
     model_args, model = create_multimodal_model(mesh_device, max_batch_size=max_batch_size, max_seq_len=max_seq_len)
     generator = LlamaGenerator(model, model_args, mesh_device)
-    tokenizer = Tokenizer(model_path=tokenizer_path)
+    tokenizer = model_args.tokenizer
     formatter = ChatFormat(tokenizer)
 
     xattn_caches = generator.model.setup_cache(model_args.max_batch_size)
