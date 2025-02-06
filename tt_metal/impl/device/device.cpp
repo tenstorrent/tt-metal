@@ -876,6 +876,7 @@ void Device::clear_l1_state() {
             hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::TILE_HEADER_BUFFER));
     }
     // TODO: clear idle eriscs as well
+    tt::Cluster::instance().l1_barrier(this->id());
 }
 
 void Device::compile_command_queue_programs() {
