@@ -129,6 +129,34 @@ def Yolov11_shard_SiLU(device, x, ncores=64):
     return x
 
 
+def Yolov11_shard_upsample(device, x):
+    shard_grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(7, 5),
+            ),
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 6),
+                ttnn.CoreCoord(0, 6),
+            ),
+        }
+    )
+    shard_height = math.ceil(x.shape[0] * x.shape[1] * x.shape[2] / 49)
+    shard_width = x.shape[-1]
+    shard_spec = ttnn.ShardSpec(shard_grid, (shard_height, shard_width), ttnn.ShardOrientation.ROW_MAJOR)
+    in_sharded_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+    x = ttnn.to_memory_config(x, memory_config=in_sharded_mem_config)
+    shard_height_out = shard_height * 2 * 2  # scale_factor=2
+    shard_spec_out = ttnn.ShardSpec(shard_grid, (shard_height_out, shard_width), ttnn.ShardOrientation.ROW_MAJOR)
+    out_sharded_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec_out
+    )
+    x = ttnn.upsample(x, scale_factor=2, memory_config=out_sharded_mem_config)  # 11
+    x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
+    return x
+
+
 class Conv:
     def __init__(self, device, parameter, conv_pt, enable_act=True, is_detect=False):
         self.enable_act = enable_act
@@ -659,7 +687,9 @@ class YoloV11:
         x10 = x
         x = ttnn.reshape(x, (x.shape[0], int(math.sqrt(x.shape[2])), int(math.sqrt(x.shape[2])), x.shape[3]))
         print("ttnn input to upsample1 is ", x.shape, x.layout, x.dtype)
-        x = ttnn.upsample(x, scale_factor=2)  # 11
+        x = Yolov11_shard_upsample(self.device, x)
+        # x = ttnn.upsample(x, scale_factor=2)
+        print("output of 1st upsample", x.shape)
         x = ttnn.reshape(x, (1, 1, x.shape[0] * x.shape[1] * x.shape[2], x.shape[3]))
         x6 = ttnn.to_layout(x6, layout=ttnn.ROW_MAJOR_LAYOUT)
         x = ttnn.concat((x, x6), -1, memory_config=ttnn.L1_MEMORY_CONFIG)  # 12
@@ -669,7 +699,9 @@ class YoloV11:
         x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
         x = ttnn.reshape(x, (x.shape[0], int(math.sqrt(x.shape[2])), int(math.sqrt(x.shape[2])), x.shape[3]))
         print("ttnn input to upsample2 is ", x.shape, x.layout, x.dtype)
-        x = ttnn.upsample(x, scale_factor=2)  # 14
+        # x = ttnn.upsample(x, scale_factor=2)  # 14
+        x = Yolov11_shard_upsample(self.device, x)
+        print("output of 2nd upsample", x.shape)
         x = ttnn.reshape(x, (1, 1, x.shape[0] * x.shape[1] * x.shape[2], x.shape[3]))
         x4 = ttnn.to_layout(x4, layout=ttnn.ROW_MAJOR_LAYOUT)
         x = ttnn.concat((x, x4), -1, memory_config=ttnn.L1_MEMORY_CONFIG)  # 15
