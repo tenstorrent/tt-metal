@@ -229,21 +229,21 @@ std::vector<Tensor> fold_with_transpose_sharded_(
     // transpose
     auto tphw_mem_config2 =
         create_sharded_memory_config(tt_output_tensor.get_logical_shape(), grid_size, shard_spec.orientation);
-    tt_output_tensor = ttnn::transpose(tt_output_tensor, 2, 3, tphw_mem_config2);
+    tt_output_tensor = ttnn::transpose(tt_output_tensor, 1, 3, tphw_mem_config2);
 
     tt::log_debug("transpose_hw_output2: {}", tt_output_tensor.get_logical_shape());
 
     // reshape
-    n = tt_output_tensor.get_logical_shape()[0], w = tt_output_tensor.get_logical_shape()[1],
-    h = tt_output_tensor.get_logical_shape()[2], c = tt_output_tensor.get_logical_shape()[3];
-    tt_output_tensor = ttnn::experimental::view(tt_output_tensor, ttnn::Shape{n, w, (h / stride_h), (c * stride_h)});
+    n = tt_output_tensor.get_logical_shape()[0], w = tt_output_tensor.get_logical_shape()[3],
+    h = tt_output_tensor.get_logical_shape()[1], c = tt_output_tensor.get_logical_shape()[2];
+    tt_output_tensor = ttnn::experimental::view(tt_output_tensor, ttnn::Shape{n, (h / stride_h), (c * stride_h), w});
 
     tt::log_debug("reshape_hw_output: {}", tt_output_tensor.get_logical_shape());
 
     // transpose
     auto tphc_mem_config2 =
         create_sharded_memory_config(tt_output_tensor.get_logical_shape(), grid_size, shard_spec.orientation);
-    tt_output_tensor = ttnn::transpose(tt_output_tensor, 1, 2, tphc_mem_config2);
+    tt_output_tensor = ttnn::transpose(tt_output_tensor, 2, 3, tphc_mem_config2);
 
     tt::log_debug("transpose_hc_output2: {}", tt_output_tensor.get_logical_shape());
 
