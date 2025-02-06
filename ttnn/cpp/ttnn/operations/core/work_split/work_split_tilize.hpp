@@ -106,7 +106,7 @@ inline BlockSplit2 split_blocks_for_tilize2(
             auto range = CoreRange{CoreCoord{i_x, i_y}, CoreCoord{i_x, i_y}};
             core_range.insert(range);
             all_cores.insert(range);
-            if (i_x == 7) {
+            if (i_x == grid_size.x - 1) {
                 i_x = 0;
                 i_y++;
             } else {
@@ -117,7 +117,7 @@ inline BlockSplit2 split_blocks_for_tilize2(
             auto range_row_cliff_core = CoreRange{CoreCoord{i_x, i_y}, CoreCoord{i_x, i_y}};
             cliff_row_core_range.insert(range_row_cliff_core);
             all_cores.insert(range_row_cliff_core);
-            if (i_x == 7) {
+            if (i_x == grid_size.x - 1) {
                 i_x = 0;
                 i_y++;
             } else {
@@ -130,7 +130,7 @@ inline BlockSplit2 split_blocks_for_tilize2(
             auto range_col_cliff = CoreRange{CoreCoord{i_x, i_y}, CoreCoord{i_x, i_y}};
             cliff_col_core_range.insert(range_col_cliff);
             all_cores.insert(range_col_cliff);
-            if (i_x == 7) {
+            if (i_x == grid_size.x - 1) {
                 i_x = 0;
                 i_y++;
             } else {
