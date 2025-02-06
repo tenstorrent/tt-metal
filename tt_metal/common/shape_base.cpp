@@ -4,7 +4,6 @@
 
 #include "assert.hpp"
 #include "shape_base.hpp"
-
 #include <stdexcept>
 #include "fmt/color.h"
 
