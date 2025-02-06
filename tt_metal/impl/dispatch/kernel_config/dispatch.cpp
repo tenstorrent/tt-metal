@@ -174,8 +174,9 @@ void DispatchKernel::GenerateDependentConfigs() {
         auto prefetch_kernel = dynamic_cast<PrefetchKernel*>(upstream_kernels_[0]);
         TT_ASSERT(prefetch_kernel);
         dependent_config_.upstream_logical_core = prefetch_kernel->GetLogicalCore();
-        dependent_config_.upstream_dispatch_cb_sem_id = prefetch_kernel->GetStaticConfig().my_downstream_cb_sem_id;
-        dependent_config_.upstream_sync_sem = prefetch_kernel->GetStaticConfig().downstream_sync_sem_id;
+        dependent_config_.upstream_dispatch_cb_sem_id =
+            prefetch_kernel->GetStaticConfig().my_downstream_cb_sem_id.value();
+        dependent_config_.upstream_sync_sem = prefetch_kernel->GetStaticConfig().downstream_sync_sem_id.value();
 
         if (prefetch_kernel->GetStaticConfig().is_h_variant.value() &&
             prefetch_kernel->GetStaticConfig().is_d_variant.value()) {
@@ -228,7 +229,7 @@ void DispatchKernel::GenerateDependentConfigs() {
         dependent_config_.prefetch_h_noc_xy = tt::tt_metal::hal.noc_xy_encoding(
             prefetch_h_kernel->GetVirtualCore().x, prefetch_h_kernel->GetVirtualCore().y);
         dependent_config_.prefetch_h_local_downstream_sem_addr =
-            prefetch_h_kernel->GetStaticConfig().my_downstream_cb_sem_id;
+            prefetch_h_kernel->GetStaticConfig().my_downstream_cb_sem_id.value();
         dependent_config_.downstream_cb_base = 0;    // Unused
         dependent_config_.downstream_cb_size = 0;    // Unused
         dependent_config_.downstream_cb_sem_id = 0;  // Unused
@@ -238,8 +239,9 @@ void DispatchKernel::GenerateDependentConfigs() {
         auto prefetch_kernel = dynamic_cast<PrefetchKernel*>(upstream_kernels_[0]);
         TT_ASSERT(prefetch_kernel);
         dependent_config_.upstream_logical_core = prefetch_kernel->GetLogicalCore();
-        dependent_config_.upstream_dispatch_cb_sem_id = prefetch_kernel->GetStaticConfig().my_downstream_cb_sem_id;
-        dependent_config_.upstream_sync_sem = prefetch_kernel->GetStaticConfig().downstream_sync_sem_id;
+        dependent_config_.upstream_dispatch_cb_sem_id =
+            prefetch_kernel->GetStaticConfig().my_downstream_cb_sem_id.value();
+        dependent_config_.upstream_sync_sem = prefetch_kernel->GetStaticConfig().downstream_sync_sem_id.value();
 
         if (prefetch_kernel->GetStaticConfig().is_h_variant.value() &&
             prefetch_kernel->GetStaticConfig().is_d_variant.value()) {

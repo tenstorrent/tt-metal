@@ -177,6 +177,8 @@ public:
     uint32_t tunneling_buffer_size_;
     uint32_t tunneling_buffer_pages_;  // tunneling_buffer_size_ / PREFETCH_D_BUFFER_LOG_PAGE_SIZE
 
+    uint32_t kernel_debug_status_enable_{0};  // How much space reserved for debug status. 0 means disabled.
+
     CoreType core_type_;  // Which core this settings is for
 
     bool operator==(const DispatchSettings& other) const {
@@ -275,6 +277,12 @@ public:
         this->dispatch_message_ = DISPATCH_MESSAGE_ENTRIES * l1_alignment;
         this->other_ptrs_size = l1_alignment;
 
+        return *this;
+    }
+
+    // Trivial setter for enabling dispatch kernel debug status
+    DispatchSettings& kernel_debug_status_enable(uint32_t size) {
+        this->kernel_debug_status_enable_ = size;
         return *this;
     }
 

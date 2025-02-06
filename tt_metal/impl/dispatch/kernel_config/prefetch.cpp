@@ -8,6 +8,7 @@
 
 #include <host_api.hpp>
 #include <tt_metal.hpp>
+#include "tt_align.hpp"
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
 
 #include <tt-metalium/command_queue_interface.hpp>
@@ -27,7 +28,6 @@ void PrefetchKernel::GenerateStaticConfigs() {
         uint32_t issue_queue_start_addr = command_queue_start_addr + cq_start;
         uint32_t issue_queue_size = device_->sysmem_manager().get_issue_queue_size(cq_id_);
 
-        dependent_config_.downstream_cb_base = my_dispatch_constants.dispatch_buffer_base();
         static_config_.downstream_cb_log_page_size = DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE;
         static_config_.downstream_cb_pages = my_dispatch_constants.dispatch_buffer_pages();
         static_config_.my_downstream_cb_sem_id = tt::tt_metal::CreateSemaphore(
@@ -35,15 +35,14 @@ void PrefetchKernel::GenerateStaticConfigs() {
 
         static_config_.pcie_base = issue_queue_start_addr;
         static_config_.pcie_size = issue_queue_size;
-        static_config_.prefetch_q_base =
-            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
+        static_config_.prefetch_q_base = my_dispatch_constants.prefetch_buffer_base();
         static_config_.prefetch_q_size = my_dispatch_constants.prefetch_q_size();
         static_config_.prefetch_q_rd_ptr_addr =
             my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_RD);
         static_config_.prefetch_q_pcie_rd_ptr_addr =
             my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_PCIE_RD);
 
-        static_config_.cmddat_q_base = my_dispatch_constants.cmddat_q_base();
+        static_config_.cmddat_q_base = my_dispatch_constants.cmddat_q_base<false>();
         static_config_.cmddat_q_size = my_dispatch_constants.cmddat_q_size();
 
         static_config_.scratch_db_base = my_dispatch_constants.scratch_db_base();
@@ -94,15 +93,14 @@ void PrefetchKernel::GenerateStaticConfigs() {
 
         static_config_.pcie_base = issue_queue_start_addr;
         static_config_.pcie_size = issue_queue_size;
-        static_config_.prefetch_q_base =
-            my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
+        static_config_.prefetch_q_base = my_dispatch_constants.prefetch_buffer_base();
         static_config_.prefetch_q_size = my_dispatch_constants.prefetch_q_size();
         static_config_.prefetch_q_rd_ptr_addr =
             my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_RD);
         static_config_.prefetch_q_pcie_rd_ptr_addr =
             my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_PCIE_RD);
 
-        static_config_.cmddat_q_base = my_dispatch_constants.cmddat_q_base();
+        static_config_.cmddat_q_base = my_dispatch_constants.cmddat_q_base<false>();
         static_config_.cmddat_q_size = my_dispatch_constants.cmddat_q_size();
 
         static_config_.scratch_db_base = my_dispatch_constants.scratch_db_base();
@@ -123,7 +121,6 @@ void PrefetchKernel::GenerateStaticConfigs() {
         static_config_.dispatch_s_buffer_size = 0;
         static_config_.dispatch_s_cb_log_page_size = 0;
     } else if (static_config_.is_d_variant.value()) {
-        dependent_config_.downstream_cb_base = my_dispatch_constants.dispatch_buffer_base();
         static_config_.downstream_cb_log_page_size = DispatchSettings::PREFETCH_D_BUFFER_LOG_PAGE_SIZE;
         static_config_.downstream_cb_pages = my_dispatch_constants.dispatch_buffer_pages();
         static_config_.my_downstream_cb_sem_id = tt::tt_metal::CreateSemaphore(
@@ -138,13 +135,14 @@ void PrefetchKernel::GenerateStaticConfigs() {
         static_config_.prefetch_q_pcie_rd_ptr_addr =
             my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_PCIE_RD);
 
+        // prefetch_q is not used in d variant so buffer can start at the first region which is prefetch_buffer_base()
         static_config_.cmddat_q_base = my_dispatch_constants.dispatch_buffer_base();
         static_config_.cmddat_q_size = my_dispatch_constants.prefetch_d_buffer_size();
 
         uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
-        static_config_.scratch_db_base = (my_dispatch_constants.dispatch_buffer_base() +
-                                          my_dispatch_constants.prefetch_d_buffer_size() + pcie_alignment - 1) &
-                                         (~(pcie_alignment - 1));
+        // scratch_db_base() is based on cmddat_q_base(). calculate manually instead.
+        static_config_.scratch_db_base =
+            tt::align(static_config_.cmddat_q_base.value() + static_config_.cmddat_q_size.value(), pcie_alignment);
         static_config_.scratch_db_size = my_dispatch_constants.scratch_db_size();
         static_config_.downstream_sync_sem_id =
             tt::tt_metal::CreateSemaphore(*program_, logical_core_, 0, GetCoreType());
@@ -202,7 +200,9 @@ void PrefetchKernel::GenerateDependentConfigs() {
                 found_dispatch = true;
 
                 dependent_config_.downstream_logical_core = dispatch_kernel->GetLogicalCore();
-                dependent_config_.downstream_cb_sem_id = dispatch_kernel->GetStaticConfig().my_dispatch_cb_sem_id;
+                dependent_config_.downstream_cb_sem_id =
+                    dispatch_kernel->GetStaticConfig().my_dispatch_cb_sem_id.value();
+                dependent_config_.downstream_cb_base = dispatch_kernel->GetStaticConfig().dispatch_cb_base.value();
             } else if (auto dispatch_s_kernel = dynamic_cast<DispatchSKernel*>(k)) {
                 TT_ASSERT(!found_dispatch_s, "PREFETCH kernel has multiple downstream DISPATCH kernels.");
                 found_dispatch_s = true;
@@ -265,7 +265,9 @@ void PrefetchKernel::GenerateDependentConfigs() {
                 found_dispatch = true;
 
                 dependent_config_.downstream_logical_core = dispatch_kernel->GetLogicalCore();
-                dependent_config_.downstream_cb_sem_id = dispatch_kernel->GetStaticConfig().my_dispatch_cb_sem_id;
+                dependent_config_.downstream_cb_sem_id =
+                    dispatch_kernel->GetStaticConfig().my_dispatch_cb_sem_id.value();
+                dependent_config_.downstream_cb_base = dispatch_kernel->GetStaticConfig().dispatch_cb_base.value();
             } else if (auto dispatch_s_kernel = dynamic_cast<DispatchSKernel*>(k)) {
                 TT_ASSERT(!found_dispatch_s, "PREFETCH kernel has multiple downstream DISPATCH kernels.");
                 found_dispatch_s = true;
