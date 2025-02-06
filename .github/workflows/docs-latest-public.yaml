@@ -80,6 +80,6 @@ jobs:
         # https://github.com/tenstorrent/tt-metal/issues/17623
         if: ${{ failure() }}
         uses: geekyeggo/delete-artifact@v5
-        failOnError: false
+        continue-on-error: true
         with:
             name: gh_pages
