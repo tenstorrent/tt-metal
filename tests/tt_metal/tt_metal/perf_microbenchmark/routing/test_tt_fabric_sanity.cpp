@@ -1255,15 +1255,15 @@ int main(int argc, char **argv) {
             throw std::runtime_error("Test cannot run on specified device.");
         } */
 
-        if (metal_fabric_init_level == 1) {
-            if (run_gk_on_idle_ethernet) {
-                routing_table_addr = hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
-            } else {
-                routing_table_addr = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
-            }
-            gk_interface_addr = routing_table_addr + sizeof(fabric_router_l1_config_t) * 4;
-            socket_info_addr = gk_interface_addr + sizeof(gatekeeper_info_t);
+        if (run_gk_on_idle_ethernet) {
+            routing_table_addr = hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
+        } else {
+            routing_table_addr = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
+        }
+        gk_interface_addr = routing_table_addr + sizeof(fabric_router_l1_config_t) * 4;
+        socket_info_addr = gk_interface_addr + sizeof(gatekeeper_info_t);
 
+        if (metal_fabric_init_level == 0) {
             // create router kernels
             std::vector<uint32_t> router_compile_args = {
                 (tunneler_queue_size_bytes >> 4),  // 0: rx_queue_size_words
@@ -1286,7 +1286,7 @@ int main(int argc, char **argv) {
             };
             for (auto& [chip_id, test_device] : test_devices) {
                 std::cout << " device " << chip_id << " create gatekeeper kernel" << std::endl;
-                // test_device->create_gatekeeper_kernel(gatekeeper_compile_args, defines);
+                test_device->create_gatekeeper_kernel(gatekeeper_compile_args, defines);
             }
         }
 

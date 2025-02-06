@@ -815,7 +815,7 @@ std::unique_ptr<Program> create_and_compile_fabric_program(IDevice* device) {
             gatekeeper_interface_addr,  // 2: gk_message_addr_l
             gatekeeper_noc_encoding,    // 3: gk_message_addr_h
         };
-        /*
+
                 auto kernel = tt_metal::CreateKernel(
                     *fabric_program_ptr,
                     "tt_metal/fabric/impl/kernels/tt_fabric_router.cpp",
@@ -823,7 +823,7 @@ std::unique_ptr<Program> create_and_compile_fabric_program(IDevice* device) {
                     tt_metal::EthernetConfig{
                         .noc = tt_metal::NOC::NOC_0, .compile_args = router_compile_args, .defines = router_defines});
 
-                tt_metal::SetRuntimeArgs(*fabric_program_ptr, kernel, router_logical_core, router_runtime_args);*/
+                tt_metal::SetRuntimeArgs(*fabric_program_ptr, kernel, router_logical_core, router_runtime_args);
     }
 
     // create gatekeeper kernel
