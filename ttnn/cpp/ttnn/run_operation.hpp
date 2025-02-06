@@ -9,6 +9,7 @@
 
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/operation.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include <tt-metalium/device_impl.hpp>
 #include <tt-metalium/type_name.hpp>
 
