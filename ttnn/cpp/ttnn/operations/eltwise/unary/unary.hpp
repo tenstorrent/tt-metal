@@ -29,11 +29,6 @@ struct ExecuteUnary {
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
-    static Tensor invoke(
-        const Tensor& input_tensor,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
-
     static typename ExecuteUnaryInvokeResult<unary_op_types...>::type invoke(
         const ComplexTensor& input_tensor, const MemoryConfig& memory_config);
 };
@@ -42,12 +37,6 @@ template <UnaryOpType unary_op_type>
 struct ExecuteUnaryWithFastAndApproximateMode {
     static Tensor invoke(
         QueueId queue_id,
-        const Tensor& input_tensor,
-        const bool parameter = false,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
-
-    static Tensor invoke(
         const Tensor& input_tensor,
         const bool parameter = false,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
@@ -62,22 +51,11 @@ struct ExecuteUnaryWithFloatParameter {
         const float parameter,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
-
-    static Tensor invoke(
-        const Tensor& input_tensor,
-        const float parameter,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
 struct Sigmoid_accurate {
     static Tensor invoke(
         QueueId queue_id,
-        const Tensor& input,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
-
-    static Tensor invoke(
         const Tensor& input,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
