@@ -225,7 +225,7 @@ bool dispatch_core_manager::is_dispatcher_s_core_allocated(chip_id_t device_id, 
     return assignment.dispatcher_s.has_value();
 }
 
-bool dispatch_core_manager::is_dispatcher_s_core_allocatedis_dispatcher_d_core_allocated(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
+bool dispatch_core_manager::is_dispatcher_d_core_allocated(chip_id_t device_id, uint16_t channel, uint8_t cq_id) {
     dispatch_core_placement_t& assignment = this->dispatch_core_assignments[device_id][channel][cq_id];
     return assignment.dispatcher_d.has_value();
 }

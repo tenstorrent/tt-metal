@@ -42,6 +42,8 @@ private:
     NOC go_signal_noc_ = NOC::NOC_0;
     uint8_t num_hw_cqs_ = 0;
     DispatchCoreConfig dispatch_core_config_;
+    // Make this mutable, since this is JIT populated
+    // through a const instance when queried
     mutable std::vector<tt_cxy_pair> dispatch_cores_;
 };
 

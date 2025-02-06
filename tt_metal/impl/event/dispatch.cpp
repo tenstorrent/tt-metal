@@ -11,9 +11,11 @@ namespace tt::tt_metal {
 
 namespace event_dispatch {
 
-inline uint32_t get_packed_write_max_unicast_sub_cmds(IDevice* device) {
+namespace {
+uint32_t get_packed_write_max_unicast_sub_cmds(IDevice* device) {
     return device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y;
 }
+}  // namespace
 
 void issue_record_event_commands(
     IDevice* device,

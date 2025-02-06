@@ -12,8 +12,8 @@ using LogicalDeviceRange = CoreRange;
 struct MeshEvent {
     MeshDevice* device = nullptr;
     LogicalDeviceRange device_range = LogicalDeviceRange({0, 0});
-    uint32_t cq_id = -1;
-    uint32_t event_id = -1;
+    uint32_t cq_id = 0;
+    uint32_t event_id = 0;
 };
 
 }  // namespace tt::tt_metal::distributed

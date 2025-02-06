@@ -408,11 +408,9 @@ void MeshCommandQueue::enqueue_record_event_helper(
     event->cq_id = id_;
     event->event_id = sysmem_manager.get_next_event(id_);
     event->device = mesh_device_;
-    if (not device_range.has_value()) {
-        event->device_range = LogicalDeviceRange({0, 0}, {mesh_device_->num_cols() - 1, mesh_device_->num_rows() - 1});
-    } else {
-        event->device_range = device_range.value();
-    }
+    event->device_range =
+        device_range.value_or(LogicalDeviceRange({0, 0}, {mesh_device_->num_cols() - 1, mesh_device_->num_rows() - 1}));
+
     sub_device_ids = buffer_dispatch::select_sub_device_ids(mesh_device_, sub_device_ids);
     for (std::size_t logical_x = event->device_range.start_coord.x; logical_x < event->device_range.end_coord.x + 1;
          logical_x++) {
