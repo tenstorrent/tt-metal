@@ -107,21 +107,8 @@ ttnn::Tensor ReshapeOperation::invoke(
 ttnn::Tensor ReshapeOperation::invoke(
     const ttnn::Tensor& input_tensor,
     const ttnn::Shape& logical_shape,
-    const ttnn::Shape& padded_shape,
-    const std::optional<MemoryConfig>& memory_config) {
-    return invoke(DefaultQueueId, input_tensor, logical_shape, padded_shape, memory_config);
-}
-
-ttnn::Tensor ReshapeOperation::invoke(
-    const ttnn::Tensor& input_tensor,
-    const ttnn::Shape& logical_shape,
     const std::optional<MemoryConfig>& memory_config) {
     return invoke(input_tensor, logical_shape, logical_shape, memory_config);
-}
-
-ttnn::Tensor ReshapeOperation::invoke(
-    const ttnn::Tensor& input_tensor, const ttnn::Shape& logical_shape, const ttnn::Shape& padded_shape) {
-    return invoke(DefaultQueueId, input_tensor, logical_shape, padded_shape, std::nullopt);
 }
 
 ttnn::Tensor ReshapeOperation::invoke(const ttnn::Tensor& input_tensor, const ttnn::Shape& logical_shape) {
@@ -134,17 +121,6 @@ ttnn::Tensor ReshapeOperation::invoke(
     tt::stl::Span<const int32_t> shape_vector,
     const std::optional<MemoryConfig>& memory_config_arg) {
     return invoke(queue_id, input_tensor, infer_dims_for_reshape(input_tensor, shape_vector), memory_config_arg);
-}
-
-ttnn::Tensor ReshapeOperation::invoke(
-    const ttnn::Tensor& input_tensor,
-    tt::stl::Span<const int32_t> shape_vector,
-    const std::optional<MemoryConfig>& memory_config_arg) {
-    return invoke(DefaultQueueId, input_tensor, shape_vector, memory_config_arg);
-}
-
-ttnn::Tensor ReshapeOperation::invoke(const ttnn::Tensor& input_tensor, tt::stl::Span<const int32_t> shape_vector) {
-    return invoke(input_tensor, shape_vector, std::nullopt);
 }
 
 }  // namespace ttnn::operations::data_movement

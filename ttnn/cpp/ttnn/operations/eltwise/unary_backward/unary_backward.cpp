@@ -326,14 +326,6 @@ std::vector<std::optional<Tensor>> ExecuteUnaryBackwardExp::invoke(
     return grad_tensor;
 }
 
-std::vector<std::optional<Tensor>> ExecuteUnaryBackwardExp::invoke(
-    const Tensor& grad,
-    const Tensor& input,
-    const std::optional<MemoryConfig>& output_mem_config,
-    std::optional<Tensor> input_grad) {
-    return ExecuteUnaryBackwardExp::invoke(DefaultQueueId, grad, input, output_mem_config, std::move(input_grad));
-}
-
 std::vector<std::optional<Tensor>> ExecuteUnaryBackwardTanh::invoke(
     QueueId queue_id,
     const Tensor& grad,
@@ -349,14 +341,6 @@ std::vector<std::optional<Tensor>> ExecuteUnaryBackwardTanh::invoke(
     ttnn::multiply(queue_id, grad, tanh_res, std::nullopt, output_mem_config, input_grad);
     grad_tensor.emplace_back(input_grad);
     return grad_tensor;
-}
-
-std::vector<std::optional<Tensor>> ExecuteUnaryBackwardTanh::invoke(
-    const Tensor& grad,
-    const Tensor& input,
-    const std::optional<MemoryConfig>& output_mem_config,
-    std::optional<Tensor> input_grad) {
-    return ExecuteUnaryBackwardTanh::invoke(DefaultQueueId, grad, input, output_mem_config, std::move(input_grad));
 }
 
 std::vector<std::optional<Tensor>> ExecuteUnaryBackwardSqrt::invoke(
@@ -415,14 +399,6 @@ std::vector<std::optional<Tensor>> ExecuteUnaryBackwardSqrt::invoke(
         input_grad);
     grad_tensor.emplace_back(input_grad);
     return grad_tensor;
-}
-
-std::vector<std::optional<Tensor>> ExecuteUnaryBackwardSqrt::invoke(
-    const Tensor& grad,
-    const Tensor& input,
-    const std::optional<MemoryConfig>& output_mem_config,
-    std::optional<Tensor> input_grad) {
-    return ExecuteUnaryBackwardSqrt::invoke(DefaultQueueId, grad, input, output_mem_config, std::move(input_grad));
 }
 
 std::vector<Tensor> ExecuteUnaryBackwardMultigammaln::invoke(
@@ -603,14 +579,6 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteUnaryBackwardRsqrt::invoke(
     return result;
 }
 
-std::vector<std::optional<ttnn::Tensor>> ExecuteUnaryBackwardRsqrt::invoke(
-    const Tensor& grad,
-    const Tensor& input,
-    const std::optional<MemoryConfig>& output_mem_config,
-    std::optional<Tensor> input_grad) {
-    return ExecuteUnaryBackwardRsqrt::invoke(DefaultQueueId, grad, input, output_mem_config, std::move(input_grad));
-}
-
 std::vector<std::optional<Tensor>> ExecuteUnaryBackwardNeg::invoke(
     QueueId queue_id,
     const Tensor& grad,
@@ -621,14 +589,6 @@ std::vector<std::optional<Tensor>> ExecuteUnaryBackwardNeg::invoke(
     input_grad = input_grad.value_or(ttnn::empty_like(input));
     result[0] = ttnn::neg(queue_id, grad, output_mem_config, input_grad);
     return result;
-}
-
-std::vector<std::optional<Tensor>> ExecuteUnaryBackwardNeg::invoke(
-    const Tensor& grad,
-    const Tensor& input,
-    const std::optional<MemoryConfig>& output_mem_config,
-    std::optional<Tensor> input_grad) {
-    return ExecuteUnaryBackwardNeg::invoke(DefaultQueueId, grad, input, output_mem_config, std::move(input_grad));
 }
 
 std::vector<Tensor> ExecuteUnaryBackwardRelu::invoke(
@@ -655,14 +615,6 @@ std::vector<std::optional<Tensor>> ExecuteUnaryBackwardFill::invoke(
                     ? ttnn::zeros_like(grad, std::nullopt, std::nullopt, std::nullopt, std::nullopt, input_grad)
                     : ttnn::zeros_like(grad);
     return result;
-}
-
-std::vector<std::optional<Tensor>> ExecuteUnaryBackwardFill::invoke(
-    const Tensor& grad,
-    const Tensor& input,
-    const std::optional<MemoryConfig>& output_mem_config,
-    std::optional<Tensor> input_grad) {
-    return ExecuteUnaryBackwardFill::invoke(DefaultQueueId, grad, input, output_mem_config, std::move(input_grad));
 }
 
 std::vector<Tensor> ExecuteUnaryBackwardHardsigmoid::invoke(
@@ -1005,14 +957,6 @@ std::vector<std::optional<Tensor>> ExecuteUnaryBackwardSilu::invoke(
 
     result[0] = input_grad;
     return result;
-}
-
-std::vector<std::optional<Tensor>> ExecuteUnaryBackwardSilu::invoke(
-    const Tensor& grad,
-    const Tensor& input,
-    const std::optional<MemoryConfig>& output_mem_config,
-    std::optional<Tensor> input_grad) {
-    return ExecuteUnaryBackwardSilu::invoke(DefaultQueueId, grad, input, output_mem_config, std::move(input_grad));
 }
 
 // Selu

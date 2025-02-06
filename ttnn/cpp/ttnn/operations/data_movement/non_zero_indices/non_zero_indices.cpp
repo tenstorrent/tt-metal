@@ -18,9 +18,4 @@ std::vector<ttnn::Tensor> NonZeroIndicesOperation::invoke(
     return operation::run_without_autoformat(NonZeroIndices{memory_config}, {input_tensor}, {}, {}, queue_id);
 }
 
-std::vector<ttnn::Tensor> NonZeroIndicesOperation::invoke(
-    const ttnn::Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config_arg) {
-    return invoke(DefaultQueueId, input_tensor, memory_config_arg);
-}
-
 }  // namespace ttnn::operations::data_movement

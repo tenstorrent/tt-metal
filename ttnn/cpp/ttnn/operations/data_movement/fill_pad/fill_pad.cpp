@@ -50,9 +50,4 @@ ttnn::Tensor FillPadOperation::invoke(
         .at(0);
 }
 
-ttnn::Tensor FillPadOperation::invoke(
-    const ttnn::Tensor& input_tensor, float fill_value, const std::optional<ttnn::MemoryConfig>& memory_config_arg) {
-    return invoke(DefaultQueueId, input_tensor, fill_value, memory_config_arg);
-}
-
 }  // namespace ttnn::operations::data_movement
