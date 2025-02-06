@@ -15,7 +15,6 @@ struct ExecuteConvertToCHW {
         const Tensor& a,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<DataType>& dtype = std::nullopt);
-    static ttnn::Tensor invoke(const Tensor& a, const std::optional<MemoryConfig>& memory_config = std::nullopt, const std::optional<DataType>& dtype = std::nullopt);
 };
 
 }  // namespace ttnn::operations::experimental::cnn

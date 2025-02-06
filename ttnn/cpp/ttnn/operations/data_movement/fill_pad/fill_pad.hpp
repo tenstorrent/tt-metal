@@ -16,11 +16,6 @@ struct FillPadOperation {
         const ttnn::Tensor& input_tensor,
         float fill_value,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt);
-
-    static ttnn::Tensor invoke(
-        const ttnn::Tensor& input_tensor,
-        float fill_value,
-        const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt);
 };
 
 }  // namespace data_movement

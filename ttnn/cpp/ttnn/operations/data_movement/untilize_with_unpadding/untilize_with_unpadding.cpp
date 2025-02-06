@@ -99,13 +99,4 @@ ttnn::Tensor ExecuteUntilizeWithUnpadding::invoke(
     return build_ndiml_untilize_val(base_untilize)(input_tensor);
 }
 
-ttnn::Tensor ExecuteUntilizeWithUnpadding::invoke(
-    const ttnn::Tensor& input_tensor,
-    const ttnn::Shape& output_tensor_end,
-    const std::optional<MemoryConfig>& memory_config,
-    bool use_multicore,
-    bool use_pack_untilize) {
-    return invoke(DefaultQueueId, input_tensor, output_tensor_end, memory_config, use_multicore, use_pack_untilize);
-}
-
 }  // namespace ttnn::operations::data_movement
