@@ -14,6 +14,7 @@
 #include "tt-metalium/core_coord.hpp"
 #include "tt-metalium/overloaded.hpp"
 #include "tt-metalium/core_coord.hpp"
+#include "ttnn/common/constants.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/tensor/host_buffer/borrowed_buffer.hpp"
 #include "ttnn/tensor/host_buffer/functions.hpp"
@@ -22,160 +23,16 @@
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
 #include <tt-metalium/command_queue.hpp>
-#include "pybind11/stl.h"
+
+#include "umd/device/tt_xy_pair.h"
 
 using namespace tt::tt_metal;
 
 namespace ttnn::distributed {
 
 namespace py = pybind11;
-
-template <typename T>
-owned_buffer::Buffer<T> create_owned_buffer(
-    std::shared_ptr<Buffer> device_buffer, const ttnn::TensorSpec& tensor_spec) {
-    TT_FATAL(
-        !tensor_spec.memory_config().is_sharded() or tensor_spec.memory_config().shard_spec.has_value(),
-        "Sharded tensors must have a shard spec when converting to tt tensors!");
-
-    std::vector<T> device_physical_data;
-
-    device_physical_data.reserve(device_buffer->size() / sizeof(T));
-
-    tensor_impl::read_data_from_device_buffer(device_buffer, device_physical_data);
-    auto logical_data = tensor_impl::decode_tensor_data(std::move(device_physical_data), tensor_spec);
-    return owned_buffer::create(std::move(logical_data));
-}
-
-template <typename T>
-owned_buffer::Buffer<T> create_owned_buffer(
-    owned_buffer::Buffer<T>&& owned_buffer, const ttnn::TensorSpec& tensor_spec) {
-    TT_FATAL(
-        !tensor_spec.memory_config().is_sharded() or tensor_spec.memory_config().shard_spec.has_value(),
-        "Sharded tensors must have a shard spec when converting to tt tensors!");
-
-    auto physical_data = owned_buffer.get();
-
-    // See implementation for documentation
-    auto logical_data = tensor_impl::decode_tensor_data(std::move(physical_data), tensor_spec);
-
-    return owned_buffer::create(std::move(logical_data));
-}
-
-template <typename T>
-OwnedBuffer get_host_buffer_from_tensor(const Tensor& tt_tensor) {
-    return std::visit(
-        tt::stl::overloaded{
-            [&tt_tensor](const OwnedStorage& storage) -> OwnedBuffer {
-                const auto& tensor_spec = tt_tensor.get_tensor_spec();
-                const auto tt_dtype = tensor_spec.data_type();
-                return create_owned_buffer(std::move(owned_buffer::get_as<T>(storage.buffer)), tensor_spec);
-            },
-            [&tt_tensor](const DeviceStorage& storage) -> OwnedBuffer {
-                const auto& tensor_spec = tt_tensor.get_tensor_spec();
-
-                return create_owned_buffer<T>(storage.get_buffer(), tensor_spec);
-            },
-            [&tt_tensor](auto&&) -> OwnedBuffer {
-                TT_THROW(
-                    "Tensor with {} storage type cannot be converted to torch",
-                    tt::stl::get_active_type_name_in_variant(tt_tensor.get_storage()));
-            }},
-        tt_tensor.get_storage());
-}
-
-template <typename T = float>
-OwnedBuffer get_host_buffer_from_tensor(const Tensor& tt_tensor)
-    requires(std::is_same_v<T, float>)
-{
-    return std::visit(
-        tt::stl::overloaded{
-            [&tt_tensor](const OwnedStorage& storage) -> OwnedBuffer {
-                const auto& tensor_spec = tt_tensor.get_tensor_spec();
-                const auto tt_dtype = tensor_spec.data_type();
-                OwnedBuffer owned_buffer = storage.get_buffer();
-                if (tt_dtype == DataType::FLOAT32) {
-                    return create_owned_buffer(std::move(owned_buffer::get_as<T>(owned_buffer)), tensor_spec);
-                }
-                if (tt_dtype == DataType::BFLOAT16) {
-                    return create_owned_buffer(std::move(owned_buffer::get_as<bfloat16>(owned_buffer)), tensor_spec);
-                }
-                if (tt_dtype == DataType::BFLOAT8_B || tt_dtype == DataType::BFLOAT4_B) {
-                    const auto& tile = tensor_spec.tile();
-                    auto uint32_data = owned_buffer::get_as<std::uint32_t>(owned_buffer).get();
-                    auto float_unpacked_data =
-                        tt_dtype == DataType::BFLOAT8_B
-                            ? unpack_bfp8_tiles_into_float_vec(
-                                  uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile)
-                            : unpack_bfp4_tiles_into_float_vec(
-                                  uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
-                    auto input_float_buffer = owned_buffer::create<float>(std::move(float_unpacked_data));
-                    return create_owned_buffer(std::move(input_float_buffer), tensor_spec);
-                }
-                TT_THROW("Floating point owned storage python conversion failed, unsupported datatype {}", tt_dtype);
-            },
-            [&tt_tensor](const DeviceStorage& storage) -> OwnedBuffer {
-                const auto& tensor_spec = tt_tensor.get_tensor_spec();
-                const auto tt_dtype = tensor_spec.data_type();
-                std::shared_ptr<Buffer> device_buffer = storage.get_buffer();
-                if (tt_dtype == DataType::FLOAT32) {
-                    return create_owned_buffer<T>(device_buffer, tensor_spec);
-                }
-                if (tt_dtype == DataType::BFLOAT16) {
-                    return create_owned_buffer<bfloat16>(device_buffer, tensor_spec);
-                }
-                if (tt_dtype == DataType::BFLOAT8_B || tt_dtype == DataType::BFLOAT4_B) {
-                    const auto& tile = tensor_spec.tile();
-
-                    std::vector<uint32_t> uint32_data;
-                    tensor_impl::read_data_from_device_buffer(device_buffer, uint32_data);
-                    auto float_unpacked_data =
-                        tt_dtype == DataType::BFLOAT8_B
-                            ? unpack_bfp8_tiles_into_float_vec(
-                                  uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile)
-                            : unpack_bfp4_tiles_into_float_vec(
-                                  uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
-                    auto input_float_buffer = owned_buffer::create<float>(std::move(float_unpacked_data));
-                    return create_owned_buffer(std::move(input_float_buffer), tensor_spec);
-                }
-                TT_THROW("Floating point device storage python conversion failed, unsupported datatype {}", tt_dtype);
-            },
-            [&tt_tensor](auto&&) -> OwnedBuffer {
-                TT_THROW(
-                    "Tensor with {} storage type cannot be converted to torch",
-                    tt::stl::get_active_type_name_in_variant(tt_tensor.get_storage()));
-            },
-        },
-        tt_tensor.get_storage());
-}
-
-template <typename T>
-py::object convert_tt_tensor_to_torch_tensor(
-    const Tensor& tt_tensor, py::object& torch_module, py::object torch_dtype) {
-    auto buffer = get_host_buffer_from_tensor<T>(tt_tensor);
-    static_assert(std::is_same_v<std::decay_t<decltype(buffer)>, OwnedBuffer>);
-
-    auto frombuffer = torch_module.attr("frombuffer");
-
-    DataType dtype = tt_tensor.get_tensor_spec().data_type();
-
-    auto logical_shape = tt_tensor.get_logical_shape();
-    auto view = logical_shape.view();
-    std::vector<uint32_t> torch_shape(view.begin(), view.end());
-    auto tensor = [&]() {
-        if (tt_tensor.volume() == 0) {
-            auto pytorch_empty = torch_module.attr("empty");
-            return pytorch_empty(torch_shape, py::arg("dtype") = torch_dtype);
-        }
-        return frombuffer(buffer, py::arg("dtype") = torch_dtype);
-    }();
-
-    tensor = tensor.attr("reshape")(torch_shape);
-    tensor = tensor.attr("contiguous")();
-    return tensor;
-}
 
 void py_module_types(py::module& module) {
     py::class_<MeshDevice, std::shared_ptr<MeshDevice>>(module, "MeshDevice");
@@ -260,11 +117,12 @@ void py_module(py::module& module) {
             &MeshDevice::get_devices,
             py::return_value_policy::reference,
             R"doc(
-            Get the devices in the device mesh.
+           Get the devices in the device mesh.
 
-            Returns:
-                List[Device]: The devices in the device mesh.
-        )doc")
+
+           Returns:
+               List[Device]: The devices in the device mesh.
+       )doc")
         .def(
             "create_submesh",
             &MeshDevice::create_submesh,
@@ -280,86 +138,94 @@ void py_module(py::module& module) {
             "compute_with_storage_grid_size",
             &MeshDevice::compute_with_storage_grid_size,
             R"doc(
-            Get the compute grid size (x, y) of the first device in the device mesh denoting region that can be targeted by ops.
+           Get the compute grid size (x, y) of the first device in the device mesh denoting region that can be targeted by ops.
 
-            Returns:
-                CoreCoord: The compute grid size of the first device in the device mesh.
-        )doc")
+
+           Returns:
+               CoreCoord: The compute grid size of the first device in the device mesh.
+       )doc")
         .def(
             "dram_grid_size",
             &MeshDevice::dram_grid_size,
             R"doc(
-            Get the dram grid size (x, y) of the first device in the device mesh.
+           Get the dram grid size (x, y) of the first device in the device mesh.
 
-            Returns:
-                CoreCoord: The dram grid size of the first device in the device mesh.
-        )doc")
+
+           Returns:
+               CoreCoord: The dram grid size of the first device in the device mesh.
+       )doc")
         .def(
             "arch",
             &MeshDevice::arch,
             R"doc(
-            Get the arch of the first device in the device mesh.
+           Get the arch of the first device in the device mesh.
 
-            Returns:
-                Arch: The arch of the first device in the device mesh.
-        )doc")
+
+           Returns:
+               Arch: The arch of the first device in the device mesh.
+       )doc")
         .def(
             "enable_async",
             &MeshDevice::enable_async,
             py::arg("enable"),
             R"doc(
-                Enable or disable async mode across all devices in the mesh.
+               Enable or disable async mode across all devices in the mesh.
 
-                Args:
-                    enable (bool): True to enable async mode, False to disable it.
-            )doc")
+
+               Args:
+                   enable (bool): True to enable async mode, False to disable it.
+           )doc")
         .def(
             "enable_program_cache",
             &MeshDevice::enable_program_cache,
             R"doc(
-                Enable program cache across all devices in the mesh.
-            )doc")
+               Enable program cache across all devices in the mesh.
+           )doc")
         .def(
             "disable_and_clear_program_cache",
             &MeshDevice::disable_and_clear_program_cache,
             R"doc(
-                Disable program cache across all devices in the mesh.
-            )doc")
+               Disable program cache across all devices in the mesh.
+           )doc")
         .def_property_readonly(
             "shape",
             &MeshDevice::shape,
             R"doc(
-            Get the shape of the device mesh.
+           Get the shape of the device mesh.
 
-            Returns:
-                Tuple[int, int]: The shape of the device mesh as (num_rows, num_cols).
-        )doc")
+
+           Returns:
+               Tuple[int, int]: The shape of the device mesh as (num_rows, num_cols).
+       )doc")
         .def(
             "reshape",
             &MeshDevice::reshape,
             py::arg("new_shape"),
             R"doc(
-                Reshapes the logical mesh and re-maps the physical devices to the new logical coordinates.
+               Reshapes the logical mesh and re-maps the physical devices to the new logical coordinates.
 
-                Reshaping Rules:
-                1. The old_shape volume must equal the new_shape volume (i.e. number of devices must remain constant)
-                2. Line-to-Line Reshaping (when either dimension is 1):
-                   - Always possible between 1xN and Nx1 shapes (e.g.: 1x8 <-> 8x1)
-                3. Grid-to-Grid Reshaping:
-                   - Only possible if the devices can form a connected physical mesh in the new shape
-                   - Must maintain physical connectivity between adjacent devices
-                4. Line-to-Grid Reshaping:
-                   - Only possible if the physical devices can form a connected physical mesh in the new shape
-                   - Example: 1x8 -> 2x4 is possible only if physical mesh permits a 2x4 configuration
 
-                Args:
-                    new_shape (MeshShape): The new shape of the mesh.
+               Reshaping Rules:
+               1. The old_shape volume must equal the new_shape volume (i.e. number of devices must remain constant)
+               2. Line-to-Line Reshaping (when either dimension is 1):
+                  - Always possible between 1xN and Nx1 shapes (e.g.: 1x8 <-> 8x1)
+               3. Grid-to-Grid Reshaping:
+                  - Only possible if the devices can form a connected physical mesh in the new shape
+                  - Must maintain physical connectivity between adjacent devices
+               4. Line-to-Grid Reshaping:
+                  - Only possible if the physical devices can form a connected physical mesh in the new shape
+                  - Example: 1x8 -> 2x4 is possible only if physical mesh permits a 2x4 configuration
 
-                Raises:
-                    RuntimeError: If the reshaping constraints are not met:
-                    1. The old_shape volume must equal the new_shape volume (i.e. number of devices must remain constant)
-                    2. For Grid-to-Grid or Line-to-Grid reshaping: physical connectivity must be possible with current devices
-            )doc")
+
+               Args:
+                   new_shape (MeshShape): The new shape of the mesh.
+
+
+               Raises:
+                   RuntimeError: If the reshaping constraints are not met:
+                   1. The old_shape volume must equal the new_shape volume (i.e. number of devices must remain constant)
+                   2. For Grid-to-Grid or Line-to-Grid reshaping: physical connectivity must be possible with current devices
+           )doc")
         .def("__repr__", &MeshDevice::to_string)
         .def(
             "create_sub_device_manager",
@@ -369,16 +235,18 @@ void py_module(py::module& module) {
             py::arg("sub_devices"),
             py::arg("local_l1_size"),
             R"doc(
-                Creates a sub-device manager for the given mesh device.
+               Creates a sub-device manager for the given mesh device.
 
-                Args:
-                    sub_devices (List[ttnn.SubDevice]): The sub-devices to include in the sub-device manager.
-                    This configuration will be used for each device in the MeshDevice.
-                    local_l1_size (int): The size of the local allocators of each sub-device. The global allocator will be shrunk by this amount.
 
-                Returns:
-                    MeshSubDeviceManagerId: The ID of the created sub-device manager.
-            )doc")
+               Args:
+                   sub_devices (List[ttnn.SubDevice]): The sub-devices to include in the sub-device manager.
+                   This configuration will be used for each device in the MeshDevice.
+                   local_l1_size (int): The size of the local allocators of each sub-device. The global allocator will be shrunk by this amount.
+
+
+               Returns:
+                   MeshSubDeviceManagerId: The ID of the created sub-device manager.
+           )doc")
         .def(
             "create_sub_device_manager_with_fabric",
             [](MeshDevice& self, const std::vector<SubDevice>& sub_devices, DeviceAddr local_l1_size) {
@@ -387,44 +255,48 @@ void py_module(py::module& module) {
             py::arg("sub_devices"),
             py::arg("local_l1_size"),
             R"doc(
-                Creates a sub-device manager for the given mesh device. This will automatically create a sub-device of ethernet cores for use with fabric.
-                Note that this is a temporary API until migration to actual fabric is complete.
+               Creates a sub-device manager for the given mesh device. This will automatically create a sub-device of ethernet cores for use with fabric.
+               Note that this is a temporary API until migration to actual fabric is complete.
 
-                Args:
-                    sub_devices (List[ttnn.SubDevice]): The sub-devices to include in the sub-device manager. No ethernet cores should be included in this list.
-                    This configuration will be used for each device in the MeshDevice.
-                    local_l1_size (int): The size of the local allocators of each sub-device. The global allocator will be shrunk by this amount.
 
-                Returns:
-                    MeshSubDeviceManagerId: The ID of the created sub-device manager.
-                    SubDeviceId: The ID of the sub-device that will be used for fabric.
-            )doc")
+               Args:
+                   sub_devices (List[ttnn.SubDevice]): The sub-devices to include in the sub-device manager. No ethernet cores should be included in this list.
+                   This configuration will be used for each device in the MeshDevice.
+                   local_l1_size (int): The size of the local allocators of each sub-device. The global allocator will be shrunk by this amount.
+
+
+               Returns:
+                   MeshSubDeviceManagerId: The ID of the created sub-device manager.
+                   SubDeviceId: The ID of the sub-device that will be used for fabric.
+           )doc")
         .def(
             "load_sub_device_manager",
             &MeshDevice::mesh_load_sub_device_manager,
             py::arg("mesh_sub_device_manager_id"),
             R"doc(
-                Loads the sub-device manager with the given ID.
+               Loads the sub-device manager with the given ID.
 
-                Args:
-                    mesh_sub_device_manager_id (MeshSubDeviceManagerId): The ID of the sub-device manager to load.
-            )doc")
+
+               Args:
+                   mesh_sub_device_manager_id (MeshSubDeviceManagerId): The ID of the sub-device manager to load.
+           )doc")
         .def(
             "clear_loaded_sub_device_manager",
             &MeshDevice::mesh_clear_loaded_sub_device_manager,
             R"doc(
-                Clears the loaded sub-device manager for the given mesh device.
-            )doc")
+               Clears the loaded sub-device manager for the given mesh device.
+           )doc")
         .def(
             "remove_sub_device_manager",
             &MeshDevice::mesh_remove_sub_device_manager,
             py::arg("mesh_sub_device_manager_id"),
             R"doc(
-                Removes the sub-device manager with the given ID.
+               Removes the sub-device manager with the given ID.
 
-                Args:
-                    mesh_sub_device_manager_id (MeshSubDeviceManagerId): The ID of the sub-device manager to remove.
-            )doc")
+
+               Args:
+                   mesh_sub_device_manager_id (MeshSubDeviceManagerId): The ID of the sub-device manager to remove.
+           )doc")
         .def(
             "set_sub_device_stall_group",
             [](MeshDevice& self, const std::vector<SubDeviceId>& sub_device_ids) {
@@ -432,20 +304,21 @@ void py_module(py::module& module) {
             },
             py::arg("sub_device_ids"),
             R"doc(
-                Set the SubDevice IDs that will be stalled on by default for Fast Dispatch commands such as reading, writing, synchronizing.
-                Stalling here refers to the Fast Dispatch cores waiting for programs to complete execution on the specified SubDevices before proceeding with the specified instruction.
-                The default SubDevice IDs to stall on are set to all SubDevice IDs, and whenever a new SubDevice Manager is loaded.
+               Set the SubDevice IDs that will be stalled on by default for Fast Dispatch commands such as reading, writing, synchronizing.
+               Stalling here refers to the Fast Dispatch cores waiting for programs to complete execution on the specified SubDevices before proceeding with the specified instruction.
+               The default SubDevice IDs to stall on are set to all SubDevice IDs, and whenever a new SubDevice Manager is loaded.
 
-                Args:
-                    sub_device_ids (List[SubDeviceId]): The IDs of the SubDevices to stall on.
-            )doc")
+
+               Args:
+                   sub_device_ids (List[SubDeviceId]): The IDs of the SubDevices to stall on.
+           )doc")
         .def(
             "reset_sub_device_stall_group",
             &MeshDevice::mesh_reset_sub_device_stall_group,
             R"doc(
-                Resets the sub_device_ids that will be stalled on by default for Fast Dispatch commands such as reading, writing, synchronizing
-                back to all SubDevice IDs.
-            )doc");
+               Resets the sub_device_ids that will be stalled on by default for Fast Dispatch commands such as reading, writing, synchronizing
+               back to all SubDevice IDs.
+           )doc");
 
     module.def(
         "open_mesh_device",
@@ -467,15 +340,17 @@ void py_module(py::module& module) {
         py::arg("device_id"),
         py::kw_only(),
         R"doc(
-        Get the tensor shard corresponding to the device_id.
+       Get the tensor shard corresponding to the device_id.
 
-        Args:
-            tensor (Tensor): The tensor to get the shard from.
-            device_id (int): The device id to get the shard for.
 
-        Returns:
-            Tensor: The shard of the tensor corresponding to the device_id.
-    )doc");
+       Args:
+           tensor (Tensor): The tensor to get the shard from.
+           device_id (int): The device id to get the shard for.
+
+
+       Returns:
+           Tensor: The shard of the tensor corresponding to the device_id.
+   )doc");
     module.def(
         "get_device_tensor",
         py::overload_cast<const Tensor&, const IDevice*>(&ttnn::distributed::get_device_tensor),
@@ -483,15 +358,17 @@ void py_module(py::module& module) {
         py::arg("device"),
         py::kw_only(),
         R"doc(
-        Get the tensor shard corresponding to the device.
+       Get the tensor shard corresponding to the device.
 
-        Args:
-            tensor (Tensor): The tensor to get the shard from.
-            device (Device): The device to get the shard for.
 
-        Returns:
-            Tensor: The shard of the tensor corresponding to the device.
-    )doc");
+       Args:
+           tensor (Tensor): The tensor to get the shard from.
+           device (Device): The device to get the shard for.
+
+
+       Returns:
+           Tensor: The shard of the tensor corresponding to the device.
+   )doc");
     module.def("get_device_tensors", &get_device_tensors, py::arg("tensor"), py::kw_only());
     module.def(
         "aggregate_as_tensor",
@@ -506,93 +383,30 @@ void py_module(py::module& module) {
         },
         py::arg("mesh_device"));
     module.def(
-        "shardedtensor_to_tensorlist",
-        [](const Tensor& tensor) -> std::vector<py::object> {
-            std::vector<py::object> tensorlist_local;
-
+        "sharded_tensor_to_tensor_list",
+        [](const Tensor& tensor) -> std::vector<Tensor> {
             std::vector<ttnn::Tensor> tensors = get_device_tensors(tensor);
 
-            py::object torch = py::module_::import("torch");
-
-            const auto tt_dtype = tensor.get_tensor_spec().data_type();
-            tensorlist_local.reserve(tensors.size());
-
-            switch (tt_dtype) {
-                case DataType::UINT8: {
-                    for (const Tensor& shard : tensors) {
-                        tensorlist_local.push_back(
-                            convert_tt_tensor_to_torch_tensor<uint8_t>(shard, torch, torch.attr("uint8")));
-                    }
-                    break;
-                }
-                case DataType::UINT16: {
-                    for (const Tensor& shard : tensors) {
-                        tensorlist_local.push_back(
-                            convert_tt_tensor_to_torch_tensor<uint16_t>(shard, torch, torch.attr("int16")));
-                    }
-                    break;
-                }
-                case DataType::INT32: {
-                    for (const Tensor& shard : tensors) {
-                        tensorlist_local.push_back(
-                            convert_tt_tensor_to_torch_tensor<int32_t>(shard, torch, torch.attr("int32")));
-                    }
-                    break;
-                }
-                case DataType::UINT32: {
-                    for (const Tensor& shard : tensors) {
-                        tensorlist_local.push_back(
-                            convert_tt_tensor_to_torch_tensor<uint32_t>(shard, torch, torch.attr("int32")));
-                    }
-                    break;
-                }
-                case DataType::FLOAT32: {
-                    for (const Tensor& shard : tensors) {
-                        tensorlist_local.push_back(
-                            convert_tt_tensor_to_torch_tensor<float>(shard, torch, torch.attr("float32")));
-                    }
-                    break;
-                }
-                case DataType::BFLOAT16: {
-                    for (const Tensor& shard : tensors) {
-                        tensorlist_local.push_back(
-                            convert_tt_tensor_to_torch_tensor<bfloat16>(shard, torch, torch.attr("bfloat16")));
-                    }
-                    break;
-                }
-                case DataType::BFLOAT4_B: {
-                    for (const Tensor& shard : tensors) {
-                        tensorlist_local.push_back(
-                            convert_tt_tensor_to_torch_tensor<float>(shard, torch, torch.attr("float32")));
-                    }
-                    break;
-                }
-                case DataType::BFLOAT8_B: {
-                    for (const Tensor& shard : tensors) {
-                        tensorlist_local.push_back(
-                            convert_tt_tensor_to_torch_tensor<float>(shard, torch, torch.attr("float32")));
-                    }
-                    break;
-                }
-                case DataType::INVALID: {
-                    TT_THROW("Unsupported DataType: {}", tt_dtype);
-                    break;
-                }
+            if (tensor.storage_type() == StorageType::MULTI_DEVICE) {
+                std::transform(tensors.begin(), tensors.end(), tensors.begin(), [](Tensor& tensor) -> Tensor {
+                    return tensor.cpu();
+                });
             }
-            if (tensorlist_local.empty()) {
-                TT_THROW("Failed to convert shards to tensor, possible unsupported DataType: {}", tt_dtype);
-            }
-            return tensorlist_local;
+
+            return tensors;
         },
         py::arg("tensor"),
         R"doc(
-            Convert a sharded multidevice tensor into a locally stored (StorageType::OWNED) list of tensors,
-            with each tensor representing a shard. All bfloat8_b or bfloat4_b shards will be converted to
-            bfloat16 tensors.
+          Convert a sharded multidevice tensor into a locally stored (StorageType::OWNED) list of tensors,
+          with each tensor representing a shard. All bfloat8_b or bfloat4_b shards will be converted to
+          bfloat16 tensors.
 
-            Returns:
-                List[torch.tensor]: A list of locally stored tensors representing the multidevice shards.
-        )doc");
+
+
+
+          Returns:
+              List[torch.tensor]: A list of locally stored tensors representing the multidevice shards.
+      )doc");
     module.def("get_t3k_physical_device_ids_ring", &get_t3k_physical_device_ids_ring);
 }
 
