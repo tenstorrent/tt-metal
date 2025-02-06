@@ -308,10 +308,9 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
         tt::log_debug(tt::LogOp, "input_tensor_cores_x: {}", input_tensor_cores_x);
         tt::log_debug(tt::LogOp, "input_tensor_cores_y: {}", input_tensor_cores_y);
 
-        if (link == 0) {
             // drain sync core is the first worker core
-            drain_sync_core = device->worker_core_from_logical_core(core);
-        }
+        drain_sync_core = device->worker_core_from_logical_core(core);
+
         std::optional<ttnn::ccl::SenderWorkerAdapterSpec> forward_fabric_connection =
             line_topology.is_first_device_in_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD)
                 ? std::nullopt
@@ -353,9 +352,9 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
         std::cout << "mcast_end_core.x : " << output_crs_this_link.bounding_box().end_coord.x
                   << " , mcast end y : " << output_crs_this_link.bounding_box().end_coord.y << std::endl;
 
-        bool wait_output_semaphore = (link == 0) && !enable_async_output_tensor;
-        bool reset_global_semaphore = (link == 0) && !enable_async_output_tensor;
-        uint32_t out_ready_sem_wait_value = ring_size * num_links;
+        bool wait_output_semaphore = true;   //(link == 0) && !enable_async_output_tensor;
+        bool reset_global_semaphore = true;  //(link == 0) && !enable_async_output_tensor;
+        uint32_t out_ready_sem_wait_value = ring_size * 1;
         std::vector<uint32_t> writer_rt_args = {
             reduction_cb_index,                   // tensor_address0
             output_tensor_shard_num_pages,        // num_tiles_per_core
@@ -373,6 +372,7 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
             mcast_start_core.y,                   // mcast_dest_noc_start_y
             mcast_end_core.x,                     // mcast_dest_noc_end_x
             mcast_end_core.y,                     // mcast_dest_noc_end_y
+            link,                                 // link
         };
         writer_rt_args.insert(writer_rt_args.end(), output_tensor_cores_x.begin(), output_tensor_cores_x.end());
         writer_rt_args.insert(writer_rt_args.end(), output_tensor_cores_y.begin(), output_tensor_cores_y.end());
