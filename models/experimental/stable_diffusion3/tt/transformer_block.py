@@ -162,10 +162,10 @@ class TtTransformerBlock:
     def __call__(  # noqa: PLR0915
         self, *, spatial: ttnn.Tensor, prompt: ttnn.Tensor, time_embed: ttnn.Tensor
     ) -> tuple[ttnn.Tensor, ttnn.Tensor | None]:
-        t = ttnn.silu(time_embed, memory_config=ttnn.L1_MEMORY_CONFIG)
+        t = ttnn.silu(time_embed, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        spatial_time = self._spatial_time_embed(t, memory_config=ttnn.L1_MEMORY_CONFIG)
-        prompt_time = self._prompt_time_embed(t, memory_config=ttnn.L1_MEMORY_CONFIG)
+        spatial_time = self._spatial_time_embed(t, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        prompt_time = self._prompt_time_embed(t, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(t)
 
         if self._spatial_attn is not None:
