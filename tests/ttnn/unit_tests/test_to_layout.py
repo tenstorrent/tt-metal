@@ -341,8 +341,7 @@ def test_untilize_w4(shape, input_layout, output_layout, device):
     assert_with_pcc(input_a[:, :, :1, :10912], output_tensor)
 
 
-@skip_for_grayskull()
-@pytest.mark.parametrize("shape", [[2, 20700, 30750], [3, 1, 11300, 12089], [16020, 15036]])
+@pytest.mark.parametrize("shape", [[2, 12700, 13750], [3, 1, 11300, 12089], [16020, 15036]])
 @pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT])
 @pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT])
 def test_tilize_perf(shape, input_layout, output_layout, device):
