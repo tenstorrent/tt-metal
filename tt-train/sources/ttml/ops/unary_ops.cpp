@@ -140,4 +140,36 @@ autograd::TensorPtr broadcast_batch(const autograd::TensorPtr& tensor, uint32_t 
     return out;
 }
 
+autograd::TensorPtr sqrt(const autograd::TensorPtr& tensor) {
+    auto out = autograd::create_tensor();
+    auto sqrt_tensor = ttnn::sqrt(tensor->get_value());
+    out->set_value(sqrt_tensor);
+    autograd::GradFunction grad = [&tensor, &out, &sqrt_tensor]() {
+        // dL/dx = dL/d(sqrt(x)) * 1/(2*sqrt(x))
+        auto grad = ttnn::divide(out->get_grad(), ttnn::multiply(sqrt_tensor, 2.F));
+        tensor->add_grad(grad);
+    };
+    auto links = autograd::get_links(tensor);
+    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    return out;
+}
+
+autograd::TensorPtr sum(const autograd::TensorPtr& tensor) {
+    auto out = autograd::create_tensor();
+    out->set_value(ttml::ttnn_fixed::sum_moreh(tensor->get_value()));
+
+    autograd::GradFunction grad = [tensor, out]() {
+        // Distribute the gradient to each element in the original tensor
+        auto in_shape = tensor->get_value().get_logical_shape();
+        auto grad_shape = out->get_grad().get_logical_shape();
+
+        auto unsqueezed_grad = ttml::core::unsqueeze_to_rank(out->get_grad(), in_shape.rank());
+        auto grad_broadcast = ttnn::repeat(unsqueezed_grad, in_shape);
+        tensor->add_grad(grad_broadcast);
+    };
+
+    auto links = autograd::get_links(tensor);
+    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    return out;
+}
 }  // namespace ttml::ops
