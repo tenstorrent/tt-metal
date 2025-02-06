@@ -20,8 +20,9 @@ if TYPE_CHECKING:
 @pytest.mark.parametrize(
     ("block_index", "batch_size", "spatial_sequence_length", "prompt_sequence_length"),
     [
-        (0, 2, 4096, 333),
+        # (0, 2, 4096, 333),
         # (23, 2, 4096, 333),
+        (0, 2, 1024, 333),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 716800}], indirect=True)

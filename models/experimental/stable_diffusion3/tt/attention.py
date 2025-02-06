@@ -75,7 +75,34 @@ class TtAttentionPart:
     def qkv(self, x: ttnn.Tensor, *, num_heads: int) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         tracy.signpost("enter TtAttentionPart")
 
-        qkv = self._qkv_proj(x)
+        # Input sharding
+        if x.shape[-2] >= 512:
+            mm_a_y = 8
+            mm_a_x = 8
+            mm_a_x_strategy = ttnn.ShardStrategy.BLOCK
+            mm_a_x_memory_config = ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
+            x = ttnn.to_memory_config(
+                x,
+                memory_config=ttnn.create_sharded_memory_config(
+                    x.shape,
+                    core_grid=ttnn.CoreGrid(y=mm_a_y, x=mm_a_x),
+                    strategy=mm_a_x_strategy,
+                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+                dtype=ttnn.bfloat8_b,
+            )
+        else:
+            mm_a_x = 8
+            mm_a_y = 6
+            mm_a_x_memory_config = ttnn.L1_MEMORY_CONFIG
+
+        qkv = self._qkv_proj(
+            x,
+            memory_config=mm_a_x_memory_config,
+            core_grid=ttnn.CoreGrid(y=mm_a_y, x=mm_a_x),
+            dtype=ttnn.bfloat8_b,
+        )
+        qkv = ttnn.to_memory_config(qkv, ttnn.L1_MEMORY_CONFIG, dtype=ttnn.bfloat8_b)
 
         q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(qkv, num_heads=num_heads, transpose_key=False)
 
@@ -89,6 +116,36 @@ class TtAttentionPart:
     def out_proj(self, x: ttnn.Tensor) -> ttnn.Tensor:
         if self._out_proj is None:
             return x
+
+        # Input sharding
+        """
+        if x.shape[-2] >= 512:
+            mm_a_y = 8
+            mm_a_x = 8
+            mm_a_x_strategy = ttnn.ShardStrategy.BLOCK
+            mm_a_x_memory_config = ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
+            x = ttnn.to_memory_config(
+                x,
+                memory_config=ttnn.create_sharded_memory_config(
+                    x.shape,
+                    core_grid=ttnn.CoreGrid(y=mm_a_y, x=mm_a_x),
+                    strategy=mm_a_x_strategy,
+                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+                dtype=ttnn.bfloat8_b,
+            )
+        else:
+            mm_a_x = 8
+            mm_a_y = 6
+            mm_a_x_memory_config = ttnn.L1_MEMORY_CONFIG
+
+        return self._out_proj(
+                             x,
+                             memory_config=mm_a_x_memory_config,
+                             core_grid=ttnn.CoreGrid(y=mm_a_y, x=mm_a_x),
+                             dtype=ttnn.bfloat8_b,
+                             )
+        """
         return self._out_proj(x)
 
 
@@ -112,9 +169,11 @@ class TtAttention:
 
         tracy.signpost("enter TtAttention")
 
-        spatial = ttnn.clone(spatial, dtype=ttnn.bfloat8_b)
-
         q, k, v = self._spatial_attn.qkv(spatial, num_heads=self._num_heads)
+
+        q = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)
+        k = ttnn.to_memory_config(k, ttnn.DRAM_MEMORY_CONFIG)
+        v = ttnn.to_memory_config(v, ttnn.DRAM_MEMORY_CONFIG)
 
         program_config = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
@@ -143,20 +202,23 @@ class TtAttention:
             ttnn.deallocate(k)
             ttnn.deallocate(v)
 
-            concatenated_attn = ttnn.transformer.concatenate_heads(attn)
+            # attn = ttnn.to_memory_config(attn, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+            concatenated_attn = ttnn.transformer.concatenate_heads(
+                attn,
+                # memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+            )
             ttnn.deallocate(attn)
 
             spatial = self._spatial_attn.out_proj(concatenated_attn)
-
-            spatial = ttnn.clone(spatial, dtype=ttnn.bfloat16)
-
             return spatial, None
 
         assert self._prompt_attn is not None
 
-        prompt = ttnn.clone(prompt, dtype=ttnn.bfloat8_b)
-
         q2, k2, v2 = self._prompt_attn.qkv(prompt, num_heads=self._num_heads)
+        q2 = ttnn.to_memory_config(q2, ttnn.DRAM_MEMORY_CONFIG)
+        k2 = ttnn.to_memory_config(k2, ttnn.DRAM_MEMORY_CONFIG)
+        v2 = ttnn.to_memory_config(v2, ttnn.DRAM_MEMORY_CONFIG)
 
         spatial, prompt = ttnn.transformer.joint_scaled_dot_product_attention(
             q,
@@ -170,16 +232,25 @@ class TtAttention:
             compute_kernel_config=compute_kernel_config,
         )
 
-        spatial = ttnn.transformer.concatenate_heads(spatial)
-        prompt = ttnn.transformer.concatenate_heads(prompt)
+        # spatial = ttnn.to_memory_config(spatial, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # prompt = ttnn.to_memory_config(prompt, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+        spatial = ttnn.transformer.concatenate_heads(
+            spatial,
+            # memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+        )
+        prompt = ttnn.transformer.concatenate_heads(
+            prompt,
+            # memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+        )
 
         spatial = self._spatial_attn.out_proj(spatial)
         prompt = self._prompt_attn.out_proj(prompt)
 
-        tracy.signpost("exit TtAttention")
+        spatial = ttnn.to_memory_config(spatial, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
+        prompt = ttnn.to_memory_config(prompt, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=ttnn.bfloat16)
 
-        spatial = ttnn.clone(spatial, dtype=ttnn.bfloat16)
-        prompt = ttnn.clone(prompt, dtype=ttnn.bfloat16)
+        tracy.signpost("exit TtAttention")
 
         return spatial, prompt
 
