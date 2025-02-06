@@ -69,6 +69,7 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/llk)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/perf_microbenchmark)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/stl)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/noc)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/lightmetal)
 
 add_custom_target(
     metal_tests
@@ -92,4 +93,5 @@ add_custom_target(
         unit_tests_llk
         unit_tests_stl
         unit_tests_noc
+        unit_tests_lightmetal
 )

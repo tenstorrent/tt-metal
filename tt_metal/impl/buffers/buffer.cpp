@@ -532,7 +532,7 @@ DeviceAddr Buffer::bank_local_page_address(uint32_t bank_id, uint32_t page_index
     return this->address() + offset;
 }
 
-uint32_t Buffer::alignment() const { return this->allocator_->get_config().alignment; }
+uint32_t Buffer::alignment() const { return allocator_->get_alignment(this->buffer_type()); }
 
 DeviceAddr Buffer::aligned_page_size() const {
     return align(page_size(), this->alignment());

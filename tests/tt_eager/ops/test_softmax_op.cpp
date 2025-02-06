@@ -16,7 +16,7 @@ using namespace tt::tt_metal;
 using namespace constants;
 
 void run_softmax(IDevice* device, const ttnn::Shape& shape) {
-    Tensor input_tensor = ttnn::random::random(shape).to(Layout::TILE).to(device);
+    Tensor input_tensor = ttnn::random::random(shape).to_layout(Layout::TILE).to_device(device);
     Tensor device_output_tensor = ttnn::softmax_in_place(input_tensor);
     Tensor output_tensor = device_output_tensor.cpu();
 }

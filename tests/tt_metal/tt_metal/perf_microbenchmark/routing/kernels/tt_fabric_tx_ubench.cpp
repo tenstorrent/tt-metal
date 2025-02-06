@@ -18,7 +18,6 @@ using namespace tt::tt_fabric;
 uint32_t src_endpoint_id;
 // constexpr uint32_t src_endpoint_id = get_compile_time_arg_val(0);
 constexpr uint32_t num_dest_endpoints = get_compile_time_arg_val(1);
-static_assert(is_power_of_2(num_dest_endpoints), "num_dest_endpoints must be a power of 2");
 constexpr uint32_t dest_endpoint_start_id = get_compile_time_arg_val(2);
 
 constexpr uint32_t data_buffer_start_addr = get_compile_time_arg_val(3);
@@ -70,8 +69,23 @@ uint32_t target_address;
 uint32_t noc_offset;
 uint32_t gk_interface_addr_l;
 uint32_t gk_interface_addr_h;
-
+uint32_t controller_noc_offset;
 uint32_t time_seed;
+
+inline void notify_traffic_controller() {
+    // send semaphore increment to traffic controller kernel on this device.
+    uint64_t dest_addr = get_noc_addr_helper(controller_noc_offset, signal_address);
+    noc_fast_atomic_increment<DM_DYNAMIC_NOC>(
+        noc_index,
+        NCRISC_AT_CMD_BUF,
+        dest_addr,
+        NOC_UNICAST_WRITE_VC,
+        1,
+        31,
+        false,
+        false,
+        MEM_NOC_ATOMIC_RET_VAL_ADDR);
+}
 
 void kernel_main() {
     tt_fabric_init();
@@ -80,13 +94,19 @@ void kernel_main() {
     time_seed = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     src_endpoint_id = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     noc_offset = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
+    controller_noc_offset = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     uint32_t router_x = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     uint32_t router_y = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     dest_device = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     uint32_t rx_buf_size = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     gk_interface_addr_l = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     gk_interface_addr_h = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
-    target_address = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
+
+    if constexpr (ASYNC_WR & test_command) {
+        base_target_address = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
+    }
+
+    target_address = base_target_address;
 
     // Read in the routing table
     uint64_t router_config_addr =
@@ -125,8 +145,12 @@ void kernel_main() {
     // make sure fabric node gatekeeper is available.
     fabric_endpoint_init();
 
+    // notify the controller kernel that this worker is ready to proceed
+    notify_traffic_controller();
+
     // wait till test sends start signal. This is set by test
-    // once tt_fabric kernels have been launched on all the test devices.
+    // once tt_fabric kernels have been launched on all the test devices and
+    // all tx workers are ready to send data
     while (*(volatile tt_l1_ptr uint32_t*)signal_address == 0);
 
     uint64_t start_timestamp = get_timestamp();
@@ -136,7 +160,7 @@ void kernel_main() {
     );
 
     while (true) {
-        client_interface->local_pull_request.pull_request.rd_ptr = 0;
+        client_interface->local_pull_request.pull_request.words_read = 0;
         fabric_async_write<ASYNC_WR_SEND>(
             0,                       // the network plane to use for this transaction
             data_buffer_start_addr,  // source address in sender’s memory
@@ -147,8 +171,8 @@ void kernel_main() {
         );
         data_words_sent += max_packet_size_words;
         packet_count++;
-        uint32_t wr_ptr = client_interface->local_pull_request.pull_request.wr_ptr;
-        while (client_interface->local_pull_request.pull_request.rd_ptr != wr_ptr) {
+        uint32_t words_written = client_interface->local_pull_request.pull_request.words_written;
+        while (client_interface->local_pull_request.pull_request.words_read != words_written) {
 #pragma GCC unroll 4
             for (int i = 0; i < 4; i++) {
                 asm("nop");

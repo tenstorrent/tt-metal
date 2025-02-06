@@ -12,6 +12,11 @@ on:
         type: boolean
         default: false
         description: "Build with tracy enabled"
+      build-wheel:
+        required: false
+        type: boolean
+        default: false
+        description: "Build Python Wheel"
       distro:
         required: false
         type: string
@@ -42,6 +47,13 @@ on:
         required: false
         type: boolean
         default: false
+    outputs:
+      ci-build-docker-image:
+        description: "Docker tag for the CI Build Docker image for building TT-Metalium et al"
+        value: ${{ jobs.build-docker-image.outputs.ci-build-tag }}
+      #ci-test-docker-image:
+      #  description: "Docker tag for the CI Test Docker image for testing TT-Metalium et al"
+      #  value: ${{ jobs.build-docker-image.outputs.ci-test-tag }}
 
 
   workflow_dispatch:
@@ -55,6 +67,11 @@ on:
         type: boolean
         default: false
         description: "Build with tracy enabled"
+      build-wheel:
+        required: false
+        type: boolean
+        default: false
+        description: "Build Python Wheel"
       distro:
         required: false
         type: string
@@ -115,11 +132,6 @@ jobs:
       - name: Update submodules
         run: |
           git submodule update --init --recursive
-      - name: Generate docker tag
-        id: generate-docker-tag
-        uses: ./.github/actions/generate-docker-tag
-        with:
-          image: tt-metalium/${{ env.IMAGE_PARAMS }}
       - name: Docker login
         uses: docker/login-action@v3
         with:
@@ -127,11 +139,11 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Pull docker image
-        run: docker pull ${{ env.TT_METAL_DOCKER_IMAGE_TAG }}
+        run: docker pull ${{ needs.build-docker-image.outputs.ci-build-tag }}
       - name: Build tt-metal and libs
         uses: tenstorrent/docker-run-action@v5
         with:
-          image: ${{ env.TT_METAL_DOCKER_IMAGE_TAG }}
+          image: ${{ needs.build-docker-image.outputs.ci-build-tag }}
           options: |
             --rm
             --tmpfs /tmp
@@ -144,6 +156,7 @@ jobs:
             -v /home/ubuntu/.ccache-ci:/home/ubuntu/.ccache
             -v /mnt/MLPerf/ccache:/mnt/MLPerf/ccache
             -e CARGO_HOME=${{ github.workspace }}/.cargo
+            -e TT_FROM_PRECOMPILED_DIR=${{ github.workspace }}
             -w ${{ github.workspace }}
           run: |
             set -eu # basic shell hygiene
@@ -168,7 +181,18 @@ jobs:
               { echo "!!! ALERT !!! This should never happen, but does explain an issue we've been hunting. Please send a link to this job to Metal Infra.  kthxbye."; exit 1; }
 
             nice -n 19 $build_command
+
+            echo "Build wheel: ${{ inputs.build-wheel }}"
+            if [ "${{ inputs.build-wheel }}" = "true" ]; then
+              nice -n 19 python3 -m build
+            fi
             ccache -s > build/ccache.stats
+      - name: Upload distribution as artifact
+        if: ${{ inputs.build-wheel }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: eager-dist-${{ inputs.distro }}-${{ inputs.version }}-any
+          path: dist/
       - name: Publish Ccache summary
         run: |
           echo '## CCache Summary' >> $GITHUB_STEP_SUMMARY

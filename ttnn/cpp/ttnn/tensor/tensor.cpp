@@ -43,7 +43,7 @@ Tensor create_owned_tensor_from_row_major_data(
     Tensor output(OwnedStorage{owned_buffer::create(std::move(physical_data))}, spec);
 
     if (device.has_value()) {
-        output = output.to(device->get_devices(), spec.memory_config());
+        output = output.to_device(device->get_devices(), spec.memory_config());
     }
 
     return output;
@@ -620,7 +620,7 @@ Tensor Tensor::from_span<float>(
 
             Tensor tensor(OwnedStorage{owned_buffer::create(std::move(packed_block_floats))}, spec);
             if (device.has_value()) {
-                tensor = tensor.to(device->get_devices(), spec.memory_config());
+                tensor = tensor.to_device(device->get_devices(), spec.memory_config());
             }
             return tensor;
         }
@@ -674,8 +674,8 @@ template <>
 std::vector<float> Tensor::to_vector<float>() const {
     Tensor cpu_tensor = this->cpu();
     switch (cpu_tensor.get_dtype()) {
-        case DataType::BFLOAT16: return unpad_tensor_to_vec<float, bfloat16>(cpu_tensor.to(Layout::ROW_MAJOR));
-        case DataType::FLOAT32: return unpad_tensor_to_vec<float, float>(cpu_tensor.to(Layout::ROW_MAJOR));
+        case DataType::BFLOAT16: return unpad_tensor_to_vec<float, bfloat16>(cpu_tensor.to_layout(Layout::ROW_MAJOR));
+        case DataType::FLOAT32: return unpad_tensor_to_vec<float, float>(cpu_tensor.to_layout(Layout::ROW_MAJOR));
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B: {
             const auto& tile = cpu_tensor.get_tensor_spec().tile();
@@ -698,7 +698,7 @@ std::vector<float> Tensor::to_vector<float>() const {
 
 template <typename T>
 std::vector<T> Tensor::to_vector() const {
-    auto cpu_tensor = this->cpu().to(Layout::ROW_MAJOR);
+    auto cpu_tensor = this->cpu().to_layout(Layout::ROW_MAJOR);
     TT_FATAL(
         cpu_tensor.get_dtype() == convert_to_data_type<T>(),
         "Unsupported data type for to_vector: got {}, expected: {}",
@@ -735,17 +735,17 @@ template std::vector<uint8_t> Tensor::to_vector<uint8_t>() const;
 template std::vector<uint16_t> Tensor::to_vector<uint16_t>() const;
 template std::vector<uint32_t> Tensor::to_vector<uint32_t>() const;
 
-Tensor Tensor::to(IDevice* target_device, const MemoryConfig& mem_config, uint8_t cq_id) const {
-    return tensor_ops::tensor_to(*this, target_device, mem_config, cq_id);
+Tensor Tensor::to_device(IDevice* target_device, const MemoryConfig& mem_config, uint8_t cq_id) const {
+    return tensor_ops::tensor_to_device(*this, target_device, mem_config, cq_id);
 }
 
-Tensor Tensor::to(distributed::MeshDevice* mesh_device, const MemoryConfig& mem_config, uint8_t cq_id) const {
+Tensor Tensor::to_device(distributed::MeshDevice* mesh_device, const MemoryConfig& mem_config, uint8_t cq_id) const {
     std::vector<IDevice*> workers_to_use = ttnn::distributed::get_mapped_devices(*this, *mesh_device);
-    return tensor_ops::tensor_to(*this, workers_to_use, mem_config, cq_id);
+    return tensor_ops::tensor_to_device(*this, workers_to_use, mem_config, cq_id);
 }
 
-Tensor Tensor::to(const std::vector<IDevice*>& workers, const MemoryConfig& mem_config, uint8_t cq_id) const {
-    return tensor_ops::tensor_to(*this, workers, mem_config, cq_id);
+Tensor Tensor::to_device(const std::vector<IDevice*>& workers, const MemoryConfig& mem_config, uint8_t cq_id) const {
+    return tensor_ops::tensor_to_device(*this, workers, mem_config, cq_id);
 }
 
 Tensor Tensor::cpu(bool blocking, uint8_t cq_id) const { return tensor_ops::tensor_cpu(*this, blocking, cq_id); }
@@ -761,12 +761,12 @@ Tensor Tensor::extract_shard(const uint32_t& core_id) const {
     return tensor_impl::extract_shard_wrapper(*this, core_id);
 }
 
-Tensor Tensor::to(Layout target_layout, IDevice* worker) const {
-    return tensor_ops::tensor_to(*this, target_layout, worker);
+Tensor Tensor::to_layout(Layout target_layout, IDevice* worker) const {
+    return tensor_ops::tensor_to_layout(*this, target_layout, worker);
 }
 
-Tensor Tensor::to(Layout target_layout, distributed::MeshDevice* mesh_device) const {
-    return tensor_ops::tensor_to(*this, target_layout, mesh_device);
+Tensor Tensor::to_layout(Layout target_layout, distributed::MeshDevice* mesh_device) const {
+    return tensor_ops::tensor_to_layout(*this, target_layout, mesh_device);
 }
 
 const std::string Tensor::write_to_string() const { return tensor_impl::to_string_wrapper(*this); }

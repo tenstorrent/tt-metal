@@ -243,7 +243,6 @@ private:
 
     FORCE_INLINE void update_edm_buffer_slot_wrptr() {
         uint64_t const noc_sem_addr = get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_slot_wrptr_addr);
-
         noc_inline_dw_write(noc_sem_addr, *this->buffer_slot_wrptr_ptr);
     }
 

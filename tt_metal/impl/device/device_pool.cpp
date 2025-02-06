@@ -306,7 +306,6 @@ void DevicePool::activate_device(chip_id_t id) {
             false,
             worker_core_thread_core,
             completion_queue_reader_core);
-        device->update_dispatch_cores_for_multi_cq_eth_dispatch();
         if (!this->firmware_built_keys.contains(device->build_key())) {
             device->build_firmware();
             this->firmware_built_keys.insert(device->build_key());
@@ -315,11 +314,6 @@ void DevicePool::activate_device(chip_id_t id) {
     } else {
         log_debug(tt::LogMetal, "DevicePool re-initialize device {}", id);
         if (not device->is_initialized()) {
-            if (device->num_hw_cqs() != num_hw_cqs) {
-                // The dispatch core manager was reset, since the number of CQs was toggled.
-                // Account for chip specific idle eth dispatch cores.
-                device->update_dispatch_cores_for_multi_cq_eth_dispatch();
-            }
             device->initialize(num_hw_cqs, this->l1_small_size, this->trace_region_size, this->l1_bank_remap);
             if (!this->firmware_built_keys.contains(device->build_key())) {
                 device->build_firmware();

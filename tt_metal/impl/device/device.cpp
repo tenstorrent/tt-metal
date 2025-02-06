@@ -12,6 +12,7 @@
 #include <host_api.hpp>
 #include <trace.hpp>
 #include <core_descriptor.hpp>
+#include "lightmetal/lightmetal_capture.hpp"
 #include "tracy/Tracy.hpp"
 #include <tt_metal.hpp>
 #include "dprint_server.hpp"
@@ -51,6 +52,7 @@ Device::Device(
     id_(device_id), worker_thread_core_(worker_thread_core), completion_queue_reader_core_(completion_queue_reader_core), work_executor_(worker_thread_core, device_id)
 {
     ZoneScoped;
+    update_dispatch_cores_for_multi_cq_eth_dispatch();
     this->initialize(num_hw_cqs, l1_small_size, trace_region_size, l1_bank_remap, minimal);
 }
 
@@ -272,25 +274,28 @@ std::unique_ptr<Allocator> Device::initialize_allocator(size_t l1_small_size, si
          .dram_bank_offsets = {},
          .dram_unreserved_base =
              hal.get_dev_addr(HalDramMemAddrType::DRAM_BARRIER) + hal.get_dev_size(HalDramMemAddrType::DRAM_BARRIER),
-         .l1_unreserved_base = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED),
+         .dram_alignment = hal.get_alignment(HalMemType::DRAM),
+         .l1_unreserved_base = align(
+             hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED),
+             hal.get_alignment(HalMemType::DRAM)),
          .worker_grid = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(logical_size.x - 1, logical_size.y - 1))),
          .worker_l1_size = static_cast<size_t>(soc_desc.worker_l1_size),
          .storage_core_bank_size = get_storage_core_bank_size(id_, num_hw_cqs_, dispatch_core_config),
-         .l1_small_size = tt::align(l1_small_size, hal.get_alignment(HalMemType::L1)),
-         .trace_region_size = tt::align(trace_region_size, hal.get_alignment(HalMemType::DRAM)),
+         .l1_small_size = align(l1_small_size, hal.get_alignment(HalMemType::DRAM)),
+         .trace_region_size = align(trace_region_size, hal.get_alignment(HalMemType::DRAM)),
          .core_type_from_noc_coord_table = {},  // Populated later
          .worker_log_to_virtual_routing_x = tt::Cluster::instance().get_worker_logical_to_virtual_x(this->id()),
          .worker_log_to_virtual_routing_y = tt::Cluster::instance().get_worker_logical_to_virtual_y(this->id()),
          .l1_bank_remap = {l1_bank_remap.begin(), l1_bank_remap.end()},
          .compute_grid = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(compute_size.x - 1, compute_size.y - 1))),
-         .alignment = std::max(hal.get_alignment(HalMemType::DRAM), hal.get_alignment(HalMemType::L1)),
+         .l1_alignment = hal.get_alignment(HalMemType::L1),
          .disable_interleaved = false});
     TT_FATAL(config.l1_small_size < (config.storage_core_bank_size.has_value() ? config.storage_core_bank_size.value() : config.worker_l1_size - config.l1_unreserved_base),
             "Reserved size must be less than bank size");
     TT_FATAL(
-        config.l1_small_size % config.alignment == 0,
-        "Reserved size must be aligned to allocator alignment {}",
-        config.alignment);
+        config.l1_small_size % config.l1_alignment == 0,
+        "Reserved size must be aligned to L1 allocator alignment {}",
+        config.l1_alignment);
     // Initialize dram_offsets from soc_descriptor
     for (auto channel = 0; channel < soc_desc.get_num_dram_views(); channel++) {
         config.dram_bank_offsets.push_back(soc_desc.get_address_offset(channel));
@@ -1016,6 +1021,13 @@ bool Device::initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t t
     log_debug(tt::LogMetal, "Running with {} cqs ", num_hw_cqs);
     TT_FATAL(num_hw_cqs > 0 and num_hw_cqs <= dispatch_core_manager::MAX_NUM_HW_CQS, "num_hw_cqs can be between 1 and {}", dispatch_core_manager::MAX_NUM_HW_CQS);
     this->using_fast_dispatch_ = false;
+    // Trying to preserve logic that was in device_pool.cpp
+    // However, I honestly don't understand it
+    if (!initialized_ && (num_hw_cqs_ != num_hw_cqs)) {
+        // The dispatch core manager was reset, since the number of CQs was toggled.
+        // Account for chip specific idle eth dispatch cores.
+        update_dispatch_cores_for_multi_cq_eth_dispatch();
+    }
     this->num_hw_cqs_ = num_hw_cqs;
     constexpr uint32_t harvesting_map_bits = 12;
     constexpr uint32_t num_hw_cq_bits = 8;
@@ -1450,6 +1462,13 @@ void Device::end_trace(const uint8_t cq_id, const uint32_t tid) {
                 this->id_,
                 active_sub_device_manager->id());
             this->command_queues_[cq_id]->record_end();
+
+            // Capture Trace if light metal trace capturing is enabled.
+            auto& lm_capture_ctx = LightMetalCaptureContext::get();
+            if (lm_capture_ctx.is_tracing()) {
+                lm_capture_ctx.capture_trace_descriptor(*trace_buffer->desc, tid);
+            }
+
             Trace::initialize_buffer(this->command_queue(cq_id), trace_buffer);
             this->mark_allocations_unsafe();
         },

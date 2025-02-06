@@ -11,6 +11,7 @@
 #include "debug/dprint.h"
 #include "dataflow_api.h"
 #include "tt_metal/hw/inc/ethernet/tunneling.h"
+#include "tt_metal/hw/inc/utils/utils.h"
 #include "risc_attribs.h"
 #include "cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
 #include "cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_types.hpp"
@@ -42,7 +43,7 @@ using BufferPtr = NamedType<uint8_t, struct BufferPtrType>;
 template <size_t LIMIT, typename T>
 auto wrap_increment(T val) -> T {
     static_assert(LIMIT != 0, "wrap_increment called with limit of 0; it must be greater than 0");
-    constexpr bool is_pow2 = (LIMIT & (LIMIT - 1)) == 0;
+    constexpr bool is_pow2 = is_power_of_2(LIMIT);
     if constexpr (LIMIT == 1) {
         return val;
     } else if constexpr (LIMIT == 2) {
@@ -51,6 +52,22 @@ auto wrap_increment(T val) -> T {
         return (val + 1) & (LIMIT - 1);
     } else {
         return (val == static_cast<T>(LIMIT - 1)) ? static_cast<T>(0) : static_cast<T>(val + 1);
+    }
+}
+template <size_t LIMIT, typename T>
+auto wrap_increment_n(T val, uint8_t increment) -> T {
+    static_assert(LIMIT != 0, "wrap_increment called with limit of 0; it must be greater than 0");
+    constexpr bool is_pow2 = is_power_of_2(LIMIT);
+    if constexpr (LIMIT == 1) {
+        return val;
+    } else if constexpr (LIMIT == 2) {
+        return 1 - val;
+    } else if constexpr (is_pow2) {
+        return (val + increment) & (LIMIT - 1);
+    } else {
+        T new_unadjusted_val = val + increment;
+        bool wraps = new_unadjusted_val >= LIMIT;
+        return wraps ? static_cast<T>(new_unadjusted_val - LIMIT) : static_cast<T>(new_unadjusted_val);
     }
 }
 
@@ -113,6 +130,9 @@ class ChannelBufferPointer {
         return BufferIndex{normalize_ptr<NUM_BUFFERS>(this->ptr)};
     }
 
+    void increment_n(uint8_t n) {
+        this->ptr = BufferPtr{wrap_increment_n<2*NUM_BUFFERS>(this->ptr.get(), n)};
+    }
     void increment() {
         this->ptr = wrap_increment<2*NUM_BUFFERS>(this->ptr);
     }

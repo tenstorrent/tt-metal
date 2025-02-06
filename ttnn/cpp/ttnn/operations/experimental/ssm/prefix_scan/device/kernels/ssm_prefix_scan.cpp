@@ -67,7 +67,7 @@ FORCE_INLINE void mul(uint32_t cb_a, uint32_t cb_b, uint32_t cb_out) {
     reconfig_data_format(cb_a, cb_b);
     pack_reconfig_data_format(cb_out);
 
-    mul_tiles_init();
+    mul_tiles_init(cb_a, cb_b);
 
     cb_wait_front(cb_a, 1);
     cb_wait_front(cb_b, 1);
@@ -89,7 +89,7 @@ FORCE_INLINE void sum(uint32_t cb_a, uint32_t cb_b, uint32_t cb_out) {
     reconfig_data_format(cb_a, cb_b);
     pack_reconfig_data_format(cb_out);
 
-    add_tiles_init();
+    add_tiles_init(cb_a, cb_b);
 
     cb_wait_front(cb_a, 1);
     cb_wait_front(cb_b, 1);
@@ -149,7 +149,7 @@ void MAIN {
     const uint32_t total_tiles_per_col = get_arg_val<uint32_t>(2);
     const uint32_t num_chunks_per_row = get_arg_val<uint32_t>(3);
 
-    binary_op_init_common(cb_a_in, cb_bx_in);
+    binary_op_init_common(cb_a_in, cb_bx_in, cb_out);
     const uint32_t num_tiles_last_chunk = total_tiles_per_row % NUM_TILES_IN_TILIZED_CHUNK == 0
                                               ? NUM_TILES_IN_TILIZED_CHUNK
                                               : total_tiles_per_row % NUM_TILES_IN_TILIZED_CHUNK;
