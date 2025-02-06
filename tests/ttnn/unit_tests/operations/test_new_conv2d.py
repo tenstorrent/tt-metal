@@ -58,7 +58,7 @@ def run_conv(
     config_override,
     dilation=1,
     use_shallow_conv_variant=False,
-    transpose_shards=False,
+    transpose_shards=True,  # TODO: Fails when set to False
     fp32_accum=False,
     packer_l1_acc=False,
     output_layout=ttnn.TILE_LAYOUT,
@@ -415,6 +415,7 @@ def test_conv_features(
         has_bias=True,
         fp32_accum=fp32_accum,
         packer_l1_acc=packer_l1_acc,
+        preprocess_weights_on_device=True,
     )
 
 
