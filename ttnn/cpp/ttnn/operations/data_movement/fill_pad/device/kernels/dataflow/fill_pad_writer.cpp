@@ -3,6 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
+#include "cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/kernel_common/sharding_addrgen.hpp"
 
 void kernel_main() {
     constexpr uint32_t cb_id_0 = get_compile_time_arg_val(0);
@@ -19,6 +21,7 @@ void kernel_main() {
     constexpr uint32_t tile_size = get_compile_time_arg_val(10);
     constexpr uint32_t tile_hw = tile_size * tile_size;
     constexpr uint32_t face_size = get_compile_time_arg_val(11);
+#define SHARDED get_compile_time_arg_val(12) == 1
     constexpr uint32_t face_hw = face_size * face_size;
     constexpr uint32_t alignment_adjustor = 16;
 
@@ -27,12 +30,28 @@ void kernel_main() {
     uint32_t starting_tile_offset = get_arg_val<uint32_t>(2);
     uint32_t num_2d_tensors = get_arg_val<uint32_t>(3);
 
+#if (SHARDED)
+    typedef ShardedInfo<
+        get_compile_time_arg_val(13),
+        get_compile_time_arg_val(14),
+        get_compile_time_arg_val(15),
+        get_compile_time_arg_val(16),
+        get_compile_time_arg_val(17),
+        get_compile_time_arg_val(18),
+        get_compile_time_arg_val(19)>
+        tensor_shard_info;
+
+    const auto [mapping_table, rt_increment] =
+        experimental::shard_addr_gen_utils::get_shard_map<tensor_shard_info>(get_arg_addr(4));
+    experimental::ShardedAddrGen<tensor_shard_info> s0 = {.bank_base_address = dst_addr, .shard_array = mapping_table};
+#else
     const DataFormat data_format = get_dataformat(cb_id_0);
     const InterleavedAddrGenFast<tensor_in_dram> s0 = {
         .bank_base_address = dst_addr,
         .page_size = tile_hw * element_size_bytes,
         .data_format = data_format  // page_size needs to be tile_size_bytes
     };
+#endif
 
     // Reserve and push the fill value into the circular buffer
     cb_reserve_back(cb_id_0, 1);
@@ -66,6 +85,7 @@ void kernel_main() {
                 uint32_t elems_to_write = col % face_size == 0 ? face_size : face_size - (col % face_size);
                 uint32_t bytes_to_write = elems_to_write * element_size_bytes;
                 noc_async_write(l1_write_addr + alignment_offset, dst_noc_addr, bytes_to_write);
+                noc_async_write_barrier();
                 col += elems_to_write;
                 face_offset += elems_to_write;
 
