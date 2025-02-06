@@ -433,7 +433,9 @@ void kernel_main() {
     gk_message_pending = 0;
     router_addr = 0;
 
+    DPRINT << "DPRINT Gatekeeper started" << ENDL();
     tt_fabric_init();
+    DPRINT << "DPRINT Gatekeeper done init" << ENDL();
 
     write_kernel_status(kernel_status, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_STARTED);
     write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff000000);
@@ -451,6 +453,7 @@ void kernel_main() {
     uint32_t loop_count = 0;
     uint32_t total_messages_procesed = 0;
     volatile ctrl_chan_msg_buf* msg_buf = &gk_info->gk_msg_buf;
+    DPRINT << "DPRINT Gatekeeper main loop" << ENDL();
     while (1) {
         if (!gk_msg_buf_is_empty(msg_buf) && gk_msg_valid(msg_buf)) {
             uint32_t msg_index = msg_buf->rdptr.ptr & FVCC_SIZE_MASK;

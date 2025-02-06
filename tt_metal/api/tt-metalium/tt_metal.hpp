@@ -23,9 +23,14 @@ class IDevice;
 
 namespace detail {
 
+enum class FabricSetting { DISABLED = 0, FABRIC = 1, EDM = 2, DEFAULT = 3 };
+
 bool DispatchStateCheck(bool isFastDispatch);
 
 bool InWorkerThread();
+
+// Call before CreateDevices to enable fabric, which uses all ethernet cores and some tensix cores
+void InitializeFabricSetting(detail::FabricSetting fabric_setting);
 
 std::map<chip_id_t, IDevice*> CreateDevices(
     // TODO: delete this in favour of DevicePool
@@ -326,7 +331,12 @@ bool WriteRegToDevice(IDevice* device, const CoreCoord& logical_core, uint32_t a
  * fit L1 buffer                         | Yes      |
  */
 bool ReadFromDeviceL1(
-    IDevice* device, const CoreCoord& logical_core, uint32_t address, uint32_t size, std::vector<uint32_t>& host_buffer);
+    IDevice* device,
+    const CoreCoord& logical_core,
+    uint32_t address,
+    uint32_t size,
+    std::vector<uint32_t>& host_buffer,
+    CoreType core_type = CoreType::WORKER);
 
 bool ReadRegFromDevice(IDevice* device, const CoreCoord& logical_core, uint32_t address, uint32_t& regval);
 

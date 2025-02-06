@@ -18,6 +18,7 @@
 namespace tt::tt_fabric {
 
 constexpr uint32_t GATEKEEPER_INFO_SIZE_BYTES = 848;
+constexpr uint32_t GATEKEEPER_INFO_SYNC_OFFSET = 0;
 
 using chan_id_t = std::uint8_t;
 using routing_plane_id_t = std::uint8_t;

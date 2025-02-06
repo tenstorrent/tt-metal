@@ -194,8 +194,7 @@ public:
     void initialize_synchronous_sw_cmd_queue() override;
     void update_dispatch_cores_for_multi_cq_eth_dispatch() override;
 
-    void initialize_fabric_program();
-    void configure_fabric_program();
+    void init_fabric() override;
 
     // Puts device into reset
     bool close() override;

@@ -63,9 +63,11 @@ typedef struct test_board {
     std::vector<std::pair<chip_id_t, chip_id_t>> unicast_map;
     std::map<chip_id_t, IDevice*> device_handle_map;
     tt::tt_fabric::ControlPlane* control_plane;
+    std::unique_ptr<tt::tt_fabric::ControlPlane> cp_owning_ptr;
     uint32_t num_chips_to_use;
     std::string mesh_graph_descriptor;
     uint32_t metal_fabric_init_level;
+    tt::tt_metal::DispatchCoreType dispatch_core_type = tt::tt_metal::DispatchCoreType::WORKER;
 
     test_board(std::string& board_type_, uint32_t metal_fabric_init_level_) {
         metal_fabric_init_level = metal_fabric_init_level_;
@@ -106,10 +108,22 @@ typedef struct test_board {
             throw std::runtime_error("Odd number of chips detected, not supported currently");
         }
 
+        // gatekeeper - run on idle ethernet for n300/T3K
+        if (("n300" == board_type_) || ("t3k" == board_type_)) {
+            run_gk_on_idle_ethernet = true;
+            dispatch_core_type = tt::tt_metal::DispatchCoreType::ETH;
+        }
+
+        if (metal_fabric_init_level != 0) {
+            tt::tt_metal::detail::InitializeFabricSetting(tt::tt_metal::detail::FabricSetting::FABRIC);
+        }
+        device_handle_map =
+            tt::tt_metal::detail::CreateDevices(available_chip_ids, 1, 0, 0, DispatchCoreConfig{dispatch_core_type});
         if (metal_fabric_init_level == 0) {
             _init_control_plane(mesh_graph_descriptor);
+        } else {
+            control_plane = tt::DevicePool::instance().get_control_plane();
         }
-        device_handle_map = tt::tt_metal::detail::CreateDevices(available_chip_ids);
 
         if (num_chips_to_use != available_chip_ids.size()) {
             // initialize partial board to get the set of physical chip IDs for fabric kernels
@@ -118,11 +132,6 @@ typedef struct test_board {
             }
         } else {
             physical_chip_ids = available_chip_ids;
-        }
-
-        // gatekeeper - run on idle ethernet for n300/T3K
-        if (("n300" == board_type_) || ("t3k" == board_type_)) {
-            run_gk_on_idle_ethernet = true;
         }
     }
 
@@ -146,7 +155,8 @@ typedef struct test_board {
             const std::filesystem::path mesh_graph_desc_path =
                 std::filesystem::path(tt::llrt::RunTimeOptions::get_instance().get_root_dir()) /
                 "tt_metal/fabric/mesh_graph_descriptors" / mesh_graph_descriptor;
-            control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(mesh_graph_desc_path.string());
+            cp_owning_ptr = std::make_unique<tt::tt_fabric::ControlPlane>(mesh_graph_desc_path.string());
+            control_plane = cp_owning_ptr.get();
         } catch (const std::exception& e) {
             log_fatal(e.what());
         }
@@ -396,7 +406,13 @@ typedef struct test_device {
         }
 
         // gatekeeper
-        if (run_gk_on_idle_ethernet) {
+        if (board_handle->metal_fabric_init_level != 0) {
+            // get gk core from dispatch core manager
+            auto fabric_gatekeeper_core = dispatch_core_manager::instance().fabric_gatekeeper(device_handle->id());
+            gk_logical_core = {fabric_gatekeeper_core.x, fabric_gatekeeper_core.y};
+            gk_phys_core = device_handle->virtual_core_from_logical_core(
+                gk_logical_core, dispatch_core_manager::instance().get_dispatch_core_type(device_handle->id()));
+        } else if (run_gk_on_idle_ethernet) {
             auto idle_eth_cores = device_handle->get_inactive_ethernet_cores();
             if (idle_eth_cores.size() == 0) {
                 throw std::runtime_error("No idle ethernet cores found on the device");
@@ -408,6 +424,7 @@ typedef struct test_device {
             gk_logical_core = {gk_x, gk_y};
             gk_phys_core = device_handle->worker_core_from_logical_core(gk_logical_core);
         }
+
         gk_noc_offset = tt_metal::hal.noc_xy_encoding(gk_phys_core.x, gk_phys_core.y);
     }
 
@@ -449,8 +466,12 @@ typedef struct test_device {
         };
 
         // initialize the semaphore
+        std::cout << "gk physical core " << gk_phys_core.x << " " << gk_phys_core.y << std::endl;
         tt::llrt::write_hex_vec_to_core(device_handle->id(), gk_phys_core, zero_buf, gk_interface_addr);
 
+        std::cout << "runtime args " << runtime_args[0] << " " << runtime_args[1] << std::endl;
+        std::cout << "compile args " << compile_args[0] << " " << compile_args[1] << " " << compile_args[2] << " "
+                  << compile_args[3] << " " << compile_args[4] << " " << compile_args[5] << std::endl;
         KernelHandle kernel;
 
         if (run_gk_on_idle_ethernet) {
@@ -481,6 +502,7 @@ typedef struct test_device {
     void wait_for_gatekeeper_sync() {
         uint32_t gk_status = 0;
         uint32_t num_routers = router_logical_cores.size();
+        std::cout << " sync " << gk_phys_core.str() << " 0x" << std::hex << gk_interface_addr << std::endl;
         uint32_t sync_addr = gk_interface_addr + offsetof(gatekeeper_info_t, router_sync) + offsetof(sync_word_t, val);
         while (num_routers != gk_status) {
             gk_status = tt::llrt::read_hex_vec_from_core(device_handle->id(), gk_phys_core, sync_addr, 4)[0];
@@ -1125,7 +1147,7 @@ int main(int argc, char **argv) {
 
     bool fixed_async_wr_notif_addr = test_args::has_command_option(input_args, "--fixed_async_wr_notif_addr");
 
-    uint32_t metal_fabric_init_level = test_args::has_command_option(input_args, "--metal_fabric_init_level");
+    uint32_t metal_fabric_init_level = test_args::get_command_option_uint32(input_args, "--metal_fabric_init_level", 0);
 
     bool pass = true;
     uint32_t num_available_devices, num_allocated_devices = 0;
@@ -1237,15 +1259,15 @@ int main(int argc, char **argv) {
             throw std::runtime_error("Test cannot run on specified device.");
         } */
 
-        if (metal_fabric_init_level == 0) {
-            if (run_gk_on_idle_ethernet) {
-                routing_table_addr = hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
-            } else {
-                routing_table_addr = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
-            }
-            gk_interface_addr = routing_table_addr + sizeof(fabric_router_l1_config_t) * 4;
-            socket_info_addr = gk_interface_addr + sizeof(gatekeeper_info_t);
+        if (run_gk_on_idle_ethernet) {
+            routing_table_addr = hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
+        } else {
+            routing_table_addr = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
+        }
+        gk_interface_addr = routing_table_addr + sizeof(fabric_router_l1_config_t) * 4;
+        socket_info_addr = gk_interface_addr + sizeof(gatekeeper_info_t);
 
+        if (metal_fabric_init_level == 0) {
             // create router kernels
             std::vector<uint32_t> router_compile_args = {
                 (tunneler_queue_size_bytes >> 4),  // 0: rx_queue_size_words
@@ -1335,31 +1357,37 @@ int main(int argc, char **argv) {
             tt_metal::detail::LaunchProgram(test_device->device_handle, test_device->program_handle, false);
         }
 
-        // wait for all routers to handshake with their gatekeepers
-        for (auto& [chip_id, test_device] : test_devices) {
-            test_device->wait_for_gatekeeper_sync();
+        if (metal_fabric_init_level == 0) {
+            // wait for all routers to handshake with their gatekeepers
+            for (auto& [chip_id, test_device] : test_devices) {
+                test_device->wait_for_gatekeeper_sync();
+            }
         }
+        std::cout << "done wait for gk sync" << std::endl;
 
         // notify tx kernels to start transmitting
         for (auto& traffic : fabric_traffic) {
             traffic.notify_tx_workers(tx_signal_address);
         }
 
+        std::cout << "done notify tx workers" << std::endl;
         // wait for rx kernels to finish
         for (auto& traffic : fabric_traffic) {
             traffic.wait_for_rx_workers_to_finish();
         }
-
-        // terminate fabric routers
-        for (auto& [chip_id, test_device] : test_devices) {
-            test_device->terminate_gatekeeper_kernel();
+        std::cout << "done wait for rx workers" << std::endl;
+        if (metal_fabric_init_level == 0) {
+            // terminate fabric routers
+            for (auto& [chip_id, test_device] : test_devices) {
+                test_device->terminate_gatekeeper_kernel();
+            }
         }
-
+        std::cout << "done terminate gatekeeper kernel" << std::endl;
         // wait for programs to exit
         for (auto& [chip_id, test_device] : test_devices) {
             tt_metal::detail::WaitProgramDone(test_device->device_handle, test_device->program_handle);
         }
-
+        std::cout << "done wait for program done" << std::endl;
         auto end = std::chrono::system_clock::now();
 
         std::chrono::duration<double> elapsed_seconds = (end-start);

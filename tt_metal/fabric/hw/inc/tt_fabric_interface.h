@@ -275,6 +275,7 @@ typedef struct _gatekeeper_info {
 } gatekeeper_info_t;
 
 static_assert(sizeof(gatekeeper_info_t) == GATEKEEPER_INFO_SIZE_BYTES);
+static_assert(offsetof(gatekeeper_info_t, router_sync) + offsetof(sync_word_t, val) == GATEKEEPER_INFO_SYNC_OFFSET);
 
 #define SOCKET_DIRECTION_SEND 1
 #define SOCKET_DIRECTION_RECV 2

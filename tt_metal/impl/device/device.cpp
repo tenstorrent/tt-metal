@@ -1022,10 +1022,10 @@ void Device::initialize_synchronous_sw_cmd_queue() {
     }
 }
 
-void Device::initialize_fabric_program() { fabric_program_ = create_and_compile_fabric_program(this); }
-
-void Device::configure_fabric_program() {
+void Device::init_fabric() {
+    fabric_program_ = create_and_compile_fabric_program(this);
     configure_fabric_cores(this);
+
     program_dispatch::finalize_program_offsets(*fabric_program_, this);
 
     detail::WriteRuntimeArgsToDevice(this, *fabric_program_);
@@ -1034,6 +1034,21 @@ void Device::configure_fabric_program() {
     // Note: the l1_barrier below is needed to be sure writes to cores that
     // don't get the GO mailbox (eg, storage cores) have all landed
     tt::Cluster::instance().l1_barrier(this->id());
+    std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = fabric_program_->logical_cores();
+    for (uint32_t programmable_core_type_index = 0; programmable_core_type_index < logical_cores_used_in_program.size();
+         programmable_core_type_index++) {
+        CoreType core_type = hal.get_core_type(programmable_core_type_index);
+        for (const auto& logical_core : logical_cores_used_in_program[programmable_core_type_index]) {
+            launch_msg_t* msg =
+                &fabric_program_->kernels_on_core(logical_core, programmable_core_type_index)->launch_msg;
+            go_msg_t* go_msg = &fabric_program_->kernels_on_core(logical_core, programmable_core_type_index)->go_msg;
+            msg->kernel_config.host_assigned_id = fabric_program_->get_runtime_id();
+
+            auto physical_core = this->virtual_core_from_logical_core(logical_core, core_type);
+            tt::llrt::write_launch_msg_to_core(
+                this->id(), physical_core, msg, go_msg, this->get_dev_addr(physical_core, HalL1MemAddrType::LAUNCH));
+        }
+    }
 }
 
 bool Device::initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap, bool minimal) {
