@@ -104,7 +104,9 @@ args_list_t emit_address_generator_compile_time_args(const tt::tt_metal::Tensor&
     switch (t.buffer()->buffer_layout()) {
         case tt::tt_metal::TensorMemoryLayout::WIDTH_SHARDED:
         case tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED:
-        case tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED: return shard_builder::sharding_ct_table_builder(t); break;
+        case tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED:
+            return shard_builder::generate_compile_time_args(t);
+            break;
 
         case tt::tt_metal::TensorMemoryLayout::INTERLEAVED: return {}; break;
 
