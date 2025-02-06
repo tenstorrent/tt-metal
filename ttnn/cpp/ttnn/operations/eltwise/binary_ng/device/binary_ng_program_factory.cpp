@@ -358,6 +358,8 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
 
     const auto& a = tensor_args.input_tensor_a;
     const auto& b = tensor_args.input_tensor_b;
+    const auto a_dtype = a.get_dtype();
+    const auto b_dtype = b.has_value() ? b->get_dtype() : a_dtype;
     auto is_sfpu_op = operation_attributes.is_sfpu;
 
     auto program = CreateProgram();
@@ -371,9 +373,9 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     uint32_t b_num_tiles_per_shard = has_sharding ? shard_specs->b_shard_spec.numel() / tile_hw : 0;
     uint32_t c_num_tiles_per_shard = has_sharding ? shard_specs->c_shard_spec.numel() / tile_hw : 0;
 
-    auto a_data_format = datatype_to_dataformat_converter(a.get_dtype());
+    auto a_data_format = datatype_to_dataformat_converter(a_dtype);
     auto b_data_format = b.has_value() ? datatype_to_dataformat_converter(b->get_dtype())
-                         : is_sfpu_op  ? datatype_to_dataformat_converter(a.get_dtype())
+                         : is_sfpu_op  ? datatype_to_dataformat_converter(a_dtype)
                                        : DataFormat::Float16_b;
     auto c_data_format = datatype_to_dataformat_converter(c.get_dtype());
 
@@ -394,7 +396,7 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     const auto op_config = is_sfpu_op ? OpConfig(op_type, std::in_place_type<OpConfig::SfpuBinaryOp>)
                                       : OpConfig(op_type, std::in_place_type<OpConfig::FpuBinaryOp>);
 
-    auto compute_kernel_defines = op_config.as_defines(a.get_dtype());
+    auto compute_kernel_defines = op_config.as_defines(a_dtype);
 
     {
         ttnn::SmallVector<unary::UnaryWithParam> lhs_activations = operation_attributes.lhs_activations;
@@ -487,12 +489,12 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     auto kernel_config = CMAKE_UNIQUE_NAMESPACE::BinaryNgKernelConfig(operation_attributes.subtile_broadcast_type);
 
     std::map<std::string, std::string> dataflow_defines;
-    if (is_sfpu_op && a.get_dtype() == DataType::FLOAT32) {
+    if (is_sfpu_op && a_dtype == DataType::FLOAT32) {
         dataflow_defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column";
         dataflow_defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row";
         dataflow_defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element<float>";
         dataflow_defines["FILL_WITH_VALUE_FLOAT"] = "fill_with_val<1024, float>";
-    } else if (is_sfpu_op && a.get_dtype() == DataType::INT32) {
+    } else if (is_sfpu_op && a_dtype == DataType::INT32) {
         dataflow_defines["FILL_TILE_WITH_FIRST_COLUMN"] = "fill_tile_with_first_column";
         dataflow_defines["FILL_TILE_WITH_FIRST_ROW"] = "fill_tile_with_first_row";
         dataflow_defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element<int32_t>";
@@ -541,11 +543,23 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     uint32_t src1interim_cb_index = tt::CBIndex::c_4;
 
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+
     if (is_sfpu_op) {
-        unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-        unpack_to_dest_mode[src1_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-        unpack_to_dest_mode[src0interim_cb_index] = UnpackToDestMode::UnpackToDestFp32;
-        unpack_to_dest_mode[src1interim_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        if (op_type != BinaryOpType::POWER) {
+            unpack_to_dest_mode[src0_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+            unpack_to_dest_mode[src1_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+            unpack_to_dest_mode[src0interim_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+            unpack_to_dest_mode[src1interim_cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        } else {
+            unpack_to_dest_mode[src0_cb_index] =
+                (a_dtype == DataType::FLOAT32) ? UnpackToDestMode::UnpackToDestFp32 : UnpackToDestMode::Default;
+            unpack_to_dest_mode[src1_cb_index] =
+                (b_dtype == DataType::FLOAT32) ? UnpackToDestMode::UnpackToDestFp32 : UnpackToDestMode::Default;
+            unpack_to_dest_mode[src0interim_cb_index] =
+                (a_dtype == DataType::FLOAT32) ? UnpackToDestMode::UnpackToDestFp32 : UnpackToDestMode::Default;
+            unpack_to_dest_mode[src1interim_cb_index] =
+                (b_dtype == DataType::FLOAT32) ? UnpackToDestMode::UnpackToDestFp32 : UnpackToDestMode::Default;
+        }
     }
 
     compute_kernel_defines["BCAST_INPUT"] = kernel_config.bcast_input_str();
