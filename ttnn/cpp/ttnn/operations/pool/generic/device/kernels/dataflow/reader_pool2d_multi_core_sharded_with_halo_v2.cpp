@@ -27,7 +27,7 @@ ALWI bool fill_with_val(uint32_t begin_addr, uint32_t n, uint16_t val) {
 }
 
 /**
- * Max-pool 2D.
+ * Pool 2D.
  */
 void kernel_main() {
     const uint32_t reader_nindices = get_compile_time_arg_val(0);
@@ -36,7 +36,7 @@ void kernel_main() {
 
     const int32_t pad_w = get_compile_time_arg_val(3);
 
-    // channel size in bytes, multiple of 32
+    // channel size in bytes
     const uint32_t in_nbytes_c = get_compile_time_arg_val(4);
 
     // input tensor height / width / channels
@@ -48,17 +48,14 @@ void kernel_main() {
     const uint32_t split_reader = get_compile_time_arg_val(9);
     const uint32_t reader_id = get_compile_time_arg_val(10);
 
-    // value of 1 in bf16 in a uin32_t
-    constexpr uint32_t bf16_one_u32 = get_compile_time_arg_val(11);
+    // bf16 value packed in u32
+    constexpr uint16_t bf16_scalar = get_compile_time_arg_val(11);
 
-    constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(12);
+    constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(13);
 
     constexpr uint32_t ceil_pad_w = get_compile_time_arg_val(15);
 
-    // static_assert(0 == reader_nindices%2, "reader_nindices must be multiple of 2");
-
     constexpr uint32_t TILE_WIDTH = 32;
-    constexpr uint32_t MAX_ELE_PER_REDUCTION = 512;  // TILE_WIDTH * 8 * numbytes
 
     constexpr uint32_t in_cb_id = (reader_id == 1) ? tt::CBIndex::c_1 : tt::CBIndex::c_0;
     constexpr uint32_t in_shard_cb_id = tt::CBIndex::c_2;  // local input shard
@@ -70,9 +67,9 @@ void kernel_main() {
     // Reduce scalar = 1
     if (reader_id == 0) {
         cb_reserve_back(in_scalar_cb_id, 1);
-        uint32_t bf16_one_u16 = bf16_one_u32 >> 16;
+
         // fill 1 row w/ scalar
-        fill_with_val(get_write_ptr(in_scalar_cb_id), ROW_HW, bf16_one_u16);
+        fill_with_val(get_write_ptr(in_scalar_cb_id), ROW_HW, bf16_scalar);
         cb_push_back(in_scalar_cb_id, 1);
     }
 
@@ -85,28 +82,22 @@ void kernel_main() {
 
     uint32_t npages_to_reserve = 1;
     uint32_t counter = reader_id;
-    uint32_t read_bytes = MAX_ELE_PER_REDUCTION;
     while (counter < reader_nindices) {
+        cb_reserve_back(in_cb_id, npages_to_reserve);
+        uint32_t out_l1_write_addr_base = get_write_ptr(in_cb_id);
+        uint32_t out_l1_write_addr = out_l1_write_addr_base;
         uint16_t top_left_local_index = reader_indices_ptr[counter++];
-        for (uint32_t c_i = 0; c_i < in_nblocks_c; ++c_i) {
-            cb_reserve_back(in_cb_id, npages_to_reserve);
-            uint32_t out_l1_write_addr_base = get_write_ptr(in_cb_id);
-            uint32_t out_l1_write_addr = out_l1_write_addr_base;
-            for (uint32_t h = 0; h < window_h; ++h) {
-                for (uint32_t w = 0; w < window_w; ++w) {
-                    uint32_t stick_offset = top_left_local_index + w + h * in_w_padded;
-                    uint32_t read_offset =
-                        in_l1_read_base_addr +
-                        (stick_offset * in_nbytes_c + c_i * MAX_ELE_PER_REDUCTION);  // 2 bytes, max 8 tiles
-                    noc_async_read_one_packet(get_noc_addr(read_offset), out_l1_write_addr, read_bytes);
-                    out_l1_write_addr += MAX_ELE_PER_REDUCTION;
-                }
-            }
-            noc_async_read_barrier();
-            cb_push_back(in_cb_id, npages_to_reserve);
+        uint32_t h_multiples = 0;
+        for (uint32_t h = 0; h < window_h; ++h, h_multiples += in_w_padded) {
+            uint32_t stick_offset = top_left_local_index + h_multiples;
+            uint32_t read_offset = in_l1_read_base_addr + (stick_offset * in_nbytes_c);
+            noc_async_read_one_packet(get_noc_addr(read_offset), out_l1_write_addr, in_nbytes_c * window_w);
+            out_l1_write_addr += in_nbytes_c * window_w;
         }
         if (split_reader) {
             counter++;  // interleave the indices
         }
+        noc_async_read_barrier();
+        cb_push_back(in_cb_id, npages_to_reserve);
     }
 }  // kernel_main()

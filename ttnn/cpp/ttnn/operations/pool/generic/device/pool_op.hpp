@@ -20,7 +20,11 @@ namespace pool {
 
 enum class Pool2DType {
     MAX_POOL2D,
+    AVG_POOL2D,
 };
+
+// Return a single bf16 init value for the pool type in u32 (packed in the least 16 bits)
+uint32_t get_bf16_pool_init_value(Pool2DType pool_type);
 
 // Generic pool uop -- called from the macro-ops
 struct Pool2D {

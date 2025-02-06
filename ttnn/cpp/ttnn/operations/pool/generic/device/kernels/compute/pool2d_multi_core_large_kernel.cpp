@@ -117,12 +117,28 @@ void MAIN {
     constexpr uint32_t num_faces_in_output_tile = is_partial_tile ? 1 : 2;
     constexpr uint32_t num_out_rows = 1;
 
+<<<<<<< HEAD:ttnn/cpp/ttnn/operations/pool/generic/device/kernels/compute/pool2d_multi_core_large_kernel.cpp
+    constexpr uint32_t num_output_tiles = in_ntiles_c / in_nblocks_c;
+
+    static_assert(REDUCE_OP == PoolType::MAX || REDUCE_OP == PoolType::SUM, "Only supports REDUCE_OP = MAX/SUM");
+    constexpr bool neginf_srca = (REDUCE_OP == PoolType::MAX ? true : false);
+    constexpr bool zero_srca_reduce = (REDUCE_OP == PoolType::MAX ? false : true);
+
+    tilizeA_B_reduce_init<neginf_srca, zero_srca_reduce>(
+        in_cb_id,
+        in_scalar_cb_id,
+        num_output_tiles,
+        interm_reduction_cb_id,
+        num_faces_in_input_tile,
+        max_rows_for_reduction);
+=======
     constexpr uint32_t max_tiles_per_iter =
         in_ntiles_c < MAX_TILES_PER_REDUCTION ? in_ntiles_c : MAX_TILES_PER_REDUCTION;
     constexpr uint32_t partial_iter_output_tiles =
         in_ntiles_c % MAX_TILES_PER_REDUCTION == 0 ? max_tiles_per_iter : in_ntiles_c % MAX_TILES_PER_REDUCTION;
     tilizeA_B_reduce_init<true>(
         in_cb_id, in_scalar_cb_id, max_tiles_per_iter, interm_cb_id, num_faces_in_input_tile, max_rows_for_reduction);
+>>>>>>> f7d847d8891c78cd3c532513ec1a81bb9398f64a:ttnn/cpp/ttnn/operations/pool/generic/device/kernels/compute/max_pool_multi_core_large_kernel.cpp
 
     uint32_t interm_reduction_chunks = window_size_hw / max_rows_for_reduction;
     cb_wait_front(in_scalar_cb_id, 1);
