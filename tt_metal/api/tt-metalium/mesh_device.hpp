@@ -11,6 +11,7 @@
 
 #include "device.hpp"
 
+#include "mesh_common.hpp"
 #include "mesh_config.hpp"
 #include "mesh_coord.hpp"
 #include "mesh_device_view.hpp"
@@ -26,6 +27,7 @@ namespace distributed {
 class MeshCommandQueue;
 class MeshDeviceView;
 class MeshSubDeviceManagerId;
+class MeshTraceBuffer;
 
 class MeshDevice : public IDevice, public std::enable_shared_from_this<MeshDevice> {
 private:
@@ -62,7 +64,8 @@ private:
     std::weak_ptr<MeshDevice> parent_mesh_;  // Submesh created with reference to parent mesh
     std::vector<std::unique_ptr<MeshCommandQueue>> mesh_command_queues_;
     std::unique_ptr<SubDeviceManagerTracker> sub_device_manager_tracker_;
-
+    std::unordered_map<MeshTraceId, std::shared_ptr<MeshTraceBuffer>> trace_buffer_pool_;
+    uint32_t trace_buffers_size_ = 0;
     // This is a reference device used to query properties that are the same for all devices in the mesh.
     IDevice* reference_device() const;
 
@@ -144,8 +147,16 @@ public:
         const bool block_on_worker_thread) override;
     void release_trace(const uint32_t tid) override;
     std::shared_ptr<TraceBuffer> get_trace(uint32_t tid) override;
+
+    // MeshTrace Internal APIs - these should be used to deprecate the single device backed trace APIs
+    void begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id);
+    void end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id);
+    void release_mesh_trace(const MeshTraceId& trace_id);
+    std::shared_ptr<MeshTraceBuffer> get_mesh_trace(const MeshTraceId& trace_id);
+    std::shared_ptr<MeshTraceBuffer>& create_mesh_trace(const MeshTraceId& trace_id);
     uint32_t get_trace_buffers_size() const override;
     void set_trace_buffers_size(uint32_t size) override;
+
     // Light Metal
     void load_trace(uint8_t cq_id, uint32_t trace_id, const TraceDescriptor& trace_desc) override;
 
