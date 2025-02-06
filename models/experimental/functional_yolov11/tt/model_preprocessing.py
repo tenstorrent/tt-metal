@@ -154,7 +154,11 @@ def create_yolov11_model_parameters(model: YoloV11, input_tensor: torch.Tensor, 
 
     parameters["model_args"] = model
 
-    feats = [28, 14, 7]  # Values depends on input resolution. Current: 224x224
+    feats = [
+        input_tensor.shape[3] // 8,
+        input_tensor.shape[3] // 16,
+        input_tensor.shape[3] // 32,
+    ]  # Values depends on input resolution. Current: 224x224
     strides = [8.0, 16.0, 32.0]
 
     anchors, strides = make_anchors(device, feats, strides)  # Optimization: Processing make anchors outside model run
