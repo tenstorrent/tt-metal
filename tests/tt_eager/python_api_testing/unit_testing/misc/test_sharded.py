@@ -668,9 +668,7 @@ def test_bcast_hw(device, num_cores, in0_height_sharded, out_height_sharded, in_
 
     height_sharded_memory_config = ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
 
-    tt_scalar_dram = ttnn.from_torch(
-        torch_scalar, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
+    tt_scalar = torch_scalar.item()
 
     tt_in0_dram = ttnn.from_torch(
         torch_in0, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
@@ -697,12 +695,12 @@ def test_bcast_hw(device, num_cores, in0_height_sharded, out_height_sharded, in_
 
         tt_out = ttnn.multiply(
             tt_in0_height_sharded,
-            tt_scalar_dram,
+            tt_scalar,
             memory_config=out_mem_config,
         )
         tt_in0_height_sharded.deallocate()
     else:
-        tt_out = ttnn.multiply(tt_in0_dram, tt_scalar_dram, memory_config=out_mem_config)
+        tt_out = ttnn.multiply(tt_in0_dram, tt_scalar, memory_config=out_mem_config)
 
     if out_height_sharded:
         tt_out = ttnn.to_memory_config(tt_out, ttnn.DRAM_MEMORY_CONFIG)
@@ -710,7 +708,7 @@ def test_bcast_hw(device, num_cores, in0_height_sharded, out_height_sharded, in_
     # Reference is out and input dram interleaved
     tt_out_ref = ttnn.multiply(
         tt_in0_dram,
-        tt_scalar_dram,
+        tt_scalar,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     tt_in0_dram.deallocate()
