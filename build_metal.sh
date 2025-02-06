@@ -32,8 +32,10 @@ show_help() {
     echo "  --disable-light-metal-trace      Disable Light Metal tracing to binary."
     echo "  --cxx-compiler-path              Set path to C++ compiler."
     echo "  --c-compiler-path                Set path to C++ compiler."
+    echo "  --cpm-source-cache               Set path to CPM Source Cache."
     echo "  --ttnn-shared-sub-libs           Use shared libraries for ttnn."
     echo "  --toolchain-path                 Set path to CMake toolchain file."
+    echo "  --configure-only                 Only configure the project, do not build."
 }
 
 clean() {
@@ -62,9 +64,11 @@ unity_builds="ON"
 light_metal_trace="ON"
 build_all="OFF"
 cxx_compiler_path=""
+cpm_source_cache=""
 c_compiler_path=""
 ttnn_shared_sub_libs="OFF"
 toolchain_path="cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
+configure_only="OFF"
 
 declare -a cmake_args
 
@@ -96,9 +100,11 @@ development
 debug
 clean
 cxx-compiler-path:
+cpm-source-cache:
 c-compiler-path:
 ttnn-shared-sub-libs
 toolchain-path:
+configure-only
 "
 
 # Flatten LONGOPTIONS into a comma-separated string for getopt
@@ -156,12 +162,16 @@ while true; do
             build_all="ON";;
         --ttnn-shared-sub-libs)
             ttnn_shared_sub_libs="ON";;
+        --configure-only)
+            configure_only="ON";;
         --disable-unity-builds)
 	    unity_builds="OFF";;
         --disable-light-metal-trace)
             light_metal_trace="OFF";;
         --cxx-compiler-path)
             cxx_compiler_path="$2";shift;;
+        --cpm-source-cache)
+            cpm_source_cache="$2";shift;;
         --c-compiler-path)
             c_compiler_path="$2";shift;;
         --toolchain-path)
@@ -238,6 +248,11 @@ fi
 if [ "$c_compiler_path" != "" ]; then
     echo "INFO: C compiler: $c_compiler_path"
     cmake_args+=("-DCMAKE_C_COMPILER=$c_compiler_path")
+fi
+
+if [ "$cpm_source_cache" != "" ]; then
+    echo "INFO: CPM_SOURCE_CACHE: $cpm_source_cache"
+    cmake_args+=("-DCPM_SOURCE_CACHE=$cpm_source_cache")
 fi
 
 if [ "$enable_ccache" = "ON" ]; then
@@ -343,5 +358,7 @@ echo "INFO: Running: cmake "${cmake_args[@]}""
 cmake "${cmake_args[@]}"
 
 # Build libraries and cpp tests
-echo "INFO: Building Project"
-cmake --build $build_dir --target install
+if [ "$configure_only" = "OFF" ]; then
+    echo "INFO: Building Project"
+    cmake --build $build_dir --target install
+fi
