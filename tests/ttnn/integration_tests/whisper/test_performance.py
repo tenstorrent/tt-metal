@@ -22,14 +22,16 @@ def get_expected_times(functional_whisper):
     }[functional_whisper]
 
 
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Not tested on single WH")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize("model_name", ["openai/whisper-base"])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [500])
 @pytest.mark.parametrize("functional_whisper", [ttnn_functional_whisper, ttnn_optimized_functional_whisper])
-def test_performance(device, use_program_cache, model_name, batch_size, sequence_size, functional_whisper):
+@pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
+def test_performance(
+    device, use_program_cache, model_name, batch_size, sequence_size, functional_whisper, enable_async_mode
+):
     config = WhisperConfig.from_pretrained(model_name)
 
     # Run TT Model
