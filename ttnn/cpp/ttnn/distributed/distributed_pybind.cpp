@@ -376,13 +376,6 @@ void py_module(py::module& module) {
         py::arg("tensors"),
         py::kw_only());
     module.def(
-        "get_mesh_device_core_grid",
-        [](MeshDevice& mesh_device) {
-            CoreCoord coords = mesh_device.compute_with_storage_grid_size();
-            new CoreGrid(coords.x, coords.y);
-        },
-        py::arg("mesh_device"));
-    module.def(
         "sharded_tensor_to_tensor_list",
         [](const Tensor& tensor) -> std::vector<Tensor> {
             std::vector<ttnn::Tensor> tensors = get_device_tensors(tensor);
