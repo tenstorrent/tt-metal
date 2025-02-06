@@ -416,8 +416,6 @@ def test_slice_negative_ends(layout, dim, ends, device):
     ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=layout)
 
     if dim == 3:
-        if layout == ttnn.ROW_MAJOR_LAYOUT and ends == -32:
-            pytest.skip("Page size will become 0 and we don't handle transforming pages to second last dimension")
         torch_output = torch_input[:, :, :, 0:ends]
         ttnn_output = ttnn_input[:, :, :, 0:ends]
     elif dim == 2:
@@ -454,8 +452,6 @@ def test_slice_bert(input_shape, input_start, input_ends, layout, device):
         torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
         ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=layout)
     else:
-        if (input_ends[-1] - input_start[-1]) % 2 != 0:
-            pytest.skip("Cannot slice the last dimension to 1 in row major layout")
         torch_input = torch.randn(input_shape, dtype=torch.float32)
         ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=layout)
 
@@ -471,6 +467,17 @@ def test_slice_bert(input_shape, input_start, input_ends, layout, device):
             input_start[1] : input_ends[1],
             input_start[2] : input_ends[2],
             input_start[3] : input_ends[3],
+        ]
+    elif len(input_shape) == 3:
+        torch_output = torch_input[
+            input_start[0] : input_ends[0],
+            input_start[1] : input_ends[1],
+            input_start[2] : input_ends[2],
+        ]
+        ttnn_output = ttnn_input[
+            input_start[0] : input_ends[0],
+            input_start[1] : input_ends[1],
+            input_start[2] : input_ends[2],
         ]
     elif len(input_shape) == 2:
         torch_output = torch_input[input_start[0] : input_ends[0], input_start[1] : input_ends[1]]
@@ -504,8 +511,6 @@ def test_ttnn_slice_bert(input_shape, input_start, input_ends, layout, memory_co
         torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
         ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=layout)
     else:
-        if (input_ends[-1] - input_start[-1]) % 2 != 0:
-            pytest.skip("Cannot slice the last dimension to 1 in row major layout")
         torch_input = torch.randn(input_shape, dtype=torch.float32)
         ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=layout)
 
@@ -581,8 +586,6 @@ def test_ttnn_slice_optimized_shapes(input_shape, input_start, input_ends, layou
         torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
         ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=layout)
     else:
-        if (input_ends[-1] - input_start[-1]) % 2:
-            pytest.skip("Cannot slice the last dimension to 1 in row major layout")
         torch_input = torch.randn(input_shape, dtype=torch.float32)
         ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=layout)
 
@@ -624,8 +627,6 @@ def test_ttnn_slice_5d(input_shape, input_start, input_ends, layout, memory_conf
         torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
         ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=layout)
     else:
-        if (input_ends[-1] - input_start[-1]) % 2:
-            pytest.skip("Cannot slice the last dimension to 1 in row major layout")
         torch_input = torch.randn(input_shape, dtype=torch.float32)
         ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=layout)
 
@@ -659,13 +660,9 @@ def test_ttnn_slice_5d(input_shape, input_start, input_ends, layout, memory_conf
 )
 def test_slice_5d(input_shape, input_start, input_ends, input_stride, layout, device):
     if layout == ttnn.TILE_LAYOUT:
-        if input_stride != (1, 1, 1, 1, 1):
-            pytest.skip("Cannot untilize 5D tensor")
         torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
         ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=layout)
     else:
-        if (input_ends[-1] - input_start[-1]) % 2:
-            pytest.skip("Cannot slice the last dimension to 1 in row major layout")
         torch_input = torch.randn(input_shape, dtype=torch.float32)
         ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=layout)
 
@@ -749,16 +746,12 @@ def test_slice_adversarial_fixed(input_shape, dim, start, end, step, layout, dev
     assert_with_pcc(torch_output_tensor, ttnn_output_tensor, 0.999)
 
 
+@pytest.mark.skip("#15796 1D tiled support is not available as of yet")
 @pytest.mark.parametrize(
     "input_shape, dim, start, end, step, layout",
-    (
-        ([1, 7], 0, 0, -1, 1, ttnn.ROW_MAJOR_LAYOUT),  # page size must equal buffer size
-        ([1, 8, 2, 2], 2, -1, -1, 1, ttnn.TILE_LAYOUT),  # Buffer size and page size should be larger than 0 bytes
-        ([3], 0, 0, -1, 1, ttnn.TILE_LAYOUT),  # Difference in expected shape as it's a 1D tensor
-    ),
+    (([3], 0, 0, -1, 1, ttnn.TILE_LAYOUT),),  # Difference in expected shape as it's a 1D tensor
 )
 def test_slice_adversarial(input_shape, dim, start, end, step, layout, device):
-    pytest.skip("These tests are known to fail")
     torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
 
     slice_obj = slice(start, end, step)
@@ -774,9 +767,89 @@ def test_slice_adversarial(input_shape, dim, start, end, step, layout, device):
     ttnn_tensor = ttnn.from_torch(torch_input, device=device, layout=layout, dtype=ttnn.bfloat16)
     ttnn_output = ttnn_tensor[indices]
 
-    ttnn_output_tensor = ttnn.to_torch(ttnn_output)
+    ttnn_output_tensor = ttnn.from_device(ttnn_output).to_torch_with_logical_shape()
 
     assert_with_pcc(torch_output_tensor, ttnn_output_tensor, 0.999)
+
+
+@pytest.mark.parametrize(
+    "input_shape, input_start, input_ends, input_stride",
+    (
+        ([3234, 4], [0, 2], [3234, 4], [1, 1]),
+        ([196, 196, 2], [0, 0, 1], [196, 196, 2], [1, 1, 1]),
+        ([1, 23, 40], [0, 0, 39], [1, 23, 40], [1, 1, 1]),
+    ),
+)
+@pytest.mark.parametrize(
+    "layout",
+    (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+)
+@pytest.mark.parametrize(
+    "input_memory_config",
+    (ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+)
+def test_slice_adversarial_flexible(
+    input_shape, input_start, input_ends, input_stride, layout, input_memory_config, device
+):
+    if layout == ttnn.TILE_LAYOUT:
+        torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+        ttnn_input = ttnn.from_torch(
+            torch_input, device=device, dtype=ttnn.bfloat16, memory_config=input_memory_config, layout=layout
+        )
+    else:
+        torch_input = torch.randn(input_shape, dtype=torch.float32)
+        ttnn_input = ttnn.from_torch(
+            torch_input, device=device, dtype=ttnn.bfloat16, memory_config=input_memory_config, layout=layout
+        )
+
+    if len(input_shape) == 5:
+        torch_output = torch_input[
+            input_start[0] : input_ends[0] : input_stride[0],
+            input_start[1] : input_ends[1] : input_stride[1],
+            input_start[2] : input_ends[2] : input_stride[2],
+            input_start[3] : input_ends[3] : input_stride[3],
+            input_start[4] : input_ends[4] : input_stride[4],
+        ]
+        ttnn_output = ttnn_input[
+            input_start[0] : input_ends[0] : input_stride[0],
+            input_start[1] : input_ends[1] : input_stride[1],
+            input_start[2] : input_ends[2] : input_stride[2],
+            input_start[3] : input_ends[3] : input_stride[3],
+            input_start[4] : input_ends[4] : input_stride[4],
+        ]
+    elif len(input_shape) == 4:
+        torch_output = torch_input[
+            input_start[0] : input_ends[0] : input_stride[0],
+            input_start[1] : input_ends[1] : input_stride[1],
+            input_start[2] : input_ends[2] : input_stride[2],
+            input_start[3] : input_ends[3] : input_stride[3],
+        ]
+        ttnn_output = ttnn_input[
+            input_start[0] : input_ends[0] : input_stride[0],
+            input_start[1] : input_ends[1] : input_stride[1],
+            input_start[2] : input_ends[2] : input_stride[2],
+            input_start[3] : input_ends[3] : input_stride[3],
+        ]
+    elif len(input_shape) == 3:
+        torch_output = torch_input[
+            input_start[0] : input_ends[0] : input_stride[0],
+            input_start[1] : input_ends[1] : input_stride[1],
+            input_start[2] : input_ends[2] : input_stride[2],
+        ]
+        ttnn_output = ttnn_input[
+            input_start[0] : input_ends[0] : input_stride[0],
+            input_start[1] : input_ends[1] : input_stride[1],
+            input_start[2] : input_ends[2] : input_stride[2],
+        ]
+    elif len(input_shape) == 2:
+        torch_output = torch_input[input_start[0] : input_ends[0], input_start[1] : input_ends[1]]
+        ttnn_output = ttnn_input[input_start[0] : input_ends[0], input_start[1] : input_ends[1]]
+    elif len(input_shape) == 1:
+        torch_output = torch_input[input_start[0] : input_ends[0]]
+        ttnn_output = ttnn_input[input_start[0] : input_ends[0]]
+
+    ttnn_output = ttnn.to_torch(ttnn_output)
+    assert_with_pcc(torch_output, ttnn_output, 0.99)
 
 
 @pytest.mark.parametrize(
@@ -791,6 +864,8 @@ def test_slice_adversarial(input_shape, dim, start, end, step, layout, device):
             1,
             ttnn.ROW_MAJOR_LAYOUT,
         ),  # An unpadding slice operations for a RowMajor layout on the output tensor requires the last dimension to be on a 32 bit boundary
+        ([1, 7], 0, 0, -1, 1, ttnn.ROW_MAJOR_LAYOUT),  # page size must equal buffer size
+        ([1, 8, 2, 2], 2, -1, -1, 1, ttnn.TILE_LAYOUT),  # Buffer size and page size should be larger than 0 bytes
     ),
 )
 def test_slice_adversarial_fixed(input_shape, dim, start, end, step, layout, device):
@@ -808,7 +883,75 @@ def test_slice_adversarial_fixed(input_shape, dim, start, end, step, layout, dev
 
     ttnn_tensor = ttnn.from_torch(torch_input, device=device, layout=layout, dtype=ttnn.bfloat16)
     ttnn_output = ttnn_tensor[indices]
-
     ttnn_output_tensor = ttnn.to_torch(ttnn_output)
 
     assert_with_pcc(torch_output_tensor, ttnn_output_tensor, 0.999)
+
+
+@pytest.mark.parametrize(
+    "input_shape",
+    ([8, 8, 8, 33, 33],),
+)
+@pytest.mark.parametrize(
+    "layout",
+    (ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT),
+)
+@pytest.mark.parametrize(
+    "input_memory_config",
+    (ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+)
+@pytest.mark.parametrize(
+    "indices",
+    (
+        [0, 0, 0, slice(0, 33, 1), slice(0, 33, 1)],
+        [1, -1, 2, slice(0, 33, 1), slice(0, 33, 1)],
+        [slice(0, 8, 1), slice(0, 8, 1), slice(0, 8, 1), 2, 2],
+    ),
+)
+def test_slice_index(device, input_shape, layout, input_memory_config, indices):
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+    ttnn_input = ttnn.from_torch(
+        torch_input, device=device, dtype=ttnn.bfloat16, memory_config=input_memory_config, layout=layout
+    )
+
+    torch_output = torch_input[
+        indices[0],
+        indices[1],
+        indices[2],
+        indices[3],
+        indices[4],
+    ]
+
+    ttnn_output = ttnn_input[
+        indices[0],
+        indices[1],
+        indices[2],
+        indices[3],
+        indices[4],
+    ]
+
+    ttnn_output = ttnn.to_torch(ttnn_output)
+
+    assert_with_pcc(torch_output, ttnn_output, 0.99)
+
+
+TERMINAL_TEST_SHAPE = (2, 4, 1, 3, 7, 5)
+
+
+@pytest.mark.parametrize(
+    "input_memory_config",
+    (ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+)
+def test_slice_tiled_terminal(device, input_memory_config):
+    """Test the situation where the logical H,W is smaller than the tile size"""
+
+    torch_input = torch.randn(TERMINAL_TEST_SHAPE, dtype=torch.bfloat16)
+    torch_output = torch_input[:, :, :, :, TERMINAL_TEST_SHAPE[-2] - 1, TERMINAL_TEST_SHAPE[-1] - 1]
+
+    ttnn_input = ttnn.from_torch(
+        torch_input, device=device, dtype=ttnn.bfloat16, memory_config=input_memory_config, layout=ttnn.TILE_LAYOUT
+    )
+
+    ttnn_output = ttnn.to_torch(ttnn_input[:, :, :, :, TERMINAL_TEST_SHAPE[-2] - 1, TERMINAL_TEST_SHAPE[-1] - 1])
+
+    assert_with_pcc(torch_output, ttnn_output, 0.99)
