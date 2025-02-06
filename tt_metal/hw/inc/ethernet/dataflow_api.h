@@ -215,6 +215,12 @@ void eth_send_bytes_over_channel_payload_only_unsafe(
     }
 }
 
+FORCE_INLINE
+void eth_send_bytes_over_channel_payload_only_unsafe_one_packet(
+    uint32_t src_addr, uint32_t dst_addr, uint32_t num_bytes) {
+    internal_::eth_send_packet_bytes_unsafe(0, src_addr, dst_addr, num_bytes);
+}
+
 /*
  * Sends the write completion signal to the receiver ethernet core, for transfers where the payload was already sent.
  * The second half of a full ethernet send.
