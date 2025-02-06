@@ -59,23 +59,18 @@ Tensor BinaryNg<binary_op_type>::invoke(
     } else {
         Tensor input_a = typecast_to(DataType::BFLOAT16, input_tensor_a);
         Tensor input_b = typecast_to(DataType::BFLOAT16, input_tensor_b);
-        const auto output_tensor = output_preallocated and typecast_out
-                                       ? ttnn::typecast(*optional_output_tensor, DataType::BFLOAT16)
-                                       : optional_output_tensor;
 
-        Tensor result = ttnn::prim::binary_ng(
+        return ttnn::prim::binary_ng(
             queue_id,
             input_a,
             input_b,
             binary_op_type,
-            input_a.get_dtype(),
+            out_dtype,
             input_a.memory_config(),
-            output_tensor,
+            optional_output_tensor,
             lhs_activations,
             rhs_activations,
             post_activations);
-
-        return typecast_out ? ttnn::typecast(result, out_dtype, std::nullopt, optional_output_tensor) : result;
     }
 }
 
@@ -141,23 +136,18 @@ Tensor BinaryNg<binary_op_type>::invoke(
             post_activations);
     } else {
         Tensor input_a = typecast_to(DataType::BFLOAT16, input_tensor_a);
-        const auto output_tensor = output_preallocated and typecast_out
-                                       ? ttnn::typecast(*optional_output_tensor, DataType::BFLOAT16)
-                                       : optional_output_tensor;
 
-        Tensor result = ttnn::prim::binary_ng(
+        return ttnn::prim::binary_ng(
             queue_id,
             input_a,
             scalar,
             binary_op_type,
-            input_a.get_dtype(),
+            out_dtype,
             input_a.memory_config(),
-            output_tensor,
+            optional_output_tensor,
             lhs_activations,
             rhs_activations,
             post_activations);
-
-        return typecast_out ? ttnn::typecast(result, out_dtype, std::nullopt, optional_output_tensor) : result;
     }
 }
 
