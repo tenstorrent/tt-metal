@@ -511,9 +511,10 @@ std::tuple<mesh_id_t, chip_id_t, chan_id_t> ControlPlane::get_connected_mesh_chi
     mesh_id_t mesh_id, chip_id_t chip_id, chan_id_t chan_id) const {
     // TODO: simplify this and maybe have this functionality in ControlPlane
     auto physical_chip_id = logical_mesh_chip_id_to_physical_chip_id_mapping_[mesh_id][chip_id];
-    auto eth_core = tt::Cluster::instance().get_soc_desc(physical_chip_id).chan_to_logical_eth_core_map.at(chan_id);
-    auto [connected_physical_chip_id, connected_eth_core] =
-        tt::Cluster::instance().get_connected_ethernet_core(std::make_tuple(physical_chip_id, eth_core));
+    tt::umd::CoreCoord eth_core =
+        tt::Cluster::instance().get_soc_desc(physical_chip_id).get_eth_core_for_channel(chan_id, CoordSystem::LOGICAL);
+    auto [connected_physical_chip_id, connected_eth_core] = tt::Cluster::instance().get_connected_ethernet_core(
+        std::make_tuple(physical_chip_id, CoreCoord{eth_core.x, eth_core.y}));
 
     auto [connected_mesh_id, connected_chip_id] =
         this->get_mesh_chip_id_from_physical_chip_id(connected_physical_chip_id);
