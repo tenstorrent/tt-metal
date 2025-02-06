@@ -24,8 +24,9 @@ uint32_t get_sharding_core_count(const tt::tt_metal::Tensor& t) {
     return core_count;
 }
 
-std::vector<CoreCoord> get_vector_of_shard_cores(const tt::tt_metal::IDevice* device, const tt::tt_metal::Tensor& t) {
+std::vector<CoreCoord> get_shard_cores(const tt::tt_metal::Tensor& t) {
     std::vector<CoreCoord> coordinates;
+    const tt::tt_metal::IDevice* device = t.device();
     struct ShardSpec shard_spec = t.shard_spec().value();
     const auto core_ranges = t.buffer()->shard_spec().grid().ranges();
     bool shard_grid_transposed =
@@ -69,8 +70,9 @@ std::vector<CoreCoord> get_vector_of_shard_cores(const tt::tt_metal::IDevice* de
     return coordinates;
 }
 
-std::vector<uint32_t> get_linear_shard_list(const tt::tt_metal::IDevice* device, const tt::tt_metal::Tensor& t) {
+std::vector<uint32_t> get_linear_shard_list(const tt::tt_metal::Tensor& t) {
     std::vector<uint32_t> args;
+    const tt::tt_metal::IDevice* device = t.device();
     struct ShardSpec shard_spec = t.shard_spec().value();
     const auto core_ranges = t.buffer()->shard_spec().grid().ranges();
     bool shard_grid_transposed =
@@ -129,13 +131,14 @@ std::vector<uint32_t> get_linear_shard_list(const tt::tt_metal::IDevice* device,
     return args;
 }
 
-void add_sharding_rt_to_existing_rt(const IDevice* d, const tt::tt_metal::Tensor& t, std::vector<uint32_t>& args) {
-    const auto& new_args = get_linear_shard_list(d, t);
+void extend_sharding_run_time_args(const tt::tt_metal::Tensor& t, std::vector<uint32_t>& args) {
+    const auto& new_args = get_linear_shard_list(t);
     std::copy(std::begin(new_args), std::end(new_args), std::back_inserter(args));
 }
 
-std::vector<uint32_t> sharding_ct_table_builder(const tt::tt_metal::IDevice* device, const tt::tt_metal::Tensor& t) {
+std::vector<uint32_t> sharding_ct_table_builder(const tt::tt_metal::Tensor& t) {
     std::vector<uint32_t> args;
+    const tt::tt_metal::IDevice* device = t.device();
     TT_ASSERT(t.is_sharded());
     TT_FATAL(
         t.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED ||
@@ -168,8 +171,8 @@ std::vector<uint32_t> sharding_ct_table_builder(const tt::tt_metal::IDevice* dev
     return args;
 }
 
-void add_sharding_ct_to_existing_ct(const IDevice* d, const tt::tt_metal::Tensor& t, std::vector<uint32_t>& args) {
-    const auto& new_args = sharding_ct_table_builder(d, t);
+void extend_sharding_compile_time_args(const tt::tt_metal::Tensor& t, std::vector<uint32_t>& args) {
+    const auto& new_args = sharding_ct_table_builder(t);
     std::copy(std::begin(new_args), std::end(new_args), std::back_inserter(args));
 }
 
