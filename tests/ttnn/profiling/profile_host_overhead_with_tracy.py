@@ -118,7 +118,11 @@ def profile_host_overhead(output_directory, output_csv, op_to_profile=""):
         logger.info(f"Analyzing {file}")
 
         # Read the csv file
-        df = pd.read_csv(file)
+        try:
+            df = pd.read_csv(file)
+        except Exception as e:
+            print(e)
+            continue
 
         # Iterate over the rows in the final dataframe
         for index, row in final_df.iterrows():
