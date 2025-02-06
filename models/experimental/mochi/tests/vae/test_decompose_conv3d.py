@@ -7,6 +7,106 @@ from loguru import logger
 from models.experimental.mochi.common import compute_metrics
 
 
+def conv3d_memory_and_flops(
+    batch_size: int,
+    in_channels: int,
+    in_depth: int,
+    in_height: int,
+    in_width: int,
+    out_channels: int,
+    kernel_size,
+    stride=1,
+    padding=0,
+    dilation=1,
+    groups=1,
+    bias=True,
+):
+    """
+    Calculate:
+      1) Number of elements to store the input (input memory usage)
+      2) Number of elements to store the kernel (kernel memory usage)
+      3) Number of FLOPs for a forward pass of this 3D convolution layer
+
+    Arguments match those of torch.nn.Conv3d (with the addition of batch_size
+    and input spatial dimensions), i.e.:
+      - in_channels, out_channels
+      - kernel_size (int or tuple of 3 ints)
+      - stride (int or tuple of 3 ints)
+      - padding (int or tuple of 3 ints)
+      - dilation (int or tuple of 3 ints)
+      - groups
+      - bias (bool)
+    """
+    import math
+
+    # Helper to handle int or tuple for 3D args
+    def _triple(x):
+        if isinstance(x, int):
+            return (x, x, x)
+        return x
+
+    k_d, k_h, k_w = _triple(kernel_size)
+    s_d, s_h, s_w = _triple(stride)
+    p_d, p_h, p_w = _triple(padding)
+    d_d, d_h, d_w = _triple(dilation)
+
+    # 1) Compute output spatial dimensions (using the standard PyTorch formula)
+    #    out_dim = floor((in_dim + 2*pad - dilation*(kernel_size-1) - 1)/stride + 1)
+    def out_size(in_size, k, s, p, d):
+        return (in_size + 2 * p - d * (k - 1) - 1) // s + 1
+
+    out_depth = out_size(in_depth, k_d, s_d, p_d, d_d)
+    out_height = out_size(in_height, k_h, s_h, p_h, d_h)
+    out_width = out_size(in_width, k_w, s_w, p_w, d_w)
+
+    # 2) Memory for the input (in elements):
+    #    We store (batch_size * in_channels * in_depth * in_height * in_width)
+    input_memory = batch_size * in_channels * in_depth * in_height * in_width
+
+    # 3) Memory for the kernel (in elements):
+    #    Weights shape: (out_channels, in_channels/groups, k_d, k_h, k_w)
+    #    + bias if bias=True (out_channels elements)
+    kernel_elems_per_out_channel = (in_channels // groups) * k_d * k_h * k_w
+    kernel_memory = out_channels * kernel_elems_per_out_channel
+    if bias:
+        kernel_memory += out_channels  # each output channel has one bias term
+
+    # 4) FLOPs for the forward pass:
+    #    For each output element, the convolution does:
+    #       (in_channels/groups * k_d * k_h * k_w) multiply-accumulates.
+    #    Count each multiply-add as 2 FLOPs.
+    #    Number of output elements = (batch_size * out_channels * out_depth * out_height * out_width)
+    output_elements = batch_size * out_channels * out_depth * out_height * out_width
+    macs_per_output = (in_channels // groups) * k_d * k_h * k_w
+    flops = output_elements * macs_per_output * 2
+
+    return input_memory, kernel_memory, flops
+
+
+if __name__ == "__main__":
+    # Example usage:
+    b = 2
+    ic = 16
+    id_ = 32
+    ih = 64
+    iw = 64
+    oc = 32
+    ksize = (3, 3, 3)
+    stride = 2
+    padding = 1
+    dilation = 1
+    groups = 1
+    bias = True
+
+    inp_mem, ker_mem, total_flops = conv3d_memory_and_flops(
+        b, ic, id_, ih, iw, oc, ksize, stride, padding, dilation, groups, bias
+    )
+
+    print("Input Memory (elements):", inp_mem)
+    print("Kernel Memory (elements):", ker_mem)
+    print("FLOPs:", total_flops)
+
+
 def decomposed_conv3d_torch(input, conv3d_module):
     """
     A decomposed conv3d that computes the 3D convolution by iterating
@@ -173,7 +273,7 @@ def decomposed_conv3d_tt(device, input, conv3d_module):
     tt_weights = [ttnn.from_torch(weight[:, :, t, :, :], dtype=ttnn.bfloat16) for t in range(kD)]
     if bias is not None:
         tt_bias = ttnn.from_torch(
-            bias.reshape(1, 1, 1, -1), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+            bias.reshape(1, 1, 1, -1), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT
         )  # Applied at the end
 
     # Compute effective kernel sizes and output dimensions.
@@ -220,16 +320,26 @@ def decomposed_conv3d_tt(device, input, conv3d_module):
             )
             # out2d has shape: [N, out_channels, H_out, W_out]
             if t == 0:
-                out_slice = out2d
+                out_slice = ttnn.typecast(out2d, ttnn.float32)
             else:
-                out_slice = out_slice + out2d
+                out_slice = out_slice + ttnn.typecast(out2d, ttnn.float32)
 
         # Save the accumulated result into the output tensor at depth index d.
         out_tensors.append(out_slice)
 
-    output = ttnn.concat(out_tensors, dim=1)
+    # TODO: Optimize concat
+    # Concat can't handle large lists of tensors. Batch up concats on dim1
+    batched_outputs = []
+    for i in range(0, len(out_tensors), 32):
+        batched_outputs.append(ttnn.concat(out_tensors[i : i + 32], dim=1))
+        for used_tensor in out_tensors[i : i + 32]:
+            ttnn.deallocate(used_tensor)
+    output = ttnn.concat(batched_outputs, dim=1)
+
     if bias is not None:
-        output = output + tt_bias
+        # inplace add to avoid OOM
+        ttnn.add(output, tt_bias, output_tensor=output)
+        # output = output + tt_bias
 
     tt_output_tensor = ttnn.from_device(output)
     torch_output_tensor = ttnn.to_torch(tt_output_tensor)
@@ -260,6 +370,30 @@ def test_decomposed_conv3d_tt(
 
     # Define input dimensions.
     N, C, D, H, W = input_shape
+
+    input_datums, kernel_datums, conv_flops = conv3d_memory_and_flops(
+        *input_shape, out_channels, kernel_size, stride, padding
+    )
+    bytes_per_datum = 2
+    input_memory = input_datums * bytes_per_datum
+    kernel_memory = kernel_datums * bytes_per_datum
+
+    def format_memory(bytes):
+        if bytes < 1024 * 1024:  # Less than 1MB
+            return f"{bytes/1024:.2f} KB"
+        elif bytes < 1024 * 1024 * 1024:  # Less than 1GB
+            return f"{bytes/(1024*1024):.2f} MB"
+        else:
+            return f"{bytes/(1024*1024*1024):.2f} GB"
+
+    print(
+        f"Input memory: {format_memory(input_memory)}, kernel memory: {format_memory(kernel_memory)}, flops: {conv_flops/1e9:.2f} GFLOPS"
+    )
+    mem_bw = 200  # GB/s
+    chip_flops = 4096 // 2 * 64 * 1e9 / 1e12  # HiFi2 TFlops
+    print(f"Memory-bound time: {(input_memory + kernel_memory) / 1e9 / mem_bw} seconds")
+    print(f"FLOPS-bound time: {conv_flops / 1e12 / chip_flops} seconds")
+    return
 
     # Create a random input tensor.
     input_tensor = torch.randn(N, C, D, H, W, dtype=torch.float32)
