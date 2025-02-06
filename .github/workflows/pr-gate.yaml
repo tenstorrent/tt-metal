@@ -33,7 +33,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-artifact:
+  pr-gate-build:
+    name: Build
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     uses: ./.github/workflows/build-artifact.yaml
     with:
