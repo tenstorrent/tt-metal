@@ -207,7 +207,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: packages
-          path: /work/build/*.{deb,ddeb}
+          path: |
+            /work/build/*.deb
+            /work/build/*.ddeb
           if-no-files-found: error
 
       - name: ☁️ Upload wheel
