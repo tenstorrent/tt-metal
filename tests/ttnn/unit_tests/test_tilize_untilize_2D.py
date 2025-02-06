@@ -77,8 +77,8 @@ def test_untilize_with_unpadding_2D(device, in_dtype, use_multicore, use_pack_un
 @pytest.mark.parametrize("in_dtype", [ttnn.bfloat16, ttnn.float32])
 @pytest.mark.parametrize("use_multicore", [False, True])
 @pytest.mark.parametrize("pad_value", [2, 1.3])
-@pytest.mark.parametrize("H", [32, 43])
-@pytest.mark.parametrize("W", [64, 76])
+@pytest.mark.parametrize("H", [36, 43])
+@pytest.mark.parametrize("W", [120, 97])
 def test_tilize_with_val_padding_2D(device, in_dtype, use_multicore, H, W, pad_value):
     torch_input_shape = [H, W]
 

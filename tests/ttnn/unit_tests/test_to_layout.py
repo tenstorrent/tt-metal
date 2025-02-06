@@ -339,3 +339,19 @@ def test_untilize_w4(shape, input_layout, output_layout, device):
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(input_a[:, :, :1, :10912], output_tensor)
+
+
+@pytest.mark.parametrize(
+    "shape", [[1, 1, 2, 1536], [1, 1, 1, 4608], [1, 1, 1, 13824], [3, 76, 9978], [1, 1, 120, 7300], [1, 1, 100, 7104]]
+)
+@pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT])
+@pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT])
+def test_tilize_perf(shape, input_layout, output_layout, device):
+    torch.manual_seed(2005)
+
+    input_a = torch.rand(shape, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(input_a, device=device, layout=input_layout, dtype=ttnn.bfloat16)
+    output_tensor = ttnn.to_layout(input_tensor, output_layout)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(input_a, output_tensor)
