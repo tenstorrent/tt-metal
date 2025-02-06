@@ -10,7 +10,7 @@ target_link_libraries(
         nlohmann_json::nlohmann_json
         magic_enum
         fmt::fmt-header-only
-        span
+        boost
 )
 
 if(TT_METAL_BUILD_TESTS)

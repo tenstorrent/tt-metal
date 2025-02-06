@@ -5,7 +5,7 @@
 #include <exception>
 #include "gtest/gtest.h"
 
-#include "ttnn/tensor/shape/shape_base.hpp"
+#include <tt-metalium/shape_base.hpp>
 
 TEST(TensorShapeBaseTests, General4D) {
     tt::tt_metal::ShapeBase vec({20, 30, 40, 50});

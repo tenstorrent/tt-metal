@@ -13,6 +13,7 @@
 
 namespace tt::tt_metal {
 
+// Simplified 2D shape for cases that fundamentally require 2 dimensions (e.g. core grid).
 class Shape2D final {
 public:
     Shape2D(std::size_t height, std::size_t width);
