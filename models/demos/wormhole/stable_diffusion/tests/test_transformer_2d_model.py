@@ -17,7 +17,7 @@ from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_p
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_transformer_2d_new_conv import transformer_2d_model
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
     pre_process_input,
-    post_process_output,
+    post_process_output_and_move_to_host,
 )
 
 
@@ -117,7 +117,7 @@ def test_transformer_2d_model_512x512(
     model = transformer_2d_model(
         device, parameters, input_shape[0], input_shape[2], input_shape[3], compute_kernel_config
     )
-    ttnn_hidden_state = pre_process_input(model.device, ttnn_hidden_state)
+    ttnn_hidden_state = pre_process_input(ttnn_hidden_state)
     ttnn_hidden_state = ttnn.reshape(
         ttnn_hidden_state,
         (
@@ -147,14 +147,12 @@ def test_transformer_2d_model_512x512(
         upcast_attention=upcast_attention,
     )
 
-    output = post_process_output(
-        model.device,
+    ttnn_output_torch = post_process_output_and_move_to_host(
         output,
         model.batch_size,
         model.input_height,
         model.input_width,
         model.proj_out_out_channels,
     )
-    ttnn_output_torch = ttnn.to_torch(ttnn.to_layout(ttnn.from_device(output), layout=ttnn.ROW_MAJOR_LAYOUT))
 
     assert_with_pcc(torch_output, ttnn_output_torch, 0.99)
