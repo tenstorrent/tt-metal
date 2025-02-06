@@ -199,6 +199,13 @@ jobs:
           ccache -s >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
 
+      - name: ☁️ Upload packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: packages
+          path: /work/build/*.{deb,ddeb}
+          if-no-files-found: error
+
       - name: ☁️ Upload wheel
         if: ${{ inputs.build-wheel }}
         uses: actions/upload-artifact@v4
