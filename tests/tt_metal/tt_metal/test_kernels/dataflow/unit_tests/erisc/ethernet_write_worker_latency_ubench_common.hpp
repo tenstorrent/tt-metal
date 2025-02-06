@@ -121,9 +121,10 @@ FORCE_INLINE void check_receiver_done(
     uint32_t& read_ptr,
     uint32_t& num_messages_ack) {
     if (has_receiver_ack(buffer_slot_sync_addrs[read_ptr])) {
-        read_ptr = advance_buffer_slot_ptr(read_ptr);
+        uint32_t next_read_ptr = advance_buffer_slot_ptr(read_ptr);
 
         buffer_slot_sync_addrs[read_ptr]->bytes_sent = 1;
+        read_ptr = next_read_ptr;
         num_messages_ack++;
     }
 }
@@ -238,6 +239,7 @@ FORCE_INLINE void check_write_worker_done_and_send_ack(
 #else
     if (buffer_not_empty) {
 #endif
+        // DPRINT << "read_ptr " << read_ptr <<ENDL();
         ack_complete(buffer_slot_sync_addrs[read_ptr]);
 
         read_ptr = advance_buffer_slot_ptr(read_ptr);

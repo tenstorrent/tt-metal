@@ -90,9 +90,13 @@ def run_erisc_write_worker(
     os.system(f"rm -rf {os.environ['TT_METAL_HOME']}/generated/profiler/.logs/profile_log_device.csv")
 
     sample_size = sample_size_expected_latency[0]
-    expected_latency = sample_size_expected_latency[1]
-    expected_latency_lower_bound = expected_latency - 0.5
-    expected_latency_upper_bound = expected_latency + 0.5
+    expected_latency_or_bw = sample_size_expected_latency[1]
+    if test_latency != 1:
+        expected_latency_or_bw_lower_bound = expected_latency_or_bw - 0.1
+        expected_latency_or_bw_upper_bound = expected_latency_or_bw + 0.1
+    else:
+        expected_latency_or_bw_lower_bound = expected_latency_or_bw - 10.0
+        expected_latency_or_bw_upper_bound = expected_latency_or_bw + 10.0
 
     ARCH_NAME = os.getenv("ARCH_NAME")
     cmd = f"TT_METAL_DEVICE_PROFILER=1 \
@@ -115,4 +119,4 @@ def run_erisc_write_worker(
     if test_latency != 1:
         logger.info(f"sender_loop_bw {sample_size / main_loop_latency}")
 
-    assert expected_latency_lower_bound <= main_loop_latency <= expected_latency_upper_bound
+    assert expected_latency_or_bw_lower_bound <= main_loop_latency <= expected_latency_or_bw_upper_bound

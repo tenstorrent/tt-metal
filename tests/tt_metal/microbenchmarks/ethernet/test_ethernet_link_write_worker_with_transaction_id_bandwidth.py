@@ -34,8 +34,8 @@ if os.path.exists(FILE_NAME):
 @pytest.mark.parametrize("test_latency", [0])
 @pytest.mark.parametrize("enable_worker", [1])
 @pytest.mark.parametrize(
-    "sample_size_expected_latency",
-    [(16, 97.2), (128, 97.2), (256, 98.0), (512, 98.0), (1024, 99.0), (2048, 173.0), (4096, 340.0), (8192, 678.5)],
+    "sample_size_expected_bw",
+    [(16, 0.21), (128, 1.72), (256, 3.44), (512, 6.89), (1024, 11.73), (2048, 11.83), (4096, 12.04), (8192, 12.07)],
 )
 def test_erisc_write_worker_bw_uni_dir(
     sample_count, sample_size_expected_latency, channel_count, num_directions, enable_worker, test_latency
@@ -60,7 +60,7 @@ def test_erisc_write_worker_bw_uni_dir(
 @pytest.mark.parametrize("enable_worker", [1])
 @pytest.mark.parametrize(
     "sample_size_expected_latency",
-    [(16, 148.0), (128, 148.0), (256, 148.7), (512, 148.8), (1024, 149.2), (2048, 178.2), (4096, 344.2)],
+    [(16, 0.13), (128, 1.03), (256, 2.08), (512, 4.15), (1024, 8.31), (2048, 11.40), (4096, 11.82)],
 )
 def test_erisc_write_worker_bw_bi_dir(
     sample_count, sample_size_expected_latency, channel_count, num_directions, test_latency, enable_worker
@@ -85,7 +85,7 @@ def test_erisc_write_worker_bw_bi_dir(
 @pytest.mark.parametrize("enable_worker", [0])
 @pytest.mark.parametrize(
     "sample_size_expected_latency",
-    [(16, 97.2), (128, 97.2), (256, 98.0), (512, 98.0), (1024, 99.0), (2048, 173.0), (4096, 340.0), (8192, 678.5)],
+    [(16, 0.28), (128, 2.25), (256, 4.39), (512, 8.35), (1024, 11.74), (2048, 11.84), (4096, 12.04), (8192, 12.07)],
 )
 def test_erisc_bw_uni_dir(
     sample_count, sample_size_expected_latency, channel_count, num_directions, test_latency, enable_worker
@@ -110,7 +110,7 @@ def test_erisc_bw_uni_dir(
 @pytest.mark.parametrize("enable_worker", [0])
 @pytest.mark.parametrize(
     "sample_size_expected_latency",
-    [(16, 148.0), (128, 148.0), (256, 148.7), (512, 148.8), (1024, 149.2), (2048, 178.2), (4096, 344.2)],
+    [(16, 0.19), (128, 1.59), (256, 3.19), (512, 6.39), (1024, 10.9), (2048, 11.4), (4096, 11.82)],
 )
 def test_erisc_bw_bi_dir(
     sample_count, sample_size_expected_latency, channel_count, num_directions, test_latency, enable_worker

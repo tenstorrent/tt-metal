@@ -35,7 +35,16 @@ if os.path.exists(FILE_NAME):
 @pytest.mark.parametrize("enable_worker", [1])
 @pytest.mark.parametrize(
     "sample_size_expected_latency",
-    [(16, 97.2), (128, 97.2), (256, 98.0), (512, 98.0), (1024, 99.0), (2048, 173.0), (4096, 340.0), (8192, 678.5)],
+    [
+        (16, 984.0),
+        (128, 1002.0),
+        (256, 1019.0),
+        (512, 1074.0),
+        (1024, 1164.0),
+        (2048, 1308.0),
+        (4096, 1560.0),
+        (8192, 2048.0),
+    ],
 )
 def test_erisc_write_worker_latency_uni_dir(
     sample_count, sample_size_expected_latency, channel_count, num_directions, test_latency, enable_worker
@@ -60,7 +69,7 @@ def test_erisc_write_worker_latency_uni_dir(
 @pytest.mark.parametrize("enable_worker", [1])
 @pytest.mark.parametrize(
     "sample_size_expected_latency",
-    [(16, 148.0), (128, 148.0), (256, 148.7), (512, 148.8), (1024, 149.2), (2048, 178.2), (4096, 344.2)],
+    [(16, 1077.0), (128, 1079.0), (256, 1077.0), (512, 1175.0), (1024, 1231.0), (2048, 1389.0), (4096, 1596.0)],
 )
 def test_erisc_write_worker_latency_bi_dir(
     sample_count, sample_size_expected_latency, channel_count, num_directions, enable_worker, test_latency
@@ -85,7 +94,16 @@ def test_erisc_write_worker_latency_bi_dir(
 @pytest.mark.parametrize("enable_worker", [0])
 @pytest.mark.parametrize(
     "sample_size_expected_latency",
-    [(16, 97.2), (128, 97.2), (256, 98.0), (512, 98.0), (1024, 99.0), (2048, 173.0), (4096, 340.0), (8192, 678.5)],
+    [
+        (16, 894.0),
+        (128, 911.0),
+        (256, 966.0),
+        (512, 984.0),
+        (1024, 1074.0),
+        (2048, 1200.0),
+        (4096, 1362.0),
+        (8192, 1686.0),
+    ],
 )
 def test_erisc_latency_uni_dir(
     sample_count, sample_size_expected_latency, channel_count, num_directions, test_latency, enable_worker
@@ -110,7 +128,7 @@ def test_erisc_latency_uni_dir(
 @pytest.mark.parametrize("enable_worker", [0])
 @pytest.mark.parametrize(
     "sample_size_expected_latency",
-    [(16, 148.0), (128, 148.0), (256, 148.7), (512, 148.8), (1024, 149.2), (2048, 178.2), (4096, 344.2)],
+    [(16, 918.0), (128, 919.0), (256, 952.0), (512, 988.0), (1024, 1122.0), (2048, 1224.0), (4096, 1394.0)],
 )
 def test_erisc_latency_bi_dir(
     sample_count, sample_size_expected_latency, channel_count, num_directions, enable_worker, test_latency
