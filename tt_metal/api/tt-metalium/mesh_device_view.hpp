@@ -21,16 +21,6 @@ namespace tt::tt_metal::distributed {
 // Forward declaration of MeshDevice
 class MeshDevice;
 
-// TODO (Issue #17477): MeshWorkload and MeshEvent currently rely on the coordinate systems
-// exposed below. These must be uplifted to an ND coordinate system (DeviceCoord and DeviceRange),
-// keeping things more consistent  across the stack.
-// For now, since the LogicalDeviceRange concept is fundamentally identical to the CoreRange concept
-// on a 2D Mesh use this definition. CoreRange contains several utility functions required
-// in the MeshWorkload context.
-
-using DeviceCoord = CoreCoord;
-using LogicalDeviceRange = CoreRange;
-
 /**
  * @brief The MeshDeviceView class provides a view of a specific sub-region within the MeshDevice.
  *

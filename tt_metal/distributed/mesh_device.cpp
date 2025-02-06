@@ -584,18 +584,40 @@ void MeshDevice::release_trace(const uint32_t tid) {
         device->release_trace(tid);
     }
 }
+
+std::shared_ptr<MeshTraceBuffer>& MeshDevice::create_mesh_trace(const MeshTraceId& trace_id) {
+    auto [trace, emplaced] = trace_buffer_pool_.emplace(trace_id, MeshTrace::create_empty_mesh_trace_buffer());
+    TT_FATAL(emplaced, "Trace buffer with tid {} already exists", *trace_id);
+    return trace->second;
+}
+
+void MeshDevice::release_mesh_trace(const MeshTraceId& trace_id) { trace_buffer_pool_.erase(trace_id); }
+
+std::shared_ptr<MeshTraceBuffer> MeshDevice::get_mesh_trace(const MeshTraceId& trace_id) {
+    auto trace = trace_buffer_pool_.find(trace_id);
+    if (trace != trace_buffer_pool_.end()) {
+        return trace->second;
+    }
+    TT_THROW("Trace Instance with ID {} is not initialized", *trace_id);
+}
+
+void MeshDevice::begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) {
+    auto& mesh_trace_buffer = this->create_mesh_trace(trace_id);
+    mesh_command_queues_[cq_id]->record_begin(trace_id, mesh_trace_buffer->desc);
+}
+
+void MeshDevice::end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) {
+    auto trace_buffer = this->get_mesh_trace(trace_id);
+    mesh_command_queues_[cq_id]->record_end();
+    MeshTrace::populate_mesh_buffer(*(mesh_command_queues_[cq_id]), trace_buffer);
+}
+
 std::shared_ptr<TraceBuffer> MeshDevice::get_trace(uint32_t tid) {
     TT_THROW("get_trace() is not supported on MeshDevice - use individual devices instead");
     return reference_device()->get_trace(tid);
 }
-uint32_t MeshDevice::get_trace_buffers_size() const {
-    TT_THROW("get_trace_buffers_size() is not supported on MeshDevice - use individual devices instead");
-    return reference_device()->get_trace_buffers_size();
-}
-void MeshDevice::set_trace_buffers_size(uint32_t size) {
-    TT_THROW("set_trace_buffers_size() is not supported on MeshDevice - use individual devices instead");
-    reference_device()->set_trace_buffers_size(size);
-}
+uint32_t MeshDevice::get_trace_buffers_size() const { return trace_buffers_size_; }
+void MeshDevice::set_trace_buffers_size(uint32_t size) { trace_buffers_size_ = size; }
 
 // Light Metal
 void MeshDevice::load_trace(const uint8_t cq_id, const uint32_t trace_id, const TraceDescriptor& trace_desc) {
