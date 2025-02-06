@@ -50,6 +50,9 @@ bool bidirectional_traffic;
 // benchmark test mode
 bool benchmark_mode;
 
+// use 16 byte lean header
+bool lean_header;
+
 uint32_t tx_signal_address;
 uint32_t host_signal_address;
 

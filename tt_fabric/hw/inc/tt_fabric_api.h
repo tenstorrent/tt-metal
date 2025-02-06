@@ -15,6 +15,7 @@ using namespace tt::tt_fabric;
 
 extern volatile local_pull_request_t* local_pull_request;
 extern volatile fabric_client_interface_t* client_interface;
+extern fabric_client_push_interface_t client_push_interface;
 
 #define ASYNC_WR_ALL 1
 #define ASYNC_WR_ADD_PR 2
@@ -31,6 +32,29 @@ inline uint32_t get_next_hop_router_noc_xy(uint32_t routing_plane, uint32_t dst_
         uint32_t next_port = routing_table[routing_plane].intra_mesh_table.dest_entry[dst_dev_id];
         return eth_chan_to_noc_xy[noc_index][next_port];
     }
+}
+
+inline uint32_t get_next_hop_router_direction(uint32_t routing_plane, uint32_t dst_mesh_id, uint32_t dst_dev_id) {
+    ASSERT(routing_plane < client_interface->num_routing_planes);
+    fabric_router_l1_config_t* routing_table = (fabric_router_l1_config_t*)client_interface->routing_tables_l1_offset;
+    uint32_t next_port = 0;
+    uint32_t direction = 0;
+    if (dst_mesh_id != routing_table[routing_plane].my_mesh_id) {
+        next_port = routing_table[routing_plane].inter_mesh_table.dest_entry[dst_mesh_id];
+    } else {
+        next_port = routing_table[routing_plane].intra_mesh_table.dest_entry[dst_dev_id];
+    }
+
+    if (routing_table[routing_plane].port_direction.directions[eth_chan_directions::EAST] == next_port) {
+        direction = eth_chan_directions::EAST;
+    } else if (routing_table[routing_plane].port_direction.directions[eth_chan_directions::WEST] == next_port) {
+        direction = eth_chan_directions::WEST;
+    } else if (routing_table[routing_plane].port_direction.directions[eth_chan_directions::NORTH] == next_port) {
+        direction = eth_chan_directions::NORTH;
+    } else if (routing_table[routing_plane].port_direction.directions[eth_chan_directions::SOUTH] == next_port) {
+        direction = eth_chan_directions::SOUTH;
+    }
+    return direction;
 }
 
 inline void fabric_setup_pull_request(uint32_t src_addr, uint32_t size) {
@@ -70,6 +94,8 @@ inline void fabric_async_write_add_header(
     packet_header->session.target_offset_h = dst_addr >> 32;
     tt_fabric_add_header_checksum(packet_header);
 }
+
+#ifdef FVC_MODE_PULL
 // Write packetized data over fabric to dst_mesh, dst_dev.
 // Packet is at src_addr in sender L1.
 template <uint8_t mode = ASYNC_WR_ALL>
@@ -93,6 +119,74 @@ inline void fabric_async_write(
         fabric_send_pull_request(routing_plane, dst_mesh_id, dst_dev_id);
     }
 }
+#else
+inline void fabric_client_router_reserve(int32_t routing_plane, uint16_t dst_mesh_id, uint16_t dst_dev_id) {
+    uint32_t direction = get_next_hop_router_direction(routing_plane, dst_mesh_id, dst_dev_id);
+    uint32_t router_addr_h = get_next_hop_router_noc_xy(routing_plane, dst_mesh_id, dst_dev_id);
+    uint64_t router_addr = ((uint64_t)router_addr_h << 32) | FABRIC_ROUTER_REQ_QUEUE_START;
+    // direction = 3;
+    router_addr += direction * 8;
+    // stream register to receive router buffer space available updates.
+    noc_inline_dw_write(router_addr, (STREAM_REG_ADDR(0, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX)));
+    noc_inline_dw_write(router_addr + 4, xy_local_addr >> 32);
+    client_push_interface.router_addr_h = router_addr_h;
+    client_push_interface.buffer_size = FABRIC_ROUTER_OUTBOUND_BUF_SIZE / PACKET_WORD_SIZE_BYTES;
+    client_push_interface.wr_ptr = 0;
+    client_push_interface.buffer_start = FABRIC_ROUTER_DATA_BUF_START + direction * FABRIC_ROUTER_OUTBOUND_BUF_SIZE;
+    client_push_interface.router_push_addr =
+        (STREAM_REG_ADDR(6 + direction, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX));
+    client_push_interface.router_space =
+        reinterpret_cast<uint32_t*>(STREAM_REG_ADDR(0, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX));
+    client_push_interface.update_router_space =
+        reinterpret_cast<uint32_t*>(STREAM_REG_ADDR(0, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX));
+    *(uint32_t*)(STREAM_REG_ADDR(0, STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX)) = client_push_interface.buffer_size;
+}
+
+inline void fabric_async_write_push_data(uint32_t src_addr, uint32_t size) {
+    uint32_t total_words_to_send = (size + PACKET_WORD_SIZE_BYTES - 1) >> 4;
+    uint64_t push_addr =
+        ((uint64_t)client_push_interface.router_addr_h << 32) | (client_push_interface.router_push_addr);
+
+    while (total_words_to_send > 0) {
+        uint32_t router_buf_space = *client_push_interface.router_space;
+        uint32_t words_before_wrap = client_push_interface.buffer_size - client_push_interface.wr_ptr;
+        uint32_t words_to_send = min(total_words_to_send, words_before_wrap);
+        words_to_send = min(router_buf_space, words_to_send);
+        if (words_to_send) {
+            uint64_t buffer_wr_addr =
+                ((uint64_t)client_push_interface.router_addr_h << 32) |
+                (client_push_interface.buffer_start + (client_push_interface.wr_ptr * PACKET_WORD_SIZE_BYTES));
+            noc_async_write_one_packet(src_addr, buffer_wr_addr, words_to_send * PACKET_WORD_SIZE_BYTES, noc_index);
+            noc_inline_dw_write(push_addr, words_to_send << REMOTE_DEST_BUF_WORDS_FREE_INC);
+            client_push_interface.wr_ptr += words_to_send;
+            *client_push_interface.update_router_space = (-words_to_send) << REMOTE_DEST_BUF_WORDS_FREE_INC;
+            if (client_push_interface.wr_ptr >= client_push_interface.buffer_size) {
+                client_push_interface.wr_ptr -= client_push_interface.buffer_size;
+            }
+            total_words_to_send -= words_to_send;
+            src_addr += words_to_send * PACKET_WORD_SIZE_BYTES;
+        }
+    }
+}
+
+template <uint8_t mode = ASYNC_WR_ALL>
+inline void fabric_async_write(
+    uint32_t routing_plane,  // the network plane to use for this transaction
+    uint32_t src_addr,       // source address in sender’s memory
+    uint16_t dst_mesh_id,
+    uint16_t dst_dev_id,
+    uint64_t dst_addr,
+    uint32_t size  // number of bytes to write to remote destination
+) {
+    if constexpr (mode == ASYNC_WR_ALL or mode == ASYNC_WR_ADD_HEADER) {
+        fabric_async_write_add_header(src_addr, dst_mesh_id, dst_dev_id, dst_addr, size);
+    }
+
+    if constexpr (mode == ASYNC_WR_ALL or mode == ASYNC_WR_SEND) {
+        fabric_async_write_push_data(src_addr, size);
+    }
+}
+#endif
 
 inline void fabric_async_write_multicast_add_header(
     uint32_t src_addr,  // source address in sender’s memory
@@ -118,6 +212,33 @@ inline void fabric_async_write_multicast_add_header(
     packet_header->packet_parameters.mcast_parameters.south = s_depth;
     tt_fabric_add_header_checksum(packet_header);
 }
+
+/*
+inline void fabric_async_write_multicast_set_state(
+    packet_header_t * header_pointer,
+    uint32_t routing_plane,  // the network plane to use for this transaction
+    uint32_t src_addr,       // source address in sender’s memory
+    uint16_t dst_mesh_id,
+    uint16_t dst_dev_id,
+    uint64_t dst_addr,
+    uint32_t size,  // number of bytes to write to remote destination
+    uint32_t e_depth,
+    uint32_t w_depth,
+    uint32_t n_depth,
+    uint32_t s_depth)
+
+}
+
+inline void fabric_async_write_multicast_with_state(
+    uint32_t state_id
+    uint32_t src_addr,       // source address in sender’s memory
+    uint16_t dst_mesh_id,
+    uint16_t dst_dev_id,
+    uint64_t dst_addr,
+    uint32_t size,  // number of bytes to write to remote destination
+)
+*/
+
 // Write packetized data over fabric to dst_mesh, dst_dev.
 // Packet is at src_addr in sender L1.
 template <uint8_t mode = ASYNC_WR_ALL>

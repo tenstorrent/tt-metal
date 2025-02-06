@@ -9,6 +9,9 @@
 
 namespace tt::tt_fabric {
 
+#define HEADER_TYPE_FULL 0
+#define HEADER_TYPE_LEAN 1
+
 typedef struct _endpoint_sync {
     uint32_t sync_addr : 24;
     uint32_t endpoint_type : 8;
@@ -122,12 +125,19 @@ typedef union _packet_params {
     uint8_t bytes[12];
 } packet_params;
 
+#ifdef FVC_MODE_PULL
 typedef struct _packet_header {
     packet_params packet_parameters;
     tt_session session;
     tt_routing routing;
 } packet_header_t;
-
+#else
+typedef struct _packet_header {
+    tt_routing routing;
+    tt_session session;
+    packet_params packet_parameters;
+} packet_header_t;
+#endif
 constexpr uint32_t PACKET_HEADER_SIZE_BYTES = 48;
 constexpr uint32_t PACKET_HEADER_SIZE_WORDS = PACKET_HEADER_SIZE_BYTES / PACKET_WORD_SIZE_BYTES;
 
@@ -136,6 +146,21 @@ static_assert(sizeof(packet_header_t) == PACKET_HEADER_SIZE_BYTES);
 static_assert(offsetof(packet_header_t, routing) % 4 == 0);
 
 constexpr uint32_t packet_header_routing_offset_dwords = offsetof(packet_header_t, routing) / 4;
+
+typedef struct _lean_packet_header_lite {
+    uint16_t packet_size_words;
+    uint8_t command;
+    uint8_t dst_dev_id;
+    uint32_t target_offset_l;
+    uint16_t target_offset_h;
+    uint16_t mcast_hops;
+    uint32_t reserved;
+} lean_packet_header_t;
+
+constexpr uint32_t LEAN_PACKET_HEADER_SIZE_BYTES = 16;
+constexpr uint32_t LEAN_PACKET_HEADER_SIZE_WORDS = LEAN_PACKET_HEADER_SIZE_BYTES / PACKET_WORD_SIZE_BYTES;
+
+static_assert(sizeof(lean_packet_header_t) == LEAN_PACKET_HEADER_SIZE_BYTES);
 
 void tt_fabric_add_header_checksum(packet_header_t* p_header) {
     uint16_t* ptr = (uint16_t*)p_header;
@@ -147,7 +172,7 @@ void tt_fabric_add_header_checksum(packet_header_t* p_header) {
     sum += sum;
     p_header->packet_parameters.misc_parameters.words[0] = sum;
 }
-
+// #define TT_FABRIC_DEBUG
 bool tt_fabric_is_header_valid(packet_header_t* p_header) {
 #ifdef TT_FABRIC_DEBUG
     uint16_t* ptr = (uint16_t*)p_header;
@@ -199,6 +224,7 @@ typedef union _chan_request_entry {
     pull_request_t pull_request;
     packet_header_t packet_header;
     uint8_t bytes[48];
+    uint32_t words[12];
 } chan_request_entry_t;
 
 constexpr uint32_t CHAN_PTR_SIZE_BYTES = 16;
@@ -344,6 +370,16 @@ typedef struct _fabric_client_interface {
 
 static_assert(sizeof(fabric_client_interface_t) % 16 == 0);
 
+typedef struct _fabric_client_push_interface {
+    uint32_t router_addr_h;
+    uint32_t buffer_start;
+    uint32_t buffer_size;
+    uint32_t wr_ptr;
+    uint32_t router_push_addr;
+    volatile uint32_t* router_space;
+    volatile uint32_t* update_router_space;
+} fabric_client_push_interface_t;
+
 constexpr uint32_t FABRIC_ROUTER_MISC_START = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
 constexpr uint32_t FABRIC_ROUTER_MISC_SIZE = 256;
 constexpr uint32_t FABRIC_ROUTER_SYNC_SEM = FABRIC_ROUTER_MISC_START;
@@ -361,5 +397,7 @@ constexpr uint32_t FVCC_IN_BUF_SIZE = FVCC_BUF_SIZE_BYTES;
 constexpr uint32_t FABRIC_ROUTER_REQ_QUEUE_START = FVCC_IN_BUF_START + FVCC_IN_BUF_SIZE;
 constexpr uint32_t FABRIC_ROUTER_REQ_QUEUE_SIZE = sizeof(chan_req_buf);
 constexpr uint32_t FABRIC_ROUTER_DATA_BUF_START = FABRIC_ROUTER_REQ_QUEUE_START + FABRIC_ROUTER_REQ_QUEUE_SIZE;
+constexpr uint32_t FABRIC_ROUTER_OUTBOUND_BUF_SIZE = 0x4000;
+constexpr uint32_t FABRIC_ROUTER_INBOUND_BUF_SIZE = 0x8000;
 
 }  // namespace tt::tt_fabric

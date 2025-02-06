@@ -496,12 +496,24 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline(
     be32 = (be32 << be_shift);
 
     while (!noc_cmd_buf_ready(noc, cmd_buf));
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_DATA, val);
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, dest_addr & 0xFFFFFFFF);
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, (uint32_t)(dest_addr >> NOC_ADDR_COORD_SHIFT));
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, be32);
-    NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+    /*
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_DATA, val);
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, dest_addr & 0xFFFFFFFF);
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_COORDINATE, (uint32_t)(dest_addr >> NOC_ADDR_COORD_SHIFT));
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_AT_LEN_BE, be32);
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+    */
+    // word offset noc cmd interface
+    uint32_t offset = (cmd_buf << NOC_CMD_BUF_OFFSET_BIT) + (noc << NOC_INSTANCE_OFFSET_BIT);
+    volatile uint32_t* ptr = (volatile uint32_t*)offset;
+    ptr[NOC_AT_DATA >> 2] = val;
+    ptr[NOC_CTRL >> 2] = noc_cmd_field;
+    ptr[NOC_TARG_ADDR_LO >> 2] = (uint32_t)dest_addr;
+    ptr[NOC_TARG_ADDR_COORDINATE >> 2] = dest_addr >> NOC_ADDR_COORD_SHIFT;
+    ptr[NOC_AT_LEN_BE >> 2] = be32;
+    ptr[NOC_CMD_CTRL >> 2] = NOC_CTRL_SEND_REQ;
+
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         if (!posted) {
             inc_noc_nonposted_writes_acked<proc_type>(noc);
