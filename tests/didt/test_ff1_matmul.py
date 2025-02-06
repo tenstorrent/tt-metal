@@ -8,7 +8,7 @@ import torch
 
 from tests.didt.op_test_base import OpTestBase, get_blackhole_grid_size
 import ttnn
-from models.utility_functions import skip_for_blackhole, is_blackhole
+from models.utility_functions import skip_for_blackhole, is_blackhole, skip_for_wormhole_b0
 
 
 class FF1Test(OpTestBase):
@@ -89,11 +89,10 @@ def test_ff1_matmul(
     per_core_N = 72
 
     # Initialize input configurations
-    compute_grid = (
-        get_blackhole_grid_size(simulate_bh_harvesting)
-        if is_blackhole()
-        else ttnn.CoreCoord(grid_size[0], grid_size[1])
-    )
+    if simulate_bh_harvesting:
+        compute_grid = get_blackhole_grid_size(simulate_bh_harvesting)
+    else:
+        compute_grid = ttnn.CoreCoord(grid_size[0], grid_size[1])
 
     start_core = ttnn.CoreCoord(0, 0)
     end_core = ttnn.CoreCoord(compute_grid.x - 1, compute_grid.y - 1)
@@ -231,7 +230,7 @@ def test_specific_board_ff1_matmul(
     )
 
 
-@skip_for_blackhole("Grid size reduction for Blackhole has not been tested")
+@skip_for_blackhole("Use test_blackhole_grid_size_ff1_matmul for blackhole!")
 @pytest.mark.parametrize(
     "grid_size",
     [(i, 8) for i in range(1, 9)] + [(8, i) for i in range(1, 8)],
@@ -253,6 +252,43 @@ def test_specific_board_ff1_matmul(
     indirect=["mesh_device"],
 )
 def test_grid_size_ff1_matmul(
+    mesh_device, gelu, math_fidelity, grid_size, iterations, determinism_check_iterations, use_program_cache
+):
+    test_ff1_matmul(
+        mesh_device,
+        gelu,
+        math_fidelity,
+        iterations,
+        determinism_check_iterations,
+        use_program_cache,
+        False,
+        grid_size=grid_size,
+    )
+
+
+@skip_for_wormhole_b0("Use test_grid_size_ff1_matmul for blackhole!")
+@pytest.mark.parametrize(
+    "grid_size",
+    [(i, 10) for i in range(1, 14)] + [(13, i) for i in range(1, 10)],
+    ids=[f"{i}x10" for i in range(1, 14)]
+    + [f"13x{i}" for i in range(1, 10)],  # 1x10, 2x10 ..., 13x10, 13x1, 13x2, 13x9
+)
+@pytest.mark.parametrize(
+    "gelu, math_fidelity",
+    GELU_FIDELITY_PARAMETRIZATION,
+    ids=GELU_FIDELITY_PARAMETRIZATION_IDS,
+)
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        pytest.param(1, id="1chips"),
+        pytest.param(2, id="2chips"),
+        pytest.param(8, id="8chips"),
+        pytest.param((8, 4), id="galaxy"),
+    ],
+    indirect=["mesh_device"],
+)
+def test_blackhole_grid_size_ff1_matmul(
     mesh_device, gelu, math_fidelity, grid_size, iterations, determinism_check_iterations, use_program_cache
 ):
     test_ff1_matmul(
