@@ -11,7 +11,7 @@ import csv
 from tt_metal.tools.profiler.process_device_log import import_log_run_stats
 import tt_metal.tools.profiler.device_post_proc_config as device_post_proc_config
 from tests.tt_metal.microbenchmarks.ethernet.test_ethernet_link_write_worker_with_transaction_id_common import (
-    run_erisc_write_worker,
+    profile_results,
 )
 
 from models.utility_functions import is_grayskull
@@ -26,12 +26,45 @@ if os.path.exists(FILE_NAME):
     os.remove(FILE_NAME)
 
 
+def run_erisc_write_worker_latency(
+    sample_count, sample_size_expected_latency, channel_count, num_directions, enable_worker, file_name
+):
+    os.system(f"rm -rf {os.environ['TT_METAL_HOME']}/generated/profiler/.logs/profile_log_device.csv")
+
+    test_latency = 1
+    sample_size = sample_size_expected_latency[0]
+    sample_size_expected_latency = sample_size_expected_latency[1]
+    diff = sample_size_expected_latency * 0.1
+    expected_latency_lower_bound = sample_size_expected_latency - diff
+    expected_latency_upper_bound = sample_size_expected_latency + diff
+
+    ARCH_NAME = os.getenv("ARCH_NAME")
+    cmd = f"TT_METAL_DEVICE_PROFILER=1 \
+            {os.environ['TT_METAL_HOME']}/build/test/tt_metal/perf_microbenchmark/ethernet/test_ethernet_write_worker_latency_no_edm_{ARCH_NAME} \
+                {sample_count} \
+                {sample_size} \
+                {channel_count} \
+                {num_directions} \
+                {test_latency} \
+                {enable_worker}"
+    rc = os.system(cmd)
+    if rc != 0:
+        logger.info("Error in running the test")
+        assert False
+
+    main_loop_latency = profile_results(
+        sample_size, sample_count, channel_count, num_directions, test_latency, file_name
+    )
+    logger.info(f"sender_loop_latency {main_loop_latency}")
+
+    assert expected_latency_lower_bound <= main_loop_latency <= expected_latency_upper_bound
+
+
 # uni-direction test for eth-sender <---> eth-receiver ---> worker
 @pytest.mark.skipif(is_grayskull(), reason="Unsupported on GS")
 @pytest.mark.parametrize("sample_count", [1])
 @pytest.mark.parametrize("channel_count", [16])
 @pytest.mark.parametrize("num_directions", [1])
-@pytest.mark.parametrize("test_latency", [1])
 @pytest.mark.parametrize("enable_worker", [1])
 @pytest.mark.parametrize(
     "sample_size_expected_latency",
@@ -47,14 +80,13 @@ if os.path.exists(FILE_NAME):
     ],
 )
 def test_erisc_write_worker_latency_uni_dir(
-    sample_count, sample_size_expected_latency, channel_count, num_directions, test_latency, enable_worker
+    sample_count, sample_size_expected_latency, channel_count, num_directions, enable_worker
 ):
-    run_erisc_write_worker(
+    run_erisc_write_worker_latency(
         sample_count,
         sample_size_expected_latency,
         channel_count,
         num_directions,
-        test_latency,
         enable_worker,
         FILE_NAME,
     )
@@ -65,21 +97,19 @@ def test_erisc_write_worker_latency_uni_dir(
 @pytest.mark.parametrize("sample_count", [1])
 @pytest.mark.parametrize("channel_count", [16])
 @pytest.mark.parametrize("num_directions", [2])
-@pytest.mark.parametrize("test_latency", [1])
 @pytest.mark.parametrize("enable_worker", [1])
 @pytest.mark.parametrize(
     "sample_size_expected_latency",
     [(16, 1077.0), (128, 1079.0), (256, 1077.0), (512, 1175.0), (1024, 1231.0), (2048, 1389.0), (4096, 1596.0)],
 )
 def test_erisc_write_worker_latency_bi_dir(
-    sample_count, sample_size_expected_latency, channel_count, num_directions, enable_worker, test_latency
+    sample_count, sample_size_expected_latency, channel_count, num_directions, enable_worker
 ):
-    run_erisc_write_worker(
+    run_erisc_write_worker_latency(
         sample_count,
         sample_size_expected_latency,
         channel_count,
         num_directions,
-        test_latency,
         enable_worker,
         FILE_NAME,
     )
@@ -90,7 +120,6 @@ def test_erisc_write_worker_latency_bi_dir(
 @pytest.mark.parametrize("sample_count", [1])
 @pytest.mark.parametrize("channel_count", [16])
 @pytest.mark.parametrize("num_directions", [1])
-@pytest.mark.parametrize("test_latency", [1])
 @pytest.mark.parametrize("enable_worker", [0])
 @pytest.mark.parametrize(
     "sample_size_expected_latency",
@@ -106,14 +135,13 @@ def test_erisc_write_worker_latency_bi_dir(
     ],
 )
 def test_erisc_latency_uni_dir(
-    sample_count, sample_size_expected_latency, channel_count, num_directions, test_latency, enable_worker
+    sample_count, sample_size_expected_latency, channel_count, num_directions, enable_worker
 ):
-    run_erisc_write_worker(
+    run_erisc_write_worker_latency(
         sample_count,
         sample_size_expected_latency,
         channel_count,
         num_directions,
-        test_latency,
         enable_worker,
         FILE_NAME,
     )
@@ -124,21 +152,17 @@ def test_erisc_latency_uni_dir(
 @pytest.mark.parametrize("sample_count", [1])
 @pytest.mark.parametrize("channel_count", [16])
 @pytest.mark.parametrize("num_directions", [2])
-@pytest.mark.parametrize("test_latency", [1])
 @pytest.mark.parametrize("enable_worker", [0])
 @pytest.mark.parametrize(
     "sample_size_expected_latency",
     [(16, 918.0), (128, 919.0), (256, 952.0), (512, 988.0), (1024, 1122.0), (2048, 1224.0), (4096, 1394.0)],
 )
-def test_erisc_latency_bi_dir(
-    sample_count, sample_size_expected_latency, channel_count, num_directions, enable_worker, test_latency
-):
-    run_erisc_write_worker(
+def test_erisc_latency_bi_dir(sample_count, sample_size_expected_latency, channel_count, num_directions, enable_worker):
+    run_erisc_write_worker_latency(
         sample_count,
         sample_size_expected_latency,
         channel_count,
         num_directions,
-        test_latency,
         enable_worker,
         FILE_NAME,
     )

@@ -64,9 +64,9 @@ FORCE_INLINE uint32_t setup_sender_buffer(
         buffer_slot_addr += sizeof(eth_buffer_slot_sync_t);
     }
 
-    // reset bytes_sent to 0s so first iter it won't block
+    // reset bytes_sent to 1s so first iter it will block on receiver ack
     for (uint32_t i = 0; i < NUM_BUFFER_SLOTS; i++) {
-        buffer_slot_sync_addrs[i]->bytes_sent = 0;
+        buffer_slot_sync_addrs[i]->bytes_sent = 1;
     }
 
     // assemble a packet filled with values
