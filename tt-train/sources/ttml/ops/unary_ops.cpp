@@ -72,7 +72,7 @@ autograd::TensorPtr log_softmax_moreh(const autograd::TensorPtr& tensor, int dim
         ttnn::operations::moreh::moreh_softmax::MorehSoftmaxOp::LOGSOFTMAX,
         ttnn::operations::moreh::moreh_softmax::MorehSoftmaxOpParallelizationStrategy::NONE,
         /* output_mem_config */ std::nullopt,
-        /* compute_kernel_config */ core::ComputeKernelConfig::precise());
+        /* compute_kernel_config */ core::ComputeKernelConfig::softmax());
     auto out = autograd::create_tensor(log_softmax);
 
     autograd::GradFunction grad = [tensor, out, dim]() {
