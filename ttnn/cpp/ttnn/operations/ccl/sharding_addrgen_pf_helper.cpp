@@ -164,7 +164,6 @@ std::vector<uint32_t> sharding_ct_table_builder(const tt::tt_metal::IDevice* dev
     args.push_back(static_cast<uint32_t>(t.memory_config().memory_layout));  // Memory layout
     args.push_back(static_cast<uint32_t>(get_sharding_core_count(t)));       // The number of sharding cores
     args.push_back(static_cast<uint32_t>(t.buffer()->aligned_page_size()));  // The page size we offset each write to
-    std::cout << "aligned page size: " << t.buffer()->aligned_page_size() << std::endl;
     TT_FATAL(t.buffer()->aligned_page_size() > 0, "algined page size is 0");
     args.push_back(static_cast<uint32_t>(
         buf_shard_spec.tensor2d_shape[1]));  // The number of pages in each sharding row not including padding pages
