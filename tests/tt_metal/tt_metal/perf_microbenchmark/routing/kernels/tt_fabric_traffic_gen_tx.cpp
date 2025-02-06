@@ -481,7 +481,7 @@ void kernel_main() {
 
         if (test_producer.get_curr_packet_valid<FVC_MODE_ENDPOINT>()) {
             curr_packet_size =
-                (test_producer.current_packet_header.routing.packet_size_bytes + PACKET_WORD_SIZE_BYTES - 1) >> 4;
+                (test_producer.current_packet_header_ptr->routing.packet_size_bytes + PACKET_WORD_SIZE_BYTES - 1) >> 4;
             uint32_t curr_data_words_sent = test_producer.pull_data_from_fvc_buffer<FVC_MODE_ENDPOINT>();
             curr_packet_words_sent += curr_data_words_sent;
             data_words_sent += curr_data_words_sent;
