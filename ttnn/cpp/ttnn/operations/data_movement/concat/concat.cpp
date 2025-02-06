@@ -16,8 +16,9 @@
 #include "cpp/ttnn/operations/data_movement/common/common.hpp"
 #include "cpp/ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "cpp/ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
-#include "cpp/ttnn/operations/data_movement/slice/slice.hpp"
-#include "cpp/ttnn/operations/data_movement/slice/device/slice_op.hpp"
+// #include "cpp/ttnn/operations/data_movement/slice/slice.hpp"
+// #include "cpp/ttnn/operations/data_movement/slice/device/slice_op.hpp"
+#include "cpp/ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding.hpp"
 
 #include <ranges>
 #include <utility>
@@ -111,31 +112,14 @@ MassagedConcat build_untilize_rm_retilize_concat(
                     TT_FATAL(
                         input_tensor.get_layout() == ttnn::TILE_LAYOUT,
                         "ttnn.concat: expected all input tensors to be in tile layout");
-                    auto untilized_tensor = ttnn::untilize(input_tensor);
-                    // untilized, so now we have a padded rm tensor. we slice to
-                    // remove the padding.
-                    const auto& input_shape = input_tensor.get_logical_shape();
-                    std::vector<uint32_t> begins_vec(input_shape.rank(), 0);
-                    tt::stl::Span<const uint32_t> begins = begins_vec;
-                    tt::stl::Span<const uint32_t> ends = input_shape.view();
-                    std::vector<uint32_t> steps_vec(input_shape.rank(), 1);
-                    tt::stl::Span<const uint32_t> steps = steps_vec;
-
-                    // we now perform a padding-oblivious slice to remove the
-                    // tile padding.
-                    // FIXME: change this to a legit slice call once
-                    // padding-oblivious entry point is uplifted to the slice
-                    // op.
-                    untilized_tensor = operation::run(
-                        SliceDeviceOperation{
-                            ttnn::Shape(begins), ttnn::Shape(ends), ttnn::Shape(steps), output_memory_config},
-                        {untilized_tensor},
-                        {},
-                        {std::nullopt},
-                        queue_id)[0];
-
-                    untilized_tensor = ttnn::reshape(untilized_tensor, input_tensor.get_logical_shape());
-                    return untilized_tensor;
+                    ttnn::SmallVector<uint32_t> end_indices(
+                        input_tensor.get_logical_shape().cbegin(), input_tensor.get_logical_shape().cend());
+                    std::for_each(end_indices.begin(), end_indices.end(), [](auto& x) {
+                        if (x > 0) {
+                            --x;
+                        }
+                    });
+                    return ttnn::untilize_with_unpadding(input_tensor, ttnn::Shape(end_indices), output_memory_config);
                 });
             return std::make_tuple(itensors, dim, groups);
         },
