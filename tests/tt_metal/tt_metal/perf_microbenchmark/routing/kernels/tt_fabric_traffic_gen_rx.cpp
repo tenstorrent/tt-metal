@@ -43,6 +43,7 @@ constexpr bool skip_pkt_content_gen = get_compile_time_arg_val(9);
 
 constexpr bool fixed_async_wr_notif_addr = get_compile_time_arg_val(10);
 
+constexpr uint32_t header_type = get_compile_time_arg_val(11);
 #define PAYLOAD_MASK (0xFFFF0000)
 
 void kernel_main() {
@@ -63,6 +64,13 @@ void kernel_main() {
     zero_l1_buf(test_results, test_results_size_bytes);
     test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_STARTED;
     test_results[TT_FABRIC_MISC_INDEX] = 0xff000000;
+
+    uint32_t header_size_words;
+    if constexpr (header_type == HEADER_TYPE_FULL) {
+        header_size_words = PACKET_HEADER_SIZE_WORDS;
+    } else {
+        header_size_words = LEAN_PACKET_HEADER_SIZE_WORDS;
+    }
 
     if constexpr (ASYNC_WR & test_command) {
         uint32_t packet_rnd_seed;
@@ -139,7 +147,7 @@ void kernel_main() {
                     curr_packet_words = max_packet_size_words;
                 }
 
-                curr_payload_words = curr_packet_words - PACKET_HEADER_SIZE_WORDS;
+                curr_payload_words = curr_packet_words - header_size_words;
 
                 // check for wrap
                 // if rx is slow, the data validation could fail, need to add sync b/w tx and rx
@@ -190,13 +198,13 @@ void kernel_main() {
     } else if constexpr (ATOMIC_INC == test_command) {
         poll_addr = reinterpret_cast<tt_l1_ptr uint32_t*>(target_address);
         // TODO: read in wrap boundary as well from compile args
-        num_packets = num_producers * ((total_data_words + PACKET_HEADER_SIZE_WORDS - 1) / PACKET_HEADER_SIZE_WORDS);
+        num_packets = num_producers * ((total_data_words + header_size_words - 1) / header_size_words);
         poll_val = atomic_increment * num_packets;
 
         // poll for the final value
         while (poll_val != *poll_addr);
 
-        processed_packet_words = num_packets * PACKET_HEADER_SIZE_WORDS;
+        processed_packet_words = num_packets * header_size_words;
     }
 
     // write out results

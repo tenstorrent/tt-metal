@@ -50,6 +50,9 @@ bool bidirectional_traffic;
 // benchmark test mode
 bool benchmark_mode;
 
+// use 16 byte lean header
+bool lean_header;
+
 uint32_t tx_signal_address;
 uint32_t host_signal_address;
 
@@ -1463,6 +1466,7 @@ int main(int argc, char **argv) {
     bool fixed_async_wr_notif_addr = test_args::has_command_option(input_args, "--fixed_async_wr_notif_addr");
 
     benchmark_mode = test_args::has_command_option(input_args, "--benchmark");
+    lean_header = test_args::has_command_option(input_args, "--lean_header");
     uint32_t packet_size_kb =
         test_args::get_command_option_uint32(input_args, "--packet_size_kb", default_packet_size_kb);
     uint32_t max_packet_size_words = packet_size_kb * 1024 / PACKET_WORD_SIZE_BYTES;
@@ -1632,6 +1636,7 @@ int main(int argc, char **argv) {
             tunneler_test_results_addr,        // 1: test_results_addr
             tunneler_test_results_size,        // 2: test_results_size
             0,                                 // timeout_mcycles * 1000 * 1000 * 4, // 3: timeout_cycles
+            lean_header ? HEADER_TYPE_LEAN : HEADER_TYPE_FULL,  // 4: 16 or 48 Byte Packet Header
         };
         for (auto& [chip_id, test_device] : test_devices) {
             test_device->create_router_kernels(router_compile_args, defines);
@@ -1670,37 +1675,39 @@ int main(int argc, char **argv) {
             prng_seed,                   // 8: prng_seed
             data_kb_per_tx,              // 9: total_data_kb
             max_packet_size_words,       // 10: max_packet_size_words
-            timeout_mcycles * 1000 * 1000 * 4,  // 11: timeout_cycles
-            tx_skip_pkt_content_gen,            // 12: skip_pkt_content_gen
-            tx_pkt_dest_size_choice,            // 13: pkt_dest_size_choice
-            tx_data_sent_per_iter_low,          // 14: data_sent_per_iter_low
-            tx_data_sent_per_iter_high,         // 15: data_sent_per_iter_high
-            fabric_command,                     // 16: fabric_command
-            target_address,                     // 17: target_address
-            atomic_increment,                   // 18: atomic_increment
-            tx_signal_address,                  // 19: tx_signal_address
-            client_interface_addr,              // 20:
-            client_pull_req_buf_addr,           // 21:
-            fixed_async_wr_notif_addr,          // 22: use fixed addr for async wr atomic inc
-            mcast,                              // 23: mcast
-            mcast_depth[RoutingDirection::E],   // 24: mcast_e
-            mcast_depth[RoutingDirection::W],   // 25: mcast_w
-            mcast_depth[RoutingDirection::N],   // 26: mcast_n
-            mcast_depth[RoutingDirection::S],   // 27: mcast_s
+            timeout_mcycles * 1000 * 1000 * 4,                  // 11: timeout_cycles
+            tx_skip_pkt_content_gen,                            // 12: skip_pkt_content_gen
+            tx_pkt_dest_size_choice,                            // 13: pkt_dest_size_choice
+            tx_data_sent_per_iter_low,                          // 14: data_sent_per_iter_low
+            tx_data_sent_per_iter_high,                         // 15: data_sent_per_iter_high
+            fabric_command,                                     // 16: fabric_command
+            target_address,                                     // 17: target_address
+            atomic_increment,                                   // 18: atomic_increment
+            tx_signal_address,                                  // 19: tx_signal_address
+            client_interface_addr,                              // 20:
+            client_pull_req_buf_addr,                           // 21:
+            fixed_async_wr_notif_addr,                          // 22: use fixed addr for async wr atomic inc
+            mcast,                                              // 23: mcast
+            mcast_depth[RoutingDirection::E],                   // 24: mcast_e
+            mcast_depth[RoutingDirection::W],                   // 25: mcast_w
+            mcast_depth[RoutingDirection::N],                   // 26: mcast_n
+            mcast_depth[RoutingDirection::S],                   // 27: mcast_s
+            lean_header ? HEADER_TYPE_LEAN : HEADER_TYPE_FULL,  // 28: 16 or 48 Byte Packet Header
         };
 
         std::vector<uint32_t> rx_compile_args = {
-            prng_seed,                  // 0: prng seed
-            data_kb_per_tx,             // 1: total data kb
-            max_packet_size_words,      // 2: max packet size (in words)
-            fabric_command,             // 3: fabric command
-            target_address,             // 4: target address
-            atomic_increment,           // 5: atomic increment
-            test_results_addr,          // 6: test results addr
-            test_results_size,          // 7: test results size in bytes
-            tx_pkt_dest_size_choice,    // 8: pkt dest and size choice
-            tx_skip_pkt_content_gen,    // 9: skip packet validation
-            fixed_async_wr_notif_addr,  // 10: use fixed addr for async wr atomic inc
+            prng_seed,                                          // 0: prng seed
+            data_kb_per_tx,                                     // 1: total data kb
+            max_packet_size_words,                              // 2: max packet size (in words)
+            fabric_command,                                     // 3: fabric command
+            target_address,                                     // 4: target address
+            atomic_increment,                                   // 5: atomic increment
+            test_results_addr,                                  // 6: test results addr
+            test_results_size,                                  // 7: test results size in bytes
+            tx_pkt_dest_size_choice,                            // 8: pkt dest and size choice
+            tx_skip_pkt_content_gen,                            // 9: skip packet validation
+            fixed_async_wr_notif_addr,                          // 10: use fixed addr for async wr atomic inc
+            lean_header ? HEADER_TYPE_LEAN : HEADER_TYPE_FULL,  // 11: 16 or 48 Byte Packet Header
         };
 
         // TODO: launch traffic kernels

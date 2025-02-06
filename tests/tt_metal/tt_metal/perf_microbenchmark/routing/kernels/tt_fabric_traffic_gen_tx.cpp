@@ -65,15 +65,20 @@ constexpr uint32_t e_depth = get_compile_time_arg_val(24);
 constexpr uint32_t w_depth = get_compile_time_arg_val(25);
 constexpr uint32_t n_depth = get_compile_time_arg_val(26);
 constexpr uint32_t s_depth = get_compile_time_arg_val(27);
+constexpr uint32_t header_type = get_compile_time_arg_val(28);
 
 uint32_t max_packet_size_mask;
 
 auto input_queue_state = select_input_queue<pkt_dest_size_choice>();
 volatile local_pull_request_t *local_pull_request = (volatile local_pull_request_t *)(data_buffer_start_addr - 1024);
-volatile tt_l1_ptr fabric_router_l1_config_t* routing_table;
+volatile fabric_router_l1_config_t* routing_table;
 volatile fabric_client_interface_t* client_interface;
 
+#ifdef FVC_MODE_PULL
 fvc_producer_state_t test_producer __attribute__((aligned(16)));
+#else
+fvc_inbound_push_state_t test_producer __attribute__((aligned(16)));
+#endif
 fvcc_inbound_state_t fvcc_test_producer __attribute__((aligned(16)));
 
 uint64_t xy_local_addr;
@@ -115,8 +120,14 @@ inline bool test_buffer_handler_async_wr() {
         return true;
     }
 
+    uint32_t header_size_words;
+    if constexpr (header_type == HEADER_TYPE_FULL) {
+        header_size_words = PACKET_HEADER_SIZE_WORDS;
+    } else {
+        header_size_words = LEAN_PACKET_HEADER_SIZE_WORDS;
+    }
     uint32_t free_words = test_producer.get_num_words_free();
-    if (free_words < PACKET_HEADER_SIZE_WORDS) {
+    if (free_words < header_size_words) {
         return false;
     }
 
@@ -139,7 +150,7 @@ inline bool test_buffer_handler_async_wr() {
 
             tt_l1_ptr uint32_t* header_ptr = reinterpret_cast<tt_l1_ptr uint32_t*>(byte_wr_addr);
             curr_payload_bytes =
-                (input_queue_state.curr_packet_size_words - PACKET_HEADER_SIZE_WORDS) * PACKET_WORD_SIZE_BYTES;
+                (input_queue_state.curr_packet_size_words - header_size_words) * PACKET_WORD_SIZE_BYTES;
 
             // check for wrap
             // if the size of fvc buffer is greater than the rx buffer size and/or rx is slow
@@ -167,7 +178,7 @@ inline bool test_buffer_handler_async_wr() {
             }
             packet_header.session.target_offset_l = target_address;
             packet_header.session.target_offset_h = noc_offset;
-            target_address += packet_header.routing.packet_size_bytes - PACKET_HEADER_SIZE_BYTES;
+            target_address += packet_header.routing.packet_size_bytes - header_size_words * PACKET_WORD_SIZE_BYTES;
             if constexpr (mcast_data) {
                 packet_header.packet_parameters.mcast_parameters.east = e_depth;
                 packet_header.packet_parameters.mcast_parameters.west = w_depth;
@@ -176,14 +187,22 @@ inline bool test_buffer_handler_async_wr() {
             }
             tt_fabric_add_header_checksum(&packet_header);
             uint32_t words_left = words_to_init - words_initialized;
-            bool split_header = words_left < PACKET_HEADER_SIZE_WORDS;
-            uint32_t header_words_to_init = PACKET_HEADER_SIZE_WORDS;
+            bool split_header = words_left < header_size_words;
+            uint32_t header_words_to_init = header_size_words;
             if (split_header) {
                 header_words_to_init = words_left;
             }
-
-            for (uint32_t i = 0; i < (header_words_to_init * PACKET_WORD_SIZE_BYTES / 4); i++) {
-                header_ptr[i] = ((uint32_t *)&packet_header)[i];
+            if constexpr (header_type == HEADER_TYPE_FULL) {
+                for (uint32_t i = 0; i < (header_words_to_init * PACKET_WORD_SIZE_BYTES / 4); i++) {
+                    header_ptr[i] = ((uint32_t*)&packet_header)[i];
+                }
+            } else {
+                header_ptr[0] = ((packet_header.routing.packet_size_bytes >> 4) & 0xFFFF) |
+                                ((packet_header.session.command & 0xFF) << 16) |
+                                ((packet_header.routing.dst_dev_id & 0xFF) << 24);
+                header_ptr[1] = packet_header.session.target_offset_l;
+                header_ptr[2] = noc_offset & 0xFFFF;
+                header_ptr[3] = 0;
             }
 
             words_initialized += header_words_to_init;
@@ -192,10 +211,10 @@ inline bool test_buffer_handler_async_wr() {
         } else {
             uint32_t words_remaining = words_to_init - words_initialized;
             uint32_t packet_words_initialized = input_queue_state.curr_packet_size_words - input_queue_state.curr_packet_words_remaining;
-            if (packet_words_initialized < PACKET_HEADER_SIZE_WORDS) {
+            if (packet_words_initialized < header_size_words) {
                 tt_l1_ptr uint32_t* header_ptr = reinterpret_cast<tt_l1_ptr uint32_t*>(byte_wr_addr);
                 uint32_t header_words_initialized = packet_words_initialized;
-                uint32_t header_words_to_init = PACKET_HEADER_SIZE_WORDS - header_words_initialized;
+                uint32_t header_words_to_init = header_size_words - header_words_initialized;
                 uint32_t header_dword_index = header_words_initialized * PACKET_WORD_SIZE_BYTES / 4;
                 header_words_to_init = std::min(words_remaining, header_words_to_init);
                 for (uint32_t i = 0; i < (header_words_to_init * PACKET_WORD_SIZE_BYTES / 4); i++) {
@@ -213,9 +232,9 @@ inline bool test_buffer_handler_async_wr() {
 
             uint32_t num_words = std::min(words_remaining, input_queue_state.curr_packet_words_remaining);
             if constexpr (!skip_pkt_content_gen) {
-                uint32_t start_val =
-                (input_queue_state.packet_rnd_seed & 0xFFFF0000) +
-                (input_queue_state.curr_packet_size_words - input_queue_state.curr_packet_words_remaining - PACKET_HEADER_SIZE_WORDS);
+                uint32_t start_val = (input_queue_state.packet_rnd_seed & 0xFFFF0000) +
+                                     (input_queue_state.curr_packet_size_words -
+                                      input_queue_state.curr_packet_words_remaining - header_size_words);
                 fill_packet_data(reinterpret_cast<tt_l1_ptr uint32_t*>(byte_wr_addr), num_words, start_val);
             }
             if constexpr (test_command & ATOMIC_INC) {
@@ -403,11 +422,11 @@ void kernel_main() {
     rx_addr_hi = base_target_address + rx_buf_size;
 
     zero_l1_buf(test_results, test_results_size_bytes);
-    test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_STARTED;
-    test_results[PQ_TEST_STATUS_INDEX+1] = (uint32_t) local_pull_request;
+    test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_STARTED;
+    test_results[TT_FABRIC_STATUS_INDEX + 1] = (uint32_t)local_pull_request;
 
-    test_results[PQ_TEST_MISC_INDEX] = 0xff000000;
-    test_results[PQ_TEST_MISC_INDEX + 1] = 0xcc000000 | src_endpoint_id;
+    test_results[TT_FABRIC_MISC_INDEX] = 0xff000000;
+    test_results[TT_FABRIC_MISC_INDEX + 1] = 0xcc000000 | src_endpoint_id;
 
     zero_l1_buf(reinterpret_cast<tt_l1_ptr uint32_t*>(data_buffer_start_addr), data_buffer_size_words * PACKET_WORD_SIZE_BYTES);
     zero_l1_buf((uint32_t*)local_pull_request, sizeof(local_pull_request_t));
@@ -421,7 +440,11 @@ void kernel_main() {
         input_queue_state.init(src_endpoint_id, prng_seed);
     }
 
+#ifdef FVC_MODE_PULL
     test_producer.init(data_buffer_start_addr, data_buffer_size_words);
+#else
+    test_producer.init<header_type>(data_buffer_start_addr, data_buffer_size_words);
+#endif
     fvcc_test_producer.init(data_buffer_start_addr, 0x0, 0x0);
 
     uint32_t temp = max_packet_size_words;
@@ -445,7 +468,7 @@ void kernel_main() {
     // all the tx workers are ready on this chip
     while (*(volatile tt_l1_ptr uint32_t*)signal_address == 0);
 
-    test_results[PQ_TEST_MISC_INDEX] = 0xff000001;
+    test_results[TT_FABRIC_MISC_INDEX] = 0xff000001;
 
     uint64_t data_words_sent = 0;
     uint64_t iter = 0;
@@ -466,6 +489,10 @@ void kernel_main() {
     routing_table = reinterpret_cast<tt_l1_ptr fabric_router_l1_config_t*>(
         client_interface->routing_tables_l1_offset + sizeof(fabric_router_l1_config_t) * routing_plane);
 
+#ifndef FVC_MODE_PULL
+    test_producer.register_with_routers<FVC_MODE_ENDPOINT, header_type>(dest_device & 0xFFFF, dest_device >> 16);
+#endif
+
     while (true) {
         iter++;
 #ifdef CHECK_TIMEOUT
@@ -480,10 +507,14 @@ void kernel_main() {
 
         bool all_packets_initialized = test_buffer_handler();
 
-        if (test_producer.get_curr_packet_valid<FVC_MODE_ENDPOINT>()) {
+        if (test_producer.get_curr_packet_valid<FVC_MODE_ENDPOINT, header_type>()) {
             curr_packet_size =
                 (test_producer.current_packet_header.routing.packet_size_bytes + PACKET_WORD_SIZE_BYTES - 1) >> 4;
+#ifdef FVC_MODE_PULL
             uint32_t curr_data_words_sent = test_producer.pull_data_from_fvc_buffer<FVC_MODE_ENDPOINT>();
+#else
+            uint32_t curr_data_words_sent = test_producer.push_data_to_eth_router<FVC_MODE_ENDPOINT, header_type>();
+#endif
             curr_packet_words_sent += curr_data_words_sent;
             data_words_sent += curr_data_words_sent;
             if constexpr (!(data_sent_per_iter_low == 0 && data_sent_per_iter_high == 0)) {
@@ -520,9 +551,9 @@ void kernel_main() {
     uint64_t cycles_elapsed = get_timestamp() - start_timestamp;
 
     uint64_t num_packets = input_queue_state.get_num_packets();
-    set_64b_result(test_results, data_words_sent, PQ_TEST_WORD_CNT_INDEX);
-    set_64b_result(test_results, cycles_elapsed, PQ_TEST_CYCLES_INDEX);
-    set_64b_result(test_results, iter, PQ_TEST_ITER_INDEX);
+    set_64b_result(test_results, data_words_sent, TT_FABRIC_WORD_CNT_INDEX);
+    set_64b_result(test_results, cycles_elapsed, TT_FABRIC_CYCLES_INDEX);
+    set_64b_result(test_results, iter, TT_FABRIC_ITER_INDEX);
     set_64b_result(test_results, total_data_words, TX_TEST_IDX_TOT_DATA_WORDS);
     set_64b_result(test_results, num_packets, TX_TEST_IDX_NPKT);
     set_64b_result(test_results, zero_data_sent_iter, TX_TEST_IDX_ZERO_DATA_WORDS_SENT_ITER);
@@ -530,13 +561,13 @@ void kernel_main() {
     set_64b_result(test_results, many_data_sent_iter, TX_TEST_IDX_MANY_DATA_WORDS_SENT_ITER);
 
     if (test_producer.packet_corrupted) {
-        test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_BAD_HEADER;
-        test_results[PQ_TEST_MISC_INDEX] = packet_count;
+        test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_BAD_HEADER;
+        test_results[TT_FABRIC_MISC_INDEX] = packet_count;
     } else if (!timeout) {
-        test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_PASS;
-        test_results[PQ_TEST_MISC_INDEX] = packet_count;
+        test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_PASS;
+        test_results[TT_FABRIC_MISC_INDEX] = packet_count;
     } else {
-        test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_TIMEOUT;
+        test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_TIMEOUT;
         set_64b_result(test_results, words_flushed, TX_TEST_IDX_WORDS_FLUSHED);
     }
 }

@@ -931,6 +931,22 @@ void noc_async_write_one_packet(
         (uint32_t)(dst_noc_addr >> NOC_ADDR_COORD_SHIFT) & NOC_COORDINATE_MASK);
     NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_AT_LEN_BE, size);
     NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
+
+    /*
+        //word offset noc cmd interface
+        uint32_t offset = (write_cmd_buf << NOC_CMD_BUF_OFFSET_BIT) + (noc << NOC_INSTANCE_OFFSET_BIT);
+        volatile uint32_t* ptr = (volatile uint32_t*)offset;
+        ptr[NOC_CTRL >> 2] = noc_cmd_field;
+        ptr[NOC_TARG_ADDR_LO >> 2] = src_local_l1_addr;
+        ptr[NOC_RET_ADDR_LO >> 2] = (uint32_t)dst_noc_addr;
+    #ifdef ARCH_BLACKHOLE
+        // Handles writing to PCIe
+        ptr[NOC_RET_ADDR_MID >> 2] = (uint32_t)(dst_noc_addr >> 32) & 0x1000000F;
+    #endif
+        ptr[NOC_RET_ADDR_COORDINATE >> 2] = dst_noc_addr >> NOC_ADDR_COORD_SHIFT;
+        ptr[NOC_AT_LEN_BE >> 2] = size;
+        ptr[NOC_CMD_CTRL >> 2] = NOC_CTRL_SEND_REQ;
+    */
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         inc_noc_nonposted_writes_acked<proc_type>(noc);
     } else {

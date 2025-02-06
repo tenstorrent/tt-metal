@@ -39,15 +39,20 @@ enum eth_chan_magic_values {
     INVALID_ROUTING_TABLE_ENTRY = 0xFF,
 };
 
+enum eth_chan_directions {
+    EAST = 0,
+    WEST = 1,
+    NORTH = 2,
+    SOUTH = 3,
+    COUNT = 4,
+};
+
 struct routing_table_t {
   chan_id_t dest_entry[MAX_MESH_SIZE];
 };
 
 struct port_direction_t {
-  chan_id_t north;
-  chan_id_t south;
-  chan_id_t east;
-  chan_id_t west;
+    chan_id_t directions[eth_chan_directions::COUNT];
 };
 
 struct fabric_router_l1_config_t {
