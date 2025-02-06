@@ -74,6 +74,13 @@ def get_core_range_set(output_core_grid):
     return output_core_range_set
 
 
+CORE_RANGE_SET_1x1 = ttnn.CoreRangeSet(
+    {
+        ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0)),
+    }
+)
+
+
 # Enumerate the post-commit cases explicitly
 @skip_for_grayskull("Requires eth connected devices to run")
 @pytest.mark.parametrize(
@@ -125,13 +132,24 @@ def get_core_range_set(output_core_grid):
             ttnn.TILE_LAYOUT,
             25,
         ),
+        (  # AllGather for layernorm
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            (1, 1, 32, 128),
+            3,
+            (32, 32),
+            CORE_RANGE_SET_1x1,
+            (32, 128),
+            CORE_RANGE_SET_1x1,
+            ttnn.TILE_LAYOUT,
+            13,
+        ),
     ),
 )
 @pytest.mark.parametrize("replication_factor", [8])
 @pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("mesh_device", [pytest.param((8, 4), id="8x4_grid")], indirect=True)
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 17068032}], indirect=True)
-def test_all_gather_llama(
+def test_all_gather_tg_llama(
     mesh_device,
     num_devices,
     output_shape,
