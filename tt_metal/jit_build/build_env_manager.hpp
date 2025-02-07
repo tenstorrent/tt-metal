@@ -29,7 +29,7 @@ public:
         chip_id_t device_id, uint32_t programmable_core, uint32_t processor_class, int processor_id);
     const JitBuildState& get_kernel_build_state(
         chip_id_t device_id, uint32_t programmable_core, uint32_t processor_class, int processor_id);
-    const JitBuildStateSubset get_kernel_build_states(
+    JitBuildStateSubset get_kernel_build_states(
         chip_id_t device_id, uint32_t programmable_core, uint32_t processor_class);
 
     void build_firmware(chip_id_t device_id);
@@ -40,7 +40,7 @@ public:
 
 private:
     BuildEnvManager();
-    ~BuildEnvManager();
+    ~BuildEnvManager() = default;
 
     std::unordered_map<chip_id_t, JitBuildEnv> device_id_to_build_env_;
     std::unordered_map<chip_id_t, uint32_t> device_id_to_build_key_;
