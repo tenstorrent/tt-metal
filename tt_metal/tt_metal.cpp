@@ -1326,7 +1326,7 @@ void EndTraceCapture(IDevice* device, const uint8_t cq_id, const uint32_t tid) {
 void ReplayTrace(IDevice* device, const uint8_t cq_id, const uint32_t tid, const bool blocking) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureReplayTrace, device, cq_id, tid, blocking);
-    device->replay_trace(cq_id, tid, blocking);
+    device->replay_trace(cq_id, tid, blocking /* block_on_device */, blocking /* block_on_worker_thread */);
 }
 
 void ReleaseTrace(IDevice* device, const uint32_t tid) {
