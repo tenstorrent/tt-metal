@@ -5,6 +5,8 @@
 #include "debug/dprint_tensix_pack.h"
 #include "debug/dprint_tensix_unpack.h"
 
+#include <array>
+
 // Register names
 #define ALU_CONFIG 0
 #define UNPACK_TILE_DESCRIPTOR 1
@@ -207,62 +209,113 @@ void MAIN {
       case ALU_CONFIG:
          ckernel::unpacker::alu_config_u alu_config;
          generate_alu_config(alu_config.f);
+         ckernel::unpacker::alu_config_u alu_config_original;
+         alu_config_original.f = ckernel::unpacker::read_alu_config();
          write_alu_config(cfg, ALU_ROUNDING_MODE_Fpu_srnd_en_ADDR32, alu_config);
          dprint_tensix_alu_config();
+         write_alu_config(cfg, ALU_ROUNDING_MODE_Fpu_srnd_en_ADDR32, alu_config_original);
          break;
       #endif
       case UNPACK_TILE_DESCRIPTOR:
          ckernel::unpacker::unpack_tile_descriptor_u tile_descriptor;
          generate_unpack_tile_descriptor(tile_descriptor.f);
+         std::array<ckernel::unpacker::unpack_tile_descriptor_t, ckernel::unpacker::NUM_UNPACKERS> tile_descriptor_vec; 
+         tile_descriptor_vec = ckernel::unpacker::read_unpack_tile_descriptor();
          write_unpack_tile_descriptor(cfg, THCON_SEC0_REG0_TileDescriptor_ADDR32, 4, tile_descriptor);
          write_unpack_tile_descriptor(cfg, THCON_SEC1_REG0_TileDescriptor_ADDR32, 4, tile_descriptor);
          dprint_tensix_unpack_tile_descriptor();
+         tile_descriptor.f = tile_descriptor_vec[0];
+         write_unpack_tile_descriptor(cfg, THCON_SEC0_REG0_TileDescriptor_ADDR32, 4, tile_descriptor);
+         tile_descriptor.f = tile_descriptor_vec[1];
+         write_unpack_tile_descriptor(cfg, THCON_SEC1_REG0_TileDescriptor_ADDR32, 4, tile_descriptor);
          break;
       case UNPACK_CONFIG:
          ckernel::unpacker::unpack_config_u unpack_config;
          generate_unpack_config(unpack_config.f);
+         std::array<ckernel::unpacker::unpack_config_t, ckernel::unpacker::NUM_UNPACKERS> unpack_config_vec;
+         unpack_config_vec = ckernel::unpacker::read_unpack_config();
          write_unpack_config(cfg, THCON_SEC0_REG2_Out_data_format_ADDR32, 4, unpack_config);
          write_unpack_config(cfg, THCON_SEC1_REG2_Out_data_format_ADDR32, 4, unpack_config);
          dprint_tensix_unpack_config();
+         unpack_config.f = unpack_config_vec[0];
+         write_unpack_config(cfg, THCON_SEC0_REG2_Out_data_format_ADDR32, 4, unpack_config);
+         unpack_config.f = unpack_config_vec[1];
+         write_unpack_config(cfg, THCON_SEC1_REG2_Out_data_format_ADDR32, 4, unpack_config);
          break;
       case PACK_CONFIG:
          ckernel::packer::pack_config_u pack_config;
          generate_pack_config(pack_config.f);
+         std::array<ckernel::packer::pack_config_t, ckernel::packer::NUM_PACKERS> pack_config_vec;
+         pack_config_vec = ckernel::packer::read_pack_config();
          write_pack_config(cfg, THCON_SEC0_REG1_Row_start_section_size_ADDR32, 4, pack_config);
          write_pack_config(cfg, THCON_SEC0_REG8_Row_start_section_size_ADDR32, 4, pack_config);
          write_pack_config(cfg, THCON_SEC1_REG1_Row_start_section_size_ADDR32, 4, pack_config);
          write_pack_config(cfg, THCON_SEC1_REG8_Row_start_section_size_ADDR32, 4, pack_config);
          dprint_tensix_pack_config();
+         pack_config.f = pack_config_vec[0];
+         write_pack_config(cfg, THCON_SEC0_REG1_Row_start_section_size_ADDR32, 4, pack_config);
+         pack_config.f = pack_config_vec[1];
+         write_pack_config(cfg, THCON_SEC0_REG8_Row_start_section_size_ADDR32, 4, pack_config);
+         pack_config.f = pack_config_vec[2];
+         write_pack_config(cfg, THCON_SEC1_REG1_Row_start_section_size_ADDR32, 4, pack_config);
+         pack_config.f = pack_config_vec[3];
+         write_pack_config(cfg, THCON_SEC1_REG8_Row_start_section_size_ADDR32, 4, pack_config);
          break;
       case RELU_CONFIG:
          ckernel::packer::relu_config_u relu_config;
          generate_relu_config(relu_config.r);
+         ckernel::packer::relu_config_u relu_config_original;
+         relu_config_original.r = ckernel::packer::read_relu_config();
          write_relu_config(cfg, ALU_ACC_CTRL_Zero_Flag_disabled_src_ADDR32, 1, relu_config);
          dprint_tensix_pack_relu_config();
+         write_relu_config(cfg, ALU_ACC_CTRL_Zero_Flag_disabled_src_ADDR32, 1, relu_config_original);
          break;
       case DEST_RD_CTRL:
          ckernel::packer::dest_rd_ctrl_u dest;
          generate_dest_rd_ctrl(dest.f);
+         ckernel::packer::dest_rd_ctrl_u dest_original;
+         dest_original.f = ckernel::packer::read_dest_rd_ctrl();
          write_dest_rd_ctrl(cfg, PCK_DEST_RD_CTRL_Read_32b_data_ADDR32, dest);
          dprint_tensix_dest_rd_ctrl();
+         write_dest_rd_ctrl(cfg, PCK_DEST_RD_CTRL_Read_32b_data_ADDR32, dest_original);
          break;
       case PACK_EDGE_OFFSET:
          ckernel::packer::pck_edge_offset_u edge;
          generate_pack_edge_offset(edge.f);
+         std::array<ckernel::packer::pck_edge_offset_t, ckernel::packer::NUM_PACKERS> edge_vec;
+         edge_vec = ckernel::packer::read_pack_edge_offset();
          write_pack_edge_offset(cfg, PCK_EDGE_OFFSET_SEC0_mask_ADDR32, edge);
          write_pack_edge_offset(cfg, PCK_EDGE_OFFSET_SEC1_mask_ADDR32, edge);
          write_pack_edge_offset(cfg, PCK_EDGE_OFFSET_SEC2_mask_ADDR32, edge);
          write_pack_edge_offset(cfg, PCK_EDGE_OFFSET_SEC3_mask_ADDR32, edge);
          dprint_tensix_pack_edge_offset();
+         edge.f = edge_vec[0];
+         write_pack_edge_offset(cfg, PCK_EDGE_OFFSET_SEC0_mask_ADDR32, edge);
+         edge.f = edge_vec[1];
+         write_pack_edge_offset(cfg, PCK_EDGE_OFFSET_SEC1_mask_ADDR32, edge);
+         edge.f = edge_vec[2];
+         write_pack_edge_offset(cfg, PCK_EDGE_OFFSET_SEC2_mask_ADDR32, edge);
+         edge.f = edge_vec[3];
+         write_pack_edge_offset(cfg, PCK_EDGE_OFFSET_SEC3_mask_ADDR32, edge);
          break;
       case PACK_COUNTERS:
          ckernel::packer::pack_counters_u counter;
          generate_pack_counters(counter.f);
+         std::array<ckernel::packer::pack_counters_t, ckernel::packer::NUM_PACKERS> counter_vec;
+         counter_vec = ckernel::packer::read_pack_counters();
          write_pack_counters(cfg, PACK_COUNTERS_SEC0_pack_per_xy_plane_ADDR32, counter);
          write_pack_counters(cfg, PACK_COUNTERS_SEC1_pack_per_xy_plane_ADDR32, counter);
          write_pack_counters(cfg, PACK_COUNTERS_SEC2_pack_per_xy_plane_ADDR32, counter);
          write_pack_counters(cfg, PACK_COUNTERS_SEC3_pack_per_xy_plane_ADDR32, counter);
          dprint_tensix_pack_counters();
+         counter.f = counter_vec[0];
+         write_pack_counters(cfg, PACK_COUNTERS_SEC0_pack_per_xy_plane_ADDR32, counter);
+         counter.f = counter_vec[1];
+         write_pack_counters(cfg, PACK_COUNTERS_SEC1_pack_per_xy_plane_ADDR32, counter);
+         counter.f = counter_vec[2];
+         write_pack_counters(cfg, PACK_COUNTERS_SEC2_pack_per_xy_plane_ADDR32, counter);
+         counter.f = counter_vec[3];
+         write_pack_counters(cfg, PACK_COUNTERS_SEC3_pack_per_xy_plane_ADDR32, counter);
          break;
    }
 }
