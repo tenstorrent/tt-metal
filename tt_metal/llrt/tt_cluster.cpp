@@ -223,12 +223,10 @@ void Cluster::assign_mem_channels_to_devices(
     }
 }
 
-void Cluster::get_metal_desc_from_tt_desc(
-    const std::unordered_map<chip_id_t, tt_SocDescriptor> &input,
-    const std::unordered_map<chip_id_t, uint32_t> &per_chip_id_harvesting_masks) {
-    for (const auto& it : input) {
-        chip_id_t id = it.first;
-        this->sdesc_per_chip_.emplace(id, metal_SocDescriptor(it.second, per_chip_id_harvesting_masks.at(id), this->cluster_desc_->get_board_type(id)));
+void Cluster::get_metal_desc_from_tt_desc() {
+    for (const auto& id : this->driver_->get_target_device_ids()) {
+        this->sdesc_per_chip_.emplace(
+            id, metal_SocDescriptor(this->driver_->get_soc_descriptor(id), this->cluster_desc_->get_board_type(id)));
     }
 }
 
@@ -280,9 +278,8 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
     }
     device_driver->set_barrier_address_params(barrier_params);
 
-    this->get_metal_desc_from_tt_desc(
-        device_driver->get_virtual_soc_descriptors(), device_driver->get_harvesting_masks_for_soc_descriptors());
     this->driver_ = std::move(device_driver);
+    this->get_metal_desc_from_tt_desc();
 }
 
 void Cluster::start_driver(tt_device_params &device_params) const {
@@ -464,14 +461,6 @@ CoreCoord Cluster::get_logical_ethernet_core_from_virtual(chip_id_t chip, CoreCo
     const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(chip);
     auto phys_eth_core = this->virtual_to_umd_coord_mapping_.at(tt_cxy_pair(chip, core.x, core.y));
     return soc_desc.get_logical_ethernet_core_from_physical(phys_eth_core);
-}
-
-uint32_t Cluster::get_harvested_rows(chip_id_t chip) const {
-    if (this->target_type_ == TargetDevice::Simulator) {
-        return 0;
-    } else {
-        return this->driver_->harvested_rows_per_target.at(chip);
-    }
 }
 
 int Cluster::get_device_aiclk(const chip_id_t &chip_id) const {

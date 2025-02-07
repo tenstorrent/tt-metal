@@ -18,7 +18,8 @@ using namespace tt::test_utils;
 
 namespace unit_tests::basic::soc_desc {
 std::unordered_set<int> get_harvested_rows(chip_id_t device_id) {
-    uint32_t harvested_rows_mask = tt::Cluster::instance().get_harvested_rows(device_id);
+    uint32_t harvested_rows_mask = CoordinateManager::shuffle_tensix_harvesting_mask_to_noc0_coords(
+        tt::Cluster::instance().get_soc_desc(device_id).arch, tt::Cluster::instance().get_harvesting_mask(device_id));
     std::unordered_set<int> harvested_rows;
     int row_coordinate = 0;
     int tmp = harvested_rows_mask;
@@ -51,7 +52,7 @@ TEST(SOC, TensixValidateLogicalToPhysicalCoreCoordHostMapping) {
     num_devices = (arch == tt::ARCH::GRAYSKULL) ? 1 : num_devices;
     for (int device_id = 0; device_id < num_devices; device_id++) {
         tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
-        uint32_t harvested_rows_mask = tt::Cluster::instance().get_harvested_rows(device_id);
+        uint32_t harvested_rows_mask = tt::Cluster::instance().get_harvesting_mask(device_id);
         const metal_SocDescriptor& soc_desc = tt::Cluster::instance().get_soc_desc(device_id);
         log_info(LogTest, "Device {} harvesting mask {}", device_id, harvested_rows_mask);
         std::unordered_set<int> harvested_rows = unit_tests::basic::soc_desc::get_harvested_rows(device_id);

@@ -2332,7 +2332,6 @@ bool Device::is_mmio_capable() const;
 const metal_SocDescriptor& tt_cluster::get_soc_desc(chip_id_t chip) const;
 
 // Get harvesting information for this chip
-uint32_t tt_cluster::get_harvested_rows(chip_id_t chip) const;
 uint32_t tt_cluster::get_harvesting_mask(chip_id_t chip) const;
 
 // Get the clock frequency for this chip
