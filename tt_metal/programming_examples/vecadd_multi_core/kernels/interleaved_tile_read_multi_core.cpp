@@ -11,7 +11,7 @@ void kernel_main() {
     uint32_t a_addr = get_arg_val<uint32_t>(0);
     uint32_t b_addr = get_arg_val<uint32_t>(1);
     uint32_t n_tiles = get_arg_val<uint32_t>(2);
-    uint32_t core_id = get_arg_val<uint32_t>(3);  // Add core ID argument
+    uint32_t start_tile_id = get_arg_val<uint32_t>(3);
 
     // The circular buffers to read the tiles into
     constexpr uint32_t cb_in0 = get_compile_time_arg_val(0);
@@ -39,13 +39,11 @@ void kernel_main() {
     };
 
     // Calculate the range of tiles this core should process
-    const uint32_t tiles_per_core = n_tiles;
-    const uint32_t start_tile = core_id * tiles_per_core;
-    const uint32_t end_tile = start_tile + tiles_per_core;
+    const uint32_t end_tile_id = start_tile_id + n_tiles;
 
     // Now we loop over the assigned tiles and read them into the circular
     // buffers
-    for (uint32_t i = start_tile; i < end_tile; i++) {
+    for (uint32_t i = start_tile_id; i < end_tile_id; i++) {
         // First we make sure there is space in the circular buffers
         cb_reserve_back(cb_in0, 1);
         cb_reserve_back(

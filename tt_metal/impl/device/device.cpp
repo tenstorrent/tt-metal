@@ -324,8 +324,8 @@ std::unique_ptr<Allocator> Device::initialize_allocator(size_t l1_small_size, si
         const auto noc_coord = this->virtual_core_from_logical_core(core, dispatch_core_type);
         config.core_type_from_noc_coord_table[noc_coord] = AllocCoreType::Dispatch;
     }
-    for (const auto &core : soc_desc.get_logical_ethernet_cores()) {
-        this->ethernet_cores_.insert(core);
+    for (const tt::umd::CoreCoord& core : soc_desc.get_cores(CoreType::ETH, CoordSystem::LOGICAL)) {
+        this->ethernet_cores_.insert({core.x, core.y});
     }
 
     // L1_BANKING scheme creates 1 bank per DRAM core and splits up L1 such that there are power 2 num L1 banks
@@ -715,7 +715,7 @@ void Device::initialize_and_launch_firmware() {
 
     const std::vector<CoreCoord> &pcie_cores = soc_d.get_pcie_cores();
     const std::vector<CoreCoord> &dram_cores = soc_d.get_dram_cores();
-    const std::vector<CoreCoord> &eth_cores = soc_d.get_physical_ethernet_cores();
+    const std::vector<tt::umd::CoreCoord>& eth_cores = soc_d.get_cores(CoreType::ETH, CoordSystem::PHYSICAL);
     // The SOC descriptor can list a dram core multiple times, depending on how GDDR is assigned to banks
     // Get a list of unique DRAM cores.
     std::unordered_set<CoreCoord> unique_dram_cores(dram_cores.begin(), dram_cores.end());
@@ -739,14 +739,14 @@ void Device::initialize_and_launch_firmware() {
     for (const CoreCoord &core : unique_dram_cores) {
         core_info->non_worker_cores[non_worker_cores_idx++] = {core.x, core.y, AddressableCoreType::DRAM};
     }
-    for (const CoreCoord &core : eth_cores) {
+    for (const tt::umd::CoreCoord& core : eth_cores) {
         core_info->non_worker_cores[non_worker_cores_idx++] = {core.x, core.y, AddressableCoreType::ETH};
     }
     if (hal.is_coordinate_virtualization_enabled()) {
         // Track Virtual Non Worker Cores (In this case only Eth) separately
         uint32_t virtual_non_worker_cores_idx = 0;
-        for (const CoreCoord &core : eth_cores) {
-            auto virtual_core = this->virtual_core_from_physical_core(core);
+        for (const tt::umd::CoreCoord& core : eth_cores) {
+            auto virtual_core = this->virtual_core_from_physical_core({core.x, core.y});
             core_info->virtual_non_worker_cores[virtual_non_worker_cores_idx++] = {virtual_core.x, virtual_core.y, AddressableCoreType::ETH};
         }
     }

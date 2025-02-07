@@ -9,6 +9,7 @@
 #include <chrono>
 #include <memory>
 
+#include "small_vector_caster.hpp"  // NOLINT - for pybind11 SmallVector binding support.
 #include "ttnn/tensor/tensor.hpp"
 #include <tt-metalium/graph_tracking.hpp>
 #include <tt-metalium/overloaded.hpp>

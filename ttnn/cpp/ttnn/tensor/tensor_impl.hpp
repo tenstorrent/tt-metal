@@ -12,6 +12,8 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/device_impl.hpp>
+#include <tt-metalium/mesh_device.hpp>
+
 #include <tracy/Tracy.hpp>
 
 #include "ttnn/tensor/host_buffer/functions.hpp"
@@ -175,22 +177,29 @@ std::shared_ptr<distributed::MeshBuffer> allocate_mesh_buffer_on_device(
     distributed::MeshDevice* mesh_device, const TensorSpec& tensor_spec);
 
 template <typename T>
-inline void read_data_from_device_buffer(
+void read_data_from_device_buffer(
     CommandQueue& cq, std::shared_ptr<Buffer> device_buffer, void* host_buffer_data, bool blocking) {
     EnqueueReadBuffer(cq, device_buffer, host_buffer_data, blocking);
 }
 
 template <typename T>
-inline void read_data_from_device_buffer(std::shared_ptr<Buffer> device_buffer, std::vector<T>& host_buffer) {
+void read_data_from_device_buffer(std::shared_ptr<Buffer> device_buffer, std::vector<T>& host_buffer) {
     ::tt::tt_metal::detail::ReadFromBuffer(device_buffer, host_buffer);
 }
 
 // ======================================================================================
-//                                         .to()
+//                                         .to_host() and .to_device()
 // ======================================================================================
 
 template <typename T>
 Tensor to_host(const Tensor& tensor, bool blocking = true, QueueId cq_id = ttnn::DefaultQueueId);
+<<<<<<< HEAD
+=======
+
+// TODO: #17215 - This will eventually subsume `to_host`, when "mesh buffer" backed tensors become the default.
+template <typename T>
+Tensor to_host_mesh_tensor(const Tensor& tensor, bool blocking = true);
+>>>>>>> origin/main
 
 template <typename T>
 Tensor to_device(
@@ -198,6 +207,18 @@ Tensor to_device(
     IDevice* target_device,
     const MemoryConfig& memory_config,
     QueueId cq_id = ttnn::DefaultQueueId);
+<<<<<<< HEAD
+=======
+
+// TODO: #17215 - This will eventually subsume `to_device`, when "mesh buffer" backed tensors become the default.
+template <typename T>
+Tensor to_device_mesh_tensor(
+    const Tensor& tensor, distributed::MeshDevice* mesh_device, const MemoryConfig& memory_config);
+
+// ======================================================================================
+//                                  .to_layout()
+// ======================================================================================
+>>>>>>> origin/main
 
 template <typename T>
 Tensor to_layout(const Tensor& tensor, Layout target_layout);
