@@ -9,6 +9,7 @@ import ttnn
 from models.utility_functions import skip_for_grayskull, torch_random
 from functools import partial
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
+from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 binary_fns = {
@@ -51,8 +52,12 @@ binary_fns = {
     "dtype",
     ([ttnn.bfloat16]),
 )
+@pytest.mark.parametrize(
+    "layout",
+    ([ttnn.TILE_LAYOUT]),
+)
 # No typecast on inputs and optional output
-def test_opt_output_no_typecast(input_shapes, dtype, ttnn_fn, device):
+def test_opt_output_no_typecast(input_shapes, dtype, layout, ttnn_fn, device):
     torch.manual_seed(0)
     a_shape, b_shape, out_shape = input_shapes
     ttnn_op = getattr(ttnn.experimental, ttnn_fn)
@@ -66,14 +71,12 @@ def test_opt_output_no_typecast(input_shapes, dtype, ttnn_fn, device):
     out = gen_func_with_cast_tt(partial(torch_random, low=0, high=1, dtype=torch.bfloat16), dtype)(out_shape)
 
     input_tensor_a = ttnn.from_torch(
-        torch_input_tensor_a, dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        torch_input_tensor_a, dtype=dtype, device=device, layout=layout, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
     input_tensor_b = ttnn.from_torch(
-        torch_input_tensor_b, dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        torch_input_tensor_b, dtype=dtype, device=device, layout=layout, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
-    out_tt = ttnn.from_torch(
-        out, dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
+    out_tt = ttnn.from_torch(out, dtype=dtype, device=device, layout=layout, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     cq_id = 0
     ttnn_op(input_tensor_a, input_tensor_b, queue_id=cq_id, output_tensor=out_tt)
     output_tensor = ttnn.to_torch(out_tt)
@@ -660,3 +663,99 @@ def test_opt_output_scalar(input_shapes, ttnn_fn, scalar, device):
 
     status = ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor)
     assert status >= 0.999
+
+
+@skip_for_grayskull("Requires wormhole_b0 to run")
+@pytest.mark.parametrize("input_shape", [(1, 1, 1, 1), (3, 3, 15, 15), (3, 3, 17, 17), (3, 3, 33, 33)])
+@pytest.mark.parametrize(
+    "memory_config",
+    ([ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG]),
+)
+@pytest.mark.parametrize("scalar", [-0.25, -16.5, 0.0, 0.05, 1.7, 19.0])
+@pytest.mark.parametrize(
+    "ttnn_fn",
+    [
+        "add",
+        "sub",
+        "mul",
+        "div",
+        "rsub",
+        "squared_difference",
+    ],
+)
+@pytest.mark.parametrize(
+    "layout",
+    ([ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT]),
+)
+def test_rm_eltwise_scalar_matrix_math(input_shape, scalar, ttnn_fn, memory_config, layout, device):
+    torch.manual_seed(0)
+    a_shape = input_shape
+
+    ttnn_op = getattr(ttnn.experimental, ttnn_fn)
+    torch_input_tensor_a = torch.randn(a_shape, dtype=torch.bfloat16)
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=layout,
+        memory_config=memory_config,
+    )
+
+    output = ttnn_op(input_tensor_a, scalar)
+    tt_output_tensor = ttnn.to_torch(output)
+
+    golden_fn = ttnn.get_golden_function(ttnn_op)
+    torch_output_tensor = golden_fn(torch_input_tensor_a, scalar)
+
+    assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.999)
+
+
+@skip_for_grayskull("Requires wormhole_b0 to run")
+@pytest.mark.parametrize("input_shape", [(1, 1, 1, 1), (3, 3, 15, 15), (3, 3, 17, 17), (3, 3, 33, 33)])
+@pytest.mark.parametrize(
+    "memory_config",
+    ([ttnn.DRAM_MEMORY_CONFIG]),
+)
+@pytest.mark.parametrize("scalar", [-0.25, -16.5, 0.0, 0.05, 1.7, 19.0])
+@pytest.mark.parametrize(
+    "ttnn_fn",
+    [
+        "gt",
+        "lt",
+        "lte",
+        "gte",
+        "eq",
+        "ne",
+    ],
+)
+@pytest.mark.parametrize(
+    "layout",
+    ([ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT]),
+)
+def test_rm_eltwise_scalar_logical(input_shape, scalar, ttnn_fn, memory_config, layout, device):
+    torch.manual_seed(0)
+    a_shape = input_shape
+
+    ttnn_op = getattr(ttnn.experimental, ttnn_fn)
+    torch_input_tensor_a = torch.randn(a_shape, dtype=torch.bfloat16)
+    torch_input_tensor_a[0, 0, 0, 0] = scalar
+    print(torch_input_tensor_a)
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=layout,
+        memory_config=memory_config,
+    )
+
+    output = ttnn_op(input_tensor_a, scalar, dtype=ttnn.uint32)
+    tt_output_tensor = ttnn.to_torch(output)
+    print(tt_output_tensor)
+
+    golden_fn = ttnn.get_golden_function(ttnn_op)
+    torch_output_tensor = golden_fn(torch_input_tensor_a, scalar)
+    print(torch_output_tensor)
+
+    assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.99)
