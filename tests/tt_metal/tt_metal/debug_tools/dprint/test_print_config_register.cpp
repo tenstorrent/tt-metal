@@ -306,6 +306,10 @@ TEST_F(DPrintFixture, ConfigRegReluTestPrint) {
         .field_values = field_values_relu_config,
         .register_name = RELU_CONFIG};
 
+    if (this->arch_ == ARCH::GRAYSKULL) {
+        GTEST_SKIP() << "Printing RELU CONFIG is not supported on grayskull.";
+    }
+
     // Run the test on the device
     this->RunTestOnDevice(
         [&](DPrintFixture* fixture, IDevice* device) { print_config_reg(fixture, device, test_config); },
@@ -321,6 +325,10 @@ TEST_F(DPrintFixture, ConfigRegDestRdCtrlTestPrint) {
         .field_names = field_names_dest_rd_ctrl,
         .field_values = field_values_dest_rd_ctrl,
         .register_name = DEST_RD_CTRL};
+
+    if (this->arch_ == ARCH::GRAYSKULL) {
+        GTEST_SKIP() << "Printing DEST RD CTRL is not supported on grayskull.";
+    }
 
     // Run the test on the device
     this->RunTestOnDevice(
