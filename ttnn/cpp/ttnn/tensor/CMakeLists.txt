@@ -18,22 +18,3 @@ set(TENSOR_SRCS
     CACHE INTERNAL
     "Tensor sources to reuse in ttnn build"
 )
-
-set(FBS_FILE ${CMAKE_CURRENT_SOURCE_DIR}/flatbuffer/tensor_types.fbs)
-get_filename_component(FBS_FILE_NAME ${FBS_FILE} NAME_WLE)
-message(
-    "CURRENT BIN DIR "
-    ${CMAKE_CURRENT_BINARY_DIR}
-)
-set(FBS_GENERATED_HEADER "${CMAKE_CURRENT_BINARY_DIR}/flatbuffers/${FBS_FILE_NAME}_generated.h")
-add_custom_command(
-    OUTPUT
-        ${FBS_GENERATED_HEADER}
-    COMMAND
-        flatc --cpp --scoped-enums -o "${CMAKE_CURRENT_BINARY_DIR}/flatbuffers/" ${FBS_FILE}
-    DEPENDS
-        flatc
-        ${FBS_FILE}
-    COMMENT "Generating FlatBuffers header ${FBS_GENERATED_HEADER}"
-)
-list(APPEND TENSOR_SRCS ${FBS_GENERATED_HEADER})
