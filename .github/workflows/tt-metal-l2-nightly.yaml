@@ -1,0 +1,79 @@
+name: "[internal] tt-metal l2 nigtly tests"
+
+on:
+  workflow_call:
+    inputs:
+      arch:
+        required: true
+        type: string
+      runner-label:
+        required: true
+        type: string
+      timeout:
+        required: false
+        type: number
+        default: 45
+  workflow_dispatch:
+    inputs:
+      arch:
+        required: true
+        type: choice
+        options:
+          - wormhole_b0
+          - blackhole
+      runner-label:
+        required: true
+        type: choice
+        options:
+          - N150
+          - N300
+          - BH
+      timeout:
+        required: false
+        type: number
+        default: 45
+
+jobs:
+  build:
+    uses: ./.github/workflows/build-artifact.yaml
+    secrets: inherit
+    with:
+      build-wheel: true
+  test:
+    needs: build-artifact
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ["ubuntu-20.04"]
+        test-group:
+          - name: ttnn example tests
+            cmd: ./tests/scripts/run_ttnn_examples.sh
+    name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
+    env:
+      LOGURU_LEVEL: INFO
+    runs-on:
+      - ${{ inputs.runner-label }}
+      - "in-service"
+    steps:
+      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
+      - uses: actions/download-artifact@v4
+        with:
+          name: eager-dist-${{ matrix.os }}-any
+      - name: ${{ matrix.test-group.name }} tests
+        timeout-minutes: ${{ inputs.timeout }}
+        uses: ./.github/actions/docker-run
+        with:
+          docker_username: ${{ github.actor }}
+          docker_password: ${{ secrets.GITHUB_TOKEN }}
+          docker_opts: |
+            -e ARCH_NAME=${{ inputs.arch }}
+          run_args: |
+            WHEEL_FILENAME=$(ls -1 *.whl)
+            pip3 install --user $WHEEL_FILENAME
+            ${{ matrix.test-group.cmd }}
+
+#      - uses: ./.github/actions/slack-report
+#        if: ${{ failure() }}
+#        with:
+#          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+#          owner: U06CXU895AP # Michael Chiou
