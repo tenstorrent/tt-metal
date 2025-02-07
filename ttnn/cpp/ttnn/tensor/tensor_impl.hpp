@@ -193,13 +193,10 @@ void read_data_from_device_buffer(std::shared_ptr<Buffer> device_buffer, std::ve
 
 template <typename T>
 Tensor to_host(const Tensor& tensor, bool blocking = true, QueueId cq_id = ttnn::DefaultQueueId);
-<<<<<<< HEAD
-=======
 
 // TODO: #17215 - This will eventually subsume `to_host`, when "mesh buffer" backed tensors become the default.
 template <typename T>
 Tensor to_host_mesh_tensor(const Tensor& tensor, bool blocking = true);
->>>>>>> origin/main
 
 template <typename T>
 Tensor to_device(
@@ -207,8 +204,6 @@ Tensor to_device(
     IDevice* target_device,
     const MemoryConfig& memory_config,
     QueueId cq_id = ttnn::DefaultQueueId);
-<<<<<<< HEAD
-=======
 
 // TODO: #17215 - This will eventually subsume `to_device`, when "mesh buffer" backed tensors become the default.
 template <typename T>
@@ -218,7 +213,6 @@ Tensor to_device_mesh_tensor(
 // ======================================================================================
 //                                  .to_layout()
 // ======================================================================================
->>>>>>> origin/main
 
 template <typename T>
 Tensor to_layout(const Tensor& tensor, Layout target_layout);
