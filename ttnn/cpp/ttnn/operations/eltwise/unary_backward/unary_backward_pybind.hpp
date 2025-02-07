@@ -222,7 +222,7 @@ void bind_unary_backward_rsqrt(
                const ttnn::Tensor& input_tensor,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& input_grad,
-               const uint8_t& queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
+               QueueId queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
                 return self(queue_id, grad_tensor, input_tensor, memory_config, input_grad);
             },
             py::arg("grad_tensor"),
@@ -866,7 +866,7 @@ void bind_unary_backward_unary_optional_float(
                float parameter,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& input_grad,
-               const uint8_t& queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
+               QueueId queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
                 return self(queue_id, grad_tensor, input_tensor, parameter, memory_config, input_grad);
             },
             py::arg("grad_tensor"),
@@ -875,7 +875,7 @@ void bind_unary_backward_unary_optional_float(
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("input_grad") = std::nullopt,
-            py::arg("queue_id") = 0});
+            py::arg("queue_id") = DefaultQueueId});
 }
 
 template <typename unary_backward_operation_t>
@@ -1012,7 +1012,7 @@ void bind_unary_backward_optional(
                const ttnn::Tensor& input_tensor,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& input_grad,
-               const uint8_t& queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
+               QueueId queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
                 return self(queue_id, grad_tensor, input_tensor, memory_config, input_grad);
             },
             py::arg("grad_tensor"),
@@ -1083,7 +1083,7 @@ void bind_unary_backward_neg(
                const ttnn::Tensor& input_tensor,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& input_grad,
-               const uint8_t& queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
+               QueueId queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
                 return self(queue_id, grad_tensor, input_tensor, memory_config, input_grad);
             },
             py::arg("grad_tensor"),
@@ -1227,7 +1227,7 @@ void bind_unary_backward_gelu(
                string parameter_a,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& input_grad,
-               const uint8_t& queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
+               QueueId queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
                 return self(queue_id, grad_tensor, input_tensor, parameter_a, memory_config, input_grad);
             },
             py::arg("grad_tensor"),

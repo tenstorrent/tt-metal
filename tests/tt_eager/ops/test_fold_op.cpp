@@ -19,8 +19,7 @@ void run_fold(IDevice* device, const ttnn::Shape& shape) {
     Tensor input_tensor = ttnn::random::random(shape).to_layout(Layout::ROW_MAJOR).to_device(device);
     uint32_t stride_h = 2;
     uint32_t stride_w = 2;
-    uint8_t queue_id = 0;
-    Tensor device_output_tensor = ttnn::fold(queue_id, input_tensor, stride_h, stride_w);
+    Tensor device_output_tensor = ttnn::fold(ttnn::DefaultQueueId, input_tensor, stride_h, stride_w);
     Tensor output_tensor = device_output_tensor.cpu();
 }
 

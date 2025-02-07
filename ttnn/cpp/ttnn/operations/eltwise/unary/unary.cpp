@@ -4,7 +4,7 @@
 
 #include "unary.hpp"
 
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "device/unary_device_operation.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/pool/downsample/device/downsample_op.hpp"
@@ -17,7 +17,7 @@ namespace ttnn::operations::unary {
 namespace detail {
 
 inline Tensor unary_impl(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& input_tensor,
     const std::vector<UnaryWithParam>& op_chain,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
@@ -51,7 +51,7 @@ inline Tensor unary_impl(
 
 template <UnaryOpType... unary_op_types>
 Tensor ExecuteUnary<unary_op_types...>::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
@@ -126,7 +126,7 @@ template struct ExecuteUnary<UnaryOpType::BITWISE_NOT>;
 
 template <UnaryOpType unary_op_type>
 Tensor ExecuteUnaryWithFastAndApproximateMode<unary_op_type>::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& input_tensor,
     const bool parameter,
     const std::optional<MemoryConfig>& memory_config,
@@ -161,7 +161,7 @@ template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::RSQRT>;
 
 template <UnaryOpType unary_op_type>
 Tensor ExecuteUnaryWithFloatParameter<unary_op_type>::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& input_tensor,
     const float parameter,
     const std::optional<MemoryConfig>& memory_config,
@@ -202,7 +202,7 @@ template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_LT>;
 template struct ExecuteUnaryWithFloatParameter<UnaryOpType::UNARY_NE>;
 
 Tensor Sigmoid_accurate::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& input,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
@@ -233,7 +233,7 @@ Tensor Sigmoid_accurate::invoke(
 }
 
 Tensor Unary_chain::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& input_tensor,
     const std::vector<UnaryWithParam>& ops_chain,
     const std::optional<MemoryConfig>& memory_config,
@@ -252,7 +252,7 @@ Tensor Unary_chain::invoke(
 }
 
 Tensor Softplus::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& input,
     const float beta,
     const float threshold,
@@ -283,7 +283,7 @@ Tensor Softplus::invoke(
 }
 
 Tensor Prelu::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& input,
     float value,
     const std::optional<MemoryConfig>& memory_config,
@@ -302,7 +302,7 @@ Tensor Prelu::invoke(
 }
 
 Tensor Identity::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
@@ -328,7 +328,7 @@ Tensor Identity::invoke(
 }
 
 Tensor Abs::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
@@ -356,7 +356,7 @@ Tensor Abs::invoke(const ComplexTensor& input_tensor, const MemoryConfig& output
 }
 
 Tensor Floor::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
@@ -382,7 +382,7 @@ Tensor Floor::invoke(
 }
 
 Tensor Ceil::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
@@ -409,7 +409,7 @@ Tensor Ceil::invoke(
 
 template <UnaryOpType unary_op_type, typename T>
 Tensor ExecuteUnaryWithIntegerParameter<unary_op_type, T>::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& input_tensor,
     T parameter,
     const std::optional<MemoryConfig>& memory_config,
@@ -445,7 +445,7 @@ template struct ExecuteUnaryWithIntegerParameter<UnaryOpType::BITWISE_XOR, int32
 
 template <UnaryOpType unary_op_type, typename T>
 Tensor SymmetricBinop<unary_op_type, T>::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& input_tensor,
     T param,
     const std::optional<MemoryConfig>& memory_config,
@@ -460,7 +460,7 @@ Tensor SymmetricBinop<unary_op_type, T>::invoke(
 
 template <UnaryOpType unary_op_type, typename T>
 Tensor SymmetricBinop<unary_op_type, T>::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     T param,
     const Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
@@ -507,7 +507,7 @@ template struct SymmetricBinop<UnaryOpType::MUL_UNARY_SFPU>;
 
 template <UnaryOpType unary_op_type, UnaryOpType unary_op_rev_type>
 Tensor AsymmetricBinop<unary_op_type, unary_op_rev_type>::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& input_tensor,
     float param,
     const std::optional<MemoryConfig>& memory_config,
@@ -522,7 +522,7 @@ Tensor AsymmetricBinop<unary_op_type, unary_op_rev_type>::invoke(
 
 template <UnaryOpType unary_op_type, UnaryOpType unary_op_rev_type>
 Tensor AsymmetricBinop<unary_op_type, unary_op_rev_type>::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     float param,
     const Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,

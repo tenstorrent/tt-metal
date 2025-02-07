@@ -259,7 +259,7 @@ Result conv2d(
 }
 
 Result Conv2dOperation::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     IDevice* device,
@@ -298,7 +298,7 @@ Result Conv2dOperation::invoke(
 }
 
 Result Conv2dOperation::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     MeshDevice* device,

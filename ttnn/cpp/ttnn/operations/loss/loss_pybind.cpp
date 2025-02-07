@@ -60,7 +60,7 @@ void bind_mse_loss_function(py::module& module) {
                const LossReductionMode mode,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<Tensor> optional_output_tensor,
-               uint8_t queue_id) -> ttnn::Tensor {
+               QueueId queue_id) -> ttnn::Tensor {
                 return self(queue_id, ref, prediction, mode, memory_config, optional_output_tensor);
             },
             py::arg("input_reference"),
@@ -69,7 +69,7 @@ void bind_mse_loss_function(py::module& module) {
             py::arg("reduction") = LossReductionMode::NONE,
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("queue_id") = 0});
+            py::arg("queue_id") = DefaultQueueId});
 }
 
 void bind_mae_loss_function(py::module& module) {
@@ -111,7 +111,7 @@ void bind_mae_loss_function(py::module& module) {
                const LossReductionMode mode,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<Tensor> optional_output_tensor,
-               uint8_t queue_id) -> ttnn::Tensor {
+               QueueId queue_id) -> ttnn::Tensor {
                 return self(queue_id, ref, prediction, mode, memory_config, optional_output_tensor);
             },
             py::arg("input_reference"),
@@ -120,7 +120,7 @@ void bind_mae_loss_function(py::module& module) {
             py::arg("reduction") = LossReductionMode::NONE,
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("queue_id") = 0});
+            py::arg("queue_id") = DefaultQueueId});
 }
 
 }  // namespace detail
