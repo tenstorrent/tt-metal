@@ -9,6 +9,7 @@
 #include <pybind11/stl/filesystem.h>
 
 #include "ttnn/core.hpp"
+#include "tt-metalium/lightmetal_binary.hpp"
 
 namespace py = pybind11;
 
@@ -30,7 +31,20 @@ void py_module(py::module& module) {
     });
     py_config.def_property_readonly("report_path", &ttnn::Config::get<"report_path">);
 
+    py::class_<LightMetalBinary>(module, "LightMetalBinary")
+        .def(py::init<>())
+        .def(py::init<std::vector<uint8_t>>())
+        .def("get_data", &LightMetalBinary::get_data)
+        .def("set_data", &LightMetalBinary::set_data)
+        .def("size", &LightMetalBinary::size)
+        .def("is_empty", &LightMetalBinary::is_empty)
+        .def("save_to_file", &LightMetalBinary::save_to_file)
+        .def_static("load_from_file", &LightMetalBinary::load_from_file);
+
     module.def("get_memory_config", &ttnn::get_memory_config);
+    module.def("light_metal_begin_capture", &LightMetalBeginCapture);
+    module.def("light_metal_end_capture", &LightMetalEndCapture);
+
     module.def(
         "set_printoptions",
         &ttnn::set_printoptions,

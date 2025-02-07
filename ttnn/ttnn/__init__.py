@@ -209,6 +209,8 @@ from ttnn.core import (
     has_tile_padding,
     is_sharded,
     get_memory_config,
+    light_metal_begin_capture,
+    light_metal_end_capture,
     create_sharded_memory_config,
     create_sharded_memory_config_,
     dump_memory_config,
