@@ -33,6 +33,8 @@ LLAMA_DIRS=(
     "${LLAMA_31_8B_DIR:-/proj_sw/user_dev/llama31-8b-data/Meta-Llama-3.1-8B-Instruct}"
     "${LLAMA_32_11B_DIR:-/proj_sw/user_dev/llama32-data/Llama3.2-11B-Vision-Instruct}"
     "${LLAMA_31_70B_DIR:-/proj_sw/llama3_1-weights/Meta-Llama-3.1-70B-Instruct/repacked}"
+    "${QWEN_25_7B_DIR:-/proj_sw/user_dev/Qwen/Qwen2.5-7B-Instruct}"
+    "${QWEN_25_72B_DIR:-/proj_sw/user_dev/Qwen/Qwen2.5-72B-Instruct}"
 )
 
 # Create reference_outputs directory if it doesn't exist
@@ -40,21 +42,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUTPUT_DIR="${SCRIPT_DIR}/reference_outputs"
 mkdir -p "$OUTPUT_DIR"
 
-# Function to get model size from directory path
-get_model_size() {
-    if [[ $1 == *"-1B"* ]]; then
-        echo "1b"
-    elif [[ $1 == *"-3B"* ]]; then
-        echo "3b"
-    elif [[ $1 == *"-8B"* ]]; then
-        echo "8b"
-    elif [[ $1 == *"-11B"* ]]; then
-        echo "11b"
-    elif [[ $1 == *"-70B"* ]]; then
-        echo "70b"
-    else
-        echo "unknown"
+# Function to get model name from directory path
+get_model_name() {
+    local dir_name=$(basename "$1")
+    # If the path ends in /repacked, use the parent directory name instead
+    if [ "$dir_name" = "repacked" ]; then
+        dir_name=$(basename "$(dirname "$1")")
     fi
+    echo "$dir_name"
 }
 
 # Loop through each LLAMA directory
@@ -65,8 +60,8 @@ for DIR in "${LLAMA_DIRS[@]}"; do
     fi
 
     # Get model size for output filename
-    MODEL_SIZE=$(get_model_size "$DIR")
-    OUTPUT_FILE="${OUTPUT_DIR}/${MODEL_SIZE}.refpt"
+    MODEL_NAME=$(get_model_name "$DIR")
+    OUTPUT_FILE="${OUTPUT_DIR}/${MODEL_NAME}_full.refpt"
 
     echo "Generating reference outputs for ${MODEL_SIZE} model..."
     echo "Using weights from: ${DIR}"

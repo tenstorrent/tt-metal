@@ -72,14 +72,16 @@ class TtLlamaCrossAttentionTransformerVision(LightweightModule):
             return w.transpose(-1, -2).view(orig_shape)
 
         as_interleaved_tensor = lambda name, suffix, type, dim: ttnn.as_tensor(
-            shuffle_weight(torch_weight(name, suffix))
-            if suffix == "weight"
-            else torch_bias(name, suffix),  # Grab only the wX part of the name
+            (
+                shuffle_weight(torch_weight(name, suffix)) if suffix == "weight" else torch_bias(name, suffix)
+            ),  # Grab only the wX part of the name
             dtype=type,
             device=self.mesh_device,
-            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=dim)
-            if dim is not None
-            else ttnn.ReplicateTensorToMesh(self.mesh_device),
+            mesh_mapper=(
+                ttnn.ShardTensorToMesh(self.mesh_device, dim=dim)
+                if dim is not None
+                else ttnn.ReplicateTensorToMesh(self.mesh_device)
+            ),
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_file_name=cache_name(name, suffix),
