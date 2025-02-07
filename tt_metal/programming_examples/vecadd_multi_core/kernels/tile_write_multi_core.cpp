@@ -7,7 +7,7 @@
 void kernel_main() {
     uint32_t c_addr = get_arg_val<uint32_t>(0);
     uint32_t n_tiles = get_arg_val<uint32_t>(1);
-    uint32_t core_id = get_arg_val<uint32_t>(2);  // Add core ID argument
+    uint32_t start_tile_id = get_arg_val<uint32_t>(2);
 
     // The circular buffer that we are going to read from and write to DRAM
     constexpr uint32_t cb_out0 = get_compile_time_arg_val(0);
@@ -22,12 +22,10 @@ void kernel_main() {
     };
 
     // Calculate the range of tiles this core should process
-    const uint32_t tiles_per_core = n_tiles;
-    const uint32_t start_tile = core_id * tiles_per_core;
-    const uint32_t end_tile = start_tile + tiles_per_core;
+    const uint32_t end_tile_id = start_tile_id + n_tiles;
 
     // Loop over the assigned tiles and write them to the output buffer
-    for (uint32_t i = start_tile; i < end_tile; i++) {
+    for (uint32_t i = start_tile_id; i < end_tile_id; i++) {
         // Make sure there is a tile in the circular buffer
         cb_wait_front(cb_out0, 1);
         uint32_t cb_out0_addr = get_read_ptr(cb_out0);
