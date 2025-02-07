@@ -118,9 +118,13 @@ void RunTestOnCore(WatcherFixture* fixture, IDevice* device, CoreCoord &core, bo
         case SanitizeZeroL1Write: output_l1_buffer_addr = 0; break;
         case SanitizeMailboxWrite:
             // This is illegal because we'd be writing to the mailbox memory
-            l1_buffer_addr = hal.get_dev_addr(
-                (is_eth_core) ? HalProgrammableCoreType::ACTIVE_ETH : HalProgrammableCoreType::TENSIX,
-                HalL1MemAddrType::MAILBOX);
+            if (is_eth_core) {
+                l1_buffer_addr = std::min(
+                    hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::MAILBOX),
+                    hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::MAILBOX));
+            } else {
+                l1_buffer_addr = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::MAILBOX);
+            }
             break;
         default:
             log_warning(LogTest, "Unrecognized feature to test ({}), skipping...", feature);
