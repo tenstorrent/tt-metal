@@ -17,6 +17,7 @@ set(TTNN_BASE_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/graph/graph_pybind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/creation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/sharding_utilities.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl/sharding_addrgen_helper.cpp
 )
 set(TTNN_OP_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/core/compute_kernel/compute_kernel_config.cpp
@@ -649,6 +650,8 @@ set(TTNN_SUBLIBRARIES
 set(TTNN_SRC)
 
 set(PYBIND_SRC
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/__init__.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/types.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/events.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/global_circular_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/global_semaphore.cpp
@@ -682,7 +685,7 @@ set(TTNN_PUBLIC_INCLUDE_DIRS
 set(TTNN_PUBLIC_LINK_LIBRARIES
     metal_common_libs
     Metalium::Metal
-    Boost::container
+    Metalium::Metal::STL
     xtensor
     xtensor-blas
     xtl
@@ -708,7 +711,6 @@ if(WITH_PYTHON_BINDINGS)
     list(
         APPEND
         TTNN_BASE_SRCS
-        ${PROJECT_SOURCE_DIR}/ttnn/cpp/pybind11/__init__.cpp
         ${TT_LIB_SRCS}
         ${PYBIND_SRC}
     ) # TT_LIB_SRCS from tt_eager/tt_lib/CMakeLists.txt for python bindigns
@@ -757,11 +759,6 @@ function(add_ttnn_sublibrary SUBLIBRARY_NAME)
         add_library(${SUBLIBRARY_NAME} OBJECT ${ARGN})
     endif()
     TT_ENABLE_UNITY_BUILD(${SUBLIBRARY_NAME})
-    if(WITH_PYTHON_BINDINGS)
-        target_compile_definitions(${SUBLIBRARY_NAME} PUBLIC TTNN_WITH_PYTHON_BINDINGS=1)
-    else()
-        target_compile_definitions(${SUBLIBRARY_NAME} PUBLIC TTNN_WITH_PYTHON_BINDINGS=0)
-    endif()
     target_include_directories(${SUBLIBRARY_NAME} PUBLIC ${TTNN_PUBLIC_INCLUDE_DIRS})
     target_link_libraries(${SUBLIBRARY_NAME} PUBLIC ${TTNN_PUBLIC_LINK_LIBRARIES})
     target_link_directories(${SUBLIBRARY_NAME} PUBLIC ${TTNN_PUBLIC_LINK_DIRS})
@@ -824,12 +821,6 @@ target_compile_options(
         -Wno-int-to-pointer-cast
         -fno-var-tracking
 )
-
-if(WITH_PYTHON_BINDINGS)
-    target_compile_definitions(ttnn PUBLIC TTNN_WITH_PYTHON_BINDINGS=1)
-else()
-    target_compile_definitions(ttnn PUBLIC TTNN_WITH_PYTHON_BINDINGS=0)
-endif()
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     target_compile_definitions(ttnn PUBLIC DISABLE_NAMESPACE_STATIC_ASSERT)

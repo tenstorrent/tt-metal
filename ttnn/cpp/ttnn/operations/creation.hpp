@@ -8,7 +8,7 @@
 #include <variant>
 
 #include <tt-metalium/command_queue.hpp>
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/core.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/distributed/types.hpp"
@@ -99,16 +99,16 @@ static Tensor arange_impl(
     auto output =
         Tensor(
             OwnedStorage{owned_buffer}, ttnn::Shape{1, 1, 1, static_cast<uint32_t>(size)}, data_type, Layout::ROW_MAJOR)
-            .to(layout);
+            .to_layout(layout);
     if (device.has_value()) {
-        output = output.to(device->get_devices(), output_mem_config);
+        output = output.to_device(device->get_devices(), output_mem_config);
     }
     return output;
 }
 
 template <typename T>
 static Tensor full_impl(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Shape& shape,
     T value,
     const Layout layout,
@@ -125,7 +125,7 @@ static Tensor full_impl(
     if (!optional_output_tensor.has_value()) {
         auto output = Tensor(OwnedStorage{owned_buffer}, shape, data_type, layout);
         if (!devices.empty()) {
-            output = output.to(devices, output_mem_config);
+            output = output.to_device(devices, output_mem_config);
         }
         return output;
     } else {
@@ -134,7 +134,7 @@ static Tensor full_impl(
 
         for (auto* buffer : buffers) {
             if (using_fast_dispatch) {
-                auto& cmd_queue = buffer->device()->command_queue(queue_id);
+                auto& cmd_queue = buffer->device()->command_queue(*queue_id);
                 tt::tt_metal::EnqueueWriteBuffer(cmd_queue, *buffer, owned_buffer.data(), /*blocking=*/false);
             } else {
                 tt::tt_metal::detail::WriteToBuffer(*buffer, owned_buffer.get());
@@ -149,7 +149,7 @@ static Tensor full_impl(
 
 template <typename T>
 inline ttnn::Tensor full_impl(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Shape& shape,
     const T fill_value,
     const std::optional<DataType>& dtype = std::nullopt,
@@ -193,7 +193,7 @@ inline ttnn::Tensor full(
     detail::OptionalAnyDevice device = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<ttnn::Tensor> optional_output_tensor = std::nullopt,
-    uint8_t queue_id = ttnn::DefaultQueueId) {
+    ttnn::QueueId queue_id = ttnn::DefaultQueueId) {
     return full_impl(
         queue_id,
         shape,
@@ -227,7 +227,7 @@ inline constexpr Ones ones{};
 
 template <typename T>
 inline ttnn::Tensor full_like_impl(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& tensor,
     const T fill_value,
     const std::optional<DataType>& dtype = std::nullopt,
@@ -288,7 +288,7 @@ struct FullLikeWith {
     static constexpr auto fill_value = FillValue.invoke();
 
     static ttnn::Tensor invoke(
-        uint8_t queue_id,
+        QueueId queue_id,
         const ttnn::Tensor& tensor,
         const std::optional<DataType>& dtype = std::nullopt,
         const std::optional<Layout>& layout = std::nullopt,
@@ -351,7 +351,7 @@ struct Full {
     template <typename FillValueType>
         requires std::is_same_v<FillValueType, int> or std::is_same_v<FillValueType, float>
     static ttnn::Tensor invoke(
-        uint8_t queue_id,
+        QueueId queue_id,
         const ttnn::Shape& shape,
         const FillValueType fill_value,
         const std::optional<DataType>& dtype = std::nullopt,
@@ -396,7 +396,7 @@ struct FullLike {
     template <typename FillValueType>
         requires std::is_same_v<FillValueType, int> or std::is_same_v<FillValueType, float>
     static ttnn::Tensor invoke(
-        uint8_t queue_id,
+        QueueId queue_id,
         const ttnn::Tensor& tensor,
         const FillValueType fill_value,
         const std::optional<DataType>& dtype = std::nullopt,

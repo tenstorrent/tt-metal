@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <dispatch_core_manager.hpp>
-#include <tt-metalium/tt_cluster.hpp>
 
 namespace tt::tt_metal {
 
@@ -32,6 +31,7 @@ public:
     const DispatchCoreConfig& get_dispatch_core_config() const;
     const std::vector<CoreCoord>& get_logical_storage_cores(uint32_t device_id) const;
     const std::vector<CoreCoord>& get_logical_dispatch_cores(uint32_t device_id) const;
+    tt_cxy_pair get_dispatch_core(uint8_t cq_id) const;
 
 private:
     void reset(uint8_t num_hw_cqs);
@@ -42,6 +42,9 @@ private:
     NOC go_signal_noc_ = NOC::NOC_0;
     uint8_t num_hw_cqs_ = 0;
     DispatchCoreConfig dispatch_core_config_;
+    // Make this mutable, since this is JIT populated
+    // through a const instance when queried
+    mutable std::vector<tt_cxy_pair> dispatch_cores_;
 };
 
 }  // namespace tt::tt_metal

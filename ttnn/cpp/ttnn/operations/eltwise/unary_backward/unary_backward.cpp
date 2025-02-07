@@ -6,7 +6,7 @@
 #include <utility>
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
 #include <tt-metalium/constants.hpp>
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
@@ -237,7 +237,7 @@ std::vector<Tensor> ExecuteUnaryBackwardRdiv::invoke(
 // unary_pow:
 // grad_input = grad * exponent * torch.pow(input, exponent - 1)
 std::vector<std::optional<Tensor>> ExecuteUnaryBackwardPow::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& grad,
     const Tensor& input,
     float exponent,
@@ -290,7 +290,7 @@ std::vector<std::optional<Tensor>> ExecuteUnaryBackwardPow::invoke(
 }
 
 std::vector<std::optional<Tensor>> ExecuteUnaryBackwardExp::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& grad,
     const Tensor& input,
     const std::optional<MemoryConfig>& output_mem_config,
@@ -335,7 +335,7 @@ std::vector<std::optional<Tensor>> ExecuteUnaryBackwardExp::invoke(
 }
 
 std::vector<std::optional<Tensor>> ExecuteUnaryBackwardTanh::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& grad,
     const Tensor& input,
     const std::optional<MemoryConfig>& output_mem_config,
@@ -360,7 +360,7 @@ std::vector<std::optional<Tensor>> ExecuteUnaryBackwardTanh::invoke(
 }
 
 std::vector<std::optional<Tensor>> ExecuteUnaryBackwardSqrt::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& grad,
     const Tensor& input,
     const std::optional<MemoryConfig>& output_mem_config,
@@ -551,7 +551,7 @@ std::vector<Tensor> ExecuteUnaryBackwardSigmoid::invoke(
 }
 
 std::vector<std::optional<ttnn::Tensor>> ExecuteUnaryBackwardRsqrt::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& grad,
     const Tensor& input,
     const std::optional<MemoryConfig>& output_mem_config,
@@ -612,7 +612,7 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteUnaryBackwardRsqrt::invoke(
 }
 
 std::vector<std::optional<Tensor>> ExecuteUnaryBackwardNeg::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& grad,
     const Tensor& input,
     const std::optional<MemoryConfig>& output_mem_config,
@@ -644,7 +644,7 @@ std::vector<Tensor> ExecuteUnaryBackwardRelu::invoke(
 // self: zeros_like(grad)
 // result: at::fill(self_t, 0)
 std::vector<std::optional<Tensor>> ExecuteUnaryBackwardFill::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& grad,
     const Tensor& input,
     const std::optional<MemoryConfig>& output_mem_config,
@@ -984,7 +984,7 @@ std::vector<Tensor> _abs_bw(
 // Silu
 // result:  grad * sigmoid_result * (1 + input * (1 - sigmoid_result))
 std::vector<std::optional<Tensor>> ExecuteUnaryBackwardSilu::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& grad,
     const Tensor& input,
     const std::optional<MemoryConfig>& output_mem_config,
@@ -1673,7 +1673,7 @@ std::vector<Tensor> ExecuteUnaryBackwardDeg2rad::invoke(
 }
 
 std::vector<std::optional<ttnn::Tensor>> ExecuteUnaryBackwardGelu::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& grad,
     const Tensor& input,
     const string& approximate,
@@ -1886,8 +1886,8 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
             if (updated_grad.storage_type() != StorageType::DEVICE &&
                 updated_grad.storage_type() != StorageType::MULTI_DEVICE) {
                 Tensor pad_updated_grad = updated_grad.pad_to_tile(1.0f);
-                pad_updated_grad = pad_updated_grad.to(Layout::TILE);
-                updated_grad = pad_updated_grad.to(input.device());
+                pad_updated_grad = pad_updated_grad.to_layout(Layout::TILE);
+                updated_grad = pad_updated_grad.to_device(input.device());
             }
         } else if (dim == 2 || dim == -2) {
             ttnn::SmallVector<int64_t> after_permute_dims = {0, 2, 1, 3};
@@ -1913,13 +1913,23 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
         temp = ttnn::operations::unary_backward::change_layout_to_tile(temp, output_memory_config);
     }
     if (dim == 3 || dim == -1) {
-        Tensor grad_result =
-            ttnn::bcast(0, reciprocal_input, temp, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::W, output_memory_config);
+        Tensor grad_result = ttnn::bcast(
+            ttnn::DefaultQueueId,
+            reciprocal_input,
+            temp,
+            ttnn::BcastOpMath::MUL,
+            ttnn::BcastOpDim::W,
+            output_memory_config);
         grad_tensor.emplace_back(grad_result);
         return grad_tensor;
     } else if (dim == 2 || dim == -2) {
-        Tensor grad_result =
-            ttnn::bcast(0, reciprocal_input, temp, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::H, output_memory_config);
+        Tensor grad_result = ttnn::bcast(
+            ttnn::DefaultQueueId,
+            reciprocal_input,
+            temp,
+            ttnn::BcastOpMath::MUL,
+            ttnn::BcastOpDim::H,
+            output_memory_config);
         grad_tensor.emplace_back(grad_result);
         return grad_tensor;
     } else if (dim == 1 || dim == -3) {
@@ -1927,7 +1937,7 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
         if (reciprocal_input.padded_shape()[1] % 32 != 0) {
             ttnn::SmallVector<std::pair<uint32_t, uint32_t>> padding = {
                 {0, 0}, {0, 32 - (reciprocal_input.padded_shape()[1] % 32)}, {0, 0}, {0, 0}};
-            tensor_1_temp = ttnn::pad(0, reciprocal_input, padding, 0, true, std::nullopt);
+            tensor_1_temp = ttnn::pad(ttnn::DefaultQueueId, reciprocal_input, padding, 0, true, std::nullopt);
         }
         ttnn::SmallVector<int64_t> after_permute_dims = {0, 2, 3, 1};
         Tensor tensor_1 = ttnn::permute(tensor_1_temp, after_permute_dims, output_memory_config);
@@ -1940,7 +1950,13 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
 
         after_permute_dims = {0, 3, 1, 2};
         Tensor result = permute(
-            ttnn::bcast(0, tensor_1, tensor_2, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::W, output_memory_config),
+            ttnn::bcast(
+                ttnn::DefaultQueueId,
+                tensor_1,
+                tensor_2,
+                ttnn::BcastOpMath::MUL,
+                ttnn::BcastOpDim::W,
+                output_memory_config),
             after_permute_dims,
             output_memory_config);
         Tensor grad_result = result;
@@ -1959,7 +1975,7 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
     if (reciprocal_input.padded_shape()[0] % 32 != 0) {
         ttnn::SmallVector<std::pair<uint32_t, uint32_t>> padding = {
             {0, (32 - (reciprocal_input.padded_shape()[0] % 32))}, {0, 0}, {0, 0}, {0, 0}};
-        tensor_1_temp = ttnn::pad(0, reciprocal_input, padding, 0, false, std::nullopt);
+        tensor_1_temp = ttnn::pad(ttnn::DefaultQueueId, reciprocal_input, padding, 0, false, std::nullopt);
     }
     ttnn::SmallVector<int64_t> after_permute_dims = {3, 1, 2, 0};
     Tensor tensor_1 = ttnn::permute(tensor_1_temp, after_permute_dims, output_memory_config);
@@ -1971,7 +1987,13 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
         tensor_2, tensor_1.device(), tensor_1.get_layout(), tensor_1.memory_config());
 
     Tensor result = ttnn::permute(
-        ttnn::bcast(0, tensor_1, tensor_2, ttnn::BcastOpMath::MUL, ttnn::BcastOpDim::W, output_memory_config),
+        ttnn::bcast(
+            ttnn::DefaultQueueId,
+            tensor_1,
+            tensor_2,
+            ttnn::BcastOpMath::MUL,
+            ttnn::BcastOpDim::W,
+            output_memory_config),
         after_permute_dims,
         output_memory_config);
     Tensor grad_result = result;

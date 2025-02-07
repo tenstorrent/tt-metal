@@ -43,7 +43,6 @@ RUN mkdir -p /tmp/cba \
 RUN apt-get update && apt-get install -y --no-install-recommends \
     apt-utils \
     bc \
-    cargo \
     clang-tidy-17 \
     curl \
     dialog \

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/run_operation.hpp"
 #include "reshape.hpp"
 #include <tt-metalium/constants.hpp>
@@ -48,16 +48,16 @@ static Tensor manual_insertion(
                 logical_shape,
                 TensorLayout::fromPaddedShape(
                     DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}, logical_shape, padded_shape)))
-            .to(Layout::ROW_MAJOR);
+            .to_layout(Layout::ROW_MAJOR);
     if (device != nullptr) {
-        output = output.to(device, output_mem_config);
+        output = output.to_device(device, output_mem_config);
     }
     return output;
 }
 }  // namespace detail
 
 ttnn::Tensor ReshapeOperation::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Shape& logical_output_shape,
     const ttnn::Shape& padded_output_shape,
@@ -97,7 +97,7 @@ ttnn::Tensor ReshapeOperation::invoke(
 }
 
 ttnn::Tensor ReshapeOperation::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Shape& logical_output_shape,
     const std::optional<MemoryConfig>& memory_config_arg) {
@@ -129,7 +129,7 @@ ttnn::Tensor ReshapeOperation::invoke(const ttnn::Tensor& input_tensor, const tt
 }
 
 ttnn::Tensor ReshapeOperation::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     tt::stl::Span<const int32_t> shape_vector,
     const std::optional<MemoryConfig>& memory_config_arg) {

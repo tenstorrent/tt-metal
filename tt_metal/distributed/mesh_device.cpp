@@ -221,9 +221,10 @@ IDevice* MeshDevice::get_device(size_t row_idx, size_t col_idx) const {
     return this->get_device_index(row_idx * num_cols() + col_idx);
 }
 
-MeshCommandQueue& MeshDevice::mesh_command_queue() {
-    TT_FATAL(this->using_fast_dispatch(), "Can only acess the MeshCommandQueue when using Fast Dispatch.");
-    return *(mesh_command_queue_);
+MeshCommandQueue& MeshDevice::mesh_command_queue(std::size_t cq_id) const {
+    TT_FATAL(this->using_fast_dispatch(), "Can only access the MeshCommandQueue when using Fast Dispatch.");
+    TT_FATAL(cq_id < mesh_command_queues_.size(), "cq_id {} is out of range", cq_id);
+    return *(mesh_command_queues_[cq_id]);
 }
 
 const DeviceIds MeshDevice::get_device_ids() const {
@@ -252,11 +253,23 @@ size_t MeshDevice::num_cols() const { return mesh_shape_.num_cols; }
 
 MeshShape MeshDevice::shape() const { return mesh_shape_; }
 
-void MeshDevice::reshape(const MeshShape& new_shape) {
-    TT_FATAL(
-        new_shape.num_rows * new_shape.num_cols == this->num_devices(),
-        "New shape must have the same number of devices as current shape");
-
+std::vector<IDevice*> MeshDevice::get_row_major_devices(const MeshShape& new_shape) const {
+    // MeshDeviceView requires devices to be provided as a 1D array in row-major order for the target mesh shape.
+    // The physical connectivity between devices must be preserved when reshaping.
+    //
+    // Example:
+    // Given 4 devices physically connected in a 2x2 grid like this:
+    //   [0]--[1]
+    //    |    |
+    //   [3]--[2]
+    //
+    // For a 1x4 mesh shape:
+    // - Devices must form a line: 0->1->2->3
+    // - Row-major order will be: [0,1,2,3]
+    //
+    // For a 2x2 mesh shape:
+    // - Preserves original 2x2 physical connectivity
+    // - Row-major order will be: [0,1,3,2]
     std::unordered_map<chip_id_t, size_t> physical_device_id_to_linearized_index;
     for (size_t i = 0; i < this->num_devices(); i++) {
         physical_device_id_to_linearized_index[this->get_devices()[i]->id()] = i;
@@ -264,6 +277,7 @@ void MeshDevice::reshape(const MeshShape& new_shape) {
 
     // From an MxN mesh, we can always reduce rank to a 1xM*N Line mesh.
     // However, going from a Line mesh to an MxN mesh is not always possible.
+    std::vector<IDevice*> new_device_order;
     if (new_shape.num_rows != 1 and new_shape.num_cols != 1) {
         auto new_physical_device_ids =
             SystemMesh::instance().request_available_devices(
@@ -285,10 +299,22 @@ void MeshDevice::reshape(const MeshShape& new_shape) {
                     this->num_cols());
             }
         }
+        for (size_t i = 0; i < new_physical_device_ids.size(); i++) {
+            new_device_order.push_back(this->get_device(new_physical_device_ids[i]));
+        }
+    } else {
+        new_device_order = view_->get_line_devices();
     }
+    return new_device_order;
+}
+
+void MeshDevice::reshape(const MeshShape& new_shape) {
+    TT_FATAL(
+        new_shape.num_rows * new_shape.num_cols == this->num_devices(),
+        "New shape must have the same number of devices as current shape");
 
     mesh_shape_ = new_shape;
-    view_ = std::make_unique<MeshDeviceView>(scoped_devices_->get_devices(), mesh_shape_);
+    view_ = std::make_unique<MeshDeviceView>(this->get_row_major_devices(new_shape), new_shape);
 }
 
 bool MeshDevice::close() {
@@ -601,9 +627,11 @@ bool MeshDevice::initialize(
     const auto& allocator = reference_device()->allocator();
     sub_device_manager_tracker_ = std::make_unique<SubDeviceManagerTracker>(
         this, std::make_unique<L1BankingAllocator>(allocator->get_config()), sub_devices);
-
+    mesh_command_queues_.reserve(this->num_hw_cqs());
     if (this->using_fast_dispatch()) {
-        mesh_command_queue_ = std::make_unique<MeshCommandQueue>(this, 0);
+        for (std::size_t cq_id = 0; cq_id < this->num_hw_cqs(); cq_id++) {
+            mesh_command_queues_.push_back(std::make_unique<MeshCommandQueue>(this, cq_id));
+        }
     }
     return true;
 }

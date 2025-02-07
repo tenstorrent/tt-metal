@@ -13,7 +13,7 @@ namespace operations::transformer {
 
 struct ExecuteScaledDotProductAttentionDecode {
     static ttnn::Tensor invoke(
-        uint8_t queue_id,
+        QueueId queue_id,
         const ttnn::Tensor& input_tensor_q,
         const ttnn::Tensor& input_tensor_k,
         const ttnn::Tensor& input_tensor_v,
@@ -42,7 +42,7 @@ struct ExecuteScaledDotProductAttentionDecode {
 
 struct ExecutePagedScaledDotProductAttentionDecode {
     static ttnn::Tensor invoke(
-        uint8_t queue_id,
+        QueueId queue_id,
         const ttnn::Tensor& input_tensor_q,
         const ttnn::Tensor& input_tensor_k,
         const ttnn::Tensor& input_tensor_v,

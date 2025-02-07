@@ -31,7 +31,7 @@ void bind_interleaved_to_sharded_partial(
                tt::tt_metal::TensorMemoryLayout shard_scheme,
                tt::tt_metal::ShardOrientation shard_orientation,
                const std::optional<ttnn::DataType>& output_dtype,
-               uint8_t queue_id) -> ttnn::Tensor {
+               QueueId queue_id) -> ttnn::Tensor {
                 return self(
                     queue_id,
                     input_tensor,
@@ -52,7 +52,7 @@ void bind_interleaved_to_sharded_partial(
             py::arg("shard_orientation"),
             py::kw_only(),
             py::arg("output_dtype") = std::nullopt,
-            py::arg("queue_id") = 0,
+            py::arg("queue_id") = DefaultQueueId,
 
         });
 }
