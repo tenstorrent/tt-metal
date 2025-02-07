@@ -24,7 +24,7 @@ constexpr bool is_associative(BinaryOpType op) {
 
 // Tensor - Scalar
 inline Tensor binary_impl(
-    uint8_t queue_id,
+    QueueId queue_id,
     BinaryOpType binary_op_type,
     const ttnn::Tensor& input_tensor,
     const float scalar,
@@ -70,7 +70,7 @@ inline Tensor binary_impl(
 
 // Scalar - Tensor
 inline Tensor binary_impl(
-    uint8_t queue_id,
+    QueueId queue_id,
     BinaryOpType binary_op_type,
     const float scalar,
     const ttnn::Tensor& input_tensor,
@@ -147,7 +147,7 @@ auto preprocess_inputs(const Tensor& input_tensor_a_arg, const Tensor& input_ten
 
 template <BinaryOpType binary_op_type>
 Tensor BinaryOperation<binary_op_type>::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& input_tensor_a_arg,
     const Tensor& input_tensor_b_arg,
     const std::optional<const DataType>& output_dtype,
@@ -192,7 +192,7 @@ Tensor BinaryOperation<binary_op_type>::invoke(
 
 template <BinaryOpType binary_op_type>
 Tensor BinaryOperation<binary_op_type>::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor_a,
     float scalar,
     const std::optional<const DataType>& output_dtype,
@@ -236,7 +236,7 @@ Tensor BinaryOperation<binary_op_type>::invoke(
 
 template <BinaryOpType binary_op_type>
 Tensor RelationalBinary<binary_op_type>::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& input_tensor_a_arg,
     const Tensor& input_tensor_b_arg,
     const std::optional<const DataType>& output_dtype,
@@ -306,7 +306,7 @@ Tensor RelationalBinary<binary_op_type>::invoke(
 
 template <BinaryOpType binary_op_type>
 Tensor RelationalBinary<binary_op_type>::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor_a,
     const float scalar,
     const std::optional<const DataType>& dtype,
@@ -320,7 +320,7 @@ Tensor RelationalBinary<binary_op_type>::invoke(
 // scalar - tensor combination not available on Pytorch for this op
 template <BinaryOpType binary_op_type>
 Tensor RelationalBinary<binary_op_type>::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const float scalar,
     const ttnn::Tensor& input_tensor_a,
     const std::optional<const DataType>& dtype,
@@ -390,7 +390,7 @@ Tensor InplaceBinaryOperation<binary_op_type>::invoke(
 
 template <BinaryOpType binary_op_type>
 Tensor BinaryOperationSfpu<binary_op_type>::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& input_tensor_a_arg,
     const Tensor& input_tensor_b_arg,
     const std::optional<const DataType>& output_dtype,

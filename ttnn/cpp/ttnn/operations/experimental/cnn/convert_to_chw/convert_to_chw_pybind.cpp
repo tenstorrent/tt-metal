@@ -28,12 +28,12 @@ void bind_convert_to_chw(py::module& module) {
                const ttnn::Tensor& input,
                const std::optional<MemoryConfig>& memory_config,
                const std::optional<DataType> dtype,
-               uint8_t queue_id) { return self(queue_id, input, memory_config, dtype); },
+               QueueId queue_id) { return self(queue_id, input, memory_config, dtype); },
             py::arg("input"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("dtype") = std::nullopt,
-            py::arg("queue_id") = 0});
+            py::arg("queue_id") = DefaultQueueId});
 }
 
 }  // namespace ttnn::operations::experimental::cnn::detail

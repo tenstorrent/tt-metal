@@ -8,17 +8,19 @@
 
 #include <tt-metalium/bfloat4.hpp>
 #include <tt-metalium/bfloat8.hpp>
-#include "tt-metalium/mesh_device.hpp"
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/command_queue.hpp>
+#include <tt-metalium/device_impl.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tracy/Tracy.hpp>
+
 #include "ttnn/tensor/host_buffer/functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"
-#include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/command_queue.hpp>
-#include <tracy/Tracy.hpp>
-#include <tt-metalium/device_impl.hpp>
+#include "ttnn/types.hpp"
 
 namespace tt {
 
@@ -189,7 +191,7 @@ void read_data_from_device_buffer(std::shared_ptr<Buffer> device_buffer, std::ve
 // ======================================================================================
 
 template <typename T>
-Tensor to_host(const Tensor& tensor, bool blocking = true, uint8_t cq_id = ttnn::DefaultQueueId);
+Tensor to_host(const Tensor& tensor, bool blocking = true, QueueId cq_id = ttnn::DefaultQueueId);
 
 // TODO: #17215 - This will eventually subsume `to_host`, when "mesh buffer" backed tensors become the default.
 template <typename T>
@@ -200,7 +202,7 @@ Tensor to_device(
     const Tensor& tensor,
     IDevice* target_device,
     const MemoryConfig& memory_config,
-    uint8_t cq_id = ttnn::DefaultQueueId);
+    QueueId cq_id = ttnn::DefaultQueueId);
 
 // TODO: #17215 - This will eventually subsume `to_device`, when "mesh buffer" backed tensors become the default.
 template <typename T>

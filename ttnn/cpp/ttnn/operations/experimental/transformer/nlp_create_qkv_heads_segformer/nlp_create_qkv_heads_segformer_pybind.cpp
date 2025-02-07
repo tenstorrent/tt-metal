@@ -21,11 +21,11 @@ void bind_nlp_create_qkv_heads_segformer(pybind11::module& module) {
                const ttnn::Tensor& input_tensor_q,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                std::optional<std::vector<std::optional<ttnn::Tensor>>>& optional_output_tensors,
-               uint8_t queue_id) { return self(queue_id, input_tensor_q, memory_config, optional_output_tensors); },
+               QueueId queue_id) { return self(queue_id, input_tensor_q, memory_config, optional_output_tensors); },
             pybind11::arg("input").noconvert(),
             pybind11::kw_only(),
             pybind11::arg("memory_config").noconvert() = std::nullopt,
             pybind11::arg("output_tensors").noconvert() = std::nullopt,
-            pybind11::arg("queue_id") = 0});
+            pybind11::arg("queue_id") = DefaultQueueId});
 };
 }  // namespace ttnn::operations::experimental::transformer::detail

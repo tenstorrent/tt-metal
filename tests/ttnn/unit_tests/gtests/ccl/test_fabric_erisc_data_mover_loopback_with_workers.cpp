@@ -12,7 +12,7 @@
 #include "tt-metalium/kernel_types.hpp"
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/erisc_datamover_builder.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
@@ -1471,7 +1471,7 @@ bool TestMultiInputReaderKernel(
 
         log_info(tt::LogTest, "Finished");
         for (auto d : devices) {
-            tt_metal::Synchronize(d, ttnn::DefaultQueueId);
+            tt_metal::Synchronize(d, *ttnn::DefaultQueueId);
         }
     }
     return pass;
@@ -2826,7 +2826,7 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
 
     log_info(tt::LogTest, "Waiting for teardown completion");
     for (auto d : devices) {
-        tt_metal::Synchronize(d, ttnn::DefaultQueueId);
+        tt_metal::Synchronize(d, *ttnn::DefaultQueueId);
     }
     log_info(tt::LogTest, "Finished");
 }
@@ -2930,7 +2930,7 @@ void run_all_gather_with_persistent_fabric(const size_t dim, const size_t num_li
 
     log_info(tt::LogTest, "Waiting for teardown completion");
     for (auto d : devices) {
-        tt_metal::Synchronize(d, ttnn::DefaultQueueId);
+        tt_metal::Synchronize(d, *ttnn::DefaultQueueId);
     }
     log_info(tt::LogTest, "Finished");
 }
@@ -3213,7 +3213,7 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
 
     log_info(tt::LogTest, "Waiting for teardown completion");
     for (IDevice* d : devices) {
-        tt_metal::Synchronize(d, ttnn::DefaultQueueId);
+        tt_metal::Synchronize(d, *ttnn::DefaultQueueId);
     }
     for (size_t i = 0; i < programs.size(); i++) {
         auto d = worker_devices[i];

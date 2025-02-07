@@ -50,7 +50,7 @@ void bind_untilize(py::module& module) {
                bool use_multicore,
                bool use_pack_untilize,
                const std::optional<CoreRangeSet>&& sub_core_grids,
-               uint8_t queue_id) {
+               QueueId queue_id) {
                 return self(queue_id, input_tensor, memory_config, use_multicore, use_pack_untilize, sub_core_grids);
             },
             py::arg("input_tensor"),
@@ -59,7 +59,7 @@ void bind_untilize(py::module& module) {
             py::arg("use_multicore") = true,
             py::arg("use_pack_untilize") = true,
             py::arg("sub_core_grids") = std::nullopt,
-            py::arg("queue_id") = 0,
+            py::arg("queue_id") = DefaultQueueId,
         });
 }
 }  // namespace ttnn::operations::data_movement::detail

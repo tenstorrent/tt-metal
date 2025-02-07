@@ -4,7 +4,7 @@
 
 #include "matmul.hpp"
 
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
@@ -82,7 +82,7 @@ ttnn::Tensor bound_matmul(
         input_tensor_b_adjusted,
         post_process_bias ? std::nullopt : bias,
         parameters,
-        0,
+        DefaultQueueId,
         optional_output_tensor = optional_output_tensor);
 
     if (post_process_bias) {

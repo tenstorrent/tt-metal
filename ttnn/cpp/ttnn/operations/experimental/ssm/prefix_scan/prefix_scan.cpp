@@ -5,14 +5,14 @@
 #include "prefix_scan.hpp"
 
 #include "device/prefix_scan_op.hpp"
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::experimental::ssm {
 
 ttnn::Tensor ExecutePrefixScan::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& a,
     const Tensor& bx,
     const Tensor& h_prev,

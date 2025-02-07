@@ -48,13 +48,13 @@ void bind_split(py::module& module) {
                int64_t& num_splits,
                int64_t& dim,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               uint8_t queue_id) { return self(queue_id, input_tensor, num_splits, dim, memory_config); },
+               QueueId queue_id) { return self(queue_id, input_tensor, num_splits, dim, memory_config); },
             py::arg("input_tensor"),
             py::arg("num_splits"),
             py::arg("dim") = 0,
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
-            py::arg("queue_id") = 0,
+            py::arg("queue_id") = DefaultQueueId,
         });
 }
 }  // namespace ttnn::operations::data_movement::detail

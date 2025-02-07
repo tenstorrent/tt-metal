@@ -5,7 +5,7 @@
 #include "ttnn/operations/data_movement/move/move.hpp"
 
 #include "device/move_device_operation.hpp"
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/distributed/api.hpp"
@@ -34,7 +34,7 @@ bool can_deallocate(const Tensor& input_tensor, bool from_multi_device = false) 
         input_tensor.get_storage());
 }
 
-static inline Tensor move(uint8_t queue_id, const Tensor& input_tensor, const std::optional<MemoryConfig>& mem_config) {
+static inline Tensor move(QueueId queue_id, const Tensor& input_tensor, const std::optional<MemoryConfig>& mem_config) {
     TT_ASSERT(input_tensor.is_allocated(), "Expected input tensor to be allocated");
     auto input_mem_config = input_tensor.memory_config();
     auto input_address = input_tensor.buffer()->address();
@@ -124,7 +124,7 @@ static inline Tensor move(uint8_t queue_id, const Tensor& input_tensor, const st
 }
 
 static inline Tensor move_sharded(
-    uint8_t queue_id, const Tensor& input_tensor, const std::optional<MemoryConfig>& mem_config) {
+    QueueId queue_id, const Tensor& input_tensor, const std::optional<MemoryConfig>& mem_config) {
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
     bool from_multi_device = distributed::is_multi_device_tensor(input_tensor);
     operation::launch_op(
@@ -186,7 +186,7 @@ static inline Tensor move_sharded(
 }
 
 ttnn::Tensor MoveOperation::invoke(
-    uint8_t queue_id, const Tensor& input_tensor, const std::optional<MemoryConfig>& output_mem_config) {
+    QueueId queue_id, const Tensor& input_tensor, const std::optional<MemoryConfig>& output_mem_config) {
     if (input_tensor.memory_config().is_sharded()) {
         return move_sharded(queue_id, input_tensor, output_mem_config);
     }

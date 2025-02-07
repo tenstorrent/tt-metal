@@ -16,7 +16,7 @@ ttnn::Shape squeeze_shape_to_4D(ttnn::Shape output_shape);
 ttnn::Tensor squeeze_from_ND_to_4D(const ttnn::Tensor& tensor);
 
 ttnn::Tensor pad_to_tile_vol(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& tensor,
     const float value,
     const bool use_multicore,
@@ -151,7 +151,7 @@ private:
 };
 
 ttnn::Tensor pad_to_tile_vol(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& tensor,
     const float value,
     const bool use_multicore,

@@ -271,7 +271,7 @@ void bind_ternary_backward_optional_output(
                const std::vector<bool>& are_required_outputs,
                const std::optional<ttnn::Tensor>& input_a_grad,
                const std::optional<ttnn::Tensor>& input_b_grad,
-               const uint8_t& queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
+               QueueId queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
                 return self(
                     queue_id,
                     grad_tensor,
@@ -292,7 +292,7 @@ void bind_ternary_backward_optional_output(
             py::arg("are_required_outputs") = std::vector<bool>{true, true},
             py::arg("input_a_grad") = std::nullopt,
             py::arg("input_b_grad") = std::nullopt,
-            py::arg("queue_id") = 0});
+            py::arg("queue_id") = DefaultQueueId});
 }
 }  // namespace detail
 

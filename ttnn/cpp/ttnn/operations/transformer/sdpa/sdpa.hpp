@@ -13,7 +13,7 @@ namespace operations::transformer {
 
 struct ExecuteScaledDotProductAttention {
     static ttnn::Tensor invoke(
-        uint8_t queue_id,
+        QueueId queue_id,
         const ttnn::Tensor& input_tensor_q,
         const ttnn::Tensor& input_tensor_k,
         const ttnn::Tensor& input_tensor_v,
@@ -38,7 +38,7 @@ struct ExecuteScaledDotProductAttention {
 
 struct ExecuteChunkedScaledDotProductAttention {
     static ttnn::Tensor invoke(
-        uint8_t queue_id,
+        QueueId queue_id,
         const ttnn::Tensor& input_tensor_q,
         const ttnn::Tensor& input_tensor_k,
         const ttnn::Tensor& input_tensor_v,
@@ -63,7 +63,7 @@ struct ExecuteChunkedScaledDotProductAttention {
 
 struct ExecuteJointAttention {
     static std::tuple<ttnn::Tensor, ttnn::Tensor> invoke(
-        uint8_t queue_id,
+        QueueId queue_id,
         const ttnn::Tensor& input_tensor_q,
         const ttnn::Tensor& input_tensor_k,
         const ttnn::Tensor& input_tensor_v,

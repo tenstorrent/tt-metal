@@ -11,7 +11,7 @@ namespace operations::data_movement {
 
 struct ExecuteUntilizeWithHaloV2 {
     static ttnn::Tensor invoke(
-        uint8_t queue_id,
+        QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         const Tensor& padding_config,
         const Tensor& local_config,

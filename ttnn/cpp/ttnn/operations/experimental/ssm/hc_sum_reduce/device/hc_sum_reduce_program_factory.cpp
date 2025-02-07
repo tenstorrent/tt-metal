@@ -4,7 +4,7 @@
 
 #include "hc_sum_reduce_program_factory.hpp"
 
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include <tt-metalium/work_split.hpp>
 
 namespace ttnn::operations::experimental::ssm::detail {

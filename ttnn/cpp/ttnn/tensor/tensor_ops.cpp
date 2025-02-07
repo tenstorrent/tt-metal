@@ -28,7 +28,7 @@
 namespace tt::tt_metal::tensor_ops {
 
 Tensor tensor_to_device(
-    const Tensor& input_tensor, IDevice* target_device, const MemoryConfig& mem_config, uint8_t cq_id) {
+    const Tensor& input_tensor, IDevice* target_device, const MemoryConfig& mem_config, QueueId cq_id) {
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::to", input_tensor, target_device, mem_config);
     // Tensor can be using borrowed storage. If so, when running in async mode, copy this tensor to owned storage.
@@ -65,7 +65,7 @@ Tensor tensor_to_device(
 }
 
 Tensor tensor_to_device(
-    const Tensor& input_tensor, const std::vector<IDevice*>& workers, const MemoryConfig& mem_config, uint8_t cq_id) {
+    const Tensor& input_tensor, const std::vector<IDevice*>& workers, const MemoryConfig& mem_config, QueueId cq_id) {
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::to", input_tensor, workers, mem_config);
     TT_FATAL(
@@ -98,7 +98,7 @@ Tensor tensor_to_device(
     return device_tensor;
 }
 
-Tensor tensor_cpu(const Tensor& input_tensor, bool blocking, uint8_t cq_id) {
+Tensor tensor_cpu(const Tensor& input_tensor, bool blocking, QueueId cq_id) {
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::cpu", input_tensor, blocking);
     auto workers = input_tensor.get_workers(blocking);

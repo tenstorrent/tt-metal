@@ -7,7 +7,7 @@
 #include <optional>
 
 #include "ttnn/decorators.hpp"
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 
 namespace ttnn {
 
@@ -17,7 +17,7 @@ namespace ternary {
 
 struct WhereOperation {
     static Tensor invoke(
-        uint8_t queue_id,
+        QueueId queue_id,
         const Tensor& predicate,
         const Tensor& value_true,
         const Tensor& value_false,
@@ -25,7 +25,7 @@ struct WhereOperation {
         std::optional<Tensor> output_tensor = std::nullopt);
 
     static Tensor invoke(
-        uint8_t queue_id,
+        QueueId queue_id,
         const Tensor& predicate,
         const float value_true,
         const Tensor& value_false,
@@ -33,7 +33,7 @@ struct WhereOperation {
         std::optional<Tensor> output_tensor = std::nullopt);
 
     static Tensor invoke(
-        uint8_t queue_id,
+        QueueId queue_id,
         const Tensor& predicate,
         const Tensor& value_true,
         const float value_false,
@@ -41,7 +41,7 @@ struct WhereOperation {
         std::optional<Tensor> output_tensor = std::nullopt);
 
     static Tensor invoke(
-        uint8_t queue_id,
+        QueueId queue_id,
         const Tensor& predicate,
         const float value_true,
         const float value_false,

@@ -14,7 +14,7 @@
 namespace ttnn::operations::embedding_backward {
 
 Tensor EmbeddingBackwardOperation::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& input_tensor_arg,
     const Tensor& weight_tensor_arg,
     const Tensor& output_gradient_tensor_arg,

@@ -65,7 +65,7 @@ void py_bind_bcast(py::module& module) {
                ttnn::BcastOpDim bcast_dim,
                std::optional<Tensor> output_tensor,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               uint8_t queue_id) {
+               QueueId queue_id) {
                 return self(
                     queue_id, input_tensor_a, input_tensor_b, bcast_op, bcast_dim, memory_config, output_tensor);
             },
@@ -76,7 +76,7 @@ void py_bind_bcast(py::module& module) {
             py::kw_only(),
             py::arg("output_tensor") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
-            py::arg("queue_id").noconvert() = 0});
+            py::arg("queue_id") = DefaultQueueId});
 }
 
 }  // namespace ttnn::operations::data_movement::detail

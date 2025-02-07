@@ -4,7 +4,7 @@
 
 #include "repeat_and_interleave_eltwise_mul_program_factory.hpp"
 
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include <tt-metalium/work_split.hpp>
 
 namespace ttnn::operations::experimental::ssm::detail {

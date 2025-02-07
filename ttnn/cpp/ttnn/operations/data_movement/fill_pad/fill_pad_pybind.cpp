@@ -52,12 +52,12 @@ void bind_fill_pad_op(py::module& module) {
                const Tensor& input_tensor,
                const float fill_value,
                const std::optional<MemoryConfig>& memory_config,
-               uint8_t queue_id) { return self(queue_id, input_tensor, fill_value, memory_config); },
+               QueueId queue_id) { return self(queue_id, input_tensor, fill_value, memory_config); },
             py::arg("input_tensor"),
             py::arg("fill_value"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
-            py::arg("queue_id") = 0});
+            py::arg("queue_id") = DefaultQueueId});
 }
 
 }  // namespace detail

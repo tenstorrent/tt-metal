@@ -5,7 +5,7 @@
 #include "untilize_with_unpadding.hpp"
 
 #include "device/untilize_with_unpadding_op.hpp"
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/run_operation.hpp"
 
 #include "ttnn/operations/data_movement/common/common.hpp"
@@ -58,7 +58,7 @@ MassagedUntilizeVal build_ndiml_untilize_val(BaseUntilizeValType base_untilize) 
 }
 
 ttnn::Tensor ExecuteUntilizeWithUnpadding::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Shape& output_tensor_end,
     const std::optional<MemoryConfig>& memory_config,

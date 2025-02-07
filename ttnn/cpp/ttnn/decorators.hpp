@@ -8,7 +8,7 @@
 
 #include <tt-metalium/graph_tracking.hpp>
 #include <tracy/Tracy.hpp>
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/core.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operation.hpp"
@@ -218,7 +218,7 @@ struct registered_operation_t {
 
     template <typename... args_t>
         requires PrimitiveOperationConcept<operation_t>
-    auto invoke(uint8_t queue_id, args_t&&... args) const {
+    auto invoke(QueueId queue_id, args_t&&... args) const {
         static_assert(
             requires { operation_t::invoke(std::forward<decltype(args)>(args)...); },
             "Primitive Operation must implement operator() method to be invoked.");

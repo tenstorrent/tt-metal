@@ -27,7 +27,7 @@ void bind_binary_ng_operation(py::module& module, T op, const std::string& docst
                const ttnn::SmallVector<unary::UnaryWithParam>& lhs_activations,
                const ttnn::SmallVector<unary::UnaryWithParam>& rhs_activations,
                const ttnn::SmallVector<unary::UnaryWithParam>& post_activations,
-               const uint8_t& queue_id) -> ttnn::Tensor {
+               QueueId queue_id) -> ttnn::Tensor {
                 return self(
                     queue_id,
                     input_tensor_a,
@@ -48,7 +48,7 @@ void bind_binary_ng_operation(py::module& module, T op, const std::string& docst
             py::arg("lhs_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
             py::arg("rhs_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
             py::arg("post_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            py::arg("queue_id") = 0},
+            py::arg("queue_id") = DefaultQueueId},
 
         // tensor and tensor
         ttnn::pybind_overload_t{
@@ -61,7 +61,7 @@ void bind_binary_ng_operation(py::module& module, T op, const std::string& docst
                const ttnn::SmallVector<unary::UnaryWithParam>& lhs_activations,
                const ttnn::SmallVector<unary::UnaryWithParam>& rhs_activations,
                const ttnn::SmallVector<unary::UnaryWithParam>& post_activations,
-               uint8_t queue_id) -> ttnn::Tensor {
+               QueueId queue_id) -> ttnn::Tensor {
                 return self(
                     queue_id,
                     input_tensor_a,
@@ -82,7 +82,7 @@ void bind_binary_ng_operation(py::module& module, T op, const std::string& docst
             py::arg("lhs_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
             py::arg("rhs_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
             py::arg("post_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            py::arg("queue_id") = 0});
+            py::arg("queue_id") = DefaultQueueId});
 }
 
 template <typename T>
@@ -99,7 +99,7 @@ void bind_binary_ng_bitwise_ops(py::module& module, T op, const std::string& doc
                const float scalar,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
-               const uint8_t& queue_id) -> ttnn::Tensor {
+               QueueId queue_id) -> ttnn::Tensor {
                 return self(queue_id, input_tensor_a, scalar, memory_config, output_tensor);
             },
             py::arg("input_tensor_a"),
@@ -107,7 +107,7 @@ void bind_binary_ng_bitwise_ops(py::module& module, T op, const std::string& doc
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("queue_id") = 0},
+            py::arg("queue_id") = DefaultQueueId},
 
         // tensor and tensor
         ttnn::pybind_overload_t{
@@ -116,7 +116,7 @@ void bind_binary_ng_bitwise_ops(py::module& module, T op, const std::string& doc
                const ttnn::Tensor& input_tensor_b,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& output_tensor,
-               uint8_t queue_id) -> ttnn::Tensor {
+               QueueId queue_id) -> ttnn::Tensor {
                 return self(queue_id, input_tensor_a, input_tensor_b, memory_config, output_tensor);
             },
             py::arg("input_tensor_a"),
@@ -124,7 +124,7 @@ void bind_binary_ng_bitwise_ops(py::module& module, T op, const std::string& doc
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("queue_id") = 0});
+            py::arg("queue_id") = DefaultQueueId});
 }
 
 template <typename T>
@@ -142,7 +142,7 @@ void bind_inplace_binary_ng_operation(py::module& module, T op, const std::strin
                const ttnn::SmallVector<unary::UnaryWithParam>& lhs_activations,
                const ttnn::SmallVector<unary::UnaryWithParam>& rhs_activations,
                const ttnn::SmallVector<unary::UnaryWithParam>& post_activations,
-               const uint8_t& queue_id) -> ttnn::Tensor {
+               QueueId queue_id) -> ttnn::Tensor {
                 return self(queue_id, input_tensor_a, scalar, lhs_activations, rhs_activations, post_activations);
             },
             py::arg("input_tensor_a"),
@@ -151,7 +151,7 @@ void bind_inplace_binary_ng_operation(py::module& module, T op, const std::strin
             py::arg("lhs_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
             py::arg("rhs_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
             py::arg("post_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            py::arg("queue_id") = 0},
+            py::arg("queue_id") = DefaultQueueId},
 
         // tensor and tensor
         ttnn::pybind_overload_t{
@@ -161,7 +161,7 @@ void bind_inplace_binary_ng_operation(py::module& module, T op, const std::strin
                const ttnn::SmallVector<unary::UnaryWithParam>& lhs_activations,
                const ttnn::SmallVector<unary::UnaryWithParam>& rhs_activations,
                const ttnn::SmallVector<unary::UnaryWithParam>& post_activations,
-               uint8_t queue_id) -> ttnn::Tensor {
+               QueueId queue_id) -> ttnn::Tensor {
                 return self(
                     queue_id, input_tensor_a, input_tensor_b, lhs_activations, rhs_activations, post_activations);
             },
@@ -171,7 +171,7 @@ void bind_inplace_binary_ng_operation(py::module& module, T op, const std::strin
             py::arg("lhs_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
             py::arg("rhs_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
             py::arg("post_activations") = ttnn::SmallVector<unary::UnaryWithParam>(),
-            py::arg("queue_id") = 0});
+            py::arg("queue_id") = DefaultQueueId});
 }
 }  // namespace detail
 

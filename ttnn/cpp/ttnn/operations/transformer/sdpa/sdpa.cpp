@@ -8,7 +8,7 @@
 
 #include "device/sdpa_op.hpp"
 #include "device/joint_sdpa_op.hpp"
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/run_operation.hpp"
 
 using namespace tt::tt_metal;
@@ -16,7 +16,7 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::transformer {
 
 ttnn::Tensor ExecuteScaledDotProductAttention::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const ttnn::Tensor& input_tensor_v,
@@ -71,7 +71,7 @@ ttnn::Tensor ExecuteScaledDotProductAttention::invoke(
 }
 
 ttnn::Tensor ExecuteChunkedScaledDotProductAttention::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const ttnn::Tensor& input_tensor_v,
@@ -126,7 +126,7 @@ ttnn::Tensor ExecuteChunkedScaledDotProductAttention::invoke(
 }
 
 std::tuple<ttnn::Tensor, ttnn::Tensor> ExecuteJointAttention::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const ttnn::Tensor& input_tensor_v,

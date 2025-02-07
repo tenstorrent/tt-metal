@@ -11,7 +11,7 @@ namespace operations::experimental::transformer {
 
 struct NLPConcatHeadsOperation {
     static ttnn::Tensor invoke(
-        uint8_t queue_id,
+        QueueId queue_id,
         const Tensor& input_tensor,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt);

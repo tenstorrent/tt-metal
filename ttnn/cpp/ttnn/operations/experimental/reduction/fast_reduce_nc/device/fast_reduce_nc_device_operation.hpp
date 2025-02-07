@@ -6,7 +6,7 @@
 
 #include <optional>
 
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/core/core.hpp"
@@ -28,7 +28,7 @@ struct FastReduceNCDeviceOperation {
 };
 
 Tensor fast_reduce_nc(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& input,
     tt::stl::Span<const int32_t> dims,
     const std::optional<const ttnn::Tensor>& output = std::nullopt,

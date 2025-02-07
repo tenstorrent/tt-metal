@@ -4,7 +4,7 @@
 
 #include "permute.hpp"
 
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
 
@@ -176,7 +176,7 @@ bool is_permute_nop(const ttnn::Tensor& a, const ttnn::SmallVector<uint32_t>& di
 }  // namespace detail
 
 ttnn::Tensor ExecutePermute::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::SmallVector<int64_t>& dims,
     const std::optional<MemoryConfig>& memory_config,

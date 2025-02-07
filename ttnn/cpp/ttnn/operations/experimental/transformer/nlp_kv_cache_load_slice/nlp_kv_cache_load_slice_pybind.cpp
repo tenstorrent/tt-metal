@@ -24,7 +24,7 @@ void bind_nlp_kv_cache_load_slice(pybind11::module& module) {
                const uint32_t seq_len_end,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                std::optional<ttnn::Tensor> optional_output_tensor,
-               uint8_t queue_id) {
+               QueueId queue_id) {
                 return self(queue_id, input_tensor, seq_len_start, seq_len_end, memory_config, optional_output_tensor);
             },
             pybind11::arg("input_tensor").noconvert(),
@@ -33,7 +33,7 @@ void bind_nlp_kv_cache_load_slice(pybind11::module& module) {
             pybind11::arg("seq_len_end").noconvert(),
             pybind11::arg("memory_config") = std::nullopt,
             pybind11::arg("output_tensor") = std::nullopt,
-            pybind11::arg("queue_id") = 0});
+            pybind11::arg("queue_id") = DefaultQueueId});
 }
 
 }  // namespace ttnn::operations::experimental::transformer::detail

@@ -174,7 +174,7 @@ void bind_binary_backward_concat(
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& input_grad,
                const std::optional<ttnn::Tensor>& other_grad,
-               const uint8_t& queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
+               QueueId queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
                 return self(
                     grad_tensor,
                     input_tensor_a,
@@ -278,7 +278,7 @@ void bind_binary_backward_addalpha(
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& input_a_grad,
                const std::optional<ttnn::Tensor>& input_b_grad,
-               const uint8_t& queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
+               QueueId queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
                 return self(
                     queue_id,
                     grad_tensor,
@@ -476,7 +476,7 @@ void bind_binary_backward_sub_alpha(
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& input_grad,
                const std::optional<ttnn::Tensor>& other_grad,
-               const uint8_t& queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
+               QueueId queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
                 return self(
                     queue_id,
                     grad_tensor,
@@ -563,7 +563,7 @@ void bind_binary_backward_rsub(
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& input_grad,
                const std::optional<ttnn::Tensor>& other_grad,
-               const uint8_t& queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
+               QueueId queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
                 return self(
                     queue_id,
                     grad_tensor,
@@ -654,7 +654,7 @@ void bind_binary_bw_mul(
                const float scalar,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& input_grad,
-               const uint8_t& queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
+               QueueId queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
                 return self(queue_id, grad_tensor, input_tensor_a, scalar, memory_config, input_grad);
             },
             py::arg("grad_tensor"),
@@ -675,7 +675,7 @@ void bind_binary_bw_mul(
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& input_grad,
                const std::optional<ttnn::Tensor>& other_grad,
-               const uint8_t& queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
+               QueueId queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
                 return self(
                     queue_id,
                     grad_tensor,
@@ -784,7 +784,7 @@ void bind_binary_bw(
                const float scalar,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& input_grad,
-               const uint8_t& queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
+               QueueId queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
                 return self(queue_id, grad_tensor, input_tensor_a, scalar, memory_config, input_grad);
             },
             py::arg("grad_tensor"),
@@ -805,7 +805,7 @@ void bind_binary_bw(
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& input_grad,
                const std::optional<ttnn::Tensor>& other_grad,
-               const uint8_t& queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
+               QueueId queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
                 return self(
                     queue_id,
                     grad_tensor,
@@ -920,7 +920,7 @@ void bind_binary_bw_div(
                const std::optional<std::string> round_mode,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& input_grad,
-               const uint8_t& queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
+               QueueId queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
                 return self(queue_id, grad_tensor, input_tensor_a, scalar, round_mode, memory_config, input_grad);
             },
             py::arg("grad_tensor"),
@@ -943,7 +943,7 @@ void bind_binary_bw_div(
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& input_grad,
                const std::optional<ttnn::Tensor>& other_grad,
-               const uint8_t& queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
+               QueueId queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
                 return self(
                     queue_id,
                     grad_tensor,
@@ -1136,7 +1136,7 @@ void bind_binary_backward_assign(
                const ttnn::Tensor& input_tensor,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& input_grad,
-               const uint8_t& queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
+               QueueId queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
                 return self(queue_id, grad_tensor, input_tensor, memory_config, input_grad);
             },
             py::arg("grad_tensor"),
@@ -1156,7 +1156,7 @@ void bind_binary_backward_assign(
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::Tensor>& input_a_grad,
                const std::optional<ttnn::Tensor>& input_b_grad,
-               const uint8_t& queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
+               QueueId queue_id) -> std::vector<std::optional<ttnn::Tensor>> {
                 return self(
                     queue_id,
                     grad_tensor,
