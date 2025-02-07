@@ -46,7 +46,7 @@ bool ShapeBase::empty() const { return original_size_ == 0; }
 
 size_t ShapeBase::size() const { return original_size_; }
 
-std::span<const uint32_t> ShapeBase::view() const { return std::span<const uint32_t>(cbegin(), cend()); }
+tt::stl::Span<const uint32_t> ShapeBase::view() const { return tt::stl::Span<const uint32_t>(value_); }
 
 bool ShapeBase::operator==(const ShapeBase& other) const = default;
 
