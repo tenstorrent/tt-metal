@@ -100,5 +100,4 @@ table TensorSpec {
     tensor_layout: TensorLayout;
 }
 
-//root_type MemoryConfig;
 root_type TensorSpec;

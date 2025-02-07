@@ -89,9 +89,9 @@ TensorSpec load_tensor_spec(FILE* input_file) {
     fread(&bin_size, sizeof(bin_size), 1, input_file);
     std::vector<uint8_t> bin(bin_size);
     fread(bin.data(), bin_size, 1, input_file);
-    flatbuffers::Verifier verifier(reinterpret_cast<const uint8_t*>(bin.data()), bin_size);
+    flatbuffers::Verifier verifier(bin.data(), bin_size);
     if (!ttnn::flatbuffer::VerifyTensorSpecBuffer(verifier)) {
-        std::cout << "tensor spec verification failed2" << std::endl;
+        TT_THROW("TensorSpec deserialization failed: invalid buffer");
     }
     auto spec = ttnn::flatbuffer::GetTensorSpec(bin.data());
     return ttnn::from_flatbuffer(spec);
@@ -281,53 +281,6 @@ Storage load_storage(
     }
 }
 
-}  // namespace
-
-void dump_tensor(
-    const std::string& file_name, const Tensor& tensor, const std::unordered_map<std::string, std::string>& strategy) {
-    std::cout << "Dumping tensor " << file_name << std::endl;
-    FILE* output_file = fopen(file_name.c_str(), "wb");
-    if (not output_file) {
-        throw std::runtime_error(fmt::format("Cannot open \"{}\"", file_name));
-    }
-
-    fwrite(&SENTINEL_VALUE, sizeof(SENTINEL_VALUE), 1, output_file);
-    fwrite(&VERSION_ID, sizeof(VERSION_ID), 1, output_file);
-
-    dump_tensor_spec(tensor.get_tensor_spec(), output_file);
-
-    auto storage_type = tensor.storage_type();
-    fwrite(&storage_type, sizeof(storage_type), 1, output_file);
-
-    bool is_on_device = is_tensor_on_device_or_multidevice(tensor);
-    Tensor tensor_to_dump = tensor;
-    if (is_on_device) {
-        tensor_to_dump = tensor_to_dump.cpu();
-    }
-
-    std::visit(
-        [output_file, &strategy](const auto& storage) {
-            using StorageType = std::decay_t<decltype(storage)>;
-            if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
-                dump_owned_storage(output_file, storage);
-            } else if constexpr (std::is_same_v<StorageType, BorrowedStorage>) {
-                dump_borrowed_storage(output_file, storage);
-            } else if constexpr (std::is_same_v<StorageType, DeviceStorage>) {
-                TT_THROW("Device storage isn't supported");
-            } else if constexpr (std::is_same_v<StorageType, MultiDeviceStorage>) {
-                TT_THROW("Device storage isn't supported");
-            } else if constexpr (std::is_same_v<StorageType, MultiDeviceHostStorage>) {
-                auto distribute_config = get_distributed_tensor_config(strategy);
-                dump_multi_device_host_storage(output_file, storage, distribute_config);
-            } else {
-                raise_unsupported_storage<StorageType>();
-            }
-        },
-        tensor_to_dump.get_storage());
-
-    fclose(output_file);
-}
-
 template <typename T>
 Tensor load_tensor_helper_legacy_impl(FILE* input_file, T device, uint8_t version_id) {
     auto shape = LegacyShape{};
@@ -363,7 +316,6 @@ Tensor load_tensor_helper_legacy_impl(FILE* input_file, T device, uint8_t versio
     } else if (has_memory_config) {
         tt::log_warning("Memory config is ignored when loading the tensor because device is not provided");
     }
-    fclose(input_file);
     return tensor;
 }
 
@@ -387,71 +339,6 @@ Tensor load_tensor_helper_very_legacy_impl(FILE* input_file, T device) {
         tensor = tensor.to_device(device);
     }
     return tensor;
-}
-
-template <typename T>
-Tensor load_tensor_helper(const std::string& file_name, T device) {
-    std::cout << "Loading tensor " << file_name << std::endl;
-    FILE* input_file = fopen(file_name.c_str(), "rb");
-    if (not input_file) {
-        throw std::runtime_error(fmt::format("Cannot open \"{}\"", file_name));
-    }
-
-    std::size_t read_sentinel;
-    fread(&read_sentinel, sizeof(read_sentinel), 1, input_file);
-    if (read_sentinel != SENTINEL_VALUE) {
-        fseek(input_file, 0, SEEK_SET);
-        return load_tensor_helper_very_legacy_impl(input_file, device);
-    }
-
-    std::uint8_t version_id;
-    fread(&version_id, sizeof(version_id), 1, input_file);
-    if (version_id > VERSION_ID) {
-        throw std::runtime_error(
-            fmt::format("Serialized tensor with version_id: {}. Loader version: {}", version_id, VERSION_ID));
-    }
-
-    if (version_id < 5) {
-        return load_tensor_helper_legacy_impl(input_file, device, version_id);
-    }
-
-    auto spec = load_tensor_spec(input_file);
-    StorageType storage_type;
-    fread(&storage_type, sizeof(storage_type), 1, input_file);
-    auto storage = load_storage(input_file, spec.data_type(), spec.layout(), storage_type, device, version_id);
-    Tensor tensor(std::move(storage), spec);
-    if (device != nullptr) {
-        tensor = tensor.to_device(device, spec.memory_config());
-    }
-    fclose(input_file);
-    return tensor;
-}
-
-// Explicit instantiations
-Tensor load_tensor(const std::string& file_name, IDevice* device) {
-    return load_tensor_helper<IDevice*>(file_name, device);
-}
-Tensor load_tensor(const std::string& file_name, MeshDevice* device) {
-    return load_tensor_helper<MeshDevice*>(file_name, device);
-}
-
-void dump_memory_config(FILE* output_file, const MemoryConfig& memory_config) {
-    fwrite(&VERSION_ID, sizeof(VERSION_ID), 1, output_file);
-    flatbuffers::FlatBufferBuilder builder;
-    auto flat_config = ttnn::to_flatbuffer(memory_config, builder);
-    builder.Finish(flat_config);
-    uint64_t buf_size = builder.GetSize();
-    fwrite(&buf_size, sizeof(buf_size), 1, output_file);
-    fwrite(builder.GetBufferPointer(), buf_size, 1, output_file);
-}
-
-void dump_memory_config(const std::string& file_name, const MemoryConfig& memory_config) {
-    FILE* output_file = fopen(file_name.c_str(), "wb");
-    if (not output_file) {
-        throw std::runtime_error(fmt::format("Cannot open \"{}\"", file_name));
-    }
-    dump_memory_config(output_file, memory_config);
-    fclose(output_file);
 }
 
 MemoryConfig load_memory_config_legacy_impl(FILE* input_file, uint8_t version_id) {
@@ -487,6 +374,117 @@ MemoryConfig load_memory_config_legacy_impl(FILE* input_file, uint8_t version_id
     return MemoryConfig{memory_layout, buffer_type, shard_spec};
 }
 
+template <typename T>
+Tensor load_tensor_helper(const std::string& file_name, T device) {
+    std::cout << "Loading tensor " << file_name << std::endl;
+    FILE* input_file = fopen(file_name.c_str(), "rb");
+    if (not input_file) {
+        throw std::runtime_error(fmt::format("Cannot open \"{}\"", file_name));
+    }
+    std::unique_ptr<FILE, decltype(&fclose)> file_guard(input_file, &fclose);
+
+    std::size_t read_sentinel;
+    fread(&read_sentinel, sizeof(read_sentinel), 1, input_file);
+    if (read_sentinel != SENTINEL_VALUE) {
+        fseek(input_file, 0, SEEK_SET);
+        return load_tensor_helper_very_legacy_impl(input_file, device);
+    }
+
+    std::uint8_t version_id;
+    fread(&version_id, sizeof(version_id), 1, input_file);
+    if (version_id > VERSION_ID) {
+        throw std::runtime_error(
+            fmt::format("Serialized tensor with version_id: {}. Loader version: {}", version_id, VERSION_ID));
+    }
+
+    if (version_id < 5) {
+        return load_tensor_helper_legacy_impl(input_file, device, version_id);
+    }
+
+    auto spec = load_tensor_spec(input_file);
+    StorageType storage_type;
+    fread(&storage_type, sizeof(storage_type), 1, input_file);
+    auto storage = load_storage(input_file, spec.data_type(), spec.layout(), storage_type, device, version_id);
+    Tensor tensor(std::move(storage), spec);
+    if (device != nullptr) {
+        tensor = tensor.to_device(device, spec.memory_config());
+    }
+    return tensor;
+}
+
+}  // namespace
+
+void dump_tensor(
+    const std::string& file_name, const Tensor& tensor, const std::unordered_map<std::string, std::string>& strategy) {
+    std::cout << "Dumping tensor " << file_name << std::endl;
+    FILE* output_file = fopen(file_name.c_str(), "wb");
+    if (not output_file) {
+        throw std::runtime_error(fmt::format("Cannot open \"{}\"", file_name));
+    }
+    std::unique_ptr<FILE, decltype(&fclose)> file_guard(output_file, &fclose);
+
+    fwrite(&SENTINEL_VALUE, sizeof(SENTINEL_VALUE), 1, output_file);
+    fwrite(&VERSION_ID, sizeof(VERSION_ID), 1, output_file);
+
+    dump_tensor_spec(tensor.get_tensor_spec(), output_file);
+
+    auto storage_type = tensor.storage_type();
+    fwrite(&storage_type, sizeof(storage_type), 1, output_file);
+
+    bool is_on_device = is_tensor_on_device_or_multidevice(tensor);
+    Tensor tensor_to_dump = tensor;
+    if (is_on_device) {
+        tensor_to_dump = tensor_to_dump.cpu();
+    }
+
+    std::visit(
+        [output_file, &strategy](const auto& storage) {
+            using StorageType = std::decay_t<decltype(storage)>;
+            if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
+                dump_owned_storage(output_file, storage);
+            } else if constexpr (std::is_same_v<StorageType, BorrowedStorage>) {
+                dump_borrowed_storage(output_file, storage);
+            } else if constexpr (std::is_same_v<StorageType, DeviceStorage>) {
+                TT_THROW("Device storage isn't supported");
+            } else if constexpr (std::is_same_v<StorageType, MultiDeviceStorage>) {
+                TT_THROW("Device storage isn't supported");
+            } else if constexpr (std::is_same_v<StorageType, MultiDeviceHostStorage>) {
+                auto distribute_config = get_distributed_tensor_config(strategy);
+                dump_multi_device_host_storage(output_file, storage, distribute_config);
+            } else {
+                raise_unsupported_storage<StorageType>();
+            }
+        },
+        tensor_to_dump.get_storage());
+}
+
+// Explicit instantiations
+Tensor load_tensor(const std::string& file_name, IDevice* device) {
+    return load_tensor_helper<IDevice*>(file_name, device);
+}
+Tensor load_tensor(const std::string& file_name, MeshDevice* device) {
+    return load_tensor_helper<MeshDevice*>(file_name, device);
+}
+
+void dump_memory_config(FILE* output_file, const MemoryConfig& memory_config) {
+    fwrite(&VERSION_ID, sizeof(VERSION_ID), 1, output_file);
+    flatbuffers::FlatBufferBuilder builder;
+    auto flat_config = ttnn::to_flatbuffer(memory_config, builder);
+    builder.Finish(flat_config);
+    uint64_t buf_size = builder.GetSize();
+    fwrite(&buf_size, sizeof(buf_size), 1, output_file);
+    fwrite(builder.GetBufferPointer(), buf_size, 1, output_file);
+}
+
+void dump_memory_config(const std::string& file_name, const MemoryConfig& memory_config) {
+    FILE* output_file = fopen(file_name.c_str(), "wb");
+    if (not output_file) {
+        throw std::runtime_error(fmt::format("Cannot open \"{}\"", file_name));
+    }
+    std::unique_ptr<FILE, decltype(&fclose)> file_guard(output_file, &fclose);
+    dump_memory_config(output_file, memory_config);
+}
+
 MemoryConfig load_memory_config(FILE* input_file) {
     std::uint8_t version_id;
     fread(&version_id, sizeof(version_id), 1, input_file);
@@ -505,6 +503,10 @@ MemoryConfig load_memory_config(FILE* input_file) {
     fread(&bin_size, sizeof(bin_size), 1, input_file);
     std::vector<uint8_t> bin(bin_size);
     fread(bin.data(), bin_size, 1, input_file);
+    flatbuffers::Verifier verifier(bin.data(), bin_size);
+    if (!verifier.VerifyBuffer<ttnn::flatbuffer::MemoryConfig>()) {
+        TT_THROW("MemoryConfig deserialization failed: invalid buffer");
+    }
     auto mem_config = flatbuffers::GetRoot<ttnn::flatbuffer::MemoryConfig>(bin.data());
     return ttnn::from_flatbuffer(mem_config);
 }
@@ -514,9 +516,8 @@ MemoryConfig load_memory_config(const std::string& file_name) {
     if (not input_file) {
         throw std::runtime_error(fmt::format("Cannot open \"{}\"", file_name));
     }
-    auto res = load_memory_config(input_file);
-    fclose(input_file);
-    return res;
+    std::unique_ptr<FILE, decltype(&fclose)> file_guard(input_file, &fclose);
+    return load_memory_config(input_file);
 }
 
 }  // namespace tt::tt_metal
