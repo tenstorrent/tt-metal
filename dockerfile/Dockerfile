@@ -98,6 +98,18 @@ RUN mkdir -p /tmp/taskflow \
     && make -C /tmp/taskflow/build install \
     && rm -rf /tmp/taskflow
 
+ARG XTENSOR_XTL_VERSION=0.7.7
+RUN mkdir -p /tmp/xtensor_xtl \
+    && wget -O /tmp/xtensor_xtl/xtensor_xtl-${XTENSOR_XTL_VERSION}.tar.gz "https://github.com/xtensor-stack/xtl/archive/refs/tags/${XTENSOR_XTL_VERSION}.tar.gz" \
+    && tar -xzf /tmp/xtensor_xtl/xtensor_xtl-${XTENSOR_XTL_VERSION}.tar.gz -C /tmp/xtensor_xtl --strip-components=1 \
+    && cmake \
+         -S /tmp/xtensor_xtl \
+         -B /tmp/xtensor_xtl/build \
+         -DCMAKE_BUILD_TYPE=Release \
+    && make -C /tmp/xtensor_xtl/build -j$(nproc) \
+    && make -C /tmp/xtensor_xtl/build install \
+    && rm -rf /tmp/xtensor_xtl
+
 ARG XTENSOR_VERSION=0.25.0
 RUN mkdir -p /tmp/xtensor \
     && wget -O /tmp/xtensor/xtensor-${XTENSOR_VERSION}.tar.gz "https://github.com/xtensor-stack/xtensor/archive/refs/tags/${XTENSOR_VERSION}.tar.gz" \
