@@ -34,7 +34,7 @@ download_logs_for_all_jobs() {
         job_id=$(echo "$job" | jq -r '.id')
         job_conclusion=$(echo "$job" | jq -r '.conclusion')
         echo "[info] download logs for job with id $job_id, attempt number $attempt_number"
-        gh api /repos/$repo/actions/jobs/$job_id/logs > generated/cicd/$workflow_run_id/logs/$job_id.log
+        gh api /repos/$repo/actions/jobs/$job_id/logs > generated/cicd/$workflow_run_id/logs/$job_id.log || true
 
         # Only download annotations for failed jobs
         if [[ "$job_conclusion" == "failure" ]]; then
