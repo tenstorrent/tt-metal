@@ -13,6 +13,7 @@ from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, s
 from models.utility_functions import torch_random
 
 TIMEOUT = 15
+TILE_HEIGHT = TILE_WIDTH = 32
 # seed for random
 random.seed(0)
 
@@ -22,7 +23,7 @@ parameters = {
             {"shape": [1, 1, 1, 16], "shard_shape": None},
             {"shape": [1, 1, 32, 16], "shard_shape": None},
             {"shape": [1, 1, 16, 32], "shard_shape": None},
-            {"shape": [1, 1, 32, 32], "shard_shape": None},
+            {"shape": [1, 1, 128, 32], "shard_shape": None},
             {"shape": [1, 1, 64, 64], "shard_shape": None},
             {"shape": [1, 1, 128, 128], "shard_shape": None},
             {"shape": [1, 1, 1, 16], "shard_shape": [1, 1, 1, 16]},
@@ -31,16 +32,17 @@ parameters = {
             {"shape": [1, 1, 32, 32], "shard_shape": [1, 1, 16, 16]},
             {"shape": [1, 1, 64, 64], "shard_shape": [1, 1, 16, 16]},
             {"shape": [1, 1, 128, 128], "shard_shape": [1, 1, 32, 16]},
+            {"shape": [1, 1, 128, 128], "shard_shape": [1, 1, 32, 32]},
         ],
         "strategy": [ttnn.ShardStrategy.WIDTH, ttnn.ShardStrategy.HEIGHT],
-        "orientation": [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.ROW_MAJOR],
+        "orientation": [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR],
         "core_grid": [
             ttnn.CoreGrid(y=1, x=1),
             ttnn.CoreGrid(y=2, x=1),
             ttnn.CoreGrid(y=1, x=2),
             ttnn.CoreGrid(y=2, x=2),
         ],
-        "dtype": [ttnn.bfloat16],
+        "dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
         "input_buffer_type": [ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG],
         "output_buffer_type": [ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG],
@@ -55,7 +57,26 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     if test_vector["layout"] == ttnn.ROW_MAJOR_LAYOUT:
         if test_vector["dtype"] == ttnn.bfloat8_b:
             return True, "bfloat8_b not supported with ROW_MAJOR_LAYOUT"
-
+    elif test_vector["layout"] == ttnn.TILE_LAYOUT:
+        if test_vector["shard_specs"]["shard_shape"] is not None and (
+            test_vector["shard_specs"]["shard_shape"][-2] % TILE_HEIGHT != 0
+            or test_vector["shard_specs"]["shard_shape"][-1] % TILE_WIDTH != 0
+        ):
+            return True, "shard_shape not supported with TILE_LAYOUT"
+        elif test_vector["shard_specs"]["shard_shape"] is None:
+            ncores = test_vector["core_grid"].x * test_vector["core_grid"].y
+            sizey = (
+                test_vector["shard_specs"]["shape"][-2] // ncores
+                if test_vector["strategy"] == ttnn.ShardStrategy.HEIGHT
+                else test_vector["shard_specs"]["shape"][-2]
+            )
+            sizex = (
+                test_vector["shard_specs"]["shape"][-1] // ncores
+                if test_vector["strategy"] == ttnn.ShardStrategy.WIDTH
+                else test_vector["shard_specs"]["shape"][-1]
+            )
+            if sizex % TILE_HEIGHT != 0 or sizey % TILE_WIDTH != 0:
+                return True, "shard_shape not supported with TILE_LAYOUT"
     return False, None
 
 
@@ -102,7 +123,7 @@ def run(
         device=device,
         layout=layout,
         memory_config=input_buffer_type,
-        dtype=ttnn.bfloat16,
+        dtype=dtype,
     )
 
     # Measure performance of the split operation in ttnn
