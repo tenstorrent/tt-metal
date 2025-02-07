@@ -391,12 +391,13 @@ CoreCoord Cluster::get_virtual_coordinate_from_logical_coordinates(
     }
 
     // TBD: Remove when all WORKER are rewritten to TENSIX
-    if (core_type == CoreType::WORKER) {
-        core_type = CoreType::TENSIX;
+    CoreType core_type_to_use = core_type;
+    if (core_type_to_use == CoreType::WORKER) {
+        core_type_to_use = CoreType::TENSIX;
     }
 
     tt::umd::CoreCoord translated_coord =
-        soc_desc.translate_coord_to({logical_coord, core_type, CoordSystem::LOGICAL}, CoordSystem::TRANSLATED);
+        soc_desc.translate_coord_to({logical_coord, core_type_to_use, CoordSystem::LOGICAL}, CoordSystem::TRANSLATED);
     return {translated_coord.x, translated_coord.y};
 }
 
