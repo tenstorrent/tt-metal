@@ -4,6 +4,7 @@
 
 #pragma once
 #include "types.hpp"
+#include "common/queue_id.hpp"
 
 namespace tt::tt_metal {
 struct Tensor;
