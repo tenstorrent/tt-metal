@@ -9,6 +9,8 @@
 #include <pybind11/operators.h>
 #include <pybind11/stl.h>
 
+#include <tt-metalium/small_vector.hpp>
+
 #include "export_enum.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
