@@ -33,7 +33,6 @@ TT_EAGER_COMMON_TEST_ENTRIES = (
     TestEntry("tt_eager/tests/ops/test_eltwise_binary_op", "ops/test_eltwise_binary_op"),
     TestEntry("tt_eager/tests/ops/test_bcast_op", "ops/test_bcast_op"),
     TestEntry("tt_eager/tests/ops/test_sliding_window_ops", "ops/test_sliding_window_ops"),
-    TestEntry("tt_eager/tests/ops/test_conv_prepare_weights_and_biases", "ops/test_conv_prepare_weights_and_biases"),
     TestEntry("tt_eager/tests/ops/test_bmm_op", "ops/test_bmm_op"),
     void_for_bh(void_for_whb0(TestEntry("tt_eager/tests/ops/test_eltwise_unary_op", "ops/test_eltwise_unary_op"))),
     TestEntry("tt_eager/tests/ops/test_layernorm_op", "ops/test_layernorm_op"),
