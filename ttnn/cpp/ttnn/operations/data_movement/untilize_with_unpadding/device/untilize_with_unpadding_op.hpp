@@ -17,6 +17,8 @@ struct UntilizeWithUnpadding {
     const bool use_multicore;
     const bool use_pack_untilize;
     const bool fp32_dest_acc_en;
+    const bool enough_space_height;
+    const bool enough_space_width;
 
     void validate(const std::vector<Tensor>& input_tensors) const;
     std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
