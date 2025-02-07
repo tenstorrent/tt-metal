@@ -18,13 +18,15 @@ def get_xml_file_root_element_tree(filepath):
     return root_element_tree
 
 
-def sanity_check_pytest_junit_xml_(root_element):
+def sanity_check_test_xml_(root_element, is_pytest=True):
     testsuite_count = len(root_element)
 
-    assert testsuite_count == 1, f"{len(root_element)}"
-
-    logger.debug("Asserted pytest junit xml")
-
+    if is_pytest:
+        assert testsuite_count == 1, f"{len(root_element)}"
+        logger.debug("Asserted pytest junit xml")
+    else:
+        assert testsuite_count >= 1, f"{len(root_element)}"
+        logger.debug("Asserted gtest xml")
     return root_element
 
 
@@ -32,9 +34,18 @@ def is_pytest_junit_xml(root_element):
     is_pytest = root_element[0].get("name") == "pytest"
 
     if is_pytest:
-        sanity_check_pytest_junit_xml_(root_element)
+        sanity_check_test_xml_(root_element)
 
     return is_pytest
+
+
+def is_gtest_xml(root_element):
+    is_gtest = root_element[0].get("name") != "pytest"
+
+    if is_gtest:
+        sanity_check_test_xml_(root_element, is_pytest=False)
+
+    return is_gtest
 
 
 def get_at_most_one_single_child_element_(element, tag_name):
@@ -73,31 +84,31 @@ def get_optional_child_element_exists_(parent_element, tag_name):
     return get_at_most_one_single_child_element_(parent_element, tag_name) != None
 
 
-def get_pytest_testcase_is_skipped(testcase_element):
+def get_testcase_is_skipped(testcase_element):
     return get_optional_child_element_exists_(testcase_element, "skipped")
 
 
-def get_pytest_testcase_is_failed(testcase_element):
+def get_testcase_is_failed(testcase_element):
     return get_optional_child_element_exists_(testcase_element, "failure")
 
 
-def get_pytest_testcase_is_error(testcase_element):
+def get_testcase_is_error(testcase_element):
     return get_optional_child_element_exists_(testcase_element, "error")
 
 
 # opportunity for less copy-pasta
 
 
-def get_pytest_failure_message(testcase_element):
-    assert get_pytest_testcase_is_failed(testcase_element)
+def get_test_failure_message(testcase_element):
+    assert get_testcase_is_failed(testcase_element)
 
     failure_element = get_at_most_one_single_child_element_(testcase_element, "failure")
 
     return failure_element.attrib["message"]
 
 
-def get_pytest_error_message(testcase_element):
-    assert get_pytest_testcase_is_error(testcase_element)
+def get_test_error_message(testcase_element):
+    assert get_testcase_is_error(testcase_element)
 
     error_element = get_at_most_one_single_child_element_(testcase_element, "error")
 
