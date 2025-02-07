@@ -16,8 +16,6 @@
 #include "cpp/ttnn/operations/data_movement/common/common.hpp"
 #include "cpp/ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "cpp/ttnn/operations/data_movement/tilize_with_val_padding/tilize_with_val_padding.hpp"
-// #include "cpp/ttnn/operations/data_movement/slice/slice.hpp"
-// #include "cpp/ttnn/operations/data_movement/slice/device/slice_op.hpp"
 #include "cpp/ttnn/operations/data_movement/untilize_with_unpadding/untilize_with_unpadding.hpp"
 
 #include <ranges>

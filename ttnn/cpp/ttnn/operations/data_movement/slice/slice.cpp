@@ -2,12 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/common/constants.hpp"
 #include "slice.hpp"
 #include "device/slice_op.hpp"
-#include "ttnn/common/queue_id.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "cpp/ttnn/operations/creation.hpp"
+#include "ttnn/common/constants.hpp"
 #include "cpp/ttnn/operations/data_movement/copy/copy.hpp"
 #include "cpp/ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
 #include "cpp/ttnn/operations/data_movement/common/common.hpp"
@@ -107,7 +109,10 @@ ttnn::Tensor SliceOperation::invoke(
         }
         rm_only = !no_step || !aligned_begins || !aligned_ends || one_dimensional;
         if (rm_only) {
-            TT_FATAL(input.get_dtype() == DataType::BFLOAT16, "Strided slice is not supported for BFLOAT8 tensors");
+            if (!no_step) {
+                TT_FATAL(
+                    input.get_dtype() != DataType::BFLOAT8_B, "Strided slice is not supported for BFLOAT8 tensors");
+            }
             input = ttnn::to_layout(input, Layout::ROW_MAJOR, std::nullopt, memory_config, (IDevice*)nullptr);
         }
     }
@@ -172,7 +177,6 @@ ttnn::Tensor SliceOperation::invoke(
     const std::optional<Tensor>& optional_output_tensor) {
     return SliceOperation::invoke<T>(ttnn::DefaultQueueId, input_tensor, begins, ends, step, memory_config_arg, optional_output_tensor);
 }
-
 
 template <typename T, std::size_t N>
 ttnn::Tensor SliceOperation::invoke(
@@ -243,7 +247,7 @@ template ttnn::Tensor SliceOperation::invoke<uint32_t>(
     const std::optional<Tensor>& optional_output_tensor);
 
 template ttnn::Tensor SliceOperation::invoke<uint32_t, 4>(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const std::array<uint32_t, 4>& output_tensor_start,
     const std::array<uint32_t, 4>& output_tensor_end,
@@ -260,7 +264,7 @@ template ttnn::Tensor SliceOperation::invoke<uint32_t, 4>(
     const std::optional<Tensor>& optional_output_tensor);
 
 template ttnn::Tensor SliceOperation::invoke<uint32_t, 3>(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const std::array<uint32_t, 3>& output_tensor_start,
     const std::array<uint32_t, 3>& output_tensor_end,
