@@ -23,11 +23,11 @@ HiFi2 -> 2 TFLOPS \
 HiFi3 -> 1.33 TFLOPS \
 HiFi4 -> 1 TFLOPS
 
-### Reduction: Average and Max
-The WH matrix engine performs 16x16 reduce max/average operations in a single cycle. \
+### Reduction: Max/Average/Sum
+The WH matrix engine performs 16x16 reduce max/average/sum operations in a single cycle. \
 This is 2*16\*16 multiply + adds in a single cycle. At 1GHz, this is 0.512 TFLOPS per matrix engine.
 
-Reduce max does not use MATH_FIDELITY; however reduce average does use MATH_FIDELITY for higher precision, and TFLOPS are calculated by dividing by the MATH_FIDELITY value.
+Reduce max does not use MATH_FIDELITY; however reduce average/sum does use MATH_FIDELITY for higher precision, and TFLOPS are calculated by dividing by the MATH_FIDELITY value.
 
 LoFi ->  0.512 TFLOPS \
 HiFi2 -> 0.256 TFLOPS \
