@@ -128,7 +128,7 @@ void kernel_main() {
 
     mcast_fwd_packet_header->to_chip_multicast(MulticastRoutingCommandHeader{1, static_cast<uint8_t>(mcast_fwd_hops)});
     mcast_bwd_packet_header->to_chip_multicast(MulticastRoutingCommandHeader{1, static_cast<uint8_t>(mcast_bwd_hops)});
-    unicast_packet_header->to_chip_unicast(UnicastRoutingCommandHeader{static_cast<uint8_t>(unicast_hops)});
+    unicast_packet_header->to_chip_unicast(static_cast<uint8_t>(unicast_hops));
 
     {
         DeviceZoneScopedN("MAIN-WRITE-ZONE");

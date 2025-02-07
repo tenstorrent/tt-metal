@@ -584,54 +584,32 @@ FORCE_INLINE void receiver_send_completion_ack(
 }
 
 
-PacketLocalForwardType get_packet_local_forward_type(const volatile tt::fabric::PacketHeader &packet_header) {
-    const bool local_chip_is_packet_destination = packet_must_be_consumed_locally(packet_header);
-    const bool packet_needs_forwarding = packet_must_be_forwarded_to_next_chip(packet_header);
-    PacketLocalForwardType forward_type =
-        static_cast<PacketLocalForwardType>(packet_needs_forwarding << 1 | local_chip_is_packet_destination);
-    return forward_type;
-}
-
 FORCE_INLINE bool can_forward_packet_completely(
-    const volatile tt::fabric::PacketHeader *packet_header, tt::fabric::WorkerToFabricEdmSender &downstream_edm_interface) {
-    auto forward_status = get_packet_local_forward_type(*packet_header);
-
-    switch (forward_status) {
-        case PACKET_FORWARD_INVALID: return false;
-        case PACKET_FORWARD_LOCAL_ONLY: return true;
-
-        case PACKET_FORWARD_REMOTE_ONLY:
-        case PACKET_FORWARD_LOCAL_AND_REMOTE: return downstream_edm_interface.edm_has_space_for_packet();
-        default: ASSERT(false); return false;
-    };
+    const volatile tt::fabric::PacketHeader* packet_header,
+    tt::fabric::RoutingFields cached_routing_fields,
+    tt::fabric::WorkerToFabricEdmSender& downstream_edm_interface) {
+    // We always check if it is the terminal mcast packet value. We can do this because all unicast packets have the
+    // mcast terminal value masked in to the routing field. This simplifies the check here to a single compare.
+    bool deliver_locally_only = cached_routing_fields.value == tt::fabric::RoutingFields::LAST_MCAST_VAL;
+    return deliver_locally_only || downstream_edm_interface.edm_has_space_for_packet();
 }
 
 // !!!WARNING!!! - MAKE SURE CONSUMER HAS SPACE BEFORE CALLING
 void receiver_forward_packet(
-    volatile tt::fabric::PacketHeader *packet_start, tt::fabric::WorkerToFabricEdmSender &downstream_edm_interface, uint8_t transaction_id) {
-    // Just cache the packet_header - we don't really expect (or care) if contents change during this function.
-    volatile tt::fabric::PacketHeader const &packet_header = *packet_start;
-    ASSERT(tt::fabric::is_valid(const_cast<tt::fabric::PacketHeader const &>(packet_header)));
-    auto forward_status = get_packet_local_forward_type(packet_header);
-    switch (forward_status) {
-        case PACKET_FORWARD_LOCAL_ONLY: {
-            execute_chip_unicast_to_local_chip(packet_start, transaction_id);
-        } break;
+    // TODO: have a separate cached copy of the packet header to save some additional L1 loads
+    volatile tt::fabric::PacketHeader *packet_start,
+    tt::fabric::RoutingFields cached_routing_fields,
+    tt::fabric::WorkerToFabricEdmSender &downstream_edm_interface,
+    uint8_t transaction_id) {
 
-        case PACKET_FORWARD_REMOTE_ONLY: {
-            forward_payload_to_downstream_edm(packet_start, downstream_edm_interface, transaction_id);
-        } break;
-
-        case PACKET_FORWARD_LOCAL_AND_REMOTE: {
-            ASSERT(packet_header.chip_send_type == tt::fabric::ChipSendType::CHIP_MULTICAST);
-            // TODO: make local chip write non-blocking
-            execute_chip_unicast_to_local_chip(packet_start, transaction_id);
-            forward_payload_to_downstream_edm(packet_start, downstream_edm_interface, transaction_id);
-        } break;
-
-        case PACKET_FORWARD_INVALID:
-        default: ASSERT(false);
-    };
+    bool start_distance_is_terminal_value = (cached_routing_fields.value & tt::fabric::RoutingFields::HOP_DISTANCE_MASK) == tt::fabric::RoutingFields::LAST_HOP_DISTANCE_VAL;
+    if (start_distance_is_terminal_value) {
+        execute_chip_unicast_to_local_chip(packet_start, transaction_id);
+    }
+    bool not_last_destination_device = cached_routing_fields.value != tt::fabric::RoutingFields::LAST_MCAST_VAL;
+    if (not_last_destination_device) {
+        forward_payload_to_downstream_edm(packet_start, cached_routing_fields, downstream_edm_interface, transaction_id);
+    }
 }
 
 ////////////////////////////////////
@@ -765,13 +743,15 @@ void run_receiver_channel_step(
     if (unwritten_packets) {
         auto receiver_buffer_index = wr_sent_ptr.get_buffer_index();
         volatile auto packet_header = local_receiver_channel.get_packet_header(receiver_buffer_index);
+
+        tt::fabric::RoutingFields cached_routing_fields = const_cast<tt::fabric::PacketHeader*>(packet_header)->routing_fields;
         print_pkt_header(packet_header);
         bool can_send_to_all_local_chip_receivers =
-            can_forward_packet_completely(packet_header, downstream_edm_interface);
+            can_forward_packet_completely(packet_header, cached_routing_fields, downstream_edm_interface);
         bool trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
         if (can_send_to_all_local_chip_receivers && trid_flushed) {
             uint8_t trid = receiver_channel_trid_tracker.update_buffer_slot_to_next_trid_and_advance_trid_counter(receiver_buffer_index);
-            receiver_forward_packet(packet_header, downstream_edm_interface, trid);
+            receiver_forward_packet(packet_header, cached_routing_fields, downstream_edm_interface, trid);
             wr_sent_ptr.increment();
         }
     }

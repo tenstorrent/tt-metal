@@ -131,7 +131,7 @@ void kernel_main() {
                 .to_noc_unicast_write(
                     tt::fabric::NocUnicastCommandHeader{dest_noc_address}, (pages_to_send * page_size));
         } else {
-            packet_header.to_chip_unicast(tt::fabric::UnicastRoutingCommandHeader{config.unicast.distance})
+            packet_header.to_chip_unicast(config.unicast.distance)
                 .to_noc_unicast_write(
                     tt::fabric::NocUnicastCommandHeader{dest_noc_address}, (pages_to_send * page_size));
         }
@@ -148,7 +148,7 @@ void kernel_main() {
         ASSERT(*last_message_semaphore_address == 0);
         uint64_t last_message_semaphore_noc0_addr =
             safe_get_noc_addr(my_x[0], my_y[0], (uint32_t)last_message_semaphore_address, 0);
-        packet_header.to_chip_unicast(tt::fabric::UnicastRoutingCommandHeader{2});
+        packet_header.to_chip_unicast(2);
         packet_header.to_noc_unicast_atomic_inc(
             tt::fabric::NocUnicastAtomicIncCommandHeader(last_message_semaphore_noc0_addr, 1, 32));
 

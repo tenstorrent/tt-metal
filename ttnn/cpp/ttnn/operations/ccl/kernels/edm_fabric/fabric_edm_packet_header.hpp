@@ -6,6 +6,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 
 namespace tt::fabric {
 
@@ -34,20 +35,26 @@ enum ChipSendType : uint8_t {
     CHIP_MULTICAST = 1,
 };
 
-struct UnicastRoutingCommandHeader {
-    uint8_t distance_in_hops;
+struct RoutingFields {
+    static constexpr uint8_t START_DISTANCE_FIELD_BIT_WIDTH = 4;
+    static constexpr uint8_t RANGE_HOPS_FIELD_BIT_WIDTH = 4;
+    static constexpr uint8_t LAST_HOP_DISTANCE_VAL = 1;
+    static constexpr uint8_t LAST_CHIP_IN_MCAST_VAL = 1 << tt::fabric::RoutingFields::START_DISTANCE_FIELD_BIT_WIDTH;
+    static constexpr uint8_t HOP_DISTANCE_MASK = (1 << tt::fabric::RoutingFields::RANGE_HOPS_FIELD_BIT_WIDTH) - 1;
+    static constexpr uint8_t RANGE_MASK = ((1 << tt::fabric::RoutingFields::RANGE_HOPS_FIELD_BIT_WIDTH) - 1)
+                                          << tt::fabric::RoutingFields::START_DISTANCE_FIELD_BIT_WIDTH;
+    static constexpr uint8_t LAST_MCAST_VAL = LAST_CHIP_IN_MCAST_VAL | LAST_HOP_DISTANCE_VAL;
+
+    uint8_t value;
 };
-static_assert(sizeof(UnicastRoutingCommandHeader) == 1, "UnicastRoutingCommandHeader size is not 1 byte");
+static_assert(sizeof(RoutingFields) == sizeof(uint8_t), "RoutingFields size is not 1 bytes");
+static_assert((RoutingFields::START_DISTANCE_FIELD_BIT_WIDTH + RoutingFields::RANGE_HOPS_FIELD_BIT_WIDTH) <= sizeof(RoutingFields) * 8, "START_DISTANCE_FIELD_BIT_WIDTH + RANGE_HOPS_FIELD_BIT_WIDTH must equal 8");
+
 struct MulticastRoutingCommandHeader {
-    uint8_t start_distance_in_hops: 4;
-    uint8_t range_hops: 4; // 0 implies unicast
+    uint8_t start_distance_in_hops: RoutingFields::START_DISTANCE_FIELD_BIT_WIDTH;
+    uint8_t range_hops: RoutingFields::RANGE_HOPS_FIELD_BIT_WIDTH; // 0 implies unicast
 };
-static_assert(sizeof(MulticastRoutingCommandHeader) == 1, "MulticastRoutingCommandHeader size is not 1 byte");
-union RoutingFields {
-    UnicastRoutingCommandHeader chip_unicast;
-    MulticastRoutingCommandHeader chip_mcast;
-};
-static_assert(sizeof(RoutingFields) == sizeof(UnicastRoutingCommandHeader), "RoutingFields size is not 1 bytes");
+static_assert(sizeof(MulticastRoutingCommandHeader) <= sizeof(RoutingFields), "MulticastRoutingCommandHeader size is not 1 byte");
 
 struct NocUnicastCommandHeader {
     uint64_t noc_address;
@@ -136,14 +143,14 @@ struct PacketHeader {
         return get_payload_size_excluding_header() + sizeof(PacketHeader);
     }
 
-    inline PacketHeader &to_chip_unicast(UnicastRoutingCommandHeader const &chip_unicast_command_header) {
+    inline PacketHeader &to_chip_unicast(uint8_t distance_in_hops) {
         this->chip_send_type = CHIP_UNICAST;
-        this->routing_fields.chip_unicast = chip_unicast_command_header;
+        this->routing_fields.value = RoutingFields::LAST_CHIP_IN_MCAST_VAL | distance_in_hops;
         return *this;
     }
     inline PacketHeader &to_chip_multicast(MulticastRoutingCommandHeader const &chip_multicast_command_header) {
         this->chip_send_type = CHIP_MULTICAST;
-        this->routing_fields.chip_mcast = chip_multicast_command_header;
+        this->routing_fields.value = ((static_cast<uint8_t>(chip_multicast_command_header.range_hops) << RoutingFields::START_DISTANCE_FIELD_BIT_WIDTH)) | static_cast<uint8_t>(chip_multicast_command_header.start_distance_in_hops);
         return *this;
     }
 
@@ -180,15 +187,14 @@ struct PacketHeader {
         return *this;
     }
 
-    inline volatile PacketHeader *to_chip_unicast(UnicastRoutingCommandHeader const &chip_unicast_command_header) volatile {
+    inline volatile PacketHeader *to_chip_unicast(uint8_t distance_in_hops) volatile {
         this->chip_send_type = CHIP_UNICAST;
-        this->routing_fields.chip_unicast.distance_in_hops = chip_unicast_command_header.distance_in_hops;
+        this->routing_fields.value = RoutingFields::LAST_CHIP_IN_MCAST_VAL | distance_in_hops;
         return this;
     }
     inline volatile PacketHeader *to_chip_multicast(MulticastRoutingCommandHeader const &chip_multicast_command_header) volatile {
         this->chip_send_type = CHIP_MULTICAST;
-        this->routing_fields.chip_mcast.range_hops = chip_multicast_command_header.range_hops;
-        this->routing_fields.chip_mcast.start_distance_in_hops = chip_multicast_command_header.start_distance_in_hops;
+        this->routing_fields.value = (static_cast<uint8_t>(chip_multicast_command_header.range_hops) << RoutingFields::START_DISTANCE_FIELD_BIT_WIDTH) | chip_multicast_command_header.start_distance_in_hops;
         return this;
     }
     inline volatile PacketHeader *to_noc_unicast_write(NocUnicastCommandHeader const &noc_unicast_command_header, size_t payload_size_bytes) volatile {

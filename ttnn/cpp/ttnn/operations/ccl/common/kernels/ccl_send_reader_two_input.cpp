@@ -450,8 +450,7 @@ void try_advance_inline_write_or_atomic_inc(command_context_t<Addrgen>& cmd_ctx)
 
         switch (cmd_ctx.current_cmd_header.dest_type) {
             case ttnn::ccl::cmd::CclCommandDestType::CHIP_UNICAST: {
-                pkt_hdr->to_chip_unicast(tt::fabric::UnicastRoutingCommandHeader{
-                    cmd_ctx.current_cmd_header.get_unicast_dest_args().distance_in_hops});
+                pkt_hdr->to_chip_unicast(cmd_ctx.current_cmd_header.get_unicast_dest_args().distance_in_hops);
 
                 auto& fabric_connection = cmd_ctx.current_cmd_header.get_unicast_dest_args().is_forward_direction
                                               ? cmd_ctx.fabric_connection.get_forward_connection()
@@ -570,7 +569,7 @@ void write_and_advance_local_read_address_for_fabric_write(
             auto& fabric_conn = unicast_args.is_forward_direction ? fabric_connection.get_forward_connection()
                                                                   : fabric_connection.get_backward_connection();
 
-            pkt_hdr->to_chip_unicast(tt::fabric::UnicastRoutingCommandHeader{unicast_args.distance_in_hops});
+            pkt_hdr->to_chip_unicast(unicast_args.distance_in_hops);
 
             fabric_conn.wait_for_empty_write_slot();
             fabric_conn.send_payload_without_header_non_blocking_from_address(l1_read_addr, payload_size_bytes);
