@@ -88,12 +88,6 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
         line_topology.get_distance_to_end_of_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::FORWARD);
     const size_t num_targets_backward =
         line_topology.get_distance_to_end_of_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD);
-
-    // Get worker cores, assuming 1 worker per link
-    uint32_t num_workers_per_link = 1;
-    const auto [sender_worker_core_range, sender_worker_cores] = choose_worker_cores(
-        num_links, num_workers_per_link, enable_persistent_fabric_mode, device, device->get_sub_device_ids().at(0));
-
     // Tensor Info
     const auto input_tensor_num_pages = input_tensor.buffer()->num_pages();
     const auto input_tensor_cores = input_tensor.memory_config().shard_spec->grid;
@@ -105,6 +99,12 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
     const auto output_tensor_shard_shape = output_tensor.memory_config().shard_spec->shape;
     const auto output_tensor_shard_num_pages = output_tensor_shard_shape[0] * output_tensor_shard_shape[1] / TILE_HW;
     const auto num_output_cores = output_tensor_cores.num_cores();
+
+    // Get worker cores, assuming 1 worker per link
+    std::optional<CoreRangeSet> reserved_cores = output_tensor_cores;
+    uint32_t num_workers_per_link = 1;
+    const auto [sender_worker_core_range, sender_worker_cores] = choose_worker_cores(
+        num_links, num_workers_per_link, enable_persistent_fabric_mode, device, sub_device_id, reserved_cores);
 
     tt::log_debug(tt::LogOp, "input_tensor_num_pages: {}", input_tensor_num_pages);
     tt::log_debug(tt::LogOp, "input_tensor_cores: {}", input_tensor_cores);
