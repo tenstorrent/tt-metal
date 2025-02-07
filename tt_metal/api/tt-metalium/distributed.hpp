@@ -31,7 +31,12 @@ void WriteShard(
     std::vector<DType>& src,
     const Coordinate& coord,
     bool blocking = false) {
-    mesh_cq.enqueue_write_shard(mesh_buffer, src.data(), coord, blocking);
+    std::vector<MeshCommandQueue::ShardDataTransfer> shard_data_transfers = {{
+        .shard_coord = coord,
+        .host_data = src.data(),
+        .region = std::nullopt,
+    }};
+    mesh_cq.enqueue_write_shards(mesh_buffer, shard_data_transfers, blocking);
 }
 
 template <typename DType>
@@ -43,7 +48,12 @@ void ReadShard(
     bool blocking = true) {
     auto shard = mesh_buffer->get_device_buffer(coord);
     dst.resize(shard->page_size() * shard->num_pages() / sizeof(DType));
-    mesh_cq.enqueue_read_shard(dst.data(), mesh_buffer, coord, blocking);
+    std::vector<MeshCommandQueue::ShardDataTransfer> shard_data_transfers = {{
+        .shard_coord = coord,
+        .host_data = dst.data(),
+        .region = std::nullopt,
+    }};
+    mesh_cq.enqueue_read_shards(shard_data_transfers, mesh_buffer, blocking);
 }
 
 template <typename DType>
