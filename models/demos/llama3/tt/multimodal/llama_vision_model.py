@@ -28,7 +28,6 @@ from models.demos.llama3.tt.multimodal.llama_cross_attention_transformer_text im
 from models.demos.llama3.tt.llama_common import (
     get_prefill_rot_mat,
     get_rot_transformation_mat,
-    get_single_rot_mat,
     copy_host_to_device,
     get_padded_prefill_len,
 )
@@ -374,7 +373,9 @@ class CrossAttentionTransformer(torch.nn.Module):
             self.configuration.max_seq_len,
             self.mesh_device,
             seq_len=S,
+            theta=self.configuration.rope_theta,
             scale_factor=self.configuration.rope_scaling_factor,
+            orig_context_len=self.configuration.orig_context_len,
         )
 
         if isinstance(page_table, torch.Tensor):
