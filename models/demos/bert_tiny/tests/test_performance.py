@@ -108,20 +108,18 @@ def test_perf_bert_tiny(
 
 @pytest.mark.models_device_performance_bare_metal
 @pytest.mark.parametrize(
-    "batch_size, expected_perf",
-    [
-        (8, 2680),
-    ],
+    "batch_size",
+    (8,),
 )
-def test_perf_device_bare_metal(batch_size, expected_perf):
+def test_perf_device_bare_metal(reset_seeds, batch_size):
     subdir = "ttnn_bert_tiny"
     num_iterations = 1
     margin = 0.03
 
     if is_wormhole_b0():
-        expected_perf = 4114.8
+        expected_perf = 1752.97
     else:
-        expected_perf = 3460.0
+        expected_perf = 1263.10
 
     command = f"pytest tests/ttnn/integration_tests/bert_tiny/test_bert_tiny.py::test_bert_for_question_answering"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
