@@ -171,18 +171,18 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
     uint32_t b_num_tiles_per_cb = num_tiles_per_cb;
 
     // Input buffers
-    auto [a_cb, a_cb_handle] = create_cb(
+    auto [input_tensor_cb, input_tensor_cb_handle] = create_cb(
         tt::CBIndex::c_0, program, all_device_cores, a_single_tile_size, num_tiles_per_cb, a_data_format);  // input
-    auto [b_cb, b_cb_handle] = create_cb(
+    auto [batch_mean_tensor_cb, batch_mean_tensor_cb_handle] = create_cb(
         tt::CBIndex::c_1,
         program,
         all_device_cores,
         b_single_tile_size,
         b_num_tiles_per_cb,
         b_data_format);  // batch_mean
-    auto [c_cb, c_cb_handle] = create_cb(
+    auto [output_tensor_cb, output_tensor_cb_handle] = create_cb(
         tt::CBIndex::c_2, program, all_device_cores, c_single_tile_size, num_tiles_per_cb, c_data_format);  // output
-    auto [d_cb, d_cb_handle] = create_cb(
+    auto [batch_var_tensor_cb, batch_var_tensor_cb_handle] = create_cb(
         tt::CBIndex::c_3,
         program,
         all_device_cores,
@@ -191,9 +191,9 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
         d_data_format);  // batch_var
     auto [eps_cb, eps_cb_handle] = create_cb(
         tt::CBIndex::c_4, program, all_device_cores, d_single_tile_size, b_num_tiles_per_cb, d_data_format);  // eps
-    auto [e_cb, e_cb_handle] = create_cb(
+    auto [weight_tensor_cb, weight_tensor_cb_handle] = create_cb(
         tt::CBIndex::c_16, program, all_device_cores, e_single_tile_size, b_num_tiles_per_cb, e_data_format);  // weight
-    auto [f_cb, f_cb_handle] = create_cb(
+    auto [bias_tensor_cb, bias_tensor_cb_handle] = create_cb(
         tt::CBIndex::c_18, program, all_device_cores, f_single_tile_size, b_num_tiles_per_cb, f_data_format);  // bias
 
     // Temporary buffers to store intermediate results
@@ -260,34 +260,35 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
     bool fp32_dest_acc_en = c_data_format == tt::DataFormat::UInt32 || c_data_format == tt::DataFormat::Int32 ||
                             c_data_format == tt::DataFormat::Float32;
 
-    uint32_t src_input_cb_index = tt::CBIndex::c_0;
-    uint32_t src_batch_mean_cb_index = tt::CBIndex::c_1;
-    uint32_t src_batch_var_cb_index = tt::CBIndex::c_3;
-    uint32_t src_eps_cb_index = tt::CBIndex::c_4;
-    uint32_t src_temp_den_cb_index = tt::CBIndex::c_5;
-    uint32_t src_temp_num_cb_index = tt::CBIndex::c_6;
-    uint32_t src_weight_cb_index = tt::CBIndex::c_16;
-    uint32_t src_temp_1_cb_index = tt::CBIndex::c_17;
-    uint32_t src_bias_cb_index = tt::CBIndex::c_18;
-
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     if (fp32_dest_acc_en) {
         for (const auto cb_index :
-             {src_input_cb_index,
-              src_batch_mean_cb_index,
-              src_batch_var_cb_index,
-              src_temp_num_cb_index,
-              src_temp_den_cb_index,
-              src_eps_cb_index,
-              src_weight_cb_index,
-              src_temp_1_cb_index,
-              src_bias_cb_index}) {
+             {input_tensor_cb,
+              batch_mean_tensor_cb,
+              batch_var_tensor_cb,
+              eps_cb,
+              den_cb,
+              num_cb,
+              weight_tensor_cb,
+              temp_1_cb,
+              bias_tensor_cb}) {
             unpack_to_dest_mode[cb_index] = UnpackToDestMode::UnpackToDestFp32;
         }
     }
 
     std::vector<uint32_t> compute_kernel_args = {
-        static_cast<uint32_t>(weight_has_value), static_cast<uint32_t>(bias_has_value)};
+        static_cast<uint32_t>(weight_has_value),
+        static_cast<uint32_t>(bias_has_value),
+        input_tensor_cb,
+        batch_mean_tensor_cb,
+        output_tensor_cb,
+        batch_var_tensor_cb,
+        eps_cb,
+        den_cb,
+        num_cb,
+        weight_tensor_cb,
+        temp_1_cb,
+        bias_tensor_cb};
     auto compute_kernel_id = tt_metal::CreateKernel(
         program,
         fmt::format(
