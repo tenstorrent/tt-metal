@@ -52,6 +52,7 @@ Device::Device(
     id_(device_id), worker_thread_core_(worker_thread_core), completion_queue_reader_core_(completion_queue_reader_core), work_executor_(worker_thread_core, device_id)
 {
     ZoneScoped;
+    update_dispatch_cores_for_multi_cq_eth_dispatch();
     this->initialize(num_hw_cqs, l1_small_size, trace_region_size, l1_bank_remap, minimal);
 }
 
@@ -875,6 +876,7 @@ void Device::clear_l1_state() {
             hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::TILE_HEADER_BUFFER));
     }
     // TODO: clear idle eriscs as well
+    tt::Cluster::instance().l1_barrier(this->id());
 }
 
 void Device::compile_command_queue_programs() {
@@ -1020,6 +1022,13 @@ bool Device::initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t t
     log_debug(tt::LogMetal, "Running with {} cqs ", num_hw_cqs);
     TT_FATAL(num_hw_cqs > 0 and num_hw_cqs <= dispatch_core_manager::MAX_NUM_HW_CQS, "num_hw_cqs can be between 1 and {}", dispatch_core_manager::MAX_NUM_HW_CQS);
     this->using_fast_dispatch_ = false;
+    // Trying to preserve logic that was in device_pool.cpp
+    // However, I honestly don't understand it
+    if (!initialized_ && (num_hw_cqs_ != num_hw_cqs)) {
+        // The dispatch core manager was reset, since the number of CQs was toggled.
+        // Account for chip specific idle eth dispatch cores.
+        update_dispatch_cores_for_multi_cq_eth_dispatch();
+    }
     this->num_hw_cqs_ = num_hw_cqs;
     constexpr uint32_t harvesting_map_bits = 12;
     constexpr uint32_t num_hw_cq_bits = 8;
