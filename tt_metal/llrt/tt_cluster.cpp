@@ -471,14 +471,6 @@ const std::unordered_map<int, int> Cluster::get_worker_logical_to_virtual_y(chip
     return worker_logical_to_virtual_y;
 }
 
-uint32_t Cluster::get_harvested_rows(chip_id_t chip) const {
-    if (this->target_type_ == TargetDevice::Simulator) {
-        return 0;
-    } else {
-        return this->driver_->harvested_rows_per_target.at(chip);
-    }
-}
-
 int Cluster::get_device_aiclk(const chip_id_t &chip_id) const {
     if (this->arch_ == tt::ARCH::BLACKHOLE) {
         // For Blackhole bring up remove AICLK query due to lack of ARC message support
