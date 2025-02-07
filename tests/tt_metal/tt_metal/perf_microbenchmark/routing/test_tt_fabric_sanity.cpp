@@ -10,8 +10,8 @@
 #include "tt_fabric/mesh_graph.hpp"
 //#include <tt-metalium/cq_commands.hpp>
 //#include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
-#include "kernels/tt_fabric_traffic_gen_test.hpp"
-#include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_common.hpp"
+#include "tt_fabric/hw/inc/tt_fabric_status.h"
+#include "test_common.hpp"
 #include "eth_l1_address_map.h"
 #include "tt_fabric/hw/inc/tt_fabric_interface.h"
 #include <numeric>
@@ -932,24 +932,16 @@ typedef struct test_traffic {
         for (uint32_t i = 0; i < num_tx_workers; i++) {
             tx_results.push_back(tt::llrt::read_hex_vec_from_core(
                 tx_device->device_handle->id(), tx_virtual_cores[i], test_results_address, 128));
-            log_info(
-                LogTest,
-                "TX{} status = {}",
-                i,
-                packet_queue_test_status_to_string(tx_results[i][PQ_TEST_STATUS_INDEX]));
-            pass &= (tx_results[i][PQ_TEST_STATUS_INDEX] == PACKET_QUEUE_TEST_PASS);
+            log_info(LogTest, "TX{} status = {}", i, tt_fabric_status_to_string(tx_results[i][TT_FABRIC_STATUS_INDEX]));
+            pass &= (tx_results[i][TT_FABRIC_STATUS_INDEX] == TT_FABRIC_STATUS_PASS);
         }
 
         // collect rx results
         for (uint32_t i = 0; i < num_rx_workers; i++) {
             rx_results.push_back(tt::llrt::read_hex_vec_from_core(
                 rx_device->device_handle->id(), rx_virtual_cores[i], test_results_address, 128));
-            log_info(
-                LogTest,
-                "RX{} status = {}",
-                i,
-                packet_queue_test_status_to_string(rx_results[i][PQ_TEST_STATUS_INDEX]));
-            pass &= (rx_results[i][PQ_TEST_STATUS_INDEX] == PACKET_QUEUE_TEST_PASS);
+            log_info(LogTest, "RX{} status = {}", i, tt_fabric_status_to_string(rx_results[i][TT_FABRIC_STATUS_INDEX]));
+            pass &= (rx_results[i][TT_FABRIC_STATUS_INDEX] == TT_FABRIC_STATUS_PASS);
         }
 
         return pass;
@@ -965,10 +957,10 @@ typedef struct test_traffic {
             num_tx_packets = 0;
 
             for (auto j : rx_to_tx_map[i]) {
-                num_tx_words += get_64b_result(tx_results[j], PQ_TEST_WORD_CNT_INDEX);
+                num_tx_words += get_64b_result(tx_results[j], TT_FABRIC_WORD_CNT_INDEX);
                 num_tx_packets += get_64b_result(tx_results[j], TX_TEST_IDX_NPKT);
             }
-            pass &= (get_64b_result(rx_results[i], PQ_TEST_WORD_CNT_INDEX) == num_tx_words);
+            pass &= (get_64b_result(rx_results[i], TT_FABRIC_WORD_CNT_INDEX) == num_tx_words);
             pass &= (get_64b_result(rx_results[i], TX_TEST_IDX_NPKT) == num_tx_packets);
 
             if (!pass) {
@@ -986,12 +978,12 @@ typedef struct test_traffic {
         uint64_t total_rx_words_checked = 0;
         uint64_t max_tx_elapsed_cycles = 0;
         for (uint32_t i = 0; i < num_tx_workers; i++) {
-            uint64_t tx_words_sent = get_64b_result(tx_results[i], PQ_TEST_WORD_CNT_INDEX);
+            uint64_t tx_words_sent = get_64b_result(tx_results[i], TT_FABRIC_WORD_CNT_INDEX);
             total_tx_words_sent += tx_words_sent;
-            uint64_t tx_elapsed_cycles = get_64b_result(tx_results[i], PQ_TEST_CYCLES_INDEX);
+            uint64_t tx_elapsed_cycles = get_64b_result(tx_results[i], TT_FABRIC_CYCLES_INDEX);
             double tx_bw = ((double)tx_words_sent) * PACKET_WORD_SIZE_BYTES / tx_elapsed_cycles;
             total_tx_bw += tx_bw;
-            uint64_t iter = get_64b_result(tx_results[i], PQ_TEST_ITER_INDEX);
+            uint64_t iter = get_64b_result(tx_results[i], TT_FABRIC_ITER_INDEX);
             max_tx_elapsed_cycles = std::max(max_tx_elapsed_cycles, tx_elapsed_cycles);
             // uint64_t zero_data_sent_iter = get_64b_result(tx_results[i], TX_TEST_IDX_ZERO_DATA_WORDS_SENT_ITER);
             // uint64_t few_data_sent_iter = get_64b_result(tx_results[i], TX_TEST_IDX_FEW_DATA_WORDS_SENT_ITER);
@@ -1023,7 +1015,7 @@ typedef struct test_traffic {
         }
         total_tx_bw_2 = ((double)total_tx_words_sent) * PACKET_WORD_SIZE_BYTES / max_tx_elapsed_cycles;
         for (uint32_t i = 0; i < num_rx_workers; i++) {
-            uint64_t words_received = get_64b_result(rx_results[i], PQ_TEST_WORD_CNT_INDEX);
+            uint64_t words_received = get_64b_result(rx_results[i], TT_FABRIC_WORD_CNT_INDEX);
             uint32_t num_tx = rx_to_tx_map[i].size();
             log_info(LogTest, "RX {}, num producers = {}, words received = {}", i, num_tx, words_received);
         }
@@ -1537,15 +1529,15 @@ int main(int argc, char **argv) {
                     tt::llrt::read_hex_vec_from_core(
                         device->id(), tunneler_phys_core, tunneler_test_results_addr, 128);
                 log_info(LogTest, "L Router status = {}",
-           packet_queue_test_status_to_string(router_results[PQ_TEST_STATUS_INDEX])); pass &=
-           (router_results[PQ_TEST_STATUS_INDEX] == PACKET_QUEUE_TEST_PASS);
+           tt_fabric_status_to_string(router_results[TT_FABRIC_STATUS_INDEX])); pass &=
+           (router_results[TT_FABRIC_STATUS_INDEX] == TT_FABRIC_STATUS_PASS);
 
                 vector<uint32_t> r_router_results =
                     tt::llrt::read_hex_vec_from_core(
                         device_r->id(), r_tunneler_phys_core, tunneler_test_results_addr, 128);
                 log_info(LogTest, "R Router status = {}",
-           packet_queue_test_status_to_string(r_router_results[PQ_TEST_STATUS_INDEX])); pass &=
-           (r_router_results[PQ_TEST_STATUS_INDEX] == PACKET_QUEUE_TEST_PASS);
+           tt_fabric_status_to_string(r_router_results[TT_FABRIC_STATUS_INDEX])); pass &=
+           (r_router_results[TT_FABRIC_STATUS_INDEX] == TT_FABRIC_STATUS_PASS);
         */
 
         // close devices

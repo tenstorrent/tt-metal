@@ -95,11 +95,11 @@ void kernel_main() {
     noc_async_read_barrier();
 
     zero_l1_buf(test_results, test_results_size_bytes);
-    test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_STARTED;
-    test_results[PQ_TEST_STATUS_INDEX + 1] = (uint32_t)local_pull_request;
+    test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_STARTED;
+    test_results[TT_FABRIC_STATUS_INDEX + 1] = (uint32_t)local_pull_request;
 
-    test_results[PQ_TEST_MISC_INDEX] = 0xff000000;
-    test_results[PQ_TEST_MISC_INDEX + 1] = 0xcc000000 | src_endpoint_id;
+    test_results[TT_FABRIC_MISC_INDEX] = 0xff000000;
+    test_results[TT_FABRIC_MISC_INDEX + 1] = 0xcc000000 | src_endpoint_id;
 
     zero_l1_buf(
         reinterpret_cast<tt_l1_ptr uint32_t*>(data_buffer_start_addr), data_buffer_size_words * PACKET_WORD_SIZE_BYTES);
@@ -162,11 +162,11 @@ void kernel_main() {
     uint64_t cycles_elapsed = get_timestamp() - start_timestamp;
 
     uint64_t num_packets = packet_count;
-    set_64b_result(test_results, data_words_sent, PQ_TEST_WORD_CNT_INDEX);
-    set_64b_result(test_results, cycles_elapsed, PQ_TEST_CYCLES_INDEX);
+    set_64b_result(test_results, data_words_sent, TT_FABRIC_WORD_CNT_INDEX);
+    set_64b_result(test_results, cycles_elapsed, TT_FABRIC_CYCLES_INDEX);
     set_64b_result(test_results, total_data_words, TX_TEST_IDX_TOT_DATA_WORDS);
     set_64b_result(test_results, num_packets, TX_TEST_IDX_NPKT);
 
-    test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_PASS;
-    test_results[PQ_TEST_MISC_INDEX] = packet_count;
+    test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_PASS;
+    test_results[TT_FABRIC_MISC_INDEX] = packet_count;
 }

@@ -5,7 +5,6 @@
 #pragma once
 
 #include "debug/dprint.h"
-#include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/traffic_gen_test.hpp"
 
 inline uint32_t prng_next(uint32_t n) {
     uint32_t x = n;
