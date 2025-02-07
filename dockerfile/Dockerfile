@@ -23,6 +23,21 @@ RUN mkdir -p /usr/local/bin && wget -O /tmp/ccache.tar.xz https://github.com/cca
     tar -xf /tmp/ccache.tar.xz -C /usr/local/bin --strip-components=1 && \
     rm /tmp/ccache.tar.xz
 
+ARG FMT_VERSION=11.0.1
+RUN mkdir -p /tmp/fmt \
+    && wget -O /tmp/fmt/fmt-${FMT_VERSION}.tar.gz "https://github.com/fmtlib/fmt/archive/${FMT_VERSION}.tar.gz" \
+    && tar -xzf /tmp/fmt/fmt-${DOXYGEN_VERSION}.tar.gz -C /tmp/fmt --strip-components=1 \
+    && cmake \
+         -S /tmp/fmt \
+         -B /tmp/fmt/build \
+         -DCMAKE_BUILD_TYPE=Release \
+         -DFMT_TEST=OFF \
+         -DFMT_DOC=OFF \
+         -DFMT_INSTALL=ON \
+    && make -C /tmp/fmt -j$(nproc) \
+    && make -C /tmp/fmt install \
+    && rm -rf /tmp/fmt
+
 ARG DOXYGEN_VERSION=1.9.6
 RUN mkdir -p /tmp/doxygen \
     && wget -O /tmp/doxygen/doxygen-${DOXYGEN_VERSION}.linux.bin.tar.gz "https://www.doxygen.nl/files/doxygen-${DOXYGEN_VERSION}.linux.bin.tar.gz" \
@@ -54,7 +69,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
     libtbb-dev \
     libcapstone-dev \
-    libfmt-dev \
     libyaml-cpp-dev \
     pybind11-dev \
     nlohmann-json3-dev \
