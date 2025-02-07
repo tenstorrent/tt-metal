@@ -53,16 +53,18 @@ inline void noc_bank_table_init(uint64_t mem_bank_to_noc_addr) {
     l1_to_local_mem_copy((uint*)bank_to_l1_offset, (uint tt_l1_ptr*)(mem_bank_to_noc_addr + dram_to_noc_size_bytes + l1_to_noc_size_bytes + dram_offsets_size_bytes), l1_offsets_size_bytes >> 2);
 }
 
-FORCE_INLINE
-uint32_t firmware_config_init(
-    tt_l1_ptr mailboxes_t* const mailboxes, uint32_t core_type_index, uint32_t dispatch_class) {
+FORCE_INLINE uint32_t firmware_config_init(
+    tt_l1_ptr mailboxes_t* const mailboxes,
+    uint32_t core_type_index,
+    uint32_t dispatch_class,
+    uint32_t launch_msg_rd_ptr) {
     extern uint32_t tt_l1_ptr* rta_l1_base;
     extern uint32_t tt_l1_ptr* crta_l1_base;
     extern uint32_t tt_l1_ptr* sem_l1_base[ProgrammableCoreType::COUNT];
 
     // TODO: check the asm for this loop to be sure loads are scheduled ok
     uint32_t kernel_config_base[ProgrammableCoreType::COUNT];
-    launch_msg_t* launch_msg_address = &(mailboxes->launch[mailboxes->launch_msg_rd_ptr]);
+    launch_msg_t* launch_msg_address = &(mailboxes->launch[launch_msg_rd_ptr]);
 #pragma GCC unroll ProgrammableCoreType::COUNT
     for (uint32_t index = 0; index < ProgrammableCoreType::COUNT; index++) {
         kernel_config_base[index] = launch_msg_address->kernel_config.kernel_config_base[index];
@@ -75,6 +77,11 @@ uint32_t firmware_config_init(
                                          launch_msg_address->kernel_config.rta_offset[dispatch_class].crta_offset);
 
     return kernel_config_base[core_type_index];
+}
+
+FORCE_INLINE uint32_t
+firmware_config_init(tt_l1_ptr mailboxes_t* const mailboxes, uint32_t core_type_index, uint32_t dispatch_class) {
+    return firmware_config_init(mailboxes, core_type_index, dispatch_class, mailboxes->launch_msg_rd_ptr);
 }
 
 FORCE_INLINE
