@@ -46,6 +46,27 @@ const std::vector<std::string> field_names_alu_config = {"ALU_ROUNDING_MODE_Fpu_
     "ALU_ACC_CTRL_Fp32_enabled", "ALU_ACC_CTRL_SFPU_Fp32_enabled", "ALU_ACC_CTRL_INT8_math_enabled"};
 const std::vector<uint32_t> field_values_alu_config = {1,0,1,15,0,1,1,0,0,1,0,0,0,1};
 
+// PACK_EDGE_OFFSET
+const std::vector<std::string> field_names_pack_edge_offset = {"mask", "mode", "tile_row_set_select_pack0", "tile_row_set_select_pack1",
+    "tile_row_set_select_pack2", "tile_row_set_select_pack3", "reserved"};
+const std::vector<uint32_t> field_values_pack_edge_offset = {16,1,0,1,2,3,0};
+
+// PACK_COUNTERS
+const std::vector<std::string> field_names_pack_counters = {"pack_per_xy_plane", "pack_reads_per_xy_plane", "pack_xys_per_til", "pack_yz_transposed",
+    "pack_per_xy_plane_offset"};
+const std::vector<uint32_t> field_values_pack_counters = {4,8,2,0,6};
+
+// RELU_CONFIG
+const std::vector<std::string> field_names_relu_config = {"ALU_ACC_CTRL_Zero_Flag_disabled_src", "ALU_ACC_CTRL_Zero_Flag_disabled_dst", "STACC_RELU_ApplyRelu",
+    "STACC_RELU_ReluThreshold", "DISABLE_RISC_BP_Disable_main", "DISABLE_RISC_BP_Disable_trisc", "DISABLE_RISC_BP_Disable_ncrisc", "DISABLE_RISC_BP_Disable_bmp_clear_main",
+    "DISABLE_RISC_BP_Disable_bmp_clear_trisc", "DISABLE_RISC_BP_Disable_bmp_clear_ncrisc"};
+const std::vector<uint32_t> field_values_relu_config = {1,0,1,8,0,2,1,0,2,1};
+
+// PACK_DEST_RD_CTRL
+const std::vector<std::string> field_names_dest_rd_ctrl = {"PCK_DEST_RD_CTRL_Read_32b_data", "PCK_DEST_RD_CTRL_Read_unsigned", "PCK_DEST_RD_CTRL_Read_int8",
+    "PCK_DEST_RD_CTRL_Round_10b_mant", "PCK_DEST_RD_CTRL_Reserved"};
+const std::vector<uint32_t> field_values_dest_rd_ctrl = {1,0,1,1,0};
+
 #ifdef ARCH_GRAYSKULL
 // UNPACK TILE DESCRIPTOR
 const std::vector<std::string> field_names_unpack_tile_descriptor = {"in_data_format", "uncompressed", "reserved_0",
@@ -58,6 +79,14 @@ const std::vector<std::string> field_names_unpack_config = {"out_data_format", "
     "tileize_mode", "force_shared_exp", "reserved_0", "upsample_rate", "upsample_and_interlave", "shift_amount",
     "uncompress_cntx0_3", "reserved_1", "uncompress_cntx4_7", "reserved_2", "limit_addr", "fifo_size"};
 const std::vector<uint32_t> field_values_unpack_config = {0,1,2,0,1,0,0,3,0,16,5,0,2,0,28,29};
+
+// PACK CONFIG
+const std::vector<std::string> field_names_pack_config = {"row_ptr_section_size", "exp_section_size", "l1_dest_addr", "uncompress", "add_l1_dest_addr_offset",
+    "reserved_0", "out_data_format", "in_data_format", "reserved_1", "src_if_sel", "pack_per_xy_plane", "l1_src_addr", "downsample_mask", "downsample_shift_count",
+    "read_mode", "exp_threshold_en", "reserved_2", "exp_threshold"};
+const std::vector<uint32_t> field_values_pack_config = {12,24,16,0,1,0,5,5,0,1,0,8,12,4,0,1,0,12};
+
+
 #else // ARCH_WORMHOLE or ARCH_BLACKHOLE
 // UNPACK TILE DESCRIPTOR
 const std::vector<std::string> field_names_unpack_tile_descriptor = {"in_data_format", "uncompressed", "reserved_0",
@@ -72,32 +101,20 @@ const std::vector<std::string> field_names_unpack_config = {"out_data_format", "
     "unpack_if_sel_cntx4_7", "reserved_3", "limit_addr", "reserved_4", "fifo_size", "reserved_5"};
 const std::vector<uint32_t> field_values_unpack_config = {0,1,2,0,1,1,0,3,0,0,16,5,6,0,0,2,3,0,28,0,29,0};
 
+#ifdef ARCH_BLACKHOLE
+const std::vector<std::string> field_names_pack_config = {"row_ptr_section_size", "exp_section_size", "l1_dest_addr", "uncompress", "add_l1_dest_addr_offset",
+    "disable_pack_zero_flag", "reserved_0", "out_data_format", "in_data_format", "dis_shared_exp_assembler", "auto_set_last_pacr_intf_sel",
+    "enable_out_fifo", "sub_l1_tile_header_size", "pack_start_intf_pos", "all_pack_disable_zero_compress_ovrd", "add_tile_header_size", "pack_dis_y_pos_start_offset",
+    "l1_src_addr"};
+const std::vector<std::string> field_values_pack_config = {12,24,16,0,1,1,0,5,5,0,0,1,0,1,2,0,1,0,8};
+#else
 // PACK CONFIG
 const std::vector<std::string> field_names_pack_config = {"row_ptr_section_size", "exp_section_size", "l1_dest_addr", "uncompress", "add_l1_dest_addr_offset",
     "reserved_0", "out_data_format", "in_data_format", "reserved_1", "src_if_sel", "pack_per_xy_plane", "l1_src_addr", "downsample_mask", "downsample_shift_count",
     "read_mode", "exp_threshold_en", "pack_l1_acc_disable_pack_zero_flag", "reserved_2", "exp_threshold"};
 const std::vector<uint32_t> field_values_pack_config = {12,24,16,0,1,0,5,5,0,1,0,8,12,4,0,1,2,0,12};
+#endif
 
-// RELU_CONFIG
-const std::vector<std::string> field_names_relu_config = {"ALU_ACC_CTRL_Zero_Flag_disabled_src", "ALU_ACC_CTRL_Zero_Flag_disabled_dst", "STACC_RELU_ApplyRelu",
-    "STACC_RELU_ReluThreshold", "DISABLE_RISC_BP_Disable_main", "DISABLE_RISC_BP_Disable_trisc", "DISABLE_RISC_BP_Disable_ncrisc", "DISABLE_RISC_BP_Disable_bmp_clear_main",
-    "DISABLE_RISC_BP_Disable_bmp_clear_trisc", "DISABLE_RISC_BP_Disable_bmp_clear_ncrisc"};
-const std::vector<uint32_t> field_values_relu_config = {1,0,1,8,0,2,1,0,2,1};
-
-// PACK_DEST_RD_CTRL
-const std::vector<std::string> field_names_dest_rd_ctrl = {"PCK_DEST_RD_CTRL_Read_32b_data", "PCK_DEST_RD_CTRL_Read_unsigned", "PCK_DEST_RD_CTRL_Read_int8",
-    "PCK_DEST_RD_CTRL_Round_10b_mant", "PCK_DEST_RD_CTRL_Reserved"};
-const std::vector<uint32_t> field_values_dest_rd_ctrl = {1,0,1,1,0};
-
-// PACK_EDGE_OFFSET
-const std::vector<std::string> field_names_pack_edge_offset = {"mask", "mode", "tile_row_set_select_pack0", "tile_row_set_select_pack1",
-    "tile_row_set_select_pack2", "tile_row_set_select_pack3", "reserved"};
-const std::vector<uint32_t> field_values_pack_edge_offset = {16,1,0,1,2,3,0};
-
-// PACK_COUNTERS
-const std::vector<std::string> field_names_pack_counters = {"pack_per_xy_plane", "pack_reads_per_xy_plane", "pack_xys_per_til", "pack_yz_transposed",
-    "pack_per_xy_plane_offset"};
-const std::vector<uint32_t> field_values_pack_counters = {4,8,2,0,6};
 #endif
 
 // Configuration for Data Flow Test involving Reader, Datacopy, and Writer

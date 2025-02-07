@@ -19,7 +19,7 @@
 #define PACK_STRIDES 8
 
 namespace NAMESPACE {
-#ifndef ARCH_GRAYSKULL
+#if defined(ARCH_WORMHOLE) or defined(ARCH_BLACKHOLE)
 void generate_alu_config(ckernel::unpacker::alu_config_t& config) {
    config.ALU_ROUNDING_MODE_Fpu_srnd_en = 1;
    config.ALU_ROUNDING_MODE_Gasket_srnd_en = 0;
@@ -50,7 +50,7 @@ void generate_unpack_tile_descriptor(ckernel::unpacker::unpack_tile_descriptor_t
    tile_descriptor.w_dim = 16;
 #ifdef ARCH_GRAYSKULL
    tile_descriptor.blobs_y_start = 32;
-#else
+#else // ARCH_WORMHOLE or ARCH_BLACKHOLE
    tile_descriptor.blobs_y_start_lo = 32;
    tile_descriptor.blobs_y_start_hi = 0;
 #endif
@@ -77,7 +77,7 @@ void generate_unpack_config(ckernel::unpacker::unpack_config_t& config) {
 
 #ifdef ARCH_GRAYSKULL
    config.reserved_0 = 0;
-#else
+#else // ARCH_WORMHOLE or ARCH_BLACKHOLE
    config.reserved_3 = 0;
    config.reserved_4 = 0;
    config.reserved_5 = 0;
@@ -99,14 +99,16 @@ void generate_pack_config(ckernel::packer::pack_config_t& config) {
    config.in_data_format = 5;
    config.src_if_sel = 1;
    config.l1_src_addr = 8;
-#ifdef ARCH_WORMHOLE
+#if defined(ARCH_WORMHOLE) or defined(ARCH_GRAYSKULL)
    config.reserved_1 = 0;
    config.pack_per_xy_plane = 0;
    config.downsample_mask = 12;
    config.downsample_shift_count = 4;
    config.read_mode = 0;
    config.exp_threshold_en = 1;
+#ifdef ARCH_WORMHOLE
    config.pack_l1_acc_disable_pack_zero_flag = 2;
+#endif
    config.reserved_2 = 0;
    config.exp_threshold = 12;
 #endif
@@ -123,6 +125,7 @@ void generate_pack_config(ckernel::packer::pack_config_t& config) {
 #endif
 }
 
+#if defined(ARCH_WORMHOLE) or defined(ARCH_BLACKHOLE)
 void generate_relu_config(ckernel::packer::relu_config_t& config) {
    config.ALU_ACC_CTRL_Zero_Flag_disabled_src = 1;
    config.ALU_ACC_CTRL_Zero_Flag_disabled_dst = 0;
@@ -135,7 +138,9 @@ void generate_relu_config(ckernel::packer::relu_config_t& config) {
    config.DISABLE_RISC_BP_Disable_bmp_clear_trisc = 2;
    config.DISABLE_RISC_BP_Disable_bmp_clear_ncrisc = 1;
 }
+#endif
 
+#if defined(ARCH_WORMHOLE) or defined(ARCH_BLACKHOLE)
 void generate_dest_rd_ctrl(ckernel::packer::dest_rd_ctrl_t& dest) {
    dest.PCK_DEST_RD_CTRL_Read_32b_data = 1;
    dest.PCK_DEST_RD_CTRL_Read_unsigned = 0;
@@ -143,6 +148,7 @@ void generate_dest_rd_ctrl(ckernel::packer::dest_rd_ctrl_t& dest) {
    dest.PCK_DEST_RD_CTRL_Round_10b_mant = 1;
    dest.PCK_DEST_RD_CTRL_Reserved = 0;
 }
+#endif
 
 void generate_pack_edge_offset(ckernel::packer::pck_edge_offset_t& edge) {
    edge.mask = 16;
@@ -162,9 +168,11 @@ void generate_pack_counters(ckernel::packer::pack_counters_t& counter) {
    counter.pack_per_xy_plane_offset = 6;
 }
 
+#if defined(ARCH_WORMHOLE) or defined(ARCH_BLACKHOLE)
 void write_alu_config(volatile uint tt_reg_ptr* cfg, uint32_t address, const ckernel::unpacker::alu_config_u &config) {
    cfg[address] = config.val;
 }
+#endif
 
 void write_unpack_tile_descriptor(volatile uint tt_reg_ptr* cfg, uint32_t address, uint num_of_words, const ckernel::unpacker::unpack_tile_descriptor_u &tile_descriptor) {
    for (uint i = 0; i < num_of_words; i++)
@@ -181,14 +189,18 @@ void write_pack_config(volatile uint tt_reg_ptr* cfg, uint32_t address, uint num
       cfg[address + i] = config.val[i];
 }
 
+#if defined(ARCH_WORMHOLE) or defined(ARCH_BLACKHOLE)
 void write_relu_config(volatile uint tt_reg_ptr* cfg, uint32_t address, uint num_of_words, const ckernel::packer::relu_config_u &config) {
    for (uint i = 0; i < num_of_words; i++)
       cfg[address + i] = config.val[i];
 }
+#endif
 
+#if defined(ARCH_WORMHOLE) or defined(ARCH_BLACKHOLE)
 void write_dest_rd_ctrl(volatile uint tt_reg_ptr* cfg, uint32_t address, const ckernel::packer::dest_rd_ctrl_u &dest) {
    cfg[address] = dest.val;
 }
+#endif
 
 void write_pack_edge_offset(volatile uint tt_reg_ptr* cfg, uint32_t address, const ckernel::packer::pck_edge_offset_u &edge) {
    cfg[address] = edge.val;
@@ -205,7 +217,7 @@ void MAIN {
    volatile uint tt_reg_ptr* cfg = get_cfg_pointer();
 
    switch (register_name) {
-      #ifndef ARCH_GRAYSKULL
+      #if defined(ARCH_WORMHOLE) or defined(ARCH_BLACKHOLE)
       case ALU_CONFIG:
          ckernel::unpacker::alu_config_u alu_config;
          generate_alu_config(alu_config.f);
@@ -230,37 +242,54 @@ void MAIN {
          write_unpack_tile_descriptor(cfg, THCON_SEC1_REG0_TileDescriptor_ADDR32, 4, tile_descriptor);
          break;
       case UNPACK_CONFIG:
+         uint num_of_words_unpack_config;
+      #ifdef ARCH_GRAYSKULL
+         num_of_words_unpack_config = 3;
+      #else
+         num_of_words_unpack_config = 4;
+      #endif
          ckernel::unpacker::unpack_config_u unpack_config;
          generate_unpack_config(unpack_config.f);
          std::array<ckernel::unpacker::unpack_config_t, ckernel::unpacker::NUM_UNPACKERS> unpack_config_vec;
          unpack_config_vec = ckernel::unpacker::read_unpack_config();
-         write_unpack_config(cfg, THCON_SEC0_REG2_Out_data_format_ADDR32, 4, unpack_config);
-         write_unpack_config(cfg, THCON_SEC1_REG2_Out_data_format_ADDR32, 4, unpack_config);
+         write_unpack_config(cfg, THCON_SEC0_REG2_Out_data_format_ADDR32, num_of_words_unpack_config, unpack_config);
+         write_unpack_config(cfg, THCON_SEC1_REG2_Out_data_format_ADDR32, num_of_words_unpack_config, unpack_config);
          dprint_tensix_unpack_config();
          unpack_config.f = unpack_config_vec[0];
-         write_unpack_config(cfg, THCON_SEC0_REG2_Out_data_format_ADDR32, 4, unpack_config);
+         write_unpack_config(cfg, THCON_SEC0_REG2_Out_data_format_ADDR32, num_of_words_unpack_config, unpack_config);
          unpack_config.f = unpack_config_vec[1];
-         write_unpack_config(cfg, THCON_SEC1_REG2_Out_data_format_ADDR32, 4, unpack_config);
+         write_unpack_config(cfg, THCON_SEC1_REG2_Out_data_format_ADDR32, num_of_words_unpack_config, unpack_config);
          break;
       case PACK_CONFIG:
+         uint num_of_words_pack_config;
+      #ifdef ARCH_BLACKHOLE
+         num_of_words_pack_config = 3;
+      #else
+         num_of_words_pack_config = 4;
+      #endif
          ckernel::packer::pack_config_u pack_config;
          generate_pack_config(pack_config.f);
          std::array<ckernel::packer::pack_config_t, ckernel::packer::NUM_PACKERS> pack_config_vec;
          pack_config_vec = ckernel::packer::read_pack_config();
-         write_pack_config(cfg, THCON_SEC0_REG1_Row_start_section_size_ADDR32, 4, pack_config);
-         write_pack_config(cfg, THCON_SEC0_REG8_Row_start_section_size_ADDR32, 4, pack_config);
-         write_pack_config(cfg, THCON_SEC1_REG1_Row_start_section_size_ADDR32, 4, pack_config);
-         write_pack_config(cfg, THCON_SEC1_REG8_Row_start_section_size_ADDR32, 4, pack_config);
+         write_pack_config(cfg, THCON_SEC0_REG1_Row_start_section_size_ADDR32, num_of_words_pack_config, pack_config);
+      #if defined(ARCH_GRAYSKULL) or defined(ARCH_WORMHOLE)
+         write_pack_config(cfg, THCON_SEC0_REG8_Row_start_section_size_ADDR32, num_of_words_pack_config, pack_config);
+         write_pack_config(cfg, THCON_SEC1_REG1_Row_start_section_size_ADDR32, num_of_words_pack_config, pack_config);
+         write_pack_config(cfg, THCON_SEC1_REG8_Row_start_section_size_ADDR32, num_of_words_pack_config, pack_config);
+      #endif
          dprint_tensix_pack_config();
          pack_config.f = pack_config_vec[0];
-         write_pack_config(cfg, THCON_SEC0_REG1_Row_start_section_size_ADDR32, 4, pack_config);
+         write_pack_config(cfg, THCON_SEC0_REG1_Row_start_section_size_ADDR32, num_of_words_pack_config, pack_config);
+      #if defined(ARCH_GRAYSKULL) or defined(ARCH_WORMHOLE)
          pack_config.f = pack_config_vec[1];
-         write_pack_config(cfg, THCON_SEC0_REG8_Row_start_section_size_ADDR32, 4, pack_config);
+         write_pack_config(cfg, THCON_SEC0_REG8_Row_start_section_size_ADDR32, num_of_words_pack_config, pack_config);
          pack_config.f = pack_config_vec[2];
-         write_pack_config(cfg, THCON_SEC1_REG1_Row_start_section_size_ADDR32, 4, pack_config);
+         write_pack_config(cfg, THCON_SEC1_REG1_Row_start_section_size_ADDR32, num_of_words_pack_config, pack_config);
          pack_config.f = pack_config_vec[3];
-         write_pack_config(cfg, THCON_SEC1_REG8_Row_start_section_size_ADDR32, 4, pack_config);
+         write_pack_config(cfg, THCON_SEC1_REG8_Row_start_section_size_ADDR32, num_of_words_pack_config, pack_config);
+      #endif
          break;
+      #if defined(ARCH_WORMHOLE) or defined(ARCH_BLACKHOLE)
       case RELU_CONFIG:
          ckernel::packer::relu_config_u relu_config;
          generate_relu_config(relu_config.r);
@@ -270,6 +299,8 @@ void MAIN {
          dprint_tensix_pack_relu_config();
          write_relu_config(cfg, ALU_ACC_CTRL_Zero_Flag_disabled_src_ADDR32, 1, relu_config_original);
          break;
+      #endif
+      #if defined(ARCH_WORMHOLE) or defined(ARCH_BLACKHOLE)
       case DEST_RD_CTRL:
          ckernel::packer::dest_rd_ctrl_u dest;
          generate_dest_rd_ctrl(dest.f);
@@ -279,24 +310,29 @@ void MAIN {
          dprint_tensix_dest_rd_ctrl();
          write_dest_rd_ctrl(cfg, PCK_DEST_RD_CTRL_Read_32b_data_ADDR32, dest_original);
          break;
+      #endif
       case PACK_EDGE_OFFSET:
          ckernel::packer::pck_edge_offset_u edge;
          generate_pack_edge_offset(edge.f);
          std::array<ckernel::packer::pck_edge_offset_t, ckernel::packer::NUM_PACKERS> edge_vec;
          edge_vec = ckernel::packer::read_pack_edge_offset();
          write_pack_edge_offset(cfg, PCK_EDGE_OFFSET_SEC0_mask_ADDR32, edge);
+      #if defined(ARCH_GRAYSKULL) or defined(ARCH_WORMHOLE)
          write_pack_edge_offset(cfg, PCK_EDGE_OFFSET_SEC1_mask_ADDR32, edge);
          write_pack_edge_offset(cfg, PCK_EDGE_OFFSET_SEC2_mask_ADDR32, edge);
          write_pack_edge_offset(cfg, PCK_EDGE_OFFSET_SEC3_mask_ADDR32, edge);
+      #endif
          dprint_tensix_pack_edge_offset();
          edge.f = edge_vec[0];
          write_pack_edge_offset(cfg, PCK_EDGE_OFFSET_SEC0_mask_ADDR32, edge);
+      #if defined(ARCH_GRAYSKULL) or defined(ARCH_WORMHOLE)
          edge.f = edge_vec[1];
          write_pack_edge_offset(cfg, PCK_EDGE_OFFSET_SEC1_mask_ADDR32, edge);
          edge.f = edge_vec[2];
          write_pack_edge_offset(cfg, PCK_EDGE_OFFSET_SEC2_mask_ADDR32, edge);
          edge.f = edge_vec[3];
          write_pack_edge_offset(cfg, PCK_EDGE_OFFSET_SEC3_mask_ADDR32, edge);
+      #endif
          break;
       case PACK_COUNTERS:
          ckernel::packer::pack_counters_u counter;
@@ -304,18 +340,22 @@ void MAIN {
          std::array<ckernel::packer::pack_counters_t, ckernel::packer::NUM_PACKERS> counter_vec;
          counter_vec = ckernel::packer::read_pack_counters();
          write_pack_counters(cfg, PACK_COUNTERS_SEC0_pack_per_xy_plane_ADDR32, counter);
+      #if defined(ARCH_GRAYSKULL) or defined(ARCH_WORMHOLE)
          write_pack_counters(cfg, PACK_COUNTERS_SEC1_pack_per_xy_plane_ADDR32, counter);
          write_pack_counters(cfg, PACK_COUNTERS_SEC2_pack_per_xy_plane_ADDR32, counter);
          write_pack_counters(cfg, PACK_COUNTERS_SEC3_pack_per_xy_plane_ADDR32, counter);
+      #endif
          dprint_tensix_pack_counters();
          counter.f = counter_vec[0];
          write_pack_counters(cfg, PACK_COUNTERS_SEC0_pack_per_xy_plane_ADDR32, counter);
+      #if defined(ARCH_GRAYSKULL) or defined(ARCH_WORMHOLE)
          counter.f = counter_vec[1];
          write_pack_counters(cfg, PACK_COUNTERS_SEC1_pack_per_xy_plane_ADDR32, counter);
          counter.f = counter_vec[2];
          write_pack_counters(cfg, PACK_COUNTERS_SEC2_pack_per_xy_plane_ADDR32, counter);
          counter.f = counter_vec[3];
          write_pack_counters(cfg, PACK_COUNTERS_SEC3_pack_per_xy_plane_ADDR32, counter);
+      #endif
          break;
    }
 }
