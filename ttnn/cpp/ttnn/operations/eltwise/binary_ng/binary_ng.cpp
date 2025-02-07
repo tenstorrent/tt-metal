@@ -18,7 +18,7 @@ namespace ttnn::operations::binary_ng {
 
 template <BinaryOpType binary_op_type>
 Tensor BinaryNg<binary_op_type>::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const std::optional<const DataType>& output_dtype,
@@ -103,7 +103,7 @@ Tensor BinaryNg<binary_op_type>::invoke(
 
 template <BinaryOpType binary_op_type>
 Tensor BinaryNg<binary_op_type>::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& input_tensor_a,
     float scalar,
     const std::optional<const DataType>& output_dtype,
@@ -185,7 +185,7 @@ Tensor BinaryNg<binary_op_type>::invoke(
 
 template <BinaryOpType binary_op_type>
 Tensor InplaceBinaryNg<binary_op_type>::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations,
@@ -224,7 +224,7 @@ Tensor InplaceBinaryNg<binary_op_type>::invoke(
 
 template <BinaryOpType binary_op_type>
 Tensor InplaceBinaryNg<binary_op_type>::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& input_tensor_a,
     const float scalar,
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> lhs_activations,
@@ -263,7 +263,7 @@ Tensor InplaceBinaryNg<binary_op_type>::invoke(
 
 template <BinaryOpType binary_op_type>
 Tensor BinaryNgBitwise<binary_op_type>::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const std::optional<MemoryConfig>& memory_config,
@@ -301,7 +301,7 @@ Tensor BinaryNgBitwise<binary_op_type>::invoke(
 
 template <BinaryOpType binary_op_type>
 Tensor BinaryNgBitwise<binary_op_type>::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& input_tensor_a,
     float scalar,
     const std::optional<MemoryConfig>& memory_config,

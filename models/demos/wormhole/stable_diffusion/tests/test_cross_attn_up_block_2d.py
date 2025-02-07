@@ -11,6 +11,9 @@ from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_p
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_cross_attn_upblock_new_conv import (
     cross_attention_upblock2d,
 )
+from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
+    preprocess_and_push_input_to_device,
+)
 from models.utility_functions import skip_for_grayskull, torch_random
 from ttnn.model_preprocessing import preprocess_model_parameters
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -21,24 +24,6 @@ def ttnn_to_torch(input):
     input = ttnn.from_device(input)
     input = ttnn.to_torch(input)
     return input
-
-
-def prepare_input_and_push_to_device(input, device, memory_config):
-    input = torch.permute(input, (0, 2, 3, 1))
-    input = torch.reshape(
-        input,
-        (
-            1,
-            1,
-            input.shape[0] * input.shape[1] * input.shape[2],
-            input.shape[3],
-        ),
-    )
-
-    input = ttnn.from_torch(input, ttnn.bfloat16)
-    input = ttnn.to_layout(input, ttnn.TILE_LAYOUT)
-    input = ttnn.to_dtype(input, ttnn.bfloat8_b)
-    return ttnn.to_device(input, device, memory_config=memory_config)
 
 
 @skip_for_grayskull()
@@ -163,10 +148,10 @@ def test_cross_attn_up_block_2d_512x512(
     norm_type = "layer_norm"
     attn_num_head_channels = 8
 
-    hidden_state = prepare_input_and_push_to_device(
-        hidden_state,
+    hidden_state = preprocess_and_push_input_to_device(
         device,
-        ttnn.MemoryConfig(
+        hidden_state,
+        memory_config=ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             ttnn.BufferType.L1,
             ttnn.ShardSpec(
@@ -184,9 +169,9 @@ def test_cross_attn_up_block_2d_512x512(
         ),
     )
 
-    res0 = prepare_input_and_push_to_device(res0, device, ttnn.DRAM_MEMORY_CONFIG)
-    res1 = prepare_input_and_push_to_device(res1, device, ttnn.DRAM_MEMORY_CONFIG)
-    res2 = prepare_input_and_push_to_device(res2, device, ttnn.DRAM_MEMORY_CONFIG)
+    res0 = preprocess_and_push_input_to_device(device, res0)
+    res1 = preprocess_and_push_input_to_device(device, res1)
+    res2 = preprocess_and_push_input_to_device(device, res2)
     res_hidden_states_tuple = (res0, res1, res2)
 
     temb = temb.permute(2, 0, 1, 3)  # pre-permute temb

@@ -9,6 +9,7 @@
 #include <chrono>
 #include <memory>
 
+#include "small_vector_caster.hpp"  // NOLINT - for pybind11 SmallVector binding support.
 #include "ttnn/tensor/tensor.hpp"
 #include <tt-metalium/graph_tracking.hpp>
 #include <tt-metalium/overloaded.hpp>
@@ -20,7 +21,7 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "tools/profiler/op_profiler.hpp"
 
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/tensor/types.hpp"
 
@@ -968,7 +969,7 @@ void pytensor_module(py::module& m_tensor) {
             )doc")
         .def(
             "to",
-            py::overload_cast<IDevice*, const MemoryConfig&, uint8_t>(&Tensor::to_device, py::const_),
+            py::overload_cast<IDevice*, const MemoryConfig&, QueueId>(&Tensor::to_device, py::const_),
             py::arg("device").noconvert(),
             py::arg("mem_config").noconvert() = MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED},
             py::arg("cq_id") = ttnn::DefaultQueueId,
@@ -1002,7 +1003,7 @@ void pytensor_module(py::module& m_tensor) {
             )doc")
         .def(
             "to",
-            py::overload_cast<MeshDevice*, const MemoryConfig&, uint8_t>(&Tensor::to_device, py::const_),
+            py::overload_cast<MeshDevice*, const MemoryConfig&, QueueId>(&Tensor::to_device, py::const_),
             py::arg("mesh_device").noconvert(),
             py::arg("mem_config").noconvert() = MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED},
             py::arg("cq_id") = ttnn::DefaultQueueId,
@@ -1077,7 +1078,7 @@ void pytensor_module(py::module& m_tensor) {
         )doc")
         .def(
             "cpu",
-            [](const Tensor& self, bool blocking, uint8_t cq_id) { return self.cpu(blocking, cq_id); },
+            [](const Tensor& self, bool blocking, QueueId cq_id) { return self.cpu(blocking, cq_id); },
             py::arg("blocking") = true,
             py::arg("cq_id") = ttnn::DefaultQueueId,
             R"doc(

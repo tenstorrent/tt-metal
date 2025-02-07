@@ -58,11 +58,14 @@ private:
     std::vector<std::shared_ptr<MeshDevice>>
         submeshes_;                          // Parent owns submeshes and is responsible for their destruction
     std::weak_ptr<MeshDevice> parent_mesh_;  // Submesh created with reference to parent mesh
-    std::unique_ptr<MeshCommandQueue> mesh_command_queue_;
+    std::vector<std::unique_ptr<MeshCommandQueue>> mesh_command_queues_;
     std::unique_ptr<SubDeviceManagerTracker> sub_device_manager_tracker_;
 
     // This is a reference device used to query properties that are the same for all devices in the mesh.
     IDevice* reference_device() const;
+
+    // Returns the devices in row-major order for the new mesh shape
+    std::vector<IDevice*> get_row_major_devices(const MeshShape& new_shape) const;
 
 public:
     MeshDevice(
@@ -235,7 +238,7 @@ public:
 
     // These methods will get removed once in favour of the ones in IDevice* and TT-Mesh bringup
     // These are prefixed with "mesh_" to avoid conflicts with the IDevice* methods
-    MeshCommandQueue& mesh_command_queue();
+    MeshCommandQueue& mesh_command_queue(std::size_t cq_id = 0) const;
     MeshSubDeviceManagerId mesh_create_sub_device_manager(
         tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size);
     // TODO #16526: Temporary api until migration to actual fabric is complete

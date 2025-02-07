@@ -18,7 +18,7 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 from models.utility_functions import torch_random
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
     pre_process_input,
-    post_process_output,
+    post_process_output_and_move_to_host,
 )
 
 
@@ -80,7 +80,6 @@ def test_upsample2d_512x512(device, scale_factor, batch_size, in_channels, input
         in_channels,
         out_channels,
     )
-    tt_up = post_process_output(device, tt_up, batch_size, input_height * 2, input_width * 2, in_channels)
-    torch_up = ttnn.to_torch(tt_up)
+    torch_up = post_process_output_and_move_to_host(tt_up, batch_size, input_height * 2, input_width * 2, in_channels)
 
     assert_with_pcc(torch_output, torch_up, 0.99)

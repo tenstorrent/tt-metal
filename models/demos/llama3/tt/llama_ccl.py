@@ -13,6 +13,7 @@ def tt_all_reduce(
     dim=0,
     num_reduce_scatter_links=1,
     num_all_gather_links=2,
+    topology=ttnn.Topology.Linear,
     memory_config=None,
     sharded=False,
     dtype=ttnn.bfloat16,
@@ -40,6 +41,7 @@ def tt_all_reduce(
             dim=dim,
             math_op=ttnn.ReduceType.Sum,
             num_links=num_reduce_scatter_links,
+            topology=topology,
             memory_config=memory_config,
         )
         input_tensor.deallocate(True)
@@ -63,7 +65,7 @@ def tt_all_reduce(
             num_links=num_all_gather_links,
             cluster_axis=cluster_axis,
             mesh_device=mesh_device,
-            topology=ttnn.Topology.Linear,
+            topology=topology,
             memory_config=ttnn.DRAM_MEMORY_CONFIG if not sharded else memory_config,
         )
 
@@ -87,7 +89,7 @@ def tt_all_reduce(
             cluster_axis=cluster_axis,
             mesh_device=mesh_device,
             math_op=ttnn.ReduceType.Sum,
-            topology=ttnn.Topology.Linear,
+            topology=topology,
             memory_config=ttnn.DRAM_MEMORY_CONFIG if not sharded else memory_config,
         )
 
@@ -97,7 +99,7 @@ def tt_all_reduce(
             num_links=num_all_gather_links,
             cluster_axis=cluster_axis,
             mesh_device=mesh_device,
-            topology=ttnn.Topology.Linear,
+            topology=topology,
             memory_config=input_mem_cfg,
         )
 

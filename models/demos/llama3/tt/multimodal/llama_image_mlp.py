@@ -35,14 +35,16 @@ class TtLlamaImageFeedForward(LightweightModule):
             cache_name = lambda name, suffix: weight_cache_path / (state_dict_prefix + f".{name}.{suffix}")
 
         as_interleaved_tensor = lambda name, suffix, type, dim: ttnn.as_tensor(
-            torch_weight(name, suffix)
-            if suffix == "weight"
-            else torch_bias(name, suffix),  # Grab only the wX part of the name
+            (
+                torch_weight(name, suffix) if suffix == "weight" else torch_bias(name, suffix)
+            ),  # Grab only the wX part of the name
             dtype=type,
             device=self.mesh_device,
-            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=dim)
-            if dim is not None
-            else ttnn.ReplicateTensorToMesh(self.mesh_device),
+            mesh_mapper=(
+                ttnn.ShardTensorToMesh(self.mesh_device, dim=dim)
+                if dim is not None
+                else ttnn.ReplicateTensorToMesh(self.mesh_device)
+            ),
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_file_name=cache_name(name, suffix),

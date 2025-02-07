@@ -6,13 +6,9 @@
 
 #include <boost/container/small_vector.hpp>
 
-#include <tt-metalium/reflection.hpp>
+#include "reflection.hpp"
 
-#if TTNN_WITH_PYTHON_BINDINGS
-#include <pybind11/stl.h>
-#endif
-
-namespace tt::tt_metal {
+namespace tt::stl {
 
 static constexpr size_t SMALL_VECTOR_SIZE = 8;
 
@@ -35,15 +31,16 @@ std::ostream& operator<<(std::ostream& os, const SmallVector<T, PREALLOCATED_SIZ
     return os;
 }
 
-}  // namespace tt::tt_metal
+}  // namespace tt::stl
 
+// TODO: remove this.
 namespace ttnn {
-using tt::tt_metal::SmallVector;
+using tt::stl::SmallVector;
 }
 
 template <typename T, size_t PREALLOCATED_SIZE>
-struct std::hash<tt::tt_metal::SmallVector<T, PREALLOCATED_SIZE>> {
-    size_t operator()(const ttnn::SmallVector<T, PREALLOCATED_SIZE>& vec) const noexcept {
+struct std::hash<tt::stl::SmallVector<T, PREALLOCATED_SIZE>> {
+    size_t operator()(const tt::stl::SmallVector<T, PREALLOCATED_SIZE>& vec) const noexcept {
         size_t hash = 0;
         for (const auto& element : vec) {
             hash = tt::stl::hash::detail::hash_objects(hash, element);
@@ -53,23 +50,13 @@ struct std::hash<tt::tt_metal::SmallVector<T, PREALLOCATED_SIZE>> {
 };
 
 template <typename T, size_t PREALLOCATED_SIZE>
-struct fmt::formatter<tt::tt_metal::SmallVector<T, PREALLOCATED_SIZE>> {
+struct fmt::formatter<tt::stl::SmallVector<T, PREALLOCATED_SIZE>> {
     constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
 
-    auto format(const tt::tt_metal::SmallVector<T, PREALLOCATED_SIZE>& vector, format_context& ctx) const
+    auto format(const tt::stl::SmallVector<T, PREALLOCATED_SIZE>& vector, format_context& ctx) const
         -> format_context::iterator {
         std::stringstream ss;
         ss << vector;
         return fmt::format_to(ctx.out(), "{}", ss.str());
     }
 };
-
-#if TTNN_WITH_PYTHON_BINDINGS
-namespace PYBIND11_NAMESPACE {
-namespace detail {
-template <typename T, size_t PREALLOCATED_SIZE>
-struct type_caster<tt::tt_metal::SmallVector<T, PREALLOCATED_SIZE>>
-    : list_caster<tt::tt_metal::SmallVector<T, PREALLOCATED_SIZE>, T> {};
-}  // namespace detail
-}  // namespace PYBIND11_NAMESPACE
-#endif

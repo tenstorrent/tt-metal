@@ -5,14 +5,14 @@
 #include "repeat_and_interleave_eltwise_mul.hpp"
 
 #include "device/repeat_and_interleave_eltwise_mul_op.hpp"
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::experimental::ssm {
 
 ttnn::Tensor ExecuteRepeatAndInterleaveEltwiseMul::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& a,
     const Tensor& b,
     const std::optional<MemoryConfig>& memory_config,

@@ -65,7 +65,7 @@ void py_module(py::module& module) {
 
     module.def(
         "to_device",
-        py::overload_cast<const ttnn::Tensor&, IDevice*, const std::optional<MemoryConfig>&, uint8_t>(
+        py::overload_cast<const ttnn::Tensor&, IDevice*, const std::optional<MemoryConfig>&, QueueId>(
             &ttnn::operations::core::to_device),
         py::arg("tensor"),
         py::arg("device"),
@@ -74,7 +74,7 @@ void py_module(py::module& module) {
 
     module.def(
         "to_device",
-        py::overload_cast<const ttnn::Tensor&, MeshDevice*, const std::optional<MemoryConfig>&, uint8_t>(
+        py::overload_cast<const ttnn::Tensor&, MeshDevice*, const std::optional<MemoryConfig>&, QueueId>(
             &ttnn::operations::core::to_device),
         py::arg("tensor"),
         py::arg("device"),
@@ -262,14 +262,14 @@ void py_module(py::module& module) {
 
     module.def(
         "begin_trace_capture",
-        py::overload_cast<IDevice*, const uint8_t>(&ttnn::operations::core::begin_trace_capture),
+        py::overload_cast<IDevice*, const QueueId>(&ttnn::operations::core::begin_trace_capture),
         py::arg("device"),
         py::kw_only(),
         py::arg("cq_id") = ttnn::DefaultQueueId);
 
     module.def(
         "end_trace_capture",
-        py::overload_cast<IDevice*, const uint32_t, const uint8_t>(&ttnn::operations::core::end_trace_capture),
+        py::overload_cast<IDevice*, const uint32_t, const QueueId>(&ttnn::operations::core::end_trace_capture),
         py::arg("device"),
         py::arg("trace_id"),
         py::kw_only(),
@@ -277,7 +277,7 @@ void py_module(py::module& module) {
 
     module.def(
         "execute_trace",
-        py::overload_cast<IDevice*, const uint32_t, const uint8_t, bool>(&ttnn::operations::core::execute_trace),
+        py::overload_cast<IDevice*, const uint32_t, const QueueId, bool>(&ttnn::operations::core::execute_trace),
         py::arg("device"),
         py::arg("trace_id"),
         py::kw_only(),
@@ -292,7 +292,7 @@ void py_module(py::module& module) {
 
     module.def(
         "begin_trace_capture",
-        [](MeshDevice* device, const uint8_t cq_id) {
+        [](MeshDevice* device, const QueueId cq_id) {
             return ttnn::operations::core::begin_trace_capture(device, cq_id);
         },
         py::arg("mesh_device"),
@@ -301,7 +301,7 @@ void py_module(py::module& module) {
 
     module.def(
         "end_trace_capture",
-        [](MeshDevice* device, const uint32_t tid, const uint8_t cq_id) {
+        [](MeshDevice* device, const uint32_t tid, const QueueId cq_id) {
             return ttnn::operations::core::end_trace_capture(device, tid, cq_id);
         },
         py::arg("mesh_device"),
@@ -311,7 +311,7 @@ void py_module(py::module& module) {
 
     module.def(
         "execute_trace",
-        [](MeshDevice* device, const uint32_t tid, const uint8_t cq_id, const bool blocking) {
+        [](MeshDevice* device, const uint32_t tid, const QueueId cq_id, const bool blocking) {
             return ttnn::operations::core::execute_trace(device, tid, cq_id, blocking);
         },
         py::arg("mesh_device"),

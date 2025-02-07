@@ -19,10 +19,10 @@
 #include "ttnn/operations/eltwise/complex_unary/complex_unary.hpp"
 #include <tt-metalium/constants.hpp>
 #include "cpp/ttnn/common/constants.hpp"
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/eltwise/ternary/where.hpp"
 #include "ttnn/operations/creation.hpp"
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/eltwise/binary_backward/binary_backward.hpp"
 #include "tools/profiler/op_profiler.hpp"
 #include <magic_enum/magic_enum.hpp>
@@ -75,7 +75,7 @@ std::vector<ttnn::Tensor> ExecuteBackwardAtan2::invoke(
 }
 
 std::vector<std::optional<ttnn::Tensor>> ExecuteAddalphaBW::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& grad,
     const Tensor& input,
     const Tensor& other,
@@ -122,7 +122,7 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteAddalphaBW::invoke(
 }
 
 std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardSubAlpha::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& grad,
     const Tensor& input,
     const Tensor& other,
@@ -169,7 +169,7 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardSubAlpha::invoke(
 }
 
 std::vector<std::optional<Tensor>> ExecuteBackwardAdd::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& grad,
     const Tensor& input,
     float alpha,
@@ -192,7 +192,7 @@ std::vector<std::optional<Tensor>> ExecuteBackwardAdd::invoke(
 }
 
 std::vector<std::optional<Tensor>> ExecuteBackwardAdd::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& grad,
     const Tensor& input,
     const Tensor& other,
@@ -252,7 +252,7 @@ std::vector<ComplexTensor> ExecuteBackwardAdd::invoke(
 }
 
 std::vector<std::optional<Tensor>> ExecuteBackwardSub::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& grad,
     const Tensor& input,
     float alpha,
@@ -275,7 +275,7 @@ std::vector<std::optional<Tensor>> ExecuteBackwardSub::invoke(
 }
 
 std::vector<std::optional<Tensor>> ExecuteBackwardSub::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& grad,
     const Tensor& input,
     const Tensor& other,
@@ -551,7 +551,7 @@ std::vector<ttnn::Tensor> ExecuteBackwardSquaredDifference::invoke(
 }
 
 std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardAssign::invoke(
-    uint8_t cq_id,
+    QueueId cq_id,
     const Tensor& grad,
     const Tensor& input,
     const Tensor& other,
@@ -576,7 +576,7 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardAssign::invoke(
 }
 
 std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardAssign::invoke(
-    uint8_t cq_id,
+    QueueId cq_id,
     const Tensor& grad,
     const Tensor& input,
     const std::optional<MemoryConfig>& output_mem_config,
@@ -614,7 +614,7 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardAssign::invoke(
 }
 
 std::vector<std::optional<Tensor>> ExecuteBackwardConcat::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& grad,
     const Tensor& input,
     const Tensor& other,
@@ -680,7 +680,7 @@ std::vector<std::optional<Tensor>> ExecuteBackwardConcat::invoke(
 }
 
 std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardRsub::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& grad,
     const Tensor& input,
     const Tensor& other,
@@ -819,7 +819,7 @@ std::vector<ttnn::Tensor> ExecuteBackwardMin::invoke(
 }
 
 std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardDiv::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& grad,
     const Tensor& input,
     float scalar,
@@ -871,7 +871,7 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardDiv::invoke(
 }
 
 std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardDiv::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& grad,
     const Tensor& input,
     const Tensor& other,
@@ -1030,7 +1030,7 @@ std::vector<ComplexTensor> ExecuteBackwardDiv::invoke(
 }
 
 std::vector<std::optional<ttnn::Tensor>> ExecuteBackwardMul::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& grad,
     const Tensor& input,
     float scalar,
@@ -1070,7 +1070,7 @@ std::vector<ComplexTensor> ExecuteBackwardMul::invoke(
 }
 
 std::vector<std::optional<Tensor>> ExecuteBackwardMul::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& grad,
     const Tensor& input,
     const Tensor& other,
