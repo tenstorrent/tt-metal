@@ -9,7 +9,6 @@ from datasets import load_dataset
 import torch
 from ttnn.model_preprocessing import preprocess_model_parameters
 from loguru import logger
-from models.utility_functions import is_wormhole_b0, is_blackhole
 from models.perf.perf_utils import prep_perf_report
 import time
 import ttnn

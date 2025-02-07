@@ -13,7 +13,6 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import torch_random
 from ttnn.model_preprocessing import preprocess_model_parameters
-from models.utility_functions import is_wormhole_b0, is_blackhole
 
 MODEL_NAME = "openai/whisper-base"
 
@@ -22,10 +21,10 @@ MODEL_NAME = "openai/whisper-base"
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [1500])
-@pytest.mark.parametrize("use_key_value_states", [False, True])
+@pytest.mark.parametrize("use_encoder_states", [False, True])
 @pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
 def test_whisper_attention(
-    device, ttnn_model, model_name, batch_size, sequence_size, use_key_value_states, enable_async_mode
+    device, ttnn_model, model_name, batch_size, sequence_size, use_encoder_states, use_program_cache, enable_async_mode
 ):
     torch.manual_seed(0)
     config = transformers.WhisperConfig.from_pretrained(model_name)
@@ -36,22 +35,20 @@ def test_whisper_attention(
     ttnn_hidden_states = ttnn.from_torch(
         torch_hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
     )
-    if use_key_value_states:
-        torch_key_value_states = torch_random(
-            (batch_size, sequence_size, config.d_model), -0.1, 0.1, dtype=torch.float32
-        )
-        ttnn_key_value_states = ttnn.from_torch(
-            torch_key_value_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    if use_encoder_states:
+        torch_encoder_states = torch_random((batch_size, sequence_size, config.d_model), -0.1, 0.1, dtype=torch.float32)
+        ttnn_encoder_states = ttnn.from_torch(
+            torch_encoder_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
         )
     else:
-        torch_key_value_states = None
-        ttnn_key_value_states = None
+        torch_encoder_states = None
+        ttnn_encoder_states = None
 
     torch_parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
         convert_to_ttnn=lambda *_: False,
         custom_preprocessor=torch_functional_whisper.custom_preprocessor,
-        prefix="encoder_attn" if use_key_value_states else "",
+        prefix="encoder_attn" if use_encoder_states else "",
     )
 
     torch_attention_mask = None
@@ -60,7 +57,7 @@ def test_whisper_attention(
         config,
         torch_hidden_states,
         torch_attention_mask,
-        key_value_states=torch_key_value_states,
+        key_value_states=torch_encoder_states,
         parameters=torch_parameters,
     )
 
@@ -69,14 +66,15 @@ def test_whisper_attention(
         convert_to_ttnn=lambda *_: True,
         custom_preprocessor=ttnn_model.custom_preprocessor,
         device=device,
-        prefix="encoder_attn" if use_key_value_states else "",
+        prefix="encoder_attn" if use_encoder_states else "",
     )
     attention_mask = None
     output = ttnn_model.whisper_attention(
         config,
         ttnn_hidden_states,
         attention_mask,
-        key_value_states=ttnn_key_value_states,
+        is_decode=(not use_encoder_states),
+        encoder_hidden_states=ttnn_encoder_states,
         parameters=ttnn_parameters,
     )
 
@@ -89,7 +87,7 @@ def test_whisper_attention(
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [1500])
 @pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
-def test_encoder_layer(device, ttnn_model, model_name, batch_size, sequence_size, enable_async_mode):
+def test_encoder_layer(device, ttnn_model, model_name, batch_size, sequence_size, use_program_cache, enable_async_mode):
     torch.manual_seed(0)
     config = transformers.WhisperConfig.from_pretrained(model_name)
     model = transformers.models.whisper.modeling_whisper.WhisperEncoderLayer(config).eval()
@@ -127,7 +125,9 @@ def test_encoder_layer(device, ttnn_model, model_name, batch_size, sequence_size
 @pytest.mark.parametrize("feature_size", [80])
 @pytest.mark.parametrize("sequence_length", [3000])
 @pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
-def test_encoder(device, ttnn_model, model_name, batch_size, feature_size, sequence_length, enable_async_mode):
+def test_encoder(
+    device, ttnn_model, model_name, batch_size, feature_size, sequence_length, use_program_cache, enable_async_mode
+):
     torch.manual_seed(0)
     config = transformers.WhisperConfig.from_pretrained(model_name)
     model = transformers.models.whisper.modeling_whisper.WhisperEncoder(config).eval()
@@ -179,7 +179,7 @@ def test_encoder(device, ttnn_model, model_name, batch_size, feature_size, seque
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [1500])
 @pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
-def test_decoder_layer(device, ttnn_model, model_name, batch_size, sequence_size, enable_async_mode):
+def test_decoder_layer(device, ttnn_model, model_name, batch_size, sequence_size, use_program_cache, enable_async_mode):
     torch.manual_seed(0)
     config = transformers.WhisperConfig.from_pretrained(model_name)
     model = transformers.models.whisper.modeling_whisper.WhisperDecoderLayer(config).eval()
@@ -236,7 +236,7 @@ def test_decoder_layer(device, ttnn_model, model_name, batch_size, sequence_size
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [1500])
 @pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
-def test_decoder(device, ttnn_model, model_name, batch_size, sequence_size, enable_async_mode):
+def test_decoder(device, ttnn_model, model_name, batch_size, sequence_size, use_program_cache, enable_async_mode):
     torch.manual_seed(0)
     config = transformers.WhisperConfig.from_pretrained(model_name)
     model = transformers.models.whisper.modeling_whisper.WhisperDecoder(config).eval()
@@ -305,7 +305,7 @@ def test_decoder(device, ttnn_model, model_name, batch_size, sequence_size, enab
 
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
 @pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
-def test_ttnn_whisper(tmp_path, device, ttnn_model, enable_async_mode):
+def test_ttnn_whisper(tmp_path, device, ttnn_model, use_program_cache, enable_async_mode):
     torch.manual_seed(0)
     model_name = "openai/whisper-base"
     config = WhisperConfig.from_pretrained(model_name)
