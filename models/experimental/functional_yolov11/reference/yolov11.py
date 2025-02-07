@@ -900,13 +900,14 @@ class YoloV11(nn.Module):
 
         x = self.model[9](x)  # 9
         x = self.model[10](x)  # 10
+        # torch.save(x,"/home/ubuntu/venkatesh_yolov11/tt-metal/models/experimental/functional_yolov11/dumps/torch_out.pth")
         x10 = x
-        print("input to upsample1 is ", x.shape)
+        # print("input to upsample1 is ", x.shape)
         x = f.upsample(x, scale_factor=2.0)  # 11
         x = torch.cat((x, x6), 1)  # 12
         x = self.model[13](x)  # 13
         x13 = x
-        print("input to upsample2 is ", x.shape)
+        # print("input to upsample2 is ", x.shape)
         x = f.upsample(x, scale_factor=2.0)  # 14
         x = torch.cat((x, x4), 1)  # 15
         x = self.model[16](x)  # 16
