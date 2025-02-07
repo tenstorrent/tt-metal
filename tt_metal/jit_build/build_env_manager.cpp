@@ -24,8 +24,6 @@ BuildEnvManager::BuildEnvManager() {
     }
 }
 
-BuildEnvManager::~BuildEnvManager() {}
-
 std::map<std::string, std::string> initialize_device_kernel_defines(chip_id_t device_id, uint8_t num_hw_cqs) {
     std::map<std::string, std::string> device_kernel_defines;
 
@@ -227,7 +225,7 @@ const JitBuildState& BuildEnvManager::get_kernel_build_state(
     return *device_id_to_kernel_build_states_[device_id][state_idx];
 }
 
-const JitBuildStateSubset BuildEnvManager::get_kernel_build_states(
+JitBuildStateSubset BuildEnvManager::get_kernel_build_states(
     chip_id_t device_id, uint32_t programmable_core, uint32_t processor_class) {
     TT_ASSERT(
         device_id_to_kernel_build_states_.count(device_id) != 0,
