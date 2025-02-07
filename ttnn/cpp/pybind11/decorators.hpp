@@ -6,10 +6,10 @@
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
-
 #include <type_traits>
 
 #include "ttnn/decorators.hpp"
+#include "small_vector_caster.hpp"  // NOLINT - for pybind11 SmallVector binding support.
 #include "ttnn/types.hpp"
 #include "types.hpp"
 
