@@ -153,7 +153,7 @@ void kernel_main() {
         pkt_hdr->to_chip_multicast(
             tt::fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(num_targets_backward_direction)});
         fabric_connection.get_backward_connection().wait_for_empty_write_slot();
-        fabric_connection.get_backward_connection().send_payload_non_blocking_from_address(
+        fabric_connection.get_backward_connection().send_payload_flush_blocking_from_address(
             packet_header_buffer_seminc, sizeof(tt::fabric::PacketHeader));
     }
     // increment locally
