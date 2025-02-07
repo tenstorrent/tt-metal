@@ -4,7 +4,7 @@ add_library(TT::Metalium::Firmware ALIAS metalium_firmware)
 if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.23)
     target_sources(
         metalium_firmware
-        PUBLIC
+        INTERFACE
             FILE_SET jit_api
             TYPE HEADERS
             BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
