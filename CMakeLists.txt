@@ -18,6 +18,7 @@ project(
     DESCRIPTION "Tenstorrent Metalium"
     HOMEPAGE_URL "https://github.com/tenstorrent/tt-metal"
     LANGUAGES
+        C # Some of the jit-build files are plain C
         CXX
 )
 message(STATUS "Metalium version: ${PROJECT_VERSION}")
