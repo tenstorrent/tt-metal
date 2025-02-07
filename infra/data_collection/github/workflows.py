@@ -26,10 +26,11 @@ def get_workflow_run_uuids_to_test_reports_paths_(workflow_outputs_dir, workflow
         test_report_uuid = test_report_dir.name.replace("test_reports_", "")
 
         try:
-            xml_file_paths = (test_report_dir / "most_recent_tests.xml").resolve(strict=True)
+            # read all *.xml in test_report_dir (gtest can have one xml files per test executable)
+            xml_file_paths = [file.resolve(strict=True) for file in list(test_report_dir.glob("*.xml"))]
         except FileNotFoundError as e:
             logger.warning(
-                f"no pytest xml file found matching most_recent_tests.xml (likely gtest xml) in {test_report_dir}"
+                f"No pytest or gtest xml file found in {test_report_dir}, skipping directory."
             )
         else:
             workflow_run_test_reports_path[test_report_uuid] = xml_file_paths
