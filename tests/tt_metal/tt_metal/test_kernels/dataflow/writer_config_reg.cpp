@@ -56,7 +56,6 @@ void generate_unpack_tile_descriptor(ckernel::unpacker::unpack_tile_descriptor_t
    tile_descriptor.digest_size = 0;
 }
 
-//0,1,2,0,1,1,0,3,1,0,16,5,6,0,4,2,3,15,28,7,29,8
 void generate_unpack_config(ckernel::unpacker::unpack_config_t& config) {
    config.out_data_format = 0;
    config.throttle_mode = 1;
@@ -87,18 +86,114 @@ void generate_unpack_config(ckernel::unpacker::unpack_config_t& config) {
 #endif
 }
 
+void generate_pack_config(ckernel::packer::pack_config_t& config) {
+   config.row_ptr_section_size = 12;
+   config.exp_section_size = 24;
+   config.l1_dest_addr = 16;
+   config.uncompress = 0;
+   config.add_l1_dest_addr_offset = 1;
+   config.reserved_0 = 0;
+   config.out_data_format = 5;
+   config.in_data_format = 5;
+   config.src_if_sel = 1;
+   config.l1_src_addr = 8;
+#ifdef ARCH_WORMHOLE
+   config.reserved_1 = 0;
+   config.pack_per_xy_plane = 0;
+   config.downsample_mask = 12;
+   config.downsample_shift_count = 4;
+   config.read_mode = 0;
+   config.exp_threshold_en = 1;
+   config.pack_l1_acc_disable_pack_zero_flag = 2;
+   config.reserved_2 = 0;
+   config.exp_threshold = 12;
+#endif
+#ifdef ARCH_BLACKHOLE
+   config.disable_pack_zero_flag = 1;
+   config.dis_shared_exp_assembler = 0;
+   config.auto_set_last_pacr_intf_sel = 0;
+   config.enable_out_fifo = 1;
+   config.sub_l1_tile_header_size = 0;
+   config.pack_start_intf_pos = 2;
+   config.all_pack_disable_zero_compress_ovrd = 0;
+   config.add_tile_header_size = 1;
+   config.pack_dis_y_pos_start_offset = 0;
+#endif
+}
+
+void generate_relu_config(ckernel::packer::relu_config_t& config) {
+   config.ALU_ACC_CTRL_Zero_Flag_disabled_src = 1;
+   config.ALU_ACC_CTRL_Zero_Flag_disabled_dst = 0;
+   config.STACC_RELU_ApplyRelu = 1;
+   config.STACC_RELU_ReluThreshold = 8;
+   config.DISABLE_RISC_BP_Disable_main = 0;
+   config.DISABLE_RISC_BP_Disable_trisc = 2;
+   config.DISABLE_RISC_BP_Disable_ncrisc = 1;
+   config.DISABLE_RISC_BP_Disable_bmp_clear_main = 0;
+   config.DISABLE_RISC_BP_Disable_bmp_clear_trisc = 2;
+   config.DISABLE_RISC_BP_Disable_bmp_clear_ncrisc = 1;
+}
+
+void generate_dest_rd_ctrl(ckernel::packer::dest_rd_ctrl_t& dest) {
+   dest.PCK_DEST_RD_CTRL_Read_32b_data = 1;
+   dest.PCK_DEST_RD_CTRL_Read_unsigned = 0;
+   dest.PCK_DEST_RD_CTRL_Read_int8 = 1;
+   dest.PCK_DEST_RD_CTRL_Round_10b_mant = 1;
+   dest.PCK_DEST_RD_CTRL_Reserved = 0;
+}
+
+void generate_pack_edge_offset(ckernel::packer::pck_edge_offset_t& edge) {
+   edge.mask = 16;
+   edge.mode = 1;
+   edge.tile_row_set_select_pack0 = 0;
+   edge.tile_row_set_select_pack1 = 1;
+   edge.tile_row_set_select_pack2 = 2;
+   edge.tile_row_set_select_pack3 = 3;
+   edge.reserved = 0;
+}
+
+void generate_pack_counters(ckernel::packer::pack_counters_t& counter) {
+   counter.pack_per_xy_plane = 4;
+   counter.pack_reads_per_xy_plane = 8;
+   counter.pack_xys_per_til = 2;
+   counter.pack_yz_transposed = 0;
+   counter.pack_per_xy_plane_offset = 6;
+}
+
 void write_alu_config(volatile uint tt_reg_ptr* cfg, uint32_t address, const ckernel::unpacker::alu_config_u &config) {
    cfg[address] = config.val;
 }
 
 void write_unpack_tile_descriptor(volatile uint tt_reg_ptr* cfg, uint32_t address, uint num_of_words, const ckernel::unpacker::unpack_tile_descriptor_u &tile_descriptor) {
-   for (uint32_t i = 0; i < num_of_words; i++)
+   for (uint i = 0; i < num_of_words; i++)
       cfg[address + i] = tile_descriptor.val[i];
 }
 
 void write_unpack_config(volatile uint tt_reg_ptr* cfg, uint32_t address, uint num_of_words, const ckernel::unpacker::unpack_config_u &config) {
-   for (uint32_t i = 0; i < num_of_words; i++)
+   for (uint i = 0; i < num_of_words; i++)
       cfg[address + i] = config.val[i];
+}
+
+void write_pack_config(volatile uint tt_reg_ptr* cfg, uint32_t address, uint num_of_words, const ckernel::packer::pack_config_u &config) {
+   for (uint i = 0; i < num_of_words; i++)
+      cfg[address + i] = config.val[i];
+}
+
+void write_relu_config(volatile uint tt_reg_ptr* cfg, uint32_t address, uint num_of_words, const ckernel::packer::relu_config_u &config) {
+   for (uint i = 0; i < num_of_words; i++)
+      cfg[address + i] = config.val[i];
+}
+
+void write_dest_rd_ctrl(volatile uint tt_reg_ptr* cfg, uint32_t address, const ckernel::packer::dest_rd_ctrl_u &dest) {
+   cfg[address] = dest.val;
+}
+
+void write_pack_edge_offset(volatile uint tt_reg_ptr* cfg, uint32_t address, const ckernel::packer::pck_edge_offset_u &edge) {
+   cfg[address] = edge.val;
+}
+
+void write_pack_counters(volatile uint tt_reg_ptr* cfg, uint32_t address, const ckernel::packer::pack_counters_u &counter) {
+   cfg[address] = counter.val;
 }
 
 void MAIN {
@@ -124,11 +219,50 @@ void MAIN {
          dprint_tensix_unpack_tile_descriptor();
          break;
       case UNPACK_CONFIG:
-         ckernel::unpacker::unpack_config_u config;
-         generate_unpack_config(config.f);
-         write_unpack_config(cfg, THCON_SEC0_REG2_Out_data_format_ADDR32, 4, config);
-         write_unpack_config(cfg, THCON_SEC1_REG2_Out_data_format_ADDR32, 4, config);
+         ckernel::unpacker::unpack_config_u unpack_config;
+         generate_unpack_config(unpack_config.f);
+         write_unpack_config(cfg, THCON_SEC0_REG2_Out_data_format_ADDR32, 4, unpack_config);
+         write_unpack_config(cfg, THCON_SEC1_REG2_Out_data_format_ADDR32, 4, unpack_config);
          dprint_tensix_unpack_config();
+         break;
+      case PACK_CONFIG:
+         ckernel::packer::pack_config_u pack_config;
+         generate_pack_config(pack_config.f);
+         write_pack_config(cfg, THCON_SEC0_REG1_Row_start_section_size_ADDR32, 4, pack_config);
+         write_pack_config(cfg, THCON_SEC0_REG8_Row_start_section_size_ADDR32, 4, pack_config);
+         write_pack_config(cfg, THCON_SEC1_REG1_Row_start_section_size_ADDR32, 4, pack_config);
+         write_pack_config(cfg, THCON_SEC1_REG8_Row_start_section_size_ADDR32, 4, pack_config);
+         dprint_tensix_pack_config();
+         break;
+      case RELU_CONFIG:
+         ckernel::packer::relu_config_u relu_config;
+         generate_relu_config(relu_config.r);
+         write_relu_config(cfg, ALU_ACC_CTRL_Zero_Flag_disabled_src_ADDR32, 1, relu_config);
+         dprint_tensix_pack_relu_config();
+         break;
+      case DEST_RD_CTRL:
+         ckernel::packer::dest_rd_ctrl_u dest;
+         generate_dest_rd_ctrl(dest.f);
+         write_dest_rd_ctrl(cfg, PCK_DEST_RD_CTRL_Read_32b_data_ADDR32, dest);
+         dprint_tensix_dest_rd_ctrl();
+         break;
+      case PACK_EDGE_OFFSET:
+         ckernel::packer::pck_edge_offset_u edge;
+         generate_pack_edge_offset(edge.f);
+         write_pack_edge_offset(cfg, PCK_EDGE_OFFSET_SEC0_mask_ADDR32, edge);
+         write_pack_edge_offset(cfg, PCK_EDGE_OFFSET_SEC1_mask_ADDR32, edge);
+         write_pack_edge_offset(cfg, PCK_EDGE_OFFSET_SEC2_mask_ADDR32, edge);
+         write_pack_edge_offset(cfg, PCK_EDGE_OFFSET_SEC3_mask_ADDR32, edge);
+         dprint_tensix_pack_edge_offset();
+         break;
+      case PACK_COUNTERS:
+         ckernel::packer::pack_counters_u counter;
+         generate_pack_counters(counter.f);
+         write_pack_counters(cfg, PACK_COUNTERS_SEC0_pack_per_xy_plane_ADDR32, counter);
+         write_pack_counters(cfg, PACK_COUNTERS_SEC1_pack_per_xy_plane_ADDR32, counter);
+         write_pack_counters(cfg, PACK_COUNTERS_SEC2_pack_per_xy_plane_ADDR32, counter);
+         write_pack_counters(cfg, PACK_COUNTERS_SEC3_pack_per_xy_plane_ADDR32, counter);
+         dprint_tensix_pack_counters();
          break;
    }
 }

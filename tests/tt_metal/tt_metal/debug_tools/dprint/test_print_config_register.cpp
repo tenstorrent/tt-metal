@@ -36,7 +36,8 @@ using namespace tt::test_utils::df;
 const std::unordered_set<std::string> format_fields = {"ALU_FORMAT_SPEC_REG0_SrcA", "ALU_FORMAT_SPEC_REG1_SrcB",
     "ALU_FORMAT_SPEC_REG2_Dstacc", "in_data_format", "out_data_format"};
 const std::unordered_set<std::string> decimal_fields = {"blobs_per_xy_plane", "x_dim", "y_dim", "z_dim", "w_dim", "blobs_y_start",
-    "digest_size", "upsample_rate", "shift_amount", "fifo_size"};
+    "digest_size", "upsample_rate", "shift_amount", "fifo_size", "row_ptr_section_size", "exp_section_size", "pack_per_xy_plane",
+    "downsample_shift_count", "exp_threshold", "STACC_RELU_ReluThreshold", "pack_reads_per_xy_plane", "pack_xys_per_til", "pack_per_xy_plane_offset"};
 
 // ALU CONFIG
 const std::vector<std::string> field_names_alu_config = {"ALU_ROUNDING_MODE_Fpu_srnd_en", "ALU_ROUNDING_MODE_Gasket_srnd_en", "ALU_ROUNDING_MODE_Packer_srnd_en",
@@ -70,6 +71,33 @@ const std::vector<std::string> field_names_unpack_config = {"out_data_format", "
     "shift_amount", "uncompress_cntx0_3", "unpack_if_sel_cntx0_3", "force_shared_exp", "reserved_2", "uncompress_cntx4_7",
     "unpack_if_sel_cntx4_7", "reserved_3", "limit_addr", "reserved_4", "fifo_size", "reserved_5"};
 const std::vector<uint32_t> field_values_unpack_config = {0,1,2,0,1,1,0,3,0,0,16,5,6,0,0,2,3,0,28,0,29,0};
+
+// PACK CONFIG
+const std::vector<std::string> field_names_pack_config = {"row_ptr_section_size", "exp_section_size", "l1_dest_addr", "uncompress", "add_l1_dest_addr_offset",
+    "reserved_0", "out_data_format", "in_data_format", "reserved_1", "src_if_sel", "pack_per_xy_plane", "l1_src_addr", "downsample_mask", "downsample_shift_count",
+    "read_mode", "exp_threshold_en", "pack_l1_acc_disable_pack_zero_flag", "reserved_2", "exp_threshold"};
+const std::vector<uint32_t> field_values_pack_config = {12,24,16,0,1,0,5,5,0,1,0,8,12,4,0,1,2,0,12};
+
+// RELU_CONFIG
+const std::vector<std::string> field_names_relu_config = {"ALU_ACC_CTRL_Zero_Flag_disabled_src", "ALU_ACC_CTRL_Zero_Flag_disabled_dst", "STACC_RELU_ApplyRelu",
+    "STACC_RELU_ReluThreshold", "DISABLE_RISC_BP_Disable_main", "DISABLE_RISC_BP_Disable_trisc", "DISABLE_RISC_BP_Disable_ncrisc", "DISABLE_RISC_BP_Disable_bmp_clear_main",
+    "DISABLE_RISC_BP_Disable_bmp_clear_trisc", "DISABLE_RISC_BP_Disable_bmp_clear_ncrisc"};
+const std::vector<uint32_t> field_values_relu_config = {1,0,1,8,0,2,1,0,2,1};
+
+// PACK_DEST_RD_CTRL
+const std::vector<std::string> field_names_dest_rd_ctrl = {"PCK_DEST_RD_CTRL_Read_32b_data", "PCK_DEST_RD_CTRL_Read_unsigned", "PCK_DEST_RD_CTRL_Read_int8",
+    "PCK_DEST_RD_CTRL_Round_10b_mant", "PCK_DEST_RD_CTRL_Reserved"};
+const std::vector<uint32_t> field_values_dest_rd_ctrl = {1,0,1,1,0};
+
+// PACK_EDGE_OFFSET
+const std::vector<std::string> field_names_pack_edge_offset = {"mask", "mode", "tile_row_set_select_pack0", "tile_row_set_select_pack1",
+    "tile_row_set_select_pack2", "tile_row_set_select_pack3", "reserved"};
+const std::vector<uint32_t> field_values_pack_edge_offset = {16,1,0,1,2,3,0};
+
+// PACK_COUNTERS
+const std::vector<std::string> field_names_pack_counters = {"pack_per_xy_plane", "pack_reads_per_xy_plane", "pack_xys_per_til", "pack_yz_transposed",
+    "pack_per_xy_plane_offset"};
+const std::vector<uint32_t> field_values_pack_counters = {4,8,2,0,6};
 #endif
 
 // Configuration for Data Flow Test involving Reader, Datacopy, and Writer
@@ -148,7 +176,7 @@ static KernelHandle prepare_print(tt_metal::Program& program, const ConfigRegPri
         tt_metal::ComputeConfig{});
 }
 
-static std::string generate_golden_output(const std::vector<std::string>& field_names, const std::vector<uint32_t>& values, uint num_of_registers) {
+static std::string generate_golden_output(const std::vector<std::string>& field_names, const std::vector<uint32_t>& values, uint num_of_registers, uint32_t register_name) {
     std::string golden_output;
     bool multiple_registers = num_of_registers > 1;
     for (uint reg_id = 1; reg_id <= num_of_registers; reg_id++) {
@@ -166,6 +194,8 @@ static std::string generate_golden_output(const std::vector<std::string>& field_
                 golden_output += field_names[i] + ": " + std::to_string(values[i]) + "\n";
             else 
                 golden_output += field_names[i] + ": 0x" + int_to_hex(values[i]) + "\n";
+            
+            if (register_name == PACK_EDGE_OFFSET && reg_id > 1) break;
         }
         if (reg_id != num_of_registers) golden_output += "\n";
     }
@@ -184,7 +214,7 @@ static void print_config_reg(
     auto print_kernel = prepare_print(program, config);
 
     // Generate golden output
-    std::string golden_output = generate_golden_output(config.field_names, config.field_values, config.num_of_registers);
+    std::string golden_output = generate_golden_output(config.field_names, config.field_values, config.num_of_registers, config.register_name);
 
     // Run the program
     fixture->RunProgram(device, program);
@@ -241,6 +271,91 @@ TEST_F(DPrintFixture, ConfigRegUnpackTestPrint) {
         .field_names = field_names_unpack_config,
         .field_values = field_values_unpack_config,
         .register_name = UNPACK_CONFIG};
+
+    // Run the test on the device
+    this->RunTestOnDevice(
+        [&](DPrintFixture* fixture, IDevice* device) { print_config_reg(fixture, device, test_config); },
+        this->devices_[0]);
+}
+
+TEST_F(DPrintFixture, ConfigRegPackTestPrint) {
+    // Setup test configuration
+    ConfigRegPrintTestConfig test_config = {
+        .core = CoreCoord(0, 0),
+        .write_kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_config_reg.cpp",
+        .print_kernel = "tests/tt_metal/tt_metal/test_kernels/misc/dprint_config_register.cpp",
+        .num_of_registers = 4,
+        .field_names = field_names_pack_config,
+        .field_values = field_values_pack_config,
+        .register_name = PACK_CONFIG};
+
+    // Run the test on the device
+    this->RunTestOnDevice(
+        [&](DPrintFixture* fixture, IDevice* device) { print_config_reg(fixture, device, test_config); },
+        this->devices_[0]);
+}
+
+TEST_F(DPrintFixture, ConfigRegReluTestPrint) {
+    // Setup test configuration
+    ConfigRegPrintTestConfig test_config = {
+        .core = CoreCoord(0, 0),
+        .write_kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_config_reg.cpp",
+        .print_kernel = "tests/tt_metal/tt_metal/test_kernels/misc/dprint_config_register.cpp",
+        .num_of_registers = 1,
+        .field_names = field_names_relu_config,
+        .field_values = field_values_relu_config,
+        .register_name = RELU_CONFIG};
+
+    // Run the test on the device
+    this->RunTestOnDevice(
+        [&](DPrintFixture* fixture, IDevice* device) { print_config_reg(fixture, device, test_config); },
+        this->devices_[0]);
+}
+
+TEST_F(DPrintFixture, ConfigRegDestRdCtrlTestPrint) {
+    // Setup test configuration
+    ConfigRegPrintTestConfig test_config = {
+        .core = CoreCoord(0, 0),
+        .write_kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_config_reg.cpp",
+        .print_kernel = "tests/tt_metal/tt_metal/test_kernels/misc/dprint_config_register.cpp",
+        .num_of_registers = 1,
+        .field_names = field_names_dest_rd_ctrl,
+        .field_values = field_values_dest_rd_ctrl,
+        .register_name = DEST_RD_CTRL};
+
+    // Run the test on the device
+    this->RunTestOnDevice(
+        [&](DPrintFixture* fixture, IDevice* device) { print_config_reg(fixture, device, test_config); },
+        this->devices_[0]);
+}
+
+TEST_F(DPrintFixture, ConfigRegPackEdgeOffsetTestPrint) {
+    // Setup test configuration
+    ConfigRegPrintTestConfig test_config = {
+        .core = CoreCoord(0, 0),
+        .write_kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_config_reg.cpp",
+        .print_kernel = "tests/tt_metal/tt_metal/test_kernels/misc/dprint_config_register.cpp",
+        .num_of_registers = 4,
+        .field_names = field_names_pack_edge_offset,
+        .field_values = field_values_pack_edge_offset,
+        .register_name = PACK_EDGE_OFFSET};
+
+    // Run the test on the device
+    this->RunTestOnDevice(
+        [&](DPrintFixture* fixture, IDevice* device) { print_config_reg(fixture, device, test_config); },
+        this->devices_[0]);
+}
+
+TEST_F(DPrintFixture, ConfigRegPackCountersTestPrint) {
+    // Setup test configuration
+    ConfigRegPrintTestConfig test_config = {
+        .core = CoreCoord(0, 0),
+        .write_kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_config_reg.cpp",
+        .print_kernel = "tests/tt_metal/tt_metal/test_kernels/misc/dprint_config_register.cpp",
+        .num_of_registers = 4,
+        .field_names = field_names_pack_counters,
+        .field_values = field_values_pack_counters,
+        .register_name = PACK_COUNTERS};
 
     // Run the test on the device
     this->RunTestOnDevice(
