@@ -375,31 +375,6 @@ void py_module(py::module& module) {
         [](const std::vector<Tensor>& tensors) -> Tensor { return aggregate_as_tensor(tensors, AllGatherTensor{}); },
         py::arg("tensors"),
         py::kw_only());
-    module.def(
-        "sharded_tensor_to_tensor_list",
-        [](const Tensor& tensor) -> std::vector<Tensor> {
-            std::vector<ttnn::Tensor> tensors = get_device_tensors(tensor);
-
-            if (tensor.storage_type() == StorageType::MULTI_DEVICE) {
-                std::transform(tensors.begin(), tensors.end(), tensors.begin(), [](Tensor& tensor) -> Tensor {
-                    return tensor.cpu();
-                });
-            }
-
-            return tensors;
-        },
-        py::arg("tensor"),
-        R"doc(
-          Convert a sharded multidevice tensor into a locally stored (StorageType::OWNED) list of tensors,
-          with each tensor representing a shard. All bfloat8_b or bfloat4_b shards will be converted to
-          bfloat16 tensors.
-
-
-
-
-          Returns:
-              List[torch.tensor]: A list of locally stored tensors representing the multidevice shards.
-      )doc");
     module.def("get_t3k_physical_device_ids_ring", &get_t3k_physical_device_ids_ring);
 }
 
