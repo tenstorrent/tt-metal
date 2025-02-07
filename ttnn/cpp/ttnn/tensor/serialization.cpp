@@ -5,8 +5,7 @@
 #include "ttnn/tensor/serialization.hpp"
 
 #include <cstdint>
-#include <fstream>
-#include <iostream>
+#include <cstdio>
 #include <string>
 #include <type_traits>
 
@@ -376,7 +375,6 @@ MemoryConfig load_memory_config_legacy_impl(FILE* input_file, uint8_t version_id
 
 template <typename T>
 Tensor load_tensor_helper(const std::string& file_name, T device) {
-    std::cout << "Loading tensor " << file_name << std::endl;
     FILE* input_file = fopen(file_name.c_str(), "rb");
     if (not input_file) {
         throw std::runtime_error(fmt::format("Cannot open \"{}\"", file_name));
@@ -416,7 +414,6 @@ Tensor load_tensor_helper(const std::string& file_name, T device) {
 
 void dump_tensor(
     const std::string& file_name, const Tensor& tensor, const std::unordered_map<std::string, std::string>& strategy) {
-    std::cout << "Dumping tensor " << file_name << std::endl;
     FILE* output_file = fopen(file_name.c_str(), "wb");
     if (not output_file) {
         throw std::runtime_error(fmt::format("Cannot open \"{}\"", file_name));
