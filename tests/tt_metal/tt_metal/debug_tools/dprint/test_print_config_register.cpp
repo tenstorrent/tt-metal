@@ -167,15 +167,6 @@ static KernelHandle prepare_writer(tt_metal::Program& program, const ConfigRegPr
             .compile_args = { config.register_name }});
 }
 
-// Prepares the compute kernel with the specified program and test configuration
-static KernelHandle prepare_print(tt_metal::Program& program, const ConfigRegPrintTestConfig& config) {
-    return tt_metal::CreateKernel(
-        program,
-        config.print_kernel,
-        config.core,
-        tt_metal::ComputeConfig{});
-}
-
 static std::string generate_golden_output(const std::vector<std::string>& field_names, const std::vector<uint32_t>& values, uint num_of_registers, uint32_t register_name) {
     std::string golden_output;
     bool multiple_registers = num_of_registers > 1;
@@ -210,9 +201,6 @@ static void print_config_reg(
     // Prepare write kernel
     auto write_kernel = prepare_writer(program, config);
 
-    // Prepare print kernel
-    auto print_kernel = prepare_print(program, config);
-
     // Generate golden output
     std::string golden_output = generate_golden_output(config.field_names, config.field_values, config.num_of_registers, config.register_name);
 
@@ -228,7 +216,6 @@ TEST_F(DPrintFixture, ConfigRegAluTestPrint) {
     ConfigRegPrintTestConfig test_config = {
         .core = CoreCoord(0, 0),
         .write_kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_config_reg.cpp",
-        .print_kernel = "tests/tt_metal/tt_metal/test_kernels/misc/dprint_config_register.cpp",
         .num_of_registers = 1,
         .field_names = field_names_alu_config,
         .field_values = field_values_alu_config,
@@ -249,7 +236,6 @@ TEST_F(DPrintFixture, ConfigRegTileDescriptorTestPrint) {
     ConfigRegPrintTestConfig test_config = {
         .core = CoreCoord(0, 0),
         .write_kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_config_reg.cpp",
-        .print_kernel = "tests/tt_metal/tt_metal/test_kernels/misc/dprint_config_register.cpp",
         .num_of_registers = 2,
         .field_names = field_names_unpack_tile_descriptor,
         .field_values = field_values_unpack_tile_descriptor,
@@ -266,7 +252,6 @@ TEST_F(DPrintFixture, ConfigRegUnpackTestPrint) {
     ConfigRegPrintTestConfig test_config = {
         .core = CoreCoord(0, 0),
         .write_kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_config_reg.cpp",
-        .print_kernel = "tests/tt_metal/tt_metal/test_kernels/misc/dprint_config_register.cpp",
         .num_of_registers = 2,
         .field_names = field_names_unpack_config,
         .field_values = field_values_unpack_config,
@@ -283,7 +268,6 @@ TEST_F(DPrintFixture, ConfigRegPackTestPrint) {
     ConfigRegPrintTestConfig test_config = {
         .core = CoreCoord(0, 0),
         .write_kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_config_reg.cpp",
-        .print_kernel = "tests/tt_metal/tt_metal/test_kernels/misc/dprint_config_register.cpp",
         .num_of_registers = 4,
         .field_names = field_names_pack_config,
         .field_values = field_values_pack_config,
@@ -300,7 +284,6 @@ TEST_F(DPrintFixture, ConfigRegReluTestPrint) {
     ConfigRegPrintTestConfig test_config = {
         .core = CoreCoord(0, 0),
         .write_kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_config_reg.cpp",
-        .print_kernel = "tests/tt_metal/tt_metal/test_kernels/misc/dprint_config_register.cpp",
         .num_of_registers = 1,
         .field_names = field_names_relu_config,
         .field_values = field_values_relu_config,
@@ -317,7 +300,6 @@ TEST_F(DPrintFixture, ConfigRegDestRdCtrlTestPrint) {
     ConfigRegPrintTestConfig test_config = {
         .core = CoreCoord(0, 0),
         .write_kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_config_reg.cpp",
-        .print_kernel = "tests/tt_metal/tt_metal/test_kernels/misc/dprint_config_register.cpp",
         .num_of_registers = 1,
         .field_names = field_names_dest_rd_ctrl,
         .field_values = field_values_dest_rd_ctrl,
@@ -334,7 +316,6 @@ TEST_F(DPrintFixture, ConfigRegPackEdgeOffsetTestPrint) {
     ConfigRegPrintTestConfig test_config = {
         .core = CoreCoord(0, 0),
         .write_kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_config_reg.cpp",
-        .print_kernel = "tests/tt_metal/tt_metal/test_kernels/misc/dprint_config_register.cpp",
         .num_of_registers = 4,
         .field_names = field_names_pack_edge_offset,
         .field_values = field_values_pack_edge_offset,
@@ -351,7 +332,6 @@ TEST_F(DPrintFixture, ConfigRegPackCountersTestPrint) {
     ConfigRegPrintTestConfig test_config = {
         .core = CoreCoord(0, 0),
         .write_kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_config_reg.cpp",
-        .print_kernel = "tests/tt_metal/tt_metal/test_kernels/misc/dprint_config_register.cpp",
         .num_of_registers = 4,
         .field_names = field_names_pack_counters,
         .field_values = field_values_pack_counters,
