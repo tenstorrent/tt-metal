@@ -15,7 +15,7 @@ namespace NAMESPACE {
 void MAIN {
     constexpr int onetile = 1;
     uint32_t per_core_block_cnt = get_arg_val<uint32_t>(0);
-    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_1);
+    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
     bool enable_reload = false;
     for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
         bool last_out = block == (per_core_block_cnt - 1);
@@ -26,7 +26,7 @@ void MAIN {
         cb_wait_front(tt::CBIndex::c_1, onetile);
 
         cb_reserve_back(tt::CBIndex::c_24, onetile);
-        mul_tiles_init();
+        mul_tiles_init(tt::CBIndex::c_0, tt::CBIndex::c_1);
         // dst0 = c_in0 x c_in1
         mul_tiles(tt::CBIndex::c_0, tt::CBIndex::c_1, 0, 0, 0);
         // c_intermed0 = pack(dst0)

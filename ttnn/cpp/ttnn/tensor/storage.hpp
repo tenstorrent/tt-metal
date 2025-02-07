@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <memory>
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
 
@@ -243,6 +244,7 @@ struct MultiDeviceStorage {
         swap(first.mesh_buffer, second.mesh_buffer);
     }
 
+    // Constructs a multi-device tensor backed by a collection of heterogeneous single-device buffers.
     MultiDeviceStorage(
         DistributedTensorConfig strategy_,
         std::vector<int> ordered_device_ids_,
@@ -254,6 +256,9 @@ struct MultiDeviceStorage {
         buffers(std::move(buffers_)),
         specs(std::move(specs_)),
         mesh_buffer(std::move(mesh_buffer_)) {}
+
+    // Constructs a replicated multi-device tensor backed by mesh buffer.
+    MultiDeviceStorage(const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer_, const TensorSpec& tensor_spec);
 
     MultiDeviceStorage(MultiDeviceStorage&& other) { swap(*this, other); }
 
@@ -377,6 +382,9 @@ struct MultiDeviceStorage {
 };
 
 using Storage = std::variant<OwnedStorage, DeviceStorage, BorrowedStorage, MultiDeviceHostStorage, MultiDeviceStorage>;
+
+template <typename T>
+concept OwnedOrBorrowedStorage = std::is_same_v<T, OwnedStorage> || std::is_same_v<T, BorrowedStorage>;
 
 template <typename T>
 constexpr void raise_unsupported_storage() {

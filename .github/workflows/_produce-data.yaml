@@ -95,6 +95,12 @@ jobs:
           echo "attempt-number=$attempt_number" >> "$GITHUB_OUTPUT"
 
           echo "::notice title=target-workflow-link::The workflow being analyzed is available at https://github.com/tenstorrent/tt-metal/actions/runs/$run_id/attempts/$attempt_number"
+      - name: Get API rate limit status
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "[Info] Grabbing API rate limit status"
+          gh api rate_limit
       - name: Output auxiliary values
         env:
           GH_TOKEN: ${{ github.token }}

@@ -38,34 +38,23 @@ jobs:
   static-checks:
     uses: ./.github/workflows/all-static-checks.yaml
     secrets: inherit
-  build-wheels:
-    needs: build-artifact
-    strategy:
-      matrix:
-        # Since pre-compiled builds only run on 20.04, we can only test on 20.04 for now
-        # The full 22.04 flow can be tested without precompiled
-        os: [ubuntu-20.04]
-    uses: ./.github/workflows/_build-wheels-impl.yaml
-    with:
-      os: ${{ matrix.os }}
-      from-precompiled: true
-    secrets: inherit
-  test-wheels:
-    needs: build-wheels
-    uses: ./.github/workflows/_test-wheels-impl.yaml
-    with:
-      from-precompiled: true
-    secrets: inherit
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
+      build-wheel: true
   build-artifact-profiler:
     uses: ./.github/workflows/build-artifact.yaml
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
       tracy: true
+    secrets: inherit
+  test-wheels:
+    needs: build-artifact
+    uses: ./.github/workflows/_test-wheels-impl.yaml
+    with:
+      from-precompiled: true
     secrets: inherit
   # Slow Dispatch Unit Tests
   sd-unit-tests:
@@ -85,7 +74,7 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
   # Fast Dispatch Unit Tests
   fast-dispatch-unit-tests:
-    needs: build-wheels
+    needs: build-artifact
     secrets: inherit
     strategy:
       fail-fast: false
@@ -102,7 +91,7 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
   # TTNN FD Unit tests
   ttnn-unit-tests:
-    needs: build-wheels
+    needs: build-artifact
     secrets: inherit
     strategy:
       fail-fast: false
@@ -118,7 +107,7 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
   # FD Model Tests
   models-unit-tests:
-    needs: build-wheels
+    needs: build-artifact
     secrets: inherit
     strategy:
       fail-fast: false
@@ -168,10 +157,21 @@ jobs:
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
-  profiler-regression:
+  run-profiler-regression:
     needs: build-artifact-profiler
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          { arch: grayskull, runner-label: E150 },
+          { arch: wormhole_b0, runner-label: N150 },
+          { arch: wormhole_b0, runner-label: N300 },
+        ]
     uses: ./.github/workflows/run-profiler-regression.yaml
     secrets: inherit
+    with:
+      arch: ${{ matrix.test-group.arch}}
+      runner-label: ${{ matrix.test-group.runner-label}}
   build-docs:
     needs: build-artifact
     uses: ./.github/workflows/docs-latest-public.yaml

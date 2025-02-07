@@ -4,6 +4,8 @@
 
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
 
+#include "tt_cluster.hpp"
+
 namespace {
 
 tt::tt_metal::DispatchCoreConfig dispatch_core_config() {

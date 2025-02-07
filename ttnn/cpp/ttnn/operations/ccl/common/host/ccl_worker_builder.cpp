@@ -1113,7 +1113,7 @@ void generate_multi_input_command_stream_kernel_rt_args(
     TT_FATAL(page_sizes.size() == tensors.size(), "Number of page sizes must match with the number of tensors");
     auto command_stream_start_arg_indices = std::vector<size_t>(num_command_streams, 0);
     std::vector<uint32_t> rt_args;
-    rt_args.reserve(100);
+    rt_args.reserve(200);
     for (size_t i = 0; i < tensors.size(); i++) {
         if (tensors[i]) {
             if (fill_args_overrider) {
@@ -1235,7 +1235,7 @@ void generate_multi_command_stream_kernel_rt_args(
 
     for (size_t i = 0; i < num_command_streams; i++) {
         std::ranges::copy(
-            ttnn::ccl::emit_address_generator_runtime_args(device, *tensors[i]), std::back_inserter(rt_args));
+            ttnn::ccl::legacy_emit_address_generator_runtime_args(device, *tensors[i]), std::back_inserter(rt_args));
     }
 
     // TODO: Handle teardown signalling
@@ -1455,7 +1455,7 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_reader_kernel_rt_args
     log_trace(tt::LogOp, "ccl_send_reader arg[{}]: page_size {}", logged_arg_idx, args[logged_arg_idx]);
     logged_arg_idx++;
 
-    auto const& addr_gen_rt_args = ttnn::ccl::emit_address_generator_runtime_args(this->device, input_tensor);
+    auto const& addr_gen_rt_args = ttnn::ccl::legacy_emit_address_generator_runtime_args(this->device, input_tensor);
     std::ranges::copy(addr_gen_rt_args, std::back_inserter(args));
     for (auto const& arg : addr_gen_rt_args) {
         log_trace(tt::LogOp, "ccl_send_reader arg[{}]: addr_gen_rt_args[] {}", logged_arg_idx, args[logged_arg_idx]);
@@ -1616,7 +1616,7 @@ std::vector<uint32_t> CCLWorkerArgBuilder::generate_sender_writer_kernel_rt_args
         }
     }
 
-    auto const& addr_gen_rt_args = ttnn::ccl::emit_address_generator_runtime_args(this->device, output_tensor);
+    auto const& addr_gen_rt_args = ttnn::ccl::legacy_emit_address_generator_runtime_args(this->device, output_tensor);
     std::ranges::copy(addr_gen_rt_args, std::back_inserter(args));
     for (auto const& arg : addr_gen_rt_args) {
         log_trace(tt::LogOp, "ccl_send_writer arg[{}]: addr_gen_rt_args[] {}", logged_arg_idx, args[logged_arg_idx]);

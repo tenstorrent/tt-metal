@@ -252,11 +252,23 @@ size_t MeshDevice::num_cols() const { return mesh_shape_.num_cols; }
 
 MeshShape MeshDevice::shape() const { return mesh_shape_; }
 
-void MeshDevice::reshape(const MeshShape& new_shape) {
-    TT_FATAL(
-        new_shape.num_rows * new_shape.num_cols == this->num_devices(),
-        "New shape must have the same number of devices as current shape");
-
+std::vector<IDevice*> MeshDevice::get_row_major_devices(const MeshShape& new_shape) const {
+    // MeshDeviceView requires devices to be provided as a 1D array in row-major order for the target mesh shape.
+    // The physical connectivity between devices must be preserved when reshaping.
+    //
+    // Example:
+    // Given 4 devices physically connected in a 2x2 grid like this:
+    //   [0]--[1]
+    //    |    |
+    //   [3]--[2]
+    //
+    // For a 1x4 mesh shape:
+    // - Devices must form a line: 0->1->2->3
+    // - Row-major order will be: [0,1,2,3]
+    //
+    // For a 2x2 mesh shape:
+    // - Preserves original 2x2 physical connectivity
+    // - Row-major order will be: [0,1,3,2]
     std::unordered_map<chip_id_t, size_t> physical_device_id_to_linearized_index;
     for (size_t i = 0; i < this->num_devices(); i++) {
         physical_device_id_to_linearized_index[this->get_devices()[i]->id()] = i;
@@ -264,6 +276,7 @@ void MeshDevice::reshape(const MeshShape& new_shape) {
 
     // From an MxN mesh, we can always reduce rank to a 1xM*N Line mesh.
     // However, going from a Line mesh to an MxN mesh is not always possible.
+    std::vector<IDevice*> new_device_order;
     if (new_shape.num_rows != 1 and new_shape.num_cols != 1) {
         auto new_physical_device_ids =
             SystemMesh::instance().request_available_devices(
@@ -285,10 +298,22 @@ void MeshDevice::reshape(const MeshShape& new_shape) {
                     this->num_cols());
             }
         }
+        for (size_t i = 0; i < new_physical_device_ids.size(); i++) {
+            new_device_order.push_back(this->get_device(new_physical_device_ids[i]));
+        }
+    } else {
+        new_device_order = view_->get_line_devices();
     }
+    return new_device_order;
+}
+
+void MeshDevice::reshape(const MeshShape& new_shape) {
+    TT_FATAL(
+        new_shape.num_rows * new_shape.num_cols == this->num_devices(),
+        "New shape must have the same number of devices as current shape");
 
     mesh_shape_ = new_shape;
-    view_ = std::make_unique<MeshDeviceView>(scoped_devices_->get_devices(), mesh_shape_);
+    view_ = std::make_unique<MeshDeviceView>(this->get_row_major_devices(new_shape), new_shape);
 }
 
 bool MeshDevice::close() {
@@ -627,12 +652,6 @@ void MeshDevice::init_command_queue_host() {
 void MeshDevice::init_command_queue_device() {
     TT_THROW("init_command_queue_device() is not supported on MeshDevice - use individual devices instead");
     reference_device()->init_command_queue_device();
-}
-void MeshDevice::update_dispatch_cores_for_multi_cq_eth_dispatch() {
-    TT_THROW(
-        "update_dispatch_cores_for_multi_cq_eth_dispatch() is not supported on MeshDevice - use individual devices "
-        "instead");
-    reference_device()->update_dispatch_cores_for_multi_cq_eth_dispatch();
 }
 void MeshDevice::synchronize() {
     // Nothing to synchronize, as all work is executed by MeshDevice is synchronous.

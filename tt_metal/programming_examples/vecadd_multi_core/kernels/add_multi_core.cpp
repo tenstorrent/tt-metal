@@ -33,7 +33,7 @@ void MAIN {
     // And we are going to add tiles. This function is only called if we ever
     // need to switch operation to something else. Since we are only adding
     // tiles, this function is only called once before the loop.
-    add_tiles_init();
+    add_tiles_init(cb_in0, cb_in1);
 
     // Calculate the range of tiles this core should process
     const uint32_t tiles_per_core = n_tiles;
