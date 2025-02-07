@@ -32,6 +32,8 @@ on:
         required: false
         type: number
         default: 45
+  schedule:
+    - cron: "0 22 * * *"
 
 jobs:
   build:
