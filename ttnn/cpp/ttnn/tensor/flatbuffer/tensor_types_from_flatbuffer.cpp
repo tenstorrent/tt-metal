@@ -44,10 +44,14 @@ DataType from_flatbuffer(flatbuffer::DataType type) {
 }
 
 MemoryConfig from_flatbuffer(const flatbuffer::MemoryConfig* config) {
+    std::optional<ShardSpec> shard_spec;
+    if (config->shard_spec()) {
+        shard_spec = from_flatbuffer(config->shard_spec());
+    }
     return MemoryConfig{
         from_flatbuffer(config->memory_layout()),
         from_flatbuffer(config->buffer_type()),
-        from_flatbuffer(config->shard_spec()),
+        shard_spec,
     };
 }
 
