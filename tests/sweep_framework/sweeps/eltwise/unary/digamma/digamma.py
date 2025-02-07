@@ -47,7 +47,7 @@ def run(
     torch.manual_seed(0)
 
     torch_input_tensor = gen_func_with_cast_tt(
-        partial(torch_random, low=0.0001, high=100, dtype=torch.float32), input_dtype
+        partial(torch_random, low=1, high=100, dtype=torch.float32), input_dtype
     )(input_shape)
     golden_function = ttnn.get_golden_function(ttnn.digamma)
     torch_output_tensor = golden_function(torch_input_tensor)
@@ -58,6 +58,7 @@ def run(
         layout=input_layout,
         device=device,
         memory_config=input_memory_config,
+        pad_value=1,
     )
 
     start_time = start_measuring_time()
