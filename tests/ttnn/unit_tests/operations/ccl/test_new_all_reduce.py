@@ -80,7 +80,6 @@ def run_all_reduce_impl(
         ##################################
 
         ##### FF2 Case #####
-        core_offset = num_links
         M, N = output_shape[2:]
         N_per_shard = round_up(math.ceil(N / input_num_cores), ttnn.TILE_SIZE)
         output_N_per_shard = round_up(math.ceil(N / output_num_cores), ttnn.TILE_SIZE)
@@ -93,7 +92,7 @@ def run_all_reduce_impl(
                     ttnn.CoreCoord(x, y),
                     ttnn.CoreCoord(x, y),
                 )
-                for x, y in CORE_RANGE[core_offset : core_offset + input_num_cores]
+                for x, y in CORE_RANGE[:input_num_cores]
             ]
         )
         input_mem_config = ttnn.MemoryConfig(
@@ -111,7 +110,7 @@ def run_all_reduce_impl(
                     ttnn.CoreCoord(x, y),
                     ttnn.CoreCoord(x, y),
                 )
-                for x, y in CORE_RANGE[core_offset : core_offset + output_num_cores]
+                for x, y in CORE_RANGE[:output_num_cores]
             ]
         )
         output_mem_config = ttnn.MemoryConfig(
