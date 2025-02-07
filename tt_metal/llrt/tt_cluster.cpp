@@ -515,7 +515,9 @@ void Cluster::write_dram_vec(std::vector<uint32_t> &vec, tt_target_dram dram, ui
     TT_ASSERT(
         d_subchannel < desc_to_use.dram_cores.at(d_chan).size(),
         "Trying to address dram sub channel that doesnt exist in the device descriptor");
-    tt_cxy_pair dram_core = tt_cxy_pair(chip_id, desc_to_use.get_core_for_dram_channel(d_chan, d_subchannel));
+    tt::umd::CoreCoord dram_core_coord =
+        desc_to_use.get_dram_core_for_channel(d_chan, d_subchannel, CoordSystem::VIRTUAL);
+    tt_cxy_pair dram_core = tt_cxy_pair(chip_id, dram_core_coord.x, dram_core_coord.y);
     size_t offset = desc_to_use.get_address_offset(d_view);
     write_core(vec.data(), vec.size() * sizeof(uint32_t), dram_core, addr + offset, small_access);
 }
@@ -534,7 +536,9 @@ void Cluster::read_dram_vec(
     TT_ASSERT(
         d_subchannel < desc_to_use.dram_cores.at(d_chan).size(),
         "Trying to address dram sub channel that doesnt exist in the device descriptor");
-    tt_cxy_pair dram_core = tt_cxy_pair(chip_id, desc_to_use.get_core_for_dram_channel(d_chan, d_subchannel));
+    tt::umd::CoreCoord dram_core_coord =
+        desc_to_use.get_dram_core_for_channel(d_chan, d_subchannel, CoordSystem::VIRTUAL);
+    tt_cxy_pair dram_core = tt_cxy_pair(chip_id, dram_core_coord.x, dram_core_coord.y);
     size_t offset = desc_to_use.get_address_offset(d_view);
     read_core(vec, sz_in_bytes, dram_core, addr + offset, small_access);
 }
