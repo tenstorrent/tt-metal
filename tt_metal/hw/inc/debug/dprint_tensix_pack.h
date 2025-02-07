@@ -389,25 +389,25 @@ inline void dprint_tensix_pack_relu_config() {
 
 inline void dprint_tensix_pack_dest_rd_ctrl_pck_dest_rd_ctrl_read_32b_data(
     const ckernel::packer::dest_rd_ctrl_t& dest) {
-    DPRINT << "0x" << HEX() << dest.PCK_DEST_RD_CTRL_Read_32b_data << "; " << ENDL();
+    DPRINT << "0x" << HEX() << dest.PCK_DEST_RD_CTRL_Read_32b_data << ENDL();
 }
 
 inline void dprint_tensix_pack_dest_rd_ctrl_pck_dest_rd_ctrl_read_unsigned(
     const ckernel::packer::dest_rd_ctrl_t& dest) {
-    DPRINT << "0x" << HEX() << dest.PCK_DEST_RD_CTRL_Read_unsigned << "; " << ENDL();
+    DPRINT << "0x" << HEX() << dest.PCK_DEST_RD_CTRL_Read_unsigned << ENDL();
 }
 
 inline void dprint_tensix_pack_dest_rd_ctrl_pck_dest_rd_ctrl_read_int8(const ckernel::packer::dest_rd_ctrl_t& dest) {
-    DPRINT << "0x" << HEX() << dest.PCK_DEST_RD_CTRL_Read_int8 << "; " << ENDL();
+    DPRINT << "0x" << HEX() << dest.PCK_DEST_RD_CTRL_Read_int8 << ENDL();
 }
 
 inline void dprint_tensix_pack_dest_rd_ctrl_pck_dest_rd_ctrl_round_10b_mant(
     const ckernel::packer::dest_rd_ctrl_t& dest) {
-    DPRINT << "0x" << HEX() << dest.PCK_DEST_RD_CTRL_Round_10b_mant << "; " << ENDL();
+    DPRINT << "0x" << HEX() << dest.PCK_DEST_RD_CTRL_Round_10b_mant << ENDL();
 }
 
 inline void dprint_tensix_pack_dest_rd_ctrl_pck_dest_rd_ctrl_reserved(const ckernel::packer::dest_rd_ctrl_t& dest) {
-    DPRINT << "0x" << HEX() << dest.PCK_DEST_RD_CTRL_Reserved << "; " << ENDL();
+    DPRINT << "0x" << HEX() << dest.PCK_DEST_RD_CTRL_Reserved << ENDL();
 }
 
 // Printing dest control bits
@@ -461,21 +461,23 @@ inline void dprint_tensix_pack_edge_offset_reserved(const ckernel::packer::pck_e
 }
 
 // Printing packer edge offset
-inline void dprint_tensix_pack_edge_offset_helper(const ckernel::packer::pck_edge_offset_t& edge) {
+inline void dprint_tensix_pack_edge_offset_helper(const ckernel::packer::pck_edge_offset_t& edge, uint reg_id) {
     DPRINT << "mask: ";
     dprint_tensix_pack_edge_offset_mask(edge);
-    DPRINT << "mode: ";
-    dprint_tensix_pack_edge_offset_mode(edge);
-    DPRINT << "tile_row_set_select_pack0: ";
-    dprint_tensix_pack_edge_offset_tile_row_set_select_pack0(edge);
-    DPRINT << "tile_row_set_select_pack1: ";
-    dprint_tensix_pack_edge_offset_tile_row_set_select_pack1(edge);
-    DPRINT << "tile_row_set_select_pack2: ";
-    dprint_tensix_pack_edge_offset_tile_row_set_select_pack2(edge);
-    DPRINT << "tile_row_set_select_pack3: ";
-    dprint_tensix_pack_edge_offset_tile_row_set_select_pack3(edge);
-    DPRINT << "reserved: ";
-    dprint_tensix_pack_edge_offset_reserved(edge);
+    if (reg_id == 1) {
+        DPRINT << "mode: ";
+        dprint_tensix_pack_edge_offset_mode(edge);
+        DPRINT << "tile_row_set_select_pack0: ";
+        dprint_tensix_pack_edge_offset_tile_row_set_select_pack0(edge);
+        DPRINT << "tile_row_set_select_pack1: ";
+        dprint_tensix_pack_edge_offset_tile_row_set_select_pack1(edge);
+        DPRINT << "tile_row_set_select_pack2: ";
+        dprint_tensix_pack_edge_offset_tile_row_set_select_pack2(edge);
+        DPRINT << "tile_row_set_select_pack3: ";
+        dprint_tensix_pack_edge_offset_tile_row_set_select_pack3(edge);
+        DPRINT << "reserved: ";
+        dprint_tensix_pack_edge_offset_reserved(edge);
+    }
 }
 
 // Choose what register you want printed with reg_id (1-4), 0 for all
@@ -485,13 +487,13 @@ inline void dprint_tensix_pack_edge_offset(uint reg_id = 0) {
         edge_vec = ckernel::packer::read_pack_edge_offset();
         if (reg_id >= 1 && reg_id <= ckernel::packer::NUM_PACKERS) {
             DPRINT << "REG_ID: " << reg_id << ENDL();
-            dprint_tensix_pack_edge_offset_helper(edge_vec[reg_id - 1]);
+            dprint_tensix_pack_edge_offset_helper(edge_vec[reg_id - 1], reg_id);
         }
         // Print all registers
         else if (reg_id == 0) {
             for (uint i = 1; i <= ckernel::packer::NUM_PACKERS; i++) {
                 DPRINT << "REG_ID: " << i << ENDL();
-                dprint_tensix_pack_edge_offset_helper(edge_vec[i - 1]);
+                dprint_tensix_pack_edge_offset_helper(edge_vec[i - 1], i);
                 if (i != ckernel::packer::NUM_PACKERS) {
                     DPRINT << ENDL();
                 }
