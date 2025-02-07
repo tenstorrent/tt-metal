@@ -780,8 +780,6 @@ void run_receiver_channel_step(
     bool unflushed_writes = !wr_flush_ptr.is_caught_up_to(wr_sent_ptr);
     if (unflushed_writes) {
         auto receiver_buffer_index = wr_flush_ptr.get_buffer_index();
-        // Temporary patch for instability. Issue was not caught due to what appears to be a bug in CI
-        // not running all tests. Issue tracked here: https://github.com/tenstorrent/tt-metal/issues/17702
         bool next_trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
         if (next_trid_flushed) {
             local_receiver_channel.eth_clear_sender_channel_ack(receiver_buffer_index);
