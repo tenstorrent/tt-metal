@@ -141,7 +141,8 @@ public:
     // Metal trace device capture mode
     virtual void begin_trace(const uint8_t cq_id, const uint32_t tid) = 0;
     virtual void end_trace(const uint8_t cq_id, const uint32_t tid) = 0;
-    virtual void replay_trace(const uint8_t cq_id, const uint32_t tid, const bool blocking) = 0;
+    virtual void replay_trace(
+        const uint8_t cq_id, const uint32_t tid, const bool block_on_device, const bool block_on_worker_thread) = 0;
     virtual void release_trace(const uint32_t tid) = 0;
 
     virtual std::shared_ptr<TraceBuffer> get_trace(uint32_t tid) = 0;
