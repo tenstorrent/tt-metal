@@ -110,19 +110,21 @@ def calculate_query_key_values(config, hidden_states, *, parameters):
     return split_query_key_value_and_split_heads(config, fused_qkv)
 
 
-def whisper_attention(config, hidden_states, attention_mask, key_value_states=None, *, parameters):
+def whisper_attention(
+    config, hidden_states, attention_mask, is_decode, encoder_hidden_states=None, kv_cache=None, *, parameters
+):
     head_size = config.d_model // config.encoder_attention_heads
     scaling = head_size**-0.5
     bsz, *_, tgt_len, _ = hidden_states.shape
 
-    is_cross_attention = key_value_states is not None
+    is_cross_attention = encoder_hidden_states is not None
     if is_cross_attention:
         query_states = hidden_states @ parameters.q_proj.weight + parameters.q_proj.bias
         query_states = ttnn.unsqueeze_to_4D(query_states)
         query_states = ttnn.transpose(query_states, 1, 2)  # 1, 32, 1, Hxd
         query_states = ttnn.reshape(query_states, (bsz, tgt_len, config.encoder_attention_heads, head_size))
         query_states = ttnn.transpose(query_states, 1, 2)  # 1, H, 32, d
-        key_states, value_states = calculate_key_values(config, key_value_states, parameters=parameters)
+        key_states, value_states = calculate_key_values(config, encoder_hidden_states, parameters=parameters)
     else:
         query_states, key_states, value_states = calculate_query_key_values(
             config, hidden_states, parameters=parameters
@@ -155,7 +157,9 @@ def encoder_layer(config, hidden_states, *, parameters):
         memory_config=WHISPER_MEMORY_CONFIG,
     )
 
-    hidden_states = whisper_attention(config, hidden_states, attention_mask=None, parameters=parameters.self_attn)
+    hidden_states = whisper_attention(
+        config, hidden_states, attention_mask=None, is_decode=False, parameters=parameters.self_attn
+    )
     hidden_states = dropout(hidden_states, p=0, training=False)
     hidden_states = residual + hidden_states
 
@@ -231,6 +235,7 @@ def decoder_layer(config, hidden_states, attention_mask, encoder_hidden_states, 
         config,
         hidden_states=hidden_states,
         attention_mask=attention_mask,
+        is_decode=True,
         parameters=parameters.self_attn,
     )
     hidden_states = dropout(hidden_states, p=0, training=False)
@@ -248,7 +253,8 @@ def decoder_layer(config, hidden_states, attention_mask, encoder_hidden_states, 
         config,
         hidden_states,
         attention_mask=None,
-        key_value_states=encoder_hidden_states,
+        is_decode=True,
+        encoder_hidden_states=encoder_hidden_states,
         parameters=parameters.encoder_attn,
     )
 
