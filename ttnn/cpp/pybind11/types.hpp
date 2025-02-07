@@ -11,6 +11,7 @@
 #include <tt-metalium/small_vector.hpp>
 
 #include "export_enum.hpp"
+#include "small_vector_caster.hpp"  // NOLINT - for pybind11 SmallVector binding support.
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast_types.hpp"
