@@ -382,9 +382,10 @@ void Cluster::generate_logical_to_virtual_coord_mapping() {
         for (std::size_t log_eth_core_y = 0; log_eth_core_y < soc_desc.get_cores(CoreType::ETH).size();
              log_eth_core_y++) {
             CoreCoord logical_eth_core = {0, log_eth_core_y};
-            CoreCoord virtual_coords = this->get_virtual_coordinate_from_physical_coordinates(
-                chip_id,
-                soc_desc.translate_coord_to(soc_desc.get_eth_core_for_channel(log_eth_core_y), CoordSystem::PHYSICAL));
+            tt::umd::CoreCoord phys_eth_core =
+                soc_desc.translate_coord_to(soc_desc.get_eth_core_for_channel(log_eth_core_y), CoordSystem::PHYSICAL);
+            CoreCoord virtual_coords =
+                this->get_virtual_coordinate_from_physical_coordinates(chip_id, {phys_eth_core.x, phys_eth_core.y});
             this->eth_logical_to_virtual_.at(board_type).insert({logical_eth_core, virtual_coords});
         }
     }
@@ -981,8 +982,10 @@ CoreCoord Cluster::ethernet_core_from_logical_core(chip_id_t chip_id, const Core
 }
 
 CoreCoord Cluster::get_virtual_eth_core_from_channel(chip_id_t chip_id, int channel) const {
-    CoreCoord logical_coord = this->get_soc_desc(chip_id).get_eth_core_for_channel(channel, CoordSystem::LOGICAL);
-    return this->get_virtual_coordinate_from_logical_coordinates(chip_id, logical_coord, CoreType::ETH);
+    tt::umd::CoreCoord logical_coord =
+        this->get_soc_desc(chip_id).get_eth_core_for_channel(channel, CoordSystem::LOGICAL);
+    return this->get_virtual_coordinate_from_logical_coordinates(
+        chip_id, {logical_coord.x, logical_coord.y}, CoreType::ETH);
 }
 
 tt_cxy_pair Cluster::get_eth_core_for_dispatch_core(
