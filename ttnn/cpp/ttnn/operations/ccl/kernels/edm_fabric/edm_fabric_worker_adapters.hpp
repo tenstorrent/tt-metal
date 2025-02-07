@@ -165,6 +165,9 @@ struct WorkerToFabricEdmSender {
     FORCE_INLINE void send_payload_non_blocking_from_address(uint32_t source_address, size_t size_bytes) {
         send_payload_from_address_impl<ttnn::ccl::EDM_IO_BLOCKING_MODE::NON_BLOCKING>(source_address, size_bytes);
     }
+    FORCE_INLINE void send_payload_non_blocking_from_address_with_trid(uint32_t source_address, size_t size_bytes, uint8_t trid) {
+        send_payload_from_address_with_trid_impl<ttnn::ccl::EDM_IO_BLOCKING_MODE::NON_BLOCKING>(source_address, size_bytes, trid);
+    }
 
     static constexpr size_t edm_sender_channel_field_stride_bytes = 16;
 
@@ -259,47 +262,60 @@ private:
         return wrptr - (normalize * this->num_buffers_per_channel);
     }
 
-    template <ttnn::ccl::EDM_IO_BLOCKING_MODE blocking_mode>
-    FORCE_INLINE void send_packet_header_and_notify_fabric(uint32_t source_address) {
+    FORCE_INLINE uint32_t compute_dest_buffer_slot_bank_address() const {
+        return this->edm_buffer_addr + (this->get_buffer_slot_index() * (this->buffer_size_bytes + sizeof(eth_channel_sync_t)));
+    }
 
-        uint64_t buffer_address = get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_addr) +
-                                  (this->get_buffer_slot_index() * (this->buffer_size_bytes + sizeof(eth_channel_sync_t)));
+    FORCE_INLINE uint64_t compute_dest_buffer_slot_noc_addr() const {
+        return get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->compute_dest_buffer_slot_bank_address());
+    }
 
-        send_chunk_from_address<blocking_mode>(source_address, 1, sizeof(tt::fabric::PacketHeader), buffer_address);
+    FORCE_INLINE void post_send_payload_increment_pointers() {
         this->advance_buffer_slot_wrptr();
         this->update_edm_buffer_slot_wrptr();
     }
     template <ttnn::ccl::EDM_IO_BLOCKING_MODE blocking_mode>
+    FORCE_INLINE void send_packet_header_and_notify_fabric(uint32_t source_address) {
+        uint64_t buffer_address = this->compute_dest_buffer_slot_noc_addr();
+
+        send_chunk_from_address<blocking_mode>(source_address, 1, sizeof(tt::fabric::PacketHeader), buffer_address);
+        post_send_payload_increment_pointers();
+    }
+
+    template <ttnn::ccl::EDM_IO_BLOCKING_MODE blocking_mode>
     FORCE_INLINE void send_payload_without_header_from_address_impl(uint32_t source_address, size_t size_bytes) {
-        uint64_t buffer_address = get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_addr) +
-                                  (this->get_buffer_slot_index() * (this->buffer_size_bytes + sizeof(eth_channel_sync_t)));
+        uint64_t buffer_address = this->compute_dest_buffer_slot_noc_addr();
 
         // skip past the first part of the buffer which will be occupied by the packet header
         send_chunk_from_address<blocking_mode>(source_address, 1, size_bytes, buffer_address + sizeof(tt::fabric::PacketHeader));
     }
-
     template <ttnn::ccl::EDM_IO_BLOCKING_MODE blocking_mode>
     FORCE_INLINE void send_payload_from_address_impl(uint32_t source_address, size_t size_bytes) {
-        uint64_t buffer_address = get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_addr) +
-                                  (this->get_buffer_slot_index() * (this->buffer_size_bytes + sizeof(eth_channel_sync_t)));
+        uint64_t buffer_address = this->compute_dest_buffer_slot_noc_addr();
 
         ASSERT(size_bytes <= this->buffer_size_bytes);
         ASSERT(tt::fabric::is_valid(*const_cast<tt::fabric::PacketHeader*>(
             reinterpret_cast<volatile tt::fabric::PacketHeader*>(source_address))));
         send_chunk_from_address<blocking_mode>(source_address, 1, size_bytes, buffer_address);
+        post_send_payload_increment_pointers();
+    }
+    template <ttnn::ccl::EDM_IO_BLOCKING_MODE blocking_mode>
+    FORCE_INLINE void send_payload_from_address_with_trid_impl(uint32_t source_address, size_t size_bytes, uint8_t trid) {
+        uint64_t buffer_address = this->compute_dest_buffer_slot_noc_addr();
 
-        this->advance_buffer_slot_wrptr();
-        this->update_edm_buffer_slot_wrptr();
+        ASSERT(size_bytes <= this->buffer_size_bytes);
+        ASSERT(tt::fabric::is_valid(*const_cast<tt::fabric::PacketHeader*>(
+            reinterpret_cast<volatile tt::fabric::PacketHeader*>(source_address))));
+        send_chunk_from_address_with_trid<blocking_mode>(source_address, 1, size_bytes, buffer_address, trid);
+        post_send_payload_increment_pointers();
     }
 
     template <ttnn::ccl::EDM_IO_BLOCKING_MODE blocking_mode>
     FORCE_INLINE void send_payload_impl(uint32_t cb_id, uint32_t num_pages, uint32_t page_size) {
-        uint64_t buffer_address = get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_addr) +
-                                  (this->get_buffer_slot_index() * (this->buffer_size_bytes + sizeof(eth_channel_sync_t)));
+        uint64_t buffer_address = this->compute_dest_buffer_slot_noc_addr();
         ASSERT(num_pages * page_size <= this->buffer_size_bytes);
         send_chunk<blocking_mode>(cb_id, num_pages, page_size, buffer_address);
-        this->advance_buffer_slot_wrptr();
-        this->update_edm_buffer_slot_wrptr();
+        post_send_payload_increment_pointers();
     }
 };
 
