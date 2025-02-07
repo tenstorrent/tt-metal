@@ -34,8 +34,8 @@ RUN mkdir -p /tmp/fmt \
          -DFMT_TEST=OFF \
          -DFMT_DOC=OFF \
          -DFMT_INSTALL=ON \
-    && make -C /tmp/fmt -j$(nproc) \
-    && make -C /tmp/fmt install \
+    && make -C /tmp/fmt/build -j$(nproc) \
+    && make -C /tmp/fmt/build install \
     && rm -rf /tmp/fmt
 
 ARG DOXYGEN_VERSION=1.9.6
