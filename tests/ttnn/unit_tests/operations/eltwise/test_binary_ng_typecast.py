@@ -687,7 +687,7 @@ def test_opt_output_scalar(input_shapes, ttnn_fn, scalar, device):
     "layout",
     ([ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT]),
 )
-def test_rm_eltwise_scalar_matrix_math(input_shape, scalar, ttnn_fn, memory_config, layout, device):
+def test_edgecase_dims_eltwise_scalar_matrix_math(input_shape, scalar, ttnn_fn, memory_config, layout, device):
     torch.manual_seed(0)
     a_shape = input_shape
 
@@ -733,14 +733,15 @@ def test_rm_eltwise_scalar_matrix_math(input_shape, scalar, ttnn_fn, memory_conf
     "layout",
     ([ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT]),
 )
-def test_rm_eltwise_scalar_logical(input_shape, scalar, ttnn_fn, memory_config, layout, device):
+def test_edgecase_dims_eltwise_scalar_logical(input_shape, scalar, ttnn_fn, memory_config, layout, device):
     torch.manual_seed(0)
     a_shape = input_shape
 
     ttnn_op = getattr(ttnn.experimental, ttnn_fn)
     torch_input_tensor_a = torch.randn(a_shape, dtype=torch.bfloat16)
-    torch_input_tensor_a[0, 0, 0, 0] = scalar
-    print(torch_input_tensor_a)
+    # guarantee at least one equal value
+    if (ttnn_fn == "eq" or ttnn_fn == "ne" or ttnn_fn == "gte" or ttnn_fn == "lte") and input_shape != (1, 1, 1, 1):
+        torch_input_tensor_a[0, 0, 0, 0] = scalar
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -752,10 +753,136 @@ def test_rm_eltwise_scalar_logical(input_shape, scalar, ttnn_fn, memory_config, 
 
     output = ttnn_op(input_tensor_a, scalar, dtype=ttnn.uint32)
     tt_output_tensor = ttnn.to_torch(output)
-    print(tt_output_tensor)
 
     golden_fn = ttnn.get_golden_function(ttnn_op)
     torch_output_tensor = golden_fn(torch_input_tensor_a, scalar)
-    print(torch_output_tensor)
 
-    assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.99)
+    assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.999)
+
+
+@pytest.mark.parametrize(
+    "input_shapes",
+    [
+        ((1, 7, 1, 1), (7, 7, 33, 33)),
+        ((7, 1, 1, 1), (7, 7, 49, 49)),
+        ((7, 7, 65, 65), (7, 7, 65, 65)),
+        ((2, 2, 10, 1), (2, 2, 10, 2)),
+    ],
+)
+@pytest.mark.parametrize(
+    "memory_config",
+    ([ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG]),
+)
+@pytest.mark.parametrize(
+    "ttnn_fn",
+    [
+        "add",
+        "sub",
+        "mul",
+        "div",
+        "rsub",
+        "squared_difference",
+    ],
+)
+@pytest.mark.parametrize(
+    "layout",
+    ([ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT]),
+)
+def test_edgecase_dims_eltwise_broadcast_matrix_math(input_shapes, ttnn_fn, memory_config, layout, device):
+    torch.manual_seed(0)
+    a_shape, b_shape = input_shapes
+
+    ttnn_op = getattr(ttnn.experimental, ttnn_fn)
+    torch_input_tensor_a = torch.randn(a_shape, dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.randn(b_shape, dtype=torch.bfloat16)
+
+    if ttnn_fn == "div":
+        torch_input_tensor_b[torch_input_tensor_b.abs() < 0.001] = 0.001
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=layout,
+        memory_config=memory_config,
+    )
+
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=layout,
+        memory_config=memory_config,
+    )
+
+    output = ttnn_op(input_tensor_a, input_tensor_b, dtype=ttnn.float32)
+    tt_output_tensor = ttnn.to_torch(output)
+
+    golden_fn = ttnn.get_golden_function(ttnn_op)
+    torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b)
+
+    assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.999)
+
+
+@skip_for_grayskull("Requires wormhole_b0 to run")
+@pytest.mark.parametrize(
+    "input_shapes",
+    [
+        ((1, 7, 1, 1), (7, 7, 33, 33)),
+        ((7, 1, 1, 1), (7, 7, 49, 49)),
+        ((7, 7, 65, 65), (7, 7, 65, 65)),
+    ],
+)
+@pytest.mark.parametrize(
+    "memory_config",
+    ([ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG]),
+)
+@pytest.mark.parametrize(
+    "ttnn_fn",
+    [
+        "gt",
+        "lt",
+        "lte",
+        "gte",
+        "eq",
+        "ne",
+    ],
+)
+@pytest.mark.parametrize(
+    "layout",
+    ([ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT]),
+)
+def test_edgecase_dims_eltwise_broadcast_logical(input_shapes, ttnn_fn, memory_config, layout, device):
+    torch.manual_seed(0)
+    a_shape, b_shape = input_shapes
+
+    ttnn_op = getattr(ttnn.experimental, ttnn_fn)
+    torch_input_tensor_a = torch.randn(a_shape, dtype=torch.bfloat16)
+    torch_input_tensor_b = torch.randn(b_shape, dtype=torch.bfloat16)
+    # guarantee at least one equal value
+    if ttnn_fn == "eq" or ttnn_fn == "ne" or ttnn_fn == "gte" or ttnn_fn == "lte":
+        torch_input_tensor_a[0, 0, 0, 0] = torch_input_tensor_b[0, 0, 0, 0]
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=layout,
+        memory_config=memory_config,
+    )
+
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=layout,
+        memory_config=memory_config,
+    )
+
+    output = ttnn_op(input_tensor_a, input_tensor_b, dtype=ttnn.float32)
+    tt_output_tensor = ttnn.to_torch(output)
+
+    golden_fn = ttnn.get_golden_function(ttnn_op)
+    torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b)
+
+    assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.999)
