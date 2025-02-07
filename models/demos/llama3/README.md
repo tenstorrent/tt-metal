@@ -1,6 +1,6 @@
-# Llama3 Models
+# Llama-like Models
 
-This codebase includes the Llama3 family of models.
+This codecan run Llama3 family of models and other similar models including Qwen2.5 and DeepSeek-R1-Distill variants.
 
 The current version supports the following Llama3 models:
 - Llama3.2-1B
@@ -8,6 +8,8 @@ The current version supports the following Llama3 models:
 - Llama3.1-8B
 - Llama3.2-11B
 - Llama3.1-70B (T3000 and TG-only)
+- Qwen2.5-7B
+- Qwen2.5-72B
 - DeepSeek R1 Distill Llama 3.3 70B (T3000 and TG-only)
 
 All the above llama models (with the exception of 70B due to its large size) are compatible and tested on the following Tenstorrent hardware:
@@ -15,6 +17,9 @@ All the above llama models (with the exception of 70B due to its large size) are
 - N300 (2-chips)
 - T3000 (8-chips)
 - TG (32-chips)
+
+Qwen-7B requires N300
+Qwen-72B requires T3K
 
 **Max Context Lengths (text-only)**: All of the compatible model/device combinations support a max prefill context-length of 128k, with the exception of Llama3.1-8B and Llama3.2-11B on N150 which have a max of 64k (due to a lack of memory). To support these large max context-lengths, chunked prefill is performed with different max chunk sizes as shown in the table below.
 
@@ -62,7 +67,7 @@ Llama3.2-11B multimodal requires extra python dependencies. Install them from:
 pip install -r models/demos/llama3/requirements.txt
 ```
 
-### HuggingFace models (e.g. DeepSeek R1 Distill Llama 3.3 70B)
+### HuggingFace models (e.g. DeepSeek R1 Distill Llama 3.3 70B, Qwen 2.5 7B, ...)
 
 Download the weights from [HuggingFace](https://huggingface.co/deepseek-ai/DeepSeek-R1-Distill-Llama-70B). Your model directory should have the following structure:
 
@@ -73,6 +78,17 @@ DeepSeek-R1-Distill-Llama-70B/
     model-00001-of-00062.safetensors
     ...
 ```
+
+#### Running llama-similar models other than DeepSeek R1 Distill and Qwen 2.5
+
+If you are bringing up a new model that is similar to these but is not listed above, you will also need to set additional environment variables:
+- `MAX_PREFILL_CHUNK_SIZE` - this determines how many thousands of tokens are prefilled in one go. For optimal performance pick 128. Depending on the model dimensions and hardware you're running on, there may not be enough L1 to prefill 128K tokens at once, in which case you can reduce this in powers of 2 down to 4.
+- `PAD_MLP_CORES` - models with a hidden_dim that is not a nice power of 2 may not have a valid layout or may run with lower performance. You can set this to a multiple of 8 between 8 and 64; `16` and `32` commonly work well if this is required.
+
+You should also watch out for:
+- RoPE encoding style. `llama3` and of course none are both supported. We have a [branch](https://github.com/tenstorrent/tt-metal/tree/llama-yarn) with `yarn` support in progress.
+- Our [accuracy test](tests/test_llama_accuracy.py) will require you to [generate some reference logits](tests/generate_reference_hf.py) and perhaps update the test to use them.
+- We parallelise attention over the number of heads. If this number is e.g. 14 then you will not be able to run it on more than 2 chips (because 14/2=7, a prime number). We do not support head-padding or similar mitigations at this time but a PR would be cool.
 
 ### Setup TT environment
 
