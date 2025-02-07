@@ -29,8 +29,8 @@ RUN mkdir -p /tmp/boost \
     && wget -O /tmp/boost/boost_${BOOST_VERSION}.tar.gz "https://archives.boost.io/release/${BOOST_VERSION}/source/boost_${BOOST_VERSION_UNDERSCORE}.tar.gz" \
     && tar -xzf /tmp/boost/boost_${BOOST_VERSION}.tar.gz -C /tmp/boost --strip-components=1 \
     && cd /tmp/boost \
-    && ./bootstrap.sh --with-libraries=container,smart_ptr,interprocess \
-    && ./b2 install --prefix=/usr/local --with-core --with-container --with-smart_ptr --with-interprocess \
+    && ./bootstrap.sh \
+    && ./b2 install --prefix=/usr/local \
     && rm -rf /tmp/boost
 
 ARG FMT_VERSION=11.0.1
