@@ -68,7 +68,9 @@ def run_all_reduce_impl(
         mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
     # create global semaphore handles
-    ccl_semaphore_handles = create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0)
+    ccl_semaphore_handles = [
+        create_global_semaphore_with_same_address(mesh_device, ccl_sub_device_crs, 0) for _ in range(8)
+    ]
 
     logger.info(f"Output shape: {output_shape}")
 
@@ -147,7 +149,7 @@ def run_all_reduce_impl(
                     tt_input_tensor,
                     cluster_axis=cluster_axis,
                     mesh_device=mesh_device,
-                    multi_device_global_semaphore=ccl_semaphore_handles,
+                    multi_device_global_semaphore=ccl_semaphore_handles[i % 8],
                     memory_config=output_mem_config,
                     topology=ttnn.Topology.Linear,
                     num_links=num_links,
