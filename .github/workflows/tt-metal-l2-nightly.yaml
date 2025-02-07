@@ -19,12 +19,14 @@ on:
         required: true
         type: choice
         options:
+          - grayskull
           - wormhole_b0
           - blackhole
       runner-label:
         required: true
         type: choice
         options:
+          - E150
           - N150
           - N300
           - BH
