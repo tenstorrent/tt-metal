@@ -1,10 +1,11 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024-2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
 #include <memory>
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/distributed/types.hpp"
 
 #include "tt-metalium/device.hpp"
