@@ -367,10 +367,13 @@ class Attention:
         qkv = ttnn.sharded_to_interleaved(qkv, memory_config=ttnn.L1_MEMORY_CONFIG)
         qkv = ttnn.permute(qkv, (0, 3, 1, 2))  # [1,256,1,49]
         print("before qkv details", qkv.shape, qkv.layout, qkv.dtype)
-        qkv = ttnn.to_torch(qkv)
-        qkv = ttnn.from_torch(
-            qkv, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG
-        )
+        # qkv = ttnn.to_torch(qkv)
+        # qkv = ttnn.from_torch(
+        #     qkv, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG
+        # )
+        qkv = ttnn.to_layout(qkv, layout=ttnn.ROW_MAJOR_LAYOUT)
+        qkv = ttnn.to_dtype(qkv, ttnn.bfloat16)
+        qkv = ttnn.to_layout(qkv, layout=ttnn.TILE_LAYOUT)
         print("after qkv details", qkv.shape, qkv.layout, qkv.dtype)
         qkv = ttnn.reshape(
             qkv, (batch_size, self.num_heads, self.key_dim * 2 + self.head_dim, qkv.shape[-1])
@@ -406,6 +409,40 @@ class Attention:
         ttnn.deallocate(v)
         ttnn.deallocate(x2)
         return x
+
+
+def determine_num_cores_for_upsample(nhw: int, width: int, max_cores=64) -> int:
+    gcd_nhw_width = math.gcd(nhw, width)
+    cores = nhw // gcd_nhw_width
+    if cores > max_cores:
+        for divisor in range(max_cores, 0, -1):
+            if nhw % divisor == 0 and (nhw // divisor) % width == 0:
+                cores = divisor
+                break
+    return cores
+
+
+def get_core_grid_from_num_cores(num_cores: int, grid_rows: int = 8, grid_cols: int = 8):
+    rows = num_cores // grid_cols
+    assert rows <= grid_rows, "Not enough cores for specified core grid"
+    ranges = []
+    if rows != 0:
+        ranges.append(
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, 0),
+                ttnn.CoreCoord(grid_rows - 1, rows - 1),
+            )
+        )
+    remainder = num_cores % grid_rows
+    if remainder != 0:
+        assert rows + 1 <= grid_rows, "Not enough cores for specified core grid"
+        ranges.append(
+            ttnn.CoreRange(
+                ttnn.CoreCoord(0, rows),
+                ttnn.CoreCoord(remainder - 1, rows),
+            )
+        )
+    return ttnn.CoreRangeSet({*ranges})
 
 
 class PSABlock:
@@ -628,23 +665,39 @@ class YoloV11:
         x = self.sppf(self.device, x)  # 9 #0.986
         x = self.c2psa(self.device, x)  # 10
         print("before x details", x.shape, x.layout, x.dtype)
-        x = ttnn.to_torch(x)
-        x = ttnn.from_torch(
-            x,
-            dtype=ttnn.bfloat16,
-            device=self.device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
+        # x = ttnn.to_torch(x)
+        # x = ttnn.from_torch(
+        #     x,
+        #     dtype=ttnn.bfloat16,
+        #     device=self.device,
+        #     layout=ttnn.ROW_MAJOR_LAYOUT,
+        #     memory_config=ttnn.L1_MEMORY_CONFIG,
+        # )
+        x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
+        x = ttnn.to_dtype(x, ttnn.bfloat16)
+        # torch.save(ttnn.to_torch(x).reshape(1,7,7,256).permute(0,3,1,2),"/home/ubuntu/venkatesh_yolov11/tt-metal/models/experimental/functional_yolov11/dumps/tt_out.pth")
         print("after x details", x.shape, x.layout, x.dtype)
         x10 = x
         x = ttnn.reshape(x, (x.shape[0], int(math.sqrt(x.shape[2])), int(math.sqrt(x.shape[2])), x.shape[3]))
         print("ttnn input to upsample1 is ", x.shape, x.layout, x.dtype)
-        # x = Yolov11_shard_upsample(self.device, x)
-        x = ttnn.upsample(x, scale_factor=2)
+        x = Yolov11_shard_upsample(self.device, x)
+        # x = ttnn.upsample(x, scale_factor=2)
+        # nhw = x.shape[0] * x.shape[1] * x.shape[2]
+        # num_cores = determine_num_cores_for_upsample(nhw, x.shape[2])
+        # core_grid = get_core_grid_from_num_cores(num_cores)
+        # shardspec = ttnn.create_sharded_memory_config_(x.shape, core_grid, ttnn.ShardStrategy.HEIGHT, orientation=ttnn.ShardOrientation.ROW_MAJOR)
+        # if x.is_sharded():
+        #     x = ttnn.reshard(x, shardspec)
+        # else:
+        #     x = ttnn.interleaved_to_sharded(x, shardspec)
+
+        # x = ttnn.upsample(x, scale_factor=2, memory_config=x.memory_config())  # 11
+        if x.is_sharded():
+            x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
         print("output of 1st upsample", x.shape)
         x = ttnn.reshape(x, (1, 1, x.shape[0] * x.shape[1] * x.shape[2], x.shape[3]))
         x6 = ttnn.to_layout(x6, layout=ttnn.ROW_MAJOR_LAYOUT)
+        print("x and x6 and x4 oconfig is ", x.memory_config(), x6.memory_config(), x4.memory_config())
         x = ttnn.concat((x, x6), -1, memory_config=ttnn.L1_MEMORY_CONFIG)  # 12
         x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)
         x = self.c3k2_5(self.device, x)  # 13
@@ -652,8 +705,20 @@ class YoloV11:
         x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
         x = ttnn.reshape(x, (x.shape[0], int(math.sqrt(x.shape[2])), int(math.sqrt(x.shape[2])), x.shape[3]))
         print("ttnn input to upsample2 is ", x.shape, x.layout, x.dtype)
-        x = ttnn.upsample(x, scale_factor=2)  # 14
-        # x = Yolov11_shard_upsample(self.device, x)
+        # nhw = x.shape[0] * x.shape[1] * x.shape[2]
+        # num_cores = determine_num_cores_for_upsample(nhw, x.shape[2])
+        # core_grid = get_core_grid_from_num_cores(num_cores)
+        # shardspec = ttnn.create_sharded_memory_config_(x.shape, core_grid, ttnn.ShardStrategy.HEIGHT, orientation=ttnn.ShardOrientation.ROW_MAJOR)
+
+        # if x.is_sharded():
+        #     x = ttnn.reshard(x, shardspec)
+        # else:
+        #     x = ttnn.interleaved_to_sharded(x, shardspec)
+        # x = ttnn.upsample(x, scale_factor=2, memory_config=x.memory_config())
+        if x.is_sharded():
+            x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # x = ttnn.upsample(x, scale_factor=2)  # 14
+        x = Yolov11_shard_upsample(self.device, x)
         print("output of 2nd upsample", x.shape)
         x = ttnn.reshape(x, (1, 1, x.shape[0] * x.shape[1] * x.shape[2], x.shape[3]))
         x4 = ttnn.to_layout(x4, layout=ttnn.ROW_MAJOR_LAYOUT)
