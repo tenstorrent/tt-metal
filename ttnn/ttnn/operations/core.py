@@ -20,6 +20,14 @@ def _golden_function(input_tensor: ttnn.Tensor, slices):
     return output_tensor
 
 
+def _host_slice_with_unpad(input_tensor: ttnn.Tensor, begins, ends) -> ttnn.Tensor:
+    """Hacky fallback to old `unpad` methods for host based accessing"""
+
+    working_tensor = ttnn.to_layout(input_tensor, ttnn.ROW_MAJOR_LAYOUT).unpad(begins, ends)
+    working_tensor = ttnn.view(working_tensor, [e - b for e, b in zip(ends, begins)])
+    return ttnn.to_layout(working_tensor, input_tensor.get_layout())
+
+
 @ttnn.register_python_operation(
     name="ttnn.Tensor.__getitem__",
     is_method=True,
@@ -132,7 +140,12 @@ def __getitem__(input_tensor: ttnn.Tensor, slices) -> ttnn.Tensor:
         slice_step.append(stp)
 
     # 5) Perform the slicing
-    output = ttnn.slice(input_tensor, slice_start, slice_end, slice_step)
+    if ttnn.is_tensor_storage_on_device(input_tensor):
+        output = ttnn.slice(input_tensor, slice_start, slice_end, slice_step)
+    else:
+        if not all([s == 1 for s in slice_step]):
+            raise RuntimeError("Host tensors cannot be accessed with non-unit stride")
+        output = _host_slice_with_unpad(input_tensor, slice_start, slice_end)
 
     # 6) Squeeze out all dimensions that were indexed by an integer.
     #    We do this from left to right, adjusting each subsequent dimension index

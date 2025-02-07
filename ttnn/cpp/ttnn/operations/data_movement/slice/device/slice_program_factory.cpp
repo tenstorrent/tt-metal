@@ -35,28 +35,28 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     auto input_shape = input_tensor.get_logical_shape();
     auto output_shape = output_tensor.get_logical_shape();
 
-    uint32_t padded_row_size_bytes = input_shape[-1] * input_tensor.element_size();
-    uint32_t unpadded_row_size_bytes = output_shape[-1] * input_tensor.element_size();
+    uint32_t input_row_size_bytes = input_shape[-1] * input_tensor.element_size();
+    uint32_t output_row_size_bytes = output_shape[-1] * input_tensor.element_size();
 
     std::uint32_t num_dims = static_cast<std::uint32_t>(input_shape.rank());
-    std::vector<uint32_t> num_unpadded_sticks_per_dim(num_dims);
-    std::vector<uint32_t> num_padded_sticks_per_dim(num_dims);
+    std::vector<uint32_t> num_output_sticks_per_dim(num_dims);
+    std::vector<uint32_t> num_input_sticks_per_dim(num_dims);
     std::vector<uint32_t> id_per_dim(num_dims);
 
     std::vector<uint32_t> accumulated_total_per_dim(num_dims);
 
     // TODO: Remove first element of these arrays and update kernel accordingly
     // This currently just matches tile version where we iterate over the row as well
-    num_unpadded_sticks_per_dim[0] = 1;
-    num_padded_sticks_per_dim[0] = 0;
+    num_output_sticks_per_dim[0] = 1;
+    num_input_sticks_per_dim[0] = 0;
     accumulated_total_per_dim[0] = 1;
 
     for (int32_t i = 1; i < num_dims; i++) {
-        uint32_t num_unpadded_dim = output_shape[-(i + 1)];
+        uint32_t num_output_dim = output_shape[-(i + 1)];
         uint32_t num_total_dim = input_shape[-(i + 1)];
-        uint32_t num_padded_dim = (num_total_dim - num_unpadded_dim) * accumulated_total_per_dim[i - 1];
-        num_unpadded_sticks_per_dim[i] = num_unpadded_dim;
-        num_padded_sticks_per_dim[i] = num_padded_dim;
+        uint32_t num_input_dim = (num_total_dim - num_output_dim) * accumulated_total_per_dim[i - 1];
+        num_output_sticks_per_dim[i] = num_output_dim;
+        num_input_sticks_per_dim[i] = num_input_dim;
         accumulated_total_per_dim[i] = num_total_dim * accumulated_total_per_dim[i - 1];
     }
 
@@ -71,22 +71,22 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     uint32_t begins_bytes = output_tensor_start[-1] * input_tensor.element_size();
     uint32_t misalignment = begins_bytes % SRC_BUFFER_ALIGNMENT;
 
-    uint32_t unpadded_row_size_bytes_offset = tt::round_up(unpadded_row_size_bytes, ALIGNMENT);
+    uint32_t output_row_size_bytes_offset = tt::round_up(output_row_size_bytes, ALIGNMENT);
     uint32_t start_addr = input_tensor.buffer()->address();
     std::vector<uint32_t> common_reader_kernel_args = {
         start_addr + begins_bytes - misalignment,  // read from nearest aligned address
-        padded_row_size_bytes,
-        unpadded_row_size_bytes,
-        unpadded_row_size_bytes_offset,
+        input_row_size_bytes,
+        output_row_size_bytes,
+        output_row_size_bytes_offset,
         num_dims,
         0,
         0,
         0,
         0};
     common_reader_kernel_args.insert(
-        common_reader_kernel_args.end(), num_unpadded_sticks_per_dim.begin(), num_unpadded_sticks_per_dim.end());
+        common_reader_kernel_args.end(), num_output_sticks_per_dim.begin(), num_output_sticks_per_dim.end());
     common_reader_kernel_args.insert(
-        common_reader_kernel_args.end(), num_padded_sticks_per_dim.begin(), num_padded_sticks_per_dim.end());
+        common_reader_kernel_args.end(), num_input_sticks_per_dim.begin(), num_input_sticks_per_dim.end());
 
     std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> ret_val(num_cores_total);
 
@@ -108,22 +108,22 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
         if (num_sticks_per_core != 0) {
             auto num_sticks_per_core_pad32 = num_sticks_per_core + (32 - num_sticks_per_core % 32) % 32;
             num_sticks_per_core_read = tt::tt_metal::merge_num_sticks_to_read(
-                num_sticks_per_core_pad32, unpadded_row_size_bytes_offset, max_read_size);
+                num_sticks_per_core_pad32, output_row_size_bytes_offset, max_read_size);
             num_read_per_barrier = num_sticks_per_core_pad32 / num_sticks_per_core_read;
         }
 
-        id_per_dim[0] = num_sticks_written % num_unpadded_sticks_per_dim[0];
-        uint32_t unpadded_written = num_sticks_written / num_unpadded_sticks_per_dim[0];
+        id_per_dim[0] = num_sticks_written % num_output_sticks_per_dim[0];
+        uint32_t output_written = num_sticks_written / num_output_sticks_per_dim[0];
         uint32_t start_id = id_per_dim[0] + start_offset;
 
         for (uint32_t j = 1; j < num_dims; j++) {
-            id_per_dim[j] = unpadded_written % num_unpadded_sticks_per_dim[j];
-            unpadded_written = unpadded_written / num_unpadded_sticks_per_dim[j];
+            id_per_dim[j] = output_written % num_output_sticks_per_dim[j];
+            output_written = output_written / num_output_sticks_per_dim[j];
             start_id += id_per_dim[j] * accumulated_total_per_dim[j - 1];
         }
         std::vector<uint32_t> reader_kernel_args = common_reader_kernel_args;
         //
-        uint32_t addr_offset = 5;  // input buffer addr, padded_row_size_bytes, unpadded_row_size_bytes, num_dims
+        uint32_t addr_offset = 5;  // input buffer addr, input_row_size_bytes, output_row_size_bytes, num_dims
         reader_kernel_args[addr_offset++] = start_id;
         reader_kernel_args[addr_offset++] = num_sticks_per_core;
         reader_kernel_args[addr_offset++] = num_sticks_per_core_read;
@@ -132,8 +132,8 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
 
         std::vector<uint32_t> writer_kernel_args = {
             output_buffer->address(),
-            unpadded_row_size_bytes,
-            unpadded_row_size_bytes_offset,
+            output_row_size_bytes,
+            output_row_size_bytes_offset,
             num_sticks_per_core,
             num_sticks_per_core_read,
             num_read_per_barrier,
@@ -155,7 +155,7 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
     // This should allocate a DRAM buffer on the device
     tt::tt_metal::IDevice* device = a.device();
 
-    uint32_t num_unpadded_sticks = output.volume() / output.get_logical_shape()[-1];
+    uint32_t num_output_sticks = output.volume() / output.get_logical_shape()[-1];
 
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
@@ -164,14 +164,14 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
     CoreRange total_cores({0, 0}, {num_cores_x - 1, num_cores_y - 1});
     uint32_t num_cores_total = num_cores_x * num_cores_y;
     auto [num_cores, all_cores, core_group_1, core_group_2, num_sticks_per_core_group_1, num_sticks_per_core_group_2] =
-        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_unpadded_sticks);
+        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_output_sticks);
 
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
 
-    uint32_t padded_row_size_bytes = a.get_logical_shape()[-1] * a.element_size();
-    uint32_t unpadded_row_size_bytes = output_shape[-1] * a.element_size();
+    uint32_t input_row_size_bytes = a.get_logical_shape()[-1] * a.element_size();
+    uint32_t output_row_size_bytes = output_shape[-1] * a.element_size();
 
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -179,8 +179,8 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
     bool src0_is_dram = src0_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
     bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
 
-    uint32_t src_stick_size = padded_row_size_bytes;
-    uint32_t dst_stick_size = unpadded_row_size_bytes;
+    uint32_t src_stick_size = input_row_size_bytes;
+    uint32_t dst_stick_size = output_row_size_bytes;
 
     uint32_t src0_cb_index = 0;
     uint32_t max_read_size = 4096;
@@ -200,7 +200,7 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
     if (misalignment != 0) {
         ALIGNMENT *= 2;
     }
-    uint32_t cb_page_size = tt::round_up(unpadded_row_size_bytes, ALIGNMENT);
+    uint32_t cb_page_size = tt::round_up(output_row_size_bytes, ALIGNMENT);
 
     uint32_t num_input_pages = num_sticks_per_core_group_1 > num_sticks_per_core_group_2 ? num_sticks_per_core_group_1
                                                                                          : num_sticks_per_core_group_2;
@@ -265,7 +265,7 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
             uint32_t num_cores_x = compute_with_storage_grid_size.x;
             uint32_t num_cores_y = compute_with_storage_grid_size.y;
             uint32_t num_cores_total = num_cores_x * num_cores_y;
-            uint32_t num_unpadded_sticks = dst_tensor.volume() / dst_tensor.get_logical_shape()[-1];
+            uint32_t num_output_sticks = dst_tensor.volume() / dst_tensor.get_logical_shape()[-1];
             auto
                 [num_cores,
                  all_cores,
@@ -273,7 +273,7 @@ operation::ProgramWithCallbacks slice_rm_multi_core(
                  core_group_2,
                  num_sticks_per_core_group_1,
                  num_sticks_per_core_group_2] =
-                    tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_unpadded_sticks);
+                    tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_output_sticks);
 
             const auto tensor_start =
                 static_cast<const ttnn::operations::data_movement::SliceDeviceOperation*>(operation)->slice_start;

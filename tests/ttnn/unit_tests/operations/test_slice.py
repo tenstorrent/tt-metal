@@ -746,35 +746,11 @@ def test_slice_adversarial_fixed(input_shape, dim, start, end, step, layout, dev
     assert_with_pcc(torch_output_tensor, ttnn_output_tensor, 0.999)
 
 
-@pytest.mark.skip("#15796 1D tiled support is not available as of yet")
-@pytest.mark.parametrize(
-    "input_shape, dim, start, end, step, layout",
-    (([3], 0, 0, -1, 1, ttnn.TILE_LAYOUT),),  # Difference in expected shape as it's a 1D tensor
-)
-def test_slice_adversarial(input_shape, dim, start, end, step, layout, device):
-    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
-
-    slice_obj = slice(start, end, step)
-
-    # Prepare indices for slicing in the specified dimension
-    indices = [slice(None)] * len(input_shape)  # By default, select all elements along every dimension
-    indices[dim] = slice_obj  # Apply slicing to the target dimension
-    indices = tuple(indices)
-
-    # Apply slicing to the input_tensor
-    torch_output_tensor = torch_input[indices]
-
-    ttnn_tensor = ttnn.from_torch(torch_input, device=device, layout=layout, dtype=ttnn.bfloat16)
-    ttnn_output = ttnn_tensor[indices]
-
-    ttnn_output_tensor = ttnn.from_device(ttnn_output).to_torch_with_logical_shape()
-
-    assert_with_pcc(torch_output_tensor, ttnn_output_tensor, 0.999)
-
-
 @pytest.mark.parametrize(
     "input_shape, input_start, input_ends, input_stride",
     (
+        ([3], [0, 0], [-1, -1], [1, 1]),
+        ([1, 7], [0, 0], [-1, -1], [1, 1]),
         ([3234, 4], [0, 2], [3234, 4], [1, 1]),
         ([196, 196, 2], [0, 0, 1], [196, 196, 2], [1, 1, 1]),
         ([1, 23, 40], [0, 0, 39], [1, 23, 40], [1, 1, 1]),
@@ -788,7 +764,7 @@ def test_slice_adversarial(input_shape, dim, start, end, step, layout, device):
     "input_memory_config",
     (ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
 )
-def test_slice_adversarial_flexible(
+def test_slice_pytorch2_former_failures(
     input_shape, input_start, input_ends, input_stride, layout, input_memory_config, device
 ):
     if layout == ttnn.TILE_LAYOUT:
