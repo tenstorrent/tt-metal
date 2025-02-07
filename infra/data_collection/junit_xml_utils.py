@@ -53,9 +53,10 @@ def get_at_most_one_single_child_element_(element, tag_name):
 
     potential_expected_blocks = list(filter(is_expected, element))
 
-    assert (
-        len(potential_expected_blocks) <= 1
-    ), f"{len(potential_expected_blocks)} is not exactly 1 for tag name {tag_name}"
+    # downgrade assert to warning
+    if len(potential_expected_blocks) > 1:
+        element_name = element.attrib.get("name", "unknown_name")
+        logger.warning(f"{element_name} : {len(potential_expected_blocks)} is greater than 1 for tag name {tag_name}")
 
     return potential_expected_blocks[0] if len(potential_expected_blocks) else None
 
