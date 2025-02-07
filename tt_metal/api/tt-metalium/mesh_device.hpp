@@ -139,6 +139,8 @@ public:
     // Trace APIs
     void begin_trace(const uint8_t cq_id, const uint32_t tid) override;
     void end_trace(const uint8_t cq_id, const uint32_t tid) override;
+
+    // TODO: `block_on_worker_thread` can be removed once we remove multi-threaded async dispatch
     void replay_trace(
         const uint8_t cq_id,
         const uint32_t tid,
