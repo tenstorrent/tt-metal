@@ -778,7 +778,8 @@ void run_receiver_channel_step(
         print_pkt_header(packet_header);
         bool can_send_to_all_local_chip_receivers =
             can_forward_packet_completely(packet_header, downstream_edm_interface);
-        if (can_send_to_all_local_chip_receivers) {
+        bool trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
+        if (can_send_to_all_local_chip_receivers && trid_flushed) {
             uint8_t trid = receiver_channel_trid_tracker.update_buffer_slot_to_next_trid_and_advance_trid_counter(receiver_buffer_index);
             receiver_forward_packet(packet_header, downstream_edm_interface, trid);
             wr_sent_ptr.increment();
@@ -789,6 +790,8 @@ void run_receiver_channel_step(
     bool unflushed_writes = !wr_flush_ptr.is_caught_up_to(wr_sent_ptr);
     if (unflushed_writes) {
         auto receiver_buffer_index = wr_flush_ptr.get_buffer_index();
+        // Temporary patch for instability. Issue was not caught due to what appears to be a bug in CI
+        // not running all tests. Issue tracked here: https://github.com/tenstorrent/tt-metal/issues/17702
         bool next_trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
         if (next_trid_flushed) {
             local_receiver_channel.eth_clear_sender_channel_ack(receiver_buffer_index);
