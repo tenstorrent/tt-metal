@@ -9,7 +9,6 @@ from typing import Optional, Tuple
 from torch.nn import functional as F
 from ttnn.model_preprocessing import preprocess_linear_weight, preprocess_linear_bias
 import ttnn
-from loguru import logger
 
 WHISPER_MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
 WHISPER_DTYPE = ttnn.bfloat8_b
@@ -47,32 +46,17 @@ def calculate_key_values(config, key_value_states, *, parameters):
     bsz, tgt_len_padded, _ = key_value_states.padded_shape
     head_size = hidden_size // config.encoder_attention_heads
 
-    fused_qkv = key_value_states @ parameters.key_value.weight + parameters.key_value.bias
+    fused_kv = key_value_states @ parameters.key_value.weight + parameters.key_value.bias
+    fused_kv = ttnn.unsqueeze_to_4D(fused_kv)  # 1, 1, S, 2xHxd
 
-    dtype = fused_qkv.dtype
-    device = fused_qkv.device()
-    fused_qkv = ttnn.to_torch(fused_qkv)
-    fused_qkv = torch.reshape(fused_qkv, (bsz, tgt_len, 2, config.encoder_attention_heads, head_size))
-    key_states, value_states = fused_qkv[..., 0, :, :], fused_qkv[..., 1, :, :]
+    key_states = fused_kv[:, :, :, :hidden_size]
+    key_states = ttnn.transpose(key_states, 2, 3)  # 1, 1, Hxd, S
+    key_states = ttnn.reshape(key_states, (bsz, config.encoder_attention_heads, head_size, tgt_len))  # 1, H, d, S
 
-    key_states = ttnn.from_torch(key_states, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    value_states = ttnn.from_torch(value_states, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-
-    key_states = ttnn.permute(key_states, (0, 2, 3, 1))
-    value_states = ttnn.permute(value_states, (0, 2, 1, 3))
-    key_states = ttnn.to_layout(key_states, ttnn.TILE_LAYOUT)
-    value_states = ttnn.to_layout(value_states, ttnn.TILE_LAYOUT)
-
-    key_states = ttnn.reshape(
-        key_states,
-        [bsz, config.encoder_attention_heads, head_size, tgt_len],
-        [bsz, config.encoder_attention_heads, head_size, tgt_len_padded],
-    )
-    value_states = ttnn.reshape(
-        value_states,
-        [bsz, config.encoder_attention_heads, tgt_len, head_size],
-        [bsz, config.encoder_attention_heads, tgt_len_padded, head_size],
-    )
+    value_states = fused_kv[:, :, :, hidden_size:]
+    value_states = ttnn.transpose(value_states, 1, 2)  # 1, S, 1, Hxd
+    value_states = ttnn.reshape(value_states, (bsz, tgt_len, config.encoder_attention_heads, head_size))
+    value_states = ttnn.transpose(value_states, 1, 2)  # 1, H, S, d
 
     return key_states, value_states
 
@@ -134,12 +118,10 @@ def whisper_attention(config, hidden_states, attention_mask, key_value_states=No
     is_cross_attention = key_value_states is not None
     if is_cross_attention:
         query_states = hidden_states @ parameters.q_proj.weight + parameters.q_proj.bias
-        dtype = query_states.dtype
-        device = query_states.device()
-        query_states = ttnn.to_torch(query_states)
-        query_states = torch.reshape(query_states, (bsz, tgt_len, config.encoder_attention_heads, head_size))
-        query_states = ttnn.from_torch(query_states, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
-        query_states = ttnn.permute(query_states, (0, 2, 1, 3))
+        query_states = ttnn.unsqueeze_to_4D(query_states)
+        query_states = ttnn.transpose(query_states, 1, 2)  # 1, 32, 1, Hxd
+        query_states = ttnn.reshape(query_states, (bsz, tgt_len, config.encoder_attention_heads, head_size))
+        query_states = ttnn.transpose(query_states, 1, 2)  # 1, H, 32, d
         key_states, value_states = calculate_key_values(config, key_value_states, parameters=parameters)
     else:
         query_states, key_states, value_states = calculate_query_key_values(

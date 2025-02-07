@@ -1,30 +1,28 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+from os import listdir
+from os.path import isfile, join
 import pytest
 import torch
 from datasets import load_dataset
 from loguru import logger
 from scipy.io import wavfile
-import ttnn
 from transformers import (
     AutoFeatureExtractor,
     AutoProcessor,
     WhisperForConditionalGeneration,
+    WhisperForAudioClassification,
 )
+from tqdm import tqdm
+import time
 
+import ttnn
+from ttnn.model_preprocessing import preprocess_model_parameters
 from models.experimental.functional_whisper.tt import ttnn_optimized_functional_whisper
 from models.generation_utils import get_logits_processor
-from ttnn.model_preprocessing import preprocess_model_parameters
-
-import torch
-import os
-from os import listdir
-from os.path import isfile, join
-
-from transformers import AutoFeatureExtractor, WhisperForAudioClassification
-from datasets import load_dataset
 
 
 def load_input_paths(folder_path):
@@ -82,14 +80,21 @@ def run_generate(
 
     decoder_start_values = generation_config.pad_token_id * torch.ones(1, 32).to(torch.long)
 
+    encoder_hidden_states = ttnn_model.encoder(config, input_embeds, parameters=parameters.encoder)
+
     MAX_GEN_LEN = 128
-    for i in range(MAX_GEN_LEN):
-        output = ttnn_model.whisper(
+    print_each_iter = False
+
+    # Decode inference run
+    logger.info("Starting decode inference run")
+
+    for i in tqdm(range(MAX_GEN_LEN), desc="Decode inference iterations"):
+        output = ttnn_model.decoder(
             config,
-            input_embeds,
             decoder_hidden_states,
             decoder_attention_mask=decoder_attention_mask,
-            parameters=parameters,
+            encoder_hidden_states=encoder_hidden_states,
+            parameters=parameters.decoder,
         )
 
         # Note: the whisper model is currently not using a kv cache and recomputes the entire sequence at each step
@@ -120,7 +125,9 @@ def run_generate(
 
         if next_tokens == config.eos_token_id:
             break
-        logger.info(processor.batch_decode(input_ids, skip_special_tokens=True)[0])
+
+        if print_each_iter:
+            logger.info(processor.batch_decode(input_ids, skip_special_tokens=True)[0])
 
     ttnn_transcription = processor.batch_decode(input_ids, skip_special_tokens=True)[0]
 
