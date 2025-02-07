@@ -13,6 +13,8 @@ set(TENSOR_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/layout/page_config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/layout/tensor_layout.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/xtensor/partition.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/flatbuffer/tensor_types_to_flatbuffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/flatbuffer/tensor_types_from_flatbuffer.cpp
     CACHE INTERNAL
     "Tensor sources to reuse in ttnn build"
 )

@@ -674,10 +674,20 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/ccl)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/deprecated)
 
+message(
+    "BIN DIR "
+    ${CMAKE_BINARY_DIR}
+)
 set(TTNN_PUBLIC_INCLUDE_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR} # ${PROJECT_SOURCE_DIR}/ttnn
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/deprecated # symlink to tt_eager; should become native folder once merge complete
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp
+    ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers
+    ${CMAKE_BINARY_DIR}/tt_metal/impl/flatbuffers
+)
+message(
+    "TTNN_PUBLIC_INCLUDE_DIRS "
+    ${TTNN_PUBLIC_INCLUDE_DIRS}
 )
 set(TTNN_PUBLIC_LINK_LIBRARIES
     metal_common_libs
@@ -686,6 +696,7 @@ set(TTNN_PUBLIC_LINK_LIBRARIES
     xtensor
     xtensor-blas
     xtl
+    FlatBuffers::FlatBuffers
 )
 set(TTNN_PUBLIC_LINK_DIRS "")
 
@@ -805,6 +816,27 @@ endforeach(
     SUBLIBRARY_PATH
     ${TTNN_SUBLIBRARIES}
 )
+
+set(FBS_FILE ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/tensor/flatbuffer/tensor_types.fbs)
+message(
+    "ROOT DIR "
+    ${CMAKE_SOURCE_DIR}
+)
+get_filename_component(FBS_FILE_NAME ${FBS_FILE} NAME_WLE)
+set(FBS_GENERATED_HEADER "${CMAKE_CURRENT_BINARY_DIR}/flatbuffers/${FBS_FILE_NAME}_generated.h")
+add_custom_command(
+    OUTPUT
+        ${FBS_GENERATED_HEADER}
+    COMMAND
+        flatc --cpp --scoped-enums -I "${CMAKE_SOURCE_DIR}/tt_metal/impl/" -o "${CMAKE_CURRENT_BINARY_DIR}/flatbuffers/"
+        ${FBS_FILE}
+    DEPENDS
+        flatc
+        ${FBS_FILE}
+    COMMENT "Generating FlatBuffers header ${FBS_GENERATED_HEADER}"
+    VERBATIM
+)
+list(APPEND TENSOR_SRCS ${FBS_GENERATED_HEADER})
 
 add_ttnn_sublibrary(ttnn_tensor ${TENSOR_SRCS})
 add_ttnn_sublibrary(ttnn_ccl ${CCL_TTNN_SRCS})
