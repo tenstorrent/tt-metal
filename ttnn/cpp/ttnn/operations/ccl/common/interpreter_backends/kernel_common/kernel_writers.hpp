@@ -33,8 +33,7 @@ FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
     pkt_hdr->reserved2 = my_chip_id;
 #endif
 
-    size_t packet_send_size_bytes = payload_size_bytes + sizeof(tt::fabric::PacketHeader);
-    pkt_hdr->to_noc_unicast_write(tt::fabric::NocUnicastCommandHeader{noc0_dest_noc_addr, packet_send_size_bytes});
+    pkt_hdr->to_noc_unicast_write(tt::fabric::NocUnicastCommandHeader{noc0_dest_noc_addr}, payload_size_bytes);
 
     switch (current_cmd_header.dest_type) {
         case ttnn::ccl::cmd::CclCommandDestType::CHIP_UNICAST: {

@@ -59,12 +59,10 @@ auto forward_to_fabric_from_cb(
     if constexpr (mcast_mode) {
         packet_header
             .to_chip_multicast(tt::fabric::MulticastRoutingCommandHeader{config.mcast.distance, config.mcast.range})
-            .to_noc_unicast_write(tt::fabric::NocUnicastCommandHeader{
-                noc0_dest_address, (pages_to_send * page_size) + sizeof(tt::fabric::PacketHeader)});
+            .to_noc_unicast_write(tt::fabric::NocUnicastCommandHeader{noc0_dest_address}, (pages_to_send * page_size));
     } else {
         packet_header.to_chip_unicast(tt::fabric::UnicastRoutingCommandHeader{config.unicast.distance})
-            .to_noc_unicast_write(tt::fabric::NocUnicastCommandHeader{
-                noc0_dest_address, (pages_to_send * page_size) + sizeof(tt::fabric::PacketHeader)});
+            .to_noc_unicast_write(tt::fabric::NocUnicastCommandHeader{noc0_dest_address}, (pages_to_send * page_size));
     }
 
     uint64_t buffer_address = sender.edm_buffer_addr + (*sender.buffer_index_ptr * (sender.buffer_size_bytes + sizeof(eth_channel_sync_t)));

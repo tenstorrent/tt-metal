@@ -464,6 +464,17 @@ def test_all_gather(
             None,
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ),
+        (
+            4,
+            [1, 4, 32, 1280],
+            3,
+            ttnn.TILE_LAYOUT,
+            (32, 128),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 4))}),
+            None,
+            None,
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ),
     ],
 )
 @pytest.mark.parametrize("num_links", [1])

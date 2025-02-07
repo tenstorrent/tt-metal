@@ -438,16 +438,14 @@ void try_advance_inline_write_or_atomic_inc(command_context_t<Addrgen>& cmd_ctx)
 
         ASSERT(cmd_ctx.packet_header_buffer_addr != 0);
         auto* pkt_hdr = reinterpret_cast<tt::fabric::PacketHeader*>(cmd_ctx.packet_header_buffer_addr);
-#ifdef DEBUG_PRINT_ENABLED
-        pkt_hdr->reserved2 = my_chip_id;
-#endif
+
         uint64_t dest_noc_addr_for_pkt = safe_get_noc_addr(dest_noc0_x, dest_noc0_y, dest_bank_addr, 0);
         if (cmd_ctx.current_cmd_header.code == ttnn::ccl::cmd::CclCommandCode::ATOMIC_INC) {
             pkt_hdr->to_noc_unicast_atomic_inc(
                 tt::fabric::NocUnicastAtomicIncCommandHeader{dest_noc_addr_for_pkt, static_cast<uint16_t>(value), 32});
         } else {
-            pkt_hdr->to_noc_unicast_write(
-                tt::fabric::NocUnicastCommandHeader{dest_noc_addr_for_pkt, static_cast<uint16_t>(value)});
+            pkt_hdr->to_noc_unicast_inline_write(
+                tt::fabric::NocUnicastInlineWriteCommandHeader{dest_noc_addr_for_pkt, static_cast<uint16_t>(value)});
         }
 
         switch (cmd_ctx.current_cmd_header.dest_type) {
@@ -563,13 +561,8 @@ void write_and_advance_local_read_address_for_fabric_write(
     const size_t payload_l1_address = l1_read_addr;
 
     auto pkt_hdr = reinterpret_cast<volatile tt::fabric::PacketHeader*>(packet_header_buffer_addr);
-#ifdef DEBUG_PRINT_ENABLED
-    pkt_hdr->reserved2 = my_chip_id;
-#endif
 
-    size_t packet_send_size_bytes = payload_size_bytes + sizeof(tt::fabric::PacketHeader);
-    pkt_hdr->to_noc_unicast_write(tt::fabric::NocUnicastCommandHeader{
-        noc0_dest_noc_addr, packet_send_size_bytes});
+    pkt_hdr->to_noc_unicast_write(tt::fabric::NocUnicastCommandHeader{noc0_dest_noc_addr}, payload_size_bytes);
 
     switch (current_cmd_header.dest_type) {
         case ttnn::ccl::cmd::CclCommandDestType::CHIP_UNICAST: {

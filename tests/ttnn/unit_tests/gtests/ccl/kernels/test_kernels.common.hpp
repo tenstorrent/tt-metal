@@ -33,8 +33,9 @@ bool terminate_fabric_endpoints_farthest_to_nearest (
             reinterpret_cast<volatile uint32_t*>(a_packet_header_addr)[sizeof(tt::fabric::PacketHeader) >> 2] = tt::fabric::TerminationSignal::GRACEFULLY_TERMINATE;
             sender.wait_for_empty_write_slot();
             packet_header.to_chip_unicast(tt::fabric::UnicastRoutingCommandHeader{static_cast<uint8_t>(distance)})
-                .to_noc_unicast_write(tt::fabric::NocUnicastCommandHeader{
-                    termination_sig_noc_addr, sizeof(tt::fabric::PacketHeader) + sizeof(uint32_t)});
+                .to_noc_unicast_write(
+                    tt::fabric::NocUnicastCommandHeader{termination_sig_noc_addr},
+                    sizeof(tt::fabric::PacketHeader) + sizeof(uint32_t));
             sender.send_payload_blocking_from_address(a_packet_header_addr, packet_header.get_payload_size_including_header());
             noc_async_writes_flushed();
         }

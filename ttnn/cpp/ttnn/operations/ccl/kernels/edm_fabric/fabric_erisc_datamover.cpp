@@ -4,7 +4,7 @@
 
 
 #include "dataflow_api.h"
-#include "tt_metal/hw/inc/ethernet/dataflow_api.h"
+#include "tt_metal/hw/inc/ethernet/tunneling.h"
 #include "cpp/ttnn/operations/ccl/kernels/edm/edm_handshake.hpp"
 #include "cpp/ttnn/operations/ccl/kernels/edm_fabric/edm_fabric_worker_adapters.hpp"
 #include "cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
@@ -298,6 +298,7 @@ struct WriteTransactionIdTracker {
     TransactionIdCounter<MAX_TRANSACTION_IDS> trid_counter;
 };
 
+static constexpr uint32_t DEFAULT_ETH_TXQ = 0;
 
 // senders update this stream
 constexpr uint32_t to_receiver_pkts_sent_id = 0;
@@ -339,11 +340,11 @@ void increment_local_update_ptr_val(uint8_t stream_id, int32_t val) {
 template <uint32_t stream_id>
 void remote_update_ptr_val(int32_t val) {
     constexpr uint32_t addr = STREAM_REG_ADDR(stream_id, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX);
-    eth_write_remote_reg(addr, val << REMOTE_DEST_BUF_WORDS_FREE_INC);
+    internal_::eth_write_remote_reg_no_txq_check(DEFAULT_ETH_TXQ, addr, val << REMOTE_DEST_BUF_WORDS_FREE_INC);
 }
 void remote_update_ptr_val(uint32_t stream_id, int32_t val) {
     const uint32_t addr = STREAM_REG_ADDR(stream_id, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX);
-    eth_write_remote_reg(addr, val << REMOTE_DEST_BUF_WORDS_FREE_INC);
+    internal_::eth_write_remote_reg_no_txq_check(DEFAULT_ETH_TXQ, addr, val << REMOTE_DEST_BUF_WORDS_FREE_INC);
 }
 
 template <uint32_t stream_id>
@@ -494,12 +495,7 @@ void send_channel_sync(
     ) {
     auto src_addr = sender_buffer_channel.get_bytes_sent_address(sender_wrptr.get_buffer_index());
     auto dest_addr = receiver_buffer_channel.get_bytes_sent_address(remote_receiver_wrptr.get_buffer_index());
-    eth_send_bytes_over_channel_payload_only_unsafe(
-        reinterpret_cast<size_t>(src_addr),
-        reinterpret_cast<size_t>(dest_addr),
-        sizeof(eth_channel_sync_t),
-        sizeof(eth_channel_sync_t),
-        sizeof(eth_channel_sync_t) >> ETH_BYTES_TO_WORDS_SHIFT);
+    internal_::eth_send_packet_bytes_unsafe(DEFAULT_ETH_TXQ, src_addr, dest_addr, sizeof(eth_channel_sync_t));
 }
 
 template <uint8_t SENDER_NUM_BUFFERS, uint8_t RECEIVER_NUM_BUFFERS>
@@ -514,7 +510,7 @@ void send_next_data(
     auto &local_sender_wrptr = sender_worker_interface.local_wrptr;
     auto local_sender_wrptr_buffer_index = local_sender_wrptr.get_buffer_index();
 
-    ASSERT(!eth_txq_is_busy());
+    ASSERT(!internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ));
 
     // TODO: TUNING - experiment with only conditionally breaking the transfer up into multiple packets if we are
     //       a certain threshold less than full packet
@@ -525,25 +521,19 @@ void send_next_data(
     auto volatile *pkt_header =
         reinterpret_cast<volatile tt::fabric::PacketHeader *>(sender_buffer_channel.get_buffer_address(local_sender_wrptr_buffer_index));
     ASSERT(tt::fabric::is_valid(*const_cast<tt::fabric::PacketHeader *>(pkt_header)));
-    size_t payload_size = 0;
-    payload_size = pkt_header->get_payload_size_including_header();
+    size_t payload_size_bytes = pkt_header->get_payload_size_including_header();
     pkt_header->src_ch_id = sender_channel_index;
 
     auto src_addr = sender_buffer_channel.get_buffer_address(local_sender_wrptr_buffer_index);
     auto dest_addr = receiver_buffer_channel.get_buffer_address(remote_receiver_wrptr.get_buffer_index());
-    eth_send_bytes_over_channel_payload_only_unsafe(
-        src_addr,
-        dest_addr,
-        payload_size,
-        payload_size,
-        payload_size >> ETH_BYTES_TO_WORDS_SHIFT);
-
+    internal_::eth_send_packet_bytes_unsafe(DEFAULT_ETH_TXQ, src_addr, dest_addr, payload_size_bytes);
 
     // Note: We can only advance to the next buffer index if we have fully completed the send (both the payload and sync
     // messages)
     local_sender_wrptr.increment();
     // update the remote reg
     static constexpr uint32_t words_to_forward = 1;
+    while (internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ)) {};
     remote_update_ptr_val<to_receiver_pkts_sent_id>(words_to_forward);
     remote_receiver_wrptr.increment();
 }
@@ -666,7 +656,7 @@ bool run_sender_channel_step(
     //       when moving to stream regs to manage rd/wr ptrs
     // TODO: update to be stream reg based. Initialize to space available and simply check for non-zero
     bool receiver_has_space_for_packet = outbound_to_receiver_channel_pointers.has_space_for_packet();
-    if (receiver_has_space_for_packet && !eth_txq_is_busy()) {
+    if (receiver_has_space_for_packet && !internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ)) {
         bool has_unsent_packet = local_sender_channel_worker_interface.has_unsent_payload();
         if (has_unsent_packet) {
             bool sender_backpressured_from_sender_side = !(local_sender_channel_worker_interface.local_rdptr.distance_behind(local_sender_channel_worker_interface.local_wrptr) < SENDER_NUM_BUFFERS);
@@ -757,7 +747,7 @@ void run_receiver_channel_step(
     auto &ack_ptr = receiver_channel_pointers.ack_ptr;
     auto pkts_received_since_last_check = get_ptr_val<to_receiver_pkts_sent_id>();
     bool pkts_received = pkts_received_since_last_check > 0;
-    bool can_send_over_eth = !eth_txq_is_busy();
+    bool can_send_over_eth = !internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ);
     ASSERT(receiver_channel_pointers.completion_ptr.distance_behind(ack_ptr) < RECEIVER_NUM_BUFFERS);
     if (pkts_received && can_send_over_eth) {
         // currently only support processing one packet at a time, so we only decrement by 1
@@ -803,7 +793,7 @@ void run_receiver_channel_step(
     auto &completion_ptr = receiver_channel_pointers.completion_ptr;
     bool unsent_completions = !completion_ptr.is_caught_up_to(wr_flush_ptr);
     if (unsent_completions) {
-        bool can_send_without_blocking = !eth_txq_is_busy();
+        bool can_send_without_blocking = !internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ);
         if (can_send_without_blocking) {
             // completion ptr incremented in callee
             receiver_send_completion_ack(
