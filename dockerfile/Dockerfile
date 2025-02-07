@@ -165,9 +165,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
     libtbb-dev \
     libcapstone-dev \
-    libyaml-cpp-dev \
     pybind11-dev \
-    nlohmann-json3-dev \
     libgtest-dev \
     libboost-all-dev \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
