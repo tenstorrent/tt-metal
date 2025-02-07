@@ -1494,10 +1494,11 @@ void Device::load_trace(const uint8_t cq_id, const uint32_t trace_id, const Trac
     this->mark_allocations_unsafe();
 }
 
-void Device::replay_trace(const uint8_t cq_id, const uint32_t tid, const bool blocking) {
+void Device::replay_trace(
+    const uint8_t cq_id, const uint32_t tid, const bool block_on_device, const bool block_on_worker_thread) {
     // If blocking, ensure that worker thread blocks until trace is completed
     this->push_work(
-        [this, cq_id, tid, blocking]() mutable {
+        [this, cq_id, tid, block_on_device]() mutable {
             ZoneScoped;
             TracyTTMetalReplayTrace(this->id(), tid);
             constexpr bool check = false;
@@ -1512,14 +1513,9 @@ void Device::replay_trace(const uint8_t cq_id, const uint32_t tid, const bool bl
             if constexpr (check) {
                 Trace::validate_instance(*trace_buffer);
             }
-            EnqueueTrace(this->command_queue(cq_id), tid, blocking);
+            EnqueueTrace(this->command_queue(cq_id), tid, block_on_device);
         },
-        blocking);
-
-    // If blocking, wait until worker threads have completed
-    if (blocking) {
-        this->synchronize();
-    }
+        block_on_worker_thread);
 }
 
 void Device::release_trace(const uint32_t tid) {
