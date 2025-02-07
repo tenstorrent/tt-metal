@@ -20,6 +20,7 @@ CPMAddPackage(
         "BOOST_SKIP_INSTALL_RULES ON"
         "BUILD_SHARED_LIBS OFF"
         "BOOST_INCLUDE_LIBRARIES core\\\;container\\\;smart_ptr\\\;interprocess"
+    FIND_PACKAGE_ARGUMENTS "GLOBAL"
 )
 
 add_library(span INTERFACE)
@@ -39,16 +40,8 @@ CPMAddPackage(
         "YAML_CPP_BUILD_TESTS OFF"
         "YAML_CPP_BUILD_TOOLS OFF"
         "YAML_BUILD_SHARED_LIBS OFF"
+    FIND_PACKAGE_ARGUMENTS "GLOBAL"
 )
-
-if(yaml-cpp_ADDED)
-    set_target_properties(
-        yaml-cpp
-        PROPERTIES
-            DEBUG_POSTFIX
-                ""
-    )
-endif()
 
 ############################################################################################################################
 # googletest
@@ -61,6 +54,7 @@ CPMAddPackage(
     VERSION 1.13.0
     OPTIONS
         "INSTALL_GTEST OFF"
+    FIND_PACKAGE_ARGUMENTS "GLOBAL"
 )
 
 if(googletest_ADDED)
@@ -82,13 +76,20 @@ endif()
 # magic_enum : https://github.com/Neargye/magic_enum
 ############################################################################################################################
 
-CPMAddPackage(NAME magic_enum GITHUB_REPOSITORY Neargye/magic_enum GIT_TAG v0.9.7)
+CPMAddPackage(NAME magic_enum GITHUB_REPOSITORY Neargye/magic_enum GIT_TAG v0.9.7 FIND_PACKAGE_ARGUMENTS "GLOBAL")
 
 ############################################################################################################################
 # fmt : https://github.com/fmtlib/fmt
 ############################################################################################################################
 
-CPMAddPackage(NAME fmt GITHUB_REPOSITORY fmtlib/fmt GIT_TAG 11.0.1 OPTIONS "CMAKE_MESSAGE_LOG_LEVEL NOTICE" FIND_PACKAGE_ARGUMENTS "GLOBAL")
+CPMAddPackage(
+    NAME fmt
+    GITHUB_REPOSITORY fmtlib/fmt
+    GIT_TAG 11.0.1
+    OPTIONS
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+    FIND_PACKAGE_ARGUMENTS "GLOBAL"
+)
 
 ############################################################################################################################
 # range-v3 : https://github.com/ericniebler/range-v3
@@ -103,19 +104,34 @@ CPMAddPackage(
     OPTIONS
         "CMAKE_BUILD_TYPE Release"
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+    FIND_PACKAGE_ARGUMENTS "GLOBAL"
 )
 
 ############################################################################################################################
 # pybind11 : https://github.com/pybind/pybind11
 ############################################################################################################################
 
-CPMAddPackage(NAME pybind11 GITHUB_REPOSITORY pybind/pybind11 GIT_TAG v2.13.6 OPTIONS "CMAKE_MESSAGE_LOG_LEVEL NOTICE")
+CPMAddPackage(
+    NAME pybind11
+    GITHUB_REPOSITORY pybind/pybind11
+    GIT_TAG v2.13.6
+    OPTIONS
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+    FIND_PACKAGE_ARGUMENTS "GLOBAL"
+)
 
 ############################################################################################################################
 # nlohmann/json : https://github.com/nlohmann/json
 ############################################################################################################################
 
-CPMAddPackage(NAME json GITHUB_REPOSITORY nlohmann/json GIT_TAG v3.11.3 OPTIONS "CMAKE_MESSAGE_LOG_LEVEL NOTICE")
+CPMAddPackage(
+    NAME json
+    GITHUB_REPOSITORY nlohmann/json
+    GIT_TAG v3.11.3
+    OPTIONS
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+    FIND_PACKAGE_ARGUMENTS "GLOBAL"
+)
 
 ############################################################################################################################
 # xtensor : https://github.com/xtensor-stack/xtensor
@@ -128,6 +144,7 @@ CPMAddPackage(
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "XTL_ENABLE_TESTS OFF"
+    FIND_PACKAGE_ARGUMENTS "GLOBAL"
 )
 CPMAddPackage(
     NAME xtensor
@@ -136,6 +153,7 @@ CPMAddPackage(
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "XTENSOR_ENABLE_TESTS OFF"
+    FIND_PACKAGE_ARGUMENTS "GLOBAL"
 )
 CPMAddPackage(
     NAME xtensor-blas
@@ -144,6 +162,7 @@ CPMAddPackage(
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "XTENSOR_ENABLE_TESTS OFF"
+    FIND_PACKAGE_ARGUMENTS "GLOBAL"
 )
 
 ############################################################################################################################
@@ -158,6 +177,7 @@ CPMAddPackage(
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "BENCHMARK_USE_LIBCXX ${ENABLE_LIBCXX}"
         "BENCHMARK_ENABLE_TESTING OFF"
+    FIND_PACKAGE_ARGUMENTS "GLOBAL"
 )
 
 if(benchmark_ADDED)
@@ -179,6 +199,7 @@ CPMAddPackage(
     GIT_TAG v3.7.0
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE" # Taskflow's CMakeLists.txt is super noisy
+    FIND_PACKAGE_ARGUMENTS "GLOBAL"
 )
 add_library(Taskflow::Taskflow ALIAS Taskflow)
 
@@ -195,6 +216,7 @@ CPMAddPackage(
         "FLATBUFFERS_BUILD_TESTS OFF"
         "FLATBUFFERS_SKIP_MONSTER_EXTRA ON"
         "FLATBUFFERS_STRICT_MODE ON"
+    FIND_PACKAGE_ARGUMENTS "GLOBAL"
 )
 
 if(flatbuffers_ADDED)
