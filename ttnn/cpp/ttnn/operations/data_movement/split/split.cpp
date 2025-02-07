@@ -64,7 +64,9 @@ std::vector<ttnn::Tensor> split_with_slice_impl(
     // torch requires split size to sum to dim size but since we are using slice we can be more permissive.
     TT_FATAL(
         std::accumulate(split_sizes.begin(), split_sizes.end(), 0) >= input_shape[dim],
-        "Split sizes should sum to at least dimension size");
+        "Split sizes should sum to at least dimension size. Split sizes: {} dimension {}",
+        split_sizes,
+        input_shape[dim]);
     std::vector<ttnn::Tensor> results;
     results.reserve(split_sizes.size());
 
@@ -93,7 +95,8 @@ std::vector<ttnn::Tensor> SplitOperation::invoke(
 
     TT_FATAL(
         std::all_of(split_sizes.begin(), split_sizes.end(), [](const auto& x) { return x > 0; }),
-        "split_size should be greater than 0 ");
+        "split_size should be greater than 0, instead got: {}",
+        split_sizes);
     const auto& input_shape = input_tensor.get_logical_shape();
 
     // special case to use hardcoded kernel for two chunks sometimes
