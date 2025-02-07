@@ -334,27 +334,15 @@ const metal_SocDescriptor &Cluster::get_soc_desc(chip_id_t chip) const {
 }
 
 void Cluster::generate_virtual_to_umd_coord_mapping() {
-    // UMD APIs currently use a coordinate system that is not Physical, Virtual or Logical.
-    // TT-Metal uses Virtual Coordinates when programming txns on device.
-    // This mapping allows Cluster APIs to be consistent with the rest of TT-Metal, while correctly
-    // using UMD under the hood.
-    // This will be kept around until UMD supports generic coordinates in its APIs, at which point TT-Metal
-    // virtual coordinates can be passed to UMD directly.
     for (auto chip_id : this->cluster_desc_->get_all_chips()) {
         this->virtual_worker_cores_[chip_id] = {};
+        for (const tt::umd::CoreCoord& core :
+             get_soc_desc(chip_id).get_cores(CoreType::TENSIX, CoordSystem::TRANSLATED)) {
+            this->virtual_worker_cores_[chip_id].insert({core.x, core.y});
+        }
         this->virtual_eth_cores_[chip_id] = {};
-        for (tt::umd::CoreCoord core : this->get_soc_desc(chip_id).get_all_cores(CoordSystem::PHYSICAL)) {
-            CoreCoord virtual_coords =
-                this->get_virtual_coordinate_from_physical_coordinates(chip_id, {core.x, core.y});
-            tt_cxy_pair virtual_core = tt_cxy_pair(chip_id, virtual_coords.x, virtual_coords.y);
-            tt_cxy_pair umd_core =
-                this->get_soc_desc(chip_id).convert_to_umd_coordinates(tt_cxy_pair(chip_id, core.x, core.y));
-            this->virtual_to_umd_coord_mapping_[virtual_core] = umd_core;
-            if (core.core_type == CoreType::TENSIX) {
-                this->virtual_worker_cores_[chip_id].insert(virtual_coords);
-            } else if (core.core_type == CoreType::ETH) {
-                this->virtual_eth_cores_[chip_id].insert(virtual_coords);
-            }
+        for (const tt::umd::CoreCoord& core : get_soc_desc(chip_id).get_cores(CoreType::ETH, CoordSystem::TRANSLATED)) {
+            this->virtual_eth_cores_[chip_id].insert({core.x, core.y});
         }
     }
 }
@@ -465,8 +453,9 @@ CoreCoord Cluster::get_physical_coordinate_from_logical_coordinates(
 
 CoreCoord Cluster::get_logical_ethernet_core_from_virtual(chip_id_t chip, CoreCoord core) const {
     const metal_SocDescriptor &soc_desc = tt::Cluster::instance().get_soc_desc(chip);
-    auto phys_eth_core = this->virtual_to_umd_coord_mapping_.at(tt_cxy_pair(chip, core.x, core.y));
-    return soc_desc.get_logical_ethernet_core_from_physical(phys_eth_core);
+    tt::umd::CoreCoord logical_core =
+        get_soc_desc(chip).translate_coord_to(core, CoordSystem::TRANSLATED, CoordSystem::LOGICAL);
+    return {logical_core.x, logical_core.y};
 }
 
 uint32_t Cluster::get_harvested_rows(chip_id_t chip) const {
@@ -495,14 +484,14 @@ int Cluster::get_device_aiclk(const chip_id_t &chip_id) const {
 
 void Cluster::deassert_risc_reset_at_core(const tt_cxy_pair &core) const {
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(core.chip);
-    tt_cxy_pair umd_core = this->virtual_to_umd_coord_mapping_.at(core);
-    this->driver_->deassert_risc_reset_at_core(umd_core);
+    tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
+    this->driver_->deassert_risc_reset_at_core(core.chip, core_coord);
 }
 
 void Cluster::assert_risc_reset_at_core(const tt_cxy_pair &core) const {
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(core.chip);
-    tt_cxy_pair umd_core = this->virtual_to_umd_coord_mapping_.at(core);
-    this->driver_->assert_risc_reset_at_core(umd_core);
+    tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
+    this->driver_->assert_risc_reset_at_core(core.chip, core_coord);
 }
 
 void Cluster::write_dram_vec(std::vector<uint32_t> &vec, tt_target_dram dram, uint64_t addr, bool small_access) const {
@@ -550,13 +539,9 @@ void Cluster::write_core(
         tt::watcher_sanitize_host_noc_write(soc_desc, this->virtual_worker_cores_.at(chip_id), this->virtual_eth_cores_.at(chip_id), {core.x, core.y}, addr, sz_in_bytes);
 
     }
-    TT_FATAL(
-        this->virtual_to_umd_coord_mapping_.find(core) != this->virtual_to_umd_coord_mapping_.end(),
-        "Cannot find UMD core for virtual core {}",
-        core.str());
-    tt_cxy_pair umd_core = this->virtual_to_umd_coord_mapping_.at(core);
+    tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
 
-    this->driver_->write_to_device(mem_ptr, sz_in_bytes, umd_core, addr, "LARGE_WRITE_TLB");
+    this->driver_->write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr, "LARGE_WRITE_TLB");
     if (this->cluster_desc_->is_chip_remote(chip_id)) {
         this->driver_->wait_for_non_mmio_flush(chip_id);
     }
@@ -570,13 +555,9 @@ void Cluster::read_core(
     if (tt::llrt::RunTimeOptions::get_instance().get_watcher_enabled()) {
         tt::watcher_sanitize_host_noc_read(soc_desc, this->virtual_worker_cores_.at(chip_id), this->virtual_eth_cores_.at(chip_id), {core.x, core.y}, addr, size_in_bytes);
     }
-    TT_FATAL(
-        this->virtual_to_umd_coord_mapping_.find(core) != this->virtual_to_umd_coord_mapping_.end(),
-        "Cannot find UMD core for virtual core {}",
-        core.str());
-    tt_cxy_pair umd_core = this->virtual_to_umd_coord_mapping_.at(core);
+    tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
 
-    this->driver_->read_from_device(mem_ptr, umd_core, addr, size_in_bytes, "LARGE_READ_TLB");
+    this->driver_->read_from_device(mem_ptr, core.chip, core_coord, addr, size_in_bytes, "LARGE_READ_TLB");
 }
 
 void Cluster::read_core(
@@ -593,8 +574,8 @@ void Cluster::write_reg(const std::uint32_t *mem_ptr, tt_cxy_pair target, uint64
     if (tt::llrt::RunTimeOptions::get_instance().get_watcher_enabled()) {
         tt::watcher_sanitize_host_noc_write(soc_desc, this->virtual_worker_cores_.at(chip_id), this->virtual_eth_cores_.at(chip_id), {target.x, target.y}, addr, size_in_bytes);
     }
-    tt_cxy_pair umd_target = this->virtual_to_umd_coord_mapping_.at(target);
-    this->driver_->write_to_device(mem_ptr, size_in_bytes, umd_target, addr, "REG_TLB");
+    tt::umd::CoreCoord target_coord = soc_desc.get_coord_at(target, CoordSystem::TRANSLATED);
+    this->driver_->write_to_device(mem_ptr, size_in_bytes, target.chip, target_coord, addr, "REG_TLB");
     if (this->cluster_desc_->is_chip_remote(chip_id)) {
         this->driver_->wait_for_non_mmio_flush(chip_id);
     }
@@ -608,8 +589,8 @@ void Cluster::read_reg(std::uint32_t *mem_ptr, tt_cxy_pair target, uint64_t addr
     if (tt::llrt::RunTimeOptions::get_instance().get_watcher_enabled()) {
         tt::watcher_sanitize_host_noc_read(soc_desc, this->virtual_worker_cores_.at(chip_id), this->virtual_eth_cores_.at(chip_id), {target.x, target.y}, addr, size_in_bytes);
     }
-    tt_cxy_pair umd_target = this->virtual_to_umd_coord_mapping_.at(target);
-    this->driver_->read_from_device(mem_ptr, umd_target, addr, size_in_bytes, "REG_TLB");
+    tt::umd::CoreCoord target_coord = soc_desc.get_coord_at(target, CoordSystem::TRANSLATED);
+    this->driver_->read_from_device(mem_ptr, target.chip, target_coord, addr, size_in_bytes, "REG_TLB");
 }
 
 void Cluster::write_sysmem(
