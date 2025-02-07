@@ -88,7 +88,7 @@ CPMAddPackage(NAME magic_enum GITHUB_REPOSITORY Neargye/magic_enum GIT_TAG v0.9.
 # fmt : https://github.com/fmtlib/fmt
 ############################################################################################################################
 
-CPMAddPackage(NAME fmt GITHUB_REPOSITORY fmtlib/fmt GIT_TAG 11.0.1 OPTIONS "CMAKE_MESSAGE_LOG_LEVEL NOTICE")
+CPMAddPackage(NAME fmt GITHUB_REPOSITORY fmtlib/fmt GIT_TAG 11.0.1 OPTIONS "CMAKE_MESSAGE_LOG_LEVEL NOTICE" FIND_PACKAGE_ARGUMENTS "GLOBAL")
 
 ############################################################################################################################
 # range-v3 : https://github.com/ericniebler/range-v3
