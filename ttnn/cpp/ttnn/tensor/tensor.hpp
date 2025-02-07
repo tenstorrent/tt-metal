@@ -174,24 +174,24 @@ public:
     template <typename T>
     std::vector<T> to_vector() const;
 
-    Tensor to(
+    Tensor to_device(
         IDevice* target_device,
         const MemoryConfig& mem_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED},
         uint8_t cq_id = ttnn::DefaultQueueId) const;
 
-    Tensor to(
+    Tensor to_device(
         distributed::MeshDevice* mesh_device,
         const MemoryConfig& mem_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED},
         uint8_t cq_id = ttnn::DefaultQueueId) const;
 
-    Tensor to(
+    Tensor to_device(
         const std::vector<IDevice*>& workers,
         const MemoryConfig& mem_config = {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED},
         uint8_t cq_id = ttnn::DefaultQueueId) const;
 
-    Tensor to(Layout target_layout, IDevice* worker = nullptr) const;
+    Tensor to_layout(Layout target_layout, IDevice* worker = nullptr) const;
 
-    Tensor to(Layout target_layout, distributed::MeshDevice* mesh_device) const;
+    Tensor to_layout(Layout target_layout, distributed::MeshDevice* mesh_device) const;
 
     Tensor pad(const ttnn::Shape& output_padded_shape, const ttnn::Shape& input_tensor_start, float pad_value) const;
 

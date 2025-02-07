@@ -106,7 +106,7 @@ void MAIN {
 // pre-add x + y
 #ifdef FUSE_PRE_ADD
     reconfig_data_format_srcb(cb_in0, cb_in1);
-    add_tiles_init();
+    add_tiles_init(cb_in0, cb_in1);
     cb_reserve_back(cb_in, num_tiles_per_block);
     for (uint32_t i = 0; i < block_h; i++) {
         index_subblock_w_offset = 0;
@@ -224,7 +224,7 @@ void MAIN {
 #endif
 
     // (x - E[x])^2, cb_mm2 <-- cb_xmm
-    mul_tiles_init();
+    mul_tiles_init(cb_xmm, cb_xmm);
     index_h_offset = 0;
     cb_reserve_back(cb_xmm2, num_tiles_per_block);
     for (uint32_t i = 0; i < block_h; i++) {
@@ -311,7 +311,7 @@ void MAIN {
                 cb_wait_front(cb_ex2, 1);
                 cb_reserve_back(cb_ex2pe, 1);
                 tile_regs_acquire();
-                add_tiles_init();
+                add_tiles_init(cb_ex2, cb_eps);
                 add_tiles(cb_ex2, cb_eps, i, 0, dst0);
                 tile_regs_wait();
                 // sqrt(Var + eps)

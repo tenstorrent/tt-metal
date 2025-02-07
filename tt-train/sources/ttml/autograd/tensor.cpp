@@ -150,4 +150,12 @@ const std::optional<NodeId>& Tensor::get_node() const {
     return m_node_id;
 }
 
+const ttnn::Shape& Tensor::get_shape() const {
+    return get_value().get_logical_shape();
+}
+
+uint32_t Tensor::get_rank() const {
+    return get_shape().rank();
+}
+
 }  // namespace ttml::autograd

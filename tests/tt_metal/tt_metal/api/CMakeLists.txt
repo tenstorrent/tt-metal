@@ -26,6 +26,7 @@ set(UNIT_TESTS_API_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/test_noc.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_runtime_args.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_semaphores.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_shape_base.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_sharded_l1_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_simple_dram_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_simple_l1_buffer.cpp

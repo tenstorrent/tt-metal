@@ -71,7 +71,7 @@ inline void eltwise_mul_and_add_block_v2(
             cb_push_back(out_cb_id, 1);
             cb_pop_front(eltwise_mul_partials_cb_cb_id, 1);
         } else {
-            add_tiles_init();
+            add_tiles_init(eltwise_mul_partials_cb_cb_id, out_cb_id);
             cb_wait_front(eltwise_mul_partials_cb_cb_id, 1);
             cb_wait_front(out_cb_id, 1);
             ACQ();

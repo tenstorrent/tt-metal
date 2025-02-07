@@ -2,6 +2,46 @@ name: "[internal] metal - Run profiler regression impl"
 
 on:
   workflow_call:
+    inputs:
+      arch:
+        required: true
+        type: string
+      runner-label:
+        required: true
+        type: string
+      timeout:
+        required: false
+        type: number
+        default: 35
+      os:
+        required: false
+        type: string
+        default: "ubuntu-20.04"
+  workflow_dispatch:
+    inputs:
+      arch:
+        required: true
+        type: choice
+        options:
+          - grayskull
+          - wormhole_b0
+          - blackhole
+      runner-label:
+        required: true
+        type: choice
+        options:
+          - E150
+          - N150
+          - N300
+          - BH
+      timeout:
+        required: false
+        type: number
+        default: 35
+      os:
+        required: false
+        type: string
+        default: "ubuntu-20.04"
 
 jobs:
   profiler-regression:
@@ -9,21 +49,14 @@ jobs:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
       fail-fast: false
-      matrix:
-        runner-info: [
-          # E150
-          {arch: grayskull, runs-on: ["cloud-virtual-machine", "E150", "in-service"], name: E150},
-          # N150
-          {arch: wormhole_b0, runs-on: ["cloud-virtual-machine", "N150", "in-service"], name: N150},
-          # N300
-          {arch: wormhole_b0, runs-on: ["cloud-virtual-machine", "N300", "in-service"], name: N300},
-        ]
     env:
-      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
-      ARCH_NAME: ${{ matrix.runner-info.arch }}
+      ARCH_NAME: ${{ inputs.arch }}
       LOGURU_LEVEL: INFO
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
-    runs-on: ${{ matrix.runner-info.runs-on }}
+    runs-on:
+      - ${{ inputs.runner-label }}
+      - cloud-virtual-machine
+      - in-service
     steps:
       - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
       - name: Set up dynamic env vars for build
@@ -36,7 +69,7 @@ jobs:
         run: tar -xvf ttm_any.tar
       - uses: ./.github/actions/install-python-deps
       - name: Run profiler regression tests
-        timeout-minutes: 30
+        timeout-minutes: ${{ inputs.timeout }}
         run: |
           ./tests/scripts/run_profiler_regressions.sh
       - uses: ./.github/actions/slack-report
