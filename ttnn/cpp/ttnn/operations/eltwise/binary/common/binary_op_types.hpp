@@ -24,7 +24,7 @@ enum class BinaryOpType {
     LOGICAL_XOR,
     LDEXP,
     LOGADDEXP2,
-    DIV_FAST,
+    DIV,
     RSUB,
     POWER,
     BITWISE_XOR,
@@ -33,4 +33,5 @@ enum class BinaryOpType {
     LEFT_SHIFT,
     RIGHT_SHIFT
 };
-}
+
+}  // namespace ttnn::operations::binary
