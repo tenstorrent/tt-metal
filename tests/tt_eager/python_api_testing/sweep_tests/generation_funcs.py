@@ -1520,7 +1520,7 @@ def gen_polyval_args(
             yield input_info
 
 
-def gen_arange_args(input_shapes, dtypes, layouts, mem_configs, low=-100, high=100, do_sanitize_args=True):
+def gen_arange_args(input_shapes, dtypes, layouts, mem_configs, low=-100, high=100, do_sanitize_args=True, coregrid=[]):
     for input_info in gen_two_scalar_args(
         input_shapes,
         dtypes,

@@ -20,10 +20,16 @@ def run_reshape_tests(input_shape, dtype, dlayout, in_mem_config, output_mem_con
     try:
         # get ref result
         ref_value = torch.reshape(x, reshape_dims)
-        x = ttnn_ops.setup_ttnn_tensor(x, device, dlayout[0], in_mem_config, dtype[0])
 
-        tt_result = ttnn.reshape(x, reshape_dims)
-        tt_result = ttnn_ops.ttnn_tensor_to_torch(tt_result, output_mem_config)
+        tt_result = ttnn_ops.reshape(
+            x,
+            device=device,
+            dtype=dtype,
+            layout=dlayout,
+            input_mem_config=[in_mem_config],
+            output_mem_config=output_mem_config,
+            reshape_dims=reshape_dims,
+        )
 
     except Exception as e:
         logger.warning(f"Operation execution crashed")
@@ -39,27 +45,36 @@ test_sweep_args = [
         (224, 128),
         [ttnn.bfloat16],
         [ttnn.TILE_LAYOUT],
-        (ttnn.DRAM_MEMORY_CONFIG),
+        (None),
         (ttnn.DRAM_MEMORY_CONFIG),
         (448, 64),
-        11871267,
+        14748599,
     ),
     (
-        (10, 192, 64),
-        [ttnn.bfloat16],
+        (224, 128),
+        [ttnn.bfloat8_b],
         [ttnn.TILE_LAYOUT],
+        (None),
         (ttnn.DRAM_MEMORY_CONFIG),
-        (ttnn.DRAM_MEMORY_CONFIG),
-        (4, 192, 160),
-        14337480,
+        (448, 64),
+        14748599,
     ),
     (
-        (6, 4, 224, 64),
+        (12, 32, 160),
         [ttnn.bfloat16],
         [ttnn.TILE_LAYOUT],
+        (None),
         (ttnn.DRAM_MEMORY_CONFIG),
+        (1, 192, 320),
+        14748599,
+    ),
+    (
+        (4, 12, 64, 224),
+        [ttnn.bfloat16],
+        [ttnn.TILE_LAYOUT],
+        (None),
         (ttnn.DRAM_MEMORY_CONFIG),
-        (24, 2, 32, 224),
+        (6, 8, 224, 64),
         14748599,
     ),
 ]

@@ -8,6 +8,7 @@ from functools import partial
 import torch
 import random
 import ttnn
+import json
 from tests.sweep_framework.sweep_utils.utils import gen_shapes
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
@@ -25,14 +26,10 @@ random.seed(0)
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
     "nightly": {
-        "input_shape": gen_shapes([1, 1, 1, 1], [6, 12, 256, 256], [1, 1, 1, 1], 8)
-        + gen_shapes([1, 1, 1], [12, 256, 256], [1, 1, 1], 8)
-        + gen_shapes([1, 1], [256, 256], [1, 1], 8),
-        "reduction": [
-            ["none", ttnn.LossReductionMode.NONE],
-            ["mean", ttnn.LossReductionMode.MEAN],
-            ["sum", ttnn.LossReductionMode.SUM],
-        ],
+        "input_shape": gen_shapes([1, 1, 1, 1], [6, 12, 256, 256], [1, 1, 1, 1], 4)
+        + gen_shapes([1, 1, 1], [12, 256, 256], [1, 1, 1], 4)
+        + gen_shapes([1, 1], [256, 256], [1, 1], 4),
+        "reduction": ["__none", "__mean", "__sum"],
         "input_reference_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_reference_layout": [ttnn.TILE_LAYOUT],
         "input_reference_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
@@ -72,12 +69,23 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_prediction_dtype
     )(input_shape)
 
+    reduction_0 = "none"
+    reduction_1 = ttnn.LossReductionMode.NONE
+
+    if reduction == "__mean":
+        reduction_0 = "mean"
+        reduction_1 = ttnn.LossReductionMode.MEAN
+
+    if reduction == "__sum":
+        reduction_0 = "sum"
+        reduction_1 = ttnn.LossReductionMode.SUM
+
     golden_function = ttnn.get_golden_function(ttnn.mse_loss)
 
     torch_output_tensor = golden_function(
         torch_input_reference_tensor.to(torch.float32),
         torch_input_prediction_tensor.to(torch.float32),
-        reduction=reduction[0],
+        reduction=reduction_0,
     )
 
     input_reference_tensor = ttnn.from_torch(
@@ -100,16 +108,13 @@ def run(
     result = ttnn.mse_loss(
         input_reference_tensor,
         input_prediction_tensor,
-        reduction=reduction[1],
+        reduction=reduction_1,
         output_tensor=None,
         memory_config=output_memory_config,
     )
 
     output_tensor = ttnn.to_torch(result)
-    if reduction[0] != "none":
-        output_tensor = output_tensor[0, 0, 0, 0]
     e2e_perf = stop_measuring_time(start_time)
 
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
-    # print(f"pcc {pcc} input_shape {input_shape} reduction {reduction[0]} {input_reference_dtype} {input_prediction_dtype}")
     return [pcc, e2e_perf]
