@@ -177,7 +177,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libcapstone-dev \
     pybind11-dev \
     libgtest-dev \
-    libboost-all-dev \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
 ENV CCACHE_TEMPDIR=/tmp/ccache
