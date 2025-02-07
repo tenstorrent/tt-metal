@@ -118,21 +118,12 @@ jobs:
         with:
           name: release-notes
           path: RELEASE_NOTES.txt
-  build-wheels:
-    needs: create-tag
-    strategy:
-      matrix:
-        os: [ubuntu-20.04]
-    uses: ./.github/workflows/_build-wheels-impl.yaml
-    with:
-      os: ${{ matrix.os }}
-      from-precompiled: false
   # Candidate for breaking up
   create-and-upload-draft-release:
     needs: [
       create-tag,
       create-release-notes,
-      build-wheels,
+      build-artifact,
     ]
     strategy:
       matrix:
@@ -186,12 +177,14 @@ jobs:
           fail_on_unmatched_files: true
   create-docker-release-image:
     needs: [
+      build-artifact,
       create-tag,
       create-and-upload-draft-release
     ]
     uses: ./.github/workflows/publish-release-image.yaml
     secrets: inherit
     with:
+      base-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
       version: ${{ needs.create-tag.outputs.version }}
       is_major_version:  ${{ needs.get-params.outputs.is-release-candidate !='true' && needs.get-params.outputs.should-create-release == 'true' }}
   release-docs:

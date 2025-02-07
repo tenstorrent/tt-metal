@@ -30,7 +30,7 @@ void MAIN {
     const uint32_t Wt = get_arg_val<uint32_t>(2);
     const uint32_t ndst = get_arg_val<uint32_t>(3);
     const uint32_t start_ht = get_arg_val<uint32_t>(4);
-    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_2);
+    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_16);
 
     constexpr uint32_t onetile = 1;
     // reserve one tile for zeros on cb_in2

@@ -118,7 +118,10 @@ struct PacketHeader {
     CommandType command_type : 2;
     ChipSendType chip_send_type : 1;
     NocSendType noc_send_type : 1;
-    uint8_t reserved : 4;
+    // Used only by the EDM sender and receiver channels. Populated by EDM sender channel to
+    // indicate to the receiver channel what channel was the source of this packet. Reserved
+    // otherwise.
+    uint8_t src_ch_id : 4;
 
     RoutingFields routing_fields;
     uint16_t reserved2; // can be tagged with src device for debug
@@ -261,6 +264,7 @@ struct PacketHeader {
 
         return this;
     }
+    inline void set_src_ch_id(uint8_t ch_id) volatile { this->src_ch_id = ch_id; }
 };
 
 

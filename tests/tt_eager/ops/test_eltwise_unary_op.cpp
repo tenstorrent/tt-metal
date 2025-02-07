@@ -57,42 +57,42 @@ Tensor host_function(const Tensor& input_tensor) {
 
 template <ttnn::operations::unary::UnaryOpType unary_op_type, typename... Args>
 bool run_test(IDevice* device, const ttnn::Shape& shape, float low, float high, Args... args) {
-    auto input_tensor = ttnn::random::uniform(bfloat16(low), bfloat16(high), shape).to(Layout::TILE);
+    auto input_tensor = ttnn::random::uniform(bfloat16(low), bfloat16(high), shape).to_layout(Layout::TILE);
 
     using ttnn::operations::unary::UnaryOpType;
     using ttnn::operations::unary::UnaryWithParam;
 
     if constexpr (unary_op_type == UnaryOpType::SQRT) {
         auto host_output = host_function<::detail::sqrt>(input_tensor);
-        auto device_output = ttnn::sqrt(input_tensor.to(device)).cpu();
+        auto device_output = ttnn::sqrt(input_tensor.to_device(device)).cpu();
         return ttnn::allclose<bfloat16>(host_output, device_output, args...);
     } else if constexpr (unary_op_type == UnaryOpType::EXP) {
         auto host_output = host_function<::detail::exp>(input_tensor);
-        auto device_output = ttnn::exp(input_tensor.to(device)).cpu();
+        auto device_output = ttnn::exp(input_tensor.to_device(device)).cpu();
         return ttnn::allclose<bfloat16>(host_output, device_output, args...);
     } else if constexpr (unary_op_type == UnaryOpType::RECIP) {
         auto host_output = host_function<::detail::recip>(input_tensor);
-        auto device_output = ttnn::reciprocal(input_tensor.to(device)).cpu();
+        auto device_output = ttnn::reciprocal(input_tensor.to_device(device)).cpu();
         return ttnn::allclose<bfloat16>(host_output, device_output, args...);
     } else if constexpr (unary_op_type == UnaryOpType::GELU) {
         auto host_output = host_function<::detail::gelu>(input_tensor);
-        auto device_output = ttnn::gelu(input_tensor.to(device)).cpu();
+        auto device_output = ttnn::gelu(input_tensor.to_device(device)).cpu();
         return ttnn::allclose<bfloat16>(host_output, device_output, args...);
     } else if constexpr (unary_op_type == UnaryOpType::RELU) {
         auto host_output = host_function<::detail::relu>(input_tensor);
-        auto device_output = ttnn::relu(input_tensor.to(device)).cpu();
+        auto device_output = ttnn::relu(input_tensor.to_device(device)).cpu();
         return ttnn::allclose<bfloat16>(host_output, device_output, args...);
     } else if constexpr (unary_op_type == UnaryOpType::SIGMOID) {
         auto host_output = host_function<::detail::sigmoid>(input_tensor);
-        auto device_output = ttnn::sigmoid(input_tensor.to(device)).cpu();
+        auto device_output = ttnn::sigmoid(input_tensor.to_device(device)).cpu();
         return ttnn::allclose<bfloat16>(host_output, device_output, args...);
     } else if constexpr (unary_op_type == UnaryOpType::LOG) {
         auto host_output = host_function<::detail::log>(input_tensor);
-        auto device_output = ttnn::log(input_tensor.to(device)).cpu();
+        auto device_output = ttnn::log(input_tensor.to_device(device)).cpu();
         return ttnn::allclose<bfloat16>(host_output, device_output, args...);
     } else if constexpr (unary_op_type == UnaryOpType::TANH) {
         auto host_output = host_function<::detail::tanh>(input_tensor);
-        auto device_output = ttnn::tanh(input_tensor.to(device)).cpu();
+        auto device_output = ttnn::tanh(input_tensor.to_device(device)).cpu();
         return ttnn::allclose<bfloat16>(host_output, device_output, args...);
     }
     TT_ASSERT(false, "Unsupported function");
@@ -110,7 +110,8 @@ void test_operation_infrastructure() {
     auto device = tt::tt_metal::CreateDevice(device_id);
 
     auto shape = ttnn::Shape({1, 1, TILE_HEIGHT, TILE_WIDTH});
-    auto input_tensor = ttnn::random::uniform(bfloat16(0), bfloat16(1), shape).to(Layout::TILE).to(device);
+    auto input_tensor =
+        ttnn::random::uniform(bfloat16(0), bfloat16(1), shape).to_layout(Layout::TILE).to_device(device);
 
     ttnn::operations::unary::operation_attributes_t op_args{
         {UnaryWithParam{UnaryOpType::SQRT}},
@@ -142,8 +143,8 @@ void test_shape_padding() {
 
     auto padded_input_tensor = ttnn::pad(input_tensor, padded_input_shape, tt::tt_metal::Array4D({0, 0, 0, 0}), 0);
 
-    padded_input_tensor = padded_input_tensor.to(Layout::TILE);
-    padded_input_tensor = padded_input_tensor.to(device);
+    padded_input_tensor = padded_input_tensor.to_layout(Layout::TILE);
+    padded_input_tensor = padded_input_tensor.to_device(device);
     auto output_tensor = ttnn::sqrt(padded_input_tensor);
     output_tensor = output_tensor.cpu();
 
@@ -250,8 +251,8 @@ void test_program_cache() {
 
         // Allocate a tensor to show that the addresses aren't cached
         auto input_tensor = ttnn::random::uniform(bfloat16(0.0f), bfloat16(0.0f), ttnn::Shape({1, 1, 32, 32}))
-                                .to(Layout::TILE)
-                                .to(device);
+                                .to_layout(Layout::TILE)
+                                .to_device(device);
 
         // Program Cache Hit
         run_test<UnaryOpType::EXP>(device, ttnn::Shape({1, 1, TILE_HEIGHT, TILE_WIDTH}), 0.0f, 1.0f, 1e-1f, 1e-5f);

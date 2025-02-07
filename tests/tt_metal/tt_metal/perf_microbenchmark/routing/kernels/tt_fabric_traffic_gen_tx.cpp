@@ -17,7 +17,6 @@ using namespace tt::tt_fabric;
 uint32_t src_endpoint_id;
 // constexpr uint32_t src_endpoint_id = get_compile_time_arg_val(0);
 constexpr uint32_t num_dest_endpoints = get_compile_time_arg_val(1);
-static_assert(is_power_of_2(num_dest_endpoints), "num_dest_endpoints must be a power of 2");
 constexpr uint32_t dest_endpoint_start_id = get_compile_time_arg_val(2);
 
 constexpr uint32_t data_buffer_start_addr = get_compile_time_arg_val(3);
@@ -61,6 +60,12 @@ constexpr uint32_t client_interface_addr = get_compile_time_arg_val(20);
 
 constexpr bool fixed_async_wr_notif_addr = get_compile_time_arg_val(22);
 
+constexpr bool mcast_data = get_compile_time_arg_val(23);
+constexpr uint32_t e_depth = get_compile_time_arg_val(24);
+constexpr uint32_t w_depth = get_compile_time_arg_val(25);
+constexpr uint32_t n_depth = get_compile_time_arg_val(26);
+constexpr uint32_t s_depth = get_compile_time_arg_val(27);
+
 uint32_t max_packet_size_mask;
 
 auto input_queue_state = select_input_queue<pkt_dest_size_choice>();
@@ -83,10 +88,27 @@ uint32_t rx_addr_hi;
 uint32_t gk_interface_addr_l;
 uint32_t gk_interface_addr_h;
 
+uint32_t controller_noc_offset;
+
 // flag to check if need to zero out notification addr
 bool reset_notif_addr = true;
 
 uint32_t time_seed;
+
+inline void notify_traffic_controller() {
+    // send semaphore increment to traffic controller kernel on this device.
+    uint64_t dest_addr = get_noc_addr_helper(controller_noc_offset, signal_address);
+    noc_fast_atomic_increment<DM_DYNAMIC_NOC>(
+        noc_index,
+        NCRISC_AT_CMD_BUF,
+        dest_addr,
+        NOC_UNICAST_WRITE_VC,
+        1,
+        31,
+        false,
+        false,
+        MEM_NOC_ATOMIC_RET_VAL_ADDR);
+}
 
 // generates packets with random size and payload on the input sideß
 inline bool test_buffer_handler_async_wr() {
@@ -128,7 +150,7 @@ inline bool test_buffer_handler_async_wr() {
                 target_address = base_target_address;
             }
 
-            packet_header.routing.flags = FORWARD;
+            packet_header.routing.flags = FORWARD | (mcast_data ? MCAST_DATA : 0);
             packet_header.routing.packet_size_bytes = input_queue_state.curr_packet_size_words * PACKET_WORD_SIZE_BYTES;
             packet_header.routing.dst_mesh_id = dest_device >> 16;
             packet_header.routing.dst_dev_id = dest_device & 0xFFFF;
@@ -147,6 +169,12 @@ inline bool test_buffer_handler_async_wr() {
             packet_header.session.target_offset_l = target_address;
             packet_header.session.target_offset_h = noc_offset;
             target_address += packet_header.routing.packet_size_bytes - PACKET_HEADER_SIZE_BYTES;
+            if constexpr (mcast_data) {
+                packet_header.packet_parameters.mcast_parameters.east = e_depth;
+                packet_header.packet_parameters.mcast_parameters.west = w_depth;
+                packet_header.packet_parameters.mcast_parameters.north = n_depth;
+                packet_header.packet_parameters.mcast_parameters.south = s_depth;
+            }
             tt_fabric_add_header_checksum(&packet_header);
             uint32_t words_left = words_to_init - words_initialized;
             bool split_header = words_left < PACKET_HEADER_SIZE_WORDS;
@@ -363,6 +391,7 @@ void kernel_main() {
     time_seed = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     src_endpoint_id = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     noc_offset = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
+    controller_noc_offset = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     uint32_t router_x = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     uint32_t router_y = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     dest_device = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
@@ -405,7 +434,7 @@ void kernel_main() {
         input_queue_state.init(src_endpoint_id, prng_seed);
     }
 
-    test_producer.init(data_buffer_start_addr, data_buffer_size_words, 0x0);
+    test_producer.init(data_buffer_start_addr, data_buffer_size_words);
     fvcc_test_producer.init(data_buffer_start_addr, 0x0, 0x0);
 
     uint32_t temp = max_packet_size_words;
@@ -421,9 +450,13 @@ void kernel_main() {
         max_packet_size_mask = (max_packet_size_mask << 1) + 1;
     }
 
-    // wait till test sends start signal. This is set by test
-    // once tt_fabric kernels have been launched on all the test devices.
-    while (*(tt_l1_ptr volatile uint32_t*)signal_address == 0);
+    // notify the controller kernel that this worker is ready to proceed
+    notify_traffic_controller();
+
+    // wait till controllrer sends start signal. This is set by controller
+    // once tt_fabric kernels have been launched on all the test devices and
+    // all the tx workers are ready on this chip
+    while (*(volatile tt_l1_ptr uint32_t*)signal_address == 0);
 
     test_results[PQ_TEST_MISC_INDEX] = 0xff000001;
 
