@@ -44,7 +44,7 @@ jobs:
     with:
       build-wheel: true
   test:
-    needs: build-artifact
+    needs: build
     strategy:
       fail-fast: false
       matrix:
