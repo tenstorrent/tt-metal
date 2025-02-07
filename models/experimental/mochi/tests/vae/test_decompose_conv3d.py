@@ -5,6 +5,7 @@ import ttnn
 import pytest
 from loguru import logger
 from models.experimental.mochi.common import compute_metrics
+import math
 
 
 def conv3d_memory_and_flops(
@@ -81,30 +82,6 @@ def conv3d_memory_and_flops(
     flops = output_elements * macs_per_output * 2
 
     return input_memory, kernel_memory, flops
-
-
-if __name__ == "__main__":
-    # Example usage:
-    b = 2
-    ic = 16
-    id_ = 32
-    ih = 64
-    iw = 64
-    oc = 32
-    ksize = (3, 3, 3)
-    stride = 2
-    padding = 1
-    dilation = 1
-    groups = 1
-    bias = True
-
-    inp_mem, ker_mem, total_flops = conv3d_memory_and_flops(
-        b, ic, id_, ih, iw, oc, ksize, stride, padding, dilation, groups, bias
-    )
-
-    print("Input Memory (elements):", inp_mem)
-    print("Kernel Memory (elements):", ker_mem)
-    print("FLOPs:", total_flops)
 
 
 def decomposed_conv3d_torch(input, conv3d_module):
@@ -359,17 +336,19 @@ def decomposed_conv3d_tt(device, input, conv3d_module):
     ],
     ids=["variant0", "variant1", "variant2", "variant3", "variant4"],
 )
+@pytest.mark.parametrize("parallel_factor", [8])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_decomposed_conv3d_tt(
-    device, input_shape, out_channels, kernel_size, stride, padding, padding_mode, use_program_cache
+    device, input_shape, out_channels, kernel_size, stride, padding, padding_mode, use_program_cache, parallel_factor
 ):
     device.enable_async(True)
     # Set a manual seed for reproducibility.
     torch.manual_seed(42)
     required_pcc = 0.98  # TODO: tighten up
-
     # Define input dimensions.
     N, C, D, H, W = input_shape
+    D = math.ceil(D / parallel_factor)
+    input_shape = (N, C, D, H, W)
 
     input_datums, kernel_datums, conv_flops = conv3d_memory_and_flops(
         *input_shape, out_channels, kernel_size, stride, padding
@@ -393,7 +372,6 @@ def test_decomposed_conv3d_tt(
     chip_flops = 4096 // 2 * 64 * 1e9 / 1e12  # HiFi2 TFlops
     print(f"Memory-bound time: {(input_memory + kernel_memory) / 1e9 / mem_bw} seconds")
     print(f"FLOPS-bound time: {conv_flops / 1e12 / chip_flops} seconds")
-    return
 
     # Create a random input tensor.
     input_tensor = torch.randn(N, C, D, H, W, dtype=torch.float32)
