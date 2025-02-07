@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -30,14 +30,10 @@ ttnn.buffer_address = buffer_address
 def run_yolov8x_inference(
     device,
     device_batch_size,
-    act_dtype,
-    weight_dtype,
 ):
     test_infra = create_test_infra(
         device,
         device_batch_size,
-        act_dtype,
-        weight_dtype,
     )
 
     tt_inputs_host, input_mem_config = test_infra.setup_l1_sharded_input(device)
@@ -69,20 +65,16 @@ def run_yolov8x_inference(
 def run_yolov8x_trace_inference(
     device,
     device_batch_size,
-    act_dtype,
-    weight_dtype,
 ):
     test_infra = create_test_infra(
         device=device,
         batch_size=device_batch_size,
-        act_dtype=act_dtype,
-        weight_dtype=weight_dtype,
     )
     tt_inputs_host, input_mem_config = test_infra.setup_l1_sharded_input(device)
 
     # First run configures convs JIT
     test_infra.input_tensor = tt_inputs_host.to(device, input_mem_config)
-
+    print("test_infra.input_tensor", test_infra.input_tensor)
     spec = test_infra.input_tensor.spec
     test_infra.run()
     test_infra.validate()
@@ -95,6 +87,7 @@ def run_yolov8x_trace_inference(
 
     # Capture
     test_infra.input_tensor = tt_inputs_host.to(device, input_mem_config)
+
     test_infra.dealloc_output()
     trace_input_addr = ttnn.buffer_address(test_infra.input_tensor)
     tid = ttnn.begin_trace_capture(device, cq_id=0)
@@ -119,16 +112,10 @@ def run_yolov8x_trace_inference(
 def run_yolov8x_trace_2cqs_inference(
     device,
     device_batch_size,
-    act_dtype,
-    weight_dtype,
-    model_location_generator=None,
 ):
     test_infra = create_test_infra(
         device,
         device_batch_size,
-        act_dtype,
-        weight_dtype,
-        # model_location_generator=model_location_generator,
     )
     tt_inputs_host, sharded_mem_config_DRAM, input_mem_config = test_infra.setup_dram_sharded_input(device)
     tt_image_res = tt_inputs_host.to(device, sharded_mem_config_DRAM)
@@ -192,58 +179,3 @@ def run_yolov8x_trace_2cqs_inference(
         signpost(header="stop")
 
     ttnn.release_trace(device, tid)
-
-
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768, "trace_region_size": 800768}], indirect=True)
-@pytest.mark.parametrize("device_batch_size, act_dtype, weight_dtype", [(1, ttnn.bfloat16, ttnn.bfloat8_b)])
-def test_run_yolov8x_trace_inference(
-    device,
-    device_batch_size,
-    act_dtype,
-    weight_dtype,
-):
-    run_yolov8x_trace_inference(
-        device,
-        device_batch_size,
-        act_dtype,
-        weight_dtype,
-    )
-
-
-@pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 24576, "trace_region_size": 3686400, "num_command_queues": 2}], indirect=True
-)
-@pytest.mark.parametrize(
-    "device_batch_size, act_dtype, weight_dtype",
-    ((1, ttnn.bfloat16, ttnn.bfloat16),),
-)
-@pytest.mark.parametrize("enable_async_mode", (False, True), indirect=True)
-def test_run_yolov8x_trace_2cqs_inference(
-    device,
-    device_batch_size,
-    act_dtype,
-    weight_dtype,
-    enable_async_mode,
-):
-    run_yolov8x_trace_2cqs_inference(
-        device=device,
-        device_batch_size=device_batch_size,
-        act_dtype=act_dtype,
-        weight_dtype=weight_dtype,
-    )
-
-
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
-@pytest.mark.parametrize("device_batch_size, act_dtype, weight_dtype", [(1, ttnn.bfloat16, ttnn.bfloat8_b)])
-def test_run_yolov8x_inference(
-    device,
-    device_batch_size,
-    act_dtype,
-    weight_dtype,
-):
-    run_yolov8x_inference(
-        device,
-        device_batch_size,
-        act_dtype,
-        weight_dtype,
-    )

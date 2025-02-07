@@ -9,7 +9,7 @@ import torch.nn as nn
 from loguru import logger
 from functools import partial
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.experimental.functional_yolov8x.tt.ttnn_yolov8x import YOLOv8x
+from models.experimental.functional_yolov8x.tt.class_ttnn_yolov8x import YOLOv8xModel
 from models.experimental.functional_yolov8x.reference import yolov8x_utils
 from models.experimental.functional_yolov8x.tt.ttnn_yolov8x_utils import custom_preprocessor
 
@@ -69,7 +69,7 @@ def load_torch_model():
 def load_ttnn_model(device, torch_model):
     state_dict = torch_model.state_dict()
     parameters = custom_preprocessor(device, state_dict)
-    ttnn_model = partial(YOLOv8x, device=device, parameters=parameters)
+    ttnn_model = YOLOv8xModel(device=device, parameters=parameters)
     return ttnn_model
 
 
@@ -78,8 +78,6 @@ class Yolov8TestInfra:
         self,
         device,
         batch_size,
-        act_dtype,
-        weight_dtype,
         model_location_generator=None,
     ):
         super().__init__()
@@ -88,20 +86,18 @@ class Yolov8TestInfra:
         self.pcc_message = "Did you forget to call validate()?"
         self.device = device
         self.batch_size = batch_size
-        self.act_dtype = act_dtype
-        self.weight_dtype = weight_dtype
         self.model_location_generator = model_location_generator
         torch_model = load_torch_model()
         self.ttnn_yolov8_model = load_ttnn_model(device=self.device, torch_model=torch_model)
         input_shape = (1, 640, 640, 3)
         torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
-        self.tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+        self.tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
         self.torch_input_tensor = torch_input_tensor.permute(0, 3, 1, 2)
         self.torch_output_tensor = torch_model(self.torch_input_tensor)
 
     def run(self):
         # input_tensor = ttnn.to_device(self.input_tensor, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
-        self.output_tensor = self.ttnn_yolov8_model(device=self.device, x=self.input_tensor)
+        self.output_tensor = self.ttnn_yolov8_model(self.input_tensor)
 
     def setup_l1_sharded_input(self, device, torch_input_tensor=None):
         if is_wormhole_b0():
@@ -155,9 +151,7 @@ class Yolov8TestInfra:
         valid_pcc = 0.978
         self.pcc_passed, self.pcc_message = assert_with_pcc(self.torch_output_tensor[0], output_tensor, pcc=valid_pcc)
 
-        logger.info(
-            f"Yolov8x batch_size={self.batch_size}, act_dtype={self.act_dtype}, weight_dtype={self.weight_dtype}, PCC={self.pcc_message}"
-        )
+        logger.info(f"Yolov8x batch_size={self.batch_size}, PCC={self.pcc_message}")
 
     def dealloc_output(self):
         ttnn.deallocate(self.output_tensor[0])
@@ -166,12 +160,8 @@ class Yolov8TestInfra:
 def create_test_infra(
     device,
     batch_size,
-    act_dtype,
-    weight_dtype,
 ):
     return Yolov8TestInfra(
         device,
         batch_size,
-        act_dtype,
-        weight_dtype,
     )
