@@ -101,6 +101,7 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
     const auto& pad_config = std::get<0>(kernel_config);
     const auto& local_config = std::get<1>(kernel_config);
     const auto& remote_config = std::get<2>(kernel_config);
+    const auto& remote_ref_counts = std::get<3>(kernel_config);
 
     auto pad_config_tensor =
         sliding_window::construct_on_host_config_tensor(pad_config, this->config_, this->parallel_config_);
