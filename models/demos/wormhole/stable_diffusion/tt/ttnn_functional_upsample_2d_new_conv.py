@@ -12,10 +12,10 @@ from models.utility_functions import (
 
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_upsample_nearest_2d import upsample_nearest2d
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
-    run_ttnn_conv_with_pre_and_post_tensor_formatting,
     conv_cache,
 )
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
+    get_default_compute_config,
     permute_conv_parameters,
 )
 from loguru import logger
@@ -97,13 +97,7 @@ class upsample2d:
             transpose_shards=False,
             reshard_if_not_optimal=False,  # Reshard has error : 1616 Bytes unique+common runtime args targeting kernel reshard_reader on (x=0,y=0) are too large. Cannot be written as they will run into memory region reserved for result. Max allowable size is 1024 Bytes
         )
-        compute_config = ttnn.init_device_compute_kernel_config(
-            self.device.arch(),
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=True,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=False,
-        )
+        compute_config = get_default_compute_config(self.device)
         if self.conv_config_override and "act_block_h" in self.conv_config_override:
             conv_config.act_block_h_override = self.conv_config_override["act_block_h"]
 
