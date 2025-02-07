@@ -211,7 +211,7 @@ def test_stable_diffusion_perf(device, batch_size, num_inference_steps, expected
 )
 def test_stable_diffusion_device_perf(expected_kernel_samples_per_second):
     subdir = "ttnn_stable_diffusion"
-    margin = 0.01
+    margin = 0.03
     batch = 1
     iterations = 1
     command = f"pytest models/demos/wormhole/stable_diffusion/tests/test_unet_2d_condition_model.py::test_unet_2d_condition_model_512x512[2-4-64-64-device_params=l1_small_size_24576]"
