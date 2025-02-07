@@ -14,7 +14,7 @@ namespace tt::tt_metal {
 
 bool Shape::operator==(const Shape& other) const = default;
 
-bool Shape::operator==(const ttsl::SmallVector<uint32_t>& other) const { return this->value_ == other; }
+bool Shape::operator==(const tt::stl::SmallVector<uint32_t>& other) const { return this->value_ == other; }
 
 size_t Shape::rank() const { return this->size(); }
 
@@ -30,7 +30,7 @@ std::array<uint32_t, 4> Shape::to_array_4D() const {
 }
 
 Shape Shape::to_rank(size_t new_rank) const {
-    ttsl::SmallVector<uint32_t> new_shape(new_rank, 1);
+    tt::stl::SmallVector<uint32_t> new_shape(new_rank, 1);
 
     int cur_idx = static_cast<int>(rank()) - 1;
     int new_idx = static_cast<int>(new_rank) - 1;

@@ -15,7 +15,8 @@ target_link_libraries(
         umd::device
         magic_enum
         fmt::fmt-header-only
-        boost
+        span
+        small_vector
         TracyClient
         nlohmann_json::nlohmann_json
         TT::Metalium::HostDevCommon

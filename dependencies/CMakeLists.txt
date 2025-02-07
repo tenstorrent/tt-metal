@@ -22,13 +22,11 @@ CPMAddPackage(
         "BOOST_INCLUDE_LIBRARIES core\\\;container\\\;smart_ptr\\\;interprocess"
 )
 
-add_library(boost INTERFACE)
-target_link_libraries(
-    boost
-    INTERFACE
-        Boost::core
-        Boost::container
-)
+add_library(span INTERFACE)
+target_link_libraries(span INTERFACE Boost::core)
+
+add_library(small_vector INTERFACE)
+target_link_libraries(small_vector INTERFACE Boost::container)
 
 ############################################################################################################################
 # yaml-cpp

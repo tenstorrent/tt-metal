@@ -4,15 +4,24 @@
 
 #pragma once
 
+#include <pybind11/operators.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
-
+#include <tt-metalium/small_vector.hpp>
 #include <type_traits>
 
 #include "ttnn/decorators.hpp"
 #include "ttnn/types.hpp"
 
 namespace py = pybind11;
+
+namespace PYBIND11_NAMESPACE {
+namespace detail {
+template <typename T, size_t PREALLOCATED_SIZE>
+struct type_caster<ttnn::SmallVector<T, PREALLOCATED_SIZE>> : list_caster<ttnn::SmallVector<T, PREALLOCATED_SIZE>, T> {
+};
+}  // namespace detail
+}  // namespace PYBIND11_NAMESPACE
 
 namespace ttnn {
 namespace decorators {

@@ -17,14 +17,6 @@
 
 namespace py = pybind11;
 
-namespace PYBIND11_NAMESPACE {
-namespace detail {
-template <typename T, size_t PREALLOCATED_SIZE>
-struct type_caster<ttnn::SmallVector<T, PREALLOCATED_SIZE>> : list_caster<ttnn::SmallVector<T, PREALLOCATED_SIZE>, T> {
-};
-}  // namespace detail
-}  // namespace PYBIND11_NAMESPACE
-
 namespace ttnn {
 namespace types {
 

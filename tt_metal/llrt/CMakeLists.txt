@@ -106,7 +106,7 @@ target_link_libraries(
         nlohmann_json::nlohmann_json
         Reflect::Reflect
         magic_enum
-        boost
+        span
         common
 )
 target_include_directories(llrt PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

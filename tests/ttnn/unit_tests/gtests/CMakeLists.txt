@@ -30,7 +30,6 @@ set(TTNN_TENSOR_UNIT_TESTS_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_distributed_tensor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_mesh_tensor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_partition.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_shape_base.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_tensor_sharding.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_vector_conversion.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_xtensor_conversion.cpp

@@ -8,7 +8,7 @@
 
 #include "reflection.hpp"
 
-namespace ttsl {
+namespace tt::stl {
 
 static constexpr size_t SMALL_VECTOR_SIZE = 8;
 
@@ -31,16 +31,16 @@ std::ostream& operator<<(std::ostream& os, const SmallVector<T, PREALLOCATED_SIZ
     return os;
 }
 
-}  // namespace ttsl
+}  // namespace tt::stl
 
 // TODO: remove this.
 namespace ttnn {
-using ttsl::SmallVector;
+using tt::stl::SmallVector;
 }
 
 template <typename T, size_t PREALLOCATED_SIZE>
-struct std::hash<ttsl::SmallVector<T, PREALLOCATED_SIZE>> {
-    size_t operator()(const ttsl::SmallVector<T, PREALLOCATED_SIZE>& vec) const noexcept {
+struct std::hash<tt::stl::SmallVector<T, PREALLOCATED_SIZE>> {
+    size_t operator()(const tt::stl::SmallVector<T, PREALLOCATED_SIZE>& vec) const noexcept {
         size_t hash = 0;
         for (const auto& element : vec) {
             hash = tt::stl::hash::detail::hash_objects(hash, element);
@@ -50,10 +50,10 @@ struct std::hash<ttsl::SmallVector<T, PREALLOCATED_SIZE>> {
 };
 
 template <typename T, size_t PREALLOCATED_SIZE>
-struct fmt::formatter<ttsl::SmallVector<T, PREALLOCATED_SIZE>> {
+struct fmt::formatter<tt::stl::SmallVector<T, PREALLOCATED_SIZE>> {
     constexpr auto parse(format_parse_context& ctx) -> format_parse_context::iterator { return ctx.end(); }
 
-    auto format(const ttsl::SmallVector<T, PREALLOCATED_SIZE>& vector, format_context& ctx) const
+    auto format(const tt::stl::SmallVector<T, PREALLOCATED_SIZE>& vector, format_context& ctx) const
         -> format_context::iterator {
         std::stringstream ss;
         ss << vector;
