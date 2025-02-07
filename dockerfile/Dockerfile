@@ -38,6 +38,90 @@ RUN mkdir -p /tmp/fmt \
     && make -C /tmp/fmt/build install \
     && rm -rf /tmp/fmt
 
+ARG YAML_VERSION=0.8.0
+RUN mkdir -p /tmp/yaml \
+    && wget -O /tmp/yaml/yaml-${YAML_VERSION}.tar.gz "https://github.com/jbeder/yaml-cpp/archive/refs/tags/${YAML_VERSION}.tar.gz" \
+    && tar -xzf /tmp/yaml/yaml-${YAML_VERSION}.tar.gz -C /tmp/yaml --strip-components=1 \
+    && cmake \
+         -S /tmp/yaml \
+         -B /tmp/yaml/build \
+         -DCMAKE_BUILD_TYPE=Release \
+         -DYAML_CPP_BUILD_TESTS=OFF \
+         -DYAML_CPP_BUILD_TOOLS=OFF \
+         -DYAML_BUILD_SHARED_LIBS=OFF \
+    && make -C /tmp/yaml/build -j$(nproc) \
+    && make -C /tmp/yaml/build install \
+    && rm -rf /tmp/yaml
+
+ARG JSON_VERSION=3.11.3
+RUN mkdir -p /tmp/json \
+    && wget -O /tmp/json/json-${JSON_VERSION}.tar.gz "https://github.com/nlohmann/json/archive/refs/tags/v${JSON_VERSION}.tar.gz" \
+    && tar -xzf /tmp/json/json-${JSON_VERSION}.tar.gz -C /tmp/json --strip-components=1 \
+    && cmake \
+         -S /tmp/json \
+         -B /tmp/json/build \
+         -DCMAKE_BUILD_TYPE=Release \
+         -DJSON_BuildTests=OFF \
+    && make -C /tmp/json/build -j$(nproc) \
+    && make -C /tmp/json/build install \
+    && rm -rf /tmp/json
+
+ARG MAGIC_ENUM_VERSION=0.9.7
+RUN mkdir -p /tmp/magic_enum \
+    && wget -O /tmp/magic_enum/magic_enum-${MAGIC_ENUM_VERSION}.tar.gz "https://github.com/Neargye/magic_enum/archive/refs/tags/v${MAGIC_ENUM_VERSION}.tar.gz" \
+    && tar -xzf /tmp/magic_enum/magic_enum-${MAGIC_ENUM_VERSION}.tar.gz -C /tmp/magic_enum --strip-components=1 \
+    && cmake \
+         -S /tmp/magic_enum \
+         -B /tmp/magic_enum/build \
+         -DCMAKE_BUILD_TYPE=Release \
+         -DMAGIC_ENUM_OPT_BUILD_TESTS=OFF \
+         -DMAGIC_ENUM_OPT_BUILD_EXAMPLES=OFF \
+         -DMAGIC_ENUM_OPT_INSTALL=ON \
+    && make -C /tmp/magic_enum/build -j$(nproc) \
+    && make -C /tmp/magic_enum/build install \
+    && rm -rf /tmp/magic_enum
+
+ARG TAKSFLOW_VERSION=3.7.0
+RUN mkdir -p /tmp/taskflow \
+    && wget -O /tmp/taskflow/taskflow-${TAKSFLOW_VERSION}.tar.gz "https://github.com/taskflow/taskflow/archive/v${TAKSFLOW_VERSION}.tar.gz" \
+    && tar -xzf /tmp/taskflow/taskflow-${TAKSFLOW_VERSION}.tar.gz -C /tmp/taskflow --strip-components=1 \
+    && cmake \
+         -S /tmp/taskflow \
+         -B /tmp/taskflow/build \
+         -DCMAKE_BUILD_TYPE=Release \
+         -DTF_BUILD_TESTS=OFF \
+         -DTF_BUILD_EXAMPLES=OFF \
+         -DTF_BUILD_BENCHMARKS=OFF \
+         -DTF_BUILD_CUDA=OFF \
+         -DTF_BUILD_SYCL=OFF \
+    && make -C /tmp/taskflow/build -j$(nproc) \
+    && make -C /tmp/taskflow/build install \
+    && rm -rf /tmp/taskflow
+
+ARG XTENSOR_VERSION=0.25.0
+RUN mkdir -p /tmp/xtensor \
+    && wget -O /tmp/xtensor/xtensor-${XTENSOR_VERSION}.tar.gz "https://github.com/xtensor-stack/xtensor/archive/refs/tags/${XTENSOR_VERSION}.tar.gz" \
+    && tar -xzf /tmp/xtensor/xtensor-${XTENSOR_VERSION}.tar.gz -C /tmp/xtensor --strip-components=1 \
+    && cmake \
+         -S /tmp/xtensor \
+         -B /tmp/xtensor/build \
+         -DCMAKE_BUILD_TYPE=Release \
+    && make -C /tmp/xtensor/build -j$(nproc) \
+    && make -C /tmp/xtensor/build install \
+    && rm -rf /tmp/xtensor
+
+ARG XTENSOR_BLAS_VERSION=0.21.0
+RUN mkdir -p /tmp/xtensor_blas \
+    && wget -O /tmp/xtensor_blas/xtensor_blas-${XTENSOR_BLAS_VERSION}.tar.gz "https://github.com/xtensor-stack/xtensor-blas/archive/refs/tags/${XTENSOR_BLAS_VERSION}.tar.gz" \
+    && tar -xzf /tmp/xtensor_blas/xtensor_blas-${XTENSOR_BLAS_VERSION}.tar.gz -C /tmp/xtensor_blas --strip-components=1 \
+    && cmake \
+         -S /tmp/xtensor_blas \
+         -B /tmp/xtensor_blas/build \
+         -DCMAKE_BUILD_TYPE=Release \
+    && make -C /tmp/xtensor_blas/build -j$(nproc) \
+    && make -C /tmp/xtensor_blas/build install \
+    && rm -rf /tmp/xtensor_blas
+
 ARG DOXYGEN_VERSION=1.9.6
 RUN mkdir -p /tmp/doxygen \
     && wget -O /tmp/doxygen/doxygen-${DOXYGEN_VERSION}.linux.bin.tar.gz "https://www.doxygen.nl/files/doxygen-${DOXYGEN_VERSION}.linux.bin.tar.gz" \
