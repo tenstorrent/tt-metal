@@ -26,7 +26,7 @@ RUN mkdir -p /usr/local/bin && wget -O /tmp/ccache.tar.xz https://github.com/cca
 ARG FMT_VERSION=11.0.1
 RUN mkdir -p /tmp/fmt \
     && wget -O /tmp/fmt/fmt-${FMT_VERSION}.tar.gz "https://github.com/fmtlib/fmt/archive/${FMT_VERSION}.tar.gz" \
-    && tar -xzf /tmp/fmt/fmt-${DOXYGEN_VERSION}.tar.gz -C /tmp/fmt --strip-components=1 \
+    && tar -xzf /tmp/fmt/fmt-${FMT_VERSION}.tar.gz -C /tmp/fmt --strip-components=1 \
     && cmake \
          -S /tmp/fmt \
          -B /tmp/fmt/build \
