@@ -253,7 +253,7 @@ def c2f(
         1,
         bfloat8=bfloat8,
         block_shard=block_shard,
-        change_shard=change_shard,
+        change_shard=True,
         deallocate_activation=deallocate_activation,
     )
     return x, out_h, out_w
@@ -391,8 +391,8 @@ def Detect(device, x, parameters, path, nc=80, ch=(), bfloat8=True):
 
     x_cat = ttnn.permute(x_cat, (0, 2, 1))
 
-    box = ttnn.slice(x_cat, [0, 0, 0], [1, 64, 8400])
-    cls = ttnn.slice(x_cat, [0, 64, 0], [1, 144, 8400])
+    box = ttnn.slice(x_cat, [0, 0, 0], [1, 64, x_cat.shape[2]])
+    cls = ttnn.slice(x_cat, [0, 64, 0], [1, 144, x_cat.shape[2]])
 
     dfl = DFL(device, box, parameters, f"{path}.dfl")
 
@@ -402,9 +402,9 @@ def Detect(device, x, parameters, path, nc=80, ch=(), bfloat8=True):
     return [ttnn.concat((dbox, ttnn.sigmoid(cls)), dim=1), x]
 
 
-def DetectionModel(device, x, parameters):
+def DetectionModel(device, x, parameters, res):
     conv_0, out_h, out_w = conv(
-        device, x, parameters, "model.0", 640, 640, 3, 2, 1, change_shard=True, deallocate_activation=True
+        device, x, parameters, "model.0", res[0], res[1], 3, 2, 1, change_shard=True, deallocate_activation=True
     )
     ttnn.deallocate(x)
 
@@ -414,7 +414,7 @@ def DetectionModel(device, x, parameters):
     ttnn.deallocate(conv_0)
 
     c2f_2, out_h, out_w = c2f(
-        device, conv_1, parameters, "model.2", out_h, out_w, n=3, shortcut=True, change_shard=True
+        device, conv_1, parameters, "model.2", out_h, out_w, n=3, shortcut=True, change_shard=False
     )
     ttnn.deallocate(conv_1)
 
@@ -424,18 +424,20 @@ def DetectionModel(device, x, parameters):
     ttnn.deallocate(c2f_2)
 
     c2f_4, out_h, out_w = c2f(
-        device, conv_3, parameters, "model.4", out_h, out_w, n=6, shortcut=True, change_shard=True
+        device, conv_3, parameters, "model.4", out_h, out_w, n=6, shortcut=True, change_shard=False
     )
     ttnn.deallocate(conv_3)
+
+    c2f_4 = ttnn.sharded_to_interleaved(c2f_4, ttnn.L1_MEMORY_CONFIG)
 
     c2f_4 = ttnn.reallocate(c2f_4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     conv_5, out_h, out_w = conv(
-        device, c2f_4, parameters, "model.5", out_h, out_w, 3, 2, 1, change_shard=True, block_shard=False
+        device, c2f_4, parameters, "model.5", out_h, out_w, 3, 2, 1, change_shard=False, block_shard=False
     )
 
     c2f_6, out_h, out_w = c2f(
-        device, conv_5, parameters, "model.6", out_h, out_w, n=6, shortcut=True, block_shard=False, change_shard=True
+        device, conv_5, parameters, "model.6", out_h, out_w, n=6, shortcut=True, block_shard=False, change_shard=False
     )
     ttnn.deallocate(conv_5)
 
@@ -505,6 +507,7 @@ def DetectionModel(device, x, parameters):
     conv_16, out_h, out_w = conv(device, c2f_15, parameters, "model.16", out_h, out_w, 3, 2, 1)
     ttnn.deallocate(c2f_15)
     conv_16 = ttnn.sharded_to_interleaved(conv_16, ttnn.L1_MEMORY_CONFIG)
+    conv_16 = ttnn.to_layout(conv_16, ttnn.ROW_MAJOR_LAYOUT)
 
     x = ttnn.concat([conv_16, twelve], dim=3)
     ttnn.deallocate(twelve)
@@ -534,5 +537,5 @@ def DetectionModel(device, x, parameters):
     return x
 
 
-def YOLOv8x(device, x, parameters):
-    return DetectionModel(device, x, parameters)
+def YOLOv8x(device, x, parameters, res=(320, 320)):
+    return DetectionModel(device, x, parameters, res)

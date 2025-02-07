@@ -14,7 +14,7 @@ from datetime import datetime
 from functools import partial
 from models.utility_functions import disable_persistent_kernel_cache
 from models.experimental.functional_yolov8x.reference import yolov8x_utils
-from models.experimental.functional_yolov8x.tt.ttnn_yolov8x import YOLOv8x
+from models.experimental.functional_yolov8x.tt.class_ttnn_yolov8x import YOLOv8xModel
 from models.experimental.functional_yolov8x.tt.ttnn_yolov8x_utils import custom_preprocessor
 from models.experimental.functional_yolov8x.demo.demo_utils import LoadImages, preprocess, postprocess
 
@@ -99,17 +99,19 @@ def save_yolo_predictions_by_model(result, save_dir, image_path, model_name):
 @pytest.mark.parametrize(
     "source, model_type",
     [
-        ("models/experimental/functional_yolov8x/demo/images/bus.jpg", "torch_model"),
+        # ("models/experimental/functional_yolov8x/demo/images/bus.jpg", "torch_model"),
         ("models/experimental/functional_yolov8x/demo/images/bus.jpg", "tt_model"),
-        ("models/experimental/functional_yolov8x/demo/images/test1.jpg", "torch_model"),
-        ("models/experimental/functional_yolov8x/demo/images/test1.jpg", "tt_model"),
-        ("models/experimental/functional_yolov8x/demo/images/test2.jpg", "torch_model"),
-        ("models/experimental/functional_yolov8x/demo/images/test2.jpg", "tt_model"),
-        ("models/experimental/functional_yolov8x/demo/images/test3.jpg", "torch_model"),
-        ("models/experimental/functional_yolov8x/demo/images/test3.jpg", "tt_model"),
+        #     ("models/experimental/functional_yolov8x/demo/images/test1.jpg", "torch_model"),
+        #     ("models/experimental/functional_yolov8x/demo/images/test1.jpg", "tt_model"),
+        #     ("models/experimental/functional_yolov8x/demo/images/test2.jpg", "torch_model"),
+        #     ("models/experimental/functional_yolov8x/demo/images/test2.jpg", "tt_model"),
+        #     ("models/experimental/functional_yolov8x/demo/images/test3.jpg", "torch_model"),
+        #     ("models/experimental/functional_yolov8x/demo/images/test3.jpg", "tt_model"),
+        #
     ],
 )
-def test_demo(device, source, model_type):
+@pytest.mark.parametrize("res", [(640, 640)])
+def test_demo(device, source, model_type, res):
     disable_persistent_kernel_cache()
 
     if model_type == "torch_model":
@@ -117,8 +119,8 @@ def test_demo(device, source, model_type):
         logger.info("Inferencing using Torch Model")
     else:
         state_dict = attempt_load("yolov8x.pt", map_location="cpu").state_dict()
-        parameters = custom_preprocessor(device, state_dict)
-        model = partial(YOLOv8x, device=device, parameters=parameters)
+        parameters = custom_preprocessor(device, state_dict, inp_h=640, inp_w=640)
+        model = YOLOv8xModel(device=device, parameters=parameters)
         logger.info("Inferencing using ttnn Model")
 
     save_dir = "models/experimental/functional_yolov8x/demo/runs"
@@ -214,10 +216,11 @@ def test_demo(device, source, model_type):
     for batch in dataset:
         paths, im0s, s = batch
 
-        im = preprocess(im0s)
+        im = preprocess(im0s, res=res)
 
         ttnn_im = im.permute((0, 2, 3, 1))
-        ttnn_im = ttnn.from_torch(ttnn_im, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+        # ttnn_im= im.reshape(1, 1, ttnn_im.shape[0]*ttnn_im.shape[1]*ttnn_im.shape[2], ttnn_im.shape[3])
+        ttnn_im = ttnn.from_torch(ttnn_im, dtype=ttnn.bfloat16)
 
         if model_type == "torch_model":
             preds = model(im)

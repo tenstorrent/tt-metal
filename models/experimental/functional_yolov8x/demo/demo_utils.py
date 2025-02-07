@@ -87,7 +87,7 @@ class LoadImages:
         return math.ceil(self.nf / self.bs)
 
 
-def LetterBox(img, new_shape=(640, 640), auto=False, scaleFill=False, scaleup=True, center=True, stride=32):
+def LetterBox(img, new_shape=(320, 320), auto=False, scaleFill=False, scaleup=True, center=True, stride=32):
     shape = img.shape[:2]
     if isinstance(new_shape, int):
         new_shape = (new_shape, new_shape)
@@ -114,15 +114,15 @@ def LetterBox(img, new_shape=(640, 640), auto=False, scaleFill=False, scaleup=Tr
     return img
 
 
-def pre_transform(im):
-    return [LetterBox(img=x) for x in im]
+def pre_transform(im, res):
+    return [LetterBox(img=x, new_shape=res) for x in im]
 
 
-def preprocess(im):
+def preprocess(im, res):
     device = "cpu"
     not_tensor = not isinstance(im, torch.Tensor)
     if not_tensor:
-        im = np.stack(pre_transform(im))
+        im = np.stack(pre_transform(im, res))
         im = im[..., ::-1].transpose((0, 3, 1, 2))
         im = np.ascontiguousarray(im)
         im = torch.from_numpy(im)
@@ -278,7 +278,7 @@ def scale_boxes(img1_shape, boxes, img0_shape, ratio_pad=None, padding=True, xyw
 
 
 def postprocess(preds, img, orig_imgs, batch, names):
-    args = {"conf": 0.5, "iou": 0.7, "agnostic_nms": False, "max_det": 300, "classes": None}
+    args = {"conf": 0.25, "iou": 0.7, "agnostic_nms": False, "max_det": 300, "classes": None}
 
     preds = non_max_suppression(
         preds,
