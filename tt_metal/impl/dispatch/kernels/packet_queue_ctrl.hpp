@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <string_view>
 
 constexpr uint32_t PACKET_WORD_SIZE_BYTES = 16;
 constexpr uint32_t MAX_SWITCH_FAN_IN = 4;
@@ -32,7 +33,7 @@ constexpr uint32_t PQ_TEST_ITER_INDEX = 6;
 constexpr uint32_t PQ_TEST_MISC_INDEX = 16;
 
 
-inline const char* packet_queue_test_status_to_string(uint32_t status) {
+inline std::string_view packet_queue_test_status_to_string(uint32_t status) {
     switch (status) {
         case PACKET_QUEUE_TEST_STARTED: return "STARTED";
         case PACKET_QUEUE_TEST_PASS: return "DONE/OK";
