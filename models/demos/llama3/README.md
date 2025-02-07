@@ -1,6 +1,6 @@
 # Llama-like Models
 
-This codecan run Llama3 family of models and other similar models including Qwen2.5 and DeepSeek-R1-Distill variants.
+This code can run Llama3 family of models and other similar models including Qwen2.5 and DeepSeek-R1-Distill variants.
 
 The current version supports the following Llama3 models:
 - Llama3.2-1B
