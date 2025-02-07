@@ -59,7 +59,7 @@ jobs:
         uses: lycheeverse/lychee-action@v2
         with:
           # Check all markdown, html and reStructuredText files in repo (default)
-          args: --base . --verbose --no-progress './**/*.md' './**/*.rst'
+          args: --base . --verbose --no-progress './*.md' './docs/source/ttnn/**/*.rst''./docs/source/ttnn/**/*.md' './docs/source/tt-metalium/**/*.rst''./docs/source/tt-metalium/**/*.md'
           # Don't fail action on broken links
           fail: false
 
