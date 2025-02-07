@@ -8,7 +8,7 @@
 #include "pybind11/pybind11.h"
 #include <pybind11/stl.h>
 
-#include "common/queue_id.hpp"
+#include "ttnn/common/queue_id.hpp"
 
 using namespace tt::tt_metal;
 
