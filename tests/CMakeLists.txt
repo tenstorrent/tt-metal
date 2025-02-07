@@ -11,6 +11,7 @@ target_link_libraries(
         magic_enum
         fmt::fmt-header-only
         span
+        small_vector
 )
 
 if(TT_METAL_BUILD_TESTS)

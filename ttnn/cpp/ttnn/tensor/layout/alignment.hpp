@@ -4,8 +4,8 @@
 
 #pragma once
 
-#include "ttnn/tensor/shape/shape_base.hpp"
-#include "ttnn/tensor/shape/small_vector.hpp"
+#include <tt-metalium/small_vector.hpp>
+#include <tt-metalium/shape_base.hpp>
 
 namespace tt::tt_metal {
 
@@ -26,7 +26,7 @@ public:
     }
 
     bool operator==(const Alignment& other) const;
-    bool operator==(const SmallVector<uint32_t>& other) const;
+    bool operator==(const tt::stl::SmallVector<uint32_t>& other) const;
 
     // Needed for reflect / fmt
     static constexpr auto attribute_names = std::forward_as_tuple("value");

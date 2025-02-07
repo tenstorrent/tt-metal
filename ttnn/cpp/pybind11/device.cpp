@@ -8,6 +8,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
+#include "small_vector_caster.hpp"  // NOLINT - for pybind11 SmallVector binding support.
 #include <tt-metalium/persistent_kernel_cache.hpp>
 #include <tt-metalium/compilation_reporter.hpp>
 #include <tt-metalium/memory_reporter.hpp>
