@@ -1,4 +1,4 @@
-name: "[internal] tt-metal l2 nigtly tests"
+name: "[internal] tt-metal l2 nightly tests"
 
 on:
   workflow_call:
@@ -74,8 +74,8 @@ jobs:
             pip3 install --user $WHEEL_FILENAME
             ${{ matrix.test-group.cmd }}
 
-#      - uses: ./.github/actions/slack-report
-#        if: ${{ failure() }}
-#        with:
-#          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
-#          owner: U06CXU895AP # Michael Chiou
+      - uses: ./.github/actions/slack-report
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          owner: U07HTBQPHFG # Bryan Keith
