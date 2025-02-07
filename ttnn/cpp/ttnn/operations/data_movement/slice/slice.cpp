@@ -29,8 +29,8 @@ ttnn::Tensor SliceOperation::invoke(
 
     const auto& input_shape = input_tensor.get_logical_shape();
     uint32_t input_rank = input_shape.rank();
-
     auto input_layout = input_tensor.get_layout();
+
     if (input_rank == 0) {
         return input_tensor;
     }
