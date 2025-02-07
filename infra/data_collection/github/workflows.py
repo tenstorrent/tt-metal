@@ -24,10 +24,9 @@ def get_workflow_run_uuids_to_test_reports_paths_(workflow_outputs_dir, workflow
         assert test_report_dir.is_dir(), f"{test_report_dir} is not dir"
 
         test_report_uuid = test_report_dir.name.replace("test_reports_", "")
-        # TODO: remove hardcoded xml filename (specific to pytest only)
-        workflow_run_test_reports_path[test_report_uuid] = (test_report_dir / "most_recent_tests.xml").resolve(
-            strict=True
-        )
+        # read all *.xml in test_report_dir (gtest can have one xml files per test executable)
+        xml_file_paths = [file.resolve(strict=True) for file in list(test_report_dir.glob("*.xml"))]
+        workflow_run_test_reports_path[test_report_uuid] = xml_file_paths
 
     return workflow_run_test_reports_path
 

@@ -65,8 +65,11 @@ def create_cicd_json_for_data_analysis(
 
         test_report_exists = github_job_id in github_job_id_to_test_reports
         if test_report_exists:
-            test_report_path = github_job_id_to_test_reports[github_job_id]
-            tests = get_tests_from_test_report_path(test_report_path)
+            tests = []
+            test_reports = github_job_id_to_test_reports[github_job_id]
+            for test_report_path in test_reports:
+                logger.info(f"Job id:{github_job_id} Analyzing test report {test_report_path}")
+                tests += get_tests_from_test_report_path(test_report_path)
         else:
             tests = []
 
