@@ -58,6 +58,7 @@ void calculate_round(const int decimals) {
             vInt res = float_to_int16(result);
             res = res & 0x7FFE;
             result = int32_to_float(res);
+            result = setsgn(result, v);
         }
         v_endif;
         dst_reg[0] = result;
