@@ -145,7 +145,6 @@ public:
     // Allows to iterate over the container elements, returning a pair of (coordinate, value reference).
     class Iterator {
     public:
-        using value_type = std::pair<MeshCoordinate, T>;
         using reference = std::pair<MeshCoordinate, std::reference_wrapper<T>>;
 
         Iterator& operator++();
