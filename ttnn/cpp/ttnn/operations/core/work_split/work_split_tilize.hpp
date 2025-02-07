@@ -24,7 +24,7 @@ struct BlockSplit {
     uint32_t nblocks_per_core_cliff;
 };
 
-struct BlockSplit2 {
+struct BlockSplitWH {
     uint32_t ncores;
     CoreRangeSet all_cores;
     CoreRangeSet core_range;
@@ -68,7 +68,7 @@ inline std::pair<int, int> closest_square_larger_than_b(int b, int width, int he
     }
 }
 
-inline BlockSplit2 split_blocks_for_tilize2(
+inline BlockSplitWH split_blocks_for_tilize_wh(
     CoreCoord grid_size, uint32_t nblocks, uint32_t width_tiles, uint32_t height_tiles) {
     size_t grid_area = grid_size.x * grid_size.y;
     uint32_t nblocks_per_core = grid_area == 0 ? 1 : std::ceil(static_cast<float>(nblocks) / grid_area);
@@ -144,7 +144,7 @@ inline BlockSplit2 split_blocks_for_tilize2(
         }
     }
 
-    return BlockSplit2{
+    return BlockSplitWH{
         ncores,
         all_cores,
         core_range,

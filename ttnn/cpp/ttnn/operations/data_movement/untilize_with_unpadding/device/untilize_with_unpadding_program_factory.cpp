@@ -241,7 +241,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_block_interle
          has_cliff_col,
          full_cores_per_row,
          full_cores_per_col] =
-            ttnn::split_blocks_for_tilize2(grid_size, num_blocks, num_tiles_per_row, num_tiles_per_col);
+            ttnn::split_blocks_for_tilize_wh(grid_size, num_blocks, num_tiles_per_row, num_tiles_per_col);
 
     uint32_t total_tiles_per_row = full_cores_per_row * single_block_size + has_cliff_row * single_block_size_cliff_row;
     uint32_t padded_row_size_bytes;
@@ -340,7 +340,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_block_interle
         program,
         "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_wh_multicore.cpp",
         all_cores,
-        ReaderDataMovementConfig({src0_is_dram, num_tiles_2d, third_dim, nblocks_per_core, total_tiles_per_row}));
+        ReaderDataMovementConfig({src0_is_dram, num_tiles_2d, third_dim, total_tiles_per_row}));
 
     // writer
 
@@ -357,7 +357,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_block_interle
         "writer_unary_stick_layout_wh_multicore.cpp",
         all_cores,
         WriterDataMovementConfig(
-            {out_is_dram, stick_size_is_power_of_two, log2_stick_size, total_num_rows, ncores, third_dim, TILE_WIDTH}));
+            {out_is_dram, stick_size_is_power_of_two, log2_stick_size, total_num_rows, third_dim, TILE_HEIGHT}));
 
     // compute
 
@@ -401,7 +401,6 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_block_interle
 
     // RUNTIME ARGS
     const auto& cores = grid_to_cores(ncores, grid_size.x, grid_size.y, true);
-    uint32_t number_blocks_per_core;
     uint32_t start_row_id = 0;
     uint32_t start_column_id = 0;
     uint32_t tile_start_id = 0;
@@ -434,22 +433,15 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_block_interle
             single_block_size_col_arg = single_block_size_cliff_col;
         }
 
-        number_blocks_per_core = single_block_size_row_arg * single_block_size_col_arg;
-        uint32_t size_per_row_per_block = nblocks_per_core * TILE_WIDTH * el_size;
-
         //  writer runtime args
         std::vector<uint32_t> writer_rt_args = {
             dst_buffer->address(),
             unpadded_row_size_bytes,
-            i,
-            size_per_row_per_block,
-            number_blocks_per_core,
             TILE_WIDTH * el_size,
             start_row_id,
             start_column_id,
             single_block_size_row_arg,
             single_block_size_col_arg,
-            el_size,
         };
 
         // reader runtime args

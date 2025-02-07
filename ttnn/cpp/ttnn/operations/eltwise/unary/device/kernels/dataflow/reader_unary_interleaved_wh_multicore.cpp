@@ -15,8 +15,7 @@ void kernel_main() {
     constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
     const uint32_t num_tiles_per_2d = get_compile_time_arg_val(1);
     const uint32_t third_dim = get_compile_time_arg_val(2);
-    const uint32_t number_blocks_per_core = get_compile_time_arg_val(3);
-    uint32_t total_tiles_per_row = get_compile_time_arg_val(4);
+    uint32_t total_tiles_per_row = get_compile_time_arg_val(3);
 
 #ifdef OUT_SHARDED
     cb_wait_front(cb_id_in0, onetile);
