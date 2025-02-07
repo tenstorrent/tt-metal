@@ -185,7 +185,7 @@ void configure_static_tlbs(
         device_driver.configure_tlb(mmio_device_id, core, tlb_index, address, TLB_DATA::Strict);
     }
     // Setup static TLBs for all eth cores
-    for (const CoreCoord& core : sdesc.get_cores(CoreType::TENSIX, sdesc.get_umd_coord_system())) {
+    for (const CoreCoord& core : sdesc.get_cores(CoreType::ETH, sdesc.get_umd_coord_system())) {
         auto tlb_index = get_static_tlb_index({core.x, core.y});
         device_driver.configure_tlb(mmio_device_id, core, tlb_index, address, TLB_DATA::Strict);
     }

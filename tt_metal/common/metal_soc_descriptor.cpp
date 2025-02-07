@@ -171,9 +171,11 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
         }
 
         this->dram_view_channels.push_back(channel);
-        CoreCoord eth_dram_endpoint_coord = get_dram_core_for_channel(channel, eth_endpoint, CoordSystem::VIRTUAL);
+        tt::umd::CoreCoord eth_dram_endpoint_coord =
+            get_dram_core_for_channel(channel, eth_endpoint, CoordSystem::VIRTUAL);
         this->dram_view_eth_cores.push_back({eth_dram_endpoint_coord.x, eth_dram_endpoint_coord.y});
-        CoreCoord worker_endpoint_coord = get_dram_core_for_channel(channel, worker_endpoint, CoordSystem::VIRTUAL);
+        tt::umd::CoreCoord worker_endpoint_coord =
+            get_dram_core_for_channel(channel, worker_endpoint, CoordSystem::VIRTUAL);
         this->dram_view_worker_cores.push_back({worker_endpoint_coord.x, worker_endpoint_coord.y});
         this->dram_view_address_offsets.push_back(address_offset);
     }
