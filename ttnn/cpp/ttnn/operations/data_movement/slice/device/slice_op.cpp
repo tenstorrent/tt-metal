@@ -94,7 +94,7 @@ void SliceDeviceOperation::validate_with_output_tensors(
         TT_FATAL(this->slice_start[i] <= this->slice_end[i], "Error");
     }
     if (!output_tensors.empty() && output_tensors[0].has_value()) {
-        const auto output_shape_required = compute_output_specs(input_tensors)[0].logical_shape();
+        const auto output_shape_required = compute_output_specs(input_tensors)[0].padded_shape();
         const auto& out_tensor = output_tensors[0].value();
         TT_FATAL(
             out_tensor.get_padded_shape() == output_shape_required,
