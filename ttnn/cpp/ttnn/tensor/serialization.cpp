@@ -318,6 +318,7 @@ Tensor load_tensor_helper_legacy_impl(FILE* input_file, T device, uint8_t versio
     return tensor;
 }
 
+// Used before VERSION_ID was introduced
 template <typename T>
 Tensor load_tensor_helper_very_legacy_impl(FILE* input_file, T device) {
     auto shape = LegacyShape{};
@@ -340,6 +341,7 @@ Tensor load_tensor_helper_very_legacy_impl(FILE* input_file, T device) {
     return tensor;
 }
 
+// Used before flatbuffer serialization, aka VERSION_ID < 5
 MemoryConfig load_memory_config_legacy_impl(FILE* input_file, uint8_t version_id) {
     TensorMemoryLayout memory_layout;
     BufferType buffer_type;
@@ -377,7 +379,7 @@ template <typename T>
 Tensor load_tensor_helper(const std::string& file_name, T device) {
     FILE* input_file = fopen(file_name.c_str(), "rb");
     if (not input_file) {
-        throw std::runtime_error(fmt::format("Cannot open \"{}\"", file_name));
+        TT_THROW("Cannot open \"{}\"", file_name);
     }
     std::unique_ptr<FILE, decltype(&fclose)> file_guard(input_file, &fclose);
 
@@ -388,11 +390,14 @@ Tensor load_tensor_helper(const std::string& file_name, T device) {
         return load_tensor_helper_very_legacy_impl(input_file, device);
     }
 
-    std::uint8_t version_id;
+    std::uint8_t version_id = 0;
     fread(&version_id, sizeof(version_id), 1, input_file);
     if (version_id > VERSION_ID) {
-        throw std::runtime_error(
-            fmt::format("Serialized tensor with version_id: {}. Loader version: {}", version_id, VERSION_ID));
+        TT_THROW(
+            "Version mismatch: the serialized tensor was created with version {} but is being loaded by a loader with "
+            "version {}. Please update your saved data or your loader so that both versions match.",
+            version_id,
+            VERSION_ID);
     }
 
     if (version_id < 5) {
@@ -400,7 +405,7 @@ Tensor load_tensor_helper(const std::string& file_name, T device) {
     }
 
     auto spec = load_tensor_spec(input_file);
-    StorageType storage_type;
+    StorageType storage_type = StorageType::OWNED;
     fread(&storage_type, sizeof(storage_type), 1, input_file);
     auto storage = load_storage(input_file, spec.data_type(), spec.layout(), storage_type, device, version_id);
     Tensor tensor(std::move(storage), spec);
@@ -416,7 +421,7 @@ void dump_tensor(
     const std::string& file_name, const Tensor& tensor, const std::unordered_map<std::string, std::string>& strategy) {
     FILE* output_file = fopen(file_name.c_str(), "wb");
     if (not output_file) {
-        throw std::runtime_error(fmt::format("Cannot open \"{}\"", file_name));
+        TT_THROW("Cannot open \"{}\"", file_name);
     }
     std::unique_ptr<FILE, decltype(&fclose)> file_guard(output_file, &fclose);
 
@@ -476,7 +481,7 @@ void dump_memory_config(FILE* output_file, const MemoryConfig& memory_config) {
 void dump_memory_config(const std::string& file_name, const MemoryConfig& memory_config) {
     FILE* output_file = fopen(file_name.c_str(), "wb");
     if (not output_file) {
-        throw std::runtime_error(fmt::format("Cannot open \"{}\"", file_name));
+        TT_THROW("Cannot open \"{}\"", file_name);
     }
     std::unique_ptr<FILE, decltype(&fclose)> file_guard(output_file, &fclose);
     dump_memory_config(output_file, memory_config);
@@ -488,8 +493,11 @@ MemoryConfig load_memory_config(FILE* input_file) {
 
     // Allow only backward compatible versions
     if (version_id > VERSION_ID) {
-        throw std::runtime_error(
-            fmt::format("Serialized tensor with version_id: {}. Loader version: {}", version_id, VERSION_ID));
+        TT_THROW(
+            "Version mismatch: the serialized memory config was created with version {} but is being loaded by a "
+            "loader with version {}. Please update your saved data or your loader so that both versions match.",
+            version_id,
+            VERSION_ID);
     }
 
     if (version_id < 5) {
@@ -511,7 +519,7 @@ MemoryConfig load_memory_config(FILE* input_file) {
 MemoryConfig load_memory_config(const std::string& file_name) {
     FILE* input_file = fopen(file_name.c_str(), "rb");
     if (not input_file) {
-        throw std::runtime_error(fmt::format("Cannot open \"{}\"", file_name));
+        TT_THROW("Cannot open \"{}\"", file_name);
     }
     std::unique_ptr<FILE, decltype(&fclose)> file_guard(input_file, &fclose);
     return load_memory_config(input_file);
