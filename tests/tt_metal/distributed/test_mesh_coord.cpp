@@ -13,6 +13,11 @@ namespace {
 using ::testing::ElementsAre;
 
 TEST(SimpleMeshShapeTest, Construction) {
+    SimpleMeshShape shape_1d(3);
+    EXPECT_EQ(shape_1d.dims(), 1);
+    EXPECT_EQ(shape_1d[0], 3);
+    EXPECT_EQ(shape_1d.mesh_size(), 3);
+
     SimpleMeshShape shape_2d(3, 4);
     EXPECT_EQ(shape_2d.dims(), 2);
     EXPECT_EQ(shape_2d[0], 3);
@@ -36,6 +41,12 @@ TEST(SimpleMeshShapeTest, Construction) {
     EXPECT_EQ(shape_5d.mesh_size(), 720);
 }
 
+TEST(SimpleMeshShapeTest, ZeroShape) {
+    SimpleMeshShape shape({});
+    EXPECT_EQ(shape.dims(), 0);
+    EXPECT_EQ(shape.mesh_size(), 0);
+}
+
 TEST(SimpleMeshShapeTest, Strides) {
     SimpleMeshShape shape(2, 3, 4);
     EXPECT_EQ(shape.get_stride(0), 12);  // 3 * 4
@@ -44,15 +55,19 @@ TEST(SimpleMeshShapeTest, Strides) {
 }
 
 TEST(SimpleMeshShapeTest, Comparison) {
-    SimpleMeshShape shape1(2, 3);
-    SimpleMeshShape shape2(2, 3);
-    SimpleMeshShape shape3(3, 2);
+    SimpleMeshShape shape(2, 3);
 
-    EXPECT_EQ(shape1, shape2);
-    EXPECT_NE(shape1, shape3);
+    EXPECT_EQ(shape, SimpleMeshShape(2, 3));
+    EXPECT_NE(shape, SimpleMeshShape(3, 2));
+    EXPECT_NE(shape, SimpleMeshShape(1, 2, 3));
 }
 
 TEST(MeshCoordinateTest, Construction) {
+    MeshCoordinate coord_1d(1);
+    EXPECT_EQ(coord_1d.dims(), 1);
+    EXPECT_THAT(coord_1d.coords(), ElementsAre(1));
+    EXPECT_EQ(coord_1d[0], 1);
+
     MeshCoordinate coord_2d(1, 2);
     EXPECT_EQ(coord_2d.dims(), 2);
     EXPECT_THAT(coord_2d.coords(), ElementsAre(1, 2));
@@ -79,11 +94,10 @@ TEST(MeshCoordinateTest, Construction) {
 
 TEST(MeshCoordinateTest, Comparison) {
     MeshCoordinate coord1(1, 2);
-    MeshCoordinate coord2(1, 2);
-    MeshCoordinate coord3(2, 1);
 
-    EXPECT_EQ(coord1, coord2);
-    EXPECT_NE(coord1, coord3);
+    EXPECT_EQ(coord1, MeshCoordinate(1, 2));
+    EXPECT_NE(coord1, MeshCoordinate(2, 1));
+    EXPECT_NE(coord1, MeshCoordinate(1, 2, 1));
 }
 
 TEST(MeshCoordinateRangeTest, FromShape) {
@@ -107,8 +121,8 @@ TEST(MeshCoordinateRangeTest, FromShape) {
 }
 
 TEST(MeshCoordinateRangeTest, Subrange) {
-    MeshCoordinate start(1, 0);
-    MeshCoordinate end(2, 2);
+    MeshCoordinate start(1, 1, 1);
+    MeshCoordinate end(2, 1, 4);
     MeshCoordinateRange range(start, end);
 
     std::vector<MeshCoordinate> coords;
@@ -119,12 +133,27 @@ TEST(MeshCoordinateRangeTest, Subrange) {
     EXPECT_THAT(
         coords,
         ElementsAre(
-            MeshCoordinate(1, 0),
-            MeshCoordinate(1, 1),
-            MeshCoordinate(1, 2),
-            MeshCoordinate(2, 0),
-            MeshCoordinate(2, 1),
-            MeshCoordinate(2, 2)));
+            MeshCoordinate(1, 1, 1),
+            MeshCoordinate(1, 1, 2),
+            MeshCoordinate(1, 1, 3),
+            MeshCoordinate(1, 1, 4),
+            MeshCoordinate(2, 1, 1),
+            MeshCoordinate(2, 1, 2),
+            MeshCoordinate(2, 1, 3),
+            MeshCoordinate(2, 1, 4)));
+}
+
+TEST(MeshCoordinateRangeTest, SubrangeOneElement) {
+    MeshCoordinate start(1, 1, 1);
+    MeshCoordinate end(1, 1, 1);
+    MeshCoordinateRange range(start, end);
+
+    std::vector<MeshCoordinate> coords;
+    for (const auto& coord : range) {
+        coords.push_back(coord);
+    }
+
+    EXPECT_THAT(coords, ElementsAre(MeshCoordinate(1, 1, 1)));
 }
 
 TEST(MeshCoordinateRangeTest, MismatchedDimensions) {
@@ -151,11 +180,12 @@ TEST(ToLinearIndexTest, Basic) {
 }
 
 TEST(ToLinearIndexTest, MismatchedDimensions) {
-    EXPECT_ANY_THROW(to_linear_index(SimpleMeshShape(2, 3), MeshCoordinate(2, 0)));
+    EXPECT_ANY_THROW(to_linear_index(SimpleMeshShape(1, 2, 3), MeshCoordinate(0, 0)));
 }
 
 TEST(ToLinearIndexTest, OutOfBounds) {
-    EXPECT_ANY_THROW(to_linear_index(SimpleMeshShape(1, 2, 3), MeshCoordinate(0, 0)));
+    EXPECT_ANY_THROW(to_linear_index(SimpleMeshShape(2, 3), MeshCoordinate(2, 0)));
+    EXPECT_ANY_THROW(to_linear_index(SimpleMeshShape(2, 3), MeshCoordinate(0, 3)));
 }
 
 TEST(MeshContainerTest, InitialValues) {

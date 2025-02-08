@@ -28,6 +28,7 @@ MeshCoordinate shape_back(const SimpleMeshShape& shape) {
 
 }  // namespace
 
+SimpleMeshShape::SimpleMeshShape(uint32_t num_elements) : ShapeBase({num_elements}) { compute_strides(); }
 SimpleMeshShape::SimpleMeshShape(uint32_t num_rows, uint32_t num_cols) : ShapeBase({num_rows, num_cols}) {
     compute_strides();
 }
@@ -49,11 +50,11 @@ size_t SimpleMeshShape::get_stride(size_t dim) const { return strides_[dim]; }
 
 size_t SimpleMeshShape::dims() const { return size(); }
 size_t SimpleMeshShape::mesh_size() const {
-    return std::accumulate(value_.begin(), value_.end(), 1, std::multiplies<size_t>());
+    return empty() ? 0 : std::accumulate(value_.begin(), value_.end(), 1, std::multiplies<size_t>());
 }
 
-bool operator==(const SimpleMeshShape& lhs, const SimpleMeshShape& rhs) { return lhs.value_ == rhs.value_; }
-bool operator!=(const SimpleMeshShape& lhs, const SimpleMeshShape& rhs) { return !(lhs == rhs); }
+bool operator==(const SimpleMeshShape& lhs, const SimpleMeshShape& rhs) = default;
+bool operator!=(const SimpleMeshShape& lhs, const SimpleMeshShape& rhs) = default;
 
 std::ostream& operator<<(std::ostream& os, const SimpleMeshShape& shape) {
     os << "SimpleMeshShape([";
@@ -67,6 +68,7 @@ std::ostream& operator<<(std::ostream& os, const SimpleMeshShape& shape) {
     return os;
 }
 
+MeshCoordinate::MeshCoordinate(uint32_t coord) : value_({coord}) {}
 MeshCoordinate::MeshCoordinate(uint32_t row, uint32_t col) : value_({row, col}) {}
 MeshCoordinate::MeshCoordinate(uint32_t x, uint32_t y, uint32_t z) : value_({x, y, z}) {}
 
@@ -119,7 +121,7 @@ MeshCoordinateRange::Iterator& MeshCoordinateRange::Iterator::operator++() {
     for (int i = new_coords.size() - 1; i >= 0; --i) {
         auto& dimension_value = new_coords[i];
         if (++dimension_value > range_->end_coord()[i]) {
-            dimension_value = 0;
+            dimension_value = range_->start_coord()[i];
         } else {
             break;
         }
