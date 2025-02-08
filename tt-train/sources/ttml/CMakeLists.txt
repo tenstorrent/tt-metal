@@ -101,7 +101,6 @@ target_link_libraries(
         pthread
         atomic
         Metalium::Metal
-        tt_stl
         Metalium::TTNN
         Python::Python
         fmt::fmt-header-only
