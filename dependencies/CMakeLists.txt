@@ -20,7 +20,7 @@ CPMAddPackage(
         "BOOST_SKIP_INSTALL_RULES ON"
         "BUILD_SHARED_LIBS OFF"
         "BOOST_INCLUDE_LIBRARIES core\\\;container\\\;smart_ptr\\\;interprocess"
-    FIND_PACKAGE_ARGUMENTS "COMPONENTS core smart_ptr container interprocess GLOBAL"
+    FIND_PACKAGE_ARGUMENTS "COMPONENTS core container smart_ptr interprocess GLOBAL"
 )
 
 add_library(span INTERFACE)
