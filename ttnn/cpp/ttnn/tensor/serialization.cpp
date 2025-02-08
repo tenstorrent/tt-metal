@@ -80,13 +80,19 @@ void safe_fread(void* buffer, size_t size, size_t count, FILE* file) {
     }
 }
 
+void safe_fwrite(const void* buffer, size_t size, size_t count, FILE* file) {
+    if (fwrite(buffer, size, count, file) != count) {
+        TT_THROW("Failed to write tensor data: file write failed");
+    }
+}
+
 void dump_tensor_spec(const TensorSpec& tensor_spec, FILE* output_file) {
     flatbuffers::FlatBufferBuilder builder;
     auto flat_spec = ttnn::to_flatbuffer(tensor_spec, builder);
     builder.Finish(flat_spec);
     uint64_t buffer_size = builder.GetSize();
-    fwrite(&buffer_size, sizeof(buffer_size), 1, output_file);
-    fwrite(builder.GetBufferPointer(), buffer_size, 1, output_file);
+    safe_fwrite(&buffer_size, sizeof(buffer_size), 1, output_file);
+    safe_fwrite(builder.GetBufferPointer(), buffer_size, 1, output_file);
 }
 
 TensorSpec load_tensor_spec(FILE* input_file) {
@@ -107,8 +113,8 @@ void dump_owned_storage(FILE* output_file, const OwnedStorage& storage) {
         [output_file]<typename T>(const owned_buffer::Buffer<T>& generic_buffer) {
             const auto buffer = owned_buffer::get_as<T>(generic_buffer);
             uint64_t size = buffer.size();
-            fwrite(&size, sizeof(size), 1, output_file);
-            fwrite(buffer.data(), sizeof(T) * size, 1, output_file);
+            safe_fwrite(&size, sizeof(size), 1, output_file);
+            safe_fwrite(buffer.data(), sizeof(T) * size, 1, output_file);
         },
         storage.buffer);
 }
@@ -118,8 +124,8 @@ void dump_borrowed_storage(FILE* output_file, const BorrowedStorage& storage) {
         [output_file]<typename T>(const borrowed_buffer::Buffer<T>& generic_buffer) {
             const auto buffer = borrowed_buffer::get_as<T>(generic_buffer);
             uint64_t size = buffer.size();
-            fwrite(&size, sizeof(size), 1, output_file);
-            fwrite(buffer.data(), sizeof(T) * size, 1, output_file);
+            safe_fwrite(&size, sizeof(size), 1, output_file);
+            safe_fwrite(buffer.data(), sizeof(T) * size, 1, output_file);
         },
         storage.buffer);
 }
@@ -127,18 +133,18 @@ void dump_borrowed_storage(FILE* output_file, const BorrowedStorage& storage) {
 void dump_multi_device_host_storage(
     FILE* output_file, const MultiDeviceHostStorage& storage, const DistributedTensorConfig& strategy) {
     uint64_t num_buffers = storage.num_buffers();
-    fwrite(&num_buffers, sizeof(num_buffers), 1, output_file);
+    safe_fwrite(&num_buffers, sizeof(num_buffers), 1, output_file);
 
     // Use the user-specified strategy which defines how it gets distributed when mapped onto multi-device
-    fwrite(&strategy, sizeof(strategy), 1, output_file);
+    safe_fwrite(&strategy, sizeof(strategy), 1, output_file);
 
     if (std::holds_alternative<ReplicateTensor>(strategy)) {
         std::visit(
             [output_file]<typename T>(const owned_buffer::Buffer<T>& generic_buffer) {
                 const auto buffer = owned_buffer::get_as<T>(generic_buffer);
                 uint64_t size = buffer.size();
-                fwrite(&size, sizeof(size), 1, output_file);
-                fwrite(buffer.begin(), sizeof(T) * size, 1, output_file);
+                safe_fwrite(&size, sizeof(size), 1, output_file);
+                safe_fwrite(buffer.begin(), sizeof(T) * size, 1, output_file);
             },
             storage.get_buffer(0));
         auto spec = storage.specs.at(0);
@@ -149,8 +155,8 @@ void dump_multi_device_host_storage(
                 [output_file]<typename T>(const owned_buffer::Buffer<T>& generic_buffer) {
                     const auto buffer = owned_buffer::get_as<T>(generic_buffer);
                     uint64_t size = buffer.size();
-                    fwrite(&size, sizeof(size), 1, output_file);
-                    fwrite(buffer.begin(), sizeof(T) * size, 1, output_file);
+                    safe_fwrite(&size, sizeof(size), 1, output_file);
+                    safe_fwrite(buffer.begin(), sizeof(T) * size, 1, output_file);
                 },
                 storage.get_buffer(i));
         }
@@ -431,13 +437,13 @@ void dump_tensor(
     }
     std::unique_ptr<FILE, decltype(&fclose)> file_guard(output_file, &fclose);
 
-    fwrite(&SENTINEL_VALUE, sizeof(SENTINEL_VALUE), 1, output_file);
-    fwrite(&VERSION_ID, sizeof(VERSION_ID), 1, output_file);
+    safe_fwrite(&SENTINEL_VALUE, sizeof(SENTINEL_VALUE), 1, output_file);
+    safe_fwrite(&VERSION_ID, sizeof(VERSION_ID), 1, output_file);
 
     dump_tensor_spec(tensor.get_tensor_spec(), output_file);
 
     auto storage_type = tensor.storage_type();
-    fwrite(&storage_type, sizeof(storage_type), 1, output_file);
+    safe_fwrite(&storage_type, sizeof(storage_type), 1, output_file);
 
     bool is_on_device = is_tensor_on_device_or_multidevice(tensor);
     Tensor tensor_to_dump = tensor;
@@ -475,13 +481,13 @@ Tensor load_tensor(const std::string& file_name, MeshDevice* device) {
 }
 
 void dump_memory_config(FILE* output_file, const MemoryConfig& memory_config) {
-    fwrite(&VERSION_ID, sizeof(VERSION_ID), 1, output_file);
+    safe_fwrite(&VERSION_ID, sizeof(VERSION_ID), 1, output_file);
     flatbuffers::FlatBufferBuilder builder;
     auto flat_config = ttnn::to_flatbuffer(memory_config, builder);
     builder.Finish(flat_config);
     uint64_t buf_size = builder.GetSize();
-    fwrite(&buf_size, sizeof(buf_size), 1, output_file);
-    fwrite(builder.GetBufferPointer(), buf_size, 1, output_file);
+    safe_fwrite(&buf_size, sizeof(buf_size), 1, output_file);
+    safe_fwrite(builder.GetBufferPointer(), buf_size, 1, output_file);
 }
 
 void dump_memory_config(const std::string& file_name, const MemoryConfig& memory_config) {
