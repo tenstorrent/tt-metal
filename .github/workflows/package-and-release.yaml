@@ -16,14 +16,14 @@ jobs:
       matrix:
         version: ["20.04", "22.04"]
     uses: ./.github/workflows/build-artifact.yaml
-    with:      
+    with:
       version: ${{ matrix.version }}
       distro: ubuntu
       publish-artifact: true
       build-wheel: true
     secrets: inherit
 
-  build-artifact-profiler:    
+  build-artifact-profiler:
     uses: ./.github/workflows/build-artifact.yaml
     with:
       tracy: true
@@ -53,7 +53,7 @@ jobs:
     if: ${{ contains(needs.build-artifact.*.outputs.version, '20.04') }}
     uses: ./.github/workflows/tgg-model-perf-tests-impl.yaml
     secrets: inherit
-    
+
   get-params:
     runs-on: ubuntu-latest
     outputs:
