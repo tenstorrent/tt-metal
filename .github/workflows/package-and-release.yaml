@@ -2,42 +2,55 @@ name: Package and release
 on:
   workflow_dispatch:
   schedule:
-    # Create rc every day at EOD of PST Mon-Fri + night of Sunday to kick off
-    # releases for beginning of work week
     - cron: "0 1 * * 1,2,3,4,5,6"
 
 permissions:
   contents: write
   packages: write
 
-jobs:
+jobs:  
   build-artifact:
+    strategy:
+      matrix:
+        version: ["20.04", "22.04"]
     uses: ./.github/workflows/build-artifact.yaml
+    with:      
+      version: ${{ matrix.version }}
+      distro: ubuntu
+      publish-artifact: true
     secrets: inherit
-  build-artifact-profiler:
+
+  build-artifact-profiler:    
     uses: ./.github/workflows/build-artifact.yaml
     with:
       tracy: true
-  single-card-demos:
+  
+  single-card-demos:    
     needs: build-artifact
+    if: ${{ contains(needs.build-artifact.*.outputs.version, '20.04') }}
     uses: ./.github/workflows/single-card-demo-tests-impl.yaml
     secrets: inherit
   t3000-demos:
     needs: build-artifact
+    if: ${{ contains(needs.build-artifact.*.outputs.version, '20.04') }}
     uses: ./.github/workflows/t3000-demo-tests-impl.yaml
     secrets: inherit
   t3000-model-perf:
     needs: build-artifact
+    if: ${{ contains(needs.build-artifact.*.outputs.version, '20.04') }}
     uses: ./.github/workflows/t3000-model-perf-tests-impl.yaml
     secrets: inherit
   tg-demos:
     needs: build-artifact
+    if: ${{ contains(needs.build-artifact.*.outputs.version, '20.04') }}
     uses: ./.github/workflows/tg-demo-tests-impl.yaml
     secrets: inherit
   tgg-model-perf:
     needs: build-artifact
+    if: ${{ contains(needs.build-artifact.*.outputs.version, '20.04') }}
     uses: ./.github/workflows/tgg-model-perf-tests-impl.yaml
     secrets: inherit
+    
   get-params:
     runs-on: ubuntu-latest
     outputs:
@@ -123,11 +136,8 @@ jobs:
     needs: [
       create-tag,
       create-release-notes,
-      build-artifact,
+      build-artifact
     ]
-    strategy:
-      matrix:
-        os: [ubuntu-20.04]
     # May accidentally create two releases without restricting to 1 job
     concurrency: create_upload_draft_release
     runs-on: ubuntu-latest
@@ -140,10 +150,14 @@ jobs:
         uses: qmonnet/git-archive-all-action@791fb850881cf58b1d1fcc9b06c01940080bba0a
         with:
           output-files: tt-metalium.tar.gz
-      - name: Download eager Python packages
+      - name: Download eager 20.04 Python packages
         uses: actions/download-artifact@v4
         with:
-          name: eager-dist-${{ matrix.os }}-any
+          name: eager-dist-ubuntu-20.04-any
+      - name: Download eager 22.04 Python packages
+        uses: actions/download-artifact@v4
+        with:
+          name: eager-dist-ubuntu-22.04-any
       - name: Create VERSION
         run: echo ${{ needs.create-tag.outputs.version }} > VERSION
       - name : Download release notes
