@@ -70,9 +70,8 @@ uint32_t max_packet_size_mask;
 
 auto input_queue_state = select_input_queue<pkt_dest_size_choice>();
 volatile local_pull_request_t *local_pull_request = (volatile local_pull_request_t *)(data_buffer_start_addr - 1024);
-volatile tt_l1_ptr fabric_router_l1_config_t* routing_table =
-    reinterpret_cast<tt_l1_ptr fabric_router_l1_config_t*>(routing_table_start_addr);
-volatile fabric_client_interface_t* client_interface = (volatile fabric_client_interface_t*)client_interface_addr;
+volatile tt_l1_ptr fabric_router_l1_config_t* routing_table;
+volatile fabric_client_interface_t* client_interface;
 
 fvc_producer_state_t test_producer __attribute__((aligned(16)));
 fvcc_inbound_state_t fvcc_test_producer __attribute__((aligned(16)));
@@ -385,15 +384,12 @@ bool test_buffer_handler() {
 }
 
 void kernel_main() {
-    tt_fabric_init();
-
     uint32_t rt_args_idx = 0;
     time_seed = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     src_endpoint_id = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     noc_offset = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     controller_noc_offset = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
-    uint32_t router_x = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
-    uint32_t router_y = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
+    uint32_t routing_plane = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     dest_device = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     uint32_t rx_buf_size = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     gk_interface_addr_l = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
@@ -406,11 +402,6 @@ void kernel_main() {
     target_address = base_target_address;
     rx_addr_hi = base_target_address + rx_buf_size;
 
-    uint64_t router_config_addr =
-        NOC_XY_ADDR(NOC_X(router_x), NOC_Y(router_y), eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE);
-    noc_async_read_one_packet(router_config_addr, routing_table_start_addr, sizeof(fabric_router_l1_config_t));
-    noc_async_read_barrier();
-
     zero_l1_buf(test_results, test_results_size_bytes);
     test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_STARTED;
     test_results[PQ_TEST_STATUS_INDEX+1] = (uint32_t) local_pull_request;
@@ -421,10 +412,6 @@ void kernel_main() {
     zero_l1_buf(reinterpret_cast<tt_l1_ptr uint32_t*>(data_buffer_start_addr), data_buffer_size_words * PACKET_WORD_SIZE_BYTES);
     zero_l1_buf((uint32_t*)local_pull_request, sizeof(local_pull_request_t));
     zero_l1_buf((uint32_t*)&packet_header, sizeof(packet_header_t));
-    zero_l1_buf((uint32_t*)client_interface, sizeof(fabric_client_interface_t));
-    client_interface->gk_interface_addr = ((uint64_t)gk_interface_addr_h << 32) | gk_interface_addr_l;
-    client_interface->gk_msg_buf_addr =
-        (((uint64_t)gk_interface_addr_h << 32) | gk_interface_addr_l) + offsetof(gatekeeper_info_t, gk_msg_buf);
 
     if constexpr (pkt_dest_size_choice == pkt_dest_size_choices_t::RANDOM) {
         input_queue_state.init(src_endpoint_id, prng_seed);
@@ -474,8 +461,10 @@ void kernel_main() {
     uint32_t curr_packet_words_sent = 0;
     uint32_t packet_count = 0;
 
-    // make sure fabric node gatekeeper is available.
-    fabric_endpoint_init();
+    // initalize client
+    fabric_endpoint_init(client_interface_addr, gk_interface_addr_l, gk_interface_addr_h);
+    routing_table = reinterpret_cast<tt_l1_ptr fabric_router_l1_config_t*>(
+        client_interface->routing_tables_l1_offset + sizeof(fabric_router_l1_config_t) * routing_plane);
 
     while (true) {
         iter++;
