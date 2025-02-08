@@ -216,7 +216,7 @@ jobs:
         if: ${{ inputs.publish-artifact }}
         uses: actions/upload-artifact@v4
         with:
-          name: TTMetal_build_any${{ (inputs.tracy && '_profiler') || '' }}
+          name: TTMetal_build_any_${{ inputs.version }}${{ (inputs.tracy && '_profiler') || '' }}
           path: /work/ttm_any.tar
           if-no-files-found: error
 
