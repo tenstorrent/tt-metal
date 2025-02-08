@@ -279,16 +279,6 @@ std::vector<std::optional<Tensor>> ExecuteUnaryBackwardPow::invoke(
     return grad_tensor;
 }
 
-std::vector<std::optional<Tensor>> ExecuteUnaryBackwardPow::invoke(
-    const Tensor& grad,
-    const Tensor& input,
-    float exponent,
-    const std::optional<MemoryConfig>& output_mem_config,
-    std::optional<Tensor> input_grad) {
-    return ExecuteUnaryBackwardPow::invoke(
-        DefaultQueueId, grad, input, exponent, output_mem_config, std::move(input_grad));
-}
-
 std::vector<std::optional<Tensor>> ExecuteUnaryBackwardExp::invoke(
     QueueId queue_id,
     const Tensor& grad,
@@ -326,14 +316,6 @@ std::vector<std::optional<Tensor>> ExecuteUnaryBackwardExp::invoke(
     return grad_tensor;
 }
 
-std::vector<std::optional<Tensor>> ExecuteUnaryBackwardExp::invoke(
-    const Tensor& grad,
-    const Tensor& input,
-    const std::optional<MemoryConfig>& output_mem_config,
-    std::optional<Tensor> input_grad) {
-    return ExecuteUnaryBackwardExp::invoke(DefaultQueueId, grad, input, output_mem_config, std::move(input_grad));
-}
-
 std::vector<std::optional<Tensor>> ExecuteUnaryBackwardTanh::invoke(
     QueueId queue_id,
     const Tensor& grad,
@@ -349,14 +331,6 @@ std::vector<std::optional<Tensor>> ExecuteUnaryBackwardTanh::invoke(
     ttnn::multiply(queue_id, grad, tanh_res, std::nullopt, output_mem_config, input_grad);
     grad_tensor.emplace_back(input_grad);
     return grad_tensor;
-}
-
-std::vector<std::optional<Tensor>> ExecuteUnaryBackwardTanh::invoke(
-    const Tensor& grad,
-    const Tensor& input,
-    const std::optional<MemoryConfig>& output_mem_config,
-    std::optional<Tensor> input_grad) {
-    return ExecuteUnaryBackwardTanh::invoke(DefaultQueueId, grad, input, output_mem_config, std::move(input_grad));
 }
 
 std::vector<std::optional<Tensor>> ExecuteUnaryBackwardSqrt::invoke(
@@ -415,14 +389,6 @@ std::vector<std::optional<Tensor>> ExecuteUnaryBackwardSqrt::invoke(
         input_grad);
     grad_tensor.emplace_back(input_grad);
     return grad_tensor;
-}
-
-std::vector<std::optional<Tensor>> ExecuteUnaryBackwardSqrt::invoke(
-    const Tensor& grad,
-    const Tensor& input,
-    const std::optional<MemoryConfig>& output_mem_config,
-    std::optional<Tensor> input_grad) {
-    return ExecuteUnaryBackwardSqrt::invoke(DefaultQueueId, grad, input, output_mem_config, std::move(input_grad));
 }
 
 std::vector<Tensor> ExecuteUnaryBackwardMultigammaln::invoke(
@@ -603,14 +569,6 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteUnaryBackwardRsqrt::invoke(
     return result;
 }
 
-std::vector<std::optional<ttnn::Tensor>> ExecuteUnaryBackwardRsqrt::invoke(
-    const Tensor& grad,
-    const Tensor& input,
-    const std::optional<MemoryConfig>& output_mem_config,
-    std::optional<Tensor> input_grad) {
-    return ExecuteUnaryBackwardRsqrt::invoke(DefaultQueueId, grad, input, output_mem_config, std::move(input_grad));
-}
-
 std::vector<std::optional<Tensor>> ExecuteUnaryBackwardNeg::invoke(
     QueueId queue_id,
     const Tensor& grad,
@@ -621,14 +579,6 @@ std::vector<std::optional<Tensor>> ExecuteUnaryBackwardNeg::invoke(
     input_grad = input_grad.value_or(ttnn::empty_like(input));
     result[0] = ttnn::neg(queue_id, grad, output_mem_config, input_grad);
     return result;
-}
-
-std::vector<std::optional<Tensor>> ExecuteUnaryBackwardNeg::invoke(
-    const Tensor& grad,
-    const Tensor& input,
-    const std::optional<MemoryConfig>& output_mem_config,
-    std::optional<Tensor> input_grad) {
-    return ExecuteUnaryBackwardNeg::invoke(DefaultQueueId, grad, input, output_mem_config, std::move(input_grad));
 }
 
 std::vector<Tensor> ExecuteUnaryBackwardRelu::invoke(
@@ -655,14 +605,6 @@ std::vector<std::optional<Tensor>> ExecuteUnaryBackwardFill::invoke(
                     ? ttnn::zeros_like(grad, std::nullopt, std::nullopt, std::nullopt, std::nullopt, input_grad)
                     : ttnn::zeros_like(grad);
     return result;
-}
-
-std::vector<std::optional<Tensor>> ExecuteUnaryBackwardFill::invoke(
-    const Tensor& grad,
-    const Tensor& input,
-    const std::optional<MemoryConfig>& output_mem_config,
-    std::optional<Tensor> input_grad) {
-    return ExecuteUnaryBackwardFill::invoke(DefaultQueueId, grad, input, output_mem_config, std::move(input_grad));
 }
 
 std::vector<Tensor> ExecuteUnaryBackwardHardsigmoid::invoke(
@@ -1005,14 +947,6 @@ std::vector<std::optional<Tensor>> ExecuteUnaryBackwardSilu::invoke(
 
     result[0] = input_grad;
     return result;
-}
-
-std::vector<std::optional<Tensor>> ExecuteUnaryBackwardSilu::invoke(
-    const Tensor& grad,
-    const Tensor& input,
-    const std::optional<MemoryConfig>& output_mem_config,
-    std::optional<Tensor> input_grad) {
-    return ExecuteUnaryBackwardSilu::invoke(DefaultQueueId, grad, input, output_mem_config, std::move(input_grad));
 }
 
 // Selu
@@ -1760,16 +1694,6 @@ std::vector<std::optional<ttnn::Tensor>> ExecuteUnaryBackwardGelu::invoke(
     return result;
 }
 
-std::vector<std::optional<ttnn::Tensor>> ExecuteUnaryBackwardGelu::invoke(
-    const Tensor& grad,
-    const Tensor& input,
-    const string& approximate,
-    const std::optional<MemoryConfig>& output_mem_config,
-    std::optional<Tensor> input_grad) {
-    return ExecuteUnaryBackwardGelu::invoke(
-        DefaultQueueId, grad, input, std::move(approximate), output_mem_config, std::move(input_grad));
-}
-
 std::vector<Tensor> ExecuteUnaryBackwardRepeat::invoke(
     const Tensor& grad,
     const Tensor& input,
@@ -1937,7 +1861,7 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
         if (reciprocal_input.padded_shape()[1] % 32 != 0) {
             ttnn::SmallVector<std::pair<uint32_t, uint32_t>> padding = {
                 {0, 0}, {0, 32 - (reciprocal_input.padded_shape()[1] % 32)}, {0, 0}, {0, 0}};
-            tensor_1_temp = ttnn::pad(ttnn::DefaultQueueId, reciprocal_input, padding, 0, true, std::nullopt);
+            tensor_1_temp = ttnn::pad(reciprocal_input, padding, 0, true, std::nullopt);
         }
         ttnn::SmallVector<int64_t> after_permute_dims = {0, 2, 3, 1};
         Tensor tensor_1 = ttnn::permute(tensor_1_temp, after_permute_dims, output_memory_config);
@@ -1975,7 +1899,7 @@ std::vector<Tensor> ExecuteUnaryBackwardProd::invoke(
     if (reciprocal_input.padded_shape()[0] % 32 != 0) {
         ttnn::SmallVector<std::pair<uint32_t, uint32_t>> padding = {
             {0, (32 - (reciprocal_input.padded_shape()[0] % 32))}, {0, 0}, {0, 0}, {0, 0}};
-        tensor_1_temp = ttnn::pad(ttnn::DefaultQueueId, reciprocal_input, padding, 0, false, std::nullopt);
+        tensor_1_temp = ttnn::pad(reciprocal_input, padding, 0, false, std::nullopt);
     }
     ttnn::SmallVector<int64_t> after_permute_dims = {3, 1, 2, 0};
     Tensor tensor_1 = ttnn::permute(tensor_1_temp, after_permute_dims, output_memory_config);

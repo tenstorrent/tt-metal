@@ -19,13 +19,6 @@ struct IndexedFillOperation {
         const ttnn::Tensor& input_tensor_b,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
         int64_t dim = 0);
-
-    static ttnn::Tensor invoke(
-        const ttnn::Tensor& batch_id,
-        const ttnn::Tensor& input_tensor_a,
-        const ttnn::Tensor& input_tensor_b,
-        const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-        int64_t dim = 0);
 };
 
 }  // namespace data_movement

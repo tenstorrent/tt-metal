@@ -36,19 +36,7 @@ struct ExecutePower {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
     static Tensor invoke(
-        const Tensor& input_tensor,
-        uint32_t exponent,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
-
-    static Tensor invoke(
         QueueId queue_id,
-        const Tensor& input_tensor,
-        float exponent,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
-
-    static Tensor invoke(
         const Tensor& input_tensor,
         float exponent,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
@@ -62,19 +50,7 @@ struct ExecutePower {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
     static Tensor invoke(
-        float input_a,
-        const Tensor& exponent,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
-
-    static Tensor invoke(
         QueueId queue_id,
-        const Tensor& input_tensor,
-        const Tensor& exponent,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
-
-    static Tensor invoke(
         const Tensor& input_tensor,
         const Tensor& exponent,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
@@ -132,22 +108,6 @@ struct ExecuteDivLikeOps {
 
 struct ExecuteDiv {
     static Tensor invoke(
-        const Tensor& input_tensor_a,
-        const Tensor& input_tensor_b,
-        bool accurate_mode = false,
-        const std::optional<std::string>& round_mode = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt);
-
-    static Tensor invoke(
-        const Tensor& input_tensor,
-        float value,
-        bool accurate_mode = false,
-        const std::optional<std::string>& round_mode = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt);
-
-    static Tensor invoke(
         QueueId queue_id,
         const Tensor& input_tensor_a,
         const Tensor& input_tensor_b,
@@ -189,25 +149,6 @@ struct ExecuteBiasGelu {
     }
 
     static Tensor invoke(
-        const Tensor& input_tensor_a_arg,
-        const Tensor& input_tensor_b_arg,
-        const std::optional<const DataType>& output_dtype = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt,
-        std::optional<unary::FusedActivations> activations = std::nullopt,
-        std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt) {
-        return BinaryOperation<binary_op_type>::invoke(
-            DefaultQueueId,
-            input_tensor_a_arg,
-            input_tensor_b_arg,
-            output_dtype,
-            memory_config,
-            optional_output_tensor,
-            activations,
-            input_tensor_a_activation);
-    }
-
-    static Tensor invoke(
         QueueId queue_id,
         const ttnn::Tensor& input_tensor_a,
         const float bias,
@@ -222,25 +163,6 @@ struct ExecuteBiasGelu {
             true,
             memory_config,
             optional_output_tensor);
-    }
-
-    static Tensor invoke(
-        const ttnn::Tensor& input_tensor_a,
-        const float bias,
-        const std::optional<const DataType>& dtype = std::nullopt,
-        const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-        std::optional<unary::FusedActivations> activations = std::nullopt,
-        std::optional<unary::UnaryWithParam> input_tensor_a_activation = std::nullopt) {
-        return invoke(
-            DefaultQueueId,
-            input_tensor_a,
-            bias,
-            dtype,
-            memory_config,
-            optional_output_tensor,
-            activations,
-            input_tensor_a_activation);
     }
 };
 
@@ -335,22 +257,7 @@ struct ExecuteRsub {
         const std::optional<unary::UnaryWithParam>& input_tensor_a_activation = std::nullopt);
 
     static Tensor invoke(
-        const Tensor& input_tensor_a_arg,
-        const Tensor& input_tensor_b_arg,
-        const std::optional<const DataType>& output_dtype = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-        const std::optional<unary::FusedActivations>& activations = std::nullopt,
-        const std::optional<unary::UnaryWithParam>& input_tensor_a_activation = std::nullopt);
-
-    static Tensor invoke(
         QueueId queue_id,
-        const Tensor& input_tensor,
-        float input_b,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
-
-    static Tensor invoke(
         const Tensor& input_tensor,
         float input_b,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
@@ -366,19 +273,7 @@ struct ExecuteBitwiseAnd {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
     static Tensor invoke(
-        const Tensor& input_tensor_a_arg,
-        const Tensor& input_tensor_b_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
-
-    static Tensor invoke(
         QueueId queue_id,
-        const Tensor& input_tensor,
-        int32_t input_b,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
-
-    static Tensor invoke(
         const Tensor& input_tensor,
         int32_t input_b,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
@@ -394,19 +289,7 @@ struct ExecuteBitwiseOr {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
     static Tensor invoke(
-        const Tensor& input_tensor_a_arg,
-        const Tensor& input_tensor_b_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
-
-    static Tensor invoke(
         QueueId queue_id,
-        const Tensor& input_tensor,
-        int32_t input_b,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
-
-    static Tensor invoke(
         const Tensor& input_tensor,
         int32_t input_b,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
@@ -422,19 +305,7 @@ struct ExecuteBitwiseXor {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
     static Tensor invoke(
-        const Tensor& input_tensor_a_arg,
-        const Tensor& input_tensor_b_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
-
-    static Tensor invoke(
         QueueId queue_id,
-        const Tensor& input_tensor,
-        int32_t input_b,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
-
-    static Tensor invoke(
         const Tensor& input_tensor,
         int32_t input_b,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
@@ -450,19 +321,7 @@ struct ExecuteBitwiseLeftShift {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
     static Tensor invoke(
-        const Tensor& input_tensor_a_arg,
-        const Tensor& input_tensor_b_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
-
-    static Tensor invoke(
         QueueId queue_id,
-        const Tensor& input_tensor,
-        int32_t input_b,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
-
-    static Tensor invoke(
         const Tensor& input_tensor,
         int32_t input_b,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
@@ -478,19 +337,7 @@ struct ExecuteBitwiseRightShift {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
     static Tensor invoke(
-        const Tensor& input_tensor_a_arg,
-        const Tensor& input_tensor_b_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
-
-    static Tensor invoke(
         QueueId queue_id,
-        const Tensor& input_tensor,
-        int32_t input_b,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
-
-    static Tensor invoke(
         const Tensor& input_tensor,
         int32_t input_b,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,

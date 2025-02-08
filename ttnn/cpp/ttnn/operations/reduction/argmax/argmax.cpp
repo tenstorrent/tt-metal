@@ -33,13 +33,4 @@ ttnn::Tensor ArgMaxOperation::invoke(
         .at(0);
 }
 
-ttnn::Tensor ArgMaxOperation::invoke(
-    const Tensor& input_tensor,
-    const std::optional<int> dim,
-    const bool use_muticore,
-    const std::optional<MemoryConfig>& memory_config,
-    std::optional<Tensor> optional_output_tensor) {
-    return invoke(DefaultQueueId, input_tensor, dim, use_muticore, memory_config, std::move(optional_output_tensor));
-}
-
 }  // namespace ttnn::operations::reduction

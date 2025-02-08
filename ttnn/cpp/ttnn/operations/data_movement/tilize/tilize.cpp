@@ -58,12 +58,4 @@ ttnn::Tensor ExecuteTilize::invoke(
     return build_ndiml_tilize(base_tilize)(input_tensor);
 }
 
-ttnn::Tensor ExecuteTilize::invoke(
-    const ttnn::Tensor& input_tensor,
-    const std::optional<MemoryConfig>& memory_config,
-    std::optional<DataType> output_dtype,
-    bool use_multicore) {
-    return invoke(DefaultQueueId, input_tensor, memory_config, output_dtype, use_multicore);
-}
-
 }  // namespace ttnn::operations::data_movement

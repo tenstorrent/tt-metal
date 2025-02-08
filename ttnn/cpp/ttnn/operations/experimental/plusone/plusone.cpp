@@ -15,6 +15,4 @@ ttnn::Tensor PlusOneOperation::invoke(QueueId queue_id, const Tensor& input_tens
     return operation::run(PlusOne{}, {input_tensor}, {}, {}, queue_id).at(0);
 }
 
-ttnn::Tensor PlusOneOperation::invoke(const Tensor& input_tensor) { return invoke(DefaultQueueId, input_tensor); }
-
 }  // namespace ttnn::operations::experimental
