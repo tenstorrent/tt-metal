@@ -143,8 +143,8 @@ Tensor to_layout_impl(
 
             if (tensor.is_sharded()) {
                 const auto memory_config = tensor.memory_config();
-                output_memory_config =
-                    tt::tt_metal::MemoryConfig{memory_config.memory_layout, memory_config.buffer_type};
+                // output_memory_config =
+                //     tt::tt_metal::MemoryConfig{memory_config.memory_layout, memory_config.buffer_type};
             }
             Shape output_tensor_end(SmallVector<uint32_t>(tensor.logical_shape().rank(), 0));
             int logical_rank = tensor.get_logical_shape().rank();
