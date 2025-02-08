@@ -138,6 +138,11 @@ TensorLayout TensorLayout::fromPaddedShape(
         CMAKE_UNIQUE_NAMESPACE::legacyShapeToAlignment(logical_shape, padded_shape, page_config, memory_config));
 }
 
+TensorLayout TensorLayout::restore_from_serialized(
+    DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const Alignment& alignment) {
+    return TensorLayout(dtype, page_config, memory_config, alignment);
+}
+
 void TensorLayout::initialize_alignment() {
     auto default_alignment = page_config_.create_default_alignment(dtype_, memory_config_);
     if (alignment_.empty()) {
