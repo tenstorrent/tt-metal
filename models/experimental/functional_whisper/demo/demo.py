@@ -22,6 +22,7 @@ import time
 import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters
 from models.experimental.functional_whisper.tt import ttnn_optimized_functional_whisper
+from models.experimental.functional_whisper.tt.ttnn_optimized_functional_whisper import init_kv_cache
 from models.generation_utils import get_logits_processor
 
 
@@ -45,18 +46,37 @@ def pad_input_32(tensor, value):
 
 
 def load_conditional_generation_ref_model():
-    hf_reference_model = (
-        WhisperForConditionalGeneration.from_pretrained("openai/whisper-base.en").to(torch.bfloat16).eval()
-    )
+    hf_ref_model = WhisperForConditionalGeneration.from_pretrained("openai/whisper-base.en").to(torch.bfloat16).eval()
     processor = AutoProcessor.from_pretrained("openai/whisper-base.en", language="English", task="transcribe")
     feature_extractor = AutoFeatureExtractor.from_pretrained("openai/whisper-base.en")
-    config = hf_reference_model.config
+    config = hf_ref_model.config
     return (
-        hf_reference_model,
+        hf_ref_model,
         config,
         processor,
         feature_extractor,
     )
+
+
+def init_conditional_generation_tt_model(hf_ref_model, config, ttnn_model, device, max_batch_size=1):
+    model = hf_ref_model.model
+    linear_weight = hf_ref_model.proj_out.weight
+
+    ttnn_linear_weight = ttnn.from_torch(linear_weight, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
+    ttnn_linear_weight = ttnn.permute(ttnn_linear_weight, (1, 0))
+    ttnn_linear_weight = ttnn.to_layout(ttnn_linear_weight, layout=ttnn.TILE_LAYOUT)
+
+    parameters = preprocess_model_parameters(
+        initialize_model=lambda: model,
+        convert_to_ttnn=ttnn_model.convert_to_ttnn,
+        custom_preprocessor=ttnn_model.custom_preprocessor,
+        device=device,
+    )
+
+    # kv_cache = init_kv_cache(config, device, max_batch_size, max_seq_len=config.max_length)
+    kv_cache = None
+
+    return parameters, ttnn_linear_weight, kv_cache
 
 
 def run_generate(
@@ -71,6 +91,7 @@ def run_generate(
     ttnn_linear_weight,
     device,
     generation_config,
+    kv_cache=None,
 ):
     input_ids = torch.tensor([[1, 1]]) * config.decoder_start_token_id
 
@@ -89,11 +110,13 @@ def run_generate(
     logger.info("Starting decode inference run")
 
     for i in tqdm(range(MAX_GEN_LEN), desc="Decode inference iterations"):
+        start_iter = time.time()
         output = ttnn_model.decoder(
             config,
             decoder_hidden_states,
             decoder_attention_mask=decoder_attention_mask,
             encoder_hidden_states=encoder_hidden_states,
+            kv_cache=kv_cache,
             parameters=parameters.decoder,
         )
 
@@ -122,6 +145,7 @@ def run_generate(
         decoder_hidden_states, decoder_attention_mask = ttnn_model.preprocess_decoder_inputs(
             config=config, input_ids=input_ids, attention_mask=None, parameters=parameters.decoder, device=device
         )
+        logger.info(f"Decode iter time: {time.time() - start_iter}")
 
         if next_tokens == config.eos_token_id:
             break
@@ -192,20 +216,9 @@ def run_demo_functional_whisper_for_audio_classification_inference(input_path, t
 def run_demo_functional_whisper_for_conditional_generation_inference(input_path, ttnn_model, device, num_inputs):
     torch.manual_seed(0)
 
-    hf_reference_model, config, processor, feature_extractor = load_conditional_generation_ref_model()
-    model = hf_reference_model.model
-    linear_weight = hf_reference_model.proj_out.weight
-
-    linear_weight = hf_reference_model.proj_out.weight
-    ttnn_linear_weight = ttnn.from_torch(linear_weight, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
-    ttnn_linear_weight = ttnn.permute(ttnn_linear_weight, (1, 0))
-    ttnn_linear_weight = ttnn.to_layout(ttnn_linear_weight, layout=ttnn.TILE_LAYOUT)
-
-    parameters = preprocess_model_parameters(
-        initialize_model=lambda: model,
-        convert_to_ttnn=ttnn_model.convert_to_ttnn,
-        custom_preprocessor=ttnn_model.custom_preprocessor,
-        device=device,
+    hf_ref_model, config, processor, feature_extractor = load_conditional_generation_ref_model()
+    parameters, ttnn_linear_weight, kv_cache = init_conditional_generation_tt_model(
+        hf_ref_model, config, ttnn_model, device
     )
 
     input_data = load_input_paths(input_path)
@@ -234,7 +247,7 @@ def run_demo_functional_whisper_for_conditional_generation_inference(input_path,
             device=device,
         )
 
-        generation_config = hf_reference_model.generation_config
+        generation_config = hf_ref_model.generation_config
         ttnn_output = run_generate(
             config,
             input_embeds,
@@ -247,6 +260,7 @@ def run_demo_functional_whisper_for_conditional_generation_inference(input_path,
             ttnn_linear_weight=ttnn_linear_weight,
             device=device,
             generation_config=generation_config,
+            kv_cache=kv_cache,
         )
         logger.info("Model Output")
         logger.info(ttnn_output)
@@ -311,19 +325,9 @@ def run_demo_functional_whisper_for_audio_classification_dataset(ttnn_model, dev
 def run_demo_functional_whisper_for_conditional_generation_dataset(ttnn_model, device):
     torch.manual_seed(0)
 
-    hf_reference_model, config, processor, feature_extractor = load_conditional_generation_ref_model()
-    model = hf_reference_model.model
-    linear_weight = hf_reference_model.proj_out.weight
-
-    ttnn_linear_weight = ttnn.from_torch(linear_weight, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
-    ttnn_linear_weight = ttnn.permute(ttnn_linear_weight, (1, 0))
-    ttnn_linear_weight = ttnn.to_layout(ttnn_linear_weight, layout=ttnn.TILE_LAYOUT)
-
-    parameters = preprocess_model_parameters(
-        initialize_model=lambda: model,
-        convert_to_ttnn=ttnn_model.convert_to_ttnn,
-        custom_preprocessor=ttnn_model.custom_preprocessor,
-        device=device,
+    hf_ref_model, config, processor, feature_extractor = load_conditional_generation_ref_model()
+    parameters, ttnn_linear_weight, kv_cache = init_conditional_generation_tt_model(
+        hf_ref_model, config, ttnn_model, device
     )
 
     ds = load_dataset("hf-internal-testing/librispeech_asr_dummy", "clean", split="validation")
@@ -345,7 +349,7 @@ def run_demo_functional_whisper_for_conditional_generation_dataset(ttnn_model, d
         device=device,
     )
 
-    generation_config = hf_reference_model.generation_config
+    generation_config = hf_ref_model.generation_config
     ttnn_output = run_generate(
         config,
         input_embeds,
@@ -358,6 +362,7 @@ def run_demo_functional_whisper_for_conditional_generation_dataset(ttnn_model, d
         ttnn_linear_weight=ttnn_linear_weight,
         device=device,
         generation_config=generation_config,
+        kv_cache=kv_cache,
     )
     logger.info("Model Output")
     logger.info(ttnn_output)
