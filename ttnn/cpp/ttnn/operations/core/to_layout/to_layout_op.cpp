@@ -142,16 +142,15 @@ Tensor to_layout_impl(
                 "dtype cannot be different from tensor dtype when converting to ROW_MAJOR_LAYOUT on device!");
 
             if (tensor.is_sharded()) {
-                const auto memory_config = tensor.memory_config();
-                // output_memory_config =
-                //     tt::tt_metal::MemoryConfig{memory_config.memory_layout, memory_config.buffer_type};
+                if (memory_config != tensor.memory_config()) {
+                    tensor = ttnn::to_memory_config(tensor, output_memory_config);
+                }
             }
             Shape output_tensor_end(SmallVector<uint32_t>(tensor.logical_shape().rank(), 0));
             int logical_rank = tensor.get_logical_shape().rank();
             for (int index = -1; index >= -logical_rank; --index) {
                 output_tensor_end[index] = tensor.get_logical_shape()[index] - 1;
             }
-
             tensor =
                 ttnn::untilize_with_unpadding(tensor, output_tensor_end, output_memory_config, use_multicore_untilize);
             return ttnn::reshape(tensor, ttnn::Shape{output_shape});
