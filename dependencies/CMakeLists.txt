@@ -8,6 +8,14 @@ set(CMAKE_CXX_CLANG_TIDY "")
 # Boost
 ############################################################################################################################
 
+function(ensureboosttarget boostTarget)
+    if(NOT TARGET Boost::${boostTarget})
+        add_library(Boost::${boostTarget} INTERFACE IMPORTED GLOBAL)
+        target_link_libraries(Boost::${boostTarget} INTERFACE Boost::headers)
+        message(STATUS "Defined Boost::${boostTarget} as an INTERFACE target.")
+    endif()
+endfunction()
+
 CPMAddPackage(
     NAME Boost
     VERSION 1.86.0
@@ -20,8 +28,13 @@ CPMAddPackage(
         "BOOST_SKIP_INSTALL_RULES ON"
         "BUILD_SHARED_LIBS OFF"
         "BOOST_INCLUDE_LIBRARIES core\\\;container\\\;smart_ptr\\\;interprocess"
-    FIND_PACKAGE_ARGUMENTS "GLOBAL"
+    FIND_PACKAGE_ARGUMENTS "CONFIG REQUIRED GLOBAL"
 )
+
+ensureboosttarget(core)
+ensureboosttarget(container)
+ensureboosttarget(smart_ptr)
+ensureboosttarget(interprocess)
 
 add_library(span INTERFACE)
 target_link_libraries(span INTERFACE Boost::core)
@@ -77,6 +90,11 @@ endif()
 ############################################################################################################################
 
 CPMAddPackage(NAME magic_enum GITHUB_REPOSITORY Neargye/magic_enum GIT_TAG v0.9.7 FIND_PACKAGE_ARGUMENTS "GLOBAL")
+
+if(NOT TARGET magic_enum)
+    add_library(magic_enum INTERFACE)
+    target_link_libraries(magic_enum INTERFACE magic_enum::magic_enum)
+endif()
 
 ############################################################################################################################
 # fmt : https://github.com/fmtlib/fmt
