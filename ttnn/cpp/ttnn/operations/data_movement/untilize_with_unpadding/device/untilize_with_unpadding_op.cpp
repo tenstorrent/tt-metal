@@ -109,7 +109,7 @@ operation::ProgramWithCallbacks UntilizeWithUnpadding::create_program(
     auto& output_tensor = output_tensors.at(0);
     if (input_tensors.at(0).memory_config().is_sharded() || this->use_multicore) {
         return detail::untilize_with_unpadding_multi_core(
-            input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en);
+            input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en, this->enough_space_height);
     } else {
         return detail::untilize_with_unpadding_single_core(
             input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en);

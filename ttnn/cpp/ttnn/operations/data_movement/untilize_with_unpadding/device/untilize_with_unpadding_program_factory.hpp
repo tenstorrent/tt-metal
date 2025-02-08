@@ -12,13 +12,13 @@ tt::tt_metal::operation::ProgramWithCallbacks untilize_with_unpadding_single_cor
     const Tensor& a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en);
 
 tt::tt_metal::operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
-    const Tensor& a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en);
+    const Tensor& a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en, bool enough_space_height);
 
 // This purely supports input block shard -> output interleaved for now
 tt::tt_metal::operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
     const Tensor& a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en);
 
 tt::tt_metal::operation::ProgramWithCallbacks untilize_with_unpadding_multi_core(
-    const Tensor& a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en);
+    const Tensor& a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en, bool enough_space_height);
 
 }  // namespace ttnn::operations::data_movement::detail
