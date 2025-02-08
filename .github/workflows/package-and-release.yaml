@@ -10,7 +10,7 @@ permissions:
   contents: write
   packages: write
 
-jobs:  
+jobs:
   build-artifact:
     strategy:
       matrix:
@@ -27,7 +27,7 @@ jobs:
     with:
       tracy: true
   
-  single-card-demos:    
+  single-card-demos:
     needs: build-artifact
     if: ${{ contains(needs.build-artifact.*.outputs.version, '20.04') }}
     uses: ./.github/workflows/single-card-demo-tests-impl.yaml
