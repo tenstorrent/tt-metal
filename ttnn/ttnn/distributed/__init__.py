@@ -19,6 +19,5 @@ from .distributed import (
     MeshToTensor,
     ConcatMeshToTensor,
     visualize_mesh_device,
-    ConcatMesh2dToTensor,
     distribute,
 )
