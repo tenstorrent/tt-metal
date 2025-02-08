@@ -5,6 +5,7 @@
 import transformers
 import torch
 from typing import Optional, Tuple
+from loguru import logger
 
 from torch.nn import functional as F
 from ttnn.model_preprocessing import preprocess_linear_weight, preprocess_linear_bias
@@ -23,27 +24,42 @@ def dropout(hidden_states, p, training):
     return hidden_states
 
 
-# The split_query_key_value_and_split_heads requires the query to have the same volume as the key and values
-# This is not the case however for whisper so we currently cannot swap out calculate_key_values below
-# def calculate_key_values(config, query_states, key_value_states, *, parameters):
-#     fused_kv = key_value_states @ parameters.key_value.weight + parameters.key_value.bias
-#     head_size = config.d_model // config.encoder_attention_heads
-#     batch_size, *_, _, two_times_hidden_size = fused_kv.padded_shape
-#     hidden_size = two_times_hidden_size // 2
-#     encoder_attention_heads = hidden_size // head_size
-#     query_states, key_states, value_states = ttnn.transformer.split_query_key_value_and_split_heads(
-#         query_states,
-#         kv_input_tensor=fused_kv,
-#         num_heads=encoder_attention_heads,
-#         memory_config=WHISPER_MEMORY_CONFIG,
-#     )
-#     key_states = ttnn.permute(key_states, (0, 1, 3, 2))
-#     return query_states, key_states, value_states
+def init_kv_cache(config, device, max_batch_size, max_seq_len):
+    """
+    Generates empty KV cache and sends to device
+    """
+
+    logger.info(f"Initializing KV cache with max batch size: {max_batch_size} and max sequence length: {max_seq_len}")
+
+    kv_cache = []
+    for i in range(config.decoder_layers):
+        kv_cache_layer = []
+        for j in range(2):
+            cache_k_or_v = torch.zeros(
+                (
+                    max_batch_size,
+                    config.decoder_attention_heads,
+                    max_seq_len,
+                    config.d_model // config.decoder_attention_heads,
+                )
+            )
+            cache_k_or_v = ttnn.as_tensor(
+                cache_k_or_v,
+                dtype=ttnn.bfloat8_b,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=None,
+                cache_file_name=None,
+            )
+            kv_cache_layer.append(cache_k_or_v)
+        kv_cache.append(kv_cache_layer)
+
+    return kv_cache
 
 
 def calculate_key_values(config, key_value_states, *, parameters):
     bsz, tgt_len, hidden_size = key_value_states.shape
-    bsz, tgt_len_padded, _ = key_value_states.padded_shape
     head_size = hidden_size // config.encoder_attention_heads
 
     fused_kv = key_value_states @ parameters.key_value.weight + parameters.key_value.bias
@@ -59,55 +75,6 @@ def calculate_key_values(config, key_value_states, *, parameters):
     value_states = ttnn.transpose(value_states, 1, 2)  # 1, H, S, d
 
     return key_states, value_states
-
-
-# The following functionis expected to replace calculate_query_key_values and split_query_key_value_and_split_heads below
-# however the pcc is incorrect on the final layer unless we keep the original split_query_key_value_and_split_heads below
-# def calculate_query_key_values(config, hidden_states, *, parameters):
-#     fused_qkv = hidden_states @ parameters.query_key_value.weight + parameters.query_key_value.bias
-#     head_size = config.d_model // config.encoder_attention_heads
-#     batch_size, *_, _, three_times_hidden_size = fused_qkv.padded_shape
-#     hidden_size = three_times_hidden_size // 3
-#     encoder_attention_heads = hidden_size // head_size
-#     return ttnn.transformer.split_query_key_value_and_split_heads(
-#         fused_qkv,
-#         num_heads=encoder_attention_heads,
-#         memory_config=WHISPER_MEMORY_CONFIG,
-#     )
-
-
-def split_query_key_value_and_split_heads(
-    config, fused_qkv: ttnn.Tensor
-) -> Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
-    head_size = config.d_model // config.encoder_attention_heads
-    batch_size, *_, seq_length, _ = fused_qkv.shape
-    batch_size, *_, padded_seq_length, _ = fused_qkv.padded_shape
-
-    query_states, key_states, value_states = ttnn.transformer.split_query_key_value_and_split_heads(
-        fused_qkv, num_heads=config.encoder_attention_heads
-    )
-
-    query_states = ttnn.reshape(
-        query_states,
-        [batch_size, config.encoder_attention_heads, seq_length, head_size],
-        [batch_size, config.encoder_attention_heads, padded_seq_length, head_size],
-    )
-    key_states = ttnn.reshape(
-        key_states,
-        [batch_size, config.encoder_attention_heads, head_size, seq_length],
-        [batch_size, config.encoder_attention_heads, head_size, padded_seq_length],
-    )
-    value_states = ttnn.reshape(
-        value_states,
-        [batch_size, config.encoder_attention_heads, seq_length, head_size],
-        [batch_size, config.encoder_attention_heads, padded_seq_length, head_size],
-    )
-    return query_states, key_states, value_states
-
-
-def calculate_query_key_values(config, hidden_states, *, parameters):
-    fused_qkv = hidden_states @ parameters.query_key_value.weight + parameters.query_key_value.bias
-    return split_query_key_value_and_split_heads(config, fused_qkv)
 
 
 def whisper_attention(
@@ -126,9 +93,25 @@ def whisper_attention(
         query_states = ttnn.transpose(query_states, 1, 2)  # 1, H, 32, d
         key_states, value_states = calculate_key_values(config, encoder_hidden_states, parameters=parameters)
     else:
-        query_states, key_states, value_states = calculate_query_key_values(
-            config, hidden_states, parameters=parameters
+        fused_qkv = hidden_states @ parameters.query_key_value.weight + parameters.query_key_value.bias  # B, S, 3xHxd
+        fused_qkv = ttnn.unsqueeze_to_4D(fused_qkv)
+        (
+            query_states,  # B, H, S, d
+            key_states,  # B, H, d, S
+            value_states,  # B, H, S, d
+        ) = ttnn.experimental.nlp_create_qkv_heads(
+            fused_qkv,
+            num_heads=config.decoder_attention_heads,
+            num_kv_heads=config.decoder_attention_heads,
+            transpose_k_heads=True,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
+
+        if is_decode and kv_cache is not None:
+            k_cache = kv_cache[0]  # 1, H, S, d
+            v_cache = kv_cache[1]  # 1, H, S, d
+
+            breakpoint()
 
     query_states *= scaling
 
@@ -143,7 +126,10 @@ def whisper_attention(
     attn_probs = dropout(attn_weights, p=0, training=False)
     attn_output = attn_probs @ value_states
 
-    attn_output = ttnn.transformer.concatenate_heads(attn_output)
+    attn_output = ttnn.experimental.nlp_concat_heads(attn_output)
+    attn_output = ttnn.squeeze(attn_output, 0)
+    attn_output = attn_output[:, :tgt_len, :]
+
     attn_output = attn_output @ parameters.out_proj.weight + parameters.out_proj.bias
     return attn_output
 
@@ -223,7 +209,7 @@ def expand_mask(mask: torch.Tensor, dtype: torch.dtype, tgt_len: Optional[int] =
     return inverted_mask.masked_fill(inverted_mask.to(torch.bool), torch.finfo(dtype).min)
 
 
-def decoder_layer(config, hidden_states, attention_mask, encoder_hidden_states, *, parameters):
+def decoder_layer(config, hidden_states, attention_mask, encoder_hidden_states, kv_cache=None, *, parameters):
     residual = hidden_states
     hidden_states = ttnn.layer_norm(
         hidden_states,
@@ -236,6 +222,7 @@ def decoder_layer(config, hidden_states, attention_mask, encoder_hidden_states, 
         hidden_states=hidden_states,
         attention_mask=attention_mask,
         is_decode=True,
+        kv_cache=kv_cache,
         parameters=parameters.self_attn,
     )
     hidden_states = dropout(hidden_states, p=0, training=False)
@@ -255,6 +242,7 @@ def decoder_layer(config, hidden_states, attention_mask, encoder_hidden_states, 
         attention_mask=None,
         is_decode=True,
         encoder_hidden_states=encoder_hidden_states,
+        kv_cache=kv_cache,
         parameters=parameters.encoder_attn,
     )
 
@@ -295,15 +283,16 @@ def prepare_decoder_attention_mask(attention_mask, input_shape, input_embeds):
     return combined_attention_mask
 
 
-def decoder(config, hidden_states, decoder_attention_mask, encoder_hidden_states, *, parameters):
+def decoder(config, hidden_states, decoder_attention_mask, encoder_hidden_states, kv_cache=None, *, parameters):
     hidden_states = dropout(hidden_states, p=0, training=False)
 
-    for decoder_layer_parameter in parameters.layers:
+    for i, decoder_layer_parameter in enumerate(parameters.layers):
         hidden_states = decoder_layer(
             config,
             hidden_states,
             decoder_attention_mask,
             encoder_hidden_states,
+            kv_cache=kv_cache[i] if kv_cache is not None else None,
             parameters=decoder_layer_parameter,
         )
 
