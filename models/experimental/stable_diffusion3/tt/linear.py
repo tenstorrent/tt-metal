@@ -37,7 +37,7 @@ class TtLinearParameters:
         if "bias" in state:
             bias = state["bias"].unsqueeze(0)
             if unsqueeze_bias:
-                bias = bias.unsqueeze(0)
+                bias = bias.unsqueeze(0).repeat(2, 1, 1)
         else:
             bias = None
 
