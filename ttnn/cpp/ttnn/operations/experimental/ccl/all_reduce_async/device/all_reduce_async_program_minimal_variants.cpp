@@ -119,7 +119,7 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
     uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size();
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
     uint32_t cb_base_num_pages = std::lcm(input_tensor_shard_num_pages, output_tensor_shard_num_pages);
-    uint32_t cb_num_pages = std::lcm(num_pages_per_packet, cb_base_num_pages);
+    uint32_t cb_num_pages = input_tensor_num_pages;
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
     tt::tt_metal::CircularBufferConfig cb_src0_config =
@@ -169,14 +169,38 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
     }
 
     // Create input tensor splits
-    std::vector<uint32_t> num_input_cores_in_link(num_links, 0);
-    uint32_t input_cores_per_link =
-        tt::div_up(output_tensor_pages_in_link[0], input_tensor_shard_num_pages);  // TODO: Add validation
-    uint32_t num_assigned_input_cores = 0;
+    std::vector<std::pair<uint32_t, uint32_t>> input_cores_idx_per_link(num_links, {0, 0});
+    std::vector<uint32_t> input_tensor_tile_offset_per_link(num_links, 0);
+    uint32_t start_core_idx = 0;
+    uint32_t num_pages_overflow = 0;
     for (uint32_t link = 0; link < num_links; link++) {
-        uint32_t num_cores_this_link = std::min(input_cores_per_link, num_input_cores - num_assigned_input_cores);
-        num_input_cores_in_link[link] = num_cores_this_link;
-        num_assigned_input_cores += num_cores_this_link;
+        uint32_t num_pages_this_link = output_tensor_pages_in_link[link];
+
+        // Get offset based on previous overflow
+        uint32_t input_tensor_tile_offset =
+            (input_tensor_shard_num_pages - num_pages_overflow) % input_tensor_shard_num_pages;
+        input_tensor_tile_offset_per_link[link] = input_tensor_tile_offset;
+
+        uint32_t end_core_idx = std::min(
+            start_core_idx + tt::div_up(num_pages_this_link + input_tensor_tile_offset, input_tensor_shard_num_pages),
+            num_input_cores - 1);
+
+        // Num pages allocated based on number of input cores selected for this link
+        uint32_t num_pages_allocated =
+            (end_core_idx - start_core_idx) * input_tensor_shard_num_pages - input_tensor_tile_offset;
+
+        // Update overflow
+        num_pages_overflow = num_pages_allocated - num_pages_this_link;
+
+        // Store core indices
+        input_cores_idx_per_link[link] = {start_core_idx, end_core_idx};
+
+        // Set start index based on overflow
+        if (num_pages_overflow > 0) {
+            start_core_idx = end_core_idx - 1;
+        } else {
+            start_core_idx = end_core_idx;
+        }
     }
 
     // Create reduction semaphore vector for each link
@@ -288,22 +312,14 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
         CoreCoord drain_sync_core = device->worker_core_from_logical_core(core);
         uint32_t worker_num_tiles_to_read = output_tensor_pages_in_link[link];
 
-        if (link < num_links - 1) {
-            TT_FATAL(
-                worker_num_tiles_to_read % input_tensor_shard_num_pages == 0,
-                "worker_num_tiles_to_read must be divisible by input_tensor_shard_num_pages, currently shard tile "
-                "offset is not supported");
-        }
-
-        uint32_t input_first_core_tile_start_offset = 0;
+        uint32_t input_first_core_tile_start_offset = input_tensor_tile_offset_per_link[link];
         uint32_t output_first_core_tile_start_offset = 0;
 
         std::vector<uint32_t> input_tensor_cores_x;
         std::vector<uint32_t> input_tensor_cores_y;
         std::vector<uint32_t> output_tensor_cores_x;
         std::vector<uint32_t> output_tensor_cores_y;
-        for (uint32_t i = input_cores_per_link * link; i < input_cores_per_link * link + num_input_cores_in_link[link];
-             i++) {
+        for (uint32_t i = input_cores_idx_per_link[link].first; i < input_cores_idx_per_link[link].second; i++) {
             auto this_core = device->worker_core_from_logical_core(input_cores_vec[i]);
             input_tensor_cores_x.push_back(this_core.x);
             input_tensor_cores_y.push_back(this_core.y);
@@ -408,6 +424,9 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
         };
         tt::tt_metal::SetRuntimeArgs(
             program, reduction_reader_kernel_id, output_corerangeset_per_link[link], reduction_reader_rt_args);
+
+        input_first_core_tile_start_offset =
+            (worker_num_tiles_to_read % input_tensor_shard_num_pages) + input_first_core_tile_start_offset;
     }
 
     auto override_runtime_arguments_callback =

@@ -174,8 +174,16 @@ def run_all_reduce_impl(
             ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
 
             ##### Run Trace #####
-            logger.info("Running trace")
+            logger.info("Starting Trace perf test...")
+            time_start = time()
             ttnn.execute_trace(mesh_device, trace_id, blocking=False)
+            ttnn.release_trace(mesh_device, trace_id)
+            for d in mesh_device.get_devices():
+                ttnn.synchronize_device(d)
+            time_end = time()
+            logger.info(f"Time taken: {time_end - time_start} s")
+            logger.info(f"Time per iter: {(time_end - time_start) / num_iters} s")
+            logger.info(f"Time per iter: {(time_end - time_start) / num_iters * 1e6} us")
 
         else:
             tt_outs = run_op()
@@ -222,12 +230,13 @@ def run_all_reduce_impl(
 @pytest.mark.parametrize(
     "output_shape, cluster_axis, num_links, input_num_cores, output_num_cores",
     [
+        ([1, 1, 32, 2048], 0, 4, 24, 16),  # FF2/DO all reduce
         ([1, 1, 32, 1280], 1, 3, 24, 40),  # QKV all reduce
         ([1, 1, 32, 3584], 1, 3, 24, 24),  # FF1 all reduce
         ([1, 1, 32, 2048], 0, 3, 24, 16),  # FF2/DO all reduce
         ([1, 1, 32, 1280], 1, 2, 24, 40),  # QKV all reduce
         ([1, 1, 32, 3584], 1, 2, 24, 24),  # FF1 all reduce
-        # ([1, 1, 32, 2048], 0, 2, 24, 16),  # FF2/DO all reduce  # Not supported
+        ([1, 1, 32, 2048], 0, 2, 24, 16),  # FF2/DO all reduce
         ([1, 1, 32, 1280], 1, 1, 24, 40),  # QKV all reduce
         ([1, 1, 32, 3584], 1, 1, 24, 24),  # FF1 all reduce
         ([1, 1, 32, 2048], 0, 1, 24, 16),  # FF2/DO all reduce
