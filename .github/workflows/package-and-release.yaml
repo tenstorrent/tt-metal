@@ -138,7 +138,7 @@ jobs:
     needs: [
       create-tag,
       create-release-notes,
-      build-artifact
+      build-artifact,
     ]
     # May accidentally create two releases without restricting to 1 job
     concurrency: create_upload_draft_release
