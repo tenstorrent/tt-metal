@@ -135,11 +135,7 @@ jobs:
           path: RELEASE_NOTES.txt
   # Candidate for breaking up
   create-and-upload-draft-release:
-    needs: [
-      create-tag,
-      create-release-notes,
-      build-artifact,
-    ]
+    needs: [create-tag, create-release-notes, build-artifact]
     # May accidentally create two releases without restricting to 1 job
     concurrency: create_upload_draft_release
     runs-on: ubuntu-latest
