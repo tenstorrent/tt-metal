@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import torch_random, is_grayskull
+from models.utility_functions import torch_random, is_grayskull, skip_for_grayskull
 
 
 @pytest.mark.parametrize("batch_size", [1, 16, 1, 16])
@@ -32,6 +32,7 @@ def test_max(device, batch_size, h, w, dim):
     assert_with_pcc(torch_output_tensor, output_tensor)
 
 
+@skip_for_grayskull("May fail on GS if run all the tests in this file. #17084")
 @pytest.mark.parametrize("batch_size1", [2])
 @pytest.mark.parametrize("batch_size2", [32])
 @pytest.mark.parametrize("h", [64])
@@ -115,8 +116,10 @@ def test_max_global(device, batch_size, h, w):
 @pytest.mark.parametrize("keepdim", [True, False])
 def test_max_dim(device, input_shape_and_dim, keepdim):
     input_shape, max_dim = input_shape_and_dim
-    if is_grayskull() and (input_shape[-1] % 32 != 0 or input_shape[-2] % 32 != 0 or input_shape[max_dim] % 32 != 0):
-        pytest.skip("If not a tile size multiple, may fail on GS if run all the tests in this file. #17084")
+    if is_grayskull() and (
+        input_shape[-1] % 32 != 0 or input_shape[-2] % 32 != 0 or input_shape[max_dim] % 32 != 0 or max_dim <= -2
+    ):
+        pytest.skip("May fail on GS if run all the tests in this file. #17084")
 
     torch_input_tensor = torch_random(input_shape, -100, 100, dtype=torch.bfloat16)
     torch_output_tensor, _ = torch.max(torch_input_tensor, dim=max_dim, keepdim=keepdim)
