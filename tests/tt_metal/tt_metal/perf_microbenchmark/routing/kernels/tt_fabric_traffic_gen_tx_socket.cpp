@@ -66,9 +66,8 @@ uint32_t max_packet_size_mask;
 
 auto input_queue_state = select_input_queue<pkt_dest_size_choice>();
 volatile local_pull_request_t* local_pull_request = (volatile local_pull_request_t*)(data_buffer_start_addr - 1024);
-volatile tt_l1_ptr fabric_router_l1_config_t* routing_table =
-    reinterpret_cast<tt_l1_ptr fabric_router_l1_config_t*>(routing_table_start_addr);
-volatile fabric_client_interface_t* client_interface = (volatile fabric_client_interface_t*)client_interface_addr;
+volatile tt_l1_ptr fabric_router_l1_config_t* routing_table;
+volatile fabric_client_interface_t* client_interface;
 volatile tt_l1_ptr chan_req_buf* client_pull_req_buf =
     reinterpret_cast<tt_l1_ptr chan_req_buf*>(client_pull_req_buf_addr);
 
@@ -328,23 +327,15 @@ bool test_buffer_handler(socket_handle_t* socket_handle) {
 }
 
 void kernel_main() {
-    tt_fabric_init();
-
     // TODO: refactor
     src_endpoint_id = get_arg_val<uint32_t>(0);
     noc_offset = get_arg_val<uint32_t>(1);
-    uint32_t router_x = get_arg_val<uint32_t>(2);
-    uint32_t router_y = get_arg_val<uint32_t>(3);
-    dest_device = get_arg_val<uint32_t>(4);
+    uint32_t routing_plane = get_arg_val<uint32_t>(2);
+    dest_device = get_arg_val<uint32_t>(3);
 
     if (ASYNC_WR == test_command) {
         target_address = get_arg_val<uint32_t>(5);
     }
-
-    uint64_t router_config_addr = NOC_XY_ADDR(router_x, router_y, eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE);
-    noc_async_read_one_packet(
-        router_config_addr, routing_table_start_addr, sizeof(tt::tt_fabric::fabric_router_l1_config_t));
-    noc_async_read_barrier();
 
     zero_l1_buf(test_results, test_results_size_bytes);
     test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_STARTED;
@@ -357,14 +348,14 @@ void kernel_main() {
         reinterpret_cast<tt_l1_ptr uint32_t*>(data_buffer_start_addr), data_buffer_size_words * PACKET_WORD_SIZE_BYTES);
     zero_l1_buf((uint32_t*)local_pull_request, sizeof(local_pull_request_t));
     zero_l1_buf((uint32_t*)&packet_header, sizeof(packet_header_t));
-    zero_l1_buf((uint32_t*)client_interface, sizeof(fabric_client_interface_t));
-    zero_l1_buf((uint32_t*)client_pull_req_buf, sizeof(chan_req_buf));
-    client_interface->gk_interface_addr = ((uint64_t)gk_interface_addr_h << 32) | gk_interface_addr_l;
-    client_interface->gk_msg_buf_addr = client_interface->gk_interface_addr + offsetof(gatekeeper_info_t, gk_msg_buf);
-    client_interface->pull_req_buf_addr = xy_local_addr | client_pull_req_buf_addr;
 
-    // make sure fabric node gatekeeper is available.
-    fabric_endpoint_init();
+    // initalize client
+    fabric_endpoint_init(client_interface_addr, gk_interface_addr_l, gk_interface_addr_h);
+    routing_table = reinterpret_cast<tt_l1_ptr fabric_router_l1_config_t*>(
+        client_interface->routing_tables_l1_offset + sizeof(fabric_router_l1_config_t) * routing_plane);
+
+    zero_l1_buf((uint32_t*)client_pull_req_buf, sizeof(chan_req_buf));
+    client_interface->pull_req_buf_addr = xy_local_addr | client_pull_req_buf_addr;
 
     if constexpr (pkt_dest_size_choice == pkt_dest_size_choices_t::RANDOM) {
         input_queue_state.init(src_endpoint_id, prng_seed);

@@ -331,7 +331,8 @@ typedef struct _fabric_client_interface {
     uint64_t gk_interface_addr;
     uint64_t gk_msg_buf_addr;
     uint64_t pull_req_buf_addr;
-    uint32_t padding[2];
+    uint32_t num_routing_planes;
+    uint32_t routing_tables_l1_offset;
     uint32_t return_status[3];
     uint32_t socket_count;
     chan_ptr wrptr;

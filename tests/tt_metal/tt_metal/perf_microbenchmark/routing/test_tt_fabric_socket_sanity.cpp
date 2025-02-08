@@ -296,6 +296,7 @@ int main(int argc, char** argv) {
         bool router_core_found = false;
         CoreCoord router_logical_core;
         CoreCoord router_phys_core;
+        routing_plane_id_t routing_plane;
         CoreCoord gk_phys_core;
         uint32_t routing_table_addr = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
         uint32_t gk_interface_addr = routing_table_addr + sizeof(fabric_router_l1_config_t) * 4;
@@ -318,6 +319,11 @@ int main(int argc, char** argv) {
                         // sender device.
                         router_logical_core = device.second->get_ethernet_sockets(neighbor)[0];
                         router_phys_core = device.second->ethernet_core_from_logical_core(router_logical_core);
+                        auto eth_chan = tt::Cluster::instance()
+                                            .get_soc_desc(test_device_id_l)
+                                            .logical_eth_core_to_chan_map.at(router_logical_core);
+                        routing_plane = control_plane->get_routing_plane_id(eth_chan);
+
                         router_core_found = true;
                     }
                     auto connected_logical_cores = device.second->get_ethernet_sockets(neighbor);
@@ -442,8 +448,7 @@ int main(int argc, char** argv) {
             std::vector<uint32_t> runtime_args = {
                 (device_map[test_device_id_l]->id() << 8) + src_endpoint_start_id + i,  // 0: src_endpoint_id
                 0x410,                                                                  // 1: dest_noc_offset
-                router_phys_core.x,
-                router_phys_core.y,
+                routing_plane,
                 (dev_r_mesh_id << 16 | dev_r_chip_id)};
 
             if (ASYNC_WR == fabric_command) {
