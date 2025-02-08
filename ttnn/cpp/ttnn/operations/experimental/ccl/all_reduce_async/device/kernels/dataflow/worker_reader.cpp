@@ -42,7 +42,7 @@ void kernel_main() {
     // interleaved addrgen
 
     uint32_t tiles_read = 0;
-    uint32_t shard_tile_id = 0;  // first_core_tile_start_offset;
+    uint32_t shard_tile_id = first_core_tile_start_offset;
     uint32_t core_id = 0;
     while (tiles_read < num_tiles_to_read) {
         // DPRINT << "tiles_read: " << tiles_read << "\n";
