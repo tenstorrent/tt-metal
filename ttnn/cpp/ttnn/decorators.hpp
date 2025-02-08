@@ -255,7 +255,7 @@ private:
     template <typename... args_t>
     auto traced_invoke(args_t&&... args) const {
         tt::log_debug(tt::LogOp, "Started C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});
-        tt::tt_metal::GraphTracker::instance().track_function_start(cpp_fully_qualified_name);
+        tt::tt_metal::GraphTracker::instance().track_function_start(cpp_fully_qualified_name, args...);
 
         auto output = invoke(std::forward<args_t>(args)...);
 
