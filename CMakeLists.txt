@@ -220,7 +220,6 @@ add_compile_options(
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-narrowing>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-non-template-friend>"
     "$<$<CXX_COMPILER_ID:GNU>:-Wno-error=non-template-friend>"
-    "$<$<CXX_COMPILER_ID:GNU>:-Wno-error=unused-result>"
     "$<$<BOOL:${ENABLE_ASAN}>:-fsanitize=address>"
     "$<$<BOOL:${ENABLE_MSAN}>:-fsanitize=memory>"
     "$<$<BOOL:${ENABLE_TSAN}>:-fsanitize=thread>"

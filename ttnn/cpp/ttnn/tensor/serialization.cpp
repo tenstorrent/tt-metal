@@ -74,6 +74,12 @@ struct LegacyShape {
 
 static constexpr uint64_t SENTINEL_VALUE = std::numeric_limits<uint64_t>::max();
 
+void safe_fread(void* buffer, size_t size, size_t count, FILE* file) {
+    if (fread(buffer, size, count, file) != count) {
+        TT_THROW("Failed to read tensor data, file must be corrupted");
+    }
+}
+
 void dump_tensor_spec(const TensorSpec& tensor_spec, FILE* output_file) {
     flatbuffers::FlatBufferBuilder builder;
     auto flat_spec = ttnn::to_flatbuffer(tensor_spec, builder);
@@ -85,9 +91,9 @@ void dump_tensor_spec(const TensorSpec& tensor_spec, FILE* output_file) {
 
 TensorSpec load_tensor_spec(FILE* input_file) {
     uint64_t bin_size = 0;
-    fread(&bin_size, sizeof(bin_size), 1, input_file);
+    safe_fread(&bin_size, sizeof(bin_size), 1, input_file);
     std::vector<uint8_t> bin(bin_size);
-    fread(bin.data(), bin_size, 1, input_file);
+    safe_fread(bin.data(), bin_size, 1, input_file);
     flatbuffers::Verifier verifier(bin.data(), bin_size);
     if (!ttnn::flatbuffer::VerifyTensorSpecBuffer(verifier)) {
         TT_THROW("TensorSpec deserialization failed: invalid buffer");
@@ -157,9 +163,9 @@ void dump_multi_device_host_storage(
 template <typename T>
 OwnedStorage load_owned_storage(FILE* input_file) {
     uint64_t size = 0;
-    fread(&size, sizeof(size), 1, input_file);
+    safe_fread(&size, sizeof(size), 1, input_file);
     auto buffer = owned_buffer::create<T>(size);
-    fread(buffer.begin(), sizeof(T) * size, 1, input_file);
+    safe_fread(buffer.begin(), sizeof(T) * size, 1, input_file);
     return {buffer};
 }
 
@@ -168,23 +174,23 @@ MultiDeviceHostStorage load_multi_device_host_storage(
     FILE* input_file, DataType data_type, Layout layout, MeshDevice* mesh_device, uint8_t version_id) {
     uint64_t num_buffers = 0;
     DistributedTensorConfig strategy;
-    fread(&num_buffers, sizeof(num_buffers), 1, input_file);
-    fread(&strategy, sizeof(strategy), 1, input_file);
+    safe_fread(&num_buffers, sizeof(num_buffers), 1, input_file);
+    safe_fread(&strategy, sizeof(strategy), 1, input_file);
 
     std::vector<OwnedBuffer> buffers;
     std::vector<ttnn::TensorSpec> specs;
     if (std::holds_alternative<ReplicateTensor>(strategy)) {
         uint64_t size = 0;
-        fread(&size, sizeof(size), 1, input_file);
+        safe_fread(&size, sizeof(size), 1, input_file);
         auto buffer = owned_buffer::create<T>(size);
-        fread(buffer.begin(), sizeof(T) * size, 1, input_file);
+        safe_fread(buffer.begin(), sizeof(T) * size, 1, input_file);
         buffers.push_back(buffer);
         auto spec = [&] {
             if (version_id >= 5) {
                 return load_tensor_spec(input_file);
             }
             auto shape = LegacyShape{};
-            fread(&shape, sizeof(shape), 1, input_file);
+            safe_fread(&shape, sizeof(shape), 1, input_file);
             return TensorSpec(
                 shape.logical_shape(),
                 TensorLayout::fromPaddedShape(
@@ -200,9 +206,9 @@ MultiDeviceHostStorage load_multi_device_host_storage(
     } else {
         for (std::size_t i = 0; i < num_buffers; ++i) {
             uint64_t size = 0;
-            fread(&size, sizeof(size), 1, input_file);
+            safe_fread(&size, sizeof(size), 1, input_file);
             auto buffer = owned_buffer::create<T>(size);
-            fread(buffer.begin(), sizeof(T) * size, 1, input_file);
+            safe_fread(buffer.begin(), sizeof(T) * size, 1, input_file);
             buffers.push_back(std::move(buffer));
         }
         for (std::size_t i = 0; i < num_buffers; ++i) {
@@ -210,7 +216,7 @@ MultiDeviceHostStorage load_multi_device_host_storage(
                 specs.push_back(load_tensor_spec(input_file));
             } else {
                 auto shape = LegacyShape{};
-                fread(&shape, sizeof(shape), 1, input_file);
+                safe_fread(&shape, sizeof(shape), 1, input_file);
                 TensorSpec spec(
                     shape.logical_shape(),
                     TensorLayout::fromPaddedShape(
@@ -286,17 +292,17 @@ Tensor load_tensor_helper_legacy_impl(FILE* input_file, T device, uint8_t versio
     DataType data_type;
     Layout layout;
     StorageType storage_type;
-    fread(&shape, sizeof(shape), 1, input_file);
-    fread(&data_type, sizeof(data_type), 1, input_file);
-    fread(&layout, sizeof(layout), 1, input_file);
-    fread(&storage_type, sizeof(storage_type), 1, input_file);
+    safe_fread(&shape, sizeof(shape), 1, input_file);
+    safe_fread(&data_type, sizeof(data_type), 1, input_file);
+    safe_fread(&layout, sizeof(layout), 1, input_file);
+    safe_fread(&storage_type, sizeof(storage_type), 1, input_file);
 
     bool has_memory_config = false;
     MemoryConfig memory_config =
         MemoryConfig{.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED, .buffer_type = BufferType::DRAM};
 
     if (version_id >= 2) {
-        fread(&has_memory_config, sizeof(has_memory_config), 1, input_file);
+        safe_fread(&has_memory_config, sizeof(has_memory_config), 1, input_file);
         if (has_memory_config) {
             memory_config = tt::tt_metal::load_memory_config(input_file);
         }
@@ -324,9 +330,9 @@ Tensor load_tensor_helper_very_legacy_impl(FILE* input_file, T device) {
     auto shape = LegacyShape{};
     DataType data_type;
     Layout layout;
-    fread(&shape, sizeof(shape), 1, input_file);
-    fread(&data_type, sizeof(data_type), 1, input_file);
-    fread(&layout, sizeof(layout), 1, input_file);
+    safe_fread(&shape, sizeof(shape), 1, input_file);
+    safe_fread(&data_type, sizeof(data_type), 1, input_file);
+    safe_fread(&layout, sizeof(layout), 1, input_file);
 
     auto storage = load_owned_storage(input_file, data_type);
     auto tensor = Tensor(
@@ -346,9 +352,9 @@ MemoryConfig load_memory_config_legacy_impl(FILE* input_file, uint8_t version_id
     TensorMemoryLayout memory_layout;
     BufferType buffer_type;
     bool has_shard_spec;
-    fread(&memory_layout, sizeof(memory_layout), 1, input_file);
-    fread(&buffer_type, sizeof(buffer_type), 1, input_file);
-    fread(&has_shard_spec, sizeof(has_shard_spec), 1, input_file);
+    safe_fread(&memory_layout, sizeof(memory_layout), 1, input_file);
+    safe_fread(&buffer_type, sizeof(buffer_type), 1, input_file);
+    safe_fread(&has_shard_spec, sizeof(has_shard_spec), 1, input_file);
 
     std::optional<ShardSpec> shard_spec = std::nullopt;
     if (has_shard_spec) {
@@ -357,18 +363,18 @@ MemoryConfig load_memory_config_legacy_impl(FILE* input_file, uint8_t version_id
         std::array<uint32_t, 2> shape;
         ShardOrientation orientation;
 
-        fread(&num_core_ranges, sizeof(num_core_ranges), 1, input_file);
+        safe_fread(&num_core_ranges, sizeof(num_core_ranges), 1, input_file);
         for (auto index = 0; index < num_core_ranges; index++) {
             CoreRange core_range{{}, {}};
-            fread(&core_range, sizeof(core_range), 1, input_file);
+            safe_fread(&core_range, sizeof(core_range), 1, input_file);
             core_ranges.insert(core_range);
         }
-        fread(&shape, sizeof(shape), 1, input_file);
-        fread(&orientation, sizeof(orientation), 1, input_file);
+        safe_fread(&shape, sizeof(shape), 1, input_file);
+        safe_fread(&orientation, sizeof(orientation), 1, input_file);
         if (version_id <= 3) {
             // Read halo for backward compatibility.
             bool halo;
-            fread(&halo, sizeof(halo), 1, input_file);
+            safe_fread(&halo, sizeof(halo), 1, input_file);
         }
         shard_spec = {CoreRangeSet{core_ranges}, shape, orientation};
     }
@@ -384,14 +390,14 @@ Tensor load_tensor_helper(const std::string& file_name, T device) {
     std::unique_ptr<FILE, decltype(&fclose)> file_guard(input_file, &fclose);
 
     std::size_t read_sentinel;
-    fread(&read_sentinel, sizeof(read_sentinel), 1, input_file);
+    safe_fread(&read_sentinel, sizeof(read_sentinel), 1, input_file);
     if (read_sentinel != SENTINEL_VALUE) {
         fseek(input_file, 0, SEEK_SET);
         return load_tensor_helper_very_legacy_impl(input_file, device);
     }
 
     std::uint8_t version_id = 0;
-    fread(&version_id, sizeof(version_id), 1, input_file);
+    safe_fread(&version_id, sizeof(version_id), 1, input_file);
     if (version_id > VERSION_ID) {
         TT_THROW(
             "Version mismatch: the serialized tensor was created with version {} but is being loaded by a loader with "
@@ -406,7 +412,7 @@ Tensor load_tensor_helper(const std::string& file_name, T device) {
 
     auto spec = load_tensor_spec(input_file);
     StorageType storage_type = StorageType::OWNED;
-    fread(&storage_type, sizeof(storage_type), 1, input_file);
+    safe_fread(&storage_type, sizeof(storage_type), 1, input_file);
     auto storage = load_storage(input_file, spec.data_type(), spec.layout(), storage_type, device, version_id);
     Tensor tensor(std::move(storage), spec);
     if (device != nullptr) {
@@ -489,7 +495,7 @@ void dump_memory_config(const std::string& file_name, const MemoryConfig& memory
 
 MemoryConfig load_memory_config(FILE* input_file) {
     std::uint8_t version_id;
-    fread(&version_id, sizeof(version_id), 1, input_file);
+    safe_fread(&version_id, sizeof(version_id), 1, input_file);
 
     // Allow only backward compatible versions
     if (version_id > VERSION_ID) {
@@ -505,9 +511,9 @@ MemoryConfig load_memory_config(FILE* input_file) {
     }
 
     uint64_t bin_size = 0;
-    fread(&bin_size, sizeof(bin_size), 1, input_file);
+    safe_fread(&bin_size, sizeof(bin_size), 1, input_file);
     std::vector<uint8_t> bin(bin_size);
-    fread(bin.data(), bin_size, 1, input_file);
+    safe_fread(bin.data(), bin_size, 1, input_file);
     flatbuffers::Verifier verifier(bin.data(), bin_size);
     if (!verifier.VerifyBuffer<ttnn::flatbuffer::MemoryConfig>()) {
         TT_THROW("MemoryConfig deserialization failed: invalid buffer");
