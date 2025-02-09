@@ -65,6 +65,9 @@ void print_pkt_header(volatile tt::fabric::PacketHeader *const packet_start) {
 
 // Since we unicast to local, we must omit the packet header
 FORCE_INLINE void execute_chip_unicast_to_local_chip(volatile tt::fabric::PacketHeader *const packet_start, uint32_t transaction_id) {
+    // TODO [volatile-use]: do word-based reads of packet header when enterring the fwd packet path
+    //                      we end up grabbing many individual fields from the same word region
+    //                      which will resolve as many separate loads
     auto const& header = *packet_start;
     uint32_t payload_start_address = reinterpret_cast<size_t>(packet_start) + sizeof(tt::fabric::PacketHeader);
 
@@ -125,10 +128,11 @@ FORCE_INLINE void update_packet_header_for_next_hop(volatile tt::fabric::PacketH
 // !!!WARNING!!! * do NOT call before determining if the packet should be consumed locally or forwarded
 // !!!WARNING!!! * ENSURE DOWNSTREAM EDM HAS SPACE FOR PACKET BEFORE CALLING
 // !!!WARNING!!!
+template <uint8_t NUM_SENDER_BUFFERS>
 FORCE_INLINE void forward_payload_to_downstream_edm(
     volatile tt::fabric::PacketHeader *packet_header,
     tt::fabric::RoutingFields cached_routing_fields,
-    tt::fabric::WorkerToFabricEdmSender &downstream_edm_interface,
+    tt::fabric::EdmToEdmSender<NUM_SENDER_BUFFERS> &downstream_edm_interface,
     uint8_t transaction_id
     ) {
     DPRINT << "Fwding pkt to downstream\n";
