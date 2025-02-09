@@ -103,7 +103,7 @@ target_link_libraries(
         Metalium::TTNN
         Python::Python
         fmt::fmt-header-only
-        magic_enum
+        magic_enum::magic_enum
         yaml-cpp::yaml-cpp
         xtensor
         xtensor-blas

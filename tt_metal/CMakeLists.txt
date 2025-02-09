@@ -13,7 +13,7 @@ target_link_libraries(
     tt_metal
     PUBLIC
         umd::device
-        magic_enum
+        magic_enum::magic_enum
         fmt::fmt-header-only
         span
         TracyClient

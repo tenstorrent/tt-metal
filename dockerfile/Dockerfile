@@ -62,6 +62,23 @@ RUN mkdir -p /tmp/pybind11 \
     && make -C /tmp/pybind11/build install \
     && rm -rf /tmp/pybind11
 
+ARG RANGE_V3_VERSION=0.12.0
+RUN mkdir -p /tmp/range-v3 \
+    && wget -O /tmp/range-v3/range-v3-${RANGE_V3_VERSION}.tar.gz "https://github.com/ericniebler/range-v3/archive/refs/tags/${RANGE_V3_VERSION}.tar.gz" \
+    && tar -xzf /tmp/range-v3/range-v3-${RANGE_V3_VERSION}.tar.gz -C /tmp/range-v3 --strip-components=1 \
+    && cmake \
+         -S /tmp/range-v3 \
+         -B /tmp/range-v3/build \
+         -DCMAKE_BUILD_TYPE=Release \
+         -DRANGE_V3_TESTS=OFF \
+         -DRANGE_V3_EXAMPLES=OFF \
+         -DRANGE_V3_DOCS=OFF \
+         -DCMAKE_INSTALL_PREFIX=/usr/local \
+    && make -C /tmp/range-v3/build -j$(nproc) \
+    && make -C /tmp/range-v3/build install \
+    && rm -rf /tmp/range-v3
+
+
 # libstdc++ vs libc++ issue arises
 #ARG YAML_VERSION=0.8.0
 #RUN mkdir -p /tmp/yaml \

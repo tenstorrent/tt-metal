@@ -91,9 +91,8 @@ endif()
 
 CPMAddPackage(NAME magic_enum GITHUB_REPOSITORY Neargye/magic_enum GIT_TAG v0.9.7 FIND_PACKAGE_ARGUMENTS "GLOBAL")
 
-if(NOT TARGET magic_enum)
-    add_library(magic_enum INTERFACE)
-    target_link_libraries(magic_enum INTERFACE magic_enum::magic_enum)
+if(magic_enum_ADDED AND NOT TARGET magic_enum::magic_enum)
+    add_library(magic_enum::magic_enum ALIAS magic_enum)
 endif()
 
 ############################################################################################################################
