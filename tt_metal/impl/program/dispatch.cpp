@@ -406,7 +406,8 @@ void insert_empty_program_dispatch_preamble_cmd(ProgramCommandSequence& program_
 
 void insert_stall_cmds(ProgramCommandSequence& program_command_sequence, SubDeviceId sub_device_id, IDevice* device) {
     // Initialize stall command sequences for this program.
-    auto dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
+    auto dispatch_core_config = DispatchQueryManager::instance().get_dispatch_core_config();
+    auto dispatch_core_type = dispatch_core_config.get_core_type();
     uint32_t dispatch_message_addr =
         DispatchMemMap::get(dispatch_core_type)
             .get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE) +
@@ -549,7 +550,8 @@ void assemble_runtime_args_commands(
     ProgramCommandSequence& program_command_sequence, Program& program, IDevice* device) {
     static const uint32_t packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(device);
     NOC noc_index = dispatch_downstream_noc;
-    CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
+    auto dispatch_core_config = DispatchQueryManager::instance().get_dispatch_core_config();
+    auto dispatch_core_type = dispatch_core_config.get_core_type();
     const uint32_t max_prefetch_command_size = DispatchMemMap::get(dispatch_core_type).max_prefetch_command_size();
 
     // Dispatch Commands to Unicast Unique Runtime Args to Workers
@@ -812,7 +814,8 @@ void insert_write_packed_payloads(
 void assemble_device_commands(
     ProgramCommandSequence& program_command_sequence, Program& program, IDevice* device, SubDeviceId sub_device_id) {
     DeviceCommandCalculator calculator;
-    CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
+    auto dispatch_core_config = DispatchQueryManager::instance().get_dispatch_core_config();
+    auto dispatch_core_type = dispatch_core_config.get_core_type();
     NOC noc_index = dispatch_downstream_noc;
     const uint32_t max_prefetch_command_size = DispatchMemMap::get(dispatch_core_type).max_prefetch_command_size();
     static const uint32_t packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(device);

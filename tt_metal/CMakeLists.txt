@@ -16,6 +16,7 @@ target_link_libraries(
         magic_enum::magic_enum
         fmt::fmt-header-only
         span
+        small_vector
         TracyClient
         nlohmann_json::nlohmann_json
         TT::Metalium::HostDevCommon

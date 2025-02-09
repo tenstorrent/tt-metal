@@ -92,6 +92,58 @@ inline void fabric_async_write(
     }
 }
 
+inline void fabric_async_write_multicast_add_header(
+    uint32_t src_addr,  // source address in sender’s memory
+    uint16_t dst_mesh_id,
+    uint16_t dst_dev_id,
+    uint64_t dst_addr,
+    uint32_t size,  // number of bytes to write to remote destination
+    uint32_t e_depth,
+    uint32_t w_depth,
+    uint32_t n_depth,
+    uint32_t s_depth) {
+    packet_header_t* packet_header = (packet_header_t*)(src_addr);
+    packet_header->routing.flags = FORWARD | MCAST_DATA;
+    packet_header->routing.packet_size_bytes = size;
+    packet_header->routing.dst_mesh_id = dst_mesh_id;
+    packet_header->routing.dst_dev_id = dst_dev_id;
+    packet_header->session.command = ASYNC_WR;
+    packet_header->session.target_offset_l = (uint32_t)dst_addr;
+    packet_header->session.target_offset_h = dst_addr >> 32;
+    packet_header->packet_parameters.mcast_parameters.east = e_depth;
+    packet_header->packet_parameters.mcast_parameters.west = w_depth;
+    packet_header->packet_parameters.mcast_parameters.north = n_depth;
+    packet_header->packet_parameters.mcast_parameters.south = s_depth;
+    tt_fabric_add_header_checksum(packet_header);
+}
+// Write packetized data over fabric to dst_mesh, dst_dev.
+// Packet is at src_addr in sender L1.
+template <uint8_t mode = ASYNC_WR_ALL>
+inline void fabric_async_write_multicast(
+    uint32_t routing_plane,  // the network plane to use for this transaction
+    uint32_t src_addr,       // source address in sender’s memory
+    uint16_t dst_mesh_id,
+    uint16_t dst_dev_id,
+    uint64_t dst_addr,
+    uint32_t size,  // number of bytes to write to remote destination
+    uint32_t e_depth,
+    uint32_t w_depth,
+    uint32_t n_depth,
+    uint32_t s_depth) {
+    if constexpr (mode == ASYNC_WR_ALL or mode == ASYNC_WR_ADD_HEADER) {
+        fabric_async_write_multicast_add_header(
+            src_addr, dst_mesh_id, dst_dev_id, dst_addr, size, e_depth, w_depth, n_depth, s_depth);
+    }
+
+    if constexpr (mode == ASYNC_WR_ALL or mode == ASYNC_WR_ADD_PR) {
+        fabric_setup_pull_request(src_addr, size);
+    }
+
+    if constexpr (mode == ASYNC_WR_ALL or mode == ASYNC_WR_SEND) {
+        fabric_send_pull_request(routing_plane, dst_mesh_id, dst_dev_id);
+    }
+}
+
 inline void send_message_to_gk() {
     uint64_t gk_noc_base = client_interface->gk_msg_buf_addr;
     uint64_t noc_addr = gk_noc_base + offsetof(ctrl_chan_msg_buf, wrptr);

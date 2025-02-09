@@ -25,12 +25,12 @@ void py_bind_expand(py::module& module, const data_movement_operation_t& operati
                const ttnn::Tensor& input_tensor,
                const ttnn::SmallVector<int32_t> output_shape,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               const uint8_t queue_id) { return self(input_tensor, output_shape, memory_config, queue_id); },
+               const QueueId queue_id) { return self(input_tensor, output_shape, memory_config, queue_id); },
             py::arg("input_tensor"),
             py::arg("output_shape"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
-            py::arg("queue_id") = 0,
+            py::arg("queue_id") = DefaultQueueId,
         });
 }
 

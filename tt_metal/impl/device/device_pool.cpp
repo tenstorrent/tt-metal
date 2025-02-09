@@ -159,8 +159,6 @@ void bind_current_thread_to_free_cores(const std::unordered_set<uint32_t>& free_
 }  // namespace device_cpu_allocator
 
 DevicePool* DevicePool::_inst = nullptr;
-// Should probably add a dispatch_core_manager.cpp and move this there
-tt_metal::dispatch_core_manager* tt_metal::dispatch_core_manager::_inst = nullptr;
 
 void DevicePool::init_profiler_devices() const {
 #if defined(TRACY_ENABLE)
@@ -538,8 +536,13 @@ void DevicePool::close_devices(const std::vector<IDevice*>& devices) {
     // before closing any device + modifying routing info.
     // If this is not done, non-blocking CCLs followed by a close will hang, since
     // the main thread will modify device state while the CCL is running on device.
+    // On TG - this should not be done on MMIO mapped devices, since we don't run
+    // any workloads on them
     for (const auto& dev_id : devices_to_close) {
         auto dev = tt::DevicePool::instance().get_active_device(dev_id);
+        if (tt::Cluster::instance().is_galaxy_cluster() and dev->is_mmio_capable()) {
+            continue;
+        }
         dev->synchronize();  // Synchronize worker queue
         Synchronize(dev);    // Synchronize device
     }

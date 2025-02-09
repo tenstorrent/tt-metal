@@ -10,9 +10,9 @@ import torch.nn as nn
 from tt_lib.fallback_ops import fallback_ops
 from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
-    run_ttnn_conv_with_pre_and_post_tensor_formatting,
+    conv_cache,
+    get_default_compute_config,
 )
-from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import conv_cache
 
 import math
 
@@ -136,13 +136,7 @@ class downsample_2d:
         if hidden_states.memory_config() != self.input_memory_config:
             hidden_states = ttnn.to_memory_config(hidden_states, self.input_memory_config)
 
-        compute_config = ttnn.init_device_compute_kernel_config(
-            self.device.arch(),
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=True,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=False,
-        )
+        compute_config = get_default_compute_config(self.device)
         if self.conv_config_override and "act_block_h" in self.conv_config_override:
             conv_config.act_block_h_override = self.conv_config_override["act_block_h"]
 
@@ -187,14 +181,5 @@ class downsample_2d:
             compute_config=compute_config,
             conv_op_cache=conv_cache,
         )
-        # hidden_states = run_ttnn_conv_with_pre_and_post_tensor_formatting(
-        #     self.device,
-        #     self.conv,
-        #     hidden_states,
-        #     self.conv.batch_size,
-        #     self.conv.output_height,
-        #     self.conv.output_width,
-        #     self.conv.out_channels,
-        # )
 
         return hidden_states

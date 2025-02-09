@@ -7,6 +7,8 @@
 #include "ttnn/cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
 #include "dataflow_api.h"
 
+#include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_transmission.hpp"
+
 #include <cstdint>
 #include <cstddef>
 
@@ -23,21 +25,21 @@ FORCE_INLINE void line_sync(
     size_t sync_noc_y,
     size_t sync_val) {
     using namespace tt::fabric;
-    mcast_fwd_packet_header->to_atomic_inc();
-    mcast_bwd_packet_header->to_atomic_inc();
 
+    auto dest_noc_addr =
+        safe_get_noc_addr(static_cast<uint8_t>(sync_noc_x), static_cast<uint8_t>(sync_noc_y), sync_bank_addr, 0);
     if (fabric_connection.has_forward_connection()) {
-        mcast_fwd_packet_header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{
-            sync_bank_addr, 1, 128, static_cast<uint8_t>(sync_noc_x), static_cast<uint8_t>(sync_noc_y)});
+        mcast_fwd_packet_header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{dest_noc_addr, 1, 128});
         fabric_connection.get_forward_connection().wait_for_empty_write_slot();
+        print_pkt_header(mcast_fwd_packet_header);
         fabric_connection.get_forward_connection().send_payload_flush_non_blocking_from_address(
             (uint32_t)mcast_fwd_packet_header, sizeof(tt::fabric::PacketHeader));
     }
 
     if (fabric_connection.has_backward_connection()) {
-        mcast_bwd_packet_header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{
-            sync_bank_addr, 1, 128, static_cast<uint8_t>(sync_noc_x), static_cast<uint8_t>(sync_noc_y)});
+        mcast_bwd_packet_header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{dest_noc_addr, 1, 128});
         fabric_connection.get_backward_connection().wait_for_empty_write_slot();
+        print_pkt_header(mcast_bwd_packet_header);
         fabric_connection.get_backward_connection().send_payload_flush_non_blocking_from_address(
             (uint32_t)mcast_bwd_packet_header, sizeof(tt::fabric::PacketHeader));
     }
@@ -101,10 +103,8 @@ void kernel_main() {
         reinterpret_cast<PacketHeader*>(packet_header_buffer_address + sizeof(tt::fabric::PacketHeader));
     auto* unicast_packet_header =
         reinterpret_cast<PacketHeader*>(packet_header_buffer_address + sizeof(tt::fabric::PacketHeader) * 2);
-    mcast_fwd_packet_header->to_write().to_chip_multicast(
-        MulticastRoutingCommandHeader{1, static_cast<uint8_t>(mcast_fwd_hops)});
-    mcast_bwd_packet_header->to_write().to_chip_multicast(
-        MulticastRoutingCommandHeader{1, static_cast<uint8_t>(mcast_bwd_hops)});
+    mcast_fwd_packet_header->to_chip_multicast(MulticastRoutingCommandHeader{1, static_cast<uint8_t>(mcast_fwd_hops)});
+    mcast_bwd_packet_header->to_chip_multicast(MulticastRoutingCommandHeader{1, static_cast<uint8_t>(mcast_bwd_hops)});
 
     if (enable_start_synchronization) {
         line_sync(
@@ -126,31 +126,27 @@ void kernel_main() {
             2 * start_sync_val);
     }
 
-    mcast_fwd_packet_header->to_write().to_chip_multicast(
-        MulticastRoutingCommandHeader{1, static_cast<uint8_t>(mcast_fwd_hops)});
-    mcast_bwd_packet_header->to_write().to_chip_multicast(
-        MulticastRoutingCommandHeader{1, static_cast<uint8_t>(mcast_bwd_hops)});
-    unicast_packet_header->to_atomic_inc().to_chip_unicast(
-        UnicastRoutingCommandHeader{static_cast<uint8_t>(unicast_hops)});
+    mcast_fwd_packet_header->to_chip_multicast(MulticastRoutingCommandHeader{1, static_cast<uint8_t>(mcast_fwd_hops)});
+    mcast_bwd_packet_header->to_chip_multicast(MulticastRoutingCommandHeader{1, static_cast<uint8_t>(mcast_bwd_hops)});
+    unicast_packet_header->to_chip_unicast(UnicastRoutingCommandHeader{static_cast<uint8_t>(unicast_hops)});
 
     {
         DeviceZoneScopedN("MAIN-WRITE-ZONE");
         for (size_t i = 0; i < num_mcasts; i++) {
-            noc_async_write(
-                source_l1_buffer_address,
-                safe_get_noc_addr(static_cast<uint8_t>(dest_noc_x), static_cast<uint8_t>(dest_noc_y), dest_bank_addr),
-                packet_payload_size_bytes);
+            auto noc0_dest_addr = safe_get_noc_addr(
+                static_cast<uint8_t>(dest_noc_x), static_cast<uint8_t>(dest_noc_y), dest_bank_addr, 0);
+            auto dest_addr =
+                safe_get_noc_addr(static_cast<uint8_t>(dest_noc_x), static_cast<uint8_t>(dest_noc_y), dest_bank_addr);
+            noc_async_write(source_l1_buffer_address, dest_addr, packet_payload_size_bytes);
             if (fabric_connection.has_forward_connection()) {
                 DeviceZoneScopedN("WR-FWD");
-                mcast_fwd_packet_header->to_noc_unicast(NocUnicastCommandHeader{
-                    dest_bank_addr,
-                    packet_payload_size_bytes + sizeof(tt::fabric::PacketHeader),
-                    static_cast<uint8_t>(dest_noc_x),
-                    static_cast<uint8_t>(dest_noc_y)});
+                mcast_fwd_packet_header->to_noc_unicast_write(NocUnicastCommandHeader{
+                    noc0_dest_addr, packet_payload_size_bytes + sizeof(tt::fabric::PacketHeader)});
                 {
                     DeviceZoneScopedN("WR-FWD-WAIT");
                     fabric_connection.get_forward_connection().wait_for_empty_write_slot();
                 }
+                print_pkt_header(mcast_fwd_packet_header);
                 fabric_connection.get_forward_connection().send_payload_without_header_non_blocking_from_address(
                     source_l1_buffer_address, packet_payload_size_bytes);
                 fabric_connection.get_forward_connection().send_payload_flush_non_blocking_from_address(
@@ -159,15 +155,13 @@ void kernel_main() {
 
             if (fabric_connection.has_backward_connection()) {
                 DeviceZoneScopedN("WR-BWD");
-                mcast_bwd_packet_header->to_noc_unicast(NocUnicastCommandHeader{
-                    dest_bank_addr,
-                    packet_payload_size_bytes + sizeof(tt::fabric::PacketHeader),
-                    static_cast<uint8_t>(dest_noc_x),
-                    static_cast<uint8_t>(dest_noc_y)});
+                mcast_bwd_packet_header->to_noc_unicast_write(NocUnicastCommandHeader{
+                    noc0_dest_addr, packet_payload_size_bytes + sizeof(tt::fabric::PacketHeader)});
                 {
                     DeviceZoneScopedN("WR-BWD-WAIT");
                     fabric_connection.get_backward_connection().wait_for_empty_write_slot();
                 }
+                print_pkt_header(mcast_bwd_packet_header);
                 fabric_connection.get_backward_connection().send_payload_without_header_non_blocking_from_address(
                     source_l1_buffer_address, packet_payload_size_bytes);
                 fabric_connection.get_backward_connection().send_payload_flush_non_blocking_from_address(
@@ -180,14 +174,12 @@ void kernel_main() {
     }
 
     for (size_t i = 0; i < num_unicasts; i++) {
+        auto noc0_dest_addr =
+            safe_get_noc_addr(static_cast<uint8_t>(dest_noc_x), static_cast<uint8_t>(dest_noc_y), dest_bank_addr, 0);
         DeviceZoneScopedN("UNICAST-WRITE");
         auto& fabric_conn =
             unicast_is_fwd ? fabric_connection.get_forward_connection() : fabric_connection.get_backward_connection();
-        unicast_packet_header->to_noc_unicast(NocUnicastCommandHeader{
-            dest_bank_addr,
-            packet_payload_size_bytes,
-            static_cast<uint8_t>(dest_noc_x),
-            static_cast<uint8_t>(dest_noc_y)});
+        unicast_packet_header->to_noc_unicast_write(NocUnicastCommandHeader{noc0_dest_addr, packet_payload_size_bytes});
         fabric_conn.wait_for_empty_write_slot();
         fabric_conn.send_payload_without_header_non_blocking_from_address(
             source_l1_buffer_address, packet_payload_size_bytes);

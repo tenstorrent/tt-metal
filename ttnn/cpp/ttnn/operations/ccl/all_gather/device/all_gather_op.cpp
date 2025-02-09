@@ -286,7 +286,7 @@ Tensor all_gather(
                 if (input_tensor.get_dtype() != DataType::BFLOAT16 && input_tensor.get_dtype() != DataType::FLOAT32) {
                     input_tensor = ttnn::typecast(input_tensor, DataType::BFLOAT16);
                 }
-                input_tensor = ttnn::pad(0, input_tensor, padding, 0, false, std::nullopt);
+                input_tensor = ttnn::pad(input_tensor, padding, 0, false, std::nullopt);
                 if (original_dtype != input_tensor.get_dtype()) {
                     input_tensor = ttnn::typecast(input_tensor, original_dtype);
                 }
