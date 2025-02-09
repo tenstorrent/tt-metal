@@ -295,7 +295,7 @@ void CaptureSetRuntimeArgsUint32(
     uint32_t kernel_global_id = ctx.get_global_id(kernel.get());
     log_debug(
         tt::LogMetalTrace,
-        "{}(uint32): kernel_global_id: {} program_global_id: {} rt_args: {}",
+        "{}: kernel_global_id: {} program_global_id: {} rt_args: {}",
         __FUNCTION__,
         kernel_global_id,
         program_global_id,
@@ -310,6 +310,33 @@ void CaptureSetRuntimeArgsUint32(
     CaptureCommand(tt::tt_metal::flatbuffer::CommandType::SetRuntimeArgsUint32Command, cmd.Union());
 }
 
+void CaptureSetRuntimeArgsUint32VecPerCore(
+    const Program& program,
+    KernelHandle kernel_id,
+    const std::vector<CoreCoord>& core_spec,
+    const std::vector<std::vector<uint32_t>>& runtime_args) {
+    auto& ctx = LightMetalCaptureContext::get();
+
+    std::shared_ptr<Kernel> kernel = program.get_kernel(kernel_id);
+    uint32_t program_global_id = ctx.get_global_id(&program);
+    uint32_t kernel_global_id = ctx.get_global_id(kernel.get());
+    log_debug(
+        tt::LogMetalTrace,
+        "{}: kernel_global_id: {} program_global_id: {} num_cores: {}",
+        __FUNCTION__,
+        kernel_global_id,
+        program_global_id,
+        core_spec.size());
+
+    auto& fbb = ctx.get_builder();
+    auto core_spec_offset = to_flatbuffer(fbb, core_spec);
+    auto runtime_args_offset = to_flatbuffer(fbb, runtime_args);
+
+    auto cmd = tt::tt_metal::flatbuffer::CreateSetRuntimeArgsUint32VecPerCoreCommand(
+        fbb, program_global_id, kernel_global_id, core_spec_offset, runtime_args_offset);
+
+    CaptureCommand(tt::tt_metal::flatbuffer::CommandType::SetRuntimeArgsUint32VecPerCoreCommand, cmd.Union());
+}
 void CaptureSetRuntimeArgs(
     IDevice* device,
     const std::shared_ptr<Kernel>& kernel,
@@ -322,7 +349,7 @@ void CaptureSetRuntimeArgs(
     auto rt_args_offset = to_flatbuffer(fbb, runtime_args);
     log_debug(
         tt::LogMetalTrace,
-        "{}(RuntimeArgs): kernel_global_id: {} rt_args_size: {}",
+        "{}: kernel_global_id: {} rt_args_size: {}",
         __FUNCTION__,
         kernel_global_id,
         runtime_args->size());

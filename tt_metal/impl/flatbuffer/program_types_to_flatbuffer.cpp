@@ -38,6 +38,27 @@ std::pair<flatbuffer::CoreSpec, ::flatbuffers::Offset<void>> to_flatbuffer(
         core_spec);
 }
 
+FlatbufferCoreCoordVector to_flatbuffer(
+    flatbuffers::FlatBufferBuilder& builder, const std::vector<CoreCoord>& core_spec) {
+    std::vector<flatbuffers::Offset<flatbuffer::CoreCoord>> core_offsets;
+    for (const auto& coord : core_spec) {
+        core_offsets.push_back(flatbuffer::CreateCoreCoord(builder, coord.x, coord.y));
+    }
+    return builder.CreateVector(core_offsets);
+}
+
+FlatbufferUInt32VecOfVec to_flatbuffer(
+    flatbuffers::FlatBufferBuilder& builder, const std::vector<std::vector<uint32_t>>& vec_of_vec) {
+    std::vector<flatbuffers::Offset<flatbuffer::UInt32Vector>> vec_offsets;
+
+    for (const auto& sub_vector : vec_of_vec) {
+        auto values_offset = builder.CreateVector(sub_vector);
+        vec_offsets.push_back(flatbuffer::CreateUInt32Vector(builder, values_offset));
+    }
+
+    return builder.CreateVector(vec_offsets);
+}
+
 // Original types defined in kernel_types.hpp
 std::pair<flatbuffer::KernelConfig, flatbuffers::Offset<void>> to_flatbuffer(
     flatbuffers::FlatBufferBuilder& builder, const DataMovementConfig& config) {

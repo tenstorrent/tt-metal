@@ -81,6 +81,13 @@ table SetRuntimeArgsUint32Command {
   args: [uint32];             // Arguments to be passed to kernel
 }
 
+table SetRuntimeArgsUint32VecPerCoreCommand {
+  program_global_id: uint32;  // Reference to Program
+  kernel_global_id: uint32;   // Reference to Kernel
+  core_spec: [CoreCoord];
+  args: [UInt32Vector];       // vector of vector of uint32_t
+}
+
 table SetRuntimeArgsCommand {
   kernel_global_id: uint32;   // Reference to Kernel
   core_spec: CoreSpec;
@@ -115,6 +122,7 @@ union CommandType {
   EnqueueProgramCommand,
   CreateKernelCommand,
   SetRuntimeArgsUint32Command,
+  SetRuntimeArgsUint32VecPerCoreCommand,
   SetRuntimeArgsCommand,
   CreateCircularBufferCommand,
   LightMetalCompareCommand,

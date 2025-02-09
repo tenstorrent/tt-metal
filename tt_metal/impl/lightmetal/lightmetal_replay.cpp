@@ -300,6 +300,10 @@ void LightMetalReplay::execute(const tt::tt_metal::flatbuffer::Command* command)
             execute(command->cmd_as_SetRuntimeArgsUint32Command());
             break;
         }
+        case ::tt::tt_metal::flatbuffer::CommandType::SetRuntimeArgsUint32VecPerCoreCommand: {
+            execute(command->cmd_as_SetRuntimeArgsUint32VecPerCoreCommand());
+            break;
+        }
         case ::tt::tt_metal::flatbuffer::CommandType::SetRuntimeArgsCommand: {
             execute(command->cmd_as_SetRuntimeArgsCommand());
             break;
@@ -515,6 +519,28 @@ void LightMetalReplay::execute(const tt::tt_metal::flatbuffer::SetRuntimeArgsUin
     stl::Span<const uint32_t> args_span(cmd->args()->data(), cmd->args()->size());
     auto core_spec = core_spec_from_flatbuffer(cmd);
     SetRuntimeArgs(*program, kernel_id, core_spec, args_span);
+}
+
+void LightMetalReplay::execute(const tt::tt_metal::flatbuffer::SetRuntimeArgsUint32VecPerCoreCommand* cmd) {
+    log_debug(
+        tt::LogMetalTrace,
+        "LightMetalReplay(SetRuntimeArgs). program_global_id: {} kernel_global_id: {}",
+        cmd->program_global_id(),
+        cmd->kernel_global_id());
+    auto program = get_program_from_map(cmd->program_global_id());
+    auto kernel_id = get_kernel_handle_from_map(cmd->kernel_global_id());
+    TT_FATAL(
+        program,
+        "Attempted to SetRuntimeArgs() using a program w/ global_id: {} that was not previously created.",
+        cmd->program_global_id());
+    TT_FATAL(
+        kernel_id != UINT32_MAX,
+        "Attempted to SetRuntimeArgs() using a kernel w/ global_id: {} that was not previously created.",
+        cmd->kernel_global_id());
+
+    auto core_spec = from_flatbuffer(cmd->core_spec());
+    auto runtime_args = from_flatbuffer(cmd->args());
+    SetRuntimeArgs(*program, kernel_id, core_spec, runtime_args);
 }
 
 void LightMetalReplay::execute(const tt::tt_metal::flatbuffer::SetRuntimeArgsCommand* cmd) {

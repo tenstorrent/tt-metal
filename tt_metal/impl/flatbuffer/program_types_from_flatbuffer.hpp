@@ -16,6 +16,11 @@ ComputeConfig from_flatbuffer(const flatbuffer::ComputeConfig* fb_config);
 EthernetConfig from_flatbuffer(const flatbuffer::EthernetConfig* fb_config);
 std::vector<SubDeviceId> from_flatbuffer(const flatbuffers::Vector<uint8_t>* fb_sub_device_ids);
 
+std::vector<CoreCoord> from_flatbuffer(
+    const flatbuffers::Vector<flatbuffers::Offset<flatbuffer::CoreCoord>>* core_spec_fbs);
+std::vector<std::vector<uint32_t>> from_flatbuffer(
+    const flatbuffers::Vector<flatbuffers::Offset<flatbuffer::UInt32Vector>>* vec_of_vec_fbs);
+
 template <typename CommandType>
 std::variant<CoreCoord, CoreRange, CoreRangeSet> core_spec_from_flatbuffer(const CommandType* cmd) {
     switch (cmd->core_spec_type()) {
