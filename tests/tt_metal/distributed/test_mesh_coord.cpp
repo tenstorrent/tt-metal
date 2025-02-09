@@ -210,6 +210,39 @@ TEST(MeshContainerTest, ElementAccessRowMajor) {
     container.at(MeshCoordinate(1, 1)) = 4;
     container.at(MeshCoordinate(1, 2)) = 5;
 
+    std::vector<MeshCoordinate> coords;
+    std::vector<int> values;
+    for (const auto& [coord, value] : container) {
+        coords.push_back(coord);
+        values.push_back(value);
+    }
+    EXPECT_THAT(
+        coords,
+        ElementsAre(
+            MeshCoordinate(0, 0),
+            MeshCoordinate(0, 1),
+            MeshCoordinate(0, 2),
+            MeshCoordinate(1, 0),
+            MeshCoordinate(1, 1),
+            MeshCoordinate(1, 2)));
+    EXPECT_THAT(values, ElementsAre(0, 1, 2, 3, 4, 5));
+}
+
+TEST(MeshContainerTest, MutateThroughProxy) {
+    SimpleMeshShape shape(2, 3);
+    MeshContainer<int> container(shape, 0);
+
+    // Proxy class provides access to the container value through the mutable reference.
+    int updated_value = 0;
+    for (auto& [coord, value] : container) {
+        value = updated_value++;
+    }
+
+    // `auto` makes a copy of the value, verify this loop is a no-op.
+    for (auto [coord, value] : container) {
+        value = updated_value++;
+    }
+
     std::vector<int> values;
     for (const auto& [coord, value] : container) {
         values.push_back(value);

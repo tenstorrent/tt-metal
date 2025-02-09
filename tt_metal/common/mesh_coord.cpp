@@ -129,7 +129,7 @@ MeshCoordinateRange::Iterator& MeshCoordinateRange::Iterator::operator++() {
     current_coord_ = MeshCoordinate(new_coords);
     return *this;
 }
-MeshCoordinate MeshCoordinateRange::Iterator::operator*() const { return current_coord_; }
+const MeshCoordinate& MeshCoordinateRange::Iterator::operator*() const { return current_coord_; }
 bool MeshCoordinateRange::Iterator::operator==(const Iterator& other) const {
     return range_ == other.range_ && linear_index_ == other.linear_index_;
 }

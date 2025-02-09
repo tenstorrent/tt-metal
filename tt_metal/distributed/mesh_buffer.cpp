@@ -125,8 +125,8 @@ void MeshBuffer::initialize_device_buffers() {
         return buffer;
     };
 
-    for (auto [coord, device_buffer] : buffers_) {
-        device_buffer.get() = init_device_buffer_at_address(coord);
+    for (auto& [coord, device_buffer] : buffers_) {
+        device_buffer = init_device_buffer_at_address(coord);
     }
 }
 
