@@ -253,6 +253,11 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
                 f_is_dram,
                 static_cast<uint32_t>(weight_has_value),
                 static_cast<uint32_t>(bias_has_value),
+                batch_mean_tensor_cb,
+                output_tensor_cb,
+                batch_var_tensor_cb,
+                weight_tensor_cb,
+                bias_tensor_cb,
             },
             std::move(writer_defines)));
 
