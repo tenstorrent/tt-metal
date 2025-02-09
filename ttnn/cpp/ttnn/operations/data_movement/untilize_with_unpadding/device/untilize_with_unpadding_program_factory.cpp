@@ -649,7 +649,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_col_interleav
 }
 
 operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
-    const Tensor& a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en, bool enough_space_height) {
+    const Tensor& a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en, bool enough_space_width) {
     tt::tt_metal::Program program{};
 
     tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.get_dtype());
@@ -667,8 +667,9 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
     uint32_t num_tiles_per_row = a.get_padded_shape()[-1] / TILE_WIDTH;
 
     uint32_t num_tiles_per_col = a.get_padded_shape()[-2] / TILE_HEIGHT;
-    if (!enough_space_height) {
-        return untilize_with_unpadding_multi_core_col_interleaved(a, output, use_pack_untilize, fp32_dest_acc_en);
+
+    if (num_tiles_per_row > num_tiles_per_col && num_tiles_per_row > 32) {
+        return untilize_with_unpadding_multi_core_block_interleaved(a, output, use_pack_untilize, fp32_dest_acc_en);
     }
 
     auto [ncores, all_cores, core_range, core_range_cliff, nblocks_per_core, nblocks_per_core_cliff] =
@@ -1120,16 +1121,6 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
     };
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
-}
-
-operation::ProgramWithCallbacks untilize_with_unpadding_multi_core(
-    const Tensor& a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en, bool enough_space_height) {
-    if (a.memory_config().is_sharded()) {
-        return untilize_with_unpadding_multi_core_sharded(a, output, use_pack_untilize, fp32_dest_acc_en);
-    } else {
-        return untilize_with_unpadding_multi_core_interleaved(
-            a, output, use_pack_untilize, fp32_dest_acc_en, enough_space_height);
-    }
 }
 
 }  // namespace ttnn::operations::data_movement::detail
