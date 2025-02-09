@@ -236,7 +236,7 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
         program,
         "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/dataflow/reader_batch_norm.cpp",
         all_device_cores,
-        tt_metal::ReaderDataMovementConfig({a_is_dram}, std::move(reader_defines)));
+        tt_metal::ReaderDataMovementConfig({a_is_dram, input_tensor_cb, eps_cb}, std::move(reader_defines)));
 
     // WRITER KERNEL
     auto writer_defines = dataflow_defines;
