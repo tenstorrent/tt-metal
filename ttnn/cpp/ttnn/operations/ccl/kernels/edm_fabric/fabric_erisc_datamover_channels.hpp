@@ -178,7 +178,7 @@ class EthChannelBuffer final {
     //        &channel_sync->  |----------------|
     //                         |  channel_sync  |
     //                         ------------------
-    EthChannelBuffer() : buffer_size_in_bytes(0), eth_transaction_ack_word_addr(0), max_eth_payload_size_in_bytes(0) {}
+    EthChannelBuffer() : buffer_size_in_bytes(0), max_eth_payload_size_in_bytes(0) {}
 
     /*
      * Expected that *buffer_index_ptr is initialized outside of this object
@@ -191,30 +191,11 @@ class EthChannelBuffer final {
                                                // that can fit 2 eth_channel_syncs cfor ack
         uint8_t channel_id) :
         buffer_size_in_bytes(buffer_size_bytes),
-        eth_transaction_ack_word_addr(eth_transaction_ack_word_addr),
         max_eth_payload_size_in_bytes(buffer_size_in_bytes + sizeof(eth_channel_sync_t)),
         channel_id(channel_id) {
         for (uint8_t i = 0; i < NUM_BUFFERS; i++) {
             this->buffer_addresses[i] =
                 channel_base_address + i * this->max_eth_payload_size_in_bytes;
-
-            uint32_t channel_sync_addr = this->buffer_addresses[i] + buffer_size_in_bytes;
-            auto channel_sync_ptr = reinterpret_cast<eth_channel_sync_t *>(channel_sync_addr);
-
-            channel_bytes_sent_addresses[i] =
-                reinterpret_cast<volatile tt_l1_ptr size_t *>(&(channel_sync_ptr->bytes_sent));
-            channel_bytes_acked_addresses[i] =
-                reinterpret_cast<volatile tt_l1_ptr size_t *>(&(channel_sync_ptr->receiver_ack));
-            channel_src_id_addresses[i] = reinterpret_cast<volatile tt_l1_ptr size_t *>(&(channel_sync_ptr->src_id));
-
-            ASSERT((uint32_t)channel_bytes_acked_addresses[i] != (uint32_t)(channel_bytes_sent_addresses[i]));
-            *(channel_bytes_sent_addresses[i]) = 0;
-            *(channel_bytes_acked_addresses[i]) = 0;
-            *(channel_src_id_addresses[i]) = 0x1c0ffee1;
-            (channel_src_id_addresses[i])[1] = 0x1c0ffee2;
-
-            // Note we don't need to overwrite the `channel_src_id_addresses` except for perhapse
-            // debug purposes where we may wish to tag this with a special value
         }
     }
 
@@ -229,22 +210,6 @@ class EthChannelBuffer final {
     [[nodiscard]] FORCE_INLINE size_t get_payload_size(BufferIndex const& buffer_index) const {
         return get_packet_header(buffer_index)->get_payload_size_including_header();
     }
-    [[nodiscard]] FORCE_INLINE size_t get_payload_plus_channel_sync_size(BufferIndex const& buffer_index) const {
-        return get_packet_header(buffer_index)->get_payload_size_including_header() + sizeof(eth_channel_sync_t);
-    }
-
-    [[nodiscard]] FORCE_INLINE volatile tt_l1_ptr size_t *get_bytes_sent_address(BufferIndex const& buffer_index) const {
-        return this->channel_bytes_sent_addresses[buffer_index];
-    }
-
-    [[nodiscard]] FORCE_INLINE volatile tt_l1_ptr size_t *get_bytes_acked_address(BufferIndex const& buffer_index) const {
-        return this->channel_bytes_acked_addresses[buffer_index];
-    }
-
-    [[nodiscard]] FORCE_INLINE volatile tt_l1_ptr size_t *get_src_id_address(BufferIndex const& buffer_index) const {
-        return this->channel_src_id_addresses[buffer_index];
-    }
-
     [[nodiscard]] FORCE_INLINE size_t get_channel_buffer_max_size_in_bytes(BufferIndex const& buffer_index) const {
         return this->buffer_size_in_bytes;
     }
@@ -256,33 +221,10 @@ class EthChannelBuffer final {
 
     [[nodiscard]] FORCE_INLINE size_t get_id() const { return this->channel_id; }
 
-    [[nodiscard]] FORCE_INLINE bool eth_is_receiver_channel_send_done(BufferIndex const& buffer_index) const {
-        return *(this->get_bytes_sent_address(buffer_index)) == 0;
-    }
-    [[nodiscard]] FORCE_INLINE bool eth_bytes_are_available_on_channel(BufferIndex const& buffer_index) const {
-        return *(this->get_bytes_sent_address(buffer_index)) != 0;
-    }
-    [[nodiscard]] FORCE_INLINE bool eth_is_receiver_channel_send_acked(BufferIndex const& buffer_index) const {
-        return *(this->get_bytes_acked_address(buffer_index)) != 0;
-    }
-    FORCE_INLINE void eth_clear_sender_channel_ack(BufferIndex const& buffer_index) const {
-        *(this->channel_bytes_acked_addresses[buffer_index]) = 0;
-    }
     [[nodiscard]] FORCE_INLINE bool eth_is_acked_or_completed(BufferIndex const& buffer_index) const {
         return eth_is_receiver_channel_send_acked(buffer_index) || eth_is_receiver_channel_send_done(buffer_index);
     }
 
-    [[nodiscard]] FORCE_INLINE size_t get_eth_transaction_ack_word_addr() const {
-        return this->eth_transaction_ack_word_addr;
-    }
-
-    [[nodiscard]] FORCE_INLINE bool all_buffers_drained() const {
-        bool drained = true;
-        for (size_t i = 0; i < NUM_BUFFERS && drained; i++) {
-            drained &= *(channel_bytes_sent_addresses[i]) == 0;
-        }
-        return drained;
-    }
 
     FORCE_INLINE bool needs_to_send_channel_sync() const {
         return this->need_to_send_channel_sync;
@@ -299,14 +241,10 @@ class EthChannelBuffer final {
    private:
 
     std::array<size_t, NUM_BUFFERS> buffer_addresses;
-    std::array<volatile tt_l1_ptr size_t *, NUM_BUFFERS> channel_bytes_sent_addresses;
-    std::array<volatile tt_l1_ptr size_t *, NUM_BUFFERS> channel_bytes_acked_addresses;
-    std::array<volatile tt_l1_ptr size_t *, NUM_BUFFERS> channel_src_id_addresses;
 
     // header + payload regions only
     const std::size_t buffer_size_in_bytes;
     // Includes header + payload + channel_sync
-    const std::size_t eth_transaction_ack_word_addr;
     const std::size_t max_eth_payload_size_in_bytes;
     uint8_t channel_id;
 };
@@ -357,11 +295,11 @@ struct EdmChannelWorkerInterface {
         return worker_location_info_ptr->worker_semaphore_address;
     }
 
-    FORCE_INLINE void update_worker_copy_of_read_ptr() {
+    FORCE_INLINE void update_worker_copy_of_read_ptr(BufferPtr new_ptr_val) {
         auto const &worker_info = *worker_location_info_ptr;
         uint64_t worker_semaphore_address = get_noc_addr(
             (uint32_t)worker_info.worker_xy.x, (uint32_t)worker_info.worker_xy.y, worker_info.worker_semaphore_address);
-        noc_inline_dw_write(worker_semaphore_address, local_ackptr.get_ptr());
+        noc_inline_dw_write(worker_semaphore_address, new_ptr_val);
     }
 
     // Connection management methods
