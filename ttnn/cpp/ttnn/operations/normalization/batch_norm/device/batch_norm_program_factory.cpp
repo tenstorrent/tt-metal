@@ -192,27 +192,27 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
     auto [eps_cb, eps_cb_handle] = create_cb(
         tt::CBIndex::c_4, program, all_device_cores, d_single_tile_size, b_num_tiles_per_cb, d_data_format);  // eps
     auto [weight_tensor_cb, weight_tensor_cb_handle] = create_cb(
-        tt::CBIndex::c_16, program, all_device_cores, e_single_tile_size, b_num_tiles_per_cb, e_data_format);  // weight
+        tt::CBIndex::c_5, program, all_device_cores, e_single_tile_size, b_num_tiles_per_cb, e_data_format);  // weight
     auto [bias_tensor_cb, bias_tensor_cb_handle] = create_cb(
-        tt::CBIndex::c_18, program, all_device_cores, f_single_tile_size, b_num_tiles_per_cb, f_data_format);  // bias
+        tt::CBIndex::c_6, program, all_device_cores, f_single_tile_size, b_num_tiles_per_cb, f_data_format);  // bias
 
     // Temporary buffers to store intermediate results
     auto [den_cb, den_cb_handle] = create_cb(
-        tt::CBIndex::c_5,
+        tt::CBIndex::c_7,
         program,
         all_device_cores,
         a_single_tile_size,
         num_tiles_per_cb,
         a_data_format);  // to store 1/(sqrt(batch_var + eps))
     auto [num_cb, num_cb_handle] = create_cb(
-        tt::CBIndex::c_6,
+        tt::CBIndex::c_8,
         program,
         all_device_cores,
         a_single_tile_size,
         num_tiles_per_cb,
         a_data_format);  // to store input - batch_mean
     auto [temp_1_cb, temp_1_cb_handle] =
-        create_cb(tt::CBIndex::c_17, program, all_device_cores, a_single_tile_size, num_tiles_per_cb, a_data_format);
+        create_cb(tt::CBIndex::c_9, program, all_device_cores, a_single_tile_size, num_tiles_per_cb, a_data_format);
 
     auto a_is_dram = static_cast<uint32_t>(input_tensor.buffer()->buffer_type() == tt_metal::BufferType::DRAM);
     auto b_is_dram = static_cast<uint32_t>(batch_mean_tensor.buffer()->buffer_type() == tt_metal::BufferType::DRAM);
