@@ -48,6 +48,20 @@ RUN mkdir -p /tmp/fmt \
     && make -C /tmp/fmt/build install \
     && rm -rf /tmp/fmt
 
+ARG PYBIND11_VERSION=2.13.6
+RUN mkdir -p /tmp/pybind11 \
+    && wget -O /tmp/pybind11/pybind11-${PYBIND11_VERSION}.tar.gz "https://github.com/pybind/pybind11/archive/refs/tags/v${PYBIND11_VERSION}.tar.gz" \
+    && tar -xzf /tmp/pybind11/pybind11-${PYBIND11_VERSION}.tar.gz -C /tmp/pybind11 --strip-components=1 \
+    && cmake \
+         -S /tmp/pybind11 \
+         -B /tmp/pybind11/build \
+         -DCMAKE_BUILD_TYPE=Release \
+         -DPYBIND11_TEST=OFF \
+         -DPYBIND11_INSTALL=ON \
+    && make -C /tmp/pybind11/build -j$(nproc) \
+    && make -C /tmp/pybind11/build install \
+    && rm -rf /tmp/pybind11
+
 # libstdc++ vs libc++ issue arises
 #ARG YAML_VERSION=0.8.0
 #RUN mkdir -p /tmp/yaml \
