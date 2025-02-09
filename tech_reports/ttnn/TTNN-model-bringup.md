@@ -155,8 +155,9 @@ Reports Folder (sample generated database file and folder structure)            
 ![](images/DB_Files.png)  |  ![](images/performance_ops_folder.png)
 
 - Visualizations and Information provided in visualizer are provided in the below video: (it contains input, output buffer information, graph and performance of those ops)
-![](images/ttnn-dashboard.mp4)
-  
+https://github.com/user-attachments/assets/11511ead-e1fe-4a82-82c8-d7343ea5dcbd
+
+
 
 
 
