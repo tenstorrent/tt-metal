@@ -198,7 +198,6 @@ void Cluster::initialize_device_drivers() {
     tt_device_params default_params;
     this->start_driver(default_params);
     this->generate_virtual_to_umd_coord_mapping();
-    this->generate_logical_to_virtual_coord_mapping();
     this->generate_virtual_to_profiler_flat_id_mapping();
 }
 
@@ -347,39 +346,6 @@ void Cluster::generate_virtual_to_umd_coord_mapping() {
     }
 }
 
-void Cluster::generate_logical_to_virtual_coord_mapping() {
-    for (auto chip_id : this->cluster_desc_->get_all_chips()) {
-        auto board_type = this->get_board_type(chip_id);
-        if (this->worker_logical_to_virtual_x_.find(board_type) != this->worker_logical_to_virtual_x_.end()) {
-            continue;
-        }
-        auto& soc_desc = this->get_soc_desc(chip_id);
-        this->worker_logical_to_virtual_x_.insert({board_type, {}});
-        this->worker_logical_to_virtual_y_.insert({board_type, {}});
-        this->eth_logical_to_virtual_.insert({board_type, {}});
-        for (auto x_coords : soc_desc.worker_log_to_routing_x) {
-            CoreCoord phys_core = soc_desc.get_physical_tensix_core_from_logical(CoreCoord(x_coords.first, 0));
-            CoreCoord virtual_coords = this->get_virtual_coordinate_from_physical_coordinates(chip_id, phys_core);
-            this->worker_logical_to_virtual_x_.at(board_type).insert({x_coords.first, virtual_coords.x});
-        }
-        for (auto y_coords : soc_desc.worker_log_to_routing_y) {
-            CoreCoord phys_core = soc_desc.get_physical_tensix_core_from_logical(CoreCoord(0, y_coords.first));
-            CoreCoord virtual_coords = this->get_virtual_coordinate_from_physical_coordinates(chip_id, phys_core);
-            this->worker_logical_to_virtual_y_.at(board_type).insert({y_coords.first, virtual_coords.y});
-        }
-        for (std::size_t log_eth_core_y = 0; log_eth_core_y < soc_desc.get_cores(CoreType::ETH).size();
-             log_eth_core_y++) {
-            CoreCoord logical_eth_core = {0, log_eth_core_y};
-            tt::umd::CoreCoord phys_eth_core =
-                soc_desc.translate_coord_to(soc_desc.get_eth_core_for_channel(log_eth_core_y), CoordSystem::PHYSICAL);
-            CoreCoord virtual_coords =
-                this->get_virtual_coordinate_from_physical_coordinates(chip_id, {phys_eth_core.x, phys_eth_core.y});
-            this->eth_logical_to_virtual_.at(board_type).insert({logical_eth_core, virtual_coords});
-        }
-    }
-
-}
-
 void Cluster::generate_virtual_to_profiler_flat_id_mapping() {
 #if defined(TRACY_ENABLE)
     for (auto chip_id : this->cluster_desc_->get_all_chips()) {
@@ -417,15 +383,27 @@ const std::unordered_set<CoreCoord>& Cluster::get_virtual_eth_cores(chip_id_t ch
     return this->virtual_eth_cores_.at(chip_id);
 }
 
-CoreCoord Cluster::get_virtual_coordinate_from_logical_coordinates(chip_id_t chip_id, CoreCoord logical_coord, const CoreType& core_type) const {
-    auto board_type = this->get_board_type(chip_id);
-    if (core_type == CoreType::WORKER) {
-        return CoreCoord(this->worker_logical_to_virtual_x_.at(board_type).at(logical_coord.x), this->worker_logical_to_virtual_y_.at(board_type).at(logical_coord.y));
-    } else if (core_type == CoreType::ETH) {
-        return this->eth_logical_to_virtual_.at(board_type).at(logical_coord);
+CoreCoord Cluster::get_virtual_coordinate_from_logical_coordinates(
+    chip_id_t chip_id, CoreCoord logical_coord, const CoreType& core_type) const {
+    // Keeping the old behavior, although UMD does define translation for other cores as well.
+    if (core_type != CoreType::WORKER && core_type != CoreType::DRAM && core_type != CoreType::ETH) {
+        TT_THROW("Undefined conversion for core type.");
     }
+
     auto& soc_desc = this->get_soc_desc(chip_id);
-    return soc_desc.get_physical_core_from_logical_core(logical_coord, core_type);
+    if (core_type == CoreType::DRAM) {
+        return soc_desc.get_physical_dram_core_from_logical(logical_coord);
+    }
+
+    // TBD: Remove when all WORKER are rewritten to TENSIX
+    CoreType core_type_to_use = core_type;
+    if (core_type_to_use == CoreType::WORKER) {
+        core_type_to_use = CoreType::TENSIX;
+    }
+
+    tt::umd::CoreCoord translated_coord =
+        soc_desc.translate_coord_to({logical_coord, core_type_to_use, CoordSystem::LOGICAL}, CoordSystem::TRANSLATED);
+    return {translated_coord.x, translated_coord.y};
 }
 
 tt_cxy_pair Cluster::get_virtual_coordinate_from_logical_coordinates(tt_cxy_pair logical_coordinate, const CoreType& core_type) const {
@@ -456,6 +434,26 @@ CoreCoord Cluster::get_logical_ethernet_core_from_virtual(chip_id_t chip, CoreCo
     tt::umd::CoreCoord logical_core =
         get_soc_desc(chip).translate_coord_to(core, CoordSystem::TRANSLATED, CoordSystem::LOGICAL);
     return {logical_core.x, logical_core.y};
+}
+
+const std::unordered_map<int, int> Cluster::get_worker_logical_to_virtual_x(chip_id_t chip_id) const {
+    std::unordered_map<int, int> worker_logical_to_virtual_x;
+    const auto& soc_desc = tt::Cluster::instance().get_soc_desc(chip_id);
+    for (const tt::umd::CoreCoord& logical_core : soc_desc.get_cores(CoreType::TENSIX, CoordSystem::LOGICAL)) {
+        tt::umd::CoreCoord translated_core = soc_desc.translate_coord_to(logical_core, CoordSystem::TRANSLATED);
+        worker_logical_to_virtual_x[logical_core.x] = translated_core.x;
+    }
+    return worker_logical_to_virtual_x;
+}
+
+const std::unordered_map<int, int> Cluster::get_worker_logical_to_virtual_y(chip_id_t chip_id) const {
+    std::unordered_map<int, int> worker_logical_to_virtual_y;
+    const auto& soc_desc = tt::Cluster::instance().get_soc_desc(chip_id);
+    for (const tt::umd::CoreCoord& logical_core : soc_desc.get_cores(CoreType::TENSIX, CoordSystem::LOGICAL)) {
+        tt::umd::CoreCoord translated_core = soc_desc.translate_coord_to(logical_core, CoordSystem::TRANSLATED);
+        worker_logical_to_virtual_y[logical_core.y] = translated_core.y;
+    }
+    return worker_logical_to_virtual_y;
 }
 
 uint32_t Cluster::get_harvested_rows(chip_id_t chip) const {
