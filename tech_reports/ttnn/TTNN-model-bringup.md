@@ -110,7 +110,54 @@ The diagram below illustrates the corresponding Downsample1 module:
 
 ### 4.2 Visualizer
 
-  - COMING SOON
+- Install ttnn-visualiser from the following the wheel file 
+
+   ``` 
+   python3 -m pip install ttnn_visualizer-0.15.0-py3-none-any.whl 
+   ```
+
+ - To start the visualizer, run in terminal: 
+    ```
+    ttnn-visualizer
+    ```
+
+ - Access ttnn-visualizer dashboard at 0.0.0.0:8000 (default)
+ ![](images/ttnn-visualizer2.png)
+
+ - For any issues, the repo of ttnn-visualizer is [here](https://github.com/tenstorrent/ttnn-visualizer)
+
+ - To generate the buffers of every tensors and the tensor and graph information, please set the TTNN_CONFIG_PATH
+    ```
+    export TTNN_CONFIG_PATH=/home/ubuntu/METAL/vis.setup
+    ```
+- The config file contains runtime debug flags that generate the tensor and graph information in a database file format, that is later visualized by ttnn-visualizer
+
+    ```
+    # sample vis.setup
+    {
+  "enable_fast_runtime_mode": false,
+  "enable_logging": true,
+  "report_name": "sd35_attention_0",
+  "enable_graph_report": false,
+  "enable_detailed_buffer_report":true,
+  "enable_detailed_tensor_report": false,
+  "enable_comparison_mode": false
+    }
+    ```
+ - To generate ops information in a csv file, run profiler (for example):
+    ``` 
+    python -m tracy -p -r -v -m pytest models/demos/yolov4/demo/demo.py
+    ```
+  
+
+Reports Folder (sample generated database file and folder structure)             |  Performance Data Folder (Sample generated performance ops information csv and folder structure)
+:-------------------------:|:-------------------------:
+![](images/DB_Files.png)  |  ![](images/performance_ops_folder.png)
+
+- Visualizations and Information provided in visualizer are provided in the below video: (it contains input, output buffer information, graph and performance of those ops)
+![](images/ttnn-dashboard.mp4)
+  
+
 
 
 ### 4.3 Trace and 2cq
