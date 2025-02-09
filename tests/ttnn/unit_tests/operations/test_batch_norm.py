@@ -10,6 +10,129 @@ from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import (
     compare_results_batch_norm,
 )
 from itertools import product
+from models.utility_functions import skip_for_grayskull
+
+
+@skip_for_grayskull("Unsupported dtype for Grayskull")
+@pytest.mark.parametrize("eps", [1.0, 0.0, 2.34, 1e-05])
+@pytest.mark.parametrize("channel_size", [1, 2, 3, 4])
+@pytest.mark.parametrize("weight", [True, False])
+@pytest.mark.parametrize("bias", [True, False])
+def test_BN_fp32_full_value(device, channel_size, eps, weight, bias):
+    input_tensor_torch = torch.full(torch.Size([3, channel_size, 64, 120]), 1, dtype=torch.float32)
+    batch_mean_torch = torch.full(torch.Size([channel_size]), 0.00030171126, dtype=torch.float32)
+    batch_var_torch = torch.full(torch.Size([channel_size]), 0.1262342343, dtype=torch.float32)
+    weight_torch = torch.full(torch.Size([channel_size]), 0.246943565369, dtype=torch.float32) if weight else None
+    bias_torch = torch.full(torch.Size([channel_size]), 0.59, dtype=torch.float32) if bias else None
+
+    result_torch = torch.nn.functional.batch_norm(
+        input=input_tensor_torch,
+        running_mean=batch_mean_torch,
+        running_var=batch_var_torch,
+        weight=weight_torch,
+        bias=bias_torch,
+        eps=eps,
+    )
+
+    batch_mean_torch = batch_mean_torch.view(1, channel_size, 1, 1)
+    batch_var_torch = batch_var_torch.view(1, channel_size, 1, 1)
+    weight_torch = weight_torch.view(1, channel_size, 1, 1) if weight else None
+    bias_torch = bias_torch.view(1, channel_size, 1, 1) if bias else None
+
+    input_tensor_tt = ttnn.from_torch(input_tensor_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    batch_mean_tt = ttnn.from_torch(batch_mean_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    batch_var_tt = ttnn.from_torch(batch_var_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    weight_tt = (
+        ttnn.from_torch(weight_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device) if weight else None
+    )
+    bias_tt = ttnn.from_torch(bias_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device) if bias else None
+
+    result_tt = ttnn.batch_norm(
+        input_tensor_tt, running_mean=batch_mean_tt, running_var=batch_var_tt, eps=eps, weight=weight_tt, bias=bias_tt
+    )
+    tt_out = ttnn.to_torch(result_tt)
+
+    status_1 = torch.allclose(result_torch, tt_out, atol=1e-10, rtol=1e-5)
+    status_2 = compare_results_batch_norm([result_torch], [tt_out])
+    assert status_2 and status_1
+
+
+@skip_for_grayskull("Unsupported dtype for Grayskull")
+@pytest.mark.parametrize(
+    "input_shapes",
+    [
+        *(torch.Size([n, c, 32, 32]) for n, c in product([1, 2, 3, 4], [1, 2, 3, 4])),
+        *(torch.Size([n, c, 23, 23]) for n, c in product([1, 2, 3, 4], [1, 2, 3, 4])),
+        *(torch.Size([n, c, 64, 120]) for n, c in product([1, 2], [1, 2, 3])),
+        torch.Size([3, 1, 64, 120]),
+        torch.Size([3, 2, 64, 120]),
+    ],
+)
+@pytest.mark.parametrize(
+    "check_mean, check_var",
+    [
+        (False, False),  # xfail case
+        (True, False),  # xfail case
+        (False, True),  # xfail case
+        (True, True),
+    ],
+)
+@pytest.mark.parametrize("weight", [True, False])
+@pytest.mark.parametrize("bias", [True, False])
+@pytest.mark.parametrize("eps", [1.0, 0.0, 2.34, 1e-05])
+def test_batch_norm_fp32(
+    input_shapes, check_mean, check_var, weight, bias, eps, device, training=False, testing_dtype="float32"
+):
+    in_data, input_tensor = data_gen_with_range_batch_norm(
+        input_shapes, 5, 10, device, is_input=True, testing_dtype=testing_dtype
+    )
+    mean_data, mean_tensor = (
+        data_gen_with_range_batch_norm(input_shapes, 4, 10, device, testing_dtype=testing_dtype)
+        if (check_mean)
+        else (None, None)
+    )
+    var_data, var_tensor = (
+        data_gen_with_range_batch_norm(input_shapes, 4, 20, device, testing_dtype=testing_dtype)
+        if (check_var)
+        else (None, None)
+    )
+    weight_data, weight_tensor = (
+        data_gen_with_range_batch_norm(input_shapes, 4, 10, device, testing_dtype=testing_dtype)
+        if weight
+        else (None, None)
+    )
+    bias_data, bias_tensor = (
+        data_gen_with_range_batch_norm(input_shapes, 4, 10, device, testing_dtype=testing_dtype)
+        if bias
+        else (None, None)
+    )
+
+    if (not training) and ((not check_mean) or (not check_var)):
+        pytest.xfail("running_mean and running_var must be defined in evaluation mode")
+
+    tt_output_tensor_on_device = ttnn.batch_norm(
+        input_tensor,
+        running_mean=mean_tensor,
+        running_var=var_tensor,
+        training=training,
+        eps=eps,
+        weight=weight_tensor,
+        bias=bias_tensor,
+    )
+    tt_output = ttnn.to_torch(tt_output_tensor_on_device)
+    torch_result = torch.nn.functional.batch_norm(
+        input=in_data,
+        running_mean=mean_data,
+        running_var=var_data,
+        weight=weight_data,
+        bias=bias_data,
+        training=training,
+        eps=eps,
+    )
+    comp_pass = compare_results_batch_norm([tt_output], [torch_result]) and torch.allclose(
+        torch_result, tt_output, atol=1e-6, rtol=1e-3
+    )
+    assert comp_pass
 
 
 @pytest.mark.parametrize(
