@@ -329,15 +329,6 @@ ttnn::Tensor ConcatOperation::invoke(
     return res;
 }
 
-ttnn::Tensor ConcatOperation::invoke(
-    const std::vector<ttnn::Tensor>& input_tensors,
-    int dim,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<ttnn::Tensor>& optional_output_tensor,
-    unsigned int groups) {
-    return invoke(DefaultQueueId, input_tensors, dim, memory_config, std::move(optional_output_tensor), groups);
-}
-
 }  // namespace data_movement
 }  // namespace operations
 }  // namespace ttnn

@@ -18,9 +18,4 @@ ttnn::Tensor ExecuteConvertToCHW::invoke(
     return operation::run(program, {a}, {}, {}, queue_id).at(0);
 }
 
-ttnn::Tensor ExecuteConvertToCHW::invoke(
-    const Tensor& a, const std::optional<MemoryConfig>& memory_config, const std::optional<DataType>& dtype) {
-    return invoke(DefaultQueueId, a, memory_config, dtype);
-}
-
 }  // namespace ttnn::operations::experimental::cnn

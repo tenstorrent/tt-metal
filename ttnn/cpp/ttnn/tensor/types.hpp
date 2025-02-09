@@ -29,7 +29,7 @@ namespace tt {
 
 namespace tt_metal {
 
-static constexpr std::uint8_t VERSION_ID = 4;
+static constexpr std::uint8_t VERSION_ID = 5;
 
 enum class DataType {
     BFLOAT16 = 0,

@@ -18,12 +18,15 @@ def data_gen_with_range_batch_norm(
     device,
     is_input=False,
     required_grad=False,
+    testing_dtype="bfloat16",
 ):
     assert high > low, "Incorrect range provided"
     torch.manual_seed(213919)
     channels = input_shapes[1]
     size = input_shapes if is_input else channels
-    pt_tensor = torch.rand(size, requires_grad=required_grad).bfloat16() * (high - low) + low
+    torch_dtype = getattr(torch, testing_dtype)
+    ttnn_dtype = getattr(ttnn, testing_dtype)
+    pt_tensor = torch.rand(size, requires_grad=required_grad, dtype=torch_dtype) * (high - low) + low
     reshaped_tensor = pt_tensor
     if not is_input:
         reshaped_tensor = pt_tensor.view(1, channels, 1, 1)
@@ -31,7 +34,7 @@ def data_gen_with_range_batch_norm(
         reshaped_tensor,
         device=device,
         layout=ttnn.TILE_LAYOUT,
-        dtype=ttnn.bfloat16,
+        dtype=ttnn_dtype,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     return pt_tensor, tt_tensor
