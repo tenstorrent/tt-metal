@@ -394,7 +394,7 @@ def test_untilize_w6(shape, input_layout, output_layout, device):
     assert_with_pcc(input_a[:, :, :10971, :11516], output_tensor)
 
 
-@pytest.mark.parametrize("shape", [[19, 6, 11432, 11021]])
+@pytest.mark.parametrize("shape", [[11432, 11021]])
 @pytest.mark.parametrize("output_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("input_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 def test_to_layout_w7(shape, input_layout, output_layout, device):

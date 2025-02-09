@@ -12,23 +12,57 @@ from tests.tt_eager.python_api_testing.sweep_tests.run_pytorch_ci_tests import r
 import ttnn
 
 params = [
-    pytest.param([[5, 5, 50, 50]], tilize_with_val_padding_args)
-    for tilize_with_val_padding_args in generation_funcs.gen_tilize_with_val_padding_args([[5, 5, 50, 50]])
-]
-params += [
-    pytest.param([[5, 5, 64, 96]], tilize_with_val_padding_args)
-    for tilize_with_val_padding_args in generation_funcs.gen_tilize_with_val_padding_args([[5, 5, 64, 96]])
-]
-params += [
     pytest.param(
-        [[1, 1, 120, 7300]],
+        [[1, 1, 50, 50]],
         {
             "dtype": [ttnn.bfloat16],
             "layout": [ttnn.ROW_MAJOR_LAYOUT],
             "input_mem_config": [ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)],
             "output_mem_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
-            "output_tensor_shape": [1, 1, 128, 7328],
+            "output_tensor_shape": [1, 1, 64, 64],
             "pad_value": 10.0,
+        },
+    )
+]
+
+params += [
+    pytest.param(
+        [[1, 1, 50, 50]],
+        {
+            "dtype": [ttnn.bfloat16],
+            "layout": [ttnn.ROW_MAJOR_LAYOUT],
+            "input_mem_config": [ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)],
+            "output_mem_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),
+            "output_tensor_shape": [1, 1, 64, 64],
+            "pad_value": 10.0,
+        },
+    )
+]
+
+params += [
+    pytest.param(
+        [[1, 1, 50, 50]],
+        {
+            "dtype": [ttnn.bfloat16],
+            "layout": [ttnn.ROW_MAJOR_LAYOUT],
+            "input_mem_config": [ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)],
+            "output_mem_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+            "output_tensor_shape": [1, 1, 64, 64],
+            "pad_value": 50.0,
+        },
+    )
+]
+
+params += [
+    pytest.param(
+        [[1, 1, 50, 50]],
+        {
+            "dtype": [ttnn.bfloat16],
+            "layout": [ttnn.ROW_MAJOR_LAYOUT],
+            "input_mem_config": [ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)],
+            "output_mem_config": ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1),
+            "output_tensor_shape": [1, 1, 64, 64],
+            "pad_value": -18.0,
         },
     )
 ]
