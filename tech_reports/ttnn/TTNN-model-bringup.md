@@ -121,7 +121,7 @@ The diagram below illustrates the corresponding Downsample1 module:
     ttnn-visualizer
     ```
 
- - Access ttnn-visualizer dashboard at 0.0.0.0:8000 (default)
+ - Access ttnn-visualizer dashboard at 0.0.0.0:8000 (default) <br> <br>
  ![](images/ttnn-visualizer2.png)
 
  - For any issues, the repo of ttnn-visualizer is [here](https://github.com/tenstorrent/ttnn-visualizer)
