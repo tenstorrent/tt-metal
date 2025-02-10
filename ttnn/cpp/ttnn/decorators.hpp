@@ -6,9 +6,9 @@
 
 #include <reflect>
 
-#include "tt_metal/graph/graph_tracking.hpp"
-#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
-#include "ttnn/common/constants.hpp"
+#include <tt-metalium/graph_tracking.hpp>
+#include <tracy/Tracy.hpp>
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/core.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operation.hpp"
@@ -131,11 +131,10 @@ auto map_execute_on_worker_thread_return_to_launch_op_return(const T&& value) {
     } else if constexpr (is_homogenous_tuple<T, Tensor>()) {
         Tensors output_tensors;
         output_tensors.reserve(std::tuple_size_v<T>);
-        std::apply(
-            [&output_tensors](auto&&... args) {
-                (output_tensors.emplace_back(std::forward<decltype(args)>(args)), ...);
-            },
-            value);
+        [&]<std::size_t... Is>(std::index_sequence<Is...>) {
+            using std::get;
+            (output_tensors.emplace_back(std::forward<decltype(get<Is>(value))>(get<Is>(value))), ...);
+        }(std::make_index_sequence<std::tuple_size_v<T>>{});
         return output_tensors;
     } else {
         static_assert(
@@ -202,6 +201,15 @@ concept PrimitiveOperationConcept = device_operation::DeviceOperationConcept<ope
 template <typename operation_t>
 concept CompositeOperationConcept = !PrimitiveOperationConcept<operation_t>;
 
+template <typename Op, typename... Args>
+concept HasInvoke = requires {
+    { Op::invoke(std::declval<Args>()...) };
+};
+
+template <typename T, typename... Args>
+concept FirstArgIs =
+    sizeof...(Args) > 0 && std::same_as<std::decay_t<std::tuple_element_t<0, std::tuple<Args&&...>>>, T>;
+
 template <reflect::fixed_string cpp_fully_qualified_name, typename operation_t, bool auto_launch_op>
 struct registered_operation_t {
     static constexpr auto is_primitive = PrimitiveOperationConcept<operation_t>;
@@ -217,9 +225,48 @@ struct registered_operation_t {
         return detail::python_fully_qualified_name(std::string{cpp_fully_qualified_name});
     }
 
+    // --- operator() Overloads ---
+
+    // (1) Overload when the first argument is a QueueId.
+    template <typename First, typename... Rest>
+        requires std::same_as<std::decay_t<First>, QueueId>
+    auto operator()(First&& first, Rest&&... rest) const {
+        return traced_invoke(std::forward<First>(first), std::forward<Rest>(rest)...);
+    }
+
+    // (2a) Overload when no QueueId is provided AND the operation is invocable without a QueueId.
+    template <typename... Args>
+        requires(sizeof...(Args) == 0 || (!FirstArgIs<QueueId, Args...> && HasInvoke<operation_t, Args && ...>))
+    auto operator()(Args&&... args) const {
+        return traced_invoke(std::forward<Args>(args)...);
+    }
+
+    // (2b) Overload when no QueueId is provided but the operation is NOT invocable without a QueueId,
+    // so we inject DefaultQueueId.
+    template <typename... Args>
+        requires(
+            sizeof...(Args) == 0 || (!FirstArgIs<QueueId, Args...> && !HasInvoke<operation_t, Args && ...> &&
+                                     HasInvoke<operation_t, QueueId, Args && ...>))
+    auto operator()(Args&&... args) const {
+        return traced_invoke(DefaultQueueId, std::forward<Args>(args)...);
+    }
+
+private:
+    template <typename... args_t>
+    auto traced_invoke(args_t&&... args) const {
+        tt::log_debug(tt::LogOp, "Started C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});
+        tt::tt_metal::GraphTracker::instance().track_function_start(cpp_fully_qualified_name, args...);
+
+        auto output = invoke(std::forward<args_t>(args)...);
+
+        tt::tt_metal::GraphTracker::instance().track_function_end(output);
+        tt::log_debug(tt::LogOp, "Finished C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});
+        return output;
+    }
+
     template <typename... args_t>
         requires PrimitiveOperationConcept<operation_t>
-    auto invoke(uint8_t queue_id, args_t&&... args) const {
+    auto invoke(QueueId queue_id, args_t&&... args) const {
         static_assert(
             requires { operation_t::invoke(std::forward<decltype(args)>(args)...); },
             "Primitive Operation must implement operator() method to be invoked.");
@@ -233,6 +280,12 @@ struct registered_operation_t {
         requires(PrimitiveOperationConcept<operation_t>)
     auto invoke(args_t&&... args) const {
         return invoke(DefaultQueueId, std::forward<args_t>(args)...);
+    }
+
+    template <typename... args_t>
+        requires(CompositeOperationConcept<operation_t>)
+    auto invoke(args_t&&... args) const {
+        return invoke_composite(std::forward<args_t>(args)...);
     }
 
     template <typename... args_t>
@@ -300,30 +353,6 @@ struct registered_operation_t {
                 "vector of "
                 "Tensor(s).");
         }
-    }
-
-    template <typename... args_t>
-        requires(CompositeOperationConcept<operation_t>)
-    auto invoke(args_t&&... args) const {
-        return invoke_composite(std::forward<args_t>(args)...);
-    }
-
-    template <typename... args_t>
-    auto operator()(args_t&&... args) const {
-        tt::log_debug(tt::LogOp, "Started   C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});
-        tt::tt_metal::GraphTracker::instance().track_function_start(cpp_fully_qualified_name, args...);
-        auto output = invoke(std::forward<args_t>(args)...);
-
-        // Should every output tensor be tracked?
-        /*
-        if (GraphTracker::instance().is_enabled()) {
-            output = tt::stl::reflection::transform_object_of_type<Tensor>(tt::tt_metal::set_tensor_id, output);
-        }
-        */
-
-        tt::tt_metal::GraphTracker::instance().track_function_end(output);
-        tt::log_debug(tt::LogOp, "Finished  C++ ttnn operation: {}", std::string_view{cpp_fully_qualified_name});
-        return output;
     }
 };
 
@@ -393,13 +422,6 @@ template <reflect::fixed_string cpp_fully_qualified_name, typename operation_t>
 constexpr auto register_operation_with_auto_launch_op() {
     return register_operation_impl<cpp_fully_qualified_name, operation_t, true>();
 }
-
-namespace detail {
-template <auto lambda_t>
-struct lambda_operation_t {
-    static auto invoke(auto&&... args) { return lambda_t(std::forward<decltype(args)>(args)...); }
-};
-}  // namespace detail
 
 }  // namespace decorators
 

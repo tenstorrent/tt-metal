@@ -62,8 +62,9 @@ jobs:
           {name: eth, cmd: "./build/test/tt_metal/unit_tests_eth_${{ inputs.arch }}"},
           {name: llk, cmd: "./build/test/tt_metal/unit_tests_llk"},
           {name: stl, cmd: "./build/test/tt_metal/unit_tests_stl"},
-          {name: distributed, cmd: "./build/test/tt_metal/distributed/distributed_unit_tests --gtest_filter=MeshDeviceSuite.*"},
+          {name: distributed, cmd: "./build/test/tt_metal/distributed/distributed_unit_tests_${{ inputs.arch }} --gtest_filter=MeshDeviceSuite.*"},
 
+          {name: lightmetal, cmd: "./build/test/tt_metal/unit_tests_lightmetal"},
           {name: dispatch multicmd queue, cmd: "TT_METAL_GTEST_NUM_HW_CQS=2 ./build/test/tt_metal/unit_tests_dispatch_${{ inputs.arch }} --gtest_filter=MultiCommandQueue*Fixture.*"},
 
           {name: ttnn cpp unit tests, cmd: ./build/test/ttnn/unit_tests_ttnn},
@@ -81,9 +82,9 @@ jobs:
     steps:
       - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
       - uses: ./.github/actions/prepare-metal-run
-        with:
-          arch: ${{ inputs.arch }}
       - name: ${{ matrix.test-group.name }} tests
+        #GH Issue 16167
+        if: ${{ !(inputs.runner-label == 'BH' && matrix.test-group.name == 'tools') }}
         timeout-minutes: ${{ inputs.timeout }}
         uses: ./.github/actions/docker-run
         with:

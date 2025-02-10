@@ -5,7 +5,7 @@
 #include "tilize_with_val_padding.hpp"
 
 #include "device/tilize_with_val_padding_op.hpp"
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
@@ -21,11 +21,13 @@ using MassagedTilizeVal = MassagedOperation<ttnn::Tensor, const ttnn::Tensor&>;
 using MassagedTilizeValParams = MassagedOperationParams<ttnn::Tensor, const ttnn::Tensor&>;
 
 MassagedTilizeVal build_ndiml_tilize_val(BaseTilizeValType base_tilize) {
-    auto original_shape = std::make_shared<ttnn::Shape>(ttnn::Shape{});
+    auto original_shape = std::make_shared<Shape>();
     return MassagedTilizeVal(MassagedTilizeValParams{
-        .predicate = [](const ttnn::Tensor& input_tensor) -> bool { return input_tensor.get_shape().rank() > 4; },
+        .predicate = [](const ttnn::Tensor& input_tensor) -> bool {
+            return input_tensor.get_logical_shape().rank() > 4;
+        },
         .pre_transform = [=](const ttnn::Tensor& input_tensor) -> OwnedTilizeValArgs {
-            *original_shape = input_tensor.get_shape();
+            *original_shape = input_tensor.get_logical_shape();
             ttnn::Tensor squeezed_tensor = squeeze_from_ND_to_4D(input_tensor);
             return std::make_tuple(squeezed_tensor);
         },
@@ -39,7 +41,7 @@ MassagedTilizeVal build_ndiml_tilize_val(BaseTilizeValType base_tilize) {
         .operation = std::move(base_tilize)});
 }
 
-ttnn::SimpleShape squeeze_output_shape(const ttnn::SimpleShape& output_shape) {
+ttnn::Shape squeeze_output_shape(const ttnn::Shape& output_shape) {
     if (output_shape.rank() > 4) {
         std::array<uint32_t, 4> output_shape_4d;
         output_shape_4d[0] = 1;
@@ -50,15 +52,15 @@ ttnn::SimpleShape squeeze_output_shape(const ttnn::SimpleShape& output_shape) {
         output_shape_4d[1] = output_shape[1 + extra_rank];
         output_shape_4d[2] = output_shape[2 + extra_rank];
         output_shape_4d[3] = output_shape[3 + extra_rank];
-        return ttnn::SimpleShape(output_shape_4d);
+        return ttnn::Shape(output_shape_4d);
     }
     return output_shape;
 }
 
 ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
-    const ttnn::SimpleShape& output_padded_shape,
+    const ttnn::Shape& output_padded_shape,
     const PadValue pad_value,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DataType> output_dtype,
@@ -82,7 +84,36 @@ ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
 
 ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
     const ttnn::Tensor& input_tensor,
-    const ttnn::SimpleShape& output_padded_shape,
+    const ttnn::Shape& output_padded_shape,
+    const PadValue pad_value,
+    const std::optional<MemoryConfig>& memory_config,
+    std::optional<DataType> output_dtype,
+    bool use_multicore) {
+    return invoke(
+        DefaultQueueId, input_tensor, output_padded_shape, pad_value, memory_config, output_dtype, use_multicore);
+}
+
+ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
+    QueueId queue_id,
+    const ttnn::Tensor& input_tensor,
+    const ttnn::SmallVector<uint32_t>& output_padded_shape,
+    const PadValue pad_value,
+    const std::optional<MemoryConfig>& memory_config,
+    std::optional<DataType> output_dtype,
+    bool use_multicore) {
+    return invoke(
+        queue_id,
+        input_tensor,
+        ttnn::Shape{output_padded_shape},
+        pad_value,
+        memory_config,
+        output_dtype,
+        use_multicore);
+}
+
+ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::SmallVector<uint32_t>& output_padded_shape,
     const PadValue pad_value,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DataType> output_dtype,
@@ -92,7 +123,7 @@ ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
 }
 
 ttnn::Tensor ExecuteTilizeWithZeroPadding::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DataType> output_dtype,

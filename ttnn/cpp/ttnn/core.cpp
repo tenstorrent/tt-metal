@@ -4,7 +4,47 @@
 
 #include "ttnn/core.hpp"
 
+#include <magic_enum/magic_enum.hpp>
+
+namespace ttnn::core {
+
+bool has_storage_type_of(const ttnn::Tensor& tensor, const ttnn::StorageType& storage_type) {
+    return tensor.storage_type() == storage_type;
+}
+
+std::optional<ttnn::MemoryConfig> get_memory_config(const ttnn::Tensor& tensor) {
+    if (not tensor.is_allocated() or not is_tensor_on_device_or_multidevice(tensor)) {
+        return std::nullopt;
+    }
+    return tensor.memory_config();
+}
+
+void set_printoptions(const std::string& profile) {
+    tt::tt_metal::tensor_impl::TTNN_TENSOR_PRINT_PROFILE =
+        magic_enum::enum_cast<tt::tt_metal::tensor_impl::TensorPrintProfile>(profile, [](char lhs, char rhs) {
+            return std::tolower(lhs) == std::tolower(rhs);
+        }).value();
+}
+
+void segfault_handler(int sig) {
+    std::cerr << tt::assert::backtrace_to_string() << std::endl;
+    exit(EXIT_FAILURE);
+}
+
+void dump_stack_trace_on_segfault() {
+    if (std::signal(SIGSEGV, segfault_handler) == SIG_ERR) {
+        std::cerr << "Error: cannot handle SIGSEGV" << std::endl;
+        exit(EXIT_FAILURE);
+    }
+}
+}  // namespace ttnn::core
+
 namespace ttnn {
+
+CoreIDs& CoreIDs::instance() {
+    static CoreIDs instance;
+    return instance;
+}
 
 std::int64_t CoreIDs::get_python_operation_id() { return python_operation_id.load(); }
 void CoreIDs::set_python_operation_id(std::int64_t python_operation_id_) { python_operation_id = python_operation_id_; }

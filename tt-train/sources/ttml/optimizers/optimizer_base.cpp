@@ -9,26 +9,6 @@
 
 namespace ttml::optimizers {
 
-namespace distributed {
-
-ttnn::Tensor synchronize_tensor(const ttnn::Tensor& tensor) {
-    auto* device = &autograd::ctx().get_device();
-    auto devices_count = device->get_devices().size();
-    assert(devices_count >= 1U);
-    // no need to synchronize if there is only one device
-    if (devices_count == 1U) {
-        return tensor;
-    }
-
-    // all_reduce Mean is not supported, use sum and divide by #devices
-    auto result = ttnn::experimental::all_reduce(
-        tensor, ttnn::operations::reduction::ReduceType::Sum, 1, std::nullopt, ttnn::ccl::Topology::Ring);
-    result = ttnn::multiply(result, 1.0F / static_cast<float>(devices_count));
-    return result;
-}
-
-}  // namespace distributed
-
 OptimizerBase::OptimizerBase(serialization::NamedParameters&& parameters) : m_parameters(std::move(parameters)) {
 }
 

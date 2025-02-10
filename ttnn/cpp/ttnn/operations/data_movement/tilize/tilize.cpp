@@ -5,7 +5,7 @@
 #include "tilize.hpp"
 
 #include "device/tilize_op.hpp"
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
@@ -20,11 +20,13 @@ using MassagedTilize = MassagedOperation<ttnn::Tensor, const ttnn::Tensor&>;
 using MassagedTilizeParams = MassagedOperationParams<ttnn::Tensor, const ttnn::Tensor&>;
 
 MassagedTilize build_ndiml_tilize(BaseTilizeType base_tilize) {
-    auto original_shape = std::make_shared<ttnn::Shape>(ttnn::Shape{});
+    auto original_shape = std::make_shared<Shape>();
     return MassagedTilize(MassagedTilizeParams{
-        .predicate = [](const ttnn::Tensor& input_tensor) -> bool { return input_tensor.get_shape().rank() > 4; },
+        .predicate = [](const ttnn::Tensor& input_tensor) -> bool {
+            return input_tensor.get_logical_shape().rank() > 4;
+        },
         .pre_transform = [=](const ttnn::Tensor& input_tensor) -> OwnedTilizeArgs {
-            *original_shape = input_tensor.get_shape();
+            *original_shape = input_tensor.get_logical_shape();
             ttnn::Tensor squeezed_tensor = squeeze_from_ND_to_4D(input_tensor);
             return std::make_tuple(squeezed_tensor);
         },
@@ -36,7 +38,7 @@ MassagedTilize build_ndiml_tilize(BaseTilizeType base_tilize) {
 }
 
 ttnn::Tensor ExecuteTilize::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DataType> output_dtype,
@@ -54,14 +56,6 @@ ttnn::Tensor ExecuteTilize::invoke(
     };
 
     return build_ndiml_tilize(base_tilize)(input_tensor);
-}
-
-ttnn::Tensor ExecuteTilize::invoke(
-    const ttnn::Tensor& input_tensor,
-    const std::optional<MemoryConfig>& memory_config,
-    std::optional<DataType> output_dtype,
-    bool use_multicore) {
-    return invoke(DefaultQueueId, input_tensor, memory_config, output_dtype, use_multicore);
 }
 
 }  // namespace ttnn::operations::data_movement

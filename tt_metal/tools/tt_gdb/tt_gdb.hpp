@@ -3,9 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <string>
-#include "llrt/tt_cluster.hpp"
-#include "llrt/llrt.hpp"
-#include "tt_metal/device.hpp"
+#include <tt_cluster.hpp>
+#include <device.hpp>
 
 namespace tt_gdb {
 // Debugger info for UI

@@ -4,6 +4,8 @@
 
 #include "page_config.hpp"
 
+#include <tt-metalium/shape2d.hpp>
+
 namespace tt::tt_metal {
 
 namespace {
@@ -51,11 +53,11 @@ void PageConfig::validate_alignment(
         [&](const auto& config) constexpr { config.validate_alignment(alignment, dtype, memory_config); }, config_);
 }
 
-Size PageConfig::get_page_shape(
-    const Size& physical_size,
+Shape2D PageConfig::get_page_shape(
+    const Shape2D& physical_size,
     DataType dtype,
     const MemoryConfig& memory_config,
-    const std::optional<Size>& physical_shard_size) const {
+    const std::optional<Shape2D>& physical_shard_size) const {
     return std::visit(
         [&](const auto& config) constexpr {
             return config.get_page_shape(physical_size, dtype, memory_config, physical_shard_size);
@@ -63,7 +65,7 @@ Size PageConfig::get_page_shape(
         config_);
 }
 
-size_t PageConfig::get_page_size_bytes(const Size& page_shape, DataType dtype) const {
+size_t PageConfig::get_page_size_bytes(const Shape2D& page_shape, DataType dtype) const {
     return std::visit(
         [&](const auto& config) constexpr { return config.get_page_size_bytes(page_shape, dtype); }, config_);
 }
@@ -109,16 +111,19 @@ void TilePageConfig::validate_alignment(const Alignment& alignment, DataType dty
         tile_.get_height());
 }
 
-Size TilePageConfig::get_page_shape(
-    const Size& physical_size, DataType dtype, const MemoryConfig& memory_config, const std::optional<Size>&) const {
+Shape2D TilePageConfig::get_page_shape(
+    const Shape2D& physical_size,
+    DataType dtype,
+    const MemoryConfig& memory_config,
+    const std::optional<Shape2D>&) const {
     if (memory_config.memory_layout == TensorMemoryLayout::SINGLE_BANK && physical_size.width() != 0 &&
         physical_size.height() != 0) {
         return physical_size;
     }
-    return Size(tile_.get_height(), tile_.get_width());
+    return Shape2D(tile_.get_height(), tile_.get_width());
 }
 
-size_t TilePageConfig::get_page_size_bytes(const Size& page_shape, DataType dtype) const {
+size_t TilePageConfig::get_page_size_bytes(const Shape2D& page_shape, DataType dtype) const {
     const auto tiles_count = page_shape.height() / tile_.get_height() * page_shape.width() / tile_.get_width();
     const auto size = tiles_count * tile_.get_tile_size(datatype_to_dataformat_converter(dtype));
     return size;
@@ -166,13 +171,13 @@ void RowMajorPageConfig::validate_alignment(
     }
 }
 
-Size RowMajorPageConfig::get_page_shape(
-    const Size& physical_size,
+Shape2D RowMajorPageConfig::get_page_shape(
+    const Shape2D& physical_size,
     DataType dtype,
     const MemoryConfig& memory_config,
-    const std::optional<Size>& physical_shard_size) const {
+    const std::optional<Shape2D>& physical_shard_size) const {
     if (physical_size.height() == 0 || physical_size.width() == 0) {
-        return Size(1, sizeof(uint32_t) / CMAKE_UNIQUE_NAMESPACE::rm_element_size_bytes(dtype));
+        return Shape2D(1, sizeof(uint32_t) / CMAKE_UNIQUE_NAMESPACE::rm_element_size_bytes(dtype));
     }
 
     if (memory_config.memory_layout == TensorMemoryLayout::SINGLE_BANK) {
@@ -185,13 +190,13 @@ Size RowMajorPageConfig::get_page_shape(
             "For width or block sharded tensors, Row Major page width comes from physical shard size so it must be "
             "provided!");
 
-        return Size(1, physical_shard_size.value().width());
+        return Shape2D(1, physical_shard_size.value().width());
     }
 
-    return Size(1, physical_size.width());
+    return Shape2D(1, physical_size.width());
 }
 
-size_t RowMajorPageConfig::get_page_size_bytes(const Size& page_shape, DataType dtype) const {
+size_t RowMajorPageConfig::get_page_size_bytes(const Shape2D& page_shape, DataType dtype) const {
     const auto size = page_shape.height() * page_shape.width() * CMAKE_UNIQUE_NAMESPACE::rm_element_size_bytes(dtype);
     return size;
 }

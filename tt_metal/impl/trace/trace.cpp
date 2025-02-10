@@ -2,16 +2,16 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "impl/trace/trace.hpp"
+#include <trace.hpp>
 
 #include <memory>
 
-#include "tt_metal/common/logger.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/device.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "tt_metal/impl/trace/trace.hpp"
+#include <logger.hpp>
+#include <tt_metal.hpp>
+#include <host_api.hpp>
+#include <device.hpp>
+#include <command_queue.hpp>
+#include <trace.hpp>
 #include "tt_metal/trace.hpp"
 
 namespace {
@@ -70,14 +70,14 @@ std::atomic<uint32_t> Trace::global_trace_id = 0;
 uint32_t Trace::next_id() { return global_trace_id++; }
 
 std::shared_ptr<TraceBuffer> Trace::create_empty_trace_buffer() {
-    return std::make_shared<TraceBuffer>(std::make_shared<detail::TraceDescriptor>(), nullptr);
+    return std::make_shared<TraceBuffer>(std::make_shared<TraceDescriptor>(), nullptr);
 }
 
 void Trace::initialize_buffer(CommandQueue& cq, const std::shared_ptr<TraceBuffer>& trace_buffer) {
     std::vector<uint32_t>& trace_data = trace_buffer->desc->data;
     uint64_t unpadded_size = trace_data.size() * sizeof(uint32_t);
     size_t page_size = interleaved_page_size(
-        unpadded_size, cq.device()->num_banks(BufferType::DRAM), kExecBufPageMin, kExecBufPageMax);
+        unpadded_size, cq.device()->allocator()->get_num_banks(BufferType::DRAM), kExecBufPageMin, kExecBufPageMax);
     uint64_t padded_size = round_up(unpadded_size, page_size);
     size_t numel_padding = (padded_size - unpadded_size) / sizeof(uint32_t);
     if (numel_padding > 0) {
@@ -85,7 +85,7 @@ void Trace::initialize_buffer(CommandQueue& cq, const std::shared_ptr<TraceBuffe
     }
     const auto current_trace_buffers_size = cq.device()->get_trace_buffers_size();
     cq.device()->set_trace_buffers_size(current_trace_buffers_size + padded_size);
-    auto trace_region_size = cq.device()->get_initialized_allocator()->config.trace_region_size;
+    auto trace_region_size = cq.device()->allocator()->get_config().trace_region_size;
     TT_FATAL(
         cq.device()->get_trace_buffers_size() <= trace_region_size,
         "Creating trace buffers of size {}B on device {}, but only {}B is allocated for trace region.",

@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/ccl/barrier/device/barrier_op.hpp"
-#include "tt_metal/host_api.hpp"
 
 #include <cstdint>
 

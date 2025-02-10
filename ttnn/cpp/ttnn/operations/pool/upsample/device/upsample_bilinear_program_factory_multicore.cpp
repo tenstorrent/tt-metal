@@ -7,14 +7,14 @@
 #include "upsample_op.hpp"
 #include "ttnn/operations/math.hpp"
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/common/math.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/math.hpp>
 // #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"  // for reduce_op_utils
 
-#include "tt_metal/tt_stl/reflection.hpp"
+#include <tt-metalium/reflection.hpp>
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
@@ -29,9 +29,9 @@ using namespace tt;
 using sliding_window::SlidingWindowConfig;
 
 Tensor HaloTensorCreation(const Tensor& input) {
-    int batch_size = input.get_legacy_shape()[0];
-    int input_height = input.get_legacy_shape()[1];
-    int input_width = input.get_legacy_shape()[2];
+    int batch_size = input.get_padded_shape()[0];
+    int input_height = input.get_padded_shape()[1];
+    int input_width = input.get_padded_shape()[2];
     int num_cores_nhw = input.shard_spec().value().num_cores();
     int num_cores_c = 1;
 
@@ -49,10 +49,9 @@ Tensor HaloTensorCreation(const Tensor& input) {
         .snap_to_tile = false,
         .is_bilinear = true};
 
-    input_tensor = ttnn::reshape(
-        input_tensor,
-        SimpleShape(std::array<uint32_t, 4>{
-            1, 1, input.get_shape()[0] * input.get_shape()[1] * input.get_shape()[2], input.get_shape()[3]}));
+    const auto& input_shape = input.get_logical_shape();
+    Shape new_shape({1, 1, input_shape[0] * input_shape[1] * input_shape[2], input_shape[3]});
+    input_tensor = ttnn::reshape(input_tensor, new_shape);
 
     auto halo_output = ttnn::halo(
         DefaultQueueId, input_tensor, sliding_window_config, 0, false, false, 0, input_tensor.memory_config(), false);
@@ -69,23 +68,23 @@ operation::ProgramWithCallbacks bilinear_multi_core(
     Program program = CreateProgram();
     IDevice* device = input.device();
 
-    auto input_shape = input.get_legacy_shape();
-    auto output_shape = output.get_legacy_shape();
+    auto input_shape = input.get_padded_shape();
+    auto output_shape = output.get_padded_shape();
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
 
     // NOTE: input is assumed to have channels last format: {N, H, W, C}, {N, 1, H * W, C}, {1, 1, N * H * W, C}
     // NOTE: Bfp8_b/TILE is not yet supported
-    uint32_t input_stick_nbytes = input.get_legacy_shape()[-1] * input.element_size();
-    uint32_t output_stick_nbytes = output.get_legacy_shape()[-1] * output.element_size();
+    uint32_t input_stick_nbytes = input.get_padded_shape()[-1] * input.element_size();
+    uint32_t output_stick_nbytes = output.get_padded_shape()[-1] * output.element_size();
     TT_FATAL(input_stick_nbytes == output_stick_nbytes, "Input and output sticks should have same size");
 
-    uint32_t output_nsticks = output.volume() / output.get_legacy_shape()[-1];
-    uint32_t input_nsticks = input.volume() / input.get_legacy_shape()[-1];
+    uint32_t output_nsticks = output.volume() / output.get_padded_shape()[-1];
+    uint32_t input_nsticks = input.volume() / input.get_padded_shape()[-1];
 
-    uint32_t in_w = input.get_legacy_shape()[2];
-    uint32_t out_w = output.get_legacy_shape()[2];
+    uint32_t in_w = input.get_padded_shape()[2];
+    uint32_t out_w = output.get_padded_shape()[2];
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(input.device()->arch(), compute_kernel_config);
@@ -138,7 +137,7 @@ operation::ProgramWithCallbacks bilinear_multi_core(
     auto halo_shard_shape = halo_in.shard_spec().value().shape;
 
     // CBs
-    uint32_t buffering_factor = 1;  // data is already fully buffered in the CBs since its sharded
+    uint32_t buffering_factor = 2;
 
     // input data is in a sharded CB
     uint32_t in_cb_id = CBIndex::c_0;
@@ -152,24 +151,39 @@ operation::ProgramWithCallbacks bilinear_multi_core(
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
     // intermediate tensor CB
-    uint32_t in1_cb_id = CBIndex::c_1;
+    uint32_t in_cb_id1 = CBIndex::c_1;
     CircularBufferConfig cb_src1_config =
         CircularBufferConfig(
-            4 * in_cb_pagesize,  // since 4 pixels per page are needed for intermediate tensor.
-            {{in1_cb_id, input_cb_data_format}})
-            .set_page_size(in1_cb_id, in_cb_pagesize);
+            4 * in_cb_pagesize * buffering_factor,  // since 4 pixels per page are needed for intermediate tensor.
+            {{in_cb_id1, input_cb_data_format}})
+            .set_page_size(in_cb_id1, in_cb_pagesize);
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
 
+    // intermediate tensor CB
+    uint32_t in_cb_id2 = CBIndex::c_2;
+    CircularBufferConfig cb_src2_config =
+        CircularBufferConfig(
+            4 * in_cb_pagesize * buffering_factor,  // since 4 pixels per page are needed for intermediate tensor.
+            {{in_cb_id2, input_cb_data_format}})
+            .set_page_size(in_cb_id2, in_cb_pagesize);
+    auto cb_src2 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src2_config);
+
     // scaler CB
-    uint32_t in_scalar_cb_id = CBIndex::c_4;
     uint32_t in_scalar_cb_pagesize = tile_size(input_cb_data_format);
-    uint32_t in_scalar_cb_npages = 1;
-    CircularBufferConfig in_scalar_cb_config =
-        CircularBufferConfig(in_scalar_cb_npages * in_scalar_cb_pagesize, {{in_scalar_cb_id, input_cb_data_format}})
-            .set_page_size(in_scalar_cb_id, in_scalar_cb_pagesize);
+    uint32_t in_scalar_cb_npages = 1 * buffering_factor;
+    uint32_t in_scalar_cb_id1 = CBIndex::c_4;
+    CircularBufferConfig in_scalar_cb_config1 =
+        CircularBufferConfig(in_scalar_cb_npages * in_scalar_cb_pagesize, {{in_scalar_cb_id1, input_cb_data_format}})
+            .set_page_size(in_scalar_cb_id1, in_scalar_cb_pagesize);
 
-    auto in_scalar_cb = tt_metal::CreateCircularBuffer(program, all_cores, in_scalar_cb_config);
+    auto in_scalar_cb1 = tt_metal::CreateCircularBuffer(program, all_cores, in_scalar_cb_config1);
 
+    uint32_t in_scalar_cb_id2 = CBIndex::c_5;
+    CircularBufferConfig in_scalar_cb_config2 =
+        CircularBufferConfig(in_scalar_cb_npages * in_scalar_cb_pagesize, {{in_scalar_cb_id2, input_cb_data_format}})
+            .set_page_size(in_scalar_cb_id2, in_scalar_cb_pagesize);
+
+    auto in_scalar_cb2 = tt_metal::CreateCircularBuffer(program, all_cores, in_scalar_cb_config2);
     // output sharded CB with upsampled data
     uint32_t out_cb_id = CBIndex::c_16;
     uint32_t aligned_output_stick_nbytes = round_up_to_mul32(output_stick_nbytes);
@@ -205,36 +219,52 @@ operation::ProgramWithCallbacks bilinear_multi_core(
 
     std::vector<uint32_t> reader_compile_time_args = {
         in_cb_id,
-        out_cb_id,
-        false,
+        in_cb_id1,
+        in_scalar_cb_id1,
         scale_h_inv_u32,
         scale_w_inv_u32,
         y_index_u32,
         x_index_compute_u32,
+        1,
+    };
+
+    std::vector<uint32_t> writer_compile_time_args = {
+        in_cb_id,
+        in_cb_id2,
+        in_scalar_cb_id2,
+        scale_h_inv_u32,
+        scale_w_inv_u32,
+        y_index_u32,
+        x_index_compute_u32,
+        0,
     };
 
     string writer_kernel_fname, reader_kernel_fname, compute_kernel_fname;
 
     reader_kernel_fname = std::string(
         "ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/dataflow/reader_bilinear_multi_core_sharded.cpp");
+    writer_kernel_fname = std::string(
+        "ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/dataflow/reader_bilinear_multi_core_sharded.cpp");
     compute_kernel_fname = std::string("ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/compute/bilinear.cpp");
 
     uint32_t in_ntiles_c = (uint32_t)std::ceil((float)input_shape[3] / constants::TILE_WIDTH);
     std::vector<uint32_t> compute_compile_time_args = {
-        1,
+        in_cb_id1,
+        in_cb_id2,
+        in_scalar_cb_id1,
+        in_scalar_cb_id2,
+        out_cb_id,
         in_ntiles_c,
         1 * in_ntiles_c,
-        4,
-        output_shape[1],
-        output_shape[2],
-        (uint32_t)std::ceil((float)output_shape[2] / constants::TILE_HEIGHT),
+        scale_factor_h * scale_factor_w,
         (uint32_t)std::ceil((float)output_shape[3] / constants::TILE_WIDTH),
         output_nsticks_per_core,  // loop count with blocks
-        input_shape[3],
     };
 
     auto reader_kernel =
         CreateKernel(program, reader_kernel_fname, all_cores, ReaderDataMovementConfig(reader_compile_time_args));
+    auto writer_kernel =
+        CreateKernel(program, writer_kernel_fname, all_cores, WriterDataMovementConfig(writer_compile_time_args));
     TT_FATAL(fp32_dest_acc_en == false, "fp32_dest_acc_en as true not supported. #12787 issue raised");
     auto reduce_op = ReduceOpMath::SUM;
     auto reduce_dim = ReduceOpDim::H;
@@ -267,13 +297,14 @@ operation::ProgramWithCallbacks bilinear_multi_core(
             reader_rt_args[8] = (core == 0) ? 1 : 0;
             reader_rt_args[9] = (core == ncores_nhw - 1) ? 1 : 0;
             SetRuntimeArgs(program, reader_kernel, core_coord, reader_rt_args);
+            SetRuntimeArgs(program, writer_kernel, core_coord, reader_rt_args);
             start_input_stick_id += input_nsticks_per_core;
         }
     } else {
         TT_FATAL(false, "Unsupported memory layout");
     }
 
-    auto override_runtime_args_callback = [reader_kernel, cb_src0, out_cb](
+    auto override_runtime_args_callback = [reader_kernel, writer_kernel, cb_src0, out_cb](
                                               const void* operation,
                                               Program& program,
                                               const std::vector<Tensor>& input_tensors,

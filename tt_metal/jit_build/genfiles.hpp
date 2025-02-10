@@ -7,8 +7,8 @@
 #include <string>
 #include <vector>
 
-#include "common/core_coord.hpp"
-#include "impl/kernels/kernel.hpp"
+#include <core_coord.hpp>
+#include <kernel.hpp>
 
 namespace tt::tt_metal {
 

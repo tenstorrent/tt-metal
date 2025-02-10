@@ -7,7 +7,7 @@
 #include "umd/device/blackhole_implementation.h"
 #include "umd/device/grayskull_implementation.h"
 #include "umd/device/wormhole_implementation.h"
-#include "tt_metal/common/assert.hpp"
+#include <assert.hpp>
 
 namespace ll_api {
 

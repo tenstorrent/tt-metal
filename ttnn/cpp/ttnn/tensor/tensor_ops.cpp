@@ -9,22 +9,26 @@
 #include <cstdint>
 #include <memory>
 
-#include "common/bfloat16.hpp"
+#include <tt-metalium/bfloat16.hpp>
 #include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_impl_wrapper.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/types.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/common/math.hpp"
-#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
-#include "tt_metal/graph/graph_tracking.hpp"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/math.hpp>
+#include <tracy/Tracy.hpp>
+#include <tt-metalium/graph_tracking.hpp>
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/core.hpp"
 
+#include "cpp/ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
+#include "cpp/ttnn/operations/data_movement/reshape_view/reshape.hpp"
+
 namespace tt::tt_metal::tensor_ops {
 
-Tensor tensor_to(const Tensor& input_tensor, IDevice* target_device, const MemoryConfig& mem_config, uint8_t cq_id) {
+Tensor tensor_to_device(
+    const Tensor& input_tensor, IDevice* target_device, const MemoryConfig& mem_config, QueueId cq_id) {
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::to", input_tensor, target_device, mem_config);
     // Tensor can be using borrowed storage. If so, when running in async mode, copy this tensor to owned storage.
@@ -60,8 +64,8 @@ Tensor tensor_to(const Tensor& input_tensor, IDevice* target_device, const Memor
     return device_tensor;
 }
 
-Tensor tensor_to(
-    const Tensor& input_tensor, const std::vector<IDevice*>& workers, const MemoryConfig& mem_config, uint8_t cq_id) {
+Tensor tensor_to_device(
+    const Tensor& input_tensor, const std::vector<IDevice*>& workers, const MemoryConfig& mem_config, QueueId cq_id) {
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::to", input_tensor, workers, mem_config);
     TT_FATAL(
@@ -94,7 +98,7 @@ Tensor tensor_to(
     return device_tensor;
 }
 
-Tensor tensor_cpu(const Tensor& input_tensor, bool blocking, uint8_t cq_id) {
+Tensor tensor_cpu(const Tensor& input_tensor, bool blocking, QueueId cq_id) {
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::cpu", input_tensor, blocking);
     auto workers = input_tensor.get_workers(blocking);
@@ -138,7 +142,7 @@ Tensor tensor_cpu(const Tensor& input_tensor, bool blocking, uint8_t cq_id) {
     return host_tensor;
 }
 
-Tensor tensor_to(const Tensor& input_tensor, Layout target_layout, IDevice* worker) {
+Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout, IDevice* worker) {
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::to", input_tensor, target_layout, worker);
     // Only push layout conversion to worker if running in async mode
@@ -170,7 +174,7 @@ Tensor tensor_to(const Tensor& input_tensor, Layout target_layout, IDevice* work
     return output;
 }
 
-Tensor tensor_to(const Tensor& input_tensor, Layout target_layout, distributed::MeshDevice* mesh_device) {
+Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout, distributed::MeshDevice* mesh_device) {
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::to", input_tensor, target_layout, mesh_device);
     if (mesh_device) {
@@ -232,8 +236,8 @@ void tensor_print(const Tensor& input_tensor) {
 
 Tensor tensor_pad(
     const Tensor& input_tensor,
-    const ttnn::SimpleShape& output_padded_shape,
-    const ttnn::SimpleShape& input_tensor_start,
+    const ttnn::Shape& output_padded_shape,
+    const ttnn::Shape& input_tensor_start,
     float pad_value) {
     ZoneScoped;
     GraphTracker::instance().track_function_start(
@@ -258,9 +262,7 @@ Tensor tensor_pad(
 }
 
 Tensor tensor_unpad(
-    const Tensor& input_tensor,
-    const ttnn::SimpleShape& output_tensor_start,
-    const ttnn::SimpleShape& output_tensor_end) {
+    const Tensor& input_tensor, const ttnn::Shape& output_tensor_start, const ttnn::Shape& output_tensor_end) {
     ZoneScoped;
     GraphTracker::instance().track_function_start(
         "Tensor::unpad", input_tensor, output_tensor_start, output_tensor_end);
@@ -292,20 +294,20 @@ Tensor tensor_pad_to_tile(const Tensor& input_tensor, float pad_value) {
     input_tensor_start.push_back(0);
     input_tensor_start.push_back(0);
 
-    auto output = input_tensor.pad(
-        ttnn::SimpleShape(std::move(padded_shape)), ttnn::SimpleShape{std::move(input_tensor_start)}, pad_value);
+    auto output =
+        input_tensor.pad(ttnn::Shape(std::move(padded_shape)), ttnn::Shape{std::move(input_tensor_start)}, pad_value);
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;
 }
 
-Tensor tensor_unpad_from_tile(const Tensor& input_tensor, const ttnn::SimpleShape& output_tensor_shape) {
+Tensor tensor_unpad_from_tile(const Tensor& input_tensor, const ttnn::Shape& output_tensor_shape) {
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::unpad_from_tile", input_tensor, output_tensor_shape);
 
     for (auto index = -3; index >= -static_cast<int>(input_tensor.get_padded_shape().rank()); index--) {
         TT_ASSERT(
-            input_tensor.get_legacy_shape().without_padding()[index] == output_tensor_shape[index],
+            input_tensor.get_logical_shape()[index] == output_tensor_shape[index],
             "Input shape must match output shape apart from last 2 dims");
     }
     TT_ASSERT(
@@ -313,11 +315,11 @@ Tensor tensor_unpad_from_tile(const Tensor& input_tensor, const ttnn::SimpleShap
             input_tensor.get_padded_shape()[-1] % constants::TILE_WIDTH == 0,
         "Last 2 dims of input shape must be multiples of 32");
     TT_ASSERT(
-        input_tensor.get_padded_shape()[-2] - constants::TILE_HEIGHT < output_tensor_shape[-2] &&
-            input_tensor.get_padded_shape()[-1] - constants::TILE_WIDTH < output_tensor_shape[-1],
+        input_tensor.get_padded_shape()[-2] < output_tensor_shape[-2] + constants::TILE_HEIGHT &&
+            input_tensor.get_padded_shape()[-1] < output_tensor_shape[-1] + constants::TILE_WIDTH,
         "Last 2 dims of output must be within range to have been padded to input");
-    SimpleShape output_tensor_start(ttnn::SmallVector<uint32_t>(input_tensor.padded_shape().rank(), 0));
-    SimpleShape output_tensor_end(ttnn::SmallVector<uint32_t>(input_tensor.padded_shape().rank(), 1));
+    Shape output_tensor_start(ttnn::SmallVector<uint32_t>(input_tensor.padded_shape().rank(), 0));
+    Shape output_tensor_end(ttnn::SmallVector<uint32_t>(input_tensor.padded_shape().rank(), 1));
     for (int index = -1; index >= -static_cast<int>(output_tensor_shape.rank()); index--) {
         output_tensor_end[index] = output_tensor_shape[index];
     }
@@ -328,110 +330,12 @@ Tensor tensor_unpad_from_tile(const Tensor& input_tensor, const ttnn::SimpleShap
 }
 
 Tensor tensor_reshape(
-    const Tensor& input_tensor, const ttnn::SimpleShape& new_logical_shape, const ttnn::SimpleShape& new_padded_shape) {
-    ZoneScoped;
-    GraphTracker::instance().track_function_start("Tensor::reshape", input_tensor, new_logical_shape, new_padded_shape);
-    const auto tile = input_tensor.get_tensor_spec().tile();
-    auto new_spec = ttnn::TensorSpec(
-        new_logical_shape,
-        TensorLayout::fromPaddedShape(
-            input_tensor.get_dtype(),
-            input_tensor.get_tensor_spec().page_config(),
-            input_tensor.memory_config(),
-            new_logical_shape,
-            new_padded_shape));
-    auto output = std::visit(
-        [&input_tensor, &new_spec, &new_logical_shape, &new_padded_shape, &tile](auto&& storage) -> Tensor {
-            using T = std::decay_t<decltype(storage)>;
-            const auto& tensor = input_tensor;
-            if constexpr (std::is_same_v<T, MultiDeviceHostStorage>) {
-                auto updated_storage = std::get<T>(tensor.get_storage());
-                auto shape = ttnn::Shape{tt::tt_metal::LegacyShape{new_logical_shape.view(), new_padded_shape.view()}};
-                for (int i = 0; i < updated_storage.shapes.size(); i++) {
-                    updated_storage.shapes[i] = shape;
-                }
-                return Tensor(updated_storage, new_spec);
-            }
-            if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
-                MultiDeviceStorage updated_storage = std::get<T>(tensor.get_storage());
-                std::unordered_map<int, ttnn::Shape> new_shapes;
-                auto shape = ttnn::Shape{tt::tt_metal::LegacyShape{new_logical_shape.view(), new_padded_shape.view()}};
-                for (auto device_id : updated_storage.ordered_device_ids) {
-                    new_shapes.insert({device_id, shape});
-                }
-                updated_storage.shapes = new_shapes;
-                return Tensor(updated_storage, new_spec);
-            }
-            if constexpr (std::is_same_v<T, DeviceStorage>) {
-                if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
-                    if (tensor.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
-                        DeviceStorage device_storage = std::get<T>(tensor.get_storage());
-                        DeviceBuffer device_buffer = device_storage.get_buffer();
-                        const auto& tensor_spec = tensor.tensor_spec();
-                        auto page_size_bytes = tensor_spec.compute_page_size_bytes();
-                        device_buffer->set_page_size(page_size_bytes);
-                        device_storage.insert_buffer(device_buffer);
-                        return Tensor(device_storage, new_spec);
-                    } else {
-                        DeviceStorage device_storage = std::get<T>(tensor.get_storage());
-                        DeviceBuffer device_buffer = device_storage.get_buffer();
-                        ShardSpecBuffer shard_spec_buffer = device_buffer->shard_spec();
-
-                        auto shard_spec = shard_spec_buffer.tensor_shard_spec;
-                        auto shard_shape = shard_spec.shape;
-
-                        uint32_t mul_div;
-                        if (new_logical_shape[-1] == 0 || shard_shape[1] == 0) {
-                            mul_div = 0;
-                        } else {
-                            mul_div = new_logical_shape[-1] > shard_shape[1] ? (new_logical_shape[-1] / shard_shape[1])
-                                                                             : (shard_shape[1] / new_logical_shape[-1]);
-                        }
-
-                        shard_spec.shape[0] = new_logical_shape[-1] > shard_shape[1] ? shard_shape[0] / mul_div
-                                                                                     : shard_shape[0] * mul_div;
-                        shard_spec.shape[1] = new_logical_shape[-1];
-
-                        shard_spec_buffer.page_shape = {1, new_logical_shape[-1]};
-                        shard_spec_buffer.tensor2d_shape = {shard_spec.shape[0], 1};
-                        shard_spec_buffer.set_shard_spec(shard_spec);
-
-                        device_buffer->set_shard_spec(shard_spec_buffer);
-                        device_storage.insert_buffer(device_buffer);
-
-                        MemoryConfig mem_config = input_tensor.memory_config();
-                        mem_config.shard_spec = shard_spec;
-
-                        auto upd_spec = ttnn::TensorSpec(
-                            new_logical_shape,
-                            TensorLayout::fromPaddedShape(
-                                input_tensor.get_dtype(),
-                                input_tensor.get_tensor_spec().page_config(),
-                                mem_config,
-                                new_logical_shape,
-                                new_padded_shape));
-
-                        return Tensor(device_storage, upd_spec);
-                    }
-                } else {
-                    return Tensor(tensor.get_storage(), new_spec);
-                }
-            } else {
-                return Tensor(tensor.get_storage(), new_spec);
-            }
-        },
-        input_tensor.get_storage());
-    output = tt::tt_metal::set_tensor_id(output);
-    GraphTracker::instance().track_function_end(output);
-    return output;
-}
-
-Tensor tensor_reshape(const Tensor& input_tensor, const ttnn::SimpleShape& new_shape) {
-    return tensor_reshape(input_tensor, new_shape, new_shape);
+    const Tensor& input_tensor, const ttnn::Shape& new_logical_shape, const ttnn::Shape& new_padded_shape) {
+    return ttnn::reshape(input_tensor, new_logical_shape, new_padded_shape);
 }
 
 Tensor tensor_reshape(const Tensor& input_tensor, const ttnn::Shape& new_shape) {
-    return tensor_reshape(input_tensor, new_shape.logical_shape(), new_shape.padded_shape());
+    return ttnn::reshape(input_tensor, new_shape);
 }
 
 }  // namespace tt::tt_metal::tensor_ops

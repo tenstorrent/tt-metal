@@ -5,7 +5,6 @@
 #pragma once
 
 #include <memory>
-#include "tt_metal/host_api.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn::global_semaphore {

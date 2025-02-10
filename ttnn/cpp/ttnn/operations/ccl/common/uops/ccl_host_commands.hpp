@@ -4,8 +4,8 @@
 
 #pragma once
 
-#include "ttnn/cpp/ttnn/operations/ccl/common/uops/ccl_command.hpp"
-#include "tt_metal/impl/buffers/global_semaphore.hpp"
+#include "cpp/ttnn/operations/ccl/common/uops/ccl_command.hpp"
+#include <tt-metalium/global_semaphore.hpp>
 
 namespace ttnn::ccl::cmd {
 

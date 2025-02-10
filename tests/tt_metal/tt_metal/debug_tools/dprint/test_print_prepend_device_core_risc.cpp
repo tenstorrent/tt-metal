@@ -8,9 +8,9 @@
 #include "debug_tools_fixture.hpp"
 #include "gtest/gtest.h"
 #include "debug_tools_test_utils.hpp"
-#include "kernels/kernel_types.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
 
 ////////////////////////////////////////////////////////////////////////////////
 // A test for checking that prints are prepended with their corresponding device, core and RISC.
@@ -21,7 +21,7 @@ using namespace tt::tt_metal;
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 static void UpdateGoldenOutput(std::vector<string>& golden_output, const IDevice* device, const string& risc) {
-    // Using wildcard characters in lieu of actual values for the physical coordinates as physical coordinates can vary
+    // Using wildcard characters in lieu of actual values for the virtual coordinates as virtual coordinates can vary
     // by machine
     const string& device_core_risc = std::to_string(device->id()) + ":(x=*,y=*):" + risc + ": ";
 

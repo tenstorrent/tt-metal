@@ -8,14 +8,14 @@
 #include <cstdlib>
 #include <filesystem>
 
-#include "tt_metal/host_api.hpp"
-#include "common/bfloat16.hpp"
-#include "tt_metal/llrt/tt_memory.h"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/tt_memory.h>
 #include "tt_metal/detail/kernel_cache.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
+#include <tt-metalium/tt_metal.hpp>
 
-#include "tt_metal/device.hpp"
-#include "tt_metal/impl/kernels/kernel.hpp"
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/kernel.hpp>
 
 using std::vector;
 using namespace tt;

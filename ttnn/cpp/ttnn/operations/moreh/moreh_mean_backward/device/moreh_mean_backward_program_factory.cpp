@@ -4,9 +4,9 @@
 
 #include <vector>
 
-#include "common/bfloat16.hpp"
+#include <tt-metalium/bfloat16.hpp>
 #include "moreh_mean_backward_device_operation.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/reduction/generic/device/common.hpp"
@@ -14,41 +14,34 @@
 
 using namespace tt::tt_metal;
 
-void get_tensor_dim(ttnn::SmallVector<uint32_t>& dim, const tt::tt_metal::LegacyShape& shape) {
+void get_tensor_dim(ttnn::SmallVector<uint32_t>& dim, const ttnn::Shape& shape) {
     const auto rank = shape.rank();
     for (auto i = 0; i < rank; ++i) {
         auto idx = rank - 1 - i;
 
         // last 2-dim
         if (idx == rank - 1 || idx == rank - 2) {
-            dim[i] = shape[idx] / tt::constants::TILE_HEIGHT;
+            dim[i] = (shape[idx] + tt::constants::TILE_HEIGHT - 1) / tt::constants::TILE_HEIGHT;
         } else {
             dim[i] = shape[idx];
         }
     }
 }
 
-tt::tt_metal::LegacyShape get_output_grad_shape(
+ttnn::Shape get_output_grad_shape(
     const Tensor& output_grad, const Tensor& input_grad, const ttnn::SmallVector<int64_t>& dims, const bool& keepdim) {
     if (keepdim) {
-        return output_grad.get_shape().value;
+        return output_grad.get_logical_shape();
     }
 
-    auto shape = input_grad.get_shape();
+    auto shape = input_grad.get_logical_shape();
     auto rank = shape.rank();
-    auto padding = shape.value.padding();
     for (auto dim : dims) {
         TT_FATAL(dim < rank, "dim {} < rank {}", dim, rank);
-        bool is_tile_dim = (dim == rank - 1 || dim == rank - 2);
-        if (is_tile_dim) {
-            shape.value[dim] = tt::constants::TILE_HEIGHT;
-            padding[dim] = Padding::PadDimension{0, 31};
-        } else {
-            shape.value[dim] = 1;
-        }
+        shape[dim] = 1;
     }
 
-    return tt::tt_metal::LegacyShape(shape.value, padding);
+    return shape;
 }
 
 namespace ttnn::operations::moreh::moreh_mean_backward {
@@ -76,14 +69,12 @@ MorehMeanBackwardOperation::MorehMeanBackwardFactory::create(
     const auto cb_data_format = datatype_to_dataformat_converter(output_grad.get_dtype());
     const auto single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);
 
-    const auto& input_grad_shape = input_grad.get_legacy_shape();
-    const auto& input_grad_shape_wo_padding = input_grad_shape.without_padding();
+    const auto& input_grad_shape = input_grad.get_logical_shape();
     const uint32_t input_grad_rank = input_grad_shape.rank();
 
     ttnn::SmallVector<uint32_t> input_grad_dim(input_grad_rank, 1);
     get_tensor_dim(input_grad_dim, input_grad_shape);
     const auto& output_grad_shape = get_output_grad_shape(output_grad, input_grad, dims, keepdim);
-    const auto& output_grad_shape_wo_padding = output_grad_shape.without_padding();
 
     ttnn::SmallVector<uint32_t> output_grad_dim(input_grad_rank, 1);
     get_tensor_dim(output_grad_dim, output_grad_shape);
@@ -94,7 +85,7 @@ MorehMeanBackwardOperation::MorehMeanBackwardFactory::create(
         bool is_tile_dim = (idx == input_grad_rank - 1 || idx == input_grad_rank - 2);
 
         if (is_tile_dim) {
-            need_bcast_dim[i] = (output_grad_shape_wo_padding[idx] != input_grad_shape_wo_padding[idx]);
+            need_bcast_dim[i] = (output_grad_shape[idx] != input_grad_shape[idx]);
         } else {
             need_bcast_dim[i] = (output_grad_shape[idx] != input_grad_shape[idx]);
         }
@@ -177,7 +168,7 @@ MorehMeanBackwardOperation::MorehMeanBackwardFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     uint32_t num_dim = 1;
     for (auto dim : dims) {
-        num_dim *= input_grad_shape_wo_padding[dim];
+        num_dim *= input_grad_shape[dim];
     }
 
     for (uint32_t i = 0, tile_offset = 0; i < num_cores_to_be_used; ++i) {

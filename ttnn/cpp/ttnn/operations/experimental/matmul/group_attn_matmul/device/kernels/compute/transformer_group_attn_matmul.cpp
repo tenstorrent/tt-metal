@@ -44,11 +44,11 @@ void MAIN {
     constexpr uint32_t intermediate_num_tiles = get_compile_time_arg_val(3);
 
 
-    constexpr uint32_t cb_in0 = 0;
-    constexpr uint32_t cb_in1 = 1;
-    constexpr uint32_t cb_intermed0 = 24;
-    constexpr uint32_t cb_intermed1 = 25;
-    constexpr uint32_t out_cb_id = 16;
+    constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
+    constexpr uint32_t cb_in1 = tt::CBIndex::c_1;
+    constexpr uint32_t cb_intermed0 = tt::CBIndex::c_3;
+    constexpr uint32_t cb_intermed1 = tt::CBIndex::c_4;
+    constexpr uint32_t out_cb_id = tt::CBIndex::c_5;
 
     constexpr uint32_t onetile = 1;
     constexpr uint32_t num_rows_in_one_tile = 32;

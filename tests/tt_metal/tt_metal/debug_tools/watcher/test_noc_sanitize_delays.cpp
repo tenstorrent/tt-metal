@@ -2,13 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "llrt/rtoptions.hpp"
+#include <tt-metalium/rtoptions.hpp>
 #include "debug_tools_fixture.hpp"
 #include "debug_tools_test_utils.hpp"
-#include "llrt/llrt.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
-#include "common/bfloat16.hpp"
+#include "llrt.hpp"
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/bfloat16.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking watcher NOC sanitization.
@@ -129,11 +129,12 @@ void RunDelayTestOnCore(WatcherDelayFixture* fixture, IDevice* device, CoreCoord
         std::vector<uint32_t> read_vec;
 
         CoreCoord worker_core = fixture->delayed_cores[CoreType::WORKER][0]; // Just check that the first delayed core has the feedback set
-        CoreCoord phys_core = device->virtual_core_from_logical_core({0, 0}, CoreType::WORKER);
-        read_vec = tt::llrt::read_hex_vec_from_core (
+        CoreCoord virtual_core = device->virtual_core_from_logical_core({0, 0}, CoreType::WORKER);
+        read_vec = tt::llrt::read_hex_vec_from_core(
             device->id(),
-            phys_core,
-            device->get_dev_addr(phys_core, HalL1MemAddrType::WATCHER) + offsetof(watcher_msg_t, debug_insert_delays),
+            virtual_core,
+            device->get_dev_addr(virtual_core, HalL1MemAddrType::WATCHER) +
+                offsetof(watcher_msg_t, debug_insert_delays),
             sizeof(debug_insert_delays_msg_t));
 
         log_info(tt::LogTest, "Read back debug_insert_delays: 0x{:x}", read_vec[0]);

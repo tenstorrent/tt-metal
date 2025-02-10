@@ -5,8 +5,8 @@
 #include "global_circular_buffer.hpp"
 
 #include <memory>
-#include "tt_metal/impl/buffers/global_circular_buffer.hpp"
-#include "tt_metal/include/tt_metal/global_circular_buffer.hpp"
+#include <tt-metalium/global_circular_buffer_impl.hpp>
+#include <tt-metalium/global_circular_buffer.hpp>
 
 namespace ttnn::global_circular_buffer {
 

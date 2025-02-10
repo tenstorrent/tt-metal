@@ -10,7 +10,6 @@ jobs:
       matrix:
         test-group: [
           { name: "TG Llama3 frequent tests", arch: wormhole_b0, model: llama3, timeout: 90, owner_id: U06F3ER8X9A}, # Stuti Raizada
-          { name: "TG Llama3-70B (old) frequent tests", arch: wormhole_b0, model: llama3-70b-old, timeout: 90, owner_id: U03FJB5TM5Y}, #Colman Glagovich
           { name: "TG resnet50 frequent tests", arch: wormhole_b0, model: resnet50, timeout: 90, owner_id: U013121KDH9}, # Austin Ho
           { name: "TG unit/distributed frequent tests", arch: wormhole_b0, model: unit, timeout: 90, owner_id: XXXXX}, # Add owner
         ]
@@ -32,9 +31,9 @@ jobs:
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - uses: actions/download-artifact@v4
         with:
-          name: TTMetal_build_${{ matrix.test-group.arch }}
+          name: TTMetal_build_any
       - name: Extract files
-        run: tar -xvf ttm_${{ matrix.test-group.arch }}.tar
+        run: tar -xvf ttm_any.tar
       - uses: ./.github/actions/install-python-deps
       - name: Run frequent regression tests
         timeout-minutes: ${{ matrix.test-group.timeout }}

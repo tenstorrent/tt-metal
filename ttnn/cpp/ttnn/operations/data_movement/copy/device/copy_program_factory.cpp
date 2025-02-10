@@ -2,17 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/common/work_split.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/util.hpp>
 #include "copy_device_operation.hpp"
 #include "ttnn/operations/math.hpp"
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
 #include <algorithm>
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -26,13 +24,13 @@ operation::ProgramWithCallbacks copy_multi_core(const Tensor& input, const Tenso
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
     uint32_t input_unit_size = tilized ? tt::tt_metal::detail::TileSize(input_cb_data_format)
-                                       : input.get_legacy_shape()[-1] * input.element_size();
+                                       : input.get_padded_shape()[-1] * input.element_size();
     tt::DataFormat output_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
     uint32_t output_unit_size = tilized ? tt::tt_metal::detail::TileSize(output_cb_data_format)
-                                        : output.get_legacy_shape()[-1] * output.element_size();
+                                        : output.get_padded_shape()[-1] * output.element_size();
     bool convert_dtype = input_cb_data_format != output_cb_data_format;
 
-    uint32_t num_units = tilized ? output.volume() / TILE_HW : output.volume() / output.get_legacy_shape()[-1];
+    uint32_t num_units = tilized ? output.volume() / TILE_HW : output.volume() / output.get_padded_shape()[-1];
 
     tt::tt_metal::IDevice* device = output.device();
 

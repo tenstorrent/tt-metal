@@ -5,8 +5,8 @@
 #include <gtest/gtest.h>
 
 #include "device_fixture.hpp"
-#include "tt_metal/host_api.hpp"
-#include "common/bfloat16.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/bfloat16.hpp>
 
 using std::vector;
 using namespace tt;

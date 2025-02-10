@@ -12,6 +12,7 @@ set(PROCS
     trisc2
     ierisc
     slave_ierisc
+    aerisc
 )
 set(TYPES
     firmware
@@ -20,8 +21,8 @@ set(TYPES
 
 include(FetchContent)
 set(SFPI_x86_64_Linux_RELEASE
-    "v6.0.0/sfpi-release.tgz"
-    "d837d26a2312d27815179995fdea83bd"
+    "v6.1.0/sfpi-release.tgz"
+    "da98a135fe95a462c3b6b4e054dc159f"
 )
 if(DEFINED SFPI_${CMAKE_HOST_SYSTEM_PROCESSOR}_${CMAKE_HOST_SYSTEM_NAME}_RELEASE)
     set(SFPI_RELEASE "${SFPI_${CMAKE_HOST_SYSTEM_PROCESSOR}_${CMAKE_HOST_SYSTEM_NAME}_RELEASE}")
@@ -151,6 +152,8 @@ foreach(ARCH IN LISTS ARCHS)
         -I..
         -I${PROJECT_SOURCE_DIR}
         -I${PROJECT_SOURCE_DIR}/tt_metal
+        -I${PROJECT_SOURCE_DIR}/tt_metal/api
+        -I${PROJECT_SOURCE_DIR}/tt_metal/api/tt-metalium
         -I${PROJECT_SOURCE_DIR}/tt_metal/include
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc
         -I${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/debug

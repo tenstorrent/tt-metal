@@ -50,8 +50,8 @@ void kernel_main() {
 #endif
 
     constexpr uint32_t cb_id_in1 = 1;
-    constexpr uint32_t cb_id_out = 16;
-    constexpr uint32_t cb_id_out_reshard = 17;
+    constexpr uint32_t cb_id_out = tt::CBIndex::c_4;
+    constexpr uint32_t cb_id_out_reshard = tt::CBIndex::c_6;
     constexpr uint32_t in1_single_tile_size_bytes = get_tile_size(cb_id_in1);
     constexpr uint32_t in1_block_size_bytes = in1_block_num_tiles * in1_single_tile_size_bytes;
 

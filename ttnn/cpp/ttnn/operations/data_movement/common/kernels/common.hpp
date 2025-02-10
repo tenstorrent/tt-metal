@@ -177,4 +177,9 @@ FORCE_INLINE void transpose_2d(
     }
 }
 
+template <uint32_t AlignReq>
+FORCE_INLINE uint32_t align_address(const uint32_t address, const uint64_t mask) {
+    return (address & mask) + AlignReq;
+}
+
 }  // namespace tt::data_movement::common

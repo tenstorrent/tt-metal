@@ -16,7 +16,7 @@ The main changes involve:
 
 ```python
     # Work with submesh device as you would with a regular ttnn.MeshDevice
-    submesh_devices: List[ttnn.MeshDevice] = mesh_device.create_submeshes((2, 4), ttnn.MeshType.Ring)
+    submesh_devices: List[ttnn.MeshDevice] = mesh_device.create_submeshes((2, 4))
 ```
 
 ### 2. Compile & Run the Model on Each Submesh

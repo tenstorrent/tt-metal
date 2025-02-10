@@ -7,7 +7,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "cpp/pybind11/decorators.hpp"
 
 #include "ttnn/operations/experimental/transformer/split_query_key_value_and_split_heads/split_query_key_value_and_split_heads.hpp"
 
@@ -41,7 +41,7 @@ void bind_split_qkv(py::module& module) {
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const uint32_t num_heads,
                std::optional<std::vector<std::optional<ttnn::Tensor>>> optional_output_tensors,
-               uint8_t queue_id) {
+               QueueId queue_id) {
                 return self(
                     queue_id,
                     input_tensor,
@@ -56,7 +56,7 @@ void bind_split_qkv(py::module& module) {
             py::arg("memory_config") = std::nullopt,
             py::arg("num_heads") = 16,
             py::arg("output_tensors") = std::nullopt,
-            py::arg("queue_id") = 0});
+            py::arg("queue_id") = DefaultQueueId});
 }
 
 }  // namespace ttnn::operations::experimental::transformer::detail

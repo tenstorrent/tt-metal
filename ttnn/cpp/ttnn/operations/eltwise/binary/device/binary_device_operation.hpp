@@ -9,9 +9,8 @@
 #include <optional>
 #include <variant>
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "ttnn/common/constants.hpp"
+#include <tt-metalium/command_queue.hpp>
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/core.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/device_operation.hpp"

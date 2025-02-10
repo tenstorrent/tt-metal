@@ -3,8 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "reshape_op.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
+#include <tt-metalium/constants.hpp>
 
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "reshape_program_factory.hpp"
@@ -26,22 +25,21 @@ void ReshapeDeviceOperation::validate(const std::vector<Tensor>& input_tensors) 
 
     TT_FATAL(
         input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
-        "Reshape does not currently support sharding");
+        "Use ttnn::reshape for reshaping sharded inputs");
     TT_FATAL(
         this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED,
-        "Reshape does not currently support sharding");
+        "Reshape does not currently support sharding. Use ttnn::reshape for reshaping sharded inputs");
 
     if (input_tensor_a.get_layout() == Layout::TILE) {
         TT_FATAL(input_tensor_a.volume() % TILE_HW == 0, "Error");
     } else if (input_tensor_a.get_layout() == Layout::ROW_MAJOR) {
         uint32_t ROW_MAJOR_WIDTH = 8;
-        auto padded_output_shape = output_shape.padded_shape();
         TT_FATAL(
-            input_tensor_a.get_legacy_shape()[3] % ROW_MAJOR_WIDTH == 0 &&
+            input_tensor_a.get_padded_shape()[3] % ROW_MAJOR_WIDTH == 0 &&
                 padded_output_shape[3] % ROW_MAJOR_WIDTH == 0,
             "Operand/target width must be a multiple of 8");
-        uint32_t num_old_sticks = input_tensor_a.get_legacy_shape()[0] * input_tensor_a.get_legacy_shape()[1] *
-                                  input_tensor_a.get_legacy_shape()[2];
+        uint32_t num_old_sticks = input_tensor_a.get_padded_shape()[0] * input_tensor_a.get_padded_shape()[1] *
+                                  input_tensor_a.get_padded_shape()[2];
         uint32_t num_new_sticks = padded_output_shape[0] * padded_output_shape[1] * padded_output_shape[2];
     } else {
         TT_THROW("Unsupported layout for reshape");
@@ -52,13 +50,13 @@ std::vector<ttnn::TensorSpec> ReshapeDeviceOperation::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     return {TensorSpec(
-        output_shape.logical_shape(),
+        logical_output_shape,
         TensorLayout::fromPaddedShape(
             input_tensor.get_dtype(),
             input_tensor.get_tensor_spec().page_config(),
             output_mem_config,
-            output_shape.logical_shape(),
-            output_shape.padded_shape()))};
+            logical_output_shape,
+            padded_output_shape))};
 }
 
 operation::ProgramWithCallbacks ReshapeDeviceOperation::create_program(

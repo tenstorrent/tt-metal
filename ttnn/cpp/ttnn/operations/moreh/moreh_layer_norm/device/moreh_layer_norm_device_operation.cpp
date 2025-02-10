@@ -38,9 +38,9 @@ void MorehLayerNormOperation::validate_inputs(
 
     TT_FATAL(normalized_dims > 0, "normalized_dims should > 0. Got {}", normalized_dims);
     TT_FATAL(
-        normalized_dims <= input.get_legacy_shape().rank(),
+        normalized_dims <= input.get_padded_shape().rank(),
         "normalized_dims should <= input rank ({}). Got: {}",
-        input.get_legacy_shape().rank(),
+        input.get_padded_shape().rank(),
         normalized_dims);
 
     if (gamma.has_value()) {

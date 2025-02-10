@@ -5,11 +5,11 @@
 #pragma once
 
 #include "ttnn/operations/core/core.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_log.h"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_log.h>
 
 using namespace tt;
 
@@ -106,14 +106,14 @@ operation::ProgramWithCallbacks embeddings_fused(
     uint32_t weights_element_size_bytes = weights.element_size();
 
     // row major, page size is last dim
-    uint32_t input_page_size = a.get_legacy_shape()[-1] * input_element_size_bytes;
-    uint32_t weight_page_size = weights.get_legacy_shape()[-1] * weights_element_size_bytes;
+    uint32_t input_page_size = a.get_padded_shape()[-1] * input_element_size_bytes;
+    uint32_t weight_page_size = weights.get_padded_shape()[-1] * weights_element_size_bytes;
 
     // weights shape is [1, 1, num_embeddings, num_dim]
-    uint32_t num_embeddings = weights.get_legacy_shape()[-2];
+    uint32_t num_embeddings = weights.get_padded_shape()[-2];
 
-    uint32_t batch_size = a.get_legacy_shape()[0];
-    uint32_t num_output_rows_per_batch = a.get_legacy_shape()[-1];
+    uint32_t batch_size = a.get_padded_shape()[0];
+    uint32_t num_output_rows_per_batch = a.get_padded_shape()[-1];
     uint32_t num_output_rows = num_output_rows_per_batch * batch_size;
     // Note: num_blocks is just blocks along height
     uint32_t num_blocks = num_output_rows / TILE_HEIGHT;
@@ -142,7 +142,7 @@ operation::ProgramWithCallbacks embeddings_fused(
             num_blocks_per_core_group_1,
             num_blocks_per_core_group_2) =
             tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_blocks);
-        num_tiles_per_block = weights.get_legacy_shape()[-1] / TILE_WIDTH;
+        num_tiles_per_block = weights.get_padded_shape()[-1] / TILE_WIDTH;
         row_major = false;
     }
     uint32_t g1_numcores = core_group_1.num_cores();
@@ -403,15 +403,15 @@ operation::ProgramWithCallbacks embeddings_rm(
     uint32_t output_element_size_bytes = output.element_size();
 
     // row major, page size is last dim
-    uint32_t input_page_size = a.get_legacy_shape()[-1] * input_element_size_bytes;
-    uint32_t weight_page_size = weights.get_legacy_shape()[-1] * weights_element_size_bytes;
-    uint32_t output_page_size = output.get_legacy_shape()[-1] * output_element_size_bytes;
+    uint32_t input_page_size = a.get_padded_shape()[-1] * input_element_size_bytes;
+    uint32_t weight_page_size = weights.get_padded_shape()[-1] * weights_element_size_bytes;
+    uint32_t output_page_size = output.get_padded_shape()[-1] * output_element_size_bytes;
 
     // weights shape is [1, 1, num_embeddings, num_dim]
-    uint32_t num_embeddings = weights.get_legacy_shape()[-2];
+    uint32_t num_embeddings = weights.get_padded_shape()[-2];
 
-    uint32_t batch_size = a.get_legacy_shape()[0];
-    uint32_t num_output_rows_per_batch = a.get_legacy_shape()[-1];
+    uint32_t batch_size = a.get_padded_shape()[0];
+    uint32_t num_output_rows_per_batch = a.get_padded_shape()[-1];
     uint32_t num_output_rows = num_output_rows_per_batch * batch_size;
     auto alignment = a.buffer()->alignment();
     uint32_t block_height = (alignment / input_element_size_bytes);
@@ -626,17 +626,17 @@ operation::ProgramWithCallbacks embeddings_tilized_indices(
 
     // row major, page size is last dim
     uint32_t input_page_size = a.get_logical_shape()[-1] * input_element_size_bytes;
-    uint32_t weight_page_size = weights.get_legacy_shape()[-1] * weights_element_size_bytes;
-    uint32_t output_page_size = output.get_legacy_shape()[-1] * output_element_size_bytes;
+    uint32_t weight_page_size = weights.get_padded_shape()[-1] * weights_element_size_bytes;
+    uint32_t output_page_size = output.get_padded_shape()[-1] * output_element_size_bytes;
 
     // weights shape is [1, 1, num_embeddings, num_dim]
-    uint32_t num_embeddings = weights.get_legacy_shape()[-2];
+    uint32_t num_embeddings = weights.get_padded_shape()[-2];
 
     uint32_t batch_size = a.get_logical_shape()[0];  // num rows
     uint32_t num_cols = a.get_logical_shape()[-1];
     uint32_t volume = num_cols * batch_size;
 
-    auto num_embedding_dims = weights.get_legacy_shape()[-1];
+    auto num_embedding_dims = weights.get_padded_shape()[-1];
 
     // setup problem and grid size
     uint32_t start_core_x = 0;

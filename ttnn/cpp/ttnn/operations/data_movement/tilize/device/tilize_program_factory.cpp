@@ -8,9 +8,9 @@
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/host_api.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -26,7 +26,7 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor& a, Tensor& outp
 
     // This should allocate a DRAM buffer on the device
     tt::tt_metal::IDevice* device = a.device();
-    auto output_shape = output.get_legacy_shape();
+    auto output_shape = output.get_padded_shape();
 
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
@@ -39,14 +39,15 @@ operation::ProgramWithCallbacks tilize_single_core(const Tensor& a, Tensor& outp
 
     uint32_t num_tiles = a.volume() / TILE_HW;
 
-    auto width = a.get_legacy_shape()[-1];
+    auto width = a.get_padded_shape()[-1];
     uint32_t stick_s = width;
     uint32_t num_sticks = a.volume() / width;
     uint32_t stick_size = stick_s * a.element_size();  // Assuming bfloat16 dataformat
 
     uint32_t num_tiles_in_row = stick_s / TILE_WIDTH;
     // Ensure we don't intrude into storage space
-    uint32_t max_l1_size = a.device()->l1_size_per_core() / 2 - a.device()->get_base_allocator_addr(HalMemType::L1);
+    uint32_t max_l1_size =
+        a.device()->l1_size_per_core() / 2 - a.device()->allocator()->get_base_allocator_addr(HalMemType::L1);
     uint32_t max_tiles = max_l1_size / (input_single_tile_size + output_single_tile_size);  // 2 CBs
     // Currently need the number of tiles in a row to be divisible by tiles in a block
     uint32_t num_tiles_per_block = 1;
@@ -165,9 +166,9 @@ operation::ProgramWithCallbacks tilize_multi_core_interleaved(const Tensor& a, T
     uint32_t output_single_tile_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
 
     int32_t ntiles = a.volume() / TILE_HW;
-    uint32_t ntiles_per_block = a.get_legacy_shape()[-1] / TILE_WIDTH;
+    uint32_t ntiles_per_block = a.get_padded_shape()[-1] / TILE_WIDTH;
     uint32_t nblocks = std::ceil((float)ntiles / ntiles_per_block);
-    uint32_t block_size_nbytes = a.get_legacy_shape()[-1] * a.element_size();
+    uint32_t block_size_nbytes = a.get_padded_shape()[-1] * a.element_size();
 
     IDevice* device = a.device();
     auto grid_size = device->compute_with_storage_grid_size();

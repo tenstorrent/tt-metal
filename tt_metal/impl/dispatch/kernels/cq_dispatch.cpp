@@ -12,7 +12,7 @@
 
 #include "debug/assert.h"
 #include "debug/dprint.h"
-#include "tt_metal/impl/dispatch/cq_commands.hpp"
+#include <cq_commands.hpp>
 #include "tt_metal/impl/dispatch/kernels/cq_common.hpp"
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 
@@ -397,17 +397,24 @@ void process_exec_buf_end_d(uint32_t& block_noc_writes_to_clear, uint32_t block_
 
 // Note that for non-paged writes, the number of writes per page is always 1
 // This means each noc_write frees up a page
-template <bool multicast>
 void process_write_linear(
     uint32_t num_mcast_dests, uint32_t& block_noc_writes_to_clear, uint32_t block_next_start_addr[]) {
     volatile tt_l1_ptr CQDispatchCmd* cmd = (volatile tt_l1_ptr CQDispatchCmd*)cmd_ptr;
+    bool multicast = num_mcast_dests > 0;
+    if (not multicast) {
+        num_mcast_dests = 1;
+    }
 
     uint32_t dst_noc = cmd->write_linear.noc_xy_addr;
     uint32_t write_offset_index = cmd->write_linear.write_offset_index;
     uint32_t dst_addr = cmd->write_linear.addr + write_offset[write_offset_index];
     uint32_t length = cmd->write_linear.length;
     uint32_t data_ptr = cmd_ptr + sizeof(CQDispatchCmd);
-    cq_noc_async_write_init_state<CQ_NOC_sNdl, multicast>(0, get_noc_addr_helper(dst_noc, dst_addr));
+    if (multicast) {
+        cq_noc_async_write_init_state<CQ_NOC_sNdl, true>(0, get_noc_addr_helper(dst_noc, dst_addr));
+    } else {
+        cq_noc_async_write_init_state<CQ_NOC_sNdl, false>(0, get_noc_addr_helper(dst_noc, dst_addr));
+    }
 
     while (length != 0) {
         // More data needs to be written, but we've exhausted the CB. Acquire more pages.
@@ -434,11 +441,7 @@ void process_write_linear(
         uint32_t available_data = cb_fence - data_ptr;
         uint32_t xfer_size = length > available_data ? available_data : length;
 
-        if constexpr (multicast) {
-            cq_noc_async_write_with_state_any_len(data_ptr, dst_addr, xfer_size, num_mcast_dests);
-        } else {
-            cq_noc_async_write_with_state_any_len(data_ptr, dst_addr, xfer_size);
-        }
+        cq_noc_async_write_with_state_any_len(data_ptr, dst_addr, xfer_size, num_mcast_dests);
         // Increment counters based on the number of packets that were written
         uint32_t num_noc_packets_written = div_up(xfer_size, NOC_MAX_BURST_SIZE);
         noc_nonposted_writes_num_issued[noc_index] += num_noc_packets_written;
@@ -454,11 +457,7 @@ void process_write_linear(
 void process_write(uint32_t& block_noc_writes_to_clear, uint32_t block_next_start_addr[]) {
     volatile tt_l1_ptr CQDispatchCmd* cmd = (volatile tt_l1_ptr CQDispatchCmd*)cmd_ptr;
     uint32_t num_mcast_dests = cmd->write_linear.num_mcast_dests;
-    if (num_mcast_dests == 0) {
-        process_write_linear<false>(1, block_noc_writes_to_clear, block_next_start_addr);
-    } else {
-        process_write_linear<true>(num_mcast_dests, block_noc_writes_to_clear, block_next_start_addr);
-    }
+    process_write_linear(num_mcast_dests, block_noc_writes_to_clear, block_next_start_addr);
 }
 
 template <bool is_dram>

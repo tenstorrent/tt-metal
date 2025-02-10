@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fd_kernel.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "impl/debug/dprint_server.hpp"
+#include <host_api.hpp>
+#include <tt_metal.hpp>
+#include "dprint_server.hpp"
 
 #include "prefetch.hpp"
 #include "dispatch.hpp"

@@ -5,11 +5,12 @@
 #include "trace_buffer.hpp"
 
 #include <utility>
-#include "tt_metal/device.hpp"
+#include <device.hpp>
+#include "buffer.hpp"
 
 namespace tt::tt_metal {
 
-TraceBuffer::TraceBuffer(std::shared_ptr<detail::TraceDescriptor> desc, std::shared_ptr<Buffer> buffer) :
+TraceBuffer::TraceBuffer(std::shared_ptr<TraceDescriptor> desc, std::shared_ptr<Buffer> buffer) :
     desc(std::move(desc)), buffer(std::move(buffer)) {}
 
 TraceBuffer::~TraceBuffer() {

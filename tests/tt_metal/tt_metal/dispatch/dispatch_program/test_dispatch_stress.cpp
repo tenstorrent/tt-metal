@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "common/logger.hpp"
+#include <tt-metalium/logger.hpp>
 #include "gtest/gtest.h"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "host_api.hpp"
-#include "tt_metal/device.hpp"
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/device.hpp>
 
 using std::vector;
 using namespace tt;
@@ -17,7 +17,7 @@ void RunTest(IDevice* device) {
     Program program = Program();
     CoreRange core_range({0, 0}, {5, 5});
 
-    auto l1_unreserved_base = device->get_base_allocator_addr(tt_metal::HalMemType::L1);
+    auto l1_unreserved_base = device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
 
     // Kernels on brisc + ncrisc that just add two numbers
     KernelHandle brisc_kid = CreateKernel(

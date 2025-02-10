@@ -68,13 +68,6 @@ void EnqueueProgram(CommandQueueHandle cq, ProgramHandle& program, bool blocking
 void Finish(CommandQueueHandle cq, tt::stl::Span<const SubDeviceId> sub_device_ids = {});
 
 /**
- * @brief Sets the command queue mode to lazy or immediate.
- *
- * @param lazy If true, sets the command queue to lazy mode.
- */
-void SetLazyCommandQueueMode(bool lazy);
-
-/**
  * @brief Retrieves the device associated with the command queue.
  *
  * @param cq The command queue to query.

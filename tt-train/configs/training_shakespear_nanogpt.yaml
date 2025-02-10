@@ -9,6 +9,8 @@ training_config:
   weight_decay: 0.01
   use_moreh_adamw: true
   use_kahan_summation: false
+  use_clip_grad_norm: false
+  clip_grad_norm_max_norm: 1.0
   transformer_config:
     num_heads: 6
     embedding_dim: 384
@@ -20,3 +22,8 @@ training_config:
     runner_type: default
     experimental:
       use_composite_layernorm: false
+eval_config:
+  repetition_penalty: 1.0
+  temperature: 0.7
+  top_k: 50
+  top_p: 1.0

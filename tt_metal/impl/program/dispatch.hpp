@@ -4,11 +4,11 @@
 
 #pragma once
 
-#include "tt_metal/impl/buffers/circular_buffer.hpp"
-#include "tt_metal/device.hpp"
-#include "tt_metal/impl/kernels/kernel.hpp"
-#include "tt_metal/impl/program/program.hpp"
-#include "tt_metal/impl/dispatch/worker_config_buffer.hpp"
+#include <circular_buffer.hpp>
+#include <device.hpp>
+#include <kernel.hpp>
+#include <program_impl.hpp>
+#include <worker_config_buffer.hpp>
 
 namespace tt {
 
@@ -117,6 +117,28 @@ void write_program_command_sequence(
     bool stall_before_program);
 
 KernelHandle get_device_local_kernel_handle(KernelHandle kernel_handle);
+
+void reset_config_buf_mgrs_and_expected_workers(
+    std::array<WorkerConfigBufferMgr, DispatchSettings::DISPATCH_MESSAGE_ENTRIES>& config_buffer_mgrs,
+    std::array<uint32_t, DispatchSettings::DISPATCH_MESSAGE_ENTRIES>& expected_num_workers_completed,
+    uint32_t num_entries_to_reset);
+
+void reset_worker_dispatch_state_on_device(
+    IDevice* device,
+    SystemMemoryManager& manager,
+    uint8_t cq_id,
+    CoreCoord dispatch_core,
+    const std::array<uint32_t, DispatchSettings::DISPATCH_MESSAGE_ENTRIES>& expected_num_workers_completed,
+    bool reset_launch_msg_state);
+
+void set_num_worker_sems_on_dispatch(
+    IDevice* device, SystemMemoryManager& manager, uint8_t cq_id, uint32_t num_worker_sems);
+
+void set_go_signal_noc_data_on_dispatch(
+    IDevice* device,
+    const vector_memcpy_aligned<uint32_t>& go_signal_noc_data,
+    SystemMemoryManager& manager,
+    uint8_t cq_id);
 
 template <typename WorkloadType, typename DeviceType>
 uint32_t program_base_addr_on_core(

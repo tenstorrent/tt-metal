@@ -9,7 +9,7 @@
 #pragma once
 
 #include "ttnn/tensor/types.hpp"
-#include "tt_metal/common/core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
 
 namespace ttnn {
 
@@ -182,26 +182,26 @@ struct FullRep {
     }
 };
 
+inline bool compare_assignments(const BlockRep& el0, const BlockRep& el1) {
+    return (
+        el0.n_data == el1.n_data && el0.n_mixed == el1.n_mixed && el0.n_pads == el1.n_pads && el0.times == el1.times);
+}
+
 inline std::vector<std::vector<BlockRep>> distribute_work(
-    const ttnn::SimpleShape& logical_shape,
-    const tt::tt_metal::Padding& padding,
+    const ttnn::Shape& logical_shape,
+    const ttnn::Shape& padded_shape,
     uint32_t num_cores,
     uint32_t blocks_per_core,
     bool has_cliff,
     uint32_t nblocks_per_core_cliff,
     uint32_t tile_height) {
-    TT_FATAL(
-        logical_shape.rank() >= 2,
-        "Only tensors >=2D, tensors are supported. Shape: {}",
-        logical_shape);
-
     auto input_w = logical_shape[-4];
     auto input_z = logical_shape[-3];
     auto input_y = logical_shape[-2];
 
-    auto padding_w = padding.rank() >= 4 ? padding[padding.get_normalized_index(-4)].back : 0;
-    auto padding_z = padding.rank() >= 3 ? padding[padding.get_normalized_index(-3)].back : 0;
-    auto padding_y = padding.rank() >= 2 ? padding[padding.get_normalized_index(-2)].back : 0;
+    auto padding_w = padded_shape[-4] - input_w;
+    auto padding_z = padded_shape[-3] - input_z;
+    auto padding_y = padded_shape[-2] - input_y;
 
     // total work is a full rep followed by a padding.
     auto full_rep_blocks = FullRep(input_y, padding_y, input_z, padding_z, input_w, tile_height).to_block_reps();

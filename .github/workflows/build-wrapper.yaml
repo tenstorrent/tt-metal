@@ -1,4 +1,4 @@
-name: "[post-commit] Build C++ binaries with all configs"
+name: "Build TT-Metalium across all configs"
 
 on:
   workflow_call:
@@ -13,20 +13,37 @@ permissions:
   pull-requests: write
 
 jobs:
-  static-checks:
-    uses: ./.github/workflows/all-static-checks.yaml
-    secrets: inherit
-  build-docker-image-2004:
-    uses:  ./.github/workflows/build-docker-artifact.yaml
-    secrets: inherit
-    with:
-      os: ubuntu-20.04-amd64
-  build-docker-image-2204:
-    uses: ./.github/workflows/build-docker-artifact.yaml
-    secrets: inherit
-    with:
-      os: ubuntu-22.04-amd64
   build:
-    needs: [build-docker-image-2004, build-docker-image-2204]
-    uses: ./.github/workflows/build.yaml
+    uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
+    strategy:
+      matrix:
+        config:
+          - version: "20.04"
+            toolchain: "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
+            build-type: "Debug"
+            publish-artifact: false
+          - version: "20.04"
+            toolchain: "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
+            build-type: "RelWithDebInfo"
+            publish-artifact: false
+          - version: "22.04"
+            toolchain: "cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
+            build-type: "Release"
+            publish-artifact: false
+          - version: "22.04"
+            toolchain: "cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake"
+            build-type: "Release"
+            publish-artifact: false
+            skip-tt-train: true
+          - version: "22.04"
+            toolchain: "cmake/x86_64-linux-gcc-12-toolchain.cmake"
+            build-type: "Release"
+            publish-artifact: false
+            skip-tt-train: true
+    with:
+      version: ${{ matrix.config.version }}
+      toolchain: ${{ matrix.config.toolchain }}
+      build-type: ${{ matrix.config.build-type }}
+      publish-artifact: ${{ matrix.config.publish-artifact }}
+      skip-tt-train: ${{ matrix.config.skip-tt-train || false }}

@@ -7,6 +7,7 @@
 #include "autograd/graph_utils.hpp"
 #include "autograd/tensor.hpp"
 #include "core/scoped.hpp"
+#include "init/tensor_initializers.hpp"
 #include "modules/positional_embeddings.hpp"
 #include "ops/binary_ops.hpp"
 #include "ops/unary_ops.hpp"
@@ -59,6 +60,18 @@ autograd::TensorPtr memory_efficient_runner(
     return out;
 }
 
+void weights_initialization(Transformer& model) {
+    auto params = model.parameters();
+    for (auto& [name, tensor_ptr] : params) {
+        const auto& tensor = tensor_ptr->get_value();
+        if (name.find("weight") != std::string::npos) {
+            init::normal_init(tensor_ptr, tensor.get_logical_shape(), {0.F, 0.02F});
+        } else if (name.find("bias") != std::string::npos) {
+            init::constant_init(tensor_ptr, tensor.get_logical_shape(), 0.F);
+        }
+    }
+}
+
 }  // namespace
 
 Transformer::Transformer(const TransformerConfig& config) {
@@ -84,6 +97,7 @@ Transformer::Transformer(const TransformerConfig& config) {
         position_embedding_type == PositionalEmbeddingType::Trainable ? "Trainable" : "Fixed");
     fmt::print("    Runner type: {}\n", runner_type == RunnerType::Default ? "Default" : "Memory efficient");
     fmt::print("    Composite layernorm: {}\n", use_composite_layernorm);
+    fmt::print("    Weight tying: {}\n", config.weight_tying == WeightTyingType::Enabled ? "Enabled" : "Disabled");
 
     uint32_t vocab_size_divisible_by_32 = (vocab_size + 31) / 32 * 32;
     if (max_sequence_length % 32 != 0) {
@@ -119,7 +133,7 @@ Transformer::Transformer(const TransformerConfig& config) {
             std::make_shared<ttml::modules::GPTBlock>(embedding_dim, num_heads, dropout_prob, use_composite_layernorm));
     }
     ln_fc = std::make_shared<ttml::modules::LayerNormLayer>(embedding_dim, use_composite_layernorm);
-    fc = std::make_shared<ttml::modules::LinearLayer>(embedding_dim, vocab_size);
+    fc = std::make_shared<ttml::modules::LinearLayer>(embedding_dim, vocab_size, /* bias */ false);
 
     create_name("transformer");
     register_module(tok_emb, "tok_emb");
@@ -129,6 +143,13 @@ Transformer::Transformer(const TransformerConfig& config) {
     }
     register_module(ln_fc, "ln_fc");
     register_module(fc, "fc");
+
+    if (config.weight_tying == WeightTyingType::Enabled) {
+        // tie weights between embedding and fc
+        tok_emb->set_weight(fc->get_weight());
+    }
+
+    weights_initialization(*this);
 }
 
 ttml::autograd::TensorPtr Transformer::operator()(
@@ -175,6 +196,18 @@ PositionalEmbeddingType read_positional_embedding_type(const YAML::Node& config)
     }
 }
 
+WeightTyingType read_weight_tying_type(const YAML::Node& config) {
+    auto weight_tying_str = config["weight_tying"].as<std::string>("disabled");
+    if (weight_tying_str == "disabled") {
+        return WeightTyingType::Disabled;
+    } else if (weight_tying_str == "enabled") {
+        return WeightTyingType::Enabled;
+    } else {
+        throw std::runtime_error(fmt::format(
+            "Unknown weight tying type: {}. Supported weight tying types [disabled, enabled]", weight_tying_str));
+    }
+}
+
 TransformerConfig read_config(const YAML::Node& config) {
     TransformerConfig transformer_config;
     transformer_config.num_heads = config["num_heads"].as<uint32_t>();
@@ -185,6 +218,7 @@ TransformerConfig read_config(const YAML::Node& config) {
     transformer_config.max_sequence_length = config["max_sequence_length"].as<uint32_t>();
     transformer_config.positional_embedding_type = read_positional_embedding_type(config);
     transformer_config.runner_type = read_runner_type(config);
+    transformer_config.weight_tying = read_weight_tying_type(config);
 
     if (auto experimental_config = config["experimental"]) {
         transformer_config.experimental.use_composite_layernorm =

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_metal/impl/allocator/algorithms/free_list.hpp"
-#include "tt_metal/common/assert.hpp"
+#include <assert.hpp>
 #include <boost/smart_ptr/make_local_shared.hpp>
 
 #include <algorithm>

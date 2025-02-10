@@ -41,7 +41,7 @@ Result conv2d(
 
 struct Conv2dOperation {
     static Result invoke(
-        uint8_t queue_id,
+        QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& weight_tensor,
         IDevice* device,
@@ -61,7 +61,7 @@ struct Conv2dOperation {
         const std::optional<const MemoryConfig>& memory_config = std::nullopt);
 
     static Result invoke(
-        uint8_t queue_id,
+        QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& weight_tensor,
         MeshDevice* device,

@@ -3,20 +3,20 @@
 // SPDX-License-Identifier: Apache-2.0
 ///
 
-#include "common/core_coord.hpp"
-#include "impl/buffers/buffer.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/buffer.hpp>
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/buffers/circular_buffer_types.hpp"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/circular_buffer_types.hpp>
 
 #include "ttnn/operations/eltwise/binary/common/binary_op_types.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/reduce_scatter/host/reduce_scatter_worker_builder.hpp"
+#include "cpp/ttnn/operations/ccl/reduce_scatter/host/reduce_scatter_worker_builder.hpp"
 
 // Includes that need to be moved to CCL datastructures header
 #include <vector>
@@ -639,8 +639,8 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
     const std::optional<size_t> user_defined_num_buffers_per_channel) {
     log_trace(tt::LogOp, "reduce_scatter_with_workers entry");
     TT_ASSERT(
-        input_tensor.get_legacy_shape()[scatter_split_dim] ==
-            output_tensor.get_legacy_shape()[scatter_split_dim] * ring_size,
+        input_tensor.get_padded_shape()[scatter_split_dim] ==
+            output_tensor.get_padded_shape()[scatter_split_dim] * ring_size,
         "Input and output tensor shapes must match");
     TT_ASSERT(
         input_tensor.buffer()->num_pages() % ring_size == 0,

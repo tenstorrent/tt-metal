@@ -5,7 +5,7 @@
 #include <vector>
 
 #include "moreh_sgd_device_operation.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
@@ -31,7 +31,7 @@ MorehSgdOperation::ProgramFactory::cached_program_t MorehSgdOperation::ProgramFa
 
     auto compute_kernel_config = operation_attributes.compute_kernel_config;
 
-    auto shape = param_in.get_shape();
+    auto shape = param_in.get_logical_shape();
     auto H = shape[-2];
     auto W = shape[-1];
     auto num = param_in.volume() / H / W;

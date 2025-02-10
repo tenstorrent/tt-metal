@@ -57,7 +57,7 @@ template <class T = float, DataType TensorType = DataType::BFLOAT16>
 template <class T = float>
 [[nodiscard]] xt::xarray<T> to_xtensor(const tt::tt_metal::Tensor& tensor) {
     auto vec = tensor.to_vector<T>();
-    const auto& shape = tensor.get_shape().logical_shape();
+    const auto& shape = tensor.get_logical_shape();
     std::vector<size_t> shape_vec(shape.cbegin(), shape.cend());
     // adapt creates view of the vector, but return will copy this data anyway (by creation of xt::array)
     return xt::adapt(std::move(vec), shape_vec);
@@ -66,7 +66,7 @@ template <class T = float>
 template <class T = float>
 auto to_xtensor(const tt::tt_metal::Tensor& tensor, const MeshToXTensorVariant<T>& composer) {
     auto cpu_tensor = tensor.cpu();
-    cpu_tensor = cpu_tensor.to(Layout::ROW_MAJOR);
+    cpu_tensor = cpu_tensor.to_layout(Layout::ROW_MAJOR);
     auto cpu_tensors = ttnn::distributed::get_device_tensors(cpu_tensor);
     std::vector<xt::xarray<T>> res;
     res.reserve(cpu_tensors.size());

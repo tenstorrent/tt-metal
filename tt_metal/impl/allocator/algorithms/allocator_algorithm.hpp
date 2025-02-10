@@ -9,8 +9,8 @@
 #include <vector>
 #include "hostdevcommon/common_values.hpp"
 
-#include "tt_metal/impl/allocator/allocator_types.hpp"
-#include "llrt/hal.hpp"
+#include <allocator_types.hpp>
+#include <hal.hpp>
 
 namespace tt {
 

@@ -30,7 +30,7 @@ Runtime arguments
 #include <stdint.h>
 #include "dataflow_api.h"
 #include "debug/dprint.h"  // required in all kernels using DPRINT
-#include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
+#include "cpp/ttnn/operations/data_movement/common/kernels/common.hpp"
 
 void kernel_main() {
     //We are guranteed to be in 2D going to 2D
@@ -140,6 +140,7 @@ void kernel_main() {
                     if (i == read_end_page - 1) {
                         tt::data_movement::common::enhanced_noc_async_write<dest_page_size_bytes, false>(
                             dest_buffer + begin_write_offset, dst_noc_addr, end_to_write);
+                        noc_async_write_barrier();
                         return;
                     }
                     write_offset = write_offset + readable;
@@ -165,6 +166,7 @@ void kernel_main() {
                 writable = dest_page_size_bytes;
                 readable = 0;
                 if (i == read_end_page - 1) {
+                    noc_async_write_barrier();
                     return;
                 }
                 write_page++;
@@ -201,5 +203,6 @@ void kernel_main() {
             }
         }
     }
+    noc_async_write_barrier();
     return;
 }

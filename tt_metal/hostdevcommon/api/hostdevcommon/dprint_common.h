@@ -14,7 +14,7 @@
 // But wait there's more, SW also includes tensix_types.h so there's both tt::DataFormat and DataFormat there. Use a
 // different name here so that this header can be included in both.
 #if !defined(KERNEL_BUILD) && !defined(FW_BUILD)  // SW
-#include "common/tt_backend_api_types.hpp"
+#include <tt-metalium/tt_backend_api_types.hpp>
 typedef tt::DataFormat CommonDataFormat;
 #else  // HW already includes tensix_types.h
 #include "core_config.h"

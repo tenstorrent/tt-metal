@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
+#include "cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
 
 namespace NAMESPACE {
 void MAIN {
@@ -30,9 +30,9 @@ void MAIN {
     constexpr uint32_t dst0 = 0;
 
     if (num_tiles > 1) {
-        binary_op_init_common(cb_input, cb_x);
+        binary_op_init_common(cb_input, cb_x, cb_y);
     } else {
-        binary_op_init_common(cb_logx, cb_decimal);
+        binary_op_init_common(cb_logx, cb_decimal, cb_y);
     }
 
     cb_wait_front(cb_decimal, onetile);  // comes from the reader
@@ -44,7 +44,7 @@ void MAIN {
             cb_wait_front(cb_input, onetile);  // comes from the reader
             cb_reserve_back(cb_x, onetile);
 
-            copy_tile_init();
+            copy_tile_init(cb_input);
             copy_tile(cb_input, 0, dst0);
             cb_pop_front(cb_input, onetile);
             tile_regs_commit();
@@ -59,7 +59,7 @@ void MAIN {
             cb_wait_front(cb_x, onetile);
             cb_reserve_back(cb_x, onetile);
 
-            add_tiles_init();
+            add_tiles_init(cb_input, cb_x);
             add_tiles(cb_input, cb_x, 0, 0, dst0);
             cb_pop_front(cb_x, onetile);
             cb_pop_front(cb_input, onetile);

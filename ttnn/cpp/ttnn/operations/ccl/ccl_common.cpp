@@ -2,13 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/operations/ccl/ccl_common.hpp"
+#include "cpp/ttnn/operations/ccl/ccl_common.hpp"
 
 #include <cstdint>
 #include <cmath>
 
 #include "ccl_host_datastructures.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/erisc_datamover_builder.hpp"
+#include "cpp/ttnn/operations/ccl/erisc_datamover_builder.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 
@@ -373,30 +373,31 @@ RingReduceScatterBaseTensorSlicer<DERIVED_SLICER_T>::RingReduceScatterBaseTensor
     uint32_t half_cb_n_pages) :
     LegacyCclTensorSlicer() {
     TT_ASSERT(max_slice_size_in_bytes > 0);
-    TT_ASSERT(input_tensor.get_legacy_shape().size() == 4);
+    TT_ASSERT(input_tensor.get_padded_shape().rank() == 4);
     this->row_major = input_tensor.get_layout() == Layout::ROW_MAJOR;
-    this->slice_dim_is_width = input_tensor.get_legacy_shape().rank() - 1 == slice_dim;
+    this->slice_dim_is_width = input_tensor.get_padded_shape().rank() - 1 == slice_dim;
     this->is_sharded = input_tensor.is_sharded();
 
     this->input_page_size = input_tensor.buffer()->page_size();
     log_trace(tt::LogOp, "input_page_size={}", input_page_size);
     if (row_major) {
-        this->num_cols = input_tensor.get_legacy_shape()[-1];
-        auto input_shape = input_tensor.get_legacy_shape();
-        auto output_shape = output_tensor.get_legacy_shape();
+        this->num_cols = input_tensor.get_padded_shape()[-1];
+        auto input_shape = input_tensor.get_padded_shape();
+        auto output_shape = output_tensor.get_padded_shape();
         this->num_rows =
-            std::accumulate(input_shape.begin() + slice_dim, input_shape.end() - 1, 1, std::multiplies<uint32_t>());
+            std::accumulate(input_shape.cbegin() + slice_dim, input_shape.cend() - 1, 1, std::multiplies<uint32_t>());
         this->row_offset =
-            std::accumulate(output_shape.begin() + slice_dim, output_shape.end() - 1, 1, std::multiplies<uint32_t>()) -
+            std::accumulate(
+                output_shape.cbegin() + slice_dim, output_shape.cend() - 1, 1, std::multiplies<uint32_t>()) -
             num_rows;
     } else {
         auto input_tile = input_tensor.get_tensor_spec().tile();
-        const uint32_t num_tiles_x = input_tensor.get_legacy_shape()[-1] / input_tile.get_width();
-        uint32_t num_tiles_y = (input_tensor.get_legacy_shape()[-2] / input_tile.get_height());
+        const uint32_t num_tiles_x = input_tensor.get_padded_shape()[-1] / input_tile.get_width();
+        uint32_t num_tiles_y = (input_tensor.get_padded_shape()[-2] / input_tile.get_height());
         for (std::size_t i = 0;
-             input_tensor.get_legacy_shape().rank() > 2 && i < input_tensor.get_legacy_shape().rank() - 2;
+             input_tensor.get_padded_shape().rank() > 2 && i < input_tensor.get_padded_shape().rank() - 2;
              i++) {
-            num_tiles_y *= input_tensor.get_legacy_shape()[i];
+            num_tiles_y *= input_tensor.get_padded_shape()[i];
         }
         TT_ASSERT(num_tiles_x >= ring_size);
         this->tensor_slice_shape.x = slice_dim == 3 ? (num_tiles_x / ring_size) : num_tiles_x;
@@ -422,7 +423,7 @@ RingReduceScatterBaseTensorSlicer<DERIVED_SLICER_T>::RingReduceScatterBaseTensor
         log_trace(tt::LogOp, "\tmax_slice_size_in_bytes={}", max_slice_size_in_bytes);
         log_trace(tt::LogOp, "\tinput_page_size={}", input_page_size);
         this->worker_slice_shapes = DERIVED_SLICER_T::create_worker_slice_shapes_for_tile_layout(
-            input_tensor.get_legacy_shape(),
+            input_tensor.get_padded_shape(),
             this->tensor_slice_shape,
             total_num_workers,
             max_slice_size_in_bytes / input_page_size,
@@ -431,15 +432,15 @@ RingReduceScatterBaseTensorSlicer<DERIVED_SLICER_T>::RingReduceScatterBaseTensor
 
     if (row_major) {
         this->flattened_tensor_shape = tt_xy_pair{
-            input_tensor.get_legacy_shape()[3],
-            input_tensor.get_legacy_shape()[0] * input_tensor.get_legacy_shape()[1] *
-                input_tensor.get_legacy_shape()[2]};
+            input_tensor.get_padded_shape()[3],
+            input_tensor.get_padded_shape()[0] * input_tensor.get_padded_shape()[1] *
+                input_tensor.get_padded_shape()[2]};
     } else {
         auto input_tile = input_tensor.get_tensor_spec().tile();
         this->flattened_tensor_shape = tt_xy_pair{
-            input_tensor.get_legacy_shape()[3] / input_tile.get_width(),
-            (input_tensor.get_legacy_shape()[0] * input_tensor.get_legacy_shape()[1] *
-             input_tensor.get_legacy_shape()[2]) /
+            input_tensor.get_padded_shape()[3] / input_tile.get_width(),
+            (input_tensor.get_padded_shape()[0] * input_tensor.get_padded_shape()[1] *
+             input_tensor.get_padded_shape()[2]) /
                 input_tile.get_height()};
     }
 
@@ -588,8 +589,8 @@ RingReduceScatterBaseTensorSlicer<DERIVED_SLICER_T>::create_worker_slice_shapes_
 }
 
 std::vector<tt_xy_pair> RingReduceScatterTensorSlicer::create_worker_slice_shapes_for_tile_layout(
-    tt::tt_metal::LegacyShape const& tensor_shape,
-    tt_xy_pair const& tensor_slice_shape_in_tiles,
+    const ttnn::Shape& tensor_shape,
+    const tt_xy_pair& tensor_slice_shape_in_tiles,
     uint32_t num_workers,
     uint32_t max_slice_size_in_pages,
     uint32_t half_cb_n_pages) {
@@ -794,8 +795,8 @@ std::vector<tt_xy_pair> RingReduceScatterTensorSlicer::create_worker_slice_shape
 }
 
 std::vector<tt_xy_pair> RingReduceScatterWrappedTensorSlicer::create_worker_slice_shapes_for_tile_layout(
-    tt::tt_metal::LegacyShape const& tensor_shape,
-    tt_xy_pair const& tensor_slice_shape_in_tiles,
+    const ttnn::Shape& tensor_shape,
+    const tt_xy_pair& tensor_slice_shape_in_tiles,
     uint32_t num_workers,
     uint32_t max_slice_size_in_pages,
     uint32_t half_cb_n_pages) {
@@ -1136,12 +1137,12 @@ GenericWrappedTensorSlicer::GenericWrappedTensorSlicer(
 
 tt_xy_pair GenericWrappedTensorSlicer::calculate_tensor_slice_shape(
     const Tensor& input_tensor, int slice_dim, uint32_t partition_size) {
-    const uint32_t num_tiles_x = input_tensor.get_legacy_shape()[-1] / tt::constants::TILE_WIDTH;
-    uint32_t num_tiles_y = (input_tensor.get_legacy_shape()[-2] / tt::constants::TILE_HEIGHT);
+    const uint32_t num_tiles_x = input_tensor.get_padded_shape()[-1] / tt::constants::TILE_WIDTH;
+    uint32_t num_tiles_y = (input_tensor.get_padded_shape()[-2] / tt::constants::TILE_HEIGHT);
     for (std::size_t i = 0;
-         input_tensor.get_legacy_shape().rank() > 2 && i < input_tensor.get_legacy_shape().rank() - 2;
+         input_tensor.get_padded_shape().rank() > 2 && i < input_tensor.get_padded_shape().rank() - 2;
          i++) {
-        num_tiles_y *= input_tensor.get_legacy_shape()[i];
+        num_tiles_y *= input_tensor.get_padded_shape()[i];
     }
     TT_ASSERT(num_tiles_x >= partition_size);
     tt_xy_pair tensor_slice_shape;
@@ -1172,7 +1173,7 @@ void GenericWrappedTensorSlicer::initialize(
 
     // Calculate worker slice shapes (tile layout)
     this->worker_slice_shapes = create_worker_slice_shapes_for_tile_layout(
-        input_tensor.get_legacy_shape(),
+        input_tensor.get_padded_shape(),
         this->tensor_slice_shape,
         total_num_workers,
         max_slice_size_in_bytes / this->input_page_size,
@@ -1180,8 +1181,8 @@ void GenericWrappedTensorSlicer::initialize(
 
     // Flattened tensor shape (tile layout)
     this->flattened_tensor_shape = tt_xy_pair{
-        input_tensor.get_legacy_shape()[3] / tt::constants::TILE_WIDTH,
-        (input_tensor.get_legacy_shape()[0] * input_tensor.get_legacy_shape()[1] * input_tensor.get_legacy_shape()[2]) /
+        input_tensor.get_padded_shape()[3] / tt::constants::TILE_WIDTH,
+        (input_tensor.get_padded_shape()[0] * input_tensor.get_padded_shape()[1] * input_tensor.get_padded_shape()[2]) /
             tt::constants::TILE_HEIGHT};
 
     this->worker_slice_offsets = compute_worker_slice_offsets(this->worker_slice_shapes, this->tensor_slice_shape);
@@ -1205,8 +1206,8 @@ std::vector<tt_xy_pair> GenericWrappedTensorSlicer::compute_worker_slice_offsets
 }
 
 std::vector<tt_xy_pair> GenericWrappedTensorSlicer::create_worker_slice_shapes_for_tile_layout(
-    tt::tt_metal::LegacyShape const& tensor_shape,
-    tt_xy_pair const& tensor_slice_shape_in_tiles,
+    const ttnn::Shape& tensor_shape,
+    const tt_xy_pair& tensor_slice_shape_in_tiles,
     uint32_t num_workers,
     uint32_t max_slice_size_in_pages,
     uint32_t half_cb_n_pages) {
@@ -1261,9 +1262,6 @@ std::vector<tt_xy_pair> GenericWrappedTensorSlicer::create_worker_slice_shapes_f
 
     return worker_slice_shapes;
 }
-
-
-
 
 GenericWrappedTensorSlicerV2::GenericWrappedTensorSlicerV2(
     const Tensor& input_tensor,
@@ -1327,7 +1325,7 @@ void GenericWrappedTensorSlicerV2::initialize(
     TT_FATAL(!this->row_major, "Row major not supported yet");
 
     // Record the input tensor shape
-    auto input_shape = input_tensor.get_legacy_shape();
+    auto input_shape = input_tensor.get_padded_shape();
     this->tensor_shape = Shape4D<uint32_t>(input_shape[0], input_shape[1], input_shape[2]/tt::constants::TILE_HEIGHT, input_shape[3]/tt::constants::TILE_WIDTH);
 
     // Calculate tensor slice shape
