@@ -42,4 +42,13 @@ function getCurrentVersion() {
 }
 document.getElementById('current-version').textContent = getCurrentVersion();
 
+const versionEl = document.createElement("span");
+versionEl.innerText = getCurrentVersion();
+versionEl.className = "project-versions";
+const wySideSearchEl = document.getElementsByClassName("wy-side-nav-search").item(0);
+if (wySideSearchEl) {
+    const projectNameEl = wySideSearchEl.children.item(1);
+    if (projectNameEl) projectNameEl.appendChild(versionEl);
+}
+
 </script>
