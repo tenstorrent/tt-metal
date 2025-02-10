@@ -678,7 +678,7 @@ void noc_async_read_inc_num_issued(std::uint32_t num_issued_reads_inc, uint8_t n
 FORCE_INLINE
 void noc_async_write_one_packet(
     std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr, std::uint32_t size, uint8_t noc = noc_index) {
-    WAYPOINT("NWPW");
+    WAYPOINT("NWP0");
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size);
     while (!noc_cmd_buf_ready(noc, write_cmd_buf));
     WAYPOINT("NWPD");
@@ -722,7 +722,7 @@ void noc_async_write_multicast_one_packet(
     bool linked = false,
     bool multicast_path_reserve = true,
     uint8_t noc = noc_index) {
-    WAYPOINT("NWPW");
+    // WAYPOINT("NWP1");
     DEBUG_SANITIZE_NOC_MULTI_WRITE_TRANSACTION(noc, dst_noc_addr_multicast, src_local_l1_addr, size);
     while (!noc_cmd_buf_ready(noc, write_cmd_buf));
     WAYPOINT("NWPD");
@@ -760,7 +760,7 @@ void noc_async_write_multicast_one_packet(
 template <bool non_posted = true>
 FORCE_INLINE void noc_async_write_one_packet_set_state(
     std::uint64_t dst_noc_addr, std::uint32_t size, uint8_t noc = noc_index, uint8_t vc = NOC_UNICAST_WRITE_VC) {
-    WAYPOINT("NWPW");
+    WAYPOINT("NWP2");
     while (!noc_cmd_buf_ready(noc, write_cmd_buf));
     WAYPOINT("NWPD");
 
@@ -787,7 +787,7 @@ FORCE_INLINE void noc_async_write_one_packet_set_state(
 template <bool non_posted = true>
 FORCE_INLINE void noc_async_write_one_packet_with_state(
     std::uint32_t src_local_l1_addr, std::uint32_t dst_noc_addr, uint8_t noc = noc_index) {
-    WAYPOINT("NWPW");
+    WAYPOINT("NWP3");
     while (!noc_cmd_buf_ready(noc, write_cmd_buf));
     WAYPOINT("NWPD");
 
@@ -947,6 +947,7 @@ inline void noc_async_write_multicast(
     bool multicast_path_reserve = true,
     uint8_t noc = noc_index) {
     if constexpr (max_page_size <= NOC_MAX_BURST_SIZE) {
+        WAYPOINT("NWPZ");
         noc_async_write_multicast_one_packet(
             src_local_l1_addr, dst_noc_addr_multicast, size, num_dests, linked, multicast_path_reserve);
     } else {

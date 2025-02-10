@@ -190,6 +190,23 @@ void metal_SocDescriptor::generate_physical_routing_to_profiler_flat_id() {
 #endif
 }
 
+// TODO: This should be deleted once we switch to virtual coordinates
+void metal_SocDescriptor::update_pcie_cores(const BoardType& board_type) {
+    if (this->arch != tt::ARCH::BLACKHOLE) {
+        return;
+    }
+    switch (board_type) {
+        case P100:
+        case UNKNOWN: {  // Workaround for BHs running FW that does not return board type in the cluster yaml
+            this->pcie_cores = {CoreCoord(11, 0)};
+        } break;
+        case P150A: {
+            this->pcie_cores = {CoreCoord(2, 0)};
+        } break;
+        default: TT_THROW("Need to update PCIe core assignment for new Blackhole type, file issue to abhullar");
+    }
+}
+
 // UMD initializes and owns tt_SocDescriptor
 // For architectures with translation tables enabled, UMD will remove the last x rows from the descriptors in
 // tt_SocDescriptor (workers list and worker_log_to_routing_x/y maps) This creates a virtual coordinate system, where
@@ -203,4 +220,5 @@ metal_SocDescriptor::metal_SocDescriptor(const tt_SocDescriptor& other, const Bo
     this->load_dram_metadata_from_device_descriptor();
     this->generate_logical_eth_coords_mapping();
     this->generate_physical_routing_to_profiler_flat_id();
+    this->update_pcie_cores(board_type);
 }

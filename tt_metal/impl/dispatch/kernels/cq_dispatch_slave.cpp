@@ -204,8 +204,13 @@ void process_go_signal_mcast_cmd() {
     uint8_t go_signal_noc_data_idx = cmd->mcast.noc_data_start_index;
     // send go signal update here
     for (uint32_t i = 0, num_mcasts = cmd->mcast.num_mcast_txns; i < num_mcasts; ++i) {
+        uint64_t mcast_xy = go_signal_noc_data[go_signal_noc_data_idx];
         uint64_t dst = get_noc_addr_helper(go_signal_noc_data[go_signal_noc_data_idx++], mcast_go_signal_addr);
+        DPRINT << "debug " << HEX() << mcast_xy << DEC() << " x " << (uint32_t)NOC_MCAST_ADDR_START_X(dst) << " y "
+               << (uint32_t)NOC_MCAST_ADDR_START_Y(dst) << " x " << (uint32_t)NOC_MCAST_ADDR_END_X(dst) << " y "
+               << (uint32_t)NOC_MCAST_ADDR_END_X(dst) << ENDL();
         // packed_write_max_unicast_sub_cmds is the total number of compute cores (num_mcast_dests for this txn)
+        WAYPOINT("OVER");
         noc_async_write_multicast_one_packet(
             (uint32_t)(aligned_go_signal_storage), dst, sizeof(uint32_t), go_signal_noc_data[go_signal_noc_data_idx++]);
     }

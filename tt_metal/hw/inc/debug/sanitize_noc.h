@@ -30,6 +30,7 @@
 #include "noc_parameters.h"
 #include "noc_nonblocking_api.h"
 #include "hostdevcommon/common_runtime_address_map.h"
+#include "debug/dprint.h"
 #ifndef ARCH_GRAYSKULL
 #include "eth_l1_address_map.h"
 #endif
@@ -277,6 +278,7 @@ uint32_t debug_sanitize_noc_addr(
         x = (uint8_t)NOC_UNICAST_ADDR_X(noc_addr);
         y = (uint8_t)NOC_UNICAST_ADDR_Y(noc_addr);
     }
+    DPRINT << "x " << (uint32_t)x << " y " << (uint32_t)y << ENDL();
     uint64_t noc_local_addr = NOC_LOCAL_ADDR(noc_addr);
     bool is_virtual_coord = false;
     AddressableCoreType core_type = get_core_type(noc_id, x, y, is_virtual_coord);
@@ -286,6 +288,7 @@ uint32_t debug_sanitize_noc_addr(
         uint8_t y_end = (uint8_t)NOC_MCAST_ADDR_END_Y(noc_addr);
         bool is_virtual_coord_end = false;
         AddressableCoreType end_core_type = get_core_type(noc_id, x_end, y_end, is_virtual_coord_end);
+        DPRINT << "is virtual coord " << (uint32_t)is_virtual_coord_end << ENDL();
 
         // Multicast supports workers only
         uint16_t return_code = DebugSanitizeNocOK;
