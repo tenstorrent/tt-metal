@@ -305,18 +305,22 @@ void DevicePool::activate_device(chip_id_t id) {
             false,
             worker_core_thread_core,
             completion_queue_reader_core);
-        if (!this->firmware_built_keys.contains(BuildEnvManager::get_instance().get_build_key(device->id()))) {
+        if (!this->firmware_built_keys.contains(
+                BuildEnvManager::get_instance().get_device_build_env(device->id()).build_key)) {
             BuildEnvManager::get_instance().build_firmware(device->id());
-            this->firmware_built_keys.insert(BuildEnvManager::get_instance().get_build_key(device->id()));
+            this->firmware_built_keys.insert(
+                BuildEnvManager::get_instance().get_device_build_env(device->id()).build_key);
         }
         this->devices.emplace_back(std::unique_ptr<IDevice>(device));
     } else {
         log_debug(tt::LogMetal, "DevicePool re-initialize device {}", id);
         if (not device->is_initialized()) {
             device->initialize(num_hw_cqs, this->l1_small_size, this->trace_region_size, this->l1_bank_remap);
-            if (!this->firmware_built_keys.contains(BuildEnvManager::get_instance().get_build_key(device->id()))) {
+            if (!this->firmware_built_keys.contains(
+                    BuildEnvManager::get_instance().get_device_build_env(device->id()).build_key)) {
                 BuildEnvManager::get_instance().build_firmware(device->id());
-                this->firmware_built_keys.insert(BuildEnvManager::get_instance().get_build_key(device->id()));
+                this->firmware_built_keys.insert(
+                    BuildEnvManager::get_instance().get_device_build_env(device->id()).build_key);
             }
         } else {
             TT_THROW("Cannot re-initialize device {}, must first call close()", id);

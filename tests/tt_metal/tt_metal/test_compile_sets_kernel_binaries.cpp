@@ -151,7 +151,7 @@ int main(int argc, char** argv) {
                 tt_metal::detail::GetKernel(program, kernel_group->kernel_ids[DISPATCH_CLASS_TENSIX_DM1].value());
 
             // Run iteration to get golden
-            uint32_t mask = BuildEnvManager::get_instance().get_build_key(device->id());
+            uint32_t mask = BuildEnvManager::get_instance().get_device_build_env(device->id()).build_key;
             tt_metal::detail::CompileProgram(device, program);
             compute_binaries.insert({mask, compute_kernel->binaries(mask)});
             TT_FATAL(compute_binaries.at(mask).size() == 3, "Expected 3 Compute binaries!");
@@ -167,7 +167,9 @@ int main(int argc, char** argv) {
             for (int i = 0; i < num_devices; i++) {
                 for (const auto& kernel_name : kernel_names) {
                     std::filesystem::remove_all(
-                        BuildEnvManager::get_instance().get_build_env(devices[i]->id()).get_out_kernel_root_path() +
+                        BuildEnvManager::get_instance()
+                            .get_device_build_env(devices[i]->id())
+                            .build_env.get_out_kernel_root_path() +
                         kernel_name);
                 }
             }
@@ -189,7 +191,7 @@ int main(int argc, char** argv) {
                 auto& program = new_programs[i];
                 ths.emplace_back([&] {
                     for (int j = 0; j < num_compiles; j++) {
-                        uint32_t mask = BuildEnvManager::get_instance().get_build_key(device->id());
+                        uint32_t mask = BuildEnvManager::get_instance().get_device_build_env(device->id()).build_key;
                         tt_metal::detail::CompileProgram(device, program);
                         uint32_t programmable_core_index =
                             hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX);
@@ -205,7 +207,9 @@ int main(int argc, char** argv) {
                         TT_FATAL(riscv1_kernel->binaries(mask) == ncrisc_binaries.at(mask), "Error");
 
                         std::string kernel_name = get_latest_kernel_binary_path(
-                            BuildEnvManager::get_instance().get_build_env(device->id()).get_out_kernel_root_path(),
+                            BuildEnvManager::get_instance()
+                                .get_device_build_env(device->id())
+                                .build_env.get_out_kernel_root_path(),
                             riscv0_kernel);
                         std::string brisc_hex_path =
                             BuildEnvManager::get_instance()
@@ -217,7 +221,9 @@ int main(int argc, char** argv) {
                             brisc_binary == *brisc_binaries.at(mask).at(0),
                             "Expected saved BRISC binary to be the same as binary in persistent cache");
                         kernel_name = get_latest_kernel_binary_path(
-                            BuildEnvManager::get_instance().get_build_env(device->id()).get_out_kernel_root_path(),
+                            BuildEnvManager::get_instance()
+                                .get_device_build_env(device->id())
+                                .build_env.get_out_kernel_root_path(),
                             riscv1_kernel);
                         std::string ncrisc_hex_path =
                             BuildEnvManager::get_instance()
@@ -233,7 +239,9 @@ int main(int argc, char** argv) {
                             "Expected saved NCRISC binary to be the same as binary in persistent cache");
                         for (int trisc_id = 0; trisc_id <= 2; trisc_id++) {
                             kernel_name = get_latest_kernel_binary_path(
-                                BuildEnvManager::get_instance().get_build_env(device->id()).get_out_kernel_root_path(),
+                                BuildEnvManager::get_instance()
+                                    .get_device_build_env(device->id())
+                                    .build_env.get_out_kernel_root_path(),
                                 compute_kernel);
                             std::string trisc_id_str = std::to_string(trisc_id);
                             std::string trisc_hex_path =

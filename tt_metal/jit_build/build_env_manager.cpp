@@ -8,6 +8,11 @@
 
 namespace tt::tt_metal {
 
+BuildEnvManager& BuildEnvManager::get_instance() {
+    static BuildEnvManager instance;
+    return instance;
+}
+
 BuildEnvManager::BuildEnvManager() {
     // Initialize build_state_indices_
     uint32_t index = 0;
@@ -108,14 +113,71 @@ uint32_t compute_build_key(chip_id_t device_id, uint8_t num_hw_cqs) {
 }
 
 JitBuildStateSet create_build_state(JitBuildEnv& build_env, chip_id_t device_id, uint8_t num_hw_cqs, bool is_fw) {
+    // Get the dispatch message address for this device
     CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device_id);
     uint32_t dispatch_message_addr = DispatchMemMap::get(dispatch_core_type, num_hw_cqs)
                                          .get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
 
+    // Prepare the container for build states
     uint32_t num_build_states = hal.get_num_risc_processors();
-    std::vector<std::shared_ptr<JitBuildState>> build_states;
-    build_states.resize(num_build_states);
+    std::vector<std::shared_ptr<JitBuildState>> build_states(num_build_states);
+    ;
 
+    // Helper lambda to create a build state based on the core type and processor info.
+    auto create_jit_build_state = [&](HalProgrammableCoreType core_type,
+                                      uint32_t processor_class,
+                                      uint32_t processor_type,
+                                      bool is_compute_processor) -> std::shared_ptr<JitBuildState> {
+        switch (core_type) {
+            case HalProgrammableCoreType::TENSIX: {
+                if (is_compute_processor) {
+                    return std::make_shared<JitBuildCompute>(
+                        build_env,
+                        JitBuiltStateConfig{
+                            .processor_id = processor_type,
+                            .is_fw = is_fw,
+                            .dispatch_message_addr = dispatch_message_addr});
+                } else {
+                    // TODO: Make .processor_id = processor_type when brisc and ncrisc are considered one
+                    // processor class
+                    return std::make_shared<JitBuildDataMovement>(
+                        build_env,
+                        JitBuiltStateConfig{
+                            .processor_id = processor_class,
+                            .is_fw = is_fw,
+                            .dispatch_message_addr = dispatch_message_addr});
+                }
+                break;
+            }
+            case HalProgrammableCoreType::ACTIVE_ETH: {
+                // Cooperative means active erisc FW needs to context switch to base FW
+                bool is_cooperative = tt::Cluster::instance().arch() == ARCH::WORMHOLE_B0;
+                return std::make_shared<JitBuildActiveEthernet>(
+                    build_env,
+                    JitBuiltStateConfig{
+                        .processor_id = processor_class,
+                        .is_fw = is_fw,
+                        .dispatch_message_addr = dispatch_message_addr,
+                        .is_cooperative = is_cooperative});
+                break;
+            }
+            case HalProgrammableCoreType::IDLE_ETH: {
+                return std::make_shared<JitBuildIdleEthernet>(
+                    build_env,
+                    JitBuiltStateConfig{
+                        .processor_id = processor_class,
+                        .is_fw = is_fw,
+                        .dispatch_message_addr = dispatch_message_addr});
+                break;
+            }
+            default:
+                TT_THROW(
+                    "Unsupported programable core type {} to initialize build states",
+                    magic_enum::enum_name(core_type));
+        }
+    };
+
+    // Loop through programmable core types and their processor classes/types.
     uint32_t index = 0;
     uint32_t programmable_core_type_count = hal.get_programmable_core_type_count();
     for (uint32_t programmable_core = 0; programmable_core < programmable_core_type_count; programmable_core++) {
@@ -127,54 +189,8 @@ JitBuildStateSet create_build_state(JitBuildEnv& build_env, chip_id_t device_id,
                 compute_proc_class.has_value() and compute_proc_class.value() == HalProcessorClassType::COMPUTE;
             uint32_t processor_types_count = hal.get_processor_types_count(programmable_core, processor_class);
             for (uint32_t processor_type = 0; processor_type < processor_types_count; processor_type++) {
-                switch (core_type) {
-                    case HalProgrammableCoreType::TENSIX: {
-                        if (is_compute_processor) {
-                            build_states[index] = std::make_shared<JitBuildCompute>(
-                                build_env,
-                                JitBuiltStateConfig{
-                                    .processor_id = processor_type,
-                                    .is_fw = is_fw,
-                                    .dispatch_message_addr = dispatch_message_addr});
-                        } else {
-                            // TODO: Make .processor_id = processor_type when brisc and ncrisc are considered one
-                            // processor class
-                            build_states[index] = std::make_shared<JitBuildDataMovement>(
-                                build_env,
-                                JitBuiltStateConfig{
-                                    .processor_id = processor_class,
-                                    .is_fw = is_fw,
-                                    .dispatch_message_addr = dispatch_message_addr});
-                        }
-                        break;
-                    }
-                    case HalProgrammableCoreType::ACTIVE_ETH: {
-                        // Cooperative means active erisc FW needs to context switch to base FW
-                        bool is_cooperative = tt::Cluster::instance().arch() == ARCH::WORMHOLE_B0;
-                        build_states[index] = std::make_shared<JitBuildActiveEthernet>(
-                            build_env,
-                            JitBuiltStateConfig{
-                                .processor_id = processor_class,
-                                .is_fw = is_fw,
-                                .dispatch_message_addr = dispatch_message_addr,
-                                .is_cooperative = is_cooperative});
-                        break;
-                    }
-                    case HalProgrammableCoreType::IDLE_ETH: {
-                        build_states[index] = std::make_shared<JitBuildIdleEthernet>(
-                            build_env,
-                            JitBuiltStateConfig{
-                                .processor_id = processor_class,
-                                .is_fw = is_fw,
-                                .dispatch_message_addr = dispatch_message_addr});
-                        break;
-                    }
-                    default:
-                        TT_THROW(
-                            "Unsupported programable core type {} to initialize build states",
-                            magic_enum::enum_name(core_type));
-                }
-                index++;
+                build_states[index++] =
+                    create_jit_build_state(core_type, processor_class, processor_type, is_compute_processor);
             }
         }
     }
@@ -184,56 +200,38 @@ JitBuildStateSet create_build_state(JitBuildEnv& build_env, chip_id_t device_id,
 
 void BuildEnvManager::add_build_env(chip_id_t device_id, uint8_t num_hw_cqs) {
     uint32_t build_key = compute_build_key(device_id, num_hw_cqs);
-    device_id_to_build_key_[device_id] = build_key;
-
     auto device_kernel_defines = initialize_device_kernel_defines(device_id, num_hw_cqs);
-    device_id_to_build_env_[device_id].init(build_key, tt::Cluster::instance().arch(), device_kernel_defines);
 
-    device_id_to_firmware_build_states_[device_id] =
-        create_build_state(device_id_to_build_env_[device_id], device_id, num_hw_cqs, true);
-    device_id_to_kernel_build_states_[device_id] =
-        create_build_state(device_id_to_build_env_[device_id], device_id, num_hw_cqs, false);
+    device_id_to_build_env_[device_id].build_key = build_key;
+    device_id_to_build_env_[device_id].build_env.init(build_key, tt::Cluster::instance().arch(), device_kernel_defines);
+    device_id_to_build_env_[device_id].firmware_build_states =
+        create_build_state(device_id_to_build_env_[device_id].build_env, device_id, num_hw_cqs, true);
+    device_id_to_build_env_[device_id].kernel_build_states =
+        create_build_state(device_id_to_build_env_[device_id].build_env, device_id, num_hw_cqs, false);
 }
 
-const JitBuildEnv& BuildEnvManager::get_build_env(chip_id_t device_id) {
+const DeviceBuildEnv& BuildEnvManager::get_device_build_env(chip_id_t device_id) {
     TT_ASSERT(device_id_to_build_env_.count(device_id) != 0, "Couldn't find build env for device {}.", device_id);
     return device_id_to_build_env_[device_id];
 }
 
-uint32_t BuildEnvManager::get_build_key(chip_id_t device_id) {
-    TT_ASSERT(device_id_to_build_key_.count(device_id) != 0, "Couldn't find build key for device {}.", device_id);
-    return device_id_to_build_key_[device_id];
-}
-
 const JitBuildState& BuildEnvManager::get_firmware_build_state(
     chip_id_t device_id, uint32_t programmable_core, uint32_t processor_class, int processor_id) {
-    TT_ASSERT(
-        device_id_to_firmware_build_states_.count(device_id) != 0,
-        "Couldn't find firmware build state for device {}.",
-        device_id);
     uint32_t state_idx = get_build_index_and_state_count(programmable_core, processor_class).first + processor_id;
-    return *device_id_to_firmware_build_states_[device_id][state_idx];
+    return *get_device_build_env(device_id).firmware_build_states[state_idx];
 }
 
 const JitBuildState& BuildEnvManager::get_kernel_build_state(
     chip_id_t device_id, uint32_t programmable_core, uint32_t processor_class, int processor_id) {
-    TT_ASSERT(
-        device_id_to_kernel_build_states_.count(device_id) != 0,
-        "Couldn't find kernel build state for device {}.",
-        device_id);
     uint32_t state_idx = get_build_index_and_state_count(programmable_core, processor_class).first + processor_id;
-    return *device_id_to_kernel_build_states_[device_id][state_idx];
+    return *get_device_build_env(device_id).kernel_build_states[state_idx];
 }
 
 JitBuildStateSubset BuildEnvManager::get_kernel_build_states(
     chip_id_t device_id, uint32_t programmable_core, uint32_t processor_class) {
-    TT_ASSERT(
-        device_id_to_kernel_build_states_.count(device_id) != 0,
-        "Couldn't find kernel build state for device {}.",
-        device_id);
     std::pair<int, int> b_id_and_count = get_build_index_and_state_count(programmable_core, processor_class);
     JitBuildStateSubset subset = {
-        &device_id_to_kernel_build_states_[device_id][b_id_and_count.first], b_id_and_count.second};
+        &get_device_build_env(device_id).kernel_build_states[b_id_and_count.first], b_id_and_count.second};
     return subset;
 }
 
@@ -251,14 +249,8 @@ std::pair<int, int> BuildEnvManager::get_build_index_and_state_count(
 }
 
 void BuildEnvManager::build_firmware(chip_id_t device_id) {
-    TT_ASSERT(
-        device_id_to_firmware_build_states_.count(device_id) != 0,
-        "Couldn't find firmware build state for device {}.",
-        device_id);
-    log_debug(tt::LogMetal, "Building base firmware for device {}", device_id);
     ZoneScoped;
-
-    jit_build_set(device_id_to_firmware_build_states_[device_id], nullptr);
+    jit_build_set(get_device_build_env(device_id).firmware_build_states, nullptr);
 }
 
 }  // namespace tt::tt_metal
