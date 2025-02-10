@@ -164,17 +164,18 @@ RUN mkdir -p /tmp/xtensor \
     && make -C /tmp/xtensor/build install \
     && rm -rf /tmp/xtensor
 
-ARG XTENSOR_BLAS_VERSION=0.21.0
-RUN mkdir -p /tmp/xtensor_blas \
-    && wget -O /tmp/xtensor_blas/xtensor_blas-${XTENSOR_BLAS_VERSION}.tar.gz "https://github.com/xtensor-stack/xtensor-blas/archive/refs/tags/${XTENSOR_BLAS_VERSION}.tar.gz" \
-    && tar -xzf /tmp/xtensor_blas/xtensor_blas-${XTENSOR_BLAS_VERSION}.tar.gz -C /tmp/xtensor_blas --strip-components=1 \
-    && cmake \
-         -S /tmp/xtensor_blas \
-         -B /tmp/xtensor_blas/build \
-         -DCMAKE_BUILD_TYPE=Release \
-    && make -C /tmp/xtensor_blas/build -j$(nproc) \
-    && make -C /tmp/xtensor_blas/build install \
-    && rm -rf /tmp/xtensor_blas
+# Issue arises - No blas
+#ARG XTENSOR_BLAS_VERSION=0.21.0
+#RUN mkdir -p /tmp/xtensor_blas \
+#    && wget -O /tmp/xtensor_blas/xtensor_blas-${XTENSOR_BLAS_VERSION}.tar.gz "https://github.com/xtensor-stack/xtensor-blas/archive/refs/tags/${XTENSOR_BLAS_VERSION}.tar.gz" \
+#    && tar -xzf /tmp/xtensor_blas/xtensor_blas-${XTENSOR_BLAS_VERSION}.tar.gz -C /tmp/xtensor_blas --strip-components=1 \
+#    && cmake \
+#         -S /tmp/xtensor_blas \
+#         -B /tmp/xtensor_blas/build \
+#         -DCMAKE_BUILD_TYPE=Release \
+#    && make -C /tmp/xtensor_blas/build -j$(nproc) \
+#    && make -C /tmp/xtensor_blas/build install \
+#    && rm -rf /tmp/xtensor_blas
 
 ARG DOXYGEN_VERSION=1.9.6
 RUN mkdir -p /tmp/doxygen \
