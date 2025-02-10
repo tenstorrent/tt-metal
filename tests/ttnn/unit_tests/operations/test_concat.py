@@ -210,36 +210,19 @@ def test_sharded_concat(device, inputs, output_shard_shape, shard_grid, strategy
 @pytest.mark.parametrize("dim", [3])
 @pytest.mark.parametrize("groups", [1, 2, 4])
 @pytest.mark.parametrize(
-    "input_shapes, output_shape, core_grid",
+    "input_shapes, output_shape, core_grid, layout",
     (
-        (
-            ((1, 1, 1, 32), (1, 1, 1, 32)),
-            (1, 1, 1, 64),
-            ttnn.CoreGrid(x=1, y=1),
-        ),
-        (
-            ((1, 1, 1, 32), (1, 1, 1, 64)),
-            (1, 1, 1, 96),
-            ttnn.CoreGrid(x=1, y=1),
-        ),
-        (
-            ((1, 1, 1, 64), (1, 1, 1, 32)),
-            (1, 1, 1, 96),
-            ttnn.CoreGrid(x=1, y=1),
-        ),
-        (
-            ((1, 1, 1024, 64), (1, 1, 1024, 32)),
-            (1, 1, 1024, 96),
-            ttnn.CoreGrid(x=4, y=1),
-        ),
-        (
-            ((1, 1, 256, 64), (1, 1, 256, 128)),
-            (1, 1, 256, 192),
-            ttnn.CoreGrid(x=8, y=1),
-        ),
+        (((1, 1, 1, 32), (1, 1, 1, 32)), (1, 1, 1, 64), ttnn.CoreGrid(x=1, y=1), ttnn.ROW_MAJOR_LAYOUT),
+        (((1, 1, 1, 32), (1, 1, 1, 64)), (1, 1, 1, 96), ttnn.CoreGrid(x=1, y=1), ttnn.ROW_MAJOR_LAYOUT),
+        (((1, 1, 1, 64), (1, 1, 1, 32)), (1, 1, 1, 96), ttnn.CoreGrid(x=1, y=1), ttnn.ROW_MAJOR_LAYOUT),
+        (((1, 1, 1024, 64), (1, 1, 1024, 32)), (1, 1, 1024, 96), ttnn.CoreGrid(x=4, y=1), ttnn.ROW_MAJOR_LAYOUT),
+        (((1, 1, 256, 64), (1, 1, 256, 128)), (1, 1, 256, 192), ttnn.CoreGrid(x=8, y=1), ttnn.ROW_MAJOR_LAYOUT),
+        (((1, 1, 32, 64), (1, 1, 32, 64)), (1, 1, 32, 128), ttnn.CoreGrid(x=1, y=1), ttnn.TILE_LAYOUT),
+        (((1, 1, 256, 64), (1, 1, 256, 128)), (1, 1, 256, 192), ttnn.CoreGrid(x=8, y=1), ttnn.TILE_LAYOUT),
+        (((1, 1, 512, 64), (1, 1, 512, 128)), (1, 1, 512, 192), ttnn.CoreGrid(x=8, y=1), ttnn.TILE_LAYOUT),
     ),
 )
-def test_sharded_concat_with_groups(device, input_shapes, output_shape, dim, groups, core_grid):
+def test_sharded_concat_with_groups(device, input_shapes, output_shape, dim, groups, core_grid, layout):
     torch_input_tensors = [torch.full(shapes, idx + 1, dtype=torch.bfloat16) for idx, shapes in enumerate(input_shapes)]
 
     expected = ttnn.concat.golden_function(torch_input_tensors, dim, groups)

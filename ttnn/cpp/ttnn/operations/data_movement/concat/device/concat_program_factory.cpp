@@ -132,19 +132,24 @@ tt_metal::operation::ProgramWithCallbacks s2s_tiled_concat_two_tensors_height_mu
     const auto bf16_data_format = tt::tt_metal::datatype_to_dataformat_converter(DataType::BFLOAT16);
     const auto bf16_tile_size = tt::tt_metal::detail::TileSize(bf16_data_format);
 
+    const auto in0_total_tiles_width = std::get<1>(num_tiles_for_each_input_shard[0]);
     const uint32_t cb_input0_transpose_id = cb_inputs.size() + 1;
-    CBHandle cb_input0_transpose =
-        create_circular_buffer(cb_input0_transpose_id, 2, bf16_tile_size, bf16_data_format, nullptr);
+    CBHandle cb_input0_transpose = create_circular_buffer(
+        cb_input0_transpose_id, in0_total_tiles_width, bf16_tile_size, bf16_data_format, nullptr);
 
+    const auto in1_total_tiles_width = std::get<1>(num_tiles_for_each_input_shard[1]);
     const uint32_t cb_input1_transpose_id = cb_inputs.size() + 2;
-    CBHandle cb_input1_transpose =
-        create_circular_buffer(cb_input1_transpose_id, 2, bf16_tile_size, bf16_data_format, nullptr);
+    CBHandle cb_input1_transpose = create_circular_buffer(
+        cb_input1_transpose_id, in1_total_tiles_width, bf16_tile_size, bf16_data_format, nullptr);
 
+    const auto out_total_tiles_width = in0_total_tiles_width + in1_total_tiles_width;
     const uint32_t cb_concat_id = cb_inputs.size() + 3;
-    CBHandle cb_concat = create_circular_buffer(cb_concat_id, 4, bf16_tile_size, bf16_data_format, nullptr);
+    CBHandle cb_concat =
+        create_circular_buffer(cb_concat_id, out_total_tiles_width, bf16_tile_size, bf16_data_format, nullptr);
 
     const uint32_t cb_output_transpose_id = cb_inputs.size() + 4;
-    CBHandle cb_output_transpose = create_circular_buffer(cb_output_transpose_id, 4, tile_size, data_format, nullptr);
+    CBHandle cb_output_transpose =
+        create_circular_buffer(cb_output_transpose_id, out_total_tiles_width, tile_size, data_format, nullptr);
 
     const bool is_rm_shard_orientation = output.shard_spec()->orientation == ShardOrientation::ROW_MAJOR;
     const auto cores = corerange_to_cores(all_cores, std::nullopt, is_rm_shard_orientation);
