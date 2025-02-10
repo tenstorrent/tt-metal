@@ -335,6 +335,8 @@ const MeshDeviceView& MeshDevice::get_view() const {
 }
 
 MeshDeviceID MeshDevice::id() const { return mesh_id_; }
+// For a mesh, build id is the same as the device id for the reference device
+chip_id_t MeshDevice::build_id() const { return reference_device()->id(); }
 
 bool MeshDevice::is_parent_mesh() const { return parent_mesh_.expired(); }
 

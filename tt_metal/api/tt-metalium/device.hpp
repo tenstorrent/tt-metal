@@ -67,6 +67,7 @@ public:
     virtual tt::ARCH arch() const = 0;
 
     virtual chip_id_t id() const = 0;
+    virtual chip_id_t build_id() const = 0;
 
     virtual uint8_t num_hw_cqs() const = 0;
 

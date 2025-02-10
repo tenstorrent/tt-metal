@@ -229,10 +229,10 @@ bool send_over_eth(
     // TODO: this should be updated to use kernel api
     uint32_t active_eth_index = hal.get_programmable_core_type_index(HalProgrammableCoreType::ACTIVE_ETH);
     auto sender_firmware_path = BuildEnvManager::get_instance()
-                                    .get_firmware_build_state(sender_device->id(), active_eth_index, 0, 0)
+                                    .get_firmware_build_state(sender_device->build_id(), active_eth_index, 0, 0)
                                     .get_target_out_path("");
     auto receiver_firmware_path = BuildEnvManager::get_instance()
-                                      .get_firmware_build_state(receiver_device->id(), active_eth_index, 0, 0)
+                                      .get_firmware_build_state(receiver_device->build_id(), active_eth_index, 0, 0)
                                       .get_target_out_path("");
     const ll_api::memory& binary_mem_send = llrt::get_risc_binary(sender_firmware_path);
     const ll_api::memory& binary_mem_receive = llrt::get_risc_binary(receiver_firmware_path);
