@@ -169,37 +169,37 @@ RunningStatistics::RunningStatisticsProgramFactory::create(
     uint32_t b_num_tiles_per_cb = num_tiles_per_cb;
 
     // Input buffers
-    auto [a_cb, a_cb_handle] = create_cb(
+    auto [batch_mean_tensor_cb, batch_mean_tensor_cb_handle] = create_cb(
         tt::CBIndex::c_0,
         program,
         all_device_cores,
         a_single_tile_size,
         num_tiles_per_cb,
         a_data_format);  // batch_mean
-    auto [b_cb, b_cb_handle] = create_cb(
+    auto [batch_var_tensor_cb, batch_var_tensor_cb_handle] = create_cb(
         tt::CBIndex::c_1,
         program,
         all_device_cores,
         b_single_tile_size,
         b_num_tiles_per_cb,
         b_data_format);  // batch_var
-    auto [c_cb, c_cb_handle] = create_cb(
+    auto [output_tensor_cb, output_tensor_cb_handle] = create_cb(
         tt::CBIndex::c_2, program, all_device_cores, c_single_tile_size, num_tiles_per_cb, c_data_format);  // output
-    auto [d_cb, d_cb_handle] = create_cb(
+    auto [old_running_mean_tensor_cb, old_running_mean_tensor_cb_handle] = create_cb(
         tt::CBIndex::c_3,
         program,
         all_device_cores,
         d_single_tile_size,
         b_num_tiles_per_cb,
         d_data_format);  // old running mean
-    auto [e_cb, e_cb_handle] = create_cb(
+    auto [old_running_var_tensor_cb, old_running_var_tensor_cb_handle] = create_cb(
         tt::CBIndex::c_4,
         program,
         all_device_cores,
         e_single_tile_size,
         b_num_tiles_per_cb,
         e_data_format);  // old running var
-    auto [f_cb, f_cb_handle] = create_cb(
+    auto [momentum_cb, momentum_cb_handle] = create_cb(
         tt::CBIndex::c_5,
         program,
         all_device_cores,
@@ -284,38 +284,40 @@ RunningStatistics::RunningStatisticsProgramFactory::create(
     bool fp32_dest_acc_en = c_data_format == tt::DataFormat::UInt32 || c_data_format == tt::DataFormat::Int32 ||
                             c_data_format == tt::DataFormat::Float32;
 
-    uint32_t src_batch_mean_cb_index = tt::CBIndex::c_0;
-    uint32_t src_batch_var_cb_index = tt::CBIndex::c_1;
-    uint32_t src_momentum_cb_index = tt::CBIndex::c_5;
-    uint32_t src_one_cb_index = tt::CBIndex::c_6;
-    uint32_t src_temp_1_cb_index = tt::CBIndex::c_21;
-    uint32_t src_temp_2_cb_index = tt::CBIndex::c_22;
-    uint32_t src_temp_3_cb_index = tt::CBIndex::c_23;
-    uint32_t src_updated_running_mean_cb_index = tt::CBIndex::c_27;
-    uint32_t src_old_running_mean_cb_index = tt::CBIndex::c_3;
-    uint32_t src_updated_running_var_cb_index = tt::CBIndex::c_28;
-    uint32_t src_old_running_var_cb_index = tt::CBIndex::c_4;
-
     std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
     if (fp32_dest_acc_en) {
         for (const auto cb_index :
-             {src_batch_mean_cb_index,
-              src_batch_var_cb_index,
-              src_momentum_cb_index,
-              src_one_cb_index,
-              src_temp_1_cb_index,
-              src_temp_2_cb_index,
-              src_temp_3_cb_index,
-              src_updated_running_mean_cb_index,
-              src_old_running_mean_cb_index,
-              src_updated_running_var_cb_index,
-              src_old_running_var_cb_index}) {
+             {batch_mean_tensor_cb,
+              batch_var_tensor_cb,
+              output_tensor_cb,
+              old_running_mean_tensor_cb,
+              old_running_var_tensor_cb,
+              updated_m_cb,
+              updated_v_cb,
+              momentum_cb,
+              one_cb,
+              tmp1_cb,
+              tmp2_cb,
+              tmp3_cb}) {
             unpack_to_dest_mode[cb_index] = UnpackToDestMode::UnpackToDestFp32;
         }
     }
 
     std::vector<uint32_t> compute_kernel_args = {
-        static_cast<uint32_t>(running_mean_has_value), static_cast<uint32_t>(running_var_has_value)};
+        static_cast<uint32_t>(running_mean_has_value),
+        static_cast<uint32_t>(running_var_has_value),
+        batch_mean_tensor_cb,
+        batch_var_tensor_cb,
+        output_tensor_cb,
+        old_running_mean_tensor_cb,
+        old_running_var_tensor_cb,
+        updated_m_cb,
+        updated_v_cb,
+        momentum_cb,
+        one_cb,
+        tmp1_cb,
+        tmp2_cb,
+        tmp3_cb};
     auto compute_kernel_id = tt_metal::CreateKernel(
         program,
         fmt::format(
