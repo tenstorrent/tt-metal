@@ -278,6 +278,12 @@ RunningStatistics::RunningStatisticsProgramFactory::create(
                 e_is_dram,
                 static_cast<uint32_t>(running_mean_has_value),
                 static_cast<uint32_t>(running_var_has_value),
+                batch_var_tensor_cb,
+                output_tensor_cb,
+                old_running_mean_tensor_cb,
+                old_running_var_tensor_cb,
+                updated_m_cb,
+                updated_v_cb,
             },
             std::move(writer_defines)));
 
