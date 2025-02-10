@@ -8,23 +8,34 @@
 
 namespace tt::tt_metal {
 
+using BuildIndexAndTypeCount = std::pair<int, int>;            // Build index and processor type count
+using ProcClassMapping = std::vector<BuildIndexAndTypeCount>;  // Processor class to BuildIndexAndTypeCount
+using ProgCoreMapping =
+    std::vector<ProcClassMapping>;  // Programmable core and processor class to BuildIndexAndTypeCount
+
+// A struct to hold device-specific build environment
+struct DeviceBuildEnv {
+    uint32_t build_key = 0;
+    JitBuildEnv build_env;
+    JitBuildStateSet firmware_build_states;
+    JitBuildStateSet kernel_build_states;
+};
+
 // Singleton class to generate and hold build environments, build keys, and build states.
 class BuildEnvManager {
 public:
     BuildEnvManager(const BuildEnvManager&) = delete;
     BuildEnvManager& operator=(const BuildEnvManager&) = delete;
-    static BuildEnvManager& get_instance() {
-        static BuildEnvManager instance;
-        return instance;
-    }
+    static BuildEnvManager& get_instance();
 
     // Add a new build environment for the corresponding device id and num_hw_cqs. Also generates the build key and
     // build states.
     void add_build_env(chip_id_t device_id, uint8_t num_hw_cqs);
 
     // Getter functions for build envs/keys/states
-    const JitBuildEnv& get_build_env(chip_id_t device_id);
-    uint32_t get_build_key(chip_id_t device_id);
+    const DeviceBuildEnv& get_device_build_env(chip_id_t device_id);
+
+    // Helper functions to extract build states from the build env.
     const JitBuildState& get_firmware_build_state(
         chip_id_t device_id, uint32_t programmable_core, uint32_t processor_class, int processor_id);
     const JitBuildState& get_kernel_build_state(
@@ -36,20 +47,17 @@ public:
 
     // Helper function to get the unique build id and number of states for a given programmable_core and
     // processor_class.
-    std::pair<int, int> get_build_index_and_state_count(uint32_t programmable_core, uint32_t processor_class);
+    BuildIndexAndTypeCount get_build_index_and_state_count(uint32_t programmable_core, uint32_t processor_class);
 
 private:
     BuildEnvManager();
     ~BuildEnvManager() = default;
 
-    std::unordered_map<chip_id_t, JitBuildEnv> device_id_to_build_env_;
-    std::unordered_map<chip_id_t, uint32_t> device_id_to_build_key_;
-    std::unordered_map<chip_id_t, JitBuildStateSet> device_id_to_firmware_build_states_;
-    std::unordered_map<chip_id_t, JitBuildStateSet> device_id_to_kernel_build_states_;
+    std::unordered_map<chip_id_t, DeviceBuildEnv> device_id_to_build_env_;
 
     // A device-agnostic mapping from programmable_core_type and processor_class to unique index + processor_type_count.
     // TODO: processor_type_count can be looked up in the hal, do we need this in here?
-    std::vector<std::vector<std::pair<int, int>>> build_state_indices_;
+    ProgCoreMapping build_state_indices_;
 };
 
 }  // namespace tt::tt_metal
