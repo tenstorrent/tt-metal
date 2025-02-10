@@ -340,8 +340,14 @@ def _golden_function(tensor, *args, **kwargs):
 
 
 sharded_to_torch_list_doc = """
-Takes in a sharded ttnn.Tensor and returns the equivalent list of pytorch tensors.
+Takes in a sharded 'ttnn.Tensor' and returns the equivalent list of pytorch tensors.
 
+Args:
+    * :attr:'tensor': the ttnn.Tensor to be converted into python tensors
+
+Example::
+    >>> ttnn_tensor = ttnn.from_torch(torch.randn((2,3)), dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper)
+    >>> ttnn.sharded_tensor_to_torch_tensor_list(ttnn_tensor)
 """
 
 
