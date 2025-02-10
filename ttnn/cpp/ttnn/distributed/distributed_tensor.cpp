@@ -2,150 +2,25 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <algorithm>
-
-#include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
-#include <tt-metalium/assert.hpp>
-#include "ttnn/distributed/distributed_tensor_config.hpp"
-#include "ttnn/distributed/types.hpp"
-#include "ttnn/tensor/xtensor/partition.hpp"
+#include "tt-metalium/assert.hpp"
 
 namespace ttnn::distributed {
-namespace {
 
-class ReplicateTensorToMesh : public TensorToMesh {
-public:
-    ReplicateTensorToMesh(size_t num_devices) : num_devices_(num_devices) {}
+std::vector<Tensor> TensorToMesh::map(const Tensor& tensor) const {
+    // This function should never be called directly, it's just to satisfy the linker
+    TT_THROW("Pure virtual function 'map' called - please use or define concrete implementations instead.");
+}
 
-    std::vector<Tensor> map(const Tensor& tensor) const override {
-        std::vector<Tensor> tensors;
-        tensors.reserve(num_devices_);
-        std::fill_n(std::back_inserter(tensors), num_devices_, tensor);
-        return tensors;
-    }
+tt::tt_metal::DistributedTensorConfig TensorToMesh::config() const {
+    // This function should never be called directly, it's just to satisfy the linker
+    TT_THROW("Pure virtual function 'config' called - please use or define concrete implementations instead.");
+}
 
-    tt::tt_metal::DistributedTensorConfig config() const override {
-        return tt::tt_metal::DistributedTensorConfig{ReplicateTensor{num_devices_}};
-    }
-
-private:
-    size_t num_devices_ = 0;
-};
-
-class ShardTensorToMesh : public TensorToMesh {
-public:
-    ShardTensorToMesh(size_t num_devices, int dim) : num_devices_(num_devices), shard_dim_(dim) {}
-
-    std::vector<Tensor> map(const Tensor& tensor) const override {
-        return experimental::xtensor::chunk(tensor, num_devices_, shard_dim_);
-    }
-
-    tt::tt_metal::DistributedTensorConfig config() const override {
-        return tt::tt_metal::DistributedTensorConfig{ShardTensor{shard_dim_}};
-    }
-
-private:
-    size_t num_devices_ = 0;
-    int shard_dim_ = -1;
-};
-
-class ShardTensorTo2dMesh : public TensorToMesh {
-public:
-    ShardTensorTo2dMesh(size_t mesh_rows, size_t mesh_cols, const Shard2dConfig& config) :
-        mesh_rows_(mesh_rows), mesh_cols_(mesh_cols), config_(config) {}
-
-    std::vector<Tensor> map(const Tensor& tensor) const override {
-        const auto [row_dim, col_dim] = config_;
-
-        std::vector<Tensor> row_tensors;
-
-        // Shard along rows
-        if (!row_dim.has_value()) {
-            row_tensors.reserve(mesh_rows_);
-            for (int i = 0; i < mesh_rows_; ++i) {
-                row_tensors.push_back(tensor);
-            }
-        } else {
-            row_tensors = experimental::xtensor::chunk(tensor, mesh_rows_, *row_dim);
-        }
-
-        std::vector<Tensor> tensor_shards;
-        tensor_shards.reserve(mesh_rows_ * mesh_cols_);
-        // Shard along columns
-        if (!col_dim.has_value()) {
-            for (const auto& t : row_tensors) {
-                for (int i = 0; i < mesh_cols_; ++i) {
-                    tensor_shards.push_back(t);
-                }
-            }
-        } else {
-            for (const auto& t : row_tensors) {
-                auto col_chunks = experimental::xtensor::chunk(t, mesh_cols_, *col_dim);
-                tensor_shards.insert(tensor_shards.end(), col_chunks.begin(), col_chunks.end());
-            }
-        }
-
-        TT_FATAL(
-            static_cast<int>(tensor_shards.size()) == mesh_rows_ * mesh_cols_,
-            "ShardTensorTo2dMesh: Sharding failed. Number of shards should match the product of the mesh "
-            "dimensions. Size: {}, rows: {}, cols: {}",
-            tensor_shards.size(),
-            mesh_rows_,
-            mesh_cols_);
-
-        return tensor_shards;
-    }
-
-    tt::tt_metal::DistributedTensorConfig config() const override {
-        return DistributedTensorConfig{ShardTensor2D{ShardMesh{mesh_rows_, mesh_cols_}}};
-    }
-
-private:
-    size_t mesh_rows_ = 0;
-    size_t mesh_cols_ = 0;
-    Shard2dConfig config_;
-};
-
-class ConcatMeshToTensor : public MeshToTensor {
-public:
-    ConcatMeshToTensor(int dim) : concat_dim_(dim) {}
-
-    Tensor compose(const std::vector<Tensor>& tensors) const override {
-        return experimental::xtensor::concat(tensors, concat_dim_);
-    }
-
-private:
-    int concat_dim_ = -1;
-};
-
-class Concat2dMeshToTensor : public MeshToTensor {
-public:
-    Concat2dMeshToTensor(size_t mesh_rows, size_t mesh_cols, const Concat2dConfig& config) :
-        mesh_rows_(mesh_rows), mesh_cols_(mesh_cols), config_(config) {}
-
-    Tensor compose(const std::vector<Tensor>& tensors) const override {
-        const auto [row_dim, col_dim] = config_;
-
-        std::vector<Tensor> row_concatenated;
-        row_concatenated.reserve(mesh_rows_);
-        for (int i = 0; i < mesh_rows_; ++i) {
-            auto row_start = tensors.begin() + i * mesh_cols_;
-            auto row_end = row_start + mesh_cols_;
-            std::vector<Tensor> row_tensors(row_start, row_end);
-            row_concatenated.push_back(experimental::xtensor::concat(row_tensors, col_dim));
-        }
-
-        return experimental::xtensor::concat(row_concatenated, row_dim);
-    }
-
-private:
-    size_t mesh_rows_ = 0;
-    size_t mesh_cols_ = 0;
-    Concat2dConfig config_;
-};
-
-}  // namespace
+Tensor MeshToTensor::compose(const std::vector<Tensor>& tensors) const {
+    // This function should never be called directly, it's just to satisfy the linker
+    TT_THROW("Pure virtual function 'compose' called  - please use or define concrete implementations instead.");
+}
 
 std::unique_ptr<TensorToMesh> replicate_tensor_to_mesh_mapper(MeshDevice& mesh_device) {
     return std::make_unique<ReplicateTensorToMesh>(mesh_device.num_devices());
