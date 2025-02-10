@@ -69,10 +69,7 @@ operation::ProgramWithCallbacks fill_pad_multi_core(const Tensor& input_tensor, 
         padded_height / tt::constants::TILE_HEIGHT * padded_width / tt::constants::TILE_HEIGHT;
     uint32_t tiles_per_tile_row = padded_width / tt::constants::TILE_HEIGHT;
 
-    bool sharded = false;
-    if (input_tensor.memory_config().memory_layout != TensorMemoryLayout::INTERLEAVED) {
-        sharded = true;
-    }
+    bool sharded = input_tensor.memory_config().memory_layout != TensorMemoryLayout::INTERLEAVED;
 
     // create kernel
     // reader compile time args

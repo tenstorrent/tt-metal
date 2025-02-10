@@ -27,12 +27,8 @@ def create_nd_padded_tiled_tensor(shape, tile_size, fill_value, dtype):
     # Create a tensor with random values
     if dtype == torch.float32:
         tensor = torch_random(shape, -15.0, 15.0, dtype=dtype)
-        # create tensor where the value is just incrementing per index:: 2D ONLY
-        # tensor = torch.arange(0, shape[-2] * shape[-1], dtype=dtype).reshape(shape)
     else:
         tensor = torch.randint(0, 10, shape, dtype=dtype)
-        # create tensor where the value is just incrementing per index
-        # tensor = torch.arange(0, shape[-2] * shape[-1], dtype=dtype).reshape(shape)
 
     # Calculate the padded sizes for the last two dimensions
     padded_shape = list(shape)
