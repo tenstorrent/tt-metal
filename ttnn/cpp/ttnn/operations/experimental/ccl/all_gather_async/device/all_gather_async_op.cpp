@@ -145,7 +145,7 @@ AllGatherAsyncVersion AllGatherAsync::select_version(const Tensor& input_tensor)
     log_trace(tt::LogOp, "[select_version] output_is_sharded: {}", output_is_sharded);
 
     if (input_is_sharded && output_is_sharded) {
-        // Check for first llama post binary matmul case
+        // Check for llama post binary mult+silu case
         if (input_tensor_shape[0] == 1 && input_tensor_shape[1] == 1 && input_tensor_shape[2] == 32 &&
             input_tensor_shape[3] == 960 && input_tensor_memory_config.buffer_type == BufferType::L1 &&
             output_mem_config.buffer_type == BufferType::L1 &&
@@ -156,10 +156,13 @@ AllGatherAsyncVersion AllGatherAsync::select_version(const Tensor& input_tensor)
             output_mem_config.shard_spec->shape[0] == 32 &&
             output_mem_config.shard_spec->shape[1] == 160 && input_shard_num_cores == 30 &&
             output_shard_num_cores == 24) {
-            return AllGatherAsyncVersion::LLAMA_POST_BINARY_MATMUL;
+            log_trace(
+                tt::LogOp,
+                "Matching conditions for Llama post binary mult+silu, using LLAMA_MINIMAL_SHARDED implementation");
+            return AllGatherAsyncVersion::LLAMA_MINIMAL_SHARDED;
         }
 
-        // Check for second llama post binary matmul case
+        // Check for llama post SDPA case
         if (input_tensor_shape[0] == 1 && input_tensor_shape[1] == 8 && input_tensor_shape[2] == 32 &&
             input_tensor_shape[3] == 128 && input_tensor_memory_config.buffer_type == BufferType::L1 &&
             output_mem_config.buffer_type == BufferType::L1 &&
@@ -170,11 +173,26 @@ AllGatherAsyncVersion AllGatherAsync::select_version(const Tensor& input_tensor)
             output_mem_config.shard_spec->shape[0] == 32 &&
             output_mem_config.shard_spec->shape[1] == 128 && input_shard_num_cores == 8 &&
             output_shard_num_cores == 32) {
-            log_trace(tt::LogOp, "All conditions matched for LLAMA_POST_BINARY_MATMUL case");
-            return AllGatherAsyncVersion::LLAMA_POST_BINARY_MATMUL;
+            log_trace(tt::LogOp, "Matching conditions for Llama post SDPA, using LLAMA_MINIMAL_SHARDED implementation");
+            return AllGatherAsyncVersion::LLAMA_MINIMAL_SHARDED;
+        }
+
+        // Check for llama rms norm case
+        if (input_tensor_shape[0] == 1 && input_tensor_shape[1] == 1 && input_tensor_shape[2] == 32 &&
+            input_tensor_shape[3] == 32 && input_tensor_memory_config.buffer_type == BufferType::L1 &&
+            output_mem_config.buffer_type == BufferType::L1 &&
+            input_tensor_memory_config.memory_layout == TensorMemoryLayout::WIDTH_SHARDED &&
+            output_mem_config.memory_layout == TensorMemoryLayout::WIDTH_SHARDED &&
+            input_tensor_memory_config.shard_spec->shape[0] == 32 &&
+            input_tensor_memory_config.shard_spec->shape[1] == 32 && output_mem_config.shard_spec->shape[0] == 32 &&
+            output_mem_config.shard_spec->shape[1] == 128 && input_shard_num_cores == 1 &&
+            output_shard_num_cores == 1) {
+            log_trace(
+                tt::LogOp, "Matching conditions for Llama rms norm case, using LLAMA_MINIMAL_SHARDED implementation");
+            return AllGatherAsyncVersion::LLAMA_MINIMAL_SHARDED;
         }
     }
-    log_trace(tt::LogOp, "All conditions matched for generic case");
+    log_trace(tt::LogOp, "Using generic implementation");
     return AllGatherAsyncVersion::GENERIC;
 }
 
@@ -206,11 +224,9 @@ operation::ProgramWithCallbacks AllGatherAsync::create_program(
                 this->sub_device_id,
                 this->enable_persistent_fabric_mode);
 
-        case AllGatherAsyncVersion::LLAMA_POST_BINARY_MATMUL:
-            log_trace(
-                tt::LogOp,
-                "Detected all gather specialized shape. all_gather_async_llama_post_binary_matmul is called");
-            return all_gather_async_llama_post_binary_matmul(
+        case AllGatherAsyncVersion::LLAMA_MINIMAL_SHARDED:
+            log_trace(tt::LogOp, "Detected all gather specialized shape. all_gather_async_llama_sharded is called");
+            return all_gather_async_llama_sharded(
                 input_tensors[0],
                 this->forward_device,
                 this->backward_device,

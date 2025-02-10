@@ -175,6 +175,8 @@ public:
     // code that uses this CoreRangeSet.
     CoreRangeSet merge_ranges() const;
 
+    CoreRangeSet subtract(const CoreRangeSet& other) const;
+
 private:
     void validate_no_overlap();
 
