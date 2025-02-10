@@ -1,0 +1,1 @@
+../../../../models/demos/wormhole/stable_diffusion/tests/test_cross_attn_midblock_2d.py
