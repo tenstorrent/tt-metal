@@ -118,9 +118,7 @@ void mcast_contig_pages_to_noc_address(
         pkt_hdr
             .to_chip_multicast(
                 tt::fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(forward_direction_num_hops)})
-            .to_noc_unicast_write(tt::fabric::NocUnicastCommandHeader{
-                noc0_dest_addr,
-                packet_send_size_bytes});
+            .to_noc_unicast_write(tt::fabric::NocUnicastCommandHeader{noc0_dest_addr}, packet_send_size_bytes);
         forward_fabric_sender.wait_for_empty_write_slot();
         forward_fabric_sender.send_payload_flush_blocking_from_address(l1_read_addr, packet_send_size_bytes);
     }
@@ -131,9 +129,7 @@ void mcast_contig_pages_to_noc_address(
         pkt_hdr
             .to_chip_multicast(
                 tt::fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(backward_direction_num_hops)})
-            .to_noc_unicast_write(tt::fabric::NocUnicastCommandHeader{
-                noc0_dest_addr,
-                packet_send_size_bytes});
+            .to_noc_unicast_write(tt::fabric::NocUnicastCommandHeader{noc0_dest_addr}, packet_send_size_bytes);
         backward_fabric_sender.wait_for_empty_write_slot();
         backward_fabric_sender.send_payload_non_blocking_from_address(l1_read_addr, packet_send_size_bytes);
     }
