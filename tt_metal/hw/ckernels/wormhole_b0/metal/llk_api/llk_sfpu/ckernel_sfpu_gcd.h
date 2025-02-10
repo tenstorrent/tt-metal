@@ -23,8 +23,8 @@ inline void calculate_sfpu_gcd(const uint dst_offset)
         TT_SFPLOAD(p_sfpu::LREG1, 4, 3, dst_offset * dst_tile_size); // b
         TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG2, 0); // sa
         TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG3, 0); // sb
-        TT_SFPABS(0, p_sfpu::LREG0, p_sfpu::LREG0, 0);
-        TT_SFPABS(0, p_sfpu::LREG1, p_sfpu::LREG1, 0);
+        TTI_SFPABS(0, p_sfpu::LREG0, p_sfpu::LREG0, 0);
+        TTI_SFPABS(0, p_sfpu::LREG1, p_sfpu::LREG1, 0);
 
         // Emulate ctz instruction by counting trailing zeroes using a series of bit masks.
         // There is a maximum of 31 trailing zero bits.  The value 31 can be represented with 5 bits.
@@ -40,28 +40,28 @@ inline void calculate_sfpu_gcd(const uint dst_offset)
             // l4 = mask
             TT_SFPLOADI(p_sfpu::LREG4, 2, mask);
             // l4 &= a
-            TT_SFPAND(0, p_sfpu::LREG0, p_sfpu::LREG4, 0);
+            TTI_SFPAND(0, p_sfpu::LREG0, p_sfpu::LREG4, 0);
             // if (a & mask) == 0
-            TT_SFPSETCC(0, p_sfpu::LREG4, 0, 6);
+            TTI_SFPSETCC(0, p_sfpu::LREG4, 0, 6);
             // then, a >>= mask_width
             TT_SFPSHFT((-mask_width) & ((1<<12)-1), p_sfpu::LREG0, p_sfpu::LREG0, 1);
             // sa += mask_width
             TT_SFPLOADI(p_sfpu::LREG4, 2, mask_width);
-            TT_SFPOR(0, p_sfpu::LREG4, p_sfpu::LREG2, 0);
-            TT_SFPENCC(0, 0, 0, 0);
+            TTI_SFPOR(0, p_sfpu::LREG4, p_sfpu::LREG2, 0);
+            TTI_SFPENCC(0, 0, 0, 0);
 
             // l4 = mask
             TT_SFPLOADI(p_sfpu::LREG4, 2, mask);
             // l4 &= b
-            TT_SFPAND(0, p_sfpu::LREG1, p_sfpu::LREG4, 0);
+            TTI_SFPAND(0, p_sfpu::LREG1, p_sfpu::LREG4, 0);
             // if (b & mask) == 0
-            TT_SFPSETCC(0, p_sfpu::LREG4, 0, 6);
+            TTI_SFPSETCC(0, p_sfpu::LREG4, 0, 6);
             // then, b >>= mask_width
             TT_SFPSHFT((-mask_width) & ((1<<12)-1), p_sfpu::LREG1, p_sfpu::LREG1, 1);
             // sb += mask_width
             TT_SFPLOADI(p_sfpu::LREG4, 2, mask_width);
-            TT_SFPOR(0, p_sfpu::LREG4, p_sfpu::LREG3, 0);
-            TT_SFPENCC(0, 0, 0, 0);
+            TTI_SFPOR(0, p_sfpu::LREG4, p_sfpu::LREG3, 0);
+            TTI_SFPENCC(0, 0, 0, 0);
 
             mask_width >>= 1;
             mask >>= mask_width;
@@ -70,15 +70,15 @@ inline void calculate_sfpu_gcd(const uint dst_offset)
         // This is possibly a convoluted way to say: sa = min(sa, sb)
 
         // set sb = sa - sb
-        TT_SFPIADD(0, p_sfpu::LREG2, p_sfpu::LREG3, 8 | 2);
+        TTI_SFPIADD(0, p_sfpu::LREG2, p_sfpu::LREG3, 8 | 2);
         TTI_SFPNOP;
         // if (sa - sb) >= 0 then sa >= sb and we need to swap
         // now we do sb = sa - (sa - sb), which gives us the original sb
-        TT_SFPIADD(0, p_sfpu::LREG2, p_sfpu::LREG3, 4 | 2);
+        TTI_SFPIADD(0, p_sfpu::LREG2, p_sfpu::LREG3, 4 | 2);
         TTI_SFPNOP;
         // now just copy back to sa
-        TT_SFPMOV(0, p_sfpu::LREG3, p_sfpu::LREG2, 0);
-        TT_SFPENCC(0, 0, 0, 0);
+        TTI_SFPMOV(0, p_sfpu::LREG3, p_sfpu::LREG2, 0);
+        TTI_SFPENCC(0, 0, 0, 0);
 
         // The worst case for binary GCD with signed 32-bit integers requires 32 iterations.
 
@@ -88,19 +88,19 @@ inline void calculate_sfpu_gcd(const uint dst_offset)
             // a -= b
 
             // l4 = b
-            TT_SFPMOV(0, p_sfpu::LREG1, p_sfpu::LREG4, 0);
+            TTI_SFPMOV(0, p_sfpu::LREG1, p_sfpu::LREG4, 0);
             // l4 = a - b
-            TT_SFPIADD(0, p_sfpu::LREG0, p_sfpu::LREG4, 8 | 2);
+            TTI_SFPIADD(0, p_sfpu::LREG0, p_sfpu::LREG4, 8 | 2);
             TTI_SFPNOP;
             // if (a - b) >= 0 then that's the new value of a
-            TT_SFPMOV(0, p_sfpu::LREG4, p_sfpu::LREG0, 0);
+            TTI_SFPMOV(0, p_sfpu::LREG4, p_sfpu::LREG0, 0);
             // else we set b = a and set a = -l4
-            TT_SFPCOMPC(0, 0, 0, 0);
+            TTI_SFPCOMPC(0, 0, 0, 0);
             // set b = a
-            TT_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
+            TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
             // set a = abs(l4)
-            TT_SFPABS(0, p_sfpu::LREG4, p_sfpu::LREG0, 0);
-            TT_SFPENCC(0, 0, 0, 0);
+            TTI_SFPABS(0, p_sfpu::LREG4, p_sfpu::LREG0, 0);
+            TTI_SFPENCC(0, 0, 0, 0);
 
             // Again, we emulate ctz, but this time for a only, and we don't need to store the shift amount this time.
 
@@ -113,12 +113,12 @@ inline void calculate_sfpu_gcd(const uint dst_offset)
                 // l4 = mask
                 TT_SFPLOADI(p_sfpu::LREG4, 2, mask);
                 // l4 &= a
-                TT_SFPAND(0, p_sfpu::LREG0, p_sfpu::LREG4, 0);
+                TTI_SFPAND(0, p_sfpu::LREG0, p_sfpu::LREG4, 0);
                 // if (a & mask) == 0
-                TT_SFPSETCC(0, p_sfpu::LREG4, 0, 6);
+                TTI_SFPSETCC(0, p_sfpu::LREG4, 0, 6);
                 // then, a >>= mask_width
                 TT_SFPSHFT((-mask_width) & ((1<<12)-1), p_sfpu::LREG0, p_sfpu::LREG0, 1);
-                TT_SFPENCC(0, 0, 0, 0);
+                TTI_SFPENCC(0, 0, 0, 0);
 
                 mask_width >>= 1;
                 mask >>= mask_width;
@@ -126,8 +126,8 @@ inline void calculate_sfpu_gcd(const uint dst_offset)
         }
 
         //dst_reg[0] = a << sa;
-        TT_SFPSHFT(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);
-        TT_SFPSTORE(p_sfpu::LREG0, 4, 3, 0);
+        TTI_SFPSHFT(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);
+        TTI_SFPSTORE(p_sfpu::LREG0, 4, 3, 0);
         //dst_reg[0] = a;
         dst_reg++;
     }
