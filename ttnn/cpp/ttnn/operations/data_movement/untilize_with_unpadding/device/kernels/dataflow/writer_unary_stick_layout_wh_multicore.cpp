@@ -32,7 +32,6 @@ void kernel_main() {
                            uint32_t width_size,
                            uint32_t size_2d,
                            uint32_t single_block_size) {
-        uint32_t onetile = 1;
         bool has_rows = (num_rows) > 0;
 
         cb_wait_front(cb_id_out0, single_block_size * has_rows);
