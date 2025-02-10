@@ -10,8 +10,8 @@
 #include "compute_kernel_api/reconfig_data_format.h"
 #include "compute_kernel_api/cb_api.h"
 
-extern uint32_t* rta_l1_base;
-extern uint32_t* crta_l1_base;
+extern uint32_t tt_l1_ptr* rta_l1_base;
+extern uint32_t tt_l1_ptr* crta_l1_base;
 
 // clang-format off
 /**
