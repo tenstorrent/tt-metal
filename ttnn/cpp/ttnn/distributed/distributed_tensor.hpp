@@ -80,9 +80,9 @@ private:
     int shard_dim_ = -1;
 };
 
-class ShardTensorTo2dMesh : public TensorToMesh {
+class ShardTensor2dMesh : public TensorToMesh {
 public:
-    ShardTensorTo2dMesh(MeshDevice& mesh_device, const MeshShape& mesh_shape, const Shard2dConfig& config) :
+    ShardTensor2dMesh(MeshDevice& mesh_device, const MeshShape& mesh_shape, const Shard2dConfig& config) :
         mesh_shape_(mesh_shape), config_(config) {
         TT_FATAL(
             config.row_dim.has_value() || config.col_dim.has_value(),
@@ -93,7 +93,7 @@ public:
             "Device mesh shape does not match the provided mesh shape.");
     }
 
-    ShardTensorTo2dMesh(const MeshShape& mesh_shape, const Shard2dConfig& config) :
+    ShardTensor2dMesh(const MeshShape& mesh_shape, const Shard2dConfig& config) :
         mesh_shape_(mesh_shape), config_(config) {}
 
     std::vector<Tensor> map(const Tensor& tensor) const override {
@@ -130,7 +130,7 @@ public:
 
         TT_FATAL(
             static_cast<int>(tensor_shards.size()) == rows * cols,
-            "ShardTensorTo2dMesh: Sharding failed. Number of shards should match the product of the mesh "
+            "ShardTensor2dMesh: Sharding failed. Number of shards should match the product of the mesh "
             "dimensions. Size: {}, rows: {}, cols: {}",
             tensor_shards.size(),
             rows,
@@ -160,9 +160,9 @@ private:
     int concat_dim_ = -1;
 };
 
-class Concat2dMeshToTensor : public MeshToTensor {
+class ConcatMesh2dToTensor : public MeshToTensor {
 public:
-    Concat2dMeshToTensor(MeshDevice& mesh_device, const Concat2dConfig& config) :
+    ConcatMesh2dToTensor(MeshDevice& mesh_device, const Concat2dConfig& config) :
         mesh_shape_(mesh_device.shape()), config_(config) {}
 
     Tensor compose(const std::vector<Tensor>& tensors) const override {
