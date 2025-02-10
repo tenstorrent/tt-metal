@@ -19,7 +19,7 @@ namespace detail {
 constexpr bool is_associative(BinaryOpType op) {
     return op == BinaryOpType::ADD || op == BinaryOpType::MUL || op == BinaryOpType::EQ || op == BinaryOpType::NE ||
            op == BinaryOpType::LOGICAL_AND || op == BinaryOpType::LOGICAL_OR || op == BinaryOpType::LOGADDEXP ||
-           op == BinaryOpType::LOGADDEXP2 || op == BinaryOpType::LOGICAL_XOR;
+           op == BinaryOpType::LOGADDEXP2 || op == BinaryOpType::LOGICAL_XOR || op == BinaryOpType::GCD;
 }
 
 // Tensor - Scalar
@@ -455,6 +455,7 @@ template struct BinaryOperation<BinaryOpType::SQUARED_DIFFERENCE>;
 template struct BinaryOperation<BinaryOpType::DIV_FAST>;
 template struct BinaryOperation<BinaryOpType::BIAS_GELU>;
 template struct BinaryOperation<BinaryOpType::RSUB>;
+template struct BinaryOperation<BinaryOpType::GCD>;
 
 template struct RelationalBinary<BinaryOpType::EQ>;
 template struct RelationalBinary<BinaryOpType::NE>;

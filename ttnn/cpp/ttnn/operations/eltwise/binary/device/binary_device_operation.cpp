@@ -39,6 +39,7 @@ namespace utils {
         case BinaryOpType::LTE:
         case BinaryOpType::EQ:
         case BinaryOpType::NE: return (a == DataType::FLOAT32 && b == DataType::FLOAT32);
+        case BinaryOpType::GCD:
         case BinaryOpType::LEFT_SHIFT:
         case BinaryOpType::RIGHT_SHIFT:
         case BinaryOpType::BITWISE_XOR:

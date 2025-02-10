@@ -34,6 +34,7 @@ enum class BinaryOpType {
     RIGHT_SHIFT,
     QUANT,
     REQUANT,
-    DEQUANT
+    DEQUANT,
+    GCD
 };
 }
