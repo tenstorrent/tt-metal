@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <initializer_list>
 #include <optional>
+#include <ttnn/operations/eltwise/unary/unary.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/graph.hpp"
@@ -22,7 +23,7 @@ namespace ttml::ops {
 
 autograd::TensorPtr rmsnorm(const autograd::TensorPtr& tensor, const autograd::TensorPtr& gamma, float epsilon) {
     auto device = &autograd::ctx().get_device();
-    ttnn::Tensor squares = ttnn::square(tensor->get_value());               
+    ttnn::Tensor squares = ttnn::square(tensor->get_value());
     std::array<uint32_t, 4> eps_shape = {1, 1, 1, 1};
     ttnn::Tensor eps_tensor = core::from_vector({epsilon}, core::create_shape(eps_shape), device);
     ttnn::Tensor mean_of_squares = ttnn::mean(squares);
@@ -34,27 +35,33 @@ autograd::TensorPtr rmsnorm(const autograd::TensorPtr& tensor, const autograd::T
     auto out = autograd::create_tensor(out_tensor);
     out->set_value(out_tensor);
 
-    autograd::GradFunction grad = [tensor, gamma, out, eps_tensor]() {
+    autograd::GradFunction grad = [tensor, gamma, out, eps_tensor, device]() {
+        auto tensor_to_str = [](const auto &tensor) {
+            std::ostringstream oss;
+            oss << core::to_xtensor(tensor);
+            return oss.str();
+        };
+
+        auto print_tensor = [=](std::string name, const auto &tensor) {
+            std::cout << name << ": " << tensor_to_str(tensor) << "\n";
+        };
+
         auto a = tensor->get_value();
         auto g = gamma->get_value();
-        auto dout = out->get_grad();
+        auto n = static_cast<float>(a.logical_shape().rank());
+        auto dL_dout = out->get_grad();
+        auto rms_a = out->get_value();
+
         // let tensor = {a_i | i = 0, 1, ..., n}
         // and gamma = {g_i | i = 0, 1, ..., n}
 
-        // backward grads in terms of dout:
-        // dL/da_i = dL/dout * eps * gamma_i / (eps + a_i^2)^(3/2)
-        // dL/dg_i = dL/dout * a_i / sqrt(eps + a_i^2)
-
-        auto dtensor_divisor = ttnn::pow(ttnn::experimental::add(eps_tensor, ttnn::square(a)), 3.0F / 2.0F);
-        auto dtensor_dividend = ttnn::experimental::mul(ttnn::experimental::mul(dout, g), eps_tensor);
-        auto dtensor = ttnn::experimental::div(dtensor_dividend, dtensor_divisor);
-        
-        auto dgamma_dividend = ttnn::experimental::mul(dout, a);
-        auto dgamma_divisor = ttnn::sqrt(ttnn::experimental::add(eps_tensor, ttnn::square(a))); // using a^2 + eps for scalar add in ttnn.
-        auto dgamma = ttnn::experimental::div(dgamma_dividend, dgamma_divisor);
-
-        tensor->add_grad(dtensor);
-        gamma->add_grad(dgamma);
+        auto g_times_dL_dout = ttnn::experimental::mul(g, dL_dout);
+        auto l = ttnn::experimental::div(g_times_dL_dout, rms_a);
+        auto scale = ttnn::matmul(a, g_times_dL_dout, /*transpose a*/ true, /*transpose b*/ false);
+        auto r = ttnn::experimental::div(
+            ttnn::experimental::mul(a, scale), ttnn::experimental::mul(ttnn::pow(rms_a, 3.0F), n));
+        auto dL_da = ttnn::experimental::sub(l, r);
+        tensor->add_grad(dL_da);
     };
 
     auto links = autograd::get_links(tensor);

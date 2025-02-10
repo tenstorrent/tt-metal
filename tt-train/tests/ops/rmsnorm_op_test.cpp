@@ -87,21 +87,22 @@ TEST_F(RMSNormOpTest, RMSNormOp_Forward) {
 
 TEST_F(RMSNormOpTest, RMSNormOp_Forward_Small) {
     using namespace ttml;
+    float eps = 0.0078125F;  // default in PyTorch for bf16
 
-    xt::xarray<float> example_xtensor = {{1.F, 2.F, 3.F, 4.F, 1.F, 2.F, 3.F, 4.F}};
+    xt::xarray<float> example_xtensor = {{{{1.F, 2.F, 3.F, 4.F, 1.F, 2.F, 3.F, 4.F}}}};
     auto example_tensor = autograd::create_tensor(core::from_xtensor(example_xtensor, &autograd::ctx().get_device()));
 
-    uint32_t H = 1, W = 8;
+    uint32_t N = 1, C = 1, H = 1, W = 8;
 
-    uint32_t size = H * W;
+    uint32_t size = N * C * H * W;
 
     auto gamma = autograd::create_tensor(core::ones(core::create_shape({1, 1, 1, W}), &autograd::ctx().get_device()));
-    auto result = ops::rmsnorm(example_tensor, gamma, 0.0F);
+    auto result = ops::rmsnorm(example_tensor, gamma, 0.0078125F);
 
     // Compare result with torch
     auto result_xtensor = core::to_xtensor(result->get_value());
 
-    xt::xarray<float> expected_result = {{0.3651F, 0.7303F, 1.0954F, 1.4606F, 0.3651F, 0.7303F, 1.0954F, 1.4606F}};
+    xt::xarray<float> expected_result = {{0.3652F, 0.7305F, 1.0938F, 1.4609F, 0.3652F, 0.7305F, 1.0938F, 1.4609F}};
     std::cout << "result_xtensor: " << result_xtensor << "\n";
     std::cout << "expected_result: " << expected_result << "\n";
 
@@ -110,7 +111,10 @@ TEST_F(RMSNormOpTest, RMSNormOp_Forward_Small) {
     auto sum_result = ttml::ops::sum(result);
     sum_result->backward();
     auto example_tensor_grad = core::to_xtensor(example_tensor->get_grad());
-    auto expected_example_tensor_grad = xt::xarray<float>(
-        {{2.4343e-01F, 1.2172e-01F, 2.9802e-08F, -1.2172e-01F, 2.4343e-01F, 1.2172e-01F, 2.9802e-08F, -1.2172e-01F}});
+    auto expected_example_tensor_grad =
+        xt::xarray<float>({{{{0.2432, 0.1211, -0.0020, -0.1230, 0.2432, 0.1211, -0.0020, -0.1230}}}});
+
+    std::cout << "expected_grad: " << expected_example_tensor_grad << "\n";
+    std::cout << "actual grad: " << example_tensor_grad << "\n";
     EXPECT_TRUE(xt::allclose(example_tensor_grad, expected_example_tensor_grad, 3e-2F));
 }
