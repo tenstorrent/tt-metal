@@ -194,9 +194,13 @@ class TtModelArgs:
             try:
                 max_prefill_chunk_size_div1024 = MAX_PREFILL_CHUNK_SIZES_DIV1024[self.base_model_name][self.device_name]
             except KeyError:
-                raise ValueError(
-                    f"Unknown model {self.model_name} on device {self.device_name}, try setting MAX_PREFILL_CHUNK_SIZE between 4 (compatible) and 128 (faster)"
+                logger.warning(
+                    f"Unknown model {self.model_name} on device {self.device_name}, setting MAX_PREFILL_CHUNK_SIZE to 4 for compatibility"
                 )
+                logger.warning(
+                    f"Try setting MAX_PREFILL_CHUNK_SIZE to larger powers of 2 up to e.g. 128 for faster performance (if you run out of L1 memory it was too high)"
+                )
+                max_prefill_chunk_size_div1024 = 4
             assert (
                 max_prefill_chunk_size_div1024 is not None
             ), f"Unsupported model {self.model_name} on device {self.device_name}"
@@ -309,23 +313,18 @@ class TtModelArgs:
                 k_chunk_size=256 if seqlen >= 2048 else 64,
             )
 
-            def find_largest_divisor(n, max_divisor=8):
-                for i in range(max_divisor, 0, -1):
-                    if n % i == 0:
-                        return i
-                return 1  # Fallback to 1 if no divisor found
-
             # nlp_concat_heads_decode will shard the data across this number of cores
             assert (
                 self.n_heads % self.cluster_shape[1] == 0
             ), f"n_heads must be divisible by num_devices: {self.n_heads} % {self.cluster_shape[1]}"
 
+            # Note: for some models (e.g. Mistral-Small) n_heads * head_dim != dim
             self.model_config["ATTN_OUTPUT_PROGCFG"] = (
                 None
                 if self.is_galaxy
                 else self.dram_matmul_config(
                     m=self.tile_padded_batch_rows,
-                    k=self.dim // self.num_devices,
+                    k=(self.n_heads * self.head_dim) // self.num_devices,
                     n=self.dim,
                     num_cores=self.n_heads // self.num_devices,
                 )
@@ -980,7 +979,7 @@ class TtModelArgs:
         self.norm_eps = params.get("norm_eps", params.get("rms_norm_eps"))
         self.vocab_size = params["vocab_size"]
         self.padded_vocab_size = 128 * 1024
-        self.head_dim = self.dim // self.n_heads
+        self.head_dim = params.get("head_dim", self.dim // self.n_heads)
 
         # Handle different MLP dimension specifications
         if "intermediate_size" in params:
@@ -1332,6 +1331,12 @@ class TtModelArgs:
             f"Cannot find a grid configuration such that both {K} and {N} tiles evenly divide into cores of max size {max_rows}x{max_cols}."
         )
 
+    def find_largest_divisor(self, n, max_divisor=8):
+        for i in range(max_divisor, 0, -1):
+            if n % i == 0:
+                return i
+        return 1  # Fallback to 1 if no divisor found
+
     def dram_matmul_config(self, m: int, k: int, n: int, num_cores=None):
         # in0_block_w must evenly divide k and be no larger than tile_size * num_cores
         if num_cores is None:
@@ -1342,7 +1347,7 @@ class TtModelArgs:
             ), f"k must be divisible by tile_size * num_cores: {k} % {self.tile_size * num_cores} != 0"
             # assert n % (self.tile_size * num_cores) == 0, f"n must be divisible by tile_size * num_cores: {n} % {self.tile_size * num_cores} != 0"
         return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
-            in0_block_w=math.ceil(k / (self.tile_size * num_cores)),
+            in0_block_w=self.find_largest_divisor(k // (self.tile_size * num_cores)),
             per_core_M=math.ceil(m / self.tile_size),
             per_core_N=math.ceil(n / (self.tile_size * num_cores)),
             fused_activation=None,
@@ -1371,7 +1376,7 @@ class TtModelArgs:
             grid = ttnn.CoreGrid(x=grid.x, y=grid_y)
 
         per_core_m = m // tile_height
-        per_core_k = math.ceil(k / tile_width / grid.num_cores)
+        per_core_k = (self.find_largest_divisor(k // (self.tile_size * grid.num_cores)),)
         per_core_n = math.ceil(n / tile_width / grid.num_cores)
 
         if is_fp32_accumulate:
@@ -1536,7 +1541,9 @@ class TtModelArgs:
         else:
             from transformers import AutoConfig, AutoModelForCausalLM
 
-            if not load_checkpoint:
+            # HF is much faster at loading from a checkpoint than generating from config
+            # so use that by preference unless we don't have a checkpoint
+            if self.dummy_weights and not load_checkpoint:
                 config = AutoConfig.from_pretrained(self.DEFAULT_CKPT_DIR)
                 config.num_layers = self.n_layers
                 model = AutoModelForCausalLM.from_config(config)
