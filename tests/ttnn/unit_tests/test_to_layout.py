@@ -379,24 +379,10 @@ def test_to_layout_wh1(shape, input_layout, output_layout, device):
     assert_with_pcc(input_a, output_tensor)
 
 
-@pytest.mark.parametrize("shape", [[1, 3, 10976, 11520]])
-@pytest.mark.parametrize("output_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
-@pytest.mark.parametrize("input_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
-def test_to_layout_wh2(shape, input_layout, output_layout, device):
-    torch.manual_seed(0)
-    input_a = torch.randn(shape, dtype=torch.bfloat16)
-
-    input_tensor = ttnn.from_torch(input_a, device=device, layout=input_layout, dtype=ttnn.bfloat16)
-    output_tensor = ttnn.to_layout(input_tensor, output_layout)
-    output_tensor = ttnn.to_torch(output_tensor)
-
-    assert_with_pcc(input_a, output_tensor)
-
-
 @pytest.mark.parametrize("shape", [[11432, 11021]])
 @pytest.mark.parametrize("output_layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("input_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
-def test_to_layout_wh3(shape, input_layout, output_layout, device):
+def test_to_layout_wh2(shape, input_layout, output_layout, device):
     torch.manual_seed(0)
     input_a = torch.randn(shape, dtype=torch.bfloat16)
 
