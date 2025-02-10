@@ -980,9 +980,6 @@ class TtModelArgs:
         self.vocab_size = params["vocab_size"]
         self.padded_vocab_size = 128 * 1024
         self.head_dim = params.get("head_dim", self.dim // self.n_heads)
-        assert (
-            self.dim % self.n_heads == 0
-        ), f"dim {self.dim} must be divisible by n_heads {self.n_heads}, check config:\n{params}"
 
         # Handle different MLP dimension specifications
         if "intermediate_size" in params:
