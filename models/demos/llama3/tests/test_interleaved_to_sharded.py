@@ -6,16 +6,7 @@ import pytest
 from loguru import logger
 import os
 import ttnn
-from models.demos.llama3.tt.llama_common import (
-    precompute_freqs,
-)
-from models.demos.llama3.tt.llama_decoder import TtTransformerBlock
 from models.demos.llama3.tt.model_config import TtModelArgs
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import TransformerBlock
-from models.utility_functions import (
-    comp_pcc,
-    comp_allclose,
-)
 from models.utility_functions import skip_for_grayskull
 
 
@@ -31,8 +22,6 @@ from models.utility_functions import skip_for_grayskull
     indirect=True,
 )
 def test_llama_decoder_inference(mesh_device, use_program_cache, reset_seeds):
-    dtype = ttnn.bfloat8_b
-
     mesh_device.enable_async(True)
 
     model_args = TtModelArgs(mesh_device)
@@ -43,28 +32,13 @@ def test_llama_decoder_inference(mesh_device, use_program_cache, reset_seeds):
     partial_state_dict = {
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     }
-    reference_model = TransformerBlock(layer_id=0, args=model_args)
+    reference_model = model_args.reference_decoder()
     reference_model.load_state_dict(partial_state_dict)
 
-    generation_start_pos = 0
     generation_length = 10
-    all_tests_pass = True
-
-    # Initialize TT model
-    tt_model = TtTransformerBlock(
-        args=model_args,
-        mesh_device=mesh_device,
-        dtype=dtype,
-        state_dict=state_dict,
-        layer_num=0,
-        weight_cache_path=model_args.weight_cache_path(dtype),
-    )
 
     seqlen = 1
     batch = model_args.max_batch_size
-
-    cos, sin = precompute_freqs(model_args.head_dim, model_args.max_seq_len * 2, model_args.rope_scaling_factor)
-    freqs_cis = torch.complex(cos, sin)
 
     for i in range(generation_length):
         logger.info(f"[Decoder] Generating token {i}")
@@ -72,13 +46,6 @@ def test_llama_decoder_inference(mesh_device, use_program_cache, reset_seeds):
         # input = torch.randn(1, 32, 4096)
         pt_decode_input = (torch.rand(batch, seqlen, model_args.dim) * 2) - 1
         tt_decode_input = pt_decode_input.clone()
-        current_pos = generation_start_pos + i
-        current_pos_tensor = ttnn.from_torch(
-            torch.tensor([current_pos] * batch),
-            device=mesh_device,
-            dtype=ttnn.int32,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        )
 
         decode_input = model_args.prepare_residual_tensor_decode(
             tt_decode_input,

@@ -105,6 +105,80 @@ def test_fill_pad(
     "shape",
     [
         (1, 16),
+        (97, 97),
+    ],
+)
+@pytest.mark.parametrize(
+    "shard_scheme",
+    [
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+    ],
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.uint32])
+def test_fill_pad_complex_sharding(device, fill_value, shape, shard_scheme, dtype):
+    torch.manual_seed(1234)
+    torch_input_tensor, padded_torch_tensor = create_nd_padded_tiled_tensor(
+        shape, 32, fill_value, ttnn_dtype_to_torch_dtype[dtype]
+    )
+    num_cores_xblock = 2
+    num_cores_yblock = 4
+    num_cores = num_cores_xblock * num_cores_yblock
+
+    # Add complex shard grid with 2 X 4 = 8 cores
+    shard_grid = ttnn.CoreRangeSet(
+        [
+            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1)),
+            ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(3, 1)),
+            ttnn.CoreRange(ttnn.CoreCoord(0, 4), ttnn.CoreCoord(0, 5)),
+        ]
+    )
+
+    tiles_per_2d = padded_torch_tensor.shape[-2] * padded_torch_tensor.shape[-1] / (32 * 32)
+    dims_b4_last_dim = 1
+    for i in range(len(padded_torch_tensor.shape) - 1):
+        dims_b4_last_dim *= padded_torch_tensor.shape[i]
+
+    shard_shape = [32, 32]
+    if shard_scheme == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
+        shard_shape = (dims_b4_last_dim, 32 * math.ceil((math.ceil(padded_torch_tensor.shape[-1] / 32) / num_cores)))
+    elif shard_scheme == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
+        tile_widths_per_core = math.ceil(dims_b4_last_dim / num_cores)
+        shard_shape = (32 * tile_widths_per_core, padded_torch_tensor.shape[-1])
+    elif shard_scheme == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
+        tile_widths_per_core = math.ceil(dims_b4_last_dim / num_cores_xblock)
+        shard_shape = (
+            32 * tile_widths_per_core,
+            32 * math.ceil((math.ceil(padded_torch_tensor.shape[-1] / 32) / num_cores_yblock)),
+        )
+    else:
+        shard_shape = (math.ceil(math.sqrt(tiles_per_core)), math.ceil(math.sqrt(tiles_per_core)))
+
+    shard_spec = ttnn.ShardSpec(shard_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    output_mem_config = ttnn.MemoryConfig(
+        shard_scheme,
+        ttnn.BufferType.L1,
+        shard_spec,
+    )
+
+    input_tensor = ttnn.to_device(
+        ttnn.from_torch(torch_input_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT),
+        device,
+        memory_config=output_mem_config,
+    )
+
+    output_tensor = ttnn.fill_implicit_tile_padding(input_tensor, fill_value, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    padded_torch_output_tensor = ttnn.from_device(output_tensor).to_torch()
+
+    assert_with_pcc(padded_torch_tensor, padded_torch_output_tensor, 0.99)
+
+
+@pytest.mark.parametrize("fill_value", [1])
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (1, 16),
         (16, 1),
         (17, 17),
         (17, 1),
@@ -116,7 +190,12 @@ def test_fill_pad(
     ],
 )
 @pytest.mark.parametrize(
-    "shard_scheme", [ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.TensorMemoryLayout.WIDTH_SHARDED]
+    "shard_scheme",
+    [
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+    ],
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.uint32])
 def test_fill_pad_sharded(device, fill_value, shape, shard_scheme, dtype):
@@ -139,10 +218,13 @@ def test_fill_pad_sharded(device, fill_value, shape, shard_scheme, dtype):
 
     shard_shape = [32, 32]
     if shard_scheme == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
-        shard_shape = (dims_b4_last_dim, 32 * math.ceil((padded_torch_tensor.shape[-1] / num_cores)))
+        shard_shape = (dims_b4_last_dim, 32 * math.ceil((math.ceil(padded_torch_tensor.shape[-1] / 32) / num_cores)))
     elif shard_scheme == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
         tile_widths_per_core = math.ceil(dims_b4_last_dim / num_cores)
         shard_shape = (32 * tile_widths_per_core, padded_torch_tensor.shape[-1])
+    elif shard_scheme == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
+        tile_widths_per_core = math.ceil(dims_b4_last_dim / num_cores_x)
+        shard_shape = (32 * tile_widths_per_core, 32 * math.ceil((padded_torch_tensor.shape[-1] / 32 / num_cores_y)))
     else:
         shard_shape = (math.ceil(math.sqrt(tiles_per_core)), math.ceil(math.sqrt(tiles_per_core)))
 

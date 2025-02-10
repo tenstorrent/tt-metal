@@ -102,7 +102,7 @@ void validate_shard_spec(const TensorLayout& tensor_layout) {
         const auto& physical_shard_shape = tensor_layout.get_physical_shard_shape();
         const auto& tile_shape = tensor_layout.get_tile().get_tile_shape();
         // TODO (issue #17060): Flip to TT_FATAL
-        TT_ASSERT(
+        TT_FATAL(
             (physical_shard_shape.height() % tile_shape[0] == 0 && physical_shard_shape.width() % tile_shape[1] == 0),
             "Physical shard shape {} must be tile {} sized!",
             physical_shard_shape,
@@ -136,6 +136,11 @@ TensorLayout TensorLayout::fromPaddedShape(
         page_config,
         memory_config,
         CMAKE_UNIQUE_NAMESPACE::legacyShapeToAlignment(logical_shape, padded_shape, page_config, memory_config));
+}
+
+TensorLayout TensorLayout::restore_from_serialized(
+    DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const Alignment& alignment) {
+    return TensorLayout(dtype, page_config, memory_config, alignment);
 }
 
 void TensorLayout::initialize_alignment() {

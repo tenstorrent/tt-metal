@@ -48,7 +48,7 @@ void bind_untilize_with_unpadding(py::module& module) {
                const std::optional<MemoryConfig>& memory_config,
                bool use_multicore,
                bool use_pack_untilize,
-               uint8_t queue_id) {
+               QueueId queue_id) {
                 return self(queue_id, input_tensor, output_tensor_end, memory_config, use_multicore, use_pack_untilize);
             },
             py::arg("input_tensor"),
@@ -57,7 +57,7 @@ void bind_untilize_with_unpadding(py::module& module) {
             py::arg("memory_config") = std::nullopt,
             py::arg("use_multicore") = true,
             py::arg("use_pack_untilize") = true,
-            py::arg("queue_id") = 0,
+            py::arg("queue_id") = DefaultQueueId,
         });
 }
 

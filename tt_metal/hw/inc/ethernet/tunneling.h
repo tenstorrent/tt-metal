@@ -96,6 +96,12 @@ void eth_write_remote_reg(uint32_t q_num, uint32_t reg_addr, uint32_t val) {
     eth_txq_reg_write(q_num, ETH_TXQ_REMOTE_REG_DATA, val);
     eth_txq_reg_write(q_num, ETH_TXQ_CMD, ETH_TXQ_CMD_START_REG);
 }
+FORCE_INLINE
+void eth_write_remote_reg_no_txq_check(uint32_t q_num, uint32_t reg_addr, uint32_t val) {
+    eth_txq_reg_write(q_num, ETH_TXQ_DEST_ADDR, reg_addr);
+    eth_txq_reg_write(q_num, ETH_TXQ_REMOTE_REG_DATA, val);
+    eth_txq_reg_write(q_num, ETH_TXQ_CMD, ETH_TXQ_CMD_START_REG);
+}
 
 void check_and_context_switch() {
     uint32_t start_time = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);

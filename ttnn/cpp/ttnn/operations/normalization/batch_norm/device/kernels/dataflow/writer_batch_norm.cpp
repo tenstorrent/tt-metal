@@ -24,7 +24,7 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
 
     // batch_mean
-    constexpr auto cb_id_src = tt::CBIndex::c_1;
+    constexpr auto cb_id_src = get_compile_time_arg_val(7);
     constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
     const uint32_t src_tile_bytes = get_tile_size(cb_id_src);
     const DataFormat src_data_format = get_dataformat(cb_id_src);
@@ -33,7 +33,7 @@ void kernel_main() {
         .bank_base_address = src_addr, .page_size = src_tile_bytes, .data_format = src_data_format};
 
     // output
-    constexpr auto cb_id_dst = tt::CBIndex::c_2;
+    constexpr auto cb_id_dst = get_compile_time_arg_val(8);
     constexpr bool dst_is_dram = get_compile_time_arg_val(1) == 1;
     const uint32_t dst_tile_bytes = get_tile_size(cb_id_dst);
     const DataFormat dst_data_format = get_dataformat(cb_id_dst);
@@ -42,7 +42,7 @@ void kernel_main() {
         .bank_base_address = dst_addr, .page_size = dst_tile_bytes, .data_format = dst_data_format};
 
     // batch_var
-    constexpr auto cb_id_batch_var = tt::CBIndex::c_3;
+    constexpr auto cb_id_batch_var = get_compile_time_arg_val(9);
     constexpr bool batch_var_is_dram = get_compile_time_arg_val(2) == 1;
     const uint32_t batch_var_tile_bytes = get_tile_size(cb_id_batch_var);
     const DataFormat batch_var_data_format = get_dataformat(cb_id_batch_var);
@@ -51,7 +51,7 @@ void kernel_main() {
         .bank_base_address = batch_var_addr, .page_size = batch_var_tile_bytes, .data_format = batch_var_data_format};
 
     // weight
-    constexpr auto cb_id_weight = tt::CBIndex::c_16;
+    constexpr auto cb_id_weight = get_compile_time_arg_val(10);
     constexpr bool weight_is_dram = get_compile_time_arg_val(3) == 1;
     const uint32_t weight_tile_bytes = get_tile_size(cb_id_weight);
     const DataFormat weight_data_format = get_dataformat(cb_id_weight);
@@ -60,7 +60,7 @@ void kernel_main() {
         .bank_base_address = weight_addr, .page_size = weight_tile_bytes, .data_format = weight_data_format};
 
     // bias
-    constexpr auto cb_id_bias = tt::CBIndex::c_18;
+    constexpr auto cb_id_bias = get_compile_time_arg_val(11);
     constexpr bool bias_is_dram = get_compile_time_arg_val(4) == 1;
     const uint32_t bias_tile_bytes = get_tile_size(cb_id_bias);
     const DataFormat bias_data_format = get_dataformat(cb_id_bias);
@@ -89,7 +89,7 @@ void kernel_main() {
             uint32_t l1_write_addr = get_write_ptr(cb_id_src);
             noc_async_read_tile(tile_offset, src, l1_write_addr);
             noc_async_read_barrier();
-            fill_tile_with_first_element_bfloat16(cb_id_src);
+            FILL_TILE_WITH_FIRST_ELEMENT(cb_id_src);
             cb_push_back(cb_id_src, onetile);
 
             // read a tile from batch variance
@@ -97,7 +97,7 @@ void kernel_main() {
             uint32_t l1_batch_var_write_addr = get_write_ptr(cb_id_batch_var);
             noc_async_read_tile(tile_offset, batch_var, l1_batch_var_write_addr);
             noc_async_read_barrier();
-            fill_tile_with_first_element_bfloat16(cb_id_batch_var);
+            FILL_TILE_WITH_FIRST_ELEMENT(cb_id_batch_var);
             cb_push_back(cb_id_batch_var, onetile);
 
             if constexpr (weight_has_value) {  // read a tile from weight tensor
@@ -105,7 +105,7 @@ void kernel_main() {
                 uint32_t l1_weight_write_addr = get_write_ptr(cb_id_weight);
                 noc_async_read_tile(tile_offset, weight, l1_weight_write_addr);
                 noc_async_read_barrier();
-                fill_tile_with_first_element_bfloat16(cb_id_weight);
+                FILL_TILE_WITH_FIRST_ELEMENT(cb_id_weight);
                 cb_push_back(cb_id_weight, onetile);
             }
 
@@ -114,7 +114,7 @@ void kernel_main() {
                 uint32_t l1_bias_write_addr = get_write_ptr(cb_id_bias);
                 noc_async_read_tile(tile_offset, bias, l1_bias_write_addr);
                 noc_async_read_barrier();
-                fill_tile_with_first_element_bfloat16(cb_id_bias);
+                FILL_TILE_WITH_FIRST_ELEMENT(cb_id_bias);
                 cb_push_back(cb_id_bias, onetile);
             }
 

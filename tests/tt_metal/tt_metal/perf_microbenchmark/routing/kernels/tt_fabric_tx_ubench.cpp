@@ -23,8 +23,6 @@ constexpr uint32_t dest_endpoint_start_id = get_compile_time_arg_val(2);
 constexpr uint32_t data_buffer_start_addr = get_compile_time_arg_val(3);
 constexpr uint32_t data_buffer_size_words = get_compile_time_arg_val(4);
 
-constexpr uint32_t routing_table_start_addr = get_compile_time_arg_val(5);
-
 constexpr uint32_t test_results_addr_arg = get_compile_time_arg_val(6);
 constexpr uint32_t test_results_size_bytes = get_compile_time_arg_val(7);
 
@@ -53,16 +51,19 @@ uint32_t base_target_address = get_compile_time_arg_val(17);
 
 // atomic increment for the ATOMIC_INC command
 constexpr uint32_t atomic_increment = get_compile_time_arg_val(18);
-// constexpr uint32_t dest_device = get_compile_time_arg_val(21);
+
 uint32_t dest_device;
 
 constexpr uint32_t signal_address = get_compile_time_arg_val(19);
 constexpr uint32_t client_interface_addr = get_compile_time_arg_val(20);
 
-volatile local_pull_request_t* local_pull_request = (volatile local_pull_request_t*)(data_buffer_start_addr - 1024);
-volatile tt_l1_ptr fabric_router_l1_config_t* routing_table =
-    reinterpret_cast<tt_l1_ptr fabric_router_l1_config_t*>(routing_table_start_addr);
-volatile fabric_client_interface_t* client_interface = (volatile fabric_client_interface_t*)client_interface_addr;
+constexpr bool mcast_data = get_compile_time_arg_val(23);
+constexpr uint32_t e_depth = get_compile_time_arg_val(24);
+constexpr uint32_t w_depth = get_compile_time_arg_val(25);
+constexpr uint32_t n_depth = get_compile_time_arg_val(26);
+constexpr uint32_t s_depth = get_compile_time_arg_val(27);
+
+volatile fabric_client_interface_t* client_interface;
 
 uint64_t xy_local_addr;
 uint32_t target_address;
@@ -88,15 +89,12 @@ inline void notify_traffic_controller() {
 }
 
 void kernel_main() {
-    tt_fabric_init();
-
     uint32_t rt_args_idx = 0;
     time_seed = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     src_endpoint_id = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     noc_offset = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     controller_noc_offset = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
-    uint32_t router_x = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
-    uint32_t router_y = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
+    uint32_t routing_plane = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     dest_device = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     uint32_t rx_buf_size = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     gk_interface_addr_l = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
@@ -108,42 +106,41 @@ void kernel_main() {
 
     target_address = base_target_address;
 
-    // Read in the routing table
-    uint64_t router_config_addr =
-        NOC_XY_ADDR(NOC_X(router_x), NOC_Y(router_y), eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE);
-    noc_async_read_one_packet(router_config_addr, routing_table_start_addr, sizeof(fabric_router_l1_config_t));
-    noc_async_read_barrier();
-
     zero_l1_buf(test_results, test_results_size_bytes);
     test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_STARTED;
-    test_results[PQ_TEST_STATUS_INDEX + 1] = (uint32_t)local_pull_request;
-
     test_results[PQ_TEST_MISC_INDEX] = 0xff000000;
     test_results[PQ_TEST_MISC_INDEX + 1] = 0xcc000000 | src_endpoint_id;
 
     zero_l1_buf(
         reinterpret_cast<tt_l1_ptr uint32_t*>(data_buffer_start_addr), data_buffer_size_words * PACKET_WORD_SIZE_BYTES);
-    zero_l1_buf((uint32_t*)local_pull_request, sizeof(local_pull_request_t));
-    zero_l1_buf((uint32_t*)client_interface, sizeof(fabric_client_interface_t));
-    client_interface->gk_interface_addr = ((uint64_t)gk_interface_addr_h << 32) | gk_interface_addr_l;
-    client_interface->gk_msg_buf_addr =
-        (((uint64_t)gk_interface_addr_h << 32) | gk_interface_addr_l) + offsetof(gatekeeper_info_t, gk_msg_buf);
 
     uint64_t data_words_sent = 0;
     uint32_t packet_count = 0;
 
     uint64_t dst_addr = ((uint64_t)noc_offset << 32 | target_address);
+    if constexpr (mcast_data) {
+        fabric_async_write_multicast_add_header(
+            data_buffer_start_addr,  // source address in sender’s memory
+            dest_device >> 16,
+            dest_device & 0xFFFF,
+            dst_addr,                    // destination write address
+            max_packet_size_words * 16,  // number of bytes to write to remote destination
+            e_depth,
+            w_depth,
+            n_depth,
+            s_depth);
+    } else {
+        fabric_async_write_add_header(
+            data_buffer_start_addr,  // source address in sender’s memory
+            dest_device >> 16,
+            dest_device & 0xFFFF,
+            dst_addr,                   // destination write address
+            max_packet_size_words * 16  // number of bytes to write to remote destination
+        );
+    }
 
-    fabric_async_write_add_header(
-        data_buffer_start_addr,  // source address in sender’s memory
-        dest_device >> 16,
-        dest_device & 0xFFFF,
-        dst_addr,                   // destination write address
-        max_packet_size_words * 16  // number of bytes to write to remote destination
-    );
-
-    // make sure fabric node gatekeeper is available.
-    fabric_endpoint_init();
+    // initalize client
+    fabric_endpoint_init(client_interface_addr, gk_interface_addr_l, gk_interface_addr_h);
 
     // notify the controller kernel that this worker is ready to proceed
     notify_traffic_controller();
@@ -153,22 +150,38 @@ void kernel_main() {
     // all tx workers are ready to send data
     while (*(volatile tt_l1_ptr uint32_t*)signal_address == 0);
 
-    uint64_t start_timestamp = get_timestamp();
     fabric_setup_pull_request(
         data_buffer_start_addr,     // source address in sender’s memory
         max_packet_size_words * 16  // number of bytes to write to remote destination
     );
 
+    uint64_t start_timestamp = get_timestamp();
+
     while (true) {
         client_interface->local_pull_request.pull_request.words_read = 0;
-        fabric_async_write<ASYNC_WR_SEND>(
-            0,                       // the network plane to use for this transaction
-            data_buffer_start_addr,  // source address in sender’s memory
-            dest_device >> 16,
-            dest_device & 0xFFFF,
-            dst_addr,                   // destination write address
-            max_packet_size_words * 16  // number of bytes to write to remote destination
-        );
+        if constexpr (mcast_data) {
+            fabric_async_write_multicast<ASYNC_WR_SEND>(
+                routing_plane,           // the network plane to use for this transaction
+                data_buffer_start_addr,  // source address in sender’s memory
+                dest_device >> 16,
+                dest_device & 0xFFFF,
+                dst_addr,                    // destination write address
+                max_packet_size_words * 16,  // number of bytes to write to remote destination
+                e_depth,
+                w_depth,
+                n_depth,
+                s_depth);
+        } else {
+            fabric_async_write<ASYNC_WR_SEND>(
+                routing_plane,           // the network plane to use for this transaction
+                data_buffer_start_addr,  // source address in sender’s memory
+                dest_device >> 16,
+                dest_device & 0xFFFF,
+                dst_addr,                   // destination write address
+                max_packet_size_words * 16  // number of bytes to write to remote destination
+            );
+        }
+
         data_words_sent += max_packet_size_words;
         packet_count++;
         uint32_t words_written = client_interface->local_pull_request.pull_request.words_written;

@@ -165,7 +165,7 @@ Tensor to_layout_impl(
                     {0, 0},
                     {0, padded_output_shape[2] - output_shape[2]},
                     {0, padded_output_shape[3] - output_shape[3]}};
-                tensor = ttnn::pad(0, tensor, padding, 0, true, std::nullopt);
+                tensor = ttnn::pad(tensor, padding, 0, true, std::nullopt);
                 return ttnn::tilize(tensor, output_memory_config, dtype, use_multicore_tilize);
             } else {
                 PadValue pad_value_variant;
