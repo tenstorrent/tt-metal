@@ -94,8 +94,16 @@ endif()
 
 CPMAddPackage(NAME magic_enum GITHUB_REPOSITORY Neargye/magic_enum GIT_TAG v0.9.7 FIND_PACKAGE_ARGUMENTS "GLOBAL")
 
-if(magic_enum_ADDED AND NOT TARGET magic_enum::magic_enum)
-    add_library(magic_enum::magic_enum ALIAS magic_enum)
+if(magic_enum_ADDED)
+    # If CPM imports magic_enum, the target magic_enum::magic_enum won't exist
+    if(NOT TARGET magic_enum::magic_enum)
+        add_library(magic_enum::magic_enum ALIAS magic_enum)
+    endif()
+    # If find_package is used beneath the hood, the target magic_enum won't exist
+    # tt-metal has been updated to ingest the target magic_enum::magic_enum, but UMD hasn't
+    if(NOT TARGET magic_enum)
+        add_library(magic_enum ALIAS magic_enum::magic_enum)
+    endif()
 endif()
 
 ############################################################################################################################
