@@ -503,37 +503,7 @@ public:
     }
 
     // TODO: RENAME issue_queue_stride ?
-    void issue_queue_push_back(uint32_t push_size_B, const uint8_t cq_id) {
-        if (this->bypass_enable) {
-            this->bypass_buffer_write_offset += push_size_B;
-            return;
-        }
-
-        // All data needs to be PCIE_ALIGNMENT aligned
-        uint32_t push_size_16B = align(push_size_B, tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::HOST)) >> 4;
-
-        SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
-        CoreType core_type = tt::tt_metal::dispatch_core_manager::instance().get_dispatch_core_type(this->device_id);
-        uint32_t issue_q_wr_ptr =
-            DispatchMemMap::get(core_type).get_host_command_queue_addr(CommandQueueHostAddrType::ISSUE_Q_WR);
-
-        if (cq_interface.issue_fifo_wr_ptr + push_size_16B >= cq_interface.issue_fifo_limit) {
-            cq_interface.issue_fifo_wr_ptr = (cq_interface.cq_start + cq_interface.offset) >> 4;  // In 16B words
-            cq_interface.issue_fifo_wr_toggle = not cq_interface.issue_fifo_wr_toggle;            // Flip the toggle
-        } else {
-            cq_interface.issue_fifo_wr_ptr += push_size_16B;
-        }
-
-        // Also store this data in hugepages, so if a hang happens we can see what was written by host.
-        chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->device_id);
-        uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->device_id);
-        tt::Cluster::instance().write_sysmem(
-            &cq_interface.issue_fifo_wr_ptr,
-            sizeof(uint32_t),
-            issue_q_wr_ptr + get_relative_cq_offset(cq_id, this->cq_size),
-            mmio_device_id,
-            channel);
-    }
+    void issue_queue_push_back(uint32_t push_size_B, const uint8_t cq_id);
 
     uint32_t completion_queue_wait_front(const uint8_t cq_id, volatile bool& exit_condition) const {
         uint32_t write_ptr_and_toggle;
@@ -550,26 +520,7 @@ public:
         return write_ptr_and_toggle;
     }
 
-    void send_completion_queue_read_ptr(const uint8_t cq_id) const {
-        const SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
-
-        uint32_t read_ptr_and_toggle =
-            cq_interface.completion_fifo_rd_ptr | (cq_interface.completion_fifo_rd_toggle << 31);
-        this->fast_write_callable(this->completion_byte_addrs[cq_id], 4, (uint8_t*)&read_ptr_and_toggle);
-
-        // Also store this data in hugepages in case we hang and can't get it from the device.
-        chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(this->device_id);
-        uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(this->device_id);
-        CoreType core_type = tt::tt_metal::dispatch_core_manager::instance().get_dispatch_core_type(this->device_id);
-        uint32_t completion_q_rd_ptr =
-            DispatchMemMap::get(core_type).get_host_command_queue_addr(CommandQueueHostAddrType::COMPLETION_Q_RD);
-        tt::Cluster::instance().write_sysmem(
-            &read_ptr_and_toggle,
-            sizeof(uint32_t),
-            completion_q_rd_ptr + get_relative_cq_offset(cq_id, this->cq_size),
-            mmio_device_id,
-            channel);
-    }
+    void send_completion_queue_read_ptr(const uint8_t cq_id) const;
 
     void wrap_issue_queue_wr_ptr(const uint8_t cq_id) {
         if (this->bypass_enable) {
@@ -601,38 +552,7 @@ public:
         this->send_completion_queue_read_ptr(cq_id);
     }
 
-    void fetch_queue_reserve_back(const uint8_t cq_id) {
-        if (this->bypass_enable) {
-            return;
-        }
-
-        CoreType core_type = tt::tt_metal::dispatch_core_manager::instance().get_dispatch_core_type(device_id);
-        const uint32_t prefetch_q_rd_ptr =
-            DispatchMemMap::get(core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::PREFETCH_Q_RD);
-
-        // Helper to wait for fetch queue space, if needed
-        uint32_t fence;
-        auto wait_for_fetch_q_space = [&]() {
-            // Loop until space frees up
-            while (this->prefetch_q_dev_ptrs[cq_id] == this->prefetch_q_dev_fences[cq_id]) {
-                tt::Cluster::instance().read_core(
-                    &fence, sizeof(uint32_t), this->prefetcher_cores[cq_id], prefetch_q_rd_ptr);
-                this->prefetch_q_dev_fences[cq_id] = fence;
-            }
-        };
-
-        wait_for_fetch_q_space();
-
-        // Wrap FetchQ if possible
-        uint32_t prefetch_q_base =
-            DispatchMemMap::get(core_type).get_device_command_queue_addr(CommandQueueDeviceAddrType::UNRESERVED);
-        uint32_t prefetch_q_limit = prefetch_q_base + DispatchMemMap::get(core_type, num_hw_cqs).prefetch_q_entries() *
-                                                          sizeof(DispatchSettings::prefetch_q_entry_type);
-        if (this->prefetch_q_dev_ptrs[cq_id] == prefetch_q_limit) {
-            this->prefetch_q_dev_ptrs[cq_id] = prefetch_q_base;
-            wait_for_fetch_q_space();
-        }
-    }
+    void fetch_queue_reserve_back(const uint8_t cq_id);
 
     void fetch_queue_write(uint32_t command_size_B, const uint8_t cq_id, bool stall_prefetcher = false) {
         CoreType dispatch_core_type =
