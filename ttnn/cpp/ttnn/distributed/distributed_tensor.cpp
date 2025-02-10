@@ -163,6 +163,7 @@ std::unique_ptr<TensorToMesh> shard_tensor_to_2d_mesh_mapper(
         "Device mesh shape does not match the provided mesh shape.");
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
     return std::make_unique<ShardTensorTo2dMesh>(mesh_shape[0], mesh_shape[1], config);
 =======
     return std::make_unique<ShardTensor2dMesh>(mesh_shape, config);
@@ -170,6 +171,9 @@ std::unique_ptr<TensorToMesh> shard_tensor_to_2d_mesh_mapper(
 =======
     return std::make_unique<ShardTensorTo2dMesh>(mesh_shape, config);
 >>>>>>> add back distributed.py for now, clean up class overloads
+=======
+    return std::make_unique<ShardTensor2dMesh>(mesh_shape, config);
+>>>>>>> fix naming errors, add tests, add imports - TODO, fix weird aliasing error with meshdevice vs ttnn.multidevice.meshdevice
 }
 
 std::unique_ptr<MeshToTensor> concat_mesh_to_tensor_composer(int dim) {
@@ -184,6 +188,7 @@ std::unique_ptr<MeshToTensor> concat_2d_mesh_to_tensor_composer(MeshDevice& mesh
         config.col_dim);
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
     TT_FATAL(mesh_device.shape().dims() == 2, "Mesh device is not configured as a 2D mesh: {}", mesh_device.shape());
     return std::make_unique<Concat2dMeshToTensor>(mesh_device.shape()[0], mesh_device.shape()[1], config);
 =======
@@ -192,6 +197,9 @@ std::unique_ptr<MeshToTensor> concat_2d_mesh_to_tensor_composer(MeshDevice& mesh
 =======
     return std::make_unique<Concat2dMeshToTensor>(mesh_device, config);
 >>>>>>> add back distributed.py for now, clean up class overloads
+=======
+    return std::make_unique<ConcatMesh2dToTensor>(mesh_device, config);
+>>>>>>> fix naming errors, add tests, add imports - TODO, fix weird aliasing error with meshdevice vs ttnn.multidevice.meshdevice
 }
 
 Tensor distribute_tensor(
