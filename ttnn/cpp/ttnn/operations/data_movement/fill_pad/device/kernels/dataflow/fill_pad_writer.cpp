@@ -25,10 +25,11 @@ void kernel_main() {
     constexpr uint32_t face_hw = face_size * face_size;
     constexpr uint32_t alignment_adjustor = 16;
 
-    uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    uint32_t cb_page_size = get_arg_val<uint32_t>(1);
-    uint32_t starting_tile_offset = get_arg_val<uint32_t>(2);
-    uint32_t num_2d_tensors = get_arg_val<uint32_t>(3);
+    uint32_t rt_arg_ind = 0;
+    uint32_t dst_addr = get_arg_val<uint32_t>(rt_arg_ind++);
+    uint32_t cb_page_size = get_arg_val<uint32_t>(rt_arg_ind++);
+    uint32_t starting_tile_offset = get_arg_val<uint32_t>(rt_arg_ind++);
+    uint32_t num_2d_tensors = get_arg_val<uint32_t>(rt_arg_ind++);
 
 #if (SHARDED)
     typedef ShardedInfo<
@@ -42,7 +43,7 @@ void kernel_main() {
         tensor_shard_info;
 
     const auto [mapping_table, rt_increment] =
-        experimental::shard_addr_gen_utils::get_shard_map<tensor_shard_info>(get_arg_addr(4));
+        experimental::shard_addr_gen_utils::get_shard_map<tensor_shard_info>(get_arg_addr(rt_arg_ind));
     experimental::ShardedAddrGen<tensor_shard_info> s0 = {.bank_base_address = dst_addr, .shard_array = mapping_table};
 #else
     const DataFormat data_format = get_dataformat(cb_id_0);
@@ -85,7 +86,6 @@ void kernel_main() {
                 uint32_t elems_to_write = col % face_size == 0 ? face_size : face_size - (col % face_size);
                 uint32_t bytes_to_write = elems_to_write * element_size_bytes;
                 noc_async_write(l1_write_addr + alignment_offset, dst_noc_addr, bytes_to_write);
-                noc_async_write_barrier();
                 col += elems_to_write;
                 face_offset += elems_to_write;
 
