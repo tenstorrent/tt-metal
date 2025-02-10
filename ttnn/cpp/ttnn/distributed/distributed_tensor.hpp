@@ -13,6 +13,12 @@
 #include "ttnn/tensor/xtensor/partition.hpp"
 #include <algorithm>
 #include <tt-metalium/assert.hpp>
+#include "ttnn/distributed/api.hpp"
+#include "ttnn/distributed/distributed_tensor_config.hpp"
+#include "ttnn/distributed/types.hpp"
+#include "ttnn/tensor/xtensor/partition.hpp"
+#include <algorithm>
+#include <tt-metalium/assert.hpp>
 
 namespace ttnn::distributed {
 
@@ -45,6 +51,8 @@ class ReplicateTensorToMesh : public TensorToMesh {
 public:
     ReplicateTensorToMesh(size_t num_devices) : num_devices_(num_devices) {}
 
+    ReplicateTensorToMesh(MeshDevice& mesh_device) : num_devices_(mesh_device.num_devices()) {}
+
     std::vector<Tensor> map(const Tensor& tensor) const override {
         std::vector<Tensor> tensors;
         tensors.reserve(num_devices_);
@@ -64,6 +72,8 @@ class ShardTensorToMesh : public TensorToMesh {
 public:
     ShardTensorToMesh(size_t num_devices, int dim) : num_devices_(num_devices), shard_dim_(dim) {}
 
+    ShardTensorToMesh(MeshDevice& mesh_device, int dim) : num_devices_(mesh_device.num_devices()), shard_dim_(dim) {}
+
     std::vector<Tensor> map(const Tensor& tensor) const override {
         return experimental::xtensor::chunk(tensor, num_devices_, shard_dim_);
     }
@@ -79,6 +89,17 @@ private:
 
 class ShardTensorTo2dMesh : public TensorToMesh {
 public:
+    ShardTensorTo2dMesh(MeshDevice& mesh_device, const MeshShape& mesh_shape, const Shard2dConfig& config) :
+        mesh_shape_(mesh_shape), config_(config) {
+        TT_FATAL(
+            config.row_dim.has_value() || config.col_dim.has_value(),
+            "Sharding a tensor to 2D mesh requires at least one dimension to shard");
+        TT_FATAL(
+            mesh_shape.num_rows <= mesh_device.shape().num_rows &&  //
+                mesh_shape.num_cols <= mesh_device.shape().num_cols,
+            "Device mesh shape does not match the provided mesh shape.");
+    }
+
     ShardTensorTo2dMesh(const MeshShape& mesh_shape, const Shard2dConfig& config) :
         mesh_shape_(mesh_shape), config_(config) {}
 
@@ -187,6 +208,7 @@ std::unique_ptr<TensorToMesh> shard_tensor_to_2d_mesh_mapper(
 std::unique_ptr<MeshToTensor> concat_mesh_to_tensor_composer(int dim);
 
 // Creates a composer that concatenates a tensor across two dimensions.
+
 
 std::unique_ptr<MeshToTensor> concat_2d_mesh_to_tensor_composer(MeshDevice& mesh_device, const Concat2dConfig& config);
 
