@@ -532,8 +532,10 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
 
     uint32_t num_tiles_per_col = output.get_padded_shape()[-2] / TILE_HEIGHT;
 
-    if (num_tiles_per_row > num_tiles_per_col && num_tiles_per_row > 32) {
-        return tilize_with_val_padding_multi_core_block_interleaved(a, output, pad_value);
+    if (num_tiles_per_row > 32) {
+        if (num_tiles_per_col > 32 || num_tiles_per_row > num_tiles_per_col) {
+            return tilize_with_val_padding_multi_core_block_interleaved(a, output, pad_value);
+        }
     }
 
     auto [ncores, all_cores, core_range, core_range_cliff, nblocks_per_core, nblocks_per_core_cliff] =
