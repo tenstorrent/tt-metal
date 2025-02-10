@@ -112,7 +112,7 @@ def get_core_range_set(output_core_grid):
                 }
             ),
             ttnn.TILE_LAYOUT,
-            40,
+            32,
         ),
         (  # AllGather after Binary Mult+Silu
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
@@ -123,7 +123,7 @@ def get_core_range_set(output_core_grid):
             (32, 160),
             get_core_range_set(PREFETCHER_NOC1_RING),
             ttnn.TILE_LAYOUT,
-            32,
+            25,
         ),
     ),
 )
