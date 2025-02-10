@@ -436,7 +436,7 @@ void ComputeKernel::read_binaries(IDevice* device) {
     uint32_t compute_class_idx = magic_enum::enum_integer(HalProcessorClassType::COMPUTE);
     for (int trisc_id = 0; trisc_id <= 2; trisc_id++) {
         const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
-            device->id(), tensix_core_type, compute_class_idx, trisc_id);
+            device->build_id(), tensix_core_type, compute_class_idx, trisc_id);
         ll_api::memory const& binary_mem = llrt::get_risc_binary(
             build_state.get_target_out_path(this->kernel_full_name_),
             ll_api::memory::Loading::CONTIGUOUS_XIP);
