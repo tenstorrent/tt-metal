@@ -2,8 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/run_operation.hpp"
 #include "reshape.hpp"
 #include "reshape_common.hpp"
@@ -37,7 +36,7 @@ ttnn::Tensor convert_tile_to_rm(
     const uint32_t tile_first_dim,
     const uint32_t tile_second_dim,
     const MemoryConfig& memory_config,
-    const uint8_t queue_id,
+    const QueueId queue_id,
     const PadValue& pad_value) {
     // Convert the 3D->3D reshaping to row major and back to tile
     TT_FATAL(
@@ -66,7 +65,7 @@ ttnn::Tensor convert_tensor_to_rm_reshape_convert_back_to_orig_layout(
     const uint32_t tile_first_dim,
     const uint32_t tile_second_dim,
     const MemoryConfig& memory_config,
-    const uint8_t queue_id,
+    const QueueId queue_id,
     const PadValue& pad_value) {
     //This function turns ND -> MD into 2D->MD for row major and 3D->MD for tiled using a 0 cost view
     const auto layout = tensor.get_layout();
@@ -131,7 +130,7 @@ ttnn::Tensor fix_shape_and_perform_reshape_on_3D_TILE(
     const uint32_t tile_first_dim,
     const uint32_t tile_second_dim,
     const MemoryConfig& memory_config,
-    const uint8_t queue_id,
+    const QueueId queue_id,
     const PadValue& pad_value) {
     //This function turns a TILE 3D->MD into an equivalent 3D->3D conversion and then turns the 3D output back to MD using a 0 cost view
     //Collapse into the third last dimension
@@ -165,7 +164,7 @@ ttnn::Tensor fix_shape_and_perform_reshape_on_2D_RM(
     const uint32_t tile_first_dim,
     const uint32_t tile_second_dim,
     const MemoryConfig& memory_config,
-    const uint8_t queue_id) {
+    const QueueId queue_id) {
     //This function turns a RM 2D->MD into an equivalent 2D->2D conversion and then turns the 2D output back to MD using a 0 cost view
     TT_FATAL((logical_shape.rank() != 0), "Can't do reshape to rank 0 tensor");
     //Collapse into the second last dimension
@@ -193,7 +192,7 @@ ttnn::Tensor perform_reshape_on_2D_RM(
     const ttnn::Shape& logical_shape,
     const ttnn::Shape& padded_shape,
     const MemoryConfig& memory_config,
-    const uint8_t queue_id) {
+    const QueueId queue_id) {
     auto temp_tensor = tensor;
     auto intermediate_mem_config = tensor.memory_config();
     auto intermediate_out_memory_config = memory_config;
@@ -350,7 +349,7 @@ ttnn::Tensor ReshapeViewOperation::invoke(
     const ttnn::Shape& logical_input_shape,
     const ttnn::Shape& padded_input_shape,
     const std::optional<MemoryConfig>& memory_config,
-    const uint8_t queue_id,
+    const QueueId queue_id,
     const std::optional<PadValue>& pad_value) {
     MemoryConfig mem_config = memory_config.value_or(tensor.memory_config());
     auto layout = tensor.get_layout();
@@ -436,31 +435,33 @@ ttnn::Tensor ReshapeViewOperation::invoke(
     const ttnn::Tensor& tensor,
     const ttnn::Shape& shape,
     const std::optional<MemoryConfig>& memory_config,
-    const uint8_t queue_id,
+    const QueueId queue_id,
     const std::optional<PadValue>& pad_value) {
     return invoke(tensor, shape, shape, memory_config, queue_id, pad_value);
 }
 
 ttnn::Tensor ReshapeViewOperation::invoke(const ttnn::Tensor& tensor, const ttnn::Shape& shape) {
-    return invoke(tensor, shape, shape, std::nullopt, 0, std::nullopt);
+    return invoke(tensor, shape, shape, std::nullopt, DefaultQueueId, std::nullopt);
 }
 
 ttnn::Tensor ReshapeViewOperation::invoke(
     const ttnn::Tensor& tensor, const ttnn::Shape& logical_shape, const ttnn::Shape& padded_shape) {
-    return invoke(tensor, logical_shape, padded_shape, std::nullopt, 0, std::nullopt);
+    return invoke(tensor, logical_shape, padded_shape, std::nullopt, DefaultQueueId, std::nullopt);
 }
 
 ttnn::Tensor ReshapeViewOperation::invoke(
     const ttnn::Tensor& tensor,
     tt::stl::Span<const int32_t> shape_vector,
     const std::optional<MemoryConfig>& memory_config,
-    const uint8_t queue_id,
+    const QueueId queue_id,
     const std::optional<PadValue>& pad_value) {
-    return invoke(tensor, tt::tt_metal::infer_dims_for_reshape(tensor, shape_vector),memory_config,queue_id,pad_value);
+    return invoke(
+        tensor, tt::tt_metal::infer_dims_for_reshape(tensor, shape_vector), memory_config, queue_id, pad_value);
 }
 
 ttnn::Tensor ReshapeViewOperation::invoke(const ttnn::Tensor& tensor, tt::stl::Span<const int32_t> shape_vector) {
-    return invoke(tensor, tt::tt_metal::infer_dims_for_reshape(tensor, shape_vector),std::nullopt,0,std::nullopt);
+    return invoke(
+        tensor, tt::tt_metal::infer_dims_for_reshape(tensor, shape_vector), std::nullopt, DefaultQueueId, std::nullopt);
 }
 
 } // ttnn::operations::data_movement namespace

@@ -45,6 +45,12 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
         num_units = input.volume() / TILE_HW;
         input_unit_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
         output_unit_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
+        TT_FATAL(
+            shard_spec.shape[0] % TILE_HEIGHT == 0 && shard_spec.shape[1] % TILE_WIDTH == 0,
+            "Shard shape {} must be tile {}x{} sized!",
+            shard_spec.shape,
+            TILE_HEIGHT,
+            TILE_WIDTH);
         num_units_per_shard_height = shard_spec.shape[0] / TILE_HEIGHT;
         num_units_per_shard_width = shard_spec.shape[1] / TILE_WIDTH;
         num_units_per_shard = num_units_per_shard_height * num_units_per_shard_width;

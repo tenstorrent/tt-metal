@@ -25,6 +25,9 @@ CPMAddPackage(
 add_library(span INTERFACE)
 target_link_libraries(span INTERFACE Boost::core)
 
+add_library(small_vector INTERFACE)
+target_link_libraries(small_vector INTERFACE Boost::container)
+
 ############################################################################################################################
 # yaml-cpp
 ############################################################################################################################

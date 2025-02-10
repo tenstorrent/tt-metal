@@ -92,7 +92,7 @@ Tensor AutoFormat::format_input_tensor(
         } else if (!convert_layout && pad_input) {
             if (formatted_input.get_layout() == Layout::ROW_MAJOR || formatted_input.get_layout() == Layout::TILE) {
                 return ttnn::pad(
-                    0,
+                    DefaultQueueId,
                     (const ttnn::Tensor)formatted_input,
                     padded_shape.to_array_4D(),
                     tt::tt_metal::Array4D({0, 0, 0, 0}),
@@ -113,7 +113,7 @@ Tensor AutoFormat::format_input_tensor(
             } else if (formatted_input.get_layout() == Layout::TILE && target_layout == Layout::ROW_MAJOR) {
                 formatted_input = ttnn::untilize(formatted_input, mem_config);
                 return ttnn::pad(
-                    0,
+                    DefaultQueueId,
                     (const ttnn::Tensor)formatted_input,
                     padded_shape.to_array_4D(),
                     tt::tt_metal::Array4D({0, 0, 0, 0}),
@@ -188,7 +188,7 @@ Tensor AutoFormat::format_output_tensor(
                 auto ends = std::array<uint32_t, 4>({shape[0], shape[1], shape[2], shape[3]});
                 auto step = std::array<uint32_t, 4>({1, 1, 1, 1});
 
-                formatted_output = ttnn::slice(DefaultQueueId, formatted_output, begins, ends, step, mem_config);
+                formatted_output = ttnn::slice(formatted_output, begins, ends, step, mem_config);
                 return formatted_output;
                 // Output is tile but shape cannot be tile. We leave in RM
             } else if (formatted_output.get_layout() == Layout::TILE && AutoFormat::legal_rm_shape(shape)) {
@@ -212,7 +212,7 @@ Tensor AutoFormat::format_output_tensor(
                 auto begins = std::array<uint32_t, 4>({0, 0, 0, 0});
                 auto ends = std::array<uint32_t, 4>({shape[0], shape[1], shape[2], shape[3]});
                 auto step = std::array<uint32_t, 4>({1, 1, 1, 1});
-                formatted_output = ttnn::slice(DefaultQueueId, formatted_output, begins, ends, step, mem_config);
+                formatted_output = ttnn::slice(formatted_output, begins, ends, step, mem_config);
                 formatted_output = ttnn::tilize(formatted_output, mem_config);
                 return formatted_output;
             }

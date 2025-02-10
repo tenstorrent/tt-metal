@@ -278,7 +278,7 @@ OutputTensors run(
     const Tensors& input_tensors,
     const OptionalConstTensors& optional_input_tensors,
     const OptionalTensors& optional_output_tensors,
-    uint8_t cq_id) {
+    QueueId cq_id) {
     if constexpr (std::is_same_v<OutputTensors, Tensors>) {
         return ttnn::prim::old_infra_device_operation(
             cq_id, std::move(operation), input_tensors, optional_input_tensors, optional_output_tensors);
@@ -293,14 +293,14 @@ template Tensors run(
     const Tensors& input_tensors,
     const OptionalConstTensors& optional_input_tensors,
     const OptionalTensors& optional_output_tensors,
-    uint8_t cq_id);
+    QueueId cq_id);
 
 template OptionalTensors run(
     DeviceOperation<OptionalTensors>&& operation,
     const Tensors& input_tensors,
     const OptionalConstTensors& optional_input_tensors,
     const OptionalTensors& optional_output_tensors,
-    uint8_t cq_id);
+    QueueId cq_id);
 
 template <class OutputTensors>
 OutputTensors run_without_autoformat(
@@ -308,7 +308,7 @@ OutputTensors run_without_autoformat(
     const Tensors& input_tensors,
     const OptionalConstTensors& optional_input_tensors,
     const OptionalTensors& optional_output_tensors,
-    uint8_t cq_id) {
+    QueueId cq_id) {
     using ttnn::operations::experimental::auto_format::AutoFormat;
     ZoneScoped;
     IDevice* device = detail::get_device(input_tensors, optional_input_tensors);
@@ -340,14 +340,14 @@ template Tensors run_without_autoformat<Tensors>(
     const Tensors& input_tensors,
     const OptionalConstTensors& optional_input_tensors,
     const OptionalTensors& optional_output_tensors,
-    uint8_t cq_id);
+    QueueId cq_id);
 
 template OptionalTensors run_without_autoformat<OptionalTensors>(
     DeviceOperation<OptionalTensors>&& operation,
     const Tensors& input_tensors,
     const OptionalConstTensors& optional_input_tensors,
     const OptionalTensors& optional_output_tensors,
-    uint8_t cq_id);
+    QueueId cq_id);
 
 std::vector<Shape> extract_padded_shapes(
     const std::vector<ttnn::TensorSpec>& tensor_specs,
@@ -373,7 +373,7 @@ Tensors run_with_autoformat(
     const OptionalTensors& optional_output_tensors,
     const float pad_value,
     const bool pad_c,
-    uint8_t cq_id) {
+    QueueId cq_id) {
     using ttnn::operations::experimental::auto_format::AutoFormat;
     ZoneScoped;
     IDevice* device = detail::get_device(input_tensors, optional_input_tensors);
@@ -445,7 +445,7 @@ Tensors run_with_autoformat(
     const OptionalConstTensors& optional_input_tensors,
     const std::vector<std::optional<FormatParams>>& optional_input_formatting,
     const OptionalTensors& optional_output_tensors,
-    uint8_t cq_id) {
+    ttnn::QueueId cq_id) {
     using ttnn::operations::experimental::auto_format::AutoFormat;
     ZoneScoped;
     IDevice* device = detail::get_device(input_tensors, optional_input_tensors);

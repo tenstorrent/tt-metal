@@ -735,20 +735,20 @@ template std::vector<uint8_t> Tensor::to_vector<uint8_t>() const;
 template std::vector<uint16_t> Tensor::to_vector<uint16_t>() const;
 template std::vector<uint32_t> Tensor::to_vector<uint32_t>() const;
 
-Tensor Tensor::to_device(IDevice* target_device, const MemoryConfig& mem_config, uint8_t cq_id) const {
+Tensor Tensor::to_device(IDevice* target_device, const MemoryConfig& mem_config, QueueId cq_id) const {
     return tensor_ops::tensor_to_device(*this, target_device, mem_config, cq_id);
 }
 
-Tensor Tensor::to_device(distributed::MeshDevice* mesh_device, const MemoryConfig& mem_config, uint8_t cq_id) const {
+Tensor Tensor::to_device(distributed::MeshDevice* mesh_device, const MemoryConfig& mem_config, QueueId cq_id) const {
     std::vector<IDevice*> workers_to_use = ttnn::distributed::get_mapped_devices(*this, *mesh_device);
     return tensor_ops::tensor_to_device(*this, workers_to_use, mem_config, cq_id);
 }
 
-Tensor Tensor::to_device(const std::vector<IDevice*>& workers, const MemoryConfig& mem_config, uint8_t cq_id) const {
+Tensor Tensor::to_device(const std::vector<IDevice*>& workers, const MemoryConfig& mem_config, QueueId cq_id) const {
     return tensor_ops::tensor_to_device(*this, workers, mem_config, cq_id);
 }
 
-Tensor Tensor::cpu(bool blocking, uint8_t cq_id) const { return tensor_ops::tensor_cpu(*this, blocking, cq_id); }
+Tensor Tensor::cpu(bool blocking, QueueId cq_id) const { return tensor_ops::tensor_cpu(*this, blocking, cq_id); }
 
 Tensor Tensor::extract_shard(const CoreCoord& core) const {
     ZoneScoped;
@@ -1016,33 +1016,11 @@ Tensor allocate_tensor_on_mesh(const TensorSpec& tensor_spec, distributed::MeshD
     TT_FATAL(
         tt::tt_metal::detail::InMainThread(), "Allocation of a tensor on mesh must be called from the main thread");
     auto mesh_buffer = tensor_impl::allocate_mesh_buffer_on_device(mesh_device, tensor_spec);
-
-    const auto [num_rows, num_cols] = mesh_device->shape();
-    std::vector<int> ordered_device_ids;
-    std::unordered_map<int, std::shared_ptr<Buffer>> buffers;
-    std::unordered_map<int, TensorSpec> specs;
-
-    ordered_device_ids.reserve(num_rows * num_cols);
-    buffers.reserve(num_rows * num_cols);
-    specs.reserve(num_rows * num_cols);
-
-    for (int row = 0; row < num_rows; ++row) {
-        for (int col = 0; col < num_cols; ++col) {
-            auto buffer = mesh_buffer->get_device_buffer(distributed::Coordinate{row, col});
-            const int device_id = buffer->device()->id();
-            ordered_device_ids.push_back(device_id);
-            buffers.emplace(device_id, std::move(buffer));
-            specs.emplace(device_id, tensor_spec);
-        }
-    }
-
-    MultiDeviceStorage multi_device_storage(
-        ReplicateTensor{}, std::move(ordered_device_ids), std::move(buffers), std::move(specs), std::move(mesh_buffer));
-
+    MultiDeviceStorage multi_device_storage(std::move(mesh_buffer), tensor_spec);
     return Tensor(std::move(multi_device_storage), tensor_spec);
 }
 
-void write_tensor(const Tensor& host_tensor, Tensor device_tensor, uint8_t cq_id) {
+void write_tensor(const Tensor& host_tensor, Tensor device_tensor, QueueId cq_id) {
     // Top level wrapper to copy a host tensor to a preallocated device tensor
     TT_ASSERT(device_tensor.workers.size(), "Workers must be specified for device_tensor in write_tensor");
 
@@ -1091,7 +1069,7 @@ void write_tensor(const Tensor& host_tensor, Tensor device_tensor, uint8_t cq_id
                             },
                             async_safe_tensor.get_storage());
                         EnqueueWriteBuffer(
-                            worker->command_queue(cq_id),
+                            worker->command_queue(*cq_id),
                             device_storage.get_buffer(),
                             host_data,
                             /*blocking=*/false);
@@ -1106,7 +1084,7 @@ void write_tensor(const Tensor& host_tensor, Tensor device_tensor, uint8_t cq_id
                         void* host_data = std::visit(
                             [](auto&& b) -> void* { return b.begin(); }, host_storage.get_buffer(worker_index));
                         EnqueueWriteBuffer(
-                            worker->command_queue(cq_id),
+                            worker->command_queue(*cq_id),
                             device_storage.get_buffer_for_device(worker),
                             host_data,
                             /*blocking=*/false);

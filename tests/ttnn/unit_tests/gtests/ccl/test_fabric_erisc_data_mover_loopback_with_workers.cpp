@@ -12,7 +12,7 @@
 #include "tt-metalium/kernel_types.hpp"
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/erisc_datamover_builder.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
@@ -1471,7 +1471,7 @@ bool TestMultiInputReaderKernel(
 
         log_info(tt::LogTest, "Finished");
         for (auto d : devices) {
-            tt_metal::Synchronize(d, ttnn::DefaultQueueId);
+            tt_metal::Synchronize(d, *ttnn::DefaultQueueId);
         }
     }
     return pass;
@@ -2826,7 +2826,7 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
 
     log_info(tt::LogTest, "Waiting for teardown completion");
     for (auto d : devices) {
-        tt_metal::Synchronize(d, ttnn::DefaultQueueId);
+        tt_metal::Synchronize(d, *ttnn::DefaultQueueId);
     }
     log_info(tt::LogTest, "Finished");
 }
@@ -2930,7 +2930,7 @@ void run_all_gather_with_persistent_fabric(const size_t dim, const size_t num_li
 
     log_info(tt::LogTest, "Waiting for teardown completion");
     for (auto d : devices) {
-        tt_metal::Synchronize(d, ttnn::DefaultQueueId);
+        tt_metal::Synchronize(d, *ttnn::DefaultQueueId);
     }
     log_info(tt::LogTest, "Finished");
 }
@@ -3213,7 +3213,7 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
 
     log_info(tt::LogTest, "Waiting for teardown completion");
     for (IDevice* d : devices) {
-        tt_metal::Synchronize(d, ttnn::DefaultQueueId);
+        tt_metal::Synchronize(d, *ttnn::DefaultQueueId);
     }
     for (size_t i = 0; i < programs.size(); i++) {
         auto d = worker_devices[i];
@@ -3266,7 +3266,6 @@ TEST(EdmFabric, DISABLED_BasicMcastThroughputTest_SenderFullNoWrap_ReceiverNoWra
     RunWriteThroughputStabilityTestWithPersistentFabric(
         num_mcasts, num_unicasts, num_links, num_op_invocations, params);
 }
-// hangs with DPRINT
 TEST(EdmFabric, BasicMcastThroughputTest_SenderFullNoWrap_ReceiverNoWrap_2Device) {
     const size_t num_mcasts = 9;
     const size_t num_unicasts = 0;
@@ -3294,7 +3293,6 @@ TEST(EdmFabric, DISABLED_BasicMcastThroughputTest_SenderFullNoWrap_ReceiverNoWra
     RunWriteThroughputStabilityTestWithPersistentFabric(
         num_mcasts, num_unicasts, num_links, num_op_invocations, params);
 }
-// First to hang - maybe somethign to do with merging traffic
 TEST(EdmFabric, DISABLED_BasicMcastThroughputTest_SenderFullNoWrap_ReceiverNoWrap_TwoWorkers_4Device) {
     const size_t num_mcasts = 9;
     const size_t num_unicasts = 0;
@@ -3600,6 +3598,18 @@ TEST(EdmFabric, BasicMcastThroughputTest_3) {
     const bool line_sync = true;
     WriteThroughputStabilityTestWithPersistentFabricParams params;
     params.line_sync = line_sync;
+    RunWriteThroughputStabilityTestWithPersistentFabric(
+        num_mcasts, num_unicasts, num_links, num_op_invocations, params);
+}
+TEST(EdmFabric, BasicMcastThroughputTest_3_onehop) {
+    const size_t num_mcasts = 200000;
+    const size_t num_unicasts = 2;
+    const size_t num_links = 1;
+    const size_t num_op_invocations = 1;
+    const bool line_sync = true;
+    WriteThroughputStabilityTestWithPersistentFabricParams params;
+    params.line_sync = line_sync;
+    params.line_size = 2;
     RunWriteThroughputStabilityTestWithPersistentFabric(
         num_mcasts, num_unicasts, num_links, num_op_invocations, params);
 }

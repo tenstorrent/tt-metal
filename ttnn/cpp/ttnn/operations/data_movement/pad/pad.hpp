@@ -7,6 +7,7 @@
 #include "ttnn/tensor/types.hpp"
 #include <ranges>
 #include "ttnn/decorators.hpp"
+#include "ttnn/common/queue_id.hpp"
 
 namespace ttnn {
 namespace operations::data_movement {
@@ -14,7 +15,7 @@ namespace operations::data_movement {
 // We overload over Array1D-8D
 #define PAD_OVERLOAD_DIM(ShapeType)                                                                                \
     static ttnn::Tensor invoke(                                                                                    \
-        uint8_t,                                                                                                   \
+        QueueId,                                                                                                   \
         const ttnn::Tensor&,                                                                                       \
         const ShapeType&,                                                                                          \
         const ShapeType&,                                                                                          \
@@ -38,7 +39,7 @@ struct ExecutePad {
     // This function signature is similar to pytorch's signature
     // Any rank tensor supported
     static ttnn::Tensor invoke(
-        uint8_t queue_id,
+        QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         tt::stl::Span<const std::pair<uint32_t, uint32_t>> padding,
         const float value,

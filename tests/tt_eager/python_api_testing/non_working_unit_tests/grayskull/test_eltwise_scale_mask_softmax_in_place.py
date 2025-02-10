@@ -10,7 +10,7 @@ import ttnn
 
 from tests.tt_eager.python_api_testing.sweep_tests import pytorch_ops
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
-from tests.tt_eager.python_api_testing.sweep_tests.tt_lib_ops import (
+from tests.ttnn.python_api_testing.sweep_tests.ttnn_ops import (
     eltwise_scale_mask_softmax_in_place as tt_eltwise_scale_mask_softmax_in_place,
 )
 
