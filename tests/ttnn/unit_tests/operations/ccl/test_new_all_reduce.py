@@ -20,6 +20,7 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_matmul_1d_gather_i
     num_cores_to_rectangle_grid,
     round_up,
 )
+from models.perf.benchmarking_utils import BenchmarkProfiler
 
 
 def run_all_reduce_impl(
@@ -31,8 +32,11 @@ def run_all_reduce_impl(
     input_num_cores,
     output_num_cores,
     num_iters=1,
+    warmup_iters=0,
     enable_async=False,
     trace_mode=False,
+    validate_all=True,
+    profiler=BenchmarkProfiler(),
 ):
     cluster_shape = (8, 4)
 
@@ -141,9 +145,9 @@ def run_all_reduce_impl(
         ##### Run the op
         ##################################
 
-        def run_op():
+        def run_op(n_iters, store_all_results=True):
             outs = []
-            for i in range(num_iters):
+            for i in range(n_iters):
                 out = ttnn.experimental.all_reduce_async(
                     tt_input_tensor,
                     cluster_axis=cluster_axis,
@@ -157,43 +161,65 @@ def run_all_reduce_impl(
                 if not trace_mode:
                     for d in mesh_device.get_devices():
                         ttnn.synchronize_device(d)
-                outs.append(out)
+                if store_all_results:
+                    outs.append(out)
 
-            return outs
+            if store_all_results:
+                return outs
+            else:
+                return [out]
 
         if trace_mode:
             ##### Compile Model #####
             logger.info("Compiling model")
-            tt_outs = run_op()
+            tt_outs = run_op(num_iters, store_all_results=validate_all)
 
             ##### Capture Trace #####
             logger.info("Capturing trace")
+            if warmup_iters > 0:
+                trace_id_warmup = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+                tt_outs = run_op(warmup_iters, store_all_results=validate_all)
+                ttnn.end_trace_capture(mesh_device, trace_id_warmup, cq_id=0)
+                for d in mesh_device.get_devices():
+                    ttnn.synchronize_device(d)
 
             trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-            tt_outs = run_op()
+            tt_outs = run_op(num_iters, store_all_results=validate_all)
             ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+            for d in mesh_device.get_devices():
+                ttnn.synchronize_device(d)
 
             ##### Run Trace #####
             logger.info("Starting Trace perf test...")
-            time_start = time()
+            profiler.start("all-reduce-async-trace-warmup")
+            if warmup_iters > 0:
+                ttnn.execute_trace(mesh_device, trace_id_warmup, blocking=False)
+                ttnn.release_trace(mesh_device, trace_id_warmup)
+                for d in mesh_device.get_devices():
+                    ttnn.synchronize_device(d)
+            profiler.end("all-reduce-async-trace-warmup")
+
+            profiler.start("all-reduce-async-trace")
             ttnn.execute_trace(mesh_device, trace_id, blocking=False)
             ttnn.release_trace(mesh_device, trace_id)
             for d in mesh_device.get_devices():
                 ttnn.synchronize_device(d)
-            time_end = time()
-            logger.info(f"Time taken: {time_end - time_start} s")
-            logger.info(f"Time per iter: {(time_end - time_start) / num_iters} s")
-            logger.info(f"Time per iter: {(time_end - time_start) / num_iters * 1e6} us")
+            profiler.end("all-reduce-async-trace")
+            time_taken = profiler.get_duration("all-reduce-async-trace") - profiler.get_duration(
+                "all-reduce-async-trace-warmup"
+            )
+            effective_iter = num_iters - warmup_iters
+            logger.info(f"Time taken: {time_taken} s")
+            logger.info(f"Time per iter: {time_taken / effective_iter} s")
+            logger.info(f"Time per iter: {time_taken / effective_iter * 1e6} us")
 
         else:
-            tt_outs = run_op()
+            tt_outs = run_op(num_iters, store_all_results=validate_all)
 
         ##################################
         ##### Validation
         ##################################
-        for tensor_index in range(len(tt_outs)):
-            tt_out_tensor = tt_outs[tensor_index]
-            output_tensor = output_tensor_goldens_list[tensor_index]
+        def validate(tt_out_tensor, output_tensor):
             for i, t in enumerate(ttnn.get_device_tensors(tt_out_tensor)):
                 # get_device_tensors returns row major, so we need to select the correct golden tensor
                 if cluster_axis == 0:
@@ -209,7 +235,17 @@ def run_all_reduce_impl(
                 else:
                     eq, output = comp_pcc(tt_output_tensor, output_tensor_)
                 assert eq, f"{i} FAILED: {output}"
-            logger.info(f"PCC output for {tensor_index} is: {output}")
+            logger.info(f"PCC output is: {output}")
+
+        if validate_all:
+            for tensor_index in range(len(tt_outs)):
+                tt_out_tensor = tt_outs[tensor_index]
+                output_tensor = output_tensor_goldens_list[tensor_index]
+                validate(tt_out_tensor, output_tensor)
+        else:
+            tt_out_tensor = tt_outs[-1]
+            output_tensor = output_tensor_goldens_list[-1]
+            validate(tt_out_tensor, output_tensor)
 
         for i in range(mesh_device.get_num_devices()):
             assert (
@@ -249,7 +285,12 @@ def run_all_reduce_impl(
         ttnn.bfloat8_b,
     ],
 )
-@pytest.mark.parametrize("num_iters", [5])
+@pytest.mark.parametrize(
+    "num_iters, warmup_iters",
+    [
+        (1000, 100),
+    ],
+)
 @pytest.mark.parametrize("enable_async", [True])
 @pytest.mark.parametrize("trace_mode", [True])
 @pytest.mark.parametrize(
@@ -273,11 +314,14 @@ def test_all_reduce(
     input_num_cores,
     output_num_cores,
     num_iters,
+    warmup_iters,
     enable_async,
     trace_mode,
     use_program_cache,
     function_level_defaults,
 ):
+    profiler = BenchmarkProfiler()
+
     run_all_reduce_impl(
         mesh_device,
         output_shape,
@@ -287,6 +331,17 @@ def test_all_reduce(
         input_num_cores,
         output_num_cores,
         num_iters=num_iters,
+        warmup_iters=warmup_iters,
         enable_async=enable_async,
         trace_mode=trace_mode,
+        validate_all=False,
+        profiler=profiler,
     )
+
+    time_taken = profiler.get_duration("all-reduce-async-trace") - profiler.get_duration(
+        "all-reduce-async-trace-warmup"
+    )
+    effective_iter = num_iters - warmup_iters
+    latency_us = time_taken / effective_iter * 1e6
+    logger.info(f"Time taken: {time_taken} s")
+    logger.info(f"Time per iter: {latency_us} us")
