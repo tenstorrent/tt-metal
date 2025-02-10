@@ -13,6 +13,7 @@
 #include "dev_mem_map.h"
 #include "hostdevcommon/kernel_structs.h"
 #include <dev_msgs.h>
+#include "noc_overlay_parameters.h"
 #include "noc/noc_parameters.h"
 #include "debug/dprint.h"
 #include "risc_common.h"
@@ -25,6 +26,11 @@ extern int32_t bank_to_l1_offset[NUM_L1_BANKS];
 extern void kernel_init(uint32_t kernel_init);
 extern void kernel_launch(uint32_t kernel_base_addr);
 void l1_to_local_mem_copy(uint32_t* dst, uint32_t tt_l1_ptr* src, int32_t len);
+
+#define STREAM_CHANNEL 31
+#define RUN_ALL_TRISCS 7
+#define RUN_NCRISC 8
+#define RUN_ALL 15
 
 inline void do_crt1(uint32_t tt_l1_ptr* data_image) {
     // Clear bss.
@@ -81,4 +87,20 @@ void wait_for_go_message() {
     while (mailboxes->go_message.signal != RUN_MSG_GO) {
         invalidate_l1_cache();
     }
+}
+
+FORCE_INLINE
+void reset_stream_register(uint32_t stream_id) {
+    NOC_STREAM_WRITE_REG(stream_id, STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX, 0);
+}
+
+FORCE_INLINE
+void increment_stream_register(uint32_t stream_id, uint32_t value) {
+    NOC_STREAM_WRITE_REG(
+        stream_id, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX, value << REMOTE_DEST_BUF_WORDS_FREE_INC);
+}
+
+FORCE_INLINE
+uint32_t get_stream_register_value(uint32_t stream_id) {
+    return NOC_STREAM_READ_REG(stream_id, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
 }

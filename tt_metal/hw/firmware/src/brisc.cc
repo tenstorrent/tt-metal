@@ -325,13 +325,15 @@ inline void set_ncrisc_kernel_resume_deassert_address() {
 
 inline void run_triscs(dispatch_core_processor_masks enables) {
     if (enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_COMPUTE) {
-        mailboxes->slave_sync.all = RUN_SYNC_MSG_ALL_TRISCS_GO;
+        increment_stream_register(STREAM_CHANNEL, RUN_ALL_TRISCS);
+        mailboxes->slave_sync.all = RUN_SYNC_MSG_ALL_TRISCS_GO;  // for tracking by watcher
     }
 }
 
 inline void finish_ncrisc_copy_and_run(dispatch_core_processor_masks enables) {
     if (enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM1) {
-        mailboxes->slave_sync.dm1 = RUN_SYNC_MSG_GO;
+        mailboxes->slave_sync.dm1 = RUN_SYNC_MSG_GO;  // for tracking by watcher or GS/WH
+        increment_stream_register(STREAM_CHANNEL, RUN_NCRISC);
 
         l1_to_ncrisc_iram_copy_wait();
 
@@ -344,13 +346,21 @@ inline void finish_ncrisc_copy_and_run(dispatch_core_processor_masks enables) {
 
 inline void wait_ncrisc_trisc() {
     WAYPOINT("NTW");
-    while (mailboxes->slave_sync.all != RUN_SYNC_MSG_ALL_SLAVES_DONE) {
+#ifdef NCRISC_HAS_IRAM
+    // stall on trisc first to reduce L1 hits
+    while ((get_stream_register_value(STREAM_CHANNEL) & RUN_ALL_TRISCS) !=
+           0);  // stall on trisc first to reduce L1 hits
+    while (mailboxes->slave_sync.dm1 != RUN_SYNC_MSG_ALL_SLAVES_DONE) {
         invalidate_l1_cache();
     }
+#else
+    while ((get_stream_register_value(STREAM_CHANNEL) & RUN_ALL) != 0);
+#endif
     WAYPOINT("NTD");
 }
 
 int main() {
+    reset_stream_register(STREAM_CHANNEL);
     configure_l1_data_cache();
     DIRTY_STACK_MEMORY();
     WAYPOINT("I");
