@@ -424,7 +424,6 @@ typedef struct test_device {
             gk_logical_core = {gk_x, gk_y};
             gk_phys_core = device_handle->worker_core_from_logical_core(gk_logical_core);
         }
-
         gk_noc_offset = tt_metal::hal.noc_xy_encoding(gk_phys_core.x, gk_phys_core.y);
     }
 
@@ -466,12 +465,8 @@ typedef struct test_device {
         };
 
         // initialize the semaphore
-        std::cout << "gk physical core " << gk_phys_core.x << " " << gk_phys_core.y << std::endl;
         tt::llrt::write_hex_vec_to_core(device_handle->id(), gk_phys_core, zero_buf, gk_interface_addr);
 
-        std::cout << "runtime args " << runtime_args[0] << " " << runtime_args[1] << std::endl;
-        std::cout << "compile args " << compile_args[0] << " " << compile_args[1] << " " << compile_args[2] << " "
-                  << compile_args[3] << " " << compile_args[4] << " " << compile_args[5] << std::endl;
         KernelHandle kernel;
 
         if (run_gk_on_idle_ethernet) {
