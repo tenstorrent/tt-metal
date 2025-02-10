@@ -1237,7 +1237,7 @@ class TtModelArgs:
         )  # TODO: Needed for TG hang workaround
 
         if in0_block_w is None:
-            in0_block_w = min(4, max(1, k // (self.tile_size * grid_size[0])))
+            in0_block_w = self.find_largest_divisor(k // (self.tile_size * grid_size[1]))
 
         return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=grid_size,
