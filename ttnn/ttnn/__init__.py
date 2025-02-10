@@ -101,7 +101,7 @@ from ttnn._ttnn.multi_device import (
     get_device_tensors,
     aggregate_as_tensor,
     get_t3k_physical_device_ids_ring,
-    sharded_tensor_to_tensor_list,
+    sharded_tensor_to_torch_tensor_list,
 )
 
 import contextlib
