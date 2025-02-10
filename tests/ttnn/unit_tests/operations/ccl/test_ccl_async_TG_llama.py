@@ -98,7 +98,7 @@ CORE_RANGE_SET_1x1 = ttnn.CoreRangeSet(
 @pytest.mark.parametrize(
     "num_iters, warmup_iters",
     [
-        (500, 100),
+        (2500, 100),
     ],
 )
 @pytest.mark.parametrize("shard_grid_orientation", [ttnn.ShardOrientation.ROW_MAJOR])
@@ -119,7 +119,7 @@ CORE_RANGE_SET_1x1 = ttnn.CoreRangeSet(
                 }
             ),
             ttnn.TILE_LAYOUT,
-            32,
+            14.5,
         ),
         (  # AllGather after Binary Mult+Silu
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
@@ -130,7 +130,7 @@ CORE_RANGE_SET_1x1 = ttnn.CoreRangeSet(
             (32, 160),
             get_core_range_set(PREFETCHER_NOC1_RING),
             ttnn.TILE_LAYOUT,
-            25,
+            15.5,
         ),
         (  # AllGather for layernorm
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
@@ -141,7 +141,7 @@ CORE_RANGE_SET_1x1 = ttnn.CoreRangeSet(
             (32, 128),
             CORE_RANGE_SET_1x1,
             ttnn.TILE_LAYOUT,
-            13,
+            9.5,
         ),
     ),
 )
@@ -234,9 +234,9 @@ def test_all_gather_tg_llama(
 @pytest.mark.parametrize(
     "output_shape, cluster_axis, num_links, input_num_cores, output_num_cores, perf_target_us",
     [
-        ([1, 1, 32, 2048], 0, 4, 24, 16, 84),  # FF2/DO all reduce
-        ([1, 1, 32, 1280], 1, 3, 24, 40, 60),  # QKV all reduce
-        ([1, 1, 32, 3584], 1, 3, 24, 24, 69),  # FF1 all reduce
+        ([1, 1, 32, 2048], 0, 4, 24, 16, 35.5),  # FF2/DO all reduce
+        ([1, 1, 32, 1280], 1, 3, 24, 40, 34.5),  # QKV all reduce
+        ([1, 1, 32, 3584], 1, 3, 24, 24, 40),  # FF1 all reduce
     ],
 )
 @pytest.mark.parametrize(
@@ -248,7 +248,7 @@ def test_all_gather_tg_llama(
 @pytest.mark.parametrize(
     "num_iters, warmup_iters",
     [
-        (1000, 100),
+        (2500, 100),
     ],
 )
 @pytest.mark.parametrize("enable_async", [True])
