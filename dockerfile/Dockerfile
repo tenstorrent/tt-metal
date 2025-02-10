@@ -152,17 +152,18 @@ RUN mkdir -p /tmp/xtensor_xtl \
     && make -C /tmp/xtensor_xtl/build install \
     && rm -rf /tmp/xtensor_xtl
 
-ARG XTENSOR_VERSION=0.25.0
-RUN mkdir -p /tmp/xtensor \
-    && wget -O /tmp/xtensor/xtensor-${XTENSOR_VERSION}.tar.gz "https://github.com/xtensor-stack/xtensor/archive/refs/tags/${XTENSOR_VERSION}.tar.gz" \
-    && tar -xzf /tmp/xtensor/xtensor-${XTENSOR_VERSION}.tar.gz -C /tmp/xtensor --strip-components=1 \
-    && cmake \
-         -S /tmp/xtensor \
-         -B /tmp/xtensor/build \
-         -DCMAKE_BUILD_TYPE=Release \
-    && make -C /tmp/xtensor/build -j$(nproc) \
-    && make -C /tmp/xtensor/build install \
-    && rm -rf /tmp/xtensor
+# xtensor problemstic
+#ARG XTENSOR_VERSION=0.25.0
+#RUN mkdir -p /tmp/xtensor \
+#    && wget -O /tmp/xtensor/xtensor-${XTENSOR_VERSION}.tar.gz "https://github.com/xtensor-stack/xtensor/archive/refs/tags/${XTENSOR_VERSION}.tar.gz" \
+#    && tar -xzf /tmp/xtensor/xtensor-${XTENSOR_VERSION}.tar.gz -C /tmp/xtensor --strip-components=1 \
+#    && cmake \
+#         -S /tmp/xtensor \
+#         -B /tmp/xtensor/build \
+#         -DCMAKE_BUILD_TYPE=Release \
+#    && make -C /tmp/xtensor/build -j$(nproc) \
+#    && make -C /tmp/xtensor/build install \
+#    && rm -rf /tmp/xtensor
 
 # Issue arises - No blas
 #ARG XTENSOR_BLAS_VERSION=0.21.0
