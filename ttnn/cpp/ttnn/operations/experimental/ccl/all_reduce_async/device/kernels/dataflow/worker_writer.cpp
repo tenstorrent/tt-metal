@@ -4,6 +4,8 @@
 
 #include "dataflow_api.h"
 #include <tt-metalium/buffer_constants.hpp>
+#include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/fabric_connection_manager.hpp"
+#include "cpp/ttnn/operations/ccl/common/interpreter_backends/kernel_common/noc_addr.hpp"
 #include "cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/minimal_ccl_common.hpp"
 #include <cstdint>
 #include <utility>
@@ -133,13 +135,12 @@ void kernel_main() {
 
     // 2. mcast output ready semaphore
     auto* pkt_hdr = reinterpret_cast<tt::fabric::PacketHeader*>(packet_header_buffer_seminc);
-    pkt_hdr->to_atomic_inc();
+    uint64_t out_ready_sem_noc_addr_in_pkt =
+        safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr, 0);
     pkt_hdr->to_noc_unicast_atomic_inc(tt::fabric::NocUnicastAtomicIncCommandHeader{
-        out_ready_sem_bank_addr,
+        out_ready_sem_noc_addr_in_pkt,
         static_cast<uint16_t>(1),  // increment 1
-        32,
-        static_cast<uint8_t>(out_ready_sem_noc0_x),
-        static_cast<uint8_t>(out_ready_sem_noc0_y)});
+        32});
     // Write the mcast packet (forward)
     if (fabric_connection.has_forward_connection()) {
         fabric_connection.get_forward_connection().wait_for_empty_write_slot();
