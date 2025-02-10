@@ -56,6 +56,8 @@ public:
     tt::ARCH arch() const override;
 
     chip_id_t id() const override { return id_; }
+    // For a single device, build id is the same as device id
+    chip_id_t build_id() const override { return id_; }
 
     uint8_t num_hw_cqs() const override { return num_hw_cqs_; }
 

@@ -83,6 +83,7 @@ public:
     // IDevice interface implementation
     tt::ARCH arch() const override;
     MeshDeviceID id() const override;
+    chip_id_t build_id() const override;
     uint8_t num_hw_cqs() const override;
     bool is_initialized() const override;
 

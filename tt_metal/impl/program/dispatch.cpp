@@ -218,8 +218,8 @@ uint32_t finalize_kernel_bins(
             auto& optional_id = kg->kernel_ids[class_id];
             if (optional_id) {
                 const auto kernel = kernels.at(optional_id.value());
-                const std::vector<const ll_api::memory*>& binaries =
-                    kernel->binaries(BuildEnvManager::get_instance().get_device_build_env(device->id()).build_key);
+                const std::vector<const ll_api::memory*>& binaries = kernel->binaries(
+                    BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
                 // TODO: this is really ugly, save me future-HAL!
                 if (programmable_core_type_index ==
                     hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)) {
