@@ -99,11 +99,12 @@ if(magic_enum_ADDED)
     if(NOT TARGET magic_enum::magic_enum)
         add_library(magic_enum::magic_enum ALIAS magic_enum)
     endif()
-    # If find_package is used beneath the hood, the target magic_enum won't exist
-    # tt-metal has been updated to ingest the target magic_enum::magic_enum, but UMD hasn't
-    if(NOT TARGET magic_enum)
-        add_library(magic_enum ALIAS magic_enum::magic_enum)
-    endif()
+endif()
+
+# If find_package is used beneath the hood, the target magic_enum won't exist
+# tt-metal has been updated to ingest the target magic_enum::magic_enum, but UMD hasn't
+if(NOT TARGET magic_enum)
+    add_library(magic_enum ALIAS magic_enum::magic_enum)
 endif()
 
 ############################################################################################################################
