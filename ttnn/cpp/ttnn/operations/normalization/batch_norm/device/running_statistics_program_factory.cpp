@@ -214,14 +214,14 @@ RunningStatistics::RunningStatisticsProgramFactory::create(
         b_num_tiles_per_cb,
         b_data_format);  // to store 1
     auto [updated_m_cb, updated_m_cb_handle] = create_cb(
-        tt::CBIndex::c_27,
+        tt::CBIndex::c_7,
         program,
         all_device_cores,
         d_single_tile_size,
         b_num_tiles_per_cb,
         d_data_format);  // updated running mean
     auto [updated_v_cb, updated_v_cb_handle] = create_cb(
-        tt::CBIndex::c_28,
+        tt::CBIndex::c_8,
         program,
         all_device_cores,
         e_single_tile_size,
@@ -230,13 +230,13 @@ RunningStatistics::RunningStatisticsProgramFactory::create(
 
     // Intermediate buffers required for updation of running stats
     auto [tmp1_cb, tmp1_cb_handle] =
-        create_cb(tt::CBIndex::c_21, program, all_device_cores, b_single_tile_size, b_num_tiles_per_cb, b_data_format);
+        create_cb(tt::CBIndex::c_9, program, all_device_cores, b_single_tile_size, b_num_tiles_per_cb, b_data_format);
 
     auto [tmp2_cb, tmp2_cb_handle] =
-        create_cb(tt::CBIndex::c_22, program, all_device_cores, b_single_tile_size, b_num_tiles_per_cb, b_data_format);
+        create_cb(tt::CBIndex::c_10, program, all_device_cores, b_single_tile_size, b_num_tiles_per_cb, b_data_format);
 
     auto [tmp3_cb, tmp3_cb_handle] =
-        create_cb(tt::CBIndex::c_23, program, all_device_cores, b_single_tile_size, b_num_tiles_per_cb, b_data_format);
+        create_cb(tt::CBIndex::c_11, program, all_device_cores, b_single_tile_size, b_num_tiles_per_cb, b_data_format);
 
     auto a_is_dram = static_cast<uint32_t>(batch_mean_tensor.buffer()->buffer_type() == tt_metal::BufferType::DRAM);
     auto b_is_dram = static_cast<uint32_t>(batch_var_tensor.buffer()->buffer_type() == tt_metal::BufferType::DRAM);
