@@ -337,7 +337,7 @@ def run_test_LlamaAttention_inference(
             attn_mask,
             mode=mode,
         )
-        # tt_out = ttnn.sharded_tensor_to_tensor_list(tt_out)
+        # tt_out = ttnn.sharded_tensor_to_torch_tensor_list(tt_out)
 
         tt_out = ttnn.to_torch(
             tt_out, mesh_composer=ConcatMesh2DToTensor(mesh_device, dims=(3, 1), cluster_shape=cluster_shape)
