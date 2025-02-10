@@ -457,3 +457,7 @@ html.writer-html5
 .rst-versions.shift-up {
   overflow-y: auto;
 }
+
+.project-versions {
+  font-size:small;
+}
