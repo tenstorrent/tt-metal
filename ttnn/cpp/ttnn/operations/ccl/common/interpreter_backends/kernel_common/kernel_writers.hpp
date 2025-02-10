@@ -33,8 +33,7 @@ FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
     pkt_hdr->reserved2 = my_chip_id;
 #endif
 
-    size_t packet_send_size_bytes = payload_size_bytes + sizeof(tt::fabric::PacketHeader);
-    pkt_hdr->to_noc_unicast_write(tt::fabric::NocUnicastCommandHeader{noc0_dest_noc_addr, packet_send_size_bytes});
+    pkt_hdr->to_noc_unicast_write(tt::fabric::NocUnicastCommandHeader{noc0_dest_noc_addr}, payload_size_bytes);
 
     switch (current_cmd_header.dest_type) {
         case ttnn::ccl::cmd::CclCommandDestType::CHIP_UNICAST: {
@@ -42,7 +41,7 @@ FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
             auto& fabric_conn = unicast_args.is_forward_direction ? fabric_connection.get_forward_connection()
                                                                   : fabric_connection.get_backward_connection();
 
-            pkt_hdr->to_chip_unicast(tt::fabric::UnicastRoutingCommandHeader{unicast_args.distance_in_hops});
+            pkt_hdr->to_chip_unicast(unicast_args.distance_in_hops);
             fabric_conn.wait_for_empty_write_slot();
             fabric_conn.send_payload_without_header_non_blocking_from_address(l1_read_addr, payload_size_bytes);
             fabric_conn.send_payload_flush_blocking_from_address((uint32_t)pkt_hdr, sizeof(tt::fabric::PacketHeader));
