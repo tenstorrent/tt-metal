@@ -16,18 +16,18 @@ void MAIN {
     constexpr uint32_t old_running_mean_has_value = get_compile_time_arg_val(0) == 1;
     constexpr uint32_t old_running_var_has_value = get_compile_time_arg_val(1) == 1;
 
-    constexpr auto cb_batch_mean = tt::CBIndex::c_0;  // batch mean
-    constexpr auto cb_batch_var = tt::CBIndex::c_1;   // batch var
-    constexpr auto cb_out0 = tt::CBIndex::c_2;
-    constexpr auto cb_old_running_mean = tt::CBIndex::c_3;       // old running mean tensor
-    constexpr auto cb_old_running_var = tt::CBIndex::c_4;        // old running var tensor
-    constexpr auto cb_updated_running_mean = tt::CBIndex::c_27;  // updated running mean tensor
-    constexpr auto cb_updated_running_var = tt::CBIndex::c_28;   // updated running var tensor
-    constexpr auto cb_momentum = tt::CBIndex::c_5;               // momentum
-    constexpr auto cb_one = tt::CBIndex::c_6;                    // stores 1
-    constexpr auto cb_tmp1 = tt::CBIndex::c_21;                  // tmp 1
-    constexpr auto cb_tmp2 = tt::CBIndex::c_22;                  // tmp 2
-    constexpr auto cb_tmp3 = tt::CBIndex::c_23;                  // tmp 3
+    constexpr auto cb_batch_mean = get_compile_time_arg_val(2);  // batch mean
+    constexpr auto cb_batch_var = get_compile_time_arg_val(3);   // batch var
+    constexpr auto cb_out0 = get_compile_time_arg_val(4);
+    constexpr auto cb_old_running_mean = get_compile_time_arg_val(5);      // old running mean tensor
+    constexpr auto cb_old_running_var = get_compile_time_arg_val(6);       // old running var tensor
+    constexpr auto cb_updated_running_mean = get_compile_time_arg_val(7);  // updated running mean tensor
+    constexpr auto cb_updated_running_var = get_compile_time_arg_val(8);   // updated running var tensor
+    constexpr auto cb_momentum = get_compile_time_arg_val(9);              // momentum
+    constexpr auto cb_one = get_compile_time_arg_val(10);                  // stores 1
+    constexpr auto cb_tmp1 = get_compile_time_arg_val(11);                 // tmp 1
+    constexpr auto cb_tmp2 = get_compile_time_arg_val(12);                 // tmp 2
+    constexpr auto cb_tmp3 = get_compile_time_arg_val(13);                 // tmp 3
 
     unary_op_init_common(cb_batch_mean, cb_out0);
     constexpr uint32_t onetile = 1;
