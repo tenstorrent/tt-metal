@@ -199,6 +199,7 @@ JitBuildStateSet create_build_state(JitBuildEnv& build_env, chip_id_t device_id,
 }
 
 void BuildEnvManager::add_build_env(chip_id_t device_id, uint8_t num_hw_cqs) {
+    const std::lock_guard<std::mutex> lock(this->lock);
     uint32_t build_key = compute_build_key(device_id, num_hw_cqs);
     auto device_kernel_defines = initialize_device_kernel_defines(device_id, num_hw_cqs);
 
@@ -211,6 +212,7 @@ void BuildEnvManager::add_build_env(chip_id_t device_id, uint8_t num_hw_cqs) {
 }
 
 const DeviceBuildEnv& BuildEnvManager::get_device_build_env(chip_id_t device_id) {
+    const std::lock_guard<std::mutex> lock(this->lock);
     TT_ASSERT(device_id_to_build_env_.count(device_id) != 0, "Couldn't find build env for device {}.", device_id);
     return device_id_to_build_env_[device_id];
 }
@@ -237,6 +239,7 @@ JitBuildStateSubset BuildEnvManager::get_kernel_build_states(
 
 std::pair<int, int> BuildEnvManager::get_build_index_and_state_count(
     uint32_t programmable_core, uint32_t processor_class) {
+    const std::lock_guard<std::mutex> lock(this->lock);
     TT_ASSERT(
         programmable_core < build_state_indices_.size(),
         "Programmable core type {} is not included in the FW or Kernel build state",
