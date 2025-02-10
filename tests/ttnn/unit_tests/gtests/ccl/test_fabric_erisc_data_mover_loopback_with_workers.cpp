@@ -3266,7 +3266,6 @@ TEST(EdmFabric, DISABLED_BasicMcastThroughputTest_SenderFullNoWrap_ReceiverNoWra
     RunWriteThroughputStabilityTestWithPersistentFabric(
         num_mcasts, num_unicasts, num_links, num_op_invocations, params);
 }
-// hangs with DPRINT
 TEST(EdmFabric, BasicMcastThroughputTest_SenderFullNoWrap_ReceiverNoWrap_2Device) {
     const size_t num_mcasts = 9;
     const size_t num_unicasts = 0;
@@ -3294,7 +3293,6 @@ TEST(EdmFabric, DISABLED_BasicMcastThroughputTest_SenderFullNoWrap_ReceiverNoWra
     RunWriteThroughputStabilityTestWithPersistentFabric(
         num_mcasts, num_unicasts, num_links, num_op_invocations, params);
 }
-// First to hang - maybe somethign to do with merging traffic
 TEST(EdmFabric, DISABLED_BasicMcastThroughputTest_SenderFullNoWrap_ReceiverNoWrap_TwoWorkers_4Device) {
     const size_t num_mcasts = 9;
     const size_t num_unicasts = 0;
@@ -3600,6 +3598,18 @@ TEST(EdmFabric, BasicMcastThroughputTest_3) {
     const bool line_sync = true;
     WriteThroughputStabilityTestWithPersistentFabricParams params;
     params.line_sync = line_sync;
+    RunWriteThroughputStabilityTestWithPersistentFabric(
+        num_mcasts, num_unicasts, num_links, num_op_invocations, params);
+}
+TEST(EdmFabric, BasicMcastThroughputTest_3_onehop) {
+    const size_t num_mcasts = 200000;
+    const size_t num_unicasts = 2;
+    const size_t num_links = 1;
+    const size_t num_op_invocations = 1;
+    const bool line_sync = true;
+    WriteThroughputStabilityTestWithPersistentFabricParams params;
+    params.line_sync = line_sync;
+    params.line_size = 2;
     RunWriteThroughputStabilityTestWithPersistentFabric(
         num_mcasts, num_unicasts, num_links, num_op_invocations, params);
 }

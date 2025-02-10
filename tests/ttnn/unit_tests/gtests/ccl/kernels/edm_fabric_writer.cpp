@@ -128,7 +128,7 @@ void kernel_main() {
 
     mcast_fwd_packet_header->to_chip_multicast(MulticastRoutingCommandHeader{1, static_cast<uint8_t>(mcast_fwd_hops)});
     mcast_bwd_packet_header->to_chip_multicast(MulticastRoutingCommandHeader{1, static_cast<uint8_t>(mcast_bwd_hops)});
-    unicast_packet_header->to_chip_unicast(UnicastRoutingCommandHeader{static_cast<uint8_t>(unicast_hops)});
+    unicast_packet_header->to_chip_unicast(static_cast<uint8_t>(unicast_hops));
 
     {
         DeviceZoneScopedN("MAIN-WRITE-ZONE");
@@ -140,8 +140,8 @@ void kernel_main() {
             noc_async_write(source_l1_buffer_address, dest_addr, packet_payload_size_bytes);
             if (fabric_connection.has_forward_connection()) {
                 DeviceZoneScopedN("WR-FWD");
-                mcast_fwd_packet_header->to_noc_unicast_write(NocUnicastCommandHeader{
-                    noc0_dest_addr, packet_payload_size_bytes + sizeof(tt::fabric::PacketHeader)});
+                mcast_fwd_packet_header->to_noc_unicast_write(
+                    NocUnicastCommandHeader{noc0_dest_addr}, packet_payload_size_bytes);
                 {
                     DeviceZoneScopedN("WR-FWD-WAIT");
                     fabric_connection.get_forward_connection().wait_for_empty_write_slot();
@@ -155,8 +155,8 @@ void kernel_main() {
 
             if (fabric_connection.has_backward_connection()) {
                 DeviceZoneScopedN("WR-BWD");
-                mcast_bwd_packet_header->to_noc_unicast_write(NocUnicastCommandHeader{
-                    noc0_dest_addr, packet_payload_size_bytes + sizeof(tt::fabric::PacketHeader)});
+                mcast_bwd_packet_header->to_noc_unicast_write(
+                    NocUnicastCommandHeader{noc0_dest_addr}, packet_payload_size_bytes);
                 {
                     DeviceZoneScopedN("WR-BWD-WAIT");
                     fabric_connection.get_backward_connection().wait_for_empty_write_slot();
@@ -179,7 +179,7 @@ void kernel_main() {
         DeviceZoneScopedN("UNICAST-WRITE");
         auto& fabric_conn =
             unicast_is_fwd ? fabric_connection.get_forward_connection() : fabric_connection.get_backward_connection();
-        unicast_packet_header->to_noc_unicast_write(NocUnicastCommandHeader{noc0_dest_addr, packet_payload_size_bytes});
+        unicast_packet_header->to_noc_unicast_write(NocUnicastCommandHeader{noc0_dest_addr}, packet_payload_size_bytes);
         fabric_conn.wait_for_empty_write_slot();
         fabric_conn.send_payload_without_header_non_blocking_from_address(
             source_l1_buffer_address, packet_payload_size_bytes);

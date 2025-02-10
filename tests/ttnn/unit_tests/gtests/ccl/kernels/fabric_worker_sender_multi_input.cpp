@@ -59,12 +59,10 @@ auto forward_to_fabric_from_cb(
     if constexpr (mcast_mode) {
         packet_header
             .to_chip_multicast(tt::fabric::MulticastRoutingCommandHeader{config.mcast.distance, config.mcast.range})
-            .to_noc_unicast_write(tt::fabric::NocUnicastCommandHeader{
-                noc0_dest_address, (pages_to_send * page_size) + sizeof(tt::fabric::PacketHeader)});
+            .to_noc_unicast_write(tt::fabric::NocUnicastCommandHeader{noc0_dest_address}, (pages_to_send * page_size));
     } else {
-        packet_header.to_chip_unicast(tt::fabric::UnicastRoutingCommandHeader{config.unicast.distance})
-            .to_noc_unicast_write(tt::fabric::NocUnicastCommandHeader{
-                noc0_dest_address, (pages_to_send * page_size) + sizeof(tt::fabric::PacketHeader)});
+        packet_header.to_chip_unicast(config.unicast.distance)
+            .to_noc_unicast_write(tt::fabric::NocUnicastCommandHeader{noc0_dest_address}, (pages_to_send * page_size));
     }
 
     uint64_t buffer_address = sender.edm_buffer_addr + (*sender.buffer_index_ptr * (sender.buffer_size_bytes + sizeof(eth_channel_sync_t)));
@@ -189,7 +187,7 @@ void kernel_main() {
     packet_header.reserved = 0xE;
     packet_header.reserved2 = 0xFFFF;
     uint64_t last_message_sem_noc_addr = get_noc_addr(my_x[0], my_y[0], last_message_semaphore_address);
-    packet_header.to_chip_unicast(tt::fabric::UnicastRoutingCommandHeader{kLoopbackNumHopsToMyChip});
+    packet_header.to_chip_unicast(kLoopbackNumHopsToMyChip);
     packet_header.to_noc_unicast_atomic_inc(
         tt::fabric::NocUnicastAtomicIncCommandHeader(last_message_sem_noc_addr, 1, 32));
 
