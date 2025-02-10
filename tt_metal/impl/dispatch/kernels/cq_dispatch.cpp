@@ -920,8 +920,10 @@ void process_go_signal_mcast_cmd() {
     uint8_t go_signal_noc_data_idx = cmd->mcast.noc_data_start_index;
     // send go signal update here
     for (uint32_t i = 0, num_mcasts = cmd->mcast.num_mcast_txns; i < num_mcasts; ++i) {
+        DPRINT << "debug " << HEX() << go_signal_noc_data[go_signal_noc_data_idx] << DEC() << ENDL();
         uint64_t dst = get_noc_addr_helper(go_signal_noc_data[go_signal_noc_data_idx++], mcast_go_signal_addr);
         // packed_write_max_unicast_sub_cmds is the total number of compute cores (num_mcast_dests for this txn)
+        WAYPOINT("HERE");
         noc_async_write_multicast_one_packet(
             (uint32_t)(aligned_go_signal_storage), dst, sizeof(uint32_t), go_signal_noc_data[go_signal_noc_data_idx++]);
     }
@@ -1235,6 +1237,8 @@ void kernel_main() {
             0x80000000,
             upstream_noc_index);
     }
+
+    DPRINT << "UPSTREAM_NOC_X " << UPSTREAM_NOC_X << " UPSTREAM_NOC_Y " << UPSTREAM_NOC_Y << ENDL();
 
     // Release any held pages from the previous block
     cb_block_release_pages<

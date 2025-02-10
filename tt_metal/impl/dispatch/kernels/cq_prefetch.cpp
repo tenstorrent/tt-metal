@@ -209,6 +209,7 @@ FORCE_INLINE uint32_t read_from_pcie(
     }
 
     uint64_t host_src_addr = pcie_noc_xy | pcie_read_ptr;
+    DPRINT << "read_from_pcie: " << HEX() << pcie_noc_xy << " " << host_src_addr << DEC() << ENDL();
     // DPRINT << "read_from_pcie: " << fence + preamble_size << " " << pcie_read_ptr << ENDL();
     noc_async_read(host_src_addr, fence + preamble_size, size);
     pending_read_size = size + preamble_size;
@@ -1229,14 +1230,14 @@ bool process_cmd(
             break;
 
         case CQ_PREFETCH_CMD_TERMINATE:
-            // DPRINT << "prefetch terminating_" << is_h_variant << is_d_variant << ENDL();
+            DPRINT << "prefetch terminating_" << is_h_variant << is_d_variant << ENDL();
             ASSERT(!exec_buf);
             done = true;
             break;
 
         default:
-            // DPRINT << "prefetch invalid command:" << (uint32_t)cmd->base.cmd_id << " " << cmd_ptr << " " <<
-            // cmddat_q_base << ENDL();
+            DPRINT << "prefetch invalid command:" << (uint32_t)cmd->base.cmd_id << " " << cmd_ptr << " "
+                   << cmddat_q_base << ENDL();
             //  DPRINT << HEX() << *(uint32_t*)cmd_ptr << ENDL();
             //  DPRINT << HEX() << *((uint32_t*)cmd_ptr+1) << ENDL();
             //  DPRINT << HEX() << *((uint32_t*)cmd_ptr+2) << ENDL();
@@ -1455,8 +1456,12 @@ void kernel_main() {
     }
     IDLE_ERISC_RETURN();
 
+    DPRINT << "waiting" << ENDL();
+
     // Confirm expected number of pages, spinning here is a leak
     cb_wait_all_pages<my_downstream_cb_sem_id>(downstream_cb_pages);
+
+    DPRINT << "done waiting" << ENDL();
 
     noc_async_full_barrier();
 
