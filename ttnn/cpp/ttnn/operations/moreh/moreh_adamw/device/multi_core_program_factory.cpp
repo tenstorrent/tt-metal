@@ -42,7 +42,7 @@ MorehAdamWDeviceOperation::MultiCore::cached_program_t MorehAdamWDeviceOperation
 
     DeviceComputeKernelConfig compute_kernel_config = operation_attributes.compute_kernel_config;
 
-    Program program{};
+    Program program = tt::tt_metal::CreateProgram();
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup

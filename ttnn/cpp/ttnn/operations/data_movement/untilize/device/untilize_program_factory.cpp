@@ -36,7 +36,7 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column_subgrid(
     bool use_pack_untilize,
     bool fp32_dest_acc_en,
     const CoreRangeSet& sub_core_grids) {
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
@@ -216,7 +216,7 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column_subgrid(
 
 operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
     const Tensor& a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en) {
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
@@ -451,7 +451,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
     bool use_pack_untilize,
     bool fp32_dest_acc_en,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     bool src_sharded = a.memory_config().is_sharded();
     bool out_sharded = output.memory_config().is_sharded();
@@ -878,7 +878,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
 
 operation::ProgramWithCallbacks untilize_single_core(
     const Tensor& a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en) {
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     CoreRange core({0, 0}, {0, 0});
 

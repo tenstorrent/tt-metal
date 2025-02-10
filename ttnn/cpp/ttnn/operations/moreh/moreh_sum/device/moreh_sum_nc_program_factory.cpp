@@ -22,7 +22,7 @@ MorehSumOperation::MorehSumNCFactory::cached_program_t MorehSumOperation::MorehS
     const DeviceComputeKernelConfig& compute_kernel_config = operation_attributes.compute_kernel_config;
 
     auto* device = input.device();
-    auto program = Program();
+    auto program = CreateProgram();
 
     const auto cb_data_format = datatype_to_dataformat_converter(output.get_dtype());
     const auto single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);

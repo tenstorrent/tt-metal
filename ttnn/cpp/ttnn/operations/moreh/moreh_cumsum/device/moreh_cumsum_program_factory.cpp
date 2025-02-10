@@ -25,7 +25,7 @@ MorehCumsumDeviceOperation::ProgramFactory::cached_program_t MorehCumsumDeviceOp
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
     auto* device = input.device();
-    auto program = Program();
+    auto program = CreateProgram();
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup

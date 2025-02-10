@@ -49,7 +49,7 @@ PermuteDeviceOperation::MultiCoreRowInvariant::cached_program_t PermuteDeviceOpe
     auto src_buffer = input_tensor.buffer();
     auto dst_buffer = output_tensor.buffer();
 
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
     uint32_t input_rm_page_size = detail::page_size(input_tensor);
@@ -177,7 +177,7 @@ PermuteDeviceOperation::MultiCoreBlockedGeneric::create(
     auto src_buffer = input_tensor.buffer();
     auto dst_buffer = output_tensor.buffer();
 
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
     uint32_t w_block_size = constants::TILE_WIDTH;

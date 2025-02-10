@@ -94,7 +94,7 @@ operation::ProgramWithCallbacks create_program_dram_sharded(
     // currently only support transpose of the full tile
     bool in1_transpose_tile = in1_tile.get_transpose_of_faces() && in1_tile.get_transpose_within_face();
 
-    tt_metal::Program program{};
+    tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     // get the dram readers
     std::vector<CoreCoord> all_worker_cores_ordered;

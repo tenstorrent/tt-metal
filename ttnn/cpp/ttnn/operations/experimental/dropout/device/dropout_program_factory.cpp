@@ -171,7 +171,7 @@ DropoutProgramFactory::cached_program_t DropoutProgramFactory::create(
     const auto& input = tensor_args.input;
     auto* device = input.device();
 
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     tt::DataFormat data_fmt_in = datatype_to_dataformat_converter(input.get_dtype());
     tt::DataFormat data_fmt_out = datatype_to_dataformat_converter(output.get_dtype());

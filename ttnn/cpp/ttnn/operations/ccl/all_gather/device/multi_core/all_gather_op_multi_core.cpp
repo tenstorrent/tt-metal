@@ -252,7 +252,7 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers(
     ccl::Topology topology,
     const std::optional<size_t> user_defined_num_workers,
     const std::optional<size_t> user_defined_num_buffers_per_channel) {
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     std::optional<experimental::ccl::AllGatherFusedOpSignaler> empty_fused_op_signaler;
     return all_gather_multi_core_with_workers_helper(
         program,

@@ -22,7 +22,7 @@ operation::ProgramWithCallbacks update_cache_multi_core(
     const uint32_t update_idx,
     const uint32_t batch_offset,
     ttnn::DeviceComputeKernelConfig compute_kernel_config) {
-    Program program{};
+    Program program = tt::tt_metal::CreateProgram();
 
     tt::DataFormat cache_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(cache_tensor.get_dtype());
     uint32_t cache_single_tile_size = tt::tt_metal::detail::TileSize(cache_cb_data_format);
@@ -321,7 +321,7 @@ operation::ProgramWithCallbacks update_cache_multi_core(
 
 operation::ProgramWithCallbacks fill_cache_multi_core(
     const Tensor& cache_tensor, const Tensor& input_tensor, const uint32_t batch_idx, const uint32_t update_idx) {
-    Program program{};
+    Program program = tt::tt_metal::CreateProgram();
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
     uint32_t single_tile_size = tt::tt_metal::detail::TileSize(cb_data_format);

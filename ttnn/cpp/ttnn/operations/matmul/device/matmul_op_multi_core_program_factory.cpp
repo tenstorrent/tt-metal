@@ -19,7 +19,7 @@ namespace operations {
 namespace matmul {
 
 operation::ProgramWithCallbacks matmul_multi_core(const Tensor& a, const Tensor& b, Tensor& output, bool bcast_batch) {
-    tt_metal::Program program{};
+    tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     const auto &ashape = a.get_padded_shape(), bshape = b.get_padded_shape();
 

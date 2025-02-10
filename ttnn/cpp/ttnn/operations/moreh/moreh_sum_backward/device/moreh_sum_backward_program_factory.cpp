@@ -67,7 +67,7 @@ MorehSumBackwardOperation::ProgramFactory::cached_program_t MorehSumBackwardOper
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
     auto* device = output_grad.device();
-    auto program = Program();
+    auto program = CreateProgram();
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup

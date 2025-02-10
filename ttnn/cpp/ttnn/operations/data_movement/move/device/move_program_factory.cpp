@@ -60,7 +60,7 @@ std::vector<CoreRange> get_multicast_regions(
 // buffer is deallocated before the op runs. In this case, data in each core needs to be moved to a temporary local
 // location before being copied into the output buffer
 operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor& input, Tensor& output) {
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input.get_dtype());
 
@@ -200,7 +200,7 @@ operation::ProgramWithCallbacks move_multi_core_with_overlap(const Tensor& input
 
 // Sharded buffers are mapped to CBs. Move from top of src CB to dst CB
 operation::ProgramWithCallbacks move_multi_core_sharded(const Tensor& input, Tensor& output) {
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input.get_dtype());
     auto shard_spec = input.shard_spec().value();

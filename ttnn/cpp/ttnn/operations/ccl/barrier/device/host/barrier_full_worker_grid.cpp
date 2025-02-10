@@ -110,7 +110,7 @@ operation::ProgramWithCallbacks barrier_with_workers(
     // Get a representation of the topology
 
     // Create the program
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     //////////////////
     // query the core ids
     auto const& topology_config = ttnn::ccl::RingTopology(

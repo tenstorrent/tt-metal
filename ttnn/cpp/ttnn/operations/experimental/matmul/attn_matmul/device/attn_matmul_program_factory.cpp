@@ -23,7 +23,7 @@ operation::ProgramWithCallbacks multi_core_attn_matmul(
     std::optional<const bool> transpose_hw,
     CoreCoord compute_with_storage_grid_size,
     ttnn::DeviceComputeKernelConfig compute_kernel_config) {
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     const auto &ashape = a.get_padded_shape(), bshape = b.get_padded_shape();
 
