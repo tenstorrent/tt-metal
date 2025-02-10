@@ -40,7 +40,7 @@ FORCE_INLINE auto wrap_increment(T val) -> T {
     } else if constexpr (LIMIT == 2) {
         return 1 - val;
     } else if constexpr (is_pow2) {
-        return (val + 1) & (LIMIT - 1);
+        return (val + 1) & (static_cast<T>(LIMIT - 1));
     } else {
         return (val == static_cast<T>(LIMIT - 1)) ? static_cast<T>(0) : static_cast<T>(val + 1);
     }
@@ -80,9 +80,9 @@ FORCE_INLINE auto normalize_ptr(BufferPtr ptr) -> BufferIndex {
     constexpr bool is_size_1 = NUM_BUFFERS == 1;
     constexpr uint8_t wrap_mask = NUM_BUFFERS - 1;
     if constexpr (is_size_pow2) {
-        return BufferIndex{ptr & wrap_mask};
+        return BufferIndex{static_cast<uint8_t>(ptr.get() & wrap_mask)};
     } else if constexpr (is_size_2) {
-        return BufferIndex{(uint8_t)1 - ptr};
+        return BufferIndex{(uint8_t)1 - ptr.get()};
     } else if constexpr (is_size_1) {
         return BufferIndex{0};
     } else {
@@ -149,7 +149,7 @@ public:
     FORCE_INLINE void increment_n(uint8_t n) {
         this->ptr = BufferPtr{wrap_increment_n<2 * NUM_BUFFERS>(this->ptr.get(), n)};
     }
-    FORCE_INLINE void increment() { this->ptr = wrap_increment<2 * NUM_BUFFERS>(this->ptr); }
+    FORCE_INLINE void increment() { this->ptr = BufferPtr{wrap_increment<2 * NUM_BUFFERS>(this->ptr.get())}; }
 
 private:
     // Make these private to make sure caller doesn't accidentally mix two pointers pointing to
