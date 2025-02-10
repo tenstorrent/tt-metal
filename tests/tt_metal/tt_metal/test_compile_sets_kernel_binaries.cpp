@@ -248,7 +248,7 @@ int main(int argc, char** argv) {
                             std::string trisc_hex_path =
                                 BuildEnvManager::get_instance()
                                     .get_kernel_build_state(
-                                        device->id(), programmable_core_index, compute_class_idx, trisc_id)
+                                        device->build_id(), programmable_core_index, compute_class_idx, trisc_id)
                                     .get_target_out_path(kernel_name);
                             ll_api::memory const& trisc_binary =
                                 llrt::get_risc_binary(trisc_hex_path, ll_api::memory::Loading::CONTIGUOUS_XIP);
