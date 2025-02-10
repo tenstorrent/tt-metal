@@ -197,6 +197,7 @@ void py_module(py::module& module) {
     detail::bind_binary_ng_operation(module, ttnn::experimental::ldexp, "Binary Ldexp Operation");
     detail::bind_binary_ng_operation(module, ttnn::experimental::logaddexp, "Binary Logaddexp Operation");
     detail::bind_binary_ng_operation(module, ttnn::experimental::logaddexp2, "Binary Logaddexp2 Operation");
+    detail::bind_binary_ng_operation(module, ttnn::experimental::gcd, "Binary GCD Operation");
 
     detail::bind_binary_ng_bitwise_ops(module, ttnn::experimental::bitwise_and, "Binary bitwise_and Operation");
     detail::bind_binary_ng_bitwise_ops(module, ttnn::experimental::bitwise_xor, "Binary bitwise_xor Operation");
@@ -235,5 +236,6 @@ void py_module(py::module& module) {
         module, ttnn::experimental::logaddexp_, "Binary Logaddexp In-place Operation");
     detail::bind_inplace_binary_ng_operation(
         module, ttnn::experimental::logaddexp2_, "Binary Logaddexp2 In-place Operation");
+    detail::bind_inplace_binary_ng_operation(module, ttnn::experimental::gcd_, "Binary GCD In-place Operation");
 }
 }  // namespace ttnn::operations::binary_ng
