@@ -10,7 +10,7 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc_without_tensor_printout
-from models.utility_functions import is_grayskull, is_blackhole, torch_random, skip_for_grayskull
+from models.utility_functions import is_grayskull, is_blackhole, torch_random, skip_for_grayskull, skip_for_wormhole_b0
 
 
 @pytest.mark.parametrize("height", [32, 30])
