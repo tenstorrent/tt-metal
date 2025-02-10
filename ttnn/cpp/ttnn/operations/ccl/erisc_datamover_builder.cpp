@@ -78,21 +78,36 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     const std::size_t channel_buffer_size_with_channel_sync =
         channel_buffer_size_bytes + sizeof(tt::fabric::PacketHeader); // + 16 // sizeof(tt::fabric::PacketHeader);
 
-    this->channel_buffer_size_bytes = channel_buffer_size_bytes;
+    const size_t next_lowest_power_of_2_buffer_slot_count =
+
+        this->channel_buffer_size_bytes = channel_buffer_size_bytes;
     this->channel_buffer_size_bytes_with_channel_sync = channel_buffer_size_with_channel_sync;
     const std::size_t total_ratio_count = 2 * sender_ratio_size + receiver_ratio_size;
+
     this->sender_0_channel_size_bytes = tt::round_down(
         (available_channel_buffering_space / total_ratio_count) * sender_ratio_size,
         channel_buffer_size_with_channel_sync);
-    this->sender_0_num_buffers = this->sender_0_channel_size_bytes / channel_buffer_size_with_channel_sync;
+    if constexpr (FabricEriscDatamoverConfig::constrain_to_power_of_2_buffer_slot_clunts) {
+        this->sender_0_num_buffers = 8;
+    } else {
+        this->sender_0_num_buffers = this->sender_0_channel_size_bytes / channel_buffer_size_with_channel_sync;
+    }
     this->sender_1_channel_size_bytes = tt::round_down(
         (available_channel_buffering_space / total_ratio_count) * sender_ratio_size,
         channel_buffer_size_with_channel_sync);
-    this->sender_1_num_buffers = this->sender_1_channel_size_bytes / channel_buffer_size_with_channel_sync;
+    if constexpr (FabricEriscDatamoverConfig::constrain_to_power_of_2_buffer_slot_clunts) {
+        this->sender_1_num_buffers = 8;
+    } else {
+        this->sender_1_num_buffers = this->sender_1_channel_size_bytes / channel_buffer_size_with_channel_sync;
+    }
     this->receiver_channel_size_bytes = tt::round_down(
         (available_channel_buffering_space / total_ratio_count) * receiver_ratio_size,
         channel_buffer_size_with_channel_sync);
-    this->receiver_num_buffers = this->receiver_channel_size_bytes / channel_buffer_size_with_channel_sync;
+    if constexpr (FabricEriscDatamoverConfig::constrain_to_power_of_2_buffer_slot_clunts) {
+        this->receiver_num_buffers = 16;
+    } else {
+        this->receiver_num_buffers = this->receiver_channel_size_bytes / channel_buffer_size_with_channel_sync;
+    }
 
     this->sender_0_channel_base_address = buffer_region_start;
     this->sender_1_channel_base_address = this->sender_0_channel_base_address + this->sender_0_channel_size_bytes;
