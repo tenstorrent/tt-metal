@@ -33,6 +33,7 @@ show_help() {
     echo "  --cxx-compiler-path              Set path to C++ compiler."
     echo "  --c-compiler-path                Set path to C++ compiler."
     echo "  --cpm-source-cache               Set path to CPM Source Cache."
+    echo "  --cpm-use-local-packages         Attempt to use locally installed dependencies."
     echo "  --ttnn-shared-sub-libs           Use shared libraries for ttnn."
     echo "  --toolchain-path                 Set path to CMake toolchain file."
     echo "  --configure-only                 Only configure the project, do not build."
@@ -65,6 +66,7 @@ light_metal_trace="ON"
 build_all="OFF"
 cxx_compiler_path=""
 cpm_source_cache=""
+cpm_use_local_packages="OFF"
 c_compiler_path=""
 ttnn_shared_sub_libs="OFF"
 toolchain_path="cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
@@ -101,6 +103,7 @@ debug
 clean
 cxx-compiler-path:
 cpm-source-cache:
+cpm-use-local-packages
 c-compiler-path:
 ttnn-shared-sub-libs
 toolchain-path:
@@ -172,6 +175,8 @@ while true; do
             cxx_compiler_path="$2";shift;;
         --cpm-source-cache)
             cpm_source_cache="$2";shift;;
+        --cpm-use-local-packages)
+            cpm_use_local_packages="ON";;
         --c-compiler-path)
             c_compiler_path="$2";shift;;
         --toolchain-path)
@@ -253,6 +258,11 @@ fi
 if [ "$cpm_source_cache" != "" ]; then
     echo "INFO: CPM_SOURCE_CACHE: $cpm_source_cache"
     cmake_args+=("-DCPM_SOURCE_CACHE=$cpm_source_cache")
+fi
+
+if [ "$cpm_use_local_packages" = "ON" ]; then
+    echo "INFO: CPM_USE_LOCAL_PACKAGES: $cpm_use_local_packages"
+    cmake_args+=("-DCPM_USE_LOCAL_PACKAGES=ON")
 fi
 
 if [ "$enable_ccache" = "ON" ]; then
@@ -348,8 +358,6 @@ if [ "$cxx_compiler_path" == "" ]; then
     echo "INFO: CMAKE_TOOLCHAIN_FILE: $toolchain_path"
     cmake_args+=("-DCMAKE_TOOLCHAIN_FILE=${toolchain_path}")
 fi
-
-cmake_args+=("-DCPM_USE_LOCAL_PACKAGES=ON")
 
 # Create and link the build directory
 mkdir -p $build_dir
