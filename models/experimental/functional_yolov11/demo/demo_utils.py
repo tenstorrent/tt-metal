@@ -87,7 +87,7 @@ class LoadImages:
         return math.ceil(self.nf / self.bs)
 
 
-def LetterBox(img, new_shape=(224, 224), auto=False, scaleFill=False, scaleup=True, center=True, stride=32):
+def LetterBox(img, new_shape=(640, 640), auto=False, scaleFill=False, scaleup=True, center=True, stride=32):
     shape = img.shape[:2]
     if isinstance(new_shape, int):
         new_shape = (new_shape, new_shape)

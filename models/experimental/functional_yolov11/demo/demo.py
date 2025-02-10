@@ -125,7 +125,9 @@ def test_demo(device, source, model_type):
         model.eval()
         logger.info("Inferencing using Torch Model")
     else:
-        torch_input, ttnn_input = create_yolov11_input_tensors(device)
+        torch_input, ttnn_input = create_yolov11_input_tensors(
+            device, input_channels=3, input_height=640, input_width=640
+        )
         torch_model = attempt_load("models/experimental/functional_yolov11/reference/yolo11n.pt", map_location="cpu")
         state_dict = torch_model.state_dict()
         torch_model = yolov11.YoloV11()
@@ -244,7 +246,9 @@ def test_demo(device, source, model_type):
                 img.shape[0] * img.shape[1] * img.shape[2],
                 img.shape[3],
             )
-            ttnn_im = ttnn.from_torch(img, dtype=ttnn.bfloat16)
+            ttnn_im = ttnn.from_torch(img, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+            # ttnn_im = ttnn.from_torch(img, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
+            # print("input tensor in demo",ttnn_im.shape,ttnn_im.dtype,ttnn_im.memory_config(),ttnn_im.layout)
             preds = model(x=ttnn_im)
             preds = ttnn.to_torch(preds, dtype=torch.float32)
             print("preds in ttnn", preds.shape)
@@ -252,5 +256,7 @@ def test_demo(device, source, model_type):
         results = postprocess(preds, im, im0s, batch, names)[0]
 
         save_yolo_predictions_by_model(results, save_dir, source, model_type)
+    # input tensor in demo Shape([1, 1, 409600, 3]) DataType.BFLOAT8_B MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt) Layout.TILE
 
+    # input tensor in demo Shape([1, 1, 409600, 3]) DataType.BFLOAT16 MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt) Layout.ROW_MAJOR
     print("Inference done")

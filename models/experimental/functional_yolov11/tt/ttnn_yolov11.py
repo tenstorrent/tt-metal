@@ -41,7 +41,7 @@ class Yolov11_Conv2D:
         self.compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=ttnn.MathFidelity.LoFi,
-            fp32_dest_acc_en=True,
+            fp32_dest_acc_en=False,
             packer_l1_acc=True,
             math_approx_mode=True,
         )
@@ -252,6 +252,7 @@ class SPPF:
         ttnn.deallocate(m1)
         ttnn.deallocate(m2)
         ttnn.deallocate(m3)
+        x = ttnn.reallocate(x)
         return x
 
 
@@ -281,6 +282,7 @@ class C3K:
         ttnn.deallocate(x2)
         ttnn.deallocate(k1)
         ttnn.deallocate(k2)
+        x = ttnn.reallocate(x)
         return x
 
 
@@ -304,6 +306,7 @@ class C3k2:
         x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
         y1 = x[:, :, :, : x.shape[-1] // 2]
         y2 = x[:, :, :, x.shape[-1] // 2 : x.shape[-1]]
+        x = ttnn.reallocate(x)
         y2 = ttnn.to_layout(y2, layout=ttnn.TILE_LAYOUT)
         if self.is_bk_enabled:
             y3 = self.k(device, y2)
@@ -348,7 +351,7 @@ class C3k2:
         ttnn.deallocate(y1)
         ttnn.deallocate(y2)
         ttnn.deallocate(y3)
-
+        x = ttnn.reallocate(x)
         return x
 
 
@@ -408,6 +411,7 @@ class Attention:
         ttnn.deallocate(k)
         ttnn.deallocate(v)
         ttnn.deallocate(x2)
+        x = ttnn.reallocate(x)
         return x
 
 
@@ -477,6 +481,7 @@ class C2PSA:
         x = self.cv2(device, x)
         ttnn.deallocate(a)
         ttnn.deallocate(b)
+        x = ttnn.reallocate(x)
         return x
 
 
@@ -561,17 +566,33 @@ class Detect:
         y2_reshaped = ttnn.reshape(y2, (y2.shape[0], y2.shape[2], y2.shape[-1]))  # 0.99908
         y3_reshaped = ttnn.reshape(y3, (y3.shape[0], y3.shape[2], y3.shape[-1]))  # 0.993
 
-        y_all = [y1_reshaped, y2_reshaped, y3_reshaped]
+        # y_all = [y1_reshaped, y2_reshaped, y3_reshaped]
         y = ttnn.concat((y1_reshaped, y2_reshaped, y3_reshaped), dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)  # 0.998
         ya, yb = y[:, :, :64], y[:, :, 64:144]  # 0.991, 0.97
-
+        ttnn.deallocate(y1)
+        ttnn.deallocate(y2)
+        ttnn.deallocate(y3)
+        ttnn.deallocate(x1)
+        ttnn.deallocate(x2)
+        ttnn.deallocate(x3)
+        ttnn.deallocate(x4)
+        ttnn.deallocate(x5)
+        ttnn.deallocate(x6)
+        ttnn.deallocate(y1_reshaped)
+        ttnn.deallocate(y2_reshaped)
+        ttnn.deallocate(y3_reshaped)
+        ttnn.deallocate(y)
+        ya = ttnn.reallocate(ya)
+        yb = ttnn.reallocate(yb)
         ya = ttnn.permute(ya, (0, 2, 1))
+        print("before reshape", ya.shape, ya.layout, ya.memory_config(), ya.dtype)
         ya = ttnn.reshape(ya, (ya.shape[0], 4, 16, ya.shape[2]))
         ya = ttnn.permute(ya, (0, 2, 1, 3))  # 0.991
         ya = ttnn.to_layout(ya, ttnn.TILE_LAYOUT)
         ya = ttnn.softmax(ya, dim=1)
         ya = ttnn.permute(ya, (0, 2, 3, 1))
         c = self.dfl(ya)  # 0.968
+        ttnn.deallocate(ya)
         c = ttnn.sharded_to_interleaved(c, memory_config=ttnn.L1_MEMORY_CONFIG)
 
         c = ttnn.to_layout(c, layout=ttnn.ROW_MAJOR_LAYOUT)
@@ -597,9 +618,24 @@ class Detect:
         z = ttnn.multiply(z, strides)  # 0.9998
         yb = ttnn.permute(yb, (0, 2, 1))
         yb = ttnn.sigmoid(yb)
+        ttnn.deallocate(c)
+        ttnn.deallocate(z1)
+        ttnn.deallocate(z2)
+        ttnn.deallocate(c1)
+        ttnn.deallocate(c2)
+        ttnn.deallocate(anchor)
+        ttnn.deallocate(strides)
+        z = ttnn.reallocate(z)
+        yb = ttnn.reallocate(yb)
         z = ttnn.to_layout(z, layout=ttnn.ROW_MAJOR_LAYOUT)
         yb = ttnn.to_layout(yb, layout=ttnn.ROW_MAJOR_LAYOUT)
         out = ttnn.concat((z, yb), dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+        ttnn.deallocate(yb)
+
+        ttnn.deallocate(z)
+
+        # out = ttnn.reallocate(out)
         return out
 
 
@@ -680,18 +716,20 @@ class YoloV11:
         x10 = x
         x = ttnn.reshape(x, (x.shape[0], int(math.sqrt(x.shape[2])), int(math.sqrt(x.shape[2])), x.shape[3]))
         print("ttnn input to upsample1 is ", x.shape, x.layout, x.dtype)
-        x = Yolov11_shard_upsample(self.device, x)
+        # x = Yolov11_shard_upsample(self.device, x)
         # x = ttnn.upsample(x, scale_factor=2)
-        # nhw = x.shape[0] * x.shape[1] * x.shape[2]
-        # num_cores = determine_num_cores_for_upsample(nhw, x.shape[2])
-        # core_grid = get_core_grid_from_num_cores(num_cores)
-        # shardspec = ttnn.create_sharded_memory_config_(x.shape, core_grid, ttnn.ShardStrategy.HEIGHT, orientation=ttnn.ShardOrientation.ROW_MAJOR)
-        # if x.is_sharded():
-        #     x = ttnn.reshard(x, shardspec)
-        # else:
-        #     x = ttnn.interleaved_to_sharded(x, shardspec)
+        nhw = x.shape[0] * x.shape[1] * x.shape[2]
+        num_cores = determine_num_cores_for_upsample(nhw, x.shape[2])
+        core_grid = get_core_grid_from_num_cores(num_cores)
+        shardspec = ttnn.create_sharded_memory_config_(
+            x.shape, core_grid, ttnn.ShardStrategy.HEIGHT, orientation=ttnn.ShardOrientation.ROW_MAJOR
+        )
+        if x.is_sharded():
+            x = ttnn.reshard(x, shardspec)
+        else:
+            x = ttnn.interleaved_to_sharded(x, shardspec)
 
-        # x = ttnn.upsample(x, scale_factor=2, memory_config=x.memory_config())  # 11
+        x = ttnn.upsample(x, scale_factor=2, memory_config=x.memory_config())  # 11
         if x.is_sharded():
             x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
         print("output of 1st upsample", x.shape)
@@ -699,47 +737,61 @@ class YoloV11:
         x6 = ttnn.to_layout(x6, layout=ttnn.ROW_MAJOR_LAYOUT)
         print("x and x6 and x4 oconfig is ", x.memory_config(), x6.memory_config(), x4.memory_config())
         x = ttnn.concat((x, x6), -1, memory_config=ttnn.L1_MEMORY_CONFIG)  # 12
+        ttnn.deallocate(x6)
+        # x = ttnn.reallocate(x)
         x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)
         x = self.c3k2_5(self.device, x)  # 13
         x13 = x
         x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
         x = ttnn.reshape(x, (x.shape[0], int(math.sqrt(x.shape[2])), int(math.sqrt(x.shape[2])), x.shape[3]))
         print("ttnn input to upsample2 is ", x.shape, x.layout, x.dtype)
-        # nhw = x.shape[0] * x.shape[1] * x.shape[2]
-        # num_cores = determine_num_cores_for_upsample(nhw, x.shape[2])
-        # core_grid = get_core_grid_from_num_cores(num_cores)
-        # shardspec = ttnn.create_sharded_memory_config_(x.shape, core_grid, ttnn.ShardStrategy.HEIGHT, orientation=ttnn.ShardOrientation.ROW_MAJOR)
+        nhw = x.shape[0] * x.shape[1] * x.shape[2]
+        num_cores = determine_num_cores_for_upsample(nhw, x.shape[2])
+        core_grid = get_core_grid_from_num_cores(num_cores)
+        shardspec = ttnn.create_sharded_memory_config_(
+            x.shape, core_grid, ttnn.ShardStrategy.HEIGHT, orientation=ttnn.ShardOrientation.ROW_MAJOR
+        )
 
-        # if x.is_sharded():
-        #     x = ttnn.reshard(x, shardspec)
-        # else:
-        #     x = ttnn.interleaved_to_sharded(x, shardspec)
-        # x = ttnn.upsample(x, scale_factor=2, memory_config=x.memory_config())
+        if x.is_sharded():
+            x = ttnn.reshard(x, shardspec)
+        else:
+            x = ttnn.interleaved_to_sharded(x, shardspec)
+        x = ttnn.upsample(x, scale_factor=2, memory_config=x.memory_config())
         if x.is_sharded():
             x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
         # x = ttnn.upsample(x, scale_factor=2)  # 14
-        x = Yolov11_shard_upsample(self.device, x)
+        # x = Yolov11_shard_upsample(self.device, x)
         print("output of 2nd upsample", x.shape)
         x = ttnn.reshape(x, (1, 1, x.shape[0] * x.shape[1] * x.shape[2], x.shape[3]))
         x4 = ttnn.to_layout(x4, layout=ttnn.ROW_MAJOR_LAYOUT)
         x = ttnn.concat((x, x4), -1, memory_config=ttnn.L1_MEMORY_CONFIG)  # 15
+        ttnn.deallocate(x4)
         x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)
         x = self.c3k2_6(self.device, x)  # 16
         x16 = x
         x = self.conv7(self.device, x)  # 17
-        x13 = ttnn.from_device(x13)
-        x13 = ttnn.to_dtype(x13, ttnn.bfloat8_b)
-        x13 = ttnn.to_device(x13, self.device)
+        x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
+        x = ttnn.to_dtype(x, ttnn.bfloat16)
         x = ttnn.concat((x, x13), -1, memory_config=ttnn.L1_MEMORY_CONFIG)  # 18
+        ttnn.deallocate(x13)
         x = self.c3k2_7(self.device, x)  # 19
         x19 = x
-        x = self.conv8(self.device, x)  # 20
-        x10 = ttnn.to_layout(x10, ttnn.TILE_LAYOUT)
-        x10 = ttnn.from_device(x10)
-        x10 = ttnn.to_dtype(x10, ttnn.bfloat8_b)
-        x10 = ttnn.to_device(x10, self.device)
+        x = self.conv8(self.device, x)  # 20 #16
+        x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
+        x = ttnn.to_dtype(x, ttnn.bfloat16)
+        # x10 = ttnn.to_layout(x10, ttnn.TILE_LAYOUT)
+
+        # x10 = ttnn.from_device(x10)
+        # x10 = ttnn.to_dtype(x10, ttnn.bfloat8_b)
+        # x10 = ttnn.to_device(x10, self.device)
+        print("x and x10 shapes are", x.shape, x10.shape, x.dtype, x10.dtype, x.layout, x10.layout)
         x = ttnn.concat((x, x10), -1, memory_config=ttnn.L1_MEMORY_CONFIG)  # 21
+        print("output cncat shape is", x.shape)
+        ttnn.deallocate(x10)
         x = self.c3k2_8(self.device, x)  # 22
         x22 = x
         x = self.detect(self.device, x16, x19, x22)
+        # ttnn.deallocate(x16)
+        # ttnn.deallocate(x19)
+        # ttnn.deallocate(x22)
         return x
