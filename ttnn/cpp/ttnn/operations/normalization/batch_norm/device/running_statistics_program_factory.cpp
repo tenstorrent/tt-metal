@@ -261,7 +261,8 @@ RunningStatistics::RunningStatisticsProgramFactory::create(
         program,
         "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/dataflow/reader_running_statistics.cpp",
         all_device_cores,
-        tt_metal::ReaderDataMovementConfig({a_is_dram}, std::move(reader_defines)));
+        tt_metal::ReaderDataMovementConfig(
+            {a_is_dram, batch_mean_tensor_cb, momentum_cb, one_cb}, std::move(reader_defines)));
 
     // WRITER KERNEL
     auto writer_defines = dataflow_defines;
