@@ -58,6 +58,7 @@ private:
     // A device-agnostic mapping from programmable_core_type and processor_class to unique index + processor_type_count.
     // TODO: processor_type_count can be looked up in the hal, do we need this in here?
     ProgCoreMapping build_state_indices_;
+    std::mutex lock;
 };
 
 }  // namespace tt::tt_metal
