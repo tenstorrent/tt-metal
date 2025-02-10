@@ -50,46 +50,32 @@ std::vector<T> convert_to_tile_layout(
     TT_ASSERT(data.size() % tile_HW == 0);
     int num_tiles = data.size() / tile_HW;
     for(int tile_idx = 0; tile_idx < num_tiles; tile_idx++) {
-        std::vector<T> top_left;
-        std::vector<T> top_right;
-        std::vector<T> bottom_left;
-        std::vector<T> bottom_right;
+        std::vector<T> top_left, top_right, bottom_left, bottom_right;
+        top_left.resize(face_HW);
+        top_right.resize(face_HW);
+        bottom_left.resize(face_HW);
+        bottom_right.resize(face_HW);
 
         if (transpose_face) {
-            for(int col = 0; col < tile_W; col++) {
-                int index = tile_idx * tile_HW + col;
-                for(int row = 0; row < tile_H; row++) {
-                    if(row < face_H and col < face_W) {
-                        top_left.push_back(data[index]);
-                    } else if(row < face_H and col >= face_W) {
-                        top_right.push_back(data[index]);
-                    } else if(row >= face_H and col < face_W) {
-                        bottom_left.push_back(data[index]);
-                    } else if(row >= face_H and col >= face_W) {
-                        bottom_right.push_back(data[index]);
-                    } else {
-                        TT_ASSERT(false);
-                    }
-                    index += tile_W;
+            int tile_offset = tile_idx * tile_HW;
+            for(int col = 0; col < face_W; col++) {
+                for(int row = 0; row < face_H; row++) {
+                    size_t dst_index = row * face_W + col;
+                    top_left[dst_index]     = data[tile_offset + (col)          * tile_H + row];
+                    top_right[dst_index]    = data[tile_offset + (col)          * tile_H + row + face_H];
+                    bottom_left[dst_index]  = data[tile_offset + (col + face_W) * tile_H + row];
+                    bottom_right[dst_index] = data[tile_offset + (col + face_W) * tile_H + row + face_H];
                 }
             }
         } else {
             int index = tile_idx * tile_HW;
-            for(int row = 0; row < tile_H; row++) {
-                for(int col = 0; col < tile_W; col++) {
-                    if(row < face_H and col < face_W) {
-                        top_left.push_back(data[index]);
-                    } else if(row < face_H and col >= face_W) {
-                        top_right.push_back(data[index]);
-                    } else if(row >= face_H and col < face_W) {
-                        bottom_left.push_back(data[index]);
-                    } else if(row >= face_H and col >= face_W) {
-                        bottom_right.push_back(data[index]);
-                    } else {
-                        TT_ASSERT(false);
-                    }
-                    index++;
-                }
+            for(int row = 0; row < face_H; row++) {
+                std::memcpy(&top_left[row * face_W],     &data[index],                            face_W * sizeof(T));
+                std::memcpy(&top_right[row * face_W],    &data[index + face_W],                   face_W * sizeof(T));
+                std::memcpy(&bottom_left[row * face_W],  &data[index + tile_W * face_H],          face_W * sizeof(T));
+                std::memcpy(&bottom_right[row * face_W], &data[index + tile_W * face_H + face_W], face_W * sizeof(T));
+
+                index += tile_W;
             }
         }
         TT_ASSERT(top_left.size() == face_HW);

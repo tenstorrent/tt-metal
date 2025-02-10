@@ -4,6 +4,7 @@
 
 #pragma once
 #include <algorithm>
+#include <cstring>
 #include <random>
 
 #include <tt-metalium/logger.hpp>
@@ -20,23 +21,23 @@ template <typename T, unsigned int TileHeight = 32, unsigned int TileWidth = 32>
 std::vector<T> tilize(std::vector<T> data, int rows, int cols) {
     TT_FATAL((rows % TileHeight) == 0, "rows={} % TileHeight={} must equal 0", rows, TileHeight);
     TT_FATAL((cols % TileWidth) == 0, "rows={} % TileHeight={} must equal 0", cols, TileWidth);
+    TT_FATAL((data.size() <= rows * cols), "data with size {} doesn't fit all {} x {} values", data.size(), rows, cols);
     constexpr unsigned int elements_in_tile = TileHeight * TileWidth;
     unsigned int num_tiles_r = rows / TileHeight;
     unsigned int num_tiles_c = cols / TileWidth;
-    std::vector<T> result;
+    std::vector<T> result(rows * cols);
     for (auto r = 0; r < num_tiles_r; r++) {
         for (auto c = 0; c < num_tiles_c; c++) {
+            #pragma unroll
             for (auto j = 0; j < TileHeight; j++) {     // tile rows
-                for (auto i = 0; i < TileWidth; i++) {  // tile cols
-                    int index = r * elements_in_tile * num_tiles_c + j * cols + c * TileWidth + i;
-                    result.push_back(data.at(index));
-                }
+                size_t src_index = r * TileHeight * cols + c * TileWidth + j * cols;
+                size_t dst_index = (r * num_tiles_c + c) * (TileHeight * TileWidth) + j * TileWidth;
+                std::memcpy(&result[0] + dst_index, &data[0] + src_index, TileWidth * sizeof(T));
             }
         }
     }
     return result;
 }
-
 // Given a tilized data (each tile's data is contiguous and row major within the tile)
 // transform it back to row major full tensor. (This function inverts the tilize() function)
 template <typename T, unsigned int TileHeight = 32, unsigned int TileWidth = 32>
