@@ -450,7 +450,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_block_interle
         SetRuntimeArgs(program, unary_reader_kernel_id, core, reader_rt_args);
         SetRuntimeArgs(program, unary_writer_kernel_id, core, writer_rt_args);
 
-        uint32_t end_column_id = start_column_id + single_block_size_row_arg * TILE_WIDTH * a.element_size();
+        uint32_t end_column_id = start_column_id + single_block_size_row_arg * TILE_WIDTH * el_size;
         start_column_id = end_column_id % padded_row_size_bytes;
         if (end_column_id % padded_row_size_bytes == 0 && end_column_id != 0) {
             start_row_id += single_block_size_col_arg * TILE_HEIGHT;
