@@ -22,6 +22,8 @@
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
 
+#include "tt_cluster.hpp"
+
 using namespace tt::tt_metal;
 
 namespace tt {
