@@ -6,7 +6,6 @@ import math
 import os
 import json
 import ttnn
-import tempfile
 from pathlib import Path
 from loguru import logger
 import torch
