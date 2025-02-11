@@ -119,14 +119,16 @@ std::vector<Tensor> fold_with_transpose_(
 
 ttnn::MemoryConfig create_sharded_memory_config(
     ttnn::Shape tensor_shape,
-    CoreCoord grid_size,
+    // CoreCoord grid_size,
+    CoreRangeSet grid_size,
     ShardOrientation orientation,
     const std::optional<MemoryConfig>& override_memory_config = std::nullopt) {
     if (override_memory_config.has_value()) {
         return override_memory_config.value();
     }
 
-    uint32_t total_cores = grid_size.x * grid_size.y;
+    // uint32_t total_cores = grid_size.x * grid_size.y;
+    uint32_t total_cores = grid_size.num_cores();
 
     uint32_t tensor_height = tensor_shape[-2] * tensor_shape[-3] * tensor_shape[-4];
     uint32_t tensor_width = tensor_shape[-1];
@@ -136,10 +138,13 @@ ttnn::MemoryConfig create_sharded_memory_config(
     auto sharded_memory_config = ttnn::MemoryConfig{
         .memory_layout = ttnn::TensorMemoryLayout::HEIGHT_SHARDED,
         .buffer_type = ttnn::BufferType::L1,
-        .shard_spec = ShardSpec{
-            CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{grid_size.x - 1, grid_size.y - 1}}}},
-            {shard_height, shard_width},
-            orientation}};
+        .shard_spec = ShardSpec{// CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{grid_size.x -
+                                // 1, grid_size.y - 1}}}},
+                                grid_size,
+                                {shard_height, shard_width},
+                                orientation}};
+
+    tt::log_debug(tt::LogOp, "sharded_memory_config: {}", sharded_memory_config);
 
     return sharded_memory_config;
 }
@@ -153,7 +158,7 @@ std::vector<Tensor> fold_with_transpose_sharded_(
     uint32_t pad_c,
     uint32_t pad_h,
     uint32_t pad_w,
-    CoreCoord grid_size,
+    CoreRangeSet grid_size,
     const std::optional<MemoryConfig>& override_memory_config) {
     using namespace tt::constants;
     IDevice* device;
@@ -292,7 +297,8 @@ Tensor FoldOperation::invoke(
     uint32_t pad_c,
     uint32_t pad_h,
     uint32_t pad_w,
-    const std::optional<CoreCoord> grid_size,
+    // const std::optional<CoreCoord> grid_size,
+    const std::optional<CoreRangeSet> core_grid,
     const std::optional<MemoryConfig>& override_memory_config) {
     if (use_transpose_as_fold) {
         if (input_tensor.is_sharded()) {
@@ -306,7 +312,8 @@ Tensor FoldOperation::invoke(
                            pad_c,
                            pad_h,
                            pad_w,
-                           grid_size.value_or(CoreCoord(1, 1)),
+                           // grid_size.value_or(CoreCoord(1, 1)),
+                           core_grid.value_or(CoreRangeSet{CoreRange{CoreCoord{0, 0}, CoreCoord{1, 1}}}),
                            override_memory_config)
                     .at(0);
             } else {
@@ -329,7 +336,8 @@ Tensor FoldOperation::invoke(
     uint32_t pad_c,
     uint32_t pad_h,
     uint32_t pad_w,
-    const std::optional<CoreCoord> grid_size,
+    // const std::optional<CoreCoord> grid_size,
+    const std::optional<CoreRangeSet> core_grid,
     const std::optional<MemoryConfig>& override_memory_config) {
     QueueId queue_id = DefaultQueueId;
     return invoke(
@@ -342,6 +350,6 @@ Tensor FoldOperation::invoke(
         pad_c,
         pad_h,
         pad_w,
-        grid_size);
+        core_grid);
 }
 }  // namespace ttnn::operations::data_movement
