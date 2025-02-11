@@ -122,7 +122,11 @@ static Tensor full_impl(
     std::fill(std::begin(owned_buffer), std::end(owned_buffer), value);
 
     if (!optional_output_tensor.has_value()) {
-        auto output = Tensor(OwnedStorage{owned_buffer}, shape, data_type, layout);
+        auto output = Tensor(
+            OwnedStorage{owned_buffer}, shape, data_type, layout);  // Issue lies in Converting the Buffer to Tensor
+
+        // Either the issue is with the OwnedStorage conversion??  or the Tensor doesn't handle the Bfloat8_b support??
+
         if (!devices.empty()) {
             output = output.to_device(devices, output_mem_config);
         }
