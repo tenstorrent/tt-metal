@@ -8,6 +8,7 @@
 
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/math.hpp"
+#include <cstdint>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -117,6 +118,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     uint32_t padding_config_cb_id = tt::CBIndex::c_2;
     uint32_t local_config_cb_id = tt::CBIndex::c_3;
     uint32_t remote_config_cb_id = tt::CBIndex::c_4;
+    uint32_t remote_ref_counts_cb_id = remote_ref_counts.has_value() ? tt::CBIndex::c_5 : 0;
 
     tt::DataFormat kernel_config_df = tt::DataFormat::RawUInt16;  // NOTE: UInt16 is not supported for CB types
     uint32_t config_nbytes =
@@ -167,6 +169,15 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
             .set_globally_allocated_address(*remote_config_buffer);
     CBHandle remote_config_cb = CreateCircularBuffer(program, all_cores, remote_config_cb_config);
 
+    if (remote_ref_counts.has_value()) {
+        auto remote_ref_counts_buffer = remote_ref_counts.value().get().device_buffer();
+        auto remote_ref_counts_cb_config =
+            CircularBufferConfig(remote_ref_counts_buffer->size(), {{remote_ref_counts_cb_id, kernel_config_df}})
+                .set_page_size(remote_ref_counts_cb_id, remote_ref_counts_buffer->page_size())
+                .set_globally_allocated_address(*remote_ref_counts_buffer);
+        CBHandle remote_ref_counts_cb = CreateCircularBuffer(program, all_cores, remote_ref_counts_cb_config);
+    }
+
     bool const is_block_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
     bool const is_width_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED;
 
@@ -189,6 +200,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         0,  // padding_config_cb_id
         0,  // local_config_cb_id
         0,  // remote_config_cb_id
+        0,  // remote_ref_counts_cb_id
         src_cb_id,
         input_to_writer_cb_id,
         out_cb_id,
@@ -205,6 +217,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     reader_ct_args[0] = 0;
     reader_ct_args[1] = local_config_cb_id;
     reader_ct_args[2] = 0;
+    reader_ct_args[3] = remote_ref_counts_cb_id;
 
     KernelHandle reader_kernel_id0 = CreateKernel(
         program,
@@ -216,6 +229,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     reader_ct_args[0] = padding_config_cb_id;
     reader_ct_args[1] = 0;
     reader_ct_args[2] = remote_config_cb_id;
+    reader_ct_args[3] = 0;
 
     KernelHandle reader_kernel_id1 = CreateKernel(
         program,
