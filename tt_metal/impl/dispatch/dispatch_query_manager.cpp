@@ -112,6 +112,7 @@ const std::vector<CoreCoord>& DispatchQueryManager::get_logical_dispatch_cores(u
 }
 
 tt_cxy_pair DispatchQueryManager::get_dispatch_core(uint8_t cq_id) const {
+    std::scoped_lock<std::mutex> lock(modifier_mutex);
     if (dispatch_cores_.empty()) {
         for (auto cq = 0; cq < num_hw_cqs_; cq++) {
             // Populate when queried. Statically allocating at

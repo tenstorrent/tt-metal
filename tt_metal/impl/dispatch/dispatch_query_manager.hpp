@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <mutex>
+
 #include <dispatch_core_manager.hpp>
 
 namespace tt::tt_metal {
@@ -45,6 +47,7 @@ private:
     // Make this mutable, since this is JIT populated
     // through a const instance when queried
     mutable std::vector<tt_cxy_pair> dispatch_cores_;
+    mutable std::mutex modifier_mutex;
 };
 
 }  // namespace tt::tt_metal
