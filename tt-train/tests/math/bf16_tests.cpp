@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
-#include <tt-train/.cpmcache/googletest/96129d89f45386492ae46d6bb8c027bc3df5f949/googletest/include/gtest/gtest.h>
 
 #include <cmath>
 #include <core/xtensor_utils.hpp>
