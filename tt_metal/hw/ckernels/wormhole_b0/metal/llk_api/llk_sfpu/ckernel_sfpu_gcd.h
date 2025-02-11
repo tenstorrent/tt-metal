@@ -84,13 +84,24 @@ inline void calculate_sfpu_gcd(const uint dst_offset)
 
         #pragma GCC unroll 32
         for (int i = 0; i < 32; ++i) {
-            // Again, we emulate ctz, but this time for a only, and we don't need to store the shift amount this time.
+            // Again, we emulate ctz, but this time for a only.
+            // Since we're removing at least 1 bit with each iteration, we also
+            // track the maximum number of trailing zeroes and only check as
+            // many masks as necessary, e.g. only 4 are needed to count up to
+            // 15 trailing zeroes, and so on.
 
-            mask = 0xffff;
-            mask_width = 16;
+            int max_zero_bits = 32 - i - 1; // maximum 5 bits
+            mask_width = max_zero_bits >> 1; // maximum 4 bits
+
+            // Round up to next highest power of 2 (assumes mask_width is up to 4 bits wide).
+            mask_width--;
+            mask_width |= mask_width >> 1;
+            mask_width |= mask_width >> 2;
+            mask_width++;
+            mask = (1 << mask_width) - 1;
 
             #pragma GCC unroll 5
-            for (int j = 0; j < 5; ++j) {
+            while (mask_width != 0) {
 
                 // l4 = mask
                 TT_SFPLOADI(p_sfpu::LREG4, 2, mask);
@@ -105,6 +116,7 @@ inline void calculate_sfpu_gcd(const uint dst_offset)
                 mask_width >>= 1;
                 mask >>= mask_width;
             }
+
             // if (b > a) swap(a, b)
             // a -= b
 
