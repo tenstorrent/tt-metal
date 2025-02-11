@@ -943,6 +943,10 @@ std::vector<LogicalPhysicalMapping> compute_logical_to_physical_shards_mapping(
 
 template <typename T>
 std::vector<T> encode_tensor_data(std::vector<T>&& logical_data, const TensorSpec& tensor_spec) {
+    if (logical_data.size() == 0) {
+        return std::vector<T>();
+    }
+
     const auto& logical_shape = tensor_spec.logical_shape();
     TT_FATAL(
         logical_data.size() == logical_shape.volume(),
@@ -1006,6 +1010,10 @@ template std::vector<uint8_t> encode_tensor_data<uint8_t>(
 
 template <typename T>
 std::vector<T> decode_tensor_data(std::vector<T>&& physical_data, const TensorSpec& tensor_spec) {
+    if (physical_data.size() == 0) {
+        return std::vector<T>();
+    }
+
     const auto& physical_shape = tensor_spec.physical_shape();
     TT_FATAL(
         physical_data.size() == physical_shape.height() * physical_shape.width(),
