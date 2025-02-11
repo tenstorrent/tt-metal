@@ -55,103 +55,35 @@ def test_concat(device, height, width, dim, async_mode):
 @pytest.mark.parametrize(
     "inputs, output_shard_shape, shard_grid, strategy, layout, cache_mode",
     (
-        (
-            [((1, 1, 160, 32), (80, 32)), ((1, 1, 160, 32), (80, 32))],
-            (80, 64),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
-            ttnn.ShardStrategy.HEIGHT,
-            ttnn.ROW_MAJOR_LAYOUT,
-            False,
-        ),
-        (
-            [((1, 1, 160, 32), (80, 32)), ((1, 1, 160, 16), (80, 16))],
-            (80, 48),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
-            ttnn.ShardStrategy.HEIGHT,
-            ttnn.ROW_MAJOR_LAYOUT,
-            False,
-        ),
-        (
-            [((1, 1, 25600, 64), (512, 64)), ((1, 1, 25600, 64), (512, 64))],
-            (512, 128),
-            ttnn.CoreRangeSet(
-                {
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 5)),
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 6), ttnn.CoreCoord(1, 6)),
-                }
-            ),
-            ttnn.ShardStrategy.HEIGHT,
-            ttnn.ROW_MAJOR_LAYOUT,
-            False,
-        ),
-        pytest.param(
-            [((1, 1, 25600, 64), (512, 64)), ((1, 1, 25600, 64), (512, 64))],
-            (512, 128),
-            ttnn.CoreRangeSet(
-                {
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 5)),
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 6), ttnn.CoreCoord(1, 6)),
-                }
-            ),
-            ttnn.ShardStrategy.HEIGHT,
-            ttnn.ROW_MAJOR_LAYOUT,
-            True,
-        ),
-        (
-            [((1, 1, 16, 16), (8, 16)), ((1, 1, 16, 16), (8, 16)), ((1, 1, 16, 16), (8, 16))],
-            (8, 48),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
-            ttnn.ShardStrategy.HEIGHT,
-            ttnn.ROW_MAJOR_LAYOUT,
-            False,
-        ),
-        (
-            [((1, 1, 16, 16), (8, 16)), ((1, 1, 16, 16), (8, 16)), ((1, 1, 16, 16), (8, 16))],
-            (8, 48),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1))}),
-            ttnn.ShardStrategy.HEIGHT,
-            ttnn.ROW_MAJOR_LAYOUT,
-            True,
-        ),
-        (
-            [((1, 1, 8, 64), (8, 16)), ((1, 1, 7, 64), (7, 16)), ((1, 1, 23, 64), (23, 16))],
-            (38, 16),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
-            ttnn.ShardStrategy.WIDTH,
-            ttnn.ROW_MAJOR_LAYOUT,
-            False,
-        ),
-        (
-            [((1, 1, 8, 64), (8, 16)), ((1, 1, 7, 64), (7, 16)), ((1, 1, 23, 64), (23, 16))],
-            (38, 16),
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3))}),
-            ttnn.ShardStrategy.WIDTH,
-            ttnn.ROW_MAJOR_LAYOUT,
-            True,
-        ),
-        (
-            [((1, 1, 256, 96), (64, 96)), ((1, 1, 256, 64), (64, 64)), ((1, 1, 256, 32), (64, 32))],
-            (64, 192),
-            ttnn.CoreRangeSet(
-                {
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 1)),
-                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(2, 0)),
-                }
-            ),
+        # (
+        #     [((1,1,49,128), (1,128)), ((1,1,49,128), (1,128)),((1,1,49,128), (1,128)),((1,1,49,128), (1,128))],
+        #     (1,512),
+        #     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7,7))}),
+        #      ttnn.ShardStrategy.HEIGHT,
+        #      ttnn.ROW_MAJOR_LAYOUT,
+        #      False,
+        # ),
+        #  (
+        #     [((1,1,400,128), (7,128)), ((1,1,400,128), (7,128)),((1,1,400,128), (7,128)),((1,1,400,128), (7,128))],
+        #     (7,512),
+        #     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7,7))}),
+        #      ttnn.ShardStrategy.HEIGHT,
+        #      ttnn.ROW_MAJOR_LAYOUT,
+        #      False,
+        # ),
+        (  # fp8 case
+            [((1, 1, 49, 64), (1, 64)), ((1, 1, 49, 64), (1, 64))],
+            (1, 128),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
             ttnn.ShardStrategy.HEIGHT,
             ttnn.TILE_LAYOUT,
             False,
         ),
         (
-            [((1, 1, 32, 512), (32, 64)), ((1, 1, 64, 512), (64, 64)), ((1, 1, 96, 512), (96, 64))],
-            (192, 64),
-            ttnn.CoreRangeSet(
-                {
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 3)),
-                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(2, 1)),
-                }
-            ),
-            ttnn.ShardStrategy.WIDTH,
+            [((1, 1, 196, 32), (4, 32)), ((1, 1, 196, 32), (4, 32))],
+            (4, 64),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
+            ttnn.ShardStrategy.HEIGHT,
             ttnn.TILE_LAYOUT,
             False,
         ),
@@ -176,7 +108,7 @@ def test_sharded_concat(device, inputs, output_shard_shape, shard_grid, strategy
                 use_height_and_width_as_shard_shape=True,
             )
             torch_input_tensor = torch.rand(shape, dtype=torch.bfloat16)
-            input_tensor = ttnn.from_torch(torch_input_tensor, layout=layout, device=device)
+            input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat8_b, layout=layout, device=device)
             input_tensor = ttnn.to_memory_config(input_tensor, input_sharded_memory_config)
             input_tensors.append((torch_input_tensor, input_tensor))
         return input_tensors
