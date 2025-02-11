@@ -142,6 +142,23 @@ golden_pcc_obj = {
             ttnn.bfloat8_b,
         ): 0.884609,  # Max ATOL Delta: 6.455164909362793, Max RTOL Delta: inf, PCC: 0.8846098380419433
     },
+    32: {
+        (
+            ttnn.MathFidelity.HiFi4,
+            ttnn.bfloat8_b,
+            ttnn.bfloat8_b,
+        ): 0.97,
+        (
+            ttnn.MathFidelity.HiFi2,
+            ttnn.bfloat8_b,
+            ttnn.bfloat8_b,
+        ): 0.95,
+        (
+            ttnn.MathFidelity.LoFi,
+            ttnn.bfloat8_b,
+            ttnn.bfloat8_b,
+        ): 0.88,
+    },
 }
 
 golden_pcc = {

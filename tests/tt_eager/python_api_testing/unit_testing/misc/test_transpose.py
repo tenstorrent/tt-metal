@@ -56,6 +56,28 @@ def transpose(
         assert device.num_program_cache_entries() == expected_program_cache_size
 
 
+def test_fold_transpose(device, use_program_cache):
+    N = 32
+    C = 4
+    H = 256
+    W = 224
+    input_shape = (N, C, H, W)
+    ## 128
+    grid = ttnn.CoreRangeSet(
+        {
+            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(12, 8)),
+            ttnn.CoreRange(ttnn.CoreCoord(0, 9), ttnn.CoreCoord(10, 9)),
+        }
+    )
+    sharded_config = ttnn.create_sharded_memory_config_(
+        input_shape,
+        grid,
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    transpose(input_shape, device, dim0=2, dim1=3, input_mem_config=sharded_config, output_mem_config=sharded_config)
+
+
 @pytest.mark.parametrize(
     "dtype",
     (ttnn.bfloat16, ttnn.float32),
