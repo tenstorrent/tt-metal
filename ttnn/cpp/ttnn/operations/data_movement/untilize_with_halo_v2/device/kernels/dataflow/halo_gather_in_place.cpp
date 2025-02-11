@@ -111,8 +111,6 @@ void kernel_main() {
     const uint32_t in_base_l1_addr = get_read_ptr(in_cb_id);
     const uint32_t out_base_l1_addr = get_write_ptr(out_cb_id);
 
-    DPRINT << "HIT" << ENDL();
-
     if constexpr (padding_config_cb_id) {
         // construct the pad stick in its buffer
         cb_reserve_back(pad_cb_id, 1);
@@ -156,6 +154,22 @@ void kernel_main() {
             is_width_sharded,
             remote_read,
             is_col_major>(config_data, my_noc_x, my_noc_y, in_base_l1_addr, out_base_l1_addr);
+    }
+
+    if constexpr (remote_ref_counts_cb_id) {
+        uint32_t config_data_l1_addr = get_read_ptr(remote_ref_counts_cb_id);
+        const tt_l1_ptr uint16_t* config_data = reinterpret_cast<const tt_l1_ptr uint16_t*>(config_data_l1_addr);
+        DPRINT << "config_data_l1_addr: " << config_data_l1_addr << "\n";
+        DPRINT << "config[0]: " << config_data[0] << "\n";
+        DPRINT << "config[1]: " << config_data[1] << "\n";
+        DPRINT << "config[2]: " << config_data[2] << "\n";
+        DPRINT << "config[3]: " << config_data[3] << "\n";
+        DPRINT << "config[4]: " << config_data[4] << "\n";
+        DPRINT << "config[5]: " << config_data[5] << "\n";
+        DPRINT << "config[6]: " << config_data[6] << "\n";
+        DPRINT << "config[7]: " << config_data[7] << "\n";
+        DPRINT << "config[8]: " << config_data[8] << "\n";
+        DPRINT << "config[9]: " << config_data[9] << "\n";
     }
 
     if constexpr (local_config_cb_id) {

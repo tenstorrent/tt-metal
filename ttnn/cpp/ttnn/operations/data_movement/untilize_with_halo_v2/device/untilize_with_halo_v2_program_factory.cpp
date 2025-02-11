@@ -172,7 +172,8 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     if (remote_ref_counts.has_value()) {
         auto remote_ref_counts_buffer = remote_ref_counts.value().get().device_buffer();
         auto remote_ref_counts_cb_config =
-            CircularBufferConfig(remote_ref_counts_buffer->size(), {{remote_ref_counts_cb_id, kernel_config_df}})
+            CircularBufferConfig(
+                remote_ref_counts_buffer->size() / num_cores, {{remote_ref_counts_cb_id, kernel_config_df}})
                 .set_page_size(remote_ref_counts_cb_id, remote_ref_counts_buffer->page_size())
                 .set_globally_allocated_address(*remote_ref_counts_buffer);
         CBHandle remote_ref_counts_cb = CreateCircularBuffer(program, all_cores, remote_ref_counts_cb_config);
