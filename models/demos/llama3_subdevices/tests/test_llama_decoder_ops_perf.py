@@ -233,7 +233,7 @@ def test_llama_decoder_inference(
 
         # capture trace
         trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-        for _ in range(100):
+        for _ in range(1):
             ttnn.dram_prefetcher(
                 tt_pf,
                 num_layers=1,
@@ -250,72 +250,14 @@ def test_llama_decoder_inference(
             )
         ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
         print("Trace captured")
+        ttnn.synchronize_devices(mesh_device, sub_device_ids=[prefetcher_setup.worker_sub_device_id])
 
         start_warmup = time.time()
         ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
         ttnn.synchronize_devices(mesh_device, sub_device_ids=[prefetcher_setup.worker_sub_device_id])
         ttnn.release_trace(mesh_device, trace_id)
         time_warmup = time.time() - start_warmup
-
-        # capture trace
-        print("Capturing trace 2 ")
-        trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
-        for _ in range(1000):
-            ttnn.dram_prefetcher(
-                tt_pf,
-                num_layers=1,
-                global_cb=prefetcher_setup.global_circular_buffer,
-            )
-            mesh_device.set_sub_device_stall_group([prefetcher_setup.worker_sub_device_id])
-            tt_out, res = tt_model(
-                decode_input,
-                res,
-                current_pos_tensor,
-                rot_mats=rot_mats,
-                mode="decode",
-                page_table=page_table_tt,
-            )
-        ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
-        print("Trace captured 2")
-
-        start_run = time.time()
-        ttnn.execute_trace(mesh_device, trace_id, cq_id=0, blocking=False)
-        ttnn.synchronize_devices(mesh_device, sub_device_ids=[prefetcher_setup.worker_sub_device_id])
-        ttnn.release_trace(mesh_device, trace_id)
-        time_run = time.time() - start_run
-
-        print(f"Time taken for warmup: {time_warmup}")
-        print(f"Time taken for run: {time_run}")
-
-        # In this test all users have the same position
-        # freqs_cis_i = freqs_cis[current_pos[0], :].unsqueeze(0)
-
-        # # Reference model
-        # ref_output = reference_model(pt_decode_input, current_pos[0], freqs_cis_i, mask=None)
-
-        # passing, pcc_message = comp_pcc(ref_output, tt_output_torch)
-
-        # logger.info(comp_allclose(ref_output, tt_output_torch))
-        # logger.info(f"PCC: {pcc_message}")
-
-        # if passing:
-        #     logger.info("Llama Decoder Block Passed!")
-        # else:
-        #     logger.warning("Llama Decoder Block Failed!")
-        #     all_tests_pass = False
-
-        # # Increment position
-        # current_pos = torch.tensor([generation_start_pos + i for _ in range(batch_size)])
-        # current_pos_tensor = ttnn.from_torch(
-        #     current_pos,
-        #     device=mesh_device,
-        #     dtype=ttnn.int32,
-        #     mesh_mapper=ttnn.ShardTensor2dMesh(
-        #         mesh_device,
-        #         dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
-        #         mesh_shape=model_args.cluster_shape,
-        #     ),
-        # )
+        print("done", time_warmup)
 
     tt_ccl.close()
 

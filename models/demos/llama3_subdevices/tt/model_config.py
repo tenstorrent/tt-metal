@@ -729,11 +729,21 @@ class TtModelArgs:
                 use_height_and_width_as_shard_shape=True,
             )
 
-            LM_HEAD_RING_SIZE = 32
-            self.lm_head_shape = (8192 // 4, 128 * 1024 // 8)
-            lm_head_ring_core_range_set = ttnn.num_cores_to_corerangeset_in_subcoregrids(
-                self.start_core, LM_HEAD_RING_SIZE, self.sub_core_grids, row_wise=True
+            core_grid_ln, grid_offset = (8, 2), ttnn.CoreCoord(1, 0)
+            core_range = ttnn.CoreRange(
+                grid_offset, ttnn.CoreCoord(core_grid_ln[1] + grid_offset.x - 1, core_grid_ln[0] + grid_offset.y - 1)
             )
+            LM_HEAD_RING_SIZE = 16
+            self.lm_head_shape = (8192 // 4, 128 * 1024 // 8)
+            lm_head_ring_core_range_set = ttnn.CoreRangeSet(
+                {
+                    core_range,
+                }
+            )
+
+            # ttnn.num_cores_to_corerangeset_in_subcoregrids(
+            #     self.start_core, LM_HEAD_RING_SIZE, self.sub_core_grids, row_wise=False
+            # )
             self.model_config["SHARDED_LM_HEAD_INPUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
                 shape=(32, self.lm_head_shape[0] // LM_HEAD_RING_SIZE),
                 core_grid=lm_head_ring_core_range_set,

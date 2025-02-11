@@ -181,7 +181,7 @@ class LMHead(LightweightModule):
         outputs = []
         for weight, pc in zip(self.output_weights, self.program_configs):
             weight_l1 = weight  # ttnn.to_memory_config(weight, self.args.model_config["LM_HEAD_RING_MEMCFG"])
-            print(f"weight_l1: {weight_l1}")
+
             output = ttnn.linear(
                 x,
                 weight_l1,
@@ -191,19 +191,21 @@ class LMHead(LightweightModule):
                 dtype=ttnn.bfloat8_b,
             )
 
-            print(f"output: {output}")
-            outputs.append(output)
-            # outputs.append(ttnn.sharded_to_interleaved(output, memory_config=ttnn.DRAM_MEMORY_CONFIG))
+            # ttnn.synchronize_devices(self.mesh_device, sub_device_ids=[self.tt_ccl.worker_sub_device_id])
+
+            # outputs.append(output)
+            outputs.append(ttnn.sharded_to_interleaved(output, memory_config=ttnn.DRAM_MEMORY_CONFIG))
             # weight_l1.deallocate(True)
             # output.deallocate(True)
 
         outputs_reduced = []
         for output in outputs:
-            output_reduced = self.tt_ccl.line_all_reduce(
-                output, cluster_axis=1, num_links=1, memory_config=self.output_memory_config
-            )
+            output_reduced = self.tt_ccl.line_all_reduce_old(
+                output, cluster_axis=1, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )  # self.output_memory_config
+
             outputs_reduced.append(output_reduced)
 
-        ttnn.synchronize_devices(self.mesh_device, sub_device_ids=[self.tt_ccl.worker_sub_device_id])
+        # ttnn.synchronize_devices(self.mesh_device, sub_device_ids=[self.tt_ccl.worker_sub_device_id])
 
         return outputs_reduced
