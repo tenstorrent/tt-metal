@@ -332,8 +332,8 @@ ttnn::Tensor unsqueeze_to_rank(const ttnn::Tensor& t, size_t rank) {
     auto t_rank = logical_shape.rank();
     TT_FATAL(t_rank <= rank, "Cannot unsqueeze to rank {} from rank {}", rank, t_rank);
 
-    tt::tt_metal::SmallVector<uint32_t> result_logical_shape(rank);
-    tt::tt_metal::SmallVector<uint32_t> result_physical_shape(rank);
+    ttnn::SmallVector<uint32_t> result_logical_shape(rank);
+    ttnn::SmallVector<uint32_t> result_physical_shape(rank);
     std::fill(result_logical_shape.begin(), result_logical_shape.end(), 1);
     std::fill(result_physical_shape.begin(), result_physical_shape.end(), 1);
 
@@ -354,8 +354,8 @@ ttnn::Tensor squeeze_to_rank(const ttnn::Tensor& t, size_t rank) {
         std::all_of(logical_shape.cbegin(), logical_shape.cbegin() + rank_diff, [](size_t dim) { return dim == 1; });
     TT_FATAL(leading_ones, "Cannot squeeze shape {} to rank {}", logical_shape, rank);
 
-    tt::tt_metal::SmallVector<uint32_t> result_logical_shape(rank);
-    tt::tt_metal::SmallVector<uint32_t> result_physical_shape(rank);
+    ttnn::SmallVector<uint32_t> result_logical_shape(rank);
+    ttnn::SmallVector<uint32_t> result_physical_shape(rank);
     std::fill(result_logical_shape.begin(), result_logical_shape.end(), 1);
     std::fill(result_physical_shape.begin(), result_physical_shape.end(), 1);
 

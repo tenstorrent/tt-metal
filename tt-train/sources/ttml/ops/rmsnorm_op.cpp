@@ -21,7 +21,7 @@
 
 namespace ttml::ops {
 
-autograd::TensorPtr rmsnorm(const autograd::TensorPtr& tensor, const autograd::TensorPtr& gamma, float epsilon) {
+autograd::TensorPtr rmsnorm(const autograd::TensorPtr &tensor, const autograd::TensorPtr &gamma, float epsilon) {
     auto device = &autograd::ctx().get_device();
     ttnn::Tensor squares = ttnn::square(tensor->get_value());
     std::array<uint32_t, 4> eps_shape = {1, 1, 1, 1};
@@ -52,15 +52,16 @@ autograd::TensorPtr rmsnorm(const autograd::TensorPtr& tensor, const autograd::T
         auto dL_dout = out->get_grad();
         auto rms_a = out->get_value();
 
-        // let tensor = {a_i | i = 0, 1, ..., n}
-        // and gamma = {g_i | i = 0, 1, ..., n}
+        std::cout << "a shape: " << a.logical_shape() << "\n";
+        auto outer = ttnn::matmul(a, a, /*transpose_a*/ false, /*transpose_b*/ true);
+        std::cout << "outer shape: " << outer.logical_shape() << "\n";
+        auto scaled_outer = ttnn::experimental::div(outer, ttnn::experimental::mul(ttnn::square(rms_a), n));
+        std::cout << "scaled_outer shape: " << scaled_outer.logical_shape() << "\n";
 
-        auto g_times_dL_dout = ttnn::experimental::mul(g, dL_dout);
-        auto l = ttnn::experimental::div(g_times_dL_dout, rms_a);
-        auto scale = ttnn::matmul(a, g_times_dL_dout, /*transpose a*/ true, /*transpose b*/ false);
-        auto r = ttnn::experimental::div(
-            ttnn::experimental::mul(a, scale), ttnn::experimental::mul(ttnn::pow(rms_a, 3.0F), n));
-        auto dL_da = ttnn::experimental::sub(l, r);
+        auto gained_dL_dout = ttnn::experimental::mul(ttnn::experimental::div(g, rms_a), dL_dout);
+        std::cout << "gained_dL_dout shape: " << gained_dL_dout.logical_shape() << "\n";
+        auto dL_da = ttnn::experimental::sub(gained_dL_dout, ttnn::matmul(gained_dL_dout, scaled_outer));
+        std::cout << "dL_da shape: " << dL_da.logical_shape() << "\n";
         tensor->add_grad(dL_da);
     };
 
