@@ -57,7 +57,7 @@ jobs:
         with:
           payload: |
             {
-              "text": "\nTT_METAL_API_SURFACE:\ndate: ${{ env.DATE }} \nnum_files: ${{ env.NUM_FILES }} \nnum_types: ${{ env.NUM_TYPES }} \nnum_methods: ${{ env.NUM_METHODS }}"
+              "text": "date: ${{ env.DATE }} \nnum_files: ${{ env.NUM_FILES }} \nnum_types: ${{ env.NUM_TYPES }} \nnum_methods: ${{ env.NUM_METHODS }}"
             }
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.METAL_API_SURFACE_WEBHOOK }}
