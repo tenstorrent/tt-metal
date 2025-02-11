@@ -431,6 +431,12 @@ class resnet50Bottleneck:
             conv_kwargs_2["conv_config"].act_block_h_override = 2 * 32
             conv_kwargs_2["conv_config"].enable_subblock_padding = False
             # conv_kwargs_2["conv_config"].enable_split_reader = False
+            if (
+                batch_size == 32
+                and layer_module
+                and (layer_module == "layer1_module2" or layer_module == "layer1_module3")
+            ):
+                conv_kwargs_2["conv_config"].act_block_h_override = 0
 
         if not ttnn.is_tensor_storage_on_device(self.conv2_weight_tensor):
             self.conv2_weight_tensor = ttnn.prepare_conv_weights(
@@ -688,6 +694,9 @@ class resnet50:
         if is_blackhole() and self.batch_size < 20:
             self.transpose_shards = False
 
+        if is_blackhole() and self.batch_size == 32:
+            act_block_h_override = 49 * 32
+
         input_channels_alignment = 16
         self.conv1_config = ttnn.Conv2dConfig(
             dtype=self.model_config["ACTIVATIONS_DTYPE"],
@@ -753,6 +762,7 @@ class resnet50:
         if self.batch_size == 16:
             num_cores_x = 8
             num_cores_y = 8
+            self.fold_compute_grid_size = (num_cores_x, num_cores_y)
         elif self.batch_size == 20:
             if is_grayskull():
                 num_cores_x = 10
@@ -763,10 +773,15 @@ class resnet50:
             elif is_blackhole():
                 num_cores_x = 10
                 num_cores_y = 8
+            self.fold_compute_grid_size = (num_cores_x, num_cores_y)
         elif self.batch_size == 32:
-            num_cores_x = 13
-            num_cores_y = 10
-        self.fold_compute_grid_size = (num_cores_x, num_cores_y)
+            core_grid = ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(12, 8)),
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 9), ttnn.CoreCoord(10, 9)),
+                }
+            )
+            self.fold_compute_grid_size = core_grid
 
         conv_dummy_tensor = torch.rand((self.fold_output_shape), dtype=torch.bfloat16)
         conv_dummy_tensor = ttnn.from_torch(conv_dummy_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
@@ -889,6 +904,7 @@ class resnet50:
             )
             self.conv1_weight_tensor = ttnn.to_device(self.conv1_weight_tensor, device)
             self.conv1_bias_tensor = ttnn.to_device(self.conv1_bias_tensor, device)
+
         x, [x_height, x_width] = ttnn.conv2d(
             input_tensor=fold_output_tensor,
             weight_tensor=self.conv1_weight_tensor,
@@ -899,6 +915,7 @@ class resnet50:
             return_output_dim=True,
             return_weights_and_bias=False,
         )
+
         # Relu is fused with conv1
         if self.batch_size == 20:
             x = ttnn.reallocate(x)
@@ -1007,6 +1024,7 @@ class resnet50:
             enable_act_double_buffer=False,
             enable_split_reader=True,
             enable_subblock_padding=not is_grayskull(),
+            layer_module="layer1_module2",
         )
 
         logger.debug(f"==== Running layer 1 module 3")
@@ -1021,6 +1039,7 @@ class resnet50:
             enable_act_double_buffer=False,
             enable_split_reader=True,
             enable_subblock_padding=not is_grayskull(),
+            layer_module="layer1_module3",
         )
 
         layer2_module1_input_shape = ttnn.Shape(x.padded_shape)

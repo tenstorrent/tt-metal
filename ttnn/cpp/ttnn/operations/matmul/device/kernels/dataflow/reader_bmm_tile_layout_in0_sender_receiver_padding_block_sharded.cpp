@@ -284,4 +284,7 @@ void kernel_main() {
             in0_tensor_current_h_dim_block_start_addr += in0_tensor_next_h_dim_block_stride;
         }
     }
+
+    // noc_async_read_barrier();
+    noc_async_write_barrier();
 }
