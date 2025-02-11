@@ -39,6 +39,7 @@ show_help() {
     echo "  --toolchain-path                 Set path to CMake toolchain file."
     echo "  --configure-only                 Only configure the project, do not build."
     echo "  --enable-coverage                Instrument the binaries for code coverage."
+    echo "  --without-python-bindings        Disable Python bindings, Enabled by default"
 }
 
 clean() {
@@ -75,6 +76,7 @@ ttnn_shared_sub_libs="OFF"
 toolchain_path="cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
 configure_only="OFF"
 enable_coverage="OFF"
+with_python_bindings="ON"
 
 declare -a cmake_args
 
@@ -114,6 +116,7 @@ ttnn-shared-sub-libs
 toolchain-path:
 configure-only
 enable-coverage
+without-python-bindings
 "
 
 # Flatten LONGOPTIONS into a comma-separated string for getopt
@@ -177,6 +180,8 @@ while true; do
             ttnn_shared_sub_libs="ON";;
         --configure-only)
             configure_only="ON";;
+        --without-python-bindings)
+            with_python_bindings="OFF";;
         --disable-unity-builds)
 	    unity_builds="OFF";;
         --disable-light-metal-trace)
@@ -256,6 +261,7 @@ echo "INFO: Build tests: $build_tests"
 echo "INFO: Enable Unity builds: $unity_builds"
 echo "INFO: TTNN Shared sub libs : $ttnn_shared_sub_libs"
 echo "INFO: Enable Light Metal Trace: $light_metal_trace"
+echo "INFO: With python bindings: $with_python_bindings"
 
 # Prepare cmake arguments
 cmake_args+=("-B" "$build_dir")
@@ -371,6 +377,18 @@ if [ "$build_all" = "ON" ]; then
     cmake_args+=("-DTTNN_BUILD_TESTS=ON")
     cmake_args+=("-DBUILD_PROGRAMMING_EXAMPLES=ON")
     cmake_args+=("-DBUILD_TT_TRAIN=ON")
+fi
+
+if [ "$light_metal_trace" = "ON" ]; then
+    cmake_args+=("-DTT_ENABLE_LIGHT_METAL_TRACE=ON")
+else
+    cmake_args+=("-DTT_ENABLE_LIGHT_METAL_TRACE=OFF")
+fi
+
+if [ "$with_python_bindings" = "ON" ]; then
+    cmake_args+=("-DWITH_PYTHON_BINDINGS=ON")
+else
+    cmake_args+=("-DWITH_PYTHON_BINDINGS=OFF")
 fi
 
 # toolchain and cxx_compiler settings would conflict with eachother
