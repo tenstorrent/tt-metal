@@ -824,7 +824,7 @@ Optimized multi-head attention ran in 0.020017147064208984 seconds for the subse
 </div>
 
 <script>
-const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/dimitri/test-versioned-docs/docs/published_versions.json';
+const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/docs/published_versions.json';
 
 async function loadVersions() {
     try {
@@ -836,7 +836,7 @@ async function loadVersions() {
         data.versions.forEach(version => {
             const dd = document.createElement('dd');
             const link = document.createElement('a');
-            link.href = `https://tenstorrent-docs-test.github.io/tt-metal/${version}/${projectCode}/index.html`;
+            link.href = `https://docs.tenstorrent.com/tt-metal/${version}/${projectCode}/index.html`;
             link.textContent = version;
             dd.appendChild(link);
             versionList.appendChild(dd);

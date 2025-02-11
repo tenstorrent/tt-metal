@@ -510,7 +510,7 @@ ttnn.Tensor([[33.75000,  9.25000,  ..., -39.50000, -6.62500]], shape=Shape([1, 3
 </div>
 
 <script>
-const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/dimitri/test-versioned-docs/docs/published_versions.json';
+const VERSIONS_URL = 'https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/docs/published_versions.json';
 
 async function loadVersions() {
     try {
@@ -522,7 +522,7 @@ async function loadVersions() {
         data.versions.forEach(version => {
             const dd = document.createElement('dd');
             const link = document.createElement('a');
-            link.href = `https://tenstorrent-docs-test.github.io/tt-metal/${version}/${projectCode}/index.html`;
+            link.href = `https://docs.tenstorrent.com/tt-metal/${version}/${projectCode}/index.html`;
             link.textContent = version;
             dd.appendChild(link);
             versionList.appendChild(dd);
