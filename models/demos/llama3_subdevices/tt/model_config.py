@@ -663,13 +663,13 @@ class TtModelArgs:
 
             # Use padded K and N
             self.model_config["W1W3_RING_MEMCFG"] = self.create_dram_sharded_mem_config(
-                k=9216 // 4,
+                k=8192 // 4,
                 n=3840,
             )
 
             # Use padded K and N
             self.model_config["W2_RING_MEMCFG"] = self.create_dram_sharded_mem_config(
-                k=3840,
+                k=3584,
                 n=9216 // 4,
             )
 
