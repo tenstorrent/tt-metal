@@ -532,8 +532,9 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
 
     uint32_t num_tiles_per_col = output.get_padded_shape()[-2] / TILE_HEIGHT;
 
-    if (num_tiles_per_row > 32) {
-        if (num_tiles_per_col > 32 || num_tiles_per_row > num_tiles_per_col) {
+    constexpr uint32_t threshold_row_block = 32;
+    if (num_tiles_per_row > threshold_row_block) {
+        if (num_tiles_per_col > threshold_row_block || num_tiles_per_row > num_tiles_per_col) {
             return tilize_with_val_padding_multi_core_block_interleaved(a, output, pad_value);
         }
     }
