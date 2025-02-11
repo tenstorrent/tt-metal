@@ -750,7 +750,7 @@ The constructor takes following arguments:</p>
 <p>Overloaded function.</p>
 <ol class="arabic">
 <li>
-<p>to(self: ttnn._ttnn.tensor.Tensor, device: ttnn._ttnn.device.IDevice, mem_config: ttnn._ttnn.tensor.MemoryConfig = MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt), cq_id: int = 0) -&gt; ttnn._ttnn.tensor.Tensor</p>
+<p>to(self: ttnn._ttnn.tensor.Tensor, device: ttnn._ttnn.device.IDevice, mem_config: ttnn._ttnn.tensor.MemoryConfig = MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt), cq_id: ttnn._ttnn.types.QueueId = QueueId(0)) -&gt; ttnn._ttnn.tensor.Tensor</p>
 <blockquote>
 <div>
 <p>Move TT Tensor from host device to TT accelerator device.</p>
@@ -798,7 +798,7 @@ The constructor takes following arguments:</p>
 </blockquote>
 </li>
 <li>
-<p>to(self: ttnn._ttnn.tensor.Tensor, mesh_device: ttnn._ttnn.multi_device.MeshDevice, mem_config: ttnn._ttnn.tensor.MemoryConfig = MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt), cq_id: int = 0) -&gt; ttnn._ttnn.tensor.Tensor</p>
+<p>to(self: ttnn._ttnn.tensor.Tensor, mesh_device: ttnn._ttnn.multi_device.MeshDevice, mem_config: ttnn._ttnn.tensor.MemoryConfig = MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt), cq_id: ttnn._ttnn.types.QueueId = QueueId(0)) -&gt; ttnn._ttnn.tensor.Tensor</p>
 <blockquote>
 <div>
 <p>Move TT Tensor from host device to TT accelerator device.</p>

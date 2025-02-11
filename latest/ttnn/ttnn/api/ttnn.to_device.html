@@ -152,9 +152,9 @@
 <dd>
 <p>Overloaded function.</p>
 <ol class="arabic">
-<li><p>to_device(tensor: ttnn._ttnn.tensor.Tensor, device: ttnn._ttnn.device.IDevice, memory_config: Optional[ttnn._ttnn.tensor.MemoryConfig] = None, cq_id: int = 0) -&gt; ttnn._ttnn.tensor.Tensor</p></li>
+<li><p>to_device(tensor: ttnn._ttnn.tensor.Tensor, device: ttnn._ttnn.device.IDevice, memory_config: Optional[ttnn._ttnn.tensor.MemoryConfig] = None, cq_id: ttnn._ttnn.types.QueueId = QueueId(0)) -&gt; ttnn._ttnn.tensor.Tensor</p></li>
 <li>
-<p>to_device(tensor: ttnn._ttnn.tensor.Tensor, device: ttnn._ttnn.multi_device.MeshDevice, memory_config: Optional[ttnn._ttnn.tensor.MemoryConfig] = None, cq_id: int = 0) -&gt; ttnn._ttnn.tensor.Tensor</p>
+<p>to_device(tensor: ttnn._ttnn.tensor.Tensor, device: ttnn._ttnn.multi_device.MeshDevice, memory_config: Optional[ttnn._ttnn.tensor.MemoryConfig] = None, cq_id: ttnn._ttnn.types.QueueId = QueueId(0)) -&gt; ttnn._ttnn.tensor.Tensor</p>
 <blockquote>
 <div>
 <p>Copy tensor from host to device.</p>
