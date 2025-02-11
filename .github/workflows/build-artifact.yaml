@@ -54,7 +54,9 @@ on:
       #ci-test-docker-image:
       #  description: "Docker tag for the CI Test Docker image for testing TT-Metalium et al"
       #  value: ${{ jobs.build-docker-image.outputs.ci-test-tag }}
-
+      packages-artifact-name:
+        description: "Name to give download-artifact to get the packages"
+        value: ${{ jobs.build-artifact.outputs.packages-artifact-name }}
 
   workflow_dispatch:
     inputs:
@@ -107,6 +109,8 @@ jobs:
     runs-on:
       - build
       - in-service
+    outputs:
+      packages-artifact-name: ${{ steps.set-artifact-name.outputs.name }}
     container:
       image: ${{ needs.build-docker-image.outputs.ci-build-tag }}
       env:
@@ -140,10 +144,22 @@ jobs:
             exit 1
           fi
 
+      - name: Set artifact name
+        id: set-artifact-name
+        run: |
+          TOOLCHAIN="${{ inputs.toolchain }}"
+          TOOLCHAIN_CLEANED=$(echo "$TOOLCHAIN" | sed -E 's/^cmake\///; s/-toolchain\.cmake$//')
+          ARTIFACT_NAME="packages-${{ inputs.distro }}-${{ inputs.version }}-${{ inputs.architecture }}-${{ inputs.build-type }}-${TOOLCHAIN_CLEANED}${{ (inputs.tracy && '_profiler') || '' }}"
+
+          echo "name=$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
+          echo "ARTIFACT_NAME=$ARTIFACT_NAME" >> "$GITHUB_ENV"
+
       - name: ⬇️ Checkout
         uses: actions/checkout@v4
         with:
           submodules: recursive
+          fetch-depth: 500 # Need enough history for `git describe`
+          fetch-tags: true # Need tags for `git describe`
           path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
 
       - name: Sanity check
@@ -184,9 +200,9 @@ jobs:
           nice -19 cmake --build build --target install
 
       - name: 📦 Package
-        if: false # Packaging coming later
         run: |
-          nice -19 cmake --build $build_dir --target package
+          nice -n 19 cmake --build build --target package
+          ls -1sh build/*.deb build/*.ddeb
 
       - name: 🐍 Build wheel
         if: ${{ inputs.build-wheel }}
@@ -199,6 +215,16 @@ jobs:
           echo '```' >> $GITHUB_STEP_SUMMARY
           ccache -s >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: ☁️ Upload packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: |
+            /work/build/*.deb
+            /work/build/*.ddeb
+          compression-level: 0
+          if-no-files-found: error
 
       - name: ☁️ Upload wheel
         if: ${{ inputs.build-wheel }}
