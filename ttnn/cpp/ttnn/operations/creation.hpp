@@ -122,7 +122,11 @@ static Tensor full_impl(
     std::fill(std::begin(owned_buffer), std::end(owned_buffer), value);
 
     if (!optional_output_tensor.has_value()) {
-        auto output = Tensor(OwnedStorage{owned_buffer}, shape, data_type, layout);
+        auto output = Tensor(
+            OwnedStorage{owned_buffer}, shape, data_type, layout);  // Issue lies in Converting the Buffer to Tensor
+
+        // Either the issue is with the OwnedStorage conversion??  or the Tensor doesn't handle the Bfloat8_b support??
+
         if (!devices.empty()) {
             output = output.to_device(devices, output_mem_config);
         }
@@ -179,6 +183,14 @@ inline ttnn::Tensor full_impl(
         case DataType::UINT32: return concrete_full.template operator()<uint32_t>(fill_value);
         case DataType::FLOAT32: return concrete_full.template operator()<float>(fill_value);
         case DataType::BFLOAT16: return concrete_full.template operator()<::bfloat16>(static_cast<float>(fill_value));
+
+        case DataType::BFLOAT8_B: {
+            using bfloat8 = std::vector<uint32_t>;
+            TensorSpec tensor_spec(
+                shape_value, TensorLayout(DataType::BFLOAT8_B, PageConfig(layout_value), MemoryConfig{}));
+            std::vector<float> fill_value_vec(shape_value.volume(), static_cast<float>(fill_value));
+            return tt::tt_metal::Tensor::from_span(tt::stl::Span<const float>(fill_value_vec), tensor_spec);
+        }
         default: TT_THROW("Unsupported DataType!");
     }
 }
