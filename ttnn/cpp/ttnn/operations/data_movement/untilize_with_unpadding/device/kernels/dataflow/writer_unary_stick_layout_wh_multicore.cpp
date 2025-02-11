@@ -39,8 +39,8 @@ void kernel_main() {
 
         for (uint32_t k = start_row_id; k < start_row_id + num_rows; k++) {
             uint64_t dst_noc_addr = get_noc_addr(size_2d + k, s);
-            uint32_t total_size = start_column_id + single_block_size * width_size;
-            uint32_t write_size = single_block_size * width_size;
+            uint32_t total_size = start_column_id + width_size;
+            uint32_t write_size = width_size;
 
             if (total_size > unpadded_X_size) {
                 uint32_t padded_size = total_size - unpadded_X_size;
@@ -51,7 +51,7 @@ void kernel_main() {
 
             noc_async_write_barrier();
 
-            l1_read_addr += width_size * single_block_size;
+            l1_read_addr += width_size;
         }
 
         cb_pop_front(cb_id_out0, single_block_size * has_rows);
