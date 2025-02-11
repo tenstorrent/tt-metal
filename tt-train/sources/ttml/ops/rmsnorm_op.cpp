@@ -1,6 +1,8 @@
-// SPDX-FileCopyrightText: (c) 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
+
+#include "rmsnorm_op.hpp"
 
 #include <core/ttnn_all_includes.hpp>
 #include <cstddef>
@@ -15,7 +17,6 @@
 #include "autograd/tensor.hpp"
 #include "core/compute_kernel_config.hpp"
 #include "core/tt_tensor_utils.hpp"
-#include "layernorm_op.hpp"
 #include "ops/binary_ops.hpp"
 #include "ops/unary_ops.hpp"
 
