@@ -94,10 +94,6 @@ operation::ProgramWithCallbacks TilizeWithValPadding::create_program(
         return detail::tilize_with_val_padding_multi_core_block_interleaved(
             input_tensor_a, output_tensor, this->pad_value);
     }
-    // if (!this->enough_space_height) {
-    //     return detail::tilize_with_val_padding_multi_core_col_interleaved(
-    //         input_tensor_a, output_tensor, this->pad_value);
-    // }
     if (!this->use_multicore) {
         return detail::tilize_with_val_padding_single_core(input_tensor_a, output_tensor, this->pad_value);
     }
