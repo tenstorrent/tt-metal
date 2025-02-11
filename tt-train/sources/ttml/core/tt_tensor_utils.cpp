@@ -326,4 +326,43 @@ template tt::tt_metal::Tensor from_xtensor<uint32_t, DataType::UINT32>(
     const XTensorToMeshVariant<uint32_t>& composer,
     Layout layout);
 
+ttnn::Tensor unsqueeze_to_rank(const ttnn::Tensor& t, size_t rank) {
+    auto logical_shape = t.get_logical_shape();
+    auto physical_shape = t.get_padded_shape();
+    auto t_rank = logical_shape.rank();
+    TT_FATAL(t_rank <= rank, "Cannot unsqueeze to rank {} from rank {}", rank, t_rank);
+
+    ttnn::SmallVector<uint32_t> result_logical_shape(rank);
+    ttnn::SmallVector<uint32_t> result_physical_shape(rank);
+    std::fill(result_logical_shape.begin(), result_logical_shape.end(), 1);
+    std::fill(result_physical_shape.begin(), result_physical_shape.end(), 1);
+
+    auto rank_diff = rank - t_rank;
+    std::copy(logical_shape.cbegin(), logical_shape.cend(), result_logical_shape.begin() + rank_diff);
+    std::copy(physical_shape.cbegin(), physical_shape.cend(), result_physical_shape.begin() + rank_diff);
+    return ttnn::reshape(t, ttnn::Shape{result_logical_shape}, ttnn::Shape{result_physical_shape});
+}
+
+ttnn::Tensor squeeze_to_rank(const ttnn::Tensor& t, size_t rank) {
+    auto logical_shape = t.get_logical_shape();
+    auto physical_shape = t.get_padded_shape();
+    auto t_rank = logical_shape.rank();
+    TT_FATAL(t_rank >= rank, "Cannot squeeze to rank {} from rank {}", rank, t_rank);
+
+    auto rank_diff = t_rank - rank;
+    bool leading_ones =
+        std::all_of(logical_shape.cbegin(), logical_shape.cbegin() + rank_diff, [](size_t dim) { return dim == 1; });
+    TT_FATAL(leading_ones, "Cannot squeeze shape {} to rank {}", logical_shape, rank);
+
+    ttnn::SmallVector<uint32_t> result_logical_shape(rank);
+    ttnn::SmallVector<uint32_t> result_physical_shape(rank);
+    std::fill(result_logical_shape.begin(), result_logical_shape.end(), 1);
+    std::fill(result_physical_shape.begin(), result_physical_shape.end(), 1);
+
+    std::copy(logical_shape.cbegin() + rank_diff, logical_shape.cend(), result_logical_shape.begin());
+    std::copy(physical_shape.cbegin() + rank_diff, physical_shape.cend(), result_physical_shape.begin());
+
+    return ttnn::reshape(t, ttnn::Shape{result_logical_shape}, ttnn::Shape{result_physical_shape});
+}
+
 }  // namespace ttml::core
