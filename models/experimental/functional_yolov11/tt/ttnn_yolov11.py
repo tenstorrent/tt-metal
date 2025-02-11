@@ -208,7 +208,6 @@ class SPPF:
             padding=[2, 2],
             dilation=[1, 1],
         )
-
         m2 = ttnn.max_pool2d(
             m1,
             batch_size=self.parameter.cv2.conv.batch_size,
@@ -220,7 +219,6 @@ class SPPF:
             padding=[2, 2],
             dilation=[1, 1],
         )
-
         m3 = ttnn.max_pool2d(
             m2,
             batch_size=self.parameter.cv2.conv.batch_size,
@@ -232,22 +230,48 @@ class SPPF:
             padding=[2, 2],
             dilation=[1, 1],
         )
-
-        if x1.is_sharded():
-            x1 = ttnn.sharded_to_interleaved(x1, ttnn.L1_MEMORY_CONFIG)
-        if m2.is_sharded():
-            m2 = ttnn.sharded_to_interleaved(m2, ttnn.L1_MEMORY_CONFIG)
-        if m3.is_sharded():
-            m3 = ttnn.sharded_to_interleaved(m3, ttnn.L1_MEMORY_CONFIG)
-        if m1.is_sharded():
-            m1 = ttnn.sharded_to_interleaved(m1, ttnn.L1_MEMORY_CONFIG)
-        y = ttnn.concat([x1, m1, m2, m3], dim=-1, memory_config=ttnn.L1_MEMORY_CONFIG)
-
+        use_sharded_concat = True
+        if use_sharded_concat:
+            shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})
+            if m1.shape[2] == 49:  # 224
+                shard_height = 1  # (n*h*w + num_cores - 1)//num_cores
+            elif m1.shape[2] == 400:  # 640
+                shard_height = 7
+            else:
+                print("invalid shard spec")
+            in_shard_width = x1.shape[-1]
+            out_shard_width = x1.shape[-1] + m1.shape[-1] + m2.shape[-1] + m3.shape[-1]
+            input_sharded_memory_config = ttnn.create_sharded_memory_config(
+                (shard_height, in_shard_width),
+                core_grid=shard_grid,
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                use_height_and_width_as_shard_shape=True,
+            )
+            output_sharded_memory_config = ttnn.create_sharded_memory_config(
+                (shard_height, out_shard_width),
+                core_grid=shard_grid,
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                use_height_and_width_as_shard_shape=True,
+            )
+            print("inpit is", input_sharded_memory_config)
+            print("outpt is", output_sharded_memory_config)
+            x1 = ttnn.to_memory_config(x1, memory_config=input_sharded_memory_config)
+            m1 = ttnn.to_memory_config(m1, memory_config=input_sharded_memory_config)
+            m2 = ttnn.to_memory_config(m2, memory_config=input_sharded_memory_config)
+            m3 = ttnn.to_memory_config(m3, memory_config=input_sharded_memory_config)
+            memory_config_used = output_sharded_memory_config
+        else:
+            if m2.is_sharded():
+                m2 = ttnn.sharded_to_interleaved(m2, ttnn.L1_MEMORY_CONFIG)
+            if m3.is_sharded():
+                m3 = ttnn.sharded_to_interleaved(m3, ttnn.L1_MEMORY_CONFIG)
+            if m1.is_sharded():
+                m1 = ttnn.sharded_to_interleaved(m1, ttnn.L1_MEMORY_CONFIG)
+            memory_config_used = ttnn.L1_MEMORY_CONFIG
+        y = ttnn.concat([x1, m1, m2, m3], dim=-1, memory_config=memory_config_used)
+        if y.is_sharded():
+            y = ttnn.sharded_to_interleaved(y, ttnn.L1_MEMORY_CONFIG)
         x = self.cv2(device, y)
-        print("shape before slice is ", x.shape)
-        if x.shape[2] != y.shape[2]:
-            x = x[:, :, :49, :]
-        print("shape after slice is ", x.shape)
         ttnn.deallocate(x1)
         ttnn.deallocate(m1)
         ttnn.deallocate(m2)
@@ -270,13 +294,62 @@ class C3K:
 
         k1 = self.k1(device, x1)
         k2 = self.k2(device, k1)
-
+        # input to concat Shape([1, 1, 49, 64]) Layout.TILE DataType.BFLOAT8_B MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt) Shape([1, 1, 49, 64]) Layout.TILE DataType.BFLOAT8_B MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt)
+        # input to concat Shape([1, 1, 196, 32]) Layout.TILE DataType.BFLOAT8_B MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt) Shape([1, 1, 196, 32]) Layout.TILE DataType.BFLOAT8_B MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::L1,shard_spec=std::nullopt)
         # if x2.is_sharded():
         #     x2 = ttnn.sharded_to_interleaved(x2, ttnn.L1_MEMORY_CONFIG)
         # if k2.is_sharded():
         #     k2 = ttnn.sharded_to_interleaved(k2, ttnn.L1_MEMORY_CONFIG)
-
-        x = ttnn.concat((k2, x2), 3, memory_config=ttnn.L1_MEMORY_CONFIG)
+        print(
+            "input to concat",
+            x2.shape,
+            x2.layout,
+            x2.dtype,
+            x2.memory_config(),
+            k2.shape,
+            k2.layout,
+            k2.dtype,
+            k2.memory_config(),
+        )
+        use_shard_concat = True
+        if use_shard_concat:
+            shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})
+            if x2.shape[2] == 49:  # 224
+                shard_height = 1  # (n*h*w + num_cores - 1)//num_cores
+            elif x2.shape[2] == 196:  # 224
+                shard_height = 4
+            elif x2.shape[2] == 400:  # 640
+                shard_height = 7
+            elif x2.shape[2] == 1600:  # 640
+                shard_height = 13
+            else:
+                print("invalid shard spec")
+            in_shard_width = x2.shape[-1]
+            out_shard_width = x2.shape[-1] + k2.shape[-1]
+            input_sharded_memory_config = ttnn.create_sharded_memory_config(
+                (shard_height, in_shard_width),
+                core_grid=shard_grid,
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                use_height_and_width_as_shard_shape=True,
+            )
+            x2 = ttnn.to_layout(x2, ttnn.ROW_MAJOR_LAYOUT)
+            x2 = ttnn.to_dtype(x2, ttnn.bfloat16)
+            x2 = ttnn.to_memory_config(x2, memory_config=input_sharded_memory_config)
+            k2 = ttnn.to_layout(k2, ttnn.ROW_MAJOR_LAYOUT)
+            k2 = ttnn.to_dtype(k2, ttnn.bfloat16)
+            k2 = ttnn.to_memory_config(k2, memory_config=input_sharded_memory_config)
+            output_sharded_memory_config = ttnn.create_sharded_memory_config(
+                (shard_height, out_shard_width),
+                core_grid=shard_grid,
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                use_height_and_width_as_shard_shape=True,
+            )
+            memory_config_used = output_sharded_memory_config
+        else:
+            memory_config_used = ttnn.L1_MEMORY_CONFIG
+        x = ttnn.concat((k2, x2), 3, memory_config=memory_config_used)
+        if x.is_sharded():
+            x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
         x = self.cv3(device, x)
         ttnn.deallocate(x1)
         ttnn.deallocate(x2)
@@ -772,6 +845,8 @@ class YoloV11:
         x = self.conv7(self.device, x)  # 17
         x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
         x = ttnn.to_dtype(x, ttnn.bfloat16)
+        x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)
+        print("x and x13 shapes are", x.shape, x13.shape, x.dtype, x13.dtype, x.layout, x13.layout)
         x = ttnn.concat((x, x13), -1, memory_config=ttnn.L1_MEMORY_CONFIG)  # 18
         ttnn.deallocate(x13)
         x = self.c3k2_7(self.device, x)  # 19
@@ -779,11 +854,6 @@ class YoloV11:
         x = self.conv8(self.device, x)  # 20 #16
         x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
         x = ttnn.to_dtype(x, ttnn.bfloat16)
-        # x10 = ttnn.to_layout(x10, ttnn.TILE_LAYOUT)
-
-        # x10 = ttnn.from_device(x10)
-        # x10 = ttnn.to_dtype(x10, ttnn.bfloat8_b)
-        # x10 = ttnn.to_device(x10, self.device)
         print("x and x10 shapes are", x.shape, x10.shape, x.dtype, x10.dtype, x.layout, x10.layout)
         x = ttnn.concat((x, x10), -1, memory_config=ttnn.L1_MEMORY_CONFIG)  # 21
         print("output cncat shape is", x.shape)
