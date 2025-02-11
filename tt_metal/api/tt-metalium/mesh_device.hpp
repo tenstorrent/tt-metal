@@ -139,7 +139,13 @@ public:
     // Trace APIs
     void begin_trace(const uint8_t cq_id, const uint32_t tid) override;
     void end_trace(const uint8_t cq_id, const uint32_t tid) override;
-    void replay_trace(const uint8_t cq_id, const uint32_t tid, const bool blocking) override;
+
+    // TODO: `block_on_worker_thread` can be removed once we remove multi-threaded async dispatch
+    void replay_trace(
+        const uint8_t cq_id,
+        const uint32_t tid,
+        const bool block_on_device,
+        const bool block_on_worker_thread) override;
     void release_trace(const uint32_t tid) override;
     std::shared_ptr<TraceBuffer> get_trace(uint32_t tid) override;
     uint32_t get_trace_buffers_size() const override;

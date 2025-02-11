@@ -7,7 +7,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/rtoptions.hpp>
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
-#include "kernels/traffic_gen_test.hpp"
+#include "test_common.hpp"
 #include "utils.hpp"
 #include "llrt.hpp"
 
