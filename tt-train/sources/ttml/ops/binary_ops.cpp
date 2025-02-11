@@ -6,7 +6,6 @@
 
 #include <core/ttnn_all_includes.hpp>
 #include <memory>
-#include <ttnn/operations/eltwise/binary/binary.hpp>
 #include <ttnn/operations/eltwise/binary_backward/binary_backward.hpp>
 #include <ttnn/tensor/types.hpp>
 #include <vector>
