@@ -32,7 +32,7 @@ protected:
 // and compute its gradient with respect to `x` as `x_grad = torch.autograd.grad(x_norm_sum, x)[0]`
 // We then compare the results of the RMSNorm and its gradient with the results of the RMSNorm and its gradient
 // computed by the RMSNorm op in TTML.
-TEST_F(RMSNormOpTest, RMSNormOp_Forward_Small) {
+TEST_F(RMSNormOpTest, RMSNorm_Small_Forward_Backward) {
     using namespace ttml;
     float eps = 0.0078125F;  // default in PyTorch for bf16
 
@@ -54,4 +54,9 @@ TEST_F(RMSNormOpTest, RMSNormOp_Forward_Small) {
     auto expected_example_tensor_grad =
         xt::xarray<float>({{{{0.2432, 0.1211, -0.0020, -0.1230, 0.2432, 0.1211, -0.0020, -0.1230}}}});
     EXPECT_TRUE(xt::allclose(example_tensor_grad, expected_example_tensor_grad, 1.0e-3F, 1e-2F));
+
+    auto gamma_grad = core::to_xtensor(gamma->get_grad());
+    auto expected_gamma_grad =
+        xt::xarray<float>({{{{0.3652F, 0.7305F, 1.0938F, 1.4609F, 0.3652F, 0.7305F, 1.0938F, 1.4609F}}}});
+    EXPECT_TRUE(xt::allclose(gamma_grad, expected_gamma_grad, 1.0e-3F, 1e-2F));
 }

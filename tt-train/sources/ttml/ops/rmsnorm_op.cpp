@@ -60,6 +60,9 @@ autograd::TensorPtr rmsnorm(const autograd::TensorPtr &tensor, const autograd::T
         auto gained_dL_dout = ttnn::experimental::mul(ttnn::experimental::div(g, rms_a), dL_dout);
         auto dL_da = ttnn::experimental::sub(gained_dL_dout, ttnn::matmul(gained_dL_dout, scaled_outer));
         tensor->add_grad(dL_da);
+
+        auto dL_dg = ttnn::experimental::div(a, rms_a);
+        gamma->add_grad(dL_dg);
     };
 
     auto links = autograd::get_links(tensor);
