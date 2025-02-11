@@ -194,7 +194,7 @@
 
 <dl class="cpp function">
 <dt class="sig sig-object cpp" id="_CPPv4N7ckernel14mul_tiles_initE8uint32_t8uint32_t">
-<span class="target" id="namespaceckernel_1a5d7722fc6c62a98e87aa80dfd4addc04"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">mul_tiles_init</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">icb0</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="m"><span class="pre">0</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">icb1</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="m"><span class="pre">1</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel14mul_tiles_initE8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
+<span class="target" id="namespaceckernel_1ad654549ed1f82fa7fc8e306671c7d16e"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">mul_tiles_init</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">icb0</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">icb1</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel14mul_tiles_initE8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
 <p>Please refer to documentation for any_init. </p>
@@ -331,6 +331,15 @@ function getCurrentVersion() {
     return window.location.pathname.split('/')[2];
 }
 document.getElementById('current-version').textContent = getCurrentVersion();
+
+const versionEl = document.createElement("span");
+versionEl.innerText = getCurrentVersion();
+versionEl.className = "project-versions";
+const wySideSearchEl = document.getElementsByClassName("wy-side-nav-search").item(0);
+if (wySideSearchEl) {
+    const projectNameEl = wySideSearchEl.children.item(1);
+    if (projectNameEl) projectNameEl.appendChild(versionEl);
+}
 
 </script><script>
       jQuery(function () {

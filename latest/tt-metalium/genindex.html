@@ -145,7 +145,7 @@
 </li>
       <li><a href="tt_metal/apis/kernel_apis/compute/binary_op_init_funcs.html#_CPPv4N7ckernel21binary_op_init_commonE8uint32_t8uint32_t8uint32_t">ckernel::binary_op_init_common (C++ function)</a>
 </li>
-      <li><a href="tt_metal/apis/kernel_apis/compute/binary_op_init_funcs.html#_CPPv4I_b_17EltwiseBinaryTypeEN7ckernel23binary_op_specific_initEvv">ckernel::binary_op_specific_init (C++ function)</a>
+      <li><a href="tt_metal/apis/kernel_apis/compute/binary_op_init_funcs.html#_CPPv4I_b_17EltwiseBinaryTypeEN7ckernel23binary_op_specific_initEv8uint32_t8uint32_t">ckernel::binary_op_specific_init (C++ function)</a>
 </li>
       <li><a href="tt_metal/apis/kernel_apis/compute/cb_pop_front.html#_CPPv4N7ckernel12cb_pop_frontE8uint32_t8uint32_t">ckernel::cb_pop_front (C++ function)</a>
 </li>
@@ -629,6 +629,15 @@ function getCurrentVersion() {
     return window.location.pathname.split('/')[2];
 }
 document.getElementById('current-version').textContent = getCurrentVersion();
+
+const versionEl = document.createElement("span");
+versionEl.innerText = getCurrentVersion();
+versionEl.className = "project-versions";
+const wySideSearchEl = document.getElementsByClassName("wy-side-nav-search").item(0);
+if (wySideSearchEl) {
+    const projectNameEl = wySideSearchEl.children.item(1);
+    if (projectNameEl) projectNameEl.appendChild(versionEl);
+}
 
 </script><script>
       jQuery(function () {

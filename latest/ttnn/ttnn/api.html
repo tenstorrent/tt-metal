@@ -2015,7 +2015,7 @@
 </tr>
 <tr class="row-even">
 <td><p><a class="reference internal" href="api/ttnn.batch_norm.html#ttnn.batch_norm" title="ttnn.batch_norm"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.batch_norm</span></code></a></p></td>
-<td><p>Applies Spatial Batch Normalization over each channel on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>. Inputs must be must be tilized and interleaved.</p></td>
+<td><p>Applies Spatial Batch Normalization over each channel on <code class="xref py py-attr docutils literal notranslate"><span class="pre">input_tensor</span></code>. Inputs must be must be tilized and interleaved. Currently support is provided for inference mode only.</p></td>
 </tr>
 </tbody>
 </table>
@@ -2263,6 +2263,15 @@ function getCurrentVersion() {
     return window.location.pathname.split('/')[2];
 }
 document.getElementById('current-version').textContent = getCurrentVersion();
+
+const versionEl = document.createElement("span");
+versionEl.innerText = getCurrentVersion();
+versionEl.className = "project-versions";
+const wySideSearchEl = document.getElementsByClassName("wy-side-nav-search").item(0);
+if (wySideSearchEl) {
+    const projectNameEl = wySideSearchEl.children.item(1);
+    if (projectNameEl) projectNameEl.appendChild(versionEl);
+}
 
 </script><script>
       jQuery(function () {

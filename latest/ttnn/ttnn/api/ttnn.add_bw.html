@@ -255,7 +255,6 @@ Supports broadcasting.</p>
 </tbody>
 </table>
 <p>bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT</p>
-<p>Sharding is not supported if both inputs are tensors.</p>
 </div>
 <div class="admonition-example admonition">
 <p class="admonition-title">Example</p>
@@ -347,6 +346,15 @@ function getCurrentVersion() {
     return window.location.pathname.split('/')[2];
 }
 document.getElementById('current-version').textContent = getCurrentVersion();
+
+const versionEl = document.createElement("span");
+versionEl.innerText = getCurrentVersion();
+versionEl.className = "project-versions";
+const wySideSearchEl = document.getElementsByClassName("wy-side-nav-search").item(0);
+if (wySideSearchEl) {
+    const projectNameEl = wySideSearchEl.children.item(1);
+    if (projectNameEl) projectNameEl.appendChild(versionEl);
+}
 
 </script><script>
       jQuery(function () {

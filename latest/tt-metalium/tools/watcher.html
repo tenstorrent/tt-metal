@@ -163,6 +163,10 @@ the log file is stored as well as a message each time the watcher checks the dev
 <span class="c1"># If the above doesn't work, and dispatch kernels (cq_prefetch.cpp, cq_dispatch.cpp) are still too large, compile out</span>
 <span class="c1"># debug tools on dispatch kernels.</span>
 <span class="n">export</span> <span class="n">TT_METAL_WATCHER_DISABLE_DISPATCH</span><span class="o">=</span><span class="mi">1</span>
+
+<span class="c1"># If you need to see the physical coordinates in the watcher log (note that physical coordinates are not expected</span>
+<span class="c1"># to be used in host-side code).</span>
+<span class="n">export</span> <span class="n">TT_METAL_WATCHER_PHYS_COORDS</span><span class="o">=</span><span class="mi">1</span>
 </pre></div>
 </div>
 </section>
@@ -424,6 +428,15 @@ function getCurrentVersion() {
     return window.location.pathname.split('/')[2];
 }
 document.getElementById('current-version').textContent = getCurrentVersion();
+
+const versionEl = document.createElement("span");
+versionEl.innerText = getCurrentVersion();
+versionEl.className = "project-versions";
+const wySideSearchEl = document.getElementsByClassName("wy-side-nav-search").item(0);
+if (wySideSearchEl) {
+    const projectNameEl = wySideSearchEl.children.item(1);
+    if (projectNameEl) projectNameEl.appendChild(versionEl);
+}
 
 </script><script>
       jQuery(function () {

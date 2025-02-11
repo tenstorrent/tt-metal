@@ -1157,6 +1157,8 @@
   <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="ttnn/api/ttnn.where_bw.html#ttnn.where_bw">where_bw() (in module ttnn)</a>
 </li>
+      <li><a href="ttnn/tensor.html#ttnn.Shape.with_tile_padding">with_tile_padding() (ttnn.Shape method)</a>
+</li>
   </ul></td>
 </tr></table>
 
@@ -1249,6 +1251,15 @@ function getCurrentVersion() {
     return window.location.pathname.split('/')[2];
 }
 document.getElementById('current-version').textContent = getCurrentVersion();
+
+const versionEl = document.createElement("span");
+versionEl.innerText = getCurrentVersion();
+versionEl.className = "project-versions";
+const wySideSearchEl = document.getElementsByClassName("wy-side-nav-search").item(0);
+if (wySideSearchEl) {
+    const projectNameEl = wySideSearchEl.children.item(1);
+    if (projectNameEl) projectNameEl.appendChild(versionEl);
+}
 
 </script><script>
       jQuery(function () {

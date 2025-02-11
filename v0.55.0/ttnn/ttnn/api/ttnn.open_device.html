@@ -129,7 +129,7 @@
 </h1>
 <span class="target" id="id1"></span><dl class="py function">
 <dt class="sig sig-object py" id="ttnn.open_device">
-<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">open_device</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">device_id:</span> <span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">l1_small_size:</span> <span class="pre">int</span> <span class="pre">=</span> <span class="pre">0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">trace_region_size:</span> <span class="pre">int</span> <span class="pre">=</span> <span class="pre">0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dispatch_core_config:</span> <span class="pre">ttnn._ttnn.device.DispatchCoreConfig</span> <span class="pre">=</span> <span class="pre">&lt;ttnn._ttnn.device.DispatchCoreConfig</span> <span class="pre">object</span> <span class="pre">at</span> <span class="pre">0x7f35d4619ab0&gt;</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn._ttnn.device.IDevice</span></span></span><a class="headerlink" href="#ttnn.open_device" title="Permalink to this definition"></a>
+<span class="sig-prename descclassname"><span class="pre">ttnn.</span></span><span class="sig-name descname"><span class="pre">open_device</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">device_id:</span> <span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">l1_small_size:</span> <span class="pre">int</span> <span class="pre">=</span> <span class="pre">0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">trace_region_size:</span> <span class="pre">int</span> <span class="pre">=</span> <span class="pre">0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dispatch_core_config:</span> <span class="pre">ttnn._ttnn.device.DispatchCoreConfig</span> <span class="pre">=</span> <span class="pre">&lt;ttnn._ttnn.device.DispatchCoreConfig</span> <span class="pre">object</span> <span class="pre">at</span> <span class="pre">0x7f1eb55a6570&gt;</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">→</span> <span class="sig-return-typehint"><span class="pre">ttnn._ttnn.device.IDevice</span></span></span><a class="headerlink" href="#ttnn.open_device" title="Permalink to this definition"></a>
 </dt>
 <dd>
 <p>Open a device with the given device_id. If the device is already open, return the existing device.</p>
@@ -233,6 +233,15 @@ function getCurrentVersion() {
     return window.location.pathname.split('/')[2];
 }
 document.getElementById('current-version').textContent = getCurrentVersion();
+
+const versionEl = document.createElement("span");
+versionEl.innerText = getCurrentVersion();
+versionEl.className = "project-versions";
+const wySideSearchEl = document.getElementsByClassName("wy-side-nav-search").item(0);
+if (wySideSearchEl) {
+    const projectNameEl = wySideSearchEl.children.item(1);
+    if (projectNameEl) projectNameEl.appendChild(versionEl);
+}
 
 </script><script>
       jQuery(function () {

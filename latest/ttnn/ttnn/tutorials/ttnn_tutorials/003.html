@@ -163,7 +163,7 @@
 <span class="n">dispatch_core_type</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">device</span><span class="o">.</span><span class="n">DispatchCoreType</span><span class="o">.</span><span class="n">ETH</span>
 <span class="k">if</span> <span class="s2">"grayskull"</span> <span class="ow">in</span> <span class="n">os</span><span class="o">.</span><span class="n">environ</span><span class="o">.</span><span class="n">get</span><span class="p">(</span><span class="s2">"ARCH_NAME"</span><span class="p">):</span>
     <span class="n">dispatch_core_type</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">device</span><span class="o">.</span><span class="n">DispatchCoreType</span><span class="o">.</span><span class="n">WORKER</span>
-<span class="n">device</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">open_device</span><span class="p">(</span><span class="n">device_id</span><span class="o">=</span><span class="n">device_id</span><span class="p">,</span> <span class="n">l1_small_size</span><span class="o">=</span><span class="mi">8192</span><span class="p">,</span> <span class="n">dispatch_core_type</span><span class="o">=</span><span class="n">dispatch_core_type</span><span class="p">)</span>
+<span class="n">device</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">open_device</span><span class="p">(</span><span class="n">device_id</span><span class="o">=</span><span class="n">device_id</span><span class="p">,</span> <span class="n">l1_small_size</span><span class="o">=</span><span class="mi">8192</span><span class="p">,</span> <span class="n">dispatch_core_config</span><span class="o">=</span><span class="n">ttnn</span><span class="o">.</span><span class="n">device</span><span class="o">.</span><span class="n">DispatchCoreConfig</span><span class="p">(</span><span class="n">dispatch_core_type</span><span class="p">))</span>
 </pre></div>
 </div>
 </div>
@@ -852,6 +852,15 @@ function getCurrentVersion() {
     return window.location.pathname.split('/')[2];
 }
 document.getElementById('current-version').textContent = getCurrentVersion();
+
+const versionEl = document.createElement("span");
+versionEl.innerText = getCurrentVersion();
+versionEl.className = "project-versions";
+const wySideSearchEl = document.getElementsByClassName("wy-side-nav-search").item(0);
+if (wySideSearchEl) {
+    const projectNameEl = wySideSearchEl.children.item(1);
+    if (projectNameEl) projectNameEl.appendChild(versionEl);
+}
 
 </script><script>
       jQuery(function () {

@@ -185,7 +185,7 @@
 </h1>
 <dl class="cpp function">
 <dt class="sig sig-object cpp" id="_CPPv4N7ckernel21binary_op_init_commonE8uint32_t8uint32_t8uint32_t">
-<span class="target" id="namespaceckernel_1aa8e3d7d25c1ebd5f6f1e0fe471a502f6"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">binary_op_init_common</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">icb0</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">icb1</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">ocb</span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="m"><span class="pre">16</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel21binary_op_init_commonE8uint32_t8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
+<span class="target" id="namespaceckernel_1a92e3e99eb774d7b07c67dbc4a6100b6f"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">binary_op_init_common</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">icb0</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">icb1</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">ocb</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel21binary_op_init_commonE8uint32_t8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
 <p>Init function for all binary ops Followed by the specific init required with an opcode (binrary_op_specific_init)</p>
@@ -229,8 +229,8 @@
 </dl>
 
 <dl class="cpp function">
-<dt class="sig sig-object cpp" id="_CPPv4I_b_17EltwiseBinaryTypeEN7ckernel23binary_op_specific_initEvv">
-<span class="k"><span class="pre">template</span></span><span class="p"><span class="pre">&lt;</span></span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">full_init</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">false</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="n"><span class="pre">EltwiseBinaryType</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">eltwise_binary_op_type</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="n"><span class="pre">ELWADD</span></span><span class="p"><span class="pre">&gt;</span></span><br><span class="target" id="namespaceckernel_1ae239860fe24a16896deca931882e7bd6"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">binary_op_specific_init</span></span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4I_b_17EltwiseBinaryTypeEN7ckernel23binary_op_specific_initEvv" title="Permalink to this definition"></a><br>
+<dt class="sig sig-object cpp" id="_CPPv4I_b_17EltwiseBinaryTypeEN7ckernel23binary_op_specific_initEv8uint32_t8uint32_t">
+<span class="k"><span class="pre">template</span></span><span class="p"><span class="pre">&lt;</span></span><span class="kt"><span class="pre">bool</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">full_init</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="k"><span class="pre">false</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="n"><span class="pre">EltwiseBinaryType</span></span><span class="w"> </span><span class="sig-name descname"><span class="n"><span class="pre">eltwise_binary_op_type</span></span></span><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="n"><span class="pre">ELWADD</span></span><span class="p"><span class="pre">&gt;</span></span><br><span class="target" id="namespaceckernel_1a944f99f5f87d4ef28462a2d4956dc6de"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">binary_op_specific_init</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">icb0</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">icb1</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4I_b_17EltwiseBinaryTypeEN7ckernel23binary_op_specific_initEv8uint32_t8uint32_t" title="Permalink to this definition"></a><br>
 </dt>
 <dd>
 <p>Init function with a specified op template parameters: full_init: if true, the full init is performed (unpack+math), otherwise a nof init is performed (only math) eltwise_binary_op_type: the binary operation type </p>
@@ -307,6 +307,15 @@ function getCurrentVersion() {
     return window.location.pathname.split('/')[2];
 }
 document.getElementById('current-version').textContent = getCurrentVersion();
+
+const versionEl = document.createElement("span");
+versionEl.innerText = getCurrentVersion();
+versionEl.className = "project-versions";
+const wySideSearchEl = document.getElementsByClassName("wy-side-nav-search").item(0);
+if (wySideSearchEl) {
+    const projectNameEl = wySideSearchEl.children.item(1);
+    if (projectNameEl) projectNameEl.appendChild(versionEl);
+}
 
 </script><script>
       jQuery(function () {

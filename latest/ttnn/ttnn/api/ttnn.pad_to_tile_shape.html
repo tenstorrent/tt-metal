@@ -148,7 +148,7 @@
 <dt class="field-even">Returns<span class="colon">:</span>
 </dt>
 <dd class="field-even">
-<p><em>List of [int]</em> – The padded shape.</p>
+<p><em>ttnn.tt_metal.LegacyShape</em> – The padded shape.</p>
 </dd>
 </dl>
 <div class="admonition note">
@@ -235,6 +235,15 @@ function getCurrentVersion() {
     return window.location.pathname.split('/')[2];
 }
 document.getElementById('current-version').textContent = getCurrentVersion();
+
+const versionEl = document.createElement("span");
+versionEl.innerText = getCurrentVersion();
+versionEl.className = "project-versions";
+const wySideSearchEl = document.getElementsByClassName("wy-side-nav-search").item(0);
+if (wySideSearchEl) {
+    const projectNameEl = wySideSearchEl.children.item(1);
+    if (projectNameEl) projectNameEl.appendChild(versionEl);
+}
 
 </script><script>
       jQuery(function () {
