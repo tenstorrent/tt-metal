@@ -437,7 +437,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_block_interle
         std::vector<uint32_t> writer_rt_args = {
             dst_buffer->address(),
             unpadded_row_size_bytes,
-            TILE_WIDTH * el_size,
+            TILE_WIDTH * el_size * single_block_size_row_arg,
             start_row_id,
             start_column_id,
             single_block_size_row_arg,

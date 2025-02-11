@@ -462,7 +462,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_block_interle
             src0_buffer->address(),
             unpadded_row_size_bytes,
             packed_pad_value,
-            TILE_WIDTH * a.element_size(),
+            TILE_WIDTH * a.element_size() * single_block_size_row_arg,
             start_row_id,
             start_column_id,
             single_block_size_row_arg,

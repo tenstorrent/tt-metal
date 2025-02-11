@@ -54,23 +54,23 @@ void kernel_main() {
             uint64_t src_noc_addr = get_noc_addr(size_2d + k, s);
 
             // Read from DRAM to tmp buffer
-            noc_async_read(src_noc_addr + start_column_id, l1_write_addr, width_size * single_block_size);
+            noc_async_read(src_noc_addr + start_column_id, l1_write_addr, width_size);
 
             uint32_t prev_size = start_column_id;
             uint32_t this_block_size = unpadded_X_size - prev_size;
-            if (this_block_size < width_size * single_block_size) {
-                uint32_t to_pad = width_size * single_block_size - this_block_size;
+            if (this_block_size < width_size) {
+                uint32_t to_pad = width_size - this_block_size;
                 fill_with_val(l1_write_addr + this_block_size + element_size, (to_pad) >> 2, pad_value);
             }
 
             // Block before copying data from tmp to cb buffer
             noc_async_read_barrier();
-            l1_write_addr += width_size * single_block_size;
+            l1_write_addr += width_size;
         }
 
         for (uint32_t pad_row = 0; pad_row < padding_rows; pad_row++) {
-            fill_with_val(l1_write_addr, (width_size * single_block_size >> 2), pad_value);
-            l1_write_addr += width_size * single_block_size;
+            fill_with_val(l1_write_addr, (width_size >> 2), pad_value);
+            l1_write_addr += width_size;
         }
 
         cb_push_back(cb_id_in0, single_block_size * has_rows);

@@ -119,10 +119,6 @@ operation::ProgramWithCallbacks UntilizeWithUnpadding::create_program(
         return detail::untilize_with_unpadding_multi_core_block_interleaved(
             input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en);
     }
-    // if (!this->enough_space_height) {
-    //     return detail::untilize_with_unpadding_multi_core_col_interleaved(
-    //         input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en);
-    // }
     return detail::untilize_with_unpadding_multi_core_interleaved(
         input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en, this->enough_space_width);
 }
