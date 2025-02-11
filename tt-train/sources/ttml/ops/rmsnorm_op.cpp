@@ -36,42 +36,30 @@ autograd::TensorPtr rmsnorm(const autograd::TensorPtr &tensor, const autograd::T
     out->set_value(out_tensor);
 
     autograd::GradFunction grad = [tensor, gamma, out, rms_eps, eps_tensor, device]() {
-        auto tensor_to_str = [](const auto &tensor) {
-            std::ostringstream oss;
-            oss << core::to_xtensor(tensor);
-            return oss.str();
-        };
-
-        auto print_tensor = [=](std::string name, const auto &tensor) {
-            std::cout << name << ": " << tensor_to_str(tensor) << "\n";
-        };
-
         auto a = tensor->get_value();
         auto g = gamma->get_value();
         auto n = static_cast<float>(a.logical_shape()[-1]);
         auto dL_dout = out->get_grad();
-        auto rms_a = rms_eps;
 
+        auto rms_a = rms_eps;
         TT_ASSERT(
             std::ranges::all_of(rms_a.logical_shape().view(), [](const auto &d) { return d == 1; }),
             "Expected a scalar in RMS(a).");
-        std::cout << "rms_a: " << core::to_xtensor(rms_a) << "\n";
 
-        auto outer = ttnn::matmul(
-            a, a, /*transpose_a*/ true, /*transpose_b*/ false);  // row vectors so the order is flipped; ttnn.outer
-                                                                 // doesn't work, but this works compared with pytorch.
-        std::cout << "outer: " << core::to_xtensor(outer) << "\n";
+        auto outer =
+            ttnn::matmul(a, a, /*transpose_a=*/true, /*transpose_b=*/false);  // row vectors so the order is flipped
+        TT_ASSERT(
+            [=]() {
+                auto outer_shape = outer.logical_shape();
+                return outer_shape[0] == static_cast<int>(n);
+            }(),
+            "Expected outer product to be an n-square tensor.");
+
         auto ms_a = ttnn::square(rms_a);
-        std::cout << "ms_a: " << core::to_xtensor(ms_a) << "\n";
         auto n_by_ms_a = ttnn::experimental::mul(ms_a, n);
-        std::cout << "n_by_ms_a: " << core::to_xtensor(n_by_ms_a) << "\n";
         auto scaled_outer = ttnn::experimental::div(outer, n_by_ms_a);
-        std::cout << "scaled_outer: " << core::to_xtensor(scaled_outer) << "\n";
-
         auto gained_dL_dout = ttnn::experimental::mul(ttnn::experimental::div(g, rms_a), dL_dout);
-        std::cout << "gained_dL_dout: " << core::to_xtensor(gained_dL_dout) << "\n";
         auto dL_da = ttnn::experimental::sub(gained_dL_dout, ttnn::matmul(gained_dL_dout, scaled_outer));
-        std::cout << "dL_da: " << core::to_xtensor(dL_da) << "\n";
         tensor->add_grad(dL_da);
     };
 
