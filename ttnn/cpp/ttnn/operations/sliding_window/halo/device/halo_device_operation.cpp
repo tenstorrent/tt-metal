@@ -109,8 +109,14 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
         sliding_window::construct_on_host_config_tensor(local_config, this->config_, this->parallel_config_);
     auto remote_config_tensor =
         sliding_window::construct_on_host_config_tensor(remote_config, this->config_, this->parallel_config_);
-    auto remote_ref_counts_tensor =
-        sliding_window::construct_on_host_config_tensor({remote_ref_counts}, this->config_, this->parallel_config_);
+
+    uint32_t repeat_factor = this->parallel_config_.grid.num_cores();
+    std::vector<std::vector<uint16_t>> remote_ref_counts_repeated;
+    for (uint32_t i = 0; i < repeat_factor; ++i) {
+        remote_ref_counts_repeated.push_back(remote_ref_counts);
+    }
+    auto remote_ref_counts_tensor = sliding_window::construct_on_host_config_tensor(
+        remote_ref_counts_repeated, this->config_, this->parallel_config_);
 
     auto pad_config_device_tensor =
         sliding_window::move_config_tensor_to_device(pad_config_tensor, parallel_config_, is_block_sharded, device);
