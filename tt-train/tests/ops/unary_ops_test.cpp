@@ -11,6 +11,7 @@
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "core/xtensor_utils.hpp"
 
 class UnaryOpsTest : public ::testing::Test {
 protected:
@@ -45,6 +46,21 @@ TEST_F(UnaryOpsTest, GlobalMean) {
     }
 }
 
+TEST_F(UnaryOpsTest, Sum) {
+    xt::xarray<float> test_vector = {{1.F, 2.F, 3.F, 4.F}, {1.F, 2.F, 3.F, 4.F}};
+    auto test_tensor_ptr =
+        ttml::autograd::create_tensor(ttml::core::from_xtensor(test_vector, &ttml::autograd::ctx().get_device()));
+
+    auto result = ttml::ops::sum(test_tensor_ptr);
+    auto result_vector = ttml::core::to_xtensor(result->get_value());
+
+    ASSERT_TRUE(xt::allclose(result_vector, xt::sum(test_vector), 1e-5F));
+
+    result->backward();
+    auto test_tensor_grad = ttml::core::to_xtensor(test_tensor_ptr->get_grad());
+
+    ASSERT_TRUE(xt::allclose(xt::ones_like(test_vector), test_tensor_grad, 1e-5F));
+}
 TEST_F(UnaryOpsTest, LogSoftmax) {
     auto* device = &ttml::autograd::ctx().get_device();
     std::vector<float> test_data = {-0.1F, -0.2F, -0.3F, -0.4F, 0.F, -0.2F, -0.3F, -0.4F};
