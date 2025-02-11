@@ -39,10 +39,10 @@ inline void calculate_sfpu_gcd(const uint dst_offset)
         // We progressively set these 5 bits by checking the masks 0xffff, 0xff, 0xf, 0x7, 0x3, 0x1,
         // each time shifting right by the width of the mask if the masked region is all zeroes.
 
-        uint16_t mask = 0xffff;
         uint16_t mask_width = 16;
+        uint16_t mask = (1 << mask_width) - 1;
         #pragma GCC unroll 5
-        for (int i = 0; i < 5; ++i) {
+        while (mask_width != 0) {
             // l4 = mask
             TT_SFPLOADI(p_sfpu::LREG4, 2, mask);
             // l4 &= c
@@ -63,12 +63,12 @@ inline void calculate_sfpu_gcd(const uint dst_offset)
         // a >>= k and b >>= k
         // k = -k for right shift
         // TODO we can track -k in the above loop to avoid this two-cycle negation
-        TTI_SFPIADD(0, p_sfpu::LCONST_0, p_sfpu::LREG3, 4 | 2);
+        TTI_SFPIADD(0, p_sfpu::LCONST_0, p_sfpu::LREG2, 4 | 2);
         TTI_SFPNOP;
-        TTI_SFPSHFT(0, p_sfpu::LREG3, p_sfpu::LREG0, 1);
-        TTI_SFPSHFT(0, p_sfpu::LREG3, p_sfpu::LREG1, 1);
+        TTI_SFPSHFT(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);
+        TTI_SFPSHFT(0, p_sfpu::LREG2, p_sfpu::LREG1, 0);
         // restore k = -k
-        TTI_SFPIADD(0, p_sfpu::LCONST_0, p_sfpu::LREG3, 4 | 2);
+        TTI_SFPIADD(0, p_sfpu::LCONST_0, p_sfpu::LREG2, 4 | 2);
 
         // now, one of a or b might be even: if b is even then swap so that a is even
         // we can reuse the mask_width register as we know it should contain 1 after the above loop
@@ -90,7 +90,7 @@ inline void calculate_sfpu_gcd(const uint dst_offset)
             // many masks as necessary, e.g. only 4 are needed to count up to
             // 15 trailing zeroes, and so on.
 
-            int max_zero_bits = 32 - i - 1; // maximum 5 bits
+            int max_zero_bits = 32 - i;
             // Round up to next highest power of 2 (assumes max_zero_bits is up to 8 bits wide).
             max_zero_bits--;
             max_zero_bits |= max_zero_bits >> 1;
@@ -137,7 +137,7 @@ inline void calculate_sfpu_gcd(const uint dst_offset)
             TTI_SFPENCC(0, 0, 0, 0);
         }
 
-        //dst_reg[0] = a << sa;
+        //dst_reg[0] = a << k;
         TTI_SFPSHFT(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);
         TTI_SFPSTORE(p_sfpu::LREG0, 4, 3, 0);
         //dst_reg[0] = a;
