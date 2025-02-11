@@ -142,7 +142,7 @@ void end_trace_capture(IDevice* device, const uint32_t tid, const QueueId cq_id)
 
 void execute_trace(IDevice* device, const uint32_t tid, const QueueId cq_id, bool blocking) {
     ZoneScoped;
-    device->replay_trace(*cq_id, tid, blocking);
+    device->replay_trace(*cq_id, tid, blocking /* block_on_device */, blocking /* block_on_worker_thread */);
 }
 
 void release_trace(IDevice* device, const uint32_t tid) {

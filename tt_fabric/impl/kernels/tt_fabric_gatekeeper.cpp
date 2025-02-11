@@ -5,6 +5,7 @@
 // clang-format off
 #include "dataflow_api.h"
 #include "tt_fabric/hw/inc/tt_fabric.h"
+#include "tt_fabric/hw/inc/tt_fabric_status.h"
 #include "debug/dprint.h"
 // clang-format on
 
@@ -18,20 +19,6 @@ constexpr uint32_t kernel_status_buf_size_bytes = get_compile_time_arg_val(4);
 constexpr uint32_t timeout_cycles = get_compile_time_arg_val(5);
 uint32_t sync_val;
 uint32_t router_mask;
-
-constexpr uint32_t PACKET_QUEUE_STAUS_MASK = 0xabc00000;
-constexpr uint32_t PACKET_QUEUE_TEST_STARTED = PACKET_QUEUE_STAUS_MASK | 0x0;
-constexpr uint32_t PACKET_QUEUE_TEST_PASS = PACKET_QUEUE_STAUS_MASK | 0x1;
-constexpr uint32_t PACKET_QUEUE_TEST_TIMEOUT = PACKET_QUEUE_STAUS_MASK | 0xdead0;
-constexpr uint32_t PACKET_QUEUE_TEST_BAD_HEADER = PACKET_QUEUE_STAUS_MASK | 0xdead1;
-constexpr uint32_t PACKET_QUEUE_TEST_DATA_MISMATCH = PACKET_QUEUE_STAUS_MASK | 0x3;
-
-// indexes of return values in test results buffer
-constexpr uint32_t PQ_TEST_STATUS_INDEX = 0;
-constexpr uint32_t PQ_TEST_WORD_CNT_INDEX = 2;
-constexpr uint32_t PQ_TEST_CYCLES_INDEX = 4;
-constexpr uint32_t PQ_TEST_ITER_INDEX = 6;
-constexpr uint32_t PQ_TEST_MISC_INDEX = 16;
 
 // careful, may be null
 tt_l1_ptr uint32_t* const kernel_status = reinterpret_cast<tt_l1_ptr uint32_t*>(kernel_status_buf_addr);
@@ -59,6 +46,39 @@ inline void notify_all_routers(uint32_t notification) {
     }
 }
 
+inline void get_routing_tables() {
+    uint32_t temp_mask = router_mask;
+    uint32_t channel = 0;
+    uint32_t routing_plane = 0;
+    for (uint32_t i = 0; i < 4; i++) {
+        if (temp_mask & 0xF) {
+            temp_mask &= 0xF;
+            break;
+        } else {
+            temp_mask >>= 4;
+        }
+        channel += 4;
+    }
+
+    if (temp_mask) {
+        for (uint32_t i = 0; i < 4; i++) {
+            if (temp_mask & 0x1) {
+                uint64_t router_config_addr = ((uint64_t)eth_chan_to_noc_xy[noc_index][channel] << 32) |
+                                              eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE;
+                noc_async_read_one_packet(
+                    router_config_addr,
+                    (uint32_t)&routing_table[routing_plane],
+                    sizeof(tt::tt_fabric::fabric_router_l1_config_t));
+                routing_plane++;
+            }
+            temp_mask >>= 1;
+            channel++;
+        }
+    }
+    gk_info->routing_planes = routing_plane;
+    noc_async_read_barrier();
+}
+
 inline void sync_all_routers() {
     // wait for all device routers to have incremented the sync semaphore.
     // sync_val is equal to number of tt-fabric routers running on a device.
@@ -68,6 +88,7 @@ inline void sync_all_routers() {
     // semaphore notifies all other routers that this router has completed
     // startup handshake with its ethernet peer.
     notify_all_routers(sync_val);
+    get_routing_tables();
     gk_info->ep_sync.val = sync_val;
 }
 
@@ -394,39 +415,6 @@ inline void process_pending_socket() {
     }
 }
 
-inline void get_routing_tables() {
-    uint32_t temp_mask = router_mask;
-    uint32_t channel = 0;
-    uint32_t routing_plane = 0;
-    for (uint32_t i = 0; i < 4; i++) {
-        if (temp_mask & 0xF) {
-            temp_mask &= 0xF;
-            break;
-        } else {
-            temp_mask >>= 4;
-        }
-        channel += 4;
-    }
-
-    if (temp_mask) {
-        for (uint32_t i = 0; i < 4; i++) {
-            if (temp_mask & 0x1) {
-                uint64_t router_config_addr = ((uint64_t)eth_chan_to_noc_xy[noc_index][channel] << 32) |
-                                              eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE;
-                noc_async_read_one_packet(
-                    router_config_addr,
-                    (uint32_t)&routing_table[routing_plane],
-                    sizeof(tt::tt_fabric::fabric_router_l1_config_t));
-                routing_plane++;
-            }
-            temp_mask >>= 1;
-            channel++;
-        }
-    }
-    gk_info->routing_planes = routing_plane;
-    noc_async_read_barrier();
-}
-
 void kernel_main() {
     sync_val = get_arg_val<uint32_t>(0);
     router_mask = get_arg_val<uint32_t>(1);
@@ -435,17 +423,16 @@ void kernel_main() {
 
     tt_fabric_init();
 
-    write_kernel_status(kernel_status, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_STARTED);
-    write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff000000);
-    write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX + 1, 0xbb000000);
-    write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX + 2, 0xAABBCCDD);
-    write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX + 3, 0xDDCCBBAA);
+    write_kernel_status(kernel_status, TT_FABRIC_STATUS_INDEX, TT_FABRIC_STATUS_STARTED);
+    write_kernel_status(kernel_status, TT_FABRIC_MISC_INDEX, 0xff000000);
+    write_kernel_status(kernel_status, TT_FABRIC_MISC_INDEX + 1, 0xbb000000);
+    write_kernel_status(kernel_status, TT_FABRIC_MISC_INDEX + 2, 0xAABBCCDD);
+    write_kernel_status(kernel_status, TT_FABRIC_MISC_INDEX + 3, 0xDDCCBBAA);
 
     zero_l1_buf((tt_l1_ptr uint32_t*)&gk_info->gk_msg_buf, FVCC_BUF_SIZE_BYTES);
     zero_l1_buf((tt_l1_ptr uint32_t*)socket_info, sizeof(socket_info_t));
 
     sync_all_routers();
-    get_routing_tables();
     uint64_t start_timestamp = get_timestamp();
 
     uint32_t loop_count = 0;
@@ -477,7 +464,7 @@ void kernel_main() {
                 gk_msg_buf_advance_rdptr((ctrl_chan_msg_buf*)msg_buf);
                 loop_count = 0;
             } else {
-                write_kernel_status(kernel_status, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_BAD_HEADER);
+                write_kernel_status(kernel_status, TT_FABRIC_STATUS_INDEX, TT_FABRIC_STATUS_BAD_HEADER);
                 return;
             }
         }
@@ -498,11 +485,11 @@ void kernel_main() {
 
     DPRINT << "Gatekeeper messages processed " << total_messages_procesed << ENDL();
 
-    write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff000002);
+    write_kernel_status(kernel_status, TT_FABRIC_MISC_INDEX, 0xff000002);
 
-    write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff000003);
+    write_kernel_status(kernel_status, TT_FABRIC_MISC_INDEX, 0xff000003);
 
-    write_kernel_status(kernel_status, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_PASS);
+    write_kernel_status(kernel_status, TT_FABRIC_STATUS_INDEX, TT_FABRIC_STATUS_PASS);
 
-    write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff00005);
+    write_kernel_status(kernel_status, TT_FABRIC_MISC_INDEX, 0xff00005);
 }
