@@ -8,7 +8,6 @@
 
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/data_movement/clone/clone.hpp"
-#include "ttnn/operations/data_movement/data_transfer/data_transfer.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/tilize/tilize.hpp"
@@ -22,16 +21,12 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::experimental::auto_format {
 
 Tensor AutoFormat::move_tensor_to_device(const Tensor& input, IDevice* device, const MemoryConfig& mem_config) {
-    if (input.storage_type() != StorageType::DEVICE) {
-        return ttnn::data_transfer_to_device(input, device, mem_config);
-    } else {
-        return input;
-    }
+    return input.to_device(device, mem_config);
 }
 
 Tensor AutoFormat::move_tensor_to_mem_config(const Tensor& input, const MemoryConfig& mem_config) {
     if (input.storage_type() != StorageType::DEVICE) {
-        return ttnn::data_transfer_to_device(input, AutoFormat::GetDefaultDevice(), mem_config);
+        return input.to_device(AutoFormat::GetDefaultDevice(), mem_config);
     } else if (input.memory_config() != mem_config) {
         return ttnn::clone(input, std::nullopt, mem_config, std::nullopt);
     } else {
@@ -123,7 +118,7 @@ Tensor AutoFormat::format_input_tensor(
             }
         }
         // Fall back to host conversions
-        formatted_input = ttnn::data_transfer_to_host(formatted_input);
+        formatted_input = formatted_input.cpu();
     }
 
     // Host side conversions
@@ -218,7 +213,7 @@ Tensor AutoFormat::format_output_tensor(
             }
         }
         // Fall back to host conversions
-        formatted_output = ttnn::data_transfer_to_host(formatted_output);
+        formatted_output = formatted_output.cpu();
     }
 
     // Host side conversions
