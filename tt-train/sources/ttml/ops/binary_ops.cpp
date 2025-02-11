@@ -124,6 +124,14 @@ autograd::TensorPtr operator*(const autograd::TensorPtr& a, float b) {
     return out;
 }
 
+autograd::TensorPtr operator*(float a, const autograd::TensorPtr& b) {
+    return b * a;
+}
+
+autograd::TensorPtr operator/(const autograd::TensorPtr& a, float b) {
+    return a * (1.F / b);
+}
+
 autograd::TensorPtr operator/(const autograd::TensorPtr& a, const autograd::TensorPtr& b) {
     auto out = autograd::create_tensor();
 
@@ -155,12 +163,20 @@ autograd::TensorPtr mul(const autograd::TensorPtr& a, const autograd::TensorPtr&
     return a * b;
 }
 
+autograd::TensorPtr mul(const autograd::TensorPtr& a, float b) {
+    return a * b;
+}
+
+autograd::TensorPtr mul(float a, const autograd::TensorPtr& b) {
+    return b * a;
+}
+
 autograd::TensorPtr div(const autograd::TensorPtr& a, const autograd::TensorPtr& b) {
     return a / b;
 }
 
-autograd::TensorPtr mul(const autograd::TensorPtr& a, float b) {
-    return a * b;
+autograd::TensorPtr div(const autograd::TensorPtr& a, float b) {
+    return a / b;
 }
 
 }  // namespace ttml::ops
