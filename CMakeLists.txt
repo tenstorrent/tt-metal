@@ -292,7 +292,7 @@ install(
 )
 install(
     TARGETS
-        ttnn
+        ttnncpp
     ARCHIVE
         DESTINATION ${CMAKE_INSTALL_LIBDIR}
     LIBRARY
@@ -301,6 +301,16 @@ install(
 )
 if(WITH_PYTHON_BINDINGS)
     # Install .so into src files for pybinds implementation
+    install(
+        TARGETS
+            ttnn
+        ARCHIVE
+            DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        LIBRARY
+            DESTINATION ${CMAKE_INSTALL_LIBDIR}
+            COMPONENT dev
+    )
+
     install(
         TARGETS
             ttnn
