@@ -91,13 +91,14 @@ inline void calculate_sfpu_gcd(const uint dst_offset)
             // 15 trailing zeroes, and so on.
 
             int max_zero_bits = 32 - i - 1; // maximum 5 bits
-            mask_width = max_zero_bits >> 1; // maximum 4 bits
+            // Round up to next highest power of 2 (assumes max_zero_bits is up to 8 bits wide).
+            max_zero_bits--;
+            max_zero_bits |= max_zero_bits >> 1;
+            max_zero_bits |= max_zero_bits >> 2;
+            max_zero_bits |= max_zero_bits >> 4;
+            max_zero_bits++;
 
-            // Round up to next highest power of 2 (assumes mask_width is up to 4 bits wide).
-            mask_width--;
-            mask_width |= mask_width >> 1;
-            mask_width |= mask_width >> 2;
-            mask_width++;
+            mask_width = max_zero_bits >> 1;
             mask = (1 << mask_width) - 1;
 
             #pragma GCC unroll 5
