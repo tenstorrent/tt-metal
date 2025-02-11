@@ -126,7 +126,7 @@ def test_demo(device, source, model_type):
         logger.info("Inferencing using Torch Model")
     else:
         torch_input, ttnn_input = create_yolov11_input_tensors(
-            device, input_channels=3, input_height=640, input_width=640
+            device, input_channels=3, input_height=224, input_width=224
         )
         torch_model = attempt_load("models/experimental/functional_yolov11/reference/yolo11n.pt", map_location="cpu")
         state_dict = torch_model.state_dict()

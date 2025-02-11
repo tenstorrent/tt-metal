@@ -16,7 +16,7 @@ from models.experimental.functional_yolov11.tt.ttnn_yolov11 import SPPF as ttnn_
 @pytest.mark.parametrize(
     "in_channel, out_channel, kernel, stride, padding, dilation, groups,fwd_input_shape",
     [
-        ([256, 512], [128, 256], [1, 1], [1, 1], [0, 0], [1, 1], [1, 1], [1, 256, 20, 20]),
+        ([256, 512], [128, 256], [1, 1], [1, 1], [0, 0], [1, 1], [1, 1], [1, 256, 7, 7]),
     ],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
