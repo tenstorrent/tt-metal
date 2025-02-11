@@ -35,23 +35,22 @@ autograd::TensorPtr rmsnorm(const autograd::TensorPtr &tensor, const autograd::T
     auto out = autograd::create_tensor(out_tensor);
     out->set_value(out_tensor);
 
-    autograd::GradFunction grad = [tensor, gamma, out, rms_eps, eps_tensor, device]() {
+    autograd::GradFunction grad = [tensor, gamma, out, rms_a = rms_eps, eps_tensor, device]() {
         auto a = tensor->get_value();
         auto g = gamma->get_value();
         auto n = static_cast<float>(a.logical_shape()[-1]);
         auto dL_dout = out->get_grad();
 
-        auto rms_a = rms_eps;
         TT_ASSERT(
             std::ranges::all_of(rms_a.logical_shape().view(), [](const auto &d) { return d == 1; }),
-            "Expected a scalar in RMS(a).");
+            "Expected a scalar in RMS(a, epsilon).");
 
         auto outer =
             ttnn::matmul(a, a, /*transpose_a=*/true, /*transpose_b=*/false);  // row vectors so the order is flipped
         TT_ASSERT(
             [=]() {
                 auto outer_shape = outer.logical_shape();
-                return outer_shape[0] == static_cast<int>(n);
+                return (outer_shape[-1] == static_cast<int>(n) && outer_shape[-2] == static_cast<int>(n));
             }(),
             "Expected outer product to be an n-square tensor.");
 
