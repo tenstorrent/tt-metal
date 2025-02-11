@@ -104,8 +104,8 @@ def test_create_pipeline_json_to_detect_runner_comm_error_v1_among_other_failure
 
     failing_jobs = get_non_success_jobs_(pipeline)
 
-    # some are skipped
-    assert len(failing_jobs) == 4
+    # some are skipped (skipped jobs are considered success)
+    assert len(failing_jobs) == 2
 
     assert pipeline.github_pipeline_id == 11110261767
 
