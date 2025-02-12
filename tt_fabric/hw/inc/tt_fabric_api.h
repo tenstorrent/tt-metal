@@ -16,10 +16,10 @@ using namespace tt::tt_fabric;
 extern volatile local_pull_request_t* local_pull_request;
 extern volatile fabric_client_interface_t* client_interface;
 
-#define ASYNC_WR_ALL 1
-#define ASYNC_WR_ADD_PR 2
-#define ASYNC_WR_SEND 3
+#define ASYNC_WR_ADD_PR 1
+#define ASYNC_WR_SEND 2
 #define ASYNC_WR_ADD_HEADER 4
+#define ASYNC_WR_ALL ASYNC_WR_ADD_HEADER | ASYNC_WR_ADD_PR | ASYNC_WR_SEND
 
 inline uint32_t get_next_hop_router_noc_xy(uint32_t routing_plane, uint32_t dst_mesh_id, uint32_t dst_dev_id) {
     ASSERT(routing_plane < client_interface->num_routing_planes);
@@ -111,15 +111,15 @@ inline void fabric_async_write(
     uint64_t dst_addr,
     uint32_t size  // number of bytes to write to remote destination
 ) {
-    if constexpr (mode == ASYNC_WR_ALL or mode == ASYNC_WR_ADD_HEADER) {
+    if constexpr (mode & ASYNC_WR_ADD_HEADER) {
         fabric_async_write_add_header(src_addr, dst_mesh_id, dst_dev_id, dst_addr, size);
     }
 
-    if constexpr (mode == ASYNC_WR_ALL or mode == ASYNC_WR_ADD_PR) {
+    if constexpr (mode & ASYNC_WR_ADD_PR) {
         fabric_setup_pull_request(src_addr, size);
     }
 
-    if constexpr (mode == ASYNC_WR_ALL or mode == ASYNC_WR_SEND) {
+    if constexpr (mode & ASYNC_WR_SEND) {
         fabric_send_pull_request<get_routing>(routing, dst_mesh_id, dst_dev_id);
     }
 }
@@ -162,16 +162,16 @@ inline void fabric_async_write_multicast(
     uint16_t w_depth,
     uint16_t n_depth,
     uint16_t s_depth) {
-    if constexpr (mode == ASYNC_WR_ALL or mode == ASYNC_WR_ADD_HEADER) {
+    if constexpr (mode & ASYNC_WR_ADD_HEADER) {
         fabric_async_write_multicast_add_header(
             src_addr, dst_mesh_id, dst_dev_id, dst_addr, size, e_depth, w_depth, n_depth, s_depth);
     }
 
-    if constexpr (mode == ASYNC_WR_ALL or mode == ASYNC_WR_ADD_PR) {
+    if constexpr (mode & ASYNC_WR_ADD_PR) {
         fabric_setup_pull_request(src_addr, size);
     }
 
-    if constexpr (mode == ASYNC_WR_ALL or mode == ASYNC_WR_SEND) {
+    if constexpr (mode & ASYNC_WR_SEND) {
         fabric_send_pull_request<get_routing>(routing_plane, dst_mesh_id, dst_dev_id);
     }
 }
@@ -207,15 +207,15 @@ inline void fabric_atomic_inc(
     uint64_t dst_addr,
     uint32_t atomic_inc,
     uint32_t wrap_boundary) {
-    if constexpr (mode == ASYNC_WR_ALL or mode == ASYNC_WR_ADD_HEADER) {
+    if constexpr (mode & ASYNC_WR_ADD_HEADER) {
         fabric_atomic_inc_add_header(src_addr, dst_mesh_id, dst_dev_id, dst_addr, atomic_inc, wrap_boundary);
     }
 
-    if constexpr (mode == ASYNC_WR_ALL or mode == ASYNC_WR_ADD_PR) {
+    if constexpr (mode & ASYNC_WR_ADD_PR) {
         fabric_setup_pull_request(src_addr, PACKET_HEADER_SIZE_BYTES);
     }
 
-    if constexpr (mode == ASYNC_WR_ALL or mode == ASYNC_WR_SEND) {
+    if constexpr (mode & ASYNC_WR_SEND) {
         fabric_send_pull_request<get_routing>(routing, dst_mesh_id, dst_dev_id);
     }
 }
@@ -254,16 +254,16 @@ inline void fabric_async_write_atomic_inc(
     uint64_t dst_atomic_addr,
     uint32_t size,  // number of bytes to write to remote destination
     uint32_t atomic_inc) {
-    if constexpr (mode == ASYNC_WR_ALL or mode == ASYNC_WR_ADD_HEADER) {
+    if constexpr (mode & ASYNC_WR_ADD_HEADER) {
         fabric_async_write_atomic_inc_add_header(
             src_addr, dst_mesh_id, dst_dev_id, dst_write_addr, dst_atomic_addr, size, atomic_inc);
     }
 
-    if constexpr (mode == ASYNC_WR_ALL or mode == ASYNC_WR_ADD_PR) {
+    if constexpr (mode & ASYNC_WR_ADD_PR) {
         fabric_setup_pull_request(src_addr, size);
     }
 
-    if constexpr (mode == ASYNC_WR_ALL or mode == ASYNC_WR_SEND) {
+    if constexpr (mode & ASYNC_WR_SEND) {
         fabric_send_pull_request<get_routing>(routing, dst_mesh_id, dst_dev_id);
     }
 }

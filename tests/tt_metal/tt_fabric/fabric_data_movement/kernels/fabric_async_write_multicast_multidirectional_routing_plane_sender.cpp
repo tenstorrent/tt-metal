@@ -82,18 +82,7 @@ void kernel_main() {
     packet_header->packet_parameters.mcast_parameters.east = 0;
     packet_header->packet_parameters.mcast_parameters.west = w_depth;
 
-    fabric_async_write_multicast<ASYNC_WR_ADD_PR>(
-        w_routing_plane,
-        src_addr,  // source address in sender’s memory
-        w_dst_mesh_id,
-        w_dst_device_id,
-        dst_noc_addr,       // destination write address
-        packet_size_bytes,  // number of bytes to write to remote destination
-        0,
-        w_depth,
-        0,
-        0);
-    fabric_async_write_multicast<ASYNC_WR_SEND>(
+    fabric_async_write_multicast<ASYNC_WR_ADD_PR | ASYNC_WR_SEND>(
         w_routing_plane,
         src_addr,  // source address in sender’s memory
         w_dst_mesh_id,
@@ -114,18 +103,7 @@ void kernel_main() {
     // packet_header->packet_parameters.mcast_parameters.west = 0;
     // packet_header->packet_parameters.mcast_parameters.north = n_depth;
 
-    // fabric_async_write_multicast<ASYNC_WR_ADD_PR>(
-    //     n_routing_plane,
-    //     src_addr,  // source address in sender’s memory
-    //     n_dst_mesh_id,
-    //     n_dst_device_id,
-    //     dst_noc_addr,       // destination write address
-    //     packet_size_bytes,  // number of bytes to write to remote destination
-    //     0,
-    //     0,
-    //     n_depth,
-    //     0);
-    // fabric_async_write_multicast<ASYNC_WR_SEND>(
+    // fabric_async_write_multicast<ASYNC_WR_ADD_PR | ASYNC_WR_SEND>(
     //     n_routing_plane,
     //     src_addr,  // source address in sender’s memory
     //     n_dst_mesh_id,
@@ -146,18 +124,7 @@ void kernel_main() {
     // packet_header->packet_parameters.mcast_parameters.north = 0;
     // packet_header->packet_parameters.mcast_parameters.south = s_depth;
 
-    // fabric_async_write_multicast<ASYNC_WR_ADD_PR>(
-    //     s_routing_plane,
-    //     src_addr,  // source address in sender’s memory
-    //     s_dst_mesh_id,
-    //     s_dst_device_id,
-    //     dst_noc_addr,       // destination write address
-    //     packet_size_bytes,  // number of bytes to write to remote destination
-    //     0,
-    //     0,
-    //     0,
-    //     s_depth);
-    // fabric_async_write_multicast<ASYNC_WR_SEND>(
+    // fabric_async_write_multicast<ASYNC_WR_ADD_PR | ASYNC_WR_SEND>(
     //     s_routing_plane,
     //     src_addr,  // source address in sender’s memory
     //     s_dst_mesh_id,
