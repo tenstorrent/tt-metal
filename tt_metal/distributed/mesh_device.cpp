@@ -580,9 +580,16 @@ void MeshDevice::end_trace(const uint8_t cq_id, const uint32_t tid) {
         device->end_trace(cq_id, tid);
     }
 }
-void MeshDevice::replay_trace(const uint8_t cq_id, const uint32_t tid, const bool blocking) {
+void MeshDevice::replay_trace(
+    const uint8_t cq_id, const uint32_t tid, const bool block_on_device, const bool block_on_worker_thread) {
     for (auto& device : scoped_devices_->get_devices()) {
-        device->replay_trace(cq_id, tid, blocking);
+        device->replay_trace(cq_id, tid, block_on_device, false /* block_on_worker_thread */);
+    }
+    // If blocking, wait until worker threads have completed
+    if (block_on_worker_thread) {
+        for (auto& device : scoped_devices_->get_devices()) {
+            device->synchronize();
+        }
     }
 }
 void MeshDevice::release_trace(const uint32_t tid) {

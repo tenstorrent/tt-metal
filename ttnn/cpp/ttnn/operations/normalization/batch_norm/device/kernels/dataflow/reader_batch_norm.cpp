@@ -21,7 +21,7 @@ void kernel_main() {
 
     constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
 
-    constexpr auto cb_id_src = tt::CBIndex::c_0;
+    constexpr auto cb_id_src = get_compile_time_arg_val(1);
     constexpr uint32_t onetile = 1;
 
     const uint32_t src_tile_bytes = get_tile_size(cb_id_src);
@@ -35,7 +35,7 @@ void kernel_main() {
     uint32_t start_c = start_remaining / HtWt;
     uint32_t start_t = start_remaining % HtWt;
 
-    constexpr auto cb_id_eps = tt::CBIndex::c_4;
+    constexpr auto cb_id_eps = get_compile_time_arg_val(2);
 
     union {
         float f;

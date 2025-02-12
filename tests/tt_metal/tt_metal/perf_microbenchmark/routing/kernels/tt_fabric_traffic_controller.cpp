@@ -29,5 +29,6 @@ void kernel_main() {
 
     // do a noc multicast to tx kernels
     uint64_t mcast_dest_addr = get_noc_addr_helper(mcast_encoding, tx_signal_addr);
-    noc_async_write_multicast_one_packet((uint32_t)mcast_sem, mcast_dest_addr, sizeof(uint32_t), num_mcast_dests);
+    noc_async_write_multicast_loopback_src((uint32_t)mcast_sem, mcast_dest_addr, sizeof(uint32_t), num_mcast_dests);
+    noc_async_writes_flushed();
 }
