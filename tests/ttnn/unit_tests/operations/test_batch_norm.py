@@ -96,29 +96,29 @@ def test_batch_norm_training_fp32(
         eps=eps,
         momentum=momentum,
     )
-    comp_pass = compare_results_batch_norm([tt_output], [torch_result])
+    comp_BN_Output = compare_results_batch_norm([tt_output], [torch_result])
     if training:
         channels = input_shapes[1]
         if check_mean:
-            comp_pass_1 = compare_results_batch_norm(
+            comp_BN_running_mean = compare_results_batch_norm(
                 [tt_updated_mean], [mean_data.view(1, channels, 1, 1)], stats=True
             )  # Check Updated running mean
         else:
             if tt_updated_mean is None:
-                comp_pass_1 = True
+                comp_BN_running_mean = True
             else:
-                comp_pass_1 = False
+                comp_BN_running_mean = False
         if check_var:
-            comp_pass_2 = compare_results_batch_norm(
+            comp_BN_running_var = compare_results_batch_norm(
                 [tt_updated_var], [var_data.view(1, channels, 1, 1)], stats=True
             )  # Check Updated running var
         else:
             if tt_updated_var is None:
-                comp_pass_2 = True
+                comp_BN_running_var = True
             else:
-                comp_pass_2 = False
-        comp_pass = comp_pass and comp_pass_1 and comp_pass_2
-    assert comp_pass
+                comp_BN_running_var = False
+        comp_BN_Output = comp_BN_Output and comp_BN_running_mean and comp_BN_running_var
+    assert comp_BN_Output
 
 
 @skip_for_grayskull("Unsupported dtype for Grayskull")
@@ -237,10 +237,10 @@ def test_batch_norm_fp32(
         training=training,
         eps=eps,
     )
-    comp_pass = compare_results_batch_norm([tt_output], [torch_result]) and torch.allclose(
+    comp_BN_Output = compare_results_batch_norm([tt_output], [torch_result]) and torch.allclose(
         torch_result, tt_output, atol=1e-6, rtol=1e-3
     )
-    assert comp_pass
+    assert comp_BN_Output
 
 
 @pytest.mark.parametrize(
@@ -311,30 +311,30 @@ def test_batch_norm(input_shapes, training, check_mean, check_var, weight, bias,
         eps=eps,
         momentum=momentum,
     )
-    comp_pass = compare_results_batch_norm([tt_output], [torch_result])  # Check BN Result
+    comp_BN_Output = compare_results_batch_norm([tt_output], [torch_result])  # Check BN Result
     if training:
         channels = input_shapes[1]
         if check_mean:
-            comp_pass_1 = compare_results_batch_norm(
+            comp_BN_running_mean = compare_results_batch_norm(
                 [tt_updated_mean], [mean_data.view(1, channels, 1, 1)], stats=True
             )  # Check Updated running mean
         else:
             if tt_updated_mean is None:
-                comp_pass_1 = True
+                comp_BN_running_mean = True
             else:
-                comp_pass_1 = False
+                comp_BN_running_mean = False
         if check_var:
-            comp_pass_2 = compare_results_batch_norm(
+            comp_BN_running_var = compare_results_batch_norm(
                 [tt_updated_var], [var_data.view(1, channels, 1, 1)], stats=True
             )  # Check Updated running var
         else:
             if tt_updated_var is None:
-                comp_pass_2 = True
+                comp_BN_running_var = True
             else:
-                comp_pass_2 = False
-        comp_pass = comp_pass and comp_pass_1 and comp_pass_2
+                comp_BN_running_var = False
+        comp_BN_Output = comp_BN_Output and comp_BN_running_mean and comp_BN_running_var
 
-    assert comp_pass
+    assert comp_BN_Output
 
 
 @pytest.mark.parametrize(
@@ -365,5 +365,5 @@ def test_batch_norm_program_cache_and_default(input_shapes, mem_layout, device):
     )
     tt_output = ttnn.to_torch(tt_output_tensor_on_device)
     torch_result = torch.nn.functional.batch_norm(input=in_data, running_mean=mean_data, running_var=var_data)
-    comp_pass = compare_results_batch_norm([tt_output], [torch_result])
-    assert comp_pass
+    comp_BN_Output = compare_results_batch_norm([tt_output], [torch_result])
+    assert comp_BN_Output
