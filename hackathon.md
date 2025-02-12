@@ -43,7 +43,9 @@ void fabric_async_write_multicast(
     uint16_t s_depth)
 ```
 Example tests:
+- All-In-One API: `TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FabricFixture.TestAsyncWriteMulticastRoutingPlane"`
 - Stateful API: `TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FabricFixture.TestAsyncWriteMulticast"`
+- Multi-Directional All-In-One API: `TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FabricFixture.TestAsyncWriteMulticastMultidirectionalRoutingPlane"`
 - Multi-Directional Stateful API: `TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FabricFixture.TestAsyncWriteMulticastMultidirectional"`
 
 ## Atomic Unicast Writes
@@ -59,6 +61,7 @@ void fabric_atomic_inc(
     uint32_t wrap_boundary)
 ```
 Example tests:
+- All-In-One API: `TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FabricFixture.TestAtomicIncRoutingPlane"`
 - Stateful API: `TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FabricFixture.TestAtomicInc"`
 
 ## Fused Async Write + Atomic Unicast Writes
@@ -75,6 +78,7 @@ fabric_async_write_atomic_inc(
     uint32_t atomic_inc)
 ```
 Example tests:
+- All-In-One API: `TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FabricFixture.TestAyncWriteAtomicIncRoutingPlane"`
 - Stateful API: `TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FabricFixture.TestAyncWriteAtomicInc"`
 
 # Op Ideas

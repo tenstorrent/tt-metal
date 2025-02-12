@@ -60,6 +60,8 @@ struct fabric_router_l1_config_t {
     std::uint8_t padding[8];  // pad to 16-byte alignment.
 } __attribute__((packed));
 
+static_assert(sizeof(fabric_router_l1_config_t) % 16 == 0);
+
 /*
 FORCE_INLINE std::uint8_t get_eth_chan_from_table(std::uint32_t base_addr, std::uint32_t target_id) {
     //  i.e. intra mesh table:

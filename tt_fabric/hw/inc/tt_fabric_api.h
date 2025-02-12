@@ -260,7 +260,7 @@ inline void fabric_async_write_atomic_inc(
     }
 
     if constexpr (mode == ASYNC_WR_ALL or mode == ASYNC_WR_ADD_PR) {
-        fabric_setup_pull_request(src_addr, PACKET_HEADER_SIZE_BYTES);
+        fabric_setup_pull_request(src_addr, size);
     }
 
     if constexpr (mode == ASYNC_WR_ALL or mode == ASYNC_WR_SEND) {

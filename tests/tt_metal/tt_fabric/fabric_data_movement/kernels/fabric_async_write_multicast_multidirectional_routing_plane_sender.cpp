@@ -32,24 +32,36 @@ void kernel_main() {
     uint32_t e_dst_mesh_id = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     uint32_t e_dst_device_id = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     uint32_t e_depth = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
-    uint32_t e_router_noc_xy = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
+    uint32_t e_routing_plane = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     uint32_t w_dst_mesh_id = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     uint32_t w_dst_device_id = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     uint32_t w_depth = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
-    uint32_t w_router_noc_xy = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
+    uint32_t w_routing_plane = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     // uint32_t n_dst_mesh_id = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     // uint32_t n_dst_device_id = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     // uint32_t n_depth = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
-    // uint32_t n_router_noc_xy = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
+    // uint32_t n_routing_plane = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     // uint32_t s_dst_mesh_id = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     // uint32_t s_dst_device_id = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     // uint32_t s_depth = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
-    // uint32_t s_router_noc_xy = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
+    // uint32_t s_routing_plane = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     constexpr uint32_t num_dirs = 2;  // 4
 
     uint64_t dst_noc_addr = get_noc_addr_helper(dst_noc_offset, dst_addr);
     uint32_t packet_size_bytes = num_bytes + PACKET_HEADER_SIZE_BYTES;
-    fabric_async_write_multicast_add_header(
+
+    // make sure fabric node gatekeeper is available.
+    fabric_endpoint_init(client_interface_addr, gk_interface_addr_l, gk_interface_addr_h);
+    for (uint32_t i = 0; i < num_dirs - 1; i++) {
+        copy_l1_buf(
+            (uint32_t*)client_interface,
+            (uint32_t*)(client_interface_addr + 4 * sizeof(fabric_router_l1_config_t) +
+                        i * sizeof(fabric_client_interface_t)),
+            sizeof(fabric_client_interface_t));
+    }
+
+    fabric_async_write_multicast(
+        e_routing_plane,
         src_addr,  // source address in sender’s memory
         e_dst_mesh_id,
         e_dst_device_id,
@@ -59,36 +71,39 @@ void kernel_main() {
         0,
         0,
         0);
-
-    // make sure fabric node gatekeeper is available.
-    fabric_endpoint_init<false>(client_interface_addr, gk_interface_addr_l, gk_interface_addr_h);
-    for (uint32_t i = 1; i < num_dirs; i++) {
-        copy_l1_buf((uint32_t*)client_interface, (uint32_t*)(client_interface + i), sizeof(fabric_client_interface_t));
-    }
-
-    fabric_setup_pull_request(
-        src_addr,          // source address in sender’s memory
-        packet_size_bytes  // number of bytes to write to remote destination
-    );
-
-    fabric_send_pull_request<false>(e_router_noc_xy, e_dst_mesh_id, e_dst_device_id);
     fabric_wait_for_pull_request_bytes_flushed(PACKET_HEADER_SIZE_BYTES);
     packet_header_t* packet_header = (packet_header_t*)(src_addr);
 
     // West Mcast
-    client_interface++;
+    client_interface = (fabric_client_interface_t*)(client_interface_addr + 4 * sizeof(fabric_router_l1_config_t));
 
     packet_header->routing.dst_mesh_id = w_dst_mesh_id;
     packet_header->routing.dst_dev_id = w_dst_device_id;
     packet_header->packet_parameters.mcast_parameters.east = 0;
     packet_header->packet_parameters.mcast_parameters.west = w_depth;
 
-    fabric_setup_pull_request(
-        src_addr,          // source address in sender’s memory
-        packet_size_bytes  // number of bytes to write to remote destination
-    );
-
-    fabric_send_pull_request<false>(w_router_noc_xy, w_dst_mesh_id, w_dst_device_id);
+    fabric_async_write_multicast<ASYNC_WR_ADD_PR>(
+        w_routing_plane,
+        src_addr,  // source address in sender’s memory
+        w_dst_mesh_id,
+        w_dst_device_id,
+        dst_noc_addr,       // destination write address
+        packet_size_bytes,  // number of bytes to write to remote destination
+        0,
+        w_depth,
+        0,
+        0);
+    fabric_async_write_multicast<ASYNC_WR_SEND>(
+        w_routing_plane,
+        src_addr,  // source address in sender’s memory
+        w_dst_mesh_id,
+        w_dst_device_id,
+        dst_noc_addr,       // destination write address
+        packet_size_bytes,  // number of bytes to write to remote destination
+        0,
+        w_depth,
+        0,
+        0);
     // fabric_wait_for_pull_request_bytes_flushed(PACKET_HEADER_SIZE_BYTES);
 
     // // North Mcast
@@ -99,12 +114,28 @@ void kernel_main() {
     // packet_header->packet_parameters.mcast_parameters.west = 0;
     // packet_header->packet_parameters.mcast_parameters.north = n_depth;
 
-    // fabric_setup_pull_request(
-    //     src_addr,     // source address in sender’s memory
-    //     packet_size_bytes  // number of bytes to write to remote destination
-    // );
-
-    // fabric_send_pull_request<false>(n_router_noc_xy, n_dst_mesh_id, n_dst_device_id);
+    // fabric_async_write_multicast<ASYNC_WR_ADD_PR>(
+    //     n_routing_plane,
+    //     src_addr,  // source address in sender’s memory
+    //     n_dst_mesh_id,
+    //     n_dst_device_id,
+    //     dst_noc_addr,       // destination write address
+    //     packet_size_bytes,  // number of bytes to write to remote destination
+    //     0,
+    //     0,
+    //     n_depth,
+    //     0);
+    // fabric_async_write_multicast<ASYNC_WR_SEND>(
+    //     n_routing_plane,
+    //     src_addr,  // source address in sender’s memory
+    //     n_dst_mesh_id,
+    //     n_dst_device_id,
+    //     dst_noc_addr,       // destination write address
+    //     packet_size_bytes,  // number of bytes to write to remote destination
+    //     0,
+    //     0,
+    //     n_depth,
+    //     0);
     // fabric_wait_for_pull_request_bytes_flushed(PACKET_HEADER_SIZE_BYTES);
 
     // // South Mcast
@@ -115,16 +146,33 @@ void kernel_main() {
     // packet_header->packet_parameters.mcast_parameters.north = 0;
     // packet_header->packet_parameters.mcast_parameters.south = s_depth;
 
-    // fabric_setup_pull_request(
-    //     src_addr,     // source address in sender’s memory
-    //     packet_size_bytes  // number of bytes to write to remote destination
-    // );
-
-    // fabric_send_pull_request<false>(s_router_noc_xy, s_dst_mesh_id, s_dst_device_id);
+    // fabric_async_write_multicast<ASYNC_WR_ADD_PR>(
+    //     s_routing_plane,
+    //     src_addr,  // source address in sender’s memory
+    //     s_dst_mesh_id,
+    //     s_dst_device_id,
+    //     dst_noc_addr,       // destination write address
+    //     packet_size_bytes,  // number of bytes to write to remote destination
+    //     0,
+    //     0,
+    //     0,
+    //     s_depth);
+    // fabric_async_write_multicast<ASYNC_WR_SEND>(
+    //     s_routing_plane,
+    //     src_addr,  // source address in sender’s memory
+    //     s_dst_mesh_id,
+    //     s_dst_device_id,
+    //     dst_noc_addr,       // destination write address
+    //     packet_size_bytes,  // number of bytes to write to remote destination
+    //     0,
+    //     0,
+    //     0,
+    //     s_depth);
 
     // Flush all pull requests
     client_interface = (volatile fabric_client_interface_t*)client_interface_addr;
-    for (uint32_t i = 0; i < num_dirs; i++) {
+    fabric_wait_for_pull_request_flushed();
+    for (uint32_t i = 0; i < num_dirs - 1; i++) {
         fabric_wait_for_pull_request_flushed();
         client_interface++;
     }
