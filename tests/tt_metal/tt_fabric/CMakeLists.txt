@@ -1,4 +1,7 @@
-set(UNIT_TESTS_FABRIC_SRC ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_routing_tables.cpp)
+set(UNIT_TESTS_FABRIC_SRC
+    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_router/test_routing_tables.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_data_movement/test_patterns.cpp
+)
 
 add_executable(fabric_unit_tests ${UNIT_TESTS_FABRIC_SRC})
 target_link_libraries(
