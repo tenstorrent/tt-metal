@@ -36,7 +36,8 @@ void copy_sticks_async(
     const uint16_t my_noc_x,
     const uint16_t my_noc_y,
     const uint32_t in_base_l1_addr,
-    const uint32_t out_base_l1_addr) {
+    const uint32_t out_base_l1_addr,
+    const uint32_t semaphore_addr = 0) {
     int i = 0;
     int length = config_data[i + 2];
 
@@ -105,6 +106,7 @@ void kernel_main() {
     constexpr uint32_t noc_00_x = get_compile_time_arg_val(16);
     constexpr uint32_t noc_00_y = get_compile_time_arg_val(17);
     constexpr uint32_t num_cores_x = get_compile_time_arg_val(18);
+    constexpr uint32_t semaphore_id = get_compile_time_arg_val(19);
 
     constexpr uint32_t elem_nbytes = sizeof(uint16_t);
     constexpr uint16_t pad_core_id = 0xFFFF;
@@ -161,13 +163,20 @@ void kernel_main() {
             is_col_major>(config_data, my_noc_x, my_noc_y, in_base_l1_addr, out_base_l1_addr);
     }
 
+    uint32_t semaphore_addr = 0;
     if constexpr (remote_ref_counts_cb_id) {
         uint32_t config_data_l1_addr = get_read_ptr(remote_ref_counts_cb_id);
         const tt_l1_ptr uint16_t* config_data = reinterpret_cast<const tt_l1_ptr uint16_t*>(config_data_l1_addr);
 
-        uint16_t remnote_ref_index = my_noc_x - noc_00_x + (my_noc_y - noc_00_y) * num_cores_x;
-        uint16_t remote_refs = config_data[remnote_ref_index];
-        DPRINT << "remote_refs: " << remote_refs << "\n";
+        uint16_t remote_ref_index = my_noc_x - noc_00_x + (my_noc_y - noc_00_y) * num_cores_x;
+        uint16_t remote_refs_to_me = config_data[remote_ref_index];
+        DPRINT << "remote_refs: " << remote_refs_to_me << "\n";
+
+        semaphore_addr = get_semaphore(semaphore_id);
+        const uint64_t my_semaphore_noc_addr = get_noc_addr(my_noc_x, my_noc_y, semaphore_addr);
+        volatile tt_l1_ptr uint32_t* my_semaphore_noc_addr_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(my_semaphore_noc_addr);
+        // noc_semaphore_wait(my_semaphore_noc_addr_ptr, remote_refs_to_me);
     }
 
     if constexpr (local_config_cb_id) {
@@ -179,7 +188,7 @@ void kernel_main() {
             is_block_sharded,
             is_width_sharded,
             false,
-            is_col_major>(config_data, my_noc_x, my_noc_y, in_base_l1_addr, out_base_l1_addr);
+            is_col_major>(config_data, my_noc_x, my_noc_y, in_base_l1_addr, out_base_l1_addr, semaphore_addr);
     }
 
     noc_async_read_barrier();

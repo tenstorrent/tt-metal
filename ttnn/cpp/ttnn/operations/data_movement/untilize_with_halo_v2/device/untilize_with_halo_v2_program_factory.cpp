@@ -173,7 +173,8 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     const bool is_width_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED;
 
     CoreCoord noc_00;
-    int num_cores_x = 0;
+    uint32_t num_cores_x = 0;
+    uint32_t semaphore_id = 0;
     if (remote_ref_counts.has_value()) {
         auto remote_ref_counts_buffer = remote_ref_counts.value().get().device_buffer();
         auto remote_ref_counts_cb_config =
@@ -191,6 +192,8 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         };
         noc_00 = core_id_to_noc_coords(0);
         num_cores_x = device->compute_with_storage_grid_size().x;
+
+        semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
     }
 
     auto aligned_input_nstick_nbytes = out_stick_nbytes;
@@ -227,7 +230,8 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         aligned_input_nstick_nbytes,
         noc_00.x,
         noc_00.y,
-        num_cores_x};
+        num_cores_x,
+        semaphore_id};
 
     reader_ct_args[0] = 0;
     reader_ct_args[1] = local_config_cb_id;
