@@ -25,11 +25,11 @@ struct DeviceLocalShardedBufferTestConfig {
     TensorMemoryLayout mem_config = TensorMemoryLayout::HEIGHT_SHARDED;
     ShardOrientation shard_orientation = ShardOrientation::ROW_MAJOR;
 
-    Shape2D tensor2d_shape() {
+    Shape2D tensor2d_shape_in_pages() {
         return {num_pages_per_core.height() * num_cores.height(), num_pages_per_core.width() * num_cores.width()};
     }
 
-    uint32_t num_pages() { return tensor2d_shape().height() * tensor2d_shape().width(); }
+    uint32_t num_pages() { return tensor2d_shape_in_pages().height() * tensor2d_shape_in_pages().width(); }
 
     std::array<uint32_t, 2> shard_shape() {
         return {num_pages_per_core.height() * page_shape.height(), num_pages_per_core.width() * page_shape.width()};
@@ -44,7 +44,11 @@ struct DeviceLocalShardedBufferTestConfig {
 
     ShardSpecBuffer shard_parameters() {
         return ShardSpecBuffer(
-            this->shard_grid(), this->shard_shape(), this->shard_orientation, this->page_shape, this->tensor2d_shape());
+            this->shard_grid(),
+            this->shard_shape(),
+            this->shard_orientation,
+            this->page_shape,
+            this->tensor2d_shape_in_pages());
     }
 };
 
