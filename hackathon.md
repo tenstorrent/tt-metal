@@ -22,6 +22,9 @@ void fabric_async_write(uint32_t routing,   // the network plane to use for this
     uint32_t size  // number of bytes to write to remote destination
 )
 ```
+Example tests:
+- All-In-One API: `TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FabricFixture.TestAsyncWriteRoutingPlane"`
+- Stateful API: `TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FabricFixture.TestAsyncWrite"`
 
 ## Async Multicast Writes
 - multicast over the fabric to target multiple devices with a single NoC endpoint on
@@ -39,6 +42,9 @@ void fabric_async_write_multicast(
     uint16_t n_depth,
     uint16_t s_depth)
 ```
+Example tests:
+- Stateful API: `TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FabricFixture.TestAsyncWriteMulticast"`
+- Multi-Directional Stateful API: `TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FabricFixture.TestAsyncWriteMulticastMultidirectional"`
 
 ## Atomic Unicast Writes
 - Unicast of the fabric to perform a noc atomic increment on a single NoC endpoint
@@ -52,6 +58,8 @@ void fabric_atomic_inc(
     uint32_t atomic_inc,
     uint32_t wrap_boundary)
 ```
+Example tests:
+- Stateful API: `TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FabricFixture.TestAtomicInc"`
 
 ## Fused Async Write + Atomic Unicast Writes
 - Unicast over the fabric and to a single NoC endpoint and perform a noc atomic increment on a single NoC endpoint
@@ -66,6 +74,8 @@ fabric_async_write_atomic_inc(
     uint32_t size,  // number of bytes to write to remote destination
     uint32_t atomic_inc)
 ```
+Example tests:
+- Stateful API: `TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FabricFixture.TestAyncWriteAtomicInc"`
 
 # Op Ideas
 Feel free to build your own custom op but if you are looking for some ideas, take a
