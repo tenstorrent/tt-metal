@@ -37,6 +37,32 @@ void bind_batch_norm_operation(pybind11::module& module) {
             ttnn.Tensor: the output tensor.
 
 
+        Note:
+            Supported dtypes, layouts, and ranks:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+                 - Ranks
+               * - BFLOAT16, FLOAT32
+                 - TILE
+                 - 4
+
+
+        Example:
+
+            >>> input_tensor = ttnn.from_torch(torch.rand([2, 3, 4, 5], dtype=torch.bfloat16)), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> running_mean = ttnn.from_torch(torch.rand([1, 3, 1, 1], dtype=torch.bfloat16)), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> running_var = ttnn.from_torch(torch.rand([1, 3, 1, 1], dtype=torch.bfloat16)), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> weight = ttnn.from_torch(torch.rand([1, 3, 1, 1], dtype=torch.bfloat16)), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> bias = ttnn.from_torch(torch.rand([1, 3, 1, 1], dtype=torch.bfloat16)), layout=ttnn.TILE_LAYOUT, device=device)
+            >>> eps = 1e-05
+            >>> momentum = 0.1
+            >>> output = ttnn.batch_norm(input_tensor, running_mean = running_mean, running_var = running_var, weight = weight, bias = bias, eps = eps, momentum = momentum, training = True)
+
+
         )doc",
         ttnn::pybind_arguments_t{
             py::arg("input"),
