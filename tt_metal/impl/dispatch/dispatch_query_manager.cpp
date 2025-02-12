@@ -34,8 +34,13 @@ tt_cxy_pair dispatch_core(uint8_t cq_id) {
     for (chip_id_t device_id = 0; device_id < tt::Cluster::instance().number_of_devices(); device_id++) {
         uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_id);
         if (tt::Cluster::instance().get_associated_mmio_device(device_id) == device_id) {
-            // Dispatch core is not allocated on this MMIO device, skip it
-            if (not dispatch_core_mgr::instance().is_dispatcher_core_allocated(device_id, channel, cq_id)) {
+            // Dispatch core is not allocated on this MMIO device or this is a TG system, skip it
+            // On TG, local dispatch cores are allocated on MMIO devices, but are not used
+            // since programs are not run on these devices. The placement of these cores is
+            // irrelevant for the runtime layer, since these are not used. Hence, these are
+            // skipped.
+            if (not dispatch_core_mgr::instance().is_dispatcher_core_allocated(device_id, channel, cq_id) or
+                tt::Cluster::instance().is_galaxy_cluster()) {
                 continue;
             }
             dispatch_core = dispatch_core_mgr::instance().dispatcher_core(device_id, channel, cq_id);
@@ -107,6 +112,7 @@ const std::vector<CoreCoord>& DispatchQueryManager::get_logical_dispatch_cores(u
 }
 
 tt_cxy_pair DispatchQueryManager::get_dispatch_core(uint8_t cq_id) const {
+    std::scoped_lock<std::mutex> lock(modifier_mutex);
     if (dispatch_cores_.empty()) {
         for (auto cq = 0; cq < num_hw_cqs_; cq++) {
             // Populate when queried. Statically allocating at

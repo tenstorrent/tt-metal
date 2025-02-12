@@ -681,6 +681,7 @@ set(TTNN_PUBLIC_INCLUDE_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR} # ${PROJECT_SOURCE_DIR}/ttnn
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/deprecated # symlink to tt_eager; should become native folder once merge complete
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp
+    ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers
 )
 set(TTNN_PUBLIC_LINK_LIBRARIES
     metal_common_libs
@@ -689,6 +690,7 @@ set(TTNN_PUBLIC_LINK_LIBRARIES
     xtensor
     xtensor-blas
     xtl
+    FlatBuffers::FlatBuffers
 )
 set(TTNN_PUBLIC_LINK_DIRS "")
 
@@ -803,6 +805,8 @@ endforeach(
     ${TTNN_SUBLIBRARIES}
 )
 
+GENERATE_FBS_HEADER(${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/tensor/flatbuffer/tensor_types.fbs)
+list(APPEND TENSOR_SRCS ${FBS_GENERATED_HEADER_FILE})
 add_ttnn_sublibrary(ttnn_tensor ${TENSOR_SRCS})
 add_ttnn_sublibrary(ttnn_ccl ${CCL_TTNN_SRCS})
 add_ttnn_sublibrary(ttnn_ccl_exp ${CCL_EXPERIMENTAL_TTNN_SRCS})

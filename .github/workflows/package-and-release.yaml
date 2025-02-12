@@ -22,6 +22,8 @@ jobs:
       publish-artifact: true
       build-wheel: true
     secrets: inherit
+    with:
+      build-wheel: true
   build-artifact-profiler:
     uses: ./.github/workflows/build-artifact.yaml
     with:
