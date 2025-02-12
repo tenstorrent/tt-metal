@@ -175,7 +175,9 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     CoreCoord noc_00;
     uint32_t num_cores_x = 0;
     uint32_t semaphore_id = 0;
+    bool in_place = false;
     if (remote_ref_counts.has_value()) {
+        in_place = true;
         auto remote_ref_counts_buffer = remote_ref_counts.value().get().device_buffer();
         auto remote_ref_counts_cb_config =
             CircularBufferConfig(
@@ -231,7 +233,8 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         noc_00.x,
         noc_00.y,
         num_cores_x,
-        semaphore_id};
+        semaphore_id,
+        in_place};
 
     reader_ct_args[0] = 0;
     reader_ct_args[1] = local_config_cb_id;
