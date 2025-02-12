@@ -39,7 +39,7 @@ void kernel_main() {
 
     for (uint32_t i = 0; i < input0_num_tiles_height; i++) {
         cb_wait_front(input0_transpose_cb, input0_num_tiles_width);
-        cb_reserve_back(concat_cb, input0_num_tiles_width);
+        cb_reserve_back(concat_cb, input0_num_tiles_width + input1_num_tiles_width);
 
         uint32_t l1_read_addr = base_l1_read_addr_0;
         noc_async_read_one_packet_set_state(noc_addr_0, input0_stride);
@@ -52,7 +52,7 @@ void kernel_main() {
         }
 
         noc_async_read_barrier();
-        cb_push_back(concat_cb, input0_num_tiles_width);
+        // cb_push_back(concat_cb, input0_num_tiles_width);
         cb_pop_front(input0_transpose_cb, input0_num_tiles_width);
 
         cb_wait_front(input1_transpose_cb, input1_num_tiles_width);
@@ -69,7 +69,7 @@ void kernel_main() {
         }
 
         noc_async_read_barrier();
-        cb_push_back(concat_cb, input1_num_tiles_width);
+        cb_push_back(concat_cb, input0_num_tiles_width + input1_num_tiles_width);
         cb_pop_front(input1_transpose_cb, input1_num_tiles_width);
     }
 }
