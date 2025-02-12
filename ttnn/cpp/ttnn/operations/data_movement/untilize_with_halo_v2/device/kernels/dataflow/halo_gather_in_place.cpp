@@ -102,6 +102,9 @@ void kernel_main() {
     constexpr bool is_col_major = get_compile_time_arg_val(13) == 1;
     constexpr uint32_t is_width_sharded = get_compile_time_arg_val(14);
     constexpr uint32_t input_aligned_page_size = get_compile_time_arg_val(15);
+    constexpr uint32_t noc_00_x = get_compile_time_arg_val(16);
+    constexpr uint32_t noc_00_y = get_compile_time_arg_val(17);
+    constexpr uint32_t num_cores_x = get_compile_time_arg_val(18);
 
     constexpr uint32_t elem_nbytes = sizeof(uint16_t);
     constexpr uint16_t pad_core_id = 0xFFFF;
@@ -159,17 +162,10 @@ void kernel_main() {
     if constexpr (remote_ref_counts_cb_id) {
         uint32_t config_data_l1_addr = get_read_ptr(remote_ref_counts_cb_id);
         const tt_l1_ptr uint16_t* config_data = reinterpret_cast<const tt_l1_ptr uint16_t*>(config_data_l1_addr);
-        DPRINT << "config_data_l1_addr: " << config_data_l1_addr << "\n";
-        DPRINT << "config[0]: " << config_data[0] << "\n";
-        DPRINT << "config[1]: " << config_data[1] << "\n";
-        DPRINT << "config[2]: " << config_data[2] << "\n";
-        DPRINT << "config[3]: " << config_data[3] << "\n";
-        DPRINT << "config[4]: " << config_data[4] << "\n";
-        DPRINT << "config[5]: " << config_data[5] << "\n";
-        DPRINT << "config[6]: " << config_data[6] << "\n";
-        DPRINT << "config[7]: " << config_data[7] << "\n";
-        DPRINT << "config[8]: " << config_data[8] << "\n";
-        DPRINT << "config[9]: " << config_data[9] << "\n";
+
+        uint16_t remnote_ref_index = my_noc_x - noc_00_x + (my_noc_y - noc_00_y) * num_cores_x;
+        uint16_t remote_refs = config_data[remnote_ref_index];
+        DPRINT << "remote_refs: " << remote_refs << "\n";
     }
 
     if constexpr (local_config_cb_id) {
