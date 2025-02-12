@@ -4,9 +4,12 @@
 
 #pragma once
 
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
 #include "eth_l1_address_map.h"
 #include "noc/noc_parameters.h"
-
+#else
+#include <tt-metalium/hal_exp.hpp>
+#endif
 namespace tt::tt_fabric {
 
 typedef struct _endpoint_sync {
@@ -18,7 +21,9 @@ static_assert(sizeof(endpoint_sync_t) == 4);
 
 constexpr uint32_t PACKET_WORD_SIZE_BYTES = 16;
 constexpr uint32_t NUM_WR_CMD_BUFS = 4;
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
 constexpr uint32_t DEFAULT_MAX_NOC_SEND_WORDS = (NOC_MAX_BURST_WORDS * NOC_WORD_BYTES) / PACKET_WORD_SIZE_BYTES;
+#endif
 constexpr uint32_t DEFAULT_MAX_ETH_SEND_WORDS = 2 * 1024;
 constexpr uint32_t FVC_SYNC_THRESHOLD = 256;
 
@@ -137,7 +142,7 @@ static_assert(offsetof(packet_header_t, routing) % 4 == 0);
 
 constexpr uint32_t packet_header_routing_offset_dwords = offsetof(packet_header_t, routing) / 4;
 
-void tt_fabric_add_header_checksum(packet_header_t* p_header) {
+inline void tt_fabric_add_header_checksum(packet_header_t* p_header) {
     uint16_t* ptr = (uint16_t*)p_header;
     uint32_t sum = 0;
     for (uint32_t i = 2; i < sizeof(packet_header_t) / 2; i++) {
@@ -148,7 +153,7 @@ void tt_fabric_add_header_checksum(packet_header_t* p_header) {
     p_header->packet_parameters.misc_parameters.words[0] = sum;
 }
 
-bool tt_fabric_is_header_valid(packet_header_t* p_header) {
+inline bool tt_fabric_is_header_valid(packet_header_t* p_header) {
 #ifdef TT_FABRIC_DEBUG
     uint16_t* ptr = (uint16_t*)p_header;
     uint32_t sum = 0;
@@ -343,23 +348,28 @@ typedef struct _fabric_client_interface {
 } fabric_client_interface_t;
 
 static_assert(sizeof(fabric_client_interface_t) % 16 == 0);
-
-constexpr uint32_t FABRIC_ROUTER_MISC_START = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
-constexpr uint32_t FABRIC_ROUTER_MISC_SIZE = 256;
-constexpr uint32_t FABRIC_ROUTER_SYNC_SEM = FABRIC_ROUTER_MISC_START;
-constexpr uint32_t FABRIC_ROUTER_SYNC_SEM_SIZE = 16;
+#if defined(KERNEL_BUILD) || defined(FW_BUILD)
+#define CONST_TYPE constexpr
+CONST_TYPE uint32_t FABRIC_ROUTER_MISC_START = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
+#else
+#define CONST_TYPE const
+CONST_TYPE uint32_t FABRIC_ROUTER_MISC_START = tt::tt_metal::experimental::hal::get_erisc_l1_unreserved_base();
+#endif
+CONST_TYPE uint32_t FABRIC_ROUTER_MISC_SIZE = 256;
+CONST_TYPE uint32_t FABRIC_ROUTER_SYNC_SEM = FABRIC_ROUTER_MISC_START;
+CONST_TYPE uint32_t FABRIC_ROUTER_SYNC_SEM_SIZE = 16;
 
 // Fabric Virtual Control Channel start/size
-constexpr uint32_t FVCC_OUT_BUF_START = FABRIC_ROUTER_MISC_START + FABRIC_ROUTER_MISC_SIZE;
-constexpr uint32_t FVCC_OUT_BUF_SIZE = FVCC_BUF_SIZE_BYTES;
-constexpr uint32_t FVCC_SYNC_BUF_START = FVCC_OUT_BUF_START + FVCC_OUT_BUF_SIZE;
-constexpr uint32_t FVCC_SYNC_BUF_SIZE = FVCC_SYNC_BUF_SIZE_BYTES;
-constexpr uint32_t FVCC_IN_BUF_START = FVCC_SYNC_BUF_START + FVCC_SYNC_BUF_SIZE;
-constexpr uint32_t FVCC_IN_BUF_SIZE = FVCC_BUF_SIZE_BYTES;
+CONST_TYPE uint32_t FVCC_OUT_BUF_START = FABRIC_ROUTER_MISC_START + FABRIC_ROUTER_MISC_SIZE;
+CONST_TYPE uint32_t FVCC_OUT_BUF_SIZE = FVCC_BUF_SIZE_BYTES;
+CONST_TYPE uint32_t FVCC_SYNC_BUF_START = FVCC_OUT_BUF_START + FVCC_OUT_BUF_SIZE;
+CONST_TYPE uint32_t FVCC_SYNC_BUF_SIZE = FVCC_SYNC_BUF_SIZE_BYTES;
+CONST_TYPE uint32_t FVCC_IN_BUF_START = FVCC_SYNC_BUF_START + FVCC_SYNC_BUF_SIZE;
+CONST_TYPE uint32_t FVCC_IN_BUF_SIZE = FVCC_BUF_SIZE_BYTES;
 
 // Fabric Virtual Channel start/size
-constexpr uint32_t FABRIC_ROUTER_REQ_QUEUE_START = FVCC_IN_BUF_START + FVCC_IN_BUF_SIZE;
-constexpr uint32_t FABRIC_ROUTER_REQ_QUEUE_SIZE = sizeof(chan_req_buf);
-constexpr uint32_t FABRIC_ROUTER_DATA_BUF_START = FABRIC_ROUTER_REQ_QUEUE_START + FABRIC_ROUTER_REQ_QUEUE_SIZE;
+CONST_TYPE uint32_t FABRIC_ROUTER_REQ_QUEUE_START = FVCC_IN_BUF_START + FVCC_IN_BUF_SIZE;
+CONST_TYPE uint32_t FABRIC_ROUTER_REQ_QUEUE_SIZE = sizeof(chan_req_buf);
+CONST_TYPE uint32_t FABRIC_ROUTER_DATA_BUF_START = FABRIC_ROUTER_REQ_QUEUE_START + FABRIC_ROUTER_REQ_QUEUE_SIZE;
 
 }  // namespace tt::tt_fabric

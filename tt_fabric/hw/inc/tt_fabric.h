@@ -15,15 +15,13 @@
 
 using namespace tt::tt_fabric;
 
-constexpr ProgrammableCoreType fd_core_type = static_cast<ProgrammableCoreType>(FD_CORE_TYPE);
-
 const uint32_t SYNC_BUF_SIZE = 16;  // must be 2^N
 const uint32_t SYNC_BUF_SIZE_MASK = (SYNC_BUF_SIZE - 1);
 const uint32_t SYNC_BUF_PTR_MASK = ((SYNC_BUF_SIZE << 1) - 1);
 
 extern uint64_t xy_local_addr;
 extern volatile local_pull_request_t* local_pull_request;
-extern volatile fabric_router_l1_config_t* routing_table;
+extern volatile tt_l1_ptr fabric_router_l1_config_t* routing_table;
 extern chan_payload_ptr inbound_rdptr_ack;
 extern volatile chan_payload_ptr remote_rdptr;
 
@@ -1423,6 +1421,12 @@ inline uint64_t get_timestamp_32b() { return reg_read(RISCV_DEBUG_REG_WALL_CLOCK
 void zero_l1_buf(tt_l1_ptr uint32_t* buf, uint32_t size_bytes) {
     for (uint32_t i = 0; i < size_bytes / 4; i++) {
         buf[i] = 0;
+    }
+}
+
+void copy_l1_buf(tt_l1_ptr uint32_t* src_buf, tt_l1_ptr uint32_t* dst_buf, uint32_t size_bytes) {
+    for (uint32_t i = 0; i < size_bytes / 4; i++) {
+        dst_buf[i] = src_buf[i];
     }
 }
 
