@@ -53,7 +53,11 @@ jobs:
         with:
           submodules: recursive
           path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
-      - uses: ./.github/actions/prepare-metal-run
+      - uses: actions/download-artifact@v4
+        with:
+          name: TTMetal_build_any
+      - name: Extract files
+        run: tar -xvf ttm_any.tar
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
