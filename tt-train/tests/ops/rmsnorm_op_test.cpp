@@ -12,6 +12,7 @@
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "ops/binary_ops.hpp"
 #include "ops/losses.hpp"
 #include "ops/unary_ops.hpp"
 
@@ -48,15 +49,27 @@ TEST_F(RMSNormOpTest, RMSNorm_Small_Forward_Backward) {
     xt::xarray<float> expected_result = {{0.3652F, 0.7305F, 1.0938F, 1.4609F, 0.3652F, 0.7305F, 1.0938F, 1.4609F}};
     EXPECT_TRUE(xt::allclose(result_xtensor, expected_result, 1e-2F));
 
-    auto sum_result = ttml::ops::sum(result);
-    sum_result->backward();
+    auto target = autograd::create_tensor(core::zeros_like(result->get_value()));
+    fmt::println("{} =? {}", target->get_value().get_logical_shape(), target->get_value().get_logical_shape());
+    auto mse_result = ttml::ops::mse_loss(result, target);
+    mse_result->backward();
     auto example_tensor_grad = core::to_xtensor(example_tensor->get_grad());
-    auto expected_example_tensor_grad =
-        xt::xarray<float>({{{{0.2432, 0.1211, -0.0020, -0.1230, 0.2432, 0.1211, -0.0020, -0.1230}}}});
+    auto expected_example_tensor_grad = xt::xarray<float>(
+        {{{{5.2452e-05F,
+            1.0490e-04F,
+            -2.0742e-05F,
+            2.0981e-04F,
+            5.2452e-05F,
+            1.0490e-04F,
+            -2.0742e-05F,
+            2.0981e-04F}}}});
+    std::cout << example_tensor_grad << std::endl;
     EXPECT_TRUE(xt::allclose(example_tensor_grad, expected_example_tensor_grad, 1.0e-3F, 1e-2F));
+    std::cout << "tensor grad ok" << std::endl;
 
     auto gamma_grad = core::to_xtensor(gamma->get_grad());
+    std::cout << gamma_grad << std::endl;
     auto expected_gamma_grad =
-        xt::xarray<float>({{{{0.3652F, 0.7305F, 1.0938F, 1.4609F, 0.3652F, 0.7305F, 1.0938F, 1.4609F}}}});
+        xt::xarray<float>({{{{0.0334F, 0.1338F, 0.2988F, 0.5352F, 0.0334F, 0.1338F, 0.2988F, 0.5352F}}}});
     EXPECT_TRUE(xt::allclose(gamma_grad, expected_gamma_grad, 1.0e-3F, 1e-2F));
 }

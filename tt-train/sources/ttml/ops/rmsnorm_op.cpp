@@ -34,7 +34,7 @@ autograd::TensorPtr rmsnorm(const autograd::TensorPtr &tensor, const autograd::T
     ttnn::Tensor out_tensor = ttnn::experimental::div(gamma_times_activations, rms_eps);
 
     auto out = autograd::create_tensor(out_tensor);
-    out->set_value(out_tensor);
+    // out->set_value(out_tensor);
 
     autograd::GradFunction grad = [tensor, gamma, out, rms_a = rms_eps, eps_tensor, device]() {
         auto a = tensor->get_value();
