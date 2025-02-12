@@ -437,6 +437,8 @@ class resnet50Bottleneck:
                 and (layer_module == "layer1_module2" or layer_module == "layer1_module3")
             ):
                 conv_kwargs_2["conv_config"].act_block_h_override = 0
+            elif batch_size == 16 and layer_module and layer_module == "layer1_module2":
+                conv_kwargs_2["conv_config"].act_block_h_override = 0
 
         if not ttnn.is_tensor_storage_on_device(self.conv2_weight_tensor):
             self.conv2_weight_tensor = ttnn.prepare_conv_weights(
@@ -762,7 +764,10 @@ class resnet50:
         if self.batch_size == 16:
             num_cores_x = 8
             num_cores_y = 8
-            self.fold_compute_grid_size = (num_cores_x, num_cores_y)
+            # self.fold_compute_grid_size = (num_cores_x, num_cores_y)
+            self.fold_compute_grid_size = ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_x - 1, num_cores_y - 1))}
+            )
         elif self.batch_size == 20:
             if is_grayskull():
                 num_cores_x = 10
@@ -773,7 +778,10 @@ class resnet50:
             elif is_blackhole():
                 num_cores_x = 10
                 num_cores_y = 8
-            self.fold_compute_grid_size = (num_cores_x, num_cores_y)
+            # self.fold_compute_grid_size = (num_cores_x, num_cores_y)
+            self.fold_compute_grid_size = ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_x - 1, num_cores_y - 1))}
+            )
         elif self.batch_size == 32:
             core_grid = ttnn.CoreRangeSet(
                 {
