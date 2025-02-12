@@ -809,8 +809,8 @@ bool Tensor::is_allocated() const {
 std::vector<uint32_t> Tensor::host_page_ordering() {
     const auto& buffer_page_mapping = *this->buffer()->get_buffer_page_mapping();
     auto cores = buffer_page_mapping.all_cores_;
-    auto shard_size = buffer()->shard_spec().size();
-    auto num_pages = cores.size() * shard_size;
+    auto shard_num_pages = buffer()->shard_spec().num_pages();
+    auto num_pages = cores.size() * shard_num_pages;
 
     std::vector<uint32_t> ret_vec;
     ret_vec.reserve(num_pages);

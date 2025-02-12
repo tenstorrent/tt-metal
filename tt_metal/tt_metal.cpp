@@ -293,8 +293,6 @@ inline void SetRuntimeArgsImpl(
 
 }  // namespace
 
-// #define DEBUG_PRINT_SHARD
-
 namespace detail {
 
 bool WriteToDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t address, std::vector<uint32_t>& host_buffer) {
@@ -586,9 +584,6 @@ void ReadFromDeviceSharded(Buffer& buffer, uint8_t* host_buffer, bool shard_orde
     TensorMemoryLayout buffer_layout = buffer.buffer_layout();
 
     auto device = buffer.device();
-#ifdef DEBUG_PRINT_SHARD
-    std::cout << "Reading From Device Height Sharded " << std::endl;
-#endif
 
     auto total_pages = buffer.num_dev_pages();
     uint32_t page_size = buffer.page_size();
