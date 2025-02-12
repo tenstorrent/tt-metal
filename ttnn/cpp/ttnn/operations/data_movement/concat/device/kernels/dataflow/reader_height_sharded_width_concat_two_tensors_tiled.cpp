@@ -32,7 +32,6 @@ void kernel_main() {
     const uint64_t noc_addr_0 = get_noc_addr(base_l1_read_addr_0);
     const uint32_t base_l1_read_addr_1 = get_read_ptr(input1_transpose_cb);
     const uint64_t noc_addr_1 = get_noc_addr(base_l1_read_addr_1);
-
     const uint32_t base_l1_write_addr = get_write_ptr(concat_cb);
 
     cb_push_back(input0_cb, input0_num_tiles_height * input0_num_tiles_width);
