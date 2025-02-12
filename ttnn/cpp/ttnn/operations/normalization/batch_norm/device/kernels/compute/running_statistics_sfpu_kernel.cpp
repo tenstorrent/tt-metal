@@ -83,7 +83,6 @@ void MAIN {
             cb_wait_front(cb_tmp1, onetile);
             cb_wait_front(cb_old_running_mean, onetile);
             cb_reserve_back(cb_tmp3, onetile);
-            mul_binary_tile_init();
             tile_regs_acquire();
             tile_regs_wait();
             copy_tile_to_dst_init_short_with_dt(cb_tmp1, cb_old_running_mean);
@@ -172,7 +171,6 @@ void MAIN {
             cb_wait_front(cb_tmp1, onetile);
             cb_wait_front(cb_old_running_var, onetile);
             cb_reserve_back(cb_tmp3, onetile);
-            mul_binary_tile_init();
             tile_regs_acquire();
             tile_regs_wait();
             copy_tile_to_dst_init_short_with_dt(cb_tmp1, cb_old_running_var);
