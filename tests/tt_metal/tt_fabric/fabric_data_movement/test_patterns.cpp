@@ -431,7 +431,7 @@ TEST_F(FabricFixture, TestAyncWriteAtomicInc) {
     EXPECT_EQ(atomic_inc, received_buffer_data[0]);
 }
 
-TEST_F(FabricFixture, TestAsyncWriteMulticastMultidirectional) {
+TEST_F(FabricFixture, TestAsyncWriteMulticast) {
     CoreCoord sender_logical_core = {0, 0};
     CoreCoord receiver_logical_core = {1, 0};
     std::pair<mesh_id_t, chip_id_t> start_mesh_chip_id;
@@ -588,7 +588,7 @@ TEST_F(FabricFixture, TestAsyncWriteMulticastMultidirectional) {
     }
 }
 
-TEST_F(FabricFixture, TestAsyncWriteMulticast) {
+TEST_F(FabricFixture, TestAsyncWriteMulticastMultidirectional) {
     CoreCoord sender_logical_core = {0, 0};
     CoreCoord receiver_logical_core = {1, 0};
     std::pair<mesh_id_t, chip_id_t> start_mesh_chip_id;
