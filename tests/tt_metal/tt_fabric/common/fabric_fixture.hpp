@@ -252,9 +252,20 @@ protected:
             GTEST_SKIP();
         }
         DispatchFixture::SetUp();
+        std::string mesh_graph_descriptor;
+        auto num_available_devices = tt_metal::GetNumAvailableDevices();
+        if (2 == num_available_devices) {
+            mesh_graph_descriptor = "n300_mesh_graph_descriptor.yaml";
+        } else if (8 == num_available_devices) {
+            mesh_graph_descriptor = "t3k_mesh_graph_descriptor.yaml";
+        } else if (32 == num_available_devices) {
+            mesh_graph_descriptor = "tg_mesh_graph_descriptor.yaml";
+        } else {
+            throw std::runtime_error("Unrecognized board");
+        }
         const std::filesystem::path mesh_graph_desc_path =
             std::filesystem::path(tt::llrt::RunTimeOptions::get_instance().get_root_dir()) /
-            "tt_fabric/mesh_graph_descriptors/t3k_mesh_graph_descriptor.yaml";
+            "tt_fabric/mesh_graph_descriptors" / mesh_graph_descriptor;
         control_plane_ = std::make_unique<tt::tt_fabric::ControlPlane>(mesh_graph_desc_path.string());
         SetUpFabricPrograms();
     }
