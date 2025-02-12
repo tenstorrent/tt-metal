@@ -62,7 +62,7 @@ void kernel_main() {
     uint32_t bytes_done = 0;
     while (bytes_done < my_total_work) {
         if constexpr (my_rd_dst_addr) {
-            uint64_t host_src_addr = pcie_noc_xy_encoding | rd_ptr;  // Correct calculation to read host
+            uint64_t host_src_addr = pcie_noc_xy_encoding | rd_ptr;
             noc_async_read(
                 host_src_addr,
                 my_rd_dst_addr,  // any L1
