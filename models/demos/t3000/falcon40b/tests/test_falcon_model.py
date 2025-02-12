@@ -6,7 +6,7 @@ import torch
 import pytest
 from loguru import logger
 import ttnn
-from ttnn import ShardTensorToMesh, ConcatMeshToTensor, ListMeshToTensor
+from ttnn import ShardTensorToMesh, ConcatMeshToTensor
 from models.demos.t3000.falcon40b.reference.hf_modeling_falcon import (
     FalconForCausalLM,
 )
@@ -196,7 +196,7 @@ def run_test_FalconModel_inference(
                 use_cache=use_cache,
             )
             # output of model is replicated
-            tensors = ttnn.to_torch(tt_out, device=mesh_device, mesh_composer=ListMeshToTensor(mesh_device))
+            tensors = ttnn.sharded_tensor_to_torch_tensor_list(tt_out)
             tt_outs.append(tensors[0].squeeze(1))
 
         tt_out = torch.vstack(tt_outs)
@@ -213,7 +213,7 @@ def run_test_FalconModel_inference(
             use_cache=use_cache,
         )
         # Output of model is replicated
-        tensors = ttnn.to_torch(tt_out, device=mesh_device, mesh_composer=ListMeshToTensor(mesh_device))
+        tensors = ttnn.sharded_tensor_to_torch_tensor_list(tt_out)
         tt_out = tensors[0].squeeze(1).transpose(0, 1)
 
     # check outputs ----------------------------------------------------------------------

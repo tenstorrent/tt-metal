@@ -19,7 +19,6 @@ from .distributed import (
     ReplicateTensorToMesh,
     MeshToTensor,
     ConcatMeshToTensor,
-    ListMeshToTensor,
     visualize_mesh_device,
     ConcatMesh2dToTensor,
     distribute,
