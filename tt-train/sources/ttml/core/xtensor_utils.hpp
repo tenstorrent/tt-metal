@@ -5,11 +5,11 @@
 #pragma once
 
 #include <core/ttnn_all_includes.hpp>
+#include <core/xtensor_utils.hpp>
 #include <span>
 #include <ttnn/tensor/shape/shape.hpp>
 #include <ttnn/tensor/xtensor/conversion_utils.hpp>
 #include <ttnn/tensor/xtensor/partition.hpp>
-
 // TODO: decide if we want to use xarray everwhere or xtensor is ok
 /*
 Difference between xtensor and xarray:
