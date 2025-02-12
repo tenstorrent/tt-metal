@@ -5,9 +5,7 @@
 import pytest
 import torch
 import ttnn
-from models.utility_functions import (
-    is_wormhole_b0,
-)
+from models.utility_functions import is_wormhole_b0, profiler
 from models.experimental.functional_yolov11.test.yolov11_test_infra import create_test_infra
 
 try:
@@ -41,19 +39,16 @@ def run_yolov11_trace_inference(
 
     # First run configures convs JIT
     test_infra.input_tensor = tt_inputs_host.to(device, input_mem_config)
-    shape = test_infra.input_tensor.shape
-    dtype = test_infra.input_tensor.dtype
-    layout = test_infra.input_tensor.layout
+    spec = test_infra.input_tensor.spec
     test_infra.run()
-    print("run1")
     test_infra.validate()
     test_infra.dealloc_output()
 
     # Optimized run
     test_infra.input_tensor = tt_inputs_host.to(device, input_mem_config)
     test_infra.run()
-    print("run2")
     test_infra.validate()
+    test_infra.dealloc_output()
 
     # Capture
     test_infra.input_tensor = tt_inputs_host.to(device, input_mem_config)
@@ -62,13 +57,7 @@ def run_yolov11_trace_inference(
     tid = ttnn.begin_trace_capture(device, cq_id=0)
     test_infra.run()
     print("run3")
-    tt_image_res = ttnn.allocate_tensor_on_device(
-        shape,
-        dtype,
-        layout,
-        device,
-        input_mem_config,
-    )
+    tt_image_res = ttnn.allocate_tensor_on_device(spec, device)
     ttnn.end_trace_capture(device, tid, cq_id=0)
     assert trace_input_addr == ttnn.buffer_address(tt_image_res)
 
