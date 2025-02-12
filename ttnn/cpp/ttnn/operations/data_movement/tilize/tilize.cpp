@@ -43,12 +43,26 @@ ttnn::Tensor ExecuteTilize::invoke(
     const std::optional<MemoryConfig>& memory_config,
     std::optional<DataType> output_dtype,
     bool use_multicore) {
+    tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
+    uint32_t input_single_tile_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
+
+    uint32_t num_tiles_per_row = input_tensor.get_padded_shape()[-1] / tt::constants::TILE_WIDTH;
+    uint32_t num_tiles_per_col = input_tensor.get_padded_shape()[-1] / tt::constants::TILE_HEIGHT;
+
+    uint32_t output_single_tile_size = input_single_tile_size;
+    bool enough_space_width =
+        enough_available_space(input_tensor, input_single_tile_size, output_single_tile_size, num_tiles_per_col);
+    bool enough_space_height =
+        enough_available_space(input_tensor, input_single_tile_size, output_single_tile_size, num_tiles_per_row);
+
     auto base_tilize = [=](const ttnn::Tensor& input_tensor) {
         return operation::run(
             Tilize{
                 memory_config.value_or(input_tensor.memory_config()),
                 output_dtype.value_or(input_tensor.get_dtype()),
-                use_multicore},
+                use_multicore,
+                enough_space_width,
+                enough_space_height},
             {input_tensor},
             {},
             {},
