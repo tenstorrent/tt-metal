@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
-#include <tt-train/.cpmcache/googletest/96129d89f45386492ae46d6bb8c027bc3df5f949/googletest/include/gtest/gtest.h>
 
 #include <cmath>
 #include <core/xtensor_utils.hpp>
@@ -180,7 +179,5 @@ TEST(BFloat16Test, Xtensor) {
     xt::xarray<float> sum_orig = float_array + float_array;
     xt::xarray<ttml::math::bfloat16> sum_bf16 = bf16_array + bf16_array;
     xt::xarray<float> bf16_sum_back = xt::cast<float>(sum_bf16);
-    std::cout << "sum_orig: " << sum_orig << std::endl;
-    std::cout << "sum_bf16: " << bf16_sum_back << std::endl;
     EXPECT_TRUE(xt::allclose(bf16_sum_back, sum_orig, /*rtol=*/1e-3, /*atol=*/1e-2));
 }
