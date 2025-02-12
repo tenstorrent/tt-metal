@@ -17,7 +17,7 @@
 namespace {
 
 auto check_board_is_n300() {
-    return tt_ClusterDescriptor().create()->get_board_type(0) == BoardType::N300;
+    return tt_ClusterDescriptor::create()->get_board_type(0) == BoardType::N300;
 }
 
 ttml::autograd::TensorPtr get_parameter(auto& parameters, const std::string& name_substring) {

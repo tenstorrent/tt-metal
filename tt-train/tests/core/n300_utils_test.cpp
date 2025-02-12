@@ -14,7 +14,7 @@
 #include "core/tt_tensor_utils.hpp"
 
 auto check_board_is_n300() {
-    return tt_ClusterDescriptor().create()->get_board_type(0) == BoardType::N300;
+    return tt_ClusterDescriptor::create()->get_board_type(0) == BoardType::N300;
 }
 
 class N300UtilsTest : public ::testing::Test {
