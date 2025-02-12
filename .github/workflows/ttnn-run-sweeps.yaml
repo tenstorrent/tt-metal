@@ -357,14 +357,17 @@ on:
           - eltwise.binary.div_no_nan.div_no_nan
           - eltwise.binary.logical_or.logical_or_
           - eltwise.binary.logical_or.logical_or
+          - eltwise.binary.logical_or.logical_or_survey
           - eltwise.binary.logical_or.logical_or_output
           - eltwise.binary.logical_or.logical_or_forge
           - eltwise.binary.logical_or.logical_or_sharded
           - eltwise.binary.logical_xor.logical_xor_
           - eltwise.binary.logical_xor.logical_xor
+          - eltwise.binary.logical_xor.logical_xor_survey
           - eltwise.binary.logical_xor.logical_xor_sharded
           - eltwise.binary.logical_and.logical_and_
           - eltwise.binary.logical_and.logical_and
+          - eltwise.binary.logical_and.logical_and_survey
           - eltwise.binary.logical_and.logical_and_output
           - eltwise.binary.logical_and.logical_and_forge
           - eltwise.binary.logical_and.logical_and_sharded
@@ -384,11 +387,15 @@ on:
           - eltwise.binary.bcast.bcast_h_sharded
           - eltwise.binary.bcast.bcast
           - eltwise.binary.eq.eq_scalar_pytorch2
+          - eltwise.binary.eq.eq_survey
           - eltwise.binary.eq.eq_forge
           - eltwise.binary.ge.ge_forge
           - eltwise.binary.gt.gt_scalar_pytorch2
           - eltwise.binary.gt.gt_forge
+          - eltwise.binary.ge.ge_survey
+          - eltwise.binary.gt.gt_survey
           - eltwise.binary.le.le_tensor_pytorch2
+          - eltwise.binary.le.le_survey
           - eltwise.binary.fmod.fmod
           - eltwise.binary.fmod.fmod_unary
           - eltwise.binary.fmod.fmod_unary_sharded
@@ -399,11 +406,14 @@ on:
           - eltwise.binary.logaddexp2.logaddexp2
           - eltwise.binary.logaddexp2.logaddexp2_sharded
           - eltwise.binary.ldexp.ldexp
+          - eltwise.binary.ldexp.ldexp_survey
           - eltwise.binary.ldexp.ldexp_sharded
           - eltwise.binary.lt.lt_tensor_pytorch2
+          - eltwise.binary.lt.lt_survey
           - eltwise.binary.lt.lt_scalar_pytorch2
           - eltwise.binary.lt.lt_forge
           - eltwise.binary.ne.ne_scalar_pytorch2
+          - eltwise.binary.ne.ne_survey
           - eltwise.binary.ne.ne_forge
           - eltwise.binary.isclose.isclose
           - eltwise.binary.isclose.isclose_sharded
