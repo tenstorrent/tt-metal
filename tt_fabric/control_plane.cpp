@@ -559,36 +559,55 @@ std::vector<std::pair<chip_id_t, chan_id_t>> ControlPlane::get_fabric_route(
                 dst_chip_id);
         }
         auto physical_chip_id = logical_mesh_chip_id_to_physical_chip_id_mapping_[src_mesh_id][src_chip_id];
+        chan_id_t next_chan_id = 0;
         if (src_mesh_id != dst_mesh_id) {
             // Inter-mesh routing
-            chan_id_t next_chan_id =
-                this->inter_mesh_routing_tables_[src_mesh_id][src_chip_id][src_chan_id][dst_mesh_id];
-            if (src_chan_id != next_chan_id) {
-                // Chan to chan within chip
-                route.push_back({physical_chip_id, next_chan_id});
-            }
-            std::tie(src_mesh_id, src_chip_id, src_chan_id) =
-                this->get_connected_mesh_chip_chan_ids(src_mesh_id, src_chip_id, next_chan_id);
-            auto connected_physical_chip_id =
-                logical_mesh_chip_id_to_physical_chip_id_mapping_[src_mesh_id][src_chip_id];
-            route.push_back({connected_physical_chip_id, src_chan_id});
+            next_chan_id = this->inter_mesh_routing_tables_[src_mesh_id][src_chip_id][src_chan_id][dst_mesh_id];
+
         } else if (src_chip_id != dst_chip_id) {
             // Intra-mesh routing
-            chan_id_t next_chan_id =
-                this->intra_mesh_routing_tables_[src_mesh_id][src_chip_id][src_chan_id][dst_chip_id];
-            if (src_chan_id != next_chan_id) {
-                // Chan to chan within chip
-                route.push_back({physical_chip_id, next_chan_id});
-            }
-            std::tie(src_mesh_id, src_chip_id, src_chan_id) =
-                this->get_connected_mesh_chip_chan_ids(src_mesh_id, src_chip_id, next_chan_id);
-            auto connected_physical_chip_id =
-                logical_mesh_chip_id_to_physical_chip_id_mapping_[src_mesh_id][src_chip_id];
-            route.push_back({connected_physical_chip_id, src_chan_id});
+            next_chan_id = this->intra_mesh_routing_tables_[src_mesh_id][src_chip_id][src_chan_id][dst_chip_id];
         }
+        if (src_chan_id != next_chan_id) {
+            // Chan to chan within chip
+            route.push_back({physical_chip_id, next_chan_id});
+        }
+        std::tie(src_mesh_id, src_chip_id, src_chan_id) =
+            this->get_connected_mesh_chip_chan_ids(src_mesh_id, src_chip_id, next_chan_id);
+        auto connected_physical_chip_id = logical_mesh_chip_id_to_physical_chip_id_mapping_[src_mesh_id][src_chip_id];
+        route.push_back({connected_physical_chip_id, src_chan_id});
     }
 
     return route;
+}
+
+std::vector<std::pair<routing_plane_id_t, CoreCoord>> ControlPlane::get_routers_to_chip(
+    mesh_id_t src_mesh_id, chip_id_t src_chip_id, mesh_id_t dst_mesh_id, chip_id_t dst_chip_id) const {
+    std::vector<std::pair<routing_plane_id_t, CoreCoord>> routers;
+    const auto& router_direction_eth_channels =
+        router_port_directions_to_physical_eth_chan_map_[src_mesh_id][src_chip_id];
+    for (const auto& [direction, eth_chans] : router_direction_eth_channels) {
+        for (const auto& src_chan_id : eth_chans) {
+            chan_id_t next_chan_id = 0;
+            if (src_mesh_id != dst_mesh_id) {
+                // Inter-mesh routing
+                next_chan_id = this->inter_mesh_routing_tables_[src_mesh_id][src_chip_id][src_chan_id][dst_mesh_id];
+
+            } else if (src_chip_id != dst_chip_id) {
+                // Intra-mesh routing
+                next_chan_id = this->intra_mesh_routing_tables_[src_mesh_id][src_chip_id][src_chan_id][dst_chip_id];
+            }
+            if (src_chan_id != next_chan_id) {
+                continue;
+            }
+            const auto& physical_chip_id =
+                this->logical_mesh_chip_id_to_physical_chip_id_mapping_[src_mesh_id][src_chip_id];
+            routers.emplace_back(
+                this->get_routing_plane_id(src_chan_id),
+                tt::Cluster::instance().get_virtual_eth_core_from_channel(physical_chip_id, src_chan_id));
+        }
+    }
+    return routers;
 }
 
 std::vector<chip_id_t> ControlPlane::get_intra_chip_neighbors(
