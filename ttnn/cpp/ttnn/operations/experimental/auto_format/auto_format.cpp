@@ -21,7 +21,11 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::experimental::auto_format {
 
 Tensor AutoFormat::move_tensor_to_device(const Tensor& input, IDevice* device, const MemoryConfig& mem_config) {
-    return input.to_device(device, mem_config);
+    if (input.storage_type() != StorageType::DEVICE) {
+        return input.to_device(device, mem_config);
+    } else {
+        return input;
+    }
 }
 
 Tensor AutoFormat::move_tensor_to_mem_config(const Tensor& input, const MemoryConfig& mem_config) {
