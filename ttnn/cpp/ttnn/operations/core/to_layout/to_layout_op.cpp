@@ -94,15 +94,14 @@ Tensor to_layout_impl(
     const auto tile = tensor.get_tensor_spec().tile();
     auto output_shape = tensor_arg.get_logical_shape();
 
-    auto output_memory_config = ttnn::DRAM_MEMORY_CONFIG;
-    if (memory_config.has_value()) {
+    auto output_memory_config =
+        memory_config.value_or(ttnn::get_memory_config(tensor).value_or(ttnn::DRAM_MEMORY_CONFIG));
+    if (memory_config.has_value() && tensor.is_sharded()) {
         output_memory_config = memory_config.value();
-        if ((output_memory_config == ttnn::DRAM_MEMORY_CONFIG && tensor.memory_config().is_l1()) ||
-            (output_memory_config == ttnn::L1_MEMORY_CONFIG && tensor.memory_config().is_dram())) {
+        if ((output_memory_config == ttnn::DRAM_MEMORY_CONFIG && ttnn::get_memory_config(tensor)->is_l1()) ||
+            (output_memory_config == ttnn::L1_MEMORY_CONFIG && ttnn::get_memory_config(tensor)->is_dram())) {
             tensor = ttnn::to_memory_config(tensor, output_memory_config);
         }
-    } else if (tensor.memory_config().is_l1()) {
-        output_memory_config = ttnn::L1_MEMORY_CONFIG;
     }
 
     TensorSpec tile_spec(
