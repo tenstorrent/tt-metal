@@ -37,17 +37,14 @@ void copy_sticks_async(
     const uint16_t my_noc_y,
     const uint32_t in_base_l1_addr,
     const uint32_t out_base_l1_addr,
-    const uint32_t semaphore_addr = 0) {
+    const uint32_t semaphore_addr = 0,
+    const bool in_place = false) {
     int i = 0;
     int length = config_data[i + 2];
 
     while (length) {
         uint16_t noc_x = ((is_block_sharded && !is_col_major) || is_width_sharded) ? my_noc_x : config_data[i + 0];
         uint16_t noc_y = ((is_block_sharded && is_col_major) || is_width_sharded) ? my_noc_y : config_data[i + 1];
-        if (semaphore_addr) {
-            const uint64_t ref_semaphore_noc_addr = get_noc_addr(noc_x, noc_y, semaphore_addr);
-            noc_semaphore_inc(ref_semaphore_noc_addr, 1);
-        }
         length = config_data[i + 2];
         i += 3;
 
@@ -87,6 +84,15 @@ void copy_sticks_async(
         }
 
         i += length;
+
+        if (in_place) {
+            noc_async_read_barrier();
+            noc_async_write_barrier();
+            DPRINT << "increment semaphore" << ENDL();
+            // DPRINT << "noc_x: " << noc_x << " noc_y: " << noc_y << "\n";
+            const uint64_t ref_semaphore_noc_addr = get_noc_addr(noc_x, noc_y, semaphore_addr);
+            // noc_semaphore_inc(ref_semaphore_noc_addr, 1);
+        }
     }
 }
 
@@ -111,6 +117,7 @@ void kernel_main() {
     constexpr uint32_t noc_00_y = get_compile_time_arg_val(17);
     constexpr uint32_t num_cores_x = get_compile_time_arg_val(18);
     constexpr uint32_t semaphore_id = get_compile_time_arg_val(19);
+    constexpr uint32_t in_place = get_compile_time_arg_val(20);
 
     constexpr uint32_t elem_nbytes = sizeof(uint16_t);
     constexpr uint16_t pad_core_id = 0xFFFF;
@@ -153,7 +160,8 @@ void kernel_main() {
     }
 
     uint32_t semaphore_addr = 0;
-    if constexpr (remote_ref_counts_cb_id) {
+    if constexpr (in_place) {
+        DPRINT << "get semaphore" << ENDL();
         semaphore_addr = get_semaphore(semaphore_id);
     }
 
@@ -167,10 +175,14 @@ void kernel_main() {
             is_block_sharded,
             is_width_sharded,
             remote_read,
-            is_col_major>(config_data, my_noc_x, my_noc_y, in_base_l1_addr, out_base_l1_addr, semaphore_addr);
+            is_col_major>(config_data, my_noc_x, my_noc_y, in_base_l1_addr, out_base_l1_addr, semaphore_addr, in_place);
     }
 
-    if constexpr (remote_ref_counts_cb_id) {
+    DPRINT << "in_place: " << in_place << "\n";
+    DPRINT << "remote_ref_counts_cb_id: " << remote_ref_counts_cb_id << "\n";
+
+    if constexpr (in_place == true && remote_ref_counts_cb_id != 0) {
+        DPRINT << "HIT" << ENDL();
         uint32_t config_data_l1_addr = get_read_ptr(remote_ref_counts_cb_id);
         const tt_l1_ptr uint16_t* config_data = reinterpret_cast<const tt_l1_ptr uint16_t*>(config_data_l1_addr);
 
