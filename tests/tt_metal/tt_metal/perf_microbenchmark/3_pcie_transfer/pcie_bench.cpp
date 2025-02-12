@@ -127,6 +127,7 @@ public:
     struct DeviceAddresses {
         uint32_t cycles;
         uint32_t rd_bytes;
+        uint32_t wr_bytes;
         uint32_t unreserved;
     };
 
@@ -180,7 +181,8 @@ public:
         DeviceAddresses addrs;
         addrs.cycles = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
         addrs.rd_bytes = align_addr(addrs.cycles + sizeof(uint32_t), l1_alignment);
-        addrs.unreserved = align_addr(addrs.rd_bytes + sizeof(uint32_t), l1_alignment);
+        addrs.wr_bytes = align_addr(addrs.rd_bytes + sizeof(uint32_t), l1_alignment);
+        addrs.unreserved = align_addr(addrs.wr_bytes + sizeof(uint32_t), l1_alignment);
         return addrs;
     }
 
@@ -228,12 +230,13 @@ public:
     }
 
     // Configure a range of kernels to pull from PCIe. Returns the range of kernels that
-    // was configured if any. Number of readers needs to be less than 1 row or a multiple of rows.
-    std::optional<CoreRange> ConfigureReaderKernels(
+    // was configured if any. Number of kernels needs to be less than 1 row or a multiple of rows.
+    std::optional<CoreRange> ConfigureKernels(
         Program& program,
         const DeviceAddresses& dev_addrs,
         uint32_t start_y,
-        uint32_t num_readers,
+        uint32_t num_kernels,
+        bool is_writer,
         uint32_t total_size,
         uint32_t page_size,
         uint32_t pcie_size,
@@ -241,7 +244,7 @@ public:
         if (!page_size) {
             page_size = total_size;
         }
-        if (!num_readers) {
+        if (!num_kernels) {
             return {};
         }
 
@@ -253,42 +256,43 @@ public:
         // or a multiple of the rows
         CoreCoord start_coord{0, start_y};
         CoreCoord end_coord;
-        if (num_readers <= max_x) {
-            end_coord.x = start_coord.x + num_readers - 1;
+        if (num_kernels <= max_x) {
+            end_coord.x = start_coord.x + num_kernels - 1;
             end_coord.y = start_coord.y;
         } else {
-            const auto number_of_rows = num_readers / max_x;
-            const auto last_row_width = (num_readers % max_x) ? num_readers % max_x : max_x;
+            const auto number_of_rows = num_kernels / max_x;
+            const auto last_row_width = (num_kernels % max_x) ? num_kernels % max_x : max_x;
             end_coord.x = start_coord.x + last_row_width - 1;
             end_coord.y = number_of_rows - 1;
         }
         CoreRange core_range{start_coord, end_coord};
 
-        [[maybe_unused]] KernelHandle read_kernel = CreateKernel(
+        std::vector<uint32_t> pcie_bench_compile_args(12, 0);
+        if (is_writer) {
+            pcie_bench_compile_args[5] = 0;                   // reserved_0
+            pcie_bench_compile_args[6] = pcie_offset;         // pcie_wr_base
+            pcie_bench_compile_args[7] = pcie_size;           // pcie_wr_size
+            pcie_bench_compile_args[8] = page_size;           // pcie_wr_transfer_size
+            pcie_bench_compile_args[9] = dev_addrs.wr_bytes;  // my_bytes_wr_addr
+        } else {
+            // reader
+            pcie_bench_compile_args[0] = dev_addrs.unreserved,  // my_rd_dst_addr
+                pcie_bench_compile_args[1] = pcie_offset;       // pcie_rd_base
+            pcie_bench_compile_args[2] = pcie_size;             // pcie_rd_size
+            pcie_bench_compile_args[3] = page_size;             // pcie_rd_transfer_size
+            pcie_bench_compile_args[4] = dev_addrs.rd_bytes;    // my_bytes_rd_addr
+        }
+        pcie_bench_compile_args[10] = total_size;
+        pcie_bench_compile_args[11] = dev_addrs.cycles;
+
+        [[maybe_unused]] KernelHandle kernel = CreateKernel(
             program,
             std::string{k_PcieBenchKernel},
             core_range,
             DataMovementConfig{
                 .processor = DataMovementProcessor::RISCV_1,
                 .noc = tt::tt_metal::NOC_0,
-                .compile_args =
-                    {
-                        dev_addrs.unreserved,  // my_rd_dst_addr
-                        pcie_offset,  // pcie_rd_base. From the device's perspective the pcie base is 0. device bar is
-                                      // mapped to hugepage.
-                        pcie_size,    // pcie_rd_size
-                        page_size,    // pcie_rd_transfer_size
-                        dev_addrs.rd_bytes,  // my_bytes_rd_addr
-
-                        0,  // my_wr_src_addr
-                        0,  // pcie_wr_base
-                        0,  // pcie_wr_size
-                        0,  // pcie_wr_transfer_size
-                        0,  // my_bytes_wr_addr
-
-                        total_size,        // total_bytes
-                        dev_addrs.cycles,  // cycles
-                    },
+                .compile_args = pcie_bench_compile_args,
                 .defines = {},
             });
 
@@ -342,7 +346,7 @@ BENCHMARK_DEFINE_F(MemCpyPcieBench, BM_HostHP_N_Readers)(benchmark::State& state
         auto src_data = this->GenSrcData(total_size);  // Already aligned
         auto program = Program();
         auto configured_readers =
-            ConfigureReaderKernels(program, dev_addrs, 0, num_readers, total_size, page_size, hp_size);
+            ConfigureKernels(program, dev_addrs, 0, num_readers, false, total_size, page_size, hp_size);
 
         std::atomic<bool> start_flag{false};
         std::atomic<int> thread_ready{0};
@@ -524,7 +528,7 @@ BENCHMARK_DEFINE_F(MemCpyPcieBench, BM_HostHP_DifferentPage)(benchmark::State& s
 
         auto program = Program();
         auto configured_readers =
-            ConfigureReaderKernels(program, dev_addrs, 0, k_NumReaders, k_TotalSize, k_PageSize, first_hp_size);
+            ConfigureKernels(program, dev_addrs, 0, k_NumReaders, false, k_TotalSize, k_PageSize, first_hp_size);
 
         tt::log_info("channel {} hugepage = {:#x}", channel, (uint64_t)first_hp);
         tt::log_info("channel {} hugepage = {:#x}", channel + 1, (uint64_t)second_hp);
@@ -584,63 +588,170 @@ BENCHMARK_DEFINE_F(MemCpyPcieBench, BM_HostHP_DifferentPage)(benchmark::State& s
     state.counters["num_readers"] = 1;
 }
 
-// BENCHMARK_REGISTER_F(MemCpyPcieBench, BM_HostHP_N_Readers)
-//     ->Name("0_Host_Write_HP_N_Readers")
-//     ->ArgsProduct({
-//         {1_GB}, // Total size
-//         {4_KB, 16_KB, 32_KB}, // Page size
-//         {1, 2, 3, 4, 5, 6, 7, 8, 16, 24, 32}, // Num kernels
-//         {0}, // Cached vector
-//         {1},  // Host Copy
-//     });
+// Host writing to one half of hugepage while device writes to another half
+BENCHMARK_DEFINE_F(MemCpyPcieBench, BM_HostHP_N_Writers)(benchmark::State& state) {
+    const auto total_size = state.range(0);
+    const auto page_size = state.range(1);
+    const auto pages = total_size / page_size;
+    const auto num_writers = state.range(2);
+    const auto cached_vector = static_cast<bool>(state.range(3));
+    const auto enable_host_write = static_cast<bool>(state.range(4));
+    const auto hp_size = this->GetHostHugePageSize();
+    const auto hp_base = this->GetHostHugePage(0);  // Already aligned
+    const auto hp_end = reinterpret_cast<uint64_t>(hp_base) + hp_size;
+    const auto dev_addrs = this->GetDevAddrMap();
 
-// BENCHMARK_REGISTER_F(MemCpyPcieBench, BM_HostHP_N_Readers)
-//     ->Name("1_Host_Write_HP_N_Readers_Cached_Vector")
-//     ->ArgsProduct({
-//         {1_GB}, // Total size
-//         {4_KB, 16_KB, 32_KB}, // Page size
-//         {1, 2, 3, 4, 5, 6, 7, 8, 16, 24, 32}, // Num kernels
-//         {1}, // Cached vector
-//         {1}, // Host copy
-//     });
+    // Device will write to second half of hugepage
+    const auto pcie_offset = total_size;
+    const auto remaining_pcie_size = hp_size - pcie_offset;
 
-// BENCHMARK_REGISTER_F(MemCpyPcieBench, BM_HostHP_N_Readers)
-//     ->Name("2_N_Readers_No_Host_Copy")
-//     ->ArgsProduct({
-//         {1_GB}, // Total size
-//         {4_KB, 16_KB, 32_KB}, // Page size
-//         {1, 2, 3, 4, 5, 6, 7, 8, 16, 24, 32}, // Num kernels
-//         {0}, // Cached vector
-//         {0}, // Host copy
-//     });
+    double total_device_time = 0;
+    double total_device_bytes = 0;
+    double total_iteration_time = 0;
 
-// BENCHMARK_REGISTER_F(MemCpyPcieBench, BM_HostHP_N_Threads)
-//     ->Name("3_Host_Write_HP_N_Threads_No_Kernels")
-//     ->ArgsProduct({
-//         {1_GB}, // Total size
-//         {4_KB, 16_KB, 32_KB}, // Page size
-//         {0}, // Num kernels
-//         {0}, // Cached vector
-//         {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}, // Thread count
-//     });
+    for (auto _ : state) {
+        auto src_data = this->GenSrcData(total_size);  // Already aligned
+        auto program = Program();
+        auto configured_writers = ConfigureKernels(
+            program, dev_addrs, 0, num_writers, true, total_size, page_size, remaining_pcie_size, pcie_offset);
 
-// BENCHMARK_REGISTER_F(MemCpyPcieBench, BM_HostHP_N_Threads)
-//     ->Name("4_Host_Write_HP_N_Threads_Cached_Vector_No_Kernels")
-//     ->ArgsProduct({
-//         {1_GB}, // Total size
-//         {4_KB, 16_KB, 32_KB}, // Page size
-//         {0}, // Num kernels
-//         {1}, // Cached vector
-//         {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16}, // Thread count
-//     });
+        std::atomic<bool> start_flag{false};
+        std::atomic<int> thread_ready{0};
+        std::chrono::duration<double> program_time;
 
-// BENCHMARK_REGISTER_F(MemCpyPcieBench, BM_BatchSizing)
-//     ->Name("5_MyMemcpyToDevice_Sizing")
-//     ->ArgsProduct({
-//         {1_GB}, // Total size
-//         {4, 8, 16, 32, 64, 128, 256, 512, 1_KB, 4_KB, 8_KB, 16_KB, 32_KB}, // Size
-//     });
+        auto thread = std::thread([&]() {
+            thread_ready++;
+            while (!start_flag.load()) {
+                std::this_thread::yield();
+            }
+
+            auto launch_start = std::chrono::high_resolution_clock::now();
+            detail::LaunchProgram(this->device, program, true);
+            auto launch_end = std::chrono::high_resolution_clock::now();
+            program_time = std::chrono::duration_cast<std::chrono::duration<double>>(launch_end - launch_start);
+        });
+
+        while (!thread_ready.load()) {
+            std::this_thread::yield();
+        }
+
+        start_flag.store(true);
+
+        std::chrono::duration<double> hp_duration{1};
+        if (enable_host_write) {
+            if (cached_vector) {
+                hp_duration = HostWriteHP<true>(hp_base, hp_size, src_data, total_size, page_size);
+            } else {
+                hp_duration = HostWriteHP<false>(hp_base, hp_size, src_data, total_size, page_size);
+            }
+        }
+        thread.join();
+
+        if (configured_writers.has_value()) {
+            auto dev_cycles = this->GetWordsFromDevice(configured_writers.value(), dev_addrs.cycles);
+            auto dev_bytes_write = this->GetWordsFromDevice(configured_writers.value(), dev_addrs.wr_bytes);
+            auto dev_clk = tt::Cluster::instance().get_device_aiclk(device->id()) * 1e6;  // Hz
+            double all_cores_cycles = std::reduce(dev_cycles.begin(), dev_cycles.end());
+            double all_cores_bytes_read = std::reduce(dev_bytes_write.begin(), dev_bytes_write.end());
+
+            total_device_time += all_cores_cycles / dev_clk;
+            total_device_bytes += all_cores_bytes_read;
+        }
+
+        state.SetIterationTime(hp_duration.count());
+        total_iteration_time += hp_duration.count();
+    }
+
+    state.SetBytesProcessed(total_size * state.iterations());
+    state.counters["dev_bandwidth_per_second"] = (total_device_bytes / total_device_time);
+    state.counters["dev_bytes"] = total_device_bytes;
+    state.counters["total_size"] = total_size;
+    state.counters["page_size"] = page_size;
+    state.counters["num_writers"] = num_writers;
+}
+
+BENCHMARK_DEFINE_F(MemCpyPcieBench, BM_HostHP_N_Writers_DifferentPage)(benchmark::State& state) {
+    for (auto _ : state) {
+    }
+}
+
+BENCHMARK_REGISTER_F(MemCpyPcieBench, BM_HostHP_N_Readers)
+    ->Name("0_Host_Write_HP_N_Readers")
+    ->ArgsProduct({
+        {1_GB},                                // Total size
+        {4_KB, 16_KB, 32_KB},                  // Page size
+        {1, 2, 3, 4, 5, 6, 7, 8, 16, 24, 32},  // Num kernels
+        {0},                                   // Cached vector
+        {1},                                   // Host Copy
+    });
+
+BENCHMARK_REGISTER_F(MemCpyPcieBench, BM_HostHP_N_Readers)
+    ->Name("1_Host_Write_HP_N_Readers_Cached_Vector")
+    ->ArgsProduct({
+        {1_GB},                                // Total size
+        {4_KB, 16_KB, 32_KB},                  // Page size
+        {1, 2, 3, 4, 5, 6, 7, 8, 16, 24, 32},  // Num kernels
+        {1},                                   // Cached vector
+        {1},                                   // Host copy
+    });
+
+BENCHMARK_REGISTER_F(MemCpyPcieBench, BM_HostHP_N_Readers)
+    ->Name("2_N_Readers_No_Host_Copy")
+    ->ArgsProduct({
+        {1_GB},                                // Total size
+        {4_KB, 16_KB, 32_KB},                  // Page size
+        {1, 2, 3, 4, 5, 6, 7, 8, 16, 24, 32},  // Num kernels
+        {0},                                   // Cached vector
+        {0},                                   // Host copy
+    });
+
+BENCHMARK_REGISTER_F(MemCpyPcieBench, BM_HostHP_N_Threads)
+    ->Name("3_Host_Write_HP_N_Threads_No_Kernels")
+    ->ArgsProduct({
+        {1_GB},                                                   // Total size
+        {4_KB, 16_KB, 32_KB},                                     // Page size
+        {0},                                                      // Num kernels
+        {0},                                                      // Cached vector
+        {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},  // Thread count
+    });
+
+BENCHMARK_REGISTER_F(MemCpyPcieBench, BM_HostHP_N_Threads)
+    ->Name("4_Host_Write_HP_N_Threads_Cached_Vector_No_Kernels")
+    ->ArgsProduct({
+        {1_GB},                                                   // Total size
+        {4_KB, 16_KB, 32_KB},                                     // Page size
+        {0},                                                      // Num kernels
+        {1},                                                      // Cached vector
+        {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16},  // Thread count
+    });
+
+BENCHMARK_REGISTER_F(MemCpyPcieBench, BM_BatchSizing)
+    ->Name("5_MyMemcpyToDevice_Sizing")
+    ->ArgsProduct({
+        {1_GB},                                                             // Total size
+        {4, 8, 16, 32, 64, 128, 256, 512, 1_KB, 4_KB, 8_KB, 16_KB, 32_KB},  // Size
+    });
 
 BENCHMARK_REGISTER_F(MemCpyPcieBench, BM_HostHP_DifferentPage)->Name("6_HostHP_1_Reader_DifferentPage");
+
+BENCHMARK_REGISTER_F(MemCpyPcieBench, BM_HostHP_N_Writers)
+    ->Name("7_Host_Write_HP_1_Writer")
+    ->ArgsProduct({
+        {512_MB},              // Total size. Half of 1GB hugepage.
+        {4_KB, 16_KB, 32_KB},  // Page size
+        {1},                   // Num kernels
+        {0},                   // Cached vector
+        {1},                   // Host Copy
+    });
+
+BENCHMARK_REGISTER_F(MemCpyPcieBench, BM_HostHP_N_Writers)
+    ->Name("8_Writer_Kernel_Only")
+    ->ArgsProduct({
+        {512_MB},              // Total size. Half of 1GB hugepage.
+        {4_KB, 16_KB, 32_KB},  // Page size
+        {1, 2, 3, 4},          // Num kernels
+        {0},                   // Cached vector
+        {0},                   // Host Copy
+    });
 
 BENCHMARK_MAIN();
