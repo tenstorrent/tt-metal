@@ -54,6 +54,9 @@ on:
       #ci-test-docker-image:
       #  description: "Docker tag for the CI Test Docker image for testing TT-Metalium et al"
       #  value: ${{ jobs.build-docker-image.outputs.ci-test-tag }}
+      artifact-name:
+        description: "Name of the published artifact"
+        value: ${{ steps.set_artifact_name.outputs.artifact_name }}
 
 
   workflow_dispatch:
@@ -213,11 +216,18 @@ jobs:
         if: ${{ inputs.publish-artifact }}
         run: tar -cvhf /work/ttm_any.tar ttnn/ttnn/*.so build/lib ttnn/ttnn/*.so build/programming_examples build/test build/tools build/tt-train data runtime
 
+      - name: Set artifact name
+        id: set_artifact_name
+        run: |
+          ARTIFACT_NAME="TTMetal_build_any${{ (inputs.tracy && '_profiler') || '' }}"
+          echo "artifact_name=$ARTIFACT_NAME" >> "$GITHUB_ENV"
+          echo "artifact_name=$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
+
       - name: ☁️ Upload tarball
         if: ${{ inputs.publish-artifact }}
         uses: actions/upload-artifact@v4
         with:
-          name: TTMetal_build_any${{ (inputs.tracy && '_profiler') || '' }}
+          name: ${{ env.artifact_name }}
           path: /work/ttm_any.tar
           if-no-files-found: error
 

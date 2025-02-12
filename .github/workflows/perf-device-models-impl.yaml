@@ -10,6 +10,9 @@ on:
       docker-image:
         required: true
         type: string
+      artifact-name:
+        required: true
+        type: string
 
 jobs:
   device-perf:
@@ -49,7 +52,7 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          name: TTMetal_build_any
+          name: ${{ inputs.artifact-name }}
           path: docker-job
 
       - name: Extract files
