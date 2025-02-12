@@ -5,8 +5,12 @@ torch.random.manual_seed(0)
 
 # Load the model from the custom path
 custom_path = "/proj_sw/user_dev/hf_data/"
-model = AutoModelForCausalLM.from_pretrained("microsoft/Phi-3.5-mini-instruct", cache_dir=custom_path)
-tokenizer = AutoTokenizer.from_pretrained("microsoft/Phi-3.5-mini-instruct", cache_dir=custom_path)
+model = AutoModelForCausalLM.from_pretrained(
+    "microsoft/Phi-3.5-mini-instruct", cache_dir=custom_path, trust_remote_code=True
+)
+tokenizer = AutoTokenizer.from_pretrained(
+    "microsoft/Phi-3.5-mini-instruct", cache_dir=custom_path, trust_remote_code=True
+)
 
 messages = [
     {"role": "system", "content": "You are a helpful AI assistant."},
