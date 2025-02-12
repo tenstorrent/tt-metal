@@ -157,7 +157,7 @@ def test_tt_model_acc(
             text = f.read()
 
         # Encode text to tokens
-        encoded_tokens = tokenizer.encode(text, bos=True, eos=False)
+        encoded_tokens = model_args.encode_prompt(text, system_prompt_text=None, instruct=False)
         total_length = prefill_len + decode_len + 1
         reference_tokens = torch.tensor(encoded_tokens[:total_length]).unsqueeze(0)
         top5_tokens = None  # Will be computed during inference
@@ -439,17 +439,18 @@ def test_tt_model_acc(
                 true_word = sanitize(tokenizer.decode([true_token]))
                 logger.info(f"{error['position']}: {context}[{incorrect}] != [{expected}], true: [{true_word}]")
 
-    # Get accuracy thresholds from PERF.md
-    min_top1_acc, min_top5_acc = get_accuracy_thresholds(
-        model_args.base_model_name,
-        model_args.device_name,
-        optimizations,
-    )
+    if use_reference_file:
+        # Get accuracy thresholds from PERF.md
+        min_top1_acc, min_top5_acc = get_accuracy_thresholds(
+            model_args.base_model_name,
+            model_args.device_name,
+            optimizations,
+        )
 
-    logger.info(f"Top-1: {total_top1_acc:.0f}% | Top-5: {total_top5_acc:.0f}%")
-    assert (
-        total_top1_acc >= min_top1_acc
-    ), f"Top-1 accuracy {total_top1_acc:.1f}% is too low (expected >={min_top1_acc}%)"
-    assert (
-        total_top5_acc >= min_top5_acc
-    ), f"Top-5 accuracy {total_top5_acc:.1f}% is too low (expected >={min_top5_acc}%)"
+        logger.info(f"Top-1: {total_top1_acc:.0f}% | Top-5: {total_top5_acc:.0f}%")
+        assert (
+            total_top1_acc >= min_top1_acc
+        ), f"Top-1 accuracy {total_top1_acc:.1f}% is too low (expected >={min_top1_acc}%)"
+        assert (
+            total_top5_acc >= min_top5_acc
+        ), f"Top-5 accuracy {total_top5_acc:.1f}% is too low (expected >={min_top5_acc}%)"
