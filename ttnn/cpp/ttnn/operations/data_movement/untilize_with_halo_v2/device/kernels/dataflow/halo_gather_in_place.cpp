@@ -44,6 +44,10 @@ void copy_sticks_async(
     while (length) {
         uint16_t noc_x = ((is_block_sharded && !is_col_major) || is_width_sharded) ? my_noc_x : config_data[i + 0];
         uint16_t noc_y = ((is_block_sharded && is_col_major) || is_width_sharded) ? my_noc_y : config_data[i + 1];
+        if (semaphore_addr) {
+            const uint64_t ref_semaphore_noc_addr = get_noc_addr(noc_x, noc_y, semaphore_addr);
+            noc_semaphore_inc(ref_semaphore_noc_addr, 1);
+        }
         length = config_data[i + 2];
         i += 3;
 
@@ -142,15 +146,18 @@ void kernel_main() {
         }
     }
 
-    // TODO: is this needed?
-    /* // input shards
+    // input shards
     if constexpr (local_config_cb_id) {
         cb_reserve_back(src_cb_id, in_nsticks);
         cb_push_back(src_cb_id, in_nsticks);
     }
 
-    cb_wait_front(in_cb_id, in_nsticks);  // make sure untilized data is available */
+    uint32_t semaphore_addr = 0;
+    if constexpr (remote_ref_counts_cb_id) {
+        semaphore_addr = get_semaphore(semaphore_id);
+    }
 
+    cb_wait_front(in_cb_id, in_nsticks);  // make sure untilized data is available
     if constexpr (remote_config_cb_id) {
         uint32_t config_data_l1_addr = get_read_ptr(remote_config_cb_id);
         const tt_l1_ptr uint16_t* config_data = reinterpret_cast<const tt_l1_ptr uint16_t*>(config_data_l1_addr);
@@ -160,10 +167,9 @@ void kernel_main() {
             is_block_sharded,
             is_width_sharded,
             remote_read,
-            is_col_major>(config_data, my_noc_x, my_noc_y, in_base_l1_addr, out_base_l1_addr);
+            is_col_major>(config_data, my_noc_x, my_noc_y, in_base_l1_addr, out_base_l1_addr, semaphore_addr);
     }
 
-    uint32_t semaphore_addr = 0;
     if constexpr (remote_ref_counts_cb_id) {
         uint32_t config_data_l1_addr = get_read_ptr(remote_ref_counts_cb_id);
         const tt_l1_ptr uint16_t* config_data = reinterpret_cast<const tt_l1_ptr uint16_t*>(config_data_l1_addr);
@@ -172,7 +178,6 @@ void kernel_main() {
         uint16_t remote_refs_to_me = config_data[remote_ref_index];
         DPRINT << "remote_refs: " << remote_refs_to_me << "\n";
 
-        semaphore_addr = get_semaphore(semaphore_id);
         const uint64_t my_semaphore_noc_addr = get_noc_addr(my_noc_x, my_noc_y, semaphore_addr);
         volatile tt_l1_ptr uint32_t* my_semaphore_noc_addr_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(my_semaphore_noc_addr);
@@ -188,7 +193,7 @@ void kernel_main() {
             is_block_sharded,
             is_width_sharded,
             false,
-            is_col_major>(config_data, my_noc_x, my_noc_y, in_base_l1_addr, out_base_l1_addr, semaphore_addr);
+            is_col_major>(config_data, my_noc_x, my_noc_y, in_base_l1_addr, out_base_l1_addr);
     }
 
     noc_async_read_barrier();
