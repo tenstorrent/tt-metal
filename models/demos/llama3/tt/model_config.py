@@ -1540,9 +1540,13 @@ class TtModelArgs:
                 return self.tokenizer.encode(prompt_text, bos=True, eos=False)
         else:
             if instruct:
-                return encode_prompt_hf(self.tokenizer, prompt_text, system_prompt_text)
-            else:
-                return self.tokenizer.encode(prompt_text, add_special_tokens=False)
+                try:
+                    return encode_prompt_hf(self.tokenizer, prompt_text, system_prompt_text)
+                except ValueError as e:
+                    logger.warning(f"Failed to encode chat prompt, are you sure this is an instruct model? Error: {e}")
+                    logger.warning(f"Falling back to base model encoding with no chat template")
+
+            return self.tokenizer.encode(prompt_text, add_special_tokens=False)
 
     def reference_lm_head(self):
         if self.checkpoint_type == CheckpointType.Meta:
