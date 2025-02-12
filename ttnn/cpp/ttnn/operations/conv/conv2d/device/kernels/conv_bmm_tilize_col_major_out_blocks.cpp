@@ -259,6 +259,9 @@ void MAIN {
                             // matmul outer product of (out_subblock_h x out_subblock_w) tiles that fill dst
                             // accumulation is done by iterating matmul_block across inner dim
                             // in0_block_w is passed as innder dim (kt) to matmul_block, interally used to stride in0
+                            for (uint32_t x = 0; x < 10; ++x) {
+                                asm volatile("nop");
+                            }
                             matmul_block(
                                 mm_in0_cb_id,
                                 in1_cb_id,

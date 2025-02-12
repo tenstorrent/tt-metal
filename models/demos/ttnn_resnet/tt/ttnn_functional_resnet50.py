@@ -472,6 +472,7 @@ class resnet50Bottleneck:
             return_output_dim=True,
             return_weights_and_bias=False,
         )
+
         if layer_module and layer_module == "layer4_module1":
             if ops_parallel_config and "layer4_module1_input" not in ops_parallel_config:
                 x_memory_config = ttnn.get_memory_config(out)
@@ -1336,6 +1337,7 @@ class resnet50:
             enable_act_double_buffer=True,
             enable_split_reader=False,
             enable_subblock_padding=False,
+            layer_module="layer4_module2",
         )
 
         logger.debug(f"==== Running layer 4 module 3")
@@ -1353,7 +1355,8 @@ class resnet50:
         )
 
         grid_size = (8, 4)
-        grid_size = (8, 8)
+        if self.batch_size > 16:
+            grid_size = (8, 8)
         shard_grid = ttnn.CoreRangeSet(
             {
                 ttnn.CoreRange(
