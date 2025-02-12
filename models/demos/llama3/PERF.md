@@ -11,16 +11,16 @@ This configuration uses bfp4 MLP FF1+FF3 for all models.
 | Model          | Device | Top-1 (%) | Top-5 (%) | Speed (t/s/u) |
 |----------------|--------|-----------|-----------|---------------|
 | Llama3.2-1B    | N150   | 89        | 98        | 86.9          |
-| Llama3.2-1B    | N300   | 91        | 98        | 104.3         |
-| Llama3.2-1B    | T3K    | 91        | 98        | 118.5         |
+| Llama3.2-1B    | N300   | 90        | 98        | 104.3         |
+| Llama3.2-1B    | T3K    | 87        | 98        | 118.5         |
 | Llama3.2-1B    | TG     |           |           | 72.3          |
-| Llama3.2-3B    | N150   | 92        | 96        | 53.3          |
+| Llama3.2-3B    | N150   | 91        | 96        | 53.3          |
 | Llama3.2-3B    | N300   | 91        | 96        | 66.1          |
 | Llama3.2-3B    | T3K    | 91        | 96        | 66.9          |
 | Llama3.2-3B    | TG     |           |           | 48.5          |
 | Llama3.1-8B    | N150   | 87        | 99        | 27.9          |
 | Llama3.1-8B    | N300   | 88        | 99        | 43.7          |
-| Llama3.1-8B    | T3K    | 88        | 100       | 64.2          |
+| Llama3.1-8B    | T3K    | 88        | 99        | 64.2          |
 | Llama3.1-8B    | TG     |           |           | 41.0          |
 | Llama3.2-11B   | N300   | 89        | 99        | 43.5          |
 | Llama3.2-11B   | T3K    | 88        | 99        | 63.4          |
@@ -37,12 +37,12 @@ This configuration uses bfp4 MLP FF1+FF3 only for the Llama-3.1-70B model and th
 | Model          | Device | Top-1 (%) | Top-5 (%) | Speed (t/s/u) |
 |----------------|--------|-----------|-----------|---------------|
 | Llama3.2-1B    | N150   | 88        | 98        | 86.8          |
-| Llama3.2-1B    | N300   | 90        | 98        | 98.1          |
-| Llama3.2-1B    | T3K    | 90        | 98        | 97.5          |
+| Llama3.2-1B    | N300   | 88        | 98        | 98.1          |
+| Llama3.2-1B    | T3K    | 89        | 99        | 97.5          |
 | Llama3.2-1B    | TG     | 87        | 98        | 51.3          |
-| Llama3.2-3B    | N150   | 93        | 99        | 44.2          |
+| Llama3.2-3B    | N150   | 92        | 99        | 44.2          |
 | Llama3.2-3B    | N300   | 92        | 98        | 54.2          |
-| Llama3.2-3B    | T3K    | 93        | 98        | 55.6          |
+| Llama3.2-3B    | T3K    | 91        | 100       | 55.6          |
 | Llama3.2-3B    | TG     | 91        | 98        | 33.6          |
 | Llama3.1-8B    | N150   | 93        | 100       | 23.6          |
 | Llama3.1-8B    | N300   | 93        | 100       | 34.5          |
