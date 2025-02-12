@@ -211,7 +211,7 @@ jobs:
       - name: 🐍 Build wheel
         if: ${{ inputs.build-wheel }}
         run: |
-          git clean -xfd
+          git clean -xffd
           nice -n 19 python3 -m build
 
       - name: ☁️ Upload wheel
