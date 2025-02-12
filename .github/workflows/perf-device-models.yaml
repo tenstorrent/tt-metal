@@ -16,3 +16,5 @@ jobs:
     needs: build-artifact-profiler
     secrets: inherit
     uses: ./.github/workflows/perf-device-models-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact-profiler.outputs.ci-build-docker-image }}
