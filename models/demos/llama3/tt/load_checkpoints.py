@@ -87,8 +87,8 @@ def map_hf_to_meta_keys(loaded_weights):
         "v_proj.bias": "wv.bias",
         "weight": "emb.weight",  # For host embeddings
         # Full path layer mappings
-        "model.layers.{layer}.input_layernorm.weight": "layers.{layer}.attention_norm.weight",
-        "model.layers.{layer}.post_attention_layernorm.weight": "layers.{layer}.ffn_norm.weight",
+        "model.layers.{layer}.input_layernorm.weight": "layers.{layer}.attention.wq.weight",
+        "model.layers.{layer}.post_attention_layernorm.weight": "layers.{layer}.attention.wk.weight",
         "model.layers.{layer}.self_attn.q_proj.weight": "layers.{layer}.attention.wq.weight",
         "model.layers.{layer}.self_attn.k_proj.weight": "layers.{layer}.attention.wk.weight",
         "model.layers.{layer}.self_attn.v_proj.weight": "layers.{layer}.attention.wv.weight",
@@ -98,7 +98,7 @@ def map_hf_to_meta_keys(loaded_weights):
         "model.layers.{layer}.self_attn.v_proj.bias": "layers.{layer}.attention.wv.bias",
         "model.layers.{layer}.mlp.gate_proj.weight": "layers.{layer}.feed_forward.w1.weight",
         "model.layers.{layer}.mlp.up_proj.weight": "layers.{layer}.feed_forward.w3.weight",
-        "model.layers.{layer}.mlp.down_proj.weight": "layers.{layer}.feed_forward.w2.weight",
+        "model.layers.{layer}.mlp.down_proj.weight": "layers.{layer}.attention.wv.weight",
     }
 
     meta_state_dict = {}
