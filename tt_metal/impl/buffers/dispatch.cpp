@@ -77,11 +77,12 @@ ShardedBufferWriteDispatchParams initialize_sharded_buf_dispatch_params(
     const BufferDispatchConstants& buf_dispatch_constants,
     const BufferRegion& region) {
     ShardedBufferWriteDispatchParams dispatch_params;
-    dispatch_params.width_split = buffer.shard_spec().shape_in_pages()[1] != buffer.shard_spec().tensor2d_shape[1];
+    dispatch_params.width_split =
+        buffer.shard_spec().shape_in_pages()[1] != buffer.shard_spec().tensor2d_shape_in_pages[1];
     dispatch_params.buffer_page_mapping = (dispatch_params.width_split) ? buffer.get_buffer_page_mapping() : nullptr;
     dispatch_params.total_pages_to_write = region.size / buffer.page_size();
     dispatch_params.total_pages_written = 0;
-    dispatch_params.max_pages_per_shard = buffer.shard_spec().size();
+    dispatch_params.max_pages_per_shard = buffer.shard_spec().num_pages();
     dispatch_params.page_size_to_write = buffer.aligned_page_size();
     dispatch_params.dst_page_index = region.offset / buffer.page_size();
     dispatch_params.starting_dst_host_page_index = region.offset / buffer.page_size();
@@ -587,11 +588,12 @@ ShardedBufferReadDispatchParams initialize_sharded_buf_read_dispatch_params(
     dispatch_params.src_page_index = region.offset / buffer.page_size();
     dispatch_params.starting_src_host_page_index = region.offset / buffer.page_size();
     dispatch_params.unpadded_dst_offset = 0;
-    dispatch_params.width_split = buffer.shard_spec().shape_in_pages()[1] != buffer.shard_spec().tensor2d_shape[1];
+    dispatch_params.width_split =
+        buffer.shard_spec().shape_in_pages()[1] != buffer.shard_spec().tensor2d_shape_in_pages[1];
     dispatch_params.buffer_page_mapping = (dispatch_params.width_split) ? buffer.get_buffer_page_mapping() : nullptr;
     dispatch_params.total_pages_to_read = region.size / buffer.page_size();
     dispatch_params.total_pages_read = 0;
-    dispatch_params.max_pages_per_shard = buffer.shard_spec().size();
+    dispatch_params.max_pages_per_shard = buffer.shard_spec().num_pages();
     dispatch_params.expected_num_workers_completed = expected_num_workers_completed;
     return dispatch_params;
 }

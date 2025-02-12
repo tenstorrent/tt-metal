@@ -184,7 +184,7 @@ std::optional<ShardSpecBuffer> TensorLayout::compute_shard_spec_buffer(const ttn
         page_shape.height());
     const auto width_in_pages = physical_size.width() / page_shape.width();
     const auto height_in_pages = physical_size.height() / page_shape.height();
-    const std::array<uint32_t, 2> tensor2d_shape{height_in_pages, width_in_pages};
+    const std::array<uint32_t, 2> tensor2d_shape_in_pages{height_in_pages, width_in_pages};
 
     auto shard_spec = memory_config_.shard_spec.value();
 
@@ -198,7 +198,7 @@ std::optional<ShardSpecBuffer> TensorLayout::compute_shard_spec_buffer(const ttn
         default: TT_THROW("Unsupported shard mode {} in compute_shard_spec_buffer!", shard_spec.mode);
     }
 
-    ShardSpecBuffer shard_spec_buffer(shard_spec, std::array<uint32_t, 2>(page_shape), tensor2d_shape);
+    ShardSpecBuffer shard_spec_buffer(shard_spec, std::array<uint32_t, 2>(page_shape), tensor2d_shape_in_pages);
     return shard_spec_buffer;
 }
 
