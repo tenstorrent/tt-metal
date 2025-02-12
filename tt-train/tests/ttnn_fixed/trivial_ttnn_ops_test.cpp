@@ -8,7 +8,6 @@
 
 #include <core/ttnn_all_includes.hpp>
 #include <memory>
-#include <ttnn/operations/core/compute_kernel/compute_kernel_config.hpp>
 #include <vector>
 
 #include "autograd/auto_context.hpp"
@@ -152,14 +151,14 @@ TEST_F(TrivialTnnFixedTest, TestSumOverBatch_0) {
 
     auto shape = ttml::core::create_shape({batch_size, 1, 1, features});
     auto tensor = ttml::core::from_vector(data, shape, device);
-    auto tensor_shape = tensor.get_shape();
+    auto tensor_shape = tensor.get_logical_shape();
     EXPECT_EQ(tensor_shape[0], batch_size);
     EXPECT_EQ(tensor_shape[1], 1U);
     EXPECT_EQ(tensor_shape[2], 1U);
     EXPECT_EQ(tensor_shape[3], features);
 
     auto result = ttml::ttnn_fixed::sum_over_batch(tensor);
-    const auto& result_shape = result.get_shape();
+    const auto& result_shape = result.get_logical_shape();
     ASSERT_EQ(result_shape.rank(), 4U);
     EXPECT_EQ(result_shape[0], 1U);
     EXPECT_EQ(result_shape[1], 1U);
@@ -184,7 +183,7 @@ TEST_F(TrivialTnnFixedTest, TestDivide) {
     auto rhs_tensor = ttml::core::from_vector(rhs, shape, device);
 
     auto result = ttml::ttnn_fixed::divide(lhs_tensor, rhs_tensor);
-    const auto& result_shape = result.get_shape();
+    const auto& result_shape = result.get_logical_shape();
     ASSERT_EQ(result_shape.rank(), 4U);
     EXPECT_EQ(result_shape[0], batch_size);
     EXPECT_EQ(result_shape[1], 1U);
@@ -213,14 +212,14 @@ TEST_F(TrivialTnnFixedTest, TestSumOverBatch_1) {
 
     auto shape = ttml::core::create_shape({batch_size, 1, 1, features});
     auto tensor = ttml::core::from_vector(data, shape, device);
-    auto tensor_shape = tensor.get_shape();
+    auto tensor_shape = tensor.get_logical_shape();
     EXPECT_EQ(tensor_shape[0], batch_size);
     EXPECT_EQ(tensor_shape[1], 1U);
     EXPECT_EQ(tensor_shape[2], 1U);
     EXPECT_EQ(tensor_shape[3], features);
 
     auto result = ttml::ttnn_fixed::sum_over_batch(tensor);
-    const auto& result_shape = result.get_shape();
+    const auto& result_shape = result.get_logical_shape();
     ASSERT_EQ(result_shape.rank(), 4U);
     EXPECT_EQ(result_shape[0], 1U);
     EXPECT_EQ(result_shape[1], 1U);

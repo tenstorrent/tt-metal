@@ -29,7 +29,7 @@ def test_to_layout_2D(device, height, width, on_device, from_layout, to_layout, 
             torch_input_tensor, (0, pad_w, 0, pad_h), mode="constant", value=0.0
         )
         input_tensor = ttnn.from_torch(torch_padded_input_tensor)
-        input_tensor = ttnn.reshape(input_tensor, shape=ttnn.Shape([height, width], ((0, pad_h), (0, pad_w))))
+        input_tensor = ttnn.reshape(input_tensor, [height, width], [height + pad_h, width + pad_w])
     else:
         input_tensor = ttnn.from_torch(torch_input_tensor)
     assert input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
@@ -51,10 +51,10 @@ def test_to_layout_2D(device, height, width, on_device, from_layout, to_layout, 
 
     if (start_with_padding and from_layout == to_layout) or to_layout == ttnn.TILE_LAYOUT:
         assert output_tensor.shape == (height, width)
-        assert output_tensor.shape.with_tile_padding() == (height + pad_h, width + pad_w)
+        assert output_tensor.padded_shape == (height + pad_h, width + pad_w)
     else:
         assert output_tensor.shape == (height, width)
-        assert output_tensor.shape.with_tile_padding() == (height, width)
+        assert output_tensor.padded_shape == (height, width)
 
     output_tensor = ttnn.to_torch(output_tensor)
 
@@ -231,3 +231,111 @@ def test_to_layout_sharded(dtype, device, use_program_cache):
     output = ttnn.to_layout(ttnn_input_tensor1, ttnn.ROW_MAJOR_LAYOUT)
 
     assert_with_pcc(torch_input_tensor1, ttnn.to_torch(output), 0.9999)
+
+
+@skip_for_grayskull()
+@pytest.mark.parametrize("batch_size", [9, 32])
+@pytest.mark.parametrize("sentence_size", [32, 256])
+def test_int_untilize(device, batch_size, sentence_size):
+    torch_input_tensor = torch.randint(0, 10, (batch_size, sentence_size), dtype=torch.int16)
+    ttnn_input = ttnn.from_torch(torch_input_tensor, device=device, dtype=ttnn.uint16, layout=ttnn.TILE_LAYOUT)
+
+    output_tt = ttnn.to_layout(ttnn_input, ttnn.ROW_MAJOR_LAYOUT)
+    output_torch = ttnn.to_torch(output_tt)
+
+    assert_with_pcc(torch_input_tensor, output_torch)
+
+
+@pytest.mark.parametrize("shape", [[143], [64], [380]])
+@pytest.mark.parametrize("input_layout", [ttnn.ROW_MAJOR_LAYOUT])
+@pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT])
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+def test_to_layout_for_1D(shape, dtype, input_layout, output_layout, device):
+    torch.manual_seed(2005)
+    input_a = torch.randn(shape, dtype=dtype)
+    input_tensor = ttnn.from_torch(input_a, device=device, layout=input_layout)
+    output_tensor = ttnn.to_layout(input_tensor, output_layout)
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert_with_pcc(input_a, output_tensor)
+
+
+@pytest.mark.parametrize("shape", [[30], [64], [2040]])
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+def test_tilize_with_padding_for_1D(shape, dtype, device):
+    torch.manual_seed(2005)
+    input_a = torch.randn(shape, dtype=dtype)
+    input_tensor = ttnn.from_torch(input_a, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.tilize_with_zero_padding(input_tensor)
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert_with_pcc(input_a, output_tensor)
+
+
+@pytest.mark.parametrize("shape", [[1, 9, 91, 7, 9]])
+def test_to_layout_page_error(shape, device):
+    torch.manual_seed(2005)
+
+    torch_tensor = torch.rand(shape, dtype=torch.bfloat16)
+
+    input_tensor = ttnn.from_torch(torch_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.to_layout(input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    torch_output = torch_tensor
+    assert torch_output.shape == output_tensor.shape
+    assert_with_pcc(torch_output, output_tensor, 0.9999)
+
+
+@pytest.mark.parametrize("shape", [[64, 7680]])
+@pytest.mark.parametrize("output_layout", [ttnn.ROW_MAJOR_LAYOUT])
+@pytest.mark.parametrize("input_layout", [ttnn.TILE_LAYOUT])
+def test_untilize_w1(shape, input_layout, output_layout, device):
+    torch.manual_seed(0)
+    input_a = torch.randn(shape, dtype=torch.bfloat16)
+
+    input_tensor = ttnn.from_torch(input_a, device=device, layout=input_layout, dtype=ttnn.bfloat16)
+    output_tensor = ttnn.untilize_with_unpadding(input_tensor, [36, 7667])
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(input_a[:37, :7668], output_tensor)
+
+
+@pytest.mark.parametrize("shape", [[2, 32, 6144]])
+@pytest.mark.parametrize("output_layout", [ttnn.ROW_MAJOR_LAYOUT])
+@pytest.mark.parametrize("input_layout", [ttnn.TILE_LAYOUT])
+def test_untilize_w2(shape, input_layout, output_layout, device):
+    torch.manual_seed(0)
+    input_a = torch.randn(shape, dtype=torch.bfloat16)
+
+    input_tensor = ttnn.from_torch(input_a, device=device, layout=input_layout, dtype=ttnn.bfloat16)
+    output_tensor = ttnn.untilize_with_unpadding(input_tensor, [1, 30, 6140])
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(input_a[:, :31, :6141], output_tensor)
+
+
+@pytest.mark.parametrize("shape", [[1, 1, 32, 1536]])
+@pytest.mark.parametrize("output_layout", [ttnn.ROW_MAJOR_LAYOUT])
+@pytest.mark.parametrize("input_layout", [ttnn.TILE_LAYOUT])
+def test_untilize_w3(shape, input_layout, output_layout, device):
+    torch.manual_seed(0)
+    input_a = torch.randn(shape, dtype=torch.bfloat16)
+
+    input_tensor = ttnn.from_torch(input_a, device=device, layout=input_layout, dtype=ttnn.bfloat16)
+    output_tensor = ttnn.untilize_with_unpadding(input_tensor, [0, 0, 31, 1535])
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(input_a[:, :, :32, :1536], output_tensor)
+
+
+@pytest.mark.parametrize("shape", [[1, 1, 32, 10912]])
+@pytest.mark.parametrize("output_layout", [ttnn.ROW_MAJOR_LAYOUT])
+@pytest.mark.parametrize("input_layout", [ttnn.TILE_LAYOUT])
+def test_untilize_w4(shape, input_layout, output_layout, device):
+    torch.manual_seed(0)
+    input_a = torch.randn(shape, dtype=torch.bfloat16)
+
+    input_tensor = ttnn.from_torch(input_a, device=device, layout=input_layout, dtype=ttnn.bfloat16)
+    output_tensor = ttnn.untilize_with_unpadding(input_tensor, [0, 0, 0, 10911])
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    assert_with_pcc(input_a[:, :, :1, :10912], output_tensor)

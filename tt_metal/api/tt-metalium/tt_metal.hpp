@@ -26,6 +26,7 @@ namespace detail {
 bool DispatchStateCheck(bool isFastDispatch);
 
 bool InWorkerThread();
+inline bool InMainThread() { return not InWorkerThread(); }
 
 std::map<chip_id_t, IDevice*> CreateDevices(
     // TODO: delete this in favour of DevicePool
@@ -329,10 +330,6 @@ bool ReadFromDeviceL1(
     IDevice* device, const CoreCoord& logical_core, uint32_t address, uint32_t size, std::vector<uint32_t>& host_buffer);
 
 bool ReadRegFromDevice(IDevice* device, const CoreCoord& logical_core, uint32_t address, uint32_t& regval);
-
-DeviceAddr AllocateBuffer(Buffer* buffer);
-
-void DeallocateBuffer(Buffer* buffer);
 
 void SynchronizeWorkerThreads(const std::vector<IDevice*>& workers);
 }  // namespace detail

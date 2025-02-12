@@ -11,7 +11,7 @@
 namespace NAMESPACE {
 void MAIN {
     uint32_t n_tiles = get_arg_val<uint32_t>(0);
-    uint32_t core_id = get_arg_val<uint32_t>(1);  // Add core ID argument
+    uint32_t start_tile_id = get_arg_val<uint32_t>(1);
 
     // We are going to read from these two circular buffers
     constexpr auto cb_in0 = get_compile_time_arg_val(0);
@@ -33,27 +33,30 @@ void MAIN {
     // And we are going to add tiles. This function is only called if we ever
     // need to switch operation to something else. Since we are only adding
     // tiles, this function is only called once before the loop.
-    add_tiles_init();
+    add_tiles_init(cb_in0, cb_in1);
 
     // Calculate the range of tiles this core should process
-    const uint32_t tiles_per_core = n_tiles;
-    const uint32_t start_tile = core_id * tiles_per_core;
-    const uint32_t end_tile = start_tile + tiles_per_core;
+    const uint32_t end_tile_id = start_tile_id + n_tiles;
 
     // Loop over the assigned tiles and perform the computation
-    for (uint32_t i = start_tile; i < end_tile; i++) {
-        // Make sure there is a valid register we can use.
-        acquire_dst();
+    for (uint32_t i = start_tile_id; i < end_tile_id; i++) {
         // Wait until there is a tile in both input circular buffers
         cb_wait_front(cb_in0, 1);
         cb_wait_front(cb_in1, 1);
+        // Make sure there is a valid register we can use.
+        tile_regs_acquire();
         // Add the tiles from the input circular buffers and write the result to
         // the destination register
         add_tiles(cb_in0, cb_in1, 0, 0, dst_reg);
+        tile_regs_commit();
+
         // Make sure there is space in the output circular buffer
         cb_reserve_back(cb_out0, 1);
+        tile_regs_wait();
         // Copy the result from adding the tiles to the output circular buffer
         pack_tile(dst_reg, cb_out0);
+        tile_regs_release();
+
         // Mark the output tile as ready and pop the input tiles
         cb_push_back(cb_out0, 1);
         cb_pop_front(cb_in0, 1);

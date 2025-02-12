@@ -13,7 +13,6 @@
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/run_operation.hpp"
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/command_queue.hpp>
 #include "ttnn/core.hpp"
 #include "ttnn/types.hpp"

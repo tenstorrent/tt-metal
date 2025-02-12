@@ -7,8 +7,8 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/rtoptions.hpp>
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
-#include "kernels/traffic_gen_test.hpp"
-#include <tt-metalium/llrt.hpp>
+#include "test_common.hpp"
+#include "llrt.hpp"
 
 using std::vector;
 using namespace tt;

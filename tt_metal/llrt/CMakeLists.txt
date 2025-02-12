@@ -107,6 +107,7 @@ target_link_libraries(
         Reflect::Reflect
         magic_enum
         span
-        Metalium::Metal::Impl
+        common
 )
+target_include_directories(llrt PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_options(llrt PRIVATE -Wno-int-to-pointer-cast)

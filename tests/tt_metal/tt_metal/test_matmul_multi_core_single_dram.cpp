@@ -312,7 +312,7 @@ int main(int argc, char** argv) {
         int per_core_M = M / num_cores_r;
         int per_core_N = N / num_cores_c;
         uint32_t single_tile_size = 2 * 1024;
-        uint32_t dram_unreserved_base = device->get_base_allocator_addr(HalMemType::DRAM);
+        uint32_t dram_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::DRAM);
         log_info(LogTest, "M = {}, N = {}, K = {}", M, N, K);
         log_info(LogTest, "Activation = {}x{}", M * 32, K * 32);
         log_info(LogTest, "Weights = {}x{}", K * 32, N * 32);

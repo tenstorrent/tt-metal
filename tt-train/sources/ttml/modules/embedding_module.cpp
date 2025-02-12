@@ -37,7 +37,7 @@ Embedding::Embedding(uint32_t num_embeddings, uint32_t embedding_dim) {
 }
 
 autograd::TensorPtr Embedding::operator()(const autograd::TensorPtr& tensor) {
-    auto sentence_size = tensor->get_value().get_shape()[-1];
+    auto sentence_size = tensor->get_value().get_logical_shape()[-1];
     if (sentence_size % TILE_HEIGHT != 0 || sentence_size % TILE_WIDTH != 0) {
         throw std::logic_error(fmt::format(
             "sentence_size must be a multiple of TILE_HEIGHT and TILE_WIDTH, current sentence_size {}", sentence_size));

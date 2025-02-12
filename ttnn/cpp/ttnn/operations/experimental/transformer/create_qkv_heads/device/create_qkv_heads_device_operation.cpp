@@ -5,8 +5,6 @@
 #include "create_qkv_heads_device_operation.hpp"
 #include <tt-metalium/work_split.hpp>
 
-#include <tt-metalium/host_api.hpp>
-
 namespace ttnn::operations::experimental::transformer {
 
 void CreateQKVHeadsDeviceOperation::validate(const std::vector<Tensor>& input_tensors) const {
@@ -20,7 +18,7 @@ void CreateQKVHeadsDeviceOperation::validate(const std::vector<Tensor>& input_te
         "Unsupported data format");
     TT_FATAL(input_tensor.get_layout() == Layout::TILE, "Error");
     TT_FATAL(input_tensor.is_sharded(), "Operands to TM must be sharded");
-    const auto input_shape = input_tensor.get_legacy_shape();
+    const auto input_shape = input_tensor.get_padded_shape();
     TT_FATAL(input_shape[1] == 1, "Unsupported input shape");
 
     auto bbox = input_tensor.shard_spec().value().grid.bounding_box();
@@ -56,11 +54,10 @@ std::vector<ttnn::TensorSpec> CreateQKVHeadsDeviceOperation::compute_output_spec
     const auto& input_tensor = input_tensors.at(0);
     const auto input_shape = input_tensor.get_padded_shape();
 
-    const auto q_shape = ttnn::SimpleShape{input_shape[0], this->num_q_heads, input_shape[2], this->head_dim};
-    const auto v_shape = ttnn::SimpleShape{input_shape[0], this->num_kv_heads, input_shape[2], this->head_dim};
-    const auto k_shape = this->transpose_k_heads
-                             ? ttnn::SimpleShape{input_shape[0], this->num_kv_heads, head_dim, input_shape[2]}
-                             : v_shape;
+    const auto q_shape = ttnn::Shape{input_shape[0], this->num_q_heads, input_shape[2], this->head_dim};
+    const auto v_shape = ttnn::Shape{input_shape[0], this->num_kv_heads, input_shape[2], this->head_dim};
+    const auto k_shape =
+        this->transpose_k_heads ? ttnn::Shape{input_shape[0], this->num_kv_heads, head_dim, input_shape[2]} : v_shape;
 
     if (output_tensors.size() == 3) {
         return {

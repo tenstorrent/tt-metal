@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/run_operation.hpp"
 #include "device/split_op.hpp"
@@ -75,10 +75,10 @@ std::vector<Tensor> split_dim_n_chunks_rm(
             output_chunk = output_chunk.pad_to_tile(0.0);
         }
 
-        output_chunk = output_chunk.to(layout);
+        output_chunk = output_chunk.to_layout(layout);
 
         if (device) {
-            output_chunk = output_chunk.to(*device);
+            output_chunk = output_chunk.to_device(*device);
         }
 
         output_tensors.push_back(output_chunk);
@@ -97,7 +97,7 @@ std::vector<Tensor> impl_split_last_dim_two_chunks_tiled(const Tensor& input_ten
 }
 
 std::vector<Tensor> split_last_dim_two_chunks_tiled(const Tensor& input_tensor, const MemoryConfig& mem_config) {
-    const auto shape = input_tensor.get_legacy_shape();
+    const auto shape = input_tensor.get_padded_shape();
     const bool pre_post_reshape = shape[0] > 1;
 
     if (!pre_post_reshape) {
@@ -140,7 +140,7 @@ std::vector<Tensor> split_dim_n_chunks_tiled(
 }  // namespace detail
 
 std::vector<ttnn::Tensor> SplitOperation::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     int64_t& num_splits,
     int64_t& dim,

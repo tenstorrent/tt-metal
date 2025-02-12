@@ -26,7 +26,7 @@ cached_program_t fold_multi_core(const Tensor& input, const Tensor& output, uint
     uint32_t num_dst_pixels = num_pixels / (stride_h * stride_w);
 
     // chunk consists of channel values of stride_w neighboring pixels along the W dimension
-    uint32_t width = input.get_legacy_shape()[2];
+    uint32_t width = input.get_padded_shape()[2];
     uint32_t chunk_size = stride_w * pixel_size;
     uint32_t row_size = width * pixel_size;
     uint32_t dst_pixel_size = stride_h * chunk_size;
@@ -112,7 +112,7 @@ void Fold::MultiCore::override_runtime_arguments(
     uint32_t num_pixels = shard_shape[0];
     uint32_t num_dst_pixels = num_pixels / (stride_h * stride_w);
 
-    uint32_t width = input_tensor.get_legacy_shape()[2];
+    uint32_t width = input_tensor.get_padded_shape()[2];
     uint32_t chunk_size = stride_w * pixel_size;
     uint32_t row_size = width * pixel_size;
     uint32_t dst_pixel_size = stride_h * chunk_size;

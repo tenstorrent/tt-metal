@@ -123,11 +123,7 @@ inline std::vector<NewT> cast(const tt::tt_metal::borrowed_buffer::Buffer<OldT>&
 
 template <typename T>
 Tensor create_owned_tensor(
-    std::vector<T>&& data,
-    const SimpleShape& logical_shape,
-    const SimpleShape& padded_shape,
-    DataType data_type,
-    Layout layout) {
+    std::vector<T>&& data, const Shape& logical_shape, const Shape& padded_shape, DataType data_type, Layout layout) {
     auto buffer = tt::tt_metal::owned_buffer::create(std::move(data));
     auto storage = tt::tt_metal::OwnedStorage{std::move(buffer)};
     return Tensor(
@@ -140,35 +136,35 @@ Tensor create_owned_tensor(
 template <typename T>
 inline Tensor create_tensor_from_buffer(
     const tt::tt_metal::borrowed_buffer::Buffer<T>& input_buffer,
-    const SimpleShape& logical_shape,
-    const SimpleShape& padded_shape,
+    const Shape& logical_shape,
+    const Shape& padded_shape,
     const Layout& input_layout,
     const DataType& dtype) {
     switch (dtype) {
         case DataType::UINT16: {
             auto data = cast<uint16_t, T>(input_buffer);
             return create_owned_tensor(std::move(data), logical_shape, padded_shape, dtype, Layout::ROW_MAJOR)
-                .to(input_layout);
+                .to_layout(input_layout);
         }
         case DataType::INT32: {
             auto data = cast<int32_t, T>(input_buffer);
             return create_owned_tensor(std::move(data), logical_shape, padded_shape, dtype, Layout::ROW_MAJOR)
-                .to(input_layout);
+                .to_layout(input_layout);
         }
         case DataType::UINT32: {
             auto data = cast<uint32_t, T>(input_buffer);
             return create_owned_tensor(std::move(data), logical_shape, padded_shape, dtype, Layout::ROW_MAJOR)
-                .to(input_layout);
+                .to_layout(input_layout);
         }
         case DataType::FLOAT32: {
             auto data = cast<float, T>(input_buffer);
             return create_owned_tensor(std::move(data), logical_shape, padded_shape, dtype, Layout::ROW_MAJOR)
-                .to(input_layout);
+                .to_layout(input_layout);
         }
         case DataType::BFLOAT16: {
             auto data = cast<::bfloat16, T>(input_buffer);
             return create_owned_tensor(std::move(data), logical_shape, padded_shape, dtype, Layout::ROW_MAJOR)
-                .to(input_layout);
+                .to_layout(input_layout);
         }
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B: {
@@ -180,7 +176,7 @@ inline Tensor create_tensor_from_buffer(
                               padded_shape,
                               DataType::FLOAT32,
                               Layout::ROW_MAJOR)
-                              .to(Layout::TILE);
+                              .to_layout(Layout::TILE);
             auto output_float_data = tt::tt_metal::owned_buffer::get_as<float>(tensor).get();
             auto output_packed_data =
                 dtype == DataType::BFLOAT8_B
@@ -248,7 +244,7 @@ struct ToDtype {
             return input_tensor;
         }
 
-        auto row_major_input_tensor = input_tensor.to(ttnn::ROW_MAJOR_LAYOUT);
+        auto row_major_input_tensor = input_tensor.to_layout(ttnn::ROW_MAJOR_LAYOUT);
         auto intermediate_tensor = distributed::is_multi_device_tensor(row_major_input_tensor)
                                        ? transform(row_major_input_tensor, detail::convert_to_cpp_supported_dtype)
                                        : detail::convert_to_cpp_supported_dtype(row_major_input_tensor);

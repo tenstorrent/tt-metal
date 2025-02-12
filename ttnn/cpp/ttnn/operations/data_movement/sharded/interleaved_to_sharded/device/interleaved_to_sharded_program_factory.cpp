@@ -18,7 +18,7 @@ namespace ttnn::operations::data_movement::detail {
 operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
     const Tensor& input, const Tensor& output, bool keep_l1_aligned, uint32_t num_slices, uint32_t slice_index) {
     tt::tt_metal::Program program{};
-
+    keep_l1_aligned = true;
     uint32_t num_units, num_units_per_shard, input_unit_size, output_unit_size, num_units_per_shard_width,
         num_units_per_shard_height, num_units_offset, num_units_per_row, num_units_per_shard_height_last,
         num_units_per_shard_width_last, padded_offset_bytes;
@@ -45,28 +45,34 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
         num_units = input.volume() / TILE_HW;
         input_unit_size = tt::tt_metal::detail::TileSize(input_cb_data_format);
         output_unit_size = tt::tt_metal::detail::TileSize(output_cb_data_format);
+        TT_FATAL(
+            shard_spec.shape[0] % TILE_HEIGHT == 0 && shard_spec.shape[1] % TILE_WIDTH == 0,
+            "Shard shape {} must be tile {}x{} sized!",
+            shard_spec.shape,
+            TILE_HEIGHT,
+            TILE_WIDTH);
         num_units_per_shard_height = shard_spec.shape[0] / TILE_HEIGHT;
         num_units_per_shard_width = shard_spec.shape[1] / TILE_WIDTH;
         num_units_per_shard = num_units_per_shard_height * num_units_per_shard_width;
-        num_units_per_row = input.get_legacy_shape()[-1] / TILE_WIDTH;
+        num_units_per_row = input.get_padded_shape()[-1] / TILE_WIDTH;
         num_units_offset = num_units_per_row;
-        uint32_t num_units_height = input.volume() / input.get_legacy_shape()[-1] / TILE_HEIGHT / num_slices;
+        uint32_t num_units_height = input.volume() / input.get_padded_shape()[-1] / TILE_HEIGHT / num_slices;
         num_units_per_shard_height_last =
             num_units_per_shard_height - (tt::round_up(num_units_height, num_units_per_shard_height) - num_units_height);
         num_units_per_shard_width_last =
             num_units_per_shard_width - (tt::round_up(num_units_per_row, num_units_per_shard_width) - num_units_per_row);
         padded_offset_bytes = (num_units_per_shard_width - num_units_per_shard_width_last) * input_unit_size;
     } else {
-        num_units = (input.volume() / input.get_legacy_shape()[-1] / shard_spec.shape[0]) *
-                    (input.get_legacy_shape()[-1] / shard_spec.shape[1]);
+        num_units = (input.volume() / input.get_padded_shape()[-1] / shard_spec.shape[0]) *
+                    (input.get_padded_shape()[-1] / shard_spec.shape[1]);
         input_unit_size = shard_spec.shape[1] * input.element_size();
         output_unit_size = shard_spec.shape[1] * output.element_size();
         num_units_per_shard_height = shard_spec.shape[0];
         num_units_per_shard_width = 1;
         num_units_per_shard = num_units_per_shard_height * num_units_per_shard_width;
-        num_units_per_row = input.get_legacy_shape()[-1] * input.element_size();
+        num_units_per_row = input.get_padded_shape()[-1] * input.element_size();
         num_units_offset = 1;
-        uint32_t num_units_height = input.volume() / input.get_legacy_shape()[-1];
+        uint32_t num_units_height = input.volume() / input.get_padded_shape()[-1];
         num_units_per_shard_height_last =
             num_units_per_shard_height - (tt::round_up(num_units_height, num_units_per_shard_height) - num_units_height);
         // TODO: Use a different variable name. Units refers to pages, but this is being used as size
@@ -80,7 +86,6 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
             padded_offset_bytes = tt::align(input_unit_size, input.buffer()->alignment());
         }
     }
-
 
     auto all_cores = shard_spec.grid;
     uint32_t input_cb_index = tt::CBIndex::c_0;
@@ -252,9 +257,9 @@ operation::ProgramWithCallbacks interleaved_to_sharded_multi_core(
 
             uint32_t dram_alignment = hal.get_alignment(HalMemType::DRAM);
             uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
-            bool aligned = (src_is_dram ? curr_idx_w % dram_alignment == 0 : true);
+            bool aligned = (src_is_dram ? (curr_idx_w % dram_alignment == 0) && (padded_offset_bytes % dram_alignment == 0) : true);
             //for blackhole and keep_l1_aligned cases, always enforce unaligned kernel call
-            aligned = aligned and !(is_blackhole) and !(keep_l1_aligned);
+            aligned = aligned and !(is_blackhole);
             uint32_t aligned_width_offset, aligned_shard_width, aligned_offset;
             if (!aligned) {
                 //TODO: is this right, leaving non BH case the same for now, should investigate

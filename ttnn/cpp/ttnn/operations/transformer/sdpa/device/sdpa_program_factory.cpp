@@ -121,7 +121,7 @@ operation::ProgramWithCallbacks sdpa_multi_core(
         const auto& page_table_tensor = page_table.value();
         block_size = k_shape[2];  // K's sequence dimension represents block size
         block_size_t = block_size / TILE_HEIGHT;
-        max_blocks_per_seq = page_table_tensor.get_legacy_shape()[1];
+        max_blocks_per_seq = page_table_tensor.get_padded_shape()[1];
         page_table_stick_size = page_table_tensor.buffer()->aligned_page_size();
         TT_FATAL(
             page_table_stick_size % 32 == 0,

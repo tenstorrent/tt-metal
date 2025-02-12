@@ -21,7 +21,7 @@ using namespace tt::tt_metal;
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 static void UpdateGoldenOutput(std::vector<string>& golden_output, const IDevice* device, const string& risc) {
-    // Using wildcard characters in lieu of actual values for the physical coordinates as physical coordinates can vary
+    // Using wildcard characters in lieu of actual values for the virtual coordinates as virtual coordinates can vary
     // by machine
     const string& device_core_risc = std::to_string(device->id()) + ":(x=*,y=*):" + risc + ": ";
 

@@ -18,12 +18,15 @@ def data_gen_with_range_batch_norm(
     device,
     is_input=False,
     required_grad=False,
+    testing_dtype="bfloat16",
 ):
     assert high > low, "Incorrect range provided"
     torch.manual_seed(213919)
     channels = input_shapes[1]
     size = input_shapes if is_input else channels
-    pt_tensor = torch.rand(size, requires_grad=required_grad).bfloat16() * (high - low) + low
+    torch_dtype = getattr(torch, testing_dtype)
+    ttnn_dtype = getattr(ttnn, testing_dtype)
+    pt_tensor = torch.rand(size, requires_grad=required_grad, dtype=torch_dtype) * (high - low) + low
     reshaped_tensor = pt_tensor
     if not is_input:
         reshaped_tensor = pt_tensor.view(1, channels, 1, 1)
@@ -31,7 +34,7 @@ def data_gen_with_range_batch_norm(
         reshaped_tensor,
         device=device,
         layout=ttnn.TILE_LAYOUT,
-        dtype=ttnn.bfloat16,
+        dtype=ttnn_dtype,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     return pt_tensor, tt_tensor
@@ -133,7 +136,7 @@ def compare_results(tt_tensor, golden_tensor, pcc=0.99):
     return status
 
 
-def compare_results_batch_norm(tt_tensor, golden_tensor, pcc=0.99):
+def compare_results_batch_norm(tt_tensor, golden_tensor, pcc=0.99, stats=False):
     status = True
     for i in range(len(tt_tensor)):
         tt_out_tensor = tt_tensor[i]
@@ -144,7 +147,11 @@ def compare_results_batch_norm(tt_tensor, golden_tensor, pcc=0.99):
         logger.debug(comp_all)
         logger.debug(comp_out)
         logger.debug(comp_out_res)
-        status = status & comp_pass & comp_all
+        if stats:
+            status = status & comp_all
+        else:
+            status = status & comp_pass & comp_all
+
     return status
 
 

@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include <tt-metalium/work_split.hpp>
@@ -431,7 +432,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     tt_metal::IDevice* device = a.device();
     TT_FATAL(a.get_layout() == Layout::ROW_MAJOR, "Conv activation should be in row major layout");
     TT_FATAL(a.memory_config().is_sharded(), "Conv activation must be sharded.");
-    TT_FATAL(output_channels <= b.get_legacy_shape()[3], "Invalid weight shape. Incorrect weight tensor.");
+    TT_FATAL(output_channels <= b.get_padded_shape()[3], "Invalid weight shape. Incorrect weight tensor.");
     uint32_t act_block_h_ntiles = block_config.act_block_h_ntiles;
     uint32_t act_block_w_ntiles = block_config.act_block_w_ntiles;
     uint32_t weight_block_w_ntiles = div_up(parallelization_config.per_core_out_matrix_width, TILE_WIDTH);
@@ -513,10 +514,10 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
 
     // Tensor b has weights and it should be tiled layout after converting conv weights into weight matrix
     TT_FATAL(b.get_layout() == Layout::TILE, "Conv weights should be in tiled layout");
-    TT_FATAL(b.get_legacy_shape()[0] == 1, "Conv weight matrix shape is invalid");
-    TT_FATAL(b.get_legacy_shape()[1] == 1, "Conv weight matrix shape is invalid");
-    uint32_t weight_matrix_height = b.get_legacy_shape()[2];
-    uint32_t weight_matrix_width = b.get_legacy_shape()[3];
+    TT_FATAL(b.get_padded_shape()[0] == 1, "Conv weight matrix shape is invalid");
+    TT_FATAL(b.get_padded_shape()[1] == 1, "Conv weight matrix shape is invalid");
+    uint32_t weight_matrix_height = b.get_padded_shape()[2];
+    uint32_t weight_matrix_width = b.get_padded_shape()[3];
     uint32_t weight_matrix_height_ntiles = weight_matrix_height / TILE_HEIGHT;
     uint32_t weight_matrix_width_ntiles = weight_matrix_width / TILE_WIDTH;
 
@@ -562,8 +563,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     // check is for 16-byte alignment
     TT_FATAL(
         input_channels_padded % 16 == 0,
-        "Expected input channels to be padded for 16 byte alignment in L1");  // TODO: For bfp16, check if its divisible
-                                                                              // by 8 not 16.
+        "Expected input channels to be padded for 16 byte alignment in L1 ({} % 16 != 0)",
+        input_channels_padded);  // TODO: For bfp16, check if its divisible by 8 not 16.
     // Always use split reader for first conv in resnet which has input channels = 16
     // TODO: Expose option to split readers for 1D convs to python?
     // bool split_reader = use_shallow_conv_variant;
@@ -579,8 +580,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
             block_config.act_block_h_ntiles % block_config.out_subblock_h_ntiles == 0,
             "Out_block_h must be divisible by out_subblock_h!");
     }
-    ttnn::Shape ashape_with_channels_padded(
-        ttnn::SmallVector<uint32_t>({ashape[0], ashape[1], ashape[2], input_channels_padded}));
+    ttnn::Shape ashape_with_channels_padded({ashape[0], ashape[1], ashape[2], input_channels_padded});
     uint32_t conv_act_size_h = ashape_with_channels_padded[1];
     uint32_t conv_act_size_w = ashape_with_channels_padded[2];
     uint32_t conv_act_size_c = ashape_with_channels_padded[3];
@@ -603,7 +603,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     // Compute the 2d matrix shape
     auto [act_matrix_shape, act_matrix_shape_unpadded] =
         optimized_conv_op_utils::compute_opt_conv_activation_as_mm_shape(
-            ashape_with_channels_padded.value,
+            ashape_with_channels_padded,
             sliding_window_config,
             parallelization_config.num_cores_nhw,
             out_block_h_ntiles);
@@ -623,10 +623,11 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     uint32_t input_width = ashape[2];
     uint32_t input_channels = ashape[3];
     bool is_conv1d = filter_w == 1 && input_width == 1;
-    bool is_depthwise_conv = groups == input_channels && groups == output_channels;
+    bool is_conv_1d_depthwise_conv =
+        is_1d_deptwise_conv(groups, input_channels, output_channels, filter_w, input_width);
 
     if (has_bias) {
-        if (is_conv1d and is_depthwise_conv) {
+        if (is_conv_1d_depthwise_conv) {
             TT_THROW("Bias is not supported for depthwise conv1d");
         }
         // Tensor bias is of shape {output_channels}
@@ -637,7 +638,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     }
 
     // matrix multiplication shape check valid for all convs except depthwise conv1d
-    if (!is_conv1d and !is_depthwise_conv) {
+    if (!is_conv_1d_depthwise_conv) {
         TT_FATAL(
             act_matrix_width == weight_matrix_height, "The width of tensor a needs to match the height of tensor b");
     }
@@ -702,7 +703,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     uint32_t weight_block_w_datums = weight_matrix_width / num_blocks_weight_w;
     assert(weight_block_w_ntiles % out_subblock_w_ntiles == 0);
     uint32_t weight_num_subblocks = weight_block_w_ntiles / out_subblock_w_ntiles;
-    uint32_t weight_block_h_ntiles = is_conv1d and is_depthwise_conv ? act_block_h_ntiles : act_block_w_ntiles;
+    uint32_t weight_block_h_ntiles = is_conv_1d_depthwise_conv ? act_block_h_ntiles : act_block_w_ntiles;
     uint32_t weight_block_num_tiles = weight_block_w_ntiles * weight_block_h_ntiles;
 
     uint32_t num_groups = num_blocks_act_h * num_blocks_act_w * num_blocks_weight_w;
@@ -753,7 +754,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         bias_buffer = bias.value().buffer();
         bias_dram_addr = bias_buffer->address();
         bias_ntiles =
-            bias.value().get_legacy_shape()[3] / constants::TILE_WIDTH;  // TODO: support non tile multiple sizes
+            bias.value().get_padded_shape()[3] / constants::TILE_WIDTH;  // TODO: support non tile multiple sizes
     }
     auto output_shape = sliding_window_config.get_output_shape();
     uint32_t conv_output_size_h = output_shape[1];
@@ -1104,7 +1105,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     bool packer_l1_acc_en = determine_packer_l1_acc(packer_l1_acc, has_bias, in0_num_blocks_w);
 
     std::tuple<CBHandle, CBHandle> input_output_cbs = {0, 0};
-    if (is_conv1d and is_depthwise_conv) {
+    if (is_conv_1d_depthwise_conv) {
         input_output_cbs = create_CBs_for_depthwise_sharded_input(
             program,
             a,
@@ -1200,7 +1201,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
 
             // For 2D convs, pre-tilize input and round robin self-mcast tilized act matrix to other cores
             tilize_in0 = false;
-        } else if (is_conv1d and is_depthwise_conv) {
+        } else if (is_conv_1d_depthwise_conv) {
             // 1D Depthwise Conv
             TT_FATAL(act_block_w_datums == round_up(conv_act_size_c * filter_w, TILE_WIDTH), "Error");
             TT_FATAL(split_reader == false, "Split reader not supported for this conv yet!");

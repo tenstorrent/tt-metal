@@ -24,10 +24,12 @@ const uint32_t SYNC_BUF_PTR_MASK = ((SYNC_BUF_SIZE << 1) - 1);
 extern uint64_t xy_local_addr;
 extern volatile local_pull_request_t* local_pull_request;
 extern volatile fabric_router_l1_config_t* routing_table;
+extern chan_payload_ptr inbound_rdptr_ack;
+extern volatile chan_payload_ptr remote_rdptr;
 
 uint64_t tt_fabric_send_pull_request(uint64_t dest_addr, volatile local_pull_request_t* local_pull_request);
 uint32_t num_words_available_to_pull(volatile pull_request_t* pull_request);
-uint32_t words_before_buffer_wrap(uint32_t buffer_size, uint32_t rd_ptr);
+uint32_t words_before_pull_buffer_wrap(uint32_t buffer_size, uint32_t rd_ptr);
 uint32_t advance_ptr(uint32_t buffer_size, uint32_t ptr, uint32_t inc_words);
 uint32_t get_rd_ptr_offset_words(pull_request_t* pull_request);
 
@@ -38,46 +40,38 @@ inline uint64_t get_timestamp() {
 }
 
 typedef struct fvc_consumer_state {
-    volatile chan_payload_ptr remote_rdptr;
-    uint32_t remote_ptr_update_addr;
     uint8_t chan_num;
-    uint8_t packet_in_progress;
-    uint8_t sync_buf_wrptr;
-    uint8_t sync_buf_rdptr;
+    uint8_t pad[3];
+    uint32_t packet_in_progress;
     uint32_t packet_words_remaining;
-    uint32_t fvc_out_wrptr;
     uint32_t fvc_out_rdptr;
     uint32_t fvc_pull_wrptr;
     uint32_t buffer_size;
+    uint32_t buffer_size_2x;
     uint32_t buffer_start;
     uint32_t remote_buffer_start;
     uint32_t pull_words_in_flight;
-    uint32_t words_since_last_sync;
-    uint32_t words_to_forward;
-    uint8_t sync_pending;
-    uint8_t padding[3];
-    uint32_t sync_buf[SYNC_BUF_SIZE];
+    uint32_t total_words_to_forward;
+    uint32_t words_sent_remote_update;
+    volatile uint32_t* sender_buffer_space;
+    volatile uint32_t* update_sender_buffer_space;
+    volatile uint32_t* receiver_buffer_space;
+    volatile uint32_t* update_receiver_buffer_space;
 
-    uint32_t get_num_words_free() {
-        uint32_t rd_ptr = remote_rdptr.ptr;
-        uint32_t words_occupied = 0;
-        if (fvc_pull_wrptr != rd_ptr) {
-            words_occupied =
-                fvc_pull_wrptr > rd_ptr ? fvc_pull_wrptr - rd_ptr : buffer_size * 2 + fvc_pull_wrptr - rd_ptr;
-        }
-        return buffer_size - words_occupied;
+    FORCE_INLINE uint32_t get_num_words_free() { return *sender_buffer_space; }
+
+    FORCE_INLINE uint32_t get_remote_num_words_free() { return *receiver_buffer_space; }
+
+    inline void reset_buffer_space(uint32_t buf_size_words) {
+        // Setting STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX resets the credit register
+        volatile uint32_t* ptr =
+            reinterpret_cast<volatile uint32_t*>(STREAM_REG_ADDR(1, STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX));
+        *ptr = buf_size_words;
+        ptr = reinterpret_cast<volatile uint32_t*>(STREAM_REG_ADDR(2, STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX));
+        *ptr = buf_size_words;
     }
 
-    uint32_t get_remote_num_words_free() {
-        uint32_t rd_ptr = remote_rdptr.ptr_cleared;
-        uint32_t words_occupied = 0;
-        if (fvc_out_wrptr != rd_ptr) {
-            words_occupied = fvc_out_wrptr > rd_ptr ? fvc_out_wrptr - rd_ptr : buffer_size * 2 + fvc_out_wrptr - rd_ptr;
-        }
-        return buffer_size - words_occupied;
-    }
-
-    inline void init(uint32_t data_buf_start, uint32_t data_buf_size_words, uint32_t ptr_update_addr) {
+    inline void init(uint32_t data_buf_start, uint32_t data_buf_size_words) {
         uint32_t words = sizeof(fvc_consumer_state) / 4;
         uint32_t* ptr = (uint32_t*)this;
         for (uint32_t i = 0; i < words; i++) {
@@ -86,182 +80,201 @@ typedef struct fvc_consumer_state {
         chan_num = 1;
         buffer_start = data_buf_start;
         buffer_size = data_buf_size_words;
+        buffer_size_2x = data_buf_size_words * 2;
         remote_buffer_start = data_buf_start + buffer_size * PACKET_WORD_SIZE_BYTES;
-        remote_ptr_update_addr = ptr_update_addr;
+        words_sent_remote_update = (STREAM_REG_ADDR(0, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX));
+        sender_buffer_space =
+            reinterpret_cast<uint32_t*>(STREAM_REG_ADDR(1, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX));
+        update_sender_buffer_space =
+            reinterpret_cast<uint32_t*>(STREAM_REG_ADDR(1, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX));
+        receiver_buffer_space =
+            reinterpret_cast<uint32_t*>(STREAM_REG_ADDR(2, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX));
+        update_receiver_buffer_space =
+            reinterpret_cast<uint32_t*>(STREAM_REG_ADDR(2, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX));
+        reset_buffer_space(data_buf_size_words);
     }
 
-    inline uint32_t words_before_buffer_wrap(uint32_t ptr) {
-        if (ptr >= buffer_size) {
-            return buffer_size * 2 - ptr;
-        } else {
-            return buffer_size - ptr;
-        }
+    FORCE_INLINE uint32_t words_before_buffer_wrap(uint32_t ptr) { return buffer_size - ptr; }
+
+    FORCE_INLINE uint32_t words_before_local_buffer_wrap() { return buffer_size - fvc_pull_wrptr; }
+
+    FORCE_INLINE uint32_t get_local_buffer_pull_addr() {
+        return buffer_start + (fvc_pull_wrptr * PACKET_WORD_SIZE_BYTES);
     }
 
-    inline uint32_t words_before_local_buffer_wrap() {
-        if (fvc_pull_wrptr >= buffer_size) {
-            return buffer_size * 2 - fvc_pull_wrptr;
-        } else {
-            return buffer_size - fvc_pull_wrptr;
-        }
+    FORCE_INLINE uint32_t get_local_buffer_read_addr() {
+        return buffer_start + (fvc_out_rdptr * PACKET_WORD_SIZE_BYTES);
     }
 
-    inline uint32_t get_local_buffer_pull_addr() {
-        uint32_t addr = buffer_start;
-        uint32_t offset = fvc_pull_wrptr;
-        if (offset >= buffer_size) {
-            offset -= buffer_size;
-        }
-        addr = addr + (offset * PACKET_WORD_SIZE_BYTES);
-        return addr;
-    }
-
-    inline uint32_t get_local_buffer_read_addr() {
-        uint32_t addr = buffer_start;
-        uint32_t offset = fvc_out_rdptr;
-        if (offset >= buffer_size) {
-            offset -= buffer_size;
-        }
-        addr = addr + (offset * PACKET_WORD_SIZE_BYTES);
-        return addr;
-    }
-
-    inline uint32_t get_remote_buffer_write_addr() {
-        uint32_t addr = remote_buffer_start;
-        uint32_t offset = fvc_out_wrptr;
-        if (offset >= buffer_size) {
-            offset -= buffer_size;
-        }
-        addr = addr + (offset * PACKET_WORD_SIZE_BYTES);
-        return addr;
-    }
-
-    inline void advance_pull_wrptr(uint32_t num_words) {
+    FORCE_INLINE void advance_pull_wrptr(uint32_t num_words) {
         uint32_t temp = fvc_pull_wrptr + num_words;
-        if (temp >= buffer_size * 2) {
-            temp -= buffer_size * 2;
+        if (temp >= buffer_size) {
+            temp -= buffer_size;
         }
         fvc_pull_wrptr = temp;
+        *update_sender_buffer_space = (-num_words) << REMOTE_DEST_BUF_WORDS_FREE_INC;
     }
 
-    inline void advance_out_wrptr(uint32_t num_words) {
-        uint32_t temp = fvc_out_wrptr + num_words;
-        if (temp >= buffer_size * 2) {
-            temp -= buffer_size * 2;
-        }
-        fvc_out_wrptr = temp;
-    }
-
-    inline void advance_out_rdptr(uint32_t num_words) {
+    FORCE_INLINE void advance_out_rdptr(uint32_t num_words) {
         uint32_t temp = fvc_out_rdptr + num_words;
-        if (temp >= buffer_size * 2) {
-            temp -= buffer_size * 2;
+        if (temp >= buffer_size) {
+            temp -= buffer_size;
         }
         fvc_out_rdptr = temp;
+        *update_receiver_buffer_space = (-num_words) << REMOTE_DEST_BUF_WORDS_FREE_INC;
     }
 
-    inline void register_pull_data(uint32_t num_words_to_pull) {
+    FORCE_INLINE void register_pull_data(uint32_t num_words_to_pull) {
         pull_words_in_flight += num_words_to_pull;
         advance_pull_wrptr(num_words_to_pull);
-        words_since_last_sync += num_words_to_pull;
         packet_words_remaining -= num_words_to_pull;
-        // also check for complete packet pulled.
-        if ((packet_words_remaining == 0) or (words_since_last_sync >= FVC_SYNC_THRESHOLD)) {
-            sync_buf[sync_buf_wrptr & SYNC_BUF_SIZE_MASK] = fvc_pull_wrptr;
-            if (get_num_words_free()) {
-                advance_pull_wrptr(1);
-                sync_buf_advance_wrptr();
-            } else {
-                sync_pending = 1;
-            }
-            words_since_last_sync = 0;
-        }
     }
 
-    inline bool check_sync_pending() {
-        if (sync_pending) {
-            if (get_num_words_free()) {
-                advance_pull_wrptr(1);
-                sync_buf_advance_wrptr();
-                sync_pending = 0;
-            }
-            return true;
-        }
-        return false;
+    FORCE_INLINE void register_move_data(uint32_t num_words_to_move) {
+        advance_pull_wrptr(num_words_to_move);
+        packet_words_remaining -= num_words_to_move;
+        total_words_to_forward += num_words_to_move;
     }
 
-    template <bool live = true>
+    template <bool barrier>
     inline uint32_t forward_data_from_fvc_buffer() {
-        uint32_t total_words_to_forward = 0;
-        uint32_t wrptr = sync_buf[sync_buf_rdptr & SYNC_BUF_SIZE_MASK];
-
-        total_words_to_forward =
-            wrptr > fvc_out_rdptr ? wrptr - fvc_out_rdptr : buffer_size * 2 + wrptr - fvc_out_rdptr;
-
+        uint32_t words_to_forward = total_words_to_forward;
         uint32_t remote_fvc_buffer_space = get_remote_num_words_free();
-        if (remote_fvc_buffer_space < (total_words_to_forward + 1)) {
-            // +1 is for pointer sync word.
-            // If fvc receiver buffer on link partner does not have space to receive the
-            // full sync buffer entry, we skip and try again next time.
+        if (remote_fvc_buffer_space == 0) {
+            // nothing to send or no space in receiver.
+            if constexpr (barrier == true) {
+                noc_async_read_barrier();
+            }
             return 0;
         }
 
-        // Now that there is enough space in receiver buffer we will send total_words_to_forward number of words.
-        // This means that we may need to break up the writes to multiple ethernet packets
-        // depending on whether local buffer is wrapping, remote buffer is wrapping,
-        // we are writing sync word etc.
-
-        if constexpr (live == true) {
-            uint32_t src_addr = 0;
-            uint32_t dest_addr = 0;  // should be second half of fvc buffer.
-            uint32_t words_remaining = total_words_to_forward;
-            while (words_remaining) {
-                uint32_t num_words_before_local_wrap = words_before_buffer_wrap(fvc_out_rdptr);
-                uint32_t num_words_before_remote_wrap = words_before_buffer_wrap(fvc_out_wrptr);
-                ;
-                uint32_t words_to_forward = std::min(num_words_before_local_wrap, num_words_before_remote_wrap);
-                words_to_forward = std::min(words_to_forward, words_remaining);
-                words_to_forward = std::min(words_to_forward, DEFAULT_MAX_ETH_SEND_WORDS);
-                src_addr = get_local_buffer_read_addr();
-                dest_addr = get_remote_buffer_write_addr();
-
-                internal_::eth_send_packet(
-                    0, src_addr / PACKET_WORD_SIZE_BYTES, dest_addr / PACKET_WORD_SIZE_BYTES, words_to_forward);
-                advance_out_rdptr(words_to_forward);
-                advance_out_wrptr(words_to_forward);
-                words_remaining -= words_to_forward;
-            }
-
-            // after sending all the data, send the last word which is pointer sync word.
-            volatile uint32_t* sync_ptr = (volatile uint32_t*)get_local_buffer_read_addr();
-            advance_out_rdptr(1);
-            sync_ptr[0] = fvc_out_wrptr;
-            sync_ptr[1] = 0;
-            sync_ptr[2] = 0;
-            sync_ptr[3] = fvc_out_rdptr;
-            internal_::eth_send_packet(
-                0, ((uint32_t)sync_ptr) / PACKET_WORD_SIZE_BYTES, remote_ptr_update_addr / PACKET_WORD_SIZE_BYTES, 1);
-        } else {
-            advance_out_rdptr(total_words_to_forward);
-            advance_out_wrptr(total_words_to_forward);
-            advance_out_rdptr(1);
-            remote_rdptr.ptr = fvc_out_rdptr;
-            remote_rdptr.ptr_cleared = fvc_out_wrptr;
+        if (remote_fvc_buffer_space < words_to_forward) {
+            words_to_forward = remote_fvc_buffer_space;
         }
-        sync_buf_advance_rdptr();
-        return total_words_to_forward;
+
+        // decrement total number of words that need to be sent over ethernet
+        // by the amount we are sending in this iteration.
+        total_words_to_forward -= words_to_forward;
+        uint32_t src_addr = 0;
+        uint32_t dest_addr = 0;  // should be second half of fvc buffer.
+        uint32_t words_remaining = words_to_forward;
+        while (words_remaining) {
+            uint32_t num_words_before_wrap = words_before_buffer_wrap(fvc_out_rdptr);
+
+            uint32_t chunk_to_forward = std::min(num_words_before_wrap, words_remaining);
+            src_addr = get_local_buffer_read_addr();
+            dest_addr = src_addr - buffer_start + remote_buffer_start;
+            if constexpr (barrier) {
+                noc_async_read_barrier();
+            }
+            internal_::eth_send_packet(
+                0, src_addr / PACKET_WORD_SIZE_BYTES, dest_addr / PACKET_WORD_SIZE_BYTES, chunk_to_forward);
+            advance_out_rdptr(chunk_to_forward);
+            words_remaining -= chunk_to_forward;
+        }
+
+        // send word credits to receiver
+        eth_write_remote_reg((uint32_t)words_sent_remote_update, words_to_forward << REMOTE_DEST_BUF_WORDS_FREE_INC);
+
+        return words_to_forward;
     }
 
-    inline void sync_buf_advance_wrptr() { sync_buf_wrptr = (sync_buf_wrptr + 1) & SYNC_BUF_PTR_MASK; }
+    inline uint32_t get_num_words_to_pull(volatile pull_request_t* pull_request) {
+        uint32_t num_words_to_pull = num_words_available_to_pull(pull_request);
+        uint32_t num_words_before_wrap = words_before_pull_buffer_wrap(pull_request->buffer_size, pull_request->rd_ptr);
 
-    inline void sync_buf_advance_rdptr() { sync_buf_rdptr = (sync_buf_rdptr + 1) & SYNC_BUF_PTR_MASK; }
+        num_words_to_pull = std::min(num_words_to_pull, num_words_before_wrap);
+        uint32_t fvc_buffer_space = get_num_words_free();
+        num_words_to_pull = std::min(num_words_to_pull, fvc_buffer_space);
 
-    inline bool sync_buf_empty() { return (sync_buf_wrptr == sync_buf_rdptr); }
+        if (num_words_to_pull == 0) {
+            return 0;
+        }
 
-    inline bool sync_buf_full() {
-        return !sync_buf_empty() && ((sync_buf_wrptr & SYNC_BUF_SIZE_MASK) == (sync_buf_rdptr & SYNC_BUF_SIZE_MASK));
+        uint32_t fvc_space_before_wptr_wrap = words_before_local_buffer_wrap();
+        num_words_to_pull = std::min(num_words_to_pull, fvc_space_before_wptr_wrap);
+
+        num_words_to_pull = std::min(num_words_to_pull, buffer_size / 2);
+
+        return num_words_to_pull;
     }
 
+    FORCE_INLINE uint32_t pull_data_to_fvc_buffer(volatile pull_request_t* pull_request) {
+        if (packet_in_progress == 0) {
+            uint32_t size = pull_request->size;
+            packet_words_remaining = (size + PACKET_WORD_SIZE_BYTES - 1) >> 4;
+            packet_in_progress = 1;
+        }
+
+        uint32_t num_words_to_pull = get_num_words_to_pull(pull_request);
+        if (num_words_to_pull == 0) {
+            return 0;
+        }
+
+        uint32_t rd_offset = get_rd_ptr_offset_words((pull_request_t*)pull_request);
+        uint64_t src_addr = pull_request->buffer_start + (rd_offset * PACKET_WORD_SIZE_BYTES);
+        uint32_t fvc_addr = get_local_buffer_pull_addr();
+
+        // pull_data_from_remote();
+        noc_async_read(src_addr, fvc_addr, num_words_to_pull * PACKET_WORD_SIZE_BYTES);
+        register_pull_data(num_words_to_pull);
+        pull_request->rd_ptr = advance_ptr(pull_request->buffer_size, pull_request->rd_ptr, num_words_to_pull);
+        pull_request->words_read += num_words_to_pull;
+
+        return num_words_to_pull;
+    }
+
+    inline uint32_t move_data_to_fvc_buffer(volatile pull_request_t* pull_request) {
+        if (packet_in_progress == 0) {
+            packet_words_remaining = PACKET_HEADER_SIZE_WORDS;
+            packet_in_progress = 1;
+        }
+
+        // if fvc does not have enough space, try again later.
+        if (get_num_words_free() < PACKET_HEADER_SIZE_WORDS) {
+            return 0;
+        }
+
+        uint32_t fvc_space_before_wptr_wrap = words_before_local_buffer_wrap();
+        uint32_t* fvc_addr = (uint32_t*)get_local_buffer_pull_addr();
+        uint32_t* src = (uint32_t*)pull_request;
+
+        switch (fvc_space_before_wptr_wrap) {
+            case 1:
+                fvc_addr[0] = src[0];
+                fvc_addr[1] = src[1];
+                fvc_addr[2] = src[2];
+                fvc_addr[3] = src[3];
+                fvc_addr = (uint32_t*)buffer_start;
+                fvc_addr[0] = src[4];
+                fvc_addr[1] = src[5];
+                fvc_addr[2] = src[6];
+                fvc_addr[3] = src[7];
+                fvc_addr[4] = src[8];
+                fvc_addr[5] = src[9];
+                fvc_addr[6] = src[10];
+                fvc_addr[7] = src[11];
+                break;
+            case 2:
+                // uint32_t i = 0;
+                for (uint32_t i = 0; i < (PACKET_HEADER_SIZE_WORDS - 1) * PACKET_WORD_SIZE_BYTES / 4; i++) {
+                    fvc_addr[i] = src[i];
+                }
+                fvc_addr = (uint32_t*)buffer_start;
+                fvc_addr[0] = src[8];
+                fvc_addr[1] = src[9];
+                fvc_addr[2] = src[10];
+                fvc_addr[3] = src[11];
+                break;
+            default:
+                for (uint32_t i = 0; i < PACKET_HEADER_SIZE_BYTES / 4; i++) {
+                    fvc_addr[i] = src[i];
+                }
+        }
+
+        register_move_data(PACKET_HEADER_SIZE_WORDS);
+        return PACKET_HEADER_SIZE_WORDS;
+    }
 } fvc_consumer_state_t;
 
 static_assert(sizeof(fvc_consumer_state_t) % 4 == 0);
@@ -269,6 +282,11 @@ static_assert(sizeof(fvc_consumer_state_t) % 4 == 0);
 #define FVC_MODE_ROUTER 1
 #define FVC_MODE_ENDPOINT 2
 
+enum ProcessingFlags : uint8_t {
+    UCAST_DEST = 1,
+    MCAST_DEST = 2,
+    NOT_DEST = 3,
+};
 // FVC Producer holds data that needs to be forwarded to other destinations.
 // This producer receives data over ethernet from neighboring chip.
 // Data in the producer is either destined for local chip, or has to make a noc hop
@@ -279,180 +297,254 @@ static_assert(sizeof(fvc_consumer_state_t) % 4 == 0);
 // Which ever entity receives the pull request is responsible draining the required amount of data from
 // FVC Producer.
 typedef struct fvc_producer_state {
-    volatile chan_payload_ptr inbound_wrptr;
-    volatile chan_payload_ptr inbound_rdptr;
-    uint32_t remote_ptr_update_addr;
+    chan_payload_ptr inbound_wrptr;
+    chan_payload_ptr inbound_rdptr;
+    uint32_t my_id;
     uint8_t chan_num;
     uint8_t packet_in_progress;
-    uint8_t pad1;
-    uint8_t pad2;
+    uint8_t packet_processing_flags;
+    uint8_t mcast_direction;
+    uint32_t mcast_router_noc_xy;
+    uint32_t words_inbound;
+    uint32_t words_cleared;
     uint32_t packet_words_remaining;
-    uint32_t packet_words_sent;
-    uint32_t fvc_out_wrptr;
+    uint32_t hop_words_remaining;
     uint32_t fvc_out_rdptr;
-    volatile uint32_t fvc_pull_rdptr;
     uint32_t buffer_size;
+    uint32_t buffer_size_2x;
     uint32_t buffer_start;
     uint32_t pull_words_in_flight;
-    uint32_t words_since_last_sync;
+    uint32_t words_before_read_wrap;
     uint32_t words_to_forward;
     bool curr_packet_valid;
     bool packet_corrupted;
     uint64_t packet_timestamp;
     uint64_t packet_dest;
+    uint64_t hop_dest;
     packet_header_t current_packet_header;
+    uint32_t* packet_id;
+    volatile uint32_t* words_received;
+    uint32_t* words_received_local_update;
+    uint32_t update_sender_buffer_space;
+    uint32_t update_receiver_buffer_space;
 
-    inline void init(uint32_t data_buf_start, uint32_t data_buf_size_words, uint32_t ptr_update_addr) {
+    inline void reset_words_received() {
+        // Setting STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX resets the credit register
+        volatile uint32_t* ptr =
+            reinterpret_cast<volatile uint32_t*>(STREAM_REG_ADDR(0, STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX));
+        *ptr = 0;
+    }
+
+    inline void init(uint32_t data_buf_start, uint32_t data_buf_size_words) {
         uint32_t words = sizeof(fvc_producer_state) / 4;
         uint32_t* ptr = (uint32_t*)this;
         for (uint32_t i = 0; i < words; i++) {
             ptr[i] = 0;
         }
         chan_num = 1;
+        my_id = routing_table->my_device_id << 16 | routing_table->my_mesh_id;
         buffer_start = data_buf_start;
         buffer_size = data_buf_size_words;
-        remote_ptr_update_addr = ptr_update_addr;
+        buffer_size_2x = data_buf_size_words * 2;
+        words_received =
+            reinterpret_cast<volatile uint32_t*>(STREAM_REG_ADDR(0, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX));
+        words_received_local_update =
+            reinterpret_cast<uint32_t*>(STREAM_REG_ADDR(0, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX));
+        update_sender_buffer_space = (STREAM_REG_ADDR(1, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX));
+        update_receiver_buffer_space = (STREAM_REG_ADDR(2, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX));
+
+        reset_words_received();
+        packet_id = (uint32_t*)&current_packet_header.routing.dst_mesh_id;
+        tt::tt_fabric::chan_id_t my_chan = routing_table->intra_mesh_table.dest_entry[routing_table->my_device_id];
+        tt::tt_fabric::chan_id_t mcast_channel = 0;
+        if (routing_table->port_direction.east == my_chan) {
+            mcast_channel = routing_table->port_direction.west;
+            mcast_direction = 1;
+        } else if (routing_table->port_direction.west == my_chan) {
+            mcast_channel = routing_table->port_direction.east;
+            mcast_direction = 0;
+        } else if (routing_table->port_direction.north == my_chan) {
+            mcast_channel = routing_table->port_direction.south;
+            mcast_direction = 3;
+        } else if (routing_table->port_direction.south == my_chan) {
+            mcast_channel = routing_table->port_direction.north;
+            mcast_direction = 2;
+        }
+        mcast_router_noc_xy = eth_chan_to_noc_xy[noc_index][mcast_channel];
     }
 
     inline uint32_t inc_ptr_with_wrap(uint32_t ptr, uint32_t inc) {
         uint32_t temp = ptr + inc;
-        if (temp >= buffer_size * 2) {
-            temp -= buffer_size * 2;
+        if (temp >= buffer_size) {
+            temp -= buffer_size;
         }
         return temp;
     }
 
     inline void advance_local_wrptr(uint32_t num_words) {
         inbound_wrptr.ptr = inc_ptr_with_wrap(inbound_wrptr.ptr, num_words);
+        words_inbound += num_words;
     }
 
-    inline void advance_out_wrptr(uint32_t num_words) { fvc_out_wrptr = inc_ptr_with_wrap(fvc_out_wrptr, num_words); }
+    template <uint8_t fvc_mode = FVC_MODE_ROUTER>
+    FORCE_INLINE void advance_out_rdptr(uint32_t num_words) {
+        uint32_t temp = fvc_out_rdptr + num_words;
+        if (temp >= buffer_size) {
+            temp -= buffer_size;
+        }
+        fvc_out_rdptr = temp;
+        if constexpr (fvc_mode == FVC_MODE_ROUTER) {
+            words_inbound -= num_words;
+        }
+    }
 
-    inline void advance_out_rdptr(uint32_t num_words) { fvc_out_rdptr = inc_ptr_with_wrap(fvc_out_rdptr, num_words); }
+    FORCE_INLINE uint32_t words_before_buffer_wrap(uint32_t ptr) { return buffer_size - ptr; }
 
-    inline uint32_t words_before_buffer_wrap(uint32_t ptr) {
-        if (ptr >= buffer_size) {
-            return buffer_size * 2 - ptr;
+    template <uint8_t fvc_mode = FVC_MODE_ROUTER>
+    FORCE_INLINE uint32_t get_num_words_available() {
+        if constexpr (fvc_mode == FVC_MODE_ROUTER) {
+            uint32_t new_words = *words_received;
+            if (new_words == 0) {
+                return words_inbound;
+            }
+            *words_received_local_update = (-new_words) << REMOTE_DEST_BUF_WORDS_FREE_INC;
+            words_inbound += new_words;
+            uint32_t temp = inbound_wrptr.ptr + new_words;
+            if (temp >= buffer_size) {
+                temp -= buffer_size;
+            }
+            inbound_wrptr.ptr = temp;
+            free_sender_buffer_space(new_words);
+            return words_inbound;
         } else {
-            return buffer_size - ptr;
+            return words_inbound;
         }
     }
 
-    inline uint32_t get_num_words_available() const {
-        uint32_t wrptr = inbound_wrptr.ptr;
-        uint32_t words_occupied = 0;
-        if (fvc_out_rdptr != wrptr) {
-            words_occupied = wrptr > fvc_out_rdptr ? wrptr - fvc_out_rdptr : buffer_size * 2 + wrptr - fvc_out_rdptr;
-        }
-        return words_occupied;
-    }
+    FORCE_INLINE
+    uint32_t get_num_words_free() { return buffer_size - words_inbound; }
 
-    inline uint32_t get_num_words_free() {
-        uint32_t wrptr = inbound_wrptr.ptr;
-        uint32_t words_occupied = 0;
-        if (fvc_pull_rdptr != wrptr) {
-            words_occupied = wrptr > fvc_pull_rdptr ? wrptr - fvc_pull_rdptr : buffer_size * 2 + wrptr - fvc_pull_rdptr;
-        }
-        return buffer_size - words_occupied;
-    }
-
-    inline bool get_curr_packet_valid() {
-        if (!curr_packet_valid && (get_num_words_available() >= PACKET_HEADER_SIZE_WORDS)) {
-            // Wait for a full packet header to arrive before advancing to next packet.
-            this->advance_next_packet();
+    template <uint8_t fvc_mode = FVC_MODE_ROUTER>
+    FORCE_INLINE bool get_curr_packet_valid() {
+        if (!curr_packet_valid) {
+            if (get_num_words_available<fvc_mode>() >= PACKET_HEADER_SIZE_WORDS) {
+                // Wait for a full packet header to arrive before advancing to next packet.
+                this->advance_next_packet<fvc_mode>();
+            }
         }
         return this->curr_packet_valid;
     }
 
-    inline uint32_t get_local_buffer_read_addr() {
-        uint32_t addr = buffer_start;
-        uint32_t offset = fvc_out_rdptr;
-        if (offset >= buffer_size) {
-            offset -= buffer_size;
-        }
-        addr = addr + (offset * PACKET_WORD_SIZE_BYTES);
-        return addr;
+    FORCE_INLINE uint32_t get_local_buffer_read_addr() {
+        return buffer_start + (fvc_out_rdptr * PACKET_WORD_SIZE_BYTES);
     }
 
-    inline uint32_t get_local_buffer_write_addr() {
-        uint32_t addr = buffer_start;
-        uint32_t offset = inbound_wrptr.ptr;
-        if (offset >= buffer_size) {
-            offset -= buffer_size;
-        }
-        addr = addr + (offset * PACKET_WORD_SIZE_BYTES);
-        return addr;
+    FORCE_INLINE uint32_t get_local_buffer_write_addr() {
+        return buffer_start + (inbound_wrptr.ptr * PACKET_WORD_SIZE_BYTES);
     }
 
-    inline uint32_t words_before_local_buffer_wrap() {
-        if (inbound_wrptr.ptr >= buffer_size) {
-            return buffer_size * 2 - inbound_wrptr.ptr;
+    FORCE_INLINE uint32_t words_before_local_buffer_wrap() { return buffer_size - inbound_wrptr.ptr; }
+
+    FORCE_INLINE void free_sender_buffer_space(uint32_t words) {
+        // send received word credits to receiver
+        eth_write_remote_reg((uint32_t)update_sender_buffer_space, words << REMOTE_DEST_BUF_WORDS_FREE_INC);
+    }
+
+    template <uint8_t fvc_mode = FVC_MODE_ROUTER>
+    FORCE_INLINE void free_receiver_buffer_space(uint32_t words) {
+        if constexpr (fvc_mode == FVC_MODE_ROUTER) {
+            // send received word credits to receiver
+            eth_write_remote_reg((uint32_t)update_receiver_buffer_space, words << REMOTE_DEST_BUF_WORDS_FREE_INC);
         } else {
-            return buffer_size - inbound_wrptr.ptr;
+            words_inbound -= words;
         }
     }
 
     template <uint8_t fvc_mode = FVC_MODE_ROUTER>
-    inline void update_remote_rdptr_sent() {
-        if (inbound_wrptr.ptr_cleared != inbound_rdptr.ptr) {
-            inbound_rdptr.ptr = inbound_wrptr.ptr_cleared;
-            if constexpr (fvc_mode == FVC_MODE_ROUTER) {
-                internal_::eth_send_packet(
-                    0,
-                    ((uint32_t)&inbound_rdptr) / PACKET_WORD_SIZE_BYTES,
-                    remote_ptr_update_addr / PACKET_WORD_SIZE_BYTES,
-                    1);
+    FORCE_INLINE void advance_next_packet() {
+        // The following code makes the following assumptions regarding packet header structure
+        // 1 - packet_parameters is always the first word of the packet header, and doesn't span across packet word
+        // boundary.
+        // 2 - routing is always the last word of the packet header doesn't span across packet word boundary.
+        static_assert(
+            offsetof(packet_header_t, packet_parameters) == 0 && sizeof(packet_params) <= PACKET_WORD_SIZE_BYTES);
+        static_assert(
+            offsetof(packet_header_t, routing) >= (PACKET_HEADER_SIZE_BYTES - PACKET_WORD_SIZE_BYTES) &&
+            offsetof(packet_header_t, routing) % PACKET_WORD_SIZE_BYTES + sizeof(tt_routing) <= PACKET_WORD_SIZE_BYTES);
+        tt_l1_ptr uint32_t* packet_header_ptr = (uint32_t*)&current_packet_header;
+        volatile tt_l1_ptr uint32_t* next_header_ptr =
+            reinterpret_cast<tt_l1_ptr uint32_t*>(get_local_buffer_read_addr());
+        // TODO: Should we just extract the specific field we want here (mcast_params)
+        packet_params* next_packet_params_ptr = (packet_params*)(next_header_ptr);
+        tt_routing* next_routing_ptr;
+        uint32_t words_before_wrap = words_before_buffer_wrap(fvc_out_rdptr);
+        uint32_t dwords_to_copy = PACKET_HEADER_SIZE_BYTES / 4;
+        if (words_before_wrap < PACKET_HEADER_SIZE_WORDS) {
+            // Header spans buffer end.
+            // Needs to be copied in two steps.
+            uint32_t dwords_before_wrap = words_before_wrap * PACKET_WORD_SIZE_BYTES / 4;
+            uint32_t dwords_after_wrap = dwords_to_copy - dwords_before_wrap;
+            for (uint32_t i = 0; i < dwords_before_wrap; i++) {
+                packet_header_ptr[i] = next_header_ptr[i];
             }
+            next_header_ptr = reinterpret_cast<tt_l1_ptr uint32_t*>(buffer_start);
+            for (uint32_t i = 0; i < dwords_after_wrap; i++) {
+                packet_header_ptr[i + dwords_before_wrap] = next_header_ptr[i];
+            }
+            next_routing_ptr =
+                (tt_routing*)(next_header_ptr + packet_header_routing_offset_dwords - dwords_before_wrap);
+        } else {
+#pragma GCC unroll 12
+            for (uint32_t i = 0; i < dwords_to_copy; i++) {
+                packet_header_ptr[i] = next_header_ptr[i];
+            }
+            next_routing_ptr = (tt_routing*)(next_header_ptr + packet_header_routing_offset_dwords);
         }
-    }
 
-    template <uint8_t fvc_mode = FVC_MODE_ROUTER>
-    inline void update_remote_rdptr_cleared() {
-        if (fvc_pull_rdptr != inbound_rdptr.ptr_cleared) {
-            inbound_rdptr.ptr_cleared = fvc_pull_rdptr;
-            if constexpr (fvc_mode == FVC_MODE_ROUTER) {
-                internal_::eth_send_packet(
-                    0,
-                    ((uint32_t)&inbound_rdptr) / PACKET_WORD_SIZE_BYTES,
-                    remote_ptr_update_addr / PACKET_WORD_SIZE_BYTES,
-                    1);
-            }
-        }
-    }
-
-    inline void advance_next_packet() {
-        if (this->get_num_words_available() >= PACKET_HEADER_SIZE_WORDS) {
-            tt_l1_ptr uint32_t* packet_header_ptr = (uint32_t*)&current_packet_header;
-            tt_l1_ptr volatile uint32_t* next_header_ptr =
-                reinterpret_cast<tt_l1_ptr uint32_t*>(get_local_buffer_read_addr());
-            uint32_t words_before_wrap = words_before_buffer_wrap(fvc_out_rdptr);
-            uint32_t dwords_to_copy = PACKET_HEADER_SIZE_BYTES / 4;
-            if (words_before_wrap < PACKET_HEADER_SIZE_WORDS) {
-                // Header spans buffer end.
-                // Needs to be copied in two steps.
-                uint32_t dwords_before_wrap = words_before_wrap * PACKET_WORD_SIZE_BYTES / 4;
-                uint32_t dwords_after_wrap = dwords_to_copy - dwords_before_wrap;
-                for (uint32_t i = 0; i < dwords_before_wrap; i++) {
-                    packet_header_ptr[i] = next_header_ptr[i];
+        this->packet_words_remaining =
+            (this->current_packet_header.routing.packet_size_bytes + PACKET_WORD_SIZE_BYTES - 1) >> 4;
+        if (tt_fabric_is_header_valid(&current_packet_header)) {
+            this->curr_packet_valid = true;
+            if (packet_is_for_local_chip()) {
+                if (packet_mcast_is_required()) {
+                    // If its mcast packet, update the hop count.
+                    // Packet arrival on this router accounts for 1 hop.
+                    // Decrement respective direction hop count and determine
+                    // whether mcast needs further hops.
+                    update_mcast_hops(next_packet_params_ptr, next_routing_ptr);
                 }
-                next_header_ptr = reinterpret_cast<tt_l1_ptr uint32_t*>(buffer_start);
-                for (uint32_t i = 0; i < dwords_after_wrap; i++) {
-                    packet_header_ptr[i + dwords_before_wrap] = next_header_ptr[i];
-                }
+                // After updating mcast hop counts, we check whether the mcast packet still qualifies to be
+                // an mcast packet.
+                packet_processing_flags =
+                    packet_mcast_is_active() ? ProcessingFlags::MCAST_DEST : ProcessingFlags::UCAST_DEST;
             } else {
-                for (uint32_t i = 0; i < dwords_to_copy; i++) {
-                    packet_header_ptr[i] = next_header_ptr[i];
+                if (packet_mcast_is_active()) {
+                    // Mcast packets have dest dev/mesh id set to the device where mcast starts.
+                    // Hence packet_is_for_local_chip() returns true only for the first mcast target device.
+                    // All other devices, need to check for mcast active flag to determine if they should consume
+                    // the data or not.
+                    // Any device that receives a packet with mcast active flag set consumes the data and forwards
+                    // as well if its not the last hop of mcast group.
+
+                    // If mcast is active, update the hop count.
+                    // Decrement hop count.
+                    update_mcast_hops(next_packet_params_ptr, next_routing_ptr);
+                    // After decrementing hop count, check whether mcast is stil active.
+                    // If mcast has been deactivated here, that means this chip is the last hop for mcast packet.
+                    // If so, we service the last hop as unicast dest.
+                    // Otherwise, we handle as mcast dest, which means packet is consumed locally as well as
+                    // forwarded to next hop in mcast direction.
+                    packet_processing_flags =
+                        packet_mcast_is_active() ? ProcessingFlags::MCAST_DEST : ProcessingFlags::UCAST_DEST;
+                } else {
+                    // We are here for one of 2 reasons.
+                    // 1 - Packet is not meant for this chip.
+                    // 2 - Packet is not under active mcast.
+                    packet_processing_flags = ProcessingFlags::NOT_DEST;
                 }
             }
-
-            this->packet_words_remaining =
-                (this->current_packet_header.routing.packet_size_bytes + PACKET_WORD_SIZE_BYTES - 1) >> 4;
-            this->packet_words_sent = 0;
-            if (tt_fabric_is_header_valid(&current_packet_header)) {
-                this->curr_packet_valid = true;
-            } else {
-                this->packet_corrupted = true;
-            }
+        } else {
+            this->packet_corrupted = true;
         }
     }
 
@@ -478,31 +570,33 @@ typedef struct fvc_producer_state {
 
     template <uint8_t fvc_mode = FVC_MODE_ROUTER, bool socket_mode = false>
     inline uint32_t pull_data_from_fvc_buffer() {
-        uint32_t words_available = get_num_words_available();
+        uint32_t words_available = get_num_words_available<fvc_mode>();
         words_available = std::min(words_available, packet_words_remaining);
         if (packet_in_progress == 0) {
-            advance_out_wrptr(words_available);
             if (current_packet_header.routing.flags == INLINE_FORWARD) {
                 copy_header((pull_request_t*)&local_pull_request->pull_request);
+                words_cleared = words_available;
             } else {
-                local_pull_request->pull_request.wr_ptr = fvc_out_wrptr;
                 local_pull_request->pull_request.rd_ptr = fvc_out_rdptr;
                 local_pull_request->pull_request.size = current_packet_header.routing.packet_size_bytes;
                 local_pull_request->pull_request.buffer_size = buffer_size;
                 local_pull_request->pull_request.buffer_start = xy_local_addr + buffer_start;
+                local_pull_request->pull_request.words_written = words_available;
+                local_pull_request->pull_request.words_read = 0;
+                words_cleared = 0;
                 local_pull_request->pull_request.ack_addr =
-                    xy_local_addr + (uint32_t)&local_pull_request->pull_request.rd_ptr;
+                    xy_local_addr + (uint32_t)&local_pull_request->pull_request.words_read;
                 local_pull_request->pull_request.flags = FORWARD;
                 packet_in_progress = 1;
             }
             packet_words_remaining -= words_available;
-            advance_out_rdptr(words_available);
+            advance_out_rdptr<fvc_mode>(words_available);
             // issue noc write to noc target of pull request.
             uint64_t dest_addr = socket_mode == false
                                      ? ((uint64_t)get_next_hop_router_noc_xy() << 32) | FABRIC_ROUTER_REQ_QUEUE_START
                                      : ((uint64_t)current_packet_header.session.target_offset_h << 32) |
                                            current_packet_header.session.target_offset_l;
-            packet_dest = tt_fabric_send_pull_request(dest_addr, local_pull_request);
+            hop_dest = tt_fabric_send_pull_request(dest_addr, local_pull_request);
             if (current_packet_header.routing.flags == INLINE_FORWARD) {
                 curr_packet_valid = false;
                 flush_async_writes<fvc_mode>();
@@ -511,71 +605,254 @@ typedef struct fvc_producer_state {
         } else {
             // pull_request.rd_ptr is updated by remote puller when data is read out of producer's local buffer.
             // it is used to determine when it it safe to reclaim local buffer memory for more data.
-            fvc_pull_rdptr = local_pull_request->pull_request.rd_ptr;
+            uint32_t curr_words_read = local_pull_request->pull_request.words_read;
+            uint32_t words_to_clear = curr_words_read - words_cleared;
+            if (words_to_clear) {
+                free_receiver_buffer_space<fvc_mode>(words_to_clear);
+                words_cleared += words_to_clear;
+            }
             if (packet_words_remaining) {
                 if (words_available) {
-                    advance_out_wrptr(words_available);
+                    advance_out_rdptr<fvc_mode>(words_available);
                     // packet_dest is returned by tt_fabric_send_pull_request() as the address of request q entry +
-                    // pull_request.wr_ptr.
-                    noc_inline_dw_write(packet_dest, fvc_out_wrptr);
-                    advance_out_rdptr(words_available);
+                    // pull_request.words_written.
+                    local_pull_request->pull_request.words_written += words_available;
+                    noc_inline_dw_write(hop_dest, local_pull_request->pull_request.words_written);
                     packet_words_remaining -= words_available;
                 }
-            } else if (fvc_pull_rdptr == fvc_out_rdptr) {
+            } else if (curr_words_read == local_pull_request->pull_request.words_written) {
                 // all data has been pulled and cleared from local buffer
                 packet_in_progress = 0;
                 curr_packet_valid = false;
             }
         }
-        // send ptr cleared to ethernet sender.
-        update_remote_rdptr_cleared<fvc_mode>();
         return words_available;
     }
 
-    inline uint32_t issue_async_write() {
-        uint32_t words_available = get_num_words_available();
+    template <bool resample = true>
+    FORCE_INLINE uint32_t issue_async_write() {
+        if constexpr (resample) {
+            get_num_words_available();
+        }
+        uint32_t words_available = words_inbound;
         words_available = std::min(words_available, packet_words_remaining);
         words_available = std::min(words_available, words_before_buffer_wrap(fvc_out_rdptr));
         if (words_available) {
             noc_async_write(get_local_buffer_read_addr(), packet_dest, words_available * PACKET_WORD_SIZE_BYTES);
             packet_words_remaining -= words_available;
-            advance_out_wrptr(words_available);
             advance_out_rdptr(words_available);
+            words_cleared += words_available;
             packet_dest += words_available * PACKET_WORD_SIZE_BYTES;
         }
         return words_available;
     }
 
-    inline bool packet_is_for_local_chip() {
-        return (current_packet_header.routing.dst_mesh_id == routing_table->my_mesh_id) &&
-               (current_packet_header.routing.dst_dev_id == routing_table->my_device_id);
+    FORCE_INLINE bool packet_is_for_local_chip() { return my_id == *packet_id; }
+
+    inline bool packet_mcast_is_active() { return (current_packet_header.routing.flags & MCAST_ACTIVE) != 0; }
+
+    inline bool packet_mcast_is_required() { return (current_packet_header.routing.flags & MCAST_DATA) != 0; }
+
+    inline void update_mcast_hops(packet_params* packet_parameters, tt_routing* routing) {
+        uint32_t hop_count = 0;
+        if (mcast_direction == 0) {
+            hop_count = current_packet_header.packet_parameters.mcast_parameters.east;
+            if (hop_count) {
+                hop_count--;
+                current_packet_header.packet_parameters.mcast_parameters.east = hop_count;
+                packet_parameters->mcast_parameters.east = hop_count;
+            }
+        } else if (mcast_direction == 1) {
+            hop_count = current_packet_header.packet_parameters.mcast_parameters.west;
+            if (hop_count) {
+                hop_count--;
+                current_packet_header.packet_parameters.mcast_parameters.west = hop_count;
+                packet_parameters->mcast_parameters.west = hop_count;
+            }
+        } else if (mcast_direction == 2) {
+            hop_count = current_packet_header.packet_parameters.mcast_parameters.north;
+            if (hop_count) {
+                hop_count--;
+                current_packet_header.packet_parameters.mcast_parameters.north = hop_count;
+                packet_parameters->mcast_parameters.north = hop_count;
+            }
+        } else if (mcast_direction == 3) {
+            hop_count = current_packet_header.packet_parameters.mcast_parameters.south;
+            if (hop_count) {
+                hop_count--;
+                current_packet_header.packet_parameters.mcast_parameters.south = hop_count;
+                packet_parameters->mcast_parameters.south = hop_count;
+            }
+        }
+        if (hop_count == 0) {
+            // on last hop clear the mcast flag bits.
+            // last hop treats packet as normal ucast async write.
+            current_packet_header.routing.flags &= ~(MCAST_ACTIVE | MCAST_DATA);
+            routing->flags &= ~(MCAST_ACTIVE | MCAST_DATA);
+        } else {
+            current_packet_header.routing.flags |= MCAST_ACTIVE;
+            routing->flags |= MCAST_ACTIVE;
+            // calculate new header checksum after mcast updates.
+            tt_fabric_add_header_checksum(&current_packet_header);
+            // copy new checksum to packet header in fvc buffer.
+            packet_parameters->misc_parameters.words[0] =
+                current_packet_header.packet_parameters.misc_parameters.words[0];
+        }
+    }
+
+    template <uint8_t fvc_mode = FVC_MODE_ROUTER>
+    inline uint32_t process_mcast_packet() {
+        uint32_t words_processed = 0;
+        if (current_packet_header.session.command & ASYNC_WR) {
+            uint32_t words_available = get_num_words_available();
+            words_available = std::min(words_available, packet_words_remaining);
+            words_processed = words_available;
+            if (packet_in_progress == 0) {
+                local_pull_request->pull_request.rd_ptr = fvc_out_rdptr;
+                local_pull_request->pull_request.size = current_packet_header.routing.packet_size_bytes;
+                local_pull_request->pull_request.buffer_size = buffer_size;
+                local_pull_request->pull_request.buffer_start = xy_local_addr + buffer_start;
+                local_pull_request->pull_request.words_written = words_available;
+                local_pull_request->pull_request.words_read = 0;
+                words_cleared = 0;
+                local_pull_request->pull_request.ack_addr =
+                    xy_local_addr + (uint32_t)&local_pull_request->pull_request.words_read;
+                local_pull_request->pull_request.flags = FORWARD;
+
+                packet_words_remaining -= words_available;
+                // issue noc write to noc target of pull request.
+                // figure out next hop for mcast forwarding
+                uint64_t dest_addr = ((uint64_t)mcast_router_noc_xy << 32) | FABRIC_ROUTER_REQ_QUEUE_START;
+                hop_dest = tt_fabric_send_pull_request(dest_addr, local_pull_request);
+
+                packet_dest = ((uint64_t)current_packet_header.session.target_offset_h << 32) |
+                              current_packet_header.session.target_offset_l;
+
+                advance_out_rdptr(PACKET_HEADER_SIZE_WORDS);
+                words_available -= PACKET_HEADER_SIZE_WORDS;
+
+                uint32_t local_words_available = std::min(words_available, words_before_buffer_wrap(fvc_out_rdptr));
+                // write available data till end of input buffer
+                if (local_words_available) {
+                    // need to check local_words_available > 0 since it is possible that we only received the packet
+                    // header so far, and words_available == 0 after words_available -= PACKET_HEADER_SIZE_WORDS above.
+                    noc_async_write(
+                        get_local_buffer_read_addr(), packet_dest, local_words_available * PACKET_WORD_SIZE_BYTES);
+                    advance_out_rdptr(local_words_available);
+                    packet_dest += local_words_available * PACKET_WORD_SIZE_BYTES;
+                }
+                local_words_available = words_available - local_words_available;
+                // write remaining available data from beginning of buffer
+                if (local_words_available) {
+                    noc_async_write(
+                        get_local_buffer_read_addr(), packet_dest, local_words_available * PACKET_WORD_SIZE_BYTES);
+                    advance_out_rdptr(local_words_available);
+                    packet_dest += local_words_available * PACKET_WORD_SIZE_BYTES;
+                }
+                // subtract the header words. Remaining words are the data to be written to packet_dest.
+                // Remember to account for trailing bytes which may not be a full packet word.
+                packet_in_progress = 1;
+            } else {
+                noc_async_writes_flushed();
+                // pull_request.rd_ptr is updated by remote puller when data is read out of producer's local buffer.
+                // it is used to determine when it it safe to reclaim local buffer memory for more data.
+                uint32_t curr_words_read = local_pull_request->pull_request.words_read;
+                uint32_t words_to_clear = curr_words_read - words_cleared;
+                if (words_to_clear) {
+                    free_receiver_buffer_space<fvc_mode>(words_to_clear);
+                    words_cleared += words_to_clear;
+                }
+
+                if (packet_words_remaining) {
+                    if (words_available) {
+                        uint32_t local_words_available =
+                            std::min(words_available, words_before_buffer_wrap(fvc_out_rdptr));
+                        // write available data till end of input buffer
+                        noc_async_write(
+                            get_local_buffer_read_addr(), packet_dest, local_words_available * PACKET_WORD_SIZE_BYTES);
+                        advance_out_rdptr(local_words_available);
+                        packet_dest += local_words_available * PACKET_WORD_SIZE_BYTES;
+                        local_words_available = words_available - local_words_available;
+                        // write remaining available data from beginning of buffer
+                        if (local_words_available) {
+                            noc_async_write(
+                                get_local_buffer_read_addr(),
+                                packet_dest,
+                                local_words_available * PACKET_WORD_SIZE_BYTES);
+                            advance_out_rdptr(local_words_available);
+                            packet_dest += local_words_available * PACKET_WORD_SIZE_BYTES;
+                        }
+
+                        // hop_dest is returned by tt_fabric_send_pull_request() as the address of request q entry +
+                        // pull_request.wr_ptr.
+                        local_pull_request->pull_request.words_written += words_available;
+                        noc_inline_dw_write(hop_dest, local_pull_request->pull_request.words_written);
+                        packet_words_remaining -= words_available;
+                    }
+                } else if (curr_words_read == local_pull_request->pull_request.words_written) {
+                    // for fused command issue the atomic inc before invalidating the current packet
+                    if (current_packet_header.session.command & ATOMIC_INC) {
+                        uint64_t noc_addr =
+                            ((uint64_t)current_packet_header.packet_parameters.async_wr_atomic_parameters.noc_xy
+                             << 32) |
+                            current_packet_header.packet_parameters.async_wr_atomic_parameters.l1_offset;
+                        noc_fast_atomic_increment(
+                            noc_index,
+                            NCRISC_AT_CMD_BUF,
+                            noc_addr,
+                            NOC_UNICAST_WRITE_VC,
+                            current_packet_header.packet_parameters.async_wr_atomic_parameters.increment,
+                            31,
+                            false);
+                    }
+                    // all data has been pulled and cleared from local buffer
+                    packet_in_progress = 0;
+                    curr_packet_valid = false;
+                    packet_timestamp = get_timestamp();
+                }
+            }
+        }
+        return words_processed;
     }
 
     template <uint8_t fvc_mode = FVC_MODE_ROUTER>
     inline uint32_t process_inbound_packet() {
         uint32_t words_processed = 0;
-        if (packet_is_for_local_chip()) {
+        if (packet_processing_flags == ProcessingFlags::UCAST_DEST) {
             if (current_packet_header.routing.flags == FORWARD) {
-                if (current_packet_header.session.command == ASYNC_WR) {
+                if (current_packet_header.session.command & ASYNC_WR) {
                     if (packet_in_progress == 0) {
                         packet_dest = ((uint64_t)current_packet_header.session.target_offset_h << 32) |
                                       current_packet_header.session.target_offset_l;
                         packet_words_remaining -= PACKET_HEADER_SIZE_WORDS;
-                        advance_out_wrptr(PACKET_HEADER_SIZE_WORDS);
                         advance_out_rdptr(PACKET_HEADER_SIZE_WORDS);
+                        words_cleared = PACKET_HEADER_SIZE_WORDS;
                         // subtract the header words. Remaining words are the data to be written to packet_dest.
                         // Remember to account for trailing bytes which may not be a full packet word.
                         packet_in_progress = 1;
-                        words_processed = PACKET_HEADER_SIZE_WORDS;
-                        words_processed += issue_async_write();
+                        issue_async_write<false>();
                     } else {
                         flush_async_writes();
                         if (packet_words_remaining) {
-                            words_processed = issue_async_write();
+                            issue_async_write<true>();
                         } else {
+                            // for fused command issue the atomic inc before invalidating the current packet
+                            if (current_packet_header.session.command & ATOMIC_INC) {
+                                uint64_t noc_addr =
+                                    ((uint64_t)current_packet_header.packet_parameters.async_wr_atomic_parameters.noc_xy
+                                     << 32) |
+                                    current_packet_header.packet_parameters.async_wr_atomic_parameters.l1_offset;
+                                noc_fast_atomic_increment(
+                                    noc_index,
+                                    NCRISC_AT_CMD_BUF,
+                                    noc_addr,
+                                    NOC_UNICAST_WRITE_VC,
+                                    current_packet_header.packet_parameters.async_wr_atomic_parameters.increment,
+                                    31,
+                                    false);
+                            }
                             packet_in_progress = 0;
                             curr_packet_valid = false;
-                            packet_timestamp = get_timestamp();
                         }
                     }
                 } else if (current_packet_header.session.command == DSOCKET_WR) {
@@ -597,29 +874,29 @@ typedef struct fvc_producer_state {
                         false);
 
                     packet_words_remaining -= PACKET_HEADER_SIZE_WORDS;
-                    advance_out_wrptr(PACKET_HEADER_SIZE_WORDS);
                     advance_out_rdptr(PACKET_HEADER_SIZE_WORDS);
                     words_processed = PACKET_HEADER_SIZE_WORDS;
-                    fvc_pull_rdptr = fvc_out_rdptr;
-                    update_remote_rdptr_cleared<fvc_mode>();
+                    free_receiver_buffer_space(PACKET_HEADER_SIZE_WORDS);
                     curr_packet_valid = false;
                     packet_timestamp = get_timestamp();
                 }
             }
+        } else if (packet_processing_flags == ProcessingFlags::MCAST_DEST) {
+            words_processed = process_mcast_packet();
         } else {
-            words_processed = pull_data_from_fvc_buffer<fvc_mode, false>();
+            pull_data_from_fvc_buffer<fvc_mode, false>();
         }
         return words_processed;
     }
 
     template <uint8_t fvc_mode = FVC_MODE_ROUTER>
-    inline void flush_async_writes() {
-        noc_async_write_barrier();
-        fvc_pull_rdptr = fvc_out_rdptr;
-        update_remote_rdptr_cleared<fvc_mode>();
+    FORCE_INLINE void flush_async_writes() {
+        noc_async_writes_flushed();
+        free_receiver_buffer_space<fvc_mode>(words_cleared);
+        words_cleared = 0;
     }
-
 } fvc_producer_state_t;
+
 typedef struct fvcc_outbound_state {
     volatile chan_payload_ptr remote_rdptr;
     uint32_t remote_ptr_update_addr;
@@ -1038,7 +1315,7 @@ typedef struct socket_reader_state {
 
     inline uint32_t get_num_words_to_pull(volatile pull_request_t* pull_request) {
         uint32_t num_words_to_pull = num_words_available_to_pull(pull_request);
-        uint32_t num_words_before_wrap = words_before_buffer_wrap(pull_request->buffer_size, pull_request->rd_ptr);
+        uint32_t num_words_before_wrap = words_before_pull_buffer_wrap(pull_request->buffer_size, pull_request->rd_ptr);
 
         num_words_to_pull = std::min(num_words_to_pull, num_words_before_wrap);
         uint32_t socket_buffer_space = get_num_words_free();
@@ -1105,8 +1382,8 @@ typedef struct socket_reader_state {
             uint32_t dest_addr = 0;  // should be second half of fvc buffer.
             uint32_t words_remaining = total_words_to_forward;
             while (words_remaining) {
-                uint32_t num_words_before_local_wrap = words_before_buffer_wrap(buffer_size, fvc_out_rdptr);
-                uint32_t num_words_before_remote_wrap = words_before_buffer_wrap(buffer_size, fvc_out_wrptr);
+                uint32_t num_words_before_local_wrap = words_before_pull_buffer_wrap(buffer_size, fvc_out_rdptr);
+                uint32_t num_words_before_remote_wrap = words_before_pull_buffer_wrap(buffer_size, fvc_out_wrptr);
                 uint32_t words_to_forward = std::min(num_words_before_local_wrap, num_words_before_remote_wrap);
                 words_to_forward = std::min(words_to_forward, words_remaining);
                 // max 8K bytes
@@ -1200,149 +1477,25 @@ inline bool fvc_req_valid(const volatile chan_req_buf* req_buf) {
 }
 
 inline uint32_t num_words_available_to_pull(volatile pull_request_t* pull_request) {
-    uint32_t wr_ptr = pull_request->wr_ptr;
-    uint32_t rd_ptr = pull_request->rd_ptr;
-    uint32_t buf_size = pull_request->buffer_size;
-
-    if (wr_ptr == rd_ptr) {
-        // buffer empty.
-        return 0;
-    }
-    uint32_t num_words = wr_ptr > rd_ptr ? wr_ptr - rd_ptr : buf_size * 2 + wr_ptr - rd_ptr;
-
-    // num_words = std::min(num_words, this->get_curr_packet_words_remaining());
-    return num_words;
+    return pull_request->words_written - pull_request->words_read;
 }
 
 inline uint32_t advance_ptr(uint32_t buffer_size, uint32_t ptr, uint32_t inc_words) {
     uint32_t temp = ptr + inc_words;
-    if (temp >= buffer_size * 2) {
-        temp -= buffer_size * 2;
+    if (temp >= buffer_size) {
+        temp -= buffer_size;
     }
     return temp;
 }
 
-inline uint32_t words_before_buffer_wrap(uint32_t buffer_size, uint32_t rd_ptr) {
-    if (rd_ptr >= buffer_size) {
-        return buffer_size * 2 - rd_ptr;
-    } else {
-        return buffer_size - rd_ptr;
-    }
-}
+inline uint32_t words_before_pull_buffer_wrap(uint32_t buffer_size, uint32_t rd_ptr) { return buffer_size - rd_ptr; }
 
-inline uint32_t get_rd_ptr_offset_words(pull_request_t* pull_request) {
-    uint32_t offset = pull_request->rd_ptr;
-    if (pull_request->rd_ptr >= pull_request->buffer_size) {
-        offset -= pull_request->buffer_size;
-    }
-    return offset;
-}
+inline uint32_t get_rd_ptr_offset_words(pull_request_t* pull_request) { return pull_request->rd_ptr; }
 
 inline void update_pull_request_words_cleared(pull_request_t* pull_request) {
-    noc_inline_dw_write(pull_request->ack_addr, pull_request->rd_ptr);
+    noc_inline_dw_write(pull_request->ack_addr, pull_request->words_read);
 }
 
-inline uint32_t get_num_words_to_pull(volatile pull_request_t* pull_request, fvc_consumer_state_t* fvc_consumer_state) {
-    uint32_t num_words_to_pull = num_words_available_to_pull(pull_request);
-    uint32_t num_words_before_wrap = words_before_buffer_wrap(pull_request->buffer_size, pull_request->rd_ptr);
-
-    num_words_to_pull = std::min(num_words_to_pull, num_words_before_wrap);
-    uint32_t fvc_buffer_space = fvc_consumer_state->get_num_words_free();
-    num_words_to_pull = std::min(num_words_to_pull, fvc_buffer_space);
-
-    if (num_words_to_pull == 0) {
-        return 0;
-    }
-
-    uint32_t fvc_space_before_wptr_wrap = fvc_consumer_state->words_before_local_buffer_wrap();
-    num_words_to_pull = std::min(num_words_to_pull, fvc_space_before_wptr_wrap);
-    num_words_to_pull = std::min(num_words_to_pull, fvc_consumer_state->buffer_size / 2);
-
-    return num_words_to_pull;
-}
-
-inline uint32_t pull_data_to_fvc_buffer(
-    volatile pull_request_t* pull_request, fvc_consumer_state_t* fvc_consumer_state) {
-    volatile uint32_t* temp = (volatile uint32_t*)0xffb2010c;
-    if (fvc_consumer_state->packet_in_progress == 0) {
-        uint32_t size = pull_request->size;
-        fvc_consumer_state->packet_words_remaining = (size + PACKET_WORD_SIZE_BYTES - 1) >> 4;
-        fvc_consumer_state->packet_in_progress = 1;
-    }
-
-    uint32_t num_words_to_pull = get_num_words_to_pull(pull_request, fvc_consumer_state);
-    bool full_packet_sent = (num_words_to_pull == fvc_consumer_state->packet_words_remaining);
-    if (num_words_to_pull == 0) {
-        temp[0] = 0xdead1111;
-        return 0;
-    }
-
-    uint32_t rd_offset = get_rd_ptr_offset_words((pull_request_t*)pull_request);
-    uint64_t src_addr = pull_request->buffer_start + (rd_offset * PACKET_WORD_SIZE_BYTES);
-    uint32_t fvc_addr = fvc_consumer_state->get_local_buffer_pull_addr();
-
-    // pull_data_from_remote();
-    noc_async_read(src_addr, fvc_addr, num_words_to_pull * PACKET_WORD_SIZE_BYTES);
-    fvc_consumer_state->register_pull_data(num_words_to_pull);
-    pull_request->rd_ptr = advance_ptr(pull_request->buffer_size, pull_request->rd_ptr, num_words_to_pull);
-
-    // TODO: this->remote_wptr_update(num_words_to_forward);
-
-    return num_words_to_pull;
-}
-
-inline uint32_t move_data_to_fvc_buffer(
-    volatile pull_request_t* pull_request, fvc_consumer_state_t* fvc_consumer_state) {
-    if (fvc_consumer_state->packet_in_progress == 0) {
-        fvc_consumer_state->packet_words_remaining = PACKET_HEADER_SIZE_WORDS;
-        fvc_consumer_state->packet_in_progress = 1;
-    }
-
-    // if fvc does not have enough space, try again later.
-    if (fvc_consumer_state->get_num_words_free() < PACKET_HEADER_SIZE_WORDS) {
-        return 0;
-    }
-
-    uint32_t fvc_space_before_wptr_wrap = fvc_consumer_state->words_before_local_buffer_wrap();
-    uint32_t* fvc_addr = (uint32_t*)fvc_consumer_state->get_local_buffer_pull_addr();
-    uint32_t* src = (uint32_t*)pull_request;
-
-    switch (fvc_space_before_wptr_wrap) {
-        case 1:
-            fvc_addr[0] = src[0];
-            fvc_addr[1] = src[1];
-            fvc_addr[2] = src[2];
-            fvc_addr[3] = src[3];
-            fvc_addr = (uint32_t*)fvc_consumer_state->buffer_start;
-            fvc_addr[0] = src[4];
-            fvc_addr[1] = src[5];
-            fvc_addr[2] = src[6];
-            fvc_addr[3] = src[7];
-            fvc_addr[4] = src[8];
-            fvc_addr[5] = src[9];
-            fvc_addr[6] = src[10];
-            fvc_addr[7] = src[11];
-            break;
-        case 2:
-            // uint32_t i = 0;
-            for (uint32_t i = 0; i < (PACKET_HEADER_SIZE_WORDS - 1) * PACKET_WORD_SIZE_BYTES / 4; i++) {
-                fvc_addr[i] = src[i];
-            }
-            fvc_addr = (uint32_t*)fvc_consumer_state->buffer_start;
-            fvc_addr[0] = src[8];
-            fvc_addr[1] = src[9];
-            fvc_addr[2] = src[10];
-            fvc_addr[3] = src[11];
-            break;
-        default:
-            for (uint32_t i = 0; i < PACKET_HEADER_SIZE_BYTES / 4; i++) {
-                fvc_addr[i] = src[i];
-            }
-    }
-
-    fvc_consumer_state->register_pull_data(PACKET_HEADER_SIZE_WORDS);
-    return PACKET_HEADER_SIZE_WORDS;
-}
 /**
  *  Polling for ready signal from the remote peers of all input and output queues.
  *  Blocks until all are ready, but doesn't block polling on each individual queue.
@@ -1436,12 +1589,12 @@ inline uint64_t tt_fabric_send_pull_request(uint64_t dest_addr, volatile local_p
     // This will happen, if the producer did not have all the availale data in its buffer when
     // the pull request was first issued. In this case, as the producer gets more data in its buffer,
     // it updates write pointer in the consumer request buffer pull request entry.
-    uint64_t wr_ptr_addr = noc_addr + offsetof(pull_request_t, wr_ptr);
-    return wr_ptr_addr;
+    uint64_t words_written_addr = noc_addr + offsetof(pull_request_t, words_written);
+    return words_written_addr;
 }
 
 inline void tt_fabric_init() {
-    uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(noc_index, 0, NOC_NODE_ID);
+    uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(noc_index, 0, NOC_CFG(NOC_ID_LOGICAL));
     uint32_t my_x = noc_id_reg & NOC_NODE_ID_MASK;
     uint32_t my_y = (noc_id_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
     xy_local_addr = NOC_XY_ADDR(my_x, my_y, 0);

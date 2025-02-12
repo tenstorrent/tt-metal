@@ -6,6 +6,7 @@
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
 #include "compute_kernel_api/eltwise_binary.h"
 
+#include "eltwise_utils_common.hpp"
 #include "eltwise_utils.hpp"
 
 namespace NAMESPACE {
@@ -43,7 +44,7 @@ ALWI void process_tile(
         cb_reserve_back(cb_out, onetile);
 
 #if HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)
-        binary_op_specific_init<true, BINARY_OP_TYPE>();
+        binary_op_specific_init<true, BINARY_OP_TYPE>(cb_post_lhs, cb_post_rhs);
 #endif
         tile_regs_acquire();
         BINARY_OP(cb_post_lhs, cb_post_rhs, 0, 0, 0);
@@ -82,7 +83,7 @@ void MAIN {
 #endif
 
 #if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS))
-    binary_op_specific_init<true, BINARY_OP_TYPE>();
+    binary_op_specific_init<true, BINARY_OP_TYPE>(cb_post_lhs, cb_post_rhs);
 #endif
 
     uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;

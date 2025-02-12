@@ -9,16 +9,16 @@
 
 namespace ttnn::operations::moreh::moreh_sum_backward {
 
-void get_tensor_dim(ttnn::SmallVector<uint32_t>& dim, const Shape& shape) {
-    const auto rank = shape.rank();
+void get_tensor_dim(ttnn::SmallVector<uint32_t>& dim, const ttnn::Shape& padded_shape) {
+    const auto rank = padded_shape.rank();
     for (auto i = 0; i < rank; ++i) {
         auto idx = rank - 1 - i;
 
         // last 2-dim
         if (idx == rank - 1 || idx == rank - 2) {
-            dim[i] = shape.value[idx] / tt::constants::TILE_HEIGHT;
+            dim[i] = padded_shape[idx] / tt::constants::TILE_HEIGHT;
         } else {
-            dim[i] = shape.value[idx];
+            dim[i] = padded_shape[idx];
         }
     }
 
@@ -28,27 +28,27 @@ void get_tensor_dim(ttnn::SmallVector<uint32_t>& dim, const Shape& shape) {
     }
 }
 
-Shape get_output_grad_shape(
+std::pair<ttnn::Shape, ttnn::Shape> get_output_grad_shape(
     const Tensor& output_grad, const Tensor& input_grad, const ttnn::SmallVector<int64_t>& dims, const bool& keepdim) {
     if (keepdim) {
-        return output_grad.get_shape();
+        return {output_grad.get_logical_shape(), output_grad.get_padded_shape()};
     }
 
-    auto shape = input_grad.get_shape().value;
-    auto rank = shape.rank();
-    auto padding = shape.padding();
+    auto logical_shape = input_grad.get_logical_shape();
+    auto padded_shape = input_grad.get_padded_shape();
+    auto rank = logical_shape.rank();
     for (auto dim : dims) {
         TT_FATAL(dim < rank, "dim {} < rank {}", dim, rank);
         bool is_tile_dim = (dim == rank - 1 || dim == rank - 2);
+        logical_shape[dim] = 1;
         if (is_tile_dim) {
-            shape[dim] = tt::constants::TILE_HEIGHT;
-            padding[dim] = Padding::PadDimension{0, 31};
+            padded_shape[dim] = tt::constants::TILE_HEIGHT;
         } else {
-            shape[dim] = 1;
+            padded_shape[dim] = 1;
         }
     }
 
-    return Shape(tt::tt_metal::LegacyShape(shape, padding));
+    return {logical_shape, padded_shape};
 }
 MorehSumBackwardOperation::ProgramFactory::cached_program_t MorehSumBackwardOperation::ProgramFactory::create(
     const operation_attributes_t& operation_attributes,
@@ -75,15 +75,15 @@ MorehSumBackwardOperation::ProgramFactory::cached_program_t MorehSumBackwardOper
     const auto cb_data_format = datatype_to_dataformat_converter(output_grad.get_dtype());
     const auto single_tile_size{tt::tt_metal::detail::TileSize(cb_data_format)};
 
-    const auto& input_grad_shape = input_grad.get_shape();
-    const auto& input_grad_shape_wo_padding = input_grad_shape.value.without_padding();
+    const auto& input_grad_shape = input_grad.get_padded_shape();
+    const auto& input_grad_shape_wo_padding = input_grad.get_logical_shape();
     const uint32_t input_grad_rank = input_grad_shape.rank();
 
     ttnn::SmallVector<uint32_t> input_grad_dim(input_grad_rank, 1);
     log_debug(tt::LogOp, "input_grad");
     get_tensor_dim(input_grad_dim, input_grad_shape);
-    const auto& output_grad_shape = get_output_grad_shape(output_grad, input_grad, dims, keepdim);
-    const auto& output_grad_shape_wo_padding = output_grad_shape.value.without_padding();
+    const auto [output_grad_shape_wo_padding, output_grad_shape] =
+        get_output_grad_shape(output_grad, input_grad, dims, keepdim);
 
     ttnn::SmallVector<uint32_t> output_grad_dim(input_grad_rank, 1);
     log_debug(tt::LogOp, "output_grad");

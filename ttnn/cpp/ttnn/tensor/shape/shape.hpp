@@ -4,16 +4,11 @@
 
 #pragma once
 
-#include "shape_base.hpp"
-
-#if TTNN_WITH_PYTHON_BINDINGS
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
-#endif
+#include <tt-metalium/shape_base.hpp>
 
 namespace tt::tt_metal {
 
-class SimpleShape final : protected ShapeBase {
+class Shape final : protected ShapeBase {
 public:
     using ShapeBase::ShapeBase;
     using ShapeBase::operator[];
@@ -29,7 +24,7 @@ public:
         return sameSize && std::equal(value_.begin(), value_.end(), other.begin());
     }
 
-    bool operator==(const SimpleShape& other) const;
+    bool operator==(const Shape& other) const;
     bool operator==(const ShapeBase::Container& other) const;
 
     [[nodiscard]] size_t rank() const;
@@ -42,29 +37,15 @@ public:
     auto attribute_values() const { return std::forward_as_tuple(this->value_); }
 
     std::array<uint32_t, 4> to_array_4D() const;
+    Shape to_rank(size_t new_rank) const;
 
-    friend std::ostream& operator<<(std::ostream& os, const SimpleShape& shape);
+    friend std::ostream& operator<<(std::ostream& os, const Shape& shape);
 };
 
-std::ostream& operator<<(std::ostream& os, const tt::tt_metal::SimpleShape& shape);
+std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Shape& shape);
 
 }  // namespace tt::tt_metal
 
 namespace ttnn {
-using tt::tt_metal::SimpleShape;
+using tt::tt_metal::Shape;
 }  // namespace ttnn
-
-#if TTNN_WITH_PYTHON_BINDINGS
-namespace PYBIND11_NAMESPACE {
-namespace detail {
-template <>
-class type_caster<ttnn::SimpleShape> {
-public:
-    PYBIND11_TYPE_CASTER(ttnn::SimpleShape, _("SimpleShape"));
-
-    bool load(handle src, bool);
-    static handle cast(const ttnn::SimpleShape& src, return_value_policy /* policy */, handle /* parent */);
-};
-}  // namespace detail
-}  // namespace PYBIND11_NAMESPACE
-#endif

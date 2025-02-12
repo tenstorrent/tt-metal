@@ -205,12 +205,12 @@ Details on multi-device APIs can be seen [here](./../Programming_Mesh_of_Devices
 
 ### Optimizing data transfers
 
-TODO
+Coming soon!
 
 ## Performance Analysis
 
-TODO
+Coming soon!
 
 ## Troubleshooting, Debugging, Pitfalls
 
-TODO
+Coming soon!

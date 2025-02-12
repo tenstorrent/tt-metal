@@ -272,6 +272,8 @@ class Buffer final {
         DEALLOCATED,
     };
 
+    void allocate_impl();
+
     // Deallocate is allowed to be called multiple times on the same buffer
     void deallocate();
     static void deleter(Buffer* buffer);

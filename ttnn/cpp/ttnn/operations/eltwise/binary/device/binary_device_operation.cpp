@@ -8,7 +8,6 @@
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
 
 using namespace tt::tt_metal;
@@ -176,7 +175,7 @@ void BinaryDeviceOperation::validate_on_program_cache_hit(
     auto width_a = input_shape_a[-1];
 
     const auto input_shape_b =
-        tensor_args.input_tensor_b.has_value() ? tensor_args.input_tensor_b->get_logical_shape() : ttnn::SimpleShape{1, 1};
+        tensor_args.input_tensor_b.has_value() ? tensor_args.input_tensor_b->get_logical_shape() : ttnn::Shape{1, 1};
     auto batch_size_0_b = input_shape_b.rank() >= 4 ? input_shape_b[-4] : 1;
     auto batch_size_1_b = input_shape_b.rank() >= 3 ? input_shape_b[-3] : 1;
     auto height_b = input_shape_b[-2];
@@ -208,7 +207,7 @@ BinaryDeviceOperation::spec_return_value_t BinaryDeviceOperation::compute_output
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto input_shape_a = input_tensor_a.logical_shape();
     const auto& tensor_b = tensor_args.input_tensor_b;
-    const auto input_shape_b = tensor_b.has_value() ? tensor_b->logical_shape() : ttnn::SimpleShape{};
+    const auto input_shape_b = tensor_b.has_value() ? tensor_b->logical_shape() : ttnn::Shape{};
 
     const int rank_a = input_shape_a.rank();
     const int rank_b = input_shape_b.rank();
@@ -233,7 +232,7 @@ BinaryDeviceOperation::spec_return_value_t BinaryDeviceOperation::compute_output
                 output_shape[i + larger_rank] = dim_a + dim_b - 1;
             }
         }
-        return ttnn::SimpleShape(output_shape);
+        return ttnn::Shape(output_shape);
     };
     auto output_shape = compute_broadcasted_output(input_shape_a, input_shape_b);
 

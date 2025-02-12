@@ -5,7 +5,7 @@
 #include "tt_metal/impl/allocator/algorithms/free_list_opt.hpp"
 #include <assert.hpp>
 #include <hal.hpp>
-#include <allocator_algorithm.hpp>
+#include "allocator_algorithm.hpp"
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>

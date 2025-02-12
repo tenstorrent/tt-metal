@@ -14,10 +14,6 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
 
-# Override the default timeout in seconds for hang detection.
-TIMEOUT = 30
-
-random.seed(0)
 
 # Parameters provided to the test vector generator are defined here.
 # They are defined as dict-type suites that contain the arguments to the run function as keys, and lists of possible inputs as values.
@@ -25,21 +21,11 @@ random.seed(0)
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
     "nightly": {
-        "input_shape": gen_shapes([1, 1, 1, 1], [6, 12, 256, 256], [1, 1, 1, 1], 16)
-        + gen_shapes([1, 1, 1], [12, 256, 256], [1, 1, 1], 16)
-        + gen_shapes([1, 1], [256, 256], [1, 1], 16),
-        "eps": [0, 10e-6, 10e-5, 10e-4, 10e-3, 10e-2, 10e-1],
-        "input_a_dtype": [ttnn.bfloat16],
-        "input_a_layout": [ttnn.TILE_LAYOUT],
-        "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
-        "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
-    },
-    "xfail": {
-        "input_shape": gen_shapes([1, 1, 1, 1], [6, 12, 256, 256], [1, 1, 1, 1], 1)
-        + gen_shapes([1, 1, 1], [12, 256, 256], [1, 1, 1], 1)
-        + gen_shapes([1, 1], [256, 256], [1, 1], 1),
-        "eps": [0, 10e-6, 10e-5, 10e-4, 10e-3, 10e-2, 10e-1],
-        "input_a_dtype": [ttnn.bfloat8_b],
+        "input_shape": gen_shapes([1, 1, 1, 1], [6, 12, 256, 256], [1, 1, 1, 1], 8)
+        + gen_shapes([1, 1, 1], [12, 256, 256], [1, 1, 1], 8)
+        + gen_shapes([1, 1], [256, 256], [1, 1], 8),
+        "eps": [0, 1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1],
+        "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
@@ -61,13 +47,13 @@ def run(
     *,
     device,
 ) -> list:
-    data_seed = random.randint(0, 20000000)
-    torch.manual_seed(data_seed)
+    torch.manual_seed(0)
 
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(input_shape)
-    torch_output_tensor = torch.logit(torch_input_tensor_a, eps)
+    golden_function = ttnn.get_golden_function(ttnn.logit)
+    torch_output_tensor = golden_function(torch_input_tensor_a, eps=eps, device=device)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -83,5 +69,4 @@ def run(
     e2e_perf = stop_measuring_time(start_time)
 
     pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.99)
-    # print(f"eps {eps} pcc {pcc}")
     return [pcc, e2e_perf]

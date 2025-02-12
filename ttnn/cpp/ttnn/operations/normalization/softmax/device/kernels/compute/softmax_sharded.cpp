@@ -25,7 +25,7 @@ ALWI void calc_numeric_stable(uint32_t cb_in, uint32_t cb_bcast_scaler, uint32_t
     reconfig_data_format(cb_in, cb_bcast_scaler);
     pack_reconfig_data_format(cb_max);
     cb_reserve_back(cb_max, 1);
-    reduce_init_delta<false, PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_max, cb_in, cb_bcast_scaler);
+    reduce_init_delta<false, PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_in, cb_bcast_scaler, cb_max);
     cb_wait_front(cb_bcast_scaler, 1);
     for (uint32_t w = 0; w < block_w; w++) {
         constexpr uint32_t bcast_scaler0 = 0;
@@ -40,7 +40,7 @@ ALWI void calc_numeric_stable(uint32_t cb_in, uint32_t cb_bcast_scaler, uint32_t
     exp_tile_init<EXP_APPROX>();
     reconfig_data_format_srcb(cb_max);
     cb_wait_front(cb_max, 1);
-    sub_bcast_cols_init_short();
+    sub_bcast_cols_init_short(cb_in, cb_max);
     uint32_t index_subblock_w_offset = 0;
     for (uint32_t j = 0; j < num_subblocks_w; j++) {
         ACQ();
@@ -97,7 +97,7 @@ void MAIN {
         reconfig_data_format(cb_in0, cb_fused_scale);
         pack_reconfig_data_format(cb_scale_mask);
         cb_wait_front(cb_fused_scale, 1);
-        mul_tiles_bcast_scalar_init_short();
+        mul_tiles_bcast_scalar_init_short(cb_in0, cb_fused_scale);
         index_subblock_w_offset = 0;
         for (uint32_t j = 0; j < num_subblocks_w; j++) {
             ACQ();
@@ -124,9 +124,9 @@ void MAIN {
         index_subblock_w_offset = 0;
 
 #ifdef CAUSAL_MASK
-        add_tiles_init();
+        add_tiles_init(cb_scale_mask, cb_fused_attn);
 #else
-        add_bcast_rows_init_short();
+        add_bcast_rows_init_short(cb_scale_mask, cb_fused_attn);
 #endif
 
 #ifndef NUMERIC_STABLE
@@ -203,7 +203,7 @@ void MAIN {
 
         // sum(exp(x))
         ACQ();
-        reduce_init_delta<false>(cb_recipsumexps, cb_exps, cb_bcast_scaler);
+        reduce_init_delta<false>(cb_exps, cb_bcast_scaler, cb_recipsumexps);
         cb_wait_front(cb_exps, block_w);
         cb_wait_front(cb_bcast_scaler, 1);
         cb_reserve_back(cb_recipsumexps, 1);
@@ -222,7 +222,7 @@ void MAIN {
         reconfig_data_format(cb_exps, cb_recipsumexps);
         pack_reconfig_data_format(cb_out0);
         cb_wait_front(cb_recipsumexps, 1);
-        mul_bcast_cols_init_short();
+        mul_bcast_cols_init_short(cb_exps, cb_recipsumexps);
         index_subblock_w_offset = 0;
         for (uint32_t j = 0; j < num_subblocks_w; j++) {
             ACQ();

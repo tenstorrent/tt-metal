@@ -62,6 +62,12 @@ void generate_ccl_command_stream_to_kernel_args(
     ttnn::ccl::tensor_address_runtime_args_overrider *rt_args_overrider_out,
     std::vector<uint32_t>& rt_args_out);
 
+/*
+ * @return the runtime args
+ */
+std::vector<uint32_t> generate_edm_connection_rt_args(
+    const ttnn::ccl::SenderWorkerAdapterSpec& connection_info, Program& program, CoreRangeSet worker_cores);
+
 // TODO: eventually take a fabric handle
 void generate_multi_input_command_stream_kernel_rt_args(
     Program& program,
@@ -149,9 +155,11 @@ struct CCLWorkerArgBuilder {
     std::vector<uint32_t> generate_sender_writer_kernel_rt_args(
         std::optional<ttnn::ccl::SenderWorkerAdapterSpec> const& forward_fabric_connection,
         const size_t sender_worker_forward_flow_control_semaphore_id,
+        const size_t sender_worker_forward_teardown_semaphore_id,
         const size_t sender_worker_forward_buffer_index_semaphore_id,
         std::optional<ttnn::ccl::SenderWorkerAdapterSpec> const& backward_fabric_connection,
         const size_t sender_worker_backward_flow_control_semaphore_id,
+        const size_t sender_worker_backward_teardown_semaphore_id,
         const size_t sender_worker_backward_buffer_index_semaphore_id,
         const size_t forward_direction_distance_to_end_of_line,
         const size_t backward_direction_distance_to_end_of_line,

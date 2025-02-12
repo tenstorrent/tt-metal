@@ -13,8 +13,8 @@
 enum class ExpectedResult { OK, ERROR };
 
 struct MatmulInput {
-    ttnn::Shape shape_a;
-    ttnn::Shape shape_b;
+    ttnn::SmallVector<uint32_t> shape_a;
+    ttnn::SmallVector<uint32_t> shape_b;
     bool transpose_a{false};
     bool transpose_b{false};
 };
@@ -71,8 +71,8 @@ TEST_F(GPT2SBatch64Test, Matmul) {
     auto run_matmul = [](auto& a, auto& b, bool transpose_a, bool transpose_b) {
         fmt::println(
             "Running matmul with shapes {} and {}, tranpose_a {} transpose_b {}",
-            a.get_shape(),
-            b.get_shape(),
+            a.get_logical_shape(),
+            b.get_logical_shape(),
             transpose_a,
             transpose_b);
         [[maybe_unused]] auto c = ttnn::matmul(
@@ -93,8 +93,8 @@ TEST_F(GPT2SBatch64Test, Matmul) {
         auto [shape_a, shape_b, transpose_a, transpose_b] = input;
 
         auto* device = &ttml::autograd::ctx().get_device();
-        auto a = ttml::core::empty(shape_a, device, {});
-        auto b = ttml::core::empty(shape_b, device, {});
+        auto a = ttml::core::empty(ttnn::Shape(shape_a), device, {});
+        auto b = ttml::core::empty(ttnn::Shape(shape_b), device, {});
 
         if (expected_result == ExpectedResult::OK) {
             EXPECT_NO_THROW(run_matmul(a, b, transpose_a, transpose_b));

@@ -11,21 +11,16 @@ permissions:
   packages: write
 
 jobs:
-  build-docker-image:
-    uses: ./.github/workflows/build-docker-artifact.yaml
-    secrets: inherit
   build-artifact:
-    needs: build-docker-image
+    needs: create-tag
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
     with:
-      build-docker: false
+      build-wheel: true
   build-artifact-profiler:
-    needs: build-docker-image
     uses: ./.github/workflows/build-artifact.yaml
     with:
       tracy: true
-      build-docker: false
   single-card-demos:
     needs: build-artifact
     uses: ./.github/workflows/single-card-demo-tests-impl.yaml
@@ -126,21 +121,12 @@ jobs:
         with:
           name: release-notes
           path: RELEASE_NOTES.txt
-  build-wheels:
-    needs: create-tag
-    strategy:
-      matrix:
-        os: [ubuntu-20.04]
-    uses: ./.github/workflows/_build-wheels-impl.yaml
-    with:
-      os: ${{ matrix.os }}
-      from-precompiled: false
   # Candidate for breaking up
   create-and-upload-draft-release:
     needs: [
       create-tag,
       create-release-notes,
-      build-wheels,
+      build-artifact,
     ]
     strategy:
       matrix:
@@ -151,6 +137,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Create archive with submodules
+        uses: qmonnet/git-archive-all-action@791fb850881cf58b1d1fcc9b06c01940080bba0a
+        with:
+          output-files: tt-metalium.tar.gz
       - name: Download eager Python packages
         uses: actions/download-artifact@v4
         with:
@@ -184,15 +176,18 @@ jobs:
             INSTALLING.md
             models/MODEL_UPDATES.md
             ttnn-*+*.whl
+            tt-metalium.tar.gz
           fail_on_unmatched_files: true
   create-docker-release-image:
     needs: [
+      build-artifact,
       create-tag,
       create-and-upload-draft-release
     ]
     uses: ./.github/workflows/publish-release-image.yaml
     secrets: inherit
     with:
+      base-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
       version: ${{ needs.create-tag.outputs.version }}
       is_major_version:  ${{ needs.get-params.outputs.is-release-candidate !='true' && needs.get-params.outputs.should-create-release == 'true' }}
   release-docs:

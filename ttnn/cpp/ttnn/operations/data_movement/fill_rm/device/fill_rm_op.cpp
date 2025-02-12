@@ -101,7 +101,7 @@ void FillRM::validate(const std::vector<Tensor>& input_tensors) const {
 }
 
 std::vector<ttnn::TensorSpec> FillRM::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
-    ttnn::SimpleShape shape({this->N, this->C, this->H, this->W});
+    ttnn::Shape shape({this->N, this->C, this->H, this->W});
     const auto& input_tensor = input_tensors.at(0);
     return {
         TensorSpec(shape, TensorLayout(input_tensor.get_dtype(), PageConfig(Layout::ROW_MAJOR), output_mem_config))};

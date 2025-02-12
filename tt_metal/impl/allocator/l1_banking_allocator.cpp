@@ -16,6 +16,7 @@
 #include <allocator.hpp>
 #include <allocator_types.hpp>
 #include <buffer_constants.hpp>
+#include "bank_manager.hpp"
 #include <assert.hpp>
 #include <core_coord.hpp>
 #include "umd/device/types/xy_pair.h"
@@ -26,8 +27,6 @@
 namespace tt {
 
 namespace tt_metal {
-
-namespace allocator {
 
 struct num_banks_t {
     uint32_t total;
@@ -69,27 +68,25 @@ num_banks_t compute_total_and_storage_only_num_l1_banks(const AllocatorConfig& a
     };
 }
 
-void init_compute_and_storage_l1_bank_manager(Allocator& allocator, const AllocatorConfig& alloc_config) {
-    TT_FATAL(
-        alloc_config.worker_grid.contains(alloc_config.compute_grid), "Compute grid must be a subset of worker grid");
-    num_banks_t num_banks = compute_total_and_storage_only_num_l1_banks(alloc_config);
-    auto logical_to_noc_coord = [&alloc_config](CoreCoord logical_core) {
+void Allocator::init_compute_and_storage_l1_bank_manager() {
+    TT_FATAL(config_.worker_grid.contains(config_.compute_grid), "Compute grid must be a subset of worker grid");
+    num_banks_t num_banks = compute_total_and_storage_only_num_l1_banks(config_);
+    auto logical_to_noc_coord = [this](CoreCoord logical_core) {
         TT_ASSERT(
-            alloc_config.worker_log_to_virtual_routing_x.find(logical_core.x) !=
-                    alloc_config.worker_log_to_virtual_routing_x.end() and
-                alloc_config.worker_log_to_virtual_routing_y.find(logical_core.y) !=
-                    alloc_config.worker_log_to_virtual_routing_y.end(),
+            config_.worker_log_to_virtual_routing_x.find(logical_core.x) !=
+                    config_.worker_log_to_virtual_routing_x.end() and
+                config_.worker_log_to_virtual_routing_y.find(logical_core.y) !=
+                    config_.worker_log_to_virtual_routing_y.end(),
             "Cannot find log_coord=[.y={}, .x={}] in logical to routing coord lookup tables... invalid AllocatorConfig "
             "setup",
             logical_core.y,
             logical_core.x);
         CoreCoord noc_core({
-            static_cast<std::size_t>(alloc_config.worker_log_to_virtual_routing_x.at(logical_core.x)),
-            static_cast<std::size_t>(alloc_config.worker_log_to_virtual_routing_y.at(logical_core.y)),
+            static_cast<std::size_t>(config_.worker_log_to_virtual_routing_x.at(logical_core.x)),
+            static_cast<std::size_t>(config_.worker_log_to_virtual_routing_y.at(logical_core.y)),
         });
         TT_ASSERT(
-            alloc_config.core_type_from_noc_coord_table.find(noc_core) !=
-                alloc_config.core_type_from_noc_coord_table.end(),
+            config_.core_type_from_noc_coord_table.find(noc_core) != config_.core_type_from_noc_coord_table.end(),
             "Cannot find noc-coord=[.y={}, .x={}] in core_type_from_noc_coord_table... invalid AllocatorConfig setup",
             noc_core.y,
             noc_core.x);
@@ -100,15 +97,14 @@ void init_compute_and_storage_l1_bank_manager(Allocator& allocator, const Alloca
     // Only l1_banks are shuffled, l1_small_banks are just contiguous and don't
     // need remapping since they are only for compute cores
     std::vector<uint32_t> shuffled_bank_id = {};
-    if (not alloc_config.l1_bank_remap.empty()) {
+    if (not config_.l1_bank_remap.empty()) {
         TT_ASSERT(
-            num_banks.num_l1_banks == alloc_config.l1_bank_remap.size(),
+            num_banks.num_l1_banks == config_.l1_bank_remap.size(),
             "override l1_bank_remap.size()={} which is not equal to the expected expected_num_l1_banks={} from "
             "soc-desc",
-            alloc_config.l1_bank_remap.size(),
+            config_.l1_bank_remap.size(),
             num_banks.num_l1_banks);
-        std::copy(
-            alloc_config.l1_bank_remap.begin(), alloc_config.l1_bank_remap.end(), std::back_inserter(shuffled_bank_id));
+        std::copy(config_.l1_bank_remap.begin(), config_.l1_bank_remap.end(), std::back_inserter(shuffled_bank_id));
     } else {
         // randomize remap
         for (uint32_t id = 0; id < num_banks.num_l1_banks; id++) {
@@ -122,27 +118,27 @@ void init_compute_and_storage_l1_bank_manager(Allocator& allocator, const Alloca
     // If l1_small_size exists, then it gets the top of L1 (offset 0)
     // and the regular L1 region is offset just below it
     uint32_t bank_id = 0;
-    const auto& cores = corerange_to_cores(alloc_config.worker_grid, std::nullopt, true);
+    const auto& cores = corerange_to_cores(config_.worker_grid, std::nullopt, true);
     for (const auto& logical_core : cores) {
         CoreCoord noc_core = logical_to_noc_coord(logical_core);
 
-        if (alloc_config.core_type_from_noc_coord_table.at(noc_core) == AllocCoreType::ComputeAndStore) {
+        if (config_.core_type_from_noc_coord_table.at(noc_core) == AllocCoreType::ComputeAndStore) {
             uint32_t remapped_bank_id = shuffled_bank_id[bank_id];
-            allocator.logical_core_to_bank_ids[BufferType::L1].insert({logical_core, {remapped_bank_id}});
-            allocator.bank_id_to_logical_core.insert({remapped_bank_id, logical_core});
+            logical_core_to_bank_ids_[BufferType::L1].insert({logical_core, {remapped_bank_id}});
+            bank_id_to_logical_core_.insert({remapped_bank_id, logical_core});
             bank_id_to_bank_offset.insert({remapped_bank_id, 0});
             bank_id++;
-        } else if (alloc_config.core_type_from_noc_coord_table.at(noc_core) == AllocCoreType::StorageOnly) {
+        } else if (config_.core_type_from_noc_coord_table.at(noc_core) == AllocCoreType::StorageOnly) {
             std::vector<uint32_t> bank_ids;
             for (int storage_bank_index = 0; storage_bank_index < num_banks.per_storage_core; storage_bank_index++) {
                 uint32_t remapped_bank_id = shuffled_bank_id[bank_id];
                 bank_ids.push_back(remapped_bank_id);
-                allocator.bank_id_to_logical_core.insert({remapped_bank_id, logical_core});
+                bank_id_to_logical_core_.insert({remapped_bank_id, logical_core});
                 int64_t bank_offset_bytes = 0;
-                if (alloc_config.storage_core_bank_size.value() != alloc_config.worker_l1_size) {
-                    uint64_t storage_core_offset = storage_bank_index * alloc_config.storage_core_bank_size.value();
+                if (config_.storage_core_bank_size.value() != config_.worker_l1_size) {
+                    uint64_t storage_core_offset = storage_bank_index * config_.storage_core_bank_size.value();
                     bank_offset_bytes = static_cast<int64_t>(storage_core_offset) -
-                                        alloc_config.storage_core_bank_size
+                                        config_.storage_core_bank_size
                                             .value();  // Assuming top-down here --  Not sure if this is hacky... need
                                                        // to specialize based off top-down cofnig flag or not?
                 } else if (num_banks.per_storage_core != 1) {
@@ -154,23 +150,23 @@ void init_compute_and_storage_l1_bank_manager(Allocator& allocator, const Alloca
                 bank_id_to_bank_offset.insert({remapped_bank_id, bank_offset_bytes});
                 bank_id++;
             }
-            allocator.logical_core_to_bank_ids[BufferType::L1].insert({logical_core, bank_ids});
+            logical_core_to_bank_ids_[BufferType::L1].insert({logical_core, bank_ids});
         }
     }
     TT_ASSERT(bank_id == shuffled_bank_id.size());
 
     std::unordered_map<uint32_t, int64_t> small_bank_id_to_bank_offset;
-    if (alloc_config.l1_small_size > 0) {
+    if (config_.l1_small_size > 0) {
         TT_ASSERT(num_banks.num_l1_small_banks > 0);
         for (const auto& logical_core : cores) {
             CoreCoord noc_core = logical_to_noc_coord(logical_core);
 
-            if (alloc_config.core_type_from_noc_coord_table.at(noc_core) != AllocCoreType::ComputeAndStore) {
+            if (config_.core_type_from_noc_coord_table.at(noc_core) != AllocCoreType::ComputeAndStore) {
                 continue;
             }
 
-            allocator.logical_core_to_bank_ids[BufferType::L1_SMALL].insert({logical_core, {bank_id}});
-            allocator.bank_id_to_logical_core.insert({bank_id, logical_core});
+            logical_core_to_bank_ids_[BufferType::L1_SMALL].insert({logical_core, {bank_id}});
+            bank_id_to_logical_core_.insert({bank_id, logical_core});
             small_bank_id_to_bank_offset.insert({bank_id, 0});
             bank_id++;
         }
@@ -189,50 +185,47 @@ void init_compute_and_storage_l1_bank_manager(Allocator& allocator, const Alloca
     // Storage only cores only need to reserve mailbox space to hold barriers
     uint32_t mem_mailbox_base = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::MAILBOX);
     uint32_t storage_core_unreserved_base =
-        ((mem_mailbox_base + alloc_config.alignment - 1) / alloc_config.alignment) * alloc_config.alignment;
+        ((mem_mailbox_base + config_.l1_alignment - 1) / config_.l1_alignment) * config_.l1_alignment;
 
     // There is only l1_bank_size bytes available for L1 buffers to be allocated in
-    uint64_t l1_bank_size = alloc_config.storage_core_bank_size.has_value()
-                                ? alloc_config.storage_core_bank_size.value()
-                                : (alloc_config.worker_l1_size - alloc_config.l1_unreserved_base);
+    uint64_t l1_bank_size = config_.storage_core_bank_size.has_value()
+                                ? config_.storage_core_bank_size.value()
+                                : (config_.worker_l1_size - config_.l1_unreserved_base);
     uint64_t interleaved_address_limit =
-        static_cast<uint64_t>(alloc_config.worker_l1_size - l1_bank_size) + storage_core_unreserved_base;
-    uint64_t allocatable_l1_size = static_cast<uint64_t>(alloc_config.worker_l1_size) -
-                                   alloc_config.l1_unreserved_base - alloc_config.l1_small_size;
+        static_cast<uint64_t>(config_.worker_l1_size - l1_bank_size) + storage_core_unreserved_base;
+    uint64_t allocatable_l1_size =
+        static_cast<uint64_t>(config_.worker_l1_size) - config_.l1_unreserved_base - config_.l1_small_size;
     // Assuming top down allocation for L1 buffers so the allocatable memory space is the top l1_bank_size bytes of L1
-    allocator.l1_manager = BankManager(
+    l1_manager_ = std::make_unique<BankManager>(
         BufferType::L1,
         bank_id_to_bank_offset,
         allocatable_l1_size,
         interleaved_address_limit,
-        alloc_config.alignment,
-        alloc_config.l1_unreserved_base,
-        alloc_config.disable_interleaved);
+        config_.l1_alignment,
+        config_.l1_unreserved_base,
+        config_.disable_interleaved);
 
-    uint64_t small_interleaved_address_limit = alloc_config.worker_l1_size - alloc_config.l1_small_size;
-    uint64_t small_alloc_offset = alloc_config.l1_unreserved_base + allocatable_l1_size;
+    uint64_t small_interleaved_address_limit = config_.worker_l1_size - config_.l1_small_size;
+    uint64_t small_alloc_offset = config_.l1_unreserved_base + allocatable_l1_size;
     TT_ASSERT(
-        (alloc_config.l1_unreserved_base + alloc_config.l1_small_size) <= alloc_config.worker_l1_size,
+        (config_.l1_unreserved_base + config_.l1_small_size) <= config_.worker_l1_size,
         "L1 small region extends past L1 size");
-    allocator.l1_small_manager = BankManager(
+    l1_small_manager_ = std::make_unique<BankManager>(
         BufferType::L1_SMALL,
         small_bank_id_to_bank_offset,
-        alloc_config.l1_small_size,
+        config_.l1_small_size,
         small_interleaved_address_limit,
-        alloc_config.alignment,
+        config_.l1_alignment,
         small_alloc_offset,
-        alloc_config.disable_interleaved);
+        config_.disable_interleaved);
 }
 
-}  // namespace allocator
+L1BankingAllocator::L1BankingAllocator(const AllocatorConfig& alloc_config) : Allocator(alloc_config) {
+    this->init_one_bank_per_channel();
+    this->init_compute_and_storage_l1_bank_manager();
+    this->validate_bank_assignments();
+}
 
-L1BankingAllocator::L1BankingAllocator(const AllocatorConfig& alloc_config) :
-    Allocator(
-        alloc_config,
-        allocator::AllocDescriptor{
-            .dram = {.init = allocator::init_one_bank_per_channel, .alloc = allocator::base_alloc},
-            .l1 = {.init = allocator::init_compute_and_storage_l1_bank_manager, .alloc = allocator::base_alloc}}) {}
-L1BankingAllocator::~L1BankingAllocator() { Allocator::reset(); }
 }  // namespace tt_metal
 
 }  // namespace tt

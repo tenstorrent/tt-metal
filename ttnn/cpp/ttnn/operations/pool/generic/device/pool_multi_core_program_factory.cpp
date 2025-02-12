@@ -43,8 +43,8 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     auto reader_indices_buffer = reader_indices.device_buffer();
     tt::tt_metal::Buffer* dst_dram_buffer = output.buffer();
 
-    const tt::tt_metal::LegacyShape input_shape = input.get_legacy_shape();
-    const tt::tt_metal::LegacyShape output_shape = output.get_legacy_shape();
+    const auto input_shape = input.get_padded_shape();
+    const auto output_shape = output.get_padded_shape();
 
     tt::DataFormat in_df = datatype_to_dataformat_converter(input.get_dtype());
     tt::DataFormat out_df = datatype_to_dataformat_converter(output.get_dtype());
@@ -416,7 +416,7 @@ Pool2D::MultiCore::cached_program_t Pool2D::MultiCore::create(
         sliding_window::generate_sliding_window_op_config(op_trace_metadata, shard_boundaries, false, true);
     auto reader_indices =
         sliding_window::construct_on_host_config_tensor(top_left_indices, sliding_window_config, parallel_config);
-    log_debug(tt::LogOp, "reader_indices shape: {}", reader_indices.shape());
+    log_debug(tt::LogOp, "reader_indices shape: {}", reader_indices.logical_shape());
     auto reader_indices_on_device =
         sliding_window::move_config_tensor_to_device(reader_indices, parallel_config, is_block_sharded, input.device());
 

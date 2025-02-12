@@ -5,7 +5,6 @@
 #include "ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
 #include "ttnn/operations/math.hpp"
 
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/hal_exp.hpp>
 
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -94,7 +93,7 @@ AllGatherConfig::AllGatherConfig(
         // See issue #6448
         int outer_dims_size = 1;
         for (std::size_t i = 0; i < dim; i++) {
-            outer_dims_size *= input_tensor.get_legacy_shape()[i];
+            outer_dims_size *= input_tensor.get_padded_shape()[i];
         }
         if (outer_dims_size > 1) {
             this->enable_bidirectional = false;
@@ -287,7 +286,7 @@ Tensor all_gather(
                 if (input_tensor.get_dtype() != DataType::BFLOAT16 && input_tensor.get_dtype() != DataType::FLOAT32) {
                     input_tensor = ttnn::typecast(input_tensor, DataType::BFLOAT16);
                 }
-                input_tensor = ttnn::pad(0, input_tensor, padding, 0, false, std::nullopt);
+                input_tensor = ttnn::pad(input_tensor, padding, 0, false, std::nullopt);
                 if (original_dtype != input_tensor.get_dtype()) {
                     input_tensor = ttnn::typecast(input_tensor, original_dtype);
                 }

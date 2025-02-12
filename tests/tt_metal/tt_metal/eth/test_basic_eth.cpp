@@ -12,7 +12,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"
-#include <tt-metalium/llrt.hpp>
+#include "llrt.hpp"
 
 // TODO: ARCH_NAME specific, must remove
 #include "eth_l1_address_map.h"

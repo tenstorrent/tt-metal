@@ -311,7 +311,7 @@ int main(int argc, char** argv) {
 
         int pci_express_slot = 0;
         tt_metal::IDevice* device = tt_metal::CreateDevice(pci_express_slot);
-        uint32_t l1_unreserved_base = device->get_base_allocator_addr(HalMemType::L1);
+        uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
         const tt::ARCH arch = device->arch();
         ////////////////////////////////////////////////////////////////////////////
         //                      Check Input Args

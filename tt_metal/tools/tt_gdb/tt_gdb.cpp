@@ -15,6 +15,8 @@
 
 #include "tt_gdb.hpp"
 
+#include "llrt.hpp"
+
 using json = nlohmann::json;
 
 namespace tt_gdb {

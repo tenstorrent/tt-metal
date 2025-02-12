@@ -12,6 +12,8 @@ on:
           - Debug
           - RelWithDebInfo
           - CI
+  schedule:
+    - cron: "0 2,11 * * *"
 
 permissions:
   actions: read
@@ -22,24 +24,15 @@ permissions:
   packages: write
 
 jobs:
-  build-docker-image-2004:
-    uses: ./.github/workflows/build-docker-artifact.yaml
-    secrets: inherit
-    with:
-      os: ubuntu-20.04-amd64
   build-artifact:
-    needs: build-docker-image-2004
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
     with:
-      build-docker: false
       build-type: ${{ inputs.build-type || 'Release' }}
   build-artifact-profiler:
-    needs: build-docker-image-2004
     uses: ./.github/workflows/build-artifact.yaml
     with:
       tracy: true
-      build-docker: false
       build-type: ${{ inputs.build-type || 'Release' }}
     secrets: inherit
   device-perf-single-card:

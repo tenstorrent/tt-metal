@@ -19,8 +19,8 @@ namespace detail {
 
 static Tensor manual_insertion(
     const Tensor& input_tensor,
-    const ttnn::SimpleShape& logical_shape,
-    const ttnn::SimpleShape& padded_shape,
+    const ttnn::Shape& logical_shape,
+    const ttnn::Shape& padded_shape,
     IDevice* device,
     const MemoryConfig& output_mem_config) {
     TT_ASSERT(input_tensor.get_layout() == Layout::ROW_MAJOR);
@@ -48,28 +48,28 @@ static Tensor manual_insertion(
                 logical_shape,
                 TensorLayout::fromPaddedShape(
                     DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), MemoryConfig{}, logical_shape, padded_shape)))
-            .to(Layout::ROW_MAJOR);
+            .to_layout(Layout::ROW_MAJOR);
     if (device != nullptr) {
-        output = output.to(device, output_mem_config);
+        output = output.to_device(device, output_mem_config);
     }
     return output;
 }
 }  // namespace detail
 
 ttnn::Tensor ReshapeOperation::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
-    ttnn::Shape output_shape,
+    const ttnn::Shape& logical_output_shape,
+    const ttnn::Shape& padded_output_shape,
     const std::optional<MemoryConfig>& memory_config_arg) {
     using namespace tt::constants;
     auto output_mem_config = memory_config_arg.value_or(input_tensor.memory_config());
-    auto padded_output_shape = output_shape.padded_shape();
     // No-op (Will do a tensor copy)
     if (((input_tensor.get_layout() == Layout::TILE or input_tensor.get_layout() == Layout::ROW_MAJOR) &&
          padded_output_shape[3] == input_tensor.get_padded_shape()[3])) {
         // Don't need to do a check here to see the H and W both divisible by 32
         // since handled within the tensor reshape method
-        return ttnn::experimental::view(input_tensor, output_shape);
+        return ttnn::experimental::view(input_tensor, logical_output_shape, padded_output_shape);
     }
     if (input_tensor.get_padded_shape() == padded_output_shape) {
         return ttnn::operations::experimental::auto_format::AutoFormat::move_tensor_to_mem_config(
@@ -77,53 +77,39 @@ ttnn::Tensor ReshapeOperation::invoke(
     }
     uint32_t ROW_MAJOR_WIDTH = 8;
     if (input_tensor.get_layout() == Layout::ROW_MAJOR &&
-        (input_tensor.get_legacy_shape()[3] % ROW_MAJOR_WIDTH != 0 || padded_output_shape[3] % ROW_MAJOR_WIDTH != 0) &&
+        (input_tensor.get_padded_shape()[3] % ROW_MAJOR_WIDTH != 0 || padded_output_shape[3] % ROW_MAJOR_WIDTH != 0) &&
         ((padded_output_shape.volume() / padded_output_shape[-1]) % TILE_HEIGHT != 0 ||
-         padded_output_shape[-1] % TILE_WIDTH != 0 || input_tensor.get_legacy_shape()[-1] % TILE_WIDTH != 0 ||
-         (input_tensor.volume() / input_tensor.get_legacy_shape()[-1]) % TILE_HEIGHT != 0)) {
+         padded_output_shape[-1] % TILE_WIDTH != 0 || input_tensor.get_padded_shape()[-1] % TILE_WIDTH != 0 ||
+         (input_tensor.volume() / input_tensor.get_padded_shape()[-1]) % TILE_HEIGHT != 0)) {
         TT_FATAL(input_tensor.get_dtype() == DataType::BFLOAT16, "Error");
 
         return detail::manual_insertion(
             (tt::tt_metal::Tensor)input_tensor,
-            output_shape.logical_shape(),
-            output_shape.padded_shape(),
+            logical_output_shape,
+            padded_output_shape,
             input_tensor.device(),
             output_mem_config);
     }
     std::vector<Tensor> output_tensors = {Tensor(tt::tt_metal::operation::get_workers_for_op_output({input_tensor}))};
-    return operation::run(ReshapeDeviceOperation{output_shape, output_mem_config}, {input_tensor}).at(0);
+    return operation::run(
+               ReshapeDeviceOperation{logical_output_shape, padded_output_shape, output_mem_config}, {input_tensor})
+        .at(0);
 }
 
 ttnn::Tensor ReshapeOperation::invoke(
-    const ttnn::Tensor& input_tensor, ttnn::Shape shape, const std::optional<MemoryConfig>& memory_config) {
-    return invoke(DefaultQueueId, input_tensor, shape, memory_config);
-}
-
-ttnn::Tensor ReshapeOperation::invoke(const ttnn::Tensor& input_tensor, const ttnn::Shape& shape) {
-    return invoke(DefaultQueueId, input_tensor, shape, std::nullopt);
+    QueueId queue_id,
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Shape& logical_output_shape,
+    const std::optional<MemoryConfig>& memory_config_arg) {
+    return invoke(queue_id, input_tensor, logical_output_shape, logical_output_shape, memory_config_arg);
 }
 
 ttnn::Tensor ReshapeOperation::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     tt::stl::Span<const int32_t> shape_vector,
     const std::optional<MemoryConfig>& memory_config_arg) {
-    return invoke(
-        queue_id,
-        input_tensor,
-        ttnn::Shape(infer_dims_for_reshape(input_tensor, shape_vector).view()),
-        memory_config_arg);
-}
-
-ttnn::Tensor ReshapeOperation::invoke(
-    const ttnn::Tensor& input_tensor,
-    tt::stl::Span<const int32_t> shape_vector,
-    const std::optional<MemoryConfig>& memory_config_arg) {
-    return invoke(DefaultQueueId, input_tensor, shape_vector, memory_config_arg);
-}
-
-ttnn::Tensor ReshapeOperation::invoke(const ttnn::Tensor& input_tensor, tt::stl::Span<const int32_t> shape_vector) {
-    return invoke(input_tensor, shape_vector, std::nullopt);
+    return invoke(queue_id, input_tensor, infer_dims_for_reshape(input_tensor, shape_vector), memory_config_arg);
 }
 
 }  // namespace ttnn::operations::data_movement

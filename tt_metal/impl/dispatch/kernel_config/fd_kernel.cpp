@@ -5,7 +5,7 @@
 #include "fd_kernel.hpp"
 #include <host_api.hpp>
 #include <tt_metal.hpp>
-#include <dprint_server.hpp>
+#include "dprint_server.hpp"
 
 #include "prefetch.hpp"
 #include "dispatch.hpp"

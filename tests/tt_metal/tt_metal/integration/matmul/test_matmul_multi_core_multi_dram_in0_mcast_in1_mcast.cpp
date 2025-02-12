@@ -380,7 +380,7 @@ bool matmul_multi_core_multi_dram_in0_mcast_in1_mcast(tt_metal::IDevice* device)
     int per_core_M = M / num_cores_r;
     int per_core_N = N / num_cores_c;
     uint32_t single_tile_size = 2 * 1024;
-    uint32_t in0_dram_addr = device->get_base_allocator_addr(HalMemType::DRAM);
+    uint32_t in0_dram_addr = device->allocator()->get_base_allocator_addr(HalMemType::DRAM);
     uint32_t in1_dram_addr = 400 * 1024 * 1024;
     uint32_t out_dram_addr = 800 * 1024 * 1024;
 

@@ -39,8 +39,8 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
 
     bool skip_untilize = input_tensor.get_layout() == Layout::ROW_MAJOR;
 
-    auto input_shape = input_tensor.get_legacy_shape();
-    auto output_shape = output_tensor.get_legacy_shape();
+    auto input_shape = input_tensor.get_padded_shape();
+    auto output_shape = output_tensor.get_padded_shape();
 
     tt::DataFormat in_df = datatype_to_dataformat_converter(input_tensor.get_dtype());
     tt::DataFormat out_df = datatype_to_dataformat_converter(output_tensor.get_dtype());
@@ -170,6 +170,9 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     bool const is_width_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED;
 
     auto aligned_input_nstick_nbytes = out_stick_nbytes;
+    log_debug(tt::LogOp, "out_stick_nbytes = {}", out_stick_nbytes);
+    log_debug(tt::LogOp, "input_tensor.buffer()->alignment() = {}", input_tensor.buffer()->alignment());
+
     if (out_stick_nbytes % input_tensor.buffer()->alignment() != 0) {
         aligned_input_nstick_nbytes = tt::round_up(out_stick_nbytes, input_tensor.buffer()->alignment());
     }

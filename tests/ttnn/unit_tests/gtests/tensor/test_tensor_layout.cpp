@@ -21,7 +21,7 @@ namespace {
 const MemoryConfig DefaultMemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM, std::nullopt};
 
 struct Inputs {
-    SimpleShape shape;
+    Shape shape;
     DataType data_type;
     Layout layout;
 };
@@ -60,7 +60,7 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::Values(
         // Tiled
         TensorLayoutTestParams{
-            Inputs{.shape = ttnn::SimpleShape{5, 4, 3, 2}, .data_type = DataType::BFLOAT16, .layout = Layout::TILE},
+            Inputs{.shape = ttnn::Shape{5, 4, 3, 2}, .data_type = DataType::BFLOAT16, .layout = Layout::TILE},
             Expected{
                 .physical_size = {5 * 4 * 32, 32},
                 .alignment = Alignment({32, 32}),
@@ -68,8 +68,7 @@ INSTANTIATE_TEST_SUITE_P(
 
         // Row Major, bfloat16, requires padding to 2
         TensorLayoutTestParams{
-            Inputs{
-                .shape = ttnn::SimpleShape{6, 5, 4, 3}, .data_type = DataType::BFLOAT16, .layout = Layout::ROW_MAJOR},
+            Inputs{.shape = ttnn::Shape{6, 5, 4, 3}, .data_type = DataType::BFLOAT16, .layout = Layout::ROW_MAJOR},
             Expected{
                 .physical_size = {6 * 5 * 4, 3},
                 .alignment = Alignment({1}),
@@ -77,7 +76,7 @@ INSTANTIATE_TEST_SUITE_P(
 
         // Row Major, uint32
         TensorLayoutTestParams{
-            Inputs{.shape = ttnn::SimpleShape{6, 5, 4, 3}, .data_type = DataType::UINT32, .layout = Layout::ROW_MAJOR},
+            Inputs{.shape = ttnn::Shape{6, 5, 4, 3}, .data_type = DataType::UINT32, .layout = Layout::ROW_MAJOR},
             Expected{
                 .physical_size = {6 * 5 * 4, 3},
                 .alignment = Alignment({1}),
@@ -85,8 +84,7 @@ INSTANTIATE_TEST_SUITE_P(
 
         // Row Major, bfloat16, requires padding to 2, aligned
         TensorLayoutTestParams{
-            Inputs{
-                .shape = ttnn::SimpleShape{6, 5, 4, 8}, .data_type = DataType::BFLOAT16, .layout = Layout::ROW_MAJOR},
+            Inputs{.shape = ttnn::Shape{6, 5, 4, 8}, .data_type = DataType::BFLOAT16, .layout = Layout::ROW_MAJOR},
             Expected{
                 .physical_size = {6 * 5 * 4, 8},
                 .alignment = Alignment({1}),
@@ -94,23 +92,22 @@ INSTANTIATE_TEST_SUITE_P(
 
         // Tile, 1 element
         TensorLayoutTestParams{
-            Inputs{.shape = ttnn::SimpleShape{1, 1, 1, 1}, .data_type = DataType::BFLOAT16, .layout = Layout::TILE},
+            Inputs{.shape = ttnn::Shape{1, 1, 1, 1}, .data_type = DataType::BFLOAT16, .layout = Layout::TILE},
             Expected{.physical_size = {32, 32}, .alignment = Alignment({32, 32}), .strides = Strides({32, 32, 32, 1})}},
 
         // Row Major, 1 element
         TensorLayoutTestParams{
-            Inputs{
-                .shape = ttnn::SimpleShape{1, 1, 1, 1}, .data_type = DataType::BFLOAT16, .layout = Layout::ROW_MAJOR},
+            Inputs{.shape = ttnn::Shape{1, 1, 1, 1}, .data_type = DataType::BFLOAT16, .layout = Layout::ROW_MAJOR},
             Expected{.physical_size = {1, 1}, .alignment = Alignment({1}), .strides = Strides({1, 1, 1, 1})}},
 
         // Row Major, uint32_t 1 element
         TensorLayoutTestParams{
-            Inputs{.shape = ttnn::SimpleShape{1, 1, 1, 1}, .data_type = DataType::UINT32, .layout = Layout::ROW_MAJOR},
+            Inputs{.shape = ttnn::Shape{1, 1, 1, 1}, .data_type = DataType::UINT32, .layout = Layout::ROW_MAJOR},
             Expected{.physical_size = {1, 1}, .alignment = Alignment({1}), .strides = Strides({1, 1, 1, 1})}},
 
         // Rank 0, RM, in bfloat16 needs additional padding to 4 bytes
         TensorLayoutTestParams{
-            Inputs{.shape = ttnn::SimpleShape{}, .data_type = DataType::BFLOAT16, .layout = Layout::ROW_MAJOR},
+            Inputs{.shape = ttnn::Shape{}, .data_type = DataType::BFLOAT16, .layout = Layout::ROW_MAJOR},
             Expected{
                 .physical_size = {1, 1},
                 .alignment = Alignment({1}),
@@ -119,7 +116,7 @@ INSTANTIATE_TEST_SUITE_P(
 
         // Rank 0, RM, in uint32_t needs no additional padding
         TensorLayoutTestParams{
-            Inputs{.shape = ttnn::SimpleShape{}, .data_type = DataType::UINT32, .layout = Layout::ROW_MAJOR},
+            Inputs{.shape = ttnn::Shape{}, .data_type = DataType::UINT32, .layout = Layout::ROW_MAJOR},
             Expected{
                 .physical_size = {1, 1},
                 .alignment = Alignment({1}),
@@ -128,7 +125,7 @@ INSTANTIATE_TEST_SUITE_P(
 
         // Rank 0, Tile
         TensorLayoutTestParams{
-            Inputs{.shape = ttnn::SimpleShape{}, .data_type = DataType::BFLOAT16, .layout = Layout::TILE},
+            Inputs{.shape = ttnn::Shape{}, .data_type = DataType::BFLOAT16, .layout = Layout::TILE},
             Expected{
                 .physical_size = {32, 32},
                 .alignment = Alignment({32, 32}),
@@ -137,7 +134,7 @@ INSTANTIATE_TEST_SUITE_P(
 
         // Rank 1, RM, bfloat16
         TensorLayoutTestParams{
-            Inputs{.shape = ttnn::SimpleShape{1}, .data_type = DataType::BFLOAT16, .layout = Layout::ROW_MAJOR},
+            Inputs{.shape = ttnn::Shape{1}, .data_type = DataType::BFLOAT16, .layout = Layout::ROW_MAJOR},
             Expected{
                 .physical_size = {1, 1},
                 .alignment = Alignment({1}),
@@ -146,7 +143,7 @@ INSTANTIATE_TEST_SUITE_P(
 
         // Rank 1, RM, uint32
         TensorLayoutTestParams{
-            Inputs{.shape = ttnn::SimpleShape{1}, .data_type = DataType::UINT32, .layout = Layout::ROW_MAJOR},
+            Inputs{.shape = ttnn::Shape{1}, .data_type = DataType::UINT32, .layout = Layout::ROW_MAJOR},
             Expected{
                 .physical_size = {1, 1},
                 .alignment = Alignment({1}),
@@ -155,23 +152,20 @@ INSTANTIATE_TEST_SUITE_P(
 
         // Rank 1, Tile
         TensorLayoutTestParams{
-            Inputs{.shape = ttnn::SimpleShape{1}, .data_type = DataType::BFLOAT16, .layout = Layout::TILE},
+            Inputs{.shape = ttnn::Shape{1}, .data_type = DataType::BFLOAT16, .layout = Layout::TILE},
             Expected{.physical_size = {32, 32}, .alignment = Alignment({32, 32}), .strides = Strides({1})}}));
 
 struct LegacyPaddingRoundtripTestParams {
-    SimpleShape shape;
-    SimpleShape padded_shape;
+    Shape shape;
+    Shape padded_shape;
 };
 
 class TensorLayoutLegacyPaddingRoundtipTests : public ::testing::TestWithParam<LegacyPaddingRoundtripTestParams> {};
 
 TEST_P(TensorLayoutLegacyPaddingRoundtipTests, Tensor_LagacyPaddingRoundtrip) {
     const auto& params = GetParam();
-    TensorLayout layout = TensorLayout::fromLegacyPaddedShape(
-        DataType::BFLOAT16,
-        Layout::ROW_MAJOR,
-        DefaultMemoryConfig,
-        Shape(params.shape.view(), params.padded_shape.view()));
+    TensorLayout layout = TensorLayout::fromPaddedShape(
+        DataType::BFLOAT16, Layout::ROW_MAJOR, DefaultMemoryConfig, params.shape, params.padded_shape);
     EXPECT_EQ(layout.compute_padded_shape(params.shape), params.padded_shape);
 
     test_utils::test_tensor_on_device(params.shape, layout);
@@ -182,74 +176,74 @@ INSTANTIATE_TEST_SUITE_P(
     TensorLayoutLegacyPaddingRoundtipTests,
     ::testing::Values(
         LegacyPaddingRoundtripTestParams{
-            .shape = SimpleShape{10},
-            .padded_shape = SimpleShape{32},
+            .shape = Shape{10},
+            .padded_shape = Shape{32},
         },
         LegacyPaddingRoundtripTestParams{
-            .shape = SimpleShape{10},
-            .padded_shape = SimpleShape{20},
-        },
-
-        LegacyPaddingRoundtripTestParams{
-            .shape = SimpleShape{40, 30},
-            .padded_shape = SimpleShape{64, 32},
-        },
-        LegacyPaddingRoundtripTestParams{
-            .shape = SimpleShape{40, 30},
-            .padded_shape = SimpleShape{40, 32},
+            .shape = Shape{10},
+            .padded_shape = Shape{20},
         },
 
         LegacyPaddingRoundtripTestParams{
-            .shape = SimpleShape{30, 20, 10},
-            .padded_shape = SimpleShape{32, 32, 32},
+            .shape = Shape{40, 30},
+            .padded_shape = Shape{64, 32},
         },
         LegacyPaddingRoundtripTestParams{
-            .shape = SimpleShape{30, 20, 10},
-            .padded_shape = SimpleShape{30, 32, 32},
-        },
-        LegacyPaddingRoundtripTestParams{
-            .shape = SimpleShape{30, 20, 10},
-            .padded_shape = SimpleShape{30, 20, 12},
-        },
-        LegacyPaddingRoundtripTestParams{
-            .shape = SimpleShape{30, 20, 10},
-            .padded_shape = SimpleShape{30, 20, 10},
+            .shape = Shape{40, 30},
+            .padded_shape = Shape{40, 32},
         },
 
         LegacyPaddingRoundtripTestParams{
-            .shape = SimpleShape{2, 3, 16, 16},
-            .padded_shape = SimpleShape{16, 16, 32, 32},
+            .shape = Shape{30, 20, 10},
+            .padded_shape = Shape{32, 32, 32},
         },
         LegacyPaddingRoundtripTestParams{
-            .shape = SimpleShape{2, 3, 16, 16},
-            .padded_shape = SimpleShape{2, 16, 16, 16},
+            .shape = Shape{30, 20, 10},
+            .padded_shape = Shape{30, 32, 32},
         },
         LegacyPaddingRoundtripTestParams{
-            .shape = SimpleShape{2, 3, 16, 16},
-            .padded_shape = SimpleShape{2, 3, 32, 32},
+            .shape = Shape{30, 20, 10},
+            .padded_shape = Shape{30, 20, 12},
         },
         LegacyPaddingRoundtripTestParams{
-            .shape = SimpleShape{2, 3, 16, 16},
-            .padded_shape = SimpleShape{2, 3, 16, 32},
-        },
-        LegacyPaddingRoundtripTestParams{
-            .shape = SimpleShape{2, 3, 16, 16},
-            .padded_shape = SimpleShape{2, 3, 16, 16},
+            .shape = Shape{30, 20, 10},
+            .padded_shape = Shape{30, 20, 10},
         },
 
         LegacyPaddingRoundtripTestParams{
-            .shape = SimpleShape{5, 4, 3, 16, 16},
-            .padded_shape = SimpleShape{16, 16, 16, 32, 32},
+            .shape = Shape{2, 3, 16, 16},
+            .padded_shape = Shape{16, 16, 32, 32},
         },
         LegacyPaddingRoundtripTestParams{
-            .shape = SimpleShape{5, 4, 3, 16, 16},
-            .padded_shape = SimpleShape{5, 4, 4, 32, 32},
+            .shape = Shape{2, 3, 16, 16},
+            .padded_shape = Shape{2, 16, 16, 16},
         },
         LegacyPaddingRoundtripTestParams{
-            .shape = SimpleShape{5, 4, 3, 16, 16},
-            .padded_shape = SimpleShape{5, 4, 3, 16, 32},
+            .shape = Shape{2, 3, 16, 16},
+            .padded_shape = Shape{2, 3, 32, 32},
         },
         LegacyPaddingRoundtripTestParams{
-            .shape = SimpleShape{5, 4, 3, 16, 16},
-            .padded_shape = SimpleShape{5, 4, 3, 16, 16},
+            .shape = Shape{2, 3, 16, 16},
+            .padded_shape = Shape{2, 3, 16, 32},
+        },
+        LegacyPaddingRoundtripTestParams{
+            .shape = Shape{2, 3, 16, 16},
+            .padded_shape = Shape{2, 3, 16, 16},
+        },
+
+        LegacyPaddingRoundtripTestParams{
+            .shape = Shape{5, 4, 3, 16, 16},
+            .padded_shape = Shape{16, 16, 16, 32, 32},
+        },
+        LegacyPaddingRoundtripTestParams{
+            .shape = Shape{5, 4, 3, 16, 16},
+            .padded_shape = Shape{5, 4, 4, 32, 32},
+        },
+        LegacyPaddingRoundtripTestParams{
+            .shape = Shape{5, 4, 3, 16, 16},
+            .padded_shape = Shape{5, 4, 3, 16, 32},
+        },
+        LegacyPaddingRoundtripTestParams{
+            .shape = Shape{5, 4, 3, 16, 16},
+            .padded_shape = Shape{5, 4, 3, 16, 16},
         }));

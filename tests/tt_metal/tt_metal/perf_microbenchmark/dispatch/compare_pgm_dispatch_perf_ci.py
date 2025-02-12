@@ -10,21 +10,24 @@ import os
 import sys
 import pathlib
 
-golden = json.load(
-    open(
-        os.path.join(
-            pathlib.Path(__file__).parent.resolve(),
-            "pgm_dispatch_golden.json",
-        ),
-        "r",
-    )
-)
 
 THRESHOLD_PCT = 5
 
 parser = argparse.ArgumentParser(description="Compare benchmark JSON to golden")
 parser.add_argument("json", help="JSON file to compare", type=argparse.FileType("r"))
+parser.add_argument(
+    "-g",
+    "--golden",
+    help="Golden JSON file",
+    type=argparse.FileType("r"),
+    default=os.path.join(
+        pathlib.Path(__file__).parent.resolve(),
+        "pgm_dispatch_golden.json",
+    ),
+)
 args = parser.parse_args()
+
+golden = json.load(args.golden)
 
 result = json.load(args.json)
 

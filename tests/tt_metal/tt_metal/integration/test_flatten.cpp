@@ -299,17 +299,3 @@ TEST_F(DispatchFixture, TensixFlatten) {
         ASSERT_TRUE(test_flatten::flatten(this, this->devices_.at(id), num_tiles_r, num_tiles_c));
     }
 }
-
-TEST_F(CommandQueueProgramFixture, DISABLED_TensixTestAsyncFlattenStress) {
-    auto& command_queue = this->device_->command_queue();
-    auto current_mode = CommandQueue::default_mode();
-    command_queue.set_mode(CommandQueue::CommandQueueMode::ASYNC);
-    uint32_t num_tiles_r = 2;
-    uint32_t num_tiles_c = 2;
-    if (!this->IsSlowDispatch()) {
-        num_tiles_r = 1;
-        num_tiles_c = 1;
-    }
-    ASSERT_TRUE(test_flatten::flatten_stress(this->device_, num_tiles_r, num_tiles_c));
-    command_queue.set_mode(current_mode);
-}

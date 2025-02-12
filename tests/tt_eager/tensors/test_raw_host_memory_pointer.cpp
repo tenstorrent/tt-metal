@@ -28,14 +28,14 @@
 07: a_cpu = np.array([[1,2,3,4],[5,6,7,8]], dtype=np.bfloat16)
 08:
 09: // define tensors on the device with CPU tensors
-10: a_dev = torch.from_numpy(a_cpu).to(device)
+10: a_dev = torch.from_numpy(a_cpu).to_device(device)
 11:
 12: c_dev = torch.sqrt(a_dev)
 13:
 14: print(c_dev[1][0])
 15:
 16: d_cpu = np.array([[11,12,13,14],[15,16,17,18]])
-17: d_dev = d_cpu.to(device)
+17: d_dev = d_cpu.to_device(device)
 18:
 19: e_dev = c_dev + d_dev
 20: print(e_dev)
@@ -44,10 +44,10 @@
 
 template <typename DataType>
 struct NDArray {
-    ttnn::SimpleShape shape;
+    ttnn::Shape shape;
     void* data;
 
-    NDArray(const ttnn::SimpleShape& shape) : shape(shape), data(malloc(shape.volume() * sizeof(DataType))) {}
+    NDArray(const ttnn::Shape& shape) : shape(shape), data(malloc(shape.volume() * sizeof(DataType))) {}
     ~NDArray() { free(data); }
 
     std::size_t size() const { return shape.volume(); }
@@ -56,7 +56,6 @@ struct NDArray {
 void test_raw_host_memory_pointer() {
     using tt::tt_metal::BorrowedStorage;
     using tt::tt_metal::DataType;
-    using tt::tt_metal::LegacyShape;
     using tt::tt_metal::OwnedStorage;
     using tt::tt_metal::Tensor;
     using namespace tt::tt_metal::borrowed_buffer;
@@ -65,7 +64,7 @@ void test_raw_host_memory_pointer() {
     int device_id = 0;
     tt::tt_metal::IDevice* device = tt::tt_metal::CreateDevice(device_id);
 
-    ttnn::SimpleShape shape({1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH});
+    ttnn::Shape shape({1, 1, tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH});
 
     // Host tensor to print the output
     Tensor tensor_for_printing =
@@ -106,7 +105,7 @@ void test_raw_host_memory_pointer() {
     /* Sanity Check End */
 
     /*  Run and Print Start   */
-    Tensor a_dev = a_cpu.to(device);
+    Tensor a_dev = a_cpu.to_device(device);
 
     Tensor c_dev = ttnn::sqrt(a_dev);
 

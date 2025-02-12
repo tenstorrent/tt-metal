@@ -39,14 +39,18 @@ inline namespace v0 {
 
 class Buffer;
 class Program;
-class CommandQueue;
 class SubDevice;
 
 }  // namespace v0
 
 class JitBuildEnv;
-class HWCommandQueue;
+class CommandQueue;
 class TraceBuffer;
+struct TraceDescriptor;
+
+namespace detail {
+struct TraceDescriptor;
+}
 
 inline namespace v0 {
 
@@ -106,57 +110,14 @@ public:
     virtual CoreRangeSet worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const = 0;
     virtual uint32_t num_worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const = 0;
 
-    virtual const std::unique_ptr<Allocator> &get_initialized_allocator() const = 0;
-    virtual const std::unique_ptr<Allocator> &get_initialized_allocator(SubDeviceId sub_device_id) const = 0;
-
-    virtual DeviceAddr get_base_allocator_addr(const HalMemType &mem_type) const = 0;
-    virtual DeviceAddr get_base_allocator_addr(const HalMemType &mem_type, SubDeviceId sub_device_id) const = 0;
-
-    virtual uint32_t num_banks(const BufferType &buffer_type) const = 0;
-    virtual uint32_t num_banks(const BufferType &buffer_type, SubDeviceId sub_device_id) const = 0;
-    virtual uint32_t bank_size(const BufferType &buffer_type) const = 0;
-    virtual uint32_t bank_size(const BufferType &buffer_type, SubDeviceId sub_device_id) const = 0;
-
-    virtual uint32_t dram_channel_from_bank_id(uint32_t bank_id) const = 0;
-    virtual uint32_t dram_channel_from_bank_id(uint32_t bank_id, SubDeviceId sub_device_id) const = 0;
+    virtual const std::unique_ptr<Allocator>& allocator() const = 0;
+    virtual const std::unique_ptr<Allocator>& allocator(SubDeviceId sub_device_id) const = 0;
 
     virtual CoreCoord logical_core_from_dram_channel(uint32_t dram_channel) const = 0;
     virtual uint32_t dram_channel_from_logical_core(const CoreCoord& logical_core) const = 0;
 
-    virtual int32_t bank_offset(BufferType buffer_type, uint32_t bank_id) const = 0;
-    virtual int32_t bank_offset(BufferType buffer_type, uint32_t bank_id, SubDeviceId sub_device_id) const = 0;
-
-    virtual CoreCoord logical_core_from_bank_id(uint32_t bank_id) const = 0;
-    virtual CoreCoord logical_core_from_bank_id(uint32_t bank_id, SubDeviceId sub_device_id) const = 0;
-
-    virtual const std::vector<uint32_t> &bank_ids_from_dram_channel(uint32_t dram_channel) const = 0;
-    virtual const std::vector<uint32_t> &bank_ids_from_dram_channel(uint32_t dram_channel, SubDeviceId sub_device_id) const = 0;
-
-    virtual const std::vector<uint32_t> &bank_ids_from_logical_core(BufferType buffer_type, const CoreCoord &logical_core) const = 0;
-    virtual const std::vector<uint32_t> &bank_ids_from_logical_core(BufferType buffer_type, const CoreCoord &logical_core, SubDeviceId sub_device_id) const = 0;
-
-    virtual allocator::Statistics get_memory_allocation_statistics(const BufferType &buffer_type) const = 0;
-    virtual allocator::Statistics get_memory_allocation_statistics(const BufferType &buffer_type, SubDeviceId sub_device_id) const = 0;
-
-    virtual uint32_t get_allocator_alignment() const = 0;
-    virtual uint32_t get_allocator_alignment(SubDeviceId sub_device_id) const = 0;
-
     virtual std::optional<DeviceAddr> lowest_occupied_compute_l1_address() const = 0;
     virtual std::optional<DeviceAddr> lowest_occupied_compute_l1_address(tt::stl::Span<const SubDeviceId> sub_device_ids) const = 0;
-
-    virtual size_t get_l1_small_size() const = 0;
-    virtual size_t get_l1_small_size(SubDeviceId sub_device_id) const = 0;
-
-    virtual const std::unordered_set<Buffer *> &get_allocated_buffers() const = 0;
-    virtual const std::unordered_set<Buffer *> &get_allocated_buffers(SubDeviceId sub_device_id) const = 0;
-
-    virtual void deallocate_buffers() = 0;
-    virtual void deallocate_buffers(SubDeviceId sub_device_id) = 0;
-
-    virtual void dump_memory_blocks(const BufferType &buffer_type, std::ofstream &out) const = 0;
-    virtual void dump_memory_blocks(const BufferType &buffer_type, std::ofstream &out, SubDeviceId sub_device_id) const = 0;
-
-    virtual MemoryBlockTable get_memory_block_table(const BufferType& buffer_type) const = 0;
 
     // Set of logical ethernet core coordinates
     // core.x represents connectivity to one other chip, i.e. cores with <x> all connect to same chip
@@ -175,19 +136,21 @@ public:
     virtual const JitBuildStateSubset build_kernel_states(uint32_t programmable_core, uint32_t processor_class) const = 0;
 
     virtual SystemMemoryManager& sysmem_manager() = 0;
-    virtual HWCommandQueue& hw_command_queue(size_t cq_id = 0) = 0;
     virtual CommandQueue& command_queue(size_t cq_id = 0) = 0;
 
     // Metal trace device capture mode
     virtual void begin_trace(const uint8_t cq_id, const uint32_t tid) = 0;
     virtual void end_trace(const uint8_t cq_id, const uint32_t tid) = 0;
-    virtual void replay_trace(const uint8_t cq_id, const uint32_t tid, const bool blocking) = 0;
+    virtual void replay_trace(
+        const uint8_t cq_id, const uint32_t tid, const bool block_on_device, const bool block_on_worker_thread) = 0;
     virtual void release_trace(const uint32_t tid) = 0;
 
     virtual std::shared_ptr<TraceBuffer> get_trace(uint32_t tid) = 0;
     virtual uint32_t get_trace_buffers_size() const = 0;
     virtual void set_trace_buffers_size(uint32_t size) = 0;
 
+    // Light Metal
+    virtual void load_trace(uint8_t cq_id, uint32_t trace_id, const TraceDescriptor& trace_desc) = 0;
     virtual bool using_slow_dispatch() const = 0;
     virtual bool using_fast_dispatch() const = 0;
 
@@ -199,8 +162,6 @@ public:
     virtual void initialize_and_launch_firmware() = 0;
     virtual void init_command_queue_host() = 0;
     virtual void init_command_queue_device() = 0;
-    virtual void initialize_synchronous_sw_cmd_queue() = 0;
-    virtual void update_dispatch_cores_for_multi_cq_eth_dispatch() = 0;
 
     // Puts device into reset
     virtual bool close() = 0;
@@ -208,10 +169,7 @@ public:
     virtual void enable_async(bool enable) = 0;
     virtual void synchronize() = 0;
     virtual WorkExecutorMode get_worker_mode() = 0;
-    virtual void set_worker_queue_mode(const WorkerQueueMode& mode) = 0;
-    virtual WorkerQueueMode get_worker_queue_mode() = 0;
     virtual bool is_worker_queue_empty() const = 0;
-    virtual bool can_use_passthrough_scheduling() const = 0;
 
     virtual void push_work(std::function<void()> work, bool blocking = false) = 0;
 
@@ -229,9 +187,6 @@ public:
 
     virtual std::vector<std::pair<transfer_info_cores, uint32_t>> extract_dst_noc_multicast_info(const std::vector<CoreRange>& ranges, const CoreType core_type) = 0;
 
-    virtual bool dispatch_s_enabled() const = 0;
-    virtual bool distributed_dispatcher() const = 0;
-    virtual NOC dispatch_go_signal_noc() const = 0;
     virtual size_t get_device_kernel_defines_hash() = 0;
 
     virtual uint8_t num_noc_mcast_txns(SubDeviceId sub_device_id) const = 0;
@@ -254,8 +209,6 @@ public:
     // TODO #15944: Temporary api until migration to actual fabric is complete
     virtual std::tuple<SubDeviceManagerId, SubDeviceId> create_sub_device_manager_with_fabric(
         tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) = 0;
-
-    virtual uint32_t get_completion_queue_reader_core() const = 0;
 
     virtual bool is_mmio_capable() const = 0;
     virtual std::vector<std::vector<chip_id_t>> get_tunnels_from_mmio() const = 0;

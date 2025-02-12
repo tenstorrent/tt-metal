@@ -27,37 +27,45 @@ void bind_reshape_view(pybind11::module& module, const data_movement_operation_t
             [](const data_movement_operation_t& self,
                const ttnn::Tensor& input_tensor,
                const ttnn::Shape& shape,
-               const std::optional<MemoryConfig> &memory_config,
-                const uint8_t queue_id,
-                const std::optional<PadValue> &pad_value
-               ) -> ttnn::Tensor {
-                return self(input_tensor, shape);
-            },
+               const std::optional<MemoryConfig>& memory_config,
+               const QueueId queue_id,
+               const std::optional<PadValue>& pad_value) -> ttnn::Tensor { return self(input_tensor, shape); },
             py::arg("input_tensor"),
             py::arg("shape"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
-            py::arg("queue_id") = 0,
-            py::arg("pad_value") = std::nullopt
+            py::arg("queue_id") = DefaultQueueId,
+            py::arg("pad_value") = std::nullopt},
+        ttnn::pybind_overload_t{
+            [](const data_movement_operation_t& self,
+               const ttnn::Tensor& input_tensor,
+               const ttnn::Shape& logical_shape,
+               const ttnn::Shape& padded_shape,
+               const std::optional<MemoryConfig>& memory_config,
+               const QueueId queue_id,
+               const std::optional<PadValue>& pad_value) -> ttnn::Tensor {
+                return self(input_tensor, logical_shape, padded_shape);
             },
+            py::arg("input_tensor"),
+            py::arg("logical_shape"),
+            py::arg("padded_shape"),
+            py::kw_only(),
+            py::arg("memory_config") = std::nullopt,
+            py::arg("queue_id") = DefaultQueueId,
+            py::arg("pad_value") = std::nullopt},
         ttnn::pybind_overload_t{
             [](const data_movement_operation_t& self,
                const ttnn::Tensor& input_tensor,
                const ttnn::SmallVector<int32_t> shape,
-               const std::optional<MemoryConfig> &memory_config,
-               const uint8_t queue_id,
-               const std::optional<PadValue> &pad_value
-               ) -> ttnn::Tensor {
-                return self(input_tensor, shape);
-            },
+               const std::optional<MemoryConfig>& memory_config,
+               const QueueId queue_id,
+               const std::optional<PadValue>& pad_value) -> ttnn::Tensor { return self(input_tensor, shape); },
             py::arg("input_tensor"),
             py::arg("shape"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
-            py::arg("queue_id") = 0,
-            py::arg("pad_value") = std::nullopt
-            }
-        );
+            py::arg("queue_id") = DefaultQueueId,
+            py::arg("pad_value") = std::nullopt});
 }
 
 }  // namespace detail

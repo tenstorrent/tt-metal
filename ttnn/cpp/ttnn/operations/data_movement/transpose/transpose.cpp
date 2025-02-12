@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/run_operation.hpp"
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/decorators.hpp"
 #include "device/transpose_op.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
@@ -26,24 +26,17 @@ inline Tensor transpose_(
     TransposeOpDim transpose_dim,
     const MemoryConfig& output_mem_config,
     const std::optional<float>& pad_value) {
-    bool tiled_only = false;
-    constexpr uint32_t FACE_WIDTH =
-        tt::constants::FACE_WIDTH;  // this is a highly restrictive constraint on the RM transpose_wh kernel, and with
-                                    // all the other bugs/limitations we should rewrite it
-    // use device->get_allocator_alignment when the it reflects the alignment of the buffer and doesn't just default to
-    // DRAM
-    auto BUFFER_ALIGNMENT = a.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? hal::get_dram_alignment()
-                                                                                        : hal::get_l1_alignment();
-    uint32_t W = a.get_padded_shape()[-1];
-    uint32_t H = a.get_padded_shape()[-2];
+    auto prim_permute = [&](const ttnn::Tensor& input, ttnn::SmallVector<uint32_t> dims) -> ttnn::Tensor {
+        return ttnn::prim::permute(input, dims, output_mem_config, std::nullopt, pad_value);
+    };
+
+    bool interleaved_rm = !a.is_sharded() && a.layout() == Layout::ROW_MAJOR;
     switch (transpose_dim) {
         case TransposeOpDim::HC:
-            tiled_only = a.get_layout() == Layout::TILE;
-            if ((!tiled_only) && ((W * a.element_size()) % BUFFER_ALIGNMENT != 0)) {  //
-                tiled_only = true;
+            if (interleaved_rm) {
+                return prim_permute(a, ttnn::SmallVector<uint32_t>{0, 2, 1, 3});
             }
             break;
-        // bubble dim around to make it possible as these implementations don't have a kernel
         case TransposeOpDim::NH:
             return ttnn::permute(
                 (const ttnn::Tensor)a, ttnn::SmallVector<int64_t>({2, 1, 0, 3}), output_mem_config, pad_value);
@@ -54,32 +47,18 @@ inline Tensor transpose_(
             return ttnn::permute(
                 (const ttnn::Tensor)a, ttnn::SmallVector<int64_t>({0, 3, 2, 1}), output_mem_config, pad_value);
         case TransposeOpDim::CN:
-            tiled_only = true;  // CN only has a tiled implementation at the moment
+            if (interleaved_rm) {
+                return prim_permute(a, ttnn::SmallVector<uint32_t>({1, 0, 2, 3}));
+            }
             break;
         case TransposeOpDim::WH:
-            if (!a.is_sharded() && a.layout() == Layout::ROW_MAJOR) {
-                return ttnn::prim::permute(
-                    a, ttnn::SmallVector<uint32_t>({0, 1, 3, 2}), output_mem_config, std::nullopt);
+            if (interleaved_rm) {
+                return prim_permute(a, ttnn::SmallVector<uint32_t>({0, 1, 3, 2}));
             }
             break;
         default: break;
     }
-    if (a.get_layout() == Layout::ROW_MAJOR) {
-        // the assorted cases where only tiled works right now (HC with stick width constraint, WH with stick width
-        // constraint, CN).
-        if (tiled_only) {
-            // convert to tiled
-            Tensor b = ttnn::to_layout(a, Layout::TILE, std::nullopt, std::nullopt, (IDevice*)nullptr);
-            // run the transpose.
-            b = operation::run(Transpose{transpose_dim, output_mem_config, pad_value}, {b}).at(0);
-            // back to original layout
-            b = ttnn::to_layout(b, a.get_layout(), std::nullopt, std::nullopt, (IDevice*)nullptr);
-            return b;
-        }
-        return operation::run(Transpose{transpose_dim, output_mem_config, pad_value}, {a}).at(0);
-    } else {
-        return operation::run(Transpose{transpose_dim, output_mem_config, pad_value}, {a}).at(0);
-    }
+    return operation::run(Transpose{transpose_dim, output_mem_config, pad_value}, {a}).at(0);
 }
 
 ttnn::Tensor transpose_nd(
@@ -101,7 +80,7 @@ ttnn::Tensor transpose_nd(
 }  // namespace detail
 
 ttnn::Tensor ExecuteTranspose::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const int64_t& dim1,
     const int64_t& dim2,

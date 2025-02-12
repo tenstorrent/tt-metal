@@ -18,7 +18,7 @@ void Tilize::validate(const std::vector<Tensor>& input_tensors) const {
 
     TT_FATAL(input_tensor_a.volume() % tt::constants::TILE_HW == 0, "Error");
 
-    auto width = input_tensor_a.get_legacy_shape()[-1];
+    auto width = input_tensor_a.get_padded_shape()[-1];
     uint32_t stick_s = width;
     uint32_t num_sticks = input_tensor_a.volume() / width;
     TT_FATAL(

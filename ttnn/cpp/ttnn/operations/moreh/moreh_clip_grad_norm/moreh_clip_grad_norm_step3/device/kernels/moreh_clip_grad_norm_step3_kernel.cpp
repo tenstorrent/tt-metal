@@ -19,7 +19,7 @@ void MAIN {
     constexpr uint32_t onetile = 1;
     constexpr uint32_t dst0 = 0;
 
-    binary_op_init_common(cb_x, cb_clip_coef_clamped);
+    binary_op_init_common(cb_x, cb_clip_coef_clamped, cb_y);
 
     cb_wait_front(cb_clip_coef_clamped, onetile);  // comes from the reader
 
@@ -29,7 +29,7 @@ void MAIN {
         cb_wait_front(cb_x, onetile);  // comes from the reader
         cb_reserve_back(cb_y, onetile);
 
-        mul_tiles_bcast_scalar_init_short();
+        mul_tiles_bcast_scalar_init_short(cb_x, cb_clip_coef_clamped);
         mul_tiles_bcast_scalar(cb_x, cb_clip_coef_clamped, 0, 0, dst0);
         cb_pop_front(cb_x, onetile);
         tile_regs_commit();

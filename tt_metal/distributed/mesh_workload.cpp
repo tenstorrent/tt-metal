@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <mesh_buffer.hpp>
+#include <mesh_command_queue.hpp>
+#include <mesh_workload.hpp>
 #include <tt_metal.hpp>
 
-#include "tt_metal/distributed/mesh_buffer.hpp"
-#include "tt_metal/distributed/mesh_command_queue.hpp"
-#include "tt_metal/distributed/mesh_workload.hpp"
 #include "tt_metal/distributed/mesh_workload_utils.hpp"
 
 namespace tt::tt_metal::distributed {
@@ -30,11 +30,11 @@ void MeshWorkload::compile(MeshDevice* mesh_device) {
     // 2. Allocate and Validate CBs
     // 3. Finalize: Compute relative offsets for all data structures in L1
     for (auto& [device_range, program] : programs_) {
-        program.compile(mesh_device->get_device(0));
-        program.allocate_circular_buffers(mesh_device->get_device(0));
-        tt::tt_metal::detail::ValidateCircularBufferRegion(program, mesh_device->get_device(0));
+        program.compile(mesh_device);
+        program.allocate_circular_buffers(mesh_device);
+        tt::tt_metal::detail::ValidateCircularBufferRegion(program, mesh_device);
     }
-    program_dispatch::finalize_program_offsets(*this, mesh_device->get_device(0));
+    program_dispatch::finalize_program_offsets(*this, mesh_device);
 }
 
 void MeshWorkload::load_binaries(MeshCommandQueue& mesh_cq) {
@@ -56,49 +56,45 @@ void MeshWorkload::load_binaries(MeshCommandQueue& mesh_cq) {
             uint32_t curr_kernel_bin_size = program.get_program_transfer_info().binary_data.size() * sizeof(uint32_t);
             max_kernel_bin_buf_size = std::max(max_kernel_bin_buf_size, curr_kernel_bin_size);
         }
-        // Allocate a buffer for kernel binaries on each device.
-        // Once MeshBuffer is available, allocate kernel bin MeshBuffer directly here
-        for (auto device : mesh_device->get_devices()) {
-            std::shared_ptr<Buffer> kernel_bin_buf = Buffer::create(
-                device,
-                max_kernel_bin_buf_size,
-                HostMemDeviceCommand::PROGRAM_PAGE_SIZE,
-                BufferType::DRAM,
-                TensorMemoryLayout::INTERLEAVED,
-                std::nullopt,
-                false);
-            kernel_bin_buffers_.insert(
-                kernel_bin_buf);  // Tie the lifetime of kernel binary buffers to the MeshWorkload
-        }
-        // Iterate over the sub-grids and EnqueueWriteMeshBuffer to each sub-grid that runs the program
-        for (auto& [device_range, program] : programs_) {
-            std::size_t kernel_bin_size = program.get_program_transfer_info().binary_data.size() * sizeof(uint32_t);
-            for (std::size_t logical_x = device_range.start_coord.x; logical_x < device_range.end_coord.x;
-                 logical_x++) {
-                for (std::size_t logical_y = device_range.start_coord.y; logical_y < device_range.end_coord.y;
-                     logical_y++) {
-                    IDevice* device = mesh_device->get_device(logical_y, logical_x);
-                    // Get a view of the allocated buffer that matches the size of the kernel binary
-                    // for the sub grid
-                    std::shared_ptr<Buffer> buffer_view = Buffer::create(
-                        device,
-                        (*(kernel_bin_buffers_.begin()))->address(),
-                        kernel_bin_size,
-                        HostMemDeviceCommand::PROGRAM_PAGE_SIZE,
-                        BufferType::DRAM,
-                        TensorMemoryLayout::INTERLEAVED,
-                        std::nullopt,
-                        false);
-                    EnqueueWriteBuffer(
-                        device->command_queue(mesh_cq.id()),
-                        buffer_view,
-                        program.get_program_transfer_info().binary_data.data(),
-                        false);
-                    // Assign this memory region to the program. Required when the program
-                    // object is used to generate dispatch commands
-                    program.set_kernels_bin_buffer(buffer_view);
-                    program.set_program_binary_status(device->id(), ProgramBinaryStatus::InFlight);
-                }
+        // In production cases, max_kernel_bin_buf_size will always be non-zero (programs have kernels). This check is
+        // primarily for test workloads, where a program may not have an attached kernel.
+        if (max_kernel_bin_buf_size) {
+            // Allocate a MeshBuffer for kernel binaries on each device. This buffer is replicated along the MeshDevice
+            // and matches the max kernel binary size across programs.
+            DeviceLocalBufferConfig device_local_kernel_bin_buf_config = {
+                .page_size = HostMemDeviceCommand::PROGRAM_PAGE_SIZE,
+                .buffer_type = BufferType::DRAM,
+                .buffer_layout = TensorMemoryLayout::INTERLEAVED,
+            };
+            ReplicatedBufferConfig global_kernel_bin_buf_config = {
+                .size = max_kernel_bin_buf_size,
+            };
+            kernel_bin_buf_ =
+                MeshBuffer::create(global_kernel_bin_buf_config, device_local_kernel_bin_buf_config, mesh_device);
+            // Iterate over the sub-grids and EnqueueWriteMeshBuffer to each sub-grid that runs an individual program
+            for (auto& [device_range, program] : this->programs_) {
+                auto& grid_start = device_range.start_coord;
+                std::size_t kernel_bin_size = program.get_program_transfer_info().binary_data.size() * sizeof(uint32_t);
+                global_kernel_bin_buf_config.size = kernel_bin_size;
+                auto kernel_bin_buf_view = MeshBuffer::create(
+                    global_kernel_bin_buf_config,
+                    device_local_kernel_bin_buf_config,
+                    mesh_device,
+                    kernel_bin_buf_->address());
+
+                mesh_device->mesh_command_queue().enqueue_write_shard_to_sub_grid(
+                    *kernel_bin_buf_view, program.get_program_transfer_info().binary_data.data(), device_range, false);
+
+                std::shared_ptr<Buffer> buffer_view = Buffer::create(
+                    mesh_device,
+                    kernel_bin_buf_->address(),
+                    kernel_bin_size,
+                    HostMemDeviceCommand::PROGRAM_PAGE_SIZE,
+                    BufferType::DRAM,
+                    TensorMemoryLayout::INTERLEAVED,
+                    std::nullopt,
+                    false);
+                program.set_kernels_bin_buffer(buffer_view);
             }
         }
         program_binary_status_[mesh_device->id()] = ProgramBinaryStatus::InFlight;
@@ -122,8 +118,7 @@ void MeshWorkload::generate_dispatch_commands(MeshCommandQueue& mesh_cq) {
     // workload is enqueued.
     auto mesh_device = mesh_cq.device();
     for (auto& [device_range, program] : programs_) {
-        auto grid_start = device_range.start_coord;
-        program.generate_dispatch_commands(mesh_device->get_device(grid_start.y, grid_start.x));
+        program.generate_dispatch_commands(mesh_device);
     }
 }
 
@@ -223,7 +218,7 @@ std::unordered_set<SubDeviceId> MeshWorkload::determine_sub_device_ids(MeshDevic
     for (auto& [device_range, program] : programs_) {
         auto grid_start = device_range.start_coord;
         IDevice* device = mesh_device->get_device(grid_start.y, grid_start.x);
-        auto sub_devs_for_program = program.determine_sub_device_ids(device);
+        auto sub_devs_for_program = program.determine_sub_device_ids(mesh_device);
         for (auto& sub_dev : sub_devs_for_program) {
             sub_devices_.insert(sub_dev);
         }
@@ -262,7 +257,7 @@ uint32_t MeshWorkload::get_sem_size(
     std::shared_ptr<MeshDevice>& mesh_device, CoreCoord logical_core, CoreType core_type) {
     uint32_t sem_size = 0;
     uint32_t program_idx = 0;
-    IDevice* device = mesh_device->get_device(0);
+    IDevice* device = mesh_device->get_device_index(0);
     for (auto& [device_range, program] : programs_) {
         if (program_idx) {
             TT_ASSERT(sem_size == program.get_sem_size(device, logical_core, core_type));
@@ -286,7 +281,7 @@ uint32_t MeshWorkload::get_cb_size(
     std::shared_ptr<MeshDevice>& mesh_device, CoreCoord logical_core, CoreType core_type) {
     uint32_t cb_size = 0;
     uint32_t program_idx = 0;
-    IDevice* device = mesh_device->get_device(0);
+    IDevice* device = mesh_device->get_device_index(0);
     for (auto& [device_range, program] : programs_) {
         if (program_idx) {
             TT_ASSERT(cb_size == program.get_cb_size(device, logical_core, core_type));

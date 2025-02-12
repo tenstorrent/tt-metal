@@ -800,7 +800,6 @@ def test_transpose_failures(config, memory_config, device):
         ],
         [[1, 9, 8, 40], [1, 2], ttnn.ROW_MAJOR_LAYOUT],
         [[1, 8, 8, 8], [1, 2], ttnn.ROW_MAJOR_LAYOUT],
-        [[21843, 768], [0, 1], ttnn.ROW_MAJOR_LAYOUT],
     ],
 )
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG])
@@ -1028,9 +1027,21 @@ def test_transpose_hw_sharded_tiled_8_cores(device, n, c, h, w):
         orientation=ttnn.ShardOrientation.COL_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
+    output_sharded_mem_config = ttnn.create_sharded_memory_config(
+        (32, 32),
+        core_grid=ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 6)),
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0)),
+            }
+        ),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.COL_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
     tt_input_tensor = ttnn.to_memory_config(tt_input_tensor, sharded_mem_config)
 
-    tt_output_tensor = ttnn.transpose(tt_input_tensor, 2, 3, memory_config=sharded_mem_config)
+    tt_output_tensor = ttnn.transpose(tt_input_tensor, 2, 3, memory_config=output_sharded_mem_config)
     tt_output_tensor = ttnn.to_torch(tt_output_tensor)
 
     assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9999)
@@ -1063,9 +1074,22 @@ def test_transpose_hw_sharded_tiled_n_cores(device, n, c, h, w):
         orientation=ttnn.ShardOrientation.COL_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
+
+    output_sharded_mem_config = ttnn.create_sharded_memory_config(
+        (32, 32),
+        core_grid=ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, h // 32 - 1)),
+            }
+        ),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.COL_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
     tt_input_tensor = ttnn.to_memory_config(tt_input_tensor, sharded_mem_config)
 
-    tt_output_tensor = ttnn.transpose(tt_input_tensor, 2, 3, memory_config=sharded_mem_config)
+    tt_output_tensor = ttnn.transpose(tt_input_tensor, 2, 3, memory_config=output_sharded_mem_config)
     tt_output_tensor = ttnn.to_memory_config(tt_output_tensor, ttnn.L1_MEMORY_CONFIG)
     tt_output_tensor = ttnn.from_device(tt_output_tensor)
     tt_output_tensor = ttnn.to_torch(tt_output_tensor)
@@ -1115,3 +1139,32 @@ def test_transpose_16411(device):
     assert_with_pcc(p_c2, ttnn.to_torch(c2), 0.9999)
     assert_with_pcc(p_c3, ttnn.to_torch(c3), 0.9999)
     assert_with_pcc(p_c4, ttnn.to_torch(c4), 0.9999)
+
+
+@pytest.mark.parametrize("rank", [5])
+@pytest.mark.parametrize("indices", [[0, 1], [0, 2], [0, 3], [0, 4], [1, 2], [1, 3], [1, 4], [2, 3], [2, 4], [3, 4]])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+def test_transpose_high_rank(*, device: ttnn.Device, rank: int, indices, layout):
+    torch.manual_seed(2005)
+    ttnn.disable_and_clear_program_cache(device)
+    ttnn.enable_program_cache(device)
+
+    shape = [2] * rank
+
+    a = torch.randn(shape, dtype=torch.bfloat16)
+    b = torch.randn(shape, dtype=torch.bfloat16)
+
+    tt_a = ttnn.from_torch(a, device=device, layout=layout)
+    tt_b = ttnn.from_torch(b, device=device, layout=layout)
+
+    a = a.transpose(*indices)
+    b = b.transpose(*indices)
+
+    tt_a = ttnn.transpose(tt_a, *indices)
+    tt_b = ttnn.transpose(tt_b, *indices)
+
+    output_a = ttnn.to_torch(tt_a)
+    output_b = ttnn.to_torch(tt_b)
+
+    assert torch.allclose(a, output_a)
+    assert torch.allclose(b, output_b)

@@ -5,6 +5,7 @@
 import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.llama3.tt.llama_common import pad_to_size
 from models.demos.llama3.tt.llama_ccl import tt_all_reduce
 
 
@@ -21,41 +22,44 @@ class TtLlamaMLP(LightweightModule):
         self.model_config = model_config
         state_dict_prefix = state_dict_prefix or args.get_state_dict_prefix(self.__class__.__name__, layer_num)
         torch_weight = lambda name: torch.transpose(self.state_dict[f"{state_dict_prefix}.{name}.weight"], -2, -1)
+        pad_hidden_dim = lambda tensor, dim: pad_to_size(tensor, dim=dim, size=args.hidden_dim)
+        # If pading was applied (e.g. via env var), add the unpadded hidden dim to the cache name to avoid loading incorrect weights
+        hidden_dim_string = f".hidden_dim_{args.hidden_dim}" if args.hidden_dim != args.unpadded_hidden_dim else ""
 
         if args.dummy_weights:
             cache_name = lambda _: None
         else:
-            cache_name = lambda name: weight_cache_path / (state_dict_prefix + f".{name}")
+            cache_name = lambda name: weight_cache_path / f"{state_dict_prefix}.{name}{hidden_dim_string}"
 
         w1_w3_mem_config = args.create_dram_sharded_mem_config(args.dim, args.hidden_dim // args.num_devices)
         w2_mem_config = args.create_dram_sharded_mem_config(args.hidden_dim // args.num_devices, args.dim)
 
         # TODO Clean up this code. With sharding, we load the normal weights and then shard them
-        as_sharded_tensor = lambda name, type, dim: ttnn.as_tensor(
-            torch_weight(name[:2]),  # Grab only the wX part of the name
+        as_sharded_tensor = lambda name, type, dims: ttnn.as_tensor(
+            pad_hidden_dim(
+                torch_weight(name[:2]), dims[0] if args.is_galaxy else dims[-1]
+            ),  # Grab only the wX part of the name
             dtype=type,
             device=self.mesh_device,
-            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=dim, mesh_shape=args.cluster_shape),
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=dims, mesh_shape=args.cluster_shape),
             layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG
-            if args.is_galaxy
-            else w2_mem_config
-            if "w2" in name
-            else w1_w3_mem_config,
+            memory_config=(
+                ttnn.DRAM_MEMORY_CONFIG if args.is_galaxy else w2_mem_config if "w2" in name else w1_w3_mem_config
+            ),
             cache_file_name=cache_name(name),
         )
 
         self.four_bit_mlp = args.optimizations.bfp4_mlp
 
         # Sharded weights
-        w1_dim = (-1, -2) if args.is_galaxy else (-2, -1)
-        w2_dim = (-2, -1) if args.is_galaxy else (-1, -2)
+        w1_dims = (-1, -2) if args.is_galaxy else (-2, -1)
+        w2_dims = (-2, -1) if args.is_galaxy else (-1, -2)
 
         self.w1 = as_sharded_tensor(
-            "w1_sharded", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, dim=w1_dim
+            "w1_sharded", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, dims=w1_dims
         )  # bfp4 normally ok here but sub .99 pcc for llama 3.1 weights
-        self.w2 = as_sharded_tensor("w2_sharded", ttnn.bfloat8_b, dim=w2_dim)
-        self.w3 = as_sharded_tensor("w3_sharded", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, dim=w1_dim)
+        self.w2 = as_sharded_tensor("w2_sharded", ttnn.bfloat8_b, dims=w2_dims)
+        self.w3 = as_sharded_tensor("w3_sharded", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, dims=w1_dims)
 
     def forward(self, x: ttnn.Tensor, mode) -> ttnn.Tensor:
         """
@@ -89,10 +93,12 @@ class TtLlamaMLP(LightweightModule):
         w1_out = ttnn.linear(
             x,
             self.w1,
-            compute_kernel_config=self.args.compute_kernel_config_lofi
-            if self.four_bit_mlp
-            else self.args.compute_kernel_config_hifi2_fp16,
-            core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_1 else None,
+            compute_kernel_config=(
+                self.args.compute_kernel_config_lofi
+                if self.four_bit_mlp
+                else self.args.compute_kernel_config_hifi2_fp16
+            ),
+            core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_1 else None,
             dtype=ttnn.bfloat8_b if TG else ttnn.bfloat16,
             program_config=pc_1,
             memory_config=x.memory_config(),
@@ -101,11 +107,13 @@ class TtLlamaMLP(LightweightModule):
         w3_out = ttnn.linear(
             x,
             self.w3,
-            compute_kernel_config=self.args.compute_kernel_config_lofi
-            if self.four_bit_mlp
-            else self.args.compute_kernel_config_hifi2_fp16,
-            core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_3 else None,
-            dtype=ttnn.bfloat8_b if TG else ttnn.bfloat16,
+            compute_kernel_config=(
+                self.args.compute_kernel_config_lofi
+                if self.four_bit_mlp
+                else self.args.compute_kernel_config_hifi2_fp16
+            ),
+            core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_3 else None,
+            dtype=ttnn.bfloat16,
             program_config=pc_3,
             memory_config=x.memory_config(),
         )
@@ -144,6 +152,7 @@ class TtLlamaMLP(LightweightModule):
                     cluster_axis=1,
                     num_all_gather_links=2,
                     sharded=True if mode == "decode" else False,
+                    topology=self.args.ccl_topology(),
                     memory_config=self.model_config["FF1_OUT_GATHERED_MEMCFG"] if mode == "decode" else None,
                 )
                 w3_out = tt_all_reduce(
@@ -152,6 +161,7 @@ class TtLlamaMLP(LightweightModule):
                     cluster_axis=1,
                     num_all_gather_links=2,
                     sharded=True if mode == "decode" else False,
+                    topology=self.args.ccl_topology(),
                     memory_config=self.model_config["FF1_OUT_GATHERED_MEMCFG"] if mode == "decode" else None,
                 )
 
@@ -188,10 +198,12 @@ class TtLlamaMLP(LightweightModule):
             compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
             dtype=self.args.ccl_dtype if TG else ttnn.bfloat16,
             program_config=pc_2,
-            memory_config=(ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG)
-            if TG
-            else w2_in.memory_config(),
-            core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
+            memory_config=(
+                (ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG)
+                if TG
+                else w2_in.memory_config()
+            ),
+            core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_2 else None,
         )
         ttnn.deallocate(w2_in)
         # if mode == "decode" and not TG:
@@ -204,11 +216,14 @@ class TtLlamaMLP(LightweightModule):
             num_reduce_scatter_links=self.args.num_reduce_scatter_links,
             num_all_gather_links=self.args.num_all_gather_links,
             sharded=(mode == "decode"),
-            memory_config=(self.model_config["FF2_OUT_REDUCE_SCATTER_MEMCFG"] if TG else w2_out.memory_config())
-            if mode == "decode"
-            else ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=(
+                (self.model_config["FF2_OUT_REDUCE_SCATTER_MEMCFG"] if TG else w2_out.memory_config())
+                if mode == "decode"
+                else ttnn.DRAM_MEMORY_CONFIG
+            ),
             dtype=self.args.ccl_dtype,
             use_composite=True if self.dim == 8192 else False,
+            topology=self.args.ccl_topology(),
         )
 
         # Ensure dim 0 and 1 are 1

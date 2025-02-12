@@ -8,7 +8,7 @@
 
 #include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/llrt.hpp>
+#include "llrt.hpp"
 #include <tt-metalium/mesh_device.hpp>
 
 #include "dispatch_fixture.hpp"
@@ -52,7 +52,7 @@ protected:
 
 class T3000MultiDeviceFixture : public ::testing::Test {
 protected:
-    void SetUp() override {
+    virtual void SetUp() override {
         using tt::tt_metal::distributed::MeshDevice;
         using tt::tt_metal::distributed::MeshDeviceConfig;
         using tt::tt_metal::distributed::MeshShape;
@@ -66,7 +66,7 @@ protected:
         if (num_devices < 8 or arch != tt::ARCH::WORMHOLE_B0) {
             GTEST_SKIP() << "Skipping T3K Multi-Device test suite on non T3K machine.";
         }
-        mesh_device_ = MeshDevice::create(MeshDeviceConfig{.mesh_shape = MeshShape{2, 4}});
+        create_mesh_device();
     }
 
     void TearDown() override {
@@ -77,5 +77,28 @@ protected:
         mesh_device_->close();
         mesh_device_.reset();
     }
+
+protected:
+    virtual void create_mesh_device() {
+        using tt::tt_metal::distributed::MeshDevice;
+        using tt::tt_metal::distributed::MeshDeviceConfig;
+        using tt::tt_metal::distributed::MeshShape;
+
+        mesh_device_ = MeshDevice::create(MeshDeviceConfig{.mesh_shape = MeshShape{2, 4}});
+    }
+
     std::shared_ptr<tt::tt_metal::distributed::MeshDevice> mesh_device_;
+};
+
+class T3000MultiCQMultiDeviceFixture : public T3000MultiDeviceFixture {
+protected:
+    // Override only the mesh device creation logic
+    void create_mesh_device() override {
+        using tt::tt_metal::distributed::MeshDevice;
+        using tt::tt_metal::distributed::MeshDeviceConfig;
+        using tt::tt_metal::distributed::MeshShape;
+
+        mesh_device_ =
+            MeshDevice::create(MeshDeviceConfig{.mesh_shape = MeshShape{2, 4}}, 0, 0, 2, DispatchCoreType::ETH);
+    }
 };

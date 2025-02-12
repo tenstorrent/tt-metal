@@ -26,7 +26,7 @@ void UntilizeWithUnpadding::validate(const std::vector<Tensor>& input_tensors) c
             TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
             TT_FATAL(
                 input_tensor_a.volume() /
-                        (input_tensor_a.get_legacy_shape()[-2] * input_tensor_a.get_legacy_shape()[-1]) ==
+                        (input_tensor_a.get_padded_shape()[-2] * input_tensor_a.get_padded_shape()[-1]) ==
                     1,
                 "Can only write unbatched output interleaved");
         } else if (input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
@@ -37,13 +37,13 @@ void UntilizeWithUnpadding::validate(const std::vector<Tensor>& input_tensors) c
         } else if (input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
             auto output_shape = this->compute_output_specs(input_tensors).at(0).padded_shape();
             for (uint32_t i = 0; i < output_shape.rank() - 2; i++) {
-                TT_FATAL(input_tensor_a.get_legacy_shape()[i] == output_shape[i], "Error");
+                TT_FATAL(input_tensor_a.get_padded_shape()[i] == output_shape[i], "Error");
             }
             if (output_mem_config.is_sharded()) {
                 TT_FATAL(
                     this->output_mem_config.memory_layout == input_tensor_a.memory_config().memory_layout, "Error");
                 TT_FATAL(
-                    input_tensor_a.get_legacy_shape()[-1] == output_shape[-1] ||
+                    input_tensor_a.get_padded_shape()[-1] == output_shape[-1] ||
                         (tt::div_up(output_shape[-1], input_tensor_a.shard_spec().value().shape[1]) ==
                          input_tensor_a.shard_spec().value().grid.num_cores()),
                     "Error");
@@ -51,11 +51,11 @@ void UntilizeWithUnpadding::validate(const std::vector<Tensor>& input_tensors) c
                 TT_FATAL(this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED, "Error");
                 TT_FATAL(
                     input_tensor_a.volume() /
-                            (input_tensor_a.get_legacy_shape()[-2] * input_tensor_a.get_legacy_shape()[-1]) ==
+                            (input_tensor_a.get_padded_shape()[-2] * input_tensor_a.get_padded_shape()[-1]) ==
                         1,
                     "Can only write unbatched output interleaved");
                 TT_FATAL(
-                    input_tensor_a.get_legacy_shape()[-1] - output_shape[-1] <
+                    input_tensor_a.get_padded_shape()[-1] - output_shape[-1] <
                         input_tensor_a.shard_spec().value().shape[1],
                     "Error");
             }
@@ -72,12 +72,12 @@ std::vector<ttnn::TensorSpec> UntilizeWithUnpadding::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
     SmallVector<uint32_t> out_shape;
     const auto& input_tensor_a = input_tensors.at(0);
-    auto rank = input_tensor_a.get_padded_shape().rank();
+    size_t rank = input_tensor_a.logical_shape().rank();
     out_shape.reserve(rank);
     for (uint32_t i = 0; i < rank; i++) {
         out_shape.push_back(this->output_tensor_end[i] + 1);
     }
-    SimpleShape output_shape(std::move(out_shape));
+    Shape output_shape(std::move(out_shape));
 
     DataType output_dtype =
         input_tensor_a.get_dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_tensor_a.get_dtype();
@@ -109,7 +109,7 @@ operation::ProgramWithCallbacks UntilizeWithUnpadding::create_program(
     auto& output_tensor = output_tensors.at(0);
     if (input_tensors.at(0).memory_config().is_sharded() || this->use_multicore) {
         return detail::untilize_with_unpadding_multi_core(
-            input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en);
+            input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en, this->enough_space_height);
     } else {
         return detail::untilize_with_unpadding_single_core(
             input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en);

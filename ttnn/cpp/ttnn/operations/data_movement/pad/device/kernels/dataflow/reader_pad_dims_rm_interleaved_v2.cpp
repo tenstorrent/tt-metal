@@ -42,6 +42,8 @@ void kernel_main() {
 
 #define not_pad_by_zero get_compile_time_arg_val(13) == 1
 #define front_padding get_compile_time_arg_val(9)
+#define unaligned get_compile_time_arg_val(22) == 1
+
 #if (not_pad_by_zero)
     constexpr uint32_t packed_pad_value = get_compile_time_arg_val(14);
     constexpr uint32_t row_major_min_bytes = get_compile_time_arg_val(15);
@@ -104,7 +106,13 @@ void kernel_main() {
                     (void*)(get_read_ptr(cb_pad_align)),
                     (size_t)(stick_size_bytes));
 #else
+#if (unaligned)
+                noc_async_read(read_noc_addr, get_write_ptr(cb_pad_align), stick_size_bytes);
+                noc_async_read_barrier();
+                noc_async_read(pad_align_noc_addr, l1_write_addr, stick_size_bytes);
+#else
                 noc_async_read(read_noc_addr, l1_write_addr, stick_size_bytes);
+#endif
 #endif
                 i_stick++;
             }

@@ -8,9 +8,8 @@
 #include <tt-metalium/cq_commands.hpp>
 #include <tt-metalium/device.hpp>
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
-#include "kernels/traffic_gen_test.hpp"
-#include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_common.hpp"
-#include <tt-metalium/llrt.hpp>
+#include "test_common.hpp"
+#include "llrt.hpp"
 
 using std::vector;
 using namespace tt;

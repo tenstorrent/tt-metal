@@ -587,8 +587,8 @@ std::vector<uint32_t> ReduceScatterWorkerArgBuilder::generate_line_start_sender_
 
     // If we are on device zero, we send n-1 chunks in ascending order
     auto &input_tensor = this->op_config.get_input_tensor(0);
-    TT_ASSERT(input_tensor.get_legacy_shape().size() == 4, "Only 4D tensors are supported for reduce scatter");
-    ttnn::ccl::Shape4D<uint32_t> input_tensor_shape = {input_tensor.get_legacy_shape()[0], input_tensor.get_legacy_shape()[1],input_tensor.get_legacy_shape()[2],input_tensor.get_legacy_shape()[3]};
+    TT_ASSERT(input_tensor.get_padded_shape().size() == 4, "Only 4D tensors are supported for reduce scatter");
+    ttnn::ccl::Shape4D<uint32_t> input_tensor_shape = {input_tensor.get_padded_shape()[0], input_tensor.get_padded_shape()[1],input_tensor.get_padded_shape()[2],input_tensor.get_padded_shape()[3]};
 
     std::vector<uint32_t> args = {
         static_cast<uint32_t>(input_tensor.buffer()->address()),
@@ -610,7 +610,7 @@ std::vector<uint32_t> ReduceScatterWorkerArgBuilder::generate_line_start_sender_
     std::ranges::copy(std::vector<uint32_t>{this->op_config.get_page_size()}, std::back_inserter(args));
     log_trace(tt::LogOp, "ccl_send arg[{}]: page_size {}", logged_arg_idx, args[logged_arg_idx]);logged_arg_idx++;
 
-    auto const& addr_gen_rt_args = ttnn::ccl::emit_address_generator_runtime_args(this->device, input_tensor);
+    auto const& addr_gen_rt_args = ttnn::ccl::legacy_emit_address_generator_runtime_args(this->device, input_tensor);
     std::ranges::copy(addr_gen_rt_args, std::back_inserter(args));
     for (auto const& arg : addr_gen_rt_args) {
         log_trace(tt::LogOp, "ccl_send arg[{}]: addr_gen_rt_args[] {}", logged_arg_idx, args[logged_arg_idx]);logged_arg_idx++;
@@ -639,7 +639,7 @@ std::vector<uint32_t> ReduceScatterWorkerArgBuilder::generate_line_start_sender_
     };
 
     auto const& input_tensor = this->op_config.get_input_tensor(0);
-    auto const& addr_gen_rt_args = ttnn::ccl::emit_address_generator_compile_time_args(input_tensor);
+    auto const& addr_gen_rt_args = ttnn::ccl::legacy_emit_address_generator_compile_time_args(input_tensor);
     std::ranges::copy(addr_gen_rt_args, std::back_inserter(args));
 
     return args;

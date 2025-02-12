@@ -62,7 +62,7 @@ void MAIN {
 
         acquire_dst();
 
-        add_bcast_rows_init_short();
+        add_bcast_rows_init_short(tt::HlkOperand::intermed0, tt::HlkOperand::in2);
         cb_wait_front(tt::CBIndex::c_24, out_block_tile_cnt);
         cb_wait_front(tt::CBIndex::c_2, dst_tile_cols);
         int dst_tile_index = 0;

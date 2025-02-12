@@ -9,7 +9,6 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include <tt-metalium/constants.hpp>
 #include <ttnn/operations/functions.hpp>
-#include <tt-metalium/host_api.hpp>
 #include "tools/profiler/op_profiler.hpp"
 
 namespace tt {

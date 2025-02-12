@@ -2,12 +2,26 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import dataclass
+
 import ttnn
 from loguru import logger
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 UNET_FULL_MODEL_PCC = 0.99999
+
+
+@dataclass
+class UNetPerformanceStatistics:
+    groups: int
+    batch: int
+    num_devices: int
+    inference_and_compile_time: float
+    inference_time: float
+
+    def get_fps(self) -> float:
+        return round(self.batch * self.groups * self.num_devices / self.inference_time, 4)
 
 
 def is_n300_with_eth_dispatch_cores(mesh_device) -> bool:

@@ -58,19 +58,19 @@ operation::ProgramWithCallbacks multi_core_convert_to_chw(
     const tt::DataFormat intermediary_format = tt::DataFormat::Float16_b;
     const uint32_t intermediary_tile_size = tt::tt_metal::detail::TileSize(intermediary_format);
 
-    const uint32_t cb_in_id = tt::CB::c_in0;
+    const uint32_t cb_in_id = tt::CBIndex::c_0;
     const uint32_t cb_in_total_size = total_tiles_per_core * input_tile_size;
     const uint32_t cb_in_page_size = input_tile_size;
     const auto cb_in = create_circular_buffer(cb_in_id, cb_in_total_size, cb_in_page_size, input_format, a.buffer());
 
-    const uint32_t cb_out_id = tt::CB::c_out0;
+    const uint32_t cb_out_id = tt::CBIndex::c_1;
     const uint32_t element_size = tt::datum_size(input_format);
     const uint32_t cb_out_total_size = tt::div_up(C * HW * element_size, input_cores.size());
     const uint32_t cb_out_page_size = tt::div_up(HW * element_size, input_cores.size());
     const auto cb_out =
         create_circular_buffer(cb_out_id, cb_out_total_size, cb_out_page_size, input_format, output.buffer());
 
-    const uint32_t cb_in_transpose_id = tt::CB::c_intermed0;
+    const uint32_t cb_in_transpose_id = tt::CBIndex::c_2;
     const uint32_t cb_in_transpose_total_size = intermediary_tile_size;
     const uint32_t cb_in_transpose_page_size = intermediary_tile_size;
     const auto cb_in_transpose = create_circular_buffer(

@@ -18,7 +18,7 @@ from models.experimental.functional_unet.tests.common import verify_with_pcc, UN
 @pytest.mark.parametrize("groups", [2])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
 def test_unet_model(batch, groups, device, use_program_cache, reset_seeds):
-    torch_input, ttnn_input = create_unet_input_tensors(batch, groups, pad_input=True)
+    torch_input, ttnn_input = create_unet_input_tensors(batch, groups, channel_order="first", pad=False, fold=False)
     model = unet_shallow_torch.UNet.from_random_weights(groups=groups)
 
     parameters = create_unet_model_parameters(model, torch_input, groups=groups, device=device)

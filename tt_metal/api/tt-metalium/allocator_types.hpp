@@ -21,9 +21,7 @@ size: bytes
 */
 using MemoryBlockTable = std::vector<std::unordered_map<std::string, std::string>>;
 struct Allocator;
-namespace allocator {
 class BankManager;
-}
 
 // Setup what each core-type is
 enum class AllocCoreType {
@@ -43,6 +41,7 @@ struct AllocatorConfig {
     size_t dram_bank_size = 0;
     std::vector<size_t> dram_bank_offsets = {};
     uint32_t dram_unreserved_base = 0;
+    uint32_t dram_alignment = 0;
     //! worker specific configuration
     uint32_t l1_unreserved_base = 0;
     CoreRangeSet worker_grid = {};
@@ -56,7 +55,7 @@ struct AllocatorConfig {
     BankMapping l1_bank_remap =
         {};  // for remapping which l1 bank points to which bank if we assume normal row-major assignment
     CoreRangeSet compute_grid = {};
-    uint32_t alignment = 0;
+    uint32_t l1_alignment = 0;
     bool disable_interleaved = false;
     void reset();
     ~AllocatorConfig() { reset(); }
@@ -67,21 +66,6 @@ enum class MemoryAllocator {
     L1_BANKING = 1,
 };
 
-namespace allocator {
-
-struct InitAndAllocFuncs {
-    std::function<void(Allocator&, const AllocatorConfig&)> init;
-    std::function<uint64_t(const AllocatorConfig&, BankManager&, uint64_t, uint64_t, bool, std::optional<uint32_t>)>
-        alloc;
-};
-
-// Holds callback functions required by allocators that specify how to initialize the bank managers and what the
-// allocation scheme is for a given storage substrate
-struct AllocDescriptor {
-    InitAndAllocFuncs dram;
-    InitAndAllocFuncs l1;
-};
-
 struct Statistics {
     size_t total_allocatable_size_bytes = 0;
     size_t total_allocated_bytes = 0;
@@ -90,7 +74,5 @@ struct Statistics {
     std::vector<uint32_t>
         largest_free_block_addrs;  // addresses (relative to bank) that can hold the largest_free_block_bytes
 };
-
-}  // namespace allocator
 
 }  // namespace tt::tt_metal

@@ -16,6 +16,7 @@ target_link_libraries(
         magic_enum
         fmt::fmt-header-only
         span
+        small_vector
         TracyClient
         nlohmann_json::nlohmann_json
         TT::Metalium::HostDevCommon
@@ -33,6 +34,7 @@ target_link_libraries(
         HAL::grayskull
         HAL::wormhole
         HAL::blackhole
+        FlatBuffers::FlatBuffers
 )
 
 target_precompile_headers(

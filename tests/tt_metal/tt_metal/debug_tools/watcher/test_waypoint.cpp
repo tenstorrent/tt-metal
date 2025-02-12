@@ -103,23 +103,32 @@ static void RunTest(WatcherFixture* fixture, IDevice* device) {
         }
     }
     if (has_idle_eth_cores) {
-        KernelHandle ierisc_kid;
+        KernelHandle ierisc_kid0, ierisc_kid1;
         std::set<CoreRange> eth_core_ranges;
         for (const auto& core : device->get_inactive_ethernet_cores()) {
             eth_core_ranges.insert(CoreRange(core, core));
         }
-        ierisc_kid = CreateKernel(
+        ierisc_kid0 = CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/misc/watcher_waypoints.cpp",
             eth_core_ranges,
             tt_metal::EthernetConfig{
-                .eth_mode = Eth::IDLE,
-                .noc = tt_metal::NOC::NOC_0
-            }
-        );
+                .eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0, .processor = DataMovementProcessor::RISCV_0});
+
+        if (device->arch() == ARCH::BLACKHOLE) {
+            ierisc_kid1 = CreateKernel(
+                program,
+                "tests/tt_metal/tt_metal/test_kernels/misc/watcher_waypoints.cpp",
+                eth_core_ranges,
+                tt_metal::EthernetConfig{
+                    .eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0, .processor = DataMovementProcessor::RISCV_1});
+        }
 
         for (const auto& core : device->get_inactive_ethernet_cores()) {
-            SetRuntimeArgs(program, ierisc_kid, core, args);
+            SetRuntimeArgs(program, ierisc_kid0, core, args);
+            if (device->arch() == ARCH::BLACKHOLE) {
+                SetRuntimeArgs(program, ierisc_kid1, core, args);
+            }
         }
     }
 
@@ -128,7 +137,10 @@ static void RunTest(WatcherFixture* fixture, IDevice* device) {
     fixture->RunProgram(device, program);
 
     // Check that the expected waypoints are in the watcher log, a set for each core.
-    auto check_core = [&](const CoreCoord &logical_core, const CoreCoord &phys_core, bool is_eth_core, bool is_active) {
+    auto check_core = [&](const CoreCoord& logical_core,
+                          const CoreCoord& virtual_core,
+                          bool is_eth_core,
+                          bool is_active) {
         vector<string> expected_waypoints;
         string expected;
         // Need to update the expected strings based on each core.
@@ -141,21 +153,27 @@ static void RunTest(WatcherFixture* fixture, IDevice* device) {
                     // blank | prefetch, dispatch | tensix kernels
                     int k_id = 1 + 2 + 3;
                     string k_id_s = fmt::format("{}", k_id);
+                    if (device->arch() == ARCH::BLACKHOLE)
+                        k_id_s += fmt::format("|{}", k_id + 1);
                 } else {
                     k_id_s = "";
                 }
                 expected = fmt::format(
-                    "Device {} ethnet core(x={:2},y={:2}) virtual(x={:2},y={:2}): {},   {},   X,   X,   X  rmsg:* "
-                    "h_id:0 "
-                    "k_id:{}",
+                    "Device {} {} ethnet core(x={:2},y={:2}) virtual(x={:2},y={:2}): {},{},   X,   X,   X  ",
                     device->id(),
+                    is_active ? "active" : "idle",
                     logical_core.x,
                     logical_core.y,
-                    phys_core.x,
-                    phys_core.y,
+                    virtual_core.x,
+                    virtual_core.y,
                     waypoint,
-                    (device->arch() == ARCH::BLACKHOLE) ? "W" : "X", // TODO (#15448): Uplift this when watcher device reader accounts for variable num eth riscs
-                    k_id_s);
+                    // TODO(#17275): Rework risc counts & masks into HAL and generalize this test.
+                    (device->arch() == ARCH::BLACKHOLE) ? waypoint : "   X");
+                if (device->arch() == ARCH::BLACKHOLE) {
+                    expected += fmt::format("rmsg:***|** h_id:0 smsg:* k_id:{}", k_id_s);
+                } else {
+                    expected += fmt::format("rmsg:***|* h_id:0 k_id:{}", k_id_s);
+                }
             } else {
                 // Each different config has a different calculation for k_id, let's just do one. Fast Dispatch, one device.
                 string k_id_s;
@@ -172,8 +190,8 @@ static void RunTest(WatcherFixture* fixture, IDevice* device) {
                     device->id(),
                     logical_core.x,
                     logical_core.y,
-                    phys_core.x,
-                    phys_core.y,
+                    virtual_core.x,
+                    virtual_core.y,
                     waypoint,
                     waypoint,
                     waypoint,
@@ -193,20 +211,20 @@ static void RunTest(WatcherFixture* fixture, IDevice* device) {
     for (uint32_t x = xy_start.x; x <= xy_end.x; x++) {
         for (uint32_t y = xy_start.y; y <= xy_end.y; y++) {
             CoreCoord logical_core = {x, y};
-            CoreCoord phys_core = device->worker_core_from_logical_core(logical_core);
-            check_core(logical_core, phys_core, false, false);
+            CoreCoord virtual_core = device->worker_core_from_logical_core(logical_core);
+            check_core(logical_core, virtual_core, false, false);
         }
     }
     if (has_eth_cores) {
         for (const auto& core : device->get_active_ethernet_cores(true)) {
-            CoreCoord phys_core = device->ethernet_core_from_logical_core(core);
-            check_core(core, phys_core, true, true);
+            CoreCoord virtual_core = device->ethernet_core_from_logical_core(core);
+            check_core(core, virtual_core, true, true);
         }
     }
     if (has_idle_eth_cores) {
         for (const auto& core : device->get_inactive_ethernet_cores()) {
-            CoreCoord phys_core = device->ethernet_core_from_logical_core(core);
-            check_core(core, phys_core, true, false);
+            CoreCoord virtual_core = device->ethernet_core_from_logical_core(core);
+            check_core(core, virtual_core, true, false);
         }
     }
 }

@@ -10,7 +10,7 @@
 #include <tt-metalium/test_tiles.hpp>
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/command_queue.hpp>
-#include <tt-metalium/llrt.hpp>
+#include "llrt.hpp"
 
 using namespace tt;
 
