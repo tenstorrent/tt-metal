@@ -342,12 +342,12 @@ operation::ProgramWithCallbacks all_gather_multi_core_with_workers_helper(
         log_trace(tt::LogOp, "input_buffer->page_size: {}", input_page_size);
         log_trace(
             tt::LogOp,
-            "input_buffer->shard_spec().tensor2d_shape[0]: {}",
-            input_buffer->shard_spec().tensor2d_shape[0]);
+            "input_buffer->shard_spec().tensor2d_shape_in_pages[0]: {}",
+            input_buffer->shard_spec().tensor2d_shape_in_pages[0]);
         log_trace(
             tt::LogOp,
-            "input_buffer->shard_spec().tensor2d_shape[1]: {}",
-            input_buffer->shard_spec().tensor2d_shape[1]);
+            "input_buffer->shard_spec().tensor2d_shape_in_pages[1]: {}",
+            input_buffer->shard_spec().tensor2d_shape_in_pages[1]);
     }
     const uint32_t max_buffer_per_chunk = tt::round_down(all_gather_config.get_eth_buffer_size(), input_page_size);
     const uint32_t max_pages_per_chunk = max_buffer_per_chunk / input_page_size;
