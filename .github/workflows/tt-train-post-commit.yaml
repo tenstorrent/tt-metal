@@ -28,7 +28,6 @@ jobs:
           {name: tt-train, cmd: ctest --no-tests=error --output-on-failure},
         ]
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
-    env:
     runs-on:
       - ${{ inputs.runner-label }}
       - cloud-virtual-machine
