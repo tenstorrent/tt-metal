@@ -24,9 +24,15 @@ def get_workflow_run_uuids_to_test_reports_paths_(workflow_outputs_dir, workflow
         assert test_report_dir.is_dir(), f"{test_report_dir} is not dir"
 
         test_report_uuid = test_report_dir.name.replace("test_reports_", "")
-        workflow_run_test_reports_path[test_report_uuid] = (test_report_dir / "most_recent_tests.xml").resolve(
-            strict=True
-        )
+
+        try:
+            xml_file_paths = (test_report_dir / "most_recent_tests.xml").resolve(strict=True)
+        except FileNotFoundError as e:
+            logger.warning(
+                f"no pytest xml file found matching most_recent_tests.xml (likely gtest xml) in {test_report_dir}"
+            )
+        else:
+            workflow_run_test_reports_path[test_report_uuid] = xml_file_paths
 
     return workflow_run_test_reports_path
 
