@@ -140,13 +140,15 @@ void kernel_main() {
         }
     }
 
-    // input shards
+    // TODO: is this needed?
+    /* // input shards
     if constexpr (local_config_cb_id) {
         cb_reserve_back(src_cb_id, in_nsticks);
         cb_push_back(src_cb_id, in_nsticks);
     }
 
-    cb_wait_front(in_cb_id, in_nsticks);  // make sure untilized data is available
+    cb_wait_front(in_cb_id, in_nsticks);  // make sure untilized data is available */
+
     if constexpr (remote_config_cb_id) {
         uint32_t config_data_l1_addr = get_read_ptr(remote_config_cb_id);
         const tt_l1_ptr uint16_t* config_data = reinterpret_cast<const tt_l1_ptr uint16_t*>(config_data_l1_addr);
