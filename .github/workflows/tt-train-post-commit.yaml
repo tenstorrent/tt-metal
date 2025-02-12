@@ -56,6 +56,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: TTMetal_build_any
+          path: docker-job
       - name: Extract files
         run: tar -xvf ttm_any.tar
       - name: ${{ matrix.test-group.name }} tests
