@@ -49,6 +49,9 @@ def load_conditional_generation_ref_model():
     hf_ref_model = WhisperForConditionalGeneration.from_pretrained("openai/whisper-base.en").to(torch.bfloat16).eval()
     processor = AutoProcessor.from_pretrained("openai/whisper-base.en", language="English", task="transcribe")
     feature_extractor = AutoFeatureExtractor.from_pretrained("openai/whisper-base.en")
+    # hf_ref_model = WhisperForConditionalGeneration.from_pretrained("distil-whisper/distil-large-v3").to(torch.bfloat16).eval()
+    # processor = AutoProcessor.from_pretrained("distil-whisper/distil-large-v3", language="English", task="transcribe")
+    # feature_extractor = AutoFeatureExtractor.from_pretrained("distil-whisper/distil-large-v3")
     config = hf_ref_model.config
     return (
         hf_ref_model,

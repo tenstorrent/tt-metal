@@ -287,6 +287,7 @@ def decoder(config, hidden_states, decoder_attention_mask, encoder_hidden_states
     hidden_states = dropout(hidden_states, p=0, training=False)
 
     for i, decoder_layer_parameter in enumerate(parameters.layers):
+        breakpoint()
         hidden_states = decoder_layer(
             config,
             hidden_states,
