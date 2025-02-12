@@ -7,7 +7,7 @@
 
 #include "dataflow_api.h"
 
-#define ENABLE_DEBUG 1
+#define ENABLE_DEBUG 0
 
 #if ENABLE_DEBUG
 #include "debug/dprint.h"
@@ -37,6 +37,8 @@ void copy_sticks_async(
     const uint16_t my_noc_y,
     const uint32_t in_base_l1_addr,
     const uint32_t out_base_l1_addr,
+    const uint32_t noc_00_x,
+    const uint32_t noc_00_y,
     const uint32_t semaphore_addr = 0,
     const bool in_place = false) {
     int i = 0;
@@ -85,13 +87,13 @@ void copy_sticks_async(
 
         i += length;
 
-        if (in_place) {
+        if (in_place && noc_x >= noc_00_x &&
+            noc_y >= noc_00_y) {  // remote config is padded with zeros, so there are some invalid noc_x, noc_y coords =
+                                  // (0,0), we need to skip these
             noc_async_read_barrier();
             noc_async_write_barrier();
-            DPRINT << "increment semaphore" << ENDL();
-            // DPRINT << "noc_x: " << noc_x << " noc_y: " << noc_y << "\n";
             const uint64_t ref_semaphore_noc_addr = get_noc_addr(noc_x, noc_y, semaphore_addr);
-            // noc_semaphore_inc(ref_semaphore_noc_addr, 1);
+            noc_semaphore_inc(ref_semaphore_noc_addr, 1);
         }
     }
 }
@@ -161,7 +163,6 @@ void kernel_main() {
 
     uint32_t semaphore_addr = 0;
     if constexpr (in_place) {
-        DPRINT << "get semaphore" << ENDL();
         semaphore_addr = get_semaphore(semaphore_id);
     }
 
@@ -175,25 +176,29 @@ void kernel_main() {
             is_block_sharded,
             is_width_sharded,
             remote_read,
-            is_col_major>(config_data, my_noc_x, my_noc_y, in_base_l1_addr, out_base_l1_addr, semaphore_addr, in_place);
+            is_col_major>(
+            config_data,
+            my_noc_x,
+            my_noc_y,
+            in_base_l1_addr,
+            out_base_l1_addr,
+            noc_00_x,
+            noc_00_y,
+            semaphore_addr,
+            in_place);
     }
 
-    DPRINT << "in_place: " << in_place << "\n";
-    DPRINT << "remote_ref_counts_cb_id: " << remote_ref_counts_cb_id << "\n";
-
     if constexpr (in_place == true && remote_ref_counts_cb_id != 0) {
-        DPRINT << "HIT" << ENDL();
         uint32_t config_data_l1_addr = get_read_ptr(remote_ref_counts_cb_id);
         const tt_l1_ptr uint16_t* config_data = reinterpret_cast<const tt_l1_ptr uint16_t*>(config_data_l1_addr);
 
         uint16_t remote_ref_index = my_noc_x - noc_00_x + (my_noc_y - noc_00_y) * num_cores_x;
         uint16_t remote_refs_to_me = config_data[remote_ref_index];
-        DPRINT << "remote_refs: " << remote_refs_to_me << "\n";
 
         const uint64_t my_semaphore_noc_addr = get_noc_addr(my_noc_x, my_noc_y, semaphore_addr);
         volatile tt_l1_ptr uint32_t* my_semaphore_noc_addr_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(my_semaphore_noc_addr);
-        // noc_semaphore_wait(my_semaphore_noc_addr_ptr, remote_refs_to_me);
+        noc_semaphore_wait(my_semaphore_noc_addr_ptr, remote_refs_to_me);
     }
 
     if constexpr (local_config_cb_id) {
@@ -205,7 +210,7 @@ void kernel_main() {
             is_block_sharded,
             is_width_sharded,
             false,
-            is_col_major>(config_data, my_noc_x, my_noc_y, in_base_l1_addr, out_base_l1_addr);
+            is_col_major>(config_data, my_noc_x, my_noc_y, in_base_l1_addr, out_base_l1_addr, noc_00_x, noc_00_y);
     }
 
     noc_async_read_barrier();
