@@ -12,6 +12,7 @@ permissions:
 
 jobs:
   build-artifact:
+    needs: create-tag
     strategy:
       matrix:
         version: ["20.04", "22.04"]
