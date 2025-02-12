@@ -58,13 +58,13 @@ std::vector<T> convert_to_tile_layout(
 
         if (transpose_face) {
             int tile_offset = tile_idx * tile_HW;
-            for(int col = 0; col < face_W; col++) {
-                for(int row = 0; row < face_H; row++) {
-                    size_t dst_index = row * face_W + col;
-                    top_left[dst_index]     = data[tile_offset + (col)          * tile_H + row];
-                    top_right[dst_index]    = data[tile_offset + (col)          * tile_H + row + face_H];
-                    bottom_left[dst_index]  = data[tile_offset + (col + face_W) * tile_H + row];
-                    bottom_right[dst_index] = data[tile_offset + (col + face_W) * tile_H + row + face_H];
+            for(int col = 0; col < face_H; col++) {
+                for(int row = 0; row < face_W; row++) {
+                    size_t dst_index = row * face_H + col;
+                    top_left[dst_index]     = data[tile_offset + (col)          * tile_W + row];
+                    top_right[dst_index]    = data[tile_offset + (col)          * tile_W + row + face_W];
+                    bottom_left[dst_index]  = data[tile_offset + (col + face_H) * tile_W + row];
+                    bottom_right[dst_index] = data[tile_offset + (col + face_H) * tile_W + row + face_W];
                 }
             }
         } else {
@@ -105,13 +105,12 @@ std::vector<T> convert_to_flat_layout(
     std::optional<PhysicalSize> tile_shape = std::nullopt,
     std::optional<PhysicalSize> face_shape = std::nullopt,
     const bool transpose_face = false,
-    const bool transpose_face_order = false) {
+    const bool transpose_face_order = false) {      // FIXME: transpose_face_order is unused
     ZoneScoped;
-    std::vector<T> result;
+    std::vector<T> result(data.size());
     if(data.size() == 0) {
         return result;
     }
-    result.reserve(data.size());
     auto tile_H = tile_shape.has_value() ? tile_shape.value()[0] : tt::constants::TILE_HEIGHT;
     auto tile_W = tile_shape.has_value() ? tile_shape.value()[1] : tt::constants::TILE_WIDTH;
     auto face_H = face_shape.has_value() ? face_shape.value()[0] : tt::constants::FACE_HEIGHT;
@@ -122,37 +121,38 @@ std::vector<T> convert_to_flat_layout(
     auto num_faces_row = tile_H / face_H;
     TT_ASSERT(data.size() % tile_HW == 0);
     int num_tiles = data.size() / tile_HW;
+    size_t dest_idx = 0;
     for(int tile_idx = 0; tile_idx < num_tiles; tile_idx++) {
         int tile_start = tile_idx * tile_HW;
 
         if (transpose_face) {
-            if (num_faces_row >= 1 && num_faces_col <= 1) { // 32x16
-                for(int face_y = 0; face_y < num_faces_row; face_y++) {
-                    int start = tile_start + face_y * (face_H * tile_W);
-                    for(int col = 0; col < face_W; col++) {
-                        for(int row = 0; row < face_H; row++) {
-                            result.push_back(data[start + col + row * face_W]);
+            if (num_faces_row >= 1 && num_faces_col <= 1) { // e.g. 32x16 case
+                for (int face_y = 0; face_y < num_faces_row; face_y++) {
+                    const int start = tile_start + face_y * (face_H * tile_W);
+                    for (int col = 0; col < face_W; col++) {
+                        for (int row = 0; row < face_H; row++) {
+                            result[dest_idx++] = data[start + col + row * face_W];
                         }
                     }
                 }
-            } else if (num_faces_row <= 1 && num_faces_col >= 1) { // 16x32
-                for(int col = 0; col < face_W; col++) {
-                    int start = tile_start + col;
-                    for(int face_x = 0; face_x < num_faces_col; face_x++) {
-                        int offset = face_x * face_HW;
-                        for(int row = 0; row < face_H; row++) {
-                            result.push_back(data[start + offset + row * face_W]);
+            } else if (num_faces_row <= 1 && num_faces_col >= 1) { // e.g. 16x32 case
+                for (int col = 0; col < face_W; col++) {
+                    const int start = tile_start + col;
+                    for (int face_x = 0; face_x < num_faces_col; face_x++) {
+                        const int offset = face_x * face_HW;
+                        for (int row = 0; row < face_H; row++) {
+                            result[dest_idx++] = data[start + offset + row * face_W];
                         }
                     }
                 }
             } else {
-                for(int face_x = 0; face_x < num_faces_col; face_x++) {
-                    for(int col = 0; col < face_W; col++) {
-                        int start = tile_start + face_x * face_HW + col;
-                        for(int face_y = 0; face_y < num_faces_row; face_y++) {
-                            int offset = face_y * (face_H * tile_W);
-                            for(int row = 0; row < face_H; row++) {
-                                result.push_back(data[start + offset + row * face_W]);
+                for (int face_x = 0; face_x < num_faces_col; face_x++) {
+                    for (int col = 0; col < face_W; col++) {
+                        const int start = tile_start + face_x * face_HW + col;
+                        for (int face_y = 0; face_y < num_faces_row; face_y++) {
+                            const int offset = face_y * (face_H * tile_W);
+                            for (int row = 0; row < face_H; row++) {
+                                result[dest_idx++] = data[start + offset + row * face_W];
                             }
                         }
                     }
@@ -160,16 +160,17 @@ std::vector<T> convert_to_flat_layout(
             }
         } else {
             for(int face_y = 0; face_y < num_faces_row; face_y++) {
-                for(int row = 0; row < face_H; row++) {
-                    int start = tile_start + face_y * (face_H * tile_W) + row * face_W;
-                    for(int face_x = 0; face_x < num_faces_col; face_x++) {
-                        int offset = face_x * face_HW;
-                        for(int col = offset; col < offset + face_W; col++) {
-                            result.push_back(data[start + col]);
-                        }
+                for(int face_x = 0; face_x < num_faces_col; face_x++) {
+                    size_t src_face_start = tile_start + face_y * (face_H * tile_W) + face_x * face_HW;
+                    size_t dst_face_start = tile_start + face_y * (face_H * tile_W) + face_x * face_W;
+                    for(int row = 0; row < face_H; row++) {
+                        size_t src_idx = src_face_start + row * face_W;
+                        size_t dst_idx = dst_face_start + row * tile_W;
+                        std::memcpy(&result[dst_idx], &data[src_idx], face_W * sizeof(T));
                     }
                 }
             }
+
         }
     }
 
@@ -179,7 +180,9 @@ std::vector<T> convert_to_flat_layout(
 // Converts a 32-swizzled tilized row-major tensor to a linear 32-zero-padded row-major tensor
 template <typename T, template <typename...> typename BufferType>
 inline std::vector<T> untilize_nchw(
-    const BufferType<T>& in, const PhysicalSize& shape, std::optional<PhysicalSize> tile_shape = std::nullopt) {
+    const BufferType<T>& in,
+    const PhysicalSize& shape,
+    std::optional<PhysicalSize> tile_shape = std::nullopt) {
     ZoneScoped;
     std::vector<T> result;
     if(in.size() == 0) {
@@ -200,14 +203,10 @@ inline std::vector<T> untilize_nchw(
     for (auto hs = 0; hs < H; hs += tile_H) {           // iterate over h with stride 32
         for (auto ws = 0; ws < W; ws += tile_W) {       // iterate over w with stride 32
             for (auto ht = 0; ht < tile_H; ht++) {      // hs + ht = h
-                for (auto wt = 0; wt < tile_W; wt++) {  // ws + wt = w
-                    T val = in[linear];
-                    auto w = wt + ws;
-                    auto h = ht + hs;
-                    auto offs = w + h * W;  // + batch_index * H * W;
-                    result[offs] = val;
-                    linear++;
-                }
+                // Note: the only difference with tilize_nchw - switched src and dst indecies
+                size_t dst_idx = (hs + ht) * W + ws;
+                size_t src_idx = hs * W + (ws * tile_H) + (ht * tile_W);
+                std::memcpy(&result[dst_idx], &in[src_idx], tile_W * sizeof(T));
             }
         }
     }
@@ -246,14 +245,9 @@ inline std::vector<T> tilize_nchw(
     for (auto hs = 0; hs < H; hs += tile_H) {
         for (auto ws = 0; ws < W; ws += tile_W) {
             for (auto ht = 0; ht < tile_H; ht++) {
-                for (auto wt = 0; wt < tile_W; wt++) {
-                    auto w = wt + ws;
-                    auto h = ht + hs;
-                    auto in_offs = w + h * W;
-                    auto val = in_rowmajor[in_offs];
-                    tilized_result[out_index] = val;
-                    out_index++;
-                }
+                size_t src_idx = (hs + ht) * W + ws;
+                size_t dst_idx = hs * W + (ws * tile_H) + (ht * tile_W);
+                std::memcpy(&tilized_result[dst_idx], &in_rowmajor[src_idx], tile_W * sizeof(T));
             }
         }
     }

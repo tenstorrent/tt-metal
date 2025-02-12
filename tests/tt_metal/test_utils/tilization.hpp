@@ -29,10 +29,10 @@ std::vector<T> tilize(std::vector<T> data, int rows, int cols) {
     for (auto r = 0; r < num_tiles_r; r++) {
         for (auto c = 0; c < num_tiles_c; c++) {
             #pragma unroll
-            for (auto j = 0; j < TileHeight; j++) {     // tile rows
-                size_t src_index = r * TileHeight * cols + c * TileWidth + j * cols;
-                size_t dst_index = (r * num_tiles_c + c) * (TileHeight * TileWidth) + j * TileWidth;
-                std::memcpy(&result[0] + dst_index, &data[0] + src_index, TileWidth * sizeof(T));
+            for (auto i = 0; i < TileHeight; i++) {     // tile rows
+                size_t src_idx = (r * elements_in_tile * num_tiles_c) + (i * num_tiles_c * TileWidth) + (c * TileWidth);
+                size_t dst_idx = (r * elements_in_tile * num_tiles_c) + (c * elements_in_tile) + (i * TileWidth);
+                std::memcpy(&result[dst_idx], &data[src_idx], TileWidth * sizeof(T));
             }
         }
     }
@@ -44,17 +44,18 @@ template <typename T, unsigned int TileHeight = 32, unsigned int TileWidth = 32>
 std::vector<T> untilize(std::vector<T> data, int rows, int cols) {
     TT_FATAL((rows % TileHeight) == 0, "rows={} % TileHeight={} must equal 0", rows, TileHeight);
     TT_FATAL((cols % TileWidth) == 0, "rows={} % TileHeight={} must equal 0", cols, TileWidth);
+    TT_FATAL((data.size() <= rows * cols), "data with size {} doesn't fit all {} x {} values", data.size(), rows, cols);
     constexpr unsigned int elements_in_tile = TileHeight * TileWidth;
     unsigned int num_tiles_r = rows / TileHeight;
     unsigned int num_tiles_c = cols / TileWidth;
-    std::vector<T> result;
+    std::vector<T> result(rows * cols);
     for (auto r = 0; r < num_tiles_r; r++) {
         for (auto i = 0; i < TileHeight; i++) {
             for (auto c = 0; c < num_tiles_c; c++) {
-                int offset = r * elements_in_tile * num_tiles_c + c * elements_in_tile + i * TileWidth;
-                for (auto j = 0; j < TileWidth; j++) {
-                    result.push_back(data.at(offset + j));
-                }
+                // Note: the only difference with tilize - switched src and dst indecies
+                size_t src_idx = (r * elements_in_tile * num_tiles_c) + (c * elements_in_tile) + (i * TileWidth);
+                size_t dst_idx = (r * elements_in_tile * num_tiles_c) + (i * num_tiles_c * TileWidth) + (c * TileWidth);
+                std::memcpy(&result[dst_idx], &data[src_idx], TileWidth * sizeof(T));
             }
         }
     }
