@@ -53,7 +53,7 @@ def test_concat(device, height, width, dim, async_mode):
 
 
 @pytest.mark.parametrize(
-    "inputs, output_shard_shape, shard_grid, strategy, layout, cache_mode",
+    "inputs, output_shard_shape, shard_grid, strategy, layout, cache_mode,dtype",
     (
         # (
         #     [((1,1,49,128), (1,128)), ((1,1,49,128), (1,128)),((1,1,49,128), (1,128)),((1,1,49,128), (1,128))],
@@ -62,6 +62,7 @@ def test_concat(device, height, width, dim, async_mode):
         #      ttnn.ShardStrategy.HEIGHT,
         #      ttnn.ROW_MAJOR_LAYOUT,
         #      False,
+        #      ttnn.bfloat16
         # ),
         #  (
         #     [((1,1,400,128), (7,128)), ((1,1,400,128), (7,128)),((1,1,400,128), (7,128)),((1,1,400,128), (7,128))],
@@ -70,27 +71,69 @@ def test_concat(device, height, width, dim, async_mode):
         #      ttnn.ShardStrategy.HEIGHT,
         #      ttnn.ROW_MAJOR_LAYOUT,
         #      False,
+        #      ttnn.bfloat16
         # ),
-        (  # fp8 case
-            [((1, 1, 49, 64), (1, 64)), ((1, 1, 49, 64), (1, 64))],
-            (1, 128),
+        # (  # fp8 case #C3K
+        #     [((1, 1, 49, 64), (1, 64)), ((1, 1, 49, 64), (1, 64))],
+        #     (1, 128),
+        #     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
+        #     ttnn.ShardStrategy.HEIGHT,
+        #     ttnn.TILE_LAYOUT,
+        #     False,
+        #     ttnn.bfloat8_b
+        # ),
+        # ( #C3K
+        #     [((1, 1, 196, 32), (4, 32)), ((1, 1, 196, 32), (4, 32))],
+        #     (4, 64),
+        #     ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
+        #     ttnn.ShardStrategy.HEIGHT,
+        #     ttnn.TILE_LAYOUT,
+        #     False,
+        #     ttnn.bfloat8_b
+        # ),
+        # c3k2
+        (
+            [((1, 1, 25600, 16), (400, 16)), ((1, 1, 25600, 16), (400, 16)), ((1, 1, 25600, 16), (400, 16))],
+            (400, 48),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
             ttnn.ShardStrategy.HEIGHT,
-            ttnn.TILE_LAYOUT,
+            ttnn.ROW_MAJOR_LAYOUT,
             False,
+            ttnn.bfloat16,
         ),
         (
-            [((1, 1, 196, 32), (4, 32)), ((1, 1, 196, 32), (4, 32))],
-            (4, 64),
+            [((1, 1, 25600, 16), (400, 16)), ((1, 1, 25600, 16), (400, 16)), ((1, 1, 25600, 16), (400, 16))],
+            (400, 48),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
             ttnn.ShardStrategy.HEIGHT,
-            ttnn.TILE_LAYOUT,
+            ttnn.ROW_MAJOR_LAYOUT,
             False,
+            ttnn.bfloat16,
+        ),
+        (
+            [((1, 1, 6400, 32), (102, 32)), ((1, 1, 6400, 32), (102, 32)), ((1, 1, 6400, 32), (102, 32))],
+            (102, 96),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
+            ttnn.ShardStrategy.HEIGHT,
+            ttnn.ROW_MAJOR_LAYOUT,
+            False,
+            ttnn.bfloat16,
+        ),
+        (
+            [((1, 1, 1600, 64), (25, 64)), ((1, 1, 1600, 64), (25, 64)), ((1, 1, 1600, 64), (25, 64))],
+            (25, 192),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
+            ttnn.ShardStrategy.HEIGHT,
+            ttnn.ROW_MAJOR_LAYOUT,
+            False,
+            ttnn.bfloat16,
         ),
     ),
 )
 @pytest.mark.parametrize("async_mode", [True, False], ids=["async_on", "async_off"])
-def test_sharded_concat(device, inputs, output_shard_shape, shard_grid, strategy, layout, cache_mode, async_mode):
+def test_sharded_concat(
+    device, inputs, output_shard_shape, shard_grid, strategy, layout, cache_mode, async_mode, dtype
+):
     device.enable_async(async_mode)
     if cache_mode:
         device.enable_program_cache()
@@ -108,7 +151,7 @@ def test_sharded_concat(device, inputs, output_shard_shape, shard_grid, strategy
                 use_height_and_width_as_shard_shape=True,
             )
             torch_input_tensor = torch.rand(shape, dtype=torch.bfloat16)
-            input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat8_b, layout=layout, device=device)
+            input_tensor = ttnn.from_torch(torch_input_tensor, dtype=dtype, layout=layout, device=device)
             input_tensor = ttnn.to_memory_config(input_tensor, input_sharded_memory_config)
             input_tensors.append((torch_input_tensor, input_tensor))
         return input_tensors
