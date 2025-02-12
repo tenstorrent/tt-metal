@@ -189,25 +189,12 @@ jobs:
         run: |
           nice -19 cmake --build $build_dir --target package
 
-      - name: 🐍 Build wheel
-        if: ${{ inputs.build-wheel }}
-        run: |
-          nice -n 19 python3 -m build
-
       - name: Publish ccache summary
         run: |
           echo '## CCache Summary' >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
           ccache -s >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-
-      - name: ☁️ Upload wheel
-        if: ${{ inputs.build-wheel }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: eager-dist-${{ inputs.distro }}-${{ inputs.version }}-any
-          path: /work/dist/
-          if-no-files-found: error
 
       - name: 'Tar files'
         if: ${{ inputs.publish-artifact }}
@@ -219,6 +206,20 @@ jobs:
         with:
           name: TTMetal_build_any${{ (inputs.tracy && '_profiler') || '' }}
           path: /work/ttm_any.tar
+          if-no-files-found: error
+
+      - name: 🐍 Build wheel
+        if: ${{ inputs.build-wheel }}
+        run: |
+          git clean -xffd
+          nice -n 19 python3 -m build
+
+      - name: ☁️ Upload wheel
+        if: ${{ inputs.build-wheel }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: eager-dist-${{ inputs.distro }}-${{ inputs.version }}-any
+          path: /work/dist/
           if-no-files-found: error
 
       - name: Cleanup
