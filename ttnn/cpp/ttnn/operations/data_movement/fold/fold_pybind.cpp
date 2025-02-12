@@ -37,7 +37,8 @@ void bind_fold_operation(py::module& module) {
                uint32_t pad_c,
                uint32_t pad_h,
                uint32_t pad_w,
-               std::optional<CoreCoord> grid_size,
+               //    std::optional<CoreCoord> grid_size,
+               std::optional<CoreRangeSet> grid_size,
                std::optional<MemoryConfig> override_memory_config,
                QueueId queue_id) -> ttnn::Tensor {
                 return op(
