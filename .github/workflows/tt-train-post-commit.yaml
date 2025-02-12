@@ -63,7 +63,7 @@ jobs:
         timeout-minutes: ${{ inputs.timeout }}
         run: |
           cp ./build/tt-train/3rd_party/wandb-cpp/libwandbcpp.so build/lib/
-          find ./build -type f -name "*.tcl" -o -name "*.cmake" -exec sed -i "s|/home/ubuntu/[^/]*/_work/tt-metal/tt-metal/build_Release|/work/build|g" {} +
+          find ./build -type f -name "*.tcl" -o -name "*.cmake" -exec sed -i "s|/work/build_Release|/work/build|g" {} +
           cd /work/build/tt-train
           ldd tests/ttml_tests || true
           ${{ matrix.test-group.cmd }}
