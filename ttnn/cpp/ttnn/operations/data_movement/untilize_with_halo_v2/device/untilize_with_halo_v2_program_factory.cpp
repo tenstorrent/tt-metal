@@ -169,6 +169,11 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
             .set_globally_allocated_address(*remote_config_buffer);
     CBHandle remote_config_cb = CreateCircularBuffer(program, all_cores, remote_config_cb_config);
 
+    const bool is_block_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
+    const bool is_width_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED;
+
+    CoreCoord noc_00;
+    int num_cores_x = 0;
     if (remote_ref_counts.has_value()) {
         auto remote_ref_counts_buffer = remote_ref_counts.value().get().device_buffer();
         auto remote_ref_counts_cb_config =
@@ -177,10 +182,16 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
                 .set_page_size(remote_ref_counts_cb_id, remote_ref_counts_buffer->page_size())
                 .set_globally_allocated_address(*remote_ref_counts_buffer);
         CBHandle remote_ref_counts_cb = CreateCircularBuffer(program, all_cores, remote_ref_counts_cb_config);
-    }
 
-    bool const is_block_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
-    bool const is_width_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED;
+        auto core_id_to_noc_coords = [is_block_sharded, transpose_mcast, device](uint32_t core_id) -> CoreCoord {
+            auto num_cores_x = device->compute_with_storage_grid_size().x;
+            auto core_coord = is_block_sharded ? (transpose_mcast ? CoreCoord(core_id, 0) : CoreCoord(0, core_id))
+                                               : CoreCoord(core_id % num_cores_x, core_id / num_cores_x);
+            return device->worker_core_from_logical_core(core_coord);
+        };
+        noc_00 = core_id_to_noc_coords(0);
+        num_cores_x = device->compute_with_storage_grid_size().x;
+    }
 
     auto aligned_input_nstick_nbytes = out_stick_nbytes;
     log_debug(tt::LogOp, "out_stick_nbytes = {}", out_stick_nbytes);
@@ -213,7 +224,10 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         remote_read,
         (uint32_t)(transpose_mcast ? 1 : 0),
         is_width_sharded,
-        aligned_input_nstick_nbytes};
+        aligned_input_nstick_nbytes,
+        noc_00.x,
+        noc_00.y,
+        num_cores_x};
 
     reader_ct_args[0] = 0;
     reader_ct_args[1] = local_config_cb_id;
