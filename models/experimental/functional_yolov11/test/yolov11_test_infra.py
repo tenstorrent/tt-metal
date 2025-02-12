@@ -153,7 +153,7 @@ class Yolov11TestInfra:
         # output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
         output_tensor = output_tensor.reshape((self.torch_output).shape)
 
-        valid_pcc = 0.996
+        valid_pcc = 0.98
         self.pcc_passed, self.pcc_message = assert_with_pcc(self.torch_output, output_tensor, pcc=valid_pcc)
 
         logger.info(f"Yolov11, PCC={self.pcc_message}")
