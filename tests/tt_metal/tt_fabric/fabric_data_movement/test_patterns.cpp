@@ -17,6 +17,8 @@ TEST_F(FabricFixture, TestAsyncWriteRoutingPlane) {
     chip_id_t physical_start_device_id;
     std::pair<mesh_id_t, chip_id_t> end_mesh_chip_id;
     chip_id_t physical_end_device_id;
+
+    // Find a device with a neighbour in the East direction
     bool connection_found = false;
     for (auto* device : devices_) {
         start_mesh_chip_id = control_plane_->get_mesh_chip_id_from_physical_chip_id(device->id());
@@ -40,6 +42,7 @@ TEST_F(FabricFixture, TestAsyncWriteRoutingPlane) {
 
     uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
 
+    // Allocate space for the client interface and router config buffers
     uint32_t worker_unreserved_base_addr =
         hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
     uint32_t client_interface_addr = worker_unreserved_base_addr;
@@ -48,6 +51,8 @@ TEST_F(FabricFixture, TestAsyncWriteRoutingPlane) {
         l1_alignment);
     uint32_t buffer_data_addr = packet_header_addr + PACKET_HEADER_SIZE_BYTES;
     uint32_t buffer_data_size = tt::constants::TILE_HW * sizeof(uint32_t);
+
+    // Reset buffer space for test validation and write initial data
     std::vector<uint32_t> buffer_data(buffer_data_size / sizeof(uint32_t), 0);
     tt::llrt::write_hex_vec_to_core(physical_end_device_id, receiver_virtual_core, buffer_data, buffer_data_addr);
 
@@ -59,6 +64,7 @@ TEST_F(FabricFixture, TestAsyncWriteRoutingPlane) {
 
     auto receiver_noc_encoding = tt::tt_metal::hal.noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
 
+    // Create the sender program
     auto sender_program = tt_metal::CreateProgram();
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
@@ -67,9 +73,11 @@ TEST_F(FabricFixture, TestAsyncWriteRoutingPlane) {
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
+    // Get the gatekeeper noc address so that we can sync and pull the routing tables
     auto [sender_gk_noc_offset, sender_gk_interface_addr] =
         this->GetFabricData().get_gatekeeper_noc_addr(physical_start_device_id);
 
+    // Use the first routing plane
     uint32_t routing_plane = 0;
     std::vector<uint32_t> sender_runtime_args = {
         client_interface_addr,
@@ -84,6 +92,7 @@ TEST_F(FabricFixture, TestAsyncWriteRoutingPlane) {
         routing_plane};
     tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
 
+    // Create the receiver program for validation
     auto receiver_program = tt_metal::CreateProgram();
     auto receiver_kernel = tt_metal::CreateKernel(
         receiver_program,
@@ -92,19 +101,19 @@ TEST_F(FabricFixture, TestAsyncWriteRoutingPlane) {
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-    auto [receiver_gk_noc_offset, receiver_gk_interface_addr] =
-        this->GetFabricData().get_gatekeeper_noc_addr(physical_end_device_id);
     std::vector<uint32_t> receiver_runtime_args = {
         buffer_data_addr,
         buffer_data_size,
     };
     tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver_logical_core, receiver_runtime_args);
 
+    // Launch sender and receiver programs and wait for them to finish
     tt_metal::detail::LaunchProgram(receiver_device, receiver_program, false);
     tt_metal::detail::LaunchProgram(sender_device, sender_program, false);
     tt_metal::detail::WaitProgramDone(sender_device, sender_program);
     tt_metal::detail::WaitProgramDone(receiver_device, receiver_program);
 
+    // Validate the data received by the receiver
     std::vector<uint32_t> received_buffer_data = tt::llrt::read_hex_vec_from_core(
         physical_end_device_id, receiver_virtual_core, buffer_data_addr, buffer_data_size);
     EXPECT_EQ(buffer_data, received_buffer_data);
@@ -195,8 +204,6 @@ TEST_F(FabricFixture, TestAsyncWrite) {
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-    auto [receiver_gk_noc_offset, receiver_gk_interface_addr] =
-        this->GetFabricData().get_gatekeeper_noc_addr(physical_end_device_id);
     std::vector<uint32_t> receiver_runtime_args = {
         buffer_data_addr,
         buffer_data_size,
@@ -295,8 +302,6 @@ TEST_F(FabricFixture, TestAtomicIncRoutingPlane) {
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-    auto [receiver_gk_noc_offset, receiver_gk_interface_addr] =
-        this->GetFabricData().get_gatekeeper_noc_addr(physical_end_device_id);
     std::vector<uint32_t> receiver_runtime_args = {
         atomic_inc_addr,
         sizeof(uint32_t),
@@ -398,8 +403,6 @@ TEST_F(FabricFixture, TestAtomicInc) {
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-    auto [receiver_gk_noc_offset, receiver_gk_interface_addr] =
-        this->GetFabricData().get_gatekeeper_noc_addr(physical_end_device_id);
     std::vector<uint32_t> receiver_runtime_args = {
         atomic_inc_addr,
         sizeof(uint32_t),
@@ -506,8 +509,6 @@ TEST_F(FabricFixture, TestAyncWriteAtomicIncRoutingPlane) {
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-    auto [receiver_gk_noc_offset, receiver_gk_interface_addr] =
-        this->GetFabricData().get_gatekeeper_noc_addr(physical_end_device_id);
     std::vector<uint32_t> receiver_runtime_args = {
         atomic_inc_addr,
         sizeof(uint32_t),
@@ -621,8 +622,6 @@ TEST_F(FabricFixture, TestAyncWriteAtomicInc) {
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-    auto [receiver_gk_noc_offset, receiver_gk_interface_addr] =
-        this->GetFabricData().get_gatekeeper_noc_addr(physical_end_device_id);
     std::vector<uint32_t> receiver_runtime_args = {
         atomic_inc_addr,
         sizeof(uint32_t),
@@ -727,8 +726,6 @@ TEST_F(FabricFixture, TestAsyncWriteMulticastRoutingPlane) {
                 tt_metal::DataMovementConfig{
                     .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-            auto [receiver_gk_noc_offset, receiver_gk_interface_addr] =
-                this->GetFabricData().get_gatekeeper_noc_addr(physical_end_device_id);
             std::vector<uint32_t> receiver_runtime_args = {
                 buffer_data_addr,
                 buffer_data_size,
@@ -877,8 +874,6 @@ TEST_F(FabricFixture, TestAsyncWriteMulticast) {
                 tt_metal::DataMovementConfig{
                     .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-            auto [receiver_gk_noc_offset, receiver_gk_interface_addr] =
-                this->GetFabricData().get_gatekeeper_noc_addr(physical_end_device_id);
             std::vector<uint32_t> receiver_runtime_args = {
                 buffer_data_addr,
                 buffer_data_size,
@@ -1038,8 +1033,6 @@ TEST_F(FabricFixture, TestAsyncWriteMulticastMultidirectionalRoutingPlane) {
                 tt_metal::DataMovementConfig{
                     .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-            auto [receiver_gk_noc_offset, receiver_gk_interface_addr] =
-                this->GetFabricData().get_gatekeeper_noc_addr(physical_end_device_id);
             std::vector<uint32_t> receiver_runtime_args = {
                 buffer_data_addr,
                 buffer_data_size,
@@ -1205,8 +1198,6 @@ TEST_F(FabricFixture, TestAsyncWriteMulticastMultidirectional) {
                 tt_metal::DataMovementConfig{
                     .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
-            auto [receiver_gk_noc_offset, receiver_gk_interface_addr] =
-                this->GetFabricData().get_gatekeeper_noc_addr(physical_end_device_id);
             std::vector<uint32_t> receiver_runtime_args = {
                 buffer_data_addr,
                 buffer_data_size,

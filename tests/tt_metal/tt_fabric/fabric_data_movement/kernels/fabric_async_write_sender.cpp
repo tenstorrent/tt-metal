@@ -35,6 +35,7 @@ void kernel_main() {
 
     uint64_t dst_noc_addr = get_noc_addr_helper(dst_noc_offset, dst_addr);
     uint32_t packet_size_bytes = num_bytes + PACKET_HEADER_SIZE_BYTES;
+    // Initialize the packet header
     fabric_async_write_add_header(
         src_addr,  // source address in sender’s memory
         dst_mesh_id,
@@ -46,11 +47,13 @@ void kernel_main() {
     // make sure fabric node gatekeeper is available.
     fabric_endpoint_init<false>(client_interface_addr, gk_interface_addr_l, gk_interface_addr_h);
 
+    // Initialize the pull request
     fabric_setup_pull_request(
         src_addr,          // source address in sender’s memory
         packet_size_bytes  // number of bytes to write to remote destination
     );
 
+    // Send the pull request
     fabric_send_pull_request<false>(router_noc_xy, dst_mesh_id, dst_device_id);
     fabric_wait_for_pull_request_flushed();
 }

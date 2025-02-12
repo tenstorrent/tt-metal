@@ -36,9 +36,10 @@ void kernel_main() {
     uint64_t dst_noc_addr = get_noc_addr_helper(dst_noc_offset, dst_addr);
     uint32_t packet_size_bytes = num_bytes + PACKET_HEADER_SIZE_BYTES;
 
-    // make sure fabric node gatekeeper is available.
+    // make sure fabric node gatekeeper is available and read the routing tables
     fabric_endpoint_init(client_interface_addr, gk_interface_addr_l, gk_interface_addr_h);
 
+    // issue the fabric write
     fabric_async_write(
         routing_plane,
         src_addr,  // source address in sender’s memory
@@ -47,5 +48,6 @@ void kernel_main() {
         dst_noc_addr,      // destination write address
         packet_size_bytes  // number of bytes to write to remote destination
     );
+    // Wait for data to be flushed before kernel ends
     fabric_wait_for_pull_request_flushed();
 }
