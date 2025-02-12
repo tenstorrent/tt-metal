@@ -6,6 +6,7 @@
 #include <cstdint>
 
 #include "dataflow_api.h"
+#include "tt_metal/tools/profiler/kernel_profiler.hpp"
 
 #define ENABLE_DEBUG 0
 
@@ -24,64 +25,88 @@ inline bool fill_with_val(uint32_t begin_addr, uint32_t n, uint16_t val) {
     return true;
 }
 
+enum SplitCopy : uint32_t { ProcessEven = 0, ProcessOdd = 1, ProcessAll, ProcessNone };
+
 template <
     uint32_t stick_nbytes,
     uint32_t input_aligned_page_size,
     bool is_block_sharded,
     bool is_width_sharded,
     bool is_read,
-    bool is_col_major>
+    bool is_col_major,
+    SplitCopy split_copy = SplitCopy::ProcessAll>
 void copy_sticks_async(
-    tt_l1_ptr uint16_t const* config_data,
+    const tt_l1_ptr uint16_t* config_data,
     const uint16_t my_noc_x,
     const uint16_t my_noc_y,
-    uint32_t const in_base_l1_addr,
-    uint32_t const out_base_l1_addr) {
+    const uint32_t in_base_l1_addr,
+    const uint32_t out_base_l1_addr) {
+    if constexpr (split_copy == SplitCopy::ProcessNone) {
+        return;
+    }
+
     int i = 0;
     int length = config_data[i + 2];
 
+    // TODO(mbezulj) remove debug print
+    if constexpr (proc_type == static_cast<std::underlying_type_t<TensixProcessorTypes>>(TensixProcessorTypes::DM0)) {
+        DPRINT << "BRISC = " << (uint32_t)split_copy << ENDL();
+    } else {
+        DPRINT << "NCRISC = " << (uint32_t)split_copy << ENDL();
+    }
+    //
+
+    int iteration = 0;
     while (length) {
+        // TODO(mbezulj) remove debug zone
+        DeviceZoneScopedN("copy-sticks");
         uint16_t noc_x = ((is_block_sharded && !is_col_major) || is_width_sharded) ? my_noc_x : config_data[i + 0];
         uint16_t noc_y = ((is_block_sharded && is_col_major) || is_width_sharded) ? my_noc_y : config_data[i + 1];
         length = config_data[i + 2];
         i += 3;
 
-        const uint64_t base_addr = get_noc_addr(noc_x, noc_y, is_read ? in_base_l1_addr : out_base_l1_addr);
-        for (uint16_t j = 0; j < length; j += 3) {
-            uint16_t src_local_idx = config_data[i + j + 0];
-            uint16_t dst_local_idx = config_data[i + j + 1];
-            uint16_t nsticks = config_data[i + j + 2];
-            uint32_t size = nsticks * stick_nbytes;
-            uint32_t dst_offset = dst_local_idx * stick_nbytes;
-            uint32_t src_offset = src_local_idx * input_aligned_page_size;
-            if constexpr (is_read) {
-                uint32_t dst_addr = out_base_l1_addr + dst_offset;
-                uint64_t src_addr = base_addr + src_offset;
-                if constexpr (stick_nbytes == input_aligned_page_size) {
-                    noc_async_read(src_addr, dst_addr, size);
-                } else {
-                    for (uint16_t k = 0; k < nsticks; k++) {
-                        noc_async_read(src_addr, dst_addr, stick_nbytes);
-                        dst_addr += stick_nbytes;
-                        src_addr += input_aligned_page_size;
+        if ((split_copy == iteration % 2) || (split_copy == SplitCopy::ProcessAll)) {
+            // TODO(mbezulj) remove debug zone and debug print
+            DeviceZoneScopedN("copy-sticks");
+            DPRINT << "iteration=" << iteration << " split_copy=" << (uint32_t)split_copy << ENDL();
+            const uint64_t base_addr = get_noc_addr(noc_x, noc_y, is_read ? in_base_l1_addr : out_base_l1_addr);
+            for (uint16_t j = 0; j < length; j += 3) {
+                uint16_t src_local_idx = config_data[i + j + 0];
+                uint16_t dst_local_idx = config_data[i + j + 1];
+                uint16_t nsticks = config_data[i + j + 2];
+                uint32_t size = nsticks * stick_nbytes;
+                uint32_t dst_offset = dst_local_idx * stick_nbytes;
+                uint32_t src_offset = src_local_idx * input_aligned_page_size;
+                if constexpr (is_read) {
+                    uint32_t dst_addr = out_base_l1_addr + dst_offset;
+                    uint64_t src_addr = base_addr + src_offset;
+                    if constexpr (stick_nbytes == input_aligned_page_size) {
+                        noc_async_read(src_addr, dst_addr, size);
+                    } else {
+                        for (uint16_t k = 0; k < nsticks; k++) {
+                            noc_async_read(src_addr, dst_addr, stick_nbytes);
+                            dst_addr += stick_nbytes;
+                            src_addr += input_aligned_page_size;
+                        }
                     }
-                }
-            } else {
-                uint64_t dst_addr = base_addr + dst_offset;
-                uint32_t src_addr = in_base_l1_addr + src_offset;
-                if constexpr (stick_nbytes == input_aligned_page_size) {
-                    noc_async_write(src_addr, dst_addr, size);
                 } else {
-                    for (uint16_t k = 0; k < nsticks; k++) {
-                        noc_async_write(src_addr, dst_addr, stick_nbytes);
-                        dst_addr += stick_nbytes;
-                        src_addr += input_aligned_page_size;
+                    uint64_t dst_addr = base_addr + dst_offset;
+                    uint32_t src_addr = in_base_l1_addr + src_offset;
+                    if constexpr (stick_nbytes == input_aligned_page_size) {
+                        noc_async_write(src_addr, dst_addr, size);
+                    } else {
+                        for (uint16_t k = 0; k < nsticks; k++) {
+                            noc_async_write(src_addr, dst_addr, stick_nbytes);
+                            dst_addr += stick_nbytes;
+                            src_addr += input_aligned_page_size;
+                        }
                     }
                 }
             }
         }
 
         i += length;
+        iteration++;
     }
 }
 
@@ -101,6 +126,15 @@ void kernel_main() {
     constexpr bool is_col_major = get_compile_time_arg_val(12) == 1;
     constexpr uint32_t is_width_sharded = get_compile_time_arg_val(13);
     constexpr uint32_t input_aligned_page_size = get_compile_time_arg_val(14);
+    constexpr bool is_remote_split_copy_enabled = static_cast<SplitCopy>(get_compile_time_arg_val(15));
+
+    // if remote split copy is enabled then even chunks would be processed by NCRISC, and odd chunks would be processed
+    // by BRISC else all chunks are processed by NCRISC.
+    constexpr bool is_ncrisc =
+        proc_type == static_cast<std::underlying_type_t<TensixProcessorTypes>>(TensixProcessorTypes::DM1);
+    constexpr SplitCopy remote_split_copy = is_remote_split_copy_enabled
+                                                ? (is_ncrisc ? SplitCopy::ProcessEven : SplitCopy::ProcessOdd)
+                                                : (is_ncrisc ? SplitCopy::ProcessAll : SplitCopy::ProcessNone);
 
     constexpr uint32_t elem_nbytes = sizeof(uint16_t);
     constexpr uint16_t pad_core_id = 0xFFFF;
@@ -110,7 +144,13 @@ void kernel_main() {
     const uint32_t in_base_l1_addr = get_read_ptr(in_cb_id);
     const uint32_t out_base_l1_addr = get_write_ptr(out_cb_id);
 
+    // TODO(mbezulj): remove debug print
+    DPRINT << "remote_config_cb_id=" << remote_config_cb_id << " split_copy=" << (uint32_t)(remote_split_copy)
+           << ENDL();
+
     if constexpr (padding_config_cb_id) {
+        // TODO(mbezulj): remove debug zone
+        DeviceZoneScopedN("padding_config_cb_id");
         // construct the pad stick in its buffer
         cb_reserve_back(pad_cb_id, 1);
         const uint16_t pad_val = pad_val_u32;
@@ -142,22 +182,32 @@ void kernel_main() {
         cb_push_back(src_cb_id, in_nsticks);
     }
 
-    cb_wait_front(in_cb_id, in_nsticks);  // make sure untilized data is available
     if constexpr (remote_config_cb_id) {
+        // TODO(mbezulj): remove debug zone
+        DeviceZoneScopedN("remote_config_cb_id");
         uint32_t config_data_l1_addr = get_read_ptr(remote_config_cb_id);
-        tt_l1_ptr uint16_t const* config_data = reinterpret_cast<tt_l1_ptr uint16_t const*>(config_data_l1_addr);
+        const tt_l1_ptr uint16_t* config_data = reinterpret_cast<const tt_l1_ptr uint16_t*>(config_data_l1_addr);
         copy_sticks_async<
             stick_nbytes,
             input_aligned_page_size,
             is_block_sharded,
             is_width_sharded,
             remote_read,
-            is_col_major>(config_data, my_noc_x, my_noc_y, in_base_l1_addr, out_base_l1_addr);
+            is_col_major,
+            remote_split_copy>(config_data, my_noc_x, my_noc_y, in_base_l1_addr, out_base_l1_addr);
+    }
+
+    {
+        // TODO(mbezulj): remove debug zone
+        DeviceZoneScopedN("local-untilized");
+        cb_wait_front(in_cb_id, in_nsticks);  // make sure untilized data is available
     }
 
     if constexpr (local_config_cb_id) {
+        // TODO(mbezulj): remove debug zone
+        DeviceZoneScopedN("local_config_cb_id");
         uint32_t config_data_l1_addr = get_read_ptr(local_config_cb_id);
-        tt_l1_ptr uint16_t const* config_data = reinterpret_cast<tt_l1_ptr uint16_t const*>(config_data_l1_addr);
+        const tt_l1_ptr uint16_t* config_data = reinterpret_cast<const tt_l1_ptr uint16_t*>(config_data_l1_addr);
         copy_sticks_async<
             stick_nbytes,
             input_aligned_page_size,
@@ -167,6 +217,14 @@ void kernel_main() {
             is_col_major>(config_data, my_noc_x, my_noc_y, in_base_l1_addr, out_base_l1_addr);
     }
 
-    noc_async_read_barrier();
-    noc_async_write_barrier();
+    {
+        // TODO(mbezulj): remove debug zone
+        DeviceZoneScopedN("wait-noc-reads");
+        noc_async_read_barrier();
+    }
+    {
+        // TODO(mbezulj): remove debug zone
+        DeviceZoneScopedN("wait-noc-writes");
+        noc_async_write_barrier();
+    }
 }
