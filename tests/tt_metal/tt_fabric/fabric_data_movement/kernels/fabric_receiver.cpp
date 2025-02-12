@@ -13,4 +13,14 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(address + size - sizeof(uint32_t));
     while (*ptr == 0);
+
+    volatile tt_l1_ptr uint32_t* data_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(address);
+
+    uint32_t l1_addr = get_read_ptr(0);
+    volatile tt_l1_ptr uint32_t* cb_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_addr);
+    for (uint32_t i = 0; i < size / sizeof(uint32_t); ++i) {
+        cb_ptr[i] = data_ptr[i];
+        // DPRINT << cb_ptr[i] << ENDL();
+    }
+    cb_push_back(0, 32);
 }

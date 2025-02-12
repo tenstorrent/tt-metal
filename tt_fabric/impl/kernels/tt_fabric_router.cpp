@@ -50,7 +50,7 @@ volatile tt_l1_ptr fabric_router_l1_config_t* routing_table =
     reinterpret_cast<tt_l1_ptr fabric_router_l1_config_t*>(eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE);
 uint64_t xy_local_addr;
 
-#define SWITCH_THRESHOLD 0x3FFF
+#define SWITCH_THRESHOLD 0xFF
 
 inline void notify_gatekeeper() {
     // send semaphore increment to gatekeeper on this device.
@@ -160,7 +160,7 @@ void kernel_main() {
                 req_buf_advance_rdptr((chan_req_buf*)fvc_consumer_req_buf);
                 fvc_consumer_state.packet_in_progress = 0;
             }
-            loop_count = 0;
+            // loop_count = 0;
         }
 
         if (fvc_consumer_state.total_words_to_forward) {
@@ -170,7 +170,7 @@ void kernel_main() {
         // Handle Ethernet Inbound Data
         if (fvc_producer_state.get_curr_packet_valid()) {
             fvc_producer_state.process_inbound_packet();
-            loop_count = 0;
+            // loop_count = 0;
         } else if (fvc_producer_state.packet_corrupted) {
             write_kernel_status(kernel_status, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_BAD_HEADER);
             return;

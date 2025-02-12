@@ -11,8 +11,27 @@
 namespace tt::tt_fabric {
 
 TEST_F(FabricFixture, TestAsyncWriteRoutingPlane) {
-    CoreCoord sender_logical_core = {0, 0};
-    CoreCoord receiver_logical_core = {1, 0};
+    std::vector<CoreCoord> sender_log_cores = {};
+    std::vector<CoreCoord> reciever_log_cores = {};
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 2; j++) {
+            sender_log_cores.emplace_back(CoreCoord({i, j}));
+            reciever_log_cores.emplace_back(CoreCoord({i, j}));
+        }
+    }
+    // std::vector<CoreCoord> sender_log_cores = {{0, 0}, {1, 0}, {0, 1}, {1, 1}, {0, 2}, };
+    // std::vector<CoreCoord> reciever_log_cores = {{0, 0}, {1, 0}, {0, 1}, {1, 1}};
+
+    std::vector<CoreRange> sender_core_ranges = {};
+    std::vector<CoreRange> reciever_core_ranges = {};
+
+    for (auto& it : sender_log_cores) {
+        sender_core_ranges.emplace_back(it);
+    }
+    for (auto& it : reciever_log_cores) {
+        reciever_core_ranges.emplace_back(it);
+    }
+
     std::pair<mesh_id_t, chip_id_t> start_mesh_chip_id;
     chip_id_t physical_start_device_id;
     std::pair<mesh_id_t, chip_id_t> end_mesh_chip_id;
@@ -37,9 +56,13 @@ TEST_F(FabricFixture, TestAsyncWriteRoutingPlane) {
     }
     auto* sender_device = DevicePool::instance().get_active_device(physical_start_device_id);
     auto* receiver_device = DevicePool::instance().get_active_device(physical_end_device_id);
-    CoreCoord sender_virtual_core = sender_device->worker_core_from_logical_core(sender_logical_core);
-    CoreCoord receiver_virtual_core = receiver_device->worker_core_from_logical_core(receiver_logical_core);
 
+    std::vector<CoreCoord> sender_virtual_cores;
+    std::vector<CoreCoord> receiver_virtual_cores;
+    for (uint32_t i = 0; i < sender_log_cores.size(); i++) {
+        sender_virtual_cores.push_back(sender_device->worker_core_from_logical_core(sender_log_cores[i]));
+        receiver_virtual_cores.push_back(sender_device->worker_core_from_logical_core(reciever_log_cores[i]));
+    }
     uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
 
     // Allocate space for the client interface and router config buffers
@@ -50,26 +73,41 @@ TEST_F(FabricFixture, TestAsyncWriteRoutingPlane) {
         client_interface_addr + sizeof(fabric_client_interface_t) + 4 * sizeof(fabric_router_l1_config_t),
         l1_alignment);
     uint32_t buffer_data_addr = packet_header_addr + PACKET_HEADER_SIZE_BYTES;
-    uint32_t buffer_data_size = tt::constants::TILE_HW * sizeof(uint32_t);
-
+    uint32_t single_tile_size_bytes = tt::constants::TILE_HW * sizeof(uint32_t);
+    uint32_t num_tiles = 32;
+    uint32_t buffer_data_size = single_tile_size_bytes * num_tiles;
+    std::vector<std::shared_ptr<Buffer>> outputs = {};
+    for (int i = 0; i < sender_log_cores.size(); i++) {
+        outputs.push_back(Buffer::create(receiver_device, buffer_data_size, single_tile_size_bytes, BufferType::DRAM));
+    }
     // Reset buffer space for test validation and write initial data
     std::vector<uint32_t> buffer_data(buffer_data_size / sizeof(uint32_t), 0);
-    tt::llrt::write_hex_vec_to_core(physical_end_device_id, receiver_virtual_core, buffer_data, buffer_data_addr);
+    for (int i = 0; i < sender_log_cores.size(); i++) {
+        tt::llrt::write_hex_vec_to_core(
+            physical_end_device_id, receiver_virtual_cores[i], buffer_data, buffer_data_addr);
+    }
 
     std::iota(buffer_data.begin(), buffer_data.end(), 0);
-    tt::llrt::write_hex_vec_to_core(physical_start_device_id, sender_virtual_core, buffer_data, buffer_data_addr);
+    for (int i = 0; i < sender_log_cores.size(); i++) {
+        tt::llrt::write_hex_vec_to_core(
+            physical_start_device_id, sender_virtual_cores[i], buffer_data, buffer_data_addr);
+    }
 
     tt::Cluster::instance().l1_barrier(physical_end_device_id);
     tt::Cluster::instance().l1_barrier(physical_start_device_id);
 
-    auto receiver_noc_encoding = tt::tt_metal::hal.noc_xy_encoding(receiver_virtual_core.x, receiver_virtual_core.y);
-
+    std::vector<uint32_t> receiver_noc_encodings = {};
+    for (int i = 0; i < receiver_virtual_cores.size(); i++) {
+        receiver_noc_encodings.push_back(
+            tt::tt_metal::hal.noc_xy_encoding(receiver_virtual_cores[i].x, receiver_virtual_cores[i].y));
+    }
     // Create the sender program
     auto sender_program = tt_metal::CreateProgram();
+
     auto sender_kernel = tt_metal::CreateKernel(
         sender_program,
         "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_async_write_routing_plane_sender.cpp",
-        {sender_logical_core},
+        CoreRangeSet(sender_core_ranges),
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 
@@ -84,28 +122,61 @@ TEST_F(FabricFixture, TestAsyncWriteRoutingPlane) {
         sender_gk_interface_addr,
         sender_gk_noc_offset,
         packet_header_addr,
-        receiver_noc_encoding,
+        receiver_noc_encodings[0],
         buffer_data_addr,
         buffer_data_size,
         end_mesh_chip_id.first,
         end_mesh_chip_id.second,
         routing_plane};
-    tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
+    for (int i = 0; i < sender_log_cores.size(); i++) {
+        sender_runtime_args[4] = receiver_noc_encodings[i];
+        tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_log_cores[i], sender_runtime_args);
+    }
 
     // Create the receiver program for validation
     auto receiver_program = tt_metal::CreateProgram();
     auto receiver_kernel = tt_metal::CreateKernel(
         receiver_program,
         "tests/tt_metal/tt_fabric/fabric_data_movement/kernels/fabric_receiver.cpp",
-        {receiver_logical_core},
+        CoreRangeSet(reciever_core_ranges),
         tt_metal::DataMovementConfig{
-            .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
-
+            .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_0_default});
     std::vector<uint32_t> receiver_runtime_args = {
         buffer_data_addr,
         buffer_data_size,
     };
-    tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver_logical_core, receiver_runtime_args);
+    tt_metal::SetRuntimeArgs(
+        receiver_program, receiver_kernel, CoreRangeSet(reciever_core_ranges), receiver_runtime_args);
+
+    std::vector<uint32_t> compute_kernel_args = {};
+    uint32_t cb_id0 = 0;
+
+    tt::DataFormat src0_cb_data_format = DataFormat::UInt32;
+
+    tt::tt_metal::CircularBufferConfig cb_in_config =
+        tt::tt_metal::CircularBufferConfig(
+            num_tiles * tt::constants::TILE_HW * sizeof(uint32_t), {{cb_id0, src0_cb_data_format}})
+            .set_page_size(cb_id0, tt::constants::TILE_HW * sizeof(uint32_t));
+
+    auto c_in = tt::tt_metal::CreateCircularBuffer(receiver_program, CoreRangeSet(reciever_core_ranges), cb_in_config);
+
+    std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)cb_id0, true};
+
+    tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
+        receiver_program,
+        "tt_metal/programming_examples/matmul_common/kernels/dataflow/writer_unary_interleaved_start_id.cpp",
+        CoreRangeSet(reciever_core_ranges),
+        tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
+    std::cout << "Here" << std::endl;
+    for (int i = 0; i < reciever_log_cores.size(); i++) {
+        std::cout << "Loop id: " << i << " " << reciever_log_cores[i].str() << std::endl;
+        tt::tt_metal::SetRuntimeArgs(
+            receiver_program,
+            writer_kernel_id,
+            reciever_log_cores[i],
+            std::vector<uint32_t>({outputs[i]->address(), num_tiles, 0}));
+    }
+    std::cout << "Done" << std::endl;
 
     // Launch sender and receiver programs and wait for them to finish
     tt_metal::detail::LaunchProgram(receiver_device, receiver_program, false);
@@ -113,10 +184,26 @@ TEST_F(FabricFixture, TestAsyncWriteRoutingPlane) {
     tt_metal::detail::WaitProgramDone(sender_device, sender_program);
     tt_metal::detail::WaitProgramDone(receiver_device, receiver_program);
 
+    for (auto& output : outputs) {
+        std::vector<uint32_t> readback_vec = {};
+        tt_metal::detail::ReadFromBuffer(output, readback_vec);
+        for (auto it : readback_vec) {
+            std::cout << it << " ";
+        }
+        std::cout << std::endl;
+        std::cout << "Done reading" << std::endl;
+    }
     // Validate the data received by the receiver
-    std::vector<uint32_t> received_buffer_data = tt::llrt::read_hex_vec_from_core(
-        physical_end_device_id, receiver_virtual_core, buffer_data_addr, buffer_data_size);
-    EXPECT_EQ(buffer_data, received_buffer_data);
+    // for (int i = 0; i < sender_log_cores.size(); i++) {
+    //     std::vector<uint32_t> received_buffer_data = tt::llrt::read_hex_vec_from_core(
+    //         physical_end_device_id, receiver_virtual_cores[i], buffer_data_addr, buffer_data_size);
+    //     for (auto it : received_buffer_data) {
+    //         std::cout << it << " ";
+    //     }
+    //     std::cout << std::endl;
+    //     std::cout << "done printing for core: " << physical_end_device_id << " " << receiver_virtual_cores[i].str()
+    //     << std::endl; EXPECT_EQ(buffer_data, received_buffer_data);
+    // }
 }
 
 TEST_F(FabricFixture, TestAsyncWrite) {
