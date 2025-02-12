@@ -237,4 +237,5 @@ def get_tests_from_test_report_path(test_report_path):
 
         return tests
     else:
-        raise Exception("We only support pytest junit xml outputs for now")
+        logger.warning("XML is not pytest junit format (gtest?), skipping for now")
+        return []
