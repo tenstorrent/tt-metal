@@ -31,7 +31,7 @@ void Conv3dOp::validate(const std::vector<Tensor>& input_tensors) const {
     // assert padding is 0
     TT_FATAL(padding[0] == 0, "Padding must be (0,x,x).");
     // TT_FATAL(padding[0] == 0 && padding[1] == 0 && padding[2] == 0, "Padding must be (0,0,0).");
-    TT_FATAL(padding_mode == "zeros", "Padding mode must be zeros.");
+    TT_FATAL(padding_mode == "zeros" || padding_mode == "replicate", "Padding mode must be zeros or replicate.");
 }
 
 std::vector<TensorSpec> Conv3dOp::compute_output_specs(const std::vector<Tensor>& input_tensors) const {

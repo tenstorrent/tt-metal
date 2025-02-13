@@ -8,6 +8,10 @@ from models.experimental.mochi.common import compute_metrics
 import math
 
 
+def _out_size(in_size, pad, k):
+    return in_size + 2 * pad - (k - 1)
+
+
 def torch_vol2col(
     input: torch.Tensor,
     conv3d_module: torch.nn.Conv3d,
@@ -59,8 +63,6 @@ def torch_vol2col(
     # ----------------------
     # For stride=1, dilation=1, groups=1:
     # out_dim = in_dim + 2*pad - (kernel - 1)
-    def _out_size(in_size, pad, k):
-        return in_size + 2 * pad - (k - 1)
 
     D_out = _out_size(D_in, pad_d, kD)
     H_out = _out_size(H_in, pad_h, kH)
@@ -102,12 +104,12 @@ def torch_vol2col(
 @pytest.mark.parametrize(
     "input_shape, out_channels, kernel_size, stride, padding, padding_mode",
     [
-        # [(1, 12, 28, 60, 106), 768, (1, 1, 1), (1, 1, 1), (0, 0, 0), "zeros"],
+        [(1, 12, 28, 60, 106), 768, (1, 1, 1), (1, 1, 1), (0, 0, 0), "zeros"],
         [(1, 12, 28, 60, 106), 768, (1, 1, 1), (1, 1, 1), (0, 1, 1), "zeros"],
-        # [(1, 768, 28, 60, 106), 768, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
-        # [(1, 512, 82, 120, 212), 512, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
-        # [(1, 256, 163, 240, 424), 256, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
-        # [(1, 128, 163, 480, 848), 128, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
+        [(1, 768, 28, 60, 106), 768, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
+        [(1, 512, 82, 120, 212), 512, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
+        [(1, 256, 163, 240, 424), 256, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
+        [(1, 128, 163, 480, 848), 128, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
         # [(1, 5, 5, 10, 15), 128, (3, 3, 3), (1, 1, 1), (0, 1, 1), "zeros"],
         # [(1, 12, 5, 60, 106), 768, (1, 1, 1), (1, 1, 1), (0, 0, 0), "zeros"],
         # [(1, 768, 5, 60, 106), 768, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
@@ -121,14 +123,15 @@ def torch_vol2col(
         # [(1, 512, 82, 120, 212), 512, (3, 3, 3), (1, 1, 1), (0, 0, 0), "zeros"],
         # [(1, 256, 163, 240, 424), 256, (3, 3, 3), (1, 1, 1), (0, 0, 0), "zeros"],
         # [(1, 128, 163, 480, 848), 128, (3, 3, 3), (1, 1, 1), (0, 0, 0), "zeros"],
+        # [(1, 1, 4, 4, 4), 1, (3, 3, 3), (1, 1, 1), (0, 1, 1), "zeros"],
         # smaller
         # [(1, 1, 3, 3, 3), 1, (3, 3, 3), (1, 1, 1), (0, 0, 0), "zeros"],
         # [(1, 5, 24, 10, 15), 128, (3, 3, 3), (1, 1, 1), (0, 0, 0), "zeros"],
-        # [(1, 12, 28, 60, 106), 768, (1, 1, 1), (1, 1, 1), (0, 0, 0), "zeros"],
-        # [(1, 768, 28, 60, 106), 768, (3, 3, 3), (1, 1, 1), (0, 0, 0), "zeros"],
-        # [(1, 512, 82, 120, 212), 512, (3, 3, 3), (1, 1, 1), (0, 0, 0), "zeros"],
-        # [(1, 256, 163, 240, 424), 256, (3, 3, 3), (1, 1, 1), (0, 0, 0), "zeros"],
-        # [(1, 128, 163, 480, 848), 128, (3, 3, 3), (1, 1, 1), (0, 0, 0), "zeros"],
+        # [(1, 12, 28, 60, 106), 768, (1, 1, 1), (1, 1, 1), (0, 1, 1), "replicate"],
+        # [(1, 64, 28, 60, 106), 64, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
+        # [(1, 64, 82, 120, 212), 64, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
+        # [(1, 64, 163, 240, 424), 64, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
+        # [(1, 64, 163, 480, 848), 64, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
         # Same as above but with no padding
         # [(1, 1, 3, 4, 3), 1, (3, 3, 3), (1, 1, 1), (0, 0, 0), "zeros"],
         # [(1, 16, 4, 5, 6), 32, (3, 3, 3), (1, 1, 1), (0, 0, 0), "zeros"],
@@ -144,6 +147,8 @@ def torch_vol2col(
     ],
     # ids=["test0", "variant0", "variant1", "variant2", "variant3", "variant4"],
 )
+
+
 # @pytest.mark.parametrize("N", [1])
 # @pytest.mark.parametrize("C", [5, 12, 16, 20, 128])
 # @pytest.mark.parametrize("D", [5, 8, 10, 13])
@@ -162,11 +167,14 @@ def test_vol2col_torch(device, input_shape, out_channels, kernel_size, stride, p
 
     # Define input dimensions.
     N, C, D, H, W = input_shape
+    D_out = _out_size(D, padding[0], kernel_size[0])
+    H_out = _out_size(H, padding[1], kernel_size[1])
+    W_out = _out_size(W, padding[2], kernel_size[2])
     # D = math.ceil(D / T_parallel_factor)
 
     # Create a random input tensor.
-    input_tensor = torch.randn(N, C, D, H, W, dtype=torch.float32)
-    # input_tensor = torch.arange(N * C * D * H * W, dtype=torch.int).reshape(N, C, D, H, W)
+    # input_tensor = torch.randn(N, C, D, H, W, dtype=torch.float32)
+    input_tensor = torch.arange(N * C * D * H * W, dtype=torch.int).reshape(N, C, D, H, W)
     # input_tensor = torch.ones(N, C, D, H, W, dtype=torch.float32)
     print(f"input_tensor.shape NCTHW = {input_tensor.shape}")
 
@@ -221,12 +229,23 @@ def test_vol2col_torch(device, input_shape, out_channels, kernel_size, stride, p
             num_patches, -1
         )
 
+    def remove_padding(t):
+        t = t.reshape(N, D_out, H_out, W_out, patch_size)
+        t = t[:, padding[0] : D_out - padding[0], padding[1] : H_out - padding[1], padding[2] : W_out - padding[2], :]
+        return t.reshape(-1, patch_size)
+
     print(f"gt output shape = {gt_output.shape}")
     print(f"tt output shape = {tt_output.shape}")
     assert tt_output.shape == gt_output.shape
 
+    tt_unpad_out = remove_padding(tt_output)
+    gt_unpad_out = remove_padding(gt_out_chan_last)
+
+    pcc, mse, mae = compute_metrics(gt_unpad_out, tt_unpad_out)
+    logger.info(f"Padding removed: PCC = {pcc}, MSE = {mse}, MAE = {mae}")
+
     pcc, mse, mae = compute_metrics(gt_out_chan_last, tt_output)
-    logger.info(f"PCC = {pcc}, MSE = {mse}, MAE = {mae}")
+    logger.info(f"With padding: PCC = {pcc}, MSE = {mse}, MAE = {mae}")
     if not pcc > 0.99:
         import pdb
 

@@ -66,10 +66,15 @@ void kernel_main() {
                             uint32_t cb_write_offset = cb_stick_idx * C_in * BF16_BYTES;
                             uint32_t cb_write_addr = cb_write_ptr + cb_write_offset;
 
-                            uint32_t h_unpad_idx = h - padding_h;
-                            uint32_t w_unpad_idx = w - padding_w;
-                            bool index_is_in_padding =
-                                h_unpad_idx < 0 || h_unpad_idx >= H_in || w_unpad_idx < 0 || w_unpad_idx >= W_in;
+                            uint32_t t_idx = t + kt;
+                            uint32_t h_idx = h + kh;
+                            uint32_t w_idx = w + kw;
+
+                            int32_t h_unpad_idx = h_idx - padding_h;
+                            int32_t w_unpad_idx = w_idx - padding_w;
+
+                            bool index_is_in_padding = h_unpad_idx < 0 || h_unpad_idx >= (int32_t)H_in ||
+                                                       w_unpad_idx < 0 || w_unpad_idx >= (int32_t)W_in;
                             if (index_is_in_padding) {
                                 if constexpr (is_padding_zeros) {
                                     constexpr uint32_t num_full_reads = in_row_size_bytes / MEM_ZEROS_SIZE;
@@ -83,18 +88,30 @@ void kernel_main() {
                                         noc_async_read(zeros_noc_addr, cb_write_addr, partial_read_size);
                                     }
                                     noc_async_read_barrier();
+                                    continue;  // don't read from DRAM
+                                } else {
+                                    // padding replicate
+                                    // 4 cases: h_unpad_idx < 0 or >= H_in, w_unpad_idx < 0 or >= W_in
+                                    // Update indices for read
+                                    if (h_unpad_idx < 0) {
+                                        h_unpad_idx = 0;
+                                    } else if (h_unpad_idx >= (int32_t)H_in) {
+                                        h_unpad_idx = H_in - 1;
+                                    }
+                                    if (w_unpad_idx < 0) {
+                                        w_unpad_idx = 0;
+                                    } else if (w_unpad_idx >= (int32_t)W_in) {
+                                        w_unpad_idx = W_in - 1;
+                                    }
                                 }
-                            } else {
-                                // Read the patch from cb_vol2col
-                                // Write the patch to out_reader
-                                uint32_t t_idx = t + kt;
-                                uint32_t h_idx = h_unpad_idx + kh;
-                                uint32_t w_idx = w_unpad_idx + kw;
-                                uint32_t in_page_idx = t_idx * H_in * W_in + h_idx * W_in + w_idx;
-
-                                in_reader.noc_async_read_page(in_page_idx, cb_write_addr);
-                                noc_async_read_barrier();
                             }
+                            // Read the patch from cb_vol2col
+                            // Write the patch to out_reader
+
+                            uint32_t in_page_idx = t_idx * H_in * W_in + h_unpad_idx * W_in + w_unpad_idx;
+
+                            in_reader.noc_async_read_page(in_page_idx, cb_write_addr);
+                            noc_async_read_barrier();
                         }
                     }
                 }

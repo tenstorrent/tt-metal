@@ -83,7 +83,7 @@ operation::ProgramWithCallbacks conv3d_factory(
     auto core_grid = CoreRange({0, 0}, {0, 0});
     auto reader_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/conv/conv3d/device/kernels/reader_vol2im.cpp",
+        "ttnn/cpp/ttnn/operations/conv/conv3d/device/kernels/reader_vol2col.cpp",
         core_grid,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
 
