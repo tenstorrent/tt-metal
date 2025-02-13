@@ -40,31 +40,14 @@ jobs:
       source: "${{ github.event.pull_request.head.repo.owner.login }}:${{ github.event.pull_request.head.ref }}"
 
   test:
-    needs: detect_trigger
     if: needs.detect_trigger.outputs.test_triggered == 'true'
-    runs-on: ubuntu-latest
-    outputs:
-      branch_name: ${{ steps.set_branch.outputs.branch_name }}
-    steps:
-      - name: Set branch name
-        id: set_branch
-        run: |
-          if [ "${{ github.event.pull_request.head.repo.full_name }}" != "${{ github.repository }}" ]; then
-            echo "branch_name=mirror/${{ github.event.pull_request.head.repo.owner.login }}/${{ github.event.pull_request.head.ref }}" >> $GITHUB_OUTPUT
-          else
-            echo "branch_name=${{ github.event.pull_request.head.ref }}" >> $GITHUB_OUTPUT
-          fi
-
-  run_tests:
-    needs: test
     uses: ./.github/workflows/all-post-commit-workflows.yaml
     with:
       build-type: Release
-      branch: ${{ needs.test.outputs.branch_name }}
 
   post_comment:
-    needs: [mirror, run_tests]
-    if: (needs.detect_trigger.outputs.test_triggered == 'true')
+    needs: [mirror, test]
+    if: needs.detect_trigger.outputs.mirror_triggered == 'true' || needs.detect_trigger.outputs.test_triggered == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Post workflow run link comment on PR
@@ -73,4 +56,4 @@ jobs:
           # If this is a PR event, use its number.
           issue: ${{ github.event.pull_request.number }}
           message: |
-            ✨ Tests workflow run is available [here](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            ✨ Workflow run is available [here](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
