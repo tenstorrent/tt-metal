@@ -210,13 +210,13 @@ void HWCommandQueue::enqueue_read_buffer(
         auto dispatch_params = buffer_dispatch::initialize_interleaved_buf_read_dispatch_params(
             buffer_obj, this->id_, this->expected_num_workers_completed, region);
         buffer_dispatch::copy_interleaved_buffer_to_completion_queue(
-            dispatch_params,
+            *dispatch_params,
             buffer_obj,
             sub_device_ids,
             dispatch_core_manager::instance().get_dispatch_core_type(device_->id()));
-        if (dispatch_params.pages_per_txn > 0) {
+        if (dispatch_params->pages_per_txn > 0) {
             this->issued_completion_q_reads.push(
-                buffer_dispatch::generate_interleaved_buffer_read_descriptor(dst, dispatch_params, buffer_obj));
+                buffer_dispatch::generate_interleaved_buffer_read_descriptor(dst, dispatch_params.get(), buffer_obj));
             this->increment_num_entries_in_completion_q();
         }
     }
