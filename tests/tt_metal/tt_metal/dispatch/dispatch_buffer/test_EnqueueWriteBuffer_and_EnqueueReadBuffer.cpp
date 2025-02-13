@@ -251,6 +251,18 @@ void test_EnqueueWriteBuffer_and_EnqueueReadBuffer(IDevice* device, CommandQueue
                 ::detail::ReadFromBuffer(*bufa, result);
             }
 
+            std::cout << "write: " << cq_write << " read: " << cq_read << std::endl;
+            if (result.size() != src.size()) {
+                std::cout << "Unequal size" << std::endl;
+            }
+            for (uint32_t i = 0; i < result.size(); i++) {
+                if (i != result[i]) {
+                    std::cout << "i: " << std::to_string(i) << " result[i]: " << std::to_string(result[i]) << std::endl;
+                    // std::cout << "Fail" << std::endl;
+                    break;
+                }
+            }
+
             EXPECT_EQ(src, result);
         }
     }
@@ -1154,6 +1166,16 @@ TEST_F(CommandQueueSingleCardBufferFixture, TestMultiplePagesLargerThanMaxPrefet
         const uint32_t max_prefetch_command_size = DispatchMemMap::get(dispatch_core_type).max_prefetch_command_size();
         TestBufferConfig config = {
             .num_pages = 30, .page_size = max_prefetch_command_size + 2048, .buftype = BufferType::L1};
+        local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config);
+    }
+}
+
+TEST_F(CommandQueueSingleCardBufferFixture, TestSingleUnalignedPageLargerThanMaxPrefetchCommandSizeForL1) {
+    for (IDevice* device : devices_) {
+        CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
+        const uint32_t max_prefetch_command_size = DispatchMemMap::get(dispatch_core_type).max_prefetch_command_size();
+        TestBufferConfig config = {
+            .num_pages = 1, .page_size = max_prefetch_command_size + 4, .buftype = BufferType::L1};
         local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer(device, device->command_queue(), config);
     }
 }
