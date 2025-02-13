@@ -1,10 +1,10 @@
-name: Mirror Fork Branch to Origin
+name: Manual Mirror Fork Branch to Origin
 
 on:
   workflow_dispatch:
     inputs:
       source:
-        description: 'Source in format <fork_owner>:<branch> (e.g., user:branch)'
+        description: 'Source in format <fork_owner>:<branch> (e.g., philei-tt:philei/speed-up-host-tilizing)'
         required: true
       target_branch:
         description: >
@@ -81,3 +81,28 @@ jobs:
           TARGET_BRANCH="${{ steps.create_branch.outputs.target_branch }}"
           echo "Pushing branch '$TARGET_BRANCH' to origin"
           git push origin "$TARGET_BRANCH" --force
+
+      - name: Comment on PR with mirror branch link
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Look for an open PR with head equal to <fork_owner>:<src_branch>
+          HEAD_QUERY="${{ steps.parse_input.outputs.fork_owner }}:${{ steps.parse_input.outputs.src_branch }}"
+          echo "Searching for PR with head: ${HEAD_QUERY}"
+          PR_JSON=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/pulls?head=${HEAD_QUERY}")
+          PR_NUMBER=$(echo "$PR_JSON" | jq '.[0].number')
+          if [ "$PR_NUMBER" != "null" ] && [ -n "$PR_NUMBER" ]; then
+            TARGET_BRANCH="${{ steps.create_branch.outputs.target_branch }}"
+            MIRROR_URL="https://github.com/${{ github.repository }}/tree/${TARGET_BRANCH}"
+            COMMENT_BODY="A mirror branch has been created for this PR: [\`${TARGET_BRANCH}\`](${MIRROR_URL})"
+            echo "Posting comment to PR #$PR_NUMBER"
+            curl -s -X POST -H "Authorization: token $GITHUB_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" \
+              -d "$(jq -nc --arg body "$COMMENT_BODY" '{body: $body}')"
+          else
+            echo "No open PR found with head ${HEAD_QUERY}. Skipping comment."
+          fi
