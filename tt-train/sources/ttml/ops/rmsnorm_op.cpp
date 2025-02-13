@@ -29,14 +29,13 @@ autograd::TensorPtr rmsnorm(const autograd::TensorPtr &tensor, const autograd::T
     ttnn::Tensor eps_tensor = core::from_vector({epsilon}, core::create_shape(eps_shape), device);
     ttnn::Tensor mean_of_squares = ttnn::mean(squares);
     ttnn::Tensor mean_of_squares_plus_epsilon = ttnn::experimental::add(mean_of_squares, eps_tensor);
-    ttnn::Tensor rms_eps = ttnn::sqrt(mean_of_squares_plus_epsilon);
+    ttnn::Tensor rms_a = ttnn::sqrt(mean_of_squares_plus_epsilon);
     ttnn::Tensor gamma_times_activations = ttnn::experimental::mul(gamma->get_value(), tensor->get_value());
-    ttnn::Tensor out_tensor = ttnn::experimental::div(gamma_times_activations, rms_eps);
+    ttnn::Tensor out_tensor = ttnn::experimental::div(gamma_times_activations, rms_a);
 
     auto out = autograd::create_tensor(out_tensor);
-    // out->set_value(out_tensor);
 
-    autograd::GradFunction grad = [tensor, gamma, out, rms_a = rms_eps, eps_tensor, device]() {
+    autograd::GradFunction grad = [tensor, gamma, out, rms_a, eps_tensor, device]() {
         auto a = tensor->get_value();
         auto g = gamma->get_value();
         auto n = static_cast<float>(a.logical_shape()[-1]);
