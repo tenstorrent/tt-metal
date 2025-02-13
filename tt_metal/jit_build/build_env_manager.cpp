@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "build_env_manager.hpp"
-#include <tt_cluster.hpp>
 #include <command_queue_interface.hpp>
+#include "tt_cluster.hpp"
 
 namespace tt::tt_metal {
 
