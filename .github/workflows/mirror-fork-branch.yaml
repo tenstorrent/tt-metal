@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       source:
-        description: 'Source in format <fork_owner>:<branch> (e.g., user:branch)'
+        description: 'Source in format <fork_owner>:<branch>'
         required: true
       target_branch:
         description: >
@@ -64,8 +64,7 @@ jobs:
             TARGET_BRANCH="mirror/${{ steps.parse_input.outputs.fork_owner }}/${{ steps.parse_input.outputs.src_branch }}"
           fi
           echo "Using target branch: $TARGET_BRANCH"
-
-          # If the branch exists locally, reset it; otherwise, create it.
+          # If the branch exists locally, update it; if not, create it.
           if git show-ref --verify --quiet "refs/heads/$TARGET_BRANCH"; then
             echo "Branch '$TARGET_BRANCH' exists. Updating with latest commits from fork."
             git checkout "$TARGET_BRANCH"
@@ -81,3 +80,32 @@ jobs:
           TARGET_BRANCH="${{ steps.create_branch.outputs.target_branch }}"
           echo "Pushing branch '$TARGET_BRANCH' to origin"
           git push origin "$TARGET_BRANCH" --force
+
+      - name: Find PR
+        id: pr
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Look for a PR with head "fork_owner:src_branch"
+          HEAD_QUERY="${{ steps.parse_input.outputs.fork_owner }}:${{ steps.parse_input.outputs.src_branch }}"
+          echo "Searching for PR with head: ${HEAD_QUERY}"
+          PR_JSON=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/pulls?head=${HEAD_QUERY}")
+          PR_NUMBER=$(echo "$PR_JSON" | jq '.[0].number // empty')
+          if [ -z "$PR_NUMBER" ]; then
+            echo "No PR found"
+            echo "issue=" >> $GITHUB_OUTPUT
+          else
+            echo "Found PR #$PR_NUMBER"
+            echo "issue=$PR_NUMBER" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Post comment on PR
+        if: steps.pr.outputs.issue != ''
+        uses: mshick/add-pr-comment@v2
+        with:
+          issue: ${{ steps.pr.outputs.issue }}
+          message: |
+           ✨ A mirror branch has been created/updated for this PR: [`${{ steps.create_branch.outputs.target_branch }}`](https://github.com/${{ github.repository }}/tree/${{ steps.create_branch.outputs.target_branch }})
