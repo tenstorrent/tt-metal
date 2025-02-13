@@ -11,6 +11,7 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     with:
       tracy: true
+      build-wheel: true
     secrets: inherit
   device-perf:
     needs: build-artifact-profiler
