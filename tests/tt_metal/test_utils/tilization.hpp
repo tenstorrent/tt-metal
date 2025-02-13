@@ -28,8 +28,8 @@ std::vector<T> tilize(std::vector<T> data, int rows, int cols) {
     std::vector<T> result(rows * cols);
     for (auto r = 0; r < num_tiles_r; r++) {
         for (auto c = 0; c < num_tiles_c; c++) {
-            #pragma unroll
-            for (auto i = 0; i < TileHeight; i++) {     // tile rows
+#pragma unroll
+            for (auto i = 0; i < TileHeight; i++) {  // tile rows
                 size_t src_idx = (r * elements_in_tile * num_tiles_c) + (i * num_tiles_c * TileWidth) + (c * TileWidth);
                 size_t dst_idx = (r * elements_in_tile * num_tiles_c) + (c * elements_in_tile) + (i * TileWidth);
                 std::memcpy(&result[dst_idx], &data[src_idx], TileWidth * sizeof(T));
