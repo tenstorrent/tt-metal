@@ -33,7 +33,7 @@ jobs:
         TT_METAL_HOME: /work
         LD_LIBRARY_PATH: /work/build/lib
         ARCH_NAME: ${{ matrix.test-info.arch }}
-        PYTHON_ENV_DIR: /work/python_env
+        PYTHONPATH: /work
         LOGURU_LEVEL: INFO
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
@@ -62,7 +62,7 @@ jobs:
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ matrix.test-info.timeout }}
         run: |
-          ./tests/scripts/run_tests.sh --tt-arch $ARCH_NAME --pipeline-type models_device_performance_${{ matrix.test-info.machine-type }}
+          ./tests/scripts/run_tests.sh --docker --tt-arch $ARCH_NAME --pipeline-type models_device_performance_${{ matrix.test-info.machine-type }}
 
       - name: Check device perf report exists
         id: check-device-perf-report

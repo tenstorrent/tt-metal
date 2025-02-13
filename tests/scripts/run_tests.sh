@@ -439,6 +439,9 @@ main() {
     # Parse the arguments
     while [[ $# -gt 0 ]]; do
         case $1 in
+            --docker)
+                docker=1
+                ;;
             --tt-arch)
                 tt_arch=$2
                 shift
@@ -468,6 +471,7 @@ main() {
     done
 
     # Set default values if arguments are not provided
+    docker=0
     tt_arch=${tt_arch:-$default_tt_arch}
     dispatch_mode=${dispatch_mode:-$default_dispatch_mode}
     pipeline_type=${pipeline_type:-$default_pipeline_type}
@@ -488,7 +492,7 @@ main() {
 
     validate_and_set_env_vars "$tt_arch" "$dispatch_mode"
 
-    if [[ $pipeline_type != "eager_"* ]]; then
+    if [[ $docker -ne 1 &&  $pipeline_type != "eager_"* ]]; then
       set_up_chdir
     fi
 
