@@ -46,7 +46,6 @@ jobs:
       distro: ${{ inputs.distro }}
       version: ${{ inputs.version }}
       architecture: ${{ inputs.architecture }}
-
   clang-tidy:
     name: 🤖 Clang Tidy
     needs: build-docker-image
