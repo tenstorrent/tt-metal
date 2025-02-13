@@ -317,6 +317,7 @@ void py_bind_conv2d(py::module& module) {
         py::arg("tile_size"));
 
     auto py_conv_config = py::class_<Conv2dConfig>(module, "Conv2dConfig");
+    py_conv_config.def(py::init<const Conv2dConfig&>());
     py_conv_config.def(
         py::init<
             DataType,
