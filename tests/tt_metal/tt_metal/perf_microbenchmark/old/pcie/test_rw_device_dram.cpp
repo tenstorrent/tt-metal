@@ -9,7 +9,6 @@
 
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/test_common.hpp>
 #include <tt-metalium/host_api.hpp>
 
 using namespace tt;

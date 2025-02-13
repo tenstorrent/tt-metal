@@ -6,7 +6,6 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/hal_exp.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/test_common.hpp>
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/rtoptions.hpp>

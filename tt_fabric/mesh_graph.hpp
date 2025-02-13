@@ -11,10 +11,8 @@
 #include <magic_enum/magic_enum.hpp>
 
 #include <tt-metalium/assert.hpp>
+#include <tt-metalium/tt_cluster.hpp>
 #include <tt-metalium/reflection.hpp>
-
-#include <umd/device/types/arch.h>                      // tt::ARCH
-#include <umd/device/types/cluster_descriptor_types.h>  // chip_id_t
 
 namespace tt::tt_fabric {
 struct ChipSpec {
