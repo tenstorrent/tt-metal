@@ -12,8 +12,11 @@ permissions:
 
 jobs:
   build-artifact:
+    needs: create-tag
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
+    with:
+      build-wheel: true
   build-artifact-profiler:
     uses: ./.github/workflows/build-artifact.yaml
     with:

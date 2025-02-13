@@ -31,6 +31,7 @@ from models.demos.llama3.tt.load_checkpoints import (
     convert_hf_to_meta,
     convert_meta_to_hf,
     reverse_permute,
+    standardize_hf_keys,
 )
 
 
@@ -114,8 +115,10 @@ class TtModelArgs:
         self.max_batch_size = max_batch_size
         self.tile_size = 32
         self.is_70b = False
+        self.from_hf_url = False  # updated below if true
 
         LLAMA_DIR = os.getenv("LLAMA_DIR")
+        HF_MODEL = os.getenv("HF_MODEL")
         if LLAMA_DIR:
             if any([os.getenv("LLAMA_CKPT_DIR"), os.getenv("LLAMA_TOKENIZER_PATH"), os.getenv("LLAMA_CACHE_PATH")]):
                 logger.warning(
@@ -125,10 +128,18 @@ class TtModelArgs:
             self.DEFAULT_TOKENIZER_PATH = LLAMA_DIR
             self.DEFAULT_CACHE_PATH = os.path.join(LLAMA_DIR, self.device_name)
             self.model_name = os.path.basename(LLAMA_DIR)  # May be overridden by config
+        elif HF_MODEL:
+            self.DEFAULT_CKPT_DIR = HF_MODEL
+            self.DEFAULT_TOKENIZER_PATH = HF_MODEL
+            self.DEFAULT_CACHE_PATH = os.getenv("LLAMA_CACHE_PATH")
+            if not self.DEFAULT_CACHE_PATH:
+                self.DEFAULT_CACHE_PATH = os.path.join("model_cache", HF_MODEL, self.device_name)
+            self.model_name = HF_MODEL  # May be overridden by config
+            self.from_hf_url = True
         else:
             assert "Please set $LLAMA_DIR to a valid checkpoint directory"
 
-        if not dummy_weights:
+        if not dummy_weights and not HF_MODEL:
             # Assert if all folders and files exist
             assert os.path.exists(
                 self.DEFAULT_CKPT_DIR
@@ -157,7 +168,10 @@ class TtModelArgs:
             self.instruct = True
 
         # Load model params
-        if not dummy_weights:
+        if HF_MODEL:
+            self.checkpoint_type = CheckpointType.HuggingFace
+            self._set_hf_params(self.DEFAULT_CKPT_DIR)
+        elif not dummy_weights:
             self.checkpoint_type = self.detect_checkpoint_type()
             self._set_model_params(self.DEFAULT_CKPT_DIR)
         else:  # With Dummy weights, set the params from the local copy inside the model folder. This is required for CI pipeline that doesn't mount the external folders.
@@ -1107,10 +1121,15 @@ class TtModelArgs:
         self.orig_context_len = 8192
 
     def _set_hf_params(self, checkpoint_dir):
-        config_file = os.path.join(checkpoint_dir, "config.json")
-        assert os.path.exists(config_file), f"config.json file not found at {config_file}"
-        with open(config_file, "r") as f:
-            config = json.load(f)
+        if self.from_hf_url:
+            from transformers import AutoConfig
+
+            config = AutoConfig.from_pretrained(self.model_name).to_dict()
+        else:
+            config_file = os.path.join(checkpoint_dir, "config.json")
+            assert os.path.exists(config_file), f"config.json file not found at {config_file}"
+            with open(config_file, "r") as f:
+                config = json.load(f)
         self._set_params_from_dict(config)
 
     def __repr__(self):
@@ -1172,7 +1191,14 @@ class TtModelArgs:
             state_dict = load_meta_state_dict(self.DEFAULT_CKPT_DIR, self.n_layers)
         else:
             assert self.checkpoint_type == CheckpointType.HuggingFace
-            state_dict = load_hf_state_dict(self.DEFAULT_CKPT_DIR)
+            if self.from_hf_url:
+                from transformers import AutoModelForCausalLM
+
+                model = AutoModelForCausalLM.from_pretrained(self.DEFAULT_CKPT_DIR)
+                state_dict = model.state_dict()
+            else:
+                state_dict = load_hf_state_dict(self.DEFAULT_CKPT_DIR)
+            state_dict = standardize_hf_keys(state_dict)
             state_dict = convert_hf_to_meta(state_dict, self.head_dim)
         keys_dict = list(state_dict.keys())[:]
         remv = [f"layers.{i}." for i in list(range(self.n_layers, self.full_model_n_layers))]
@@ -1210,7 +1236,7 @@ class TtModelArgs:
         )  # TODO: Needed for TG hang workaround
 
         if in0_block_w is None:
-            in0_block_w = min(4, max(1, k // (self.tile_size * grid_size[0])))
+            in0_block_w = self.find_largest_divisor(k // (self.tile_size * grid_size[1]))
 
         return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=grid_size,
@@ -1514,9 +1540,13 @@ class TtModelArgs:
                 return self.tokenizer.encode(prompt_text, bos=True, eos=False)
         else:
             if instruct:
-                return encode_prompt_hf(self.tokenizer, prompt_text, system_prompt_text)
-            else:
-                return self.tokenizer.encode(prompt_text, add_special_tokens=False)
+                try:
+                    return encode_prompt_hf(self.tokenizer, prompt_text, system_prompt_text)
+                except ValueError as e:
+                    logger.warning(f"Failed to encode chat prompt, are you sure this is an instruct model? Error: {e}")
+                    logger.warning(f"Falling back to base model encoding with no chat template")
+
+            return self.tokenizer.encode(prompt_text, add_special_tokens=False)
 
     def reference_lm_head(self):
         if self.checkpoint_type == CheckpointType.Meta:

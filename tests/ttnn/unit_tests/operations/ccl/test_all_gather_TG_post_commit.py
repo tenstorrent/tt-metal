@@ -14,6 +14,7 @@ from tests.ttnn.unit_tests.operations.ccl.test_ccl_common import (
     teardown_fabric_interface,
     create_global_semaphore_with_same_address,
 )
+from models.perf.benchmarking_utils import BenchmarkProfiler
 
 
 def report_mismatches(golden, actual, max_printable=None):
@@ -64,6 +65,7 @@ def run_with_trace(
     n_buffer=None,
     num_iter=20,
     use_all_gather_async=False,
+    profiler=BenchmarkProfiler(),
 ):
     # Compile Run
     logger.info("Compiling model")
@@ -131,10 +133,15 @@ def run_with_trace(
 
     # Run the op
     logger.info("Starting Trace perf test...")
+    profiler.start("all-gather-async-trace")
     ttnn.execute_trace(mesh_device, trace_id, blocking=False)
     ttnn.release_trace(mesh_device, trace_id)
     for d in mesh_device.get_devices():
         ttnn.synchronize_device(d)
+    profiler.end("all-gather-async-trace")
+    logger.info(f"Time taken: {profiler.get_duration('all-gather-async-trace')} s")
+    logger.info(f"Time per iter: {(profiler.get_duration('all-gather-async-trace')) / num_iter} s")
+    logger.info(f"Time per iter: {(profiler.get_duration('all-gather-async-trace')) / num_iter * 1e6} us")
 
     return tt_out_tensor
 
@@ -160,6 +167,7 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
     tile=(32, 32),
     trace_mode=False,
     debug=False,
+    profiler=BenchmarkProfiler(),
     # New all-gather-async and persistent fabric params
     use_all_gather_async=False,
     enable_persistent_fabric=False,
@@ -270,6 +278,7 @@ def run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
                 all_gather_topology=ttnn.Topology.Linear,
                 num_iter=num_iters,
                 use_all_gather_async=use_all_gather_async,
+                profiler=profiler,
             )
 
         else:
