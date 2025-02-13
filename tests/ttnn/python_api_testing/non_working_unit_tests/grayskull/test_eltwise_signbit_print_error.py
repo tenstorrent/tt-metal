@@ -9,11 +9,10 @@ import torch
 import ttnn
 import traceback
 
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_equal_print_error_value
 from tests.ttnn.python_api_testing.sweep_tests import ttnn_ops
 
 
-# Test file mentioned in #7749
 def run_eltwise_singbit_tests(
     input_shape,
     dtype,
@@ -24,13 +23,19 @@ def run_eltwise_singbit_tests(
     device,
 ):
     torch.manual_seed(data_seed)
-    x = torch.Tensor(size=input_shape[0]).uniform_(-100, 100)
+    x = torch.Tensor(size=input_shape[0]).uniform_(-1, 0)  # Torch might generate values in RM Layout
 
     try:
         # get ref result
         ref_value = torch.signbit(x)
+        torch.set_printoptions(linewidth=200, threshold=10000, precision=5, sci_mode=False, edgeitems=128)
+        input_torch = x
+        print("\nTorch Input : ", x)
 
-        x = ttnn_ops.setup_ttnn_tensor(x, device, dlayout[0], in_mem_config[0], dtype[0])
+        x = ttnn.Tensor(x, dtype[0]).to(dlayout[0]).to(device)  # Convert it to required layout
+        ttnn.set_printoptions(profile="full")
+        y = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)  # Convert it back to RM layout
+        print("\nTT Input : ", y)
         tt_result = ttnn.signbit(x, memory_config=output_mem_config)
         tt_result = ttnn_ops.ttnn_tensor_to_torch(tt_result)
 
@@ -43,7 +48,11 @@ def run_eltwise_singbit_tests(
     assert tt_result.shape == ref_value.shape
 
     # compare tt and golden outputs
-    success, pcc_value = comp_equal(ref_value, tt_result)
+    torch.set_printoptions(linewidth=200, threshold=10000, precision=5, sci_mode=False, edgeitems=128)
+    print("Torch value : ", ref_value)
+    print("TT Result   : ", tt_result)
+    print("\n Details of the values causing assertion issue")
+    success, pcc_value = comp_equal_print_error_value(ref_value, tt_result, input_torch, tt_result)
     logger.debug(pcc_value)
     logger.debug(success)
 
@@ -52,6 +61,7 @@ def run_eltwise_singbit_tests(
 
 test_sweep_args = [
     (
+        # [(32, 32)],
         [(224, 128)],
         [ttnn.bfloat8_b],
         [ttnn.TILE_LAYOUT],
@@ -59,22 +69,22 @@ test_sweep_args = [
         ttnn.DRAM_MEMORY_CONFIG,
         17155532,
     ),
-    (
-        [(6, 160, 64)],
-        [ttnn.bfloat8_b],
-        [ttnn.TILE_LAYOUT],
-        [ttnn.DRAM_MEMORY_CONFIG],
-        ttnn.DRAM_MEMORY_CONFIG,
-        9456908,
-    ),
-    (
-        [(6, 160, 64)],
-        [ttnn.bfloat8_b],
-        [ttnn.TILE_LAYOUT],
-        [ttnn.L1_MEMORY_CONFIG],
-        ttnn.DRAM_MEMORY_CONFIG,
-        4689090,
-    ),
+    # (
+    #     [(6, 160, 64)],
+    #     [ttnn.bfloat8_b],
+    #     [ttnn.TILE_LAYOUT],
+    #     [ttnn.DRAM_MEMORY_CONFIG],
+    #     ttnn.DRAM_MEMORY_CONFIG,
+    #     9456908,
+    # ),
+    # (
+    #     [(6, 160, 64)],
+    #     [ttnn.bfloat8_b],
+    #     [ttnn.TILE_LAYOUT],
+    #     [ttnn.L1_MEMORY_CONFIG],
+    #     ttnn.DRAM_MEMORY_CONFIG,
+    #     4689090,
+    # ),
 ]
 
 
