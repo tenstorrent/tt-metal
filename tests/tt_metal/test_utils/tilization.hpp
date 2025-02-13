@@ -21,7 +21,7 @@ template <typename T, unsigned int TileHeight = 32, unsigned int TileWidth = 32>
 std::vector<T> tilize(std::vector<T> data, int rows, int cols) {
     TT_FATAL((rows % TileHeight) == 0, "rows={} % TileHeight={} must equal 0", rows, TileHeight);
     TT_FATAL((cols % TileWidth) == 0, "rows={} % TileHeight={} must equal 0", cols, TileWidth);
-    TT_FATAL((data.size() <= rows * cols), "data with size {} doesn't fit all {} x {} values", data.size(), rows, cols);
+    TT_FATAL((data.size() == rows * cols), "data with size {} doesn't fit all {} x {} values", data.size(), rows, cols);
     constexpr unsigned int elements_in_tile = TileHeight * TileWidth;
     unsigned int num_tiles_r = rows / TileHeight;
     unsigned int num_tiles_c = cols / TileWidth;
@@ -44,7 +44,7 @@ template <typename T, unsigned int TileHeight = 32, unsigned int TileWidth = 32>
 std::vector<T> untilize(std::vector<T> data, int rows, int cols) {
     TT_FATAL((rows % TileHeight) == 0, "rows={} % TileHeight={} must equal 0", rows, TileHeight);
     TT_FATAL((cols % TileWidth) == 0, "rows={} % TileHeight={} must equal 0", cols, TileWidth);
-    TT_FATAL((data.size() <= rows * cols), "data with size {} doesn't fit all {} x {} values", data.size(), rows, cols);
+    TT_FATAL((data.size() == rows * cols), "data with size {} doesn't fit all {} x {} values", data.size(), rows, cols);
     constexpr unsigned int elements_in_tile = TileHeight * TileWidth;
     unsigned int num_tiles_r = rows / TileHeight;
     unsigned int num_tiles_c = cols / TileWidth;
