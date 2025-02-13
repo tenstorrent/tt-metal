@@ -165,7 +165,6 @@ std::shared_ptr<MeshDevice> MeshDevice::create_submesh(const MeshShape& submesh_
 
     auto submesh_devices = view_->get_devices(start_coordinate, end_coordinate);
     submesh->view_ = std::make_unique<MeshDeviceView>(submesh_devices, submesh_shape);
-    SystemMesh::instance().register_mesh_device(submesh, submesh_devices);
     submeshes_.push_back(submesh);
     log_trace(
         LogMetal,
@@ -598,7 +597,6 @@ bool MeshDevice::initialize(
     tt::stl::Span<const std::uint32_t> l1_bank_remap,
     bool minimal) {
     view_ = std::make_unique<MeshDeviceView>(scoped_devices_->get_devices(), mesh_shape_);
-    SystemMesh::instance().register_mesh_device(shared_from_this(), this->get_devices());
 
     // For MeshDevice, we support uniform sub-devices across all devices and we do not support ethernet subdevices.
     const auto& compute_grid_size = this->compute_with_storage_grid_size();
