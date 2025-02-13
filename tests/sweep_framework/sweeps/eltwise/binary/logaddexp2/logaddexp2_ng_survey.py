@@ -23,19 +23,19 @@ from models.utility_functions import torch_random
 # Each suite has a key name (in this case "suite_1") which will associate the test vectors to this specific suite of inputs.
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
-    "div_bf16_1": {
+    "logaddexp2_bf4b_1": {
         "input_shape": [{"self": [1, 1, 1024, 1024], "other": [1, 1, 1024, 1024]}],
-        # "input_shape": [{"self": [1, 1, 512, 512], "other": [1, 1, 512, 512]}], # for float32 and int32 dtypes
-        "input_a_dtype": [ttnn.bfloat16],
-        "input_b_dtype": [ttnn.bfloat16],
+        # "input_shape": [{"self": [1, 1, 512, 512], "other": [1, 1, 512, 512]}],  # for float32 and int32 dtypes
+        # "input_a_dtype": [ttnn.bfloat16],
+        # "input_b_dtype": [ttnn.bfloat16],
         # "input_a_dtype": [ttnn.float32],
         # "input_b_dtype": [ttnn.float32],
         # "input_a_dtype": [ttnn.int32],
         # "input_b_dtype": [ttnn.int32],
         # "input_a_dtype": [ttnn.bfloat8_b],
         # "input_b_dtype": [ttnn.bfloat8_b],
-        # "input_a_dtype": [ttnn.bfloat4_b],
-        # "input_b_dtype": [ttnn.bfloat4_b],
+        "input_a_dtype": [ttnn.bfloat4_b],
+        "input_b_dtype": [ttnn.bfloat4_b],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_b_layout": [ttnn.TILE_LAYOUT],
         "input_mem_config": [
@@ -145,12 +145,12 @@ def run(
     torch.manual_seed(0)
 
     torch_input_tensor_a = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.bfloat16), input_a_dtype
+        partial(torch_random, low=-65, high=65, dtype=torch.bfloat16), input_a_dtype
     )(input_shape["self"])
 
     if isinstance(input_shape["other"], list):
         torch_input_tensor_b = gen_func_with_cast_tt(
-            partial(torch_random, low=-100, high=-1, dtype=torch.bfloat16), input_b_dtype
+            partial(torch_random, low=-65, high=65, dtype=torch.bfloat16), input_b_dtype
         )(input_shape["other"])
     else:
         torch_input_tensor_b = torch.tensor(input_shape["other"], dtype=torch.bfloat16)
@@ -186,11 +186,11 @@ def run(
     if input_b_dtype == ttnn.bfloat4_b:
         torch_input_tensor_b = ttnn.to_torch(input_tensor_b)
 
-    golden_function = ttnn.get_golden_function(ttnn.experimental.div)
+    golden_function = ttnn.get_golden_function(ttnn.experimental.logaddexp2)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b)
 
     start_time = start_measuring_time()
-    result = ttnn.experimental.div(input_tensor_a, input_tensor_b)
+    result = ttnn.experimental.logaddexp2(input_tensor_a, input_tensor_b)
     output_tensor = ttnn.to_torch(result)
     e2e_perf = stop_measuring_time(start_time)
 
