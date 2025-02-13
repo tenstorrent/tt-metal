@@ -385,6 +385,7 @@ on:
           - eltwise.binary.squared_difference.squared_difference
           - eltwise.binary.squared_difference_output.squared_difference_output
           - eltwise.binary.squared_difference.squared_difference_ng_survey
+          - eltwise.binary.rsub.rsub_ng_survey
           - eltwise.binary.scatter.scatter_forge
           - eltwise.binary.bcast.bcast_h_sharded
           - eltwise.binary.bcast.bcast
@@ -401,8 +402,10 @@ on:
           - eltwise.binary.floor_divide.floor_divide
           - eltwise.binary.logaddexp.logaddexp
           - eltwise.binary.logaddexp.logaddexp_sharded
+          - eltwise.binary.logaddexp.logaddexp_ng_survey
           - eltwise.binary.logaddexp2.logaddexp2
           - eltwise.binary.logaddexp2.logaddexp2_sharded
+          - eltwise.binary.logaddexp2.logaddexp2_ng_survey
           - eltwise.binary.ldexp.ldexp
           - eltwise.binary.ldexp.ldexp_sharded
           - eltwise.binary.lt.lt_tensor_pytorch2
