@@ -339,3 +339,26 @@ def test_untilize_w4(shape, input_layout, output_layout, device):
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(input_a[:, :, :1, :10912], output_tensor)
+
+
+def test_interleaved_to_sharded_block_shareded_unaligned_width(device):
+    torch_input_shape = [1, 1, 196, 92]
+    torch_input = torch.randn(torch_input_shape, dtype=torch.bfloat16).bfloat16()
+
+    sharded_memory_config = ttnn.create_sharded_memory_config(
+        [32, 32],
+        core_grid=ttnn.CoreGrid(
+            x=7,
+            y=3,
+        ),
+        strategy=ttnn.ShardStrategy.BLOCK,
+        orientation=ttnn.ShardOrientation.COL_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    ttnn_input = ttnn.from_torch(torch_input, device=device, layout=ttnn.ROW_MAJOR_LAYOUT)
+    ttnn_output = ttnn.to_memory_config(ttnn_input, sharded_memory_config)
+
+    output_torch = ttnn.to_torch(ttnn_output)
+
+    passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_input, output_torch)
+    assert passing, pcc_msg
