@@ -62,13 +62,25 @@ std::shared_ptr<Buffer> allocate_buffer_on_device(IDevice* device, const TensorS
     auto shard_spec_buffer = tensor_spec.compute_shard_spec_buffer();
     auto memory_config = tensor_spec.tensor_layout().get_memory_config();
 
-    return Buffer::create(
-        device,
-        buffer_size_bytes,
-        page_size_bytes,
-        memory_config.buffer_type,
-        memory_config.memory_layout,
-        shard_spec_buffer);
+    if (memory_config.is_sharded()) {
+        TT_FATAL(shard_spec_buffer.has_value(), "Buffer is sharded, but no shard parameters specified");
+        ShardedBufferConfig config{
+            .device = device,
+            .size = buffer_size_bytes,
+            .page_size = page_size_bytes,
+            .buffer_type = memory_config.buffer_type,
+            .buffer_layout = memory_config.memory_layout,
+            .shard_parameters = shard_spec_buffer.value()};
+        return CreateBuffer(config);
+    } else {
+        InterleavedBufferConfig config{
+            .device = device,
+            .size = buffer_size_bytes,
+            .page_size = page_size_bytes,
+            .buffer_type = memory_config.buffer_type,
+            .buffer_layout = memory_config.memory_layout};
+        return CreateBuffer(config);
+    }
 }
 
 std::shared_ptr<distributed::MeshBuffer> allocate_mesh_buffer_on_device(

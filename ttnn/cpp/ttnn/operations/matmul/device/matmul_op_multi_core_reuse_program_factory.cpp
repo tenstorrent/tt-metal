@@ -33,7 +33,7 @@ tt_metal::operation::ProgramWithCallbacks create_program(
     tt_metal::Buffer* in0_buffer,
     tt_metal::Buffer* in1_buffer,
     tt_metal::Buffer* out_buffer) {
-    tt_metal::Program program{};
+    tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     uint32_t in0_single_tile_size = tt_metal::detail::TileSize(in0_cb_data_format);
     uint32_t in1_single_tile_size = tt_metal::detail::TileSize(in1_cb_data_format);

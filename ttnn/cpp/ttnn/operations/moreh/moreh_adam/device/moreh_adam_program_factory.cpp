@@ -40,7 +40,7 @@ MorehAdamOperation::ProgramFactory::cached_program_t MorehAdamOperation::Program
 
     uint32_t num_tiles = param_in.volume() / tt::constants::TILE_HW;
 
-    Program program{};
+    Program program = tt::tt_metal::CreateProgram();
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup

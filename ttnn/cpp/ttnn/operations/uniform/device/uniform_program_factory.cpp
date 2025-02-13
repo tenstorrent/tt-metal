@@ -32,7 +32,7 @@ UniformDeviceOperation::ProgramFactory::cached_program_t UniformDeviceOperation:
     uint32_t num_cores_y = grid.y;
     auto cores = grid_to_cores(num_cores, num_cores_x, num_cores_y);
 
-    Program program = Program();
+    Program program = CreateProgram();
 
     DataType output_dtype = output.dtype();
     auto out_data_format = datatype_to_dataformat_converter(output_dtype);

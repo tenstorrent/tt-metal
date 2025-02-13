@@ -1462,7 +1462,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_2d_optimized(
     bool transpose_mcast,
     std::optional<UnaryWithParam> fused_activation,
     bool untilize_out) {
-    tt_metal::Program program{}; /* Create a program */
+    tt_metal::Program program = tt::tt_metal::CreateProgram(); /* Create a program */
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> empty_fused_op_signaler;
 
     return matmul_multi_core_reuse_mcast_2d_optimized_(

@@ -50,7 +50,7 @@ MorehBiasAddBackwardOperation::SingleCoreProgramFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    Program program{};
+    Program program = tt::tt_metal::CreateProgram();
     CoreCoord core = {0, 0};
     const uint32_t core_num = 1;
 

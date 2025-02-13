@@ -300,7 +300,7 @@ template <bool is_reader>
 operation::ProgramWithCallbacks reshard_multi_core_same_width(const Tensor& input, Tensor& output) {
     auto device = input.device();
 
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     const auto& local_tensor = is_reader ? output : input;
     const auto& remote_tensor = is_reader ? input : output;
@@ -427,7 +427,7 @@ operation::ProgramWithCallbacks reshard_multi_core_generic(const Tensor& input, 
     auto device = input.device();
     auto output_core_to_page_range_pair = get_core_page_ranges(input.buffer(), output.buffer());
 
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     auto input_shard_spec = input.shard_spec().value();
     auto output_shard_spec = output.shard_spec().value();
@@ -616,7 +616,7 @@ template <bool is_reader>
 operation::ProgramWithCallbacks reshard_multi_core_same_height(const Tensor& input, Tensor& output) {
     auto device = input.device();
 
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     const auto& local_tensor = is_reader ? output : input;
     const auto& remote_tensor = is_reader ? input : output;

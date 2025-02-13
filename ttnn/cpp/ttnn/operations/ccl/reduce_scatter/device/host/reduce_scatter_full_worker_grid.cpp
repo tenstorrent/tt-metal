@@ -725,7 +725,7 @@ operation::ProgramWithCallbacks reduce_scatter_with_workers(
     }
 
     //////////////////
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     // Semaphores && CBs
     auto worker_receiver_semaphore_id = tt::tt_metal::CreateSemaphore(program, worker_core_range, 0);

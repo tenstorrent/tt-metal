@@ -138,7 +138,7 @@ operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
     const GlobalSemaphore semaphore,
     const std::optional<SubDeviceId>& sub_device_id,
     bool enable_persistent_fabric_mode) {
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     const bool enable_async_output_tensor = false;
     const bool lower_command_stream_to_noc_commands =
         ttnn::ccl::worker_detail::can_command_stream_be_lowered_to_noc_commands(input_tensor);

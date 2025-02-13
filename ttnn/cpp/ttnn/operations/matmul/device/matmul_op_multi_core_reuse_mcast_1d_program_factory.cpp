@@ -995,7 +995,7 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
     // currently only support transpose of the full tile
     bool in1_transpose_tile = in1_tile.get_transpose_of_faces() && in1_tile.get_transpose_within_face();
 
-    tt_metal::Program program{};
+    tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     bool fuse_op = false;
 
@@ -2408,7 +2408,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized(
     bool untilize_out,
     const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb,
     uint32_t num_global_cb_receivers) {
-    tt_metal::Program program{}; /* Create a program */
+    tt_metal::Program program = tt::tt_metal::CreateProgram(); /* Create a program */
     std::optional<ttnn::experimental::ccl::MatmulFusedOpSignaler> empty_fused_op_signaler;
 
     return matmul_multi_core_reuse_mcast_1d_optimized_(

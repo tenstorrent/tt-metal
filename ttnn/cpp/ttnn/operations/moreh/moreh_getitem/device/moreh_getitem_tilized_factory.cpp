@@ -118,7 +118,7 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
             [num_cores, all_cores, core_group_1, core_group_2, num_units_per_core_group_1, num_units_per_core_group_2] =
                 split_work_to_cores_wt_core_range(core_range, num_units);
 
-        Program program = Program();
+        Program program = CreateProgram();
 
         // create circular buffers
         auto src_cb_data_format = datatype_to_dataformat_converter(input.get_dtype());
@@ -352,7 +352,7 @@ MorehGetItemOperation::MorehGetItemTilizedFactory::create(
             [num_cores, all_cores, core_group_1, core_group_2, num_units_per_core_group_1, num_units_per_core_group_2] =
                 split_work_to_cores_wt_core_range(core_range, num_units);
 
-        Program program = Program();
+        Program program = CreateProgram();
 
         // create circular buffers
         auto src_cb_data_format = datatype_to_dataformat_converter(input.get_dtype());

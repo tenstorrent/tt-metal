@@ -31,7 +31,7 @@ MorehLayerNormBackwardInputGradOperation::ProgramFactory::create(
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
     IDevice* device = output_grad.device();
-    Program program = Program();
+    Program program = CreateProgram();
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup

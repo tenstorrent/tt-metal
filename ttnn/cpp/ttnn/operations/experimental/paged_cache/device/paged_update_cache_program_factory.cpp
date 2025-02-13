@@ -36,7 +36,7 @@ operation::ProgramWithCallbacks paged_update_cache_multi_core(
     const uint32_t batch_offset,
     ttnn::DeviceComputeKernelConfig compute_kernel_config,
     const bool share_cache) {
-    Program program{};
+    Program program = tt::tt_metal::CreateProgram();
 
     tt_metal::IDevice* device = input_tensor.device();
 
