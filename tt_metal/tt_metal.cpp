@@ -528,70 +528,6 @@ void WriteToBuffer(Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
     }
 }
 
-void ReadFromDeviceInterleavedContiguousLargePage(const Buffer& buffer, uint8_t* host_buffer) {
-    const buffer_dispatch::PartialPageSpec& partial_page_spec = buffer_dispatch::calculate_partial_page_spec(buffer);
-    const uint32_t page_size = partial_page_spec.unpadded_partial_page_size;
-    const uint32_t padded_page_size = partial_page_spec.padded_partial_page_size;
-    const uint32_t num_partial_pages_per_full_page = partial_page_spec.num_partial_pages_per_full_page;
-    const uint32_t num_partial_pages = buffer.num_pages() * num_partial_pages_per_full_page;
-
-    uint32_t num_full_pages_read = 0;
-    IDevice* device = buffer.device();
-    const uint32_t num_banks = device->allocator()->get_num_banks(buffer.buffer_type());
-    uint32_t host_idx = 0;
-    uint32_t bank_index = 0;
-    std::vector<uint32_t> page;
-    page.resize(page_size / sizeof(uint32_t));
-    DeviceAddr page_address = buffer.address();
-    for (int page_index = 0; page_index < num_partial_pages; page_index++) {
-        // const bool is_start_of_full_page = page_index % num_partial_pages_per_full_page == 0;
-        // if (is_start_of_full_page) {
-
-        // }
-        // auto absolute_address = buffer.page_address(bank_index, page_index);
-        // Get address offset of buffer in bank. Required when reading from DRAM.
-        // auto bank_local_address = buffer.bank_local_page_address(bank_index, page_index);
-        const uint32_t adjusted_page_index =
-            num_full_pages_read + (page_index - (num_full_pages_read * num_partial_pages_per_full_page)) * num_banks;
-        page.clear();
-        switch (buffer.buffer_type()) {
-            case BufferType::DRAM:
-            case BufferType::TRACE: {
-                // page_address = buffer.bank_local_page_address(bank_index, adjusted_page_index);
-                ReadFromDeviceDRAMChannel(device, bank_index, page_address, page_size, page);
-            } break;
-            case BufferType::L1:
-            case BufferType::L1_SMALL: {
-                // page_address = buffer.page_address(bank_index, adjusted_page_index);
-                auto core_coordinates =
-                    device->worker_core_from_logical_core(buffer.logical_core_from_bank_id(bank_index));
-                tt::Cluster::instance().read_core(
-                    page.data(), page_size, tt_cxy_pair(device->id(), core_coordinates), page_address);
-            } break;
-            default: TT_THROW("Unsupported buffer type to read from device!");
-        }
-
-        page_address += padded_page_size;
-
-        uint32_t additional_padding = 0;
-        const bool is_last_partial_page_of_full_page =
-            page_index % num_partial_pages_per_full_page == num_partial_pages_per_full_page - 1;
-        if (is_last_partial_page_of_full_page) {
-            num_full_pages_read += 1;
-            const bool will_next_full_page_be_round_robined = num_full_pages_read % num_banks == 0;
-            if (!will_next_full_page_be_round_robined) {
-                const uint32_t full_page_size = num_partial_pages_per_full_page * padded_page_size;
-                page_address -= full_page_size;
-            }
-            bank_index = (bank_index + 1) % num_banks;
-            additional_padding = partial_page_spec.last_partial_page_additional_padding;
-        }
-
-        std::memcpy(host_buffer + host_idx, page.data(), page_size - additional_padding);
-        host_idx += page_size - additional_padding;
-    }
-}
-
 uint32_t RemovePaddingFromPartialPages(
     const buffer_dispatch::PartialPageSpec& partial_page_spec,
     const uint8_t* full_page_data,
@@ -608,10 +544,6 @@ uint32_t RemovePaddingFromPartialPages(
         } else {
             num_bytes_to_copy = partial_page_spec.unpadded_partial_page_size;
         }
-        // full_page_without_padding.insert(
-        //     full_page_without_padding.end(),
-        //     full_page_data.begin() + i,
-        //     full_page_data.begin() + i + num_elements_to_copy);
         std::memcpy(page_without_padding_data + total_num_bytes_copied, full_page_data + i, num_bytes_to_copy);
         i += partial_page_spec.padded_partial_page_size;
         num_partial_pages_processed += 1;
@@ -620,59 +552,102 @@ uint32_t RemovePaddingFromPartialPages(
     return total_num_bytes_copied;
 }
 
-void ReadFromDeviceInterleavedContiguous(const Buffer& buffer, uint8_t* host_buffer) {
-    // if (buffer_dispatch::are_pages_large(buffer)) {
-    //     ReadFromDeviceInterleavedContiguousLargePage(buffer, host_buffer);
-    //     return;
-    // }
-
+void ReadFromDeviceInterleavedContiguousLargePage(const Buffer& buffer, uint8_t* host_buffer) {
     const buffer_dispatch::PartialPageSpec& partial_page_spec = buffer_dispatch::calculate_partial_page_spec(buffer);
-    const uint32_t page_size =
+    const uint32_t full_padded_page_size =
         partial_page_spec.padded_partial_page_size * partial_page_spec.num_partial_pages_per_full_page;
-    const uint32_t num_pages = buffer.num_pages();
+    const uint32_t num_full_pages = buffer.num_pages();
+
+    IDevice* device = buffer.device();
+    const uint32_t num_banks = device->allocator()->get_num_banks(buffer.buffer_type());
+
+    uint32_t num_round_robins = 0;
+    uint32_t host_idx = 0;
+    uint32_t bank_index = 0;
+    std::vector<uint32_t> page;
+    page.resize(full_padded_page_size / sizeof(uint32_t));
+    for (int page_index = 0; page_index < num_full_pages; page_index++) {
+        const DeviceAddr full_page_address_offset =
+            (num_round_robins > 0) ? (full_padded_page_size - buffer.aligned_page_size()) * num_round_robins : 0;
+        page.clear();
+        switch (buffer.buffer_type()) {
+            case BufferType::DRAM:
+            case BufferType::TRACE: {
+                const DeviceAddr page_address =
+                    buffer.bank_local_page_address(bank_index, page_index) + full_page_address_offset;
+                ReadFromDeviceDRAMChannel(device, bank_index, page_address, full_padded_page_size, page);
+            } break;
+            case BufferType::L1:
+            case BufferType::L1_SMALL: {
+                const DeviceAddr page_address = buffer.page_address(bank_index, page_index) + full_page_address_offset;
+                auto core_coordinates =
+                    device->worker_core_from_logical_core(buffer.allocator()->get_logical_core_from_bank_id(bank_index));
+                tt::Cluster::instance().read_core(
+                    page.data(), full_padded_page_size, tt_cxy_pair(device->id(), core_coordinates), page_address);
+            } break;
+            default: TT_THROW("Unsupported buffer type to read from device!");
+        }
+
+        uint8_t* full_page_data_without_padding = new uint8_t[full_padded_page_size];
+        const uint32_t full_page_data_without_padding_size_bytes = RemovePaddingFromPartialPages(
+            partial_page_spec,
+            reinterpret_cast<uint8_t*>(page.data()),
+            full_padded_page_size,
+            full_page_data_without_padding);
+        TT_ASSERT(full_page_data_without_padding_size_bytes == buffer.page_size());
+
+        // Copy page into host buffer
+        std::memcpy(host_buffer + host_idx, full_page_data_without_padding, full_page_data_without_padding_size_bytes);
+        delete[] full_page_data_without_padding;
+
+        host_idx += full_page_data_without_padding_size_bytes;
+        if (bank_index + 1 == num_banks) {
+            num_round_robins += 1;
+        }
+        bank_index = (bank_index + 1) % num_banks;
+    }
+}
+
+void ReadFromDeviceInterleavedContiguous(const Buffer& buffer, uint8_t* host_buffer) {
+    if (buffer_dispatch::are_pages_large(buffer)) {
+        ReadFromDeviceInterleavedContiguousLargePage(buffer, host_buffer);
+        return;
+    }
+
+    uint32_t page_size = buffer.page_size();
+    uint32_t num_pages = buffer.num_pages();
 
     auto device = buffer.device();
     auto num_banks = device->allocator()->get_num_banks(buffer.buffer_type());
-    size_t host_idx = 0;
 
-    uint32_t num_round_robins = 0;
+    size_t host_idx = 0;
     uint32_t bank_index = 0;
     std::vector<uint32_t> page;
     page.resize(page_size / sizeof(uint32_t));
     for (int page_index = 0; page_index < num_pages; page_index++) {
         auto absolute_address = buffer.page_address(bank_index, page_index);
         // Get address offset of buffer in bank. Required when reading from DRAM.
-        auto addr1 = (num_round_robins > 0) ? (page_size - buffer.aligned_page_size()) * num_round_robins : 0;
         auto bank_local_address = buffer.bank_local_page_address(bank_index, page_index);
         page.clear();
         switch (buffer.buffer_type()) {
             case BufferType::DRAM:
             case BufferType::TRACE:
-                ReadFromDeviceDRAMChannel(device, bank_index, bank_local_address + addr1, page_size, page);
+                ReadFromDeviceDRAMChannel(device, bank_index, bank_local_address, page_size, page);
                 break;
             case BufferType::L1:
             case BufferType::L1_SMALL: {
                 auto core_coordinates = device->worker_core_from_logical_core(
                     buffer.allocator()->get_logical_core_from_bank_id(bank_index));
-                tt::Cluster::instance().read_core(page.data(), page_size, tt_cxy_pair(device->id(), core_coordinates), absolute_address);
+                tt::Cluster::instance().read_core(
+                    page.data(), page_size, tt_cxy_pair(device->id(), core_coordinates), absolute_address);
             } break;
             default: TT_THROW("Unsupported buffer type to read from device!");
         }
 
-        uint8_t* page_without_padding = new uint8_t[page_size];
-        uint32_t page_size_to_copy = RemovePaddingFromPartialPages(
-            partial_page_spec, reinterpret_cast<uint8_t*>(page.data()), page_size, page_without_padding);
-        // page_size = page_without_padding.size() * sizeof(uint32_t);
-        TT_ASSERT(page_size_to_copy == buffer.page_size());
-
         // Copy page into host buffer
-        std::memcpy(host_buffer + host_idx, page_without_padding, page_size_to_copy);
-        delete[] page_without_padding;
+        std::memcpy(host_buffer + host_idx, page.data(), page_size);
+        host_idx += page_size;
 
-        host_idx += page_size_to_copy;
-        if (bank_index + 1 == num_banks) {
-            num_round_robins += 1;
-        }
         bank_index = (bank_index + 1) % num_banks;
     }
 }
