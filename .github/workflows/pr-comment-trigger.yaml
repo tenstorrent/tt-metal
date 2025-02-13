@@ -31,13 +31,29 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  mirror_fetch_pr_info:
+    if: needs.detect_trigger.outputs.mirror_triggered == 'true'
+    runs-on: ubuntu-latest    
+    outputs:
+      source: ${{ steps.set_source.outputs.source }}
+    steps:
+      - name: Find pull request
+        id: find_pr
+        uses: peter-evans/find-pull-request@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          issue-number: ${{ github.event.issue.number }}
+      - name: Set source
+        id: set_source
+        run: |
+          echo "source=${{ steps.find_pr.outputs.head_repo_owner }}:${{ steps.find_pr.outputs.head_ref }}" >> $GITHUB_OUTPUT
+
   mirror:
-    needs: detect_trigger
+    needs: mirror_fetch_pr_info
     if: needs.detect_trigger.outputs.mirror_triggered == 'true'
     uses: ./.github/workflows/mirror-fork-branch.yaml
     with:
-      # Build the source input as "<fork_owner>:<branch>" using the PR head info.
-      source: "${{ github.event.pull_request.head.repo.owner.login }}:${{ github.event.pull_request.head.ref }}"
+      source: "${{ needs.mirror_fetch_pr_info.outputs.source }}"
 
   test:
     if: needs.detect_trigger.outputs.test_triggered == 'true'
@@ -53,7 +69,6 @@ jobs:
       - name: Post workflow run link comment on PR
         uses: mshick/add-pr-comment@v2
         with:
-          # If this is a PR event, use its number.
-          issue: ${{ github.event.pull_request.number }}
+          issue: ${{ github.event.issue.number || github.event.pull_request.number }}
           message: |
             ✨ Workflow run is available [here](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
