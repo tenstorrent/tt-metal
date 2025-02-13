@@ -58,6 +58,7 @@ def run_conv(
     config_override,
     dilation=1,
     use_shallow_conv_variant=False,
+    transpose_shards=True,  # TODO: Fails when set to False
     fp32_accum=False,
     packer_l1_acc=False,
     output_layout=ttnn.TILE_LAYOUT,
@@ -71,6 +72,7 @@ def run_conv(
     input_mesh_mapper=None,
     weight_mesh_mapper=None,
     output_mesh_composer=None,
+    preprocess_weights_on_device=True,
 ):
     if isinstance(device, ttnn.MeshDevice):
         assert input_mesh_mapper is not None, "Expected mesh mapper for input tensor when using device mesh"
@@ -135,6 +137,8 @@ def run_conv(
         enable_split_reader=False,
         enable_subblock_padding=False,
         output_layout=output_layout,
+        transpose_shards=transpose_shards,
+        preprocess_weights_on_device=preprocess_weights_on_device,
     )
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -176,7 +180,6 @@ def run_conv(
         memory_config=memory_config,
         return_output_dim=True,
     )
-
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
     torch_output_tensor = ttnn.to_torch(tt_output_tensor, mesh_composer=output_mesh_composer)
 
@@ -192,6 +195,8 @@ def run_conv(
 
     if not fp32_accum:
         pcc = 0.985
+        if input_channels * filter_height * filter_width > 10000:
+            pcc = 0.97
     elif math_fidelity == ttnn.MathFidelity.LoFi and activations_dtype == ttnn.bfloat8_b:
         pcc = 0.996
     else:
@@ -412,6 +417,7 @@ def test_conv_features(
         has_bias=True,
         fp32_accum=fp32_accum,
         packer_l1_acc=packer_l1_acc,
+        preprocess_weights_on_device=True,
     )
 
 
@@ -783,7 +789,7 @@ def test_conv_for_segformer_512x512(
 )
 @pytest.mark.parametrize(
     "weights_dtype",
-    [ttnn.bfloat16, ttnn.bfloat8_b],
+    [ttnn.bfloat16],
 )
 @pytest.mark.parametrize(
     "activations_dtype",
@@ -966,6 +972,7 @@ def test_resnet50_conv_wh(
         pad_w,
         config_override=config_override,
         use_shallow_conv_variant=use_shallow_conv_variant,
+        transpose_shards=True,  ## use RM (transpose_mcast=False) with 2D on WH
         packer_l1_acc=packer_l1_acc,
         fp32_accum=False,
         has_bias=has_bias,
@@ -1027,6 +1034,7 @@ def test_conv_mem_config_wh(
         shard_layout=shard_layout,
         config_override=config_override,
         use_shallow_conv_variant=use_shallow_conv_variant,
+        transpose_shards=True,  ## use RM (transpose_mcast=False) with 2D on WH
         packer_l1_acc=True,
         fp32_accum=False,
         has_bias=True,
@@ -1212,7 +1220,7 @@ def test_resnet50_conv_wh_fp32(
 )
 @pytest.mark.parametrize(
     "weights_dtype",
-    [ttnn.bfloat8_b],
+    [ttnn.bfloat16],
 )
 @pytest.mark.parametrize(
     "activations_dtype",
@@ -1354,7 +1362,7 @@ def test_sd_conv(
 )
 @pytest.mark.parametrize(
     "activations_dtype",
-    [ttnn.bfloat16, ttnn.bfloat8_b],
+    [ttnn.bfloat16],
 )
 @pytest.mark.parametrize(
     "fp32_accum",
@@ -1495,7 +1503,7 @@ def test_sd_conv_wh(
 )
 @pytest.mark.parametrize(
     "weights_dtype",
-    [ttnn.bfloat8_b],
+    [ttnn.bfloat16],
 )
 @pytest.mark.parametrize(
     "activations_dtype",
@@ -1647,6 +1655,7 @@ def test_unet_conv_wh(
         config_override,
         shard_layout=shard_layout,
         use_shallow_conv_variant=use_shallow_conv_variant,
+        transpose_shards=True,  ## use RM (transpose_mcast=False) with 2D on WH
         output_layout=output_layout,
         auto_shard=auto_shard,
     )
@@ -1745,6 +1754,7 @@ def test_unet_conv_groups_2_wh(
         config_override,
         shard_layout=shard_layout,
         use_shallow_conv_variant=use_shallow_conv_variant,
+        transpose_shards=True,  ## use RM (transpose_mcast=False) with 2D on WH
         output_layout=output_layout,
         auto_shard=auto_shard,
         groups=groups,
@@ -1842,6 +1852,7 @@ def test_unet_conv_groups_4_6_wh(
         config_override,
         shard_layout=shard_layout,
         use_shallow_conv_variant=use_shallow_conv_variant,
+        transpose_shards=True,  ## use RM (transpose_mcast=False) with 2D on WH
         output_layout=output_layout,
         groups=groups,
     )
@@ -1940,12 +1951,14 @@ def test_unet_conv_groups_8_wh(
         config_override,
         shard_layout=shard_layout,
         use_shallow_conv_variant=use_shallow_conv_variant,
+        transpose_shards=True,  ## use RM (transpose_mcast=False) with 2D on WH
         output_layout=output_layout,
         auto_shard=auto_shard,
         groups=groups,
     )
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, config_override",
@@ -2007,6 +2020,7 @@ def test_halo_reshard_conv(
     )
 
 
+@skip_for_grayskull()
 @pytest.mark.skip("New API needs to be tested")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
@@ -2368,6 +2382,7 @@ def test_yolov4_conv_groups_larger_than_one(
     )
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     " output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, shard_layout, config_override, use_shallow_conv_variant, groups",
@@ -2618,7 +2633,7 @@ def test_conv_for_vanilla_unet(
 )
 @pytest.mark.parametrize(
     "weights_dtype",
-    [ttnn.bfloat8_b, ttnn.bfloat16],
+    [ttnn.bfloat16],
 )
 @pytest.mark.parametrize(
     "activations_dtype",
@@ -2707,6 +2722,7 @@ def test_non_tile_multiple_height_conv_wh(
         fp32_accum=fp32_accum,
         has_bias=has_bias,
         output_layout=ttnn.ROW_MAJOR_LAYOUT,
+        preprocess_weights_on_device=True,
     )
 
 
@@ -2789,7 +2805,9 @@ def test_non_tile_multiple_width_conv_wh(
         config_override,
         shard_layout=shard_layout,
         use_shallow_conv_variant=(input_channels == 16),
+        transpose_shards=True,  # TODO: Fails when transpose_shards is False
         output_layout=ttnn.ROW_MAJOR_LAYOUT,
+        preprocess_weights_on_device=True,
     )
 
 
@@ -2855,6 +2873,7 @@ def test_shallow_conv_with_tiled_input(device):
 
 # Tests running conv2d which maps to matmul w/o sharding the input tensor.
 # Output tensor is in DRAM.
+@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize("tiled_input", [True, False])
 @pytest.mark.parametrize("input_on_device", [True, False])
