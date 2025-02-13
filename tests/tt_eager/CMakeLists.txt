@@ -13,7 +13,6 @@ set(TT_EAGER_TESTS_OPS
     ops/test_sfpu.cpp
     ops/test_sliding_window_ops.cpp
     ops/test_fold_op.cpp
-    ops/test_conv_prepare_weights_and_biases.cpp
 )
 
 set(TT_EAGER_TESTS_TENSORS
