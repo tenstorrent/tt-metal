@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       source:
-        description: 'Source in format <fork_owner>:<branch> (e.g., philei-tt:philei/speed-up-host-tilizing)'
+        description: 'Source in format <fork_owner>:<branch>'
         required: true
       target_branch:
         description: >
