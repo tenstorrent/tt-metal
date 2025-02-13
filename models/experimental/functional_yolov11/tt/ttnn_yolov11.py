@@ -357,15 +357,9 @@ class Attention:
         qkv = self.qkv(device, x)  # [1, 1, 49[64], 256]
         qkv = ttnn.sharded_to_interleaved(qkv, memory_config=ttnn.L1_MEMORY_CONFIG)
         qkv = ttnn.permute(qkv, (0, 3, 1, 2))  # [1,256,1,49]
-        print("before qkv details", qkv.shape, qkv.layout, qkv.dtype)
-        # qkv = ttnn.to_torch(qkv)
-        # qkv = ttnn.from_torch(
-        #     qkv, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG
-        # )
         qkv = ttnn.to_layout(qkv, layout=ttnn.ROW_MAJOR_LAYOUT)
         qkv = ttnn.to_dtype(qkv, ttnn.bfloat16)
         qkv = ttnn.to_layout(qkv, layout=ttnn.TILE_LAYOUT)
-        print("after qkv details", qkv.shape, qkv.layout, qkv.dtype)
         qkv = ttnn.reshape(
             qkv, (batch_size, self.num_heads, self.key_dim * 2 + self.head_dim, qkv.shape[-1])
         )  # [1,2,128,49]
@@ -386,10 +380,10 @@ class Attention:
         v = ttnn.reshape(v, (1, 1, (v.shape[0] * v.shape[1] * v.shape[2]), v.shape[3]))  # [1,1,128, 49[64]]
         v = ttnn.permute(v, (0, 1, 3, 2))
         x2 = self.pe(device=device, x=v)
-        x2 = ttnn.sharded_to_interleaved(x2, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # x2 = ttnn.sharded_to_interleaved(x2, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        x = x1 + x2
-
+        # x = x1 + x2
+        x = ttnn.add(x1, x2, memory_config=x2.memory_config())
         x = self.proj(device=device, x=x)
         ttnn.deallocate(x1)
         ttnn.deallocate(qkv)
@@ -446,11 +440,13 @@ class PSABlock:
     def __call__(self, device, x):
         x1 = x
         x = self.attn(device, x)
-        x = x1 + x
+        # x = x1 + x
+        x = ttnn.add(x1, x, memory_config=x.memory_config())
         x1 = x
         x = self.ffn_conv1(device, x)
         x = self.ffn_conv2(device, x)
-        return x + x1
+        x = ttnn.add(x, x1, memory_config=x1.memory_config())
+        return x
 
 
 class C2PSA:
@@ -555,7 +551,8 @@ class Detect:
         y3_reshaped = ttnn.reshape(y3, (y3.shape[0], y3.shape[2], y3.shape[-1]))  # 0.993
 
         # y_all = [y1_reshaped, y2_reshaped, y3_reshaped]
-        y = ttnn.concat((y1_reshaped, y2_reshaped, y3_reshaped), dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)  # 0.998
+        y = ttnn.concat((y1, y2, y3), dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)  # 0.998
+        y = ttnn.squeeze(y, dim=0)
         ya, yb = y[:, :, :64], y[:, :, 64:144]  # 0.991, 0.97
         ttnn.deallocate(y1)
         ttnn.deallocate(y2)
@@ -566,19 +563,22 @@ class Detect:
         ttnn.deallocate(x4)
         ttnn.deallocate(x5)
         ttnn.deallocate(x6)
-        ttnn.deallocate(y1_reshaped)
-        ttnn.deallocate(y2_reshaped)
-        ttnn.deallocate(y3_reshaped)
+        # ttnn.deallocate(y1_reshaped)
+        # ttnn.deallocate(y2_reshaped)
+        # ttnn.deallocate(y3_reshaped)
         ttnn.deallocate(y)
         ya = ttnn.reallocate(ya)
         yb = ttnn.reallocate(yb)
-        ya = ttnn.permute(ya, (0, 2, 1))
-        print("before reshape", ya.shape, ya.layout, ya.memory_config(), ya.dtype)
-        ya = ttnn.reshape(ya, (ya.shape[0], 4, 16, ya.shape[2]))
-        ya = ttnn.permute(ya, (0, 2, 1, 3))  # 0.991
-        ya = ttnn.to_layout(ya, ttnn.TILE_LAYOUT)
-        ya = ttnn.softmax(ya, dim=1)
-        ya = ttnn.permute(ya, (0, 2, 3, 1))
+        # ya = ttnn.permute(ya, (0, 2, 1))
+        # print("before reshape", ya.shape, ya.layout, ya.memory_config(), ya.dtype)
+        # ya = ttnn.reshape(ya, (ya.shape[0], 4, 16, ya.shape[2]))
+        # ya = ttnn.permute(ya, (0, 2, 1, 3))  # 0.991
+        # ya = ttnn.to_layout(ya, ttnn.TILE_LAYOUT)
+        # ya = ttnn.softmax(ya, dim=1)
+        # ya = ttnn.permute(ya, (0, 2, 3, 1))
+        ya = ttnn.reshape(ya, (ya.shape[0], y.shape[1], 4, 16))
+        ya = ttnn.softmax(ya, dim=-1)
+        ya = ttnn.permute(ya, (0, 2, 1, 3))
         c = self.dfl(ya)  # 0.968
         ttnn.deallocate(ya)
         c = ttnn.sharded_to_interleaved(c, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -587,11 +587,13 @@ class Detect:
         c = ttnn.permute(c, (0, 3, 1, 2))
         c = ttnn.reshape(c, (c.shape[0], 1, 4, int(c.shape[3] / 4)))
         c = ttnn.reshape(c, (c.shape[0], c.shape[1] * c.shape[2], c.shape[3]))
+        # c = ttnn.reshape(c,(c.shape[0],c.shape[1],4,int(c.shape[2] / 4)))
+        # c = ttnn.squeeze(c,dim=0)
         c1, c2 = c[:, :2, :], c[:, 2:4, :]
 
         anchor, strides = self.anchors, self.strides
-        anchor = ttnn.to_memory_config(anchor, memory_config=ttnn.L1_MEMORY_CONFIG)
-        strides = ttnn.to_memory_config(strides, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # anchor = ttnn.to_memory_config(anchor, memory_config=ttnn.L1_MEMORY_CONFIG)
+        # strides = ttnn.to_memory_config(strides, memory_config=ttnn.L1_MEMORY_CONFIG)
         c1 = ttnn.to_layout(c1, layout=ttnn.TILE_LAYOUT)
         c2 = ttnn.to_layout(c2, layout=ttnn.TILE_LAYOUT)
 
