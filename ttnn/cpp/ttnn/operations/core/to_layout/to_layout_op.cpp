@@ -93,8 +93,16 @@ Tensor to_layout_impl(
     auto tensor = tensor_arg;
     const auto tile = tensor.get_tensor_spec().tile();
     auto output_shape = tensor_arg.get_logical_shape();
+
     auto output_memory_config =
         memory_config.value_or(ttnn::get_memory_config(tensor).value_or(ttnn::DRAM_MEMORY_CONFIG));
+    if (memory_config.has_value() && tensor.is_sharded()) {
+        output_memory_config = memory_config.value();
+        if ((output_memory_config == ttnn::DRAM_MEMORY_CONFIG && ttnn::get_memory_config(tensor)->is_l1()) ||
+            (output_memory_config == ttnn::L1_MEMORY_CONFIG && ttnn::get_memory_config(tensor)->is_dram())) {
+            tensor = ttnn::to_memory_config(tensor, output_memory_config);
+        }
+    }
 
     TensorSpec tile_spec(
         tensor_arg.get_logical_shape(),
@@ -141,17 +149,11 @@ Tensor to_layout_impl(
                 !dtype.has_value() || dtype.value() == tensor_arg.dtype(),
                 "dtype cannot be different from tensor dtype when converting to ROW_MAJOR_LAYOUT on device!");
 
-            if (tensor.is_sharded()) {
-                const auto memory_config = tensor.memory_config();
-                output_memory_config =
-                    tt::tt_metal::MemoryConfig{memory_config.memory_layout, memory_config.buffer_type};
-            }
             Shape output_tensor_end(SmallVector<uint32_t>(tensor.logical_shape().rank(), 0));
             int logical_rank = tensor.get_logical_shape().rank();
             for (int index = -1; index >= -logical_rank; --index) {
                 output_tensor_end[index] = tensor.get_logical_shape()[index] - 1;
             }
-
             tensor =
                 ttnn::untilize_with_unpadding(tensor, output_tensor_end, output_memory_config, use_multicore_untilize);
             return ttnn::reshape(tensor, ttnn::Shape{output_shape});
