@@ -18,4 +18,4 @@ jobs:
     uses: ./.github/workflows/perf-device-models-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact-profiler.outputs.ci-build-docker-image }}
-      artifact-name: ${{ needs.build-artifact-profiler.outputs.artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
