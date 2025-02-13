@@ -1,0 +1,64 @@
+name: Mirror Fork Branch to Origin
+on:
+  workflow_dispatch:
+    inputs:
+      fork_repo:
+        description: 'Full name of the fork repository (e.g., user/repo)'
+        required: true
+      branch:
+        description: 'Branch name in the fork to mirror'
+        required: true
+      target_branch:
+        description: >
+          Target branch name in origin (optional). If not provided, the branch will be named
+          `mirror/<fork_owner>/<branch>`.
+        required: false
+
+jobs:
+  mirror-fork-branch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout base repository
+        uses: actions/checkout@v4
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add fork remote and fetch branch
+        run: |
+          echo "Adding remote for fork: ${{ github.event.inputs.fork_repo }}"
+          # If the remote already exists, ignore the error.
+          git remote add fork https://github.com/${{ github.event.inputs.fork_repo }}.git || echo "Remote 'fork' already exists"
+          echo "Fetching branch: ${{ github.event.inputs.branch }}"
+          git fetch fork ${{ github.event.inputs.branch }}
+
+      - name: Create or update local branch from fork branch
+        id: create_branch
+        run: |
+          # Determine the target branch name.
+          if [ -n "${{ github.event.inputs.target_branch }}" ]; then
+            TARGET_BRANCH="${{ github.event.inputs.target_branch }}"
+          else
+            FORK_OWNER=$(echo "${{ github.event.inputs.fork_repo }}" | cut -d'/' -f1)
+            TARGET_BRANCH="mirror/${FORK_OWNER}/${{ github.event.inputs.branch }}"
+          fi
+          echo "Using target branch: $TARGET_BRANCH"
+
+          # Check if the branch already exists locally.
+          if git show-ref --verify --quiet "refs/heads/$TARGET_BRANCH"; then
+            echo "Branch '$TARGET_BRANCH' exists locally. Updating with latest commits from fork."
+            git checkout "$TARGET_BRANCH"
+            git reset --hard "fork/${{ github.event.inputs.branch }}"
+          else
+            echo "Branch '$TARGET_BRANCH' does not exist locally. Creating it from fork branch."
+            git checkout -b "$TARGET_BRANCH" "fork/${{ github.event.inputs.branch }}"
+          fi
+          echo "::set-output name=target_branch::$TARGET_BRANCH"
+
+      - name: Push branch to origin
+        run: |
+          TARGET_BRANCH="${{ steps.create_branch.outputs.target_branch }}"
+          echo "Pushing branch '$TARGET_BRANCH' to origin"
+          git push origin "$TARGET_BRANCH" --force
