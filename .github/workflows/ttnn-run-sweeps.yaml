@@ -352,9 +352,12 @@ on:
           - eltwise.binary.multiply.multiply_forge
           - eltwise.binary.multiply.multiply_llama
           - eltwise.binary.multiply.mul_no_act_llama
+          - eltwise.binary.multiply.multiply_ng_survey
           - eltwise.binary.div.div
           - eltwise.binary.div.div_tensor_pytorch2
           - eltwise.binary.div.div_forge
+          - eltwise.binary.div.div_ng_survey
+          - eltwise.binary.bias_gelu.bias_gelu_ng_survey
           - eltwise.binary.div_no_nan.div_no_nan
           - eltwise.binary.logical_or.logical_or_
           - eltwise.binary.logical_or.logical_or
@@ -381,6 +384,7 @@ on:
           - eltwise.binary.rpow.rpow_sharded
           - eltwise.binary.squared_difference.squared_difference
           - eltwise.binary.squared_difference_output.squared_difference_output
+          - eltwise.binary.squared_difference.squared_difference_ng_survey
           - eltwise.binary.scatter.scatter_forge
           - eltwise.binary.bcast.bcast_h_sharded
           - eltwise.binary.bcast.bcast
