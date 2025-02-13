@@ -7,6 +7,8 @@
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
 #include <tt_align.hpp>
 
+#include "tt_cluster.hpp"
+
 namespace tt::tt_metal {
 
 namespace event_dispatch {

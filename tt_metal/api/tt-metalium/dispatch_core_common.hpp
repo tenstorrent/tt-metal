@@ -9,6 +9,8 @@
 #include "data_types.hpp"
 #include "reflection.hpp"
 
+#include <umd/device/tt_core_coordinates.h>  // CoreType
+
 namespace tt::tt_metal {
 
 enum DispatchWorkerType : uint32_t {

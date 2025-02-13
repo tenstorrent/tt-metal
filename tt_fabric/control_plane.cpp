@@ -6,6 +6,8 @@
 #include "control_plane.hpp"
 #include <queue>
 
+#include "tt_cluster.hpp"
+
 namespace tt::tt_fabric {
 
 // Get the physical chip ids for a mesh

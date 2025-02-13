@@ -9,6 +9,8 @@
 #include <tt-metalium/command_queue_interface.hpp>
 #include <tt-metalium/dispatch_settings.hpp>
 
+#include "tt_cluster.hpp"
+
 namespace tt::tt_metal {
 namespace buffer_dispatch {
 

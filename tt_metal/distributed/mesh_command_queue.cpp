@@ -14,6 +14,7 @@
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
 
+#include "tt_cluster.hpp"
 namespace tt::tt_metal::distributed {
 
 struct MeshReadEventDescriptor {
