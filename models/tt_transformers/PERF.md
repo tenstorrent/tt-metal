@@ -116,3 +116,201 @@ This configuration uses bfp4 MLP FF1+FF3 for all models. **Batch_size=32 and pre
 | Llama3.1-70B   | TG     |               |               |
 | Qwen2.5-7B     | N300   |               |               |
 | Qwen2.5-72B    | T3K    |               |               |
+
+## LlamaOptimizations.ff1_3_bfp4_lofi_ff2_bfp4_lofi
+
+| Model | Device | Top-1 (%) | Top-5 (%) | Speed (t/s/u) |
+|-------|--------|-----------|-----------|---------------|
+| 1b    | N150   | 0         | 0         | 0             |
+| 1b    | N300   | 84        | 98        | 58.1          |
+| 1b    | T3K    | N/A       | N/A       | N/A           |
+| 1b    | TG     | N/A       | N/A       | N/A           |
+| 3b    | N150   | N/A       | N/A       | N/A           |
+| 3b    | N300   | N/A       | N/A       | N/A           |
+| 3b    | T3K    | N/A       | N/A       | N/A           |
+| 3b    | TG     | N/A       | N/A       | N/A           |
+| 8b    | N150   | N/A       | N/A       | N/A           |
+| 8b    | N300   | N/A       | N/A       | N/A           |
+| 8b    | T3K    | N/A       | N/A       | N/A           |
+| 8b    | TG     | N/A       | N/A       | N/A           |
+| 11b   | N300   | N/A       | N/A       | N/A           |
+| 11b   | T3K    | N/A       | N/A       | N/A           |
+| 11b   | TG     | N/A       | N/A       | N/A           |
+| 70b   | T3K    | N/A       | N/A       | N/A           |
+| 70b   | TG     | N/A       | N/A       | N/A           |
+
+## LlamaOptimizations.ff1_3_bfp4_lofi_ff2_bfp8_hifi2
+
+| Model | Device | Top-1 (%) | Top-5 (%) | Speed (t/s/u) |
+|-------|--------|-----------|-----------|---------------|
+| 1b    | N150   | 0         | 0         | 0             |
+| 1b    | N300   | 87        | 98        | 55.8          |
+| 1b    | T3K    | N/A       | N/A       | N/A           |
+| 1b    | TG     | N/A       | N/A       | N/A           |
+| 3b    | N150   | N/A       | N/A       | N/A           |
+| 3b    | N300   | N/A       | N/A       | N/A           |
+| 3b    | T3K    | N/A       | N/A       | N/A           |
+| 3b    | TG     | N/A       | N/A       | N/A           |
+| 8b    | N150   | N/A       | N/A       | N/A           |
+| 8b    | N300   | N/A       | N/A       | N/A           |
+| 8b    | T3K    | N/A       | N/A       | N/A           |
+| 8b    | TG     | N/A       | N/A       | N/A           |
+| 11b   | N300   | N/A       | N/A       | N/A           |
+| 11b   | T3K    | N/A       | N/A       | N/A           |
+| 11b   | TG     | N/A       | N/A       | N/A           |
+| 70b   | T3K    | N/A       | N/A       | N/A           |
+| 70b   | TG     | N/A       | N/A       | N/A           |
+
+## LlamaOptimizations.ff1_3_bfp4_lofi_ff2_bf16_hifi4
+
+| Model | Device | Top-1 (%) | Top-5 (%) | Speed (t/s/u) |
+|-------|--------|-----------|-----------|---------------|
+| 1b    | N150   | 0         | 0         | 0             |
+| 1b    | N300   | 84        | 98        | 53.0          |
+| 1b    | T3K    | N/A       | N/A       | N/A           |
+| 1b    | TG     | N/A       | N/A       | N/A           |
+| 3b    | N150   | N/A       | N/A       | N/A           |
+| 3b    | N300   | N/A       | N/A       | N/A           |
+| 3b    | T3K    | N/A       | N/A       | N/A           |
+| 3b    | TG     | N/A       | N/A       | N/A           |
+| 8b    | N150   | N/A       | N/A       | N/A           |
+| 8b    | N300   | N/A       | N/A       | N/A           |
+| 8b    | T3K    | N/A       | N/A       | N/A           |
+| 8b    | TG     | N/A       | N/A       | N/A           |
+| 11b   | N300   | N/A       | N/A       | N/A           |
+| 11b   | T3K    | N/A       | N/A       | N/A           |
+| 11b   | TG     | N/A       | N/A       | N/A           |
+| 70b   | T3K    | N/A       | N/A       | N/A           |
+| 70b   | TG     | N/A       | N/A       | N/A           |
+
+## LlamaOptimizations.ff1_3_bfp8_hifi2_ff2_bfp4_lofi
+
+| Model | Device | Top-1 (%) | Top-5 (%) | Speed (t/s/u) |
+|-------|--------|-----------|-----------|---------------|
+| 1b    | N150   | 0         | 0         | 0             |
+| 1b    | N300   | 86        | 98        | 56.9          |
+| 1b    | T3K    | N/A       | N/A       | N/A           |
+| 1b    | TG     | N/A       | N/A       | N/A           |
+| 3b    | N150   | N/A       | N/A       | N/A           |
+| 3b    | N300   | N/A       | N/A       | N/A           |
+| 3b    | T3K    | N/A       | N/A       | N/A           |
+| 3b    | TG     | N/A       | N/A       | N/A           |
+| 8b    | N150   | N/A       | N/A       | N/A           |
+| 8b    | N300   | N/A       | N/A       | N/A           |
+| 8b    | T3K    | N/A       | N/A       | N/A           |
+| 8b    | TG     | N/A       | N/A       | N/A           |
+| 11b   | N300   | N/A       | N/A       | N/A           |
+| 11b   | T3K    | N/A       | N/A       | N/A           |
+| 11b   | TG     | N/A       | N/A       | N/A           |
+| 70b   | T3K    | N/A       | N/A       | N/A           |
+| 70b   | TG     | N/A       | N/A       | N/A           |
+
+## LlamaOptimizations.ff1_3_bfp8_hifi2_ff2_bfp8_hifi2
+
+| Model | Device | Top-1 (%) | Top-5 (%) | Speed (t/s/u) |
+|-------|--------|-----------|-----------|---------------|
+| 1b    | N150   | 0         | 0         | 0             |
+| 1b    | N300   | 86        | 99        | 56.3          |
+| 1b    | T3K    | N/A       | N/A       | N/A           |
+| 1b    | TG     | N/A       | N/A       | N/A           |
+| 3b    | N150   | N/A       | N/A       | N/A           |
+| 3b    | N300   | N/A       | N/A       | N/A           |
+| 3b    | T3K    | N/A       | N/A       | N/A           |
+| 3b    | TG     | N/A       | N/A       | N/A           |
+| 8b    | N150   | N/A       | N/A       | N/A           |
+| 8b    | N300   | N/A       | N/A       | N/A           |
+| 8b    | T3K    | N/A       | N/A       | N/A           |
+| 8b    | TG     | N/A       | N/A       | N/A           |
+| 11b   | N300   | N/A       | N/A       | N/A           |
+| 11b   | T3K    | N/A       | N/A       | N/A           |
+| 11b   | TG     | N/A       | N/A       | N/A           |
+| 70b   | T3K    | N/A       | N/A       | N/A           |
+| 70b   | TG     | N/A       | N/A       | N/A           |
+
+## LlamaOptimizations.ff1_3_bfp8_hifi2_ff2_bf16_hifi4
+
+| Model | Device | Top-1 (%) | Top-5 (%) | Speed (t/s/u) |
+|-------|--------|-----------|-----------|---------------|
+| 1b    | N150   | 0         | 0         | 0             |
+| 1b    | N300   | 89        | 99        | 53.7          |
+| 1b    | T3K    | N/A       | N/A       | N/A           |
+| 1b    | TG     | N/A       | N/A       | N/A           |
+| 3b    | N150   | N/A       | N/A       | N/A           |
+| 3b    | N300   | N/A       | N/A       | N/A           |
+| 3b    | T3K    | N/A       | N/A       | N/A           |
+| 3b    | TG     | N/A       | N/A       | N/A           |
+| 8b    | N150   | N/A       | N/A       | N/A           |
+| 8b    | N300   | N/A       | N/A       | N/A           |
+| 8b    | T3K    | N/A       | N/A       | N/A           |
+| 8b    | TG     | N/A       | N/A       | N/A           |
+| 11b   | N300   | N/A       | N/A       | N/A           |
+| 11b   | T3K    | N/A       | N/A       | N/A           |
+| 11b   | TG     | N/A       | N/A       | N/A           |
+| 70b   | T3K    | N/A       | N/A       | N/A           |
+| 70b   | TG     | N/A       | N/A       | N/A           |
+
+## LlamaOptimizations.ff1_3_bf16_hifi4_ff2_bfp4_lofi
+
+| Model | Device | Top-1 (%) | Top-5 (%) | Speed (t/s/u) |
+|-------|--------|-----------|-----------|---------------|
+| 1b    | N150   | 0         | 0         | 0             |
+| 1b    | N300   | 85        | 98        | 51.6          |
+| 1b    | T3K    | N/A       | N/A       | N/A           |
+| 1b    | TG     | N/A       | N/A       | N/A           |
+| 3b    | N150   | N/A       | N/A       | N/A           |
+| 3b    | N300   | N/A       | N/A       | N/A           |
+| 3b    | T3K    | N/A       | N/A       | N/A           |
+| 3b    | TG     | N/A       | N/A       | N/A           |
+| 8b    | N150   | N/A       | N/A       | N/A           |
+| 8b    | N300   | N/A       | N/A       | N/A           |
+| 8b    | T3K    | N/A       | N/A       | N/A           |
+| 8b    | TG     | N/A       | N/A       | N/A           |
+| 11b   | N300   | N/A       | N/A       | N/A           |
+| 11b   | T3K    | N/A       | N/A       | N/A           |
+| 11b   | TG     | N/A       | N/A       | N/A           |
+| 70b   | T3K    | N/A       | N/A       | N/A           |
+| 70b   | TG     | N/A       | N/A       | N/A           |
+
+## LlamaOptimizations.ff1_3_bf16_hifi4_ff2_bfp8_hifi2
+
+| Model | Device | Top-1 (%) | Top-5 (%) | Speed (t/s/u) |
+|-------|--------|-----------|-----------|---------------|
+| 1b    | N150   | 0         | 0         | 0             |
+| 1b    | N300   | 88        | 98        | 53.0          |
+| 1b    | T3K    | N/A       | N/A       | N/A           |
+| 1b    | TG     | N/A       | N/A       | N/A           |
+| 3b    | N150   | N/A       | N/A       | N/A           |
+| 3b    | N300   | N/A       | N/A       | N/A           |
+| 3b    | T3K    | N/A       | N/A       | N/A           |
+| 3b    | TG     | N/A       | N/A       | N/A           |
+| 8b    | N150   | N/A       | N/A       | N/A           |
+| 8b    | N300   | N/A       | N/A       | N/A           |
+| 8b    | T3K    | N/A       | N/A       | N/A           |
+| 8b    | TG     | N/A       | N/A       | N/A           |
+| 11b   | N300   | N/A       | N/A       | N/A           |
+| 11b   | T3K    | N/A       | N/A       | N/A           |
+| 11b   | TG     | N/A       | N/A       | N/A           |
+| 70b   | T3K    | N/A       | N/A       | N/A           |
+| 70b   | TG     | N/A       | N/A       | N/A           |
+
+## LlamaOptimizations.ff1_3_bf16_hifi4_ff2_bf16_hifi4
+
+| Model | Device | Top-1 (%) | Top-5 (%) | Speed (t/s/u) |
+|-------|--------|-----------|-----------|---------------|
+| 1b    | N150   | 0         | 0         | 0             |
+| 1b    | N300   | 90        | 99        | 50.7          |
+| 1b    | T3K    | N/A       | N/A       | N/A           |
+| 1b    | TG     | N/A       | N/A       | N/A           |
+| 3b    | N150   | N/A       | N/A       | N/A           |
+| 3b    | N300   | N/A       | N/A       | N/A           |
+| 3b    | T3K    | N/A       | N/A       | N/A           |
+| 3b    | TG     | N/A       | N/A       | N/A           |
+| 8b    | N150   | N/A       | N/A       | N/A           |
+| 8b    | N300   | N/A       | N/A       | N/A           |
+| 8b    | T3K    | N/A       | N/A       | N/A           |
+| 8b    | TG     | N/A       | N/A       | N/A           |
+| 11b   | N300   | N/A       | N/A       | N/A           |
+| 11b   | T3K    | N/A       | N/A       | N/A           |
+| 11b   | TG     | N/A       | N/A       | N/A           |
+| 70b   | T3K    | N/A       | N/A       | N/A           |
+| 70b   | TG     | N/A       | N/A       | N/A           |

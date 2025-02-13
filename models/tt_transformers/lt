@@ -481,6 +481,9 @@ def main(stdscr):
                         if command_input == "vision":
                             command_input = "vision-mlp,vision-attn,vision-block,vision-xfmr,vision-xattn,vision-xblock,vision-conv,vision-class,vision-tile-pos,vision-pos,vision-encoder,vision-text-xfmr,vision-vision-xfmr"
 
+                        if command_input == "precision":
+                            command_input = "accuracy,demo,accuracy-acc,demo-acc,accuracy-precision_ff1_3_bfp4_lofi_ff2_bfp4_lofi,accuracy-precision_ff1_3_bfp4_lofi_ff2_bfp8_hifi2,accuracy-precision_ff1_3_bfp4_lofi_ff2_bf16_hifi4,accuracy-precision_ff1_3_bfp8_hifi2_ff2_bfp4_lofi,accuracy-precision_ff1_3_bfp8_hifi2_ff2_bfp8_hifi2,accuracy-precision_ff1_3_bfp8_hifi2_ff2_bf16_hifi4,accuracy-precision_ff1_3_bf16_hifi4_ff2_bfp4_lofi,accuracy-precision_ff1_3_bf16_hifi4_ff2_bfp8_hifi2,accuracy-precision_ff1_3_bf16_hifi4_ff2_bf16_hifi4,demo-precision_ff1_3_bfp4_lofi_ff2_bfp4_lofi,demo-precision_ff1_3_bfp4_lofi_ff2_bfp8_hifi2,demo-precision_ff1_3_bfp4_lofi_ff2_bf16_hifi4,demo-precision_ff1_3_bfp8_hifi2_ff2_bfp4_lofi,demo-precision_ff1_3_bfp8_hifi2_ff2_bfp8_hifi2,demo-precision_ff1_3_bfp8_hifi2_ff2_bf16_hifi4,demo-precision_ff1_3_bf16_hifi4_ff2_bfp4_lofi,demo-precision_ff1_3_bf16_hifi4_ff2_bfp8_hifi2,demo-precision_ff1_3_bf16_hifi4_ff2_bf16_hifi4"
+
                         # Parse models, devices, and commands
                         models = parse_list(model_input)
                         devices = parse_list(device_input)
@@ -873,6 +876,24 @@ def run_entry_command(entry, screen_lock, output_entries, screen_needs_update):
         "model": "pytest models/tt_transformers/tests/test_model.py -k 'performance-256 and full'",
         "model-quick": "pytest models/tt_transformers/tests/test_model.py -k 'performance-256 and quick'",
         "model-prefill": "pytest models/tt_transformers/tests/test_model_prefill.py -k performance-4096",
+        "accuracy-precision_ff1_3_bfp4_lofi_ff2_bfp4_lofi": "pytest models/tt_transformers/tests/test_accuracy.py -k 'attention-precision_ff1_3_bfp4_lofi_ff2_bfp4_lofi and file'",
+        "accuracy-precision_ff1_3_bfp4_lofi_ff2_bfp8_hifi2": "pytest models/tt_transformers/tests/test_accuracy.py -k 'attention-precision_ff1_3_bfp4_lofi_ff2_bfp8_hifi2 and file'",
+        "accuracy-precision_ff1_3_bfp4_lofi_ff2_bf16_hifi4": "pytest models/tt_transformers/tests/test_accuracy.py -k 'attention-precision_ff1_3_bfp4_lofi_ff2_bf16_hifi4 and file'",
+        "accuracy-precision_ff1_3_bfp8_hifi2_ff2_bfp4_lofi": "pytest models/tt_transformers/tests/test_accuracy.py -k 'attention-precision_ff1_3_bfp8_hifi2_ff2_bfp4_lofi and file'",
+        "accuracy-precision_ff1_3_bfp8_hifi2_ff2_bfp8_hifi2": "pytest models/tt_transformers/tests/test_accuracy.py -k 'attention-precision_ff1_3_bfp8_hifi2_ff2_bfp8_hifi2 and file'",
+        "accuracy-precision_ff1_3_bfp8_hifi2_ff2_bf16_hifi4": "pytest models/tt_transformers/tests/test_accuracy.py -k 'attention-precision_ff1_3_bfp8_hifi2_ff2_bf16_hifi4 and file'",
+        "accuracy-precision_ff1_3_bf16_hifi4_ff2_bfp4_lofi": "pytest models/tt_transformers/tests/test_accuracy.py -k 'attention-precision_ff1_3_bf16_hifi4_ff2_bfp4_lofi and file'",
+        "accuracy-precision_ff1_3_bf16_hifi4_ff2_bfp8_hifi2": "pytest models/tt_transformers/tests/test_accuracy.py -k 'attention-precision_ff1_3_bf16_hifi4_ff2_bfp8_hifi2 and file'",
+        "accuracy-precision_ff1_3_bf16_hifi4_ff2_bf16_hifi4": "pytest models/tt_transformers/tests/test_accuracy.py -k 'attention-precision_ff1_3_bf16_hifi4_ff2_bf16_hifi4 and file'",
+        "demo-precision_ff1_3_bfp4_lofi_ff2_bfp4_lofi": "pytest models/tt_transformers/demo/simple_text_demo.py -k 'precision_ff1_3_bfp4_lofi_ff2_bfp4_lofi and batch-1'",
+        "demo-precision_ff1_3_bfp4_lofi_ff2_bfp8_hifi2": "pytest models/tt_transformers/demo/simple_text_demo.py -k 'precision_ff1_3_bfp4_lofi_ff2_bfp8_hifi2 and batch-1'",
+        "demo-precision_ff1_3_bfp4_lofi_ff2_bf16_hifi4": "pytest models/tt_transformers/demo/simple_text_demo.py -k 'precision_ff1_3_bfp4_lofi_ff2_bf16_hifi4 and batch-1'",
+        "demo-precision_ff1_3_bfp8_hifi2_ff2_bfp4_lofi": "pytest models/tt_transformers/demo/simple_text_demo.py -k 'precision_ff1_3_bfp8_hifi2_ff2_bfp4_lofi and batch-1'",
+        "demo-precision_ff1_3_bfp8_hifi2_ff2_bfp8_hifi2": "pytest models/tt_transformers/demo/simple_text_demo.py -k 'precision_ff1_3_bfp8_hifi2_ff2_bfp8_hifi2 and batch-1'",
+        "demo-precision_ff1_3_bfp8_hifi2_ff2_bf16_hifi4": "pytest models/tt_transformers/demo/simple_text_demo.py -k 'precision_ff1_3_bfp8_hifi2_ff2_bf16_hifi4 and batch-1'",
+        "demo-precision_ff1_3_bf16_hifi4_ff2_bfp4_lofi": "pytest models/tt_transformers/demo/simple_text_demo.py -k 'precision_ff1_3_bf16_hifi4_ff2_bfp4_lofi and batch-1'",
+        "demo-precision_ff1_3_bf16_hifi4_ff2_bfp8_hifi2": "pytest models/tt_transformers/demo/simple_text_demo.py -k 'precision_ff1_3_bf16_hifi4_ff2_bfp8_hifi2 and batch-1'",
+        "demo-precision_ff1_3_bf16_hifi4_ff2_bf16_hifi4": "pytest models/tt_transformers/demo/simple_text_demo.py -k 'precision_ff1_3_bf16_hifi4_ff2_bf16_hifi4 and batch-1'",
         # Vision tests (require 11B weights)
         "vision-mlp": "pytest models/tt_transformers/tests/multimodal/test_image_mlp.py",
         "vision-attn": "pytest models/tt_transformers/tests/multimodal/test_image_attention.py",
@@ -1217,7 +1238,7 @@ def get_help_text(current_line, num_input_fields, num_output_entries):
     elif current_line <= num_input_fields - 1:
         return "Enter: Next field | ↑↓: Navigate fields | Esc: Exit"
     else:
-        return "Enter: View log | Backspace/x: Cancel entry | X: Cancel all | r: Restart entry | p: Reparse log | ↑↓: Navigate entries | Esc: Exit"
+        return "Enter: View log | Backspace/x: Cancel entry | X: Cancel all | r: Restart entry | p: Reparse log | m: Export markdown | ↑↓: Navigate entries | Esc: Exit"
 
 
 def cancel_entry(entry):
@@ -1241,6 +1262,7 @@ def export_results_to_markdown(output_entries, stdscr):
     # Initialize ordered lists to maintain entry order
     perf_entries = []
     acc_entries = []
+    precision_entries = {}
 
     # Collect results from entries in their original order
     for entry in output_entries:
@@ -1290,6 +1312,32 @@ def export_results_to_markdown(output_entries, stdscr):
                         existing_entry[4] = ttft
                 else:
                     acc_entries.append([key, top1, top5, speed or "N/A", ttft])
+                    
+            elif entry.command_name.startswith('demo-precision'):
+                # get speed from demo-precision entries
+                speed = entry.speed
+                ttft = entry.ttft
+
+                setting = entry.command_name[len('demo-precision'):]
+                if setting not in precision_entries:
+                    precision_entries[setting] = {key: ['N/A', 'N/A', speed or 'N/A', ttft]}
+                else:
+                    precision_entries[setting][key][-1] = speed or 'N/A'
+                    precision_entries[setting][key][-2] = ttft
+
+            elif entry.command_name.startswith('accuracy-precision'):
+                # get accuracy from accuracy-precision entries
+                top1, top5 = "N/A", "N/A"
+                if entry.pcc:
+                    match = re.match(r"(\d+)\s*\|\s*(\d+)", entry.pcc)
+                    if match:
+                        top1, top5 = match.group(1), match.group(2)
+
+                setting = entry.command_name[len('accuracy-precision'):]
+                if setting not in precision_entries:
+                    precision_entries[setting] = {key: [top1, top5, 'N/A']}
+                else:
+                    precision_entries[setting][key][1:3] = [top1, top5]
 
     # Create markdown content
     markdown_lines = [
@@ -1335,15 +1383,43 @@ def export_results_to_markdown(output_entries, stdscr):
         (model, device), top1, top5, speed, ttft = entry
         markdown_lines.append(f"| {fullname[model]} | {device} | {top1} | {top5} | {speed} | {ttft} |")
 
+    # add precision tables
+    for setting, entries in precision_entries.items():
+        markdown_lines.extend(
+            [
+                "",
+                f"## LlamaOptimizations.{setting}",
+                "",
+                "| Model | Device | Top-1 (%) | Top-5 (%) | Speed (t/s/u) |",
+                "|-------|--------|-----------|-----------|---------------|",
+            ]
+        )
+        for key, entry in entries.items():
+            model, device = key
+            top1, top5, speed = entry
+            markdown_lines.append(f"| {model} | {device} | {top1} | {top5} | {speed} |")
+
     # Write to PERF.md
     with open("PERF.md", "w") as f:
         f.write("\n".join(markdown_lines) + "\n")
 
     # Clear screen and show message
     stdscr.clear()
-    stdscr.addstr(0, 0, "\n".join(markdown_lines))
-    stdscr.addstr(len(markdown_lines) + 2, 0, f"Table written to {os.path.abspath('PERF.md')}")
-    stdscr.addstr(len(markdown_lines) + 3, 0, "Press any key to return...")
+
+    # display 'PERF.md' using less
+    # Save current terminal state
+    curses.def_prog_mode()
+    # Exit curses temporarily
+    curses.endwin()
+    # Run less command
+    os.system(f"less -R PERF.md")
+    # Resume curses
+    curses.reset_prog_mode()
+    stdscr.refresh()
+
+    # display helpful message at the bottom of the screen
+    stdscr.addstr(0, 0, f"Table written to {os.path.abspath('PERF.md')}")
+    stdscr.addstr(1, 0, "Press any key to return...")
     stdscr.refresh()
 
     # Temporarily make getch() blocking
