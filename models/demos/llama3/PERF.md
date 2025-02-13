@@ -1,6 +1,6 @@
 # Llama 3 model performance and accuracy
 
-Performance collected from [demo/demo.py](demo/demo.py) and accuracy collected from [tests/test_llama_accuracy.py](tests/test_llama_accuracy.py). You can generate this table by running these tests with the `lt` tool (tell it to run `table`) and pressing `m` whilst in the results section to export to markdown.
+Performance collected from [demo/demo.py](demo/demo.py) and accuracy collected from [tests/test_llama_accuracy.py](tests/test_llama_accuracy.py). You can generate this table by running these tests with the `lt` tool (tell it to run `table` or `precision`) and pressing `m` whilst in the results section to export to markdown.
 
 Note that `test_llama_accuracy.py` parses the below to determine expected values +- 0.5.
 
