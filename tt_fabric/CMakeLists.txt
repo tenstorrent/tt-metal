@@ -9,18 +9,12 @@ target_sources(
         mesh_graph.cpp
 )
 
-target_include_directories(
-    tt_fabric
-    PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}
-        ${PROJECT_SOURCE_DIR}/tt_metal/api/tt-metalium
-)
+target_include_directories(tt_fabric PRIVATE .)
 
 target_link_libraries(
     tt_fabric
     PRIVATE
         Metalium::Metal
-        Metalium::Metal::LLRT
         umd::device
         metal_common_libs
         magic_enum

@@ -15,8 +15,6 @@
 #include "kernel_config/eth_router.hpp"
 #include "kernel_config/eth_tunneler.hpp"
 
-#include "tt_cluster.hpp"
-
 namespace tt::tt_metal {
 
 // For readablity, unset = x = -1

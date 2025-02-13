@@ -12,14 +12,11 @@
 #include "logger.hpp"
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/test_common.hpp>
 #include <tt-metalium/rtoptions.hpp>
 #include <tt-metalium/metal_soc_descriptor.h>
 #include <tt-metalium/event.hpp>
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/device.hpp>
-
-#include "tt_cluster.hpp"
 
 constexpr uint32_t DEFAULT_ITERATIONS = 1000;
 constexpr uint32_t DEFAULT_WARMUP_ITERATIONS = 2;

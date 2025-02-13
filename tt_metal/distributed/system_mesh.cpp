@@ -7,8 +7,6 @@
 #include "umd/device/types/cluster_descriptor_types.h"
 #include "tt_metal/distributed/coordinate_translation.hpp"
 
-#include "tt_cluster.hpp"
-
 namespace tt::tt_metal::distributed {
 
 class SystemMesh::Impl {

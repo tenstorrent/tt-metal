@@ -18,8 +18,6 @@
 #include <hal.hpp>
 #include <tt_align.hpp>
 
-#include "tt_cluster.hpp"
-
 namespace tt::tt_metal {
 
 namespace v1 {

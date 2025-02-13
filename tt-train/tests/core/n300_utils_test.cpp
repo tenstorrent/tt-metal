@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
-#include <umd/device/tt_cluster_descriptor.h>
 
 #include <core/ttnn_all_includes.hpp>
 #include <core/xtensor_utils.hpp>
@@ -14,9 +13,8 @@
 #include "core/tt_tensor_utils.hpp"
 
 auto check_board_is_n300() {
-    return tt_ClusterDescriptor::create()->get_board_type(0) == BoardType::N300;
+    return tt::Cluster::instance().get_board_type(0) == BoardType::N300;
 }
-
 class N300UtilsTest : public ::testing::Test {
 protected:
     void SetUp() override {

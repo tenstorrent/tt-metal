@@ -82,7 +82,6 @@ target_link_libraries(
 
 set(LLRT_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/llrt.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/core_descriptor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/rtoptions.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tlb_config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tt_cluster.cpp
@@ -106,7 +105,6 @@ target_link_libraries(
         Tracy::TracyClient
         nlohmann_json::nlohmann_json
         Reflect::Reflect
-        yaml-cpp::yaml-cpp
         magic_enum
         span
         common

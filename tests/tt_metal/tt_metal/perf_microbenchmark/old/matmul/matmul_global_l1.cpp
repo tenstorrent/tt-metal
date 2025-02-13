@@ -12,7 +12,6 @@
 #include <tt-metalium/test_tiles.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/test_common.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "dprint_server.hpp"
