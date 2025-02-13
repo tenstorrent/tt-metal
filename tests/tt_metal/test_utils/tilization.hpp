@@ -52,7 +52,7 @@ std::vector<T> untilize(std::vector<T> data, int rows, int cols) {
     for (auto r = 0; r < num_tiles_r; r++) {
         for (auto i = 0; i < TileHeight; i++) {
             for (auto c = 0; c < num_tiles_c; c++) {
-                // Note: the only difference with tilize - switched src and dst indecies
+                // Note: the only difference with tilize - switched src and dst indices
                 size_t src_idx = (r * elements_in_tile * num_tiles_c) + (c * elements_in_tile) + (i * TileWidth);
                 size_t dst_idx = (r * elements_in_tile * num_tiles_c) + (i * num_tiles_c * TileWidth) + (c * TileWidth);
                 std::memcpy(&result[dst_idx], &data[src_idx], TileWidth * sizeof(T));

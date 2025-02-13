@@ -203,7 +203,7 @@ inline std::vector<T> untilize_nchw(
     for (auto hs = 0; hs < H; hs += tile_H) {           // iterate over h with stride 32
         for (auto ws = 0; ws < W; ws += tile_W) {       // iterate over w with stride 32
             for (auto ht = 0; ht < tile_H; ht++) {      // hs + ht = h
-                // Note: the only difference with tilize_nchw - switched src and dst indecies
+                // Note: the only difference with tilize_nchw - switched src and dst indices
                 size_t dst_idx = (hs + ht) * W + ws;
                 size_t src_idx = hs * W + (ws * tile_H) + (ht * tile_W);
                 std::memcpy(&result[dst_idx], &in[src_idx], tile_W * sizeof(T));
