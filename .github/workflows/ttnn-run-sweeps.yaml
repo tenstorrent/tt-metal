@@ -321,6 +321,7 @@ on:
           - eltwise.binary.add.add_different_memory_configs
           - eltwise.binary.add.add_forge
           - eltwise.binary.add.add_llama
+          - eltwise.binary.add.add_ng_survey
           - eltwise.binary.atan2.atan2
           - eltwise.binary.atan2.atan2_sharded
           - eltwise.unary.gtz.gtz
@@ -343,6 +344,7 @@ on:
           - eltwise.unary_complex.angle_bw.angle_bw
           - eltwise.unary_complex.conj_bw
           - eltwise.binary.subtract.subtract
+          - eltwise.binary.subtract.subtract_ng_survey
           - eltwise.binary.subtract.subtract_tensor_pytorch2
           - eltwise.binary.subtract.subtract_forge
           - eltwise.binary.multiply.multiply
