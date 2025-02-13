@@ -5,6 +5,7 @@
 // clang-format off
 #include "dataflow_api.h"
 #include "tt_fabric/hw/inc/tt_fabric.h"
+#include "tt_fabric/hw/inc/tt_fabric_status.h"
 #include "debug/dprint.h"
 // clang-format on
 
@@ -18,20 +19,6 @@ constexpr uint32_t kernel_status_buf_size_bytes = get_compile_time_arg_val(4);
 constexpr uint32_t timeout_cycles = get_compile_time_arg_val(5);
 uint32_t sync_val;
 uint32_t router_mask;
-
-constexpr uint32_t PACKET_QUEUE_STAUS_MASK = 0xabc00000;
-constexpr uint32_t PACKET_QUEUE_TEST_STARTED = PACKET_QUEUE_STAUS_MASK | 0x0;
-constexpr uint32_t PACKET_QUEUE_TEST_PASS = PACKET_QUEUE_STAUS_MASK | 0x1;
-constexpr uint32_t PACKET_QUEUE_TEST_TIMEOUT = PACKET_QUEUE_STAUS_MASK | 0xdead0;
-constexpr uint32_t PACKET_QUEUE_TEST_BAD_HEADER = PACKET_QUEUE_STAUS_MASK | 0xdead1;
-constexpr uint32_t PACKET_QUEUE_TEST_DATA_MISMATCH = PACKET_QUEUE_STAUS_MASK | 0x3;
-
-// indexes of return values in test results buffer
-constexpr uint32_t PQ_TEST_STATUS_INDEX = 0;
-constexpr uint32_t PQ_TEST_WORD_CNT_INDEX = 2;
-constexpr uint32_t PQ_TEST_CYCLES_INDEX = 4;
-constexpr uint32_t PQ_TEST_ITER_INDEX = 6;
-constexpr uint32_t PQ_TEST_MISC_INDEX = 16;
 
 // careful, may be null
 tt_l1_ptr uint32_t* const kernel_status = reinterpret_cast<tt_l1_ptr uint32_t*>(kernel_status_buf_addr);
@@ -436,11 +423,11 @@ void kernel_main() {
 
     tt_fabric_init();
 
-    write_kernel_status(kernel_status, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_STARTED);
-    write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff000000);
-    write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX + 1, 0xbb000000);
-    write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX + 2, 0xAABBCCDD);
-    write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX + 3, 0xDDCCBBAA);
+    write_kernel_status(kernel_status, TT_FABRIC_STATUS_INDEX, TT_FABRIC_STATUS_STARTED);
+    write_kernel_status(kernel_status, TT_FABRIC_MISC_INDEX, 0xff000000);
+    write_kernel_status(kernel_status, TT_FABRIC_MISC_INDEX + 1, 0xbb000000);
+    write_kernel_status(kernel_status, TT_FABRIC_MISC_INDEX + 2, 0xAABBCCDD);
+    write_kernel_status(kernel_status, TT_FABRIC_MISC_INDEX + 3, 0xDDCCBBAA);
 
     zero_l1_buf((tt_l1_ptr uint32_t*)&gk_info->gk_msg_buf, FVCC_BUF_SIZE_BYTES);
     zero_l1_buf((tt_l1_ptr uint32_t*)socket_info, sizeof(socket_info_t));
@@ -477,7 +464,7 @@ void kernel_main() {
                 gk_msg_buf_advance_rdptr((ctrl_chan_msg_buf*)msg_buf);
                 loop_count = 0;
             } else {
-                write_kernel_status(kernel_status, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_BAD_HEADER);
+                write_kernel_status(kernel_status, TT_FABRIC_STATUS_INDEX, TT_FABRIC_STATUS_BAD_HEADER);
                 return;
             }
         }
@@ -498,11 +485,11 @@ void kernel_main() {
 
     DPRINT << "Gatekeeper messages processed " << total_messages_procesed << ENDL();
 
-    write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff000002);
+    write_kernel_status(kernel_status, TT_FABRIC_MISC_INDEX, 0xff000002);
 
-    write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff000003);
+    write_kernel_status(kernel_status, TT_FABRIC_MISC_INDEX, 0xff000003);
 
-    write_kernel_status(kernel_status, PQ_TEST_STATUS_INDEX, PACKET_QUEUE_TEST_PASS);
+    write_kernel_status(kernel_status, TT_FABRIC_STATUS_INDEX, TT_FABRIC_STATUS_PASS);
 
-    write_kernel_status(kernel_status, PQ_TEST_MISC_INDEX, 0xff00005);
+    write_kernel_status(kernel_status, TT_FABRIC_MISC_INDEX, 0xff00005);
 }

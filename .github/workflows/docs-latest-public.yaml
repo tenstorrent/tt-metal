@@ -83,3 +83,9 @@ jobs:
         continue-on-error: true
         with:
             name: github-pages
+      - name: Check the docs deployment is up
+        if: ${{ github.ref == 'refs/heads/main' }}
+        # TODO: Enhance this by looping over all the published versions in docs/published_versions.json
+        run: |
+          set -eu # basic shell hygiene
+          curl --fail -LI https://docs.tenstorrent.com/tt-metal/latest/ttnn/index.html -o /dev/null -s

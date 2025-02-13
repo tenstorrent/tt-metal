@@ -12,7 +12,6 @@
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "cpp/ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
-#include "ttnn/operations/data_movement/data_transfer/data_transfer.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "device/reshape_rm_op.hpp"
