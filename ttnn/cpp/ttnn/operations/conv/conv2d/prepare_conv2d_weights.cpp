@@ -714,7 +714,6 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
         }
     }
     weight_tensor_ = ttnn::pad(
-        0,
         weight_tensor_,
         weights_channels_padded_shape.to_array_4D(),
         tt::tt_metal::Array4D({0, 0, 0, 0}),
@@ -753,7 +752,6 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
                     {output_num_cores_channels, out_channels_per_core, in_channels_padded * window_h, window_w}));
 
             weight_tensor_ = ttnn::pad(
-                0,
                 weight_tensor_,
                 tt::tt_metal::Array4D(
                     {output_num_cores_channels, rounded_weight_block_width, in_channels_padded * window_h, window_w}),
@@ -775,7 +773,6 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
             ttnn::Shape(
                 {1, input_num_cores_channels, in_channels_per_core * window_h * window_w, final_out_channels_padded}));
         weight_tensor_ = ttnn::pad(
-            0,
             weight_tensor_,
             tt::tt_metal::Array4D(
                 {1, input_num_cores_channels, rounded_weight_block_height, final_out_channels_padded}),
@@ -799,7 +796,6 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
             weight_tensor_ = ttnn::reshape(
                 weight_tensor_, ttnn::Shape({1, window_h, window_w * in_channels_padded, out_channels_padded}));
             weight_tensor_ = ttnn::pad(
-                0,
                 weight_tensor_,
                 tt::tt_metal::Array4D({1, window_h, weight_block_h_datums, out_channels_padded}),
                 tt::tt_metal::Array4D({0, 0, 0, 0}),
