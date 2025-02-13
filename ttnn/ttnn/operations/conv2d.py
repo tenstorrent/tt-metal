@@ -13,12 +13,7 @@ from ttnn.device import (
     is_grayskull,
     is_wormhole_b0,
 )
-import copy
 from enum import Enum
-
-
-def _nearest_32(x):
-    return math.ceil(x / 32) * 32
 
 
 Conv2dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
@@ -341,9 +336,9 @@ def conv2d_dram_slice(
         conv_output_height = get_conv_output_dim(input_height, kernel_size[0], stride[0], padding[0], dilation[0])
 
     # Prepare conv config for slices
-    # conv2d_config_for_slices = copy.deepcopy(conv_config) # this is impossible
-    conv2d_config_for_slices = conv_config  # todo, this ruins the original config
+    conv2d_config_for_slices = ttnn.Conv2dConfig(conv_config)
     # conv2d_config_for_slices.output_layout = ttnn.ROW_MAJOR_LAYOUT, cant set RM, leads to OOM
+
     conv_output_tensor = None
     conv_prepared_device_weight = None
     conv_prepared_device_bias = None
@@ -414,12 +409,12 @@ def conv2d_dram_slice(
             compute_config=compute_config,
             memory_config=memory_config,  # should be ttnn.DRAM_MEMORY_CONFIG, but fails on PCC with that
         )
-        # # temp workaround
-        # print(f"PRE conv_output_slice.memory_config()={conv_output_slice.memory_config()}")
+        # temp workaround - pending fix #17706
         # to_layout with memory_config can override memory_config if sharded and on untilize with unpadding path
         # also if to_layout is called with memory_config, it will cause PCC on the case with a 56 output channels
         conv_output_slice = ttnn.to_memory_config(conv_output_slice, ttnn.DRAM_MEMORY_CONFIG)
         conv_output_slice = ttnn.to_layout(conv_output_slice, ttnn.ROW_MAJOR_LAYOUT)
+        # conv_output_slice = ttnn.to_layout(conv_output_slice, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
         if dram_slice == DramSlice.Width:
             # As it is width sliced, restore it back to [N, H, W, C] format to allow mid results concat

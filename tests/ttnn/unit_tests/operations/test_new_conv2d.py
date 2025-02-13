@@ -2927,21 +2927,20 @@ def test_dram_input_mm_conv(device, tiled_input, input_on_device):
 @pytest.mark.parametrize(
     "batch, groups, input_channels, output_channels, input_height, input_width, num_input_slices, dram_slice, weights_dtype, activations_dtype, kernel, stride, padding, dilation, input_channels_alignment, act_block_h_override, act_block_w_div, deallocate_activation, math_fidelity, fp32_accum, packer_l1_acc, math_approx_mode, dst_full_sync_en",
     (
-        #
-        (1, 1, 10, 64, 4096, 512, 2, DramSlice.Height, ttnn.bfloat8_b, ttnn.bfloat8_b, (4, 4), (2, 2), (1, 1), (1, 1), 16, 32*64, 1, True , ttnn.MathFidelity.LoFi, True, False, True, False),
-        (1, 1, 64, 64, 2048, 256, 2, DramSlice.Height, ttnn.bfloat8_b, ttnn.bfloat8_b, (4, 4), (2, 2), (1, 1), (1, 1), 32, 32*16 , 1, False, ttnn.MathFidelity.LoFi, True, False, True, False),
-        (1, 1, 64, 64, 1024, 128, 1, DramSlice.Height, ttnn.bfloat8_b, ttnn.bfloat8_b, (4, 4), (2, 2), (1, 1), (1, 1), 32, 0 , 1, False, ttnn.MathFidelity.LoFi, True, False, True, False),
-        (1, 1, 64, 64, 512 , 64 , 1, DramSlice.Height, ttnn.bfloat8_b, ttnn.bfloat8_b, (4, 4), (2, 2), (1, 1), (1, 1), 32, 0 , 1, False, ttnn.MathFidelity.LoFi, True, False, True, False),
-        # TODO(mbezulj): to further optimize act_block_h_override
-        (1, 1, 4, 32, 1024, 1024, 2, DramSlice.Width, ttnn.bfloat8_b, ttnn.bfloat8_b, (5, 5), (1, 1), (0, 0), (1, 1), 16, 32*6, 1, True, ttnn.MathFidelity.LoFi, True, False, True, False),
-        (1, 1, 32, 48, 1020, 1020, 3, DramSlice.Width, ttnn.bfloat8_b, ttnn.bfloat8_b, (3, 3), (1, 1), (0, 0), (2, 2), 32, 32*16, 1, True, ttnn.MathFidelity.LoFi, True, False, True, False),
-        (1, 1, 48, 56, 1016, 1016, 4, DramSlice.Width, ttnn.bfloat8_b, ttnn.bfloat8_b, (3, 3), (1, 1), (0, 0), (4, 4), 32, 32*3, 1, True, ttnn.MathFidelity.LoFi, True, False, True, False),
-        (1, 1, 56, 64, 1008, 1008, 12, DramSlice.Width, ttnn.bfloat8_b, ttnn.bfloat8_b, (3, 3), (1, 1), (0, 0), (8, 8), 32, 0, 1, True, ttnn.MathFidelity.LoFi, True, False, True, False), # pcc if act_block_h_override, 6 slices ...
-        (1, 1, 64, 128, 992, 992, 5, DramSlice.Width, ttnn.bfloat8_b, ttnn.bfloat8_b, (2, 2), (1, 1), (0, 0), (1, 1), 32, 32*8, 1, True, ttnn.MathFidelity.LoFi, True, False, True, False),
+        pytest.param
+        (1, 1, 10, 64, 4096,  512,  2, DramSlice.Height, ttnn.bfloat8_b, ttnn.bfloat8_b, (4, 4), (2, 2), (1, 1), (1, 1), 16, 32*64, 1, True , ttnn.MathFidelity.LoFi, True, False, True, False, marks=pytest.mark.skipif(is_grayskull(), reason="Skipping on Grayskull")),
+        (1, 1, 64, 64, 2048,  256,  2, DramSlice.Height, ttnn.bfloat8_b, ttnn.bfloat8_b, (4, 4), (2, 2), (1, 1), (1, 1), 32, 32*16 , 1, False, ttnn.MathFidelity.LoFi, True, False, True, False),
+        (1, 1, 64, 64, 1024,  128,  1, DramSlice.Height, ttnn.bfloat8_b, ttnn.bfloat8_b, (4, 4), (2, 2), (1, 1), (1, 1), 32, 0 , 1, False, ttnn.MathFidelity.LoFi, True, False, True, False),
+        (1, 1, 64, 64,  512,   64,  1, DramSlice.Height, ttnn.bfloat8_b, ttnn.bfloat8_b, (4, 4), (2, 2), (1, 1), (1, 1), 32, 0 , 1, False, ttnn.MathFidelity.LoFi, True, False, True, False),
+        (1, 1,  4, 32, 1024, 1024,  2, DramSlice.Width,  ttnn.bfloat8_b, ttnn.bfloat8_b, (5, 5), (1, 1), (0, 0), (1, 1), 16, 32*6, 1, True, ttnn.MathFidelity.LoFi, True, False, True, False),
+        (1, 1, 32, 48, 1020, 1020,  3, DramSlice.Width,  ttnn.bfloat8_b, ttnn.bfloat8_b, (3, 3), (1, 1), (0, 0), (2, 2), 32, 32*16, 1, True, ttnn.MathFidelity.LoFi, True, False, True, False),
+        (1, 1, 48, 56, 1016, 1016,  4, DramSlice.Width,  ttnn.bfloat8_b, ttnn.bfloat8_b, (3, 3), (1, 1), (0, 0), (4, 4), 32, 32*3, 1, True, ttnn.MathFidelity.LoFi, True, False, True, False),
+        (1, 1, 56, 64, 1008, 1008, 12, DramSlice.Width,  ttnn.bfloat8_b, ttnn.bfloat8_b, (3, 3), (1, 1), (0, 0), (8, 8), 32, 0, 1, True, ttnn.MathFidelity.LoFi, True, False, True, False), # pcc if act_block_h_override, 6 slices ...
+        (1, 1, 64, 128, 992,  992,  5, DramSlice.Width,  ttnn.bfloat8_b, ttnn.bfloat8_b, (2, 2), (1, 1), (0, 0), (1, 1), 32, 32*8, 1, True, ttnn.MathFidelity.LoFi, True, False, True, False),
     ),
 )
-
 #fmt: on
+
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384*2}], indirect=True)
 def test_dram_slice_conv2d(
     device,
