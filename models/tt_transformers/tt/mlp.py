@@ -49,17 +49,15 @@ class MLP(LightweightModule):
             cache_file_name=cache_name(name),
         )
 
-        self.layer_settings = self.args.optimizations.layer_settings
-
         # Sharded weights
         w1_dims = (-1, -2) if args.is_galaxy else (-2, -1)
         w2_dims = (-2, -1) if args.is_galaxy else (-1, -2)
 
         self.w1 = as_sharded_tensor(
-            "w1_sharded", self.layer_settings["w1"]["dtype"], dim=w1_dim
+            "w1_sharded", self.model_config["FF1_3_DTYPE"], dim=w1_dim
         )  # bfp4 normally ok here but sub .99 pcc for llama 3.1 weights
-        self.w2 = as_sharded_tensor("w2_sharded", self.layer_settings["w2"]["dtype"], dim=w2_dim)
-        self.w3 = as_sharded_tensor("w3_sharded", self.layer_settings["w3"]["dtype"], dim=w1_dim)
+        self.w2 = as_sharded_tensor("w2_sharded", self.model_config["FF2_DTYPE"], dim=w2_dim)
+        self.w3 = as_sharded_tensor("w3_sharded", self.model_config["FF1_3_DTYPE"], dim=w1_dim)
 
     def forward(self, x: ttnn.Tensor, mode) -> ttnn.Tensor:
         """
@@ -93,11 +91,7 @@ class MLP(LightweightModule):
         w1_out = ttnn.linear(
             x,
             self.w1,
-            compute_kernel_config=(
-                self.args.compute_kernel_config_lofi
-                if self.four_bit_mlp
-                else self.args.compute_kernel_config_hifi2_fp16
-            ),
+            compute_kernel_config=self.model_config["FF1_3_COMPUTE_KERNEL_CFG"],
             core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_1 else None,
             dtype=ttnn.bfloat8_b if TG else ttnn.bfloat16,
             program_config=pc_1,
@@ -107,11 +101,7 @@ class MLP(LightweightModule):
         w3_out = ttnn.linear(
             x,
             self.w3,
-            compute_kernel_config=(
-                self.args.compute_kernel_config_lofi
-                if self.four_bit_mlp
-                else self.args.compute_kernel_config_hifi2_fp16
-            ),
+            compute_kernel_config=self.model_config["FF1_3_COMPUTE_KERNEL_CFG"],
             core_grid=None,  # FIXME: validate on TG ttnn.CoreGrid(y=8, x=8) if not pc_3 else None,
             dtype=ttnn.bfloat16,
             program_config=pc_3,
@@ -196,7 +186,7 @@ class MLP(LightweightModule):
         w2_out = ttnn.linear(
             w2_in,
             self.w2,
-            compute_kernel_config=self.layer_settings["w2"]["compute_kernel_config"],
+            compute_kernel_config=self.model_config["FF2_COMPUTE_KERNEL_CFG"],
             dtype=self.args.ccl_dtype if TG else ttnn.bfloat16,
             program_config=pc_2,
             memory_config=(

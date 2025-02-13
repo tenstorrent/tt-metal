@@ -35,72 +35,49 @@ from models.tt_transformers.tt.load_checkpoints import (
 )
 
 
-@dataclass
+class PrecisionSetting(Enum):
+    BFP4_LOFI = "bfp4_lofi"
+    BFP8_HIFI2 = "bfp8_hifi2"
+    BF16_HIFI4 = "bf16_hifi4"
+
+
+class LayerGroup(Enum):
+    FF1_FF3 = "ff1_3"
+    FF2 = "ff2"
+
+
 class ModelOptimizations:
-    def _default_layer_settings():
-        return {
-            "w1": {
-                "dtype": ttnn.bfloat8_b,
-                "compute_kernel_config": ttnn.WormholeComputeKernelConfig(
-                    math_fidelity=ttnn.MathFidelity.HiFi2,
-                    math_approx_mode=False,
-                    fp32_dest_acc_en=False,
-                    packer_l1_acc=True,
-                ),
-            },
-            "w2": {
-                "dtype": ttnn.bfloat8_b,
-                "compute_kernel_config": ttnn.WormholeComputeKernelConfig(
-                    math_fidelity=ttnn.MathFidelity.HiFi2,
-                    math_approx_mode=False,
-                    fp32_dest_acc_en=False,
-                    packer_l1_acc=True,
-                ),
-            },
-            "w3": {
-                "dtype": ttnn.bfloat8_b,
-                "compute_kernel_config": ttnn.WormholeComputeKernelConfig(
-                    math_fidelity=ttnn.MathFidelity.HiFi2,
-                    math_approx_mode=False,
-                    fp32_dest_acc_en=False,
-                    packer_l1_acc=True,
-                ),
-            },
-        }
-
-    layer_settings: dict = field(default_factory=_default_layer_settings)
-
     @classmethod
     def accuracy(cls, model_name):
         """Configuration optimized for accuracy
         Only 70B models uses bfp4 MLPs in this configuration
         """
         if model_name in ["Llama3.1-70B", "DeepSeek-R1-Distill-Llama-70B", "Qwen2.5-72B"]:
-            return ModelOptimizations.performance(model_name)
-
-        return cls()
+            inst = ModelOptimizations.performance(model_name)
+        else:
+            inst = cls()
+        inst.__name__ = "accuracy"
+        return inst
 
     @classmethod
     def performance(cls, model_name):
         """Configuration optimized for performance
         All models use bfp4 MLPs in this configuration
         """
-        inst = cls()
-        inst.layer_settings["w1"]["dtype"] = ttnn.bfloat4_b
-        inst.layer_settings["w1"]["compute_kernel_config"] = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=True,
-        )
-        inst.layer_settings["w3"]["dtype"] = ttnn.bfloat4_b
-        inst.layer_settings["w3"]["compute_kernel_config"] = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=True,
-        )
+        inst = cls({LayerGroup.FF1_FF3: PrecisionSetting.BFP4_LOFI})
+        inst.__name__ = "performance"
         return inst
+
+    def __init__(self, layer2precision: dict = None):
+        self.layer_settings = self._default_layer_settings()
+        self.layer_settings.update(layer2precision or {})
+        self.__name__ = "_".join([f"{k.value}_{v.value}" for k, v in self.layer_settings.items()])
+
+    def _default_layer_settings(self):
+        return {
+            LayerGroup.FF1_FF3: PrecisionSetting.BFP8_HIFI2,
+            LayerGroup.FF2: PrecisionSetting.BFP8_HIFI2,
+        }
 
 
 class CheckpointType(Enum):
@@ -369,8 +346,19 @@ class ModelArgs:
                 packer_l1_acc=False,
             )
 
+            # Configure data precision and math fidelity for kernels
             self.model_config["COMPUTE_KERNEL_CONFIG_HIFI2"] = self.compute_kernel_config_hifi2
+            precision_setting_lookup = {
+                PrecisionSetting.BFP4_LOFI: (ttnn.bfloat4_b, self.compute_kernel_config_lofi),
+                PrecisionSetting.BFP8_HIFI2: (ttnn.bfloat8_b, self.compute_kernel_config_hifi2),
+                PrecisionSetting.BF16_HIFI4: (ttnn.bfloat16, self.compute_kernel_config_hifi4),
+            }
+            for layer, precision in self.optimizations.layer_settings.items():
+                dtype, kernel_cfg = precision_setting_lookup[precision]
+                self.model_config[f"{layer.value.upper()}_DTYPE"] = dtype
+                self.model_config[f"{layer.value.upper()}_COMPUTE_KERNEL_CFG"] = kernel_cfg
 
+            # Create memory config for sharded tensors
             residual_grid = self.dram_shard_core_grid_for_k(self.dim // self.num_devices)
             self.model_config["DECODE_RESIDUAL_MEMCFG"] = (
                 ttnn.L1_MEMORY_CONFIG  # FIXME: when residual add support typecasting for sharded tensors
