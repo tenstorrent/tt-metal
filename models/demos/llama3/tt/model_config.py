@@ -1402,7 +1402,7 @@ class TtModelArgs:
             grid = ttnn.CoreGrid(x=grid.x, y=grid_y)
 
         per_core_m = m // tile_height
-        per_core_k = (self.find_largest_divisor(k // (self.tile_size * grid.num_cores)),)
+        per_core_k = self.find_largest_divisor(k // (self.tile_size * grid.num_cores))
         per_core_n = math.ceil(n / tile_width / grid.num_cores)
 
         if is_fp32_accumulate:
