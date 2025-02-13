@@ -25,7 +25,7 @@ def get_accuracy_thresholds(model_name: str, device_name: str, optimizations: Ll
     model_size = model_name.split("-")[1].lower()
 
     # Read PERF.md
-    perf_file = Path(__file__).parent.parent / "PERF_target.md"
+    perf_file = Path(__file__).parent.parent / "PERF.md"
     with open(perf_file, "r") as f:
         content = f.read()
 
