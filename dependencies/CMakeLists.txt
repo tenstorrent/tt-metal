@@ -8,6 +8,14 @@ set(CMAKE_CXX_CLANG_TIDY "")
 # Boost
 ############################################################################################################################
 
+function(ensureboosttarget boostTarget)
+    if(NOT TARGET Boost::${boostTarget})
+        add_library(Boost::${boostTarget} INTERFACE IMPORTED GLOBAL)
+        target_link_libraries(Boost::${boostTarget} INTERFACE Boost::headers)
+        message(STATUS "Defined Boost::${boostTarget} as an INTERFACE target.")
+    endif()
+endfunction()
+
 CPMAddPackage(
     NAME Boost
     VERSION 1.86.0
@@ -20,7 +28,13 @@ CPMAddPackage(
         "BOOST_SKIP_INSTALL_RULES ON"
         "BUILD_SHARED_LIBS OFF"
         "BOOST_INCLUDE_LIBRARIES core\\\;container\\\;smart_ptr\\\;interprocess"
+    FIND_PACKAGE_ARGUMENTS "CONFIG REQUIRED GLOBAL"
 )
+
+ensureboosttarget(core)
+ensureboosttarget(container)
+ensureboosttarget(smart_ptr)
+ensureboosttarget(interprocess)
 
 add_library(span INTERFACE)
 target_link_libraries(span INTERFACE Boost::core)
@@ -42,16 +56,8 @@ CPMAddPackage(
         "YAML_CPP_BUILD_TESTS OFF"
         "YAML_CPP_BUILD_TOOLS OFF"
         "YAML_BUILD_SHARED_LIBS OFF"
+    FIND_PACKAGE_ARGUMENTS "GLOBAL"
 )
-
-if(yaml-cpp_ADDED)
-    set_target_properties(
-        yaml-cpp
-        PROPERTIES
-            DEBUG_POSTFIX
-                ""
-    )
-endif()
 
 ############################################################################################################################
 # googletest
@@ -64,6 +70,7 @@ CPMAddPackage(
     VERSION 1.13.0
     OPTIONS
         "INSTALL_GTEST OFF"
+    FIND_PACKAGE_ARGUMENTS "GLOBAL"
 )
 
 if(googletest_ADDED)
@@ -85,13 +92,33 @@ endif()
 # magic_enum : https://github.com/Neargye/magic_enum
 ############################################################################################################################
 
-CPMAddPackage(NAME magic_enum GITHUB_REPOSITORY Neargye/magic_enum GIT_TAG v0.9.7)
+CPMAddPackage(NAME magic_enum GITHUB_REPOSITORY Neargye/magic_enum GIT_TAG v0.9.7 FIND_PACKAGE_ARGUMENTS "GLOBAL")
+
+if(magic_enum_ADDED)
+    # If CPM imports magic_enum, the target magic_enum::magic_enum won't exist
+    if(NOT TARGET magic_enum::magic_enum)
+        add_library(magic_enum::magic_enum ALIAS magic_enum)
+    endif()
+endif()
+
+# If find_package is used beneath the hood, the target magic_enum won't exist
+# tt-metal has been updated to ingest the target magic_enum::magic_enum, but UMD hasn't
+if(NOT TARGET magic_enum)
+    add_library(magic_enum ALIAS magic_enum::magic_enum)
+endif()
 
 ############################################################################################################################
 # fmt : https://github.com/fmtlib/fmt
 ############################################################################################################################
 
-CPMAddPackage(NAME fmt GITHUB_REPOSITORY fmtlib/fmt GIT_TAG 11.0.1 OPTIONS "CMAKE_MESSAGE_LOG_LEVEL NOTICE")
+CPMAddPackage(
+    NAME fmt
+    GITHUB_REPOSITORY fmtlib/fmt
+    GIT_TAG 11.0.1
+    OPTIONS
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+    FIND_PACKAGE_ARGUMENTS "GLOBAL"
+)
 
 ############################################################################################################################
 # range-v3 : https://github.com/ericniebler/range-v3
@@ -106,19 +133,34 @@ CPMAddPackage(
     OPTIONS
         "CMAKE_BUILD_TYPE Release"
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+    FIND_PACKAGE_ARGUMENTS "GLOBAL"
 )
 
 ############################################################################################################################
 # pybind11 : https://github.com/pybind/pybind11
 ############################################################################################################################
 
-CPMAddPackage(NAME pybind11 GITHUB_REPOSITORY pybind/pybind11 GIT_TAG v2.13.6 OPTIONS "CMAKE_MESSAGE_LOG_LEVEL NOTICE")
+CPMAddPackage(
+    NAME pybind11
+    GITHUB_REPOSITORY pybind/pybind11
+    GIT_TAG v2.13.6
+    OPTIONS
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+    FIND_PACKAGE_ARGUMENTS "GLOBAL"
+)
 
 ############################################################################################################################
 # nlohmann/json : https://github.com/nlohmann/json
 ############################################################################################################################
 
-CPMAddPackage(NAME json GITHUB_REPOSITORY nlohmann/json GIT_TAG v3.11.3 OPTIONS "CMAKE_MESSAGE_LOG_LEVEL NOTICE")
+CPMAddPackage(
+    NAME json
+    GITHUB_REPOSITORY nlohmann/json
+    GIT_TAG v3.11.3
+    OPTIONS
+        "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
+    FIND_PACKAGE_ARGUMENTS "GLOBAL"
+)
 
 ############################################################################################################################
 # xtensor : https://github.com/xtensor-stack/xtensor
@@ -131,6 +173,7 @@ CPMAddPackage(
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "XTL_ENABLE_TESTS OFF"
+    FIND_PACKAGE_ARGUMENTS "GLOBAL"
 )
 CPMAddPackage(
     NAME xtensor
@@ -139,6 +182,7 @@ CPMAddPackage(
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "XTENSOR_ENABLE_TESTS OFF"
+    FIND_PACKAGE_ARGUMENTS "GLOBAL"
 )
 CPMAddPackage(
     NAME xtensor-blas
@@ -147,6 +191,7 @@ CPMAddPackage(
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "XTENSOR_ENABLE_TESTS OFF"
+    FIND_PACKAGE_ARGUMENTS "GLOBAL"
 )
 
 ############################################################################################################################
@@ -161,6 +206,7 @@ CPMAddPackage(
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "BENCHMARK_USE_LIBCXX ${ENABLE_LIBCXX}"
         "BENCHMARK_ENABLE_TESTING OFF"
+    FIND_PACKAGE_ARGUMENTS "GLOBAL"
 )
 
 if(benchmark_ADDED)
@@ -182,6 +228,7 @@ CPMAddPackage(
     GIT_TAG v3.7.0
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE" # Taskflow's CMakeLists.txt is super noisy
+    FIND_PACKAGE_ARGUMENTS "GLOBAL"
 )
 add_library(Taskflow::Taskflow ALIAS Taskflow)
 
@@ -198,6 +245,7 @@ CPMAddPackage(
         "FLATBUFFERS_BUILD_TESTS OFF"
         "FLATBUFFERS_SKIP_MONSTER_EXTRA ON"
         "FLATBUFFERS_STRICT_MODE ON"
+    FIND_PACKAGE_ARGUMENTS "GLOBAL"
 )
 
 if(flatbuffers_ADDED)

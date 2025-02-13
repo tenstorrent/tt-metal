@@ -105,7 +105,7 @@ target_link_libraries(
         Tracy::TracyClient
         nlohmann_json::nlohmann_json
         Reflect::Reflect
-        magic_enum
+        magic_enum::magic_enum
         span
         common
 )
