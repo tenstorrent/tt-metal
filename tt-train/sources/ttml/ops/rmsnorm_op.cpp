@@ -27,9 +27,9 @@ autograd::TensorPtr rmsnorm(const autograd::TensorPtr &tensor, const autograd::T
     ttnn::Tensor squares = ttnn::square(tensor->get_value());
     std::array<uint32_t, 4> eps_shape = {1, 1, 1, 1};
     ttnn::Tensor eps_tensor = core::from_vector({epsilon}, core::create_shape(eps_shape), device);
-    ttnn::Tensor mean_of_squares = ttnn::mean(squares);
-    ttnn::Tensor mean_of_squares_plus_epsilon = ttnn::experimental::add(mean_of_squares, eps_tensor);
-    ttnn::Tensor rms_a = ttnn::sqrt(mean_of_squares_plus_epsilon);
+    ttnn::Tensor seq_means_of_squares = ttnn::mean(squares, /*dim_arg=*/-1, /*keep_dim=*/true); /* [N,C,H,1] */
+    ttnn::Tensor seq_means_of_squares_plus_epsilon = ttnn::experimental::add(seq_means_of_squares, eps_tensor);
+    ttnn::Tensor rms_a = ttnn::sqrt(seq_means_of_squares_plus_epsilon);
     ttnn::Tensor gamma_times_activations = ttnn::experimental::mul(gamma->get_value(), tensor->get_value());
     ttnn::Tensor out_tensor = ttnn::experimental::div(gamma_times_activations, rms_a);
 
