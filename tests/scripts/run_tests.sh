@@ -437,6 +437,8 @@ set_up_chdir() {
 
 main() {
     # Parse the arguments
+    docker=0
+
     while [[ $# -gt 0 ]]; do
         case $1 in
             --docker)
@@ -471,7 +473,6 @@ main() {
     done
 
     # Set default values if arguments are not provided
-    docker=0
     tt_arch=${tt_arch:-$default_tt_arch}
     dispatch_mode=${dispatch_mode:-$default_dispatch_mode}
     pipeline_type=${pipeline_type:-$default_pipeline_type}
