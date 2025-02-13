@@ -14,6 +14,7 @@ target_link_libraries(
         common
     PRIVATE
         Metalium::Metal::Common
+        Metalium::Metal::LLRT
         Tracy::TracyClient
         Taskflow::Taskflow
         TT::Metalium::HostDevCommon
