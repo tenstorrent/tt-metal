@@ -69,7 +69,10 @@ MorehSumOperation::spec_return_value_t MorehSumOperation::compute_output_specs(
     }
 
     const auto& input = tensor_args.input;
-    const auto& input_shape = input.get_logical_shape();
+    auto input_shape = input.get_logical_shape();
+    if (input_shape.rank() < 2) {
+        input_shape = input_shape.to_rank(2);
+    }
     const auto input_rank = input_shape.rank();
     const bool is_tile_dim = (operation_attributes.dim == input_rank - 1 || operation_attributes.dim == input_rank - 2);
     log_debug(

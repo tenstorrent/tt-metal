@@ -68,7 +68,7 @@ autograd::TensorPtr nll_loss(
     }
 
     auto* device = &autograd::ctx().get_device();
-    auto divisor = core::empty(ttnn::Shape({1}), device, prediction->get_value().memory_config());
+    auto divisor = core::empty(ttnn::Shape({1, 1}), device, prediction->get_value().memory_config());
 
     auto tensor_shape = prediction->get_value().get_logical_shape();
     uint32_t Ndim = tensor_shape[0] * tensor_shape[1] * tensor_shape[2];
