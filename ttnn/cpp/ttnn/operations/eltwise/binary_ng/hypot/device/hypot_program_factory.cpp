@@ -9,10 +9,10 @@
 #include "ttnn/operations/eltwise/binary_ng/device/binary_ng_utils.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 
-
 using namespace tt::tt_metal;
 
 namespace {
+
 namespace CMAKE_UNIQUE_NAMESPACE {
 
 using namespace ttnn::operations::binary_ng;
@@ -461,7 +461,7 @@ HypotNgDeviceOperation::HypotProgramFactory::cached_program_t HypotNgDeviceOpera
     // READER KERNEL
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/reader_interleaved_no_bcast.cpp",
+        get_kernel_file_path(kernel_config.reader_kernel, is_sfpu_op),
         all_device_cores,
         tt_metal::ReaderDataMovementConfig({a_is_dram, has_sharding}, std::move(reader_defines)));
 
@@ -479,7 +479,7 @@ HypotNgDeviceOperation::HypotProgramFactory::cached_program_t HypotNgDeviceOpera
 
     auto writer_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/writer_interleaved_no_bcast.cpp",
+        get_kernel_file_path(writer_kernel, is_sfpu_op),
         all_device_cores,
         tt_metal::WriterDataMovementConfig({b_is_dram, c_is_dram, has_sharding}, std::move(writer_defines)));
 
@@ -502,9 +502,19 @@ HypotNgDeviceOperation::HypotProgramFactory::cached_program_t HypotNgDeviceOpera
 
     compute_kernel_defines["BCAST_INPUT"] = kernel_config.bcast_input_str();
 
+    std::string compute_hypot_kernel_filepath;
+    if(kernel_config.compute_kernel == KernelName::ComputeNoBcast){
+        compute_hypot_kernel_filepath = "ttnn/cpp/ttnn/operations/eltwise/binary_ng/hypot/device/kernels/compute/eltwise_hypot_no_bcast.cpp";
+    }
+    else if(kernel_config.compute_kernel == KernelName::ComputeBcast){
+        compute_hypot_kernel_filepath = "ttnn/cpp/ttnn/operations/eltwise/binary_ng/hypot/device/kernels/compute/eltwise_hypot_bcast.cpp";
+    }
+    else{
+       TT_THROW("Unexpected KernelName encountered in hypot compute kernel !!");
+    }
     auto compute_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/eltwise/binary_ng/hypot/device/kernels/compute/eltwise_hypot_no_bcast.cpp",
+        compute_hypot_kernel_filepath,
         all_device_cores,
         tt_metal::ComputeConfig{
             .fp32_dest_acc_en = fp32_dest_acc_en,
