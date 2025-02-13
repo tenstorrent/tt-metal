@@ -20,7 +20,7 @@ from pathlib import Path
 def get_accuracy_thresholds(base_model_name: str, device_name: str, optimizations: ModelOptimizations):
     """Parse accuracy thresholds from PERF.md for the given model, optimization mode, and device."""
     # Read PERF.md
-    perf_file = Path(__file__).parent.parent / "PERF_target.md"
+    perf_file = Path(__file__).parent.parent / "PERF.md"
     with open(perf_file, "r") as f:
         content = f.read()
 
