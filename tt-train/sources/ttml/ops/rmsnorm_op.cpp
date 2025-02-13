@@ -65,11 +65,14 @@ autograd::TensorPtr rmsnorm(const autograd::TensorPtr &tensor, const autograd::T
         // want outer product tensor [B,N,S,C,C]
         // reshape to get [B,N,S,1,C], mul by its own transpose.
 
-        auto a_vectors = ttnn::reshape(a, ttnn::Shape{B, N, S, 1, C});
+        auto a_vectors = ttnn::reshape(a, ttnn::Shape{B, N, S, C, 1});
+        fmt::println("a_vectors shape: {}", a_vectors.logical_shape());
         auto outer = ttnn::matmul(a_vectors, a_vectors, /*transpose_a=*/false, /*transpose_b=*/true);
         auto desired_outer_shape = {B, N, S, C, C};
-        if (outer.logical_shape() != desired_outer_shape) {
-            throw std::runtime_error{"Expected outer product to be a tensor with shape [B,N,S,C,C]."};
+        auto outer_shape = outer.logical_shape();
+        if (outer_shape != desired_outer_shape) {
+            throw std::runtime_error{
+                fmt::format("Expected outer product to be a tensor with shape [B,N,S,C,C] but got {}.", outer_shape)};
         }
 
         auto ms_a = ttnn::square(rms_a);
