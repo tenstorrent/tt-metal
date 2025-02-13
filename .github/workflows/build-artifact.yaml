@@ -56,7 +56,7 @@ on:
       #  value: ${{ jobs.build-docker-image.outputs.ci-test-tag }}
       artifact-name:
         description: "Name of the published artifact"
-        value: ${{ steps.set_artifact_name.outputs.artifact_name }}
+        value: ${{ jobs.build-artifact.outputs.artifact_name }}
 
 
   workflow_dispatch:
@@ -110,6 +110,8 @@ jobs:
     runs-on:
       - build
       - in-service
+    outputs:
+      artifact_name: ${{ steps.set_artifact_name.outputs.artifact_name }}
     container:
       image: ${{ needs.build-docker-image.outputs.ci-build-tag }}
       env:
