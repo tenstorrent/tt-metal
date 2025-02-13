@@ -31,6 +31,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Debug trigger output
+        run: |
+          echo "Mirror Triggered: ${{ steps.mirror_check.outputs.triggered }}"
+          echo "Test Triggered: ${{ steps.test_check.outputs.triggered }}"
+
   mirror_fetch_pr_info:
     if: needs.detect_trigger.outputs.mirror_triggered == 'true'
     runs-on: ubuntu-latest    
