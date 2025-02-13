@@ -42,15 +42,28 @@ jobs:
   test:
     needs: detect_trigger
     if: needs.detect_trigger.outputs.test_triggered == 'true'
-    uses: ./.github/workflows/all-post-commit-workflows.yaml
+    runs-on: ubuntu-latest
+    outputs:
+      branch_name: ${{ steps.set_branch.outputs.branch_name }}
+    steps:
+      - name: Set branch name
+        id: set_branch
+        run: |
+          if [ "${{ github.event.pull_request.head.repo.full_name }}" != "${{ github.repository }}" ]; then
+            echo "branch_name=mirror/${{ github.event.pull_request.head.repo.owner.login }}/${{ github.event.pull_request.head.ref }}" >> $GITHUB_OUTPUT
+          else
+            echo "branch_name=${{ github.event.pull_request.head.ref }}" >> $GITHUB_OUTPUT
+          fi
+
+  run_tests:
+    needs: test
+    uses: ./.github/workflows/all-post-commit-tests.yml
     with:
       build-type: Release
-      # For PRs from a fork, run tests on the mirror branch in our repo;
-      # otherwise, run on the PR’s head branch.
-      branch: ${{ github.event.pull_request.head.repo.full_name != github.repository && 'mirror/' + github.event.pull_request.head.repo.owner.login + '/' + github.event.pull_request.head.ref || github.event.pull_request.head.ref }}
+      branch: ${{ needs.test.outputs.branch_name }}
 
   post_comment:
-    needs: [mirror, test]
+    needs: [mirror, run_tests]
     if: (needs.detect_trigger.outputs.test_triggered == 'true')
     runs-on: ubuntu-latest
     steps:
