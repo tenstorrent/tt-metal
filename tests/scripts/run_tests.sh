@@ -437,8 +437,13 @@ set_up_chdir() {
 
 main() {
     # Parse the arguments
+    docker=0
+
     while [[ $# -gt 0 ]]; do
         case $1 in
+            --docker)
+                docker=1
+                ;;
             --tt-arch)
                 tt_arch=$2
                 shift
@@ -488,7 +493,7 @@ main() {
 
     validate_and_set_env_vars "$tt_arch" "$dispatch_mode"
 
-    if [[ $pipeline_type != "eager_"* ]]; then
+    if [[ $docker -ne 1 &&  $pipeline_type != "eager_"* ]]; then
       set_up_chdir
     fi
 

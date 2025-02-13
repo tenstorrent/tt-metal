@@ -2,6 +2,8 @@
 # not be available during environment installation. We recommend setuptools
 # and wheel before installing this requirements.txt file.
 
+loguru
+
 # During dep resolution, black may install platformdirs >=4.0.0, which is
 # a breaking dependency for virtualenv installed by pre-commit. virtualenv
 # requires <4.0.0 platformdirs, so we're pinning platformdirs here
