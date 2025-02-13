@@ -109,4 +109,3 @@ jobs:
           issue: ${{ steps.pr.outputs.issue }}
           message: |
            ✨ A mirror branch has been created/updated for this PR: [`${{ steps.create_branch.outputs.target_branch }}`](https://github.com/${{ github.repository }}/tree/${{ steps.create_branch.outputs.target_branch }})
-
