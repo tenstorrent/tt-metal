@@ -30,7 +30,8 @@ Tensor BatchNorm::invoke(
     const std::optional<Tensor>& weight,
     const std::optional<Tensor>& bias,
     const std::optional<Tensor>& output,
-    const std::optional<MemoryConfig>& memory_config) {
+    const std::optional<MemoryConfig>& memory_config,
+    QueueId queue_id) {
     Tensor batch_mean = mean_NHW(input, memory_config);
     Tensor mean_sq = mean_NHW(ttnn::square(input, memory_config), memory_config);
     Tensor batch_var = ttnn::subtract(mean_sq, ttnn::square(batch_mean, memory_config), std::nullopt, memory_config);

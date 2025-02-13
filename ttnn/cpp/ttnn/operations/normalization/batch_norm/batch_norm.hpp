@@ -19,7 +19,8 @@ struct BatchNorm {
         const std::optional<Tensor>& weight = std::nullopt,
         const std::optional<Tensor>& bias = std::nullopt,
         const std::optional<Tensor>& output = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        QueueId queue_id = DefaultQueueId);
 };
 }  // namespace operations::normalization
 

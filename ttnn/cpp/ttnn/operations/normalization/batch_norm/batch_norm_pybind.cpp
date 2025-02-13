@@ -31,6 +31,7 @@ void bind_batch_norm_operation(pybind11::module& module) {
             training (bool, optional): Selection between training mode and inference (evaluation) mode. Defaults to `False` (Inference mode).
             output (ttnn.Tensor, optional): Preallocated output tensor to store batch norm result of shape `[N, C, H, W]`. Defaults to `None`.
             memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
+            queue_id (int, optional): command queue id. Defaults to 0.
 
 
         Returns:
@@ -75,8 +76,7 @@ void bind_batch_norm_operation(pybind11::module& module) {
             py::arg("weight") = std::nullopt,
             py::arg("bias") = std::nullopt,
             py::arg("output") = std::nullopt,
-            py::arg("memory_config") = std::nullopt
-
-        });
+            py::arg("memory_config") = std::nullopt,
+            py::arg("queue_id") = DefaultQueueId});
 }
 }  // namespace ttnn::operations::normalization::detail
