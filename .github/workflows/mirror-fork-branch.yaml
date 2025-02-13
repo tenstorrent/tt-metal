@@ -1,6 +1,18 @@
 name: Mirror Fork Branch to Origin
 
 on:
+  workflow_call:
+    inputs:
+      source:
+        description: 'Source in format <fork_owner>:<branch>'
+        required: true
+        type: string
+      target_branch:
+        description: >
+          Optional. Target branch name in origin. If not provided, the branch will be named
+          `mirror/<fork_owner>/<branch>`.
+        required: false
+        type: string
   workflow_dispatch:
     inputs:
       source:
