@@ -15,7 +15,6 @@
 #include "data_types.hpp"
 #include "program_device_map.hpp"
 #include "build.hpp"
-#include "tt_cluster.hpp"
 #include "hal.hpp"
 #include "command_queue_interface.hpp"
 #include "command_queue.hpp"

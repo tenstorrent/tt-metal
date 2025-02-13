@@ -20,6 +20,8 @@
 #include <tt_align.hpp>
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
 
+#include "tt_cluster.hpp"
+
 namespace tt::tt_metal {
 
 // assert here to avoid the need to include command_queue_interface.hpp in header

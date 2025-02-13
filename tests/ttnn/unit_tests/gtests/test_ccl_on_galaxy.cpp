@@ -13,6 +13,8 @@
 #include "ttnn/tensor/layout/tensor_layout.hpp"
 #include "ttnn_multi_command_queue_fixture.hpp"
 
+#include "tt_cluster.hpp"
+
 using namespace tt;
 using namespace tt_metal;
 

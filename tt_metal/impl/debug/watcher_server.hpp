@@ -6,6 +6,8 @@
 
 #include <device.hpp>
 
+struct metal_SocDescriptor;
+
 namespace tt {
 
 void watcher_init(tt_metal::IDevice* device);

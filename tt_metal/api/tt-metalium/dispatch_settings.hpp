@@ -7,11 +7,15 @@
 #include <cstdint>
 #include <magic_enum/magic_enum.hpp>
 #include <unordered_map>
+#include "dev_msgs.h"  // go_msg_t
 #include "hal.hpp"
-#include "tt_cluster.hpp"
 #include <tt-metalium/cq_commands.hpp>
 #include <utility>
 #include "umd/device/tt_core_coordinates.h"
+
+namespace tt {
+class Cluster;
+}
 
 namespace tt::tt_metal {
 
