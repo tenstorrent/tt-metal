@@ -57,7 +57,7 @@ jobs:
 
   run_tests:
     needs: test
-    uses: ./.github/workflows/all-post-commit-tests.yml
+    uses: ./.github/workflows/all-post-commit-workflows.yaml
     with:
       build-type: Release
       branch: ${{ needs.test.outputs.branch_name }}
