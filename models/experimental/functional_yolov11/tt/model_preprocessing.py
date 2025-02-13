@@ -39,8 +39,12 @@ def make_anchors(device, feats, strides, grid_cell_offset=0.5):
     b = torch.cat(stride_tensor).transpose(0, 1)
 
     return (
-        ttnn.from_torch(a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device),
-        ttnn.from_torch(b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device),
+        ttnn.from_torch(
+            a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+        ),
+        ttnn.from_torch(
+            b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+        ),
     )
 
 

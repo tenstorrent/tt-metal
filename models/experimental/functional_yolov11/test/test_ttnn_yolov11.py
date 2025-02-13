@@ -62,7 +62,7 @@ def attempt_load(weights, map_location=None):
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
 def test_yolov11(device, use_program_cache, reset_seeds):
-    torch_input, ttnn_input = create_yolov11_input_tensors(device, input_channels=3, input_height=224, input_width=224)
+    torch_input, ttnn_input = create_yolov11_input_tensors(device, input_channels=3, input_height=640, input_width=640)
 
     torch_model = attempt_load("yolov11n.pt", map_location="cpu")
     state_dict = torch_model.state_dict()
