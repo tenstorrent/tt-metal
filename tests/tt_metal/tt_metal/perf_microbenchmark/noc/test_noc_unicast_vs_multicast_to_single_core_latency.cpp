@@ -9,7 +9,6 @@
 #include <tt-metalium/device.hpp>
 #include "dprint_server.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
-#include "tt_cluster.hpp"
 
 using namespace tt;
 //
