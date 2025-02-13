@@ -34,7 +34,7 @@ jobs:
   mirror:
     needs: detect_trigger
     if: needs.detect_trigger.outputs.mirror_triggered == 'true'
-    uses: ./.github/workflows/mirror-branch-workflow.yml
+    uses: ./.github/workflows/mirror-fork-branch.yaml
     with:
       # Build the source input as "<fork_owner>:<branch>" using the PR head info.
       source: "${{ github.event.pull_request.head.repo.owner.login }}:${{ github.event.pull_request.head.ref }}"
@@ -42,7 +42,7 @@ jobs:
   test:
     needs: detect_trigger
     if: needs.detect_trigger.outputs.test_triggered == 'true'
-    uses: ./.github/workflows/all-post-commit-tests.yml
+    uses: ./.github/workflows/all-post-commit-workflows.yaml
     with:
       build-type: Release
       # For PRs from a fork, run tests on the mirror branch in our repo;
