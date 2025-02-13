@@ -1,4 +1,4 @@
-name: Manual Mirror Fork Branch to Origin
+name: Mirror Fork Branch to Origin
 
 on:
   workflow_dispatch:
