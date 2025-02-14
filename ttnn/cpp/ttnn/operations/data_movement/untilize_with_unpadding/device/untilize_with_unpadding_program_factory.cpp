@@ -649,7 +649,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_col_interleav
 }
 
 operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
-    const Tensor& a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en, bool enough_space_width) {
+    const Tensor& a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en) {
     tt::tt_metal::Program program{};
 
     tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.get_dtype());

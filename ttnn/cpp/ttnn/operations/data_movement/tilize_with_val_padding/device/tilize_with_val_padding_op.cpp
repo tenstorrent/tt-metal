@@ -98,8 +98,7 @@ operation::ProgramWithCallbacks TilizeWithValPadding::create_program(
         return detail::tilize_with_val_padding_single_core(input_tensor_a, output_tensor, this->pad_value);
     }
 
-    return detail::tilize_with_val_padding_multi_core_interleaved(
-        input_tensor_a, output_tensor, this->pad_value, this->enough_space_width);
+    return detail::tilize_with_val_padding_multi_core_interleaved(input_tensor_a, output_tensor, this->pad_value);
 }
 
 }  // namespace ttnn::operations::data_movement

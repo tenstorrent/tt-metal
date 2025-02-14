@@ -120,7 +120,7 @@ operation::ProgramWithCallbacks UntilizeWithUnpadding::create_program(
             input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en);
     }
     return detail::untilize_with_unpadding_multi_core_interleaved(
-        input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en, this->enough_space_width);
+        input_tensor_a, output_tensor, this->use_pack_untilize, this->fp32_dest_acc_en);
 }
 
 }  // namespace ttnn::operations::data_movement

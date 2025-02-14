@@ -234,7 +234,6 @@ operation::ProgramWithCallbacks tilize_with_val_padding_single_core(
 
 operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_block_interleaved(
     const Tensor& a, Tensor& output, const ttnn::PadValue pad_value) {
-    printf("executing block interleaved\n");
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
@@ -516,7 +515,7 @@ operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_block_interle
 }
 
 operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
-    const Tensor& a, Tensor& output, const ttnn::PadValue pad_value, bool enough_space_width) {
+    const Tensor& a, Tensor& output, const ttnn::PadValue pad_value) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());

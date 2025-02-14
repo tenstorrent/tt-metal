@@ -14,7 +14,7 @@ tt::tt_metal::operation::ProgramWithCallbacks tilize_with_val_padding_single_cor
     const Tensor& a, Tensor& output, const ttnn::PadValue pad_value);
 
 tt::tt_metal::operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_interleaved(
-    const Tensor& a, Tensor& output, const ttnn::PadValue pad_value, bool enough_space_width);
+    const Tensor& a, Tensor& output, const ttnn::PadValue pad_value);
 
 tt::tt_metal::operation::ProgramWithCallbacks tilize_with_val_padding_multi_core_sharded(
     const Tensor& a, Tensor& output, const ttnn::PadValue pad_value);
