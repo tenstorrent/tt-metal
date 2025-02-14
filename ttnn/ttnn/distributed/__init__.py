@@ -4,7 +4,6 @@
 
 # TODO: All of the TensorTo and MeshTo classes will be slowly cut out over the next few days
 from .distributed import (
-    MeshDevice,
     DispatchCoreType,
     TensorToMesh,
     ShardTensorToMesh,
