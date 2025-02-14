@@ -758,7 +758,11 @@ void py_module(py::module& module) {
     auto py_replicate_tensor_config = static_cast<py::class_<ReplicateTensor>>(module.attr("ShardTensor"));
     py_replicate_tensor_config.def(py::init<>())
         .def(py::init<int>(), py::arg("replication_factor") = 1)
+<<<<<<< HEAD
         .def_readwrite("shard_dimension", &ReplicateTensor::replication_factor)
+=======
+        .def_readwrite("shard_dimension", &ShardTensor::shard_dimension)
+>>>>>>> add configs to pybind
         .def("__eq__", [](const ReplicateTensor& a, const ReplicateTensor& b) {
             return a.replication_factor == b.replication_factor;
         });
@@ -767,6 +771,7 @@ void py_module(py::module& module) {
     py_shard_tensor_config.def(py::init<int>(), py::arg("shard_dimension"))
         .def_readwrite("shard_dimension", &ShardTensor::shard_dimension)
         .def("__eq__", [](const ShardTensor& a, const ShardTensor& b) { return a == b; });
+<<<<<<< HEAD
     auto py_shard_mesh = static_cast<py::class_<ShardMesh>>(module.attr("ShardMesh"));
     py_shard_mesh.def(py::init<>()).def_readwrite("y", &ShardMesh::y).def_readwrite("x", &ShardMesh::x);
     auto py_shard_tensor2d = static_cast<py::class_<ShardTensor2D>>(module.attr("ShardTensor2d"));
@@ -786,6 +791,19 @@ void py_module(py::module& module) {
     py_concat2d_config.def(py::init<int, int>(), py::arg("row_dim"), py::arg("col_dim"))
         .def_readwrite("row_dim", &Concat2dConfig::row_dim)
         .def_readwrite("col_dim", &Concat2dConfig::col_dim);
+=======
+
+    auto py_shard_mesh = static_cast<py::class_<ShardMesh>>(module.attr("ShardMesh"));
+    py_shard_mesh.def(py::init<>()).def_readwrite("y", &ShardMesh::y).def_readwrite("x", &ShardMesh::x);
+
+    auto py_shard_tensor2d = static_cast<py::class_<ShardTensor2D>>(module.attr("ShardTensor2D"));
+    py_shard_tensor2d.def(py::init<ShardMesh>(), py::arg("mesh"))
+        .def_readonly("shard_mesh", &ShardTensor2D::shard_mesh)
+        .def("__eq__", [](const ShardTensor2D& a, const ShardTensor2D& b) { return a == b; });
+
+    auto py_allgather_config = static_cast<py::class_<AllGatherTensor>>(module.attr("AllGatherTensor"));
+    .def(py::init<>()).def("__eq__", [](const AllGatherTensor& a, const AllGatherTensor& b) { return a == b; });
+>>>>>>> add configs to pybind
 
     module.def(
         "get_distributed_tensor_config",
@@ -799,6 +817,7 @@ void py_module(py::module& module) {
                 "item": "field",
             }
         )doc");
+<<<<<<< HEAD
     module.def(
         "get_shard2d_config",
         &get_shard2d_config,
@@ -821,6 +840,8 @@ void py_module(py::module& module) {
                 "col_dim": "field",
             }
     )doc");
+=======
+>>>>>>> add configs to pybind
     module.def(
         "get_device_tensor",
         py::overload_cast<const Tensor&, const IDevice*>(&ttnn::distributed::get_device_tensor),
@@ -960,7 +981,8 @@ void py_module(py::module& module) {
             return distribute_tensor(tensor, mapper, mesh_device);
         },
         py::arg("tensor"),
-        py::arg("mapper"));
+        py::arg("mapper"),
+        py::arg("mesh_device"));
     module.def(
         "aggregate_tensor",
         [](const Tensor& tensor, const MeshToTensor& composer) -> Tensor { return aggregate_tensor(tensor, composer); },
