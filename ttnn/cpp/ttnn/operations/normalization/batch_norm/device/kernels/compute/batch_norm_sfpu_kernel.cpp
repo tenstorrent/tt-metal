@@ -6,6 +6,7 @@
 #include "cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
+#include "debug/dprint.h"
 
 #include <cstdint>
 
@@ -178,6 +179,7 @@ void MAIN {
     uint32_t tile_start = get_arg_val<uint32_t>(2);
     constexpr uint32_t weight_has_value = get_compile_time_arg_val(0) == 1;
     constexpr uint32_t bias_has_value = get_compile_time_arg_val(1) == 1;
+    DPRINT << "compute kernel - 1" << ENDL();
 
     if (num_tiles == 0) {
         return;
@@ -239,5 +241,6 @@ void MAIN {
 
     constexpr uint32_t onetile = 1;
     constexpr int dst0 = 0;
+    DPRINT << "compute kernel - 2" << ENDL();
 }
 }  // namespace NAMESPACE

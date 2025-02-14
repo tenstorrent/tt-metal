@@ -45,6 +45,8 @@ void set_or_update_runtime_arguments(
 
     uint32_t num_output_tiles = c.volume() / c.tensor_spec().tile().get_tile_hw();
 
+    tt::log_info(tt::LogOp, "check 6");
+
     constexpr bool row_major = true;
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
@@ -72,6 +74,7 @@ void set_or_update_runtime_arguments(
             continue;
         }
 
+        tt::log_info(tt::LogOp, "check 7");
         uint32_t cHtWt = cHt * cWt;
         const auto scalar = eps;
         const auto packed_scalar_eps = input_tensor.get_dtype() == DataType::FLOAT32
@@ -138,6 +141,8 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
 
     auto* device = input_tensor.device();
 
+    tt::log_info(tt::LogOp, "check 1");
+
     const bool weight_has_value = weight_tensor.has_value();
     const bool bias_has_value = bias_tensor.has_value();
 
@@ -158,6 +163,8 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
     uint32_t f_single_tile_size = tt_metal::detail::TileSize(f_data_format);
 
     uint32_t num_output_tiles = output.volume() / output.tensor_spec().tile().get_tile_hw();
+
+    tt::log_info(tt::LogOp, "check 2");
 
     // we parallelize the computation across the output tiles
     constexpr bool row_major = true;
@@ -214,6 +221,7 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
     auto [temp_1_cb, temp_1_cb_handle] =
         create_cb(tt::CBIndex::c_9, program, all_device_cores, a_single_tile_size, num_tiles_per_cb, a_data_format);
 
+    tt::log_info(tt::LogOp, "check 3");
     auto a_is_dram = static_cast<uint32_t>(input_tensor.buffer()->buffer_type() == tt_metal::BufferType::DRAM);
     auto b_is_dram = static_cast<uint32_t>(batch_mean_tensor.buffer()->buffer_type() == tt_metal::BufferType::DRAM);
     auto c_is_dram = static_cast<uint32_t>(output.buffer()->buffer_type() == tt_metal::BufferType::DRAM);
@@ -305,9 +313,13 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
             .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
             .compile_args = compute_kernel_args});
 
+    tt::log_info(tt::LogOp, "check 4");
+
     auto set_runtime_args = [](Program& program, KernelHandle kernel_id, CoreCoord core, auto&& args) {
         tt_metal::SetRuntimeArgs(program, kernel_id, core, args);
     };
+
+    tt::log_info(tt::LogOp, "check 5");
 
     CMAKE_UNIQUE_NAMESPACE::set_or_update_runtime_arguments(
         program,
