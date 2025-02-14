@@ -43,7 +43,7 @@ def test_replicate_to_tensor_mesh(mesh_device, dtype):
         device=mesh_device,
     )
 
-    mapper = ttnn.ReplicateTensorToMesh(mesh_device).map(to_repl)
+    mapper = ttnn.ReplicateTensorToMesh(mesh_device)
     replicated_tensors = ttnn.distribute_tensor(to_repl, mapper, mesh_device)
     out_tensors = ttnn.get_device_tensors(replicated_tensors)
 
@@ -64,7 +64,7 @@ def test_shard_to_tensor_mesh(mesh_device, dtype):
         device=mesh_device,
     )
 
-    mapper = ttnn.ShardTensorToMesh(mesh_device, dim=3).map(to_shard)
+    mapper = ttnn.ShardTensorToMesh(mesh_device, dim=3)
 
     out_tensor = ttnn.distribute_tensor(to_shard, mapper, mesh_device)
 
@@ -85,7 +85,7 @@ def test_concat_to_tensor(mesh_device, dtype):
         device=mesh_device,
     )
 
-    mapper = ttnn.ShardTensorToMesh(mesh_device, dim=3).map(to_shard)
+    mapper = ttnn.ShardTensorToMesh(mesh_device, dim=3)
 
     composer = ttnn.ConcatMeshToTensor(dim=3)
 
@@ -158,7 +158,7 @@ def test_shard2d_to_tensor_mesh(M, K, N, dtype, mesh_shape, mesh_device):
         device=mesh_device,
     )
 
-    mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=shard_dim).map(to_shard)
+    mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=shard_dim)
 
     out_tensors = ttnn.get_device_tensors(ttnn.distribute_tensor(to_shard, mapper, mesh_device))
 
