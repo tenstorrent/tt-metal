@@ -73,6 +73,14 @@ tt::tt_metal::Tensor sum_moreh(const tt::tt_metal::Tensor& t, int dim, bool keep
         /* device_compute_kernel_config */ core::ComputeKernelConfig::precise());
     return res;
 }
+
+// Overload supporting generic sum over multiple dimensions
+tt::tt_metal::Tensor sum_moreh(const tt::tt_metal::Tensor& t, std::optional<SmallVector<int64_t>> dims, bool keep_dim) {
+    tt::tt_metal::Tensor res =
+        ttnn::moreh_sum(t, dims, keep_dim, std::nullopt, std::nullopt, core::ComputeKernelConfig::precise());
+    return res;
+}
+
 tt::tt_metal::Tensor sum_ttnn(const tt::tt_metal::Tensor& t, int dim, bool keep_dim) {
     return ttnn::sum(t, dim, keep_dim, std::nullopt, core::ComputeKernelConfig::precise());
 }
