@@ -2927,8 +2927,7 @@ def test_dram_input_mm_conv(device, tiled_input, input_on_device):
 @pytest.mark.parametrize(
     "batch, groups, input_channels, output_channels, input_height, input_width, num_input_slices, dram_slice, weights_dtype, activations_dtype, kernel, stride, padding, dilation, input_channels_alignment, act_block_h_override, act_block_w_div, deallocate_activation, math_fidelity, fp32_accum, packer_l1_acc, math_approx_mode, dst_full_sync_en",
     (
-        pytest.param
-        (1, 1, 10, 64, 4096,  512,  2, DramSlice.Height, ttnn.bfloat8_b, ttnn.bfloat8_b, (4, 4), (2, 2), (1, 1), (1, 1), 16, 32*64, 1, True , ttnn.MathFidelity.LoFi, True, False, True, False, marks=pytest.mark.skipif(is_grayskull(), reason="Skipping on Grayskull")),
+        (1, 1, 10, 64, 4096,  512,  2, DramSlice.Height, ttnn.bfloat8_b, ttnn.bfloat8_b, (4, 4), (2, 2), (1, 1), (1, 1), 16, 32*64, 1, True , ttnn.MathFidelity.LoFi, True, False, True, False),
         (1, 1, 64, 64, 2048,  256,  2, DramSlice.Height, ttnn.bfloat8_b, ttnn.bfloat8_b, (4, 4), (2, 2), (1, 1), (1, 1), 32, 32*16 , 1, False, ttnn.MathFidelity.LoFi, True, False, True, False),
         (1, 1, 64, 64, 1024,  128,  1, DramSlice.Height, ttnn.bfloat8_b, ttnn.bfloat8_b, (4, 4), (2, 2), (1, 1), (1, 1), 32, 0 , 1, False, ttnn.MathFidelity.LoFi, True, False, True, False),
         (1, 1, 64, 64,  512,   64,  1, DramSlice.Height, ttnn.bfloat8_b, ttnn.bfloat8_b, (4, 4), (2, 2), (1, 1), (1, 1), 32, 0 , 1, False, ttnn.MathFidelity.LoFi, True, False, True, False),
@@ -2940,7 +2939,7 @@ def test_dram_input_mm_conv(device, tiled_input, input_on_device):
     ),
 )
 #fmt: on
-
+@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384*2}], indirect=True)
 def test_dram_slice_conv2d(
     device,
@@ -2969,6 +2968,9 @@ def test_dram_slice_conv2d(
     dst_full_sync_en,
 ):
     torch.manual_seed(11234)
+
+    if device.core_grid.y != 8 and is_wormhole_b0():
+        pytest.skip("Needs 8x8 grid for wormhole_b0")
 
     conv_input_shape = [batch, input_channels, input_height, input_width]
     conv_weight_shape = [output_channels, input_channels // groups, kernel[0], kernel[1]]
