@@ -112,7 +112,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: device-perf-report-csv-${{ matrix.test-info.arch }}-${{ matrix.test-info.machine-type }}
-          path: "${{ steps.check-device-perf-report.outputs.device_perf_report_filename }}"
+          path: /work/${{ steps.check-device-perf-report.outputs.device_perf_report_filename }}
 
       - name: Cleanup
         if: always()
