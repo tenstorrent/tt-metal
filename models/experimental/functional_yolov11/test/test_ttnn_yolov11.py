@@ -62,7 +62,7 @@ def attempt_load(weights, map_location=None):
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
 def test_yolov11(device, use_program_cache, reset_seeds):
-    torch_input, ttnn_input = create_yolov11_input_tensors(device, input_channels=3, input_height=640, input_width=640)
+    torch_input, ttnn_input = create_yolov11_input_tensors(device, input_channels=3, input_height=224, input_width=224)
 
     torch_model = attempt_load("yolov11n.pt", map_location="cpu")
     state_dict = torch_model.state_dict()
@@ -79,11 +79,7 @@ def test_yolov11(device, use_program_cache, reset_seeds):
     parameters = create_yolov11_model_parameters(torch_model, torch_input, device=device)
     ttnn_model = ttnn_yolov11.YoloV11(device, parameters)
     ttnn_output = ttnn_model(ttnn_input)
-    # l1 = torch.load("/home/ubuntu/venkatesh_yolov11/tt-metal/models/experimental/functional_yolov11/dumps/torch_out.pth")
-    # l1 = torch.load("/home/ubuntu/venkatesh_yolov11/tt-metal/models/experimental/functional_yolov11/dumps/tt_out.pth")
-    # assert_with_pcc(l1, l2, 0.99)
     ttnn_output = ttnn.to_torch(ttnn_output)
-    # ttnn_output = ttnn_output.permute(0, 2, 1)
-    print(ttnn_output.shape, torch_output.shape)
+
     ttnn_output = ttnn_output.reshape(torch_output.shape)
     assert_with_pcc(torch_output, ttnn_output, 0.99999)
