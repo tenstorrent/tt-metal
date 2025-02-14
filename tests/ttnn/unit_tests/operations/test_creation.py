@@ -258,7 +258,7 @@ def test_full_multi_device(mesh_device, input_shape, fill_value, layout):
 
     tensor = ttnn.full(input_shape, device=mesh_device, fill_value=fill_value, layout=layout)
     assert ttnn.is_tensor_storage_on_device(tensor)
-    output_tensors = ttnn.sharded_tensor_to_torch_tensor_list(tensor)
+    output_tensors = [ttnn.to_torch(shard) for shard in ttnn.get_device_tensors(tensor.cpu())]
     for output_tensor in output_tensors:
         assert_with_pcc(torch_tensor, output_tensor, 0.9999)
         assert torch.allclose(torch_tensor, output_tensor)
@@ -320,7 +320,7 @@ def test_arange_multi_device(mesh_device, start, end, step):
     )
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
-    output_tensors = ttnn.sharded_tensor_to_torch_tensor_list(output_tensor)
+    output_tensors = [ttnn.to_torch(shard) for shard in ttnn.get_device_tensors(output_tensor.cpu())]
     for output_tensor in output_tensors:
         output_tensor = output_tensor[-1, -1, -1, :]
         if divup((end - start), step) % 2 != 0:
@@ -367,7 +367,7 @@ def test_empty_multi_device(mesh_device, input_shapes):
     output_tensor = ttnn.empty(input_shapes, ttnn.bfloat16, ttnn.TILE_LAYOUT, mesh_device, ttnn.DRAM_MEMORY_CONFIG)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
-    output_tensors = ttnn.sharded_tensor_to_torch_tensor_list(output_tensor)
+    output_tensors = [ttnn.to_torch(shard) for shard in ttnn.get_device_tensors(output_tensor.cpu())]
     for output_tensor in output_tensors:
         assert list(torch_output_tensor.shape) == list(output_tensor.shape)
 
@@ -415,6 +415,6 @@ def test_empty_like_multi_device(mesh_device, input_shapes):
     output_tensor = ttnn.empty_like(input_tensor, layout=ttnn.TILE_LAYOUT)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.from_device(output_tensor)
-    output_tensors = ttnn.sharded_tensor_to_torch_tensor_list(output_tensor)
+    output_tensors = [ttnn.to_torch(shard) for shard in ttnn.get_device_tensors(output_tensor.cpu())]
     for output_tensor in output_tensors:
         assert list(torch_input_tensor.shape) == list(output_tensor.shape)

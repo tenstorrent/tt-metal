@@ -196,7 +196,9 @@ def test_multi_device_replicate(mesh_device, shape, layout, memory_config):
     )
     ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)
     ttnn_loop_back_tensor = ttnn.from_device(ttnn_tensor)
-    loopback_replicated_tensors = ttnn.sharded_tensor_to_torch_tensor_list(ttnn_loop_back_tensor)
+    loopback_replicated_tensors = [
+        ttnn.to_torch(shard) for shard in ttnn.get_device_tensors(ttnn_loop_back_tensor.cpu())
+    ]
     for loopback_replicated_tensor in loopback_replicated_tensors:
         assert torch.all(full_tensor == loopback_replicated_tensor)
 

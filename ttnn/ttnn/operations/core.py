@@ -339,28 +339,6 @@ def _golden_function(tensor, *args, **kwargs):
     return tensor
 
 
-sharded_to_torch_list_doc = """
-Takes in a sharded 'ttnn.Tensor' and returns the equivalent list of pytorch tensors.
-
-Args:
-    * :attr:'tensor': the ttnn.Tensor to be converted into python tensors
-
-Example::
-    >>> ttnn_tensor = ttnn.from_torch(torch.randn((2,3)), dtype=ttnn.bfloat16, mesh_mapper=mesh_mapper)
-    >>> ttnn.sharded_tensor_to_torch_tensor_list(ttnn_tensor)
-"""
-
-
-@ttnn.register_python_operation(name="ttnn.sharded_tensor_to_torch_tensor_list", golden_function=_golden_function)
-def sharded_tensor_to_torch_tensor_list(tensor: ttnn.Tensor) -> List["torch.Tensor"]:
-    tensor_shards = ttnn.get_device_tensors(tensor.cpu())
-    return [ttnn.to_torch(shard) for shard in tensor_shards]
-
-
-def _golden_function(tensor, *args, **kwargs):
-    return tensor
-
-
 doc = """
 Copies the `ttnn.Tensor` :attr:`tensor` to the `tt_lib.device.Device`.
 
