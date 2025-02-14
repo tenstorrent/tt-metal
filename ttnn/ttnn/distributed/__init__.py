@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from .distributed import (
-    MeshDevice,
     DispatchCoreType,
     open_mesh_device,
     close_mesh_device,
