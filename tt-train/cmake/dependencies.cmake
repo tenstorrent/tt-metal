@@ -66,10 +66,6 @@ CPMAddPackage(NAME fmt GITHUB_REPOSITORY fmtlib/fmt GIT_TAG 11.0.1)
 
 CPMAddPackage(NAME magic_enum GITHUB_REPOSITORY Neargye/magic_enum GIT_TAG v0.9.7)
 
-if(magic_enum_ADDED AND NOT TARGET magic_enum::magic_enum)
-    add_library(magic_enum::magic_enum ALIAS magic_enum)
-endif()
-
 ############################################################################################################################
 # nlohmann/json : https://github.com/nlohmann/json
 ############################################################################################################################
