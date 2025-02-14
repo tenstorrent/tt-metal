@@ -11,6 +11,8 @@ from loguru import logger
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
 from ttnn import (
+    distribute_tensor,
+    aggregate_tensor,
     ShardTensorToMesh,
     ShardTensor2dMesh,
     ReplicateTensorToMesh,
@@ -41,11 +43,11 @@ def test_replicate_to_tensor_mesh(mesh_device, dtype):
         device=mesh_device,
     )
 
-    out_tensors = ttnn.ReplicateTensorToMesh(mesh_device).map(to_repl)
+    mapper = ttnn.ReplicateTensorToMesh(mesh_device).map(to_repl)
+    replicated_tensors = ttnn.distribute_tensor(to_repl, mapper, mesh_device)
+    out_tensors = ttnn.get_device_tensors(replicated_tensors)
 
-    test = ttnn.from_torch(torch_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
-
-    out_pass, out_pcc = comp_pcc(out_tensors[0], test, pcc=0.99)
+    out_pass, out_pcc = comp_pcc(ttnn.to_torch(out_tensors[0]), torch_tensor, pcc=0.99)
     logger.info(f"PCC value: {out_pcc}")
     assert out_pass
 
@@ -55,20 +57,18 @@ def test_shard_to_tensor_mesh(mesh_device, dtype):
     torch.manual_seed(1234)
 
     torch_tensor = torch.randn(1, 1, 8192, 32768)
-    tensor_shards = ttnn.from_torch(
+    to_shard = ttnn.from_torch(
         torch_tensor,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
     )
 
-    test = ttnn.from_torch(torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+    mapper = ttnn.ShardTensorToMesh(mesh_device, dim=3).map(to_shard)
 
-    out_tensors = ttnn.ShardTensorToMesh(mesh_device, dim=3).map(tensor_shards)
+    out_tensor = ttnn.distribute_tensor(to_shard, mapper, mesh_device)
 
-    out_tensor = ttnn.aggregate_as_tensor(out_tensors)
-
-    out_pass, out_pcc = comp_pcc(out_tensor, test, pcc=0.99)
+    out_pass, out_pcc = comp_pcc(out_tensor, torch_tensor, pcc=0.99)
     logger.info(f"PCC value: {out_pcc}")
     assert out_pass
 
@@ -80,18 +80,44 @@ def test_concat_to_tensor(mesh_device, dtype):
     torch_tensor = torch.randn(1, 1, 8192, 32768)
     to_shard = ttnn.from_torch(
         torch_tensor,
-        dtype=ttnn.bfloat16,
+        dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
     )
 
-    test = ttnn.from_torch(torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+    mapper = ttnn.ShardTensorToMesh(mesh_device, dim=3).map(to_shard)
 
-    sharded_tensors = ttnn.ShardTensorToMesh(mesh_device, dim=3).map(to_shard)
+    composer = ttnn.ConcatMeshToTensor(dim=3)
 
-    out_tensor = ttnn.to_torch(ttnn.ConcatMeshToTensor(dim=3).compose(), dtype=ttnn.bfloat16, device=mesh_device)
+    out_tensor = ttnn.aggregate_tensor(ttnn.distribute_tensor(to_shard, mapper, mesh_device), composer)
 
-    out_pass, out_pcc = comp_pcc(out_tensor, test, pcc=0.99)
+    out_pass, out_pcc = comp_pcc(out_tensor, torch_tensor, pcc=0.99)
+    logger.info(f"PCC value: {out_pcc}")
+    assert out_pass
+
+
+@pytest.mark.parametrize("dtype", [ttnn.uint16, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.float32])
+def test_concat_slice_to_tensor(mesh_device, dtype):
+    torch.manual_seed(1234)
+
+    torch_tensor = torch.randn(1, 1, 8192, 32768)
+    to_shard = ttnn.from_torch(
+        torch_tensor,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+    )
+
+    mapper = ttnn.ShardTensorToMesh(mesh_device, dim=3)
+
+    composer = ttnn.ConcatMeshToTensor(dim=3)
+
+    out_tensor = []
+    out_tensor[0] = ttnn.aggregate_tensor(ttnn.distribute_tensor(to_shard, mapper, mesh_device)[:-2], composer)
+    out_tensor[1] = ttnn.aggregate_tensor(ttnn.distribute_tensor(to_shard, mapper, mesh_device)[:-1], composer)
+    out_tensor[2] = ttnn.aggregate_tensor(ttnn.distribute_tensor(to_shard, mapper, mesh_device)[:0], composer)
+
+    out_pass, out_pcc = comp_pcc(out_tensor, torch_tensor, pcc=0.99)
     logger.info(f"PCC value: {out_pcc}")
     assert out_pass
 
@@ -132,16 +158,15 @@ def test_shard2d_to_tensor_mesh(M, K, N, dtype, mesh_shape, mesh_device):
         device=mesh_device,
     )
 
-    out_tensors = ttnn.get_device_tensors(
-        ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=shard_dim).map(to_shard)
-    )
+    mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=shard_dim).map(to_shard)
 
-    for tensor in out_tensors:
-        print(tensor)
+    out_tensors = ttnn.get_device_tensors(ttnn.distribute_tensor(to_shard, mapper, mesh_device))
 
-    # out_pass, out_pcc = comp_pcc(tensor_shards, out, pcc=0.99)
-    # logger.info(f"PCC value: {out_pcc}")
-    # assert out_pass
+    ttnn.aggregate_as_tensor(out_tensors, mesh_device)
+
+    out_pass, out_pcc = comp_pcc(out_tensors, torch_tensor, pcc=0.99)
+    logger.info(f"PCC value: {out_pcc}")
+    assert out_pass
 
 
 @pytest.mark.parametrize(
@@ -181,16 +206,12 @@ def test_concat2d_to_tensor(M, K, N, dtype, mesh_shape, mesh_device):
         device=mesh_device,
     )
 
-    sharded_tensors = ttnn.get_device_tensors(
-        ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=shard_dim).map(to_shard)
-    )
+    mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=shard_dim)
 
-    out = ttnn.to_torch(
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=concat_dim, mesh_shape=mesh_shape).compose(
-            sharded_tensors
-        ),
-    )
+    composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=concat_dim, mesh_shape=mesh_shape)
 
-    out_pass, out_pcc = comp_pcc(out, torch_tensor, pcc=0.99)
+    out_tensor = ttnn.aggregate_tensor(ttnn.distribute_tensor(to_shard, mapper, mesh_device), composer)
+
+    out_pass, out_pcc = comp_pcc(out_tensor, torch_tensor, pcc=0.99)
     logger.info(f"PCC value: {out_pcc}")
     assert out_pass
