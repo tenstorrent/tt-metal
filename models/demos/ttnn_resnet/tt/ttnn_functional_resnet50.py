@@ -443,8 +443,17 @@ class resnet50Bottleneck:
                 )
             ):
                 conv_kwargs_2["conv_config"].act_block_h_override = 0
-            elif batch_size == 16 and layer_module and layer_module == "layer1_module2":
+            elif (
+                batch_size == 20
+                and layer_module
+                and (layer_module == "layer4_module2" or layer_module == "layer4_module3")
+            ):
                 conv_kwargs_2["conv_config"].act_block_h_override = 0
+            elif (
+                batch_size == 16
+                and layer_module
+                and (layer_module == "layer1_module2" or layer_module == "layer1_module3")
+            ):
                 conv_kwargs_2["conv_config"].act_block_h_override = 0
 
         if not ttnn.is_tensor_storage_on_device(self.conv2_weight_tensor):
@@ -1363,6 +1372,7 @@ class resnet50:
             enable_act_double_buffer=True,
             enable_split_reader=False,
             enable_subblock_padding=False,
+            layer_module="layer4_module3",
         )
 
         grid_size = (8, 4)
