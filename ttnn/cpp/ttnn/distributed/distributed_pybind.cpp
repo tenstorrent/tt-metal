@@ -26,6 +26,7 @@
 #include "tt-metalium/mesh_coord.hpp"
 #include "distributed_tensor.hpp"
 #include "tt-metalium/assert.hpp"
+<<<<<<< HEAD
 =======
 #include "distributed_tensor.hpp"
 <<<<<<< HEAD
@@ -47,8 +48,11 @@
 #include "distributed_tensor.cpp"
 =======
 >>>>>>> move class definitions from from distributed_tensor.cpp to.hpp so they can be exposed to the pybind.cpp; add dummy void methods in .cpp to satisfy linker; add new constructors and factory methods to fix type errors
+=======
+>>>>>>> fix test mappers, convert to cpu_tensor
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/distributed_tensor_config.hpp"
+#include "ttnn/operations/core/core.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 >>>>>>> one type error left
 #include "ttnn/tensor/tensor.hpp"
@@ -83,6 +87,14 @@ struct ConcreteMeshToTensor : MeshToTensor {
         PYBIND11_OVERRIDE(Tensor, MeshToTensor, compose, tensors);
     }
 };
+
+Tensor get_cpu_tensor(const Tensor& tensor) {
+    if (is_device_tensor(tensor)) {
+        Tensor cpu_tensor = tensor.cpu();
+        TT_ASSERT(is_device_tensor(cpu_tensor));
+    }
+    return tensor;
+}
 
 void py_module_types(py::module& module) {
 <<<<<<< HEAD
@@ -136,7 +148,7 @@ void py_module_types(py::module& module) {
 
     py::class_<ReplicateTensor>(module, "ReplicateTensor");
     py::class_<ShardTensor>(module, "ShardTensor");
-    py::class_<ShardTensor2D>(module, "ShardTensor2D");
+    py::class_<ShardTensor2D>(module, "ShardTensor2d");
     py::class_<ShardMesh>(module, "ShardMesh");
     py::class_<AllGatherTensor>(module, "AllGatherTensor");
     py::class_<DistributedTensorConfig>(module, "DistributedTensorConfig");
@@ -783,10 +795,14 @@ void py_module(py::module& module) {
     py_replicate_tensor_config.def(py::init<>())
         .def(py::init<int>(), py::arg("replication_factor") = 1)
 <<<<<<< HEAD
+<<<<<<< HEAD
         .def_readwrite("shard_dimension", &ReplicateTensor::replication_factor)
 =======
         .def_readwrite("shard_dimension", &ShardTensor::shard_dimension)
 >>>>>>> add configs to pybind
+=======
+        .def_readwrite("shard_dimension", &ReplicateTensor::replication_factor)
+>>>>>>> fix test mappers, convert to cpu_tensor
         .def("__eq__", [](const ReplicateTensor& a, const ReplicateTensor& b) {
             return a.replication_factor == b.replication_factor;
         });
@@ -820,14 +836,21 @@ void py_module(py::module& module) {
     auto py_shard_mesh = static_cast<py::class_<ShardMesh>>(module.attr("ShardMesh"));
     py_shard_mesh.def(py::init<>()).def_readwrite("y", &ShardMesh::y).def_readwrite("x", &ShardMesh::x);
 
-    auto py_shard_tensor2d = static_cast<py::class_<ShardTensor2D>>(module.attr("ShardTensor2D"));
+    auto py_shard_tensor2d = static_cast<py::class_<ShardTensor2D>>(module.attr("ShardTensor2d"));
     py_shard_tensor2d.def(py::init<ShardMesh>(), py::arg("mesh"))
         .def_readonly("shard_mesh", &ShardTensor2D::shard_mesh)
         .def("__eq__", [](const ShardTensor2D& a, const ShardTensor2D& b) { return a == b; });
 
+<<<<<<< HEAD
     auto py_allgather_config = static_cast<py::class_<AllGatherTensor>>(module.attr("AllGatherTensor"));
     .def(py::init<>()).def("__eq__", [](const AllGatherTensor& a, const AllGatherTensor& b) { return a == b; });
 >>>>>>> add configs to pybind
+=======
+    auto py_allgather_config =
+        static_cast<py::class_<AllGatherTensor>>(module.attr("AllGatherTensor"))
+            .def(py::init<>())
+            .def("__eq__", [](const AllGatherTensor& a, const AllGatherTensor& b) { return a == b; });
+>>>>>>> fix test mappers, convert to cpu_tensor
 
     module.def(
         "get_distributed_tensor_config",
@@ -991,6 +1014,7 @@ void py_module(py::module& module) {
            const TensorToMesh& mapper,
            std::optional<std::reference_wrapper<MeshDevice>> mesh_device) -> Tensor {
 <<<<<<< HEAD
+<<<<<<< HEAD
             return distribute_tensor(from_device(tensor), mapper, mesh_device);
         },
         py::arg("tensor"),
@@ -1003,19 +1027,29 @@ void py_module(py::module& module) {
         },
 =======
             return distribute_tensor(tensor, mapper, mesh_device);
+=======
+            return distribute_tensor(get_cpu_tensor(tensor), mapper, mesh_device);
+>>>>>>> fix test mappers, convert to cpu_tensor
         },
         py::arg("tensor"),
         py::arg("mapper"),
         py::arg("mesh_device"));
     module.def(
         "aggregate_tensor",
+<<<<<<< HEAD
         [](const Tensor& tensor, const MeshToTensor& composer) -> Tensor { return aggregate_tensor(tensor, composer); },
 >>>>>>> fix mesh device conflict, add aggregate/distribute and config pybinds, fix keyword error
+=======
+        [](const Tensor& tensor, const MeshToTensor& composer) -> Tensor {
+            return aggregate_tensor(get_cpu_tensor(tensor), composer);
+        },
+>>>>>>> fix test mappers, convert to cpu_tensor
         py::arg("tensor"),
         py::arg("composer"));
     module.def(
         "aggregate_tensor",
         [](const std::vector<Tensor>& tensors, const MeshToTensor& composer) -> Tensor {
+<<<<<<< HEAD
 <<<<<<< HEAD
             return aggregate_tensor(from_device(aggregate_as_tensor(tensors, AllGatherTensor{})), composer);
         },
@@ -1032,6 +1066,9 @@ void py_module(py::module& module) {
 >>>>>>> one type error left
 =======
             return aggregate_tensor(aggregate_as_tensor(tensors, AllGatherTensor{}), composer);
+=======
+            return aggregate_tensor(get_cpu_tensor(aggregate_as_tensor(tensors, AllGatherTensor{})), composer);
+>>>>>>> fix test mappers, convert to cpu_tensor
         },
         py::arg("tensor"),
         py::arg("composer"));
