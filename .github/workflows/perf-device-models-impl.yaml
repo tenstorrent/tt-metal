@@ -78,7 +78,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-info.timeout }}
         run: |
           if [[ "${{ matrix.test-info.arch }}" == "wormhole_b0" ]]; then
-            export WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml
+            export MAGIC_ENV=wormhole_b0_80_arch_eth_dispatch.yaml
           fi
           pytest models/demos/wormhole/stable_diffusion/tests -m models_device_performance_bare_metal --timeout=600
           pytest models/demos/distilbert/tests -m models_device_performance_bare_metal
@@ -88,12 +88,12 @@ jobs:
           pytest models/demos/mnist/tests -m models_device_performance_bare_metal
           pytest models/demos/squeezebert/tests -m models_device_performance_bare_metal
           pytest models/demos/roberta/tests/ -m models_device_performance_bare_metal
-          pytest models/demos/wormhole/resnet50/tests -m models_device_performance_bare_metal
-          pytest models/experimental/functional_unet/tests/test_unet_perf.py -m models_device_performance_bare_metal
-          pytest models/demos/wormhole/mamba/tests -m models_device_performance_bare_metal
-          pytest models/demos/metal_BERT_large_11/tests -m models_device_performance_bare_metal
-          pytest models/demos/falcon7b_common/tests -m models_device_performance_bare_metal
-          pytest models/demos/wormhole/bert_tiny/tests -m models_device_performance_bare_metal
+          WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/wormhole/resnet50/tests -m models_device_performance_bare_metal
+          WH_ARCH_YAML=$MAGIC_ENV pytest models/experimental/functional_unet/tests/test_unet_perf.py -m models_device_performance_bare_metal
+          WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/wormhole/mamba/tests -m models_device_performance_bare_metal
+          WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/metal_BERT_large_11/tests -m models_device_performance_bare_metal
+          WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/falcon7b_common/tests -m models_device_performance_bare_metal
+          WH_ARCH_YAML=$MAGIC_ENV pytest models/demos/wormhole/bert_tiny/tests -m models_device_performance_bare_metal
 
       - name: Check device perf report exists
         id: check-device-perf-report
