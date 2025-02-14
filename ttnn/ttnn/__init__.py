@@ -112,6 +112,8 @@ from ttnn._ttnn.multi_device import (
     get_device_tensor,
     get_device_tensors,
     aggregate_as_tensor,
+    aggregate_tensor,
+    distribute_tensor,
     get_t3k_physical_device_ids_ring,
 )
 
