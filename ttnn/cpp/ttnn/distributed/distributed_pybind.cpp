@@ -13,11 +13,13 @@
 #include <tt-metalium/command_queue.hpp>
 #include "tt-metalium/mesh_coord.hpp"
 #include "distributed_tensor.hpp"
+#include "tt-metalium/assert.hpp"
 #include "ttnn/distributed/api.hpp"
 <<<<<<< HEAD
 #include "ttnn/distributed/types.hpp"
 =======
 #include "ttnn/distributed/distributed_tensor_config.hpp"
+#include "ttnn/operations/core/core.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 >>>>>>> one type error left
 #include "ttnn/tensor/tensor.hpp"
@@ -53,6 +55,14 @@ struct ConcreteMeshToTensor : MeshToTensor {
     }
 };
 
+Tensor get_cpu_tensor(const Tensor& tensor) {
+    if (is_device_tensor(tensor)) {
+        Tensor cpu_tensor = tensor.cpu();
+        TT_ASSERT(is_device_tensor(cpu_tensor));
+    }
+    return tensor;
+}
+
 void py_module_types(py::module& module) {
     py::class_<MeshToTensor, ConcreteMeshToTensor, std::unique_ptr<MeshToTensor>>(module, "MeshToTensor");
     py::class_<TensorToMesh, ConcreteTensorToMesh, std::unique_ptr<TensorToMesh>>(module, "TensorToMesh");
@@ -66,7 +76,7 @@ void py_module_types(py::module& module) {
 
     py::class_<ReplicateTensor>(module, "ReplicateTensor");
     py::class_<ShardTensor>(module, "ShardTensor");
-    py::class_<ShardTensor2D>(module, "ShardTensor2D");
+    py::class_<ShardTensor2D>(module, "ShardTensor2d");
     py::class_<ShardMesh>(module, "ShardMesh");
     py::class_<AllGatherTensor>(module, "AllGatherTensor");
     py::class_<DistributedTensorConfig>(module, "DistributedTensorConfig");
@@ -533,7 +543,7 @@ void py_module(py::module& module) {
     auto py_replicate_tensor_config = static_cast<py::class_<ReplicateTensor>>(module.attr("ShardTensor"));
     py_replicate_tensor_config.def(py::init<>())
         .def(py::init<int>(), py::arg("replication_factor") = 1)
-        .def_readwrite("shard_dimension", &ShardTensor::shard_dimension)
+        .def_readwrite("shard_dimension", &ReplicateTensor::replication_factor)
         .def("__eq__", [](const ReplicateTensor& a, const ReplicateTensor& b) {
             return a.replication_factor == b.replication_factor;
         });
@@ -546,13 +556,15 @@ void py_module(py::module& module) {
     auto py_shard_mesh = static_cast<py::class_<ShardMesh>>(module.attr("ShardMesh"));
     py_shard_mesh.def(py::init<>()).def_readwrite("y", &ShardMesh::y).def_readwrite("x", &ShardMesh::x);
 
-    auto py_shard_tensor2d = static_cast<py::class_<ShardTensor2D>>(module.attr("ShardTensor2D"));
+    auto py_shard_tensor2d = static_cast<py::class_<ShardTensor2D>>(module.attr("ShardTensor2d"));
     py_shard_tensor2d.def(py::init<ShardMesh>(), py::arg("mesh"))
         .def_readonly("shard_mesh", &ShardTensor2D::shard_mesh)
         .def("__eq__", [](const ShardTensor2D& a, const ShardTensor2D& b) { return a == b; });
 
-    auto py_allgather_config = static_cast<py::class_<AllGatherTensor>>(module.attr("AllGatherTensor"));
-    .def(py::init<>()).def("__eq__", [](const AllGatherTensor& a, const AllGatherTensor& b) { return a == b; });
+    auto py_allgather_config =
+        static_cast<py::class_<AllGatherTensor>>(module.attr("AllGatherTensor"))
+            .def(py::init<>())
+            .def("__eq__", [](const AllGatherTensor& a, const AllGatherTensor& b) { return a == b; });
 
     module.def(
         "get_distributed_tensor_config",
@@ -625,20 +637,22 @@ void py_module(py::module& module) {
         [](const Tensor& tensor,
            const TensorToMesh& mapper,
            std::optional<std::reference_wrapper<MeshDevice>> mesh_device) -> Tensor {
-            return distribute_tensor(tensor, mapper, mesh_device);
+            return distribute_tensor(get_cpu_tensor(tensor), mapper, mesh_device);
         },
         py::arg("tensor"),
         py::arg("mapper"),
         py::arg("mesh_device"));
     module.def(
         "aggregate_tensor",
-        [](const Tensor& tensor, const MeshToTensor& composer) -> Tensor { return aggregate_tensor(tensor, composer); },
+        [](const Tensor& tensor, const MeshToTensor& composer) -> Tensor {
+            return aggregate_tensor(get_cpu_tensor(tensor), composer);
+        },
         py::arg("tensor"),
         py::arg("composer"));
     module.def(
         "aggregate_tensor",
         [](const std::vector<Tensor>& tensors, const MeshToTensor& composer) -> Tensor {
-            return aggregate_tensor(aggregate_as_tensor(tensors, AllGatherTensor{}), composer);
+            return aggregate_tensor(get_cpu_tensor(aggregate_as_tensor(tensors, AllGatherTensor{})), composer);
         },
         py::arg("tensor"),
         py::arg("composer"));
