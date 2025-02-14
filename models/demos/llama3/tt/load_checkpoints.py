@@ -47,9 +47,10 @@ def standardize_hf_keys(state_dict):
     return state_dict
 
 
-def convert_hf_to_meta(state_dict, head_dim):
+def convert_hf_to_meta(state_dict, head_dim, num_layers):
     state_dict = convert_hf_qkv_to_meta_format(state_dict, head_dim)
     state_dict = map_hf_to_meta_keys(state_dict)
+    state_dict = split_hf_single_qkv_to_q_k_v_tensors(state_dict, num_layers)
     return state_dict
 
 
@@ -70,6 +71,9 @@ def map_hf_to_meta_keys(loaded_weights):
         "self_attn.q_proj.bias": "attention.wq.bias",
         "self_attn.k_proj.bias": "attention.wk.bias",
         "self_attn.v_proj.bias": "attention.wv.bias",
+        # leave the following two keys as-is - split_hf_single_qkv_to_q_k_v_tensors will fix
+        "self_attn.qkv_proj.weight": "self_attn.qkv_proj.weight",
+        "mlp.gate_up_proj.weight": "mlp.gate_up_proj.weight",
         # Feed forward module mappings
         "mlp.gate_proj.weight": "feed_forward.w1.weight",
         "mlp.up_proj.weight": "feed_forward.w3.weight",
@@ -99,6 +103,9 @@ def map_hf_to_meta_keys(loaded_weights):
         "model.layers.{layer}.mlp.gate_proj.weight": "layers.{layer}.feed_forward.w1.weight",
         "model.layers.{layer}.mlp.up_proj.weight": "layers.{layer}.feed_forward.w3.weight",
         "model.layers.{layer}.mlp.down_proj.weight": "layers.{layer}.feed_forward.w2.weight",
+        # leave the following two keys as-is - split_hf_single_qkv_to_q_k_v_tensors will fix
+        "model.layers.{layer}.self_attn.qkv_proj.weight": "layers.{layer}.self_attn.qkv_proj.weight",
+        "model.layers.{layer}.mlp.gate_up_proj.weight": "layers.{layer}.mlp.gate_up_proj.weight",
     }
 
     meta_state_dict = {}
@@ -200,6 +207,32 @@ def convert_hf_qkv_to_meta_format(loaded_weights, head_dim):
             # Keep all other weights unchanged
             converted_weights[key] = tensor
     return converted_weights
+
+
+def split_hf_single_qkv_to_q_k_v_tensors(loaded_weights, num_layers):
+    """Splits qkv and ff weights to separate tensors.
+    Some models such as microsoft/Phi-3.5-mini-instruct store the qkv as a concatenated
+    tensor and the feed forward projection/up tensors as a single tensor as well.
+    This method splits the tensors up and renames the entries to the corresponding meta keys.
+    Note that this is called after `map_hf_to_meta_keys` which means that the `map_hf_to_meta_keys`
+    needs to preserve the keys.
+    """
+    for i in range(num_layers):
+        key_name = f"layers.{i}.self_attn.qkv_proj.weight"
+        if key_name in loaded_weights:
+            q, k, v = torch.tensor_split(loaded_weights[key_name], 3, dim=0)
+            loaded_weights[f"layers.{i}.attention.wq.weight"] = q
+            loaded_weights[f"layers.{i}.attention.wk.weight"] = k
+            loaded_weights[f"layers.{i}.attention.wv.weight"] = v
+
+        key_name = f"layers.{i}.mlp.gate_up_proj.weight"
+        if key_name in loaded_weights:
+            gate_proj, up_t = torch.tensor_split(loaded_weights[key_name], 2, dim=0)
+            loaded_weights[f"layers.{i}.feed_forward.w1.weight"] = gate_proj
+            loaded_weights[f"layers.{i}.feed_forward.w2.weight"] = up_t
+            loaded_weights[f"layers.{i}.feed_forward.w3.weight"] = loaded_weights[f"layers.{i}.feed_forward.w2.weight"]
+
+    return loaded_weights
 
 
 def convert_meta_to_hf(state_dict, head_dim):
