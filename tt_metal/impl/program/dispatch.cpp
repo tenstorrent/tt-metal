@@ -15,6 +15,7 @@
 #include "tt_metal/impl/dispatch/data_collection.hpp"
 #include "tt_metal/impl/dispatch/device_command_calculator.hpp"
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
+#include "tt_metal/jit_build/build_env_manager.hpp"
 
 namespace tt::tt_metal {
 namespace program_dispatch {
@@ -217,7 +218,8 @@ uint32_t finalize_kernel_bins(
             auto& optional_id = kg->kernel_ids[class_id];
             if (optional_id) {
                 const auto kernel = kernels.at(optional_id.value());
-                const std::vector<const ll_api::memory*>& binaries = kernel->binaries(device->build_key());
+                const std::vector<const ll_api::memory*>& binaries = kernel->binaries(
+                    BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
                 // TODO: this is really ugly, save me future-HAL!
                 if (programmable_core_type_index ==
                     hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)) {
@@ -1513,6 +1515,9 @@ void reserve_space_in_kernel_config_buffer(
             dispatch_md.stall_first = false;
             dispatch_md.stall_before_program = true;
         }
+
+        // TODO: config_buffer_mgr is stateful so code below restores original reservation state
+        // pull state out of the config_buffer_mgr
         reservation = config_buffer_mgr.reserve(program_config_sizes);
     }
 
@@ -1527,6 +1532,10 @@ void reserve_space_in_kernel_config_buffer(
     }
     config_buffer_mgr.alloc(expected_num_workers_completed + num_program_workers);
 
+    // TODO.  This code is needlessly complex due to enqueue program and
+    // binary writing being intertwined.  Separate out writing kernel
+    // binaries into program compile/finalize.  The sync below is confusing
+    // and not needed (just need a barrier on DRAM write)
     if (program_binary_status != ProgramBinaryStatus::Committed) {
         // Insert a stall before writing any program configs when binaries are in flight
         dispatch_md.stall_first = true;

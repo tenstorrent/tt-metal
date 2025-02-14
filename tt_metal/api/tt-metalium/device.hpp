@@ -15,7 +15,6 @@
 #include "data_types.hpp"
 #include "program_device_map.hpp"
 #include "build.hpp"
-#include "tt_cluster.hpp"
 #include "hal.hpp"
 #include "command_queue_interface.hpp"
 #include "sub_device_manager.hpp"
@@ -43,7 +42,6 @@ class SubDevice;
 
 }  // namespace v0
 
-class JitBuildEnv;
 class CommandQueue;
 class TraceBuffer;
 struct TraceDescriptor;
@@ -68,8 +66,7 @@ public:
     virtual tt::ARCH arch() const = 0;
 
     virtual chip_id_t id() const = 0;
-
-    virtual uint32_t build_key() const = 0;
+    virtual chip_id_t build_id() const = 0;
 
     virtual uint8_t num_hw_cqs() const = 0;
 
@@ -128,20 +125,14 @@ public:
     virtual uint32_t get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& core) const = 0;
     virtual uint32_t get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const = 0;
 
-    virtual const JitBuildEnv& build_env() const = 0;
-    virtual const string build_firmware_target_path(uint32_t programmable_core, uint32_t processor_class, int i) const = 0;
-    virtual const string build_kernel_target_path(uint32_t programmable_core, uint32_t processor_class, int i, const string& kernel_name) const = 0;
-    virtual const JitBuildState& build_firmware_state(uint32_t programmable_core, uint32_t processor_class, int i) const = 0;
-    virtual const JitBuildState& build_kernel_state(uint32_t programmable_core, uint32_t processor_class, int i) const = 0;
-    virtual const JitBuildStateSubset build_kernel_states(uint32_t programmable_core, uint32_t processor_class) const = 0;
-
     virtual SystemMemoryManager& sysmem_manager() = 0;
     virtual CommandQueue& command_queue(size_t cq_id = 0) = 0;
 
     // Metal trace device capture mode
     virtual void begin_trace(const uint8_t cq_id, const uint32_t tid) = 0;
     virtual void end_trace(const uint8_t cq_id, const uint32_t tid) = 0;
-    virtual void replay_trace(const uint8_t cq_id, const uint32_t tid, const bool blocking) = 0;
+    virtual void replay_trace(
+        const uint8_t cq_id, const uint32_t tid, const bool block_on_device, const bool block_on_worker_thread) = 0;
     virtual void release_trace(const uint32_t tid) = 0;
 
     virtual std::shared_ptr<TraceBuffer> get_trace(uint32_t tid) = 0;
@@ -155,8 +146,12 @@ public:
 
     // Checks that the given arch is on the given pci_slot and that it's responding
     // Puts device into reset
-    virtual bool initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap = {}, bool minimal = false) = 0;
-    virtual void build_firmware() = 0;
+    virtual bool initialize(
+        const uint8_t num_hw_cqs,
+        size_t l1_small_size,
+        size_t trace_region_size,
+        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
+        bool minimal = false) = 0;
     virtual void reset_cores() = 0;
     virtual void initialize_and_launch_firmware() = 0;
     virtual void init_command_queue_host() = 0;

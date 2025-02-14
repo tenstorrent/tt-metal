@@ -37,11 +37,14 @@ def load_hf_state_dict(ckpt_dir):
             raise FileNotFoundError(f"Neither model.safetensors.index.json nor model.safetensors found in {ckpt_dir}")
         loaded_weights = safetensors_load_file(safetensor_path)
 
-    if not "lm_head.weight" in loaded_weights:
-        # Assume tied to the embeddings if not present
-        loaded_weights["lm_head.weight"] = loaded_weights["model.embed_tokens.weight"]
-
     return loaded_weights
+
+
+def standardize_hf_keys(state_dict):
+    if not "lm_head.weight" in state_dict:
+        # Assume tied to the embeddings if not present
+        state_dict["lm_head.weight"] = state_dict["model.embed_tokens.weight"]
+    return state_dict
 
 
 def convert_hf_to_meta(state_dict, head_dim):

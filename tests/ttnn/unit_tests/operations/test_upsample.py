@@ -125,14 +125,8 @@ def test_upsample_single_core(device, input_shapes, scale_h, scale_w):
 @pytest.mark.parametrize("shard_strategy", [ttnn.ShardStrategy.HEIGHT, ttnn.ShardStrategy.BLOCK])
 @pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
 def test_upsample_multi_core(device, input_shape, scale_h, scale_w, shard_strategy, shard_orientation):
-    if (
-        (shard_strategy == ttnn.ShardStrategy.BLOCK)
-        and (shard_orientation == ttnn.ShardOrientation.ROW_MAJOR)
-        and (scale_h == 2)
-        and (scale_w == 2)
-        and (input_shape == [2, 1280, 4, 4])
-    ):
-        pytest.skip("skipped to unblock P0 issue 16975 but needs to be fixed and removed for issue 17035")
+    if (shard_strategy == ttnn.ShardStrategy.BLOCK) and (shard_orientation == ttnn.ShardOrientation.COL_MAJOR):
+        pytest.skip("Disabled until illegal shard configs are fixed (#17795)")
     if is_grayskull() and (scale_h > 2 or scale_w > 2):
         pytest.skip("Skipping test because it won't fit in L1!")
 

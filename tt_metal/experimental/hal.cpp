@@ -17,6 +17,8 @@ using tt::tt_metal::HalSingleton;
 
 namespace tt::tt_metal::experimental::hal {
 
+tt::ARCH get_arch() { return HalSingleton::getInstance().get_arch(); }
+
 std::string get_arch_name() {
     auto arch_enum = HalSingleton::getInstance().get_arch();
     return tt::get_string_lowercase(arch_enum);

@@ -10,8 +10,8 @@
 #include "tt_fabric/mesh_graph.hpp"
 //#include <tt-metalium/cq_commands.hpp>
 //#include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
-#include "kernels/tt_fabric_traffic_gen_test.hpp"
-#include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_common.hpp"
+#include "tt_fabric/hw/inc/tt_fabric_status.h"
+#include "test_common.hpp"
 #include "eth_l1_address_map.h"
 #include "tt_fabric/hw/inc/tt_fabric_interface.h"
 #include <numeric>
@@ -450,6 +450,10 @@ typedef struct test_board {
         return control_plane->get_intra_chip_neighbors(src_mesh_id, src_chip_id, routing_direction);
     }
 
+    inline routing_plane_id_t get_routing_plane_from_chan(chan_id_t eth_chan) {
+        return control_plane->get_routing_plane_id(eth_chan);
+    }
+
     inline void close_devices() { tt::tt_metal::detail::CloseDevices(device_handle_map); }
 
 } test_board_t;
@@ -472,8 +476,8 @@ typedef struct test_device {
     uint32_t router_mask = 0;
     uint32_t gk_noc_offset;
     metal_SocDescriptor soc_desc;
-    std::unordered_map<CoreCoord, std::vector<std::pair<uint32_t, CoreCoord>>>
-        router_worker_map;  // router phys to worker logical cores
+    std::unordered_map<chan_id_t, std::vector<std::pair<uint32_t, CoreCoord>>>
+        router_worker_map;  // router chan to worker logical cores
 
     test_device(chip_id_t chip_id_, test_board_t* board_handle_) {
         physical_chip_id = chip_id_;
@@ -646,8 +650,8 @@ typedef struct test_device {
     void get_available_router_cores(
         uint32_t num_hops,
         std::shared_ptr<test_device>& rx_device,
-        std::vector<CoreCoord>& src_routers,
-        std::vector<CoreCoord>& dest_routers) {
+        std::vector<chan_id_t>& src_routers,
+        std::vector<chan_id_t>& dest_routers) {
         // shortest route possible with least number of internal noc hops
         uint32_t shortest_route_length = 2 * num_hops - 1;
         bool select_router = false;
@@ -656,16 +660,15 @@ typedef struct test_device {
         for (auto i = 0; i < router_logical_cores.size(); i++) {
             std::vector<std::pair<chip_id_t, chan_id_t>> route;
             std::set<chip_id_t> chips_in_route;
-            chan_id_t eth_chan = soc_desc.logical_eth_core_to_chan_map.at(router_logical_cores[i]);
+            chan_id_t src_eth_chan = soc_desc.logical_eth_core_to_chan_map.at(router_logical_cores[i]);
             chips_in_route.insert(physical_chip_id);
             try {
-                route = _get_route_to_chip(rx_device->mesh_id, rx_device->logical_chip_id, eth_chan);
+                route = _get_route_to_chip(rx_device->mesh_id, rx_device->logical_chip_id, src_eth_chan);
             } catch (const std::exception& e) {
                 continue;
             }
 
-            auto dest_router =
-                tt::Cluster::instance().get_virtual_eth_core_from_channel(physical_chip_id, route.back().second);
+            auto dest_eth_chan = route.back().second;
 
             if (DEFAULT_NUM_HOPS == num_hops) {
                 // no need to check for path length for default case, all routers can be used
@@ -684,8 +687,8 @@ typedef struct test_device {
             }
 
             if (select_router) {
-                src_routers.push_back(router_virtual_cores[i]);
-                dest_routers.push_back(dest_router);
+                src_routers.push_back(src_eth_chan);
+                dest_routers.push_back(dest_eth_chan);
             }
         }
 
@@ -695,16 +698,16 @@ typedef struct test_device {
         }
     }
 
-    std::vector<std::tuple<CoreCoord, uint32_t, CoreCoord>> select_worker_cores(
-        const std::vector<CoreCoord>& router_cores,
+    std::vector<std::tuple<chan_id_t, uint32_t, CoreCoord>> select_worker_cores(
+        const std::vector<chan_id_t>& router_cores,
         uint32_t num_links,
         uint32_t count,
         uint32_t skip_first_n_workers = 0) {
-        std::vector<std::tuple<CoreCoord, uint32_t, CoreCoord>> result;
+        std::vector<std::tuple<chan_id_t, uint32_t, CoreCoord>> result;
         uint32_t link_idx = 0;
         if (benchmark_mode) {
             // temp map to keep a track of indices to start lookup from
-            std::unordered_map<CoreCoord, uint32_t> router_worker_idx;
+            std::unordered_map<chan_id_t, uint32_t> router_worker_idx;
             for (auto i = 0; i < count; i++) {
                 if (link_idx == num_links) {
                     link_idx = 0;
@@ -772,6 +775,7 @@ typedef struct test_device {
         uint32_t noc_dist, noc_index, noc0_dist, noc1_dist;
         for (auto i = 0; i < router_logical_cores.size(); i++) {
             router_phys_core = router_phys_cores[i];
+            chan_id_t eth_chan = soc_desc.logical_eth_core_to_chan_map.at(router_logical_cores[i]);
             std::vector<std::pair<uint32_t, std::pair<uint32_t, CoreCoord>>> temp_map;
             for (auto j = 0; j < worker_logical_cores.size(); j++) {
                 worker_phys_core = worker_phys_cores[j];
@@ -790,7 +794,7 @@ typedef struct test_device {
             std::sort(temp_map.begin(), temp_map.end());
 
             for (auto& [noc_dist, pair] : temp_map) {
-                router_worker_map[router_virtual_cores[i]].push_back(pair);
+                router_worker_map[eth_chan].push_back(pair);
             }
         }
     }
@@ -807,8 +811,8 @@ typedef struct test_traffic {
     uint32_t num_tx_workers;
     uint32_t num_rx_workers;
     uint32_t target_address;
-    std::vector<std::tuple<CoreCoord, uint32_t, CoreCoord>> tx_workers;
-    std::vector<std::tuple<CoreCoord, uint32_t, CoreCoord>> rx_workers;
+    std::vector<std::tuple<chan_id_t, uint32_t, CoreCoord>> tx_workers;
+    std::vector<std::tuple<chan_id_t, uint32_t, CoreCoord>> rx_workers;
     std::vector<CoreCoord> tx_virtual_cores;
     std::vector<CoreCoord> rx_virtual_cores;
     CoreCoord controller_logical_core;
@@ -848,8 +852,8 @@ typedef struct test_traffic {
             throw std::runtime_error("Number of dest endpoints should be less than or equal to src endpoints");
         }
 
-        std::vector<CoreCoord> src_routers;
-        std::vector<CoreCoord> dest_routers;
+        std::vector<chan_id_t> src_routers;
+        std::vector<chan_id_t> dest_routers;
         // For Unicast there is only one rx device
         // For mcast, this only supports line mcast, we pass the last device as the rx device
         tx_device->get_available_router_cores(num_hops, *rx_devices.rbegin(), src_routers, dest_routers);
@@ -865,7 +869,8 @@ typedef struct test_traffic {
             num_cores_to_skip = (num_rx_workers + num_links_to_use - 1) / num_links_to_use;
         }
         // Assumes uniform worker grid across receiver chips
-        rx_workers = rx_devices[0]->select_worker_cores(dest_routers, num_links_to_use, num_rx_workers, num_cores_to_skip);
+        rx_workers =
+            rx_devices[0]->select_worker_cores(dest_routers, num_links_to_use, num_rx_workers, num_cores_to_skip);
 
         // TODO: not the most optimum selection, might impact somewhat in bidirectional mode
         controller_logical_core = tx_device->select_random_worker_cores(1)[0];
@@ -889,7 +894,7 @@ typedef struct test_traffic {
         CoreCoord tx_core, rx_core;
         tt_metal::NOC noc_id;
         std::vector<uint32_t> zero_buf(2, 0);
-        CoreCoord router_virtual_core;
+        chan_id_t eth_chan;
         uint32_t mesh_chip_id = rx_devices[0]->mesh_chip_id;
 
         // update the test results address, which will be used later for polling, collecting results
@@ -933,23 +938,24 @@ typedef struct test_traffic {
 
         // launch tx kernels
         for (auto i = 0; i < num_tx_workers; i++) {
-            router_virtual_core = std::get<0>(tx_workers[i]);
+            eth_chan = std::get<0>(tx_workers[i]);
             noc_id = (std::get<1>(tx_workers[i]) == 0) ? tt_metal::NOC::NOC_0 : tt_metal::NOC::NOC_1;
             tx_core = std::get<2>(tx_workers[i]);
             rx_core = std::get<2>(rx_workers[tx_to_rx_map[i]]);
+
+            auto routing_plane = tx_device->board_handle->get_routing_plane_from_chan(eth_chan);
 
             // setup runtime args
             std::vector<uint32_t> runtime_args = {
                 time_seed,                                           // 0: time based seed
                 tx_device->get_endpoint_id(tx_core),                 // 1: src_endpoint_id
-                rx_devices[0]->get_noc_offset(rx_core),                  // 2: dest_noc_offset
+                rx_devices[0]->get_noc_offset(rx_core),              // 2: dest_noc_offset
                 tx_device->get_noc_offset(controller_logical_core),  // 3: controller noc offset
-                router_virtual_core.x,                               // 4: router_x
-                router_virtual_core.y,                               // 5: router_y
-                mesh_chip_id,                                        // 6: mesh and chip id
-                rx_buf_size,                                         // 7: space in rx's L1
-                gk_interface_addr,                                   // 8: gk_message_addr_l
-                tx_device->gk_noc_offset,                            // 9: gk_message_addr_h
+                routing_plane,                                       // 4: routing plane to use
+                mesh_chip_id,                                        // 5: mesh and chip id
+                rx_buf_size,                                         // 6: space in rx's L1
+                gk_interface_addr,                                   // 7: gk_message_addr_l
+                tx_device->gk_noc_offset,                            // 8: gk_message_addr_h
             };
 
             if (ASYNC_WR & fabric_command) {
@@ -962,8 +968,9 @@ typedef struct test_traffic {
 
             log_info(
                 LogTest,
-                "Device: {}, TX kernel running on: logical: x={},y={}; virtual: x={},y={}",
+                "[Device: Phys: {}, Logical: {}] TX kernel running on: logical: x={},y={}; virtual: x={},y={}",
                 tx_device->physical_chip_id,
+                (uint32_t)tx_device->logical_chip_id,
                 tx_core.x,
                 tx_core.y,
                 tx_virtual_cores[i].x,
@@ -1017,8 +1024,9 @@ typedef struct test_traffic {
 
                 log_info(
                     LogTest,
-                    "Device: {}, RX kernel running on: logical: x={},y={}; virtual: x={},y={}",
+                    "[Device: Phys: {}, Logical: {}] RX kernel running on: logical: x={},y={}; virtual: x={},y={}",
                     rx_device->physical_chip_id,
+                    (uint32_t)rx_device->logical_chip_id,
                     rx_core.x,
                     rx_core.y,
                     rx_virtual_cores[i].x,
@@ -1074,11 +1082,12 @@ typedef struct test_traffic {
                 tx_device->physical_chip_id, tx_virtual_cores[i], test_results_address, 128));
             log_info(
                 LogTest,
-                "Device {} TX{} status = {}",
+                "[Device: Phys: {}, Logical: {}] TX{} status = {}",
                 tx_device->physical_chip_id,
+                (uint32_t)tx_device->logical_chip_id,
                 i,
-                packet_queue_test_status_to_string(tx_results[i][PQ_TEST_STATUS_INDEX]));
-            pass &= (tx_results[i][PQ_TEST_STATUS_INDEX] == PACKET_QUEUE_TEST_PASS);
+                tt_fabric_status_to_string(tx_results[i][TT_FABRIC_STATUS_INDEX]));
+            pass &= (tx_results[i][TT_FABRIC_STATUS_INDEX] == TT_FABRIC_STATUS_PASS);
         }
 
         // collect rx results
@@ -1089,11 +1098,12 @@ typedef struct test_traffic {
                     rx_devices[d]->physical_chip_id, rx_virtual_cores[i], test_results_address, 128));
                 log_info(
                     LogTest,
-                    "Device {} RX{} status = {}",
+                    "[Device: Phys: {}, Logical: {}] RX{} status = {}",
                     rx_devices[d]->physical_chip_id,
+                    (uint32_t)rx_devices[d]->logical_chip_id,
                     i,
-                    packet_queue_test_status_to_string(rx_results[d][i][PQ_TEST_STATUS_INDEX]));
-                pass &= (rx_results[d][i][PQ_TEST_STATUS_INDEX] == PACKET_QUEUE_TEST_PASS);
+                    tt_fabric_status_to_string(rx_results[d][i][TT_FABRIC_STATUS_INDEX]));
+                pass &= (rx_results[d][i][TT_FABRIC_STATUS_INDEX] == TT_FABRIC_STATUS_PASS);
             }
         }
 
@@ -1111,10 +1121,10 @@ typedef struct test_traffic {
                 num_tx_packets = 0;
 
                 for (auto j : rx_to_tx_map[i]) {
-                    num_tx_words += get_64b_result(tx_results[j], PQ_TEST_WORD_CNT_INDEX);
+                    num_tx_words += get_64b_result(tx_results[j], TT_FABRIC_WORD_CNT_INDEX);
                     num_tx_packets += get_64b_result(tx_results[j], TX_TEST_IDX_NPKT);
                 }
-                pass &= (get_64b_result(rx_results[d][i], PQ_TEST_WORD_CNT_INDEX) == num_tx_words);
+                pass &= (get_64b_result(rx_results[d][i], TT_FABRIC_WORD_CNT_INDEX) == num_tx_words);
                 pass &= (get_64b_result(rx_results[d][i], TX_TEST_IDX_NPKT) == num_tx_packets);
 
                 if (!pass) {
@@ -1133,12 +1143,12 @@ typedef struct test_traffic {
         uint64_t total_rx_words_checked = 0;
         uint64_t max_tx_elapsed_cycles = 0;
         for (uint32_t i = 0; i < num_tx_workers; i++) {
-            uint64_t tx_words_sent = get_64b_result(tx_results[i], PQ_TEST_WORD_CNT_INDEX);
+            uint64_t tx_words_sent = get_64b_result(tx_results[i], TT_FABRIC_WORD_CNT_INDEX);
             total_tx_words_sent += tx_words_sent;
-            uint64_t tx_elapsed_cycles = get_64b_result(tx_results[i], PQ_TEST_CYCLES_INDEX);
+            uint64_t tx_elapsed_cycles = get_64b_result(tx_results[i], TT_FABRIC_CYCLES_INDEX);
             double tx_bw = ((double)tx_words_sent) * PACKET_WORD_SIZE_BYTES / tx_elapsed_cycles;
             total_tx_bw += tx_bw;
-            uint64_t iter = get_64b_result(tx_results[i], PQ_TEST_ITER_INDEX);
+            uint64_t iter = get_64b_result(tx_results[i], TT_FABRIC_ITER_INDEX);
             max_tx_elapsed_cycles = std::max(max_tx_elapsed_cycles, tx_elapsed_cycles);
             // uint64_t zero_data_sent_iter = get_64b_result(tx_results[i], TX_TEST_IDX_ZERO_DATA_WORDS_SENT_ITER);
             // uint64_t few_data_sent_iter = get_64b_result(tx_results[i], TX_TEST_IDX_FEW_DATA_WORDS_SENT_ITER);
@@ -1149,8 +1159,9 @@ typedef struct test_traffic {
 
             log_info(
                 LogTest,
-                "Device: {}, TX {} words sent: {}, elapsed cycles: {} -> BW: {:.2f} B/cycle",
+                "[Device: Phys: {}, Logical: {}] TX {} words sent: {}, elapsed cycles: {} -> BW: {:.2f} B/cycle",
                 tx_device->physical_chip_id,
+                tx_device->logical_chip_id,
                 i,
                 tx_words_sent,
                 tx_elapsed_cycles,
@@ -1172,12 +1183,13 @@ typedef struct test_traffic {
         total_tx_bw_2 = ((double)total_tx_words_sent) * PACKET_WORD_SIZE_BYTES / max_tx_elapsed_cycles;
         for (uint32_t d = 0; d < rx_devices.size(); d++) {
             for (uint32_t i = 0; i < num_rx_workers; i++) {
-                uint64_t words_received = get_64b_result(rx_results[d][i], PQ_TEST_WORD_CNT_INDEX);
+                uint64_t words_received = get_64b_result(rx_results[d][i], TT_FABRIC_WORD_CNT_INDEX);
                 uint32_t num_tx = rx_to_tx_map[i].size();
                 log_info(
                     LogTest,
-                    "Device: {}, RX {}, num producers = {}, words received = {}",
+                    "[Device: Phys: {}, Logical: {}] RX {}, num producers = {}, words received = {}",
                     rx_devices[d]->physical_chip_id,
+                    (uint32_t)rx_devices[d]->logical_chip_id,
                     i,
                     num_tx,
                     words_received);
@@ -1495,8 +1507,6 @@ int main(int argc, char **argv) {
     }
 
     global_rng.seed(prng_seed);
-    log_info(LogTest, "PRNG seed = {}", prng_seed);
-
     time_seed = std::chrono::system_clock::now().time_since_epoch().count();
 
     try {
@@ -1605,10 +1615,13 @@ int main(int argc, char **argv) {
             throw std::runtime_error("Test cannot run on specified device.");
         } */
 
+        uint32_t worker_unreserved_base_addr =
+            hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
+
         if (run_gk_on_idle_ethernet) {
             routing_table_addr = hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
         } else {
-            routing_table_addr = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
+            routing_table_addr = worker_unreserved_base_addr;
         }
         gk_interface_addr = routing_table_addr + sizeof(fabric_router_l1_config_t) * 4;
         socket_info_addr = gk_interface_addr + sizeof(gatekeeper_info_t);
@@ -1641,8 +1654,9 @@ int main(int argc, char **argv) {
             defines["CHECK_TIMEOUT"] = "";
         }
 
-        uint32_t client_interface_addr = routing_table_addr + sizeof(fabric_router_l1_config_t) * 4;
-        uint32_t client_pull_req_buf_addr = client_interface_addr + sizeof(fabric_client_interface_t);
+        uint32_t client_interface_addr = worker_unreserved_base_addr;
+        uint32_t client_pull_req_buf_addr =
+            client_interface_addr + sizeof(fabric_client_interface_t) + sizeof(fabric_router_l1_config_t) * 4;
 
         std::vector<uint32_t> tx_compile_args = {
             0,                           //(device->id() << 8) + src_endpoint_start_id + i,  // 0: src_endpoint_id
@@ -1748,15 +1762,15 @@ int main(int argc, char **argv) {
                     tt::llrt::read_hex_vec_from_core(
                         device->id(), tunneler_phys_core, tunneler_test_results_addr, 128);
                 log_info(LogTest, "L Router status = {}",
-           packet_queue_test_status_to_string(router_results[PQ_TEST_STATUS_INDEX])); pass &=
-           (router_results[PQ_TEST_STATUS_INDEX] == PACKET_QUEUE_TEST_PASS);
+           tt_fabric_status_to_string(router_results[TT_FABRIC_STATUS_INDEX])); pass &=
+           (router_results[TT_FABRIC_STATUS_INDEX] == TT_FABRIC_STATUS_PASS);
 
                 vector<uint32_t> r_router_results =
                     tt::llrt::read_hex_vec_from_core(
                         device_r->id(), r_tunneler_phys_core, tunneler_test_results_addr, 128);
                 log_info(LogTest, "R Router status = {}",
-           packet_queue_test_status_to_string(r_router_results[PQ_TEST_STATUS_INDEX])); pass &=
-           (r_router_results[PQ_TEST_STATUS_INDEX] == PACKET_QUEUE_TEST_PASS);
+           tt_fabric_status_to_string(r_router_results[TT_FABRIC_STATUS_INDEX])); pass &=
+           (r_router_results[TT_FABRIC_STATUS_INDEX] == TT_FABRIC_STATUS_PASS);
         */
 
         // close devices
