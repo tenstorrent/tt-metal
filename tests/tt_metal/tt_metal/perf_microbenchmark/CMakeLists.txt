@@ -49,6 +49,11 @@ set(ARCHITECTURES
     "blackhole"
 )
 
+set(G_BENCH_TESTS
+    "dispatch/test_pgm_dispatch.cpp"
+    "3_pcie_transfer/pcie_bench.cpp"
+)
+
 foreach(arch ${ARCHITECTURES})
     foreach(TEST_SRC ${PERF_MICROBENCH_TESTS_SRCS})
         get_filename_component(TEST_TARGET ${TEST_SRC} NAME_WE)
@@ -69,14 +74,7 @@ foreach(arch ${ARCHITECTURES})
                 yaml-cpp::yaml-cpp
                 tt_fabric
         )
-        if(
-            ${TEST_SRC}
-                STREQUAL
-                "dispatch/test_pgm_dispatch.cpp"
-            OR ${TEST_SRC}
-                STREQUAL
-                "3_pcie_transfer/pcie_bench.cpp"
-        )
+        if(${TEST_SRC} IN_LIST G_BENCH_TESTS)
             target_link_libraries(${TEST_TARGET} PRIVATE benchmark::benchmark)
         endif()
         target_include_directories(
