@@ -861,6 +861,7 @@ TT_ENABLE_UNITY_BUILD(ttnn)
 set(TTNN_INSTALL_RPATH
     "${PROJECT_BINARY_DIR}/lib"
     "$ORIGIN/build/lib"
+    "$ORIGIN"
 )
 
 #Make sure library built is _ttnn.so and that it can find all it's linked libraries
