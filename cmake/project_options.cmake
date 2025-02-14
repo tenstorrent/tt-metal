@@ -20,6 +20,7 @@ option(TT_UNITY_BUILDS "Build with Unity builds" ON)
 option(BUILD_TT_TRAIN "Enables build of tt-train" OFF)
 option(ENABLE_TTNN_SHARED_SUBLIBS "Use shared libraries for ttnn to speed up incremental builds" OFF)
 option(TT_ENABLE_LIGHT_METAL_TRACE "Enable Light Metal Trace" ON)
+option(ENABLE_COVERAGE "Enable code coverage instrumentation" OFF)
 
 ###########################################################################################
 
