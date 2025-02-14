@@ -36,6 +36,7 @@ show_help() {
     echo "  --ttnn-shared-sub-libs           Use shared libraries for ttnn."
     echo "  --toolchain-path                 Set path to CMake toolchain file."
     echo "  --configure-only                 Only configure the project, do not build."
+    echo "  --enable-coverage                Instrument the binaries for code coverage."
 }
 
 clean() {
@@ -69,6 +70,7 @@ c_compiler_path=""
 ttnn_shared_sub_libs="OFF"
 toolchain_path="cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
 configure_only="OFF"
+enable_coverage="OFF"
 
 declare -a cmake_args
 
@@ -105,6 +107,7 @@ c-compiler-path:
 ttnn-shared-sub-libs
 toolchain-path:
 configure-only
+enable-coverage
 "
 
 # Flatten LONGOPTIONS into a comma-separated string for getopt
@@ -138,6 +141,8 @@ while true; do
             enable_tsan="ON";;
         -u|--enable-ubsan)
             enable_ubsan="ON";;
+        --enable-coverage)
+            enable_coverage="ON";;
         -b|--build-type)
             build_type="$2";shift;;
         -p|--enable-profiler)
@@ -228,6 +233,7 @@ echo "INFO: Enable AddressSanitizer: $enable_asan"
 echo "INFO: Enable MemorySanitizer: $enable_msan"
 echo "INFO: Enable ThreadSanitizer: $enable_tsan"
 echo "INFO: Enable UndefinedBehaviorSanitizer: $enable_ubsan"
+echo "INFO: Enable Coverage: $enable_coverage"
 echo "INFO: Build directory: $build_dir"
 echo "INFO: Install Prefix: $cmake_install_prefix"
 echo "INFO: Build tests: $build_tests"
@@ -282,6 +288,10 @@ fi
 
 if [ "$enable_profiler" = "ON" ]; then
     cmake_args+=("-DENABLE_TRACY=ON")
+fi
+
+if [ "$enable_coverage" = "ON" ]; then
+    cmake_args+=("-DENABLE_COVERAGE=ON")
 fi
 
 if [ "$export_compile_commands" = "ON" ]; then
