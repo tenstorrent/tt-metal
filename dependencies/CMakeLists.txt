@@ -28,7 +28,7 @@ CPMAddPackage(
         "BOOST_SKIP_INSTALL_RULES ON"
         "BUILD_SHARED_LIBS OFF"
         "BOOST_INCLUDE_LIBRARIES core\\\;container\\\;smart_ptr\\\;interprocess"
-    FIND_PACKAGE_ARGUMENTS "CONFIG REQUIRED GLOBAL"
+    FIND_PACKAGE_ARGUMENTS "CONFIG REQUIRED"
 )
 
 ensureboosttarget(core)
@@ -117,7 +117,6 @@ CPMAddPackage(
     GIT_TAG 11.0.1
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
-    FIND_PACKAGE_ARGUMENTS "GLOBAL"
 )
 
 ############################################################################################################################
@@ -133,7 +132,6 @@ CPMAddPackage(
     OPTIONS
         "CMAKE_BUILD_TYPE Release"
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
-    FIND_PACKAGE_ARGUMENTS "GLOBAL"
 )
 
 ############################################################################################################################
@@ -146,7 +144,6 @@ CPMAddPackage(
     GIT_TAG v2.13.6
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
-    FIND_PACKAGE_ARGUMENTS "GLOBAL"
 )
 
 ############################################################################################################################
@@ -159,7 +156,6 @@ CPMAddPackage(
     GIT_TAG v3.11.3
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
-    FIND_PACKAGE_ARGUMENTS "GLOBAL"
 )
 
 ############################################################################################################################
@@ -173,7 +169,6 @@ CPMAddPackage(
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "XTL_ENABLE_TESTS OFF"
-    FIND_PACKAGE_ARGUMENTS "GLOBAL"
 )
 CPMAddPackage(
     NAME xtensor
@@ -182,7 +177,6 @@ CPMAddPackage(
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "XTENSOR_ENABLE_TESTS OFF"
-    FIND_PACKAGE_ARGUMENTS "GLOBAL"
 )
 CPMAddPackage(
     NAME xtensor-blas
@@ -191,7 +185,6 @@ CPMAddPackage(
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "XTENSOR_ENABLE_TESTS OFF"
-    FIND_PACKAGE_ARGUMENTS "GLOBAL"
 )
 
 ############################################################################################################################
@@ -206,7 +199,6 @@ CPMAddPackage(
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE"
         "BENCHMARK_USE_LIBCXX ${ENABLE_LIBCXX}"
         "BENCHMARK_ENABLE_TESTING OFF"
-    FIND_PACKAGE_ARGUMENTS "GLOBAL"
 )
 
 if(benchmark_ADDED)
@@ -223,12 +215,11 @@ endif()
 ############################################################################################################################
 
 CPMAddPackage(
-    NAME taskflow
+    NAME Taskflow
     GITHUB_REPOSITORY taskflow/taskflow
     GIT_TAG v3.7.0
     OPTIONS
         "CMAKE_MESSAGE_LOG_LEVEL NOTICE" # Taskflow's CMakeLists.txt is super noisy
-    FIND_PACKAGE_ARGUMENTS "GLOBAL"
 )
 add_library(Taskflow::Taskflow ALIAS Taskflow)
 
@@ -245,7 +236,6 @@ CPMAddPackage(
         "FLATBUFFERS_BUILD_TESTS OFF"
         "FLATBUFFERS_SKIP_MONSTER_EXTRA ON"
         "FLATBUFFERS_STRICT_MODE ON"
-    FIND_PACKAGE_ARGUMENTS "GLOBAL"
 )
 
 if(flatbuffers_ADDED)
