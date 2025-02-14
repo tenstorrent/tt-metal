@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.19...3.30)
+cmake_minimum_required(VERSION 3.24...3.30)
 
 # Sanity check, forgetting to clone submodules is a common omission and results in a poor error message
 if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tt_metal/third_party/umd/CMakeLists.txt")
@@ -94,6 +94,9 @@ set(CMAKE_CXX_FLAGS_CI "-O3 -DDEBUG")
 
 # We're not currently using C++20 modules, so don't bother scanning for them
 set(CMAKE_CXX_SCAN_FOR_MODULES FALSE)
+
+# Promote all IMPORTED targets discovered by find_package() to a GLOBAL scope
+set(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL TRUE)
 
 ############################################################################################################################
 # Project Options
