@@ -28,11 +28,9 @@ MeshCoordinate shape_back(const SimpleMeshShape& shape) {
 
 }  // namespace
 
-SimpleMeshShape::SimpleMeshShape(uint32_t num_elements) : ShapeBase({num_elements}) { compute_strides(); }
-SimpleMeshShape::SimpleMeshShape(uint32_t num_rows, uint32_t num_cols) : ShapeBase({num_rows, num_cols}) {
-    compute_strides();
-}
-SimpleMeshShape::SimpleMeshShape(uint32_t x, uint32_t y, uint32_t z) : ShapeBase({x, y, z}) { compute_strides(); }
+SimpleMeshShape::SimpleMeshShape(uint32_t x) : ShapeBase({x}) {}
+SimpleMeshShape::SimpleMeshShape(uint32_t x, uint32_t y) : ShapeBase({x, y}) {}
+SimpleMeshShape::SimpleMeshShape(uint32_t x, uint32_t y, uint32_t z) : ShapeBase({x, y, z}) {}
 
 SimpleMeshShape::SimpleMeshShape(const MeshShape& legacy_shape) :
     SimpleMeshShape(legacy_shape.num_rows, legacy_shape.num_cols) {}
@@ -69,7 +67,7 @@ std::ostream& operator<<(std::ostream& os, const SimpleMeshShape& shape) {
 }
 
 MeshCoordinate::MeshCoordinate(uint32_t coord) : value_({coord}) {}
-MeshCoordinate::MeshCoordinate(uint32_t row, uint32_t col) : value_({row, col}) {}
+MeshCoordinate::MeshCoordinate(uint32_t x, uint32_t y) : value_({x, y}) {}
 MeshCoordinate::MeshCoordinate(uint32_t x, uint32_t y, uint32_t z) : value_({x, y, z}) {}
 
 MeshCoordinate::MeshCoordinate(tt::stl::Span<const uint32_t> coords) : value_(coords.begin(), coords.end()) {}

@@ -21,8 +21,8 @@ public:
     using ShapeBase::operator[];
 
     // Shorthands for constructing 1D, 2D and 3D shapes.
-    SimpleMeshShape(uint32_t num_elements);
-    SimpleMeshShape(uint32_t num_rows, uint32_t num_cols);
+    SimpleMeshShape(uint32_t x);
+    SimpleMeshShape(uint32_t x, uint32_t y);
     SimpleMeshShape(uint32_t x, uint32_t y, uint32_t z);
 
     // Temporary constructor for transitioning to `SimpleMeshShape`.
@@ -56,8 +56,8 @@ private:
 class MeshCoordinate {
 public:
     // Shorthands for constructing 1D, 2D and 3D coordinates.
-    MeshCoordinate(uint32_t coord);
-    MeshCoordinate(uint32_t row, uint32_t col);
+    MeshCoordinate(uint32_t x);
+    MeshCoordinate(uint32_t x, uint32_t y);
     MeshCoordinate(uint32_t x, uint32_t y, uint32_t z);
 
     // Constructs a generic N-dimensional coordinate.
