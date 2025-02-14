@@ -69,7 +69,7 @@ set_target_properties(
     tt_metal
     PROPERTIES
         INSTALL_RPATH
-            "${PROJECT_BINARY_DIR}/lib"
+            "${PROJECT_BINARY_DIR}/lib;$ORIGIN"
         ADDITIONAL_CLEAN_FILES
             "${PROJECT_BINARY_DIR}/lib;${PROJECT_BINARY_DIR}/obj"
 )
