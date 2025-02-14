@@ -104,6 +104,7 @@ RUN mkdir -p /tmp/json \
          -B /tmp/json/build \
          -DCMAKE_BUILD_TYPE=Release \
          -DJSON_BuildTests=OFF \
+         -DJSON_Install=ON \
     && make -C /tmp/json/build -j$(nproc) \
     && make -C /tmp/json/build install \
     && rm -rf /tmp/json
