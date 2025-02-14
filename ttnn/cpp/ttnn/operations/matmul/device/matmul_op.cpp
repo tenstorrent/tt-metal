@@ -1528,6 +1528,19 @@ void Matmul::validate(
             this->output_dtype.value());
     }
 
+    const bool has_width_sharded_input = (input_tensor_a.is_sharded() && input_tensor_a.memory_config().memory_layout ==
+                                                                             TensorMemoryLayout::WIDTH_SHARDED) ||
+                                         (input_tensor_b.is_sharded() && input_tensor_b.memory_config().memory_layout ==
+                                                                             TensorMemoryLayout::WIDTH_SHARDED);
+
+    const bool has_block_sharded_input = (input_tensor_a.is_sharded() && input_tensor_a.memory_config().memory_layout ==
+                                                                             TensorMemoryLayout::BLOCK_SHARDED) ||
+                                         (input_tensor_b.is_sharded() && input_tensor_b.memory_config().memory_layout ==
+                                                                             TensorMemoryLayout::BLOCK_SHARDED);
+    TT_FATAL(
+        !(has_width_sharded_input && has_block_sharded_input),
+        "Cannot have one input width sharded and one input block sharded");
+
     std::visit(
         [input_tensor_a, input_tensor_b, optional_bias, in0_tile_shape, in1_tile_shape, this](
             const auto& program_config) {
