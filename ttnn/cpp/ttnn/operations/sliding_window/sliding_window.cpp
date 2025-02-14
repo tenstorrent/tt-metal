@@ -479,7 +479,8 @@ generate_halo_kernel_config_tensors(
             flat_data[1] = nocy;
             flat_data[2] = len;
             uint32_t idx = 3;
-            for (size_t i = 0; i < data.size(); ++i) {
+            for (size_t i = data.size(); i-- > 0;) {  // reverse the order of the local config for in place operaiton
+                                                      // (this has no negative effect on non-in place operation)
                 auto [src_start, dst_start, length] = data[i];
                 flat_data[idx++] = src_start;
                 flat_data[idx++] = dst_start;
