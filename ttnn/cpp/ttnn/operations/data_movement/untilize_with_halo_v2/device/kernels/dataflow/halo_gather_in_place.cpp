@@ -50,11 +50,15 @@ void copy_sticks_async(
         length = config_data[i + 2];
         i += 3;
 
+        DPRINT << "noc_x: " << noc_x << " noc_y: " << noc_y << " length: " << length << ENDL();
+
         const uint64_t base_addr = get_noc_addr(noc_x, noc_y, is_read ? in_base_l1_addr : out_base_l1_addr);
         for (uint16_t j = 0; j < length; j += 3) {
             uint16_t src_local_idx = config_data[i + j + 0];
             uint16_t dst_local_idx = config_data[i + j + 1];
             uint16_t nsticks = config_data[i + j + 2];
+            DPRINT << "src_local_idx: " << src_local_idx << " dst_local_idx: " << dst_local_idx
+                   << " nsticks: " << nsticks << ENDL();
             uint32_t size = nsticks * stick_nbytes;
             uint32_t dst_offset = dst_local_idx * stick_nbytes;
             uint32_t src_offset = src_local_idx * input_aligned_page_size;
@@ -200,6 +204,8 @@ void kernel_main() {
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(my_semaphore_noc_addr);
         noc_semaphore_wait(my_semaphore_noc_addr_ptr, remote_refs_to_me);
     }
+
+    DPRINT << "LOCAL COPY" << ENDL();
 
     if constexpr (local_config_cb_id) {
         uint32_t config_data_l1_addr = get_read_ptr(local_config_cb_id);
