@@ -526,10 +526,46 @@ void py_module(py::module& module) {
            tensor (Tensor): The tensor to get the shard from.
            device_id (int): The device id to get the shard for.
 
+        Returns:
+            Tensor: The shard of the tensor corresponding to the device_id.
+    )doc");
 
-       Returns:
-           Tensor: The shard of the tensor corresponding to the device_id.
-   )doc");
+    auto py_replicate_tensor_config = static_cast<py::class_<ReplicateTensor>>(module.attr("ShardTensor"));
+    py_replicate_tensor_config.def(py::init<>())
+        .def(py::init<int>(), py::arg("replication_factor") = 1)
+        .def_readwrite("shard_dimension", &ShardTensor::shard_dimension)
+        .def("__eq__", [](const ReplicateTensor& a, const ReplicateTensor& b) {
+            return a.replication_factor == b.replication_factor;
+        });
+
+    auto py_shard_tensor_config = static_cast<py::class_<ShardTensor>>(module.attr("ShardTensor"));
+    py_shard_tensor_config.def(py::init<int>(), py::arg("shard_dimension"))
+        .def_readwrite("shard_dimension", &ShardTensor::shard_dimension)
+        .def("__eq__", [](const ShardTensor& a, const ShardTensor& b) { return a == b; });
+
+    auto py_shard_mesh = static_cast<py::class_<ShardMesh>>(module.attr("ShardMesh"));
+    py_shard_mesh.def(py::init<>()).def_readwrite("y", &ShardMesh::y).def_readwrite("x", &ShardMesh::x);
+
+    auto py_shard_tensor2d = static_cast<py::class_<ShardTensor2D>>(module.attr("ShardTensor2D"));
+    py_shard_tensor2d.def(py::init<ShardMesh>(), py::arg("mesh"))
+        .def_readonly("shard_mesh", &ShardTensor2D::shard_mesh)
+        .def("__eq__", [](const ShardTensor2D& a, const ShardTensor2D& b) { return a == b; });
+
+    auto py_allgather_config = static_cast<py::class_<AllGatherTensor>>(module.attr("AllGatherTensor"));
+    .def(py::init<>()).def("__eq__", [](const AllGatherTensor& a, const AllGatherTensor& b) { return a == b; });
+
+    module.def(
+        "get_distributed_tensor_config",
+        &get_distributed_tensor_config,
+        py::arg("metadata"),
+        R"doc(
+            Returns a distributed_tensor_config object given a valid metadata object of the type
+
+            {
+                "item": "field",
+                "item": "field",
+            }
+        )doc");
     module.def(
         "get_device_tensor",
         py::overload_cast<const Tensor&, const IDevice*>(&ttnn::distributed::get_device_tensor),
@@ -592,7 +628,8 @@ void py_module(py::module& module) {
             return distribute_tensor(tensor, mapper, mesh_device);
         },
         py::arg("tensor"),
-        py::arg("mapper"));
+        py::arg("mapper"),
+        py::arg("mesh_device"));
     module.def(
         "aggregate_tensor",
         [](const Tensor& tensor, const MeshToTensor& composer) -> Tensor { return aggregate_tensor(tensor, composer); },
