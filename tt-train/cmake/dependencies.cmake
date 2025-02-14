@@ -89,6 +89,9 @@ CPMAddPackage(
 )
 
 CPMAddPackage(NAME Taskflow GITHUB_REPOSITORY taskflow/taskflow GIT_TAG v3.7.0 OPTIONS "TF_BUILD_TESTS OFF")
+if(Taskflow_ADDED AND NOT TARGET Taskflow::Taskflow)
+    add_library(Taskflow::Taskflow ALIAS Taskflow)
+endif()
 
 include(${PROJECT_SOURCE_DIR}/cmake/fetch_cli11.cmake)
 
