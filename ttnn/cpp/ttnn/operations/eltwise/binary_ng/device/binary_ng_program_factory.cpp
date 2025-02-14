@@ -196,6 +196,7 @@ void set_or_update_runtime_arguments(
             }
         }
     }
+    compute_with_storage_grid = CoreCoord{1, 1};
     const uint32_t num_cores_total =
         zero_start_grid ? compute_with_storage_grid.x * compute_with_storage_grid.y : all_device_cores.num_cores();
 
@@ -315,6 +316,9 @@ void set_or_update_runtime_arguments(
 
             auto [freq, counter] =
                 calculate_compute_kernel_args(operation_attributes.subtile_broadcast_type, c_start_id, cHt, cWt);
+            // tt::log_info(tt::LogOp, "cHtWt = {}", cHtWt);
+            tt::log_info(tt::LogOp, "counter = {}", counter);
+            tt::log_info(tt::LogOp, "freq = {}", freq);
             std::array compute_runtime_args = {c_num_tiles, freq, counter};
             handle_args(program, compute_kernel_id, core, compute_runtime_args);
         } else {

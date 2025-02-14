@@ -6,6 +6,7 @@
 #include "cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
 #include "compute_kernel_api/eltwise_unary/eltwise_unary.h"
+#include "debug/dprint.h"
 
 #include <cstdint>
 
@@ -35,10 +36,15 @@ ALWI void batchnorm_bcast_tiles(
 
     // input - batch_mean
     cb_wait_front(cb_bcast, onetile);
+    // DPRINT_UNPACK(DPRINT << "this is the unpack cb_bcast" << ENDL());
+    // DPRINT << TSLICE(cb_bcast, 0, SliceRange::h0_w0_32()) << ENDL();
     for (uint32_t j = tile_start; j < freq; ++j) {
         cb_wait_front(cb_other, onetile);
+        // DPRINT_UNPACK(DPRINT << "   this is the unpack cb_other" << ENDL());
+        // DPRINT << TSLICE(cb_other, 0, SliceRange::h0_w0_32()) << ENDL();
 
         cb_reserve_back(cb_num, onetile);
+        // DPRINT_PACK(DPRINT << "     this is the pack cb_num" << ENDL());
 
         sub_binary_tile_init();
         tile_regs_acquire();
@@ -58,27 +64,39 @@ ALWI void batchnorm_bcast_tiles(
         cb_push_back(cb_num, onetile);
         cb_pop_front(cb_other, onetile);
     }
+    // DPRINT << "out of cb_other loop : " << ENDL();
     cb_pop_front(cb_bcast, onetile);
 
     // 1/(sqrt(batch_var + eps))
     cb_reserve_back(cb_den, onetile);
+    DPRINT_PACK(DPRINT << "this is the pack cb_den" << ENDL());
     cb_wait_front(cb_batch_var, onetile);
+    DPRINT_UNPACK(DPRINT << "this is the unpack cb_batch_var" << ENDL());
+    // DPRINT << TSLICE(cb_batch_var, 0, SliceRange::h0_w0_32()) << ENDL();
 
-    add_binary_tile_init();
-    rsqrt_tile_init();
+    tile_regs_acquire();
+    tile_regs_wait();
+
+    DPRINT << "wait 1 : " << ENDL();
     copy_tile_to_dst_init_short_with_dt(cb_eps, cb_batch_var);
     for (uint32_t i = 0; i < onetile; ++i) {
+        DPRINT << "wait 1.3 : " << ENDL();
         copy_tile(cb_batch_var, i, i * 2);
+        DPRINT << "wait 1.5 : " << ENDL();
     }
+    DPRINT << "wait 2 : " << ENDL();
     copy_tile_to_dst_init_short_with_dt(cb_batch_var, cb_eps);
     for (uint32_t i = 0; i < onetile; ++i) {
         copy_tile(cb_eps, i, i * 2 + 1);
 
+        DPRINT << "wait 3 : " << ENDL();
+        add_binary_tile_init();
         add_binary_tile(i * 2, i * 2 + 1);
+        rsqrt_tile_init();
         rsqrt_tile(i * 2);
         tile_regs_commit();
 
-        tile_regs_wait();
+        // tile_regs_wait();
         pack_tile(i * 2, cb_den);
     }
     tile_regs_release();
@@ -88,10 +106,15 @@ ALWI void batchnorm_bcast_tiles(
 
     // (input - batch_mean)/(sqrt(batch_var + eps)) = result
     cb_wait_front(cb_den, onetile);
+    DPRINT_UNPACK(DPRINT << "this is the unpack cb_den" << ENDL());
+    // DPRINT << TSLICE(cb_den, 0, SliceRange::h0_w0_32()) << ENDL();
     for (uint32_t j = tile_start; j < freq; ++j) {
         cb_wait_front(cb_num, onetile);
+        DPRINT_UNPACK(DPRINT << "this is the unpack cb_num" << ENDL());
+        // DPRINT << TSLICE(cb_num, 0, SliceRange::h0_w0_32()) << ENDL();
 
         cb_reserve_back(cb_affine_or_out, onetile);
+        DPRINT_PACK(DPRINT << "this is the pack cb_affine_or_out" << ENDL());
 
         mul_binary_tile_init();
         tile_regs_acquire();
@@ -115,10 +138,15 @@ ALWI void batchnorm_bcast_tiles(
 
     if (weight_has_value) {  // result = result * weight
         cb_wait_front(cb_weight, onetile);
+        // DPRINT_UNPACK(DPRINT << "this is the unpack cb_weight" << ENDL());
+        // DPRINT << TSLICE(cb_weight, 0, SliceRange::h0_w0_32()) << ENDL();
         for (uint32_t j = tile_start; j < freq; ++j) {
             cb_wait_front(cb_affine_or_out, onetile);
+            // DPRINT_UNPACK(DPRINT << "this is the unpack cb_affine_or_out" << ENDL());
+            // DPRINT << TSLICE(cb_affine_or_out, 0, SliceRange::h0_w0_32()) << ENDL();
 
             cb_reserve_back(cb_scaled_output, onetile);
+            // DPRINT_PACK(DPRINT << "this is the unpack cb_scaled_output" << ENDL());
 
             mul_binary_tile_init();
             tile_regs_acquire();
@@ -143,8 +171,10 @@ ALWI void batchnorm_bcast_tiles(
 
     if (bias_has_value) {  // result = result + bias
         cb_wait_front(cb_bias, onetile);
+        // DPRINT << TSLICE(cb_bias, 0, SliceRange::h0_w0_32()) << ENDL();
         for (uint32_t j = tile_start; j < freq; ++j) {
             cb_wait_front(cb_tmp_1, onetile);
+            // DPRINT << TSLICE(cb_tmp_1, 0, SliceRange::h0_w0_32()) << ENDL();
 
             cb_reserve_back(cb_output_0, onetile);
 
@@ -176,6 +206,10 @@ void MAIN {
     uint32_t tile_start = get_arg_val<uint32_t>(2);
     constexpr uint32_t weight_has_value = get_compile_time_arg_val(0) == 1;
     constexpr uint32_t bias_has_value = get_compile_time_arg_val(1) == 1;
+    // DPRINT << "compute kernel - 1" << ENDL();
+    // DPRINT << "     num_tiles : " << num_tiles << ENDL();
+    // DPRINT << "     tile_freq : " << tile_freq << ENDL();
+    // DPRINT << "     tile_start : " << tile_start << ENDL();
 
     if (num_tiles == 0) {
         return;
@@ -200,11 +234,16 @@ void MAIN {
 
     uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;
     uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;
+    // DPRINT << "complete_iterations: " << complete_iterations << ENDL();
+    // DPRINT << "remaining_iterations: " << remaining_iterations << ENDL();
 
     constexpr uint32_t onetile = 1;
     cb_wait_front(cb_eps, onetile);
+    DPRINT_UNPACK(DPRINT << "this is the unpack cb_eps" << ENDL());
+    // DPRINT << TSLICE(cb_eps, 0, SliceRange::h0_w0_32()) << ENDL();
 
     for (uint32_t i = 0; i < complete_iterations; ++i, tile_start = 0) {
+        DPRINT << "     iteration first: " << i << ENDL();
         batchnorm_bcast_tiles(
             cb_bcast,
             cb_other,
@@ -222,6 +261,7 @@ void MAIN {
             bias_has_value);
     }
     if (remaining_iterations > 0) {
+        // DPRINT << "     iteration second: " << ENDL();
         batchnorm_bcast_tiles(
             cb_bcast,
             cb_other,
@@ -238,5 +278,6 @@ void MAIN {
             weight_has_value,
             bias_has_value);
     }
+    cb_pop_front(cb_eps, onetile);
 }
 }  // namespace NAMESPACE
