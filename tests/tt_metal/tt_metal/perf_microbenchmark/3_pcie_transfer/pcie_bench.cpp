@@ -11,6 +11,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <future>
+#include <limits>
 #include <mutex>
 #include <numeric>
 #include <span>
@@ -38,6 +39,9 @@
 
 using namespace tt::tt_metal;
 using namespace std::chrono_literals;  // s
+
+using Timepoint = decltype(std::chrono::high_resolution_clock::now());
+using StartEndTime = std::pair<Timepoint, Timepoint>;
 
 static constexpr uint32_t k_MemCpyAlignment = sizeof(__m256i);  // Largest instruction in memcpy impl
 
@@ -104,6 +108,10 @@ static inline void my_memcpy_to_device(void* __restrict dst, const void* __restr
     }
 }
 
+double get_current_time_seconds() {
+    return std::chrono::duration<double>(std::chrono::high_resolution_clock::now().time_since_epoch()).count();
+}
+
 // Uses low level APIs to benchmark Pcie transfer.
 // Fast dispatch needs to be disabled because this benchmark will write into hugepage.
 // For better benchmark outputs, run it with TT_METAL_LOGGER_LEVEL=FATAL
@@ -143,8 +151,7 @@ public:
     }
 
     // Get size of the host hugepage
-    uint32_t GetHostHugePageSize() const {
-        const auto dut_id = this->device->id();
+    uint32_t GetHostHugePageSize(chip_id_t dut_id) const {
         chip_id_t mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(dut_id);
         uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(dut_id);
         return tt::Cluster::instance().get_host_channel_size(mmio_device_id, channel);
@@ -333,7 +340,7 @@ BENCHMARK_DEFINE_F(MemCpyPcieBench, BM_HostHP_N_Readers)(benchmark::State& state
     const auto num_readers = state.range(2);
     const auto cached_vector = static_cast<bool>(state.range(3));
     const auto enable_host_write = static_cast<bool>(state.range(4));
-    const auto hp_size = this->GetHostHugePageSize();
+    const auto hp_size = this->GetHostHugePageSize(this->device->id());
     const auto hp_base = this->GetHostHugePage(0);  // Already aligned
     const auto hp_end = reinterpret_cast<uint64_t>(hp_base) + hp_size;
     const auto dev_addrs = this->GetDevAddrMap();
@@ -409,15 +416,13 @@ BENCHMARK_DEFINE_F(MemCpyPcieBench, BM_HostHP_N_Readers)(benchmark::State& state
 BENCHMARK_DEFINE_F(MemCpyPcieBench, BM_HostHP_N_Threads)(benchmark::State& state) {
     static_assert((k_MemCpyAlignment & ((k_MemCpyAlignment)-1)) == 0);
 
-    using Timepoint = decltype(std::chrono::high_resolution_clock::now());
-    using StartEndTime = std::pair<Timepoint, Timepoint>;
     const auto total_size = state.range(0);
     const auto page_size = state.range(1);
     const auto cached_vector = static_cast<bool>(state.range(3));
     const auto num_threads = static_cast<size_t>(state.range(4));
 
     const auto hp_base_addr = this->GetHostHugePage(0);
-    const auto hp_size = this->GetHostHugePageSize();
+    const auto hp_size = this->GetHostHugePageSize(this->device->id());
     const auto hp_end = reinterpret_cast<uint64_t>(hp_base_addr) + hp_size;
     const auto bytes_per_thread = ((total_size / num_threads) + (k_MemCpyAlignment)-1) & -(k_MemCpyAlignment);
     const auto last_thread_bytes = total_size - (bytes_per_thread * (num_threads - 1));
@@ -492,7 +497,7 @@ BENCHMARK_DEFINE_F(MemCpyPcieBench, BM_BatchSizing)(benchmark::State& state) {
     for (auto _ : state) {
         auto rnd_data = this->GenSrcData(total_size);
         auto hugepage_ptr = this->GetHostHugePage(0);
-        auto hugepage_size = this->GetHostHugePageSize();
+        auto hugepage_size = this->GetHostHugePageSize(this->device->id());
         auto src_ptr = rnd_data.data();
         state.SetIterationTime(
             this->HostWriteHP<false>(hugepage_ptr, hugepage_size, rnd_data, total_size, batch_size).count());
@@ -596,7 +601,7 @@ BENCHMARK_DEFINE_F(MemCpyPcieBench, BM_HostHP_N_Writers)(benchmark::State& state
     const auto num_writers = state.range(2);
     const auto cached_vector = static_cast<bool>(state.range(3));
     const auto enable_host_write = static_cast<bool>(state.range(4));
-    const auto hp_size = this->GetHostHugePageSize();
+    const auto hp_size = this->GetHostHugePageSize(this->device->id());
     const auto hp_base = this->GetHostHugePage(0);  // Already aligned
     const auto hp_end = reinterpret_cast<uint64_t>(hp_base) + hp_size;
     const auto dev_addrs = this->GetDevAddrMap();
@@ -670,10 +675,114 @@ BENCHMARK_DEFINE_F(MemCpyPcieBench, BM_HostHP_N_Writers)(benchmark::State& state
     state.counters["num_writers"] = num_writers;
 }
 
-BENCHMARK_DEFINE_F(MemCpyPcieBench, BM_HostHP_N_Writers_DifferentPage)(benchmark::State& state) {
+// 2 writer kernels writing to different hugepages
+BENCHMARK_DEFINE_F(MemCpyPcieBench, BM_HostHP_2_Writers_DifferentPage)(benchmark::State& state) {
     for (auto _ : state) {
     }
 }
+
+// 2 MMIO devices reading their hugepage. Host memory will probably get saturated.
+// NOTE: From the device perspective, hugepage is at 0. It's not explicit in this benchmark, but
+// each MMIO device will be reading a different page.
+// The address gets mapped to the addr with the BAR which is configured by UMD.
+BENCHMARK_DEFINE_F(MemCpyPcieBench, BM_2_MMIO_Devices_Reading_DifferentPage)(benchmark::State& state) {
+    constexpr uint32_t k_ReadersEachDevice = 1;
+    constexpr uint32_t k_NumThreads = k_ReadersEachDevice * 2;  // Two devices
+    constexpr uint32_t k_TotalSize = 1_GB;
+    constexpr uint32_t k_PageSize = 32_KB;
+
+    const auto dev_addrs = this->GetDevAddrMap();
+
+    double total_device_bytes = 0;
+
+    // Open another device
+    if (tt::Cluster::instance().number_of_pci_devices() < 2) {
+        state.SkipWithMessage("At least two MMIO devices are required for this benchmark");
+        return;
+    }
+
+    std::vector<IDevice*> devices{
+        this->device,
+        CreateDevice(this->device->id() + 1, 1),
+    };
+
+    for (auto _ : state) {
+        auto earliest_start = std::numeric_limits<double>::max();
+        auto latest_end = std::numeric_limits<double>::min();
+
+        std::vector<std::thread> threads(k_NumThreads);
+        std::atomic<bool> start_flag{false};
+        std::atomic<int> threads_ready{0};
+        std::vector<double> start_times(k_NumThreads);
+        std::vector<double> end_times(k_NumThreads);
+        std::vector<CoreRange> reader_core_ranges;
+
+        auto make_program_thread = [](int i,
+                                      std::atomic<int>& thread_started_counter,
+                                      std::atomic<bool>& start_signal,
+                                      IDevice* device,
+                                      Program& pgm,
+                                      std::vector<double>& start_times,
+                                      std::vector<double>& end_times) {
+            return std::thread([&]() {
+                thread_started_counter++;
+                while (!start_signal.load()) {
+                    std::this_thread::yield();
+                }
+
+                start_times[i] = get_current_time_seconds();
+                detail::LaunchProgram(device, pgm, true);
+                end_times[i] = get_current_time_seconds();
+            });
+        };
+
+        for (int i = 0; i < devices.size(); ++i) {
+            auto program = CreateProgram();
+            const auto hp_size = GetHostHugePageSize(devices[i]->id());
+            reader_core_ranges.push_back(
+                ConfigureKernels(program, dev_addrs, 0, k_ReadersEachDevice, false, k_TotalSize, k_PageSize, hp_size)
+                    .value());
+            threads.push_back(
+                make_program_thread(i, threads_ready, start_flag, devices[i], program, start_times, end_times));
+        }
+
+        while (!threads_ready.load()) {
+            std::this_thread::yield();
+        }
+
+        start_flag.store(true);
+
+        for (auto& thread : threads) {
+            thread.join();
+        }
+
+        double iteration_time = 0;
+        for (int i = 0; i < devices.size(); ++i) {
+            auto dev_bytes_read = this->GetWordsFromDevice(reader_core_ranges[i], dev_addrs.rd_bytes);
+            auto dev_clk = tt::Cluster::instance().get_device_aiclk(devices[i]->id()) * 1e6;  // Hz
+            total_device_bytes += std::reduce(dev_bytes_read.begin(), dev_bytes_read.end());
+            earliest_start = std::max(earliest_start, start_times[i]);
+            latest_end = std::max(latest_end, end_times[i]);
+        }
+
+        state.SetIterationTime(latest_end - earliest_start);
+    }
+
+    state.SetBytesProcessed(total_device_bytes);
+
+    // Close devices not managed by the bench fixture
+    for (auto& device_ptr : devices) {
+        if (device_ptr->id() != this->device->id()) {
+            tt::tt_metal::CloseDevice(device_ptr);
+        }
+    }
+}
+
+// 2 MMIO devices writing the same hugepage. Host memory will probably get saturated
+// NOTE: From the device perspective, hugepage is at 0. It's not explicit in this benchmark, but
+// each MMIO device will be reading a different page.
+// The address gets mapped to the addr with the BAR which is configured by UMD.
+BENCHMARK_DEFINE_F(MemCpyPcieBench, BM_2_MMIO_Devices_Writing_DifferentPage)(benchmark::State& state) {}
 
 BENCHMARK_REGISTER_F(MemCpyPcieBench, BM_HostHP_N_Readers)
     ->Name("0_Host_Write_HP_N_Readers")
