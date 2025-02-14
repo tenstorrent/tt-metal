@@ -12,7 +12,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.llama3.tt.distributed_norm import DistributedNorm
 from models.demos.llama3.tt.lm_head import LMHead
-from models.demos.llama3.tt.llama_common import copy_host_to_device, get_prefill_rot_mat
+from models.demos.llama3.tt.llama_common import copy_host_to_device
 from models.demos.llama3.tt.llama_rope import TtLlamaRotarySetup
 from models.demos.llama3.tt.llama_embedding import TtLlamaEmbedding
 

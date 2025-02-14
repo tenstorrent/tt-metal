@@ -401,30 +401,30 @@ class TtModelArgs:
                 grid_size=mlp2_grid(seq_len),
             )
 
-            k_dim = self.dim // self.cluster_shape[0] if self.is_galaxy else self.dim
-            n_dim = self.dim // self.cluster_shape[1] if self.is_galaxy else self.dim
-            num_rows = lambda seq_len: min(seq_len, 1024 if self.is_galaxy else 2048)
-            self.model_config["WO_PREFILL_PROGCFG"] = lambda seq_len: self.matmul_config(
-                m=num_rows(seq_len),
-                k=k_dim,
-                n=n_dim,
-                grid_size=self.find_prefill_grid(num_rows(seq_len), n_dim // self.tile_size),
-                in0_block_w=1,
-                fuse_batch=seq_len <= 1024,  # if self.is_galaxy else 2048),
-            )
-            # TODO Check TTFT (prefill perf) on galaxy with the new config
+            # k_dim = self.dim // self.cluster_shape[0] if self.is_galaxy else self.dim
+            # n_dim = self.dim // self.cluster_shape[1] if self.is_galaxy else self.dim
+            # num_rows = lambda seq_len: min(seq_len, 1024 if self.is_galaxy else 2048)
             # self.model_config["WO_PREFILL_PROGCFG"] = lambda seq_len: self.matmul_config(
-            #     m=min(seq_len, 1024 if self.is_galaxy else 2048),
-            #     k=self.dim // self.cluster_shape[0] if self.is_galaxy else self.dim,
-            #     n=self.dim // self.cluster_shape[1]
-            #     if self.is_galaxy
-            #     else 1024
-            #     if self.ccl_topology() == ttnn.Topology.Ring and 1024 % (self.dim / self.num_devices) == 0
-            #     else self.dim,
-            #     grid_size=(8, 8),
-            #     in0_block_w=1 if self.is_galaxy else self.dim // 1024,
-            #     fuse_batch=seq_len <= 1024,
+            #     m=num_rows(seq_len),
+            #     k=k_dim,
+            #     n=n_dim,
+            #     grid_size=self.find_prefill_grid(num_rows(seq_len), n_dim // self.tile_size),
+            #     in0_block_w=1,
+            #     fuse_batch=seq_len <= 1024,  # if self.is_galaxy else 2048),
             # )
+            # TODO Check TTFT (prefill perf) on galaxy with the new config
+            self.model_config["WO_PREFILL_PROGCFG"] = lambda seq_len: self.matmul_config(
+                m=min(seq_len, 1024 if self.is_galaxy else 2048),
+                k=self.dim // self.cluster_shape[0] if self.is_galaxy else self.dim,
+                n=self.dim // self.cluster_shape[1]
+                if self.is_galaxy
+                else 1024
+                if self.ccl_topology() == ttnn.Topology.Ring and 1024 % (self.dim / self.num_devices) == 0
+                else self.dim,
+                grid_size=(8, 8),
+                in0_block_w=1 if self.is_galaxy else self.dim // 1024,
+                fuse_batch=seq_len <= 1024,
+            )
 
             # Calculate largest number of lm_head_num_rows such that self.dim % (lm_head_num_rows * lm_head_cores_per_row) == 0
             if self.num_devices == 32:

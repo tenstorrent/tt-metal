@@ -215,6 +215,19 @@ def create_tt_model(
             True,  # stop_at_eos
             False,  # ci_only
         ),
+        (  # Batch-1 run (Reasoning) - single user, small prompt, long thinking time
+            "models/demos/llama3/demo/input_data_questions_reasoning.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            16 * 1024,  # max_seq_len
+            1,  # batch_size
+            15000,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 32, "page_max_num_blocks": 1024},  # page_params  # TODO This will be serviced by vLLM
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            False,  # stop_at_eos
+            False,  # ci_only
+        ),
         (  # CI Batch-1 run - Measures the performance of a single user over 4096 iterations
             "models/demos/llama3/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
@@ -246,6 +259,7 @@ def create_tt_model(
         "batch-1",  # latency
         "batch-32",  # throughput
         "long-context",  # max-length
+        "reasoning-1",  # reasoning
         "ci-1",  # CI batch 1
         "ci-32",  # CI batch 32
     ],
@@ -367,7 +381,7 @@ def test_llama_demo_text(
         use_paged_kv_cache=paged_attention,
     )
 
-    tokenizer = Tokenizer(model_args.tokenizer_path)
+    tokenizer = model_args.tokenizer
     generator = LlamaGenerator(model, model_args, mesh_device, tokenizer=tokenizer)
 
     num_tokens_generated_decode = []
@@ -501,8 +515,8 @@ def test_llama_demo_text(
             for user in range(batch_size):
                 user_tok = out_tok[user].item()
                 if (
-                    user_tok != 128009 and user_done[user] == False
-                ):  # Stop saving the ouput after hitting the eos token (<|eot_id|>) (128009)
+                    user_tok not in tokenizer.stop_tokens and user_done[user] == False
+                ):  # Read until an eos token (e.g. <|eot_id|>); create_tokenizer adds stop_tokens to HF tokenizers
                     all_outputs[user].append(user_tok)
                 else:
                     if (
@@ -534,14 +548,10 @@ def test_llama_demo_text(
                 logger.info("Finished decoding, printing the final outputs...\n")
                 for i, (output, prompt) in enumerate(zip(all_outputs, input_prompts)):
                     text = tokenizer.decode(output)
-                    if instruct:
-                        split_text = text.split("<|start_header_id|>assistant<|end_header_id|>", 1)
-                    else:
-                        split_text = text.split(prompt, 1)
-                    if len(split_text) > 1:
-                        text_after_prompt = split_text[1]
-                    else:
-                        text_after_prompt = text  # If prompt is not found, use the whole text
+                    prompt_including_assistant_tags = tokenizer.decode(
+                        model_args.encode_prompt(prompt, instruct=instruct)
+                    )
+                    text_after_prompt = text.replace(prompt_including_assistant_tags, "", 1)
                     if print_to_file:
                         with open(output_filename, "a") as f:
                             f.write(
@@ -639,76 +649,77 @@ def test_llama_demo_text(
     )
 
     # Benchmark targets
-    supported_models = ["3.2-1B", "3.2-3B", "3.1-8B", "3.2-11B", "3.1-70B"]
+    supported_models = ["Llama3.2-1B", "Llama3.2-3B", "Llama3.1-8B", "Llama3.2-11B", "Llama3.1-70B"]
     supported_devices = ["N150", "N300", "T3K", "TG"]
 
-    llama_model_name = model_args.model_name
     tt_device_name = model_args.device_name
 
-    assert llama_model_name in supported_models, f"Model {llama_model_name} not supported"
-    assert tt_device_name in supported_devices, f"Device {tt_device_name} not supported"
+    if model_args.base_model_name in supported_models:
+        assert tt_device_name in supported_devices, f"Device {tt_device_name} not supported"
 
-    # TODO Update these targets on PERF.md and read from there
-    # Set the target times to first token for every combination of device and model
-    target_prefill_tok_s = {
-        "N150_3.2-1B": 1050,  # TODO Update target
-        "N300_3.2-1B": 1050,  # TODO Update target
-        "T3K_3.2-1B": 1050,  # TODO Update target
-        "TG_3.2-1B": 1050,  # TODO Update target
-        #
-        "N150_3.2-3B": 1050,  # TODO Update target
-        "N300_3.2-3B": 1050,  # TODO Update target
-        "T3K_3.2-3B": 1050,  # TODO Update target
-        "TG_3.2-3B": 1050,  # TODO Update target
-        #
-        "N150_3.1-8B": 1050,
-        "N300_3.1-8B": 1050,
-        "T3K_3.1-8B": 1050,
-        "TG_3.1-8B": 1050,
-        #
-        "N150_3.2-11B": 1050,  # TODO Update target
-        "N300_3.2-11B": 1050,  # TODO Update target
-        "T3K_3.2-11B": 1050,  # TODO Update target
-        "TG_3.2-11B": 1050,  # TODO Update target
-        #
-        "N150_3.1-70B": 1050,  # TODO Update target
-        "N300_3.1-70B": 1050,  # TODO Update target
-        "T3K_3.1-70B": 1050,  # TODO Update target
-        "TG_3.1-70B": 1050,  # TODO Update target
-    }[f"{tt_device_name}_{llama_model_name}"]
+        # Set the target times to first token for every combination of device and model
+        target_prefill_tok_s = {
+            "N150_Llama3.2-1B": 1050,  # TODO Update target
+            "N300_Llama3.2-1B": 1050,  # TODO Update target
+            "T3K_Llama3.2-1B": 1050,  # TODO Update target
+            "TG_Llama3.2-1B": 1050,  # TODO Update target
+            #
+            "N150_Llama3.2-3B": 1050,  # TODO Update target
+            "N300_Llama3.2-3B": 1050,  # TODO Update target
+            "T3K_Llama3.2-3B": 1050,  # TODO Update target
+            "TG_Llama3.2-3B": 1050,  # TODO Update target
+            #
+            "N150_Llama3.1-8B": 1050,
+            "N300_Llama3.1-8B": 1050,
+            "T3K_Llama3.1-8B": 1050,
+            "TG_Llama3.1-8B": 1050,
+            #
+            "N150_Llama3.2-11B": 1050,  # TODO Update target
+            "N300_Llama3.2-11B": 1050,  # TODO Update target
+            "T3K_Llama3.2-11B": 1050,  # TODO Update target
+            "TG_Llama3.2-11B": 1050,  # TODO Update target
+            #
+            "N150_Llama3.1-70B": 1050,  # TODO Update target
+            "N300_Llama3.1-70B": 1050,  # TODO Update target
+            "T3K_Llama3.1-70B": 1050,  # TODO Update target
+            "TG_Llama3.1-70B": 1050,  # TODO Update target
+        }[f"{tt_device_name}_{model_args.base_model_name}"]
 
-    # Set the target decode timesfor every combination of device and model
-    target_decode_tok_s_u = {
-        "N150_3.2-1B": 160,  # TODO Update target
-        "N300_3.2-1B": 250,  # TODO Update target
-        "T3K_3.2-1B": 300,  # TODO Update target
-        "TG_3.2-1B": 300,  # TODO Update target
-        #
-        "N150_3.2-3B": 60,  # TODO Update target
-        "N300_3.2-3B": 100,  # TODO Update target
-        "T3K_3.2-3B": 150,  # TODO Update target
-        "TG_3.2-3B": 150,  # TODO Update target
-        #
-        "N150_3.1-8B": 23,  # TODO Update target
-        "N300_3.1-8B": 38,
-        "T3K_3.1-8B": 45,
-        "TG_3.1-8B": 45,  # TODO Update target
-        #
-        "N150_3.2-11B": 23,
-        "N300_3.2-11B": 38,  # TODO Update target
-        "T3K_3.2-11B": 45,  # TODO Update target
-        "TG_3.2-11B": 45,  # TODO Update target
-        #
-        "T3K_3.1-70B": 20,  # TODO Update target
-        "TG_3.1-70B": 20,  # TODO Update target
-    }[f"{tt_device_name}_{llama_model_name}"]
+        # Set the target decode timesfor every combination of device and model
+        target_decode_tok_s_u = {
+            "N150_Llama3.2-1B": 160,  # TODO Update target
+            "N300_Llama3.2-1B": 250,  # TODO Update target
+            "T3K_Llama3.2-1B": 300,  # TODO Update target
+            "TG_Llama3.2-1B": 300,  # TODO Update target
+            #
+            "N150_Llama3.2-3B": 60,  # TODO Update target
+            "N300_Llama3.2-3B": 100,  # TODO Update target
+            "T3K_Llama3.2-3B": 150,  # TODO Update target
+            "TG_Llama3.2-3B": 150,  # TODO Update target
+            #
+            "N150_Llama3.1-8B": 23,  # TODO Update target
+            "N300_Llama3.1-8B": 38,
+            "T3K_Llama3.1-8B": 45,
+            "TG_Llama3.1-8B": 45,  # TODO Update target
+            #
+            "N150_Llama3.2-11B": 23,
+            "N300_Llama3.2-11B": 38,  # TODO Update target
+            "T3K_Llama3.2-11B": 45,  # TODO Update target
+            "TG_Llama3.2-11B": 45,  # TODO Update target
+            #
+            "T3K_Llama3.1-70B": 20,  # TODO Update target
+            "TG_Llama3.1-70B": 20,  # TODO Update target
+        }[f"{tt_device_name}_{model_args.base_model_name}"]
 
-    target_decode_tok_s = target_decode_tok_s_u * batch_size
-    targets = {
-        "prefill_t/s": target_prefill_tok_s,
-        "decode_t/s": target_decode_tok_s,
-        "decode_t/s/u": target_decode_tok_s_u,
-    }
+        target_decode_tok_s = target_decode_tok_s_u * batch_size
+        targets = {
+            "prefill_t/s": target_prefill_tok_s,
+            "decode_t/s": target_decode_tok_s,
+            "decode_t/s/u": target_decode_tok_s_u,
+        }
+    else:
+        logger.warning(f"Model {model_args.base_model_name} not does not have performance targets set")
+        targets = {}
 
     # Save benchmark data for CI dashboard
     if is_ci_env:
@@ -745,7 +756,7 @@ def test_llama_demo_text(
         benchmark_data.save_partial_run_json(
             profiler,
             run_type=f"{tt_device_name}-demo",
-            ml_model_name=llama_model_name,
+            ml_model_name=model_args.base_model_name,
             ml_model_type="llm",
             num_layers=model_args.n_layers,
             batch_size=batch_size,

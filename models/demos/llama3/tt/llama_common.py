@@ -60,10 +60,7 @@ def preprocess_inputs_prefill(
     if max_prefill_len == 128 * 1024:
         max_prefill_len = 128 * 1024 - max_generated_tokens
 
-    if instruct:
-        encoded_prompts = [encode_prompt_llama_instruct(tokenizer, prompt) for prompt in input_prompts]
-    else:
-        encoded_prompts = [tokenizer.encode(prompt, bos=True, eos=False) for prompt in input_prompts]
+    encoded_prompts = [model_args.encode_prompt(prompt, instruct=instruct) for prompt in input_prompts]
 
     # Print the length of encoded prompts
     logger.info("Encoded prompt lengths:" + ", ".join(str(len(prompt)) for prompt in encoded_prompts))
@@ -74,13 +71,24 @@ def preprocess_inputs_prefill(
 
     # To avoid running out of memory when giving prompts larger than the maximum, clip to max_prefill_len
     if min_prompt_len > max_prefill_len:
-        logger.warning(f"Prompt too long. Clipping prompts to {max_prefill_len}")
-        if instruct:  # When clipping, make sure to add the ` 】 token at the end (4 tokens)
-            encoded_prompts = [encod[: max_prefill_len - 4] for encod in encoded_prompts]
-            dec_prompts = [tokenizer.decode(encod) + " 】" for encod in encoded_prompts]
-            encoded_prompts = [tokenizer.encode(prompt, bos=True, eos=False) for prompt in dec_prompts]
+        logger.info(f"Left-clipping prompts to {max_prefill_len}")
+        if instruct:
+            # We need to allow a few tokens for the system prompt and the special turn tokens for assistant and user;
+            # to find out how big those will be, we will:
+            # 1. Tokenize the entire prompt with non-instruct tokenization
+            # 2. Calculate overhead = length of instruct tokenization - length of non-instruct tokenization
+            # 3. Shorten the tokenized clipped prompt by the overhead and convert back to text
+            # 4. Tokenize the result with instruct tokenization
+            # 5. Assert that the length of this is equal to the max_prefill_len
+            raw_prompts = [model_args.encode_prompt(prompt, instruct=False) for prompt in input_prompts]
+            overhead = [len(e) - len(r) for e, r in zip(encoded_prompts, raw_prompts)]
+            shortened = [tokenizer.decode(e[-(max_prefill_len - o) :]) for e, o in zip(raw_prompts, overhead)]
+            encoded_prompts = [model_args.encode_prompt(prompt, instruct=instruct) for prompt in shortened]
+            assert all(
+                len(e) == max_prefill_len for e in encoded_prompts
+            ), f"Clipped prompts are not of the correct length, expected {max_prefill_len} but got {[len(e) for e in encoded_prompts]}"
         else:
-            encoded_prompts = [encod[:max_prefill_len] for encod in encoded_prompts]
+            encoded_prompts = [encod[-max_prefill_len:] for encod in encoded_prompts]
 
         # Update prompt lengths
         prompt_lens = [len(x) for x in encoded_prompts]
@@ -199,7 +207,9 @@ def gather_cos_sin(position_ids, cos, sin):
 
 
 def get_prefill_rot_mat(head_dim, mesh_device, seq_len, theta, scale_factor, orig_context_len, start_pos=0):
-    cos, sin = precompute_freqs(head_dim, seq_len * 2, theta=theta, scale_factor=scale_factor, orig_context_len=orig_context_len)
+    cos, sin = precompute_freqs(
+        head_dim, seq_len * 2, theta=theta, scale_factor=scale_factor, orig_context_len=orig_context_len
+    )
     cos_gathered, sin_gathered = gather_cos_sin(torch.arange(start_pos, start_pos + seq_len), cos, sin)
     assert cos_gathered.size() == (1, 1, seq_len, head_dim)
     assert sin_gathered.size() == (1, 1, seq_len, head_dim)
