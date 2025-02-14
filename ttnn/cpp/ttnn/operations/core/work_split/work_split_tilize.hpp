@@ -42,6 +42,9 @@ struct BlockSplitWH {
 };
 
 inline std::pair<int, int> closest_square_larger_than_b(int b, int width, int height, int ref) {
+    if (ref <= 0) {
+        return {1, 1};
+    }
     int sqrt_b = std::sqrt(b);
     bool is_perfect_square = (sqrt_b * sqrt_b == b);
 
@@ -54,8 +57,10 @@ inline std::pair<int, int> closest_square_larger_than_b(int b, int width, int he
     }
 
     int candidate = sqrt_b + 1;
-
-    while (true) {
+    int max_candidate = width * height;
+    int max_iterations = max_candidate - sqrt_b;
+    int counter = 0;
+    while (counter < max_iterations) {
         int square = candidate * candidate;
 
         if ((std::ceil(static_cast<float>(width) / std::sqrt(square))) *
@@ -65,7 +70,9 @@ inline std::pair<int, int> closest_square_larger_than_b(int b, int width, int he
         }
 
         candidate++;
+        counter++;
     }
+    return {1, 1};
 }
 
 inline BlockSplitWH split_blocks_for_tilize_wh(

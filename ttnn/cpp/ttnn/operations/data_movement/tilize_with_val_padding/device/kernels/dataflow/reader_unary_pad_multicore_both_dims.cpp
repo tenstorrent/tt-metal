@@ -16,10 +16,10 @@ FORCE_INLINE void fill_with_val(uint32_t begin_addr, uint32_t n, uint32_t val) {
 void kernel_main() {
     constexpr uint32_t cb_id_in0 = 0;
 
-    const uint32_t total_num_rows = get_compile_time_arg_val(3);
-    const uint32_t third_dim = get_compile_time_arg_val(4);
-    const uint32_t tile_height = get_compile_time_arg_val(5);
-    const uint32_t element_size = get_compile_time_arg_val(6);
+    const uint32_t total_num_rows = get_compile_time_arg_val(2);
+    const uint32_t third_dim = get_compile_time_arg_val(3);
+    const uint32_t tile_height = get_compile_time_arg_val(4);
+    const uint32_t element_size = get_compile_time_arg_val(5);
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t unpadded_X_size = get_arg_val<uint32_t>(1);
@@ -27,9 +27,8 @@ void kernel_main() {
 
     constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
 
-#define stick_size_is_pow2 get_compile_time_arg_val(1) == 1
-#if (stick_size_is_pow2)
-    constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(2);
+#if (stick_size_is_pow2 == 1)
+    constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(1);
     const InterleavedPow2AddrGen<src0_is_dram> s = {
         .bank_base_address = src_addr, .log_base_2_of_page_size = log_base_2_of_page_size};
 #else

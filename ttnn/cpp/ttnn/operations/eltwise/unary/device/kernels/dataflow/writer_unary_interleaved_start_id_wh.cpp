@@ -16,10 +16,6 @@ void kernel_main() {
     const uint32_t third_dim = get_compile_time_arg_val(3);
     uint32_t total_tiles_per_row = get_compile_time_arg_val(4);
 
-#ifdef OUT_SHARDED
-    cb_wait_front(cb_id_out, onetile);
-#else
-
     // single-tile ublocks
     constexpr uint32_t onetile = 1;
     const uint32_t tile_bytes = get_tile_size(cb_id_out);
@@ -49,5 +45,4 @@ void kernel_main() {
             }
         }
     }
-#endif
 }

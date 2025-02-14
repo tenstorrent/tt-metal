@@ -350,6 +350,8 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_block_interle
     uint32_t log2_stick_size = stick_size_is_power_of_two ? (std::uint32_t)std::log2(stick_size) : 0;
 
     uint32_t total_num_rows = output.get_logical_shape()[-2];
+    std::map<std::string, std::string> writer_defines = {
+        {"stick_size_is_pow2", std::to_string((uint32_t)(stick_size_is_power_of_two))}};
 
     KernelHandle unary_writer_kernel_id = CreateKernel(
         program,
@@ -357,7 +359,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_block_interle
         "writer_unary_stick_layout_wh_multicore.cpp",
         all_cores,
         WriterDataMovementConfig(
-            {out_is_dram, stick_size_is_power_of_two, log2_stick_size, total_num_rows, third_dim, TILE_HEIGHT}));
+            {out_is_dram, log2_stick_size, total_num_rows, third_dim, TILE_HEIGHT}, writer_defines));
 
     // compute
 
