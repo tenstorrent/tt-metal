@@ -141,7 +141,7 @@ while true; do
             enable_tsan="ON";;
         -u|--enable-ubsan)
             enable_ubsan="ON";;
-        -u|--enable-coverage)
+        --enable-coverage)
             enable_coverage="ON";;
         -b|--build-type)
             build_type="$2";shift;;
