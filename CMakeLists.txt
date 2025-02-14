@@ -95,6 +95,9 @@ set(CMAKE_CXX_FLAGS_CI "-O3 -DDEBUG")
 # We're not currently using C++20 modules, so don't bother scanning for them
 set(CMAKE_CXX_SCAN_FOR_MODULES FALSE)
 
+# Promote all IMPORTED targets discovered by find_package() to a GLOBAL scope
+set(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL TRUE)
+
 ############################################################################################################################
 # Project Options
 #   The following options and their defaults impact what artifacts get built
