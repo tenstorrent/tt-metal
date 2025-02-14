@@ -208,7 +208,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
     libtbb-dev \
     libcapstone-dev \
-    pybind11-dev \
     libgtest-dev \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
