@@ -111,10 +111,12 @@ on:
           - eltwise.unary.bitwise.bitwise_and.bitwise_and_sharded
           - eltwise.unary.bitwise.bitwise_and.bitwise_and_unary
           - eltwise.unary.bitwise.bitwise_and.bitwise_and_unary_sharded
+          - eltwise.unary.bitwise.bitwise_and.bitwise_and_ng_survey
           - eltwise.unary.bitwise.bitwise_left_shift.bitwise_left_shift
           - eltwise.unary.bitwise.bitwise_left_shift.bitwise_left_shift_sharded
           - eltwise.unary.bitwise.bitwise_left_shift.bitwise_left_shift_unary
           - eltwise.unary.bitwise.bitwise_left_shift.bitwise_left_shift_unary_sharded
+          - eltwise.unary.bitwise_left_shift.bitwise_left_shift_ng_survey
           - eltwise.unary.bitwise.bitwise_not.bitwise_not
           - eltwise.unary.bitwise.bitwise_not.bitwise_not_sharded
           - eltwise.unary.bitwise.bitwise_not.bitwise_not_pytorch2
@@ -122,14 +124,17 @@ on:
           - eltwise.unary.bitwise.bitwise_or.bitwise_or_sharded
           - eltwise.unary.bitwise.bitwise_or.bitwise_or_unary
           - eltwise.unary.bitwise.bitwise_or.bitwise_or_unary_sharded
+          - eltwise.unary.bitwise.bitwise_or.bitwise_or_ng_survey
           - eltwise.unary.bitwise.bitwise_right_shift.bitwise_right_shift
           - eltwise.unary.bitwise.bitwise_right_shift.bitwise_right_shift_sharded
           - eltwise.unary.bitwise.bitwise_right_shift.bitwise_right_shift_unary
           - eltwise.unary.bitwise.bitwise_right_shift.bitwise_right_shift_unary_sharded
+          - eltwise.unary.bitwise_right_shift.bitwise_right_shift_ng_survey
           - eltwise.unary.bitwise.bitwise_xor.bitwise_xor
           - eltwise.unary.bitwise.bitwise_xor.bitwise_xor_sharded
           - eltwise.unary.bitwise.bitwise_xor.bitwise_xor_unary
           - eltwise.unary.bitwise.bitwise_xor.bitwise_xor_unary_sharded
+          - eltwise.unary.bitwise.bitwise_xor.bitwise_xor_ng_survey
           - eltwise.unary.log_sigmoid.log_sigmoid
           - eltwise.unary.logical_not.logical_not_
           - eltwise.unary.logical_not.logical_not
