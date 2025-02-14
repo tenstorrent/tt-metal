@@ -56,7 +56,6 @@ CPMAddPackage(
         "YAML_CPP_BUILD_TESTS OFF"
         "YAML_CPP_BUILD_TOOLS OFF"
         "YAML_BUILD_SHARED_LIBS OFF"
-    FIND_PACKAGE_ARGUMENTS "GLOBAL"
 )
 
 ############################################################################################################################
@@ -70,7 +69,6 @@ CPMAddPackage(
     VERSION 1.13.0
     OPTIONS
         "INSTALL_GTEST OFF"
-    FIND_PACKAGE_ARGUMENTS "GLOBAL"
 )
 
 if(googletest_ADDED)
