@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
+#include "debug/dprint.h"
 
 #include "dataflow_api.h"
 #include "cpp/ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
@@ -81,6 +82,7 @@ void kernel_main() {
     uint32_t tile_offset = start_n * n_stride + start_c * c_stride;
     uint32_t next_batch_shift = n_stride - c_stride * C;
 
+    DPRINT << "writer kernel" << ENDL();
     uint32_t num_tiles_written = 0;
     for (uint32_t n = start_n; n < N && num_tiles_written < num_tiles; ++n, start_c = 0) {
         for (uint32_t c = start_c; c < C && num_tiles_written < num_tiles; ++c, start_t = 0) {
@@ -130,4 +132,5 @@ void kernel_main() {
         }
         tile_offset += next_batch_shift;
     }
+    DPRINT << "writer kernel - 2" << ENDL();
 }
