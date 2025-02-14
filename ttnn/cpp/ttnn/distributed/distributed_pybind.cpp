@@ -134,6 +134,13 @@ void py_module_types(py::module& module) {
         module, "ConcatMesh2dToTensor");
 >>>>>>> fix naming errors, add tests, add imports - TODO, fix weird aliasing error with meshdevice vs ttnn.multidevice.meshdevice
 
+    py::class_<ReplicateTensor>(module, "ReplicateTensor");
+    py::class_<ShardTensor>(module, "ShardTensor");
+    py::class_<ShardTensor2D>(module, "ShardTensor2D");
+    py::class_<ShardMesh>(module, "ShardMesh");
+    py::class_<AllGatherTensor>(module, "AllGatherTensor");
+    py::class_<DistributedTensorConfig>(module, "DistributedTensorConfig");
+
     py::class_<MeshDevice, std::shared_ptr<MeshDevice>>(module, "MeshDevice");
     py::class_<MeshSubDeviceManagerId>(module, "MeshSubDeviceManagerId");
     py::class_<MeshShape>(module, "MeshShape", "Struct representing the shape of a mesh device.");
@@ -604,13 +611,11 @@ void py_module(py::module& module) {
             py::init([](MeshDevice& mesh_device) -> std::unique_ptr<ReplicateTensorToMesh> {
                 return std::make_unique<ReplicateTensorToMesh>(ReplicateTensorToMesh(mesh_device.num_devices()));
             }),
-            py::kw_only(),
             py::arg("mesh_device"))
         .def(
             py::init([](size_t num_devices) -> std::unique_ptr<ReplicateTensorToMesh> {
                 return std::make_unique<ReplicateTensorToMesh>(ReplicateTensorToMesh(num_devices));
             }),
-            py::kw_only(),
             py::arg("num_devices"))
         .def(
             "map",
@@ -625,14 +630,12 @@ void py_module(py::module& module) {
             py::init([](MeshDevice& mesh_device, int dim) -> std::unique_ptr<ShardTensorToMesh> {
                 return std::make_unique<ShardTensorToMesh>(ShardTensorToMesh(mesh_device, dim));
             }),
-            py::kw_only(),
             py::arg("mesh_device"),
             py::arg("dim"))
         .def(
             py::init([](size_t num_devices, int dim) -> std::unique_ptr<ShardTensorToMesh> {
                 return std::make_unique<ShardTensorToMesh>(ShardTensorToMesh(num_devices, dim));
             }),
-            py::kw_only(),
             py::arg("num_devices"),
             py::arg("dim"))
         .def(
@@ -651,7 +654,6 @@ void py_module(py::module& module) {
                    const Shard2dConfig& config) -> std::unique_ptr<ShardTensor2dMesh> {
                     return std::make_unique<ShardTensor2dMesh>(ShardTensor2dMesh(mesh_device, mesh_shape, config));
                 }),
-            py::kw_only(),
             py::arg("mesh_device"),
             py::arg("mesh_shape"),
             py::arg("config"))
@@ -660,7 +662,6 @@ void py_module(py::module& module) {
                 [](const MeshShape& mesh_shape, const Shard2dConfig& config) -> std::unique_ptr<ShardTensor2dMesh> {
                     return std::make_unique<ShardTensor2dMesh>(ShardTensor2dMesh(mesh_shape, config));
                 }),
-            py::kw_only(),
             py::arg("mesh_shape"),
             py::arg("config"))
         .def(
@@ -682,7 +683,6 @@ void py_module(py::module& module) {
             py::init([](int dim) -> std::unique_ptr<ConcatMeshToTensor> {
                 return std::make_unique<ConcatMeshToTensor>(dim);
             }),
-            py::kw_only(),
             py::arg("dim"))
         .def(
             "compose",
@@ -716,7 +716,6 @@ void py_module(py::module& module) {
                         config.col_dim);
                     return std::make_unique<ConcatMesh2dToTensor>(mesh_device, config);
                 }),
-            py::kw_only(),
             py::arg("mesh_device"),
             py::arg("config"))
         .def(
@@ -843,9 +842,13 @@ void py_module(py::module& module) {
 <<<<<<< HEAD
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
     // TODO: Add rdocs
 =======
 >>>>>>> move class definitions from from distributed_tensor.cpp to.hpp so they can be exposed to the pybind.cpp; add dummy void methods in .cpp to satisfy linker; add new constructors and factory methods to fix type errors
+=======
+    // TODO: Add rdocs
+>>>>>>> fix mesh device conflict, add aggregate/distribute and config pybinds, fix keyword error
     module.def(
         "replicate_tensor_to_mesh_mapper",
         [](MeshDevice& mesh_device) -> std::unique_ptr<TensorToMesh> {
@@ -908,6 +911,7 @@ void py_module(py::module& module) {
         py::arg("mesh_device"),
         py::arg("config"));
 <<<<<<< HEAD
+<<<<<<< HEAD
     module.def(
         "concat_2d_mesh_to_tensor_composer",
         [](MeshDevice& mesh_device,
@@ -934,11 +938,14 @@ void py_module(py::module& module) {
             Returns:
                 TensorToMesh: The created ConcatMesh2dToTensor composer.
    )doc");
+=======
+>>>>>>> fix mesh device conflict, add aggregate/distribute and config pybinds, fix keyword error
     module.def(
         "distribute_tensor",
         [](const Tensor& tensor,
            const TensorToMesh& mapper,
            std::optional<std::reference_wrapper<MeshDevice>> mesh_device) -> Tensor {
+<<<<<<< HEAD
             return distribute_tensor(from_device(tensor), mapper, mesh_device);
         },
         py::arg("tensor"),
@@ -949,11 +956,21 @@ void py_module(py::module& module) {
         [](const Tensor& tensor, const MeshToTensor& composer) -> Tensor {
             return aggregate_tensor(from_device(tensor), composer);
         },
+=======
+            return distribute_tensor(tensor, mapper, mesh_device);
+        },
+        py::arg("tensor"),
+        py::arg("mapper"));
+    module.def(
+        "aggregate_tensor",
+        [](const Tensor& tensor, const MeshToTensor& composer) -> Tensor { return aggregate_tensor(tensor, composer); },
+>>>>>>> fix mesh device conflict, add aggregate/distribute and config pybinds, fix keyword error
         py::arg("tensor"),
         py::arg("composer"));
     module.def(
         "aggregate_tensor",
         [](const std::vector<Tensor>& tensors, const MeshToTensor& composer) -> Tensor {
+<<<<<<< HEAD
             return aggregate_tensor(from_device(aggregate_as_tensor(tensors, AllGatherTensor{})), composer);
         },
         py::arg("tensor"),
@@ -967,6 +984,12 @@ void py_module(py::module& module) {
     // TODO: overload this method to enable selection of a subset of shards with a config or something before passing to
     // aggregate
 >>>>>>> one type error left
+=======
+            return aggregate_tensor(aggregate_as_tensor(tensors, AllGatherTensor{}), composer);
+        },
+        py::arg("tensor"),
+        py::arg("composer"));
+>>>>>>> fix mesh device conflict, add aggregate/distribute and config pybinds, fix keyword error
     module.def(
         "aggregate_as_tensor",
         [](const std::vector<Tensor>& tensors) -> Tensor { return aggregate_as_tensor(tensors, AllGatherTensor{}); },
