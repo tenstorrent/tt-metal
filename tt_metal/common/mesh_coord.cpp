@@ -28,9 +28,9 @@ MeshCoordinate shape_back(const SimpleMeshShape& shape) {
 
 }  // namespace
 
-SimpleMeshShape::SimpleMeshShape(uint32_t x) : ShapeBase({x}) {}
-SimpleMeshShape::SimpleMeshShape(uint32_t x, uint32_t y) : ShapeBase({x, y}) {}
-SimpleMeshShape::SimpleMeshShape(uint32_t x, uint32_t y, uint32_t z) : ShapeBase({x, y, z}) {}
+SimpleMeshShape::SimpleMeshShape(uint32_t x) : ShapeBase({x}) { compute_strides(); }
+SimpleMeshShape::SimpleMeshShape(uint32_t x, uint32_t y) : ShapeBase({x, y}) { compute_strides(); }
+SimpleMeshShape::SimpleMeshShape(uint32_t x, uint32_t y, uint32_t z) : ShapeBase({x, y, z}) { compute_strides(); }
 
 SimpleMeshShape::SimpleMeshShape(const MeshShape& legacy_shape) :
     SimpleMeshShape(legacy_shape.num_rows, legacy_shape.num_cols) {}

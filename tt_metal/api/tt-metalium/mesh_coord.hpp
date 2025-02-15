@@ -97,6 +97,7 @@ public:
     // Constructs a range that iterates over all coordinates in the mesh.
     MeshCoordinateRange(const SimpleMeshShape& shape);
 
+    // Returns start and (inclusive) end coordinates of the range.
     const MeshCoordinate& start_coord() const;
     const MeshCoordinate& end_coord() const;
 
@@ -165,6 +166,7 @@ public:
         }
     }
 
+    // Force a copy via `auto`.
     template <std::size_t I>
     auto get() const&& {
         return get<I>();
@@ -177,7 +179,8 @@ private:
 
 }  // namespace detail
 
-// Allows storing data in a mesh-shaped container, with convenient accessors and iterators.
+// Allows storing data in a mesh-shaped flat container, with convenient accessors and iterators.
+// The iteration order and the storage memory layout is row-major.
 template <typename T>
 class MeshContainer {
 public:
@@ -212,8 +215,32 @@ public:
         ValueProxy value_proxy_;
     };
 
+    class ConstIterator {
+    public:
+        using ValueProxy = detail::MeshCoordinateValueProxy<const T>;
+
+        ConstIterator& operator++();
+        const ValueProxy& operator*() const;
+        bool operator==(const ConstIterator& other) const;
+        bool operator!=(const ConstIterator& other) const;
+
+    private:
+        ConstIterator(
+            const MeshContainer* container, const MeshCoordinateRange::Iterator& coord_iter, size_t linear_index);
+        friend class MeshContainer;
+
+        const MeshContainer* container_ = nullptr;
+        MeshCoordinateRange::Iterator coord_iter_;
+        size_t linear_index_ = 0;
+
+        // Provides mutable access to the container value along with the coordinate from the range iterator.
+        ValueProxy value_proxy_;
+    };
+
     Iterator begin();
     Iterator end();
+    ConstIterator begin() const;
+    ConstIterator end() const;
 
 private:
     SimpleMeshShape shape_;
@@ -262,12 +289,43 @@ typename MeshContainer<T>::Iterator::ValueProxy& MeshContainer<T>::Iterator::ope
 }
 
 template <typename T>
+MeshContainer<T>::ConstIterator::ConstIterator(
+    const MeshContainer* container, const MeshCoordinateRange::Iterator& coord_iter, size_t linear_index) :
+    container_(container),
+    coord_iter_(coord_iter),
+    linear_index_(linear_index),
+    value_proxy_(&(*coord_iter_), &container_->values_[linear_index_]) {}
+
+template <typename T>
+typename MeshContainer<T>::ConstIterator& MeshContainer<T>::ConstIterator::operator++() {
+    ++linear_index_;
+    ++coord_iter_;
+    value_proxy_ = ValueProxy(&(*coord_iter_), &container_->values_[linear_index_]);
+    return *this;
+}
+
+template <typename T>
+const typename MeshContainer<T>::ConstIterator::ValueProxy& MeshContainer<T>::ConstIterator::operator*() const {
+    return value_proxy_;
+}
+
+template <typename T>
 bool MeshContainer<T>::Iterator::operator==(const Iterator& other) const {
     return container_ == other.container_ && coord_iter_ == other.coord_iter_ && linear_index_ == other.linear_index_;
 }
 
 template <typename T>
 bool MeshContainer<T>::Iterator::operator!=(const Iterator& other) const {
+    return !(*this == other);
+}
+
+template <typename T>
+bool MeshContainer<T>::ConstIterator::operator==(const ConstIterator& other) const {
+    return container_ == other.container_ && coord_iter_ == other.coord_iter_ && linear_index_ == other.linear_index_;
+}
+
+template <typename T>
+bool MeshContainer<T>::ConstIterator::operator!=(const ConstIterator& other) const {
     return !(*this == other);
 }
 
@@ -279,6 +337,16 @@ typename MeshContainer<T>::Iterator MeshContainer<T>::begin() {
 template <typename T>
 typename MeshContainer<T>::Iterator MeshContainer<T>::end() {
     return Iterator(this, coord_range_.end(), shape_.mesh_size());
+}
+
+template <typename T>
+typename MeshContainer<T>::ConstIterator MeshContainer<T>::begin() const {
+    return ConstIterator(this, coord_range_.begin(), /* linear_index = */ 0);
+}
+
+template <typename T>
+typename MeshContainer<T>::ConstIterator MeshContainer<T>::end() const {
+    return ConstIterator(this, coord_range_.end(), shape_.mesh_size());
 }
 
 }  // namespace tt::tt_metal::distributed
