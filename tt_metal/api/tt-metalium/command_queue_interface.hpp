@@ -36,7 +36,8 @@ enum class CommandQueueDeviceAddrType : uint8_t {
     COMPLETION_Q1_LAST_EVENT = 5,
     DISPATCH_S_SYNC_SEM = 6,
     DISPATCH_MESSAGE = 7,
-    UNRESERVED = 8
+    KERNEL_DEBUG_STATUS = 8,
+    UNRESERVED = 9,
 };
 
 enum class CommandQueueHostAddrType : uint8_t {
@@ -44,7 +45,7 @@ enum class CommandQueueHostAddrType : uint8_t {
     ISSUE_Q_WR = 1,
     COMPLETION_Q_WR = 2,
     COMPLETION_Q_RD = 3,
-    UNRESERVED = 4
+    UNRESERVED = 4,
 };
 
 //
@@ -82,13 +83,22 @@ public:
         return instance;
     }
 
+    uint32_t prefetch_buffer_base() const { return prefetch_buffer_base_; }
+
     uint32_t prefetch_q_entries() const { return settings.prefetch_q_entries_; }
 
     uint32_t prefetch_q_size() const { return settings.prefetch_q_size_; }
 
     uint32_t max_prefetch_command_size() const { return settings.prefetch_max_cmd_size_; }
 
-    uint32_t cmddat_q_base() const { return cmddat_q_base_; }
+    template <bool is_prefetch_d>
+    uint32_t cmddat_q_base() const {
+        if constexpr (is_prefetch_d) {
+            return cmddat_q_base_d_variant_;
+        } else {
+            return cmddat_q_base_;
+        }
+    }
 
     uint32_t cmddat_q_size() const { return settings.prefetch_cmddat_q_size_; }
 
@@ -174,6 +184,9 @@ private:
                 device_cq_addr_sizes_[dev_addr_idx] = settings.dispatch_s_sync_sem_;
             } else if (dev_addr_type == CommandQueueDeviceAddrType::DISPATCH_MESSAGE) {
                 device_cq_addr_sizes_[dev_addr_idx] = settings.dispatch_message_;
+            } else if (dev_addr_type == CommandQueueDeviceAddrType::KERNEL_DEBUG_STATUS) {
+                // May be 0
+                device_cq_addr_sizes_[dev_addr_idx] = settings.kernel_debug_status_enable_;
             } else {
                 device_cq_addr_sizes_[dev_addr_idx] = settings.other_ptrs_size;
             }
@@ -193,8 +206,14 @@ private:
         uint32_t prefetch_dispatch_unreserved_base =
             device_cq_addrs_[tt::utils::underlying_type<CommandQueueDeviceAddrType>(
                 CommandQueueDeviceAddrType::UNRESERVED)];
-        cmddat_q_base_ = prefetch_dispatch_unreserved_base + round_size(settings.prefetch_q_size_, pcie_alignment);
-        scratch_db_base_ = cmddat_q_base_ + round_size(settings.prefetch_cmddat_q_size_, pcie_alignment);
+
+        // Prefetcher: FetchQ | Cmddat | Scratch
+        // Dispatcher: Dispatch Buffer
+        prefetch_buffer_base_ = prefetch_dispatch_unreserved_base;  // Already aligned from above
+        cmddat_q_base_d_variant_ = align(prefetch_buffer_base_ + settings.prefetch_d_buffer_size_, pcie_alignment);
+        cmddat_q_base_ = align(prefetch_buffer_base_ + settings.prefetch_q_size_, pcie_alignment);
+        scratch_db_base_ = align(cmddat_q_base_ + settings.prefetch_cmddat_q_size_, pcie_alignment);
+
         dispatch_buffer_base_ = align(prefetch_dispatch_unreserved_base, 1 << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE);
         dispatch_buffer_block_size_pages_ = settings.dispatch_pages_ / DispatchSettings::DISPATCH_BUFFER_SIZE_BLOCKS;
         const uint32_t dispatch_cb_end = dispatch_buffer_base_ + settings.dispatch_size_;
@@ -223,7 +242,9 @@ private:
         return {l1_base, l1_size};
     }
 
+    uint32_t prefetch_buffer_base_;
     uint32_t cmddat_q_base_;
+    uint32_t cmddat_q_base_d_variant_;
     uint32_t scratch_db_base_;
     uint32_t dispatch_buffer_base_;
 
