@@ -169,14 +169,20 @@ TEST(MeshCoordinateRangeTest, InvalidRange) {
 }
 
 TEST(ToLinearIndexTest, Basic) {
-    SimpleMeshShape shape(2, 3);
+    SimpleMeshShape shape(2, 2, 3);
 
-    EXPECT_EQ(to_linear_index(shape, MeshCoordinate(0, 0)), 0);
-    EXPECT_EQ(to_linear_index(shape, MeshCoordinate(0, 1)), 1);
-    EXPECT_EQ(to_linear_index(shape, MeshCoordinate(0, 2)), 2);
-    EXPECT_EQ(to_linear_index(shape, MeshCoordinate(1, 0)), 3);
-    EXPECT_EQ(to_linear_index(shape, MeshCoordinate(1, 1)), 4);
-    EXPECT_EQ(to_linear_index(shape, MeshCoordinate(1, 2)), 5);
+    EXPECT_EQ(to_linear_index(shape, MeshCoordinate(0, 0, 0)), 0);
+    EXPECT_EQ(to_linear_index(shape, MeshCoordinate(0, 0, 1)), 1);
+    EXPECT_EQ(to_linear_index(shape, MeshCoordinate(0, 0, 2)), 2);
+    EXPECT_EQ(to_linear_index(shape, MeshCoordinate(0, 1, 0)), 3);
+    EXPECT_EQ(to_linear_index(shape, MeshCoordinate(0, 1, 1)), 4);
+    EXPECT_EQ(to_linear_index(shape, MeshCoordinate(0, 1, 2)), 5);
+    EXPECT_EQ(to_linear_index(shape, MeshCoordinate(1, 0, 0)), 6);
+    EXPECT_EQ(to_linear_index(shape, MeshCoordinate(1, 0, 1)), 7);
+    EXPECT_EQ(to_linear_index(shape, MeshCoordinate(1, 0, 2)), 8);
+    EXPECT_EQ(to_linear_index(shape, MeshCoordinate(1, 1, 0)), 9);
+    EXPECT_EQ(to_linear_index(shape, MeshCoordinate(1, 1, 1)), 10);
+    EXPECT_EQ(to_linear_index(shape, MeshCoordinate(1, 1, 2)), 11);
 }
 
 TEST(ToLinearIndexTest, MismatchedDimensions) {
