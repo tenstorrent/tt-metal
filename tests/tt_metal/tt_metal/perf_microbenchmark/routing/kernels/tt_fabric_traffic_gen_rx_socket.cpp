@@ -64,27 +64,27 @@ void kernel_main() {
     tt_fabric_init();
 
     zero_l1_buf(test_results, test_results_size_bytes);
-    test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_STARTED;
-    test_results[PQ_TEST_MISC_INDEX] = 0xff000000;
+    test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_STARTED;
+    test_results[TT_FABRIC_MISC_INDEX] = 0xff000000;
     zero_l1_buf(
         reinterpret_cast<tt_l1_ptr uint32_t*>(data_buffer_start_addr), data_buffer_size_words * PACKET_WORD_SIZE_BYTES);
-    test_results[PQ_TEST_MISC_INDEX] = 0xff000001;
+    test_results[TT_FABRIC_MISC_INDEX] = 0xff000001;
     zero_l1_buf((uint32_t*)client_interface, sizeof(fabric_client_interface_t));
-    test_results[PQ_TEST_MISC_INDEX] = 0xff000002;
+    test_results[TT_FABRIC_MISC_INDEX] = 0xff000002;
     zero_l1_buf((uint32_t*)client_pull_req_buf, sizeof(chan_req_buf));
-    test_results[PQ_TEST_MISC_INDEX] = 0xff000003;
+    test_results[TT_FABRIC_MISC_INDEX] = 0xff000003;
 
     client_interface->gk_interface_addr = ((uint64_t)gk_interface_addr_h << 32) | gk_interface_addr_l;
     client_interface->gk_msg_buf_addr = client_interface->gk_interface_addr + offsetof(gatekeeper_info_t, gk_msg_buf);
     client_interface->pull_req_buf_addr = xy_local_addr | client_pull_req_buf_addr;
-    test_results[PQ_TEST_MISC_INDEX] = 0xff000004;
+    test_results[TT_FABRIC_MISC_INDEX] = 0xff000004;
 
     // make sure fabric node gatekeeper is available.
     fabric_endpoint_init();
 
     socket_reader.init(data_buffer_start_addr, data_buffer_size_words);
     DPRINT << "Socket open on  " << dest_device << ENDL();
-    test_results[PQ_TEST_MISC_INDEX] = 0xff000005;
+    test_results[TT_FABRIC_MISC_INDEX] = 0xff000005;
 
     fabric_socket_open(
         3,                      // the network plane to use for this socket
@@ -96,7 +96,7 @@ void kernel_main() {
         dest_device & 0xFFFF,
         0  // fabric virtual channel.
     );
-    test_results[PQ_TEST_MISC_INDEX] = 0xff000006;
+    test_results[TT_FABRIC_MISC_INDEX] = 0xff000006;
 
     uint32_t loop_count = 0;
     uint32_t packet_count = 0;
@@ -110,7 +110,7 @@ void kernel_main() {
             }
             if (pull_req->flags == FORWARD) {
                 socket_reader.pull_socket_data(pull_req);
-                test_results[PQ_TEST_MISC_INDEX] = 0xDD000001;
+                test_results[TT_FABRIC_MISC_INDEX] = 0xDD000001;
                 noc_async_read_barrier();
                 update_pull_request_words_cleared(pull_req);
                 socket_reader.pull_words_in_flight = 0;
@@ -119,11 +119,11 @@ void kernel_main() {
 
             if (socket_reader.packet_in_progress == 1 and socket_reader.packet_words_remaining == 0) {
                 // wait for any pending sockat data writes to finish.
-                test_results[PQ_TEST_MISC_INDEX] = 0xDD000002;
+                test_results[TT_FABRIC_MISC_INDEX] = 0xDD000002;
 
                 noc_async_write_barrier();
 
-                test_results[PQ_TEST_MISC_INDEX] = 0xDD000003;
+                test_results[TT_FABRIC_MISC_INDEX] = 0xDD000003;
                 // clear the flags field to invalidate pull request slot.
                 // flags will be set to non-zero by next requestor.
                 req_buf_advance_rdptr((chan_req_buf*)client_pull_req_buf);
@@ -132,7 +132,7 @@ void kernel_main() {
                 loop_count = 0;
             }
         }
-        test_results[PQ_TEST_MISC_INDEX] = 0xDD400000 | (loop_count & 0xfffff);
+        test_results[TT_FABRIC_MISC_INDEX] = 0xDD400000 | (loop_count & 0xfffff);
 
         loop_count++;
         if (packet_count > 0 and loop_count >= 0x10000) {
@@ -142,13 +142,13 @@ void kernel_main() {
     }
 
     // write out results
-    set_64b_result(test_results, processed_packet_words, PQ_TEST_WORD_CNT_INDEX);
+    set_64b_result(test_results, processed_packet_words, TT_FABRIC_WORD_CNT_INDEX);
     set_64b_result(test_results, num_packets, TX_TEST_IDX_NPKT);
 
     if (async_wr_check_failed) {
-        test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_DATA_MISMATCH;
+        test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_DATA_MISMATCH;
     } else {
-        test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_PASS;
-        test_results[PQ_TEST_MISC_INDEX] = 0xff000005;
+        test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_PASS;
+        test_results[TT_FABRIC_MISC_INDEX] = 0xff000005;
     }
 }
