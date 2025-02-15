@@ -21,6 +21,12 @@ on:
           - creation.zeros.zeros
           - creation.empty.empty
           - creation.zeros_like.zeros_like
+          - eltwise.unary_backward.exp2_bw.exp2_bw_sharded
+          - eltwise.unary_backward.erfinv_bw.erfinv_bw_sharded
+          - eltwise.unary_backward.expm1_bw.expm1_bw_sharded
+          - eltwise.unary_backward.reciprocal_bw.reciprocal_bw_sharded
+          - eltwise.unary_backward.digamma_bw.digamma_bw_sharded
+          - eltwise.binary_complex.reciprocal_bw.reciprocal_bw_sharded
           - eltwise.unary.cos.cos_sharded
           - eltwise.unary.cosh.cosh_sharded
           - eltwise.unary.deg2rad.deg2rad_sharded
