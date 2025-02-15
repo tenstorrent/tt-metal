@@ -54,6 +54,9 @@ on:
           - eltwise.unary.clamp.clamp_pytorch2
           - eltwise.unary.clamp.clamp_min_pytorch2
           - eltwise.unary.clip.clip
+          - eltwise.unary.clip.clip_ternary
+          - eltwise.unary.clip.clip_sharded
+          - eltwise.unary.clip.clip_ternary_sharded
           - eltwise.unary.cbrt.cbrt
           - eltwise.unary.rsub.rsub
           - eltwise.unary.rsub.rsub_sharded
