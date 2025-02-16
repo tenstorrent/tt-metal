@@ -144,12 +144,26 @@ public:
     // elements have to match `spec`; block float formats such as BFLOAT8_B and BFLOAT4_B require `T` equal `float`.
     //
     // The data in the buffer is copied into a tensor with an owned storage.
-    //
-    // TODO: add support for returning a tensor with borrowed storage based off the buffer.
-    // TODO: handle tilization and padding in face of sharding.
     template <typename T>
     static Tensor from_span(
         tt::stl::Span<const T> buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device = std::nullopt);
+
+    // Returns true if the tensor spec is such that the tensor can be borrowed:
+    // 1. The tensor physical shape is the same as logical shape.
+    // 2. The tensor layout is row-major.
+    bool static is_borrowable(const TensorSpec& spec);
+
+    // Creates a `Tensor` with storage "borrowed" from the buffer of elements of type `T`. `on_creation_callback` and
+    // `on_destruction_callback` are called when the tensor is created and destroyed, respectively.
+    //
+    // Throws if `spec` does not satisfy the conditions for borrowing a tensor from a buffer.
+    template <typename T>
+    static Tensor borrow_from_span(
+        tt::stl::Span<T> buffer,
+        const TensorSpec& spec,
+        const std::function<void()>& on_creation_callback,
+        const std::function<void()>& on_destruction_callback,
+        std::optional<ttnn::AnyDevice> device = std::nullopt);
 
     // Same as `from_span`, but operates on a vector instead.
     template <typename T>
@@ -158,8 +172,8 @@ public:
         return from_span(tt::stl::Span<const T>(buffer), spec, device);
     }
 
-    // Same as `from_vector`, but takes in an rvalue. No copies will be made, if the target layout is row-major, and no
-    // type conversion is needed.
+    // Same as `from_vector`, but takes in an rvalue. No copies will be made, if the target layout is row-major,
+    // physical shape matches logical shape, and no type conversion is needed.
     template <typename T>
     static Tensor from_vector(
         std::vector<T>&& buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device = std::nullopt);
@@ -169,8 +183,6 @@ public:
     // the `Tensor`; block float formats such as BFLOAT8_B and BFLOAT4_B require `T` equal `float`.
     //
     // If the tensor resides on a device, it will be brough back to host.
-    //
-    // TODO: handle tilization and padding in face of sharding.
     template <typename T>
     std::vector<T> to_vector() const;
 
