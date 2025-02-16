@@ -259,7 +259,7 @@ void test_EnqueueWriteBuffer_and_EnqueueReadBuffer(IDevice* device, CommandQueue
                 if (i != result[i]) {
                     std::cout << "i: " << std::to_string(i) << " result[i]: " << std::to_string(result[i]) << std::endl;
                     // std::cout << "Fail" << std::endl;
-                    break;
+                    // break;
                 }
             }
 
