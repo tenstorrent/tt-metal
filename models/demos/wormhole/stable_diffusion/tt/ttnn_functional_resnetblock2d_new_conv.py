@@ -182,10 +182,6 @@ class resnetBlock2D:
         self.conv2_config_override = {}
         if (out_channels, out_channels, input_height, input_width) in config_override:
             self.conv2_config_override = config_override[(out_channels, out_channels, input_height, input_width)]
-        # if use_in_shortcut:
-        #     self.conv2_config_override["grid_size"] = self.conv_shortcut.conv.grid_size
-        #     self.conv2_config_override["per_core_out_matrix_height"] = self.conv_shortcut.conv.per_core_out_matrix_height
-        #     self.conv2_config_override["per_core_weight_matrix_width"] = self.conv_shortcut.conv.per_core_out_matrix_width
 
         self.conv2_input_height = conv2_input_height
         self.conv2_input_width = conv2_input_width

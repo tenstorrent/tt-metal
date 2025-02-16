@@ -71,8 +71,7 @@ Tensor optimized_conv_new(
     bool enable_act_double_buffer,
     bool enable_weights_double_buffer,
     bool enable_split_reader,
-    bool enable_subblock_padding,
-    bool use_non_tile_height) {
+    bool enable_subblock_padding) {
     std::vector<Tensor> output_tensors = {Tensor(tt::tt_metal::operation::get_workers_for_op_output({a, b}))};
 
     operation::launch_op(
@@ -91,8 +90,7 @@ Tensor optimized_conv_new(
          enable_act_double_buffer,
          enable_weights_double_buffer,
          enable_split_reader,
-         enable_subblock_padding,
-         use_non_tile_height](
+         enable_subblock_padding](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
@@ -138,8 +136,7 @@ Tensor optimized_conv_new(
                 enable_act_double_buffer,
                 enable_weights_double_buffer,
                 enable_split_reader,
-                enable_subblock_padding,
-                use_non_tile_height);
+                enable_subblock_padding);
             IDevice* device = a.device();
 
             optimized_conv_op.pre_op_l1_allocation_size_bytes =
@@ -163,10 +160,8 @@ void OptimizedConvNew::validate(
         TT_FATAL((this->dtype == DataType::BFLOAT16) || (this->dtype == DataType::FLOAT32), "Error");
     }
     if (this->memory_config.is_sharded()) {
-        uint32_t out_block_h_ntiles =
-            optimized_conv_op_utils::div_up(parallelization_config.per_core_out_matrix_height, TILE_HEIGHT);
-        uint32_t per_core_out_matrix_width_ntiles =
-            optimized_conv_op_utils::div_up(parallelization_config.per_core_out_matrix_width, TILE_WIDTH);
+        uint32_t out_block_h_ntiles = parallelization_config.per_core_out_matrix_height_ntile;
+        uint32_t per_core_out_matrix_width_ntiles = parallelization_config.per_core_out_matrix_width_ntile;
         auto [act_matrix_shape, act_matrix_shape_unpadded] =
             optimized_conv_op_utils::compute_opt_conv_activation_as_mm_shape(
                 input_tensor_a.get_padded_shape(),
@@ -207,10 +202,8 @@ std::vector<TensorSpec> OptimizedConvNew::compute_output_specs(const std::vector
     // Tiled output shape is padded shape. Padded to tile shape.
     auto shape_w = batch_size * conv_output_h * conv_output_w;
     auto shape_c = output_channels;
-    auto padded_shape_w = this->use_non_tile_height
-                              ? parallelization_config.num_cores_nhw * parallelization_config.per_core_out_matrix_height
-                              : parallelization_config.num_cores_nhw *
-                                    tt::round_up(parallelization_config.per_core_out_matrix_height, TILE_HEIGHT);
+    auto padded_shape_w =
+        parallelization_config.num_cores_nhw * parallelization_config.per_core_out_matrix_height_ntile * TILE_HEIGHT;
     auto padded_shape_c = tt::round_up(this->output_channels, TILE_WIDTH);
     ttnn::Shape output_shape({1, 1, shape_w, shape_c});
     ttnn::Shape padded_output_shape({1, 1, padded_shape_w, padded_shape_c});
@@ -219,24 +212,9 @@ std::vector<TensorSpec> OptimizedConvNew::compute_output_specs(const std::vector
     if (this->memory_config.is_sharded()) {
         if (this->memory_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
             uint32_t total_height_tiles = padded_output_shape.volume() / padded_output_shape[-1] / TILE_HEIGHT;
-            uint32_t num_cores;
-            std::array<uint32_t, 2> shard_shape;
-            if (this->use_non_tile_height) {
-                num_cores = this->parallelization_config.num_cores_nhw;
-                uint32_t total_height = padded_output_shape.volume() / padded_output_shape[-1];
-                shard_shape = {(uint32_t)(total_height / num_cores), padded_output_shape[-1]};
-            } else {
-                num_cores = total_height_tiles /
-                            tt::div_up(this->parallelization_config.per_core_out_matrix_height, TILE_HEIGHT);
-                CoreRangeSet shard_grid =
-                    tt::tt_metal::num_cores_to_corerangeset(num_cores, this->parallelization_config.grid_size, true);
-
-                shard_shape = {
-                    optimized_conv_op_utils::div_up(
-                        this->parallelization_config.per_core_out_matrix_height, TILE_HEIGHT) *
-                        TILE_HEIGHT,
-                    padded_output_shape[-1]};
-            }
+            uint32_t num_cores = total_height_tiles / this->parallelization_config.per_core_out_matrix_height_ntile;
+            std::array<uint32_t, 2> shard_shape = {
+                this->parallelization_config.per_core_out_matrix_height_ntile * TILE_HEIGHT, padded_output_shape[-1]};
             CoreRangeSet shard_grid =
                 tt::tt_metal::num_cores_to_corerangeset(num_cores, this->parallelization_config.grid_size, true);
             auto shard_spec = ShardSpec{shard_grid, shard_shape, ShardOrientation::ROW_MAJOR};
@@ -249,8 +227,8 @@ std::vector<TensorSpec> OptimizedConvNew::compute_output_specs(const std::vector
         } else if (this->memory_config.memory_layout == TensorMemoryLayout::WIDTH_SHARDED) {
             uint32_t total_height_tiles = padded_output_shape.volume() / padded_output_shape[-1] / TILE_HEIGHT;
             std::array<uint32_t, 2> shard_shape = {
-                tt::div_up(this->parallelization_config.per_core_out_matrix_height, TILE_HEIGHT) * TILE_HEIGHT,
-                tt::div_up(this->parallelization_config.per_core_out_matrix_width, TILE_WIDTH) * TILE_WIDTH};
+                this->parallelization_config.per_core_out_matrix_height_ntile * TILE_HEIGHT,
+                this->parallelization_config.per_core_out_matrix_width_ntile * TILE_WIDTH};
             auto shard_grid = this->memory_config.shard_spec.value().grid;
             auto shard_spec = ShardSpec{shard_grid, shard_shape, this->memory_config.shard_spec.value().orientation};
             auto mem_config = this->memory_config;
@@ -314,8 +292,7 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
         enable_act_double_buffer,
         enable_weights_double_buffer,
         enable_split_reader,
-        enable_subblock_padding,
-        use_non_tile_height);
+        enable_subblock_padding);
 
     const uint32_t post_op_l1_allocation_size =
         device->allocator()->get_statistics(tt::tt_metal::BufferType::L1).total_allocated_bytes;
@@ -340,7 +317,6 @@ operation::ProgramWithCallbacks OptimizedConvNew::create_program(
             .enable_subblock_padding = enable_subblock_padding},
         this->memory_config,
         has_bias,
-        use_non_tile_height,
         is_1d_deptwise_conv(
             groups,
             input_tensor_shape[3],
