@@ -2,11 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstring>
 #include <tt_metal.hpp>
 
 #include <algorithm>
-#include <filesystem>
-#include <mutex>
 #include <optional>
 #include <string>
 #include <unordered_set>
@@ -15,8 +14,9 @@
 #include <dev_msgs.h>
 #include <hal.hpp>
 #include <allocator.hpp>
-#include "buffer_constants.hpp"
+#include "assert.hpp"
 #include "buffers/dispatch.hpp"
+#include "device.hpp"
 #include "dprint_server.hpp"
 #include <command_queue.hpp>
 #include <profiler.hpp>
@@ -37,10 +37,10 @@
 #include "tracy/Tracy.hpp"
 
 #include <graph_tracking.hpp>
-#include <vector>
 #include "lightmetal/host_api_capture_helpers.hpp"
 
 #include "llrt.hpp"
+#include "umd/device/tt_core_coordinates.h"
 
 namespace tt {
 
@@ -462,6 +462,91 @@ void WriteToDeviceSharded(Buffer& buffer, tt::stl::Span<const uint8_t> host_buff
     }
 }
 
+uint32_t AddPaddingToPartialPages(
+    const buffer_dispatch::PartialPageSpec& partial_page_spec,
+    const uint8_t* partial_pages_data,
+    uint32_t full_unpadded_page_data_size_bytes,
+    uint8_t* page_with_padding_data) {
+    uint32_t total_num_bytes_added = 0;
+    uint32_t num_partial_pages_processed = 0;
+    uint32_t i = 0;
+    while (i < full_unpadded_page_data_size_bytes) {
+        uint32_t num_bytes_data_to_add = 0;
+        uint32_t num_bytes_padding_to_add = 0;
+        if (num_partial_pages_processed == partial_page_spec.num_partial_pages_per_full_page - 1) {
+            num_bytes_data_to_add =
+                partial_page_spec.unpadded_partial_page_size - partial_page_spec.last_partial_page_additional_padding;
+            num_bytes_padding_to_add =
+                partial_page_spec.last_partial_page_additional_padding +
+                (partial_page_spec.padded_partial_page_size - partial_page_spec.unpadded_partial_page_size);
+        } else {
+            num_bytes_data_to_add = partial_page_spec.unpadded_partial_page_size;
+            num_bytes_padding_to_add =
+                partial_page_spec.padded_partial_page_size - partial_page_spec.unpadded_partial_page_size;
+        }
+
+        std::memcpy(page_with_padding_data + total_num_bytes_added, partial_pages_data + i, num_bytes_data_to_add);
+        total_num_bytes_added += num_bytes_data_to_add;
+
+        std::memset(page_with_padding_data + total_num_bytes_added, 0, num_bytes_padding_to_add);
+        total_num_bytes_added += num_bytes_padding_to_add;
+
+        i += num_bytes_data_to_add + num_bytes_padding_to_add;
+        num_partial_pages_processed += 1;
+    }
+    return total_num_bytes_added;
+}
+
+void WriteToDeviceInterleavedContiguousLargePage(const Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
+    const buffer_dispatch::PartialPageSpec& partial_page_spec = buffer_dispatch::calculate_partial_page_spec(buffer);
+    const uint32_t full_padded_page_size =
+        partial_page_spec.padded_partial_page_size * partial_page_spec.num_partial_pages_per_full_page;
+    // const uint32_t full_unpadded_page_size =
+    //     partial_page_spec.unpadded_partial_page_size * partial_page_spec.num_partial_pages_per_full_page;
+    const uint32_t num_full_pages = buffer.num_pages();
+
+    IDevice* device = buffer.device();
+    const uint32_t num_banks = device->allocator()->get_num_banks(buffer.buffer_type());
+
+    uint32_t num_round_robins = 0;
+    uint32_t bank_index = 0;
+    uint32_t data_index = 0;
+    std::vector<uint32_t> page;
+    page.resize(full_padded_page_size / sizeof(uint32_t));
+    for (uint32_t page_index = 0; page_index < num_full_pages; page_index++) {
+        auto absolute_address = buffer.page_address(bank_index, page_index);
+        // Get address offset of buffer in bank. Required when writing to DRAM.
+        auto bank_local_address = buffer.bank_local_page_address(bank_index, page_index);
+        // std::memcpy(page.data(), host_buffer.data() + data_index, full_padded_page_size);
+        const DeviceAddr full_page_address_offset =
+            (num_round_robins > 0) ? (full_padded_page_size - buffer.aligned_page_size()) * num_round_robins : 0;
+        const uint32_t full_page_data_with_padding_size_bytes = AddPaddingToPartialPages(
+            partial_page_spec,
+            host_buffer.data() + data_index,
+            buffer.page_size(),
+            reinterpret_cast<uint8_t*>(page.data()));
+        TT_ASSERT(full_page_data_with_padding_size_bytes == full_padded_page_size);
+        switch (buffer.buffer_type()) {
+            case BufferType::DRAM:
+                WriteToDeviceDRAMChannel(device, bank_index, bank_local_address + full_page_address_offset, page);
+                break;
+            case BufferType::L1:
+            case BufferType::L1_SMALL: {
+                CoreCoord logical_core = buffer.allocator()->get_logical_core_from_bank_id(bank_index);
+                WriteToDeviceL1(
+                    device, logical_core, absolute_address + full_page_address_offset, page, CoreType::WORKER);
+            } break;
+            default: TT_THROW("Unsupported buffer type to write to device!");
+        }
+
+        if (bank_index + 1 == num_banks) {
+            num_round_robins += 1;
+        }
+        bank_index = (bank_index + 1) % num_banks;
+        data_index += buffer.page_size();
+    }
+}
+
 void WriteToDeviceInterleavedContiguous(const Buffer& buffer, tt::stl::Span<const uint8_t> host_buffer) {
     uint32_t host_buffer_size_bytes = host_buffer.size();
     TT_FATAL(
@@ -469,6 +554,11 @@ void WriteToDeviceInterleavedContiguous(const Buffer& buffer, tt::stl::Span<cons
         "Bounds-Error -- Attempting to write {} bytes to a {} byte buffer",
         host_buffer_size_bytes,
         buffer.size());
+
+    if (buffer_dispatch::are_pages_large(buffer)) {
+        WriteToDeviceInterleavedContiguousLargePage(buffer, host_buffer);
+        return;
+    }
 
     uint32_t page_size = buffer.page_size();
     uint32_t num_pages = buffer.num_pages();
@@ -485,14 +575,11 @@ void WriteToDeviceInterleavedContiguous(const Buffer& buffer, tt::stl::Span<cons
         auto bank_local_address = buffer.bank_local_page_address(bank_index, page_index);
         std::memcpy(page.data(), host_buffer.data() + data_index, page_size);
         switch (buffer.buffer_type()) {
-            case BufferType::DRAM:
-                WriteToDeviceDRAMChannel(device, bank_index, bank_local_address, page);
-                break;
+            case BufferType::DRAM: WriteToDeviceDRAMChannel(device, bank_index, bank_local_address, page); break;
             case BufferType::L1:
             case BufferType::L1_SMALL: {
-                auto core_coordinates = device->worker_core_from_logical_core(
-                    buffer.allocator()->get_logical_core_from_bank_id(bank_index));
-                llrt::write_hex_vec_to_core(device->id(), core_coordinates, page, absolute_address);
+                CoreCoord logical_core = buffer.allocator()->get_logical_core_from_bank_id(bank_index);
+                WriteToDeviceL1(device, logical_core, absolute_address, page, CoreType::WORKER);
             } break;
             default: TT_THROW("Unsupported buffer type to write to device!");
         }
