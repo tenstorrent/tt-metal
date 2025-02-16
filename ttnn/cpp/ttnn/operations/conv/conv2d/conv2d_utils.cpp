@@ -845,7 +845,7 @@ Conv2dConfig determine_conv_config_for_auto_shard(
             conv_config.act_block_w_div = tt::div_up(in_channels, width_sharded_num_cores * constants::TILE_WIDTH);
         }
 
-        const conv_op_l1_usage l1_usage = calculate_L1_usage(
+        conv_op_l1_usage l1_usage = calculate_L1_usage(
             compute_config,
             opt_conv_op_block_config,
             opt_conv_op_parallel_config,
@@ -856,6 +856,16 @@ Conv2dConfig determine_conv_config_for_auto_shard(
             enable_bias,
             use_non_tile_height,
             conv_is_1d_deptwise);
+
+        // Since we don't have L1 usage for halo output (input to conv2d)
+        // use approx input tensor size per core as a proxy.
+        uint32_t input_nhw = tt::div_up(batch_size * input_height * input_width, tt::constants::TILE_HEIGHT);
+        uint32_t input_c = tt::div_up(in_channels_padded, tt::constants::TILE_WIDTH);
+        uint32_t approx_input_size =
+            input_nhw * input_c * tt::tile_size(datatype_to_dataformat_converter(conv_config.dtype));
+        uint32_t approx_input_size_per_core = approx_input_size / input_parallel_config.grid.num_cores();
+
+        l1_usage.tensor_allocation_size += approx_input_size_per_core;
         log_debug(
             tt::LogOp,
             "L1 usage for {}: {}, {}",
@@ -907,7 +917,6 @@ std::tuple<OptimizedConvParallelizationConfig, OptimizedConvBlockConfig, MemoryC
     uint32_t output_width,
     std::array<uint32_t, 2> kernel_size,
     const CoreCoord& compute_grid) {
-    auto elem_size = conv_config.weights_dtype == DataType::BFLOAT8_B ? 1 : 2;
     bool is_non_tile_mul_width = check_non_tile_mul_width(compute_grid, conv_config, in_channels);
     const bool use_non_tile_height = check_non_tile_height(conv_config, out_channels);
 
