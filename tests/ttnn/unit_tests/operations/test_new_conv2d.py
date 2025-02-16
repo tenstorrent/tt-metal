@@ -2966,3 +2966,35 @@ def test_split_reader_regression(
         shard_layout=shard_layout,
         enable_split_reader=True,
     )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_small_in_large_out_channels_auto_shard(device, torch_tensor_map):
+    batch_size = 2
+    in_channels = 16
+    out_channels = 1536
+    kernel_size = (2, 2)
+    stride = (2, 2)
+    padding = (0, 0)
+    height = 128
+    width = 128
+    run_conv(
+        device,
+        torch_tensor_map,
+        ttnn.MathFidelity.LoFi,
+        ttnn.bfloat16,
+        ttnn.bfloat16,
+        batch_size,
+        out_channels,
+        in_channels,
+        height,
+        width,
+        kernel_size[0],
+        kernel_size[1],
+        stride[0],
+        stride[1],
+        padding[0],
+        padding[1],
+        None,
+        auto_shard=True,
+    )
