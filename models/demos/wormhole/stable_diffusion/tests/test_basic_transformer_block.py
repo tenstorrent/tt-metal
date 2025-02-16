@@ -76,7 +76,7 @@ def test_basic_transformer_block_512x512(device, model_name, N, C, H, W, index, 
     cross_attention_kwargs = None
     class_labels = None
 
-    torch_output = basic_transformer(hidden_states.squeeze(0), encoder_hidden_states.squeeze(0))
+    torch_output = basic_transformer(hidden_states.squeeze(0), encoder_hidden_states=encoder_hidden_states.squeeze(0))
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: basic_transformer, custom_preprocessor=custom_preprocessor, device=device
