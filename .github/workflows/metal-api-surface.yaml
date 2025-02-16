@@ -57,9 +57,7 @@ jobs:
         with:
           payload: |
             {
-              "text": "\nTT_METAL_API_SURFACE:\ndate: ${{ env.DATE }} \nnum_files: ${{ env.NUM_FILES }} \nnum_types: ${{ env.NUM_TYPES }} \nnum_methods: ${{ env.NUM_METHODS }}",
-              "owner": "U07J3K6KS1K"
+              "text": "date: ${{ env.DATE }} \nnum_files: ${{ env.NUM_FILES }} \nnum_types: ${{ env.NUM_TYPES }} \nnum_methods: ${{ env.NUM_METHODS }}"
             }
         env:
-          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
-          SLACK_CHANNEL_ID: C08BAGE4410
+          SLACK_WEBHOOK_URL: ${{ secrets.METAL_API_SURFACE_WEBHOOK }}

@@ -35,6 +35,7 @@
 
 #include "impl/dispatch/topology.hpp"
 #include "impl/dispatch/hardware_command_queue.hpp"
+#include "tt_metal/jit_build/build_env_manager.hpp"
 
 namespace tt {
 
@@ -334,130 +335,6 @@ std::unique_ptr<Allocator> Device::initialize_allocator(size_t l1_small_size, si
     return std::make_unique<L1BankingAllocator>(config);
 }
 
-void Device::initialize_device_kernel_defines()
-{
-    // Clear previously stored defines, in case we are running with different configuration this time.
-    // This is needed to handle the case where the number of L1 banks on GS can be changed in each run.
-    this->device_kernel_defines_.clear();
-    const size_t num_dram_banks = this->allocator()->get_num_banks(BufferType::DRAM);
-    const size_t num_l1_banks = this->allocator()->get_num_banks(BufferType::L1);
-
-    bool is_dram_pow2 = ceil(log2(num_dram_banks)) == log2(num_dram_banks);
-    bool is_l1_pow2 = ceil(log2(num_l1_banks)) == log2(num_l1_banks);
-
-    this->device_kernel_defines_.emplace("NUM_DRAM_BANKS", std::to_string(num_dram_banks));
-    this->device_kernel_defines_.emplace("NUM_L1_BANKS", std::to_string(num_l1_banks));
-
-    if (is_dram_pow2) {
-        this->device_kernel_defines_.emplace("LOG_BASE_2_OF_NUM_DRAM_BANKS", std::to_string(static_cast<size_t>(log2(num_dram_banks))));
-    } else {
-        this->device_kernel_defines_.emplace("IS_NOT_POW2_NUM_DRAM_BANKS", "1");
-    }
-    if (is_l1_pow2) {
-        this->device_kernel_defines_.emplace("LOG_BASE_2_OF_NUM_L1_BANKS", std::to_string(static_cast<size_t>(log2(num_l1_banks))));
-    } else {
-        this->device_kernel_defines_.emplace("IS_NOT_POW2_NUM_L1_BANKS", "1");
-    }
-
-    // TODO (abhullar): Until we switch to virtual coordinates, we need to pass physical PCIe coordinates to device
-    //  because Blackhole PCIe endpoint is dependent on board type
-    const metal_SocDescriptor& soc_d = tt::Cluster::instance().get_soc_desc(this->id());
-    auto pcie_cores = soc_d.get_pcie_cores();
-    auto grid_size = this->grid_size();
-
-    CoreCoord pcie_core = pcie_cores.empty() ? grid_size : pcie_cores[0];
-
-    this->device_kernel_defines_.emplace("PCIE_NOC_X", std::to_string(pcie_core.x));
-    this->device_kernel_defines_.emplace("PCIE_NOC_Y", std::to_string(pcie_core.y));
-}
-
-void Device::initialize_build() {
-    ZoneScoped;
-
-    this->initialize_device_kernel_defines();
-    this->build_env_.init(this->build_key(), this->arch(), this->device_kernel_defines_);
-
-    CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(this->id());
-    uint32_t dispatch_message_addr = DispatchMemMap::get(dispatch_core_type, this->num_hw_cqs_)
-                                         .get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE);
-
-    uint32_t num_build_states = hal.get_num_risc_processors();
-
-    auto init_helper = [this, dispatch_message_addr, num_build_states] (bool is_fw) -> JitBuildStateSet {
-        std::vector<std::shared_ptr<JitBuildState>> build_states;
-
-        build_states.resize(num_build_states);
-        uint32_t programmable_core_type_count = hal.get_programmable_core_type_count();
-        if (is_fw) {
-            this->build_state_indices_.resize(programmable_core_type_count);
-        }
-
-        uint32_t index = 0;
-        for (uint32_t programmable_core = 0; programmable_core < programmable_core_type_count; programmable_core++) {
-            HalProgrammableCoreType core_type = magic_enum::enum_value<HalProgrammableCoreType>(programmable_core);
-            uint32_t processor_class_count = hal.get_processor_classes_count(programmable_core);
-            if (is_fw) {
-                this->build_state_indices_[programmable_core].resize(processor_class_count);
-            }
-            for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
-                auto compute_proc_class = magic_enum::enum_cast<HalProcessorClassType>(processor_class);
-                bool is_compute_processor = compute_proc_class.has_value() and compute_proc_class.value() == HalProcessorClassType::COMPUTE;
-                uint32_t processor_types_count = hal.get_processor_types_count(programmable_core, processor_class);
-                if (is_fw) {
-                    this->build_state_indices_[programmable_core][processor_class] = {index, processor_types_count};
-                }
-                for (uint32_t processor_type = 0; processor_type < processor_types_count; processor_type++) {
-                    switch (core_type) {
-                        case HalProgrammableCoreType::TENSIX: {
-                            if (is_compute_processor) {
-                                build_states[index] = std::make_shared<JitBuildCompute>(
-                                    this->build_env_, JitBuiltStateConfig{.processor_id = processor_type, .is_fw=is_fw, .dispatch_message_addr=dispatch_message_addr});
-                            } else {
-                                // TODO: Make .processor_id = processor_type when brisc and ncrisc are considered one processor class
-                                build_states[index] = std::make_shared<JitBuildDataMovement>(
-                                    this->build_env_, JitBuiltStateConfig{.processor_id = processor_class, .is_fw=is_fw, .dispatch_message_addr=dispatch_message_addr});
-                            }
-                            break;
-                        }
-                        case HalProgrammableCoreType::ACTIVE_ETH: {
-                            // Cooperative means active erisc FW needs to context switch to base FW
-                            bool is_cooperative = this->arch() == ARCH::WORMHOLE_B0;
-                            build_states[index] = std::make_shared<JitBuildActiveEthernet>(
-                                this->build_env_,
-                                JitBuiltStateConfig{
-                                    .processor_id = processor_class,
-                                    .is_fw = is_fw,
-                                    .dispatch_message_addr = dispatch_message_addr,
-                                    .is_cooperative = is_cooperative});
-                            break;
-                        }
-                        case HalProgrammableCoreType::IDLE_ETH: {
-                            build_states[index] = std::make_shared<JitBuildIdleEthernet>(
-                                this->build_env_, JitBuiltStateConfig{.processor_id = processor_class, .is_fw=is_fw, .dispatch_message_addr=dispatch_message_addr});
-                            break;
-                        }
-                        default:
-                            TT_THROW("Unsupported programable core type {} to initialize build states", magic_enum::enum_name(core_type));
-                    }
-                    index++;
-                }
-            }
-        }
-
-       return build_states;
-    };
-
-    this->firmware_build_states_ = init_helper(true);
-    this->kernel_build_states_ = init_helper(false);
-}
-
-void Device::build_firmware() {
-    log_debug(tt::LogMetal, "Building base firmware for device {}", this->id_);
-    ZoneScoped;
-
-    jit_build_set(this->firmware_build_states_, nullptr);
-}
-
 void Device::initialize_device_bank_to_noc_tables(const HalProgrammableCoreType &core_type, CoreCoord virtual_core)
 {
     const uint32_t dram_to_noc_sz_in_bytes = dram_bank_to_noc_xy_.size() * sizeof(uint16_t);
@@ -492,19 +369,23 @@ void Device::initialize_firmware(const HalProgrammableCoreType &core_type, CoreC
     switch (core_type) {
         case HalProgrammableCoreType::TENSIX: {
             for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
-                auto [build_idx, num_build_states] = this->build_processor_type_to_index(core_type_idx, processor_class);
-                for (uint32_t riscv_id = build_idx; riscv_id < (build_idx + num_build_states); riscv_id++) {
-                    ll_api::memory const& binary_mem = llrt::get_risc_binary(
-                        firmware_build_states_[riscv_id]->get_target_out_path(""));
+                auto [build_idx, num_build_states] =
+                    BuildEnvManager::get_instance().get_build_index_and_state_count(core_type_idx, processor_class);
+                for (uint32_t riscv_id = 0; riscv_id < num_build_states; riscv_id++) {
+                    auto fw_path = BuildEnvManager::get_instance()
+                                       .get_firmware_build_state(id_, core_type_idx, processor_class, riscv_id)
+                                       .get_target_out_path("");
+                    const ll_api::memory& binary_mem = llrt::get_risc_binary(fw_path);
                     uint32_t fw_size = binary_mem.get_text_size();
-                    if (riscv_id == 1) { // TODO: clean up how brisc/ncrisc are handled
+                    if (riscv_id + build_idx == 1) {  // TODO: clean up how brisc/ncrisc are handled
                         // In this context, ncrisc_kernel_size16 is the size of the fw
                         launch_msg->kernel_config.ncrisc_kernel_size16 = (fw_size + 15) >> 4;
                     }
                     log_debug(LogDevice, "RISC {} fw binary size: {} in bytes", riscv_id, fw_size);
 
                     if (not llrt::RunTimeOptions::get_instance().get_skip_loading_fw())  {
-                        llrt::test_load_write_read_risc_binary(binary_mem, this->id(), virtual_core, core_type_idx, processor_class, (riscv_id - build_idx));
+                        llrt::test_load_write_read_risc_binary(
+                            binary_mem, this->id(), virtual_core, core_type_idx, processor_class, riscv_id);
                     }
                 }
             }
@@ -536,13 +417,16 @@ void Device::initialize_firmware(const HalProgrammableCoreType &core_type, CoreC
             }
             if (not llrt::RunTimeOptions::get_instance().get_skip_loading_fw()) {
                 for (uint32_t processor_class = 0; processor_class < processor_class_count; processor_class++) {
-                    auto [build_idx, num_build_states] = this->build_processor_type_to_index(core_type_idx, processor_class);
-                    for (uint32_t eriscv_id = build_idx; eriscv_id < (build_idx + num_build_states); eriscv_id++) {
-                        ll_api::memory const& binary_mem = llrt::get_risc_binary(
-                            firmware_build_states_[eriscv_id]->get_target_out_path(""));
+                    auto num_build_states = hal.get_processor_types_count(core_type_idx, processor_class);
+                    for (uint32_t eriscv_id = 0; eriscv_id < num_build_states; eriscv_id++) {
+                        auto fw_path = BuildEnvManager::get_instance()
+                                           .get_firmware_build_state(id_, core_type_idx, processor_class, eriscv_id)
+                                           .get_target_out_path("");
+                        const ll_api::memory& binary_mem = llrt::get_risc_binary(fw_path);
                         uint32_t fw_size = binary_mem.get_text_size();
                         log_debug(LogDevice, "ERISC fw binary size: {} in bytes", fw_size);
-                        llrt::test_load_write_read_risc_binary(binary_mem, this->id(), virtual_core, core_type_idx, processor_class, (eriscv_id - build_idx));
+                        llrt::test_load_write_read_risc_binary(
+                            binary_mem, this->id(), virtual_core, core_type_idx, processor_class, eriscv_id);
                     }
                 }
             }
@@ -1030,31 +914,9 @@ bool Device::initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t t
         update_dispatch_cores_for_multi_cq_eth_dispatch();
     }
     this->num_hw_cqs_ = num_hw_cqs;
-    constexpr uint32_t harvesting_map_bits = 12;
-    constexpr uint32_t num_hw_cq_bits = 8;
-    constexpr uint32_t dispatch_core_axis_bits = 1;
-    constexpr uint32_t dispatch_core_type_bits = 1;
-    static_assert(dispatch_core_manager::MAX_NUM_HW_CQS <= (1 << num_hw_cq_bits));
-    static_assert(static_cast<uint32_t>(DispatchCoreAxis::COUNT) <= (1 << dispatch_core_axis_bits));
-    static_assert(static_cast<uint32_t>(DispatchCoreType::COUNT) <= (1 << dispatch_core_type_bits));
-    static_assert(harvesting_map_bits + num_hw_cq_bits + dispatch_core_axis_bits + dispatch_core_type_bits <= sizeof(this->build_key_) * CHAR_BIT);
-
-    // num_hw_cqs, dispatch_core_axis, dispatch_core_type all change the number of banks, so need to be part of the
-    // build key since we have defines based on number of banks.
-    const auto& dispatch_core_config = dispatch_core_manager::instance().get_dispatch_core_config(this->id_);
-    this->build_key_ = (static_cast<uint32_t>(dispatch_core_config.get_dispatch_core_type()) << (harvesting_map_bits + num_hw_cq_bits + dispatch_core_axis_bits)) |
-                       (static_cast<uint32_t>(dispatch_core_config.get_dispatch_core_axis()) << (harvesting_map_bits + num_hw_cq_bits)) |
-                       (static_cast<uint32_t>(num_hw_cqs_) << harvesting_map_bits);
-    if (not hal.is_coordinate_virtualization_enabled()) {
-        // Coordinate virtualization is not enabled. For a single program, its associated binaries will vary across devices with different cores harvested.
-        this->build_key_ = (this->build_key_) | tt::Cluster::instance().get_harvesting_mask(this->id());
-    } else {
-        // Coordinate Virtualization is enabled. Track only the number of harvested cores, instead of the exact harvesting configuration (this is not needed).
-        this->build_key_ = (this->build_key_) | (std::bitset<harvesting_map_bits>(tt::Cluster::instance().get_harvesting_mask(this->id())).count());
-    }
+    BuildEnvManager::get_instance().add_build_env(this->id(), this->num_hw_cqs());
     this->initialize_cluster();
     this->initialize_default_sub_device_state(l1_small_size, trace_region_size, l1_bank_remap);
-    this->initialize_build();
     this->generate_device_bank_to_noc_tables();
 
     // For minimal setup, don't initialize FW, watcher, dprint. They won't work if we're attaching to a hung chip.
@@ -1339,42 +1201,6 @@ std::optional<DeviceAddr> Device::lowest_occupied_compute_l1_address() const {
 
 std::optional<DeviceAddr> Device::lowest_occupied_compute_l1_address(tt::stl::Span<const SubDeviceId> sub_device_ids) const {
     return sub_device_manager_tracker_->lowest_occupied_compute_l1_address(sub_device_ids);
-}
-
-std::pair<int, int> Device::build_processor_type_to_index(uint32_t programmable_core, uint32_t processor_class) const {
-    TT_ASSERT(programmable_core < this->build_state_indices_.size(),
-        "Programmable core type {} is not included in the FW or Kernel build state", programmable_core);
-    TT_ASSERT(processor_class < this->build_state_indices_[programmable_core].size(),
-        "Processor class type {} is not included in the FW or Kernel build state", processor_class);
-    return this->build_state_indices_[programmable_core][processor_class];
-}
-
-// Ideally the firmware getter would be private to the device, however, tests look for this
-const JitBuildState& Device::build_firmware_state(uint32_t programmable_core, uint32_t processor_class, int i) const {
-    return *(this->firmware_build_states_[build_processor_type_to_index(programmable_core, processor_class).first + i]);
-}
-
-const JitBuildState& Device::build_kernel_state(uint32_t programmable_core, uint32_t processor_class, int i) const {
-    return *(this->kernel_build_states_[build_processor_type_to_index(programmable_core, processor_class).first + i]);
-}
-
-const JitBuildStateSubset Device::build_kernel_states(uint32_t programmable_core, uint32_t processor_class) const {
-    std::pair<int, int> bptti = build_processor_type_to_index(programmable_core, processor_class);
-    JitBuildStateSubset subset = {
-        &this->kernel_build_states_[bptti.first],
-        bptti.second
-    };
-    return subset;
-}
-
-const string Device::build_firmware_target_path(uint32_t programmable_core, uint32_t processor_class, int i) const {
-    const JitBuildState& bs = build_firmware_state(programmable_core, processor_class, i);
-    return bs.get_target_out_path("");
-}
-
-const string Device::build_kernel_target_path(uint32_t programmable_core, uint32_t processor_class, int i, const string& kernel_name) const {
-    const JitBuildState& bs = build_kernel_state(programmable_core, processor_class, i);
-    return bs.get_target_out_path(kernel_name);
 }
 
 CommandQueue& Device::command_queue(size_t cq_id) {
