@@ -721,6 +721,12 @@ template Tensor Tensor::from_span<uint16_t>(
     tt::stl::Span<const uint16_t> buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device);
 template Tensor Tensor::from_span<uint32_t>(
     tt::stl::Span<const uint32_t> buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device);
+template Tensor Tensor::borrow_from_span<float>(
+    tt::stl::Span<float> buffer,
+    const TensorSpec& spec,
+    const std::function<void()>& on_creation_callback,
+    const std::function<void()>& on_destruction_callback,
+    std::optional<ttnn::AnyDevice> device);
 template Tensor Tensor::borrow_from_span<bfloat16>(
     tt::stl::Span<bfloat16> buffer,
     const TensorSpec& spec,
