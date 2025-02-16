@@ -15,6 +15,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
+#include "ttnn/operations/matmul/device/matmul_op.hpp"
 
 using namespace tt::constants;
 
@@ -1380,6 +1381,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     for (auto elem : compute_defines) {
         log_debug(LogOp, "compute_defines: {} = {}", elem.first, elem.second);
     }
+
+    bmm_op_utils::add_nops_in_matmul(compute_defines);
 
     writer_compile_time_args = {
         cb_indices.out0_cb,

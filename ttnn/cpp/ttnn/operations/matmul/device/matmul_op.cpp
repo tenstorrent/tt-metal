@@ -1271,7 +1271,7 @@ void add_nops_in_matmul(std::map<string, string>& mm_kernel_defines) {
     // Limit matmul op throughput by inserting NOP instruction ever 3 MVMUL instructions
     const bool enable_mm_add_nops = std::getenv("TT_ENABLE_MM_ADD_NOPS");
     if (enable_mm_add_nops) {
-        mm_kernel_defines["TT_ENABLE_MM_ADD_NOPS"] = "1";
+        mm_kernel_defines["MM_ADD_NOPS"] = "1";
         log_warning(tt::LogOp, "Throttle matmul perf to max 75% by adding NOPs as every 4th inst");
     }
 }

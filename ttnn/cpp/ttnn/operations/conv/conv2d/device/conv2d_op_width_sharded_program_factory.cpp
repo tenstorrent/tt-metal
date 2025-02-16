@@ -15,6 +15,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
+#include "ttnn/operations/matmul/device/matmul_op.hpp"
 
 using namespace tt::constants;
 
@@ -753,6 +754,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         partials_cb_uses_output = cb_config_matmul_partials.globally_allocated_address().value() ==
                                   cb_config_output.globally_allocated_address().value();
     }
+
+    bmm_op_utils::add_nops_in_matmul(compute_defines);
 
     compute_kernel_args = {
         act_block_w_ntiles,      // in0_block_w
