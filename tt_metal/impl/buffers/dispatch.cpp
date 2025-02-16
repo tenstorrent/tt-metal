@@ -7,6 +7,8 @@
 #include "assert.hpp"
 #include "math.hpp"
 #include "dispatch.hpp"
+#include <iostream>
+#include <ostream>
 #include <tt-metalium/command_queue_interface.hpp>
 #include <tt-metalium/dispatch_settings.hpp>
 
@@ -1009,6 +1011,9 @@ void copy_completion_queue_data_into_user_space(
     uint32_t offset_in_completion_q_data = sizeof(CQDispatchCmd);
 
     uint32_t pad_size_bytes = padded_page_size - page_size;
+    bool trigger = false;
+
+    std::cout << "buffer page size: " << page_size << std::endl;
 
     while (remaining_bytes_to_read != 0) {
         uint32_t completion_queue_write_ptr_and_toggle =
@@ -1055,15 +1060,59 @@ void copy_completion_queue_data_into_user_space(
                 offset_in_completion_q_data = 0;
                 uint32_t dst_offset_bytes = 0;
 
-                const uint32_t page_size_to_read =
-                    partial_page_spec ? partial_page_spec->unpadded_partial_page_size : page_size;
-                const uint32_t padded_page_size_to_read =
-                    partial_page_spec ? partial_page_spec->padded_partial_page_size : padded_page_size;
-                pad_size_bytes = partial_page_spec ? padded_page_size_to_read - page_size_to_read : pad_size_bytes;
-
                 while (src_offset_bytes < bytes_xfered) {
+                    uint32_t page_size_to_read =
+                        partial_page_spec ? partial_page_spec->unpadded_partial_page_size : page_size;
+                    const uint32_t num_bytes_read_curr_full_page = total_num_bytes_read % page_size;
+                    if (partial_page_spec &&
+                        // total_num_bytes_read % partial_page_spec->unpadded_partial_page_size == 0 &&
+                        num_bytes_read_curr_full_page / partial_page_spec->unpadded_partial_page_size ==
+                            partial_page_spec->num_partial_pages_per_full_page - 1) {
+                        page_size_to_read -= partial_page_spec->last_partial_page_additional_padding;
+                    }
+
+                    const uint32_t padded_page_size_to_read =
+                        partial_page_spec ? partial_page_spec->padded_partial_page_size : padded_page_size;
+
+                    pad_size_bytes = partial_page_spec ? padded_page_size_to_read - page_size_to_read : pad_size_bytes;
+                    // if (partial_page_spec &&
+                    //     // total_num_bytes_read % partial_page_spec->unpadded_partial_page_size == 0 &&
+                    //     total_num_bytes_read / partial_page_spec->unpadded_partial_page_size ==
+                    //         partial_page_spec->num_partial_pages_per_full_page - 1) {
+                    //     pad_size_bytes += partial_page_spec->last_partial_page_additional_padding;
+                    // }
+
+                    // if (partial_page_spec) {
+                    //     const uint32_t num_bytes_read_curr_full_page = total_num_bytes_read % page_size;
+                    //     if (num_bytes_read_curr_full_page + page_size_to_read > page_size) {
+                    //         // if (trigger) {
+                    //         // }
+                    //         const uint32_t extra_padding_bytes =
+                    //         partial_page_spec->last_partial_page_additional_padding; std::cout << "Output " <<
+                    //         std::to_string(trigger) << " " << total_num_bytes_read << " " << page_size_to_read << " "
+                    //         << remaining_bytes_of_nonaligned_page << " " << extra_padding_bytes << std::endl;
+                    //         page_size_to_read -= extra_padding_bytes;
+                    //         // page_size_to_read -= std::min(
+                    //         //     total_num_bytes_read + page_size_to_read - page_size,
+                    //         //     page_size_to_read - extra_padding_bytes);
+                    //         if (remaining_bytes_of_nonaligned_page > 0) {
+                    //             // page_size_to_read - num_bytes_read_curr_partial_page => if <= 0, no more data to
+                    //             read, otherwise take min of this and remaining_bytes_of_nonaligned_page
+                    //             remaining_bytes_of_nonaligned_page = std::min(page_size_to_read,
+                    //             remaining_bytes_of_nonaligned_page); const uint32_t num_bytes_read_curr_partial_page
+                    //             = num_bytes_read_curr_full_page % partial_page_spec->unpadded_partial_page_size;
+                    //             pad_size_bytes += (partial_page_spec->unpadded_partial_page_size -
+                    //             remaining_bytes_of_nonaligned_page - num_bytes_read_curr_partial_page);
+                    //         }
+                    //         // else {
+
+                    //         // }
+                    //     }
+                    // }
+
                     uint32_t src_offset_increment = padded_page_size_to_read;
                     uint32_t num_bytes_to_copy = 0;
+
                     if (remaining_bytes_of_nonaligned_page > 0) {
                         // Case 1: Portion of the page was copied into user buffer on the previous completion queue pop.
                         uint32_t num_bytes_remaining = bytes_xfered - src_offset_bytes;
@@ -1076,23 +1125,41 @@ void copy_completion_queue_data_into_user_space(
                             // There is more data after padding
                             if (rem_bytes_in_cq >= pad_size_bytes) {
                                 src_offset_increment += pad_size_bytes;
+                                if (trigger) {
+                                    std::cout << "rem_bytes_in_cq >= pad_size_bytes " << rem_bytes_in_cq << " "
+                                              << pad_size_bytes << " " << src_offset_increment << std::endl;
+                                }
                                 // Only pad data left in queue
                             } else {
                                 offset_in_completion_q_data = pad_size_bytes - rem_bytes_in_cq;
+                                if (trigger) {
+                                    std::cout << "rem_bytes_in_cq < pad_size_bytes " << rem_bytes_in_cq << " "
+                                              << pad_size_bytes << " " << src_offset_increment << " "
+                                              << offset_in_completion_q_data << std::endl;
+                                }
                             }
                         }
+                        if (trigger) {
+                            std::cout << num_bytes_remaining << " " << num_bytes_to_copy << " "
+                                      << remaining_bytes_of_nonaligned_page << " " << src_offset_increment << " "
+                                      << offset_in_completion_q_data << std::endl;
+                        }
+                        trigger = false;
                     } else if (src_offset_bytes + padded_page_size_to_read >= bytes_xfered) {
                         // Case 2: Last page of data that was popped off the completion queue
                         // Don't need to compute src_offset_increment since this is end of loop
+                        std::cout << "Total num bytes read: " << total_num_bytes_read << std::endl;
                         uint32_t num_bytes_remaining = bytes_xfered - src_offset_bytes;
                         num_bytes_to_copy = std::min(num_bytes_remaining, page_size_to_read);
                         remaining_bytes_of_nonaligned_page = page_size_to_read - num_bytes_to_copy;
+                        trigger = true;
                         // We've copied needed data, start of next read is offset due to remaining pad bytes
                         if (remaining_bytes_of_nonaligned_page == 0) {
                             offset_in_completion_q_data = padded_page_size_to_read - num_bytes_remaining;
                         }
                     } else {
                         num_bytes_to_copy = page_size_to_read;
+                        trigger = false;
                     }
 
                     // if (partial_page_spec && (total_num_bytes_read % page_size) + num_bytes_to_copy ==
@@ -1100,11 +1167,11 @@ void copy_completion_queue_data_into_user_space(
                     // if (partial_page_spec && partial_page_spec->num_partial_pages_per_full_page - 1 ==
                     // ((total_num_bytes_read % page_size) + num_bytes_to_copy) /
                     // partial_page_spec->unpadded_partial_page_size) {
-                    if (partial_page_spec && (total_num_bytes_read % page_size) + num_bytes_to_copy > page_size) {
-                        // uint32_t extra_bytes = (total_num_bytes_read % page_size) + num_bytes_to_copy - page_size;
-                        uint32_t extra_bytes = partial_page_spec->last_partial_page_additional_padding;
-                        num_bytes_to_copy -= extra_bytes;
-                    }
+                    // if (partial_page_spec && (total_num_bytes_read % page_size) + num_bytes_to_copy > page_size) {
+                    //     // uint32_t extra_bytes = (total_num_bytes_read % page_size) + num_bytes_to_copy - page_size;
+                    //     uint32_t extra_bytes = partial_page_spec->last_partial_page_additional_padding;
+                    //     num_bytes_to_copy -= extra_bytes;
+                    // }
 
                     tt::Cluster::instance().read_sysmem(
                         (char*)(uint64_t(contiguous_dst) + dst_offset_bytes),
@@ -1112,6 +1179,9 @@ void copy_completion_queue_data_into_user_space(
                         completion_q_read_ptr + src_offset_bytes,
                         mmio_device_id,
                         channel);
+
+                    std::cout << "num bytes to copy " << num_bytes_to_copy << std::endl;
+                    std::cout << "src offset increment" << src_offset_increment << std::endl;
 
                     total_num_bytes_read += num_bytes_to_copy;
                     // if (total_num_bytes_read == page_size) {
