@@ -10,6 +10,7 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
+#include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -600,6 +601,8 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     if (packer_l1_acc) {
         compute_defines["PACKER_L1_ACC"] = "1";
     }
+
+    bmm_op_utils::add_nops_in_matmul(compute_defines);
 
     for (auto elem : compute_defines) {
         log_debug(LogOp, "compute_defines: {} = {}", elem.first, elem.second);
