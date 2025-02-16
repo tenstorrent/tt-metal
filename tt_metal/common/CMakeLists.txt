@@ -1,6 +1,7 @@
 set(COMMON_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/core_assignment.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_coord.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/mesh_coord.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal_soc_descriptor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/shape2d.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/shape_base.cpp
