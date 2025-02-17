@@ -3,11 +3,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-import ttnn
-import torch
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import run_for_wormhole_b0
-from models.experimental.functional_yolov11.test.yolov11_perfomant import (
+from models.experimental.functional_yolov11.tests.yolov11_perfomant import (
     run_yolov11_trace_inference,
     run_yolov11_trace_2cqs_inference,
 )

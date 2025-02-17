@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -6,7 +6,7 @@ import pytest
 import torch
 import ttnn
 from models.utility_functions import is_wormhole_b0, profiler
-from models.experimental.functional_yolov11.test.yolov11_test_infra import create_test_infra
+from models.experimental.functional_yolov11.tests.yolov11_test_infra import create_test_infra
 
 try:
     from tracy import signpost
@@ -56,7 +56,6 @@ def run_yolov11_trace_inference(
     trace_input_addr = ttnn.buffer_address(test_infra.input_tensor)
     tid = ttnn.begin_trace_capture(device, cq_id=0)
     test_infra.run()
-    print("run3")
     tt_image_res = ttnn.allocate_tensor_on_device(spec, device)
     ttnn.end_trace_capture(device, tid, cq_id=0)
     assert trace_input_addr == ttnn.buffer_address(tt_image_res)
