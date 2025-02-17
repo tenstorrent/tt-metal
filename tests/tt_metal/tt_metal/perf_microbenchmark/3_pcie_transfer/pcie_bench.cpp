@@ -900,6 +900,23 @@ BENCHMARK_DEFINE_F(MemCpyPcieBench, BM_2_MMIO_Devices_Reading_SameNode)(benchmar
     tt::tt_metal::detail::CloseDevices(devices);
 }
 
+BENCHMARK_DEFINE_F(MemCpyPcieBench, BM_All_MMIO_Devices_Reading)(benchmark::State& state) {
+    constexpr uint32_t k_ReadersEachDevice = 1;
+    constexpr uint32_t k_TotalSize = 1_GB;
+    constexpr uint32_t k_PageSize = 32_KB;
+
+    auto& cluster = tt::Cluster::instance();
+    const auto pcie_devices = cluster.number_of_pci_devices();
+    std::vector<chip_id_t> device_ids;
+    for (chip_id_t device_id = 0; device_id < pcie_devices; ++device_id) {
+        device_ids.push_back(device_id);
+    }
+    auto devices = tt::tt_metal::detail::CreateDevices(device_ids);
+    MultiMMIODevicesTest(
+        state, devices, k_ReadersEachDevice * device_ids.size(), k_TotalSize, k_PageSize, k_ReadersEachDevice);
+    tt::tt_metal::detail::CloseDevices(devices);
+}
+
 BENCHMARK_REGISTER_F(MemCpyPcieBench, BM_HostHP_N_Readers)
     ->Name("0_Host_Write_HP_N_Readers")
     ->ArgsProduct({
@@ -982,5 +999,7 @@ BENCHMARK_REGISTER_F(MemCpyPcieBench, BM_HostHP_N_Writers)
 BENCHMARK_REGISTER_F(MemCpyPcieBench, BM_2_MMIO_Devices_Reading_DifferentNode)->Name("9_2_MMIO_Devices_DifferentNode");
 
 BENCHMARK_REGISTER_F(MemCpyPcieBench, BM_2_MMIO_Devices_Reading_SameNode)->Name("10_2_MMIO_Devices_SameNode");
+
+BENCHMARK_REGISTER_F(MemCpyPcieBench, BM_All_MMIO_Devices_Reading)->Name("11_All_MMIO_Devices_Reading");
 
 BENCHMARK_MAIN();
