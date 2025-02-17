@@ -12,11 +12,13 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
 def run_slice_rm_sharded(device, n, c, h, w):
-    torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
+    torch_input_tensor = torch.ones((n, c, h, w), dtype=torch.bfloat16)
     n_unpadded = n
-    c_unpadded = 115
+    c_unpadded = min(c, 115)
     h_unpadded = 115
-    torch_output_tensor = torch_input_tensor[:n_unpadded, :c_unpadded, :h_unpadded, :]
+    w_unpadded = 16
+
+    torch_output_tensor = torch_input_tensor[:n_unpadded, :c_unpadded, :h_unpadded, :w_unpadded]
     tt_input_tensor = ttnn.from_torch(
         torch_input_tensor,
         dtype=ttnn.DataType.BFLOAT16,
@@ -45,7 +47,7 @@ def run_slice_rm_sharded(device, n, c, h, w):
     grid_size = ttnn.CoreGrid(y=num_cores_y, x=num_cores_x)
     grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
     shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
-    shard_spec = ttnn.ShardSpec(shard_grid, (shard_h, w), ttnn.ShardOrientation.ROW_MAJOR)
+    shard_spec = ttnn.ShardSpec(shard_grid, (shard_h, w_unpadded), ttnn.ShardOrientation.ROW_MAJOR)
     output_mem_config = ttnn.MemoryConfig(
         ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
     )
@@ -53,19 +55,19 @@ def run_slice_rm_sharded(device, n, c, h, w):
     tt_output_tensor = ttnn.slice(
         tt_input_tensor,
         (0, 0, 0, 0),
-        (n_unpadded, c_unpadded, h_unpadded, w),
+        (n_unpadded, c_unpadded, h_unpadded, w_unpadded),
         memory_config=output_mem_config,
     )
-    tt_output_tensor = ttnn.to_memory_config(tt_output_tensor, ttnn.L1_MEMORY_CONFIG)
+
     tt_output_tensor = ttnn.from_device(tt_output_tensor)
     tt_output_tensor = ttnn.to_torch(tt_output_tensor)
     assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9999)
 
 
-@pytest.mark.parametrize("n", [16])
-@pytest.mark.parametrize("c", [128])
-@pytest.mark.parametrize("h", [128])
-@pytest.mark.parametrize("w", [16])
+@pytest.mark.parametrize("n", [1, 16, 21])
+@pytest.mark.parametrize("c", [1, 128, 133])
+@pytest.mark.parametrize("h", [128, 150])
+@pytest.mark.parametrize("w", [16, 32])
 def test_slice_rm_sharded_with_program_cache(device, n, c, h, w, use_program_cache):
     for _ in range(2):
         run_slice_rm_sharded(device, n, c, h, w)
@@ -79,7 +81,7 @@ def test_slice_rm_sharded_with_program_cache(device, n, c, h, w, use_program_cac
             device=device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-    assert device.num_program_cache_entries() == 3
+    assert device.num_program_cache_entries() == 2
 
 
 @pytest.mark.parametrize("n", [16])

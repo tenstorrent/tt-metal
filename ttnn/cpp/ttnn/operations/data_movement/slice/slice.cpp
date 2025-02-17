@@ -107,7 +107,7 @@ ttnn::Tensor SliceOperation::invoke(
             aligned_ends &= slice_aligned_to_tile(modified_ends) || (modified_ends[input_rank - 1] == input_shape[-1] &&
                                                                      modified_ends[input_rank - 2] == input_shape[-2]);
         }
-        rm_only = !no_step || !aligned_begins || !aligned_ends || one_dimensional;
+        rm_only = !no_step || !aligned_begins || !aligned_ends || one_dimensional || input_tensor.is_sharded();
         if (rm_only) {
             if (!no_step) {
                 TT_FATAL(
