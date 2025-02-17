@@ -114,15 +114,19 @@ def LetterBox(img, new_shape=(224, 224), auto=False, scaleFill=False, scaleup=Tr
     return img
 
 
-def pre_transform(im):
-    return [LetterBox(img=x) for x in im]
+def pre_transform(im, LetterBox_shape=(224, 224)):
+    return [LetterBox(img=x, new_shape=LetterBox_shape) for x in im]
 
 
-def preprocess(im):
+def preprocess(im, resolution):
     device = "cpu"
     not_tensor = not isinstance(im, torch.Tensor)
     if not_tensor:
-        im = np.stack(pre_transform(im))
+        if resolution[1] == 224:
+            LetterBox_shape = (224, 224)
+        else:
+            LetterBox_shape = (640, 640)
+        im = np.stack(pre_transform(im, LetterBox_shape))
         im = im[..., ::-1].transpose((0, 3, 1, 2))
         im = np.ascontiguousarray(im)
         im = torch.from_numpy(im)
