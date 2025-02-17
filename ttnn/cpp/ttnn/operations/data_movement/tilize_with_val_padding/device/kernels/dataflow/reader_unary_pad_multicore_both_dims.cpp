@@ -27,7 +27,7 @@ void kernel_main() {
 
     constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
 
-#if (stick_size_is_pow2 == 1)
+#if (STICK_SIZE_IS_POW2 == 1)
     constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(1);
     const InterleavedPow2AddrGen<src0_is_dram> s = {
         .bank_base_address = src_addr, .log_base_2_of_page_size = log_base_2_of_page_size};

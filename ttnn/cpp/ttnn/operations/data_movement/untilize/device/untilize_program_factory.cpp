@@ -586,7 +586,7 @@ operation::ProgramWithCallbacks untilize_multi_core_block(
 
     uint32_t total_num_rows = output.get_logical_shape()[-2];
     std::map<std::string, std::string> writer_defines = {
-        {"stick_size_is_pow2", std::to_string((uint32_t)(stick_size_is_power_of_two))}};
+        {"STICK_SIZE_IS_POW2", std::to_string((uint32_t)(stick_size_is_power_of_two))}};
 
     KernelHandle unary_writer_kernel_id = CreateKernel(
         program,

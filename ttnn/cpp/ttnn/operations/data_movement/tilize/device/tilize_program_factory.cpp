@@ -285,7 +285,7 @@ operation::ProgramWithCallbacks tilize_multi_core_block(const Tensor& a, Tensor&
     uint32_t total_num_rows = a.get_logical_shape()[-2];
 
     std::map<std::string, std::string> reader_defines = {
-        {"stick_size_is_pow2", std::to_string((uint32_t)(stick_size_is_power_of_two))}};
+        {"STICK_SIZE_IS_POW2", std::to_string((uint32_t)(stick_size_is_power_of_two))}};
     KernelHandle unary_reader_kernel_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/tilize_with_val_padding/device/kernels/dataflow/"
