@@ -583,7 +583,7 @@ operation::ProgramWithCallbacks slice_rm_multi_core_sharded(
     uint32_t num_unpadded_sticks = output.volume() / output.get_logical_shape()[-1];
 
     // stick sizes
-    uint32_t W_padded = a.get_logical_shape()[-1];
+    uint32_t W_padded = a.get_padded_shape()[-1];
     uint32_t W_unpadded = output.get_logical_shape()[-1];
     auto stick_size_padded = W_padded * a.element_size();
     auto stick_size_unpadded = W_unpadded * output.element_size();

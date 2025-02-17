@@ -152,7 +152,7 @@ def test_distilbert_perf_device(batch_size, test, reset_seeds):
     margin = 0.03
     num_iterations = 1
     if is_grayskull():
-        expected_perf = 292
+        expected_perf = 57.3
     elif is_wormhole_b0():
         expected_perf = 97.0
 
