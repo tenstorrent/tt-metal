@@ -1255,12 +1255,26 @@ void add_stagger_defines_if_needed(
     }
 }
 
-void throttle_mm_perf(std::map<string, string>& mm_kernel_defines) {
+void throttle_mm_perf(std::map<string, string>& mm_kernel_defines, MathFidelity fidelity) {
     // Limit matmul op throughput by inserting NOP instruction ever 3 MVMUL instructions
     const bool enable_throttle_mm_perf = std::getenv("TT_THROTTLE_MM_PERF");
-    if (enable_throttle_mm_perf) {
-        mm_kernel_defines["THROTTLE_MM_PERF"] = "1";
-        log_warning(tt::LogOp, "Throttle matmul perf to max 75% by adding NOPs as every 4th inst");
+    const uint32_t num_nops = enable_throttle_mm_perf ? std::stoi(std::getenv("TT_THROTTLE_MM_PERF")) : 0;
+    if (enable_throttle_mm_perf && fidelity == MathFidelity::LoFi) {
+        if (num_nops == 2) {
+            mm_kernel_defines["MM_ADD_NOPS"] = std::to_string(num_nops);
+            log_warning(tt::LogOp, "Throttle matmul perf to max 50% by adding 2 NOPs every 2 instructions");
+        } else if (num_nops == 1) {
+            mm_kernel_defines["MM_ADD_NOPS"] = std::to_string(num_nops);
+            log_warning(tt::LogOp, "Throttle matmul perf to max 75% by adding 1 NOP every 3 instructions");
+        } else {
+            log_warning(
+                tt::LogOp,
+                "Throttle matmul perf ignored: invalid number of NOPs requested - only 1 and 2 are supported");
+        }
+    }
+    if (fidelity != MathFidelity::LoFi) {
+        log_warning(
+            tt::LogOp, "Throttle matmul perf ignored: requested high-fidelity. Throttling enabled for LoFi only");
     }
 }
 

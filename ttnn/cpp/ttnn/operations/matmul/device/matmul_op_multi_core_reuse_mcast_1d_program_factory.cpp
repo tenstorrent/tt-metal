@@ -433,7 +433,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in0(
     }
 
     bmm_op_utils::add_stagger_defines_if_needed(device->arch(), num_cores, mm_kernel_defines);
-    bmm_op_utils::throttle_mm_perf(mm_kernel_defines);
+    bmm_op_utils::throttle_mm_perf(mm_kernel_defines, math_fidelity);
 
     if (in1_is_sharded) {
         mm_kernel_in1_sender_writer_defines["IN1_SHARDED"] = "1";
@@ -1270,7 +1270,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_mcast_in1(
     }
 
     bmm_op_utils::add_stagger_defines_if_needed(device->arch(), num_cores, mm_kernel_defines);
-    bmm_op_utils::throttle_mm_perf(mm_kernel_defines);
+    bmm_op_utils::throttle_mm_perf(mm_kernel_defines, math_fidelity);
 
     if (in0_is_sharded) {
         mm_kernel_in0_sender_defines["IN0_SHARDED"] = "1";
@@ -1917,7 +1917,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program_gather_in0(
         mm_kernel_defines["FP32_DEST_ACC_EN"] = "1";
     }
     bmm_op_utils::add_stagger_defines_if_needed(device->arch(), num_cores, mm_kernel_defines);
-    bmm_op_utils::throttle_mm_perf(mm_kernel_defines);
+    bmm_op_utils::throttle_mm_perf(mm_kernel_defines, math_fidelity);
 
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
     tt_metal::NOC in0_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(device->arch());
