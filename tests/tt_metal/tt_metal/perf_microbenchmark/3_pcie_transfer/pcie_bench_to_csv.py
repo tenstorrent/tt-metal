@@ -37,14 +37,14 @@ def BM_HostHP_N_Readers(json_data, filter_name="0_Host_Write_HP_N_Readers"):
 
         data_points.append(
             [
-                str(benchmark["total_size"]),
-                # str(benchmark["kernel_0_bw"]),
-                str(benchmark["total_size"]),
-                # str(benchmark["dev_bw"]),
-                str(benchmark["total_size"]),
-                str(benchmark["num_readers"]),
-                str(benchmark["bytes_per_second"]),
-                str(benchmark["page_size"]),
+                float(benchmark["total_size"]),
+                float(benchmark["kernel_0_bw"]),
+                float(benchmark["total_size"]),
+                float(benchmark["dev_bw"]),
+                float(benchmark["total_size"]),
+                float(benchmark["num_readers"]),
+                float(benchmark["bytes_per_second"]),
+                float(benchmark["page_size"]),
             ]
         )
 
@@ -63,18 +63,18 @@ def BM_HostHP_N_Threads(json_data, filter_name="3_Host_Write_HP_N_Threads_No_Ker
         name = benchmark["name"]
         if not name.startswith(filter_name):
             continue
-
+        print(benchmark)
         data_points.append(
-            {
-                "thread_0_bw": benchmark["thread_0_bw"],
-                "total_size": benchmark["total_size"],
-                "page_size": benchmark["page_size"],
-                "num_threads": benchmark["num_threads"],
-                "host_bytes_per_second": benchmark["bytes_per_second"],
-            }
+            [
+                float(benchmark["thread_0_bw"]),
+                float(benchmark["total_size"]),
+                float(benchmark["page_size"]),
+                float(benchmark["num_threads"]),
+                float(benchmark["bytes_per_second"]),
+            ]
         )
 
-    data_points.sort(key=lambda x: (x["total_size"], x["page_size"], x["num_threads"]))
+    data_points.sort(key=lambda x: (x[1], x[2], x[3]))
     data_points.insert(0, ["thread_0_bw", "total_size", "page_size", "num_threads", "host_bytes_per_second"])
     print(filter_name)
     print(rows_to_csv_str(data_points))
@@ -90,14 +90,14 @@ def BM_BatchSizing(json_data, filter_name="5_MyMemcpyToDevice_Sizing"):
             continue
 
         data_points.append(
-            {
-                "total_size": benchmark["total_size"],
-                "page_size": benchmark["page_size"],
-                "host_bytes_per_second": benchmark["bytes_per_second"],
-            }
+            [
+                float(benchmark["total_size"]),
+                float(benchmark["page_size"]),
+                float(benchmark["bytes_per_second"]),
+            ]
         )
 
-    data_points.sort(key=lambda x: (x["total_size"], x["page_size"]))
+    data_points.sort(key=lambda x: (x[0], x[1]))
     data_points.insert(0, ["total_size", "page_size", "host_bytes_per_second"])
     print(filter_name)
     print(rows_to_csv_str(data_points))
@@ -113,18 +113,18 @@ def BM_HostHP_DifferentPage(json_data, filter_name="6_HostHP_1_Reader_DifferentP
             continue
 
         data_points.append(
-            {
-                "dev_bw": benchmark["dev_bw"],
-                "dev_bytes": benchmark["dev_bytes"],
-                "kernel_0_bw": benchmark["kernel_0_bw"],
-                "total_size": benchmark["total_size"],
-                "page_size": benchmark["page_size"],
-                "num_readers": benchmark["num_readers"],
-                "host_bytes_per_second": benchmark["bytes_per_second"],
-            }
+            [
+                float(benchmark["dev_bw"]),
+                float(benchmark["dev_bytes"]),
+                float(benchmark["kernel_0_bw"]),
+                float(benchmark["total_size"]),
+                float(benchmark["page_size"]),
+                float(benchmark["num_readers"]),
+                float(benchmark["bytes_per_second"]),
+            ]
         )
 
-    data_points.sort(key=lambda x: (x["total_size"], x["page_size"], x["num_readers"]))
+    data_points.sort(key=lambda x: (x[3], x[4], x[5]))
     data_points.insert(
         0, ["dev_bw", "dev_bytes", "kernel_0_bw", "total_size", "page_size", "num_readers", "host_bytes_per_second"]
     )
@@ -142,18 +142,18 @@ def BM_HostHP_N_Writers(json_data, filter_name="7_Host_Write_HP_1_Writer"):
             continue
 
         data_points.append(
-            {
-                "kernel_0_bw": benchmark["kernel_0_bw"],
-                "dev_bw": benchmark["dev_bw"],
-                "dev_bytes": benchmark["dev_bytes"],
-                "total_size": benchmark["total_size"],
-                "page_size": benchmark["page_size"],
-                "num_writers": benchmark["num_writers"],
-                "host_bytes_per_second": benchmark["bytes_per_second"],
-            }
+            [
+                float(benchmark["kernel_0_bw"]),
+                float(benchmark["dev_bw"]),
+                float(benchmark["dev_bytes"]),
+                float(benchmark["total_size"]),
+                float(benchmark["page_size"]),
+                float(benchmark["num_writers"]),
+                float(benchmark["bytes_per_second"]),
+            ]
         )
 
-    data_points.sort(key=lambda x: (x["total_size"], x["page_size"], x["num_writers"]))
+    data_points.sort(key=lambda x: (x[3], x[4], x[5]))
     data_points.insert(
         0, ["kernel_0_bw", "dev_bw", "dev_bytes", "total_size", "page_size", "num_writers", "host_bytes_per_second"]
     )
@@ -163,7 +163,7 @@ def BM_HostHP_N_Writers(json_data, filter_name="7_Host_Write_HP_1_Writer"):
     return data_points
 
 
-def BM_2_MMIO_Devices_Reading_DifferentPage(json_data, filter_name=""):
+def BM_Multi_MMIO_Devices_Reading_DifferentPage(json_data, filter_name=""):
     data_points = []
     for benchmark in json_data["benchmarks"]:
         name = benchmark["name"]
@@ -171,17 +171,17 @@ def BM_2_MMIO_Devices_Reading_DifferentPage(json_data, filter_name=""):
             continue
 
         data_points.append(
-            {
-                "dev_0_kernel_0_bw": benchmark["dev_0_kernel_0_bw"],
-                "dev_bw": benchmark["dev_bw"],
-                "dev_bytes": benchmark["dev_bytes"],
-                "dev_cycles": benchmark["dev_cycles"],
-                "total_size": benchmark["total_size"],
-                "page_size": benchmark["page_size"],
-            }
+            [
+                float(benchmark["dev_0_kernel_0_bw"]),
+                float(benchmark["dev_bw"]),
+                float(benchmark["dev_bytes"]),
+                float(benchmark["dev_cycles"]),
+                float(benchmark["total_size"]),
+                float(benchmark["page_size"]),
+            ]
         )
 
-    data_points.sort(key=lambda x: (x["total_size"], x["page_size"]))
+    data_points.sort(key=lambda x: (x[4], x[5]))
     data_points.insert(0, ["dev_0_kernel_0_bw", "dev_bw", "dev_bytes", "dev_cycles", "total_size", "page_size"])
     print(filter_name)
     print(rows_to_csv_str(data_points))
@@ -207,6 +207,10 @@ def main():
     BM_HostHP_N_Writers(data, "7_Host_Write_HP_1_Writer")
 
     BM_HostHP_N_Writers(data, "8_Writer_Kernel_Only")
+
+    BM_Multi_MMIO_Devices_Reading_DifferentPage(data, "9_2_MMIO_Devices_DifferentNode")
+    BM_Multi_MMIO_Devices_Reading_DifferentPage(data, "10_2_MMIO_Devices_SameNode")
+    BM_Multi_MMIO_Devices_Reading_DifferentPage(data, "11_All_MMIO_Devices_Reading")
 
 
 if __name__ == "__main__":

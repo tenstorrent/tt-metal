@@ -9,7 +9,6 @@
 #include "assert.hpp"
 #include "aligned_allocator.hpp"
 #include "umd/device/device_api_metal.h"
-#include <thread>
 
 namespace tt::tt_metal {
 
@@ -24,12 +23,6 @@ using vector_memcpy_aligned = std::vector<T, tt::stl::aligned_allocator<T, MEMCP
 // TODO: ditto alignment isues
 template <bool debug_sync = false>
 static inline void memcpy_to_device(void* __restrict dst, const void* __restrict src, size_t n) {
-    tt::log_info(
-        tt::LogDispatch,
-        "    memcpy_to_device dst {:#x} N={} (thread={})",
-        (uint64_t)dst,
-        n,
-        std::hash<std::thread::id>{}(std::this_thread::get_id()));
     TT_ASSERT((uintptr_t)dst % MEMCPY_ALIGNMENT == 0);
 
     static constexpr uint32_t inner_loop = 8;
