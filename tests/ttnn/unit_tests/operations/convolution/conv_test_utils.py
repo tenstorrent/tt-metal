@@ -66,6 +66,9 @@ def run_conv(
     shard_layout=None,
     auto_shard=False,
     memory_config=None,
+    enable_act_double_buffer=False,
+    enable_weights_double_buffer=False,
+    enable_split_reader=False,
     input_mesh_mapper=None,
     weight_mesh_mapper=None,
     output_mesh_composer=None,
@@ -139,8 +142,9 @@ def run_conv(
             16 if use_shallow_conv_variant or (input_channels == 16 and input_height == 115) else 32
         ),
         deallocate_activation=deallocate_activation,
-        enable_act_double_buffer=False,
-        enable_split_reader=False,
+        enable_act_double_buffer=enable_act_double_buffer,
+        enable_weights_double_buffer=enable_weights_double_buffer,
+        enable_split_reader=enable_split_reader,
         enable_subblock_padding=False,
         output_layout=output_layout,
     )
