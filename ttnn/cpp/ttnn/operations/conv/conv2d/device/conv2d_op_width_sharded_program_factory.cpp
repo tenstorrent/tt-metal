@@ -755,7 +755,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
                                   cb_config_output.globally_allocated_address().value();
     }
 
-    bmm_op_utils::add_nops_in_matmul(compute_defines);
+    bmm_op_utils::add_nops_in_matmul(compute_defines, math_fidelity);
 
     compute_kernel_args = {
         act_block_w_ntiles,      // in0_block_w
