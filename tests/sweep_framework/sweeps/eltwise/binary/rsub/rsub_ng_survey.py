@@ -2,21 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import Optional, Tuple
 from functools import partial
 
 import torch
-import random
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
-
-# Override the default timeout in seconds for hang detection.
-# TIMEOUT = 30
-
-# random.seed(0)
 
 # Parameters provided to the test vector generator are defined here.
 # They are defined as dict-type suites that contain the arguments to the run function as keys, and lists of possible inputs as values.
@@ -30,7 +23,7 @@ parameters = {
             # {"input_a_dtype": "ttnn.bfloat16", "input_b_dtype": "ttnn.bfloat16"},
             # {"input_a_dtype": "ttnn.float32", "input_b_dtype": "ttnn.float32"},
             # {"input_a_dtype": "ttnn.bfloat8_b", "input_b_dtype": "ttnn.bfloat8_b"},
-            # {"input_a_dtype": "ttnn.bfloat4_b", "input_b_dtype": "ttnn.bfloat4_b"},
+            # {"input_a_dtype": "ttnn.bfloat4_b", "input_b_dtype": "ttnn.bfloat4_b"}, # same dtype
             {"input_a_dtype": "ttnn.bfloat16", "input_b_dtype": "ttnn.float32"},
             {"input_a_dtype": "ttnn.bfloat16", "input_b_dtype": "ttnn.bfloat8_b"},
             {"input_a_dtype": "ttnn.bfloat16", "input_b_dtype": "ttnn.bfloat4_b"},
@@ -42,7 +35,7 @@ parameters = {
             {"input_a_dtype": "ttnn.bfloat8_b", "input_b_dtype": "ttnn.bfloat4_b"},
             {"input_a_dtype": "ttnn.bfloat4_b", "input_b_dtype": "ttnn.float32"},
             {"input_a_dtype": "ttnn.bfloat4_b", "input_b_dtype": "ttnn.bfloat16"},
-            {"input_a_dtype": "ttnn.bfloat4_b", "input_b_dtype": "ttnn.bfloat8_b"},
+            {"input_a_dtype": "ttnn.bfloat4_b", "input_b_dtype": "ttnn.bfloat8_b"},  # mixed dtype
         ],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_b_layout": [ttnn.TILE_LAYOUT],
@@ -51,24 +44,24 @@ parameters = {
             {"a_mem": "l1_interleaved", "b_mem": "dram_interleaved"},
             {"a_mem": "dram_interleaved", "b_mem": "l1_interleaved"},
             {"a_mem": "dram_interleaved", "b_mem": "dram_interleaved"},  # l1 - dram combination
-            # {"a_mem": "l1_height_sharded_rm", "b_mem": "l1_height_sharded_rm"},
-            # {"a_mem": "dram_interleaved", "b_mem": "l1_height_sharded_rm"},
-            # {"a_mem": "l1_height_sharded_rm", "b_mem": "dram_interleaved"},  # HS
-            # {"a_mem": "l1_width_sharded_rm", "b_mem": "l1_width_sharded_rm"},
-            # {"a_mem": "dram_interleaved", "b_mem": "l1_width_sharded_rm"},
-            # {"a_mem": "l1_width_sharded_rm", "b_mem": "dram_interleaved"},  # WS
-            # {"a_mem": "l1_block_sharded_rm", "b_mem": "l1_block_sharded_rm"},
-            # {"a_mem": "dram_interleaved", "b_mem": "l1_block_sharded_rm"},
-            # {"a_mem": "l1_block_sharded_rm", "b_mem": "dram_interleaved"},  # BS #row_major orientation
-            # {"a_mem": "l1_height_sharded_cm", "b_mem": "l1_height_sharded_cm"},
-            # {"a_mem": "dram_interleaved", "b_mem": "l1_height_sharded_cm"},
-            # {"a_mem": "l1_height_sharded_cm", "b_mem": "dram_interleaved"},  # HS
-            # {"a_mem": "l1_width_sharded_cm", "b_mem": "l1_width_sharded_cm"},
-            # {"a_mem": "dram_interleaved", "b_mem": "l1_width_sharded_cm"},
-            # {"a_mem": "l1_width_sharded_cm", "b_mem": "dram_interleaved"},  # WS
-            # {"a_mem": "l1_block_sharded_cm", "b_mem": "l1_block_sharded_cm"},
-            # {"a_mem": "dram_interleaved", "b_mem": "l1_block_sharded_cm"},
-            # {"a_mem": "l1_block_sharded_cm", "b_mem": "dram_interleaved"},  # BS #col_major orientation
+            {"a_mem": "l1_height_sharded_rm", "b_mem": "l1_height_sharded_rm"},
+            {"a_mem": "dram_interleaved", "b_mem": "l1_height_sharded_rm"},
+            {"a_mem": "l1_height_sharded_rm", "b_mem": "dram_interleaved"},  # HS
+            {"a_mem": "l1_width_sharded_rm", "b_mem": "l1_width_sharded_rm"},
+            {"a_mem": "dram_interleaved", "b_mem": "l1_width_sharded_rm"},
+            {"a_mem": "l1_width_sharded_rm", "b_mem": "dram_interleaved"},  # WS
+            {"a_mem": "l1_block_sharded_rm", "b_mem": "l1_block_sharded_rm"},
+            {"a_mem": "dram_interleaved", "b_mem": "l1_block_sharded_rm"},
+            {"a_mem": "l1_block_sharded_rm", "b_mem": "dram_interleaved"},  # BS #row_major orientation
+            {"a_mem": "l1_height_sharded_cm", "b_mem": "l1_height_sharded_cm"},
+            {"a_mem": "dram_interleaved", "b_mem": "l1_height_sharded_cm"},
+            {"a_mem": "l1_height_sharded_cm", "b_mem": "dram_interleaved"},  # HS
+            {"a_mem": "l1_width_sharded_cm", "b_mem": "l1_width_sharded_cm"},
+            {"a_mem": "dram_interleaved", "b_mem": "l1_width_sharded_cm"},
+            {"a_mem": "l1_width_sharded_cm", "b_mem": "dram_interleaved"},  # WS
+            {"a_mem": "l1_block_sharded_cm", "b_mem": "l1_block_sharded_cm"},
+            {"a_mem": "dram_interleaved", "b_mem": "l1_block_sharded_cm"},
+            {"a_mem": "l1_block_sharded_cm", "b_mem": "dram_interleaved"},  # BS #col_major orientation
         ],
     },
 }
@@ -204,10 +197,5 @@ def run(
     result = ttnn.experimental.rsub(input_tensor_a, input_tensor_b)
     output_tensor = ttnn.to_torch(result)
     e2e_perf = stop_measuring_time(start_time)
-    print(torch_output_tensor)
-    print(output_tensor)
-    diff = torch.abs(torch_output_tensor - output_tensor)
-    max_atol = torch.max(diff)
-    print(f"Max absolute tolerance (atol): {max_atol.item()}")
 
     return [check_with_pcc(torch_output_tensor, output_tensor, pcc=0.99), e2e_perf]
