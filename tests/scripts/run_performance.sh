@@ -23,6 +23,9 @@ run_perf_models_other() {
         env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/yolov4/tests/test_perf_yolo.py -m $test_marker
 
         env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/distilbert/tests/test_perf_distilbert.py -m $test_marker
+
+        #yolov11
+        env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/experimental/functional_yolov11/tests/test_yolov11.py -m $test_marker
     fi
 
     env pytest -n auto tests/ttnn/integration_tests/bert/test_performance.py -m $test_marker
@@ -103,6 +106,7 @@ run_device_perf_models() {
 
     env pytest models/demos/roberta/tests/ -m $test_marker
 
+
     if [ "$tt_arch" == "grayskull" ]; then
         #TODO(MO): Until #6560 is fixed, GS device profiler test are grouped with
         #Model Device perf regression tests to make sure thy run on no-soft-reset BMs
@@ -133,6 +137,8 @@ run_device_perf_models() {
         env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/yolov4/tests/ -m $test_marker
 
         env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/distilbert/tests -m $test_marker
+
+        env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/experimental/functional_yolov11/tests/ -m $test_marker
     fi
 
     ## Merge all the generated reports

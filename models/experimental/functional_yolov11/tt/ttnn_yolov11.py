@@ -1,12 +1,13 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+
 # SPDX-License-Identifier: Apache-2.0
+
 import ttnn
 import math
 from tt_lib.utils import (
     _nearest_y,
 )
 from tests.ttnn.ttnn_utility_fuction import get_shard_grid_from_num_cores
-import torch
 
 
 class Yolov11_Conv2D:
@@ -105,56 +106,6 @@ class Yolov11_Conv2D:
             return_weights_and_bias=True,
         )
         return x
-
-
-def Yolov11_shard_SiLU(device, x, ncores=64):
-    input_2d_height = x.shape.with_tile_padding()[2]
-    input_2d_width = x.shape.with_tile_padding()[3]
-
-    input_2d_height_padded = _nearest_y(input_2d_height, ncores * 32)
-
-    shard_height = math.ceil(input_2d_height_padded / ncores)
-    shard_grid = get_shard_grid_from_num_cores(ncores, device)
-    shard_width = input_2d_width
-    shard_orientation = ttnn.ShardOrientation.ROW_MAJOR
-    tensor_memory_layout = ttnn.TensorMemoryLayout.HEIGHT_SHARDED
-
-    shard_spec = ttnn.ShardSpec(shard_grid, (shard_height, shard_width), shard_orientation, False)
-
-    in_sharded_mem_config = ttnn.MemoryConfig(tensor_memory_layout, ttnn.BufferType.L1, shard_spec)
-
-    x = ttnn.to_memory_config(x, memory_config=in_sharded_mem_config)
-
-    x = ttnn.silu(x, memory_config=in_sharded_mem_config)
-    return x
-
-
-def Yolov11_shard_upsample(device, x):
-    shard_grid = ttnn.CoreRangeSet(
-        {
-            ttnn.CoreRange(
-                ttnn.CoreCoord(0, 0),
-                ttnn.CoreCoord(7, 5),
-            ),
-            ttnn.CoreRange(
-                ttnn.CoreCoord(0, 6),
-                ttnn.CoreCoord(0, 6),
-            ),
-        }
-    )
-    shard_height = math.ceil(x.shape[0] * x.shape[1] * x.shape[2] / 49)
-    shard_width = x.shape[-1]
-    shard_spec = ttnn.ShardSpec(shard_grid, (shard_height, shard_width), ttnn.ShardOrientation.ROW_MAJOR)
-    in_sharded_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
-    x = ttnn.to_memory_config(x, memory_config=in_sharded_mem_config)
-    shard_height_out = shard_height * 2 * 2  # scale_factor=2
-    shard_spec_out = ttnn.ShardSpec(shard_grid, (shard_height_out, shard_width), ttnn.ShardOrientation.ROW_MAJOR)
-    out_sharded_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec_out
-    )
-    x = ttnn.upsample(x, scale_factor=2, memory_config=out_sharded_mem_config)
-    x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
-    return x
 
 
 def sharded_concat(input_tensors, num_cores=64, dim=3):  # expected input tensors to be in fp16, RM, same (h*w)
@@ -283,7 +234,7 @@ class C3K:
 
         k1 = self.k1(device, x1)
         k2 = self.k2(device, k1)
-        use_shard_concat = False  # fps drop due to layout conversion
+        use_shard_concat = False
         if use_shard_concat:
             x2 = ttnn.to_layout(x2, ttnn.ROW_MAJOR_LAYOUT)
             x2 = ttnn.to_dtype(x2, ttnn.bfloat16)
@@ -537,9 +488,6 @@ class Detect:
         y2 = ttnn.concat((x2, x5), -1, memory_config=ttnn.L1_MEMORY_CONFIG)
         y3 = ttnn.concat((x3, x6), -1, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        y1_reshaped = ttnn.reshape(y1, (y1.shape[0], y1.shape[2], y1.shape[-1]))
-        y2_reshaped = ttnn.reshape(y2, (y2.shape[0], y2.shape[2], y2.shape[-1]))
-        y3_reshaped = ttnn.reshape(y3, (y3.shape[0], y3.shape[2], y3.shape[-1]))
         y = ttnn.concat((y1, y2, y3), dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
         y = ttnn.squeeze(y, dim=0)
         ya, yb = y[:, :, :64], y[:, :, 64:144]
@@ -561,7 +509,6 @@ class Detect:
         c = self.dfl(ya)
         ttnn.deallocate(ya)
         c = ttnn.sharded_to_interleaved(c, memory_config=ttnn.L1_MEMORY_CONFIG)
-
         c = ttnn.to_layout(c, layout=ttnn.ROW_MAJOR_LAYOUT)
         c = ttnn.permute(c, (0, 3, 1, 2))
         c = ttnn.reshape(c, (c.shape[0], 1, 4, int(c.shape[3] / 4)))
@@ -569,6 +516,8 @@ class Detect:
         c1, c2 = c[:, :2, :], c[:, 2:4, :]
 
         anchor, strides = self.anchors, self.strides
+        anchor = ttnn.to_memory_config(anchor, memory_config=ttnn.L1_MEMORY_CONFIG)
+        strides = ttnn.to_memory_config(strides, memory_config=ttnn.L1_MEMORY_CONFIG)
         c1 = ttnn.to_layout(c1, layout=ttnn.TILE_LAYOUT)
         c2 = ttnn.to_layout(c2, layout=ttnn.TILE_LAYOUT)
 
@@ -659,7 +608,6 @@ class YoloV11:
         x = self.c2psa(self.device, x)
         x10 = x
         x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
-        # x = ttnn.to_dtype(x, ttnn.bfloat16)
         x = ttnn.reshape(x, (x.shape[0], int(math.sqrt(x.shape[2])), int(math.sqrt(x.shape[2])), x.shape[3]))
         nhw = x.shape[0] * x.shape[1] * x.shape[2]
         num_cores = determine_num_cores_for_upsample(nhw, x.shape[2])
@@ -671,17 +619,12 @@ class YoloV11:
             x = ttnn.reshard(x, shardspec)
         else:
             x = ttnn.interleaved_to_sharded(x, shardspec)
-
         x = ttnn.upsample(x, scale_factor=2, memory_config=x.memory_config())  # 11
         if x.is_sharded():
             x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
         x = ttnn.reshape(x, (1, 1, x.shape[0] * x.shape[1] * x.shape[2], x.shape[3]))
         x6 = ttnn.to_layout(x6, layout=ttnn.ROW_MAJOR_LAYOUT)
-
-        # x = sharded_concat([x,x6]) # unequal channels( sharded_concat is not applicable)
         shard_height = (x[0].shape[2] + 64 - 1) // 64
-        print("shard height is ", shard_height)
-        print("x and x6 sahpes are", x.shape, x6.shape)
         input_sharded_memory_config_1 = ttnn.create_sharded_memory_config(
             (shard_height, x.shape[-1]),
             core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
@@ -694,22 +637,19 @@ class YoloV11:
             strategy=ttnn.ShardStrategy.HEIGHT,
             use_height_and_width_as_shard_shape=True,
         )
-        # x = ttnn.to_memory_config(x,input_sharded_memory_config_1)
-        # x6 = ttnn.to_memory_config(x6,input_sharded_memory_config_2)
+        x = ttnn.to_memory_config(x, input_sharded_memory_config_1)
+        x6 = ttnn.to_memory_config(x6, input_sharded_memory_config_2)
         out_sharded_memory_config_ = ttnn.create_sharded_memory_config(
             (shard_height, x.shape[-1] + x6.shape[-1]),
             core_grid=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))}),
             strategy=ttnn.ShardStrategy.HEIGHT,
             use_height_and_width_as_shard_shape=True,
         )
-        x = ttnn.concat((x, x6), -1, memory_config=ttnn.L1_MEMORY_CONFIG)
+        x = ttnn.concat((x, x6), -1, memory_config=out_sharded_memory_config_)
 
         ttnn.deallocate(x6)
-        # if x.shape[2]==196:
-        #     x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
-        #     x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)
-        print(" after x and x6 concat", x.shape)
-        # return x
+        if x.shape[2] == 196:
+            x = ttnn.sharded_to_interleaved(x, memory_config=ttnn.L1_MEMORY_CONFIG)
         x = self.c3k2_5(self.device, x)  # 13
         x13 = x
         x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
@@ -730,26 +670,16 @@ class YoloV11:
         x = ttnn.reshape(x, (1, 1, x.shape[0] * x.shape[1] * x.shape[2], x.shape[3]))
         x4 = ttnn.to_layout(x4, layout=ttnn.ROW_MAJOR_LAYOUT)
         x = sharded_concat([x, x4])
-        # x = ttnn.concat((x, x4), -1, memory_config=ttnn.L1_MEMORY_CONFIG)  # 15
         ttnn.deallocate(x4)
-        # x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)
         x = self.c3k2_6(self.device, x)  # 16
         x16 = x
         x = self.conv7(self.device, x)  # 17
-        # x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
-        # x = ttnn.to_dtype(x, ttnn.bfloat16)
-        # x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)
-        # print("x and x13 shapes are", x.shape, x13.shape, x.dtype, x13.dtype, x.layout, x13.layout)
         x = ttnn.concat((x, x13), -1, memory_config=ttnn.L1_MEMORY_CONFIG)  # 18
         ttnn.deallocate(x13)
         x = self.c3k2_7(self.device, x)  # 19
         x19 = x
-        x = self.conv8(self.device, x)  # 20 #16
-        # x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
-        # x = ttnn.to_dtype(x, ttnn.bfloat16)
-        print("x and x10 shapes are", x.shape, x10.shape, x.dtype, x10.dtype, x.layout, x10.layout)
+        x = self.conv8(self.device, x)
         x = ttnn.concat((x, x10), -1, memory_config=ttnn.L1_MEMORY_CONFIG)  # 21
-        print("output cncat shape is", x.shape)
         ttnn.deallocate(x10)
         x = self.c3k2_8(self.device, x)  # 22
         x22 = x

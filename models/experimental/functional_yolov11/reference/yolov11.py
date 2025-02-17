@@ -1,14 +1,15 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
+from pathlib import Path
+import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as f
 import math
-
-# from torchview import draw_graph
 import torch
+import time
 
 
 def make_anchors(feats, strides, grid_cell_offset=0.5):
@@ -204,7 +205,6 @@ class C3k(nn.Module):
         )
 
     def forward(self, x):
-        #
         x1 = self.cv1(x)
         x2 = self.cv2(x)
         x = self.m(x1)
@@ -216,9 +216,6 @@ class C3k(nn.Module):
 class C3k2(nn.Module):
     def __init__(self, in_channel, out_channel, kernel, stride, padding, dilation, groups, is_bk_enabled=False):
         super().__init__()
-        #
-        #     f"c3k2 init is called,{in_channel}, {out_channel}, {kernel},{stride}, {padding}, {dilation}, {groups},{is_bk_enabled}"
-        # )
         self.is_bk_enabled = is_bk_enabled
         if is_bk_enabled:
             self.cv1 = Conv(
@@ -714,31 +711,22 @@ class Detect(nn.Module):
 
         ya = torch.reshape(ya, (ya.shape[0], int(ya.shape[1] / self.in_channel[24]), self.in_channel[24], ya.shape[2]))
         ya = torch.permute(ya, (0, 2, 1, 3))
-        ya = f.softmax(ya, dim=1)  # torch.Size([1, 16, 4, 1029])
+        ya = f.softmax(ya, dim=1)
         c = self.dfl(ya)
         c1 = torch.reshape(c, (c.shape[0], c.shape[1] * c.shape[2], c.shape[3]))
         c2 = c1
         c1 = c1[:, 0:2, :]
         c2 = c2[:, 2:4, :]
-
         anchor, strides = (y_all.transpose(0, 1) for y_all in make_anchors(y_all, [8, 16, 32], 0.5))
         anchor.unsqueeze(0)
-
         c1 = anchor - c1
         c2 = anchor + c2
-
-        # print(c1.shape, c2.shape)
-
         z1 = c2 - c1
         z2 = c1 + c2
-
         z2 = z2 / 2
-
         z = torch.concat((z2, z1), 1)
         z = z * strides
-        # yb = torch.load("yb.pt")
         yb = torch.sigmoid(yb)
-        # return yb
         out = torch.concat((z, yb), 1)
         return out
 
@@ -890,24 +878,19 @@ class YoloV11(nn.Module):
         x = self.model[2](x)  # 2
         x = self.model[3](x)  # 3
         x = self.model[4](x)  # 4
-        # torch.save(x, "/home/ubuntu/tt-metal/models/experimental/functional_yolov11/dumps/torch_out.pth")
         x4 = x
         x = self.model[5](x)  # 5
         x = self.model[6](x)  # 6
         x6 = x
         x = self.model[7](x)  # 7
         x = self.model[8](x)  # 8
-
         x = self.model[9](x)  # 9
         x = self.model[10](x)  # 10
-        # torch.save(x,"/home/ubuntu/venkatesh_yolov11/tt-metal/models/experimental/functional_yolov11/dumps/torch_out.pth")
         x10 = x
-        # print("input to upsample1 is ", x.shape)
         x = f.upsample(x, scale_factor=2.0)  # 11
         x = torch.cat((x, x6), 1)  # 12
         x = self.model[13](x)  # 13
         x13 = x
-        # print("input to upsample2 is ", x.shape)
         x = f.upsample(x, scale_factor=2.0)  # 14
         x = torch.cat((x, x4), 1)  # 15
         x = self.model[16](x)  # 16
@@ -941,28 +924,6 @@ class DWConv(Conv):
         super().__init__(c1, c2, k, s, g=math.gcd(c1, c2), d=d, act=act)
 
 
-# class DFL(nn.Module):
-#     """
-#     Integral module of Distribution Focal Loss (DFL).
-
-#     Proposed in Generalized Focal Loss https://ieeexplore.ieee.org/document/9792391
-#     """
-
-#     def __init__(self, c1=16):
-#         """Initialize a convolutional layer with a given number of input channels."""
-#         super().__init__()
-#         self.conv = nn.Conv2d(c1, 1, 1, bias=False).requires_grad_(False)
-#         x = torch.arange(c1, dtype=torch.float)
-#         self.conv.weight.data[:] = nn.Parameter(x.view(1, c1, 1, 1))
-#         self.c1 = c1
-
-#     def forward(self, x):
-#         """Applies a transformer layer on input tensor 'x' and returns a tensor."""
-#         b, _, a = x.shape  # batch, channels, anchors
-#         return self.conv(x.view(b, 4, self.c1, a).transpose(2, 1).softmax(1)).view(b, 4, a)
-#         # return self.conv(x.view(b, self.c1, 4, a).softmax(1)).view(b, 4, a)
-
-
 class BaseModel(nn.Module):
     def forward(self, x, *args, **kwargs):
         if isinstance(x, dict):
@@ -987,14 +948,61 @@ class DetectionModel(BaseModel):
         super().__init__()
 
 
-# model = YoloV11()
-# model_graph = draw_graph(
-# model,
-# input_size=(1, 3, 224, 224),
-# dtypes=[torch.float32],
-# expand_nested=True,
-# graph_name="yolov11_ref",
-# depth=10,
-# directory=".",
-# )
-# model_graph.visual_graph.render(format="pdf")
+class Ensemble(nn.ModuleList):
+    def __init__(self):
+        super(Ensemble, self).__init__()
+
+    def forward(self, x, augment=False):
+        y = []
+        for module in self:
+            y.append(module(x, augment)[0])
+        y = torch.cat(y, 1)
+        return y, None
+
+
+def attempt_download(file, repo="ultralytics/assets", key="reference"):
+    tests = Path(__file__).parent.parent / key
+    file_path = tests / Path(str(file).strip().replace("'", "").lower())
+    if not file_path.exists():
+        name = "yolo11n.pt"
+        msg = f"{file_path} missing, try downloading from https://github.com/{repo}/releases/"
+
+        try:
+            url = f"https://github.com/{repo}/releases/download/v8.3.0/{name}"
+
+            print(f"Downloading {url} to {file_path}...")
+            torch.hub.download_url_to_file(url, file_path)
+            assert file_path.exists() and file_path.stat().st_size > 1e6, f"Download failed for {name}"
+
+        except Exception as e:
+            print(f"Error downloading from GitHub: {e}. Trying secondary source...")
+            url = f"https://storage.googleapis.com/{repo}/ckpt/{name}"
+            print(f"Downloading {url} to {file_path}...")
+            os.system(f"curl -L {url} -o {file_path}")
+            if not file_path.exists() or file_path.stat().st_size < 1e6:
+                file_path.unlink(missing_ok=True)
+                print(f"ERROR: Download failure for {msg}")
+            else:
+                print(f"Download succeeded from secondary source!")
+    return file_path
+
+
+def attempt_load(weights, map_location=None):
+    model = Ensemble()
+    for w in weights if isinstance(weights, list) else [weights]:
+        weight_path = attempt_download(w)
+        ckpt = torch.load(weight_path, map_location=map_location)
+        model.append(ckpt["ema" if ckpt.get("ema") else "model"].float().eval())
+
+    for m in model.modules():
+        if isinstance(m, (nn.Hardswish, nn.LeakyReLU, nn.ReLU, nn.ReLU6, nn.SiLU)):
+            m.inplace = True
+        elif isinstance(m, nn.Upsample):
+            m.recompute_scale_factor = None
+
+    if len(model) == 1:
+        return model[-1]
+    else:
+        for k in ["names", "stride"]:
+            setattr(model, k, getattr(model[-1], k))
+        return model

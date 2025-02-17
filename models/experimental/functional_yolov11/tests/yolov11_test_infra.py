@@ -1,17 +1,14 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
 from loguru import logger
-import os
-import pytest
 import torch
-import torchvision
 from tests.ttnn.utils_for_testing import assert_with_pcc
 import ttnn
 from models.experimental.functional_yolov11.reference import yolov11
-from models.experimental.functional_yolov11.reference.yolov11 import YoloV11 as torch_yolov11
-from models.experimental.functional_yolov11.tt.ttnn_yolov11 import YoloV11 as ttnn_yolov11
+from models.experimental.functional_yolov11.tt import ttnn_yolov11
+from models.experimental.functional_yolov11.reference.yolov11 import attempt_load
 import sys
 from models.utility_functions import (
     is_wormhole_b0,
@@ -33,38 +30,6 @@ try:
 
 except KeyError:
     print("models.experimental.functional_yolov11.reference.yolov11 not found.")
-
-
-class Ensemble(nn.ModuleList):
-    def __init__(self):
-        super(Ensemble, self).__init__()
-
-    def forward(self, x, augment=False):
-        y = []
-        for module in self:
-            y.append(module(x, augment)[0])
-        y = torch.cat(y, 1)
-        return y, None
-
-
-def attempt_load(weights, map_location=None):
-    model = Ensemble()
-    for w in weights if isinstance(weights, list) else [weights]:
-        w = "models/experimental/functional_yolov11/reference/yolo11n.pt"
-        ckpt = torch.load(w, map_location=map_location)
-        model.append(ckpt["ema" if ckpt.get("ema") else "model"].float().eval())
-    for m in model.modules():
-        if type(m) in [nn.Hardswish, nn.LeakyReLU, nn.ReLU, nn.ReLU6, nn.SiLU]:
-            m.inplace = True
-        elif type(m) is nn.Upsample:
-            m.recompute_scale_factor = None
-
-    if len(model) == 1:
-        return model[-1]
-    else:
-        for k in ["names", "stride"]:
-            setattr(model, k, getattr(model[-1], k))
-        return model
 
 
 def load_yolov11_model():
@@ -97,7 +62,7 @@ class Yolov11TestInfra:
         torch_model = load_yolov11_model()
         parameters = create_yolov11_model_parameters(torch_model, self.torch_input, device=device)
         self.torch_output = torch_model(self.torch_input)
-        self.ttnn_yolov11_model = ttnn_yolov11(device, parameters)
+        self.ttnn_yolov11_model = ttnn_yolov11.YoloV11(device, parameters)
 
     def run(self):
         self.output_tensor = self.ttnn_yolov11_model(self.input_tensor)
@@ -150,7 +115,6 @@ class Yolov11TestInfra:
     def validate(self, output_tensor=None):
         output_tensor = self.output_tensor if output_tensor is None else output_tensor
         output_tensor = ttnn.to_torch(self.output_tensor)
-        # output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
         output_tensor = output_tensor.reshape((self.torch_output).shape)
 
         valid_pcc = 0.98
