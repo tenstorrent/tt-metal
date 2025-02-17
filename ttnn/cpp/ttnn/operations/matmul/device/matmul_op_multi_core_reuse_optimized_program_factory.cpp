@@ -224,7 +224,7 @@ tt::tt_metal::operation::ProgramWithCallbacks create_program(
     }
 
     bmm_op_utils::add_stagger_defines_if_needed(device->arch(), num_cores, mm_kernel_defines);
-    bmm_op_utils::add_nops_in_matmul(mm_kernel_defines);
+    bmm_op_utils::add_nops_in_matmul(mm_kernel_defines, math_fidelity);
     bmm_op_utils::add_mm_throttle_defines_if_needed(device->arch(), math_fidelity, mm_kernel_defines);
 
     // Create compute kernel
