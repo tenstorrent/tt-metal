@@ -600,7 +600,10 @@ Tensor Tensor::from_span(tt::stl::Span<const T> buffer, const TensorSpec& spec, 
 }
 
 bool Tensor::is_borrowable(const TensorSpec& spec) {
-    return spec.physical_shape() == spec.logical_2d_shape() and spec.layout() == Layout::ROW_MAJOR;
+    return spec.physical_shape() == spec.logical_2d_shape() &&  //
+           spec.layout() == Layout::ROW_MAJOR &&                //
+           // Ideally, this should assert on `TensorSpec` creation.
+           (spec.data_type() != DataType::BFLOAT4_B && spec.data_type() != DataType::BFLOAT8_B);
 }
 
 template <typename T>
@@ -614,16 +617,16 @@ Tensor Tensor::borrow_from_span(
     TT_FATAL(
         buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
     TT_FATAL(
+        spec.data_type() == convert_to_data_type<T>(),
+        "Unsupported data type: got {}, expected: {}",
+        spec.data_type(),
+        convert_to_data_type<T>());
+    TT_FATAL(
         is_borrowable(spec),
         "Tensor spec does not support borrowing a tensor from a buffer: physical shape {}, logical shape {}, layout {}",
         spec.physical_shape(),
         spec.logical_2d_shape(),
         spec.layout());
-    TT_FATAL(
-        spec.data_type() == convert_to_data_type<T>(),
-        "Unsupported data type: got {}, expected: {}",
-        spec.data_type(),
-        convert_to_data_type<T>());
     BorrowedStorage storage(
         borrowed_buffer::Buffer(buffer.data(), buffer.size()), on_creation_callback, on_destruction_callback);
     Tensor output(std::move(storage), spec);
@@ -667,26 +670,24 @@ std::vector<float> Tensor::to_vector<float>() const {
     Tensor cpu_tensor = this->cpu();
     switch (cpu_tensor.get_dtype()) {
         case DataType::BFLOAT16: {
-            auto physical_data_bfloat16 =
-                owned_buffer::get_as<bfloat16>(std::get<OwnedStorage>(cpu_tensor.storage()).buffer).get();
+            auto buffer = host_buffer::get_as<bfloat16>(cpu_tensor);
             std::vector<float> physical_data;
-            physical_data.reserve(physical_data_bfloat16.size());
-            std::transform(
-                physical_data_bfloat16.begin(),
-                physical_data_bfloat16.end(),
-                std::back_inserter(physical_data),
-                [](bfloat16 val) { return val.to_float(); });
+            physical_data.reserve(buffer.size());
+            std::transform(buffer.begin(), buffer.end(), std::back_inserter(physical_data), [](bfloat16 val) {
+                return val.to_float();
+            });
             return tensor_impl::decode_tensor_data(std::move(physical_data), cpu_tensor.tensor_spec());
         }
         case DataType::FLOAT32: {
-            auto physical_data = owned_buffer::get_as<float>(std::get<OwnedStorage>(cpu_tensor.storage()).buffer).get();
+            auto buffer = host_buffer::get_as<float>(cpu_tensor);
+            auto physical_data = std::vector<float>(buffer.begin(), buffer.end());
             return tensor_impl::decode_tensor_data(std::move(physical_data), cpu_tensor.tensor_spec());
         }
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B: {
             const auto& tile = cpu_tensor.get_tensor_spec().tile();
-            std::vector<uint32_t> packed_data =
-                owned_buffer::get_as<std::uint32_t>(std::get<OwnedStorage>(cpu_tensor.storage()).buffer).get();
+            auto buffer = host_buffer::get_as<uint32_t>(cpu_tensor);
+            auto packed_data = std::vector<uint32_t>(buffer.begin(), buffer.end());
             std::vector<float> unpacked_data =
                 cpu_tensor.get_tensor_spec().data_type() == DataType::BFLOAT8_B
                     ? unpack_bfp8_tiles_into_float_vec(
@@ -710,7 +711,8 @@ std::vector<T> Tensor::to_vector() const {
         this->get_dtype(),
         convert_to_data_type<T>());
     auto cpu_tensor = this->cpu();
-    auto physical_data = owned_buffer::get_as<T>(std::get<OwnedStorage>(cpu_tensor.storage()).buffer).get();
+    auto data = host_buffer::get_as<T>(cpu_tensor);
+    auto physical_data = std::vector<T>(data.begin(), data.end());
     return tensor_impl::decode_tensor_data(std::move(physical_data), cpu_tensor.tensor_spec());
 }
 
