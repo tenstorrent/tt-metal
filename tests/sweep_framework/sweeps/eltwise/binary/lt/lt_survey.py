@@ -17,10 +17,26 @@ from models.utility_functions import torch_random
 # Each suite has a key name (in this case "suite_1") which will associate the test vectors to this specific suite of inputs.
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
-    "lt_survey-4": {
+    "mixed-3": {
         "input_shape": [{"self": [1, 1, 1024, 1024], "other": [1, 1, 1024, 1024]}],
-        "input_a_dtype": [ttnn.bfloat4_b],
-        "input_b_dtype": [ttnn.bfloat4_b],
+        "input_dtype": [
+            {"input_a_dtype": "ttnn.bfloat16", "input_b_dtype": "ttnn.float32"},
+            {"input_a_dtype": "ttnn.bfloat16", "input_b_dtype": "ttnn.bfloat8_b"},
+            {"input_a_dtype": "ttnn.bfloat16", "input_b_dtype": "ttnn.bfloat4_b"},
+            # {"input_a_dtype": "ttnn.bfloat16", "input_b_dtype": "ttnn.bfloat16"}, Tested already
+            {"input_a_dtype": "ttnn.bfloat8_b", "input_b_dtype": "ttnn.bfloat16"},
+            {"input_a_dtype": "ttnn.bfloat8_b", "input_b_dtype": "ttnn.float32"},
+            {"input_a_dtype": "ttnn.bfloat8_b", "input_b_dtype": "ttnn.bfloat4_b"},
+            # {"input_a_dtype": "ttnn.bfloat8_b", "input_b_dtype": "ttnn.bfloat8_b"}, Tested already
+            {"input_a_dtype": "ttnn.bfloat4_b", "input_b_dtype": "ttnn.bfloat16"},
+            {"input_a_dtype": "ttnn.bfloat4_b", "input_b_dtype": "ttnn.float32"},
+            {"input_a_dtype": "ttnn.bfloat4_b", "input_b_dtype": "ttnn.bfloat8_b"},
+            # {"input_a_dtype": "ttnn.bfloat4_b", "input_b_dtype": "ttnn.bfloat4_b"}, Tested already
+            {"input_a_dtype": "ttnn.float32", "input_b_dtype": "ttnn.bfloat16"},
+            {"input_a_dtype": "ttnn.float32", "input_b_dtype": "ttnn.bfloat8_b"},
+            {"input_a_dtype": "ttnn.float32", "input_b_dtype": "ttnn.bfloat4_b"},
+            # {"input_a_dtype": "ttnn.float32", "input_b_dtype": "ttnn.float32"}, Tested already
+        ],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_b_layout": [ttnn.TILE_LAYOUT],
         "input_memory_config": [
@@ -49,6 +65,18 @@ parameters = {
         ],
     },
 }
+
+
+def return_dtype(dtype):
+    if dtype == "ttnn.bfloat16":
+        return ttnn.bfloat16
+    elif dtype == "ttnn.float32":
+        return ttnn.float32
+    elif dtype == "ttnn.bfloat8_b":
+        return ttnn.bfloat8_b
+    elif dtype == "ttnn.bfloat4_b":
+        return ttnn.bfloat4_b
+    raise ("Input dtype is not valid!")
 
 
 def return_mem_config(mem_config_string):
@@ -113,8 +141,7 @@ def return_mem_config(mem_config_string):
 # If you defined a device_mesh_fixture above, the object you yielded will be passed into this function as 'device'. Otherwise, it will be the default ttnn device opened by the infra.
 def run(
     input_shape,
-    input_a_dtype,
-    input_b_dtype,
+    input_dtype,
     input_a_layout,
     input_b_layout,
     input_memory_config,
@@ -122,9 +149,10 @@ def run(
     device,
 ) -> list:
     torch.manual_seed(0)
-
     input_a_memory_config = input_memory_config["a_mem_config"]
     input_b_memory_config = input_memory_config["b_mem_config"]
+    input_a_dtype = return_dtype(input_dtype["input_a_dtype"])
+    input_b_dtype = return_dtype(input_dtype["input_b_dtype"])
 
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
@@ -153,17 +181,8 @@ def run(
         memory_config=return_mem_config(input_b_memory_config),
     )
 
-    if input_a_dtype == ttnn.bfloat8_b:
-        torch_input_tensor_a = ttnn.to_torch(input_tensor_a)
-
-    if input_b_dtype == ttnn.bfloat8_b:
-        torch_input_tensor_b = ttnn.to_torch(input_tensor_b)
-
-    if input_a_dtype == ttnn.bfloat4_b:
-        torch_input_tensor_a = ttnn.to_torch(input_tensor_a)
-
-    if input_b_dtype == ttnn.bfloat4_b:
-        torch_input_tensor_b = ttnn.to_torch(input_tensor_b)
+    torch_input_tensor_a = ttnn.to_torch(input_tensor_a)
+    torch_input_tensor_b = ttnn.to_torch(input_tensor_b)
 
     golden_function = ttnn.get_golden_function(ttnn.lt)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b)

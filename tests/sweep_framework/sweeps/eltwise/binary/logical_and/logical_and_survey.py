@@ -74,8 +74,9 @@ def return_dtype(dtype):
         return ttnn.float32
     elif dtype == "ttnn.bfloat8_b":
         return ttnn.bfloat8_b
-    else:
+    elif dtype == "ttnn.bfloat4_b":
         return ttnn.bfloat4_b
+    raise ("Input dtype is not valid!")
 
 
 def return_mem_config(mem_config_string):
