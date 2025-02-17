@@ -62,6 +62,8 @@ void kernel_main() {
     constexpr uint32_t total_weight_num_tiles =
         weight_block_height_num_outer * num_blocks_weight_h * weight_block_num_tiles;
 
+    constexpr uint32_t act_block_h_datums_first_reader_read = act_block_h_datums_first_reader / 2;
+
     uint32_t i = 0;
     i += 19;
     uint32_t out_start_tile_id = get_arg_val<uint32_t>(i);
@@ -254,7 +256,7 @@ void kernel_main() {
             out_block_h_start_tile_id_h += out_block_height_num_tiles;
 #endif
 
-            start_reader_idx = reader_idx + act_block_h_datums_read;
+            start_reader_idx = reader_idx + act_block_h_datums_first_reader_read;
         }  // out_num_blocks_h
         out_block_w_start_tile_id += out_next_block_stride_w;
         out_block_w_start_tile_id_w += weight_block_width_ntiles;
