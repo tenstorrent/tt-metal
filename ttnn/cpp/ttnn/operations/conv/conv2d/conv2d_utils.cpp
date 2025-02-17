@@ -314,7 +314,13 @@ static std::pair<uint32_t, uint32_t> determine_largest_subblock_size(
             break;
         }
     }
-    TT_ASSERT(subblock_h > 0 && subblock_w > 0);
+    TT_FATAL(
+        subblock_h > 0 && subblock_w > 0,
+        "Could not find valid subblock size for block size {}x{}, split_reader_enabled: {}, fp32_accum: {}",
+        block_height,
+        block_width,
+        split_reader_enabled,
+        fp32_accum);
     return {subblock_h, subblock_w};
 }
 
