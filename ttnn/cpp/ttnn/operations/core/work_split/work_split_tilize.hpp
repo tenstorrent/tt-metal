@@ -9,7 +9,7 @@
 #pragma once
 
 #include "ttnn/tensor/types.hpp"
-#include "tt_metal/common/core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
 
 namespace ttnn {
 
@@ -152,11 +152,17 @@ struct FullRep {
     BlockRep pad;
     uint32_t times_total;
 
-    FullRep(uint32_t n_rows, uint32_t n_pads, uint32_t times, uint32_t pads_mul, uint32_t times_total) :
-        rep{n_rows / 32, n_rows % 32, n_pads / 32, times},
-        pad{0, 0, (n_rows + n_pads) * pads_mul, 1},
+    FullRep(
+        uint32_t n_rows,
+        uint32_t n_pads,
+        uint32_t times,
+        uint32_t pads_mul,
+        uint32_t times_total,
+        uint32_t tile_height) :
+        rep{n_rows / tile_height, n_rows % tile_height, n_pads / tile_height, times},
+        pad{0, 0, (n_rows + n_pads) * pads_mul / tile_height, 1},
         times_total(times_total) {
-        TT_FATAL((n_rows + n_pads) % 32 == 0 && "total rows must be divisible by 32", "Error");
+        TT_FATAL((n_rows + n_pads) % tile_height == 0 && "total rows must be divisible by {}", "Error", tile_height);
     }
 
     std::vector<BlockRep> to_block_reps() const {
@@ -176,30 +182,29 @@ struct FullRep {
     }
 };
 
+inline bool compare_assignments(const BlockRep& el0, const BlockRep& el1) {
+    return (
+        el0.n_data == el1.n_data && el0.n_mixed == el1.n_mixed && el0.n_pads == el1.n_pads && el0.times == el1.times);
+}
+
 inline std::vector<std::vector<BlockRep>> distribute_work(
-    const ttnn::SimpleShape& logical_shape,
-    const tt::tt_metal::Padding& padding,
+    const ttnn::Shape& logical_shape,
+    const ttnn::Shape& padded_shape,
     uint32_t num_cores,
     uint32_t blocks_per_core,
     bool has_cliff,
-    uint32_t nblocks_per_core_cliff) {
-    TT_FATAL(
-        logical_shape.rank() >= 2 && logical_shape.rank() <= 4,
-        "Only 2D, 3D, and 4D tensors are supported. Shape: {}",
-        "Error",
-        logical_shape,
-        padding);
+    uint32_t nblocks_per_core_cliff,
+    uint32_t tile_height) {
+    auto input_w = logical_shape[-4];
+    auto input_z = logical_shape[-3];
+    auto input_y = logical_shape[-2];
 
-    auto input_w = logical_shape.rank() >= 4 ? logical_shape[-4] : 1;
-    auto input_z = logical_shape.rank() >= 3 ? logical_shape[-3] : 1;
-    auto input_y = logical_shape.rank() >= 2 ? logical_shape[-2] : 1;
-
-    auto padding_w = logical_shape.rank() >= 4 ? padding[padding.get_normalized_index(-4)].back : 0;
-    auto padding_z = logical_shape.rank() >= 3 ? padding[padding.get_normalized_index(-3)].back : 0;
-    auto padding_y = logical_shape.rank() >= 2 ? padding[padding.get_normalized_index(-2)].back : 0;
+    auto padding_w = padded_shape[-4] - input_w;
+    auto padding_z = padded_shape[-3] - input_z;
+    auto padding_y = padded_shape[-2] - input_y;
 
     // total work is a full rep followed by a padding.
-    auto full_rep_blocks = FullRep(input_y, padding_y, input_z, padding_z, input_w).to_block_reps();
+    auto full_rep_blocks = FullRep(input_y, padding_y, input_z, padding_z, input_w, tile_height).to_block_reps();
     std::deque<BlockRep> total_work(full_rep_blocks.begin(), full_rep_blocks.end());
     total_work.emplace_back(0, 0, (input_y + padding_y) * (input_z + padding_z) * padding_w, 1);
 

@@ -3,22 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
 #include "compute_kernel_api/eltwise_binary.h"
 
-#include "eltwise_defines.hpp"
+#include "eltwise_utils_common.hpp"
 #include "eltwise_utils.hpp"
-
-#ifdef PREPROCESS_A_INCLUDE
-#include QUOTE(PREPROCESS_A_INCLUDE)
-#endif
-
-#ifdef PREPROCESS_B_INCLUDE
-#include QUOTE(PREPROCESS_B_INCLUDE)
-#endif
-
-#ifdef POSTPROCESS_INCLUDE
-#include QUOTE(POSTPROCESS_INCLUDE)
-#endif
 
 namespace NAMESPACE {
 void MAIN {
@@ -28,39 +17,35 @@ void MAIN {
     constexpr auto cb_pre_rhs = tt::CBIndex::c_1;
     constexpr auto cb_out = tt::CBIndex::c_2;
 
-    constexpr auto cb_post_lhs = PREPROCESS_A ? tt::CBIndex::c_3 : cb_pre_lhs;
-    constexpr auto cb_post_rhs = PREPROCESS_B ? tt::CBIndex::c_4 : cb_pre_rhs;
+    constexpr auto cb_post_lhs = HAS_ACTIVATIONS(LHS) ? tt::CBIndex::c_3 : cb_pre_lhs;
+    constexpr auto cb_post_rhs = HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_pre_rhs;
 
     binary_op_init_common(cb_post_lhs, cb_post_rhs, cb_out);
+#ifdef PACK_RELU
+    PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
+#endif
 
-#if not(PREPROCESS_A || PREPROCESS_B)
-    binary_op_specific_init<true, BINARY_OP_TYPE>();
+#if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS))
+    binary_op_specific_init<true, BINARY_OP_TYPE>(cb_post_lhs, cb_post_rhs);
 #endif
 
     constexpr uint32_t onetile = 1;
 
-#if PREPROCESS_B
-    PREPROCESS(PREPROCESS_B_INIT, PREPROCESS_B_APPLY, cb_pre_rhs, cb_post_rhs, cb_out, onetile);
-#endif
+    PREPROCESS(RHS, cb_pre_rhs, cb_post_rhs, cb_out, onetile);
     cb_wait_front(cb_post_rhs, onetile);
 
-    for(uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
-#if PREPROCESS_A
-        PREPROCESS(PREPROCESS_A_INIT, PREPROCESS_A_APPLY, cb_pre_lhs, cb_post_lhs, cb_out, onetile);
-#endif
+    for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
+        PREPROCESS(LHS, cb_pre_lhs, cb_post_lhs, cb_out, onetile);
         cb_wait_front(cb_post_lhs, onetile);
 
         cb_reserve_back(cb_out, onetile);
 
-#if PREPROCESS_A || PREPROCESS_B
-        binary_op_specific_init<true, BINARY_OP_TYPE>();
+#if HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)
+        binary_op_specific_init<true, BINARY_OP_TYPE>(cb_post_lhs, cb_post_rhs);
 #endif
         tile_regs_acquire();
         BINARY_OP(cb_post_lhs, cb_post_rhs, 0, 0, 0);
-#if POSTPROCESS
-        POSTPROCESS_INIT();
-        POSTPROCESS_APPLY(0);
-#endif
+        PROCESS_POST_ACTIVATIONS(0);
         tile_regs_commit();
 
         tile_regs_wait();

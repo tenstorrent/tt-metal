@@ -2,14 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "impl/buffers/circular_buffer_types.hpp"
+#include <tt-metalium/circular_buffer_types.hpp>
 #include "ttnn/operations/normalization/groupnorm/device/groupnorm_op.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/math.hpp"
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
 
 #include <optional>
 
@@ -141,7 +141,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
         TT_ASSERT(beta.value().get_layout() == Layout::ROW_MAJOR);
     }
 
-    bool is_height_sharding = a.get_legacy_shape()[3] == a.shard_spec().value().shape[1];
+    bool is_height_sharding = a.get_padded_shape()[3] == a.shard_spec().value().shape[1];
     // convert data format
     tt::DataFormat in_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.get_dtype());
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.get_dtype());
@@ -171,12 +171,12 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     uint32_t per_core_N = a.shard_spec().value().shape[1];
     uint32_t per_core_Mt = per_core_M / TILE_HEIGHT;
     uint32_t per_core_Nt = (per_core_N + TILE_WIDTH - 1) / TILE_WIDTH;
-    uint32_t per_core_N_bytes_padded = round_up_to_mul32(per_core_N * datum_size_bytes);
+    uint32_t per_core_N_bytes_padded = tt::round_up(per_core_N * datum_size_bytes, output.buffer()->alignment());
     bool reader_repack_output = (per_core_N % TILE_WIDTH) != 0;
     bool tilize_in = a.get_layout() == Layout::ROW_MAJOR;
     bool untilize_out = output.get_layout() == Layout::ROW_MAJOR;
     // tensor shape
-    const auto shape = a.get_legacy_shape();
+    const auto shape = a.get_padded_shape();
     uint32_t H = shape[2] * num_batches;
     uint32_t Ht = H / TILE_HEIGHT;
     uint32_t W = shape[3];
@@ -293,7 +293,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
 
     if (input_mask.has_value()) {
         TT_ASSERT(
-            input_mask.value().get_legacy_shape()[3] == block_wt * TILE_WIDTH &&
+            input_mask.value().get_padded_shape()[3] == block_wt * TILE_WIDTH &&
             "input mask must have the same width as block_wt");
     }
 
@@ -313,14 +313,15 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     ////////////////////////////////////////////////////////////////////////////
     //                      Grayskull Device Setup
     ////////////////////////////////////////////////////////////////////////////
-    Device* device = a.device();
+    IDevice* device = a.device();
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
     // block size for in0 (tensor a)
     uint32_t in0_block_tiles = per_core_Nt * per_core_Mt;
-    uint32_t in0_CB_size = in0_block_tiles * in_single_tile_size;
+    uint32_t in0_CB_size = a.buffer()->aligned_size_per_bank();  // use buffer size to handle both RM and Tile
+    uint32_t in_CB_size = in0_block_tiles * in_single_tile_size;
     // in2 - scaler
     uint32_t in2_CB_size = single_tile_size;
     // in3 - eps
@@ -338,7 +339,6 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     uint32_t repack_CB_size = per_core_Nt * in_single_tile_size * 2;  // double buffer
     // itermediate buffers
     uint32_t interm_block_tiles = block_ht * block_wt;
-    uint32_t in_CB_size = in0_CB_size;
     uint32_t im_out_CB_size = out_single_tile_size * interm_block_tiles;
     uint32_t x_CB_size = interm_block_tiles * single_tile_size;
     uint32_t xmm_CB_size = interm_block_tiles * single_tile_size;
@@ -548,7 +548,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
         (std::uint32_t)block_wt};
 
     if (gamma.has_value() and gamma.value().get_layout() == Layout::ROW_MAJOR) {
-        auto gamma_stick_size = gamma.value().get_legacy_shape()[3] * gamma.value().element_size();
+        auto gamma_stick_size = gamma.value().get_padded_shape()[3] * gamma.value().element_size();
         bool gamma_stick_size_is_power_of_two = is_power_of_two_at_least_32(gamma_stick_size);
         writer_mcast_sender_compile_time_args.push_back((std::uint32_t)gamma_stick_size_is_power_of_two);
         if (gamma_stick_size_is_power_of_two) {
@@ -559,7 +559,7 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
             writer_mcast_sender_compile_time_args.push_back(gamma_stick_size);
         }
     } else if (beta.has_value() and beta.value().get_layout() == Layout::ROW_MAJOR) {
-        auto beta_stick_size = beta.value().get_legacy_shape()[3] * beta.value().element_size();
+        auto beta_stick_size = beta.value().get_padded_shape()[3] * beta.value().element_size();
         bool beta_stick_size_is_power_of_two = is_power_of_two_at_least_32(beta_stick_size);
         writer_mcast_sender_compile_time_args.push_back((std::uint32_t)beta_stick_size_is_power_of_two);
         if (beta_stick_size_is_power_of_two) {

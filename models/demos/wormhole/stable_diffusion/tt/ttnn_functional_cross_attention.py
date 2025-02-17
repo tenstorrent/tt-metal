@@ -499,7 +499,6 @@ class cross_attention:
             output_shard_grid,
             [height_per_core, key_len],
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
         )
         output_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -737,7 +736,6 @@ class cross_attention:
                 output_shard_grid,
                 [self.seq_len, self.q_len // grid_size[0]],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             )
             output_mem_config = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.BLOCK_SHARDED,
@@ -754,7 +752,6 @@ class cross_attention:
                 output_shard_grid,
                 [96, self.kv_len // grid_size[0]],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             )
             output_mem_config = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.BLOCK_SHARDED,
@@ -790,7 +787,7 @@ class cross_attention:
             memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
         )
 
-        if hidden_states.shape.with_tile_padding()[-1] != hidden_states.shape[-1]:
+        if hidden_states.padded_shape[-1] != hidden_states.shape[-1]:
             assert False
             hidden_states = hidden_states[:, :, : hidden_states.shape[-1]]
 

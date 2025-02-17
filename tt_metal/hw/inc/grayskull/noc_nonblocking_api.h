@@ -7,7 +7,7 @@
 #include <stdint.h>
 
 #include "noc_parameters.h"
-#include "dev_msgs.h"
+#include <dev_msgs.h>
 #include "noc_overlay_parameters.h"
 
 // Helper functions to convert NoC coordinates to NoC-0 coordinates, used in metal as "physical" coordinates.
@@ -304,11 +304,18 @@ inline __attribute__((always_inline)) void dynamic_noc_init() {
 
 // set noc local memory state for a single kernel from the global state
 inline __attribute__((always_inline)) void noc_local_state_init(int noc) {
-    noc_reads_num_issued[noc] = NOC_STATUS_READ_REG(noc, NIU_MST_RD_RESP_RECEIVED);
-    noc_nonposted_writes_num_issued[noc] = NOC_STATUS_READ_REG(noc, NIU_MST_NONPOSTED_WR_REQ_SENT);
-    noc_nonposted_writes_acked[noc] = NOC_STATUS_READ_REG(noc, NIU_MST_WR_ACK_RECEIVED);
-    noc_nonposted_atomics_acked[noc] = NOC_STATUS_READ_REG(noc, NIU_MST_ATOMIC_RESP_RECEIVED);
-    noc_posted_writes_num_issued[noc] = NOC_STATUS_READ_REG(noc, NIU_MST_POSTED_WR_REQ_SENT);
+    // Hide latency of NOC reg reads by reading first, writing second
+    uint32_t reads_num_issued = NOC_STATUS_READ_REG(noc, NIU_MST_RD_RESP_RECEIVED);
+    uint32_t nonposted_writes_num_issued = NOC_STATUS_READ_REG(noc, NIU_MST_NONPOSTED_WR_REQ_SENT);
+    uint32_t nonposted_writes_acked = NOC_STATUS_READ_REG(noc, NIU_MST_WR_ACK_RECEIVED);
+    uint32_t nonposted_atomics_acked = NOC_STATUS_READ_REG(noc, NIU_MST_ATOMIC_RESP_RECEIVED);
+    uint32_t posted_writes_num_issued = NOC_STATUS_READ_REG(noc, NIU_MST_POSTED_WR_REQ_SENT);
+
+    noc_reads_num_issued[noc] = reads_num_issued;
+    noc_nonposted_writes_num_issued[noc] = nonposted_writes_num_issued;
+    noc_nonposted_writes_acked[noc] = nonposted_writes_acked;
+    noc_nonposted_atomics_acked[noc] = nonposted_atomics_acked;
+    noc_posted_writes_num_issued[noc] = posted_writes_num_issued;
 }
 
 inline __attribute__((always_inline)) void dynamic_noc_local_state_init() {
@@ -320,11 +327,18 @@ inline __attribute__((always_inline)) void dynamic_noc_local_state_init() {
 
 inline __attribute__((always_inline)) void ncrisc_noc_counters_init() {
     for (int noc = 0; noc < NUM_NOCS; noc++) {
-        noc_reads_num_issued[noc] = NOC_STATUS_READ_REG(noc, NIU_MST_RD_RESP_RECEIVED);
-        noc_nonposted_writes_num_issued[noc] = NOC_STATUS_READ_REG(noc, NIU_MST_NONPOSTED_WR_REQ_SENT);
-        noc_nonposted_writes_acked[noc] = NOC_STATUS_READ_REG(noc, NIU_MST_WR_ACK_RECEIVED);
-        noc_nonposted_atomics_acked[noc] = NOC_STATUS_READ_REG(noc, NIU_MST_ATOMIC_RESP_RECEIVED);
-        noc_posted_writes_num_issued[noc] = NOC_STATUS_READ_REG(noc, NIU_MST_POSTED_WR_REQ_SENT);
+        // Hide latency of NOC reg reads by reading first, writing second
+        uint32_t reads_num_issued = NOC_STATUS_READ_REG(noc, NIU_MST_RD_RESP_RECEIVED);
+        uint32_t nonposted_writes_num_issued = NOC_STATUS_READ_REG(noc, NIU_MST_NONPOSTED_WR_REQ_SENT);
+        uint32_t nonposted_writes_acked = NOC_STATUS_READ_REG(noc, NIU_MST_WR_ACK_RECEIVED);
+        uint32_t nonposted_atomics_acked = NOC_STATUS_READ_REG(noc, NIU_MST_ATOMIC_RESP_RECEIVED);
+        uint32_t posted_writes_num_issued = NOC_STATUS_READ_REG(noc, NIU_MST_POSTED_WR_REQ_SENT);
+
+        noc_reads_num_issued[noc] = reads_num_issued;
+        noc_nonposted_writes_num_issued[noc] = nonposted_writes_num_issued;
+        noc_nonposted_writes_acked[noc] = nonposted_writes_acked;
+        noc_nonposted_atomics_acked[noc] = nonposted_atomics_acked;
+        noc_posted_writes_num_issued[noc] = posted_writes_num_issued;
     }
 }
 

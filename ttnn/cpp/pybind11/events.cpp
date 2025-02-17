@@ -4,8 +4,11 @@
 
 #include "events.hpp"
 
-#include "tt_metal/impl/event/event.hpp"
+#include <tt-metalium/event.hpp>
 #include "pybind11/pybind11.h"
+#include <pybind11/stl.h>
+
+#include "ttnn/common/queue_id.hpp"
 
 using namespace tt::tt_metal;
 
@@ -20,7 +23,7 @@ void py_module(py::module& module) {
     // Single Device APIs
     module.def(
         "create_event",
-        py::overload_cast<Device*>(&create_event),
+        py::overload_cast<IDevice*>(&create_event),
         py::arg("device"),
         R"doc(
             Create an Event Object on a single device.
@@ -31,7 +34,7 @@ void py_module(py::module& module) {
 
     module.def(
         "record_event",
-        py::overload_cast<uint8_t, const std::shared_ptr<Event>&, const std::vector<SubDeviceId>&>(&record_event),
+        py::overload_cast<QueueId, const std::shared_ptr<Event>&, const std::vector<SubDeviceId>&>(&record_event),
         py::arg("cq_id"),
         py::arg("event"),
         py::arg("sub_device_ids") = std::vector<SubDeviceId>(),
@@ -41,12 +44,12 @@ void py_module(py::module& module) {
             Args:
                 cq_id (int): The Command Queue on which event completion will be recorded.
                 event (event): The event used to record completion of preceeding commands.
-                sub_device_ids (List[ttnn.SubDeviceId], optional): The sub-device IDs to record completion for. Defaults to all sub-devices.
+                sub_device_ids (List[ttnn.SubDeviceId], optional): The sub-device IDs to record completion for. Defaults to sub-devices set by set_sub_device_stall_group.
             )doc");
 
     module.def(
         "wait_for_event",
-        py::overload_cast<uint8_t, const std::shared_ptr<Event>&>(&wait_for_event),
+        py::overload_cast<QueueId, const std::shared_ptr<Event>&>(&wait_for_event),
         py::arg("cq_id"),
         py::arg("event"),
         R"doc(
@@ -71,7 +74,7 @@ void py_module(py::module& module) {
 
     module.def(
         "record_event",
-        py::overload_cast<uint8_t, const MultiDeviceEvent&, const std::vector<SubDeviceId>&>(&record_event),
+        py::overload_cast<QueueId, const MultiDeviceEvent&, const std::vector<SubDeviceId>&>(&record_event),
         py::arg("cq_id"),
         py::arg("multi_device_event"),
         py::arg("sub_device_ids") = std::vector<SubDeviceId>(),
@@ -85,7 +88,7 @@ void py_module(py::module& module) {
 
     module.def(
         "wait_for_event",
-        py::overload_cast<uint8_t, const MultiDeviceEvent&>(&wait_for_event),
+        py::overload_cast<QueueId, const MultiDeviceEvent&>(&wait_for_event),
         py::arg("cq_id"),
         py::arg("multi_device_event"),
         R"doc(
@@ -94,7 +97,7 @@ void py_module(py::module& module) {
             Args:
                 cq_id (int): The Command Queue on which event completion will be recorded.
                 event (event): The event used to record completion of preceeding commands.
-                sub_device_ids (List[ttnn.SubDeviceId], optional): The sub-device IDs to record completion for. Defaults to all sub-devices.
+                sub_device_ids (List[ttnn.SubDeviceId], optional): The sub-device IDs to record completion for. Defaults to sub-devices set by set_sub_device_stall_group.
             )doc");
 }
 

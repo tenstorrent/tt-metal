@@ -18,7 +18,7 @@ Where, `TT_METAL_COMMIT_SHA_OR_TAG` and `TT_VLLM_COMMIT_SHA_OR_TAG` are found in
 Example:
 
 ```bash
-./models/demos/t3000/llama3_70b/setup_llama.sh llama-3.1-70b-instruct v0.53.0-rc36 384f1790c3be16e1d1b10de07252be2e66d00935
+./models/demos/t3000/llama3_70b/setup_llama.sh llama-3.1-70b-instruct v0.54.0-rc2 953161188c50f10da95a88ab305e23977ebd3750
 ```
 
 Follow prompts as they come up in CLI to select appropriate weights for Llama 3.1 70B Instruct.

@@ -13,7 +13,7 @@ namespace data_movement {
 struct SliceOperation {
     template <typename T>
     static ttnn::Tensor invoke(
-        uint8_t queue_id,
+        QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         tt::stl::Span<const T> begins,
         tt::stl::Span<const T> ends,
@@ -32,7 +32,7 @@ struct SliceOperation {
 
     template <typename T>
     static ttnn::Tensor invoke(
-        uint8_t queue_id,
+        QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         const ttnn::SmallVector<T>& begins,
         const ttnn::SmallVector<T>& ends,
@@ -68,7 +68,7 @@ struct SliceOperation {
 
     template <typename T, std::size_t N>
     static ttnn::Tensor invoke(
-        uint8_t queue_id,
+        QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         const std::array<T, N>& output_tensor_start,
         const std::array<T, N>& output_tensor_end,

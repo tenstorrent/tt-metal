@@ -8,7 +8,7 @@
 namespace ttnn::operations::data_movement {
 
 ttnn::Tensor UnsqueezeOperation::invoke(const ttnn::Tensor& input_tensor, const int dim) {
-    const auto tensor_shape = input_tensor.get_shape();
+    const auto& tensor_shape = input_tensor.get_logical_shape();
     const uint32_t rank = tensor_shape.rank();
     const int32_t max_dim = (int)(rank);
     const int32_t min_dim = -(max_dim)-1;
@@ -42,7 +42,7 @@ ttnn::Tensor UnsqueezeOperation::invoke(const ttnn::Tensor& input_tensor, const 
         output_shape_vector.push_back(1);
     }
 
-    return ttnn::reshape(input_tensor, output_shape_vector);
+    return ttnn::reshape(input_tensor, ttnn::Shape(std::move(output_shape_vector)));
 }
 
 }  // namespace ttnn::operations::data_movement

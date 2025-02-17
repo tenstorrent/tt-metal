@@ -13,6 +13,64 @@ from models.utility_functions import is_grayskull, skip_for_blackhole
 
 @pytest.mark.parametrize(
     "dtype",
+    (ttnn.bfloat16,),
+    ids=[
+        "bfloat16",
+    ],
+)
+@pytest.mark.parametrize(
+    "nb, nc, nh, nw",
+    (
+        # llama shapes
+        (1, 1, 32, 128 * 1024),
+    ),
+)
+def test_run_untilize_subcoregrid_test(dtype, nb, nc, nh, nw, device):
+    if is_grayskull():
+        pytest.skip("Skipping tests on Grayskull")
+    device.enable_async(True)
+    shape = [nb, nc, nh, nw]
+
+    torch.set_printoptions(precision=3, sci_mode=False, linewidth=3000, threshold=10000, edgeitems=128)
+
+    torch.manual_seed(10)
+
+    inp = torch.rand(*shape).bfloat16()
+
+    a = ttnn.Tensor(
+        inp.flatten().tolist(),
+        shape,
+        dtype,
+        ttnn.TILE_LAYOUT,
+        device,
+    )
+
+    out_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
+
+    b1 = ttnn.untilize(
+        a,
+        memory_config=out_mem_config,
+        use_multicore=True,
+        sub_core_grids=ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 6)),
+            }
+        ),
+    )
+    c1 = b1.cpu().to_torch()
+
+    untilized_inp = untilize(inp)
+
+    if dtype == ttnn.float32:
+        passing1, output = comp_pcc(untilized_inp, c1, 0.999999)
+        logger.info(output)
+    else:
+        passing1 = torch.equal(untilized_inp, c1)
+    assert passing1
+
+
+@pytest.mark.parametrize(
+    "dtype",
     (ttnn.bfloat16, ttnn.float32),
     ids=["bfloat16", "float"],
 )
@@ -40,7 +98,6 @@ from models.utility_functions import is_grayskull, skip_for_blackhole
 def test_run_untilize_test(dtype, nb, nc, nh, nw, device):
     if is_grayskull() and dtype == ttnn.float32:
         pytest.skip("Skipping float32 tests on Grayskull")
-
     shape = [nb, nc, 32 * nh, 32 * nw]
 
     torch.set_printoptions(precision=3, sci_mode=False, linewidth=3000, threshold=10000, edgeitems=128)
@@ -72,7 +129,6 @@ def test_run_untilize_test(dtype, nb, nc, nh, nw, device):
         logger.info(output)
     else:
         passing1 = torch.equal(untilized_inp, c1)
-
     assert passing1
 
 
@@ -119,3 +175,9 @@ def test_run_untilize_5d(dtype, shape, device):
         passing1 = torch.equal(inp, our_untilized)
 
     assert passing1
+
+
+def test_regression_untilize_1d(device):
+    input = ttnn.ones([1280], ttnn.bfloat16, ttnn.TILE_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG)
+    out_untilized = ttnn.to_layout(input, layout=ttnn.ROW_MAJOR_LAYOUT)
+    assert out_untilized is not None

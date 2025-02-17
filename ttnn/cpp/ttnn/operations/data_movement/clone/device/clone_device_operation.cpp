@@ -36,20 +36,18 @@ void CloneOperation::validate_on_program_cache_hit(
     validate_inputs(operation_attributes, tensor_args);
 };
 
-CloneOperation::shape_return_value_t CloneOperation::compute_output_shapes(
+CloneOperation::spec_return_value_t CloneOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    return tensor_args.input.get_logical_shape();
+    const auto& input = tensor_args.input;
+    return TensorSpec(
+        input.get_logical_shape(),
+        TensorLayout(operation_attributes.dtype, PageConfig(input.get_layout()), operation_attributes.memory_config));
 };
 
 CloneOperation::tensor_return_value_t CloneOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& input = tensor_args.input;
-    return create_device_tensor(
-        compute_output_shapes(operation_attributes, tensor_args),
-        operation_attributes.dtype,
-        input.get_layout(),
-        input.device(),
-        operation_attributes.memory_config);
+    auto spec = compute_output_specs(operation_attributes, tensor_args);
+    return create_device_tensor(spec, tensor_args.input.device());
 }
 
 std::tuple<CloneOperation::operation_attributes_t, CloneOperation::tensor_args_t> CloneOperation::invoke(

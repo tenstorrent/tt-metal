@@ -21,6 +21,7 @@ ALWI void mask_tile_init() {
     MATH((llk_math_eltwise_unary_sfpu_mask_init<true>()));  // TODO(AP): move out init
 }
 
+// clang-format off
 /**
  * Performs element-wise computation of mask on each element of a tile
  * in data and mask DST register. *mask_tile* will mask each element with 0,
@@ -35,15 +36,13 @@ ALWI void mask_tile_init() {
  *
  * Return value: None
  *
- * | Argument       | Description                                                                | Type     | Valid
- * Range                                           | Required |
- * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | dst_data_index | The index of the tile in DST REG for the data and result                   | uint32_t | Must be
- * less than the acquired size of DST REG        | True     | | dst_mask_index | The index of the tile in DST REG for
- * the mask                              | uint32_t | Must be less than the acquired size of DST REG        | True     |
- * | data_format    | The format of the data and mask (supports Float16, Float16_b, and Int32)   | DataFormat | Must be
- * a valid data format                         | False    |
+ * | Argument       | Description                                                                | Type       | Valid Range                                           | Required |
+ * |----------------|----------------------------------------------------------------------------|------------|-------------------------------------------------------|----------|
+ * | dst_data_index | The index of the tile in DST REG for the data and result                   | uint32_t   | Must be less than the acquired size of DST REG        | True     | 
+ * | dst_mask_index | The index of the tile in DST REG for the mask                              | uint32_t   | Must be less than the acquired size of DST REG        | True     |
+ * | data_format    | The format of the data and mask (supports Float16, Float16_b, and Int32)   | DataFormat | Must be a valid data format                           | False    |
  */
+ // clang-format on
 ALWI void mask_tile(uint32_t idst_data, uint32_t idst2_mask, DataFormat data_format = DataFormat::Float16_b) {
     MATH((llk_math_eltwise_unary_sfpu_mask<true>(idst_data, data_format)));
 }

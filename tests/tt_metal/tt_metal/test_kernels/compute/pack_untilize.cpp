@@ -30,6 +30,6 @@ void MAIN {
         cb_pop_front(tt::CBIndex::c_0, per_core_block_tile_cnt);
     }
 
-    pack_untilize_uninit();
+    pack_untilize_uninit(tt::CBIndex::c_16);
 }
 }  // namespace NAMESPACE

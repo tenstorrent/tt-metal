@@ -4,8 +4,8 @@
 
 #pragma once
 #include <cstdint>
-#include "host_api.hpp"
-#include "impl/kernels/kernel.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/kernel.hpp>
 
 struct TestBufferConfig {
     uint32_t num_pages;
@@ -24,7 +24,7 @@ inline std::vector<uint32_t> generate_arange_vector(uint32_t size_bytes, uint32_
 }
 
 inline std::pair<std::shared_ptr<tt::tt_metal::Buffer>, std::vector<uint32_t>> EnqueueWriteBuffer_prior_to_wrap(
-    tt::tt_metal::Device* device, tt::tt_metal::CommandQueue& cq, const TestBufferConfig& config) {
+    tt::tt_metal::IDevice* device, tt::tt_metal::CommandQueue& cq, const TestBufferConfig& config) {
     // This function just enqueues a buffer (which should be large in the config)
     // write as a precursor to testing the wrap mechanism
     size_t buf_size = config.num_pages * config.page_size;
@@ -37,7 +37,7 @@ inline std::pair<std::shared_ptr<tt::tt_metal::Buffer>, std::vector<uint32_t>> E
     return std::make_pair(std::move(buffer), src);
 }
 
-inline bool does_device_have_active_eth_cores(const Device* device) {
+inline bool does_device_have_active_eth_cores(const IDevice* device) {
     return !(device->get_active_ethernet_cores(true).empty());
 }
 

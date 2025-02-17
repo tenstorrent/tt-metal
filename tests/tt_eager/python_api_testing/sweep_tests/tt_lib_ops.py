@@ -60,7 +60,7 @@ def linear(
     if bias is not None:
         tt_bias = setup_tt_tensor(bias, device, layout[2], input_mem_config[2], dtype[2])
 
-    _, __, out_features, in_features = tt_weight.shape.with_tile_padding()
+    _, __, out_features, in_features = tt_weight.padded_shape
     tt_linear = tt_Linear(in_features, out_features, tt_weight, tt_bias)
 
     t1 = tt_linear(t0)
@@ -1256,6 +1256,7 @@ def prod(
     *args,
     all_dimensions,
     dim,
+    keepdim,
     device,
     dtype,
     layout,
@@ -1264,7 +1265,7 @@ def prod(
     **kwargs,
 ):
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
-    t1 = ttnn.prod(t0, all_dimensions, dim, memory_config=output_mem_config)
+    t1 = ttnn.prod(t0, all_dimensions, dim, keepdim=keepdim, memory_config=output_mem_config)
     output_tensor = ttnn.from_device(t1)
     output_tensor = ttnn.to_layout(output_tensor, ttnn.ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.to_torch(output_tensor)

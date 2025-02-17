@@ -5,7 +5,7 @@
 #include <stdint.h>
 #include <cstring>
 #include "dataflow_api.h"
-#include "ttnn/cpp/ttnn/operations/data_movement/common/kernels/debug.hpp"
+#include "tt_metal/hw/inc/debug/dprint_pages.h"
 
 #define u8_l1_ptr volatile tt_l1_ptr uint8_t*
 #define u8_vol_ptr volatile uint8_t*

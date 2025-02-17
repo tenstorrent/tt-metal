@@ -45,6 +45,8 @@ run_perf_models_other() {
 
     env pytest -n auto models/demos/squeezebert/tests/test_performance.py -m $test_marker
 
+    env pytest -n auto models/demos/roberta/tests/test_performance.py -m $test_marker
+
     ## Merge all the generated reports
     env python3 models/perf/merge_perf_results.py
 }
@@ -74,7 +76,7 @@ run_perf_models_cnn_javelin() {
     local test_marker=$2
 
     # Run tests
-    env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/experimental/functional_unet/tests/test_unet_perf.py -m $test_marker
+    env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/experimental/functional_unet/tests -m $test_marker
     env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/wormhole/stable_diffusion/tests -m $test_marker --timeout=480
 
     ## Merge all the generated reports
@@ -98,6 +100,8 @@ run_device_perf_models() {
     env pytest models/demos/mnist/tests -m $test_marker
 
     env pytest models/demos/squeezebert/tests -m $test_marker
+
+    env pytest models/demos/roberta/tests/ -m $test_marker
 
     if [ "$tt_arch" == "grayskull" ]; then
         #TODO(MO): Until #6560 is fixed, GS device profiler test are grouped with

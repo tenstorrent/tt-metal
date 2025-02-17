@@ -20,7 +20,7 @@ set to N at compile time. xtensor_fixed<T, xshape<I, J, K> : tensor whose shape 
 
 namespace ttml::core {
 template <class T>
-xt::xarray<T> span_to_xtensor_view(std::span<T> vec, const ttnn::SimpleShape& shape) {
+xt::xarray<T> span_to_xtensor_view(std::span<T> vec, const ttnn::Shape& shape) {
     return ttnn::experimental::xtensor::span_to_xtensor_view(vec, shape);
 }
 template <class T>

@@ -5,16 +5,18 @@
 #include "ttnn/operations/data_movement/squeeze/squeeze.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 
-#include "ttnn/cpp/ttnn/tensor/types.hpp"
-#include "ttnn/cpp/ttnn/tensor/tensor.hpp"
+#include "cpp/ttnn/tensor/types.hpp"
+#include "cpp/ttnn/tensor/tensor.hpp"
 
 namespace ttnn {
 namespace operations {
 namespace data_movement {
-ttnn::Tensor squeeze_to_le_4D(const ttnn::Tensor& tensor);
+
+ttnn::Shape squeeze_shape_to_4D(ttnn::Shape output_shape);
+ttnn::Tensor squeeze_from_ND_to_4D(const ttnn::Tensor& tensor);
 
 ttnn::Tensor pad_to_tile_vol(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& tensor,
     const float value,
     const bool use_multicore,
@@ -148,9 +150,8 @@ private:
     OpType operation_;
 };
 
-ttnn::Tensor squeeze_to_le_4D(const ttnn::Tensor& tensor);
 ttnn::Tensor pad_to_tile_vol(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& tensor,
     const float value,
     const bool use_multicore,
@@ -164,13 +165,12 @@ enum class ShardStrategy { BLOCK, HEIGHT, WIDTH };
 // provided, the shard shape will be inferred from the tensor shape and the
 // shard strategy.
 ttnn::MemoryConfig create_sharded_memory_config(
-    const ttnn::SimpleShape& logical_shape,
+    const ttnn::Shape& logical_shape,
     const tt::tt_metal::CoreRangeSet& core_grid,
     const ShardStrategy& strategy,
     const tt::tt_metal::ShardOrientation& orientation,
     std::optional<std::array<uint32_t, 2>> shard_shape = std::nullopt,
-    const tt::tt_metal::Layout& layout = tt::tt_metal::Layout::ROW_MAJOR,
-    bool halo = false);
+    const tt::tt_metal::Layout& layout = tt::tt_metal::Layout::ROW_MAJOR);
 
 std::pair<uint32_t, std::array<uint32_t, 2>> tensor_coord_to_height_sharded_coord(
     const std::span<const uint32_t>& tensor_shape,

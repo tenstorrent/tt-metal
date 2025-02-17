@@ -6,12 +6,12 @@
 
 #include <optional>
 
-#include "impl/buffers/buffer.hpp"
+#include <tt-metalium/buffer.hpp>
 #include "sdpa_decode_op.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/common/logger.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "ttnn/operation.hpp"
 
 using namespace tt;
@@ -96,7 +96,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
 
     Program program = CreateProgram();
 
-    Device* device = input_tensor_q.device();
+    IDevice* device = input_tensor_q.device();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
@@ -363,8 +363,8 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         page_table_stick_size = page_table_buffer->aligned_page_size();
 
         // cb page_table
-        auto c_in9_config = CircularBufferConfig(page_table_tile_size, {{CBIndex::c_9, page_table_df}})
-                                .set_page_size(CBIndex::c_9, page_table_tile_size);
+        auto c_in9_config = CircularBufferConfig(page_table_stick_size, {{CBIndex::c_9, page_table_df}})
+                                .set_page_size(CBIndex::c_9, page_table_stick_size);
         auto cb_in9_id = CreateCircularBuffer(program, core_grid, c_in9_config);
     }
 
@@ -598,6 +598,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         PNHt,
         St,
         DHt,
+        Sk_chunk_t,
         packed_identity_scalar,
         scale_union.u,
         num_cores_per_batch,

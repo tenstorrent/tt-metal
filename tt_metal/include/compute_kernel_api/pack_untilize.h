@@ -56,7 +56,7 @@ ALWI void pack_untilize_block(uint32_t icb, uint32_t block_rt_dim, uint32_t ocb)
 /**
  * Uninitialize untilize operation, to allow initializing another operation.
  */
-ALWI void pack_untilize_uninit(uint32_t ocb = 16) {
+ALWI void pack_untilize_uninit(uint32_t ocb) {
     PACK((llk_pack_init(ocb)));
     PACK((llk_init_packer_dest_offset_registers<false>()));
 
@@ -76,6 +76,11 @@ template <
     bool narrow_row = false,
     std::uint32_t row_num_datums = TILE_C_DIM>
 ALWI void pack_untilize_dst_init_short(uint32_t ocb, uint32_t face_r_dim = 16, uint32_t num_faces = 4) {
+#ifndef ARCH_GRAYSKULL
+    // A workaround for tt-metal#17132. This is not needed for Grayskull,
+    // as it breaks the packer. Should be addressed more systematically.
+    PACK((llk_pack_untilize_hw_configure_disaggregated<false, DST_ACCUM_MODE>(ocb, face_r_dim, num_faces)));
+#endif
     PACK((llk_pack_untilize_init<block_ct_dim, full_ct_dim, diagonal, narrow_row, row_num_datums>(
         ocb, face_r_dim, num_faces)));
     PACK((llk_init_packer_dest_offset_registers<true, diagonal>()));

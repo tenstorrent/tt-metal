@@ -3,22 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
 #include "compute_kernel_api/eltwise_binary.h"
 
-#include "eltwise_defines.hpp"
+#include "eltwise_utils_common.hpp"
 #include "eltwise_utils.hpp"
-
-#ifdef PREPROCESS_A_INCLUDE
-#include QUOTE(PREPROCESS_A_INCLUDE)
-#endif
-
-#ifdef PREPROCESS_B_INCLUDE
-#include QUOTE(PREPROCESS_B_INCLUDE)
-#endif
-
-#ifdef POSTPROCESS_INCLUDE
-#include QUOTE(POSTPROCESS_INCLUDE)
-#endif
 
 namespace NAMESPACE {
 
@@ -34,40 +23,32 @@ ALWI void process_tile(
     constexpr uint32_t onetile = 1;
 
 #if BCAST_INPUT
-    auto cb_bcast = cb_post_rhs;
-    auto cb_other = cb_post_lhs;
+#define CB_PRE_BCAST cb_pre_rhs
+#define CB_POST_BCAST cb_post_rhs
+#define CB_PRE_OTHER cb_pre_lhs
+#define CB_POST_OTHER cb_post_lhs
 #else
-    auto cb_bcast = cb_post_lhs;
-    auto cb_other = cb_post_rhs;
+#define CB_PRE_BCAST cb_pre_lhs
+#define CB_POST_BCAST cb_post_lhs
+#define CB_PRE_OTHER cb_pre_rhs
+#define CB_POST_OTHER cb_post_rhs
 #endif
 
-#if PREPROCESS_A && (BCAST_INPUT == 0)
-    PREPROCESS(PREPROCESS_A_INIT, PREPROCESS_A_APPLY, cb_pre_lhs, cb_post_lhs, cb_out, onetile);
-#elif PREPROCESS_B && (BCAST_INPUT == 1)
-    PREPROCESS(PREPROCESS_B_INIT, PREPROCESS_B_APPLY, cb_pre_rhs, cb_post_rhs, cb_out, onetile);
-#endif
-
-    cb_wait_front(cb_bcast, onetile);
+    PREPROCESS(BCAST_OP, CB_PRE_BCAST, CB_POST_BCAST, cb_out, onetile);
+    cb_wait_front(CB_POST_BCAST, onetile);
 
     for (uint32_t j = tile_start; j < freq; ++j) {
-#if PREPROCESS_A && (BCAST_INPUT == 1)
-        PREPROCESS(PREPROCESS_A_INIT, PREPROCESS_A_APPLY, cb_pre_lhs, cb_post_lhs, cb_out, onetile);
-#elif PREPROCESS_B && (BCAST_INPUT == 0)
-        PREPROCESS(PREPROCESS_B_INIT, PREPROCESS_B_APPLY, cb_pre_rhs, cb_post_rhs, cb_out, onetile);
-#endif
-        cb_wait_front(cb_other, onetile);
+        PREPROCESS(OTHER_OP, CB_PRE_OTHER, CB_POST_OTHER, cb_out, onetile);
+        cb_wait_front(CB_POST_OTHER, onetile);
 
         cb_reserve_back(cb_out, onetile);
 
-#if PREPROCESS_A || PREPROCESS_B
-        binary_op_specific_init<true, BINARY_OP_TYPE>();
+#if HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)
+        binary_op_specific_init<true, BINARY_OP_TYPE>(cb_post_lhs, cb_post_rhs);
 #endif
         tile_regs_acquire();
         BINARY_OP(cb_post_lhs, cb_post_rhs, 0, 0, 0);
-#if POSTPROCESS
-        POSTPROCESS_INIT();
-        POSTPROCESS_APPLY(0);
-#endif
+        PROCESS_POST_ACTIVATIONS(0);
         tile_regs_commit();
 
         tile_regs_wait();
@@ -75,9 +56,9 @@ ALWI void process_tile(
         tile_regs_release();
 
         cb_push_back(cb_out, onetile);
-        cb_pop_front(cb_other, onetile);
+        cb_pop_front(CB_POST_OTHER, onetile);
     }
-    cb_pop_front(cb_bcast, onetile);
+    cb_pop_front(CB_POST_BCAST, onetile);
 }
 
 void MAIN {
@@ -93,13 +74,16 @@ void MAIN {
     constexpr auto cb_pre_rhs = tt::CBIndex::c_1;
     constexpr auto cb_out = tt::CBIndex::c_2;
 
-    constexpr auto cb_post_lhs = PREPROCESS_A ? tt::CBIndex::c_3 : cb_pre_lhs;
-    constexpr auto cb_post_rhs = PREPROCESS_B ? tt::CBIndex::c_4 : cb_pre_rhs;
+    constexpr auto cb_post_lhs = HAS_ACTIVATIONS(LHS) ? tt::CBIndex::c_3 : cb_pre_lhs;
+    constexpr auto cb_post_rhs = HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_pre_rhs;
 
     binary_op_init_common(cb_post_lhs, cb_post_rhs, cb_out);
+#ifdef PACK_RELU
+    PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));
+#endif
 
-#if not(PREPROCESS_A || PREPROCESS_B)
-    binary_op_specific_init<true, BINARY_OP_TYPE>();
+#if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS))
+    binary_op_specific_init<true, BINARY_OP_TYPE>(cb_post_lhs, cb_post_rhs);
 #endif
 
     uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;

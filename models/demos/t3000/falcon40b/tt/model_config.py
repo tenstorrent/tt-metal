@@ -314,7 +314,6 @@ def get_decode_model_config(model_config_str, input_shape, num_devices):
                     shard_width_hidden_dim_per_device_across_32_cores,
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             ),
         )
         model_config["ATTN_MASK_MEMCFG"] = ttnn.MemoryConfig(
@@ -327,7 +326,6 @@ def get_decode_model_config(model_config_str, input_shape, num_devices):
                     1,  # Dynamic
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             ),
         )
         model_config["PARALLEL_ATTN_ADD_OUTPUT_MEMCFG"] = ttnn.MemoryConfig(
@@ -340,7 +338,6 @@ def get_decode_model_config(model_config_str, input_shape, num_devices):
                     shard_width_hidden_dim_per_device_across_32_cores,
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             ),
         )
         model_config["DROPOUT_ADD_OUTPUT_MEMCFG"] = ttnn.MemoryConfig(
@@ -353,7 +350,6 @@ def get_decode_model_config(model_config_str, input_shape, num_devices):
                     shard_width_hidden_dim_per_device_across_32_cores,
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             ),
         )
 
@@ -368,7 +364,6 @@ def get_decode_model_config(model_config_str, input_shape, num_devices):
                     shard_width_hidden_dim_across_32_cores,
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             ),
         )
         model_config["LN_ATTN_INPUT_MEMCFG"] = ttnn.MemoryConfig(
@@ -381,7 +376,6 @@ def get_decode_model_config(model_config_str, input_shape, num_devices):
                     shard_width_hidden_dim_across_32_cores,
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             ),
         )
         model_config["LN_ATTN_OUTPUT_MEMCFG"] = ttnn.MemoryConfig(
@@ -394,7 +388,6 @@ def get_decode_model_config(model_config_str, input_shape, num_devices):
                     shard_width_hidden_dim_across_32_cores,
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             ),
         )
         model_config["LN_ATTN_PROGCFG"] = ttnn.LayerNormShardedMultiCoreProgramConfig(
@@ -421,7 +414,6 @@ def get_decode_model_config(model_config_str, input_shape, num_devices):
                     shard_width_hidden_dim_across_32_cores,
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             ),
         )
 
@@ -436,7 +428,6 @@ def get_decode_model_config(model_config_str, input_shape, num_devices):
                     shard_width_hidden_dim_across_8_cores,
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             ),
         )
         model_config["QKV_MM_PROGCFG"] = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
@@ -460,7 +451,6 @@ def get_decode_model_config(model_config_str, input_shape, num_devices):
                     shard_width_qkv_heads_per_device_across_8_cores,
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             ),
         )
         model_config["CREATE_QKV_HEADS_INPUT_MEMCFG"] = ttnn.MemoryConfig(
@@ -473,7 +463,6 @@ def get_decode_model_config(model_config_str, input_shape, num_devices):
                     total_width_per_group_of_qkv_heads,  # Must always be minimum a full group
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             ),
         )
         model_config["CREATE_QKV_HEADS_OUTPUT_MEMCFG"] = HEIGHT_SHARDED_MEMCFG
@@ -487,7 +476,6 @@ def get_decode_model_config(model_config_str, input_shape, num_devices):
                     head_dim,
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             ),
         )
         model_config["CREATE_KV_HEADS_OUTPUT_MEMCFG"] = ttnn.MemoryConfig(
@@ -500,7 +488,6 @@ def get_decode_model_config(model_config_str, input_shape, num_devices):
                     head_dim,
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             ),
         )
         model_config["ROTARY_EMBEDDING_OUTPUT_MEMCFG"] = HEIGHT_SHARDED_MEMCFG
@@ -514,7 +501,6 @@ def get_decode_model_config(model_config_str, input_shape, num_devices):
                     head_dim,
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             ),
         )
         model_config["K_TRANSPOSED_OUTPUT_MEMCFG"] = HEIGHT_SHARDED_MEMCFG
@@ -537,7 +523,6 @@ def get_decode_model_config(model_config_str, input_shape, num_devices):
                     shard_width_hidden_dim_across_32_cores,
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             ),
         )
         model_config["SELFOUT_MM_OUTPUT_MEMCFG"] = WIDTH_SHARDED_MEMCFG
@@ -552,7 +537,6 @@ def get_decode_model_config(model_config_str, input_shape, num_devices):
                     shard_width_hidden_dim_per_device_across_32_cores,
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             ),
         )
         model_config["DENSE_4H_TO_H_MM_OUTPUT_MEMCFG"] = WIDTH_SHARDED_MEMCFG
@@ -601,7 +585,6 @@ def get_decode_model_config(model_config_str, input_shape, num_devices):
                     shard_width_hidden_dim_across_32_cores,
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             ),
         )
         model_config["LN_F_OUTPUT_MEMCFG"] = ttnn.MemoryConfig(
@@ -614,7 +597,6 @@ def get_decode_model_config(model_config_str, input_shape, num_devices):
                     shard_width_hidden_dim_across_32_cores,
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             ),
         )
         model_config["LN_F_PROGCFG"] = ttnn.LayerNormShardedMultiCoreProgramConfig(
@@ -832,7 +814,6 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
                     hidden_size // 8 // mlpn_mm_grid_size[0],
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             ),
         )
         model_config["DENSE_4H_TO_H_MM_OPTIMIZED_OUTPUT_MEMCFG"] = ttnn.MemoryConfig(
@@ -845,7 +826,6 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
                     hidden_size // mlpn_mm_grid_size[0],
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             ),
         )
     else:  # use 1d matmuls and width sharding
@@ -866,7 +846,6 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
                     hidden_size // 8 // mlp_num_cores,
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             ),
         )
         model_config["DENSE_4H_TO_H_MM_OPTIMIZED_OUTPUT_MEMCFG"] = ttnn.MemoryConfig(
@@ -879,7 +858,6 @@ def get_prefill_model_config(model_config_str, input_shape, num_devices):
                     hidden_size // mlp_num_cores,
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             ),
         )
 
@@ -929,7 +907,6 @@ def get_sharded_layernorm_specs_for_seqlen(
                 layernorm_shard_width_hidden_dim,
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
         ),
     )
 

@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/reduction/prod/device/prod_op_all.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/host_api.hpp>
 
 namespace tt {
 using namespace constants;
@@ -23,7 +23,7 @@ operation::ProgramWithCallbacks prod_single_core(const Tensor& a, const Tensor& 
     uint32_t num_tiles = a.volume() / TILE_HW;
 
     // This should allocate a DRAM buffer on the device
-    tt_metal::Device* device = a.device();
+    tt_metal::IDevice* device = a.device();
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;

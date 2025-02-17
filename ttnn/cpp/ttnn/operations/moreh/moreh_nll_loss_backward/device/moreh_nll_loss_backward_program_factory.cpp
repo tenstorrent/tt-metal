@@ -4,10 +4,10 @@
 
 #include <optional>
 
-#include "common/constants.hpp"
+#include <tt-metalium/constants.hpp>
 #include "moreh_nll_loss_backward_device_operation.hpp"
-#include "tt_metal/common/math.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 
 namespace ttnn::operations::moreh::moreh_nll_loss_backward {
@@ -24,7 +24,7 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
     // split work
 
     // input_grad: (N, C)
-    auto input_grad_shape = input_grad.get_shape().value;
+    auto input_grad_shape = input_grad.get_padded_shape();
     auto N = input_grad_shape[0];
     auto channel_size = input_grad_shape[1];
 
@@ -34,7 +34,7 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
     const bool weight_has_value = weight.has_value();
     const bool divisor_has_value = divisor.has_value();
 
-    tt::tt_metal::Device* device = target.device();
+    tt::tt_metal::IDevice* device = target.device();
     auto grid = device->compute_with_storage_grid_size();
     uint32_t core_h = grid.y;
 
@@ -195,7 +195,7 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
     // split work
 
     // input_grad: (N, C, W)
-    auto input_grad_shape = input_grad.get_shape().value;
+    auto input_grad_shape = input_grad.get_padded_shape();
     auto N = input_grad_shape[0];
     auto channel_size = input_grad_shape[1];
 
@@ -203,13 +203,13 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
     auto Ct = channel_size / tt::constants::TILE_HEIGHT;
     auto Wt = W / tt::constants::TILE_WIDTH;
 
-    auto target_shape = target.get_shape().value;
+    auto target_shape = target.get_padded_shape();
     auto num_inner_tile = target_shape[-1] / tt::constants::TILE_WIDTH;
 
     const bool weight_has_value = weight.has_value();
     const bool divisor_has_value = divisor.has_value();
 
-    tt::tt_metal::Device* device = target.device();
+    tt::tt_metal::IDevice* device = target.device();
     auto grid = device->compute_with_storage_grid_size();
     uint32_t core_h = grid.y;
 
@@ -369,7 +369,7 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
     const uint32_t ignore_index,
     const DeviceComputeKernelConfig compute_kernel_config) {
     // split work
-    auto input_grad_shape = input_grad.get_shape().value;
+    auto input_grad_shape = input_grad.get_padded_shape();
     auto N = input_grad_shape[0];
     auto channel_size = input_grad_shape[1];
 
@@ -382,7 +382,7 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
     const bool weight_has_value = weight.has_value();
     const bool divisor_has_value = divisor.has_value();
 
-    tt::tt_metal::Device* device = target.device();
+    tt::tt_metal::IDevice* device = target.device();
     auto grid = device->compute_with_storage_grid_size();
     uint32_t core_h = grid.y;
 
@@ -551,7 +551,7 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t MorehNllLossBackw
     const Tensor& input_grad = tensor_return_value;
 
     // split work
-    auto input_grad_shape = input_grad.get_shape();
+    auto input_grad_shape = input_grad.get_logical_shape();
     auto input_grad_rank = input_grad_shape.rank();
 
     if (input_grad_rank == 2) {

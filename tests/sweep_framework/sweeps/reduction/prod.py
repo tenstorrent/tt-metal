@@ -13,6 +13,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_f
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
+from tests.sweep_framework.sweep_utils.reduction_common import run_prod
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 30
@@ -30,14 +31,49 @@ parameters = {
         + gen_shapes([32, 32], [256, 256], [32, 32], 2)
         + gen_shapes([1, 1, 1, 1], [6, 12, 256, 256], [1, 1, 1, 1], 2)
         + gen_shapes([1, 1, 1], [12, 256, 256], [1, 1, 1], 2)
-        + gen_shapes([1, 1], [256, 256], [1, 1], 2),
-        "dim": [0, 1, 2, 3],
-        "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
-        "input_a_layout": [ttnn.TILE_LAYOUT],
+        + gen_shapes([1, 1], [256, 256], [1, 1], 2)
+        + gen_shapes([1], [256], [1], 8)
+        + gen_shapes([1, 1, 1, 1], [6, 12, 200, 255], [1, 1, 1, 1], 5)
+        + gen_shapes([1, 1, 1], [12, 555, 128], [1, 1, 1], 4)
+        + gen_shapes([1, 1], [32, 32], [1, 1], 32),
+        "dim": [
+            0,
+            1,
+            2,
+            3,
+            None,
+            [0, 1],
+            [0, 2],
+            [0, 3],
+            [1, 2],
+            [1, 3],
+            [2, 3],
+            [0, 1, 2],
+            [0, 1, 3],
+            [0, 1, 3],
+            [0, 2, 3],
+            [1, 2, 3],
+            [0, 1, 2, 3],
+        ],
+        "keepdim": [True, False],
+        "input_a_dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b],
+        "input_a_layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
     },
 }
+
+
+# Invalidate vector is called during the generation phase where each vector will be passed in.
+# If invalidated, the vector will still be stored but will be skipped.
+# Returns False, None if the vector is valid, and True, str with a reason for invalidation if it is invalid.
+def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
+    if test_vector["input_a_layout"] == ttnn.ROW_MAJOR_LAYOUT and not (
+        test_vector["input_a_dtype"] == ttnn.float32 or test_vector["input_a_dtype"] == ttnn.bfloat16
+    ):
+        return True, "Row major is only supported for fp32 & fp16"
+
+    return False, None
 
 
 # This is the run instructions for the test, defined by the developer.
@@ -47,6 +83,7 @@ parameters = {
 def run(
     input_shape,
     dim,
+    keepdim,
     input_a_dtype,
     input_a_layout,
     input_a_memory_config,
@@ -54,30 +91,38 @@ def run(
     *,
     device,
 ) -> list:
-    data_seed = random.randint(0, 20000000)
-    torch.manual_seed(data_seed)
-
-    torch_input_tensor_a = gen_func_with_cast_tt(
-        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
-    )(input_shape)
-
-    dim = dim % len(input_shape)
-
-    torch_output_tensor = torch.prod(torch_input_tensor_a, dim=dim, keepdim=True)
-
-    input_tensor_a = ttnn.from_torch(
-        torch_input_tensor_a,
-        dtype=input_a_dtype,
-        layout=input_a_layout,
-        device=device,
-        memory_config=input_a_memory_config,
+    return run_prod(
+        input_shape,
+        dim,
+        keepdim,
+        input_a_dtype,
+        input_a_layout,
+        input_a_memory_config,
+        output_memory_config,
+        device,
     )
 
-    start_time = start_measuring_time()
-    result = ttnn.prod(input_tensor_a, dim=dim, memory_config=output_memory_config)
-    output_tensor = ttnn.to_torch(result)
-    e2e_perf = stop_measuring_time(start_time)
 
-    pcc = check_with_pcc(torch_output_tensor, output_tensor, 0.999)
-    # print(f"input_shape {input_shape} pcc {pcc}")
-    return [pcc, e2e_perf]
+import pytest
+
+
+@pytest.mark.parametrize(
+    "input_shape, dim, keepdim",
+    [
+        # 0-D/1-D support is not available yet
+        # ([7, 32], 1, False),
+        # ([7], 0, False),
+        # ([7], 1, True),
+        ([7, 32], 0, True),
+        ([7, 32], 3, True),
+        ([5, 7, 32], 1, False),
+        ([5, 7, 32], 0, True),
+        ([5, 7, 32], 3, True),
+        ([5, 7, 32, 66], 1, True),
+        ([5, 7, 32, 66], 2, False),
+    ],
+)
+def test_reduction_prod_localrun_fail_only(device, input_shape, dim, keepdim):
+    run_prod(
+        input_shape, dim, keepdim, ttnn.float32, ttnn.TILE_LAYOUT, ttnn.L1_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG, device
+    )

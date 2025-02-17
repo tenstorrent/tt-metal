@@ -64,6 +64,34 @@ autograd::TensorPtr log_softmax(const autograd::TensorPtr& tensor, int dim) {
     return out;
 }
 
+autograd::TensorPtr log_softmax_moreh(const autograd::TensorPtr& tensor, int dim) {
+    auto log_softmax = ttnn::moreh_softmax(
+        tensor->get_value(),
+        /* axis */ dim,
+        /* output */ std::nullopt,
+        ttnn::operations::moreh::moreh_softmax::MorehSoftmaxOp::LOGSOFTMAX,
+        ttnn::operations::moreh::moreh_softmax::MorehSoftmaxOpParallelizationStrategy::NONE,
+        /* output_mem_config */ std::nullopt,
+        /* compute_kernel_config */ core::ComputeKernelConfig::softmax());
+    auto out = autograd::create_tensor(log_softmax);
+
+    autograd::GradFunction grad = [tensor, out, dim]() {
+        auto grad = ttnn::moreh_softmax_backward(
+            out->get_value(),
+            out->get_grad(),
+            /* axis */ dim,
+            /* output */ std::nullopt,
+            ttnn::operations::moreh::moreh_softmax_backward::MorehSoftmaxBackwardOp::LOGSOFTMAX,
+            ttnn::operations::moreh::moreh_softmax_backward::MorehSoftmaxBackwardOpParallelizationStrategy::NONE,
+            /* output_mem_config */ std::nullopt,
+            /* compute_kernel_config */ core::ComputeKernelConfig::precise());
+        tensor->add_grad(grad);
+    };
+    auto links = autograd::get_links(tensor);
+    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    return out;
+}
+
 autograd::TensorPtr mean(const autograd::TensorPtr& tensor) {
     auto shape = core::create_shape({1, 1, 1, 1});
     autograd::TensorPtr out = autograd::create_tensor(core::from_vector({0.F}, shape, &autograd::ctx().get_device()));
@@ -76,9 +104,15 @@ autograd::TensorPtr mean(const autograd::TensorPtr& tensor) {
         std::nullopt,
         /* device_compute_kernel_config */ core::ComputeKernelConfig::precise());
     autograd::GradFunction grad = [tensor, out]() {
-        auto resulting_shape = tensor->get_value().get_shape();
+        auto resulting_shape = tensor->get_value().get_logical_shape();
         auto res = ttnn::moreh_mean_backward(
-            out->get_grad(), std::nullopt, false, resulting_shape, std::nullopt, std::nullopt, std::nullopt);
+            out->get_grad(),
+            std::nullopt,
+            false,
+            resulting_shape,
+            std::nullopt,
+            std::nullopt,
+            core::ComputeKernelConfig::precise());
         tensor->add_grad(res);
     };
     auto links = autograd::get_links(tensor);
@@ -88,7 +122,7 @@ autograd::TensorPtr mean(const autograd::TensorPtr& tensor) {
 }
 
 autograd::TensorPtr broadcast_batch(const autograd::TensorPtr& tensor, uint32_t new_batch_dim) {
-    if (new_batch_dim == 1 || tensor->get_value().shape()[0] == new_batch_dim) {
+    if (new_batch_dim == 1 || tensor->get_value().get_logical_shape()[0] == new_batch_dim) {
         return tensor;
     }
     auto out = ttml::autograd::create_tensor();

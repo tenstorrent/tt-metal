@@ -10,14 +10,14 @@
 #include <iostream>
 #include <utility>
 
-#include "common/tt_backend_api_types.hpp"
-#include "common/utils.hpp"
+#include <tt_backend_api_types.hpp>
+#include <utils.hpp>
 #include "hostdevcommon/common_values.hpp"
-#include "jit_build/build.hpp"
-#include "jit_build/data_format.hpp"
-#include "jit_build/settings.hpp"
+#include <build.hpp>
+#include <data_format.hpp>
+#include <settings.hpp>
 
-#include "tt_metal/hw/inc/circular_buffer_constants.h"
+#include <circular_buffer_constants.h>
 
 namespace fs = std::filesystem;
 

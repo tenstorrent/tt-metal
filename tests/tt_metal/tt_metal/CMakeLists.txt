@@ -14,6 +14,7 @@ set(TT_METAL_TESTS_SRCS
     # test_eltwise_unary.cpp        <- not tested in run_tt_metal.py
     test_matmul_single_tile_bfp8b.cpp
     test_matmul_single_tile_output_in_l1.cpp
+    test_stress_noc_mcast.cpp
     test_dram_loopback_single_core.cpp
     test_datacopy_bfp8b.cpp
     test_datacopy.cpp
@@ -45,9 +46,7 @@ foreach(TEST_SRC ${TT_METAL_TESTS_SRCS})
     target_include_directories(
         ${TEST}
         PRIVATE
-            ${PROJECT_SOURCE_DIR}
-            ${PROJECT_SOURCE_DIR}/tt_metal
-            ${PROJECT_SOURCE_DIR}/tt_metal/common
+            "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
             ${PROJECT_SOURCE_DIR}/tests
             ${CMAKE_CURRENT_SOURCE_DIR}
     )
@@ -70,19 +69,29 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/llk)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/perf_microbenchmark)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/stl)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/noc)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/lightmetal)
 
 add_custom_target(
     metal_tests
     DEPENDS
         ${METAL_TEST_TARGETS}
         metal_perf_microbenchmark_tests
-        unit_tests_api
-        unit_tests_debug_tools
+        unit_tests_api_grayskull
+        unit_tests_api_wormhole_b0
+        unit_tests_api_blackhole
+        unit_tests_debug_tools_grayskull
+        unit_tests_debug_tools_wormhole_b0
+        unit_tests_debug_tools_blackhole
         unit_tests_device
-        unit_tests_dispatch
-        unit_tests_eth
+        unit_tests_dispatch_grayskull
+        unit_tests_dispatch_wormhole_b0
+        unit_tests_dispatch_blackhole
+        unit_tests_eth_grayskull
+        unit_tests_eth_wormhole_b0
+        unit_tests_eth_blackhole
         unit_tests_integration
         unit_tests_llk
         unit_tests_stl
         unit_tests_noc
+        unit_tests_lightmetal
 )

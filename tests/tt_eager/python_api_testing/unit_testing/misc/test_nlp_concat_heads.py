@@ -12,11 +12,9 @@ from models.utility_functions import is_grayskull
 import ttnn
 
 
-def run_nlp_concat_heads_test(batch, seq_len, dtype, in0_mem_config, out_mem_config, device):
+def run_nlp_concat_heads_test(batch, seq_len, num_heads, head_dim, dtype, in0_mem_config, out_mem_config, device):
     torch.manual_seed(1234)
 
-    num_heads = 71
-    head_dim = 64
     in0_shape = [batch, num_heads, seq_len, head_dim]
 
     A = torch.randn(in0_shape)
@@ -31,7 +29,7 @@ def run_nlp_concat_heads_test(batch, seq_len, dtype, in0_mem_config, out_mem_con
     logger.debug(f"in0: {in0_t.memory_config().buffer_type} and {in0_t.get_dtype()}")
     logger.debug(f"out: {out.memory_config().buffer_type} and {out.get_dtype()}")
 
-    assert list(out.shape.with_tile_padding()) == [batch, 1, seq_len, num_heads * head_dim]
+    assert list(out.padded_shape) == [batch, 1, seq_len, num_heads * head_dim]
 
     pyt_got_back_rm_out = tt2torch_tensor(out)
 
@@ -78,24 +76,30 @@ def run_nlp_concat_heads_test(batch, seq_len, dtype, in0_mem_config, out_mem_con
         "batch1_seq128",
     ],
 )
-def test_nlp_concat_heads_test(batch, seq_len, dtype, in0_mem_config, out_mem_config, request, device):
+@pytest.mark.parametrize("num_heads", (2, 8, 16), ids=["num_heads2", "num_heads8", "num_heads16"])
+@pytest.mark.parametrize("head_dim", (64, 128), ids=["head_dim64", "head_dim128"])
+def test_nlp_concat_heads_test(
+    batch, seq_len, num_heads, head_dim, dtype, in0_mem_config, out_mem_config, request, device
+):
     if is_grayskull() and dtype == ttnn.float32:
         pytest.skip("Skipping float32 tests on Grayskull")
-    run_nlp_concat_heads_test(batch, seq_len, dtype, in0_mem_config, out_mem_config, device)
+    run_nlp_concat_heads_test(batch, seq_len, num_heads, head_dim, dtype, in0_mem_config, out_mem_config, device)
 
 
 def test_nlp_concat_heads_with_program_cache(device, use_program_cache):
+    num_heads = 71
+    head_dim = 64
     dtype = ttnn.bfloat8_b
     mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
     for _ in range(2):
-        run_nlp_concat_heads_test(1, 32, dtype, mem_config, mem_config, device)
+        run_nlp_concat_heads_test(1, 32, num_heads, head_dim, dtype, mem_config, mem_config, device)
         dummy_shape = [1, 1, 32, 32]
         py_dummy_tensor = torch.randn(dummy_shape)
         tt_dummy_tensor = ttnn.Tensor(py_dummy_tensor, dtype).to(ttnn.TILE_LAYOUT).to(device, mem_config)
 
     mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
     for _ in range(2):
-        run_nlp_concat_heads_test(1, 32, dtype, mem_config, mem_config, device)
+        run_nlp_concat_heads_test(1, 32, num_heads, head_dim, dtype, mem_config, mem_config, device)
         dummy_shape = [1, 1, 32, 32]
         py_dummy_tensor = torch.randn(dummy_shape)
         tt_dummy_tensor = ttnn.Tensor(py_dummy_tensor, dtype).to(ttnn.TILE_LAYOUT).to(device, mem_config)

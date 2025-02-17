@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from typing import List, Optional
+import math
 import torch
 
 import ttnn
@@ -40,7 +40,8 @@ class TtLlamaAttention(LightweightModule):
         self.ccl_dtype = configuration.ccl_dtype
         self.num_reduce_scatter_links = configuration.num_reduce_scatter_links
         self.num_all_gather_links = configuration.num_all_gather_links
-
+        self.MAX_QKV_MM_SEQ_LEN = configuration.MAX_QKV_MM_SEQ_LEN
+        self.tile_size = configuration.tile_size
         self.num_device_groups = self.num_devices // self.n_kv_heads
         self.num_devices_per_group = self.n_kv_heads if self.TG else self.num_devices
         self.batch_size_per_device_group = (
@@ -92,17 +93,73 @@ class TtLlamaAttention(LightweightModule):
         self.ccl_topology = configuration.ccl_topology()
         self.is_multichip = configuration.is_multichip
 
-        self.layer_num = layer_num
         layer_name = configuration.get_state_dict_prefix(self.__class__.__name__, layer_num)
         if configuration.dummy_weights or (weight_cache_path is None):
             cache_name = lambda _: None
         else:
             cache_name = lambda name: weight_cache_path / (f"{layer_name}.{name}")
 
-        wq_str = f"{layer_name}.wq.weight"
-        wk_str = f"{layer_name}.wk.weight"
-        wv_str = f"{layer_name}.wv.weight"
-        wo_str = f"{layer_name}.wo.weight"
+        wq_str = f"{layer_name}.wq"
+        wk_str = f"{layer_name}.wk"
+        wv_str = f"{layer_name}.wv"
+        wo_str = f"{layer_name}.wo"
+
+        # Initialize bias tensors as None
+        self.wqkv_bias_decode = None
+        self.wqkv_bias_prefill = None
+
+        # Create combined QKV bias if present in state dict
+        if f"{wq_str}.bias" in self.state_dict:
+            qkv_bias = torch.concat(
+                [
+                    torch.concat(
+                        [
+                            torch.chunk(self.state_dict[f"{wq_str}.bias"], configuration.num_devices)[i],
+                            torch.chunk(self.state_dict[f"{wk_str}.bias"], configuration.num_devices)[i],
+                            torch.chunk(self.state_dict[f"{wv_str}.bias"], configuration.num_devices)[i],
+                        ],
+                        dim=-1,
+                    )
+                    for i in range(configuration.num_devices)
+                ],
+                dim=-1,
+            )
+            # Prefill can use broadcasting on the bias add so wants a 1d tensor
+            self.wqkv_bias_prefill = ttnn.as_tensor(
+                qkv_bias,
+                device=self.mesh_device,
+                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
+                dtype=self.dtype,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                layout=ttnn.TILE_LAYOUT,
+                cache_file_name=cache_name("wqkv_bias_prefill_sharded"),
+            )
+            # as_tensor returns (32, dim) which is incorrect, this reshape updates the padded size to the correct size
+            self.wqkv_bias_prefill = ttnn.reshape(
+                self.wqkv_bias_prefill,
+                (1, 1, 1, self.wqkv_bias_prefill.shape[-1]),
+                (1, 1, self.wqkv_bias_prefill.shape[-2], self.wqkv_bias_prefill.shape[-1]),
+            )
+
+            # Broadcasting does not seem to be supported inside execute_trace so expand to the whole batch size
+            # Create a list of bias tensors for each multiple of tile_size up to max_batch_size
+            self.wqkv_bias_decode = []
+            for batch_size in range(
+                configuration.tile_size,
+                configuration.tile_padded_batch_rows + configuration.tile_size,
+                configuration.tile_size,
+            ):
+                qkv_bias_decode = qkv_bias.unsqueeze(0).expand(batch_size, -1)
+                bias_tensor = ttnn.as_tensor(
+                    qkv_bias_decode,
+                    device=self.mesh_device,
+                    mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=-1),
+                    dtype=self.dtype,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    layout=ttnn.TILE_LAYOUT,
+                    cache_file_name=cache_name(f"wqkv_bias_decode_sharded_{batch_size}"),
+                )
+                self.wqkv_bias_decode.append(bias_tensor)
 
         # when splitting the devices, we need to make sure that the number of heads is divisible by the number of devices
         assert self.n_heads % self.num_devices_per_group == 0
@@ -118,9 +175,9 @@ class TtLlamaAttention(LightweightModule):
         qkv_list = []
         for i in range(self.num_devices_per_group):
             # Chunk weights
-            wq_selected = torch.chunk(self.state_dict[wq_str], self.num_devices_per_group, dim=0)[i]
-            wk_selected = torch.chunk(self.state_dict[wk_str], self.num_devices_per_group, dim=0)[i]
-            wv_selected = torch.chunk(self.state_dict[wv_str], self.num_devices_per_group, dim=0)[i]
+            wq_selected = torch.chunk(self.state_dict[f"{wq_str}.weight"], self.num_devices_per_group, dim=0)[i]
+            wk_selected = torch.chunk(self.state_dict[f"{wk_str}.weight"], self.num_devices_per_group, dim=0)[i]
+            wv_selected = torch.chunk(self.state_dict[f"{wv_str}.weight"], self.num_devices_per_group, dim=0)[i]
 
             # Transpose the selected chunks
             wq = torch.transpose(wq_selected, -2, -1)
@@ -146,7 +203,7 @@ class TtLlamaAttention(LightweightModule):
 
         # For ring topology we can use all gather matmul for wo
         self.use_fused_all_gather_matmul = self.model_config["USE_FUSED_ALL_GATHER_MATMUL"]
-        pt_wo = self.state_dict[wo_str].transpose(-1, -2).unsqueeze(0).unsqueeze(0)
+        pt_wo = self.state_dict[f"{wo_str}.weight"].transpose(-1, -2).unsqueeze(0).unsqueeze(0)
 
         wo_mem_config = configuration.create_dram_sharded_mem_config(
             configuration.dim // configuration.num_devices, configuration.dim
@@ -163,9 +220,9 @@ class TtLlamaAttention(LightweightModule):
                 dims=(2, 3) if (self.use_fused_all_gather_matmul or self.TG) else (3, 2),
                 mesh_shape=configuration.cluster_shape,
             ),
-            cache_file_name=cache_name("wo_width_sharded_2d")
-            if (self.use_fused_all_gather_matmul or self.TG)
-            else cache_name("wo"),
+            cache_file_name=(
+                cache_name("wo_width_sharded_2d") if (self.use_fused_all_gather_matmul or self.TG) else cache_name("wo")
+            ),
         )
         if not use_paged_kv_cache:
             # vLLM provides its own kv cache
@@ -221,9 +278,11 @@ class TtLlamaAttention(LightweightModule):
                 device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-                cache_file_name=f"{weight_cache_path}/kvcache_{k_or_v.shape}"
-                if weight_cache_path and not configuration.dummy_weights
-                else None,
+                cache_file_name=(
+                    f"{weight_cache_path}/kvcache_{k_or_v.shape}"
+                    if weight_cache_path and not configuration.dummy_weights
+                    else None
+                ),
             )
             for k_or_v in [cache_k, cache_v]
         ]
@@ -245,14 +304,23 @@ class TtLlamaAttention(LightweightModule):
         # QKV matmuls
         # Use HiFi2 for DRAM-sharded matmuls as they are otherwise flop-bound. Loses 1 bit of activation precision.
         ###
+
         xqkv_fused_sharded = ttnn.linear(
             x,
             self.wqkv,
+            # bias=self.wqkv_bias,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             program_config=self.model_config["XQKV_DECODE_PROGCFG"],
             compute_kernel_config=self.compute_kernel_config_hifi2,
             dtype=self.ccl_dtype if self.TG else ttnn.bfloat16,
         )
+        # FIXME: File bug against dram-sharded matmuls with bias
+        if self.wqkv_bias_decode:
+            # select the bias tensor based on the number of tiles in the rows
+            # WARNING: must not change the batch size between compiling and executing a trace
+            num_tiles = int(math.ceil(xqkv_fused_sharded.shape[-2] / self.tile_size))
+            xqkv_fused_sharded = xqkv_fused_sharded + self.wqkv_bias_decode[num_tiles - 1]
+
         ttnn.deallocate(x)
         xqkv_fused = tt_all_reduce(
             xqkv_fused_sharded,
@@ -263,6 +331,7 @@ class TtLlamaAttention(LightweightModule):
             memory_config=self.model_config["QKV_OUT_GATHERED_MEMCFG"](list(self.mesh_device.shape)[1]),
             sharded=True,
             dtype=self.ccl_dtype,
+            topology=self.ccl_topology,
         )
 
         if self.TG:
@@ -281,7 +350,7 @@ class TtLlamaAttention(LightweightModule):
         # Reshape such that true unpadded batch is tracked in shape
         fqkv_shape = xqkv_fused.shape
         xqkv_fused = ttnn.reshape(
-            xqkv_fused, ttnn.Shape((1, 1, self.batch_size_per_device_group, fqkv_shape[3]), (1, 1, 32, fqkv_shape[3]))
+            xqkv_fused, (1, 1, self.batch_size_per_device_group, fqkv_shape[3]), (1, 1, 32, fqkv_shape[3])
         )
 
         ###
@@ -317,8 +386,8 @@ class TtLlamaAttention(LightweightModule):
         # KV update
         ###
         if kv_cache:
-            keys = kv_cache[self.layer_num][0]
-            values = kv_cache[self.layer_num][1]
+            keys = kv_cache[0]
+            values = kv_cache[1]
         else:
             keys = self.layer_past[0]
             values = self.layer_past[1]
@@ -437,13 +506,16 @@ class TtLlamaAttention(LightweightModule):
                 num_reduce_scatter_links=self.num_reduce_scatter_links,
                 num_all_gather_links=self.num_all_gather_links,
                 dim=0 if (self.TG and self.hidden_size < 8192) else 3,
+                topology=self.ccl_topology,
                 memory_config=(
-                    self.model_config["SELF_OUT_REDUCE_SCATTER_MEMCFG"]
-                    if self.hidden_size == 8192
-                    else self.model_config["SELF_OUT_GATHERED_MEMCFG"](list(self.mesh_device.shape)[0])
-                )
-                if self.TG
-                else self.model_config["DECODE_RESIDUAL_MEMCFG"],
+                    (
+                        self.model_config["SELF_OUT_REDUCE_SCATTER_MEMCFG"]
+                        if self.hidden_size == 8192
+                        else self.model_config["SELF_OUT_GATHERED_MEMCFG"](list(self.mesh_device.shape)[0])
+                    )
+                    if self.TG
+                    else self.model_config["DECODE_RESIDUAL_MEMCFG"]
+                ),
                 sharded=True,
                 dtype=self.ccl_dtype,
                 use_composite=True if self.hidden_size == 8192 else False,
@@ -456,7 +528,16 @@ class TtLlamaAttention(LightweightModule):
 
             return dense_out_reduced
 
-    def forward_prefill(self, x_11SH, rot_mats, user_id: int = 0, page_table=None, kv_cache=None):
+    def forward_prefill(
+        self,
+        x_11SH,
+        rot_mats,
+        user_id: int = 0,
+        page_table=None,
+        chunk_page_table=None,
+        chunk_start_idx=None,
+        kv_cache=None,
+    ):
         seq_len = x_11SH.shape[-2]
         assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
         ###
@@ -464,17 +545,24 @@ class TtLlamaAttention(LightweightModule):
         ###
 
         # reshaping long sequence to matmul fit on device
-        if seq_len > 2048:
-            x_11SH = ttnn.reshape(x_11SH, [1, seq_len // 2048, 2048, -1])
+        if seq_len > self.MAX_QKV_MM_SEQ_LEN:
+            if seq_len % self.MAX_QKV_MM_SEQ_LEN != 0:
+                raise ValueError(f"seq_len {seq_len} must be divisible by {self.MAX_QKV_MM_SEQ_LEN}")
+            x_11SH = ttnn.reshape(x_11SH, [1, seq_len // self.MAX_QKV_MM_SEQ_LEN, self.MAX_QKV_MM_SEQ_LEN, -1])
 
         xqkv_fused = ttnn.linear(
             x_11SH,
             self.wqkv,
+            # bias=self.wqkv_bias_prefill,
             dtype=self.ccl_dtype if self.TG else ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             compute_kernel_config=self.compute_kernel_config_hifi2,
             program_config=self.model_config["XQKV_PREFILL_PROGCFG"](seq_len),
         )
+
+        # FIXME: surely ttnn.linear bias should work?
+        if self.wqkv_bias_prefill is not None:
+            xqkv_fused = xqkv_fused + self.wqkv_bias_prefill
 
         xqkv_fused = tt_all_reduce(
             xqkv_fused,
@@ -486,7 +574,7 @@ class TtLlamaAttention(LightweightModule):
             dtype=self.ccl_dtype,
         )
 
-        if seq_len > 2048:
+        if seq_len > self.MAX_QKV_MM_SEQ_LEN:
             xqkv_fused = ttnn.reshape(xqkv_fused, [1, 1, seq_len, -1])
 
         ttnn.deallocate(x_11SH)
@@ -536,7 +624,7 @@ class TtLlamaAttention(LightweightModule):
 
         # Fill KV-Cache
         if kv_cache:
-            keys_BKSD, values_BKSD = kv_cache[self.layer_num][0], kv_cache[self.layer_num][1]
+            keys_BKSD, values_BKSD = kv_cache[0], kv_cache[1]
         else:
             keys_BKSD, values_BKSD = self.layer_past[0], self.layer_past[1]
 
@@ -566,11 +654,14 @@ class TtLlamaAttention(LightweightModule):
             # In the case that the tokens have been padded along the seq len dimension, we need to fill the cache with the unpadded k/v values.
             # Assume that the page table does not have padding, so we can use it to get the unpadded page len.
             block_size = keys_BKSD.shape[2]
-            page_len = page_table.shape[1] * block_size
+            # If chunked prefill, use chunk_page_table if given, otherwise use page_table.
+            fill_page_table = chunk_page_table if chunk_page_table is not None else page_table
+
+            page_len = fill_page_table.shape[1] * block_size
             k_fill_sliced = k_fill[:, :, :page_len, :] if page_len < k_fill.shape[2] else k_fill
             v_fill_sliced = v_fill[:, :, :page_len, :] if page_len < v_fill.shape[2] else v_fill
-            ttnn.experimental.paged_fill_cache(keys_BKSD, k_fill_sliced, page_table, batch_idx=user_id)
-            ttnn.experimental.paged_fill_cache(values_BKSD, v_fill_sliced, page_table, batch_idx=user_id)
+            ttnn.experimental.paged_fill_cache(keys_BKSD, k_fill_sliced, fill_page_table, batch_idx=user_id)
+            ttnn.experimental.paged_fill_cache(values_BKSD, v_fill_sliced, fill_page_table, batch_idx=user_id)
         else:
             ttnn.fill_cache(
                 keys_BKSD,
@@ -588,32 +679,34 @@ class TtLlamaAttention(LightweightModule):
             ttnn.deallocate(v_fill)
 
         # SDPA
-
-        # reshaping to put group in batch dim to do sdpa on 8 MQAs in parallel
-        k_heads_K1SD_8b = ttnn.reshape(k_heads_1KSD_8b, [self.n_local_kv_heads, 1, -1, self.head_dim])
-        v_heads_V1SD_8b = ttnn.reshape(v_heads_1VSD_8b, [self.n_local_kv_heads, 1, -1, self.head_dim])
-
         q_heads_1QSD_8b = ttnn.typecast(q_heads_1QSD, dtype=ttnn.bfloat8_b)
         ttnn.deallocate(q_heads_1QSD)
 
-        q_heads_84SD_8b = ttnn.reshape(
-            q_heads_1QSD_8b, [self.n_local_kv_heads, self.n_local_heads // self.n_local_kv_heads, -1, self.head_dim]
-        )
-
-        attn_output_84SD = ttnn.transformer.scaled_dot_product_attention(
-            q_heads_84SD_8b,
-            k_heads_K1SD_8b,
-            v_heads_V1SD_8b,
-            is_causal=True,
-            scale=self.scale,
-            compute_kernel_config=self.compute_kernel_config_hifi4,
-            program_config=self.model_config["SDPA_PROGCFG"](seq_len),
-        )
+        if chunk_start_idx is not None:
+            attn_output_84SD = ttnn.transformer.chunked_scaled_dot_product_attention(
+                q_heads_1QSD_8b,
+                keys_BKSD,
+                values_BKSD,
+                page_table,
+                chunk_start_idx,
+                compute_kernel_config=self.compute_kernel_config_hifi4,
+                program_config=self.model_config["SDPA_PROGCFG"](seq_len),
+            )
+        else:
+            attn_output_84SD = ttnn.transformer.scaled_dot_product_attention(
+                q_heads_1QSD_8b,
+                k_heads_1KSD_8b,
+                v_heads_1VSD_8b,
+                is_causal=True,
+                scale=self.scale,
+                compute_kernel_config=self.compute_kernel_config_hifi4,
+                program_config=self.model_config["SDPA_PROGCFG"](seq_len),
+            )
 
         # deallocate keys and values
-        ttnn.deallocate(q_heads_84SD_8b)
-        ttnn.deallocate(k_heads_K1SD_8b)
-        ttnn.deallocate(v_heads_V1SD_8b)
+        ttnn.deallocate(q_heads_1QSD_8b)
+        ttnn.deallocate(k_heads_1KSD_8b)
+        ttnn.deallocate(v_heads_1VSD_8b)
 
         attn_output_1QSD = ttnn.reshape(attn_output_84SD, [1, self.n_local_heads, -1, self.head_dim])
 
@@ -661,6 +754,7 @@ class TtLlamaAttention(LightweightModule):
                 dim=0 if self.TG else 3,
                 num_reduce_scatter_links=self.num_reduce_scatter_links,
                 num_all_gather_links=self.num_all_gather_links,
+                topology=self.ccl_topology,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 dtype=self.ccl_dtype,
             )
@@ -675,10 +769,20 @@ class TtLlamaAttention(LightweightModule):
         user_id=0,
         mode="decode",
         page_table=None,
+        chunk_page_table=None,
+        chunk_start_idx=None,
         kv_cache=None,
     ):
         if mode == "prefill":
-            return self.forward_prefill(x, rot_mats, user_id, page_table=page_table, kv_cache=kv_cache)
+            return self.forward_prefill(
+                x,
+                rot_mats,
+                user_id,
+                page_table=page_table,
+                chunk_page_table=chunk_page_table,
+                chunk_start_idx=chunk_start_idx,
+                kv_cache=kv_cache,
+            )
         else:
             return self.forward_decode(x, current_pos, rot_mats, page_table=page_table, kv_cache=kv_cache)
 

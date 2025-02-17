@@ -2,640 +2,186 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <cstddef>
+#include "ttnn/cpp/ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
+#include "ttnn/cpp/ttnn/operations/ccl/common/uops/ccl_command.hpp"
+
+#include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+
 #include "gtest/gtest.h"
-#include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
 
-static constexpr std::array<noc_grid_index_t, 8> worker_to_routing_x_wormhole = {1, 2, 3, 4, 6, 7, 8, 9};
+#include <cstddef>
 
-static constexpr std::array<noc_grid_index_t, 10> worker_to_routing_y_wormhole = {1, 2, 3, 4, 5, 7, 8, 9, 10, 11};
+TEST(
+    CclTensorSlicer_SliceWorkerSplitting,
+    page_based_1worker_TensorShape_1_1_4_1__SliceShape_1_1_1_1__SliceOffset_0_0_3_0__Workers1) {
+    const auto worker_slices = ttnn::ccl::cmd::builder::split_tensor_slice_across_workers_wrapped_page_aligned(
+        ttnn::ccl::v2::TensorSlice{
+            {1, 1, 4, 1},  // tensor_shape
+            {1, 1, 1, 1},  // tensor slice shape
+            {0, 0, 3, 0},  // tensor slice offset
+            {1, 1, 1, 1},
+            {0, 0, 0, 0}},
+        1);
 
-namespace tt {
-namespace tt_metal {
+    ASSERT_EQ(worker_slices.size(), 1);
+    ASSERT_EQ(worker_slices[0].tensor_slice_shape.w, 1);
+    ASSERT_EQ(worker_slices[0].tensor_slice_shape.z, 1);
+    ASSERT_EQ(worker_slices[0].tensor_slice_shape.y, 1);
+    ASSERT_EQ(worker_slices[0].tensor_slice_shape.x, 1);
 
-struct UnharvestedWormholeWorkerToNocLookup
-    : address_generators::WorkerToNocCoordLookup<UnharvestedWormholeWorkerToNocLookup> {
-    static constexpr std::array<noc_grid_index_t, 8> worker_to_routing_x = {1, 2, 3, 4, 6, 7, 8, 9};
-    static constexpr std::array<noc_grid_index_t, 10> worker_to_routing_y = {1, 2, 3, 4, 5, 7, 8, 9, 10, 11};
+    ASSERT_EQ(worker_slices[0].tensor_slice_offset.w, 0);
+    ASSERT_EQ(worker_slices[0].tensor_slice_offset.z, 0);
+    ASSERT_EQ(worker_slices[0].tensor_slice_offset.y, 3);
+    ASSERT_EQ(worker_slices[0].tensor_slice_offset.x, 0);
 
-    noc_grid_index_t get_noc_x_from_worker_x(noc_grid_index_t worker_x) const {
-        // ASSERT worker_x < worker_to_routing_x_wormhole.size()
-        return worker_to_routing_x[worker_x];
-    }
+    ASSERT_EQ(worker_slices[0].worker_slice_shape.w, 1);
+    ASSERT_EQ(worker_slices[0].worker_slice_shape.z, 1);
+    ASSERT_EQ(worker_slices[0].worker_slice_shape.y, 1);
+    ASSERT_EQ(worker_slices[0].worker_slice_shape.x, 1);
 
-    noc_grid_index_t get_noc_y_from_worker_y(noc_grid_index_t worker_y) const {
-        // ASSERT worker_y < worker_to_routing_y_wormhole.size()
-        return worker_to_routing_y[worker_y];
-    }
-};
-
-static void run_width_sharded_tensor_slice_indexer_get_page_location_test(
-    address_generators::WidthShardedAddressGenerator<
-        UnharvestedWormholeWorkerToNocLookup,
-        address_generators::DeviceWidthShardSpec>& addrgen,
-
-    std::size_t pages_per_shard_y,
-    std::size_t pages_per_shard_x,
-
-    std::size_t shard_grid_height,
-    std::size_t shard_grid_width,
-
-    std::size_t worker_shard_cores_start_y,
-    std::size_t worker_shard_cores_start_x,
-    bool is_shard_grid_transposed) {
-    std::size_t page_id = 0;
-    // Takes a long time to sweep really large numbers so instead stride through the range.
-    // Really the only reason to test larger numbers is to catch overflow issues with smaller
-    // number types that may be carried around in the addrgen structs
-    std::size_t py_increment = pages_per_shard_y > 32 ? 7 : 1;
-    std::size_t px_increment = pages_per_shard_x > 32 ? 7 : 1;
-
-    if (!is_shard_grid_transposed) {
-        for (std::size_t py = 0; py < pages_per_shard_y; py++) {
-            for (std::size_t y_logical = worker_shard_cores_start_y;
-                 y_logical < worker_shard_cores_start_y + shard_grid_height;
-                 y_logical++) {
-                for (std::size_t x_logical = worker_shard_cores_start_x;
-                     x_logical < worker_shard_cores_start_x + shard_grid_width;
-                     x_logical++) {
-                    for (std::size_t px = 0; px < pages_per_shard_x; px++) {
-                        if (px % px_increment == 0 && py % py_increment == 0 ||
-                            (py == (pages_per_shard_y - 1) || px != (pages_per_shard_x - 1))) {
-                            auto const& result = addrgen.get_page_location(page_id);
-                            ASSERT_EQ(result.core_location.noc_x, worker_to_routing_x_wormhole.at(x_logical));
-                            ASSERT_EQ(result.core_location.noc_y, worker_to_routing_y_wormhole.at(y_logical));
-                            ASSERT_EQ(result.page_offset, px + (py * pages_per_shard_x));
-
-                            auto const& result2 =
-                                addrgen.get_page_location_with_contiguous_pages_in_row_in_bank(page_id);
-                            ASSERT_EQ(result2.core_location.noc_x, result.core_location.noc_x);
-                            ASSERT_EQ(result2.core_location.noc_y, result.core_location.noc_y);
-                            ASSERT_EQ(result2.page_offset, result.page_offset);
-                            ASSERT_EQ(result2.contig_pages_in_row, pages_per_shard_x - px);
-                        }
-
-                        page_id++;
-                    }
-                }
-            }
-        }
-    } else {
-        for (std::size_t py = 0; py < pages_per_shard_y; py++) {
-            for (std::size_t x_logical = worker_shard_cores_start_x;
-                 x_logical < worker_shard_cores_start_x + shard_grid_width;
-                 x_logical++) {
-                for (std::size_t y_logical = worker_shard_cores_start_y;
-                     y_logical < worker_shard_cores_start_y + shard_grid_height;
-                     y_logical++) {
-                    for (std::size_t px = 0; px < pages_per_shard_x; px++) {
-                        if (px % px_increment == 0 && py % py_increment == 0 ||
-                            (py == (pages_per_shard_y - 1) || px != (pages_per_shard_x - 1))) {
-                            auto const& result = addrgen.get_page_location(page_id);
-                            ASSERT_EQ(result.core_location.noc_x, worker_to_routing_x_wormhole.at(x_logical));
-                            ASSERT_EQ(result.core_location.noc_y, worker_to_routing_y_wormhole.at(y_logical));
-                            ASSERT_EQ(result.page_offset, px + (py * pages_per_shard_x));
-
-                            auto const& result2 =
-                                addrgen.get_page_location_with_contiguous_pages_in_row_in_bank(page_id);
-                            ASSERT_EQ(result2.core_location.noc_x, result.core_location.noc_x);
-                            ASSERT_EQ(result2.core_location.noc_y, result.core_location.noc_y);
-                            ASSERT_EQ(result2.page_offset, result.page_offset);
-                            ASSERT_EQ(result2.contig_pages_in_row, pages_per_shard_x - px);
-                        }
-                        page_id++;
-                    }
-                }
-            }
-        }
-    }
+    ASSERT_EQ(worker_slices[0].worker_slice_offset.w, 0);
+    ASSERT_EQ(worker_slices[0].worker_slice_offset.z, 0);
+    ASSERT_EQ(worker_slices[0].worker_slice_offset.y, 0);
+    ASSERT_EQ(worker_slices[0].worker_slice_offset.x, 0);
 }
 
-static void run_width_sharded_tensor_slice_indexer_get_page_location_test(
-    std::size_t pages_per_shard_y,
-    std::size_t pages_per_shard_x,
+TEST(
+    CclTensorSlicer_SliceWorkerSplitting,
+    page_based_1worker_TensorShape_1_1_4_1__SliceShape_1_1_1_1__SliceOffset_0_0_0_0__Workers1) {
+    const auto worker_slices = ttnn::ccl::cmd::builder::split_tensor_slice_across_workers_wrapped_page_aligned(
+        ttnn::ccl::v2::TensorSlice{
+            {1, 1, 4, 1},  // tensor_shape
+            {1, 1, 1, 1},  // tensor slice shape
+            {0, 0, 0, 0},  // tensor slice offset
+            {1, 1, 4, 1},
+            {0, 0, 0, 0}},
+        1);
 
-    std::size_t shard_grid_height,
-    std::size_t shard_grid_width,
+    ASSERT_EQ(worker_slices.size(), 1);
+    ASSERT_EQ(worker_slices[0].tensor_slice_shape.w, 1);
+    ASSERT_EQ(worker_slices[0].tensor_slice_shape.z, 1);
+    ASSERT_EQ(worker_slices[0].tensor_slice_shape.y, 1);
+    ASSERT_EQ(worker_slices[0].tensor_slice_shape.x, 1);
 
-    std::size_t worker_shard_cores_start_y,
-    std::size_t worker_shard_cores_start_x,
+    ASSERT_EQ(worker_slices[0].tensor_slice_offset.w, 0);
+    ASSERT_EQ(worker_slices[0].tensor_slice_offset.z, 0);
+    ASSERT_EQ(worker_slices[0].tensor_slice_offset.y, 0);
+    ASSERT_EQ(worker_slices[0].tensor_slice_offset.x, 0);
 
-    bool is_shard_grid_transposed) {
-    const std::size_t global_num_pages = pages_per_shard_y * pages_per_shard_x * shard_grid_width * shard_grid_height;
+    ASSERT_EQ(worker_slices[0].worker_slice_shape.w, 1);
+    ASSERT_EQ(worker_slices[0].worker_slice_shape.z, 1);
+    ASSERT_EQ(worker_slices[0].worker_slice_shape.y, 1);
+    ASSERT_EQ(worker_slices[0].worker_slice_shape.x, 1);
 
-    auto addrgen = address_generators::
-        WidthShardedAddressGenerator<UnharvestedWormholeWorkerToNocLookup, address_generators::DeviceWidthShardSpec>(
-            UnharvestedWormholeWorkerToNocLookup(),
-            address_generators::DeviceShardSpecTypeGetter<TensorMemoryLayout::WIDTH_SHARDED>::type(
-                pages_per_shard_y,
-                pages_per_shard_x,
-                shard_grid_height,
-                shard_grid_width,
-                worker_shard_cores_start_y,
-                worker_shard_cores_start_x,
-                is_shard_grid_transposed),
-            1024,
-            0x0);
-
-    run_width_sharded_tensor_slice_indexer_get_page_location_test(
-        addrgen,
-        pages_per_shard_y,
-        pages_per_shard_x,
-
-        shard_grid_height,
-        shard_grid_width,
-
-        worker_shard_cores_start_y,
-        worker_shard_cores_start_x,
-
-        is_shard_grid_transposed);
+    ASSERT_EQ(worker_slices[0].worker_slice_offset.w, 0);
+    ASSERT_EQ(worker_slices[0].worker_slice_offset.z, 0);
+    ASSERT_EQ(worker_slices[0].worker_slice_offset.y, 0);
+    ASSERT_EQ(worker_slices[0].worker_slice_offset.x, 0);
 }
 
-TEST(CclWidthShardedTensorSliceIndexer_Wormhole, basic_test_case) {
-    static constexpr std::size_t pages_per_shard_y = 1;
-    static constexpr std::size_t pages_per_shard_x = 8;
-
-    static constexpr std::size_t shard_grid_height = 2;
-    static constexpr std::size_t shard_grid_width = 1;
-
-    static constexpr std::size_t worker_shard_cores_start_y = 0;
-    static constexpr std::size_t worker_shard_cores_start_x = 0;
-
-    bool is_shard_grid_transposed = false;
-
-    run_width_sharded_tensor_slice_indexer_get_page_location_test(
-        pages_per_shard_y,
-        pages_per_shard_x,
-
-        shard_grid_height,
-        shard_grid_width,
-
-        worker_shard_cores_start_y,
-        worker_shard_cores_start_x,
-
-        is_shard_grid_transposed);
+static size_t get_flat_index_from_shape(
+    const ttnn::ccl::Shape4D<uint32_t>& shape, const ttnn::ccl::Shape4D<uint32_t>& index) {
+    std::size_t offset = index.x;
+    std::size_t inner_volume = shape.x;
+    offset += index.y * inner_volume;
+    inner_volume *= shape.y;
+    offset += index.z * inner_volume;
+    inner_volume *= shape.z;
+    offset += index.w * inner_volume;
+    return offset;
 }
 
-TEST(CclWidthShardedTensorSliceIndexer_Wormhole, SweepWormhole) {
-    std::size_t max_worker_rows = 10;
-    std::size_t max_worker_cols = 8;
+TEST(
+    TensorIterationSweep,
+    advance_worker_global_page__Shape_1_4_4_72__SliceShape_1_4_1_72__SliceOffset_0_0_3_0__WorkerStartPage_0__Stride_1) {
+    uint32_t stride = 1;
+    ttnn::ccl::Shape4D<uint32_t> tensor_shape{1, 4, 4, 72};
+    ttnn::ccl::Shape4D<uint32_t> tensor_slice_shape{1, 4, 1, 72};
+    const ttnn::ccl::Shape4D<uint32_t> tensor_slice_offset_base{0, 0, 3, 0};
+    ttnn::ccl::Shape4D<uint32_t> tensor_slice_offset_current{0, 0, 3, 0};
+    ttnn::ccl::Shape4D<uint32_t> start_offset_worker_slice{0, 0, 0, 0};
+    size_t worker_slice_volume = tensor_slice_shape.volume();
+    uint32_t curr_page_idx =
+        get_flat_index_from_shape(tensor_shape, tensor_slice_offset_base + start_offset_worker_slice);
+    uint32_t offset_into_worker_slice = 0;
 
-    for (auto pages_per_shard_y : {1, 2, 5, 8, 256}) {
-        for (auto pages_per_shard_x : {1, 2, 5, 8, 256}) {
-            for (auto shard_grid_offset_logical_y : {0, 1, 2, 3, 4, 5, 6, 7, 8, 9}) {
-                for (auto shard_grid_offset_logical_x : {0, 1, 2, 3, 4, 5, 6, 7}) {
-                    for (std::size_t shard_grid_height = 1;
-                         shard_grid_height < (max_worker_rows - shard_grid_offset_logical_y);
-                         shard_grid_height++) {
-                        for (std::size_t shard_grid_width = 1;
-                             shard_grid_width < (max_worker_cols - shard_grid_offset_logical_x);
-                             shard_grid_width++) {
-                            for (bool transpose_shard_grid : {false, true}) {
-                                run_width_sharded_tensor_slice_indexer_get_page_location_test(
-                                    pages_per_shard_y,
-                                    pages_per_shard_x,
-                                    shard_grid_height,
-                                    shard_grid_width,
-                                    shard_grid_offset_logical_y,
-                                    shard_grid_offset_logical_x,
-                                    transpose_shard_grid);
+    tensor_slice_offset_current.w = tensor_slice_offset_base.w;
+    for (size_t w = 0; w < tensor_slice_shape.w; w++) {
+        bool last_w = w == tensor_slice_shape.w - 1;
+        tensor_slice_offset_current.z = tensor_slice_offset_base.z;
+        for (size_t z = 0; z < tensor_slice_shape.z; z++) {
+            bool last_z = z == tensor_slice_shape.z - 1;
+            tensor_slice_offset_current.y = tensor_slice_offset_base.y;
+            for (size_t y = 0; y < tensor_slice_shape.y; y++) {
+                bool last_y = y == tensor_slice_shape.y - 1;
+                tensor_slice_offset_current.x = tensor_slice_offset_base.x;
+                for (size_t x = 0; x < tensor_slice_shape.x; x++) {
+                    bool last_x = x == tensor_slice_shape.x - 1;
+                    bool end_of_worker_slice = ttnn::ccl::v2::advance_worker_global_page(
+                        curr_page_idx,
+                        offset_into_worker_slice,   // local to the worker chunk
+                        start_offset_worker_slice,  // local to the tensor slice
+
+                        worker_slice_volume,  // worker chunk shape
+                        tensor_slice_shape,   // tensor slice shape (per device)
+                        tensor_slice_offset_base,
+
+                        tensor_shape,  // full tensor shape
+
+                        stride);
+                    if (tensor_slice_offset_current.x == (tensor_slice_offset_base.x + tensor_slice_shape.x - 1)) {
+                        if (tensor_slice_offset_current.y == (tensor_slice_offset_base.y + tensor_slice_shape.y - 1)) {
+                            if (tensor_slice_offset_current.z ==
+                                (tensor_slice_offset_base.z + tensor_slice_shape.z - 1)) {
+                                tensor_slice_offset_current.w =
+                                    (tensor_slice_offset_current.w + 1) % tensor_slice_shape.w;
+                                tensor_slice_offset_current.z = tensor_slice_offset_base.z;
+                            } else {
+                                tensor_slice_offset_current.z = tensor_slice_offset_current.z + 1;
                             }
+                            tensor_slice_offset_current.y = tensor_slice_offset_base.y;
+                        } else {
+                            tensor_slice_offset_current.y = tensor_slice_offset_current.y + 1;
                         }
+                        tensor_slice_offset_current.x = tensor_slice_offset_base.x;
+                    } else {
+                        tensor_slice_offset_current.x = tensor_slice_offset_current.x + 1;
                     }
+                    bool last_page = last_w && last_z && last_y && last_x;
+                    ASSERT_TRUE(
+                        last_page ||
+                        (curr_page_idx == get_flat_index_from_shape(tensor_shape, tensor_slice_offset_current)));
                 }
             }
         }
     }
 }
 
-static void run_height_sharded_tensor_slice_indexer_get_page_location_test(
-    address_generators::HeightShardedAddressGenerator<
-        UnharvestedWormholeWorkerToNocLookup,
-        address_generators::DeviceHeightShardSpec>& addrgen,
-    std::size_t pages_per_shard_y,
-    std::size_t pages_per_shard_x,
+TEST(
+    TensorIteration,
+    advance_worker_global_page__Shape_1_4_4_72__SliceShape_1_4_1_72__OffsetIntoWorkerSlice_71__CurrPageId_287_last_page_on_plane__Stride_1) {
+    uint32_t stride = 1;
+    uint32_t curr_page_idx = 287;
+    uint32_t offset_into_worker_slice = 71;
+    ttnn::ccl::Shape4D<uint32_t> tensor_shape{1, 4, 4, 72};
+    ttnn::ccl::Shape4D<uint32_t> tensor_slice_shape{1, 4, 1, 72};
+    ttnn::ccl::Shape4D<uint32_t> tensor_slice_offset{0, 0, 3, 0};
+    ttnn::ccl::Shape4D<uint32_t> start_offset_worker_slice{0, 0, 0, 0};
+    ttnn::ccl::Shape4D<uint32_t> worker_slice_shape{1, 1, 1, 288};
 
-    std::size_t shard_grid_height,
-    std::size_t shard_grid_width,
+    auto old_page_id = curr_page_idx;
+    bool end_of_worker_slice = ttnn::ccl::v2::advance_worker_global_page(
+        curr_page_idx,
+        offset_into_worker_slice,   // local to the worker chunk
+        start_offset_worker_slice,  // local to the tensor slice
 
-    std::size_t worker_shard_cores_start_y,
-    std::size_t worker_shard_cores_start_x,
+        worker_slice_shape.volume(),  // worker chunk shape
+        tensor_slice_shape,           // tensor slice shape (per device)
+        tensor_slice_offset,
 
-    bool is_shard_grid_transposed) {
-    std::size_t page_id = 0;
+        tensor_shape,  // full tensor shape
 
-    // Takes a long time to sweep really large numbers so instead stride through the range.
-    // Really the only reason to test larger numbers is to catch overflow issues with smaller
-    // number types that may be carried around in the addrgen structs
-    std::size_t py_increment = pages_per_shard_y > 32 ? 7 : 1;
-    std::size_t px_increment = pages_per_shard_x > 32 ? 7 : 1;
-
-    if (!is_shard_grid_transposed) {
-        for (std::size_t x_logical = worker_shard_cores_start_x;
-             x_logical < worker_shard_cores_start_x + shard_grid_width;
-             x_logical++) {
-            for (std::size_t y_logical = worker_shard_cores_start_y;
-                 y_logical < worker_shard_cores_start_y + shard_grid_height;
-                 y_logical++) {
-                for (std::size_t py = 0; py < pages_per_shard_y; py++) {
-                    for (std::size_t px = 0; px < pages_per_shard_x; px++) {
-                        if (px % px_increment == 0 && py % py_increment == 0 ||
-                            (py == (pages_per_shard_y - 1) || px != (pages_per_shard_x - 1))) {
-                            auto const& result = addrgen.get_page_location(page_id);
-                            ASSERT_EQ(result.core_location.noc_x, worker_to_routing_x_wormhole.at(x_logical));
-                            ASSERT_EQ(result.core_location.noc_y, worker_to_routing_y_wormhole.at(y_logical));
-                            ASSERT_EQ(result.page_offset, px + (py * pages_per_shard_x));
-                        }
-
-                        page_id++;
-                    }
-                }
-            }
-        }
-    } else {
-        for (std::size_t y_logical = worker_shard_cores_start_y;
-             y_logical < worker_shard_cores_start_y + shard_grid_height;
-             y_logical++) {
-            for (std::size_t x_logical = worker_shard_cores_start_x;
-                 x_logical < worker_shard_cores_start_x + shard_grid_width;
-                 x_logical++) {
-                for (std::size_t py = 0; py < pages_per_shard_y; py++) {
-                    for (std::size_t px = 0; px < pages_per_shard_x; px++) {
-                        if (px % px_increment == 0 && py % py_increment == 0 ||
-                            (py == (pages_per_shard_y - 1) || px != (pages_per_shard_x - 1))) {
-                            auto const& result = addrgen.get_page_location(page_id);
-                            ASSERT_EQ(result.core_location.noc_x, worker_to_routing_x_wormhole.at(x_logical));
-                            ASSERT_EQ(result.core_location.noc_y, worker_to_routing_y_wormhole.at(y_logical));
-                            ASSERT_EQ(result.page_offset, px + (py * pages_per_shard_x));
-                        }
-                        page_id++;
-                    }
-                }
-            }
-        }
-    }
+        stride);
+    ASSERT_EQ(curr_page_idx, old_page_id + 1 + 72 * 3);
+    ASSERT_EQ(offset_into_worker_slice, 72);
 }
-
-static void run_height_sharded_tensor_slice_indexer_get_page_location_test(
-    std::size_t pages_per_shard_y,
-    std::size_t pages_per_shard_x,
-
-    std::size_t shard_grid_height,
-    std::size_t shard_grid_width,
-
-    std::size_t worker_shard_cores_start_y,
-    std::size_t worker_shard_cores_start_x,
-
-    bool is_shard_grid_transposed) {
-    const std::size_t global_num_pages = pages_per_shard_y * pages_per_shard_x * shard_grid_width * shard_grid_height;
-
-    auto addrgen = address_generators::
-        HeightShardedAddressGenerator<UnharvestedWormholeWorkerToNocLookup, address_generators::DeviceHeightShardSpec>(
-            UnharvestedWormholeWorkerToNocLookup(),
-            address_generators::DeviceShardSpecTypeGetter<TensorMemoryLayout::HEIGHT_SHARDED>::type(
-                pages_per_shard_y,
-                pages_per_shard_x,
-                shard_grid_height,
-                shard_grid_width,
-                worker_shard_cores_start_y,
-                worker_shard_cores_start_x,
-                is_shard_grid_transposed),
-            1024,
-            0x0);
-
-    run_height_sharded_tensor_slice_indexer_get_page_location_test(
-        addrgen,
-        pages_per_shard_y,
-        pages_per_shard_x,
-        shard_grid_height,
-        shard_grid_width,
-        worker_shard_cores_start_y,
-        worker_shard_cores_start_x,
-
-        is_shard_grid_transposed);
-}
-
-TEST(CclHeightShardedTensorSliceIndexer_Wormhole, basic_test_case) {
-    static constexpr std::size_t pages_per_shard_y = 8;
-    static constexpr std::size_t pages_per_shard_x = 1;
-
-    static constexpr std::size_t shard_grid_height = 1;
-    static constexpr std::size_t shard_grid_width = 2;
-
-    static constexpr std::size_t worker_shard_cores_start_y = 0;
-    static constexpr std::size_t worker_shard_cores_start_x = 0;
-
-    bool is_shard_grid_transposed = false;
-
-    run_height_sharded_tensor_slice_indexer_get_page_location_test(
-        pages_per_shard_y,
-        pages_per_shard_x,
-
-        shard_grid_height,
-        shard_grid_width,
-
-        worker_shard_cores_start_y,
-        worker_shard_cores_start_x,
-
-        is_shard_grid_transposed);
-}
-
-TEST(CclHeightShardedTensorSliceIndexer_Wormhole, SweepWormhole) {
-    std::size_t max_worker_rows = 10;
-    std::size_t max_worker_cols = 8;
-
-    for (auto pages_per_shard_y : {1, 2, 5, 8, 256}) {
-        for (auto pages_per_shard_x : {1, 2, 5, 8, 256}) {
-            for (auto shard_grid_offset_logical_y : {0, 1, 2, 3, 4, 5, 6, 7, 8, 9}) {
-                for (auto shard_grid_offset_logical_x : {0, 1, 2, 3, 4, 5, 6, 7}) {
-                    for (std::size_t shard_grid_height = 1;
-                         shard_grid_height < (max_worker_rows - shard_grid_offset_logical_y);
-                         shard_grid_height++) {
-                        for (std::size_t shard_grid_width = 1;
-                             shard_grid_width < (max_worker_cols - shard_grid_offset_logical_x);
-                             shard_grid_width++) {
-                            for (bool transpose_shard_grid : {false, true}) {
-                                run_height_sharded_tensor_slice_indexer_get_page_location_test(
-                                    pages_per_shard_y,
-                                    pages_per_shard_x,
-                                    shard_grid_height,
-                                    shard_grid_width,
-                                    shard_grid_offset_logical_y,
-                                    shard_grid_offset_logical_x,
-                                    transpose_shard_grid);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-static void run_block_sharded_tensor_slice_indexer_get_page_location_test(
-    address_generators::BlockShardedAddressGenerator<
-        UnharvestedWormholeWorkerToNocLookup,
-        address_generators::DeviceBlockShardSpec>& addrgen,
-    std::size_t pages_per_shard_y,
-    std::size_t pages_per_shard_x,
-
-    std::size_t shard_grid_height,
-    std::size_t shard_grid_width,
-
-    std::size_t worker_shard_cores_start_y,
-    std::size_t worker_shard_cores_start_x,
-
-    bool is_shard_grid_transposed) {
-    std::size_t page_id = 0;
-
-    // Takes a long time to sweep really large numbers so instead stride through the range.
-    // Really the only reason to test larger numbers is to catch overflow issues with smaller
-    // number types that may be carried around in the addrgen structs
-    std::size_t py_increment = pages_per_shard_y > 32 ? 7 : 1;
-    std::size_t px_increment = pages_per_shard_x > 32 ? 7 : 1;
-
-    if (!is_shard_grid_transposed) {
-        for (std::size_t y_logical = worker_shard_cores_start_y;
-             y_logical < worker_shard_cores_start_y + shard_grid_height;
-             y_logical++) {
-            for (std::size_t py = 0; py < pages_per_shard_y; py++) {
-                for (std::size_t x_logical = worker_shard_cores_start_x;
-                     x_logical < worker_shard_cores_start_x + shard_grid_width;
-                     x_logical++) {
-                    for (std::size_t px = 0; px < pages_per_shard_x; px++) {
-                        if (px % px_increment == 0 && py % py_increment == 0 ||
-                            (py == (pages_per_shard_y - 1) || px != (pages_per_shard_x - 1))) {
-                            auto const& result = addrgen.get_page_location(page_id);
-                            ASSERT_EQ(result.core_location.noc_x, worker_to_routing_x_wormhole.at(x_logical));
-                            ASSERT_EQ(result.core_location.noc_y, worker_to_routing_y_wormhole.at(y_logical));
-                            ASSERT_EQ(result.page_offset, px + (py * pages_per_shard_x));
-
-                            auto const& result2 =
-                                addrgen.get_page_location_with_contiguous_pages_in_row_in_bank(page_id);
-                            ASSERT_EQ(result2.core_location.noc_x, result.core_location.noc_x);
-                            ASSERT_EQ(result2.core_location.noc_y, result.core_location.noc_y);
-                            ASSERT_EQ(result2.page_offset, result.page_offset);
-                            ASSERT_EQ(result2.contig_pages_in_row, pages_per_shard_x - px);
-                        }
-
-                        page_id++;
-                    }
-                }
-            }
-        }
-    } else {
-        ASSERT_EQ(true, false);  //"Transposed grid not supported in testing yet"
-    }
-}
-
-static void run_block_sharded_tensor_slice_indexer_get_page_location_test(
-    std::size_t pages_per_shard_y,
-    std::size_t pages_per_shard_x,
-
-    std::size_t shard_grid_height,
-    std::size_t shard_grid_width,
-
-    std::size_t worker_shard_cores_start_y,
-    std::size_t worker_shard_cores_start_x,
-
-    bool is_shard_grid_transposed) {
-    const std::size_t global_num_pages = pages_per_shard_y * pages_per_shard_x * shard_grid_width * shard_grid_height;
-
-    auto addrgen = address_generators::
-        BlockShardedAddressGenerator<UnharvestedWormholeWorkerToNocLookup, address_generators::DeviceBlockShardSpec>(
-            UnharvestedWormholeWorkerToNocLookup(),
-            address_generators::DeviceShardSpecTypeGetter<TensorMemoryLayout::BLOCK_SHARDED>::type(
-                pages_per_shard_y,
-                pages_per_shard_x,
-                shard_grid_height,
-                shard_grid_width,
-                worker_shard_cores_start_y,
-                worker_shard_cores_start_x,
-                is_shard_grid_transposed),
-            1024,
-            0x0);
-
-    run_block_sharded_tensor_slice_indexer_get_page_location_test(
-        addrgen,
-        pages_per_shard_y,
-        pages_per_shard_x,
-        shard_grid_height,
-        shard_grid_width,
-        worker_shard_cores_start_y,
-        worker_shard_cores_start_x,
-        is_shard_grid_transposed);
-}
-
-TEST(CclBlockShardedTensorSliceIndexer_Wormhole, basic_test_case) {
-    static constexpr std::size_t pages_per_shard_y = 8;
-    static constexpr std::size_t pages_per_shard_x = 2;
-
-    static constexpr std::size_t shard_grid_height = 3;
-    static constexpr std::size_t shard_grid_width = 2;
-
-    static constexpr std::size_t worker_shard_cores_start_y = 0;
-    static constexpr std::size_t worker_shard_cores_start_x = 0;
-
-    bool is_shard_grid_transposed = false;
-
-    run_block_sharded_tensor_slice_indexer_get_page_location_test(
-        pages_per_shard_y,
-        pages_per_shard_x,
-
-        shard_grid_height,
-        shard_grid_width,
-
-        worker_shard_cores_start_y,
-        worker_shard_cores_start_x,
-
-        is_shard_grid_transposed);
-}
-
-TEST(CclBlockShardedTensorSliceIndexer_Wormhole, SweepWormhole) {
-    std::size_t max_worker_rows = 10;
-    std::size_t max_worker_cols = 8;
-
-    for (auto pages_per_shard_y : {1, 2, 5, 8, 256}) {
-        for (auto pages_per_shard_x : {1, 2, 5, 8, 256}) {
-            for (auto shard_grid_offset_logical_y : {0, 1, 2, 3, 4, 5, 6, 7, 8, 9}) {
-                for (auto shard_grid_offset_logical_x : {0, 1, 2, 3, 4, 5, 6, 7}) {
-                    for (std::size_t shard_grid_height = 1;
-                         shard_grid_height < (max_worker_rows - shard_grid_offset_logical_y);
-                         shard_grid_height++) {
-                        for (std::size_t shard_grid_width = 1;
-                             shard_grid_width < (max_worker_cols - shard_grid_offset_logical_x);
-                             shard_grid_width++) {
-                            for (bool transpose_shard_grid :
-                                 {false}) {  // true: transpose mode not yet supported for block sharded indexer
-                                run_block_sharded_tensor_slice_indexer_get_page_location_test(
-                                    pages_per_shard_y,
-                                    pages_per_shard_x,
-                                    shard_grid_height,
-                                    shard_grid_width,
-                                    shard_grid_offset_logical_y,
-                                    shard_grid_offset_logical_x,
-                                    transpose_shard_grid);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-TEST(CclShardedTensorAddrGenBuilder, TestBuildWidthSharded) {
-    static constexpr std::size_t pages_per_shard_y = 1;
-    static constexpr std::size_t pages_per_shard_x = 8;
-
-    static constexpr std::size_t shard_grid_height = 2;
-    static constexpr std::size_t shard_grid_width = 1;
-
-    static constexpr std::size_t worker_shard_cores_start_y = 0;
-    static constexpr std::size_t worker_shard_cores_start_x = 0;
-
-    bool is_shard_grid_transposed = false;
-    auto addrgen = build_sharded_addr_gen<TensorMemoryLayout::WIDTH_SHARDED>(
-        UnharvestedWormholeWorkerToNocLookup(),
-        address_generators::DeviceShardSpecTypeGetter<TensorMemoryLayout::WIDTH_SHARDED>::type(
-            pages_per_shard_y,
-            pages_per_shard_x,
-            shard_grid_height,
-            shard_grid_width,
-            worker_shard_cores_start_y,
-            worker_shard_cores_start_x,
-            is_shard_grid_transposed),
-        1024,
-        0x0);
-
-    run_width_sharded_tensor_slice_indexer_get_page_location_test(
-        addrgen,
-        pages_per_shard_y,
-        pages_per_shard_x,
-
-        shard_grid_height,
-        shard_grid_width,
-
-        worker_shard_cores_start_y,
-        worker_shard_cores_start_x,
-
-        is_shard_grid_transposed);
-}
-TEST(CclShardedTensorAddrGenBuilder, TestBuildHeightSharded) {
-    static constexpr std::size_t pages_per_shard_y = 8;
-    static constexpr std::size_t pages_per_shard_x = 1;
-
-    static constexpr std::size_t shard_grid_height = 1;
-    static constexpr std::size_t shard_grid_width = 2;
-
-    static constexpr std::size_t worker_shard_cores_start_y = 0;
-    static constexpr std::size_t worker_shard_cores_start_x = 0;
-
-    bool is_shard_grid_transposed = false;
-    auto addrgen = build_sharded_addr_gen<TensorMemoryLayout::HEIGHT_SHARDED>(
-        UnharvestedWormholeWorkerToNocLookup(),
-        address_generators::DeviceShardSpecTypeGetter<TensorMemoryLayout::HEIGHT_SHARDED>::type(
-            pages_per_shard_y,
-            pages_per_shard_x,
-            shard_grid_height,
-            shard_grid_width,
-            worker_shard_cores_start_y,
-            worker_shard_cores_start_x,
-            is_shard_grid_transposed),
-        1024,
-        0x0);
-
-    run_height_sharded_tensor_slice_indexer_get_page_location_test(
-        addrgen,
-        pages_per_shard_y,
-        pages_per_shard_x,
-
-        shard_grid_height,
-        shard_grid_width,
-
-        worker_shard_cores_start_y,
-        worker_shard_cores_start_x,
-
-        is_shard_grid_transposed);
-}
-TEST(CclShardedTensorAddrGenBuilder, TestBuildBlockSharded) {
-    static constexpr std::size_t pages_per_shard_y = 8;
-    static constexpr std::size_t pages_per_shard_x = 2;
-
-    static constexpr std::size_t shard_grid_height = 3;
-    static constexpr std::size_t shard_grid_width = 2;
-
-    static constexpr std::size_t worker_shard_cores_start_y = 0;
-    static constexpr std::size_t worker_shard_cores_start_x = 0;
-
-    bool is_shard_grid_transposed = false;
-
-    auto addrgen = build_sharded_addr_gen<TensorMemoryLayout::BLOCK_SHARDED>(
-        UnharvestedWormholeWorkerToNocLookup(),
-        address_generators::DeviceShardSpecTypeGetter<TensorMemoryLayout::BLOCK_SHARDED>::type(
-            pages_per_shard_y,
-            pages_per_shard_x,
-            shard_grid_height,
-            shard_grid_width,
-            worker_shard_cores_start_y,
-            worker_shard_cores_start_x,
-            is_shard_grid_transposed),
-        1024,
-        0x0);
-
-    run_block_sharded_tensor_slice_indexer_get_page_location_test(
-        addrgen,
-        pages_per_shard_y,
-        pages_per_shard_x,
-
-        shard_grid_height,
-        shard_grid_width,
-
-        worker_shard_cores_start_y,
-        worker_shard_cores_start_x,
-
-        is_shard_grid_transposed);
-}
-
-}  // namespace tt_metal
-}  // namespace tt

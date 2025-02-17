@@ -63,7 +63,7 @@ def gen_reshape_shape(input_shape, step=1):
 
 # Does not have memory_config parameter
 parameters = {
-    "xfail": {
+    "nightly": {
         "input_shape": gen_shapes([1, 1, 1, 1], [6, 6, 256, 256], [1, 1, 1, 1], 16)
         + gen_shapes([1, 1, 1], [6, 256, 256], [1, 1, 1], 16)
         + gen_shapes([1, 1], [256, 256], [1, 1], 16),

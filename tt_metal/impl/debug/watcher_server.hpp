@@ -4,13 +4,15 @@
 
 #pragma once
 
-#include "tt_metal/impl/device/device.hpp"
+#include <device.hpp>
+
+struct metal_SocDescriptor;
 
 namespace tt {
 
-void watcher_init(tt_metal::Device* device);
-void watcher_attach(tt_metal::Device* device);
-void watcher_detach(tt_metal::Device* dev);
+void watcher_init(tt_metal::IDevice* device);
+void watcher_attach(tt_metal::IDevice* device);
+void watcher_detach(tt_metal::IDevice* dev);
 
 void watcher_sanitize_host_noc_read(const metal_SocDescriptor& soc_d, CoreCoord core, uint64_t addr, uint32_t len);
 void watcher_sanitize_host_noc_write(const metal_SocDescriptor& soc_d, CoreCoord core, uint64_t addr, uint32_t len);

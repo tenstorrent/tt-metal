@@ -4,4 +4,14 @@ set(PROFILER_SRC
 )
 
 add_library(profiler OBJECT ${PROFILER_SRC})
-target_link_libraries(profiler PUBLIC common)
+target_link_libraries(
+    profiler
+    PUBLIC
+        common
+    PRIVATE
+        Tracy::TracyClient
+        Taskflow::Taskflow
+        TT::Metalium::HostDevCommon
+        Metalium::Metal::Impl
+        Metalium::Metal::LLRT
+)

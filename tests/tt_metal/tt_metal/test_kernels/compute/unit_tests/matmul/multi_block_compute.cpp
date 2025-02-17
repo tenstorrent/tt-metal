@@ -29,7 +29,7 @@ void MAIN {
     for (uint32_t block_id = 0; block_id < num_blocks; block_id++) {
         acquire_dst();
         if (block_id > 0) {
-            copy_tile_to_dst_init_short();
+            copy_tile_to_dst_init_short(partials_cb);
             cb_wait_front(partials_cb, out_block_num_tiles);
             for (uint32_t i = 0; i < out_block_num_tiles; i++) {
                 copy_tile(partials_cb, i, i);

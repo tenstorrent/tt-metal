@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "data_collection.hpp"
-#include "llrt/rtoptions.hpp"
-#include "tt_metal/impl/kernels/kernel.hpp"
-#include "tt_metal/common/core_coord.hpp"
+#include <rtoptions.hpp>
+#include <kernel.hpp>
+#include <core_coord.hpp>
 
 #include <magic_enum/magic_enum.hpp>
 

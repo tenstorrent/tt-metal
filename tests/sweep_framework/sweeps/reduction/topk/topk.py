@@ -28,12 +28,36 @@ random.seed(0)
 parameters = {
     "nightly": {
         "input_shape": gen_shapes([1, 1, 32, 64], [2, 6, 128, 128], [1, 1, 32, 64], 64)
-        + gen_shapes([1, 32, 64], [12, 256, 1024], [1, 32, 64], 8)
-        + gen_shapes([32, 64], [256, 1024], [32, 64], 8),
-        "dim": [-1, -2, -3, -4],
-        "largest": [True],
+        + gen_shapes([1, 1, 33, 65], [2, 6, 127, 129], [1, 1, 33, 63], 128)
+        + gen_shapes([1, 1, 31, 63], [2, 6, 128, 128], [1, 1, 32, 64], 7)
+        + gen_shapes([1, 32, 64], [12, 200, 1025], [1, 32, 64], 8)
+        + gen_shapes([1, 32, 64], [12, 256, 1023], [1, 32, 164], 9)
+        + gen_shapes([1, 7, 20], [12, 300, 1024], [1, 32, 64], 10)
+        + gen_shapes([32, 64], [256, 1024], [32, 64], 8)
+        + gen_shapes([32, 6], [256, 404], [32, 264], 18)
+        + gen_shapes([32, 17], [256, 124], [32, 624], 28),
+        "dim": [
+            0,
+            1,
+            2,
+            3,
+            None,
+            [0, 1],
+            [0, 2],
+            [0, 3],
+            [1, 2],
+            [1, 3],
+            [2, 3],
+            [0, 1, 2],
+            [0, 1, 3],
+            [0, 1, 3],
+            [0, 2, 3],
+            [1, 2, 3],
+            [0, 1, 2, 3],
+        ],
+        "largest": [True, False],
         "k": [32],  # only k = 32 is supported for now
-        "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "input_a_dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b],
         "input_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
@@ -42,10 +66,28 @@ parameters = {
         "input_shape": gen_shapes([1, 1, 32, 64], [6, 12, 256, 1024], [1, 1, 32, 64], 64)
         + gen_shapes([1, 32, 64], [12, 256, 1024], [1, 32, 64], 8)
         + gen_shapes([32, 64], [256, 1024], [32, 64], 8),
-        "dim": [-1, -2, -3, -4],
+        "dim": [
+            0,
+            1,
+            2,
+            3,
+            None,
+            [0, 1],
+            [0, 2],
+            [0, 3],
+            [1, 2],
+            [1, 3],
+            [2, 3],
+            [0, 1, 2],
+            [0, 1, 3],
+            [0, 1, 3],
+            [0, 2, 3],
+            [1, 2, 3],
+            [0, 1, 2, 3],
+        ],
         "largest": [True, False],
         "k": [32],
-        "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "input_a_dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b],
         "input_layout": [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
@@ -65,8 +107,11 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
         return True, "Absolute value of dim must be less or equal than the rank of input tensor"
     if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT:
         return True, "Unary operation requires tensor to be in Tile layout when working with non-sharded input tensor"
-    if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT and test_vector["input_a_dtype"] == ttnn.bfloat8_b:
-        return True, "bfloat8_b is only supported on tiled layout"
+    if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT and not (
+        test_vector["input_a_dtype"] == ttnn.float32 or test_vector["input_a_dtype"] == ttnn.bfloat16
+    ):
+        return True, "Row major is only supported for fp32 & fp16"
+
     return False, None
 
 
@@ -88,6 +133,9 @@ def run(
 ) -> list:
     data_seed = random.randint(0, 20000000)
     torch.manual_seed(data_seed)
+
+    if input_a_dtype == ttnn.float32 and ttnn.device.is_grayskull(device):
+        return [(False, "Dest Fp32 mode is not supported for arch grayskull"), 0]
 
     input_shape = sanitize_shape(input_shape, "topk")
 

@@ -25,35 +25,32 @@ void ExampleMultipleReturnDeviceOperation::validate_on_program_cache_hit(
         attributes.return_output2);
 }
 
-ExampleMultipleReturnDeviceOperation::shape_return_value_t ExampleMultipleReturnDeviceOperation::compute_output_shapes(
-    const operation_attributes_t&, const tensor_args_t& tensor_args) {
-    return {tensor_args.input_tensor.shape(), tensor_args.input_tensor.shape()};
+ExampleMultipleReturnDeviceOperation::spec_return_value_t ExampleMultipleReturnDeviceOperation::compute_output_specs(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const auto& input_tensor = tensor_args.input_tensor;
+    TensorSpec spec(
+        input_tensor.get_logical_shape(),
+        TensorLayout(input_tensor.get_dtype(), PageConfig(input_tensor.get_layout()), MemoryConfig{}));
+    spec_return_value_t result = {std::nullopt, std::nullopt};
+    if (operation_attributes.return_output1) {
+        std::get<0>(result) = spec;
+    }
+    if (operation_attributes.return_output2) {
+        std::get<1>(result) = spec;
+    }
+    return result;
 }
 
 ExampleMultipleReturnDeviceOperation::tensor_return_value_t ExampleMultipleReturnDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto [output1_shape_opt, output2_shape_opt] = compute_output_shapes(operation_attributes, tensor_args);
-
-    auto output1_shape = output1_shape_opt.value();
-    auto output2_shape = output2_shape_opt.value();
-
-    auto return_output1 = operation_attributes.return_output1;
-    auto return_output2 = operation_attributes.return_output2;
-
-    const auto& input_tensor = tensor_args.input_tensor;
-    auto output1 =
-        create_device_tensor(output1_shape, input_tensor.dtype(), input_tensor.layout(), input_tensor.device());
-
-    auto output2 =
-        create_device_tensor(output2_shape, input_tensor.dtype(), input_tensor.layout(), input_tensor.device());
+    auto [output1_spec_opt, output2_spec_opt] = compute_output_specs(operation_attributes, tensor_args);
 
     std::vector<std::optional<Tensor>> ret(2);
-
-    if (return_output1) {
-        ret[0] = output1;
+    if (output1_spec_opt) {
+        ret[0] = create_device_tensor(*output1_spec_opt, tensor_args.input_tensor.device());
     }
-    if (return_output2) {
-        ret[1] = output2;
+    if (output2_spec_opt) {
+        ret[1] = create_device_tensor(*output2_spec_opt, tensor_args.input_tensor.device());
     }
 
     return ret;

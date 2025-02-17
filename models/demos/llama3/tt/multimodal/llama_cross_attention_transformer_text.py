@@ -126,8 +126,8 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
             configuration.head_dim,
             configuration.max_seq_len,
             configuration.rope_theta,
-            configuration.use_scaled_rope,
             configuration.rope_scaling_factor,
+            configuration.orig_context_len,
         )
         self.trans_mats_dict = self.rope_setup.get_both_trans_mats()
 
@@ -276,10 +276,12 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
         mode="decode",
         page_table=None,
         kv_cache=None,
+        cross_page_table=None,
         text_only_inference=False,
         vision_tokens=None,
         get_last_token=-1,
     ):
+        total_layer_idx = 0  # Used to track the total layer index for accessing the paged kv cache
         for idx, (
             layer,
             xattn_layer,
@@ -289,13 +291,18 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
                 h = xattn_layer(
                     h,
                     xattn_mask=xattn_mask,
-                    xattn_cache=xattn_caches[xattn_layer_idx],
+                    xattn_cache=(
+                        xattn_caches[xattn_layer_idx] if cross_page_table is None else kv_cache[total_layer_idx]
+                    ),
                     full_text_row_masked_out_mask_1NSH=full_text_row_masked_out_mask_1NSH,
                     full_text_row_masked_out_mask_11SD=full_text_row_masked_out_mask_11SD,
                     mode=mode,
                     user_id=user_id,
                     vision_tokens=vision_tokens,
+                    cross_page_table=cross_page_table,
                 )
+            if idx in self.fusion_schedule:
+                total_layer_idx += 1
             h = layer(
                 h,
                 current_pos,
@@ -303,8 +310,9 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
                 user_id=user_id,
                 mode=mode,
                 page_table=page_table,
-                kv_cache=kv_cache,
+                kv_cache=kv_cache[total_layer_idx] if kv_cache is not None else None,
             )
+            total_layer_idx += 1
 
         if get_last_token != -1:
             h = ttnn.slice(h, (0, 0, get_last_token, 0), (1, 1, get_last_token + 32, h.shape[-1]))

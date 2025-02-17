@@ -72,7 +72,7 @@ class Yolov4TestInfra:
         self.act_dtype = act_dtype
         self.weight_dtype = weight_dtype
         self.model_location_generator = model_location_generator
-        self.ttnn_yolov4_model = TtYOLOv4(load_yolov4_weight(self.model_location_generator))
+        self.ttnn_yolov4_model = TtYOLOv4(device, load_yolov4_weight(self.model_location_generator))
         torch_model = load_yolov4_model(self.ttnn_yolov4_model)
         input_shape = (1, 320, 320, 3)
         torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
@@ -81,7 +81,7 @@ class Yolov4TestInfra:
         self.torch_output_tensor = torch_model(self.torch_input_tensor)
 
     def run(self):
-        self.output_tensor = self.ttnn_yolov4_model(self.device, self.input_tensor)
+        self.output_tensor = self.ttnn_yolov4_model(self.input_tensor)
 
     def setup_l1_sharded_input(self, device, torch_input_tensor=None):
         if is_wormhole_b0():
@@ -99,7 +99,7 @@ class Yolov4TestInfra:
         grid_size = core_grid
         grid_coord = ttnn.CoreCoord(grid_size.x - 1, grid_size.y - 1)
         shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), grid_coord)})
-        shard_spec = ttnn.ShardSpec(shard_grid, (shard_h, 16), ttnn.ShardOrientation.ROW_MAJOR, False)
+        shard_spec = ttnn.ShardSpec(shard_grid, (shard_h, 16), ttnn.ShardOrientation.ROW_MAJOR)
         input_mem_config = ttnn.MemoryConfig(
             ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.types.BufferType.L1, shard_spec
         )
@@ -121,7 +121,6 @@ class Yolov4TestInfra:
                 16,
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
         )
         sharded_mem_config_DRAM = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, dram_shard_spec

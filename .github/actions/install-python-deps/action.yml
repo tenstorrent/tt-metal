@@ -10,7 +10,7 @@ runs:
   using: "composite"
   steps:
     - name: "Install Cached Python Dependencies"
-      uses: getsentry/action-setup-venv@v2.1.0
+      uses: getsentry/action-setup-venv@v2.1.1
       id: venv
       with:
         python-version: ${{ inputs.python-version }}
@@ -18,6 +18,7 @@ runs:
         cache-dependency-path: |
           tt_metal/python_env/requirements-dev.txt
           docs/requirements-docs.txt
+          tests/sweep_framework/requirements-sweeps.txt
           pyproject.toml
           create_venv.sh
         install-cmd: ./create_venv.sh

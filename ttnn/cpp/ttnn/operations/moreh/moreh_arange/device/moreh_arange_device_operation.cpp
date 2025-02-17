@@ -55,39 +55,33 @@ void MorehArangeOperation::validate_on_program_cache_hit(
     validate_inputs(operation_attributes, tensor_args);
 };
 
-MorehArangeOperation::shape_return_value_t MorehArangeOperation::compute_output_shapes(
+MorehArangeOperation::spec_return_value_t MorehArangeOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    if (tensor_args.output.has_value()) {
+        return tensor_args.output->get_tensor_spec();
+    }
+
     uint32_t num_elems = static_cast<uint32_t>(
         ceil((operation_attributes.end - operation_attributes.start) / operation_attributes.step));
 
     if (operation_attributes.untilize_out) {
-        return ttnn::Shape(tt::tt_metal::LegacyShape({num_elems}));
+        return TensorSpec(
+            Shape({num_elems}),
+            TensorLayout(
+                operation_attributes.dtype, PageConfig(Layout::ROW_MAJOR), operation_attributes.memory_config));
     }
 
-    SmallVector<uint32_t> output_size = {
-        tt::constants::TILE_HEIGHT, tt::round_up(num_elems, tt::constants::TILE_WIDTH)};
-
-    auto dimensions_pads = SmallVector<Padding::PadDimension>();
-    dimensions_pads.push_back(Padding::PadDimension{.front = 0, .back = 31});
-    dimensions_pads.push_back(
-        Padding::PadDimension{.front = 0, .back = tt::round_up(num_elems, tt::constants::TILE_WIDTH) - num_elems});
-    const auto padding = Padding(dimensions_pads, Padding::PadValue::Any);
-
-    return ttnn::Shape{tt::tt_metal::LegacyShape(output_size, padding)};
+    return TensorSpec(
+        Shape({1, num_elems}),
+        TensorLayout(operation_attributes.dtype, PageConfig(Layout::TILE), operation_attributes.memory_config));
 };
 
 MorehArangeOperation::tensor_return_value_t MorehArangeOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& output = tensor_args.output;
-    if (output.has_value()) {
-        return output.value();
+    if (tensor_args.output.has_value()) {
+        return tensor_args.output.value();
     }
-    return create_device_tensor(
-        compute_output_shapes(operation_attributes, tensor_args),
-        operation_attributes.dtype,
-        operation_attributes.untilize_out ? Layout::ROW_MAJOR : Layout::TILE,
-        tensor_args.any.device(),
-        operation_attributes.memory_config);
+    return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.any.device());
 }
 
 std::tuple<MorehArangeOperation::operation_attributes_t, MorehArangeOperation::tensor_args_t>

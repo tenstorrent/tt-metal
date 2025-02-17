@@ -49,8 +49,8 @@ def run_elt_silu_relu(
     interleaved_mem_config = ttnn.L1_MEMORY_CONFIG
     input_tensor = ttnn.to_memory_config(input_tensor, interleaved_mem_config)
     # input_shape = [1, 1, _nearest_y(batch_size * input_height * input_width, 32), input_channels]
-    input_2d_height = input_tensor.shape.with_tile_padding()[2]
-    input_2d_width = input_tensor.shape.with_tile_padding()[3]
+    input_2d_height = input_tensor.padded_shape[2]
+    input_2d_width = input_tensor.padded_shape[3]
     logger.debug(f"input_2d_height={input_2d_height} and input_2d_width={input_2d_width}")
 
     ## input shard
@@ -89,7 +89,7 @@ def run_elt_silu_relu(
     logger.debug(f"shard_grid={shard_grid}")
     logger.debug(f"input_shard_height={shard_height}, input_shard_width={shard_width}")
 
-    shard_spec = ttnn.ShardSpec(shard_grid, (shard_height, shard_width), shard_orientation, False)
+    shard_spec = ttnn.ShardSpec(shard_grid, (shard_height, shard_width), shard_orientation)
     in_sharded_mem_config = ttnn.MemoryConfig(tensor_memory_layout, ttnn.BufferType.L1, shard_spec)
 
     logger.debug(f"shard_memory_layout={in_sharded_mem_config}")

@@ -5,10 +5,10 @@
 #include <algorithm>
 
 #include "test_golden_impls.hpp"
-#include "common/test_tiles.hpp"
-#include "common/bfloat16.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
+#include <tt-metalium/test_tiles.hpp>
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include "tests/tt_metal/test_utils/packing.hpp"
 
 using std::vector;

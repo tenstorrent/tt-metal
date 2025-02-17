@@ -29,7 +29,7 @@ Silicon accelerator setup
 .. code-block:: cpp
 
    constexpr int device_id = 0;
-   Device *device = CreateDevice(device_id);
+   auto device = CreateDevice(device_id);
 
 We instantiate a device to control our ``GRAYSKULL`` type
 accelerator.

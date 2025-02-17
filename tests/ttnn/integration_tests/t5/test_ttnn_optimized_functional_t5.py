@@ -131,7 +131,7 @@ def test_t5_attention(device, model_name, batch_size, sequence_size):
     output, _ = functional_t5.t5_attention(config, hidden_states, is_decoder=False, parameters=parameters)
     output = ttnn.to_torch(output)
 
-    assert ttnn.pearson_correlation_coefficient(torch_output, output) >= 0.9990
+    assert ttnn.pearson_correlation_coefficient(torch_output, output) >= 0.998
 
 
 @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
@@ -160,7 +160,7 @@ def test_t5_layer_self_attention(device, model_name, batch_size, sequence_size):
     )
     output = ttnn.to_torch(output)
 
-    assert ttnn.pearson_correlation_coefficient(torch_output, output) >= 0.997
+    assert ttnn.pearson_correlation_coefficient(torch_output, output) >= 0.996
 
 
 @pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")

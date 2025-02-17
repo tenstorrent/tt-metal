@@ -5,7 +5,7 @@
 #pragma once
 
 #include "risc_common.h"
-#include "dev_msgs.h"
+#include <dev_msgs.h>
 #include "eth_l1_address_map.h"
 #include "risc_common.h"
 #include "tt_eth_api.h"
@@ -13,7 +13,7 @@
 
 #include "tools/profiler/kernel_profiler.hpp"
 #include "noc_nonblocking_api.h"
-#include "../dataflow_api.h"
+#include "dataflow_api.h"
 #include "tunneling.h"
 
 /**
@@ -213,6 +213,12 @@ void eth_send_bytes_over_channel_payload_only_unsafe(
             0, ((num_bytes_sent + src_addr) >> 4), ((num_bytes_sent + dst_addr) >> 4), num_bytes_per_send_word_size);
         num_bytes_sent += num_bytes_per_send;
     }
+}
+
+FORCE_INLINE
+void eth_send_bytes_over_channel_payload_only_unsafe_one_packet(
+    uint32_t src_addr, uint32_t dst_addr, uint32_t num_bytes) {
+    internal_::eth_send_packet_bytes_unsafe(0, src_addr, dst_addr, num_bytes);
 }
 
 /*

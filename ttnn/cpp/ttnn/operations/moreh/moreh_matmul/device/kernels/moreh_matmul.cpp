@@ -5,7 +5,7 @@
 // Implemented based on bmm.cpp
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/transpose_wh.h"
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
+#include "cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
 
 namespace NAMESPACE {
 
@@ -200,7 +200,7 @@ FORCE_INLINE void matmul_with_transpose_and_mask(
     // TODO: checking required when the input cb format and intermediate cb format are different.
     mm_init(cb_in0, cb_in1, cb_out0);
     if (transpose_input || transpose_other) {
-        transpose_wh_init(cb_in0);
+        transpose_wh_init(cb_in0, cb_out0);
     }
 
     if (need_input_mask_h || need_input_mask_w) {

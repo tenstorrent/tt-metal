@@ -7,16 +7,18 @@
 #include <iomanip>
 #include <filesystem>
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tools/profiler/profiler.hpp"
-#include "tools/profiler/profiler_state.hpp"
-#include "tools/profiler/common.hpp"
+#include <host_api.hpp>
+#include <tt_metal.hpp>
+#include <profiler.hpp>
+#include <profiler_state.hpp>
+#include <common.hpp>
 #include "hostdevcommon/profiler_common.h"
-#include "llrt/rtoptions.hpp"
-#include "dev_msgs.h"
-#include "tt_metal/third_party/tracy/public/tracy/Tracy.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include <rtoptions.hpp>
+#include <dev_msgs.h>
+#include "tracy/Tracy.hpp"
+#include <device.hpp>
+
+#include "llrt.hpp"
 
 namespace tt {
 
@@ -27,23 +29,28 @@ static kernel_profiler::PacketTypes get_packet_type(uint32_t timer_id) {
 }
 
 void DeviceProfiler::readRiscProfilerResults(
-    int device_id, const std::vector<std::uint32_t>& profile_buffer, const CoreCoord& worker_core) {
+    IDevice* device, CoreCoord& worker_core) {
     ZoneScoped;
+    auto device_id = device->id();
 
+    my_device_id = device_id;
     HalProgrammableCoreType CoreType;
     int riscCount;
-    profiler_msg_t* profiler_msg;
 
     if (tt::Cluster::instance().is_worker_core(worker_core, device_id)) {
-        profiler_msg = hal.get_dev_addr<profiler_msg_t*>(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::PROFILER);
         CoreType = HalProgrammableCoreType::TENSIX;
         riscCount = 5;
     } else {
-        profiler_msg =
-            hal.get_dev_addr<profiler_msg_t*>(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::PROFILER);
-        CoreType = HalProgrammableCoreType::ACTIVE_ETH;
+        auto active_eth_cores = tt::Cluster::instance().get_active_ethernet_cores(device_id);
+        bool is_active_eth_core = active_eth_cores.find(tt::Cluster::instance().get_logical_ethernet_core_from_virtual(
+                                      device_id, worker_core)) != active_eth_cores.end();
+
+        CoreType = is_active_eth_core ? tt_metal::HalProgrammableCoreType::ACTIVE_ETH
+                                      : tt_metal::HalProgrammableCoreType::IDLE_ETH;
+
         riscCount = 1;
     }
+    profiler_msg_t* profiler_msg = hal.get_dev_addr<profiler_msg_t*>(CoreType, HalL1MemAddrType::PROFILER);
 
     uint32_t coreFlatID = tt::Cluster::instance().get_virtual_routing_to_profiler_flat_id(device_id).at(worker_core);
     uint32_t startIndex = coreFlatID * MAX_RISCV_PER_CORE * PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC;
@@ -212,9 +219,11 @@ void DeviceProfiler::readRiscProfilerResults(
     }
 
     std::vector<uint32_t> control_buffer_reset(kernel_profiler::PROFILER_L1_CONTROL_VECTOR_SIZE, 0);
-    control_buffer_reset[kernel_profiler::DRAM_PROFILER_ADDRESS] = output_dram_buffer->address();
+    control_buffer_reset[kernel_profiler::DRAM_PROFILER_ADDRESS] =
+        control_buffer[kernel_profiler::DRAM_PROFILER_ADDRESS];
+    control_buffer_reset[kernel_profiler::FLAT_ID] = control_buffer[kernel_profiler::FLAT_ID];
+    control_buffer_reset[kernel_profiler::CORE_COUNT_PER_DRAM] = control_buffer[kernel_profiler::CORE_COUNT_PER_DRAM];
 
-    profiler_msg = hal.get_dev_addr<profiler_msg_t*>(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::PROFILER);
     tt::llrt::write_hex_vec_to_core(
         device_id, worker_core, control_buffer_reset, reinterpret_cast<uint64_t>(profiler_msg->control_vector));
 }
@@ -384,7 +393,7 @@ void DeviceProfiler::generateZoneSourceLocationsHashes() {
     }
 }
 
-void DeviceProfiler::dumpResults(Device* device, const std::vector<CoreCoord>& worker_cores, bool lastDump) {
+void DeviceProfiler::dumpResults(IDevice* device, const std::vector<CoreCoord>& worker_cores, ProfilerDumpState state) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
 
@@ -394,11 +403,9 @@ void DeviceProfiler::dumpResults(Device* device, const std::vector<CoreCoord>& w
     generateZoneSourceLocationsHashes();
 
     if (output_dram_buffer != nullptr) {
-        std::vector<uint32_t> profile_buffer(output_dram_buffer->size() / sizeof(uint32_t), 0);
-
         const auto USE_FAST_DISPATCH = std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr;
         if (USE_FAST_DISPATCH) {
-            if (lastDump) {
+            if (state == ProfilerDumpState::LAST_CLOSE_DEVICE) {
                 if (tt::llrt::RunTimeOptions::get_instance().get_profiler_do_dispatch_cores()) {
                     tt_metal::detail::ReadFromBuffer(output_dram_buffer, profile_buffer);
                 }
@@ -406,13 +413,13 @@ void DeviceProfiler::dumpResults(Device* device, const std::vector<CoreCoord>& w
                 EnqueueReadBuffer(device->command_queue(), output_dram_buffer, profile_buffer, true);
             }
         } else {
-            if (!lastDump) {
+            if (state != ProfilerDumpState::LAST_CLOSE_DEVICE) {
                 tt_metal::detail::ReadFromBuffer(output_dram_buffer, profile_buffer);
             }
         }
 
-        for (const auto& worker_core : worker_cores) {
-            readRiscProfilerResults(device_id, profile_buffer, worker_core);
+        for (auto worker_core : worker_cores) {
+            readRiscProfilerResults(device, worker_core);
         }
     } else {
         log_warning("DRAM profiler buffer is not initialized");
@@ -433,9 +440,9 @@ void DeviceProfiler::pushTracyDeviceResults() {
         }
     }
 
-    double delay = 0;
-    double frequency = 0;
-    uint64_t cpuTime = 0;
+    static double delay = 0;
+    static double frequency = 0;
+    static uint64_t cpuTime = 0;
 
     for (auto& device_core : device_cores) {
         int device_id = device_core.first;
@@ -482,8 +489,9 @@ void DeviceProfiler::pushTracyDeviceResults() {
         }
     }
 
-    for (auto& event : device_events) {
+    for (auto event : device_events) {
         std::pair<uint32_t, CoreCoord> device_core = {event.chip_id, (CoreCoord){event.core_x, event.core_y}};
+        event.timestamp = event.timestamp * this->freqScale + this->shift;
         if (event.zone_phase == tracy::TTDeviceEventPhase::begin) {
             TracyTTPushStartZone(device_tracy_contexts[device_core], event);
         } else if (event.zone_phase == tracy::TTDeviceEventPhase::end) {

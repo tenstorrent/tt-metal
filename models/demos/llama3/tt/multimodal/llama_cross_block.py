@@ -125,6 +125,7 @@ class TtLlamaCrossAttentionTransformerBlock(LightweightModule):
         mode,
         user_id=0,
         vision_tokens=None,
+        cross_page_table=None,
     ):
         skip_mem_cfg = self.model_config["DECODE_RESIDUAL_MEMCFG"] if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG
         assert (
@@ -139,6 +140,7 @@ class TtLlamaCrossAttentionTransformerBlock(LightweightModule):
             mode=mode,
             user_id=user_id,
             vision_tokens=vision_tokens,
+            cross_page_table=cross_page_table,
         )
         # FIXME: DRAM workaround for No circular buffer with id error
         attn_out = ttnn.to_memory_config(attn_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -149,8 +151,7 @@ class TtLlamaCrossAttentionTransformerBlock(LightweightModule):
         # FIXME: DRAM workaround for No circular buffer with id error
         mlp_out = ttnn.to_memory_config(mlp_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        if mode == "prefill":
-            mlp_out = ttnn.mul(mlp_out, full_text_row_masked_out_mask_11SD)
+        mlp_out = ttnn.mul(mlp_out, full_text_row_masked_out_mask_11SD)
         mlp_out = ttnn.mul(mlp_out, ttnn.tanh(self.gate_ffwd))
         out = ttnn.add(res, mlp_out)
         return out

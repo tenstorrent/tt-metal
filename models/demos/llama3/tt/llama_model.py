@@ -2,19 +2,17 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import os
-import math
 import ttnn
 import torch
 import torch.nn as nn
+from tqdm import tqdm
 from models.demos.llama3.tt.llama_decoder import TtTransformerBlock
 from models.common.rmsnorm import RMSNorm
 import ttnn
-from typing import Optional
 from models.common.lightweightmodule import LightweightModule
 from models.demos.llama3.tt.distributed_norm import DistributedNorm
 from models.demos.llama3.tt.lm_head import LMHead
-from models.demos.llama3.tt.llama_common import copy_host_to_device, get_prefill_rot_mat, HostEmbedding
+from models.demos.llama3.tt.llama_common import copy_host_to_device, get_prefill_rot_mat
 from models.demos.llama3.tt.llama_rope import TtLlamaRotarySetup
 from models.demos.llama3.tt.llama_embedding import TtLlamaEmbedding
 
@@ -28,6 +26,7 @@ class TtTransformer(LightweightModule):
         state_dict,
         weight_cache_path,
         paged_attention_config=None,
+        use_paged_kv_cache=False,
     ):
         super().__init__()
         self.args = args
@@ -54,8 +53,8 @@ class TtTransformer(LightweightModule):
             args.head_dim,
             args.max_seq_len,
             args.rope_theta,
-            args.use_scaled_rope,
             args.rope_scaling_factor,
+            args.orig_context_len,
         )
         self.trans_mats_dict = self.rope_setup.get_both_trans_mats()
 
@@ -69,8 +68,9 @@ class TtTransformer(LightweightModule):
                 layer_num=i,
                 transformation_mats=self.trans_mats_dict,
                 paged_attention_config=paged_attention_config,
+                use_paged_kv_cache=use_paged_kv_cache,
             )
-            for i in range(self.n_layers)
+            for i in tqdm(range(self.n_layers))
         ]
         self.norm = DistributedNorm(
             RMSNorm(
@@ -84,6 +84,7 @@ class TtTransformer(LightweightModule):
                 is_distributed=self.args.is_distributed_norm,
                 sharded_program_config=self.model_config["SHARDED_NORM_LM_HEAD_PRGM_CFG"],
                 sharded_output_config=self.model_config["LM_HEAD_INPUT_MEMCFG"],
+                ccl_topology=self.args.ccl_topology(),
             ),
             args,
             args.is_galaxy,
@@ -98,7 +99,7 @@ class TtTransformer(LightweightModule):
             weight_cache_path=weight_cache_path,
         )
 
-    def prepare_inputs_prefill(self, tokens, page_table=None):
+    def prepare_inputs_prefill(self, tokens, start_pos=0, page_table=None, chunk_page_table=None):
         """
         Inputs are torch tensors or python types. This function returns ttnn
         tensors on device.
@@ -107,25 +108,25 @@ class TtTransformer(LightweightModule):
 
         tokens = tokens.reshape(1, 1, 1, -1)
         S = tokens.shape[-1]
-        dims = (None, -1) if self.args.is_galaxy else (None, None)
-        mesh_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=dims, mesh_shape=self.cluster_shape)
-
         tokens = ttnn.from_torch(
             tokens,
             device=self.mesh_device,
             dtype=ttnn.uint32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=mesh_mapper,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
-
         tokens_embd = self.embd(tokens)
+        tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
 
         tt_rot_mats_prefill = get_prefill_rot_mat(
             self.args.head_dim,
             self.args.max_seq_len,
             self.mesh_device,
-            seq_len=S,
-            scale_factor=self.args.rope_scaling_factor,
+            S,
+            self.args.rope_theta,
+            self.args.rope_scaling_factor,
+            self.args.orig_context_len,
+            start_pos=start_pos,
         )
 
         if page_table is not None:
@@ -139,7 +140,18 @@ class TtTransformer(LightweightModule):
         else:
             tt_page_table = None
 
-        return tokens_embd, tt_rot_mats_prefill, tt_page_table
+        if chunk_page_table is not None:
+            tt_chunk_page_table = ttnn.from_torch(
+                chunk_page_table,
+                device=self.mesh_device,
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+            )
+        else:
+            tt_chunk_page_table = None
+
+        return tokens_embd, tt_rot_mats_prefill, tt_page_table, tt_chunk_page_table
 
     def prepare_inputs_decode(self, *inputs):
         """
@@ -158,21 +170,24 @@ class TtTransformer(LightweightModule):
         Inputs are torch tensors or python types. Outputs are ttnn tensors on host.
         NOTE: Tokens and current_pos are padded to batch
         """
-        B = tokens.shape[-1]
+        B = tokens.shape[0]
         assert current_pos.shape[0] == B, "Batch size mismatch"
         assert B == self.args.max_batch_size, "Batch size must be equal to max_batch_size"
 
-        dims = (None, -1) if self.args.is_galaxy else (None, None)
-        mesh_mapper = ttnn.ShardTensor2dMesh(self.mesh_device, dims=dims, mesh_shape=self.cluster_shape)
-
+        # Necessary padding to be full tile sized when on device
+        tokens = torch.nn.functional.pad(tokens.view(-1), (0, 32 - len(tokens)), "constant", 0)
         tokens = ttnn.from_torch(
             tokens,
             device=None,
             dtype=ttnn.uint32,
-            mesh_mapper=mesh_mapper,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
+        tokens = ttnn.unsqueeze_to_4D(tokens)
 
-        rope_idxs = self.rope_setup.get_rot_idxs(current_pos, on_host=True)
+        rot_current_pos = torch.maximum(
+            current_pos, torch.tensor(0, dtype=torch.int64)
+        )  # Ensure position indices are non-negative
+        rope_idxs = self.rope_setup.get_rot_idxs(rot_current_pos, on_host=True)
         current_pos_tt = ttnn.from_torch(
             current_pos,
             device=None,
@@ -210,6 +225,10 @@ class TtTransformer(LightweightModule):
         tt_rot_mats = self.rope_setup.get_rot_mats(rope_idxs)
         tt_tokens = self.embd(tokens)
         tt_tokens = ttnn.unsqueeze_to_4D(tt_tokens)
+        tt_tokens = ttnn.to_memory_config(
+            tt_tokens,
+            self.args.model_config["DECODE_RESIDUAL_MEMCFG"],
+        )
         return tt_tokens, current_pos, tt_rot_mats, page_table
 
     def process_output_prefill(self, tt_out, last_token_idx):
@@ -222,20 +241,32 @@ class TtTransformer(LightweightModule):
             mesh_composer=ttnn.ConcatMesh2dToTensor(
                 self.mesh_device, dims=(3, 1) if self.args.is_galaxy else (1, -1), mesh_shape=self.args.cluster_shape
             ),
-        )[0, 0, last_token_idx, :]
+        )[0, 0, last_token_idx, : self.vocab_size]
         return logits
 
-    def process_output_decode(self, tt_out):
+    def process_output_decode(self, tt_out, B, S=1):
         """
         Input is ttnn device tensor of logits. Output is torch logits tensor
         """
         if self.args.num_devices > 1:
-            tt_out = ttnn.all_gather(tt_out, dim=3, num_links=1, topology=ttnn.Topology.Linear)
-        tt_out_rm = ttnn.untilize(tt_out, use_multicore=True)
+            if self.args.is_galaxy:
+                tt_out = ttnn.all_gather(
+                    tt_out,
+                    dim=3,
+                    num_links=2,
+                    cluster_axis=0,
+                    mesh_device=self.mesh_device,
+                    topology=self.args.ccl_topology(),
+                )
+            else:
+                tt_out = ttnn.all_gather(tt_out, dim=3, num_links=1, topology=self.args.ccl_topology())
+        tt_out = ttnn.untilize(tt_out, use_multicore=True)
         if self.args.num_devices > 1:
-            return ttnn.to_torch(ttnn.get_device_tensors(tt_out_rm)[0]).float()
+            tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()
         else:
-            return ttnn.to_torch(tt_out_rm).float()
+            tt_out = ttnn.to_torch(tt_out).float()
+        tt_out = tt_out[:, :, :B, : self.vocab_size].view(B, S, -1)
+        return tt_out
 
     def ttnn_prefill_forward(
         self,
@@ -243,7 +274,10 @@ class TtTransformer(LightweightModule):
         rot_mats,
         user_id,
         page_table=None,
+        chunk_page_table=None,
+        chunk_start_idx=None,
         get_last_token=-1,
+        kv_cache=None,
     ):
         """
         This method will take device tensors and any other args to run forward.
@@ -253,11 +287,13 @@ class TtTransformer(LightweightModule):
             x,
             current_pos=None,
             rot_mats=rot_mats,
-            transformation_mats=None,
             user_id=user_id,
             mode="prefill",
             page_table=page_table,
+            chunk_page_table=chunk_page_table,
+            chunk_start_idx=chunk_start_idx,
             get_last_token=get_last_token,
+            kv_cache=kv_cache,
         )
 
     def ttnn_decode_forward(
@@ -266,18 +302,24 @@ class TtTransformer(LightweightModule):
         current_pos,
         rot_mats,
         page_table=None,
+        kv_cache=None,
     ):
         """
         This method will take device tensors and any other args to run forward.
         It returns ttnn device tensors.
         """
-        return self.forward(
+        tt_logits = self.forward(
             x,
             current_pos,
             rot_mats=rot_mats,
             mode="decode",
             page_table=page_table,
+            kv_cache=kv_cache,
         )
+        # Send output logits to DRAM so L1 is not reserved for ttnn tracing and can be used by subsequent operations
+        if not self.args.is_galaxy:
+            tt_logits = ttnn.to_memory_config(tt_logits, ttnn.DRAM_MEMORY_CONFIG)
+        return tt_logits
 
     def forward(
         self,
@@ -287,14 +329,27 @@ class TtTransformer(LightweightModule):
         user_id=0,
         mode="decode",
         page_table=None,
+        chunk_page_table=None,
+        chunk_start_idx=None,
         get_last_token=-1,
+        kv_cache=None,
     ):
         # No-op if callers already provide the right memory config
         if mode == "decode" and not self.args.is_galaxy:
             x = ttnn.to_memory_config(x, self.model_config["DECODE_RESIDUAL_MEMCFG"])
 
-        for layer in self.layers:
-            x = layer(x, current_pos, rot_mats, user_id, mode, page_table)
+        for i, layer in enumerate(self.layers):
+            x = layer(
+                x,
+                current_pos,
+                rot_mats,
+                user_id,
+                mode,
+                page_table,
+                chunk_page_table=chunk_page_table,
+                chunk_start_idx=chunk_start_idx,
+                kv_cache=kv_cache[i] if kv_cache is not None else None,
+            )
 
         if mode == "prefill" and get_last_token == -1:
             return x

@@ -55,11 +55,10 @@ def test_multi_device_open_close_full_mesh_device_fixture(mesh_device):
 
 def test_multi_device_open_close_using_context_manager(silicon_arch_name, silicon_arch_wormhole_b0):
     """Using context manager to open and close multi-device"""
-    pytest.skip("Issue #6983")
-    mesh_shape, device_ids = ttnn.MeshShape(2, 2), ttnn.get_device_ids()
-    if len(device_ids) <= 1:
+    if ttnn.get_num_devices() < 4:
         pytest.skip()
-    with ttnn.create_mesh_device(mesh_shape, device_ids) as mesh_device:
+    mesh_shape = ttnn.MeshShape(2, 2)
+    with ttnn.create_mesh_device(mesh_shape) as mesh_device:
         # Do something with multi_device
         pass
 
@@ -511,11 +510,16 @@ def test_sharded_matmul(t3k_mesh_device):
     q_heads_1B4D = ttnn.to_device(q_heads_1B4D, t3k_mesh_device)
     keys_1BDP = ttnn.to_device(keys_1BDP, t3k_mesh_device)
 
+    core_grid = ttnn.CoreGrid(y=4, x=8)
+    compute_grid_size = t3k_mesh_device.compute_with_storage_grid_size()
+    if (compute_grid_size.x < core_grid.x) or (compute_grid_size.y < core_grid.y):
+        pytest.skip("Test requires larger grid size")
+
     q_heads_1B4D = ttnn.to_memory_config(
         q_heads_1B4D,
         ttnn.create_sharded_memory_config(
             shape=(32, 128),
-            core_grid=ttnn.CoreGrid(y=4, x=8),
+            core_grid=core_grid,
             strategy=ttnn.ShardStrategy.HEIGHT,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
@@ -526,7 +530,7 @@ def test_sharded_matmul(t3k_mesh_device):
         keys_1BDP,
         ttnn.create_sharded_memory_config(
             shape=(128, 32),
-            core_grid=ttnn.CoreGrid(y=4, x=8),
+            core_grid=core_grid,
             strategy=ttnn.ShardStrategy.HEIGHT,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
@@ -542,7 +546,7 @@ def test_sharded_matmul(t3k_mesh_device):
         q_heads_1B4D,
         keys_1BDP,
         dtype=ttnn.bfloat16,
-        core_grid=ttnn.CoreGrid(y=4, x=8),
+        core_grid=core_grid,
         compute_kernel_config=compute_kernel_attn,
     )
 
@@ -668,8 +672,11 @@ def test_visualize_mesh_device(t3k_mesh_device):
     ttnn.visualize_mesh_device(t3k_mesh_device)
 
 
-def test_all_gather_multiple_submeshes(t3k_mesh_device):
+@pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x2_grid")], indirect=True)
+def test_all_gather_multiple_submeshes(mesh_device):
     """Test all_gather with multiple submeshes"""
+    if mesh_device.get_num_devices() < 8:
+        pytest.skip()
 
     def model(submesh):
         full_tensor = torch.ones((1, 1, 32, 32 * submesh.get_num_devices()), dtype=torch.bfloat16)
@@ -684,6 +691,28 @@ def test_all_gather_multiple_submeshes(t3k_mesh_device):
             device_tensor_torch = ttnn.to_torch(device_tensor)
             assert torch.all(device_tensor_torch == full_tensor)
 
-    submesh_devices = t3k_mesh_device.create_submeshes(ttnn.MeshShape(2, 2), ttnn.MeshType.Ring)
+    submesh_devices = mesh_device.create_submeshes(ttnn.MeshShape(2, 2))
     for submesh in submesh_devices:
         model(submesh)
+
+
+@pytest.mark.parametrize("mesh_device", [pytest.param((1, 8), id="1x8_line")], indirect=True)
+def test_line_all_gather_after_reshape(mesh_device):
+    if mesh_device.get_num_devices() < 8:
+        pytest.skip()
+    mesh_device.reshape(ttnn.MeshShape(2, 4))
+    torch_input_tensor = torch.rand((1, 1, 64, 128), dtype=torch.bfloat16)
+
+    mesh_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=list(mesh_device.shape), dims=(2, 3)),
+    )
+    output_tensor = ttnn.all_gather(
+        mesh_tensor,
+        dim=2,
+        cluster_axis=0,
+        mesh_device=mesh_device,
+        topology=ttnn.Topology.Linear,
+    )

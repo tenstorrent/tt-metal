@@ -10,7 +10,7 @@
 
 #include "graph_consts.hpp"
 #include "graph_processor.hpp"
-#include "tt_metal/common/assert.hpp"
+#include <tt-metalium/assert.hpp>
 
 namespace ttnn::graph {
 
@@ -42,7 +42,7 @@ ttnn::Shape parse_shape(std::string_view shape_string) {
         }
     }
 
-    return ttnn::Shape(shape);
+    return ttnn::Shape(std::move(shape));
 }
 }  // namespace
 

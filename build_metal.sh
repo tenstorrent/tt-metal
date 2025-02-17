@@ -29,8 +29,15 @@ show_help() {
     echo "  --clean                          Remove build workspaces."
     echo "  --build-static-libs              Build tt_metal (not ttnn) as a static lib (BUILD_SHARED_LIBS=OFF)"
     echo "  --disable-unity-builds           Disable Unity builds"
+    echo "  --disable-light-metal-trace      Disable Light Metal tracing to binary."
     echo "  --cxx-compiler-path              Set path to C++ compiler."
     echo "  --c-compiler-path                Set path to C++ compiler."
+    echo "  --cpm-source-cache               Set path to CPM Source Cache."
+    echo "  --cpm-use-local-packages         Attempt to use locally installed dependencies."
+    echo "  --ttnn-shared-sub-libs           Use shared libraries for ttnn."
+    echo "  --toolchain-path                 Set path to CMake toolchain file."
+    echo "  --configure-only                 Only configure the project, do not build."
+    echo "  --enable-coverage                Instrument the binaries for code coverage."
 }
 
 clean() {
@@ -56,14 +63,58 @@ build_programming_examples="OFF"
 build_tt_train="OFF"
 build_static_libs="OFF"
 unity_builds="ON"
+light_metal_trace="ON"
 build_all="OFF"
 cxx_compiler_path=""
+cpm_source_cache=""
+cpm_use_local_packages="OFF"
 c_compiler_path=""
+ttnn_shared_sub_libs="OFF"
+toolchain_path="cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake"
+configure_only="OFF"
+enable_coverage="OFF"
 
 declare -a cmake_args
 
 OPTIONS=h,e,c,t,a,m,s,u,b:,p
-LONGOPTIONS=help,build-all,export-compile-commands,enable-ccache,enable-time-trace,enable-asan,enable-msan,enable-tsan,enable-ubsan,build-type:,enable-profiler,install-prefix:,build-tests,build-ttnn-tests,build-metal-tests,build-umd-tests,build-programming-examples,build-tt-train,build-static-libs,disable-unity-builds,release,development,debug,clean,cxx-compiler-path:,c-compiler-path:
+LONGOPTIONS="
+help
+build-all
+export-compile-commands
+enable-ccache
+enable-time-trace
+enable-asan
+enable-msan
+enable-tsan
+enable-ubsan
+build-type:
+enable-profiler
+install-prefix:
+build-tests
+build-ttnn-tests
+build-metal-tests
+build-umd-tests
+build-programming-examples
+build-tt-train
+build-static-libs
+disable-unity-builds
+disable-light-metal-trace
+release
+development
+debug
+clean
+cxx-compiler-path:
+cpm-source-cache:
+cpm-use-local-packages
+c-compiler-path:
+ttnn-shared-sub-libs
+toolchain-path:
+configure-only
+enable-coverage
+"
+
+# Flatten LONGOPTIONS into a comma-separated string for getopt
+LONGOPTIONS=$(echo "$LONGOPTIONS" | tr '\n' ',' | sed 's/,$//')
 
 # Parse the options
 PARSED=$(getopt --options=$OPTIONS --longoptions=$LONGOPTIONS --name "$0" -- "$@")
@@ -93,6 +144,8 @@ while true; do
             enable_tsan="ON";;
         -u|--enable-ubsan)
             enable_ubsan="ON";;
+        --enable-coverage)
+            enable_coverage="ON";;
         -b|--build-type)
             build_type="$2";shift;;
         -p|--enable-profiler)
@@ -115,12 +168,24 @@ while true; do
             build_static_libs="ON";;
         --build-all)
             build_all="ON";;
+        --ttnn-shared-sub-libs)
+            ttnn_shared_sub_libs="ON";;
+        --configure-only)
+            configure_only="ON";;
         --disable-unity-builds)
 	    unity_builds="OFF";;
+        --disable-light-metal-trace)
+            light_metal_trace="OFF";;
         --cxx-compiler-path)
             cxx_compiler_path="$2";shift;;
+        --cpm-source-cache)
+            cpm_source_cache="$2";shift;;
+        --cpm-use-local-packages)
+            cpm_use_local_packages="ON";;
         --c-compiler-path)
             c_compiler_path="$2";shift;;
+        --toolchain-path)
+            toolchain_path="$2";shift;;
         --release)
             build_type="Release";;
         --development)
@@ -173,10 +238,13 @@ echo "INFO: Enable AddressSanitizer: $enable_asan"
 echo "INFO: Enable MemorySanitizer: $enable_msan"
 echo "INFO: Enable ThreadSanitizer: $enable_tsan"
 echo "INFO: Enable UndefinedBehaviorSanitizer: $enable_ubsan"
+echo "INFO: Enable Coverage: $enable_coverage"
 echo "INFO: Build directory: $build_dir"
 echo "INFO: Install Prefix: $cmake_install_prefix"
 echo "INFO: Build tests: $build_tests"
 echo "INFO: Enable Unity builds: $unity_builds"
+echo "INFO: TTNN Shared sub libs : $ttnn_shared_sub_libs"
+echo "INFO: Enable Light Metal Trace: $light_metal_trace"
 
 # Prepare cmake arguments
 cmake_args+=("-B" "$build_dir")
@@ -191,6 +259,16 @@ fi
 if [ "$c_compiler_path" != "" ]; then
     echo "INFO: C compiler: $c_compiler_path"
     cmake_args+=("-DCMAKE_C_COMPILER=$c_compiler_path")
+fi
+
+if [ "$cpm_source_cache" != "" ]; then
+    echo "INFO: CPM_SOURCE_CACHE: $cpm_source_cache"
+    cmake_args+=("-DCPM_SOURCE_CACHE=$cpm_source_cache")
+fi
+
+if [ "$cpm_use_local_packages" = "ON" ]; then
+    echo "INFO: CPM_USE_LOCAL_PACKAGES: $cpm_use_local_packages"
+    cmake_args+=("-DCPM_USE_LOCAL_PACKAGES=ON")
 fi
 
 if [ "$enable_ccache" = "ON" ]; then
@@ -222,16 +300,23 @@ if [ "$enable_profiler" = "ON" ]; then
     cmake_args+=("-DENABLE_TRACY=ON")
 fi
 
+if [ "$enable_coverage" = "ON" ]; then
+    cmake_args+=("-DENABLE_COVERAGE=ON")
+fi
+
 if [ "$export_compile_commands" = "ON" ]; then
     cmake_args+=("-DCMAKE_EXPORT_COMPILE_COMMANDS=ON")
 else
     cmake_args+=("-DCMAKE_EXPORT_COMPILE_COMMANDS=OFF")
 fi
 
+if [ "$ttnn_shared_sub_libs" = "ON" ]; then
+    cmake_args+=("-DENABLE_TTNN_SHARED_SUBLIBS=ON")
+fi
+
 if [ "$build_tests" = "ON" ]; then
     cmake_args+=("-DTT_METAL_BUILD_TESTS=ON")
     cmake_args+=("-DTTNN_BUILD_TESTS=ON")
-    cmake_args+=("-DTT_UMD_BUILD_TESTS=ON")
 fi
 
 if [ "$build_metal_tests" = "ON" ]; then
@@ -242,7 +327,7 @@ if [ "$build_ttnn_tests" = "ON" ]; then
     cmake_args+=("-DTTNN_BUILD_TESTS=ON")
 fi
 
-if [ "$build_tt_umd_tests" = "ON" ]; then
+if [ "$build_umd_tests" = "ON" ]; then
     cmake_args+=("-DTT_UMD_BUILD_TESTS=ON")
 fi
 
@@ -264,12 +349,24 @@ else
     cmake_args+=("-DTT_UNITY_BUILDS=OFF")
 fi
 
+if [ "$light_metal_trace" = "ON" ]; then
+    cmake_args+=("-DTT_ENABLE_LIGHT_METAL_TRACE=ON")
+else
+    cmake_args+=("-DTT_ENABLE_LIGHT_METAL_TRACE=OFF")
+fi
+
 if [ "$build_all" = "ON" ]; then
     cmake_args+=("-DTT_METAL_BUILD_TESTS=ON")
     cmake_args+=("-DTTNN_BUILD_TESTS=ON")
-    cmake_args+=("-DTT_UMD_BUILD_TESTS=ON")
     cmake_args+=("-DBUILD_PROGRAMMING_EXAMPLES=ON")
     cmake_args+=("-DBUILD_TT_TRAIN=ON")
+fi
+
+# toolchain and cxx_compiler settings would conflict with eachother
+# only use toolchain if not setting cxx compiler directly
+if [ "$cxx_compiler_path" == "" ]; then
+    echo "INFO: CMAKE_TOOLCHAIN_FILE: $toolchain_path"
+    cmake_args+=("-DCMAKE_TOOLCHAIN_FILE=${toolchain_path}")
 fi
 
 # Create and link the build directory
@@ -281,5 +378,7 @@ echo "INFO: Running: cmake "${cmake_args[@]}""
 cmake "${cmake_args[@]}"
 
 # Build libraries and cpp tests
-echo "INFO: Building Project"
-cmake --build $build_dir --target install
+if [ "$configure_only" = "OFF" ]; then
+    echo "INFO: Building Project"
+    cmake --build $build_dir --target install
+fi

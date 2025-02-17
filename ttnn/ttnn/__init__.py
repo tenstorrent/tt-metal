@@ -7,6 +7,7 @@ import json
 import importlib
 import os
 import pathlib
+import re
 from types import ModuleType
 
 from loguru import logger
@@ -58,7 +59,7 @@ def save_config_to_json_file(json_path):
     with open(json_path, "w") as f:
         normalized_config = {}
         for key in dir(CONFIG):
-            if "__" in key:
+            if re.match("^_.+_$", key):
                 continue
             value = getattr(CONFIG, key)
             if isinstance(value, pathlib.Path):
@@ -110,6 +111,7 @@ from ttnn._ttnn.global_semaphore import (
     create_global_semaphore,
     get_global_semaphore_address,
     reset_global_semaphore_value,
+    create_global_semaphore_with_same_address,
 )
 
 from ttnn.types import (
@@ -145,6 +147,7 @@ from ttnn.types import (
     TILE_LAYOUT,
     StorageType,
     DEVICE_STORAGE_TYPE,
+    MULTI_DEVICE_STORAGE_TYPE,
     CoreGrid,
     CoreRange,
     Shape,
@@ -173,6 +176,7 @@ from ttnn.device import (
     manage_device,
     synchronize_device,
     dump_device_memory_state,
+    get_memory_view,
     GetPCIeDeviceID,
     GetNumPCIeDevices,
     GetNumAvailableDevices,
@@ -309,6 +313,8 @@ from ttnn.operations.reduction import (
 
 from ttnn.operations.ccl import (
     Topology,
+    teardown_edm_fabric,
+    initialize_edm_fabric,
 )
 
 from ttnn.operations.conv2d import (
@@ -325,3 +331,9 @@ import ttnn.graph
 
 if importlib.util.find_spec("torch") is not None:
     import ttnn.tracer
+
+from ttnn._ttnn.device import get_arch_name as _get_arch_name
+
+
+def get_arch_name():
+    return _get_arch_name()
