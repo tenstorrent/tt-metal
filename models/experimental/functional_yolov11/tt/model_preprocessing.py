@@ -1,5 +1,6 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
-# SPDX-License-Identifier: Apache-2.0]
+
+# SPDX-License-Identifier: Apache-2.0
 
 import torch
 import ttnn
@@ -11,7 +12,6 @@ from models.experimental.functional_yolov11.reference.yolov11 import Conv, DFL, 
 
 
 def create_yolov11_input_tensors(device, batch=1, input_channels=3, input_height=224, input_width=224):
-    # torch.manual_seed(20)
     torch_input_tensor = torch.randn(batch, input_channels, input_height, input_width)
     ttnn_input_tensor = torch.permute(torch_input_tensor, (0, 2, 3, 1))
     ttnn_input_tensor = ttnn_input_tensor.reshape(
@@ -39,12 +39,8 @@ def make_anchors(device, feats, strides, grid_cell_offset=0.5):
     b = torch.cat(stride_tensor).transpose(0, 1)
 
     return (
-        ttnn.from_torch(
-            a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
-        ),
-        ttnn.from_torch(
-            b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
-        ),
+        ttnn.from_torch(a, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device),
+        ttnn.from_torch(b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device),
     )
 
 
@@ -97,17 +93,6 @@ class DotDict(dict):
 
 
 def preprocess(d: dict, weights_path: str, bias_path: str):
-    """
-    Accesses a tensor within a nested dictionary using a path string.
-
-    Args:
-        d: The dictionary containing the nested structure.
-        path: A string representing the path to the tensor,
-              e.g., "conv1.module.conv.weight".
-
-    Returns:
-        The tensor found at the specified path, or None if not found.
-    """
     tt_bias = None
     weight_keys = weights_path.split(".")
     bias_keys = bias_path.split(".")
@@ -162,7 +147,7 @@ def create_yolov11_model_parameters(model: YoloV11, input_tensor: torch.Tensor, 
         input_tensor.shape[3] // 8,
         input_tensor.shape[3] // 16,
         input_tensor.shape[3] // 32,
-    ]  # Values depends on input resolution. Current: 224x224
+    ]
     strides = [8.0, 16.0, 32.0]
 
     anchors, strides = make_anchors(device, feats, strides)  # Optimization: Processing make anchors outside model run
@@ -187,7 +172,7 @@ def create_yolov11_model_parameters_detect(
         model=model, run_model=lambda model: model(input_tensor_1, input_tensor_2, input_tensor_3), device=None
     )
 
-    feats = [28, 14, 7]  # Values depends on input resolution. Current: 224x224
+    feats = [28, 14, 7]
     strides = [8.0, 16.0, 32.0]
 
     anchors, strides = make_anchors(device, feats, strides)  # Optimization: Processing make anchors outside model run

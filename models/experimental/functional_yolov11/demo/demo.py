@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from pathlib import Path
 import os
 import cv2
 import sys
@@ -11,17 +12,16 @@ import pytest
 import torch.nn as nn
 from loguru import logger
 from datetime import datetime
-from functools import partial
 from models.utility_functions import disable_persistent_kernel_cache
 from models.experimental.functional_yolov11.reference import yolov11
-
+from models.experimental.functional_yolov11.reference.yolov11 import attempt_load
 from models.experimental.functional_yolov11.tt import ttnn_yolov11
-
 from models.experimental.functional_yolov11.tt.model_preprocessing import (
     create_yolov11_input_tensors,
     create_yolov11_model_parameters,
 )
 from models.experimental.functional_yolov11.demo.demo_utils import LoadImages, preprocess, postprocess
+from models.utility_functions import skip_for_grayskull
 
 try:
     sys.modules["ultralytics"] = yolov11
@@ -31,38 +31,6 @@ try:
     sys.modules["ultralytics.nn.modules.head"] = yolov11
 except KeyError:
     print("models.experimental.functional_yolov11.reference.yolov11 not found.")
-
-
-class Ensemble(nn.ModuleList):
-    def __init__(self):
-        super(Ensemble, self).__init__()
-
-    def forward(self, x, augment=False):
-        y = []
-        for module in self:
-            y.append(module(x, augment)[0])
-        y = torch.cat(y, 1)
-        return y, None
-
-
-def attempt_load(weights, map_location=None):
-    model = Ensemble()
-    for w in weights if isinstance(weights, list) else [weights]:
-        w = "models/experimental/functional_yolov11/reference/yolo11n.pt"
-        ckpt = torch.load(w, map_location=map_location)
-        model.append(ckpt["ema" if ckpt.get("ema") else "model"].float().eval())
-    for m in model.modules():
-        if type(m) in [nn.Hardswish, nn.LeakyReLU, nn.ReLU, nn.ReLU6, nn.SiLU]:
-            m.inplace = True
-        elif type(m) is nn.Upsample:
-            m.recompute_scale_factor = None
-
-    if len(model) == 1:
-        return model[-1]
-    else:
-        for k in ["names", "stride"]:
-            setattr(model, k, getattr(model[-1], k))
-        return model
 
 
 def save_yolo_predictions_by_model(result, save_dir, image_path, model_name):
@@ -99,53 +67,61 @@ def save_yolo_predictions_by_model(result, save_dir, image_path, model_name):
     print(f"Predictions saved to {output_path}")
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@skip_for_grayskull()
 @pytest.mark.parametrize(
-    "source, model_type",
+    "use_pretrained_weight",
     [
-        ("models/experimental/functional_yolov11/demo/images/cycle_girl.jpg", "torch_model"),
-        ("models/experimental/functional_yolov11/demo/images/cycle_girl.jpg", "tt_model"),
-        ("models/experimental/functional_yolov11/demo/images/dog.jpg", "torch_model"),
-        ("models/experimental/functional_yolov11/demo/images/dog.jpg", "tt_model"),
+        False,
+        # True      # uncomment  to run the model for real weights
+    ],
+    ids=[
+        "pretrained_weight_false",
+        # "pretrained_weight_true",    # uncomment to run the model for real weights
     ],
 )
-def test_demo(device, source, model_type):
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+@pytest.mark.parametrize(
+    "source, model_type,resolution",
+    [
+        # 224*224
+        # ("models/experimental/functional_yolov11/demo/images/cycle_girl.jpg", "torch_model", [3, 224, 224]),
+        # ("models/experimental/functional_yolov11/demo/images/cycle_girl.jpg", "tt_model", [3, 224, 224]),
+        # ("models/experimental/functional_yolov11/demo/images/dog.jpg", "torch_model", [3, 224, 224]),
+        # ("models/experimental/functional_yolov11/demo/images/dog.jpg", "tt_model", [3, 224, 224]),
+        # 640*640
+        # ("models/experimental/functional_yolov11/demo/images/cycle_girl.jpg", "torch_model", [3, 640, 640]),
+        ("models/experimental/functional_yolov11/demo/images/cycle_girl.jpg", "tt_model", [3, 640, 640]),
+        # ("models/experimental/functional_yolov11/demo/images/dog.jpg", "torch_model", [3, 640, 640]),
+        # ("models/experimental/functional_yolov11/demo/images/dog.jpg", "tt_model", [3, 640, 640]),
+    ],
+)
+def test_demo(device, source, model_type, resolution, use_pretrained_weight):
     disable_persistent_kernel_cache()
-
-    if model_type == "torch_model":
-        model = attempt_load("models/experimental/functional_yolov11/reference/yolo11n.pt", map_location="cpu")
-        state_dict = model.state_dict()
-        model = yolov11.YoloV11()
+    model = yolov11.YoloV11()
+    if use_pretrained_weight:
+        logger.info(f"Demo Inferencing with Pre-trained Weights")
+        state_dict = attempt_load("yolo11n.pt", map_location="cpu").state_dict()
         ds_state_dict = {k: v for k, v in state_dict.items()}
         new_state_dict = {}
         for (name1, parameter1), (name2, parameter2) in zip(model.state_dict().items(), ds_state_dict.items()):
             if isinstance(parameter2, torch.FloatTensor):
                 new_state_dict[name1] = parameter2
         model.load_state_dict(new_state_dict)
+    else:
+        logger.info(f"Demo Inferencing with Random Weights")
+    if model_type == "torch_model":
         model.eval()
         logger.info("Inferencing using Torch Model")
     else:
         torch_input, ttnn_input = create_yolov11_input_tensors(
-            device, input_channels=3, input_height=224, input_width=224
+            device, input_channels=resolution[0], input_height=resolution[1], input_width=resolution[2]
         )
-        torch_model = attempt_load("models/experimental/functional_yolov11/reference/yolo11n.pt", map_location="cpu")
-        state_dict = torch_model.state_dict()
-        torch_model = yolov11.YoloV11()
-        ds_state_dict = {k: v for k, v in state_dict.items()}
-        new_state_dict = {}
-        for (name1, parameter1), (name2, parameter2) in zip(torch_model.state_dict().items(), ds_state_dict.items()):
-            if isinstance(parameter2, torch.FloatTensor):
-                new_state_dict[name1] = parameter2
-        torch_model.load_state_dict(new_state_dict)
-        torch_model.eval()
-        parameters = create_yolov11_model_parameters(torch_model, torch_input, device=device)
+        parameters = create_yolov11_model_parameters(model, torch_input, device=device)
         model = ttnn_yolov11.YoloV11(device, parameters)
         logger.info("Inferencing using ttnn Model")
 
     save_dir = "models/experimental/functional_yolov11/demo/runs"
-
     dataset = LoadImages(path=source)
-
     model_save_dir = os.path.join(save_dir, model_type)
     os.makedirs(model_save_dir, exist_ok=True)
 
@@ -234,10 +210,9 @@ def test_demo(device, source, model_type):
 
     for batch in dataset:
         paths, im0s, s = batch
-        im = preprocess(im0s)
+        im = preprocess(im0s, resolution)
         if model_type == "torch_model":
             preds = model(im)
-            print("preds in torch", preds.shape)
         else:
             img = torch.permute(im, (0, 2, 3, 1))
             img = img.reshape(
@@ -247,16 +222,8 @@ def test_demo(device, source, model_type):
                 img.shape[3],
             )
             ttnn_im = ttnn.from_torch(img, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
-            # ttnn_im = ttnn.from_torch(img, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16)
-            # print("input tensor in demo",ttnn_im.shape,ttnn_im.dtype,ttnn_im.memory_config(),ttnn_im.layout)
             preds = model(x=ttnn_im)
             preds = ttnn.to_torch(preds, dtype=torch.float32)
-            print("preds in ttnn", preds.shape)
-
         results = postprocess(preds, im, im0s, batch, names)[0]
-
         save_yolo_predictions_by_model(results, save_dir, source, model_type)
-    # input tensor in demo Shape([1, 1, 409600, 3]) DataType.BFLOAT8_B MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt) Layout.TILE
-
-    # input tensor in demo Shape([1, 1, 409600, 3]) DataType.BFLOAT16 MemoryConfig(memory_layout=TensorMemoryLayout::INTERLEAVED,buffer_type=BufferType::DRAM,shard_spec=std::nullopt) Layout.ROW_MAJOR
     print("Inference done")
