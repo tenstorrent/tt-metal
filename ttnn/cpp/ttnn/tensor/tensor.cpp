@@ -602,7 +602,7 @@ Tensor Tensor::from_span(tt::stl::Span<const T> buffer, const TensorSpec& spec, 
 bool Tensor::is_borrowable(const TensorSpec& spec) {
     return spec.physical_shape() == spec.logical_2d_shape() &&  //
            spec.layout() == Layout::ROW_MAJOR &&                //
-           // Ideally, this should assert on `TensorSpec` creation.
+           // The block float types imply tilized layout - the extra check is conservative.
            (spec.data_type() != DataType::BFLOAT4_B && spec.data_type() != DataType::BFLOAT8_B);
 }
 

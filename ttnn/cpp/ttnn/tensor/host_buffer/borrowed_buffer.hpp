@@ -13,7 +13,7 @@ template <typename T>
 struct Buffer {
     using value_type = T;
 
-    explicit Buffer() = default;
+    Buffer() = default;
     Buffer(T* data_ptr, std::size_t size) : data_ptr_(data_ptr), size_(size) {}
 
     std::size_t size() const { return this->size_; }
