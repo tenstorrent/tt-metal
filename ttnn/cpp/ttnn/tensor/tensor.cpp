@@ -610,6 +610,9 @@ Tensor Tensor::borrow_from_span(
     const std::function<void()>& on_creation_callback,
     const std::function<void()>& on_destruction_callback,
     std::optional<ttnn::AnyDevice> device) {
+    size_t volume = spec.logical_shape().volume();
+    TT_FATAL(
+        buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
     TT_FATAL(
         is_borrowable(spec),
         "Tensor spec does not support borrowing a tensor from a buffer: physical shape {}, logical shape {}, layout {}",
@@ -669,9 +672,10 @@ std::vector<float> Tensor::to_vector<float>() const {
             std::vector<float> physical_data;
             physical_data.reserve(physical_data_bfloat16.size());
             std::transform(
-                physical_data_bfloat16.begin(), physical_data_bfloat16.end(), physical_data.begin(), [](bfloat16 val) {
-                    return val.to_float();
-                });
+                physical_data_bfloat16.begin(),
+                physical_data_bfloat16.end(),
+                std::back_inserter(physical_data),
+                [](bfloat16 val) { return val.to_float(); });
             return tensor_impl::decode_tensor_data(std::move(physical_data), cpu_tensor.tensor_spec());
         }
         case DataType::FLOAT32: {

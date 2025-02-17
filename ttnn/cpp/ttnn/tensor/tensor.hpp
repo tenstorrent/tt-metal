@@ -148,7 +148,7 @@ public:
     static Tensor from_span(
         tt::stl::Span<const T> buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device = std::nullopt);
 
-    // Returns true if the tensor spec is such that the tensor can be borrowed:
+    // Returns true if the tensor spec is such that the tensor can be created by borrowing storage from a buffer:
     // 1. The tensor physical shape is the same as logical shape.
     // 2. The tensor layout is row-major.
     bool static is_borrowable(const TensorSpec& spec);
