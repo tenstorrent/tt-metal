@@ -162,8 +162,7 @@ public:
         tt::stl::Span<T> buffer,
         const TensorSpec& spec,
         const std::function<void()>& on_creation_callback,
-        const std::function<void()>& on_destruction_callback,
-        std::optional<ttnn::AnyDevice> device = std::nullopt);
+        const std::function<void()>& on_destruction_callback);
 
     // Same as `from_span`, but operates on a vector instead.
     template <typename T>

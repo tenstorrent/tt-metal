@@ -83,13 +83,10 @@ Tensor create_typed_tt_tensor_from_py_data(
         "Sharded tensors must have a shard spec when converting to tt tensors!");
 
     tt::stl::Span<T> pydata_span(reinterpret_cast<T*>(py_data_ptr), tensor_spec.logical_shape().volume());
-    if (Tensor::is_borrowable(tensor_spec) && !force_disable_borrow) {
-        return Tensor::borrow_from_span(
-            pydata_span,
-            tensor_spec,
-            on_creation_callback,
-            on_destruction_callback,
-            device == nullptr ? std::nullopt : std::optional<ttnn::AnyDevice>(device));
+    if (Tensor::is_borrowable(tensor_spec) && !force_disable_borrow &&
+        // No point in creating a borrowed storage, as uploading to device will make a copy anyways.
+        device == nullptr) {
+        return Tensor::borrow_from_span(pydata_span, tensor_spec, on_creation_callback, on_destruction_callback);
     } else {
         return Tensor::from_span(
             tt::stl::Span<const T>(pydata_span),
