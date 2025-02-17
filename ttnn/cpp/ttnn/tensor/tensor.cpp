@@ -611,8 +611,7 @@ Tensor Tensor::borrow_from_span(
     tt::stl::Span<T> buffer,
     const TensorSpec& spec,
     const std::function<void()>& on_creation_callback,
-    const std::function<void()>& on_destruction_callback,
-    std::optional<ttnn::AnyDevice> device) {
+    const std::function<void()>& on_destruction_callback) {
     size_t volume = spec.logical_shape().volume();
     TT_FATAL(
         buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
@@ -629,13 +628,7 @@ Tensor Tensor::borrow_from_span(
         spec.layout());
     BorrowedStorage storage(
         borrowed_buffer::Buffer(buffer.data(), buffer.size()), on_creation_callback, on_destruction_callback);
-    Tensor output(std::move(storage), spec);
-
-    if (device.has_value()) {
-        output = output.to_device(device->get_devices(), spec.memory_config());
-    }
-
-    return output;
+    return Tensor(std::move(storage), spec);
 }
 
 template <>
@@ -731,38 +724,32 @@ template Tensor Tensor::borrow_from_span<float>(
     tt::stl::Span<float> buffer,
     const TensorSpec& spec,
     const std::function<void()>& on_creation_callback,
-    const std::function<void()>& on_destruction_callback,
-    std::optional<ttnn::AnyDevice> device);
+    const std::function<void()>& on_destruction_callback);
 template Tensor Tensor::borrow_from_span<bfloat16>(
     tt::stl::Span<bfloat16> buffer,
     const TensorSpec& spec,
     const std::function<void()>& on_creation_callback,
-    const std::function<void()>& on_destruction_callback,
-    std::optional<ttnn::AnyDevice> device);
+    const std::function<void()>& on_destruction_callback);
 template Tensor Tensor::borrow_from_span<int32_t>(
     tt::stl::Span<int32_t> buffer,
     const TensorSpec& spec,
     const std::function<void()>& on_creation_callback,
-    const std::function<void()>& on_destruction_callback,
-    std::optional<ttnn::AnyDevice> device);
+    const std::function<void()>& on_destruction_callback);
 template Tensor Tensor::borrow_from_span<uint8_t>(
     tt::stl::Span<uint8_t> buffer,
     const TensorSpec& spec,
     const std::function<void()>& on_creation_callback,
-    const std::function<void()>& on_destruction_callback,
-    std::optional<ttnn::AnyDevice> device);
+    const std::function<void()>& on_destruction_callback);
 template Tensor Tensor::borrow_from_span<uint16_t>(
     tt::stl::Span<uint16_t> buffer,
     const TensorSpec& spec,
     const std::function<void()>& on_creation_callback,
-    const std::function<void()>& on_destruction_callback,
-    std::optional<ttnn::AnyDevice> device);
+    const std::function<void()>& on_destruction_callback);
 template Tensor Tensor::borrow_from_span<uint32_t>(
     tt::stl::Span<uint32_t> buffer,
     const TensorSpec& spec,
     const std::function<void()>& on_creation_callback,
-    const std::function<void()>& on_destruction_callback,
-    std::optional<ttnn::AnyDevice> device);
+    const std::function<void()>& on_destruction_callback);
 template Tensor Tensor::from_vector<bfloat16>(
     std::vector<bfloat16>&& buffer, const TensorSpec& spec, std::optional<ttnn::AnyDevice> device);
 template Tensor Tensor::from_vector<int32_t>(
