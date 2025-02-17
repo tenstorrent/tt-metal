@@ -1299,7 +1299,8 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         (uint32_t)act_mcast_receiver_semaphore_id,
         (uint32_t)in0_block_num_tiles * tilized_act_tile_size,  // act_mcast_sender_size_bytes
         (uint32_t)(transpose_mcast ? 1 : 0),
-        (uint32_t)act_block_h_datums_last_block};
+        (uint32_t)act_block_h_datums_last_block,
+        (uint32_t)act_block_h_datums_split_last};
 
     // define for bias
     std::map<string, string> writer_defines;
