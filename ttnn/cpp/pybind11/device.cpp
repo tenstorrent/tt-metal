@@ -19,12 +19,17 @@
 #include <tt-metalium/trace.hpp>
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include <tt-metalium/hal_exp.hpp>
+#include "tt_metal/tools/profiler/op_profiler.hpp"
+
 using namespace tt::tt_metal;
 
 namespace py = pybind11;
 
 namespace {
-inline void DumpDeviceProfiler(IDevice* device) { tt::tt_metal::detail::DumpDeviceProfileResults(device); }
+inline void DumpDeviceProfiler(IDevice* device) { 
+    ProfilerOptionalMetadata prof_metadata(op_profiler::runtime_id_to_opname.exportMap());
+    tt::tt_metal::detail::DumpDeviceProfileResults(device); 
+}
 }  // namespace
 
 namespace ttnn {

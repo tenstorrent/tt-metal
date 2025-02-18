@@ -268,9 +268,6 @@ __attribute__((noinline)) void finish_profiler() {
 }
 
 __attribute__((noinline)) void quick_push() {
-#if defined(DISPATCH_KERNEL) && (PROFILE_KERNEL == PROFILER_OPT_DO_DISPATCH_CORES) && \
-    (defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC))
-
     SrcLocNameToHash("PROFILER-NOC-QUICK-SEND");
     mark_time_at_index_inlined(wIndex, hash);
     wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
@@ -314,8 +311,6 @@ __attribute__((noinline)) void quick_push() {
     }
 
     wIndex = CUSTOM_MARKERS;
-
-#endif
 }
 
 template <uint32_t timer_id, DoingDispatch dispatch = DoingDispatch::NOT_DISPATCH>
@@ -380,6 +375,14 @@ struct profileScopeAccumulate {
         sums[index] += (((uint64_t)p_reg[WALL_CLOCK_HIGH_INDEX] << 32) | p_reg[WALL_CLOCK_LOW_INDEX]) - start_time;
     }
 };
+
+// performs quick push to DRAM if buffers appear full
+template <DoingDispatch dispatch = DoingDispatch::NOT_DISPATCH>
+inline __attribute__((always_inline)) void flush_to_dram_if_full() {
+    if (not bufferHasRoom<dispatch>()) {
+        quick_push();
+    }
+}
 
 template <uint32_t data_id, DoingDispatch dispatch = DoingDispatch::NOT_DISPATCH>
 inline __attribute__((always_inline)) void timeStampedData(uint64_t data) {
@@ -484,5 +487,7 @@ inline __attribute__((always_inline)) void recordEvent(uint16_t event_id) {
 #define DeviceTimestampedData(data_id, data)
 
 #define DeviceRecordEvent(event_id)
+
+#include "noc_event_profiler.hpp"
 
 #endif

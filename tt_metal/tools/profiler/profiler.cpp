@@ -17,6 +17,7 @@
 #include <dev_msgs.h>
 #include "tracy/Tracy.hpp"
 #include <device.hpp>
+#include "event_metadata.hpp"
 
 #include "llrt.hpp"
 
@@ -29,7 +30,11 @@ static kernel_profiler::PacketTypes get_packet_type(uint32_t timer_id) {
 }
 
 void DeviceProfiler::readRiscProfilerResults(
-    IDevice* device, CoreCoord& worker_core) {
+    IDevice* device,
+    CoreCoord& worker_core,
+    const std::optional<ProfilerOptionalMetadata>& metadata,
+    std::ofstream& log_file_ofs,
+    nlohmann::ordered_json& noc_trace_json_log) {
     ZoneScoped;
     auto device_id = device->id();
 
@@ -66,6 +71,14 @@ void DeviceProfiler::readRiscProfilerResults(
         return;
     }
 
+    // helper function to lookup opname from runtime id if metadata is available
+    auto getOpNameIfAvailable = [&metadata](auto device_id, auto runtime_id) {
+        return (metadata.has_value()) ? metadata->getOpName(device_id, runtime_id) : "";
+    };
+
+    // translate worker core virtual coord to phys coordinates
+    auto phys_coord = getPhysicalAddressFromVirtual(device, worker_core);
+
     int riscNum = 0;
     for (int riscEndIndex = 0; riscEndIndex < riscCount; riscEndIndex++) {
         uint32_t bufferEndIndex = control_buffer[riscEndIndex];
@@ -99,6 +112,7 @@ void DeviceProfiler::readRiscProfilerResults(
 
             uint32_t opTime_H = 0;
             uint32_t opTime_L = 0;
+            std::string opname;
             for (int index = bufferRiscShift; index < (bufferRiscShift + bufferEndIndex);
                  index += kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE) {
                 if (!newRunStart && profile_buffer[index] == 0 && profile_buffer[index + 1] == 0) {
@@ -113,6 +127,8 @@ void DeviceProfiler::readRiscProfilerResults(
                     coreFlatIDRead = (profile_buffer[index] >> 3) & 0xFF;
                     runCounterRead = profile_buffer[index + 1] & 0xFFFF;
                     runHostCounterRead = (profile_buffer[index + 1] >> 16) & 0xFFFF;
+
+                    opname = getOpNameIfAvailable(device_id, runHostCounterRead);
 
                 } else {
                     uint32_t timer_id = (profile_buffer[index] >> 12) & 0x7FFFF;
@@ -149,11 +165,15 @@ void DeviceProfiler::readRiscProfilerResults(
                                     worker_core.y,
                                     runCounterRead);
 
-                                dumpResultToFile(
+                                logPacketData(
+                                    device,
+                                    log_file_ofs,
+                                    noc_trace_json_log,
                                     runCounterRead,
                                     runHostCounterRead,
+                                    opname,
                                     device_id,
-                                    worker_core,
+                                    phys_coord,
                                     coreFlatID,
                                     riscType,
                                     0,
@@ -166,11 +186,15 @@ void DeviceProfiler::readRiscProfilerResults(
 
                             uint32_t time_H = opTime_H;
                             uint32_t time_L = opTime_L;
-                            dumpResultToFile(
+                            logPacketData(
+                                device,
+                                log_file_ofs,
+                                noc_trace_json_log,
                                 runCounterRead,
                                 runHostCounterRead,
+                                opname,
                                 device_id,
-                                worker_core,
+                                phys_coord,
                                 coreFlatID,
                                 riscType,
                                 sum,
@@ -185,11 +209,15 @@ void DeviceProfiler::readRiscProfilerResults(
                             index += kernel_profiler::PROFILER_L1_MARKER_UINT32_SIZE;
                             uint32_t data_H = profile_buffer[index];
                             uint32_t data_L = profile_buffer[index + 1];
-                            dumpResultToFile(
+                            logPacketData(
+                                device,
+                                log_file_ofs,
+                                noc_trace_json_log,
                                 runCounterRead,
                                 runHostCounterRead,
+                                opname,
                                 device_id,
-                                worker_core,
+                                phys_coord,
                                 coreFlatID,
                                 riscType,
                                 (uint64_t(data_H) << 32) | data_L,
@@ -200,11 +228,15 @@ void DeviceProfiler::readRiscProfilerResults(
                         case kernel_profiler::TS_EVENT: {
                             uint32_t time_H = profile_buffer[index] & 0xFFF;
                             uint32_t time_L = profile_buffer[index + 1];
-                            dumpResultToFile(
+                            logPacketData(
+                                device,
+                                log_file_ofs,
+                                noc_trace_json_log,
                                 runCounterRead,
                                 runHostCounterRead,
+                                opname,
                                 device_id,
-                                worker_core,
+                                phys_coord,
                                 coreFlatID,
                                 riscType,
                                 0,
@@ -234,9 +266,13 @@ void DeviceProfiler::firstTimestamp(uint64_t timestamp) {
     }
 }
 
-void DeviceProfiler::dumpResultToFile(
+void DeviceProfiler::logPacketData(
+    const IDevice* device,
+    std::ofstream& log_file_ofs,
+    nlohmann::ordered_json& noc_trace_json_log,
     uint32_t run_id,
     uint32_t run_host_id,
+    std::string opname,
     int device_id,
     CoreCoord core,
     int core_flat,
@@ -244,10 +280,6 @@ void DeviceProfiler::dumpResultToFile(
     uint64_t data,
     uint32_t timer_id,
     uint64_t timestamp) {
-    std::pair<uint32_t, CoreCoord> deviceCore = {device_id, core};
-    std::filesystem::path log_path = output_dir / DEVICE_SIDE_LOG;
-    std::ofstream log_file;
-
     kernel_profiler::PacketTypes packet_type = get_packet_type(timer_id);
     uint32_t t_id = timer_id & 0xFFFF;
     std::string zone_name = "";
@@ -292,20 +324,9 @@ void DeviceProfiler::dumpResultToFile(
 
     firstTimestamp(timestamp);
 
-    if (!std::filesystem::exists(log_path)) {
-        log_file.open(log_path);
-        log_file << "ARCH: " << get_string_lowercase(device_architecture)
-                 << ", CHIP_FREQ[MHz]: " << device_core_frequency << std::endl;
-        log_file << "PCIe slot, core_x, core_y, RISC processor type, timer_id, time[cycles since reset], data, run ID, "
-                    "run host ID,  zone name, type, source line, source file"
-                 << std::endl;
-    } else {
-        log_file.open(log_path, std::ios_base::app);
-    }
-
-    // log_file << fmt::format("{:4},{:3},{:3},{:>7},{:7},{:15},{:15},{:5},{:>25},{:>6},{:6},{}",
-    log_file << fmt::format(
-        "{},{},{},{},{},{},{},{},{},{},{},{},{}",
+    logPacketDataToCSV(
+        device,
+        log_file_ofs,
         device_id,
         core.x,
         core.y,
@@ -315,12 +336,233 @@ void DeviceProfiler::dumpResultToFile(
         data,
         run_id,
         run_host_id,
+        opname,
         zone_name,
-        magic_enum::enum_name(packet_type),
+        packet_type,
         source_line,
         source_file);
-    log_file << std::endl;
-    log_file.close();
+
+    logNocTracePacketDataToJson(
+        device,
+        noc_trace_json_log,
+        device_id,
+        core.x,
+        core.y,
+        tracy::riscName[risc_num],
+        t_id,
+        timestamp,
+        data,
+        run_id,
+        run_host_id,
+        opname,
+        zone_name,
+        packet_type,
+        source_line,
+        source_file);
+}
+
+void DeviceProfiler::logPacketDataToCSV(
+    const IDevice* device,
+    std::ofstream& log_file_ofs,
+    int device_id,
+    int core_x,
+    int core_y,
+    const std::string_view risc_name,
+    uint32_t timer_id,
+    uint64_t timestamp,
+    uint64_t data,
+    uint32_t run_id,
+    uint32_t run_host_id,
+    const std::string_view opname,
+    const std::string_view zone_name,
+    kernel_profiler::PacketTypes packet_type,
+    uint64_t source_line,
+    const std::string_view source_file) {
+    log_file_ofs << fmt::format(
+                        "{},{},{},{},{},{},{},{},{},{},{},{},{}",
+                        device_id,
+                        core_x,
+                        core_y,
+                        risc_name,
+                        timer_id,
+                        timestamp,
+                        data,
+                        run_id,
+                        run_host_id,
+                        zone_name,
+                        magic_enum::enum_name(packet_type),
+                        source_line,
+                        source_file)
+                 << std::endl;
+}
+
+void DeviceProfiler::logNocTracePacketDataToJson(
+    const IDevice* device,
+    nlohmann::ordered_json& noc_trace_json_log,
+    int device_id,
+    int core_x,
+    int core_y,
+    const std::string_view risc_name,
+    uint32_t timer_id,
+    uint64_t timestamp,
+    uint64_t data,
+    uint32_t run_id,
+    uint32_t run_host_id,
+    const std::string_view opname,
+    const std::string_view zone_name,
+    kernel_profiler::PacketTypes packet_type,
+    uint64_t source_line,
+    const std::string_view source_file) {
+    if (packet_type == kernel_profiler::ZONE_START || packet_type == kernel_profiler::ZONE_END) {
+        if ((risc_name == "NCRISC" || risc_name == "BRISC") &&
+            (zone_name.starts_with("TRUE-KERNEL-END") || zone_name.ends_with("-KERNEL"))) {
+            tracy::TTDeviceEventPhase zone_phase = (packet_type == kernel_profiler::ZONE_END)
+                                                       ? tracy::TTDeviceEventPhase::end
+                                                       : tracy::TTDeviceEventPhase::begin;
+            noc_trace_json_log.push_back(nlohmann::ordered_json{
+                {"run_id", run_id},
+                {"run_host_id", run_host_id},
+                {"op_name", opname},
+                {"proc", risc_name},
+                {"zone", zone_name},
+                {"zone_phase", magic_enum::enum_name(zone_phase)},
+                {"sx", core_x},
+                {"sy", core_y},
+                {"timestamp", timestamp},
+            });
+        }
+
+    } else if (packet_type == kernel_profiler::TS_DATA) {
+        KernelProfilerNocEventMetadata ev_md(data);
+
+        nlohmann::ordered_json data = {
+            {"run_id", run_id},
+            {"run_host_id", run_host_id},
+            {"op_name", opname},
+            {"proc", risc_name},
+            {"noc", magic_enum::enum_name(ev_md.noc_type)},
+            {"vc", int(ev_md.noc_vc)},
+            {"sx", core_x},
+            {"sy", core_y},
+            {"num_bytes", uint32_t(ev_md.num_bytes)},
+            {"type", magic_enum::enum_name(ev_md.noc_xfer_type)},
+            {"timestamp", timestamp},
+        };
+
+        // handle dst coordinates correctly for different NocEventType
+        if (ev_md.dst_x == -1 || ev_md.dst_y == -1 ||
+            ev_md.noc_xfer_type == KernelProfilerNocEventMetadata::NocEventType::READ_WITH_STATE ||
+            ev_md.noc_xfer_type == KernelProfilerNocEventMetadata::NocEventType::WRITE_WITH_STATE) {
+            // DO NOT emit destination coord; it isn't meaningful
+
+        } else if (ev_md.noc_xfer_type == KernelProfilerNocEventMetadata::NocEventType::WRITE_MULTICAST) {
+            auto phys_start_coord = getPhysicalAddressFromVirtual(device, {ev_md.dst_x, ev_md.dst_y});
+            data["mcast_start_x"] = phys_start_coord.x;
+            data["mcast_start_y"] = phys_start_coord.y;
+            auto phys_end_coord = getPhysicalAddressFromVirtual(device, {ev_md.mcast_end_dst_x, ev_md.mcast_end_dst_y});
+            data["mcast_end_x"] = phys_end_coord.x;
+            data["mcast_end_y"] = phys_end_coord.y;
+        } else {
+            auto phys_coord = getPhysicalAddressFromVirtual(device, {ev_md.dst_x, ev_md.dst_y});
+            data["dx"] = phys_coord.x;
+            data["dy"] = phys_coord.y;
+        }
+
+        noc_trace_json_log.push_back(std::move(data));
+    }
+}
+
+void DeviceProfiler::emitCSVHeader(
+    std::ofstream& log_file_ofs, const tt::ARCH& device_architecture, int device_core_frequency) const {
+    log_file_ofs << "ARCH: " << get_string_lowercase(device_architecture)
+                 << ", CHIP_FREQ[MHz]: " << device_core_frequency << std::endl;
+    log_file_ofs << "PCIe slot, core_x, core_y, RISC processor type, timer_id, time[cycles since reset], data, run ID, "
+                    "run host ID,  zone name, type, source line, source file"
+                 << std::endl;
+}
+
+void DeviceProfiler::serializeJsonNocTraces(
+    const nlohmann::ordered_json& noc_trace_json_log,
+    const std::filesystem::path& output_dir,
+    int device_id,
+    bool lastDump) {
+    // create output directory if it does not exist
+    std::filesystem::create_directories(output_dir);
+    if (!std::filesystem::is_directory(output_dir)) {
+        log_error(
+            "Could not write noc event json trace to '{}' because the directory path could not be created!",
+            output_dir);
+        return;
+    }
+
+    // bin events by runtime id
+    using RuntimeID = uint32_t;
+    std::unordered_map<RuntimeID, nlohmann::json::array_t> events_by_opname;
+    for (auto& json_event : noc_trace_json_log) {
+        RuntimeID runtime_id = json_event.value("run_host_id", -1);
+        events_by_opname[runtime_id].push_back(json_event);
+    }
+
+    // sort events in each opname group by proc first, then timestamp
+    for (auto& [runtime_id, events] : events_by_opname) {
+        std::sort(events.begin(), events.end(), [](const auto& a, const auto& b) {
+            auto sx_a = a.value("sx", 0);
+            auto sy_a = a.value("sy", 0);
+            auto sx_b = b.value("sx", 0);
+            auto sy_b = b.value("sy", 0);
+            auto proc_a = a.value("proc", "");
+            auto proc_b = b.value("proc", "");
+            auto timestamp_a = a.value("timestamp", 0);
+            auto timestamp_b = b.value("timestamp", 0);
+            return std::tie(sx_a, sy_a, proc_a, timestamp_a) < std::tie(sx_b, sy_b, proc_b, timestamp_b);
+        });
+    }
+
+    // for each opname in events_by_opname, adjust timestamps to be relative to the smallest timestamp within the group
+    // with identical sx,sy,proc
+    for (auto& [runtime_id, events] : events_by_opname) {
+        std::tuple<int, int, std::string> reference_event_loc;
+        uint64_t reference_timestamp = 0;
+        for (auto& event : events) {
+            std::string zone = event.value("zone", "");
+            std::string zone_phase = event.value("zone_phase", "");
+            uint64_t curr_timestamp = event.value("timestamp", 0);
+            // if -KERNEL::begin event is found, reset the reference timestamp
+            if (zone.ends_with("-KERNEL") && zone_phase == "begin") {
+                reference_timestamp = curr_timestamp;
+            }
+
+            // fix timestamp to be relative to reference_timestamp
+            event["timestamp"] = curr_timestamp - reference_timestamp;
+        }
+    }
+
+    for (auto& [runtime_id, events] : events_by_opname) {
+        // dump events to a json file inside directory output_dir named after the opname
+        std::filesystem::path rpt_path = output_dir;
+        std::string op_name = events.front().value("op_name", "UnknownOP");
+        rpt_path /= fmt::format("noc_trace_dev{}_{}_ID{}.json", device_id, op_name, runtime_id);
+        log_info("Writing noc event json trace to '{}'", rpt_path);
+        std::ofstream rpt_ofs(rpt_path);
+        if (!rpt_ofs) {
+            log_error("Could not write noc event json trace to '{}'", rpt_path);
+            return;
+        }
+        rpt_ofs << nlohmann::json(std::move(events)).dump(4) << std::endl;
+    }
+}
+
+CoreCoord DeviceProfiler::getPhysicalAddressFromVirtual(const IDevice* device, const CoreCoord& c) const {
+    if (c.x >= hal.get_virtual_worker_start_x() && c.y >= hal.get_virtual_worker_start_y()) {
+        auto logical_x = c.x - hal.get_virtual_worker_start_x();
+        auto logical_y = c.y - hal.get_virtual_worker_start_y();
+
+        const metal_SocDescriptor& soc_desc = tt::Cluster::instance().get_soc_desc(device->id());
+        // if the core has an address in the 'virtual' space, it must be CoreType::WORKER
+        return soc_desc.get_physical_core_from_logical_core({logical_x, logical_y}, CoreType::WORKER);
+    } else {
+        return c;
+    }
 }
 
 DeviceProfiler::DeviceProfiler(const bool new_logs) {
@@ -393,7 +635,11 @@ void DeviceProfiler::generateZoneSourceLocationsHashes() {
     }
 }
 
-void DeviceProfiler::dumpResults(IDevice* device, const std::vector<CoreCoord>& worker_cores, ProfilerDumpState state) {
+void DeviceProfiler::dumpResults(
+    IDevice* device,
+    const std::vector<CoreCoord>& worker_cores,
+    ProfilerDumpState state,
+    const std::optional<ProfilerOptionalMetadata>& metadata) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
 
@@ -421,13 +667,45 @@ void DeviceProfiler::dumpResults(IDevice* device, const std::vector<CoreCoord>& 
         for (auto worker_core : worker_cores) {
             readRiscProfilerResults(device, worker_core);
         }
+
+        // open CSV log file
+        std::filesystem::path log_path = output_dir / DEVICE_SIDE_LOG;
+        std::ofstream log_file_ofs;
+
+        // append to existing CSV log file if it already exists
+        if (std::filesystem::exists(log_path)) {
+            log_file_ofs.open(log_path, std::ios_base::app);
+        } else {
+            log_file_ofs.open(log_path);
+            emitCSVHeader(log_file_ofs, device_architecture, device_core_frequency);
+        }
+
+        // create nlohmann json log object
+        nlohmann::ordered_json noc_trace_json_log = nlohmann::json::array();
+
+        if (!log_file_ofs) {
+            log_error("Could not open kernel profiler dump file '{}'", log_path);
+        } else {
+            for (const auto& worker_core : worker_cores) {
+                readRiscProfilerResults(
+                    device, metadata, log_file_ofs, noc_trace_json_log, device_id, profile_buffer, worker_core);
+            }
+
+            // if defined, used profiler_noc_events_report_path to write json log. otherwise use output_dir
+            auto rpt_path = tt::llrt::RunTimeOptions::get_instance().get_profiler_noc_events_report_path();
+            if (rpt_path.empty()) {
+                rpt_path = output_dir;
+            }
+
+            serializeJsonNocTraces(noc_trace_json_log, rpt_path, device_id, lastDump);
+        }
     } else {
         log_warning("DRAM profiler buffer is not initialized");
     }
 #endif
 }
 
-void DeviceProfiler::pushTracyDeviceResults() {
+    void DeviceProfiler::pushTracyDeviceResults() {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
     std::set<std::pair<uint32_t, CoreCoord>> device_cores_set;
@@ -476,18 +754,26 @@ void DeviceProfiler::pushTracyDeviceResults() {
                 worker_core.y);
         }
 
-        if (device_tracy_contexts.find(device_core) == device_tracy_contexts.end()) {
-            auto tracyCtx = TracyTTContext();
-            std::string tracyTTCtxName =
-                fmt::format("Device: {}, Core ({},{})", device_id, worker_core.x, worker_core.y);
+        static double delay = 0;
+        static double frequency = 0;
+        static uint64_t cpuTime = 0;
 
-            TracyTTContextPopulate(tracyCtx, cpuTime, delay, frequency);
+        for (auto& device_core : device_cores) {
+            int device_id = device_core.first;
+            CoreCoord worker_core = device_core.second;
 
-            TracyTTContextName(tracyCtx, tracyTTCtxName.c_str(), tracyTTCtxName.size());
-
-            device_tracy_contexts.emplace(device_core, tracyCtx);
+            if (device_core_sync_info.find(worker_core) != device_core_sync_info.end()) {
+                cpuTime = get<0>(device_core_sync_info.at(worker_core));
+                delay = get<1>(device_core_sync_info.at(worker_core));
+                frequency = get<2>(device_core_sync_info.at(worker_core));
+                log_info(
+                    "Device {} sync info are, frequency {} GHz,  delay {} cycles and, sync point {} seconds",
+                    device_id,
+                    frequency,
+                    delay,
+                    cpuTime);
+            }
         }
-    }
 
     for (auto event : device_events) {
         std::pair<uint32_t, CoreCoord> device_core = {event.chip_id, (CoreCoord){event.core_x, event.core_y}};
@@ -497,12 +783,21 @@ void DeviceProfiler::pushTracyDeviceResults() {
         } else if (event.zone_phase == tracy::TTDeviceEventPhase::end) {
             TracyTTPushEndZone(device_tracy_contexts[device_core], event);
         }
-    }
-    device_events.clear();
-#endif
-}
 
-bool getDeviceProfilerState() { return tt::llrt::RunTimeOptions::get_instance().get_profiler_enabled(); }
+        for (auto event : device_events) {
+            std::pair<uint32_t, CoreCoord> device_core = {event.chip_id, (CoreCoord){event.core_x, event.core_y}};
+            event.timestamp = event.timestamp * this->freqScale + this->shift;
+            if (event.zone_phase == tracy::TTDeviceEventPhase::begin) {
+                TracyTTPushStartZone(device_tracy_contexts[device_core], event);
+            } else if (event.zone_phase == tracy::TTDeviceEventPhase::end) {
+                TracyTTPushEndZone(device_tracy_contexts[device_core], event);
+            }
+        }
+        device_events.clear();
+#endif
+    }
+
+    bool getDeviceProfilerState() { return tt::llrt::RunTimeOptions::get_instance().get_profiler_enabled(); }
 
 }  // namespace tt_metal
 
