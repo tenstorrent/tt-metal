@@ -4,29 +4,8 @@
 
 #include "ttnn/distributed/distributed_pybind.hpp"
 #include <pybind11/pytypes.h>
-#include <cstdint>
-#include <memory>
-#include <utility>
 
-#include "tt-metalium/assert.hpp"
-#include "tt-metalium/bfloat16.hpp"
-#include "tt-metalium/buffer.hpp"
-#include "tt-metalium/core_coord.hpp"
-#include "tt-metalium/overloaded.hpp"
-#include "tt-metalium/core_coord.hpp"
-#include "ttnn/common/constants.hpp"
-#include "ttnn/distributed/api.hpp"
-#include "ttnn/tensor/host_buffer/borrowed_buffer.hpp"
-#include "ttnn/tensor/host_buffer/functions.hpp"
-#include "ttnn/tensor/layout/page_config.hpp"
-#include "ttnn/tensor/storage.hpp"
-#include "ttnn/tensor/tensor_impl.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/types.hpp"
 #include <tt-metalium/command_queue.hpp>
-
-#include "umd/device/tt_xy_pair.h"
 
 using namespace tt::tt_metal;
 

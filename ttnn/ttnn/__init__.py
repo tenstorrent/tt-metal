@@ -9,10 +9,8 @@ import os
 import pathlib
 import re
 from types import ModuleType
-from typing import List
 
 from loguru import logger
-import torch
 
 # Sets env and updates shared libs rpath
 # This is a tweak required for a proper wheel functioning
@@ -102,8 +100,6 @@ from ttnn._ttnn.multi_device import (
     aggregate_as_tensor,
     get_t3k_physical_device_ids_ring,
 )
-
-import contextlib
 
 from ttnn._ttnn.events import create_event, record_event, wait_for_event
 
