@@ -4,6 +4,7 @@
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
+#include <unordered_set>
 
 #include "mesh_coord.hpp"
 
@@ -11,7 +12,7 @@ namespace tt::tt_metal::distributed {
 namespace {
 
 using ::testing::ElementsAre;
-
+using ::testing::UnorderedElementsAre;
 TEST(SimpleMeshShapeTest, Construction) {
     SimpleMeshShape shape_1d(3);
     EXPECT_EQ(shape_1d.dims(), 1);
@@ -98,6 +99,21 @@ TEST(MeshCoordinateTest, Comparison) {
     EXPECT_EQ(coord1, MeshCoordinate(1, 2));
     EXPECT_NE(coord1, MeshCoordinate(2, 1));
     EXPECT_NE(coord1, MeshCoordinate(1, 2, 1));
+}
+
+TEST(MeshCoordinateTest, UnorderedSet) {
+    std::unordered_set<MeshCoordinate> set;
+    set.insert(MeshCoordinate(0, 0, 0));
+    set.insert(MeshCoordinate(0, 0, 1));
+    set.insert(MeshCoordinate(0, 0, 2));
+
+    EXPECT_FALSE(set.insert(MeshCoordinate(0, 0, 2)).second);
+    EXPECT_THAT(
+        set,
+        UnorderedElementsAre(
+            MeshCoordinate(0, 0, 0),  //
+            MeshCoordinate(0, 0, 1),
+            MeshCoordinate(0, 0, 2)));
 }
 
 TEST(MeshCoordinateRangeTest, FromShape) {
@@ -232,6 +248,7 @@ TEST(MeshContainerTest, ElementAccessRowMajor) {
             MeshCoordinate(1, 1),
             MeshCoordinate(1, 2)));
     EXPECT_THAT(values, ElementsAre(0, 1, 2, 3, 4, 5));
+    EXPECT_THAT(container.values(), ElementsAre(0, 1, 2, 3, 4, 5));
 }
 
 TEST(MeshContainerTest, ConstContainer) {
@@ -254,6 +271,7 @@ TEST(MeshContainerTest, ConstContainer) {
             MeshCoordinate(1, 1),
             MeshCoordinate(1, 2)));
     EXPECT_THAT(values, ElementsAre(0, 0, 0, 0, 0, 0));
+    EXPECT_THAT(container.values(), ElementsAre(0, 0, 0, 0, 0, 0));
 }
 
 TEST(MeshContainerTest, MutateThroughProxy) {
@@ -276,6 +294,7 @@ TEST(MeshContainerTest, MutateThroughProxy) {
         values.push_back(value);
     }
     EXPECT_THAT(values, ElementsAre(0, 1, 2, 3, 4, 5));
+    EXPECT_THAT(container.values(), ElementsAre(0, 1, 2, 3, 4, 5));
 }
 
 TEST(MeshContainerTest, OutOfBounds) {
