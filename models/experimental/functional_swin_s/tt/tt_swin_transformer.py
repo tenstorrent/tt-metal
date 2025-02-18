@@ -69,6 +69,7 @@ class TtSwinTransformer:
             if i_stage != 7:
                 self.layers.append(self.downsample_layer(device, parameters["features"][i_stage + 1], dim))
             index += 1
+            # print("self.layers: \n", self.layers[0])
 
         self.flatten = nn.Flatten(1)
 
@@ -81,11 +82,11 @@ class TtSwinTransformer:
         x = self.conv2d(self.device, x)
         x = ttnn.to_device(x, device=self.device)
         x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)
-        x = ttnn.permute(x, (0, 3, 1, 2))
+        x = ttnn.permute(x, (0, 3, 1, 2))  # 26
 
         # conv ends
 
-        x = ttnn.permute(x, (0, 2, 3, 1))
+        x = ttnn.permute(x, (0, 2, 3, 1))  # 27
         if self.norm_layer is None:
             x = ttnn.layer_norm(
                 x, weight=self.parameters.features[0][2].weight, bias=self.parameters.features[0][2].bias
@@ -99,6 +100,7 @@ class TtSwinTransformer:
                     x = self.layers[i_stage][j](x)
             else:
                 x = self.layers[i_stage](x)
+
         if self.norm_layer is None:
             x = ttnn.layer_norm(
                 x, weight=self.parameters.norm.weight, bias=self.parameters.norm.bias
