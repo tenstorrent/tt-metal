@@ -140,8 +140,8 @@ constexpr uint32_t packet_header_routing_offset_dwords = offsetof(packet_header_
 void tt_fabric_add_header_checksum(packet_header_t* p_header) {
     uint16_t* ptr = (uint16_t*)p_header;
     uint32_t sum = 0;
-    for (uint32_t i = 2; i < sizeof(packet_header_t) / 2; i++) {
-        sum += ptr[i];
+    for (uint32_t i = 2; i + 1 < sizeof(packet_header_t) / 2; i += 2) {
+        sum += ptr[i] + ptr[i + 1];
     }
     sum = ~sum;
     sum += sum;
@@ -152,8 +152,8 @@ bool tt_fabric_is_header_valid(packet_header_t* p_header) {
 #ifdef TT_FABRIC_DEBUG
     uint16_t* ptr = (uint16_t*)p_header;
     uint32_t sum = 0;
-    for (uint32_t i = 2; i < sizeof(packet_header_t) / 2; i++) {
-        sum += ptr[i];
+    for (uint32_t i = 2; i + 1 < sizeof(packet_header_t) / 2; i += 2) {
+        sum += ptr[i] + ptr[i + 1];
     }
     sum = ~sum;
     sum += sum;
