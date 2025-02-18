@@ -5,13 +5,12 @@
 #pragma once
 
 #include "risc_attribs.h"
-#include <hostdevcommon/common_values.hpp>
 #include "dataflow_api.h"
 #include "noc_overlay_parameters.h"
 #include "ethernet/dataflow_api.h"
 #include "tt_fabric_interface.h"
 
-using namespace tt::tt_fabric;
+namespace tt::tt_fabric {
 
 #define ASYNC_WR_ADD_PR 1
 #define ASYNC_WR_SEND 2
@@ -42,6 +41,9 @@ inline uint32_t get_next_hop_router_noc_xy(
 inline void fabric_setup_pull_request(
     volatile tt_l1_ptr fabric_client_interface_t* client_interface, uint32_t src_addr, uint32_t size) {
     uint32_t size_in_words = (size + PACKET_WORD_SIZE_BYTES - 1) >> 4;
+    // TODO: Could return this value to the user and take this as an arg to avoid repeated lookup
+    // Added here to avoid user having to declare globals
+    uint64_t xy_local_addr = get_noc_addr(0);
     client_interface->local_pull_request.pull_request.wr_ptr = size_in_words;
     client_interface->local_pull_request.pull_request.rd_ptr = 0;
     client_interface->local_pull_request.pull_request.size = size;
@@ -338,7 +340,7 @@ inline socket_handle_t* fabric_socket_open(
     client_interface->gk_message.packet_header.session.command = SOCKET_OPEN;
     client_interface->gk_message.packet_header.session.target_offset_h = client_interface->pull_req_buf_addr >> 32;
     client_interface->gk_message.packet_header.session.target_offset_l = (uint32_t)client_interface->pull_req_buf_addr;
-    client_interface->gk_message.packet_header.session.ack_offset_h = xy_local_addr >> 32;
+    client_interface->gk_message.packet_header.session.ack_offset_h = NOC_XY_ENCODING(my_x[noc_index], my_y[noc_index]);
     client_interface->gk_message.packet_header.session.ack_offset_l = (uint32_t)socket_handle;
     client_interface->gk_message.packet_header.packet_parameters.socket_parameters.socket_id = socket_id;
     client_interface->gk_message.packet_header.packet_parameters.socket_parameters.epoch_id = epoch_id;
@@ -386,7 +388,6 @@ inline void fabric_socket_connect(socket_handle_t* socket_handle) {
 template <RoutingType routing_type = RoutingType::ROUTING_TABLE>
 inline void fabric_endpoint_init(
     volatile tt_l1_ptr fabric_client_interface_t* client_interface, uint32_t outbound_eth_chan) {
-    tt_fabric_init();
     // TODO: Should not assume routing tables are immediately after the client interface
     // This should be a separate address we take in
     uint32_t routing_tables_offset = (uint32_t)client_interface + sizeof(fabric_client_interface_t);
@@ -403,3 +404,5 @@ inline void fabric_endpoint_init(
         noc_async_read_barrier();
     }
 }
+
+}  // namespace tt::tt_fabric

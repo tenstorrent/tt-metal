@@ -457,6 +457,7 @@ void kernel_main() {
     uint32_t packet_count = 0;
 
     // initalize client
+    tt_fabric_init();
     fabric_endpoint_init(client_interface, outbound_eth_chan);
     routing_table = reinterpret_cast<tt_l1_ptr fabric_router_l1_config_t*>(client_interface->routing_tables_l1_offset);
 

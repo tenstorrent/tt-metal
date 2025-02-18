@@ -81,6 +81,7 @@ void kernel_main() {
     test_results[TT_FABRIC_MISC_INDEX] = 0xff000004;
 
     // make sure fabric node gatekeeper is available.
+    tt_fabric_init();
     fabric_endpoint_init();
 
     socket_reader.init(data_buffer_start_addr, data_buffer_size_words);
