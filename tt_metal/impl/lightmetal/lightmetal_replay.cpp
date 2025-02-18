@@ -264,8 +264,8 @@ void LightMetalReplay::execute(const tt::tt_metal::flatbuffer::Command* command)
             execute(command->cmd_as_ReleaseTraceCommand());
             break;
         }
-        case ::tt::tt_metal::flatbuffer::CommandType::CreateBufferCommand: {
-            execute(command->cmd_as_CreateBufferCommand());
+        case ::tt::tt_metal::flatbuffer::CommandType::BufferCreateCommand: {
+            execute(command->cmd_as_BufferCreateCommand());
             break;
         }
         case ::tt::tt_metal::flatbuffer::CommandType::DeallocateBufferCommand: {
@@ -284,8 +284,8 @@ void LightMetalReplay::execute(const tt::tt_metal::flatbuffer::Command* command)
             execute(command->cmd_as_FinishCommand());
             break;
         }
-        case ::tt::tt_metal::flatbuffer::CommandType::CreateProgramCommand: {
-            execute(command->cmd_as_CreateProgramCommand());
+        case ::tt::tt_metal::flatbuffer::CommandType::ProgramConstructorCommand: {
+            execute(command->cmd_as_ProgramConstructorCommand());
             break;
         }
         case ::tt::tt_metal::flatbuffer::CommandType::EnqueueProgramCommand: {
@@ -356,33 +356,47 @@ void LightMetalReplay::execute(const tt::tt_metal::flatbuffer::ReleaseTraceComma
     ReleaseTrace(this->device_, cmd->tid());
 }
 
-void LightMetalReplay::execute(const tt::tt_metal::flatbuffer::CreateBufferCommand* cmd) {
+void LightMetalReplay::execute(const tt::tt_metal::flatbuffer::BufferCreateCommand* cmd) {
     log_debug(
         tt::LogMetalTrace,
-        "LightMetalReplay(CreateBuffer) global_id: {} size: {} page_size: {} layout: {} buffer_type: {}",
+        "LightMetalReplay(BufferCreate) global_id: {} size: {} page_size: {} layout: {} buffer_type: {}",
         cmd->global_id(),
-        cmd->config()->size(),
-        cmd->config()->page_size(),
-        EnumNameTensorMemoryLayout(cmd->config()->buffer_layout()),
-        EnumNameBufferType(cmd->config()->buffer_type()));
+        cmd->size(),
+        cmd->page_size(),
+        EnumNameTensorMemoryLayout(cmd->buffer_layout()),
+        EnumNameBufferType(cmd->buffer_type()));
 
-    switch (cmd->config()->buffer_layout()) {
-        case tt::tt_metal::flatbuffer::TensorMemoryLayout::Interleaved: {
-            tt::tt_metal::InterleavedBufferConfig config{
-                .device = this->device_,
-                .size = cmd->config()->size(),
-                .page_size = cmd->config()->page_size(),
-                .buffer_type = from_flatbuffer(cmd->config()->buffer_type())};
+    // Handle optionals
+    const auto shard_parameters = from_flatbuffer(cmd->shard_parameters());
+    const auto bottom_up = cmd->bottom_up() ? std::optional<bool>{cmd->bottom_up()->value()} : std::nullopt;
+    const auto sub_device_id =
+        cmd->sub_device_id() ? std::optional<SubDeviceId>{cmd->sub_device_id()->value()} : std::nullopt;
 
-            auto buffer = CreateBuffer(config);
-            add_buffer_to_map(cmd->global_id(), buffer);
-            break;
-        }
-        default:
-            // TODO (kmabee) - Add support for other buffer_layouts.
-            TT_THROW(
-                "Unsupported buffer_layout: {}",
-                std::string(EnumNameTensorMemoryLayout(cmd->config()->buffer_layout())));
+    // This API is overloaded with and without address field.
+    if (cmd->address()) {
+        auto buffer = Buffer::create(
+            this->device_,
+            cmd->address()->value(),
+            cmd->size(),
+            cmd->page_size(),
+            from_flatbuffer(cmd->buffer_type()),
+            from_flatbuffer(cmd->buffer_layout()),
+            shard_parameters,
+            bottom_up,
+            sub_device_id);
+        add_buffer_to_map(cmd->global_id(), buffer);
+
+    } else {
+        auto buffer = Buffer::create(
+            this->device_,
+            cmd->size(),
+            cmd->page_size(),
+            from_flatbuffer(cmd->buffer_type()),
+            from_flatbuffer(cmd->buffer_layout()),
+            shard_parameters,
+            bottom_up,
+            sub_device_id);
+        add_buffer_to_map(cmd->global_id(), buffer);
     }
 }
 
@@ -453,10 +467,9 @@ void LightMetalReplay::execute(const tt::tt_metal::flatbuffer::FinishCommand* cm
     Finish(cq, sub_device_ids);
 }
 
-void LightMetalReplay::execute(const tt::tt_metal::flatbuffer::CreateProgramCommand* cmd) {
-    log_debug(tt::LogMetalTrace, "LightMetalReplay(CreateProgram) global_id: {} ", cmd->global_id());
-    auto program = CreateProgram();
-    add_program_to_map(cmd->global_id(), std::make_shared<Program>(std::move(program)));
+void LightMetalReplay::execute(const tt::tt_metal::flatbuffer::ProgramConstructorCommand* cmd) {
+    log_debug(tt::LogMetalTrace, "LightMetalReplay(ProgramConstructor) global_id: {} ", cmd->global_id());
+    add_program_to_map(cmd->global_id(), std::make_shared<Program>());
 }
 
 void LightMetalReplay::execute(const tt::tt_metal::flatbuffer::EnqueueProgramCommand* cmd) {
