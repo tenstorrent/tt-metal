@@ -16,6 +16,7 @@
 #include <tt-metalium/logger.hpp>
 #include <tt-metalium/host_api.hpp>
 #include "lightmetal_capture_utils.hpp"
+#include "tt_metal/test_utils/stimulus.hpp"
 
 using std::vector;
 using namespace tt;
@@ -24,10 +25,112 @@ using namespace tt::tt_metal;
 namespace tt::tt_metal {
 namespace {
 
+struct L1Config {
+    uint32_t num_cores_height = 1;
+    uint32_t num_cores_width = 2;
+    uint32_t num_tiles_per_core_height = 2;
+    uint32_t num_tiles_per_core_width = 2;
+    uint32_t element_size = 2;
+    uint32_t size_bytes = 1 * num_cores_height * num_tiles_per_core_height * tt::constants::TILE_HEIGHT *
+                          num_cores_width * num_tiles_per_core_width * tt::constants::TILE_WIDTH * element_size;
+    uint32_t page_size_bytes = tt::constants::TILE_HW * element_size;
+    tt::DataFormat l1_data_format = tt::DataFormat::Float16_b;
+    TensorMemoryLayout buffer_layout = TensorMemoryLayout::HEIGHT_SHARDED;
+
+    bool sharded = true;
+    ShardSpecBuffer shard_spec() const {
+        return ShardSpecBuffer(
+            CoreRangeSet(std::set<CoreRange>(
+                {CoreRange(CoreCoord(0, 0), CoreCoord(0, num_cores_height * num_cores_width - 1))})),
+            {(uint32_t)num_tiles_per_core_height * tt::constants::TILE_HEIGHT,
+             (uint32_t)num_tiles_per_core_width * tt::constants::TILE_WIDTH},
+            ShardOrientation::ROW_MAJOR,
+            {tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
+            {1 * num_cores_height * num_tiles_per_core_height * num_cores_height,
+             num_tiles_per_core_width * num_cores_width});
+    }
+};
+
+// Inspired heavily from test_sharded_l1_buffer.cpp
+bool l1_buffer_read_write_test(IDevice* device, const L1Config& test_config) {
+    TT_FATAL(device != nullptr, "Device not setup");
+
+    bool pass = true;
+    CommandQueue& cq = device->command_queue();
+
+    uint32_t num_loops = 5;
+    std::vector<std::shared_ptr<Buffer>> buffers_vec;
+
+    for (uint32_t loop_idx = 0; loop_idx < num_loops; loop_idx++) {
+        log_debug(tt::LogTest, "Running loop: {}", loop_idx);
+
+        auto buffer = test_config.sharded ? CreateBuffer(tt::tt_metal::ShardedBufferConfig{
+                                                .device = device,
+                                                .size = test_config.size_bytes,
+                                                .page_size = test_config.page_size_bytes,
+                                                .buffer_layout = test_config.buffer_layout,
+                                                .shard_parameters = test_config.shard_spec()})
+                                          : CreateBuffer(tt::tt_metal::BufferConfig{
+                                                .device = device,
+                                                .size = test_config.size_bytes,
+                                                .page_size = test_config.page_size_bytes,
+                                                .buffer_layout = test_config.buffer_layout});
+
+        if (loop_idx > 1) {
+            buffers_vec.push_back(buffer);
+        }
+
+        auto input =
+            tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, test_config.size_bytes / sizeof(uint32_t));
+
+        vector<uint32_t> output;
+        output.resize(input.size());
+
+        // Write data to buffer, then read outputs and verify against expected.
+        EnqueueWriteBuffer(cq, *buffer, input.data(), /*blocking=*/true);
+
+        // This will do read, and verify that readback matches between capture + replay
+        LightMetalCompareToCapture(cq, *buffer, output.data());
+
+        pass &= (output == input);
+
+        // For dev/debug go ahead and print the results. Had a replay bug, was seeing wrong data.
+        for (size_t i = 0; i < output.size(); i++) {
+            log_debug(tt::LogMetalTrace, "loop_idx: {} rd_data i: {:3d} => data: {}", loop_idx, i, output[i]);
+        }
+
+        if (!pass) {
+            if (input.size() != output.size()) {
+                std::cout << "Different size of input and output, input.size() = " << input.size() << " output.size() "
+                          << output.size() << std::endl;
+            }
+            int smaller_size = std::min<int>(input.size(), output.size());
+            auto entries_per_page = test_config.page_size_bytes / (sizeof(uint32_t));
+            for (int i = 0; i < smaller_size; i++) {
+                if (input[i] != output[i]) {
+                    std::cout << "mismatch on page: " << i / entries_per_page
+                              << " entry index: " << i % entries_per_page << " with input being " << std::hex
+                              << input[i] << " and output being " << output[i] << std::dec << std::endl;
+                }
+            }
+        }
+    }
+
+    // If any Buffers were kept alive for testing, Deallocate them now to exercise that path for capture/replay.
+    if (buffers_vec.size() > 0) {
+        log_info(tt::LogTest, "Explicitly deallocating {} buffers now.", buffers_vec.size());
+        for (auto& buffer : buffers_vec) {
+            DeallocateBuffer(*buffer);
+        }
+    }
+
+    return pass;
+}
+
 // Single RISC, no CB's here. Very simple.
 Program create_simple_datamovement_program(
     const Buffer& input, const Buffer& output, const Buffer& l1_buffer, bool rt_arg_per_core_vec = false) {
-    Program program = CreateProgram();
+    Program program = Program();  // Verify Program constructor can be used.
     IDevice* device = input.device();
     constexpr CoreCoord core = {0, 0};
 
@@ -130,71 +233,35 @@ vector<bool> blocking_flags = {kBlocking, kNonBlocking};
 using LightMetalBasicTest = SingleDeviceLightMetalFixture;
 
 // Test that create buffer, write, readback, and verify works when traced + replayed.
-TEST_F(LightMetalBasicTest, CreateBufferEnqueueWriteRead) {
+TEST_F(LightMetalBasicTest, CreateBufferInterleavedEnqueueWriteRead) {
     CreateDeviceAndBeginCapture(4096);
+    L1Config test_config;
+    test_config.buffer_layout = TensorMemoryLayout::INTERLEAVED;
+    test_config.sharded = false;
+    EXPECT_TRUE(l1_buffer_read_write_test(device_, test_config));
+}
 
-    CommandQueue& command_queue = device_->command_queue();
-    uint32_t num_loops = 5;
-    bool keep_buffers_alive = true;
-    std::vector<std::shared_ptr<Buffer>> buffers_vec;
+TEST_F(LightMetalBasicTest, CreateBufferHeightShardEnqueueWriteRead) {
+    CreateDeviceAndBeginCapture(4096);
+    L1Config test_config;
+    EXPECT_TRUE(l1_buffer_read_write_test(device_, test_config));
+}
 
-    for (uint32_t loop_idx = 0; loop_idx < num_loops; loop_idx++) {
-        log_debug(tt::LogTest, "Running loop: {}", loop_idx);
-
-        // Switch to use top level CreateBuffer API that has trace support.
-        uint32_t size_bytes = 64;  // 16 elements.
-        auto buffer = CreateBuffer(InterleavedBufferConfig{device_, size_bytes, size_bytes, BufferType::DRAM});
-        log_debug(
-            tt::LogTest,
-            "created buffer loop: {} with size: {} bytes addr: 0x{:x}",
-            loop_idx,
-            buffer->size(),
-            buffer->address());
-
-        if (keep_buffers_alive && loop_idx > 1) {
-            buffers_vec.push_back(buffer);
-        }
-
-        // We don't want to capture inputs in binary, but do it to start for testing.
-        uint32_t start_val = loop_idx * 100;
-        vector<uint32_t> input_data(buffer->size() / sizeof(uint32_t), 0);
-        for (uint32_t i = 0; i < input_data.size(); i++) {
-            input_data[i] = start_val + i;
-        }
-        log_debug(tt::LogTest, "initialize input_data with {} elements start_val: {}", input_data.size(), start_val);
-
-        vector<uint32_t> readback_data;
-        readback_data.resize(input_data.size());  // This is required.
-
-        // Write data to buffer, then read outputs and verify against expected.
-        EnqueueWriteBuffer(command_queue, *buffer, input_data.data(), /*blocking=*/true);
-        // This will verify that readback matches between capture + replay
-        LightMetalCompareToCapture(command_queue, *buffer, readback_data.data());
-
-        EXPECT_TRUE(input_data == readback_data);
-
-        // For dev/debug go ahead and print the results. Had a replay bug, was seeing wrong data.
-        for (size_t i = 0; i < readback_data.size(); i++) {
-            log_debug(tt::LogMetalTrace, "loop: {} rd_data i: {:3d} => data: {}", loop_idx, i, readback_data[i]);
-        }
-    }
-
-    // If any Buffers were kept alive for testing, Deallocate them now to exercise that path for capture/replay.
-    if (keep_buffers_alive) {
-        log_info(tt::LogTest, "Explicitly deallocating {} buffers now.", buffers_vec.size());
-        for (auto& buffer : buffers_vec) {
-            DeallocateBuffer(*buffer);
-        }
-    }
-
-    Finish(command_queue);
+TEST_F(LightMetalBasicTest, CreateBufferWidthShardEnqueueWriteRead) {
+    CreateDeviceAndBeginCapture(4096);
+    L1Config test_config;
+    test_config.buffer_layout = TensorMemoryLayout::WIDTH_SHARDED;
+    EXPECT_TRUE(l1_buffer_read_write_test(device_, test_config));
 }
 
 void SingleRISCDataMovement_test(tt::tt_metal::IDevice* device, bool rt_arg_per_core_vec) {
     uint32_t size_bytes = 64;  // 16 elements.
-    auto input = CreateBuffer(InterleavedBufferConfig{device, size_bytes, size_bytes, BufferType::DRAM});
-    auto output = CreateBuffer(InterleavedBufferConfig{device, size_bytes, size_bytes, BufferType::DRAM});
-    auto l1_buffer = CreateBuffer(InterleavedBufferConfig{device, size_bytes, size_bytes, BufferType::L1});
+
+    // For extra coverage, use Buffer::create (now support for light metal capture/replay)
+    auto input = Buffer::create(device, size_bytes, size_bytes, BufferType::DRAM);
+    auto output = Buffer::create(device, size_bytes, size_bytes, BufferType::DRAM);
+    auto l1_buffer = Buffer::create(device, size_bytes, size_bytes, BufferType::L1);
+
     log_debug(
         tt::LogTest,
         "Created 3 Buffers. input: 0x{:x} output: 0x{:x} l1_buffer: 0x{:x}",

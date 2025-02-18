@@ -79,7 +79,17 @@ void CaptureLoadTrace(IDevice* device, const uint8_t cq_id, const uint32_t tid);
 
 void CaptureReleaseTrace(IDevice* device, uint32_t tid);
 
-void CaptureCreateBuffer(const std::shared_ptr<Buffer>& buffer, const InterleavedBufferConfig& config);
+void CaptureBufferCreate(
+    const std::shared_ptr<Buffer>& buffer,
+    IDevice* device,
+    const std::optional<DeviceAddr> address,  // Made optional to share with 2 variants.
+    DeviceAddr size,
+    DeviceAddr page_size,
+    const BufferType buffer_type,
+    const TensorMemoryLayout buffer_layout,
+    const std::optional<ShardSpecBuffer>& shard_parameters,
+    const std::optional<bool> bottom_up,
+    const std::optional<SubDeviceId> sub_device_id);
 
 void CaptureDeallocateBuffer(Buffer& buffer);
 
@@ -96,7 +106,7 @@ void CaptureEnqueueReadBuffer(
     bool blocking);
 
 void CaptureFinish(CommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device_ids);
-void CaptureCreateProgram(Program& program);
+void CaptureProgramConstructor(Program& program);
 void CaptureEnqueueProgram(CommandQueue& cq, Program& program, bool blocking);
 
 void CaptureCreateKernel(
