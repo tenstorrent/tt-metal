@@ -40,6 +40,7 @@ struct dispatch_core_placement_t {
     std::optional<tt_cxy_pair> mux_d = std::nullopt; // Mux
     std::optional<tt_cxy_pair> demux_d = std::nullopt; // Demux
     std::optional<tt_cxy_pair> tunneler_d = std::nullopt; // ethernet tunneler
+    std::optional<tt_cxy_pair> fabric_gatekeeper = std::nullopt;  // Fabric Gatekeeper
 };
 
 class dispatch_core_manager {
@@ -119,6 +120,20 @@ class dispatch_core_manager {
         chip_id_t upstream_device_id, chip_id_t device_id, uint16_t channel, uint8_t cq_id);
 
     const tt_cxy_pair& us_tunneler_core_local(chip_id_t device_id, uint16_t channel, uint8_t cq_id);
+    /// @brief Gets the location of the kernel desginated for fabric gatekeeper.
+    /// @param device_id ID of the device that a fast dispatch command targets
+    /// @return tt_cxy_pair logical location (chip + core coordinate) of the fabric_gatekeeper core
+    const tt_cxy_pair& fabric_gatekeeper(chip_id_t device_id) {
+        // One fabric gatekeeper per device, no dependency on channel or cq_id
+        dispatch_core_placement_t& assignment = this->fabric_core_assignments[device_id];
+        if (assignment.fabric_gatekeeper.has_value()) {
+            return assignment.fabric_gatekeeper.value();
+        }
+        CoreCoord gatekeeper_coord = this->get_next_available_dispatch_core(device_id);
+        assignment.fabric_gatekeeper = tt_cxy_pair(device_id, gatekeeper_coord.x, gatekeeper_coord.y);
+        log_dispatch_assignment("Fabric Gatekeeper", assignment.fabric_gatekeeper.value(), device_id, 0, 0);
+        return assignment.fabric_gatekeeper.value();
+    }
 
     /// @brief Gets the location of the kernel desginated to write to the completion queue region for a particular command queue
     ///         Each command queue has one completion queue
@@ -190,6 +205,7 @@ private:
     // {device ID : {channel (hugepage) : {cq_id : dispatch assignment}}}
     // Each device has an assigned hugepage at a specific channel that holds (up to 2) hardware command queues (represented by cq_id)
     std::unordered_map<chip_id_t, std::unordered_map<uint16_t, std::unordered_map<uint8_t, dispatch_core_placement_t>>> dispatch_core_assignments;
+    std::unordered_map<chip_id_t, dispatch_core_placement_t> fabric_core_assignments;
     std::unordered_map<chip_id_t, std::list<CoreCoord>> available_dispatch_cores_by_device;
     std::unordered_map<chip_id_t, DispatchCoreConfig> dispatch_core_config_by_device;  //TODO: dispatch_core_type_by_device should probably be for all devices, not per device
     uint8_t num_hw_cqs;

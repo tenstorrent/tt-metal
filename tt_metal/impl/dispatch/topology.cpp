@@ -6,6 +6,7 @@
 #include "kernel_config/fd_kernel.hpp"
 #include <device_pool.hpp>
 #include <tt_metal.hpp>
+#include <host_api.hpp>
 #include "kernel_config/fd_kernel.hpp"
 #include "kernel_config/prefetch.hpp"
 #include "kernel_config/dispatch.hpp"
@@ -20,365 +21,365 @@
 
 namespace tt::tt_metal {
 
-// For readablity, unset = x = -1
-#define x -1
+// For readablity, unset = X = -1
+#define X -1
 
 void increment_node_ids(DispatchKernelNode& node, uint32_t inc) {
     node.id += inc;
     for (int& id : node.upstream_ids) {
-        if (id != x) {
+        if (id != X) {
             id += inc;
         }
     }
     for (int& id : node.downstream_ids) {
-        if (id != x) {
+        if (id != X) {
             id += inc;
         }
     }
 }
 
 static const std::vector<DispatchKernelNode> single_chip_arch_1cq = {
-    {0, 0, 0, 0, PREFETCH_HD, {x, x, x, x}, {1, 2, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {1, 0, 0, 0, DISPATCH_HD, {0, x, x, x}, {2, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {2, 0, 0, 0, DISPATCH_S, {0, x, x, x}, {1, x, x, x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
+    {0, 0, 0, 0, PREFETCH_HD, {X, X, X, X}, {1, 2, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {1, 0, 0, 0, DISPATCH_HD, {0, X, X, X}, {2, X, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {2, 0, 0, 0, DISPATCH_S, {0, X, X, X}, {1, X, X, X}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
 };
 
 static const std::vector<DispatchKernelNode> single_chip_arch_2cq = {
-    {0, 0, 0, 0, PREFETCH_HD, {x, x, x, x}, {2, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {1, 0, 0, 1, PREFETCH_HD, {x, x, x, x}, {3, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {2, 0, 0, 0, DISPATCH_HD, {0, x, x, x}, {x, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {3, 0, 0, 1, DISPATCH_HD, {1, x, x, x}, {x, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {0, 0, 0, 0, PREFETCH_HD, {X, X, X, X}, {2, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {1, 0, 0, 1, PREFETCH_HD, {X, X, X, X}, {3, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {2, 0, 0, 0, DISPATCH_HD, {0, X, X, X}, {X, X, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {3, 0, 0, 1, DISPATCH_HD, {1, X, X, X}, {X, X, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
 };
 
 static const std::vector<DispatchKernelNode> single_chip_arch_2cq_dispatch_s = {
-    {0, 0, 0, 0, PREFETCH_HD, {x, x, x, x}, {1, 4, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {1, 0, 0, 0, DISPATCH_HD, {0, x, x, x}, {4, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {2, 0, 0, 1, PREFETCH_HD, {x, x, x, x}, {3, 5, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {3, 0, 0, 1, DISPATCH_HD, {2, x, x, x}, {5, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {4, 0, 0, 0, DISPATCH_S, {0, x, x, x}, {1, x, x, x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
-    {5, 0, 0, 1, DISPATCH_S, {2, x, x, x}, {3, x, x, x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
+    {0, 0, 0, 0, PREFETCH_HD, {X, X, X, X}, {1, 4, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {1, 0, 0, 0, DISPATCH_HD, {0, X, X, X}, {4, X, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {2, 0, 0, 1, PREFETCH_HD, {X, X, X, X}, {3, 5, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {3, 0, 0, 1, DISPATCH_HD, {2, X, X, X}, {5, X, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {4, 0, 0, 0, DISPATCH_S, {0, X, X, X}, {1, X, X, X}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
+    {5, 0, 0, 1, DISPATCH_S, {2, X, X, X}, {3, X, X, X}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
 };
 
 static const std::vector<DispatchKernelNode> two_chip_arch_1cq = {
-    {0, 0, 0, 0, PREFETCH_HD, {x, x, x, x}, {1, 2, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {1, 0, 0, 0, DISPATCH_HD, {0, x, x, x}, {2, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {2, 0, 0, 0, DISPATCH_S, {0, x, x, x}, {1, x, x, x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
+    {0, 0, 0, 0, PREFETCH_HD, {X, X, X, X}, {1, 2, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {1, 0, 0, 0, DISPATCH_HD, {0, X, X, X}, {2, X, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {2, 0, 0, 0, DISPATCH_S, {0, X, X, X}, {1, X, X, X}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
 
-    {3, 0, 1, 0, PREFETCH_H, {x, x, x, x}, {5, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {4, 0, 1, 0, DISPATCH_H, {6, x, x, x}, {3, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {3, 0, 1, 0, PREFETCH_H, {X, X, X, X}, {5, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {4, 0, 1, 0, DISPATCH_H, {6, X, X, X}, {3, X, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
 
-    {5, 0, 1, 0, PACKET_ROUTER_MUX, {3, x, x, x}, {7, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {6, 0, 1, 0, DEMUX, {7, x, x, x}, {4, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {7, 0, 1, 0, US_TUNNELER_REMOTE, {11, 5, x, x}, {11, 6, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {5, 0, 1, 0, PACKET_ROUTER_MUX, {3, X, X, X}, {7, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {6, 0, 1, 0, DEMUX, {7, X, X, X}, {4, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {7, 0, 1, 0, US_TUNNELER_REMOTE, {11, 5, X, X}, {11, 6, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
 
-    {8, 1, x, 0, PREFETCH_D, {13, x, x, x}, {9, 10, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {9, 1, x, 0, DISPATCH_D, {8, x, x, x}, {10, 12, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {10, 1, x, 0, DISPATCH_S, {8, x, x, x}, {9, x, x, x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
+    {8, 1, X, 0, PREFETCH_D, {13, X, X, X}, {9, 10, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {9, 1, X, 0, DISPATCH_D, {8, X, X, X}, {10, 12, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {10, 1, X, 0, DISPATCH_S, {8, X, X, X}, {9, X, X, X}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
 
-    {11, 1, x, 0, US_TUNNELER_LOCAL, {7, 12, x, x}, {7, 13, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {12, 1, x, 0, MUX_D, {9, x, x, x}, {11, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {13, 1, x, 0, PACKET_ROUTER_DEMUX, {11, x, x, x}, {8, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {11, 1, X, 0, US_TUNNELER_LOCAL, {7, 12, X, X}, {7, 13, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {12, 1, X, 0, MUX_D, {9, X, X, X}, {11, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {13, 1, X, 0, PACKET_ROUTER_DEMUX, {11, X, X, X}, {8, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
 };
 
 static const std::vector<DispatchKernelNode> two_chip_arch_2cq = {
-    {0, 0, 0, 0, PREFETCH_HD, {x, x, x, x}, {2, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {1, 0, 0, 1, PREFETCH_HD, {x, x, x, x}, {3, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {2, 0, 0, 0, DISPATCH_HD, {0, x, x, x}, {x, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {3, 0, 0, 1, DISPATCH_HD, {1, x, x, x}, {x, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {0, 0, 0, 0, PREFETCH_HD, {X, X, X, X}, {2, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {1, 0, 0, 1, PREFETCH_HD, {X, X, X, X}, {3, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {2, 0, 0, 0, DISPATCH_HD, {0, X, X, X}, {X, X, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {3, 0, 0, 1, DISPATCH_HD, {1, X, X, X}, {X, X, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
 
-    {4, 0, 1, 0, PREFETCH_H, {x, x, x, x}, {8, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {5, 0, 1, 1, PREFETCH_H, {x, x, x, x}, {8, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {6, 0, 1, 0, DISPATCH_H, {9, x, x, x}, {4, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {7, 0, 1, 1, DISPATCH_H, {9, x, x, x}, {5, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {4, 0, 1, 0, PREFETCH_H, {X, X, X, X}, {8, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {5, 0, 1, 1, PREFETCH_H, {X, X, X, X}, {8, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {6, 0, 1, 0, DISPATCH_H, {9, X, X, X}, {4, X, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {7, 0, 1, 1, DISPATCH_H, {9, X, X, X}, {5, X, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
 
-    {8, 0, 1, 0, PACKET_ROUTER_MUX, {4, 5, x, x}, {10, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {9, 0, 1, 0, DEMUX, {10, x, x, x}, {6, 7, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {10, 0, 1, 0, US_TUNNELER_REMOTE, {15, 8, x, x}, {15, 9, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {8, 0, 1, 0, PACKET_ROUTER_MUX, {4, 5, X, X}, {10, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {9, 0, 1, 0, DEMUX, {10, X, X, X}, {6, 7, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {10, 0, 1, 0, US_TUNNELER_REMOTE, {15, 8, X, X}, {15, 9, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
 
-    {11, 1, x, 0, PREFETCH_D, {17, x, x, x}, {13, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {12, 1, x, 1, PREFETCH_D, {17, x, x, x}, {14, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {13, 1, x, 0, DISPATCH_D, {11, x, x, x}, {16, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {14, 1, x, 1, DISPATCH_D, {12, x, x, x}, {16, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {11, 1, X, 0, PREFETCH_D, {17, X, X, X}, {13, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {12, 1, X, 1, PREFETCH_D, {17, X, X, X}, {14, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {13, 1, X, 0, DISPATCH_D, {11, X, X, X}, {16, X, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {14, 1, X, 1, DISPATCH_D, {12, X, X, X}, {16, X, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
 
-    {15, 1, x, 0, US_TUNNELER_LOCAL, {10, 16, x, x}, {10, 17, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {16, 1, x, 0, MUX_D, {13, 14, x, x}, {15, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {17, 1, x, 0, PACKET_ROUTER_DEMUX, {15, x, x, x}, {11, 12, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {15, 1, X, 0, US_TUNNELER_LOCAL, {10, 16, X, X}, {10, 17, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {16, 1, X, 0, MUX_D, {13, 14, X, X}, {15, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {17, 1, X, 0, PACKET_ROUTER_DEMUX, {15, X, X, X}, {11, 12, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
 
 };
 
 static const std::vector<DispatchKernelNode> galaxy_nine_chip_arch_1cq = {
     // For MMIO chip, TODO: investigate removing these, they aren't needed
-    {0, 0, 0, 0, PREFETCH_HD, {x, x, x, x}, {1, 2, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {1, 0, 0, 0, DISPATCH_HD, {0, x, x, x}, {2, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {2, 0, 0, 0, DISPATCH_S, {0, x, x, x}, {1, x, x, x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
+    {0, 0, 0, 0, PREFETCH_HD, {X, X, X, X}, {1, 2, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {1, 0, 0, 0, DISPATCH_HD, {0, X, X, X}, {2, X, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {2, 0, 0, 0, DISPATCH_S, {0, X, X, X}, {1, X, X, X}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
 
     // Sevicing remote chips 1-4
-    {3, 0, 1, 0, PREFETCH_H, {x, x, x, x}, {11, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {4, 0, 1, 0, DISPATCH_H, {13, x, x, x}, {3, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {5, 0, 2, 0, PREFETCH_H, {x, x, x, x}, {11, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {6, 0, 2, 0, DISPATCH_H, {13, x, x, x}, {5, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {7, 0, 3, 0, PREFETCH_H, {x, x, x, x}, {11, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {8, 0, 3, 0, DISPATCH_H, {14, x, x, x}, {7, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {9, 0, 4, 0, PREFETCH_H, {x, x, x, x}, {11, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {10, 0, 4, 0, DISPATCH_H, {14, x, x, x}, {9, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {11, 0, 1, 0, PACKET_ROUTER_MUX, {3, 5, 7, 9}, {15, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {12, 0, 1, 0, DEMUX, {15, x, x, x}, {13, 14, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {13, 0, 1, 0, DEMUX, {12, x, x, x}, {4, 6, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {14, 0, 1, 0, DEMUX, {12, x, x, x}, {8, 10, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {15, 0, 1, 0, US_TUNNELER_REMOTE, {29, 11, x, x}, {29, 12, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {3, 0, 1, 0, PREFETCH_H, {X, X, X, X}, {11, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {4, 0, 1, 0, DISPATCH_H, {13, X, X, X}, {3, X, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {5, 0, 2, 0, PREFETCH_H, {X, X, X, X}, {11, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {6, 0, 2, 0, DISPATCH_H, {13, X, X, X}, {5, X, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {7, 0, 3, 0, PREFETCH_H, {X, X, X, X}, {11, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {8, 0, 3, 0, DISPATCH_H, {14, X, X, X}, {7, X, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {9, 0, 4, 0, PREFETCH_H, {X, X, X, X}, {11, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {10, 0, 4, 0, DISPATCH_H, {14, X, X, X}, {9, X, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {11, 0, 1, 0, PACKET_ROUTER_MUX, {3, 5, 7, 9}, {15, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {12, 0, 1, 0, DEMUX, {15, X, X, X}, {13, 14, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {13, 0, 1, 0, DEMUX, {12, X, X, X}, {4, 6, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {14, 0, 1, 0, DEMUX, {12, X, X, X}, {8, 10, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {15, 0, 1, 0, US_TUNNELER_REMOTE, {29, 11, X, X}, {29, 12, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
 
     // Servicing remote chips 5-8
-    {16, 0, 5, 0, PREFETCH_H, {x, x, x, x}, {24, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {17, 0, 5, 0, DISPATCH_H, {26, x, x, x}, {16, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {18, 0, 6, 0, PREFETCH_H, {x, x, x, x}, {24, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {19, 0, 6, 0, DISPATCH_H, {26, x, x, x}, {18, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {20, 0, 7, 0, PREFETCH_H, {x, x, x, x}, {24, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {21, 0, 7, 0, DISPATCH_H, {27, x, x, x}, {20, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {22, 0, 8, 0, PREFETCH_H, {x, x, x, x}, {24, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {23, 0, 8, 0, DISPATCH_H, {27, x, x, x}, {22, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {24, 0, 5, 0, PACKET_ROUTER_MUX, {16, 18, 20, 22}, {28, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {25, 0, 5, 0, DEMUX, {28, x, x, x}, {26, 27, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {26, 0, 5, 0, DEMUX, {25, x, x, x}, {17, 19, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {27, 0, 5, 0, DEMUX, {25, x, x, x}, {21, 23, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {28, 0, 5, 0, US_TUNNELER_REMOTE, {59, 24, x, x}, {59, 25, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {16, 0, 5, 0, PREFETCH_H, {X, X, X, X}, {24, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {17, 0, 5, 0, DISPATCH_H, {26, X, X, X}, {16, X, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {18, 0, 6, 0, PREFETCH_H, {X, X, X, X}, {24, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {19, 0, 6, 0, DISPATCH_H, {26, X, X, X}, {18, X, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {20, 0, 7, 0, PREFETCH_H, {X, X, X, X}, {24, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {21, 0, 7, 0, DISPATCH_H, {27, X, X, X}, {20, X, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {22, 0, 8, 0, PREFETCH_H, {X, X, X, X}, {24, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {23, 0, 8, 0, DISPATCH_H, {27, X, X, X}, {22, X, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {24, 0, 5, 0, PACKET_ROUTER_MUX, {16, 18, 20, 22}, {28, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {25, 0, 5, 0, DEMUX, {28, X, X, X}, {26, 27, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {26, 0, 5, 0, DEMUX, {25, X, X, X}, {17, 19, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {27, 0, 5, 0, DEMUX, {25, X, X, X}, {21, 23, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {28, 0, 5, 0, US_TUNNELER_REMOTE, {59, 24, X, X}, {59, 25, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
 
     // Remote chip 1
-    {29, 1, x, 0, US_TUNNELER_LOCAL, {15, 30, x, x}, {15, 31, 32, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {30, 1, x, 0, MUX_D, {34, 36, x, x}, {29, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {31, 1, x, 0, PACKET_ROUTER_DEMUX, {29, x, x, x}, {33, 36, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {32, 1, x, 0, PACKET_ROUTER_DEMUX, {29, x, x, x}, {36, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {33, 1, x, 0, PREFETCH_D, {31, x, x, x}, {34, 35, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {34, 1, x, 0, DISPATCH_D, {33, x, x, x}, {35, 30, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {35, 1, x, 0, DISPATCH_S, {33, x, x, x}, {34, x, x, x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
-    {36, 1, x, 0, US_TUNNELER_REMOTE, {37, 31, 32, x}, {37, 30, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {29, 1, X, 0, US_TUNNELER_LOCAL, {15, 30, X, X}, {15, 31, 32, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {30, 1, X, 0, MUX_D, {34, 36, X, X}, {29, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {31, 1, X, 0, PACKET_ROUTER_DEMUX, {29, X, X, X}, {33, 36, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {32, 1, X, 0, PACKET_ROUTER_DEMUX, {29, X, X, X}, {36, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {33, 1, X, 0, PREFETCH_D, {31, X, X, X}, {34, 35, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {34, 1, X, 0, DISPATCH_D, {33, X, X, X}, {35, 30, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {35, 1, X, 0, DISPATCH_S, {33, X, X, X}, {34, X, X, X}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
+    {36, 1, X, 0, US_TUNNELER_REMOTE, {37, 31, 32, X}, {37, 30, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
 
     // Remote chip 2
-    {37, 2, x, 0, US_TUNNELER_LOCAL, {36, 38, x, x}, {36, 39, 40, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {38, 2, x, 0, MUX_D, {42, 44, x, x}, {37, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {39, 2, x, 0, PACKET_ROUTER_DEMUX, {37, x, x, x}, {41, 44, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {40, 2, x, 0, PACKET_ROUTER_DEMUX, {37, x, x, x}, {44, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {41, 2, x, 0, PREFETCH_D, {39, x, x, x}, {42, 43, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {42, 2, x, 0, DISPATCH_D, {41, x, x, x}, {43, 38, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {43, 2, x, 0, DISPATCH_S, {41, x, x, x}, {42, x, x, x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
-    {44, 2, x, 0, US_TUNNELER_REMOTE, {45, 39, 40, x}, {45, 38, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {37, 2, X, 0, US_TUNNELER_LOCAL, {36, 38, X, X}, {36, 39, 40, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {38, 2, X, 0, MUX_D, {42, 44, X, X}, {37, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {39, 2, X, 0, PACKET_ROUTER_DEMUX, {37, X, X, X}, {41, 44, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {40, 2, X, 0, PACKET_ROUTER_DEMUX, {37, X, X, X}, {44, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {41, 2, X, 0, PREFETCH_D, {39, X, X, X}, {42, 43, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {42, 2, X, 0, DISPATCH_D, {41, X, X, X}, {43, 38, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {43, 2, X, 0, DISPATCH_S, {41, X, X, X}, {42, X, X, X}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
+    {44, 2, X, 0, US_TUNNELER_REMOTE, {45, 39, 40, X}, {45, 38, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
 
     // Remote chip 3
-    {45, 3, x, 0, US_TUNNELER_LOCAL, {44, 46, x, x}, {44, 47, 48, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {46, 3, x, 0, MUX_D, {50, 52, x, x}, {45, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {47, 3, x, 0, PACKET_ROUTER_DEMUX, {45, x, x, x}, {49, 52, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {48, 3, x, 0, PACKET_ROUTER_DEMUX, {45, x, x, x}, {52, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {49, 3, x, 0, PREFETCH_D, {47, x, x, x}, {50, 51, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {50, 3, x, 0, DISPATCH_D, {49, x, x, x}, {51, 46, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {51, 3, x, 0, DISPATCH_S, {49, x, x, x}, {50, x, x, x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
-    {52, 3, x, 0, US_TUNNELER_REMOTE, {53, 47, 48, x}, {53, 46, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {45, 3, X, 0, US_TUNNELER_LOCAL, {44, 46, X, X}, {44, 47, 48, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {46, 3, X, 0, MUX_D, {50, 52, X, X}, {45, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {47, 3, X, 0, PACKET_ROUTER_DEMUX, {45, X, X, X}, {49, 52, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {48, 3, X, 0, PACKET_ROUTER_DEMUX, {45, X, X, X}, {52, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {49, 3, X, 0, PREFETCH_D, {47, X, X, X}, {50, 51, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {50, 3, X, 0, DISPATCH_D, {49, X, X, X}, {51, 46, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {51, 3, X, 0, DISPATCH_S, {49, X, X, X}, {50, X, X, X}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
+    {52, 3, X, 0, US_TUNNELER_REMOTE, {53, 47, 48, X}, {53, 46, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
 
     // Remote chip 4
-    {53, 4, x, 0, US_TUNNELER_LOCAL, {52, 54, x, x}, {52, 55, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {54, 4, x, 0, MUX_D, {57, x, x, x}, {53, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {55, 4, x, 0, PACKET_ROUTER_DEMUX, {53, x, x, x}, {56, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {56, 4, x, 0, PREFETCH_D, {55, x, x, x}, {57, 58, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {57, 4, x, 0, DISPATCH_D, {56, x, x, x}, {58, 54, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {58, 4, x, 0, DISPATCH_S, {56, x, x, x}, {57, x, x, x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
+    {53, 4, X, 0, US_TUNNELER_LOCAL, {52, 54, X, X}, {52, 55, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {54, 4, X, 0, MUX_D, {57, X, X, X}, {53, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {55, 4, X, 0, PACKET_ROUTER_DEMUX, {53, X, X, X}, {56, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {56, 4, X, 0, PREFETCH_D, {55, X, X, X}, {57, 58, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {57, 4, X, 0, DISPATCH_D, {56, X, X, X}, {58, 54, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {58, 4, X, 0, DISPATCH_S, {56, X, X, X}, {57, X, X, X}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
 
     // Remote chip 5
-    {59, 5, x, 0, US_TUNNELER_LOCAL, {28, 60, x, x}, {28, 61, 62, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {60, 5, x, 0, MUX_D, {64, 66, x, x}, {59, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {61, 5, x, 0, PACKET_ROUTER_DEMUX, {59, x, x, x}, {63, 66, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {62, 5, x, 0, PACKET_ROUTER_DEMUX, {59, x, x, x}, {66, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {63, 5, x, 0, PREFETCH_D, {61, x, x, x}, {64, 65, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {64, 5, x, 0, DISPATCH_D, {63, x, x, x}, {65, 60, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {65, 5, x, 0, DISPATCH_S, {63, x, x, x}, {64, x, x, x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
-    {66, 5, x, 0, US_TUNNELER_REMOTE, {67, 61, 62, x}, {67, 60, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {59, 5, X, 0, US_TUNNELER_LOCAL, {28, 60, X, X}, {28, 61, 62, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {60, 5, X, 0, MUX_D, {64, 66, X, X}, {59, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {61, 5, X, 0, PACKET_ROUTER_DEMUX, {59, X, X, X}, {63, 66, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {62, 5, X, 0, PACKET_ROUTER_DEMUX, {59, X, X, X}, {66, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {63, 5, X, 0, PREFETCH_D, {61, X, X, X}, {64, 65, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {64, 5, X, 0, DISPATCH_D, {63, X, X, X}, {65, 60, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {65, 5, X, 0, DISPATCH_S, {63, X, X, X}, {64, X, X, X}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
+    {66, 5, X, 0, US_TUNNELER_REMOTE, {67, 61, 62, X}, {67, 60, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
 
     // Remote chip 6
-    {67, 6, x, 0, US_TUNNELER_LOCAL, {66, 68, x, x}, {66, 69, 70, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {68, 6, x, 0, MUX_D, {72, 74, x, x}, {67, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {69, 6, x, 0, PACKET_ROUTER_DEMUX, {67, x, x, x}, {71, 74, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {70, 6, x, 0, PACKET_ROUTER_DEMUX, {67, x, x, x}, {74, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {71, 6, x, 0, PREFETCH_D, {69, x, x, x}, {72, 73, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {72, 6, x, 0, DISPATCH_D, {71, x, x, x}, {73, 68, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {73, 6, x, 0, DISPATCH_S, {71, x, x, x}, {72, x, x, x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
-    {74, 6, x, 0, US_TUNNELER_REMOTE, {75, 69, 70, x}, {75, 68, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {67, 6, X, 0, US_TUNNELER_LOCAL, {66, 68, X, X}, {66, 69, 70, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {68, 6, X, 0, MUX_D, {72, 74, X, X}, {67, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {69, 6, X, 0, PACKET_ROUTER_DEMUX, {67, X, X, X}, {71, 74, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {70, 6, X, 0, PACKET_ROUTER_DEMUX, {67, X, X, X}, {74, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {71, 6, X, 0, PREFETCH_D, {69, X, X, X}, {72, 73, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {72, 6, X, 0, DISPATCH_D, {71, X, X, X}, {73, 68, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {73, 6, X, 0, DISPATCH_S, {71, X, X, X}, {72, X, X, X}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
+    {74, 6, X, 0, US_TUNNELER_REMOTE, {75, 69, 70, X}, {75, 68, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
 
     // Remote chip 7
-    {75, 7, x, 0, US_TUNNELER_LOCAL, {74, 76, x, x}, {74, 77, 78, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {76, 7, x, 0, MUX_D, {80, 82, x, x}, {75, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {77, 7, x, 0, PACKET_ROUTER_DEMUX, {75, x, x, x}, {79, 82, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {78, 7, x, 0, PACKET_ROUTER_DEMUX, {75, x, x, x}, {82, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {79, 7, x, 0, PREFETCH_D, {77, x, x, x}, {80, 81, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {80, 7, x, 0, DISPATCH_D, {79, x, x, x}, {81, 76, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {81, 7, x, 0, DISPATCH_S, {79, x, x, x}, {80, x, x, x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
-    {82, 7, x, 0, US_TUNNELER_REMOTE, {83, 77, 78, x}, {83, 76, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {75, 7, X, 0, US_TUNNELER_LOCAL, {74, 76, X, X}, {74, 77, 78, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {76, 7, X, 0, MUX_D, {80, 82, X, X}, {75, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {77, 7, X, 0, PACKET_ROUTER_DEMUX, {75, X, X, X}, {79, 82, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {78, 7, X, 0, PACKET_ROUTER_DEMUX, {75, X, X, X}, {82, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {79, 7, X, 0, PREFETCH_D, {77, X, X, X}, {80, 81, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {80, 7, X, 0, DISPATCH_D, {79, X, X, X}, {81, 76, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {81, 7, X, 0, DISPATCH_S, {79, X, X, X}, {80, X, X, X}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
+    {82, 7, X, 0, US_TUNNELER_REMOTE, {83, 77, 78, X}, {83, 76, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
 
     // Remote chip 8
-    {83, 8, x, 0, US_TUNNELER_LOCAL, {82, 84, x, x}, {82, 85, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {84, 8, x, 0, MUX_D, {87, x, x, x}, {83, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {85, 8, x, 0, PACKET_ROUTER_DEMUX, {83, x, x, x}, {86, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {86, 8, x, 0, PREFETCH_D, {85, x, x, x}, {87, 88, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {87, 8, x, 0, DISPATCH_D, {86, x, x, x}, {88, 84, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {88, 8, x, 0, DISPATCH_S, {86, x, x, x}, {87, x, x, x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
+    {83, 8, X, 0, US_TUNNELER_LOCAL, {82, 84, X, X}, {82, 85, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {84, 8, X, 0, MUX_D, {87, X, X, X}, {83, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {85, 8, X, 0, PACKET_ROUTER_DEMUX, {83, X, X, X}, {86, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {86, 8, X, 0, PREFETCH_D, {85, X, X, X}, {87, 88, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {87, 8, X, 0, DISPATCH_D, {86, X, X, X}, {88, 84, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {88, 8, X, 0, DISPATCH_S, {86, X, X, X}, {87, X, X, X}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
 };
 
 static const std::vector<DispatchKernelNode> galaxy_nine_chip_arch_2cq = {
     // For MMIO chip
-    {0, 0, 0, 0, PREFETCH_HD, {x, x, x, x}, {2, 4, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {1, 0, 0, 1, PREFETCH_HD, {x, x, x, x}, {3, 5, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {2, 0, 0, 0, DISPATCH_HD, {0, x, x, x}, {4, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {3, 0, 0, 1, DISPATCH_HD, {1, x, x, x}, {5, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {4, 0, 0, 0, DISPATCH_S, {0, x, x, x}, {2, x, x, x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
-    {5, 0, 0, 1, DISPATCH_S, {1, x, x, x}, {3, x, x, x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
+    {0, 0, 0, 0, PREFETCH_HD, {X, X, X, X}, {2, 4, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {1, 0, 0, 1, PREFETCH_HD, {X, X, X, X}, {3, 5, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {2, 0, 0, 0, DISPATCH_HD, {0, X, X, X}, {4, X, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {3, 0, 0, 1, DISPATCH_HD, {1, X, X, X}, {5, X, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {4, 0, 0, 0, DISPATCH_S, {0, X, X, X}, {2, X, X, X}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
+    {5, 0, 0, 1, DISPATCH_S, {1, X, X, X}, {3, X, X, X}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
 
     // Servicing remote chips 1-4
-    {6, 0, 1, 0, PREFETCH_H, {x, x, x, x}, {22, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {7, 0, 1, 1, PREFETCH_H, {x, x, x, x}, {23, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {8, 0, 1, 0, DISPATCH_H, {25, x, x, x}, {6, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {9, 0, 1, 1, DISPATCH_H, {25, x, x, x}, {7, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {10, 0, 2, 0, PREFETCH_H, {x, x, x, x}, {22, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {11, 0, 2, 1, PREFETCH_H, {x, x, x, x}, {23, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {12, 0, 2, 0, DISPATCH_H, {25, x, x, x}, {10, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {13, 0, 2, 1, DISPATCH_H, {25, x, x, x}, {11, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {14, 0, 3, 0, PREFETCH_H, {x, x, x, x}, {22, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {15, 0, 3, 1, PREFETCH_H, {x, x, x, x}, {23, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {16, 0, 3, 0, DISPATCH_H, {26, x, x, x}, {14, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {17, 0, 3, 1, DISPATCH_H, {26, x, x, x}, {15, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {18, 0, 4, 0, PREFETCH_H, {x, x, x, x}, {22, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {19, 0, 4, 1, PREFETCH_H, {x, x, x, x}, {23, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {20, 0, 4, 0, DISPATCH_H, {26, x, x, x}, {18, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {21, 0, 4, 1, DISPATCH_H, {26, x, x, x}, {19, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {22, 0, 1, 0, PACKET_ROUTER_MUX, {6, 10, 14, 18}, {27, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {23, 0, 1, 0, PACKET_ROUTER_MUX, {7, 11, 15, 19}, {27, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {24, 0, 1, 0, DEMUX, {27, x, x, x}, {25, 26, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {25, 0, 1, 0, DEMUX, {24, x, x, x}, {8, 9, 12, 13}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {26, 0, 1, 0, DEMUX, {24, x, x, x}, {16, 17, 20, 21}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {27, 0, 1, 0, US_TUNNELER_REMOTE, {50, 22, 23, x}, {50, 24, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {6, 0, 1, 0, PREFETCH_H, {X, X, X, X}, {22, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {7, 0, 1, 1, PREFETCH_H, {X, X, X, X}, {23, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {8, 0, 1, 0, DISPATCH_H, {25, X, X, X}, {6, X, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {9, 0, 1, 1, DISPATCH_H, {25, X, X, X}, {7, X, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {10, 0, 2, 0, PREFETCH_H, {X, X, X, X}, {22, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {11, 0, 2, 1, PREFETCH_H, {X, X, X, X}, {23, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {12, 0, 2, 0, DISPATCH_H, {25, X, X, X}, {10, X, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {13, 0, 2, 1, DISPATCH_H, {25, X, X, X}, {11, X, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {14, 0, 3, 0, PREFETCH_H, {X, X, X, X}, {22, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {15, 0, 3, 1, PREFETCH_H, {X, X, X, X}, {23, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {16, 0, 3, 0, DISPATCH_H, {26, X, X, X}, {14, X, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {17, 0, 3, 1, DISPATCH_H, {26, X, X, X}, {15, X, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {18, 0, 4, 0, PREFETCH_H, {X, X, X, X}, {22, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {19, 0, 4, 1, PREFETCH_H, {X, X, X, X}, {23, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {20, 0, 4, 0, DISPATCH_H, {26, X, X, X}, {18, X, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {21, 0, 4, 1, DISPATCH_H, {26, X, X, X}, {19, X, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {22, 0, 1, 0, PACKET_ROUTER_MUX, {6, 10, 14, 18}, {27, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {23, 0, 1, 0, PACKET_ROUTER_MUX, {7, 11, 15, 19}, {27, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {24, 0, 1, 0, DEMUX, {27, X, X, X}, {25, 26, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {25, 0, 1, 0, DEMUX, {24, X, X, X}, {8, 9, 12, 13}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {26, 0, 1, 0, DEMUX, {24, X, X, X}, {16, 17, 20, 21}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {27, 0, 1, 0, US_TUNNELER_REMOTE, {50, 22, 23, X}, {50, 24, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
 
     // Servicing remote chips 5-8
-    {28, 0, 5, 0, PREFETCH_H, {x, x, x, x}, {44, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {29, 0, 5, 1, PREFETCH_H, {x, x, x, x}, {45, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {30, 0, 5, 0, DISPATCH_H, {47, x, x, x}, {28, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {31, 0, 5, 1, DISPATCH_H, {47, x, x, x}, {29, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {32, 0, 6, 0, PREFETCH_H, {x, x, x, x}, {44, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {33, 0, 6, 1, PREFETCH_H, {x, x, x, x}, {45, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {34, 0, 6, 0, DISPATCH_H, {47, x, x, x}, {32, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {35, 0, 6, 1, DISPATCH_H, {47, x, x, x}, {33, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {36, 0, 7, 0, PREFETCH_H, {x, x, x, x}, {44, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {37, 0, 7, 1, PREFETCH_H, {x, x, x, x}, {45, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {38, 0, 7, 0, DISPATCH_H, {48, x, x, x}, {36, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {39, 0, 7, 1, DISPATCH_H, {48, x, x, x}, {37, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {40, 0, 8, 0, PREFETCH_H, {x, x, x, x}, {44, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {41, 0, 8, 1, PREFETCH_H, {x, x, x, x}, {45, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {42, 0, 8, 0, DISPATCH_H, {48, x, x, x}, {40, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {43, 0, 8, 1, DISPATCH_H, {48, x, x, x}, {41, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {44, 0, 5, 0, PACKET_ROUTER_MUX, {28, 32, 36, 40}, {49, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {45, 0, 5, 0, PACKET_ROUTER_MUX, {29, 33, 37, 41}, {49, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {46, 0, 5, 0, DEMUX, {49, x, x, x}, {47, 48, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {47, 0, 5, 0, DEMUX, {46, x, x, x}, {30, 31, 34, 35}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {48, 0, 5, 0, DEMUX, {46, x, x, x}, {38, 39, 42, 43}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {49, 0, 5, 0, US_TUNNELER_REMOTE, {93, 44, 45, x}, {93, 46, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {28, 0, 5, 0, PREFETCH_H, {X, X, X, X}, {44, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {29, 0, 5, 1, PREFETCH_H, {X, X, X, X}, {45, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {30, 0, 5, 0, DISPATCH_H, {47, X, X, X}, {28, X, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {31, 0, 5, 1, DISPATCH_H, {47, X, X, X}, {29, X, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {32, 0, 6, 0, PREFETCH_H, {X, X, X, X}, {44, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {33, 0, 6, 1, PREFETCH_H, {X, X, X, X}, {45, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {34, 0, 6, 0, DISPATCH_H, {47, X, X, X}, {32, X, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {35, 0, 6, 1, DISPATCH_H, {47, X, X, X}, {33, X, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {36, 0, 7, 0, PREFETCH_H, {X, X, X, X}, {44, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {37, 0, 7, 1, PREFETCH_H, {X, X, X, X}, {45, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {38, 0, 7, 0, DISPATCH_H, {48, X, X, X}, {36, X, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {39, 0, 7, 1, DISPATCH_H, {48, X, X, X}, {37, X, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {40, 0, 8, 0, PREFETCH_H, {X, X, X, X}, {44, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {41, 0, 8, 1, PREFETCH_H, {X, X, X, X}, {45, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {42, 0, 8, 0, DISPATCH_H, {48, X, X, X}, {40, X, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {43, 0, 8, 1, DISPATCH_H, {48, X, X, X}, {41, X, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {44, 0, 5, 0, PACKET_ROUTER_MUX, {28, 32, 36, 40}, {49, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {45, 0, 5, 0, PACKET_ROUTER_MUX, {29, 33, 37, 41}, {49, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {46, 0, 5, 0, DEMUX, {49, X, X, X}, {47, 48, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {47, 0, 5, 0, DEMUX, {46, X, X, X}, {30, 31, 34, 35}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {48, 0, 5, 0, DEMUX, {46, X, X, X}, {38, 39, 42, 43}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {49, 0, 5, 0, US_TUNNELER_REMOTE, {93, 44, 45, X}, {93, 46, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
 
     // Remote chip 1
-    {50, 1, x, 0, US_TUNNELER_LOCAL, {27, 51, x, x}, {27, 52, 53, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {51, 1, x, 0, MUX_D, {56, 57, 60, x}, {50, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {52, 1, x, 0, PACKET_ROUTER_DEMUX, {50, x, x, x}, {54, 60, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {53, 1, x, 0, PACKET_ROUTER_DEMUX, {50, x, x, x}, {55, 60, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {54, 1, x, 0, PREFETCH_D, {52, x, x, x}, {56, 58, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {55, 1, x, 1, PREFETCH_D, {53, x, x, x}, {57, 59, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {56, 1, x, 0, DISPATCH_D, {54, x, x, x}, {58, 51, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {57, 1, x, 1, DISPATCH_D, {55, x, x, x}, {59, 51, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {58, 1, x, 0, DISPATCH_S, {54, x, x, x}, {56, x, x, x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
+    {50, 1, X, 0, US_TUNNELER_LOCAL, {27, 51, X, X}, {27, 52, 53, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {51, 1, X, 0, MUX_D, {56, 57, 60, X}, {50, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {52, 1, X, 0, PACKET_ROUTER_DEMUX, {50, X, X, X}, {54, 60, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {53, 1, X, 0, PACKET_ROUTER_DEMUX, {50, X, X, X}, {55, 60, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {54, 1, X, 0, PREFETCH_D, {52, X, X, X}, {56, 58, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {55, 1, X, 1, PREFETCH_D, {53, X, X, X}, {57, 59, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {56, 1, X, 0, DISPATCH_D, {54, X, X, X}, {58, 51, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {57, 1, X, 1, DISPATCH_D, {55, X, X, X}, {59, 51, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {58, 1, X, 0, DISPATCH_S, {54, X, X, X}, {56, X, X, X}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
     // TODO: Why does the second dispatch S connect to the first dispatch D? Keep same as previous implementation for
     // now
-    {59, 1, x, 1, DISPATCH_S, {54, x, x, x}, {56, x, x, x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
-    {60, 1, x, 0, US_TUNNELER_REMOTE, {61, 52, 53, x}, {61, 51, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {59, 1, X, 1, DISPATCH_S, {54, X, X, X}, {56, X, X, X}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
+    {60, 1, X, 0, US_TUNNELER_REMOTE, {61, 52, 53, X}, {61, 51, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
 
     // Remote chip 2
-    {61, 2, x, 0, US_TUNNELER_LOCAL, {60, 62, x, x}, {60, 63, 64, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {62, 2, x, 0, MUX_D, {67, 68, 71, x}, {61, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {63, 2, x, 0, PACKET_ROUTER_DEMUX, {61, x, x, x}, {65, 71, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {64, 2, x, 0, PACKET_ROUTER_DEMUX, {61, x, x, x}, {66, 71, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {65, 2, x, 0, PREFETCH_D, {63, x, x, x}, {67, 69, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {66, 2, x, 1, PREFETCH_D, {64, x, x, x}, {68, 70, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {67, 2, x, 0, DISPATCH_D, {65, x, x, x}, {69, 62, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {68, 2, x, 1, DISPATCH_D, {66, x, x, x}, {70, 62, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {69, 2, x, 0, DISPATCH_S, {65, x, x, x}, {67, x, x, x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
-    {70, 2, x, 1, DISPATCH_S, {65, x, x, x}, {67, x, x, x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
-    {71, 2, x, 0, US_TUNNELER_REMOTE, {72, 63, 64, x}, {72, 62, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {61, 2, X, 0, US_TUNNELER_LOCAL, {60, 62, X, X}, {60, 63, 64, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {62, 2, X, 0, MUX_D, {67, 68, 71, X}, {61, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {63, 2, X, 0, PACKET_ROUTER_DEMUX, {61, X, X, X}, {65, 71, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {64, 2, X, 0, PACKET_ROUTER_DEMUX, {61, X, X, X}, {66, 71, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {65, 2, X, 0, PREFETCH_D, {63, X, X, X}, {67, 69, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {66, 2, X, 1, PREFETCH_D, {64, X, X, X}, {68, 70, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {67, 2, X, 0, DISPATCH_D, {65, X, X, X}, {69, 62, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {68, 2, X, 1, DISPATCH_D, {66, X, X, X}, {70, 62, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {69, 2, X, 0, DISPATCH_S, {65, X, X, X}, {67, X, X, X}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
+    {70, 2, X, 1, DISPATCH_S, {65, X, X, X}, {67, X, X, X}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
+    {71, 2, X, 0, US_TUNNELER_REMOTE, {72, 63, 64, X}, {72, 62, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
 
     // Remote chip 3
-    {72, 3, x, 0, US_TUNNELER_LOCAL, {71, 73, x, x}, {71, 74, 75, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {73, 3, x, 0, MUX_D, {78, 79, 82, x}, {72, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {74, 3, x, 0, PACKET_ROUTER_DEMUX, {72, x, x, x}, {76, 82, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {75, 3, x, 0, PACKET_ROUTER_DEMUX, {72, x, x, x}, {77, 82, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {76, 3, x, 0, PREFETCH_D, {74, x, x, x}, {78, 80, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {77, 3, x, 1, PREFETCH_D, {75, x, x, x}, {79, 81, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {78, 3, x, 0, DISPATCH_D, {76, x, x, x}, {80, 73, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {79, 3, x, 1, DISPATCH_D, {77, x, x, x}, {81, 73, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {80, 3, x, 0, DISPATCH_S, {76, x, x, x}, {78, x, x, x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
-    {81, 3, x, 1, DISPATCH_S, {76, x, x, x}, {78, x, x, x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
-    {82, 3, x, 0, US_TUNNELER_REMOTE, {83, 74, 75, x}, {83, 73, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {72, 3, X, 0, US_TUNNELER_LOCAL, {71, 73, X, X}, {71, 74, 75, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {73, 3, X, 0, MUX_D, {78, 79, 82, X}, {72, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {74, 3, X, 0, PACKET_ROUTER_DEMUX, {72, X, X, X}, {76, 82, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {75, 3, X, 0, PACKET_ROUTER_DEMUX, {72, X, X, X}, {77, 82, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {76, 3, X, 0, PREFETCH_D, {74, X, X, X}, {78, 80, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {77, 3, X, 1, PREFETCH_D, {75, X, X, X}, {79, 81, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {78, 3, X, 0, DISPATCH_D, {76, X, X, X}, {80, 73, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {79, 3, X, 1, DISPATCH_D, {77, X, X, X}, {81, 73, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {80, 3, X, 0, DISPATCH_S, {76, X, X, X}, {78, X, X, X}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
+    {81, 3, X, 1, DISPATCH_S, {76, X, X, X}, {78, X, X, X}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
+    {82, 3, X, 0, US_TUNNELER_REMOTE, {83, 74, 75, X}, {83, 73, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
 
     // Remote chip 4
-    {83, 4, x, 0, US_TUNNELER_LOCAL, {82, 84, x, x}, {82, 85, 86, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {84, 4, x, 0, MUX_D, {89, 90, x, x}, {83, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {85, 4, x, 0, PACKET_ROUTER_DEMUX, {83, x, x, x}, {87, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {86, 4, x, 0, PACKET_ROUTER_DEMUX, {83, x, x, x}, {88, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {87, 4, x, 0, PREFETCH_D, {85, x, x, x}, {89, 91, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {88, 4, x, 1, PREFETCH_D, {86, x, x, x}, {90, 92, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {89, 4, x, 0, DISPATCH_D, {87, x, x, x}, {91, 84, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {90, 4, x, 1, DISPATCH_D, {88, x, x, x}, {92, 84, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {91, 4, x, 0, DISPATCH_S, {87, x, x, x}, {89, x, x, x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
-    {92, 4, x, 1, DISPATCH_S, {87, x, x, x}, {89, x, x, x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
+    {83, 4, X, 0, US_TUNNELER_LOCAL, {82, 84, X, X}, {82, 85, 86, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {84, 4, X, 0, MUX_D, {89, 90, X, X}, {83, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {85, 4, X, 0, PACKET_ROUTER_DEMUX, {83, X, X, X}, {87, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {86, 4, X, 0, PACKET_ROUTER_DEMUX, {83, X, X, X}, {88, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {87, 4, X, 0, PREFETCH_D, {85, X, X, X}, {89, 91, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {88, 4, X, 1, PREFETCH_D, {86, X, X, X}, {90, 92, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {89, 4, X, 0, DISPATCH_D, {87, X, X, X}, {91, 84, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {90, 4, X, 1, DISPATCH_D, {88, X, X, X}, {92, 84, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {91, 4, X, 0, DISPATCH_S, {87, X, X, X}, {89, X, X, X}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
+    {92, 4, X, 1, DISPATCH_S, {87, X, X, X}, {89, X, X, X}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
 
     // Remote chip 5
-    {93, 5, x, 0, US_TUNNELER_LOCAL, {49, 94, x, x}, {49, 95, 96, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {94, 5, x, 0, MUX_D, {99, 100, 103, x}, {93, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {95, 5, x, 0, PACKET_ROUTER_DEMUX, {93, x, x, x}, {97, 103, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {96, 5, x, 0, PACKET_ROUTER_DEMUX, {93, x, x, x}, {98, 103, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {97, 5, x, 0, PREFETCH_D, {95, x, x, x}, {99, 101, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {98, 5, x, 1, PREFETCH_D, {96, x, x, x}, {100, 102, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {99, 5, x, 0, DISPATCH_D, {97, x, x, x}, {101, 94, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {100, 5, x, 1, DISPATCH_D, {98, x, x, x}, {102, 94, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {101, 5, x, 0, DISPATCH_S, {97, x, x, x}, {99, x, x, x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
-    {102, 5, x, 1, DISPATCH_S, {97, x, x, x}, {99, x, x, x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
-    {103, 5, x, 0, US_TUNNELER_REMOTE, {104, 95, 96, x}, {104, 94, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {93, 5, X, 0, US_TUNNELER_LOCAL, {49, 94, X, X}, {49, 95, 96, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {94, 5, X, 0, MUX_D, {99, 100, 103, X}, {93, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {95, 5, X, 0, PACKET_ROUTER_DEMUX, {93, X, X, X}, {97, 103, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {96, 5, X, 0, PACKET_ROUTER_DEMUX, {93, X, X, X}, {98, 103, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {97, 5, X, 0, PREFETCH_D, {95, X, X, X}, {99, 101, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {98, 5, X, 1, PREFETCH_D, {96, X, X, X}, {100, 102, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {99, 5, X, 0, DISPATCH_D, {97, X, X, X}, {101, 94, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {100, 5, X, 1, DISPATCH_D, {98, X, X, X}, {102, 94, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {101, 5, X, 0, DISPATCH_S, {97, X, X, X}, {99, X, X, X}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
+    {102, 5, X, 1, DISPATCH_S, {97, X, X, X}, {99, X, X, X}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
+    {103, 5, X, 0, US_TUNNELER_REMOTE, {104, 95, 96, X}, {104, 94, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
 
     // Remote chip 6
-    {104, 6, x, 0, US_TUNNELER_LOCAL, {103, 105, x, x}, {103, 106, 107, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {105, 6, x, 0, MUX_D, {110, 111, 114, x}, {104, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {106, 6, x, 0, PACKET_ROUTER_DEMUX, {104, x, x, x}, {108, 114, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {107, 6, x, 0, PACKET_ROUTER_DEMUX, {104, x, x, x}, {109, 114, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {108, 6, x, 0, PREFETCH_D, {106, x, x, x}, {110, 112, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {109, 6, x, 1, PREFETCH_D, {107, x, x, x}, {111, 113, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {110, 6, x, 0, DISPATCH_D, {108, x, x, x}, {112, 105, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {111, 6, x, 1, DISPATCH_D, {109, x, x, x}, {113, 105, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {112, 6, x, 0, DISPATCH_S, {108, x, x, x}, {110, x, x, x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
-    {113, 6, x, 1, DISPATCH_S, {108, x, x, x}, {110, x, x, x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
-    {114, 6, x, 0, US_TUNNELER_REMOTE, {115, 106, 107, x}, {115, 105, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {104, 6, X, 0, US_TUNNELER_LOCAL, {103, 105, X, X}, {103, 106, 107, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {105, 6, X, 0, MUX_D, {110, 111, 114, X}, {104, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {106, 6, X, 0, PACKET_ROUTER_DEMUX, {104, X, X, X}, {108, 114, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {107, 6, X, 0, PACKET_ROUTER_DEMUX, {104, X, X, X}, {109, 114, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {108, 6, X, 0, PREFETCH_D, {106, X, X, X}, {110, 112, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {109, 6, X, 1, PREFETCH_D, {107, X, X, X}, {111, 113, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {110, 6, X, 0, DISPATCH_D, {108, X, X, X}, {112, 105, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {111, 6, X, 1, DISPATCH_D, {109, X, X, X}, {113, 105, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {112, 6, X, 0, DISPATCH_S, {108, X, X, X}, {110, X, X, X}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
+    {113, 6, X, 1, DISPATCH_S, {108, X, X, X}, {110, X, X, X}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
+    {114, 6, X, 0, US_TUNNELER_REMOTE, {115, 106, 107, X}, {115, 105, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
 
     // Remote chip 7
-    {115, 7, x, 0, US_TUNNELER_LOCAL, {114, 116, x, x}, {114, 117, 118, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {116, 7, x, 0, MUX_D, {121, 122, 125, x}, {115, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {117, 7, x, 0, PACKET_ROUTER_DEMUX, {115, x, x, x}, {119, 125, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {118, 7, x, 0, PACKET_ROUTER_DEMUX, {115, x, x, x}, {120, 125, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {119, 7, x, 0, PREFETCH_D, {117, x, x, x}, {121, 123, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {120, 7, x, 1, PREFETCH_D, {118, x, x, x}, {122, 124, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {121, 7, x, 0, DISPATCH_D, {119, x, x, x}, {123, 116, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {122, 7, x, 1, DISPATCH_D, {120, x, x, x}, {124, 116, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {123, 7, x, 0, DISPATCH_S, {119, x, x, x}, {121, x, x, x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
-    {124, 7, x, 1, DISPATCH_S, {119, x, x, x}, {121, x, x, x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
-    {125, 7, x, 0, US_TUNNELER_REMOTE, {126, 117, 118, x}, {126, 116, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {115, 7, X, 0, US_TUNNELER_LOCAL, {114, 116, X, X}, {114, 117, 118, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {116, 7, X, 0, MUX_D, {121, 122, 125, X}, {115, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {117, 7, X, 0, PACKET_ROUTER_DEMUX, {115, X, X, X}, {119, 125, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {118, 7, X, 0, PACKET_ROUTER_DEMUX, {115, X, X, X}, {120, 125, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {119, 7, X, 0, PREFETCH_D, {117, X, X, X}, {121, 123, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {120, 7, X, 1, PREFETCH_D, {118, X, X, X}, {122, 124, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {121, 7, X, 0, DISPATCH_D, {119, X, X, X}, {123, 116, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {122, 7, X, 1, DISPATCH_D, {120, X, X, X}, {124, 116, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {123, 7, X, 0, DISPATCH_S, {119, X, X, X}, {121, X, X, X}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
+    {124, 7, X, 1, DISPATCH_S, {119, X, X, X}, {121, X, X, X}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
+    {125, 7, X, 0, US_TUNNELER_REMOTE, {126, 117, 118, X}, {126, 116, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
 
     // Remote chip 8
-    {126, 8, x, 0, US_TUNNELER_LOCAL, {125, 127, x, x}, {125, 128, 129, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {127, 8, x, 0, MUX_D, {132, 133, x, x}, {126, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {128, 8, x, 0, PACKET_ROUTER_DEMUX, {126, x, x, x}, {130, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {129, 8, x, 0, PACKET_ROUTER_DEMUX, {126, x, x, x}, {131, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {130, 8, x, 0, PREFETCH_D, {128, x, x, x}, {132, 134, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {131, 8, x, 1, PREFETCH_D, {129, x, x, x}, {133, 135, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {132, 8, x, 0, DISPATCH_D, {130, x, x, x}, {134, 127, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {133, 8, x, 1, DISPATCH_D, {131, x, x, x}, {135, 127, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {134, 8, x, 0, DISPATCH_S, {130, x, x, x}, {132, x, x, x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
-    {135, 8, x, 1, DISPATCH_S, {130, x, x, x}, {132, x, x, x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
+    {126, 8, X, 0, US_TUNNELER_LOCAL, {125, 127, X, X}, {125, 128, 129, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {127, 8, X, 0, MUX_D, {132, 133, X, X}, {126, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {128, 8, X, 0, PACKET_ROUTER_DEMUX, {126, X, X, X}, {130, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {129, 8, X, 0, PACKET_ROUTER_DEMUX, {126, X, X, X}, {131, X, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {130, 8, X, 0, PREFETCH_D, {128, X, X, X}, {132, 134, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {131, 8, X, 1, PREFETCH_D, {129, X, X, X}, {133, 135, X, X}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {132, 8, X, 0, DISPATCH_D, {130, X, X, X}, {134, 127, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {133, 8, X, 1, DISPATCH_D, {131, X, X, X}, {135, 127, X, X}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {134, 8, X, 0, DISPATCH_S, {130, X, X, X}, {132, X, X, X}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
+    {135, 8, X, 1, DISPATCH_S, {130, X, X, X}, {132, X, X, X}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
 };
 
 std::vector<FDKernel*> node_id_to_kernel;
@@ -749,6 +750,159 @@ void configure_dispatch_cores(IDevice* device) {
             node_id_to_kernel[idx]->ConfigureCore();
         }
     }
+}
+
+std::uint32_t get_gatekeeper_interface_addr(IDevice* device) {
+    std::uint32_t gatekeeper_routing_table_addr;
+    if (dispatch_core_manager::instance().get_dispatch_core_type(device->id()) == CoreType::ETH) {
+        gatekeeper_routing_table_addr =
+            hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
+    } else {
+        gatekeeper_routing_table_addr = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
+    }
+    return gatekeeper_routing_table_addr + sizeof(tt_fabric::fabric_router_l1_config_t) * 4;
+};
+
+std::unique_ptr<Program> create_and_compile_fabric_program(IDevice* device) {
+    auto fabric_program_ptr = std::make_unique<Program>();
+    constexpr uint32_t default_tunneler_queue_size_bytes = 0x8000;  // maximum queue (power of 2)
+    constexpr uint32_t default_tunneler_test_results_addr =
+        0x39000;  // 0x8000 * 4 + 0x19000; 0x10000 * 4 + 0x19000 = 0x59000 > 0x40000 (256kB)
+    // TODO: the size below is overriding eth barrier, need to fix this
+    constexpr uint32_t default_tunneler_test_results_size = 0x6000;  // 256kB total L1 in ethernet core - 0x39000
+    constexpr uint32_t default_test_results_addr = 0x100000;
+    constexpr uint32_t default_test_results_size = 0x40000;
+
+    auto fabric_gatekeeper_core = dispatch_core_manager::instance().fabric_gatekeeper(device->id());
+
+    CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
+    bool gatekeeper_on_idle_eth_core =
+        dispatch_core_manager::instance().get_dispatch_core_type(device->id()) == CoreType::ETH;
+
+    uint32_t programmable_core_type_index =
+        (dispatch_core_type == CoreType::WORKER)
+            ? hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)
+            : hal.get_programmable_core_type_index(HalProgrammableCoreType::IDLE_ETH);
+
+    auto gatekeeper_logical_core = CoreCoord(fabric_gatekeeper_core.x, fabric_gatekeeper_core.y);
+    auto gatekeeper_virtual_core = device->virtual_core_from_logical_core(gatekeeper_logical_core, dispatch_core_type);
+    auto gatekeeper_noc_encoding = tt_metal::hal.noc_xy_encoding(gatekeeper_virtual_core.x, gatekeeper_virtual_core.y);
+
+    std::uint32_t gatekeeper_routing_table_addr;
+    if (gatekeeper_on_idle_eth_core) {
+        gatekeeper_routing_table_addr =
+            hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
+    } else {
+        gatekeeper_routing_table_addr = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
+    }
+    std::uint32_t gatekeeper_interface_addr = get_gatekeeper_interface_addr(device);
+    std::uint32_t socket_info_addr = gatekeeper_interface_addr + tt_fabric::GATEKEEPER_INFO_SIZE_BYTES;
+
+    std::uint32_t num_routers = device->get_active_ethernet_cores().size();  // TODO: should get this from control plane
+
+    // create router kernels
+    std::vector<uint32_t> router_compile_args = {
+        (default_tunneler_queue_size_bytes >> 4),  // 0: rx_queue_size_words
+        default_tunneler_test_results_addr,        // 1: test_results_addr
+        default_tunneler_test_results_size,        // 2: test_results_size
+        0,                                         // timeout_mcycles * 1000 * 1000 * 4, // 3: timeout_cycles
+    };
+
+    std::map<string, string> router_defines = {};
+
+    // TODO: Manual clear of semaphore, move this to proper Metal sempahore apis
+    std::vector<uint32_t> fabric_sem_zero_buf(1, 0);
+
+    std::uint32_t router_mask = 0;
+    for (const auto& router_logical_core : device->get_active_ethernet_cores()) {
+        router_mask += 0x1 << router_logical_core.y;
+        const auto& router_physical_core = device->ethernet_core_from_logical_core(router_logical_core);
+        // setup runtime args
+        std::vector<uint32_t> router_runtime_args = {
+            num_routers,                // 0: number of active fabric routers
+            /*router_mask*/ 0,          // 1: active fabric router mask, should be unused by kernels
+            gatekeeper_interface_addr,  // 2: gk_message_addr_l
+            gatekeeper_noc_encoding,    // 3: gk_message_addr_h
+        };
+
+        auto kernel = tt_metal::CreateKernel(
+            *fabric_program_ptr,
+            "tt_metal/fabric/impl/kernels/tt_fabric_router.cpp",
+            router_logical_core,
+            tt_metal::EthernetConfig{
+                .noc = tt_metal::NOC::NOC_0, .compile_args = router_compile_args, .defines = router_defines});
+
+        tt_metal::SetRuntimeArgs(*fabric_program_ptr, kernel, router_logical_core, router_runtime_args);
+    }
+
+    // create gatekeeper kernel
+    std::map<string, string> gatekeeper_defines = {};
+    std::vector<uint32_t> gatekeeper_runtime_args = {
+        num_routers,  // 0: number of active fabric routers
+        router_mask,  // 1: active fabric router mask
+    };
+
+    std::vector<uint32_t> gatekeeper_compile_args = {
+        gatekeeper_interface_addr,      // 0: gk info addr
+        socket_info_addr,               // 1:
+        gatekeeper_routing_table_addr,  // 2:
+        default_test_results_addr,      // 3: test_results_addr
+        default_test_results_size,      // 4: test_results_size
+        0,                              // 5: timeout_cycles
+    };
+
+    KernelHandle kernel;
+
+    if (gatekeeper_on_idle_eth_core) {
+        kernel = tt_metal::CreateKernel(
+            *fabric_program_ptr,
+            "tt_metal/fabric/impl/kernels/tt_fabric_gatekeeper.cpp",
+            {gatekeeper_logical_core},
+            tt_metal::EthernetConfig{
+                .eth_mode = Eth::IDLE,
+                .noc = tt_metal::NOC::NOC_0,
+                .compile_args = gatekeeper_compile_args,
+                .defines = gatekeeper_defines});
+    } else {
+        kernel = tt_metal::CreateKernel(
+            *fabric_program_ptr,
+            "tt_metal/fabric/impl/kernels/tt_fabric_gatekeeper.cpp",
+            {gatekeeper_logical_core},
+            tt_metal::DataMovementConfig{
+                .processor = tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = tt_metal::NOC::RISCV_0_default,
+                .compile_args = gatekeeper_compile_args,
+                .defines = gatekeeper_defines});
+    }
+
+    tt_metal::SetRuntimeArgs(*fabric_program_ptr, kernel, gatekeeper_logical_core, gatekeeper_runtime_args);
+    detail::CompileProgram(device, *fabric_program_ptr, /*fd_bootloader_mode=*/true);
+    return fabric_program_ptr;
+}
+
+void configure_fabric_cores(IDevice* device) {
+    std::vector<uint32_t> router_zero_buf(1, 0);
+
+    for (const auto& router_logical_core : device->get_active_ethernet_cores()) {
+        // initialize the semaphore
+        auto fabric_router_sync_sem_addr =
+            hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+        detail::WriteToDeviceL1(
+            device, router_logical_core, fabric_router_sync_sem_addr, router_zero_buf, CoreType::ETH);
+    }
+
+    std::uint32_t gatekeeper_interface_addr = get_gatekeeper_interface_addr(device);
+    std::vector<uint32_t> gatekeeper_zero_buf(12, 0);
+    auto fabric_gatekeeper_core = dispatch_core_manager::instance().fabric_gatekeeper(device->id());
+    CoreCoord gatekeeper_logical_core = CoreCoord(fabric_gatekeeper_core.x, fabric_gatekeeper_core.y);
+    auto gatekeeper_virtual_core = device->virtual_core_from_logical_core(
+        gatekeeper_logical_core, dispatch_core_manager::instance().get_dispatch_core_type(device->id()));
+    detail::WriteToDeviceL1(
+        device,
+        gatekeeper_logical_core,
+        gatekeeper_interface_addr,
+        gatekeeper_zero_buf,
+        dispatch_core_manager::instance().get_dispatch_core_type(device->id()));
 }
 
 }  // namespace tt::tt_metal

@@ -293,6 +293,7 @@ dispatch_core_manager::dispatch_core_manager(const DispatchCoreConfig& dispatch_
 void dispatch_core_manager::reset_dispatch_core_manager(
     const DispatchCoreConfig& dispatch_core_config, uint8_t num_hw_cqs) {
     this->dispatch_core_assignments.clear();
+    this->fabric_core_assignments.clear();
     this->available_dispatch_cores_by_device.clear();
     this->dispatch_core_config_by_device.clear();
     for (chip_id_t device_id = 0; device_id < tt::Cluster::instance().number_of_devices(); device_id++) {

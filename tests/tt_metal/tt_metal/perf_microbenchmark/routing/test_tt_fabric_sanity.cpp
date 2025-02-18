@@ -4,6 +4,7 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/device_impl.hpp>
 #include <tt-metalium/rtoptions.hpp>
 #include <tt-metalium/mesh_graph.hpp>
@@ -85,11 +86,15 @@ typedef struct test_board {
     std::vector<chip_id_t> physical_chip_ids;
     std::vector<std::pair<chip_id_t, std::vector<chip_id_t>>> tx_rx_map;
     std::map<chip_id_t, IDevice*> device_handle_map;
-    std::unique_ptr<tt::tt_fabric::ControlPlane> control_plane;
+    tt::tt_fabric::ControlPlane* control_plane;
+    std::unique_ptr<tt::tt_fabric::ControlPlane> cp_owning_ptr;
     uint32_t num_chips_to_use;
     std::string mesh_graph_descriptor;
+    uint32_t metal_fabric_init_level;
+    tt::tt_metal::DispatchCoreType dispatch_core_type = tt::tt_metal::DispatchCoreType::WORKER;
 
-    test_board(std::string& board_type_) {
+    test_board(std::string& board_type_, uint32_t metal_fabric_init_level_) {
+        metal_fabric_init_level = metal_fabric_init_level_;
         if ("n300" == board_type_) {
             mesh_graph_descriptor = "n300_mesh_graph_descriptor.yaml";
             num_chips_to_use = 2;
@@ -129,8 +134,22 @@ typedef struct test_board {
             throw std::runtime_error("Odd number of chips detected, not supported currently");
         }
 
-        device_handle_map = tt::tt_metal::detail::CreateDevices(available_chip_ids);
-        _init_control_plane(mesh_graph_descriptor);
+        // gatekeeper - run on idle ethernet for n300/T3K
+        if (("n300" == board_type_) || ("t3k" == board_type_)) {
+            run_gk_on_idle_ethernet = true;
+            dispatch_core_type = tt::tt_metal::DispatchCoreType::ETH;
+        }
+
+        if (metal_fabric_init_level != 0) {
+            tt::tt_metal::detail::InitializeFabricSetting(tt::tt_metal::detail::FabricSetting::FABRIC);
+        }
+        device_handle_map =
+            tt::tt_metal::detail::CreateDevices(available_chip_ids, 1, 0, 0, DispatchCoreConfig{dispatch_core_type});
+        if (metal_fabric_init_level == 0) {
+            _init_control_plane(mesh_graph_descriptor);
+        } else {
+            control_plane = tt::DevicePool::instance().get_control_plane();
+        }
 
         if (num_chips_to_use != available_chip_ids.size()) {
             // initialize partial board to get the set of physical chip IDs for fabric kernels
@@ -172,7 +191,8 @@ typedef struct test_board {
             const std::filesystem::path mesh_graph_desc_path =
                 std::filesystem::path(tt::llrt::RunTimeOptions::get_instance().get_root_dir()) /
                 "tt_metal/fabric/mesh_graph_descriptors" / mesh_graph_descriptor;
-            control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(mesh_graph_desc_path.string());
+            cp_owning_ptr = std::make_unique<tt::tt_fabric::ControlPlane>(mesh_graph_desc_path.string());
+            control_plane = cp_owning_ptr.get();
         } catch (const std::exception& e) {
             log_fatal(e.what());
         }
@@ -1301,7 +1321,10 @@ int main(int argc, char **argv) {
         log_info(
             LogTest, "  --device_id: Device on which the test will be run, default = {}", default_test_device_id_l);
         log_info(
-            LogTest, "  --device_id_r: Device on which the test will be run, default = {}", default_test_device_id_r);
+            LogTest, "  --device_id_r: DDevice on which the test will be run, default = {}", default_test_device_id_r);
+
+        log_info(
+            LogTest, "  --metal_fabric_init_level: use Metal runtime to load fabric, 0 is disable, 1 is enable", 0);
         return 0;
     }
 
@@ -1402,6 +1425,7 @@ int main(int argc, char **argv) {
     if (mcast && bidirectional_traffic) {
         throw std::runtime_error("Bidirectional traffic is not supported for mcast");
     }
+    uint32_t metal_fabric_init_level = test_args::get_command_option_uint32(input_args, "--metal_fabric_init_level", 0);
 
     bool pass = true;
     uint32_t num_available_devices, num_allocated_devices = 0;
@@ -1436,7 +1460,7 @@ int main(int argc, char **argv) {
     time_seed = std::chrono::system_clock::now().time_since_epoch().count();
 
     try {
-        test_board_t test_board(board_type);
+        test_board_t test_board(board_type, metal_fabric_init_level);
         num_available_devices = test_board.get_num_available_devices();
 
         // keep the number of test devices even
@@ -1624,30 +1648,37 @@ int main(int argc, char **argv) {
             tt_metal::detail::LaunchProgram(test_device->device_handle, test_device->program_handle, false);
         }
 
-        // wait for all routers to handshake with master router
-        for (auto& [chip_id, test_device] : test_devices) {
-            test_device->wait_for_router_sync();
+        if (metal_fabric_init_level == 0) {
+            // wait for all routers to handshake with master router
+            for (auto& [chip_id, test_device] : test_devices) {
+                test_device->wait_for_router_sync();
+            }
         }
+        std::cout << "done wait for rrouter sync" << std::endl;
 
         // notify tx controller to signal the tx workers
         for (auto& traffic : fabric_traffic) {
             traffic.notify_tx_controller();
         }
 
+        std::cout << "done notify tx workers" << std::endl;
         // wait for rx kernels to finish
         for (auto& traffic : fabric_traffic) {
             traffic.wait_for_rx_workers_to_finish();
         }
-        // terminate fabric routers
-        for (auto& [chip_id, test_device] : test_devices) {
-            test_device->terminate_router_kernels();
+        // terminate fabric routers if control plane is not managed by DevicePool
+        if (metal_fabric_init_level == 0) {
+            for (auto& [chip_id, test_device] : test_devices) {
+                test_device->terminate_router_kernels();
+            }
         }
 
+        std::cout << "done terminate router kernel" << std::endl;
         // wait for programs to exit
         for (auto& [chip_id, test_device] : test_devices) {
             tt_metal::detail::WaitProgramDone(test_device->device_handle, test_device->program_handle);
         }
-
+        std::cout << "done wait for program done" << std::endl;
         auto end = std::chrono::system_clock::now();
 
         std::chrono::duration<double> elapsed_seconds = (end-start);

@@ -284,6 +284,9 @@ typedef struct _gatekeeper_info {
     ctrl_chan_msg_buf gk_msg_buf;
 } gatekeeper_info_t;
 
+static_assert(sizeof(gatekeeper_info_t) == GATEKEEPER_INFO_SIZE_BYTES);
+static_assert(offsetof(gatekeeper_info_t, router_sync) + offsetof(sync_word_t, val) == GATEKEEPER_INFO_SYNC_OFFSET);
+
 #define SOCKET_DIRECTION_SEND 1
 #define SOCKET_DIRECTION_RECV 2
 #define SOCKET_TYPE_DGRAM 1
@@ -349,6 +352,7 @@ constexpr uint32_t FABRIC_ROUTER_MISC_START = eth_l1_mem::address_map::ERISC_L1_
 constexpr uint32_t FABRIC_ROUTER_MISC_SIZE = 256;
 constexpr uint32_t FABRIC_ROUTER_SYNC_SEM = FABRIC_ROUTER_MISC_START;
 constexpr uint32_t FABRIC_ROUTER_SYNC_SEM_SIZE = 16;
+static_assert(FABRIC_ROUTER_SYNC_SEM == eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE);
 
 // Fabric Virtual Control Channel start/size
 constexpr uint32_t FVCC_OUT_BUF_START = FABRIC_ROUTER_MISC_START + FABRIC_ROUTER_MISC_SIZE;
