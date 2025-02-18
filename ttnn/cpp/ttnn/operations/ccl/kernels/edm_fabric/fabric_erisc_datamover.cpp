@@ -907,6 +907,11 @@ void run_fabric_edm_main_loop(
 
     WriteTransactionIdTracker<RECEIVER_NUM_BUFFERS, NUM_TRANSACTION_IDS> receiver_channel_trid_tracker;
 
+    // This value defines the number of loop iterations we perform of the main control sequence before exiting
+    // to check for termination and context switch. Removing the these checks from the inner loop can drastically
+    // improve performance. The value of 32 was chosen somewhat empirically and then raised up slightly.
+    constexpr uint32_t DEFAULT_ITERATIONS_BETWEEN_CTX_SWITCH_AND_TEARDOWN_CHECKS = 32;
+
     while (!got_immediate_termination_signal(termination_signal_ptr)) {
         bool got_graceful_termination = got_graceful_termination_signal(termination_signal_ptr);
         if (got_graceful_termination) {
@@ -919,7 +924,7 @@ void run_fabric_edm_main_loop(
             }
         }
         bool did_something = false;
-        for (size_t i = 0; i < 32; i++) {
+        for (size_t i = 0; i < DEFAULT_ITERATIONS_BETWEEN_CTX_SWITCH_AND_TEARDOWN_CHECKS; i++) {
             // Capture these to see if we made progress
 
             // There are some cases, mainly for performance, where we don't want to switch between sender channels
