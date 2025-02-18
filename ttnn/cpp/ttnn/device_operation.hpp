@@ -15,6 +15,7 @@
 #include <tt-metalium/graph_tracking.hpp>
 #include "ttnn/core.hpp"
 #include "ttnn/distributed/api.hpp"
+#include <tt-metalium/distributed.hpp>
 #include "tools/profiler/op_profiler.hpp"
 
 namespace ttnn {
@@ -329,17 +330,16 @@ void launch_on_worker_thread(auto cq_id, auto device_operation_id, const auto& o
         if(tt::tt_metal::GraphTracker::instance().hook_program(program.get())) {
             return;
         }
-
-        enqueue_or_launch_program(*program);
-
-        TracyOpTTNNDevice(
-            device_operation_t{},
-            device_operation_id,
-            device->id(),
+        auto mesh_device = dynamic_cast<tt::tt_metal::distributed::MeshDevice*>(device);
+        auto& cq = mesh_device->mesh_command_queue();
+        auto mesh_workload = tt::tt_metal::distributed::CreateMeshWorkload();
+        auto mesh_shape = mesh_device->shape();
+        tt::tt_metal::distributed::AddProgramToMeshWorkload(
+            mesh_workload,
             *program,
-            operation_attributes,
-            tensor_args,
-            tensor_return_value);
+            tt::tt_metal::distributed::LogicalDeviceRange({0, 0}, {mesh_shape.num_cols - 1, mesh_shape.num_rows - 1}));
+        tt::tt_metal::distributed::EnqueueMeshWorkload(cq, mesh_workload, true);
+
     }
 }
 
@@ -354,91 +354,9 @@ typename device_operation_t::tensor_return_value_t launch_on_single_device(
     // Create output tensor first
     auto tensor_return_value = device_operation_t::create_output_tensors(operation_attributes, tensor_args);
     auto device = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args).device();
-    launch_on_worker_thread<device_operation_t>(cq_id, device_operation_id, operation_attributes, tensor_args, tensor_return_value, device);
+    launch_on_worker_thread<device_operation_t>(
+        cq_id, device_operation_id, operation_attributes, tensor_args, tensor_return_value, device);
     return tensor_return_value;
-}
-
-template <DeviceOperationConcept device_operation_t>
-typename device_operation_t::tensor_args_t get_shard_tensor_args(std::size_t index, auto device, const typename device_operation_t::tensor_args_t& tensor_args) {
-    auto get_shard = [device](const auto& tensor) {
-        auto& storage = std::get<tt::tt_metal::MultiDeviceStorage>(tensor.get_storage());
-        return Tensor{DeviceStorage{storage.get_buffer_for_device(device)}, storage.get_tensor_spec_for_device(device)};
-    };
-    return tt::stl::reflection::transform_object_of_type<Tensor>(get_shard, tensor_args);
-}
-
-static Tensor make_tensor_return_value_from_shards(auto& old_storage, std::vector<Tensor>& output_shards) {
-    return distributed::create_multi_device_tensor(output_shards, StorageType::MULTI_DEVICE, old_storage.strategy);
-}
-
-static std::vector<Tensor> make_tensor_return_value_from_shards(auto& old_storage,  std::vector<std::vector<Tensor>>& output_shards) {
-    auto& first_shard = output_shards[0];
-
-    std::vector<Tensor> output;
-    output.reserve(first_shard.size());
-
-    for (auto index = 0; index < first_shard.size(); index++) {
-        std::vector<Tensor> tensors;
-        for (auto shard_index = 0; shard_index < output_shards.size(); shard_index++) {
-            tensors.push_back(output_shards[shard_index][index]);
-        }
-        output.push_back(make_tensor_return_value_from_shards(old_storage, tensors));
-    }
-    return output;
-}
-
-static std::vector<std::optional<Tensor>> make_tensor_return_value_from_shards(auto& old_storage, std::vector<std::vector<std::optional<Tensor>>>& output_shards) {
-    auto& first_shard = output_shards[0];
-
-    std::vector<std::optional<Tensor>> output;
-    output.reserve(first_shard.size());
-
-    for (auto index = 0; index < first_shard.size(); index++) {
-        if (not first_shard[index].has_value()) {
-            output.push_back(std::nullopt);
-            continue;
-        }
-        std::vector<Tensor> tensors;
-        for (auto shard_index = 0; shard_index < output_shards.size(); shard_index++) {
-            tensors.push_back(output_shards[shard_index][index].value());
-        }
-        output.push_back(make_tensor_return_value_from_shards(old_storage, tensors));
-    }
-    return output;
-}
-
-template<typename T>
-static T make_tensor_return_value_from_shards(auto& old_storage, std::vector<T>& output_shards) {
-    // TODO: add logic to handle all types we want to support generically
-    TT_THROW("make_tensor_return_value_from_shards is not implemented for this type. Please add an overload");
-}
-
-template <DeviceOperationConcept device_operation_t>
-typename device_operation_t::tensor_return_value_t launch_on_multi_device(
-    QueueId cq_id,
-    const typename device_operation_t::operation_attributes_t& operation_attributes,
-    const typename device_operation_t::tensor_args_t& tensor_args) {
-    ZoneScopedN("Launch Multi Device Operation");
-
-    using tensor_return_value_t = typename device_operation_t::tensor_return_value_t;
-
-    // TODO: support the case when tensor args are empty? Or pass in the device as an argument in that case
-    auto first_tensor = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args);
-    const auto& storage = std::get<tt::tt_metal::MultiDeviceStorage>(first_tensor.get_storage());
-    using storage_t = std::remove_cvref_t<decltype(storage)>;
-
-    auto num_shards = storage.num_buffers();
-
-    std::vector<tensor_return_value_t> outputs;
-    outputs.reserve(num_shards);
-
-    for (auto shard_index = 0; shard_index < num_shards; shard_index++) {
-        auto device = storage.get_buffer_for_device_id(shard_index)->device();
-        auto shard_tensor_args = get_shard_tensor_args<device_operation_t>(shard_index, device, tensor_args);
-        outputs.push_back(launch_on_single_device<device_operation_t>(cq_id, operation_attributes, shard_tensor_args));
-    }
-
-    return make_tensor_return_value_from_shards(storage, outputs);
 }
 
 template <DeviceOperationConcept device_operation_t>
@@ -447,6 +365,7 @@ typename device_operation_t::tensor_return_value_t invoke(
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args) {
     ZoneScopedN("Run Device Operation");
+    log_info(tt::LogOp, "Run Device Operation HERE");
 
     // TODO: Add GraphTracker::instance().track_device_operation to track device operations specifically?
     tt::tt_metal::GraphTracker::instance().track_function_start(get_operation_name<device_operation_t>(operation_attributes), operation_attributes, tensor_args);
@@ -462,14 +381,7 @@ typename device_operation_t::tensor_return_value_t invoke(
     auto tensor_return_value = std::visit(
         [&cq_id, &operation_attributes, &tensor_args](auto&& storage) -> tensor_return_value_t {
             using storage_t = std::remove_cvref_t<decltype(storage)>;
-            if constexpr (std::is_same_v<storage_t, tt::tt_metal::DeviceStorage>) {
-                return detail::launch_on_single_device<device_operation_t>(cq_id, operation_attributes, tensor_args);
-            } else if constexpr (std::is_same_v<storage_t, tt::tt_metal::MultiDeviceStorage>) {
-                return detail::launch_on_multi_device<device_operation_t>(cq_id, operation_attributes, tensor_args);
-            }
-            else {
-                TT_THROW("Unsupported storage type");
-            }
+            return detail::launch_on_single_device<device_operation_t>(cq_id, operation_attributes, tensor_args);
         },
         storage);
 

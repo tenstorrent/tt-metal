@@ -62,6 +62,27 @@ Tensor tensor_to_device(
 }
 
 Tensor tensor_to_device(
+    const Tensor& input_tensor, distributed::MeshDevice* mesh_device, const MemoryConfig& mem_config, QueueId cq_id) {
+    ZoneScoped;
+    // GraphTracker::instance().track_function_start("Tensor::to_device", input_tensor, mesh_device, mem_config);
+    //  TODO: Add check for main-thread
+
+    Tensor device_tensor = Tensor(mesh_device);
+    if (device_tensor.mesh_device_ != nullptr and device_tensor.mesh_device_ != mesh_device) {
+        // if (device_tensor.storage_type() == StorageType::DEVICE) { careful this is hang
+        TT_ASSERT(device_tensor.device() == mesh_device && "Currently do not support moving between devices");
+        device_tensor.populate_buffers_and_metadata(input_tensor);
+    } else {
+        tensor_impl::validate_on_device_dtype_and_layout(
+            input_tensor.get_padded_shape(), input_tensor.get_dtype(), input_tensor.get_layout());
+        auto local_tensor =
+            tensor_impl::to_device_mesh_tensor_wrapper(input_tensor, mesh_device, mem_config);  // add cq-id
+        device_tensor.populate_buffers_and_metadata(local_tensor);
+    }
+    return device_tensor;
+}
+
+Tensor tensor_to_device(
     const Tensor& input_tensor, const std::vector<IDevice*>& workers, const MemoryConfig& mem_config, QueueId cq_id) {
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::to_device", input_tensor, workers, mem_config);
@@ -139,6 +160,11 @@ Tensor tensor_cpu(const Tensor& input_tensor, bool blocking, QueueId cq_id) {
     return host_tensor;
 }
 
+Tensor tensor_cpu(const Tensor& input_tensor, distributed::MeshDevice* mesh_device, bool blocking, QueueId cq_id) {
+    ZoneScoped;
+    return tensor_impl::to_host_mesh_tensor_wrapper(input_tensor, blocking);
+}
+
 Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout, IDevice* worker) {
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::to_layout", input_tensor, target_layout, worker);
@@ -211,6 +237,7 @@ Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout, distri
             });
         }
         tensor_modified_layout = tt::tt_metal::set_tensor_id(tensor_modified_layout);
+        tensor_modified_layout.set_device(mesh_device);
         GraphTracker::instance().track_function_end(tensor_modified_layout);
         return tensor_modified_layout;
     }
@@ -227,7 +254,6 @@ Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout, distri
 
 void tensor_print(const Tensor& input_tensor) {
     GraphTracker::instance().track_function_start("Tensor::print", input_tensor);
-    std::cout << input_tensor.write_to_string() << std::endl;
     GraphTracker::instance().track_function_end();
 }
 
