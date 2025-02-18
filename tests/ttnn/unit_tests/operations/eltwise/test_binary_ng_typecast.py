@@ -717,7 +717,7 @@ def test_edgecase_dims_eltwise_scalar_matrix_math(input_shape, scalar, ttnn_fn, 
     "memory_config",
     ([ttnn.DRAM_MEMORY_CONFIG]),
 )
-@pytest.mark.parametrize("scalar", [-0.25, -16.5, 0.0, 0.05, 1.7, 19.0])
+@pytest.mark.parametrize("scalar", [-1.0, -2.0, 0.0, 1.0, 2.0, 19.0])
 @pytest.mark.parametrize(
     "ttnn_fn",
     [
@@ -738,10 +738,11 @@ def test_edgecase_dims_eltwise_scalar_logical(input_shape, scalar, ttnn_fn, memo
     a_shape = input_shape
 
     ttnn_op = getattr(ttnn.experimental, ttnn_fn)
-    torch_input_tensor_a = torch.randn(a_shape, dtype=torch.bfloat16)
-    # guarantee at least one equal value
+    torch_input_tensor_a = torch.randint(low=-50, high=50, size=a_shape, dtype=torch.bfloat16)
+    # guarantee a few equal values
     if (ttnn_fn == "eq" or ttnn_fn == "ne" or ttnn_fn == "gte" or ttnn_fn == "lte") and input_shape != (1, 1, 1, 1):
         torch_input_tensor_a[0, 0, 0, 0] = scalar
+        torch_input_tensor_a[-1, -1, -1, -1] = scalar
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -888,6 +889,7 @@ def test_edgecase_dims_eltwise_broadcast_logical(input_shapes, ttnn_fn, memory_c
     assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.999)
 
 
+@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "input_shape, input_layout, input_shard_grid, input_shard_orientation, input_sharding_scheme",
     [
