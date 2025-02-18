@@ -5,9 +5,9 @@
 #include <cmath>
 
 #include "base_types.hpp"
-#include "common/constants.hpp"
-#include <tt_metal/common/core_coord.hpp>
-#include <tt_metal/common/work_split.hpp>
+// #include "common/constants.hpp"
+#include <tt_metal/api/tt-metalium/core_coord.hpp>
+#include <tt_metal/api/tt-metalium/work_split.hpp>
 #include "logger.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/generic/generic_op/generic_op.hpp"
