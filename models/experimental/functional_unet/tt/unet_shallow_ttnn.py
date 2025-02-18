@@ -49,31 +49,57 @@ def get_core_grid_from_num_cores(num_cores: int, grid_rows: int = 8, grid_cols: 
     return ttnn.CoreRangeSet({*ranges})
 
 
-def concatenate(inputs: List, dim=-1, groups=2):
-    assert len(inputs) > 0
+def concatenate(activation, residual, dim=-1, groups=4):
     assert dim < 0
-    assert all(tensor.is_sharded() for tensor in inputs), "All inputs to `ttnn.concat` must be sharded"
-    max_idx, output_memory_config = max(
-        ((i, t.memory_config()) for i, t in enumerate(inputs)), key=lambda m: m[1].shard_spec.num_cores()
-    )
-    for i in range(0, len(inputs)):
-        if i == max_idx:
-            continue
-        tensor = inputs[i]
-        memory_config = tensor.memory_config()
-        shard_shape = memory_config.shard_spec.shape
+    assert activation.is_sharded() and residual.is_sharded(), "Both inputs to `ttnn.concat` must be sharded"
+
+    if activation.shape[-2] == 1056 * 160:
+        print("--------- special concat")
+        residual_tile = ttnn.to_layout(residual, ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+        ttnn.deallocate(residual)
+
+        output_memory_config = residual.memory_config()
+
+        activation_shard_shape = activation.memory_config().shard_spec.shape
+
         output_shard_shape = output_memory_config.shard_spec.shape
-        output_shard_shape[dim] += shard_shape[dim]
+        output_shard_shape[-1] += activation_shard_shape[-1]
         output_memory_config.shard_spec.shape = output_shard_shape
 
-        reshard_shape = output_shard_shape
-        reshard_shape[dim] = shard_shape[dim]
-        if reshard_shape != shard_shape:
-            memory_config.shard_spec.shape = reshard_shape
-            memory_config.shard_spec.grid = output_memory_config.shard_spec.grid
-            memory_config.shard_spec.orientation = output_memory_config.shard_spec.orientation
-            inputs[i] = ttnn.reshard(tensor, memory_config)
-    return ttnn.concat(inputs, dim=dim, memory_config=output_memory_config, groups=groups)
+        activation_reshard_shape = output_shard_shape
+        activation_reshard_shape[dim] = activation_shard_shape[dim]
+
+        memory_config = activation.memory_config()
+        memory_config.shard_spec.shape = [output_shard_shape[0], activation_shard_shape[1]]
+        memory_config.shard_spec.grid = output_memory_config.shard_spec.grid
+        memory_config.shard_spec.orientation = output_memory_config.shard_spec.orientation
+        x = ttnn.reshard(activation, memory_config)
+        ttnn.deallocate(activation)
+
+        x_tile = ttnn.to_layout(x, ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+        ttnn.deallocate(x)
+
+        return ttnn.concat([x_tile, residual_tile], dim=dim, memory_config=output_memory_config, groups=groups)
+    else:
+        output_memory_config = residual.memory_config()
+
+        activation_shard_shape = activation.memory_config().shard_spec.shape
+
+        output_shard_shape = output_memory_config.shard_spec.shape
+        output_shard_shape[-1] += activation_shard_shape[-1]
+        output_memory_config.shard_spec.shape = output_shard_shape
+
+        activation_reshard_shape = output_shard_shape
+        activation_reshard_shape[dim] = activation_shard_shape[dim]
+
+        memory_config = activation.memory_config()
+        memory_config.shard_spec.shape = [output_shard_shape[0], activation_shard_shape[1]]
+        memory_config.shard_spec.grid = output_memory_config.shard_spec.grid
+        memory_config.shard_spec.orientation = output_memory_config.shard_spec.orientation
+        x = ttnn.reshard(activation, memory_config)
+        ttnn.deallocate(activation)
+
+        return ttnn.concat([x, residual], dim=dim, memory_config=output_memory_config, groups=groups)
 
 
 def is_valid_device_for_unet(device):
@@ -111,6 +137,7 @@ class UNetConv2D:
         output_layout=ttnn.TILE_LAYOUT,
         reshard_if_not_optimal=False,
         mesh_mapper=None,
+        reallocate_halo_output=False,
     ):
         assert is_valid_device_for_unet(device), "UNet Shallow requires an 8x8 grid on all devices"
 
@@ -149,6 +176,7 @@ class UNetConv2D:
             input_channels_alignment=conv.input_channels_alignment if "input_channels_alignment" in conv else 32,
             reshard_if_not_optimal=reshard_if_not_optimal,
             in_place=conv.in_place if "in_place" in conv else False,
+            reallocate_halo_output=reallocate_halo_output,
         )
         self.compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
@@ -181,7 +209,7 @@ class UNetConv2D:
             "stride": self.stride,
             "padding": self.padding,
             "dilation": [1, 1],
-            "groups": 2,
+            "groups": 4,
             "device": self.device,
             "conv_config": self.conv_config,
         }
@@ -271,9 +299,18 @@ class UNetUpblock:
         device,
         conv_cache={},
         mesh_mapper=None,
+        reshard=True,
     ):
         self.device = device
-        self.conv1 = UNetConv2D(conv1, bn1, device, conv_cache, reshard_if_not_optimal=True, mesh_mapper=mesh_mapper)
+        self.conv1 = UNetConv2D(
+            conv1,
+            bn1,
+            device,
+            conv_cache,
+            reshard_if_not_optimal=reshard,
+            mesh_mapper=mesh_mapper,
+            reallocate_halo_output=reshard,
+        )
         self.conv2 = UNetConv2D(conv2, bn2, device, conv_cache, mesh_mapper=mesh_mapper)
         self.conv3 = UNetConv2D(conv3, bn3, device, conv_cache, mesh_mapper=mesh_mapper)
 
@@ -294,11 +331,13 @@ class UNetUpblock:
         else:
             x = ttnn.interleaved_to_sharded(x, shardspec)
 
-        x = ttnn.upsample(x, (2, 2), memory_config=x.memory_config())
-        x = ttnn.reshape(
-            x, (1, 1, self.conv1.batch_size * self.conv1.input_height * self.conv1.input_width, x.shape[-1])
+        upsampled = ttnn.upsample(x, (2, 2), memory_config=x.memory_config())
+        ttnn.deallocate(x)
+
+        return ttnn.reshape(
+            upsampled,
+            (1, 1, self.conv1.batch_size * self.conv1.input_height * self.conv1.input_width, upsampled.shape[-1]),
         )
-        return x
 
     def __call__(self, x, residual):
         assert list(x.shape)[:2] == [
@@ -306,27 +345,56 @@ class UNetUpblock:
             1,
         ], f"Expected upblock input to flattened into [1, 1, BHW, C] but was {list(x.shape)}"
 
-        residual = ttnn.to_layout(residual, ttnn.ROW_MAJOR_LAYOUT)
-        x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
+        print(f"X: {x.shape}, {x.layout}, \n{x.memory_config().shard_spec}")
+        print(f"RES: {residual.shape}, {residual.layout}, \n{residual.memory_config().shard_spec}")
 
-        x = self.upsample(x)
-
-        if not residual.is_sharded():
-            core_grid = get_core_grid_from_num_cores(x.memory_config().shard_spec.num_cores())
-            memory_config = ttnn.create_sharded_memory_config_(
-                residual.shape, core_grid, ttnn.ShardStrategy.HEIGHT, orientation=ttnn.ShardOrientation.ROW_MAJOR
-            )
-            residual = ttnn.to_memory_config(residual, memory_config)
-
-        y = concatenate([x, residual], dim=-1)
-        ttnn.deallocate(x)
+        residual_rm = ttnn.to_layout(residual, ttnn.ROW_MAJOR_LAYOUT)
         ttnn.deallocate(residual)
 
-        y = self.conv1(y)
-        y = self.conv2(y)
-        y = self.conv3(y)
+        x_rm = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.deallocate(x)
 
-        return y
+        x = self.upsample(x_rm)
+        ttnn.deallocate(x_rm)
+
+        if not residual_rm.is_sharded():
+            core_grid = get_core_grid_from_num_cores(x.memory_config().shard_spec.num_cores())
+            memory_config = ttnn.create_sharded_memory_config_(
+                residual_rm.shape, core_grid, ttnn.ShardStrategy.HEIGHT, orientation=ttnn.ShardOrientation.ROW_MAJOR
+            )
+            residual = ttnn.to_memory_config(residual_rm, memory_config)
+            ttnn.deallocate(residual_rm)
+            residual_rm = residual
+
+        y = concatenate(x, residual_rm, dim=-1)
+        ttnn.deallocate(x)
+        ttnn.deallocate(residual_rm)
+
+        if y.shape[-2] == 1056 * 160:
+            print("alternatve branch")
+            y_rm = ttnn.untilize(y)
+            ttnn.deallocate(y)
+
+            print("y_rm: ", y_rm.layout)
+            # y_rm = ttnn.reallocate(y_rm)
+
+            ttnn.dump_device_memory_state(y_rm.device(), "pre_conv_block_")
+
+            y = self.conv1(y_rm)
+            y = self.conv2(y)
+            y = self.conv3(y)
+
+            return y
+        else:
+            y = ttnn.reallocate(y)
+
+            ttnn.dump_device_memory_state(y.device(), "pre_conv_block_")
+
+            y = self.conv1(y)
+            y = self.conv2(y)
+            y = self.conv3(y)
+
+            return y
 
 
 class UNet:
@@ -429,6 +497,7 @@ class UNet:
             device,
             conv_cache=self.conv_cache,
             mesh_mapper=mesh_mapper,
+            reshard=False,
         )
 
         self.output_layer = UNetConv2D(
