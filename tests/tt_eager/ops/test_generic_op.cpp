@@ -8,6 +8,9 @@
 // #include "common/constants.hpp"
 #include <tt_metal/api/tt-metalium/core_coord.hpp>
 #include <tt_metal/api/tt-metalium/work_split.hpp>
+#include <tt_metal/api/tt-metalium/host_api.hpp>
+#include <tt_metal/api/tt-metalium/assert.hpp>
+
 #include "logger.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/generic/generic_op/generic_op.hpp"
@@ -20,10 +23,8 @@
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/operations/normalization/softmax/softmax.hpp"
 #include "ttnn/operation.hpp"
-#include "tt_metal/host_api.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/tensor/types.hpp"
-#include "common/assert.hpp"
 using tt::tt_metal::DataType;
 using tt::tt_metal::IDevice;
 
