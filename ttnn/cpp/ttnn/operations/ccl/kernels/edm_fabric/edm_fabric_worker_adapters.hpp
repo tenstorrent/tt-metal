@@ -294,7 +294,6 @@ private:
     }
 
     FORCE_INLINE void advance_buffer_slot_wrptr() {
-        // TODO: smarter addition if we are working with pow2
         if constexpr (USER_DEFINED_NUM_BUFFER_SLOTS) {
             *this->buffer_slot_wrptr_ptr = wrap_increment<BUFFER_SLOT_PTR_WRAP>(*this->buffer_slot_wrptr_ptr);
         } else {
