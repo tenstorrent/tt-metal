@@ -11,7 +11,6 @@ training_config:
   use_kahan_summation: false
   use_clip_grad_norm: false
   clip_grad_norm_max_norm: 1.0
-  use_ddp: false
   transformer_config:
     num_heads: 6
     embedding_dim: 384
