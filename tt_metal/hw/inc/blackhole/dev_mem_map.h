@@ -48,7 +48,7 @@
 
 /////////////
 // Firmware/kernel code holes
-#define MEM_BRISC_FIRMWARE_SIZE (5 * 1024 + 128)
+#define MEM_BRISC_FIRMWARE_SIZE (5 * 1024 + 256)
 // TODO: perhaps put NCRISC FW in the scratch area and free 1.5K after init (GS/WH)
 #define MEM_NCRISC_FIRMWARE_SIZE 1536
 #define MEM_TRISC0_FIRMWARE_SIZE 1536
@@ -68,7 +68,7 @@
 #define MEM_L1_BARRIER 12
 #define MEM_MAILBOX_BASE 16
 // Magic size must be big enough to hold dev_msgs_t.  static_asserts will fire if this is too small
-#define MEM_MAILBOX_SIZE 12256
+#define MEM_MAILBOX_SIZE 12640
 #define MEM_MAILBOX_END (MEM_MAILBOX_BASE + MEM_MAILBOX_SIZE)
 #define MEM_ZEROS_BASE ((MEM_MAILBOX_END + 31) & ~31)
 
@@ -115,7 +115,7 @@
 #define MEM_TRISC2_STACK_BASE (MEM_LOCAL_BASE + MEM_TRISC_LOCAL_SIZE - MEM_TRISC2_STACK_SIZE)
 
 /////////////
-// IERISC memory map
+// Idle ERISC memory map
 #define MEM_IERISC_LOCAL_SIZE (8 * 1024)
 #define MEM_SLAVE_IERISC_LOCAL_SIZE (8 * 1024)
 #define MEM_IERISC_FIRMWARE_SIZE (24 * 1024)
@@ -125,7 +125,7 @@
 // TODO: reduce this when mailbox sizes are core type aware for some members (eg watcher/dprint)
 // TODO: also, move into gap above in the reserved area
 #define MEM_IERISC_MAILBOX_BASE (MEM_IERISC_RESERVED1 + MEM_IERISC_RESERVED1_SIZE)
-#define MEM_IERISC_MAILBOX_SIZE 3344
+#define MEM_IERISC_MAILBOX_SIZE 3728
 #define MEM_IERISC_MAILBOX_END (MEM_IERISC_MAILBOX_BASE + MEM_IERISC_MAILBOX_SIZE)
 #define MEM_IERISC_FIRMWARE_BASE (MEM_IERISC_MAILBOX_END)
 #define MEM_SLAVE_IERISC_FIRMWARE_BASE (MEM_IERISC_FIRMWARE_BASE + MEM_IERISC_FIRMWARE_SIZE)
@@ -143,6 +143,18 @@
 
 #define IERISC_RESET_PC (MEM_LOCAL_BASE | 0x14000)
 #define SLAVE_IERISC_RESET_PC (MEM_LOCAL_BASE | 0x14008)
+
+/////////////
+// Active ERISC memory map
+// TODO: These are added here to enable aerisc compilation but are replicated in eth_l1_address_map
+// eth_l1_address_map should be removed in favour of this file
+#define MEM_AERISC_MAILBOX_BASE (MEM_IERISC_RESERVED1 + MEM_IERISC_RESERVED1_SIZE)
+#define MEM_AERISC_MAILBOX_END (MEM_AERISC_MAILBOX_BASE + MEM_IERISC_MAILBOX_SIZE)
+#define MEM_AERISC_FIRMWARE_BASE (MEM_AERISC_MAILBOX_END)
+#define MEM_AERISC_MAP_END (MEM_AERISC_FIRMWARE_BASE + MEM_IERISC_FIRMWARE_SIZE)
+#define MEM_AERISC_INIT_LOCAL_L1_BASE_SCRATCH MEM_AERISC_MAP_END
+#define MEM_AERISC_STACK_SIZE 1024
+#define MEM_AERISC_STACK_BASE (MEM_LOCAL_BASE + MEM_IERISC_LOCAL_SIZE - MEM_AERISC_STACK_SIZE)
 
 /////////////
 // Padding/alignment restriction needed in linker scripts for erisc

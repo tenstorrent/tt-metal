@@ -8,11 +8,11 @@
 
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operations/math.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/data_movement/untilize/untilize.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/host_api.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -350,8 +350,8 @@ operation::ProgramWithCallbacks downsample_single_core(
     auto [img_batch_size, img_height, img_width, img_stride_h, img_stride_w] = downsample_params;
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
 
-    TT_ASSERT(a.get_legacy_shape()[0] == 1 && a.get_legacy_shape()[1] == 1);
-    TT_ASSERT(output.get_legacy_shape()[0] == 1 && output.get_legacy_shape()[1] == 1);
+    TT_ASSERT(a.get_padded_shape()[0] == 1 && a.get_padded_shape()[1] == 1);
+    TT_ASSERT(output.get_padded_shape()[0] == 1 && output.get_padded_shape()[1] == 1);
 
     tt::tt_metal::IDevice* device = a.device();
 
@@ -385,11 +385,11 @@ operation::ProgramWithCallbacks downsample_single_core(
     auto core_range = all_cores;
 
     uint32_t input_height =
-        a.get_legacy_shape()[2];  // input height == flattened face of input image, multiple images are stacked in H dim
-    uint32_t input_width = a.get_legacy_shape()[3];         // input width == input image # of channels
-    uint32_t output_height = output.get_legacy_shape()[2];  // output height == flattened face of output image, multiple
+        a.get_padded_shape()[2];  // input height == flattened face of input image, multiple images are stacked in H dim
+    uint32_t input_width = a.get_padded_shape()[3];         // input width == input image # of channels
+    uint32_t output_height = output.get_padded_shape()[2];  // output height == flattened face of output image, multiple
                                                             // images are stacked in H dim
-    uint32_t output_width = output.get_legacy_shape()[3];
+    uint32_t output_width = output.get_padded_shape()[3];
     TT_ASSERT(input_width == output_width);
 
     uint32_t input_height_unpadded = img_batch_size * img_height * img_width;

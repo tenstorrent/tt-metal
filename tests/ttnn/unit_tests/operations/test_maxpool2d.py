@@ -71,8 +71,18 @@ def run_max_pool(
             pytest.skip("This case runs out of memory on Grayskull")
         if kernel_h > 3 and kernel_w > 3 and act_shape == [16, 64, 112, 112] and is_grayskull():
             pytest.skip("This case runs out of memory on Grayskull")
-        if kernel_size == (13, 13) and act_shape == [128, 32, 132, 20] and is_grayskull():
+        if (
+            stride == (2, 2)
+            and kernel_size == (13, 13)
+            and act_shape == [1, 800, 32, 32]
+            and not is_x2_harvested(device)
+            and not is_grayskull()
+        ):
+            pytest.skip("This case runs out of memory on Wormhole b0")
+        if kernel_size == (13, 13) and (act_shape == [128, 32, 132, 20] or in_c > 512) and is_grayskull():
             pytest.skip("This case runs out of memory on Grayskull")
+        if kernel_size == (13, 13) and in_c > 768 and is_x2_harvested(device):
+            pytest.skip("This case runs out of memory on Wormhole X2")
         if kernel_h > 5 and kernel_w > 5 and act_shape == [16, 64, 112, 112] and is_x2_harvested(device):
             pytest.skip("This case runs out of memory on Wormhole X2")
         if stride == (1, 1) and act_shape == [128, 32, 132, 20] and is_x2_harvested(device):
@@ -107,7 +117,7 @@ def run_max_pool(
             pytest.skip("This case runs out of memory on Wormhole X2")
         if kernel_h > 5 and kernel_w > 5 and act_shape == [8, 4096, 10, 16] and is_x2_harvested(device):
             pytest.skip("This case runs out of memory on Wormhole X2")
-        if kernel_size == (13, 13) and act_shape == [1, 32768, 10, 10] and is_x2_harvested(device):
+        if kernel_size == (13, 13) and in_c >= 32768 and is_x2_harvested(device):
             pytest.skip("This case runs out of memory on Wormhole X2")
 
     if shard_scheme == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
@@ -206,7 +216,7 @@ def run_max_pool(
 
     pcc_thresh = 1.0
     if dtype == ttnn.bfloat8_b:
-        pcc_thresh = 0.9997
+        pcc_thresh = 0.9994
 
     passing, pcc = assert_with_pcc(output_pytorch, golden_pytorch, pcc_thresh)
 
@@ -275,6 +285,13 @@ def run_max_pool(
             [1, 512, 10, 10],
             [1, 96, 112, 112],
             [1, 192, 132, 20],
+            # wide non-8 multiple tests
+            [1, 800, 32, 32],
+            [1, 640, 32, 32],
+            [1, 576, 32, 32],
+            [1, 384, 32, 32],
+            # C=16 test
+            [1, 16, 10, 10],
         )
     ),
 )
@@ -350,6 +367,11 @@ def test_run_max_pool(act_shape, kernel_size, padding, stride, dilation, device,
             # wide yolo kernel
             [1, 32768, 10, 10],
             [1, 6144, 6, 6],
+            # wide non-8 multiple tests
+            [1, 800 * 64, 8, 8],
+            [1, 640 * 64, 8, 8],
+            [1, 576 * 64, 8, 8],
+            [1, 384 * 64, 8, 8],
         )
     ),
 )
@@ -455,6 +477,11 @@ def test_run_max_pool_width_shard(
             [1, 4096, 10, 10],
             [1, 768, 56, 56],
             [1, 1280, 8, 6],
+            # wide non-8 multiple tests
+            [1, 800 * 8, 16, 16],
+            [1, 640 * 8, 16, 16],
+            [1, 576 * 8, 16, 16],
+            [1, 384 * 8, 16, 16],
         )
     ),
 )

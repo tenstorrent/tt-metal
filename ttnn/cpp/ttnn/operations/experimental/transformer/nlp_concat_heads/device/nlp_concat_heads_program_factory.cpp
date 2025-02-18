@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
 #include "nlp_concat_heads_device_operation.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 
 using namespace tt::tt_metal;
 
@@ -17,7 +17,7 @@ using namespace tt;
 
 operation::ProgramWithCallbacks multi_core_nlp_concat_heads(
     const Tensor& a, Tensor& output, CoreCoord compute_with_storage_grid_size) {
-    const auto& ashape = a.get_legacy_shape();
+    const auto& ashape = a.get_padded_shape();
 
     tt_metal::IDevice* device = a.device();
 
@@ -52,7 +52,7 @@ operation::ProgramWithCallbacks multi_core_nlp_concat_heads(
         all_cores = a.shard_spec().value().grid;
         num_cores = all_cores.num_cores();
         core_group_1 = all_cores;
-        num_blocks_per_core_group_1 = a.shard_spec().value().shape[0] / a.get_legacy_shape()[-2];
+        num_blocks_per_core_group_1 = a.shard_spec().value().shape[0] / a.get_padded_shape()[-2];
         per_tensor_tiles = a.shard_spec().value().shape[0] * a.shard_spec().value().shape[1] / TILE_HW;
         row_major = a.shard_spec().value().orientation == ShardOrientation::ROW_MAJOR;
     } else {

@@ -6,11 +6,11 @@
 #include <functional>
 #include <random>
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "common/bfloat16.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
-#include "test_tiles.hpp"
+#include <tt-metalium/test_tiles.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
@@ -312,7 +312,7 @@ int main(int argc, char** argv) {
         int per_core_M = M / num_cores_r;
         int per_core_N = N / num_cores_c;
         uint32_t single_tile_size = 2 * 1024;
-        uint32_t dram_unreserved_base = device->get_base_allocator_addr(HalMemType::DRAM);
+        uint32_t dram_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::DRAM);
         log_info(LogTest, "M = {}, N = {}, K = {}", M, N, K);
         log_info(LogTest, "Activation = {}x{}", M * 32, K * 32);
         log_info(LogTest, "Weights = {}x{}", K * 32, N * 32);

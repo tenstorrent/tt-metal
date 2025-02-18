@@ -296,7 +296,7 @@ def run_test_LlamaModel_end_to_end_hybrid_data_tensor_parallel(
     profiler.clear()
 
     submesh_to_metadata = defaultdict(dict)
-    submeshes = mesh_device.create_submeshes((2, 4), ttnn.MeshType.Ring)
+    submeshes = mesh_device.create_submeshes((2, 4))
     for submesh in submeshes:
         # Set up model -----------------------------------------------------------------------
         logger.info("Moving weights to devices; might take some time...")
@@ -337,7 +337,7 @@ def run_test_LlamaModel_end_to_end_hybrid_data_tensor_parallel(
         compile_iter_time = profiler.get("compile_time")
         logger.info(f"decode with compile time, single iter latency: {compile_iter_time}")
 
-        submesh_to_metadata[submesh.get_mesh_id()] = {
+        submesh_to_metadata[submesh.id()] = {
             "submesh": submesh,
             "logits_rm": logits_rm,
             "tt_model": tt_model,
@@ -352,7 +352,7 @@ def run_test_LlamaModel_end_to_end_hybrid_data_tensor_parallel(
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
 
     for submesh in submeshes:
-        mesh_id = submesh.get_mesh_id()
+        mesh_id = submesh.id()
         tt_model = submesh_to_metadata[mesh_id]["tt_model"]
         tt_inp_emb = submesh_to_metadata[mesh_id]["tt_inp_emb"]
         rot_mat = submesh_to_metadata[mesh_id]["rot_mat"]

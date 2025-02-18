@@ -26,6 +26,8 @@ void kernel_main() {
     uint32_t noc = get_arg_val<uint32_t>(rt_args_idx++);
     bool is_hop_core = (bool)get_arg_val<uint32_t>(rt_args_idx++);
     bool end_of_hop = (bool)get_arg_val<uint32_t>(rt_args_idx++);
+    const uint32_t* unpadded_in0_shard_widths_in_tiles = (uint32_t*)get_arg_addr(rt_args_idx);
+    rt_args_idx += ring_size;
 
     volatile tt_l1_ptr uint32_t* l1_signal_sem_addr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(signal_semaphore_addr);
@@ -48,6 +50,9 @@ void kernel_main() {
 
     for (uint32_t b = 0; b < batch; ++b) {
         for (uint32_t shard_cnt = hop_core_offset; shard_cnt < ring_size; shard_cnt++) {
+            uint32_t curr_ring_idx = (ring_idx + shard_cnt) % ring_size;
+            bool skip_send = unpadded_in0_shard_widths_in_tiles[curr_ring_idx] == 0 && !is_hop_core;
+
             uint32_t curr_shard_write_addr = l1_write_addr_in0 + shard_size_bytes * (shard_cnt - hop_core_offset);
             uint64_t remote_curr_shard_write_addr =
                 get_noc_addr(next_core_noc_x, next_core_noc_y, curr_shard_write_addr, noc);
@@ -59,7 +64,9 @@ void kernel_main() {
 
             // Send data to next core
             if (shard_cnt < ring_size - 1 || is_hop_core) {  // Skip sending the last shard
-                noc_async_write(curr_shard_read_addr, remote_curr_shard_write_addr, shard_size_bytes, noc);
+                if (!skip_send) {
+                    noc_async_write(curr_shard_read_addr, remote_curr_shard_write_addr, shard_size_bytes, noc);
+                }
 
                 // Signal the next core that data is ready
                 noc_semaphore_inc(remote_signal_semaphore_addr, 1, noc);

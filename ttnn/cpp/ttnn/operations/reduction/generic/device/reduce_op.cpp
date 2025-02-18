@@ -109,11 +109,8 @@ std::vector<ttnn::TensorSpec> Reduce::compute_output_specs(const std::vector<Ten
 
     return {ttnn::TensorSpec(
         output_shape,
-        TensorLayout::fromLegacyPaddedShape(
-            this->output_dtype,
-            PageConfig(Layout::TILE),
-            output_mem_config,
-            ttnn::Shape(output_shape.view(), output_padded_shape.view())))};
+        TensorLayout::fromPaddedShape(
+            this->output_dtype, PageConfig(Layout::TILE), output_mem_config, output_shape, output_padded_shape))};
 }
 
 operation::ProgramWithCallbacks Reduce::create_program(
@@ -217,7 +214,7 @@ Tensor reduce(
                 }
                 auto input_tensor_pad_shape =
                     ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(
-                        input_tensor.get_legacy_shape());
+                        input_tensor.get_padded_shape());
                 auto formatted_input_tensor = input_tensor;
                 if (!ttnn::operations::experimental::auto_format::AutoFormat::check_input_tensor_format(
                         input_tensor, input_tensor_pad_shape)) {

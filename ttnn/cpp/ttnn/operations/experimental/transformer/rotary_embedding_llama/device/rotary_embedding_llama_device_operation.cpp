@@ -5,8 +5,7 @@
 #include "rotary_embedding_llama_device_operation.hpp"
 #include "rotary_embedding_llama_program_factory.hpp"
 
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/constants.hpp>
 
 namespace tt {
 

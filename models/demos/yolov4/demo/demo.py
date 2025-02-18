@@ -450,7 +450,7 @@ def do_detect(model, img, conf_thresh, nms_thresh, n_classes, device=None, class
             img = input_tensor
             t1 = time.time()
 
-            output = model(device, img)
+            output = model(img)
 
             output_tensor1 = ttnn.to_torch(output[0])
             output_tensor1 = output_tensor1.reshape(1, 40, 40, 255)

@@ -7,15 +7,14 @@
 #include <cstdint>
 #include <numeric>
 
-#include "common/constants.hpp"
+#include <tt-metalium/constants.hpp>
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/common/types/ccl_types.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/program/program.hpp"
+#include <tt-metalium/program_impl.hpp>
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/ccl/erisc_datamover_builder.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
+#include "cpp/ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
 
 namespace ttnn {
 namespace ccl {
@@ -143,9 +142,9 @@ class CclOpShardedTensorConfig final : public virtual CclOpTensorConfig {
 
 struct CclTensorSlicer {
     CclTensorSlicer(
-        tt::tt_metal::LegacyShape tensor_shape,
-        tt::tt_metal::LegacyShape dim_slice_factors,
-        // tt::tt_metal::LegacyShape page_shape,
+        const tt::tt_metal::Shape& tensor_shape,
+        const tt::tt_metal::Shape& dim_slice_factors,
+        // tt::tt_metal::Shape page_shape,
         std::size_t num_pages,
         std::size_t elem_size,
         std::size_t page_size_in_bytes) :
@@ -159,25 +158,25 @@ struct CclTensorSlicer {
             tensor_shape.rank() == dim_slice_factors.rank(),
             "Tensor shape and dim slice factors must have the same size");
         TT_ASSERT(
-            std::all_of(dim_slice_factors.begin(), dim_slice_factors.end(), [](uint32_t factor) { return factor > 0; }),
+            std::all_of(dim_slice_factors.cbegin(), dim_slice_factors.cend(), [](uint32_t factor) { return factor > 0; }),
             "All factors must be greater than 0");
     }
 
     std::size_t get_num_pages_per_slice() const {
         std::size_t n = std::accumulate(
-            dim_slice_factors_per_rank.begin(), dim_slice_factors_per_rank.end(), 1, std::multiplies<uint32_t>());
+            dim_slice_factors_per_rank.cbegin(), dim_slice_factors_per_rank.cend(), 1, std::multiplies<uint32_t>());
         for (uint32_t i = 0; i < (tensor_shape.rank() - dim_slice_factors_per_rank.rank()); ++i) {
             n *= tensor_shape[i];
         }
         return n;
     }
 
-    tt::tt_metal::LegacyShape const tensor_shape;
-    tt::tt_metal::LegacyShape const dim_slice_factors_per_rank;
-    // tt::tt_metal::LegacyShape const page_shape;
+    tt::tt_metal::Shape const tensor_shape;
+    tt::tt_metal::Shape const dim_slice_factors_per_rank;
+    // tt::tt_metal::Shape const page_shape;
     std::size_t const num_pages;
 
-    // tt::tt_metal::LegacyShape rank_slice_shape;
+    // tt::tt_metal::Shape rank_slice_shape;
 
     std::size_t const page_size_in_bytes;
     std::size_t const elem_size;
@@ -384,7 +383,7 @@ class RingReduceScatterBaseTensorSlicer : public LegacyCclTensorSlicer {
         std::vector<tt_xy_pair> const& worker_slice_shapes, tt_xy_pair const& tensor_slice_shape);
 
     static std::vector<tt_xy_pair> create_worker_slice_shapes_for_tile_layout(
-        tt::tt_metal::LegacyShape const& tensor_shape,
+        ttnn::Shape const& tensor_shape,
         tt_xy_pair const& tensor_slice_shape_in_tiles,
         uint32_t num_workers,
         uint32_t max_slice_size_in_pages,
@@ -423,7 +422,7 @@ class RingReduceScatterTensorSlicer : public RingReduceScatterBaseTensorSlicer<R
         std::vector<tt_xy_pair> const& worker_slice_shapes, tt_xy_pair const& tensor_slice_shape);
 
     static std::vector<tt_xy_pair> create_worker_slice_shapes_for_tile_layout(
-        tt::tt_metal::LegacyShape const& tensor_shape,
+        ttnn::Shape const& tensor_shape,
         tt_xy_pair const& tensor_slice_shape_in_tiles,
         uint32_t num_workers,
         uint32_t max_slice_size_in_pages,
@@ -451,7 +450,7 @@ class RingReduceScatterWrappedTensorSlicer : public RingReduceScatterBaseTensorS
         std::vector<tt_xy_pair> const& worker_slice_shapes, tt_xy_pair const& tensor_slice_shape);
 
     static std::vector<tt_xy_pair> create_worker_slice_shapes_for_tile_layout(
-        tt::tt_metal::LegacyShape const& tensor_shape,
+        ttnn::Shape const& tensor_shape,
         tt_xy_pair const& tensor_slice_shape_in_tiles,
         uint32_t num_workers,
         uint32_t max_slice_size_in_pages,
@@ -465,35 +464,35 @@ class InterleavedRingAllGatherTensorSlicer : public LegacyCclTensorSlicer {
         Tensor const& input_tensor, Tensor const& output_tensor, int slice_dim, uint32_t slice_idx) :
         LegacyCclTensorSlicer() {
         this->row_major = input_tensor.get_layout() == tt::tt_metal::Layout::ROW_MAJOR;
-        this->slice_dim_is_width = input_tensor.get_legacy_shape().rank() - 1 == slice_dim;
+        this->slice_dim_is_width = input_tensor.get_padded_shape().rank() - 1 == slice_dim;
         this->is_sharded = input_tensor.is_sharded();
 
         this->input_page_size = input_tensor.buffer()->page_size();
 
         if (row_major) {
-            this->num_cols = input_tensor.get_legacy_shape()[-1];
-            auto input_shape = input_tensor.get_legacy_shape();
-            auto output_shape = output_tensor.get_legacy_shape();
+            this->num_cols = input_tensor.get_padded_shape()[-1];
+            auto input_shape = input_tensor.get_padded_shape();
+            auto output_shape = output_tensor.get_padded_shape();
             this->num_rows =
-                std::accumulate(input_shape.begin() + slice_dim, input_shape.end() - 1, 1, std::multiplies<uint32_t>());
+                std::accumulate(input_shape.cbegin() + slice_dim, input_shape.cend() - 1, 1, std::multiplies<uint32_t>());
             this->row_offset =
                 std::accumulate(
-                    output_shape.begin() + slice_dim, output_shape.end() - 1, 1, std::multiplies<uint32_t>()) -
+                    output_shape.cbegin() + slice_dim, output_shape.cend() - 1, 1, std::multiplies<uint32_t>()) -
                 num_rows;
         } else {
-            auto input_shape = input_tensor.get_legacy_shape();
-            auto output_shape = output_tensor.get_legacy_shape();
+            auto input_shape = input_tensor.get_padded_shape();
+            auto output_shape = output_tensor.get_padded_shape();
             auto input_tile = input_tensor.tensor_spec().tile();
             auto output_tile = output_tensor.tensor_spec().tile();
             this->num_cols = input_shape[-1] / input_tile.get_width();
-            uint32_t num_output_cols = output_tensor.get_legacy_shape()[-1] / output_tile.get_width();
+            uint32_t num_output_cols = output_tensor.get_padded_shape()[-1] / output_tile.get_width();
             this->num_rows =
                 std::accumulate(
-                    input_shape.begin() + slice_dim, input_shape.end() - 1, 1, std::multiplies<uint32_t>()) /
+                    input_shape.cbegin() + slice_dim, input_shape.cend() - 1, 1, std::multiplies<uint32_t>()) /
                 input_tile.get_height();
             this->row_offset =
                 (std::accumulate(
-                     output_shape.begin() + slice_dim, output_shape.end() - 1, 1, std::multiplies<uint32_t>()) / output_tile.get_height() - num_rows) *
+                     output_shape.cbegin() + slice_dim, output_shape.cend() - 1, 1, std::multiplies<uint32_t>()) / output_tile.get_height() - num_rows) *
                 num_output_cols;
             this->col_offset = num_output_cols - num_cols;
             this->num_tiles = num_rows * num_cols;
@@ -603,7 +602,7 @@ public:
 
     // method to create worker slice shapes in a tile layout
     std::vector<tt_xy_pair> create_worker_slice_shapes_for_tile_layout(
-        const tt::tt_metal::LegacyShape& tensor_shape,
+        const ttnn::Shape& tensor_shape,
         tt_xy_pair const& tensor_slice_shape_in_tiles,
         uint32_t num_workers,
         uint32_t max_slice_size_in_pages,

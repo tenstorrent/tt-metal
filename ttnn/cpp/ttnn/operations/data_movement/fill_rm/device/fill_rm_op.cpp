@@ -3,10 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/data_movement/fill_rm/device/fill_rm_op.hpp"
-#include "tt_metal/common/test_tiles.hpp"
+#include <tt-metalium/test_tiles.hpp>
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/util.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/util.hpp>
 
 using namespace tt::tt_metal;
 
@@ -101,7 +101,7 @@ void FillRM::validate(const std::vector<Tensor>& input_tensors) const {
 }
 
 std::vector<ttnn::TensorSpec> FillRM::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
-    ttnn::SimpleShape shape({this->N, this->C, this->H, this->W});
+    ttnn::Shape shape({this->N, this->C, this->H, this->W});
     const auto& input_tensor = input_tensors.at(0);
     return {
         TensorSpec(shape, TensorLayout(input_tensor.get_dtype(), PageConfig(Layout::ROW_MAJOR), output_mem_config))};

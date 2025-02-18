@@ -2,15 +2,28 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/impl/device/device_pool.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include <device_pool.hpp>
+#include <device_impl.hpp>
 
 #include <numa.h>
 
-#include "tt_metal/detail/tt_metal.hpp"
+#include <algorithm>
+#include <cstdlib>
+#include <set>
+#include <utility>
+
+#include "dispatch_core_manager.hpp"
+#include "dispatch_settings.hpp"
+#include "dprint_server.hpp"
+#include "host_api.hpp"
+#include <tt_metal.hpp>
 #include "tt_metal/impl/debug/noc_logging.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
+#include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
+#include "tt_metal/jit_build/build_env_manager.hpp"
+
+#include "tt_cluster.hpp"
 
 using namespace tt::tt_metal;
 
@@ -149,8 +162,6 @@ void bind_current_thread_to_free_cores(const std::unordered_set<uint32_t>& free_
 }  // namespace device_cpu_allocator
 
 DevicePool* DevicePool::_inst = nullptr;
-// Should probably add a dispatch_core_manager.cpp and move this there
-tt_metal::dispatch_core_manager* tt_metal::dispatch_core_manager::_inst = nullptr;
 
 void DevicePool::init_profiler_devices() const {
 #if defined(TRACY_ENABLE)
@@ -169,12 +180,16 @@ void DevicePool::init_profiler_devices() const {
                 for (uint32_t ts = tunnels_from_mmio[t].size() - 1; ts > 0; ts--) {
                     uint32_t mmio_controlled_device_id = tunnels_from_mmio[t][ts];
                     auto mmio_device = get_device(mmio_controlled_device_id);
-                    log_info(tt::LogMetal, "Starting profiler on device {}", mmio_device->id());
                     detail::InitDeviceProfiler(mmio_device);
+                    log_info(
+                        tt::LogMetal,
+                        "Profiler started on remote device {}",
+                        mmio_device->id());
                 }
             }
         }
     }
+    detail::ProfilerSync(ProfilerSyncState::INIT);
 #endif
 }
 
@@ -187,7 +202,12 @@ void DevicePool::initialize(
     tt::stl::Span<const std::uint32_t> l1_bank_remap) noexcept {
     ZoneScoped;
     log_debug(tt::LogMetal, "DevicePool initialize");
+    // Initialize the dispatch core manager, responsible for assigning dispatch cores
     tt::tt_metal::dispatch_core_manager::initialize(dispatch_core_config, num_hw_cqs);
+    // Initialize the dispatch query layer, used by runtime command generation
+    tt_metal::DispatchQueryManager::initialize(num_hw_cqs);
+    // Initialize DispatchSettings with defaults
+    tt_metal::DispatchSettings::initialize(tt::Cluster::instance());
 
     if (_inst == nullptr) {
         static DevicePool device_pool{};
@@ -242,7 +262,6 @@ void DevicePool::initialize_device(IDevice* dev) const {
         dev->init_command_queue_host();
     } else {
         detail::DispatchStateCheck(false);
-        dev->initialize_synchronous_sw_cmd_queue();
         TT_ASSERT(dev->num_hw_cqs() == 1, "num_hw_cqs must be 1 in slow dispatch");
     }
 
@@ -288,24 +307,22 @@ void DevicePool::activate_device(chip_id_t id) {
             false,
             worker_core_thread_core,
             completion_queue_reader_core);
-        device->update_dispatch_cores_for_multi_cq_eth_dispatch();
-        if (!this->firmware_built_keys.contains(device->build_key())) {
-            device->build_firmware();
-            this->firmware_built_keys.insert(device->build_key());
+        if (!this->firmware_built_keys.contains(
+                BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key)) {
+            BuildEnvManager::get_instance().build_firmware(device->build_id());
+            this->firmware_built_keys.insert(
+                BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
         }
         this->devices.emplace_back(std::unique_ptr<IDevice>(device));
     } else {
         log_debug(tt::LogMetal, "DevicePool re-initialize device {}", id);
         if (not device->is_initialized()) {
-            if (device->num_hw_cqs() != num_hw_cqs) {
-                // The dispatch core manager was reset, since the number of CQs was toggled.
-                // Account for chip specific idle eth dispatch cores.
-                device->update_dispatch_cores_for_multi_cq_eth_dispatch();
-            }
             device->initialize(num_hw_cqs, this->l1_small_size, this->trace_region_size, this->l1_bank_remap);
-            if (!this->firmware_built_keys.contains(device->build_key())) {
-                device->build_firmware();
-                this->firmware_built_keys.insert(device->build_key());
+            if (!this->firmware_built_keys.contains(
+                    BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key)) {
+                BuildEnvManager::get_instance().build_firmware(device->build_id());
+                this->firmware_built_keys.insert(
+                    BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
             }
         } else {
             TT_THROW("Cannot re-initialize device {}, must first call close()", id);
@@ -476,6 +493,8 @@ bool DevicePool::close_device(chip_id_t device_id) {
     // Sync and close one device
     // Currently can only call this on mmio chips, once we split dispatch kernel shutdown
     // from device close, we can call this on remote devices too
+    ZoneScoped;
+    detail::ProfilerSync(ProfilerSyncState::CLOSE_DEVICE);
     tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false);
     bool pass = true;
     const auto& mmio_device_id = tt::Cluster::instance().get_associated_mmio_device(device_id);
@@ -494,6 +513,8 @@ void DevicePool::close_devices(const std::vector<IDevice*>& devices) {
     // Ordered, because we need to shutdown tunnels from the farthest to the closest.
     std::vector<chip_id_t> devices_to_close;
 
+    ZoneScoped;
+    detail::ProfilerSync(ProfilerSyncState::CLOSE_DEVICE);
     // Loop over all devices and add remote devices to devices_to_close
     // For Galaxy if an mmio device's tunnels are being closed, close the mmio device as well
     std::unordered_set<chip_id_t> mmio_devices_to_close;
@@ -522,8 +543,13 @@ void DevicePool::close_devices(const std::vector<IDevice*>& devices) {
     // before closing any device + modifying routing info.
     // If this is not done, non-blocking CCLs followed by a close will hang, since
     // the main thread will modify device state while the CCL is running on device.
+    // On TG - this should not be done on MMIO mapped devices, since we don't run
+    // any workloads on them
     for (const auto& dev_id : devices_to_close) {
         auto dev = tt::DevicePool::instance().get_active_device(dev_id);
+        if (tt::Cluster::instance().is_galaxy_cluster() and dev->is_mmio_capable()) {
+            continue;
+        }
         dev->synchronize();  // Synchronize worker queue
         Synchronize(dev);    // Synchronize device
     }
@@ -542,9 +568,9 @@ DevicePool::~DevicePool() {
     log_debug(tt::LogMetal, "DevicePool destructor");
     for (const auto& dev : this->devices) {
         if (dev != nullptr and dev->is_initialized()) {
-            // TODO: #13876, Was encountering issues with the dispatch_constants being destroyed before the DevicePool
+            // TODO: #13876, Was encountering issues with the DispatchMemMap being destroyed before the DevicePool
             // destructor, which leads to device->close() hitting asserts. We need to move the ownership of
-            // dispatch_constants to the device, so it doesn't go out of scope before the device is closed.
+            // DispatchMemMap to the device, so it doesn't go out of scope before the device is closed.
             dev->close();
         }
     }

@@ -1083,7 +1083,7 @@ def test_sdpa_decode_program_cache(device, b, nh, nkv, s, d, dtype, use_program_
                 dtype=dtype,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.MemoryConfig(
-                    ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                    ttnn.TensorMemoryLayout.WIDTH_SHARDED,
                     ttnn.BufferType.L1,
                     ttnn.ShardSpec(
                         ttnn.CoreRangeSet({num_to_corerange(32)}),

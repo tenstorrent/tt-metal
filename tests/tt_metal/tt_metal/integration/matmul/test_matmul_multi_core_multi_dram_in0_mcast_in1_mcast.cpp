@@ -5,11 +5,11 @@
 #include <algorithm>
 
 #include "dispatch_fixture.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "common/bfloat16.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
-#include "test_tiles.hpp"
+#include <tt-metalium/test_tiles.hpp>
 #include "hostdevcommon/common_values.hpp"
 #include "tests/tt_metal/test_utils/tilization.hpp"
 #include "matmul_test_utils.hpp"
@@ -380,7 +380,7 @@ bool matmul_multi_core_multi_dram_in0_mcast_in1_mcast(tt_metal::IDevice* device)
     int per_core_M = M / num_cores_r;
     int per_core_N = N / num_cores_c;
     uint32_t single_tile_size = 2 * 1024;
-    uint32_t in0_dram_addr = device->get_base_allocator_addr(HalMemType::DRAM);
+    uint32_t in0_dram_addr = device->allocator()->get_base_allocator_addr(HalMemType::DRAM);
     uint32_t in1_dram_addr = 400 * 1024 * 1024;
     uint32_t out_dram_addr = 800 * 1024 * 1024;
 

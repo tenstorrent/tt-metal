@@ -12,18 +12,9 @@
 namespace tt {
 
 namespace tt_metal {
-const ttnn::SimpleShape infer_dims_for_reshape(const Tensor& tensor, tt::stl::Span<const int32_t> shape);
+const ttnn::Shape infer_dims_for_reshape(const Tensor& tensor, tt::stl::Span<const int32_t> shape);
 
-// TODO: Remove this once we switch to SimpleShape .volume()
-static std::size_t compute_volume(const tt::tt_metal::LegacyShape& shape) {
-    size_t volume = 1;
-    for (auto index = 0; index < shape.rank(); index++) {
-        volume *= shape[index];
-    }
-    return volume;
-}
-
-static ttnn::SmallVector<uint32_t> compute_strides(const ttnn::SimpleShape& shape) {
+static ttnn::SmallVector<uint32_t> compute_strides(const ttnn::Shape& shape) {
     if (shape.rank() == 0) {
         return {};
     }
@@ -51,7 +42,7 @@ static int compute_flat_indices(tt::stl::Span<const int> indices, tt::stl::Span<
     return flat_index;
 };
 
-static std::size_t compute_buffer_size(const ttnn::SimpleShape& shape, DataType data_type, const Tile& tile) {
+static std::size_t compute_buffer_size(const ttnn::Shape& shape, DataType data_type, const Tile& tile) {
     const size_t volume = shape.volume();
     auto tile_hw = tile.get_tile_hw();
     if (data_type == DataType::BFLOAT8_B) {
@@ -127,11 +118,6 @@ inline uint32_t get_batch_size(const T& shape) {
     return result;
 }
 
-// Flattens input shape into height and width
-// - Height is accumulated over all dims except last
-// - Width is equal to the last dim
-Size get_2d_shape(const ttnn::SimpleShape& shape);
-
 // Useful information about how a shard_shape cuts a 2D shape
 // - num_shards_height: Number of shards along the height (including partial last shard, if any)
 // - last_shard_height: Height of last partial shard (if None, it will be same as full shard shape height)
@@ -145,7 +131,7 @@ struct ShardDivisionSpec {
 };
 
 // Returns ShardDivisionSpecs given 2D shape and shard_shape
-ShardDivisionSpec compute_shard_division_spec(const Size& shape, const Size& shard_shape);
+ShardDivisionSpec compute_shard_division_spec(const Shape2D& shape, const Shape2D& shard_shape);
 
 }  // namespace tt_metal
 }  // namespace tt

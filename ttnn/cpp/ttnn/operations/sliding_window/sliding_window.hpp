@@ -64,18 +64,18 @@ struct SlidingWindowConfig {
     /**
      * Return the input shape (excluding depth)
      */
-    Shape get_input_shape() const;
+    ttnn::Shape get_input_shape() const;
 
     /**
      * Calculate the window op output shape, excludes the channel dimension since this config is independent of the
      * depth.
      */
-    Shape get_output_shape() const;
+    ttnn::Shape get_output_shape() const;
 
     uint32_t get_ceil_pad_h() const;
     uint32_t get_ceil_pad_w() const;
 
-    Shape get_transposed_full_input_shape() const;
+    ttnn::Shape get_transposed_full_input_shape() const;
 
     std::array<uint32_pair_t, 2> get_transposed_real_padding() const;
     /**

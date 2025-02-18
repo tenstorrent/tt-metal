@@ -85,6 +85,7 @@ void kernel_main() {
 
     uint32_t npages_to_reserve = 1;
     uint32_t counter = reader_id;
+    uint32_t read_bytes = MAX_ELE_PER_REDUCTION;
     while (counter < reader_nindices) {
         uint16_t top_left_local_index = reader_indices_ptr[counter++];
         for (uint32_t c_i = 0; c_i < in_nblocks_c; ++c_i) {
@@ -97,7 +98,7 @@ void kernel_main() {
                     uint32_t read_offset =
                         in_l1_read_base_addr +
                         (stick_offset * in_nbytes_c + c_i * MAX_ELE_PER_REDUCTION);  // 2 bytes, max 8 tiles
-                    noc_async_read_one_packet(get_noc_addr(read_offset), out_l1_write_addr, MAX_ELE_PER_REDUCTION);
+                    noc_async_read_one_packet(get_noc_addr(read_offset), out_l1_write_addr, read_bytes);
                     out_l1_write_addr += MAX_ELE_PER_REDUCTION;
                 }
             }

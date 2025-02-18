@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "layernorm_distributed_pybind.hpp"
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "cpp/pybind11/decorators.hpp"
 #include "layernorm_pre_all_gather.hpp"
 #include "layernorm_post_all_gather.hpp"
 
@@ -22,6 +22,7 @@ void bind_normalization_layernorm_pre_all_gather_operation(py::module& module) {
             py::arg("input_tensor"),
             py::kw_only(),
             py::arg("dtype") = DataType::BFLOAT16,
+            py::arg("residual_input_tensor") = std::nullopt,
             py::arg("compute_kernel_config") = std::nullopt,
             py::arg("program_config") = std::nullopt,
             py::arg("memory_config") = std::nullopt});
@@ -43,7 +44,8 @@ void bind_normalization_layernorm_post_all_gather_operation(py::module& module) 
             py::arg("bias") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("compute_kernel_config") = std::nullopt,
-            py::arg("program_config") = std::nullopt});
+            py::arg("program_config") = std::nullopt,
+            py::arg("dtype") = std::nullopt});
 }
 
 void bind_normalization_layernorm_distributed(py::module& module) {

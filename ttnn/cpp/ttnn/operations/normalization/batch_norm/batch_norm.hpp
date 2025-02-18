@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,10 +15,12 @@ struct BatchNorm {
         std::optional<Tensor> running_var = std::nullopt,
         const bool training = false,
         const float eps = 1e-05,
-        std::optional<Tensor> weight = std::nullopt,
-        std::optional<Tensor> bias = std::nullopt,
-        std::optional<Tensor> output = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt);
+        const float momentum = 0.1,
+        const std::optional<Tensor>& weight = std::nullopt,
+        const std::optional<Tensor>& bias = std::nullopt,
+        const std::optional<Tensor>& output = std::nullopt,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        QueueId queue_id = DefaultQueueId);
 };
 }  // namespace operations::normalization
 

@@ -7,13 +7,13 @@
 #include <random>
 #include <math.h>
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "common/bfloat16.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/bfloat16.hpp>
 
-#include "llrt/llrt.hpp"
+#include "llrt.hpp"
 
-#include "impl/debug/dprint_server.hpp"
+#include "dprint_server.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does

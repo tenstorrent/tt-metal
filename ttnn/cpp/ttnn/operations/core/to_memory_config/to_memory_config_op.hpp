@@ -8,11 +8,11 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/sharded/reshard/device/reshard_op.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/sharded/interleaved_to_sharded/device/interleaved_to_sharded_op.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/sharded/sharded_to_interleaved/device/sharded_to_interleaved_op.hpp"
+#include "cpp/ttnn/operations/data_movement/sharded/reshard/device/reshard_op.hpp"
+#include "cpp/ttnn/operations/data_movement/sharded/interleaved_to_sharded/device/interleaved_to_sharded_op.hpp"
+#include "cpp/ttnn/operations/data_movement/sharded/sharded_to_interleaved/device/sharded_to_interleaved_op.hpp"
 #include "ttnn/types.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/copy/device/copy_device_operation.hpp"
+#include "cpp/ttnn/operations/data_movement/copy/device/copy_device_operation.hpp"
 
 namespace ttnn {
 
@@ -27,7 +27,7 @@ struct ToMemoryConfig {
         const ttnn::MemoryConfig& memory_config,
         std::optional<ttnn::DataType> dtype = std::nullopt) {
         // Temporary until we see why buffer data not being populated
-        const auto original_shape = tensor.get_shape();
+        const auto& original_shape = tensor.get_logical_shape();
         const auto original_memory_config = ttnn::get_memory_config(tensor);
         if (original_memory_config.has_value() && original_memory_config.value() == memory_config) {
             return tensor;

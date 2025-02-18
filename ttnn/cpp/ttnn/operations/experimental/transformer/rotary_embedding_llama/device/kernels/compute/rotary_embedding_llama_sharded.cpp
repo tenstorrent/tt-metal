@@ -67,7 +67,7 @@ void MAIN {
         cb_push_back(rotated_in_interm_cb, Wt);
         cb_wait_front(rotated_in_interm_cb, Wt);
 
-        mul_bcast_rows_init_short();
+        mul_bcast_rows_init_short(rotated_in_interm_cb, sin_cb);
         ACQ();
         for (uint32_t j = 0; j < Wt; ++j) {
             // sin_interim = rotated * sin
@@ -90,7 +90,7 @@ void MAIN {
 
         cb_wait_front(sin_interm_cb, Wt);
         cb_wait_front(cos_interm_cb, Wt);
-        add_tiles_init();
+        add_tiles_init(cos_interm_cb, sin_interm_cb);
         ACQ();
         for (uint32_t j = 0; j < Wt; ++j) {
             // out = cos_interim + sin_interim

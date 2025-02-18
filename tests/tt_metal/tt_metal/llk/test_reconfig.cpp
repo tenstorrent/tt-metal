@@ -4,7 +4,7 @@
 
 #include <variant>
 #include "device_fixture.hpp"
-#include "tt_metal/common/bfloat8.hpp"
+#include <tt-metalium/bfloat8.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 
 using std::vector;

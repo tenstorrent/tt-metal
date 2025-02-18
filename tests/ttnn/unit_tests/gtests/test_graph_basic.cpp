@@ -8,14 +8,16 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/graph/graph_processor.hpp"
 #include "ttnn/graph/graph_consts.hpp"
+#include "ttnn/graph/graph_trace_utils.hpp"
+#include "ttnn/operations/normalization/softmax/softmax.hpp"
 
 #include <string>
 
 namespace ttnn::graph::test {
 
 struct BufferTestParam {
-    ttnn::SimpleShape shape_a;
-    ttnn::SimpleShape shape_b;
+    ttnn::Shape shape_a;
+    ttnn::Shape shape_b;
 };
 
 class BufferTestFixture
@@ -102,8 +104,8 @@ INSTANTIATE_TEST_SUITE_P(
     BufferTestFixture,
     ::testing::Combine(
         ::testing::Values(BufferTestParam{
-            .shape_a = ttnn::SimpleShape(tt::tt_metal::Array4D{1, 1, 32, 32}),
-            .shape_b = ttnn::SimpleShape(tt::tt_metal::Array4D{32, 1, 32, 32})}),
+            .shape_a = ttnn::Shape(tt::tt_metal::Array4D{1, 1, 32, 32}),
+            .shape_b = ttnn::Shape(tt::tt_metal::Array4D{32, 1, 32, 32})}),
         ::testing::Values(
             tt::tt_metal::IGraphProcessor::RunMode::NO_DISPATCH, tt::tt_metal::IGraphProcessor::RunMode::NORMAL)),
     [](const testing::TestParamInfo<std::tuple<BufferTestParam, tt::tt_metal::IGraphProcessor::RunMode>>& info) {
@@ -121,3 +123,84 @@ INSTANTIATE_TEST_SUITE_P(
         return ss.str();
     });
 }  // namespace ttnn::graph::test
+
+class TestScopedGraphCapture : public ttnn::TTNNFixtureWithDevice {};
+TEST_F(TestScopedGraphCapture, ScopedGraphCapture) {
+    tt::tt_metal::IDevice* device = &(this->getDevice());
+
+    auto operation = [&device](tt::tt_metal::DataType datatype) {
+        const auto input_a = ttnn::TensorSpec(
+            ttnn::Shape(tt::tt_metal::Array4D{1, 4, 512, 512}),
+            tt::tt_metal::TensorLayout(
+                datatype, tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE), ttnn::L1_MEMORY_CONFIG));
+        const auto input_tensor_a = tt::tt_metal::create_device_tensor(input_a, device);
+        const auto output_tensor = ttnn::softmax(input_tensor_a, -1);
+    };
+
+    // build reference
+    std::vector<std::string> ref_calltrace;
+    nlohmann::json ref_json_trace;
+    {
+        auto capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NO_DISPATCH);
+        operation(tt::tt_metal::DataType::BFLOAT16);
+        ref_json_trace = capture.end_graph_capture();
+        ref_calltrace = ttnn::graph::extract_calltrace(ref_json_trace);
+    }
+    for (const auto& call : ref_calltrace) {
+        std::cout << call << std::endl;
+    }
+
+    // with manual exception in the nested loop
+    {
+        auto capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NO_DISPATCH);
+        try {
+            auto capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NO_DISPATCH);
+            operation(tt::tt_metal::DataType::BFLOAT16);
+            throw std::runtime_error("Expected");
+        } catch (const std::exception& e) {
+            EXPECT_EQ(std::string(e.what()), "Expected");
+        }
+        auto json_trace = capture.end_graph_capture();
+        EXPECT_EQ(ttnn::graph::extract_calltrace(json_trace), ref_calltrace);
+    }
+
+    // with exception in the operation #2
+    {
+        auto capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NO_DISPATCH);
+        try {
+            auto capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NO_DISPATCH);
+            operation(tt::tt_metal::DataType::UINT8);  // fails in the softmax::validate (not supported data type)
+        } catch (const std::exception& e) {
+            EXPECT_TRUE(std::string(e.what()).find("FATAL") != std::string::npos);
+        }
+        auto json_trace = capture.end_graph_capture();
+
+        EXPECT_EQ(
+            ttnn::graph::extract_calltrace(json_trace),
+            std::vector<std::string>(
+                {"tt::tt_metal::create_device_tensor",
+                 "ttnn::softmax",
+                 "ttnn::prim::old_infra_device_operation",
+                 "Softmax",
+                 "tt::tt_metal::create_device_tensor"}));
+    }
+
+    // check original again to ensure it's not affected by the thrown exceptions
+    {
+        auto capture = ttnn::graph::ScopedGraphCapture(IGraphProcessor::RunMode::NO_DISPATCH);
+        operation(tt::tt_metal::DataType::BFLOAT16);
+        auto json_trace = capture.end_graph_capture();
+        // std::cout << json_trace.dump(4);
+        EXPECT_EQ(ttnn::graph::extract_calltrace(json_trace), ref_calltrace);
+
+        EXPECT_EQ(json_trace.size(), ref_json_trace.size());
+        // tensor ids can be different, therfore checking if general structure is the same
+        for (size_t i = 0; i < json_trace.size(); i++) {
+            const auto& v = json_trace[i];
+            const auto& ref_v = ref_json_trace[i];
+            EXPECT_EQ(v[ttnn::graph::kCounter], ref_v[ttnn::graph::kCounter]);
+            EXPECT_EQ(v[ttnn::graph::kConnections], ref_v[ttnn::graph::kConnections]);
+            EXPECT_EQ(v[ttnn::graph::kNodeType], ref_v[ttnn::graph::kNodeType]);
+        }
+    }
+}

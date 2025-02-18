@@ -4,7 +4,9 @@
 
 #pragma once
 
-#include "tt_metal/device.hpp"
+#include <device.hpp>
+
+struct metal_SocDescriptor;
 
 namespace tt {
 

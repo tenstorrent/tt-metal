@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "cpp/pybind11/decorators.hpp"
 
 #include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads/nlp_create_qkv_heads.hpp"
 #include "ttnn/operations/experimental/transformer/nlp_create_qkv_heads/nlp_create_qkv_heads_pybind.hpp"
@@ -26,7 +26,7 @@ void bind_nlp_create_qkv_heads_template(pybind11::module& module, const transfor
                const bool transpose_k_heads,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                std::optional<std::vector<std::optional<ttnn::Tensor>>>& optional_output_tensors,
-               uint8_t queue_id) {
+               QueueId queue_id) {
                 return self(
                     queue_id,
                     input_tensor_q,
@@ -45,7 +45,7 @@ void bind_nlp_create_qkv_heads_template(pybind11::module& module, const transfor
             pybind11::arg("transpose_k_heads").noconvert() = true,
             pybind11::arg("memory_config").noconvert() = std::nullopt,
             pybind11::arg("output_tensors").noconvert() = std::nullopt,
-            pybind11::arg("queue_id") = 0});
+            pybind11::arg("queue_id") = DefaultQueueId});
 };
 
 void bind_nlp_create_qkv_heads(pybind11::module& module) {

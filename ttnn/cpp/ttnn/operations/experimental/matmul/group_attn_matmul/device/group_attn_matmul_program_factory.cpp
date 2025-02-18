@@ -3,10 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "group_attn_matmul_device_operation.hpp"
-#include "tt_metal/common/work_split.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn::operations::experimental::matmul {
@@ -27,7 +27,7 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(
     ttnn::DeviceComputeKernelConfig compute_kernel_config) {
     tt::tt_metal::Program program{};
 
-    const auto &ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
+    const auto &ashape = a.get_padded_shape(), bshape = b.get_padded_shape();
 
     // This should allocate a DRAM buffer on the device
     tt::tt_metal::IDevice* device = a.device();
@@ -174,21 +174,21 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(
     // Intermediate CBs for handling untilizing, copying rows, and tilizing to output CB
     uint32_t interm_cb_num_tiles =
         2 * intermediate_num_tiles;  // TODO: Generalize; double buffering should help when we are not reader bound
-    uint32_t cb_intermed0_index = tt::CBIndex::c_24;
+    uint32_t cb_intermed0_index = tt::CBIndex::c_3;
     tt::tt_metal::CircularBufferConfig cb_interm0_config =
         tt::tt_metal::CircularBufferConfig(
             interm_cb_num_tiles * interm_single_tile_size, {{cb_intermed0_index, interm_data_format}})
             .set_page_size(cb_intermed0_index, interm_single_tile_size);
     auto cb_interm0 = tt::tt_metal::CreateCircularBuffer(program, all_device_cores, cb_interm0_config);
 
-    uint32_t cb_intermed1_index = tt::CBIndex::c_25;
+    uint32_t cb_intermed1_index = tt::CBIndex::c_4;
     tt::tt_metal::CircularBufferConfig cb_interm1_config =
         tt::tt_metal::CircularBufferConfig(MtNt * interm_single_tile_size, {{cb_intermed1_index, interm_data_format}})
             .set_page_size(cb_intermed1_index, interm_single_tile_size);
     auto cb_interm1 = tt::tt_metal::CreateCircularBuffer(program, all_device_cores, cb_interm1_config);
 
     // CB for output (if sharded, full num tiles per core)
-    uint32_t output_cb_index = tt::CBIndex::c_16;
+    uint32_t output_cb_index = tt::CBIndex::c_5;
     CBHandle cb_output;
     if (output_is_sharded) {
         uint32_t num_output_tiles =
@@ -324,7 +324,7 @@ operation::ProgramWithCallbacks multi_core_group_attn_matmul(
         tt::tt_metal::Buffer* src1_buffer = b.buffer();
         tt::tt_metal::Buffer* dst_buffer = output.buffer();
 
-        const auto &ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
+        const auto &ashape = a.get_padded_shape(), bshape = b.get_padded_shape();
 
         tt::tt_metal::IDevice* device = a.device();
 

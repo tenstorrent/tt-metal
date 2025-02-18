@@ -11,10 +11,10 @@
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/common/work_split.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/host_api.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -59,7 +59,7 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column_subgrid(
 
     uint32_t max_tiles = 1;
     uint32_t ntiles_per_block = ntiles / ncores;
-    uint32_t stick_s = a.get_legacy_shape()[-1];
+    uint32_t stick_s = a.get_padded_shape()[-1];
     uint32_t ntiles_per_row = stick_s / TILE_WIDTH;
     uint32_t stick_size = stick_s * output.element_size();
     uint32_t ntiles_per_column = ntiles / ntiles_per_row;
@@ -136,7 +136,7 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column_subgrid(
 
     std::string compute_kernel(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
-    if (ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize) {
+    if (ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize || a.get_dtype() == DataType::UINT16) {
         log_debug(tt::LogOp, "Using slow untilize.");
         compute_kernel =
             std::string("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp");
@@ -240,12 +240,12 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
     uint32_t ntiles_per_block = ntiles / (ncores_x * ncores_y);
 
     // TODO increase block size to increase untilize performance, currently each untilize block is a single tile
-    // uint32_t max_l1_size = a.device()->l1_size_per_core() / 2 - a.device()->get_base_allocator_addr(HalMemType::L1);
-    // uint32_t max_tiles = (max_l1_size / (input_single_tile_size + output_single_tile_size))/2;  // 2 CBs, double
-    // buffering each
+    // uint32_t max_l1_size = a.device()->l1_size_per_core() / 2 -
+    // a.device()->allocator()->get_base_allocator_addr(HalMemType::L1); uint32_t max_tiles =
+    // (max_l1_size / (input_single_tile_size + output_single_tile_size))/2;  // 2 CBs, double buffering each
     uint32_t max_tiles = 1;
 
-    uint32_t stick_s = a.get_legacy_shape()[-1];
+    uint32_t stick_s = a.get_padded_shape()[-1];
     uint32_t ntiles_per_row = stick_s / TILE_WIDTH;
     uint32_t stick_size = stick_s * output.element_size();
     uint32_t ntiles_per_column = ntiles / ntiles_per_row;
@@ -325,7 +325,7 @@ operation::ProgramWithCallbacks untilize_multi_core_parallelize_column(
 
     std::string compute_kernel(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
-    if (ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize) {
+    if (ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize || a.get_dtype() == DataType::UINT16) {
         log_debug(tt::LogOp, "Using slow untilize.");
         compute_kernel =
             std::string("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp");
@@ -464,12 +464,13 @@ operation::ProgramWithCallbacks untilize_multi_core(
     IDevice* device = a.device();
 
     uint32_t ntiles = a.volume() / TILE_HW;
-    uint32_t stick_s = a.get_legacy_shape()[-1];
-    uint32_t ntiles_per_block = a.get_legacy_shape()[-1] / TILE_WIDTH;
+    uint32_t stick_s = a.get_padded_shape()[-1];
+    uint32_t ntiles_per_block = a.get_padded_shape()[-1] / TILE_WIDTH;
     uint32_t nblocks = std::ceil((float)ntiles / ntiles_per_block);
-    uint32_t block_size_nbytes = a.get_legacy_shape()[-1] * output.element_size();
+    uint32_t block_size_nbytes = a.get_padded_shape()[-1] * output.element_size();
 
-    uint32_t max_l1_size = a.device()->l1_size_per_core() / 2 - a.device()->get_base_allocator_addr(HalMemType::L1);
+    uint32_t max_l1_size =
+        a.device()->l1_size_per_core() / 2 - a.device()->allocator()->get_base_allocator_addr(HalMemType::L1);
     uint32_t max_tiles =
         (max_l1_size / (input_single_tile_size + output_single_tile_size));  // 2 CBs, double buffering each
 
@@ -519,12 +520,12 @@ operation::ProgramWithCallbacks untilize_multi_core(
 
         num_rows_block = shard_spec.shape[0];
         block_row_size = shard_spec.shape[1] * output.element_size();  // in0_block_w * TILE_WIDTH * dtype_nbytes
-        output_row_size = output.get_legacy_shape()[-1] * output.element_size();  // output row size bytes
+        output_row_size = output.get_padded_shape()[-1] * output.element_size();  // output row size bytes
         last_block_row_size_unpadded =
             block_row_size -
-            (tt::round_up(output.get_legacy_shape()[-1], shard_spec.shape[1]) - output.get_legacy_shape()[-1]) *
+            (tt::round_up(output.get_padded_shape()[-1], shard_spec.shape[1]) - output.get_padded_shape()[-1]) *
                 output.element_size();
-        uint32_t num_output_rows = output.volume() / output.get_legacy_shape()[-1];
+        uint32_t num_output_rows = output.volume() / output.get_padded_shape()[-1];
         num_output_rows_unpadded =
             num_rows_block - (tt::round_up(num_output_rows, shard_spec.shape[0]) - num_output_rows);
         end_core = (*shard_spec.grid.ranges().begin()).end_coord;
@@ -628,7 +629,7 @@ operation::ProgramWithCallbacks untilize_multi_core(
 
     std::string compute_kernel(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
-    if (ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize) {
+    if (ntiles_per_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize || a.get_dtype() == DataType::UINT16) {
         log_debug(tt::LogOp, "Using slow untilize.");
         compute_kernel =
             std::string("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp");
@@ -890,13 +891,14 @@ operation::ProgramWithCallbacks untilize_single_core(
 
     int32_t num_tiles = a.volume() / TILE_HW;
 
-    uint32_t num_sticks = a.volume() / a.get_legacy_shape()[-1];
-    uint32_t stick_size = a.get_legacy_shape()[-1] * output.element_size();
+    uint32_t num_sticks = a.volume() / a.get_padded_shape()[-1];
+    uint32_t stick_size = a.get_padded_shape()[-1] * output.element_size();
 
-    uint32_t stick_s = a.get_legacy_shape()[-1];
+    uint32_t stick_s = a.get_padded_shape()[-1];
     uint32_t num_tiles_in_row = stick_s / TILE_WIDTH;
     // Ensure we don't intrude into storage space
-    uint32_t max_l1_size = a.device()->l1_size_per_core() / 2 - a.device()->get_base_allocator_addr(HalMemType::L1);
+    uint32_t max_l1_size =
+        a.device()->l1_size_per_core() / 2 - a.device()->allocator()->get_base_allocator_addr(HalMemType::L1);
     uint32_t max_tiles = max_l1_size / (input_single_tile_size + output_single_tile_size);  // 2 CBs
     // Currently need the number of tiles in a row to be divisible by tiles in a block
     uint32_t num_tiles_per_block = 1;
@@ -981,7 +983,7 @@ operation::ProgramWithCallbacks untilize_single_core(
 
     std::string compute_kernel(
         "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/pack_untilize.cpp");
-    if (num_tiles_per_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize) {
+    if (num_tiles_per_block > MAX_PACK_UNTILIZE_WIDTH || !use_pack_untilize || a.get_dtype() == DataType::UINT16) {
         log_debug(tt::LogOp, "Using slow untilize.");
         compute_kernel =
             std::string("ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/compute/untilize.cpp");

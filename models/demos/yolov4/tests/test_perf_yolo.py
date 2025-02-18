@@ -81,6 +81,7 @@ def test_yolov4(
         profiler.start("inference_time")
         profiler.start(f"inference_time_{idx}")
         ttnn_output_tensor = ttnn_model(device, ttnn_input)
+
         profiler.end(f"inference_time_{idx}")
         profiler.end("inference_time")
 
@@ -124,7 +125,7 @@ def test_perf_device_bare_metal_yolov4(batch_size, model_name):
     num_iterations = 1
     margin = 0.03
 
-    expected_perf = 199.89
+    expected_perf = 234
     command = f"pytest tests/ttnn/integration_tests/yolov4/test_ttnn_yolov4.py"
 
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]

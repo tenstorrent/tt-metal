@@ -18,7 +18,6 @@ def get_mesh_device_core_grid(mesh_device):
 MeshDevice = ttnn._ttnn.multi_device.MeshDevice
 MeshDevice.core_grid = property(get_mesh_device_core_grid)
 DispatchCoreType = ttnn._ttnn.device.DispatchCoreType
-MeshType = ttnn._ttnn.multi_device.MeshType
 
 
 def _get_rich_table(
@@ -141,7 +140,6 @@ def open_mesh_device(
     dispatch_core_config: ttnn.DispatchCoreConfig = ttnn.DispatchCoreConfig(),
     offset: ttnn.MeshOffset = ttnn.MeshOffset(row=0, col=0),
     physical_device_ids: List[int] = [],
-    mesh_type: "MeshType" = MeshType.RowMajor,
 ):
     """
     Open a mesh device with the specified configuration.
@@ -154,7 +152,6 @@ def open_mesh_device(
         dispatch_core_type (int, optional): Type of dispatch core. Defaults to DispatchCoreType.WORKER.
         offset (ttnn.MeshOffset, optional): Offset in logical mesh coordinates for the mesh device. Defaults to (0, 0).
         physical_device_ids (List[int], optional): List of physical device IDs to use. Defaults to [].
-        mesh_type (MeshType, optional): Defines type of mesh requested. Type imposes connectivity constraints and defines device iteration order.
 
     Returns:
         ttnn._ttnn.multi_device.MeshDevice: The opened mesh device.
@@ -168,7 +165,6 @@ def open_mesh_device(
         dispatch_core_config=dispatch_core_config,
         offset=offset,
         physical_device_ids=physical_device_ids,
-        mesh_type=mesh_type,
     )
 
 
@@ -182,27 +178,13 @@ def close_mesh_device(mesh_device):
 
 
 @contextlib.contextmanager
-def create_mesh_device(
-    mesh_shape: ttnn.MeshShape,
-    device_ids: List[int],
-    l1_small_size: int = ttnn._ttnn.device.DEFAULT_L1_SMALL_SIZE,
-    trace_region_size: int = ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE,
-    num_command_queues: int = 1,
-    dispatch_core_config: ttnn._ttnn.device.DispatchCoreConfig = ttnn._ttnn.device.DispatchCoreConfig(),
-):
+def create_mesh_device(*args, **kwargs):
     """
-    create_mesh_device(mesh_shape: ttnn.MeshShape, device_ids: List[int]) -> ttnn.MeshDevice
+    create_mesh_device(*args, **kwargs) -> ttnn.MeshDevice
 
     Context manager for opening and closing a device.
     """
-    mesh_device = open_mesh_device(
-        mesh_shape=mesh_shape,
-        device_ids=device_ids,
-        l1_small_size=l1_small_size,
-        trace_region_size=trace_region_size,
-        num_command_queues=num_command_queues,
-        dispatch_core_type=dispatch_core_config,
-    )
+    mesh_device = open_mesh_device(*args, **kwargs)
     try:
         yield mesh_device
     finally:

@@ -3,15 +3,15 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 
 namespace ttnn::operations::data_movement::detail {
 
 tt::tt_metal::operation::ProgramWithCallbacks slice_multi_core(
     const Tensor& a,
     Tensor& output,
-    const tt::tt_metal::LegacyShape& output_tensor_start,
-    const tt::tt_metal::LegacyShape& output_tensor_end,
-    const tt::tt_metal::LegacyShape& step);
+    const ttnn::Shape& output_tensor_start,
+    const ttnn::Shape& output_tensor_end,
+    const ttnn::Shape& step);
 
 }  // namespace ttnn::operations::data_movement::detail

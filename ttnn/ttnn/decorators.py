@@ -21,7 +21,9 @@ import ttnn
 import ttnn.database
 
 
-def compare_tensors_using_pcc(python_fully_qualified_name, golden_outputs, outputs, desired_pcc, level):
+def compare_tensors_using_pcc(
+    python_fully_qualified_name, golden_outputs, outputs, desired_pcc, level, fail_on_bad_comparison
+):
     import torch
 
     from models.utility_functions import comp_pcc
@@ -59,9 +61,11 @@ def compare_tensors_using_pcc(python_fully_qualified_name, golden_outputs, outpu
         comparison_records.append(commparison_record)
 
         if not matches:
-            logger.error(
-                f"{python_fully_qualified_name}: Comparing output tensor {index} against CPU {level} failed: pcc is {actual_pcc} but should be >={desired_pcc}"
-            )
+            error_message = f"{python_fully_qualified_name}: Comparing output tensor {index} against CPU {level} failed: pcc is {actual_pcc} but should be >={desired_pcc}"
+            if fail_on_bad_comparison:
+                raise RuntimeError(error_message)
+            else:
+                logger.error(error_message)
 
     return comparison_records
 
@@ -121,7 +125,7 @@ def get_devices(object_value):
     devices = set()
     if isinstance(object_value, ttnn.Tensor):
         if ttnn.is_tensor_storage_on_device(object_value) and object_value.is_allocated():
-            devices.add(object_value.device())
+            devices.update(object_value.devices())
     elif isinstance(object_value, ttnn.Device):
         devices.add(object_value)
     elif isinstance(object_value, (list, tuple)):
@@ -258,7 +262,7 @@ def preprocess_global_golden_function_inputs(function_args, function_kwargs):
             input_index += 1
             return golden_tensor
         elif isinstance(object_value, ttnn.Shape):
-            return tuple(object_value.with_tile_padding())
+            return tuple(object_value)
         elif isinstance(object_value, (list, tuple)):
             new_object_value = [recursive_preprocess_golden_function_inputs(element) for element in object_value]
             return type(object_value)(new_object_value)
@@ -453,6 +457,7 @@ class Operation:
                         output,
                         desired_pcc=ttnn.CONFIG.comparison_mode_pcc,
                         level="locally",
+                        fail_on_bad_comparison=ttnn.CONFIG.comparison_mode_should_raise_exception,
                     )
 
                 if global_golden_function_output is not None:
@@ -464,6 +469,7 @@ class Operation:
                         output,
                         desired_pcc=ttnn.CONFIG.comparison_mode_pcc,
                         level="globally",
+                        fail_on_bad_comparison=ttnn.CONFIG.comparison_mode_should_raise_exception,
                     )
 
                 if isinstance(local_golden_function_output, torch.Tensor):
@@ -798,7 +804,7 @@ def register_python_operation(
         if is_cpp_operation:
             raise RuntimeError(f"{function} is a C++ operation, but it is being registered as a Python operation")
         elif not is_experimental and not is_method:
-            logger.warning(f"Should {python_fully_qualified_name} be migrated to C++?")
+            logger.debug(f"Should {python_fully_qualified_name} be migrated to C++?")
 
         operation_class = FastOperation if ttnn.CONFIG.enable_fast_runtime_mode else Operation
 

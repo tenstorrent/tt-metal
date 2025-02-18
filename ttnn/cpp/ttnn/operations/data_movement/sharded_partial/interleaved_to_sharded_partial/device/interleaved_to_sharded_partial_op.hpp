@@ -7,8 +7,8 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
 
-#include "tt_metal/common/core_coord.hpp"
-#include "tt_metal/impl/buffers/buffer.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/buffer.hpp>
 namespace ttnn::operations::data_movement {
 
 struct InterleavedToShardedPartialDeviceOperation {

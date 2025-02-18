@@ -10,8 +10,8 @@
 #include <utility>
 
 #include "pybind11/decorators.hpp"
-#include "tt_metal/common/core_coord.hpp"
-#include "ttnn/cpp/pybind11/json_class.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include "cpp/pybind11/json_class.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/types.hpp"
 
@@ -346,8 +346,7 @@ void py_module(py::module& module) {
                const std::optional<const ttnn::CoreGrid> core_grid,
                const std::optional<const Tile>& output_tile,
                std::optional<Tensor>& optional_output_tensor,
-               const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb)
-                -> ttnn::Tensor {
+               const std::optional<const DeviceGlobalCircularBuffer>& global_cb) -> ttnn::Tensor {
                 return self(
                     input_tensor_a,
                     input_tensor_b,
@@ -431,8 +430,7 @@ void py_module(py::module& module) {
                const std::optional<const ttnn::CoreGrid> core_grid,
                const std::optional<const Tile>& output_tile,
                std::optional<Tensor>& optional_output_tensor,
-               const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb)
-                -> ttnn::Tensor {
+               const std::optional<const DeviceGlobalCircularBuffer>& global_cb) -> ttnn::Tensor {
                 return self(
                     input_tensor_a,
                     input_tensor_b,

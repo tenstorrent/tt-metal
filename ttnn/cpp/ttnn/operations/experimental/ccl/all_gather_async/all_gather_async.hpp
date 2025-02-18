@@ -6,7 +6,7 @@
 
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
-#include "ttnn/cpp/ttnn/global_semaphore.hpp"
+#include "cpp/ttnn/global_semaphore.hpp"
 
 namespace ttnn {
 namespace operations::experimental::ccl {

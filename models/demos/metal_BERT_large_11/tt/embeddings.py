@@ -5,7 +5,6 @@
 from typing import List, Optional, Tuple, Union
 import torch
 import ttnn
-from models.utility_functions import torch2tt_tensor
 
 
 class TtEmbeddings:
@@ -50,44 +49,44 @@ class TtEmbeddings:
                 )
             ).to(device, self.model_config["EMBEDDINGS_LAYERNORM_BETA_MEMCFG"])
         else:
-            self.word_embeddings_weight = torch2tt_tensor(
+            self.word_embeddings_weight = ttnn.from_torch(
                 state_dict[f"{base_address}.word_embeddings.weight"],
-                device,
-                ttnn.ROW_MAJOR_LAYOUT,
-                model_config["INPUT_EMBEDDINGS_WEIGHTS_MEMCFG"],
                 model_config["INPUT_EMBEDDINGS_WEIGHTS_DTYPE"],
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+                memory_config=model_config["INPUT_EMBEDDINGS_WEIGHTS_MEMCFG"],
             )
 
-            self.position_embeddings_weight = torch2tt_tensor(
+            self.position_embeddings_weight = ttnn.from_torch(
                 state_dict[f"{base_address}.position_embeddings.weight"],
-                device,
-                ttnn.ROW_MAJOR_LAYOUT,
-                model_config["INPUT_EMBEDDINGS_WEIGHTS_MEMCFG"],
                 model_config["INPUT_EMBEDDINGS_WEIGHTS_DTYPE"],
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+                memory_config=model_config["INPUT_EMBEDDINGS_WEIGHTS_MEMCFG"],
             )
 
-            self.token_type_embeddings_weight = torch2tt_tensor(
+            self.token_type_embeddings_weight = ttnn.from_torch(
                 state_dict[f"{base_address}.token_type_embeddings.weight"],
-                device,
-                ttnn.ROW_MAJOR_LAYOUT,
-                model_config["INPUT_EMBEDDINGS_WEIGHTS_MEMCFG"],
                 model_config["INPUT_EMBEDDINGS_WEIGHTS_DTYPE"],
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+                memory_config=model_config["INPUT_EMBEDDINGS_WEIGHTS_MEMCFG"],
             )
 
-            self.layerNorm_gamma = torch2tt_tensor(
+            self.layerNorm_gamma = ttnn.from_torch(
                 state_dict[f"{base_address}.LayerNorm.weight"].reshape([1, 1, -1, 32]),
-                device,
-                ttnn.ROW_MAJOR_LAYOUT,
-                model_config["EMBEDDINGS_LAYERNORM_GAMMA_MEMCFG"],
                 model_config["EMBEDDINGS_LAYERNORM_GAMMA_DTYPE"],
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+                memory_config=model_config["EMBEDDINGS_LAYERNORM_GAMMA_MEMCFG"],
             )
 
-            self.layerNorm_beta = torch2tt_tensor(
+            self.layerNorm_beta = ttnn.from_torch(
                 state_dict[f"{base_address}.LayerNorm.bias"].reshape([1, 1, -1, 32]),
-                device,
-                ttnn.ROW_MAJOR_LAYOUT,
-                model_config["EMBEDDINGS_LAYERNORM_BETA_MEMCFG"],
                 model_config["EMBEDDINGS_LAYERNORM_BETA_DTYPE"],
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+                memory_config=model_config["EMBEDDINGS_LAYERNORM_BETA_MEMCFG"],
             )
 
         self.layerNorm_eps = config.layer_norm_eps

@@ -31,8 +31,6 @@ Note the current compatability matrix:
 ```sh
 sudo ./install_dependencies.sh
 ```
-- Note: `CMake 3.16` is the targetted required version of `CMake` as it aligns with the default from `Ubuntu 20.04`. Some advanced build configurations like unity builds require `CMake 3.20`.
-  - To install `CMake 3.20` see: https://github.com/tenstorrent/tt-metal/blob/4d7730d3e2d22c51d62baa1bfed861b557d9a3c0/dockerfile/ubuntu-20.04-amd64.Dockerfile#L9-L14
 ---
 
 ### Step 3. Install and start using TT-NN and TT-Metalium!
@@ -48,21 +46,13 @@ sudo ./install_dependencies.sh
 > If you do not want to use the models or follow the tutorials and want to
 > immediately start using the API, you may install just the wheel or get the release Docker container.
 
-1. Install git and git-lfs.
-
-```sh
-sudo apt install git git-lfs
-```
-
-2. Clone the repo.
+1. Clone the repo.
 
 ```sh
 git clone https://github.com/tenstorrent/tt-metal.git --recurse-submodules
-cd tt-metal
-git submodule foreach 'git lfs fetch --all && git lfs pull'
 ```
 
-3. Install either from source, or from our release wheel. Note that if you are
+2. Install either from source, or from our release wheel. Note that if you are
 going to try using the model demos, we highly recommend you install from
 source.
 
@@ -132,16 +122,12 @@ sudo cpupower frequency-set -g performance
 
 #### Option 3: From Docker Release Image
 
-Download the latest Docker release from our [Docker registry](https://github.com/orgs/tenstorrent/packages?q=tt-metalium-ubuntu&tab=packages&q=tt-metalium-ubuntu-20.04-amd64-release) page for
-the particular Tenstorrent card architecture that you have installed on your
-system. (ie. Grayskull, Wormhole, etc)
+Download the latest Docker release from our [Docker registry](https://github.com/orgs/tenstorrent/packages?q=tt-metalium-ubuntu&tab=packages&q=tt-metalium-ubuntu-20.04-amd64-release) page
 
 ```sh
-docker pull ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-20.04-amd64-release/<arch_name>:latest-rc
-docker run --it --rm -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-20.04-amd64-release/<arch_name>:latest-rc bash
+docker pull ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-20.04-amd64-release:latest-rc
+docker run -it --rm -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-20.04-amd64-release:latest-rc bash
 ```
-where `arch_name` is one of `grayskull`, `wormhole_b0`, or `blackhole`,
-depending on your Tenstorrent card type.
 
 When inside of the container,
 ```sh
@@ -156,7 +142,7 @@ To verify your installation, try the executing an example:
 python3 -m ttnn.examples.usage.run_op_on_device
 ```
 
-You are all set! Visit the [TT-NN Basic examples page](https://docs.tenstorrent.com/ttnn/latest/ttnn/usage.html#basic-examples) or get started with [simple kernels on TT-Metalium](https://docs.tenstorrent.com/tt-metalium/latest/tt_metal/examples/index.html).
+You are all set! Visit the [TT-NN Basic examples page](https://docs.tenstorrent.com/tt-metal/latest/ttnn/ttnn/usage.html#basic-examples) or get started with [simple kernels on TT-Metalium](https://docs.tenstorrent.com/tt-metal/latest/tt-metalium/tt_metal/examples/index.html).
 
 ---
 

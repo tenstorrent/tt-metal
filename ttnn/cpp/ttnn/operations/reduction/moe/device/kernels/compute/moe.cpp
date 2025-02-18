@@ -64,7 +64,7 @@ void add_block_bcast_rows_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t row
 
     uint32_t num_tiles = rows * cols;
     if (first_call) {
-        init_bcast<EltwiseBinaryType::ELWADD, BroadcastType::ROW>(in0_cb, in1_cb);
+        init_bcast<EltwiseBinaryType::ELWADD, BroadcastType::ROW>(in0_cb, in1_cb, in0_cb);
     } else {
         reconfig_data_format(in0_cb, in1_cb);
         add_bcast_rows_init_short(in0_cb, in1_cb);
@@ -90,7 +90,7 @@ void mul_block_inplace(uint32_t in0_cb, uint32_t in1_cb, uint32_t num_tiles) {
     // Postcondition: in0_cb has num_tiles produced
     // Postcondition: in1_cb has num_tiles produced
     reconfig_data_format(in0_cb, in1_cb);
-    mul_tiles_init();
+    mul_tiles_init(in0_cb, in1_cb);
     cb_wait_front(in0_cb, num_tiles);
     cb_wait_front(in1_cb, num_tiles);
     for (uint32_t i = 0; i < num_tiles; i++) {

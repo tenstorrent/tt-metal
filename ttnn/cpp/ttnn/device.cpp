@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/device.hpp"
-#include "tt_metal/impl/device/device_pool.hpp"
+#include <tt-metalium/device_pool.hpp>
 
 namespace ttnn {
 
@@ -29,7 +29,7 @@ void close_device(IDevice& device) { tt::DevicePool::instance().close_device(dev
 bool is_wormhole_or_blackhole(tt::ARCH arch) { return arch == tt::ARCH::WORMHOLE_B0 or arch == tt::ARCH::BLACKHOLE; }
 
 void deallocate_buffers(IDevice* device) {
-    device->push_work([device]() mutable { device->deallocate_buffers(); });
+    device->push_work([device]() mutable { device->allocator()->deallocate_buffers(); });
 }
 
 }  // namespace device

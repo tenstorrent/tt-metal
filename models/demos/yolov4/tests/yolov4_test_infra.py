@@ -109,6 +109,7 @@ class Yolov4TestInfra:
         self.weight_dtype = weight_dtype
         self.model_location_generator = model_location_generator
         self.ttnn_yolov4_model = TtYOLOv4(load_yolov4_weight(self.model_location_generator), device)
+
         torch_model = load_yolov4_model(self.ttnn_yolov4_model)
         input_shape = (1, 320, 320, 3)
         torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
@@ -119,7 +120,7 @@ class Yolov4TestInfra:
         self.ref_boxes, self.ref_confs = get_region_boxes([ref1, ref2, ref3])
 
     def run(self):
-        self.output_tensor = self.ttnn_yolov4_model(self.device, self.input_tensor)
+        self.output_tensor = self.ttnn_yolov4_model(self.input_tensor)
 
     def setup_l1_sharded_input(self, device, torch_input_tensor=None):
         if is_wormhole_b0():

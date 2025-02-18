@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <cstdint>
 #include <optional>
 
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
@@ -34,8 +35,11 @@ bool use_matmul_for_1x1_conv(
     uint32_t groups,
     const Conv2dConfig& conv_config);
 
-template <typename T>
-bool check_non_tile_mul_width(T* device, const Conv2dConfig& conv_config, const uint32_t in_channels);
+bool is_1d_deptwise_conv(
+    uint32_t groups, uint32_t input_channels, uint32_t output_channels, uint32_t kernel_width, uint32_t image_width);
+
+bool check_non_tile_mul_width(
+    const CoreCoord& compute_grid, const Conv2dConfig& conv_config, const uint32_t in_channels);
 
 bool check_non_tile_height(const Conv2dConfig& conv_config, const uint32_t out_channels);
 
@@ -52,6 +56,12 @@ sliding_window::ParallelConfig determine_parallel_config(
     bool is_out_tiled = true,
     bool is_non_tile_mul_shard_width = false,
     uint32_t act_block_h_override = 0);
+
+sliding_window::ParallelConfig determine_output_parallel_config(
+    const sliding_window::ParallelConfig& input_parallel_config,
+    const CoreCoord& compute_grid_size,
+    uint32_t out_channels,
+    bool is_mm_conv);
 
 sliding_window::ParallelConfig determine_output_parallel_config(
     const sliding_window::ParallelConfig& input_parallel_config,
@@ -89,7 +99,6 @@ OptimizedConvBlockConfig determine_per_core_conv_block_config(
     bool fp32_accum,
     bool split_reader_enabled);
 
-template <typename T>
 std::tuple<OptimizedConvParallelizationConfig, OptimizedConvBlockConfig, MemoryConfig> get_conv_configs(
     const Conv2dConfig& conv_config,
     const DeviceComputeKernelConfig& compute_config,
@@ -101,7 +110,7 @@ std::tuple<OptimizedConvParallelizationConfig, OptimizedConvBlockConfig, MemoryC
     uint32_t output_height,
     uint32_t output_width,
     std::array<uint32_t, 2> kernel_size,
-    T* device);
+    const CoreCoord& compute_grid);
 
 template <typename T>
 static std::tuple<ttnn::Shape, ttnn::MemoryConfig, bool, bool> get_conv_padded_input_shape_and_mem_config(
@@ -128,10 +137,15 @@ Conv2dConfig determine_conv_config_for_auto_shard(
     uint32_t output_height,
     uint32_t output_width,
     uint32_t weights_width,
+    uint32_t input_height,
     uint32_t input_width,
     const CoreCoord& compute_grid_size,
     Layout input_tensor_layout,
-    std::optional<const MemoryConfig> input_memory_config);
+    std::optional<const MemoryConfig> input_memory_config,
+    const std::array<uint32_t, 2>& kernel_size,
+    const uint32_t groups,
+    const bool enable_bias,
+    const DeviceComputeKernelConfig& compute_config);
 
 template <typename T>
 std::tuple<ttnn::Tensor, sliding_window::ParallelConfig, sliding_window::ParallelConfig, bool>

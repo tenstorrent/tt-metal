@@ -5,7 +5,7 @@
 #include "convert_to_chw_op.hpp"
 
 #include "convert_to_chw_program_factory.hpp"
-#include "tt_metal/common/constants.hpp"
+#include <tt-metalium/constants.hpp>
 
 namespace ttnn::operations::experimental::cnn {
 
@@ -39,7 +39,7 @@ std::vector<ttnn::TensorSpec> ConvertToCHW::compute_output_specs(const std::vect
     const auto B = shape[0];
     const auto HW = shape[2];
     const auto C = shape[3];
-    return {TensorSpec(SimpleShape({B, 1, C, HW}), TensorLayout(dtype, PageConfig(Layout::ROW_MAJOR), memory_config))};
+    return {TensorSpec(Shape({B, 1, C, HW}), TensorLayout(dtype, PageConfig(Layout::ROW_MAJOR), memory_config))};
 }
 
 operation::ProgramWithCallbacks ConvertToCHW::create_program(

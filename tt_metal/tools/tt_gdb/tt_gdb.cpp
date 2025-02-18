@@ -10,10 +10,12 @@
 #include <filesystem>
 #include <thread>
 
-#include "tt_metal/device.hpp"
+#include <device.hpp>
 #include "build_kernels_for_riscv/build_kernel_options.hpp"
 
 #include "tt_gdb.hpp"
+
+#include "llrt.hpp"
 
 using json = nlohmann::json;
 

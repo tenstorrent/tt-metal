@@ -5,11 +5,10 @@
 #include "unary_device_operation.hpp"
 
 #include <magic_enum/magic_enum.hpp>
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/tools/profiler/op_profiler.hpp"
+#include <tt-metalium/constants.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "tools/profiler/op_profiler.hpp"
 
 using namespace tt::tt_metal;
 
@@ -188,7 +187,7 @@ tensor_return_value_t UnaryDeviceOperation::create_output_tensors(
 tt::stl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
-    const auto& input_shape = input_tensor.legacy_shape();
+    const auto& input_shape = input_tensor.get_padded_shape();
 
     auto program_factory = select_program_factory(args, tensor_args);
     operation::Hash hash = operation::hash_operation<UnaryDeviceOperation>(
@@ -196,7 +195,7 @@ tt::stl::hash::hash_t UnaryDeviceOperation::compute_program_hash(
         program_factory.index(),
         input_tensor.dtype(),
         std::get<DeviceStorage>(input_tensor.storage()).memory_config(),
-        compute_volume(input_shape));
+        input_shape.volume());
 
     return hash;
 }

@@ -7,7 +7,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "cpp/pybind11/decorators.hpp"
 
 #include "concat.hpp"
 
@@ -52,7 +52,7 @@ Example:
                std::optional<ttnn::Tensor>& optional_output_tensor,
                std::optional<ttnn::MemoryConfig>& memory_config,
                const int groups,
-               uint8_t queue_id) {
+               QueueId queue_id) {
                 return self(queue_id, tensors, dim, memory_config, optional_output_tensor, groups);
             },
             py::arg("tensors"),
@@ -61,7 +61,7 @@ Example:
             py::arg("output_tensor").noconvert() = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("groups") = 1,
-            py::arg("queue_id") = 0,
+            py::arg("queue_id") = DefaultQueueId,
         });
 }
 

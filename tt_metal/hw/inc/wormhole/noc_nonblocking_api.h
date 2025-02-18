@@ -7,7 +7,7 @@
 #include <stdint.h>
 
 #include "noc_parameters.h"
-#include "dev_msgs.h"
+#include <dev_msgs.h>
 #include "noc_overlay_parameters.h"
 
 // Helper functions to convert NoC coordinates to NoC-0 coordinates, used in metal as "physical" coordinates.
@@ -138,7 +138,7 @@ inline __attribute__((always_inline)) bool ncrisc_noc_read_with_transaction_id_f
     return (NOC_STATUS_READ_REG(noc, NIU_MST_REQS_OUTSTANDING_ID(transcation_id)) == 0);
 }
 
-template <uint32_t proc_type, uint8_t noc_mode = DM_DEDICATED_NOC>
+template <uint32_t proc_type, uint8_t noc_mode = DM_DEDICATED_NOC, bool use_trid = false>
 inline __attribute__((always_inline)) void ncrisc_noc_fast_write(
     uint32_t noc,
     uint32_t cmd_buf,
@@ -150,11 +150,16 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write(
     bool linked,
     uint32_t num_dests,
     bool multicast_path_reserve,
-    bool posted = false) {
+    bool posted = false,
+    uint32_t trid = 0) {
     uint32_t noc_cmd_field =
         NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(vc) | (linked ? NOC_CMD_VC_LINKED : 0x0) |
         (mcast ? ((multicast_path_reserve ? NOC_CMD_PATH_RESERVE : 0) | NOC_CMD_BRCST_PACKET) : 0x0) |
         (posted ? 0 : NOC_CMD_RESP_MARKED);
+
+    if constexpr (use_trid) {
+        NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_PACKET_TAG, NOC_PACKET_TAG_TRANSACTION_ID(trid));
+    }
 
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_CTRL, noc_cmd_field);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_addr);
@@ -241,6 +246,11 @@ inline __attribute__((always_inline)) bool ncrisc_dynamic_noc_nonposted_writes_f
 
 inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_writes_flushed(uint32_t noc) {
     return (NOC_STATUS_READ_REG(noc, NIU_MST_WR_ACK_RECEIVED) == noc_nonposted_writes_acked[noc]);
+}
+
+inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_write_with_transaction_id_flushed(
+    uint32_t noc, uint32_t transcation_id) {
+    return (NOC_STATUS_READ_REG(noc, NIU_MST_WRITE_REQS_OUTGOING_ID(transcation_id)) == 0);
 }
 
 inline __attribute__((always_inline)) bool ncrisc_noc_nonposted_atomics_flushed(uint32_t noc) {
@@ -379,7 +389,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read_any_len(
     ncrisc_noc_fast_read(noc, cmd_buf, src_addr, dest_addr, len_bytes);
 }
 
-template <uint32_t proc_type, uint8_t noc_mode = DM_DEDICATED_NOC>
+template <uint32_t proc_type, uint8_t noc_mode = DM_DEDICATED_NOC, bool use_trid = false, bool one_packet = false>
 inline __attribute__((always_inline)) void ncrisc_noc_fast_write_any_len(
     uint32_t noc,
     uint32_t cmd_buf,
@@ -391,28 +401,43 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_any_len(
     bool linked,
     uint32_t num_dests,
     bool multicast_path_reserve,
-    bool posted = false) {
-    while (len_bytes > NOC_MAX_BURST_SIZE) {
-        while (!noc_cmd_buf_ready(noc, cmd_buf));
-        ncrisc_noc_fast_write<proc_type, noc_mode>(
-            noc,
-            cmd_buf,
-            src_addr,
-            dest_addr,
-            NOC_MAX_BURST_SIZE,
-            vc,
-            mcast,
-            linked,
-            num_dests,
-            multicast_path_reserve,
-            posted);
-        src_addr += NOC_MAX_BURST_SIZE;
-        dest_addr += NOC_MAX_BURST_SIZE;
-        len_bytes -= NOC_MAX_BURST_SIZE;
+    bool posted = false,
+    uint32_t trid = 0) {
+    if constexpr (!one_packet) {
+        while (len_bytes > NOC_MAX_BURST_SIZE) {
+            while (!noc_cmd_buf_ready(noc, cmd_buf));
+            ncrisc_noc_fast_write<proc_type, noc_mode, use_trid>(
+                noc,
+                cmd_buf,
+                src_addr,
+                dest_addr,
+                NOC_MAX_BURST_SIZE,
+                vc,
+                mcast,
+                linked,
+                num_dests,
+                multicast_path_reserve,
+                posted,
+                trid);
+            src_addr += NOC_MAX_BURST_SIZE;
+            dest_addr += NOC_MAX_BURST_SIZE;
+            len_bytes -= NOC_MAX_BURST_SIZE;
+        }
     }
     while (!noc_cmd_buf_ready(noc, cmd_buf));
-    ncrisc_noc_fast_write<proc_type, noc_mode>(
-        noc, cmd_buf, src_addr, dest_addr, len_bytes, vc, mcast, linked, num_dests, multicast_path_reserve, posted);
+    ncrisc_noc_fast_write<proc_type, noc_mode, use_trid>(
+        noc,
+        cmd_buf,
+        src_addr,
+        dest_addr,
+        len_bytes,
+        vc,
+        mcast,
+        linked,
+        num_dests,
+        multicast_path_reserve,
+        posted,
+        trid);
 }
 
 template <uint32_t proc_type, uint8_t noc_mode = DM_DEDICATED_NOC>

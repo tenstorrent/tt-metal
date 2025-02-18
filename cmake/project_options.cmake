@@ -5,7 +5,7 @@
 option(WITH_PYTHON_BINDINGS "Enables build of python bindings" ON)
 option(ENABLE_CODE_TIMERS "Enable code timers" OFF)
 option(ENABLE_TRACY "Enable Tracy Profiling" OFF)
-option(ENABLE_LIBCXX "Enable using libc++" ON)
+option(ENABLE_LIBCXX "Enable using libc++" OFF)
 option(ENABLE_BUILD_TIME_TRACE "Enable build time trace (Clang only -ftime-trace)" OFF)
 option(BUILD_SHARED_LIBS "Create shared libraries" ON)
 option(ENABLE_ASAN "Enable build with AddressSanitizer" OFF)
@@ -19,6 +19,8 @@ option(ENABLE_CCACHE "Build with compiler cache" FALSE)
 option(TT_UNITY_BUILDS "Build with Unity builds" ON)
 option(BUILD_TT_TRAIN "Enables build of tt-train" OFF)
 option(ENABLE_TTNN_SHARED_SUBLIBS "Use shared libraries for ttnn to speed up incremental builds" OFF)
+option(TT_ENABLE_LIGHT_METAL_TRACE "Enable Light Metal Trace" ON)
+option(ENABLE_COVERAGE "Enable code coverage instrumentation" OFF)
 
 ###########################################################################################
 

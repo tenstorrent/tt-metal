@@ -10,12 +10,11 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/sliding_window/reference_sliding_window.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/tensor/types.hpp"
 
 using std::vector;
-using tt::tt_metal::LegacyShape;
 using tt::tt_metal::Tensor;
 using namespace ttnn::operations::sliding_window;
 
@@ -374,29 +373,29 @@ int main() {
             .pad_hw = {tc.pad_h, tc.pad_w},
             .dilation_hw = {1, 1},
             .num_cores_nhw = tc.num_cores_nhw};
-        tt::tt_metal::LegacyShape input_tensor_shape = {
-            config.batch_size,
-            config.input_hw.first + 2 * config.pad_hw.first,
-            config.input_hw.second + 2 * config.pad_hw.second};
-        tt::tt_metal::LegacyShape output_tensor_shape = config.get_output_shape().value;
-        tt::tt_metal::LegacyShape filter_tensor_shape = {config.window_hw.first, config.window_hw.second};
+        ttnn::Shape input_tensor_shape(
+            {config.batch_size,
+             config.input_hw.first + 2 * config.pad_hw.first,
+             config.input_hw.second + 2 * config.pad_hw.second});
+        auto output_tensor_shape = config.get_output_shape();
+        ttnn::Shape filter_tensor_shape({config.window_hw.first, config.window_hw.second});
 
         Tensor input_padded_tensor =
-            ttnn::random::random(input_tensor_shape, DataType::BFLOAT16).to(Layout::ROW_MAJOR).cpu();
+            ttnn::random::random(input_tensor_shape, DataType::BFLOAT16).to_layout(Layout::ROW_MAJOR).cpu();
         Tensor filter_tensor =
-            ttnn::random::random(filter_tensor_shape, DataType::BFLOAT16).to(Layout::ROW_MAJOR).cpu();
+            ttnn::random::random(filter_tensor_shape, DataType::BFLOAT16).to_layout(Layout::ROW_MAJOR).cpu();
         auto input_padded_tensor_buf = owned_buffer::get_as<bfloat16>(input_padded_tensor);
         auto filter_tensor_buf = owned_buffer::get_as<bfloat16>(filter_tensor);
 
         vector<float> filter_vector = create_filter_vec(filter_tensor_buf, tc.filter_h, tc.filter_w);
         owned_buffer::Buffer<bfloat16> out_golden_tensor_buf = ref_conv_op(
             input_padded_tensor,
-            ttnn::Shape(input_tensor_shape),
+            input_tensor_shape,
             tc.stride_h,
             tc.stride_w,
             filter_vector,
-            ttnn::Shape(filter_tensor_shape),
-            ttnn::Shape(output_tensor_shape));
+            filter_tensor_shape,
+            output_tensor_shape);
 
         auto failed_tests = validate_generate_functions(
             device,

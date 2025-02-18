@@ -7,6 +7,7 @@ import json
 import importlib
 import os
 import pathlib
+import re
 from types import ModuleType
 
 from loguru import logger
@@ -58,7 +59,7 @@ def save_config_to_json_file(json_path):
     with open(json_path, "w") as f:
         normalized_config = {}
         for key in dir(CONFIG):
-            if "__" in key:
+            if re.match("^_.+_$", key):
                 continue
             value = getattr(CONFIG, key)
             if isinstance(value, pathlib.Path):
@@ -146,6 +147,7 @@ from ttnn.types import (
     TILE_LAYOUT,
     StorageType,
     DEVICE_STORAGE_TYPE,
+    MULTI_DEVICE_STORAGE_TYPE,
     CoreGrid,
     CoreRange,
     Shape,
@@ -329,3 +331,9 @@ import ttnn.graph
 
 if importlib.util.find_spec("torch") is not None:
     import ttnn.tracer
+
+from ttnn._ttnn.device import get_arch_name as _get_arch_name
+
+
+def get_arch_name():
+    return _get_arch_name()

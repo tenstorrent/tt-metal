@@ -4,7 +4,6 @@
 
 #include "interleaved_to_sharded_op.hpp"
 
-#include "tt_metal/host_api.hpp"
 
 #include "interleaved_to_sharded_program_factory.hpp"
 

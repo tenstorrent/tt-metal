@@ -7,12 +7,12 @@
 #include "upsample_op.hpp"
 #include "ttnn/operations/math.hpp"
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/common/math.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/math.hpp>
 
-#include "tt_metal/tt_stl/reflection.hpp"
+#include <tt-metalium/reflection.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -25,14 +25,14 @@ operation::ProgramWithCallbacks upsample_single_core(
     CoreRange core({0, 0}, {0, 0});
 
     tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input.get_dtype());
-    uint32_t input_unit_size = input.get_legacy_shape()[-1] * input.element_size();
+    uint32_t input_unit_size = input.get_padded_shape()[-1] * input.element_size();
     tt::DataFormat output_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.get_dtype());
-    uint32_t output_unit_size = output.get_legacy_shape()[-1] * output.element_size();
+    uint32_t output_unit_size = output.get_padded_shape()[-1] * output.element_size();
 
-    uint32_t output_num_units = output.volume() / output.get_legacy_shape()[-1];  // N*H*W for outout
-    uint32_t input_num_units = input.volume() / input.get_legacy_shape()[-1];     // N*H*W for input
+    uint32_t output_num_units = output.volume() / output.get_padded_shape()[-1];  // N*H*W for outout
+    uint32_t input_num_units = input.volume() / input.get_padded_shape()[-1];     // N*H*W for input
 
-    auto output_shape = output.get_legacy_shape();
+    auto output_shape = output.get_padded_shape();
     // This should allocate a DRAM buffer on the device
     tt_metal::IDevice* device = output.device();
 

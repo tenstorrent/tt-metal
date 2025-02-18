@@ -4,9 +4,9 @@
 
 #include "binary_op_utils.hpp"
 
-#include "tt_metal/common/assert.hpp"
+#include <tt-metalium/assert.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
-#include "ttnn/cpp/ttnn/tensor/types.hpp"
+#include "cpp/ttnn/tensor/types.hpp"
 
 using namespace tt::tt_metal;
 
@@ -107,7 +107,7 @@ std::map<std::string, std::string> get_defines(
             op_binary_type = "EltwiseBinaryType::ELWADD";
             defines.merge(get_defines(UnaryOpType::LOG2, std::nullopt, "0", idst));
             break;
-        default: TT_ASSERT(false && "Undefined op type");
+        default: TT_THROW("Undefined op type {}", op_type);
     }
 
     using DataType = tt::tt_metal::DataType;
@@ -138,10 +138,10 @@ std::map<std::string, std::string> get_defines(
          (input_dtype.value() == DataType::UINT16 && output_dtype.value() == DataType::BFLOAT4_B) ||
          (input_dtype.value() == DataType::BFLOAT4_B && output_dtype.value() == DataType::INT32) ||
          (input_dtype.value() == DataType::INT32 && output_dtype.value() == DataType::BFLOAT4_B))) {
-        TT_ASSERT(defines.count("SFPU_OP_CHAIN_0") == 0 && "SFPU_OP_CHAIN_0 already defined");
+        TT_ASSERT(defines.count("SFPU_OP_CHAIN_0") == 0, "SFPU_OP_CHAIN_0 already defined");
 
-        auto in_dataformat = std::to_string((uint32_t)datatype_to_dataformat_converter(input_dtype.value()));
-        auto out_dataformat = std::to_string((uint32_t)datatype_to_dataformat_converter(output_dtype.value()));
+        auto in_dataformat = (uint32_t)datatype_to_dataformat_converter(input_dtype.value());
+        auto out_dataformat = (uint32_t)datatype_to_dataformat_converter(output_dtype.value());
         defines.insert(
             {"SFPU_OP_CHAIN_0",
              fmt::format("typecast_tile_init(); typecast_tile<{0}u, {1}u>(i);", in_dataformat, out_dataformat)});

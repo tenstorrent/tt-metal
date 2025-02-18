@@ -3,9 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#include "impl/device/device.hpp"
-#include "impl/program/program.hpp"
+#include <device_impl.hpp>
+#include <program_impl.hpp>
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
+#include "tt_cluster.hpp"
 
 #define UNUSED_LOGICAL_CORE tt_cxy_pair(device_->id(), 0, 0)
 #define UNUSED_SEM_ID 0

@@ -4,10 +4,10 @@
 
 #include "repeat_interleave.hpp"
 
-#include "ttnn/cpp/ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
-#include "ttnn/cpp/ttnn/operations/data_movement/transpose/transpose.hpp"
-#include "ttnn/cpp/ttnn/operations/copy.hpp"
+#include "cpp/ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
+#include "cpp/ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
+#include "cpp/ttnn/operations/data_movement/transpose/transpose.hpp"
+#include "cpp/ttnn/operations/copy.hpp"
 
 namespace ttnn {
 namespace operations {
@@ -22,8 +22,9 @@ ttnn::Tensor ExecuteRepeatInterleave::invoke(
     if (repeat == 1) {
         return ttnn::to_memory_config(input_a, mem_config);
     }
-    uint32_t input_rank = input_a.get_shape().rank();
-    uint32_t normalized_dim = input_a.get_shape().get_normalized_index(dim);
+    const auto& input_a_shape = input_a.get_logical_shape();
+    uint32_t input_rank = input_a_shape.rank();
+    uint32_t normalized_dim = input_a_shape.get_normalized_index(dim);
     if (normalized_dim == input_rank - 1) {
         auto transposed_input = ttnn::transpose(input_a, -1, -2, mem_config);
         auto repeated_input = ExecuteRepeatInterleave::invoke(transposed_input, repeat, -2, mem_config);
@@ -37,10 +38,11 @@ ttnn::Tensor ExecuteRepeatInterleave::invoke(
     }
 
     rm_input = ttnn::to_layout(rm_input, Layout::ROW_MAJOR, std::nullopt, std::nullopt, (IDevice*)nullptr);
+    const auto& rm_input_shape = rm_input.get_logical_shape();
     SmallVector<uint32_t> final_shape;
     final_shape.reserve(input_rank);
-    for (uint32_t i = 0; i < rm_input.get_shape().rank(); i++) {
-        final_shape.push_back(rm_input.get_shape()[i]);
+    for (uint32_t i = 0; i < rm_input_shape.rank(); i++) {
+        final_shape.push_back(rm_input_shape[i]);
     }
 
     final_shape[normalized_dim] *= repeat;

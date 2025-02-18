@@ -5,11 +5,11 @@
 #include <cstdint>
 #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
-#include "tt_metal/common/work_split.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/host_api.hpp>
 
 using namespace tt::constants;
 
@@ -59,7 +59,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     tt_metal::IDevice* device = a.device();
     TT_FATAL(a.get_layout() == Layout::ROW_MAJOR, "Conv activation should be in row major layout");
     TT_FATAL(a.memory_config().is_sharded(), "Conv activation must be sharded.");
-    TT_FATAL(output_channels <= b.get_legacy_shape()[3], "Invalid weight shape. Incorrect weight tensor.");
+    TT_FATAL(output_channels <= b.get_padded_shape()[3], "Invalid weight shape. Incorrect weight tensor.");
     uint32_t act_block_h_ntiles = block_config.act_block_h_ntiles;
     uint32_t act_block_w_ntiles = block_config.act_block_w_ntiles;
     uint32_t weight_block_w_ntiles =
@@ -141,10 +141,10 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
 
     // Tensor b has weights and it should be tiled layout after converting conv weights into weight matrix
     TT_FATAL(b.get_layout() == Layout::TILE, "Conv weights should be in tiled layout");
-    TT_FATAL(b.get_legacy_shape()[0] == 1, "Conv weight matrix shape is invalid");
-    TT_FATAL(b.get_legacy_shape()[1] == 1, "Conv weight matrix shape is invalid");
-    uint32_t weight_matrix_height = b.get_legacy_shape()[2];
-    uint32_t weight_matrix_width = b.get_legacy_shape()[3];
+    TT_FATAL(b.get_padded_shape()[0] == 1, "Conv weight matrix shape is invalid");
+    TT_FATAL(b.get_padded_shape()[1] == 1, "Conv weight matrix shape is invalid");
+    uint32_t weight_matrix_height = b.get_padded_shape()[2];
+    uint32_t weight_matrix_width = b.get_padded_shape()[3];
     uint32_t weight_matrix_height_ntiles = weight_matrix_height / TILE_HEIGHT;
     uint32_t weight_matrix_width_ntiles = weight_matrix_width / TILE_WIDTH;
 
@@ -168,8 +168,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     const auto& p_config = parallelization_config;
     uint32_t num_cores_x = p_config.grid_size.x;
     uint32_t num_cores_y = p_config.grid_size.y;
-    TT_FATAL(num_cores_x < 13, "Error");
-    TT_FATAL(num_cores_y < 10, "Error");
     uint32_t per_core_out_matrix_height_ntiles =
         div_up(p_config.per_core_out_matrix_height, tt::constants::TILE_HEIGHT);
     uint32_t per_core_out_matrix_width_ntiles = div_up(p_config.per_core_out_matrix_width, tt::constants::TILE_WIDTH);
@@ -227,7 +225,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     // Compute the 2d matrix shape
     auto [act_matrix_shape, act_matrix_shape_unpadded] =
         optimized_conv_op_utils::compute_opt_conv_activation_as_mm_shape(
-            ashape_with_channels_padded.value,
+            ashape_with_channels_padded,
             sliding_window_config,
             parallelization_config.num_cores_nhw,
             out_block_h_ntiles);
@@ -739,10 +737,12 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         act_block_num_tiles_split,
         act_tile_size);
 
+    auto conv_reader_indices_buffer = conv_reader_indices.value().device_buffer();
+
     CircularBufferConfig cb_for_reader_indices_config =
         CircularBufferConfig(out_block_h_datums * 2, {{cb_for_reader_indices, tt::DataFormat::Float16_b}})
             .set_page_size(cb_for_reader_indices, out_block_h_datums * 2);
-    cb_for_reader_indices_config.set_globally_allocated_address(*conv_reader_indices.value().buffer());
+    cb_for_reader_indices_config.set_globally_allocated_address(*conv_reader_indices_buffer);
     auto cb_for_reader_indices_id = tt_metal::CreateCircularBuffer(program, all_cores, cb_for_reader_indices_config);
 
     if (has_bias) {
@@ -874,11 +874,13 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
              (uint32_t)(core_index < output_num_cores)});
     }
 
-    auto empty_callback = [](const void* operation,
-                             Program& program,
-                             const std::vector<Tensor>& input_tensors,
-                             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-                             const std::vector<Tensor>& output_tensors) {};
+    // Capture conv_reader_indices_buffer to cache this with the program
+    auto empty_callback = [conv_reader_indices_buffer](
+                              const void* operation,
+                              Program& program,
+                              const std::vector<Tensor>& input_tensors,
+                              const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+                              const std::vector<Tensor>& output_tensors) {};
     return {.program = std::move(program), .override_runtime_arguments_callback = empty_callback};
 }
 

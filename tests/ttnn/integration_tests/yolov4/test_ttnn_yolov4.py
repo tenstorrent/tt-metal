@@ -83,6 +83,7 @@ def test_yolov4(device, reset_seeds, model_location_generator):
     input_tensor = torch.permute(torch_input, (0, 2, 3, 1))
     ttnn_input = ttnn.from_torch(input_tensor, ttnn.bfloat16)
 
+
     torch_model = Yolov4()
 
     new_state_dict = {}

@@ -72,7 +72,7 @@ autograd::TensorPtr log_softmax_moreh(const autograd::TensorPtr& tensor, int dim
         ttnn::operations::moreh::moreh_softmax::MorehSoftmaxOp::LOGSOFTMAX,
         ttnn::operations::moreh::moreh_softmax::MorehSoftmaxOpParallelizationStrategy::NONE,
         /* output_mem_config */ std::nullopt,
-        /* compute_kernel_config */ core::ComputeKernelConfig::precise());
+        /* compute_kernel_config */ core::ComputeKernelConfig::softmax());
     auto out = autograd::create_tensor(log_softmax);
 
     autograd::GradFunction grad = [tensor, out, dim]() {
@@ -104,7 +104,7 @@ autograd::TensorPtr mean(const autograd::TensorPtr& tensor) {
         std::nullopt,
         /* device_compute_kernel_config */ core::ComputeKernelConfig::precise());
     autograd::GradFunction grad = [tensor, out]() {
-        auto resulting_shape = tensor->get_value().get_shape();
+        auto resulting_shape = tensor->get_value().get_logical_shape();
         auto res = ttnn::moreh_mean_backward(
             out->get_grad(),
             std::nullopt,
@@ -122,7 +122,7 @@ autograd::TensorPtr mean(const autograd::TensorPtr& tensor) {
 }
 
 autograd::TensorPtr broadcast_batch(const autograd::TensorPtr& tensor, uint32_t new_batch_dim) {
-    if (new_batch_dim == 1 || tensor->get_value().shape()[0] == new_batch_dim) {
+    if (new_batch_dim == 1 || tensor->get_value().get_logical_shape()[0] == new_batch_dim) {
         return tensor;
     }
     auto out = ttml::autograd::create_tensor();
