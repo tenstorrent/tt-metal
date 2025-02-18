@@ -18,5 +18,7 @@ inline __attribute__((always_inline)) void risc_context_switch() {
 #endif
 }
 
+inline __attribute__((always_inline)) void risc_context_switch_without_noc_sync() { rtos_context_switch_ptr(); }
+
 inline __attribute__((always_inline)) void disable_erisc_app() { flag_disable[0] = 0; }
 }  // namespace internal_

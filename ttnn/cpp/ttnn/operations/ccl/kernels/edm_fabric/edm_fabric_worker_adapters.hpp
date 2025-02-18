@@ -121,11 +121,18 @@ struct WorkerToFabricEdmSenderImpl {
         num_buffers_per_channel(num_buffers_per_channel),
         last_buffer_index(num_buffers_per_channel - 1),
         edm_noc_x(edm_worker_x),
-        edm_noc_y(edm_worker_y) {
+        edm_noc_y(edm_worker_y),
+        edm_noc_cmd_buf(write_reg_cmd_buf) {
+        setup_edm_noc_cmd_buf(write_reg_cmd_buf);
         ASSERT(buffer_size_bytes > 0);
         if constexpr (USER_DEFINED_NUM_BUFFER_SLOTS) {
             ASSERT(num_buffers_per_channel == EDM_NUM_BUFFER_SLOTS);
         }
+    }
+
+    FORCE_INLINE void setup_edm_noc_cmd_buf(uint8_t cmd_buf) const {
+        uint64_t edm_noc_addr = get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0);
+        noc_async_write_one_packet_with_trid_set_state(edm_noc_addr, cmd_buf);
     }
 
     FORCE_INLINE bool edm_has_space_for_packet() const {
@@ -278,6 +285,8 @@ struct WorkerToFabricEdmSenderImpl {
     uint8_t edm_noc_x;
     uint8_t edm_noc_y;
 
+    uint8_t edm_noc_cmd_buf;
+
 private:
 
     FORCE_INLINE void update_edm_buffer_slot_wrptr() {
@@ -339,12 +348,13 @@ private:
     }
     template <ttnn::ccl::EDM_IO_BLOCKING_MODE blocking_mode>
     FORCE_INLINE void send_payload_from_address_with_trid_impl(uint32_t source_address, size_t size_bytes, uint8_t trid) {
-        uint64_t buffer_address = this->compute_dest_buffer_slot_noc_addr();
+        // uint64_t buffer_address = this->compute_dest_buffer_slot_noc_addr();
 
         ASSERT(size_bytes <= this->buffer_size_bytes);
         ASSERT(tt::fabric::is_valid(*const_cast<tt::fabric::PacketHeader*>(
             reinterpret_cast<volatile tt::fabric::PacketHeader*>(source_address))));
-        send_chunk_from_address_with_trid<blocking_mode>(source_address, 1, size_bytes, buffer_address, trid);
+        send_chunk_from_address_with_trid<blocking_mode>(source_address, 1, size_bytes, this->edm_buffer_addr, trid, this->edm_noc_cmd_buf);
+        // send_chunk_from_address_with_trid<blocking_mode>(source_address, 1, size_bytes, buffer_address, trid, this->edm_noc_cmd_buf);
         post_send_payload_increment_pointers();
     }
 
