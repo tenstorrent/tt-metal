@@ -17,8 +17,9 @@ namespace ttnn::operations::binary {
 namespace utils {
     bool is_binary_sfpu_op(BinaryOpType val, DataType a, DataType b) {
     switch (val) {
-        case BinaryOpType::ADD: return ((a == DataType::FLOAT32 && b == DataType::FLOAT32) || (a == DataType::INT32 && b == DataType::INT32));
+        case BinaryOpType::ADD:
         case BinaryOpType::SUB:
+            return ((a == DataType::FLOAT32 && b == DataType::FLOAT32) || (a == DataType::INT32 && b == DataType::INT32));
         case BinaryOpType::MUL:
         case BinaryOpType::DIV_FAST:
         case BinaryOpType::RSUB:
