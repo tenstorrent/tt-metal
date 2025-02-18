@@ -2,31 +2,26 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#pragma once
-
-#include "ttnn/decorators.hpp"
+#include "ttnn/operations/generic/generic_op/generic_op.hpp"
+#include "device/generic_op_device_operation.hpp"
 
 namespace ttnn::operations::generic {
-
-struct GenericOpDeviceOperation {
-    struct operation_attributes_t;
-};
 
 struct GenericOp {
     static Tensor invoke(
         QueueId queue_id,
         const Tensor& input_tensor,
         const GenericOpDeviceOperation::operation_attributes_t& operation_attributes,
-        const std::vector<Tensor>& io_tensors = {});
+        const std::vector<Tensor>& io_tensors = {}) {
+        return ttnn::prim::generic(queue_id, input_tensor, operation_attributes, io_tensors);
+    }
 
     static Tensor invoke(
         const Tensor& input_tensor,
         const GenericOpDeviceOperation::operation_attributes_t& operation_attributes,
-        const std::vector<Tensor>& io_tensors = {});
+        const std::vector<Tensor>& io_tensors = {}) {
+        return invoke(0, input_tensor, operation_attributes, io_tensors);
+    }
 };  // struct GenericOp
 
-}   // namespace ttnn::operations::generic
-
-namespace ttnn {
-constexpr auto generic_op = ttnn::register_operation<"ttnn::generic_op", ttnn::operations::generic::GenericOp>();
-}  // namespace ttnn
+}  // namespace ttnn::operations::generic
