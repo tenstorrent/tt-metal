@@ -30,7 +30,7 @@ namespace ccl {
 
 
 struct FabricEriscDatamoverConfig {
-    static constexpr bool constrain_to_power_of_2_buffer_slot_clunts = true;
+    static constexpr bool constrain_to_power_of_2_buffer_slot_counts = true;
 
     static constexpr std::size_t field_size = 16;
     static constexpr std::size_t buffer_alignment = 32;
