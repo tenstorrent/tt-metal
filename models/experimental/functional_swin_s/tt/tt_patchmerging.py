@@ -37,7 +37,7 @@ class TtPatchMerging:
         self.parameters = parameters
 
     def __call__(self, x):
-        _, H, W, _ = x.get_legacy_shape()
+        _, H, W, _ = x.shape  # get_legacy_shape()
         x = ttnn.pad(
             x, x.shape, [0, 0, 0, 0], 0
         )  # This is not needed(check on this) x = F.pad(x, (0, 0, 0, W % 2, 0, H % 2)) , No difference in shape
@@ -61,14 +61,14 @@ class TtPatchMerging:
                     strategy=ttnn.ShardStrategy.HEIGHT,
                     orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 ),
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat16,
             )
 
             x = ttnn.linear(
                 x,
                 self.parameters.reduction["weight"],
                 memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat16,
                 compute_kernel_config=ttnn.WormholeComputeKernelConfig(
                     math_fidelity=ttnn.MathFidelity.LoFi,
                 ),
@@ -83,13 +83,13 @@ class TtPatchMerging:
                     strategy=ttnn.ShardStrategy.BLOCK,
                     orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 ),
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat16,
             )
             x = ttnn.linear(
                 x,
                 self.parameters.reduction["weight"],
                 memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat16,
                 compute_kernel_config=ttnn.WormholeComputeKernelConfig(
                     math_fidelity=ttnn.MathFidelity.LoFi,
                 ),
@@ -99,7 +99,7 @@ class TtPatchMerging:
             x = ttnn.linear(
                 x,
                 self.parameters.reduction["weight"],
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat16,
                 compute_kernel_config=ttnn.WormholeComputeKernelConfig(
                     math_fidelity=ttnn.MathFidelity.LoFi,
                 ),

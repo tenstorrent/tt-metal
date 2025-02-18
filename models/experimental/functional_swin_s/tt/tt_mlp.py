@@ -112,7 +112,7 @@ class TtMLP:
                         strategy=ttnn.ShardStrategy.HEIGHT,
                         orientation=ttnn.ShardOrientation.ROW_MAJOR,
                     ),
-                    dtype=ttnn.bfloat8_b,
+                    dtype=ttnn.bfloat16,
                 )
 
                 x = ttnn.linear(
@@ -120,7 +120,7 @@ class TtMLP:
                     self.parameters[0].weight,
                     bias=self.parameters[0].bias,
                     memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
-                    dtype=ttnn.bfloat8_b,
+                    dtype=ttnn.bfloat16,
                     compute_kernel_config=ttnn.WormholeComputeKernelConfig(
                         math_fidelity=ttnn.MathFidelity.LoFi,
                     ),
@@ -136,7 +136,7 @@ class TtMLP:
                         strategy=ttnn.ShardStrategy.HEIGHT,
                         orientation=ttnn.ShardOrientation.ROW_MAJOR,
                     ),
-                    dtype=ttnn.bfloat8_b,
+                    dtype=ttnn.bfloat16,
                 )
 
                 x = ttnn.linear(
@@ -144,7 +144,7 @@ class TtMLP:
                     self.parameters[0].weight,
                     bias=self.parameters[0].bias,
                     memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
-                    dtype=ttnn.bfloat8_b,
+                    dtype=ttnn.bfloat16,
                     compute_kernel_config=ttnn.WormholeComputeKernelConfig(
                         math_fidelity=ttnn.MathFidelity.LoFi,
                     ),
@@ -224,7 +224,7 @@ class TtMLP:
                     strategy=ttnn.ShardStrategy.HEIGHT,
                     orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 ),
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat16,
             )
 
             x = ttnn.linear(
@@ -232,7 +232,7 @@ class TtMLP:
                 self.parameters[3].weight,
                 bias=self.parameters[3].bias,
                 memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat16,
                 compute_kernel_config=ttnn.WormholeComputeKernelConfig(
                     math_fidelity=ttnn.MathFidelity.LoFi,
                 ),
@@ -247,7 +247,7 @@ class TtMLP:
                     strategy=ttnn.ShardStrategy.HEIGHT,
                     orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 ),
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat16,
             )
 
             x = ttnn.linear(
@@ -255,7 +255,7 @@ class TtMLP:
                 self.parameters[3].weight,
                 bias=self.parameters[3].bias,
                 memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG,
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat16,
                 compute_kernel_config=ttnn.WormholeComputeKernelConfig(
                     math_fidelity=ttnn.MathFidelity.LoFi,
                 ),
@@ -270,14 +270,14 @@ class TtMLP:
                     strategy=ttnn.ShardStrategy.BLOCK,
                     orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 ),
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat16,
             )
             x = ttnn.linear(
                 x,
                 self.parameters[3].weight,
                 bias=self.parameters[3].bias,
                 memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat16,
                 compute_kernel_config=ttnn.WormholeComputeKernelConfig(
                     math_fidelity=ttnn.MathFidelity.LoFi,
                 ),
@@ -300,7 +300,7 @@ class TtMLP:
                 self.parameters[3].weight,
                 bias=self.parameters[3].bias,
                 # memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat16,
                 core_grid=ttnn.CoreGrid(y=8, x=8),
                 compute_kernel_config=ttnn.WormholeComputeKernelConfig(
                     math_fidelity=ttnn.MathFidelity.LoFi,

@@ -89,6 +89,7 @@ class SwinTransformer(nn.Module):
         self.features = nn.Sequential(*layers)
 
         num_features = embed_dim * 2 ** (len(depths) - 1)
+        print("Norm num_features:", num_features)
         self.norm = norm_layer(num_features)
         self.permute = Permute([0, 3, 1, 2])  # B H W C -> B C H W
         self.avgpool = nn.AdaptiveAvgPool2d(1)
