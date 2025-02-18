@@ -315,15 +315,15 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     if (is_large_kernel) {
         reader_kernel_fname =
             "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/dataflow/"
-            "reader_max_pool_2d_multi_core_sharded_with_halo_large_kernel_v2.cpp";
+            "reader_pool_2d_multi_core_sharded_with_halo_large_kernel_v2.cpp";
     } else if (is_wide_reduction) {
         reader_kernel_fname =
             "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/dataflow/"
-            "reader_max_pool_2d_multi_core_sharded_with_halo_wide.cpp";
+            "reader_pool_2d_multi_core_sharded_with_halo_wide.cpp";
     } else {
         reader_kernel_fname =
             "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/dataflow/"
-            "reader_max_pool_2d_multi_core_sharded_with_halo_v2.cpp";
+            "reader_pool_2d_multi_core_sharded_with_halo_v2.cpp";
     }
 
     auto reader0_config = DataMovementConfig{
@@ -368,10 +368,10 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     std::string compute_kernel_fname;
     if (is_large_kernel) {
         compute_kernel_fname =
-            "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/compute/max_pool_multi_core_large_kernel.cpp";
+            "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/compute/pool_2d_multi_core_large_kernel.cpp";
     } else {
         // both regular and wide reductions
-        compute_kernel_fname = "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/compute/max_pool_multi_core.cpp";
+        compute_kernel_fname = "ttnn/cpp/ttnn/operations/pool/generic/device/kernels/compute/pool_2d_multi_core.cpp";
     }
 
     auto compute_kernel = CreateKernel(program, compute_kernel_fname, core_range, compute_config);
