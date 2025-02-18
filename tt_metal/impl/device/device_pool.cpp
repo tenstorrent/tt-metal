@@ -260,7 +260,7 @@ void DevicePool::initialize(
     _inst->init_firmware_on_active_devices();
 
     tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true, target_mmio_ids);
-    _inst->wait_for_fabric_gatekeeper_sync();
+    _inst->wait_for_fabric_master_router_sync();
     _inst->init_profiler_devices();
 }
 
@@ -413,28 +413,25 @@ void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
     }
 }
 
-void DevicePool::wait_for_fabric_gatekeeper_sync() const {
+void DevicePool::wait_for_fabric_master_router_sync() const {
     if (this->fabric_setting == detail::FabricSetting::FABRIC) {
-        for (const auto& dev : this->get_all_active_devices()) {
-            // TODO: this sync should be part of init_fabric, but was seeing hangs when doing a local sync
-            // Wait for gatekeeper to sync
-            std::uint32_t gatekeeper_sync_addr =
-                get_gatekeeper_interface_addr(dev) + tt::tt_fabric::GATEKEEPER_INFO_SYNC_OFFSET;
-            auto fabric_gatekeeper_core = dispatch_core_manager::instance().fabric_gatekeeper(dev->id());
-            auto gatekeeper_logical_core = CoreCoord(fabric_gatekeeper_core.x, fabric_gatekeeper_core.y);
-            auto gatekeeper_virtual_core = dev->virtual_core_from_logical_core(
-                gatekeeper_logical_core, dispatch_core_manager::instance().get_dispatch_core_type(dev->id()));
+        std::vector<uint32_t> master_router_terminate(1, 0);
+        auto fabric_router_sync_sem_addr =
+            hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
 
+        std::vector<std::uint32_t> master_router_status{0};
+        for (const auto& dev : this->get_all_active_devices()) {
+            auto fabric_master_router_core = *dev->get_active_ethernet_cores().begin();  // TODO: get this from a
+                                                                                         // manager
             std::uint32_t num_routers = dev->get_active_ethernet_cores().size();
-            std::vector<std::uint32_t> gk_status{0};
-            while (gk_status[0] != num_routers) {
+            while (master_router_status[0] != num_routers) {
                 tt_metal::detail::ReadFromDeviceL1(
                     dev,
-                    gatekeeper_logical_core,
-                    gatekeeper_sync_addr,
+                    fabric_master_router_core,
+                    fabric_router_sync_sem_addr,
                     4,
-                    gk_status,
-                    dispatch_core_manager::instance().get_dispatch_core_type(dev->id()));
+                    master_router_status,
+                    CoreType::ETH);
             }
         }
     }
@@ -642,17 +639,14 @@ void DevicePool::close_devices(const std::vector<IDevice*>& devices) {
 
     // Terminate fabric gatekeeper
     if (this->fabric_setting == detail::FabricSetting::FABRIC) {
-        std::vector<uint32_t> gk_terminate(12, 0);
+        std::vector<uint32_t> master_router_terminate(1, 0);
+        auto fabric_router_sync_sem_addr =
+            hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
         for (const auto& dev : devices) {
-            auto fabric_gatekeeper_core = dispatch_core_manager::instance().fabric_gatekeeper(dev->id());
-            auto gatekeeper_logical_core = CoreCoord(fabric_gatekeeper_core.x, fabric_gatekeeper_core.y);
-            std::uint32_t gatekeeper_terminate_addr = get_gatekeeper_interface_addr(dev);
+            auto fabric_master_router_core = *dev->get_active_ethernet_cores().begin();  // TODO: get this from a
+                                                                                         // manager
             tt_metal::detail::WriteToDeviceL1(
-                dev,
-                gatekeeper_logical_core,
-                gatekeeper_terminate_addr,
-                gk_terminate,
-                dispatch_core_manager::instance().get_dispatch_core_type(dev->id()));
+                dev, fabric_master_router_core, fabric_router_sync_sem_addr, master_router_terminate, CoreType::ETH);
         }
     }
     tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false);

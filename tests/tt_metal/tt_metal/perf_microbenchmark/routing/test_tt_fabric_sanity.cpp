@@ -134,12 +134,6 @@ typedef struct test_board {
             throw std::runtime_error("Odd number of chips detected, not supported currently");
         }
 
-        // gatekeeper - run on idle ethernet for n300/T3K
-        if (("n300" == board_type_) || ("t3k" == board_type_)) {
-            run_gk_on_idle_ethernet = true;
-            dispatch_core_type = tt::tt_metal::DispatchCoreType::ETH;
-        }
-
         if (metal_fabric_init_level != 0) {
             tt::tt_metal::detail::InitializeFabricSetting(tt::tt_metal::detail::FabricSetting::FABRIC);
         }

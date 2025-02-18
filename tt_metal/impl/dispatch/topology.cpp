@@ -752,17 +752,6 @@ void configure_dispatch_cores(IDevice* device) {
     }
 }
 
-std::uint32_t get_gatekeeper_interface_addr(IDevice* device) {
-    std::uint32_t gatekeeper_routing_table_addr;
-    if (dispatch_core_manager::instance().get_dispatch_core_type(device->id()) == CoreType::ETH) {
-        gatekeeper_routing_table_addr =
-            hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
-    } else {
-        gatekeeper_routing_table_addr = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
-    }
-    return gatekeeper_routing_table_addr + sizeof(tt_fabric::fabric_router_l1_config_t) * 4;
-};
-
 std::unique_ptr<Program> create_and_compile_fabric_program(IDevice* device) {
     auto fabric_program_ptr = std::make_unique<Program>();
     constexpr uint32_t default_tunneler_queue_size_bytes = 0x8000;  // maximum queue (power of 2)
@@ -773,40 +762,7 @@ std::unique_ptr<Program> create_and_compile_fabric_program(IDevice* device) {
     constexpr uint32_t default_test_results_addr = 0x100000;
     constexpr uint32_t default_test_results_size = 0x40000;
 
-    auto fabric_gatekeeper_core = dispatch_core_manager::instance().fabric_gatekeeper(device->id());
-
-    CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
-    bool gatekeeper_on_idle_eth_core =
-        dispatch_core_manager::instance().get_dispatch_core_type(device->id()) == CoreType::ETH;
-
-    uint32_t programmable_core_type_index =
-        (dispatch_core_type == CoreType::WORKER)
-            ? hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)
-            : hal.get_programmable_core_type_index(HalProgrammableCoreType::IDLE_ETH);
-
-    auto gatekeeper_logical_core = CoreCoord(fabric_gatekeeper_core.x, fabric_gatekeeper_core.y);
-    auto gatekeeper_virtual_core = device->virtual_core_from_logical_core(gatekeeper_logical_core, dispatch_core_type);
-    auto gatekeeper_noc_encoding = tt_metal::hal.noc_xy_encoding(gatekeeper_virtual_core.x, gatekeeper_virtual_core.y);
-
-    std::uint32_t gatekeeper_routing_table_addr;
-    if (gatekeeper_on_idle_eth_core) {
-        gatekeeper_routing_table_addr =
-            hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
-    } else {
-        gatekeeper_routing_table_addr = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
-    }
-    std::uint32_t gatekeeper_interface_addr = get_gatekeeper_interface_addr(device);
-    std::uint32_t socket_info_addr = gatekeeper_interface_addr + tt_fabric::GATEKEEPER_INFO_SIZE_BYTES;
-
     std::uint32_t num_routers = device->get_active_ethernet_cores().size();  // TODO: should get this from control plane
-
-    // create router kernels
-    std::vector<uint32_t> router_compile_args = {
-        (default_tunneler_queue_size_bytes >> 4),  // 0: rx_queue_size_words
-        default_tunneler_test_results_addr,        // 1: test_results_addr
-        default_tunneler_test_results_size,        // 2: test_results_size
-        0,                                         // timeout_mcycles * 1000 * 1000 * 4, // 3: timeout_cycles
-    };
 
     std::map<string, string> router_defines = {};
 
@@ -816,15 +772,29 @@ std::unique_ptr<Program> create_and_compile_fabric_program(IDevice* device) {
     std::uint32_t router_mask = 0;
     for (const auto& router_logical_core : device->get_active_ethernet_cores()) {
         router_mask += 0x1 << router_logical_core.y;
-        const auto& router_physical_core = device->ethernet_core_from_logical_core(router_logical_core);
-        // setup runtime args
-        std::vector<uint32_t> router_runtime_args = {
-            num_routers,                // 0: number of active fabric routers
-            /*router_mask*/ 0,          // 1: active fabric router mask, should be unused by kernels
-            gatekeeper_interface_addr,  // 2: gk_message_addr_l
-            gatekeeper_noc_encoding,    // 3: gk_message_addr_h
-        };
+    }
 
+    auto master_router_chan = (*device->get_active_ethernet_cores().begin()).y;
+    // setup runtime args
+    std::vector<uint32_t> router_runtime_args = {
+        num_routers,         // 0: number of active fabric routers
+        router_mask,         // 1: active fabric router mask
+        master_router_chan,  // 2: master router channel
+    };
+
+    // create router kernels
+    std::vector<uint32_t> router_compile_args = {
+        (default_tunneler_queue_size_bytes >> 4),  // 0: rx_queue_size_words
+        default_tunneler_test_results_addr,        // 1: test_results_addr
+        default_tunneler_test_results_size,        // 2: test_results_size
+        0,                                         // timeout_mcycles * 1000 * 1000 * 4, // 3: timeout_cycles
+        0,                                         // 4: is_master_router
+    };
+
+    for (const auto& router_logical_core : device->get_active_ethernet_cores()) {
+        if (master_router_chan == router_logical_core.y) {
+            router_compile_args[4] = 1;
+        }
         auto kernel = tt_metal::CreateKernel(
             *fabric_program_ptr,
             "tt_metal/fabric/impl/kernels/tt_fabric_router.cpp",
@@ -835,47 +805,6 @@ std::unique_ptr<Program> create_and_compile_fabric_program(IDevice* device) {
         tt_metal::SetRuntimeArgs(*fabric_program_ptr, kernel, router_logical_core, router_runtime_args);
     }
 
-    // create gatekeeper kernel
-    std::map<string, string> gatekeeper_defines = {};
-    std::vector<uint32_t> gatekeeper_runtime_args = {
-        num_routers,  // 0: number of active fabric routers
-        router_mask,  // 1: active fabric router mask
-    };
-
-    std::vector<uint32_t> gatekeeper_compile_args = {
-        gatekeeper_interface_addr,      // 0: gk info addr
-        socket_info_addr,               // 1:
-        gatekeeper_routing_table_addr,  // 2:
-        default_test_results_addr,      // 3: test_results_addr
-        default_test_results_size,      // 4: test_results_size
-        0,                              // 5: timeout_cycles
-    };
-
-    KernelHandle kernel;
-
-    if (gatekeeper_on_idle_eth_core) {
-        kernel = tt_metal::CreateKernel(
-            *fabric_program_ptr,
-            "tt_metal/fabric/impl/kernels/tt_fabric_gatekeeper.cpp",
-            {gatekeeper_logical_core},
-            tt_metal::EthernetConfig{
-                .eth_mode = Eth::IDLE,
-                .noc = tt_metal::NOC::NOC_0,
-                .compile_args = gatekeeper_compile_args,
-                .defines = gatekeeper_defines});
-    } else {
-        kernel = tt_metal::CreateKernel(
-            *fabric_program_ptr,
-            "tt_metal/fabric/impl/kernels/tt_fabric_gatekeeper.cpp",
-            {gatekeeper_logical_core},
-            tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_0,
-                .noc = tt_metal::NOC::RISCV_0_default,
-                .compile_args = gatekeeper_compile_args,
-                .defines = gatekeeper_defines});
-    }
-
-    tt_metal::SetRuntimeArgs(*fabric_program_ptr, kernel, gatekeeper_logical_core, gatekeeper_runtime_args);
     detail::CompileProgram(device, *fabric_program_ptr, /*fd_bootloader_mode=*/true);
     return fabric_program_ptr;
 }
@@ -890,19 +819,6 @@ void configure_fabric_cores(IDevice* device) {
         detail::WriteToDeviceL1(
             device, router_logical_core, fabric_router_sync_sem_addr, router_zero_buf, CoreType::ETH);
     }
-
-    std::uint32_t gatekeeper_interface_addr = get_gatekeeper_interface_addr(device);
-    std::vector<uint32_t> gatekeeper_zero_buf(12, 0);
-    auto fabric_gatekeeper_core = dispatch_core_manager::instance().fabric_gatekeeper(device->id());
-    CoreCoord gatekeeper_logical_core = CoreCoord(fabric_gatekeeper_core.x, fabric_gatekeeper_core.y);
-    auto gatekeeper_virtual_core = device->virtual_core_from_logical_core(
-        gatekeeper_logical_core, dispatch_core_manager::instance().get_dispatch_core_type(device->id()));
-    detail::WriteToDeviceL1(
-        device,
-        gatekeeper_logical_core,
-        gatekeeper_interface_addr,
-        gatekeeper_zero_buf,
-        dispatch_core_manager::instance().get_dispatch_core_type(device->id()));
 }
 
 }  // namespace tt::tt_metal

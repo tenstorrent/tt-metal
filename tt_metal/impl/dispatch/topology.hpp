@@ -35,8 +35,6 @@ std::unique_ptr<tt::tt_metal::Program> create_and_compile_cq_program(tt::tt_meta
 // Perform additional configuration (writing to specific L1 addresses, etc.) for FD kernels on this device.
 void configure_dispatch_cores(tt::tt_metal::IDevice* device);
 
-std::uint32_t get_gatekeeper_interface_addr(tt::tt_metal::IDevice* device);
-
 // Compile fabric kernels needed to support scaleout systems.
 std::unique_ptr<tt::tt_metal::Program> create_and_compile_fabric_program(tt::tt_metal::IDevice* device);
 
