@@ -24,10 +24,12 @@ constexpr uint32_t fvc_data_buf_size_bytes = fvc_data_buf_size_words * PACKET_WO
 constexpr uint32_t kernel_status_buf_addr_arg = get_compile_time_arg_val(1);
 constexpr uint32_t kernel_status_buf_size_bytes = get_compile_time_arg_val(2);
 constexpr uint32_t timeout_cycles = get_compile_time_arg_val(3);
+constexpr bool is_master = get_compile_time_arg_val(4);
 uint32_t sync_val;
 uint32_t router_mask;
-uint32_t gk_message_addr_l;
-uint32_t gk_message_addr_h;
+uint32_t master_router_chan;
+uint64_t xy_local_addr;
+bool terminated_slave_routers = false;
 
 // careful, may be null
 tt_l1_ptr uint32_t* const kernel_status = reinterpret_cast<tt_l1_ptr uint32_t*>(kernel_status_buf_addr_arg);
@@ -35,16 +37,23 @@ tt_l1_ptr volatile chan_req_buf* fvc_consumer_req_buf =
     reinterpret_cast<tt_l1_ptr chan_req_buf*>(FABRIC_ROUTER_REQ_QUEUE_START);
 volatile tt_l1_ptr fabric_router_l1_config_t* routing_table =
     reinterpret_cast<tt_l1_ptr fabric_router_l1_config_t*>(eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE);
-uint64_t xy_local_addr;
+
+volatile uint32_t* sync_sem_addr = (volatile uint32_t*)FABRIC_ROUTER_SYNC_SEM;
 
 #define SWITCH_THRESHOLD 0x3FFF
 
-inline void notify_gatekeeper() {
-    // send semaphore increment to gatekeeper on this device.
+inline void wait_for_sem(uint32_t value) {
+    while (*sync_sem_addr != value) {
+        // context switch while waiting to allow slow dispatch traffic to go through
+        internal_::risc_context_switch();
+    }
+}
+
+inline void notify_master_router() {
+    // send semaphore increment to master router on this device.
     // semaphore notifies all other routers that this router has completed
     // startup handshake with its ethernet peer.
-    uint64_t dest_addr =
-        (((uint64_t)gk_message_addr_h << 32) | gk_message_addr_l) + offsetof(gatekeeper_info_t, router_sync);
+    uint64_t dest_addr = get_noc_addr_helper(eth_chan_to_noc_xy[noc_index][master_router_chan], FABRIC_ROUTER_SYNC_SEM);
     noc_fast_atomic_increment<DM_DYNAMIC_NOC>(
         noc_index,
         NCRISC_AT_CMD_BUF,
@@ -55,27 +64,31 @@ inline void notify_gatekeeper() {
         false,
         false,
         MEM_NOC_ATOMIC_RET_VAL_ADDR);
+}
 
-    volatile uint32_t* sync_sem_addr = (volatile uint32_t*)FABRIC_ROUTER_SYNC_SEM;
-    // wait for all device routers to have incremented the sync semaphore.
-    // sync_val is equal to number of tt-fabric routers running on a device.
-    while (*sync_sem_addr != sync_val) {
-        // context switch while waiting to allow slow dispatch traffic to go through
-        internal_::risc_context_switch();
+inline void notify_slave_routers(uint32_t notification) {
+    uint32_t remaining_cores = router_mask;
+    for (uint32_t i = 0; i < 16; i++) {
+        if (remaining_cores == 0) {
+            break;
+        }
+        if ((remaining_cores & (0x1 << i)) && (master_router_chan != i)) {
+            uint64_t dest_addr = get_noc_addr_helper(eth_chan_to_noc_xy[noc_index][i], FABRIC_ROUTER_SYNC_SEM);
+            noc_inline_dw_write(dest_addr, notification);
+            remaining_cores &= ~(0x1 << i);
+        }
     }
 }
 
 void kernel_main() {
+    tt_fabric_init();
     fvc_producer_state_t fvc_producer_state;
     rtos_context_switch_ptr = (void (*)())RtosTable[0];
 
     uint32_t rt_args_idx = 0;
     sync_val = get_arg_val<uint32_t>(rt_args_idx++);
     router_mask = get_arg_val<uint32_t>(rt_args_idx++);
-    gk_message_addr_l = get_arg_val<uint32_t>(rt_args_idx++);
-    gk_message_addr_h = get_arg_val<uint32_t>(rt_args_idx++);
-
-    tt_fabric_init();
+    master_router_chan = get_arg_val<uint32_t>(rt_args_idx++);
 
     write_kernel_status(kernel_status, TT_FABRIC_STATUS_INDEX, TT_FABRIC_STATUS_STARTED);
     write_kernel_status(kernel_status, TT_FABRIC_MISC_INDEX, 0xff000000);
@@ -112,7 +125,19 @@ void kernel_main() {
         return;
     }
 
-    notify_gatekeeper();
+    if constexpr (is_master) {
+        // wait for all device routers to have incremented the sync semaphore.
+        // sync_val is equal to number of tt-fabric routers running on a device.
+        wait_for_sem(sync_val - 1);
+        notify_slave_routers(sync_val);
+        // increment the sync sem to signal host that handshake is complete
+        *sync_sem_addr += 1;
+    } else {
+        notify_master_router();
+        // wait for the signal from the master router
+        wait_for_sem(sync_val);
+    }
+
     uint64_t start_timestamp = get_timestamp();
 
     write_kernel_status(kernel_status, TT_FABRIC_MISC_INDEX, 0xff000001);
@@ -176,7 +201,13 @@ void kernel_main() {
             internal_::risc_context_switch();
         }
         if (*(volatile uint32_t*)FABRIC_ROUTER_SYNC_SEM == 0) {
-            // terminate signal from host sw.
+            // terminate signal from host sw
+            if constexpr (is_master) {
+                if (!terminated_slave_routers) {
+                    notify_slave_routers(0);
+                    terminated_slave_routers = true;
+                }
+            }
             if (loop_count >= 0x1000) {
                 break;
             }
