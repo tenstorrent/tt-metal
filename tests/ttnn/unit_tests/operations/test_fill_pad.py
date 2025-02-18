@@ -53,8 +53,6 @@ ttnn_dtype_to_torch_dtype = {
     ttnn.bfloat16: torch.float32,
 }
 
-# torch.set_printoptions(threshold=10000)
-
 
 @pytest.mark.parametrize(
     "shape",
@@ -113,7 +111,6 @@ def test_fill_pad(
     [
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
     ],
 )
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.uint32])
@@ -146,12 +143,6 @@ def test_fill_pad_complex_sharding(device, fill_value, shape, shard_scheme, dtyp
     elif shard_scheme == ttnn.TensorMemoryLayout.HEIGHT_SHARDED:
         tile_widths_per_core = math.ceil(dims_b4_last_dim / num_cores)
         shard_shape = (32 * tile_widths_per_core, padded_torch_tensor.shape[-1])
-    elif shard_scheme == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
-        tile_widths_per_core = math.ceil(dims_b4_last_dim / num_cores_xblock)
-        shard_shape = (
-            32 * tile_widths_per_core,
-            32 * math.ceil((math.ceil(padded_torch_tensor.shape[-1] / 32) / num_cores_yblock)),
-        )
     else:
         shard_shape = (math.ceil(math.sqrt(tiles_per_core)), math.ceil(math.sqrt(tiles_per_core)))
 

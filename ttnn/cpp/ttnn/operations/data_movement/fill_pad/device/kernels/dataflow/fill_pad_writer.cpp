@@ -102,4 +102,5 @@ void kernel_main() {
     for (uint32_t t = 0; t < num_2d_tensors; t++) {
         fill_pad_2d_tensor(t * tiles_per_2d_tensor + starting_tile_offset);
     }
+    noc_async_write_barrier();
 }
