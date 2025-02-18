@@ -351,6 +351,7 @@ void kernel_main() {
     zero_l1_buf((uint32_t*)&packet_header, sizeof(packet_header_t));
 
     // initalize client
+    tt_fabric_init();
     fabric_endpoint_init(client_interface, gk_interface_addr_l, gk_interface_addr_h);
     routing_table = reinterpret_cast<tt_l1_ptr fabric_router_l1_config_t*>(
         client_interface->routing_tables_l1_offset + sizeof(fabric_router_l1_config_t) * routing_plane);

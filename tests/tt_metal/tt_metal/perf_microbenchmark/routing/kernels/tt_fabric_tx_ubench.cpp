@@ -66,7 +66,6 @@ constexpr uint32_t s_depth = get_compile_time_arg_val(27);
 volatile tt_l1_ptr fabric_client_interface_t* client_interface =
     (volatile tt_l1_ptr fabric_client_interface_t*)client_interface_addr;
 
-uint64_t xy_local_addr;
 uint32_t target_address;
 uint32_t noc_offset;
 uint32_t controller_noc_offset;
