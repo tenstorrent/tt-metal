@@ -37,6 +37,12 @@ on:
       os:
         required: false
         type: string
+      build-artifact-name:
+        required: true
+        type: string
+      wheel-artifact-name:
+        required: true
+        type: string
 
 jobs:
   profiler-regression:
@@ -79,11 +85,19 @@ jobs:
       - name: ⬇️ Download Build
         uses: actions/download-artifact@v4
         with:
-          name: TTMetal_build_any_profiler
+          name: ${{ inputs.build-artifact-name }}
           path: docker-job
       - name: Extract files
         run: tar -xvf ttm_any.tar
-      - uses: ./.github/actions/install-python-deps
+      - name: ⬇️ Download Wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.wheel-artifact-name }}
+          path: docker-job
+      - name: Install Wheel
+        run: |
+          WHEEL_FILENAME=$(ls -1 *.whl)
+          pip3 install $WHEEL_FILENAME
       - name: Run profiler regression tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
