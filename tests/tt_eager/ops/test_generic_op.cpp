@@ -30,7 +30,6 @@ using tt::tt_metal::IDevice;
 
 using tt::tt_metal::Layout;
 using tt::tt_metal::OwnedStorage;
-using Shape = tt::tt_metal::LegacyShape;
 using tt::tt_metal::Tensor;
 
 namespace detail {
@@ -61,7 +60,7 @@ Tensor host_function(const Tensor& input_tensor) {
 
     return Tensor(
         OwnedStorage{output_buffer},
-        input_tensor.get_legacy_shape(),
+        input_tensor.get_logical_shape(),
         input_tensor.get_dtype(),
         input_tensor.get_layout());
 }
@@ -77,7 +76,11 @@ Tensor host_function(const Tensor& input_tensor_a, const Tensor& input_tensor_b)
         auto value = BinaryFunction{}(input_a_buffer[index].to_float(), input_b_buffer[index].to_float());
         output_buffer[index] = bfloat16(value);
     }
-    return Tensor(OwnedStorage{output_buffer}, input_tensor_a.get_legacy_shape(), input_tensor_a.get_dtype(), input_tensor_a.get_layout());
+    return Tensor(
+        OwnedStorage{output_buffer},
+        input_tensor_a.get_logical_shape(),
+        input_tensor_a.get_dtype(),
+        input_tensor_a.get_layout());
 }
 
 template <ttnn::operations::unary::UnaryOpType unary_op_type, typename... Args>
@@ -181,7 +184,7 @@ bool run_test(IDevice* device, const Shape& shape, float low, float high, Args..
 //             .at(0);
 //     output_tensor = output_tensor.cpu();
 
-//     auto output_shape = output_tensor.get_legacy_shape();
+//     auto output_shape = output_tensor.get_logical_shape();
 //     TT_FATAL(output_shape == tt::tt_metal::Shape(padded_input_shape));
 //     TT_FATAL(output_shape.without_padding() == tt::tt_metal::Shape(input_shape));
 
@@ -840,8 +843,9 @@ void test_numerically() {
                 block_width = mem_config.shard_spec.value().shape[1] / TILE_WIDTH;
                 block_size = block_width * block_height;
                 end_core = (*mem_config.shard_spec.value().grid.ranges().begin()).end_coord;
-                output_width = device_output_tensor.get_legacy_shape()[-1] / TILE_WIDTH;
-                uint32_t output_height = device_output_tensor.volume() / device_output_tensor.get_legacy_shape()[-1] / TILE_HEIGHT;
+                output_width = device_output_tensor.get_logical_shape()[-1] / TILE_WIDTH;
+                uint32_t output_height =
+                    device_output_tensor.volume() / device_output_tensor.get_logical_shape()[-1] / TILE_HEIGHT;
                 last_unpadded_block_height = block_height - (tt::round_up(output_height, block_height) - output_height);
                 last_unpadded_block_width = block_width - (tt::round_up(output_width, block_width) - output_width);
             }
@@ -929,7 +933,7 @@ void test_numerically() {
 
         auto input_tensor = ttnn::unsqueeze_to_4D(input_tensor_generic);
 
-        const auto shape = input_tensor.get_legacy_shape();
+        const auto shape = input_tensor.get_logical_shape();
         uint32_t W = shape[-1], H = (input_tensor.volume() / (shape[0] * shape[-1])), NC = shape[0];
         uint32_t HW = H*W;
 
@@ -947,7 +951,7 @@ void test_numerically() {
 
         uint32_t mask_H = H;
         if (mask.has_value()) {
-            mask_H = mask.value().get_legacy_shape()[2];
+            mask_H = mask.value().get_logical_shape()[2];
         }
         uint32_t mask_Ht = mask_H/TILE_HEIGHT;
 
@@ -1027,7 +1031,8 @@ void test_numerically() {
             reader_compile_time_args.push_back(mask_is_dram);
         }
         if (causal_mask) {
-            uint32_t num_tiles_causal_mask = mask.value().get_legacy_shape()[-1] * mask.value().get_legacy_shape()[-2] / TILE_WIDTH / TILE_HEIGHT;
+            uint32_t num_tiles_causal_mask =
+                mask.value().get_logical_shape()[-1] * mask.value().get_logical_shape()[-2] / TILE_WIDTH / TILE_HEIGHT;
             reader_compile_time_args.push_back(num_tiles_causal_mask);
         }
 
@@ -1226,7 +1231,7 @@ void test_numerically() {
         a = a.to(Layout::TILE).to(device);
         b = b.to(Layout::TILE).to(device);
 
-        const auto& ashape = a.get_legacy_shape(), bshape = b.get_legacy_shape();
+        const auto &ashape = a.get_logical_shape(), bshape = b.get_logical_shape();
 
         Shape output_shape = Shape{B_original, 1, Mt_original*TILE_HEIGHT, Nt_original*TILE_WIDTH};
         auto output = tt::tt_metal::create_device_tensor(
@@ -1249,7 +1254,7 @@ void test_numerically() {
 
         // This should allocate a DRAM buffer on the device
         tt::tt_metal::Device *device = a.device();
-        Shape cshape = output.get_legacy_shape(); // C=A*B, N1MK*11KN->N1MN
+        Shape cshape = output.get_logical_shape();  // C=A*B, N1MK*11KN->N1MN
 
         auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
         uint32_t num_cores_x = compute_with_storage_grid_size.x;
