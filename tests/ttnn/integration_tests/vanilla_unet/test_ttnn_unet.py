@@ -61,12 +61,14 @@ def create_custom_preprocessor(device):
                 dtype=ttnn.bfloat16,
             )
 
-            # for i in range(4,0,-1):
-            #     parameters[f"upconv{i}"]={}
-            #     parameters[f"upconv{i}"]["weight"] = ttnn.from_torch(getattr(model,f"upconv{i}").weight, dtype=ttnn.bfloat8_b,layout=ttnn.TILE_LAYOUT)
-            #     parameters[f"upconv{i}"]["bias"] = ttnn.from_torch(
-            #         torch.reshape(getattr(model,f"upconv{i}").bias, (1, 1, 1, -1)), dtype=ttnn.bfloat8_b,layout=ttnn.TILE_LAYOUT
-            #         )
+            for i in range(4, 1, -1):
+                parameters[f"upconv{i}"] = {}
+                parameters[f"upconv{i}"]["weight"] = ttnn.from_torch(
+                    getattr(model, f"upconv{i}").weight, dtype=ttnn.bfloat16
+                )
+                parameters[f"upconv{i}"]["bias"] = ttnn.from_torch(
+                    torch.reshape(getattr(model, f"upconv{i}").bias, (1, 1, 1, -1)), dtype=ttnn.bfloat16
+                )
 
             for i in range(4, 0, -1):
                 parameters[f"decoder{i}"] = {}
@@ -110,7 +112,7 @@ def create_custom_preprocessor(device):
     return custom_preprocessor
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @skip_for_grayskull()
 def test_unet(device, reset_seeds, model_location_generator):
     state_dict = torch.load(
@@ -121,8 +123,8 @@ def test_unet(device, reset_seeds, model_location_generator):
 
     reference_model = UNet()
 
-    for layer in reference_model.children():
-        print(layer)
+    # for layer in reference_model.children():
+    #     print(layer)
 
     new_state_dict = {}
     keys = [name for name, parameter in reference_model.state_dict().items()]
@@ -145,10 +147,11 @@ def test_unet(device, reset_seeds, model_location_generator):
     ttnn_input_tensor = ttnn.from_torch(torch_input_tensor.permute(0, 2, 3, 1), device=device, dtype=ttnn.bfloat16)
 
     ttnn_output = ttnn_model(device, ttnn_input_tensor)
+    print("test")
 
-    # ttnn_output = ttnn.from_device(ttnn_output)
-    # ttnn_output = ttnn.to_layout(ttnn_output, ttnn.ROW_MAJOR_LAYOUT)
-    # ttnn_output = ttnn.to_torch(ttnn_output)
+    print(ttnn_output.shape, torch_output_tensor.shape)
+    ttnn_output = ttnn.to_torch(ttnn_output)
     ttnn_output = ttnn_output.permute(0, 3, 1, 2)
+    ttnn_output = ttnn_output.reshape(torch_output_tensor.shape)
 
     assert_with_pcc(torch_output_tensor, ttnn_output, pcc=1.0)
