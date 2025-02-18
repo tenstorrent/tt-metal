@@ -20,6 +20,7 @@
 #include "umd/device/tt_soc_descriptor.h"
 #include "fmt/base.h"
 #include <reflection.hpp>
+#include "lightmetal/host_api_capture_helpers.hpp"
 
 #include "tracy/Tracy.hpp"
 
@@ -296,6 +297,7 @@ std::shared_ptr<Buffer> Buffer::create(
     const std::optional<ShardSpecBuffer>& shard_parameters,
     const std::optional<bool> bottom_up,
     const std::optional<SubDeviceId> sub_device_id) {
+    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     auto* bufferPtr = new Buffer(
         device,
         size,
@@ -330,6 +332,9 @@ std::shared_ptr<Buffer> Buffer::create(
         }
     });
 
+    LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureBufferCreate, buffer, device, std::nullopt, size,
+        page_size, buffer_type, buffer_layout, shard_parameters, bottom_up, sub_device_id);
+
     return buffer;
 }
 
@@ -343,6 +348,7 @@ std::shared_ptr<Buffer> Buffer::create(
     const std::optional<ShardSpecBuffer>& shard_parameters,
     const std::optional<bool> bottom_up,
     const std::optional<SubDeviceId> sub_device_id) {
+    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     // Not using a custom deleter, because it doesn't own any data to cleanup
     auto buffer = std::make_shared<Buffer>(
         device,
@@ -359,6 +365,9 @@ std::shared_ptr<Buffer> Buffer::create(
 
     buffer->address_ = address;
     buffer->allocation_status_.store(AllocationStatus::ALLOCATED, std::memory_order::relaxed);
+
+    LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureBufferCreate, buffer, device, address, size,
+        page_size, buffer_type, buffer_layout, shard_parameters, bottom_up, sub_device_id);
 
     return buffer;
 }

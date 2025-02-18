@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "flatbuffer/buffer_types_to_flatbuffer.hpp"
+#include "flatbuffer/program_types_to_flatbuffer.hpp"
 #include "lightmetal/lightmetal_capture.hpp"  // For LightMetalCaptureContext
 
 namespace tt::tt_metal {
@@ -73,6 +74,56 @@ flatbuffers::Offset<flatbuffer::CircularBufferConfig> to_flatbuffer(
         config.dynamic_cb(),
         config.max_size(),
         config.buffer_size());
+}
+
+// TODO: Opportunity to share with TTNN. This was straight up copied from tensor_types_to_flatbuffer.cpp
+
+flatbuffer::ShardOrientation to_flatbuffer(ShardOrientation orientation) {
+    switch (orientation) {
+        case ShardOrientation::ROW_MAJOR: return flatbuffer::ShardOrientation::RowMajor;
+        case ShardOrientation::COL_MAJOR: return flatbuffer::ShardOrientation::ColMajor;
+    }
+    TT_THROW("Unsupported ShardOrientation to flatbuffer.");
+}
+
+flatbuffer::ShardMode to_flatbuffer(ShardMode shard_mode) {
+    switch (shard_mode) {
+        case ShardMode::LOGICAL: return flatbuffer::ShardMode::Logical;
+        case ShardMode::PHYSICAL: return flatbuffer::ShardMode::Physical;
+    }
+    TT_THROW("Unsupported ShardMode to flatbuffer.");
+}
+
+flatbuffers::Offset<flatbuffer::ShardSpec> to_flatbuffer(
+    const ShardSpec& spec, flatbuffers::FlatBufferBuilder& builder) {
+    flatbuffers::Offset<flatbuffer::ShardShape> physical_shard_shape = 0;
+    if (spec.physical_shard_shape.has_value()) {
+        const auto& phys_shape = *spec.physical_shard_shape;
+        physical_shard_shape = flatbuffer::CreateShardShape(builder, phys_shape[0], phys_shape[1]);
+    }
+    return flatbuffer::CreateShardSpec(
+        builder,
+        to_flatbuffer(builder, spec.grid),
+        spec.shape[0],
+        spec.shape[1],
+        to_flatbuffer(spec.orientation),
+        to_flatbuffer(spec.mode),
+        physical_shard_shape);
+}
+
+flatbuffers::Offset<flatbuffer::ShardSpecBuffer> to_flatbuffer(
+    const std::optional<ShardSpecBuffer>& shard_parameters, ::flatbuffers::FlatBufferBuilder& builder) {
+    if (!shard_parameters.has_value()) {
+        return 0;
+    }
+
+    return flatbuffer::CreateShardSpecBuffer(
+        builder,
+        to_flatbuffer(shard_parameters->tensor_shard_spec, builder),
+        shard_parameters->page_shape[0],
+        shard_parameters->page_shape[1],
+        shard_parameters->tensor2d_shape_in_pages[0],
+        shard_parameters->tensor2d_shape_in_pages[1]);
 }
 
 }  // namespace tt::tt_metal
