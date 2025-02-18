@@ -106,8 +106,8 @@ def create_custom_preprocessor(device):
 
             parameters["norm"] = {}
             parameters["head"] = {}
-            parameters["norm"]["weight"] = preprocess_layernorm_parameter(torch_model.norm.weight, dtype=ttnn.bfloat8_b)
-            parameters["norm"]["bias"] = preprocess_layernorm_parameter(torch_model.norm.bias, dtype=ttnn.bfloat8_b)
+            parameters["norm"]["weight"] = preprocess_layernorm_parameter(torch_model.norm.weight, dtype=ttnn.bfloat16)
+            parameters["norm"]["bias"] = preprocess_layernorm_parameter(torch_model.norm.bias, dtype=ttnn.bfloat16)
             parameters["head"]["weight"] = preprocess_linear_weight(torch_model.head.weight, dtype=ttnn.bfloat8_b)
             parameters["head"]["bias"] = preprocess_linear_bias(torch_model.head.bias, dtype=ttnn.bfloat8_b)
 
@@ -128,6 +128,7 @@ def test_swin_s_transformer(device, reset_seeds):
 
     torch_model.load_state_dict(state_dict)
     torch_model.eval()
+    print(torch_model)
 
     # Input tensor for testing
     torch_input_tensor = torch.randn(1, 3, 512, 512)  # Sample input tensor
@@ -152,7 +153,13 @@ def test_swin_s_transformer(device, reset_seeds):
     )
 
     # Convert input tensor to TTNN format
-    input_tensor = ttnn.from_torch(torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
 
     # Apply TTNN model
     output_tensor = ttnn_model(input_tensor)
@@ -162,5 +169,5 @@ def test_swin_s_transformer(device, reset_seeds):
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(
-        torch_output_tensor, output_tensor, pcc=0.82
+        torch_output_tensor, output_tensor, pcc=0.99  # pcc=0.82
     )  # The drop starts as we use shard MM in patch_mergig & mlp sub_module sub_module

@@ -25,14 +25,14 @@ def create_custom_preprocessor(device):
         if isinstance(torch_model, MLP):
             parameters[0] = {}
             parameters[3] = {}
-            parameters[0]["weight"] = preprocess_linear_weight(torch_model[0].weight, dtype=ttnn.bfloat8_b)
-            parameters[0]["bias"] = preprocess_linear_bias(torch_model[0].bias, dtype=ttnn.bfloat8_b)
-            parameters[3]["weight"] = preprocess_linear_weight(torch_model[3].weight, dtype=ttnn.bfloat8_b)
-            parameters[3]["bias"] = preprocess_linear_bias(torch_model[3].bias, dtype=ttnn.bfloat8_b)
+            parameters[0]["weight"] = preprocess_linear_weight(torch_model[0].weight, dtype=ttnn.bfloat16)
+            parameters[0]["bias"] = preprocess_linear_bias(torch_model[0].bias, dtype=ttnn.bfloat16)
+            parameters[3]["weight"] = preprocess_linear_weight(torch_model[3].weight, dtype=ttnn.bfloat16)
+            parameters[3]["bias"] = preprocess_linear_bias(torch_model[3].bias, dtype=ttnn.bfloat16)
             if torch.layer_norm in torch_model:
                 parameters[1] = {}
-                parameters[1]["weight"] = preprocess_layernorm_parameter(torch_model[1].weight, dtype=ttnn.bfloat8_b)
-                parameters[1]["bias"] = preprocess_layernorm_parameter(torch_model[1].bias, dtype=ttnn.bfloat8_b)
+                parameters[1]["weight"] = preprocess_layernorm_parameter(torch_model[1].weight, dtype=ttnn.bfloat16)
+                parameters[1]["bias"] = preprocess_layernorm_parameter(torch_model[1].bias, dtype=ttnn.bfloat16)
         return parameters
 
     return custom_preprocessor
