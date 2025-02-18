@@ -5,21 +5,29 @@
 #pragma once
 
 #include "ttnn/decorators.hpp"
+#include <unordered_map>
 
 namespace ttnn::operations::generic {
 
-struct operation_attributes_t;
+enum CBIndex : std::uint8_t;
+struct circular_buffer_attributes_t;
+struct data_movement_attributes_t;
+struct compute_attributes_t;
 
 struct GenericOp {
     static Tensor invoke(
         QueueId queue_id,
-        const Tensor& input_tensor,
-        const operation_attributes_t& operation_attributes,
+        const std::vector<ttnn::Tensor>& input_tensors,
+        const std::unordered_map<tt::CBIndex, circular_buffer_attributes_t>&,
+        const std::vector<compute_attributes_t>&,
+        const std::vector<data_movement_attributes_t>&,
         const std::vector<Tensor>& io_tensors = {});
 
     static Tensor invoke(
-        const Tensor& input_tensor,
-        const operation_attributes_t& operation_attributes,
+        const std::vector<ttnn::Tensor>& input_tensors,
+        const std::unordered_map<tt::CBIndex, circular_buffer_attributes_t>&,
+        const std::vector<compute_attributes_t>&,
+        const std::vector<data_movement_attributes_t>&,
         const std::vector<Tensor>& io_tensors = {});
 };  // struct GenericOp
 
