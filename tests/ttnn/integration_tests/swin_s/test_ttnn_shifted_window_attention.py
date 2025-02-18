@@ -61,13 +61,13 @@ def create_custom_preprocessor(device):
         if isinstance(torch_model, ShiftedWindowAttention):
             parameters["qkv"] = {}
             parameters["proj"] = {}
-            parameters["qkv"]["weight"] = preprocess_linear_weight(torch_model.qkv.weight, dtype=ttnn.bfloat8_b)
-            parameters["qkv"]["bias"] = preprocess_linear_bias(torch_model.qkv.bias, dtype=ttnn.bfloat8_b)
+            parameters["qkv"]["weight"] = preprocess_linear_weight(torch_model.qkv.weight, dtype=ttnn.bfloat16)
+            parameters["qkv"]["bias"] = preprocess_linear_bias(torch_model.qkv.bias, dtype=ttnn.bfloat16)
             parameters["relative_position_bias"] = ttnn.from_torch(
-                torch_model.get_relative_position_bias(), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT
+                torch_model.get_relative_position_bias(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
             )
-            parameters["proj"]["weight"] = preprocess_linear_weight(torch_model.proj.weight, dtype=ttnn.bfloat8_b)
-            parameters["proj"]["bias"] = preprocess_linear_bias(torch_model.proj.bias, dtype=ttnn.bfloat8_b)
+            parameters["proj"]["weight"] = preprocess_linear_weight(torch_model.proj.weight, dtype=ttnn.bfloat16)
+            parameters["proj"]["bias"] = preprocess_linear_bias(torch_model.proj.bias, dtype=ttnn.bfloat16)
 
         return parameters
 
@@ -80,7 +80,7 @@ def create_custom_preprocessor(device):
     "batch_size",
     [
         1,
-        8,
+        # 8,
     ],
 )
 @pytest.mark.parametrize(

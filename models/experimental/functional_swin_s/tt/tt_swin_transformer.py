@@ -69,6 +69,7 @@ class TtSwinTransformer:
             if i_stage != 7:
                 self.layers.append(self.downsample_layer(device, parameters["features"][i_stage + 1], dim))
             index += 1
+            # print("self.layers: \n", self.layers[0])
 
         self.flatten = nn.Flatten(1)
 
@@ -92,13 +93,19 @@ class TtSwinTransformer:
             )
         else:
             pass
+        # print("self.layers: \n", self.layers[3])
+        # print("Total layers: ", len(self.layers))
 
-        for i_stage in range(len(self.layers)):
+        for i_stage in range(7):  # len(self.layers)
+            # print("i_stage: ", i_stage)
             if i_stage % 2 == 0:
                 for j in range(len(self.layers[i_stage])):
                     x = self.layers[i_stage][j](x)
+                    # if i_stage == 4:
+                    #     torch.save(ttnn.to_torch(x), f"tests/ttnn/integration_tests/swin_s/outputs/ttnn/ttnn_output_stage4_{j}")
             else:
                 x = self.layers[i_stage](x)
+
         if self.norm_layer is None:
             x = ttnn.layer_norm(
                 x, weight=self.parameters.norm.weight, bias=self.parameters.norm.bias

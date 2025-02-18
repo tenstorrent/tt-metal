@@ -47,12 +47,12 @@ class TtShiftedWindowAttention(nn.Module):
 
         x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
         x = ttnn.from_device(x)
-        B, H, W, C = x.get_legacy_shape()
+        B, H, W, C = x.shape  # get_legacy_shape()
         pad_r = (self.window_size[1] - W % self.window_size[1]) % self.window_size[1]
         pad_b = (self.window_size[0] - H % self.window_size[0]) % self.window_size[0]
         pad_values = (0, 0, 0, pad_r, 0, pad_b)
         x = fallback_ops.pad(x, pad_values)  # check this 6 side padding
-        _, pad_H, pad_W, _ = x.get_legacy_shape()
+        _, pad_H, pad_W, _ = x.shape  # get_legacy_shape()
 
         self.shift_size = self.shift_size.copy()
         # If window size is larger than feature size, there is no need to shift window

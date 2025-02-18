@@ -89,6 +89,7 @@ class SwinTransformer(nn.Module):
         self.features = nn.Sequential(*layers)
 
         num_features = embed_dim * 2 ** (len(depths) - 1)
+        print("Norm num_features:", num_features)
         self.norm = norm_layer(num_features)
         self.permute = Permute([0, 3, 1, 2])  # B H W C -> B C H W
         self.avgpool = nn.AdaptiveAvgPool2d(1)
@@ -102,12 +103,27 @@ class SwinTransformer(nn.Module):
         #             nn.init.zeros_(m.bias)
 
     def forward(self, x):
-        x = self.features(x)
-        x = self.norm(x)
+        # x = self.features(x)  # PCC: 0.9585471512955952
+        x = self.features[0](x)  # PCC: 0.99 (Conv, permute, norm)
+        x = self.features[1](x)  # PCC: 0.99
+        x = self.features[2](x)  # PCC: 0.99
+        x = self.features[3](x)  # PCC: 0.99
+        x = self.features[4](x)  # PCC: 0.9892166798942761
+        # x = self.features[5](x) # PCC: 0.7916543115170744
+        for i in range(len(self.features[5])):
+            print("i:", i)
+            print("each layer:", self.features[5][i])
+            x = self.features[5][i](x)
+            # torch.save(x, f"tests/ttnn/integration_tests/swin_s/outputs/torch/torch_output_stage4_{i}")
+
+        x = self.features[6](x)  # PCC: 0.91805555666799
+        x = self.features[7](x)  # PCC: 0.9585471512955952
+
+        x = self.norm(x)  # PCC: 0.7161977099395083
 
         x = self.permute(x)
         x = self.avgpool(x)
 
         x = self.flatten(x)
         x = self.head(x)
-        return x
+        return x  # PCC: 0.8473307418423793

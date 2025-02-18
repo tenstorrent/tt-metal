@@ -128,6 +128,7 @@ def test_swin_s_transformer(device, reset_seeds):
 
     torch_model.load_state_dict(state_dict)
     torch_model.eval()
+    # print(torch_model)
 
     # Input tensor for testing
     torch_input_tensor = torch.randn(1, 3, 512, 512)  # Sample input tensor
@@ -162,5 +163,5 @@ def test_swin_s_transformer(device, reset_seeds):
     output_tensor = ttnn.to_torch(output_tensor)
 
     assert_with_pcc(
-        torch_output_tensor, output_tensor, pcc=0.82
+        torch_output_tensor, output_tensor, pcc=0.99  # pcc=0.82
     )  # The drop starts as we use shard MM in patch_mergig & mlp sub_module sub_module
