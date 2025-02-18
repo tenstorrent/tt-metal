@@ -21,6 +21,13 @@ on:
           - creation.zeros.zeros
           - creation.empty.empty
           - creation.zeros_like.zeros_like
+          - eltwise.unary.add.add_unary
+          - eltwise.unary.subtract.subtract_unary
+          - eltwise.unary.div_no_nan.div_no_nan_unary
+          - eltwise.unary.eq.eq
+          - eltwise.unary.eq.eq_
+          - eltwise.unary.ne.ne
+          - eltwise.unary.ne.ne_
           - eltwise.unary.cos.cos_sharded
           - eltwise.unary.cosh.cosh_sharded
           - eltwise.unary.deg2rad.deg2rad_sharded
