@@ -211,7 +211,11 @@ std::vector<IDevice*> MeshDevice::get_devices() const { return view_->get_device
 
 // TODO: Remove this function once we have a proper view interface
 IDevice* MeshDevice::get_device(size_t row_idx, size_t col_idx) const {
-    return this->get_device_index(row_idx * num_cols() + col_idx);
+    return get_device(MeshCoordinate{row_idx, col_idx});
+}
+
+IDevice* MeshDevice::get_device(const MeshCoordinate& coord) const {
+    return this->get_device_index(to_linear_index(SimpleMeshShape(mesh_shape_), coord));
 }
 
 MeshCommandQueue& MeshDevice::mesh_command_queue(std::size_t cq_id) const {
