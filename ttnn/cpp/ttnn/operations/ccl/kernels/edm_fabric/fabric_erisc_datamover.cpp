@@ -925,9 +925,9 @@ void run_fabric_edm_main_loop(
                 return;
             }
         }
-
+        bool did_something = false;
+        for (size_t i = 0; i < 32; i++) {
         // Capture these to see if we made progress
-        auto old_recv_state = receiver_state;
 
         // There are some cases, mainly for performance, where we don't want to switch between sender channels
         // so we interoduce this to provide finer grain control over when we disable the automatic switching
@@ -939,7 +939,7 @@ void run_fabric_edm_main_loop(
             sender_channel_counters_ptrs[sender_channel_index],
             sender_channel_packet_recorders[sender_channel_index],
             channel_connection_established[sender_channel_index],
-            sender_channel_index);
+            sender_channel_index) || did_something_sender;
 
         sender_channel_index = 1 - sender_channel_index;
 
@@ -951,7 +951,9 @@ void run_fabric_edm_main_loop(
             receiver_channel_trid_tracker,
             &receiver_state);
 
-        bool did_something = did_something_sender || old_recv_state != receiver_state;
+            did_something = did_something || did_something_sender;
+        }
+        // bool did_something = did_something_sender;
 
         if (did_something) {
             did_nothing_count = 0;
