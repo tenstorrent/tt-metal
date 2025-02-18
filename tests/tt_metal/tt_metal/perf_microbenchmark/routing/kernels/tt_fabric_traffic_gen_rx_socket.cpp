@@ -44,7 +44,8 @@ constexpr uint32_t data_buffer_size_words = get_compile_time_arg_val(13);
 
 volatile tt_l1_ptr chan_req_buf* client_pull_req_buf =
     reinterpret_cast<tt_l1_ptr chan_req_buf*>(client_pull_req_buf_addr);
-volatile fabric_client_interface_t* client_interface = (volatile fabric_client_interface_t*)client_interface_addr;
+volatile tt_l1_ptr fabric_client_interface_t* client_interface =
+    (volatile tt_l1_ptr fabric_client_interface_t*)client_interface_addr;
 uint64_t xy_local_addr;
 socket_reader_state socket_reader;
 
@@ -87,6 +88,7 @@ void kernel_main() {
     test_results[TT_FABRIC_MISC_INDEX] = 0xff000005;
 
     fabric_socket_open(
+        client_interface,       // fabric client interface
         3,                      // the network plane to use for this socket
         2,                      // Temporal epoch for which the socket is being opened
         1,                      // Socket Id to open
