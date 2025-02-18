@@ -14,12 +14,16 @@ jobs:
   build-artifact:
     strategy:
       matrix:
-        version: ["20.04", "22.04"]
+        config:
+          - version: "20.04"
+            publish-artifact: true
+          - version: "22.04"
+            publish-artifact: false
     uses: ./.github/workflows/build-artifact.yaml
     with:
-      version: ${{ matrix.version }}
+      version: ${{ matrix.config.version }}
       distro: ubuntu
-      publish-artifact: true
+      publish-artifact: ${{ matrix.config.publish-artifact }}
       build-wheel: true
     secrets: inherit
   build-artifact-profiler:
