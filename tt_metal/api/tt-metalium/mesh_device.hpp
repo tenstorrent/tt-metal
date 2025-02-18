@@ -33,7 +33,7 @@ private:
     class ScopedDevices {
     private:
         std::map<chip_id_t, IDevice*> opened_devices_;
-        std::vector<IDevice*> devices_;
+        MeshContainer<IDevice*> devices_;
 
     public:
         // Constructor acquires physical resources
@@ -50,6 +50,7 @@ private:
         ScopedDevices& operator=(const ScopedDevices&) = delete;
 
         const std::vector<IDevice*>& get_devices() const;
+        IDevice* get_device(const MeshCoordinate& coord) const;
     };
 
     std::shared_ptr<ScopedDevices> scoped_devices_;
@@ -202,7 +203,6 @@ public:
 
     // Returns the devices in the mesh in row-major order.
     std::vector<IDevice*> get_devices() const;
-    IDevice* get_device_index(size_t logical_device_id) const;
     IDevice* get_device(chip_id_t physical_device_id) const;
     IDevice* get_device(size_t row_idx, size_t col_idx) const;
     IDevice* get_device(const MeshCoordinate& coord) const;

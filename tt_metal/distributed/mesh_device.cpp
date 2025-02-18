@@ -68,27 +68,36 @@ MeshDevice::ScopedDevices::ScopedDevices(
     size_t trace_region_size,
     size_t num_command_queues,
     const DispatchCoreConfig& dispatch_core_config,
-    const MeshDeviceConfig& config) {
+    const MeshDeviceConfig& config) :
+    devices_(SimpleMeshShape(config.mesh_shape), /*fill_value=*/nullptr) {
     auto& system_mesh = SystemMesh::instance();
     auto physical_device_ids = system_mesh.request_available_devices(config);
 
     opened_devices_ = tt::tt_metal::detail::CreateDevices(
         physical_device_ids, num_command_queues, l1_small_size, trace_region_size, dispatch_core_config);
 
+    TT_FATAL(
+        opened_devices_.size() == devices_.shape().mesh_size(),
+        "Opened devices size mismatch; expected: {}, actual: {}",
+        devices_.shape().mesh_size(),
+        opened_devices_.size());
+
+    auto it = devices_.begin();
     for (auto physical_device_id : physical_device_ids) {
-        devices_.push_back(opened_devices_.at(physical_device_id));
+        it->value() = opened_devices_.at(physical_device_id);
+        ++it;
     }
 }
 
 MeshDevice::ScopedDevices::~ScopedDevices() {
-    if (not opened_devices_.empty()) {
+    if (!opened_devices_.empty()) {
         tt::tt_metal::detail::CloseDevices(opened_devices_);
-        opened_devices_.clear();
-        devices_.clear();
     }
 }
 
-const std::vector<IDevice*>& MeshDevice::ScopedDevices::get_devices() const { return devices_; }
+const std::vector<IDevice*>& MeshDevice::ScopedDevices::get_devices() const { return devices_.values(); }
+
+IDevice* MeshDevice::ScopedDevices::get_device(const MeshCoordinate& coord) const { return devices_.at(coord); }
 
 uint8_t MeshDevice::num_hw_cqs() const {
     return validate_and_get_reference_value(
@@ -192,12 +201,6 @@ std::vector<std::shared_ptr<MeshDevice>> MeshDevice::create_submeshes(const Mesh
 
 MeshDevice::~MeshDevice() {}
 
-IDevice* MeshDevice::get_device_index(size_t device_index) const {
-    TT_FATAL(device_index >= 0 and device_index < num_devices(), "Invalid device index");
-    const auto& devices = scoped_devices_->get_devices();
-    return devices.at(device_index);
-}
-
 IDevice* MeshDevice::get_device(chip_id_t physical_device_id) const {
     for (auto device : this->get_devices()) {
         if (device->id() == physical_device_id) {
@@ -214,9 +217,7 @@ IDevice* MeshDevice::get_device(size_t row_idx, size_t col_idx) const {
     return get_device(MeshCoordinate{row_idx, col_idx});
 }
 
-IDevice* MeshDevice::get_device(const MeshCoordinate& coord) const {
-    return this->get_device_index(to_linear_index(SimpleMeshShape(mesh_shape_), coord));
-}
+IDevice* MeshDevice::get_device(const MeshCoordinate& coord) const { return scoped_devices_->get_device(coord); }
 
 MeshCommandQueue& MeshDevice::mesh_command_queue(std::size_t cq_id) const {
     TT_FATAL(this->using_fast_dispatch(), "Can only access the MeshCommandQueue when using Fast Dispatch.");

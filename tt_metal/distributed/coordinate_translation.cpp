@@ -36,7 +36,7 @@ CoordinateTranslationMap load_translation_map(const std::string& filename, const
             TT_THROW("Invalid coordinate format in JSON file: {}", filename);
         }
         result.emplace(
-            Coordinate{mapping[0][0], mapping[0][1]},
+            MeshCoordinate(mapping[0][0], mapping[0][1]),
             PhysicalCoordinate{
                 mapping[1][0],  // cluster_id
                 mapping[1][2],  // x
@@ -49,49 +49,34 @@ CoordinateTranslationMap load_translation_map(const std::string& filename, const
     return result;
 }
 
-MeshShape get_system_mesh_shape(size_t system_num_devices) {
-    static const std::unordered_map<size_t, MeshShape> system_mesh_to_shape = {
-        {1, MeshShape{1, 1}},   // single-device
-        {2, MeshShape{1, 2}},   // N300
-        {8, MeshShape{2, 4}},   // T3000; as ring to match existing tests
-        {32, MeshShape{8, 4}},  // TG, QG
-        {64, MeshShape{8, 8}},  // TGG
-    };
-    TT_FATAL(
-        system_mesh_to_shape.contains(system_num_devices), "Unsupported number of devices: {}", system_num_devices);
-    auto shape = system_mesh_to_shape.at(system_num_devices);
-    log_debug(LogMetal, "Logical SystemMesh Shape: {}x{}", shape.num_rows, shape.num_cols);
-    return shape;
-}
-
 }  // namespace
 
-std::pair<CoordinateTranslationMap, MeshShape> get_system_mesh_coordinate_translation_map() {
-    static const auto* cached_translation_map = new std::pair<CoordinateTranslationMap, MeshShape>([] {
-        auto system_num_devices = tt::Cluster::instance().number_of_user_devices();
+const std::pair<CoordinateTranslationMap, SimpleMeshShape>& get_system_mesh_coordinate_translation_map() {
+    static const auto* cached_translation_map = new std::pair<CoordinateTranslationMap, SimpleMeshShape>([] {
+        const auto system_num_devices = tt::Cluster::instance().number_of_user_devices();
 
-        std::string galaxy_mesh_descriptor = "TG.json";
-        if (tt::Cluster::instance().number_of_pci_devices() == system_num_devices) {
-            galaxy_mesh_descriptor = "QG.json";
-        }
+        const bool is_qg = tt::Cluster::instance().number_of_pci_devices() == system_num_devices;
 
-        const std::unordered_map<size_t, std::string> system_mesh_translation_map = {
-            {1, "device.json"},
-            {2, "N300.json"},
-            {8, "T3000.json"},
-            {32, galaxy_mesh_descriptor},
-            {64, "TGG.json"},
+        // TODO: #17477 - This assumes shapes and coordinates are in 2D. This will be extended for 3D.
+        // Consider if 1D can be used for single device and N300.
+        const std::unordered_map<size_t, std::pair<std::string, SimpleMeshShape>> system_mesh_translation_map = {
+            {1, std::make_pair("device.json", SimpleMeshShape(1, 1))},
+            {2, std::make_pair("N300.json", SimpleMeshShape(1, 2))},
+            {8, std::make_pair("T3000.json", SimpleMeshShape(2, 4))},
+            {32, std::make_pair(is_qg ? "QG.json" : "TG.json", SimpleMeshShape(8, 4))},
+            {64, std::make_pair("TGG.json", SimpleMeshShape(8, 8))},
         };
-
         TT_FATAL(
             system_mesh_translation_map.contains(system_num_devices),
             "Unsupported number of devices: {}",
             system_num_devices);
 
-        auto translation_config_file = get_config_path(system_mesh_translation_map.at(system_num_devices));
-        return std::pair<CoordinateTranslationMap, MeshShape>{
-            load_translation_map(translation_config_file, "logical_to_physical_coordinates"),
-            get_system_mesh_shape(system_num_devices)};
+        auto [translation_config_file, shape] = system_mesh_translation_map.at(system_num_devices);
+        TT_ASSERT(system_num_devices == shape.mesh_size());
+        log_debug(LogMetal, "Logical SystemMesh Shape: {}", shape);
+
+        return std::pair<CoordinateTranslationMap, SimpleMeshShape>{
+            load_translation_map(translation_config_file, /*key=*/"logical_to_physical_coordinates"), shape};
     }());
 
     return *cached_translation_map;
