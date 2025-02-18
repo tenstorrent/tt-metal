@@ -11,14 +11,14 @@ struct GenericOp {
     static Tensor invoke(
         QueueId queue_id,
         const Tensor& input_tensor,
-        const GenericOpDeviceOperation::operation_attributes_t& operation_attributes,
+        const operation_attributes_t& operation_attributes,
         const std::vector<Tensor>& io_tensors = {}) {
         return ttnn::prim::generic(queue_id, input_tensor, operation_attributes, io_tensors);
     }
 
     static Tensor invoke(
         const Tensor& input_tensor,
-        const GenericOpDeviceOperation::operation_attributes_t& operation_attributes,
+        const operation_attributes_t& operation_attributes,
         const std::vector<Tensor>& io_tensors = {}) {
         return invoke(0, input_tensor, operation_attributes, io_tensors);
     }
