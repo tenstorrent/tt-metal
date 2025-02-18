@@ -8,7 +8,6 @@
 #include <memory>
 #include <ttnn/operations/eltwise/binary/binary.hpp>
 #include <ttnn/operations/eltwise/binary_backward/binary_backward.hpp>
-#include <ttnn/operations/eltwise/binary_ng/binary_ng.hpp>
 #include <ttnn/tensor/types.hpp>
 #include <vector>
 
@@ -56,7 +55,7 @@ autograd::TensorPtr operator+(const autograd::TensorPtr& a, const autograd::Auto
 autograd::TensorPtr operator+(const autograd::TensorPtr& a, const autograd::TensorPtr& b) {
     auto out = autograd::create_tensor();
 
-    out->set_value(ttnn::experimental::add(a->get_value(), b->get_value()));
+    out->set_value(ttnn::add(a->get_value(), b->get_value()));
     autograd::GradFunction grad = [a, b, out]() {
         if (is_batch_broadcasted(a, out->get_grad())) {
             a->add_grad(ttnn_fixed::sum_over_dim(out->get_grad(), /* axis */ 0));
