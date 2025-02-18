@@ -74,7 +74,6 @@ def run_yolov8x_trace_inference(
 
     # First run configures convs JIT
     test_infra.input_tensor = tt_inputs_host.to(device, input_mem_config)
-    print("test_infra.input_tensor", test_infra.input_tensor)
     spec = test_infra.input_tensor.spec
     test_infra.run()
     test_infra.validate()
