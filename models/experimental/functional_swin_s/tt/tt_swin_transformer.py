@@ -69,6 +69,7 @@ class TtSwinTransformer:
             if i_stage != 7:
                 self.layers.append(self.downsample_layer(device, parameters["features"][i_stage + 1], dim))
             index += 1
+            # print("self.layers: \n", self.layers[0])
 
         self.flatten = nn.Flatten(1)
 
@@ -80,15 +81,18 @@ class TtSwinTransformer:
         x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
         x = self.conv2d(self.device, x)
         x = ttnn.to_device(x, device=self.device)
-        x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)
-        x = ttnn.permute(x, (0, 3, 1, 2))
+        x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+        x = ttnn.permute(x, (0, 3, 1, 2))  # 26
 
         # conv ends
 
-        x = ttnn.permute(x, (0, 2, 3, 1))
+        x = ttnn.permute(x, (0, 2, 3, 1))  # 27
         if self.norm_layer is None:
             x = ttnn.layer_norm(
-                x, weight=self.parameters.features[0][2].weight, bias=self.parameters.features[0][2].bias
+                x,
+                weight=self.parameters.features[0][2].weight,
+                bias=self.parameters.features[0][2].bias,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
             )
         else:
             pass
@@ -99,9 +103,13 @@ class TtSwinTransformer:
                     x = self.layers[i_stage][j](x)
             else:
                 x = self.layers[i_stage](x)
+
         if self.norm_layer is None:
             x = ttnn.layer_norm(
-                x, weight=self.parameters.norm.weight, bias=self.parameters.norm.bias
+                x,
+                weight=self.parameters.norm.weight,
+                bias=self.parameters.norm.bias,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
             )  # pcc drops starts from here
         else:
             pass
@@ -112,10 +120,10 @@ class TtSwinTransformer:
         x = ttnn.permute(x, (0, 3, 1, 2))
         # AdaptiveAvgPool2d  ends
         x = ttnn.from_device(x)
-        x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
+        x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
         x = ttnn.reshape(x, (x.shape[0], -1))  # Replace for flatten, self.flatten(x)
         x = ttnn.to_device(x, device=self.device)
-        x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)
+        x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
         x = ttnn.linear(
             x,
             self.parameters.head.weight,

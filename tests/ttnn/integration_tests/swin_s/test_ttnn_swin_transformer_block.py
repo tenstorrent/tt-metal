@@ -67,17 +67,17 @@ def create_custom_preprocessor(device):
         if isinstance(torch_model, SwinTransformerBlock):
             parameters["norm1"] = {}
             parameters["norm1"]["weight"] = preprocess_layernorm_parameter(
-                torch_model.norm1.weight, dtype=ttnn.bfloat8_b
+                torch_model.norm1.weight, dtype=ttnn.bfloat16
             )
-            parameters["norm1"]["bias"] = preprocess_layernorm_parameter(torch_model.norm1.bias, dtype=ttnn.bfloat8_b)
+            parameters["norm1"]["bias"] = preprocess_layernorm_parameter(torch_model.norm1.bias, dtype=ttnn.bfloat16)
             parameters["attn"] = {}
             shifted_window_attention_preprocessor = create_custom_preprocessor_shifted_window_attention(device)
             parameters["attn"] = shifted_window_attention_preprocessor(torch_model.attn, None, None)
             parameters["norm2"] = {}
             parameters["norm2"]["weight"] = preprocess_layernorm_parameter(
-                torch_model.norm2.weight, dtype=ttnn.bfloat8_b
+                torch_model.norm2.weight, dtype=ttnn.bfloat16
             )
-            parameters["norm2"]["bias"] = preprocess_layernorm_parameter(torch_model.norm2.bias, dtype=ttnn.bfloat8_b)
+            parameters["norm2"]["bias"] = preprocess_layernorm_parameter(torch_model.norm2.bias, dtype=ttnn.bfloat16)
             parameters["mlp"] = {}
             mlp_preprocessor = create_custom_preprocessor_mlp(device)
             parameters["mlp"] = mlp_preprocessor(torch_model.mlp, None, None)

@@ -49,10 +49,18 @@ class TtSwinTransformerBlock(nn.Module):
         #             nn.init.normal_(m.bias, std=1e-6)
 
     def __call__(self, x):
-        norm1 = ttnn.layer_norm(x, weight=self.parameters.norm1.weight, bias=self.parameters.norm1.bias)
+        norm1 = ttnn.layer_norm(
+            x, weight=self.parameters.norm1.weight, bias=self.parameters.norm1.bias, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
         attn = self.attn(norm1)
         x = x + attn
-        norm2 = ttnn.layer_norm(x, weight=self.parameters.norm2.weight, bias=self.parameters.norm2.bias)
+        ttnn.deallocate(norm1)
+        norm2 = ttnn.layer_norm(
+            x, weight=self.parameters.norm2.weight, bias=self.parameters.norm2.bias, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
+        ttnn.deallocate(attn)
         mlp = self.mlp(norm2)
         x = x + mlp
+        ttnn.deallocate(norm2)
+        ttnn.deallocate(mlp)
         return x
