@@ -12,12 +12,6 @@ from .distributed import (
     get_device_ids,
     create_mesh_device,
     synchronize_devices,
-    TensorToMesh,
-    ShardTensorToMesh,
-    ShardTensor2dMesh,
-    ReplicateTensorToMesh,
-    MeshToTensor,
-    ConcatMeshToTensor,
     visualize_mesh_device,
     distribute,
 )
