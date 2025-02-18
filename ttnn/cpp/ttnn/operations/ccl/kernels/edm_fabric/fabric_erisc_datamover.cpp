@@ -600,7 +600,6 @@ FORCE_INLINE void receiver_send_completion_ack(
 
 template <uint8_t SENDER_NUM_BUFFERS>
 FORCE_INLINE bool can_forward_packet_completely(
-    // const volatile tt::fabric::PacketHeader* packet_header,
     tt::fabric::RoutingFields cached_routing_fields,
     tt::fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>& downstream_edm_interface) {
     // We always check if it is the terminal mcast packet value. We can do this because all unicast packets have the
@@ -662,7 +661,6 @@ FORCE_INLINE bool run_sender_channel_step(
                     tt::fabric::validate(*packet_header);
                     packet_header_recorder.record_packet_header(packet_header);
                 }
-                // print_pkt_header(packet_header);
                 send_next_data(
                     local_sender_channel,
                     local_sender_channel_worker_interface,

@@ -33,7 +33,6 @@ using BufferPtr = NamedType<uint8_t, struct BufferPtrType>;
 // Increments val and wraps to 0 if it reaches limit
 template <size_t LIMIT = 0, typename T>
 FORCE_INLINE auto wrap_increment(T val) -> T {
-    // static_assert(LIMIT != 0, "wrap_increment called with limit of 0; it must be greater than 0");
     constexpr bool is_pow2 = LIMIT != 0 && is_power_of_2(LIMIT);
     if constexpr (LIMIT == 1) {
         return val;
@@ -47,7 +46,6 @@ FORCE_INLINE auto wrap_increment(T val) -> T {
 }
 template <size_t LIMIT, typename T>
 FORCE_INLINE auto wrap_increment_n(T val, uint8_t increment) -> T {
-    // static_assert(LIMIT != 0, "wrap_increment called with limit of 0; it must be greater than 0");
     constexpr bool is_pow2 = LIMIT != 0 && is_power_of_2(LIMIT);
     if constexpr (LIMIT == 1) {
         return val;
