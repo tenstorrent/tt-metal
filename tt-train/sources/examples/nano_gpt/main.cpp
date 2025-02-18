@@ -333,7 +333,6 @@ struct TrainingConfig {
     std::string scheduler_type = "identity";
     bool use_clip_grad_norm = false;
     float clip_grad_norm_max_norm = 1.0F;
-    bool use_ddp = false;
     ttml::models::gpt2::TransformerConfig transformer_config;
 };
 
@@ -357,7 +356,6 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     config.tokenizer_type = training_config["tokenizer_type"].as<std::string>(config.tokenizer_type);
     config.scheduler_type = training_config["scheduler_type"].as<std::string>(config.scheduler_type);
     config.use_clip_grad_norm = training_config["use_clip_grad_norm"].as<bool>(config.use_clip_grad_norm);
-    config.use_ddp = training_config["use_ddp"].as<bool>(config.use_ddp);
     config.clip_grad_norm_max_norm =
         training_config["clip_grad_norm_max_norm"].as<float>(config.clip_grad_norm_max_norm);
 
@@ -379,17 +377,13 @@ int main(int argc, char **argv) {
     bool is_eval = false;
     bool add_time_to_name = true;
     bool enable_wandb = true;
+    bool ddp = false;
     app.add_option("-c,--config", config_name, "Yaml Config name")->default_val(config_name);
     app.add_option("-e,--eval", is_eval, "Is evaluation")->default_val(is_eval);
     app.add_option("-t,--add_time_to_name", add_time_to_name, "Add time to run name")->default_val(add_time_to_name);
     app.add_option("-w,--wandb", enable_wandb, "Enable wandb logging")->default_val(enable_wandb);
+    app.add_option("-d,--ddp", ddp, "Enable DDP")->default_val(ddp);
     CLI11_PARSE(app, argc, argv);
-
-    auto yaml_config = YAML::LoadFile(config_name);
-    TrainingConfig config = parse_config(yaml_config);
-    EvalConfig eval_config = parse_eval_config(yaml_config);
-
-    bool ddp = config.use_ddp;
 
     initialize_device(ddp);
 
@@ -400,6 +394,10 @@ int main(int argc, char **argv) {
             return -1;
         }
     }
+
+    auto yaml_config = YAML::LoadFile(config_name);
+    TrainingConfig config = parse_config(yaml_config);
+    EvalConfig eval_config = parse_eval_config(yaml_config);
 
     if (enable_wandb) {
         wandbcpp::init({.project = config.project_name, .name = generate_run_name(config, add_time_to_name)});
@@ -426,7 +424,6 @@ int main(int argc, char **argv) {
             {"scheduler_type", config.scheduler_type},
             {"using_clip_grad_norm", config.use_clip_grad_norm},
             {"clip_grad_norm_max_norm", config.clip_grad_norm_max_norm},
-            {"use_ddp", config.use_ddp},
         });
     }
 
