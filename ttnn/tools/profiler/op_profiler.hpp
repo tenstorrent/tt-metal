@@ -84,6 +84,45 @@ private:
     std::stack<TracyCZoneCtx> call_stack;
 };
 
+class thread_safe_runtime_id_to_ops_map {
+    using DEVICE_ID = uint32_t;
+    using RUNTIME_ID = uint32_t;
+    using KEY_TYPE = std::pair<DEVICE_ID, RUNTIME_ID>;
+    using VAL_TYPE = std::string;
+    using RUNTIME_ID_TO_OP_MAP = std::map<KEY_TYPE, VAL_TYPE>;
+
+public:
+    RUNTIME_ID_TO_OP_MAP::iterator find(DEVICE_ID device_id, RUNTIME_ID runtime_id) {
+        std::scoped_lock<std::mutex> lock(map_mutex);
+        return map.find({device_id, runtime_id});
+    }
+    RUNTIME_ID_TO_OP_MAP::iterator begin() {
+        std::scoped_lock<std::mutex> lock(map_mutex);
+        return map.begin();
+    }
+    RUNTIME_ID_TO_OP_MAP::iterator end() {
+        std::scoped_lock<std::mutex> lock(map_mutex);
+        return map.end();
+    }
+    VAL_TYPE at(DEVICE_ID device_id, RUNTIME_ID runtime_id) {
+        std::scoped_lock<std::mutex> lock(map_mutex);
+        return map.at({device_id, runtime_id});
+    }
+    void emplace(KEY_TYPE key, VAL_TYPE opname) {
+        std::scoped_lock<std::mutex> lock(map_mutex);
+        map.emplace(key, opname);
+    }
+    RUNTIME_ID_TO_OP_MAP exportMap() {
+        std::scoped_lock<std::mutex> lock(map_mutex);
+        return map;
+    }
+
+private:
+    std::mutex map_mutex;
+    RUNTIME_ID_TO_OP_MAP map;
+};
+
+inline thread_safe_runtime_id_to_ops_map runtime_id_to_opname{};
 inline thread_safe_cached_ops_map cached_ops{};
 inline thread_safe_call_stack call_stack;
 
@@ -374,6 +413,13 @@ inline std::string op_meta_data_serialized_json(
     auto& tensor_return_value) {
     const bool useCachedOps = std::getenv("TT_METAL_PROFILER_NO_CACHE_OP_INFO") == nullptr;
     auto program_hash = compute_program_hash<device_operation_t>(operation_attributes, tensor_args);
+
+    auto as_string = [](std::string_view v) -> std::string { return {v.data(), v.size()}; };
+    std::string opName = as_string(tt::stl::get_type_name<device_operation_t>());
+    if constexpr (requires { device_operation_t::get_type_name(operation_attributes); }) {
+        opName = device_operation_t::get_type_name(operation_attributes);
+    }
+    runtime_id_to_opname.emplace({device_id, program.get_runtime_id()}, opName);
 
     if (!useCachedOps || (cached_ops.find(device_id) == cached_ops.end()) ||
         (cached_ops.at(device_id).find(program_hash) == cached_ops.at(device_id).end())) {

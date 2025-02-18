@@ -618,7 +618,7 @@ void InitDeviceProfiler(IDevice* device) {
 #endif
 }
 
-void DumpDeviceProfileResults(IDevice* device, ProfilerDumpState state) {
+void DumpDeviceProfileResults(IDevice* device, ProfilerDumpState state, const std::optional<ProfilerOptionalMetadata>& metadata) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
     std::vector<CoreCoord> workerCores;
@@ -634,7 +634,7 @@ void DumpDeviceProfileResults(IDevice* device, ProfilerDumpState state) {
         workerCores.push_back(virtualCore);
     }
     device->push_work([device, workerCores, state]() mutable {
-        DumpDeviceProfileResults(device, workerCores, state);
+        DumpDeviceProfileResults(device, workerCores, state, metadata);
         if (deviceDeviceTimePair.find(device->id()) != deviceDeviceTimePair.end() and
             state == ProfilerDumpState::CLOSE_DEVICE_SYNC) {
             for (auto& connected_device : deviceDeviceTimePair.at(device->id())) {
@@ -647,7 +647,7 @@ void DumpDeviceProfileResults(IDevice* device, ProfilerDumpState state) {
 #endif
 }
 
-void DumpDeviceProfileResults(IDevice* device, std::vector<CoreCoord>& worker_cores, ProfilerDumpState state) {
+void DumpDeviceProfileResults(IDevice* device, std::vector<CoreCoord>& worker_cores, ProfilerDumpState state, const std::optional<ProfilerOptionalMetadata>& metadata) {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
     std::string name = fmt::format("Device Dump {}", device->id());
