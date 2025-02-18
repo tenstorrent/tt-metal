@@ -4,9 +4,12 @@
 
 #include "ttnn/distributed/distributed_pybind.hpp"
 #include <pybind11/cast.h>
+<<<<<<< HEAD
 #include <cstddef>
 #include <memory>
 #include <pybind11/pytypes.h>
+=======
+>>>>>>> clean up imports, fix test cases and change them to use mapper/composer functions, fix storage error by using from_device instead of cpu
 
 #include <ostream>
 
@@ -20,10 +23,17 @@
 =======
 #include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "ttnn/operations/core/core.hpp"
+<<<<<<< HEAD
 #include "ttnn/tensor/tensor_utils.hpp"
 >>>>>>> one type error left
+=======
+>>>>>>> clean up imports, fix test cases and change them to use mapper/composer functions, fix storage error by using from_device instead of cpu
 #include "ttnn/tensor/tensor.hpp"
+<<<<<<< HEAD
 #include "ttnn/types.hpp"
+=======
+#include <tt-metalium/command_queue.hpp>
+>>>>>>> clean up imports, fix test cases and change them to use mapper/composer functions, fix storage error by using from_device instead of cpu
 
 // This is required for automatic conversions, as in the creation of mesh devices
 // https://github.com/tenstorrent/tt-metal/issues/18082
@@ -54,14 +64,6 @@ struct ConcreteMeshToTensor : MeshToTensor {
         PYBIND11_OVERRIDE(Tensor, MeshToTensor, compose, tensors);
     }
 };
-
-Tensor get_cpu_tensor(const Tensor& tensor) {
-    if (is_device_tensor(tensor)) {
-        Tensor cpu_tensor = tensor.cpu();
-        TT_ASSERT(is_device_tensor(cpu_tensor));
-    }
-    return tensor;
-}
 
 void py_module_types(py::module& module) {
     py::class_<MeshToTensor, ConcreteMeshToTensor, std::unique_ptr<MeshToTensor>>(module, "MeshToTensor");
@@ -587,6 +589,7 @@ void py_module(py::module& module) {
         R"doc(
        Get the tensor shard corresponding to the device.
 
+<<<<<<< HEAD
 
        Args:
            tensor (Tensor): The tensor to get the shard from.
@@ -596,6 +599,15 @@ void py_module(py::module& module) {
        Returns:
            Tensor: The shard of the tensor corresponding to the device.
    )doc");
+=======
+        Args:
+            tensor (Tensor): The tensor to get the shard from.
+            device (Device): The device to get the shard for.
+aggregate_as
+        Returns:
+            Tensor: The shard of the tensor corresponding to the device.
+    )doc");
+>>>>>>> clean up imports, fix test cases and change them to use mapper/composer functions, fix storage error by using from_device instead of cpu
     module.def("get_device_tensors", &get_device_tensors, py::arg("tensor"), py::kw_only());
     // TODO: Add rdocs
     module.def(
@@ -637,7 +649,7 @@ void py_module(py::module& module) {
         [](const Tensor& tensor,
            const TensorToMesh& mapper,
            std::optional<std::reference_wrapper<MeshDevice>> mesh_device) -> Tensor {
-            return distribute_tensor(get_cpu_tensor(tensor), mapper, mesh_device);
+            return distribute_tensor(from_device(tensor), mapper, mesh_device);
         },
         py::arg("tensor"),
         py::arg("mapper"),
@@ -645,14 +657,14 @@ void py_module(py::module& module) {
     module.def(
         "aggregate_tensor",
         [](const Tensor& tensor, const MeshToTensor& composer) -> Tensor {
-            return aggregate_tensor(get_cpu_tensor(tensor), composer);
+            return aggregate_tensor(from_device(tensor), composer);
         },
         py::arg("tensor"),
         py::arg("composer"));
     module.def(
         "aggregate_tensor",
         [](const std::vector<Tensor>& tensors, const MeshToTensor& composer) -> Tensor {
-            return aggregate_tensor(get_cpu_tensor(aggregate_as_tensor(tensors, AllGatherTensor{})), composer);
+            return aggregate_tensor(from_device(aggregate_as_tensor(tensors, AllGatherTensor{})), composer);
         },
         py::arg("tensor"),
         py::arg("composer"));
