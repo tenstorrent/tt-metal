@@ -387,12 +387,12 @@ Tensor convert_python_tensors_to_tt_tensors(
 
 template <typename T>
 owned_buffer::Buffer<T> create_row_major_owned_buffer(
-    owned_buffer::Buffer<T>&& owned_buffer, const ttnn::TensorSpec& tensor_spec, const bool legacy_output) {
+    owned_buffer::Buffer<T>&& owned_buffer, const ttnn::TensorSpec& tensor_spec, const bool padded_output) {
     TT_FATAL(
         !tensor_spec.memory_config().is_sharded() or tensor_spec.memory_config().shard_spec.has_value(),
         "Sharded tensors must have a shard spec when converting to tt tensors!");
 
-    if (legacy_output) {
+    if (padded_output) {
         if (tensor_spec.layout() == Layout::TILE) {
             auto data = tensor_impl::convert_layout_tile_to_row_major(
                 tensor_spec.physical_shape(), tensor_spec.tile(), owned_buffer);
@@ -410,39 +410,39 @@ owned_buffer::Buffer<T> create_row_major_owned_buffer(
 }
 
 std::variant<OwnedBuffer, BorrowedBuffer> get_host_buffer_from_tensor(
-    const Tensor& tt_tensor, const bool legacy_output) {
+    const Tensor& tt_tensor, const bool padded_output) {
     TT_ASSERT(tt_tensor.storage_type() == StorageType::OWNED or tt_tensor.storage_type() == StorageType::BORROWED);
 
     using RetType = std::variant<OwnedBuffer, BorrowedBuffer>;
     return std::visit(
         tt::stl::overloaded{
-            [&tt_tensor, legacy_output](const OwnedStorage& storage) -> RetType {
+            [&tt_tensor, padded_output](const OwnedStorage& storage) -> RetType {
                 const auto& tensor_spec = tt_tensor.get_tensor_spec();
                 const auto tt_dtype = tensor_spec.data_type();
                 switch (tt_dtype) {
                     case DataType::UINT8: {
                         return create_row_major_owned_buffer(
-                            std::move(owned_buffer::get_as<uint8_t>(storage.buffer)), tensor_spec, legacy_output);
+                            std::move(owned_buffer::get_as<uint8_t>(storage.buffer)), tensor_spec, padded_output);
                     }
                     case DataType::UINT16: {
                         return create_row_major_owned_buffer(
-                            std::move(owned_buffer::get_as<uint16_t>(storage.buffer)), tensor_spec, legacy_output);
+                            std::move(owned_buffer::get_as<uint16_t>(storage.buffer)), tensor_spec, padded_output);
                     }
                     case DataType::INT32: {
                         return create_row_major_owned_buffer(
-                            std::move(owned_buffer::get_as<int32_t>(storage.buffer)), tensor_spec, legacy_output);
+                            std::move(owned_buffer::get_as<int32_t>(storage.buffer)), tensor_spec, padded_output);
                     }
                     case DataType::UINT32: {
                         return create_row_major_owned_buffer(
-                            std::move(owned_buffer::get_as<uint32_t>(storage.buffer)), tensor_spec, legacy_output);
+                            std::move(owned_buffer::get_as<uint32_t>(storage.buffer)), tensor_spec, padded_output);
                     }
                     case DataType::FLOAT32: {
                         return create_row_major_owned_buffer(
-                            std::move(owned_buffer::get_as<float>(storage.buffer)), tensor_spec, legacy_output);
+                            std::move(owned_buffer::get_as<float>(storage.buffer)), tensor_spec, padded_output);
                     }
                     case DataType::BFLOAT16: {
                         return create_row_major_owned_buffer(
-                            std::move(owned_buffer::get_as<::bfloat16>(storage.buffer)), tensor_spec, legacy_output);
+                            std::move(owned_buffer::get_as<::bfloat16>(storage.buffer)), tensor_spec, padded_output);
                     }
                     case DataType::BFLOAT8_B:
                     case DataType::BFLOAT4_B: {
@@ -455,7 +455,7 @@ std::variant<OwnedBuffer, BorrowedBuffer> get_host_buffer_from_tensor(
                                 : unpack_bfp4_tiles_into_float_vec(
                                       uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
                         auto input_float_buffer = owned_buffer::create<float>(std::move(float_unpacked_data));
-                        return create_row_major_owned_buffer(std::move(input_float_buffer), tensor_spec, legacy_output);
+                        return create_row_major_owned_buffer(std::move(input_float_buffer), tensor_spec, padded_output);
                     }
                     default: {
                         TT_THROW("Unsupported DataType: {}", tt_dtype);
@@ -473,20 +473,13 @@ std::variant<OwnedBuffer, BorrowedBuffer> get_host_buffer_from_tensor(
         tt_tensor.get_storage());
 }
 
-py::object convert_tt_tensor_to_torch_tensor(const Tensor& tt_tensor, const bool legacy_output = false) {
+py::object convert_tt_tensor_to_torch_tensor(const Tensor& tt_tensor, const bool padded_output = false) {
     GraphTracker::instance().track_function_start(
-        "tt::tt_metal::detail::convert_tt_tensor_to_torch_tensor", tt_tensor, legacy_output);
+        "tt::tt_metal::detail::convert_tt_tensor_to_torch_tensor", tt_tensor, padded_output);
 
-    // TODO: Remove legacy_output flag which supports old behaviour of returning tensors with padded shape.
-    // These cases need to be fixed:
-    //     ROW_MAJOR tensors with padding (since ROW_MAJOR has no alignment, cannot automatically strip data unless
-    //     padded shape is queried) Physical sharding on padded shape (unlike interleaved tensors, cannot derive an
-    //     equivalent logical shard spec to strip out data)
-    // One way to clean this up is:
-    //     1. Update tests to use ttnn.from_torch and ttnn.to_torch
-    //     2. Fix usage of tensor.to_torch inside ttnn functional APIs
-    //     3. Deprecate old tensor.to_torch and rename tensor.to_torch_with_logical_shape back to tensor.to_torch
-    auto buffer = get_host_buffer_from_tensor(tt_tensor, legacy_output);
+    // TODO: Remove padded_output flag which supports old behaviour of returning tensors with padded shape.
+    // Need to update tests to not use tensor.to_torch_with_padded_shape()
+    auto buffer = get_host_buffer_from_tensor(tt_tensor, padded_output);
 
     py::object torch = py::module_::import("torch");
     auto frombuffer = torch.attr("frombuffer");
@@ -530,7 +523,7 @@ py::object convert_tt_tensor_to_torch_tensor(const Tensor& tt_tensor, const bool
         return frombuffer(buffer, py::arg("dtype") = torch_dtype);
     }();
 
-    if (legacy_output) {
+    if (padded_output) {
         auto shape = tt_tensor.get_padded_shape();
         torch_shape = std::vector<std::uint32_t>(shape.cbegin(), shape.cend());
     }
@@ -1474,7 +1467,7 @@ void pytensor_module(py::module& m_tensor) {
         )doc",
             py::return_value_policy::reference)
         .def(
-            "to_torch",
+            "to_torch_with_padded_shape",
             [](const Tensor& self) -> py::object { return detail::convert_tt_tensor_to_torch_tensor(self, true); },
             R"doc(
             Convert tensor to torch tensor using legacy padded shape.
@@ -1484,11 +1477,11 @@ void pytensor_module(py::module& m_tensor) {
 
             .. code-block:: python
 
-                data = tt_tensor.cpu().to_torch() # move TT Tensor to host and convert it to torch tensor
+                data = tt_tensor.cpu().to_torch_with_padded_shape() # move TT Tensor to host and convert it to torch tensor
 
         )doc")
         .def(
-            "to_torch_with_logical_shape",
+            "to_torch",
             [](const Tensor& self) -> py::object { return detail::convert_tt_tensor_to_torch_tensor(self); },
             R"doc(
             Convert tensor to torch tensor.
@@ -1497,7 +1490,7 @@ void pytensor_module(py::module& m_tensor) {
 
             .. code-block:: python
 
-                data = tt_tensor.cpu().to_torch_with_logical_shape() # move TT Tensor to host and convert it to torch tensor
+                data = tt_tensor.cpu().to_torch() # move TT Tensor to host and convert it to torch tensor
 
         )doc")
         .def(

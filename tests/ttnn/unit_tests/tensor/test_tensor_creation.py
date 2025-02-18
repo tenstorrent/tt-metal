@@ -243,8 +243,8 @@ def test_tensor_creation_with_memory_config(shape, memory_config, tt_dtype, layo
     tt_tensor_1 = tt_tensor_1.cpu()
     tt_tensor_2 = tt_tensor_2.cpu()
 
-    py_tensor_after_round_trip_1 = tt_tensor_1.to_torch_with_logical_shape()
-    py_tensor_after_round_trip_2 = tt_tensor_2.to_torch_with_logical_shape()
+    py_tensor_after_round_trip_1 = tt_tensor_1.to_torch()
+    py_tensor_after_round_trip_2 = tt_tensor_2.to_torch()
     py_tensor_after_round_trip_3 = ttnn.to_torch(tt_tensor_1)
     py_tensor_after_round_trip_4 = ttnn.to_torch(tt_tensor_2)
 
