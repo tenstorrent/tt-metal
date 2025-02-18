@@ -144,24 +144,24 @@ void MAIN {
         return;
     }
 
-    constexpr auto cb_input = tt::CBIndex::c_0;       // input
-    constexpr auto cb_batch_mean = tt::CBIndex::c_1;  // batch_mean
+    constexpr auto cb_input = get_compile_time_arg_val(2);       // input
+    constexpr auto cb_batch_mean = get_compile_time_arg_val(3);  // batch_mean
     constexpr auto cb_output_0 =
-        tt::CBIndex::c_2;  // output -- > [(input - batch_mean)/(sqrt(batch_var + eps))] * weight
-    constexpr auto cb_batch_var = tt::CBIndex::c_3;  // batch_var
-    constexpr auto cb_eps = tt::CBIndex::c_4;        // eps
-    constexpr auto cb_den = tt::CBIndex::c_5;        // 1/(sqrt(batch_var + eps))
-    constexpr auto cb_num = tt::CBIndex::c_6;        // input - batch_mean
-    constexpr auto cb_weight = tt::CBIndex::c_16;    // weight tensor
-    constexpr auto cb_tmp_1 = tt::CBIndex::c_17;     // (input - batch_mean)/(sqrt(batch_var + eps))
-    constexpr auto cb_bias = tt::CBIndex::c_18;      // bias tensor
+        get_compile_time_arg_val(4);  // output -- > [(input - batch_mean)/(sqrt(batch_var + eps))] * weight
+    constexpr auto cb_batch_var = get_compile_time_arg_val(5);  // batch_var
+    constexpr auto cb_eps = get_compile_time_arg_val(6);        // eps
+    constexpr auto cb_den = get_compile_time_arg_val(7);        // 1/(sqrt(batch_var + eps))
+    constexpr auto cb_num = get_compile_time_arg_val(8);        // input - batch_mean
+    constexpr auto cb_weight = get_compile_time_arg_val(9);     // weight tensor
+    constexpr auto cb_tmp_1 = get_compile_time_arg_val(10);     // (input - batch_mean)/(sqrt(batch_var + eps))
+    constexpr auto cb_bias = get_compile_time_arg_val(11);      // bias tensor
 
     auto cb_bcast = cb_batch_mean;
     auto cb_other = cb_input;
 
-    binary_op_init_common(cb_bcast, cb_other, cb_output_0);
+    binary_op_init_common(cb_other, cb_bcast, cb_output_0);
 
-    sub_tiles_init();
+    sub_tiles_init(cb_other, cb_bcast);
     uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;
     uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;
     for (uint32_t i = 0; i < complete_iterations; ++i, tile_start = 0) {

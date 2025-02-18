@@ -6,11 +6,12 @@
 
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
-
 #include <type_traits>
 
 #include "ttnn/decorators.hpp"
+#include "small_vector_caster.hpp"  // NOLINT - for pybind11 SmallVector binding support.
 #include "ttnn/types.hpp"
+#include "types.hpp"
 
 namespace py = pybind11;
 
@@ -41,7 +42,7 @@ constexpr auto resolve_primitive_operation_call_method(F) {
     using traits = function_traits<F>;
 
     return []<typename TSelf, typename... TArgs>(arg_traits<TSelf, TArgs...>) {
-        return [](TSelf self, TArgs... args, std::uint8_t queue_id) ->
+        return [](TSelf self, TArgs... args, QueueId queue_id) ->
                typename traits::return_t { return self(queue_id, static_cast<decltype(args)&&>(args)...); };
     }(typename traits::arg_tuple{});
 }
@@ -84,7 +85,7 @@ void def_call_operator(py_operation_t& py_operation, const pybind_overload_t<fun
                 "__call__",
                 resolve_primitive_operation_call_method(overload.function),
                 args...,
-                py::arg("queue_id") = 0);
+                py::arg("queue_id") = DefaultQueueId);
         },
         overload.args.value);
 }

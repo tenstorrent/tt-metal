@@ -21,7 +21,7 @@
 namespace ttnn::operations::data_movement {
 
 std::vector<Tensor> fold_with_transpose_(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& input,
     const std::optional<const ttnn::Shape>& output_shape,
     uint32_t stride_h,
@@ -145,7 +145,7 @@ ttnn::MemoryConfig create_sharded_memory_config(
 }
 
 std::vector<Tensor> fold_with_transpose_sharded_(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& input,
     const std::optional<const ttnn::Shape>& output_shape,
     uint32_t stride_h,
@@ -283,7 +283,7 @@ std::vector<Tensor> fold_with_transpose_sharded_(
 }
 
 Tensor FoldOperation::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     uint32_t stride_h,
     uint32_t stride_w,
@@ -331,7 +331,7 @@ Tensor FoldOperation::invoke(
     uint32_t pad_w,
     const std::optional<CoreCoord> grid_size,
     const std::optional<MemoryConfig>& override_memory_config) {
-    uint8_t queue_id = 0;
+    QueueId queue_id = DefaultQueueId;
     return invoke(
         queue_id,
         input_tensor,

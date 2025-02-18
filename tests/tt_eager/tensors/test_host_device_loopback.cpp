@@ -21,8 +21,8 @@ bool test_single_tile_single_dram_bank_loopback(IDevice* device) {
     bool pass = true;
     ttnn::Shape single_tile_shape({1, 1, TILE_HEIGHT, TILE_WIDTH});
 
-    Tensor host_a = ttnn::random::random(single_tile_shape).to(Layout::TILE);
-    Tensor device_a = host_a.to(device);
+    Tensor host_a = ttnn::random::random(single_tile_shape).to_layout(Layout::TILE);
+    Tensor device_a = host_a.to_device(device);
     Tensor loopbacked_a = device_a.cpu();
     auto host_a_data = owned_buffer::get_as<bfloat16>(host_a);
     auto loopbacked_a_data = owned_buffer::get_as<bfloat16>(loopbacked_a);
@@ -35,8 +35,8 @@ bool test_multi_tile_multi_dram_bank_loopback(IDevice* device) {
     bool pass = true;
     ttnn::Shape multi_tile_shape({1, 1, 4 * TILE_HEIGHT, 3 * TILE_WIDTH});
 
-    Tensor host_a = ttnn::random::random(multi_tile_shape).to(Layout::TILE);
-    Tensor device_a = host_a.to(device);
+    Tensor host_a = ttnn::random::random(multi_tile_shape).to_layout(Layout::TILE);
+    Tensor device_a = host_a.to_device(device);
     Tensor loopbacked_a = device_a.cpu();
     auto host_a_data = owned_buffer::get_as<bfloat16>(host_a);
     auto loopbacked_a_data = owned_buffer::get_as<bfloat16>(loopbacked_a);

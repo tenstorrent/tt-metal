@@ -41,8 +41,8 @@ TEST_F(MultiProducerCommandQueueTest, Stress) {
     const TensorSpec tensor_spec(tensor_shape, tensor_layout);
 
     // Thread 0 uses cq_0, thread 1 uses cq_1
-    const uint32_t t0_io_cq = 0;
-    const uint32_t t1_io_cq = 1;
+    const ttnn::QueueId t0_io_cq = ttnn::DefaultQueueId;
+    const ttnn::QueueId t1_io_cq = ttnn::QueueId(1);
 
     std::vector<float> t0_host_data(tensor_shape.volume());
     std::vector<float> t1_host_data(tensor_shape.volume());
@@ -54,7 +54,7 @@ TEST_F(MultiProducerCommandQueueTest, Stress) {
 
     std::thread t0([&]() {
         for (int j = 0; j < 100; j++) {
-            Tensor t0_tensor = t0_host_tensor.to(device, mem_cfg, t0_io_cq);
+            Tensor t0_tensor = t0_host_tensor.to_device(device, mem_cfg, t0_io_cq);
             EXPECT_TRUE(is_tensor_on_device(t0_tensor));
             EXPECT_THAT(t0_tensor.to_vector<float>(), Pointwise(FloatEq(), t0_host_data));
         }
@@ -62,7 +62,7 @@ TEST_F(MultiProducerCommandQueueTest, Stress) {
 
     std::thread t1([&]() {
         for (int j = 0; j < 100; j++) {
-            Tensor t1_tensor = t1_host_tensor.to(device, mem_cfg, t1_io_cq);
+            Tensor t1_tensor = t1_host_tensor.to_device(device, mem_cfg, t1_io_cq);
             EXPECT_TRUE(is_tensor_on_device(t1_tensor));
             EXPECT_THAT(t1_tensor.to_vector<float>(), Pointwise(FloatEq(), t1_host_data));
         }
@@ -91,8 +91,8 @@ TEST_F(MultiProducerCommandQueueTest, EventSync) {
     const TensorLayout tensor_layout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), mem_cfg);
     const TensorSpec tensor_spec(tensor_shape, tensor_layout);
 
-    const uint32_t write_cq = 0;
-    const uint32_t read_cq = 1;
+    const ttnn::QueueId write_cq = ttnn::DefaultQueueId;
+    const ttnn::QueueId read_cq = ttnn::QueueId(1);
 
     std::shared_ptr<Event> write_event = std::make_shared<Event>();
     std::shared_ptr<Event> read_event = std::make_shared<Event>();
@@ -110,10 +110,10 @@ TEST_F(MultiProducerCommandQueueTest, EventSync) {
 
             // Create tensor and transfer to device
             const Tensor host_tensor = Tensor::from_vector(host_data, tensor_spec);
-            memcpy(device->command_queue(write_cq), device_tensor, host_tensor);
+            memcpy(device->command_queue(*write_cq), device_tensor, host_tensor);
             EXPECT_TRUE(is_tensor_on_device(device_tensor));
 
-            ttnn::record_event(device->command_queue(write_cq), write_event);
+            ttnn::record_event(device->command_queue(*write_cq), write_event);
         }
     });
 
@@ -127,7 +127,7 @@ TEST_F(MultiProducerCommandQueueTest, EventSync) {
             EXPECT_FALSE(is_tensor_on_device(readback_tensor));
             EXPECT_THAT(readback_tensor.to_vector<float>(), Pointwise(FloatEq(), host_data));
 
-            ttnn::record_event(device->command_queue(read_cq), read_event);
+            ttnn::record_event(device->command_queue(*read_cq), read_event);
         }
     });
 

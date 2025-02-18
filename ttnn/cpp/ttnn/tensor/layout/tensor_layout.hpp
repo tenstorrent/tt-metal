@@ -82,6 +82,9 @@ public:
         return std::forward_as_tuple(dtype_, page_config_, memory_config_, alignment_);
     }
 
+    static TensorLayout restore_from_serialized(
+        DataType dtype, const PageConfig& page_config, const MemoryConfig& memory_config, const Alignment& alignment);
+
 private:
     // Private to not expose alignment parameter to the public API
     TensorLayout(

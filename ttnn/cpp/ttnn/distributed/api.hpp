@@ -45,6 +45,10 @@ Tensor get_device_tensor(const Tensor& multi_device_tensor, const int device_id)
 // Returns true has MultiDeviceHost/MultiDevice Storage
 bool is_multi_device_tensor(const Tensor& tensor);
 
+// Returns true if tensor has MultiDevice storage type and is allocated on a mesh buffer.
+// TODO: remove when the infrastructure uniformly works with mesh buffer backed tensors.
+bool is_mesh_buffer_tensor(const Tensor& tensor);
+
 // Given a multi-device tensor and a device, returns a list of per-device tensors.
 std::vector<Tensor> get_tensors_from_multi_device_storage(const Tensor& multi_device_tensor);
 

@@ -11,6 +11,7 @@
 
 #include "tests/tt_metal/tt_metal/dispatch/dispatch_test_utils.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
+#include "tests/tt_metal/distributed/utils.hpp"
 
 namespace tt::tt_metal::distributed::test {
 namespace {
@@ -323,123 +324,6 @@ std::shared_ptr<Program> initialize_dummy_program(CoreCoord worker_grid_size) {
     return program;
 }
 
-std::vector<std::shared_ptr<Program>> create_eltwise_bin_programs(
-    std::shared_ptr<MeshDevice>& mesh_device,
-    std::vector<std::shared_ptr<MeshBuffer>>& src0_bufs,
-    std::vector<std::shared_ptr<MeshBuffer>>& src1_bufs,
-    std::vector<std::shared_ptr<MeshBuffer>>& output_bufs) {
-    const std::vector<std::string> op_id_to_op_define = {"add_tiles", "mul_tiles"};
-    const std::vector<std::string> op_id_to_op_type_define = {"EltwiseBinaryType::ELWADD", "EltwiseBinaryType::ELWMUL"};
-
-    CoreCoord worker_grid_size = mesh_device->compute_with_storage_grid_size();
-
-    std::vector<std::shared_ptr<Program>> programs = {std::make_shared<Program>(), std::make_shared<Program>()};
-    auto full_grid = CoreRange({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
-
-    for (std::size_t eltwise_op = 0; eltwise_op < op_id_to_op_define.size(); eltwise_op++) {
-        auto& program = *programs[eltwise_op];
-        uint32_t single_tile_size = 2 * 1024;
-        uint32_t num_tiles = 2048;
-        uint32_t dram_buffer_size =
-            single_tile_size * num_tiles;  // num_tiles of FP16_B, hard-coded in the reader/writer kernels
-        uint32_t page_size = single_tile_size;
-
-        ReplicatedBufferConfig global_buffer_config{.size = dram_buffer_size};
-        DeviceLocalBufferConfig per_device_buffer_config{
-            .page_size = page_size,
-            .buffer_type = tt_metal::BufferType::DRAM,
-            .buffer_layout = TensorMemoryLayout::INTERLEAVED,
-            .bottom_up = true};
-
-        for (std::size_t col_idx = 0; col_idx < worker_grid_size.x; col_idx++) {
-            for (std::size_t row_idx = 0; row_idx < worker_grid_size.y; row_idx++) {
-                auto src0_dram_buffer =
-                    MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device.get());
-                src0_bufs.push_back(src0_dram_buffer);
-
-                auto src1_dram_buffer =
-                    MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device.get());
-                src1_bufs.push_back(src1_dram_buffer);
-                auto dst_dram_buffer =
-                    MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device.get());
-                output_bufs.push_back(dst_dram_buffer);
-            }
-        }
-
-        uint32_t src0_cb_index = tt::CBIndex::c_0;
-        uint32_t num_input_tiles = 2;
-        tt_metal::CircularBufferConfig cb_src0_config =
-            tt_metal::CircularBufferConfig(
-                num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}})
-                .set_page_size(src0_cb_index, single_tile_size);
-        auto cb_src0 = tt_metal::CreateCircularBuffer(program, full_grid, cb_src0_config);
-
-        uint32_t src1_cb_index = tt::CBIndex::c_1;
-        tt_metal::CircularBufferConfig cb_src1_config =
-            tt_metal::CircularBufferConfig(
-                num_input_tiles * single_tile_size, {{src1_cb_index, tt::DataFormat::Float16_b}})
-                .set_page_size(src1_cb_index, single_tile_size);
-        auto cb_src1 = tt_metal::CreateCircularBuffer(program, full_grid, cb_src1_config);
-
-        uint32_t ouput_cb_index = tt::CBIndex::c_16;
-        uint32_t num_output_tiles = 2;
-        tt_metal::CircularBufferConfig cb_output_config =
-            tt_metal::CircularBufferConfig(
-                num_output_tiles * single_tile_size, {{ouput_cb_index, tt::DataFormat::Float16_b}})
-                .set_page_size(ouput_cb_index, single_tile_size);
-        auto cb_output = tt_metal::CreateCircularBuffer(program, full_grid, cb_output_config);
-
-        auto binary_reader_kernel = tt_metal::CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_dual_8bank.cpp",
-            full_grid,
-            tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_1, .noc = tt_metal::NOC::RISCV_1_default});
-
-        auto unary_writer_kernel = tt_metal::CreateKernel(
-            program,
-            "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp",
-            full_grid,
-            tt_metal::DataMovementConfig{
-                .processor = tt_metal::DataMovementProcessor::RISCV_0, .noc = tt_metal::NOC::RISCV_0_default});
-
-        std::vector<uint32_t> compute_kernel_args = {};
-
-        bool fp32_dest_acc_en = false;
-        bool math_approx_mode = false;
-        std::map<string, string> binary_defines = {
-            {"ELTWISE_OP", op_id_to_op_define[eltwise_op]}, {"ELTWISE_OP_TYPE", op_id_to_op_type_define[eltwise_op]}};
-        auto eltwise_binary_kernel = tt_metal::CreateKernel(
-            program,
-            "tt_metal/kernels/compute/eltwise_binary.cpp",
-            full_grid,
-            tt_metal::ComputeConfig{.compile_args = compute_kernel_args, .defines = binary_defines});
-
-        SetRuntimeArgs(program, eltwise_binary_kernel, full_grid, {2048, 1});
-
-        for (std::size_t col_idx = 0; col_idx < worker_grid_size.x; col_idx++) {
-            for (std::size_t row_idx = 0; row_idx < worker_grid_size.y; row_idx++) {
-                CoreCoord curr_core = {col_idx, row_idx};
-                const std::array<uint32_t, 7> reader_args = {
-                    src0_bufs.at(col_idx * worker_grid_size.y + row_idx)->address(),
-                    0,
-                    num_tiles,
-                    src1_bufs.at(col_idx * worker_grid_size.y + row_idx)->address(),
-                    0,
-                    num_tiles,
-                    0};
-
-                const std::array<uint32_t, 3> writer_args = {
-                    output_bufs.at(col_idx * worker_grid_size.y + row_idx)->address(), 0, num_tiles};
-
-                SetRuntimeArgs(program, unary_writer_kernel, curr_core, writer_args);
-                SetRuntimeArgs(program, binary_reader_kernel, curr_core, reader_args);
-            }
-        }
-    }
-    return programs;
-}
-
 void verify_cb_config(
     std::shared_ptr<MeshDevice>& mesh_device,
     MeshWorkload& workload,
@@ -505,9 +389,10 @@ void validate_sems(
     }
 }
 
-using MeshWorkloadTest = T3000MultiDeviceFixture;
+using MeshWorkloadTestT3000 = T3000MeshDeviceFixture;
+using MeshWorkloadTestSuite = GenericMeshDeviceFixture;
 
-TEST_F(MeshWorkloadTest, MeshWorkloadOnActiveEthAsserts) {
+TEST_F(MeshWorkloadTestT3000, MeshWorkloadOnActiveEthAsserts) {
     // A MeshWorkload cannot be run on ethernet core - Runtime should assert if the
     // user tries this. Verify this functionality here.
     std::shared_ptr<MeshWorkload> workload = std::make_shared<MeshWorkload>();
@@ -519,14 +404,14 @@ TEST_F(MeshWorkloadTest, MeshWorkloadOnActiveEthAsserts) {
             IDevice* device = mesh_device_->get_device(logical_y, logical_x);
             auto programs = create_random_programs(
                 1, mesh_device_->compute_with_storage_grid_size(), seed, device->get_active_ethernet_cores(true));
-            LogicalDeviceRange devices = {{logical_x, logical_y}, {logical_x + 1, logical_y + 1}};
+            LogicalDeviceRange devices = {{logical_x, logical_y}, {logical_x, logical_y}};
             AddProgramToMeshWorkload(*workload, *programs[0], devices);
         }
     }
     EXPECT_THROW(EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false), std::exception);
 }
 
-TEST_F(MeshWorkloadTest, SimultaneousMeshWorkloads) {
+TEST_F(MeshWorkloadTestT3000, SimultaneousMeshWorkloads) {
     uint32_t num_programs = 100;
     uint32_t num_heterogeneous_programs = 64;
     uint32_t num_iterations = 1000;
@@ -606,7 +491,8 @@ TEST_F(MeshWorkloadTest, SimultaneousMeshWorkloads) {
     Finish(mesh_device_->mesh_command_queue());
 }
 
-TEST_F(MeshWorkloadTest, RandomizedMeshWorkload) {
+// MeshWorkload tests on N300 and T3000
+TEST_F(MeshWorkloadTestSuite, RandomizedMeshWorkload) {
     uint32_t num_programs = 60;
     uint32_t num_iterations = 1500;
     auto random_seed = 10;
@@ -616,8 +502,8 @@ TEST_F(MeshWorkloadTest, RandomizedMeshWorkload) {
     log_info("Create {} MeshWorkloads", num_programs);
     auto programs = create_random_programs(num_programs, mesh_device_->compute_with_storage_grid_size(), seed);
     std::mt19937 rng(seed);
-    std::uniform_int_distribution<int> gen_x(1, 4);
-    std::uniform_int_distribution<int> gen_y(1, 2);
+    std::uniform_int_distribution<int> gen_x(1, mesh_device_->num_cols());
+    std::uniform_int_distribution<int> gen_y(1, mesh_device_->num_rows());
     std::vector<std::shared_ptr<MeshWorkload>> mesh_workloads = {};
 
     // Create multiple mesh workloads on grids of random sizes.
@@ -643,17 +529,19 @@ TEST_F(MeshWorkloadTest, RandomizedMeshWorkload) {
     Finish(mesh_device_->mesh_command_queue());
 }
 
-TEST_F(MeshWorkloadTest, EltwiseBinaryMeshWorkload) {
+TEST_F(MeshWorkloadTestSuite, EltwiseBinaryMeshWorkload) {
     std::vector<std::shared_ptr<MeshBuffer>> src0_bufs = {};
     std::vector<std::shared_ptr<MeshBuffer>> src1_bufs = {};
     std::vector<std::shared_ptr<MeshBuffer>> output_bufs = {};
 
     CoreCoord worker_grid_size = mesh_device_->compute_with_storage_grid_size();
 
-    auto programs = create_eltwise_bin_programs(mesh_device_, src0_bufs, src1_bufs, output_bufs);
+    auto programs = tt::tt_metal::distributed::test::utils::create_eltwise_bin_programs(
+        mesh_device_, src0_bufs, src1_bufs, output_bufs);
     auto mesh_workload = CreateMeshWorkload();
-    LogicalDeviceRange devices_0 = LogicalDeviceRange({0, 0}, {3, 0});
-    LogicalDeviceRange devices_1 = LogicalDeviceRange({0, 1}, {3, 1});
+    LogicalDeviceRange devices_0 = LogicalDeviceRange({0, 0}, {mesh_device_->num_cols() - 1, 0});
+    LogicalDeviceRange devices_1 = LogicalDeviceRange(
+        {0, mesh_device_->num_rows() - 1}, {mesh_device_->num_cols() - 1, mesh_device_->num_rows() - 1});
     AddProgramToMeshWorkload(mesh_workload, *programs[0], devices_0);
     AddProgramToMeshWorkload(mesh_workload, *programs[1], devices_1);
     std::vector<uint32_t> src0_vec = create_constant_vector_of_bfloat16(src0_bufs[0]->size(), 2);
@@ -698,7 +586,7 @@ TEST_F(MeshWorkloadTest, EltwiseBinaryMeshWorkload) {
     }
 }
 
-TEST_F(MeshWorkloadTest, MeshWorkloadSanity) {
+TEST_F(MeshWorkloadTestSuite, MeshWorkloadSanity) {
     CoreCoord worker_grid_size = mesh_device_->compute_with_storage_grid_size();
     uint32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::Float16_b);
 
@@ -763,8 +651,9 @@ TEST_F(MeshWorkloadTest, MeshWorkloadSanity) {
     }
     auto program_1 = initialize_dummy_program(worker_grid_size);
     auto mesh_workload = MeshWorkload();
-    LogicalDeviceRange devices_0 = LogicalDeviceRange({0, 0}, {3, 0});
-    LogicalDeviceRange devices_1 = LogicalDeviceRange({0, 1}, {3, 1});
+    LogicalDeviceRange devices_0 = LogicalDeviceRange({0, 0}, {mesh_device_->num_cols() - 1, 0});
+    LogicalDeviceRange devices_1 = LogicalDeviceRange(
+        {0, mesh_device_->num_rows() - 1}, {mesh_device_->num_cols() - 1, mesh_device_->num_rows() - 1});
     AddProgramToMeshWorkload(mesh_workload, program, devices_0);
     AddProgramToMeshWorkload(mesh_workload, *program_1, devices_1);
 
@@ -813,7 +702,7 @@ TEST_F(MeshWorkloadTest, MeshWorkloadSanity) {
     }
 }
 
-TEST_F(MeshWorkloadTest, MeshWorkloadCBUpdate) {
+TEST_F(MeshWorkloadTestSuite, MeshWorkloadCBUpdate) {
     std::shared_ptr<Program> program = std::make_shared<Program>();
     CoreCoord worker_grid_size = mesh_device_->compute_with_storage_grid_size();
     CoreRange cr = CoreRange({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
@@ -829,7 +718,8 @@ TEST_F(MeshWorkloadTest, MeshWorkloadCBUpdate) {
     initialize_dummy_kernels(*program, cr_set);
 
     auto mesh_workload = CreateMeshWorkload();
-    LogicalDeviceRange devices = LogicalDeviceRange({0, 0}, {3, 1});
+    LogicalDeviceRange devices =
+        LogicalDeviceRange({0, 0}, {mesh_device_->num_cols() - 1, mesh_device_->num_rows() - 1});
 
     AddProgramToMeshWorkload(mesh_workload, *program, devices);
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload, false);
@@ -848,7 +738,7 @@ TEST_F(MeshWorkloadTest, MeshWorkloadCBUpdate) {
     verify_cb_config(mesh_device_, mesh_workload, updated_cb_config_vector, cr_set);
 }
 
-TEST_F(MeshWorkloadTest, MeshWorkloadSemaphoreSanity) {
+TEST_F(MeshWorkloadTestSuite, MeshWorkloadSemaphoreSanity) {
     auto worker_grid_size = mesh_device_->compute_with_storage_grid_size();
     auto full_grid = CoreRange({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
     Program program;
@@ -859,7 +749,8 @@ TEST_F(MeshWorkloadTest, MeshWorkloadSemaphoreSanity) {
         expected_semaphore_values.push_back(sem);
     }
     auto mesh_workload = CreateMeshWorkload();
-    LogicalDeviceRange devices = LogicalDeviceRange({0, 0}, {3, 1});
+    LogicalDeviceRange devices =
+        LogicalDeviceRange({0, 0}, {mesh_device_->num_cols() - 1, mesh_device_->num_rows() - 1});
     AddProgramToMeshWorkload(mesh_workload, program, devices);
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload, false);
     Finish(mesh_device_->mesh_command_queue());
@@ -869,7 +760,7 @@ TEST_F(MeshWorkloadTest, MeshWorkloadSemaphoreSanity) {
     }
 }
 
-TEST_F(MeshWorkloadTest, MeshWorkloadSemaphoreDifferentPrograms) {
+TEST_F(MeshWorkloadTestSuite, MeshWorkloadSemaphoreDifferentPrograms) {
     auto worker_grid_size = mesh_device_->compute_with_storage_grid_size();
     auto full_grid = CoreRange({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
     Program program0;
@@ -885,8 +776,9 @@ TEST_F(MeshWorkloadTest, MeshWorkloadSemaphoreDifferentPrograms) {
         expected_semaphore_values_1.push_back(sem + 1);
     }
     auto mesh_workload = CreateMeshWorkload();
-    LogicalDeviceRange devices_0 = LogicalDeviceRange({0, 0}, {3, 0});
-    LogicalDeviceRange devices_1 = LogicalDeviceRange({0, 1}, {3, 1});
+    LogicalDeviceRange devices_0 = LogicalDeviceRange({0, 0}, {mesh_device_->num_cols() - 1, 0});
+    LogicalDeviceRange devices_1 = LogicalDeviceRange(
+        {0, mesh_device_->num_rows() - 1}, {mesh_device_->num_cols() - 1, mesh_device_->num_rows() - 1});
 
     AddProgramToMeshWorkload(mesh_workload, program0, devices_0);
     AddProgramToMeshWorkload(mesh_workload, program1, devices_1);

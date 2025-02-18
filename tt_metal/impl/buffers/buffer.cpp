@@ -208,12 +208,12 @@ BufferPageMapping generate_buffer_page_mapping(const Buffer& buffer) {
     uint32_t num_dev_pages = buffer.num_dev_pages();
     auto [core_host_page_indices, shard_shape] = core_to_host_pages(
         num_dev_pages,
-        shard_spec.size(),
+        shard_spec.num_pages(),
         num_cores,
         buffer.buffer_layout(),
         shard_spec.page_shape,
         shard_spec.shape(),
-        shard_spec.tensor2d_shape);
+        shard_spec.tensor2d_shape_in_pages);
 
     buffer_page_mapping.core_host_page_indices_ = std::vector<std::vector<uint32_t>>(num_cores);
 
@@ -229,7 +229,7 @@ BufferPageMapping generate_buffer_page_mapping(const Buffer& buffer) {
     auto shape_in_pages = shard_spec.shape_in_pages();
     for (uint32_t core_index = 0; core_index < core_host_page_indices.size(); core_index++) {
         uint32_t valid_shard_page = 0;
-        buffer_page_mapping.core_host_page_indices_[core_index].reserve(shard_spec.size());
+        buffer_page_mapping.core_host_page_indices_[core_index].reserve(shard_spec.num_pages());
         uint32_t shard_page_id = 0;
         for (uint32_t shard_page_x = 0; shard_page_x < shape_in_pages[0]; shard_page_x++) {
             for (uint32_t shard_page_y = 0; shard_page_y < shape_in_pages[1]; shard_page_y++) {
@@ -469,7 +469,7 @@ uint32_t Buffer::num_dev_pages() const {
         return this->num_pages();
     }
 
-    return this->shard_spec().size() * this->num_cores().value();
+    return this->shard_spec().num_pages() * this->num_cores().value();
 }
 
 CoreType Buffer::core_type() const {
@@ -523,7 +523,7 @@ DeviceAddr Buffer::bank_local_page_address(uint32_t bank_id, uint32_t page_index
     uint32_t offset;
     if (is_sharded(this->buffer_layout())) {
         auto shard_spec = this->shard_spec();
-        uint32_t pages_offset_within_bank = page_index % shard_spec.size();
+        uint32_t pages_offset_within_bank = page_index % shard_spec.num_pages();
         offset = (round_up(this->page_size(), this->alignment()) * pages_offset_within_bank);
     } else {
         uint32_t pages_offset_within_bank = page_index / num_banks;
@@ -532,7 +532,7 @@ DeviceAddr Buffer::bank_local_page_address(uint32_t bank_id, uint32_t page_index
     return this->address() + offset;
 }
 
-uint32_t Buffer::alignment() const { return this->allocator_->get_config().alignment; }
+uint32_t Buffer::alignment() const { return allocator_->get_alignment(this->buffer_type()); }
 
 DeviceAddr Buffer::aligned_page_size() const {
     return align(page_size(), this->alignment());
@@ -550,7 +550,7 @@ DeviceAddr Buffer::aligned_size_per_bank() const {
 DeviceAddr Buffer::sharded_page_address(uint32_t bank_id, uint32_t page_index) const {
     TT_FATAL(is_sharded(this->buffer_layout()), "Buffer not sharded");
     auto shard_spec = this->shard_spec();
-    uint32_t pages_offset_within_bank = page_index % shard_spec.size();
+    uint32_t pages_offset_within_bank = page_index % shard_spec.num_pages();
     auto offset = (round_up(this->page_size(), this->alignment()) * pages_offset_within_bank);
     return translate_page_address(offset, bank_id);
 }
@@ -591,12 +591,12 @@ bool ShardSpec::operator==(const ShardSpec&) const = default;
 bool ShardSpec::operator!=(const ShardSpec&) const = default;
 
 std::array<uint32_t, 2> ShardSpecBuffer::shape_in_pages() const {
-    auto width_in_pages = page_shape[0] == 0 ? 0 : tensor_shard_spec.shape[0] / page_shape[0];
-    auto height_in_pages = page_shape[1] == 0 ? 0 : tensor_shard_spec.shape[1] / page_shape[1];
-    return {width_in_pages, height_in_pages};
+    auto height_in_pages = page_shape[0] == 0 ? 0 : tensor_shard_spec.shape[0] / page_shape[0];
+    auto width_in_pages = page_shape[1] == 0 ? 0 : tensor_shard_spec.shape[1] / page_shape[1];
+    return {height_in_pages, width_in_pages};
 }
 
-DeviceAddr ShardSpecBuffer::size() const {
+DeviceAddr ShardSpecBuffer::num_pages() const {
     auto shape_in_pages_ = this->shape_in_pages();
     return shape_in_pages_[0] * shape_in_pages_[1];
 }

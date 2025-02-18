@@ -12,6 +12,8 @@
 #include <tt-metalium/command_queue_interface.hpp>
 #include <tt-metalium/dispatch_settings.hpp>
 
+#include "tt_cluster.hpp"
+
 // Because we are a Friend of Program, accessing Program::get_program_transfer_info() and Program::get_kernels_buffer()
 // MUST REMOVE
 #include <program_impl.hpp>
@@ -399,7 +401,7 @@ void HWCommandQueue::enqueue_program(Program& program, bool blocking) {
 }
 
 void HWCommandQueue::enqueue_record_event(
-    const std::shared_ptr<Event>& event, bool clear_count, tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    const std::shared_ptr<Event>& event, tt::stl::Span<const SubDeviceId> sub_device_ids) {
     ZoneScopedN("HWCommandQueue_enqueue_record_event");
 
     TT_FATAL(!this->manager.get_bypass_mode(), "Enqueue Record Event cannot be used with tracing");
@@ -413,38 +415,22 @@ void HWCommandQueue::enqueue_record_event(
     event->ready = true;  // what does this mean???
 
     sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
-
-    auto command = EnqueueRecordEventCommand(
-        this->id_,
-        this->device_,
-        this->noc_index_,
-        this->manager,
+    event_dispatch::issue_record_event_commands(
+        device_,
         event->event_id,
-        this->expected_num_workers_completed,
+        id_,
+        device_->num_hw_cqs(),
+        this->manager,
         sub_device_ids,
-        clear_count,
-        true);
-    this->enqueue_command(command, false, sub_device_ids);
-
-    if (clear_count) {
-        for (const auto& id : sub_device_ids) {
-            this->expected_num_workers_completed[id.to_index()] = 0;
-        }
-    }
+        this->expected_num_workers_completed);
     this->issued_completion_q_reads.push(
         std::make_shared<CompletionReaderVariant>(std::in_place_type<ReadEventDescriptor>, event->event_id));
     this->increment_num_entries_in_completion_q();
 }
 
-void HWCommandQueue::enqueue_wait_for_event(const std::shared_ptr<Event>& sync_event, bool clear_count) {
+void HWCommandQueue::enqueue_wait_for_event(const std::shared_ptr<Event>& sync_event) {
     ZoneScopedN("HWCommandQueue_enqueue_wait_for_event");
-
-    auto command = EnqueueWaitForEventCommand(this->id_, this->device_, this->manager, *sync_event, clear_count);
-    this->enqueue_command(command, false, {});
-
-    if (clear_count) {
-        this->manager.reset_event_id(this->id_);
-    }
+    event_dispatch::issue_wait_for_event_commands(id_, sync_event->cq_id, this->manager, sync_event->event_id);
 }
 
 void HWCommandQueue::enqueue_trace(const uint32_t trace_id, bool blocking) {
@@ -528,29 +514,8 @@ void HWCommandQueue::read_completion_queue() {
                                 this->exit_condition);
                         } else if constexpr (std::is_same_v<T, ReadEventDescriptor>) {
                             ZoneScopedN("CompletionQueueReadEvent");
-                            uint32_t read_ptr = this->manager.get_completion_queue_read_ptr(this->id_);
-                            thread_local static std::vector<uint32_t> dispatch_cmd_and_event(
-                                (sizeof(CQDispatchCmd) + DispatchSettings::EVENT_PADDED_SIZE) / sizeof(uint32_t));
-                            tt::Cluster::instance().read_sysmem(
-                                dispatch_cmd_and_event.data(),
-                                sizeof(CQDispatchCmd) + DispatchSettings::EVENT_PADDED_SIZE,
-                                read_ptr,
-                                mmio_device_id,
-                                channel);
-                            uint32_t event_completed = dispatch_cmd_and_event[sizeof(CQDispatchCmd) / sizeof(uint32_t)];
-
-                            TT_ASSERT(
-                                event_completed == read_descriptor.event_id,
-                                "Event Order Issue: expected to read back completion signal for event {} but got {}!",
-                                read_descriptor.event_id,
-                                event_completed);
-                            this->manager.completion_queue_pop_front(1, this->id_);
-                            this->manager.set_last_completed_event(this->id_, read_descriptor.get_global_event_id());
-                            log_trace(
-                                LogAlways,
-                                "Completion queue popped event {} (global: {})",
-                                event_completed,
-                                read_descriptor.get_global_event_id());
+                            event_dispatch::read_events_from_completion_queue(
+                                read_descriptor, mmio_device_id, channel, this->id_, this->manager);
                         }
                     },
                     read_descriptor);
@@ -570,7 +535,7 @@ void HWCommandQueue::finish(tt::stl::Span<const SubDeviceId> sub_device_ids) {
     ZoneScopedN("HWCommandQueue_finish");
     tt::log_debug(tt::LogDispatch, "Finish for command queue {}", this->id_);
     std::shared_ptr<Event> event = std::make_shared<Event>();
-    this->enqueue_record_event(event, false, sub_device_ids);
+    this->enqueue_record_event(event, sub_device_ids);
     if (tt::llrt::RunTimeOptions::get_instance().get_test_mode_enabled()) {
         while (this->num_entries_in_completion_q > this->num_completed_completion_q_reads) {
             if (DPrintServerHangDetected()) {

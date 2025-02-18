@@ -4,7 +4,9 @@
 
 #pragma once
 
-#include "ttnn/tensor/shape/small_vector.hpp"
+#include <span>
+#include <tt-metalium/small_vector.hpp>
+
 #include "ttnn/tensor/tensor.hpp"
 #include <ttnn/tensor/xtensor/xtensor_all_includes.hpp>
 

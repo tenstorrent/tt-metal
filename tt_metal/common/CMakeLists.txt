@@ -1,9 +1,10 @@
 set(COMMON_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/core_assignment.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/core_coord.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/core_descriptor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/mesh_coord.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal_soc_descriptor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/shape2d.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/shape_base.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tt_backend_api_types.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/work_split.cpp
@@ -17,9 +18,10 @@ target_link_libraries(
     common
     PUBLIC
         nlohmann_json::nlohmann_json
-        magic_enum
+        magic_enum::magic_enum
         fmt::fmt-header-only
         span
+        small_vector
         Metalium::Metal::STL
         umd::Firmware
         umd::device

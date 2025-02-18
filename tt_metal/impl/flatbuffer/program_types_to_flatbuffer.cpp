@@ -4,7 +4,9 @@
 
 #include "flatbuffer/base_types_to_flatbuffer.hpp"
 #include "flatbuffer/program_types_to_flatbuffer.hpp"
+#include "lightmetal/lightmetal_capture.hpp"  // For LightMetalCaptureContext
 #include <overloaded.hpp>
+
 namespace tt::tt_metal {
 
 // Original types defined in core_coord.hpp
@@ -34,6 +36,27 @@ std::pair<flatbuffer::CoreSpec, ::flatbuffers::Offset<void>> to_flatbuffer(
                 return {flatbuffer::CoreSpec::CoreRangeSet, core_range_set.Union()};
             }},
         core_spec);
+}
+
+FlatbufferCoreCoordVector to_flatbuffer(
+    flatbuffers::FlatBufferBuilder& builder, const std::vector<CoreCoord>& core_spec) {
+    std::vector<flatbuffers::Offset<flatbuffer::CoreCoord>> core_offsets;
+    for (const auto& coord : core_spec) {
+        core_offsets.push_back(flatbuffer::CreateCoreCoord(builder, coord.x, coord.y));
+    }
+    return builder.CreateVector(core_offsets);
+}
+
+FlatbufferUInt32VecOfVec to_flatbuffer(
+    flatbuffers::FlatBufferBuilder& builder, const std::vector<std::vector<uint32_t>>& vec_of_vec) {
+    std::vector<flatbuffers::Offset<flatbuffer::UInt32Vector>> vec_offsets;
+
+    for (const auto& sub_vector : vec_of_vec) {
+        auto values_offset = builder.CreateVector(sub_vector);
+        vec_offsets.push_back(flatbuffer::CreateUInt32Vector(builder, values_offset));
+    }
+
+    return builder.CreateVector(vec_offsets);
 }
 
 // Original types defined in kernel_types.hpp
@@ -155,10 +178,8 @@ flatbuffers::Offset<flatbuffer::RuntimeArg> create_runtime_arg(
                 return builder.CreateStruct(tt_metal::flatbuffer::UInt32Value{arg_value}).Union();
             },
             [&](Buffer* arg_value) -> flatbuffers::Offset<void> {
-                // auto& ctx = LightMetalCaptureContext::Get();
-                // uint32_t buffer_global_id = ctx.GetGlobalId(arg_value);
-                // TODO (kmabee) - Uncomment above code once capture library is merged. Temp hack here for now.
-                uint32_t buffer_global_id = 0;
+                auto& ctx = LightMetalCaptureContext::get();
+                uint32_t buffer_global_id = ctx.get_global_id(arg_value);
                 value_type = flatbuffer::RuntimeArgValue::BufferGlobalId;
                 return builder.CreateStruct(tt_metal::flatbuffer::BufferGlobalId{buffer_global_id}).Union();
             }},

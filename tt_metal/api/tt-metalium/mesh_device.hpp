@@ -12,6 +12,7 @@
 #include "device.hpp"
 
 #include "mesh_config.hpp"
+#include "mesh_coord.hpp"
 #include "mesh_device_view.hpp"
 #include "sub_device_types.hpp"
 #include "span.hpp"
@@ -58,11 +59,14 @@ private:
     std::vector<std::shared_ptr<MeshDevice>>
         submeshes_;                          // Parent owns submeshes and is responsible for their destruction
     std::weak_ptr<MeshDevice> parent_mesh_;  // Submesh created with reference to parent mesh
-    std::unique_ptr<MeshCommandQueue> mesh_command_queue_;
+    std::vector<std::unique_ptr<MeshCommandQueue>> mesh_command_queues_;
     std::unique_ptr<SubDeviceManagerTracker> sub_device_manager_tracker_;
 
     // This is a reference device used to query properties that are the same for all devices in the mesh.
     IDevice* reference_device() const;
+
+    // Returns the devices in row-major order for the new mesh shape
+    std::vector<IDevice*> get_row_major_devices(const MeshShape& new_shape) const;
 
 public:
     MeshDevice(
@@ -80,7 +84,7 @@ public:
     // IDevice interface implementation
     tt::ARCH arch() const override;
     MeshDeviceID id() const override;
-    uint32_t build_key() const override;
+    chip_id_t build_id() const override;
     uint8_t num_hw_cqs() const override;
     bool is_initialized() const override;
 
@@ -124,19 +128,19 @@ public:
     const std::set<CoreCoord>& storage_only_cores() const override;
     uint32_t get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& core) const override;
     uint32_t get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const override;
-    const JitBuildEnv& build_env() const override;
-    const string build_firmware_target_path(uint32_t programmable_core, uint32_t processor_class, int i) const override;
-    const string build_kernel_target_path(uint32_t programmable_core, uint32_t processor_class, int i, const string& kernel_name) const override;
-    const JitBuildState& build_firmware_state(uint32_t programmable_core, uint32_t processor_class, int i) const override;
-    const JitBuildState& build_kernel_state(uint32_t programmable_core, uint32_t processor_class, int i) const override;
-    const JitBuildStateSubset build_kernel_states(uint32_t programmable_core, uint32_t processor_class) const override;
     SystemMemoryManager& sysmem_manager() override;
     CommandQueue& command_queue(size_t cq_id = 0) override;
 
     // Trace APIs
     void begin_trace(const uint8_t cq_id, const uint32_t tid) override;
     void end_trace(const uint8_t cq_id, const uint32_t tid) override;
-    void replay_trace(const uint8_t cq_id, const uint32_t tid, const bool blocking) override;
+
+    // TODO: `block_on_worker_thread` can be removed once we remove multi-threaded async dispatch
+    void replay_trace(
+        const uint8_t cq_id,
+        const uint32_t tid,
+        const bool block_on_device,
+        const bool block_on_worker_thread) override;
     void release_trace(const uint32_t tid) override;
     std::shared_ptr<TraceBuffer> get_trace(uint32_t tid) override;
     uint32_t get_trace_buffers_size() const override;
@@ -148,13 +152,16 @@ public:
     bool using_fast_dispatch() const override;
 
     // Initialization APIs
-    bool initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap = {}, bool minimal = false) override;
-    void build_firmware() override;
+    bool initialize(
+        const uint8_t num_hw_cqs,
+        size_t l1_small_size,
+        size_t trace_region_size,
+        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
+        bool minimal = false) override;
     void reset_cores() override;
     void initialize_and_launch_firmware() override;
     void init_command_queue_host() override;
     void init_command_queue_device() override;
-    void update_dispatch_cores_for_multi_cq_eth_dispatch() override;
     bool close() override;
     void enable_async(bool enable) override;
     void synchronize() override;
@@ -198,6 +205,7 @@ public:
     IDevice* get_device_index(size_t logical_device_id) const;
     IDevice* get_device(chip_id_t physical_device_id) const;
     IDevice* get_device(size_t row_idx, size_t col_idx) const;
+    IDevice* get_device(const MeshCoordinate& coord) const;
 
     const DeviceIds get_device_ids() const;
 
@@ -236,7 +244,7 @@ public:
 
     // These methods will get removed once in favour of the ones in IDevice* and TT-Mesh bringup
     // These are prefixed with "mesh_" to avoid conflicts with the IDevice* methods
-    MeshCommandQueue& mesh_command_queue();
+    MeshCommandQueue& mesh_command_queue(std::size_t cq_id = 0) const;
     MeshSubDeviceManagerId mesh_create_sub_device_manager(
         tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size);
     // TODO #16526: Temporary api until migration to actual fabric is complete

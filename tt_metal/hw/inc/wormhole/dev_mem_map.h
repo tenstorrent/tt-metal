@@ -72,7 +72,7 @@
 #define MEM_L1_BARRIER 12
 #define MEM_MAILBOX_BASE 16
 // Magic size must be big enough to hold dev_msgs_t.  static_asserts will fire if this is too small
-#define MEM_MAILBOX_SIZE 12256
+#define MEM_MAILBOX_SIZE 12640
 // These are used in ncrisc-halt.S, asserted in ncrisc.cc to be valid
 #define MEM_NCRISC_HALT_STACK_MAILBOX_ADDRESS MEM_MAILBOX_BASE + 4
 #define MEM_SLAVE_RUN_MAILBOX_ADDRESS MEM_MAILBOX_BASE + 8
@@ -136,7 +136,7 @@
 // TODO: reduce this when mailbox sizes are core type aware for some members (eg watcher/dprint)
 // TODO: also, move into gap above in the reserved area
 #define MEM_IERISC_MAILBOX_BASE (MEM_IERISC_RESERVED2 + MEM_IERISC_RESERVED2_SIZE)
-#define MEM_IERISC_MAILBOX_SIZE 3232
+#define MEM_IERISC_MAILBOX_SIZE 3616
 #define MEM_IERISC_MAILBOX_END (MEM_IERISC_MAILBOX_BASE + MEM_IERISC_MAILBOX_SIZE)
 #define MEM_IERISC_FIRMWARE_BASE MEM_IERISC_MAILBOX_END
 #define MEM_IERISC_MAP_END (MEM_IERISC_FIRMWARE_BASE + MEM_IERISC_FIRMWARE_SIZE)

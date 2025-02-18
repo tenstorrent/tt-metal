@@ -4,7 +4,7 @@
 
 #include "pad.hpp"
 
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
@@ -14,10 +14,7 @@ namespace ttnn::operations::data_movement {
 
 namespace {
 
-template <typename ArrayType>
-bool eq_spans(const ArrayType& a, const ArrayType& b) {
-    return std::equal(a.begin(), a.end(), b.begin(), b.end());
-}
+bool eq_spans(const auto a, const auto b) { return std::equal(a.begin(), a.end(), b.begin(), b.end()); }
 
 ttnn::Shape update_original_shape(const ttnn::Shape& padded_shape, const ttnn::Shape& input_shape) {
     ttnn::SmallVector<uint32_t> updated_shape;
@@ -31,7 +28,7 @@ ttnn::Shape update_original_shape(const ttnn::Shape& padded_shape, const ttnn::S
 }
 
 static ttnn::Tensor pad_impl(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     std::span<const uint32_t> output_padded_shape,
     std::span<const uint32_t> input_tensor_start,
@@ -157,7 +154,7 @@ static ttnn::Tensor pad_impl(
 }
 
 static ttnn::Tensor pad_impl(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     ttnn::SmallVector<std::pair<uint32_t, uint32_t>> padding,
     const float value,
@@ -228,7 +225,7 @@ static ttnn::Tensor pad_impl(
 // Any rank tensor supported
 
 ttnn::Tensor ExecutePad::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     tt::stl::Span<const std::pair<uint32_t, uint32_t>> padding,
     const float value,
@@ -263,7 +260,7 @@ ttnn::Tensor ExecutePad::invoke(
 
 #define PAD_OVERLOAD_DIM_IMPL(ShapeType)                                                                               \
     ttnn::Tensor ExecutePad::invoke(                                                                                   \
-        uint8_t queue_id,                                                                                              \
+        QueueId queue_id,                                                                                              \
         const ttnn::Tensor& input_tensor,                                                                              \
         const ShapeType& output_padded_shape,                                                                          \
         const ShapeType& input_tensor_start,                                                                           \

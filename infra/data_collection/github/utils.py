@@ -97,6 +97,8 @@ def get_job_failure_signature_(github_job, failure_description) -> Optional[Unio
         "lost communication with the server": str(InfraErrorV1.RUNNER_COMM_FAILURE),
         "runner has received a shutdown signal": str(InfraErrorV1.RUNNER_SHUTDOWN_FAILURE),
         "No space left on device": str(InfraErrorV1.DISK_SPACE_FAILURE),
+        "API rate limit exceeded": str(InfraErrorV1.API_RATE_LIMIT_FAILURE),
+        "Tenstorrent cards seem to be in use": str(InfraErrorV1.RUNNER_CARD_IN_USE_FAILURE),
     }
 
     # Check the mapping dictionary for specific failure signature types
@@ -230,7 +232,8 @@ def get_job_row_from_github_job(github_job, github_job_id_to_annotations):
 
     job_end_ts = github_job["completed_at"]
 
-    job_success = github_job["conclusion"] == "success"
+    # skipped jobs are considered passing jobs (nothing was run)
+    job_success = github_job["conclusion"] in ["success", "skipped"]
 
     is_build_job = "build" in name or "build" in labels
 

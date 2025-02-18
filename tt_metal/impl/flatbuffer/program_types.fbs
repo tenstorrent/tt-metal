@@ -72,3 +72,7 @@ union RuntimeArgValue {
 table RuntimeArg {
   value: RuntimeArgValue;
 }
+
+table UInt32Vector {
+    values: [uint32];
+}

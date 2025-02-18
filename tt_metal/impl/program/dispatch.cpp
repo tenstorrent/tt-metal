@@ -15,6 +15,7 @@
 #include "tt_metal/impl/dispatch/data_collection.hpp"
 #include "tt_metal/impl/dispatch/device_command_calculator.hpp"
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
+#include "tt_metal/jit_build/build_env_manager.hpp"
 
 namespace tt::tt_metal {
 namespace program_dispatch {
@@ -217,7 +218,8 @@ uint32_t finalize_kernel_bins(
             auto& optional_id = kg->kernel_ids[class_id];
             if (optional_id) {
                 const auto kernel = kernels.at(optional_id.value());
-                const std::vector<const ll_api::memory*>& binaries = kernel->binaries(device->build_key());
+                const std::vector<const ll_api::memory*>& binaries = kernel->binaries(
+                    BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
                 // TODO: this is really ugly, save me future-HAL!
                 if (programmable_core_type_index ==
                     hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)) {
@@ -406,7 +408,8 @@ void insert_empty_program_dispatch_preamble_cmd(ProgramCommandSequence& program_
 
 void insert_stall_cmds(ProgramCommandSequence& program_command_sequence, SubDeviceId sub_device_id, IDevice* device) {
     // Initialize stall command sequences for this program.
-    auto dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
+    auto dispatch_core_config = DispatchQueryManager::instance().get_dispatch_core_config();
+    auto dispatch_core_type = dispatch_core_config.get_core_type();
     uint32_t dispatch_message_addr =
         DispatchMemMap::get(dispatch_core_type)
             .get_device_command_queue_addr(CommandQueueDeviceAddrType::DISPATCH_MESSAGE) +
@@ -549,7 +552,8 @@ void assemble_runtime_args_commands(
     ProgramCommandSequence& program_command_sequence, Program& program, IDevice* device) {
     static const uint32_t packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(device);
     NOC noc_index = dispatch_downstream_noc;
-    CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
+    auto dispatch_core_config = DispatchQueryManager::instance().get_dispatch_core_config();
+    auto dispatch_core_type = dispatch_core_config.get_core_type();
     const uint32_t max_prefetch_command_size = DispatchMemMap::get(dispatch_core_type).max_prefetch_command_size();
 
     // Dispatch Commands to Unicast Unique Runtime Args to Workers
@@ -812,7 +816,8 @@ void insert_write_packed_payloads(
 void assemble_device_commands(
     ProgramCommandSequence& program_command_sequence, Program& program, IDevice* device, SubDeviceId sub_device_id) {
     DeviceCommandCalculator calculator;
-    CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
+    auto dispatch_core_config = DispatchQueryManager::instance().get_dispatch_core_config();
+    auto dispatch_core_type = dispatch_core_config.get_core_type();
     NOC noc_index = dispatch_downstream_noc;
     const uint32_t max_prefetch_command_size = DispatchMemMap::get(dispatch_core_type).max_prefetch_command_size();
     static const uint32_t packed_write_max_unicast_sub_cmds = get_packed_write_max_unicast_sub_cmds(device);
@@ -1510,6 +1515,9 @@ void reserve_space_in_kernel_config_buffer(
             dispatch_md.stall_first = false;
             dispatch_md.stall_before_program = true;
         }
+
+        // TODO: config_buffer_mgr is stateful so code below restores original reservation state
+        // pull state out of the config_buffer_mgr
         reservation = config_buffer_mgr.reserve(program_config_sizes);
     }
 
@@ -1524,6 +1532,10 @@ void reserve_space_in_kernel_config_buffer(
     }
     config_buffer_mgr.alloc(expected_num_workers_completed + num_program_workers);
 
+    // TODO.  This code is needlessly complex due to enqueue program and
+    // binary writing being intertwined.  Separate out writing kernel
+    // binaries into program compile/finalize.  The sync below is confusing
+    // and not needed (just need a barrier on DRAM write)
     if (program_binary_status != ProgramBinaryStatus::Committed) {
         // Insert a stall before writing any program configs when binaries are in flight
         dispatch_md.stall_first = true;

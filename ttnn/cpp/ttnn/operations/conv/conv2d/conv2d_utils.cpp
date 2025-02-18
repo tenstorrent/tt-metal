@@ -361,9 +361,7 @@ OptimizedConvBlockConfig determine_per_core_conv_block_config(
     }
 
     auto grid_size = parallel_config.grid.bounding_box().grid_size();
-    uint32_t act_c_num_blocks = parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED ? 1
-                                : parallel_config.shard_orientation == ShardOrientation::COL_MAJOR ? grid_size.y
-                                                                                                   : grid_size.x;
+    uint32_t act_c_num_blocks = get_num_cores_channels_from_parallel_config(parallel_config);
     TT_ASSERT(padded_in_channels % act_c_num_blocks == 0);
     uint32_t act_block_w =
         parallel_config.shard_scheme == TensorMemoryLayout::HEIGHT_SHARDED
@@ -774,15 +772,14 @@ Conv2dConfig determine_conv_config_for_auto_shard(
         Conv2dConfig conv_config = conv_config_in;
         conv_config.shard_layout = shard_layout;
         if (conv_config.act_block_h_override == 0) {
-            if (in_channels <= constants::TILE_WIDTH / 2 &&
-                conv_config.input_channels_alignment == constants::TILE_WIDTH && !is_mm_conv &&
-                conv_config.shard_layout == TensorMemoryLayout::HEIGHT_SHARDED &&
+            if (in_channels < constants::TILE_WIDTH && conv_config.input_channels_alignment == constants::TILE_WIDTH &&
+                !is_mm_conv && conv_config.shard_layout == TensorMemoryLayout::HEIGHT_SHARDED &&
                 input_tensor_layout == Layout::ROW_MAJOR) {
                 log_debug(LogOp, "Auto shard, enable shallow conv");
-                // height sharded, non matmul conv, with input channels <= 16, and default setting for
+                // height sharded, non matmul conv, with input channels < 32, and default setting for
                 // input_channels_alignment
                 // Currently data-movement ops have too many restrictions to support shallow convs with tiled input.
-                conv_config.input_channels_alignment = constants::TILE_WIDTH / 2;
+                conv_config.input_channels_alignment = 8;
             } else if (conv_config.shard_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
                 conv_config.input_channels_alignment = constants::TILE_WIDTH;
             }
@@ -995,9 +992,6 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
         (per_core_out_matrix_height_ntiles + act_block_h_ntiles - 1) / act_block_h_ntiles;
     uint32_t out_block_h_ntiles_padded = num_blocks_act_h_per_core * act_block_h_ntiles;
 
-    // TODO: this needs to be changed - needs to be independent from dram alignment
-    const uint32_t alignment_bytes = std::max(hal.get_alignment(HalMemType::L1), hal.get_alignment(HalMemType::DRAM));
-
     TensorMemoryLayout sharding_scheme = conv_config.shard_layout.value();
     if (sharding_scheme == TensorMemoryLayout::WIDTH_SHARDED) {
         uint32_t conv_output_c_per_core = per_core_out_matrix_width_ntiles * tt::constants::TILE_WIDTH;
@@ -1078,7 +1072,7 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
             } else if (conv_config.dtype == DataType::FLOAT32) {
                 per_core_out_width_aligned *= 4;
             }
-            output_size = round_up(per_core_out_width_aligned, alignment_bytes) * pconfig.per_core_out_matrix_height;
+            output_size = round_up(per_core_out_width_aligned, hal.get_alignment(HalMemType::L1)) * pconfig.per_core_out_matrix_height;
         } else {
             output_size = per_core_out_matrix_height_ntiles * per_core_out_matrix_width_ntiles * output_tile_size;
         }
@@ -1182,7 +1176,7 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
             } else if (conv_config.dtype == DataType::FLOAT32) {
                 per_core_out_width_aligned *= 4;
             }
-            output_size = round_up(per_core_out_width_aligned, alignment_bytes) * pconfig.per_core_out_matrix_height;
+            output_size = round_up(per_core_out_width_aligned, hal.get_alignment(HalMemType::L1)) * pconfig.per_core_out_matrix_height;
         } else {
             output_size = per_core_out_matrix_height_ntiles * per_core_out_matrix_width_ntiles * output_tile_size;
         }

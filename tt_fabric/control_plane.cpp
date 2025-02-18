@@ -6,6 +6,8 @@
 #include "control_plane.hpp"
 #include <queue>
 
+#include "tt_cluster.hpp"
+
 namespace tt::tt_fabric {
 
 // Get the physical chip ids for a mesh
@@ -484,6 +486,7 @@ void ControlPlane::write_routing_tables_to_chip(mesh_id_t mesh_id, chip_id_t chi
                 tt_metal::hal.get_dev_addr(
                     tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::FABRIC_ROUTER_CONFIG),
                 false);
+            tt::Cluster::instance().l1_barrier(physical_chip_id);
         }
     }
 }
@@ -511,9 +514,10 @@ std::tuple<mesh_id_t, chip_id_t, chan_id_t> ControlPlane::get_connected_mesh_chi
     mesh_id_t mesh_id, chip_id_t chip_id, chan_id_t chan_id) const {
     // TODO: simplify this and maybe have this functionality in ControlPlane
     auto physical_chip_id = logical_mesh_chip_id_to_physical_chip_id_mapping_[mesh_id][chip_id];
-    auto eth_core = tt::Cluster::instance().get_soc_desc(physical_chip_id).chan_to_logical_eth_core_map.at(chan_id);
-    auto [connected_physical_chip_id, connected_eth_core] =
-        tt::Cluster::instance().get_connected_ethernet_core(std::make_tuple(physical_chip_id, eth_core));
+    tt::umd::CoreCoord eth_core =
+        tt::Cluster::instance().get_soc_desc(physical_chip_id).get_eth_core_for_channel(chan_id, CoordSystem::LOGICAL);
+    auto [connected_physical_chip_id, connected_eth_core] = tt::Cluster::instance().get_connected_ethernet_core(
+        std::make_tuple(physical_chip_id, CoreCoord{eth_core.x, eth_core.y}));
 
     auto [connected_mesh_id, connected_chip_id] =
         this->get_mesh_chip_id_from_physical_chip_id(connected_physical_chip_id);
@@ -587,6 +591,17 @@ std::vector<std::pair<chip_id_t, chan_id_t>> ControlPlane::get_fabric_route(
     }
 
     return route;
+}
+
+std::vector<chip_id_t> ControlPlane::get_intra_chip_neighbors(
+    mesh_id_t src_mesh_id, chip_id_t src_chip_id, RoutingDirection routing_direction) const {
+    for (const auto& [_, routing_edge] :
+         this->routing_table_generator_->get_intra_mesh_connectivity()[src_mesh_id][src_chip_id]) {
+        if (routing_edge.port_direction == routing_direction) {
+            return routing_edge.connected_chip_ids;
+        }
+    }
+    return {};
 }
 
 void ControlPlane::configure_routing_tables() const {

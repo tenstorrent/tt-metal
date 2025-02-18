@@ -56,6 +56,9 @@ public:
     DeviceAddr get_base_allocator_addr(const HalMemType& mem_type) const;
 
     const AllocatorConfig& get_config() const;
+    // Alignment can be pulled out of the AllocatorConfig but this getter is a helper
+    // so client code does not need to condition based on BufferType
+    uint32_t get_alignment(BufferType buffer_type) const;
 
     Statistics get_statistics(const BufferType& buffer_type) const;
     MemoryBlockTable get_memory_block_table(const BufferType& buffer_type) const;

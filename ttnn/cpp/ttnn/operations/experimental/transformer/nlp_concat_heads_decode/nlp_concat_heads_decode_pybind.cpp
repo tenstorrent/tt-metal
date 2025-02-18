@@ -24,7 +24,7 @@ void bind_nlp_concat_heads_decode(py::module& module) {
                const uint32_t num_heads,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                std::optional<ttnn::Tensor> optional_output_tensor,
-               uint8_t queue_id) {
+               QueueId queue_id) {
                 return self(queue_id, input_tensor, num_heads, memory_config, optional_output_tensor);
             },
             py::arg("input_tensor").noconvert(),
@@ -32,7 +32,7 @@ void bind_nlp_concat_heads_decode(py::module& module) {
             py::arg("num_heads").noconvert(),
             py::arg("memory_config") = std::nullopt,
             py::arg("output_tensor") = std::nullopt,
-            py::arg("queue_id") = 0});
+            py::arg("queue_id") = DefaultQueueId});
 }
 
 }  // namespace ttnn::operations::experimental::transformer::detail

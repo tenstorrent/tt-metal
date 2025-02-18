@@ -8,6 +8,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
+#include "small_vector_caster.hpp"  // NOLINT - for pybind11 SmallVector binding support.
 #include <tt-metalium/persistent_kernel_cache.hpp>
 #include <tt-metalium/compilation_reporter.hpp>
 #include <tt-metalium/memory_reporter.hpp>
@@ -578,11 +579,11 @@ void device_module(py::module& m_device) {
 
     m_device.def(
         "synchronize_device",
-        [](IDevice* device, const std::optional<uint8_t> cq_id, const std::vector<SubDeviceId>& sub_device_ids) {
+        [](IDevice* device, const QueueId cq_id, const std::vector<SubDeviceId>& sub_device_ids) {
             // Send finish command to issue queue through worker thread
             // Worker thread will stall until the device is flushed.
             device->push_work(
-                [device, cq_id, &sub_device_ids]() mutable { Synchronize(device, cq_id, sub_device_ids); });
+                [device, cq_id, &sub_device_ids]() mutable { Synchronize(device, *cq_id, sub_device_ids); });
             // Main thread stalls until worker is complete (full device and worker queue flush).
             device->synchronize();
         },
@@ -608,7 +609,7 @@ void device_module(py::module& m_device) {
                     >>> ttnn.synchronize_device(device)
             )doc",
         py::arg("device"),
-        py::arg("cq_id") = std::nullopt,
+        py::arg("cq_id") = DefaultQueueId,
         py::arg("sub_device_ids") = std::vector<SubDeviceId>());
     m_device.def("DumpDeviceProfiler", DumpDeviceProfiler, py::arg("device"), R"doc(
         Dump device side profiling data.
