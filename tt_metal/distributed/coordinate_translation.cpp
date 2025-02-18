@@ -36,7 +36,7 @@ CoordinateTranslationMap load_translation_map(const std::string& filename, const
             TT_THROW("Invalid coordinate format in JSON file: {}", filename);
         }
         result.emplace(
-            Coordinate{mapping[0][0], mapping[0][1]},
+            MeshCoordinate(mapping[0][0], mapping[0][1]),
             PhysicalCoordinate{
                 mapping[1][0],  // cluster_id
                 mapping[1][2],  // x
@@ -51,22 +51,22 @@ CoordinateTranslationMap load_translation_map(const std::string& filename, const
 
 MeshShape get_system_mesh_shape(size_t system_num_devices) {
     static const std::unordered_map<size_t, MeshShape> system_mesh_to_shape = {
-        {1, MeshShape{1, 1}},   // single-device
-        {2, MeshShape{1, 2}},   // N300
-        {8, MeshShape{2, 4}},   // T3000; as ring to match existing tests
-        {32, MeshShape{8, 4}},  // TG, QG
-        {64, MeshShape{8, 8}},  // TGG
+        {1, MeshShape(1, 1)},   // single-device
+        {2, MeshShape(1, 2)},   // N300
+        {8, MeshShape(2, 4)},   // T3000; as ring to match existing tests
+        {32, MeshShape(8, 4)},  // TG, QG
+        {64, MeshShape(8, 8)},  // TGG
     };
     TT_FATAL(
         system_mesh_to_shape.contains(system_num_devices), "Unsupported number of devices: {}", system_num_devices);
     auto shape = system_mesh_to_shape.at(system_num_devices);
-    log_debug(LogMetal, "Logical SystemMesh Shape: {}x{}", shape.num_rows, shape.num_cols);
+    log_debug(LogMetal, "Logical SystemMesh Shape: {}", shape);
     return shape;
 }
 
 }  // namespace
 
-std::pair<CoordinateTranslationMap, MeshShape> get_system_mesh_coordinate_translation_map() {
+const std::pair<CoordinateTranslationMap, MeshShape>& get_system_mesh_coordinate_translation_map() {
     static const auto* cached_translation_map = new std::pair<CoordinateTranslationMap, MeshShape>([] {
         auto system_num_devices = tt::Cluster::instance().number_of_user_devices();
 
@@ -89,6 +89,9 @@ std::pair<CoordinateTranslationMap, MeshShape> get_system_mesh_coordinate_transl
             system_num_devices);
 
         auto translation_config_file = get_config_path(system_mesh_translation_map.at(system_num_devices));
+
+        // TODO: #17477 - This assumes shapes and coordinates are in 2D. This will be extended for 3D.
+        // Consider if 1D can be used for single device and N300.
         return std::pair<CoordinateTranslationMap, MeshShape>{
             load_translation_map(translation_config_file, "logical_to_physical_coordinates"),
             get_system_mesh_shape(system_num_devices)};

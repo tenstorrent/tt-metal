@@ -216,8 +216,9 @@ std::unordered_set<SubDeviceId> MeshWorkload::determine_sub_device_ids(MeshDevic
     // Get the sub device ids for all program across all devices in the Workload
     std::unordered_set<SubDeviceId> sub_devices_;
     for (auto& [device_range, program] : programs_) {
-        auto grid_start = device_range.start_coord;
-        IDevice* device = mesh_device->get_device(grid_start.y, grid_start.x);
+        const auto grid_start = device_range.start_coord;
+        MeshCoordinate mesh_coord(grid_start.y, grid_start.x);
+        IDevice* device = mesh_device->get_device(mesh_coord);
         auto sub_devs_for_program = program.determine_sub_device_ids(mesh_device);
         for (auto& sub_dev : sub_devs_for_program) {
             sub_devices_.insert(sub_dev);
@@ -257,12 +258,11 @@ uint32_t MeshWorkload::get_sem_size(
     std::shared_ptr<MeshDevice>& mesh_device, CoreCoord logical_core, CoreType core_type) {
     uint32_t sem_size = 0;
     uint32_t program_idx = 0;
-    IDevice* device = mesh_device->get_device_index(0);
     for (auto& [device_range, program] : programs_) {
         if (program_idx) {
-            TT_ASSERT(sem_size == program.get_sem_size(device, logical_core, core_type));
+            TT_ASSERT(sem_size == program.get_sem_size(mesh_device.get(), logical_core, core_type));
         } else {
-            sem_size = program.get_sem_size(device, logical_core, core_type);
+            sem_size = program.get_sem_size(mesh_device.get(), logical_core, core_type);
         }
         program_idx++;
     }
@@ -281,12 +281,11 @@ uint32_t MeshWorkload::get_cb_size(
     std::shared_ptr<MeshDevice>& mesh_device, CoreCoord logical_core, CoreType core_type) {
     uint32_t cb_size = 0;
     uint32_t program_idx = 0;
-    IDevice* device = mesh_device->get_device_index(0);
     for (auto& [device_range, program] : programs_) {
         if (program_idx) {
-            TT_ASSERT(cb_size == program.get_cb_size(device, logical_core, core_type));
+            TT_ASSERT(cb_size == program.get_cb_size(mesh_device.get(), logical_core, core_type));
         } else {
-            cb_size = program.get_cb_size(device, logical_core, core_type);
+            cb_size = program.get_cb_size(mesh_device.get(), logical_core, core_type);
         }
         program_idx++;
     }

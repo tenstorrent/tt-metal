@@ -9,24 +9,19 @@
 #include <vector>
 
 #include "shape_base.hpp"
+#include "utils.hpp"
 
 namespace tt::tt_metal::distributed {
 
-struct MeshShape;
-
-// TODO: #17477 - Rename to `MeshShape` when the legacy type is gone.
-class SimpleMeshShape : public ShapeBase {
+class MeshShape : public ShapeBase {
 public:
     using ShapeBase::ShapeBase;
     using ShapeBase::operator[];
 
     // Shorthands for constructing 1D, 2D and 3D shapes.
-    SimpleMeshShape(uint32_t x);
-    SimpleMeshShape(uint32_t x, uint32_t y);
-    SimpleMeshShape(uint32_t x, uint32_t y, uint32_t z);
-
-    // Temporary constructor for transitioning to `SimpleMeshShape`.
-    SimpleMeshShape(const MeshShape& legacy_shape);
+    explicit MeshShape(uint32_t x);
+    MeshShape(uint32_t x, uint32_t y);
+    MeshShape(uint32_t x, uint32_t y, uint32_t z);
 
     // Returns the dimensionality of the mesh.
     size_t dims() const;
@@ -41,9 +36,12 @@ public:
     static constexpr auto attribute_names = std::forward_as_tuple("value");
     auto attribute_values() const { return std::forward_as_tuple(value_); }
 
-    friend bool operator==(const SimpleMeshShape& lhs, const SimpleMeshShape& rhs);
-    friend bool operator!=(const SimpleMeshShape& lhs, const SimpleMeshShape& rhs);
-    friend std::ostream& operator<<(std::ostream& os, const SimpleMeshShape& shape);
+    MeshShape& operator=(const MeshShape&) = default;
+    MeshShape(const MeshShape&) = default;
+
+    friend bool operator==(const MeshShape& lhs, const MeshShape& rhs);
+    friend bool operator!=(const MeshShape& lhs, const MeshShape& rhs);
+    friend std::ostream& operator<<(std::ostream& os, const MeshShape& shape);
 
 private:
     using ShapeBase::empty;
@@ -56,7 +54,7 @@ private:
 class MeshCoordinate {
 public:
     // Shorthands for constructing 1D, 2D and 3D coordinates.
-    MeshCoordinate(uint32_t x);
+    explicit MeshCoordinate(uint32_t x);
     MeshCoordinate(uint32_t x, uint32_t y);
     MeshCoordinate(uint32_t x, uint32_t y, uint32_t z);
 
@@ -86,7 +84,7 @@ private:
 
 // Converts a MeshCoordinate to a linear index.
 // Throws if `coord` is out of bounds of `shape`.
-size_t to_linear_index(const SimpleMeshShape& shape, const MeshCoordinate& coord);
+size_t to_linear_index(const MeshShape& shape, const MeshCoordinate& coord);
 
 // Represents a range of MeshCoordinates. Requires that mesh coordinates have the same dimensionality.
 class MeshCoordinateRange {
@@ -95,7 +93,7 @@ public:
     MeshCoordinateRange(const MeshCoordinate& start, const MeshCoordinate& end);
 
     // Constructs a range that iterates over all coordinates in the mesh.
-    MeshCoordinateRange(const SimpleMeshShape& shape);
+    explicit MeshCoordinateRange(const MeshShape& shape);
 
     // Returns start and (inclusive) end coordinates of the range.
     const MeshCoordinate& start_coord() const;
@@ -184,10 +182,10 @@ private:
 template <typename T>
 class MeshContainer {
 public:
-    MeshContainer(const SimpleMeshShape& shape, const T& fill_value);
+    MeshContainer(const MeshShape& shape, const T& fill_value);
 
     // Returns a shape of the container.
-    const SimpleMeshShape& shape() const;
+    const MeshShape& shape() const;
 
     // Accessor methods.
     T& at(const MeshCoordinate& coord);
@@ -199,7 +197,10 @@ public:
         using ValueProxy = detail::MeshCoordinateValueProxy<T>;
 
         Iterator& operator++();
-        ValueProxy& operator*();
+        ValueProxy& operator*() { return value_proxy_; }
+        const ValueProxy& operator*() const { return value_proxy_; }
+        ValueProxy* operator->() { return &value_proxy_; }
+        const ValueProxy* operator->() const { return &value_proxy_; }
         bool operator==(const Iterator& other) const;
         bool operator!=(const Iterator& other) const;
 
@@ -220,7 +221,8 @@ public:
         using ValueProxy = detail::MeshCoordinateValueProxy<const T>;
 
         ConstIterator& operator++();
-        const ValueProxy& operator*() const;
+        const ValueProxy& operator*() const { return value_proxy_; }
+        const ValueProxy* operator->() const { return &value_proxy_; }
         bool operator==(const ConstIterator& other) const;
         bool operator!=(const ConstIterator& other) const;
 
@@ -237,23 +239,28 @@ public:
         ValueProxy value_proxy_;
     };
 
+    // Iterators provide a reference to the value along with the coordinate.
     Iterator begin();
     Iterator end();
     ConstIterator begin() const;
     ConstIterator end() const;
 
+    // View of the flat container of values.
+    std::vector<T>& values() { return values_; }
+    const std::vector<T>& values() const { return values_; }
+
 private:
-    SimpleMeshShape shape_;
+    MeshShape shape_;
     MeshCoordinateRange coord_range_;
     std::vector<T> values_;
 };
 
 template <typename T>
-MeshContainer<T>::MeshContainer(const SimpleMeshShape& shape, const T& fill_value) :
+MeshContainer<T>::MeshContainer(const MeshShape& shape, const T& fill_value) :
     shape_(shape), coord_range_(shape), values_(shape.mesh_size(), fill_value) {}
 
 template <typename T>
-const SimpleMeshShape& MeshContainer<T>::shape() const {
+const MeshShape& MeshContainer<T>::shape() const {
     return shape_;
 }
 
@@ -284,11 +291,6 @@ typename MeshContainer<T>::Iterator& MeshContainer<T>::Iterator::operator++() {
 }
 
 template <typename T>
-typename MeshContainer<T>::Iterator::ValueProxy& MeshContainer<T>::Iterator::operator*() {
-    return value_proxy_;
-}
-
-template <typename T>
 MeshContainer<T>::ConstIterator::ConstIterator(
     const MeshContainer* container, const MeshCoordinateRange::Iterator& coord_iter, size_t linear_index) :
     container_(container),
@@ -302,11 +304,6 @@ typename MeshContainer<T>::ConstIterator& MeshContainer<T>::ConstIterator::opera
     ++coord_iter_;
     value_proxy_ = ValueProxy(&(*coord_iter_), &container_->values_[linear_index_]);
     return *this;
-}
-
-template <typename T>
-const typename MeshContainer<T>::ConstIterator::ValueProxy& MeshContainer<T>::ConstIterator::operator*() const {
-    return value_proxy_;
 }
 
 template <typename T>
@@ -365,6 +362,17 @@ struct tuple_element<0, tt::tt_metal::distributed::detail::MeshCoordinateValuePr
 template <typename T>
 struct tuple_element<1, tt::tt_metal::distributed::detail::MeshCoordinateValueProxy<T>> {
     using type = T;
+};
+
+template <>
+struct hash<tt::tt_metal::distributed::MeshCoordinate> {
+    size_t operator()(const tt::tt_metal::distributed::MeshCoordinate& coord) const noexcept {
+        size_t seed = 0;
+        for (const auto coord : coord.coords()) {
+            tt::utils::hash_combine(seed, coord);
+        }
+        return seed;
+    }
 };
 
 }  // namespace std

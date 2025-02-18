@@ -18,7 +18,7 @@ namespace {
 MeshCoordinate zero_coordinate(size_t dims) { return MeshCoordinate(tt::stl::SmallVector<uint32_t>(dims, 0)); }
 
 // Returns the last valid coordinate for the provided `shape`.
-MeshCoordinate shape_back(const SimpleMeshShape& shape) {
+MeshCoordinate shape_back(const MeshShape& shape) {
     tt::stl::SmallVector<uint32_t> coords;
     for (int i = 0; i < shape.dims(); i++) {
         coords.push_back(shape[i] - 1);
@@ -28,14 +28,11 @@ MeshCoordinate shape_back(const SimpleMeshShape& shape) {
 
 }  // namespace
 
-SimpleMeshShape::SimpleMeshShape(uint32_t x) : ShapeBase({x}) { compute_strides(); }
-SimpleMeshShape::SimpleMeshShape(uint32_t x, uint32_t y) : ShapeBase({x, y}) { compute_strides(); }
-SimpleMeshShape::SimpleMeshShape(uint32_t x, uint32_t y, uint32_t z) : ShapeBase({x, y, z}) { compute_strides(); }
+MeshShape::MeshShape(uint32_t x) : ShapeBase({x}) { compute_strides(); }
+MeshShape::MeshShape(uint32_t x, uint32_t y) : ShapeBase({x, y}) { compute_strides(); }
+MeshShape::MeshShape(uint32_t x, uint32_t y, uint32_t z) : ShapeBase({x, y, z}) { compute_strides(); }
 
-SimpleMeshShape::SimpleMeshShape(const MeshShape& legacy_shape) :
-    SimpleMeshShape(legacy_shape.num_rows, legacy_shape.num_cols) {}
-
-void SimpleMeshShape::compute_strides() {
+void MeshShape::compute_strides() {
     size_t stride = 1;
     strides_.resize(dims());
     for (int dim = dims() - 1; dim >= 0; --dim) {
@@ -44,18 +41,18 @@ void SimpleMeshShape::compute_strides() {
     }
 }
 
-size_t SimpleMeshShape::get_stride(size_t dim) const { return strides_[dim]; }
+size_t MeshShape::get_stride(size_t dim) const { return strides_[dim]; }
 
-size_t SimpleMeshShape::dims() const { return size(); }
-size_t SimpleMeshShape::mesh_size() const {
+size_t MeshShape::dims() const { return size(); }
+size_t MeshShape::mesh_size() const {
     return empty() ? 0 : std::accumulate(value_.begin(), value_.end(), 1, std::multiplies<size_t>());
 }
 
-bool operator==(const SimpleMeshShape& lhs, const SimpleMeshShape& rhs) = default;
-bool operator!=(const SimpleMeshShape& lhs, const SimpleMeshShape& rhs) = default;
+bool operator==(const MeshShape& lhs, const MeshShape& rhs) = default;
+bool operator!=(const MeshShape& lhs, const MeshShape& rhs) = default;
 
-std::ostream& operator<<(std::ostream& os, const SimpleMeshShape& shape) {
-    os << "SimpleMeshShape([";
+std::ostream& operator<<(std::ostream& os, const MeshShape& shape) {
+    os << "MeshShape([";
     for (size_t i = 0; i < shape.dims(); ++i) {
         if (i > 0) {
             os << ", ";
@@ -102,7 +99,7 @@ MeshCoordinateRange::MeshCoordinateRange(const MeshCoordinate& start, const Mesh
     }
 }
 
-MeshCoordinateRange::MeshCoordinateRange(const SimpleMeshShape& shape) :
+MeshCoordinateRange::MeshCoordinateRange(const MeshShape& shape) :
     MeshCoordinateRange(zero_coordinate(shape.dims()), shape_back(shape)) {}
 
 const MeshCoordinate& MeshCoordinateRange::start_coord() const { return start_; }
@@ -143,7 +140,7 @@ MeshCoordinateRange::Iterator MeshCoordinateRange::end() const {
     return Iterator(this, start_, range_size);
 }
 
-size_t to_linear_index(const SimpleMeshShape& shape, const MeshCoordinate& coord) {
+size_t to_linear_index(const MeshShape& shape, const MeshCoordinate& coord) {
     TT_FATAL(
         shape.dims() == coord.dims(),
         "Shape and coordinate dimensions do not match: {} != {}",

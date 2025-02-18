@@ -4,6 +4,7 @@
 
 #include <system_mesh.hpp>
 
+#include "mesh_coord.hpp"
 #include "umd/device/types/cluster_descriptor_types.h"
 #include "tt_metal/distributed/coordinate_translation.hpp"
 
@@ -15,7 +16,7 @@ class SystemMesh::Impl {
 private:
     MeshShape logical_mesh_shape_;
     CoordinateTranslationMap logical_to_physical_coordinates_;
-    std::unordered_map<LogicalCoordinate, chip_id_t> logical_to_device_id_;
+    std::unordered_map<MeshCoordinate, chip_id_t> logical_to_device_id_;
     std::unordered_map<PhysicalCoordinate, chip_id_t> physical_coordinate_to_device_id_;
     std::unordered_map<chip_id_t, PhysicalCoordinate> physical_device_id_to_coordinate_;
 
@@ -31,7 +32,7 @@ public:
     std::vector<chip_id_t> request_available_devices(const MeshDeviceConfig& config) const;
     IDevice* get_device(const chip_id_t physical_device_id) const;
 
-    chip_id_t get_physical_device_id(size_t logical_row_idx, size_t logical_col_idx) const;
+    chip_id_t get_physical_device_id(const MeshCoordinate& coord) const;
 };
 
 // Implementation of public methods
@@ -70,31 +71,17 @@ void SystemMesh::Impl::initialize() {
 }
 
 const MeshShape& SystemMesh::Impl::get_shape() const { return logical_mesh_shape_; }
-size_t SystemMesh::Impl::get_num_devices() const {
-    auto [num_rows, num_cols] = this->get_shape();
-    return num_rows * num_cols;
-}
+size_t SystemMesh::Impl::get_num_devices() const { return get_shape().mesh_size(); }
 
-chip_id_t SystemMesh::Impl::get_physical_device_id(size_t logical_row_idx, size_t logical_col_idx) const {
-    TT_FATAL(
-        logical_row_idx < logical_mesh_shape_.num_rows,
-        "Row index out of bounds: {} >= {}",
-        logical_row_idx,
-        logical_mesh_shape_.num_rows);
-    TT_FATAL(
-        logical_col_idx < logical_mesh_shape_.num_cols,
-        "Column index out of bounds: {} >= {}",
-        logical_col_idx,
-        logical_mesh_shape_.num_cols);
-    auto logical_coordinate = Coordinate{logical_row_idx, logical_col_idx};
-    return logical_to_device_id_.at(logical_coordinate);
+chip_id_t SystemMesh::Impl::get_physical_device_id(const MeshCoordinate& coord) const {
+    return logical_to_device_id_.at(coord);
 }
 
 std::vector<chip_id_t> SystemMesh::Impl::get_mapped_physical_device_ids(const MeshDeviceConfig& config) const {
     std::vector<chip_id_t> physical_device_ids;
-    auto [system_mesh_rows, system_mesh_cols] = this->get_shape();
-    auto [requested_num_rows, requested_num_cols] = config.mesh_shape;
-    auto [row_offset, col_offset] = config.offset;
+    auto [system_mesh_rows, system_mesh_cols] = std::make_pair(get_shape()[0], get_shape()[1]);
+    auto [requested_num_rows, requested_num_cols] = std::make_pair(config.mesh_shape[0], config.mesh_shape[1]);
+    auto [row_offset, col_offset] = std::make_pair(config.offset[0], config.offset[1]);
 
     // First check if total size fits
     TT_FATAL(
@@ -110,7 +97,7 @@ std::vector<chip_id_t> SystemMesh::Impl::get_mapped_physical_device_ids(const Me
         TT_FATAL(row_offset == 0 and col_offset == 0, "Row and column offsets unsupported for single row mesh");
         auto line_length = requested_num_rows * requested_num_cols;
         auto line_coords = MeshDeviceView::get_line_coordinates(
-            line_length, Coordinate{row_offset, col_offset}, system_mesh_rows, system_mesh_cols);
+            line_length, MeshCoordinate(row_offset, col_offset), system_mesh_rows, system_mesh_cols);
         for (const auto& logical_coordinate : line_coords) {
             auto physical_device_id = logical_to_device_id_.at(logical_coordinate);
             physical_device_ids.push_back(physical_device_id);
@@ -166,27 +153,21 @@ std::vector<chip_id_t> SystemMesh::Impl::get_mapped_physical_device_ids(const Me
     // Map each submesh coordinate to the original logical coordinates
     for (size_t row = 0; row < requested_num_rows; row++) {
         for (size_t col = 0; col < requested_num_cols; col++) {
-            Coordinate logical_coordinate;
-            if (requires_rotation) {
-                // After swapping requested_num_rows and requested_num_cols,
-                // (row, col) now iterate over the rotated shape.
-                size_t old_row = row_offset + row;  // top row
-                size_t old_col = col_offset + col;  // increasing columns horizontally
-                logical_coordinate = Coordinate{old_row, old_col};
-            } else {
-                logical_coordinate = Coordinate{row + row_offset, col + col_offset};
-            }
+            size_t logical_row = row + row_offset;
+            size_t logical_col = col + col_offset;
 
             TT_FATAL(
-                logical_coordinate.row < logical_mesh_shape_.num_rows,
+                logical_row < system_mesh_rows,
                 "Row coordinate out of bounds: {} >= {}",
-                logical_coordinate.row,
-                logical_mesh_shape_.num_rows);
+                logical_row,
+                system_mesh_rows);
             TT_FATAL(
-                logical_coordinate.col < logical_mesh_shape_.num_cols,
+                logical_col < system_mesh_cols,
                 "Column coordinate out of bounds: {} >= {}",
-                logical_coordinate.col,
-                logical_mesh_shape_.num_cols);
+                logical_col,
+                system_mesh_cols);
+
+            MeshCoordinate logical_coordinate(logical_row, logical_col);
 
             auto physical_device_id = logical_to_device_id_.at(logical_coordinate);
             physical_device_ids.push_back(physical_device_id);
@@ -199,17 +180,7 @@ std::vector<chip_id_t> SystemMesh::Impl::get_mapped_physical_device_ids(const Me
 }
 
 std::vector<chip_id_t> SystemMesh::Impl::request_available_devices(const MeshDeviceConfig& config) const {
-    auto [requested_num_rows, requested_num_cols] = config.mesh_shape;
-    auto [max_num_rows, max_num_cols] = logical_mesh_shape_;
-    auto [row_offset, col_offset] = config.offset;
-
-    log_debug(
-        LogMetal,
-        "Mapping MeshDevice ({}x{}) with offset: {}, {}",
-        requested_num_rows,
-        requested_num_cols,
-        row_offset,
-        col_offset);
+    log_debug(LogMetal, "Mapping MeshDevice ({}) with offset: {}", config.mesh_shape, config.offset);
 
     return config.physical_device_ids.empty() ? this->get_mapped_physical_device_ids(config)
                                               : config.physical_device_ids;
@@ -226,8 +197,8 @@ SystemMesh& SystemMesh::instance() {
     return instance;
 }
 
-chip_id_t SystemMesh::get_physical_device_id(size_t logical_row_idx, size_t logical_col_idx) const {
-    return pimpl_->get_physical_device_id(logical_row_idx, logical_col_idx);
+chip_id_t SystemMesh::get_physical_device_id(const MeshCoordinate& coord) const {
+    return pimpl_->get_physical_device_id(coord);
 }
 
 const MeshShape& SystemMesh::get_shape() const { return pimpl_->get_shape(); }

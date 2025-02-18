@@ -33,7 +33,7 @@ private:
     class ScopedDevices {
     private:
         std::map<chip_id_t, IDevice*> opened_devices_;
-        std::vector<IDevice*> devices_;
+        MeshContainer<IDevice*> devices_;
 
     public:
         // Constructor acquires physical resources
@@ -50,6 +50,7 @@ private:
         ScopedDevices& operator=(const ScopedDevices&) = delete;
 
         const std::vector<IDevice*>& get_devices() const;
+        IDevice* get_device(const MeshCoordinate& coord) const;
     };
 
     std::shared_ptr<ScopedDevices> scoped_devices_;
@@ -73,7 +74,6 @@ public:
         std::shared_ptr<ScopedDevices> mesh_handle,
         const MeshShape& mesh_shape,
         std::weak_ptr<MeshDevice> parent_mesh = {});
-    ~MeshDevice() override;
 
     MeshDevice(const MeshDevice&) = delete;
     MeshDevice& operator=(const MeshDevice&) = delete;
@@ -202,16 +202,12 @@ public:
 
     // Returns the devices in the mesh in row-major order.
     std::vector<IDevice*> get_devices() const;
-    IDevice* get_device_index(size_t logical_device_id) const;
-    IDevice* get_device(chip_id_t physical_device_id) const;
-    IDevice* get_device(size_t row_idx, size_t col_idx) const;
     IDevice* get_device(const MeshCoordinate& coord) const;
+    IDevice* get_device(chip_id_t physical_device_id) const;
 
     const DeviceIds get_device_ids() const;
 
     size_t num_devices() const;
-    size_t num_rows() const;
-    size_t num_cols() const;
     MeshShape shape() const;
 
     // Reshapes the logical mesh and re-maps the physical devices to the new logical coordinates.
@@ -238,7 +234,7 @@ public:
     std::vector<std::shared_ptr<MeshDevice>> get_submeshes() const;
 
     std::shared_ptr<MeshDevice> create_submesh(
-        const MeshShape& submesh_shape, const MeshOffset& offset = MeshOffset{0, 0});
+        const MeshShape& submesh_shape, const MeshCoordinate& offset = MeshCoordinate(0, 0));
 
     std::vector<std::shared_ptr<MeshDevice>> create_submeshes(const MeshShape& submesh_shape);
 

@@ -21,8 +21,8 @@ namespace py = pybind11;
 void py_module_types(py::module& module) {
     py::class_<MeshDevice, std::shared_ptr<MeshDevice>>(module, "MeshDevice");
     py::class_<MeshSubDeviceManagerId>(module, "MeshSubDeviceManagerId");
-    py::class_<MeshShape>(module, "MeshShape", "Struct representing the shape of a mesh device.");
-    py::class_<MeshOffset>(module, "MeshOffset", "Struct representing the offset of a mesh device.");
+    py::class_<MeshShape>(module, "MeshShape", "Shape of a mesh device.");
+    py::class_<MeshCoordinate>(module, "MeshCoordinate", "Coordinate within a mesh device.");
 }
 
 void py_module(py::module& module) {
@@ -32,7 +32,8 @@ void py_module(py::module& module) {
             "Constructor with specified number of rows and columns.",
             py::arg("num_rows"),
             py::arg("num_cols"))
-        .def_readwrite("num_rows", &MeshShape::num_rows, "Number of rows in the mesh.")
+        .def_readonly(
+            "num_rows", []() {}, "Number of rows in the mesh.")
         .def_readwrite("num_cols", &MeshShape::num_cols, "Number of columns in the mesh.")
         .def(
             "__repr__",

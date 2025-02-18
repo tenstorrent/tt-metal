@@ -7,6 +7,7 @@
 #include <memory>
 #include <vector>
 
+#include "mesh_coord.hpp"
 #include "mesh_config.hpp"
 #include "mesh_device.hpp"
 #include "device.hpp"
@@ -34,7 +35,7 @@ public:
     size_t get_num_devices() const;
 
     // Gets the physical device ID for a given logical row and column index
-    chip_id_t get_physical_device_id(size_t logical_row_idx, size_t logical_col_idx) const;
+    chip_id_t get_physical_device_id(const MeshCoordinate& coord) const;
 
     // Get the physical device IDs mapped to a MeshDevice
     std::vector<chip_id_t> get_mapped_physical_device_ids(const MeshDeviceConfig& config) const;

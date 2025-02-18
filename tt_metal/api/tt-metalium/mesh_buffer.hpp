@@ -96,7 +96,6 @@ public:
     const ShardedBufferConfig& global_shard_spec() const;
     const DeviceLocalBufferConfig& device_local_config() const { return device_local_config_; }
 
-    std::shared_ptr<Buffer> get_device_buffer(const Coordinate& device_coord) const;
     std::shared_ptr<Buffer> get_device_buffer(const MeshCoordinate& device_coord) const;
     uint32_t datum_size_bytes() const;
     Shape2D physical_shard_shape() const;
@@ -110,7 +109,7 @@ private:
         DeviceAddr device_local_size,
         MeshDevice* mesh_device,
         std::shared_ptr<Buffer> backing_buffer) :
-        buffers_(SimpleMeshShape(mesh_device->shape()), nullptr),
+        buffers_(mesh_device->shape(), nullptr),
         config_(config),
         device_local_config_(device_local_config),
         mesh_device_(mesh_device),
@@ -125,7 +124,7 @@ private:
         DeviceAddr address,
         DeviceAddr device_local_size,
         MeshDevice* mesh_device) :
-        buffers_(SimpleMeshShape(mesh_device->shape()), /*fill_value=*/nullptr),
+        buffers_(mesh_device->shape(), /*fill_value=*/nullptr),
         config_(config),
         device_local_config_(device_local_config),
         mesh_device_(mesh_device),

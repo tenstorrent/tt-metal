@@ -23,6 +23,7 @@
 #include <sub_device_types.hpp>
 
 #include <hal.hpp>
+#include "mesh_coord.hpp"
 
 namespace tt::tt_metal::distributed {
 
@@ -68,27 +69,29 @@ MeshDevice::ScopedDevices::ScopedDevices(
     size_t trace_region_size,
     size_t num_command_queues,
     const DispatchCoreConfig& dispatch_core_config,
-    const MeshDeviceConfig& config) {
+    const MeshDeviceConfig& config) :
+    devices_(config.mesh_shape, /*fill_value=*/nullptr) {
     auto& system_mesh = SystemMesh::instance();
     auto physical_device_ids = system_mesh.request_available_devices(config);
 
     opened_devices_ = tt::tt_metal::detail::CreateDevices(
         physical_device_ids, num_command_queues, l1_small_size, trace_region_size, dispatch_core_config);
 
+    TT_FATAL(opened_devices_.size() == devices_.shape().mesh_size(), "Opened devices size mismatch");
+    auto it = devices_.begin();
     for (auto physical_device_id : physical_device_ids) {
-        devices_.push_back(opened_devices_.at(physical_device_id));
+        it->value() = opened_devices_.at(physical_device_id);
+        ++it;
     }
 }
 
 MeshDevice::ScopedDevices::~ScopedDevices() {
-    if (not opened_devices_.empty()) {
+    if (!opened_devices_.empty()) {
         tt::tt_metal::detail::CloseDevices(opened_devices_);
-        opened_devices_.clear();
-        devices_.clear();
     }
 }
 
-const std::vector<IDevice*>& MeshDevice::ScopedDevices::get_devices() const { return devices_; }
+const std::vector<IDevice*>& MeshDevice::ScopedDevices::get_devices() const { return devices_.values(); }
 
 uint8_t MeshDevice::num_hw_cqs() const {
     return validate_and_get_reference_value(
@@ -135,45 +138,42 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
     return mesh_device;
 }
 
-std::shared_ptr<MeshDevice> MeshDevice::create_submesh(const MeshShape& submesh_shape, const MeshOffset& offset) {
-    if (submesh_shape.num_rows <= 0 || submesh_shape.num_cols <= 0) {
-        TT_THROW(
-            "Invalid submesh shape: ({}, {}). Both dimensions must be positive.",
-            submesh_shape.num_rows,
-            submesh_shape.num_cols);
+std::shared_ptr<MeshDevice> MeshDevice::create_submesh(const MeshShape& submesh_shape, const MeshCoordinate& offset) {
+    for (const auto dim : submesh_shape.view()) {
+        TT_FATAL(dim > 0, "Invalid submesh shape: ({}). All dimensions must be positive.", submesh_shape.dims());
     }
 
-    if (offset.row < 0 || offset.col < 0) {
-        TT_THROW("Invalid offset: ({}, {}). Offset must be non-negative.", offset.row, offset.col);
-    }
-
-    if (offset.row + submesh_shape.num_rows > mesh_shape_.num_rows ||
-        offset.col + submesh_shape.num_cols > mesh_shape_.num_cols) {
-        TT_THROW(
-            "Submesh ({}x{}) with offset ({}, {}) does not fit within parent mesh ({}x{}).",
-            submesh_shape.num_rows,
-            submesh_shape.num_cols,
-            offset.row,
-            offset.col,
-            mesh_shape_.num_rows,
-            mesh_shape_.num_cols);
+    TT_FATAL(
+        submesh_shape.dims() == mesh_shape_.dims(),
+        "Submesh dimensions must match parent mesh shape; {} != {}",
+        submesh_shape.dims(),
+        mesh_shape_.dims());
+    TT_FATAL(
+        offset.dims() == mesh_shape_.dims(),
+        "Offset dimensions must match parent mesh shape; {} != {}",
+        offset.dims(),
+        mesh_shape_.dims());
+    for (int i = 0; i < submesh_shape.dims(); i++) {
+        if (offset[i] + submesh_shape[i] > mesh_shape_[i]) {
+            TT_THROW(
+                "Submesh ({}) with offset ({}) does not fit within parent mesh ({}).",
+                submesh_shape,
+                offset,
+                mesh_shape_);
+        }
     }
 
     auto submesh = std::make_shared<MeshDevice>(scoped_devices_, submesh_shape, shared_from_this());
-    auto start_coordinate = Coordinate{offset.row, offset.col};
-    auto end_coordinate = Coordinate{offset.row + submesh_shape.num_rows - 1, offset.col + submesh_shape.num_cols - 1};
 
-    auto submesh_devices = view_->get_devices(start_coordinate, end_coordinate);
+    tt::stl::SmallVector<uint32_t> end_coordinate;
+    for (int i = 0; i < offset.dims(); i++) {
+        end_coordinate.push_back(offset[i] + submesh_shape[i] - 1);
+    }
+
+    auto submesh_devices = view_->get_devices(offset, MeshCoordinate(end_coordinate));
     submesh->view_ = std::make_unique<MeshDeviceView>(submesh_devices, submesh_shape);
     submeshes_.push_back(submesh);
-    log_trace(
-        LogMetal,
-        "Instantiating submesh {}: {}x{} with offset: {} {}",
-        submesh->id(),
-        submesh_shape.num_rows,
-        submesh_shape.num_cols,
-        offset.row,
-        offset.col);
+    log_trace(LogMetal, "Instantiating submesh {}: {} with offset: {}", submesh->id(), submesh_shape, offset);
     log_trace(LogMetal, "Submesh {} instantiated with {} devices", submesh->id(), submesh->get_devices().size());
 
     return submesh;
@@ -181,21 +181,39 @@ std::shared_ptr<MeshDevice> MeshDevice::create_submesh(const MeshShape& submesh_
 
 std::vector<std::shared_ptr<MeshDevice>> MeshDevice::create_submeshes(const MeshShape& submesh_shape) {
     std::vector<std::shared_ptr<MeshDevice>> submeshes;
-    for (int row = 0; row < this->num_rows(); row += submesh_shape.num_rows) {
-        for (int col = 0; col < this->num_cols(); col += submesh_shape.num_cols) {
-            auto submesh = this->create_submesh(submesh_shape, MeshOffset{row, col});
-            submeshes.push_back(submesh);
+    TT_FATAL(
+        submesh_shape.dims() == mesh_shape_.dims(),
+        "Submesh dimensions must match parent mesh shape; {} != {}",
+        submesh_shape.dims(),
+        mesh_shape_.dims());
+
+    // Stamp `submesh_shape` over in the parent mesh.
+    const size_t num_dims = mesh_shape_.dims();
+    tt::stl::SmallVector<uint32_t> submesh_multipliers(num_dims, 0);
+    tt::stl::SmallVector<uint32_t> offset(num_dims, 0);
+
+    // Calculate when we're done (all indices reach their max)
+    bool done = false;
+    while (!done) {
+        // Create submesh at current offset
+        auto submesh = this->create_submesh(submesh_shape, MeshCoordinate(offset));
+        submeshes.push_back(submesh);
+
+        for (int dim = num_dims - 1; dim >= 0; --dim) {
+            ++submesh_multipliers[dim];
+            offset[dim] = submesh_multipliers[dim] * submesh_shape[dim];
+            if (submesh_multipliers[dim] * submesh_shape[dim] < mesh_shape_[dim]) {
+                break;
+            } else if (dim == 0) {
+                // End of the outermost dimension.
+                done = true;
+            } else {
+                submesh_multipliers[dim] = 0;
+                offset[dim] = 0;
+            }
         }
     }
     return submeshes;
-}
-
-MeshDevice::~MeshDevice() {}
-
-IDevice* MeshDevice::get_device_index(size_t device_index) const {
-    TT_FATAL(device_index >= 0 and device_index < num_devices(), "Invalid device index");
-    const auto& devices = scoped_devices_->get_devices();
-    return devices.at(device_index);
 }
 
 IDevice* MeshDevice::get_device(chip_id_t physical_device_id) const {
@@ -209,14 +227,7 @@ IDevice* MeshDevice::get_device(chip_id_t physical_device_id) const {
 
 std::vector<IDevice*> MeshDevice::get_devices() const { return view_->get_devices(); }
 
-// TODO: Remove this function once we have a proper view interface
-IDevice* MeshDevice::get_device(size_t row_idx, size_t col_idx) const {
-    return get_device(MeshCoordinate{row_idx, col_idx});
-}
-
-IDevice* MeshDevice::get_device(const MeshCoordinate& coord) const {
-    return this->get_device_index(to_linear_index(SimpleMeshShape(mesh_shape_), coord));
-}
+IDevice* MeshDevice::get_device(const MeshCoordinate& coord) const { return scoped_devices_->get_device(coord); }
 
 MeshCommandQueue& MeshDevice::mesh_command_queue(std::size_t cq_id) const {
     TT_FATAL(this->using_fast_dispatch(), "Can only access the MeshCommandQueue when using Fast Dispatch.");
@@ -243,10 +254,6 @@ tt::ARCH MeshDevice::arch() const {
     return validate_and_get_reference_value(
         scoped_devices_->get_devices(), [](const auto& device) { return device->arch(); });
 }
-
-size_t MeshDevice::num_rows() const { return mesh_shape_.num_rows; }
-
-size_t MeshDevice::num_cols() const { return mesh_shape_.num_cols; }
 
 MeshShape MeshDevice::shape() const { return mesh_shape_; }
 
@@ -275,25 +282,18 @@ std::vector<IDevice*> MeshDevice::get_row_major_devices(const MeshShape& new_sha
     // From an MxN mesh, we can always reduce rank to a 1xM*N Line mesh.
     // However, going from a Line mesh to an MxN mesh is not always possible.
     std::vector<IDevice*> new_device_order;
-    if (new_shape.num_rows != 1 and new_shape.num_cols != 1) {
+    if (std::any_of(new_shape.cbegin(), new_shape.cend(), [](size_t dim) { return dim != 1; })) {
         auto new_physical_device_ids =
-            SystemMesh::instance().request_available_devices(
-                MeshDeviceConfig{
-                    .mesh_shape=new_shape
-                }
-            );
+            SystemMesh::instance().request_available_devices(MeshDeviceConfig{.mesh_shape = new_shape});
 
         for (size_t i = 0; i < new_physical_device_ids.size(); i++) {
-            if (physical_device_id_to_linearized_index.find(new_physical_device_ids[i]) == physical_device_id_to_linearized_index.end()) {
+            if (physical_device_id_to_linearized_index.find(new_physical_device_ids[i]) ==
+                physical_device_id_to_linearized_index.end()) {
                 TT_THROW(
-                    "User has requested a reshape of the MeshDevice to shape: {}x{}, but it is not possible to form a "
-                    "physically connected mesh of {}x{} grid with the opened devices from the original shape: {}x{}.",
-                    new_shape.num_rows,
-                    new_shape.num_cols,
-                    new_shape.num_rows,
-                    new_shape.num_cols,
-                    this->num_rows(),
-                    this->num_cols());
+                    "User has requested a reshape of the MeshDevice to shape: {}, but it is not possible to form a "
+                    "physically connected mesh of this shape with the opened devices from the original shape: {}.",
+                    new_shape,
+                    this->shape());
             }
         }
         for (size_t i = 0; i < new_physical_device_ids.size(); i++) {
@@ -307,11 +307,12 @@ std::vector<IDevice*> MeshDevice::get_row_major_devices(const MeshShape& new_sha
 
 void MeshDevice::reshape(const MeshShape& new_shape) {
     TT_FATAL(
-        new_shape.num_rows * new_shape.num_cols == this->num_devices(),
+        new_shape.mesh_size() == this->num_devices(),
         "New shape must have the same number of devices as current shape");
+    auto new_view = std::make_unique<MeshDeviceView>(this->get_row_major_devices(new_shape), new_shape);
 
     mesh_shape_ = new_shape;
-    view_ = std::make_unique<MeshDeviceView>(this->get_row_major_devices(new_shape), new_shape);
+    view_ = std::move(new_view);
 }
 
 bool MeshDevice::close() {
@@ -329,7 +330,7 @@ bool MeshDevice::close() {
 }
 
 std::string MeshDevice::to_string() const {
-    return fmt::format("MeshDevice({}x{} grid, {} devices)", this->num_rows(), this->num_cols(), this->num_devices());
+    return fmt::format("MeshDevice({} shape, {} devices)", this->shape(), this->shape().mesh_size());
 }
 
 const MeshDeviceView& MeshDevice::get_view() const {

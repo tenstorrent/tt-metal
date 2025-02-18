@@ -212,7 +212,7 @@ TEST_F(T3000ReshapeTest, From1x4To2x2Valid) {
         DEFAULT_TRACE_REGION_SIZE,
         1,
         tt::tt_metal::DispatchCoreType::WORKER,
-        MeshOffset{0, 0},
+        MeshCoordinate(0, 0),
         physical_device_ids);
 
     mesh->reshape({2, 2});
