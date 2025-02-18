@@ -31,11 +31,8 @@ GenericOpDeviceOperation::tensor_return_value_t GenericOpDeviceOperation::create
         compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor.device());
 }
 
-std::tuple<GenericOpDeviceOperation::operation_attributes_t, GenericOpDeviceOperation::tensor_args_t>
-GenericOpDeviceOperation::invoke(
-    const Tensor& input,
-    const GenericOpDeviceOperation::operation_attributes_t& operation_attributes,
-    const std::vector<Tensor>& io_tensors) {
+std::tuple<operation_attributes_t, GenericOpDeviceOperation::tensor_args_t> GenericOpDeviceOperation::invoke(
+    const Tensor& input, const operation_attributes_t& operation_attributes, const std::vector<Tensor>& io_tensors) {
     return {operation_attributes, tensor_args_t{.input_tensor = input, .io_tensors = io_tensors}};
 }
 
