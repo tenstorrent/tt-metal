@@ -33,6 +33,9 @@ Tensor BinaryNg<binary_op_type>::invoke(
     const ttnn::DataType out_dtype =
         output_preallocated ? optional_output_tensor->get_dtype() : output_dtype.value_or(a_dtype);
 
+    const auto mem_config = output_preallocated ? optional_output_tensor->memory_config()
+                                                : memory_config.value_or(input_tensor_a.memory_config());
+
     if (output_dtype.has_value() && output_preallocated) {
         TT_FATAL(
             *output_dtype == out_dtype,
@@ -67,8 +70,7 @@ Tensor BinaryNg<binary_op_type>::invoke(
             input_b,
             binary_op_type,
             out_dtype,
-            output_preallocated ? optional_output_tensor->memory_config()
-                                : memory_config.value_or(input_tensor_a.memory_config()),
+            mem_config,
             optional_output_tensor,
             lhs_activations,
             rhs_activations,
@@ -78,12 +80,7 @@ Tensor BinaryNg<binary_op_type>::invoke(
         // since there's no consensus here, avoiding the conversion if we have an excuse to is likely the best option
         // since it leads to better perf
         if (input_a_rm && input_b_rm) {
-            result = ttnn::to_layout(
-                result,
-                Layout::ROW_MAJOR,
-                std::nullopt,
-                memory_config.value_or(input_tensor_a.memory_config()),
-                (IDevice*)nullptr);
+            result = ttnn::to_layout(result, Layout::ROW_MAJOR, std::nullopt, mem_config, (IDevice*)nullptr);
         }
 
         return result;
@@ -100,13 +97,13 @@ Tensor BinaryNg<binary_op_type>::invoke(
             input_b,
             binary_op_type,
             input_a.get_dtype(),
-            input_a.memory_config(),
+            mem_config,
             output_tensor,
             lhs_activations,
             rhs_activations,
             post_activations);
 
-        return typecast_out ? ttnn::typecast(result, out_dtype, std::nullopt, optional_output_tensor) : result;
+        return typecast_out ? ttnn::typecast(result, out_dtype, mem_config, optional_output_tensor) : result;
     }
 }
 

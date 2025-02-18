@@ -761,6 +761,7 @@ def test_edgecase_dims_eltwise_scalar_logical(input_shape, scalar, ttnn_fn, memo
     assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.999)
 
 
+@skip_for_grayskull("Requires wormhole_b0 to run")
 @pytest.mark.parametrize(
     "input_shapes",
     [
