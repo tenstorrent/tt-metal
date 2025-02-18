@@ -6,6 +6,9 @@
 #include <pybind11/pytypes.h>
 
 #include <tt-metalium/command_queue.hpp>
+#include "ttnn/distributed/api.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
 
 using namespace tt::tt_metal;
 
