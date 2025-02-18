@@ -8,7 +8,6 @@
 
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/data_movement/clone/clone.hpp"
-#include "ttnn/operations/data_movement/data_transfer/data_transfer.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/tilize/tilize.hpp"
@@ -23,7 +22,7 @@ namespace ttnn::operations::experimental::auto_format {
 
 Tensor AutoFormat::move_tensor_to_device(const Tensor& input, IDevice* device, const MemoryConfig& mem_config) {
     if (input.storage_type() != StorageType::DEVICE) {
-        return ttnn::data_transfer_to_device(input, device, mem_config);
+        return input.to_device(device, mem_config);
     } else {
         return input;
     }
@@ -31,7 +30,7 @@ Tensor AutoFormat::move_tensor_to_device(const Tensor& input, IDevice* device, c
 
 Tensor AutoFormat::move_tensor_to_mem_config(const Tensor& input, const MemoryConfig& mem_config) {
     if (input.storage_type() != StorageType::DEVICE) {
-        return ttnn::data_transfer_to_device(input, AutoFormat::GetDefaultDevice(), mem_config);
+        return input.to_device(AutoFormat::GetDefaultDevice(), mem_config);
     } else if (input.memory_config() != mem_config) {
         return ttnn::clone(input, std::nullopt, mem_config, std::nullopt);
     } else {
@@ -123,7 +122,7 @@ Tensor AutoFormat::format_input_tensor(
             }
         }
         // Fall back to host conversions
-        formatted_input = ttnn::data_transfer_to_host(formatted_input);
+        formatted_input = formatted_input.cpu();
     }
 
     // Host side conversions
@@ -188,7 +187,7 @@ Tensor AutoFormat::format_output_tensor(
                 auto ends = std::array<uint32_t, 4>({shape[0], shape[1], shape[2], shape[3]});
                 auto step = std::array<uint32_t, 4>({1, 1, 1, 1});
 
-                formatted_output = ttnn::slice(DefaultQueueId, formatted_output, begins, ends, step, mem_config);
+                formatted_output = ttnn::slice(formatted_output, begins, ends, step, mem_config);
                 return formatted_output;
                 // Output is tile but shape cannot be tile. We leave in RM
             } else if (formatted_output.get_layout() == Layout::TILE && AutoFormat::legal_rm_shape(shape)) {
@@ -212,13 +211,13 @@ Tensor AutoFormat::format_output_tensor(
                 auto begins = std::array<uint32_t, 4>({0, 0, 0, 0});
                 auto ends = std::array<uint32_t, 4>({shape[0], shape[1], shape[2], shape[3]});
                 auto step = std::array<uint32_t, 4>({1, 1, 1, 1});
-                formatted_output = ttnn::slice(DefaultQueueId, formatted_output, begins, ends, step, mem_config);
+                formatted_output = ttnn::slice(formatted_output, begins, ends, step, mem_config);
                 formatted_output = ttnn::tilize(formatted_output, mem_config);
                 return formatted_output;
             }
         }
         // Fall back to host conversions
-        formatted_output = ttnn::data_transfer_to_host(formatted_output);
+        formatted_output = formatted_output.cpu();
     }
 
     // Host side conversions

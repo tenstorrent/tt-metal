@@ -1,3 +1,9 @@
+if(ENABLE_COVERAGE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    message(STATUS "Enabling code coverage flags for all tt_metal targets")
+    add_compile_options(--coverage)
+    add_link_options(--coverage)
+endif()
+
 add_library(tt_metal)
 add_library(Metalium::Metal ALIAS tt_metal)
 
@@ -13,7 +19,7 @@ target_link_libraries(
     tt_metal
     PUBLIC
         umd::device
-        magic_enum
+        magic_enum::magic_enum
         fmt::fmt-header-only
         span
         small_vector

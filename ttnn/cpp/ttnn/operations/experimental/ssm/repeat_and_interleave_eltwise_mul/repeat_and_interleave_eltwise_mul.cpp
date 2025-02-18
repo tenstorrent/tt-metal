@@ -25,13 +25,4 @@ ttnn::Tensor ExecuteRepeatAndInterleaveEltwiseMul::invoke(
     return operation::run(program, {a, b}, {}, {}, queue_id).at(0);
 }
 
-ttnn::Tensor ExecuteRepeatAndInterleaveEltwiseMul::invoke(
-    const Tensor& a,
-    const Tensor& b,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<DataType> dtype,
-    const std::optional<MathFidelity> math_fidelity) {
-    return invoke(DefaultQueueId, a, b, memory_config, dtype, math_fidelity);
-}
-
 }  // namespace ttnn::operations::experimental::ssm

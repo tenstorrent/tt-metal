@@ -21,6 +21,9 @@
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
+#include "tt_metal/jit_build/build_env_manager.hpp"
+
+#include "tt_cluster.hpp"
 
 using namespace tt::tt_metal;
 
@@ -304,18 +307,22 @@ void DevicePool::activate_device(chip_id_t id) {
             false,
             worker_core_thread_core,
             completion_queue_reader_core);
-        if (!this->firmware_built_keys.contains(device->build_key())) {
-            device->build_firmware();
-            this->firmware_built_keys.insert(device->build_key());
+        if (!this->firmware_built_keys.contains(
+                BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key)) {
+            BuildEnvManager::get_instance().build_firmware(device->build_id());
+            this->firmware_built_keys.insert(
+                BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
         }
         this->devices.emplace_back(std::unique_ptr<IDevice>(device));
     } else {
         log_debug(tt::LogMetal, "DevicePool re-initialize device {}", id);
         if (not device->is_initialized()) {
             device->initialize(num_hw_cqs, this->l1_small_size, this->trace_region_size, this->l1_bank_remap);
-            if (!this->firmware_built_keys.contains(device->build_key())) {
-                device->build_firmware();
-                this->firmware_built_keys.insert(device->build_key());
+            if (!this->firmware_built_keys.contains(
+                    BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key)) {
+                BuildEnvManager::get_instance().build_firmware(device->build_id());
+                this->firmware_built_keys.insert(
+                    BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
             }
         } else {
             TT_THROW("Cannot re-initialize device {}, must first call close()", id);
@@ -536,8 +543,13 @@ void DevicePool::close_devices(const std::vector<IDevice*>& devices) {
     // before closing any device + modifying routing info.
     // If this is not done, non-blocking CCLs followed by a close will hang, since
     // the main thread will modify device state while the CCL is running on device.
+    // On TG - this should not be done on MMIO mapped devices, since we don't run
+    // any workloads on them
     for (const auto& dev_id : devices_to_close) {
         auto dev = tt::DevicePool::instance().get_active_device(dev_id);
+        if (tt::Cluster::instance().is_galaxy_cluster() and dev->is_mmio_capable()) {
+            continue;
+        }
         dev->synchronize();  // Synchronize worker queue
         Synchronize(dev);    // Synchronize device
     }

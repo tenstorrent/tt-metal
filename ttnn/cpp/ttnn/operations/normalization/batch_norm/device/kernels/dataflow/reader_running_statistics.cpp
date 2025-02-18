@@ -21,9 +21,9 @@ void kernel_main() {
 
     constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
 
-    constexpr auto cb_id_src = tt::CBIndex::c_0;
-    constexpr auto cb_id_momentum = tt::CBIndex::c_5;
-    constexpr auto cb_id_one = tt::CBIndex::c_6;
+    constexpr auto cb_id_src = get_compile_time_arg_val(1);
+    constexpr auto cb_id_momentum = get_compile_time_arg_val(2);
+    constexpr auto cb_id_one = get_compile_time_arg_val(3);
     constexpr uint32_t onetile = 1;
 
     const uint32_t src_tile_bytes = get_tile_size(cb_id_src);
@@ -46,12 +46,19 @@ void kernel_main() {
     union {
         float f;
         uint32_t u;
-    } scalar;
-    scalar.f = 1.0f;
-    fill_cb_with_value(cb_id_one, scalar.u);
+    } scalar_one, scalar_momentum;
+    scalar_one.f = 1.0f;
+    fill_cb_with_value(cb_id_one, scalar_one.u);
 
+    // momentum
+    scalar_momentum.u = momentum;
     cb_reserve_back(cb_id_momentum, onetile);
-    fill_with_val_bfloat16(cb_id_momentum, momentum);
+#ifdef FILL_WITH_VALUE_FLOAT
+    FILL_WITH_VALUE_FLOAT(cb_id_momentum, scalar_momentum.f);
+#endif
+#ifdef FILL_WITH_VALUE
+    FILL_WITH_VALUE(cb_id_momentum, momentum);
+#endif
     cb_push_back(cb_id_momentum, onetile);
 
     uint32_t num_tiles_read = 0;

@@ -8,8 +8,6 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.llama3.tt.llama_ccl import tt_all_reduce, tt_all_gather
-from models.demos.llama3.tt.llama_common import first_five
-from models.demos.llama3.tt.load_checkpoints import permute
 
 
 class TtLlamaAttention(LightweightModule):
@@ -138,7 +136,9 @@ class TtLlamaAttention(LightweightModule):
             )
             # as_tensor returns (32, dim) which is incorrect, this reshape updates the padded size to the correct size
             self.wqkv_bias_prefill = ttnn.reshape(
-                self.wqkv_bias_prefill, ttnn.Shape([1, 1, 1, self.wqkv_bias_prefill.shape[-1]])
+                self.wqkv_bias_prefill,
+                (1, 1, 1, self.wqkv_bias_prefill.shape[-1]),
+                (1, 1, self.wqkv_bias_prefill.shape[-2], self.wqkv_bias_prefill.shape[-1]),
             )
 
             # Broadcasting does not seem to be supported inside execute_trace so expand to the whole batch size
@@ -305,11 +305,6 @@ class TtLlamaAttention(LightweightModule):
         # Use HiFi2 for DRAM-sharded matmuls as they are otherwise flop-bound. Loses 1 bit of activation precision.
         ###
 
-        as_torch = lambda tensor: torch.Tensor(
-            ttnn.to_torch(tensor, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1))
-        )
-
-        # print(f"our x:", " ".join(f'{t:+3.1f}' for t in as_torch(x)[0, 0, 0].flatten()))
         xqkv_fused_sharded = ttnn.linear(
             x,
             self.wqkv,
@@ -581,18 +576,6 @@ class TtLlamaAttention(LightweightModule):
 
         if seq_len > self.MAX_QKV_MM_SEQ_LEN:
             xqkv_fused = ttnn.reshape(xqkv_fused, [1, 1, seq_len, -1])
-
-        def fix(xqkv):
-            torch_q = xqkv[: self.head_dim * self.n_local_heads]
-            torch_k = xqkv[
-                self.head_dim * self.n_local_heads : self.head_dim * (self.n_local_heads + self.n_local_kv_heads)
-            ]
-            torch_v = xqkv[self.head_dim * (self.n_local_heads + self.n_local_kv_heads) :]
-            to_hf = lambda t: permute(t.unsqueeze(-1), t.shape[0] // self.head_dim, t.shape[0], 1).squeeze(-1)
-            torch_q = to_hf(torch_q)
-            torch_k = to_hf(torch_k)
-            torch_v = torch_v
-            return torch_k.flatten()
 
         ttnn.deallocate(x_11SH)
 

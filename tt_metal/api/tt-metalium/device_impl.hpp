@@ -15,7 +15,6 @@
 #include "data_types.hpp"
 #include "program_device_map.hpp"
 #include "build.hpp"
-#include "tt_cluster.hpp"
 #include "hal.hpp"
 #include "command_queue_interface.hpp"
 #include "command_queue.hpp"
@@ -56,8 +55,8 @@ public:
     tt::ARCH arch() const override;
 
     chip_id_t id() const override { return id_; }
-
-    uint32_t build_key() const override { return build_key_; }
+    // For a single device, build id is the same as device id
+    chip_id_t build_id() const override { return id_; }
 
     uint8_t num_hw_cqs() const override { return num_hw_cqs_; }
 
@@ -117,20 +116,17 @@ public:
     uint32_t get_noc_unicast_encoding(uint8_t noc_index, const CoreCoord& core) const override;
     uint32_t get_noc_multicast_encoding(uint8_t noc_index, const CoreRange& cores) const override;
 
-    const JitBuildEnv& build_env() const override { return this->build_env_; }
-    const string build_firmware_target_path(uint32_t programmable_core, uint32_t processor_class, int i) const override;
-    const string build_kernel_target_path(uint32_t programmable_core, uint32_t processor_class, int i, const string& kernel_name) const override;
-    const JitBuildState& build_firmware_state(uint32_t programmable_core, uint32_t processor_class, int i) const override;
-    const JitBuildState& build_kernel_state(uint32_t programmable_core, uint32_t processor_class, int i) const override;
-    const JitBuildStateSubset build_kernel_states(uint32_t programmable_core, uint32_t processor_class) const override;
-
     SystemMemoryManager& sysmem_manager() override { return *sysmem_manager_; }
     CommandQueue& command_queue(size_t cq_id = 0) override;
 
     // Metal trace device capture mode
     void begin_trace(const uint8_t cq_id, const uint32_t tid) override;
     void end_trace(const uint8_t cq_id, const uint32_t tid) override;
-    void replay_trace(const uint8_t cq_id, const uint32_t tid, const bool blocking) override;
+    void replay_trace(
+        const uint8_t cq_id,
+        const uint32_t tid,
+        const bool block_on_device,
+        const bool block_on_worker_thread) override;
     void release_trace(const uint32_t tid) override;
     std::shared_ptr<TraceBuffer> get_trace(uint32_t tid) override;
     uint32_t get_trace_buffers_size() const override { return trace_buffers_size_; }
@@ -143,8 +139,12 @@ public:
 
     // Checks that the given arch is on the given pci_slot and that it's responding
     // Puts device into reset
-    bool initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap = {}, bool minimal = false) override;
-    void build_firmware() override;
+    bool initialize(
+        const uint8_t num_hw_cqs,
+        size_t l1_small_size,
+        size_t trace_region_size,
+        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
+        bool minimal = false) override;
     void reset_cores() override;
     void initialize_and_launch_firmware() override;
     void init_command_queue_host() override;
@@ -203,8 +203,6 @@ private:
     void initialize_cluster();
     std::unique_ptr<Allocator> initialize_allocator(
         size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap = {});
-    void initialize_build();
-    void initialize_device_kernel_defines();
     void initialize_device_bank_to_noc_tables(const HalProgrammableCoreType &core_type, CoreCoord virtual_core);
     void initialize_firmware(const HalProgrammableCoreType &core_type, CoreCoord virtual_core, launch_msg_t *launch_msg, go_msg_t* go_msg);
 
@@ -216,9 +214,8 @@ private:
     void configure_command_queue_programs();
     void clear_l1_state();
     void get_associated_dispatch_virtual_cores(
-        std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> &my_dispatch_cores,
-        std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>> &other_dispatch_cores);
-    std::pair<int, int> build_processor_type_to_index(uint32_t programmable_core, uint32_t processor_class) const;
+        std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>>& my_dispatch_cores,
+        std::unordered_map<chip_id_t, std::unordered_set<CoreCoord>>& other_dispatch_cores);
 
     void set_worker_mode(const WorkExecutorMode& mode);
 
@@ -233,7 +230,6 @@ private:
     CoreCoord virtual_core_from_physical_core(const CoreCoord& physical_coord) const;
 
     chip_id_t id_;
-    uint32_t build_key_ = 0;
     std::vector<std::vector<chip_id_t>> tunnels_from_mmio_;
 
     std::unique_ptr<SubDeviceManagerTracker> sub_device_manager_tracker_;
@@ -253,11 +249,6 @@ private:
 
     // SystemMemoryManager is the interface to the hardware command queue
     std::vector<std::unique_ptr<CommandQueue>> command_queues_;
-
-    JitBuildEnv build_env_;
-    JitBuildStateSet firmware_build_states_;
-    JitBuildStateSet kernel_build_states_;
-    std::vector<std::vector<std::pair<int, int>>> build_state_indices_;
 
     std::set<CoreCoord> compute_cores_;
     std::set<CoreCoord> storage_only_cores_;

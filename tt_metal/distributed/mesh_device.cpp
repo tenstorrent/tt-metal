@@ -90,12 +90,6 @@ MeshDevice::ScopedDevices::~ScopedDevices() {
 
 const std::vector<IDevice*>& MeshDevice::ScopedDevices::get_devices() const { return devices_; }
 
-uint32_t MeshDevice::build_key() const {
-    TT_FATAL(tt::tt_metal::hal.is_coordinate_virtualization_enabled(), "MeshDevice::build_key() expects coordinate virtualization to be enabled");
-    return validate_and_get_reference_value(
-        scoped_devices_->get_devices(), [](const auto& device) { return device->build_key(); });
-}
-
 uint8_t MeshDevice::num_hw_cqs() const {
     return validate_and_get_reference_value(
         scoped_devices_->get_devices(), [](const auto& device) { return device->num_hw_cqs(); });
@@ -171,7 +165,6 @@ std::shared_ptr<MeshDevice> MeshDevice::create_submesh(const MeshShape& submesh_
 
     auto submesh_devices = view_->get_devices(start_coordinate, end_coordinate);
     submesh->view_ = std::make_unique<MeshDeviceView>(submesh_devices, submesh_shape);
-    SystemMesh::instance().register_mesh_device(submesh, submesh_devices);
     submeshes_.push_back(submesh);
     log_trace(
         LogMetal,
@@ -218,7 +211,11 @@ std::vector<IDevice*> MeshDevice::get_devices() const { return view_->get_device
 
 // TODO: Remove this function once we have a proper view interface
 IDevice* MeshDevice::get_device(size_t row_idx, size_t col_idx) const {
-    return this->get_device_index(row_idx * num_cols() + col_idx);
+    return get_device(MeshCoordinate{row_idx, col_idx});
+}
+
+IDevice* MeshDevice::get_device(const MeshCoordinate& coord) const {
+    return this->get_device_index(to_linear_index(SimpleMeshShape(mesh_shape_), coord));
 }
 
 MeshCommandQueue& MeshDevice::mesh_command_queue(std::size_t cq_id) const {
@@ -341,6 +338,8 @@ const MeshDeviceView& MeshDevice::get_view() const {
 }
 
 MeshDeviceID MeshDevice::id() const { return mesh_id_; }
+// For a mesh, build id is the same as the device id for the reference device
+chip_id_t MeshDevice::build_id() const { return reference_device()->id(); }
 
 bool MeshDevice::is_parent_mesh() const { return parent_mesh_.expired(); }
 
@@ -536,28 +535,6 @@ uint32_t MeshDevice::get_noc_multicast_encoding(uint8_t noc_index, const CoreRan
     });
 }
 
-// Floating point and build environment
-const JitBuildEnv& MeshDevice::build_env() const { return reference_device()->build_env(); }
-
-// Build and firmware paths
-const string MeshDevice::build_firmware_target_path(uint32_t programmable_core, uint32_t processor_class, int i) const {
-    return reference_device()->build_firmware_target_path(programmable_core, processor_class, i);
-}
-const string MeshDevice::build_kernel_target_path(
-    uint32_t programmable_core, uint32_t processor_class, int i, const string& kernel_name) const {
-    return reference_device()->build_kernel_target_path(programmable_core, processor_class, i, kernel_name);
-}
-const JitBuildState& MeshDevice::build_firmware_state(
-    uint32_t programmable_core, uint32_t processor_class, int i) const {
-    return reference_device()->build_firmware_state(programmable_core, processor_class, i);
-}
-const JitBuildState& MeshDevice::build_kernel_state(uint32_t programmable_core, uint32_t processor_class, int i) const {
-    return reference_device()->build_kernel_state(programmable_core, processor_class, i);
-}
-const JitBuildStateSubset MeshDevice::build_kernel_states(uint32_t programmable_core, uint32_t processor_class) const {
-    return reference_device()->build_kernel_states(programmable_core, processor_class);
-}
-
 // System memory and command queue management
 SystemMemoryManager& MeshDevice::sysmem_manager() {
     TT_THROW("sysmem_manager() is not supported on MeshDevice - use individual devices instead");
@@ -580,9 +557,16 @@ void MeshDevice::end_trace(const uint8_t cq_id, const uint32_t tid) {
         device->end_trace(cq_id, tid);
     }
 }
-void MeshDevice::replay_trace(const uint8_t cq_id, const uint32_t tid, const bool blocking) {
+void MeshDevice::replay_trace(
+    const uint8_t cq_id, const uint32_t tid, const bool block_on_device, const bool block_on_worker_thread) {
     for (auto& device : scoped_devices_->get_devices()) {
-        device->replay_trace(cq_id, tid, blocking);
+        device->replay_trace(cq_id, tid, block_on_device, false /* block_on_worker_thread */);
+    }
+    // If blocking, wait until worker threads have completed
+    if (block_on_worker_thread) {
+        for (auto& device : scoped_devices_->get_devices()) {
+            device->synchronize();
+        }
     }
 }
 void MeshDevice::release_trace(const uint32_t tid) {
@@ -617,7 +601,6 @@ bool MeshDevice::initialize(
     tt::stl::Span<const std::uint32_t> l1_bank_remap,
     bool minimal) {
     view_ = std::make_unique<MeshDeviceView>(scoped_devices_->get_devices(), mesh_shape_);
-    SystemMesh::instance().register_mesh_device(shared_from_this(), this->get_devices());
 
     // For MeshDevice, we support uniform sub-devices across all devices and we do not support ethernet subdevices.
     const auto& compute_grid_size = this->compute_with_storage_grid_size();
@@ -636,10 +619,6 @@ bool MeshDevice::initialize(
     return true;
 }
 
-void MeshDevice::build_firmware() {
-    TT_THROW("build_firmware() is not supported on MeshDevice - use individual devices instead");
-    reference_device()->build_firmware();
-}
 void MeshDevice::reset_cores() {
     TT_THROW("reset_cores() is not supported on MeshDevice - use individual devices instead");
     reference_device()->reset_cores();

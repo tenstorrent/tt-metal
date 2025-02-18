@@ -112,6 +112,12 @@ void CaptureSetRuntimeArgsUint32(
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     tt::stl::Span<const uint32_t> runtime_args);
 
+void CaptureSetRuntimeArgsUint32VecPerCore(
+    const Program& program,
+    KernelHandle kernel_id,
+    const std::vector<CoreCoord>& core_spec,
+    const std::vector<std::vector<uint32_t>>& runtime_args);
+
 void CaptureSetRuntimeArgs(
     IDevice* device,
     const std::shared_ptr<Kernel>& kernel,

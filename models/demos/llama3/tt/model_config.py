@@ -31,6 +31,7 @@ from models.demos.llama3.tt.load_checkpoints import (
     convert_hf_to_meta,
     convert_meta_to_hf,
     reverse_permute,
+    standardize_hf_keys,
 )
 
 
@@ -114,8 +115,10 @@ class TtModelArgs:
         self.max_batch_size = max_batch_size
         self.tile_size = 32
         self.is_70b = False
+        self.from_hf_url = False  # updated below if true
 
         LLAMA_DIR = os.getenv("LLAMA_DIR")
+        HF_MODEL = os.getenv("HF_MODEL")
         if LLAMA_DIR:
             if any([os.getenv("LLAMA_CKPT_DIR"), os.getenv("LLAMA_TOKENIZER_PATH"), os.getenv("LLAMA_CACHE_PATH")]):
                 logger.warning(
@@ -125,10 +128,18 @@ class TtModelArgs:
             self.DEFAULT_TOKENIZER_PATH = LLAMA_DIR
             self.DEFAULT_CACHE_PATH = os.path.join(LLAMA_DIR, self.device_name)
             self.model_name = os.path.basename(LLAMA_DIR)  # May be overridden by config
+        elif HF_MODEL:
+            self.DEFAULT_CKPT_DIR = HF_MODEL
+            self.DEFAULT_TOKENIZER_PATH = HF_MODEL
+            self.DEFAULT_CACHE_PATH = os.getenv("LLAMA_CACHE_PATH")
+            if not self.DEFAULT_CACHE_PATH:
+                self.DEFAULT_CACHE_PATH = os.path.join("model_cache", HF_MODEL, self.device_name)
+            self.model_name = HF_MODEL  # May be overridden by config
+            self.from_hf_url = True
         else:
             assert "Please set $LLAMA_DIR to a valid checkpoint directory"
 
-        if not dummy_weights:
+        if not dummy_weights and not HF_MODEL:
             # Assert if all folders and files exist
             assert os.path.exists(
                 self.DEFAULT_CKPT_DIR
@@ -157,7 +168,10 @@ class TtModelArgs:
             self.instruct = True
 
         # Load model params
-        if not dummy_weights:
+        if HF_MODEL:
+            self.checkpoint_type = CheckpointType.HuggingFace
+            self._set_hf_params(self.DEFAULT_CKPT_DIR)
+        elif not dummy_weights:
             self.checkpoint_type = self.detect_checkpoint_type()
             self._set_model_params(self.DEFAULT_CKPT_DIR)
         else:  # With Dummy weights, set the params from the local copy inside the model folder. This is required for CI pipeline that doesn't mount the external folders.
@@ -194,9 +208,13 @@ class TtModelArgs:
             try:
                 max_prefill_chunk_size_div1024 = MAX_PREFILL_CHUNK_SIZES_DIV1024[self.base_model_name][self.device_name]
             except KeyError:
-                raise ValueError(
-                    f"Unknown model {self.model_name} on device {self.device_name}, try setting MAX_PREFILL_CHUNK_SIZE between 4 (compatible) and 128 (faster)"
+                logger.warning(
+                    f"Unknown model {self.model_name} on device {self.device_name}, setting MAX_PREFILL_CHUNK_SIZE to 4 for compatibility"
                 )
+                logger.warning(
+                    f"Try setting MAX_PREFILL_CHUNK_SIZE to larger powers of 2 up to e.g. 128 for faster performance (if you run out of L1 memory it was too high)"
+                )
+                max_prefill_chunk_size_div1024 = 4
             assert (
                 max_prefill_chunk_size_div1024 is not None
             ), f"Unsupported model {self.model_name} on device {self.device_name}"
@@ -309,23 +327,18 @@ class TtModelArgs:
                 k_chunk_size=256 if seqlen >= 2048 else 64,
             )
 
-            def find_largest_divisor(n, max_divisor=8):
-                for i in range(max_divisor, 0, -1):
-                    if n % i == 0:
-                        return i
-                return 1  # Fallback to 1 if no divisor found
-
             # nlp_concat_heads_decode will shard the data across this number of cores
             assert (
                 self.n_heads % self.cluster_shape[1] == 0
             ), f"n_heads must be divisible by num_devices: {self.n_heads} % {self.cluster_shape[1]}"
 
+            # Note: for some models (e.g. Mistral-Small) n_heads * head_dim != dim
             self.model_config["ATTN_OUTPUT_PROGCFG"] = (
                 None
                 if self.is_galaxy
                 else self.dram_matmul_config(
                     m=self.tile_padded_batch_rows,
-                    k=self.dim // self.num_devices,
+                    k=(self.n_heads * self.head_dim) // self.num_devices,
                     n=self.dim,
                     num_cores=self.n_heads // self.num_devices,
                 )
@@ -980,7 +993,7 @@ class TtModelArgs:
         self.norm_eps = params.get("norm_eps", params.get("rms_norm_eps"))
         self.vocab_size = params["vocab_size"]
         self.padded_vocab_size = 128 * 1024
-        self.head_dim = self.dim // self.n_heads
+        self.head_dim = params.get("head_dim", self.dim // self.n_heads)
 
         # Handle different MLP dimension specifications
         if "intermediate_size" in params:
@@ -1108,10 +1121,15 @@ class TtModelArgs:
         self.orig_context_len = 8192
 
     def _set_hf_params(self, checkpoint_dir):
-        config_file = os.path.join(checkpoint_dir, "config.json")
-        assert os.path.exists(config_file), f"config.json file not found at {config_file}"
-        with open(config_file, "r") as f:
-            config = json.load(f)
+        if self.from_hf_url:
+            from transformers import AutoConfig
+
+            config = AutoConfig.from_pretrained(self.model_name).to_dict()
+        else:
+            config_file = os.path.join(checkpoint_dir, "config.json")
+            assert os.path.exists(config_file), f"config.json file not found at {config_file}"
+            with open(config_file, "r") as f:
+                config = json.load(f)
         self._set_params_from_dict(config)
 
     def __repr__(self):
@@ -1173,7 +1191,14 @@ class TtModelArgs:
             state_dict = load_meta_state_dict(self.DEFAULT_CKPT_DIR, self.n_layers)
         else:
             assert self.checkpoint_type == CheckpointType.HuggingFace
-            state_dict = load_hf_state_dict(self.DEFAULT_CKPT_DIR)
+            if self.from_hf_url:
+                from transformers import AutoModelForCausalLM
+
+                model = AutoModelForCausalLM.from_pretrained(self.DEFAULT_CKPT_DIR)
+                state_dict = model.state_dict()
+            else:
+                state_dict = load_hf_state_dict(self.DEFAULT_CKPT_DIR)
+            state_dict = standardize_hf_keys(state_dict)
             state_dict = convert_hf_to_meta(state_dict, self.head_dim)
         keys_dict = list(state_dict.keys())[:]
         remv = [f"layers.{i}." for i in list(range(self.n_layers, self.full_model_n_layers))]
@@ -1211,7 +1236,7 @@ class TtModelArgs:
         )  # TODO: Needed for TG hang workaround
 
         if in0_block_w is None:
-            in0_block_w = min(4, max(1, k // (self.tile_size * grid_size[0])))
+            in0_block_w = self.find_largest_divisor(k // (self.tile_size * grid_size[1]))
 
         return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=grid_size,
@@ -1332,6 +1357,12 @@ class TtModelArgs:
             f"Cannot find a grid configuration such that both {K} and {N} tiles evenly divide into cores of max size {max_rows}x{max_cols}."
         )
 
+    def find_largest_divisor(self, n, max_divisor=8):
+        for i in range(max_divisor, 0, -1):
+            if n % i == 0:
+                return i
+        return 1  # Fallback to 1 if no divisor found
+
     def dram_matmul_config(self, m: int, k: int, n: int, num_cores=None):
         # in0_block_w must evenly divide k and be no larger than tile_size * num_cores
         if num_cores is None:
@@ -1342,7 +1373,7 @@ class TtModelArgs:
             ), f"k must be divisible by tile_size * num_cores: {k} % {self.tile_size * num_cores} != 0"
             # assert n % (self.tile_size * num_cores) == 0, f"n must be divisible by tile_size * num_cores: {n} % {self.tile_size * num_cores} != 0"
         return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
-            in0_block_w=math.ceil(k / (self.tile_size * num_cores)),
+            in0_block_w=self.find_largest_divisor(k // (self.tile_size * num_cores)),
             per_core_M=math.ceil(m / self.tile_size),
             per_core_N=math.ceil(n / (self.tile_size * num_cores)),
             fused_activation=None,
@@ -1371,7 +1402,7 @@ class TtModelArgs:
             grid = ttnn.CoreGrid(x=grid.x, y=grid_y)
 
         per_core_m = m // tile_height
-        per_core_k = math.ceil(k / tile_width / grid.num_cores)
+        per_core_k = self.find_largest_divisor(k // (self.tile_size * grid.num_cores))
         per_core_n = math.ceil(n / tile_width / grid.num_cores)
 
         if is_fp32_accumulate:
@@ -1509,9 +1540,13 @@ class TtModelArgs:
                 return self.tokenizer.encode(prompt_text, bos=True, eos=False)
         else:
             if instruct:
-                return encode_prompt_hf(self.tokenizer, prompt_text, system_prompt_text)
-            else:
-                return self.tokenizer.encode(prompt_text, add_special_tokens=False)
+                try:
+                    return encode_prompt_hf(self.tokenizer, prompt_text, system_prompt_text)
+                except ValueError as e:
+                    logger.warning(f"Failed to encode chat prompt, are you sure this is an instruct model? Error: {e}")
+                    logger.warning(f"Falling back to base model encoding with no chat template")
+
+            return self.tokenizer.encode(prompt_text, add_special_tokens=False)
 
     def reference_lm_head(self):
         if self.checkpoint_type == CheckpointType.Meta:
@@ -1536,7 +1571,9 @@ class TtModelArgs:
         else:
             from transformers import AutoConfig, AutoModelForCausalLM
 
-            if not load_checkpoint:
+            # HF is much faster at loading from a checkpoint than generating from config
+            # so use that by preference unless we don't have a checkpoint
+            if self.dummy_weights and not load_checkpoint:
                 config = AutoConfig.from_pretrained(self.DEFAULT_CKPT_DIR)
                 config.num_layers = self.n_layers
                 model = AutoModelForCausalLM.from_config(config)
