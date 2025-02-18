@@ -51,24 +51,21 @@ struct compute_attributes_t {
     tt::tt_metal::ComputeConfig config;
     // std::vector<uint32_t> runtime_args = {};
     std::unordered_map<CoreCoord, std::vector<uint32_t>> runtime_args_per_core = {};
+};
+using cb_attr_map = std::unordered_map<tt::CBIndex, circular_buffer_attributes_t>;
 
+struct operation_attributes_t {
+    cb_attr_map circular_buffer_attributes;
+
+    std::vector<data_movement_attributes_t> data_movement_attributes;
+
+    // Ethernet not supported at the moment.
+    // std::optional<tt::metal::EthernetConfig> ethernetConfig;
+
+    std::vector<compute_attributes_t> compute_attributes;
 };
 
-using cb_attr_map = std::unordered_map<tt::CBIndex, circular_buffer_attributes_t>;
 struct GenericOpDeviceOperation {
-
-    struct operation_attributes_t {
-        cb_attr_map circular_buffer_attributes;
-
-        std::vector<data_movement_attributes_t> data_movement_attributes;
-
-        // Ethernet not supported at the moment.
-        // std::optional<tt::metal::EthernetConfig> ethernetConfig;
-
-        std::vector<compute_attributes_t> compute_attributes;
-    };
-
-
     // Define the return types for the shape(s) of the operation
     using shape_return_value_t = std::vector<Shape>;
 
@@ -140,9 +137,4 @@ struct GenericOpDeviceOperation {
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };  // struct GenericOpDeviceOperation
 
-}   // namespace ttnn::operations::generic
-
-namespace ttnn::prim {
-constexpr auto generic =
-    ttnn::register_operation<"ttnn::prim::generic", ttnn::operations::generic::GenericOpDeviceOperation>();
-}  // namespace ttnn::prim
+}  // namespace ttnn::operations::generic

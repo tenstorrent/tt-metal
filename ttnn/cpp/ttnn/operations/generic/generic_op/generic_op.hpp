@@ -8,20 +8,18 @@
 
 namespace ttnn::operations::generic {
 
-struct GenericOpDeviceOperation {
-    struct operation_attributes_t;
-};
+struct operation_attributes_t;
 
 struct GenericOp {
     static Tensor invoke(
         QueueId queue_id,
         const Tensor& input_tensor,
-        const GenericOpDeviceOperation::operation_attributes_t& operation_attributes,
+        const operation_attributes_t& operation_attributes,
         const std::vector<Tensor>& io_tensors = {});
 
     static Tensor invoke(
         const Tensor& input_tensor,
-        const GenericOpDeviceOperation::operation_attributes_t& operation_attributes,
+        const operation_attributes_t& operation_attributes,
         const std::vector<Tensor>& io_tensors = {});
 };  // struct GenericOp
 
