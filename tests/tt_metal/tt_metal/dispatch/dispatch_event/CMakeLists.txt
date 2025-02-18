@@ -1,5 +1,0 @@
-set(UNIT_TESTS_DISPATCH_EVENT_SRC
-    ${CMAKE_CURRENT_SOURCE_DIR}/test_EnqueueWaitForEvent.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/test_events.cpp
-    PARENT_SCOPE
-)

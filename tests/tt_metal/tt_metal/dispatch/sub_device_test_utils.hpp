@@ -6,9 +6,7 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/global_semaphore.hpp>
-
-// TODO: ARCH_NAME specific, must remove
-#include "eth_l1_address_map.h"
+#include <tt-metalium/hal.hpp>
 
 inline std::tuple<Program, CoreCoord, GlobalSemaphore> create_single_sync_program(
     IDevice* device, SubDevice sub_device) {
@@ -102,7 +100,8 @@ inline std::tuple<Program, Program, Program, GlobalSemaphore> create_basic_eth_s
         syncer_core_physical.y,
         tensix_waiter_core_physical.x,
         tensix_waiter_core_physical.y,
-        eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE};
+        hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED)
+    };
     SetRuntimeArgs(waiter_program, waiter_kernel, waiter_core, waiter_rt_args);
 
     Program syncer_program = CreateProgram();

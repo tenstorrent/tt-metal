@@ -354,16 +354,16 @@ def test_timestamped_events():
 def test_sub_device_profiler():
     ARCH_NAME = os.getenv("ARCH_NAME")
     run_gtest_profiler_test(
-        "./build/test/tt_metal/unit_tests_dispatch" + "_" + ARCH_NAME,
+        "./build/test/tt_metal/unit_tests_dispatch",
         "CommandQueueSingleCardFixture.TensixTestSubDeviceBasicPrograms",
     )
     os.environ["TT_METAL_PROFILER_SYNC"] = "1"
     run_gtest_profiler_test(
-        "./build/test/tt_metal/unit_tests_dispatch" + "_" + ARCH_NAME,
+        "./build/test/tt_metal/unit_tests_dispatch",
         "CommandQueueSingleCardFixture.TensixActiveEthTestSubDeviceBasicEthPrograms",
     )
     os.environ["TT_METAL_PROFILER_SYNC"] = "0"
     run_gtest_profiler_test(
-        "./build/test/tt_metal/unit_tests_dispatch" + "_" + ARCH_NAME,
+        "./build/test/tt_metal/unit_tests_dispatch",
         "CommandQueueSingleCardTraceFixture.TensixTestSubDeviceTraceBasicPrograms",
     )
