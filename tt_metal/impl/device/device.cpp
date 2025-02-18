@@ -36,6 +36,7 @@
 #include "impl/dispatch/topology.hpp"
 #include "impl/dispatch/hardware_command_queue.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
+#include <host_api_call_guard.hpp>
 
 namespace tt {
 
@@ -965,6 +966,7 @@ bool Device::initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t t
 void Device::push_work(std::function<void()> work, bool blocking) {
     if (not this->initialized_) {
         if (!uninitialized_error_fired_) {
+            DumpCallStack(20);
             log_fatal("Attempting to push work to Device {} which is not initialized. Ignoring...", this->id_);
             uninitialized_error_fired_ = true;
         }
@@ -1247,6 +1249,7 @@ CommandQueue& Device::command_queue(size_t cq_id) {
 
 void Device::synchronize() {
     if (not this->initialized_) {
+        DumpCallStack(20);
         log_warning("Attempting to synchronize Device {} which is not initialized. Ignoring...", this->id_);
         return;
     }

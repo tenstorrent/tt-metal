@@ -892,6 +892,7 @@ void detail::Program_::validate_circular_buffer_region(const IDevice* device) {
             continue;
         }
         uint64_t cb_region_end = cb_allocator.l1_regions.back().second; //cb_allocator.get_cb_region_end();
+        uint64_t cb_region_start = cb_allocator.l1_regions.back().first;  // cb_allocator.get_cb_region_end();
         if (cb_region_end > max_l1_size) {
             TT_THROW(
                 "Statically allocated circular buffers on core range {} grow to {} B which is beyond max L1 size of {} "
@@ -900,6 +901,22 @@ void detail::Program_::validate_circular_buffer_region(const IDevice* device) {
                 cb_region_end,
                 max_l1_size);
         }
+
+        // KCM Debug for resnet.
+        if (lowest_address.has_value()) {
+            bool violation = lowest_address.has_value() and lowest_address.value() < cb_region_end;
+            log_info(
+                tt::LogMetal,
+                "KCM validate_circular_buffer_region. program: {} cores: {} cb_region_start: {} cb_region_end: {}, "
+                "lowest_address: {} status: {}",
+                this->id,
+                cb_allocator.core_range.str(),
+                cb_region_start,
+                cb_region_end,
+                lowest_address.value(),
+                violation ? "VIOLATION" : "");
+        }
+
         if (lowest_address.has_value() and lowest_address.value() < cb_region_end) {
             TT_THROW(
                 "Statically allocated circular buffers in program {} clash with L1 buffers on core range {}. L1 buffer "

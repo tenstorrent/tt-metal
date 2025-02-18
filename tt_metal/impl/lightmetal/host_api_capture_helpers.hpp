@@ -48,7 +48,7 @@ struct TraceScope {
 
 #define LIGHT_METAL_TRACE_FUNCTION_CALL(capture_func, ...)                                          \
     do {                                                                                            \
-        log_trace(                                                                                  \
+        log_info(                                                                                   \
             tt::LogMetalTrace,                                                                      \
             "LIGHT_METAL_TRACE_FUNCTION_CALL: {} via {} istracing: {} depth: {}",                   \
             #capture_func,                                                                          \

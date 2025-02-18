@@ -402,6 +402,7 @@ void Buffer::allocate_impl() {
 }
 
 void Buffer::deallocate() {
+    ENSURE_CALLED_FROM_API();
     deallocation_requested_.store(true, std::memory_order::relaxed);
     if (!owns_data_) {
         return;
