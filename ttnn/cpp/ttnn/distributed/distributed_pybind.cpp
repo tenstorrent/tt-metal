@@ -13,6 +13,7 @@
 =======
 =======
 #include <pybind11/cast.h>
+<<<<<<< HEAD
 >>>>>>> one type error left
 #include <cstddef>
 #include <memory>
@@ -28,6 +29,11 @@
 >>>>>>> clean up imports, fix test cases and change them to use mapper/composer functions, fix storage error by using from_device instead of cpu
 
 =======
+#include <pybind11/pytypes.h>
+>>>>>>> fix rebase
+=======
+#include <cstddef>
+
 #include <pybind11/pytypes.h>
 >>>>>>> fix rebase
 #include <tt-metalium/command_queue.hpp>
@@ -69,12 +75,12 @@
 #include <tt-metalium/command_queue.hpp>
 =======
 #include "ttnn/tensor/tensor.hpp"
-<<<<<<< HEAD
-#include "ttnn/types.hpp"
-=======
 #include <tt-metalium/command_queue.hpp>
+<<<<<<< HEAD
 >>>>>>> clean up imports, fix test cases and change them to use mapper/composer functions, fix storage error by using from_device instead of cpu
 >>>>>>> clean up imports, fix test cases and change them to use mapper/composer functions, fix storage error by using from_device instead of cpu
+=======
+>>>>>>> fix rebase
 
 // This is required for automatic conversions, as in the creation of mesh devices
 // https://github.com/tenstorrent/tt-metal/issues/18082
@@ -909,10 +915,13 @@ void py_module(py::module& module) {
        Get the tensor shard corresponding to the device.
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 =======
 <<<<<<< HEAD
 
 >>>>>>> clean up imports, fix test cases and change them to use mapper/composer functions, fix storage error by using from_device instead of cpu
+=======
+>>>>>>> fix rebase
        Args:
            tensor (Tensor): The tensor to get the shard from.
            device (Device): The device to get the shard for.
@@ -921,15 +930,6 @@ void py_module(py::module& module) {
        Returns:
            Tensor: The shard of the tensor corresponding to the device.
    )doc");
-=======
-        Args:
-            tensor (Tensor): The tensor to get the shard from.
-            device (Device): The device to get the shard for.
-aggregate_as
-        Returns:
-            Tensor: The shard of the tensor corresponding to the device.
-    )doc");
->>>>>>> clean up imports, fix test cases and change them to use mapper/composer functions, fix storage error by using from_device instead of cpu
     module.def("get_device_tensors", &get_device_tensors, py::arg("tensor"), py::kw_only());
 <<<<<<< HEAD
 <<<<<<< HEAD
