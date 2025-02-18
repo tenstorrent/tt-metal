@@ -600,7 +600,7 @@ FORCE_INLINE void receiver_send_completion_ack(
 
 template <uint8_t SENDER_NUM_BUFFERS>
 FORCE_INLINE bool can_forward_packet_completely(
-    const volatile tt::fabric::PacketHeader* packet_header,
+    // const volatile tt::fabric::PacketHeader* packet_header,
     tt::fabric::RoutingFields cached_routing_fields,
     tt::fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>& downstream_edm_interface) {
     // We always check if it is the terminal mcast packet value. We can do this because all unicast packets have the
@@ -619,12 +619,13 @@ FORCE_INLINE void receiver_forward_packet(
     uint8_t transaction_id) {
 
     bool start_distance_is_terminal_value = (cached_routing_fields.value & tt::fabric::RoutingFields::HOP_DISTANCE_MASK) == tt::fabric::RoutingFields::LAST_HOP_DISTANCE_VAL;
+    uint16_t payload_size_bytes = packet_start->payload_size_bytes;
     if (start_distance_is_terminal_value) {
-        execute_chip_unicast_to_local_chip(packet_start, transaction_id);
+        execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id);
     }
     bool not_last_destination_device = cached_routing_fields.value != tt::fabric::RoutingFields::LAST_MCAST_VAL;
     if (not_last_destination_device) {
-        forward_payload_to_downstream_edm(packet_start, cached_routing_fields, downstream_edm_interface, transaction_id);
+        forward_payload_to_downstream_edm(packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface, transaction_id);
     }
 }
 
@@ -661,7 +662,7 @@ FORCE_INLINE bool run_sender_channel_step(
                     tt::fabric::validate(*packet_header);
                     packet_header_recorder.record_packet_header(packet_header);
                 }
-                print_pkt_header(packet_header);
+                // print_pkt_header(packet_header);
                 send_next_data(
                     local_sender_channel,
                     local_sender_channel_worker_interface,
@@ -778,9 +779,11 @@ FORCE_INLINE void run_receiver_channel_step(
         volatile auto packet_header = local_receiver_channel.get_packet_header(receiver_buffer_index);
 
         tt::fabric::RoutingFields cached_routing_fields = const_cast<tt::fabric::PacketHeader*>(packet_header)->routing_fields;
-        print_pkt_header(packet_header);
+        // print_pkt_header(packet_header);
         bool can_send_to_all_local_chip_receivers =
-            can_forward_packet_completely(packet_header, cached_routing_fields, downstream_edm_interface);
+            can_forward_packet_completely(
+                // packet_header,
+                cached_routing_fields, downstream_edm_interface);
         bool trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
         if (can_send_to_all_local_chip_receivers && trid_flushed) {
             // DeviceZoneScopedN("EDMR-Send-Impl");
