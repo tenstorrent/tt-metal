@@ -45,8 +45,7 @@ struct AllShardSpecs {
     ShardSpec c_shard_spec;
 };
 
-ShardSpec adjust_to_shape(
-    const ShardSpec& shard_spec, const ttnn::Shape& from_shape, const ttnn::Shape& to_shape) {
+ShardSpec adjust_to_shape(const ShardSpec& shard_spec, const ttnn::Shape& from_shape, const ttnn::Shape& to_shape) {
     auto ret = shard_spec;
 
     ret.shape[0] = (ret.shape[0] * to_shape[-2]) / from_shape[-2];
@@ -180,7 +179,7 @@ void set_or_update_runtime_arguments(
     bool zero_start_grid = false;
     CoreCoord compute_with_storage_grid;
     const auto& all_device_cores = operation_attributes.worker_grid;
-    if (all_device_cores.size() == 1) {
+    if (grid.size() == 1) {
         const auto& cr = *all_device_cores.ranges().begin();
         if (cr.start_coord.x == 0 && cr.start_coord.y == 0) {
             if (has_sharding) {

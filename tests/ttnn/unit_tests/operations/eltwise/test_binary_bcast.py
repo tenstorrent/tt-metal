@@ -357,24 +357,45 @@ def test_binary_invalid_rank(device, a_shape, b_shape):
 
 
 height_sharded_memory_config = ttnn.create_sharded_memory_config(
-    [320, 128],
-    core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (2, 0))}),
+    # [320, 128], # 7 cores
+    # core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 6))}),
+    [160, 128],  # 14 cores
+    # config 1 single rectangle start from 0, 0
+    # core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (1, 6))}),
+    # config 2 single rectangle not start from 0, 0
+    # core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((1, 0), (2, 6))}),
+    # config 3 two grids any
+    core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((1, 0), (1, 6)), ttnn.CoreRange((3, 0), (3, 6))}),
+    # [32, 128] should work with 70 cores
+    # [64, 128], # 35 cores
+    # core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (4, 6))}),
     strategy=ttnn.ShardStrategy.HEIGHT,
     orientation=ttnn.ShardOrientation.ROW_MAJOR,
     use_height_and_width_as_shard_shape=True,
 )
 
+# width sharding is not good for large and tall (w is small) tensors
+# because each core may ends up with a large tensor as well, then out of L1 space
 width_sharded_memory_config = ttnn.create_sharded_memory_config(
-    [960, 64],
-    core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 1))}),
+    # [2240, 64],
+    # core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 1))}),
+    [2240, 32],
+    # core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 3))}),
+    # core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((1, 0), (1, 3))}),
+    core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 1)), ttnn.CoreRange((2, 2), (2, 3))}),
     strategy=ttnn.ShardStrategy.WIDTH,
     orientation=ttnn.ShardOrientation.ROW_MAJOR,
     use_height_and_width_as_shard_shape=True,
 )
 
 block_sharded_memory_config = ttnn.create_sharded_memory_config(
-    [320, 64],
-    core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (1, 2))}),
+    # [320, 64], # 128 / 64 = 2, core grid is 2x6
+    # core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (1, 6))}),
+    # following is better, more cores
+    [320, 32],  # 128 / 32 = 4, core grid is 4x6
+    # core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (3, 6))}),
+    core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((1, 0), (4, 6))}),
+    # [160, 32] will not work, because it needs core grid 4x14
     strategy=ttnn.ShardStrategy.BLOCK,
     orientation=ttnn.ShardOrientation.ROW_MAJOR,
     use_height_and_width_as_shard_shape=True,
@@ -383,7 +404,7 @@ block_sharded_memory_config = ttnn.create_sharded_memory_config(
 
 @pytest.mark.parametrize(
     "a_shape, b_shape",
-    ((torch.Size([5, 3, 64, 128]), torch.Size([5, 3, 64, 128])),),
+    ((torch.Size([5, 7, 64, 128]), torch.Size([5, 7, 64, 128])),),
 )
 @pytest.mark.parametrize(
     "sharded_config",
@@ -436,6 +457,56 @@ def test_binary_sharded(a_shape, b_shape, sharded_config, dtype_pt, dtype_tt, de
         out_tt_sharded = ttnn.experimental.add(a_tt, b_tt, memory_config=sharded_config)
         out_tt_sharded = ttnn.to_torch(out_tt_sharded)
         assert ttnn.pearson_correlation_coefficient(out_tt_sharded, out_pt) >= 0.99988
+
+
+@pytest.mark.parametrize(
+    "a_shape, b_shape",
+    ((torch.Size([5, 7, 64, 128]), torch.Size([5, 7, 64, 128])),),
+)
+@pytest.mark.parametrize(
+    "sharded_core_grid",
+    (
+        ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (1, 6))}),
+        ttnn.CoreRangeSet({ttnn.CoreRange((1, 0), (2, 6))}),
+        ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 6)), ttnn.CoreRange((1, 0), (1, 6))}),
+        ttnn.CoreRangeSet({ttnn.CoreRange((1, 0), (1, 6)), ttnn.CoreRange((3, 0), (3, 6))}),
+    ),
+)
+def test_binary_sharded_core_grid(device, a_shape, b_shape, sharded_core_grid):
+    sharded_config = ttnn.create_sharded_memory_config(
+        [160, 128],  # 14 cores
+        core_grid=sharded_core_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.bfloat16), ttnn.bfloat16)(a_shape)
+    b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.bfloat16), ttnn.bfloat16)(b_shape)
+
+    a_tt = ttnn.from_torch(
+        a_pt,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=sharded_config,
+    )
+    b_tt = ttnn.from_torch(
+        b_pt,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=sharded_config,
+    )
+
+    out_pt = torch.add(a_pt, b_pt)
+
+    out_tt_interleaved = ttnn.experimental.add(a_tt, b_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    out_tt_interleaved = ttnn.to_torch(out_tt_interleaved)
+    assert ttnn.pearson_correlation_coefficient(out_tt_interleaved, out_pt) >= 0.99988
+
+    out_tt_sharded = ttnn.experimental.add(a_tt, b_tt, memory_config=sharded_config)
+    out_tt_sharded = ttnn.to_torch(out_tt_sharded)
+    assert ttnn.pearson_correlation_coefficient(out_tt_sharded, out_pt) >= 0.99988
 
 
 @skip_for_grayskull("Requires wormhole_b0 to run")
