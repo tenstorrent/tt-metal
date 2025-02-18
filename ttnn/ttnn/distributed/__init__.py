@@ -17,6 +17,7 @@ from .distributed import (
     ReplicateTensorToMesh,
     MeshToTensor,
     ConcatMeshToTensor,
+    synchronize_devices,
     visualize_mesh_device,
     distribute,
 )
