@@ -391,6 +391,7 @@ on:
           - eltwise.binary.squared_difference_output.squared_difference_output
           - eltwise.binary.squared_difference.squared_difference_ng_survey
           - eltwise.binary.rsub.rsub_ng_survey
+          - eltwise.binary.rsub.rsub_ng_scalar_survey
           - eltwise.binary.scatter.scatter_forge
           - eltwise.binary.bcast.bcast_h_sharded
           - eltwise.binary.bcast.bcast
