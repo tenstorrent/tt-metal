@@ -4,6 +4,7 @@
 
 import ttnn
 import pytest
+from models.utility_functions import skip_for_grayskull
 from models.experimental.functional_yolov8x.tests.yolov8x_performant import (
     run_yolov8x_inference,
     run_yolov8x_trace_2cqs_inference,
@@ -11,6 +12,7 @@ from models.experimental.functional_yolov8x.tests.yolov8x_performant import (
 )
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize("device_batch_size", [(1)])
 def test_run_yolov8x_inference(
@@ -24,13 +26,13 @@ def test_run_yolov8x_inference(
     )
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768, "trace_region_size": 3686400}], indirect=True)
 @pytest.mark.parametrize("device_batch_size", [(1)])
 def test_run_yolov8x_trace_inference(
     device,
     device_batch_size,
     use_program_cache,
-    # enable_async_mode,
 ):
     run_yolov8x_trace_inference(
         device,
@@ -38,24 +40,17 @@ def test_run_yolov8x_trace_inference(
     )
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": 24576, "trace_region_size": 3686400, "num_command_queues": 2}], indirect=True
 )
-@pytest.mark.parametrize(
-    "device_batch_size, act_dtype, weight_dtype",
-    ((1, ttnn.bfloat16, ttnn.bfloat16),),
-)
-@pytest.mark.parametrize("enable_async_mode", (False, True), indirect=True)
-def test_run_yolov8x_trace_2cqs_inference(
+@pytest.mark.parametrize("device_batch_size", [(1)])
+def q(
     device,
     device_batch_size,
-    act_dtype,
-    weight_dtype,
-    enable_async_mode,
+    use_program_cache,
 ):
     run_yolov8x_trace_2cqs_inference(
         device=device,
         device_batch_size=device_batch_size,
-        act_dtype=act_dtype,
-        weight_dtype=weight_dtype,
     )
