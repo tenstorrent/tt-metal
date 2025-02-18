@@ -16,7 +16,7 @@ from models.demos.yolov4.ttnn.yolov4 import TtYOLOv4
 from models.demos.yolov4.ttnn.weight_parameter_update import update_weight_parameters
 from collections import OrderedDict
 import ttnn
-from models.utility_functions import skip_for_grayskull, skip_for_wormhole_b0
+from models.utility_functions import skip_for_grayskull
 
 
 def yolo_forward_dynamic(
@@ -202,7 +202,7 @@ class YoloLayer(nn.Module):
 
 
 def get_region_boxes(boxes_and_confs):
-    # print("Getting boxes from boxes and confs ...")
+    print("Getting boxes from boxes and confs ...")
     boxes_list = []
     confs_list = []
 
