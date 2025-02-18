@@ -23,11 +23,11 @@ def create_custom_preprocessor(device):
         if isinstance(torch_model, PatchMerging):
             parameters["reduction"] = {}
             parameters["reduction"]["weight"] = preprocess_linear_weight(
-                torch_model.reduction.weight, dtype=ttnn.bfloat8_b
+                torch_model.reduction.weight, dtype=ttnn.bfloat16
             )
             parameters["norm"] = {}
-            parameters["norm"]["weight"] = preprocess_layernorm_parameter(torch_model.norm.weight, dtype=ttnn.bfloat8_b)
-            parameters["norm"]["bias"] = preprocess_layernorm_parameter(torch_model.norm.bias, dtype=ttnn.bfloat8_b)
+            parameters["norm"]["weight"] = preprocess_layernorm_parameter(torch_model.norm.weight, dtype=ttnn.bfloat16)
+            parameters["norm"]["bias"] = preprocess_layernorm_parameter(torch_model.norm.bias, dtype=ttnn.bfloat16)
         return parameters
 
     return custom_preprocessor

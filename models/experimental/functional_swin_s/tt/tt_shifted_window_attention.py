@@ -47,12 +47,12 @@ class TtShiftedWindowAttention(nn.Module):
 
         x = ttnn.to_layout(x, layout=ttnn.ROW_MAJOR_LAYOUT)
         x = ttnn.from_device(x)
-        B, H, W, C = x.get_legacy_shape()
+        B, H, W, C = x.shape  # get_legacy_shape()
         pad_r = (self.window_size[1] - W % self.window_size[1]) % self.window_size[1]
         pad_b = (self.window_size[0] - H % self.window_size[0]) % self.window_size[0]
         pad_values = (0, 0, 0, pad_r, 0, pad_b)
         x = fallback_ops.pad(x, pad_values)  # check this 6 side padding
-        _, pad_H, pad_W, _ = x.get_legacy_shape()
+        _, pad_H, pad_W, _ = x.shape  # get_legacy_shape()
 
         self.shift_size = self.shift_size.copy()
         # If window size is larger than feature size, there is no need to shift window
@@ -61,23 +61,27 @@ class TtShiftedWindowAttention(nn.Module):
         if self.window_size[1] >= pad_W:
             self.shift_size[1] = 0
 
-        x = tt_to_torch_tensor(x)
         # cyclic shift
-        # Torch is used since ttnn doesn't support roll, should check this
         if sum(self.shift_size) > 0:
-            x = torch.roll(x, shifts=(-self.shift_size[0], -self.shift_size[1]), dims=(1, 2))
-        x = torch_to_tt_tensor_rm(x, self.device)
+            x = ttnn.roll(x, [-self.shift_size[0], -self.shift_size[1]], [1, 2])
 
         # partition windows
         num_windows = (pad_H // self.window_size[0]) * (pad_W // self.window_size[1])
 
-        # Torch is used since ttnn doesn't support reshape or permute of 6D tensor
-        x = tt_to_torch_tensor(x)
-        x = x.view(
-            (B, pad_H // self.window_size[0], self.window_size[0], pad_W // self.window_size[1], self.window_size[1], C)
+        x = ttnn.reshape(
+            x,
+            (
+                (
+                    B,
+                    pad_H // self.window_size[0],
+                    self.window_size[0],
+                    pad_W // self.window_size[1],
+                    self.window_size[1],
+                    C,
+                )
+            ),
         )
-        x = x.permute(0, 1, 3, 2, 4, 5)
-        x = torch_to_tt_tensor_rm(x, self.device, put_on_device=True)
+        x = ttnn.permute(x, (0, 1, 3, 2, 4, 5))
 
         x = ttnn.reshape(x, (B * num_windows, self.window_size[0] * self.window_size[1], C))
 
@@ -98,14 +102,18 @@ class TtShiftedWindowAttention(nn.Module):
         qkv = ttnn.from_device(qkv)
         qkv = ttnn.reshape(qkv, (x.shape[0], x.shape[1], 3, self.num_heads, C // self.num_heads))
         qkv = ttnn.to_device(qkv, device=self.device)
-        qkv = ttnn.to_torch(qkv)
 
-        qkv = qkv.permute(2, 0, 3, 1, 4)
-        q, k, v = qkv[0], qkv[1], qkv[2]
-        q = ttnn.from_torch(q, device=self.device, layout=ttnn.TILE_LAYOUT)
-        k = ttnn.from_torch(k, device=self.device, layout=ttnn.TILE_LAYOUT)
-        v = ttnn.from_torch(v, device=self.device, layout=ttnn.TILE_LAYOUT)
+        qkv = ttnn.permute(qkv, (2, 0, 3, 1, 4))
 
+        q = qkv[0:1, :, :, :, :]
+        k = qkv[1:2, :, :, :, :]
+        v = qkv[2:3, :, :, :, :]
+        q = ttnn.squeeze(q, 0)
+        k = ttnn.squeeze(k, 0)
+        v = ttnn.squeeze(v, 0)
+        q = ttnn.to_layout(q, ttnn.TILE_LAYOUT)
+        k = ttnn.to_layout(k, ttnn.TILE_LAYOUT)
+        v = ttnn.to_layout(v, ttnn.TILE_LAYOUT)
         q = q * (C // self.num_heads) ** -0.5
         k = ttnn.permute(k, (0, 1, 3, 2))
         attn = ttnn.matmul(
@@ -159,23 +167,26 @@ class TtShiftedWindowAttention(nn.Module):
             ),
         )
 
-        # Torch is used since ttnn doesn't support reshape or permute of 6D tensor
-        x = ttnn.to_torch(x)
         # reverse windows
-        x = x.view(
-            B, pad_H // self.window_size[0], pad_W // self.window_size[1], self.window_size[0], self.window_size[1], C
+        x = ttnn.reshape(
+            x,
+            (
+                B,
+                pad_H // self.window_size[0],
+                pad_W // self.window_size[1],
+                self.window_size[0],
+                self.window_size[1],
+                C,
+            ),
         )
-        x = x.permute(0, 1, 3, 2, 4, 5)
-        x = ttnn.from_torch(x, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+        x = ttnn.permute(x, (0, 1, 3, 2, 4, 5))
 
         x = ttnn.reshape(x, (B, pad_H, pad_W, C))
 
         # reverse cyclic shift
-        # Torch is used since ttnn doesn't support roll, should check this
         if sum(self.shift_size) > 0:
-            x = ttnn.to_torch(x)
-            x = torch.roll(x, shifts=(self.shift_size[0], self.shift_size[1]), dims=(1, 2))
-            x = ttnn.from_torch(x, device=self.device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+            x = ttnn.roll(x, [self.shift_size[0], self.shift_size[1]], [1, 2])
 
         # unpad features
         x = x[:, :H, :W, :]
