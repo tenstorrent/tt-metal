@@ -367,3 +367,4 @@ TEST_F(DPrintFixture, ConfigRegPackCountersTestPrint) {
         [&](DPrintFixture* fixture, IDevice* device) { print_config_reg(fixture, device, test_config); },
         this->devices_[0]);
 }
+
