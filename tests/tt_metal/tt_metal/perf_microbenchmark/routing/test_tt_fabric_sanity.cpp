@@ -1406,9 +1406,7 @@ int main(int argc, char **argv) {
     bool pass = true;
     uint32_t num_available_devices, num_allocated_devices = 0;
 
-    std::map<string, string> defines = {
-        {"FD_CORE_TYPE", std::to_string(0)}, // todo, support dispatch on eth
-    };
+    std::map<string, string> defines;
 
     if (benchmark_mode) {
         prng_seed = 100;
