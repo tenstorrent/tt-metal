@@ -10,62 +10,28 @@
 #include <variant>
 #include "ttnn/decorators.hpp"
 
-#include <tt_metal/api/tt-metalium/core_coord.hpp>
-#include <tt_metal/api/tt-metalium/kernel_types.hpp>
-#include <tt_metal/hostdevcommon/api/hostdevcommon/kernel_structs.h>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/core.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/types.hpp"
+#include "ttnn/operations/generic/generic_op/generic_op_types.hpp"
 
-using tt::tt_metal::CoreCoord;
-using tt::tt_metal::CoreRangeSet;
 namespace ttnn::operations::generic {
 
-struct circular_buffer_attributes_t {
-    CoreRangeSet core_spec;
-    uint32_t total_size;
-    uint32_t page_size;
-    // uint8_t buffer_index;
-    tt::DataFormat data_format;
-
-    // this needs better solution as we now have input tensors (std::vector) and output tensor so index is not great
-    std::optional<int> set_globally_allocated_address = std::nullopt; // an index to io_tensors that will set globally allocated address on CB
-};
-
-struct data_movement_attributes_t {
-    CoreRangeSet core_spec;
-    std::string kernel_path;
-    tt::tt_metal::DataMovementConfig config;
-    std::unordered_map<CoreCoord, std::vector<uint32_t>> runtime_args_per_core = {};
-
-    // std::variant<CoreCoord, CoreRange, CoreRangeSet> core_spec;
-    // std::shared_ptr<RuntimeArgs> runtime_args;
-    // std::vector<std::shared_ptr<RuntimeArgs>> runtime_args;
-
-};
-
-struct compute_attributes_t {
-    CoreRangeSet core_spec;
-    std::string  kernel_path;
-    tt::tt_metal::ComputeConfig config;
-    // std::vector<uint32_t> runtime_args = {};
-    std::unordered_map<CoreCoord, std::vector<uint32_t>> runtime_args_per_core = {};
-};
 using cb_attr_map = std::unordered_map<tt::CBIndex, circular_buffer_attributes_t>;
 
-struct operation_attributes_t {
-    cb_attr_map circular_buffer_attributes;
-
-    std::vector<data_movement_attributes_t> data_movement_attributes;
-
-    // Ethernet not supported at the moment.
-    // std::optional<tt::metal::EthernetConfig> ethernetConfig;
-
-    std::vector<compute_attributes_t> compute_attributes;
-};
-
 struct GenericOpDeviceOperation {
+    struct operation_attributes_t {
+        cb_attr_map circular_buffer_attributes;
+
+        std::vector<data_movement_attributes_t> data_movement_attributes;
+
+        // Ethernet not supported at the moment.
+        // std::optional<tt::metal::EthernetConfig> ethernetConfig;
+
+        std::vector<compute_attributes_t> compute_attributes;
+    };
+
     // Define the return types for the shape(s) of the operation
     using shape_return_value_t = std::vector<Shape>;
 
