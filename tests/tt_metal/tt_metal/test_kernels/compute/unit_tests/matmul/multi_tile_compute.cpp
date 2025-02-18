@@ -22,7 +22,7 @@ void MAIN {
 
     // we are looking at block
     // out = in0[r x k]*in1[k x c]
-    mm_init();
+    mm_init(in0_cb, in1_cb, out_cb);
     acquire_dst();
 
     uint32_t out_tile_index = 0;

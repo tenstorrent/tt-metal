@@ -19,7 +19,7 @@ void MAIN {
     const uint32_t in1_tile_index = 0;
     const uint32_t out_tile_index = 0;
     const bool transpose = false;
-    mm_init();
+    mm_init(in0_cb, in1_cb, out_cb);
     cb_reserve_back(out_cb, num_out_tiles);
     acquire_dst();
     cb_wait_front(in0_cb, num_in0_tiles);

@@ -25,7 +25,7 @@ void MAIN {
 
     // we are looking at block
     // out = in0[r x k]*in1[k x c]
-    mm_init();
+    mm_init(in0_cb, in1_cb, out_cb);
     for (uint32_t block_id = 0; block_id < num_blocks; block_id++) {
         acquire_dst();
         if (block_id > 0) {
@@ -35,7 +35,7 @@ void MAIN {
                 copy_tile(partials_cb, i, i);
             }
             cb_pop_front(partials_cb, out_block_num_tiles);
-            mm_init_short();
+            mm_init_short(in0_cb, in1_cb);
         }
         uint32_t out_tile_index = 0;
         uint32_t in0_index_r_offset = 0;
