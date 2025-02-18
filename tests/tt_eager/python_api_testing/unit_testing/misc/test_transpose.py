@@ -1004,7 +1004,6 @@ def test_transpose_forge_hc(device, b, h, w, dim0, dim1):
 @pytest.mark.parametrize("h", [256])
 @pytest.mark.parametrize("w", [32])
 def test_transpose_hw_sharded_tiled_8_cores(device, n, c, h, w):
-    pytest.skip("skipped to unblock P0 issue 16975 but needs to be fixed and removed for issue 17031")
     torch.manual_seed(2005)
     torch_input_tensor = torch.rand((n, c, h, w), dtype=torch.bfloat16)
     torch_output_tensor = torch_input_tensor.transpose(2, 3)
@@ -1028,9 +1027,21 @@ def test_transpose_hw_sharded_tiled_8_cores(device, n, c, h, w):
         orientation=ttnn.ShardOrientation.COL_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
+    output_sharded_mem_config = ttnn.create_sharded_memory_config(
+        (32, 32),
+        core_grid=ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 6)),
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0)),
+            }
+        ),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.COL_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
     tt_input_tensor = ttnn.to_memory_config(tt_input_tensor, sharded_mem_config)
 
-    tt_output_tensor = ttnn.transpose(tt_input_tensor, 2, 3, memory_config=sharded_mem_config)
+    tt_output_tensor = ttnn.transpose(tt_input_tensor, 2, 3, memory_config=output_sharded_mem_config)
     tt_output_tensor = ttnn.to_torch(tt_output_tensor)
 
     assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9999)
@@ -1063,9 +1074,22 @@ def test_transpose_hw_sharded_tiled_n_cores(device, n, c, h, w):
         orientation=ttnn.ShardOrientation.COL_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
+
+    output_sharded_mem_config = ttnn.create_sharded_memory_config(
+        (32, 32),
+        core_grid=ttnn.CoreRangeSet(
+            {
+                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, h // 32 - 1)),
+            }
+        ),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.COL_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
     tt_input_tensor = ttnn.to_memory_config(tt_input_tensor, sharded_mem_config)
 
-    tt_output_tensor = ttnn.transpose(tt_input_tensor, 2, 3, memory_config=sharded_mem_config)
+    tt_output_tensor = ttnn.transpose(tt_input_tensor, 2, 3, memory_config=output_sharded_mem_config)
     tt_output_tensor = ttnn.to_memory_config(tt_output_tensor, ttnn.L1_MEMORY_CONFIG)
     tt_output_tensor = ttnn.from_device(tt_output_tensor)
     tt_output_tensor = ttnn.to_torch(tt_output_tensor)

@@ -47,6 +47,7 @@ def prepare_conv_weights(
     stride,
     padding,
     dilation,
+    has_bias,
     groups,
     device,
     conv_config=None,
@@ -65,6 +66,7 @@ def prepare_conv_weights(
         stride=list(stride),
         padding=list(padding),
         dilation=list(dilation),
+        has_bias=has_bias,
         groups=groups,
         device=device,
         conv_config=conv_config,
@@ -243,6 +245,8 @@ def _golden_function(
     groups: int = 1,
     bias_tensor=None,
     conv_config: Conv2dConfig = None,
+    return_output_dim=False,
+    return_weights_and_bias=False,
     **_,
 ):
     import torch
@@ -270,7 +274,10 @@ def _golden_function(
     N, C, H, W = output_tensor.shape
     output_tensor = output_tensor.permute(0, 2, 3, 1).reshape(1, 1, N * H * W, C)  # N, C, H, W -> 1, 1, NHW, C
 
-    return [output_tensor]
+    if return_output_dim or return_weights_and_bias:
+        return [output_tensor]
+
+    return output_tensor
 
 
 ttnn.attach_golden_function(

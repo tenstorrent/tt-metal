@@ -73,3 +73,19 @@ jobs:
         if: ${{ github.ref == 'refs/heads/main' }}
         id: deployment
         uses: actions/deploy-pages@v4.0.4
+      - name: Delete artifact if deployment failed
+        # When the deployment API call fails, the artifacts are not cleaned up correctly
+        # and the next attempt (!) run will cause an error.
+        # See more:
+        # https://github.com/tenstorrent/tt-metal/issues/17623
+        if: ${{ failure() }}
+        uses: geekyeggo/delete-artifact@v5
+        continue-on-error: true
+        with:
+            name: github-pages
+      - name: Check the docs deployment is up
+        if: ${{ github.ref == 'refs/heads/main' }}
+        # TODO: Enhance this by looping over all the published versions in docs/published_versions.json
+        run: |
+          set -eu # basic shell hygiene
+          curl --fail -LI https://docs.tenstorrent.com/tt-metal/latest/ttnn/index.html -o /dev/null -s

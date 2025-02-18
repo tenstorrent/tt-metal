@@ -32,7 +32,7 @@ uint32_t get_bf16_pool_init_value(Pool2DType pool_type) {
 
 template <Pool2DType pool_type>
 Tensor Pool2DOp<pool_type>::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& input_tensor,
     uint32_t batch_size,
     uint32_t input_h,

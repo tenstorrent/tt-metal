@@ -28,7 +28,6 @@ from models.demos.llama3.tt.multimodal.llama_cross_attention_transformer_text im
 from models.demos.llama3.tt.llama_common import (
     get_prefill_rot_mat,
     get_rot_transformation_mat,
-    get_single_rot_mat,
     copy_host_to_device,
     get_padded_prefill_len,
 )
@@ -374,7 +373,9 @@ class CrossAttentionTransformer(torch.nn.Module):
             self.configuration.max_seq_len,
             self.mesh_device,
             seq_len=S,
+            theta=self.configuration.rope_theta,
             scale_factor=self.configuration.rope_scaling_factor,
+            orig_context_len=self.configuration.orig_context_len,
         )
 
         if isinstance(page_table, torch.Tensor):
@@ -619,33 +620,14 @@ class CrossAttentionTransformer(torch.nn.Module):
         tt_xattn_mask = ttnn.to_layout(tt_xattn_mask, ttnn.TILE_LAYOUT)
         tt_xattn_mask = ttnn.reshape(
             tt_xattn_mask,
-            shape=ttnn.Shape(
-                [
-                    S,
-                    B,
-                    self.configuration.n_heads // self.configuration.num_devices,
-                    tt_xattn_mask.shape[-1],
-                ],
-                [S, B, 32, tt_xattn_mask.shape[-1]],
-            ),
+            [S, B, self.configuration.n_heads // self.configuration.num_devices, tt_xattn_mask.shape[-1]],
+            [S, B, 32, tt_xattn_mask.shape[-1]],
         )
         tt_full_text_mask_expand_1NSH = ttnn.to_layout(tt_full_text_mask_expand_1NSH, ttnn.TILE_LAYOUT)
         tt_full_text_mask_expand_1NSH = ttnn.reshape(
             tt_full_text_mask_expand_1NSH,
-            shape=ttnn.Shape(
-                [
-                    S,
-                    B,
-                    self.configuration.n_heads // self.configuration.num_devices,
-                    self.configuration.head_dim,
-                ],
-                [
-                    S,
-                    B,
-                    32,
-                    self.configuration.head_dim,
-                ],
-            ),
+            [S, B, self.configuration.n_heads // self.configuration.num_devices, self.configuration.head_dim],
+            [S, B, 32, self.configuration.head_dim],
         )
         tt_full_text_mask_expand_11SD = ttnn.to_layout(tt_full_text_mask_expand_11SD, ttnn.TILE_LAYOUT)
 

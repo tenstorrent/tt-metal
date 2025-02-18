@@ -61,7 +61,7 @@ void py_bind_conv2d(py::module& module) {
                const std::optional<const Conv2dConfig>& conv_config,
                const std::optional<const DeviceComputeKernelConfig>& compute_config,
                const std::optional<const MemoryConfig>& memory_config,
-               const uint8_t& queue_id) -> Result {
+               QueueId queue_id) -> Result {
                 return self(
                     queue_id,
                     input_tensor,
@@ -100,7 +100,7 @@ void py_bind_conv2d(py::module& module) {
             py::arg("conv_config") = std::nullopt,
             py::arg("compute_config") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
-            py::arg("queue_id") = 0},
+            py::arg("queue_id") = DefaultQueueId},
 
         ttnn::pybind_overload_t{
             [](const decltype(ttnn::conv2d)& self,
@@ -121,7 +121,7 @@ void py_bind_conv2d(py::module& module) {
                const std::optional<const Conv2dConfig>& conv_config,
                const std::optional<const DeviceComputeKernelConfig>& compute_config,
                const std::optional<const MemoryConfig>& memory_config,
-               const uint8_t& queue_id) -> Result {
+               QueueId queue_id) -> Result {
                 return self(
                     queue_id,
                     input_tensor,
@@ -160,7 +160,7 @@ void py_bind_conv2d(py::module& module) {
             py::arg("conv_config") = std::nullopt,
             py::arg("compute_config") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
-            py::arg("queue_id") = 0});
+            py::arg("queue_id") = DefaultQueueId});
 
     module.def(
         "prepare_conv_weights",
@@ -179,6 +179,7 @@ void py_bind_conv2d(py::module& module) {
         py::arg("stride"),
         py::arg("padding"),
         py::arg("dilation"),
+        py::arg("has_bias"),
         py::arg("groups"),
         py::arg("device"),
         py::arg("conv_config") = std::nullopt,
@@ -201,6 +202,7 @@ void py_bind_conv2d(py::module& module) {
         py::arg("stride"),
         py::arg("padding"),
         py::arg("dilation"),
+        py::arg("has_bias"),
         py::arg("groups"),
         py::arg("device"),
         py::arg("conv_config") = std::nullopt,

@@ -27,7 +27,7 @@ void check_test_environment() {
 
 std::vector<chip_id_t> get_physical_device_ids(const MeshDevice& mesh) {
     std::vector<chip_id_t> device_ids;
-    for (auto* device : mesh.get_devices(ttnn::distributed::MeshType::RowMajor)) {
+    for (auto* device : mesh.get_devices()) {
         device_ids.push_back(device->id());
     }
     return device_ids;
@@ -83,7 +83,7 @@ TEST_P(MeshReshapeTest, TestReshapeBetweenConfigurations) {
     EXPECT_EQ(mesh->num_rows(), old_shape.num_rows);
     EXPECT_EQ(mesh->num_cols(), old_shape.num_cols);
 
-    auto original_order = get_physical_device_ids(*mesh);
+    auto original_order = mesh->get_device_ids();
 
     // Attempt reshape
     mesh->reshape({new_shape.num_rows, new_shape.num_cols});
@@ -93,7 +93,7 @@ TEST_P(MeshReshapeTest, TestReshapeBetweenConfigurations) {
     EXPECT_EQ(mesh->num_cols(), new_shape.num_cols);
 
     // Verify device ordering is preserved
-    EXPECT_EQ(get_physical_device_ids(*mesh), original_order);
+    EXPECT_EQ(mesh->get_device_ids(), original_order);
 }
 
 // Generate all possible combinations of shapes from kMeshShapes
@@ -121,40 +121,34 @@ TEST_F(T3000ReshapeTest, InvalidReshapeDimensions) {
     EXPECT_EQ(mesh->num_cols(), 8);
 }
 
-TEST_F(T3000ReshapeTest, From1x8To2x4) {
+TEST_F(T3000ReshapeTest, From1x8To2x4ThenBackTo1x8) {
     auto mesh = ttnn::distributed::open_mesh_device(
         {1, 8}, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, tt::tt_metal::DispatchCoreType::WORKER);
 
     EXPECT_EQ(mesh->num_rows(), 1);
     EXPECT_EQ(mesh->num_cols(), 8);
-    auto original_order = get_physical_device_ids(*mesh);
-
-    mesh->reshape({2, 4});
-    EXPECT_EQ(mesh->num_rows(), 2);
-    EXPECT_EQ(mesh->num_cols(), 4);
-    auto new_order = get_physical_device_ids(*mesh);
-    EXPECT_EQ(original_order, new_order);
-}
-
-TEST_F(T3000ReshapeTest, OnRingTopology) {
-    auto mesh = ttnn::distributed::open_mesh_device(
-        {1, 8},
-        DEFAULT_L1_SMALL_SIZE,
-        DEFAULT_TRACE_REGION_SIZE,
-        1,
-        tt::tt_metal::DispatchCoreType::WORKER,
-        ttnn::distributed::MeshType::Ring);
-
-    EXPECT_EQ(mesh->num_rows(), 1);
-    EXPECT_EQ(mesh->num_cols(), 8);
-    auto original_order = get_physical_device_ids(*mesh);
+    auto original_order = mesh->get_device_ids();
 
     mesh->reshape({2, 4});
 
     EXPECT_EQ(mesh->num_rows(), 2);
     EXPECT_EQ(mesh->num_cols(), 4);
-    auto new_order = get_physical_device_ids(*mesh);
-    EXPECT_EQ(original_order, new_order);
+    std::vector<chip_id_t> expected_physical_device_id_order = {
+        original_order[0],
+        original_order[1],
+        original_order[2],
+        original_order[3],
+        original_order[7],
+        original_order[6],
+        original_order[5],
+        original_order[4],
+    };
+
+    auto new_order = mesh->get_device_ids();
+    EXPECT_EQ(new_order, expected_physical_device_id_order);
+
+    mesh->reshape({1, 8});
+    EXPECT_EQ(mesh->get_device_ids(), original_order);
 }
 
 TEST_F(T3000ReshapeTest, InvalidTotalDeviceCount) {
@@ -168,26 +162,6 @@ TEST_F(T3000ReshapeTest, InvalidTotalDeviceCount) {
     // Verify original shape is preserved after failed reshapes
     EXPECT_EQ(mesh->num_rows(), 1);
     EXPECT_EQ(mesh->num_cols(), 8);
-}
-
-TEST_F(T3000ReshapeTest, MultipleReshapes) {
-    auto mesh = ttnn::distributed::open_mesh_device(
-        {1, 8}, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, tt::tt_metal::DispatchCoreType::WORKER);
-
-    auto original_order = get_physical_device_ids(*mesh);
-
-    // Test multiple reshapes
-    mesh->reshape({2, 4});  // 1x8 -> 2x4
-    auto order1 = get_physical_device_ids(*mesh);
-    EXPECT_EQ(order1, original_order);
-
-    mesh->reshape({4, 2});  // 2x4 -> 4x2
-    auto order2 = get_physical_device_ids(*mesh);
-    EXPECT_EQ(order2, original_order);
-
-    mesh->reshape({1, 8});  // 4x2 -> 1x8 (back to original)
-    auto final_order = get_physical_device_ids(*mesh);
-    EXPECT_EQ(final_order, original_order);
 }
 
 TEST_F(T3000ReshapeTest, RingPreservation) {
@@ -228,7 +202,6 @@ TEST_F(T3000ReshapeTest, From1x4To2x2Valid) {
     // Fetch the device ids for a physically connected 2x2 mesh.
     auto physical_device_ids = system_mesh.get_mapped_physical_device_ids(MeshDeviceConfig{
         .mesh_shape = MeshShape{2, 2},
-        .mesh_type = ttnn::distributed::MeshType::Line,
     });
 
     // Supply the physical device ids to the mesh constructor that we know we know is 2x2 physically connected.
@@ -239,14 +212,13 @@ TEST_F(T3000ReshapeTest, From1x4To2x2Valid) {
         DEFAULT_TRACE_REGION_SIZE,
         1,
         tt::tt_metal::DispatchCoreType::WORKER,
-        ttnn::distributed::MeshType::Line,
         MeshOffset{0, 0},
         physical_device_ids);
 
     mesh->reshape({2, 2});
     EXPECT_EQ(mesh->num_rows(), 2);
     EXPECT_EQ(mesh->num_cols(), 2);
-    auto new_layout = get_physical_device_ids(*mesh);
+    auto new_layout = mesh->get_device_ids();
     for (auto physical_device_id : physical_device_ids) {
         EXPECT_TRUE(std::find(new_layout.begin(), new_layout.end(), physical_device_id) != new_layout.end());
     }
@@ -256,27 +228,21 @@ TEST_F(T3000ReshapeTest, From2x2To1x4) {
     auto mesh = ttnn::distributed::open_mesh_device(
         {2, 2}, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, tt::tt_metal::DispatchCoreType::WORKER);
 
-    std::vector<chip_id_t> original_layout;
-    for (size_t i = 0; i < mesh->num_rows(); ++i) {
-        for (size_t j = 0; j < mesh->num_cols(); ++j) {
-            auto id = mesh->get_device(i, j)->id();
-            original_layout.push_back(id);
-        }
-    }
+    auto mesh_2x2_device_ids = mesh->get_device_ids();
 
     mesh->reshape({1, 4});
     EXPECT_EQ(mesh->num_rows(), 1);
     EXPECT_EQ(mesh->num_cols(), 4);
 
-    std::vector<chip_id_t> new_layout;
-    for (size_t i = 0; i < mesh->num_rows(); ++i) {
-        for (size_t j = 0; j < mesh->num_cols(); ++j) {
-            auto id = mesh->get_device(i, j)->id();
-            new_layout.push_back(id);
-        }
-    }
+    auto mesh_1x4_device_ids = mesh->get_device_ids();
+    std::vector<chip_id_t> expected_1x4_device_ids = {
+        mesh_2x2_device_ids[0],
+        mesh_2x2_device_ids[1],
+        mesh_2x2_device_ids[3],
+        mesh_2x2_device_ids[2],
+    };
 
-    EXPECT_EQ(new_layout, original_layout);
+    EXPECT_EQ(mesh_1x4_device_ids, expected_1x4_device_ids);
 }
 
 }  // namespace ttnn::distributed::test

@@ -27,7 +27,7 @@ std::vector<std::string> extract_calltrace(const nlohmann::json& trace);
 std::unordered_set<uint32_t> extract_output_tensors(const nlohmann::json& trace);
 
 struct TensorInfo {
-    ttnn::SimpleShape shape;
+    ttnn::Shape shape;
     uint32_t size = 0;
     tt::tt_metal::BufferType type = tt::tt_metal::BufferType::DRAM;
 

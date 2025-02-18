@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pathlib
+import json
 from datetime import datetime
 from functools import partial
 from typing import List
@@ -23,9 +24,15 @@ def get_workflow_run_uuids_to_test_reports_paths_(workflow_outputs_dir, workflow
         assert test_report_dir.is_dir(), f"{test_report_dir} is not dir"
 
         test_report_uuid = test_report_dir.name.replace("test_reports_", "")
-        workflow_run_test_reports_path[test_report_uuid] = (test_report_dir / "most_recent_tests.xml").resolve(
-            strict=True
-        )
+
+        try:
+            xml_file_paths = (test_report_dir / "most_recent_tests.xml").resolve(strict=True)
+        except FileNotFoundError as e:
+            logger.warning(
+                f"no pytest xml file found matching most_recent_tests.xml (likely gtest xml) in {test_report_dir}"
+            )
+        else:
+            workflow_run_test_reports_path[test_report_uuid] = xml_file_paths
 
     return workflow_run_test_reports_path
 
@@ -108,6 +115,25 @@ def get_github_job_id_to_test_reports(workflow_outputs_dir, workflow_run_id: int
     return github_job_id_to_test_reports
 
 
+def get_github_job_id_to_annotations(workflow_outputs_dir, workflow_run_id: int):
+    # Read <job_id>_annotations.json inside the logs dir
+    logs_dir = workflow_outputs_dir / str(workflow_run_id) / "logs"
+    annot_json_files = logs_dir.glob("*_annotations.json")
+
+    github_job_ids_to_annotation_jsons = {}
+    for annot_json_file in annot_json_files:
+        annot_json_info = None
+        with open(annot_json_file, "r") as f:
+            annot_json_info = json.load(f)
+        if annot_json_info:
+            # Map job id to annotation info (list of dict)
+            github_job_id = annot_json_file.name.replace("_annotations.json", "")
+            assert github_job_id.isnumeric(), f"{github_job_id}"
+            github_job_id = int(github_job_id)
+            github_job_ids_to_annotation_jsons[github_job_id] = annot_json_info
+    return github_job_ids_to_annotation_jsons
+
+
 def get_pydantic_test_from_pytest_testcase_(testcase, default_timestamp=datetime.now()):
     skipped = junit_xml_utils.get_pytest_testcase_is_skipped(testcase)
     failed = junit_xml_utils.get_pytest_testcase_is_failed(testcase)
@@ -126,8 +152,13 @@ def get_pydantic_test_from_pytest_testcase_(testcase, default_timestamp=datetime
     # Error at the beginning of a test can prevent pytest from recording timestamps at all
     if not (skipped or error):
         properties = junit_xml_utils.get_pytest_testcase_properties(testcase)
-        test_start_ts = datetime.strptime(properties["start_timestamp"], "%Y-%m-%dT%H:%M:%S")
-        test_end_ts = datetime.strptime(properties["end_timestamp"], "%Y-%m-%dT%H:%M:%S")
+        # Check if properties is none to see if pytest recorded the timestamps
+        if properties is not None:
+            test_start_ts = datetime.strptime(properties["start_timestamp"], "%Y-%m-%dT%H:%M:%S")
+            test_end_ts = datetime.strptime(properties["end_timestamp"], "%Y-%m-%dT%H:%M:%S")
+        else:
+            test_start_ts = default_timestamp
+            test_end_ts = default_timestamp
     else:
         test_start_ts = default_timestamp
         test_end_ts = default_timestamp
@@ -212,4 +243,5 @@ def get_tests_from_test_report_path(test_report_path):
 
         return tests
     else:
-        raise Exception("We only support pytest junit xml outputs for now")
+        logger.warning("XML is not pytest junit format (gtest?), skipping for now")
+        return []

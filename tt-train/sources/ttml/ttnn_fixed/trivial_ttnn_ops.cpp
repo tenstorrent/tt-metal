@@ -5,7 +5,6 @@
 #include "trivial_ttnn_ops.hpp"
 
 #include <core/ttnn_all_includes.hpp>
-#include <ttnn/operations/moreh/moreh_sum/moreh_sum.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "core/compute_kernel_config.hpp"
@@ -45,7 +44,7 @@ tt::tt_metal::Tensor softmax(const tt::tt_metal::Tensor& t, int dim) {
 }
 
 tt::tt_metal::Tensor divide(const tt::tt_metal::Tensor& a, const tt::tt_metal::Tensor& b) {
-    auto inv_b = ttnn::reciprocal(/* queue_id */ 0, b);
+    auto inv_b = ttnn::reciprocal(ttnn::DefaultQueueId, b);
     return ttnn::multiply(a, inv_b);
 }
 

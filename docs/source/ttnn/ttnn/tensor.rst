@@ -30,31 +30,6 @@ Printing the shape would show the actual shape:
     >>> print(ttnn.Shape([16, 32]))
     ttnn.Shape([16, 32])
 
-:class:`ttnn.Shape([14, 28], [32, 32])` is a shape of 2D tensor with 14 rows and 28 columns.
-Where the number of actual rows and columns is 14 and 28 respectively and the number of padded rows and columns is 32 and 32 respectively.
-The tensor of this shape has 32 * 32 elements in the storage.
-
-.. figure:: images/tensor_with_tile_padding.png
-    :align: center
-    :alt: Tensor With Padded Shape
-
-    Tensor with 14 rows and 28 columns and padded to 32x32 tile.
-
-Printing the shape would show the actual shape with the padded shape next to it in the square brackets:
-
-.. code-block:: python
-
-    >>> print(ttnn.Shape([14, 28], [32, 32]))
-    ttnn.Shape([14[32], 28[32]])
-
-
-Shape with tile padding can be obtained by calling `with_tile_padding()` method of :class:`ttnn.Shape`
-
-.. code-block:: python
-
-    >>> print(ttnn.Shape([14, 28], [32, 32]).with_tile_padding())
-    ttnn.Shape([32, 32])
-
 .. _ttnn.Layout:
 
 Layout

@@ -58,7 +58,7 @@ def run_bert_large_post_softmax_bmm_test(device, dtype, in0_mem_config, in1_mem_
     logger.debug(f"in1 is on: {b_t.memory_config().buffer_type}")
     logger.debug(f"out is on: {t2.memory_config().buffer_type}")
 
-    assert t2.shape.with_tile_padding() == out_shape
+    assert t2.padded_shape == out_shape
     pyt_got_back_rm = ttnn.to_torch(t2)
 
     ref_bmm = torch.matmul(A.reshape([9, 16, 384, 384]), B)

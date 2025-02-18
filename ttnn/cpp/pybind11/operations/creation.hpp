@@ -8,6 +8,7 @@
 #include <pybind11/stl.h>
 
 #include "cpp/pybind11/decorators.hpp"
+#include "cpp/pybind11/types.hpp"
 #include "ttnn/operations/creation.hpp"
 
 namespace py = pybind11;
@@ -28,16 +29,9 @@ auto create_pybind_full_overload() {
            const std::optional<std::reference_wrapper<device_t>> device,
            const std::optional<MemoryConfig>& memory_config,
            std::optional<ttnn::Tensor>& optional_output_tensor,
-           uint8_t queue_id) -> ttnn::Tensor {
+           QueueId queue_id) -> ttnn::Tensor {
             return self(
-                queue_id,
-                ttnn::SimpleShape(shape),
-                fill_value,
-                dtype,
-                layout,
-                device,
-                memory_config,
-                optional_output_tensor);
+                queue_id, ttnn::Shape(shape), fill_value, dtype, layout, device, memory_config, optional_output_tensor);
         },
         py::arg("shape"),
         py::arg("fill_value"),
@@ -58,7 +52,7 @@ auto create_pybind_full_with_hard_coded_value_overload() {
            const std::optional<Layout>& layout,
            const std::optional<std::reference_wrapper<device_t>> device,
            const std::optional<MemoryConfig>& memory_config) -> ttnn::Tensor {
-            return self(ttnn::SimpleShape{shape}, dtype, layout, device, memory_config);
+            return self(ttnn::Shape{shape}, dtype, layout, device, memory_config);
         },
         py::arg("shape"),
         py::arg("dtype") = std::nullopt,
@@ -78,7 +72,7 @@ auto create_pybind_full_like_overload() {
            const std::optional<std::reference_wrapper<device_t>> device,
            const std::optional<MemoryConfig>& memory_config,
            std::optional<ttnn::Tensor>& optional_output_tensor,
-           uint8_t queue_id) -> ttnn::Tensor {
+           QueueId queue_id) -> ttnn::Tensor {
             return self(queue_id, tensor, fill_value, dtype, layout, device, memory_config, optional_output_tensor);
         },
         py::arg("tensor"),
@@ -101,7 +95,7 @@ auto create_pybind_full_like_with_hard_coded_value_overload() {
            const std::optional<std::reference_wrapper<device_t>> device,
            const std::optional<MemoryConfig>& memory_config,
            std::optional<ttnn::Tensor>& optional_output_tensor,
-           uint8_t queue_id) -> ttnn::Tensor {
+           QueueId queue_id) -> ttnn::Tensor {
             return self(queue_id, tensor, dtype, layout, device, memory_config, optional_output_tensor);
         },
         py::arg("tensor"),
@@ -122,7 +116,7 @@ auto create_pybind_empty_overload() {
            const Layout& layout,
            device_t* device,
            const MemoryConfig& memory_config) -> ttnn::Tensor {
-            return self(ttnn::SimpleShape{shape}, dtype, layout, device, memory_config);
+            return self(ttnn::Shape{shape}, dtype, layout, device, memory_config);
         },
         py::arg("shape"),
         py::arg("dtype") = DataType::BFLOAT16,

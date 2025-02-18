@@ -672,8 +672,11 @@ def test_visualize_mesh_device(t3k_mesh_device):
     ttnn.visualize_mesh_device(t3k_mesh_device)
 
 
-def test_all_gather_multiple_submeshes(t3k_mesh_device):
+@pytest.mark.parametrize("mesh_device", [pytest.param((2, 4), id="2x2_grid")], indirect=True)
+def test_all_gather_multiple_submeshes(mesh_device):
     """Test all_gather with multiple submeshes"""
+    if mesh_device.get_num_devices() < 8:
+        pytest.skip()
 
     def model(submesh):
         full_tensor = torch.ones((1, 1, 32, 32 * submesh.get_num_devices()), dtype=torch.bfloat16)
@@ -688,6 +691,28 @@ def test_all_gather_multiple_submeshes(t3k_mesh_device):
             device_tensor_torch = ttnn.to_torch(device_tensor)
             assert torch.all(device_tensor_torch == full_tensor)
 
-    submesh_devices = t3k_mesh_device.create_submeshes(ttnn.MeshShape(2, 2), ttnn.MeshType.Ring)
+    submesh_devices = mesh_device.create_submeshes(ttnn.MeshShape(2, 2))
     for submesh in submesh_devices:
         model(submesh)
+
+
+@pytest.mark.parametrize("mesh_device", [pytest.param((1, 8), id="1x8_line")], indirect=True)
+def test_line_all_gather_after_reshape(mesh_device):
+    if mesh_device.get_num_devices() < 8:
+        pytest.skip()
+    mesh_device.reshape(ttnn.MeshShape(2, 4))
+    torch_input_tensor = torch.rand((1, 1, 64, 128), dtype=torch.bfloat16)
+
+    mesh_tensor = ttnn.from_torch(
+        torch_input_tensor,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=list(mesh_device.shape), dims=(2, 3)),
+    )
+    output_tensor = ttnn.all_gather(
+        mesh_tensor,
+        dim=2,
+        cluster_axis=0,
+        mesh_device=mesh_device,
+        topology=ttnn.Topology.Linear,
+    )

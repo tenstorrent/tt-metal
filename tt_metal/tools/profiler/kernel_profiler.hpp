@@ -182,6 +182,18 @@ inline __attribute__((always_inline)) void risc_finished_profiling() {
     profiler_control_buffer[kernel_profiler::DEVICE_BUFFER_END_INDEX_BR_ER + myRiscID] = wIndex;
 }
 
+#if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_ERISC) || \
+    defined(COMPILE_FOR_IDLE_ERISC)
+inline void __attribute__((always_inline)) noc_async_write_posted(
+    std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr, std::uint32_t size, uint8_t noc = noc_index) {
+    WAYPOINT("NAWW");
+    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size);
+    ncrisc_noc_fast_write_any_len<proc_type, noc_mode>(
+        noc, write_cmd_buf, src_local_l1_addr, dst_noc_addr, size, NOC_UNICAST_WRITE_VC, false, false, 1, true, true);
+    WAYPOINT("NAWD");
+}
+#endif
+
 __attribute__((noinline)) void finish_profiler() {
     risc_finished_profiling();
 #if defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_BRISC)
@@ -234,14 +246,14 @@ __attribute__((noinline)) void finish_profiler() {
                 uint64_t dram_bank_dst_noc_addr =
                     s.get_noc_addr(core_flat_id / profiler_core_count_per_dram, dram_offset);
 
-                noc_async_write(
+                noc_async_write_posted(
                     reinterpret_cast<uint32_t>(profiler_data_buffer[hostIndex]), dram_bank_dst_noc_addr, send_size);
             }
             profiler_control_buffer[deviceIndex] = 0;
         }
     }
 
-    noc_async_write_barrier();
+    noc_async_posted_writes_flushed();
     profiler_control_buffer[RUN_COUNTER]++;
     profiler_control_buffer[PROFILER_DONE] = 1;
 #endif
@@ -281,12 +293,12 @@ __attribute__((noinline)) void quick_push() {
     uint32_t currEndIndex = profiler_control_buffer[HOST_BUFFER_END_INDEX_BR_ER + myRiscID] + wIndex;
 
     if (currEndIndex <= PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC) {
-        noc_async_write(
+        noc_async_write_posted(
             reinterpret_cast<uint32_t>(profiler_data_buffer[myRiscID]),
             dram_bank_dst_noc_addr,
             wIndex * sizeof(uint32_t));
 
-        noc_async_write_barrier();
+        noc_async_posted_writes_flushed();
         profiler_control_buffer[HOST_BUFFER_END_INDEX_BR_ER + myRiscID] = currEndIndex;
 
     } else {

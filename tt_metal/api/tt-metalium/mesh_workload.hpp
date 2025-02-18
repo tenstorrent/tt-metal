@@ -9,10 +9,6 @@
 #include "mesh_buffer.hpp"
 
 namespace tt::tt_metal::distributed {
-// The LogicalDeviceRange concept is fundamentally identical to the CoreRange concept
-// Use this definition for now, since CoreRange contains several utility functions required
-// in the MeshWorkload context. CoreRange can eventually be renamed to Range2D.
-using LogicalDeviceRange = CoreRange;
 using RuntimeArgsPerCore = std::vector<std::vector<RuntimeArgsData>>;
 
 class MeshCommandQueue;

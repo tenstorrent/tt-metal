@@ -14,6 +14,9 @@
 #include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
 
+#include "cpp/ttnn/operations/ccl/kernels/edm_fabric/edm_fabric_counters.hpp"
+
+#include <tt-metalium/assert.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/program_impl.hpp>
 #include <tt-metalium/hal_exp.hpp>
@@ -29,21 +32,57 @@ namespace ccl {
 struct FabricEriscDatamoverConfig {
     static constexpr std::size_t field_size = 16;
     static constexpr std::size_t buffer_alignment = 32;
+    static constexpr std::size_t eth_word_l1_alignment = 16;
     static_assert(((buffer_alignment - 1) & buffer_alignment) == 0);
+    static constexpr bool enable_fabric_counters = false;
+    static constexpr bool enable_fabric_pkt_header_recording = false;
 
     // Global
     static constexpr std::size_t eth_channel_sync_size = 16;
     std::size_t handshake_addr = tt::tt_metal::experimental::hal::get_erisc_l1_unreserved_base()/* + 1024*/;
     std::size_t edm_channel_ack_addr = handshake_addr + eth_channel_sync_size;
     std::size_t termination_signal_address =
-        edm_channel_ack_addr + (2 * eth_channel_sync_size);  // pad extra bytes to match old EDM so handshake logic will still work
+        edm_channel_ack_addr +
+        (4 * eth_channel_sync_size);  // pad extra bytes to match old EDM so handshake logic will still work
+
+    // Debug and Counters
+    static constexpr std::size_t receiver_channel_counters_size_bytes =
+        (((tt::fabric::receiver_channel_counters_l1_size - 1) / field_size) + 1) * field_size;
+    static constexpr std::size_t sender_channel_counters_size_bytes =
+        (((tt::fabric::sender_channel_counters_l1_size - 1) / field_size) + 1) * field_size;
+
+    std::size_t receiver_channel_counters_address = termination_signal_address + field_size;
+    std::size_t sender_channel_0_counters_address =
+        receiver_channel_counters_address + receiver_channel_counters_size_bytes;
+    std::size_t sender_channel_1_counters_address =
+        sender_channel_0_counters_address + sender_channel_counters_size_bytes;
+
+    // Packet header history buffer(s)
+    static constexpr std::size_t receiver_completed_packet_header_cb_size_headers = 32;
+    static constexpr std::size_t receiver_completed_packet_header_cb_size_bytes =
+        sizeof(tt::fabric::PacketHeader) * receiver_completed_packet_header_cb_size_headers;
+    static constexpr std::size_t sender_completed_packet_header_cb_size_headers = 32;
+    static constexpr std::size_t sender_completed_packet_header_cb_size_bytes =
+        sizeof(tt::fabric::PacketHeader) * sender_completed_packet_header_cb_size_headers;
+    std::size_t receiver_completed_packet_header_cb_address =
+        sender_channel_1_counters_address + sender_channel_counters_size_bytes;
+    std::size_t sender_0_completed_packet_header_cb_address =
+        receiver_completed_packet_header_cb_address + receiver_completed_packet_header_cb_size_bytes;
+    std::size_t sender_1_completed_packet_header_cb_address =
+        sender_0_completed_packet_header_cb_address + sender_completed_packet_header_cb_size_bytes;
 
     // ----------- Sender Channel 0
-    std::size_t sender_channel_0_buffer_index_address = termination_signal_address + field_size;
-    std::size_t sender_channel_0_worker_connection_info_address =
-        sender_channel_0_buffer_index_address + field_size;
+    std::size_t sender_channel_0_buffer_index_address =
+        sender_1_completed_packet_header_cb_address + sender_completed_packet_header_cb_size_bytes;
+    // Connection info layout:
+    // 0: buffer_index_rdptr -> Tells EDM the address in worker L1 to update EDM's copy of channel rdptr
+    // 1: worker_teardown_semaphore_address -> Tells EDM where to signal connection teardown completion in worker's L1
+    // 2: WorkerXY (as uint32_t)
+    // 3: Hold's EDM's rdptr for the buffer index in the channel
+    std::size_t sender_channel_0_worker_conn_info_base_address = sender_channel_0_buffer_index_address + field_size;
     std::size_t sender_channel_0_local_flow_control_semaphore_address =
-        sender_channel_0_worker_connection_info_address + field_size;
+        sender_channel_0_worker_conn_info_base_address + sizeof(tt::fabric::EDMChannelWorkerLocationInfo);
+    // sender_channel_0_conn_info_edm_rdptr_address_address + field_size;
     std::size_t sender_channel_0_producer_terminate_connection_address =
         sender_channel_0_local_flow_control_semaphore_address + field_size;
     // persistent mode field
@@ -53,17 +92,23 @@ struct FabricEriscDatamoverConfig {
     std::size_t sender_channel_0_buffer_index_semaphore_address =
         sender_channel_0_connection_semaphore_address + field_size;
 
-    static_assert(field_size >= sizeof(tt::fabric::EDMChannelWorkerLocationInfo));
+    static_assert(sizeof(tt::fabric::EDMChannelWorkerLocationInfo) % field_size == 0);
 
     // ----------- Sender Channel 1
     std::size_t sender_channel_1_buffer_index_address =
         sender_channel_0_buffer_index_semaphore_address + field_size;
-    std::size_t sender_channel_1_worker_connection_info_address =
-        sender_channel_1_buffer_index_address + field_size;
+    // Connection info layout:
+    // 0: buffer_index_rdptr -> Tells EDM the address in worker L1 to update EDM's copy of channel rdptr
+    // 1: worker_teardown_semaphore_address -> Tells EDM where to signal connection teardown completion in worker's L1
+    // 2: WorkerXY (as uint32_t)
+    // 3: Hold's EDM's rdptr for the buffer index in the channel
+    std::size_t sender_channel_1_worker_conn_info_base_address = sender_channel_1_buffer_index_address + field_size;
     std::size_t sender_channel_1_local_flow_control_semaphore_address =
-        sender_channel_1_worker_connection_info_address + field_size;
+        sender_channel_1_worker_conn_info_base_address + sizeof(tt::fabric::EDMChannelWorkerLocationInfo);
+    // sender_channel_1_conn_info_edm_rdptr_address_address + field_size;
     std::size_t sender_channel_1_producer_terminate_connection_address =
         sender_channel_1_local_flow_control_semaphore_address + field_size;
+
     // persistent mode field
     std::size_t sender_channel_1_connection_semaphore_address =
         sender_channel_1_producer_terminate_connection_address + field_size;
@@ -135,6 +180,8 @@ size_t log_worker_to_fabric_edm_sender_rt_args(std::vector<uint32_t> const& args
 class FabricEriscDatamoverBuilder {
    public:
        static constexpr size_t default_firmware_context_switch_interval = 200000;
+       // payload only, no header
+       static constexpr size_t default_packet_payload_size_bytes = 4096;
 
        FabricEriscDatamoverBuilder(
            const CoreCoord& my_eth_core_logical,
@@ -253,7 +300,13 @@ class EdmLineFabricOpInterface {
     EdmLineFabricOpInterface (IDevice* local_device, std::optional<IDevice*> forward_device, std::optional<IDevice*> backward_device,  Program* program, bool enable_persistent_mode, std::optional<size_t> desired_num_links, bool build_in_worker_connection_mode = false);
 
     static EdmLineFabricOpInterface build_program_builder_worker_connection_fabric(std::vector<IDevice*> const& device_sequence, std::vector<Program*> const& program_sequence, bool enable_persistent_mode, std::optional<size_t> desired_num_links = std::nullopt);
-    static EdmLineFabricOpInterface build_program_builder_worker_connection_fabric(IDevice* local_device, std::optional<IDevice*> forward_device, std::optional<IDevice*> backward_device,  Program* program, bool enable_persistent_mode, std::optional<size_t> desired_num_links = std::nullopt);
+    static EdmLineFabricOpInterface build_program_builder_worker_connection_fabric(
+        IDevice* local_device,
+        IDevice* forward_device,
+        IDevice* backward_device,
+        Program* program,
+        bool enable_persistent_mode,
+        std::optional<size_t> desired_num_links = std::nullopt);
 
     // Will create a connection adapter for a worker which can be used to pass args to the worker kernel talking to the
     // corresponding fabric endpoint. This interface will guarantee unique connections only so requesting more unique connections
@@ -316,7 +369,7 @@ class EdmLineFabricOpInterface {
     size_t firmware_context_switch_interval = FabricEriscDatamoverBuilder::default_firmware_context_switch_interval;
 };
 
-void initialize_edm_fabric(distributed::MeshDevice* mesh_device);
+void initialize_edm_fabric(distributed::MeshDevice* mesh_device, bool wrap_fabric_around_mesh = false);
 void teardown_edm_fabric(distributed::MeshDevice* mesh_device);
 
 };  // namespace ccl

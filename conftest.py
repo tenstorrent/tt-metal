@@ -257,8 +257,8 @@ def pcie_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, devic
         mesh_shape=ttnn.MeshShape(2, 2),
         **updated_device_params,
         offset=ttnn.MeshOffset(0, 1),
-        mesh_type=ttnn.MeshType.Ring,
     )
+    mesh_device.reshape(ttnn.MeshShape(1, 4))
 
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")
     yield mesh_device
@@ -303,9 +303,8 @@ def t3k_mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device
     request.node.pci_ids = ttnn.get_pcie_device_ids()
     updated_device_params = get_updated_device_params(device_params)
     mesh_device = ttnn.open_mesh_device(
-        mesh_shape=ttnn.MeshShape(2, 4),
+        mesh_shape=ttnn.MeshShape(1, 8),
         **updated_device_params,
-        mesh_type=ttnn.MeshType.Ring,
     )
 
     logger.debug(f"multidevice with {mesh_device.get_num_devices()} devices is created")

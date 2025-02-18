@@ -17,6 +17,7 @@ set(TTNN_CCL_UNIT_TESTS_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/ccl/test_ccl_commands.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ccl/test_ccl_helpers.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ccl/test_ccl_tensor_slicers.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ccl/test_sharded_address_generators_new.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ccl/test_sharded_address_generators.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ccl/test_ccl_reduce_scatter_host_helpers.cpp
 )
@@ -28,8 +29,8 @@ set(TTNN_TENSOR_UNIT_TESTS_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_create_tensor_multi_device.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_create_tensor_with_layout.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_distributed_tensor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_mesh_tensor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_partition.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_shape_base.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_tensor_sharding.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_vector_conversion.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/test_xtensor_conversion.cpp

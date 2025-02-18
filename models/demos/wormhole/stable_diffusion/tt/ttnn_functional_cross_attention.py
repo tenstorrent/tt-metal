@@ -787,7 +787,7 @@ class cross_attention:
             memory_config=ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG,
         )
 
-        if hidden_states.shape.with_tile_padding()[-1] != hidden_states.shape[-1]:
+        if hidden_states.padded_shape[-1] != hidden_states.shape[-1]:
             assert False
             hidden_states = hidden_states[:, :, : hidden_states.shape[-1]]
 

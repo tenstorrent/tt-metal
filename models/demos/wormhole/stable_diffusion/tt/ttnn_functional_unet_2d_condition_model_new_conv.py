@@ -38,6 +38,7 @@ from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions
     pad_group_norm_weight,
     pre_process_input,
     conv_cache,
+    get_default_compute_config,
 )
 
 fp32_accum = True
@@ -389,13 +390,7 @@ class UNet2DConditionModel:
             transpose_shards=False,
             reshard_if_not_optimal=True,
         )
-        compute_config = ttnn.init_device_compute_kernel_config(
-            self.device.arch(),
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=True,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=False,
-        )
+        compute_config = get_default_compute_config(self.device)
 
         conv_kwargs = {
             "in_channels": in_channels,
@@ -418,6 +413,7 @@ class UNet2DConditionModel:
                 weights_format="OIHW",
                 input_memory_config=sample.memory_config(),
                 input_layout=sample.get_layout(),
+                has_bias=True,
                 **conv_kwargs,
             )
             self.conv_in_bias = ttnn.prepare_conv_bias(
@@ -680,13 +676,7 @@ class UNet2DConditionModel:
             transpose_shards=False,
             reshard_if_not_optimal=True,
         )
-        compute_config = ttnn.init_device_compute_kernel_config(
-            self.device.arch(),
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=True,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=False,
-        )
+        compute_config = get_default_compute_config(self.device)
 
         conv_kwargs_1 = {
             "in_channels": self.conv_out_in_channels,
@@ -709,6 +699,7 @@ class UNet2DConditionModel:
                 weights_format="OIHW",
                 input_memory_config=sample.memory_config(),
                 input_layout=sample.get_layout(),
+                has_bias=True,
                 **conv_kwargs_1,
             )
             self.conv_out_bias = ttnn.prepare_conv_bias(

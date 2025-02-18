@@ -516,7 +516,7 @@ def test_binary_remainder_ttnn(input_shapes, device):
     in_data2, input_tensor2 = data_gen_with_range(input_shapes, -100, 100, device)
     output_tensor = ttnn.remainder(input_tensor1, input_tensor2)
     golden_function = ttnn.get_golden_function(ttnn.remainder)
-    golden_tensor = golden_function(in_data1, in_data2)
+    golden_tensor = golden_function(in_data1, in_data2, device=device)
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
     assert comp_pass
@@ -541,7 +541,7 @@ def test_shape_remainder(device, shapes):
     torch_input_tensor_b = torch.rand(shapes[1], dtype=torch.bfloat16) * (high - low) + low
 
     golden_function = ttnn.get_golden_function(ttnn.remainder)
-    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b)
+    torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b, device=device)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
@@ -573,7 +573,7 @@ def test_remainder_ttnn(input_shapes, scalar, device):
     in_data1, input_tensor1 = data_gen_with_range(input_shapes, -150, 150, device)
     output_tensor = ttnn.remainder(input_tensor1, scalar)
     golden_function = ttnn.get_golden_function(ttnn.remainder)
-    golden_tensor = golden_function(in_data1, scalar)
+    golden_tensor = golden_function(in_data1, scalar, device=device)
 
     comp_pass = compare_pcc([output_tensor], [golden_tensor])
     assert comp_pass

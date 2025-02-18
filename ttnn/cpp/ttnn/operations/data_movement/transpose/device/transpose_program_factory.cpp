@@ -632,7 +632,8 @@ operation::ProgramWithCallbacks transpose_hc_multi_core(
     uint32_t sub_tile_line_bytes = 16 * a.element_size();
 
     uint32_t num_tensor_tiles = a.volume() / TILE_HW;
-    uint32_t W = a.shape()[3], H = a.shape()[2], C = a.shape()[1], N = a.shape()[0];
+    const auto& a_shape = a.get_logical_shape();
+    uint32_t W = a_shape[3], H = a_shape[2], C = a_shape[1], N = a_shape[0];
     uint32_t NCH = N * C * H;
     bool row_major = a.get_layout() == Layout::ROW_MAJOR;
 
@@ -674,8 +675,7 @@ operation::ProgramWithCallbacks transpose_hc_multi_core(
     // TODO: noc_async_write only require 16B alignment for both DRAM and L1 for Blackhole, so instead of reading in
     // face-lines from C tiles to form a single tile, we can load a single tile and then write out its face-lines to C
     // tiles
-    uint32_t alignment = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM ? hal::get_dram_alignment()
-                                                                                     : hal::get_l1_alignment();
+    uint32_t alignment = dst_buffer->alignment();
     bool misaligned = alignment > sub_tile_line_bytes;
     if (row_major) {
         auto num_sticks = num_tiles_per_core_group_1 > num_tiles_per_core_group_2 ? num_tiles_per_core_group_1
@@ -806,7 +806,8 @@ operation::ProgramWithCallbacks transpose_hc_multi_core(
 
         uint32_t num_tensor_tiles = src_tensor.volume() / TILE_HW;
 
-        uint32_t H = src_tensor.shape()[2], C = src_tensor.shape()[1], N = src_tensor.shape()[0];
+        uint32_t H = src_tensor.get_logical_shape()[2], C = src_tensor.get_logical_shape()[1],
+                 N = src_tensor.get_logical_shape()[0];
         uint32_t NCH = N * C * H;
         bool row_major = src_tensor.get_layout() == Layout::ROW_MAJOR;
 
@@ -1168,7 +1169,8 @@ operation::ProgramWithCallbacks transpose_hc_multi_core_sharded(const Tensor& a,
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
 
     const auto shape = a.get_padded_shape();
-    uint32_t W = a.shape()[3], H = a.shape()[2], C = a.shape()[1], N = a.shape()[0];
+    uint32_t W = a.get_logical_shape()[3], H = a.get_logical_shape()[2], C = a.get_logical_shape()[1],
+             N = a.get_logical_shape()[0];
     uint32_t total_height = N * C * H;
     uint32_t stick_size_bytes = W * a.element_size();
 
@@ -1439,8 +1441,8 @@ void override_runtime_args_wh_rm(
     uint32_t num_hw_blocks_per_core_group_1,
     const CoreRangeSet& core_group_2,
     uint32_t num_hw_blocks_per_core_group_2) {
-    auto input_shape = input_tensor.shape();
-    auto output_shape = output_tensor.shape();
+    auto input_shape = input_tensor.get_logical_shape();
+    auto output_shape = output_tensor.get_logical_shape();
 
     uint32_t W = input_shape[3], H = input_shape[2], NC = input_shape[1] * input_shape[0];
     uint32_t ht = (H + TILE_HEIGHT - 1) / TILE_HEIGHT;
@@ -1525,7 +1527,8 @@ void override_runtime_args_wh_rm(
 
 operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor& a, Tensor& output) {
     uint32_t num_tensor_tiles = a.volume() / TILE_HW;
-    uint32_t W = a.shape()[3], H = a.shape()[2], C = a.shape()[1], N = a.shape()[0], NC = a.shape()[1] * a.shape()[0];
+    uint32_t W = a.get_logical_shape()[3], H = a.get_logical_shape()[2], C = a.get_logical_shape()[1],
+             N = a.get_logical_shape()[0], NC = a.get_logical_shape()[1] * a.get_logical_shape()[0];
     bool row_major = a.get_layout() == Layout::ROW_MAJOR;
 
     uint32_t ht = (H + TILE_HEIGHT - 1) / TILE_HEIGHT;
@@ -1723,7 +1726,7 @@ operation::ProgramWithCallbacks transpose_wh_multi_core(const Tensor& a, Tensor&
         uint32_t num_cores_y = compute_with_storage_grid_size.y;
         uint32_t num_cores_total = num_cores_x * num_cores_y;
         uint32_t num_tensor_tiles = src_tensor.volume() / TILE_HW;
-        uint32_t NC = src_tensor.shape()[1] * src_tensor.shape()[0];
+        uint32_t NC = src_tensor.get_logical_shape()[1] * src_tensor.get_logical_shape()[0];
         bool row_major = src_tensor.get_layout() == Layout::ROW_MAJOR;
 
         auto
@@ -1988,7 +1991,8 @@ operation::ProgramWithCallbacks transpose_wh_multi_core_sharded_rm(const Tensor&
     tt::tt_metal::Buffer* src0_buffer = a.buffer();
 
     const auto shape = a.get_padded_shape();
-    uint32_t W = a.shape()[3], H = a.shape()[2], C = a.shape()[1], N = a.shape()[0];
+    uint32_t W = a.get_logical_shape()[3], H = a.get_logical_shape()[2], C = a.get_logical_shape()[1],
+             N = a.get_logical_shape()[0];
     uint32_t total_height = N * C * H;
     uint32_t stick_size_bytes = W * a.element_size();
     uint32_t ht = (H + TILE_HEIGHT - 1) / TILE_HEIGHT;

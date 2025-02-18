@@ -18,13 +18,16 @@
 #include <trace_buffer.hpp>
 #include <span.hpp>
 #include <tt_align.hpp>
+#include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
+
+#include "tt_cluster.hpp"
 
 namespace tt::tt_metal {
 
 // assert here to avoid the need to include command_queue_interface.hpp in header
 static_assert(
-    SubDeviceManager::MAX_NUM_SUB_DEVICES <= dispatch_constants::DISPATCH_MESSAGE_ENTRIES,
-    "MAX_NUM_SUB_DEVICES must be less than or equal to dispatch_constants::DISPATCH_MESSAGE_ENTRIES");
+    SubDeviceManager::MAX_NUM_SUB_DEVICES <= DispatchSettings::DISPATCH_MESSAGE_ENTRIES,
+    "MAX_NUM_SUB_DEVICES must be less than or equal to DispatchSettings::DISPATCH_MESSAGE_ENTRIES");
 
 std::atomic<uint64_t> SubDeviceManager::next_sub_device_manager_id_ = 0;
 
@@ -261,6 +264,7 @@ void SubDeviceManager::populate_sub_allocators() {
              .dram_bank_size = 0,
              .dram_bank_offsets = global_allocator_config.dram_bank_offsets,
              .dram_unreserved_base = global_allocator_config.dram_unreserved_base,
+             .dram_alignment = global_allocator_config.dram_alignment,
              .l1_unreserved_base = global_allocator_config.l1_unreserved_base,
              .worker_grid = compute_cores,
              .worker_l1_size = global_allocator_config.l1_unreserved_base + local_l1_size_,
@@ -272,7 +276,7 @@ void SubDeviceManager::populate_sub_allocators() {
              .worker_log_to_virtual_routing_y = global_allocator_config.worker_log_to_virtual_routing_y,
              .l1_bank_remap = std::move(l1_bank_remap),
              .compute_grid = compute_cores,
-             .alignment = global_allocator_config.alignment,
+             .l1_alignment = global_allocator_config.l1_alignment,
              .disable_interleaved = true});
         TT_FATAL(
             config.l1_small_size < (config.storage_core_bank_size.has_value()
@@ -280,9 +284,9 @@ void SubDeviceManager::populate_sub_allocators() {
                                         : config.worker_l1_size - config.l1_unreserved_base),
             "Reserved size must be less than bank size");
         TT_FATAL(
-            config.l1_small_size % config.alignment == 0,
-            "Reserved size must be aligned to allocator alignment {}",
-            config.alignment);
+            config.l1_small_size % config.l1_alignment == 0,
+            "Reserved size must be aligned to allocator L1 alignment {}",
+            config.l1_alignment);
 
         // sub_devices only have compute cores for allocation
         for (const CoreCoord& core : corerange_to_cores(compute_cores)) {
@@ -304,7 +308,7 @@ void SubDeviceManager::populate_noc_data() {
     noc_mcast_data_start_index_.resize(num_sub_devices);
     noc_unicast_data_start_index_.resize(num_sub_devices);
 
-    NOC noc_index = device_->dispatch_go_signal_noc();
+    NOC noc_index = DispatchQueryManager::instance().go_signal_noc();
     uint32_t idx = 0;
     for (uint32_t i = 0; i < num_sub_devices; ++i) {
         const auto& tensix_cores = sub_devices_[i].cores(HalProgrammableCoreType::TENSIX).merge_ranges();
@@ -333,10 +337,10 @@ void SubDeviceManager::populate_noc_data() {
         num_noc_unicast_txns_[i] = idx - noc_unicast_data_start_index_[i];
 
         TT_FATAL(
-            idx <= dispatch_constants::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES,
+            idx <= DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES,
             "NOC data entries {} exceeds maximum supported size {}",
             idx,
-            dispatch_constants::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES);
+            DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES);
     }
 }
 

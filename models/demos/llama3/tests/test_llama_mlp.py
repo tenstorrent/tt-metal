@@ -9,7 +9,6 @@ import os
 import ttnn
 from models.demos.llama3.tt.llama_mlp import TtLlamaMLP
 from models.demos.llama3.tt.model_config import TtModelArgs
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import FeedForward
 from models.utility_functions import (
     comp_pcc,
     comp_allclose,
@@ -57,12 +56,7 @@ def test_llama_mlp_inference(seq_len, batch_size, mesh_device, use_program_cache
     }
 
     model_args.WEIGHTS_DTYPE = dtype
-    reference_model = FeedForward(
-        dim=model_args.dim,
-        hidden_dim=4 * model_args.dim,
-        multiple_of=model_args.multiple_of,
-        ffn_dim_multiplier=model_args.ffn_dim_multiplier,
-    )
+    reference_model = model_args.reference_mlp()
     reference_model.load_state_dict(partial_state_dict)
 
     tt_model = TtLlamaMLP(
@@ -84,12 +78,14 @@ def test_llama_mlp_inference(seq_len, batch_size, mesh_device, use_program_cache
         ),  # When both dims are None, the mapper used is `ReplicateTensorToMesh`
         dtype=ttnn.bfloat8_b,
         memory_config=(
-            tt_model.model_config["MLP_ACT_MEMCFG"]
-            if model_args.is_galaxy
-            else model_args.model_config["SHARDED_MLP_INPUT_MEMCFG"]
-        )
-        if mode == "decode"
-        else ttnn.DRAM_MEMORY_CONFIG,
+            (
+                tt_model.model_config["MLP_ACT_MEMCFG"]
+                if model_args.is_galaxy
+                else model_args.model_config["SHARDED_MLP_INPUT_MEMCFG"]
+            )
+            if mode == "decode"
+            else ttnn.DRAM_MEMORY_CONFIG
+        ),
         layout=ttnn.TILE_LAYOUT,
     )
 
