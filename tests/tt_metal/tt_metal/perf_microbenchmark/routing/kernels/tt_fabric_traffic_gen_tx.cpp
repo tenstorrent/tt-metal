@@ -83,10 +83,6 @@ packet_header_t packet_header __attribute__((aligned(16)));
 uint32_t target_address;
 uint32_t noc_offset;
 uint32_t rx_addr_hi;
-
-uint32_t gk_interface_addr_l;
-uint32_t gk_interface_addr_h;
-
 uint32_t controller_noc_offset;
 
 // flag to check if need to zero out notification addr
@@ -389,11 +385,9 @@ void kernel_main() {
     src_endpoint_id = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     noc_offset = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     controller_noc_offset = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
-    uint32_t routing_plane = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
+    uint32_t outbound_eth_chan = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     dest_device = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     uint32_t rx_buf_size = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
-    gk_interface_addr_l = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
-    gk_interface_addr_h = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
 
     if constexpr (ASYNC_WR & test_command) {
         base_target_address = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
@@ -462,9 +456,8 @@ void kernel_main() {
     uint32_t packet_count = 0;
 
     // initalize client
-    fabric_endpoint_init(client_interface_addr, gk_interface_addr_l, gk_interface_addr_h);
-    routing_table = reinterpret_cast<tt_l1_ptr fabric_router_l1_config_t*>(
-        client_interface->routing_tables_l1_offset + sizeof(fabric_router_l1_config_t) * routing_plane);
+    fabric_endpoint_init(client_interface_addr, outbound_eth_chan);
+    routing_table = reinterpret_cast<tt_l1_ptr fabric_router_l1_config_t*>(client_interface->routing_tables_l1_offset);
 
     while (true) {
         iter++;

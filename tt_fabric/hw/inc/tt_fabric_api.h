@@ -245,43 +245,19 @@ inline void fabric_socket_connect(socket_handle_t* socket_handle) {
     while (((volatile socket_handle_t*)socket_handle)->socket_state != SocketState::ACTIVE);
 }
 
-inline void fabric_endpoint_init(uint32_t base_address, uint32_t gk_interface_addr_l, uint32_t gk_interface_addr_h) {
+inline void fabric_endpoint_init(uint32_t base_address, uint32_t outbound_eth_chan) {
     tt_fabric_init();
 
     client_interface = (volatile fabric_client_interface_t*)base_address;
     uint32_t routing_tables_offset = base_address + sizeof(fabric_client_interface_t);
 
     zero_l1_buf((uint32_t*)client_interface, sizeof(fabric_client_interface_t));
-    client_interface->gk_interface_addr = ((uint64_t)gk_interface_addr_h << 32) | gk_interface_addr_l;
-    client_interface->gk_msg_buf_addr =
-        (((uint64_t)gk_interface_addr_h << 32) | gk_interface_addr_l) + offsetof(gatekeeper_info_t, gk_msg_buf);
     client_interface->routing_tables_l1_offset = routing_tables_offset;
+    client_interface->num_routing_planes = 1;
 
-    // make sure fabric node gatekeeper is available.
-    uint64_t noc_addr = client_interface->gk_interface_addr + offsetof(gatekeeper_info_t, ep_sync);
-    client_interface->return_status[0] = 0;
-    while (1) {
-        noc_async_read_one_packet(noc_addr, (uint32_t)&client_interface->return_status[0], 4);
-        noc_async_read_barrier();
-        if (client_interface->return_status[0] != 0) {
-            break;
-        }
-    }
-
-    // read the gk info first at routing table addr and later override with routing tables
-    noc_async_read_one_packet(
-        client_interface->gk_interface_addr, client_interface->routing_tables_l1_offset, sizeof(gatekeeper_info_t));
-    noc_async_read_barrier();
-
-    client_interface->num_routing_planes = ((gatekeeper_info_t*)routing_tables_offset)->routing_planes;
-
-    // read routing tables
-    uint64_t gk_rt_noc_addr = client_interface->gk_interface_addr - sizeof(fabric_router_l1_config_t) * 4;
-    uint32_t table_offset;
-    for (uint32_t i = 0; i < client_interface->num_routing_planes; i++) {
-        table_offset = sizeof(fabric_router_l1_config_t) * i;
-        noc_async_read_one_packet(
-            gk_rt_noc_addr + table_offset, routing_tables_offset + table_offset, sizeof(fabric_router_l1_config_t));
-    }
+    // read routing table
+    uint64_t dest_addr = get_noc_addr_helper(
+        eth_chan_to_noc_xy[noc_index][outbound_eth_chan], eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE);
+    noc_async_read_one_packet(dest_addr, routing_tables_offset, sizeof(fabric_router_l1_config_t));
     noc_async_read_barrier();
 }

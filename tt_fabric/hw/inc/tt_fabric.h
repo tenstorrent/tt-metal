@@ -23,7 +23,7 @@ const uint32_t SYNC_BUF_PTR_MASK = ((SYNC_BUF_SIZE << 1) - 1);
 
 extern uint64_t xy_local_addr;
 extern volatile local_pull_request_t* local_pull_request;
-extern volatile fabric_router_l1_config_t* routing_table;
+extern volatile tt_l1_ptr fabric_router_l1_config_t* routing_table;
 extern chan_payload_ptr inbound_rdptr_ack;
 extern volatile chan_payload_ptr remote_rdptr;
 
