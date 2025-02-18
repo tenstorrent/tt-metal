@@ -15,15 +15,20 @@ constexpr std::string_view PROFILER_RUNTIME_ROOT_DIR = "generated/profiler/";
 constexpr std::string_view PROFILER_LOGS_DIR_NAME = ".logs/";
 
 inline std::string get_profiler_artifacts_dir() {
-    std::string artifactDir = string(PROFILER_RUNTIME_ROOT_DIR);
-    const auto PROFILER_ARTIFACTS_DIR = std::getenv("TT_METAL_PROFILER_DIR");
-    if (PROFILER_ARTIFACTS_DIR != nullptr) {
-        artifactDir = string(PROFILER_ARTIFACTS_DIR) + "/";
+    std::string artifacts_dir;
+    if (std::getenv("TT_METAL_PROFILER_DIR")) {
+        artifacts_dir = std::string(std::getenv("TT_METAL_PROFILER_DIR")) + "/";
+    } else {
+        std::string prefix;
+        if (std::getenv("TT_METAL_HOME")) {
+            prefix = std::string(std::getenv("TT_METAL_HOME")) + "/";
+        }
+        artifacts_dir = prefix + std::string(PROFILER_RUNTIME_ROOT_DIR);
     }
-    return artifactDir;
+    return artifacts_dir;
 }
 
-inline std::string get_profiler_logs_dir() { return get_profiler_artifacts_dir() + string(PROFILER_LOGS_DIR_NAME); }
+inline std::string get_profiler_logs_dir() { return get_profiler_artifacts_dir() + std::string(PROFILER_LOGS_DIR_NAME); }
 
 inline std::string PROFILER_ZONE_SRC_LOCATIONS_LOG = get_profiler_logs_dir() + "zone_src_locations.log";
 }  // namespace tt_metal
