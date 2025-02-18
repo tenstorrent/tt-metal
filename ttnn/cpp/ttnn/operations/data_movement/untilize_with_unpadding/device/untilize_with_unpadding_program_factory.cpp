@@ -365,7 +365,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_col_interleav
 }
 
 operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
-    const Tensor& a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en) {
+    const Tensor& a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en, bool enough_space_height) {
     tt::tt_metal::Program program{};
 
     tt::DataFormat input_cb_data_format = datatype_to_dataformat_converter(a.get_dtype());
@@ -383,7 +383,7 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_interleaved(
     uint32_t num_tiles_per_row = a.get_padded_shape()[-1] / TILE_WIDTH;
 
     uint32_t num_tiles_per_col = a.get_padded_shape()[-2] / TILE_HEIGHT;
-    if (num_tiles_per_row > num_tiles_per_col) {
+    if (!enough_space_height) {
         return untilize_with_unpadding_multi_core_col_interleaved(a, output, use_pack_untilize, fp32_dest_acc_en);
     }
 
@@ -839,11 +839,12 @@ operation::ProgramWithCallbacks untilize_with_unpadding_multi_core_sharded(
 }
 
 operation::ProgramWithCallbacks untilize_with_unpadding_multi_core(
-    const Tensor& a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en) {
+    const Tensor& a, Tensor& output, bool use_pack_untilize, bool fp32_dest_acc_en, bool enough_space_height) {
     if (a.memory_config().is_sharded()) {
         return untilize_with_unpadding_multi_core_sharded(a, output, use_pack_untilize, fp32_dest_acc_en);
     } else {
-        return untilize_with_unpadding_multi_core_interleaved(a, output, use_pack_untilize, fp32_dest_acc_en);
+        return untilize_with_unpadding_multi_core_interleaved(
+            a, output, use_pack_untilize, fp32_dest_acc_en, enough_space_height);
     }
 }
 

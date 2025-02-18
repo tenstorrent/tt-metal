@@ -124,18 +124,17 @@ void kernel_main() {
         const auto dest_noc_address = get_noc_addr(p, dest_addr_gen, 0, NORMALIZED_NOC_INDEX);
         const size_t packet_size = page_size + sizeof(tt::fabric::PacketHeader);
         auto packet_addr = get_read_ptr(cb_id_in0);
-        auto& packet_header = *reinterpret_cast<tt::fabric::PacketHeader*>(packet_addr);
+        auto* packet_header = reinterpret_cast<volatile tt::fabric::PacketHeader*>(packet_addr);
         if constexpr (mcast_mode) {
             packet_header
-                .to_chip_multicast(tt::fabric::MulticastRoutingCommandHeader{config.mcast.distance, config.mcast.range})
-                .to_noc_unicast_write(tt::fabric::NocUnicastCommandHeader{
-                    dest_noc_address, (pages_to_send * page_size) + sizeof(tt::fabric::PacketHeader)});
-            packet_header.reserved2 = 0x1111;  // debug only
+                ->to_chip_multicast(
+                    tt::fabric::MulticastRoutingCommandHeader{config.mcast.distance, config.mcast.range})
+                ->to_noc_unicast_write(
+                    tt::fabric::NocUnicastCommandHeader{dest_noc_address}, (pages_to_send * page_size));
         } else {
-            packet_header.to_chip_unicast(tt::fabric::UnicastRoutingCommandHeader{config.unicast.distance})
-                .to_noc_unicast_write(tt::fabric::NocUnicastCommandHeader{
-                    dest_noc_address, (pages_to_send * page_size) + sizeof(tt::fabric::PacketHeader)});
-            packet_header.reserved2 = 0x1111;  // debug only
+            packet_header->to_chip_unicast(config.unicast.distance)
+                ->to_noc_unicast_write(
+                    tt::fabric::NocUnicastCommandHeader{dest_noc_address}, (pages_to_send * page_size));
         }
 
         sender.send_payload_blocking_from_address(packet_addr, packet_size);
@@ -150,7 +149,7 @@ void kernel_main() {
         ASSERT(*last_message_semaphore_address == 0);
         uint64_t last_message_semaphore_noc0_addr =
             safe_get_noc_addr(my_x[0], my_y[0], (uint32_t)last_message_semaphore_address, 0);
-        packet_header.to_chip_unicast(tt::fabric::UnicastRoutingCommandHeader{2});
+        packet_header.to_chip_unicast(2);
         packet_header.to_noc_unicast_atomic_inc(
             tt::fabric::NocUnicastAtomicIncCommandHeader(last_message_semaphore_noc0_addr, 1, 32));
 

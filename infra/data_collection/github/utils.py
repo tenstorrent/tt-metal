@@ -232,7 +232,8 @@ def get_job_row_from_github_job(github_job, github_job_id_to_annotations):
 
     job_end_ts = github_job["completed_at"]
 
-    job_success = github_job["conclusion"] == "success"
+    # skipped jobs are considered passing jobs (nothing was run)
+    job_success = github_job["conclusion"] in ["success", "skipped"]
 
     is_build_job = "build" in name or "build" in labels
 

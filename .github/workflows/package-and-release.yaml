@@ -12,6 +12,7 @@ permissions:
 
 jobs:
   build-artifact:
+    needs: create-tag
     strategy:
       matrix:
         config:
@@ -32,27 +33,22 @@ jobs:
       tracy: true
   single-card-demos:
     needs: build-artifact
-    if: ${{ contains(needs.build-artifact.*.outputs.version, '20.04') }}
     uses: ./.github/workflows/single-card-demo-tests-impl.yaml
     secrets: inherit
   t3000-demos:
     needs: build-artifact
-    if: ${{ contains(needs.build-artifact.*.outputs.version, '20.04') }}
     uses: ./.github/workflows/t3000-demo-tests-impl.yaml
     secrets: inherit
   t3000-model-perf:
     needs: build-artifact
-    if: ${{ contains(needs.build-artifact.*.outputs.version, '20.04') }}
     uses: ./.github/workflows/t3000-model-perf-tests-impl.yaml
     secrets: inherit
   tg-demos:
     needs: build-artifact
-    if: ${{ contains(needs.build-artifact.*.outputs.version, '20.04') }}
     uses: ./.github/workflows/tg-demo-tests-impl.yaml
     secrets: inherit
   tgg-model-perf:
     needs: build-artifact
-    if: ${{ contains(needs.build-artifact.*.outputs.version, '20.04') }}
     uses: ./.github/workflows/tgg-model-perf-tests-impl.yaml
     secrets: inherit
   get-params:
