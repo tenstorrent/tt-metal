@@ -133,7 +133,7 @@ def get_github_job_id_to_annotations(workflow_outputs_dir, workflow_run_id: int)
     return github_job_ids_to_annotation_jsons
 
 
-def get_pydantic_test_from_testcase_(testcase, default_timestamp=datetime.now(), is_pytest=True):
+def get_pydantic_test_from_testcase_(testcase, default_timestamp=datetime.now(), is_pytest=True, testsuite_name=None):
     skipped = junit_xml_utils.get_testcase_is_skipped(testcase)
     failed = junit_xml_utils.get_testcase_is_failed(testcase)
     error = junit_xml_utils.get_testcase_is_error(testcase)
@@ -194,7 +194,10 @@ def get_pydantic_test_from_testcase_(testcase, default_timestamp=datetime.now(),
     # leaving empty for now
     owner = None
 
-    full_test_name = f"{filepath}::{testcase.attrib['name']}"
+    if testsuite_name:
+        full_test_name = f"{filepath}::{testsuite_name}::{testcase.attrib['name']}"
+    else:
+        full_test_name = f"{filepath}::{testcase.attrib['name']}"
 
     # to be populated with [] if available
     config = None
@@ -247,9 +250,13 @@ def get_tests_from_test_report_path(test_report_path):
         tests = []
         for i in range(len(report_root)):
             testsuite = report_root[i]
+            testsuite_name = testsuite.attrib.get("name") if is_gtest else None
             default_timestamp = datetime.strptime(testsuite.attrib["timestamp"], "%Y-%m-%dT%H:%M:%S.%f")
             get_pydantic_test = partial(
-                get_pydantic_test_from_testcase_, default_timestamp=default_timestamp, is_pytest=is_pytest
+                get_pydantic_test_from_testcase_,
+                default_timestamp=default_timestamp,
+                is_pytest=is_pytest,
+                testsuite_name=testsuite_name,
             )
             for testcase in testsuite:
                 if is_valid_testcase_(testcase):
