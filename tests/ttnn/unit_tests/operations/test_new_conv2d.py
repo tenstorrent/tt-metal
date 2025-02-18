@@ -120,7 +120,12 @@ def run_conv(
             weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32,
             mesh_mapper=weight_mesh_mapper,
         )
-
+    torch_input_tensor = torch_input_tensor.reshape(
+        1,
+        1,
+        torch_input_tensor.shape[0] * torch_input_tensor.shape[1] * torch_input_tensor.shape[2],
+        torch_input_tensor.shape[3],
+    )
     tt_input_tensor = ttnn.from_torch(
         torch_input_tensor,
         activations_dtype if activations_dtype == ttnn.float32 else ttnn.bfloat16,
@@ -2851,4 +2856,120 @@ def test_block_sharding_relu_act_block_h(
         config_override=config_override,
         shard_layout=shard_layout,
         activation=activation,
+    )
+
+@skip_for_grayskull()
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, input_channels, output_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, groups, config_override, use_shallow_conv_variant",
+    (
+        (4, 3, 64, 320, 800, 7, 7, 2, 2, 3, 3, 1, None, False),  # 1
+        (4, 64, 64, 80, 200, 3, 3, 1, 1, 1, 1, 1, None, False),  # 2
+        (4, 64, 64, 80, 200, 3, 3, 1, 1, 1, 1, 1, None, False),  # 3
+        (4, 64, 64, 80, 200, 3, 3, 1, 1, 1, 1, 1, None, False),  # 4
+        (4, 64, 64, 80, 200, 3, 3, 1, 1, 1, 1, 1, None, False),  # 5
+        (4, 64, 64, 80, 200, 3, 3, 1, 1, 1, 1, 1, None, False),  # 6
+        (4, 64, 64, 80, 200, 3, 3, 1, 1, 1, 1, 1, None, False),  # 7
+        (4, 64, 128, 80, 200, 3, 3, 2, 2, 1, 1, 1, None, False),  # 8
+        (4, 128, 128, 40, 100, 3, 3, 1, 1, 1, 1, 1, None, False),  # 9
+        (4, 64, 128, 80, 200, 1, 1, 2, 2, 0, 0, 1, None, False),  # 10
+        (4, 128, 128, 40, 100, 3, 3, 1, 1, 1, 1, 1, None, False),  # 11
+        (4, 128, 128, 40, 100, 3, 3, 1, 1, 1, 1, 1, None, False),  # 12
+        (4, 128, 128, 40, 100, 3, 3, 1, 1, 1, 1, 1, None, False),  # 13
+        (4, 128, 128, 40, 100, 3, 3, 1, 1, 1, 1, 1, None, False),  # 14
+        (4, 128, 128, 40, 100, 3, 3, 1, 1, 1, 1, 1, None, False),  # 15
+        (4, 128, 128, 40, 100, 3, 3, 1, 1, 1, 1, 1, None, False),  # 16
+        (4, 128, 256, 40, 100, 3, 3, 2, 2, 1, 1, 1, None, False),  # 17
+        (4, 256, 256, 20, 50, 3, 3, 1, 1, 1, 1, 1, None, False),  # 18
+        (4, 128, 256, 40, 100, 1, 1, 2, 2, 0, 0, 1, None, False),  # 19
+        (4, 256, 256, 20, 50, 3, 3, 1, 1, 1, 1, 1, None, False),  # 20
+        (4, 256, 256, 20, 50, 3, 3, 1, 1, 1, 1, 1, None, False),  # 21
+        (4, 256, 256, 20, 50, 3, 3, 1, 1, 1, 1, 1, None, False),  # 22
+        (4, 256, 256, 20, 50, 3, 3, 1, 1, 1, 1, 1, None, False),  # 23
+        (4, 256, 256, 20, 50, 3, 3, 1, 1, 1, 1, 1, None, False),  # 24
+        (4, 256, 256, 20, 50, 3, 3, 1, 1, 1, 1, 1, None, False),  # 25
+        (4, 256, 256, 20, 50, 3, 3, 1, 1, 1, 1, 1, None, False),  # 26
+        (4, 256, 256, 20, 50, 3, 3, 1, 1, 1, 1, 1, None, False),  # 27
+        (4, 256, 256, 20, 50, 3, 3, 1, 1, 1, 1, 1, None, False),  # 28
+        (4, 256, 256, 20, 50, 3, 3, 1, 1, 1, 1, 1, None, False),  # 29
+        (4, 256, 512, 20, 50, 3, 3, 2, 2, 1, 1, 1, None, False),  # 30
+        (4, 512, 512, 10, 25, 3, 3, 1, 1, 1, 1, 1, None, False),  # 31
+        (4, 256, 512, 20, 50, 1, 1, 2, 2, 0, 0, 1, None, False),  # 32
+        (4, 512, 512, 10, 25, 3, 3, 1, 1, 1, 1, 1, None, False),  # 33
+        (4, 512, 512, 10, 25, 3, 3, 1, 1, 1, 1, 1, None, False),  # 34
+        (4, 512, 512, 10, 25, 3, 3, 1, 1, 1, 1, 1, None, False),  # 35
+        (4, 512, 512, 10, 25, 3, 3, 1, 1, 1, 1, 1, None, False),  # 36
+        (4, 512, 8, 10, 25, 1, 1, 1, 1, 0, 0, 1, None, False),  # 37
+
+
+
+    ),
+)
+@pytest.mark.parametrize(
+    "weights_dtype",
+    [ttnn.bfloat8_b],
+)
+@pytest.mark.parametrize(
+    "activations_dtype",
+    [ttnn.bfloat16],
+)
+@pytest.mark.parametrize("memory_config", [ttnn.L1_MEMORY_CONFIG])
+@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
+@pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT])
+def test_conv_ultra_fastlane_detection_v2_tusimple(
+    device,
+    use_program_cache,
+    math_fidelity,
+    activations_dtype,
+    weights_dtype,
+    batch_size,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    pad_h,
+    pad_w,
+    config_override,
+    use_shallow_conv_variant,
+    groups,
+    output_layout,
+    memory_config,
+):
+    torch_tensor_map={}
+    dilation=1
+    if output_channels == 8:
+        activation=""
+    else:
+        activation="relu"
+    if input_channels ==3:
+        activations_dtype = ttnn.bfloat8_b
+    run_conv(
+        device,
+        torch_tensor_map,
+        math_fidelity,
+        activations_dtype,
+        weights_dtype,
+        batch_size,
+        output_channels,
+        input_channels,
+        input_height,
+        input_width,
+        filter_height,
+        filter_width,
+        stride_h,
+        stride_w,
+        pad_h,
+        pad_w,
+        config_override,
+        dilation,
+        use_shallow_conv_variant=use_shallow_conv_variant,
+        groups=groups,
+        output_layout=output_layout,
+        has_bias=False,
+        memory_config=memory_config,
+        activation=activation
     )
