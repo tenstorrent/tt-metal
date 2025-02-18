@@ -16,7 +16,7 @@ static constexpr size_t DESTINATION_HOP_COUNT = 1;
 // TODO: make 0 and the associated field to num mcast destinations
 static constexpr size_t LAST_MCAST_DESTINATION = 1;
 
-void print_pkt_hdr_routing_fields(volatile tt::fabric::PacketHeader *const packet_start) {
+FORCE_INLINE void print_pkt_hdr_routing_fields(volatile tt::fabric::PacketHeader *const packet_start) {
 #ifdef DEBUG_PRINT_ENABLED
     switch (packet_start->chip_send_type) {
         case tt::fabric::CHIP_UNICAST: {
@@ -32,7 +32,7 @@ void print_pkt_hdr_routing_fields(volatile tt::fabric::PacketHeader *const packe
 #endif
 }
 
-void print_pkt_header_noc_fields(volatile tt::fabric::PacketHeader *const packet_start) {
+FORCE_INLINE void print_pkt_header_noc_fields(volatile tt::fabric::PacketHeader *const packet_start) {
 #ifdef DEBUG_PRINT_ENABLED
     switch (packet_start->noc_send_type) {
         case tt::fabric::NocSendType::NOC_UNICAST_WRITE: {
@@ -50,7 +50,7 @@ void print_pkt_header_noc_fields(volatile tt::fabric::PacketHeader *const packet
 #endif
 }
 
-void print_pkt_header(volatile tt::fabric::PacketHeader *const packet_start) {
+FORCE_INLINE void print_pkt_header(volatile tt::fabric::PacketHeader *const packet_start) {
 #ifdef DEBUG_PRINT_ENABLED
     auto const& header = *packet_start;
     DPRINT << "PKT: nsnd_t:" << (uint32_t) packet_start->noc_send_type <<
@@ -136,7 +136,7 @@ FORCE_INLINE void forward_payload_to_downstream_edm(
     tt::fabric::EdmToEdmSender<NUM_SENDER_BUFFERS> &downstream_edm_interface,
     uint8_t transaction_id
     ) {
-    DPRINT << "Fwding pkt to downstream\n";
+    // DPRINT << "Fwding pkt to downstream\n";
     // TODO: PERF - this should already be getting checked by the caller so this should be redundant make it an ASSERT
     ASSERT(downstream_edm_interface.edm_has_space_for_packet()); // best effort check
 
