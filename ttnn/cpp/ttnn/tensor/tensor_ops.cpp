@@ -45,10 +45,7 @@ Tensor tensor_to_device(
             device_tensor.populate_buffers_and_metadata(async_safe_tensor);
         } else {
             tensor_impl::validate_on_device_dtype_and_layout(
-                target_device,
-                async_safe_tensor.get_padded_shape(),
-                async_safe_tensor.get_dtype(),
-                async_safe_tensor.get_layout());
+                async_safe_tensor.get_padded_shape(), async_safe_tensor.get_dtype(), async_safe_tensor.get_layout());
             auto local_tensor = tensor_impl::to_device_wrapper(async_safe_tensor, target_device, mem_config, cq_id);
             // Populate device tensor
             device_tensor.populate_buffers_and_metadata(local_tensor);

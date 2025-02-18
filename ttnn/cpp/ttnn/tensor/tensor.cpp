@@ -190,7 +190,6 @@ void Tensor::init(Storage storage, TensorSpec tensor_spec) {
                 TT_ASSERT(storage.buffer->device() != nullptr);
                 workers = {storage.buffer->device()};
                 tensor_impl::validate_on_device_dtype_and_layout(
-                    storage.buffer->device(),
                     tensor_attributes->tensor_spec.padded_shape(),
                     tensor_attributes->tensor_spec.data_type(),
                     tensor_attributes->tensor_spec.layout());
@@ -210,7 +209,6 @@ void Tensor::init(Storage storage, TensorSpec tensor_spec) {
                     TT_ASSERT(buffer->device() != nullptr);
                     TT_ASSERT(buffer->device()->id() == device_id);
                     tensor_impl::validate_on_device_dtype_and_layout(
-                        buffer->device(),
                         tensor_attributes->tensor_spec.padded_shape(),
                         tensor_attributes->tensor_spec.data_type(),
                         tensor_attributes->tensor_spec.layout());
