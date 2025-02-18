@@ -18,6 +18,7 @@ project(
     DESCRIPTION "Tenstorrent Metalium"
     HOMEPAGE_URL "https://github.com/tenstorrent/tt-metal"
     LANGUAGES
+        C # Some of the jit-build files are plain C
         CXX
 )
 message(STATUS "Metalium version: ${PROJECT_VERSION}")
@@ -242,6 +243,11 @@ else()
     add_compile_definitions(TT_ENABLE_LIGHT_METAL_TRACE=0)
 endif()
 
+include(GNUInstallDirs)
+# GNUInstallDirs takes PROJECT_DIR verbatim, but directories should always be lowercase
+string(TOLOWER ${PROJECT_NAME} PROJECT_NAME_LOWER)
+string(REPLACE ${PROJECT_NAME} ${PROJECT_NAME_LOWER} CMAKE_INSTALL_DOCDIR ${CMAKE_INSTALL_DOCDIR})
+
 if(ENABLE_CODE_TIMERS)
     add_compile_definitions(TT_ENABLE_CODE_TIMERS)
 endif()
@@ -265,7 +271,6 @@ endif()
 # For top level install: cmake --build build --target install  or  make/ninja install -C build
 ############################################################################################################################
 # Install for build artifacts that will upload build/lib
-include(GNUInstallDirs)
 
 install(
     TARGETS
@@ -274,7 +279,7 @@ install(
         DESTINATION ${CMAKE_INSTALL_LIBDIR}
     LIBRARY
         DESTINATION ${CMAKE_INSTALL_LIBDIR}
-        COMPONENT dev
+        COMPONENT tar
 )
 install(
     TARGETS
@@ -283,7 +288,7 @@ install(
         DESTINATION ${CMAKE_INSTALL_LIBDIR}
     LIBRARY
         DESTINATION ${CMAKE_INSTALL_LIBDIR}
-        COMPONENT dev
+        COMPONENT tar
 )
 install(
     TARGETS
@@ -292,7 +297,7 @@ install(
         DESTINATION ${CMAKE_INSTALL_LIBDIR}
     LIBRARY
         DESTINATION ${CMAKE_INSTALL_LIBDIR}
-        COMPONENT dev
+        COMPONENT tar
 )
 if(WITH_PYTHON_BINDINGS)
     # Install .so into src files for pybinds implementation
@@ -305,6 +310,15 @@ if(WITH_PYTHON_BINDINGS)
             tt_pybinds
     )
 endif()
+
+# FIXME(17578): figure out what bits we actually need to ship and omit the rest
+install(
+    DIRECTORY
+        runtime
+    DESTINATION ${CMAKE_INSTALL_LIBEXECDIR}/tt-metalium
+    USE_SOURCE_PERMISSIONS
+    COMPONENT jit-build
+)
 
 # Custom clean target for `built` folder for when new kernel changes are pulled
 add_custom_target(
