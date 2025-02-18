@@ -9,6 +9,8 @@
 #include "risc_attribs.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #include "debug/watcher_common.h"
+#include "debug/ring_buffer.h"
+#include "debug/dprint.h"
 
 #if defined(PROFILE_KERNEL)
 namespace kernel_profiler {
@@ -60,6 +62,11 @@ void __attribute__((noinline)) Application(void) {
     ncrisc_noc_full_sync();
     WAYPOINT("REW");
     uint32_t count = 0;
+
+    auto start = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
+    internal_::risc_context_switch();
+    auto end = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
+
     while (routing_info->routing_enabled != 1) {
         volatile uint32_t *ptr = (volatile uint32_t *)0xffb2010c;
         count++;
@@ -73,6 +80,7 @@ void __attribute__((noinline)) Application(void) {
         // FD: assume that no more host -> remote writes are pending
         uint8_t go_message_signal = mailboxes->go_message.signal;
         if (go_message_signal == RUN_MSG_GO) {
+            WATCHER_RING_BUFFER_PUSH(end - start);
             // Only include this iteration in the device profile if the launch message is valid. This is because all workers get a go signal regardless of whether
             // they're running a kernel or not. We don't want to profile "invalid" iterations.
             DeviceZoneScopedMainN("ERISC-FW");
