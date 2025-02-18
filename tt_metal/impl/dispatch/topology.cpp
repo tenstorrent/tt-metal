@@ -794,6 +794,8 @@ std::unique_ptr<Program> create_and_compile_fabric_program(IDevice* device) {
     for (const auto& router_logical_core : device->get_active_ethernet_cores()) {
         if (master_router_chan == router_logical_core.y) {
             router_compile_args[4] = 1;
+        } else {
+            router_compile_args[4] = 0;
         }
         auto kernel = tt_metal::CreateKernel(
             *fabric_program_ptr,

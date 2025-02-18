@@ -1562,17 +1562,19 @@ int main(int argc, char **argv) {
         uint32_t worker_unreserved_base_addr =
             hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
 
-        // create router kernels
-        std::vector<uint32_t> router_compile_args = {
-            (tunneler_queue_size_bytes >> 4),  // 0: rx_queue_size_words
-            tunneler_test_results_addr,        // 1: test_results_addr
-            tunneler_test_results_size,        // 2: test_results_size
-            0,                                 // timeout_mcycles * 1000 * 1000 * 4, // 3: timeout_cycles
-        };
-        for (auto& [chip_id, test_device] : test_devices) {
-            test_device->create_router_kernels(router_compile_args, defines);
+        if (metal_fabric_init_level == 0) {
+            // manual init fabric
+            // create router kernels
+            std::vector<uint32_t> router_compile_args = {
+                (tunneler_queue_size_bytes >> 4),  // 0: rx_queue_size_words
+                tunneler_test_results_addr,        // 1: test_results_addr
+                tunneler_test_results_size,        // 2: test_results_size
+                0,                                 // timeout_mcycles * 1000 * 1000 * 4, // 3: timeout_cycles
+            };
+            for (auto& [chip_id, test_device] : test_devices) {
+                test_device->create_router_kernels(router_compile_args, defines);
+            }
         }
-
         if (check_txrx_timeout) {
             defines["CHECK_TIMEOUT"] = "";
         }
@@ -1648,14 +1650,12 @@ int main(int argc, char **argv) {
                 test_device->wait_for_router_sync();
             }
         }
-        std::cout << "done wait for rrouter sync" << std::endl;
 
         // notify tx controller to signal the tx workers
         for (auto& traffic : fabric_traffic) {
             traffic.notify_tx_controller();
         }
 
-        std::cout << "done notify tx workers" << std::endl;
         // wait for rx kernels to finish
         for (auto& traffic : fabric_traffic) {
             traffic.wait_for_rx_workers_to_finish();
@@ -1667,12 +1667,10 @@ int main(int argc, char **argv) {
             }
         }
 
-        std::cout << "done terminate router kernel" << std::endl;
         // wait for programs to exit
         for (auto& [chip_id, test_device] : test_devices) {
             tt_metal::detail::WaitProgramDone(test_device->device_handle, test_device->program_handle);
         }
-        std::cout << "done wait for program done" << std::endl;
         auto end = std::chrono::system_clock::now();
 
         std::chrono::duration<double> elapsed_seconds = (end-start);

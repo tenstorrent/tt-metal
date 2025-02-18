@@ -415,7 +415,6 @@ void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
 
 void DevicePool::wait_for_fabric_master_router_sync() const {
     if (this->fabric_setting == detail::FabricSetting::FABRIC) {
-        std::vector<uint32_t> master_router_terminate(1, 0);
         auto fabric_router_sync_sem_addr =
             hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
 
@@ -642,7 +641,7 @@ void DevicePool::close_devices(const std::vector<IDevice*>& devices) {
         std::vector<uint32_t> master_router_terminate(1, 0);
         auto fabric_router_sync_sem_addr =
             hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
-        for (const auto& dev : devices) {
+        for (const auto& dev : this->get_all_active_devices()) {
             auto fabric_master_router_core = *dev->get_active_ethernet_cores().begin();  // TODO: get this from a
                                                                                          // manager
             tt_metal::detail::WriteToDeviceL1(
