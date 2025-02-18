@@ -53,7 +53,11 @@ def make_anchors(device, feats, strides, grid_cell_offset=0.5):
 
 def ttnn_decode_bboxes(device, distance, anchor_points, xywh=True, dim=1):
     distance = ttnn.to_layout(distance, ttnn.ROW_MAJOR_LAYOUT)
-    lt, rb = ttnn.split(distance, 2, 1)  # if done in tile : tt-metal issue #17017
+    # lt, rb = ttnn.split(distance, 2, 1, memory_config=ttnn.L1_MEMORY_CONFIG)  # if done in tile : tt-metal issue #17017
+
+    lt = distance[:, : distance.shape[1] // 2, :]
+    rb = distance[:, distance.shape[1] // 2 :, :]
+
     lt = ttnn.to_layout(lt, ttnn.TILE_LAYOUT)
     rb = ttnn.to_layout(rb, ttnn.TILE_LAYOUT)
 

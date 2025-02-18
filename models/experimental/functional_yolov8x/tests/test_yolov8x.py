@@ -2,16 +2,18 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 import sys
 import ttnn
 import time
 import torch
 import pytest
 import torch.nn as nn
+from pathlib import Path
 from loguru import logger
-from models.utility_functions import is_wormhole_b0
+from models.utility_functions import is_wormhole_b0, skip_for_grayskull
 from models.perf.perf_utils import prep_perf_report
-from models.experimental.functional_yolov8x.tt.ttnn_yolov8x import YOLOv8x
+from models.experimental.functional_yolov8x.tt.ttnn_yolov8x import YOLOv8xModel
 from models.experimental.functional_yolov8x.reference import yolov8x_utils
 from models.experimental.functional_yolov8x.tt.ttnn_yolov8x_utils import custom_preprocessor
 from models.utility_functions import enable_persistent_kernel_cache, disable_persistent_kernel_cache
@@ -40,18 +42,46 @@ class Ensemble(nn.ModuleList):
         return y, None
 
 
+def attempt_download(file, repo="ultralytics/assets"):
+    tests = Path(__file__).parent.parent / "reference"
+    file_path = tests / Path(str(file).strip().replace("'", "").lower())
+
+    if not file_path.exists():
+        name = "yolov8x.pt"
+        msg = f"{file_path} missing, try downloading from https://github.com/{repo}/releases/"
+        try:
+            url = f"https://github.com/{repo}/releases/download/v8.3.0/{name}"
+            print(f"Downloading {url} to {file_path}...")
+            torch.hub.download_url_to_file(url, file_path)
+
+            assert file_path.exists() and file_path.stat().st_size > 1e6, f"Download failed for {name}"
+        except Exception as e:
+            print(f"Error downloading from GitHub: {e}. Trying secondary source...")
+
+            url = f"https://storage.googleapis.com/{repo}/ckpt/{name}"
+            print(f"Downloading {url} to {file_path}...")
+            os.system(f"curl -L {url} -o {file_path}")
+
+            if not file_path.exists() or file_path.stat().st_size < 1e6:
+                file_path.unlink(missing_ok=True)
+                print(f"ERROR: Download failure for {msg}")
+            else:
+                print(f"Download succeeded from secondary source!")
+    return file_path
+
+
 def attempt_load(weights, map_location=None):
     model = Ensemble()
     for w in weights if isinstance(weights, list) else [weights]:
-        w = "models/experimental/functional_yolov8x/demo/yolov8x.pt"
-        ckpt = torch.load(w, map_location=map_location)
+        weight_path = attempt_download(w)
+        print("Loading weights from:", weight_path)
+        ckpt = torch.load(weight_path, map_location=map_location)
         model.append(ckpt["ema" if ckpt.get("ema") else "model"].float().eval())
     for m in model.modules():
-        if type(m) in [nn.Hardswish, nn.LeakyReLU, nn.ReLU, nn.ReLU6, nn.SiLU]:
+        if isinstance(m, (nn.Hardswish, nn.LeakyReLU, nn.ReLU, nn.ReLU6, nn.SiLU)):
             m.inplace = True
-        elif type(m) is nn.Upsample:
+        elif isinstance(m, nn.Upsample):
             m.recompute_scale_factor = None
-
     if len(model) == 1:
         return model[-1]
     else:
@@ -61,14 +91,16 @@ def attempt_load(weights, map_location=None):
 
 
 def get_expected_times(name):
-    base = {"yolov8x": (177.47, 4.81)}
+    base = {"yolov8x": (153.35, 0.5827)}
     return base[name]
 
 
+@skip_for_grayskull()
 @pytest.mark.models_performance_bare_metal
+@pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize("batch_size", [(1)])
-@pytest.mark.parametrize("input_tensor", [torch.rand((1, 3, 640, 640))], ids=["input_tensor"])
+@pytest.mark.parametrize("input_tensor", [torch.rand((1, 640, 640, 3))], ids=["input_tensor"])
 def test_yolov8x(device, input_tensor, batch_size):
     disable_persistent_kernel_cache()
 
@@ -82,9 +114,10 @@ def test_yolov8x(device, input_tensor, batch_size):
 
     durations = []
 
+    model = YOLOv8xModel(device, parameters, res=(640, 640))
     for i in range(2):
         start = time.time()
-        ttnn_model_output = YOLOv8x(device, ttnn_input, parameters)[0]
+        ttnn_ouput = model(ttnn_input)
         end = time.time()
         durations.append(end - start)
         enable_persistent_kernel_cache()
@@ -109,10 +142,11 @@ def test_yolov8x(device, input_tensor, batch_size):
     logger.info(f"Samples per second: {1 / inference_time * batch_size}")
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize(
     "batch_size, expected_perf",
     [
-        [1, 10.94],
+        [1, 20.072],
     ],
 )
 @pytest.mark.models_device_performance_bare_metal
@@ -122,7 +156,7 @@ def test_perf_device_bare_metal_yolov8x(batch_size, expected_perf):
     margin = 0.03
     expected_perf = expected_perf if is_wormhole_b0() else 10.94
 
-    command = f"pytest tests/ttnn/integration_tests/yolov8x/test_ttnn_yolov8x.py::test_demo"
+    command = f"pytest tests/ttnn/integration_tests/yolov8x/test_ttnn_yolov8x.py::test_yolov8x_640"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 
     inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"
