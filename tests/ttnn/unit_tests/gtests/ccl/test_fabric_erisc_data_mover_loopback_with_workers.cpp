@@ -3590,6 +3590,17 @@ TEST(EdmFabric, BasicMcastThroughputTest_2) {
 
     RunWriteThroughputStabilityTestWithPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
 }
+TEST(EdmFabric, BasicMcastThroughputTest_3_SingleLink) {
+    const size_t num_mcasts = 200000;
+    const size_t num_unicasts = 0;
+    const size_t num_links = 1;
+    const size_t num_op_invocations = 1;
+    const bool line_sync = true;
+    WriteThroughputStabilityTestWithPersistentFabricParams params;
+    params.line_sync = line_sync;
+    RunWriteThroughputStabilityTestWithPersistentFabric(
+        num_mcasts, num_unicasts, num_links, num_op_invocations, params);
+}
 TEST(EdmFabric, BasicMcastThroughputTest_3) {
     const size_t num_mcasts = 200000;
     const size_t num_unicasts = 2;
