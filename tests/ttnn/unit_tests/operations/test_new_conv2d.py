@@ -83,7 +83,7 @@ def run_conv(
         logger.info(f"Using {num_devices} devices for this test")
     else:
         total_batch_size = batch_size
-
+    print("shard layout is", shard_layout)
     torch.manual_seed(0)
     conv_input_shape = (total_batch_size, input_channels, input_height, input_width)
     conv_weight_shape = (output_channels, input_channels // groups, filter_height, filter_width)
@@ -120,7 +120,12 @@ def run_conv(
             weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32,
             mesh_mapper=weight_mesh_mapper,
         )
-
+    torch_input_tensor = torch_input_tensor.reshape(
+        1,
+        1,
+        torch_input_tensor.shape[0] * torch_input_tensor.shape[1] * torch_input_tensor.shape[2],
+        torch_input_tensor.shape[3],
+    )
     tt_input_tensor = ttnn.from_torch(
         torch_input_tensor,
         activations_dtype if activations_dtype == ttnn.float32 else ttnn.bfloat16,
@@ -179,7 +184,7 @@ def run_conv(
         memory_config=memory_config,
         return_output_dim=True,
     )
-
+    print("output config and shapeis", tt_output_tensor_on_device.memory_config(), tt_output_tensor_on_device.shape)
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
     torch_output_tensor = ttnn.to_torch(tt_output_tensor, mesh_composer=output_mesh_composer)
 
@@ -2851,4 +2856,239 @@ def test_block_sharding_relu_act_block_h(
         config_override=config_override,
         shard_layout=shard_layout,
         activation=activation,
+    )
+
+@skip_for_grayskull()
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 79104}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, input_channels, output_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, groups, config_override, use_shallow_conv_variant",
+    (
+       #bs - 1
+        (1, 3, 64, 320, 800, 7, 7, 2, 2, 3, 3, 1,{"act_block_h": 32}, False),  # 1
+        (1, 64, 64, 80, 200, 3, 3, 1, 1, 1, 1, 1, None, False),  # 2
+        (1, 64, 64, 80, 200, 3, 3, 1, 1, 1, 1, 1, None, False),  # 3
+        (1, 64, 64, 80, 200, 3, 3, 1, 1, 1, 1, 1, None, False),  # 4
+        (1, 64, 64, 80, 200, 3, 3, 1, 1, 1, 1, 1, None, False),  # 5
+        (1, 64, 64, 80, 200, 3, 3, 1, 1, 1, 1, 1, None, False),  # 6
+        (1, 64, 64, 80, 200, 3, 3, 1, 1, 1, 1, 1, None, False),  # 7
+        (1, 64, 128, 80, 200, 3, 3, 2, 2, 1, 1, 1, None, False),  # 8
+        (1, 128, 128, 40, 100, 3, 3, 1, 1, 1, 1, 1, None, False),  # 9
+        (1, 64, 128, 80, 200, 1, 1, 2, 2, 0, 0, 1, None, False),  # 10
+        (1, 128, 128, 40, 100, 3, 3, 1, 1, 1, 1, 1, None, False),  # 11
+        (1, 128, 128, 40, 100, 3, 3, 1, 1, 1, 1, 1, None, False),  # 12
+        (1, 128, 128, 40, 100, 3, 3, 1, 1, 1, 1, 1, None, False),  # 13
+        (1, 128, 128, 40, 100, 3, 3, 1, 1, 1, 1, 1, None, False),  # 14
+        (1, 128, 128, 40, 100, 3, 3, 1, 1, 1, 1, 1, None, False),  # 15
+        (1, 128, 128, 40, 100, 3, 3, 1, 1, 1, 1, 1, None, False),  # 16
+        (1, 128, 256, 40, 100, 3, 3, 2, 2, 1, 1, 1, None, False),  # 17
+        (1, 256, 256, 20, 50, 3, 3, 1, 1, 1, 1, 1, None, False),  # 18
+        (1, 128, 256, 40, 100, 1, 1, 2, 2, 0, 0, 1, None, False),  # 19
+        (1, 256, 256, 20, 50, 3, 3, 1, 1, 1, 1, 1, None, False),  # 20
+        (1, 256, 256, 20, 50, 3, 3, 1, 1, 1, 1, 1, None, False),  # 21
+        (1, 256, 256, 20, 50, 3, 3, 1, 1, 1, 1, 1, None, False),  # 22
+        (1, 256, 256, 20, 50, 3, 3, 1, 1, 1, 1, 1, None, False),  # 23
+        (1, 256, 256, 20, 50, 3, 3, 1, 1, 1, 1, 1, None, False),  # 24
+        (1, 256, 256, 20, 50, 3, 3, 1, 1, 1, 1, 1, None, False),  # 25
+        (1, 256, 256, 20, 50, 3, 3, 1, 1, 1, 1, 1, None, False),  # 26
+        (1, 256, 256, 20, 50, 3, 3, 1, 1, 1, 1, 1, None, False),  # 27
+        (1, 256, 256, 20, 50, 3, 3, 1, 1, 1, 1, 1, None, False),  # 28
+        (1, 256, 256, 20, 50, 3, 3, 1, 1, 1, 1, 1, None, False),  # 29
+        (1, 256, 512, 20, 50, 3, 3, 2, 2, 1, 1, 1, None, False),  # 30
+        (1, 512, 512, 10, 25, 3, 3, 1, 1, 1, 1, 1, None, False),  # 31
+        (1, 256, 512, 20, 50, 1, 1, 2, 2, 0, 0, 1, None, False),  # 32
+        (1, 512, 512, 10, 25, 3, 3, 1, 1, 1, 1, 1, None, False),  # 33
+        (1, 512, 512, 10, 25, 3, 3, 1, 1, 1, 1, 1, None, False),  # 34
+        (1, 512, 512, 10, 25, 3, 3, 1, 1, 1, 1, 1, None, False),  # 35
+        (1, 512, 512, 10, 25, 3, 3, 1, 1, 1, 1, 1, None, False),  # 36
+        (1, 512, 8, 10, 25, 1, 1, 1, 1, 0, 0, 1, None, False),  # 37
+
+    #    bs-2
+        (2, 3, 64, 320, 800, 7, 7, 2, 2, 3, 3, 1, {"act_block_h": 32}, True),  # 1
+        (2, 64, 64, 80, 200, 3, 3, 1, 1, 1, 1, 1, None, False),  # 2
+        (2, 64, 64, 80, 200, 3, 3, 1, 1, 1, 1, 1, None, False),  # 3
+        (2, 64, 64, 80, 200, 3, 3, 1, 1, 1, 1, 1, None, False),  # 4
+        (2, 64, 64, 80, 200, 3, 3, 1, 1, 1, 1, 1, None, False),  # 5
+        (2, 64, 64, 80, 200, 3, 3, 1, 1, 1, 1, 1, None, False),  # 6
+        (2, 64, 64, 80, 200, 3, 3, 1, 1, 1, 1, 1, None, False),  # 7
+        (2, 64, 128, 80, 200, 3, 3, 2, 2, 1, 1, 1, None, False),  # 8
+        (2, 128, 128, 40, 100, 3, 3, 1, 1, 1, 1, 1, None, False),  # 9
+        (2, 64, 128, 80, 200, 1, 1, 2, 2, 0, 0, 1, None, False),  # 10
+        (2, 128, 128, 40, 100, 3, 3, 1, 1, 1, 1, 1, None, False),  # 11
+        (2, 128, 128, 40, 100, 3, 3, 1, 1, 1, 1, 1, None, False),  # 12
+        (2, 128, 128, 40, 100, 3, 3, 1, 1, 1, 1, 1, None, False),  # 13
+        (2, 128, 128, 40, 100, 3, 3, 1, 1, 1, 1, 1, None, False),  # 14
+        (2, 128, 128, 40, 100, 3, 3, 1, 1, 1, 1, 1, None, False),  # 15
+        (2, 128, 128, 40, 100, 3, 3, 1, 1, 1, 1, 1, None, False),  # 16
+        (2, 128, 256, 40, 100, 3, 3, 2, 2, 1, 1, 1, None, False),  # 17
+        (2, 256, 256, 20, 50, 3, 3, 1, 1, 1, 1, 1, None, False),  # 18
+        (2, 128, 256, 40, 100, 1, 1, 2, 2, 0, 0, 1, None, False),  # 19
+        (2, 256, 256, 20, 50, 3, 3, 1, 1, 1, 1, 1, None, False),  # 20
+        (2, 256, 256, 20, 50, 3, 3, 1, 1, 1, 1, 1, None, False),  # 21
+        (2, 256, 256, 20, 50, 3, 3, 1, 1, 1, 1, 1, None, False),  # 22
+        (2, 256, 256, 20, 50, 3, 3, 1, 1, 1, 1, 1, None, False),  # 23
+        (2, 256, 256, 20, 50, 3, 3, 1, 1, 1, 1, 1, None, False),  # 24
+        (2, 256, 256, 20, 50, 3, 3, 1, 1, 1, 1, 1, None, False),  # 25
+        (2, 256, 256, 20, 50, 3, 3, 1, 1, 1, 1, 1, None, False),  # 26
+        (2, 256, 256, 20, 50, 3, 3, 1, 1, 1, 1, 1, None, False),  # 27
+        (2, 256, 256, 20, 50, 3, 3, 1, 1, 1, 1, 1, None, False),  # 28
+        (2, 256, 256, 20, 50, 3, 3, 1, 1, 1, 1, 1, None, False),  # 29
+        (2, 256, 512, 20, 50, 3, 3, 2, 2, 1, 1, 1, None, False),  # 30
+        (2, 512, 512, 10, 25, 3, 3, 1, 1, 1, 1, 1, None, False),  # 31
+        (2, 256, 512, 20, 50, 1, 1, 2, 2, 0, 0, 1, None, False),  # 32
+        (2, 512, 512, 10, 25, 3, 3, 1, 1, 1, 1, 1, None, False),  # 33
+        (2, 512, 512, 10, 25, 3, 3, 1, 1, 1, 1, 1, None, False),  # 34
+        (2, 512, 512, 10, 25, 3, 3, 1, 1, 1, 1, 1, None, False),  # 35
+        (2, 512, 512, 10, 25, 3, 3, 1, 1, 1, 1, 1, None, False),  # 36
+        (2, 512, 8, 10, 25, 1, 1, 1, 1, 0, 0, 1, None, False),  # 37
+
+        # bs-4
+
+        (4, 3, 64, 320, 800, 7, 7, 2, 2, 3, 3, 1, {"act_block_h": 128}, True),  # 1
+        (4, 64, 64, 80, 200, 3, 3, 1, 1, 1, 1, 1, None, False),  # 2
+        (4, 64, 64, 80, 200, 3, 3, 1, 1, 1, 1, 1, None, False),  # 3
+        (4, 64, 64, 80, 200, 3, 3, 1, 1, 1, 1, 1, None, False),  # 4
+        (4, 64, 64, 80, 200, 3, 3, 1, 1, 1, 1, 1, None, False),  # 5
+        (4, 64, 64, 80, 200, 3, 3, 1, 1, 1, 1, 1, None, False),  # 6
+        (4, 64, 64, 80, 200, 3, 3, 1, 1, 1, 1, 1, None, False),  # 7
+        (4, 64, 128, 80, 200, 3, 3, 2, 2, 1, 1, 1, None, False),  # 8
+        (4, 128, 128, 40, 100, 3, 3, 1, 1, 1, 1, 1, None, False),  # 9
+        (4, 64, 128, 80, 200, 1, 1, 2, 2, 0, 0, 1, None, False),  # 10
+        (4, 128, 128, 40, 100, 3, 3, 1, 1, 1, 1, 1, None, False),  # 11
+        (4, 128, 128, 40, 100, 3, 3, 1, 1, 1, 1, 1, None, False),  # 12
+        (4, 128, 128, 40, 100, 3, 3, 1, 1, 1, 1, 1, None, False),  # 13
+        (4, 128, 128, 40, 100, 3, 3, 1, 1, 1, 1, 1, None, False),  # 14
+        (4, 128, 128, 40, 100, 3, 3, 1, 1, 1, 1, 1, None, False),  # 15
+        (4, 128, 128, 40, 100, 3, 3, 1, 1, 1, 1, 1, None, False),  # 16
+        (4, 128, 256, 40, 100, 3, 3, 2, 2, 1, 1, 1, None, False),  # 17
+        (4, 256, 256, 20, 50, 3, 3, 1, 1, 1, 1, 1, None, False),  # 18
+        (4, 128, 256, 40, 100, 1, 1, 2, 2, 0, 0, 1, None, False),  # 19
+        (4, 256, 256, 20, 50, 3, 3, 1, 1, 1, 1, 1, None, False),  # 20
+        (4, 256, 256, 20, 50, 3, 3, 1, 1, 1, 1, 1, None, False),  # 21
+        (4, 256, 256, 20, 50, 3, 3, 1, 1, 1, 1, 1, None, False),  # 22
+        (4, 256, 256, 20, 50, 3, 3, 1, 1, 1, 1, 1, None, False),  # 23
+        (4, 256, 256, 20, 50, 3, 3, 1, 1, 1, 1, 1, None, False),  # 24
+        (4, 256, 256, 20, 50, 3, 3, 1, 1, 1, 1, 1, None, False),  # 25
+        (4, 256, 256, 20, 50, 3, 3, 1, 1, 1, 1, 1, None, False),  # 26
+        (4, 256, 256, 20, 50, 3, 3, 1, 1, 1, 1, 1, None, False),  # 27
+        (4, 256, 256, 20, 50, 3, 3, 1, 1, 1, 1, 1, None, False),  # 28
+        (4, 256, 256, 20, 50, 3, 3, 1, 1, 1, 1, 1, None, False),  # 29
+        (4, 256, 512, 20, 50, 3, 3, 2, 2, 1, 1, 1, None, False),  # 30
+        (4, 512, 512, 10, 25, 3, 3, 1, 1, 1, 1, 1, None, False),  # 31
+        (4, 256, 512, 20, 50, 1, 1, 2, 2, 0, 0, 1, None, False),  # 32
+        (4, 512, 512, 10, 25, 3, 3, 1, 1, 1, 1, 1, None, False),  # 33
+        (4, 512, 512, 10, 25, 3, 3, 1, 1, 1, 1, 1, None, False),  # 34
+        (4, 512, 512, 10, 25, 3, 3, 1, 1, 1, 1, 1, None, False),  # 35
+        (4, 512, 512, 10, 25, 3, 3, 1, 1, 1, 1, 1, None, False),  # 36
+        (4, 512, 8, 10, 25, 1, 1, 1, 1, 0, 0, 1, None, False),  # 37
+
+    # (8, 3, 64, 320, 800, 7, 7, 2, 2, 3, 3, 1, {"act_block_h": 1024}, True),  # 1
+    # (8, 64, 64, 80, 200, 3, 3, 1, 1, 1, 1, 1, None, False),  # 2
+    # (8, 64, 64, 80, 200, 3, 3, 1, 1, 1, 1, 1, None, False),  # 3
+    # (8, 64, 64, 80, 200, 3, 3, 1, 1, 1, 1, 1, None, False),  # 4
+    # (8, 64, 64, 80, 200, 3, 3, 1, 1, 1, 1, 1, None, False),  # 5
+    # (8, 64, 64, 80, 200, 3, 3, 1, 1, 1, 1, 1, None, False),  # 6
+    # (8, 64, 64, 80, 200, 3, 3, 1, 1, 1, 1, 1, None, False),  # 7
+    # (8, 64, 128, 80, 200, 3, 3, 2, 2, 1, 1, 1, None, False),  # 8
+    # (8, 128, 128, 40, 100, 3, 3, 1, 1, 1, 1, 1, None, False),  # 9
+    # (8, 64, 128, 80, 200, 1, 1, 2, 2, 0, 0, 1, None, False),  # 10
+    # (8, 128, 128, 40, 100, 3, 3, 1, 1, 1, 1, 1, None, False),  # 11
+    # (8, 128, 128, 40, 100, 3, 3, 1, 1, 1, 1, 1, None, False),  # 12
+    # (8, 128, 128, 40, 100, 3, 3, 1, 1, 1, 1, 1, None, False),  # 13
+    # (8, 128, 128, 40, 100, 3, 3, 1, 1, 1, 1, 1, None, False),  # 14
+    # (8, 128, 128, 40, 100, 3, 3, 1, 1, 1, 1, 1, None, False),  # 15
+    # (8, 128, 128, 40, 100, 3, 3, 1, 1, 1, 1, 1, None, False),  # 16
+    # (8, 128, 256, 40, 100, 3, 3, 2, 2, 1, 1, 1, None, False),  # 17
+    # (8, 256, 256, 20, 50, 3, 3, 1, 1, 1, 1, 1, None, False),  # 18
+    # (8, 128, 256, 40, 100, 1, 1, 2, 2, 0, 0, 1, None, False),  # 19
+    # (8, 256, 256, 20, 50, 3, 3, 1, 1, 1, 1, 1, None, False),  # 20
+    # (8, 256, 256, 20, 50, 3, 3, 1, 1, 1, 1, 1, None, False),  # 21
+    # (8, 256, 256, 20, 50, 3, 3, 1, 1, 1, 1, 1, None, False),  # 22
+    # (8, 256, 256, 20, 50, 3, 3, 1, 1, 1, 1, 1, None, False),  # 23
+    # (8, 256, 256, 20, 50, 3, 3, 1, 1, 1, 1, 1, None, False),  # 24
+    # (8, 256, 256, 20, 50, 3, 3, 1, 1, 1, 1, 1, None, False),  # 25
+    # (8, 256, 256, 20, 50, 3, 3, 1, 1, 1, 1, 1, None, False),  # 26
+    # (8, 256, 256, 20, 50, 3, 3, 1, 1, 1, 1, 1, None, False),  # 27
+    # (8, 256, 256, 20, 50, 3, 3, 1, 1, 1, 1, 1, None, False),  # 28
+    # (8, 256, 256, 20, 50, 3, 3, 1, 1, 1, 1, 1, None, False),  # 29
+    # (8, 256, 512, 20, 50, 3, 3, 2, 2, 1, 1, 1, None, False),  # 30
+    # (8, 512, 512, 10, 25, 3, 3, 1, 1, 1, 1, 1, None, False),  # 31
+    # (8, 256, 512, 20, 50, 1, 1, 2, 2, 0, 0, 1, None, False),  # 32
+    # (8, 512, 512, 10, 25, 3, 3, 1, 1, 1, 1, 1, None, False),  # 33
+    # (8, 512, 512, 10, 25, 3, 3, 1, 1, 1, 1, 1, None, False),  # 34
+    # (8, 512, 512, 10, 25, 3, 3, 1, 1, 1, 1, 1, None, False),  # 35
+    # (8, 512, 512, 10, 25, 3, 3, 1, 1, 1, 1, 1, None, False),  # 36
+    # (8, 512, 8, 10, 25, 1, 1, 1, 1, 0, 0, 1, None, False),  # 37
+
+
+    ),
+)
+@pytest.mark.parametrize(
+    "weights_dtype",
+    [ttnn.bfloat8_b],
+)
+@pytest.mark.parametrize(
+    "activations_dtype",
+    [ttnn.bfloat8_b],
+)
+@pytest.mark.parametrize("memory_config", [ttnn.L1_MEMORY_CONFIG])
+@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
+@pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT])
+def test_conv_ultra_fastlane_detection_v2_tusimple(
+    device,
+    use_program_cache,
+    math_fidelity,
+    activations_dtype,
+    weights_dtype,
+    batch_size,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    pad_h,
+    pad_w,
+    config_override,
+    use_shallow_conv_variant,
+    groups,
+    output_layout,
+    memory_config,
+):
+    torch_tensor_map={}
+    dilation=1
+    if output_channels == 8:
+        activation=""
+    else:
+        activation="relu"
+    if input_channels ==3:
+        activations_dtype = ttnn.bfloat8_b
+    run_conv(
+        device,
+        torch_tensor_map,
+        math_fidelity,
+        activations_dtype,
+        weights_dtype,
+        batch_size,
+        output_channels,
+        input_channels,
+        input_height,
+        input_width,
+        filter_height,
+        filter_width,
+        stride_h,
+        stride_w,
+        pad_h,
+        pad_w,
+        config_override,
+        dilation,
+        use_shallow_conv_variant=use_shallow_conv_variant,
+        groups=groups,
+        output_layout=output_layout,
+        has_bias=False,
+        # memory_config=memory_config,
+        activation=activation,
+        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        # auto_shard=True
     )
