@@ -35,7 +35,7 @@ def get_device_freq():
     return freq
 
 
-def profile_results(sample_size, sample_count, channel_count, num_directions, test_latency, file_name):
+def profile_results(sample_size, sample_count, channel_count, benchmark_type, test_latency, file_name):
     freq = get_device_freq() / 1000.0
     setup = device_post_proc_config.default_setup()
     setup.deviceInputLog = profiler_log_path
@@ -60,7 +60,7 @@ def profile_results(sample_size, sample_count, channel_count, num_directions, te
     if test_latency == 1:
         main_loop_latency = main_loop_cycle / freq
         header = [
-            "NUM_DIRECTIONS",
+            "BENCHMARK ID",
             "SAMPLE_SIZE",
             "LATENCY (ns)",
         ]
@@ -69,7 +69,7 @@ def profile_results(sample_size, sample_count, channel_count, num_directions, te
         main_loop_latency = main_loop_cycle / freq / sample_count / channel_count
         bw = sample_size / main_loop_latency
         header = [
-            "NUM_DIRECTIONS",
+            "BENCHMARK ID",
             "SAMPLE_SIZE",
             "BW (B/c)",
         ]
@@ -78,7 +78,7 @@ def profile_results(sample_size, sample_count, channel_count, num_directions, te
     append_to_csv(
         file_name,
         header,
-        [num_directions, sample_size, res],
+        [benchmark_type, sample_size, res],
         write_header,
     )
     return main_loop_latency
