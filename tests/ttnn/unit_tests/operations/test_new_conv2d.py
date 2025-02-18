@@ -93,7 +93,7 @@ def run_conv(
     torch_input_tensor = torch.permute(torch_input_tensor_nchw, (0, 2, 3, 1))
 
     torch_weight_tensor = randomize_torch_tensor(torch_tensor_map, conv_weight_shape)
-    torch_bias_tensor = randomize_torch_tensor(torch_tensor_map, conv_bias_shape) if has_bias else None
+    torch_bias_tensor = randomize_torch_tensor(torch_tensor_map, conv_bias_shape) * 10 if has_bias else None
 
     torch_out_golden_tensor = torch.nn.functional.conv2d(
         torch_input_tensor_nchw,
@@ -111,6 +111,7 @@ def run_conv(
         torch_weight_tensor,
         weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32,
         mesh_mapper=weight_mesh_mapper,
+        device=device,
     )
     tt_bias_tensor = None
     if has_bias:
@@ -118,6 +119,7 @@ def run_conv(
             torch_bias_tensor,
             weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32,
             mesh_mapper=weight_mesh_mapper,
+            device=device,
         )
 
     tt_input_tensor = ttnn.from_torch(
@@ -138,6 +140,7 @@ def run_conv(
         output_layout=output_layout,
         transpose_shards=transpose_shards,
         preprocess_weights_on_device=preprocess_weights_on_device,
+        always_preprocess_weights=True,
     )
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -157,7 +160,7 @@ def run_conv(
             conv_config.override_sharding_config = True
             print("Setting num_cores_nhw to 98")
 
-    [tt_output_tensor_on_device, [out_height, out_width]] = ttnn.conv2d(
+    [tt_output_tensor_on_device, [out_height, out_width], [d_w, d_b]] = ttnn.conv2d(
         input_tensor=tt_input_tensor,
         weight_tensor=tt_weight_tensor,
         in_channels=input_channels,
@@ -178,6 +181,7 @@ def run_conv(
         groups=groups,
         memory_config=memory_config,
         return_output_dim=True,
+        return_weights_and_bias=True,
     )
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
     torch_output_tensor = ttnn.to_torch(tt_output_tensor, mesh_composer=output_mesh_composer)
