@@ -221,3 +221,6 @@ def test_create_pipeline_json_for_gtest_testcases(workflow_run_gh_environment):
             assert job.job_success is False
             # check that there are failing pytests stored in the pydantic testcase list
             assert len([x for x in job.tests if not x.success]) > 0
+
+    # fails validation, job is expected be skipped
+    assert len([x for x in pipeline.jobs if x.github_job_id == 37190219113]) == 0
