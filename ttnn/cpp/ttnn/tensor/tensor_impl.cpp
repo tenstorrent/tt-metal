@@ -90,7 +90,7 @@ std::shared_ptr<distributed::MeshBuffer> allocate_mesh_buffer_on_device(
     return distributed::MeshBuffer::create(replicated_buffer_config, device_local_buffer_config, mesh_device);
 }
 
-void validate_on_device_dtype_and_layout(IDevice* device, const ttnn::Shape& shape, DataType dtype, Layout layout) {
+void validate_on_device_dtype_and_layout(const ttnn::Shape& shape, DataType dtype, Layout layout) {
     // TODO: Get supported layout and dtypes from device
     auto supported_dtype = [&dtype]() {
         TT_ASSERT(
