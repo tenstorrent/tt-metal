@@ -87,10 +87,12 @@ TestResult mem_bench_page_sizing(benchmark::State& state) {
     auto src_data = gen_src_data(ctx.total_size);
     auto hugepage = get_hugepage(k_DeviceId, 0);
     auto hugepage_size = get_hugepage_size(k_DeviceId);
+    bool cached = state.range(2);
 
     for (auto _ : state) {
-        auto iteration_time = copy_to_hugepage<false>(hugepage, hugepage_size, src_data, ctx.total_size, ctx.page_size);
-
+        const double iteration_time =
+            cached ? copy_to_hugepage<true>(hugepage, hugepage_size, src_data, ctx.total_size, ctx.page_size)
+                   : copy_to_hugepage<false>(hugepage, hugepage_size, src_data, ctx.total_size, ctx.page_size);
         results.host_bytes_processed += ctx.total_size;
         results.host_time_elapsed += iteration_time;
 
@@ -418,6 +420,14 @@ void register_basic_benchmark_suite() {
         ->ArgsProduct({
             {1_GB},
             {16, 8_KB, 16_KB, 32_KB},
+            {false},
+        });
+    ::benchmark::RegisterBenchmark("Host Copy (Cached)", mem_bench_page_sizing)
+        ->Apply(global_bench_args)
+        ->ArgsProduct({
+            {1_GB},
+            {16, 8_KB, 16_KB, 32_KB},
+            {true},
         });
     ::benchmark::RegisterBenchmark("Host Copy Saturation", mem_bench_copy_multithread)
         ->Apply(global_bench_args)
