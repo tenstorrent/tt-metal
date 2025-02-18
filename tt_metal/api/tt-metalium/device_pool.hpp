@@ -36,9 +36,11 @@ public:
     DevicePool(DevicePool&& other) noexcept = delete;
 
     static DevicePool& instance() noexcept {
-        TT_ASSERT(_inst != nullptr, "Trying to get DevicePool without initializing it");
+        TT_ASSERT((_inst != nullptr) and (_inst->initialized), "Trying to get DevicePool without initializing it");
         return *_inst;
     }
+
+    static void initialize_fabric_setting(detail::FabricSetting fabric_setting) noexcept;
 
     static void initialize(
         const std::vector<chip_id_t>& device_ids,
@@ -56,6 +58,8 @@ public:
     void register_worker_thread_for_device(IDevice* device, std::thread::id worker_thread_id);
     void unregister_worker_thread_for_device(IDevice* device);
     const std::unordered_set<std::thread::id>& get_worker_thread_ids() const;
+
+    tt::tt_fabric::ControlPlane* get_control_plane() const;
 
 private:
     ~DevicePool();
@@ -77,6 +81,11 @@ private:
     bool skip_remote_devices;
     std::unordered_set<uint32_t> firmware_built_keys;
 
+    detail::FabricSetting fabric_setting = detail::FabricSetting::DEFAULT;
+    std::unique_ptr<tt::tt_fabric::ControlPlane> control_plane;
+
+    bool initialized = false;
+
     // Determine which CPU cores the worker threads need to be placed on for each device
     std::unordered_map<uint32_t, uint32_t> worker_thread_to_cpu_core_map;
     std::unordered_map<uint32_t, uint32_t> completion_queue_reader_to_cpu_core_map;
@@ -85,7 +94,12 @@ private:
     void activate_device(chip_id_t id);
     void initialize_device(IDevice* dev) const;
     void add_devices_to_pool(const std::vector<chip_id_t>& device_ids);
+    void wait_for_fabric_master_router_sync() const;
     IDevice* get_device(chip_id_t id) const;
+
+    // Fabric setup helper functions
+    void initialize_control_plane();
+
     static DevicePool* _inst;
 };
 

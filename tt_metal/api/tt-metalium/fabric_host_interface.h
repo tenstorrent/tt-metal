@@ -17,10 +17,10 @@
 // TODO: move routing table here
 namespace tt::tt_fabric {
 
-constexpr uint32_t GATEKEEPER_INFO_SIZE_BYTES = 848;
-
 using chan_id_t = std::uint8_t;
 using routing_plane_id_t = std::uint8_t;
+
+static constexpr std::uint32_t DEFAULT_ROUTER_RX_QUEUE_SIZE_BYTES = 0x8000;  // maximum queue (power of 2);
 
 static constexpr std::uint32_t MAX_MESH_SIZE = 1024;
 static constexpr std::uint32_t MAX_NUM_MESHES = 1024;
