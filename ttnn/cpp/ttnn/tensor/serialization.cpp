@@ -27,7 +27,7 @@ namespace {
 struct FileCloser {
     void operator()(FILE* file) const {
         if (file) {
-            fclose(file);
+            TT_ASSERT(fclose(file) == 0, "Failed to close file");
         }
     }
 };
