@@ -34,7 +34,7 @@ jobs:
     runs-on:
       - ${{ inputs.runner-label }}
       - cloud-virtual-machine
-      - in-service
+      #- in-service
     container:
       image: ${{ inputs.docker-image }}
       env:
