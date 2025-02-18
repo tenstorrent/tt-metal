@@ -349,6 +349,7 @@ constexpr uint32_t FABRIC_ROUTER_MISC_START = eth_l1_mem::address_map::ERISC_L1_
 constexpr uint32_t FABRIC_ROUTER_MISC_SIZE = 256;
 constexpr uint32_t FABRIC_ROUTER_SYNC_SEM = FABRIC_ROUTER_MISC_START;
 constexpr uint32_t FABRIC_ROUTER_SYNC_SEM_SIZE = 16;
+static_assert(FABRIC_ROUTER_SYNC_SEM == eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE);
 
 // Fabric Virtual Control Channel start/size
 constexpr uint32_t FVCC_OUT_BUF_START = FABRIC_ROUTER_MISC_START + FABRIC_ROUTER_MISC_SIZE;

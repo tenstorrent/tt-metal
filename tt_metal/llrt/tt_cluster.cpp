@@ -130,9 +130,10 @@ void Cluster::detect_arch_and_target() {
         this->target_type_);
 }
 
-bool Cluster::is_galaxy_cluster() const {
-    return this->is_tg_cluster_;
-}
+// TODO: remove this when we deprecate TG
+bool Cluster::is_galaxy_cluster() const { return this->cluster_type_ == ClusterType::TG; }
+
+ClusterType Cluster::get_cluster_type() const { return this->cluster_type_; }
 
 BoardType Cluster::get_board_type(chip_id_t chip_id) const {
   return this->cluster_desc_->get_board_type(chip_id);
@@ -145,11 +146,31 @@ void Cluster::generate_cluster_descriptor() {
         this->cluster_desc_ = tt_ClusterDescriptor::create_mock_cluster(tt_SimulationDevice::detect_available_device_ids(), this->arch_);
     } else {
         this->cluster_desc_ = tt_ClusterDescriptor::create_from_yaml(tt_ClusterDescriptor::get_cluster_descriptor_file_path());
+
+        // Detect cluster type
         for (const auto &chip_id : this->cluster_desc_->get_all_chips()) {
             if (this->cluster_desc_->get_board_type(chip_id) == BoardType::GALAXY) {
-                this->is_tg_cluster_ = true;
+                this->cluster_type_ = ClusterType::TG;
                 break;
             }
+        }
+        bool all_n300 = true;
+        for (const auto& chip_id : this->cluster_desc_->get_all_chips()) {
+            if (this->cluster_desc_->get_board_type(chip_id) == BoardType::N300) {
+                all_n300 &= (this->cluster_desc_->get_board_type(chip_id) == BoardType::N300);
+            }
+        }
+        if (all_n300) {
+            if (this->cluster_desc_->get_all_chips().size() == 1) {
+                this->cluster_type_ = ClusterType::N300;
+            } else if (this->cluster_desc_->get_all_chips().size() == 8) {
+                this->cluster_type_ = ClusterType::T3K;
+            }
+        }
+
+        if ((this->cluster_desc_->get_all_chips().size() == this->cluster_desc_->get_chips_with_mmio().size()) and
+            (this->cluster_desc_->get_all_chips().size() == 32)) {
+            this->cluster_type_ = ClusterType::GALAXY;
         }
     }
 
@@ -168,7 +189,7 @@ void Cluster::generate_cluster_descriptor() {
     }
 
     uint32_t total_num_hugepages = tt::umd::get_num_hugepages();
-    if (this->is_tg_cluster_) {
+    if (this->cluster_type_ == ClusterType::TG) {
         // TODO: don't think this check is correct, we want to have total num hugepages == num chips even for Galaxy
         TT_FATAL(
             this->arch_ == tt::ARCH::BLACKHOLE or total_num_hugepages >= this->cluster_desc_->get_all_chips().size()/4,
@@ -177,8 +198,8 @@ void Cluster::generate_cluster_descriptor() {
             this->cluster_desc_->get_all_chips().size()/4,
             this->cluster_desc_->get_all_chips().size(),
             total_num_hugepages);
-    } else if (this->target_type_ != TargetDevice::Simulator){
-    // TODO (abhullar): ignore hugepage set up for BH bringup
+    } else if (this->target_type_ != TargetDevice::Simulator) {
+        // TODO (abhullar): ignore hugepage set up for BH bringup
         TT_FATAL(
             this->arch_ == tt::ARCH::BLACKHOLE or total_num_hugepages >= this->cluster_desc_->get_all_chips().size(),
             "Machine setup error: Insufficient number of hugepages available, expected one per device ({}) but have {}. "
