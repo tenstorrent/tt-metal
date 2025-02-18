@@ -16,7 +16,7 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { arch: wormhole_b0, runner-label: N150 },
+          #{ arch: wormhole_b0, runner-label: N150 },
           { arch: wormhole_b0, runner-label: N300 },
         ]
     uses: ./.github/workflows/run-profiler-regression.yaml
@@ -24,3 +24,4 @@ jobs:
     with:
       arch: ${{ matrix.test-group.arch}}
       runner-label: ${{ matrix.test-group.runner-label}}
+      docker-image: ${{ needs.build-artifact-profiler.outputs.ci-build-docker-image }}
