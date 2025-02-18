@@ -64,7 +64,8 @@ void print_pkt_header(volatile tt::fabric::PacketHeader *const packet_start) {
 
 
 // Since we unicast to local, we must omit the packet header
-FORCE_INLINE void execute_chip_unicast_to_local_chip(volatile tt::fabric::PacketHeader *const packet_start, uint32_t transaction_id) {
+FORCE_INLINE void execute_chip_unicast_to_local_chip(
+    volatile tt::fabric::PacketHeader *const packet_start, uint16_t payload_size_bytes, uint32_t transaction_id) {
     // TODO [volatile-use]: do word-based reads of packet header when enterring the fwd packet path
     //                      we end up grabbing many individual fields from the same word region
     //                      which will resolve as many separate loads
@@ -72,7 +73,6 @@ FORCE_INLINE void execute_chip_unicast_to_local_chip(volatile tt::fabric::Packet
     uint32_t payload_start_address = reinterpret_cast<size_t>(packet_start) + sizeof(tt::fabric::PacketHeader);
 
     tt::fabric::NocSendType noc_send_type = packet_start->noc_send_type;
-    auto const payload_size_bytes = header.payload_size_bytes;
     switch (noc_send_type) {
         case tt::fabric::NocSendType::NOC_UNICAST_WRITE: {
             auto const dest_address = header.command_fields.unicast_write.noc_address;
@@ -131,6 +131,7 @@ FORCE_INLINE void update_packet_header_for_next_hop(volatile tt::fabric::PacketH
 template <uint8_t NUM_SENDER_BUFFERS>
 FORCE_INLINE void forward_payload_to_downstream_edm(
     volatile tt::fabric::PacketHeader *packet_header,
+    uint16_t payload_size_bytes,
     tt::fabric::RoutingFields cached_routing_fields,
     tt::fabric::EdmToEdmSender<NUM_SENDER_BUFFERS> &downstream_edm_interface,
     uint8_t transaction_id
@@ -144,6 +145,7 @@ FORCE_INLINE void forward_payload_to_downstream_edm(
     update_packet_header_for_next_hop(packet_header, cached_routing_fields);
     downstream_edm_interface.send_payload_non_blocking_from_address_with_trid(
         reinterpret_cast<size_t>(packet_header),
-        packet_header->get_payload_size_including_header(),
+        payload_size_bytes + sizeof(tt::fabric::PacketHeader),
+        // packet_header->get_payload_size_including_header(),
         transaction_id);
 }
