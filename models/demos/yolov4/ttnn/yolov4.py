@@ -26,7 +26,6 @@ from models.demos.yolov4.ttnn.genboxes import TtGenBoxes
 
 class TtYOLOv4:
     def __init__(self, path, device) -> None:
-
         if type(path) is str:
             self.torch_model = torch.load(path)
         else:

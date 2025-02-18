@@ -554,4 +554,3 @@ def do_detect(model, img, conf_thresh, nms_thresh, n_classes, device=None, class
             class_names = load_class_names(class_name)
             img = cv2.imread(imgfile)
             plot_boxes_cv2(img, boxes[0], "torch_prediction_demo.jpg", class_names)
-
