@@ -77,10 +77,10 @@ def test_tensor_preallocation_and_write_apis(
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
         ttnn.copy_host_to_device_tensor(tt_input_tensor_a, preallocated_tensor)
-        readback_tensors = ttnn.to_torch(
-            preallocated_tensor.cpu().to(ttnn.ROW_MAJOR_LAYOUT),
-            mesh_composer=ttnn.ListMeshToTensor(mesh_device),
-        )
+        readback_tensors = [
+            ttnn.to_torch(shard)
+            for shard in ttnn.get_device_tensors(preallocated_tensor.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
+        ]
         for readback_tensor in readback_tensors:
             allclose, output = comp_pcc(readback_tensor, input_tensor_a)
             assert allclose, f"FAILED: {output}"

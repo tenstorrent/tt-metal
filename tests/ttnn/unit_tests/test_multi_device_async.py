@@ -84,7 +84,7 @@ def test_multi_device_check_per_device_shard(pcie_mesh_device, layout, memory_co
 @pytest.mark.parametrize("memory_config", [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG])
 def test_multi_device_replicate(pcie_mesh_device, shape, layout, memory_config):
     """Test ReplicateTensorToMesh to broadcast a tensor across multiple devices"""
-    from ttnn import ReplicateTensorToMesh, ListMeshToTensor
+    from ttnn import ReplicateTensorToMesh
 
     pcie_mesh_device.enable_async(True)
 
@@ -100,9 +100,9 @@ def test_multi_device_replicate(pcie_mesh_device, shape, layout, memory_config):
         )
         ttnn_tensor = ttnn.to_device(ttnn_tensor, pcie_mesh_device)
         ttnn_loop_back_tensor = ttnn.from_device(ttnn_tensor)
-        loopback_replicated_tensors = ttnn.to_torch(
-            ttnn_loop_back_tensor, mesh_composer=ListMeshToTensor(pcie_mesh_device)
-        )
+        loopback_replicated_tensors = [
+            ttnn.to_torch(shard) for shard in ttnn.get_device_tensors(ttnn_loop_back_tensor.cpu())
+        ]
         for loopback_replicated_tensor in loopback_replicated_tensors:
             assert torch.all(full_tensor == loopback_replicated_tensor)
 
@@ -114,7 +114,7 @@ def test_multi_device_replicate(pcie_mesh_device, shape, layout, memory_config):
 @pytest.mark.parametrize("dtype", [ttnn.bfloat8_b])
 def test_ttnn_to_multi_device_tilized_parallel(pcie_mesh_device, layout, memory_config, dtype):
     """Test multi chip layout conversions on worker threads"""
-    from ttnn import ShardTensorToMesh, ConcatMeshToTensor, ListMeshToTensor
+    from ttnn import ShardTensorToMesh, ConcatMeshToTensor
 
     shard_dim = 3
     pcie_mesh_device.enable_async(True)
@@ -134,9 +134,7 @@ def test_ttnn_to_multi_device_tilized_parallel(pcie_mesh_device, layout, memory_
             )
         else:
             # Test Mesh Composer
-            readback_tensors = ttnn.to_torch(
-                ttnn_tensor, mesh_composer=ListMeshToTensor(pcie_mesh_device), device=pcie_mesh_device
-            )
+            readback_tensors = [ttnn.to_torch(shard) for shard in ttnn.get_device_tensors(ttnn_tensor.cpu())]
             readback_tensor = torch.cat(readback_tensors, dim=shard_dim)
         assert torch.all(readback_tensor == torch_tensor)
     pcie_mesh_device.enable_async(False)
@@ -320,7 +318,7 @@ def test_add_1D_tensor_and_scalar(pcie_mesh_device, scalar, size):
         mesh_mapper=ttnn.ReplicateTensorToMesh(pcie_mesh_device),
     )
     output_tensor = input_tensor + scalar
-    output_tensors = ttnn.to_torch(output_tensor, mesh_composer=ttnn.ListMeshToTensor(pcie_mesh_device))
+    output_tensors = [ttnn.to_torch(shard) for shard in ttnn.get_device_tensors(output_tensor.cpu())]
     for output_tensor in output_tensors:
         assert ttnn.pearson_correlation_coefficient(torch_output_tensor, output_tensor) >= 0.99988
         assert output_tensor.shape == (1, size)
