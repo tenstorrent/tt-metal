@@ -68,7 +68,12 @@ jobs:
       - name: Set up dynamic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-      - uses: ./.github/actions/ensure-active-weka-mount
+      - name: Verify Weka availability
+        run: |
+          if [ ! -d "/mnt/MLPerf/bit_error_tests" ]; then
+            echo "::error title=weka-not-mounted::NFS drive is not mounted; machine not properly provisioned."
+            exit 1
+          fi
       - uses: actions/download-artifact@v4
         with:
           name: TTMetal_build_any
