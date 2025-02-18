@@ -3,44 +3,51 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/tensor/storage.hpp"
+#include "tt-metalium/mesh_coord.hpp"
 
 namespace tt::tt_metal {
 
-std::vector<std::shared_ptr<Buffer>> MultiDeviceStorage::get_buffers() const {
-    std::lock_guard<std::mutex> lock(buffer_mtx);
-    std::vector<std::shared_ptr<Buffer>> buf_vec;
-    buf_vec.reserve(buffers.size());
-    for (const auto& pair : buffers) {
-        buf_vec.push_back(pair.second);
-    }
-    return buf_vec;
+DeviceStorage::DeviceStorage(std::shared_ptr<Buffer> buffer_) {
+    TT_THROW("DeviceStorage not implemented for Buffer");
+    buffer = std::move(buffer_);
 }
 
-MultiDeviceStorage::MultiDeviceStorage(
-    const std::shared_ptr<distributed::MeshBuffer>& mesh_buffer_, const TensorSpec& tensor_spec) :
-    strategy(ReplicateTensor{}),
-    mesh_buffer(mesh_buffer_)  //
-{
-    // TODO: #17215 - In the long term, this code won't exist: no interactions will be made with individual Buffers, and
-    // instead the APIs will use MeshBuffer directly. MeshBuffer will also guarantee that all shards have the same
-    // tensor spec.
-    //
-    // For now, this code ensures MeshBuffer backed tensors are compatible with the rest of the ops infra.
-    const auto [num_rows, num_cols] = mesh_buffer->device()->shape();
-
-    ordered_device_ids.reserve(num_rows * num_cols);
-    buffers.reserve(num_rows * num_cols);
-    specs.reserve(num_rows * num_cols);
-
-    for (int row = 0; row < num_rows; ++row) {
-        for (int col = 0; col < num_cols; ++col) {
-            auto buffer = mesh_buffer->get_device_buffer(distributed::MeshCoordinate(row, col));
-            const int device_id = buffer->device()->id();
-            ordered_device_ids.push_back(device_id);
-            buffers.emplace(device_id, std::move(buffer));
-            specs.emplace(device_id, tensor_spec);
-        }
+MemoryConfig DeviceStorage::memory_config() const {
+    if (this->mesh_buffer.get() == nullptr) {
+        TT_THROW("MemoryConfig can only be obtained if the buffer is not null");
     }
+    // TT_THROW("MemoryConfig not implemented for mesh buffer");
+
+    const auto& buffer = this->mesh_buffer->get_device_buffer(tt::tt_metal::distributed::MeshCoordinate(0, 0));
+    std::optional<ShardSpec> shard_spec = std::nullopt;
+
+    if (is_sharded(buffer->buffer_layout())) {
+        shard_spec = buffer->shard_spec().tensor_shard_spec;
+    }
+    return MemoryConfig{
+        .memory_layout = buffer->buffer_layout(), .buffer_type = buffer->buffer_type(), .shard_spec = shard_spec};
+}
+
+DeviceStorage::DeviceStorage(std::shared_ptr<distributed::MeshBuffer> mesh_buffer_) :
+    mesh_buffer(std::move(mesh_buffer_)) {}
+
+void DeviceStorage::insert_buffer(const std::shared_ptr<Buffer>& buffer_) {
+    // this->buffer = buffer_;
+    TT_THROW("insert_buffer not implemented for mesh buffer");
+}
+
+std::shared_ptr<Buffer> DeviceStorage::get_buffer() const {
+    if (this->mesh_buffer.get() == nullptr) {
+        TT_THROW("get_buffer not implemented for mesh buffer");
+    }
+    return this->mesh_buffer->get_device_buffer(tt::tt_metal::distributed::MeshCoordinate(0, 0));
+}
+
+bool DeviceStorage::is_allocated() const {
+    if (this->mesh_buffer.get() == nullptr) {
+        TT_THROW("is_allocated not implemented for mesh buffer");
+    }
+    return this->mesh_buffer->is_allocated();
 }
 
 }  // namespace tt::tt_metal

@@ -85,31 +85,40 @@ void apply(const Tensor& tensor, const std::function<void(const Tensor&)>& calla
 
 std::vector<IDevice*> get_devices(const Tensor& tensor) {
     std::vector<IDevice*> devices;
-    if (tensor.storage_type() == tt::tt_metal::StorageType::MULTI_DEVICE) {
-        TT_ASSERT(
-            std::holds_alternative<tt::tt_metal::MultiDeviceStorage>(tensor.get_storage()),
-            "Unexpected type {}",
-            tt::stl::get_active_type_name_in_variant(tensor.get_storage()));
-        const auto& tensor_storage = std::get<tt::tt_metal::MultiDeviceStorage>(tensor.get_storage());
-        for (int i = 0; i < tensor_storage.ordered_device_ids.size(); ++i) {
-            auto device_id = tensor_storage.ordered_device_ids[i];
-            devices.push_back(tensor_storage.get_buffer_for_device_id(device_id)->device());
+    /*
+        if (tensor.storage_type() == tt::tt_metal::StorageType::MULTI_DEVICE) {
+            TT_ASSERT(
+                std::holds_alternative<tt::tt_metal::MultiDeviceStorage>(tensor.get_storage()),
+                "Unexpected type {}",
+                tt::stl::get_active_type_name_in_variant(tensor.get_storage()));
+            const auto& tensor_storage = std::get<tt::tt_metal::MultiDeviceStorage>(tensor.get_storage());
+            for (int i = 0; i < tensor_storage.ordered_device_ids.size(); ++i) {
+                auto device_id = tensor_storage.ordered_device_ids[i];
+                devices.push_back(tensor_storage.get_buffer_for_device_id(device_id)->device());
+            }
+            return devices;
+        } else {
+            TT_THROW("Tensor is not a multi-device tensor");
         }
-        return devices;
-    } else {
-        TT_THROW("Tensor is not a multi-device tensor");
-    }
+    */
+    TT_THROW("Not implemented");
 }
 
 uint32_t num_buffers_in_tensor(const Tensor& tensor) {
+    /*
     if (std::holds_alternative<MultiDeviceStorage>(tensor.get_storage())) {
         auto device_storage = std::get<tt::tt_metal::MultiDeviceStorage>(tensor.get_storage());
         return device_storage.num_buffers();
-    } else if (std::holds_alternative<MultiDeviceHostStorage>(tensor.get_storage())) {
+    } else {
+    */
+
+    if (std::holds_alternative<MultiDeviceHostStorage>(tensor.get_storage())) {
         auto host_storage = std::get<tt::tt_metal::MultiDeviceHostStorage>(tensor.get_storage());
         return host_storage.num_buffers();
+    } else if (std::holds_alternative<DeviceStorage>(tensor.get_storage())) {
+        TT_THROW("Not implemented");
+        return 1;
     } else if (
-        std::holds_alternative<DeviceStorage>(tensor.get_storage()) ||
         std::holds_alternative<OwnedStorage>(tensor.get_storage()) ||
         std::holds_alternative<BorrowedStorage>(tensor.get_storage())) {
         return 1;
@@ -127,10 +136,13 @@ Tensor get_shard_for_device(const Tensor& tensor, IDevice* target_device, std::o
             // Stalling reads for tensor data-type and layout are needed here
             // since some worker might have raced ahead to these lookups, while
             // another worker is populating this metadata.
+            /*
             if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
                 return Tensor{
                     DeviceStorage{s.get_buffer_for_device(target_device)}, s.get_tensor_spec_for_device(target_device)};
-            } else if constexpr (std::is_same_v<T, MultiDeviceHostStorage>) {
+            } else {
+            */
+            if constexpr (std::is_same_v<T, MultiDeviceHostStorage>) {
                 return Tensor{
                     OwnedStorage{s.get_buffer(buffer_index.value())}, s.get_tensor_spec(buffer_index.value())};
             } else if constexpr (
@@ -156,11 +168,14 @@ void insert_buffer_and_shape_for_device(
                     buffer_index.value(),
                     std::get<OwnedStorage>(shard.tensor_attributes->storage).get_buffer(),
                     shard.tensor_attributes->tensor_spec);
-            } else if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
-                s.insert_buffer_and_spec_for_device(
-                    target_device,
-                    std::get<DeviceStorage>(shard.tensor_attributes->storage).get_buffer(),
-                    shard.tensor_attributes->tensor_spec);
+                /*
+                }
+    else if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
+                    s.insert_buffer_and_spec_for_device(
+                        target_device,
+                        std::get<DeviceStorage>(shard.tensor_attributes->storage).get_buffer(),
+                        shard.tensor_attributes->tensor_spec);
+    */
             } else if constexpr (std::is_same_v<T, OwnedStorage>) {
                 s.insert_buffer(std::get<OwnedStorage>(shard.tensor_attributes->storage).get_buffer());
             } else if constexpr (std::is_same_v<T, DeviceStorage>) {

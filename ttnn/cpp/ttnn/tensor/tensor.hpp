@@ -81,6 +81,7 @@ public:
     std::shared_ptr<TensorAttributes> tensor_attributes = nullptr;
 
     // Tensor gets worker queue handle through the device
+    std::optional<distributed::MeshDevice*> mesh_device_ = std::nullopt;
     std::vector<IDevice*> workers = {};
 
     // ======================================================================================
@@ -108,6 +109,7 @@ public:
     explicit Tensor(
         uint32_t num_buffers, std::optional<DistributedTensorConfig> distributed_tensor_config = std::nullopt);
     explicit Tensor(const std::vector<IDevice*>& workers);
+    explicit Tensor(distributed::MeshDevice* mesh_device);
 
     Tensor(const Tensor& other);
 
@@ -124,6 +126,7 @@ public:
             this->workers = std::move(other.workers);
             this->tensor_attributes = std::move(other.tensor_attributes);
         }
+        this->mesh_device_ = std::move(other.mesh_device_);
         return *this;
     }
 
@@ -138,6 +141,8 @@ public:
     void deallocate(bool force = false);
 
     std::vector<IDevice*> get_workers(bool blocking = false) const;
+
+    void set_device(distributed::MeshDevice* mesh_device) { mesh_device_ = mesh_device; }
 
     // Converts a buffer of elements of type `T` to a `Tensor`.
     // Elements in the buffer are assumed to be stored in row-major order. The size of the buffer and the type of the
@@ -271,13 +276,6 @@ public:
         if (storage_type == tt::tt_metal::StorageType::DEVICE) {
             auto storage = std::get<DeviceStorage>(this->get_storage());
             return std::vector<Buffer*>{storage.get_buffer().get()};
-        } else if (storage_type == tt::tt_metal::StorageType::MULTI_DEVICE) {
-            std::vector<Buffer*> buffers;
-            auto storage = std::get<MultiDeviceStorage>(this->get_storage());
-            for (const auto& buffer : storage.get_buffers()) {
-                buffers.push_back(buffer.get());
-            }
-            return buffers;
         } else {
             TT_THROW("Cannot get buffers from a tensor with non-device storage.");
         }
@@ -293,6 +291,9 @@ public:
     std::shared_ptr<Buffer> device_buffer() const { return std::get<DeviceStorage>(this->get_storage()).get_buffer(); }
 
     IDevice* device() const {
+        if (this->mesh_device_.has_value()) {
+            return this->mesh_device_.value();
+        }
         if (this->storage_type() == tt::tt_metal::StorageType::DEVICE) {
             auto buffer = this->buffer();
             if (buffer == nullptr) {

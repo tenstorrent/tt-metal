@@ -470,13 +470,11 @@ void dump_tensor(
                 dump_borrowed_storage(output_file, storage);
             } else if constexpr (std::is_same_v<StorageType, DeviceStorage>) {
                 TT_THROW("Device storage isn't supported");
-            } else if constexpr (std::is_same_v<StorageType, MultiDeviceStorage>) {
-                TT_THROW("Device storage isn't supported");
             } else if constexpr (std::is_same_v<StorageType, MultiDeviceHostStorage>) {
                 auto distribute_config = get_distributed_tensor_config(strategy);
                 dump_multi_device_host_storage(output_file, storage, distribute_config);
             } else {
-                raise_unsupported_storage<StorageType>();
+                // raise_unsupported_storage<StorageType>();
             }
         },
         tensor_to_dump.get_storage());

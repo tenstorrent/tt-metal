@@ -33,6 +33,11 @@ MeshCommandQueue::MeshCommandQueue(MeshDevice* mesh_device, uint32_t id) {
     this->populate_dispatch_core_type();
 }
 
+MeshCommandQueue::~MeshCommandQueue() {
+    // need to be called per subdeivce-id?
+    this->finish();
+}
+
 void MeshCommandQueue::populate_virtual_program_dispatch_core() {
     int device_idx = 0;
     for (auto device : this->mesh_device_->get_devices()) {

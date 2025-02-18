@@ -43,6 +43,7 @@ Tensor get_device_tensor(const Tensor& multi_device_tensor, const tt::tt_metal::
 Tensor get_device_tensor(const Tensor& multi_device_tensor, const int device_id);
 
 // Returns true has MultiDeviceHost/MultiDevice Storage
+bool is_host_mesh_tensor(const Tensor& tensor);
 bool is_multi_device_tensor(const Tensor& tensor);
 
 // Returns true if tensor has MultiDevice storage type and is allocated on a mesh buffer.

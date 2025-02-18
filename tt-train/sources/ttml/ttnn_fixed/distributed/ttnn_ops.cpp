@@ -16,8 +16,10 @@ tt::tt_metal::Tensor scatter(const tt::tt_metal::Tensor& tensor, int dim) {
     }
 
     auto device_grid_shape = current_device->shape();
-    const auto& storage = std::get<tt::tt_metal::MultiDeviceStorage>(tensor.get_storage());
-    auto num_tensor_buffers = storage.num_buffers();
+    // const auto& storage = std::get<tt::tt_metal::MultiDeviceStorage>(tensor.get_storage());
+    // auto num_tensor_buffers = storage.num_buffers();
+    //  TODO(jchu): fix me
+    auto num_tensor_buffers = 1;
 
     if (num_devices != num_tensor_buffers) {
         throw std::logic_error(fmt::format(

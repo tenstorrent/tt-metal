@@ -329,6 +329,7 @@ bool MeshDevice::close() {
         submesh->close();
     }
     submeshes_.clear();
+    mesh_command_queues_.clear();
     if (scoped_devices_) {
         scoped_devices_.reset();
     }

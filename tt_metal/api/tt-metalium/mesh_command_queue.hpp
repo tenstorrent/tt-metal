@@ -113,6 +113,7 @@ private:
 
 public:
     MeshCommandQueue(MeshDevice* mesh_device, uint32_t id);
+    ~MeshCommandQueue();
     MeshDevice* device() const { return mesh_device_; }
     uint32_t id() const { return id_; }
     WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) { return config_buffer_mgr_[index]; };
