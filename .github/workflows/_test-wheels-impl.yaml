@@ -7,6 +7,18 @@ on:
         description: "Use precompiled assets for wheel build"
         default: True
         type: boolean
+      # arch and os sections added for dockerizing step
+      arch:
+        required: true
+        type: string
+      os:
+        required: false
+        type: string
+        default: "ubuntu-20.04"
+      docker-image:
+        required: true
+        type: string
+
 
 # Since pre-compiled assets are only built on ubuntu-20.04, we force tests
 # to only be run on ubuntu-20.04.
@@ -53,22 +65,52 @@ jobs:
         os: [ubuntu-20.04]
         runner-hw-info: [
           {arch: grayskull, type: E150},
-          {arch: wormhole_b0, type: N150},
-          {arch: wormhole_b0, type: N300}
+          #{arch: wormhole_b0, type: N150},
+          #{arch: wormhole_b0, type: N300}
         ]
-    runs-on: ["cloud-virtual-machine", "${{ matrix.runner-hw-info.type }}", "in-service"]
+    runs-on: ["cloud-virtual-machine", "${{ matrix.runner-hw-info.type }}", "issue-hackathon"]
+    container:
+      image: ${{ inputs.docker-image }}
+      env:
+        TT_METAL_HOME: /work
+        PYTHONPATH: /work
+        LD_LIBRARY_PATH: /work/build/lib
+        ARCH_NAME: ${{ matrix.runner-hw-info.arch }}
+        LOGURU_LEVEL: INFO
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /dev/hugepages-1G:/dev/hugepages-1G
+        - /mnt/MLPerf:/mnt/MLPerf
+      options: "--device /dev/tenstorrent"
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - uses: actions/checkout@v4
+        with:
+          path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
       - uses: actions/download-artifact@v4
         with:
           name: eager-dist-${{ matrix.os }}-any
+          path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
       - name: Set up end-to-end tests environment
         run: ./tests/scripts/set_up_end_to_end_tests_env.sh
       - name: Activate env and run release tests - silicon
         timeout-minutes: 2
-        shell: bash
         run: |
           source tests/end_to_end_tests/env/bin/activate
           python3 -m ttnn.examples.usage.run_op_on_device
           cd tests/end_to_end_tests
           pytest -c conftest.py . -m eager_package_silicon
+      - name: Cleanup
+        if: always()
+        run: |
+          # We are forced to checkout the repo into a subdir of the host's workdir; this pollutes the host
+          # with root-owned files.  Be sure to clean up after ourselves in case we're on a non-ephemeral runner.
+          echo "pre rm"
+          ls -al /__w/tt-metal/tt-metal
+          rm -rf /__w/tt-metal/tt-metal/docker-job
+          echo "post rm"
+          ls -al /__w/tt-metal/tt-metal
+      

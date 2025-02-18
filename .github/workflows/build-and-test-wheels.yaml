@@ -7,6 +7,18 @@ on:
         description: "Use precompiled assets for wheel build"
         default: True
         type: boolean
+      # arch and os sections added for dockerizing step
+      arch:
+        required: true
+        type: choice
+        options:
+          - grayskull
+          - wormhole_b0
+          - blackhole
+      os:
+        required: false
+        type: string
+        default: "ubuntu-20.04"
   schedule:
     - cron: "0 0 * * *"
 
@@ -17,7 +29,15 @@ jobs:
     secrets: inherit
   test-wheels:
     needs: build-artifact
-    if: ${{ always() }}
+    strategy:
+      matrix:
+        # Since pre-compiled builds only run on 20.04, we can only test on 20.04 for now
+        # The full 22.04 flow can be tested without precompiled
+        os: ${{ fromJson((github.event_name == 'schedule' || inputs.from-precompiled) && '["ubuntu-20.04"]' || '["ubuntu-20.04", "ubuntu-22.04"]') }}
+        arch: [grayskull, wormhole_b0]
     uses: ./.github/workflows/_test-wheels-impl.yaml
     with:
+      os: ${{ matrix.os }}
+      arch: ${{ matrix.arch }}
       from-precompiled: ${{ github.event_name == 'workflow_dispatch' && inputs.from-precompiled }}
+      docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
