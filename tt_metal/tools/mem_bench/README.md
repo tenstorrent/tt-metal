@@ -15,6 +15,8 @@ Tests will report host bandwidth and/or device bandwidth. If device bandwidth is
 > [!NOTE]
 Reducing the `tt_metal` library log level by exporting `TT_METAL_LOGGER_LEVEL=fatal` will increase the readability of the output.
 
+> [!NOTE]
+On NUMA systems, the host page for the device's command queue data is pinned on the memory node closest to where the device is located. If `tt_metal` is run on a different node then bandwidth will degrade because it'll need to cross sockets. Therefore, it's important to run `tt_metal` on the closest node. On Linux, the execution policy can be set using `numactl`. E.g., if the device is located on node 0, then `numactl --cpubind=0 --membind=0 <command>` will allocate resources closer to the device.
 
 ```
 ./build/tools/mem_bench --help
