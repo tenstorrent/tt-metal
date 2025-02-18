@@ -4,15 +4,14 @@
 
 #include "ttnn/distributed/distributed_pybind.hpp"
 #include <pybind11/cast.h>
-<<<<<<< HEAD
 #include <cstddef>
-#include <memory>
-#include <pybind11/pytypes.h>
-=======
->>>>>>> clean up imports, fix test cases and change them to use mapper/composer functions, fix storage error by using from_device instead of cpu
 
+<<<<<<< HEAD
 #include <ostream>
 
+=======
+#include <pybind11/pytypes.h>
+>>>>>>> fix rebase
 #include <tt-metalium/command_queue.hpp>
 #include "tt-metalium/mesh_coord.hpp"
 #include "distributed_tensor.hpp"
@@ -29,11 +28,7 @@
 =======
 >>>>>>> clean up imports, fix test cases and change them to use mapper/composer functions, fix storage error by using from_device instead of cpu
 #include "ttnn/tensor/tensor.hpp"
-<<<<<<< HEAD
-#include "ttnn/types.hpp"
-=======
 #include <tt-metalium/command_queue.hpp>
->>>>>>> clean up imports, fix test cases and change them to use mapper/composer functions, fix storage error by using from_device instead of cpu
 
 // This is required for automatic conversions, as in the creation of mesh devices
 // https://github.com/tenstorrent/tt-metal/issues/18082
@@ -589,8 +584,6 @@ void py_module(py::module& module) {
         R"doc(
        Get the tensor shard corresponding to the device.
 
-<<<<<<< HEAD
-
        Args:
            tensor (Tensor): The tensor to get the shard from.
            device (Device): The device to get the shard for.
@@ -599,15 +592,6 @@ void py_module(py::module& module) {
        Returns:
            Tensor: The shard of the tensor corresponding to the device.
    )doc");
-=======
-        Args:
-            tensor (Tensor): The tensor to get the shard from.
-            device (Device): The device to get the shard for.
-aggregate_as
-        Returns:
-            Tensor: The shard of the tensor corresponding to the device.
-    )doc");
->>>>>>> clean up imports, fix test cases and change them to use mapper/composer functions, fix storage error by using from_device instead of cpu
     module.def("get_device_tensors", &get_device_tensors, py::arg("tensor"), py::kw_only());
     // TODO: Add rdocs
     module.def(
