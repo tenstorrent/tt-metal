@@ -886,3 +886,49 @@ def test_edgecase_dims_eltwise_broadcast_logical(input_shapes, ttnn_fn, memory_c
     torch_output_tensor = golden_fn(torch_input_tensor_a, torch_input_tensor_b)
 
     assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.999)
+
+
+@pytest.mark.parametrize(
+    "input_shape, input_layout, input_shard_grid, input_shard_orientation, input_sharding_scheme",
+    [
+        (
+            [1, 1, 64, 64],
+            ttnn.TILE_LAYOUT,
+            ttnn.CoreGrid(y=1, x=2),
+            ttnn.ShardOrientation.ROW_MAJOR,
+            ttnn.ShardStrategy.WIDTH,
+        ),
+    ],
+)
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("output_dtype", [ttnn.float32, ttnn.bfloat16])
+def test_binary_div(
+    device,
+    input_shape,
+    input_layout,
+    input_shard_grid,
+    input_shard_orientation,
+    input_sharding_scheme,
+    input_dtype,
+    output_dtype,
+):
+    memory_config = ttnn.create_sharded_memory_config(
+        input_shape,
+        core_grid=input_shard_grid,
+        strategy=input_sharding_scheme,
+        orientation=input_shard_orientation,
+        use_height_and_width_as_shard_shape=False,
+    )
+
+    torch_input_a = torch.rand(input_shape, dtype=torch.bfloat16) + 1
+    torch_input_b = torch.rand(input_shape, dtype=torch.bfloat16) + 1
+    torch_output = torch_input_a / torch_input_b
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_a, layout=input_layout, memory_config=memory_config, dtype=input_dtype, device=device
+    )
+    input_tensor_b = ttnn.from_torch(
+        torch_input_b, layout=input_layout, memory_config=memory_config, dtype=input_dtype, device=device
+    )
+    output_tensor = ttnn.experimental.div(input_tensor_a, input_tensor_b, dtype=output_dtype)
+    assert_with_pcc(torch_output, ttnn.to_torch(output_tensor), 0.999)
