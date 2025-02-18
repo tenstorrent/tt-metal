@@ -11,11 +11,11 @@ from models.utility_functions import torch_random, is_wormhole_b0, skip_for_gray
 
 
 @pytest.mark.parametrize("batch_sizes", [(1,)])
-@pytest.mark.parametrize("m_size", [384])
-@pytest.mark.parametrize("k_size", [1024])
-@pytest.mark.parametrize("n_size", [1024])
+@pytest.mark.parametrize("m_size", [1])
+@pytest.mark.parametrize("k_size", [2000])  # 2048
+@pytest.mark.parametrize("n_size", [2048])  # 39576
 @pytest.mark.parametrize("use_bias", [True, False])
-def test_linear(
+def test_linear_ultralane_detection_v2(
     batch_sizes,
     m_size,
     k_size,
@@ -24,9 +24,9 @@ def test_linear(
     *,
     device,
 ):
-    input_shape_a = (*batch_sizes, m_size, k_size)
+    input_shape_a = (m_size, k_size)
     input_shape_b = (k_size, n_size)
-
+    print("input shape are", input_shape_a, input_shape_b)
     torch_input_tensor_a = torch_random(input_shape_a, -0.1, 0.1, dtype=torch.float32)
     torch_input_tensor_b = torch_random(input_shape_b, -0.1, 0.1, dtype=torch.float32)
     if use_bias:
