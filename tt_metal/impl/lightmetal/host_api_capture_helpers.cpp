@@ -62,28 +62,28 @@ void CaptureCommand(tt::tt_metal::flatbuffer::CommandType cmd_type, ::flatbuffer
 
 void CaptureReplayTrace(IDevice* device, uint8_t cq_id, uint32_t trace_id, bool blocking) {
     auto& ctx = LightMetalCaptureContext::get();
-    log_debug(tt::LogMetalTrace, "{}: cq_id: {} trace_id: {} blocking: {}", __FUNCTION__, cq_id, trace_id, blocking);
+    log_info(tt::LogMetalTrace, "{}: cq_id: {} trace_id: {} blocking: {}", __FUNCTION__, cq_id, trace_id, blocking);
     auto cmd = tt::tt_metal::flatbuffer::CreateReplayTraceCommand(ctx.get_builder(), cq_id, trace_id, blocking);
     CaptureCommand(tt::tt_metal::flatbuffer::CommandType::ReplayTraceCommand, cmd.Union());
 }
 
 void CaptureEnqueueTrace(CommandQueue& cq, uint32_t trace_id, bool blocking) {
     auto& ctx = LightMetalCaptureContext::get();
-    log_debug(tt::LogMetalTrace, "{}: cq_id: {} trace_id: {} blocking: {}", __FUNCTION__, cq.id(), trace_id, blocking);
+    log_info(tt::LogMetalTrace, "{}: cq_id: {} trace_id: {} blocking: {}", __FUNCTION__, cq.id(), trace_id, blocking);
     auto cmd = tt::tt_metal::flatbuffer::CreateEnqueueTraceCommand(ctx.get_builder(), cq.id(), trace_id, blocking);
     CaptureCommand(tt::tt_metal::flatbuffer::CommandType::EnqueueTraceCommand, cmd.Union());
 }
 
 void CaptureLoadTrace(IDevice* device, uint8_t cq_id, uint32_t trace_id) {
     auto& ctx = LightMetalCaptureContext::get();
-    log_debug(tt::LogMetalTrace, "{}: cq_id: {} trace_id: {}", __FUNCTION__, cq_id, trace_id);
+    log_info(tt::LogMetalTrace, "{}: cq_id: {} trace_id: {}", __FUNCTION__, cq_id, trace_id);
     auto cmd = tt::tt_metal::flatbuffer::CreateLoadTraceCommand(ctx.get_builder(), trace_id, cq_id);
     CaptureCommand(tt::tt_metal::flatbuffer::CommandType::LoadTraceCommand, cmd.Union());
 }
 
 void CaptureReleaseTrace(IDevice* device, uint32_t trace_id) {
     auto& ctx = LightMetalCaptureContext::get();
-    log_debug(tt::LogMetalTrace, "{}: trace_id: {}", __FUNCTION__, trace_id);
+    log_info(tt::LogMetalTrace, "{}: trace_id: {}", __FUNCTION__, trace_id);
     auto cmd = tt::tt_metal::flatbuffer::CreateReleaseTraceCommand(ctx.get_builder(), trace_id);
     CaptureCommand(tt::tt_metal::flatbuffer::CommandType::ReleaseTraceCommand, cmd.Union());
 }
@@ -146,13 +146,13 @@ void CaptureDeallocateBuffer(Buffer& buffer) {
     // deallocated on Program destruction while capturing is still enabled depending on test structure (scope)
     // so let's just not capture these DeallocateBuffer() calls since they will occur on playback naturally.
     if (!ctx.is_in_map(&buffer)) {
-        log_debug(tt::LogMetalTrace, "Cannot capture DeallocateBuffer() without CreateBuffer() - ignoring.");
+        log_info(tt::LogMetalTrace, "Cannot capture DeallocateBuffer() without CreateBuffer() - ignoring.");
         return;
     }
 
     auto buffer_global_id = ctx.get_global_id(&buffer);
 
-    log_debug(
+    log_info(
         tt::LogMetalTrace,
         "{}: buffer_global_id: {} size: {} address: {}",
         __FUNCTION__,
@@ -179,7 +179,7 @@ void CaptureEnqueueWriteBuffer(
     uint32_t cq_global_id = cq.id();  // TODO (kmabee) - consider storing/getting CQ from global map instead.
     uint32_t buffer_global_id = ctx.get_global_id(buffer_ptr);
 
-    log_debug(
+    log_info(
         tt::LogMetalTrace, "{}: cq_global_id: {} buffer_global_id: {}", __FUNCTION__, cq_global_id, buffer_global_id);
     // PrintHostDataType(src); // Debug
 
@@ -221,7 +221,7 @@ void CaptureEnqueueReadBuffer(
     uint32_t cq_global_id = cq.id();  // TODO (kmabee) - consider storing/getting CQ from global map instead.
     uint32_t buffer_global_id = ctx.get_global_id(buffer_ptr);
 
-    log_debug(
+    log_info(
         tt::LogMetalTrace, "{}: cq_global_id: {} buffer_global_id: {}", __FUNCTION__, cq_global_id, buffer_global_id);
 
     // Idea store a read_global_id to keep track of read results.
@@ -237,7 +237,7 @@ void CaptureFinish(CommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device
     // Use to_flatbuffer to convert SubDeviceIds to FlatBuffer vector
     auto fb_sub_device_ids = to_flatbuffer(ctx.get_builder(), sub_device_ids);
 
-    log_debug(
+    log_info(
         tt::LogMetalTrace, "{}: cq_global_id: {} sub_devices: {}", __FUNCTION__, cq_global_id, sub_device_ids.size());
     auto cmd = tt::tt_metal::flatbuffer::CreateFinishCommand(ctx.get_builder(), cq_global_id, fb_sub_device_ids);
     CaptureCommand(tt::tt_metal::flatbuffer::CommandType::FinishCommand, cmd.Union());
@@ -246,7 +246,7 @@ void CaptureFinish(CommandQueue& cq, tt::stl::Span<const SubDeviceId> sub_device
 void CaptureProgramConstructor(Program& program) {
     auto& ctx = LightMetalCaptureContext::get();
     uint32_t program_global_id = ctx.add_to_map(&program);
-    log_debug(tt::LogMetalTrace, "{}: program_global_id: {}", __FUNCTION__, program_global_id);
+    log_info(tt::LogMetalTrace, "{}: program_global_id: {}", __FUNCTION__, program_global_id);
 
     auto cmd = tt::tt_metal::flatbuffer::CreateProgramConstructorCommand(ctx.get_builder(), program_global_id);
     CaptureCommand(tt::tt_metal::flatbuffer::CommandType::ProgramConstructorCommand, cmd.Union());
@@ -262,7 +262,7 @@ void CaptureEnqueueProgram(CommandQueue& cq, Program& program, bool blocking) {
 
     uint32_t cq_global_id = cq.id();  // TODO (kmabee) - consider storing/getting CQ from global map instead.
     uint32_t program_global_id = ctx.get_global_id(&program);
-    log_debug(
+    log_info(
         tt::LogMetalTrace, "{}: cq_global_id: {} program_global_id: {}", __FUNCTION__, cq_global_id, program_global_id);
 
     auto cmd = tt::tt_metal::flatbuffer::CreateEnqueueProgramCommand(
@@ -281,7 +281,7 @@ void CaptureCreateKernel(
     std::shared_ptr<Kernel> kernel = program.get_kernel(kernel_id);
     uint32_t kernel_global_id = ctx.add_to_map(kernel.get());
     uint32_t program_global_id = ctx.get_global_id(&program);
-    log_debug(
+    log_info(
         tt::LogMetalTrace,
         "{}: file_name: {} kernel_global_id: {} (kernel_id: {}) program_global_id: {}",
         __FUNCTION__,
@@ -317,7 +317,7 @@ void CaptureSetRuntimeArgsUint32(
     std::shared_ptr<Kernel> kernel = program.get_kernel(kernel_id);
     uint32_t program_global_id = ctx.get_global_id(&program);
     uint32_t kernel_global_id = ctx.get_global_id(kernel.get());
-    log_debug(
+    log_info(
         tt::LogMetalTrace,
         "{}: kernel_global_id: {} program_global_id: {} rt_args: {}",
         __FUNCTION__,
@@ -344,7 +344,7 @@ void CaptureSetRuntimeArgsUint32VecPerCore(
     std::shared_ptr<Kernel> kernel = program.get_kernel(kernel_id);
     uint32_t program_global_id = ctx.get_global_id(&program);
     uint32_t kernel_global_id = ctx.get_global_id(kernel.get());
-    log_debug(
+    log_info(
         tt::LogMetalTrace,
         "{}: kernel_global_id: {} program_global_id: {} num_cores: {}",
         __FUNCTION__,
@@ -371,7 +371,7 @@ void CaptureSetRuntimeArgs(
     uint32_t kernel_global_id = ctx.get_global_id(kernel.get());
     auto [core_spec_type, core_spec_offset] = to_flatbuffer(fbb, core_spec);
     auto rt_args_offset = to_flatbuffer(fbb, runtime_args);
-    log_debug(
+    log_info(
         tt::LogMetalTrace,
         "{}: kernel_global_id: {} rt_args_size: {}",
         __FUNCTION__,
@@ -394,7 +394,7 @@ void CaptureCreateCircularBuffer(
     uint32_t program_global_id = ctx.get_global_id(&program);
     auto [core_spec_type, core_spec_offset] = to_flatbuffer(fbb, core_spec);
     auto cb_config_offset = to_flatbuffer(config, fbb);
-    log_debug(
+    log_info(
         tt::LogMetalTrace,
         "{}: cb_global_id: {} program_global_id: {} ",
         __FUNCTION__,
@@ -426,7 +426,7 @@ void CaptureLightMetalCompare(
     const uint32_t* golden_data_uint32 = static_cast<const uint32_t*>(golden_data);
     std::vector<uint32_t> golden_data_vector(golden_data_uint32, golden_data_uint32 + golden_data_len);
 
-    log_debug(
+    log_info(
         tt::LogMetalTrace,
         "{}: buffer_global_id: {} is_user_data: {} golden_data_len: {}",
         __FUNCTION__,

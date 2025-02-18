@@ -1356,7 +1356,7 @@ void ReleaseTrace(IDevice* device, const uint32_t tid) {
 // This is nop if compile time define not set.
 void LightMetalBeginCapture() {
 #if defined(TT_ENABLE_LIGHT_METAL_TRACE) && (TT_ENABLE_LIGHT_METAL_TRACE == 1)
-    log_debug(tt::LogMetalTrace, "Begin LightMetalBinary Capture");
+    log_info(tt::LogMetalTrace, "Begin LightMetalBinary Capture");
     auto& lm_capture_ctx = LightMetalCaptureContext::get();
     lm_capture_ctx.reset();            // Clear previous traces if any, ensure tracing disabled
     lm_capture_ctx.set_tracing(true);  // Enable tracing
@@ -1368,7 +1368,7 @@ void LightMetalBeginCapture() {
 // This is nop if compile time define not set, return empty vector.
 LightMetalBinary LightMetalEndCapture() {
 #if defined(TT_ENABLE_LIGHT_METAL_TRACE) && (TT_ENABLE_LIGHT_METAL_TRACE == 1)
-    log_debug(tt::LogMetalTrace, "End LightMetalBinary Capture");
+    log_info(tt::LogMetalTrace, "End LightMetalBinary Capture");
     auto& lm_capture_ctx = LightMetalCaptureContext::get();
     TT_ASSERT(lm_capture_ctx.is_tracing(), "Light Metal Capture was not enabled.");
     lm_capture_ctx.set_tracing(false);  // Disable tracing

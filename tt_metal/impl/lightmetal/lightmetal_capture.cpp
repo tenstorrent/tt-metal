@@ -12,6 +12,7 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/program_impl.hpp>
 #include <tt-metalium/kernel.hpp>
+#include <host_api_call_guard.hpp>
 
 namespace tt::tt_metal {
 inline namespace v0 {
@@ -81,6 +82,7 @@ uint32_t LightMetalCaptureContext::add_to_map(const Buffer* obj) {
     }
     uint32_t global_id = next_global_id_++;
     buffer_to_global_id_map_[obj] = global_id;
+    log_info(tt::LogMetalTrace, "Buffer added to global_id map with global_id: {}", global_id);
     return global_id;
 }
 
@@ -96,6 +98,7 @@ uint32_t LightMetalCaptureContext::get_global_id(const Buffer* obj) {
     if (it != buffer_to_global_id_map_.end()) {
         return it->second;
     } else {
+        DumpCallStack(20);
         TT_THROW("Buffer not found in global_id global_id map");
     }
 }
@@ -110,6 +113,7 @@ uint32_t LightMetalCaptureContext::add_to_map(const Program* obj) {
     }
     uint32_t global_id = next_global_id_++;
     program_id_to_global_id_map_[obj->get_id()] = global_id;
+    log_info(tt::LogMetalTrace, "Program id: {} added to global_id map with global_id: {}", obj->get_id(), global_id);
     return global_id;
 }
 

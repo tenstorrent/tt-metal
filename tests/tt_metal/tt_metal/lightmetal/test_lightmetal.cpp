@@ -262,7 +262,7 @@ void SingleRISCDataMovement_test(tt::tt_metal::IDevice* device, bool rt_arg_per_
     auto output = Buffer::create(device, size_bytes, size_bytes, BufferType::DRAM);
     auto l1_buffer = Buffer::create(device, size_bytes, size_bytes, BufferType::L1);
 
-    log_debug(
+    log_info(
         tt::LogTest,
         "Created 3 Buffers. input: 0x{:x} output: 0x{:x} l1_buffer: 0x{:x}",
         input->address(),
@@ -290,7 +290,7 @@ void SingleRISCDataMovement_test(tt::tt_metal::IDevice* device, bool rt_arg_per_
 
     // For dev/debug go ahead and print the results
     for (size_t i = 0; i < eager_output_data.size(); i++) {
-        log_debug(tt::LogMetalTrace, "i: {:3d} input: {} output: {}", i, input_data[i], eager_output_data[i]);
+        log_info(tt::LogMetalTrace, "i: {:3d} input: {} output: {}", i, input_data[i], eager_output_data[i]);
     }
 
     Finish(command_queue);
