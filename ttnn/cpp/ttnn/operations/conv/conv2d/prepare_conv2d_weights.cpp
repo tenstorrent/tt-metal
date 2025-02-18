@@ -479,8 +479,6 @@ Tensor convert_conv_weight_tensor_to_depthwise_layout(
 }
 
 void validate_weight_tensor(const ttnn::Tensor& weight_tensor) {
-    TT_FATAL(
-        !ttnn::has_storage_type_of(weight_tensor, ttnn::DEVICE_STORAGE_TYPE), "conv weight should be placed on host");
     TT_FATAL(weight_tensor.get_layout() == Layout::ROW_MAJOR, "conv weight layout should be in row_major layout");
     TT_FATAL(weight_tensor.get_logical_shape().rank() == 4, "conv weight should be 4D tensor");
 }
@@ -829,20 +827,72 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
         bias_tensor_ = bias_tensor.value();
         bool is_bias_tensor_is_on_device = ttnn::is_tensor_on_device_or_multidevice(bias_tensor_);
         if (!is_bias_tensor_is_on_device) {
-            TT_FATAL(
-                bias_tensor_.get_logical_shape()[3] == out_channels,
-                "Bias must have the same length as output channels");
-            bias_tensor_ = conv_bias_layout_convert(
-                bias_tensor_,
-                weights_bias_dtype,
-                weight_block_h_ntiles,
-                weight_block_w_ntiles,
-                output_parallel_config,
-                device,
-                out_channels_padded,
-                is_non_tile_mul_width);
             bias_tensor_ = ttnn::operations::core::to_device(bias_tensor_, device, std::nullopt);
         }
+        if (input_parallel_config.shard_scheme == TensorMemoryLayout::BLOCK_SHARDED) {
+            auto bias_out_channels = bias_tensor_.get_logical_shape()[3];
+            ttnn::Shape bias_channels_padded_shape({1, 1, 1, out_channels_padded});
+            bias_tensor_ = ttnn::pad(
+                bias_tensor_,
+                bias_channels_padded_shape.to_array_4D(),
+                tt::tt_metal::Array4D{0, 0, 0, 0},
+                0,
+                true,
+                std::nullopt);
+            auto out_channels_per_core = out_channels_padded / output_num_cores_channels;
+            auto rounded_weight_block_width = tt::round_up(out_channels_per_core, constants::TILE_WIDTH);
+
+            auto final_out_channels_padded = rounded_weight_block_width * output_num_cores_channels;
+
+            if (final_out_channels_padded != out_channels_padded) {
+                bias_tensor_ =
+                    ttnn::reshape(bias_tensor_, ttnn::Shape({1, 1, output_num_cores_channels, out_channels_per_core}));
+
+                bias_tensor_ = ttnn::pad(
+                    bias_tensor_,
+                    tt::tt_metal::Array4D({1, 1, output_num_cores_channels, rounded_weight_block_width}),
+                    tt::tt_metal::Array4D({0, 0, 0, 0}),
+                    0,
+                    true,
+                    std::nullopt);
+            }
+            bias_tensor_ = ttnn::reshape(bias_tensor_, ttnn::Shape({1, 1, 1, final_out_channels_padded}));
+            bias_tensor_ = ttnn::pad(
+                bias_tensor_,
+                tt::tt_metal::Array4D({1, 1, 32, final_out_channels_padded}),
+                tt::tt_metal::Array4D{0, 0, 0, 0},
+                0,
+                true,
+                std::nullopt);
+        } else {
+            ttnn::Shape bias_channels_padded_shape({1, 1, 32, round_up(out_channels, weight_block_w_ntiles * 32)});
+            bias_tensor_ = ttnn::pad(
+                bias_tensor_,
+                bias_channels_padded_shape.to_array_4D(),
+                tt::tt_metal::Array4D{0, 0, 0, 0},
+                0,
+                true,
+                std::nullopt);
+        }
+        bias_tensor_ = ttnn::tilize(
+            bias_tensor_,
+            ttnn::MemoryConfig(
+                {.memory_layout = tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
+                 .buffer_type = tt::tt_metal::BufferType::DRAM}),
+            weights_bias_dtype,
+            true);
+        // TT_FATAL(
+        //     bias_tensor_.get_logical_shape()[3] == out_channels,
+        //     "Bias must have the same length as output channels");
+        // bias_tensor_ = conv_bias_layout_convert(
+        //     bias_tensor_,
+        //     weights_bias_dtype,
+        //     weight_block_h_ntiles,
+        //     weight_block_w_ntiles,
+        //     output_parallel_config,
+        //     device,
+        //     out_channels_padded,
+        //     is_non_tile_mul_width);
     }
 
     return {weight_tensor_, bias_tensor.has_value() ? bias_tensor_ : std::optional<ttnn::Tensor>()};
