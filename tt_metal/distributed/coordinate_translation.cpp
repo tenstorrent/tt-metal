@@ -71,12 +71,17 @@ const std::pair<CoordinateTranslationMap, SimpleMeshShape>& get_system_mesh_coor
             "Unsupported number of devices: {}",
             system_num_devices);
 
-        auto [translation_config_file, shape] = system_mesh_translation_map.at(system_num_devices);
-        TT_ASSERT(system_num_devices == shape.mesh_size());
+        const auto [translation_config_file, shape] = system_mesh_translation_map.at(system_num_devices);
+        TT_FATAL(
+            system_num_devices == shape.mesh_size(),
+            "Mismatch between number of devices and the mesh shape: {} != {}",
+            system_num_devices,
+            shape.mesh_size());
         log_debug(LogMetal, "Logical SystemMesh Shape: {}", shape);
 
         return std::pair<CoordinateTranslationMap, SimpleMeshShape>{
-            load_translation_map(translation_config_file, /*key=*/"logical_to_physical_coordinates"), shape};
+            load_translation_map(get_config_path(translation_config_file), /*key=*/"logical_to_physical_coordinates"),
+            shape};
     }());
 
     return *cached_translation_map;

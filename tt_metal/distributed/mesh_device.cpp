@@ -77,8 +77,8 @@ MeshDevice::ScopedDevices::ScopedDevices(
         physical_device_ids, num_command_queues, l1_small_size, trace_region_size, dispatch_core_config);
 
     TT_FATAL(
-        opened_devices_.size() == devices_.shape().mesh_size(),
-        "Opened devices size mismatch; expected: {}, actual: {}",
+        physical_device_ids.size() == devices_.shape().mesh_size(),
+        "Device size mismatch; expected: {}, actual: {}",
         devices_.shape().mesh_size(),
         opened_devices_.size());
 

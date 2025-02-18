@@ -92,8 +92,8 @@ std::vector<chip_id_t> SystemMesh::Impl::get_mapped_physical_device_ids(const Me
     // TODO: #17477 - Extend to ND.
     TT_FATAL(
         logical_mesh_shape_.dims() == 2,
-        "SystemMesh only supports 2D meshes; requested shape: {}",
-        logical_mesh_shape_);
+        "SystemMesh only supports 2D meshes; requested dimensions: {}",
+        logical_mesh_shape_.dims());
 
     auto [system_mesh_rows, system_mesh_cols] = std::make_tuple(logical_mesh_shape_[0], logical_mesh_shape_[1]);
     auto [requested_num_rows, requested_num_cols] = config.mesh_shape;
