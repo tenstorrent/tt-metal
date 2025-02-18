@@ -206,7 +206,7 @@ class TtLlamaAttention(LightweightModule):
         pt_wo = self.state_dict[f"{wo_str}.weight"].transpose(-1, -2).unsqueeze(0).unsqueeze(0)
 
         wo_mem_config = configuration.create_dram_sharded_mem_config(
-            configuration.dim // configuration.num_devices, configuration.dim
+            (configuration.n_heads * configuration.head_dim) // configuration.num_devices, configuration.dim
         )
 
         self.wo = ttnn.as_tensor(
