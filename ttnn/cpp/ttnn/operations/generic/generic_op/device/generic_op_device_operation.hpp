@@ -10,8 +10,8 @@
 #include <variant>
 #include "ttnn/decorators.hpp"
 
-#include <tt_metal/common/core_coord.hpp>
-#include <tt_metal/impl/kernels/kernel_types.hpp>
+#include <tt_metal/api/tt-metalium/core_coord.hpp>
+#include <tt_metal/api/tt-metalium/kernel_types.hpp>
 #include <tt_metal/hostdevcommon/api/hostdevcommon/kernel_structs.h>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/core.hpp"
@@ -70,7 +70,7 @@ struct GenericOpDeviceOperation {
 
 
     // Define the return types for the shape(s) of the operation
-    using shape_return_value_t = std::vector<SimpleShape>;
+    using shape_return_value_t = std::vector<Shape>;
 
     // Define the return types for the tensor(s) of the operation
     // Can be a single Tensor, std::optional<Tensor, ...>, std::vector<Tensor>, std::tuple<Tensor, ...> etc.
