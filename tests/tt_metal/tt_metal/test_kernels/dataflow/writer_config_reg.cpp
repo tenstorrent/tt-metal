@@ -213,7 +213,7 @@ void write_pack_counters(volatile uint tt_reg_ptr* cfg, uint32_t address, const 
 void MAIN {
    uint32_t register_name = get_compile_time_arg_val(0);
 
-   // Get pointer to registers for current state ID 
+   // Get pointer to registers for current state ID
    volatile uint tt_reg_ptr* cfg = get_cfg_pointer();
 
    switch (register_name) {
@@ -231,7 +231,7 @@ void MAIN {
       case UNPACK_TILE_DESCRIPTOR:
          ckernel::unpacker::unpack_tile_descriptor_u tile_descriptor;
          generate_unpack_tile_descriptor(tile_descriptor.f);
-         std::array<ckernel::unpacker::unpack_tile_descriptor_t, ckernel::unpacker::NUM_UNPACKERS> tile_descriptor_vec; 
+         std::array<ckernel::unpacker::unpack_tile_descriptor_t, ckernel::unpacker::NUM_UNPACKERS> tile_descriptor_vec;
          tile_descriptor_vec = ckernel::unpacker::read_unpack_tile_descriptor();
          write_unpack_tile_descriptor(cfg, THCON_SEC0_REG0_TileDescriptor_ADDR32, 4, tile_descriptor);
          write_unpack_tile_descriptor(cfg, THCON_SEC1_REG0_TileDescriptor_ADDR32, 4, tile_descriptor);

@@ -197,12 +197,13 @@ static std::string generate_golden_output(const std::vector<std::string>& field_
                 continue;
             }
             if (format_fields.find(field_names[i]) != format_fields.end())
-                golden_output += field_names[i] + ": " + data_format_to_string(values[i]) + "\n"; 
+                golden_output += field_names[i] + ": " + data_format_to_string(values[i]) + "\n";
             else if (decimal_fields.find(field_names[i]) != format_fields.end())
                 golden_output += field_names[i] + ": " + std::to_string(values[i]) + "\n";
-            else 
+            else {
                 golden_output += field_names[i] + ": 0x" + int_to_hex(values[i]) + "\n";
-            
+            }
+
             if (register_name == PACK_EDGE_OFFSET && reg_id > 1) break;
         }
         if (reg_id != num_of_registers) golden_output += "\n";
@@ -223,7 +224,7 @@ static void print_config_reg(
 
     // Run the program
     fixture->RunProgram(device, program);
-    
+
     // Check the print log against golden output.
     EXPECT_TRUE(FilesMatchesString(DPrintFixture::dprint_file_name, golden_output));
 }
@@ -237,7 +238,7 @@ TEST_F(DPrintFixture, ConfigRegAluTestPrint) {
         .field_names = field_names_alu_config,
         .field_values = field_values_alu_config,
         .register_name = ALU_CONFIG};
-    
+
     if (this->arch_ == ARCH::GRAYSKULL) {
         GTEST_SKIP() << "Printing ALU CONFIG is not supported on grayskull.";
     }
@@ -367,4 +368,3 @@ TEST_F(DPrintFixture, ConfigRegPackCountersTestPrint) {
         [&](DPrintFixture* fixture, IDevice* device) { print_config_reg(fixture, device, test_config); },
         this->devices_[0]);
 }
-
