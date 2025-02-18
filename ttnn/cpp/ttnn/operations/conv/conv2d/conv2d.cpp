@@ -119,12 +119,11 @@ Result conv2d(
     bool weight_is_on_device = ttnn::is_tensor_on_device_or_multidevice(weight_tensor);
     ttnn::Tensor weight_tensor_on_device = weight_tensor;
     std::optional<ttnn::Tensor> bias_tensor_on_device = bias_tensor;
-    if (!weight_is_on_device) {
+    if (!weight_is_on_device || conv_config.always_preprocess_weights) {
         // prepare weights in desired layout and move to device
 
         // TODO: Implement heuristic to decide if weights should be preprocessed on device.
-        if (conv_config.preprocess_weights_on_device.has_value() &&
-            conv_config.preprocess_weights_on_device.value() == false) {
+        if (conv_config.preprocess_weights_on_device == false) {
             tie(weight_tensor_on_device, bias_tensor_on_device) = prepare_conv_weights_biases_and_move_to_device(
                 weight_tensor,
                 bias_tensor,

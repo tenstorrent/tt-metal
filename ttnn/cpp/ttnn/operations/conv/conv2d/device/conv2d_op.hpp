@@ -62,7 +62,12 @@ struct Conv2dConfig {
     // BFLOAT8 is always Tile layout.
     Layout output_layout = Layout::TILE;
 
-    std::optional<bool> preprocess_weights_on_device = std::nullopt;
+    // Select between preprocessing weights on device or on host.
+    bool preprocess_weights_on_device = true;
+
+    // If false, only preprocess weights if they are originally located on host.
+    // If true, preprocess weights regarding of original location.
+    bool always_preprocess_weights = false;
 
     // Doubles the size of the CBs for activation.
     // Increased perf, but increased L1 usage.
