@@ -4,7 +4,7 @@
 
 #include "view.hpp"
 
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/run_operation.hpp"
 #include <tt-metalium/constants.hpp>
 #include <ttnn/operations/functions.hpp>
@@ -14,10 +14,10 @@
 namespace ttnn::operations::experimental::reshape {
 
 static MemoryConfig infer_output_memory_config(
-    const MemoryConfig& input_memory_config, const ttnn::SimpleShape& output_logical_shape) {
+    const MemoryConfig& input_memory_config, const ttnn::Shape& output_padded_shape) {
     if (input_memory_config.memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
         auto shard_spec = input_memory_config.shard_spec.value();
-        shard_spec.shape[1] = output_logical_shape[-1];  // update output shard to match new shard width
+        shard_spec.shape[1] = output_padded_shape[-1];  // update output shard to match new shard width
         return MemoryConfig{input_memory_config.memory_layout, input_memory_config.buffer_type, shard_spec};
     } else {
         return input_memory_config;
@@ -25,11 +25,11 @@ static MemoryConfig infer_output_memory_config(
 }
 
 Tensor tensor_reshape(
-    const Tensor& input_tensor, const ttnn::SimpleShape& new_logical_shape, const ttnn::SimpleShape& new_padded_shape) {
+    const Tensor& input_tensor, const ttnn::Shape& new_logical_shape, const ttnn::Shape& new_padded_shape) {
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::reshape", input_tensor, new_logical_shape, new_padded_shape);
 
-    const auto output_memory_config = infer_output_memory_config(input_tensor.memory_config(), new_logical_shape);
+    const auto output_memory_config = infer_output_memory_config(input_tensor.memory_config(), new_padded_shape);
     auto new_spec = ttnn::TensorSpec(
         new_logical_shape,
         TensorLayout::fromPaddedShape(
@@ -81,7 +81,7 @@ Tensor tensor_reshape(
                 if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
                     if (tensor.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {
                         DeviceStorage device_storage = std::get<T>(tensor.get_storage());
-                        DeviceBuffer device_buffer = device_storage.get_buffer();
+                        auto device_buffer = device_storage.get_buffer();
                         const auto& tensor_spec = tensor.tensor_spec();
                         auto page_size_bytes = tensor_spec.compute_page_size_bytes();
                         device_buffer->set_page_size(page_size_bytes);
@@ -89,7 +89,7 @@ Tensor tensor_reshape(
                         return Tensor(device_storage, new_spec);
                     } else {
                         DeviceStorage device_storage = std::get<T>(tensor.get_storage());
-                        DeviceBuffer device_buffer = device_storage.get_buffer();
+                        auto device_buffer = device_storage.get_buffer();
                         ShardSpecBuffer shard_spec_buffer = device_buffer->shard_spec();
 
                         auto shard_spec = shard_spec_buffer.tensor_shard_spec;
@@ -142,16 +142,12 @@ Tensor tensor_reshape(
 }
 
 ttnn::Tensor ViewOperation::invoke(
-    const ttnn::Tensor& tensor, const ttnn::SimpleShape& logical_shape, const ttnn::SimpleShape& padded_shape) {
+    const ttnn::Tensor& tensor, const ttnn::Shape& logical_shape, const ttnn::Shape& padded_shape) {
     return tensor_reshape(tensor, logical_shape, padded_shape);
 }
 
-ttnn::Tensor ViewOperation::invoke(const ttnn::Tensor& tensor, const ttnn::SimpleShape& shape) {
-    return tensor_reshape(tensor, shape, shape);
-}
-
 ttnn::Tensor ViewOperation::invoke(const ttnn::Tensor& tensor, const ttnn::Shape& shape) {
-    return tensor_reshape(tensor, shape.logical_shape(), shape.padded_shape());
+    return tensor_reshape(tensor, shape, shape);
 }
 
 }  // namespace ttnn::operations::experimental::reshape

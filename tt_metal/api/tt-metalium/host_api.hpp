@@ -438,7 +438,7 @@ void DeallocateBuffer(Buffer& buffer);
 *  | program  | The program getting ownership of the buffer  | Program &                      |             | Yes      |
 */
 // clang-format on
-void AssignGlobalBufferToProgram(std::shared_ptr<Buffer> buffer, Program& program);
+void AssignGlobalBufferToProgram(const std::shared_ptr<Buffer>& buffer, Program& program);
 
 // clang-format off
 // ==================================================
@@ -507,7 +507,7 @@ void SetRuntimeArgs(
     IDevice* device,
     const std::shared_ptr<Kernel>& kernel,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
-    std::shared_ptr<RuntimeArgs> runtime_args);
+    const std::shared_ptr<RuntimeArgs>& runtime_args);
 
 // clang-format off
 /**

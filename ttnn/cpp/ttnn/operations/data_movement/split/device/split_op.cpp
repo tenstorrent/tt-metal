@@ -44,7 +44,7 @@ std::vector<ttnn::TensorSpec> SplitDeviceOperation::compute_output_specs(
     auto output_shape_array = input_shape_array;
     output_shape_array[this->dim] /= this->num_splits;
     TensorSpec spec(
-        SimpleShape(output_shape_array),
+        Shape(output_shape_array),
         TensorLayout(input_tensor.get_dtype(), PageConfig(input_tensor.get_layout()), output_mem_config));
     return std::vector<ttnn::TensorSpec>(this->num_splits, spec);
 }

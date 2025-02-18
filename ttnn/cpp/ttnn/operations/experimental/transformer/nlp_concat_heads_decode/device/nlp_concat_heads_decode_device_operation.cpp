@@ -56,7 +56,7 @@ std::vector<ttnn::TensorSpec> NLPConcatHeadsDecodeDeviceOperation::compute_outpu
 
     auto hidden_dim = num_heads * head_dim;
 
-    SimpleShape output_shape({sequence_length, 1, batch, hidden_dim});
+    Shape output_shape({sequence_length, 1, batch, hidden_dim});
 
     CoreRangeSet output_core_grid;
     if (this->on_subcoregrids) {

@@ -56,7 +56,7 @@ std::vector<TensorSpec> UpSample::compute_output_specs(const std::vector<Tensor>
     uint32_t out_w = input_shape[2] * scale_factor_w_;
     uint32_t out_c = input_shape[3];
 
-    auto output_shape = ttnn::SimpleShape({out_n, out_h, out_w, out_c});
+    auto output_shape = ttnn::Shape({out_n, out_h, out_w, out_c});
 
     if (output_mem_config_.is_sharded()) {
         if (!input.memory_config().is_sharded()) {

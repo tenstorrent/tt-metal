@@ -60,7 +60,7 @@ void pretty_print_data_as_shards(
 
 namespace {
 struct ShardWithAlignmentInputs {
-    SimpleShape shape;
+    Shape shape;
     Shape2D logical_shard_shape;
     std::optional<Shape2D> physical_shard_shape;
     TensorMemoryLayout memory_layout;
@@ -194,7 +194,7 @@ INSTANTIATE_TEST_SUITE_P(
         // NOTE: This can also be interpreted as height sharded where we don't break apart height
         ShardWithAlignmentParams{
             ShardWithAlignmentInputs{
-                .shape = SimpleShape{1, 2, 15, 20},
+                .shape = Shape{1, 2, 15, 20},
                 .logical_shard_shape = Shape2D{15, 20},
                 .physical_shard_shape = std::nullopt,
                 .memory_layout = TensorMemoryLayout::HEIGHT_SHARDED,
@@ -273,7 +273,7 @@ INSTANTIATE_TEST_SUITE_P(
         // NOTE: This also supports logical shard height that breaks the height logically
         ShardWithAlignmentParams{
             ShardWithAlignmentInputs{
-                .shape = SimpleShape{1, 1, 15, 15},
+                .shape = Shape{1, 1, 15, 15},
                 .logical_shard_shape = Shape2D{5, 15},
                 .physical_shard_shape = std::nullopt,
                 .memory_layout = TensorMemoryLayout::HEIGHT_SHARDED,
@@ -354,7 +354,7 @@ INSTANTIATE_TEST_SUITE_P(
         // TILE width sharded is equivalent to setting logical shard height to full flattened tensor height
         ShardWithAlignmentParams{
             ShardWithAlignmentInputs{
-                .shape = SimpleShape{1, 2, 5, 20},
+                .shape = Shape{1, 2, 5, 20},
                 .logical_shard_shape = Shape2D{10, 10},
                 .physical_shard_shape = std::nullopt,
                 .memory_layout = TensorMemoryLayout::WIDTH_SHARDED,
@@ -394,7 +394,7 @@ INSTANTIATE_TEST_SUITE_P(
         // TILE block sharded with alignment up to nearest page instead of physical shard shape in last row/col
         ShardWithAlignmentParams{
             ShardWithAlignmentInputs{
-                .shape = SimpleShape{1, 1, 30, 30},
+                .shape = Shape{1, 1, 30, 30},
                 .logical_shard_shape = Shape2D{18, 20},
                 .physical_shard_shape = std::nullopt,
                 .memory_layout = TensorMemoryLayout::BLOCK_SHARDED,
@@ -488,7 +488,7 @@ INSTANTIATE_TEST_SUITE_P(
         // RM interleaved is equivalent to setting logical shard size to 1 by 1
         ShardWithAlignmentParams{
             ShardWithAlignmentInputs{
-                .shape = SimpleShape{1, 2, 5, 1},
+                .shape = Shape{1, 2, 5, 1},
                 .logical_shard_shape = Shape2D{1, 1},
                 .physical_shard_shape = std::nullopt,
                 .memory_layout = TensorMemoryLayout::HEIGHT_SHARDED,
@@ -540,7 +540,7 @@ INSTANTIATE_TEST_SUITE_P(
         // RM height sharded with padding along width to arbitrary shard width
         ShardWithAlignmentParams{
             ShardWithAlignmentInputs{
-                .shape = SimpleShape{1, 2, 5, 1},
+                .shape = Shape{1, 2, 5, 1},
                 .logical_shard_shape = Shape2D{3, 1},
                 .physical_shard_shape = Shape2D{3, 4},
                 .memory_layout = TensorMemoryLayout::HEIGHT_SHARDED,
@@ -582,7 +582,7 @@ INSTANTIATE_TEST_SUITE_P(
         // RM width sharded with alignment up to nearest page in last shard (in RM sharded, it is set to physical shard width)
         ShardWithAlignmentParams{
             ShardWithAlignmentInputs{
-                .shape = SimpleShape{1, 2, 5, 10},
+                .shape = Shape{1, 2, 5, 10},
                 .logical_shard_shape = Shape2D{10, 3},
                 .physical_shard_shape = std::nullopt,
                 .memory_layout = TensorMemoryLayout::WIDTH_SHARDED,
@@ -616,7 +616,7 @@ INSTANTIATE_TEST_SUITE_P(
         // RM width sharded with padding along width to arbitrary shard width
         ShardWithAlignmentParams{
             ShardWithAlignmentInputs{
-                .shape = SimpleShape{1, 2, 5, 10},
+                .shape = Shape{1, 2, 5, 10},
                 .logical_shard_shape = Shape2D{10, 3},
                 .physical_shard_shape = Shape2D{10, 4},
                 .memory_layout = TensorMemoryLayout::WIDTH_SHARDED,
@@ -650,7 +650,7 @@ INSTANTIATE_TEST_SUITE_P(
         // Arbitrary logical shard shape and alignment to stress test edges with padding
         ShardWithAlignmentParams{
             ShardWithAlignmentInputs{
-                .shape = SimpleShape{1, 2, 10, 10},
+                .shape = Shape{1, 2, 10, 10},
                 .logical_shard_shape = Shape2D{3, 4},
                 .physical_shard_shape = Shape2D{5, 7},
                 .memory_layout = TensorMemoryLayout::BLOCK_SHARDED,
@@ -736,7 +736,7 @@ namespace {
 const CoreCoord grid_size{8, 7};
 
 struct CreateShardedTensorWithAlignmentInputs {
-    SimpleShape shape;
+    Shape shape;
     DataType data_type;
     PageConfig page_config;
     MemoryConfig memory_config;
@@ -779,7 +779,7 @@ INSTANTIATE_TEST_SUITE_P(
         // - Along height: 48 * 56 / 48 is 56 shards; 56 * 64 = 3584
         CreateShardedTensorWithAlignmentParams{
             CreateShardedTensorWithAlignmentInputs{
-                .shape = SimpleShape{1, 48, 56, 32},
+                .shape = Shape{1, 48, 56, 32},
                 .data_type = DataType::BFLOAT16,
                 .page_config = PageConfig(Layout::TILE),
                 .memory_config =
@@ -802,7 +802,7 @@ INSTANTIATE_TEST_SUITE_P(
         // - Along height: 48 * 56 / 64 is 42 shards; 42 * 64 = 2688
         CreateShardedTensorWithAlignmentParams{
             CreateShardedTensorWithAlignmentInputs{
-                .shape = SimpleShape{1, 48, 56, 32},
+                .shape = Shape{1, 48, 56, 32},
                 .data_type = DataType::BFLOAT16,
                 .page_config = PageConfig(Layout::TILE),
                 .memory_config =
@@ -824,7 +824,7 @@ INSTANTIATE_TEST_SUITE_P(
         // 48 "shards" with 56 aligned to 32 for tile alignment; 48 * 64 = 3072
         CreateShardedTensorWithAlignmentParams{
             CreateShardedTensorWithAlignmentInputs{
-                .shape = SimpleShape{1, 48, 56, 32},
+                .shape = Shape{1, 48, 56, 32},
                 .data_type = DataType::BFLOAT16,
                 .page_config = PageConfig(Layout::TILE),
                 .memory_config =
@@ -845,7 +845,7 @@ INSTANTIATE_TEST_SUITE_P(
         // - Along width: 5 / 1 is 5 shards; 5 * 1 = 5
         CreateShardedTensorWithAlignmentParams{
             CreateShardedTensorWithAlignmentInputs{
-                .shape = SimpleShape{1, 2, 10, 5},
+                .shape = Shape{1, 2, 10, 5},
                 .data_type = DataType::UINT8,
                 .page_config = PageConfig(Layout::ROW_MAJOR),
                 .memory_config =
@@ -868,7 +868,7 @@ INSTANTIATE_TEST_SUITE_P(
         // - Along width: 8 / 4 is 2 shards; 2 * 4 = 8
         CreateShardedTensorWithAlignmentParams{
             CreateShardedTensorWithAlignmentInputs{
-                .shape = SimpleShape{1, 2, 10, 8},
+                .shape = Shape{1, 2, 10, 8},
                 .data_type = DataType::UINT8,
                 .page_config = PageConfig(Layout::ROW_MAJOR),
                 .memory_config =
@@ -890,7 +890,7 @@ INSTANTIATE_TEST_SUITE_P(
         // 20 "shards" with 5 aligned to 1
         CreateShardedTensorWithAlignmentParams{
             CreateShardedTensorWithAlignmentInputs{
-                .shape = SimpleShape{1, 2, 10, 5},
+                .shape = Shape{1, 2, 10, 5},
                 .data_type = DataType::UINT8,
                 .page_config = PageConfig(Layout::ROW_MAJOR),
                 .memory_config =
@@ -910,7 +910,7 @@ INSTANTIATE_TEST_SUITE_P(
         // - Along width: 32 / 10 is 4 shards; 4 * custom alignment 48 = 192 (48 % 16 == 0, so it is legal)
         CreateShardedTensorWithAlignmentParams{
             CreateShardedTensorWithAlignmentInputs{
-                .shape = SimpleShape{1, 8, 36, 32},
+                .shape = Shape{1, 8, 36, 32},
                 .data_type = DataType::BFLOAT8_B,
                 .page_config = PageConfig(Layout::TILE, Tile({32, 16})),
                 .memory_config =
@@ -933,7 +933,7 @@ INSTANTIATE_TEST_SUITE_P(
         // - Along width: 5 / 2 is 3 shards; 3 * custom alignment 3 = 9 (alignment on width can be arbitrary because UINT32 is already 4-byte aligned)
         CreateShardedTensorWithAlignmentParams{
             CreateShardedTensorWithAlignmentInputs{
-                .shape = SimpleShape{1, 2, 10, 5},
+                .shape = Shape{1, 2, 10, 5},
                 .data_type = DataType::UINT32,
                 .page_config = PageConfig(Layout::ROW_MAJOR),
                 .memory_config =
@@ -957,7 +957,7 @@ INSTANTIATE_TEST_SUITE_P(
 
 namespace {
 struct IllegalShardSpecParams {
-    SimpleShape shape;
+    Shape shape;
     PageConfig page_config;
     MemoryConfig memory_config;
     std::string expected_err_msg;
@@ -967,7 +967,6 @@ struct IllegalShardSpecParams {
 class IllegalTensorLayoutCreationTests : public ::testing::TestWithParam<IllegalShardSpecParams> {};
 
 TEST_P(IllegalTensorLayoutCreationTests, ExpectFailAndCheckErrMsg) {
-    GTEST_SKIP() << "Enable tests after flipping asserts to TT_FATAL (issue #17060)";
     const auto& params = GetParam();
 
     EXPECT_THAT(
@@ -984,7 +983,7 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::Values(
         // Physical shard shape is not tile sized
         IllegalShardSpecParams{
-            .shape = SimpleShape{100, 20},
+            .shape = Shape{100, 20},
             .page_config = PageConfig(Layout::TILE, Tile({32, 16})),
             .memory_config =
                 MemoryConfig{
@@ -1001,7 +1000,7 @@ INSTANTIATE_TEST_SUITE_P(
         },
         // Custom physical shard shape for logical sharding is not tile sized (check along shard width)
         IllegalShardSpecParams{
-            .shape = SimpleShape{100, 20},
+            .shape = Shape{100, 20},
             .page_config = PageConfig(Layout::TILE, Tile({32, 32})),
             .memory_config =
                 MemoryConfig{
@@ -1019,7 +1018,7 @@ INSTANTIATE_TEST_SUITE_P(
         },
         // Custom physical shard shape for logical sharding is not tile sized (check along shard height)
         IllegalShardSpecParams{
-            .shape = SimpleShape{100, 20},
+            .shape = Shape{100, 20},
             .page_config = PageConfig(Layout::TILE, Tile({32, 32})),
             .memory_config =
                 MemoryConfig{
@@ -1042,7 +1041,6 @@ INSTANTIATE_TEST_SUITE_P(
 class IllegalTensorSpecCreationTests : public ::testing::TestWithParam<IllegalShardSpecParams> {};
 
 TEST_P(IllegalTensorSpecCreationTests, ExpectFailAndCheckErrMsg) {
-    GTEST_SKIP() << "Enable tests after flipping asserts to TT_FATAL (issue #17060)";
     const auto& params = GetParam();
 
     auto tensor_layout = TensorLayout(DataType::BFLOAT16, params.page_config, params.memory_config);
@@ -1059,7 +1057,7 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::Values(
         // HEIGHT sharded: Not enough cores
         IllegalShardSpecParams{
-            .shape = SimpleShape{100, 16},
+            .shape = Shape{100, 16},
             .page_config = PageConfig(Layout::TILE, Tile({32, 16})),
             .memory_config =
                 MemoryConfig{
@@ -1076,7 +1074,7 @@ INSTANTIATE_TEST_SUITE_P(
         },
         // HEIGHT sharded: Not enough cores
         IllegalShardSpecParams{
-            .shape = SimpleShape{100, 20},
+            .shape = Shape{100, 20},
             .page_config = PageConfig(Layout::TILE, Tile({32, 16})),
             .memory_config =
                 MemoryConfig{
@@ -1094,7 +1092,7 @@ INSTANTIATE_TEST_SUITE_P(
         },
         // HEIGHT sharded: Shard width does not match
         IllegalShardSpecParams{
-            .shape = SimpleShape{100, 20},
+            .shape = Shape{100, 20},
             .page_config = PageConfig(Layout::TILE, Tile({32, 16})),
             .memory_config =
                 MemoryConfig{
@@ -1111,7 +1109,7 @@ INSTANTIATE_TEST_SUITE_P(
         },
         // HEIGHT sharded: Shard width does not match
         IllegalShardSpecParams{
-            .shape = SimpleShape{100, 20},
+            .shape = Shape{100, 20},
             .page_config = PageConfig(Layout::TILE, Tile({32, 16})),
             .memory_config =
                 MemoryConfig{
@@ -1129,7 +1127,7 @@ INSTANTIATE_TEST_SUITE_P(
         },
         // WIDTH sharded: Not enough cores
         IllegalShardSpecParams{
-            .shape = SimpleShape{16, 100},
+            .shape = Shape{16, 100},
             .page_config = PageConfig(Layout::TILE, Tile({16, 32})),
             .memory_config =
                 MemoryConfig{
@@ -1146,7 +1144,7 @@ INSTANTIATE_TEST_SUITE_P(
         },
         // WIDTH sharded: Not enough cores
         IllegalShardSpecParams{
-            .shape = SimpleShape{20, 100},
+            .shape = Shape{20, 100},
             .page_config = PageConfig(Layout::TILE, Tile({16, 32})),
             .memory_config =
                 MemoryConfig{
@@ -1164,7 +1162,7 @@ INSTANTIATE_TEST_SUITE_P(
         },
         // WIDTH sharded: Shard height does not match
         IllegalShardSpecParams{
-            .shape = SimpleShape{20, 100},
+            .shape = Shape{20, 100},
             .page_config = PageConfig(Layout::TILE, Tile({16, 32})),
             .memory_config =
                 MemoryConfig{
@@ -1181,7 +1179,7 @@ INSTANTIATE_TEST_SUITE_P(
         },
         // WIDTH sharded: Shard height does not match
         IllegalShardSpecParams{
-            .shape = SimpleShape{20, 100},
+            .shape = Shape{20, 100},
             .page_config = PageConfig(Layout::TILE, Tile({16, 32})),
             .memory_config =
                 MemoryConfig{
@@ -1199,7 +1197,7 @@ INSTANTIATE_TEST_SUITE_P(
         },
         // BLOCK sharded: Grid is not rectangular
         IllegalShardSpecParams{
-            .shape = SimpleShape{100, 100},
+            .shape = Shape{100, 100},
             .page_config = PageConfig(Layout::TILE, Tile({16, 32})),
             .memory_config =
                 MemoryConfig{
@@ -1217,7 +1215,7 @@ INSTANTIATE_TEST_SUITE_P(
         },
         // BLOCK sharded: Shards must stay within row/col
         IllegalShardSpecParams{
-            .shape = SimpleShape{100, 100},
+            .shape = Shape{100, 100},
             .page_config = PageConfig(Layout::TILE, Tile({32, 32})),
             .memory_config =
                 MemoryConfig{
@@ -1235,7 +1233,7 @@ INSTANTIATE_TEST_SUITE_P(
         },
         // BLOCK sharded: Shards must stay within row/col
         IllegalShardSpecParams{
-            .shape = SimpleShape{100, 100},
+            .shape = Shape{100, 100},
             .page_config = PageConfig(Layout::TILE, Tile({32, 32})),
             .memory_config =
                 MemoryConfig{
@@ -1253,7 +1251,7 @@ INSTANTIATE_TEST_SUITE_P(
         },
         // BLOCK sharded: Shards must stay within row/col
         IllegalShardSpecParams{
-            .shape = SimpleShape{100, 100},
+            .shape = Shape{100, 100},
             .page_config = PageConfig(Layout::TILE, Tile({32, 32})),
             .memory_config =
                 MemoryConfig{
@@ -1271,7 +1269,7 @@ INSTANTIATE_TEST_SUITE_P(
         },
         // BLOCK sharded: Shards must stay within row/col
         IllegalShardSpecParams{
-            .shape = SimpleShape{100, 100},
+            .shape = Shape{100, 100},
             .page_config = PageConfig(Layout::TILE, Tile({32, 32})),
             .memory_config =
                 MemoryConfig{

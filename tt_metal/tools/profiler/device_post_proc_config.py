@@ -24,6 +24,28 @@ class default_setup(metaclass=MergeMetaclass):
     ]
 
     timerAnalysis = {
+        "device_kernel_first_to_last_start": {
+            "across": "ops",
+            "type": "op_first_last",
+            "start": {
+                "core": "ANY",
+                "risc": "ANY",
+                "zone_phase": "ZONE_START",
+                "zone_name": [f"{risc}-KERNEL" for risc in riscTypes],
+            },
+            "end": {
+                "core": "ANY",
+                "risc": "ANY",
+                "zone_phase": "ZONE_START",
+                "zone_name": [f"{risc}-KERNEL" for risc in riscTypes],
+            },
+        },
+        "device_kernel_duration_per_core": {
+            "across": "ops",
+            "type": "op_core_first_last",
+            "start": {"core": "ANY", "risc": "ANY", "zone_name": [f"{risc}-KERNEL" for risc in riscTypes]},
+            "end": {"core": "ANY", "risc": "ANY", "zone_name": [f"{risc}-KERNEL" for risc in riscTypes]},
+        },
         "device_fw_duration": {
             "across": "ops",
             "type": "op_first_last",

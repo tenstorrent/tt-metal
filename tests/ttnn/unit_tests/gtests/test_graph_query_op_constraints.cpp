@@ -70,7 +70,7 @@ static std::ostream& operator<<(std::ostream& os, const tt::tt_metal::TensorLayo
     return os;
 }
 
-static std::ostream& operator<<(std::ostream& os, const ttnn::SimpleShape& shape) {
+static std::ostream& operator<<(std::ostream& os, const ttnn::Shape& shape) {
     for (size_t i = 0; i < shape.rank(); i++) {
         if (i != 0) {
             os << "x";
@@ -87,7 +87,7 @@ static std::ostream& operator<<(std::ostream& os, const ttnn::SimpleShape& shape
 // ============================================================================
 
 const auto g_height_shard_3_1_1024_1024_tiled_to_16_cores = ttnn::TensorSpec(
-    ttnn::SimpleShape(tt::tt_metal::Array4D{3, 1, 32 * 32, 32 * 32}),
+    ttnn::Shape(tt::tt_metal::Array4D{3, 1, 32 * 32, 32 * 32}),
     tt::tt_metal::TensorLayout(
         tt::tt_metal::DataType::BFLOAT16,
         tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
@@ -100,7 +100,7 @@ const auto g_height_shard_3_1_1024_1024_tiled_to_16_cores = ttnn::TensorSpec(
                 ShardOrientation::ROW_MAJOR}}));
 
 const auto g_height_shard_1_1_1024_32_tiled_to_32_cores = ttnn::TensorSpec(
-    ttnn::SimpleShape(tt::tt_metal::Array4D{1, 1, 32 * 32, 64}),
+    ttnn::Shape(tt::tt_metal::Array4D{1, 1, 32 * 32, 64}),
     tt::tt_metal::TensorLayout(
         tt::tt_metal::DataType::BFLOAT16,
         tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
@@ -113,49 +113,49 @@ const auto g_height_shard_1_1_1024_32_tiled_to_32_cores = ttnn::TensorSpec(
                 ShardOrientation::ROW_MAJOR}}));
 
 const auto g_interleaved_1_1_1024_1024_tiled = ttnn::TensorSpec(
-    ttnn::SimpleShape(tt::tt_metal::Array4D{1, 1, 64, 128}),
+    ttnn::Shape(tt::tt_metal::Array4D{1, 1, 64, 128}),
     tt::tt_metal::TensorLayout(
         tt::tt_metal::DataType::BFLOAT16,
         tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
         ttnn::L1_MEMORY_CONFIG));
 
 const auto g_interleave_4_2_160_244_tiled = ttnn::TensorSpec(
-    ttnn::SimpleShape(tt::tt_metal::Array4D{4, 2, 5 * 32, 7 * 32}),
+    ttnn::Shape(tt::tt_metal::Array4D{4, 2, 5 * 32, 7 * 32}),
     tt::tt_metal::TensorLayout(
         tt::tt_metal::DataType::BFLOAT16,
         tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
         ttnn::L1_MEMORY_CONFIG));
 
 const auto g_interleave_1_2_160_244_tiled = ttnn::TensorSpec(
-    ttnn::SimpleShape(tt::tt_metal::Array4D{1, 1, 5 * 32, 7 * 32}),
+    ttnn::Shape(tt::tt_metal::Array4D{1, 1, 5 * 32, 7 * 32}),
     tt::tt_metal::TensorLayout(
         tt::tt_metal::DataType::BFLOAT16,
         tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
         ttnn::L1_MEMORY_CONFIG));
 
 const auto g_interleave_1_1_160_244_tiled = ttnn::TensorSpec(
-    ttnn::SimpleShape(tt::tt_metal::Array4D{1, 1, 5 * 32, 7 * 32}),
+    ttnn::Shape(tt::tt_metal::Array4D{1, 1, 5 * 32, 7 * 32}),
     tt::tt_metal::TensorLayout(
         tt::tt_metal::DataType::BFLOAT16,
         tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
         ttnn::L1_MEMORY_CONFIG));
 
 const auto g_interleaved_1_1_2048_64_tiled = ttnn::TensorSpec(
-    ttnn::SimpleShape(tt::tt_metal::Array4D{1, 1, 2048, 64}),
+    ttnn::Shape(tt::tt_metal::Array4D{1, 1, 2048, 64}),
     tt::tt_metal::TensorLayout(
         tt::tt_metal::DataType::BFLOAT16,
         tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
         ttnn::L1_MEMORY_CONFIG));
 
 const auto g_interleaved_1_1_245_1024_tiled = ttnn::TensorSpec(
-    ttnn::SimpleShape(tt::tt_metal::Array4D{1, 1, 256, 1024}),
+    ttnn::Shape(tt::tt_metal::Array4D{1, 1, 256, 1024}),
     tt::tt_metal::TensorLayout(
         tt::tt_metal::DataType::BFLOAT16,
         tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
         ttnn::L1_MEMORY_CONFIG));
 
 const auto g_width_shard_1_1_64_2048_tiled_to_32_cores = ttnn::TensorSpec(
-    ttnn::SimpleShape(tt::tt_metal::Array4D{1, 1, 64, 2048}),
+    ttnn::Shape(tt::tt_metal::Array4D{1, 1, 64, 2048}),
     tt::tt_metal::TensorLayout(
         tt::tt_metal::DataType::BFLOAT16,
         tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
@@ -168,7 +168,7 @@ const auto g_width_shard_1_1_64_2048_tiled_to_32_cores = ttnn::TensorSpec(
                 ShardOrientation::ROW_MAJOR}}));
 
 const auto g_block_shard_1_1_1600_256_tiled_to_32_cores = ttnn::TensorSpec(
-    ttnn::SimpleShape(tt::tt_metal::Array4D{1, 1, 1600, 256}),
+    ttnn::Shape(tt::tt_metal::Array4D{1, 1, 1600, 256}),
     tt::tt_metal::TensorLayout(
         tt::tt_metal::DataType::BFLOAT16,
         tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
@@ -414,13 +414,13 @@ INSTANTIATE_TEST_SUITE_P(
             ResourceUsageMap{
                 {BoardType::N300,
                  ttnn::graph::ResourceUsage{
-                     .cb_peak_size_per_core = 3 * (2 * 2 * 32 * 32),
-                     .l1_buffers_peak_per_core = 20480,
+                     .cb_peak_size_per_core = 57344,
+                     .l1_buffers_peak_per_core = 26688,
                      .l1_output_buffer_per_core = 10240}},
                 {BoardType::E150,
                  ttnn::graph::ResourceUsage{
-                     .cb_peak_size_per_core = 3 * (2 * 2 * 32 * 32),
-                     .l1_buffers_peak_per_core = 12288,
+                     .cb_peak_size_per_core = 57344,
+                     .l1_buffers_peak_per_core = 14720,
                      .l1_output_buffer_per_core = 6144}}}),
         std::make_tuple(  // broadcast
             g_interleave_4_2_160_244_tiled,
@@ -428,13 +428,13 @@ INSTANTIATE_TEST_SUITE_P(
             ResourceUsageMap{
                 {BoardType::N300,
                  ttnn::graph::ResourceUsage{
-                     .cb_peak_size_per_core = 3 * (2 * 2 * 32 * 32),
-                     .l1_buffers_peak_per_core = 20480,
+                     .cb_peak_size_per_core = 57344,
+                     .l1_buffers_peak_per_core = 26688,
                      .l1_output_buffer_per_core = 10240}},
                 {BoardType::E150,
                  ttnn::graph::ResourceUsage{
-                     .cb_peak_size_per_core = 3 * (2 * 2 * 32 * 32),
-                     .l1_buffers_peak_per_core = 12288,
+                     .cb_peak_size_per_core = 57344,
+                     .l1_buffers_peak_per_core = 14720,
                      .l1_output_buffer_per_core = 6144}}})),
     [](const testing::TestParamInfo<std::tuple<ttnn::TensorSpec, ttnn::TensorSpec, ResourceUsageMap>>& info) {
         std::stringstream ss;
@@ -492,7 +492,7 @@ TEST_P(MatmulOpIfTest, Matmul) {
         tt::tt_metal::IDevice* device = &getDevice();
 
         const auto output_spec = ttnn::TensorSpec(
-            ttnn::SimpleShape(tt::tt_metal::Array4D{
+            ttnn::Shape(tt::tt_metal::Array4D{
                 input_spec_a.logical_shape()[0],
                 input_spec_a.logical_shape()[1],
                 input_spec_a.logical_shape()[-2],

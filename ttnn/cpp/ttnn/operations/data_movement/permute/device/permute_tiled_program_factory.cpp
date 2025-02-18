@@ -23,7 +23,7 @@ uint32_t num_tiles(const ttnn::Tensor& input_tensor) {
 
 uint32_t tile_size(const ttnn::Tensor& input_tensor) { return tile_volume(input_tensor) * input_tensor.element_size(); }
 
-ttnn::SimpleShape get_tiled_shape(const ttnn::Tensor& input_tensor) {
+ttnn::Shape get_tiled_shape(const ttnn::Tensor& input_tensor) {
     const auto& tile_shape = input_tensor.get_tensor_spec().tile().get_tile_shape();
     const auto& shape = input_tensor.get_padded_shape();
     ttnn::SmallVector<uint32_t> tiled_shape;
@@ -39,11 +39,11 @@ ttnn::SimpleShape get_tiled_shape(const ttnn::Tensor& input_tensor) {
         }
         tiled_shape.push_back(dim);
     }
-    auto res = ttnn::SimpleShape(tiled_shape);
+    auto res = ttnn::Shape(tiled_shape);
     return res;
 }
 
-ttnn::SmallVector<uint32_t> get_strides(const ttnn::SimpleShape& shape) {
+ttnn::SmallVector<uint32_t> get_strides(const ttnn::Shape& shape) {
     ttnn::SmallVector<uint32_t> strides(shape.rank());
     strides[shape.rank() - 1] = 1;
     for (int i = shape.rank() - 2; i >= 0; i--) {

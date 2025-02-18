@@ -24,7 +24,7 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
     // split work
 
     // input_grad: (N, C)
-    auto input_grad_shape = input_grad.get_shape().value;
+    auto input_grad_shape = input_grad.get_padded_shape();
     auto N = input_grad_shape[0];
     auto channel_size = input_grad_shape[1];
 
@@ -195,7 +195,7 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
     // split work
 
     // input_grad: (N, C, W)
-    auto input_grad_shape = input_grad.get_shape().value;
+    auto input_grad_shape = input_grad.get_padded_shape();
     auto N = input_grad_shape[0];
     auto channel_size = input_grad_shape[1];
 
@@ -203,7 +203,7 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
     auto Ct = channel_size / tt::constants::TILE_HEIGHT;
     auto Wt = W / tt::constants::TILE_WIDTH;
 
-    auto target_shape = target.get_shape().value;
+    auto target_shape = target.get_padded_shape();
     auto num_inner_tile = target_shape[-1] / tt::constants::TILE_WIDTH;
 
     const bool weight_has_value = weight.has_value();
@@ -369,7 +369,7 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t moreh_nll_loss_ba
     const uint32_t ignore_index,
     const DeviceComputeKernelConfig compute_kernel_config) {
     // split work
-    auto input_grad_shape = input_grad.get_shape().value;
+    auto input_grad_shape = input_grad.get_padded_shape();
     auto N = input_grad_shape[0];
     auto channel_size = input_grad_shape[1];
 
@@ -551,7 +551,7 @@ MorehNllLossBackwardDeviceOperation::Factory::cached_program_t MorehNllLossBackw
     const Tensor& input_grad = tensor_return_value;
 
     // split work
-    auto input_grad_shape = input_grad.get_shape();
+    auto input_grad_shape = input_grad.get_logical_shape();
     auto input_grad_rank = input_grad_shape.rank();
 
     if (input_grad_rank == 2) {

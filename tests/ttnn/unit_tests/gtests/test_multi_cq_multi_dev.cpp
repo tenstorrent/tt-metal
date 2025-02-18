@@ -17,7 +17,7 @@ using namespace tt;
 using namespace tt_metal;
 using MultiCommandQueueT3KFixture = ttnn::MultiCommandQueueT3KFixture;
 
-Tensor dispatch_ops_to_device(IDevice* dev, Tensor input_tensor, uint8_t cq_id) {
+Tensor dispatch_ops_to_device(IDevice* dev, Tensor input_tensor, QueueId cq_id) {
     using ttnn::operations::unary::UnaryOpType;
     using ttnn::operations::unary::UnaryWithParam;
 
@@ -45,7 +45,7 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ1) {
         .buffer_type = BufferType::DRAM,
         .shard_spec = std::nullopt};
 
-    ttnn::SimpleShape shape{1, 3, 2048, 2048};
+    ttnn::Shape shape{1, 3, 2048, 2048};
     uint32_t buf_size_datums = 2048 * 2048 * 3;
     uint32_t datum_size_bytes = 2;
     auto host_data = std::shared_ptr<bfloat16[]>(new bfloat16[buf_size_datums]);
@@ -71,17 +71,17 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ1) {
                 auto write_event = std::make_shared<Event>();
                 auto workload_event = std::make_shared<Event>();
                 ttnn::write_buffer(
-                    0,
+                    ttnn::QueueId(0),
                     input_tensor,
                     {host_data, host_data, host_data, host_data, host_data, host_data, host_data, host_data});
                 ttnn::record_event(device->command_queue(0), write_event);
                 ttnn::wait_for_event(device->command_queue(1), write_event);
-                auto output_tensor = dispatch_ops_to_device(device, input_tensor, 1);
+                auto output_tensor = dispatch_ops_to_device(device, input_tensor, ttnn::QueueId(1));
                 ttnn::record_event(device->command_queue(1), workload_event);
                 ttnn::wait_for_event(device->command_queue(0), workload_event);
 
                 ttnn::read_buffer(
-                    0,
+                    ttnn::QueueId(0),
                     output_tensor,
                     {readback_data,
                      readback_data,
@@ -112,7 +112,7 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ0) {
         .buffer_type = BufferType::DRAM,
         .shard_spec = std::nullopt};
 
-    ttnn::SimpleShape shape{1, 3, 2048, 2048};
+    ttnn::Shape shape{1, 3, 2048, 2048};
     uint32_t buf_size_datums = 2048 * 2048 * 3;
     uint32_t datum_size_bytes = 2;
     auto host_data = std::shared_ptr<bfloat16[]>(new bfloat16[buf_size_datums]);
@@ -139,17 +139,17 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceProgramsOnCQ0) {
                 auto write_event = std::make_shared<Event>();
                 auto workload_event = std::make_shared<Event>();
                 ttnn::write_buffer(
-                    1,
+                    ttnn::QueueId(1),
                     input_tensor,
                     {host_data, host_data, host_data, host_data, host_data, host_data, host_data, host_data});
                 ttnn::record_event(device->command_queue(1), write_event);
                 ttnn::wait_for_event(device->command_queue(0), write_event);
-                auto output_tensor = dispatch_ops_to_device(device, input_tensor, 0);
+                auto output_tensor = dispatch_ops_to_device(device, input_tensor, ttnn::DefaultQueueId);
                 ttnn::record_event(device->command_queue(0), workload_event);
                 ttnn::wait_for_event(device->command_queue(1), workload_event);
                 // std::this_thread::sleep_for(std::chrono::milliseconds(50));
                 ttnn::read_buffer(
-                    1,
+                    ttnn::QueueId(1),
                     output_tensor,
                     {readback_data,
                      readback_data,
@@ -180,7 +180,7 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceWithCQ1Only) {
         .buffer_type = BufferType::DRAM,
         .shard_spec = std::nullopt};
 
-    ttnn::SimpleShape shape{1, 3, 2048, 2048};
+    ttnn::Shape shape{1, 3, 2048, 2048};
     uint32_t buf_size_datums = 2048 * 2048 * 3;
     uint32_t datum_size_bytes = 2;
     auto host_data = std::shared_ptr<bfloat16[]>(new bfloat16[buf_size_datums]);
@@ -208,16 +208,16 @@ TEST_F(MultiCommandQueueT3KFixture, Test2CQMultiDeviceWithCQ1Only) {
                 auto workload_event = std::make_shared<Event>();
 
                 ttnn::write_buffer(
-                    1,
+                    ttnn::QueueId(1),
                     input_tensor,
                     {host_data, host_data, host_data, host_data, host_data, host_data, host_data, host_data});
                 ttnn::record_event(device->command_queue(1), write_event);
                 ttnn::wait_for_event(device->command_queue(1), write_event);
-                auto output_tensor = dispatch_ops_to_device(device, input_tensor, 1);
+                auto output_tensor = dispatch_ops_to_device(device, input_tensor, ttnn::QueueId(1));
                 ttnn::record_event(device->command_queue(1), workload_event);
                 ttnn::wait_for_event(device->command_queue(1), workload_event);
                 ttnn::read_buffer(
-                    1,
+                    ttnn::QueueId(1),
                     output_tensor,
                     {readback_data,
                      readback_data,

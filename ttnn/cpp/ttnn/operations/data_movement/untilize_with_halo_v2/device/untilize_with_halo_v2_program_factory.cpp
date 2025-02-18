@@ -170,6 +170,9 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     bool const is_width_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED;
 
     auto aligned_input_nstick_nbytes = out_stick_nbytes;
+    log_debug(tt::LogOp, "out_stick_nbytes = {}", out_stick_nbytes);
+    log_debug(tt::LogOp, "input_tensor.buffer()->alignment() = {}", input_tensor.buffer()->alignment());
+
     if (out_stick_nbytes % input_tensor.buffer()->alignment() != 0) {
         aligned_input_nstick_nbytes = tt::round_up(out_stick_nbytes, input_tensor.buffer()->alignment());
     }

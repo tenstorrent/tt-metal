@@ -23,7 +23,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     tt_metal::Program& program,
     const Tensor& a,
     const Tensor& b,
-    const ttnn::SimpleShape& ashape,
+    const ttnn::Shape& ashape,
     std::optional<const Tensor> bias,
     const std::optional<const Tensor>& conv_reader_indices,
     const sliding_window::SlidingWindowConfig& sliding_window_config,
@@ -168,8 +168,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     const auto& p_config = parallelization_config;
     uint32_t num_cores_x = p_config.grid_size.x;
     uint32_t num_cores_y = p_config.grid_size.y;
-    TT_FATAL(num_cores_x < 13, "Error");
-    TT_FATAL(num_cores_y < 10, "Error");
     uint32_t per_core_out_matrix_height_ntiles =
         div_up(p_config.per_core_out_matrix_height, tt::constants::TILE_HEIGHT);
     uint32_t per_core_out_matrix_width_ntiles = div_up(p_config.per_core_out_matrix_width, tt::constants::TILE_WIDTH);
@@ -200,7 +198,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
             "Out_block_h must be divisible by out_subblock_h!");
     }
 
-    ttnn::SimpleShape ashape_with_channels_padded({ashape[0], ashape[1], ashape[2], input_channels_padded});
+    ttnn::Shape ashape_with_channels_padded({ashape[0], ashape[1], ashape[2], input_channels_padded});
 
     uint32_t conv_act_size_h = ashape_with_channels_padded[1];
     uint32_t conv_act_size_w = ashape_with_channels_padded[2];

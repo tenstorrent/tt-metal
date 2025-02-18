@@ -50,7 +50,7 @@ Tensor HaloTensorCreation(const Tensor& input) {
         .is_bilinear = true};
 
     const auto& input_shape = input.get_logical_shape();
-    SimpleShape new_shape({1, 1, input_shape[0] * input_shape[1] * input_shape[2], input_shape[3]});
+    Shape new_shape({1, 1, input_shape[0] * input_shape[1] * input_shape[2], input_shape[3]});
     input_tensor = ttnn::reshape(input_tensor, new_shape);
 
     auto halo_output = ttnn::halo(

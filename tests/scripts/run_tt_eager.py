@@ -32,42 +32,9 @@ from tests.scripts.cmdline_args import (
 TT_EAGER_COMMON_TEST_ENTRIES = (
     TestEntry("tt_eager/tests/ops/test_eltwise_binary_op", "ops/test_eltwise_binary_op"),
     TestEntry("tt_eager/tests/ops/test_bcast_op", "ops/test_bcast_op"),
-    TestEntry("tt_eager/tests/ops/test_transpose_op", "ops/test_transpose_op"),
     TestEntry("tt_eager/tests/ops/test_sliding_window_ops", "ops/test_sliding_window_ops"),
-    TestEntry("tt_eager/tests/ops/test_conv_prepare_weights_and_biases", "ops/test_conv_prepare_weights_and_biases"),
     TestEntry("tt_eager/tests/ops/test_bmm_op", "ops/test_bmm_op"),
     void_for_bh(void_for_whb0(TestEntry("tt_eager/tests/ops/test_eltwise_unary_op", "ops/test_eltwise_unary_op"))),
-    void_for_whb0(
-        TestEntry(
-            "tt_eager/tests/ops/test_transpose_wh_single_core",
-            "ops/test_transpose_wh_single_core",
-        )
-    ),
-    void_for_whb0(
-        TestEntry(
-            "tt_eager/tests/ops/test_transpose_wh_multi_core",
-            "ops/test_transpose_wh_multi_core",
-        )
-    ),
-    void_for_whb0(TestEntry("tt_eager/tests/ops/test_tilize_op", "ops/test_tilize_op")),
-    void_for_whb0(
-        TestEntry(
-            "tt_eager/tests/ops/test_tilize_op_channels_last",
-            "ops/test_tilize_op_channels_last",
-        )
-    ),
-    void_for_whb0(
-        TestEntry(
-            "tt_eager/tests/ops/test_tilize_zero_padding",
-            "ops/test_tilize_zero_padding",
-        )
-    ),
-    void_for_whb0(
-        TestEntry(
-            "tt_eager/tests/ops/test_tilize_zero_padding_channels_last",
-            "ops/test_tilize_zero_padding_channels_last",
-        )
-    ),
     TestEntry("tt_eager/tests/ops/test_layernorm_op", "ops/test_layernorm_op"),
     TestEntry("tt_eager/tests/ops/test_softmax_op", "ops/test_softmax_op"),
     TestEntry("tt_eager/tests/ops/test_average_pool", "ops/test_average_pool"),

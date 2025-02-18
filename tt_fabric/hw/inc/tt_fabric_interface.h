@@ -35,7 +35,7 @@ constexpr uint32_t FVC_SYNC_THRESHOLD = 256;
 #define SOCKET_CONNECT (0x1 << 10)
 
 #define INVALID 0x0
-#define DATA 0x1
+#define MCAST_ACTIVE 0x1
 #define MCAST_DATA 0x2
 #define SYNC 0x4
 #define FORWARD 0x8
@@ -70,11 +70,11 @@ typedef struct _tt_session {
 static_assert(sizeof(tt_session) == 20);
 
 typedef struct _mcast_params {
+    uint32_t socket_id;  // Socket Id for DSocket Multicast. Ignored for ASYNC multicast.
     uint16_t east;
     uint16_t west;
     uint16_t north;
     uint16_t south;
-    uint32_t socket_id;  // Socket Id for DSocket Multicast. Ignored for ASYNC multicast.
 } mcast_params;
 
 typedef struct _socket_params {
@@ -128,10 +128,14 @@ typedef struct _packet_header {
     tt_routing routing;
 } packet_header_t;
 
-const uint32_t PACKET_HEADER_SIZE_BYTES = 48;
-const uint32_t PACKET_HEADER_SIZE_WORDS = PACKET_HEADER_SIZE_BYTES / PACKET_WORD_SIZE_BYTES;
+constexpr uint32_t PACKET_HEADER_SIZE_BYTES = 48;
+constexpr uint32_t PACKET_HEADER_SIZE_WORDS = PACKET_HEADER_SIZE_BYTES / PACKET_WORD_SIZE_BYTES;
 
 static_assert(sizeof(packet_header_t) == PACKET_HEADER_SIZE_BYTES);
+
+static_assert(offsetof(packet_header_t, routing) % 4 == 0);
+
+constexpr uint32_t packet_header_routing_offset_dwords = offsetof(packet_header_t, routing) / 4;
 
 void tt_fabric_add_header_checksum(packet_header_t* p_header) {
     uint16_t* ptr = (uint16_t*)p_header;
@@ -145,6 +149,7 @@ void tt_fabric_add_header_checksum(packet_header_t* p_header) {
 }
 
 bool tt_fabric_is_header_valid(packet_header_t* p_header) {
+#ifdef TT_FABRIC_DEBUG
     uint16_t* ptr = (uint16_t*)p_header;
     uint32_t sum = 0;
     for (uint32_t i = 2; i < sizeof(packet_header_t) / 2; i++) {
@@ -153,6 +158,9 @@ bool tt_fabric_is_header_valid(packet_header_t* p_header) {
     sum = ~sum;
     sum += sum;
     return (p_header->packet_parameters.misc_parameters.words[0] == sum);
+#else
+    return true;
+#endif
 }
 
 // This is a pull request entry for a fabric router.
@@ -176,11 +184,13 @@ typedef struct _pull_request {
     uint64_t buffer_start;  // Producer local buffer start. Used for wrapping rd/wr_ptr at the end of buffer.
     uint64_t ack_addr;  // Producer local address to send rd_ptr updates. fabric router pushes its rd_ptr to requestor
                         // at this address.
-    uint8_t padding[15];
+    uint32_t words_written;
+    uint32_t words_read;
+    uint8_t padding[7];
     uint8_t flags;  // Router command.
 } pull_request_t;
 
-const uint32_t PULL_REQ_SIZE_BYTES = 48;
+constexpr uint32_t PULL_REQ_SIZE_BYTES = 48;
 
 static_assert(sizeof(pull_request_t) == PULL_REQ_SIZE_BYTES);
 static_assert(sizeof(pull_request_t) == sizeof(packet_header_t));
@@ -191,18 +201,18 @@ typedef union _chan_request_entry {
     uint8_t bytes[48];
 } chan_request_entry_t;
 
-const uint32_t CHAN_PTR_SIZE_BYTES = 16;
+constexpr uint32_t CHAN_PTR_SIZE_BYTES = 16;
 typedef struct _chan_ptr {
     uint32_t ptr;
     uint32_t pad[3];
 } chan_ptr;
 static_assert(sizeof(chan_ptr) == CHAN_PTR_SIZE_BYTES);
 
-const uint32_t CHAN_REQ_BUF_LOG_SIZE = 4;  // must be 2^N
-const uint32_t CHAN_REQ_BUF_SIZE = 16;     // must be 2^N
-const uint32_t CHAN_REQ_BUF_SIZE_MASK = (CHAN_REQ_BUF_SIZE - 1);
-const uint32_t CHAN_REQ_BUF_PTR_MASK = ((CHAN_REQ_BUF_SIZE << 1) - 1);
-const uint32_t CHAN_REQ_BUF_SIZE_BYTES = 2 * CHAN_PTR_SIZE_BYTES + CHAN_REQ_BUF_SIZE * PULL_REQ_SIZE_BYTES;
+constexpr uint32_t CHAN_REQ_BUF_LOG_SIZE = 4;  // must be 2^N
+constexpr uint32_t CHAN_REQ_BUF_SIZE = 16;     // must be 2^N
+constexpr uint32_t CHAN_REQ_BUF_SIZE_MASK = (CHAN_REQ_BUF_SIZE - 1);
+constexpr uint32_t CHAN_REQ_BUF_PTR_MASK = ((CHAN_REQ_BUF_SIZE << 1) - 1);
+constexpr uint32_t CHAN_REQ_BUF_SIZE_BYTES = 2 * CHAN_PTR_SIZE_BYTES + CHAN_REQ_BUF_SIZE * PULL_REQ_SIZE_BYTES;
 
 typedef struct _chan_req_buf {
     chan_ptr wrptr;
@@ -230,12 +240,12 @@ static_assert(sizeof(chan_payload_ptr) == CHAN_PTR_SIZE_BYTES);
 // Each control channel message is 48 Bytes.
 // FVCC buffer is a 16 message buffer each for incoming and outgoing messages.
 // Control message capacity can be increased by increasing FVCC_BUF_SIZE.
-const uint32_t FVCC_BUF_SIZE = 16;     // must be 2^N
-const uint32_t FVCC_BUF_LOG_SIZE = 4;  // must be log2(FVCC_BUF_SIZE)
-const uint32_t FVCC_SIZE_MASK = (FVCC_BUF_SIZE - 1);
-const uint32_t FVCC_PTR_MASK = ((FVCC_BUF_SIZE << 1) - 1);
-const uint32_t FVCC_BUF_SIZE_BYTES = PULL_REQ_SIZE_BYTES * FVCC_BUF_SIZE + 2 * CHAN_PTR_SIZE_BYTES;
-const uint32_t FVCC_SYNC_BUF_SIZE_BYTES = CHAN_PTR_SIZE_BYTES * FVCC_BUF_SIZE;
+constexpr uint32_t FVCC_BUF_SIZE = 16;     // must be 2^N
+constexpr uint32_t FVCC_BUF_LOG_SIZE = 4;  // must be log2(FVCC_BUF_SIZE)
+constexpr uint32_t FVCC_SIZE_MASK = (FVCC_BUF_SIZE - 1);
+constexpr uint32_t FVCC_PTR_MASK = ((FVCC_BUF_SIZE << 1) - 1);
+constexpr uint32_t FVCC_BUF_SIZE_BYTES = PULL_REQ_SIZE_BYTES * FVCC_BUF_SIZE + 2 * CHAN_PTR_SIZE_BYTES;
+constexpr uint32_t FVCC_SYNC_BUF_SIZE_BYTES = CHAN_PTR_SIZE_BYTES * FVCC_BUF_SIZE;
 
 inline bool fvcc_buf_ptrs_empty(uint32_t wrptr, uint32_t rdptr) { return (wrptr == rdptr); }
 
@@ -321,7 +331,8 @@ typedef struct _fabric_client_interface {
     uint64_t gk_interface_addr;
     uint64_t gk_msg_buf_addr;
     uint64_t pull_req_buf_addr;
-    uint32_t padding[2];
+    uint32_t num_routing_planes;
+    uint32_t routing_tables_l1_offset;
     uint32_t return_status[3];
     uint32_t socket_count;
     chan_ptr wrptr;

@@ -241,7 +241,7 @@ void BinaryNgDeviceOperation::validate_on_program_cache_hit(
     }
 
     const auto& input_shape_a = input_tensor_a.get_logical_shape();
-    const auto input_shape_b = input_tensor_b.has_value() ? input_tensor_b->get_logical_shape() : ttnn::Shape{1, 1};
+    const auto input_shape_b = input_tensor_b.has_value() ? input_tensor_b->get_logical_shape() : ttnn::Shape({1, 1});
 
     const int rank_a = input_shape_a.rank();
     const int rank_b = input_shape_b.rank();
@@ -274,7 +274,7 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto input_shape_a = input_tensor_a.logical_shape();
     const auto& tensor_b = tensor_args.input_tensor_b;
-    const auto input_shape_b = tensor_b.has_value() ? tensor_b->logical_shape() : ttnn::SimpleShape{};
+    const auto input_shape_b = tensor_b.has_value() ? tensor_b->logical_shape() : ttnn::Shape{};
 
     const int rank_a = input_shape_a.rank();
     const int rank_b = input_shape_b.rank();
@@ -297,7 +297,7 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
                 output_shape[i + larger_rank] = dim_a + dim_b - 1;
             }
         }
-        return ttnn::SimpleShape(output_shape);
+        return ttnn::Shape(output_shape);
     };
 
     auto output_shape = compute_broadcasted_output(input_shape_a, input_shape_b);
@@ -389,10 +389,10 @@ BinaryNgDeviceOperation::invoke(
         input_tensor_b.get_logical_shape()[-2],
         input_tensor_b.get_logical_shape()[-1]);
 
-    DataType dtype1 = input_tensor_a.get_dtype();
-    DataType dtype2 = input_tensor_a.get_dtype();
+    DataType dtype_a = input_tensor_a.get_dtype();
+    DataType dtype_b = input_tensor_b.get_dtype();
     bool device_check = input_tensor_a.device()->arch() != tt::ARCH::GRAYSKULL;
-    bool is_sfpu_op = (utils::is_binary_sfpu_op(binary_op_type, dtype1, dtype2) && device_check);
+    bool is_sfpu_op = (utils::is_binary_sfpu_op(binary_op_type, dtype_a, dtype_b) && device_check);
 
     return {
         operation_attributes_t{
@@ -422,9 +422,9 @@ BinaryNgDeviceOperation::invoke(
     tt::stl::Span<const unary::UnaryWithParam> lhs_activations,
     tt::stl::Span<const unary::UnaryWithParam> rhs_activations,
     tt::stl::Span<const unary::UnaryWithParam> post_activations) {
-    DataType dtype1 = input_tensor_a.get_dtype();
+    DataType dtype_a = input_tensor_a.get_dtype();
     bool device_check = input_tensor_a.device()->arch() != tt::ARCH::GRAYSKULL;
-    bool is_sfpu_op = (utils::is_binary_sfpu_op(binary_op_type, dtype1, dtype1) && device_check);
+    bool is_sfpu_op = (utils::is_binary_sfpu_op(binary_op_type, dtype_a, dtype_a) && device_check);
     return {
         operation_attributes_t{
             binary_op_type,

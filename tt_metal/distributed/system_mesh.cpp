@@ -7,13 +7,12 @@
 #include "umd/device/types/cluster_descriptor_types.h"
 #include "tt_metal/distributed/coordinate_translation.hpp"
 
+#include "tt_cluster.hpp"
+
 namespace tt::tt_metal::distributed {
 
 class SystemMesh::Impl {
 private:
-    std::unordered_map<MeshDeviceID, std::vector<chip_id_t>> assigned_devices_;
-    std::unordered_map<MeshDeviceID, std::weak_ptr<MeshDevice>> assigned_mesh_device_devices_;
-
     MeshShape logical_mesh_shape_;
     CoordinateTranslationMap logical_to_physical_coordinates_;
     std::unordered_map<LogicalCoordinate, chip_id_t> logical_to_device_id_;
@@ -31,7 +30,6 @@ public:
     std::vector<chip_id_t> get_mapped_physical_device_ids(const MeshDeviceConfig& config) const;
     std::vector<chip_id_t> request_available_devices(const MeshDeviceConfig& config) const;
     IDevice* get_device(const chip_id_t physical_device_id) const;
-    void register_mesh_device(const std::shared_ptr<MeshDevice>& mesh_device, const std::vector<IDevice*>& devices);
 
     chip_id_t get_physical_device_id(size_t logical_row_idx, size_t logical_col_idx) const;
 };
@@ -200,16 +198,6 @@ std::vector<chip_id_t> SystemMesh::Impl::get_mapped_physical_device_ids(const Me
     return physical_device_ids;
 }
 
-void SystemMesh::Impl::register_mesh_device(
-    const std::shared_ptr<MeshDevice>& mesh_device, const std::vector<IDevice*>& devices) {
-    std::vector<chip_id_t> physical_device_ids;
-    for (auto device : devices) {
-        physical_device_ids.push_back(device->id());
-    }
-    assigned_mesh_device_devices_.insert({mesh_device->id(), mesh_device});
-    assigned_devices_.insert({mesh_device->id(), physical_device_ids});
-}
-
 std::vector<chip_id_t> SystemMesh::Impl::request_available_devices(const MeshDeviceConfig& config) const {
     auto [requested_num_rows, requested_num_cols] = config.mesh_shape;
     auto [max_num_rows, max_num_cols] = logical_mesh_shape_;
@@ -245,11 +233,6 @@ chip_id_t SystemMesh::get_physical_device_id(size_t logical_row_idx, size_t logi
 const MeshShape& SystemMesh::get_shape() const { return pimpl_->get_shape(); }
 
 size_t SystemMesh::get_num_devices() const { return pimpl_->get_num_devices(); }
-
-void SystemMesh::register_mesh_device(
-    const std::shared_ptr<MeshDevice>& mesh_device, const std::vector<IDevice*>& devices) {
-    pimpl_->register_mesh_device(mesh_device, devices);
-}
 
 std::vector<chip_id_t> SystemMesh::request_available_devices(const MeshDeviceConfig& config) const {
     return pimpl_->request_available_devices(config);

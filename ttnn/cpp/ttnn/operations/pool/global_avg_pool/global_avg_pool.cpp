@@ -29,7 +29,7 @@ Tensor global_avg_pool2d(
     auto output = input;
 
     auto in_shape = input.get_padded_shape();
-    ttnn::SimpleShape output_shape({in_shape[0], 1, in_shape[1] * in_shape[2], in_shape[3]});
+    ttnn::Shape output_shape({in_shape[0], 1, in_shape[1] * in_shape[2], in_shape[3]});
     output = ttnn::experimental::view(output, output_shape);
 
     output = pool_2d<PoolType::AVG>(output, memory_config, output_dtype);

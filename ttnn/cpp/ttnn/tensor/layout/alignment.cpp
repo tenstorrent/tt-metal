@@ -10,7 +10,7 @@ namespace tt::tt_metal {
 
 bool Alignment::operator==(const Alignment& other) const = default;
 
-bool Alignment::operator==(const SmallVector<uint32_t>& other) const { return this->value_ == other; }
+bool Alignment::operator==(const tt::stl::SmallVector<uint32_t>& other) const { return this->value_ == other; }
 
 std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Alignment& alignment) {
     os << "Alignment([";

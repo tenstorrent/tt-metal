@@ -17,6 +17,7 @@
 #include "tt_align.hpp"
 
 namespace tt::tt_metal {
+
 template <bool hugepage_write = false>
 class DeviceCommand {
 public:
@@ -296,7 +297,7 @@ public:
             std::numeric_limits<uint8_t>::max());
         uint32_t lengthB = sizeof(CQDispatchCmd);
         TT_ASSERT(
-            lengthB <= (1 << dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE),
+            lengthB <= (1 << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE),
             "Data for go signal mcast must fit within one page");
         this->add_prefetch_relay_inline(true, lengthB, dispatcher_type);
         auto initialize_mcast_cmd = [&](CQDispatchCmd* mcast_cmd) {
@@ -447,10 +448,10 @@ public:
     void add_dispatch_set_go_signal_noc_data(
         const vector_memcpy_aligned<uint32_t>& noc_mcast_unicast_data, DispatcherSelect dispatcher_type) {
         TT_ASSERT(
-            noc_mcast_unicast_data.size() <= dispatch_constants::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES,
+            noc_mcast_unicast_data.size() <= DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES,
             "Number of words {} exceeds maximum {}",
             noc_mcast_unicast_data.size(),
-            dispatch_constants::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES);
+            DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES);
         auto data_sizeB = noc_mcast_unicast_data.size() * sizeof(uint32_t);
         uint32_t lengthB = sizeof(CQDispatchCmd) + data_sizeB;
         this->add_prefetch_relay_inline(true, lengthB, dispatcher_type);
@@ -785,8 +786,8 @@ private:
         if (!flush) {
             uint32_t dispatch_page_size = 1
                                           << (dispatcher_type == DispatcherSelect::DISPATCH_MASTER
-                                                  ? dispatch_constants::DISPATCH_BUFFER_LOG_PAGE_SIZE
-                                                  : dispatch_constants::DISPATCH_S_BUFFER_LOG_PAGE_SIZE);
+                                                  ? DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE
+                                                  : DispatchSettings::DISPATCH_S_BUFFER_LOG_PAGE_SIZE);
             TT_ASSERT(
                 lengthB <= dispatch_page_size,
                 "Data to relay for inline no flush {} must fit within one dispatch page {}",

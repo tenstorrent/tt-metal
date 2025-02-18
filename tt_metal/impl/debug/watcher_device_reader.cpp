@@ -311,7 +311,7 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor& logical_core, bool is_active_
     virtual_core.type = logical_core.type;
 
     // Print device id, core coords (logical)
-    string core_type = is_eth_core ? "ethnet" : "worker";
+    string core_type = is_eth_core ? (is_active_eth_core ? "active ethnet" : "idle ethnet") : "worker";
     string core_coord_str = fmt::format(
         "core(x={:2},y={:2}) virtual(x={:2},y={:2})",
         logical_core.coord.x,
@@ -343,6 +343,13 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor& logical_core, bool is_active_
     // For more accurate reporting of launch messages and running kernel ids, dump data from the previous valid
     // program (one entry before), if the current program is invalid (enables == 0)
     uint32_t launch_msg_read_ptr = mbox_data->launch_msg_rd_ptr;
+    if (launch_msg_read_ptr > launch_msg_buffer_num_entries) {
+        TT_THROW(
+            "Watcher read invalid launch_msg_read_ptr on {}: read {}, max valid {}!",
+            core_str,
+            launch_msg_read_ptr,
+            launch_msg_buffer_num_entries);
+    }
     if (mbox_data->launch[launch_msg_read_ptr].kernel_config.enables == 0) {
         launch_msg_read_ptr = (launch_msg_read_ptr - 1 + launch_msg_buffer_num_entries) % launch_msg_buffer_num_entries;
     }
@@ -376,19 +383,13 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor& logical_core, bool is_active_
         }
     }
 
-    // Ethernet cores don't use the launch message/sync reg
-    if (!is_eth_core) {
-        // Dump state always available
-        DumpLaunchMessage(virtual_core, mbox_data);
-        if (tt::llrt::RunTimeOptions::get_instance().get_watcher_dump_all()) {
-            // Reading registers while running can cause hangs, only read if
-            // requested explicitly
-            DumpSyncRegs(virtual_core);
-        }
-    } else {
-        fprintf(f, "rmsg:");
-        DumpRunState(virtual_core, &mbox_data->launch[launch_msg_read_ptr], mbox_data->go_message.signal);
-        fprintf(f, " h_id:%d ", mbox_data->launch[launch_msg_read_ptr].kernel_config.host_assigned_id);
+    // Dump state always available
+    DumpLaunchMessage(virtual_core, mbox_data);
+    // Ethernet cores don't use the sync reg
+    if (!is_eth_core && tt::llrt::RunTimeOptions::get_instance().get_watcher_dump_all()) {
+        // Reading registers while running can cause hangs, only read if
+        // requested explicitly
+        DumpSyncRegs(virtual_core);
     }
 
     // Eth core only reports erisc kernel id, uses the brisc field
@@ -397,6 +398,9 @@ void WatcherDeviceReader::DumpCore(CoreDescriptor& logical_core, bool is_active_
             f,
             "k_id:%d",
             mbox_data->launch[launch_msg_read_ptr].kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM0]);
+        if (device->arch() == ARCH::BLACKHOLE) {
+            fprintf(f, "|%d", mbox_data->launch[launch_msg_read_ptr].kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM1]);
+        }
     } else {
         fprintf(
             f,
@@ -646,6 +650,7 @@ void WatcherDeviceReader::DumpRunState(CoreDescriptor& core, const launch_msg_t*
 }
 
 void WatcherDeviceReader::DumpLaunchMessage(CoreDescriptor& core, const mailboxes_t* mbox_data) {
+    bool is_eth = (core.type == CoreType::ETH);
     const launch_msg_t* launch_msg = get_valid_launch_message(mbox_data);
     const slave_sync_msg_t* slave_sync = &mbox_data->slave_sync;
     fprintf(f, "rmsg:");
@@ -676,7 +681,7 @@ void WatcherDeviceReader::DumpLaunchMessage(CoreDescriptor& core, const mailboxe
 
     fprintf(f, "|");
     if (launch_msg->kernel_config.enables &
-        ~(DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM0 | DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM1 |
+        ~(DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM0 | DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM1 | DISPATCH_CLASS_MASK_ETH_DM0 | DISPATCH_CLASS_MASK_ETH_DM1 |
           DISPATCH_CLASS_MASK_TENSIX_ENABLE_COMPUTE)) {
         LogRunningKernels(core, launch_msg);
         TT_THROW(
@@ -685,33 +690,55 @@ void WatcherDeviceReader::DumpLaunchMessage(CoreDescriptor& core, const mailboxe
             launch_msg->kernel_config.enables);
     }
 
-    if (launch_msg->kernel_config.enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM0) {
-        fprintf(f, "B");
-    } else {
-        fprintf(f, "b");
-    }
+    // TODO(#17275): Generalize and pull risc data out of HAL
+    if (!is_eth) {
+        if (launch_msg->kernel_config.enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM0) {
+            fprintf(f, "B");
+        } else {
+            fprintf(f, "b");
+        }
 
-    if (launch_msg->kernel_config.enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM1) {
-        fprintf(f, "N");
-    } else {
-        fprintf(f, "n");
-    }
+        if (launch_msg->kernel_config.enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_DM1) {
+            fprintf(f, "N");
+        } else {
+            fprintf(f, "n");
+        }
 
-    if (launch_msg->kernel_config.enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_COMPUTE) {
-        fprintf(f, "T");
+        if (launch_msg->kernel_config.enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_COMPUTE) {
+            fprintf(f, "T");
+        } else {
+            fprintf(f, "t");
+        }
     } else {
-        fprintf(f, "t");
+        if (launch_msg->kernel_config.enables & DISPATCH_CLASS_MASK_ETH_DM0) {
+            fprintf(f, "E");
+        } else {
+            fprintf(f, "e");
+        }
+        if (device->arch() == ARCH::BLACKHOLE) {
+            if (launch_msg->kernel_config.enables & DISPATCH_CLASS_MASK_ETH_DM1) {
+                fprintf(f, "E");
+            } else {
+                fprintf(f, "e");
+            }
+        }
     }
 
     fprintf(f, " h_id:%d ", launch_msg->kernel_config.host_assigned_id);
 
-    fprintf(f, "smsg:");
-    DumpRunState(core, launch_msg, slave_sync->dm1);
-    DumpRunState(core, launch_msg, slave_sync->trisc0);
-    DumpRunState(core, launch_msg, slave_sync->trisc1);
-    DumpRunState(core, launch_msg, slave_sync->trisc2);
+    if (!is_eth) {
+        fprintf(f, "smsg:");
+        DumpRunState(core, launch_msg, slave_sync->dm1);
+        DumpRunState(core, launch_msg, slave_sync->trisc0);
+        DumpRunState(core, launch_msg, slave_sync->trisc1);
+        DumpRunState(core, launch_msg, slave_sync->trisc2);
+        fprintf(f, " ");
+    } else if (device->arch() == ARCH::BLACKHOLE) {
+        fprintf(f, "smsg:");
+        DumpRunState(core, launch_msg, slave_sync->dm1);
+        fprintf(f, " ");
+    }
 
-    fprintf(f, " ");
 }
 
 void WatcherDeviceReader::DumpWaypoints(CoreDescriptor& core, const mailboxes_t* mbox_data, bool to_stdout) {
@@ -795,13 +822,24 @@ void WatcherDeviceReader::ValidateKernelIDs(CoreDescriptor& core, const launch_m
         if (launch->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM0] >= kernel_names.size()) {
             uint16_t watcher_kernel_id = launch->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM0];
             TT_THROW(
-                "Watcher data corruption, unexpected erisc kernel id on Device {} core {}: {} (last valid {})",
+                "Watcher data corruption, unexpected erisc0 kernel id on Device {} core {}: {} (last valid {})",
                 device->id(),
                 core.coord.str(),
                 watcher_kernel_id,
                 kernel_names.size());
         }
         used_kernel_names[launch->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM0]] = true;
+
+        if (launch->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM1] >= kernel_names.size()) {
+            uint16_t watcher_kernel_id = launch->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM1];
+            TT_THROW(
+                "Watcher data corruption, unexpected erisc1 kernel id on Device {} core {}: {} (last valid {})",
+                device->id(),
+                core.coord.str(),
+                watcher_kernel_id,
+                kernel_names.size());
+        }
+        used_kernel_names[launch->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_ETH_DM1]] = true;
     } else {
         if (launch->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM0] >= kernel_names.size()) {
             uint16_t watcher_kernel_id = launch->kernel_config.watcher_kernel_ids[DISPATCH_CLASS_TENSIX_DM0];

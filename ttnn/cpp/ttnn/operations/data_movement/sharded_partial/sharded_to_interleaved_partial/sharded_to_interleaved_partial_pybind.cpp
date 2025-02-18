@@ -28,7 +28,7 @@ void bind_sharded_to_interleaved_partial(
                int64_t& slice_index,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::DataType>& output_dtype,
-               uint8_t queue_id) -> ttnn::Tensor {
+               QueueId queue_id) -> ttnn::Tensor {
                 return self(queue_id, input_tensor, cache_tensor, num_slices, slice_index, memory_config, output_dtype);
             },
             py::arg("input_tensor").noconvert(),
@@ -38,7 +38,7 @@ void bind_sharded_to_interleaved_partial(
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("output_dtype") = std::nullopt,
-            py::arg("queue_id") = 0,
+            py::arg("queue_id") = DefaultQueueId,
 
         });
 }

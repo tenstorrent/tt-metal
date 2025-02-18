@@ -103,23 +103,32 @@ static void RunTest(WatcherFixture* fixture, IDevice* device) {
         }
     }
     if (has_idle_eth_cores) {
-        KernelHandle ierisc_kid;
+        KernelHandle ierisc_kid0, ierisc_kid1;
         std::set<CoreRange> eth_core_ranges;
         for (const auto& core : device->get_inactive_ethernet_cores()) {
             eth_core_ranges.insert(CoreRange(core, core));
         }
-        ierisc_kid = CreateKernel(
+        ierisc_kid0 = CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/misc/watcher_waypoints.cpp",
             eth_core_ranges,
             tt_metal::EthernetConfig{
-                .eth_mode = Eth::IDLE,
-                .noc = tt_metal::NOC::NOC_0
-            }
-        );
+                .eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0, .processor = DataMovementProcessor::RISCV_0});
+
+        if (device->arch() == ARCH::BLACKHOLE) {
+            ierisc_kid1 = CreateKernel(
+                program,
+                "tests/tt_metal/tt_metal/test_kernels/misc/watcher_waypoints.cpp",
+                eth_core_ranges,
+                tt_metal::EthernetConfig{
+                    .eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0, .processor = DataMovementProcessor::RISCV_1});
+        }
 
         for (const auto& core : device->get_inactive_ethernet_cores()) {
-            SetRuntimeArgs(program, ierisc_kid, core, args);
+            SetRuntimeArgs(program, ierisc_kid0, core, args);
+            if (device->arch() == ARCH::BLACKHOLE) {
+                SetRuntimeArgs(program, ierisc_kid1, core, args);
+            }
         }
     }
 
@@ -144,22 +153,27 @@ static void RunTest(WatcherFixture* fixture, IDevice* device) {
                     // blank | prefetch, dispatch | tensix kernels
                     int k_id = 1 + 2 + 3;
                     string k_id_s = fmt::format("{}", k_id);
+                    if (device->arch() == ARCH::BLACKHOLE)
+                        k_id_s += fmt::format("|{}", k_id + 1);
                 } else {
                     k_id_s = "";
                 }
                 expected = fmt::format(
-                    "Device {} ethnet core(x={:2},y={:2}) virtual(x={:2},y={:2}): {},   {},   X,   X,   X  rmsg:* "
-                    "h_id:0 "
-                    "k_id:{}",
+                    "Device {} {} ethnet core(x={:2},y={:2}) virtual(x={:2},y={:2}): {},{},   X,   X,   X  ",
                     device->id(),
+                    is_active ? "active" : "idle",
                     logical_core.x,
                     logical_core.y,
                     virtual_core.x,
                     virtual_core.y,
                     waypoint,
-                    (device->arch() == ARCH::BLACKHOLE) ? "W" : "X",  // TODO (#15448): Uplift this when watcher device
-                                                                      // reader accounts for variable num eth riscs
-                    k_id_s);
+                    // TODO(#17275): Rework risc counts & masks into HAL and generalize this test.
+                    (device->arch() == ARCH::BLACKHOLE) ? waypoint : "   X");
+                if (device->arch() == ARCH::BLACKHOLE) {
+                    expected += fmt::format("rmsg:***|** h_id:0 smsg:* k_id:{}", k_id_s);
+                } else {
+                    expected += fmt::format("rmsg:***|* h_id:0 k_id:{}", k_id_s);
+                }
             } else {
                 // Each different config has a different calculation for k_id, let's just do one. Fast Dispatch, one device.
                 string k_id_s;
