@@ -12,6 +12,7 @@
 #include "device.hpp"
 
 #include "mesh_config.hpp"
+#include "mesh_coord.hpp"
 #include "mesh_device_view.hpp"
 #include "sub_device_types.hpp"
 #include "span.hpp"
@@ -204,6 +205,7 @@ public:
     IDevice* get_device_index(size_t logical_device_id) const;
     IDevice* get_device(chip_id_t physical_device_id) const;
     IDevice* get_device(size_t row_idx, size_t col_idx) const;
+    IDevice* get_device(const MeshCoordinate& coord) const;
 
     const DeviceIds get_device_ids() const;
 
