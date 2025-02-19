@@ -228,6 +228,35 @@ std::pair<uint32_t, std::array<uint32_t, 2>> tensor_coord_to_height_sharded_coor
     return std::make_pair(which_shard, shard_coord);
 }
 
+uint32_t l1_space_post_allocation(const TensorSpec& tensor_spec, IDevice* device) {
+    auto buffer_size_bytes = tensor_spec.compute_packed_buffer_size_bytes();
+    auto page_size_bytes = tensor_spec.compute_page_size_bytes();
+    auto shard_spec_buffer = tensor_spec.compute_shard_spec_buffer();
+    auto memory_config = tensor_spec.tensor_layout().get_memory_config();
+
+    // get current device address
+    auto lowest_address = device->lowest_occupied_compute_l1_address();
+    uint32_t max_l1_space = lowest_address.has_value() ? lowest_address.value() : device->l1_size_per_core();
+    max_l1_space = max_l1_space - device->allocator()->get_base_allocator_addr(HalMemType::L1);
+    // return current device address if DRAM
+    if (memory_config.buffer_type == BufferType::DRAM) {
+        return max_l1_space;
+    }
+
+    uint32_t num_banks = device->allocator()->get_num_banks(BufferType::L1);
+    if (memory_config.shard_spec.has_value()) {
+        num_banks = memory_config.shard_spec.value().num_cores();
+    }
+
+    uint32_t alignment_bytes = tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::L1);
+    uint32_t num_pages = page_size_bytes == 0 ? 0 : buffer_size_bytes / page_size_bytes;
+    uint32_t num_equally_distributed_pages = num_pages == 0 ? 0 : 1 + ((num_pages - 1) / num_banks);
+    uint32_t buffer_addr_add = num_equally_distributed_pages * tt::round_up(page_size_bytes, alignment_bytes);
+
+    uint32_t final_space = max_l1_space - buffer_addr_add;
+    return final_space;
+}
+
 }  // namespace data_movement
 }  // namespace operations
 }  // namespace ttnn
