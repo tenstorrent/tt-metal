@@ -16,6 +16,35 @@
 
 namespace ttnn::operations::data_movement {
 
+namespace detail {
+
+// Logic flow for setting memory config. If input is sharded and no output tensor, or memory config is provided try to
+//  find the best shard config using the layout and orientation of the input.
+MemoryConfig get_memory_config(
+    const std::optional<Tensor>& output_tensor,
+    const std::optional<MemoryConfig>& memory_config_arg,
+    const Tensor& input_tensor,
+    const Shape& output_shape) {
+    if (output_tensor.has_value()) {
+        return output_tensor.value().memory_config();
+    } else if (memory_config_arg.has_value()) {
+        return memory_config_arg.value();
+    } else {
+        auto input_memory_config = input_tensor.memory_config();
+        if (input_tensor.is_sharded()) {
+            return create_sharded_memory_config(
+                output_shape,
+                input_memory_config.shard_spec->grid,
+                input_memory_config.memory_layout,
+                input_memory_config.shard_spec->orientation);
+        } else {
+            return input_memory_config;
+        }
+    }
+}
+
+}  // namespace detail
+
 template <typename T>
 ttnn::Tensor SliceOperation::invoke(
     QueueId queue_id,
@@ -55,12 +84,10 @@ ttnn::Tensor SliceOperation::invoke(
 
     const auto& tile_shape = input_tensor.get_tensor_spec().tile().get_tile_shape();
 
-    auto memory_config = optional_output_tensor.has_value() ? optional_output_tensor.value().memory_config()
-                                                            : memory_config_arg.value_or(input_tensor.memory_config());
-
     auto ret_adjustment([&](const ttnn::Tensor& input_tensor) {
         if (input_tensor.storage_type() == StorageType::DEVICE) {
-            auto tensor = ttnn::to_memory_config(input_tensor, memory_config, std::nullopt);
+            auto tensor = ttnn::to_memory_config(
+                input_tensor, memory_config_arg.value_or(input_tensor.memory_config()), std::nullopt);
             tensor = ttnn::to_layout(tensor, input_layout, std::nullopt, std::nullopt, (IDevice*)nullptr);
             return tensor;
         }
@@ -90,6 +117,34 @@ ttnn::Tensor SliceOperation::invoke(
         }
     }
 
+    ttnn::SmallVector<uint32_t> actual_shape_vec;
+    actual_shape_vec.reserve(input_rank);
+    bool empty = false;
+
+    auto output_dim_i = [&modified_begins, &modified_step](size_t i, const ttnn::SmallVector<uint32_t>& modified_ends) {
+        return (modified_ends[i] - modified_begins[i] + modified_step[i] - 1) / modified_step[i];
+    };
+
+    // Compute actual and padded shapes for the original input rank
+    for (size_t i = 0; i < input_rank; ++i) {
+        TT_FATAL(
+            modified_begins[i] <= modified_ends[i],
+            "Invalid slice operation: begin[{}] must be less than or equal to end[{}], but got {} > {}",
+            i,
+            i,
+            modified_begins[i],
+            modified_ends[i]);
+        auto val = output_dim_i(i, modified_ends);
+        if (val == 0) {
+            empty = true;
+        }
+        actual_shape_vec.push_back(val);
+    }
+    ttnn::Shape actual_shape(actual_shape_vec);
+
+    const auto memory_config =
+        detail::get_memory_config(optional_output_tensor, memory_config_arg, input_tensor, actual_shape);
+
     bool aligned_begins = true;
     bool aligned_ends = true;
     bool rm_only = false;
@@ -116,31 +171,6 @@ ttnn::Tensor SliceOperation::invoke(
             input = ttnn::to_layout(input, Layout::ROW_MAJOR, std::nullopt, memory_config, (IDevice*)nullptr);
         }
     }
-
-    auto output_dim_i = [&modified_begins, &modified_step](size_t i, const ttnn::SmallVector<uint32_t>& modified_ends) {
-        return (modified_ends[i] - modified_begins[i] + modified_step[i] - 1) / modified_step[i];
-    };
-
-    ttnn::SmallVector<uint32_t> actual_shape_vec;
-    actual_shape_vec.reserve(input_rank);
-    bool empty = false;
-
-    // Compute actual and padded shapes for the original input rank
-    for (size_t i = 0; i < input_rank; ++i) {
-        TT_FATAL(
-            modified_begins[i] <= modified_ends[i],
-            "Invalid slice operation: begin[{}] must be less than or equal to end[{}], but got {} > {}",
-            i,
-            i,
-            modified_begins[i],
-            modified_ends[i]);
-        auto val = output_dim_i(i, modified_ends);
-        if (val == 0) {
-            empty = true;
-        }
-        actual_shape_vec.push_back(val);
-    }
-    ttnn::Shape actual_shape(actual_shape_vec);
 
     if (empty) {
         TT_FATAL(

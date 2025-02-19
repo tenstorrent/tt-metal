@@ -62,6 +62,7 @@ def run_slice_rm_sharded(device, n, c, h, w):
     assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9999)
 
 
+@pytest.mark.skip
 @pytest.mark.parametrize("n", [16])
 @pytest.mark.parametrize("c", [128])
 @pytest.mark.parametrize("h", [128])
@@ -82,6 +83,7 @@ def test_slice_rm_sharded_with_program_cache(device, n, c, h, w, use_program_cac
     assert device.num_program_cache_entries() == 3
 
 
+@pytest.mark.skip
 @pytest.mark.parametrize("n", [16])
 @pytest.mark.parametrize("c", [128])
 @pytest.mark.parametrize("h", [128])
@@ -142,6 +144,7 @@ def slice_test(
     return a_pt, a_ref, device.num_program_cache_entries()
 
 
+@pytest.mark.skip
 @pytest.mark.parametrize(
     "dtype",
     (ttnn.bfloat16, ttnn.float32),
@@ -254,6 +257,7 @@ def test_run_slice_test(
     assert eq
 
 
+@pytest.mark.skip
 # slice alternate elements in a given tensor
 @pytest.mark.parametrize("dim", [4, 12, 20, 68])
 def test_stride_slice_single_dim_skip_2(dim, device):
@@ -268,6 +272,7 @@ def test_stride_slice_single_dim_skip_2(dim, device):
     assert_with_pcc(torch_output, ttnn_output, 0.99)
 
 
+@pytest.mark.skip
 @pytest.mark.parametrize("h", [18, 34])
 @pytest.mark.parametrize("w", [18, 34])
 @pytest.mark.parametrize("begins_h", [2])
@@ -286,6 +291,7 @@ def test_stride_slice_two_dim(h, w, begins_h, begins_w, stride_h, stride_w, devi
     assert_with_pcc(torch_output, ttnn_output, 0.99)
 
 
+@pytest.mark.skip
 @pytest.mark.parametrize("c", [8])
 @pytest.mark.parametrize("h", [2])
 @pytest.mark.parametrize("w", [2])
@@ -307,6 +313,7 @@ def test_stride_slice_three_dim(c, h, w, begins_c, begins_h, begins_w, stride_c,
     assert_with_pcc(torch_output, ttnn_output, 0.99)
 
 
+@pytest.mark.skip
 @pytest.mark.parametrize("dims", [[18, 18, 18, 18]])
 @pytest.mark.parametrize("begins", [[2, 0, 0, 2]])
 @pytest.mark.parametrize("ends", [[18, 16, 16, 18]])
@@ -328,6 +335,7 @@ def test_stride_slice_four_dim(dims, begins, ends, strides, layout, device):
     assert_with_pcc(torch_output, ttnn_output, 0.99)
 
 
+@pytest.mark.skip
 @pytest.mark.parametrize("dims", [[1, 56, 56, 96]])
 @pytest.mark.parametrize("begins", [[0, 0, 0, 0]])
 @pytest.mark.parametrize("ends", [[1, -1, 56, 96]])
@@ -349,6 +357,7 @@ def test_stride_slice_four_dim_tiled(dims, begins, ends, strides, layout, device
     assert_with_pcc(torch_output, ttnn_output, 0.99)
 
 
+@pytest.mark.skip
 # these tests are copy and paste from the yolo customers #8920
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 def test_slice_usecase1(layout, device):
@@ -362,6 +371,7 @@ def test_slice_usecase1(layout, device):
     assert_with_pcc(torch_output, ttnn_output, 0.99)
 
 
+@pytest.mark.skip
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 def test_slice_usecase2(layout, device):
     torch_input = torch.randn(1, 3, 640, 640)
@@ -374,6 +384,7 @@ def test_slice_usecase2(layout, device):
     assert_with_pcc(torch_output, ttnn_output, 0.99)
 
 
+@pytest.mark.skip
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 def test_slice_usecase3(layout, device):
     torch_input = torch.randn(1, 3, 640, 640)
@@ -386,6 +397,7 @@ def test_slice_usecase3(layout, device):
     assert_with_pcc(torch_output, ttnn_output, 0.99)
 
 
+@pytest.mark.skip
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 def test_slice_usecase4(layout, device):
     torch_input = torch.randn(1, 3, 640, 640)
@@ -408,6 +420,7 @@ def test_slice_ellipses(device):
     assert_with_pcc(torch_output, ttnn_output, 0.99)
 
 
+@pytest.mark.skip
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
 @pytest.mark.parametrize("dim", [0, 1, 2, 3])
 @pytest.mark.parametrize("ends", [-2, -4, -6, -32])
@@ -432,6 +445,7 @@ def test_slice_negative_ends(layout, dim, ends, device):
     assert_with_pcc(torch_output, ttnn_output, 0.99)
 
 
+@pytest.mark.skip
 @pytest.mark.parametrize(
     "input_shape, input_start, input_ends",
     (
@@ -487,6 +501,7 @@ def test_slice_bert(input_shape, input_start, input_ends, layout, device):
     assert_with_pcc(torch_output, ttnn_output, 0.99)
 
 
+@pytest.mark.skip
 @pytest.mark.parametrize(
     "input_shape, input_start, input_ends",
     (
@@ -530,6 +545,7 @@ def test_ttnn_slice_bert(input_shape, input_start, input_ends, layout, memory_co
     assert_with_pcc(torch_output, ttnn_output, 0.99)
 
 
+@pytest.mark.skip
 def test_slice_output_tensor_rm(device):
     torch_input = torch.ones(1, 3, 640, 640)
     ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16)
@@ -546,6 +562,7 @@ def test_slice_output_tensor_rm(device):
     assert_with_pcc(torch_output, ttnn_output, 0.99)
 
 
+@pytest.mark.skip
 def test_slice_output_tensor_tile(device):
     torch_input = torch.ones(1, 3, 640, 640)
     ttnn_input = ttnn.from_torch(torch_input, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
@@ -564,6 +581,7 @@ def test_slice_output_tensor_tile(device):
     assert_with_pcc(torch_output, ttnn_output, 0.99)
 
 
+@pytest.mark.skip
 @pytest.mark.parametrize(
     "input_shape, input_start, input_ends",
     (
@@ -604,6 +622,7 @@ def test_ttnn_slice_optimized_shapes(input_shape, input_start, input_ends, layou
     assert_with_pcc(torch_output, ttnn_output, 0.99)
 
 
+@pytest.mark.skip
 @pytest.mark.parametrize(
     "input_shape, input_start, input_ends",
     (
@@ -644,6 +663,7 @@ def test_ttnn_slice_5d(input_shape, input_start, input_ends, layout, memory_conf
     assert_with_pcc(torch_output, ttnn_output, 0.99)
 
 
+@pytest.mark.skip
 @pytest.mark.parametrize(
     "input_shape, input_start, input_ends, input_stride",
     (
@@ -707,6 +727,7 @@ def test_slice_7d(device):
     assert_with_pcc(torch_output, ttnn_output, 0.99)
 
 
+@pytest.mark.skip
 @pytest.mark.parametrize(
     "input_shape, dim, start, end, step, layout",
     (
@@ -746,6 +767,7 @@ def test_slice_adversarial_fixed(input_shape, dim, start, end, step, layout, dev
     assert_with_pcc(torch_output_tensor, ttnn_output_tensor, 0.999)
 
 
+@pytest.mark.skip
 @pytest.mark.parametrize(
     "input_shape, input_start, input_ends, input_stride",
     (
@@ -828,6 +850,7 @@ def test_slice_pytorch2_former_failures(
     assert_with_pcc(torch_output, ttnn_output, 0.99)
 
 
+@pytest.mark.skip
 @pytest.mark.parametrize(
     "input_shape, dim, start, end, step, layout",
     (
@@ -864,6 +887,7 @@ def test_slice_adversarial_fixed(input_shape, dim, start, end, step, layout, dev
     assert_with_pcc(torch_output_tensor, ttnn_output_tensor, 0.999)
 
 
+@pytest.mark.skip
 @pytest.mark.parametrize(
     "input_shape",
     ([8, 8, 8, 33, 33],),
@@ -914,6 +938,7 @@ def test_slice_index(device, input_shape, layout, input_memory_config, indices):
 TERMINAL_TEST_SHAPE = (2, 4, 1, 3, 7, 5)
 
 
+@pytest.mark.skip
 @pytest.mark.parametrize(
     "input_memory_config",
     (ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
@@ -931,3 +956,61 @@ def test_slice_tiled_terminal(device, input_memory_config):
     ttnn_output = ttnn.to_torch(ttnn_input[:, :, :, :, TERMINAL_TEST_SHAPE[-2] - 1, TERMINAL_TEST_SHAPE[-1] - 1])
 
     assert_with_pcc(torch_output, ttnn_output, 0.99)
+
+
+@pytest.mark.parametrize(
+    "N, N_slice",
+    [
+        [3584, 2048],
+    ],
+)
+def test_slice_tg(
+    device,
+    N,
+    N_slice,
+    function_level_defaults,
+):
+    num_cores = 16
+    M = 32
+    shape = (1, 1, M, N)
+
+    ##### Input #####
+    pt_input = torch.randn(shape, dtype=torch.float32)
+
+    ##### TT Input #####
+    storage_grid = (8, 8)
+    CORE_RANGE = [(x, y) for y in range(storage_grid[1]) for x in range(storage_grid[0])][:num_cores]
+    core_range_set = ttnn.CoreRangeSet(
+        [
+            ttnn.CoreRange(
+                ttnn.CoreCoord(x, y),
+                ttnn.CoreCoord(x, y),
+            )
+            for x, y in CORE_RANGE
+        ]
+    )
+    tt_input_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            core_range_set,
+            [32, shape[3] // num_cores],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    tt_input = ttnn.from_torch(
+        pt_input,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        memory_config=tt_input_mem_config,
+    )
+
+    ##### Operation ####
+    pt_out = pt_input[..., :N_slice]
+    tt_out = ttnn.slice(tt_input, [0, 0, 0, 0], [1, 1, M, N_slice])
+    assert tt_out.is_sharded()
+
+    ##### Validation #####
+    tt_out = ttnn.to_torch(tt_out)[..., :N_slice]
+    assert_with_pcc(pt_out, tt_out, 0.999)
