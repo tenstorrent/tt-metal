@@ -109,7 +109,7 @@ def test_pc_repeat(device, layout, shape, repeat_shape, use_program_cache):
 # 17975 test cases
 
 
-def test_github_issues_from_17975(device, use_program_cache):
+def test_pc_with_different_shapes_in_sequence(device, use_program_cache):
     y = torch.rand((1, 1, 256, 384), dtype=torch.bfloat16)
     y_tt = ttnn.from_torch(y, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     base_program_cache_entires = device.num_program_cache_entries()
