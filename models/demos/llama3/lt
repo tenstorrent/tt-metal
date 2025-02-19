@@ -762,7 +762,7 @@ def draw_output_entry(stdscr, entry, y, is_selected, max_x):
                     color = COLOR_PAIR_WAITING
             elif i == 4:  # Speed column
                 color = COLOR_PAIR_SPEED
-            elif i == 5: # TTFT column
+            elif i == 5:  # TTFT column
                 color = COLOR_PAIR_SPEED
             elif i == 6:  # PCC column
                 if col:
