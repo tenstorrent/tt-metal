@@ -64,6 +64,28 @@ constexpr uint32_t dispatch_s_cb_log_page_size = get_compile_time_arg_val(25);
 constexpr uint32_t is_d_variant = get_compile_time_arg_val(26);
 constexpr uint32_t is_h_variant = get_compile_time_arg_val(27);
 
+constexpr uint32_t prefetch_q_end = prefetch_q_base + prefetch_q_size;
+constexpr uint32_t cmddat_q_end = cmddat_q_base + cmddat_q_size;
+constexpr uint32_t scratch_db_end = scratch_db_base + scratch_db_size;
+
+// hd and h: fetch_q, cmddat_q, scratch_db
+static_assert(
+    !(is_h_variant) || (prefetch_q_base >= cmddat_q_end || cmddat_q_base >= prefetch_q_end),
+    "prefetch_q and cmddat_q overlap");
+
+static_assert(
+    !(is_h_variant) || (prefetch_q_base >= scratch_db_end || scratch_db_base >= prefetch_q_end),
+    "prefetch_q and scratch_db overlap");
+
+static_assert(
+    !(is_h_variant) || (scratch_db_base >= cmddat_q_end || cmddat_q_base >= scratch_db_end),
+    "cmddat_q and scratch_db overlap");
+
+// d: cmddat_q, scratch_db
+static_assert(
+    !(is_d_variant && !is_h_variant) || (scratch_db_base >= cmddat_q_end || cmddat_q_base >= scratch_db_end),
+    "cmddat_q and scratch_db overlap");
+
 constexpr uint8_t my_noc_index = NOC_INDEX;
 constexpr uint32_t my_noc_xy = uint32_t(NOC_XY_ENCODING(MY_NOC_X, MY_NOC_Y));
 constexpr uint32_t upstream_noc_xy = uint32_t(NOC_XY_ENCODING(UPSTREAM_NOC_X, UPSTREAM_NOC_Y));
@@ -75,9 +97,7 @@ constexpr uint32_t downstream_cb_page_size = 1 << downstream_cb_log_page_size;
 constexpr uint32_t dispatch_s_cb_page_size = 1 << dispatch_s_cb_log_page_size;
 constexpr uint32_t downstream_cb_end = downstream_cb_base + (1 << downstream_cb_log_page_size) * downstream_cb_pages;
 constexpr uint32_t dispatch_s_buffer_end = dispatch_s_buffer_base + dispatch_s_buffer_size;
-constexpr uint32_t prefetch_q_end = prefetch_q_base + prefetch_q_size;
 constexpr uint32_t cmddat_q_page_size = 1 << cmddat_q_log_page_size;
-constexpr uint32_t cmddat_q_end = cmddat_q_base + cmddat_q_size;
 
 constexpr uint32_t scratch_db_half_size = scratch_db_size / 2;
 constexpr uint32_t scratch_db_base0 = scratch_db_base;
