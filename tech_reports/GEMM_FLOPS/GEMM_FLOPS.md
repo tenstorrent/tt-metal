@@ -55,27 +55,27 @@ For more details please refer to the tech reports [Matrix Engine](../matrix_engi
 
 For example, when changing the precision of the matrix, for a given size of matrix the output performance is expected to be different.
 
-![A simple bar chart of the TFLOPS on WH when changing the precision of matrcies](images/effects_of_precision.png "Variance in performance of TFLOPS on WH from SRAM due to changing precision")
+![A simple bar chart of the TFLOPS on WH when changing the precision of matrices](images/effects_of_precision.png "Variance in performance of TFLOPS on WH from SRAM due to changing precision")
 
 
 
 ## MicroBenchmarks
 
-### Matrix Multiplication TFLOPs on Wormhole (WH)
+### Matrix Multiplication TFLOPS on Wormhole (WH)
 
 The WH matrix engine performs 8x16 x 16x16 = 8x16 in a single cycle.
 - This is 2*8\*16\*16 = 4096 muladds in a single cycle.
-- At 1GHz, this is 4 TFLOPs per matrix engine.
+- At 1GHz, this is 4 TFLOPS per matrix engine.
 - The 8x16 is the smallest matrix that can be fed into in0, and 16x16 is the smallest matrix that can be fed into in1.
 
 If the input matrices fed into the engine are "shorter" than 8x16, for example 1x16, the engine will still perform 8x16 x 16x16 = 8x16, but the effective throughput will be 1/8.
-Thus, for 1x16 x 16x16 matrices, the effective throughput is 0.5 TFLOP per matrix engine.
+Thus, for 1x16 x 16x16 matrices, the effective throughput is 0.5 TFLOPS per matrix engine.
 
-MATH_FIDELITY is used for higher precision, and TFLOPs are calculated by dividing by the MATH_FIDELITY value.
-- LoFi ->  ~4 TFLOPs
-- HiFi2 -> ~2 TFLOPs
-- HiFi3 -> ~1.33 TFLOPs
-- HiFi4 -> ~1 TFLOPs
+MATH_FIDELITY is used for higher precision, and TFLOPS are calculated by dividing by the MATH_FIDELITY value.
+- LoFi ->  ~4 TFLOPS
+- HiFi2 -> ~2 TFLOPS
+- HiFi3 -> ~1.33 TFLOPS
+- HiFi4 -> ~1 TFLOPS
 
 
 ### Utilization derivation formula
@@ -90,7 +90,7 @@ Ideal cycles = (m * k * n) / (tile_height * tile_width * tile_height) * (cycle_p
 
 ### Manually tuned Performance
 
-Here we show the peak results we can get based on manually selected matmul configuturations, including packer l1 enablement, math fidelity, input output sharding, and input ouput L1/DRAM selection.
+Here we show the peak results we can get based on manually selected matmul configurations, including packer l1 enablement, math fidelity, input output sharding, and input output L1/DRAM selection.
 
 #### Peak FLOPS
 
@@ -100,7 +100,7 @@ Below is the results generated from running the benchmark script, showcasing the
 
 We also show the results with and without trace (see [AdvancedPerformanceOptimizationsForModels](../AdvancedPerformanceOptimizationsForModels/AdvancedPerformanceOptimizationsForModels.md) for details of trace). With trace, we can minimize the overhead of host which can reflect the actual device performance better.
 
-Finally, we present the results in terms of device time, device throughput in TFLOPs, device utilization compared to the user-specified grid size and device utilization compared to the full grid size (8x8 in Wormhole). Utilization is calculated with
+Finally, we present the results in terms of device time, device throughput in TFLOPS, device utilization compared to the user-specified grid size and device utilization compared to the full grid size (8x8 in Wormhole). Utilization is calculated with
 
 
 #### TFLOPS plot across all matrix sizes and configurations
@@ -108,7 +108,7 @@ Finally, we present the results in terms of device time, device throughput in TF
 ![](images/matmul_tflops_5_exp.png)
 
 
-#### Utilization plot across all matrix sizes and configurations, based on the Chip TFLOPs calculated per each Math Fidelity
+#### Utilization plot across all matrix sizes and configurations, based on the Chip TFLOPS calculated per each Math Fidelity
 
 ![](images/matmul_utilization_5_exp.png)
 
@@ -123,7 +123,7 @@ Finally, we present the results in terms of device time, device throughput in TF
 ![](images/matmul_utilization_table_5_exp.png)
 
 
-#### TFLOPS ratio between the results with trace and without-trace. The trace mode has signficiant impact (i.e. higher ratio) when running a sequence of smaller/faster OPs, because the OP dispatch time will be comparable to the OP device runtime.
+#### TFLOPS ratio between the results with trace and without-trace. The trace mode has significant impact (i.e. higher ratio) when running a sequence of smaller/faster OPS, because the OP dispatch time will be comparable to the OP device runtime.
 
 ![](images/mamtul_trace_nontrace_ratio_5_exp.png)
 
@@ -131,7 +131,7 @@ Finally, we present the results in terms of device time, device throughput in TF
 
 #### The full results table
 
-|     m |     k |     n | use_trace   | grid_size   | in0_sharded   | out_sharded   | in0_storage_type   | in1_storage_type   | out_storage_type   | dtype              | math_fidelity      |   inference_time_avg (ns) |   TFLOPs (avg) | Utilization (vs user grid)   | Utilization (vs 8x8 full grid)   |
+|     m |     k |     n | use_trace   | grid_size   | in0_sharded   | out_sharded   | in0_storage_type   | in1_storage_type   | out_storage_type   | dtype              | math_fidelity      |   inference_time_avg (ns) |   TFLOPS (avg) | Utilization (vs user grid)   | Utilization (vs 8x8 full grid)   |
 |------:|------:|------:|:------------|:------------|:--------------|:--------------|:-------------------|:-------------------|:-------------------|:-------------------|:-------------------|--------------------------:|---------------:|:-----------------------------|:---------------------------------|
 |   512 |   512 |   512 | False       | (8, 8)      | True          | True          | L1                 | DRAM               | L1                 | DataType.BFLOAT16  | MathFidelity.HiFi2 |          378654           |           0.71 | 0.54%                        | 0.54%                            |
 |   512 |  1024 |  1024 | False       | (8, 8)      | True          | True          | L1                 | DRAM               | L1                 | DataType.BFLOAT16  | MathFidelity.HiFi2 |          363193           |           2.96 | 2.26%                        | 2.26%                            |
@@ -289,7 +289,7 @@ Finally, we present the results in terms of device time, device throughput in TF
 
 For most hardware, peak performance is achieved with square matrices that best align with the underlying hardware, for example WH performs best when using Square input matrices, we achieve highest device utilization with bfloat16 and HiFi4.
 
-![A simple bar chart of the TFLOPS on WH when using various square matrcies](images/TFLOPS_WH_SQUARE.png "Square Matrix TFLOPS on WH from SRAM")
+![A simple bar chart of the TFLOPS on WH when using various square matrices](images/TFLOPS_WH_SQUARE.png "Square Matrix TFLOPS on WH from SRAM")
 
 #### Rectangular matrices
 
@@ -297,23 +297,23 @@ When deviating from Square matrices, the total balance of compute can be thrown 
 
 Given input matrix A of 512x1024 and B of 1024x2048 to produce output matrix 512x2048 requires the same amount of computation as if the input matrices were of dimensions 1024^2. However, the performance results are measurably different:
 
-|     m |     k |     n | use_trace   | grid_size   | in0_sharded   | out_sharded   | in0_storage_type   | in1_storage_type   | out_storage_type   | dtype              | math_fidelity      |   inference_time_avg (ns) |   TFLOPs (avg) | Utilization (vs user grid)   | Utilization (vs 8x8 full grid)   |
+|     m |     k |     n | use_trace   | grid_size   | in0_sharded   | out_sharded   | in0_storage_type   | in1_storage_type   | out_storage_type   | dtype              | math_fidelity      |   inference_time_avg (ns) |   TFLOPS (avg) | Utilization (vs user grid)   | Utilization (vs 8x8 full grid)   |
 |------:|------:|------:|:------------|:------------|:--------------|:--------------|:-------------------|:-------------------|:-------------------|:-------------------|:-------------------|--------------------------:|---------------:|:-----------------------------|:---------------------------------|
 |   512 |  1024 |  2048 | True        | (8, 8)      | True          | True          | L1                 | DRAM               | L1                 | DataType.BFLOAT16  | MathFidelity.HiFi2 |           52824           |          40.65 | 31.02%                       | 31.02%                           |
 |  1024 |  1024 |  1024 | True        | (8, 8)      | True          | True          | L1                 | DRAM               | L1                 | DataType.BFLOAT16  | MathFidelity.HiFi2 |           36845.2         |          58.28 | 44.47%                       | 44.47%
 
-![A simple bar chart of the TFLOPS on WH when using square vs rectangular matrcies](images/effects_of_shapes.png "Square vs rectangular Matrix TFLOPS on WH from SRAM")
+![A simple bar chart of the TFLOPS on WH when using square vs rectangular matrices](images/effects_of_shapes.png "Square vs rectangular Matrix TFLOPS on WH from SRAM")
 
 
 ### Out of Box performance
 
-We also show the peak results we can get based on auto-selected matmul configuturations, which the matmul op itself chooses the configuraitons. It currently is not perfect and we'll continue improve it so that it can match or even surpass the manually selected ones. We show the results from 512x512x512 to 4096x4096x4096. The reason we are not testing shapes larger is due to the wrong selections of matmul configuturations.
+We also show the peak results we can get based on auto-selected matmul configurations, which the matmul op itself chooses the configurations. It currently is not perfect and we'll continue improve it so that it can match or even surpass the manually selected ones. We show the results from 512x512x512 to 4096x4096x4096. The reason we are not testing shapes larger is due to the wrong selections of matmul configurations.
 
-As we can see, the results are comprable to the manutally selected.
+As we can see, the results are comparable to the manually selected.
 
 #### The full results table
 
-| m | k | n | use_trace | grid_size | in0_storage_type | in1_storage_type | out_storage_type | dtype | math_fidelity | inference_time_avg (ns) | TFLOPs (avg) | Utilization (vs user grid) | Utilization (vs 8x8 full grid) |
+| m | k | n | use_trace | grid_size | in0_storage_type | in1_storage_type | out_storage_type | dtype | math_fidelity | inference_time_avg (ns) | TFLOPS (avg) | Utilization (vs user grid) | Utilization (vs 8x8 full grid) |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 512 | 512 | 512 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 400640.96 | 0.67 | 0.51% | 0.51% |
 | 512 | 1024 | 1024 | False | (8, 8) | DRAM | DRAM | DRAM | DataType.BFLOAT16 | MathFidelity.HiFi2 | 296726.23 | 3.62 | 2.76% | 2.76% |
