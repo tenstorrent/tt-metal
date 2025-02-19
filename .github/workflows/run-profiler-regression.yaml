@@ -36,7 +36,7 @@ jobs:
     runs-on:
       - ${{ inputs.runner-label }}
       - cloud-virtual-machine
-      - issue-hackathon
+      - in-service
     container:
       image: ${{ inputs.docker-image }}
       env:
