@@ -1175,9 +1175,6 @@ void kernel_main() {
                   downstream_noc_interface_buffer_index_local_addr)
             : tt::fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>();
 
-    // setup edm to edm noc cmd buf
-    // downstream_edm_noc_interface.setup_edm_noc_cmd_buf();
-
     auto local_receiver_channel = tt::fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>(
         local_receiver_channel_buffer_address,
         channel_buffer_size,
