@@ -72,9 +72,6 @@ def test_repeat(device, layout, dtype, shape, repeat_shape):
     assert_with_pcc(torch_result, output, 0.9999)
 
 
-# TODO! test program cache when it is implemented
-
-
 @pytest.mark.parametrize("layout", layouts)
 @pytest.mark.parametrize("shape", shapes)
 @pytest.mark.parametrize("repeat_shape", repeat_shapes)
