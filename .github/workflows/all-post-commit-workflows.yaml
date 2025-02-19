@@ -48,6 +48,7 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
+      build-wheel: true
       tracy: true
     secrets: inherit
   # Slow Dispatch Unit Tests
