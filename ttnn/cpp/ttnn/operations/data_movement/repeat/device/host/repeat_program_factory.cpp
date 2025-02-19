@@ -119,38 +119,19 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_repeater_last_dim(
             }
         }
     }
-    auto override_runtime_args_callback = [reader_kernel_id, num_cores_x, num_cores_y, number_of_pages, responsibility](
+    auto override_runtime_args_callback = [reader_kernel_id, total_cores](
                                               const void* operation,
                                               const tt::tt_metal::Program& program,
                                               const std::vector<Tensor>& input_tensors,
                                               const std::vector<std::optional<const Tensor>>&,
                                               const std::vector<Tensor>& output_tensors) {
-        uint32_t read_start_page = 0;
-        uint32_t done = 0;
         auto input = input_tensors.at(0);
         auto output = output_tensors.at(0);
-        for (int core_x = 0; core_x < num_cores_x; core_x++) {
-            for (int core_y = 0; core_y < num_cores_y; core_y++) {
-                CoreCoord core = {core_x, core_y};
-                if (done == 1) {
-                    const std::vector<uint32_t> reader_runtime_args = {0, 0, 0, 0, 1};
-                    tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
-                } else {
-                    // set the runtime args
-                    // set the compile time args
-                    const uint32_t start_of_read = read_start_page;
-                    uint32_t end_of_read = read_start_page + responsibility;
-                    end_of_read = end_of_read < number_of_pages ? end_of_read : number_of_pages;
-
-                    const std::vector<uint32_t> reader_runtime_args = {
-                        input.buffer()->address(), output.buffer()->address(), start_of_read, end_of_read, 0
-
-                    };
-                    read_start_page = end_of_read;
-                    done = (end_of_read == number_of_pages) ? 1 : 0;
-                    tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
-                }
-            }
+        auto& runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
+        for (const auto& core : total_cores) {
+            auto& runtime_args = runtime_args_by_core[core.x][core.y];
+            runtime_args.at(0) = input.buffer()->address();
+            runtime_args.at(1) = output.buffer()->address();
         }
     };
 
@@ -282,16 +263,7 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_repeater(
             }
         }
     }
-    auto override_runtime_args_callback = [reader_kernel_id,
-                                           num_repeats,
-                                           num_cores_total,
-                                           num_cores_x,
-                                           num_cores_y,
-                                           number_of_higher_pages,
-                                           number_of_lower_pages,
-                                           divide_on_higher,
-                                           responsibility_chunk,
-                                           responsibility_mod](
+    auto override_runtime_args_callback = [reader_kernel_id, total_cores](
                                               const void* operation,
                                               const tt::tt_metal::Program& program,
                                               const std::vector<Tensor>& input_tensors,
@@ -299,55 +271,11 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_repeater(
                                               const std::vector<Tensor>& output_tensors) {
         auto input = input_tensors.at(0);
         auto output = output_tensors.at(0);
-        tt::tt_metal::Buffer* src_buffer = input.buffer();
-        tt::tt_metal::Buffer* dst_buffer = output.buffer();
-        uint32_t done = 0;
-        uint32_t read_start_page = 0;
-        uint32_t core_count = 0;
-        for (int core_x = 0; core_x < num_cores_x; core_x++) {
-            for (int core_y = 0; core_y < num_cores_y; core_y++) {
-                uint32_t responsibility =
-                    core_count++ < responsibility_mod ? responsibility_chunk + 1 : responsibility_chunk;
-                CoreCoord core = {core_x, core_y};
-                if (done == 1) {
-                    const std::vector<uint32_t> reader_runtime_args = {0, 0, 0, 0, 0, 0, 0, 1};
-                    tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
-                } else if (divide_on_higher) {
-                    const uint32_t start_of_read = read_start_page;
-                    uint32_t end_of_read = read_start_page + responsibility;
-                    end_of_read = end_of_read < number_of_higher_pages ? end_of_read : number_of_higher_pages;
-
-                    const std::vector<uint32_t> reader_runtime_args = {
-                        src_buffer->address(),
-                        dst_buffer->address(),
-                        start_of_read,
-                        end_of_read,
-                        0,
-                        number_of_lower_pages,
-                        num_repeats,
-                        0};
-                    read_start_page = end_of_read;
-                    done = (end_of_read == number_of_higher_pages) ? 1 : 0;
-                    tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
-                } else {
-                    const uint32_t start_of_read = read_start_page;
-                    uint32_t end_of_read = read_start_page + responsibility;
-                    end_of_read = end_of_read < number_of_lower_pages ? end_of_read : number_of_lower_pages;
-
-                    const std::vector<uint32_t> reader_runtime_args = {
-                        src_buffer->address(),
-                        dst_buffer->address(),
-                        0,
-                        number_of_higher_pages,
-                        start_of_read,
-                        end_of_read,
-                        num_repeats,
-                        0};
-                    read_start_page = end_of_read;
-                    done = (end_of_read == number_of_lower_pages) ? 1 : 0;
-                    tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
-                }
-            }
+        auto& runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
+        for (const auto& core : total_cores) {
+            auto& runtime_args = runtime_args_by_core[core.x][core.y];
+            runtime_args.at(0) = input.buffer()->address();
+            runtime_args.at(1) = output.buffer()->address();
         }
     };
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
