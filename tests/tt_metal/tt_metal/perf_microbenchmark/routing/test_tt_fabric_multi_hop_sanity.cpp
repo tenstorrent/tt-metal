@@ -228,9 +228,7 @@ int main(int argc, char** argv) {
 
     CoreCoord gk_core = {gk_x, gk_y};
 
-    std::map<string, string> defines = {
-        {"FD_CORE_TYPE", std::to_string(0)},  // todo, support dispatch on eth
-    };
+    std::map<string, string> defines;
 
     try {
         const std::filesystem::path tg_mesh_graph_desc_path =
