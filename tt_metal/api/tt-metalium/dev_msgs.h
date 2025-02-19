@@ -310,6 +310,7 @@ struct addressable_core_t {
 constexpr static std::uint32_t MAX_VIRTUAL_NON_WORKER_CORES = 18;
 // This is the total number of Non Worker Cores on WH (first term is Ethernet, second term is PCIe and last term is
 // DRAM).
+// ??????
 constexpr static std::uint32_t MAX_NON_WORKER_CORES = MAX_VIRTUAL_NON_WORKER_CORES + 1 + 16;
 constexpr static std::uint32_t MAX_HARVESTED_ROWS = 2;
 constexpr static std::uint8_t CORE_COORD_INVALID = 0xFF;

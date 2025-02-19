@@ -1144,10 +1144,6 @@ void assemble_device_commands(
             CoreCoord virtual_end =
                 device->virtual_core_from_logical_core(core_range.end_coord, kernel_group->get_core_type());
 
-            std::cout << "MCAST GO SIGNAL NOC XY " << std::hex
-                      << device->get_noc_multicast_encoding(noc_index, CoreRange(virtual_start, virtual_end))
-                      << std::dec << " noc index " << noc_index << " start " << virtual_start.str() << " end "
-                      << virtual_end.str() << std::endl;
             multicast_go_signal_sub_cmds.emplace_back(CQDispatchWritePackedMulticastSubCmd{
                 .noc_xy_addr = device->get_noc_multicast_encoding(noc_index, CoreRange(virtual_start, virtual_end)),
                 .num_mcast_dests = (uint32_t)core_range.size()});
