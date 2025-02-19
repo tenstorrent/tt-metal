@@ -73,7 +73,7 @@ def test_repeat(device, layout, dtype, shape, repeat_shape):
 @pytest.mark.parametrize("layout", layouts)
 @pytest.mark.parametrize("shape", shapes)
 @pytest.mark.parametrize("repeat_shape", repeat_shapes)
-def test_pc_repeat(device, layout, shape, repeat_shape):
+def test_pc_repeat(device, layout, shape, repeat_shape, use_program_cache):
     # trying to avoid the `buffer not divisible by page size` error. Does this make sense?
     if layout == ttnn.TILE_LAYOUT and (
         prod(shape) % ttnn.TILE_SIZE != 0 or _get_final_size(shape, repeat_shape) % ttnn.TILE_SIZE != 0
@@ -82,15 +82,14 @@ def test_pc_repeat(device, layout, shape, repeat_shape):
 
     if len(repeat_shape) < len(shape):
         pytest.skip("PyTorch repeat dim must be >= tensor dim (although we can handle this).")
-    device.enable_program_cache()
     num_iters = 3
     input_tensors = []
     torch_results = []
-    for i in range(3):
+    for i in range(num_iters):
         torch_tensor = torch.rand(shape, dtype=torch.bfloat16)
         torch_results.append(torch_tensor.repeat(repeat_shape))
         input_tensors.append(ttnn.from_torch(torch_tensor, layout=layout, device=device, dtype=ttnn.bfloat16))
-    for i in range(3):
+    for i in range(num_iters):
         output = ttnn.repeat(input_tensors[i], ttnn.Shape(repeat_shape))
         output = ttnn.to_torch(output)
         assert (
@@ -98,3 +97,54 @@ def test_pc_repeat(device, layout, shape, repeat_shape):
         ), f"Output shape {output.shape} does not match torch shape {torch_results[i].shape}"
 
         assert_with_pcc(torch_results[i], output, 0.9999)
+
+
+# 17975 test cases
+
+
+def test_17975_a(device, use_program_cache):
+    y = torch.rand((1, 1, 256, 384), dtype=torch.bfloat16)
+
+    for _ in range(10):
+        y_tt = ttnn.from_torch(y, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        print("program cache: ", device.num_program_cache_entries())
+
+        x = torch.zeros((64, 1, 256, 384), dtype=torch.bfloat16)
+        x_tt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+        z_tt = x_tt + y_tt
+
+        for i in range(64):
+            z_torch = ttnn.to_torch(z_tt[i : i + 1])
+            assert torch.allclose(z_torch, y, atol=1e-2), f"z_torch[{i}] != y"
+
+
+def test_17975_b(device, use_program_cache):
+    y = torch.rand((1, 1, 32, 32), dtype=torch.bfloat16)
+
+    for _ in range(10):
+        y_tt = ttnn.from_torch(y, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        print("program cache: ", device.num_program_cache_entries())
+
+        x = torch.zeros((4, 1, 32, 32), dtype=torch.bfloat16)
+        x_tt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+        ttnn.repeat(y_tt, [4, 1, 1, 1])
+        z_tt = ttnn.experimental.add(x_tt, y_tt)
+        # z_tt = x_tt + y_tt
+
+        for i in range(4):
+            z_torch = ttnn.to_torch(z_tt[i : i + 1])
+            assert torch.allclose(z_torch, y, atol=1e-2), f"z_torch[{i}] != y"
+
+
+def test_17975_c(device, use_program_cache):
+    for _ in range(10):
+        y = torch.rand((1, 1, 256, 384), dtype=torch.bfloat16)
+
+        y_tt = ttnn.from_torch(y, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        z_tt = ttnn.repeat(y_tt, ttnn.Shape([64, 1, 1, 1]))
+
+        for i in range(64):
+            z_torch = ttnn.to_torch(z_tt[i : i + 1])
+            assert torch.allclose(z_torch, y, atol=1e-2), f"z_torch[{i}] != y"

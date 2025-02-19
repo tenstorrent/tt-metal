@@ -119,7 +119,7 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_repeater_last_dim(
             }
         }
     }
-    auto override_runtime_args_callback = [reader_kernel_id](
+    auto override_runtime_args_callback = [reader_kernel_id, num_cores_x, num_cores_y, num_cores_total](
                                               const void* operation,
                                               const tt::tt_metal::Program& program,
                                               const std::vector<Tensor>& input_tensors,
@@ -128,16 +128,10 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_repeater_last_dim(
         auto input = input_tensors.at(0);
         auto output = output_tensors.at(0);
         ttnn::Shape input_log_shape = ttnn::Shape(input.get_logical_shape().view());
-        ttnn::Shape output_log_shape = ttnn::Shape(output.get_logical_shape().view());
-        const uint32_t data_size = input.element_size();
         tt::tt_metal::IDevice* device = input.device();
-        auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-        uint32_t num_cores_x = compute_with_storage_grid_size.x;
-        uint32_t num_cores_y = compute_with_storage_grid_size.y;
-        uint32_t num_cores_total = num_cores_x * num_cores_y;
         uint32_t read_start_page = 0;
-        tt::tt_metal::Buffer* src_buffer = input.buffer();
-        tt::tt_metal::Buffer* dst_buffer = output.buffer();
+        auto src_buffer = input.buffer();
+        auto dst_buffer = output.buffer();
         uint32_t number_of_pages = input_log_shape[-2];
         uint32_t responsibility = ((number_of_pages - 1) / num_cores_total) + 1;
         uint32_t done = 0;
