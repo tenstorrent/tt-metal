@@ -522,9 +522,20 @@ void py_module(py::module& module) {
             }),
             py::arg("dim"))
         .def(
+            py::init([](MeshDevice mesh_device, int dim) -> std::unique_ptr<ConcatMeshToTensor> {
+                return std::make_unique<DeviceConcatMeshToTensor>(mesh_device, dim);
+            }),
+            py::arg("mesh_device"),
+            py::arg("dim"))
+        .def(
             "compose",
             [](const ConcatMeshToTensor& self, const std::vector<Tensor>& tensors) { return self.compose(tensors); },
+            py::arg("tensors"))
+        .def(
+            "compose",
+            [](const ConcatMeshToTensor& self, const Tensor& tensor) { return self.compose(tensor); },
             py::arg("tensors"));
+
     auto py_concat_2d_mesh_to_tensor =
         static_cast<py::class_<ConcatMesh2dToTensor, std::unique_ptr<ConcatMesh2dToTensor>>>(
             module.attr("ConcatMesh2dToTensor"));
