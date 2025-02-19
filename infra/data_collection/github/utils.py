@@ -11,7 +11,7 @@ from typing import Optional, Union
 
 from loguru import logger
 
-from infra.data_collection.models import InfraErrorV1
+from infra.data_collection.models import InfraErrorV1, TestErrorV1
 from infra.data_collection.pydantic_models import CompleteBenchmarkRun
 
 
@@ -134,10 +134,24 @@ def get_failure_signature_and_description_from_annotations(github_job, github_jo
     if job_id in github_job_id_to_annotations:
         annotation_info = github_job_id_to_annotations[job_id]
 
-        # Iterate over list of job annotation's until first failure-level annotation message
-        failure_description = next((d["message"] for d in annotation_info if d["annotation_level"] == "failure"), None)
-        if failure_description:
-            failure_signature = get_job_failure_signature_(github_job, failure_description)
+        for _annot in annotation_info:
+            if _annot["annotation_level"] == "failure":
+                # Unit test failure: a failure exists where the annotation path is not .github
+                if _annot["path"] != ".github":
+                    failure_description = _annot["path"]
+                    if ".py" in failure_description:
+                        failure_signature = str(TestErrorV1.PY_TEST_FAILURE)
+                    elif ".cpp" in failure_description:
+                        failure_signature = str(TestErrorV1.CPP_TEST_FAILURE)
+                    else:
+                        failure_signature = str(TestErrorV1.UNKNOWN_TEST_FAILURE)
+                    return failure_signature, failure_description
+                else:
+                    # Infrastructure error
+                    failure_description = _annot.get("message")
+                    if failure_description:
+                        failure_signature = get_job_failure_signature_(github_job, failure_description)
+                        return failure_signature, failure_description
     return failure_signature, failure_description
 
 
