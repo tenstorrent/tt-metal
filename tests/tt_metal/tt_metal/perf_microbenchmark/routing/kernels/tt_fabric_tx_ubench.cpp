@@ -5,10 +5,10 @@
 // clang-format off
 #include "dataflow_api.h"
 #include "debug/dprint.h"
-#include "tt_fabric/hw/inc/tt_fabric.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric.h"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen.hpp"
-#include "tt_fabric/hw/inc/tt_fabric_interface.h"
-#include "tt_fabric/hw/inc/tt_fabric_api.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/common/kernel_utils.hpp"
 
 // clang-format on
@@ -136,7 +136,7 @@ void kernel_main() {
     }
 
     // initalize client
-    fabric_endpoint_init(client_interface, outbound_eth_chan);
+    fabric_endpoint_init<RoutingType::ROUTING_TABLE>(client_interface, outbound_eth_chan);
 
     // notify the controller kernel that this worker is ready to proceed
     notify_traffic_controller();
@@ -157,7 +157,7 @@ void kernel_main() {
     while (true) {
         client_interface->local_pull_request.pull_request.words_read = 0;
         if constexpr (mcast_data) {
-            fabric_async_write_multicast<ASYNC_WR_SEND>(
+            fabric_async_write_multicast<AsyncWriteMode::SEND, RoutingType::ROUTING_TABLE>(
                 client_interface,
                 0,                       // the network plane to use for this transaction
                 data_buffer_start_addr,  // source address in sender’s memory
@@ -170,7 +170,7 @@ void kernel_main() {
                 n_depth,
                 s_depth);
         } else {
-            fabric_async_write<ASYNC_WR_SEND>(
+            fabric_async_write<AsyncWriteMode::SEND, RoutingType::ROUTING_TABLE>(
                 client_interface,
                 0,                       // the network plane to use for this transaction
                 data_buffer_start_addr,  // source address in sender’s memory
