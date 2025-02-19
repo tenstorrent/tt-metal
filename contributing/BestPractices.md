@@ -376,17 +376,32 @@ To ensure safe and predictable program termination, static objects should meet t
 **Avoid:**
 ```cpp
 // Bad: Using a static object with a non-trivial destructor.
-static std::string kData = "Non-trivial destructor! Bad!";
+static const std::map<int, std::string> kDeviceConfigFiles = {
+    {1, "n150.yaml"},
+    {2, "n300.yaml"},
+    {8, "t3000.yaml"}
+};
 ```
 
 **Prefer:**
 ```cpp
 // Option 1: Use a trivial type for static data when possible.
-static constexpr std::string_view kData = "Trivial destructor! Good!";
+constexpr std::string_view kData = "Trivial destructor! Good!";
+
+constexpr uint32_t kMaxNumberOfCommandQueues = 2;
+
+// Using array of trivially destructible types is OK.
+constexpr std::array<int, 3> kDeviceIds = {1, 2, 8};
 
 // Option 2: If dynamic initialization is required, use function-local statics with `Indestructible`.
-const auto& get_data() {
-    static Indestructible<std::string> kData("Disabled destructor! Good!");
-    return kData.get();
+const auto& get_device_configs() {
+    static tt::stl::Indestructible<std::map<int, std::string_view>> configs{
+        std::map<int, std::string_view>{
+            {1, "n150.yaml"},
+            {2, "n300.yaml"},
+            {8, "t3000.yaml"}
+        }
+    };
+    return configs.get();
 }
 ```

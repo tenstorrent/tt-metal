@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <new>
 #include <utility>
 
@@ -43,8 +44,8 @@ public:
     ~Indestructible() = default;
 
 private:
-    // A buffer of unsigned char with alignment of T and size of T
-    alignas(T) unsigned char storage_[sizeof(T)];
+    // A buffer of std::byte with alignment of T and size of T
+    alignas(T) std::byte storage_[sizeof(T)];
 };
 
 }  // namespace tt::stl
