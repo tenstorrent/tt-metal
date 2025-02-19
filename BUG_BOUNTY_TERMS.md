@@ -14,28 +14,28 @@ This Program is a discretionary initiative. Tenstorrent, in our sole discretion,
 
 To be eligible to participate in the Program you must:
 
-* be the legal age of majority in your country and have the legal capacity to enter into, and be bound by, these Terms;  
-* if you are participating in the Program as an entity, have the legal authority to accept these Terms on the applicable entity’s behalf (in which case “you” will mean the foregoing entity);  
-* not be subject to legal obligations that prevent you from participating in the bug bounty Program (for example, under your employment contract or ethical rules);  
-* not be a sanctioned person or a citizen or resident of a sanctioned country under applicable law, including under U.S. embargo or sanctions;  
-* not be in violation of any applicable laws or regulations when participating in the Program;  
-* not ask for payment in exchange for Bug details or dispute the applicability of the bug bounty Program to you, including the amount of any proposed or actual payment or categorization of a Bug; and  
+* be the legal age of majority in your country and have the legal capacity to enter into, and be bound by, these Terms;
+* if you are participating in the Program as an entity, have the legal authority to accept these Terms on the applicable entity’s behalf (in which case “you” will mean the foregoing entity);
+* not be subject to legal obligations that prevent you from participating in the bug bounty Program (for example, under your employment contract or ethical rules);
+* not be a sanctioned person or a citizen or resident of a sanctioned country under applicable law, including under U.S. embargo or sanctions;
+* not be in violation of any applicable laws or regulations when participating in the Program;
+* not ask for payment in exchange for Bug details or dispute the applicability of the bug bounty Program to you, including the amount of any proposed or actual payment or categorization of a Bug; and
 * not be a current employee, vendor, contractor, or agent for Tenstorrent.
 
 You may be required to provide Tenstorrent with proof of compliance and eligibility in the form requested with regard to any of your obligations hereunder. Tenstorrent reserves the right to limit or refuse your eligibility to participate in the Program for any reason in its sole discretion, including but not limited to where your participation is prohibited by any applicable law. If Tenstorrent becomes aware of any violation of these Terms, Tenstorrent may elect to, among other things, (a) withhold, amend, or cancel the benefits of or payments under the Program or (b) require return of any payment made to you, including taking any action at law to obtain such payment.
 
 **Bounty Scope**
 
-The Bounty will be applicable for Identified Issues in \[repo name & link\]. An “Identified Issue” are Bugs which have an open GitHub issue and are tagged with both (1) “bounty” and (2) one of the categories listed in Exhibit A.
+The Bounty will be applicable for Identified Issues in [tt-metal](https://github.com/tenstorrent/tt-metal). An “Identified Issue” are Bugs which have an open GitHub issue and are tagged with both (1) “bounty” and (2) one of the categories listed in Exhibit A.
 
 **Bounty Payment**
 
 Subject to these Terms, you will receive payments based on the type of Bug resolved in accordance with Exhibit A. In order to receive a Bounty payment, you:
 
-* must not be in breach of these Terms;  
-* must be assigned on GitHub to the Identified Issue for which you are submitting a pull request, and your pull request must be submitted while you are still assigned to the Identified Issue (you have forfeited your right to any Bounty once the Identified Issue is re-assigned to another contributor). Tenstorrent reserves the right to re-assign any Identified Issue if the assigned contributor becomes unresponsive for over two (2) weeks or if the assigned contributor explicitly forfeits the assignment;  
-* must release your contributions under the license of the repository in which you are submitting a pull request;  
-* provide additional information as may be required by us (such as payment information) and meet all requirements to receive such Bounty as may be required by applicable law and regulations. If you do not provide such additional information or meet such requirements, we may not provide payment; and  
+* must not be in breach of these Terms;
+* must be assigned on GitHub to the Identified Issue for which you are submitting a pull request, and your pull request must be submitted while you are still assigned to the Identified Issue (you have forfeited your right to any Bounty once the Identified Issue is re-assigned to another contributor). Tenstorrent reserves the right to re-assign any Identified Issue if the assigned contributor becomes unresponsive for over two (2) weeks or if the assigned contributor explicitly forfeits the assignment;
+* must release your contributions under the license of the repository in which you are submitting a pull request;
+* provide additional information as may be required by us (such as payment information) and meet all requirements to receive such Bounty as may be required by applicable law and regulations. If you do not provide such additional information or meet such requirements, we may not provide payment; and
 * may not designate someone else to receive your Bounty payout.
 
 Bounties are paid in US dollars to your nominated bank account via ACH. Please note that we can not issue Bounty payouts to individuals, entities, or residents of countries that are listed in the U.S. Department of The Treasury Office of Foreign Assets Control (OFAC) sanctions list.
@@ -46,15 +46,15 @@ You will be solely responsible for all income tax liabilities that arise from or
 
 You shall:
 
-* only participate in the Program solely for the intended purpose of disclosing or resolving Bugs to Tenstorrent as described in these Terms and any related documentation;  
-* participate in the Program for lawful purposes only and shall comply with all applicable laws and regulations; and  
+* only participate in the Program solely for the intended purpose of disclosing or resolving Bugs to Tenstorrent as described in these Terms and any related documentation;
+* participate in the Program for lawful purposes only and shall comply with all applicable laws and regulations; and
 * only access, disclose or modify your own user data and be solely responsible for the accuracy, completeness, appropriateness, and legality of any data or Bug solutions you upload or provide through your participation in the Program.
 
 You shall not:
 
-* attempt to gain access to another user’s account or data;  
-* transmit any viruses or exploits through your participation in the Program, except for the sole purpose of discovery and submission of Bugs and subject to compliance with these Terms;  
-* upload, input, access, store, distribute or any material that: (i) is unlawful, harmful, threatening, defamatory, obscene, infringing, harassing or racially or ethnically offensive; (ii) facilitates illegal activity; (iii) is otherwise illegal (including without limitation infringement of any third party intellectual property rights or any other rights); or (iv) causes damage or injury to any person or property; or  
+* attempt to gain access to another user’s account or data;
+* transmit any viruses or exploits through your participation in the Program, except for the sole purpose of discovery and submission of Bugs and subject to compliance with these Terms;
+* upload, input, access, store, distribute or any material that: (i) is unlawful, harmful, threatening, defamatory, obscene, infringing, harassing or racially or ethnically offensive; (ii) facilitates illegal activity; (iii) is otherwise illegal (including without limitation infringement of any third party intellectual property rights or any other rights); or (iv) causes damage or injury to any person or property; or
 * upload or input or otherwise disclose to Tenstorrent any information which you do not have the rights to or which you are under an existing contractual or other legal obligation to maintain in confidence.
 
 **Intellectual Property Rights**
@@ -87,7 +87,7 @@ These Terms shall apply for as long as you are participating in the Program purs
 
 **Governing Law & Disputes**
 
-These Terms shall be governed by and construed in accordance with the laws of the State of California and any federal laws applicable therein and shall be binding upon the parties hereto in California and worldwide. The parties consent to the exclusive jurisdiction of the courts of the State of California for any dispute arising out of this Agreement. Except where prohibited, as a condition of participating in this Program, each Participant agrees that between the parties, any and all disputes, claims, and causes of action arising out of or connected with this Program, or the Bounty Payout awarded must be resolved individually, without resort to any form of class action. 
+These Terms shall be governed by and construed in accordance with the laws of the State of California and any federal laws applicable therein and shall be binding upon the parties hereto in California and worldwide. The parties consent to the exclusive jurisdiction of the courts of the State of California for any dispute arising out of this Agreement. Except where prohibited, as a condition of participating in this Program, each Participant agrees that between the parties, any and all disputes, claims, and causes of action arising out of or connected with this Program, or the Bounty Payout awarded must be resolved individually, without resort to any form of class action.
 
 **General**
 
@@ -103,5 +103,3 @@ These Terms will be binding on and will inure to the benefit of the legal repres
 | difficulty/hard | Complex tasks demanding deep architectural understanding and significant effort. | \- Major feature implementation. \- Core system redesign. \- Implementing a new kernel or low-level ops. \- Optimizing performance-critical code paths. |  2000 – 3000 |
 
 ---
-
-
