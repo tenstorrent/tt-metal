@@ -67,7 +67,10 @@ operation::ProgramWithCallbacks conv3d_factory(
         cb_vol2col_id,          // 15: cb_in
         in_row_size_bytes,      // 16
         out_row_size_bytes,     // 17
-        is_padding_zeros        // 18
+        is_padding_zeros,       // 18
+        config.T_out_block,     // 19
+        config.W_out_block,     // 20
+        config.H_out_block,     // 21
     };
 
     auto core_grid = CoreRange({0, 0}, {0, 0});

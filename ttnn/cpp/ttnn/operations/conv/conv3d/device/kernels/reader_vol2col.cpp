@@ -5,123 +5,157 @@
 #include <stdint.h>
 #include "dataflow_api.h"
 
+inline int32_t clampIndex(int32_t idx, int32_t lower_bound, int32_t upper_bound) {
+    // If we're doing replicate padding, clamp idx into [lower_bound, upper_bound].
+    if (idx < lower_bound) {
+        return lower_bound;
+    }
+    if (idx > upper_bound) {
+        return upper_bound;
+    }
+    return idx;
+}
+
+template <uint32_t in_row_size_bytes>
+inline void zeroPad(uint32_t cb_write_addr) {
+    // Zero-fill from MEM_ZEROS
+    constexpr uint32_t num_full_reads = in_row_size_bytes / MEM_ZEROS_SIZE;
+    constexpr uint32_t partial_read_size = in_row_size_bytes % MEM_ZEROS_SIZE;
+    const uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
+
+    for (uint32_t i = 0; i < num_full_reads; ++i) {
+        noc_async_read(zeros_noc_addr, cb_write_addr, MEM_ZEROS_SIZE);
+        cb_write_addr += MEM_ZEROS_SIZE;
+    }
+    if (partial_read_size > 0) {
+        noc_async_read(zeros_noc_addr, cb_write_addr, partial_read_size);
+    }
+    noc_async_read_barrier();
+}
+
 void kernel_main() {
     constexpr uint32_t N = get_compile_time_arg_val(0);
     constexpr uint32_t T_in = get_compile_time_arg_val(1);
     constexpr uint32_t H_in = get_compile_time_arg_val(2);
     constexpr uint32_t W_in = get_compile_time_arg_val(3);
     constexpr uint32_t C_in = get_compile_time_arg_val(4);
+
     constexpr uint32_t padding_t = get_compile_time_arg_val(5);
     constexpr uint32_t padding_h = get_compile_time_arg_val(6);
     constexpr uint32_t padding_w = get_compile_time_arg_val(7);
     constexpr uint32_t kT = get_compile_time_arg_val(8);
     constexpr uint32_t kH = get_compile_time_arg_val(9);
     constexpr uint32_t kW = get_compile_time_arg_val(10);
+
     constexpr uint32_t T_out = get_compile_time_arg_val(11);
     constexpr uint32_t H_out = get_compile_time_arg_val(12);
     constexpr uint32_t W_out = get_compile_time_arg_val(13);
     constexpr uint32_t C_out = get_compile_time_arg_val(14);
 
     constexpr uint32_t cb_vol2col = get_compile_time_arg_val(15);
-    // constexpr uint32_t cb_vol2col_out = get_compile_time_arg_val(16);
 
     constexpr uint32_t in_row_size_bytes = get_compile_time_arg_val(16);
     constexpr uint32_t out_row_size_bytes = get_compile_time_arg_val(17);
     constexpr bool is_padding_zeros = get_compile_time_arg_val(18) == 1;
 
-    /**
-     * Implement vol2col. Produce one patch at a time, reading sticks from DRAM
-     * directly into cb_vol2col. Write the patch out when it is constructed.
-     *
-     * Currentl does not support any padding.
-     *
-     *
-     * TODO:
-     * - handle non-aligned channels (16 seems to be alignment)
-     * - handle padding (zeros and replicate)
-     */
+    // Example block sizes; you could also parameterize these
+    // as compile-time args if you want them configurable.
+    constexpr uint32_t T_block_size = get_compile_time_arg_val(19);
+    constexpr uint32_t H_block_size = get_compile_time_arg_val(20);
+    constexpr uint32_t W_block_size = get_compile_time_arg_val(21);
 
+    // Load input/output addresses
     uint32_t argidx = 0;
     const uint32_t in_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t out_addr = get_arg_val<uint32_t>(argidx++);
 
+    // Interleaved address generators
     constexpr bool is_dram = true;
-
     const InterleavedAddrGen<is_dram> in_reader = {.bank_base_address = in_addr, .page_size = in_row_size_bytes};
-
     const InterleavedAddrGen<true> out_reader = {.bank_base_address = out_addr, .page_size = out_row_size_bytes};
 
     constexpr uint32_t BF16_BYTES = 2;
-
     uint32_t cb_write_ptr = get_write_ptr(cb_vol2col);
+
     uint32_t out_page_idx = 0;
-    for (uint32_t t = 0; t < T_out; t++) {
-        for (uint32_t h = 0; h < H_out; h++) {
-            for (uint32_t w = 0; w < W_out; w++) {
-                // patch = input[:, t:t+kD, h:h+kH, w:w+kW, :].reshape(-1)
-                for (uint32_t kt = 0; kt < kT; kt++) {
-                    for (uint32_t kh = 0; kh < kH; kh++) {
-                        for (uint32_t kw = 0; kw < kW; kw++) {
-                            uint32_t cb_stick_idx = kt * kH * kW + kh * kW + kw;
-                            uint32_t cb_write_offset = cb_stick_idx * C_in * BF16_BYTES;
-                            uint32_t cb_write_addr = cb_write_ptr + cb_write_offset;
 
-                            uint32_t t_idx = t + kt;
-                            uint32_t h_idx = h + kh;
-                            uint32_t w_idx = w + kw;
+    // 3D blocking loops:
+    for (uint32_t t_block = 0; t_block < T_out; t_block += T_block_size) {
+        const uint32_t t_block_end = (t_block + T_block_size < T_out) ? t_block + T_block_size : T_out;
 
-                            int32_t h_unpad_idx = h_idx - padding_h;
-                            int32_t w_unpad_idx = w_idx - padding_w;
+        for (uint32_t h_block = 0; h_block < H_out; h_block += H_block_size) {
+            const uint32_t h_block_end = (h_block + H_block_size < H_out) ? h_block + H_block_size : H_out;
 
-                            bool index_is_in_padding = h_unpad_idx < 0 || h_unpad_idx >= (int32_t)H_in ||
-                                                       w_unpad_idx < 0 || w_unpad_idx >= (int32_t)W_in;
-                            if (index_is_in_padding) {
-                                if constexpr (is_padding_zeros) {
-                                    constexpr uint32_t num_full_reads = in_row_size_bytes / MEM_ZEROS_SIZE;
-                                    constexpr uint32_t partial_read_size = in_row_size_bytes % MEM_ZEROS_SIZE;
-                                    uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
-                                    for (uint32_t i = 0; i < num_full_reads; ++i) {
-                                        noc_async_read(zeros_noc_addr, cb_write_addr, MEM_ZEROS_SIZE);
-                                        cb_write_addr += MEM_ZEROS_SIZE;
-                                    }
-                                    if (partial_read_size > 0) {
-                                        noc_async_read(zeros_noc_addr, cb_write_addr, partial_read_size);
-                                    }
-                                    noc_async_read_barrier();
-                                    continue;  // don't read from DRAM
-                                } else {
-                                    // padding replicate
-                                    // 4 cases: h_unpad_idx < 0 or >= H_in, w_unpad_idx < 0 or >= W_in
-                                    // Update indices for read
-                                    if (h_unpad_idx < 0) {
-                                        h_unpad_idx = 0;
-                                    } else if (h_unpad_idx >= (int32_t)H_in) {
-                                        h_unpad_idx = H_in - 1;
-                                    }
-                                    if (w_unpad_idx < 0) {
-                                        w_unpad_idx = 0;
-                                    } else if (w_unpad_idx >= (int32_t)W_in) {
-                                        w_unpad_idx = W_in - 1;
+            for (uint32_t w_block = 0; w_block < W_out; w_block += W_block_size) {
+                const uint32_t w_block_end = (w_block + W_block_size < W_out) ? w_block + W_block_size : W_out;
+
+                // Now iterate through the sub-tile
+                for (uint32_t t = t_block; t < t_block_end; ++t) {
+                    for (uint32_t h = h_block; h < h_block_end; ++h) {
+                        for (uint32_t w = w_block; w < w_block_end; ++w) {
+                            // For each output coordinate (t, h, w),
+                            // gather the kT*kH*kW patch around (t,h,w).
+                            for (uint32_t kt = 0; kt < kT; kt++) {
+                                for (uint32_t kh = 0; kh < kH; kh++) {
+                                    for (uint32_t kw = 0; kw < kW; kw++) {
+                                        const uint32_t cb_stick_idx = kt * kH * kW + kh * kW + kw;
+                                        const uint32_t cb_write_offset = cb_stick_idx * C_in * BF16_BYTES;
+                                        const uint32_t cb_write_addr = cb_write_ptr + cb_write_offset;
+
+                                        // “Unpadded” indices before we clamp/pad
+                                        int32_t t_idx = (int32_t)(t + kt) - padding_t;
+                                        int32_t h_idx = (int32_t)(h + kh) - padding_h;
+                                        int32_t w_idx = (int32_t)(w + kw) - padding_w;
+
+                                        // Check if inside the valid region
+                                        bool outside_t = (t_idx < 0 || t_idx >= (int32_t)T_in);
+                                        bool outside_h = (h_idx < 0 || h_idx >= (int32_t)H_in);
+                                        bool outside_w = (w_idx < 0 || w_idx >= (int32_t)W_in);
+                                        bool in_padding = (outside_t || outside_h || outside_w);
+
+                                        if (in_padding && is_padding_zeros) {
+                                            // Zero fill
+                                            zeroPad<in_row_size_bytes>(cb_write_addr);
+                                            continue;
+                                        }
+
+                                        // If replicate-padding or inside valid region:
+                                        if (outside_t) {
+                                            t_idx = clampIndex(t_idx, 0, (int32_t)T_in - 1);
+                                        }
+                                        if (outside_h) {
+                                            h_idx = clampIndex(h_idx, 0, (int32_t)H_in - 1);
+                                        }
+                                        if (outside_w) {
+                                            w_idx = clampIndex(w_idx, 0, (int32_t)W_in - 1);
+                                        }
+
+                                        // Now do the normal read from DRAM.
+                                        // Flattened index in the input
+                                        const uint32_t in_page_idx =
+                                            (uint32_t)(t_idx)*H_in * W_in + (uint32_t)(h_idx)*W_in + (uint32_t)(w_idx);
+
+                                        in_reader.noc_async_read_page(in_page_idx, cb_write_addr);
+                                        noc_async_read_barrier();
                                     }
                                 }
                             }
-                            // Read the patch from cb_vol2col
-                            // Write the patch to out_reader
 
-                            uint32_t in_page_idx = t_idx * H_in * W_in + h_unpad_idx * W_in + w_unpad_idx;
+                            // This completes the patch. If you need to
+                            // write it out or pass it on, do so here:
+                            uint64_t dst_addr = get_noc_addr(out_page_idx, out_reader);
+                            noc_async_write(cb_write_ptr, dst_addr, out_row_size_bytes);
+                            noc_async_write_barrier();
 
-                            in_reader.noc_async_read_page(in_page_idx, cb_write_addr);
-                            noc_async_read_barrier();
+                            out_page_idx++;
                         }
                     }
                 }
-                // write patch to out_reader
-                uint64_t dst_addr = get_noc_addr(out_page_idx, out_reader);
-                noc_async_write(cb_write_ptr, dst_addr, out_row_size_bytes);
-                noc_async_write_barrier();
-
-                out_page_idx++;
+                // End of w_block
             }
+            // End of h_block
         }
+        // End of t_block
+        // Possibly "push patches to compute" here if your pipeline expects it
     }
 }

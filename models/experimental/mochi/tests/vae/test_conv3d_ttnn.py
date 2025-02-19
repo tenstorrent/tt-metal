@@ -43,18 +43,6 @@ def run_vol2col_test(device, input_shape, out_channels, kernel_size, stride, pad
 
     gt_output = conv3d_module(input_tensor)
 
-    gt_vol2col = torch_vol2col(
-        input_tensor,
-        conv3d_module,
-        depth_block=2,
-        hw_block=2,
-        out_chan_block=2,
-    )  # (num_patches, C_in * kD * kH * kW)
-    torch_weight = conv3d_module.weight.data  # out_chan, C, kD, kH, kW
-    torch_weight = torch_weight.permute(1, 2, 3, 4, 0)  # C, kD, kH, kW, out_chan
-    torch_weight = torch_weight.reshape(-1, out_channels)
-    gt_matmul_out = torch.matmul(gt_vol2col, torch_weight)
-
     # Shape input for TTNN
     tt_input = input_tensor.permute(0, 2, 3, 4, 1)
     ALIGNMENT = 16
@@ -78,9 +66,9 @@ def run_vol2col_test(device, input_shape, out_channels, kernel_size, stride, pad
         dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat16,
         output_layout=ttnn.ROW_MAJOR_LAYOUT,
-        T_out_block=1,
-        W_out_block=1,
-        H_out_block=1,
+        T_out_block=2,
+        W_out_block=2,
+        H_out_block=2,
         output_channels=out_channels,
         kernel_size=kernel_size,
         stride=stride,
