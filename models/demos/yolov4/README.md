@@ -14,12 +14,12 @@
 
 - Use the following command to run the yolov4 with a giraffe image:
   ```
-  pytest models/demos/yolov4/demo/test_ttnn_yolov4.py
+  pytest models/demos/yolov4/demo/demo.py
   ```
 
 - Use the following command to run the yolov4 with different input image:
   ```
-  pytest  --disable-warnings --input-path=<PATH_TO_INPUT_IMAGE> models/demos/yolov4/demo/test_ttnn_yolov4.py
+  pytest  --disable-warnings --input-path=<PATH_TO_INPUT_IMAGE> models/demos/yolov4/demo/demo.py
   ```
 
 Once you run the command, The output file named `ttnn_prediction_demo.jpg` will be generated.

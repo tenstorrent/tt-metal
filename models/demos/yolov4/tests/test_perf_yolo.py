@@ -67,7 +67,7 @@ def test_yolov4(
 
     logger.info(f"Compiling model with warmup run")
     profiler.start(f"inference_and_compile_time")
-    ttnn_output_tensor = ttnn_model(device, ttnn_input)
+    ttnn_output_tensor = ttnn_model(ttnn_input)
 
     profiler.end(f"inference_and_compile_time")
 
@@ -80,7 +80,7 @@ def test_yolov4(
     for idx in range(iterations):
         profiler.start("inference_time")
         profiler.start(f"inference_time_{idx}")
-        ttnn_output_tensor = ttnn_model(device, ttnn_input)
+        ttnn_output_tensor = ttnn_model(ttnn_input)
 
         profiler.end(f"inference_time_{idx}")
         profiler.end("inference_time")

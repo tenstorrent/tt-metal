@@ -45,6 +45,7 @@ class TtYOLOv4:
         self.boxes_confs_2 = TtGenBoxes(device)
 
         self.downs = []  # [self.down1]
+        self.device = device
 
     def __call__(self, input_tensor):
         d1 = self.down1(input_tensor)
@@ -61,9 +62,9 @@ class TtYOLOv4:
         if orig:
             return x4, x5, x6
         else:
-            x4_boxes_confs = self.boxes_confs_0(device, x4)
-            x5_boxes_confs = self.boxes_confs_1(device, x5)
-            x6_boxes_confs = self.boxes_confs_2(device, x6)
+            x4_boxes_confs = self.boxes_confs_0(self.device, x4)
+            x5_boxes_confs = self.boxes_confs_1(self.device, x5)
+            x6_boxes_confs = self.boxes_confs_2(self.device, x6)
 
             confs_1 = ttnn.to_layout(x4_boxes_confs[1], ttnn.ROW_MAJOR_LAYOUT)
             confs_2 = ttnn.to_layout(x5_boxes_confs[1], ttnn.ROW_MAJOR_LAYOUT)

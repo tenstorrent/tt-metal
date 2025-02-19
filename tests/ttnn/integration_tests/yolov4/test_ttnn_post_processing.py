@@ -96,14 +96,6 @@ def test_yolov4_post_processing(device, reset_seeds, model_location_generator):
     result_2_conf = ttnn.to_torch(result_2[1])
     result_3_conf = ttnn.to_torch(result_3[1])
 
-    # result_1_conf = result_1_conf.permute(0, 1, 3, 2)
-    # result_2_conf = result_2_conf.permute(0, 1, 3, 2)
-    # result_3_conf= result_3_conf.permute(0, 1, 3, 2)
-
-    # result_1_conf = result_1_conf.reshape(1, 4800, 80)
-    # result_2_conf = result_2_conf.reshape(1, 1200, 80)
-    # result_3_conf= result_3_conf.reshape(1, 300, 80)
-
     assert_with_pcc(ref1[0], result_1_bb, 0.99)
     assert_with_pcc(ref2[0], result_2_bb, 0.99)
     assert_with_pcc(ref3[0], result_3_bb, 0.99)

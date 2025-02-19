@@ -6,7 +6,7 @@ import torch
 import ttnn
 from models.demos.yolov4.reference.yolov4 import Yolov4
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import skip_for_grayskull, skip_for_wormhole_b0
+from models.utility_functions import skip_for_grayskull
 from models.demos.yolov4.ttnn.yolov4 import TtYOLOv4
 from models.demos.yolov4.demo.demo import YoloLayer, get_region_boxes, post_processing, plot_boxes_cv2, load_class_names
 import cv2
@@ -102,7 +102,7 @@ def test_yolov4(device, reset_seeds, model_location_generator):
     ref1, ref2, ref3 = gen_yolov4_boxes_confs(torch_output_tensor)
     ref_boxes, ref_confs = get_region_boxes([ref1, ref2, ref3])
 
-    ttnn_output_tensor = ttnn_model(device, ttnn_input)
+    ttnn_output_tensor = ttnn_model(ttnn_input)
     result_boxes_padded = ttnn.to_torch(ttnn_output_tensor[0])
     result_confs = ttnn.to_torch(ttnn_output_tensor[1])
 
@@ -117,6 +117,7 @@ def test_yolov4(device, reset_seeds, model_location_generator):
     assert_with_pcc(ref_boxes, result_boxes, 0.99)
     assert_with_pcc(ref_confs, result_confs, 0.71)
 
+    """
     ## Giraffe image detection
     conf_thresh = 0.3
     nms_thresh = 0.4
@@ -127,3 +128,4 @@ def test_yolov4(device, reset_seeds, model_location_generator):
     class_names = load_class_names(namesfile)
     img = cv2.imread(imgfile)
     plot_boxes_cv2(img, boxes[0], "ttnn_prediction_demo.jpg", class_names)
+    """
