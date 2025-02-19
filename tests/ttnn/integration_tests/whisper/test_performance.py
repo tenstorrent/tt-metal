@@ -3,40 +3,43 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from models.experimental.functional_whisper.tt import ttnn_functional_whisper, ttnn_optimized_functional_whisper
+from models.experimental.functional_whisper.tt import ttnn_optimized_functional_whisper
 from transformers import AutoFeatureExtractor, WhisperModel, WhisperConfig
 from datasets import load_dataset
 import torch
 from ttnn.model_preprocessing import preprocess_model_parameters
 from loguru import logger
 from models.perf.perf_utils import prep_perf_report
+from models.utility_functions import skip_for_grayskull
 import time
 import ttnn
 
 
-def get_expected_times(functional_whisper):
+def get_expected_times(model_name):
+    """
+    Returns expected compile time and inference time.
+    """
     return {
-        ttnn_functional_whisper: (11.7, 4.16),
-        ttnn_optimized_functional_whisper: (1.7, 1.35),
-    }[functional_whisper]
+        "openai/whisper-base": (12.8, 0.04),
+        "distil-whisper/distil-large-v3": (10.0, 0.24),
+    }[model_name]
 
 
+@skip_for_grayskull()
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
-@pytest.mark.parametrize("model_name", ["openai/whisper-base"])
+@pytest.mark.parametrize("model_name", ["openai/whisper-base", "distil-whisper/distil-large-v3"])
 @pytest.mark.parametrize("batch_size", [1])
-@pytest.mark.parametrize("sequence_size", [500])
-@pytest.mark.parametrize("functional_whisper", [ttnn_functional_whisper, ttnn_optimized_functional_whisper])
+@pytest.mark.parametrize("decoder_sequence_size", [32])  # tile size
+@pytest.mark.parametrize("functional_whisper", [ttnn_optimized_functional_whisper])
 @pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
 def test_performance(
-    device, use_program_cache, model_name, batch_size, sequence_size, functional_whisper, enable_async_mode
+    device, use_program_cache, model_name, batch_size, decoder_sequence_size, functional_whisper, enable_async_mode
 ):
     config = WhisperConfig.from_pretrained(model_name)
 
     # Run TT Model
-    if functional_whisper == ttnn_functional_whisper:
-        tt_model_name = f"ttnn_{model_name}"
-    elif functional_whisper == ttnn_optimized_functional_whisper:
+    if functional_whisper == ttnn_optimized_functional_whisper:
         tt_model_name = f"ttnn_{model_name}_optimized"
     else:
         raise ValueError(f"Unknown functional_t5: {functional_whisper}")
@@ -46,7 +49,7 @@ def test_performance(
     ds = load_dataset("hf-internal-testing/librispeech_asr_dummy", "clean", split="validation")
     inputs = feature_extractor(ds[0]["audio"]["array"], sampling_rate=16000, return_tensors="pt")
     input_features = inputs.input_features
-    decoder_input_ids = torch.tensor([[1, 1]]) * config.decoder_start_token_id
+    decoder_input_ids = torch.ones(1, decoder_sequence_size).type(torch.int32) * config.decoder_start_token_id
 
     attention_mask = None
 
@@ -85,12 +88,12 @@ def test_performance(
 
     inference_and_compile_time, inference_time, *_ = durations
 
-    expected_compile_time, expected_inference_time = get_expected_times(functional_whisper)
+    expected_compile_time, expected_inference_time = get_expected_times(model_name)
     prep_perf_report(
         model_name=tt_model_name,
         batch_size=batch_size,
-        inference_and_compile_time=durations[0],
-        inference_time=durations[1],
+        inference_and_compile_time=inference_and_compile_time,
+        inference_time=inference_time,
         expected_compile_time=expected_compile_time,
         expected_inference_time=expected_inference_time,
         comments="",
@@ -98,5 +101,4 @@ def test_performance(
     )
 
     logger.info(f"Compile time: {inference_and_compile_time - inference_time}")
-    logger.info(f"Inference time: {inference_time}")
-    logger.info(f"Samples per second: {1 / inference_time * batch_size}")
+    logger.info(f"Inference time (encoder + decoder): {inference_time}")
