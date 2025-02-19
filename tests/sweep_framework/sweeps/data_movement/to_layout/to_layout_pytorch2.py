@@ -93,15 +93,23 @@ def run(
         torch_input_tensor = torch_random(tensor_shape, -0.1, 0.1, dtype=torch_dtype)
 
     # create ttnn tensor from torch tensor
-    ttnn_input_tensor = ttnn.from_torch(torch_input_tensor, device=device, layout=input_layout, dtype=ttnn_dtype)
+    try:
+        ttnn_input_tensor = ttnn.from_torch(torch_input_tensor, device=device, layout=input_layout, dtype=ttnn_dtype)
 
-    start_time = start_measuring_time()
-    # create output tensor using to_layout
-    ttnn_tensor = ttnn.to_layout(ttnn_input_tensor, output_layout)
-    e2e_perf = stop_measuring_time(start_time)
+        start_time = start_measuring_time()
+        # create output tensor using to_layout
+        ttnn_tensor = ttnn.to_layout(ttnn_input_tensor, output_layout)
+        e2e_perf = stop_measuring_time(start_time)
 
-    # convert back to torch
-    ttnn_converted_tensor = ttnn.to_torch(ttnn_tensor)
+        # convert back to torch
+        ttnn_converted_tensor = ttnn.to_torch(ttnn_tensor)
+    except Exception as e:
+        print(e)
+        e2e_perf = TIMEOUT
+        print(
+            f"Error occurred with parameters: to_layout_specs={to_layout_specs}, dtype={dtype}, input_layout={input_layout}, output_layout={output_layout}"
+        )
+        return [False, None]
 
     # Compare the results and return performance and accuracy check
     result = check_with_pcc(ttnn_converted_tensor, torch_input_tensor)
