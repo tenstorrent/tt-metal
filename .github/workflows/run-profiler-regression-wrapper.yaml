@@ -17,9 +17,9 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { arch: grayskull, runner-label: issue-hackathon },
-          #{ arch: wormhole_b0, runner-label: N150 },
-          #{ arch: wormhole_b0, runner-label: N300 },
+          { arch: grayskull, runner-label: E150 },
+          { arch: wormhole_b0, runner-label: N150 },
+          { arch: wormhole_b0, runner-label: N300 },
         ]
     uses: ./.github/workflows/run-profiler-regression.yaml
     secrets: inherit
