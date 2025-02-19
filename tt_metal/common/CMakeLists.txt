@@ -1,5 +1,5 @@
 add_library(common OBJECT)
-add_library(Metalium::Metal::Common ALIAS common)
+add_library(TT::Metalium::Common ALIAS common)
 
 target_sources(
     common
