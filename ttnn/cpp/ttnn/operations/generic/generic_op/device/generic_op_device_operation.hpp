@@ -18,22 +18,8 @@
 
 namespace ttnn::operations::generic {
 
-using cb_attr_map = std::unordered_map<tt::CBIndex, circular_buffer_attributes_t>;
-
 struct GenericOpDeviceOperation {
-    struct operation_attributes_t {
-        cb_attr_map circular_buffer_attributes;
-
-        std::vector<data_movement_attributes_t> data_movement_attributes;
-
-        // Ethernet not supported at the moment.
-        // std::optional<tt::metal::EthernetConfig> ethernetConfig;
-
-        std::vector<compute_attributes_t> compute_attributes;
-    };
-
-    // Define the return types for the shape(s) of the operation
-    using shape_return_value_t = std::vector<Shape>;
+    using operation_attributes_t = program_attributes_t;
 
     // Define the return types for the tensor(s) of the operation
     // Can be a single Tensor, std::optional<Tensor, ...>, std::vector<Tensor>, std::tuple<Tensor, ...> etc.
@@ -78,6 +64,10 @@ struct GenericOpDeviceOperation {
 
     // Mandatory methods
 
+    std::vector<ttnn::TensorSpec> compute_output_specs(const operation_attributes_t&, const tensor_args_t&) const;
+
+    std::vector<Tensor> create_output_tensors(const operation_attributes_t&, const tensor_args_t&) const;
+
     // Select the program factory based on the operation attributes and tensor args
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -88,14 +78,6 @@ struct GenericOpDeviceOperation {
 
     // Validate the operation when it reuses a program. Usually will have less checks
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
-
-    // Compute the output shapes based on the operation attributes and tensor args
-    static shape_return_value_t compute_output_shapes(const operation_attributes_t&, const tensor_args_t&);
-
-    // Create the output tensors based on the operation attributes and tensor args
-    static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-
-    static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
     static std::tuple<operation_attributes_t, tensor_args_t> invoke(
         const Tensor&, const operation_attributes_t&, const std::vector<Tensor>& = {});

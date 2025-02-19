@@ -12,6 +12,8 @@
 #include <tt_metal/api/tt-metalium/assert.hpp>
 
 #include "ttnn/operations/generic/generic_op/generic_op.hpp"
+#include "ttnn/operations/generic/generic_op/generic_op_types.hpp"
+
 #include "ttnn/operations/generic/generic_op/device/generic_op_device_operation.hpp"
 #include "logger.hpp"
 #include "ttnn/operations/core/core.hpp"
@@ -32,6 +34,8 @@ using tt::tt_metal::IDevice;
 using tt::tt_metal::Layout;
 using tt::tt_metal::OwnedStorage;
 using tt::tt_metal::Tensor;
+
+using namespace ttnn::operations::generic;
 
 namespace detail {
 float sqrt(float x) { return std::sqrt(x); }
@@ -296,58 +300,61 @@ void test_numerically() {
                 tt::tt_metal::split_work_to_cores(
                     compute_with_storage_grid_size, input_tensor.volume() / tt::constants::TILE_HW);
 
-        ttnn::operations::generic::operation_attributes_t program_attributes = {
-            .circular_buffer_attributes =
-                {{tt::CBIndex::c_0,
-                  {
-                      .core_spec = all_cores,
-                      .total_size = 2 * tt::tt_metal::detail::TileSize(input_cb_data_format),
-                      .page_size = tt::tt_metal::detail::TileSize(input_cb_data_format),
-                      .data_format = input_cb_data_format,
-                  }},
-                 {tt::CBIndex::c_1,
-                  {
-                      .core_spec = all_cores,
-                      .total_size = 2 * tt::tt_metal::detail::TileSize(input_cb_data_format),
-                      .page_size = tt::tt_metal::detail::TileSize(input_cb_data_format),
-                      .data_format = input_cb_data_format,
-                  }}},
-            .data_movement_attributes =
-                {{.core_spec = all_cores,
-                  .kernel_path = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
-                                 "reader_unary_interleaved_start_id.cpp",
-                  .config = tt::tt_metal::ReaderDataMovementConfig({(uint32_t)is_dram_input})},
-                 {.core_spec = all_cores,
-                  .kernel_path = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
-                                 "writer_unary_interleaved_start_id.cpp",
-                  .config =
-                      tt::tt_metal::WriterDataMovementConfig({(uint32_t)tt::CBIndex::c_1, (uint32_t)is_dram_input})}},
-            .compute_attributes =
+        ttnn::operations::generic::program_attributes_t
+            program_attributes =
                 {
-                    {
-                        .core_spec = core_group_1,
-                        .kernel_path = "tt_metal/kernels/compute/eltwise_sfpu.cpp",
-                        .config =
-                            {
-                                .math_fidelity = MathFidelity::HiFi4,
-                                .fp32_dest_acc_en = false,
-                                .math_approx_mode = false,
-                                .compile_args = {num_tiles_per_core_group_1, 1},
-                                .defines = defines_sqrt,
-                            },
-                    },
-                    {
-                        .core_spec = core_group_2,
-                        .kernel_path = "tt_metal/kernels/compute/eltwise_sfpu.cpp",
-                        .config =
-                            {
-                                .math_fidelity = MathFidelity::HiFi4,
-                                .fp32_dest_acc_en = false,
-                                .math_approx_mode = false,
-                                .compile_args = {num_tiles_per_core_group_2, 1},
-                                .defines = defines_sqrt,
-                            },
-                    }}};
+                    .circular_buffer_attributes =
+                        {{tt::CBIndex::c_0,
+                          {
+                              .core_spec = all_cores,
+                              .total_size = 2 * tt::tt_metal::detail::TileSize(input_cb_data_format),
+                              .page_size = tt::tt_metal::detail::TileSize(input_cb_data_format),
+                              .data_format = input_cb_data_format,
+                          }},
+                         {tt::CBIndex::c_1,
+                          {
+                              .core_spec = all_cores,
+                              .total_size = 2 * tt::tt_metal::detail::TileSize(input_cb_data_format),
+                              .page_size = tt::tt_metal::detail::TileSize(input_cb_data_format),
+                              .data_format = input_cb_data_format,
+                          }}},
+                    .data_movement_attributes =
+                        {{.core_spec = all_cores,
+                          .kernel_path = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
+                                         "reader_unary_interleaved_start_id.cpp",
+                          .config = tt::tt_metal::ReaderDataMovementConfig({(uint32_t)is_dram_input})},
+                         {.core_spec = all_cores,
+                          .kernel_path = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
+                                         "writer_unary_interleaved_start_id.cpp",
+                          .config = tt::tt_metal::WriterDataMovementConfig(
+                              {(uint32_t)tt::CBIndex::c_1, (uint32_t)is_dram_input})}},
+                    .compute_attributes =
+                        {{
+                             .core_spec = core_group_1,
+                             .kernel_path = "tt_metal/kernels/compute/eltwise_sfpu.cpp",
+                             .config =
+                                 {
+                                     .math_fidelity = MathFidelity::HiFi4,
+                                     .fp32_dest_acc_en = false,
+                                     .math_approx_mode = false,
+                                     .compile_args = {num_tiles_per_core_group_1, 1},
+                                     .defines = defines_sqrt,
+                                 },
+                         },
+                         {
+                             .core_spec = core_group_2,
+                             .kernel_path = "tt_metal/kernels/compute/eltwise_sfpu.cpp",
+                             .config =
+                                 {
+                                     .math_fidelity = MathFidelity::HiFi4,
+                                     .fp32_dest_acc_en = false,
+                                     .math_approx_mode = false,
+                                     .compile_args = {num_tiles_per_core_group_2, 1},
+                                     .defines = defines_sqrt,
+                                 },
+                         }},
+                };
+
         // Data movement kernel needs output tensor address to be passed as a runtime argument.
         // auto device_output_tensor = tt::tt_metal::create_device_tensor(
         //     device_input_tensor.tensor_attributes->shape,
@@ -439,7 +446,7 @@ void test_numerically() {
 
         uint32_t aligned_input_tile_nbytes = round_up_to_mul32(input_tile_size);  // will have issue if the page is not multiple of 32
 
-        ttnn::operations::generic::operation_attributes_t program_attributes = {
+        ttnn::operations::generic::program_attributes_t program_attributes = {
             .circular_buffer_attributes =
                 {{tt::CBIndex::c_0,
                   {
@@ -462,21 +469,20 @@ void test_numerically() {
                   .kernel_path =
                       "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp",
                   .config = tt::tt_metal::ReaderDataMovementConfig({(uint32_t)tt::CB::c_in0})}},
-            .compute_attributes = {
-                {
-                    .core_spec = all_cores,
-                    .kernel_path = "tt_metal/kernels/compute/eltwise_sfpu.cpp",
-                    .config =
-                        {
-                            .math_fidelity = MathFidelity::HiFi4,
-                            .fp32_dest_acc_en = false,
-                            .math_approx_mode = false,
-                            .compile_args = {1, num_tile_per_core},
-                            .defines = defines_relu,
-                        },
-                    .runtime_args_per_core = test::detail::cast_args_to_core_coords(all_cores, {num_tile_per_core}),
-                },
-            }};
+            .compute_attributes = {{
+                .core_spec = all_cores,
+                .kernel_path = "tt_metal/kernels/compute/eltwise_sfpu.cpp",
+                .config =
+                    {
+                        .math_fidelity = MathFidelity::HiFi4,
+                        .fp32_dest_acc_en = false,
+                        .math_approx_mode = false,
+                        .compile_args = {1, num_tile_per_core},
+                        .defines = defines_relu,
+                    },
+                .runtime_args_per_core = test::detail::cast_args_to_core_coords(all_cores, {num_tile_per_core}),
+            }},
+        };
 
         // // calculate data movement runtime arguments
         for (uint32_t i = 0; i < compute_with_storage_grid_size.x * compute_with_storage_grid_size.y; i++) {
@@ -547,7 +553,7 @@ void test_numerically() {
         bool dst_is_dram = device_output_tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM ? 1 : 0;
         std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)tt::CB::c_out0, (std::uint32_t)dst_is_dram};
 
-        ttnn::operations::generic::operation_attributes_t
+        ttnn::operations::generic::program_attributes_t
             program_attributes =
                 {
                     .circular_buffer_attributes =
