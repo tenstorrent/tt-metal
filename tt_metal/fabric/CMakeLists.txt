@@ -1,12 +1,10 @@
-add_library(fabric)
-
-target_sources(
-    fabric
-    PRIVATE
-        control_plane.cpp
-        routing_table_generator.cpp
-        mesh_graph.cpp
+set(FABRIC_SRC
+    ${CMAKE_CURRENT_SOURCE_DIR}/control_plane.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/routing_table_generator.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/mesh_graph.cpp
 )
+
+add_library(fabric OBJECT ${FABRIC_SRC})
 
 target_include_directories(fabric PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
