@@ -62,7 +62,7 @@ void bind_reduction_topk_operation(py::module& module) {
         ttnn::pybind_overload_t{
             [](const OperationType& self,
                const ttnn::Tensor& input_tensor,
-               const uint16_t k,
+               const uint32_t k,
                const int8_t dim,
                const bool largest,
                const bool sorted,
