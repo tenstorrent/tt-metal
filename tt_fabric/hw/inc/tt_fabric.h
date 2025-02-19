@@ -492,7 +492,6 @@ typedef struct fvc_producer_state {
             next_routing_ptr =
                 (tt_routing*)(next_header_ptr + packet_header_routing_offset_dwords - dwords_before_wrap);
         } else {
-#pragma GCC unroll 12
             for (uint32_t i = 0; i < dwords_to_copy; i++) {
                 packet_header_ptr[i] = next_header_ptr[i];
             }
