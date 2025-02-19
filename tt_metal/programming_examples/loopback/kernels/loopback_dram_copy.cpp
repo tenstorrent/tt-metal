@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include "dataflow_api.h"
 
 void kernel_main() {
     std::uint32_t l1_buffer_addr = get_arg_val<uint32_t>(0);

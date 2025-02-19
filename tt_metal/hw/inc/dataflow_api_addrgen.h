@@ -1,6 +1,12 @@
+#pragma once
 
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_ERISC) || \
     defined(COMPILE_FOR_IDLE_ERISC)
+
+#include "hw/inc/utils/utils.h"
+#include "dataflow_cmd_bufs.h"
+
+#define NOC_UNICAST_WRITE_VC 1
 
 #if defined(COMPILE_FOR_BRISC)
 constexpr uint8_t proc_type = static_cast<std::underlying_type_t<TensixProcessorTypes>>(TensixProcessorTypes::DM0);
@@ -130,5 +136,8 @@ struct InterleavedAddrGen {
         noc_async_read(this->get_noc_addr(id, offset), dest_addr, page_size, noc);
     }
 };
+
+FORCE_INLINE
+void noc_async_posted_writes_flushed(uint8_t noc = noc_index) { while (!ncrisc_noc_posted_writes_sent(noc)); }
 
 #endif

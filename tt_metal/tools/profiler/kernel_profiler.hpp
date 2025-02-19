@@ -9,14 +9,13 @@
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_ERISC) || \
     defined(COMPILE_FOR_IDLE_ERISC)
 #include "risc_common.h"
-#include "dataflow_cmd_bufs.h"
 #else
 #include "ckernel.h"
 #endif
 
 #include "hostdevcommon/profiler_common.h"
 #include "risc_attribs.h"
-#include "kernel_profiler_addr_gen.hpp"
+#include "dataflow_api_addrgen.h"
 
 #include <dev_msgs.h>
 
