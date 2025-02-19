@@ -97,6 +97,13 @@ def test_pc_repeat(device, layout, shape, repeat_shape, use_program_cache):
         ), f"Output shape {output.shape} does not match torch shape {torch_results[i].shape}"
 
         assert_with_pcc(torch_results[i], output, 0.9999)
+        if i == 0:
+            base_program_cache_entires = device.num_program_cache_entries()
+        else:
+            assert (
+                device.num_program_cache_entries() == base_program_cache_entires,
+                "program cache entries differ on same configs",
+            )
 
 
 # 17975 test cases
