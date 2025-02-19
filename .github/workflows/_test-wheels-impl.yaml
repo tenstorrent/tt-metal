@@ -98,7 +98,6 @@ jobs:
       - name: Activate env and run release tests - silicon
         timeout-minutes: 2
         run: |
-          source tests/end_to_end_tests/env/bin/activate
           python3 -m ttnn.examples.usage.run_op_on_device
           cd tests/end_to_end_tests
           pytest -c conftest.py . -m eager_package_silicon
@@ -112,4 +111,3 @@ jobs:
           rm -rf /__w/tt-metal/tt-metal/docker-job
           echo "post rm"
           ls -al /__w/tt-metal/tt-metal
-      
