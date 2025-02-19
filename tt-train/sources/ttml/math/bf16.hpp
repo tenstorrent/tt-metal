@@ -7,6 +7,11 @@
 #include <array>
 #include <cstdint>
 #include <ostream>
+#include <xtensor/xarray.hpp>
+#include <xtensor/xeval.hpp>
+#include <xtensor/xio.hpp>
+#include <xtensor/xnoalias.hpp>
+
 namespace ttml::math {
 
 class bfloat16 {
@@ -302,3 +307,8 @@ struct common_type<double, ttml::math::bfloat16> {
 };
 
 }  // namespace std
+
+namespace xt {
+template <>
+struct xscalar<ttml::math::bfloat16> : std::true_type {};
+}  // namespace xt

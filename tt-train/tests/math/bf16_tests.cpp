@@ -181,3 +181,17 @@ TEST(BFloat16Test, Xtensor) {
     xt::xarray<float> bf16_sum_back = xt::cast<float>(sum_bf16);
     EXPECT_TRUE(xt::allclose(bf16_sum_back, sum_orig, /*rtol=*/1e-3, /*atol=*/1e-2));
 }
+
+TEST(BFloat16Test, Matmul16vs32) {
+    xt::random::seed(42);
+    xt::xarray<float> a_fp32 = xt::random::randn<float>({32, 64}, -0.5f, 0.5f);
+    xt::xarray<float> b_fp32 = xt::random::randn<float>({64, 16}, -0.5f, 0.5f);
+    xt::xarray<ttml::math::bfloat16> a_bf16 = xt::cast<ttml::math::bfloat16>(a_fp32);
+    xt::xarray<ttml::math::bfloat16> b_bf16 = xt::cast<ttml::math::bfloat16>(b_fp32);
+
+    xt::xarray<float> c_fp32 = xt::linalg::dot(a_fp32, b_fp32);
+    xt::xarray<ttml::math::bfloat16> c_bf16 = xt::linalg::dot(a_bf16, b_bf16);
+    xt::xarray<float> c_bf16_out = xt::cast<float>(b_fp32);
+
+    EXPECT_TRUE(xt::allclose(c_fp32, c_bf16_out, /*rtol=*/1e-3, /*atol=*/1e-2));
+}
