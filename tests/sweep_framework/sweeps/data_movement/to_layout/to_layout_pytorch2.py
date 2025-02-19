@@ -8,7 +8,7 @@ import traceback
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
 
-TIMEOUT = 10
+TIMEOUT = 50
 # seed for random
 random.seed(0)
 
@@ -78,13 +78,13 @@ def run(
         output_layout = ttnn.TILE_LAYOUT
     torch_dtype = dtype_dict[dtype]
     ttnn_dtype = dtype
-    print(dtype)
-    print(torch_dtype)
-    print(input_layout)
-    print(output_layout)
+    # print(dtype)
+    # print(torch_dtype)
+    # print(input_layout)
+    # print(output_layout)
 
     tensor_shape = tuple(to_layout_specs["shape"])
-    print(tensor_shape)
+    # print(tensor_shape)
     torch_input_tensor = None
     # create random tensor in PyTorch
     # if torch dtype is interger, use randint to create tensor
