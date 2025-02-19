@@ -1207,18 +1207,6 @@ void noc_async_writes_flushed(uint8_t noc = noc_index) {
 }
 
 /**
- * This blocking call waits for all outstanding enqueued posted *noc_async_write*
- * calls issued on the current Tensix core to depart, but will not wait
- * for them to complete
- */
-FORCE_INLINE
-void noc_async_posted_writes_flushed(uint8_t noc = noc_index) {
-    WAYPOINT("NPWW");
-    while (!ncrisc_noc_posted_writes_sent(noc));
-    WAYPOINT("NPWD");
-}
-
-/**
  * This blocking call waits for all the outstanding enqueued *noc_async_write*
  * calls issued on the current Tensix core to complete. After returning from
  * this call the *noc_async_write* queue will be empty for the current Tensix
