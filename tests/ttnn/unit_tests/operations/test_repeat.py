@@ -12,8 +12,6 @@ import ttnn
 from models.utility_functions import comp_pcc
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
-from tqdm import tqdm
-
 layouts = [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT]
 
 dtypes = [(torch.float32, ttnn.float32), (torch.bfloat16, ttnn.bfloat16)]
@@ -85,14 +83,18 @@ def test_pc_repeat(device, layout, shape, repeat_shape):
     if len(repeat_shape) < len(shape):
         pytest.skip("PyTorch repeat dim must be >= tensor dim (although we can handle this).")
     device.enable_program_cache()
-    for _ in tqdm(range(3)):
+    num_iters = 3
+    input_tensors = []
+    torch_results = []
+    for i in range(3):
         torch_tensor = torch.rand(shape, dtype=torch.bfloat16)
-        torch_result = torch_tensor.repeat(repeat_shape)
-        input_tensor = ttnn.from_torch(torch_tensor, layout=layout, device=device, dtype=ttnn.bfloat16)
-        output = ttnn.repeat(input_tensor, ttnn.Shape(repeat_shape))
+        torch_results.append(torch_tensor.repeat(repeat_shape))
+        input_tensors.append(ttnn.from_torch(torch_tensor, layout=layout, device=device, dtype=ttnn.bfloat16))
+    for i in range(3):
+        output = ttnn.repeat(input_tensors[i], ttnn.Shape(repeat_shape))
         output = ttnn.to_torch(output)
         assert (
-            output.shape == torch_result.shape
-        ), f"Output shape {output.shape} does not match torch shape {torch_result.shape}"
+            output.shape == torch_results[i].shape
+        ), f"Output shape {output.shape} does not match torch shape {torch_results[i].shape}"
 
-        assert_with_pcc(torch_result, output, 0.9999)
+        assert_with_pcc(torch_results[i], output, 0.9999)
