@@ -78,6 +78,7 @@
 // Magic size must be big enough to hold dev_msgs_t.  static_asserts will fire if this is too small
 #define MEM_MAILBOX_SIZE 12656
 // These are used in ncrisc-halt.S, asserted in ncrisc.cc to be valid
+#define MEM_NCRISC_RESUME_ADDR_MAILBOX_ADDRESS MEM_MAILBOX_BASE + 0
 #define MEM_NCRISC_HALT_STACK_MAILBOX_ADDRESS MEM_MAILBOX_BASE + 4
 #define MEM_SUBORDINATE_RUN_MAILBOX_ADDRESS MEM_MAILBOX_BASE + 8
 #define MEM_MAILBOX_END (MEM_MAILBOX_BASE + MEM_MAILBOX_SIZE)

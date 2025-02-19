@@ -36,10 +36,43 @@ wh_iram_trampoline:
 	sw s10, 11 * 4( sp )
 	sw s11, 12 * 4( sp )
 	sw a1,  13 * 4( sp )
-	sw sp, MEM_NCRISC_HALT_STACK_MAILBOX_ADDRESS( zero )
-	sb a0, MEM_SUBORDINATE_RUN_MAILBOX_ADDRESS( zero )   /* Tell brisc we're done */
+	la a1, return_from_iram
+	sw a1, 14 * 4( sp )
+	sw  sp, MEM_NCRISC_HALT_STACK_MAILBOX_ADDRESS( zero )
+	sb a0, MEM_SLAVE_RUN_MAILBOX_ADDRESS( zero )   /* Tell brisc we're done */
 
 	/*Program flow will end here as ncrisc will go into reset*/
 0:	j 0b
 .size	wh_iram_trampoline, .-wh_iram_trampoline
+.endfunc
+
+.align 4
+.func
+return_from_iram:
+    .option push
+    .option norelax
+	// Initialize global pointer,
+	// Use an absolute reloc, so text placement is irrelevant.
+	lui gp,%hi(__global_pointer$)
+	addi gp,gp,%lo(__global_pointer$)
+    .option pop
+	lw  sp, MEM_NCRISC_HALT_STACK_MAILBOX_ADDRESS( zero )
+	/* Restore context */
+    lw  ra, 0 * 4( sp )
+    lw  s0, 1 * 4( sp )
+    lw  s1, 2 * 4( sp )
+    lw  s2, 3 * 4( sp )
+    lw  s3, 4 * 4( sp )
+    lw  s4, 5 * 4( sp )
+    lw  s5, 6 * 4( sp )
+    lw  s6, 7 * 4( sp )
+    lw  s7, 8 * 4( sp )
+    lw  s8, 9 * 4( sp )
+    lw  s9, 10 * 4( sp )
+    lw  s10, 11 * 4( sp )
+    lw  s11, 12 * 4( sp )
+
+	addi sp, sp, CONTEXT_SIZE
+
+	ret
 .endfunc

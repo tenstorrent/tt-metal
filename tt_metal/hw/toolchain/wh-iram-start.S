@@ -19,21 +19,15 @@ _start:
 	addi gp,gp,%lo(__global_pointer$)
 	.option pop
 	lw  sp, MEM_NCRISC_HALT_STACK_MAILBOX_ADDRESS( zero )
-	lw  ra, 0 * 4( sp )
-	lw  s0, 1 * 4( sp )
-	lw  s1, 2 * 4( sp )
-	lw  s2, 3 * 4( sp )
-	lw  s3, 4 * 4( sp )
-	lw  s4, 5 * 4( sp )
-	lw  s5, 6 * 4( sp )
-	lw  s6, 7 * 4( sp )
-	lw  s7, 8 * 4( sp )
-	lw  s8, 9 * 4( sp )
-	lw  s9, 10 * 4( sp )
-	lw  s10, 11 * 4( sp )
-	lw  s11, 12 * 4( sp )
 	lw  a0, 13 * 4( sp )
-	addi sp, sp, (16 * 4)
-	tail    kernel_launch
+	call    _Z13kernel_launchm
+	lw ra, 14 * 4(sp)
+	sw ra,  MEM_NCRISC_RESUME_ADDR_MAILBOX_ADDRESS( zero )
+	sb zero, MEM_SLAVE_RUN_MAILBOX_ADDRESS( zero )   /* Tell brisc we're done */
+
+halt:
+	/*Program flow will end here as ncrisc will go into reset*/
+	j halt
+	.size  _start, .-_start
 .size _start, .-_start
 .endfunc
