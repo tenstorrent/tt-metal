@@ -94,7 +94,11 @@ public:
     }
 
     ShardTensor2dMesh(const MeshShape& mesh_shape, const Shard2dConfig& config) :
-        mesh_shape_(mesh_shape), config_(config) {}
+        mesh_shape_(mesh_shape), config_(config) {
+        TT_FATAL(
+            config.row_dim.has_value() || config.col_dim.has_value(),
+            "Sharding a tensor to 2D mesh requires at least one dimension to shard");
+    }
 
     std::vector<Tensor> map(const Tensor& tensor) const override {
         const auto [rows, cols] = mesh_shape_;
@@ -140,7 +144,7 @@ public:
     }
 
     tt::tt_metal::DistributedTensorConfig config() const override {
-        return DistributedTensorConfig{ShardTensor2D{ShardMesh{mesh_shape_.num_rows, mesh_shape_.num_cols}}};
+        return DistributedTensorConfig{ShardTensor2D{ShardMesh{.y = mesh_shape_.num_rows, .x = mesh_shape_.num_cols}}};
     }
 
 private:
@@ -212,5 +216,9 @@ Tensor distribute_tensor(
 
 // Aggregates a multi-device tensor into a host tensor according to the `composer`.
 Tensor aggregate_tensor(const Tensor& tensor, const MeshToTensor& composer);
+
+Shard2dConfig get_shard2d_config(const std::unordered_map<std::string, std::string>& metadata);
+
+Concat2dConfig get_concat2d_config(const std::unordered_map<std::string, std::string>& metadata);
 
 }  // namespace ttnn::distributed
