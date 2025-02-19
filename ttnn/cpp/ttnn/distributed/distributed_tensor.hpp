@@ -171,6 +171,19 @@ private:
     int concat_dim_ = -1;
 };
 
+class DeviceConcatMeshToTensor : public ConcatMeshToTensor {
+public:
+    DeviceConcatMeshToTensor(MeshDevice mesh_device, int dim) : mesh_device_(mesh_device), concat_dim_(dim) {}
+
+    Tensor compose(const Tensor& tensor) {
+        return experimental::xtensor::concat(get_device_tensors(tensor), concat_dim_);
+    }
+
+private:
+    MeshDevice mesh_device_;
+    int concat_dim_ = -1;
+};
+
 class ConcatMesh2dToTensor : public MeshToTensor {
 public:
     ConcatMesh2dToTensor(MeshDevice& mesh_device, const Concat2dConfig& config) :
