@@ -376,16 +376,18 @@ class TtModelArgs:
             else:
                 self.model_config["ATTN_ALL_GATHER_MATMUL_PROGCFG"] = None
 
-            prefill_rows = lambda seq_len: min(seq_len, 1024) // self.tile_size
+            # For maximum performance, set the prefill grid row to 8, even if it can fit in a smaller grid
+            # prefill_rows = lambda seq_len: min(seq_len, 1024) // self.tile_size
+            prefill_rows = 8
             mlp1_3_grid = lambda seq_len: (
                 (8, min(min(seq_len, 1024) // 32, 4))
                 if self.is_galaxy
-                else self.find_prefill_grid(prefill_rows(seq_len), self.dim // self.tile_size)
+                else self.find_prefill_grid(prefill_rows, self.dim // self.tile_size)
             )
             mlp2_grid = lambda seq_len: (
                 (8, min(min(seq_len, 1024) // 32, 4))
                 if self.is_galaxy
-                else self.find_prefill_grid(prefill_rows(seq_len), self.hidden_dim // self.tile_size)
+                else self.find_prefill_grid(prefill_rows, self.hidden_dim // self.tile_size)
             )
 
             self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"] = lambda seq_len: self.matmul_config(
