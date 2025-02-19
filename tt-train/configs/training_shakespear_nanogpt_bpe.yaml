@@ -2,14 +2,18 @@ training_config:
   project_name: "tt_train_nano_gpt"
   seed: 5489
   model_save_interval: 500
-  batch_size: 2
+  batch_size: 64
   num_epochs: 1
   max_steps: 5000
-  learning_rate: 0.0003
-  weight_decay: 0.01
+  learning_rate: 0.0002
+  weight_decay: 0.1
   tokenizer_type: bpe
-
+  use_moreh_adamw: true
+  use_kahan_summation: false
+  #gradient_accumulation_steps: 4
+  scheduler_type: "warmup_linear"
   transformer_config:
+    weight_tying: enabled
     num_heads: 6
     embedding_dim: 384
     dropout_prob: 0.2
