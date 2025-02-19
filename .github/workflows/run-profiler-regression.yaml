@@ -103,14 +103,7 @@ jobs:
       - name: Run profiler regression tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
-          mkdir -p generated/profiler
-          pytest tests/tt_metal/tools/profiler/test_device_profiler.py
-          rm -rf generated/profiler || true
-          mkdir -p generated/profiler
-          tt_metal/tools/profiler/profile_this.py -c 'pytest tests/tt_eager/python_api_testing/sweep_tests/pytests/tt_dnn/test_matmul.py::test_run_matmul_test[BFLOAT16-input_shapes0]'
-          ls generated/profiler/reports/
-          cat generated/profiler/reports/*/ops_perf_results_*.csv
-          rm -rf generated/profiler || true
+          ./tests/scripts/run_profiler_regressions.sh
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
         with:
