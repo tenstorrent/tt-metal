@@ -177,6 +177,8 @@ std::pair<uint32_t, std::array<uint32_t, 2>> tensor_coord_to_height_sharded_coor
     const std::span<const uint32_t>& shard_shape,
     const std::span<const uint32_t>& tensor_coord);
 
+uint32_t l1_space_post_allocation(const TensorSpec& tensor_spec, IDevice* device);
+
 }  // namespace data_movement
 }  // namespace operations
 }  // namespace ttnn
