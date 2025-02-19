@@ -29,7 +29,7 @@ function(
     #todo: Ideally declaring the library should be the first thing to do, sadly making it shared requires to add sources
     string(TOUPPER "${LIBRARY_NAME}" LIBRARY_NAME_ALIAS)
     add_library(${LIBRARY_NAME} SHARED ${SOURCES})
-    add_library(Metalium::${LIBRARY_NAME_ALIAS} ALIAS ${LIBRARY_NAME})
+    add_library(TT::NN::${LIBRARY_NAME_ALIAS} ALIAS ${LIBRARY_NAME})
     target_include_directories(${LIBRARY_NAME} PUBLIC "${INCLUDE_DIRS}")
     target_link_directories(${LIBRARY_NAME} PUBLIC ${LINK_DIRECTORIES})
 
@@ -967,16 +967,15 @@ foreach(SUBLIBRARY_PATH ${TTNN_SUBLIBRARIES})
     set(SUBLIBRARY_SRCS ${TTNN_SRC})
     list(FILTER SUBLIBRARY_SRCS INCLUDE REGEX "${SUBLIBRARY_PATH}")
     list(FILTER TTNN_SRC EXCLUDE REGEX "${SUBLIBRARY_PATH}")
-    # Remove files that contain 'pybind' in their name
-    list(FILTER SUBLIBRARY_SRCS EXCLUDE REGEX ".*[Pp]ybind.*")
-    # Ensure FBS_GENERATED_HEADER_FILE is not excluded
-    # since that path would be detected on previous regex
-    if(FBS_GENERATED_HEADER_FILE)
-        list(APPEND SUBLIBRARY_SRCS ${FBS_GENERATED_HEADER_FILE})
-    endif()
 
     if(SUBLIBRARY_SRCS)
         string(REPLACE "/" "_" SUBLIBRARY_NAME ${SUBLIBRARY_PATH})
+
+        # Append FBS_GENERATED_HEADER_FILE only if the sublibrary is "tt_tensor"
+        if(${SUBLIBRARY_NAME} STREQUAL "ttnn_tensor")
+            list(APPEND SUBLIBRARY_SRCS ${FBS_GENERATED_HEADER_FILE})
+        endif()
+
         add_ttnn_sublibrary(${SUBLIBRARY_NAME} ${SUBLIBRARY_SRCS})
         list(APPEND ALL_TTNN_SUBLIBRARIES ${SUBLIBRARY_NAME})
     endif()
