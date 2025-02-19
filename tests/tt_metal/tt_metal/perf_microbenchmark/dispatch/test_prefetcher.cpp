@@ -3,11 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <algorithm>
-#include <functional>
-#include <random>
 
 #include "assert.hpp"
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/memcpy.hpp>
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/rtoptions.hpp>
@@ -1478,30 +1477,7 @@ void gen_terminate_cmds(vector<uint32_t>& prefetch_cmds, vector<uint32_t>& cmd_s
     add_prefetcher_cmd(prefetch_cmds, cmd_sizes, CQ_PREFETCH_CMD_TERMINATE, empty_payload);
 }
 
-// Ideally would work by cachelines, but the min size is less than that
-void nt_memcpy(uint8_t* __restrict dst, const uint8_t* __restrict src, size_t n) {
-    size_t num_lines = n / CQ_PREFETCH_CMD_BARE_MIN_SIZE;
-
-    size_t i;
-    for (i = 0; i < num_lines; i++) {
-        size_t j;
-        for (j = 0; j < CQ_PREFETCH_CMD_BARE_MIN_SIZE / sizeof(__m128i); j++) {
-            // __m128i blk = _mm_stream_load_si128((__m128i *)src);
-            __m128i blk = _mm_loadu_si128((const __m128i*)src);
-            /* non-temporal store */
-            _mm_stream_si128((__m128i*)dst, blk);
-            src += sizeof(__m128i);
-            dst += sizeof(__m128i);
-        }
-        n -= CQ_PREFETCH_CMD_BARE_MIN_SIZE;
-    }
-
-    if (num_lines > 0) {
-        tt_driver_atomics::sfence();
-    }
-}
-
-void write_prefetcher_cmd(
+size_t write_prefetcher_cmd(
     IDevice* device,
     vector<uint32_t>& cmds,
     uint32_t& cmd_offset,
@@ -1538,7 +1514,7 @@ void write_prefetcher_cmd(
     uint32_t cmd_size_bytes = (cmd_size16b & ~prefetch_q_msb_mask) << DispatchSettings::PREFETCH_Q_LOG_MINSIZE;
     uint32_t cmd_size_words = cmd_size_bytes / sizeof(uint32_t);
 
-    nt_memcpy((uint8_t*)host_mem_ptr, (uint8_t*)&cmds[cmd_offset], cmd_size_bytes);
+    memcpy_to_device((uint8_t*)host_mem_ptr, (uint8_t*)&cmds[cmd_offset], cmd_size_bytes);
     cmd_offset += cmd_size_words;
     host_mem_ptr += cmd_size_words;
 
@@ -1546,9 +1522,11 @@ void write_prefetcher_cmd(
     prefetch_q_writer.write(prefetch_q_dev_ptr, cmd_size16b);
 
     prefetch_q_dev_ptr += sizeof(DispatchSettings::prefetch_q_entry_type);
+
+    return cmd_size_bytes;
 }
 
-void write_prefetcher_cmds(
+size_t write_prefetcher_cmds(
     uint32_t iterations,
     IDevice* device,
     vector<uint32_t> prefetch_cmds,  // yes copy for dram_exec_buf
@@ -1589,6 +1567,7 @@ void write_prefetcher_cmds(
         initialize_device_g = false;
     }
 
+    size_t total_bytes_written_to_hugepage = 0;
     for (uint32_t i = 0; i < iterations; i++) {
         uint32_t cmd_ptr = 0;
         for (uint32_t j = 0; j < cmd_sizes.size(); j++) {
@@ -1602,7 +1581,7 @@ void write_prefetcher_cmds(
                 host_mem_ptr = (uint32_t*)host_hugepage_base;
             }
 
-            write_prefetcher_cmd(
+            total_bytes_written_to_hugepage += write_prefetcher_cmd(
                 device,
                 prefetch_cmds,
                 cmd_ptr,
@@ -1616,6 +1595,8 @@ void write_prefetcher_cmds(
                 prefetch_q_writer);
         }
     }
+
+    return total_bytes_written_to_hugepage;
 }
 
 // Clear DRAM (helpful for paged write to DRAM debug to have a fresh slate)
@@ -1649,7 +1630,9 @@ std::chrono::duration<double> run_test(
     auto start = std::chrono::system_clock::now();
 
     std::thread t1([&]() {
-        write_prefetcher_cmds(
+        size_t bytes_written = 0;
+        auto begin = std::chrono::steady_clock::now();  // s
+        bytes_written += write_prefetcher_cmds(
             iterations,
             device,
             cmds,
@@ -1661,7 +1644,7 @@ std::chrono::duration<double> run_test(
             phys_prefetch_core,
             prefetch_q_writer,
             false);
-        write_prefetcher_cmds(
+        bytes_written += write_prefetcher_cmds(
             1,
             device,
             terminate_cmds,
@@ -1673,6 +1656,10 @@ std::chrono::duration<double> run_test(
             phys_prefetch_core,
             prefetch_q_writer,
             true);
+        auto end = std::chrono::steady_clock::now();
+        auto duration = std::chrono::duration_cast<std::chrono::nanoseconds>(end - begin).count();
+        tt::log_info(
+            "Wrote {} bytes to hugepage ({:.4f} GiB/s)", bytes_written, static_cast<double>(bytes_written) / duration);
     });
     tt_metal::detail::LaunchProgram(device, program, false);
     if (test_device_id_g != 0) {
