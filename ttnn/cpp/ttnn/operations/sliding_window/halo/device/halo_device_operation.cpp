@@ -102,6 +102,7 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
     const auto& local_config = std::get<1>(kernel_config);
     const auto& remote_config = std::get<2>(kernel_config);
     const auto& remote_ref_counts = std::get<3>(kernel_config);
+    const auto& max_ref_size = std::get<4>(kernel_config);
 
     auto pad_config_tensor =
         sliding_window::construct_on_host_config_tensor(pad_config, this->config_, this->parallel_config_);
@@ -110,7 +111,15 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
     auto remote_config_tensor =
         sliding_window::construct_on_host_config_tensor(remote_config, this->config_, this->parallel_config_);
 
-    uint32_t repeat_factor = this->parallel_config_.grid.num_cores();
+    DataType type = input_tensor.get_dtype();
+    int num_cores = this->parallel_config_.grid.num_cores();
+    int remote_temp_size = max_ref_size * num_cores;
+    // TODO do we need to vary this type for bfloat8?
+    auto remote_temp_buffer = owned_buffer::create<bfloat16>(std::vector<bfloat16>(remote_temp_size));
+    ttnn::Shape remote_temp_shape = ttnn::Shape({num_cores, max_ref_size});
+    Tensor remote_temp_tensor(OwnedStorage{remote_temp_buffer}, remote_temp_shape, type, Layout::ROW_MAJOR);
+
+    uint32_t repeat_factor = num_cores;
     std::vector<std::vector<uint16_t>> remote_ref_counts_repeated;
     for (uint32_t i = 0; i < repeat_factor; ++i) {
         remote_ref_counts_repeated.push_back(remote_ref_counts);
