@@ -6,16 +6,11 @@
 
 #include <algorithm>
 #include <optional>
-#include <string>
-#include <unordered_set>
-#include <utility>
 
 #include <dev_msgs.h>
 #include <hal.hpp>
 #include <allocator.hpp>
-#include "assert.hpp"
 #include "buffers/dispatch.hpp"
-#include "device.hpp"
 #include "dprint_server.hpp"
 #include <command_queue.hpp>
 #include <profiler.hpp>
@@ -473,7 +468,7 @@ DeviceAddr CalculateAddressDeviceInterleavedContiguous(
         const buffer_dispatch::PartialPageSpec& partial_page_spec =
             buffer_dispatch::calculate_partial_page_spec(buffer);
         const uint32_t full_padded_page_size =
-            partial_page_spec.unpadded_partial_page_size * partial_page_spec.num_partial_pages_per_full_page;
+            partial_page_spec.partial_page_size * partial_page_spec.num_partial_pages_per_full_page;
         const DeviceAddr full_page_address_offset =
             (num_round_robins > 0) ? (full_padded_page_size - buffer.aligned_page_size()) * num_round_robins : 0;
         addr += full_page_address_offset;
