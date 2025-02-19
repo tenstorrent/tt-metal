@@ -11,8 +11,40 @@
 #include "tt_metal/impl/event/dispatch.hpp"
 
 namespace tt::tt_metal {
-struct ReadBufferDescriptor;
-struct ReadEventDescriptor;
+
+// Used so the host knows how to properly copy data into user space from the completion queue (in hugepages)
+struct ReadBufferDescriptor {
+    TensorMemoryLayout buffer_layout;
+    uint32_t page_size;
+    uint32_t padded_page_size;
+    std::shared_ptr<const BufferPageMapping> buffer_page_mapping;
+    void* dst;
+    uint32_t dst_offset;
+    uint32_t num_pages_read;
+    uint32_t cur_dev_page_id;
+    uint32_t starting_host_page_id;
+
+    ReadBufferDescriptor(
+        TensorMemoryLayout buffer_layout,
+        uint32_t page_size,
+        uint32_t padded_page_size,
+        void* dst,
+        uint32_t dst_offset,
+        uint32_t num_pages_read,
+        uint32_t cur_dev_page_id,
+        uint32_t starting_host_page_id = 0,
+        const std::shared_ptr<const BufferPageMapping>& buffer_page_mapping = nullptr) :
+        buffer_layout(buffer_layout),
+        page_size(page_size),
+        padded_page_size(padded_page_size),
+        buffer_page_mapping(buffer_page_mapping),
+        dst(dst),
+        dst_offset(dst_offset),
+        num_pages_read(num_pages_read),
+        cur_dev_page_id(cur_dev_page_id),
+        starting_host_page_id(starting_host_page_id) {}
+};
+
 using CompletionReaderVariant = std::variant<std::monostate, ReadBufferDescriptor, ReadEventDescriptor>;
 
 // Contains helper functions to interface with buffers on device
@@ -79,7 +111,6 @@ struct ShardedBufferReadDispatchParams : BufferReadDispatchParams {
     uint32_t initial_pages_skipped = 0;
     uint32_t starting_src_host_page_index = 0;
     std::shared_ptr<const BufferPageMapping> buffer_page_mapping = nullptr;
-    // uint32_t total_pages_to_read = 0;
     uint32_t total_pages_read = 0;
     uint32_t max_pages_per_shard = 0;
     CoreCoord core;
@@ -144,38 +175,5 @@ bool are_pages_large(const Buffer& buffer);
 
 PartialPageSpec calculate_partial_page_spec(const Buffer& buffer);
 }  // namespace buffer_dispatch
-
-// Used so the host knows how to properly copy data into user space from the completion queue (in hugepages)
-struct ReadBufferDescriptor {
-    TensorMemoryLayout buffer_layout;
-    uint32_t page_size;
-    uint32_t padded_page_size;
-    std::shared_ptr<const BufferPageMapping> buffer_page_mapping;
-    void* dst;
-    uint32_t dst_offset;
-    uint32_t num_pages_read;
-    uint32_t cur_dev_page_id;
-    uint32_t starting_host_page_id;
-
-    ReadBufferDescriptor(
-        TensorMemoryLayout buffer_layout,
-        uint32_t page_size,
-        uint32_t padded_page_size,
-        void* dst,
-        uint32_t dst_offset,
-        uint32_t num_pages_read,
-        uint32_t cur_dev_page_id,
-        uint32_t starting_host_page_id = 0,
-        const std::shared_ptr<const BufferPageMapping>& buffer_page_mapping = nullptr) :
-        buffer_layout(buffer_layout),
-        page_size(page_size),
-        padded_page_size(padded_page_size),
-        buffer_page_mapping(buffer_page_mapping),
-        dst(dst),
-        dst_offset(dst_offset),
-        num_pages_read(num_pages_read),
-        cur_dev_page_id(cur_dev_page_id),
-        starting_host_page_id(starting_host_page_id) {}
-};
 
 }  // namespace tt::tt_metal

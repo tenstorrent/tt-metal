@@ -251,18 +251,6 @@ void test_EnqueueWriteBuffer_and_EnqueueReadBuffer(IDevice* device, CommandQueue
                 ::detail::ReadFromBuffer(*bufa, result);
             }
 
-            std::cout << "write: " << cq_write << " read: " << cq_read << std::endl;
-            if (result.size() != src.size()) {
-                std::cout << "Unequal size" << std::endl;
-            }
-            for (uint32_t i = 0; i < result.size(); i++) {
-                if (i != result[i]) {
-                    std::cout << "i: " << std::to_string(i) << " result[i]: " << std::to_string(result[i]) << std::endl;
-                    std::cout << "Fail" << std::endl;
-                    break;
-                }
-            }
-
             EXPECT_EQ(src, result);
         }
     }

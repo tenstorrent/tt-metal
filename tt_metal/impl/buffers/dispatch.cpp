@@ -1001,7 +1001,6 @@ void copy_completion_queue_data_into_user_space(
     uint32_t offset_in_completion_q_data = sizeof(CQDispatchCmd);
 
     uint32_t pad_size_bytes = padded_page_size - page_size;
-    bool trigger = false;
 
     while (remaining_bytes_to_read != 0) {
         uint32_t completion_queue_write_ptr_and_toggle =
@@ -1069,21 +1068,18 @@ void copy_completion_queue_data_into_user_space(
                                 offset_in_completion_q_data = pad_size_bytes - rem_bytes_in_cq;
                             }
                         }
-                        trigger = false;
                     } else if (src_offset_bytes + padded_page_size >= bytes_xfered) {
                         // Case 2: Last page of data that was popped off the completion queue
                         // Don't need to compute src_offset_increment since this is end of loop
                         uint32_t num_bytes_remaining = bytes_xfered - src_offset_bytes;
                         num_bytes_to_copy = std::min(num_bytes_remaining, page_size);
                         remaining_bytes_of_nonaligned_page = page_size - num_bytes_to_copy;
-                        trigger = true;
                         // We've copied needed data, start of next read is offset due to remaining pad bytes
                         if (remaining_bytes_of_nonaligned_page == 0) {
                             offset_in_completion_q_data = padded_page_size - num_bytes_remaining;
                         }
                     } else {
                         num_bytes_to_copy = page_size;
-                        trigger = false;
                     }
 
                     tt::Cluster::instance().read_sysmem(
