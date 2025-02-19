@@ -4,14 +4,11 @@
 
 #pragma once
 
-#include <algorithm>
-#include <vector>
 #include <string>
 #include <map>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/hal_exp.hpp>
 #include <tt-metalium/tt_align.hpp>
-#include "host_utils.hpp"
 
 namespace tt::tt_metal::tools::mem_bench {
 
@@ -44,16 +41,16 @@ struct L1MemoryMap {
 struct Context {
     std::map<chip_id_t, IDevice*> devices;
     L1MemoryMap device_address;
-    uint32_t total_size;
-    uint32_t page_size;
-    int threads;
-    int number_reader_kernels;
-    int number_writer_kernels;
-    bool enable_host_copy_with_kernels;
-    int iterations;
+    uint32_t total_size{0};
+    uint32_t page_size{0};
+    int threads{0};
+    int number_reader_kernels{0};
+    int number_writer_kernels{0};
+    bool enable_host_copy_with_kernels{0};
+    int iterations{0};
 
     Context(
-        std::map<chip_id_t, IDevice*> devices_,
+        const std::map<chip_id_t, IDevice*>& devices_,
         uint32_t total_size_,
         uint32_t page_size_,
         int threads_,
@@ -61,7 +58,6 @@ struct Context {
         int writers_,
         bool enable_host_copy_with_kernels_,
         int iterations_) {
-        using namespace tt::tt_metal;
         auto l1_alignment = experimental::hal::get_l1_alignment();
         auto l1_base = experimental::hal::get_tensix_l1_unreserved_base();
         device_address.cycles = l1_base;

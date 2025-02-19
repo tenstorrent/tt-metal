@@ -4,11 +4,9 @@
 
 #include "host_utils.hpp"
 #include <limits>
-#include <numeric>
 #include <random>
 #include <chrono>
 #include <algorithm>
-#include <unordered_map>
 #include <numa.h>
 #include <tt_cluster.hpp>
 
@@ -28,7 +26,7 @@ uint32_t get_hugepage_size(int device_id) {
     return cluster.get_host_channel_size(mmio_device_id, channel);
 }
 
-tt::tt_metal::vector_memcpy_aligned<uint32_t> gen_src_data(uint32_t num_bytes) {
+tt::tt_metal::vector_memcpy_aligned<uint32_t> generate_random_src_data(uint32_t num_bytes) {
     std::uniform_int_distribution<uint32_t> distribution(
         std::numeric_limits<uint32_t>::min(), std::numeric_limits<uint32_t>::max());
     std::default_random_engine generator;

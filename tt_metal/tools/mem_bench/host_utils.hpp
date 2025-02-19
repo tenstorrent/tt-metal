@@ -5,18 +5,16 @@
 #pragma once
 
 #include <span>
-#include <chrono>
 #include <vector>
 #include <atomic>
 #include <thread>
-#include <iostream>
 #include <tt-metalium/memcpy.hpp>
 #include <tt-metalium/tt_align.hpp>
 
 namespace tt::tt_metal::tools::mem_bench {
 
-// Generate aligned source data.
-tt::tt_metal::vector_memcpy_aligned<uint32_t> gen_src_data(uint32_t num_bytes);
+// Generate random data aligned for memcpy_to_device.
+tt::tt_metal::vector_memcpy_aligned<uint32_t> generate_random_src_data(uint32_t num_bytes);
 
 // Get current host time, in seconds.
 double get_current_time_seconds();
@@ -42,9 +40,14 @@ uint32_t get_hugepage_size(int device_id);
 // Copy data to hugepage. Returns the duration.
 // repeating_src_vector: Keep copying the same elements to hugepage. This should force the source data in stay in the
 // caches. fence: Memory barrier at the end of each copy. Returns the time in seconds
-template <bool repeating_src_vector, bool fence = false>
+template <bool fence = false>
 double copy_to_hugepage(
-    void* hugepage_base, uint32_t hugepage_size, std::span<uint32_t> src_data, size_t total_size, size_t page_size) {
+    void* hugepage_base,
+    uint32_t hugepage_size,
+    std::span<uint32_t> src_data,
+    size_t total_size,
+    size_t page_size,
+    bool repeating_src_vector) {
     uint64_t hugepage_addr = reinterpret_cast<uint64_t>(hugepage_base);
     uint64_t hugepage_end = hugepage_addr + hugepage_size;
     uint64_t src_addr = reinterpret_cast<uint64_t>(src_data.data());
@@ -63,7 +66,7 @@ double copy_to_hugepage(
         // 64 bit host address alignment
         hugepage_addr = ((hugepage_addr + page_size - 1) | (tt::tt_metal::MEMCPY_ALIGNMENT - 1)) + 1;
 
-        if constexpr (!repeating_src_vector) {
+        if (!repeating_src_vector) {
             src_addr += page_size;
         }
 
@@ -81,13 +84,14 @@ double copy_to_hugepage(
 // The total size of src_data to be copied to hugepage is split equally to the threads.
 // Returns time taken in seconds for all copies to complete. Time is calculated by latest thread end - earliest thread
 // start.
-template <bool repeating_src_vector, bool fence = false>
+template <bool fence = false>
 double copy_to_hugepage_threaded(
     void* hugepage_base,
     uint32_t hugepage_size,
     std::span<uint32_t> src_data,
     size_t total_size,
     size_t page_size,
+    bool repeating_src_vector,
     int num_threads) {
     using namespace tt::tt_metal;
     static_assert((MEMCPY_ALIGNMENT & ((MEMCPY_ALIGNMENT)-1)) == 0);
@@ -109,6 +113,7 @@ double copy_to_hugepage_threaded(
                                   bytes_per_thread,
                                   hugepage_base,
                                   hugepage_size,
+                                  repeating_src_vector,
                                   page_size,
                                   num_threads,
                                   last_thread_bytes,
@@ -130,8 +135,8 @@ double copy_to_hugepage_threaded(
             }
 
             thread_start_times[i] = get_current_time_seconds();
-            thread_durations[i] = copy_to_hugepage<repeating_src_vector, fence>(
-                (void*)thread_dst, hugepage_size, thread_src, thread_bytes, page_size);
+            thread_durations[i] = copy_to_hugepage<fence>(
+                (void*)thread_dst, hugepage_size, thread_src, thread_bytes, page_size, repeating_src_vector);
             thread_end_times[i] = get_current_time_seconds();
         });
     }

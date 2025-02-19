@@ -38,10 +38,6 @@ constexpr uint32_t my_cycles_addr = get_compile_time_arg_val(11);
 static_assert(my_bytes_rd_addr && my_bytes_wr_addr, "Must provide addresses for my_bytes_rd/wr_addr");
 static_assert(my_cycles_addr, "Must provide L1 address for cycles elapsed");
 
-auto my_cycles = reinterpret_cast<volatile uint32_t*>(my_cycles_addr);
-auto my_bytes_read = reinterpret_cast<volatile uint32_t*>(my_bytes_rd_addr);
-auto my_bytes_written = reinterpret_cast<volatile uint32_t*>(my_bytes_wr_addr);
-
 uint64_t get_cycles() {
     uint32_t timestamp_low = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
     uint32_t timestamp_high = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_H);
@@ -49,6 +45,10 @@ uint64_t get_cycles() {
 }
 
 void kernel_main() {
+    auto my_cycles = reinterpret_cast<volatile uint32_t*>(my_cycles_addr);
+    auto my_bytes_read = reinterpret_cast<volatile uint32_t*>(my_bytes_rd_addr);
+    auto my_bytes_written = reinterpret_cast<volatile uint32_t*>(my_bytes_wr_addr);
+
     my_bytes_read[0] = 0;
     my_bytes_written[0] = 0;
     my_cycles[0] = 0;

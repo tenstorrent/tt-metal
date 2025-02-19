@@ -2,13 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <memory>
-#include <chrono>
-#include <cstdlib>
-#include <limits>
 #include <numeric>
-#include <span>
-#include <stdlib.h>
 
 #include <benchmark/benchmark.h>
 
@@ -17,12 +11,13 @@
 #include <tt-metalium/hal_exp.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/helpers.hpp>
 #include <tt-metalium/test_common.hpp>
 
+#include "context.hpp"
 #include "host_utils.hpp"
 #include "device_utils.hpp"
 #include "work_thread.hpp"
+#include "tt_metal/impl/dispatch/util/size_literals.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -84,15 +79,15 @@ TestResult mem_bench_page_sizing(benchmark::State& state) {
         0,               // Iterations is managed by the benchmark framework
     };
 
-    auto src_data = gen_src_data(ctx.total_size);
+    auto src_data = generate_random_src_data(ctx.total_size);
     auto hugepage = get_hugepage(k_DeviceId, 0);
     auto hugepage_size = get_hugepage_size(k_DeviceId);
     bool cached = state.range(2);
 
     for (auto _ : state) {
         const double iteration_time =
-            cached ? copy_to_hugepage<true>(hugepage, hugepage_size, src_data, ctx.total_size, ctx.page_size)
-                   : copy_to_hugepage<false>(hugepage, hugepage_size, src_data, ctx.total_size, ctx.page_size);
+            cached ? copy_to_hugepage(hugepage, hugepage_size, src_data, ctx.total_size, ctx.page_size, true)
+                   : copy_to_hugepage(hugepage, hugepage_size, src_data, ctx.total_size, ctx.page_size, false);
         results.host_bytes_processed += ctx.total_size;
         results.host_time_elapsed += iteration_time;
 
@@ -117,13 +112,13 @@ TestResult mem_bench_copy_multithread(benchmark::State& state) {
         true,            // Enable host copy
         0,               // Iterations is managed by the benchmark framework
     };
-    auto src_data = gen_src_data(ctx.total_size);
+    auto src_data = generate_random_src_data(ctx.total_size);
     auto hugepage = get_hugepage(0, 0);
     auto hugepage_size = get_hugepage_size(0);
 
     for (auto _ : state) {
-        auto iteration_time = copy_to_hugepage_threaded<false>(
-            hugepage, hugepage_size, src_data, ctx.total_size, ctx.page_size, ctx.threads);
+        auto iteration_time = copy_to_hugepage_threaded(
+            hugepage, hugepage_size, src_data, ctx.total_size, ctx.page_size, false, ctx.threads);
 
         results.host_bytes_processed += ctx.total_size;
         results.host_time_elapsed += iteration_time;
@@ -152,7 +147,7 @@ TestResult mem_bench_copy_with_active_kernel(benchmark::State& state) {
         0,               // Iterations is managed by the benchmark framework
     };
 
-    auto src_data = gen_src_data(ctx.total_size);
+    auto src_data = generate_random_src_data(ctx.total_size);
     auto hugepage = get_hugepage(device->id(), 0);
     auto hugepage_size = get_hugepage_size(device->id());
 
@@ -171,7 +166,7 @@ TestResult mem_bench_copy_with_active_kernel(benchmark::State& state) {
                 if (ctx.enable_host_copy_with_kernels) {
                     // Host copy while waiting for program
                     host_copy_time =
-                        copy_to_hugepage<false>(hugepage, hugepage_size, src_data, ctx.total_size, ctx.page_size);
+                        copy_to_hugepage(hugepage, hugepage_size, src_data, ctx.total_size, ctx.page_size, false);
                     results.host_bytes_processed += ctx.total_size;
                     results.host_time_elapsed += host_copy_time;
                 }
@@ -211,7 +206,7 @@ TestResult mem_bench_copy_active_kernel_different_page(benchmark::State& state) 
         0,               // Iterations is managed by the benchmark framework
     };
 
-    auto src_data = gen_src_data(ctx.total_size);
+    auto src_data = generate_random_src_data(ctx.total_size);
     auto device_hugepage_size = get_hugepage_size(device->id());
 
     // 2nd open device is not required
@@ -233,7 +228,7 @@ TestResult mem_bench_copy_active_kernel_different_page(benchmark::State& state) 
             [&]() {
                 // Host copy while waiting for program
                 host_copy_time =
-                    copy_to_hugepage<false>(host_hugepage, host_hugepage_size, src_data, ctx.total_size, ctx.page_size);
+                    copy_to_hugepage(host_hugepage, host_hugepage_size, src_data, ctx.total_size, ctx.page_size, false);
                 results.host_bytes_processed += ctx.total_size;
                 results.host_time_elapsed += host_copy_time;
             });
@@ -363,7 +358,7 @@ TestResult mem_bench_copy_with_read_and_write_kernel(benchmark::State& state) {
         0,               // Iterations is managed by the benchmark framework
     };
 
-    auto src_data = gen_src_data(ctx.total_size);
+    auto src_data = generate_random_src_data(ctx.total_size);
     auto hugepage = get_hugepage(device->id(), 0);
     auto hugepage_size = get_hugepage_size(device->id());
 
@@ -393,7 +388,7 @@ TestResult mem_bench_copy_with_read_and_write_kernel(benchmark::State& state) {
             [&]() {
                 // Host copy while waiting for program
                 host_copy_time =
-                    copy_to_hugepage<false>(hugepage, hugepage_size / 2, src_data, ctx.total_size, ctx.page_size);
+                    copy_to_hugepage(hugepage, hugepage_size / 2, src_data, ctx.total_size, ctx.page_size, false);
                 results.host_bytes_processed += ctx.total_size;
                 results.host_time_elapsed += host_copy_time;
             });
@@ -519,7 +514,7 @@ int main(int argc, char* argv[]) {
 
     // Run all benchmarks
     if (test_args::has_command_option(input_args, "--full")) {
-        register_full_benchmark_suite();
+        // register_full_benchmark_suite();
     }
 
     ::benchmark::Initialize(&argc, argv);
