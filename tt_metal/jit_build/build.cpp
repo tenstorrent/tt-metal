@@ -438,7 +438,7 @@ JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const Jit
         case 0: {
             this->target_name_ = "active_erisc";
             this->cflags_ =
-                env_.cflags_ + "-Os " + "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
+                env_.cflags_ + "-O3 " + "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
 
             this->defines_ +=
                 "-DCOMPILE_FOR_ERISC "
@@ -452,7 +452,7 @@ JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const Jit
             } else {
                 this->srcs_.push_back("tt_metal/hw/firmware/src/active_erisck.cc");
             }
-            this->lflags_ = env_.lflags_ + "-Os ";
+            this->lflags_ = env_.lflags_ + "-O3 ";
 
             if (this->is_fw_) {
                 this->lflags_ +=
@@ -466,7 +466,7 @@ JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const Jit
         }
         case 1: {
             this->target_name_ = "erisc";
-            this->cflags_ = env_.cflags_ + "-Os -fno-delete-null-pointer-checks ";
+            this->cflags_ = env_.cflags_ + "-O3 -fno-delete-null-pointer-checks ";
 
             this->defines_ +=
                 "-DCOMPILE_FOR_ERISC "
@@ -489,7 +489,7 @@ JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const Jit
                 linker_str = "tt_metal/hw/toolchain/erisc-b0-kernel.ld ";
             }
             this->lflags_ = env_.lflags_ +
-                            "-Os "
+                            "-O3 "
                             "-L" +
                             env_.root_ +
                             "/tt_metal/hw/toolchain "
