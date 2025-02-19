@@ -141,7 +141,6 @@ def run_interactive_demo_inference(device, num_inference_steps, image_size=(256,
 
     time_step = ttnn_scheduler.timesteps.tolist()
 
-    prevPrompt = ""
     json_file_path = "models/demos/wormhole/stable_diffusion/demo/web_demo/input_prompts.json"
 
     while True:
@@ -151,9 +150,19 @@ def run_interactive_demo_inference(device, num_inference_steps, image_size=(256,
 
         ttnn_scheduler.set_timesteps(num_inference_steps)
 
-        with open(json_file_path, "r") as f:
-            data = json.load(f)
-            input_prompts = data["prompts"]
+        # attempt to read file multiple times as web server can write to the prompt queue
+        # while it is being read, leading to invalid JSON parsing
+        NUM_ATTEMPTS = 10
+        for _attempt in range(10):
+            try:
+                with open(json_file_path, "r") as f:
+                    data = json.load(f)
+                    input_prompts = data["prompts"]
+            except json.decoder.JSONDecodeError:
+                time.sleep(0.25)
+                continue
+            else:
+                break
 
         new_prompt = ""
         currInd = 0
@@ -169,11 +178,8 @@ def run_interactive_demo_inference(device, num_inference_steps, image_size=(256,
             time.sleep(5)
             continue
 
-        if new_prompt == prevPrompt:
-            continue
         elif len(new_prompt) > 0:
             input_prompt = [new_prompt]
-            prevPrompt = new_prompt
         if input_prompt[0] == "q":
             break
 
