@@ -156,12 +156,10 @@ void Cluster::generate_cluster_descriptor() {
         }
         bool all_n300 = true;
         for (const auto& chip_id : this->cluster_desc_->get_all_chips()) {
-            if (this->cluster_desc_->get_board_type(chip_id) == BoardType::N300) {
-                all_n300 &= (this->cluster_desc_->get_board_type(chip_id) == BoardType::N300);
-            }
+            all_n300 &= (this->cluster_desc_->get_board_type(chip_id) == BoardType::N300);
         }
         if (all_n300) {
-            if (this->cluster_desc_->get_all_chips().size() == 1) {
+            if (this->cluster_desc_->get_all_chips().size() == 2) {
                 this->cluster_type_ = ClusterType::N300;
             } else if (this->cluster_desc_->get_all_chips().size() == 8) {
                 this->cluster_type_ = ClusterType::T3K;
