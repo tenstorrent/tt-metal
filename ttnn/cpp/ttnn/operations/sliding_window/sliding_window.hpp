@@ -64,18 +64,18 @@ struct SlidingWindowConfig {
     /**
      * Return the input shape (excluding depth)
      */
-    Shape get_input_shape() const;
+    ttnn::Shape get_input_shape() const;
 
     /**
      * Calculate the window op output shape, excludes the channel dimension since this config is independent of the
      * depth.
      */
-    Shape get_output_shape() const;
+    ttnn::Shape get_output_shape() const;
 
     uint32_t get_ceil_pad_h() const;
     uint32_t get_ceil_pad_w() const;
 
-    Shape get_transposed_full_input_shape() const;
+    ttnn::Shape get_transposed_full_input_shape() const;
 
     std::array<uint32_pair_t, 2> get_transposed_real_padding() const;
     /**
@@ -102,7 +102,7 @@ generate_halo_kernel_config_tensors(
     bool is_block_sharded,
     bool transpose_mcast,
     bool remote_read,
-    tt::tt_metal::Device* device);
+    tt::tt_metal::IDevice* device);
 std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(
     const std::vector<uint32_t>& op_trace_metadata,
     const std::vector<std::pair<uint32_pair_t, uint32_pair_t>>& shard_boundaries,
@@ -114,7 +114,7 @@ Tensor construct_on_host_config_tensor(
     const SlidingWindowConfig& sw_config,
     const ParallelConfig& p_config);
 Tensor move_config_tensor_to_device(
-    const Tensor& config_tensor, const ParallelConfig& p_config, bool is_block_sharded, tt::tt_metal::Device* device);
+    const Tensor& config_tensor, const ParallelConfig& p_config, bool is_block_sharded, tt::tt_metal::IDevice* device);
 
 }  // namespace ttnn::operations::sliding_window
 

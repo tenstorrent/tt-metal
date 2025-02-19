@@ -23,7 +23,7 @@ void MAIN {
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t first_tile = 0;
 
-    binary_op_init_common(cb_in0, cb_in1);
+    binary_op_init_common(cb_in0, cb_in1, cb_out0);
     cb_wait_front(cb_in1, onetile);
 
     for (uint32_t i = 0; i < num_output_tiles_per_core; i++) {
@@ -33,7 +33,7 @@ void MAIN {
             uint32_t cb_add = (enable_reload) ? (cb_intermed0) : (cb_in1);
             cb_wait_front(cb_in0, onetile);
 
-            add_tiles_init();
+            add_tiles_init(cb_in0, cb_add);
             add_tiles(cb_in0, cb_add, first_tile, first_tile, dst0);
 
             cb_pop_front(cb_in0, onetile);
@@ -50,7 +50,7 @@ void MAIN {
             // copy tile from intermed0 to out0
             ACQ();
             cb_wait_front(cb_intermed0, onetile);
-            copy_tile_to_dst_init_short();
+            copy_tile_to_dst_init_short(tt::CBIndex::c_24);
             copy_tile(tt::CBIndex::c_24, first_tile, dst0);
             cb_reserve_back(cb_out0, onetile);
             pack_tile(dst0, cb_out0);

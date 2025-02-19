@@ -9,10 +9,10 @@
 #include "command_queue_fixture.hpp"
 #include "dispatch_fixture.hpp"
 #include "multi_device_fixture.hpp"
-#include "tt_metal/common/math.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/kernels/kernel.hpp"
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/kernel.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"
 
 // FIXME: ARCH_NAME
@@ -41,8 +41,8 @@ namespace unit_tests::erisc::kernels {
 
 bool chip_to_chip_dram_buffer_transfer(
     DispatchFixture* fixture,
-    tt_metal::Device* sender_device,
-    tt_metal::Device* receiver_device,
+    tt_metal::IDevice* sender_device,
+    tt_metal::IDevice* receiver_device,
     const CoreCoord& eth_sender_core,
     const CoreCoord& eth_receiver_core,
     const size_t& byte_size) {
@@ -172,8 +172,8 @@ bool chip_to_chip_dram_buffer_transfer(
 
 bool chip_to_chip_interleaved_buffer_transfer(
     DispatchFixture* fixture,
-    tt_metal::Device* sender_device,
-    tt_metal::Device* receiver_device,
+    tt_metal::IDevice* sender_device,
+    tt_metal::IDevice* receiver_device,
     const CoreCoord& eth_sender_core,
     const CoreCoord& eth_receiver_core,
     const CMAKE_UNIQUE_NAMESPACE::BankedConfig& cfg,

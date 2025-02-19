@@ -4,8 +4,8 @@
 
 #include "topology.hpp"
 #include "kernel_config/fd_kernel.hpp"
-#include "impl/device/device_pool.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
+#include <device_pool.hpp>
+#include <tt_metal.hpp>
 #include "kernel_config/fd_kernel.hpp"
 #include "kernel_config/prefetch.hpp"
 #include "kernel_config/dispatch.hpp"
@@ -15,26 +15,14 @@
 #include "kernel_config/eth_router.hpp"
 #include "kernel_config/eth_tunneler.hpp"
 
-#define DISPATCH_MAX_UPSTREAM 4
-#define DISPATCH_MAX_DOWNSTREAM 4
+#include "tt_cluster.hpp"
 
-typedef struct {
-    int id;
-    chip_id_t device_id;                          // Device that this kernel is located on
-    chip_id_t servicing_device_id;                // Remote device that this kernel services, used for kernels on MMIO
-    uint8_t cq_id;                                // CQ this kernel implements
-    DispatchWorkerType kernel_type;               // Type of dispatch kernel this is
-    int upstream_ids[DISPATCH_MAX_UPSTREAM];      // Upstream dispatch kernels
-    int downstream_ids[DISPATCH_MAX_DOWNSTREAM];  // Downstream dispatch kernels
-    NOC my_noc;                                   // NOC this kernel uses to dispatch kernels
-    NOC upstream_noc;                             // NOC used to communicate upstream
-    NOC downstream_noc;                           // NOC used to communicate downstream
-} dispatch_kernel_node_t;
+namespace tt::tt_metal {
 
 // For readablity, unset = x = -1
 #define x -1
 
-void increment_node_ids(dispatch_kernel_node_t& node, uint32_t inc) {
+void increment_node_ids(DispatchKernelNode& node, uint32_t inc) {
     node.id += inc;
     for (int& id : node.upstream_ids) {
         if (id != x) {
@@ -48,20 +36,20 @@ void increment_node_ids(dispatch_kernel_node_t& node, uint32_t inc) {
     }
 }
 
-static const std::vector<dispatch_kernel_node_t> single_chip_arch_1cq = {
+static const std::vector<DispatchKernelNode> single_chip_arch_1cq = {
     {0, 0, 0, 0, PREFETCH_HD, {x, x, x, x}, {1, 2, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
     {1, 0, 0, 0, DISPATCH_HD, {0, x, x, x}, {2, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
     {2, 0, 0, 0, DISPATCH_S, {0, x, x, x}, {1, x, x, x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
 };
 
-static const std::vector<dispatch_kernel_node_t> single_chip_arch_2cq = {
-    {0, 0, 0, 0, PREFETCH_HD, {x, x, x, x}, {1, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {1, 0, 0, 0, DISPATCH_HD, {0, x, x, x}, {x, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {2, 0, 0, 1, PREFETCH_HD, {x, x, x, x}, {3, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {3, 0, 0, 1, DISPATCH_HD, {2, x, x, x}, {x, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+static const std::vector<DispatchKernelNode> single_chip_arch_2cq = {
+    {0, 0, 0, 0, PREFETCH_HD, {x, x, x, x}, {2, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {1, 0, 0, 1, PREFETCH_HD, {x, x, x, x}, {3, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {2, 0, 0, 0, DISPATCH_HD, {0, x, x, x}, {x, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {3, 0, 0, 1, DISPATCH_HD, {1, x, x, x}, {x, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
 };
 
-static const std::vector<dispatch_kernel_node_t> single_chip_arch_2cq_dispatch_s = {
+static const std::vector<DispatchKernelNode> single_chip_arch_2cq_dispatch_s = {
     {0, 0, 0, 0, PREFETCH_HD, {x, x, x, x}, {1, 4, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
     {1, 0, 0, 0, DISPATCH_HD, {0, x, x, x}, {4, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
     {2, 0, 0, 1, PREFETCH_HD, {x, x, x, x}, {3, 5, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
@@ -70,25 +58,28 @@ static const std::vector<dispatch_kernel_node_t> single_chip_arch_2cq_dispatch_s
     {5, 0, 0, 1, DISPATCH_S, {2, x, x, x}, {3, x, x, x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
 };
 
-static const std::vector<dispatch_kernel_node_t> two_chip_arch_1cq = {
+static const std::vector<DispatchKernelNode> two_chip_arch_1cq = {
     {0, 0, 0, 0, PREFETCH_HD, {x, x, x, x}, {1, 2, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
     {1, 0, 0, 0, DISPATCH_HD, {0, x, x, x}, {2, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
     {2, 0, 0, 0, DISPATCH_S, {0, x, x, x}, {1, x, x, x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
 
     {3, 0, 1, 0, PREFETCH_H, {x, x, x, x}, {5, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
     {4, 0, 1, 0, DISPATCH_H, {6, x, x, x}, {3, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+
     {5, 0, 1, 0, PACKET_ROUTER_MUX, {3, x, x, x}, {7, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
     {6, 0, 1, 0, DEMUX, {7, x, x, x}, {4, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {7, 0, 1, 0, US_TUNNELER_REMOTE, {8, 5, x, x}, {8, 6, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {8, 1, x, 0, US_TUNNELER_LOCAL, {7, 9, x, x}, {7, 10, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {9, 1, x, 0, MUX_D, {12, x, x, x}, {8, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {10, 1, x, 0, PACKET_ROUTER_DEMUX, {8, x, x, x}, {11, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {11, 1, x, 0, PREFETCH_D, {10, x, x, x}, {12, 13, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {12, 1, x, 0, DISPATCH_D, {11, x, x, x}, {13, 9, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {13, 1, x, 0, DISPATCH_S, {11, x, x, x}, {12, x, x, x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
+    {7, 0, 1, 0, US_TUNNELER_REMOTE, {11, 5, x, x}, {11, 6, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+
+    {8, 1, x, 0, PREFETCH_D, {13, x, x, x}, {9, 10, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {9, 1, x, 0, DISPATCH_D, {8, x, x, x}, {10, 12, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {10, 1, x, 0, DISPATCH_S, {8, x, x, x}, {9, x, x, x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
+
+    {11, 1, x, 0, US_TUNNELER_LOCAL, {7, 12, x, x}, {7, 13, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {12, 1, x, 0, MUX_D, {9, x, x, x}, {11, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {13, 1, x, 0, PACKET_ROUTER_DEMUX, {11, x, x, x}, {8, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
 };
 
-static const std::vector<dispatch_kernel_node_t> two_chip_arch_2cq = {
+static const std::vector<DispatchKernelNode> two_chip_arch_2cq = {
     {0, 0, 0, 0, PREFETCH_HD, {x, x, x, x}, {2, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
     {1, 0, 0, 1, PREFETCH_HD, {x, x, x, x}, {3, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
     {2, 0, 0, 0, DISPATCH_HD, {0, x, x, x}, {x, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
@@ -101,18 +92,20 @@ static const std::vector<dispatch_kernel_node_t> two_chip_arch_2cq = {
 
     {8, 0, 1, 0, PACKET_ROUTER_MUX, {4, 5, x, x}, {10, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
     {9, 0, 1, 0, DEMUX, {10, x, x, x}, {6, 7, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {10, 0, 1, 0, US_TUNNELER_REMOTE, {11, 8, x, x}, {11, 9, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {11, 1, x, 0, US_TUNNELER_LOCAL, {10, 12, x, x}, {10, 13, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {12, 1, x, 0, MUX_D, {16, 17, x, x}, {11, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {13, 1, x, 0, PACKET_ROUTER_DEMUX, {11, x, x, x}, {14, 15, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {10, 0, 1, 0, US_TUNNELER_REMOTE, {15, 8, x, x}, {15, 9, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
 
-    {14, 1, x, 0, PREFETCH_D, {13, x, x, x}, {16, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {15, 1, x, 1, PREFETCH_D, {13, x, x, x}, {17, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
-    {16, 1, x, 0, DISPATCH_D, {14, x, x, x}, {12, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
-    {17, 1, x, 1, DISPATCH_D, {15, x, x, x}, {12, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {11, 1, x, 0, PREFETCH_D, {17, x, x, x}, {13, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {12, 1, x, 1, PREFETCH_D, {17, x, x, x}, {14, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {13, 1, x, 0, DISPATCH_D, {11, x, x, x}, {16, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+    {14, 1, x, 1, DISPATCH_D, {12, x, x, x}, {16, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
+
+    {15, 1, x, 0, US_TUNNELER_LOCAL, {10, 16, x, x}, {10, 17, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {16, 1, x, 0, MUX_D, {13, 14, x, x}, {15, x, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+    {17, 1, x, 0, PACKET_ROUTER_DEMUX, {15, x, x, x}, {11, 12, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
+
 };
 
-static const std::vector<dispatch_kernel_node_t> galaxy_nine_chip_arch_1cq = {
+static const std::vector<DispatchKernelNode> galaxy_nine_chip_arch_1cq = {
     // For MMIO chip, TODO: investigate removing these, they aren't needed
     {0, 0, 0, 0, PREFETCH_HD, {x, x, x, x}, {1, 2, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
     {1, 0, 0, 0, DISPATCH_HD, {0, x, x, x}, {2, x, x, x}, NOC::NOC_0, NOC::NOC_1, NOC::NOC_0},
@@ -225,7 +218,7 @@ static const std::vector<dispatch_kernel_node_t> galaxy_nine_chip_arch_1cq = {
     {88, 8, x, 0, DISPATCH_S, {86, x, x, x}, {87, x, x, x}, NOC::NOC_1, NOC::NOC_1, NOC::NOC_1},
 };
 
-static const std::vector<dispatch_kernel_node_t> galaxy_nine_chip_arch_2cq = {
+static const std::vector<DispatchKernelNode> galaxy_nine_chip_arch_2cq = {
     // For MMIO chip
     {0, 0, 0, 0, PREFETCH_HD, {x, x, x, x}, {2, 4, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
     {1, 0, 0, 1, PREFETCH_HD, {x, x, x, x}, {3, 5, x, x}, NOC::NOC_0, NOC::NOC_0, NOC::NOC_0},
@@ -389,18 +382,19 @@ static const std::vector<dispatch_kernel_node_t> galaxy_nine_chip_arch_2cq = {
 
 std::vector<FDKernel*> node_id_to_kernel;
 
-// Helper function to get the nodes for this platform
-std::vector<dispatch_kernel_node_t> get_nodes(const std::set<chip_id_t>& device_ids, uint32_t num_hw_cqs) {
+// Helper function to automatically generate dispatch nodes given devices + num hw CQs + detection of card type.
+std::vector<DispatchKernelNode> generate_nodes(const std::set<chip_id_t>& device_ids, uint32_t num_hw_cqs) {
     // Select/generate the right input table, depends on (1) board [detected from total # of devices], and (2) number
     // of active devices. TODO: read this out of YAML instead of the structs above?
     uint32_t total_devices = tt::Cluster::instance().number_of_devices();
     TT_ASSERT(
-        total_devices == 1 or total_devices == 2 or total_devices == 4 or total_devices == 8 or total_devices == 36,
+        total_devices == 1 or total_devices == 2 or total_devices == 4 or total_devices == 8 or total_devices == 32 or
+            total_devices == 36,
         "Unexpected target.");
     uint32_t num_devices = device_ids.size();
     TT_ASSERT(num_devices > 0, "Can't determine dispatch architecture with no active devices.");
     TT_ASSERT(num_devices <= total_devices);
-    std::vector<dispatch_kernel_node_t> nodes;
+    std::vector<DispatchKernelNode> nodes;
 
     std::set<chip_id_t> mmio_devices;
     std::set<chip_id_t> remote_devices;
@@ -429,7 +423,7 @@ std::vector<dispatch_kernel_node_t> get_nodes(const std::set<chip_id_t>& device_
 
     if (remote_devices.empty()) {
         // MMIO devices only, just replicate a single chip arch for each
-        std::vector<dispatch_kernel_node_t> nodes_for_one_mmio = populate_single_device();
+        std::vector<DispatchKernelNode> nodes_for_one_mmio = populate_single_device();
         uint32_t index_offset = 0;
         for (auto id : mmio_devices) {
             for (auto node : nodes_for_one_mmio) {
@@ -444,7 +438,7 @@ std::vector<dispatch_kernel_node_t> get_nodes(const std::set<chip_id_t>& device_
         // Need to handle N300/T3000 separately from TG/TGG since they have different templates/tunnel depths
         if (tt::Cluster::instance().is_galaxy_cluster()) {
             // For Galaxy, we always init all remote devices associated with an mmio device.
-            const std::vector<dispatch_kernel_node_t>* nodes_for_one_mmio =
+            const std::vector<DispatchKernelNode>* nodes_for_one_mmio =
                 (num_hw_cqs == 1) ? &galaxy_nine_chip_arch_1cq : &galaxy_nine_chip_arch_2cq;
             uint32_t index_offset = 0;
             for (auto mmio_device_id : mmio_devices) {
@@ -461,7 +455,7 @@ std::vector<dispatch_kernel_node_t> get_nodes(const std::set<chip_id_t>& device_
                 }
 
                 // Pull nodes from the template, updating their index and device id
-                for (dispatch_kernel_node_t node : *nodes_for_one_mmio) {
+                for (DispatchKernelNode node : *nodes_for_one_mmio) {
                     node.device_id = template_id_to_device_id[node.device_id];
                     node.servicing_device_id = template_id_to_device_id[node.servicing_device_id];
                     increment_node_ids(node, index_offset);
@@ -474,7 +468,7 @@ std::vector<dispatch_kernel_node_t> get_nodes(const std::set<chip_id_t>& device_
             TT_ASSERT(
                 mmio_devices.size() == remote_devices.size() or remote_devices.empty(),
                 "N300/T3K expects devices in mmio/remote pairs.");
-            const std::vector<dispatch_kernel_node_t>* nodes_for_one_mmio =
+            const std::vector<DispatchKernelNode>* nodes_for_one_mmio =
                 (num_hw_cqs == 1) ? &two_chip_arch_1cq : &two_chip_arch_2cq;
             uint32_t index_offset = 0;
             for (auto mmio_device_id : mmio_devices) {
@@ -491,7 +485,7 @@ std::vector<dispatch_kernel_node_t> get_nodes(const std::set<chip_id_t>& device_
                 TT_ASSERT(found_remote, "Couldn't find paired remote chip for device {}", mmio_device_id);
 
                 // Add dispatch kernels for the mmio/remote pair
-                for (dispatch_kernel_node_t node : *nodes_for_one_mmio) {
+                for (DispatchKernelNode node : *nodes_for_one_mmio) {
                     TT_ASSERT(node.device_id == 0 || node.device_id == 1);
                     if (node.device_id == 0) {
                         node.device_id = mmio_device_id;
@@ -518,6 +512,9 @@ std::vector<dispatch_kernel_node_t> get_nodes(const std::set<chip_id_t>& device_
 // Device until fields are populated, (2) need to be connected to kernel objects for devices that aren't created yet,
 // and (3) the table to choose depends on total number of devices, not know at Device creation.
 void populate_fd_kernels(const std::set<chip_id_t>& device_ids, uint32_t num_hw_cqs) {
+    populate_fd_kernels(generate_nodes(device_ids, num_hw_cqs));
+}
+void populate_fd_kernels(const std::vector<DispatchKernelNode>& nodes) {
     // If we already had nodes from a previous run, clear them (since we could have a different # of devices or CQs).
     if (!node_id_to_kernel.empty()) {
         for (int idx = 0; idx < node_id_to_kernel.size(); idx++) {
@@ -526,8 +523,9 @@ void populate_fd_kernels(const std::set<chip_id_t>& device_ids, uint32_t num_hw_
         node_id_to_kernel.clear();
     }
 
-    // Read the input table, create configs for each node
-    std::vector<dispatch_kernel_node_t> nodes = get_nodes(device_ids, num_hw_cqs);
+    // Read the input table, create configs for each node + track mmio devices and number of cqs.
+    std::unordered_set<chip_id_t> mmio_device_ids;
+    std::unordered_set<uint8_t> hw_cq_ids;
     for (const auto& node : nodes) {
         TT_ASSERT(node_id_to_kernel.size() == node.id);
         node_id_to_kernel.push_back(FDKernel::Generate(
@@ -537,16 +535,21 @@ void populate_fd_kernels(const std::set<chip_id_t>& device_ids, uint32_t num_hw_
             node.cq_id,
             {node.my_noc, node.upstream_noc, node.downstream_noc},
             node.kernel_type));
+        if (tt::Cluster::instance().get_associated_mmio_device(node.device_id) == node.device_id) {
+            mmio_device_ids.insert(node.device_id);
+        }
+        hw_cq_ids.insert(node.cq_id);
     }
+    uint32_t num_hw_cqs = hw_cq_ids.size();
 
     // Connect the graph with upstream/downstream kernels
     for (const auto& node : nodes) {
-        for (int idx = 0; idx < DISPATCH_MAX_UPSTREAM; idx++) {
+        for (int idx = 0; idx < DISPATCH_MAX_UPSTREAM_KERNELS; idx++) {
             if (node.upstream_ids[idx] >= 0) {
                 node_id_to_kernel.at(node.id)->AddUpstreamKernel(node_id_to_kernel.at(node.upstream_ids[idx]));
             }
         }
-        for (int idx = 0; idx < DISPATCH_MAX_DOWNSTREAM; idx++) {
+        for (int idx = 0; idx < DISPATCH_MAX_DOWNSTREAM_KERNELS; idx++) {
             if (node.downstream_ids[idx] >= 0) {
                 node_id_to_kernel.at(node.id)->AddDownstreamKernel(node_id_to_kernel.at(node.downstream_ids[idx]));
             }
@@ -557,7 +560,7 @@ void populate_fd_kernels(const std::set<chip_id_t>& device_ids, uint32_t num_hw_
     std::map<chip_id_t, uint32_t> device_id_to_tunnel_stop;
     std::map<chip_id_t, std::vector<chip_id_t>> mmio_device_id_to_serviced_devices;
     uint32_t tunnel_depth;
-    for (auto mmio_device_id : device_ids) {
+    for (auto mmio_device_id : mmio_device_ids) {
         if (tt::Cluster::instance().get_associated_mmio_device(mmio_device_id) != mmio_device_id) {
             continue;
         }
@@ -659,7 +662,7 @@ void populate_fd_kernels(const std::set<chip_id_t>& device_ids, uint32_t num_hw_
     }
 }
 
-std::unique_ptr<Program> create_and_compile_cq_program(Device* device) {
+std::unique_ptr<Program> create_and_compile_cq_program(IDevice* device) {
     TT_ASSERT(
         node_id_to_kernel.size() > 0,
         "Tried to create CQ program without nodes populated (need to run populate_fd_kernels()");
@@ -688,11 +691,11 @@ std::unique_ptr<Program> create_and_compile_cq_program(Device* device) {
     return cq_program_ptr;
 }
 
-void configure_dispatch_cores(Device* device) {
+void configure_dispatch_cores(IDevice* device) {
     // Set up completion_queue_writer core. This doesn't actually have a kernel so keep it out of the struct and config
     // it here. TODO: should this be in the struct?
     CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
-    auto& my_dispatch_constants = dispatch_constants::get(dispatch_core_type);
+    auto& my_dispatch_constants = DispatchMemMap::get(dispatch_core_type);
     uint32_t cq_start = my_dispatch_constants.get_host_command_queue_addr(CommandQueueHostAddrType::UNRESERVED);
     uint32_t cq_size = device->sysmem_manager().get_cq_size();
     std::vector<uint32_t> zero = {0x0};
@@ -705,7 +708,7 @@ void configure_dispatch_cores(Device* device) {
             for (uint8_t cq_id = 0; cq_id < device->num_hw_cqs(); cq_id++) {
                 tt_cxy_pair completion_q_writer_location =
                     dispatch_core_manager::instance().completion_queue_writer_core(serviced_device_id, channel, cq_id);
-                Device* mmio_device = tt::DevicePool::instance().get_active_device(completion_q_writer_location.chip);
+                IDevice* mmio_device = tt::DevicePool::instance().get_active_device(completion_q_writer_location.chip);
                 uint32_t completion_q_wr_ptr =
                     my_dispatch_constants.get_device_command_queue_addr(CommandQueueDeviceAddrType::COMPLETION_Q_WR);
                 uint32_t completion_q_rd_ptr =
@@ -746,3 +749,5 @@ void configure_dispatch_cores(Device* device) {
         }
     }
 }
+
+}  // namespace tt::tt_metal

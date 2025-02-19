@@ -36,5 +36,5 @@ void kernel_main() {
             noc_read_addr += remote_stride_bytes;
         }
     }
-    noc_async_write_barrier();
+    noc_async_read_barrier();
 }

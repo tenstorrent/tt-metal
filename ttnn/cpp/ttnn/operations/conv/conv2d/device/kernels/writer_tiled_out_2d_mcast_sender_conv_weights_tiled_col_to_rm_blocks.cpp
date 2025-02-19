@@ -8,17 +8,7 @@
 
 #if ENABLE_DEBUG
 #include "debug/dprint.h"
-
-inline void print_pages(uint32_t l1_addr, uint32_t pagelen, uint32_t npages, uint32_t start = 0) {
-    volatile tt_l1_ptr uint16_t* ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(l1_addr) + start * pagelen;
-    for (uint32_t page = 0; page < npages; ++page) {
-        DPRINT << start + page << ": ";
-        for (uint32_t j = 0; j < pagelen; ++j, ++ptr) {
-            DPRINT << BF16(*ptr) << " ";
-        }
-        DPRINT << ENDL();
-    }
-}
+#include "debug/dprint_pages.h"
 #endif
 
 void kernel_main() {
@@ -59,12 +49,6 @@ void kernel_main() {
 
     constexpr uint32_t out_addr = get_compile_time_arg_val(29);
 
-#ifdef UNPAD_UNTILIZE_OUT
-    constexpr uint32_t out_block_width_ntiles = get_compile_time_arg_val(33);
-    constexpr uint32_t out_block_width_padded_bytes = get_compile_time_arg_val(34);
-    constexpr uint32_t out_block_width_bytes = get_compile_time_arg_val(35);
-    constexpr uint32_t untilized_padded_out_cb = get_compile_time_arg_val(36);
-#endif
     uint32_t i = 0;
     i += 1;
     const uint32_t weight_addr_dram_base = get_arg_val<uint32_t>(i);
@@ -347,30 +331,8 @@ void kernel_main() {
         weight_start_tile_id += weight_next_block_stride_w;
     }  // out_num_blocks_w
 #ifdef SHARDED_OUT
-#ifdef UNPAD_UNTILIZE_OUT
-    uint32_t dst_cb_addr = get_write_ptr(cb_id_out0);
-
-    uint32_t src_cb_addr = get_read_ptr(untilized_padded_out_cb);
-    for (uint32_t nbw = 0; nbw < out_num_blocks_w; nbw++) {
-        for (uint32_t nbh = 0; nbh < out_num_blocks_h; nbh++) {
-            for (uint32_t bh = 0; bh < out_block_height_num_tiles; bh++) {
-                cb_wait_front(untilized_padded_out_cb, out_block_width_ntiles);
-                uint32_t src_cb_addr = get_read_ptr(untilized_padded_out_cb);
-                for (uint32_t r = 0; r < 32; r++) {
-                    noc_async_read(get_noc_addr(src_cb_addr), dst_cb_addr, out_block_width_bytes);
-                    noc_async_read_barrier();
-                    src_cb_addr += out_block_width_padded_bytes;
-
-                    dst_cb_addr += out_aligned_page_size;
-                }
-                cb_pop_front(untilized_padded_out_cb, out_block_width_ntiles);
-            }
-        }
-    }
-#else
     cb_wait_front(
         cb_id_out0,
         out_subblock_tile_count * out_num_subblocks_h * out_num_subblocks_w * out_num_blocks_w * out_num_blocks_h);
-#endif
 #endif
 }

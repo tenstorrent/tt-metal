@@ -5,29 +5,27 @@
 #include <optional>
 #include <utility>
 
-#include "common/constants.hpp"
-#include "common/math.hpp"
-
-#include "tt_metal/impl/buffers/buffer_constants.hpp"
+#include <tt-metalium/buffer_constants.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
-#include "ttnn/operations/core/core.hpp"
+
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/conv/conv2d/prepare_conv2d_weights.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
-#include "ttnn/operations/data_movement/move/move.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
+#include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/data_movement/move/move.hpp"
 
 using namespace tt;
 namespace ttnn {
 namespace operations::conv {
-using sliding_window::SlidingWindowConfig;
 using sliding_window::ParallelConfig;
+using sliding_window::SlidingWindowConfig;
 
 namespace conv2d {
 
@@ -54,94 +52,70 @@ Result conv2d(
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config) {
-    const bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding, dilation, groups);
-    const uint32_t output_height = ((input_height - kernel_size[0] - ((kernel_size[0] - 1 ) * (dilation[0] - 1)) + 2 * padding[0]) / stride[0]) + 1;
+    Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
+    const bool mm_conv = use_matmul_for_1x1_conv(kernel_size, stride, padding, dilation, groups, conv_config);
+    const uint32_t output_height =
+        ((input_height - kernel_size[0] - ((kernel_size[0] - 1) * (dilation[0] - 1)) + 2 * padding[0]) / stride[0]) + 1;
     const uint32_t output_width =
         ((input_width - kernel_size[1] - ((kernel_size[0] - 1) * (dilation[0] - 1)) + 2 * padding[1]) / stride[1]) + 1;
 
-    Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
+    DeviceComputeKernelConfig compute_config = compute_config_.value_or(get_conv_default_compute_kernel_config(device));
+
     const auto compute_grid_size = device->compute_with_storage_grid_size();
 
     bool auto_shard = false;
     if (!input_tensor.is_sharded() && !conv_config.shard_layout.has_value()) {
         // In this case we deduce the shard layout.
-        adjust_conv_op_config_for_auto_shard_if_necessary(
+        conv_config = determine_conv_config_for_auto_shard(
+            conv_config,
             mm_conv,
             batch_size,
             in_channels,
             out_channels,
             output_height,
             output_width,
-            weight_tensor.get_shape()[3],
+            weight_tensor.get_logical_shape()[3],
+            input_height,
             input_width,
             compute_grid_size,
-            conv_config,
             input_tensor.layout(),
             ttnn::is_tensor_on_device_or_multidevice(input_tensor) ? std::make_optional(input_tensor.memory_config())
-                                                                   : std::nullopt);
+                                                                   : std::nullopt,
+            kernel_size,
+            groups,
+            bias_tensor.has_value(),
+            compute_config);
         auto_shard = true;
     }
 
     ShardOrientation shard_orientation =
         conv_config.transpose_shards ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR;
-    bool is_non_tile_mul_width = check_non_tile_mul_width(device, conv_config, in_channels);
 
-    DeviceComputeKernelConfig compute_config = compute_config_.value_or(
-        init_device_compute_kernel_config(device->arch(), std::nullopt, MathFidelity::HiFi4, true, false, false));
-    auto [input_tensor_post_tm, parallel_config, output_parallel_config, use_non_tile_height] =
-        shard_or_reshard_tensor_if_required(
-            device,
-            input_tensor,
-            conv_config,
-            batch_size,
-            output_height,
-            output_width,
-            in_channels,
-            out_channels,
-            mm_conv,
-            auto_shard,
-            is_non_tile_mul_width);
-
-    uint32_t round_up_size = !use_non_tile_height ? tt::constants::TILE_HEIGHT : 1;
-    uint32_t nhw_out = batch_size * output_height * output_width;
-    uint32_t out_channels_padded = tt::round_up(
-        out_channels,
-        get_num_cores_channels_from_parallel_config(output_parallel_config) * tt::constants::TILE_WIDTH);
-    if(is_non_tile_mul_width) {
-        out_channels_padded = tt::round_up(out_channels, 32);
-    }
-    MemoryConfig conv_out_memory_config = create_sharded_memory_config_from_parallel_config(
-        ttnn::Shape(std::array<uint32_t, 4>{1, 1, nhw_out, out_channels_padded}),
-        output_parallel_config,
-        round_up_size);
-    ParallelConfig largest_parallel_config = output_parallel_config.grid.num_cores() > parallel_config.grid.num_cores() ? output_parallel_config : parallel_config;
-
-    OptimizedConvParallelizationConfig opt_conv_op_parallel_config = determine_conv_op_parallel_config_from_conv_output_mem_config(
-        conv_out_memory_config,
-        get_num_cores_nhw_from_parallel_config(largest_parallel_config),
-        get_num_cores_channels_from_parallel_config(largest_parallel_config));
-
-    uint32_t in_channels_padded = tt::round_up(
+    auto [input_tensor_post_tm, parallel_config, output_parallel_config] = shard_or_reshard_tensor_if_required(
+        device,
+        input_tensor,
+        conv_config,
+        batch_size,
+        output_height,
+        output_width,
         in_channels,
-        get_num_cores_channels_from_parallel_config(parallel_config) * conv_config.input_channels_alignment);
-    if(is_non_tile_mul_width){
-        in_channels_padded = tt::round_up(in_channels, conv_config.input_channels_alignment);
-    }
+        out_channels,
+        mm_conv,
+        auto_shard);
 
-    uint32_t nhw_out_padded_ntile = get_num_cores_nhw_from_parallel_config(output_parallel_config) *
-                                    conv_out_memory_config.shard_spec.value().shape[0] / tt::constants::TILE_HEIGHT;
-
-    OptimizedConvBlockConfig opt_conv_op_block_config = determine_per_core_conv_block_config(
+    auto [opt_conv_op_parallel_config, opt_conv_op_block_config, conv_out_memory_config] = get_conv_configs(
+        conv_config,
+        compute_config,
         parallel_config,
-        opt_conv_op_parallel_config,
-        in_channels_padded,
-        nhw_out_padded_ntile,
-        conv_config.act_block_h_override,
-        conv_config.act_block_w_div,
-        kernel_size[0],
-        kernel_size[1],
-        get_fp32_dest_acc_en(compute_config),
-        conv_config.enable_split_reader);
+        output_parallel_config,
+        in_channels,
+        out_channels,
+        batch_size,
+        output_height,
+        output_width,
+        kernel_size,
+        compute_grid_size);
+
     bool weight_is_on_device = ttnn::is_tensor_on_device_or_multidevice(weight_tensor);
     ttnn::Tensor weight_tensor_on_device = weight_tensor;
     std::optional<ttnn::Tensor> bias_tensor_on_device = bias_tensor;
@@ -155,12 +129,12 @@ Result conv2d(
             opt_conv_op_block_config.act_block_w_ntiles,
             opt_conv_op_block_config.out_subblock_w_ntiles,
             parallel_config,
+            output_parallel_config,
             device,
             groups,
             opt_conv_op_block_config.act_block_h_ntiles,
             input_width,
-            true,
-            is_non_tile_mul_width);
+            true);
     }
     // if 1x1 conv w/ stride 1, convert input tensor to tile layout if required
     if (mm_conv) {
@@ -182,7 +156,7 @@ Result conv2d(
             .dilation_hw = {dilation[0], dilation[1]},
             .num_cores_nhw = opt_conv_op_parallel_config.num_cores_nhw,
             .core_range_set = input_tensor_post_tm.memory_config().shard_spec.value().grid,
-            .snap_to_tile = !use_non_tile_height,
+            .snap_to_tile = true,
         };
 
         bool bypass_halo =
@@ -191,8 +165,11 @@ Result conv2d(
 
         if (bypass_halo) {
             if (input_tensor_post_tm.layout() == Layout::TILE) {
-                input_tensor_post_tm = ttnn::to_layout(
-                    input_tensor_post_tm, Layout::ROW_MAJOR, std::nullopt, std::nullopt, device);
+                // Reshape is used as a workaround to an issue in to_layout mentioned here :
+                // https://github.com/tenstorrent/tt-metal/issues/16330
+                input_tensor_post_tm = ttnn::reshape(input_tensor_post_tm, input_tensor_post_tm.get_padded_shape());
+                input_tensor_post_tm =
+                    ttnn::to_layout(input_tensor_post_tm, Layout::ROW_MAJOR, std::nullopt, std::nullopt, device);
             }
         } else {
             Tensor halo_output = ttnn::halo(
@@ -204,10 +181,10 @@ Result conv2d(
                 parallel_config.shard_orientation == ShardOrientation::COL_MAJOR,
                 0,
                 input_tensor_post_tm.memory_config(),
-                !use_non_tile_height);
+                true);
 
             if (conv_config.deallocate_activation) {
-                input_tensor_post_tm.deallocate(/*force*/true);
+                input_tensor_post_tm.deallocate(/*force*/ true);
             }
 
             input_tensor_post_tm = std::move(halo_output);
@@ -236,9 +213,7 @@ Result conv2d(
             compute_config,
             conv_config.enable_act_double_buffer,
             conv_config.enable_weights_double_buffer,
-            conv_config.enable_split_reader,
-            conv_config.enable_subblock_padding,
-            use_non_tile_height);
+            conv_config.enable_split_reader);
 
         if (memory_config.has_value() && memory_config.value() != conv_output.memory_config()) {
             conv_output = ttnn::to_memory_config(conv_output, memory_config.value(), std::nullopt);
@@ -278,10 +253,10 @@ Result conv2d(
 }
 
 Result Conv2dOperation::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
-    Device * device,
+    IDevice* device,
     uint32_t in_channels,
     uint32_t out_channels,
     uint32_t batch_size,
@@ -295,15 +270,32 @@ Result Conv2dOperation::invoke(
     std::optional<const ttnn::Tensor> bias_tensor,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
-    const std::optional<const MemoryConfig>& memory_config){
-    return conv2d(input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, dilation, groups, std::move(bias_tensor), std::move(conv_config_), std::move(compute_config_), memory_config);
+    const std::optional<const MemoryConfig>& memory_config) {
+    return conv2d(
+        input_tensor,
+        weight_tensor,
+        device,
+        in_channels,
+        out_channels,
+        batch_size,
+        input_height,
+        input_width,
+        kernel_size,
+        stride,
+        padding,
+        dilation,
+        groups,
+        std::move(bias_tensor),
+        std::move(conv_config_),
+        std::move(compute_config_),
+        memory_config);
 }
 
 Result Conv2dOperation::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
-    MeshDevice * device,
+    MeshDevice* device,
     uint32_t in_channels,
     uint32_t out_channels,
     uint32_t batch_size,
@@ -317,11 +309,27 @@ Result Conv2dOperation::invoke(
     std::optional<const ttnn::Tensor> bias_tensor,
     const std::optional<const Conv2dConfig>& conv_config_,
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
-    const std::optional<const MemoryConfig>& memory_config){
-    return conv2d(input_tensor, weight_tensor, device, in_channels, out_channels, batch_size, input_height, input_width, kernel_size, stride, padding, dilation, groups, std::move(bias_tensor), std::move(conv_config_), std::move(compute_config_), memory_config);
+    const std::optional<const MemoryConfig>& memory_config) {
+    return conv2d(
+        input_tensor,
+        weight_tensor,
+        device,
+        in_channels,
+        out_channels,
+        batch_size,
+        input_height,
+        input_width,
+        kernel_size,
+        stride,
+        padding,
+        dilation,
+        groups,
+        std::move(bias_tensor),
+        std::move(conv_config_),
+        std::move(compute_config_),
+        memory_config);
 }
 
-
 }  // namespace conv2d
-}  // namespace operations
+}  // namespace operations::conv
 }  // namespace ttnn

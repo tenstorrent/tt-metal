@@ -5,14 +5,14 @@
 #pragma once
 
 #include "ttnn/decorators.hpp"
-#include "tt_metal/common/core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
 
 namespace ttnn {
 namespace operations::data_movement {
 
 struct ReshardOperation {
     static ttnn::Tensor invoke(
-        uint8_t queue_id,
+        QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         const MemoryConfig& memory_config,
         const std::optional<Tensor>& optional_output_tensor);

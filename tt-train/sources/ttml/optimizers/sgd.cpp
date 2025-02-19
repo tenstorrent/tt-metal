@@ -6,6 +6,7 @@
 
 #include <fmt/format.h>
 
+#include "autograd/auto_context.hpp"
 #include "autograd/autocast_tensor.hpp"
 #include "core/debug.hpp"
 #include "core/tt_tensor_utils.hpp"
@@ -47,6 +48,7 @@ void SGD::step() {
         }
 
         auto gradients = tensor_ptr->get_grad();
+
         if (m_config.weight_decay != 0.0F) {
             gradients = ttnn::add(
                 ttnn::multiply(tensor_ptr->get_value(autograd::PreferredPrecision::FULL), m_config.weight_decay),

@@ -15,8 +15,8 @@ namespace ttnn::operations::moreh::moreh_matmul_backward {
 
 inline bool is_dot_backward(const Tensor& output_grad, const Tensor& input, const Tensor& other) {
     // TODO: non-4d support for dot backward.
-    if (output_grad.get_legacy_shape().rank() != 4 || input.get_legacy_shape().rank() != 4 ||
-        other.get_legacy_shape().rank() != 4) {
+    if (output_grad.get_padded_shape().rank() != 4 || input.get_padded_shape().rank() != 4 ||
+        other.get_padded_shape().rank() != 4) {
         return false;
     }
     return is_scalar(output_grad) && is_1d_tensor(input) && is_1d_tensor(other) && is_same_shape(input, other);
@@ -44,16 +44,13 @@ std::vector<std::optional<Tensor>> MorehMatmulBackward::invoke(
         TT_FATAL(input_grad.has_value(), "Input gradient is marked required but not provided.");
         const auto& input_grad_tensor = input_grad.value();
         if (moreh_matmul::is_same_batch_dim(output_grad, input_grad_tensor)) {
-            const auto& input_grad_shape = input_grad_tensor.get_legacy_shape().without_padding();
-            const auto& output_grad_shape = output_grad.get_legacy_shape().without_padding();
             ttnn::moreh_matmul(
                 output_grad, other, false, true, input_grad_tensor, std::nullopt, memory_config, compute_kernel_config);
         } else {
-            const auto& input_shape = input.get_legacy_shape().without_padding();
             const auto& temp_input_grad = ttnn::moreh_matmul(
                 output_grad, other, false, true, std::nullopt, std::nullopt, memory_config, compute_kernel_config);
             auto reduce_dims =
-                moreh_matmul::find_reduce_dim(temp_input_grad.get_legacy_shape(), input_grad_tensor.get_legacy_shape());
+                moreh_matmul::find_reduce_dim(temp_input_grad.get_padded_shape(), input_grad_tensor.get_padded_shape());
             ttnn::moreh_sum(
                 temp_input_grad, reduce_dims, true, input_grad_tensor, memory_config, compute_kernel_config);
         }
@@ -70,7 +67,7 @@ std::vector<std::optional<Tensor>> MorehMatmulBackward::invoke(
             const auto& temp_other_grad = ttnn::moreh_matmul(
                 input, output_grad, true, false, std::nullopt, std::nullopt, memory_config, compute_kernel_config);
             auto reduce_dims =
-                moreh_matmul::find_reduce_dim(temp_other_grad.get_legacy_shape(), other_grad_tensor.get_legacy_shape());
+                moreh_matmul::find_reduce_dim(temp_other_grad.get_padded_shape(), other_grad_tensor.get_padded_shape());
             ttnn::moreh_sum(
                 temp_other_grad, reduce_dims, true, other_grad_tensor, memory_config, compute_kernel_config);
         }

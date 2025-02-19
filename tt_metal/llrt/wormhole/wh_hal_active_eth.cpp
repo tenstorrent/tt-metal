@@ -7,7 +7,7 @@
 #include <cstdint>
 
 #include "core_config.h"
-#include "dev_msgs.h"
+#include <dev_msgs.h>
 #include "eth_l1_address_map.h"
 
 #include "hal.hpp"
@@ -43,6 +43,16 @@ HalCoreInfoType create_active_eth_mem_map() {
         GET_ETH_MAILBOX_ADDRESS_HOST(launch_msg_rd_ptr);
     mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::BANK_TO_NOC_SCRATCH)] =
         eth_l1_mem::address_map::ERISC_MEM_BANK_TO_NOC_SCRATCH;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::APP_SYNC_INFO)] =
+        eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_BASE;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::TILE_HEADER_BUFFER)] =
+        eth_l1_mem::address_map::TILE_HEADER_BUFFER_BASE;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::APP_ROUTING_INFO)] =
+        eth_l1_mem::address_map::ERISC_APP_ROUTING_INFO_BASE;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::RETRAIN_COUNT)] =
+        eth_l1_mem::address_map::RETRAIN_COUNT_ADDR;
+    mem_map_bases[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTER_CONFIG)] =
+        eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_BASE;
 
     std::vector<uint32_t> mem_map_sizes;
     mem_map_sizes.resize(static_cast<std::size_t>(HalL1MemAddrType::COUNT));
@@ -62,6 +72,14 @@ HalCoreInfoType create_active_eth_mem_map() {
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::GO_MSG)] = sizeof(go_msg_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR)] = sizeof(uint32_t);
     mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::BANK_TO_NOC_SCRATCH)] = eth_l1_mem::address_map::ERISC_MEM_BANK_TO_NOC_SIZE;
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::APP_SYNC_INFO)] =
+        eth_l1_mem::address_map::ERISC_APP_SYNC_INFO_SIZE;
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::TILE_HEADER_BUFFER)] = sizeof(std::uint32_t);
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::APP_ROUTING_INFO)] =
+        eth_l1_mem::address_map::ERISC_APP_ROUTING_INFO_SIZE;
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::RETRAIN_COUNT)] = sizeof(uint32_t);
+    mem_map_sizes[static_cast<std::size_t>(HalL1MemAddrType::FABRIC_ROUTER_CONFIG)] =
+        eth_l1_mem::address_map::FABRIC_ROUTER_CONFIG_SIZE;
 
     std::vector<std::vector<HalJitBuildConfig>> processor_classes(NumEthDispatchClasses);
     std::vector<HalJitBuildConfig> processor_types(1);
@@ -69,6 +87,8 @@ HalCoreInfoType create_active_eth_mem_map() {
         processor_types[0] = HalJitBuildConfig{
             .fw_base_addr = eth_l1_mem::address_map::FIRMWARE_BASE,
             .local_init_addr = eth_l1_mem::address_map::FIRMWARE_BASE,
+            .fw_launch_addr = eth_l1_mem::address_map::LAUNCH_ERISC_APP_FLAG,
+            .fw_launch_addr_value = 0x1,
         };
         processor_classes[processor_class_idx] = processor_types;
     }

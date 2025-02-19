@@ -18,7 +18,7 @@ namespace detail {
 
 void bind_complex_tensor_type(py::module& m) {
     py::class_<ComplexTensor>(m, "ComplexTensor")
-        .def(py::init<std::array<Tensor, 2>>())
+        .def(py::init<std::tuple<const Tensor&, const Tensor&>>())
         .def_property_readonly("real", &ComplexTensor::real)
         .def_property_readonly("imag", &ComplexTensor::imag)
         .def("deallocate", &ComplexTensor::deallocate)

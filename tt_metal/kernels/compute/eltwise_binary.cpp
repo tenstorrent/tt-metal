@@ -26,9 +26,9 @@ void MAIN {
 
 #if not defined ELTWISE_DEST_REUSE_TYPE
 #ifdef FULL_INIT
-    binary_op_specific_init<true, ELTWISE_OP_TYPE>();
+    binary_op_specific_init<true, ELTWISE_OP_TYPE>(cb_in0, cb_in1);
 #else
-    binary_op_specific_init<false, ELTWISE_OP_TYPE>();
+    binary_op_specific_init<false, ELTWISE_OP_TYPE>(cb_in0, cb_in1);
 #endif
 #endif
 
@@ -45,7 +45,7 @@ void MAIN {
 
 #if defined(DST_ACCUM_MODE) || defined(ELTWISE_DEST_REUSE_TYPE)
         cb_wait_front(cb_in2, per_core_block_size);
-        copy_tile_to_dst_init_short();
+        copy_tile_to_dst_init_short(cb_in2);
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
             copy_tile(cb_in2, i, i);  // copy from c_in[0] to DST[0]
         }

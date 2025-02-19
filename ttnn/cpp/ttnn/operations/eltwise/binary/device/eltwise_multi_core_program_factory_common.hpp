@@ -9,26 +9,26 @@
 #include "binary_device_operation.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/host_api.hpp>
 
 namespace ttnn::operations::binary {
 
 template <bool initialize_args>
 inline __attribute__((always_inline)) void set_eltwise_binary_runtime_args(
-    Program& program,
+    tt::tt_metal::Program& program,
     const Tensor& a,
     const Tensor& b,
     const Tensor& output,
-    const KernelHandle binary_reader_kernel_id,
-    const KernelHandle unary_writer_kernel_id,
-    const KernelHandle eltwise_binary_kernel_id,
-    const CBHandle cb_src0,
-    const CBHandle cb_src1,
-    const CBHandle cb_output,
+    const tt::tt_metal::KernelHandle binary_reader_kernel_id,
+    const tt::tt_metal::KernelHandle unary_writer_kernel_id,
+    const tt::tt_metal::KernelHandle eltwise_binary_kernel_id,
+    const tt::tt_metal::CBHandle cb_src0,
+    const tt::tt_metal::CBHandle cb_src1,
+    const tt::tt_metal::CBHandle cb_output,
     const CoreRangeSet& all_device_cores,
     const uint32_t src0_single_tile_size,
     const uint32_t src1_single_tile_size,
@@ -123,8 +123,8 @@ inline __attribute__((always_inline)) void set_eltwise_binary_runtime_args(
         if (block_or_width_sharded) {
             block_size = block_width * block_height;
             end_core = (*shard_spec.value().grid.ranges().begin()).end_coord;
-            output_width = output.get_legacy_shape()[-1] / TILE_WIDTH;
-            uint32_t output_height = output.volume() / output.get_legacy_shape()[-1] / TILE_HEIGHT;
+            output_width = output.get_padded_shape()[-1] / TILE_WIDTH;
+            uint32_t output_height = output.volume() / output.get_padded_shape()[-1] / TILE_HEIGHT;
             last_unpadded_block_height = block_height - (round_up(output_height, block_height) - output_height);
             last_unpadded_block_width = block_width - (round_up(output_width, block_width) - output_width);
         }

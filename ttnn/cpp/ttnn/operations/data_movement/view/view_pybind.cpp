@@ -7,7 +7,7 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "cpp/pybind11/decorators.hpp"
 #include "ttnn/operations/data_movement/view/view.hpp"
 #include "ttnn/types.hpp"
 
@@ -22,7 +22,7 @@ void bind_view(pybind11::module& module, const data_movement_operation_t& operat
         operation,
         doc,
         ttnn::pybind_overload_t{
-            [](const data_movement_operation_t& self, const ttnn::Tensor& input_tensor, const ttnn::SimpleShape& shape)
+            [](const data_movement_operation_t& self, const ttnn::Tensor& input_tensor, const ttnn::Shape& shape)
                 -> ttnn::Tensor { return self(input_tensor, shape); },
             py::arg("input_tensor"),
             py::arg("shape"),

@@ -63,7 +63,7 @@ void MAIN {
     constexpr uint32_t intermed_cb_id2 = get_compile_time_arg_val(4);
     constexpr uint32_t output_cb_id = get_compile_time_arg_val(5);
 
-    reduce_init<true>(input_cb_id, scalar_cb_id);
+    reduce_init<true>(input_cb_id, scalar_cb_id, intermed_cb_id1);
     reduce_revert_delta<REDUCE_DIM>(intermed_cb_id1);  // Required or else the first tile is wrong
 
     for (uint32_t block_h_id = 0; block_h_id < input_num_blocks_h; block_h_id++) {

@@ -47,7 +47,7 @@ from models.utility_functions import skip_for_grayskull
 )
 @pytest.mark.parametrize(
     "seq_len, prefill_chunk_size",
-    [(4096, 1024)],
+    [(4096, 2048)],
 )
 @pytest.mark.parametrize(
     "optimizations",

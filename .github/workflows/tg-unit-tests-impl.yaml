@@ -28,7 +28,7 @@ jobs:
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - name: Build UMD device and tests
         run: |
-          cmake -B build -G Ninja -DTT_UMD_BUILD_TESTS=ON
+          cmake -B build -G Ninja -DTT_UMD_BUILD_TESTS=ON -DCMAKE_TOOLCHAIN_FILE=cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake
           cmake --build build --target umd_tests
       - name: Run UMD unit regression tests
         timeout-minutes: 10
@@ -41,8 +41,11 @@ jobs:
       matrix:
         test-group: [
           { name: "TG unit tests", arch: wormhole_b0, model: unit, timeout: 30, owner_id: XXXXX},  # Add owner
+          { name: "TG Fabric tests", arch: wormhole_b0, model: fabric, timeout: 30, owner_id: UJ45FEC7M},  # Allan Liu
           { name: "TG Llama3-small unit tests", arch: wormhole_b0, model: llama3-small, timeout: 45, owner_id: U06F3ER8X9A}, # Stuti Raizada
           { name: "TG Llama3-70b unit tests", arch: wormhole_b0, model: llama3-70b, timeout: 45, owner_id: U06F3ER8X9A}, # Stuti Raizada
+          { name: "TG DRAM Prefetcher unit tests", arch: wormhole_b0, model: prefetcher, timeout: 30, owner_id: U071CKL4AFK}, # Ammar Vora, Yu Gao
+          { name: "TG distributed ops tests", arch: wormhole_b0, model: distributed-ops, timeout: 15, owner_id: U044T8U8DEF},  # Johanna Rock
         ]
     name: ${{ matrix.test-group.name }}
     env:
@@ -63,9 +66,9 @@ jobs:
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
       - uses: actions/download-artifact@v4
         with:
-          name: TTMetal_build_${{ matrix.test-group.arch }}
+          name: TTMetal_build_any
       - name: Extract files
-        run: tar -xvf ttm_${{ matrix.test-group.arch }}.tar
+        run: tar -xvf ttm_any.tar
       - uses: ./.github/actions/install-python-deps
       - name: Run unit regression tests
         timeout-minutes: ${{ matrix.test-group.timeout }}

@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_metal/impl/allocator/algorithms/free_list_opt.hpp"
-#include "common/assert.hpp"
-#include "llrt/hal.hpp"
-#include "tt_metal/impl/allocator/algorithms/allocator_algorithm.hpp"
+#include <assert.hpp>
+#include <hal.hpp>
+#include "allocator_algorithm.hpp"
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -464,6 +464,28 @@ void FreeListOpt::dump_blocks(std::ostream& out) const {
             << leftpad_num(block_next_block_[i], pad) << " " << leftpad(block_is_allocated_[i] ? "yes" : "no", pad)
             << std::endl;
     }
+}
+
+MemoryBlockTable FreeListOpt::get_memory_block_table() const {
+    MemoryBlockTable blocks;
+
+    for (size_t i = 0; i < block_address_.size(); i++) {
+        std::unordered_map<std::string, std::string> block_entry;
+
+        if (!meta_block_is_allocated_[i]) {
+            continue;
+        }
+
+        block_entry["blockID"] = std::to_string(i);
+        block_entry["address"] = std::to_string(block_address_[i]);  // bytes
+        block_entry["size"] = std::to_string(block_size_[i]);        // bytes
+        block_entry["prevID"] = std::to_string(block_prev_block_[i]);
+        block_entry["nextID"] = std::to_string(block_next_block_[i]);
+        block_entry["allocated"] = block_is_allocated_[i] ? "yes" : "no";
+        blocks.push_back(block_entry);
+    }
+
+    return blocks;
 }
 
 void FreeListOpt::shrink_size(DeviceAddr shrink_size, bool bottom_up) {

@@ -39,10 +39,11 @@ void kernel_main() {
     constexpr uint32_t out_subblock_w = get_compile_time_arg_val(3);
     constexpr uint32_t intermediate_num_tiles = get_compile_time_arg_val(3);
 
-    constexpr uint32_t cb_id_in0 = 0;
-    constexpr uint32_t cb_id_in1 = 1;  // mcast receive all kv_heads; compute chooses which kv_heads to use for matmul
-    constexpr uint32_t cb_id_intermed0 = 24;
-    constexpr uint32_t cb_id_intermed1 = 25;
+    constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
+    constexpr uint32_t cb_id_in1 =
+        tt::CBIndex::c_1;  // mcast receive all kv_heads; compute chooses which kv_heads to use for matmul
+    constexpr uint32_t cb_id_intermed0 = tt::CBIndex::c_3;
+    constexpr uint32_t cb_id_intermed1 = tt::CBIndex::c_4;
 
     constexpr uint32_t onetile = 1;
     constexpr uint32_t num_rows_in_one_tile = 32;

@@ -13,12 +13,9 @@
 #include "compute_kernel_api/binary_bitwise_sfpu.h"
 #include "compute_kernel_api/binary_shift.h"
 #include "compute_kernel_api/add_int32_sfpu.h"
+#include "compute_kernel_api/sub_int32_sfpu.h"
 
 #define PRE_SCALE defined SFPU_OP_INIT_PRE_IN0_0 || defined SFPU_OP_INIT_PRE_IN1_0
-
-#if defined(ADD_INT32_INIT) || defined(BITWISE_INIT) || defined(SHIFT_INIT)
-#define INT32_INIT
-#endif
 
 namespace NAMESPACE {
 void MAIN {
@@ -51,7 +48,7 @@ void MAIN {
     for (uint32_t block = 0; block < per_core_block_cnt; ++block) {
 
 #if PRE_SCALE
-    copy_tile_to_dst_init_short();  // need to copy from CB to DST to be able to run sfpu math
+        copy_tile_to_dst_init_short(cb_in0);  // need to copy from CB to DST to be able to run sfpu math
 #endif
 
 #ifdef SFPU_OP_INIT_PRE_IN0_0
@@ -111,12 +108,14 @@ void MAIN {
         for (uint32_t i = 0; i < per_core_block_size; ++i) {
             copy_tile(cb_inp1, i, i * 2 + 1);
 
-#ifndef INT32_INIT
-            eltwise_binop_tile_init();
+#ifdef BINOP_INIT
+            BINOP_INIT
 #endif
-
 #ifdef ADD_INT32_INIT
             ADD_INT32_INIT
+#endif
+#ifdef SUB_INT32_INIT
+            SUB_INT32_INIT
 #endif
 #ifdef BITWISE_INIT
             BITWISE_INIT

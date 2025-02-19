@@ -26,6 +26,7 @@ public:
     static AutoContext& get_instance();
 
     std::mt19937& get_generator();
+    void set_generator(const std::mt19937& generator);
 
     void set_seed(uint32_t seed);
 

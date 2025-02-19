@@ -10,15 +10,15 @@
 #include <random>
 
 #include "device_fixture.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "test_golden_impls.hpp"
-#include "common/test_tiles.hpp"
-#include "common/bfloat16.hpp"
+#include <tt-metalium/test_tiles.hpp>
+#include <tt-metalium/bfloat16.hpp>
 
 using std::vector;
 using namespace tt;
@@ -225,7 +225,7 @@ std::string get_compute_kernel_name(const ReduceDim& reduce_dim) {
     return compute_kernel_name;
 }
 
-void run_single_core_reduce_program(tt_metal::Device* device, const ReduceConfig& test_config) {
+void run_single_core_reduce_program(tt_metal::IDevice* device, const ReduceConfig& test_config) {
     Program program = tt_metal::CreateProgram();
 
     CoreCoord core = {0, 0};

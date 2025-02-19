@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fd_kernel.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "impl/debug/dprint_server.hpp"
+#include <host_api.hpp>
+#include <tt_metal.hpp>
+#include "dprint_server.hpp"
 
 #include "prefetch.hpp"
 #include "dispatch.hpp"
@@ -14,6 +14,8 @@
 #include "demux.hpp"
 #include "eth_router.hpp"
 #include "eth_tunneler.hpp"
+
+using namespace tt::tt_metal;
 
 // Helper function to get upstream device in the tunnel from current device, not valid for mmio
 chip_id_t FDKernel::GetUpstreamDeviceId(chip_id_t device_id) {

@@ -3,13 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#include "impl/device/device.hpp"
-#include "impl/program/program.hpp"
+#include <device_impl.hpp>
+#include <program_impl.hpp>
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
+#include "tt_cluster.hpp"
 
 #define UNUSED_LOGICAL_CORE tt_cxy_pair(device_->id(), 0, 0)
-// TODO: Just to make match with previous implementation, remove later
-#define UNUSED_LOGICAL_CORE_ADJUSTED tt_cxy_pair(servicing_device_id_, 0, 0)
 #define UNUSED_SEM_ID 0
 
 typedef struct {
@@ -74,13 +73,15 @@ public:
         chip_id_t servicing_device_id,
         uint8_t cq_id,
         noc_selection_t noc_selection,
-        DispatchWorkerType type);
+        tt::tt_metal::DispatchWorkerType type);
 
     // Register another kernel as upstream/downstream of this one
     void AddUpstreamKernel(FDKernel* upstream) { upstream_kernels_.push_back(upstream); }
     void AddDownstreamKernel(FDKernel* downstream) { downstream_kernels_.push_back(downstream); }
 
-    virtual CoreType GetCoreType() { return dispatch_core_manager::instance().get_dispatch_core_type(device_->id()); }
+    virtual CoreType GetCoreType() {
+        return tt::tt_metal::dispatch_core_manager::instance().get_dispatch_core_type(device_->id());
+    }
     tt_cxy_pair GetLogicalCore() { return logical_core_; }
     tt_cxy_pair GetVirtualCore() {
         return tt::Cluster::instance().get_virtual_coordinate_from_logical_coordinates(logical_core_, GetCoreType());
@@ -90,7 +91,7 @@ public:
     // Get the port index for which a given kernel is upstream/downstream of this one
     int GetUpstreamPort(FDKernel* other) { return GetPort(other, this->upstream_kernels_); }
     int GetDownstreamPort(FDKernel* other) { return GetPort(other, this->downstream_kernels_); }
-    void AddDeviceAndProgram(Device* device, Program* program) {
+    void AddDeviceAndProgram(tt::tt_metal::IDevice* device, tt::tt_metal::Program* program) {
         device_ = device;
         program_ = program;
     };
@@ -118,8 +119,8 @@ protected:
     static chip_id_t GetDownstreamDeviceId(chip_id_t device_id);
     static uint32_t GetTunnelStop(chip_id_t device_id);
 
-    Device* device_ = nullptr;  // Set at configuration time by AddDeviceAndProgram()
-    Program* program_ = nullptr;
+    tt::tt_metal::IDevice* device_ = nullptr;  // Set at configuration time by AddDeviceAndProgram()
+    tt::tt_metal::Program* program_ = nullptr;
     tt_cxy_pair logical_core_;
     chip_id_t device_id_;
     chip_id_t servicing_device_id_;  // Remote chip that this PREFETCH_H/DISPATCH_H is servicing

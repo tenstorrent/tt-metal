@@ -6,20 +6,20 @@
 
 #include <optional>
 
-#include "common/base_types.hpp"
-#include "common/constants.hpp"
+#include <tt-metalium/base_types.hpp>
+#include <tt-metalium/constants.hpp>
 #include "moreh_clip_grad_norm_step1/device/moreh_clip_grad_norm_step1_device_operation.hpp"
 #include "moreh_clip_grad_norm_step2/device/moreh_clip_grad_norm_step2_device_operation.hpp"
 #include "moreh_clip_grad_norm_step3/device/moreh_clip_grad_norm_step3_device_operation.hpp"
-#include "ttnn/cpp/ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/cpp/ttnn/operations/eltwise/binary/binary_composite.hpp"
+#include "cpp/ttnn/operations/eltwise/binary/binary.hpp"
+#include "cpp/ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "ttnn/operations/creation.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::moreh::moreh_clip_grad_norm {
 
-inline uint32_t get_num_device_cores(Device* device) {
+inline uint32_t get_num_device_cores(IDevice* device) {
     const auto num_cores_x = static_cast<uint32_t>(device->compute_with_storage_grid_size().x);
     const auto num_cores_y = static_cast<uint32_t>(device->compute_with_storage_grid_size().y);
     return num_cores_x * num_cores_y;
@@ -43,7 +43,7 @@ Tensor MorehClipGradNorm::invoke(
     const auto num_iter = (total_num_inputs + max_num_inputs - 1) / max_num_inputs;
     // Store intermediate reduction of Sum[|e|^p]
     auto tmp_pow_sum = create_device_tensor(
-        SimpleShape{static_cast<uint32_t>(inputs.size()), 1, 1},
+        Shape{static_cast<uint32_t>(inputs.size()), 1, 1},
         inputs.at(0).get_dtype(),
         Layout::TILE,
         device,
@@ -91,10 +91,10 @@ Tensor MorehClipGradNorm::invoke(
     }
 
     // max_norm / (total_norm + 1e-6)
-    Tensor max_norm_tensor = creation::create_scalar(max_norm, inputs.at(0).get_dtype(), Layout::TILE, device);
+    Tensor max_norm_tensor = ttnn::full(Shape({1}), max_norm, inputs.at(0).get_dtype(), Layout::TILE, *device);
     auto clip_coef = ttnn::div(max_norm_tensor, ttnn::add(output_total_norm, 1e-6f));
     // min(clip_coef, 1.0f)
-    Tensor scalar = creation::create_scalar(1.0f, inputs.at(0).get_dtype(), Layout::TILE, device);
+    Tensor scalar = ttnn::full(Shape({1}), 1.0f, inputs.at(0).get_dtype(), Layout::TILE, *device);
     auto clip_coef_clamped = ttnn::minimum(clip_coef, scalar);
     scalar.deallocate();
     max_norm_tensor.deallocate();

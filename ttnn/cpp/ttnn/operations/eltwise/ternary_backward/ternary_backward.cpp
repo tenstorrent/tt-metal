@@ -6,11 +6,10 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
-#include "ttnn/cpp/ttnn/operations/eltwise/ternary/where.hpp"
+#include "cpp/ttnn/operations/eltwise/ternary/where.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/tools/profiler/op_profiler.hpp"
+#include <tt-metalium/constants.hpp>
+#include "tools/profiler/op_profiler.hpp"
 #include "ttnn/operations/eltwise/ternary_backward/ternary_backward.hpp"
 #include <magic_enum/magic_enum.hpp>
 
@@ -71,7 +70,7 @@ std::vector<Tensor> AddcdivBackwardOperation::invoke(
 }
 
 std::vector<OptionalTensor> WhereBackwardOperation::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& grad,
     const Tensor& condition,
     const Tensor& input,

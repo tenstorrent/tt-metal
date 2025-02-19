@@ -107,6 +107,8 @@ void kernel_main() {
     constexpr uint32_t cb_id_act_second_reader = 7;
     constexpr uint32_t cb_id_sharded_act = 3;
     constexpr uint32_t act_block_h_datums_read = act_block_h_datums / 2;  // Extra /2 because of packed uint16 reads
+    constexpr uint32_t act_block_h_datums_first_reader_read =
+        act_block_h_datums_first_reader / 2;  // Extra /2 because of packed uint16 reads
     constexpr uint32_t act_block_num_tiles_read = act_block_num_tiles;
 
     constexpr uint32_t cb_reader_indices = tt::CBIndex::c_4;
@@ -401,8 +403,7 @@ void kernel_main() {
             out_block_h_start_tile_id += out_next_block_stride_h;
             out_block_h_start_tile_id_h += out_block_height_num_tiles;
 #endif
-
-            start_reader_idx = reader_idx + act_block_h_datums_read;
+            start_reader_idx = reader_idx + act_block_h_datums_first_reader_read;
         }  // out_num_blocks_h
         out_block_w_start_tile_id += out_next_block_stride_w;
         out_block_w_start_tile_id_w += weight_block_width_ntiles;

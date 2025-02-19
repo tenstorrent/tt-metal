@@ -4,15 +4,16 @@
 
 #pragma once
 
+#include <vector>
+
 #include <cstddef>
 #include <cstdint>
 #include <variant>
 #include <limits>
 
-#include "ttnn/cpp/ttnn/operations/ccl/common/types/ccl_types.hpp"
-
+#include "cpp/ttnn/operations/ccl/common/types/ccl_types.hpp"
 // For command dest type
-#include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
+#include "cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
 
 namespace ttnn {
 namespace ccl {
@@ -60,6 +61,32 @@ struct CclCommandAtomicInc {
     uint32_t value = 1;
     uint32_t wrap_value = std::numeric_limits<uint32_t>::max();
 };
+
+struct noc_transfer_info {
+    // When encoded into a command, the noc address contains the relative offset of the
+    // read/write from the base address, which must be stored elsewhere by the command
+    // interpreter/command stream. The base address is specified in the command
+    uint64_t noc_addr = 0;
+    size_t noc_transfer_size_bytes = 0;
+};
+
+struct HostNocTransferBurstGrouping {
+    size_t num_transfers_per_packet = 0;
+    std::vector<noc_transfer_info> transfer_infos;
+};
+struct HostCclCommandNocTransferBurst {
+    size_t bank_base_address = 0;
+    uint32_t num_transfers_total = 0;
+    std::vector<HostNocTransferBurstGrouping> transfer_burst_groupings;
+};
+struct DeviceCclCommandNocTransferBurst {
+    size_t bank_base_address = 0;
+    uint32_t num_transfers_total = 0;
+
+    // Populated as the burst is being completed and command args are being decoded
+    uint8_t num_transfers_per_packet = 0;
+};
+
 struct CclCommandInlineReadWrite {
     uint32_t value = 0;
 };
@@ -71,7 +98,8 @@ using CclCommandArgs = std::variant<
     CclCommandWaitValue,
     CclCommandAtomicInc,
     CclCommandInlineReadWrite,
-    CclCommandReadWrite>;
+    CclCommandReadWrite,
+    HostCclCommandNocTransferBurst>;
 
 enum SRC_DEST_TYPE : uint8_t { SRC = 0, DEST = 1 };
 
@@ -94,6 +122,16 @@ enum class CclCommandArgCode : uint8_t {
 
     // core descriptor commands
     SET_CORE_DESCRIPTOR_INFO = 9,
+
+    // Specifies how many noc transfers are specified in the
+    // noc transaction burst command
+    SET_NOC_TRANSFER_BURST_START_INFO = 10,
+
+    // Specifies how many noc transfers are expected to be performed back to back
+    // and packed into a single (CB) packet (though conceivably we could pack this)
+    // into a common ethernet packet too for better utilization (provided that the)
+    // receiver does the proper unpacking
+    SET_NOC_TRANSFER_BURST_SIZE_PER_PACKET = 11,
 
     INVALID = std::numeric_limits<uint8_t>::max(),
 };
@@ -170,6 +208,14 @@ struct command_arg_field<CclCommandArgCode::SET_FULL_TENSOR_SLICE_SPEC_IN_PAGES>
 template <>
 struct command_arg_field<CclCommandArgCode::SET_ADDRESS_INFO> {
     using type = uint32_t;
+};
+template <>
+struct command_arg_field<CclCommandArgCode::SET_NOC_TRANSFER_BURST_START_INFO> {
+    using type = DeviceCclCommandNocTransferBurst;
+};
+template <>
+struct command_arg_field<CclCommandArgCode::SET_NOC_TRANSFER_BURST_SIZE_PER_PACKET> {
+    using type = uint8_t;
 };
 
 template <CclCommandArgCode T>
@@ -456,10 +502,14 @@ enum class CclCommandCoreDescriptorType : uint8_t {
     ADDRGEN = 0,
     LOCAL = 1,
     NOC_XY = 2,
-    RECTANGLE = 3
+    RECTANGLE = 3,
+
+    // used for noc bursts since the core is embedded in the noc command
+    NONE = 4
     // Future types may include: list, rectangle_list, etc.
 };
 struct CclCommandCoreDescriptorTypeAddrgen {};
+struct CclCommandCoreDescriptorTypeNone {};
 struct CclCommandCoreDescriptorTypeLocal {};
 struct CclCommandCoreDescriptorTypeNocXY {
     uint8_t x;
@@ -493,7 +543,8 @@ using CclCommandCoreDescriptorArgs = std::variant<
     CclCommandCoreDescriptorTypeAddrgen,
     CclCommandCoreDescriptorTypeLocal,
     CclCommandCoreDescriptorTypeNocXY,
-    CclCommandCoreDescriptorTypeMcast>;
+    CclCommandCoreDescriptorTypeMcast,
+    CclCommandCoreDescriptorTypeNone>;
 
 // A command is composed of one or more arguments
 // This enum specifies the high level command
@@ -512,13 +563,17 @@ enum class CclCommandCode : uint8_t {
 
     RAW_INLINE_WRITE_BYTES = 5,
 
-    // Behaviour reading/writing to CBs still a little unclear
-    // This mode isn't actually supported yet
-    RAW_READ_BYTES = 6,
-    RAW_WRITE_BYTES = 7,
+    NOC_READ_BURST = 6,
+    NOC_WRITE_BURST = 7,
 
-    INVALID = 8
+    // Waits on semaphore values before performing reads. Every read waits for the target semaphore
+    // value before reading
+    FLOW_CONTROLLED_NOC_READ_BURST = 8,
+    NOC_WRITE_AND_ATOMIC_INC = 9,
+
+    INVALID = 10
 };
+
 
 enum CclCommandDestType : uint8_t {
     CHIP_UNICAST = tt::fabric::CHIP_UNICAST,
@@ -542,7 +597,6 @@ using LocalOnlyCommandDestArgs = DestTypeArgsNull;
 // Used only for host code paths
 using CclCommandDestArgs = std::variant<UnicastCommandDestArgs, MulticastCommandDestArgs, LocalOnlyCommandDestArgs>;
 
-namespace v2 {};
 
 struct CclCommandHeader {
     CclCommandCode code : 6;
@@ -559,8 +613,9 @@ struct CclCommandHeader {
         LocalOnlyCommandDestArgs local_only;
     } command_dest_args;
 
-    CclCommandHeader() : code(CclCommandCode::INVALID), dest_type(CclCommandDestType::CHIP_LOCAL_ONLY), arg_count(0) {}
-    CclCommandHeader(CclCommandCode code, CclCommandDestArgs const& args, uint8_t arg_count) :
+    CclCommandHeader() :
+        code(CclCommandCode::INVALID), dest_type(CclCommandDestType::CHIP_LOCAL_ONLY), arg_count(0) {}
+    CclCommandHeader(CclCommandCode code, const CclCommandDestArgs& args, uint8_t arg_count) :
         code(code), arg_count(arg_count) {
         if (std::holds_alternative<UnicastCommandDestArgs>(args)) {
             command_dest_args.unicast = std::get<UnicastCommandDestArgs>(args);
@@ -573,36 +628,22 @@ struct CclCommandHeader {
             this->dest_type = CclCommandDestType::CHIP_LOCAL_ONLY;
         }
     }
-    CclCommandHeader(CclCommandCode code, MulticastCommandDestArgs const& multicast_args, uint8_t arg_count) :
+    CclCommandHeader(CclCommandCode code, const MulticastCommandDestArgs& multicast_args, uint8_t arg_count) :
         code(code), dest_type(CclCommandDestType::CHIP_MULTICAST), arg_count(arg_count) {
         this->command_dest_args.multicast = multicast_args;
     }
-    CclCommandHeader(CclCommandCode code, LocalOnlyCommandDestArgs const& local_only_args, uint8_t arg_count) :
+    CclCommandHeader(CclCommandCode code, const LocalOnlyCommandDestArgs& local_only_args, uint8_t arg_count) :
         code(code), dest_type(CclCommandDestType::CHIP_LOCAL_ONLY), arg_count(arg_count) {
         this->command_dest_args.local_only = local_only_args;
     }
 
-    static CclCommandHeader from_uint32(uint32_t cmd_header) {
+    static CclCommandHeader from_uint32_impl(uint32_t cmd_header) {
         CclCommandHeader decoded;
         reinterpret_cast<uint32_t*>(&decoded)[0] = cmd_header;
         return decoded;
-        // decoded.code = static_cast<CclCommandCode>(cmd_header & 0xFF);
-        // decoded.dest_type = static_cast<CclCommandDestType>((cmd_header >> 6) & 0x3);
-        // switch (decoded.dest_type) {
-        //     case CclCommandDestType::CHIP_UNICAST:
-        //         decoded.command_dest_args.unicast = UnicastCommandDestArgs{static_cast<uint8_t>((cmd_header >> 16) &
-        //         0xFF), static_cast<bool>((cmd_header >> 24) & 0x1)}; break;
-        //     case CclCommandDestType::CHIP_MULTICAST:
-        //         decoded.command_dest_args.multicast = MulticastCommandDestArgs{static_cast<uint8_t>((cmd_header >>
-        //         16) & 0xFF), static_cast<uint8_t>((cmd_header >> 24) & 0xFF)}; break;
-        //     default:
-        //         break;
-        // }
-        // decoded.arg_count = (cmd_header >> 8) & 0xF;
-        // return decoded;
     }
 
-    static uint32_t to_uint32(CclCommandHeader const& cmd_header) {
+    static uint32_t to_uint32(const CclCommandHeader& cmd_header) {
         uint32_t encoded = 0;
         encoded = (uint32_t)(cmd_header.code);
         encoded |= (cmd_header.dest_type << 6);
@@ -621,11 +662,15 @@ struct CclCommandHeader {
         return encoded;
     }
     uint32_t to_uint32() const { return to_uint32(*this); }
+    static CclCommandHeader from_uint32(uint32_t cmd_header) {
+        return CclCommandHeader::from_uint32_impl(cmd_header);
+    }
 
-    UnicastCommandDestArgs const& get_unicast_dest_args() const { return command_dest_args.unicast; }
-    MulticastCommandDestArgs const& get_multicast_dest_args() const { return command_dest_args.multicast; }
-    LocalOnlyCommandDestArgs const& get_local_only_dest_args() const { return command_dest_args.local_only; }
+    const UnicastCommandDestArgs& get_unicast_dest_args() const { return command_dest_args.unicast; }
+    const MulticastCommandDestArgs& get_multicast_dest_args() const { return command_dest_args.multicast; }
+    const LocalOnlyCommandDestArgs& get_local_only_dest_args() const { return command_dest_args.local_only; }
 };
+
 static_assert(sizeof(CclCommandHeader) == sizeof(uint32_t));
 
 }  // namespace cmd

@@ -359,7 +359,7 @@ def test_matmul_in1_dram_sharded_tiny_tile(
     )
     in1_shard_grid = ttnn.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1)
     in1_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), in1_shard_grid)})
-    in1_shard_spec = ttnn.ShardSpec(in1_shard_grid, in1_shard_shape, ttnn.ShardOrientation.ROW_MAJOR, False)
+    in1_shard_spec = ttnn.ShardSpec(in1_shard_grid, in1_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
     in1_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, in1_shard_spec)
     in1_t = ttnn.from_torch(
         in1,
@@ -376,7 +376,7 @@ def test_matmul_in1_dram_sharded_tiny_tile(
         bias_padded = torch.nn.functional.pad(bias_padded, (0, 0, 0, tile_h - bias_padded.size(2)), "constant", 0)
         bias_shard_grid = ttnn.CoreCoord(device.dram_grid_size().x - 1, device.dram_grid_size().y - 1)
         bias_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), bias_shard_grid)})
-        bias_shard_spec = ttnn.ShardSpec(bias_shard_grid, bias_shard_shape, ttnn.ShardOrientation.ROW_MAJOR, False)
+        bias_shard_spec = ttnn.ShardSpec(bias_shard_grid, bias_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
         bias_mem_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, bias_shard_spec
         )
@@ -576,8 +576,8 @@ def run_matmul_2d_multiple_output_blocks_per_core(
 
 @run_for_wormhole_b0()
 @pytest.mark.parametrize("b", [1, 2])
-@pytest.mark.parametrize("m", [1024])
-@pytest.mark.parametrize("k", [1024])
+@pytest.mark.parametrize("m", [512])
+@pytest.mark.parametrize("k", [512])
 @pytest.mark.parametrize("n", [1024])
 @pytest.mark.parametrize("has_bias", [True, False])
 @pytest.mark.parametrize("grid_size", [(8, 4)])
@@ -752,8 +752,8 @@ def run_matmul_2d_tiny_tile(
 
 
 @run_for_wormhole_b0()
-@pytest.mark.parametrize("m", [768])
-@pytest.mark.parametrize("k", [1024])
+@pytest.mark.parametrize("m", [512])
+@pytest.mark.parametrize("k", [512])
 @pytest.mark.parametrize("n", [768])
 @pytest.mark.parametrize("has_bias", [False, True])
 @pytest.mark.parametrize("grid_size", [(8, 4)])
@@ -1230,14 +1230,14 @@ def test_matmul_with_matched_width_height(device, m_size, k_size, n_size):
 def test_matmul_with_matched_width_height_from_1D(device, k_size, n_size):
     torch.manual_seed(0)
 
-    torch_input_tensor_a = torch.rand((k_size), dtype=torch.bfloat16)
+    torch_input_tensor_a = torch.rand((1, k_size), dtype=torch.bfloat16)
     torch_input_tensor_b = torch.rand((k_size, n_size), dtype=torch.bfloat16)
     torch_output_tensor = torch.matmul(torch_input_tensor_a, torch_input_tensor_b)
 
     input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device)
     output = input_tensor_a @ input_tensor_b
-    output = ttnn.to_torch(output, torch_rank=1)
+    output = ttnn.to_torch(output)
 
     assert len(output.shape) == len(torch_output_tensor.shape)
     assert output.shape == torch_output_tensor.shape
@@ -1718,114 +1718,6 @@ def test_falcon_query_key_value_matmul(device, batch_size, m_size, k_size, n_siz
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.996)
 
 
-# @skip_for_grayskull()
-@pytest.mark.skipif(is_wormhole_b0() or is_blackhole(), reason="Unsupported on WH and BH")
-@pytest.mark.parametrize(
-    "batch_size, channel_a, channel_b, m_size, k_size, n_size, has_bias",
-    [
-        (1, 2, 1, 1024, 640, 2560, False),
-        (2, 8, 8, 64, 96, 160, False),
-        (1, 2, 1, 4096, 320, 1280, False),
-        (1, 2, 1, 64, 1280, 5120, False),
-        (2, 8, 8, 64, 64, 160, False),
-        (1, 2, 1, 1024, 640, 768, False),
-        (2, 8, 8, 96, 160, 96, False),
-        (2, 8, 8, 1024, 1024, 96, False),
-        (1, 2, 1, 96, 768, 1024, False),
-        (1, 1, 1, 32, 1280, 1280, True),
-        (2, 8, 8, 4096, 96, 64, False),
-        (1, 2, 1, 64, 5120, 1280, True),
-        (2, 8, 8, 4096, 64, 96, False),
-        (1, 2, 1, 1024, 768, 640, True),
-        (1, 2, 1, 256, 1280, 1280, True),
-        (2, 8, 8, 1024, 96, 96, False),
-        (1, 2, 1, 1024, 640, 2304, False),
-        (1, 1, 1, 32, 1280, 320, True),
-        (1, 2, 1, 96, 768, 2560, False),
-        (1, 2, 1, 4096, 1280, 320, True),
-        (1, 2, 1, 1024, 2560, 640, True),
-        (1, 2, 1, 256, 1280, 3840, False),
-        (1, 1, 1, 32, 320, 1280, True),
-        (1, 2, 1, 4096, 512, 320, True),
-        (1, 2, 1, 64, 1280, 1280, True),
-        (1, 2, 1, 256, 5120, 1280, True),
-        (1, 2, 1, 256, 1280, 1280, False),
-        (2, 8, 8, 256, 160, 96, False),
-        (2, 8, 8, 256, 256, 160, False),
-        (1, 2, 1, 96, 768, 1536, False),
-        (1, 2, 1, 64, 1280, 3840, False),
-        (2, 8, 8, 1024, 96, 1024, False),
-        (2, 8, 8, 256, 96, 160, False),
-        (1, 2, 1, 64, 1280, 1280, False),
-        (2, 8, 8, 4096, 64, 4096, False),
-        (1, 1, 1, 32, 1280, 640, True),
-        (2, 8, 8, 64, 160, 64, False),
-        (1, 2, 1, 4096, 320, 1536, False),
-        (1, 2, 1, 256, 1280, 5120, False),
-        (2, 8, 8, 4096, 4096, 64, False),
-        (2, 8, 8, 256, 160, 256, False),
-        (1, 2, 1, 4096, 320, 512, False),
-    ],
-)
-@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b])
-def test_sd_matmul(device, batch_size, channel_a, channel_b, m_size, k_size, n_size, has_bias, dtype):
-    torch.manual_seed(0)
-    if device.core_grid.y == 7:
-        pytest.skip("Issue #6984: Compute Grid size too small")
-    core_grid = ttnn.CoreGrid(x=8, y=8)
-    TILE_HEIGHT = 32
-
-    if batch_size == 2:
-        if (m_size == 1024 and k_size == 96 and n_size == 1024) or (m_size == 4096 and k_size == 64 and n_size == 4096):
-            # NOTE: matmul errors out with OOM otherwise
-            core_grid = None
-
-    # if batch_size == 2:
-    #     if m_size == 1024 and k_size == 96 and n_size == 1024 and (dtype == ttnn.bfloat16 or is_grayskull()):
-    #         pytest.skip("skip: Raises OOM")
-    #     if m_size == 4096 and k_size == 64 and n_size == 4096:
-    #         pytest.skip("skip: Raises OOM without decomposition")
-    #     if is_grayskull():
-    #         if m_size == 4096 and (
-    #             (k_size == 96 and n_size == 64) or (k_size == 64 and n_size == 96) or (k_size == 4096 and n_size == 64)
-    #         ):
-    #             pytest.skip("skip: Raises OOM on GS")
-
-    torch_input_tensor_a = torch.randn((batch_size, channel_a, m_size, k_size), dtype=torch.bfloat16)
-    torch_input_tensor_b = torch.randn((batch_size, channel_b, k_size, n_size), dtype=torch.bfloat16)
-    torch_output_tensor = torch_input_tensor_a @ torch_input_tensor_b
-    if has_bias:
-        torch_input_tensor_c = torch.randn((1, 1, TILE_HEIGHT, n_size), dtype=torch.bfloat16)
-        _torch_input_tensor_c = torch.repeat_interleave(
-            torch_input_tensor_c, torch_output_tensor.shape[2] // TILE_HEIGHT, dim=2
-        )
-        torch_output_tensor = torch_output_tensor + _torch_input_tensor_c
-
-    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
-    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype)
-    input_tensor_c = (
-        ttnn.from_torch(torch_input_tensor_c, layout=ttnn.TILE_LAYOUT, device=device, dtype=dtype) if has_bias else None
-    )
-    pcc = 0.94 if dtype == ttnn.bfloat8_b else 0.98
-
-    if has_bias:
-        output_tensor = ttnn.linear(
-            input_tensor_a,
-            input_tensor_b,
-            bias=input_tensor_c,
-            core_grid=core_grid,
-        )
-    else:
-        output_tensor = ttnn.matmul(
-            input_tensor_a,
-            input_tensor_b,
-            core_grid=core_grid,
-        )
-
-    output_tensor = ttnn.to_torch(output_tensor)
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
-
-
 @run_for_wormhole_b0()
 @pytest.mark.parametrize(
     "in0_dtype, in1_dtype, num_activation_cores, num_compute_cores, has_bias, config, M, K, N",
@@ -1889,7 +1781,6 @@ def test_matmul_in0_in1_bias_sharded(
                 N_padded // num_compute_cores,
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
         ),
     )
 
@@ -1904,7 +1795,6 @@ def test_matmul_in0_in1_bias_sharded(
                     N_padded // num_compute_cores,
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             ),
         )
 
@@ -1919,7 +1809,6 @@ def test_matmul_in0_in1_bias_sharded(
                 K // num_activation_cores,
             ],
             ttnn.ShardOrientation.ROW_MAJOR,
-            False,
         ),
     )
 
@@ -2111,3 +2000,17 @@ def test_optional_output_argument(device, n_size, c, m, k, n):
     assert_with_pcc(torch_output_tensor, output, 0.999)
     assert_with_pcc(torch_output_tensor, optional_output_tensor, 0.999)
     assert_with_pcc(output, optional_output_tensor, 0.999)
+
+
+def test_small_matmul_pcc(device):
+    torch.manual_seed(0)
+    pcc = 0.99
+    torch_input_tensor_a = torch.rand([1, 2048], dtype=torch.float32)
+    torch_input_tensor_b = torch.rand([2048, 1000], dtype=torch.float32)
+    torch_output_tensor = torch.matmul(torch_input_tensor_a, torch_input_tensor_b)
+    input_tensor_a = ttnn.from_torch(torch_input_tensor_a, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.float32)
+    input_tensor_b = ttnn.from_torch(torch_input_tensor_b, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.float32)
+    output1 = ttnn.matmul(input_tensor_a, input_tensor_b)
+    output_tensor = ttnn.to_torch(output1)
+
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)

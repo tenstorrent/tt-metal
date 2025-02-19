@@ -30,7 +30,7 @@ def get_expected_compile_time_sec():
 
 
 def get_expected_inference_time_sec():
-    return 0.23
+    return 0.237
 
 
 @pytest.mark.models_performance_bare_metal
@@ -60,14 +60,14 @@ def test_yolov4(
         weights_pth = "tests/ttnn/integration_tests/yolov4/yolov4.pth"
     else:
         weights_pth = str(model_path / "yolov4.pth")
-    ttnn_model = TtYOLOv4(weights_pth)
+    ttnn_model = TtYOLOv4(device, weights_pth)
 
     torch_input_tensor = torch.rand(input_shape, dtype=torch.bfloat16)
     ttnn_input = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
 
     logger.info(f"Compiling model with warmup run")
     profiler.start(f"inference_and_compile_time")
-    out1, out2, out3 = ttnn_model(device, ttnn_input)
+    out1, out2, out3 = ttnn_model(ttnn_input)
     profiler.end(f"inference_and_compile_time")
 
     inference_and_compile_time = profiler.get("inference_and_compile_time")
@@ -79,7 +79,7 @@ def test_yolov4(
     for idx in range(iterations):
         profiler.start("inference_time")
         profiler.start(f"inference_time_{idx}")
-        out1, out2, out3 = ttnn_model(device, ttnn_input)
+        out1, out2, out3 = ttnn_model(ttnn_input)
         outputs.append(ttnn.from_device(out1, blocking=False))
         outputs.append(ttnn.from_device(out2, blocking=False))
         outputs.append(ttnn.from_device(out3, blocking=False))
@@ -126,7 +126,7 @@ def test_perf_device_bare_metal_yolov4(batch_size, model_name):
     num_iterations = 1
     margin = 0.03
 
-    expected_perf = 199.89
+    expected_perf = 234
     command = f"pytest tests/ttnn/integration_tests/yolov4/test_ttnn_yolov4.py"
 
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]

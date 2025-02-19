@@ -4,7 +4,7 @@
 
 #include "moreh_clip_grad_norm_step2_device_operation.hpp"
 
-#include "common/constants.hpp"
+#include <tt-metalium/constants.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -43,7 +43,7 @@ MorehClipGradNormStep2Operation::spec_return_value_t MorehClipGradNormStep2Opera
 
     // output total_norm 1 element
     return TensorSpec(
-        SimpleShape{1, 1},
+        Shape{1, 1},
         TensorLayout(
             tensor_args.tmp_pow_sum.get_dtype(), PageConfig(Layout::TILE), operation_attributes.memory_config));
 };

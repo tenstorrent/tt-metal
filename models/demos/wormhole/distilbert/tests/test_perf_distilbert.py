@@ -175,7 +175,7 @@ def test_distilbert_perf_device(batch_size, test, reset_seeds):
     margin = 0.03
     num_iterations = 1
 
-    expected_perf = 224
+    expected_perf = 245
     if ttnn.GetNumAvailableDevices() == 2:
         batch_size = batch_size * 2
 

@@ -3,18 +3,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-#include "impl/buffers/buffer_constants.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/common/types/ccl_types.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/common/uops/ccl_command_device.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/common/types/ccl_types_device.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/kernel_common/worker_edm_adapters.hpp"
+#include <tt-metalium/buffer_constants.hpp>
+#include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include "cpp/ttnn/operations/ccl/common/types/ccl_types.hpp"
+#include "cpp/ttnn/operations/ccl/shared_with_host/sharded_tensor_addr_gen.hpp"
+#include "cpp/ttnn/operations/ccl/common/uops/ccl_command_device.hpp"
+#include "cpp/ttnn/operations/ccl/common/types/ccl_types_device.hpp"
+#include "cpp/ttnn/operations/ccl/kernel_common/worker_edm_adapters.hpp"
 #include "debug/dprint.h"
-#include "ttnn/cpp/ttnn/tensor/enum_types.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/common/kernels/command_processor.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/common/kernels/ccl_send_utils.hpp"
-#include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_transmission.hpp"
+#include "cpp/ttnn/tensor/enum_types.hpp"
+#include "cpp/ttnn/operations/ccl/common/kernels/command_processor.hpp"
+#include "cpp/ttnn/operations/ccl/common/kernels/ccl_send_utils.hpp"
+#include "cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_transmission.hpp"
 
 #include <cstdint>
 

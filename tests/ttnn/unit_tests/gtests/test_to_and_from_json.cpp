@@ -44,8 +44,7 @@ INSTANTIATE_TEST_SUITE_P(
                 .shard_spec = ShardSpec(
                     CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{1, 2}, CoreCoord{7, 4}}}},
                     {32, 128},
-                    ShardOrientation::ROW_MAJOR,
-                    true
+                    ShardOrientation::ROW_MAJOR
                 )
             }
         },
@@ -58,7 +57,6 @@ INSTANTIATE_TEST_SUITE_P(
                     CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{7, 4}}}},
                     {5, 6},
                     ShardOrientation::ROW_MAJOR,
-                    true,
                     ShardMode::LOGICAL
                 )
             }
@@ -72,8 +70,7 @@ INSTANTIATE_TEST_SUITE_P(
                     CoreRangeSet{std::set<CoreRange>{CoreRange{CoreCoord{0, 0}, CoreCoord{7, 7}}}},
                     {3, 4},
                     {32, 32},
-                    ShardOrientation::COL_MAJOR,
-                    false
+                    ShardOrientation::COL_MAJOR
                 )
             }
         }

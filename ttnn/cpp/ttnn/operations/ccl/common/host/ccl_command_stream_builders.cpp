@@ -3,11 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 ///
 
-#include "ttnn/cpp/ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
+#include "cpp/ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
 
-#include "tt_metal/common/assert.hpp"
+#include <tt-metalium/assert.hpp>
 
-#include "ttnn/cpp/ttnn/tensor/tensor.hpp"
+#include "cpp/ttnn/tensor/tensor.hpp"
 
 #include <ranges>
 #include <vector>
@@ -88,30 +88,10 @@ std::vector<std::vector<ttnn::ccl::v2::TensorSlice>> split_tensor_slices_across_
     return worker_slices_streams;
 };
 
-Shape4D<uint32_t> from_tensor_shape(ttnn::Shape const& shape) {
-    constexpr size_t max_rank = 4;
-    TT_FATAL(
-        shape.size() <= max_rank,
-        "Reduce scatter device code only supports tensors up to rank 4. Current tensor rank is {}. The host code "
-        "calling the program factory must reduce the dimensionality",
-        shape.size());
-
-    Shape4D<uint32_t> shape4d = {1, 1, 1, 1};
-    size_t output_index = max_rank - 1;
-    for (int i = shape.size() - 1; i >= 0; --i) {
-        shape4d[output_index] = shape[i];
-        output_index--;
-    }
-    return shape4d;
-}
-
-static ttnn::ccl::Shape4D<uint32_t> shape_to_shape_in_tiles(ttnn::Shape const& shape) {
-    auto logical_shape = shape.logical_shape();
-    logical_shape[-2] /= tt::constants::TILE_HEIGHT;
-    logical_shape[-1] /= tt::constants::TILE_WIDTH;
-    TT_FATAL(logical_shape.size() == 4, "Expected 4D shape but got {}", logical_shape.size());
+static ttnn::ccl::Shape4D<uint32_t> shape_to_shape_in_tiles(const Shape& shape) {
+    TT_FATAL(shape.rank() == 4, "Expected 4D shape but got {}", shape.rank());
     ttnn::ccl::Shape4D<uint32_t> shape_in_tiles = {
-        logical_shape[0], logical_shape[1], logical_shape[2], logical_shape[3]};
+        shape[0], shape[1], shape[-2] / tt::constants::TILE_HEIGHT, shape[-1] / tt::constants::TILE_WIDTH};
     return shape_in_tiles;
 }
 
@@ -126,13 +106,15 @@ std::vector<ttnn::ccl::v2::TensorSlice> split_tensor_slice_across_workers_wrappe
         return worker_slice;
     };
 
-    const auto worker_slices_view =
-        compute_evenly_split_sizes(num_pages, num_workers) |
-        std::views::transform([to_cmd_tensor](auto size_offset) { return to_cmd_tensor(size_offset); });
-
+    const auto evenly_split_sizes = compute_evenly_split_sizes(num_pages, num_workers);
     std::vector<ttnn::ccl::v2::TensorSlice> worker_slices;
     worker_slices.reserve(num_workers);
-    std::ranges::copy(worker_slices_view, std::back_inserter(worker_slices));
+    std::transform(
+        evenly_split_sizes.begin(),
+        evenly_split_sizes.end(),
+        std::back_inserter(worker_slices),
+        [to_cmd_tensor](auto size_offset) { return to_cmd_tensor(size_offset); });
+
     TT_FATAL(
         worker_slices.size() == num_workers, "Expected {} worker slices but got {}", num_workers, worker_slices.size());
     return worker_slices;
@@ -144,7 +126,7 @@ std::vector<ttnn::ccl::v2::TensorSlice> compute_page_aligned_slices(
     TT_FATAL(num_slices > 0, "Number of slices must be greater than 0");
     std::vector<ttnn::ccl::v2::TensorSlice> tensor_slices;
 
-    auto const input_tensor_shape_in_tiles = shape_to_shape_in_tiles(input_tensor.get_shape());
+    const auto input_tensor_shape_in_tiles = shape_to_shape_in_tiles(input_tensor.get_logical_shape());
     tensor_slices.reserve(num_slices);
 
     // split the input tensor, by shape, into pieces
@@ -161,11 +143,14 @@ std::vector<ttnn::ccl::v2::TensorSlice> compute_page_aligned_slices(
         return cmd_tensor;
     };
 
-    const auto tensor_slices_view =
-        compute_evenly_split_sizes(input_tensor_shape_in_tiles[split_dim], num_slices) |
-        std::views::transform([to_cmd_tensor](auto size_offset) { return to_cmd_tensor(size_offset); });
+    const auto evenly_split_sizes = compute_evenly_split_sizes(input_tensor_shape_in_tiles[split_dim], num_slices);
+    tensor_slices.reserve(evenly_split_sizes.size());
+    std::transform(
+        evenly_split_sizes.begin(),
+        evenly_split_sizes.end(),
+        std::back_inserter(tensor_slices),
+        [to_cmd_tensor](auto size_offset) { return to_cmd_tensor(size_offset); });
 
-    std::ranges::copy(tensor_slices_view, std::back_inserter(tensor_slices));
     TT_FATAL(
         tensor_slices.size() == num_slices, "Expected {} tensor slices but got {}", num_slices, tensor_slices.size());
 

@@ -12,6 +12,10 @@ std::mt19937& AutoContext::get_generator() {
     return m_generator;
 }
 
+void AutoContext::set_generator(const std::mt19937& generator) {
+    m_generator = generator;
+}
+
 void AutoContext::set_seed(uint32_t seed) {
     m_seed = seed;
     m_generator = std::mt19937(m_seed);

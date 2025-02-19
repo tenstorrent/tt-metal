@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
+#include "cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
 
 ALWI bool need_to_do_mask_h(uint32_t w_idx, uint32_t origin_num_h_tiles, uint32_t origin_num_w_tiles) {
     return ((w_idx / origin_num_w_tiles) + 1) % origin_num_h_tiles == 0;
@@ -18,7 +18,7 @@ void MAIN {
     constexpr bool is_lastdim_layernorm = get_compile_time_arg_val(5) == 1;
     constexpr bool is_groupnorm = get_compile_time_arg_val(6) == 1;
 
-    binary_op_init_common(tt::CBIndex::c_1, tt::CBIndex::c_2);
+    binary_op_init_common(tt::CBIndex::c_1, tt::CBIndex::c_2, tt::CBIndex::c_16);
 
     constexpr auto cb_dy = tt::CBIndex::c_0;         // output_grad(==dy)
     constexpr auto cb_x = tt::CBIndex::c_1;          // input(==x)

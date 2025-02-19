@@ -13,10 +13,14 @@ using namespace sfpi;
 namespace ckernel {
 namespace sfpu {
 
-template <bool APPROXIMATION_MODE, int BINOP_MODE, int ITERATIONS = 8>
-inline void calculate_sfpu_binary(const uint dst_offset)
-{
-    _calculate_sfpu_binary_<APPROXIMATION_MODE, BINOP_MODE, ITERATIONS>(dst_offset);
+template <bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS = 8>
+inline void calculate_sfpu_binary(const uint dst_offset) {
+    _calculate_sfpu_binary_<APPROXIMATION_MODE, BINOP, ITERATIONS>(dst_offset);
+}
+
+template <bool APPROXIMATION_MODE /*unused*/, BinaryOp BINOP>
+inline void sfpu_binary_init() {
+    _sfpu_binary_init_<APPROXIMATION_MODE, BINOP>();
 }
 
 }  // namespace sfpu

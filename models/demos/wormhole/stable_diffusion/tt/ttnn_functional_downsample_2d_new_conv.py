@@ -10,9 +10,9 @@ import torch.nn as nn
 from tt_lib.fallback_ops import fallback_ops
 from models.utility_functions import torch_to_tt_tensor_rm, tt_to_torch_tensor
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
-    run_ttnn_conv_with_pre_and_post_tensor_formatting,
+    conv_cache,
+    get_default_compute_config,
 )
-from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import conv_cache
 
 import math
 
@@ -136,43 +136,50 @@ class downsample_2d:
         if hidden_states.memory_config() != self.input_memory_config:
             hidden_states = ttnn.to_memory_config(hidden_states, self.input_memory_config)
 
-        compute_config = ttnn.init_device_compute_kernel_config(
-            self.device.arch(),
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=True,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=False,
-        )
+        compute_config = get_default_compute_config(self.device)
         if self.conv_config_override and "act_block_h" in self.conv_config_override:
             conv_config.act_block_h_override = self.conv_config_override["act_block_h"]
 
-        [hidden_states, [self.conv_weights, self.conv_bias]] = ttnn.conv2d(
+        conv_kwargs = {
+            "in_channels": self.in_channels,
+            "out_channels": self.out_channels,
+            "batch_size": self.batch_size,
+            "input_height": self.input_height,
+            "input_width": self.input_width,
+            "kernel_size": (3, 3),
+            "stride": (self.stride, self.stride),
+            "padding": (1, 1),
+            "dilation": (1, 1),
+            "groups": 1,
+            "device": self.device,
+            "conv_config": conv_config,
+        }
+
+        if not ttnn.is_tensor_storage_on_device(self.conv_weights):
+            self.conv_weights = ttnn.prepare_conv_weights(
+                weight_tensor=self.conv_weights,
+                weights_format="OIHW",
+                input_memory_config=hidden_states.memory_config(),
+                input_layout=hidden_states.get_layout(),
+                has_bias=True,
+                **conv_kwargs,
+            )
+            self.conv_bias = ttnn.prepare_conv_bias(
+                bias_tensor=self.conv_bias,
+                input_memory_config=hidden_states.memory_config(),
+                input_layout=hidden_states.get_layout(),
+                **conv_kwargs,
+            )
+            self.conv_weights = ttnn.to_device(self.conv_weights, self.device)
+            self.conv_bias = ttnn.to_device(self.conv_bias, self.device)
+
+        hidden_states = ttnn.conv2d(
             input_tensor=hidden_states,
-            in_channels=self.in_channels,
-            out_channels=self.out_channels,
-            kernel_size=(3, 3),
-            stride=(self.stride, self.stride),
-            padding=(1, 1),
-            device=self.device,
-            batch_size=self.batch_size,
-            input_height=self.input_height,
-            input_width=self.input_width,
+            **conv_kwargs,
             weight_tensor=self.conv_weights,
             bias_tensor=self.conv_bias,
-            conv_config=conv_config,
             compute_config=compute_config,
             conv_op_cache=conv_cache,
-            return_output_dim=False,
-            return_weights_and_bias=True,
         )
-        # hidden_states = run_ttnn_conv_with_pre_and_post_tensor_formatting(
-        #     self.device,
-        #     self.conv,
-        #     hidden_states,
-        #     self.conv.batch_size,
-        #     self.conv.output_height,
-        #     self.conv.output_width,
-        #     self.conv.out_channels,
-        # )
 
         return hidden_states

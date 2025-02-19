@@ -153,7 +153,6 @@ def tt_llama_attention_prepare_inputs(llama_attention_model, x, start_pos, rope_
                     llama_attention_model.head_dim,
                 ],
                 ttnn.ShardOrientation.ROW_MAJOR,
-                False,
             ),
         )
         rot_mats = ttnn.as_tensor(
@@ -338,7 +337,7 @@ def run_test_LlamaAttention_inference(
             attn_mask,
             mode=mode,
         )
-        # tt_out = ttnn.to_torch(tt_out, mesh_composer=ListMeshToTensor(mesh_device))[0]
+        # tt_out = [ttnn.to_torch(shard) for shard in ttnn.get_device_tensors(tt_out.cpu())]
 
         tt_out = ttnn.to_torch(
             tt_out, mesh_composer=ConcatMesh2DToTensor(mesh_device, dims=(3, 1), cluster_shape=cluster_shape)

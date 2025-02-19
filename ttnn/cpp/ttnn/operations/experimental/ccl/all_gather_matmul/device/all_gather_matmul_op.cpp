@@ -2,18 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "common/core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
 #include "ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
 #include "ttnn/operations/math.hpp"
-#include "tt_metal/host_api.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
-#include "eth_l1_address_map.h"
 #include "ttnn/operations/experimental/ccl/all_gather_matmul/device/all_gather_matmul_op.hpp"
+#include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 
 /* All Gather Matmul fusion includes */
-#include "ttnn/cpp/ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
-#include "ttnn/cpp/ttnn/operations/matmul/device/matmul_op.hpp"
-#include "ttnn/cpp/ttnn/operations/matmul/matmul.hpp"
+#include "cpp/ttnn/operations/ccl/all_gather/device/all_gather_op.hpp"
+#include "cpp/ttnn/operations/matmul/device/matmul_op.hpp"
+#include "cpp/ttnn/operations/matmul/matmul.hpp"
 
 namespace ttnn {
 namespace experimental {
@@ -39,7 +38,7 @@ void AllGatherMatmul::validate(
     // All Gather Matmul validate
     TT_FATAL(this->all_gather_struct.dim == 3, "AllGatherMatmul requires dim=3 for the AllGather operaitons.");
     TT_FATAL(
-        input_tensor.get_legacy_shape()[0] == 1 && input_tensor.get_legacy_shape()[1] == 1,
+        input_tensor.get_padded_shape()[0] == 1 && input_tensor.get_padded_shape()[1] == 1,
         "AllGatherMatmul requires input tensor to have batch size of 1.");
     std::visit(
         [&](const auto& config) {
@@ -59,8 +58,7 @@ void AllGatherMatmul::validate(
         auto const& shard_grid = all_gather_output_tensor_shard_spec->grid.bounding_box();
         auto const& shard_grid_start = shard_grid.start_coord;
         auto const& shard_grid_end = shard_grid.end_coord;
-        const uint32_t num_all_gather_output_shards =
-            (shard_grid_end.y - shard_grid_start.y + 1) * (shard_grid_end.x - shard_grid_start.x + 1);
+        const uint32_t num_all_gather_output_shards = shard_builder::get_sharding_core_count(all_gather_output_tensor);
         TT_FATAL(
             this->all_gather_struct.ring_size == num_all_gather_output_shards,
             "AllGatherMatmul requires number of tensor slices to equal the number of output shards of the all_gather.");
@@ -220,7 +218,9 @@ std::vector<ttnn::Tensor> all_gather_matmul(
                     ttnn::operations::matmul::get_fused_activation(activation),
                     user_run_batched,
                     transpose_a,
-                    transpose_b});
+                    transpose_b,
+                    /*output_tile=*/std::nullopt,
+                    /*global_cb=*/std::nullopt});
 
             return operation::run(
                 ttnn::experimental::AllGatherMatmul{/* All Gather Params */

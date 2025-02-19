@@ -1,0 +1,78 @@
+include "flatbuffer/base_types.fbs";
+
+namespace tt.tt_metal.flatbuffer;
+
+table CoreCoord {
+  x: int;
+  y: int;
+}
+
+table CoreRange {
+  start: CoreCoord;
+  end: CoreCoord;
+}
+
+table CoreRangeSet {
+  ranges: [CoreRange];
+}
+
+union CoreSpec {
+  CoreCoord,
+  CoreRange,
+  CoreRangeSet
+}
+
+table DataMovementConfig {
+  processor: DataMovementProcessor;
+  noc: NOC;
+  noc_mode: NOC_MODE;
+  compile_args: [uint32]; // Array of compile arguments
+  defines: [DefineEntry]; // Key-value pair map for defines
+}
+
+table ComputeConfig {
+  math_fidelity: MathFidelity;
+  fp32_dest_acc_en: bool;
+  dst_full_sync_en: bool;
+  unpack_to_dest_mode: [UnpackToDestMode]; // Array of unpack modes
+  bfp8_pack_precise: bool;
+  math_approx_mode: bool;
+  compile_args: [uint32]; // Array of compile arguments
+  defines: [DefineEntry]; // Key-value pair map for defines
+}
+
+table EthernetConfig {
+  eth_mode: EthMode;
+  noc: NOC;
+  processor: DataMovementProcessor;
+  compile_args: [uint32]; // Array of compile arguments
+  defines: [DefineEntry]; // Key-value pair map for defines
+}
+
+// Union to include multiple configurations
+union KernelConfig {
+  DataMovementConfig,
+  ComputeConfig,
+  EthernetConfig
+}
+
+struct UInt32Value {
+  value: uint32;
+}
+
+struct BufferGlobalId {
+  id: uint32;
+}
+
+union RuntimeArgValue {
+  UInt32Value,
+  BufferGlobalId,
+}
+
+table RuntimeArg {
+  value: RuntimeArgValue;
+}
+
+table UInt32Vector {
+    values: [uint32];
+}

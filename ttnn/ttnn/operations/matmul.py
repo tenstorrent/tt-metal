@@ -17,7 +17,9 @@ MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig = (
 )
 
 
-def _golden_function(input_tensor_a, input_tensor_b, *args, **kwargs):
+def _golden_function(
+    input_tensor_a, input_tensor_b, transpose_a=False, transpose_b=False, *, bias=None, activation=None, **kwargs
+):
     import torch
 
     if transpose_a:
@@ -44,7 +46,9 @@ ttnn.attach_golden_function(
 )
 
 
-def _golden_function(input_tensor_a, input_tensor_b, *, bias=None, activation=None, **kwargs):
+def _golden_function(
+    input_tensor_a, input_tensor_b, transpose_a=False, transpose_b=False, *, bias=None, activation=None, **kwargs
+):
     import torch
 
     if transpose_a:
@@ -64,6 +68,8 @@ def _golden_function(input_tensor_a, input_tensor_b, *, bias=None, activation=No
         output_tensor = torch.nn.functional.gelu(output_tensor)
     elif activation == "relu":
         output_tensor = torch.nn.functional.relu(output_tensor)
+    elif activation == "silu":
+        output_tensor = torch.nn.functional.silu(output_tensor)
     elif activation is not None:
         raise RuntimeError(f"{activation} is not supported as activation function")
 

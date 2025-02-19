@@ -7,7 +7,7 @@
 #include <cstddef>
 #include <ttnn/core.hpp>
 #include <ttnn/distributed/api.hpp>
-#include "distributed/mesh_device.hpp"
+#include <tt-metalium/mesh_device.hpp>
 
 namespace ttnn::distributed::test {
 
@@ -18,9 +18,10 @@ TEST(DistributedTestStandalone, TestSystemMeshTearDownWithoutClose) {
     mesh = ttnn::distributed::open_mesh_device(
         {2, 4}, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, tt::tt_metal::DispatchCoreType::WORKER);
 
-    auto [rows, cols] = sys.get_shape();
-    EXPECT_GT(rows, 0);
-    EXPECT_GT(cols, 0);
+    const auto system_shape = sys.get_shape();
+    ASSERT_EQ(system_shape.dims(), 2);
+    EXPECT_EQ(system_shape[0], 2);
+    EXPECT_EQ(system_shape[1], 4);
 }
 
 }  // namespace ttnn::distributed::test

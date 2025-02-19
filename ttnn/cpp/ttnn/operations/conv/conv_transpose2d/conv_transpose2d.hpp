@@ -16,12 +16,12 @@ using OutputHeight = uint32_t;
 using OutputWidth = uint32_t;
 using Result = std::tuple<ttnn::Tensor, OutputHeight, OutputWidth, ttnn::Tensor, std::optional<ttnn::Tensor>>;
 
-struct ConvTranpose2dOperation{
+struct ConvTranpose2dOperation {
     static Result invoke(
-        uint8_t queue_id,
+        QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& weight_tensor,
-        Device * device,
+        IDevice* device,
         uint32_t in_channels,
         uint32_t out_channels,
         uint32_t batch_size,
@@ -40,10 +40,10 @@ struct ConvTranpose2dOperation{
         bool mirror_kernel = true);
 
     static Result invoke(
-        uint8_t queue_id,
+        QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& weight_tensor,
-        MeshDevice * device,
+        MeshDevice* device,
         uint32_t in_channels,
         uint32_t out_channels,
         uint32_t batch_size,
@@ -66,6 +66,7 @@ struct ConvTranpose2dOperation{
 }  // namespace operations::conv
 }  // namespace ttnn
 
-namespace ttnn{
-    constexpr auto conv_transpose2d = ttnn::register_operation<"ttnn::conv_transpose2d", operations::conv::conv_transpose2d::ConvTranpose2dOperation>();
+namespace ttnn {
+constexpr auto conv_transpose2d =
+    ttnn::register_operation<"ttnn::conv_transpose2d", operations::conv::conv_transpose2d::ConvTranpose2dOperation>();
 }

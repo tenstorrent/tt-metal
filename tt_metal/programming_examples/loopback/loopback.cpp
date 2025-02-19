@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/device/device.hpp"
-#include "common/bfloat16.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/bfloat16.hpp>
 
 /*
  * 1. Host writes data to buffer in DRAM
@@ -27,7 +27,7 @@ int main(int argc, char** argv) {
          * Silicon accelerator setup
          */
         constexpr int device_id = 0;
-        Device* device = CreateDevice(device_id);
+        IDevice* device = CreateDevice(device_id);
 
         /*
          * Setup program and command queue to execute along with its buffers and kernels to use
