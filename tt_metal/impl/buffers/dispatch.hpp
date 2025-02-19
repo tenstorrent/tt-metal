@@ -28,26 +28,57 @@ struct BufferReadDispatchParams {
     uint32_t unpadded_dst_offset = 0;
     uint32_t pages_per_txn = 0;
     uint32_t address = 0;
+    uint32_t total_pages_to_read = 0;
+    uint32_t total_pages_read = 0;
+    uint32_t num_banks = 0;
 
     virtual ~BufferReadDispatchParams() = default;
 
-    void update_params_to_be_within_bounds(const Buffer& buffer) {
-        const uint32_t num_banks = this->device->allocator()->get_num_banks(buffer.buffer_type());
-        const uint32_t num_pages_per_bank = this->src_page_index / num_banks;
+    virtual void update_params_to_be_within_bounds(const Buffer& buffer) {
+        const uint32_t num_pages_per_bank = this->src_page_index / this->num_banks;
         this->address += num_pages_per_bank * this->padded_page_size;
-        this->src_page_index = this->src_page_index % num_banks;
+        this->src_page_index = this->src_page_index % this->num_banks;
+    }
+
+    virtual void calculate_num_pages_for_read_transaction() { this->pages_per_txn = this->total_pages_to_read; }
+
+    virtual void update_params_after_read_transaction() {
+        this->total_pages_to_read -= this->pages_per_txn;
+        this->total_pages_read += this->pages_per_txn;
+        this->src_page_index += this->pages_per_txn;
     }
 };
 
 struct PartialPageSpec {
     uint32_t unpadded_partial_page_size = 0;
-    uint32_t padded_partial_page_size = 0;
+    // uint32_t padded_partial_page_size = 0;
     uint32_t last_partial_page_additional_padding = 0;
     uint32_t num_partial_pages_per_full_page = 0;
 };
 
 struct BufferReadLargePageDispatchParams : BufferReadDispatchParams {
     PartialPageSpec partial_page_spec;
+
+    void update_params_to_be_within_bounds(const Buffer& buffer) override {
+        const uint32_t num_pages_per_bank = this->src_page_index / this->num_banks;
+        this->address += num_pages_per_bank * (this->partial_page_spec.num_partial_pages_per_full_page *
+                                               this->partial_page_spec.unpadded_partial_page_size);
+        this->src_page_index = this->src_page_index % this->num_banks;
+    }
+
+    // void calculate_num_pages_for_read_transaction() override {
+    //     this->pages_per_txn =
+    //         std::min(this->total_pages_to_read, this->num_banks - (this->src_page_index % this->num_banks));
+    // }
+
+    void update_params_after_read_transaction() override {
+        this->total_pages_to_read -= this->pages_per_txn;
+        this->total_pages_read += this->pages_per_txn;
+        this->address += ((this->src_page_index + this->pages_per_txn) / this->num_banks) *
+                         (this->partial_page_spec.num_partial_pages_per_full_page *
+                          this->partial_page_spec.unpadded_partial_page_size);
+        this->src_page_index = (this->src_page_index + this->pages_per_txn) % this->num_banks;
+    }
 };
 
 struct ShardedBufferReadDispatchParams : BufferReadDispatchParams {
@@ -55,7 +86,7 @@ struct ShardedBufferReadDispatchParams : BufferReadDispatchParams {
     uint32_t initial_pages_skipped = 0;
     uint32_t starting_src_host_page_index = 0;
     std::shared_ptr<const BufferPageMapping> buffer_page_mapping = nullptr;
-    uint32_t total_pages_to_read = 0;
+    // uint32_t total_pages_to_read = 0;
     uint32_t total_pages_read = 0;
     uint32_t max_pages_per_shard = 0;
     CoreCoord core;
