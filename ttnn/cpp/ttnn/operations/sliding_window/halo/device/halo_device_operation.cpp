@@ -115,8 +115,12 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
     for (uint32_t i = 0; i < repeat_factor; ++i) {
         remote_ref_counts_repeated.push_back(remote_ref_counts);
     }
-    auto remote_ref_counts_tensor = sliding_window::construct_on_host_config_tensor(
-        remote_ref_counts_repeated, this->config_, this->parallel_config_);
+    ttnn::Shape config_shape(
+        {(uint32_t)remote_ref_counts_repeated.size(), (uint32_t)remote_ref_counts_repeated[0].size()});
+    std::vector<uint16_t> config_vector = sliding_window::flatten(remote_ref_counts_repeated);
+    auto config_buffer = owned_buffer::create<uint16_t>(std::move(config_vector));
+    auto remote_ref_counts_tensor =
+        Tensor(OwnedStorage{config_buffer}, config_shape, DataType::UINT16, Layout::ROW_MAJOR);
 
     auto pad_config_device_tensor =
         sliding_window::move_config_tensor_to_device(pad_config_tensor, parallel_config_, is_block_sharded, device);
