@@ -18,6 +18,7 @@ tt::tt_metal::operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     const Tensor& local_config,
     const Tensor& remote_config,
     std::optional<std::reference_wrapper<const Tensor>> remote_ref_counts,
+    std::optional<std::reference_wrapper<const Tensor>> remote_temp,
     const bool remote_read,
     const bool transpose_mcast,
     Tensor& output_tensor,
