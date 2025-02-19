@@ -5,6 +5,7 @@
 #include "untilize_with_halo_v2_op.hpp"
 
 #include "ttnn/run_operation.hpp"
+#include <optional>
 #include <tt-metalium/work_split.hpp>
 #include "untilize_with_halo_v2_program_factory.hpp"
 
@@ -90,6 +91,7 @@ operation::ProgramWithCallbacks UntilizeWithHaloV2::create_program(
         padding_config,
         local_config,
         remote_config,
+        std::nullopt,
         std::nullopt,
         remote_read_,
         transpose_mcast_,

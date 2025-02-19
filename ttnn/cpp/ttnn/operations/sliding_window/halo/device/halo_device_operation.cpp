@@ -139,6 +139,8 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
         sliding_window::move_config_tensor_to_device(remote_config_tensor, parallel_config_, is_block_sharded, device);
     auto remote_ref_counts_device_tensor = sliding_window::move_config_tensor_to_device(
         remote_ref_counts_tensor, parallel_config_, is_block_sharded, device);
+    auto remote_temp_device_tensor =
+        sliding_window::move_config_tensor_to_device(remote_temp_tensor, parallel_config_, is_block_sharded, device);
 
     Program program = CreateProgram();
 
@@ -152,6 +154,7 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
         local_config_device_tensor,
         remote_config_device_tensor,
         std::optional<std::reference_wrapper<const Tensor>>(remote_ref_counts_device_tensor),
+        std::optional<std::reference_wrapper<const Tensor>>(remote_temp_device_tensor),
         remote_read_,
         transpose_mcast_,
         output_tensor,

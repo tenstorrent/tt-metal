@@ -9,6 +9,7 @@
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/math.hpp"
 #include <cstdint>
+#include <optional>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -30,6 +31,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     const Tensor& local_config,
     const Tensor& remote_config,
     std::optional<std::reference_wrapper<const Tensor>> remote_ref_counts,
+    std::optional<std::reference_wrapper<const Tensor>> remote_temp,
     const bool remote_read,
     const bool transpose_mcast,
     Tensor& output_tensor,
@@ -119,6 +121,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     uint32_t local_config_cb_id = tt::CBIndex::c_3;
     uint32_t remote_config_cb_id = tt::CBIndex::c_4;
     uint32_t remote_ref_counts_cb_id = remote_ref_counts.has_value() ? tt::CBIndex::c_5 : 0;
+    uint32_t remote_temp_cb_id = remote_temp.has_value() ? tt::CBIndex::c_6 : 0;
 
     tt::DataFormat kernel_config_df = tt::DataFormat::RawUInt16;  // NOTE: UInt16 is not supported for CB types
     uint32_t config_nbytes =
@@ -177,6 +180,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     uint32_t semaphore_id = 0;
     bool in_place = false;
     if (remote_ref_counts.has_value()) {
+        TT_ASSERT(remote_temp.has_value(), "remote_temp should be provided if remote_ref_counts is provided");
         in_place = true;
         auto remote_ref_counts_buffer = remote_ref_counts.value().get().device_buffer();
         auto remote_ref_counts_cb_config =
@@ -185,6 +189,13 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
                 .set_page_size(remote_ref_counts_cb_id, remote_ref_counts_buffer->page_size())
                 .set_globally_allocated_address(*remote_ref_counts_buffer);
         CBHandle remote_ref_counts_cb = CreateCircularBuffer(program, all_cores, remote_ref_counts_cb_config);
+
+        auto remote_temp_buffer = remote_temp.value().get().device_buffer();
+        auto remote_temp_cb_config =
+            CircularBufferConfig(remote_temp_buffer->size() / num_cores, {{remote_temp_cb_id, kernel_config_df}})
+                .set_page_size(remote_temp_cb_id, remote_temp_buffer->page_size())
+                .set_globally_allocated_address(*remote_temp_buffer);
+        CBHandle remote_temp_cb = CreateCircularBuffer(program, all_cores, remote_temp_cb_config);
 
         auto core_id_to_noc_coords = [is_block_sharded, transpose_mcast, device](uint32_t core_id) -> CoreCoord {
             auto num_cores_x = device->compute_with_storage_grid_size().x;
@@ -218,6 +229,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         0,  // local_config_cb_id
         0,  // remote_config_cb_id
         0,  // remote_ref_counts_cb_id
+        0,  // remote_temp_cb_id
         src_cb_id,
         input_to_writer_cb_id,
         out_cb_id,
@@ -240,6 +252,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     reader_ct_args[1] = local_config_cb_id;
     reader_ct_args[2] = 0;
     reader_ct_args[3] = remote_ref_counts_cb_id;
+    reader_ct_args[4] = 0;
 
     KernelHandle reader_kernel_id0 = CreateKernel(
         program,
@@ -252,6 +265,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     reader_ct_args[1] = 0;
     reader_ct_args[2] = remote_config_cb_id;
     reader_ct_args[3] = 0;
+    reader_ct_args[4] = remote_temp_cb_id;
 
     KernelHandle reader_kernel_id1 = CreateKernel(
         program,
