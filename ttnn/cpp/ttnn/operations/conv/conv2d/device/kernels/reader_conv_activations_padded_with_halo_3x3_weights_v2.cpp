@@ -153,4 +153,5 @@ void kernel_main() {
         start_reader_idx += act_block_h_datums_read;
 #endif
     }
+    noc_async_write_barrier();
 }
