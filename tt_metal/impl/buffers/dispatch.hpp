@@ -8,7 +8,6 @@
 #include <sub_device_types.hpp>
 #include <command_queue.hpp>
 #include "buffer.hpp"
-#include "device.hpp"
 #include "tt_metal/impl/event/dispatch.hpp"
 
 namespace tt::tt_metal {
@@ -163,7 +162,6 @@ struct ReadBufferDescriptor {
     uint32_t num_pages_read;
     uint32_t cur_dev_page_id;
     uint32_t starting_host_page_id;
-    buffer_dispatch::PartialPageSpec* partial_page;
 
     ReadBufferDescriptor(
         TensorMemoryLayout buffer_layout,
@@ -174,8 +172,7 @@ struct ReadBufferDescriptor {
         uint32_t num_pages_read,
         uint32_t cur_dev_page_id,
         uint32_t starting_host_page_id = 0,
-        const std::shared_ptr<const BufferPageMapping>& buffer_page_mapping = nullptr,
-        buffer_dispatch::PartialPageSpec* partial_page = nullptr) :
+        const std::shared_ptr<const BufferPageMapping>& buffer_page_mapping = nullptr) :
         buffer_layout(buffer_layout),
         page_size(page_size),
         padded_page_size(padded_page_size),
@@ -184,8 +181,7 @@ struct ReadBufferDescriptor {
         dst_offset(dst_offset),
         num_pages_read(num_pages_read),
         cur_dev_page_id(cur_dev_page_id),
-        starting_host_page_id(starting_host_page_id),
-        partial_page(partial_page) {}
+        starting_host_page_id(starting_host_page_id) {}
 };
 
 }  // namespace tt::tt_metal
