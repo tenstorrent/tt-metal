@@ -1168,3 +1168,14 @@ def test_transpose_high_rank(*, device: ttnn.Device, rank: int, indices, layout)
 
     assert torch.allclose(a, output_a)
     assert torch.allclose(b, output_b)
+
+
+def test_transpose_17912(device):
+    import torch, ttnn
+
+    x = ttnn.from_torch(torch.arange(0, 32 * 32).reshape(32, 32)).to(ttnn.TILE_LAYOUT).to(device)
+    with pytest.raises(
+        RuntimeError,
+        match="Uint32 is not a supported data type for LLK transpose",
+    ) as exception:
+        x = ttnn.transpose(x, 0, 1)
