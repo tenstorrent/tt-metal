@@ -227,7 +227,7 @@ struct WorkerToFabricEdmSenderImpl {
         noc_inline_dw_write(edm_connection_handshake_noc_addr, open_connection_value);
         noc_async_read_barrier();
 
-        this->edm_buffer_addr = this->edm_buffer_base_addr + (this->get_buffer_slot_index() * (this->buffer_size_bytes + sizeof(eth_channel_sync_t)));
+        this->edm_buffer_addr = this->edm_buffer_base_addr + (this->get_buffer_slot_index() * (this->buffer_size_bytes));
         ASSERT(*this->buffer_slot_wrptr_ptr < 20);
     }
 
@@ -301,7 +301,7 @@ private:
             *this->buffer_slot_wrptr_ptr =
                 !(wrptr == ((this->num_buffers_per_channel * 2) - 1)) ? wrptr + 1 : 0;
         }
-        this->edm_buffer_addr = this->edm_buffer_base_addr + (this->get_buffer_slot_index() * (this->buffer_size_bytes + sizeof(eth_channel_sync_t)));
+        this->edm_buffer_addr = this->edm_buffer_base_addr + (this->get_buffer_slot_index() * this->buffer_size_bytes);
     }
 
     FORCE_INLINE uint64_t compute_dest_buffer_slot_noc_addr() const {

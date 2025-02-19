@@ -52,7 +52,7 @@ class EthChannelBuffer final {
                                                // that can fit 2 eth_channel_syncs cfor ack
         uint8_t channel_id) :
         buffer_size_in_bytes(buffer_size_bytes),
-        max_eth_payload_size_in_bytes(buffer_size_in_bytes + sizeof(eth_channel_sync_t)),
+        max_eth_payload_size_in_bytes(buffer_size_in_bytes),
         channel_id(channel_id) {
         for (uint8_t i = 0; i < NUM_BUFFERS; i++) {
             this->buffer_addresses[i] =

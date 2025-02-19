@@ -136,7 +136,6 @@ struct FabricEriscDatamoverConfig {
         std::size_t channel_buffer_size_bytes, std::size_t sender_ratio_size, std::size_t receiver_ratio_size);
 
     std::size_t channel_buffer_size_bytes = 0;
-    std::size_t channel_buffer_size_bytes_with_channel_sync = 0;
     std::size_t sender_0_channel_size_bytes = 0;
     std::size_t sender_0_num_buffers = 0;
     std::size_t sender_1_channel_size_bytes = 0;
@@ -183,7 +182,8 @@ class FabricEriscDatamoverBuilder {
    public:
        static constexpr size_t default_firmware_context_switch_interval = 200000;
        // payload only, no header
-       static constexpr size_t default_packet_payload_size_bytes = 4096;
+       static constexpr size_t default_packet_payload_size_bytes =
+           1088 * 4;  // 4352 bytes to fit up to 4 bfp8 tiles per packet
 
        FabricEriscDatamoverBuilder(
            const CoreCoord& my_eth_core_logical,

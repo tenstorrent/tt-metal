@@ -65,7 +65,7 @@ auto forward_to_fabric_from_cb(
             .to_noc_unicast_write(tt::fabric::NocUnicastCommandHeader{noc0_dest_address}, (pages_to_send * page_size));
     }
 
-    uint64_t buffer_address = sender.edm_buffer_addr + (*sender.buffer_index_ptr * (sender.buffer_size_bytes + sizeof(eth_channel_sync_t)));
+    uint64_t buffer_address = sender.edm_buffer_addr + (*sender.buffer_index_ptr * sender.buffer_size_bytes);
     sender.send_payload_blocking_from_address(packet_addr, packet_size);
     noc_async_writes_flushed();
     // }

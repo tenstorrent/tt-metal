@@ -649,10 +649,23 @@ FORCE_INLINE bool run_sender_channel_step(
     // TODO: convert to loop to send multiple packets back to back (or support sending multiple packets in one shot)
     //       when moving to stream regs to manage rd/wr ptrs
     // TODO: update to be stream reg based. Initialize to space available and simply check for non-zero
+    //
+    // 4 insns - commonize across channels could save some cycles
     bool receiver_has_space_for_packet = outbound_to_receiver_channel_pointers.has_space_for_packet();
-    if (receiver_has_space_for_packet && !internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ)) {
+    // Remove a branch if evaluating eth_txq_is_busy outside of loop -
+    // - usually it should pass though at that point
+    // Should structure loop from most likely to least likely to fail
+    if (receiver_has_space_for_packet &&
+        // 3 insns
+        !internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ)
+
+        ) {
+        // 4 insns
         bool has_unsent_packet = local_sender_channel_worker_interface.has_unsent_payload();
+
         if (has_unsent_packet) {
+            // Changing to simple counter (outstanding packets) should let us simplify this
+            // 4 insns
             bool sender_backpressured_from_sender_side = !(local_sender_channel_worker_interface.local_rdptr.distance_behind(local_sender_channel_worker_interface.local_wrptr) < SENDER_NUM_BUFFERS);
             if (!sender_backpressured_from_sender_side) {
                 did_something = true;
@@ -670,8 +683,10 @@ FORCE_INLINE bool run_sender_channel_step(
             }
         }
     }
+    // -> Total of up to ~15 insns to decide if we can send packet (eats into budget)
 
     // Process COMPLETIONs from receiver
+    // 2 insns load, 1 for branch
     int32_t completions_since_last_check = get_ptr_val(to_sender_packets_completed_streams[sender_channel_index]);
     if (completions_since_last_check > 0) {
         auto& sender_rdptr = local_sender_channel_worker_interface.local_rdptr;
@@ -683,7 +698,10 @@ FORCE_INLINE bool run_sender_channel_step(
                 local_sender_channel_worker_interface.update_worker_copy_of_read_ptr(sender_rdptr.get_ptr());
             }
         }
-    }
+        if constexpr (!enable_first_level_ack) {
+            did_something = true;
+        }
+    } // 2 insns
 
     // Process ACKs from receiver
     // ACKs are processed second to avoid any sort of races. If we process acks second,
@@ -699,11 +717,9 @@ FORCE_INLINE bool run_sender_channel_step(
             increment_local_update_ptr_val(to_sender_packets_acked_streams[sender_channel_index], -acks_since_last_check);
         }
         did_something = did_something || (completions_since_last_check + acks_since_last_check) > 0;
-    } else {
-        did_something = did_something || (completions_since_last_check > 0);
     }
 
-
+    // 1 insn
     if (!channel_connection_established) {
         // Can get rid of one of these two checks if we duplicate the logic above here in the function
         // and depending on which of the two versions we are in (the connected version or disconnected version)
@@ -727,13 +743,16 @@ FORCE_INLINE bool run_sender_channel_step(
                 local_sender_channel_worker_interface.update_worker_copy_of_read_ptr(local_sender_channel_worker_interface.local_rdptr.get_ptr());
             }
         }
-    } else if (local_sender_channel_worker_interface.has_worker_teardown_request()) {
+    } else if (
+        // 4 insns
+        local_sender_channel_worker_interface.has_worker_teardown_request()) {
         did_something = true;
         channel_connection_established = false;
         local_sender_channel_worker_interface.teardown_connection(
             local_sender_channel_worker_interface.local_rdptr.get_ptr());
-    }
+    } // 5 insns total
 
+    // Total insns spent checking ~18 insns
     return did_something;
 };
 
@@ -765,10 +784,13 @@ FORCE_INLINE void run_receiver_channel_step(
             ack_ptr.increment();
         }
     } else {
+        // TODO: optimize away and use `pkts_received_since_last_check = get_ptr_val<to_receiver_pkts_sent_id>()`
+        // instead to check for unwritten_packets
         increment_local_update_ptr_val<to_receiver_pkts_sent_id>(-pkts_received_since_last_check);
         ack_ptr.increment_n(pkts_received_since_last_check);
-    }
+    } // 8 insns up to here for !enable_first_level_ack
 
+    // 3 insns incl branch
     auto &wr_sent_ptr = receiver_channel_pointers.wr_sent_ptr;
     bool unwritten_packets = !wr_sent_ptr.is_caught_up_to(ack_ptr);
     if (unwritten_packets) {
@@ -816,9 +838,12 @@ FORCE_INLINE void run_receiver_channel_step(
         auto &wr_flush_ptr = receiver_channel_pointers.wr_flush_ptr;
         // Currently unclear if it's better to loop here or not... Also unclear if merging these
         // two pointers is better or not... Seems to be maybe 5-10% better merged but need more data
+
+        // 4 insns for the branch condition
         if (!wr_flush_ptr.is_caught_up_to(wr_sent_ptr) && !internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ)) {
             auto receiver_buffer_index = wr_flush_ptr.get_buffer_index();
             bool next_trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
+            // 7 insns
             if (next_trid_flushed) {
                 auto &completion_ptr = receiver_channel_pointers.completion_ptr;
                 wr_flush_ptr.increment();
@@ -829,9 +854,10 @@ FORCE_INLINE void run_receiver_channel_step(
                     completion_ptr,
                     local_receiver_channel);
             }
-        }
-
+        } // 11 insns
     }
+
+    // TOTAL of ~22 insns
 };
 
 

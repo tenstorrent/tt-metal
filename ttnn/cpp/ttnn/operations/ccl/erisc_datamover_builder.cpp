@@ -43,7 +43,7 @@ namespace ttnn::ccl {
 //
 
 FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
-    std::size_t channel_buffer_size_bytes, std::size_t sender_ratio_size, std::size_t receiver_ratio_size) {
+    std::size_t preferred_channel_buffer_size_bytes, std::size_t sender_ratio_size, std::size_t receiver_ratio_size) {
     TT_FATAL(
         (receiver_completed_packet_header_cb_address % eth_word_l1_alignment == 0),
         "receiver_completed_packet_header_cb_address must be aligned to 16 bytes");
@@ -73,44 +73,103 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
         "receiver_completed_packet_header_cb_address must be aligned to 16 bytes");
 
     TT_FATAL(sender_channel_1_buffer_index_address != sender_channel_0_buffer_index_address, "FabricEriscDatamoverConfig was constructed with illegal buffer index address");
-    const size_t min_buffer_size = sizeof(tt::fabric::PacketHeader) + 2 * FabricEriscDatamoverConfig::eth_channel_sync_size;
-    TT_FATAL(channel_buffer_size_bytes >= min_buffer_size, "FabricEriscDatamoverConfig was constructed with `channel_buffer_size_bytes` argument set smaller than minimum size of {}", min_buffer_size);
+    const size_t min_buffer_size = sizeof(tt::fabric::PacketHeader) + FabricEriscDatamoverConfig::eth_channel_sync_size;
+    TT_FATAL(
+        preferred_channel_buffer_size_bytes >= min_buffer_size,
+        "FabricEriscDatamoverConfig was constructed with `preferred_channel_buffer_size_bytes` argument set smaller "
+        "than minimum size of {}",
+        min_buffer_size);
 
-    constexpr size_t default_pow2_num_sender_buffer_slots = 8;
-    constexpr size_t default_pow2_num_receiver_buffer_slots = 16;
+    // constexpr size_t default_pow2_num_sender_buffer_slots = 8;
+    // constexpr size_t default_pow2_num_receiver_buffer_slots = 16;
+    // See if we can thread in the constant from HAL
 
-    const std::size_t channel_buffer_size_with_channel_sync =
-        channel_buffer_size_bytes + sizeof(tt::fabric::PacketHeader); // + 16 // sizeof(tt::fabric::PacketHeader);
-
-    const size_t next_lowest_power_of_2_buffer_slot_count =
-
-        this->channel_buffer_size_bytes = channel_buffer_size_bytes;
-    this->channel_buffer_size_bytes_with_channel_sync = channel_buffer_size_with_channel_sync;
     const std::size_t total_ratio_count = 2 * sender_ratio_size + receiver_ratio_size;
 
-    this->sender_0_channel_size_bytes = tt::round_down(
-        (available_channel_buffering_space / total_ratio_count) * sender_ratio_size,
-        channel_buffer_size_with_channel_sync);
     if constexpr (FabricEriscDatamoverConfig::constrain_to_power_of_2_buffer_slot_counts) {
-        this->sender_0_num_buffers = default_pow2_num_sender_buffer_slots;
+        constexpr size_t min_desired_packet_payload_size_bytes = 1088 * 4;
+        constexpr size_t max_packet_payload_size_bytes = 8192;
+        constexpr size_t min_desired_packet_payload_size_bytes_with_header =
+            min_desired_packet_payload_size_bytes + sizeof(tt::fabric::PacketHeader);
+        constexpr size_t max_packet_payload_size_bytes_with_header =
+            max_packet_payload_size_bytes + sizeof(tt::fabric::PacketHeader);
+
+        auto round_down_to_power_of_2 = [](size_t x) {
+            TT_FATAL(
+                x > 0,
+                "Cannot compute next lowest power of 2 for 0. Internal error when setting up "
+                "FabricEriscDatamoverConfig");
+            size_t next_power_of_2 = 1;
+            while (x >= next_power_of_2) {
+                next_power_of_2 <<= 1;
+            }
+            return next_power_of_2 >> 1;
+        };
+
+        const size_t sender_channel_max_size_bytes =
+            (this->available_channel_buffering_space / total_ratio_count) * sender_ratio_size;
+        const size_t receiver_channel_max_size_bytes =
+            (this->available_channel_buffering_space / total_ratio_count) * receiver_ratio_size;
+
+        const size_t sender_channel_num_buffer_slots_non_pow2 =
+            sender_channel_max_size_bytes / min_desired_packet_payload_size_bytes_with_header;
+        const size_t receiver_channel_num_buffer_slots_non_pow2 =
+            receiver_channel_max_size_bytes / min_desired_packet_payload_size_bytes_with_header;
+        const size_t sender_channel_num_buffer_slots_pow2 =
+            round_down_to_power_of_2(sender_channel_num_buffer_slots_non_pow2);
+        const size_t receiver_channel_num_buffer_slots_pow2 =
+            round_down_to_power_of_2(receiver_channel_num_buffer_slots_non_pow2);
+
+        this->sender_0_num_buffers = sender_channel_num_buffer_slots_pow2;
+        this->sender_1_num_buffers = sender_channel_num_buffer_slots_pow2;
+        this->receiver_num_buffers = receiver_channel_num_buffer_slots_pow2;
+
+        this->sender_0_channel_size_bytes = sender_channel_max_size_bytes;
+        this->sender_1_channel_size_bytes = sender_channel_max_size_bytes;
+        this->receiver_channel_size_bytes = receiver_channel_max_size_bytes;
+
+        const size_t sender_0_buffer_slot_size_bytes = tt::round_down(
+            sender_channel_max_size_bytes / this->sender_0_num_buffers, sizeof(tt::fabric::PacketHeader));
+        const size_t sender_1_buffer_slot_size_bytes = tt::round_down(
+            sender_channel_max_size_bytes / this->sender_1_num_buffers, sizeof(tt::fabric::PacketHeader));
+        const size_t receiver_buffer_slot_size_bytes = tt::round_down(
+            receiver_channel_max_size_bytes / this->receiver_num_buffers, sizeof(tt::fabric::PacketHeader));
+
+        this->channel_buffer_size_bytes = std::min(
+            {sender_0_buffer_slot_size_bytes, sender_1_buffer_slot_size_bytes, receiver_buffer_slot_size_bytes});
+        this->sender_0_channel_size_bytes = this->channel_buffer_size_bytes * this->sender_0_num_buffers;
+        this->sender_1_channel_size_bytes = this->channel_buffer_size_bytes * this->sender_1_num_buffers;
+        this->receiver_channel_size_bytes = this->channel_buffer_size_bytes * this->receiver_num_buffers;
+
+        TT_FATAL(
+            this->sender_0_num_buffers == this->sender_1_num_buffers,
+            "Implementation expects sender_0_num_buffers and sender_1_num_buffers to be the same for now");
+        TT_FATAL(
+            this->sender_0_channel_size_bytes + this->sender_1_channel_size_bytes + this->receiver_channel_size_bytes <=
+                this->available_channel_buffering_space,
+            "Internal error - channel sizes exceed available space");
+        TT_FATAL(
+            this->channel_buffer_size_bytes >= min_desired_packet_payload_size_bytes_with_header,
+            "Error - couldn't produce a channel buffer slot of minimal size {} when setting up "
+            "FabricEriscDatamoverConfig. This indicates a bug in internal logic",
+            min_desired_packet_payload_size_bytes_with_header);
     } else {
-        this->sender_0_num_buffers = this->sender_0_channel_size_bytes / channel_buffer_size_with_channel_sync;
-    }
-    this->sender_1_channel_size_bytes = tt::round_down(
-        (available_channel_buffering_space / total_ratio_count) * sender_ratio_size,
-        channel_buffer_size_with_channel_sync);
-    if constexpr (FabricEriscDatamoverConfig::constrain_to_power_of_2_buffer_slot_counts) {
-        this->sender_1_num_buffers = default_pow2_num_sender_buffer_slots;
-    } else {
-        this->sender_1_num_buffers = this->sender_1_channel_size_bytes / channel_buffer_size_with_channel_sync;
-    }
-    this->receiver_channel_size_bytes = tt::round_down(
-        (available_channel_buffering_space / total_ratio_count) * receiver_ratio_size,
-        channel_buffer_size_with_channel_sync);
-    if constexpr (FabricEriscDatamoverConfig::constrain_to_power_of_2_buffer_slot_counts) {
-        this->receiver_num_buffers = default_pow2_num_receiver_buffer_slots;
-    } else {
-        this->receiver_num_buffers = this->receiver_channel_size_bytes / channel_buffer_size_with_channel_sync;
+        this->channel_buffer_size_bytes = preferred_channel_buffer_size_bytes;
+        this->sender_0_channel_size_bytes = tt::round_down(
+            (available_channel_buffering_space / total_ratio_count) * sender_ratio_size,
+            this->channel_buffer_size_bytes);
+        this->sender_0_num_buffers = this->sender_0_channel_size_bytes / this->channel_buffer_size_bytes;
+
+        this->sender_1_channel_size_bytes = tt::round_down(
+            (available_channel_buffering_space / total_ratio_count) * sender_ratio_size,
+            this->channel_buffer_size_bytes);
+
+        this->sender_1_num_buffers = this->sender_1_channel_size_bytes / this->channel_buffer_size_bytes;
+
+        this->receiver_channel_size_bytes = tt::round_down(
+            (available_channel_buffering_space / total_ratio_count) * receiver_ratio_size,
+            this->channel_buffer_size_bytes);
+        this->receiver_num_buffers = this->receiver_channel_size_bytes / this->channel_buffer_size_bytes;
     }
 
     this->sender_0_channel_base_address = buffer_region_start;
@@ -123,10 +182,37 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
 
     static constexpr size_t total_num_channels = 3; // sender0, sender1, receiver
     const size_t max_channel_buffer_size = (available_channel_buffering_space / total_num_channels) - FabricEriscDatamoverConfig::eth_channel_sync_size - sizeof(tt::fabric::PacketHeader);
-    TT_FATAL(channel_buffer_size_bytes <= max_channel_buffer_size, "Specified size of `channel_buffer_size_bytes` was too large. Maximum allowable size is {} B", max_channel_buffer_size);
+    TT_FATAL(
+        this->channel_buffer_size_bytes <= max_channel_buffer_size,
+        "Specified size of `channel_buffer_size_bytes` was too large. Maximum allowable size is {} B",
+        max_channel_buffer_size);
     TT_FATAL(this->sender_0_channel_size_bytes > 0, "Internal error when computing `sender_0_channel_size_bytes` which was computed to be size 0");
     TT_FATAL(this->sender_1_channel_size_bytes > 0, "Internal error when computing `sender_1_channel_size_bytes` which was computed to be size 0");
     TT_FATAL(this->receiver_channel_size_bytes > 0, "Internal error when computing `receiver_channel_size_bytes` which was computed to be size 0");
+    TT_FATAL(
+        this->receiver_channel_size_bytes % sizeof(tt::fabric::PacketHeader) == 0,
+        "Internal error - receiver_channel_size_bytes was computed to be not a multiple of "
+        "sizeof(tt::fabric::PacketHeader)");
+    TT_FATAL(
+        this->sender_0_channel_size_bytes % sizeof(tt::fabric::PacketHeader) == 0,
+        "Internal error - sender_0_channel_size_bytes was computed to be not a multiple of "
+        "sizeof(tt::fabric::PacketHeader)");
+    TT_FATAL(
+        this->sender_1_channel_size_bytes % sizeof(tt::fabric::PacketHeader) == 0,
+        "Internal error - sender_1_channel_size_bytes was computed to be not a multiple of "
+        "sizeof(tt::fabric::PacketHeader)");
+    TT_FATAL(
+        this->sender_0_channel_base_address % sizeof(tt::fabric::PacketHeader) == 0,
+        "Internal error - sender_0_channel_base_address was computed to be not a multiple of "
+        "sizeof(tt::fabric::PacketHeader)");
+    TT_FATAL(
+        this->sender_1_channel_base_address % sizeof(tt::fabric::PacketHeader) == 0,
+        "Internal error - sender_1_channel_base_address was computed to be not a multiple of "
+        "sizeof(tt::fabric::PacketHeader)");
+    TT_FATAL(
+        this->receiver_channel_base_address % sizeof(tt::fabric::PacketHeader) == 0,
+        "Internal error - receiver_channel_base_address was computed to be not a multiple of "
+        "sizeof(tt::fabric::PacketHeader)");
     TT_FATAL(
         this->sender_0_channel_size_bytes + this->sender_1_channel_size_bytes + this->receiver_channel_size_bytes <=
         this->available_channel_buffering_space, "Internal error when computing channel sizes. Total channel size exceeds available space");
