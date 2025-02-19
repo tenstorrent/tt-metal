@@ -115,7 +115,7 @@ struct InterleavedBufferWriteLargePageDispatchParams : InterleavedBufferWriteDis
         tt::stl::Span<const uint32_t> expected_num_workers_completed) :
         InterleavedBufferWriteDispatchParams(
             buffer, dst_page_index, total_pages_to_write, cq_id, expected_num_workers_completed) {
-        this->page_size_to_write = partial_page_spec.padded_partial_page_size;
+        this->page_size_to_write = partial_page_spec.unpadded_partial_page_size;
         this->data_size_per_page_size_to_write = partial_page_spec.unpadded_partial_page_size;
         this->full_pages_to_write = num_full_pages;
         this->full_page_size = full_page_size;
@@ -267,12 +267,12 @@ PartialPageSpec calculate_partial_page_spec(const Buffer& buffer) {
     // while (buffer.aligned_page_size() % partial_page.unpadded_partial_page_size != 0) {
     //     partial_page.unpadded_partial_page_size += 1;
     // }
-    partial_page_spec.padded_partial_page_size = partial_page_spec.unpadded_partial_page_size;
+    // partial_page_spec.padded_partial_page_size = partial_page_spec.unpadded_partial_page_size;
     const uint32_t pcie_alignment = hal.get_alignment(HalMemType::HOST);
     const uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
-    while (partial_page_spec.padded_partial_page_size % pcie_alignment != 0 ||
-           partial_page_spec.padded_partial_page_size % l1_alignment != 0) {
-        partial_page_spec.padded_partial_page_size += 1;
+    while (partial_page_spec.unpadded_partial_page_size % pcie_alignment != 0 ||
+           partial_page_spec.unpadded_partial_page_size % l1_alignment != 0) {
+        partial_page_spec.unpadded_partial_page_size += 1;
     }
     partial_page_spec.num_partial_pages_per_full_page =
         tt::div_up(buffer.aligned_page_size(), partial_page_spec.unpadded_partial_page_size);
@@ -312,10 +312,10 @@ std::unique_ptr<InterleavedBufferWriteDispatchParams> initialize_interleaved_buf
         // const uint32_t num_partial_pages_per_full_page = buffer.aligned_page_size() /
         // partial_page_spec.unpadded_partial_page_size;
         const uint32_t full_page_size =
-            partial_page_spec.num_partial_pages_per_full_page * partial_page_spec.padded_partial_page_size;
+            partial_page_spec.num_partial_pages_per_full_page * partial_page_spec.unpadded_partial_page_size;
         const uint32_t num_full_pages = total_pages_to_write;
-        const uint32_t padded_buffer_size = total_pages_to_write * full_page_size;
-        total_pages_to_write = tt::div_up(padded_buffer_size, partial_page_spec.padded_partial_page_size);
+        const uint32_t padded_buffer_size = total_pages_to_write * buffer.aligned_page_size();
+        total_pages_to_write = num_full_pages * partial_page_spec.num_partial_pages_per_full_page;
         dispatch_params = std::make_unique<InterleavedBufferWriteLargePageDispatchParams>(
             buffer,
             dst_page_index,
@@ -783,23 +783,31 @@ std::unique_ptr<BufferReadDispatchParams> initialize_interleaved_buf_read_dispat
     const bool read_large_pages = are_pages_large(buffer);
     if (read_large_pages) {
         dispatch_params = std::make_unique<BufferReadLargePageDispatchParams>();
-        BufferReadLargePageDispatchParams* large_page_dispatch_params =
-            dynamic_cast<BufferReadLargePageDispatchParams*>(dispatch_params.get());
-        const PartialPageSpec partial_page = calculate_partial_page_spec(buffer);
-        large_page_dispatch_params->partial_page_spec = partial_page;
-        large_page_dispatch_params->padded_page_size =
-            partial_page.num_partial_pages_per_full_page * partial_page.padded_partial_page_size;
     } else {
         dispatch_params = std::make_unique<BufferReadDispatchParams>();
-        dispatch_params->padded_page_size = buffer.aligned_page_size();
     }
-    dispatch_params->pages_per_txn = region.size / buffer.page_size();
+
+    dispatch_params->total_pages_to_read = region.size / buffer.page_size();
     dispatch_params->src_page_index = region.offset / buffer.page_size();
     dispatch_params->cq_id = cq_id;
     dispatch_params->device = buffer.device();
     dispatch_params->address = buffer.address();
     dispatch_params->unpadded_dst_offset = 0;
     dispatch_params->expected_num_workers_completed = expected_num_workers_completed;
+    dispatch_params->num_banks = buffer.device()->allocator()->get_num_banks(buffer.buffer_type());
+
+    if (read_large_pages) {
+        BufferReadLargePageDispatchParams* large_page_dispatch_params =
+            dynamic_cast<BufferReadLargePageDispatchParams*>(dispatch_params.get());
+        const PartialPageSpec partial_page_spec = calculate_partial_page_spec(buffer);
+        large_page_dispatch_params->partial_page_spec = partial_page_spec;
+        dispatch_params->padded_page_size =
+            partial_page_spec.unpadded_partial_page_size * partial_page_spec.num_partial_pages_per_full_page;
+        // large_page_dispatch_params->update_params_to_be_within_bounds(buffer);
+    } else {
+        dispatch_params->padded_page_size = buffer.aligned_page_size();
+    }
+
     return dispatch_params;
 }
 
@@ -939,14 +947,16 @@ void copy_interleaved_buffer_to_completion_queue(
     Buffer& buffer,
     tt::stl::Span<const SubDeviceId> sub_device_ids,
     CoreType dispatch_core_type) {
-    if (dispatch_params.pages_per_txn > 0) {
+    if (dispatch_params.total_pages_to_read > 0) {
         // Only 8 bits are assigned for the page offset in CQPrefetchRelayPagedCmd
         // To handle larger page offsets move bank base address up and update page offset to be relative to the new
         // bank address
         if (dispatch_params.src_page_index > CQ_PREFETCH_RELAY_PAGED_START_PAGE_MASK) {
             dispatch_params.update_params_to_be_within_bounds(buffer);
         }
+        dispatch_params.calculate_num_pages_for_read_transaction();
         issue_read_buffer_dispatch_command_sequence(buffer, dispatch_params, sub_device_ids, dispatch_core_type);
+        dispatch_params.update_params_after_read_transaction();
     }
 }
 
@@ -964,7 +974,7 @@ std::shared_ptr<tt::tt_metal::CompletionReaderVariant> generate_sharded_buffer_r
         dispatch_params.padded_page_size,
         dst,
         dispatch_params.unpadded_dst_offset,
-        dispatch_params.pages_per_txn,
+        dispatch_params.total_pages_read,
         initial_src_page_index,
         dispatch_params.starting_src_host_page_index,
         dispatch_params.buffer_page_mapping);
@@ -983,11 +993,11 @@ std::shared_ptr<tt::tt_metal::CompletionReaderVariant> generate_interleaved_buff
         dispatch_params->padded_page_size,
         dst,
         dispatch_params->unpadded_dst_offset,
-        dispatch_params->pages_per_txn,
+        dispatch_params->total_pages_read,
         dispatch_params->src_page_index,
         0,
         nullptr,
-        partial_page_spec);
+        nullptr);
 }
 
 void copy_completion_queue_data_into_user_space(
@@ -1046,6 +1056,9 @@ void copy_completion_queue_data_into_user_space(
         if (buffer_page_mapping == nullptr) {
             void* contiguous_dst = (void*)(uint64_t(dst) + contig_dst_offset);
             if (page_size == padded_page_size) {
+                // if (!partial_page_spec) {
+
+                // }
                 uint32_t data_bytes_xfered = bytes_xfered - offset_in_completion_q_data;
                 tt::Cluster::instance().read_sysmem(
                     contiguous_dst,
@@ -1072,7 +1085,7 @@ void copy_completion_queue_data_into_user_space(
                     }
 
                     const uint32_t padded_page_size_to_read =
-                        partial_page_spec ? partial_page_spec->padded_partial_page_size : padded_page_size;
+                        partial_page_spec ? partial_page_spec->unpadded_partial_page_size : padded_page_size;
 
                     pad_size_bytes = partial_page_spec ? padded_page_size_to_read - page_size_to_read : pad_size_bytes;
                     // if (partial_page_spec &&
