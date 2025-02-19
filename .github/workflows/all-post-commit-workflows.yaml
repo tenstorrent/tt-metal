@@ -55,6 +55,8 @@ jobs:
     uses: ./.github/workflows/_test-wheels-impl.yaml
     with:
       from-precompiled: true
+      arch: wormhole_b0
+      docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
     secrets: inherit
   # Slow Dispatch Unit Tests
   sd-unit-tests:
