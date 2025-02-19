@@ -112,7 +112,7 @@ std::vector<std::vector<uint16_t>> generate_sliding_window_op_config(
     const std::vector<std::pair<uint32_pair_t, uint32_pair_t>>& shard_boundaries,
     bool pad_tile = false,
     bool pad_cores = false);
-std::vector<uint16_t> flatten(const std::vector<std::vector<uint16_t>>& input);
+std::vector<uint16_t> flatten(const std::vector<std::vector<uint16_t>>& input, uint32_t extend_with_zeroes = 0);
 Tensor construct_on_host_config_tensor(
     const std::vector<std::vector<uint16_t>>& config,
     const SlidingWindowConfig& sw_config,
