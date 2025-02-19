@@ -77,6 +77,7 @@ def run_fabric_edm(num_mcasts, num_unicasts, num_links, num_op_invocations, line
 
     bandwidth = profile_results(num_mcasts, num_unicasts, packet_size)
     logger.info("bandwidth: {} B/c", bandwidth)
+    assert expected_bw - 0.2 <= bandwidth <= expected_bw + 0.2
 
 
 @pytest.mark.skipif(is_grayskull(), reason="Unsupported on GS")
@@ -88,7 +89,7 @@ def run_fabric_edm(num_mcasts, num_unicasts, num_links, num_op_invocations, line
 @pytest.mark.parametrize("packet_size", [4096])
 @pytest.mark.parametrize(
     "expected_bw",
-    [5.5],
+    [5.0],
 )
 def test_fabric_edm_bw(num_mcasts, num_unicasts, num_links, num_op_invocations, line_sync, packet_size, expected_bw):
     run_fabric_edm(
