@@ -15,11 +15,9 @@
 
 using namespace tt::tt_fabric;
 
-constexpr ProgrammableCoreType fd_core_type = static_cast<ProgrammableCoreType>(FD_CORE_TYPE);
-
-const uint32_t SYNC_BUF_SIZE = 16;  // must be 2^N
-const uint32_t SYNC_BUF_SIZE_MASK = (SYNC_BUF_SIZE - 1);
-const uint32_t SYNC_BUF_PTR_MASK = ((SYNC_BUF_SIZE << 1) - 1);
+constexpr uint32_t SYNC_BUF_SIZE = 16;  // must be 2^N
+constexpr uint32_t SYNC_BUF_SIZE_MASK = (SYNC_BUF_SIZE - 1);
+constexpr uint32_t SYNC_BUF_PTR_MASK = ((SYNC_BUF_SIZE << 1) - 1);
 
 extern uint64_t xy_local_addr;
 extern volatile local_pull_request_t* local_pull_request;
