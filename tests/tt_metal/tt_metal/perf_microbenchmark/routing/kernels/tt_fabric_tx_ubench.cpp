@@ -63,9 +63,9 @@ constexpr uint32_t w_depth = get_compile_time_arg_val(25);
 constexpr uint32_t n_depth = get_compile_time_arg_val(26);
 constexpr uint32_t s_depth = get_compile_time_arg_val(27);
 
-volatile fabric_client_interface_t* client_interface;
+volatile tt_l1_ptr fabric_client_interface_t* client_interface =
+    (volatile tt_l1_ptr fabric_client_interface_t*)client_interface_addr;
 
-uint64_t xy_local_addr;
 uint32_t target_address;
 uint32_t noc_offset;
 uint32_t controller_noc_offset;
@@ -136,7 +136,7 @@ void kernel_main() {
     }
 
     // initalize client
-    fabric_endpoint_init(client_interface_addr, outbound_eth_chan);
+    fabric_endpoint_init(client_interface, outbound_eth_chan);
 
     // notify the controller kernel that this worker is ready to proceed
     notify_traffic_controller();
@@ -147,6 +147,7 @@ void kernel_main() {
     while (*(volatile tt_l1_ptr uint32_t*)signal_address == 0);
 
     fabric_setup_pull_request(
+        client_interface,           // fabric client interface
         data_buffer_start_addr,     // source address in sender’s memory
         max_packet_size_words * 16  // number of bytes to write to remote destination
     );
@@ -157,6 +158,7 @@ void kernel_main() {
         client_interface->local_pull_request.pull_request.words_read = 0;
         if constexpr (mcast_data) {
             fabric_async_write_multicast<ASYNC_WR_SEND>(
+                client_interface,
                 0,                       // the network plane to use for this transaction
                 data_buffer_start_addr,  // source address in sender’s memory
                 dest_device >> 16,
@@ -169,6 +171,7 @@ void kernel_main() {
                 s_depth);
         } else {
             fabric_async_write<ASYNC_WR_SEND>(
+                client_interface,
                 0,                       // the network plane to use for this transaction
                 data_buffer_start_addr,  // source address in sender’s memory
                 dest_device >> 16,

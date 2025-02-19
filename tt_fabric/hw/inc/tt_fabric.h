@@ -15,11 +15,9 @@
 
 using namespace tt::tt_fabric;
 
-constexpr ProgrammableCoreType fd_core_type = static_cast<ProgrammableCoreType>(FD_CORE_TYPE);
-
-const uint32_t SYNC_BUF_SIZE = 16;  // must be 2^N
-const uint32_t SYNC_BUF_SIZE_MASK = (SYNC_BUF_SIZE - 1);
-const uint32_t SYNC_BUF_PTR_MASK = ((SYNC_BUF_SIZE << 1) - 1);
+constexpr uint32_t SYNC_BUF_SIZE = 16;  // must be 2^N
+constexpr uint32_t SYNC_BUF_SIZE_MASK = (SYNC_BUF_SIZE - 1);
+constexpr uint32_t SYNC_BUF_PTR_MASK = ((SYNC_BUF_SIZE << 1) - 1);
 
 extern uint64_t xy_local_addr;
 extern volatile local_pull_request_t* local_pull_request;
@@ -1593,9 +1591,4 @@ inline uint64_t tt_fabric_send_pull_request(uint64_t dest_addr, volatile local_p
     return words_written_addr;
 }
 
-inline void tt_fabric_init() {
-    uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(noc_index, 0, NOC_CFG(NOC_ID_LOGICAL));
-    uint32_t my_x = noc_id_reg & NOC_NODE_ID_MASK;
-    uint32_t my_y = (noc_id_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
-    xy_local_addr = NOC_XY_ADDR(my_x, my_y, 0);
-}
+inline void tt_fabric_init() { xy_local_addr = get_noc_addr(0); }
