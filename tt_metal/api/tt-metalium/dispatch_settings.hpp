@@ -126,10 +126,10 @@ public:
     static constexpr uint32_t EVENT_PADDED_SIZE = 16;
 
     // When page size of buffer to write/read exceeds the max prefetch command size, the PCIe-aligned page size is
-    // broken down into equal sized partial pages. UNPADDED_PARTIAL_PAGE_SIZE denotes the unpadded partial page size to
-    // use. The size of the padded partial page is the smallest value >= UNPADDED_PARTIAL_PAGE_SIZE that is
-    // PCIE-aligned.
-    static constexpr uint32_t UNPADDED_PARTIAL_PAGE_SIZE = 3044;
+    // broken down into equal sized partial pages. BASE_PARTIAL_PAGE_SIZE is incremented until the partial page size
+    // is PCIE-aligned. If the resulting partial page size doesn't evenly divide the full page size, the last partial
+    // page size is padded appropriately.
+    static constexpr uint32_t BASE_PARTIAL_PAGE_SIZE = 4096;
 
     static constexpr uint32_t MAX_HUGEPAGE_SIZE = 1 << 30;                                        // 1GB
     static constexpr uint32_t MAX_DEV_CHANNEL_SIZE = 1 << 28;                                     // 256 MB;
