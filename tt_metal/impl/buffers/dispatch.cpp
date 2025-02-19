@@ -42,7 +42,7 @@ struct BufferWriteDispatchParams {
 // Parameters specific to interleaved buffers
 struct InterleavedBufferWriteDispatchParams : BufferWriteDispatchParams {
     uint32_t num_banks = 0;
-    uint32_t data_size_per_page_size_to_write = 0;
+    uint32_t data_size_to_copy = 0;
     const Buffer& buffer;
 
     InterleavedBufferWriteDispatchParams(
@@ -56,7 +56,7 @@ struct InterleavedBufferWriteDispatchParams : BufferWriteDispatchParams {
         this->address = buffer.address();
         this->dst_page_index = dst_page_index;
         this->page_size_to_write = buffer.aligned_page_size();
-        this->data_size_per_page_size_to_write = buffer.page_size();
+        this->data_size_to_copy = buffer.page_size();
         this->total_pages_to_write = total_pages_to_write;
         this->device = buffer.device();
         this->cq_id = cq_id;
@@ -113,7 +113,7 @@ struct InterleavedBufferWriteLargePageDispatchParams : InterleavedBufferWriteDis
         InterleavedBufferWriteDispatchParams(
             buffer, dst_page_index, total_pages_to_write, cq_id, expected_num_workers_completed) {
         this->page_size_to_write = partial_page_spec.partial_page_size;
-        this->data_size_per_page_size_to_write = partial_page_spec.partial_page_size;
+        this->data_size_to_copy = partial_page_spec.partial_page_size;
         this->full_pages_to_write = num_full_pages;
         this->full_page_size = full_page_size;
         this->num_partial_pages_in_single_full_page = partial_page_spec.num_partial_pages_per_full_page;
@@ -352,7 +352,7 @@ void populate_interleaved_buffer_write_dispatch_cmds(
         uint32_t num_partial_pages_written_curr_txn = 0;
         for (uint32_t sysmem_address_offset = 0; sysmem_address_offset < data_size_bytes;
              sysmem_address_offset += dispatch_params.page_size_to_write) {
-            uint32_t page_size_to_copy = dispatch_params.data_size_per_page_size_to_write;
+            uint32_t page_size_to_copy = dispatch_params.data_size_to_copy;
             uint32_t src_address_offset = num_full_pages_written * buffer.page_size() +
                                           num_partial_pages_written_per_current_full_page * page_size_to_copy +
                                           num_partial_pages_written_curr_txn * buffer.page_size();
@@ -373,9 +373,9 @@ void populate_interleaved_buffer_write_dispatch_cmds(
                  sysmem_address_offset += dispatch_params.page_size_to_write) {
                 command_sequence.add_data(
                     (char*)src + src_address_offset,
-                    dispatch_params.data_size_per_page_size_to_write,
+                    dispatch_params.data_size_to_copy,
                     dispatch_params.page_size_to_write);
-                src_address_offset += dispatch_params.data_size_per_page_size_to_write;
+                src_address_offset += dispatch_params.data_size_to_copy;
             }
         } else {
             command_sequence.add_data((char*)src + src_address_offset, data_size_bytes, data_size_bytes);
@@ -966,10 +966,6 @@ std::shared_ptr<tt::tt_metal::CompletionReaderVariant> generate_sharded_buffer_r
 
 std::shared_ptr<tt::tt_metal::CompletionReaderVariant> generate_interleaved_buffer_read_descriptor(
     void* dst, BufferReadDispatchParams* dispatch_params, Buffer& buffer) {
-    BufferReadLargePageDispatchParams* large_page_dispatch_params =
-        dynamic_cast<BufferReadLargePageDispatchParams*>(dispatch_params);
-    PartialPageSpec* partial_page_spec =
-        large_page_dispatch_params ? &(large_page_dispatch_params->partial_page_spec) : nullptr;
     return std::make_shared<tt::tt_metal::CompletionReaderVariant>(
         std::in_place_type<tt::tt_metal::ReadBufferDescriptor>,
         buffer.buffer_layout(),
