@@ -50,10 +50,6 @@ jobs:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
       fail-fast: false
-    env:
-      ARCH_NAME: ${{ inputs.arch }}
-      LOGURU_LEVEL: INFO
-      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
     runs-on:
       - ${{ inputs.runner-label }}
       - cloud-virtual-machine
@@ -67,6 +63,12 @@ jobs:
         LD_LIBRARY_PATH: /work/build/lib
         ARCH_NAME: ${{ inputs.arch }}
         LOGURU_LEVEL: INFO
+        PROFILER_SCRIPTS_ROOT: /work/tt_metal/tools/profiler
+        PROFILER_TEST_SCRIPTS_ROOT: /work/tests/tt_metal/tools/profiler
+        PROFILER_ARTIFACTS_DIR: /work/generated/profiler
+        PROFILER_OUTPUT_DIR: /work/generated/profiler/reports
+        TTNN_CONFIG_OVERRIDES: '{"enable_fast_runtime_mode": false}'
+        TT_METAL_DEVICE_PROFILER: 1
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
@@ -101,7 +103,14 @@ jobs:
       - name: Run profiler regression tests
         timeout-minutes: ${{ inputs.timeout }}
         run: |
-          ./tests/scripts/run_profiler_regressions.sh
+          mkdir -p generated/profiler
+          pytest tests/tt_metal/tools/profiler/test_device_profiler.py
+          rm -rf generated/profiler || true
+          mkdir -p generated/profiler
+          tt_metal/tools/profiler/profile_this.py -c 'pytest tests/tt_eager/python_api_testing/sweep_tests/pytests/tt_dnn/test_matmul.py::test_run_matmul_test[BFLOAT16-input_shapes0]'
+          ls generated/profiler/reports/
+          cat generated/profiler/reports/*/ops_perf_results_*.csv
+          rm -rf generated/profiler || true
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
         with:
