@@ -5,15 +5,12 @@
 #pragma once
 
 #include "risc_attribs.h"
-#include <hostdevcommon/common_values.hpp>
 #include "dataflow_api.h"
 #include "noc_overlay_parameters.h"
 #include "ethernet/dataflow_api.h"
 #include "tt_fabric_interface.h"
 
-using namespace tt::tt_fabric;
-
-extern volatile fabric_client_interface_t* client_interface;
+namespace tt::tt_fabric {
 
 #define ASYNC_WR_ADD_PR 1
 #define ASYNC_WR_SEND 2
@@ -25,7 +22,11 @@ enum RoutingType : uint8_t {
     ROUTER_XY,
 };
 
-inline uint32_t get_next_hop_router_noc_xy(uint32_t routing_plane, uint32_t dst_mesh_id, uint32_t dst_dev_id) {
+inline uint32_t get_next_hop_router_noc_xy(
+    volatile tt_l1_ptr fabric_client_interface_t* client_interface,
+    uint32_t routing_plane,
+    uint32_t dst_mesh_id,
+    uint32_t dst_dev_id) {
     ASSERT(routing_plane < client_interface->num_routing_planes);
     fabric_router_l1_config_t* routing_table = (fabric_router_l1_config_t*)client_interface->routing_tables_l1_offset;
     if (dst_mesh_id != routing_table[routing_plane].my_mesh_id) {
@@ -37,8 +38,12 @@ inline uint32_t get_next_hop_router_noc_xy(uint32_t routing_plane, uint32_t dst_
     }
 }
 
-inline void fabric_setup_pull_request(uint32_t src_addr, uint32_t size) {
+inline void fabric_setup_pull_request(
+    volatile tt_l1_ptr fabric_client_interface_t* client_interface, uint32_t src_addr, uint32_t size) {
     uint32_t size_in_words = (size + PACKET_WORD_SIZE_BYTES - 1) >> 4;
+    // TODO: Could return this value to the user and take this as an arg to avoid repeated lookup
+    // Added here to avoid user having to declare globals
+    uint64_t xy_local_addr = get_noc_addr(0);
     client_interface->local_pull_request.pull_request.wr_ptr = size_in_words;
     client_interface->local_pull_request.pull_request.rd_ptr = 0;
     client_interface->local_pull_request.pull_request.size = size;
@@ -52,10 +57,14 @@ inline void fabric_setup_pull_request(uint32_t src_addr, uint32_t size) {
 }
 
 template <RoutingType routing_type = RoutingType::ROUTING_TABLE>
-inline void fabric_send_pull_request(uint32_t routing, uint16_t dst_mesh_id, uint16_t dst_dev_id) {
+inline void fabric_send_pull_request(
+    volatile tt_l1_ptr fabric_client_interface_t* client_interface,
+    uint32_t routing,
+    uint16_t dst_mesh_id,
+    uint16_t dst_dev_id) {
     uint64_t router_addr;
     if constexpr (routing_type == RoutingType::ROUTING_TABLE) {
-        router_addr = ((uint64_t)get_next_hop_router_noc_xy(routing, dst_mesh_id, dst_dev_id) << 32) |
+        router_addr = ((uint64_t)get_next_hop_router_noc_xy(client_interface, routing, dst_mesh_id, dst_dev_id) << 32) |
                       FABRIC_ROUTER_REQ_QUEUE_START;
     } else {
         router_addr = get_noc_addr_helper(routing, FABRIC_ROUTER_REQ_QUEUE_START);
@@ -63,7 +72,8 @@ inline void fabric_send_pull_request(uint32_t routing, uint16_t dst_mesh_id, uin
     tt_fabric_send_pull_request(router_addr, (volatile local_pull_request_t*)&client_interface->local_pull_request);
 }
 
-FORCE_INLINE void fabric_wait_for_pull_request_words_flushed(uint32_t words) {
+FORCE_INLINE void fabric_wait_for_pull_request_words_flushed(
+    volatile tt_l1_ptr fabric_client_interface_t* client_interface, uint32_t words) {
     while (client_interface->local_pull_request.pull_request.words_read < words) {
 #pragma GCC unroll 4
         for (int i = 0; i < 4; i++) {
@@ -72,14 +82,15 @@ FORCE_INLINE void fabric_wait_for_pull_request_words_flushed(uint32_t words) {
     }
 }
 
-inline void fabric_wait_for_pull_request_bytes_flushed(uint32_t size) {
+inline void fabric_wait_for_pull_request_bytes_flushed(
+    volatile tt_l1_ptr fabric_client_interface_t* client_interface, uint32_t size) {
     uint32_t size_in_words = (size + PACKET_WORD_SIZE_BYTES - 1) >> 4;
-    fabric_wait_for_pull_request_words_flushed(size_in_words);
+    fabric_wait_for_pull_request_words_flushed(client_interface, size_in_words);
 }
 
-inline void fabric_wait_for_pull_request_flushed() {
+inline void fabric_wait_for_pull_request_flushed(volatile tt_l1_ptr fabric_client_interface_t* client_interface) {
     uint32_t words_written = client_interface->local_pull_request.pull_request.words_written;
-    fabric_wait_for_pull_request_words_flushed(words_written);
+    fabric_wait_for_pull_request_words_flushed(client_interface, words_written);
 }
 
 inline void fabric_async_write_add_header(
@@ -104,6 +115,7 @@ inline void fabric_async_write_add_header(
 // Packet is at src_addr in sender L1.
 template <uint8_t mode = ASYNC_WR_ALL, RoutingType routing_type = RoutingType::ROUTING_TABLE>
 inline void fabric_async_write(
+    volatile tt_l1_ptr fabric_client_interface_t* client_interface,
     uint32_t routing,   // the network plane to use for this transaction
     uint32_t src_addr,  // source address in sender’s memory
     uint16_t dst_mesh_id,
@@ -116,11 +128,11 @@ inline void fabric_async_write(
     }
 
     if constexpr (mode & ASYNC_WR_ADD_PR) {
-        fabric_setup_pull_request(src_addr, size);
+        fabric_setup_pull_request(client_interface, src_addr, size);
     }
 
     if constexpr (mode & ASYNC_WR_SEND) {
-        fabric_send_pull_request<routing_type>(routing, dst_mesh_id, dst_dev_id);
+        fabric_send_pull_request<routing_type>(client_interface, routing, dst_mesh_id, dst_dev_id);
     }
 }
 
@@ -152,6 +164,7 @@ inline void fabric_async_write_multicast_add_header(
 // Packet is at src_addr in sender L1.
 template <uint8_t mode = ASYNC_WR_ALL, RoutingType routing_type = RoutingType::ROUTING_TABLE>
 inline void fabric_async_write_multicast(
+    volatile tt_l1_ptr fabric_client_interface_t* client_interface,
     uint32_t routing_plane,  // the network plane to use for this transaction
     uint32_t src_addr,       // source address in sender’s memory
     uint16_t dst_mesh_id,
@@ -168,11 +181,11 @@ inline void fabric_async_write_multicast(
     }
 
     if constexpr (mode & ASYNC_WR_ADD_PR) {
-        fabric_setup_pull_request(src_addr, size);
+        fabric_setup_pull_request(client_interface, src_addr, size);
     }
 
     if constexpr (mode & ASYNC_WR_SEND) {
-        fabric_send_pull_request<routing_type>(routing_plane, dst_mesh_id, dst_dev_id);
+        fabric_send_pull_request<routing_type>(client_interface, routing_plane, dst_mesh_id, dst_dev_id);
     }
 }
 
@@ -200,6 +213,7 @@ inline void fabric_atomic_inc_add_header(
 // Packet is at src_addr in sender L1.
 template <uint8_t mode = ASYNC_WR_ALL, RoutingType routing_type = RoutingType::ROUTING_TABLE>
 inline void fabric_atomic_inc(
+    volatile tt_l1_ptr fabric_client_interface_t* client_interface,
     uint32_t routing,   // the network plane to use for this transaction
     uint32_t src_addr,  // source address in sender’s memory
     uint16_t dst_mesh_id,
@@ -212,11 +226,11 @@ inline void fabric_atomic_inc(
     }
 
     if constexpr (mode & ASYNC_WR_ADD_PR) {
-        fabric_setup_pull_request(src_addr, PACKET_HEADER_SIZE_BYTES);
+        fabric_setup_pull_request(client_interface, src_addr, PACKET_HEADER_SIZE_BYTES);
     }
 
     if constexpr (mode & ASYNC_WR_SEND) {
-        fabric_send_pull_request<routing_type>(routing, dst_mesh_id, dst_dev_id);
+        fabric_send_pull_request<routing_type>(client_interface, routing, dst_mesh_id, dst_dev_id);
     }
 }
 
@@ -246,6 +260,7 @@ inline void fabric_async_write_atomic_inc_add_header(
 // Packet is at src_addr in sender L1.
 template <uint8_t mode = ASYNC_WR_ALL, RoutingType routing_type = RoutingType::ROUTING_TABLE>
 inline void fabric_async_write_atomic_inc(
+    volatile tt_l1_ptr fabric_client_interface_t* client_interface,
     uint32_t routing,   // the network plane to use for this transaction
     uint32_t src_addr,  // source address in sender’s memory
     uint16_t dst_mesh_id,
@@ -260,15 +275,15 @@ inline void fabric_async_write_atomic_inc(
     }
 
     if constexpr (mode & ASYNC_WR_ADD_PR) {
-        fabric_setup_pull_request(src_addr, size);
+        fabric_setup_pull_request(client_interface, src_addr, size);
     }
 
     if constexpr (mode & ASYNC_WR_SEND) {
-        fabric_send_pull_request<routing_type>(routing, dst_mesh_id, dst_dev_id);
+        fabric_send_pull_request<routing_type>(client_interface, routing, dst_mesh_id, dst_dev_id);
     }
 }
 
-inline void send_message_to_gk() {
+inline void send_message_to_gk(volatile tt_l1_ptr fabric_client_interface_t* client_interface) {
     uint64_t gk_noc_base = client_interface->gk_msg_buf_addr;
     uint64_t noc_addr = gk_noc_base + offsetof(ctrl_chan_msg_buf, wrptr);
     noc_fast_atomic_increment<DM_DYNAMIC_NOC>(
@@ -298,6 +313,7 @@ inline void send_message_to_gk() {
 }
 
 inline socket_handle_t* fabric_socket_open(
+    volatile tt_l1_ptr fabric_client_interface_t* client_interface,
     uint32_t routing_plane,   // the network plane to use for this socket
     uint16_t epoch_id,        // Temporal epoch for which the socket is being opened
     uint16_t socket_id,       // Socket Id to open
@@ -324,7 +340,7 @@ inline socket_handle_t* fabric_socket_open(
     client_interface->gk_message.packet_header.session.command = SOCKET_OPEN;
     client_interface->gk_message.packet_header.session.target_offset_h = client_interface->pull_req_buf_addr >> 32;
     client_interface->gk_message.packet_header.session.target_offset_l = (uint32_t)client_interface->pull_req_buf_addr;
-    client_interface->gk_message.packet_header.session.ack_offset_h = xy_local_addr >> 32;
+    client_interface->gk_message.packet_header.session.ack_offset_h = NOC_XY_ENCODING(my_x[noc_index], my_y[noc_index]);
     client_interface->gk_message.packet_header.session.ack_offset_l = (uint32_t)socket_handle;
     client_interface->gk_message.packet_header.packet_parameters.socket_parameters.socket_id = socket_id;
     client_interface->gk_message.packet_header.packet_parameters.socket_parameters.epoch_id = epoch_id;
@@ -332,11 +348,12 @@ inline socket_handle_t* fabric_socket_open(
     client_interface->gk_message.packet_header.packet_parameters.socket_parameters.socket_direction = direction;
     client_interface->gk_message.packet_header.packet_parameters.socket_parameters.routing_plane = routing_plane;
     tt_fabric_add_header_checksum((packet_header_t*)&client_interface->gk_message.packet_header);
-    send_message_to_gk();
+    send_message_to_gk(client_interface);
     return socket_handle;
 }
 
-inline void fabric_socket_close(socket_handle_t* socket_handle) {
+inline void fabric_socket_close(
+    volatile tt_l1_ptr fabric_client_interface_t* client_interface, socket_handle_t* socket_handle) {
     packet_header_t* packet_header = (packet_header_t*)&client_interface->gk_message.packet_header;
     uint32_t dst_mesh_id = socket_handle->rcvr_mesh_id;
     uint32_t dst_dev_id = socket_handle->rcvr_dev_id;
@@ -355,7 +372,8 @@ inline void fabric_socket_close(socket_handle_t* socket_handle) {
         dst[i] = src[i];
     }
     uint64_t dest_addr =
-        ((uint64_t)get_next_hop_router_noc_xy(socket_handle->routing_plane, dst_mesh_id, dst_dev_id) << 32) |
+        ((uint64_t)get_next_hop_router_noc_xy(client_interface, socket_handle->routing_plane, dst_mesh_id, dst_dev_id)
+         << 32) |
         FABRIC_ROUTER_REQ_QUEUE_START;
     tt_fabric_send_pull_request(dest_addr, (volatile local_pull_request_t*)&client_interface->local_pull_request);
 }
@@ -368,10 +386,11 @@ inline void fabric_socket_connect(socket_handle_t* socket_handle) {
 }
 
 template <RoutingType routing_type = RoutingType::ROUTING_TABLE>
-inline void fabric_endpoint_init(uint32_t base_address, uint32_t outbound_eth_chan) {
-    tt_fabric_init();
-    client_interface = (volatile fabric_client_interface_t*)base_address;
-    uint32_t routing_tables_offset = base_address + sizeof(fabric_client_interface_t);
+inline void fabric_endpoint_init(
+    volatile tt_l1_ptr fabric_client_interface_t* client_interface, uint32_t outbound_eth_chan) {
+    // TODO: Should not assume routing tables are immediately after the client interface
+    // This should be a separate address we take in
+    uint32_t routing_tables_offset = (uint32_t)client_interface + sizeof(fabric_client_interface_t);
 
     zero_l1_buf((uint32_t*)client_interface, sizeof(fabric_client_interface_t));
     client_interface->routing_tables_l1_offset = routing_tables_offset;
@@ -385,3 +404,5 @@ inline void fabric_endpoint_init(uint32_t base_address, uint32_t outbound_eth_ch
         noc_async_read_barrier();
     }
 }
+
+}  // namespace tt::tt_fabric

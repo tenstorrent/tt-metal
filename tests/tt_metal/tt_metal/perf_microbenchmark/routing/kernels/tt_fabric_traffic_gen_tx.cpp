@@ -71,7 +71,8 @@ uint32_t max_packet_size_mask;
 auto input_queue_state = select_input_queue<pkt_dest_size_choice>();
 volatile local_pull_request_t *local_pull_request = (volatile local_pull_request_t *)(data_buffer_start_addr - 1024);
 volatile tt_l1_ptr fabric_router_l1_config_t* routing_table;
-volatile fabric_client_interface_t* client_interface;
+volatile tt_l1_ptr fabric_client_interface_t* client_interface =
+    (volatile tt_l1_ptr fabric_client_interface_t*)client_interface_addr;
 
 fvc_producer_state_t test_producer __attribute__((aligned(16)));
 fvcc_inbound_state_t fvcc_test_producer __attribute__((aligned(16)));
@@ -456,7 +457,8 @@ void kernel_main() {
     uint32_t packet_count = 0;
 
     // initalize client
-    fabric_endpoint_init(client_interface_addr, outbound_eth_chan);
+    tt_fabric_init();
+    fabric_endpoint_init(client_interface, outbound_eth_chan);
     routing_table = reinterpret_cast<tt_l1_ptr fabric_router_l1_config_t*>(client_interface->routing_tables_l1_offset);
 
     while (true) {

@@ -718,3 +718,14 @@ def test_line_all_gather_after_reshape(mesh_device):
         mesh_device=mesh_device,
         topology=ttnn.Topology.Linear,
     )
+
+
+def test_distribute_api(mesh_device):
+    torch_hidden_states = torch.rand((1, 1, 32, 32), dtype=torch.bfloat16)
+    with ttnn.distribute(ttnn.ReplicateTensorToMesh(mesh_device)):
+        hidden_states = ttnn.from_torch(
+            torch_hidden_states,
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+        )
