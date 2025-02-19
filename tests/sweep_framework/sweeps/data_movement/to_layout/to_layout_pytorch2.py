@@ -3,6 +3,7 @@ from typing import Optional, Tuple
 import torch
 import random
 import ttnn
+import traceback
 
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
@@ -104,7 +105,8 @@ def run(
         # convert back to torch
         ttnn_converted_tensor = ttnn.to_torch(ttnn_tensor)
     except Exception as e:
-        print(e)
+        print(f"Exception: {e}")
+        traceback.print_exc()
         e2e_perf = TIMEOUT
         print(
             f"Error occurred with parameters: to_layout_specs={to_layout_specs}, dtype={dtype}, input_layout={input_layout}, output_layout={output_layout}"
