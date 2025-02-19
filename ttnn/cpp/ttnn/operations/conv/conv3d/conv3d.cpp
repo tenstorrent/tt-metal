@@ -19,13 +19,7 @@ namespace conv3d {
 ttnn::Tensor ExecuteConv3d::invoke(
     uint8_t queue_id,
     const ttnn::Tensor& input_tensor,
-    // const ttnn::Tensor& weight_tensor,
-    uint32_t output_channels,
-    std::array<uint32_t, 3> kernel_size,
-    std::array<uint32_t, 3> stride,
-    std::array<uint32_t, 3> padding,
-    std::string padding_mode,
-    uint32_t groups,
+    const Conv3dConfig& config,
     const std::optional<MemoryConfig>& memory_config) {
     auto arch = input_tensor.storage_type() == StorageType::DEVICE
                     ? input_tensor.device()->arch()
@@ -33,12 +27,7 @@ ttnn::Tensor ExecuteConv3d::invoke(
 
     return operation::run(
                Conv3dOp{
-                   .output_channels = output_channels,
-                   .kernel_size = kernel_size,
-                   .stride = stride,
-                   .padding = padding,
-                   .padding_mode = padding_mode,
-                   .groups = groups,
+                   .config = config,
                    .output_mem_config = memory_config.value_or(operation::DEFAULT_OUTPUT_MEMORY_CONFIG)},
                {input_tensor},
                {},
@@ -48,26 +37,8 @@ ttnn::Tensor ExecuteConv3d::invoke(
 }
 
 ttnn::Tensor ExecuteConv3d::invoke(
-    const ttnn::Tensor& input_tensor,
-    // const ttnn::Tensor& weight_tensor,
-    uint32_t output_channels,
-    std::array<uint32_t, 3> kernel_size,
-    std::array<uint32_t, 3> stride,
-    std::array<uint32_t, 3> padding,
-    std::string padding_mode,
-    uint32_t groups,
-    const std::optional<MemoryConfig>& memory_config) {
-    return invoke(
-        DefaultQueueId,
-        input_tensor,
-        // weight_tensor,
-        output_channels,
-        kernel_size,
-        stride,
-        padding,
-        padding_mode,
-        groups,
-        memory_config);
+    const ttnn::Tensor& input_tensor, const Conv3dConfig& config, const std::optional<MemoryConfig>& memory_config) {
+    return invoke(DefaultQueueId, input_tensor, config, memory_config);
 }
 
 }  // namespace conv3d

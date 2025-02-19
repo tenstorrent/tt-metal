@@ -26,16 +26,17 @@ void Conv3dOp::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(input_tensor_a.dtype() == DataType::BFLOAT16, "Activation tensor must be bfloat16.");
 
     // Add assertions for strides and groups
-    TT_FATAL(stride[0] == 1 && stride[1] == 1 && stride[2] == 1, "Strides must be (1,1,1).");
-    TT_FATAL(groups == 1, "Groups must be 1.");
+    TT_FATAL(config.stride[0] == 1 && config.stride[1] == 1 && config.stride[2] == 1, "Strides must be (1,1,1).");
+    TT_FATAL(config.groups == 1, "Groups must be 1.");
     // assert padding is 0
-    TT_FATAL(padding[0] == 0, "Padding must be (0,x,x).");
-    // TT_FATAL(padding[0] == 0 && padding[1] == 0 && padding[2] == 0, "Padding must be (0,0,0).");
-    TT_FATAL(padding_mode == "zeros" || padding_mode == "replicate", "Padding mode must be zeros or replicate.");
+    TT_FATAL(config.padding[0] == 0, "Padding must be (0,x,x).");
+    // TT_FATAL(config.padding[0] == 0 && config.padding[1] == 0 && config.padding[2] == 0, "Padding must be (0,0,0).");
+    TT_FATAL(
+        config.padding_mode == "zeros" || config.padding_mode == "replicate",
+        "Padding mode must be zeros or replicate.");
 }
 
 std::vector<TensorSpec> Conv3dOp::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
-    // Compute vol2col output shape
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_a_shape = input_tensor_a.shape();
     uint32_t N = input_tensor_a_shape[0];
@@ -44,13 +45,10 @@ std::vector<TensorSpec> Conv3dOp::compute_output_specs(const std::vector<Tensor>
     uint32_t W_in = input_tensor_a_shape[3];
     uint32_t C_in = input_tensor_a_shape[4];
 
-    uint32_t T_out = T_in + 2 * padding[0] - (kernel_size[0] - 1);
-    uint32_t H_out = H_in + 2 * padding[1] - (kernel_size[1] - 1);
-    uint32_t W_out = W_in + 2 * padding[2] - (kernel_size[2] - 1);
-    uint32_t C_out = output_channels;
+    auto [T_out, H_out, W_out] = detail::compute_output_dims(T_in, H_in, W_in, config.padding, config.kernel_size);
 
     uint32_t num_patches = N * T_out * H_out * W_out;
-    uint32_t patch_size = kernel_size[0] * kernel_size[1] * kernel_size[2] * C_in;
+    uint32_t patch_size = config.kernel_size[0] * config.kernel_size[1] * config.kernel_size[2] * C_in;
 
     ttnn::SimpleShape output_shape({num_patches, patch_size});
 
@@ -65,9 +63,7 @@ std::vector<TensorSpec> Conv3dOp::compute_output_specs(const std::vector<Tensor>
 
 operation::ProgramWithCallbacks Conv3dOp::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
-    // TODO: Implement actual conv3d program
-    return detail::conv3d_factory(
-        input_tensors.at(0), output_channels, kernel_size, stride, padding, padding_mode, groups, output_tensors.at(0));
+    return detail::conv3d_factory(input_tensors[0], config, output_tensors[0]);
 }
 
 }  // namespace conv3d

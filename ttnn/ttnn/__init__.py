@@ -338,6 +338,7 @@ from ttnn.operations.conv2d import (
     prepare_conv_weights,
     prepare_conv_bias,
 )
+from ttnn._ttnn.operations.conv import Conv3dConfig
 from ttnn.operations.conv1d import Conv1d, Conv1dConfig
 
 from ttnn.operations.transformer import SDPAProgramConfig

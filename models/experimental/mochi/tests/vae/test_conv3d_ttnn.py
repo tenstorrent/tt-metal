@@ -8,55 +8,7 @@ from models.experimental.mochi.common import compute_metrics
 from models.experimental.mochi.tests.vae.test_vol2col import _out_size, torch_vol2col
 
 
-@pytest.mark.parametrize(
-    "input_shape, out_channels, kernel_size, stride, padding, padding_mode",
-    [
-        [(1, 32, 28, 60, 106), 768, (1, 1, 1), (1, 1, 1), (0, 0, 0), "zeros"],
-        [(1, 12, 28, 60, 106), 768, (1, 1, 1), (1, 1, 1), (0, 1, 1), "zeros"],
-        [(1, 768, 28, 60, 106), 768, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
-        [(1, 512, 82, 120, 212), 512, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
-        [(1, 256, 163, 240, 424), 256, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
-        [(1, 128, 163, 480, 848), 128, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
-        # [(1, 5, 5, 10, 15), 128, (3, 3, 3), (1, 1, 1), (0, 1, 1), "zeros"],
-        # [(1, 12, 5, 60, 106), 768, (1, 1, 1), (1, 1, 1), (0, 0, 0), "zeros"],
-        # [(1, 768, 5, 60, 106), 768, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
-        # [(1, 128, 5, 120, 212), 128, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
-        # [(1, 128, 5, 240, 424), 128, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
-        # [(1, 128, 5, 480, 848), 128, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
-        # no padding
-        # [(1, 5, 24, 10, 15), 128, (3, 3, 3), (1, 1, 1), (0, 0, 0), "zeros"],
-        # [(1, 12, 28, 60, 106), 768, (1, 1, 1), (1, 1, 1), (0, 0, 0), "zeros"],
-        # [(1, 768, 28, 60, 106), 768, (3, 3, 3), (1, 1, 1), (0, 0, 0), "zeros"],
-        # [(1, 512, 82, 120, 212), 512, (3, 3, 3), (1, 1, 1), (0, 0, 0), "zeros"],
-        # [(1, 256, 163, 240, 424), 256, (3, 3, 3), (1, 1, 1), (0, 0, 0), "zeros"],
-        # [(1, 128, 163, 480, 848), 128, (3, 3, 3), (1, 1, 1), (0, 0, 0), "zeros"],
-        # [(1, 1, 4, 4, 4), 1, (3, 3, 3), (1, 1, 1), (0, 1, 1), "zeros"],
-        # smaller
-        # [(1, 1, 3, 3, 3), 1, (3, 3, 3), (1, 1, 1), (0, 0, 0), "zeros"],
-        # [(1, 5, 24, 10, 15), 128, (3, 3, 3), (1, 1, 1), (0, 0, 0), "zeros"],
-        # [(1, 12, 28, 60, 106), 768, (1, 1, 1), (1, 1, 1), (0, 1, 1), "replicate"],
-        # [(1, 64, 28, 60, 106), 64, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
-        # [(1, 64, 82, 120, 212), 64, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
-        # [(1, 64, 163, 240, 424), 64, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
-        # [(1, 64, 163, 480, 848), 64, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
-        # Same as above but with no padding
-        # [(1, 1, 3, 4, 3), 1, (3, 3, 3), (1, 1, 1), (0, 0, 0), "zeros"],
-        # [(1, 16, 4, 5, 6), 32, (3, 3, 3), (1, 1, 1), (0, 0, 0), "zeros"],
-        # [(1, 16, 24, 10, 15), 128, (3, 3, 3), (1, 1, 1), (0, 0, 0), "zeros"],
-        # [(1, 5, 24, 10, 15), 128, (3, 3, 3), (1, 1, 1), (0, 0, 0), "zeros"],
-        # [(1, 8, 24, 10, 15), 128, (3, 3, 3), (1, 1, 1), (0, 0, 0), "zeros"],
-        # [(1, 12, 28, 60, 106), 768, (1, 1, 1), (1, 1, 1), (0, 0, 0), "zeros"],
-        # [(1, 12, 28, 60, 106), 768, (3, 3, 3), (1, 1, 1), (0, 0, 0), "zeros"],
-        # [(1, 768, 28, 60, 106), 768, (3, 3, 3), (1, 1, 1), (0, 0, 0), "replicate"],
-        # [(1, 512, 82, 120, 212), 512, (3, 3, 3), (1, 1, 1), (0, 0, 0), "replicate"],
-        # [(1, 256, 163, 240, 424), 256, (3, 3, 3), (1, 1, 1), (0, 0, 0), "replicate"],
-        # [(1, 128, 163, 480, 848), 128, (3, 3, 3), (1, 1, 1), (0, 0, 0), "replicate"],
-    ],
-    # ids=["test0", "variant0", "variant1", "variant2", "variant3", "variant4"],
-)
-def test_vol2col_torch(device, input_shape, out_channels, kernel_size, stride, padding, padding_mode):
-    # def test_vol2col_torch(device, N, C, D, H, W, out_channels, kernel_size, stride, padding, padding_mode):
-    # Set a manual seed for reproducibility.
+def run_vol2col_test(device, input_shape, out_channels, kernel_size, stride, padding, padding_mode):
     torch.manual_seed(42)
 
     # Define input dimensions.
@@ -122,14 +74,24 @@ def test_vol2col_torch(device, input_shape, out_channels, kernel_size, stride, p
         conv3d_module.bias.data, device=device, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.TILE_LAYOUT
     )
 
-    tt_vol2col_output = ttnn.conv3d(
-        input_tensor=tt_input,
-        out_channels=out_channels,
+    config = ttnn.Conv3dConfig(
+        dtype=ttnn.bfloat16,
+        weights_dtype=ttnn.bfloat16,
+        output_layout=ttnn.ROW_MAJOR_LAYOUT,
+        T_out_block=1,
+        W_out_block=1,
+        H_out_block=1,
+        output_channels=out_channels,
         kernel_size=kernel_size,
         stride=stride,
         padding=padding,
         padding_mode=padding_mode,
         groups=1,
+    )
+
+    tt_vol2col_output = ttnn.conv3d(
+        input_tensor=tt_input,
+        config=config,
     )
 
     tt_vol2col_output = ttnn.to_layout(tt_vol2col_output, ttnn.TILE_LAYOUT)
@@ -153,3 +115,77 @@ def test_vol2col_torch(device, input_shape, out_channels, kernel_size, stride, p
 
         pdb.set_trace()
     assert pcc > 0.99, f"PCC = {pcc}, MSE = {mse}, MAE = {mae}"
+
+
+@pytest.mark.parametrize(
+    "input_shape, out_channels, kernel_size, stride, padding, padding_mode",
+    [
+        # [(1, 32, 28, 60, 106), 768, (1, 1, 1), (1, 1, 1), (0, 0, 0), "zeros"],
+        # [(1, 12, 28, 60, 106), 768, (1, 1, 1), (1, 1, 1), (0, 1, 1), "zeros"],
+        # [(1, 768, 28, 60, 106), 768, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
+        # [(1, 512, 82, 120, 212), 512, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
+        # [(1, 256, 163, 240, 424), 256, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
+        # [(1, 128, 163, 480, 848), 128, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
+        # [(1, 5, 5, 10, 15), 128, (3, 3, 3), (1, 1, 1), (0, 1, 1), "zeros"],
+        # [(1, 12, 5, 60, 106), 768, (1, 1, 1), (1, 1, 1), (0, 0, 0), "zeros"],
+        # [(1, 768, 5, 60, 106), 768, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
+        # [(1, 128, 5, 120, 212), 128, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
+        # [(1, 128, 5, 240, 424), 128, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
+        # [(1, 128, 5, 480, 848), 128, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
+        # no padding
+        # [(1, 5, 24, 10, 15), 128, (3, 3, 3), (1, 1, 1), (0, 0, 0), "zeros"],
+        # [(1, 12, 28, 60, 106), 768, (1, 1, 1), (1, 1, 1), (0, 0, 0), "zeros"],
+        # [(1, 768, 28, 60, 106), 768, (3, 3, 3), (1, 1, 1), (0, 0, 0), "zeros"],
+        # [(1, 512, 82, 120, 212), 512, (3, 3, 3), (1, 1, 1), (0, 0, 0), "zeros"],
+        # [(1, 256, 163, 240, 424), 256, (3, 3, 3), (1, 1, 1), (0, 0, 0), "zeros"],
+        # [(1, 128, 163, 480, 848), 128, (3, 3, 3), (1, 1, 1), (0, 0, 0), "zeros"],
+        # [(1, 1, 4, 4, 4), 1, (3, 3, 3), (1, 1, 1), (0, 1, 1), "zeros"],
+        # smaller
+        # [(1, 1, 3, 3, 3), 1, (3, 3, 3), (1, 1, 1), (0, 0, 0), "zeros"],
+        # [(1, 5, 24, 10, 15), 128, (3, 3, 3), (1, 1, 1), (0, 0, 0), "zeros"],
+        # [(1, 12, 28, 60, 106), 768, (1, 1, 1), (1, 1, 1), (0, 1, 1), "replicate"],
+        # [(1, 64, 28, 60, 106), 64, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
+        # [(1, 64, 82, 120, 212), 64, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
+        # [(1, 64, 163, 240, 424), 64, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
+        # [(1, 64, 163, 480, 848), 64, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
+        # Same as above but with no padding
+        # [(1, 1, 3, 4, 3), 1, (3, 3, 3), (1, 1, 1), (0, 0, 0), "zeros"],
+        # [(1, 16, 4, 5, 6), 32, (3, 3, 3), (1, 1, 1), (0, 0, 0), "zeros"],
+        # [(1, 16, 24, 10, 15), 128, (3, 3, 3), (1, 1, 1), (0, 0, 0), "zeros"],
+        # [(1, 5, 24, 10, 15), 128, (3, 3, 3), (1, 1, 1), (0, 0, 0), "zeros"],
+        # [(1, 8, 24, 10, 15), 128, (3, 3, 3), (1, 1, 1), (0, 0, 0), "zeros"],
+        # [(1, 12, 28, 60, 106), 768, (1, 1, 1), (1, 1, 1), (0, 0, 0), "zeros"],
+        # [(1, 12, 28, 60, 106), 768, (3, 3, 3), (1, 1, 1), (0, 0, 0), "zeros"],
+        # [(1, 768, 28, 60, 106), 768, (3, 3, 3), (1, 1, 1), (0, 0, 0), "replicate"],
+        # [(1, 512, 82, 120, 212), 512, (3, 3, 3), (1, 1, 1), (0, 0, 0), "replicate"],
+        # [(1, 256, 163, 240, 424), 256, (3, 3, 3), (1, 1, 1), (0, 0, 0), "replicate"],
+        # [(1, 128, 163, 480, 848), 128, (3, 3, 3), (1, 1, 1), (0, 0, 0), "replicate"],
+    ],
+    # ids=["test0", "variant0", "variant1", "variant2", "variant3", "variant4"],
+)
+def test_vol2col_torch_mochi_shapes(device, input_shape, out_channels, kernel_size, stride, padding, padding_mode):
+    # def test_vol2col_torch(device, N, C, D, H, W, out_channels, kernel_size, stride, padding, padding_mode):
+    # Set a manual seed for reproducibility.
+    run_vol2col_test(device, input_shape, out_channels, kernel_size, stride, padding, padding_mode)
+
+
+@pytest.mark.parametrize("B", [1])
+@pytest.mark.parametrize("C_in", [12, 32, 64])
+@pytest.mark.parametrize("C_out", [12, 32, 64])
+@pytest.mark.parametrize("T", [5, 8, 11])
+@pytest.mark.parametrize("H", [7, 10, 13])
+@pytest.mark.parametrize("W", [10, 13, 16])
+@pytest.mark.parametrize("kernel_size", [(3, 3, 3), (1, 1, 1)])
+@pytest.mark.parametrize("stride", [(1, 1, 1)])
+@pytest.mark.parametrize("padding", [(0, 0, 0), (0, 1, 1)])
+@pytest.mark.parametrize("padding_mode", ["zeros", "replicate"])
+def test_vol2col_sweep(device, B, C_in, C_out, T, H, W, kernel_size, stride, padding, padding_mode):
+    if padding == (0, 0, 0) and padding_mode == "replicate":
+        pytest.skip("Skipping padding (0, 0, 0) and padding_mode replicate because it's duplicate")
+    input_shape = (B, C_in, T, H, W)
+    out_channels = C_out
+    kernel_size = kernel_size
+    stride = stride
+    padding = padding
+    padding_mode = padding_mode
+    run_vol2col_test(device, input_shape, out_channels, kernel_size, stride, padding, padding_mode)
