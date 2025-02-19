@@ -157,7 +157,7 @@ void kernel_main() {
 
     output_queue.init(mux_fan_in, remote_tx_queue_start_addr_words, remote_tx_queue_size_words,
                       remote_tx_x, remote_tx_y, remote_tx_queue_id, tx_network_type,
-                      input_queues, mux_fan_in,
+                      input_queues,
                       output_depacketize, output_depacketize_log_page_size,
                       output_depacketize_downstream_sem, output_depacketize_local_sem,
                       output_depacketize_remove_header);

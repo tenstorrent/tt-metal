@@ -16,6 +16,8 @@
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include "debug/dprint.h"
 
+#define ENABLE_DPRINTS true
+
 constexpr ProgrammableCoreType fd_core_type = static_cast<ProgrammableCoreType>(FD_CORE_TYPE);
 
 constexpr uint32_t NUM_WR_CMD_BUFS = 4;
@@ -26,6 +28,40 @@ constexpr uint32_t DEFAULT_MAX_ETH_SEND_WORDS = 2*1024;
 constexpr uint32_t NUM_PTR_REGS_PER_INPUT_QUEUE = 1;
 constexpr uint32_t NUM_PTR_REGS_PER_OUTPUT_QUEUE = 2;
 
+template<DispatchRemoteNetworkType T>
+struct MaxSendWords {
+    static_assert(std::is_enum_v<DispatchRemoteNetworkType>,
+                 "NetworkTraits requires DispatchRemoteNetworkType enum");
+    static_assert(std::is_void_v<T>, "Unknown DispatchRemoteNetworkType");
+};
+
+template<>
+struct MaxSendWords<DispatchRemoteNetworkType::DISABLE_QUEUE> {
+    static constexpr uint32_t max_send_words = 0;
+};
+
+template<>
+struct MaxSendWords<DispatchRemoteNetworkType::NONE> {
+    static constexpr uint32_t max_send_words = 0;
+};
+
+template<>
+struct MaxSendWords<DispatchRemoteNetworkType::ETH> {
+    static constexpr uint32_t max_send_words = DEFAULT_MAX_ETH_SEND_WORDS;
+};
+
+template<>
+struct MaxSendWords<DispatchRemoteNetworkType::NOC0> {
+    static constexpr uint32_t max_send_words = DEFAULT_MAX_NOC_SEND_WORDS;
+};
+
+template<>
+struct MaxSendWords<DispatchRemoteNetworkType::NOC1> {
+    static constexpr uint32_t max_send_words = DEFAULT_MAX_NOC_SEND_WORDS;
+};
+
+template<DispatchRemoteNetworkType T>
+inline constexpr uint32_t max_send_words_v = MaxSendWords<T>::max_send_words;
 
 inline uint64_t get_timestamp() {
     uint32_t timestamp_low = reg_read(RISCV_DEBUG_REG_WALL_CLOCK_L);
@@ -43,21 +79,18 @@ void zero_l1_buf(tt_l1_ptr uint32_t* buf, uint32_t size_bytes) {
     }
 }
 
-static FORCE_INLINE
 void write_test_results(tt_l1_ptr uint32_t* const buf, uint32_t i, uint32_t val) {
     if (buf != nullptr) {
         buf[i] = val;
     }
 }
 
-static FORCE_INLINE
 void write_kernel_status(tt_l1_ptr uint32_t* const buf, uint32_t i, uint32_t val) {
     if (buf != nullptr) {
         buf[i] = val;
     }
 }
 
-static FORCE_INLINE
 void set_64b_result(uint32_t* buf, uint64_t val, uint32_t index = 0) {
     if (buf != nullptr) {
         buf[index] = val >> 32;
@@ -174,6 +207,8 @@ public:
         this->queue_id = queue_id;
         this->queue_start_addr_words = queue_start_addr_words;
         this->queue_size_words = queue_size_words;
+        this->ptr_offset_mask = queue_size_words - 1;
+        this->queue_size_mask = (queue_size_words << 1) - 1;
         this->queue_is_input = queue_is_input;
         this->remote_x = remote_x;
         this->remote_y = remote_y;
@@ -475,11 +510,8 @@ public:
         }
     }
 
-    void yield() {
-        // TODO: implement yield for ethernet here
-    }
-
     void dprint_object() {
+#if ENABLE_DPRINTS
         DPRINT << "  id: " << DEC() << static_cast<uint32_t>(this->queue_id) << ENDL();
         DPRINT << "  start_addr: 0x" << HEX() << static_cast<uint32_t>(this->queue_start_addr_words*PACKET_WORD_SIZE_BYTES) << ENDL();
         DPRINT << "  size_bytes: 0x" << HEX() << static_cast<uint32_t>(this->queue_size_words*PACKET_WORD_SIZE_BYTES) << ENDL();
@@ -491,6 +523,7 @@ public:
         DPRINT << "  local_wptr: 0x" << HEX() << this->get_queue_local_wptr() << ENDL();
         DPRINT << "  local_rptr_sent: 0x" << HEX() << this->get_queue_local_rptr_sent() << ENDL();
         DPRINT << "  local_rptr_cleared: 0x" << HEX() << this->get_queue_local_rptr_cleared() << ENDL();
+#endif
     }
 };
 
@@ -571,9 +604,6 @@ public:
                                    packetizer_input_remote_sem_id,
                                    packetizer_input_log_page_size);
 
-        tt_l1_ptr uint32_t* queue_ptr =
-            reinterpret_cast<tt_l1_ptr uint32_t*>(queue_start_addr_words*PACKET_WORD_SIZE_BYTES);
-
         this->packetizer_page_words_cleared = 0;
 
         if (packetizer_input) {
@@ -583,8 +613,6 @@ public:
             this->curr_packet_tag = 0xabcd;
         }
 
-        this->ptr_offset_mask = queue_size_words - 1;
-        this->queue_size_mask = (queue_size_words << 1) - 1;
         this->curr_packet_valid = false;
         this->reset_queue_local_wptr();
         this->reset_ready_flag();
@@ -725,6 +753,7 @@ public:
     }
 
     void dprint_object() {
+#if ENABLE_DPRINTS
         DPRINT << "Input queue:" << ENDL();
         packet_queue_state_t::dprint_object();
         DPRINT << "  packet_valid: " << DEC() << static_cast<uint32_t>(this->curr_packet_valid) << ENDL();
@@ -734,17 +763,14 @@ public:
         DPRINT << "  packet_flags: 0x" << HEX() << static_cast<uint32_t>(this->curr_packet_flags) << ENDL();
         DPRINT << "  packet_size_words: " << DEC() << static_cast<uint32_t>(this->curr_packet_size_words) << ENDL();
         DPRINT << "  packet_words_sent: " << DEC() << static_cast<uint32_t>(this->curr_packet_words_sent) << ENDL();
+#endif
     }
 
 };
 
 
 class packet_output_queue_state_t : public packet_queue_state_t {
-
 protected:
-
-    uint32_t output_max_send_words;
-
     uint32_t unpacketizer_page_words_sent;
     bool unpacketizer_remove_header;
 
@@ -758,10 +784,7 @@ protected:
         uint32_t curr_output_total_words_in_flight;
         uint32_t prev_output_total_words_in_flight;
 
-        uint8_t num_input_queues;
-
-        void init(packet_input_queue_state_t* input_queue_array, uint32_t num_input_queues) {
-            this->num_input_queues = num_input_queues;
+        void init(packet_input_queue_state_t* input_queue_array) {
             this->input_queue_array = input_queue_array;
             this->curr_input_queue_words_in_flight = &(this->input_queue_words_in_flight[0]);
             this->prev_input_queue_words_in_flight = &(this->input_queue_words_in_flight[MAX_SWITCH_FAN_IN]);
@@ -810,6 +833,7 @@ protected:
         }
 
         void dprint_object() {
+#if ENABLE_DPRINTS
             DPRINT << "  curr_output_total_words_in_flight: " << DEC() << this->curr_output_total_words_in_flight << ENDL();
             for (uint32_t j = 0; j < MAX_SWITCH_FAN_IN; j++) {
                 DPRINT << "       from input queue id " << DEC() <<
@@ -824,6 +848,7 @@ protected:
                             << DEC() << this->prev_input_queue_words_in_flight[j]
                             << ENDL();
             }
+#endif
         }
 
     } input_queue_status;
@@ -846,7 +871,6 @@ public:
               uint8_t remote_queue_id,
               DispatchRemoteNetworkType remote_update_network_type,
               packet_input_queue_state_t* input_queue_array,
-              uint8_t num_input_queues,
               bool unpacketizer_output = false,
               uint16_t unpacketizer_output_log_page_size = 0,
               uint8_t unpacketizer_output_sem_id = 0,
@@ -861,25 +885,7 @@ public:
 
         this->unpacketizer_remove_header = unpacketizer_output_remove_header;
         this->unpacketizer_page_words_sent = 0;
-        this->ptr_offset_mask = queue_size_words - 1;
-        this->queue_size_mask = (queue_size_words << 1) - 1;
-        this->input_queue_status.init(input_queue_array, num_input_queues);
-        switch (remote_update_network_type) {
-            case DispatchRemoteNetworkType::DISABLE_QUEUE:
-            case DispatchRemoteNetworkType::NONE:
-                this->output_max_send_words = 0;
-                break;
-            case DispatchRemoteNetworkType::ETH:
-                this->output_max_send_words = DEFAULT_MAX_ETH_SEND_WORDS;
-                break;
-            case DispatchRemoteNetworkType::NOC0:
-            case DispatchRemoteNetworkType::NOC1:
-                this->output_max_send_words = DEFAULT_MAX_NOC_SEND_WORDS;
-                break;
-            default:
-                ASSERT(false);
-        }
-
+        this->input_queue_status.init(input_queue_array);
         this->reset_queue_local_rptr_sent();
         this->reset_queue_local_rptr_cleared();
         this->reset_ready_flag();
@@ -946,14 +952,13 @@ public:
                     return false;
                 }
             }
-            this->yield();
         }
         this->input_queue_status.prev_words_in_flight_flush<input_network_types, input_cb_modes>();
         this->input_queue_status.prev_words_in_flight_flush<input_network_types, input_cb_modes>();
         return true;
     }
 
-    template<bool input_queue_cb_mode>
+    template<bool input_queue_cb_mode, DispatchRemoteNetworkType output_network_type>
     inline uint32_t get_num_words_to_send(uint32_t input_queue_index) {
         packet_input_queue_state_t* input_queue_ptr = &(this->input_queue_status.input_queue_array[input_queue_index]);
 
@@ -965,7 +970,7 @@ public:
         uint32_t output_buf_words_before_wptr_wrap = this->get_queue_words_before_wptr_wrap();
 
         num_words_to_forward = std::min(num_words_to_forward, output_buf_words_before_wptr_wrap);
-        num_words_to_forward = std::min(num_words_to_forward, this->output_max_send_words);
+        num_words_to_forward = std::min(num_words_to_forward, max_send_words_v<output_network_type>);
 
         return num_words_to_forward;
     }
@@ -973,7 +978,7 @@ public:
     template<DispatchRemoteNetworkType output_network_type, bool output_cb_mode, DispatchRemoteNetworkType input_network_type, bool input_cb_mode>
     inline uint32_t forward_data_from_input(uint32_t input_queue_index, bool& full_packet_sent, uint16_t end_of_cmd) {
         packet_input_queue_state_t* input_queue_ptr = &(this->input_queue_status.input_queue_array[input_queue_index]);
-        uint32_t num_words_to_forward = this->get_num_words_to_send<input_cb_mode>(input_queue_index);
+        uint32_t num_words_to_forward = this->get_num_words_to_send<input_cb_mode, output_network_type>(input_queue_index);
         full_packet_sent = (num_words_to_forward == input_queue_ptr->get_curr_packet_words_remaining());
         if (num_words_to_forward == 0) {
             return 0;
@@ -1019,9 +1024,11 @@ public:
     }
 
     void dprint_object() {
+#if ENABLE_DPRINTS
         DPRINT << "Output queue:" << ENDL();
         packet_queue_state_t::dprint_object();
         this->input_queue_status.dprint_object();
+#endif
     }
 };
 

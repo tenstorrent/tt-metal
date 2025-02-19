@@ -250,8 +250,7 @@ void kernel_main() {
             remote_receiver_y[i],
             remote_receiver_queue_id[i],
             remote_receiver_network_type[i],
-            &input_queues[i],
-            1);
+            &input_queues[i]);
     }
 
     if (!wait_all_input_output_ready<input_queue_network_sequence,

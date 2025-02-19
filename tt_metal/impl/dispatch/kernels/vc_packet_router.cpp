@@ -224,7 +224,7 @@ void kernel_main() {
 
         output_queues[i].init(i + router_lanes, remote_tx_queue_start_addr_words[i], remote_tx_queue_size_words[i],
                               remote_tx_x[i], remote_tx_y[i], remote_tx_queue_id[i], remote_tx_network_type[i],
-                              &input_queues[i], 1,
+                              &input_queues[i],
                               output_depacketize[i], output_depacketize_log_page_size[i],
                               output_depacketize_local_sem[i], output_depacketize_downstream_sem[i],
                               output_depacketize_remove_header[i]);
@@ -249,7 +249,7 @@ void kernel_main() {
     uint32_t heartbeat = 0;
     while (!all_outputs_finished && !timeout) {
         IDLE_ERISC_HEARTBEAT_AND_RETURN(heartbeat);
-        if (timeout_cycles > 0) {
+        if constexpr (timeout_cycles > 0) {
             uint32_t cycles_since_progress = get_timestamp_32b() - progress_timestamp;
             if (cycles_since_progress > timeout_cycles) {
                 timeout = true;
