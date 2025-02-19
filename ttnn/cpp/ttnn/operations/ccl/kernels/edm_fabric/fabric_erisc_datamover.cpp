@@ -318,20 +318,11 @@ struct WriteTransactionIdTracker {
             return trid == INVALID_TRID || ncrisc_noc_nonposted_write_with_transaction_id_sent(noc_index, trid);
         }
     }
-    FORCE_INLINE bool transaction_acked(tt::fabric::BufferIndex buffer_index) const {
-        if constexpr (BOTH_PARAMS_ARE_POW2) {
-            auto trid = this->get_buffer_slot_trid(buffer_index);
-            return ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc_index, trid);
-        } else {
-            // TODO: should be able to remove compare against INVALID_TRID
-            auto trid = this->get_buffer_slot_trid(buffer_index);
-            return trid == INVALID_TRID || ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc_index, trid);
-        }
-    }
     FORCE_INLINE void all_buffer_slot_transactions_acked() const {
         for (uint8_t i = 0; i < NUM_CHANNELS; ++i) {
             tt::fabric::BufferIndex buffer_index(i);
-            while(!transaction_acked(buffer_index));
+            auto trid = this->get_buffer_slot_trid(buffer_index);
+            noc_async_write_barrier_with_trid(trid, noc_index);
         }
     }
     private:
@@ -1276,11 +1267,6 @@ void kernel_main() {
 
     // make sure all the noc transactions are acked before re-init the noc counters
     receiver_channel_trid_tracker.all_buffer_slot_transactions_acked();
-
-    // make sure all the noc transactions are flushed before reinit the noc counters
-    // for (int i = 0; i < 10000; ++i) {
-    //     asm volatile("nop");
-    // }
     // re-init the noc counters as the noc api used is not incrementing them
     ncrisc_noc_counters_init();
 
