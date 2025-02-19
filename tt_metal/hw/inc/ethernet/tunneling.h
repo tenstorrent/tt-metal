@@ -154,9 +154,4 @@ void run_routing() {
 }
 
 FORCE_INLINE
-void run_routing_without_noc_sync() {
-    // router_init();
-    // TODO: maybe split into two FWs? or this may be better to sometimes allow each eth core to do both send and
-    // receive of fd packets
-    internal_::risc_context_switch_without_noc_sync();
-}
+void run_routing_without_noc_sync() { internal_::risc_context_switch_without_noc_sync(); }
