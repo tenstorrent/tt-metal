@@ -23,10 +23,7 @@ set(TTNN_CCL_UNIT_TESTS_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/ccl/test_ccl_reduce_scatter_host_helpers.cpp
 )
 
-set(TTNN_FABRIC_EDM_SRC
-    ${CMAKE_CURRENT_SOURCE_DIR}/ccl/test_fabric_edm.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/ccl/test_fabric_edm_common.cpp
-)
+set(TTNN_FABRIC_EDM_SRC ${CMAKE_CURRENT_SOURCE_DIR}/ccl/test_fabric_edm.cpp)
 
 set(TTNN_TENSOR_UNIT_TESTS_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/common_tensor_test_utils.cpp
