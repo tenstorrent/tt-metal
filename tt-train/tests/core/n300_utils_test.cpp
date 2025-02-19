@@ -240,7 +240,7 @@ TEST_F(N300UtilsTest, DropoutDifferentSeed) {
 TEST_F(N300UtilsTest, MorehClipGradNorm) {
     auto* device = &ttml::autograd::ctx().get_device();
     auto mesh_shape = device->shape();
-    xt::xarray<float> xtensor = xt::ones<float>({1, 1, 1, 10});
+    xt::xarray<float> xtensor = xt::ones<float>({4, 1, 20, 5});
 
     ttml::core::XTensorToMeshVariant<float> replicate_composer = ttml::core::ReplicateXTensorToMesh<float>(mesh_shape);
     auto tensor = ttml::core::from_xtensor(xtensor, device, replicate_composer, ttnn::Layout::TILE);
@@ -257,4 +257,9 @@ TEST_F(N300UtilsTest, MorehClipGradNorm) {
     // ensure that moreh clip grad norm works without throwing a
     // bad_variant_access on n300.
     EXPECT_NO_THROW(do_it());
+    xt::xarray<float> expected_res = xt::full_like(xtensor, 0.05F);
+
+    ttml::core::MeshToXTensorVariant<float> identity_composer = ttml::core::VectorMeshToXTensor<float>(mesh_shape);
+    auto res_back = ttml::core::to_xtensor(tensor, identity_composer)[0];
+    EXPECT_TRUE(xt::allclose(expected_res, res_back, 2e-2F));
 }
