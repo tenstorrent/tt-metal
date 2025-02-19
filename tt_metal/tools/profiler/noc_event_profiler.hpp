@@ -4,15 +4,12 @@
 
 #pragma once
 
-// NOTE: this ifdef must be **exactly aligned** with ifdef in kernel_profiler.hpp, or
-// timeStampedData will be fwd declared and used, but then never defined.
 #if defined(PROFILE_NOC_EVENTS)
 
 #include <utility>
 #include <tuple>
 #include "event_metadata.hpp"
 #include "risc_attribs.h"
-#include "kernel_profiler_fwd.hpp"
 #include <algorithm>
 
 namespace noc_event_profiler {

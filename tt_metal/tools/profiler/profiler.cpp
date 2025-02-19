@@ -31,7 +31,7 @@ static kernel_profiler::PacketTypes get_packet_type(uint32_t timer_id) {
 
 void DeviceProfiler::readRiscProfilerResults(
     IDevice* device,
-    CoreCoord& worker_core,
+    const CoreCoord& worker_core,
     const std::optional<ProfilerOptionalMetadata>& metadata,
     std::ofstream& log_file_ofs,
     nlohmann::ordered_json& noc_trace_json_log) {
@@ -482,10 +482,7 @@ void DeviceProfiler::emitCSVHeader(
 }
 
 void DeviceProfiler::serializeJsonNocTraces(
-    const nlohmann::ordered_json& noc_trace_json_log,
-    const std::filesystem::path& output_dir,
-    int device_id,
-    bool lastDump) {
+    const nlohmann::ordered_json& noc_trace_json_log, const std::filesystem::path& output_dir, int device_id) {
     // create output directory if it does not exist
     std::filesystem::create_directories(output_dir);
     if (!std::filesystem::is_directory(output_dir)) {
@@ -664,10 +661,6 @@ void DeviceProfiler::dumpResults(
             }
         }
 
-        for (auto worker_core : worker_cores) {
-            readRiscProfilerResults(device, worker_core);
-        }
-
         // open CSV log file
         std::filesystem::path log_path = output_dir / DEVICE_SIDE_LOG;
         std::ofstream log_file_ofs;
@@ -687,8 +680,7 @@ void DeviceProfiler::dumpResults(
             log_error("Could not open kernel profiler dump file '{}'", log_path);
         } else {
             for (const auto& worker_core : worker_cores) {
-                readRiscProfilerResults(
-                    device, metadata, log_file_ofs, noc_trace_json_log, device_id, profile_buffer, worker_core);
+                readRiscProfilerResults(device, worker_core, metadata, log_file_ofs, noc_trace_json_log);
             }
 
             // if defined, used profiler_noc_events_report_path to write json log. otherwise use output_dir
@@ -697,7 +689,7 @@ void DeviceProfiler::dumpResults(
                 rpt_path = output_dir;
             }
 
-            serializeJsonNocTraces(noc_trace_json_log, rpt_path, device_id, lastDump);
+            serializeJsonNocTraces(noc_trace_json_log, rpt_path, device_id);
         }
     } else {
         log_warning("DRAM profiler buffer is not initialized");
@@ -705,7 +697,7 @@ void DeviceProfiler::dumpResults(
 #endif
 }
 
-    void DeviceProfiler::pushTracyDeviceResults() {
+void DeviceProfiler::pushTracyDeviceResults() {
 #if defined(TRACY_ENABLE)
     ZoneScoped;
     std::set<std::pair<uint32_t, CoreCoord>> device_cores_set;
@@ -754,26 +746,18 @@ void DeviceProfiler::dumpResults(
                 worker_core.y);
         }
 
-        static double delay = 0;
-        static double frequency = 0;
-        static uint64_t cpuTime = 0;
+        if (device_tracy_contexts.find(device_core) == device_tracy_contexts.end()) {
+            auto tracyCtx = TracyTTContext();
+            std::string tracyTTCtxName =
+                fmt::format("Device: {}, Core ({},{})", device_id, worker_core.x, worker_core.y);
 
-        for (auto& device_core : device_cores) {
-            int device_id = device_core.first;
-            CoreCoord worker_core = device_core.second;
+            TracyTTContextPopulate(tracyCtx, cpuTime, delay, frequency);
 
-            if (device_core_sync_info.find(worker_core) != device_core_sync_info.end()) {
-                cpuTime = get<0>(device_core_sync_info.at(worker_core));
-                delay = get<1>(device_core_sync_info.at(worker_core));
-                frequency = get<2>(device_core_sync_info.at(worker_core));
-                log_info(
-                    "Device {} sync info are, frequency {} GHz,  delay {} cycles and, sync point {} seconds",
-                    device_id,
-                    frequency,
-                    delay,
-                    cpuTime);
-            }
+            TracyTTContextName(tracyCtx, tracyTTCtxName.c_str(), tracyTTCtxName.size());
+
+            device_tracy_contexts.emplace(device_core, tracyCtx);
         }
+    }
 
     for (auto event : device_events) {
         std::pair<uint32_t, CoreCoord> device_core = {event.chip_id, (CoreCoord){event.core_x, event.core_y}};
@@ -783,21 +767,12 @@ void DeviceProfiler::dumpResults(
         } else if (event.zone_phase == tracy::TTDeviceEventPhase::end) {
             TracyTTPushEndZone(device_tracy_contexts[device_core], event);
         }
-
-        for (auto event : device_events) {
-            std::pair<uint32_t, CoreCoord> device_core = {event.chip_id, (CoreCoord){event.core_x, event.core_y}};
-            event.timestamp = event.timestamp * this->freqScale + this->shift;
-            if (event.zone_phase == tracy::TTDeviceEventPhase::begin) {
-                TracyTTPushStartZone(device_tracy_contexts[device_core], event);
-            } else if (event.zone_phase == tracy::TTDeviceEventPhase::end) {
-                TracyTTPushEndZone(device_tracy_contexts[device_core], event);
-            }
-        }
-        device_events.clear();
-#endif
     }
+    device_events.clear();
+#endif
+}
 
-    bool getDeviceProfilerState() { return tt::llrt::RunTimeOptions::get_instance().get_profiler_enabled(); }
+bool getDeviceProfilerState() { return tt::llrt::RunTimeOptions::get_instance().get_profiler_enabled(); }
 
 }  // namespace tt_metal
 

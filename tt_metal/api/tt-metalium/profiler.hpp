@@ -66,10 +66,7 @@ private:
 
     // serialize all noc trace data into per-op json trace files
     void serializeJsonNocTraces(
-        const nlohmann::ordered_json& noc_trace_json_log,
-        const std::filesystem::path& output_dir,
-        int device_id,
-        bool lastDump);
+        const nlohmann::ordered_json& noc_trace_json_log, const std::filesystem::path& output_dir, int device_id);
 
     void emitCSVHeader(
         std::ofstream& log_file_ofs, const tt::ARCH& device_architecture, int device_core_frequency) const;
@@ -133,13 +130,11 @@ private:
 
     // Helper function for reading risc profile results
     void readRiscProfilerResults(
-        const IDevice* device,
+        IDevice* device,
+        const CoreCoord& worker_core,
         const std::optional<ProfilerOptionalMetadata>& metadata,
         std::ofstream& log_file_ofs,
-        nlohmann::ordered_json& noc_trace_json_log,
-        int device_id,
-        const std::vector<std::uint32_t>& profile_buffer,
-        const CoreCoord& worker_core);
+        nlohmann::ordered_json& noc_trace_json_log);
 
     // Push device results to tracy
     void pushTracyDeviceResults();
@@ -164,17 +159,17 @@ public:
     // DRAM Vector
     std::vector<uint32_t> profile_buffer;
 
-    //Device events
+    // Device events
     std::set<tracy::TTDeviceEvent> device_events;
 
     std::set<tracy::TTDeviceEvent> device_sync_events;
 
     std::set<tracy::TTDeviceEvent> device_sync_new_events;
 
-    //shift
+    // shift
     int64_t shift = 0;
 
-    //frequency scale
+    // frequency scale
     double freqScale = 1.0;
 
     uint32_t my_device_id = 0;

@@ -40,7 +40,6 @@ set(PERF_MICROBENCH_TESTS_SRCS
     9_dram_adjacent_read_remote_l1_write/test_dram_read_l1_write.cpp
     10_dram_read_remote_cb_sync/test_dram_read_remote_cb.cpp
     11_remote_cb_sync_matmul_single_core/test_remote_cb_sync_matmul.cpp
-    noc_bw_profiling/noc_bw_profiling.cpp
 )
 
 set(ARCHITECTURES
