@@ -26,6 +26,7 @@
 #include "utils/utils.h"
 #include "debug/assert.h"
 #include "dev_msgs.h"
+#include "tools/profiler/kernel_profiler.hpp"
 
 #if defined(COMPILE_FOR_BRISC)
 constexpr uint8_t proc_type = static_cast<std::underlying_type_t<TensixProcessorTypes>>(TensixProcessorTypes::DM0);
@@ -2175,7 +2176,7 @@ inline void noc_async_write_one_packet_with_trid(
     std::uint32_t trid,
     uint8_t noc = noc_index) {
     WAYPOINT("NAWW");
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID, dst_noc_addr, size);
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID, dst_noc_addr, size, -1);
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size);
 #ifndef ARCH_GRAYSKULL
     ncrisc_noc_fast_write_any_len<proc_type, noc_mode, true, true>(

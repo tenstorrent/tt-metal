@@ -13,7 +13,7 @@
 #include "dispatch_core_manager.hpp"
 #include "buffer.hpp"
 #include "profiler.hpp"
-#include "tt_metal/tools/profiler/profiler_optional_metadata.hpp"
+#include "profiler_optional_metadata.hpp"
 
 namespace tt::tt_metal {
 inline namespace v0 {
@@ -217,8 +217,8 @@ void ProfilerSync(ProfilerSyncState state);
  * | satate        | Dumpprofiler various states                       | ProfilerDumpState |                  | False |
  * */
 void DumpDeviceProfileResults(
-    IDevice* device, 
-    std::vector<CoreCoord>& worker_cores, 
+    IDevice* device,
+    std::vector<CoreCoord>& worker_cores,
     ProfilerDumpState = ProfilerDumpState::NORMAL,
     const std::optional<ProfilerOptionalMetadata>& metadata = {});
 
