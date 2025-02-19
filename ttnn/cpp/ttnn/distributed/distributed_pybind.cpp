@@ -68,6 +68,7 @@
 >>>>>>> fix test mappers, convert to cpu_tensor
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/distributed_tensor_config.hpp"
+#include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 >>>>>>> one type error left
@@ -189,6 +190,7 @@ void py_module(py::module& module) {
             py::arg("num_cols"))
         .def(
 <<<<<<< HEAD
+<<<<<<< HEAD
             py::init([](size_t x, size_t y, size_t z) { return MeshShape(x, y, z); }),
             "Constructor with the specified 3D shape.",
             py::arg("x"),
@@ -199,6 +201,8 @@ void py_module(py::module& module) {
             "Constructor with the specified ND shape.",
             py::arg("shape"))
 =======
+=======
+>>>>>>> Replace none types, expose configs, fix tuple errors
             py::init([](const std::tuple<int, int>& dims) { return MeshShape(std::get<0>(dims), std::get<1>(dims)); }),
             "Constructor with specified number of rows and columns as a tuple (rows, columns).",
             py::arg("dims"))
@@ -703,23 +707,24 @@ void py_module(py::module& module) {
                 [](MeshDevice& mesh_device,
                    const MeshShape& mesh_shape,
                    const Shard2dConfig& config) -> std::unique_ptr<ShardTensor2dMesh> {
-                    return std::make_unique<ShardTensor2dMesh>(ShardTensor2dMesh(mesh_device, mesh_shape, config));
-                }),
-            py::init(
-                [](MeshDevice& mesh_device,
-                   const MeshShape& mesh_shape,
-                   const std::tuple<int, int>& config) -> std::unique_ptr<ShardTensor2dMesh> {
-                    return std::make_unique<ShardTensor2dMesh>(ShardTensor2dMesh(
-                        mesh_device,
-                        mesh_shape,
-                        Shard2dConfig{
-                            .row_dim = std::get<0>(config),
-                            .col_dim = std::get<1>(config),
-                        }));
+                    return std::make_unique<ShardTensor2dMesh>(mesh_device, mesh_shape, config);
                 }),
             py::arg("mesh_device"),
             py::arg("mesh_shape"),
             py::arg("config"))
+        .def(
+            py::init(
+                [](MeshDevice& mesh_device,
+                   const std::tuple<int, int> dims,
+                   const MeshShape& mesh_shape) -> std::unique_ptr<ShardTensor2dMesh> {
+                    return std::make_unique<ShardTensor2dMesh>(
+                        mesh_device,
+                        mesh_shape,
+                        Shard2dConfig{.row_dim = std::get<0>(dims), .col_dim = std::get<1>(dims)});
+                }),
+            py::arg("mesh_device"),
+            py::arg("dims"),
+            py::arg("mesh_shape"))
         .def(
             py::init(
                 [](const MeshShape& mesh_shape, const Shard2dConfig& config) -> std::unique_ptr<ShardTensor2dMesh> {
@@ -776,11 +781,13 @@ void py_module(py::module& module) {
                         config.col_dim);
                     return std::make_unique<ConcatMesh2dToTensor>(mesh_device, config);
                 }),
+            py::arg("mesh_device"),
+            py::arg("config"))
+        .def(
             py::init(
-                [](MeshDevice& mesh_device,
-                   const std::tuple<int, int> config) -> std::unique_ptr<ConcatMesh2dToTensor> {
-                    int row_dim = std::get<0>(config);
-                    int col_dim = std::get<1>(config);
+                [](MeshDevice& mesh_device, const std::tuple<int, int> dims) -> std::unique_ptr<ConcatMesh2dToTensor> {
+                    int row_dim = std::get<0>(dims);
+                    int col_dim = std::get<1>(dims);
                     TT_FATAL(
                         row_dim != col_dim,
                         "Dimensions in 'dims' must be different; got row_dim: {}, col_dim: {}",
@@ -793,12 +800,59 @@ void py_module(py::module& module) {
                             .col_dim = col_dim,
                         });
                 }),
-
             py::arg("mesh_device"),
-            py::arg("config"))
+            py::arg("dims"))
+        .def(
+            py::init(
+                [](MeshDevice& mesh_device,
+                   const Concat2dConfig& config,
+                   MeshShape& mesh_shape) -> std::unique_ptr<ConcatMesh2dToTensor> {
+                    TT_FATAL(
+                        config.row_dim != config.col_dim,
+                        "Dimensions in 'dims' must be different; got row_dim: {}, col_dim: {}",
+                        config.row_dim,
+                        config.col_dim);
+                    TT_FATAL(
+                        mesh_shape.num_rows <= mesh_device.shape().num_rows &&  //
+                            mesh_shape.num_cols <= mesh_device.shape().num_cols,
+                        "Device mesh shape does not match the provided mesh shape.");
+
+                    return std::make_unique<ConcatMesh2dToTensor>(mesh_device, config);
+                }),
+            py::arg("mesh_device"),
+            py::arg("config"),
+            py::arg("mesh_shape"))
+        .def(
+            py::init(
+                [](MeshDevice& mesh_device,
+                   const std::tuple<int, int> dims,
+                   MeshShape& mesh_shape) -> std::unique_ptr<ConcatMesh2dToTensor> {
+                    int row_dim = std::get<0>(dims);
+                    int col_dim = std::get<1>(dims);
+
+                    TT_FATAL(
+                        row_dim != col_dim,
+                        "Dimensions in 'dims' must be different; got row_dim: {}, col_dim: {}",
+                        row_dim,
+                        col_dim);
+                    TT_FATAL(
+                        mesh_shape.num_rows <= mesh_device.shape().num_rows &&  //
+                            mesh_shape.num_cols <= mesh_device.shape().num_cols,
+                        "Device mesh shape does not match the provided mesh shape.");
+
+                    return std::make_unique<ConcatMesh2dToTensor>(
+                        mesh_device,
+                        Concat2dConfig{
+                            .row_dim = row_dim,
+                            .col_dim = col_dim,
+                        });
+                }),
+            py::arg("mesh_device"),
+            py::arg("dims"),
+            py::arg("mesh_shape"))
         .def(
             "compose",
-            [](ConcatMesh2dToTensor self, const std::vector<Tensor>& tensors) -> Tensor {
+            [](const ConcatMesh2dToTensor& self, const std::vector<Tensor>& tensors) -> Tensor {
                 return self.compose(tensors);
             },
             py::arg("tensors"));
@@ -1028,6 +1082,9 @@ void py_module(py::module& module) {
         py::arg("config"));
     module.def(
 <<<<<<< HEAD
+<<<<<<< HEAD
+=======
+>>>>>>> Replace none types, expose configs, fix tuple errors
         "shard_tensor_to_2d_mesh_mapper",
         [](MeshDevice& mesh_device,
            const std::tuple<int, int> mesh_shape,
@@ -1052,8 +1109,11 @@ void py_module(py::module& module) {
                 TensorToMesh: The created ShardTensor2dMesh mapper.
    )doc");
     module.def(
+<<<<<<< HEAD
 =======
 >>>>>>> move class definitions from from distributed_tensor.cpp to.hpp so they can be exposed to the pybind.cpp; add dummy void methods in .cpp to satisfy linker; add new constructors and factory methods to fix type errors
+=======
+>>>>>>> Replace none types, expose configs, fix tuple errors
         "concat_mesh_to_tensor_composer",
         [](int dim) -> std::unique_ptr<MeshToTensor> { return concat_mesh_to_tensor_composer(dim); },
         py::arg("dim"));
@@ -1094,6 +1154,50 @@ void py_module(py::module& module) {
    )doc");
 =======
 >>>>>>> fix mesh device conflict, add aggregate/distribute and config pybinds, fix keyword error
+    module.def(
+        "concat_2d_mesh_to_tensor_composer",
+        [](MeshDevice& mesh_device, const std::tuple<int, int> dims) -> std::unique_ptr<MeshToTensor> {
+            return concat_2d_mesh_to_tensor_composer(
+                mesh_device, Concat2dConfig{.row_dim = std::get<0>(dims), .col_dim = std::get<1>(dims)});
+        },
+        py::arg("mesh_device"),
+        py::arg("dims"),
+        R"doc(
+            Create a ConcatMesh2dToTensor composer with the given mesh device and dimensions.
+
+            Args:
+                mesh_device (MeshDevice): The mesh device to create the composer for.
+                dims (Tuple[int, int]): The dimensions to create the composer for in (row, column) format.
+
+            Returns:
+                TensorToMesh: The created ConcatMesh2dToTensor composer.
+   )doc");
+    module.def(
+        "concat_2d_mesh_to_tensor_composer",
+        [](MeshDevice& mesh_device,
+           const std::tuple<int, int> dims,
+           const std::tuple<int, int> mesh_shape) -> std::unique_ptr<MeshToTensor> {
+            TT_FATAL(
+                std::get<0>(mesh_shape) <= mesh_device.shape().num_rows &&  //
+                    std::get<1>(mesh_shape) <= mesh_device.shape().num_cols,
+                "Device mesh shape does not match the provided mesh shape.");
+            return concat_2d_mesh_to_tensor_composer(
+                mesh_device, Concat2dConfig{.row_dim = std::get<0>(dims), .col_dim = std::get<1>(dims)});
+        },
+        py::arg("mesh_device"),
+        py::arg("dims"),
+        py::arg("mesh_shape"),
+        R"doc(
+            Create a ConcatMesh2dToTensor composer with the given mesh device and dimensions.
+
+            Args:
+                mesh_device (MeshDevice): The mesh device to create the composer for.
+                dims (Tuple[int, int]): The dimensions to create the composer for in (row, column) format.
+                mesh_shape (Tuple[int, int]): The shape of the 2D mesh as (num_rows, num_cols).
+
+            Returns:
+                TensorToMesh: The created ConcatMesh2dToTensor composer.
+   )doc");
     module.def(
         "distribute_tensor",
         [](const Tensor& tensor,
