@@ -109,13 +109,13 @@ def test_github_issues_from_17975(device, use_program_cache):
 
     x = torch.zeros((64, 1, 256, 384), dtype=torch.bfloat16)
     x_tt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-
+    num_iters = 4
     z_tt = x_tt + y_tt
 
     for i in range(64):
         z_torch = ttnn.to_torch(z_tt[i : i + 1])
         assert torch.allclose(z_torch, y, atol=1e-2), f"z_torch[{i}] != y"
-    for _ in range(10):
+    for _ in range(num_iters):
         y_tt = ttnn.from_torch(y, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
         assert (
             device.num_program_cache_entries() == base_program_cache_entires,
@@ -142,10 +142,10 @@ def test_github_issues_from_17975(device, use_program_cache):
     z_tt = ttnn.experimental.add(x_tt, y_tt)
     # z_tt = x_tt + y_tt
 
-    for i in range(4):
+    for i in range(num_iters):
         z_torch = ttnn.to_torch(z_tt[i : i + 1])
         assert torch.allclose(z_torch, y, atol=1e-2), f"z_torch[{i}] != y"
-    for _ in range(10):
+    for _ in range(num_iters):
         y_tt = ttnn.from_torch(y, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
         assert (
             device.num_program_cache_entries() == base_program_cache_entires,
@@ -159,7 +159,7 @@ def test_github_issues_from_17975(device, use_program_cache):
         z_tt = ttnn.experimental.add(x_tt, y_tt)
         # z_tt = x_tt + y_tt
 
-        for i in range(4):
+        for i in range(num_iters):
             z_torch = ttnn.to_torch(z_tt[i : i + 1])
             assert torch.allclose(z_torch, y, atol=1e-2), f"z_torch[{i}] != y"
     y = torch.rand((1, 1, 256, 384), dtype=torch.bfloat16)
@@ -171,7 +171,7 @@ def test_github_issues_from_17975(device, use_program_cache):
     for i in range(64):
         z_torch = ttnn.to_torch(z_tt[i : i + 1])
         assert torch.allclose(z_torch, y, atol=1e-2), f"z_torch[{i}] != y"
-    for _ in range(10):
+    for _ in range(num_iters):
         y = torch.rand((1, 1, 256, 384), dtype=torch.bfloat16)
         y_tt = ttnn.from_torch(y, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
         assert (
