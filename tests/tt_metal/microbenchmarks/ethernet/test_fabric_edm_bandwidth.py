@@ -53,7 +53,7 @@ def profile_results(num_mcasts, num_unicasts, packet_size):
     packets_per_src_chip = num_mcasts + num_unicasts
     traffic_streams_through_boundary = 2
     total_byte_sent = packets_per_src_chip * traffic_streams_through_boundary * packet_size
-    bandwidth = total_byte_sent / main_loop_cycles[0]
+    bandwidth = total_byte_sent / max(main_loop_cycles)
 
     return bandwidth
 
@@ -88,7 +88,7 @@ def run_fabric_edm(num_mcasts, num_unicasts, num_links, num_op_invocations, line
 @pytest.mark.parametrize("packet_size", [4096])
 @pytest.mark.parametrize(
     "expected_bw",
-    [10.0],
+    [5.5],
 )
 def test_fabric_edm_bw(num_mcasts, num_unicasts, num_links, num_op_invocations, line_sync, packet_size, expected_bw):
     run_fabric_edm(
