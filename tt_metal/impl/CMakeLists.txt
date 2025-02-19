@@ -89,7 +89,7 @@ target_link_libraries(
         Boost::smart_ptr
         FlatBuffers::FlatBuffers
         range-v3::range-v3
-        Metalium::Metal::Common
+        TT::Metalium::Common
         Taskflow::Taskflow
         TT::Metalium::HostDevCommon
         Metalium::Metal::Hardware
