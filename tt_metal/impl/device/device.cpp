@@ -653,12 +653,25 @@ void Device::initialize_and_launch_firmware() {
         core_info->non_worker_cores[non_worker_cores_idx++] = {core.x, core.y, AddressableCoreType::ETH};
     }
     if (hal.is_coordinate_virtualization_enabled()) {
-        // Track Virtual Non Worker Cores (In this case only Eth) separately
-        // todo this needs to include pcie and dram for bh!
+        // Track Virtual Non Worker Cores separately
         uint32_t virtual_non_worker_cores_idx = 0;
         for (const tt::umd::CoreCoord& core : eth_cores) {
             auto virtual_core = this->virtual_core_from_physical_core({core.x, core.y});
             core_info->virtual_non_worker_cores[virtual_non_worker_cores_idx++] = {virtual_core.x, virtual_core.y, AddressableCoreType::ETH};
+        }
+
+        if (this->arch() == ARCH::BLACKHOLE) {
+            for (const CoreCoord& core : pcie_cores) {
+                auto virtual_core = this->virtual_core_from_physical_core({core.x, core.y});
+                core_info->virtual_non_worker_cores[virtual_non_worker_cores_idx++] = {
+                    virtual_core.x, virtual_core.y, AddressableCoreType::PCIE};
+            }
+
+            for (const CoreCoord& core : unique_dram_cores) {
+                auto virtual_core = this->virtual_core_from_physical_core({core.x, core.y});
+                core_info->virtual_non_worker_cores[virtual_non_worker_cores_idx++] = {
+                    virtual_core.x, virtual_core.y, AddressableCoreType::DRAM};
+            }
         }
     }
 
@@ -945,7 +958,6 @@ void Device::init_command_queue_device() {
             sub_device_manager_tracker_->get_active_sub_device_manager()->num_sub_devices(),
             sub_device_manager_tracker_->get_active_sub_device_manager()->noc_mcast_unicast_data());
     }
-    std::cout << "done init cq device" << std::endl;
 }
 
 void Device::init_fabric() {
@@ -1157,8 +1169,18 @@ CoreType Device::core_type_from_virtual_core(const CoreCoord &virtual_coord) con
 
 CoreCoord Device::virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) const {
     // what happens if virtual and physical overlap ...
-    return coord;
-    if (coord.x >= this->grid_size().x || coord.y >= this->grid_size().y) {
+    // return coord;
+    bool in_virtual_space = coord.x >= this->grid_size().x || coord.y >= this->grid_size().y;
+    if (this->arch() == ARCH::BLACKHOLE) {
+        // Virtual and Physical Tensix cores overlap
+        bool on_pcie_row = (coord.y == 0);
+        bool on_eth_row = (coord.y == 1);
+        bool on_dram_col = (coord.x == 0 or coord.x == 9);
+        bool is_physical_non_worker = on_pcie_row or on_eth_row or on_dram_col;
+        in_virtual_space = in_virtual_space and !is_physical_non_worker;
+    }
+
+    if (in_virtual_space) {
         // Coordinate already in virtual space: NOC0 and NOC1 are the same
         return coord;
     } else {
@@ -1176,8 +1198,18 @@ CoreCoord Device::virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) co
 
 CoreCoord Device::virtual_noc_coordinate(uint8_t noc_index, CoreCoord coord) const {
     // what happens if virtual and physical overlap
-    return coord;
-    if (coord.x >= this->grid_size().x || coord.y >= this->grid_size().y) {
+    // return coord;
+    bool in_virtual_space = coord.x >= this->grid_size().x || coord.y >= this->grid_size().y;
+    if (this->arch() == ARCH::BLACKHOLE) {
+        // Virtual and Physical Tensix cores overlap
+        bool on_pcie_row = (noc_index == 0 ? coord.y == 0 : coord.y == 11);
+        bool on_eth_row = (noc_index == 0 ? coord.y == 1 : coord.y == 10);
+        bool on_dram_col = (noc_index == 0 ? (coord.x == 0 or coord.x == 9) : (coord.x == 7 or coord.x == 16));
+        bool is_physical_non_worker = on_pcie_row or on_eth_row or on_dram_col;
+        in_virtual_space = in_virtual_space and !is_physical_non_worker;
+    }
+
+    if (in_virtual_space) {
         // Coordinate already in virtual space: NOC0 and NOC1 are the same
         return coord;
     } else {
@@ -1677,7 +1709,6 @@ std::vector<std::pair<transfer_info_cores, uint32_t>> Device::extract_dst_noc_mu
     for (const CoreRange& core_range : ranges) {
         CoreCoord virtual_start = this->virtual_core_from_logical_core(core_range.start_coord, core_type);
         CoreCoord virtual_end = this->virtual_core_from_logical_core(core_range.end_coord, core_type);
-        std::cout << "virtual st " << virtual_start.str() << " , virtual end " << virtual_end.str() << std::endl;
 
         uint32_t num_receivers = core_range.size();
         dst_noc_multicast_info.push_back(std::make_pair(CoreRange(virtual_start, virtual_end), num_receivers));

@@ -280,8 +280,6 @@ void DevicePool::initialize_device(IDevice* dev) const {
     }
     dev->initialize_and_launch_firmware();
 
-    std::cout << "Done init and launch FW" << std::endl;
-
     watcher_attach(dev);
 
     // TODO: add handling of EDM
@@ -292,7 +290,6 @@ void DevicePool::initialize_device(IDevice* dev) const {
 
     // Set up HW command queues on device for FD
     if (this->using_fast_dispatch) {
-        std::cout << "init cq device" << std::endl;
         dev->init_command_queue_device();
     }
 }
