@@ -75,4 +75,12 @@ Tensor aggregate_tensor(const Tensor& tensor, const MeshToTensor& composer) {
                                           : composer.compose({tensor});
 }
 
+static Shard2dConfig get_shard2d_config(const std::unordered_map<std::string, std::string>& metadata) {
+    return Shard2dConfig(std::stoi(metadata.at("row_dim")), std::stoi(metadata.at("col_dim")));
+}
+
+static Concat2dConfig get_concat2d_config(const std::unordered_map<std::string, std::string>& metadata) {
+    return Concat2dConfig(std::stoi(metadata.at("row_dim")), std::stoi(metadata.at("col_dim")));
+}
+
 }  // namespace ttnn::distributed
