@@ -2079,6 +2079,8 @@ FORCE_INLINE void noc_async_write_one_packet_with_trid_with_state(
     while (!noc_cmd_buf_ready(noc, cmd_buf));
     WAYPOINT("NWPD");
 
+    // In order to sanitize, need to grab full noc addr + xfer size from state.
+    DEBUG_SANITIZE_NOC_WRITE_TRANSACTION_WITH_ADDR_AND_SIZE_STATE(noc, dst_noc_addr, src_local_l1_addr);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_PACKET_TAG, NOC_PACKET_TAG_TRANSACTION_ID(trid));
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_TARG_ADDR_LO, src_local_l1_addr);
     NOC_CMD_BUF_WRITE_REG(noc, cmd_buf, NOC_RET_ADDR_LO, (uint32_t)dst_noc_addr);
