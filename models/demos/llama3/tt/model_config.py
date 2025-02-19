@@ -408,9 +408,11 @@ class TtModelArgs:
             n_dim = (
                 self.dim // self.cluster_shape[1]
                 if self.is_galaxy
-                else 1024
-                if self.ccl_topology() == ttnn.Topology.Ring and 1024 % (self.dim / self.num_devices) == 0
-                else self.dim
+                else (
+                    1024
+                    if self.ccl_topology() == ttnn.Topology.Ring and 1024 % (self.dim / self.num_devices) == 0
+                    else self.dim
+                )
             )
             num_rows = lambda seq_len: min(seq_len, 1024 if self.is_galaxy else 2048)
             self.model_config["WO_PREFILL_PROGCFG"] = lambda seq_len: self.matmul_config(
