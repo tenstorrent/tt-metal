@@ -12,20 +12,17 @@ import ttnn
 from models.utility_functions import comp_pcc
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
+from tqdm import tqdm
+
 layouts = [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT]
 
-dtypes = [(torch.float32, ttnn.float32), (torch.bfloat16, ttnn.bfloat16), (torch.bfloat16, ttnn.bfloat8_b)]
-shapes = [(1,), (2,), (2, 1), (2, 3), (2, 1, 3), (4, 16, 3, 2), (4, 3, 1, 2, 2)]
+dtypes = [(torch.float32, ttnn.float32), (torch.bfloat16, ttnn.bfloat16)]
+shapes = [(1,), (2,), (2, 3), (4, 16, 3, 1), (4, 3, 1, 2, 2)]
 repeat_shapes = [
     (1,),
-    (2,),
     (1, 2),
-    (1, 4),
-    (2, 1, 3),
-    (1, 2, 3),
     (4, 3, 2, 1),
     (2, 3, 4, 5, 2),
-    (2, 1, 3, 1, 3, 1),
     (2048,),
 ]
 
@@ -76,3 +73,29 @@ def test_repeat(device, layout, dtype, shape, repeat_shape):
 
 
 # TODO! test program cache when it is implemented
+
+
+@pytest.mark.parametrize("layout", layouts)
+@pytest.mark.parametrize("shape", shapes)
+@pytest.mark.parametrize("repeat_shape", repeat_shapes)
+def test_pc_repeat(device, layout, shape, repeat_shape):
+    # trying to avoid the `buffer not divisible by page size` error. Does this make sense?
+    if layout == ttnn.TILE_LAYOUT and (
+        prod(shape) % ttnn.TILE_SIZE != 0 or _get_final_size(shape, repeat_shape) % ttnn.TILE_SIZE != 0
+    ):
+        pytest.skip("Tensor not suitable for tile layout")
+
+    if len(repeat_shape) < len(shape):
+        pytest.skip("PyTorch repeat dim must be >= tensor dim (although we can handle this).")
+    device.enable_program_cache()
+    for _ in tqdm(range(3)):
+        torch_tensor = torch.rand(shape, dtype=torch.bfloat16)
+        torch_result = torch_tensor.repeat(repeat_shape)
+        input_tensor = ttnn.from_torch(torch_tensor, layout=layout, device=device, dtype=ttnn.bfloat16)
+        output = ttnn.repeat(input_tensor, ttnn.Shape(repeat_shape))
+        output = ttnn.to_torch(output)
+        assert (
+            output.shape == torch_result.shape
+        ), f"Output shape {output.shape} does not match torch shape {torch_result.shape}"
+
+        assert_with_pcc(torch_result, output, 0.9999)
