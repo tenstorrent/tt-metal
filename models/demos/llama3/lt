@@ -163,6 +163,11 @@ class OutputEntryList:
                     entry.output = entry_data["output"]
                     entry.log_id = entry_data["log_id"]
                     entry.speed = entry_data["speed"]
+                    if (
+                        "ttft" not in entry_data.keys()
+                    ):  # Verify if the new TTFT attribute is present to avoid errors with old lt versions
+                        os.remove("logs/state.json")
+                        return
                     entry.ttft = entry_data["ttft"]
                     entry.pcc = entry_data["pcc"]
                     self._entries.append(entry)
