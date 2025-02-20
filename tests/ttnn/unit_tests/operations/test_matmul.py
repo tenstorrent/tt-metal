@@ -2014,3 +2014,134 @@ def test_small_matmul_pcc(device):
     output_tensor = ttnn.to_torch(output1)
 
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
+
+
+@pytest.mark.parametrize("side", ["height", "width"])
+def test_padded_2d_matmul(device, side):
+    """
+    This test checks that when the program config specifies per_core_M and per_core_N
+    which would multiply out to be larger than the true shape of the output, matmul
+    does not clobber memory outside the shape of the output.
+    """
+    pytest.skip("#17491: last tile bounds are not set up properly")
+
+    if side == "height":
+        M = 43 * 1024
+        K = 256
+        N = 32
+        out_block_h = 11
+        out_block_w = 1
+        per_core_M = 176
+        per_core_N = 1
+    else:
+        M = 32
+        K = 256
+        N = 43 * 1024
+        out_block_h = 1
+        out_block_w = 11
+        per_core_M = 1
+        per_core_N = 176
+    torch.manual_seed(0)
+    pcc = 0.99
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(8, 8),
+        in0_block_w=1,
+        out_block_h=out_block_h,
+        out_block_w=out_block_w,
+        out_subblock_h=1,
+        out_subblock_w=1,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=False,
+    )
+
+    torch_act = torch.rand([1, 1, M, K], dtype=torch.float32)
+    torch_weight = torch.rand([1, 1, K, N], dtype=torch.float32)
+    # Allocate tensors above and below where the output will be
+    X = 2**8
+    dummy_lower = torch.full([1, 1, X, X], 2)
+    dummy_out = torch.zeros([1, 1, M, N])
+    dummy_upper = torch.full([1, 1, X, X], 4)
+
+    act = ttnn.from_torch(torch_act, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
+    weight = ttnn.from_torch(torch_weight, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
+    lower_tt = ttnn.from_torch(dummy_lower, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
+    out_tt = ttnn.from_torch(dummy_out, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
+    upper_tt = ttnn.from_torch(dummy_upper, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
+    # Free up dummy output tensor so matmul will allocate output there
+    ttnn.deallocate(out_tt)
+    output_tensor = ttnn.matmul(
+        act,
+        weight,
+        program_config=program_config,
+        compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False
+        ),
+    )
+    lower = ttnn.to_torch(lower_tt).float()
+    upper = ttnn.to_torch(upper_tt).float()
+    # Check that the tensors above and below the output are unchanged
+    torch_output_tensor = torch.matmul(torch_act, torch_weight)
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+    assert torch.all(lower == 2)
+    assert torch.all(upper == 4)
+
+
+@pytest.mark.parametrize("has_program_config", [True])  # False])#, True])
+def test_padded_1d_matmul(device, has_program_config):
+    pytest.skip("#17491: last tile bounds are not set up properly")
+    S = 44520
+    D = 1536
+    if has_program_config:
+        program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=1,
+            out_block_h=11,
+            out_block_w=16,
+            out_subblock_h=1,
+            out_subblock_w=4,
+            per_core_M=22,
+            per_core_N=48,
+            mcast_in0=False,
+            fused_activation=None,
+            fuse_batch=True,
+        )
+    else:
+        program_config = None
+
+    torch.manual_seed(0)
+    pcc = 0.99
+    torch_act = torch.rand([1, 1, S, D], dtype=torch.float32)
+    torch_weight = torch.rand([1, 1, D, D], dtype=torch.float32)
+    # Allocate tensors above and below where the output will be
+    X = 2**8
+    dummy_lower = torch.full([1, 1, X, X], 2)
+    dummy_out = torch.zeros([1, 1, S, D])
+    dummy_upper = torch.full([1, 1, X, X], 4)
+
+    act = ttnn.from_torch(torch_act, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
+    weight = ttnn.from_torch(torch_weight, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
+    lower_tt = ttnn.from_torch(dummy_lower, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
+    out_tt = ttnn.from_torch(dummy_out, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
+    upper_tt = ttnn.from_torch(dummy_upper, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
+    # Free up dummy output tensor so linear will allocate output there
+    ttnn.deallocate(out_tt)
+    output_tensor = ttnn.matmul(
+        act,
+        weight,
+        core_grid=ttnn.CoreGrid(x=8, y=8),
+        compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False
+        ),
+    )
+    lower = ttnn.to_torch(lower_tt).float()
+    upper = ttnn.to_torch(upper_tt).float()
+    # Check that the tensors above and below the output are unchanged
+    torch_output_tensor = torch.matmul(torch_act, torch_weight)
+    output_tensor = ttnn.to_torch(output_tensor)
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+    assert torch.all(lower == 2)
+    assert torch.all(upper == 4)
