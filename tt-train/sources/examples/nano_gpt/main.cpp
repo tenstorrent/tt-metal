@@ -483,17 +483,8 @@ int main(int argc, char **argv) {
             mask.push_back(i >= j ? 1.0F : 0.0F);
         }
     }
-
-    if (ddp) {
-        ttml::core::XTensorToMeshVariant<float> float_composer =
-            ttml::core::ShardXTensorToMesh<float>(device->shape(), 0);
-        xt::xarray<float> mask_xtensor = xt::adapt(mask, {1U, 1U, sequence_length, sequence_length});
-        cached_data.masks_tensor =
-            ttml::autograd::create_tensor(ttml::core::from_xtensor(mask_xtensor, device, float_composer));
-    } else {
-        cached_data.masks_tensor = ttml::autograd::create_tensor(
-            ttml::core::from_vector(mask, ttml::core::create_shape({1, 1, sequence_length, sequence_length}), device));
-    }
+    cached_data.masks_tensor = ttml::autograd::create_tensor(
+        ttml::core::from_vector(mask, ttml::core::create_shape({1, 1, sequence_length, sequence_length}), device));
 
     std::function<BatchType(std::vector<DatasetSample> && samples)> collate_fn =
         [sequence_length, num_heads, device, &cached_data, ddp](std::vector<DatasetSample> &&samples) {
