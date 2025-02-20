@@ -3,13 +3,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/distributed/distributed_pybind.hpp"
-#include <pybind11/pytypes.h>
 
 #include <tt-metalium/command_queue.hpp>
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
-
+#include "pybind11/stl.h"
 using namespace tt::tt_metal;
 
 namespace ttnn::distributed {
