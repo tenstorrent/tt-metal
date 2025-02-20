@@ -117,7 +117,7 @@ jobs:
     - uses: lukka/get-cmake@b516803a3c5fac40e2e922349d15cdebdba01e60
       if: steps.changed-cmake-files.outputs.any_changed == 'true'
       with:
-        cmakeVersion: "~3.24.0"
+        cmakeVersion: "~3.30.0"
     - name: Check CMake version
       if: steps.changed-cmake-files.outputs.any_changed == 'true'
       run: cmake --version
@@ -133,4 +133,4 @@ jobs:
       run: |
         echo "Checking compatibility with $(cmake --version)"
         # FIXME: Why is HAVE_STD_REGEX needed? Clean up when we solve it.
-        cmake -DCMAKE_TOOLCHAIN_FILE=cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake -DHAVE_STD_REGEX=ON -B build .
+        cmake -D TT_METAL_BUILD_TESTS=ON -D BUILD_PROGRAMMING_EXAMPLES=ON -B build .
