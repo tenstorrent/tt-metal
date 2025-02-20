@@ -15,7 +15,7 @@
 
 namespace ttnn::operations::pool {
 
-// namespace {
+namespace {
 
 // ReduceOpMath get_reduce_op(Pool2DType pool_type) {
 //     switch (pool_type) {
@@ -23,9 +23,22 @@ namespace ttnn::operations::pool {
 //     }
 // }
 
-// } // namespace
+// Return a single bf16 scalar for the pool type in u32 (packed in the least 16 bits)
+// TODO(jongbinlimTT): This is tech debt from previous author. Function name shows a getter of
+// BF16, but return type is UINT32_T. This isn't correct.
+uint32_t get_bf16_pool_scalar(Pool2DType pool_type, uint32_t kernel_size_hw) {
+    float value;
+    switch (pool_type) {
+        case Pool2DType::MAX_POOL2D: value = 1.; break;
+    }
+    return bfloat16(value).to_packed();
+}
+
+}  // namespace
 
 // Return a single bf16 init value for the pool type in u32 (packed in the least 16 bits)
+// TODO(jongbinlimTT): This is tech debt from previous author. Function name shows a getter of
+// BF16, but return type is UINT32_T. This isn't correct.
 uint32_t get_bf16_pool_init_value(Pool2DType pool_type) {
     float value;
     switch (pool_type) {
@@ -294,9 +307,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
      * Reader Kernel: input rows -> input cb
      */
     float one = 1.;
-    uint32_t bf16_one_u32 = *reinterpret_cast<uint32_t*>(&one);
-    // uint32_t bf16_scalar = *reinterpret_cast<uint32_t*>(&one);
-    // uint32_t bf16_scalar = static_cast<uint32_t>(one);
+    uint32_t bf16_scalar = get_bf16_pool_scalar(pool_type, kernel_size_hw) << 16;  // << 16 is for maxpool.
     // const uint32_t bf16_scalar = 1.0f; // TODO(jongbinlimTT): 1.0 for max pool, 1.0 / kernel_size for avg pool.
     const uint32_t bf16_init_value =
         get_bf16_pool_init_value(pool_type);  // TODO(jongbinlimTT): -inf for max pool, 0 for avg pool.
@@ -313,7 +324,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         nblocks,
         split_reader,     // enable split reader
         0,                // split reader id
-        bf16_one_u32,     // bf16_scalar,
+        bf16_scalar,      // bf16_one_u32,     // bf16_scalar,
         bf16_init_value,  //
         in_nblocks_c,
         in_cb_sz,
@@ -332,7 +343,7 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         nblocks,
         split_reader,     // enable split reader
         1,                // split reader id
-        bf16_one_u32,     // bf16_scalar,
+        bf16_scalar,      // bf16_one_u32,     // bf16_scalar,
         bf16_init_value,  //
         in_nblocks_c,
         in_cb_sz,
