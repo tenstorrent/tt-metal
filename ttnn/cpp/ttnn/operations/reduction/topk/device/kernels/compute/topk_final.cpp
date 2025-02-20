@@ -95,10 +95,9 @@ void MAIN {
             cb_wait_front(input_transposed_cb_index, Wt);
             cb_wait_front(index_transposed_cb_index, Wt);
 
-            uint32_t i = 0;
             uint32_t dist = ((1 << m_iter) * K) >> 5;
             uint32_t left_tile_id = 0;
-            while (i < num_k_sequences) {
+            for (uint32_t i = 0; i < num_k_sequences; i += seq_per_2tiles) {
                 for (uint32_t t = 0; t < tiles_per_seq; t++) {
                     left_tile_id = ((i * (1 << m_iter) * K) >> 5) + t;
                     uint32_t right_tile_id = left_tile_id + dist;
@@ -137,7 +136,6 @@ void MAIN {
                     pack_tile<true>(index_dest_end, index_transposed_cb_index, right_tile_id);
                     release_dst();
                 }
-                i += seq_per_2tiles;
             }
 
             cb_reserve_back(input_transposed_cb_index, Wt);
@@ -153,7 +151,7 @@ void MAIN {
             // we have decreased our search space by half
             num_k_sequences = num_k_sequences >> 1;
             int target_tiles = (Wt == 1 || ((num_k_sequences == 1) && (tiles_per_seq == 1))) ? 1 : 2;
-            uint32_t idx = 0;
+
             int sel_tile_id[2];
             int sel_tile_id_ptr = 0;
             seq_per_2tiles = (seq_per_2tiles == 2) ? 2 : seq_per_2tiles >> 1;
@@ -162,7 +160,7 @@ void MAIN {
             cb_wait_front(input_transposed_cb_index, Wt);
             cb_wait_front(index_transposed_cb_index, Wt);
 
-            while (idx < num_k_sequences) {
+            for (uint32_t idx = 0; idx < num_k_sequences; idx += (seq_per_2tiles >> 1)) {
                 for (uint32_t t = 0; t < tiles_per_seq; t++) {
                     uint32_t left_ind = ((idx * (1 << (m_iter + 1)) * K) >> 5) + t;
                     if (left_ind >= Wt) {
@@ -210,7 +208,6 @@ void MAIN {
                         a = switch_dir ? !a : a;
                     }
                 }
-                idx += (seq_per_2tiles >> 1);
             }
             cb_reserve_back(input_transposed_cb_index, Wt);
             cb_reserve_back(index_transposed_cb_index, Wt);
