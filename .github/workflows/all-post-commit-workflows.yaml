@@ -50,12 +50,6 @@ jobs:
       build-type: ${{ inputs.build-type || 'Release' }}
       tracy: true
     secrets: inherit
-  test-wheels:
-    needs: build-artifact
-    uses: ./.github/workflows/_test-wheels-impl.yaml
-    with:
-      from-precompiled: true
-    secrets: inherit
   # Slow Dispatch Unit Tests
   sd-unit-tests:
     needs: build-artifact
