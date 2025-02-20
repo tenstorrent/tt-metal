@@ -6,6 +6,7 @@
 #include <pybind11/pytypes.h>
 
 #include <tt-metalium/command_queue.hpp>
+#include "tt-metalium/mesh_coord.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
@@ -66,8 +67,10 @@ void py_module(py::module& module) {
                         const std::vector<chip_id_t>& physical_device_ids) {
                 return MeshDevice::create(
                     MeshDeviceConfig{
-                        .mesh_shape = mesh_device_shape,
-                        .offset = offset,
+                        .mesh_shape = SimpleMeshShape(mesh_device_shape),
+                        .offset = offset.row != 0 || offset.col != 0
+                                      ? std::make_optional<MeshCoordinate>(offset.row, offset.col)
+                                      : std::nullopt,
                         .physical_device_ids = physical_device_ids,
                     },
                     l1_small_size,

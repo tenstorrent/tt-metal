@@ -223,18 +223,20 @@ Tensor reduce_scatter(
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             const auto& input_device_tensor = input_tensors.at(0);
 
+            TT_FATAL(mesh_view.is_mesh_2d(), "Mesh view is not 2D");
             const auto coordinate = mesh_view.find_device(input_device_tensor.device()->id());
-            const auto view_index = (cluster_axis == 0) ? coordinate.col : coordinate.row;
-            const auto device_index = (cluster_axis == 0) ? coordinate.row : coordinate.col;
+            const auto view_index = (cluster_axis == 0) ? coordinate[1] : coordinate[0];
+            const auto device_index = (cluster_axis == 0) ? coordinate[0] : coordinate[1];
 
             auto get_chip_id = [&](std::size_t line_index) -> std::optional<chip_id_t> {
-                auto new_coord = coordinate;
+                auto new_row = coordinate[0];
+                auto new_col = coordinate[1];
                 if (cluster_axis == 0) {
-                    new_coord.row = line_index % num_devices;
+                    new_row = line_index % num_devices;
                 } else {
-                    new_coord.col = line_index % num_devices;
+                    new_col = line_index % num_devices;
                 }
-                return mesh_view.find_device_id(new_coord);
+                return mesh_view.find_device_id(MeshCoordinate(new_row, new_col));
             };
 
             bool is_last_chip_in_clockwise_direction = device_index == (num_devices - 1);

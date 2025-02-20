@@ -80,7 +80,7 @@ MeshDevice::ScopedDevices::ScopedDevices(
         physical_device_ids.size() == devices_.shape().mesh_size(),
         "Device size mismatch; expected: {}, actual: {}",
         devices_.shape().mesh_size(),
-        opened_devices_.size());
+        physical_device_ids.size());
 
     auto it = devices_.begin();
     for (auto physical_device_id : physical_device_ids) {
@@ -135,10 +135,13 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
     size_t num_command_queues,
     const DispatchCoreConfig& dispatch_core_config,
     tt::stl::Span<const std::uint32_t> l1_bank_remap) {
+    // TODO: #17477 Extend to ND.
+    TT_FATAL(config.mesh_shape.dims() == 2, "Mesh shape must be 2D");
+    auto mesh_shape_2d = MeshShape{config.mesh_shape[0], config.mesh_shape[1]};
     auto mesh_device = std::make_shared<MeshDevice>(
         std::make_shared<ScopedDevices>(
             l1_small_size, trace_region_size, num_command_queues, dispatch_core_config, config),
-        config.mesh_shape);
+        mesh_shape_2d);
 
     mesh_device->initialize(num_command_queues, l1_small_size, trace_region_size, l1_bank_remap);
     return mesh_device;
@@ -169,11 +172,14 @@ std::shared_ptr<MeshDevice> MeshDevice::create_submesh(const MeshShape& submesh_
     }
 
     auto submesh = std::make_shared<MeshDevice>(scoped_devices_, submesh_shape, shared_from_this());
-    auto start_coordinate = Coordinate{offset.row, offset.col};
-    auto end_coordinate = Coordinate{offset.row + submesh_shape.num_rows - 1, offset.col + submesh_shape.num_cols - 1};
+    auto start_coordinate = MeshCoordinate{offset.row, offset.col};
+    auto end_coordinate =
+        MeshCoordinate{offset.row + submesh_shape.num_rows - 1, offset.col + submesh_shape.num_cols - 1};
 
-    auto submesh_devices = view_->get_devices(start_coordinate, end_coordinate);
-    submesh->view_ = std::make_unique<MeshDeviceView>(submesh_devices, submesh_shape);
+    MeshContainer<IDevice*> submesh_devices_container(
+        submesh_shape, view_->get_devices(MeshCoordinateRange{start_coordinate, end_coordinate}));
+
+    submesh->view_ = std::make_unique<MeshDeviceView>(submesh_devices_container);
     submeshes_.push_back(submesh);
     log_trace(
         LogMetal,
@@ -311,8 +317,11 @@ void MeshDevice::reshape(const MeshShape& new_shape) {
         new_shape.num_rows * new_shape.num_cols == this->num_devices(),
         "New shape must have the same number of devices as current shape");
 
+    MeshContainer<IDevice*> devices(new_shape, this->get_row_major_devices(new_shape));
+    auto new_view = std::make_unique<MeshDeviceView>(devices);
+
     mesh_shape_ = new_shape;
-    view_ = std::make_unique<MeshDeviceView>(this->get_row_major_devices(new_shape), new_shape);
+    view_ = std::move(new_view);
 }
 
 bool MeshDevice::close() {
@@ -601,7 +610,8 @@ bool MeshDevice::initialize(
     size_t trace_region_size,
     tt::stl::Span<const std::uint32_t> l1_bank_remap,
     bool minimal) {
-    view_ = std::make_unique<MeshDeviceView>(scoped_devices_->get_devices(), mesh_shape_);
+    MeshContainer<IDevice*> devices(mesh_shape_, scoped_devices_->get_devices());
+    view_ = std::make_unique<MeshDeviceView>(devices);
 
     // For MeshDevice, we support uniform sub-devices across all devices and we do not support ethernet subdevices.
     const auto& compute_grid_size = this->compute_with_storage_grid_size();
