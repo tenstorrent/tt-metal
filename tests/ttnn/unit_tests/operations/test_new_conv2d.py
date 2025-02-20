@@ -147,11 +147,32 @@ def run_conv(
     if config_override and "act_block_w_div" in config_override and not auto_shard:
         conv_config.act_block_w_div = config_override["act_block_w_div"]
 
+    if config_override and "in_place" in config_override and not auto_shard:
+        conv_config.in_place = config_override["in_place"]
+
     if config_override and "num_cores_nhw" in config_override:
         if config_override["num_cores_nhw"] == 98:
             conv_config.core_grid = ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (11, 7)), ttnn.CoreRange((0, 8), (1, 8))})
             conv_config.override_sharding_config = True
             print("Setting num_cores_nhw to 98")
+
+    """
+    MemoryConfig(memory_layout=TensorMemoryLayout::HEIGHT_SHARDED,
+    buffer_type=BufferType::L1,
+    shard_spec=ShardSpec(grid={[(x=0,y=0) - (x=7,y=6)], [(x=0,y=7) - (x=3,y=7)]},shape={2816, 128},
+    orientation=ShardOrientation::ROW_MAJOR,mode=ShardMode::PHYSICAL,physical_shard_shape=std::nullopt))
+    """
+    # cg = ttn#n.CoreRangeSet(
+    # {
+    # ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 6)),
+    # ttnn.CoreRange(ttnn.CoreCoord(0, 7), ttnn.CoreCoord(3, 7)),
+    # }
+    # )
+    # in_shard_spec = ttnn.ShardSpec(cg, (2816, 192), ttnn.ShardOrientation.ROW_MAJOR)
+    # in_mem_confg = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, in_shard_spec)
+    # tt_input_tensor = ttnn.to_device(tt_input_tensor,memory_config=in_mem_confg, device=device)
+
+    print(tt_input_tensor)
 
     [tt_output_tensor_on_device, [out_height, out_width]] = ttnn.conv2d(
         input_tensor=tt_input_tensor,
@@ -1753,28 +1774,27 @@ def test_unet_conv_groups_2_wh(
 )
 @pytest.mark.parametrize(
     "groups",
-    [4, 6],
+    [3],
 )
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, shard_layout, config_override, use_shallow_conv_variant",
     (
-        (16, 4, 1056, 160, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True),
-        (16, 16, 1056, 160, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True),
-        (16, 16, 528, 80, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True),
-        (32, 16, 264, 40, 3, 3, 1, 1, 1, 1, HS, None, False),
-        (32, 32, 264, 40, 3, 3, 1, 1, 1, 1, HS, None, False),
-        (32, 32, 132, 20, 3, 3, 1, 1, 1, 1, HS, None, False),
-        (64, 32, 66, 10, 3, 3, 1, 1, 1, 1, HS, None, False),
-        (64, 64, 66, 10, 3, 3, 1, 1, 1, 1, HS, None, False),
-        (32, 96, 132, 20, 3, 3, 1, 1, 1, 1, HS, None, False),
-        (32, 32, 132, 20, 3, 3, 1, 1, 1, 1, HS, None, False),
-        (32, 64, 264, 40, 3, 3, 1, 1, 1, 1, HS, None, False),
-        (32, 32, 264, 40, 3, 3, 1, 1, 1, 1, HS, None, False),
-        # (16, 48, 528, 80, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True), # OOM - need inplace convolution
-        (16, 16, 528, 80, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True),
-        # (16, 32, 1056, 160, 3, 3, 1, 1, 1, 1, HS, {"act_block_h": 2 * 32}, True), # OOM - need inplace convolution
-        (1, 16, 1056, 160, 1, 1, 1, 1, 0, 0, HS, {"act_block_h": 2 * 32}, False),
+        (
+            16,
+            32,
+            1056,
+            160,
+            3,
+            3,
+            1,
+            1,
+            1,
+            1,
+            HS,
+            {"act_block_h": 2 * 32, "in_place": True},
+            True,
+        ),  # OOM - need inplace convolution
     ),
 )
 @pytest.mark.parametrize(

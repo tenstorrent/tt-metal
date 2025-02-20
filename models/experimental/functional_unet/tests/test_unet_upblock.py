@@ -21,7 +21,7 @@ from models.experimental.functional_unet.tests.common import (
 )
 
 
-@pytest.mark.parametrize("batch, groups", [(1, 2)])
+@pytest.mark.parametrize("batch, groups", [(1, 4)])
 @pytest.mark.parametrize(
     "block_name, input_channels, input_height, input_width, residual_channels",
     [

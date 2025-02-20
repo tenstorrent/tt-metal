@@ -50,9 +50,12 @@ def get_core_grid_from_num_cores(num_cores: int, grid_rows: int = 8, grid_cols: 
     return ttnn.CoreRangeSet({*ranges})
 
 
-def concatenate(activation, residual, dim=-1, groups=2):
+def concatenate(activation, residual, dim=-1, groups=4):
     assert dim < 0
     assert activation.is_sharded() and residual.is_sharded(), "Both inputs to `ttnn.concat` must be sharded"
+
+    residual_tile = ttnn.to_layout(residual, ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+    ttnn.deallocate(residual)
 
     output_memory_config = residual.memory_config()
 
@@ -74,9 +77,6 @@ def concatenate(activation, residual, dim=-1, groups=2):
 
     x_tile = ttnn.to_layout(x, ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
     ttnn.deallocate(x)
-
-    residual_tile = ttnn.to_layout(residual, ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
-    ttnn.deallocate(residual)
 
     return ttnn.concat([x_tile, residual_tile], dim=dim, memory_config=output_memory_config, groups=groups)
 
@@ -116,6 +116,7 @@ class UNetConv2D:
         output_layout=ttnn.TILE_LAYOUT,
         reshard_if_not_optimal=False,
         mesh_mapper=None,
+        reallocate_halo_output=False,
     ):
         assert is_valid_device_for_unet(device), "UNet Shallow requires an 8x8 grid on all devices"
 
@@ -154,6 +155,7 @@ class UNetConv2D:
             input_channels_alignment=conv.input_channels_alignment if "input_channels_alignment" in conv else 32,
             reshard_if_not_optimal=reshard_if_not_optimal,
             in_place=conv.in_place if "in_place" in conv else False,
+            reallocate_halo_output=reallocate_halo_output,
         )
         self.compute_config = ttnn.init_device_compute_kernel_config(
             device.arch(),
@@ -186,7 +188,7 @@ class UNetConv2D:
             "stride": self.stride,
             "padding": self.padding,
             "dilation": [1, 1],
-            "groups": 2,
+            "groups": 4,
             "device": self.device,
             "conv_config": self.conv_config,
         }
@@ -276,9 +278,18 @@ class UNetUpblock:
         device,
         conv_cache={},
         mesh_mapper=None,
+        reshard=True,
     ):
         self.device = device
-        self.conv1 = UNetConv2D(conv1, bn1, device, conv_cache, reshard_if_not_optimal=True, mesh_mapper=mesh_mapper)
+        self.conv1 = UNetConv2D(
+            conv1,
+            bn1,
+            device,
+            conv_cache,
+            reshard_if_not_optimal=reshard,
+            mesh_mapper=mesh_mapper,
+            reallocate_halo_output=reshard,
+        )
         self.conv2 = UNetConv2D(conv2, bn2, device, conv_cache, mesh_mapper=mesh_mapper)
         self.conv3 = UNetConv2D(conv3, bn3, device, conv_cache, mesh_mapper=mesh_mapper)
 
@@ -325,23 +336,44 @@ class UNetUpblock:
         x = self.upsample(x_rm)
         ttnn.deallocate(x_rm)
 
-        if not residual.is_sharded():
+        if not residual_rm.is_sharded():
             core_grid = get_core_grid_from_num_cores(x.memory_config().shard_spec.num_cores())
             memory_config = ttnn.create_sharded_memory_config_(
-                residual.shape, core_grid, ttnn.ShardStrategy.HEIGHT, orientation=ttnn.ShardOrientation.ROW_MAJOR
+                residual_rm.shape, core_grid, ttnn.ShardStrategy.HEIGHT, orientation=ttnn.ShardOrientation.ROW_MAJOR
             )
-            residual = ttnn.to_memory_config(residual, memory_config)
+            residual = ttnn.to_memory_config(residual_rm, memory_config)
+            ttnn.deallocate(residual_rm)
+            residual_rm = residual
 
         y = concatenate(x, residual_rm, dim=-1)
         ttnn.deallocate(x)
         ttnn.deallocate(residual_rm)
 
-        y = ttnn.reallocate(y)
-        y = self.conv1(y)
-        y = self.conv2(y)
-        y = self.conv3(y)
+        if y.shape[-2] == 1056 * 160:
+            print("alternatve branch")
+            y_rm = ttnn.untilize(y)
+            ttnn.deallocate(y)
 
-        return y
+            print("y_rm: ", y_rm.layout)
+            # y_rm = ttnn.reallocate(y_rm)
+
+            ttnn.dump_device_memory_state(y_rm.device(), "pre_conv_block_")
+
+            y = self.conv1(y_rm)
+            y = self.conv2(y)
+            y = self.conv3(y)
+
+            return y
+        else:
+            y = ttnn.reallocate(y)
+
+            ttnn.dump_device_memory_state(y.device(), "pre_conv_block_")
+
+            y = self.conv1(y)
+            y = self.conv2(y)
+            y = self.conv3(y)
+
+            return y
 
 
 class UNet:
@@ -444,6 +476,7 @@ class UNet:
             device,
             conv_cache=self.conv_cache,
             mesh_mapper=mesh_mapper,
+            reshard=False,
         )
 
         self.output_layer = UNetConv2D(
