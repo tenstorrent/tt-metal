@@ -1,5 +1,7 @@
 #! /usr/bin/env bash
 
+set -x
+
 source scripts/tools_setup_common.sh
 
 set -eo pipefail
@@ -86,7 +88,10 @@ run_profiling_test(){
 
     echo "Make sure this test runs in a build with cmake option ENABLE_TRACY=ON"
 
-    source python_env/bin/activate
+    if [[ -z "$NO_USE_VENV_PLZ" ]]; then
+      source python_env/bin/activate
+    fi
+
     export PYTHONPATH=$TT_METAL_HOME
 
     run_additional_T3000_test
