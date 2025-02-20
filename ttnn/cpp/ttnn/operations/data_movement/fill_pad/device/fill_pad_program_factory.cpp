@@ -85,18 +85,23 @@ operation::ProgramWithCallbacks fill_pad_multi_core(const Tensor& input_tensor, 
         (std::uint32_t)tiles_per_2d_tensor,
         (std::uint32_t)tiles_per_tile_row,
         (std::uint32_t)tt::constants::TILE_HEIGHT,
-        (std::uint32_t)tt::constants::FACE_HEIGHT,
-        (std::uint32_t)sharded};
+        (std::uint32_t)tt::constants::FACE_HEIGHT};
 
     if (sharded) {
         shard_builder::extend_sharding_compile_time_args(input_tensor, writer_compile_time_args);
+    }
+
+    std::map<string, string> compute_defines;
+    if (sharded) {
+        compute_defines["SHARDED"] = "1";
     }
 
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/dataflow/fill_pad_writer.cpp",
         all_cores,
-        tt_metal::WriterDataMovementConfig(writer_compile_time_args));  // writer only for in-place operation
+        tt_metal::WriterDataMovementConfig(
+            writer_compile_time_args, compute_defines));  // writer only for in-place operation
 
     auto cores = grid_to_cores(num_cores, num_cores_x, num_cores_y, false);
     std::vector<uint32_t> writer_runtime_args = {
