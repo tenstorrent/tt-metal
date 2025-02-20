@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -8,6 +8,34 @@ import ttnn
 from loguru import logger
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from models.utility_functions import nearest_32
+
+
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        32,
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("dtype", [ttnn.uint16, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.float32])
+def test_direct_replicate_to_tensor_mesh(mesh_device, dtype):
+    torch.manual_seed(1234)
+
+    torch_tensor = torch.randn(1, 1, 32, 256)
+    to_repl = ttnn.from_torch(
+        torch_tensor,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+    )
+
+    mapper = ttnn.CppReplicateTensorToMesh(mesh_device)
+    replicated_tensors = ttnn.from_torch(to_repl, mapper, mesh_device)
+    out_tensors = ttnn.get_device_tensors(replicated_tensors)
+
+    out_pass, out_pcc = comp_pcc(ttnn.to_torch(out_tensors[0]), torch_tensor, pcc=0.99)
+    logger.info(f"PCC value: {out_pcc}")
+    assert out_pass
 
 
 @pytest.mark.parametrize(
