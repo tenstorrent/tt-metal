@@ -253,6 +253,7 @@ std::vector<TensorSpec> OptimizedConvNew::compute_output_specs(const std::vector
             TT_THROW("Unsupported shard scheme");
         }
     }
+
     return {TensorSpec(
         output_shape,
         TensorLayout::fromPaddedShape(

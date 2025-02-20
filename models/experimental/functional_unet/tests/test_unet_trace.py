@@ -108,11 +108,11 @@ def test_unet_trace(
 
 @skip_for_grayskull("UNet not currently supported on GS")
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 68864, "trace_region_size": 442368, "num_command_queues": 2}], indirect=True
+    "device_params", [{"l1_small_size": 68864, "trace_region_size": 494592, "num_command_queues": 2}], indirect=True
 )
 @pytest.mark.parametrize(
     "batch, groups, iterations",
-    ((1, 2, 32),),
+    ((1, 4, 32),),
 )
 def test_unet_trace_2cq(
     batch: int,
@@ -343,11 +343,11 @@ def test_unet_trace_2cq_multi_device(
 
 @skip_for_grayskull("UNet not currently supported on GS")
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 68864, "trace_region_size": 424960, "num_command_queues": 2}], indirect=True
+    "device_params", [{"l1_small_size": 68864, "trace_region_size": 494592, "num_command_queues": 2}], indirect=True
 )
 @pytest.mark.parametrize(
     "batch, groups, iterations",
-    ((1, 2, 128),),
+    ((1, 4, 256),),
 )
 def test_unet_trace_2cq_same_io(
     batch: int,
@@ -486,7 +486,7 @@ def test_unet_trace_2cq_same_io(
 )
 @pytest.mark.parametrize(
     "batch, groups, iterations",
-    ((1, 2, 128),),
+    ((1, 4, 128),),
 )
 def test_unet_trace_2cq_same_io_multi_device(
     batch: int,
