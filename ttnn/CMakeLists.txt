@@ -21,6 +21,7 @@ function(
     LINK_DIRECTORIES
     INCLUDE_DIRS
     TARGET_LINK_LIBRARIES
+    DYNAMIC_LIBRARY
 )
     ##################################################
     # Declare and define the library
@@ -28,7 +29,12 @@ function(
 
     #todo: Ideally declaring the library should be the first thing to do, sadly making it shared requires to add sources
     string(TOUPPER "${LIBRARY_NAME}" LIBRARY_NAME_ALIAS)
-    add_library(${LIBRARY_NAME} SHARED ${SOURCES})
+    if(DYNAMIC_LIBRARY)
+        add_library(${LIBRARY_NAME} SHARED ${SOURCES})
+    else()
+        add_library(${LIBRARY_NAME} STATIC ${SOURCES})
+    endif()
+
     add_library(TT::NN::${LIBRARY_NAME_ALIAS} ALIAS ${LIBRARY_NAME})
     target_include_directories(${LIBRARY_NAME} PUBLIC "${INCLUDE_DIRS}")
     target_link_directories(${LIBRARY_NAME} PUBLIC ${LINK_DIRECTORIES})
@@ -69,26 +75,28 @@ function(
         "$ORIGIN"
     )
 
-    #Make sure library built is _ttnn.so / _ttnnpycpp.so and that it can find all it's linked libraries
-    #ttnn breaks if - fvisibility = hidden, so CXX_VISIBILITY_PRESET set to default
-    set_target_properties(
-        ${LIBRARY_NAME}
-        PROPERTIES
-            OUTPUT_NAME
-                "_${LIBRARY_NAME}"
-            PREFIX
-                ""
-            SUFFIX
-                ".so"
-            BUILD_RPATH
-                "${PROJECT_BINARY_DIR}/tt_metal;${PROJECT_BINARY_DIR}/ttnn"
-            INSTALL_RPATH
-                "${TTNN_INSTALL_RPATH}"
-            CXX_VISIBILITY_PRESET
-                "default"
-            ADDITIONAL_CLEAN_FILES
-                "${PROJECT_SOURCE_DIR}/ttnn/ttnn/_'${LIBRARY_NAME}'.so;${PROJECT_SOURCE_DIR}/ttnn/'${LIBRARY_NAME}'.egg-info"
-    )
+    if(DYNAMIC_LIBRARY)
+        #Make sure library built is _ttnn.so / _ttnnpycpp.so and that it can find all it's linked libraries
+        #ttnn breaks if - fvisibility = hidden, so CXX_VISIBILITY_PRESET set to default
+        set_target_properties(
+            ${LIBRARY_NAME}
+            PROPERTIES
+                OUTPUT_NAME
+                    "_${LIBRARY_NAME}"
+                PREFIX
+                    ""
+                SUFFIX
+                    ".so"
+                BUILD_RPATH
+                    "${PROJECT_BINARY_DIR}/tt_metal;${PROJECT_BINARY_DIR}/ttnn"
+                INSTALL_RPATH
+                    "${TTNN_INSTALL_RPATH}"
+                CXX_VISIBILITY_PRESET
+                    "default"
+                ADDITIONAL_CLEAN_FILES
+                    "${PROJECT_SOURCE_DIR}/ttnn/ttnn/_'${LIBRARY_NAME}'.so;${PROJECT_SOURCE_DIR}/ttnn/'${LIBRARY_NAME}'.egg-info"
+        )
+    endif()
 endfunction()
 
 ##################################################
@@ -155,10 +163,8 @@ endfunction()
 ##################################################
 set(TTNN_PUBLIC_INCLUDE_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR} # ${PROJECT_SOURCE_DIR}/ttnn
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/deprecated # symlink to tt_eager; should become native folder once merge complete
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp
     ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/experimental/tt_lib
 )
 
 set(TTNN_BASE_SRCS
@@ -1016,20 +1022,39 @@ list(APPEND TTNN_PUBLIC_INCLUDE_DIRS_PYBIND ${TTNN_PUBLIC_INCLUDE_DIRS})
 ##################################################
 # Build the libraries!
 ##################################################
+
+set(BUILD_DYNAMIC_LIB ON)
+if(WITH_PYTHON_BINDINGS)
+    #ttnncpp will be static when building python bindings
+    set(BUILD_DYNAMIC_LIB OFF)
+endif()
+
+#there are two ways to build TTNN
+# 1) Without Python bindings
+#        ttnncpp will be a dynamic library that can be linked to any project
+# 2) With python bindings
+#        ttnn will be a dynamic library with ttnncpp statically linked to it
+# so if a user wants to consume ttnncpp for a project but also is interested on having
+# ttnn as well, it should build it first without python bindings and then with them.
+# Most of the use cases will link to ttnn without caring a lot about the backend, but
+# for those who need this second use case, now it is officially supported
 build_library(
-    "ttnncpp"
-    "${SOURCES_CPP}"
-    "${TTNN_PUBLIC_LINK_DIRS}"
-    "${TTNN_PUBLIC_INCLUDE_DIRS}"
-    "${TARGET_LINK_LIBRARIES_CPP}"
+    "ttnncpp"                       #LIBRARY_NAME
+    "${SOURCES_CPP}"                #SOURCES
+    "${TTNN_PUBLIC_LINK_DIRS}"      #LINK_DIRECTORIES
+    "${TTNN_PUBLIC_INCLUDE_DIRS}"   #INCLUDE_DIRS
+    "${TARGET_LINK_LIBRARIES_CPP}"  #TARGET_LINK_LIBRARIES
+    ${BUILD_DYNAMIC_LIB}            #DYNAMIC_LIBRARY
+    #if we don't build the python binding, is always dynamic
 )
 
 if(WITH_PYTHON_BINDINGS)
     build_library(
-        "ttnn"
-        "${SOURCES_PYBIND}"
-        "${TTNN_PUBLIC_LINK_DIRS_PYBIND}"
-        "${TTNN_PUBLIC_INCLUDE_DIRS_PYBIND}"
-        "${TARGET_LINK_LIBRARIES_PYBIND}"
+        "ttnn"                              #LIBRARY_NAME
+        "${SOURCES_PYBIND}"                 #SOURCES
+        "${TTNN_PUBLIC_LINK_DIRS_PYBIND}"   #LINK_DIRECTORIES
+        "${TTNN_PUBLIC_INCLUDE_DIRS_PYBIND}"#INCLUDE_DIRS
+        "${TARGET_LINK_LIBRARIES_PYBIND}"   #TARGET_LINK_LIBRARIES
+        ON # if is built, is always dynamic #DYNAMIC_LIBRARY
     )
 endif()
