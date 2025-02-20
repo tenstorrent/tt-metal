@@ -4,7 +4,6 @@
 
 #include "ttnn/distributed/distributed_pybind.hpp"
 #include <pybind11/cast.h>
-#include <cstddef>
 
 #include <pybind11/pytypes.h>
 #include <tt-metalium/command_queue.hpp>
