@@ -157,6 +157,7 @@ Tensor Pool2DOp<pool_type>::invoke(
 }
 
 template class Pool2DOp<Pool2DType::MAX_POOL2D>;
+template class Pool2DOp<Pool2DType::AVG_POOL2D>;
 
 }  // namespace operations::pool
 }  // namespace ttnn
