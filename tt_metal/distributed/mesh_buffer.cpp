@@ -90,7 +90,7 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
     if (!address.has_value()) {
         // Rely on the MeshDevice allocator to provide the address for the entire mesh buffer.
         // The address provided to the backing buffer is used as the address for the MeshBuffer object.
-        std::shared_ptr<Buffer> backing_buffer = Buffer::create(
+        std::shared_ptr<Buffer> backing_buffer = SingleBuffer::create(
             mesh_device,
             device_local_size,
             device_local_config.page_size,
@@ -113,7 +113,7 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
 
 void MeshBuffer::initialize_device_buffers() {
     auto init_device_buffer_at_address = [this](const MeshCoordinate& coord) {
-        std::shared_ptr<Buffer> buffer = Buffer::create(
+        std::shared_ptr<Buffer> buffer = SingleBuffer::create(
             mesh_device_->get_device(coord),
             address_,
             device_local_size_,

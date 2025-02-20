@@ -1155,7 +1155,7 @@ GlobalSemaphore CreateGlobalSemaphore(
 
 std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
-    auto buffer = Buffer::create(
+    auto buffer = SingleBuffer::create(
         config.device,
         config.size,
         config.page_size,
@@ -1169,7 +1169,7 @@ std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config) {
     return buffer;
 }
 std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config, DeviceAddr address) {
-    return Buffer::create(
+    return SingleBuffer::create(
         config.device,
         address,
         config.size,
@@ -1180,7 +1180,7 @@ std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config, Devi
         std::nullopt);
 }
 std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config, SubDeviceId sub_device_id) {
-    return Buffer::create(
+    return SingleBuffer::create(
         config.device,
         config.size,
         config.page_size,
@@ -1191,7 +1191,7 @@ std::shared_ptr<Buffer> CreateBuffer(const InterleavedBufferConfig& config, SubD
         sub_device_id);
 }
 std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config) {
-    return Buffer::create(
+    return SingleBuffer::create(
         config.device,
         config.size,
         config.page_size,
@@ -1202,7 +1202,7 @@ std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config) {
         std::nullopt);
 }
 std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config, DeviceAddr address) {
-    return Buffer::create(
+    return SingleBuffer::create(
         config.device,
         address,
         config.size,
@@ -1214,7 +1214,7 @@ std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config, DeviceAd
         std::nullopt);
 }
 std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config, SubDeviceId sub_device_id) {
-    return Buffer::create(
+    return SingleBuffer::create(
         config.device,
         config.size,
         config.page_size,

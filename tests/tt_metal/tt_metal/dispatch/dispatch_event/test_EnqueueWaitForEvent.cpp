@@ -232,7 +232,7 @@ TEST_F(MultiCommandQueueSingleDeviceEventFixture, TestEventsReadWriteWithWaitFor
         vector<vector<uint32_t>> srcs;
         for (uint i = 0; i < cqs.size(); i++) {
             uint32_t wr_data_base = (buf_idx * 1000) + (i * 100);
-            buffers.push_back(Buffer::create(this->device_, buf_size, config.page_size, config.buftype));
+            buffers.push_back(SingleBuffer::create(this->device_, buf_size, config.page_size, config.buftype));
             srcs.push_back(generate_arange_vector(buffers[i]->size(), wr_data_base));
             log_debug(tt::LogTest, "buf_idx: {} Doing Write to cq_id: {} of data: {}", buf_idx, i, srcs[i]);
             EnqueueWriteBuffer(cqs[i], *buffers[i], srcs[i], false);
@@ -300,7 +300,7 @@ TEST_F(MultiCommandQueueSingleDeviceEventFixture, TestEventsReadWriteWithWaitFor
             auto event = std::make_shared<Event>();
             vector<uint32_t> result;
 
-            buffers.push_back(Buffer::create(this->device_, buf_size, config.page_size, config.buftype));
+            buffers.push_back(SingleBuffer::create(this->device_, buf_size, config.page_size, config.buftype));
             srcs.push_back(generate_arange_vector(buffers[i]->size(), wr_data_base));
 
             // Blocking Read after Non-Blocking Write on alternate CQs, events ensure ordering.
@@ -371,7 +371,7 @@ TEST_F(MultiCommandQueueSingleDeviceEventFixture, TestEventsReadWriteWithWaitFor
             vector<vector<uint32_t>> read_results;
             vector<std::shared_ptr<Buffer>> buffers;
 
-            buffers.push_back(Buffer::create(this->device_, buf_size, config.page_size, config.buftype));
+            buffers.push_back(SingleBuffer::create(this->device_, buf_size, config.page_size, config.buftype));
 
             // Number of write-read combos per buffer. Fewer make RAW race without events easier to hit.
             for (uint j = 0; j < num_wr_rd_per_buf; j++) {

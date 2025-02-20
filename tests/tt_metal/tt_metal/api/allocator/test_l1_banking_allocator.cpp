@@ -47,7 +47,7 @@ TEST_F(DeviceSingleCardBufferFixture, TestL1BuffersAllocatedTopDown) {
             break;
         }
         auto buffer =
-            tt::tt_metal::Buffer::create(this->device_, buffer_size, buffer_size, tt::tt_metal::BufferType::L1);
+            tt::tt_metal::SingleBuffer::create(this->device_, buffer_size, buffer_size, tt::tt_metal::BufferType::L1);
         buffers.emplace_back(std::move(buffer));
         total_buffer_size += buffer_size;
         EXPECT_EQ(buffers.back()->address(), this->device_->l1_size_per_core() - total_buffer_size);

@@ -106,7 +106,7 @@ int main(int argc, char** argv) {
         }
 
         // Application setup
-        auto buffer = tt_metal::Buffer::create(
+        auto buffer = tt_metal::SingleBuffer::create(
             device, transfer_size, page_size, buffer_type == 0 ? tt_metal::BufferType::DRAM : tt_metal::BufferType::L1);
 
         std::vector<uint32_t> src_vec = create_random_vector_of_bfloat16(

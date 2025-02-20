@@ -208,7 +208,7 @@ int main(int argc, char** argv) {
         l1_buffers.reserve(l1_buffers_size);
         for (int r = 0; r < num_cores_r; ++r) {
             for (int c = 0; c < num_cores_c; ++c) {
-                l1_buffers.push_back(tt_metal::Buffer::create(
+                l1_buffers.push_back(tt_metal::SingleBuffer::create(
                     device, total_tiles_size_bytes, single_tile_size, tt_metal::BufferType::L1));
                 tt_metal::detail::WriteToBuffer(*l1_buffers[r * num_cores_c + c], packed_tensors[r * num_cores_c + c]);
 

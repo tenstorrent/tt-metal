@@ -88,8 +88,8 @@ vector<bool> blocking_flags = {kBlocking, kNonBlocking};
 
 TEST_F(MultiCommandQueueSingleDeviceTraceFixture, TensixEnqueueOneProgramTrace) {
     CreateDevice(2048);
-    auto input = Buffer::create(this->device_, 2048, 2048, BufferType::DRAM);
-    auto output = Buffer::create(this->device_, 2048, 2048, BufferType::DRAM);
+    auto input = SingleBuffer::create(this->device_, 2048, 2048, BufferType::DRAM);
+    auto output = SingleBuffer::create(this->device_, 2048, 2048, BufferType::DRAM);
 
     CommandQueue& command_queue = this->device_->command_queue(0);
     CommandQueue& data_movement_queue = this->device_->command_queue(1);
@@ -129,8 +129,8 @@ TEST_F(MultiCommandQueueSingleDeviceTraceFixture, TensixEnqueueOneProgramTrace) 
 
 TEST_F(MultiCommandQueueSingleDeviceTraceFixture, TensixEnqueueOneProgramTraceLoops) {
     CreateDevice(4096);
-    auto input = Buffer::create(this->device_, 2048, 2048, BufferType::DRAM);
-    auto output = Buffer::create(this->device_, 2048, 2048, BufferType::DRAM);
+    auto input = SingleBuffer::create(this->device_, 2048, 2048, BufferType::DRAM);
+    auto output = SingleBuffer::create(this->device_, 2048, 2048, BufferType::DRAM);
 
     CommandQueue& command_queue = this->device_->command_queue(0);
     CommandQueue& data_movement_queue = this->device_->command_queue(1);
@@ -180,8 +180,8 @@ TEST_F(MultiCommandQueueSingleDeviceTraceFixture, TensixEnqueueOneProgramTraceLo
 
 TEST_F(MultiCommandQueueSingleDeviceTraceFixture, TensixEnqueueOneProgramTraceBenchmark) {
     CreateDevice(6144);
-    auto input = Buffer::create(this->device_, 2048, 2048, BufferType::DRAM);
-    auto output = Buffer::create(this->device_, 2048, 2048, BufferType::DRAM);
+    auto input = SingleBuffer::create(this->device_, 2048, 2048, BufferType::DRAM);
+    auto output = SingleBuffer::create(this->device_, 2048, 2048, BufferType::DRAM);
 
     constexpr bool kBlocking = true;
     constexpr bool kNonBlocking = false;
@@ -258,12 +258,12 @@ TEST_F(CommandQueueTraceFixture, TensixInstantiateTraceSanity) {
     CreateDevice(2048);
     CommandQueue& command_queue = this->device_->command_queue();
 
-    auto input = Buffer::create(this->device_, 2048, 2048, BufferType::DRAM);
+    auto input = SingleBuffer::create(this->device_, 2048, 2048, BufferType::DRAM);
     vector<uint32_t> input_data(input->size() / sizeof(uint32_t), 0);
     for (uint32_t i = 0; i < input_data.size(); i++) {
         input_data[i] = i;
     }
-    auto output = Buffer::create(this->device_, 2048, 2048, BufferType::DRAM);
+    auto output = SingleBuffer::create(this->device_, 2048, 2048, BufferType::DRAM);
     auto simple_program = std::make_shared<Program>(create_simple_unary_program(*input, *output));
     EnqueueProgram(command_queue, *simple_program, true);
     uint32_t tid = BeginTraceCapture(this->device_, command_queue.id());
@@ -288,8 +288,8 @@ TEST_F(CommandQueueTraceFixture, TensixInstantiateTraceSanity) {
 
 TEST_F(CommandQueueTraceFixture, TensixEnqueueProgramTraceCapture) {
     CreateDevice(2048);
-    auto input = Buffer::create(this->device_, 2048, 2048, BufferType::DRAM);
-    auto output = Buffer::create(this->device_, 2048, 2048, BufferType::DRAM);
+    auto input = SingleBuffer::create(this->device_, 2048, 2048, BufferType::DRAM);
+    auto output = SingleBuffer::create(this->device_, 2048, 2048, BufferType::DRAM);
 
     CommandQueue& command_queue = this->device_->command_queue();
 
@@ -314,8 +314,8 @@ TEST_F(CommandQueueTraceFixture, TensixEnqueueProgramTraceCapture) {
     EnqueueProgram(command_queue, simple_program, false);
     EndTraceCapture(this->device_, command_queue.id(), tid);
     // Create and Enqueue a Program with a live trace to ensure that a warning is generated
-    auto input_temp = Buffer::create(this->device_, 2048, 2048, BufferType::DRAM);
-    auto output_temp = Buffer::create(this->device_, 2048, 2048, BufferType::DRAM);
+    auto input_temp = SingleBuffer::create(this->device_, 2048, 2048, BufferType::DRAM);
+    auto output_temp = SingleBuffer::create(this->device_, 2048, 2048, BufferType::DRAM);
     Program simple_program_temp = create_simple_unary_program(*input_temp, *output_temp);
     EnqueueProgram(command_queue, simple_program_temp, true);
     // Run trace that can clobber the temporary buffers created above
@@ -331,8 +331,8 @@ TEST_F(CommandQueueTraceFixture, TensixEnqueueProgramTraceCapture) {
 
 TEST_F(CommandQueueTraceFixture, TensixEnqueueProgramDeviceCapture) {
     CreateDevice(2048);
-    auto input = Buffer::create(this->device_, 2048, 2048, BufferType::DRAM);
-    auto output = Buffer::create(this->device_, 2048, 2048, BufferType::DRAM);
+    auto input = SingleBuffer::create(this->device_, 2048, 2048, BufferType::DRAM);
+    auto output = SingleBuffer::create(this->device_, 2048, 2048, BufferType::DRAM);
 
     CommandQueue& command_queue = this->device_->command_queue();
 
@@ -387,9 +387,9 @@ TEST_F(CommandQueueTraceFixture, TensixEnqueueTwoProgramTrace) {
     // Get command queue from device for this test, since its running in async mode
     CommandQueue& command_queue = this->device_->command_queue();
 
-    auto input = Buffer::create(this->device_, 2048, 2048, BufferType::DRAM);
-    auto interm = Buffer::create(this->device_, 2048, 2048, BufferType::DRAM);
-    auto output = Buffer::create(this->device_, 2048, 2048, BufferType::DRAM);
+    auto input = SingleBuffer::create(this->device_, 2048, 2048, BufferType::DRAM);
+    auto interm = SingleBuffer::create(this->device_, 2048, 2048, BufferType::DRAM);
+    auto output = SingleBuffer::create(this->device_, 2048, 2048, BufferType::DRAM);
 
     Program op0 = create_simple_unary_program(*input, *interm);
     Program op1 = create_simple_unary_program(*interm, *output);
@@ -462,8 +462,8 @@ TEST_F(CommandQueueTraceFixture, TensixEnqueueMultiProgramTraceBenchmark) {
     CreateDevice(6144);
     CommandQueue& command_queue = this->device_->command_queue();
 
-    auto input = Buffer::create(this->device_, 2048, 2048, BufferType::DRAM);
-    auto output = Buffer::create(this->device_, 2048, 2048, BufferType::DRAM);
+    auto input = SingleBuffer::create(this->device_, 2048, 2048, BufferType::DRAM);
+    auto output = SingleBuffer::create(this->device_, 2048, 2048, BufferType::DRAM);
 
     uint32_t num_loops = parse_env<int>("TT_METAL_TRACE_LOOPS", 4);
     uint32_t num_programs = parse_env<int>("TT_METAL_TRACE_PROGRAMS", 4);
@@ -476,7 +476,7 @@ TEST_F(CommandQueueTraceFixture, TensixEnqueueMultiProgramTraceBenchmark) {
     }
 
     for (int i = 0; i < num_programs; i++) {
-        interm_buffers.push_back(Buffer::create(this->device_, 2048, 2048, BufferType::DRAM));
+        interm_buffers.push_back(SingleBuffer::create(this->device_, 2048, 2048, BufferType::DRAM));
         if (i == 0) {
             programs.push_back(create_simple_unary_program(*input, *(interm_buffers[i])));
         } else if (i == (num_programs - 1)) {

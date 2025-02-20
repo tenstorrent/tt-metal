@@ -28,7 +28,7 @@ inline std::pair<std::shared_ptr<tt::tt_metal::Buffer>, std::vector<uint32_t>> E
     // This function just enqueues a buffer (which should be large in the config)
     // write as a precursor to testing the wrap mechanism
     size_t buf_size = config.num_pages * config.page_size;
-    auto buffer = Buffer::create(device, buf_size, config.page_size, config.buftype);
+    auto buffer = SingleBuffer::create(device, buf_size, config.page_size, config.buftype);
 
     std::vector<uint32_t> src =
         create_random_vector_of_bfloat16(buf_size, 100, std::chrono::system_clock::now().time_since_epoch().count());

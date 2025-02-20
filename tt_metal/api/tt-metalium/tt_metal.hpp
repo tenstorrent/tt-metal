@@ -11,7 +11,7 @@
 #include "hostdevcommon/common_values.hpp"
 #include "core_coord.hpp"
 #include "dispatch_core_manager.hpp"
-#include "buffer.hpp"
+#include "single_buffer.hpp"
 #include "profiler.hpp"
 
 namespace tt::tt_metal {

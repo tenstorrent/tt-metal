@@ -192,8 +192,8 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         std::vector<uint32_t> input_vec = create_random_vector_of_bfloat16(
             input_size, 100, std::chrono::system_clock::now().time_since_epoch().count());
-        auto input_buffer =
-            Buffer::create(device, input_vec.size() * sizeof(uint32_t), single_tile_size, tt_metal::BufferType::DRAM);
+        auto input_buffer = SingleBuffer::create(
+            device, input_vec.size() * sizeof(uint32_t), single_tile_size, tt_metal::BufferType::DRAM);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup

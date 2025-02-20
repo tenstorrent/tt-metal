@@ -62,7 +62,7 @@ std::shared_ptr<Buffer> allocate_buffer_on_device(IDevice* device, const TensorS
     auto shard_spec_buffer = tensor_spec.compute_shard_spec_buffer();
     auto memory_config = tensor_spec.tensor_layout().get_memory_config();
 
-    return Buffer::create(
+    return SingleBuffer::create(
         device,
         buffer_size_bytes,
         page_size_bytes,

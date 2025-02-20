@@ -126,7 +126,7 @@ int main(int argc, char** argv) {
 
         // limit size of the L1 buffer to do not exceed global L1 size
         uint32_t l1_buffer_size = num_cores_r * num_cores_c * (num_tiles > 256 ? 256 : num_tiles) * page_size;
-        auto l1_buffer = tt_metal::Buffer::create(device, l1_buffer_size, page_size, tt_metal::BufferType::L1);
+        auto l1_buffer = tt_metal::SingleBuffer::create(device, l1_buffer_size, page_size, tt_metal::BufferType::L1);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup

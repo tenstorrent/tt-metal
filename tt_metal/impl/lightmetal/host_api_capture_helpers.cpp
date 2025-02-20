@@ -118,7 +118,7 @@ void CaptureCreateBuffer(const std::shared_ptr<Buffer>& buffer, const Interleave
 void CaptureDeallocateBuffer(Buffer& buffer) {
     auto& ctx = LightMetalCaptureContext::get();
 
-    // Kind of a workaround, but Program Binaries buffer is created via Buffer::create() but can be
+    // Kind of a workaround, but Program Binaries buffer is created via SingleBuffer::create() but can be
     // deallocated on Program destruction while capturing is still enabled depending on test structure (scope)
     // so let's just not capture these DeallocateBuffer() calls since they will occur on playback naturally.
     if (!ctx.is_in_map(&buffer)) {

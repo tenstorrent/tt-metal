@@ -85,7 +85,7 @@ void MeshWorkload::load_binaries(MeshCommandQueue& mesh_cq) {
                 mesh_device->mesh_command_queue().enqueue_write_shard_to_sub_grid(
                     *kernel_bin_buf_view, program.get_program_transfer_info().binary_data.data(), device_range, false);
 
-                std::shared_ptr<Buffer> buffer_view = Buffer::create(
+                std::shared_ptr<Buffer> buffer_view = SingleBuffer::create(
                     mesh_device,
                     kernel_bin_buf_->address(),
                     kernel_bin_size,

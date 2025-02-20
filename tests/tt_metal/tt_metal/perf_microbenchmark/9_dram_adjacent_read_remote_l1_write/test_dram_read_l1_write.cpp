@@ -577,7 +577,7 @@ int main(int argc, char** argv) {
             input_vec = create_random_vector_of_bfloat16(input_size, 100, 1234);
         }
 
-        auto input_buffer = tt_metal::Buffer::create(
+        auto input_buffer = tt_metal::SingleBuffer::create(
             device, input_vec.size() * sizeof(uint32_t), single_tile_size, tt_metal::BufferType::DRAM);
 
         ////////////////////////////////////////////////////////////////////////////
