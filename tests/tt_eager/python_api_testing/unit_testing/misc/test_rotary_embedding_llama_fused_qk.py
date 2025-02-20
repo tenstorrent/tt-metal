@@ -132,7 +132,7 @@ def test_rotary_embedding_llama_fused_qk_with_program_cache(
 
         cache_tensors.append(test_tensor)
 
-    num_ops = 4  # embedding + fused_qk_rope + transpose + interleaved_to_sharded
+    num_ops = 5  # untilize cos/sin + embedding + fused_qk_rope + transpose + interleaved_to_sharded
 
     if (batch * 2) % ttnn.TILE_SIZE != 0:
         num_ops += 1  # slice

@@ -454,7 +454,7 @@ def test_rotary_embedding_llama_with_program_cache(
 
     num_ops = 2  # 2 * rope
     if mode == "decode":
-        num_ops += 3  # embedding + transpose + interleaved_to_sharded
+        num_ops += 4  # untilize cos/sin + embedding + transpose + interleaved_to_sharded
 
         if batch % ttnn.TILE_SIZE != 0:
             num_ops += 1  # slice

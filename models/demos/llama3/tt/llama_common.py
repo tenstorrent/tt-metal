@@ -5,6 +5,7 @@
 import math
 import torch
 import ttnn
+from loguru import logger
 
 
 class HostEmbedding(torch.nn.Module):
@@ -44,14 +45,88 @@ def encode_prompt_llama_instruct(tokenizer, prompt_text, system_prompt_text=None
     return begin_of_text + system_prompt + user_prompt + assistant_reply
 
 
-def encode_prompt_hf(tokenizer, prompt_text, system_prompt_text=None):
-    """See https://huggingface.co/docs/transformers/main/en/chat_templating"""
-    chat = []
-    if system_prompt_text:
-        chat.append({"role": "system", "content": system_prompt_text})
-    if prompt_text:
-        chat.append({"role": "user", "content": prompt_text})
-    return tokenizer.apply_chat_template(chat, tokenize=True, add_generation_prompt=True)
+def preprocess_inputs_prefill(
+    input_prompts,
+    tokenizer,
+    model_args,
+    instruct,
+    max_generated_tokens,
+    max_prefill_len=128 * 1024,
+):
+    """
+    Run tokenizer on inputs, and create embeddings for the first token of each input
+    """
+    # To avoid going out of memory, clip the max prefill length by the maximum number of tokens that will be generated
+    if max_prefill_len == 128 * 1024:
+        max_prefill_len = 128 * 1024 - max_generated_tokens
+
+    encoded_prompts = [model_args.encode_prompt(prompt, instruct=instruct) for prompt in input_prompts]
+
+    # Print the length of encoded prompts
+    logger.info("Encoded prompt lengths:" + ", ".join(str(len(prompt)) for prompt in encoded_prompts))
+
+    prompt_lens = [len(x) for x in encoded_prompts]
+    min_prompt_len = min(prompt_lens)
+    max_prompt_len = max(prompt_lens)
+
+    # To avoid running out of memory when giving prompts larger than the maximum, clip to max_prefill_len
+    if min_prompt_len > max_prefill_len:
+        logger.info(f"Left-clipping prompts to {max_prefill_len}")
+        if instruct:
+            # We need to allow a few tokens for the system prompt and the special turn tokens for assistant and user;
+            # to find out how big those will be, we will:
+            # 1. Tokenize the entire prompt with non-instruct tokenization
+            # 2. Calculate overhead = length of instruct tokenization - length of non-instruct tokenization
+            # 3. Shorten the tokenized clipped prompt by the overhead and convert back to text
+            # 4. Tokenize the result with instruct tokenization
+            # 5. Assert that the length of this is equal to the max_prefill_len
+            raw_prompts = [model_args.encode_prompt(prompt, instruct=False) for prompt in input_prompts]
+            overhead = [len(e) - len(r) for e, r in zip(encoded_prompts, raw_prompts)]
+            shortened = [tokenizer.decode(e[-(max_prefill_len - o) :]) for e, o in zip(raw_prompts, overhead)]
+            encoded_prompts = [model_args.encode_prompt(prompt, instruct=instruct) for prompt in shortened]
+            assert all(
+                len(e) == max_prefill_len for e in encoded_prompts
+            ), f"Clipped prompts are not of the correct length, expected {max_prefill_len} but got {[len(e) for e in encoded_prompts]}"
+        else:
+            encoded_prompts = [encod[-max_prefill_len:] for encod in encoded_prompts]
+
+        # Update prompt lengths
+        prompt_lens = [len(x) for x in encoded_prompts]
+        min_prompt_len = min(prompt_lens)
+        max_prompt_len = max(prompt_lens)
+
+    assert (
+        max_prompt_len <= model_args.max_seq_len
+    ), f"Max prompt length {max_prompt_len} exceeds model max seq len {model_args.max_seq_len}"
+    assert min_prompt_len > 0, "Minimum prompt length must be greater than 0"
+    assert min_prompt_len <= max_prompt_len, f"Minimum prompt length {min_prompt_len} exceeds max len {max_prompt_len}"
+
+    logger.info(f"# of users: {len(encoded_prompts)}")
+    input_tokens_prefill = []
+    decoding_pos = []
+    prefill_lens = []
+
+    # Always prefill the nearest power of 2 for each user. This means that the majority of cases we will prefill more tokens than needed.
+    # To avoid issues, we keep track of the decoding position to decode correctly the user's prompt
+    for i, encoded in enumerate(encoded_prompts):
+        # Prefill size is nearest power of 2
+        prefill_seq_len = max(2 ** math.ceil(math.log(len(encoded), 2)), 128)
+
+        # Initial prefill tensors full of pad tokens
+        input_tokens_prefill_i = torch.full((1, prefill_seq_len), 0, dtype=torch.int32)
+        input_tokens_prefill_i[0, : len(encoded[:])] = torch.tensor(encoded[:]).to(input_tokens_prefill_i)
+        input_tokens_prefill.append(input_tokens_prefill_i)
+
+        # Keep the correct decoding position of each user
+        decoding_pos.append(len(encoded))
+        prefill_lens.append(prefill_seq_len)
+
+    return (
+        input_tokens_prefill,
+        encoded_prompts,
+        decoding_pos,
+        prefill_lens,
+    )
 
 
 def encode_prompt_hf(tokenizer, prompt_text, system_prompt_text=None):
@@ -131,10 +206,10 @@ def gather_cos_sin(position_ids, cos, sin):
     return cos, sin
 
 
-def get_prefill_rot_mat(
-    head_dim, max_seq_len, mesh_device, seq_len, theta, scale_factor, orig_context_len, start_pos=0
-):
-    cos, sin = precompute_freqs(head_dim, max_seq_len * 2, theta, scale_factor, orig_context_len)
+def get_prefill_rot_mat(head_dim, mesh_device, seq_len, theta, scale_factor, orig_context_len, start_pos=0):
+    cos, sin = precompute_freqs(
+        head_dim, seq_len * 2, theta=theta, scale_factor=scale_factor, orig_context_len=orig_context_len
+    )
     cos_gathered, sin_gathered = gather_cos_sin(torch.arange(start_pos, start_pos + seq_len), cos, sin)
     assert cos_gathered.size() == (1, 1, seq_len, head_dim)
     assert sin_gathered.size() == (1, 1, seq_len, head_dim)
@@ -317,7 +392,9 @@ def sample_host(tt_input, mesh_device, temperature=0.6, top_p=0.08, on_host=True
             pt_out = torch.argmax(pt_input, dim=-1)
 
     if mesh_device is None:
-        return pt_out
+        if pt_out.dim() == 1:  # if sampling a single token re-add the batch dim to the tensor
+            pt_out = pt_out.unsqueeze(0)
+        return None, pt_out
     if on_host:
         return (
             ttnn.as_tensor(
