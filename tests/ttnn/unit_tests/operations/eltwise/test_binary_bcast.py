@@ -1238,19 +1238,50 @@ def test_binary_sharded_small_tile_row_major(a_shape, b_shape, shard_type, shard
 
 
 @pytest.mark.parametrize(
-    "a_shape, b_shape",
-    # ((torch.Size([5, 7, 2, 35]), torch.Size([5, 7, 2, 35])),),
-    ((torch.Size([1, 1, 1024, 1024]), torch.Size([1, 1, 1024, 1024])),),
-)
-@pytest.mark.parametrize(
-    "shard_type, shard_size, core_range",
+    "a_shape, b_shape, shard_type, shard_size, core_range",
     (
-        # [ttnn.ShardStrategy.HEIGHT, [64, 32], ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (4, 6))})],
-        # [ttnn.ShardStrategy.WIDTH, [32, 35 * 32], ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 1))})],
-        # [ttnn.ShardStrategy.BLOCK, [32, 32 * 5], ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (6, 1))})],
-        [ttnn.ShardStrategy.HEIGHT, [1024, 128], ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 7))})],
-        [ttnn.ShardStrategy.WIDTH, [128, 1024], ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 7))})],
-        # [ttnn.ShardStrategy.BLOCK, [256, 256], ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (3, 3))})],
+        [
+            torch.Size([5, 7, 2, 35]),
+            torch.Size([5, 7, 2, 35]),
+            ttnn.ShardStrategy.HEIGHT,
+            [64, 32],
+            ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (4, 6))}),
+        ],
+        [
+            torch.Size([5, 7, 2, 35]),
+            torch.Size([5, 7, 2, 35]),
+            ttnn.ShardStrategy.WIDTH,
+            [32, 35 * 32],
+            ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 1))}),
+        ],
+        [
+            torch.Size([5, 7, 2, 35]),
+            torch.Size([5, 7, 2, 35]),
+            ttnn.ShardStrategy.BLOCK,
+            [32, 32 * 5],
+            ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (6, 1))}),
+        ],
+        [
+            torch.Size([1, 1, 1024, 1024]),
+            torch.Size([1, 1, 1024, 1024]),
+            ttnn.ShardStrategy.HEIGHT,
+            [1024, 128],
+            ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 7))}),
+        ],
+        [
+            torch.Size([1, 1, 1024, 1024]),
+            torch.Size([1, 1, 1024, 1024]),
+            ttnn.ShardStrategy.WIDTH,
+            [128, 1024],
+            ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 7))}),
+        ],
+        [
+            torch.Size([1, 1, 1024, 1024]),
+            torch.Size([1, 1, 1024, 1024]),
+            ttnn.ShardStrategy.BLOCK,
+            [256, 256],
+            ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (3, 3))}),
+        ],
     ),
 )
 def test_binary_sharded_col_major(a_shape, b_shape, shard_type, shard_size, core_range, device):
@@ -1269,6 +1300,7 @@ def test_binary_sharded_col_major(a_shape, b_shape, shard_type, shard_size, core
         (ttnn.DRAM_MEMORY_CONFIG, shard_config),
         (shard_config, ttnn.DRAM_MEMORY_CONFIG),
         (shard_config, shard_config),
+        (ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
     )
 
     for src_config, dst_config in input_combinations:

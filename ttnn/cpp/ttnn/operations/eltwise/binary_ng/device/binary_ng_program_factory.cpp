@@ -167,10 +167,12 @@ void set_or_update_runtime_arguments(
     const auto [cN, cC, cHt, cWt] = get_shape_dims(c);
     const uint32_t cHt_unrolled = cN * cC * cHt;
 
-    bool row_major = true;
     const auto shard_specs = get_shard_specs(a, b, c);
     const bool has_sharding = shard_specs.has_value();
     auto grid = has_sharding ? shard_specs->a_shard_spec.grid : CoreRangeSet{};
+
+    bool row_major =
+        has_sharding ? shard_specs->a_shard_spec.orientation == ShardOrientation::ROW_MAJOR ? true : false : true;
 
     // zero_start_grid is a flag to indicate that we are using a single rectangular grid that starts at (0, 0)
     // as well as having the sharded tensors (if any) start at (0, 0)
@@ -383,7 +385,6 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     uint32_t c_single_tile_size = tt_metal::detail::TileSize(c_data_format);
 
     // we parallelize the computation across the output tiles
-    constexpr bool row_major = true;
     const auto& all_device_cores = operation_attributes.worker_grid;
 
     Buffer* a_buffer = a.buffer();
