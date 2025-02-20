@@ -69,11 +69,11 @@ struct CBConfigTile {
 
 table CircularBufferConfig {
   total_size: uint32;
-  globally_allocated_address: uint32; // Optional behavior can be handled with a default value (or union)
+  globally_allocated_address: Uint32Optional;
   data_formats: [CBConfigDataFormat]; // Mimic optional array in C++ by using KV map.
   page_sizes: [CBConfigPageSize];     // Mimic optional array in C++ by using KV map.
   tiles: [CBConfigTile];              // Mimic optional array in C++ by using KV map.
-  shadow_buf_global_id: uint32;
+  shadow_buf_global_id: Uint32Optional;
   buffer_indices: [uint8];
   local_buffer_indices: [uint8];
   remote_buffer_indices: [uint8];
