@@ -4,34 +4,25 @@
 
 
 import pytest
-import ttnn
 import torch
-
-from tests.ttnn.utils_for_testing import assert_with_pcc
-
-from models.experimental.functional_mobilenetv2.reference.mobilenetv2 import Mobilenetv2
-from models.experimental.functional_mobilenetv2.tt.model_preprocessing import (
-    create_mobilenetv2_input_tensors,
-    create_mobilenetv2_model_parameters,
-)
-from models.experimental.functional_mobilenetv2.tt import ttnn_mobilenetv2
 import os
-from models.utility_functions import (
-    skip_for_grayskull,
-)
+from torchvision import models
+from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.experimental.functional_mobilenetv2.reference.mobilenetv2 import Mobilenetv2
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
-@skip_for_grayskull()
 def test_mobilenetv2(device, reset_seeds):
+    model = models.mobilenet_v2(pretrained=True)
+    model.eval()
+
     if not os.path.exists("models/experimental/functional_mobilenetv2/mobilenet_v2-b0353104.pth"):
         os.system(
             "bash models/experimental/functional_mobilenetv2/weights_download.sh"
         )  # execute the weights_download.sh file
-
+    torch_model = Mobilenetv2()
     state_dict = torch.load("models/experimental/functional_mobilenetv2/mobilenet_v2-b0353104.pth")
     ds_state_dict = {k: v for k, v in state_dict.items()}
-    torch_model = Mobilenetv2()
 
     new_state_dict = {}
 
@@ -41,18 +32,11 @@ def test_mobilenetv2(device, reset_seeds):
 
     torch_model.load_state_dict(new_state_dict)
     torch_model.eval()
-    torch_input_tensor, ttnn_input_tensor = create_mobilenetv2_input_tensors()
-    torch_output_tensor = torch_model(torch_input_tensor)
 
-    parameters = create_mobilenetv2_model_parameters(torch_model, torch_input_tensor, device=device)
+    input_tensor = torch.randn((1, 3, 256, 256), dtype=torch.float32)
 
-    ttnn_model = ttnn_mobilenetv2.MobileNetV2(parameters, device, torch_model)
-    output_tensor = ttnn_model(device, ttnn_input_tensor)
+    torch_model_output = torch_model(input_tensor)
 
-    #
-    # Tensor Postprocessing
-    #
-    output_tensor = ttnn.to_torch(output_tensor)
-    output_tensor = output_tensor.reshape(torch_output_tensor.shape)
-    output_tensor = output_tensor.to(torch_input_tensor.dtype)
-    assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.87)
+    model_output = model(input_tensor)
+
+    assert_with_pcc(torch_model_output, model_output, 1)

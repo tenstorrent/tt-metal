@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -202,6 +202,7 @@ class Mobilenetv2(nn.Module):
 
         x9 = self.c9(x8_m)
         x9_b = self.b9(x9)
+
         a1 = x9_b + x6_b
         x10 = self.c10(a1)
         x10_b = self.b10(x10)
@@ -226,7 +227,6 @@ class Mobilenetv2(nn.Module):
         x15_b = self.b15(x15)
 
         a2 = x15_b + x12_b
-
         x16 = self.c16(a2)
         x16_b = self.b16(x16)
         x16_m = self.relu(x16_b)
@@ -239,7 +239,6 @@ class Mobilenetv2(nn.Module):
         x18_b = self.b18(x18)
 
         a3 = a2 + x18_b
-
         x19 = self.c19(a3)
         x19_b = self.b19(x19)
         x19_m = self.relu(x19_b)
@@ -263,7 +262,6 @@ class Mobilenetv2(nn.Module):
         x24_b = self.b24(x24)
 
         a4 = x21_b + x24_b
-
         x25 = self.c25(a4)
         x25_b = self.b25(x25)
         x25_m = self.relu(x25_b)
@@ -276,7 +274,6 @@ class Mobilenetv2(nn.Module):
         x27_b = self.b27(x27)
 
         a5 = a4 + x27_b
-
         x28 = self.c28(a5)
         x28_b = self.b28(x28)
         x28_m = self.relu(x28_b)
@@ -289,7 +286,6 @@ class Mobilenetv2(nn.Module):
         x30_b = self.b30(x30)
 
         a6 = a5 + x30_b
-
         x31 = self.c31(a6)
         x31_b = self.b31(x31)
         x31_m = self.relu(x31_b)
@@ -313,7 +309,6 @@ class Mobilenetv2(nn.Module):
         x36_b = self.b36(x36)
 
         a7 = x33_b + x36_b
-
         x37 = self.c37(a7)
         x37_b = self.b37(x37)
         x37_m = self.relu(x37_b)
@@ -326,7 +321,6 @@ class Mobilenetv2(nn.Module):
         x39_b = self.b39(x39)
 
         a8 = a7 + x39_b
-
         x40 = self.c40(a8)
         x40_b = self.b40(x40)
         x40_m = self.relu(x40_b)
@@ -350,7 +344,6 @@ class Mobilenetv2(nn.Module):
         x45_b = self.b45(x45)
 
         a9 = x45_b + x42_b
-
         x46 = self.c46(a9)
         x46_b = self.b46(x46)
         x46_m = self.relu(x46_b)
@@ -363,7 +356,6 @@ class Mobilenetv2(nn.Module):
         x48_b = self.b48(x48)
 
         a10 = a9 + x48_b
-
         x49 = self.c49(a10)
         x49_b = self.b49(x49)
         x49_m = self.relu(x49_b)
