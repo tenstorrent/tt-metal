@@ -361,7 +361,9 @@ Tensor all_gather(
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             const auto& input_device_tensor = input_tensors.at(0);
 
-            TT_FATAL(mesh_view.is_mesh_2d(), "Mesh view is not 2D");
+            TT_FATAL(
+                mesh_view.is_mesh_2d(),
+                "all-gather invoked with cluster_axis API on >2D mesh, which is currently unsupported");
             const auto coordinate = mesh_view.find_device(input_device_tensor.device()->id());
             const auto view_index = (cluster_axis == 0) ? coordinate[1] : coordinate[0];
             const auto device_index = (cluster_axis == 0) ? coordinate[0] : coordinate[1];

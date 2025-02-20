@@ -335,7 +335,9 @@ Tensor reduce_scatter(
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             const auto& input_device_tensor = input_tensors.at(0);
 
-            TT_FATAL(mesh_view.is_mesh_2d(), "Mesh view is not 2D");
+            TT_FATAL(
+                mesh_view.is_mesh_2d(),
+                "reduce-scatter invoked with cluster_axis API on >2D mesh, which is currently unsupported");
             const auto coordinate = mesh_view.find_device(input_device_tensor.device()->id());
             std::vector<IDevice*> devices = (cluster_axis == 0) ? mesh_view.get_devices_on_column(coordinate[1])
                                                                 : mesh_view.get_devices_on_row(coordinate[0]);
