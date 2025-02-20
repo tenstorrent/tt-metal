@@ -10,10 +10,10 @@ import ttnn
 from models.demos.llama3.tt.llama_common import (
     get_prefill_rot_mat,
     PagedAttentionConfig,
+    preprocess_inputs_prefill,
 )
 from models.demos.llama3.tt.llama_model import TtTransformer
 from models.demos.llama3.tt.model_config import TtModelArgs, LlamaOptimizations
-from models.demos.llama3.demo.demo import preprocess_inputs_prefill
 from pathlib import Path
 
 
@@ -229,7 +229,6 @@ def test_tt_model_acc(
         # Pre-compute the rotational embedding matrix and send to device
         rot_mats_prefill = get_prefill_rot_mat(
             model_args.head_dim,
-            model_args.max_seq_len,
             mesh_device,
             prefill_lens[0],
             model_args.rope_theta,

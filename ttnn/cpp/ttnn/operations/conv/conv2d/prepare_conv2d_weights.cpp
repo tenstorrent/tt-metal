@@ -504,24 +504,17 @@ ttnn::Tensor conv_bias_layout_convert(
     uint32_t weight_block_w_ntiles,
     const ParallelConfig& parallel_config,
     T* device,
-    uint32_t out_channels,
-    bool is_non_tile_mul_width) {
+    uint32_t out_channels) {
     ttnn::Tensor bias_tensor_ = bias_tensor;
     validate_bias_tensor(bias_tensor_);
-    if (!is_non_tile_mul_width) {
-        const auto& bias_shape = bias_tensor_.get_logical_shape();
-        TT_FATAL(bias_shape[0] == 1 && bias_shape[1] == 1 && bias_shape[2] == 1, "bias shape is not correct");
-        ttnn::Shape bias_channels_padded_shape({1, 1, 32, round_up(out_channels, weight_block_w_ntiles * 32)});
-        bias_tensor_ =
-            ttnn::pad(bias_tensor_, bias_channels_padded_shape.to_array_4D(), tt::tt_metal::Array4D{0, 0, 0, 0}, 0);
-        bias_tensor_ = ttnn::to_layout(bias_tensor_, Layout::TILE, std::nullopt, std::nullopt, (T*)nullptr);
-        if (bias_tensor_.get_dtype() != bias_dtype) {
-            bias_tensor_ = ttnn::to_dtype(bias_tensor_, bias_dtype);
-        }
-    } else {
-        uint32_t num_cores_channels = get_num_cores_channels_from_parallel_config(parallel_config);
-        bias_tensor_ =
-            convert_conv_bias_tensor_to_tiled_layout_block_sharded(bias_tensor_, num_cores_channels, bias_dtype);
+    const auto& bias_shape = bias_tensor_.get_logical_shape();
+    TT_FATAL(bias_shape[0] == 1 && bias_shape[1] == 1 && bias_shape[2] == 1, "bias shape is not correct");
+    ttnn::Shape bias_channels_padded_shape({1, 1, 32, round_up(out_channels, weight_block_w_ntiles * 32)});
+    bias_tensor_ =
+        ttnn::pad(bias_tensor_, bias_channels_padded_shape.to_array_4D(), tt::tt_metal::Array4D{0, 0, 0, 0}, 0);
+    bias_tensor_ = ttnn::to_layout(bias_tensor_, Layout::TILE, std::nullopt, std::nullopt, (T*)nullptr);
+    if (bias_tensor_.get_dtype() != bias_dtype) {
+        bias_tensor_ = ttnn::to_dtype(bias_tensor_, bias_dtype);
     }
     return bias_tensor_;
 }
@@ -569,10 +562,6 @@ static OptimizedConvBlockConfig get_opt_block_config(
     ShardOrientation shard_orientation =
         conv_config.transpose_shards ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR;
 
-    const bool use_non_tile_height = check_non_tile_height(conv_config, out_channels);
-
-    bool is_non_tile_mul_width = check_non_tile_mul_width(compute_grid_size, conv_config, in_channels);
-
     if (input_memory_config.is_sharded() && !conv_config.reshard_if_not_optimal) {
         conv_config.shard_layout = input_memory_config.memory_layout;
     }
@@ -593,8 +582,7 @@ static OptimizedConvBlockConfig get_opt_block_config(
             compute_grid_size,
             shard_orientation,
             !mm_conv,
-            !use_non_tile_height,
-            is_non_tile_mul_width,
+            true,
             conv_config.act_block_h_override);
     }
     auto output_parallel_config = parallel_config;
@@ -610,11 +598,11 @@ static OptimizedConvBlockConfig get_opt_block_config(
         log_debug(tt::LogOp, "Changing width sharded output grid to  {}", output_parallel_config.grid);
     }
 
-    uint32_t round_up_size = !use_non_tile_height ? tt::constants::TILE_HEIGHT : 1;
     auto conv_out_memory_config = create_sharded_memory_config_from_parallel_config(
-        ttnn::Shape({1, 1, batch_size * output_height * output_width, tt::round_up(out_channels, 32)}),
+        ttnn::Shape(
+            {1, 1, batch_size * output_height * output_width, tt::round_up(out_channels, tt::constants::TILE_WIDTH)}),
         output_parallel_config,
-        round_up_size);
+        tt::constants::TILE_HEIGHT);
     auto largest_parallel_config = output_parallel_config.grid.num_cores() > parallel_config.grid.num_cores()
                                        ? output_parallel_config
                                        : parallel_config;
@@ -657,8 +645,7 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     uint32_t groups,
     uint32_t act_block_h_ntiles,
     uint32_t input_width,
-    const bool parameters_on_device,
-    bool is_non_tile_mul_width) {
+    const bool parameters_on_device) {
     validate_weight_tensor(weight_tensor);
     ttnn::Tensor weight_tensor_;  // tensor to return
     ttnn::Tensor bias_tensor_;
@@ -701,11 +688,7 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     uint32_t out_channel_padding = out_channels_padded - out_channels;
 
     ttnn::Shape weights_channels_padded_shape({out_channels_padded, in_channels_padded, window_h, window_w});
-    if (is_non_tile_mul_width) {
-        weights_channels_padded_shape = ttnn::Shape(
-            {round_up(out_channels, 32), round_up(in_channels, input_channels_alignment), window_h, window_w});
-        out_channels_padded = tt::round_up(out_channels, 32);
-    }
+
     if (weights_bias_dtype == DataType::BFLOAT8_B) {
         TT_ASSERT(weight_tensor_.get_dtype() == DataType::FLOAT32);
         if (bias_tensor.has_value()) {
@@ -757,8 +740,7 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
                 weight_block_w_ntiles,
                 output_parallel_config,
                 device,
-                out_channels_padded,
-                is_non_tile_mul_width);
+                out_channels_padded);
             bias_tensor_ = ttnn::operations::core::to_device(bias_tensor_, device, std::nullopt);
         }
     }
@@ -819,10 +801,6 @@ ttnn::Tensor prepare_conv_weights(
     ShardOrientation shard_orientation =
         conv_config.transpose_shards ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR;
 
-    const bool use_non_tile_height = check_non_tile_height(conv_config, out_channels);
-    bool is_non_tile_mul_width =
-        check_non_tile_mul_width(device->compute_with_storage_grid_size(), conv_config, in_channels);
-
     if (input_memory_config.is_sharded() && !conv_config.reshard_if_not_optimal) {
         conv_config.shard_layout = input_memory_config.memory_layout;
     }
@@ -844,8 +822,7 @@ ttnn::Tensor prepare_conv_weights(
             device->compute_with_storage_grid_size(),
             shard_orientation,
             !mm_conv,
-            !use_non_tile_height,
-            is_non_tile_mul_width,
+            true,
             conv_config.act_block_h_override);
     }
 
@@ -867,9 +844,7 @@ ttnn::Tensor prepare_conv_weights(
         device,
         groups,
         opt_conv_op_block_config.act_block_h_ntiles,
-        input_width,
-        false,
-        is_non_tile_mul_width);
+        input_width);
 
     return weight_tensor_on_device;
 }
@@ -928,13 +903,10 @@ ttnn::Tensor prepare_conv_bias(
     ShardOrientation shard_orientation =
         conv_config.transpose_shards ? ShardOrientation::COL_MAJOR : ShardOrientation::ROW_MAJOR;
 
-    const bool use_non_tile_height = check_non_tile_height(conv_config, out_channels);
-
     if (input_memory_config.is_sharded() && !conv_config.reshard_if_not_optimal) {
         conv_config.shard_layout = input_memory_config.memory_layout;
     }
     CoreCoord compute_grid = device->compute_with_storage_grid_size();
-    bool is_non_tile_mul_width = check_non_tile_mul_width(compute_grid, conv_config, in_channels);
     ParallelConfig parallel_config;
     if (input_memory_config.shard_spec.has_value() && !conv_config.reshard_if_not_optimal) {
         parallel_config = {
@@ -952,8 +924,7 @@ ttnn::Tensor prepare_conv_bias(
             compute_grid,
             shard_orientation,
             !mm_conv,
-            !use_non_tile_height,
-            is_non_tile_mul_width,
+            true,
             conv_config.act_block_h_override);
     }
 
@@ -970,8 +941,7 @@ ttnn::Tensor prepare_conv_bias(
         weight_block_w_ntiles,
         output_parallel_config,
         device,
-        out_channels,
-        is_non_tile_mul_width);
+        out_channels);
     return bias_tensor_;
 }
 
@@ -1028,8 +998,7 @@ template std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weigh
     uint32_t groups,
     uint32_t act_block_h_ntiles,
     uint32_t input_width,
-    const bool parameters_on_device,
-    bool is_non_tile_mul_width);
+    const bool parameters_on_device);
 
 template std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>>
 prepare_conv_weights_biases_and_move_to_device<MeshDevice>(
@@ -1045,8 +1014,7 @@ prepare_conv_weights_biases_and_move_to_device<MeshDevice>(
     uint32_t groups,
     uint32_t act_block_h_ntiles,
     uint32_t input_width,
-    const bool parameters_on_device,
-    bool is_non_tile_mul_width);
+    const bool parameters_on_device);
 
 template ttnn::Tensor prepare_conv_bias<IDevice>(
     const ttnn::Tensor& bias_tensor,
@@ -1091,8 +1059,7 @@ template ttnn::Tensor conv_bias_layout_convert(
     uint32_t weight_block_w_ntiles,
     const sliding_window::ParallelConfig& parallel_config,
     IDevice* device,
-    uint32_t out_channels,
-    bool is_non_tile_mul_width);
+    uint32_t out_channels);
 
 template ttnn::Tensor conv_bias_layout_convert(
     const ttnn::Tensor& bias_tensor,
@@ -1101,8 +1068,7 @@ template ttnn::Tensor conv_bias_layout_convert(
     uint32_t weight_block_w_ntiles,
     const sliding_window::ParallelConfig& parallel_config,
     MeshDevice* device,
-    uint32_t out_channels,
-    bool is_non_tile_mul_width);
+    uint32_t out_channels);
 
 }  // namespace conv2d
 }  // namespace operations::conv

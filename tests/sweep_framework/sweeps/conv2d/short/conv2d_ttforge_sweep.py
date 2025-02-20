@@ -407,10 +407,11 @@ import pytest
 @pytest.mark.parametrize("input_spec", parameters["ttforge_sweep_conv2d"]["input_specs"])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_conv2d_localrun(device, input_spec):
-    run_conv2d_short_sweep(
+    pcc, messsage = run_conv2d_short_sweep(
         input_spec,
         device,
-    )
+    )[0]
+    assert pcc, messsage
 
 
 # fmt: off
@@ -433,7 +434,8 @@ failing_parameters = [
 @pytest.mark.parametrize("input_spec", failing_parameters)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_conv2d_localrun_fail_only(device, input_spec):
-    run_conv2d_short_sweep(
+    pcc, messsage = run_conv2d_short_sweep(
         input_spec,
         device,
-    )
+    )[0]
+    assert pcc, messsage

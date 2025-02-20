@@ -1797,7 +1797,7 @@ def test_sharded_tilize_with_val_padding(input_shape, sharding_config, output_dt
             interleaved_mem_config,
         )
 
-    tt_got_back = yt.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+    tt_got_back = yt.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch_with_padded_shape()
 
     y = torch.nn.functional.pad(x, [0, 0, 0, roundup32(H) - H], "constant", 1.0)
 

@@ -22,7 +22,6 @@ jobs:
           {arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "in-service"], ccl: true},
         ]
     env:
-      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       # Use BM for microbenchmarks
       ARCH_NAME: ${{ matrix.runner-info.arch }}
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib

@@ -5,10 +5,10 @@
 // clang-format off
 #include "debug/dprint.h"
 #include "dataflow_api.h"
-#include "tt_fabric/hw/inc/tt_fabric.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric.h"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen.hpp"
-#include "tt_fabric/hw/inc/tt_fabric_interface.h"
-#include "tt_fabric/hw/inc/tt_fabric_api.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 // clang-format on
 
 using namespace tt::tt_fabric;
@@ -44,7 +44,8 @@ constexpr uint32_t data_buffer_size_words = get_compile_time_arg_val(13);
 
 volatile tt_l1_ptr chan_req_buf* client_pull_req_buf =
     reinterpret_cast<tt_l1_ptr chan_req_buf*>(client_pull_req_buf_addr);
-volatile fabric_client_interface_t* client_interface = (volatile fabric_client_interface_t*)client_interface_addr;
+volatile tt_l1_ptr fabric_client_interface_t* client_interface =
+    (volatile tt_l1_ptr fabric_client_interface_t*)client_interface_addr;
 uint64_t xy_local_addr;
 socket_reader_state socket_reader;
 
@@ -80,13 +81,15 @@ void kernel_main() {
     test_results[TT_FABRIC_MISC_INDEX] = 0xff000004;
 
     // make sure fabric node gatekeeper is available.
-    fabric_endpoint_init();
+    tt_fabric_init();
+    fabric_endpoint_init<RoutingType::ROUTING_TABLE>();
 
     socket_reader.init(data_buffer_start_addr, data_buffer_size_words);
     DPRINT << "Socket open on  " << dest_device << ENDL();
     test_results[TT_FABRIC_MISC_INDEX] = 0xff000005;
 
     fabric_socket_open(
+        client_interface,       // fabric client interface
         3,                      // the network plane to use for this socket
         2,                      // Temporal epoch for which the socket is being opened
         1,                      // Socket Id to open

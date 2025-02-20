@@ -570,7 +570,7 @@ TEST_F(MeshWorkloadTestSuite, EltwiseBinaryMeshWorkload) {
                         mesh_device_->mesh_command_queue(),
                         dst_vec,
                         output_bufs[col_idx * worker_grid_size.y + row_idx],
-                        Coordinate(logical_y, logical_x));
+                        MeshCoordinate(logical_y, logical_x));
                     if (logical_y == 0) {
                         for (int i = 0; i < dst_vec.size(); i++) {
                             EXPECT_EQ(dst_vec[i].to_float(), 5);
@@ -687,7 +687,7 @@ TEST_F(MeshWorkloadTestSuite, MeshWorkloadSanity) {
                             mesh_device_->mesh_command_queue(),
                             dst_vec,
                             output_buffers[col_idx * worker_grid_size.y + row_idx],
-                            Coordinate(logical_y, logical_x));
+                            MeshCoordinate(logical_y, logical_x));
                         for (int i = 0; i < dst_vec.size(); i++) {
                             float ref_val = std::pow(2, (iter % 2) + 1);
                             if (i >= 512) {

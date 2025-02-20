@@ -1,7 +1,7 @@
 {
   "context": {
-    "date": "2025-02-17T16:09:05+00:00",
-    "host_name": "tt-metal-ci-vm-190",
+    "date": "2025-02-20T00:45:37+00:00",
+    "host_name": "tt-metal-ci-vm-163",
     "executable": "./build/test/tt_metal/perf_microbenchmark/dispatch/test_pgm_dispatch_wormhole_b0",
     "num_cpus": 14,
     "mhz_per_cpu": 2300,
@@ -32,7 +32,7 @@
         "num_sharing": 1
       }
     ],
-    "load_avg": [8.73,8.27,8.15],
+    "load_avg": [10.85,14.93,17.13],
     "library_version": "v1.9.1",
     "library_build_type": "debug",
     "json_schema_version": 1
@@ -48,10 +48,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 26,
-      "real_time": 2.6730076923076924e+07,
-      "cpu_time": 2.3336153846153637e+04,
+      "real_time": 2.6723500000000004e+07,
+      "cpu_time": 2.7281923076922314e+04,
       "time_unit": "ns",
-      "IterationTime": 2.6730076923076924e-06
+      "IterationTime": 2.6723500000000008e-06
     },
     {
       "name": "BM_pgm_dispatch/brisc_only_trace/512/manual_time",
@@ -63,10 +63,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 26,
-      "real_time": 2.6894346153846148e+07,
-      "cpu_time": 2.4738846153846353e+04,
+      "real_time": 2.6898615384615384e+07,
+      "cpu_time": 2.3647692307690377e+04,
       "time_unit": "ns",
-      "IterationTime": 2.6894346153846151e-06
+      "IterationTime": 2.6898615384615384e-06
     },
     {
       "name": "BM_pgm_dispatch/brisc_only_trace/1024/manual_time",
@@ -78,10 +78,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 26,
-      "real_time": 2.7130807692307692e+07,
-      "cpu_time": 2.3016923076922227e+04,
+      "real_time": 2.7135038461538460e+07,
+      "cpu_time": 2.6173846153846840e+04,
       "time_unit": "ns",
-      "IterationTime": 2.7130807692307694e-06
+      "IterationTime": 2.7135038461538459e-06
     },
     {
       "name": "BM_pgm_dispatch/brisc_only_trace/2048/manual_time",
@@ -93,10 +93,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 25,
-      "real_time": 2.7683120000000004e+07,
-      "cpu_time": 2.3659639999999981e+04,
+      "real_time": 2.7682240000000000e+07,
+      "cpu_time": 2.7707479999996562e+04,
       "time_unit": "ns",
-      "IterationTime": 2.7683120000000002e-06
+      "IterationTime": 2.7682240000000003e-06
     },
     {
       "name": "BM_pgm_dispatch/brisc_only_trace/4096/manual_time",
@@ -108,10 +108,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 24,
-      "real_time": 2.9706791666666672e+07,
-      "cpu_time": 2.2529416666666744e+04,
+      "real_time": 2.9701666666666657e+07,
+      "cpu_time": 2.6383541666665420e+04,
       "time_unit": "ns",
-      "IterationTime": 2.9706791666666672e-06
+      "IterationTime": 2.9701666666666657e-06
     },
     {
       "name": "BM_pgm_dispatch/brisc_only_trace/8192/manual_time",
@@ -123,10 +123,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 22,
-      "real_time": 3.2475590909090903e+07,
-      "cpu_time": 2.4634954545455952e+04,
+      "real_time": 3.2618636363636363e+07,
+      "cpu_time": 3.5915136363635029e+04,
       "time_unit": "ns",
-      "IterationTime": 3.2475590909090901e-06
+      "IterationTime": 3.2618636363636362e-06
     },
     {
       "name": "BM_pgm_dispatch/brisc_only_trace/12288/manual_time",
@@ -138,10 +138,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 3.5464200000000007e+07,
-      "cpu_time": 2.2655500000001717e+04,
+      "real_time": 3.5456300000000000e+07,
+      "cpu_time": 2.9020000000001823e+04,
       "time_unit": "ns",
-      "IterationTime": 3.5464200000000010e-06
+      "IterationTime": 3.5456300000000000e-06
     },
     {
       "name": "BM_pgm_dispatch/ncrisc_only_trace/256/manual_time",
@@ -153,10 +153,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 26,
-      "real_time": 2.6713653846153848e+07,
-      "cpu_time": 2.2773076923076318e+04,
+      "real_time": 2.6716115384615384e+07,
+      "cpu_time": 2.8298846153847095e+04,
       "time_unit": "ns",
-      "IterationTime": 2.6713653846153849e-06
+      "IterationTime": 2.6716115384615382e-06
     },
     {
       "name": "BM_pgm_dispatch/ncrisc_only_trace/512/manual_time",
@@ -168,10 +168,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 26,
-      "real_time": 2.6892884615384616e+07,
-      "cpu_time": 2.3196538461534874e+04,
+      "real_time": 2.6904692307692308e+07,
+      "cpu_time": 2.9525000000000331e+04,
       "time_unit": "ns",
-      "IterationTime": 2.6892884615384616e-06
+      "IterationTime": 2.6904692307692307e-06
     },
     {
       "name": "BM_pgm_dispatch/ncrisc_only_trace/1024/manual_time",
@@ -183,10 +183,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 26,
-      "real_time": 2.7130423076923076e+07,
-      "cpu_time": 2.1398461538454285e+04,
+      "real_time": 2.7138307692307688e+07,
+      "cpu_time": 3.2016230769230744e+04,
       "time_unit": "ns",
-      "IterationTime": 2.7130423076923079e-06
+      "IterationTime": 2.7138307692307689e-06
     },
     {
       "name": "BM_pgm_dispatch/ncrisc_only_trace/2048/manual_time",
@@ -198,10 +198,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 25,
-      "real_time": 2.7683520000000000e+07,
-      "cpu_time": 2.2990679999992382e+04,
+      "real_time": 2.7686920000000000e+07,
+      "cpu_time": 2.9539840000003533e+04,
       "time_unit": "ns",
-      "IterationTime": 2.7683520000000004e-06
+      "IterationTime": 2.7686920000000001e-06
     },
     {
       "name": "BM_pgm_dispatch/ncrisc_only_trace/4096/manual_time",
@@ -213,10 +213,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 24,
-      "real_time": 2.9707708333333340e+07,
-      "cpu_time": 2.4864708333331248e+04,
+      "real_time": 2.9711166666666657e+07,
+      "cpu_time": 2.9315125000003070e+04,
       "time_unit": "ns",
-      "IterationTime": 2.9707708333333341e-06
+      "IterationTime": 2.9711166666666665e-06
     },
     {
       "name": "BM_pgm_dispatch/ncrisc_only_trace/8192/manual_time",
@@ -228,10 +228,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 22,
-      "real_time": 3.2475227272727262e+07,
-      "cpu_time": 2.3398636363641304e+04,
+      "real_time": 3.2541499999999996e+07,
+      "cpu_time": 2.9300954545452561e+04,
       "time_unit": "ns",
-      "IterationTime": 3.2475227272727262e-06
+      "IterationTime": 3.2541499999999996e-06
     },
     {
       "name": "BM_pgm_dispatch/ncrisc_only_trace/12288/manual_time",
@@ -243,10 +243,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 3.5465350000000000e+07,
-      "cpu_time": 2.4466999999994689e+04,
+      "real_time": 3.5457350000000007e+07,
+      "cpu_time": 2.8714999999990272e+04,
       "time_unit": "ns",
-      "IterationTime": 3.5465349999999997e-06
+      "IterationTime": 3.5457350000000005e-06
     },
     {
       "name": "BM_pgm_dispatch/trisc_only_trace/256/manual_time",
@@ -258,10 +258,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 24,
-      "real_time": 2.9075708333333332e+07,
-      "cpu_time": 2.3487499999993073e+04,
+      "real_time": 2.9076750000000000e+07,
+      "cpu_time": 2.8871249999997312e+04,
       "time_unit": "ns",
-      "IterationTime": 2.9075708333333332e-06
+      "IterationTime": 2.9076749999999997e-06
     },
     {
       "name": "BM_pgm_dispatch/trisc_only_trace/512/manual_time",
@@ -273,10 +273,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 24,
-      "real_time": 2.9075458333333340e+07,
-      "cpu_time": 2.5067874999988122e+04,
+      "real_time": 2.9078583333333328e+07,
+      "cpu_time": 3.2055000000012307e+04,
       "time_unit": "ns",
-      "IterationTime": 2.9075458333333340e-06
+      "IterationTime": 2.9078583333333325e-06
     },
     {
       "name": "BM_pgm_dispatch/trisc_only_trace/1024/manual_time",
@@ -288,10 +288,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 23,
-      "real_time": 2.9828217391304348e+07,
-      "cpu_time": 2.2127217391293176e+04,
+      "real_time": 2.9838043478260875e+07,
+      "cpu_time": 2.7489000000008553e+04,
       "time_unit": "ns",
-      "IterationTime": 2.9828217391304348e-06
+      "IterationTime": 2.9838043478260870e-06
     },
     {
       "name": "BM_pgm_dispatch/trisc_only_trace/2048/manual_time",
@@ -303,10 +303,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 21,
-      "real_time": 3.3546238095238108e+07,
-      "cpu_time": 2.2843809523807682e+04,
+      "real_time": 3.3531809523809519e+07,
+      "cpu_time": 2.8204238095241864e+04,
       "time_unit": "ns",
-      "IterationTime": 3.3546238095238102e-06
+      "IterationTime": 3.3531809523809517e-06
     },
     {
       "name": "BM_pgm_dispatch/trisc_only_trace/4096/manual_time",
@@ -318,10 +318,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 18,
-      "real_time": 3.8659222222222216e+07,
-      "cpu_time": 2.3362222222224183e+04,
+      "real_time": 3.8661722222222231e+07,
+      "cpu_time": 2.8678888888874117e+04,
       "time_unit": "ns",
-      "IterationTime": 3.8659222222222217e-06
+      "IterationTime": 3.8661722222222239e-06
     },
     {
       "name": "BM_pgm_dispatch/trisc_only_trace/8192/manual_time",
@@ -333,10 +333,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 15,
-      "real_time": 4.6317666666666664e+07,
-      "cpu_time": 2.5929333333341019e+04,
+      "real_time": 4.6449466666666664e+07,
+      "cpu_time": 3.4942666666667086e+04,
       "time_unit": "ns",
-      "IterationTime": 4.6317666666666669e-06
+      "IterationTime": 4.6449466666666656e-06
     },
     {
       "name": "BM_pgm_dispatch/trisc_only_trace/12288/manual_time",
@@ -348,10 +348,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 13,
-      "real_time": 5.4694230769230768e+07,
-      "cpu_time": 2.7805461538474508e+04,
+      "real_time": 5.4678076923076920e+07,
+      "cpu_time": 3.1526230769245263e+04,
       "time_unit": "ns",
-      "IterationTime": 5.4694230769230770e-06
+      "IterationTime": 5.4678076923076923e-06
     },
     {
       "name": "BM_pgm_dispatch/brisc_trisc_only_trace/256/manual_time",
@@ -363,10 +363,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 23,
-      "real_time": 2.9950565217391301e+07,
-      "cpu_time": 2.1679434782619621e+04,
+      "real_time": 2.9953652173913039e+07,
+      "cpu_time": 2.7541652173924052e+04,
       "time_unit": "ns",
-      "IterationTime": 2.9950565217391299e-06
+      "IterationTime": 2.9953652173913039e-06
     },
     {
       "name": "BM_pgm_dispatch/brisc_trisc_only_trace/512/manual_time",
@@ -378,10 +378,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 23,
-      "real_time": 3.0197434782608695e+07,
-      "cpu_time": 2.2568478260875934e+04,
+      "real_time": 3.0217695652173914e+07,
+      "cpu_time": 2.8143086956519077e+04,
       "time_unit": "ns",
-      "IterationTime": 3.0197434782608692e-06
+      "IterationTime": 3.0217695652173911e-06
     },
     {
       "name": "BM_pgm_dispatch/brisc_trisc_only_trace/1024/manual_time",
@@ -393,10 +393,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 22,
-      "real_time": 3.1887909090909086e+07,
-      "cpu_time": 2.3819681818183399e+04,
+      "real_time": 3.1854545454545461e+07,
+      "cpu_time": 2.8280409090914400e+04,
       "time_unit": "ns",
-      "IterationTime": 3.1887909090909085e-06
+      "IterationTime": 3.1854545454545458e-06
     },
     {
       "name": "BM_pgm_dispatch/brisc_trisc_only_trace/2048/manual_time",
@@ -408,10 +408,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 19,
-      "real_time": 3.5937210526315793e+07,
-      "cpu_time": 2.1740000000004005e+04,
+      "real_time": 3.5941894736842103e+07,
+      "cpu_time": 2.7991578947383328e+04,
       "time_unit": "ns",
-      "IterationTime": 3.5937210526315797e-06
+      "IterationTime": 3.5941894736842104e-06
     },
     {
       "name": "BM_pgm_dispatch/brisc_trisc_only_trace/4096/manual_time",
@@ -423,10 +423,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 17,
-      "real_time": 4.1428294117647067e+07,
-      "cpu_time": 2.6309411764709432e+04,
+      "real_time": 4.1464941176470578e+07,
+      "cpu_time": 2.8563529411757321e+04,
       "time_unit": "ns",
-      "IterationTime": 4.1428294117647069e-06
+      "IterationTime": 4.1464941176470575e-06
     },
     {
       "name": "BM_pgm_dispatch/brisc_trisc_only_trace/8192/manual_time",
@@ -438,10 +438,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 13,
-      "real_time": 5.2825692307692304e+07,
-      "cpu_time": 2.5559999999988584e+04,
+      "real_time": 5.2712923076923065e+07,
+      "cpu_time": 2.9768461538459691e+04,
       "time_unit": "ns",
-      "IterationTime": 5.2825692307692300e-06
+      "IterationTime": 5.2712923076923071e-06
     },
     {
       "name": "BM_pgm_dispatch/brisc_trisc_only_trace/12288/manual_time",
@@ -453,10 +453,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 11,
-      "real_time": 6.4249545454545468e+07,
-      "cpu_time": 2.4714545454566789e+04,
+      "real_time": 6.4287909090909094e+07,
+      "cpu_time": 3.0248181818161931e+04,
       "time_unit": "ns",
-      "IterationTime": 6.4249545454545459e-06
+      "IterationTime": 6.4287909090909088e-06
     },
     {
       "name": "BM_pgm_dispatch/all_processors_trace/256/manual_time",
@@ -468,10 +468,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 22,
-      "real_time": 3.1338136363636352e+07,
-      "cpu_time": 2.3316954545463374e+04,
+      "real_time": 3.1347363636363629e+07,
+      "cpu_time": 2.7595363636369959e+04,
       "time_unit": "ns",
-      "IterationTime": 3.1338136363636358e-06
+      "IterationTime": 3.1347363636363633e-06
     },
     {
       "name": "BM_pgm_dispatch/all_processors_trace/512/manual_time",
@@ -483,10 +483,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 22,
-      "real_time": 3.1957136363636363e+07,
-      "cpu_time": 2.4401090909075374e+04,
+      "real_time": 3.1968454545454536e+07,
+      "cpu_time": 2.8872136363650661e+04,
       "time_unit": "ns",
-      "IterationTime": 3.1957136363636368e-06
+      "IterationTime": 3.1968454545454536e-06
     },
     {
       "name": "BM_pgm_dispatch/all_processors_trace/1024/manual_time",
@@ -498,10 +498,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 21,
-      "real_time": 3.3438000000000007e+07,
-      "cpu_time": 2.2249333333332477e+04,
+      "real_time": 3.3430047619047619e+07,
+      "cpu_time": 2.7584142857142589e+04,
       "time_unit": "ns",
-      "IterationTime": 3.3438000000000005e-06
+      "IterationTime": 3.3430047619047614e-06
     },
     {
       "name": "BM_pgm_dispatch/all_processors_trace/2048/manual_time",
@@ -513,10 +513,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 18,
-      "real_time": 3.8705333333333336e+07,
-      "cpu_time": 2.1913888888885285e+04,
+      "real_time": 3.8706222222222224e+07,
+      "cpu_time": 2.9503444444461336e+04,
       "time_unit": "ns",
-      "IterationTime": 3.8705333333333330e-06
+      "IterationTime": 3.8706222222222218e-06
     },
     {
       "name": "BM_pgm_dispatch/all_processors_trace/4096/manual_time",
@@ -528,10 +528,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 15,
-      "real_time": 4.5641533333333343e+07,
-      "cpu_time": 2.3505999999991665e+04,
+      "real_time": 4.5603533333333328e+07,
+      "cpu_time": 3.3940666666657882e+04,
       "time_unit": "ns",
-      "IterationTime": 4.5641533333333340e-06
+      "IterationTime": 4.5603533333333325e-06
     },
     {
       "name": "BM_pgm_dispatch/all_processors_trace/8192/manual_time",
@@ -543,10 +543,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 12,
-      "real_time": 5.9665083333333321e+07,
-      "cpu_time": 2.5379166666672503e+04,
+      "real_time": 5.9665333333333343e+07,
+      "cpu_time": 3.1440833333358973e+04,
       "time_unit": "ns",
-      "IterationTime": 5.9665083333333329e-06
+      "IterationTime": 5.9665333333333355e-06
     },
     {
       "name": "BM_pgm_dispatch/all_processors_trace/12288/manual_time",
@@ -557,11 +557,11 @@
       "repetitions": 1,
       "repetition_index": 0,
       "threads": 1,
-      "iterations": 9,
-      "real_time": 7.3753111111111119e+07,
-      "cpu_time": 2.4642222222216584e+04,
+      "iterations": 10,
+      "real_time": 7.3627100000000015e+07,
+      "cpu_time": 3.2366999999977608e+04,
       "time_unit": "ns",
-      "IterationTime": 7.3753111111111126e-06
+      "IterationTime": 7.3627100000000014e-06
     },
     {
       "name": "BM_pgm_dispatch/all_processors_all_cores_trace/256/manual_time",
@@ -573,10 +573,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 22,
-      "real_time": 3.1155954545454539e+07,
-      "cpu_time": 2.2925454545448658e+04,
+      "real_time": 3.1157590909090914e+07,
+      "cpu_time": 2.8746818181798779e+04,
       "time_unit": "ns",
-      "IterationTime": 3.1155954545454542e-06
+      "IterationTime": 3.1157590909090916e-06
     },
     {
       "name": "BM_pgm_dispatch/all_processors_all_cores_trace/512/manual_time",
@@ -588,10 +588,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 22,
-      "real_time": 3.1700909090909079e+07,
-      "cpu_time": 2.3464227272729233e+04,
+      "real_time": 3.1726454545454547e+07,
+      "cpu_time": 2.8230272727267838e+04,
       "time_unit": "ns",
-      "IterationTime": 3.1700909090909077e-06
+      "IterationTime": 3.1726454545454548e-06
     },
     {
       "name": "BM_pgm_dispatch/all_processors_all_cores_trace/1024/manual_time",
@@ -603,10 +603,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 21,
-      "real_time": 3.3428095238095231e+07,
-      "cpu_time": 2.2474714285730934e+04,
+      "real_time": 3.3420380952380959e+07,
+      "cpu_time": 2.9070761904773484e+04,
       "time_unit": "ns",
-      "IterationTime": 3.3428095238095233e-06
+      "IterationTime": 3.3420380952380956e-06
     },
     {
       "name": "BM_pgm_dispatch/all_processors_all_cores_trace/2048/manual_time",
@@ -618,10 +618,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 18,
-      "real_time": 3.8703722222222224e+07,
-      "cpu_time": 2.3273944444469744e+04,
+      "real_time": 3.8704111111111104e+07,
+      "cpu_time": 3.3141833333299393e+04,
       "time_unit": "ns",
-      "IterationTime": 3.8703722222222221e-06
+      "IterationTime": 3.8704111111111108e-06
     },
     {
       "name": "BM_pgm_dispatch/all_processors_all_cores_trace/4096/manual_time",
@@ -633,10 +633,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 15,
-      "real_time": 4.5644800000000000e+07,
-      "cpu_time": 3.3046666666673256e+04,
+      "real_time": 4.5595866666666672e+07,
+      "cpu_time": 2.5466666666673631e+04,
       "time_unit": "ns",
-      "IterationTime": 4.5644800000000004e-06
+      "IterationTime": 4.5595866666666675e-06
     },
     {
       "name": "BM_pgm_dispatch/all_processors_all_cores_trace/8192/manual_time",
@@ -648,10 +648,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 12,
-      "real_time": 5.9704833333333321e+07,
-      "cpu_time": 2.4242500000030512e+04,
+      "real_time": 5.9758166666666657e+07,
+      "cpu_time": 2.7325833333350736e+04,
       "time_unit": "ns",
-      "IterationTime": 5.9704833333333331e-06
+      "IterationTime": 5.9758166666666655e-06
     },
     {
       "name": "BM_pgm_dispatch/all_processors_all_cores_trace/12288/manual_time",
@@ -663,10 +663,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 9,
-      "real_time": 7.3861777777777776e+07,
-      "cpu_time": 2.5335555555629064e+04,
+      "real_time": 7.3744555555555537e+07,
+      "cpu_time": 2.8037777777810566e+04,
       "time_unit": "ns",
-      "IterationTime": 7.3861777777777777e-06
+      "IterationTime": 7.3744555555555538e-06
     },
     {
       "name": "BM_pgm_dispatch/all_processors_all_cores_1cb/256/manual_time",
@@ -678,10 +678,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 3.4477300000000000e+07,
-      "cpu_time": 2.3501999999986368e+04,
+      "real_time": 3.4546250000000007e+07,
+      "cpu_time": 6.9045999999994834e+04,
       "time_unit": "ns",
-      "IterationTime": 3.4477299999999996e-06
+      "IterationTime": 3.4546250000000008e-06
     },
     {
       "name": "BM_pgm_dispatch/all_processors_all_cores_1cb/512/manual_time",
@@ -693,10 +693,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 3.4912649999999993e+07,
-      "cpu_time": 2.4015000000021661e+04,
+      "real_time": 3.5552100000000000e+07,
+      "cpu_time": 1.0344854999999597e+05,
       "time_unit": "ns",
-      "IterationTime": 3.4912649999999992e-06
+      "IterationTime": 3.5552099999999997e-06
     },
     {
       "name": "BM_pgm_dispatch/all_processors_all_cores_1cb/1024/manual_time",
@@ -708,10 +708,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 19,
-      "real_time": 3.6714894736842096e+07,
-      "cpu_time": 2.4035315789486402e+04,
+      "real_time": 3.6692157894736841e+07,
+      "cpu_time": 3.3235578947351925e+04,
       "time_unit": "ns",
-      "IterationTime": 3.6714894736842097e-06
+      "IterationTime": 3.6692157894736836e-06
     },
     {
       "name": "BM_pgm_dispatch/all_processors_all_cores_1cb/2048/manual_time",
@@ -723,10 +723,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 17,
-      "real_time": 4.1945941176470585e+07,
-      "cpu_time": 2.5924117647079052e+04,
+      "real_time": 4.1962058823529422e+07,
+      "cpu_time": 4.1426470588239579e+04,
       "time_unit": "ns",
-      "IterationTime": 4.1945941176470588e-06
+      "IterationTime": 4.1962058823529422e-06
     },
     {
       "name": "BM_pgm_dispatch/all_processors_all_cores_1cb/4096/manual_time",
@@ -738,10 +738,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 14,
-      "real_time": 4.8923285714285716e+07,
-      "cpu_time": 2.6736428571475353e+04,
+      "real_time": 4.8866571428571425e+07,
+      "cpu_time": 4.9834999999934633e+04,
       "time_unit": "ns",
-      "IterationTime": 4.8923285714285717e-06
+      "IterationTime": 4.8866571428571430e-06
     },
     {
       "name": "BM_pgm_dispatch/all_processors_all_cores_1cb/8192/manual_time",
@@ -753,10 +753,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 11,
-      "real_time": 6.3098818181818180e+07,
-      "cpu_time": 2.2529999999934800e+04,
+      "real_time": 6.3119272727272704e+07,
+      "cpu_time": 2.9314545454588042e+04,
       "time_unit": "ns",
-      "IterationTime": 6.3098818181818184e-06
+      "IterationTime": 6.3119272727272713e-06
     },
     {
       "name": "BM_pgm_dispatch/all_processors_all_cores_32cb/256/manual_time",
@@ -768,10 +768,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 3.4805099999999993e+07,
-      "cpu_time": 2.4124099999989212e+04,
+      "real_time": 3.4796650000000000e+07,
+      "cpu_time": 2.7215999999974370e+04,
       "time_unit": "ns",
-      "IterationTime": 3.4805099999999994e-06
+      "IterationTime": 3.4796650000000004e-06
     },
     {
       "name": "BM_pgm_dispatch/all_processors_all_cores_32cb/512/manual_time",
@@ -783,10 +783,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 3.5100100000000007e+07,
-      "cpu_time": 2.5931549999969051e+04,
+      "real_time": 3.5107099999999993e+07,
+      "cpu_time": 3.0068449999998138e+04,
       "time_unit": "ns",
-      "IterationTime": 3.5100100000000006e-06
+      "IterationTime": 3.5107100000000000e-06
     },
     {
       "name": "BM_pgm_dispatch/all_processors_all_cores_32cb/1024/manual_time",
@@ -798,10 +798,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 19,
-      "real_time": 3.7149842105263159e+07,
-      "cpu_time": 3.0253684210560106e+04,
+      "real_time": 3.7121473684210517e+07,
+      "cpu_time": 2.5832631578970897e+04,
       "time_unit": "ns",
-      "IterationTime": 3.7149842105263159e-06
+      "IterationTime": 3.7121473684210523e-06
     },
     {
       "name": "BM_pgm_dispatch/all_processors_all_cores_32cb/2048/manual_time",
@@ -813,10 +813,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 17,
-      "real_time": 4.2246647058823526e+07,
-      "cpu_time": 2.9003529411721647e+04,
+      "real_time": 4.2177882352941185e+07,
+      "cpu_time": 1.7096470588196622e+04,
       "time_unit": "ns",
-      "IterationTime": 4.2246647058823523e-06
+      "IterationTime": 4.2177882352941189e-06
     },
     {
       "name": "BM_pgm_dispatch/all_processors_all_cores_32cb/4096/manual_time",
@@ -828,10 +828,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 14,
-      "real_time": 4.9113000000000000e+07,
-      "cpu_time": 3.1937142857112784e+04,
+      "real_time": 4.8997500000000007e+07,
+      "cpu_time": 3.3407857142834073e+04,
       "time_unit": "ns",
-      "IterationTime": 4.9112999999999999e-06
+      "IterationTime": 4.8997500000000008e-06
     },
     {
       "name": "BM_pgm_dispatch/all_processors_all_cores_32cb/8192/manual_time",
@@ -843,10 +843,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 11,
-      "real_time": 6.6463000000000007e+07,
-      "cpu_time": 3.2335727272761716e+04,
+      "real_time": 6.6456181818181820e+07,
+      "cpu_time": 3.2069909090831123e+04,
       "time_unit": "ns",
-      "IterationTime": 6.6463000000000011e-06
+      "IterationTime": 6.6456181818181815e-06
     },
     {
       "name": "BM_pgm_dispatch/all_processors_1_core_1_rta/256/manual_time",
@@ -858,10 +858,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 3.4480349999999993e+07,
-      "cpu_time": 2.8031049999999166e+04,
+      "real_time": 3.4481950000000007e+07,
+      "cpu_time": 3.1215449999999477e+04,
       "time_unit": "ns",
-      "IterationTime": 3.4480349999999989e-06
+      "IterationTime": 3.4481950000000008e-06
     },
     {
       "name": "BM_pgm_dispatch/all_processors_1_core_1_rta/512/manual_time",
@@ -873,10 +873,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 20,
-      "real_time": 3.4916699999999993e+07,
-      "cpu_time": 2.8380200000022171e+04,
+      "real_time": 3.4921199999999993e+07,
+      "cpu_time": 3.2242249999958614e+04,
       "time_unit": "ns",
-      "IterationTime": 3.4916699999999991e-06
+      "IterationTime": 3.4921200000000001e-06
     },
     {
       "name": "BM_pgm_dispatch/all_processors_1_core_1_rta/1024/manual_time",
@@ -888,10 +888,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 19,
-      "real_time": 3.6713736842105277e+07,
-      "cpu_time": 3.5802631578961627e+04,
+      "real_time": 3.6684263157894753e+07,
+      "cpu_time": 2.7482105263160487e+04,
       "time_unit": "ns",
-      "IterationTime": 3.6713736842105279e-06
+      "IterationTime": 3.6684263157894747e-06
     },
     {
       "name": "BM_pgm_dispatch/all_processors_1_core_1_rta/2048/manual_time",
@@ -903,10 +903,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 17,
-      "real_time": 4.1953000000000007e+07,
-      "cpu_time": 3.1220588235308609e+04,
+      "real_time": 4.1952058823529415e+07,
+      "cpu_time": 2.8309411764701639e+04,
       "time_unit": "ns",
-      "IterationTime": 4.1953000000000003e-06
+      "IterationTime": 4.1952058823529409e-06
     },
     {
       "name": "BM_pgm_dispatch/all_processors_1_core_1_rta/4096/manual_time",
@@ -918,10 +918,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 14,
-      "real_time": 4.8927500000000000e+07,
-      "cpu_time": 3.0061428571442102e+04,
+      "real_time": 4.8853357142857142e+07,
+      "cpu_time": 3.0190714285703380e+04,
       "time_unit": "ns",
-      "IterationTime": 4.8927499999999990e-06
+      "IterationTime": 4.8853357142857137e-06
     },
     {
       "name": "BM_pgm_dispatch/all_processors_1_core_1_rta/8192/manual_time",
@@ -933,10 +933,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 11,
-      "real_time": 6.2969909090909101e+07,
-      "cpu_time": 3.1834636363631769e+04,
+      "real_time": 6.2988090909090906e+07,
+      "cpu_time": 3.2970000000031134e+04,
       "time_unit": "ns",
-      "IterationTime": 6.2969909090909095e-06
+      "IterationTime": 6.2988090909090911e-06
     },
     {
       "name": "BM_pgm_dispatch/one_processor_all_cores_128_rta/256/manual_time",
@@ -948,10 +948,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 12,
-      "real_time": 5.7600500000000000e+07,
-      "cpu_time": 3.8343500000056119e+04,
+      "real_time": 5.7582083333333336e+07,
+      "cpu_time": 2.9232166666689114e+04,
       "time_unit": "ns",
-      "IterationTime": 5.7600500000000000e-06
+      "IterationTime": 5.7582083333333335e-06
     },
     {
       "name": "BM_pgm_dispatch/one_processor_all_cores_128_rta/512/manual_time",
@@ -963,10 +963,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 12,
-      "real_time": 5.7762833333333336e+07,
-      "cpu_time": 3.0340916666649064e+04,
+      "real_time": 5.7757333333333343e+07,
+      "cpu_time": 2.6393666666605732e+04,
       "time_unit": "ns",
-      "IterationTime": 5.7762833333333342e-06
+      "IterationTime": 5.7757333333333356e-06
     },
     {
       "name": "BM_pgm_dispatch/one_processor_all_cores_128_rta/1024/manual_time",
@@ -978,10 +978,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 12,
-      "real_time": 5.8090666666666664e+07,
-      "cpu_time": 2.9895833333348779e+04,
+      "real_time": 5.8078833333333336e+07,
+      "cpu_time": 2.9148333333376781e+04,
       "time_unit": "ns",
-      "IterationTime": 5.8090666666666666e-06
+      "IterationTime": 5.8078833333333324e-06
     },
     {
       "name": "BM_pgm_dispatch/one_processor_all_cores_128_rta/2048/manual_time",
@@ -993,10 +993,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 12,
-      "real_time": 5.8695666666666664e+07,
-      "cpu_time": 3.0913333333308183e+04,
+      "real_time": 5.8718750000000000e+07,
+      "cpu_time": 3.2037500000026139e+04,
       "time_unit": "ns",
-      "IterationTime": 5.8695666666666663e-06
+      "IterationTime": 5.8718750000000004e-06
     },
     {
       "name": "BM_pgm_dispatch/one_processor_all_cores_128_rta/4096/manual_time",
@@ -1008,10 +1008,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 12,
-      "real_time": 6.0850166666666657e+07,
-      "cpu_time": 3.4490833333252383e+04,
+      "real_time": 6.0855916666666657e+07,
+      "cpu_time": 2.9017500000024418e+04,
       "time_unit": "ns",
-      "IterationTime": 6.0850166666666669e-06
+      "IterationTime": 6.0855916666666656e-06
     },
     {
       "name": "BM_pgm_dispatch/one_processor_all_cores_128_rta/8192/manual_time",
@@ -1023,10 +1023,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 11,
-      "real_time": 6.3639545454545468e+07,
-      "cpu_time": 2.4531909090958430e+04,
+      "real_time": 6.3647909090909101e+07,
+      "cpu_time": 5.7657272727208336e+04,
       "time_unit": "ns",
-      "IterationTime": 6.3639545454545460e-06
+      "IterationTime": 6.3647909090909099e-06
     },
     {
       "name": "BM_pgm_dispatch/one_processors_all_cores_1_rta/256/manual_time",
@@ -1038,10 +1038,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 19,
-      "real_time": 3.7484105263157889e+07,
-      "cpu_time": 2.1082684210533014e+04,
+      "real_time": 3.7490263157894738e+07,
+      "cpu_time": 3.1591578947311547e+04,
       "time_unit": "ns",
-      "IterationTime": 3.7484105263157885e-06
+      "IterationTime": 3.7490263157894740e-06
     },
     {
       "name": "BM_pgm_dispatch/one_processors_all_cores_1_rta/512/manual_time",
@@ -1053,10 +1053,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 19,
-      "real_time": 3.7578157894736834e+07,
-      "cpu_time": 2.0652526315825377e+04,
+      "real_time": 3.7583947368421055e+07,
+      "cpu_time": 2.7524947368368958e+04,
       "time_unit": "ns",
-      "IterationTime": 3.7578157894736839e-06
+      "IterationTime": 3.7583947368421052e-06
     },
     {
       "name": "BM_pgm_dispatch/one_processors_all_cores_1_rta/1024/manual_time",
@@ -1068,10 +1068,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 19,
-      "real_time": 3.7757578947368421e+07,
-      "cpu_time": 2.0148947368394791e+04,
+      "real_time": 3.7766263157894745e+07,
+      "cpu_time": 2.7608894736817401e+04,
       "time_unit": "ns",
-      "IterationTime": 3.7757578947368423e-06
+      "IterationTime": 3.7766263157894748e-06
     },
     {
       "name": "BM_pgm_dispatch/one_processors_all_cores_1_rta/2048/manual_time",
@@ -1083,10 +1083,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 18,
-      "real_time": 3.8168833333333336e+07,
-      "cpu_time": 1.8871666666599020e+04,
+      "real_time": 3.8182833333333336e+07,
+      "cpu_time": 3.5652777777765245e+04,
       "time_unit": "ns",
-      "IterationTime": 3.8168833333333331e-06
+      "IterationTime": 3.8182833333333328e-06
     },
     {
       "name": "BM_pgm_dispatch/one_processors_all_cores_1_rta/4096/manual_time",
@@ -1098,10 +1098,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 18,
-      "real_time": 3.9009111111111112e+07,
-      "cpu_time": 2.0109444444453096e+04,
+      "real_time": 3.9015388888888888e+07,
+      "cpu_time": 3.1919444444423243e+04,
       "time_unit": "ns",
-      "IterationTime": 3.9009111111111116e-06
+      "IterationTime": 3.9015388888888894e-06
     },
     {
       "name": "BM_pgm_dispatch/one_processors_all_cores_1_rta/8192/manual_time",
@@ -1113,10 +1113,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 17,
-      "real_time": 4.1178411764705881e+07,
-      "cpu_time": 3.0142941176503722e+04,
+      "real_time": 4.1168529411764704e+07,
+      "cpu_time": 2.6784117647024759e+04,
       "time_unit": "ns",
-      "IterationTime": 4.1178411764705887e-06
+      "IterationTime": 4.1168529411764698e-06
     },
     {
       "name": "BM_pgm_dispatch/all_processors_all_cores_1_rta/256/manual_time",
@@ -1128,10 +1128,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 17,
-      "real_time": 4.0965764705882341e+07,
-      "cpu_time": 3.2121941176508615e+04,
+      "real_time": 4.0973294117647059e+07,
+      "cpu_time": 3.0251941176431654e+04,
       "time_unit": "ns",
-      "IterationTime": 4.0965764705882342e-06
+      "IterationTime": 4.0973294117647062e-06
     },
     {
       "name": "BM_pgm_dispatch/all_processors_all_cores_1_rta/512/manual_time",
@@ -1143,10 +1143,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 17,
-      "real_time": 4.1141235294117637e+07,
-      "cpu_time": 2.9815529411770989e+04,
+      "real_time": 4.1147823529411763e+07,
+      "cpu_time": 2.7783117647029550e+04,
       "time_unit": "ns",
-      "IterationTime": 4.1141235294117641e-06
+      "IterationTime": 4.1147823529411768e-06
     },
     {
       "name": "BM_pgm_dispatch/all_processors_all_cores_1_rta/1024/manual_time",
@@ -1158,10 +1158,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 17,
-      "real_time": 4.1674705882352941e+07,
-      "cpu_time": 3.0351529411815398e+04,
+      "real_time": 4.1673176470588244e+07,
+      "cpu_time": 2.6009411764730197e+04,
       "time_unit": "ns",
-      "IterationTime": 4.1674705882352947e-06
+      "IterationTime": 4.1673176470588240e-06
     },
     {
       "name": "BM_pgm_dispatch/all_processors_all_cores_1_rta/2048/manual_time",
@@ -1173,10 +1173,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 16,
-      "real_time": 4.4369937500000007e+07,
-      "cpu_time": 3.1336250000069122e+04,
+      "real_time": 4.4385749999999993e+07,
+      "cpu_time": 3.1358375000012373e+04,
       "time_unit": "ns",
-      "IterationTime": 4.4369937500000004e-06
+      "IterationTime": 4.4385749999999993e-06
     },
     {
       "name": "BM_pgm_dispatch/all_processors_all_cores_1_rta/4096/manual_time",
@@ -1188,10 +1188,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 14,
-      "real_time": 4.9822928571428575e+07,
-      "cpu_time": 3.2757142857141120e+04,
+      "real_time": 4.9728785714285724e+07,
+      "cpu_time": 3.4272142857132741e+04,
       "time_unit": "ns",
-      "IterationTime": 4.9822928571428567e-06
+      "IterationTime": 4.9728785714285730e-06
     },
     {
       "name": "BM_pgm_dispatch/all_processors_all_cores_1_rta/8192/manual_time",
@@ -1203,10 +1203,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 10,
-      "real_time": 6.9507500000000015e+07,
-      "cpu_time": 3.1938000000053533e+04,
+      "real_time": 6.9515500000000000e+07,
+      "cpu_time": 2.9503000000019598e+04,
       "time_unit": "ns",
-      "IterationTime": 6.9507500000000012e-06
+      "IterationTime": 6.9515499999999987e-06
     },
     {
       "name": "BM_pgm_dispatch/all_processors_all_cores_32_rta/256/manual_time",
@@ -1218,10 +1218,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 13,
-      "real_time": 5.5500076923076913e+07,
-      "cpu_time": 3.6943769230810212e+04,
+      "real_time": 5.5481153846153848e+07,
+      "cpu_time": 2.8435384615285930e+04,
       "time_unit": "ns",
-      "IterationTime": 5.5500076923076912e-06
+      "IterationTime": 5.5481153846153849e-06
     },
     {
       "name": "BM_pgm_dispatch/all_processors_all_cores_32_rta/512/manual_time",
@@ -1233,10 +1233,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 13,
-      "real_time": 5.5804769230769232e+07,
-      "cpu_time": 3.2049923076918130e+04,
+      "real_time": 5.5787769230769232e+07,
+      "cpu_time": 2.8239153846079451e+04,
       "time_unit": "ns",
-      "IterationTime": 5.5804769230769237e-06
+      "IterationTime": 5.5787769230769234e-06
     },
     {
       "name": "BM_pgm_dispatch/all_processors_all_cores_32_rta/1024/manual_time",
@@ -1248,10 +1248,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 12,
-      "real_time": 5.7422916666666657e+07,
-      "cpu_time": 3.0158166666627294e+04,
+      "real_time": 5.7414583333333336e+07,
+      "cpu_time": 2.7385750000015934e+04,
       "time_unit": "ns",
-      "IterationTime": 5.7422916666666659e-06
+      "IterationTime": 5.7414583333333341e-06
     },
     {
       "name": "BM_pgm_dispatch/all_processors_all_cores_32_rta/2048/manual_time",
@@ -1263,10 +1263,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 11,
-      "real_time": 6.2508999999999993e+07,
-      "cpu_time": 3.7220090909138227e+04,
+      "real_time": 6.2470636363636352e+07,
+      "cpu_time": 2.9027090909168732e+04,
       "time_unit": "ns",
-      "IterationTime": 6.2508999999999980e-06
+      "IterationTime": 6.2470636363636352e-06
     },
     {
       "name": "BM_pgm_dispatch/all_processors_all_cores_32_rta/4096/manual_time",
@@ -1278,10 +1278,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 10,
-      "real_time": 7.0115900000000015e+07,
-      "cpu_time": 3.5648000000065847e+04,
+      "real_time": 6.9968000000000015e+07,
+      "cpu_time": 3.4655299999997173e+04,
       "time_unit": "ns",
-      "IterationTime": 7.0115900000000001e-06
+      "IterationTime": 6.9967999999999997e-06
     },
     {
       "name": "BM_pgm_dispatch/all_processors_all_cores_32_rta/8192/manual_time",
@@ -1293,10 +1293,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 8,
-      "real_time": 8.5774750000000015e+07,
-      "cpu_time": 3.3160000000087566e+04,
+      "real_time": 8.5776875000000000e+07,
+      "cpu_time": 4.4509999999942098e+04,
       "time_unit": "ns",
-      "IterationTime": 8.5774750000000021e-06
+      "IterationTime": 8.5776875000000000e-06
     },
     {
       "name": "BM_pgm_dispatch/all_processors_all_cores_128_rta/256/manual_time",
@@ -1308,10 +1308,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 6,
-      "real_time": 1.1872416666666667e+08,
-      "cpu_time": 3.5832500000054781e+04,
+      "real_time": 1.1872816666666667e+08,
+      "cpu_time": 3.2293333333655028e+04,
       "time_unit": "ns",
-      "IterationTime": 1.1872416666666667e-05
+      "IterationTime": 1.1872816666666668e-05
     },
     {
       "name": "BM_pgm_dispatch/all_processors_all_cores_128_rta/512/manual_time",
@@ -1323,10 +1323,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 6,
-      "real_time": 1.1916200000000000e+08,
-      "cpu_time": 3.4728499999895728e+04,
+      "real_time": 1.1918916666666669e+08,
+      "cpu_time": 3.7318166666485318e+04,
       "time_unit": "ns",
-      "IterationTime": 1.1916200000000001e-05
+      "IterationTime": 1.1918916666666667e-05
     },
     {
       "name": "BM_pgm_dispatch/all_processors_all_cores_128_rta/1024/manual_time",
@@ -1338,10 +1338,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 6,
-      "real_time": 1.2089416666666664e+08,
-      "cpu_time": 2.3970000000280343e+04,
+      "real_time": 1.2099716666666667e+08,
+      "cpu_time": 5.3235000000502921e+04,
       "time_unit": "ns",
-      "IterationTime": 1.2089416666666665e-05
+      "IterationTime": 1.2099716666666669e-05
     },
     {
       "name": "BM_pgm_dispatch/all_processors_all_cores_128_rta/2048/manual_time",
@@ -1353,10 +1353,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 6,
-      "real_time": 1.2610266666666667e+08,
-      "cpu_time": 2.4575166666688612e+04,
+      "real_time": 1.2612233333333333e+08,
+      "cpu_time": 3.0120000000503449e+04,
       "time_unit": "ns",
-      "IterationTime": 1.2610266666666667e-05
+      "IterationTime": 1.2612233333333333e-05
     },
     {
       "name": "BM_pgm_dispatch/all_processors_all_cores_128_rta/4096/manual_time",
@@ -1368,10 +1368,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 5,
-      "real_time": 1.3209140000000003e+08,
-      "cpu_time": 2.9534000000097651e+04,
+      "real_time": 1.3205980000000000e+08,
+      "cpu_time": 3.2816000000224223e+04,
       "time_unit": "ns",
-      "IterationTime": 1.3209140000000003e-05
+      "IterationTime": 1.3205980000000001e-05
     },
     {
       "name": "BM_pgm_dispatch/all_processors_all_cores_128_rta/8192/manual_time",
@@ -1383,10 +1383,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 5,
-      "real_time": 1.4751780000000000e+08,
-      "cpu_time": 2.7633999999920889e+04,
+      "real_time": 1.4751639999999997e+08,
+      "cpu_time": 2.9743999999709555e+04,
       "time_unit": "ns",
-      "IterationTime": 1.4751780000000000e-05
+      "IterationTime": 1.4751639999999999e-05
     },
     {
       "name": "BM_pgm_dispatch/sems_1_core_1_processor_trace/256/manual_time",
@@ -1398,10 +1398,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 23,
-      "real_time": 3.0070826086956523e+07,
-      "cpu_time": 1.9661304347930236e+04,
+      "real_time": 3.0079826086956527e+07,
+      "cpu_time": 2.2574782608740941e+04,
       "time_unit": "ns",
-      "IterationTime": 3.0070826086956525e-06
+      "IterationTime": 3.0079826086956523e-06
     },
     {
       "name": "BM_pgm_dispatch/sems_1_core_1_processor_trace/512/manual_time",
@@ -1413,10 +1413,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 23,
-      "real_time": 3.0183391304347832e+07,
-      "cpu_time": 2.0213999999958043e+04,
+      "real_time": 3.0202608695652176e+07,
+      "cpu_time": 4.0060869565186738e+04,
       "time_unit": "ns",
-      "IterationTime": 3.0183391304347831e-06
+      "IterationTime": 3.0202608695652174e-06
     },
     {
       "name": "BM_pgm_dispatch/sems_1_core_1_processor_trace/1024/manual_time",
@@ -1428,10 +1428,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 23,
-      "real_time": 3.0480260869565219e+07,
-      "cpu_time": 1.9658826087010082e+04,
+      "real_time": 3.0492695652173914e+07,
+      "cpu_time": 2.9276956521792508e+04,
       "time_unit": "ns",
-      "IterationTime": 3.0480260869565220e-06
+      "IterationTime": 3.0492695652173912e-06
     },
     {
       "name": "BM_pgm_dispatch/sems_1_core_1_processor_trace/2048/manual_time",
@@ -1443,10 +1443,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 23,
-      "real_time": 3.1034043478260871e+07,
-      "cpu_time": 1.8955478260807013e+04,
+      "real_time": 3.1046869565217398e+07,
+      "cpu_time": 2.7367391304267130e+04,
       "time_unit": "ns",
-      "IterationTime": 3.1034043478260867e-06
+      "IterationTime": 3.1046869565217395e-06
     },
     {
       "name": "BM_pgm_dispatch/sems_1_core_1_processor_trace/4096/manual_time",
@@ -1458,10 +1458,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 21,
-      "real_time": 3.2993238095238108e+07,
-      "cpu_time": 1.9665619047616801e+04,
+      "real_time": 3.3158952380952388e+07,
+      "cpu_time": 2.7611333333341227e+04,
       "time_unit": "ns",
-      "IterationTime": 3.2993238095238104e-06
+      "IterationTime": 3.3158952380952389e-06
     },
     {
       "name": "BM_pgm_dispatch/sems_1_core_1_processor_trace/8192/manual_time",
@@ -1473,10 +1473,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 19,
-      "real_time": 3.5972473684210517e+07,
-      "cpu_time": 1.8976315789655619e+04,
+      "real_time": 3.5967578947368428e+07,
+      "cpu_time": 2.5672157894711901e+04,
       "time_unit": "ns",
-      "IterationTime": 3.5972473684210520e-06
+      "IterationTime": 3.5967578947368428e-06
     },
     {
       "name": "BM_pgm_dispatch/sems_all_cores_1_processor_trace/256/manual_time",
@@ -1488,10 +1488,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 23,
-      "real_time": 3.0070695652173907e+07,
-      "cpu_time": 2.0065217391309332e+04,
+      "real_time": 3.0080652173913050e+07,
+      "cpu_time": 2.3450434782661305e+04,
       "time_unit": "ns",
-      "IterationTime": 3.0070695652173906e-06
+      "IterationTime": 3.0080652173913051e-06
     },
     {
       "name": "BM_pgm_dispatch/sems_all_cores_1_processor_trace/512/manual_time",
@@ -1503,10 +1503,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 23,
-      "real_time": 3.0182782608695649e+07,
-      "cpu_time": 1.9268260869586622e+04,
+      "real_time": 3.0202347826086946e+07,
+      "cpu_time": 2.6328260869543938e+04,
       "time_unit": "ns",
-      "IterationTime": 3.0182782608695648e-06
+      "IterationTime": 3.0202347826086945e-06
     },
     {
       "name": "BM_pgm_dispatch/sems_all_cores_1_processor_trace/1024/manual_time",
@@ -1518,10 +1518,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 23,
-      "real_time": 3.0480173913043477e+07,
-      "cpu_time": 2.0814782608624682e+04,
+      "real_time": 3.0492826086956527e+07,
+      "cpu_time": 2.5107826086822195e+04,
       "time_unit": "ns",
-      "IterationTime": 3.0480173913043482e-06
+      "IterationTime": 3.0492826086956527e-06
     },
     {
       "name": "BM_pgm_dispatch/sems_all_cores_1_processor_trace/2048/manual_time",
@@ -1533,10 +1533,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 23,
-      "real_time": 3.1036086956521735e+07,
-      "cpu_time": 1.9879521739063006e+04,
+      "real_time": 3.1049826086956531e+07,
+      "cpu_time": 2.8926956521718483e+04,
       "time_unit": "ns",
-      "IterationTime": 3.1036086956521736e-06
+      "IterationTime": 3.1049826086956537e-06
     },
     {
       "name": "BM_pgm_dispatch/sems_all_cores_1_processor_trace/4096/manual_time",
@@ -1548,10 +1548,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 21,
-      "real_time": 3.3019095238095239e+07,
-      "cpu_time": 2.0720428571406403e+04,
+      "real_time": 3.3183761904761899e+07,
+      "cpu_time": 2.5488571428546777e+04,
       "time_unit": "ns",
-      "IterationTime": 3.3019095238095238e-06
+      "IterationTime": 3.3183761904761902e-06
     },
     {
       "name": "BM_pgm_dispatch/sems_all_cores_1_processor_trace/8192/manual_time",
@@ -1563,10 +1563,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 19,
-      "real_time": 3.5973947368421055e+07,
-      "cpu_time": 2.0178684210529689e+04,
+      "real_time": 3.5970473684210517e+07,
+      "cpu_time": 2.4643736842253511e+04,
       "time_unit": "ns",
-      "IterationTime": 3.5973947368421058e-06
+      "IterationTime": 3.5970473684210519e-06
     },
     {
       "name": "BM_pgm_dispatch/maxed_config_params_trace/256/manual_time",
@@ -1578,10 +1578,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 7,
-      "real_time": 1.0377071428571427e+08,
-      "cpu_time": 2.2170000000138705e+04,
+      "real_time": 1.0378914285714285e+08,
+      "cpu_time": 2.4571285714155725e+04,
       "time_unit": "ns",
-      "IterationTime": 1.0377071428571427e-05
+      "IterationTime": 1.0378914285714286e-05
     },
     {
       "name": "BM_pgm_dispatch/maxed_config_params_trace/512/manual_time",
@@ -1593,10 +1593,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 7,
-      "real_time": 1.0426657142857143e+08,
-      "cpu_time": 2.3283000000365715e+04,
+      "real_time": 1.0429685714285715e+08,
+      "cpu_time": 3.0871428571848421e+04,
       "time_unit": "ns",
-      "IterationTime": 1.0426657142857143e-05
+      "IterationTime": 1.0429685714285715e-05
     },
     {
       "name": "BM_pgm_dispatch/maxed_config_params_trace/1024/manual_time",
@@ -1608,10 +1608,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 7,
-      "real_time": 1.0614242857142857e+08,
-      "cpu_time": 2.7466428570781838e+04,
+      "real_time": 1.0611100000000000e+08,
+      "cpu_time": 3.9938714285727074e+04,
       "time_unit": "ns",
-      "IterationTime": 1.0614242857142859e-05
+      "IterationTime": 1.0611100000000001e-05
     },
     {
       "name": "BM_pgm_dispatch/maxed_config_params_trace/2048/manual_time",
@@ -1623,10 +1623,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 6,
-      "real_time": 1.1098866666666667e+08,
-      "cpu_time": 2.3233333333649851e+04,
+      "real_time": 1.1098150000000001e+08,
+      "cpu_time": 3.3381499999762811e+04,
       "time_unit": "ns",
-      "IterationTime": 1.1098866666666666e-05
+      "IterationTime": 1.1098150000000000e-05
     },
     {
       "name": "BM_pgm_dispatch/maxed_config_params_trace/4096/manual_time",
@@ -1638,10 +1638,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 6,
-      "real_time": 1.1733233333333333e+08,
-      "cpu_time": 2.4433333333462317e+04,
+      "real_time": 1.1733666666666667e+08,
+      "cpu_time": 3.0893333332689584e+04,
       "time_unit": "ns",
-      "IterationTime": 1.1733233333333333e-05
+      "IterationTime": 1.1733666666666667e-05
     },
     {
       "name": "BM_pgm_dispatch/maxed_config_params_trace/8192/manual_time",
@@ -1653,10 +1653,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 5,
-      "real_time": 1.3236920000000000e+08,
-      "cpu_time": 2.6089799999340357e+04,
+      "real_time": 1.3242140000000000e+08,
+      "cpu_time": 6.4220000000148044e+04,
       "time_unit": "ns",
-      "IterationTime": 1.3236920000000002e-05
+      "IterationTime": 1.3242140000000001e-05
     },
     {
       "name": "BM_pgm_dispatch/kernel_groups_trace/256/manual_time",
@@ -1668,10 +1668,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 6,
-      "real_time": 1.2223816666666667e+08,
-      "cpu_time": 2.6801666667353173e+04,
+      "real_time": 1.2227466666666669e+08,
+      "cpu_time": 7.1834833333876231e+04,
       "time_unit": "ns",
-      "IterationTime": 1.2223816666666666e-05
+      "IterationTime": 1.2227466666666668e-05
     },
     {
       "name": "BM_pgm_dispatch/kernel_groups_trace/512/manual_time",
@@ -1683,10 +1683,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 6,
-      "real_time": 1.2258733333333333e+08,
-      "cpu_time": 2.7776666667496858e+04,
+      "real_time": 1.2259900000000000e+08,
+      "cpu_time": 3.6168333333345501e+04,
       "time_unit": "ns",
-      "IterationTime": 1.2258733333333330e-05
+      "IterationTime": 1.2259899999999999e-05
     },
     {
       "name": "BM_pgm_dispatch/kernel_groups_trace/1024/manual_time",
@@ -1698,10 +1698,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 6,
-      "real_time": 1.2489916666666667e+08,
-      "cpu_time": 2.6563333333247861e+04,
+      "real_time": 1.2490616666666664e+08,
+      "cpu_time": 3.7696666667604477e+04,
       "time_unit": "ns",
-      "IterationTime": 1.2489916666666665e-05
+      "IterationTime": 1.2490616666666665e-05
     },
     {
       "name": "BM_pgm_dispatch/kernel_groups_trace/2048/manual_time",
@@ -1713,10 +1713,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 5,
-      "real_time": 1.4246980000000000e+08,
-      "cpu_time": 2.9727999999806798e+04,
+      "real_time": 1.4242300000000000e+08,
+      "cpu_time": 4.3096000000275577e+04,
       "time_unit": "ns",
-      "IterationTime": 1.4246980000000001e-05
+      "IterationTime": 1.4242299999999999e-05
     },
     {
       "name": "BM_pgm_dispatch/kernel_groups_trace/4096/manual_time",
@@ -1728,10 +1728,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 3,
-      "real_time": 2.0078166666666666e+08,
-      "cpu_time": 3.5603333332782466e+04,
+      "real_time": 2.0092400000000003e+08,
+      "cpu_time": 1.0000999999941011e+05,
       "time_unit": "ns",
-      "IterationTime": 2.0078166666666670e-05
+      "IterationTime": 2.0092400000000001e-05
     },
     {
       "name": "BM_pgm_dispatch/kernel_groups_trace/8192/manual_time",
@@ -1743,10 +1743,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 2,
-      "real_time": 3.1837400000000000e+08,
-      "cpu_time": 7.5791000000435815e+04,
+      "real_time": 3.1842150000000000e+08,
+      "cpu_time": 8.8309999998870131e+04,
       "time_unit": "ns",
-      "IterationTime": 3.1837399999999994e-05
+      "IterationTime": 3.1842150000000001e-05
     },
     {
       "name": "BM_pgm_dispatch/10000_kernel_all_cores_all_processors_32_cbs_trace/256/manual_time",
@@ -1758,10 +1758,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 6,
-      "real_time": 1.1883483333333333e+08,
-      "cpu_time": 3.1042833333809012e+04,
+      "real_time": 1.1885383333333333e+08,
+      "cpu_time": 5.3930833333974231e+04,
       "time_unit": "ns",
-      "IterationTime": 1.1883483333333336e-05
+      "IterationTime": 1.1885383333333331e-05
     },
     {
       "name": "BM_pgm_dispatch/10000_kernel_all_cores_all_processors_32_cbs_trace/512/manual_time",
@@ -1773,10 +1773,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 6,
-      "real_time": 1.1884550000000000e+08,
-      "cpu_time": 3.5406666666422854e+04,
+      "real_time": 1.1886033333333333e+08,
+      "cpu_time": 5.4605000000170396e+04,
       "time_unit": "ns",
-      "IterationTime": 1.1884549999999998e-05
+      "IterationTime": 1.1886033333333333e-05
     },
     {
       "name": "BM_pgm_dispatch/10000_kernel_all_cores_all_processors_32_cbs_trace/1024/manual_time",
@@ -1788,10 +1788,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 6,
-      "real_time": 1.1890100000000000e+08,
-      "cpu_time": 3.3865000000095810e+04,
+      "real_time": 1.1891850000000000e+08,
+      "cpu_time": 4.7281666667231555e+04,
       "time_unit": "ns",
-      "IterationTime": 1.1890100000000000e-05
+      "IterationTime": 1.1891850000000000e-05
     },
     {
       "name": "BM_pgm_dispatch/10000_kernel_all_cores_all_processors_32_cbs_trace/2048/manual_time",
@@ -1803,10 +1803,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 6,
-      "real_time": 1.1947133333333333e+08,
-      "cpu_time": 3.3283333332671340e+04,
+      "real_time": 1.1947416666666669e+08,
+      "cpu_time": 3.8594999999475018e+04,
       "time_unit": "ns",
-      "IterationTime": 1.1947133333333333e-05
+      "IterationTime": 1.1947416666666669e-05
     },
     {
       "name": "BM_pgm_dispatch/10000_kernel_all_cores_all_processors_32_cbs_trace/4096/manual_time",
@@ -1818,10 +1818,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 6,
-      "real_time": 1.2130549999999999e+08,
-      "cpu_time": 3.2995499999799453e+04,
+      "real_time": 1.2130733333333333e+08,
+      "cpu_time": 3.2120333333551796e+04,
       "time_unit": "ns",
-      "IterationTime": 1.2130549999999999e-05
+      "IterationTime": 1.2130733333333334e-05
     },
     {
       "name": "BM_pgm_dispatch/10000_kernel_all_cores_all_processors_32_cbs_trace/8192/manual_time",
@@ -1833,10 +1833,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 4,
-      "real_time": 1.6620975000000003e+08,
-      "cpu_time": 2.9792750000368073e+04,
+      "real_time": 1.6623825000000000e+08,
+      "cpu_time": 4.3950500000278225e+04,
       "time_unit": "ns",
-      "IterationTime": 1.6620975000000001e-05
+      "IterationTime": 1.6623825000000000e-05
     },
     {
       "name": "BM_pgm_dispatch/5000_kernel_all_cores_all_processors_32_cbs_trace/256/manual_time",
@@ -1848,10 +1848,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 10,
-      "real_time": 6.8096700000000000e+07,
-      "cpu_time": 2.6223100000066781e+04,
+      "real_time": 6.8102999999999985e+07,
+      "cpu_time": 3.7966700000424680e+04,
       "time_unit": "ns",
-      "IterationTime": 6.8096699999999990e-06
+      "IterationTime": 6.8102999999999990e-06
     },
     {
       "name": "BM_pgm_dispatch/5000_kernel_all_cores_all_processors_32_cbs_trace/512/manual_time",
@@ -1863,10 +1863,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 10,
-      "real_time": 6.8104800000000015e+07,
-      "cpu_time": 3.1231999999903335e+04,
+      "real_time": 6.8112900000000000e+07,
+      "cpu_time": 4.4721000000436106e+04,
       "time_unit": "ns",
-      "IterationTime": 6.8104800000000006e-06
+      "IterationTime": 6.8112899999999988e-06
     },
     {
       "name": "BM_pgm_dispatch/5000_kernel_all_cores_all_processors_32_cbs_trace/1024/manual_time",
@@ -1878,10 +1878,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 10,
-      "real_time": 6.8165500000000000e+07,
-      "cpu_time": 2.5873999999959098e+04,
+      "real_time": 6.8179099999999985e+07,
+      "cpu_time": 3.8537999999732616e+04,
       "time_unit": "ns",
-      "IterationTime": 6.8165500000000008e-06
+      "IterationTime": 6.8179099999999986e-06
     },
     {
       "name": "BM_pgm_dispatch/5000_kernel_all_cores_all_processors_32_cbs_trace/2048/manual_time",
@@ -1893,10 +1893,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 10,
-      "real_time": 6.8736599999999985e+07,
-      "cpu_time": 3.0934999999487900e+04,
+      "real_time": 6.8735000000000000e+07,
+      "cpu_time": 3.6897999999752079e+04,
       "time_unit": "ns",
-      "IterationTime": 6.8736599999999988e-06
+      "IterationTime": 6.8735000000000003e-06
     },
     {
       "name": "BM_pgm_dispatch/5000_kernel_all_cores_all_processors_32_cbs_trace/4096/manual_time",
@@ -1908,10 +1908,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 10,
-      "real_time": 7.0558000000000015e+07,
-      "cpu_time": 2.3976199999964367e+04,
+      "real_time": 7.0568000000000015e+07,
+      "cpu_time": 3.4171799999427327e+04,
       "time_unit": "ns",
-      "IterationTime": 7.0558000000000011e-06
+      "IterationTime": 7.0568000000000008e-06
     },
     {
       "name": "BM_pgm_dispatch/5000_kernel_all_cores_all_processors_32_cbs_trace/8192/manual_time",
@@ -1923,14 +1923,119 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 6,
-      "real_time": 1.1595766666666667e+08,
-      "cpu_time": 2.9203333333782666e+04,
+      "real_time": 1.1600533333333333e+08,
+      "cpu_time": 6.3993333333437855e+04,
       "time_unit": "ns",
-      "IterationTime": 1.1595766666666667e-05
+      "IterationTime": 1.1600533333333334e-05
+    },
+    {
+      "name": "BM_pgm_dispatch_vary_slow_cycles/256_bytes_brisc_only_all_processors_trace/0/manual_time",
+      "family_index": 20,
+      "per_family_instance_index": 0,
+      "run_name": "BM_pgm_dispatch_vary_slow_cycles/256_bytes_brisc_only_all_processors_trace/0/manual_time",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "repetition_index": 0,
+      "threads": 1,
+      "iterations": 26,
+      "real_time": 2.6718038461538460e+07,
+      "cpu_time": 3.2454615384617333e+04,
+      "time_unit": "ns",
+      "IterationTime": 2.6718038461538463e-06
+    },
+    {
+      "name": "BM_pgm_dispatch_vary_slow_cycles/256_bytes_brisc_only_all_processors_trace/1000/manual_time",
+      "family_index": 20,
+      "per_family_instance_index": 1,
+      "run_name": "BM_pgm_dispatch_vary_slow_cycles/256_bytes_brisc_only_all_processors_trace/1000/manual_time",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "repetition_index": 0,
+      "threads": 1,
+      "iterations": 26,
+      "real_time": 2.7278346153846152e+07,
+      "cpu_time": 5.1366461538402917e+04,
+      "time_unit": "ns",
+      "IterationTime": 2.7278346153846159e-06
+    },
+    {
+      "name": "BM_pgm_dispatch_vary_slow_cycles/256_bytes_brisc_only_all_processors_trace/2000/manual_time",
+      "family_index": 20,
+      "per_family_instance_index": 2,
+      "run_name": "BM_pgm_dispatch_vary_slow_cycles/256_bytes_brisc_only_all_processors_trace/2000/manual_time",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "repetition_index": 0,
+      "threads": 1,
+      "iterations": 23,
+      "real_time": 3.0445391304347821e+07,
+      "cpu_time": 8.0444347825841367e+04,
+      "time_unit": "ns",
+      "IterationTime": 3.0445391304347821e-06
+    },
+    {
+      "name": "BM_pgm_dispatch_vary_slow_cycles/256_bytes_brisc_only_all_processors_trace/3000/manual_time",
+      "family_index": 20,
+      "per_family_instance_index": 3,
+      "run_name": "BM_pgm_dispatch_vary_slow_cycles/256_bytes_brisc_only_all_processors_trace/3000/manual_time",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "repetition_index": 0,
+      "threads": 1,
+      "iterations": 17,
+      "real_time": 4.0024176470588237e+07,
+      "cpu_time": 5.6982764705788424e+04,
+      "time_unit": "ns",
+      "IterationTime": 4.0024176470588232e-06
+    },
+    {
+      "name": "BM_pgm_dispatch_vary_slow_cycles/256_bytes_brisc_only_all_processors_trace/4000/manual_time",
+      "family_index": 20,
+      "per_family_instance_index": 4,
+      "run_name": "BM_pgm_dispatch_vary_slow_cycles/256_bytes_brisc_only_all_processors_trace/4000/manual_time",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "repetition_index": 0,
+      "threads": 1,
+      "iterations": 14,
+      "real_time": 5.3831642857142858e+07,
+      "cpu_time": 1.4073500000019328e+05,
+      "time_unit": "ns",
+      "IterationTime": 5.3831642857142854e-06
+    },
+    {
+      "name": "BM_pgm_dispatch_vary_slow_cycles/256_bytes_brisc_only_all_processors_trace/5000/manual_time",
+      "family_index": 20,
+      "per_family_instance_index": 5,
+      "run_name": "BM_pgm_dispatch_vary_slow_cycles/256_bytes_brisc_only_all_processors_trace/5000/manual_time",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "repetition_index": 0,
+      "threads": 1,
+      "iterations": 12,
+      "real_time": 6.0328166666666664e+07,
+      "cpu_time": 1.0642833333326015e+05,
+      "time_unit": "ns",
+      "IterationTime": 6.0328166666666668e-06
+    },
+    {
+      "name": "BM_pgm_dispatch_vary_slow_cycles/256_bytes_brisc_only_all_processors_trace/10000/manual_time",
+      "family_index": 20,
+      "per_family_instance_index": 6,
+      "run_name": "BM_pgm_dispatch_vary_slow_cycles/256_bytes_brisc_only_all_processors_trace/10000/manual_time",
+      "run_type": "iteration",
+      "repetitions": 1,
+      "repetition_index": 0,
+      "threads": 1,
+      "iterations": 6,
+      "real_time": 1.1106266666666667e+08,
+      "cpu_time": 1.2152666666646420e+05,
+      "time_unit": "ns",
+      "IterationTime": 1.1106266666666666e-05
     },
     {
       "name": "BM_pgm_dispatch/kernel_groups_4_shadow/256/manual_time",
-      "family_index": 20,
+      "family_index": 21,
       "per_family_instance_index": 0,
       "run_name": "BM_pgm_dispatch/kernel_groups_4_shadow/256/manual_time",
       "run_type": "iteration",
@@ -1938,14 +2043,14 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 1,
-      "real_time": 5.4237800000000000e+08,
-      "cpu_time": 4.8290000002282337e+04,
+      "real_time": 5.4244600000000000e+08,
+      "cpu_time": 9.3160000005809707e+04,
       "time_unit": "ns",
-      "IterationTime": 5.4237800000000004e-05
+      "IterationTime": 5.4244599999999992e-05
     },
     {
       "name": "BM_pgm_dispatch/kernel_groups_4_shadow/512/manual_time",
-      "family_index": 20,
+      "family_index": 21,
       "per_family_instance_index": 1,
       "run_name": "BM_pgm_dispatch/kernel_groups_4_shadow/512/manual_time",
       "run_type": "iteration",
@@ -1953,14 +2058,14 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 1,
-      "real_time": 5.4552000000000000e+08,
-      "cpu_time": 4.1389999999807973e+04,
+      "real_time": 5.4561200000000000e+08,
+      "cpu_time": 8.8479999995172417e+04,
       "time_unit": "ns",
-      "IterationTime": 5.4551999999999995e-05
+      "IterationTime": 5.4561199999999995e-05
     },
     {
       "name": "BM_pgm_dispatch/kernel_groups_4_shadow/1024/manual_time",
-      "family_index": 20,
+      "family_index": 21,
       "per_family_instance_index": 2,
       "run_name": "BM_pgm_dispatch/kernel_groups_4_shadow/1024/manual_time",
       "run_type": "iteration",
@@ -1968,14 +2073,14 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 1,
-      "real_time": 5.5493300000000000e+08,
-      "cpu_time": 4.2209000000070773e+04,
+      "real_time": 5.5501000000000000e+08,
+      "cpu_time": 8.5339999998268468e+04,
       "time_unit": "ns",
-      "IterationTime": 5.5493299999999999e-05
+      "IterationTime": 5.5501000000000003e-05
     },
     {
       "name": "BM_pgm_dispatch/kernel_groups_4_shadow/2048/manual_time",
-      "family_index": 20,
+      "family_index": 21,
       "per_family_instance_index": 3,
       "run_name": "BM_pgm_dispatch/kernel_groups_4_shadow/2048/manual_time",
       "run_type": "iteration",
@@ -1983,14 +2088,14 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 1,
-      "real_time": 5.9554600000000000e+08,
-      "cpu_time": 3.8520000003927635e+04,
+      "real_time": 5.9559500000000000e+08,
+      "cpu_time": 6.8378000001700915e+04,
       "time_unit": "ns",
-      "IterationTime": 5.9554600000000001e-05
+      "IterationTime": 5.9559499999999998e-05
     },
     {
       "name": "BM_pgm_dispatch/kernel_groups_4_shadow/4096/manual_time",
-      "family_index": 20,
+      "family_index": 21,
       "per_family_instance_index": 4,
       "run_name": "BM_pgm_dispatch/kernel_groups_4_shadow/4096/manual_time",
       "run_type": "iteration",
@@ -1998,14 +2103,14 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 1,
-      "real_time": 8.5543900000000000e+08,
-      "cpu_time": 4.7340000001838693e+04,
+      "real_time": 8.5700900000000000e+08,
+      "cpu_time": 9.7529999997902909e+04,
       "time_unit": "ns",
-      "IterationTime": 8.5543899999999999e-05
+      "IterationTime": 8.5700900000000005e-05
     },
     {
       "name": "BM_pgm_dispatch/kernel_groups_4_shadow/8192/manual_time",
-      "family_index": 20,
+      "family_index": 21,
       "per_family_instance_index": 5,
       "run_name": "BM_pgm_dispatch/kernel_groups_4_shadow/8192/manual_time",
       "run_type": "iteration",
@@ -2013,14 +2118,14 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 1,
-      "real_time": 1.5866330000000000e+09,
-      "cpu_time": 6.2331000002302520e+04,
+      "real_time": 1.5866420000000000e+09,
+      "cpu_time": 8.7729999997065985e+04,
       "time_unit": "ns",
-      "IterationTime": 1.5866329999999999e-04
+      "IterationTime": 1.5866420000000002e-04
     },
     {
       "name": "BM_pgm_dispatch/kernel_groups_5_shadow/256/manual_time",
-      "family_index": 21,
+      "family_index": 22,
       "per_family_instance_index": 0,
       "run_name": "BM_pgm_dispatch/kernel_groups_5_shadow/256/manual_time",
       "run_type": "iteration",
@@ -2028,14 +2133,14 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 1,
-      "real_time": 6.5096400000000000e+08,
-      "cpu_time": 4.1160000002093962e+04,
+      "real_time": 6.5102400000000000e+08,
+      "cpu_time": 8.2499999997764913e+04,
       "time_unit": "ns",
-      "IterationTime": 6.5096400000000002e-05
+      "IterationTime": 6.5102400000000002e-05
     },
     {
       "name": "BM_pgm_dispatch/kernel_groups_5_shadow/512/manual_time",
-      "family_index": 21,
+      "family_index": 22,
       "per_family_instance_index": 1,
       "run_name": "BM_pgm_dispatch/kernel_groups_5_shadow/512/manual_time",
       "run_type": "iteration",
@@ -2043,14 +2148,14 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 1,
-      "real_time": 6.5486500000000000e+08,
-      "cpu_time": 3.6379999997393497e+04,
+      "real_time": 6.5491500000000000e+08,
+      "cpu_time": 6.0670999999956621e+04,
       "time_unit": "ns",
-      "IterationTime": 6.5486499999999997e-05
+      "IterationTime": 6.5491499999999995e-05
     },
     {
       "name": "BM_pgm_dispatch/kernel_groups_5_shadow/1024/manual_time",
-      "family_index": 21,
+      "family_index": 22,
       "per_family_instance_index": 2,
       "run_name": "BM_pgm_dispatch/kernel_groups_5_shadow/1024/manual_time",
       "run_type": "iteration",
@@ -2058,14 +2163,14 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 1,
-      "real_time": 6.6611600000000000e+08,
-      "cpu_time": 3.5420000003227869e+04,
+      "real_time": 6.6614900000000000e+08,
+      "cpu_time": 6.6809999999861699e+04,
       "time_unit": "ns",
-      "IterationTime": 6.6611600000000004e-05
+      "IterationTime": 6.6614900000000005e-05
     },
     {
       "name": "BM_pgm_dispatch/kernel_groups_5_shadow/2048/manual_time",
-      "family_index": 21,
+      "family_index": 22,
       "per_family_instance_index": 3,
       "run_name": "BM_pgm_dispatch/kernel_groups_5_shadow/2048/manual_time",
       "run_type": "iteration",
@@ -2073,14 +2178,14 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 1,
-      "real_time": 7.1765000000000000e+08,
-      "cpu_time": 3.1180000000574637e+04,
+      "real_time": 7.1777900000000000e+08,
+      "cpu_time": 6.4689999994982369e+04,
       "time_unit": "ns",
-      "IterationTime": 7.1765000000000002e-05
+      "IterationTime": 7.1777899999999996e-05
     },
     {
       "name": "BM_pgm_dispatch/kernel_groups_5_shadow/4096/manual_time",
-      "family_index": 21,
+      "family_index": 22,
       "per_family_instance_index": 4,
       "run_name": "BM_pgm_dispatch/kernel_groups_5_shadow/4096/manual_time",
       "run_type": "iteration",
@@ -2088,14 +2193,14 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 1,
-      "real_time": 1.0249530000000000e+09,
-      "cpu_time": 3.6509000004514295e+04,
+      "real_time": 1.0252410000000001e+09,
+      "cpu_time": 6.5110000001311622e+04,
       "time_unit": "ns",
-      "IterationTime": 1.0249529999999999e-04
+      "IterationTime": 1.0252410000000002e-04
     },
     {
       "name": "BM_pgm_dispatch/kernel_groups_5_shadow/8192/manual_time",
-      "family_index": 21,
+      "family_index": 22,
       "per_family_instance_index": 5,
       "run_name": "BM_pgm_dispatch/kernel_groups_5_shadow/8192/manual_time",
       "run_type": "iteration",
@@ -2103,14 +2208,14 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 1,
-      "real_time": 1.8616840000000000e+09,
-      "cpu_time": 3.8631000002453671e+04,
+      "real_time": 1.8617290000000000e+09,
+      "cpu_time": 5.8751000004519941e+04,
       "time_unit": "ns",
-      "IterationTime": 1.8616840000000001e-04
+      "IterationTime": 1.8617290000000000e-04
     },
     {
       "name": "BM_pgm_dispatch/eth_dispatch/256/manual_time",
-      "family_index": 22,
+      "family_index": 23,
       "per_family_instance_index": 0,
       "run_name": "BM_pgm_dispatch/eth_dispatch/256/manual_time",
       "run_type": "iteration",
@@ -2118,14 +2223,14 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 18,
-      "real_time": 3.9575555555555552e+07,
-      "cpu_time": 2.2015555555378163e+04,
+      "real_time": 3.9584000000000007e+07,
+      "cpu_time": 2.9282944444178029e+04,
       "time_unit": "ns",
-      "IterationTime": 3.9575555555555552e-06
+      "IterationTime": 3.9584000000000009e-06
     },
     {
       "name": "BM_pgm_dispatch/eth_dispatch/512/manual_time",
-      "family_index": 22,
+      "family_index": 23,
       "per_family_instance_index": 1,
       "run_name": "BM_pgm_dispatch/eth_dispatch/512/manual_time",
       "run_type": "iteration",
@@ -2133,14 +2238,14 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 18,
-      "real_time": 3.9568499999999993e+07,
-      "cpu_time": 1.8607777777488209e+04,
+      "real_time": 3.9588388888888896e+07,
+      "cpu_time": 3.2771111111094971e+04,
       "time_unit": "ns",
-      "IterationTime": 3.9568499999999992e-06
+      "IterationTime": 3.9588388888888888e-06
     },
     {
       "name": "BM_pgm_dispatch/eth_dispatch/1024/manual_time",
-      "family_index": 22,
+      "family_index": 23,
       "per_family_instance_index": 2,
       "run_name": "BM_pgm_dispatch/eth_dispatch/1024/manual_time",
       "run_type": "iteration",
@@ -2148,14 +2253,14 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 18,
-      "real_time": 3.9578277777777784e+07,
-      "cpu_time": 2.2552444444477893e+04,
+      "real_time": 3.9585055555555552e+07,
+      "cpu_time": 3.0058333333471408e+04,
       "time_unit": "ns",
-      "IterationTime": 3.9578277777777777e-06
+      "IterationTime": 3.9585055555555547e-06
     },
     {
       "name": "BM_pgm_dispatch/eth_dispatch/2048/manual_time",
-      "family_index": 22,
+      "family_index": 23,
       "per_family_instance_index": 3,
       "run_name": "BM_pgm_dispatch/eth_dispatch/2048/manual_time",
       "run_type": "iteration",
@@ -2163,14 +2268,14 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 18,
-      "real_time": 3.9572277777777784e+07,
-      "cpu_time": 1.9345055555675117e+04,
+      "real_time": 3.9588722222222224e+07,
+      "cpu_time": 3.1872222222043925e+04,
       "time_unit": "ns",
-      "IterationTime": 3.9572277777777781e-06
+      "IterationTime": 3.9588722222222231e-06
     },
     {
       "name": "BM_pgm_dispatch/eth_dispatch/4096/manual_time",
-      "family_index": 22,
+      "family_index": 23,
       "per_family_instance_index": 4,
       "run_name": "BM_pgm_dispatch/eth_dispatch/4096/manual_time",
       "run_type": "iteration",
@@ -2178,14 +2283,14 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 18,
-      "real_time": 3.9572444444444448e+07,
-      "cpu_time": 2.3290999999956184e+04,
+      "real_time": 3.9596333333333343e+07,
+      "cpu_time": 4.4238777777631331e+04,
       "time_unit": "ns",
-      "IterationTime": 3.9572444444444448e-06
+      "IterationTime": 3.9596333333333344e-06
     },
     {
       "name": "BM_pgm_dispatch/eth_dispatch/8192/manual_time",
-      "family_index": 22,
+      "family_index": 23,
       "per_family_instance_index": 5,
       "run_name": "BM_pgm_dispatch/eth_dispatch/8192/manual_time",
       "run_type": "iteration",
@@ -2193,14 +2298,14 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 18,
-      "real_time": 3.9588333333333336e+07,
-      "cpu_time": 2.9833888889009409e+04,
+      "real_time": 3.9596611111111112e+07,
+      "cpu_time": 4.4103444444548106e+04,
       "time_unit": "ns",
-      "IterationTime": 3.9588333333333335e-06
+      "IterationTime": 3.9596611111111109e-06
     },
     {
       "name": "BM_pgm_dispatch/tensix_eth_2/256/manual_time",
-      "family_index": 23,
+      "family_index": 24,
       "per_family_instance_index": 0,
       "run_name": "BM_pgm_dispatch/tensix_eth_2/256/manual_time",
       "run_type": "iteration",
@@ -2208,14 +2313,14 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 5,
-      "real_time": 1.4142620000000000e+08,
-      "cpu_time": 3.8329999999575652e+04,
+      "real_time": 1.4140000000000003e+08,
+      "cpu_time": 4.7829800000442905e+04,
       "time_unit": "ns",
-      "IterationTime": 1.4142619999999999e-05
+      "IterationTime": 1.4140000000000000e-05
     },
     {
       "name": "BM_pgm_dispatch/tensix_eth_2/512/manual_time",
-      "family_index": 23,
+      "family_index": 24,
       "per_family_instance_index": 1,
       "run_name": "BM_pgm_dispatch/tensix_eth_2/512/manual_time",
       "run_type": "iteration",
@@ -2223,14 +2328,14 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 5,
-      "real_time": 1.4812320000000000e+08,
-      "cpu_time": 3.3424000000081833e+04,
+      "real_time": 1.4768340000000000e+08,
+      "cpu_time": 3.5056000000110995e+04,
       "time_unit": "ns",
-      "IterationTime": 1.4812319999999998e-05
+      "IterationTime": 1.4768340000000000e-05
     },
     {
       "name": "BM_pgm_dispatch/tensix_eth_2/1024/manual_time",
-      "family_index": 23,
+      "family_index": 24,
       "per_family_instance_index": 2,
       "run_name": "BM_pgm_dispatch/tensix_eth_2/1024/manual_time",
       "run_type": "iteration",
@@ -2238,14 +2343,14 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 5,
-      "real_time": 1.5148540000000000e+08,
-      "cpu_time": 2.4277999999355870e+04,
+      "real_time": 1.5152940000000000e+08,
+      "cpu_time": 7.9954000000270753e+04,
       "time_unit": "ns",
-      "IterationTime": 1.5148539999999998e-05
+      "IterationTime": 1.5152939999999998e-05
     },
     {
       "name": "BM_pgm_dispatch/tensix_eth_2/2048/manual_time",
-      "family_index": 23,
+      "family_index": 24,
       "per_family_instance_index": 3,
       "run_name": "BM_pgm_dispatch/tensix_eth_2/2048/manual_time",
       "run_type": "iteration",
@@ -2253,14 +2358,14 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 4,
-      "real_time": 1.6367274999999997e+08,
-      "cpu_time": 3.2517750000238266e+04,
+      "real_time": 1.6369250000000003e+08,
+      "cpu_time": 6.2395000000492473e+04,
       "time_unit": "ns",
-      "IterationTime": 1.6367274999999997e-05
+      "IterationTime": 1.6369250000000003e-05
     },
     {
       "name": "BM_pgm_dispatch/tensix_eth_2/4096/manual_time",
-      "family_index": 23,
+      "family_index": 24,
       "per_family_instance_index": 4,
       "run_name": "BM_pgm_dispatch/tensix_eth_2/4096/manual_time",
       "run_type": "iteration",
@@ -2268,14 +2373,14 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 3,
-      "real_time": 2.1807833333333334e+08,
-      "cpu_time": 2.7522999999973763e+04,
+      "real_time": 2.1813066666666666e+08,
+      "cpu_time": 8.3360000000235843e+04,
       "time_unit": "ns",
-      "IterationTime": 2.1807833333333332e-05
+      "IterationTime": 2.1813066666666670e-05
     },
     {
       "name": "BM_pgm_dispatch/tensix_eth_2/8192/manual_time",
-      "family_index": 23,
+      "family_index": 24,
       "per_family_instance_index": 5,
       "run_name": "BM_pgm_dispatch/tensix_eth_2/8192/manual_time",
       "run_type": "iteration",
@@ -2283,14 +2388,14 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 2,
-      "real_time": 3.2477100000000006e+08,
-      "cpu_time": 3.4020000001078188e+04,
+      "real_time": 3.2481750000000000e+08,
+      "cpu_time": 4.3999999999044805e+04,
       "time_unit": "ns",
-      "IterationTime": 3.2477100000000001e-05
+      "IterationTime": 3.2481749999999994e-05
     },
     {
       "name": "BM_pgm_dispatch/tensix_eth_2_4_shadow/256/manual_time",
-      "family_index": 24,
+      "family_index": 25,
       "per_family_instance_index": 0,
       "run_name": "BM_pgm_dispatch/tensix_eth_2_4_shadow/256/manual_time",
       "run_type": "iteration",
@@ -2298,14 +2403,14 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 1,
-      "real_time": 1.0864170000000000e+09,
-      "cpu_time": 3.6670000000071923e+04,
+      "real_time": 1.0859430000000000e+09,
+      "cpu_time": 4.6169000000872984e+04,
       "time_unit": "ns",
-      "IterationTime": 1.0864170000000000e-04
+      "IterationTime": 1.0859430000000000e-04
     },
     {
       "name": "BM_pgm_dispatch/tensix_eth_2_4_shadow/512/manual_time",
-      "family_index": 24,
+      "family_index": 25,
       "per_family_instance_index": 1,
       "run_name": "BM_pgm_dispatch/tensix_eth_2_4_shadow/512/manual_time",
       "run_type": "iteration",
@@ -2313,14 +2418,14 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 1,
-      "real_time": 1.1051990000000000e+09,
-      "cpu_time": 3.6348999998381260e+04,
+      "real_time": 5.4643700000000000e+09,
+      "cpu_time": 6.0580000003085384e+04,
       "time_unit": "ns",
-      "IterationTime": 1.1051990000000001e-04
+      "IterationTime": 5.4643699999999999e-04
     },
     {
       "name": "BM_pgm_dispatch/tensix_eth_2_4_shadow/1024/manual_time",
-      "family_index": 24,
+      "family_index": 25,
       "per_family_instance_index": 2,
       "run_name": "BM_pgm_dispatch/tensix_eth_2_4_shadow/1024/manual_time",
       "run_type": "iteration",
@@ -2328,14 +2433,14 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 1,
-      "real_time": 1.1301090000000000e+09,
-      "cpu_time": 3.0899999998723615e+04,
+      "real_time": 1.1302310000000000e+09,
+      "cpu_time": 5.5519999996533894e+04,
       "time_unit": "ns",
-      "IterationTime": 1.1301090000000001e-04
+      "IterationTime": 1.1302310000000000e-04
     },
     {
       "name": "BM_pgm_dispatch/tensix_eth_2_4_shadow/2048/manual_time",
-      "family_index": 24,
+      "family_index": 25,
       "per_family_instance_index": 3,
       "run_name": "BM_pgm_dispatch/tensix_eth_2_4_shadow/2048/manual_time",
       "run_type": "iteration",
@@ -2343,14 +2448,14 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 1,
-      "real_time": 1.1301990000000000e+09,
-      "cpu_time": 3.8449999998135812e+04,
+      "real_time": 1.1301150000000000e+09,
+      "cpu_time": 8.7759999999548192e+04,
       "time_unit": "ns",
-      "IterationTime": 1.1301989999999999e-04
+      "IterationTime": 1.1301150000000000e-04
     },
     {
       "name": "BM_pgm_dispatch/tensix_eth_2_4_shadow/4096/manual_time",
-      "family_index": 24,
+      "family_index": 25,
       "per_family_instance_index": 4,
       "run_name": "BM_pgm_dispatch/tensix_eth_2_4_shadow/4096/manual_time",
       "run_type": "iteration",
@@ -2358,14 +2463,14 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 1,
-      "real_time": 1.2371950000000000e+09,
-      "cpu_time": 3.1809999995857652e+04,
+      "real_time": 1.2373150000000000e+09,
+      "cpu_time": 6.0830000002454195e+04,
       "time_unit": "ns",
-      "IterationTime": 1.2371950000000001e-04
+      "IterationTime": 1.2373150000000001e-04
     },
     {
       "name": "BM_pgm_dispatch/tensix_eth_2_4_shadow/8192/manual_time",
-      "family_index": 24,
+      "family_index": 25,
       "per_family_instance_index": 5,
       "run_name": "BM_pgm_dispatch/tensix_eth_2_4_shadow/8192/manual_time",
       "run_type": "iteration",
@@ -2373,10 +2478,10 @@
       "repetition_index": 0,
       "threads": 1,
       "iterations": 1,
-      "real_time": 1.8342070000000000e+09,
-      "cpu_time": 3.7970999997583021e+04,
+      "real_time": 1.8335490000000000e+09,
+      "cpu_time": 7.1139999995750710e+04,
       "time_unit": "ns",
-      "IterationTime": 1.8342070000000000e-04
+      "IterationTime": 1.8335490000000000e-04
     }
   ]
 }

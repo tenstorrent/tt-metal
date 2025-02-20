@@ -202,26 +202,25 @@ Result conv_transpose2d(
     }
 
     // Call Halo Transpose
-    auto [input_tensor_post_tm, parallel_config, output_parallel_config, use_non_tile_height] =
-        shard_or_reshard_tensor_if_required(
-            device,
-            input_tensor,
-            conv_config,
-            batch_size,
-            output_height,
-            output_width,
-            in_channels,
-            out_channels,
-            mm_conv,
-            auto_shard);
+    auto [input_tensor_post_tm, parallel_config, output_parallel_config] = shard_or_reshard_tensor_if_required(
+        device,
+        input_tensor,
+        conv_config,
+        batch_size,
+        output_height,
+        output_width,
+        in_channels,
+        out_channels,
+        mm_conv,
+        auto_shard);
 
-    uint32_t round_up_size = !use_non_tile_height ? tt::constants::TILE_HEIGHT : 1;
+    uint32_t round_up_size = tt::constants::TILE_HEIGHT;
 
     Tensor halo_output;
     if (!mm_conv) {
         sliding_window_config.num_cores_nhw = get_num_cores_nhw_from_parallel_config(parallel_config);
         sliding_window_config.core_range_set = input_tensor_post_tm.memory_config().shard_spec.value().grid;
-        sliding_window_config.snap_to_tile = !use_non_tile_height;
+        sliding_window_config.snap_to_tile = true;
 
         halo_output = ttnn::halo(
             DefaultQueueId,

@@ -23,6 +23,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/program/dispatch.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/debug_tools.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/host_runtime_commands.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/device_command_calculator.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_query_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_core_common.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dispatch/dispatch_core_manager.cpp
@@ -89,7 +90,7 @@ target_link_libraries(
         Boost::smart_ptr
         FlatBuffers::FlatBuffers
         range-v3::range-v3
-        Metalium::Metal::Common
+        TT::Metalium::Common
         Taskflow::Taskflow
         TT::Metalium::HostDevCommon
         Metalium::Metal::Hardware

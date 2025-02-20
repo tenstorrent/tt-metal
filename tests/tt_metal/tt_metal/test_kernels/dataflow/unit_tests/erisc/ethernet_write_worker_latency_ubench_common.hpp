@@ -172,7 +172,7 @@ FORCE_INLINE bool has_incoming_packet(volatile eth_buffer_slot_sync_t* buffer_sl
 }
 
 FORCE_INLINE bool write_worker_done(uint32_t trid) {
-    return ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc_index, trid);
+    return ncrisc_noc_nonposted_write_with_transaction_id_sent(noc_index, trid);
 }
 
 FORCE_INLINE void ack_complete(

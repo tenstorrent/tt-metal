@@ -64,7 +64,7 @@ while [[ "$found" = "false" ]]; do
       continue
    fi
 
-   timeout $timeout_duration $test
+   timeout $timeout_duration bash -c "$test"
    timeout_code=${PIPESTATUS[0]}
    echo $timeout_code
 

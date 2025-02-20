@@ -65,19 +65,25 @@ def create_cicd_json_for_data_analysis(
 
         test_report_exists = github_job_id in github_job_id_to_test_reports
         if test_report_exists:
-            test_report_path = github_job_id_to_test_reports[github_job_id]
-            tests = get_tests_from_test_report_path(test_report_path)
+            tests = []
+            test_reports = github_job_id_to_test_reports[github_job_id]
+            for test_report_path in test_reports:
+                logger.info(f"Job id:{github_job_id} Analyzing test report {test_report_path}")
+                tests += get_tests_from_test_report_path(test_report_path)
         else:
             tests = []
 
         logger.info(f"Found {len(tests)} tests for job {github_job_id}")
 
-        job = pydantic_models.Job(
-            **raw_job,
-            tests=tests,
-        )
-
-        jobs.append(job)
+        try:
+            job = pydantic_models.Job(
+                **raw_job,
+                tests=tests,
+            )
+        except ValueError as e:
+            logger.warning(f"Skipping insert for job {github_job_id}, model validation failed: {e}")
+        else:
+            jobs.append(job)
 
     pipeline = pydantic_models.Pipeline(
         **raw_pipeline,

@@ -1,0 +1,339 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites tests="168" failures="5" disabled="2" errors="0" time="27.71" timestamp="2025-02-13T20:03:49.630" name="AllTests">
+  <testsuite name="Host" tests="12" failures="0" disabled="0" skipped="0" errors="0" time="0.544" timestamp="2025-02-13T20:03:49.630">
+    <testcase name="TestTilizeAndThenUntilizeBfloat16" file="/work/tests/tt_metal/tt_metal/api/test_tilize_untilize.cpp" line="38" status="run" result="completed" time="0.278" timestamp="2025-02-13T20:03:49.630" classname="Host" />
+    <testcase name="TestTilizeThrowErrorForNonBfloat16DataType" file="/work/tests/tt_metal/tt_metal/api/test_tilize_untilize.cpp" line="49" status="run" result="completed" time="0" timestamp="2025-02-13T20:03:49.909" classname="Host" />
+    <testcase name="TestTilizeThrowErrorForInvalidTileMandN" file="/work/tests/tt_metal/tt_metal/api/test_tilize_untilize.cpp" line="54" status="run" result="completed" time="0" timestamp="2025-02-13T20:03:49.909" classname="Host" />
+    <testcase name="TestTilizeThrowErrorForInvalidVectorShape" file="/work/tests/tt_metal/tt_metal/api/test_tilize_untilize.cpp" line="63" status="run" result="completed" time="0" timestamp="2025-02-13T20:03:49.910" classname="Host" />
+    <testcase name="TestUntilizeThrowErrorForNonBfloat16DataType" file="/work/tests/tt_metal/tt_metal/api/test_tilize_untilize.cpp" line="70" status="run" result="completed" time="0" timestamp="2025-02-13T20:03:49.910" classname="Host" />
+    <testcase name="TestUntilizeThrowErrorForInvalidTileMandN" file="/work/tests/tt_metal/tt_metal/api/test_tilize_untilize.cpp" line="75" status="run" result="completed" time="0" timestamp="2025-02-13T20:03:49.910" classname="Host" />
+    <testcase name="TestUntilizeThrowErrorForInvalidVectorShape" file="/work/tests/tt_metal/tt_metal/api/test_tilize_untilize.cpp" line="84" status="run" result="completed" time="0" timestamp="2025-02-13T20:03:49.911" classname="Host" />
+    <testcase name="TestUntilizeAndThenTilizeBfloat16" file="/work/tests/tt_metal/tt_metal/api/test_tilize_untilize.cpp" line="91" status="run" result="completed" time="0.263" timestamp="2025-02-13T20:03:49.911" classname="Host" />
+    <testcase name="ExtractBitArray" file="/work/tests/tt_metal/tt_metal/api/test_bit_utils.cpp" line="9" status="run" result="completed" time="0" timestamp="2025-02-13T20:03:50.175" classname="Host" />
+    <testcase name="PackBitArray" file="/work/tests/tt_metal/tt_metal/api/test_bit_utils.cpp" line="28" status="run" result="completed" time="0" timestamp="2025-02-13T20:03:50.175" classname="Host" />
+    <testcase name="PackExtractBitArray" file="/work/tests/tt_metal/tt_metal/api/test_bit_utils.cpp" line="57" status="run" result="completed" time="0" timestamp="2025-02-13T20:03:50.175" classname="Host" />
+    <testcase name="ExtractPackBitArray" file="/work/tests/tt_metal/tt_metal/api/test_bit_utils.cpp" line="71" status="run" result="completed" time="0" timestamp="2025-02-13T20:03:50.175" classname="Host" />
+  </testsuite>
+  <testsuite name="WorkerConfigBuffer" tests="6" failures="0" disabled="0" skipped="0" errors="0" time="0" timestamp="2025-02-13T20:03:50.175">
+    <testcase name="MarkCompletelyFull" file="/work/tests/tt_metal/tt_metal/api/test_worker_config_buffer.cpp" line="18" status="run" result="completed" time="0" timestamp="2025-02-13T20:03:50.175" classname="WorkerConfigBuffer" />
+    <testcase name="SmallSize" file="/work/tests/tt_metal/tt_metal/api/test_worker_config_buffer.cpp" line="44" status="run" result="completed" time="0" timestamp="2025-02-13T20:03:50.175" classname="WorkerConfigBuffer" />
+    <testcase name="SizeOne" file="/work/tests/tt_metal/tt_metal/api/test_worker_config_buffer.cpp" line="63" status="run" result="completed" time="0" timestamp="2025-02-13T20:03:50.175" classname="WorkerConfigBuffer" />
+    <testcase name="LoopAround" file="/work/tests/tt_metal/tt_metal/api/test_worker_config_buffer.cpp" line="109" status="run" result="completed" time="0" timestamp="2025-02-13T20:03:50.175" classname="WorkerConfigBuffer" />
+    <testcase name="Randomized" file="/work/tests/tt_metal/tt_metal/api/test_worker_config_buffer.cpp" line="126" status="run" result="completed" time="0" timestamp="2025-02-13T20:03:50.175" classname="WorkerConfigBuffer" />
+    <testcase name="VeryBasic" file="/work/tests/tt_metal/tt_metal/api/test_worker_config_buffer.cpp" line="181" status="run" result="completed" time="0" timestamp="2025-02-13T20:03:50.175" classname="WorkerConfigBuffer" />
+  </testsuite>
+  <testsuite name="NOC" tests="3" failures="0" disabled="0" skipped="1" errors="0" time="0.596" timestamp="2025-02-13T20:03:50.175">
+    <testcase name="TensixSingleDeviceHarvestingPrints" file="/work/tests/tt_metal/tt_metal/api/test_noc.cpp" line="68" status="run" result="completed" time="0.516" timestamp="2025-02-13T20:03:50.175" classname="NOC" />
+    <testcase name="TensixVerifyNocNodeIDs" file="/work/tests/tt_metal/tt_metal/api/test_noc.cpp" line="106" status="run" result="completed" time="0.079" timestamp="2025-02-13T20:03:50.692" classname="NOC" />
+    <testcase name="TensixVerifyNocIdentityTranslationTable" file="/work/tests/tt_metal/tt_metal/api/test_noc.cpp" line="136" status="run" result="skipped" time="0" timestamp="2025-02-13T20:03:50.771" classname="NOC">
+      <skipped message="/work/tests/tt_metal/tt_metal/api/test_noc.cpp:143&#x0A;"><![CDATA[/work/tests/tt_metal/tt_metal/api/test_noc.cpp:143
+]]></skipped>
+    </testcase>
+  </testsuite>
+  <testsuite name="DeviceFixture" tests="67" failures="5" disabled="0" skipped="0" errors="0" time="24.334" timestamp="2025-02-13T20:03:50.771">
+    <testcase name="TensixDirectedStreamRegWriteRead" file="/work/tests/tt_metal/tt_metal/api/test_noc.cpp" line="174" status="run" result="completed" time="0.352" timestamp="2025-02-13T20:03:50.771" classname="DeviceFixture" />
+    <testcase name="TensixLegallyModifyRTArgsDataMovement" file="/work/tests/tt_metal/tt_metal/api/test_runtime_args.cpp" line="198" status="run" result="completed" time="0.555" timestamp="2025-02-13T20:03:51.124" classname="DeviceFixture" />
+    <testcase name="TensixLegallyModifyRTArgsCompute" file="/work/tests/tt_metal/tt_metal/api/test_runtime_args.cpp" line="247" status="run" result="completed" time="0.481" timestamp="2025-02-13T20:03:51.680" classname="DeviceFixture" />
+    <testcase name="TensixSetRuntimeArgsSubsetOfCoresCompute" file="/work/tests/tt_metal/tt_metal/api/test_runtime_args.cpp" line="279" status="run" result="completed" time="0.018" timestamp="2025-02-13T20:03:52.161" classname="DeviceFixture" />
+    <testcase name="TensixSetRuntimeArgsUniqueValuesCompute" file="/work/tests/tt_metal/tt_metal/api/test_runtime_args.cpp" line="309" status="run" result="completed" time="0.023" timestamp="2025-02-13T20:03:52.180" classname="DeviceFixture" />
+    <testcase name="TensixSetRuntimeArgsVaryingLengthPerCore" file="/work/tests/tt_metal/tt_metal/api/test_runtime_args.cpp" line="344" status="run" result="completed" time="0.42" timestamp="2025-02-13T20:03:52.203" classname="DeviceFixture" />
+    <testcase name="TensixIllegalTooManyRuntimeArgs" file="/work/tests/tt_metal/tt_metal/api/test_runtime_args.cpp" line="397" status="run" result="completed" time="0.008" timestamp="2025-02-13T20:03:52.623" classname="DeviceFixture" />
+    <testcase name="TensixIllegallyModifyRTArgs" file="/work/tests/tt_metal/tt_metal/api/test_runtime_args.cpp" line="418" status="run" result="completed" time="0.018" timestamp="2025-02-13T20:03:52.632" classname="DeviceFixture" />
+    <testcase name="TensixInitializeLegalSemaphores" file="/work/tests/tt_metal/tt_metal/api/test_semaphores.cpp" line="104" status="run" result="completed" time="0.56" timestamp="2025-02-13T20:03:52.650" classname="DeviceFixture" />
+    <testcase name="TensixInitializeIllegalSemaphores" file="/work/tests/tt_metal/tt_metal/api/test_semaphores.cpp" line="113" status="run" result="completed" time="0.026" timestamp="2025-02-13T20:03:53.210" classname="DeviceFixture" />
+    <testcase name="TensixCreateMultipleSemaphoresOnSameCore" file="/work/tests/tt_metal/tt_metal/api/test_semaphores.cpp" line="123" status="run" result="completed" time="0.009" timestamp="2025-02-13T20:03:53.237" classname="DeviceFixture" />
+    <testcase name="TestInterleavedReadWrite" file="/work/tests/tt_metal/tt_metal/api/test_sharded_l1_buffer.cpp" line="94" status="run" result="completed" time="0.013" timestamp="2025-02-13T20:03:53.246" classname="DeviceFixture" />
+    <testcase name="TestHeightShardReadWrite" file="/work/tests/tt_metal/tt_metal/api/test_sharded_l1_buffer.cpp" line="103" status="run" result="completed" time="0.009" timestamp="2025-02-13T20:03:53.260" classname="DeviceFixture" />
+    <testcase name="TestWidthShardReadWrite" file="/work/tests/tt_metal/tt_metal/api/test_sharded_l1_buffer.cpp" line="110" status="run" result="completed" time="0.009" timestamp="2025-02-13T20:03:53.269" classname="DeviceFixture" />
+    <testcase name="TestUnorderedHeightShardReadWrite" file="/work/tests/tt_metal/tt_metal/api/test_sharded_l1_buffer.cpp" line="118" status="run" result="completed" time="0.017" timestamp="2025-02-13T20:03:53.279" classname="DeviceFixture" />
+    <testcase name="TestSimpleDramBufferReadOnlyLo" file="/work/tests/tt_metal/tt_metal/api/test_simple_dram_buffer.cpp" line="44" status="run" result="completed" time="0.012" timestamp="2025-02-13T20:03:53.297" classname="DeviceFixture" />
+    <testcase name="TestSimpleDramBufferReadOnlyHi" file="/work/tests/tt_metal/tt_metal/api/test_simple_dram_buffer.cpp" line="55" status="run" result="completed" time="0.009" timestamp="2025-02-13T20:03:53.309" classname="DeviceFixture" />
+    <testcase name="TestSimpleDramBufferWriteOnlyLo" file="/work/tests/tt_metal/tt_metal/api/test_simple_dram_buffer.cpp" line="66" status="run" result="completed" time="0.01" timestamp="2025-02-13T20:03:53.319" classname="DeviceFixture" />
+    <testcase name="TestSimpleDramBufferWriteOnlyHi" file="/work/tests/tt_metal/tt_metal/api/test_simple_dram_buffer.cpp" line="77" status="run" result="completed" time="0.01" timestamp="2025-02-13T20:03:53.329" classname="DeviceFixture" />
+    <testcase name="TestSimpleL1BufferReadOnlyLo" file="/work/tests/tt_metal/tt_metal/api/test_simple_l1_buffer.cpp" line="121" status="run" result="completed" time="0.012" timestamp="2025-02-13T20:03:53.340" classname="DeviceFixture" />
+    <testcase name="TestSimpleL1BufferReadOnlyHi" file="/work/tests/tt_metal/tt_metal/api/test_simple_l1_buffer.cpp" line="133" status="run" result="completed" time="0.011" timestamp="2025-02-13T20:03:53.352" classname="DeviceFixture" />
+    <testcase name="TestSimpleL1BufferWriteOnlyLo" file="/work/tests/tt_metal/tt_metal/api/test_simple_l1_buffer.cpp" line="144" status="run" result="completed" time="0.018" timestamp="2025-02-13T20:03:53.364" classname="DeviceFixture" />
+    <testcase name="TestSimpleL1BufferWriteOnlyHi" file="/work/tests/tt_metal/tt_metal/api/test_simple_l1_buffer.cpp" line="157" status="run" result="completed" time="0.011" timestamp="2025-02-13T20:03:53.382" classname="DeviceFixture" />
+    <testcase name="TensixTestSimpleL1ReadWriteTileLo" file="/work/tests/tt_metal/tt_metal/api/test_simple_l1_buffer.cpp" line="169" status="run" result="completed" time="0.321" timestamp="2025-02-13T20:03:53.394" classname="DeviceFixture" />
+    <testcase name="TensixTestSimpleL1ReadWriteTileHi" file="/work/tests/tt_metal/tt_metal/api/test_simple_l1_buffer.cpp" line="181" status="run" result="completed" time="0.015" timestamp="2025-02-13T20:03:53.715" classname="DeviceFixture" />
+    <testcase name="TensixTestSimpleL1ReadWritex2y2TileLo" file="/work/tests/tt_metal/tt_metal/api/test_simple_l1_buffer.cpp" line="193" status="run" result="completed" time="0.018" timestamp="2025-02-13T20:03:53.730" classname="DeviceFixture" />
+    <testcase name="TensixTestSimpleL1ReadWritex2y2TileHi" file="/work/tests/tt_metal/tt_metal/api/test_simple_l1_buffer.cpp" line="205" status="run" result="completed" time="0.02" timestamp="2025-02-13T20:03:53.749" classname="DeviceFixture" />
+    <testcase name="TensixTestBufferL1ReadWriteTileLo" file="/work/tests/tt_metal/tt_metal/api/test_simple_l1_buffer.cpp" line="217" status="run" result="completed" time="0.02" timestamp="2025-02-13T20:03:53.769" classname="DeviceFixture" />
+    <testcase name="TensixTestBufferL1ReadWriteTileHi" file="/work/tests/tt_metal/tt_metal/api/test_simple_l1_buffer.cpp" line="229" status="run" result="completed" time="0.02" timestamp="2025-02-13T20:03:53.790" classname="DeviceFixture" />
+    <testcase name="TensixSingleCoreDirectDramReaderOnly" file="/work/tests/tt_metal/tt_metal/api/test_direct.cpp" line="336" status="run" result="completed" time="0.293" timestamp="2025-02-13T20:03:53.810" classname="DeviceFixture" />
+    <testcase name="TensixSingleCoreDirectDramWriterOnly" file="/work/tests/tt_metal/tt_metal/api/test_direct.cpp" line="347" status="run" result="completed" time="0.287" timestamp="2025-02-13T20:03:54.103" classname="DeviceFixture" />
+    <testcase name="TensixSingleCoreDirectDramReaderWriter" file="/work/tests/tt_metal/tt_metal/api/test_direct.cpp" line="358" status="run" result="completed" time="0.309" timestamp="2025-02-13T20:03:54.391" classname="DeviceFixture" />
+    <testcase name="TensixSingleCoreDirectDramReaderDatacopyWriter" file="/work/tests/tt_metal/tt_metal/api/test_direct.cpp" line="373" status="run" result="completed" time="1.265" timestamp="2025-02-13T20:03:54.701" classname="DeviceFixture" />
+    <testcase name="TensixTestSingleCoreSingleTileBankedL1ReaderOnly" file="/work/tests/tt_metal/tt_metal/api/test_banked.cpp" line="270" status="run" result="completed" time="0.358" timestamp="2025-02-13T20:03:55.966" classname="DeviceFixture" />
+    <testcase name="TensixTestSingleCoreMultiTileBankedL1ReaderOnly" file="/work/tests/tt_metal/tt_metal/api/test_banked.cpp" line="277" status="run" result="completed" time="0.973" timestamp="2025-02-13T20:03:56.324" classname="DeviceFixture" />
+    <testcase name="TensixTestSingleCoreSingleTileBankedDramReaderOnly" file="/work/tests/tt_metal/tt_metal/api/test_banked.cpp" line="296" status="run" result="completed" time="0.346" timestamp="2025-02-13T20:03:57.298" classname="DeviceFixture" />
+    <testcase name="TensixTestSingleCoreMultiTileBankedDramReaderOnly" file="/work/tests/tt_metal/tt_metal/api/test_banked.cpp" line="305" status="run" result="completed" time="1.766" timestamp="2025-02-13T20:03:57.644" classname="DeviceFixture" />
+    <testcase name="TensixTestSingleCoreSingleTileBankedL1WriterOnly" file="/work/tests/tt_metal/tt_metal/api/test_banked.cpp" line="326" status="run" result="completed" time="0.321" timestamp="2025-02-13T20:03:59.411" classname="DeviceFixture" />
+    <testcase name="TensixTestSingleCoreMultiTileBankedL1WriterOnly" file="/work/tests/tt_metal/tt_metal/api/test_banked.cpp" line="333" status="run" result="completed" time="1.031" timestamp="2025-02-13T20:03:59.732" classname="DeviceFixture" />
+    <testcase name="TensixTestSingleCoreSingleTileBankedDramWriterOnly" file="/work/tests/tt_metal/tt_metal/api/test_banked.cpp" line="352" status="run" result="completed" time="0.343" timestamp="2025-02-13T20:04:00.764" classname="DeviceFixture" />
+    <testcase name="TensixTestSingleCoreMultiTileBankedDramWriterOnly" file="/work/tests/tt_metal/tt_metal/api/test_banked.cpp" line="361" status="run" result="completed" time="1.838" timestamp="2025-02-13T20:04:01.108" classname="DeviceFixture">
+      <failure message="/work/tests/tt_metal/tt_metal/api/test_banked.cpp:375&#x0A;Value of: local_test_functions::reader_cb_writer(this-&gt;devices_.at(id), test_config, false, true)&#x0A;  Actual: false&#x0A;Expected: true" type=""><![CDATA[/work/tests/tt_metal/tt_metal/api/test_banked.cpp:375
+Value of: local_test_functions::reader_cb_writer(this->devices_.at(id), test_config, false, true)
+  Actual: false
+Expected: true]]></failure>
+      <failure message="/work/tests/tt_metal/tt_metal/api/test_banked.cpp:375&#x0A;Value of: local_test_functions::reader_cb_writer(this-&gt;devices_.at(id), test_config, false, true)&#x0A;  Actual: false&#x0A;Expected: true" type=""><![CDATA[/work/tests/tt_metal/tt_metal/api/test_banked.cpp:375
+Value of: local_test_functions::reader_cb_writer(this->devices_.at(id), test_config, false, true)
+  Actual: false
+Expected: true]]></failure>
+      <failure message="/work/tests/tt_metal/tt_metal/api/test_banked.cpp:375&#x0A;Value of: local_test_functions::reader_cb_writer(this-&gt;devices_.at(id), test_config, false, true)&#x0A;  Actual: false&#x0A;Expected: true" type=""><![CDATA[/work/tests/tt_metal/tt_metal/api/test_banked.cpp:375
+Value of: local_test_functions::reader_cb_writer(this->devices_.at(id), test_config, false, true)
+  Actual: false
+Expected: true]]></failure>
+      <failure message="/work/tests/tt_metal/tt_metal/api/test_banked.cpp:375&#x0A;Value of: local_test_functions::reader_cb_writer(this-&gt;devices_.at(id), test_config, false, true)&#x0A;  Actual: false&#x0A;Expected: true" type=""><![CDATA[/work/tests/tt_metal/tt_metal/api/test_banked.cpp:375
+Value of: local_test_functions::reader_cb_writer(this->devices_.at(id), test_config, false, true)
+  Actual: false
+Expected: true]]></failure>
+    </testcase>
+    <testcase name="TensixTestSingleCoreSingleTileBankedL1ReaderAndWriter" file="/work/tests/tt_metal/tt_metal/api/test_banked.cpp" line="382" status="run" result="completed" time="0.009" timestamp="2025-02-13T20:04:02.946" classname="DeviceFixture" />
+    <testcase name="TensixTestSingleCoreMultiTileBankedL1ReaderAndWriter" file="/work/tests/tt_metal/tt_metal/api/test_banked.cpp" line="389" status="run" result="completed" time="0.518" timestamp="2025-02-13T20:04:02.956" classname="DeviceFixture" />
+    <testcase name="TensixTestSingleCoreSingleTileBankedDramReaderAndWriter" file="/work/tests/tt_metal/tt_metal/api/test_banked.cpp" line="407" status="run" result="completed" time="0.009" timestamp="2025-02-13T20:04:03.475" classname="DeviceFixture" />
+    <testcase name="TensixTestSingleCoreMultiTileBankedDramReaderAndWriter" file="/work/tests/tt_metal/tt_metal/api/test_banked.cpp" line="416" status="run" result="completed" time="1.124" timestamp="2025-02-13T20:04:03.484" classname="DeviceFixture">
+      <failure message="/work/tests/tt_metal/tt_metal/api/test_banked.cpp:429&#x0A;Value of: local_test_functions::reader_cb_writer(this-&gt;devices_.at(id), test_config, true, true)&#x0A;  Actual: false&#x0A;Expected: true" type=""><![CDATA[/work/tests/tt_metal/tt_metal/api/test_banked.cpp:429
+Value of: local_test_functions::reader_cb_writer(this->devices_.at(id), test_config, true, true)
+  Actual: false
+Expected: true]]></failure>
+      <failure message="/work/tests/tt_metal/tt_metal/api/test_banked.cpp:429&#x0A;Value of: local_test_functions::reader_cb_writer(this-&gt;devices_.at(id), test_config, true, true)&#x0A;  Actual: false&#x0A;Expected: true" type=""><![CDATA[/work/tests/tt_metal/tt_metal/api/test_banked.cpp:429
+Value of: local_test_functions::reader_cb_writer(this->devices_.at(id), test_config, true, true)
+  Actual: false
+Expected: true]]></failure>
+      <failure message="/work/tests/tt_metal/tt_metal/api/test_banked.cpp:429&#x0A;Value of: local_test_functions::reader_cb_writer(this-&gt;devices_.at(id), test_config, true, true)&#x0A;  Actual: false&#x0A;Expected: true" type=""><![CDATA[/work/tests/tt_metal/tt_metal/api/test_banked.cpp:429
+Value of: local_test_functions::reader_cb_writer(this->devices_.at(id), test_config, true, true)
+  Actual: false
+Expected: true]]></failure>
+      <failure message="/work/tests/tt_metal/tt_metal/api/test_banked.cpp:429&#x0A;Value of: local_test_functions::reader_cb_writer(this-&gt;devices_.at(id), test_config, true, true)&#x0A;  Actual: false&#x0A;Expected: true" type=""><![CDATA[/work/tests/tt_metal/tt_metal/api/test_banked.cpp:429
+Value of: local_test_functions::reader_cb_writer(this->devices_.at(id), test_config, true, true)
+  Actual: false
+Expected: true]]></failure>
+      <failure message="/work/tests/tt_metal/tt_metal/api/test_banked.cpp:429&#x0A;Value of: local_test_functions::reader_cb_writer(this-&gt;devices_.at(id), test_config, true, true)&#x0A;  Actual: false&#x0A;Expected: true" type=""><![CDATA[/work/tests/tt_metal/tt_metal/api/test_banked.cpp:429
+Value of: local_test_functions::reader_cb_writer(this->devices_.at(id), test_config, true, true)
+  Actual: false
+Expected: true]]></failure>
+      <failure message="/work/tests/tt_metal/tt_metal/api/test_banked.cpp:429&#x0A;Value of: local_test_functions::reader_cb_writer(this-&gt;devices_.at(id), test_config, true, true)&#x0A;  Actual: false&#x0A;Expected: true" type=""><![CDATA[/work/tests/tt_metal/tt_metal/api/test_banked.cpp:429
+Value of: local_test_functions::reader_cb_writer(this->devices_.at(id), test_config, true, true)
+  Actual: false
+Expected: true]]></failure>
+    </testcase>
+    <testcase name="TensixTestSingleCoreSingleTileBankedDramReaderAndL1Writer" file="/work/tests/tt_metal/tt_metal/api/test_banked.cpp" line="436" status="run" result="completed" time="0.013" timestamp="2025-02-13T20:04:04.609" classname="DeviceFixture" />
+    <testcase name="TensixTestSingleCoreMultiTileBankedDramReaderAndL1Writer" file="/work/tests/tt_metal/tt_metal/api/test_banked.cpp" line="444" status="run" result="completed" time="0.826" timestamp="2025-02-13T20:04:04.622" classname="DeviceFixture" />
+    <testcase name="TensixTestSingleCoreSingleTileBankedL1ReaderAndDramWriter" file="/work/tests/tt_metal/tt_metal/api/test_banked.cpp" line="464" status="run" result="completed" time="0.011" timestamp="2025-02-13T20:04:05.449" classname="DeviceFixture" />
+    <testcase name="TensixTestSingleCoreMultiTileBankedL1ReaderAndDramWriter" file="/work/tests/tt_metal/tt_metal/api/test_banked.cpp" line="472" status="run" result="completed" time="0.782" timestamp="2025-02-13T20:04:05.461" classname="DeviceFixture">
+      <failure message="/work/tests/tt_metal/tt_metal/api/test_banked.cpp:485&#x0A;Value of: local_test_functions::reader_cb_writer(this-&gt;devices_.at(id), test_config, true, true)&#x0A;  Actual: false&#x0A;Expected: true" type=""><![CDATA[/work/tests/tt_metal/tt_metal/api/test_banked.cpp:485
+Value of: local_test_functions::reader_cb_writer(this->devices_.at(id), test_config, true, true)
+  Actual: false
+Expected: true]]></failure>
+      <failure message="/work/tests/tt_metal/tt_metal/api/test_banked.cpp:485&#x0A;Value of: local_test_functions::reader_cb_writer(this-&gt;devices_.at(id), test_config, true, true)&#x0A;  Actual: false&#x0A;Expected: true" type=""><![CDATA[/work/tests/tt_metal/tt_metal/api/test_banked.cpp:485
+Value of: local_test_functions::reader_cb_writer(this->devices_.at(id), test_config, true, true)
+  Actual: false
+Expected: true]]></failure>
+      <failure message="/work/tests/tt_metal/tt_metal/api/test_banked.cpp:485&#x0A;Value of: local_test_functions::reader_cb_writer(this-&gt;devices_.at(id), test_config, true, true)&#x0A;  Actual: false&#x0A;Expected: true" type=""><![CDATA[/work/tests/tt_metal/tt_metal/api/test_banked.cpp:485
+Value of: local_test_functions::reader_cb_writer(this->devices_.at(id), test_config, true, true)
+  Actual: false
+Expected: true]]></failure>
+      <failure message="/work/tests/tt_metal/tt_metal/api/test_banked.cpp:485&#x0A;Value of: local_test_functions::reader_cb_writer(this-&gt;devices_.at(id), test_config, true, true)&#x0A;  Actual: false&#x0A;Expected: true" type=""><![CDATA[/work/tests/tt_metal/tt_metal/api/test_banked.cpp:485
+Value of: local_test_functions::reader_cb_writer(this->devices_.at(id), test_config, true, true)
+  Actual: false
+Expected: true]]></failure>
+      <failure message="/work/tests/tt_metal/tt_metal/api/test_banked.cpp:485&#x0A;Value of: local_test_functions::reader_cb_writer(this-&gt;devices_.at(id), test_config, true, true)&#x0A;  Actual: false&#x0A;Expected: true" type=""><![CDATA[/work/tests/tt_metal/tt_metal/api/test_banked.cpp:485
+Value of: local_test_functions::reader_cb_writer(this->devices_.at(id), test_config, true, true)
+  Actual: false
+Expected: true]]></failure>
+      <failure message="/work/tests/tt_metal/tt_metal/api/test_banked.cpp:485&#x0A;Value of: local_test_functions::reader_cb_writer(this-&gt;devices_.at(id), test_config, true, true)&#x0A;  Actual: false&#x0A;Expected: true" type=""><![CDATA[/work/tests/tt_metal/tt_metal/api/test_banked.cpp:485
+Value of: local_test_functions::reader_cb_writer(this->devices_.at(id), test_config, true, true)
+  Actual: false
+Expected: true]]></failure>
+    </testcase>
+    <testcase name="TensixTestSingleCoreMultiTileBankedL1ReaderDataCopyL1Writer" file="/work/tests/tt_metal/tt_metal/api/test_banked.cpp" line="492" status="run" result="completed" time="3.014" timestamp="2025-02-13T20:04:06.244" classname="DeviceFixture" />
+    <testcase name="TensixTestSingleCoreMultiTileBankedDramReaderDataCopyDramWriter" file="/work/tests/tt_metal/tt_metal/api/test_banked.cpp" line="511" status="run" result="completed" time="2.74" timestamp="2025-02-13T20:04:09.258" classname="DeviceFixture">
+      <failure message="/work/tests/tt_metal/tt_metal/api/test_banked.cpp:524&#x0A;Value of: local_test_functions::reader_datacopy_writer(this-&gt;devices_.at(id), test_config)&#x0A;  Actual: false&#x0A;Expected: true" type=""><![CDATA[/work/tests/tt_metal/tt_metal/api/test_banked.cpp:524
+Value of: local_test_functions::reader_datacopy_writer(this->devices_.at(id), test_config)
+  Actual: false
+Expected: true]]></failure>
+      <failure message="/work/tests/tt_metal/tt_metal/api/test_banked.cpp:524&#x0A;Value of: local_test_functions::reader_datacopy_writer(this-&gt;devices_.at(id), test_config)&#x0A;  Actual: false&#x0A;Expected: true" type=""><![CDATA[/work/tests/tt_metal/tt_metal/api/test_banked.cpp:524
+Value of: local_test_functions::reader_datacopy_writer(this->devices_.at(id), test_config)
+  Actual: false
+Expected: true]]></failure>
+      <failure message="/work/tests/tt_metal/tt_metal/api/test_banked.cpp:524&#x0A;Value of: local_test_functions::reader_datacopy_writer(this-&gt;devices_.at(id), test_config)&#x0A;  Actual: false&#x0A;Expected: true" type=""><![CDATA[/work/tests/tt_metal/tt_metal/api/test_banked.cpp:524
+Value of: local_test_functions::reader_datacopy_writer(this->devices_.at(id), test_config)
+  Actual: false
+Expected: true]]></failure>
+      <failure message="/work/tests/tt_metal/tt_metal/api/test_banked.cpp:524&#x0A;Value of: local_test_functions::reader_datacopy_writer(this-&gt;devices_.at(id), test_config)&#x0A;  Actual: false&#x0A;Expected: true" type=""><![CDATA[/work/tests/tt_metal/tt_metal/api/test_banked.cpp:524
+Value of: local_test_functions::reader_datacopy_writer(this->devices_.at(id), test_config)
+  Actual: false
+Expected: true]]></failure>
+      <failure message="/work/tests/tt_metal/tt_metal/api/test_banked.cpp:524&#x0A;Value of: local_test_functions::reader_datacopy_writer(this-&gt;devices_.at(id), test_config)&#x0A;  Actual: false&#x0A;Expected: true" type=""><![CDATA[/work/tests/tt_metal/tt_metal/api/test_banked.cpp:524
+Value of: local_test_functions::reader_datacopy_writer(this->devices_.at(id), test_config)
+  Actual: false
+Expected: true]]></failure>
+    </testcase>
+    <testcase name="TensixTestSingleCoreMultiTileBankedL1ReaderDataCopyDramWriter" file="/work/tests/tt_metal/tt_metal/api/test_banked.cpp" line="531" status="run" result="completed" time="0.624" timestamp="2025-02-13T20:04:11.998" classname="DeviceFixture">
+      <failure message="/work/tests/tt_metal/tt_metal/api/test_banked.cpp:545&#x0A;Value of: local_test_functions::reader_datacopy_writer(this-&gt;devices_.at(id), test_config)&#x0A;  Actual: false&#x0A;Expected: true" type=""><![CDATA[/work/tests/tt_metal/tt_metal/api/test_banked.cpp:545
+Value of: local_test_functions::reader_datacopy_writer(this->devices_.at(id), test_config)
+  Actual: false
+Expected: true]]></failure>
+      <failure message="/work/tests/tt_metal/tt_metal/api/test_banked.cpp:545&#x0A;Value of: local_test_functions::reader_datacopy_writer(this-&gt;devices_.at(id), test_config)&#x0A;  Actual: false&#x0A;Expected: true" type=""><![CDATA[/work/tests/tt_metal/tt_metal/api/test_banked.cpp:545
+Value of: local_test_functions::reader_datacopy_writer(this->devices_.at(id), test_config)
+  Actual: false
+Expected: true]]></failure>
+      <failure message="/work/tests/tt_metal/tt_metal/api/test_banked.cpp:545&#x0A;Value of: local_test_functions::reader_datacopy_writer(this-&gt;devices_.at(id), test_config)&#x0A;  Actual: false&#x0A;Expected: true" type=""><![CDATA[/work/tests/tt_metal/tt_metal/api/test_banked.cpp:545
+Value of: local_test_functions::reader_datacopy_writer(this->devices_.at(id), test_config)
+  Actual: false
+Expected: true]]></failure>
+      <failure message="/work/tests/tt_metal/tt_metal/api/test_banked.cpp:545&#x0A;Value of: local_test_functions::reader_datacopy_writer(this-&gt;devices_.at(id), test_config)&#x0A;  Actual: false&#x0A;Expected: true" type=""><![CDATA[/work/tests/tt_metal/tt_metal/api/test_banked.cpp:545
+Value of: local_test_functions::reader_datacopy_writer(this->devices_.at(id), test_config)
+  Actual: false
+Expected: true]]></failure>
+      <failure message="/work/tests/tt_metal/tt_metal/api/test_banked.cpp:545&#x0A;Value of: local_test_functions::reader_datacopy_writer(this-&gt;devices_.at(id), test_config)&#x0A;  Actual: false&#x0A;Expected: true" type=""><![CDATA[/work/tests/tt_metal/tt_metal/api/test_banked.cpp:545
+Value of: local_test_functions::reader_datacopy_writer(this->devices_.at(id), test_config)
+  Actual: false
+Expected: true]]></failure>
+      <failure message="/work/tests/tt_metal/tt_metal/api/test_banked.cpp:545&#x0A;Value of: local_test_functions::reader_datacopy_writer(this-&gt;devices_.at(id), test_config)&#x0A;  Actual: false&#x0A;Expected: true" type=""><![CDATA[/work/tests/tt_metal/tt_metal/api/test_banked.cpp:545
+Value of: local_test_functions::reader_datacopy_writer(this->devices_.at(id), test_config)
+  Actual: false
+Expected: true]]></failure>
+    </testcase>
+    <testcase name="TensixTestSingleCoreMultiTileBankedDramReaderDataCopyL1Writer" file="/work/tests/tt_metal/tt_metal/api/test_banked.cpp" line="552" status="run" result="completed" time="0.229" timestamp="2025-02-13T20:04:12.623" classname="DeviceFixture" />
+    <testcase name="TensixTestCircularBuffersSequentiallyPlaced" file="/work/tests/tt_metal/tt_metal/api/circular_buffer/test_CircularBuffer_allocation.cpp" line="51" status="run" result="completed" time="0.498" timestamp="2025-02-13T20:04:12.853" classname="DeviceFixture" />
+    <testcase name="TensixTestCircularBufferSequentialAcrossAllCores" file="/work/tests/tt_metal/tt_metal/api/circular_buffer/test_CircularBuffer_allocation.cpp" line="77" status="run" result="completed" time="0.343" timestamp="2025-02-13T20:04:13.351" classname="DeviceFixture" />
+    <testcase name="TensixTestValidCircularBufferAddress" file="/work/tests/tt_metal/tt_metal/api/circular_buffer/test_CircularBuffer_allocation.cpp" line="124" status="run" result="completed" time="0.34" timestamp="2025-02-13T20:04:13.695" classname="DeviceFixture" />
+    <testcase name="TensixTestCircularBuffersAndL1BuffersCollision" file="/work/tests/tt_metal/tt_metal/api/circular_buffer/test_CircularBuffer_allocation.cpp" line="168" status="run" result="completed" time="0.011" timestamp="2025-02-13T20:04:14.035" classname="DeviceFixture" />
+    <testcase name="TensixTestValidUpdateCircularBufferSize" file="/work/tests/tt_metal/tt_metal/api/circular_buffer/test_CircularBuffer_allocation.cpp" line="204" status="run" result="completed" time="0.307" timestamp="2025-02-13T20:04:14.047" classname="DeviceFixture" />
+    <testcase name="TensixTestInvalidUpdateCircularBufferSize" file="/work/tests/tt_metal/tt_metal/api/circular_buffer/test_CircularBuffer_allocation.cpp" line="240" status="run" result="completed" time="0.015" timestamp="2025-02-13T20:04:14.355" classname="DeviceFixture" />
+    <testcase name="TensixTestUpdateCircularBufferAddress" file="/work/tests/tt_metal/tt_metal/api/circular_buffer/test_CircularBuffer_allocation.cpp" line="272" status="run" result="completed" time="0.011" timestamp="2025-02-13T20:04:14.371" classname="DeviceFixture" />
+    <testcase name="TensixTestUpdateCircularBufferPageSize" file="/work/tests/tt_metal/tt_metal/api/circular_buffer/test_CircularBuffer_allocation.cpp" line="312" status="run" result="completed" time="0.011" timestamp="2025-02-13T20:04:14.382" classname="DeviceFixture" />
+    <testcase name="TensixTestDataCopyWithUpdatedCircularBufferConfig" file="/work/tests/tt_metal/tt_metal/api/circular_buffer/test_CircularBuffer_allocation.cpp" line="405" status="run" result="completed" time="0.012" timestamp="2025-02-13T20:04:14.393" classname="DeviceFixture" />
+    <testcase name="TensixTestCreateCircularBufferAtValidIndices" file="/work/tests/tt_metal/tt_metal/api/circular_buffer/test_CircularBuffer_creation.cpp" line="57" status="run" result="completed" time="0.303" timestamp="2025-02-13T20:04:14.406" classname="DeviceFixture" />
+    <testcase name="TestCreateCircularBufferAtInvalidIndex" file="/work/tests/tt_metal/tt_metal/api/circular_buffer/test_CircularBuffer_creation.cpp" line="100" status="run" result="completed" time="0.012" timestamp="2025-02-13T20:04:14.710" classname="DeviceFixture" />
+    <testcase name="TestCreateCircularBufferWithMismatchingConfig" file="/work/tests/tt_metal/tt_metal/api/circular_buffer/test_CircularBuffer_creation.cpp" line="106" status="run" result="completed" time="0.009" timestamp="2025-02-13T20:04:14.722" classname="DeviceFixture" />
+    <testcase name="TensixTestCreateCircularBufferAtOverlappingIndex" file="/work/tests/tt_metal/tt_metal/api/circular_buffer/test_CircularBuffer_creation.cpp" line="114" status="run" result="completed" time="0.01" timestamp="2025-02-13T20:04:14.732" classname="DeviceFixture" />
+    <testcase name="TensixTestCircularBufferNonBlockingAPIs" file="/work/tests/tt_metal/tt_metal/api/circular_buffer/test_CircularBuffer_non_blocking.cpp" line="63" status="run" result="completed" time="0.363" timestamp="2025-02-13T20:04:14.742" classname="DeviceFixture" />
+  </testsuite>
+  <testsuite name="TensorShapeBaseTests" tests="3" failures="0" disabled="0" skipped="0" errors="0" time="0.004" timestamp="2025-02-13T20:04:15.106">
+    <testcase name="General4D" file="/work/tests/tt_metal/tt_metal/api/test_shape_base.cpp" line="10" status="run" result="completed" time="0.001" timestamp="2025-02-13T20:04:15.106" classname="TensorShapeBaseTests" />
+    <testcase name="Empty" file="/work/tests/tt_metal/tt_metal/api/test_shape_base.cpp" line="40" status="run" result="completed" time="0.002" timestamp="2025-02-13T20:04:15.107" classname="TensorShapeBaseTests" />
+    <testcase name="TwoElements" file="/work/tests/tt_metal/tt_metal/api/test_shape_base.cpp" line="69" status="run" result="completed" time="0" timestamp="2025-02-13T20:04:15.109" classname="TensorShapeBaseTests" />
+  </testsuite>
+  <testsuite name="TensorVectorBaseTests" tests="2" failures="0" disabled="0" skipped="0" errors="0" time="0.001" timestamp="2025-02-13T20:04:15.110">
+    <testcase name="General5D" file="/work/tests/tt_metal/tt_metal/api/test_shape_base.cpp" line="26" status="run" result="completed" time="0" timestamp="2025-02-13T20:04:15.110" classname="TensorVectorBaseTests" />
+    <testcase name="SingleElement" file="/work/tests/tt_metal/tt_metal/api/test_shape_base.cpp" line="56" status="run" result="completed" time="0" timestamp="2025-02-13T20:04:15.111" classname="TensorVectorBaseTests" />
+  </testsuite>
+  <testsuite name="SOC" tests="1" failures="0" disabled="0" skipped="0" errors="0" time="0.014" timestamp="2025-02-13T20:04:15.111">
+    <testcase name="TensixValidateLogicalToPhysicalCoreCoordHostMapping" file="/work/tests/tt_metal/tt_metal/api/test_soc_descriptor.cpp" line="47" status="run" result="completed" time="0.014" timestamp="2025-02-13T20:04:15.111" classname="SOC" />
+  </testsuite>
+  <testsuite name="DeviceSingleCardBufferFixture" tests="6" failures="0" disabled="0" skipped="0" errors="0" time="0.061" timestamp="2025-02-13T20:04:15.126">
+    <testcase name="TestInvalidBufferRegion" file="/work/tests/tt_metal/tt_metal/api/test_buffer_region.cpp" line="12" status="run" result="completed" time="0.009" timestamp="2025-02-13T20:04:15.126" classname="DeviceSingleCardBufferFixture" />
+    <testcase name="TestValidBufferRegion" file="/work/tests/tt_metal/tt_metal/api/test_buffer_region.cpp" line="27" status="run" result="completed" time="0.01" timestamp="2025-02-13T20:04:15.136" classname="DeviceSingleCardBufferFixture" />
+    <testcase name="TestPartialBufferRegion" file="/work/tests/tt_metal/tt_metal/api/test_buffer_region.cpp" line="45" status="run" result="completed" time="0.01" timestamp="2025-02-13T20:04:15.146" classname="DeviceSingleCardBufferFixture" />
+    <testcase name="TestFullBufferRegion" file="/work/tests/tt_metal/tt_metal/api/test_buffer_region.cpp" line="60" status="run" result="completed" time="0.01" timestamp="2025-02-13T20:04:15.156" classname="DeviceSingleCardBufferFixture" />
+    <testcase name="TestL1BuffersAllocatedTopDown" file="/work/tests/tt_metal/tt_metal/api/allocator/test_l1_banking_allocator.cpp" line="34" status="run" result="completed" time="0.01" timestamp="2025-02-13T20:04:15.166" classname="DeviceSingleCardBufferFixture" />
+    <testcase name="TestL1BuffersDoNotGrowBeyondBankSize" file="/work/tests/tt_metal/tt_metal/api/allocator/test_l1_banking_allocator.cpp" line="58" status="run" result="completed" time="0.01" timestamp="2025-02-13T20:04:15.176" classname="DeviceSingleCardBufferFixture" />
+  </testsuite>
+  <testsuite name="DispatchFixture" tests="17" failures="0" disabled="2" skipped="4" errors="0" time="2.15" timestamp="2025-02-13T20:04:15.187">
+    <testcase name="TensixDRAMtoL1Multicast" file="/work/tests/tt_metal/tt_metal/api/test_dram_to_l1_multicast.cpp" line="130" status="run" result="completed" time="0.389" timestamp="2025-02-13T20:04:15.187" classname="DispatchFixture" />
+    <testcase name="TensixDRAMtoL1MulticastLoopbackSrc" file="/work/tests/tt_metal/tt_metal/api/test_dram_to_l1_multicast.cpp" line="141" status="run" result="completed" time="0.387" timestamp="2025-02-13T20:04:15.577" classname="DispatchFixture" />
+    <testcase name="TensixDRAMtoL1MulticastExcludeRegionUpLeft" file="/work/tests/tt_metal/tt_metal/api/test_dram_to_l1_multicast.cpp" line="152" status="run" result="skipped" time="0.01" timestamp="2025-02-13T20:04:15.964" classname="DispatchFixture">
+      <skipped message="/work/tests/tt_metal/tt_metal/api/test_dram_to_l1_multicast.cpp:162&#x0A;"><![CDATA[/work/tests/tt_metal/tt_metal/api/test_dram_to_l1_multicast.cpp:162
+]]></skipped>
+    </testcase>
+    <testcase name="TensixDRAMtoL1MulticastExcludeRegionUpRight" file="/work/tests/tt_metal/tt_metal/api/test_dram_to_l1_multicast.cpp" line="169" status="run" result="skipped" time="0.009" timestamp="2025-02-13T20:04:15.974" classname="DispatchFixture">
+      <skipped message="/work/tests/tt_metal/tt_metal/api/test_dram_to_l1_multicast.cpp:179&#x0A;"><![CDATA[/work/tests/tt_metal/tt_metal/api/test_dram_to_l1_multicast.cpp:179
+]]></skipped>
+    </testcase>
+    <testcase name="TensixDRAMtoL1MulticastExcludeRegionDownLeft" file="/work/tests/tt_metal/tt_metal/api/test_dram_to_l1_multicast.cpp" line="186" status="run" result="skipped" time="0.01" timestamp="2025-02-13T20:04:15.984" classname="DispatchFixture">
+      <skipped message="/work/tests/tt_metal/tt_metal/api/test_dram_to_l1_multicast.cpp:196&#x0A;"><![CDATA[/work/tests/tt_metal/tt_metal/api/test_dram_to_l1_multicast.cpp:196
+]]></skipped>
+    </testcase>
+    <testcase name="TensixDRAMtoL1MulticastExcludeRegionDownRight" file="/work/tests/tt_metal/tt_metal/api/test_dram_to_l1_multicast.cpp" line="203" status="run" result="skipped" time="0.01" timestamp="2025-02-13T20:04:15.994" classname="DispatchFixture">
+      <skipped message="/work/tests/tt_metal/tt_metal/api/test_dram_to_l1_multicast.cpp:213&#x0A;"><![CDATA[/work/tests/tt_metal/tt_metal/api/test_dram_to_l1_multicast.cpp:213
+]]></skipped>
+    </testcase>
+    <testcase name="TensixDRAMLoopbackSingleCore" file="/work/tests/tt_metal/tt_metal/api/test_dram.cpp" line="175" status="run" result="completed" time="0.298" timestamp="2025-02-13T20:04:16.004" classname="DispatchFixture" />
+    <testcase name="TensixDRAMLoopbackSingleCorePreAllocated" file="/work/tests/tt_metal/tt_metal/api/test_dram.cpp" line="193" status="run" result="completed" time="0.021" timestamp="2025-02-13T20:04:16.303" classname="DispatchFixture" />
+    <testcase name="TensixDRAMLoopbackSingleCoreDB" file="/work/tests/tt_metal/tt_metal/api/test_dram.cpp" line="211" status="run" result="completed" time="0.415" timestamp="2025-02-13T20:04:16.324" classname="DispatchFixture" />
+    <testcase name="TensixCreateGlobalCircularBuffers" file="/work/tests/tt_metal/tt_metal/api/test_global_circular_buffers.cpp" line="17" status="run" result="completed" time="0.014" timestamp="2025-02-13T20:04:16.739" classname="DispatchFixture" />
+    <testcase name="TensixProgramGlobalCircularBuffers" file="/work/tests/tt_metal/tt_metal/api/test_global_circular_buffers.cpp" line="50" status="run" result="completed" time="0.543" timestamp="2025-02-13T20:04:16.753" classname="DispatchFixture" />
+    <testcase name="InitializeGlobalSemaphores" file="/work/tests/tt_metal/tt_metal/api/test_global_semaphores.cpp" line="15" status="run" result="completed" time="0.011" timestamp="2025-02-13T20:04:17.297" classname="DispatchFixture" />
+    <testcase name="CreateMultipleGlobalSemaphoresOnSameCore" file="/work/tests/tt_metal/tt_metal/api/test_global_semaphores.cpp" line="46" status="run" result="completed" time="0.01" timestamp="2025-02-13T20:04:17.309" classname="DispatchFixture" />
+    <testcase name="ResetGlobalSemaphores" file="/work/tests/tt_metal/tt_metal/api/test_global_semaphores.cpp" line="82" status="run" result="completed" time="0.009" timestamp="2025-02-13T20:04:17.320" classname="DispatchFixture" />
+    <testcase name="TensixCreateKernelsOnComputeCores" file="/work/tests/tt_metal/tt_metal/api/test_kernel_creation.cpp" line="15" status="run" result="completed" time="0.008" timestamp="2025-02-13T20:04:17.330" classname="DispatchFixture" />
+    <testcase name="DISABLED_TensixCreateKernelsOnStorageCores" file="/work/tests/tt_metal/tt_metal/api/test_kernel_creation.cpp" line="29" status="notrun" result="suppressed" time="0" timestamp="1970-01-01T00:00:00.000" classname="DispatchFixture" />
+    <testcase name="DISABLED_TensixIdleEthCreateKernelsOnDispatchCores" file="/work/tests/tt_metal/tt_metal/api/test_kernel_creation.cpp" line="51" status="notrun" result="suppressed" time="0" timestamp="1970-01-01T00:00:00.000" classname="DispatchFixture" />
+  </testsuite>
+  <testsuite name="CompileProgramWithKernelPathEnvVarFixture" tests="4" failures="0" disabled="0" skipped="4" errors="0" time="0" timestamp="2025-02-13T20:04:17.338">
+    <testcase name="TensixKernelUnderMetalRootDir" file="/work/tests/tt_metal/tt_metal/api/test_kernel_creation.cpp" line="85" status="run" result="skipped" time="0" timestamp="2025-02-13T20:04:17.338" classname="CompileProgramWithKernelPathEnvVarFixture">
+      <skipped message="/work/tests/tt_metal/tt_metal/api/compile_program_with_kernel_path_env_var_fixture.hpp:17&#x0A;"><![CDATA[/work/tests/tt_metal/tt_metal/api/compile_program_with_kernel_path_env_var_fixture.hpp:17
+]]></skipped>
+    </testcase>
+    <testcase name="TensixKernelUnderKernelRootDir" file="/work/tests/tt_metal/tt_metal/api/test_kernel_creation.cpp" line="91" status="run" result="skipped" time="0" timestamp="2025-02-13T20:04:17.338" classname="CompileProgramWithKernelPathEnvVarFixture">
+      <skipped message="/work/tests/tt_metal/tt_metal/api/compile_program_with_kernel_path_env_var_fixture.hpp:17&#x0A;"><![CDATA[/work/tests/tt_metal/tt_metal/api/compile_program_with_kernel_path_env_var_fixture.hpp:17
+]]></skipped>
+    </testcase>
+    <testcase name="TensixKernelUnderMetalRootDirAndKernelRootDir" file="/work/tests/tt_metal/tt_metal/api/test_kernel_creation.cpp" line="100" status="run" result="skipped" time="0" timestamp="2025-02-13T20:04:17.338" classname="CompileProgramWithKernelPathEnvVarFixture">
+      <skipped message="/work/tests/tt_metal/tt_metal/api/compile_program_with_kernel_path_env_var_fixture.hpp:17&#x0A;"><![CDATA[/work/tests/tt_metal/tt_metal/api/compile_program_with_kernel_path_env_var_fixture.hpp:17
+]]></skipped>
+    </testcase>
+    <testcase name="TensixNonExistentKernel" file="/work/tests/tt_metal/tt_metal/api/test_kernel_creation.cpp" line="108" status="run" result="skipped" time="0" timestamp="2025-02-13T20:04:17.338" classname="CompileProgramWithKernelPathEnvVarFixture">
+      <skipped message="/work/tests/tt_metal/tt_metal/api/compile_program_with_kernel_path_env_var_fixture.hpp:17&#x0A;"><![CDATA[/work/tests/tt_metal/tt_metal/api/compile_program_with_kernel_path_env_var_fixture.hpp:17
+]]></skipped>
+    </testcase>
+  </testsuite>
+  <testsuite name="CoreCoordFixture" tests="18" failures="0" disabled="0" skipped="0" errors="0" time="0" timestamp="2025-02-13T20:04:17.338">
+    <testcase name="TestCoreRangeIntersects" file="/work/tests/tt_metal/tt_metal/api/core_coord/test_CoreRange_intersects.cpp" line="11" status="run" result="completed" time="0" timestamp="2025-02-13T20:04:17.338" classname="CoreCoordFixture" />
+    <testcase name="TestCoreRangeNotIntersects" file="/work/tests/tt_metal/tt_metal/api/core_coord/test_CoreRange_intersects.cpp" line="28" status="run" result="completed" time="0" timestamp="2025-02-13T20:04:17.338" classname="CoreCoordFixture" />
+    <testcase name="TestCoreRangeIterator" file="/work/tests/tt_metal/tt_metal/api/core_coord/test_CoreRange_iterator.cpp" line="13" status="run" result="completed" time="0" timestamp="2025-02-13T20:04:17.338" classname="CoreCoordFixture" />
+    <testcase name="TestCoreRangeMerge" file="/work/tests/tt_metal/tt_metal/api/core_coord/test_CoreRange_merge.cpp" line="11" status="run" result="completed" time="0" timestamp="2025-02-13T20:04:17.338" classname="CoreCoordFixture" />
+    <testcase name="TestCoreRangeNotMergeable" file="/work/tests/tt_metal/tt_metal/api/core_coord/test_CoreRange_merge.cpp" line="24" status="run" result="completed" time="0" timestamp="2025-02-13T20:04:17.338" classname="CoreCoordFixture" />
+    <testcase name="TestCoreRangeSetValidConstruct" file="/work/tests/tt_metal/tt_metal/api/core_coord/test_CoreRangeSet_construct.cpp" line="11" status="run" result="completed" time="0" timestamp="2025-02-13T20:04:17.338" classname="CoreCoordFixture" />
+    <testcase name="TestCoreRangeSetInvalidConstruct" file="/work/tests/tt_metal/tt_metal/api/core_coord/test_CoreRangeSet_construct.cpp" line="19" status="run" result="completed" time="0" timestamp="2025-02-13T20:04:17.338" classname="CoreCoordFixture" />
+    <testcase name="TestCoreRangeSetContains" file="/work/tests/tt_metal/tt_metal/api/core_coord/test_CoreRangeSet_contains.cpp" line="13" status="run" result="completed" time="0" timestamp="2025-02-13T20:04:17.339" classname="CoreCoordFixture" />
+    <testcase name="TestCoreRangeSetNotContains" file="/work/tests/tt_metal/tt_metal/api/core_coord/test_CoreRangeSet_contains.cpp" line="36" status="run" result="completed" time="0" timestamp="2025-02-13T20:04:17.339" classname="CoreCoordFixture" />
+    <testcase name="TestCoreRangeSetIntersects" file="/work/tests/tt_metal/tt_metal/api/core_coord/test_CoreRangeSet_intersects.cpp" line="13" status="run" result="completed" time="0" timestamp="2025-02-13T20:04:17.339" classname="CoreCoordFixture" />
+    <testcase name="TestCoreRangeSetNotIntersects" file="/work/tests/tt_metal/tt_metal/api/core_coord/test_CoreRangeSet_intersects.cpp" line="35" status="run" result="completed" time="0" timestamp="2025-02-13T20:04:17.339" classname="CoreCoordFixture" />
+    <testcase name="TestCoreRangeSetMergeNoSolution" file="/work/tests/tt_metal/tt_metal/api/core_coord/test_CoreRangeSet_merge.cpp" line="14" status="run" result="completed" time="0" timestamp="2025-02-13T20:04:17.339" classname="CoreCoordFixture" />
+    <testcase name="TestCoreRangeSetMergeCoreCoord" file="/work/tests/tt_metal/tt_metal/api/core_coord/test_CoreRangeSet_merge.cpp" line="21" status="run" result="completed" time="0" timestamp="2025-02-13T20:04:17.339" classname="CoreCoordFixture" />
+    <testcase name="TestCoreRangeSetMergeCoreRange" file="/work/tests/tt_metal/tt_metal/api/core_coord/test_CoreRangeSet_merge.cpp" line="51" status="run" result="completed" time="0" timestamp="2025-02-13T20:04:17.339" classname="CoreCoordFixture" />
+    <testcase name="TestCoreRangeAdjacent" file="/work/tests/tt_metal/tt_metal/api/core_coord/test_CoreRange_adjacent.cpp" line="11" status="run" result="completed" time="0" timestamp="2025-02-13T20:04:17.339" classname="CoreCoordFixture" />
+    <testcase name="TestCoreRangeNotAdjacent" file="/work/tests/tt_metal/tt_metal/api/core_coord/test_CoreRange_adjacent.cpp" line="22" status="run" result="completed" time="0" timestamp="2025-02-13T20:04:17.339" classname="CoreCoordFixture" />
+    <testcase name="TestCoreRangeContains" file="/work/tests/tt_metal/tt_metal/api/core_coord/test_CoreRange_contains.cpp" line="13" status="run" result="completed" time="0" timestamp="2025-02-13T20:04:17.339" classname="CoreCoordFixture" />
+    <testcase name="TestCoreRangeNotContains" file="/work/tests/tt_metal/tt_metal/api/core_coord/test_CoreRange_contains.cpp" line="28" status="run" result="completed" time="0" timestamp="2025-02-13T20:04:17.339" classname="CoreCoordFixture" />
+  </testsuite>
+  <testsuite name="FreeListAllocator" tests="3" failures="0" disabled="0" skipped="0" errors="0" time="0" timestamp="2025-02-13T20:04:17.339">
+    <testcase name="TestDirectedSeriesOfAllocDealloc" file="/work/tests/tt_metal/tt_metal/api/allocator/test_free_list_allocator.cpp" line="12" status="run" result="completed" time="0" timestamp="2025-02-13T20:04:17.339" classname="FreeListAllocator" />
+    <testcase name="TestResizeAllocator" file="/work/tests/tt_metal/tt_metal/api/allocator/test_free_list_allocator.cpp" line="133" status="run" result="completed" time="0" timestamp="2025-02-13T20:04:17.339" classname="FreeListAllocator" />
+    <testcase name="TestDirectedResizeAllocator" file="/work/tests/tt_metal/tt_metal/api/allocator/test_free_list_allocator.cpp" line="184" status="run" result="completed" time="0" timestamp="2025-02-13T20:04:17.339" classname="FreeListAllocator" />
+  </testsuite>
+  <testsuite name="FreeListOptTest" tests="18" failures="0" disabled="0" skipped="0" errors="0" time="0.001" timestamp="2025-02-13T20:04:17.339">
+    <testcase name="Allocation" file="/work/tests/tt_metal/tt_metal/api/allocator/test_free_list_opt_allocator.cpp" line="14" status="run" result="completed" time="0" timestamp="2025-02-13T20:04:17.339" classname="FreeListOptTest" />
+    <testcase name="Alignment" file="/work/tests/tt_metal/tt_metal/api/allocator/test_free_list_opt_allocator.cpp" line="25" status="run" result="completed" time="0" timestamp="2025-02-13T20:04:17.339" classname="FreeListOptTest" />
+    <testcase name="MinAllocationSize" file="/work/tests/tt_metal/tt_metal/api/allocator/test_free_list_opt_allocator.cpp" line="35" status="run" result="completed" time="0" timestamp="2025-02-13T20:04:17.339" classname="FreeListOptTest" />
+    <testcase name="Clear" file="/work/tests/tt_metal/tt_metal/api/allocator/test_free_list_opt_allocator.cpp" line="45" status="run" result="completed" time="0" timestamp="2025-02-13T20:04:17.340" classname="FreeListOptTest" />
+    <testcase name="AllocationAndDeallocation" file="/work/tests/tt_metal/tt_metal/api/allocator/test_free_list_opt_allocator.cpp" line="57" status="run" result="completed" time="0" timestamp="2025-02-13T20:04:17.340" classname="FreeListOptTest" />
+    <testcase name="AllocateAtAddress" file="/work/tests/tt_metal/tt_metal/api/allocator/test_free_list_opt_allocator.cpp" line="82" status="run" result="completed" time="0" timestamp="2025-02-13T20:04:17.340" classname="FreeListOptTest" />
+    <testcase name="AllocateAtAddressInteractions" file="/work/tests/tt_metal/tt_metal/api/allocator/test_free_list_opt_allocator.cpp" line="106" status="run" result="completed" time="0" timestamp="2025-02-13T20:04:17.340" classname="FreeListOptTest" />
+    <testcase name="ShrinkAndReset" file="/work/tests/tt_metal/tt_metal/api/allocator/test_free_list_opt_allocator.cpp" line="123" status="run" result="completed" time="0" timestamp="2025-02-13T20:04:17.340" classname="FreeListOptTest" />
+    <testcase name="Statistics" file="/work/tests/tt_metal/tt_metal/api/allocator/test_free_list_opt_allocator.cpp" line="145" status="run" result="completed" time="0" timestamp="2025-02-13T20:04:17.340" classname="FreeListOptTest" />
+    <testcase name="AllocateFromTop" file="/work/tests/tt_metal/tt_metal/api/allocator/test_free_list_opt_allocator.cpp" line="157" status="run" result="completed" time="0" timestamp="2025-02-13T20:04:17.340" classname="FreeListOptTest" />
+    <testcase name="Coalescing" file="/work/tests/tt_metal/tt_metal/api/allocator/test_free_list_opt_allocator.cpp" line="172" status="run" result="completed" time="0" timestamp="2025-02-13T20:04:17.340" classname="FreeListOptTest" />
+    <testcase name="CoalescingAfterResetShrink" file="/work/tests/tt_metal/tt_metal/api/allocator/test_free_list_opt_allocator.cpp" line="188" status="run" result="completed" time="0" timestamp="2025-02-13T20:04:17.340" classname="FreeListOptTest" />
+    <testcase name="OutOfMemory" file="/work/tests/tt_metal/tt_metal/api/allocator/test_free_list_opt_allocator.cpp" line="207" status="run" result="completed" time="0" timestamp="2025-02-13T20:04:17.340" classname="FreeListOptTest" />
+    <testcase name="AvailableAddresses" file="/work/tests/tt_metal/tt_metal/api/allocator/test_free_list_opt_allocator.cpp" line="221" status="run" result="completed" time="0" timestamp="2025-02-13T20:04:17.340" classname="FreeListOptTest" />
+    <testcase name="LowestOccupiedAddress" file="/work/tests/tt_metal/tt_metal/api/allocator/test_free_list_opt_allocator.cpp" line="264" status="run" result="completed" time="0" timestamp="2025-02-13T20:04:17.340" classname="FreeListOptTest" />
+    <testcase name="LowestOccupiedAddressWithAllocateAt" file="/work/tests/tt_metal/tt_metal/api/allocator/test_free_list_opt_allocator.cpp" line="288" status="run" result="completed" time="0" timestamp="2025-02-13T20:04:17.341" classname="FreeListOptTest" />
+    <testcase name="FirstFit" file="/work/tests/tt_metal/tt_metal/api/allocator/test_free_list_opt_allocator.cpp" line="300" status="run" result="completed" time="0" timestamp="2025-02-13T20:04:17.341" classname="FreeListOptTest" />
+    <testcase name="FirstFitAllocateAtAddressInteractions" file="/work/tests/tt_metal/tt_metal/api/allocator/test_free_list_opt_allocator.cpp" line="327" status="run" result="completed" time="0" timestamp="2025-02-13T20:04:17.341" classname="FreeListOptTest" />
+  </testsuite>
+  <testsuite name="BlockfloatCommonTests/ConvertU32ToBfpTests" tests="8" failures="0" disabled="0" skipped="0" errors="0" time="0" timestamp="2025-02-13T20:04:17.341">
+    <testcase name="MantissaRoundingWithPositiveFloat/0" value_param="12-byte object &lt;00-80 81-42 41-00 00-00 00-00 82-42&gt;" file="/work/tests/tt_metal/tt_metal/api/test_blockfloat_common.cpp" line="34" status="run" result="completed" time="0" timestamp="2025-02-13T20:04:17.341" classname="BlockfloatCommonTests/ConvertU32ToBfpTests" />
+    <testcase name="MantissaRoundingWithPositiveFloat/1" value_param="12-byte object &lt;00-80 82-42 41-00 00-00 00-00 82-42&gt;" file="/work/tests/tt_metal/tt_metal/api/test_blockfloat_common.cpp" line="34" status="run" result="completed" time="0" timestamp="2025-02-13T20:04:17.341" classname="BlockfloatCommonTests/ConvertU32ToBfpTests" />
+    <testcase name="MantissaRoundingWithPositiveFloat/2" value_param="12-byte object &lt;00-00 81-42 40-00 00-00 00-00 80-42&gt;" file="/work/tests/tt_metal/tt_metal/api/test_blockfloat_common.cpp" line="34" status="run" result="completed" time="0" timestamp="2025-02-13T20:04:17.341" classname="BlockfloatCommonTests/ConvertU32ToBfpTests" />
+    <testcase name="MantissaRoundingWithPositiveFloat/3" value_param="12-byte object &lt;00-00 83-42 42-00 00-00 00-00 84-42&gt;" file="/work/tests/tt_metal/tt_metal/api/test_blockfloat_common.cpp" line="34" status="run" result="completed" time="0" timestamp="2025-02-13T20:04:17.341" classname="BlockfloatCommonTests/ConvertU32ToBfpTests" />
+    <testcase name="MantissaRoundingWithNegativeFloat/0" value_param="12-byte object &lt;00-80 81-42 41-00 00-00 00-00 82-42&gt;" file="/work/tests/tt_metal/tt_metal/api/test_blockfloat_common.cpp" line="40" status="run" result="completed" time="0" timestamp="2025-02-13T20:04:17.341" classname="BlockfloatCommonTests/ConvertU32ToBfpTests" />
+    <testcase name="MantissaRoundingWithNegativeFloat/1" value_param="12-byte object &lt;00-80 82-42 41-00 00-00 00-00 82-42&gt;" file="/work/tests/tt_metal/tt_metal/api/test_blockfloat_common.cpp" line="40" status="run" result="completed" time="0" timestamp="2025-02-13T20:04:17.341" classname="BlockfloatCommonTests/ConvertU32ToBfpTests" />
+    <testcase name="MantissaRoundingWithNegativeFloat/2" value_param="12-byte object &lt;00-00 81-42 40-00 00-00 00-00 80-42&gt;" file="/work/tests/tt_metal/tt_metal/api/test_blockfloat_common.cpp" line="40" status="run" result="completed" time="0" timestamp="2025-02-13T20:04:17.341" classname="BlockfloatCommonTests/ConvertU32ToBfpTests" />
+    <testcase name="MantissaRoundingWithNegativeFloat/3" value_param="12-byte object &lt;00-00 83-42 42-00 00-00 00-00 84-42&gt;" file="/work/tests/tt_metal/tt_metal/api/test_blockfloat_common.cpp" line="40" status="run" result="completed" time="0" timestamp="2025-02-13T20:04:17.341" classname="BlockfloatCommonTests/ConvertU32ToBfpTests" />
+  </testsuite>
+</testsuites>

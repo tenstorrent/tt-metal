@@ -31,6 +31,8 @@ void kernel_main() {
 
     constexpr uint32_t act_block_h_datums_read_last_block =
         act_block_h_datums_last_block > act_block_h_datums ? act_block_h_datums / 2 : act_block_h_datums_last_block / 2;
+    constexpr uint32_t act_block_h_datums_second_reader = get_compile_time_arg_val(26);
+    constexpr uint32_t act_block_h_datums_second_reader_read = act_block_h_datums_second_reader / 2;
 
     uint32_t i = 0;
     uint32_t noop = get_arg_val<uint32_t>(i);
@@ -150,7 +152,7 @@ void kernel_main() {
 
         start_reader_idx = reader_idx;
 #ifdef SPLIT_READER
-        start_reader_idx += act_block_h_datums_read;
+        start_reader_idx += act_block_h_datums_second_reader_read;
 #endif
     }
 }

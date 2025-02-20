@@ -271,7 +271,7 @@ void MeshCommandQueue::write_sharded_buffer(const MeshBuffer& buffer, const void
                     for (std::size_t replicated_device_y = 0; replicated_device_y < num_devices_y;
                          replicated_device_y++) {
                         auto device_shard_view =
-                            buffer.get_device_buffer(Coordinate(replicated_device_y, replicated_device_x));
+                            buffer.get_device_buffer(MeshCoordinate(replicated_device_y, replicated_device_x));
                         const BufferRegion region(0, device_shard_view->size());
                         this->write_shard_to_device(device_shard_view, shard_data.data(), region);
                     }
@@ -279,21 +279,23 @@ void MeshCommandQueue::write_sharded_buffer(const MeshBuffer& buffer, const void
             } else if (height_replicated or width_replicated) {
                 if (buffer.global_shard_spec().shard_orientation == ShardOrientation::ROW_MAJOR) {
                     for (auto replicated_device_y = 0; replicated_device_y < num_devices_y; replicated_device_y++) {
-                        auto device_shard_view = buffer.get_device_buffer(Coordinate(replicated_device_y, device_x));
+                        auto device_shard_view =
+                            buffer.get_device_buffer(MeshCoordinate(replicated_device_y, device_x));
                         const BufferRegion region(0, device_shard_view->size());
                         this->write_shard_to_device(device_shard_view, shard_data.data(), region);
                     }
                     device_x++;
                 } else {
                     for (auto replicated_device_x = 0; replicated_device_x < num_devices_x; replicated_device_x++) {
-                        auto device_shard_view = buffer.get_device_buffer(Coordinate(device_y, replicated_device_x));
+                        auto device_shard_view =
+                            buffer.get_device_buffer(MeshCoordinate(device_y, replicated_device_x));
                         const BufferRegion region(0, device_shard_view->size());
                         this->write_shard_to_device(device_shard_view, shard_data.data(), region);
                     }
                     device_y++;
                 }
             } else {
-                auto device_shard_view = buffer.get_device_buffer(Coordinate(device_y, device_x));
+                auto device_shard_view = buffer.get_device_buffer(MeshCoordinate(device_y, device_x));
                 const BufferRegion region(0, device_shard_view->size());
                 this->write_shard_to_device(device_shard_view, shard_data.data(), region);
                 if (buffer.global_shard_spec().shard_orientation == ShardOrientation::ROW_MAJOR) {
@@ -334,7 +336,7 @@ void MeshCommandQueue::read_sharded_buffer(MeshBuffer& buffer, void* dst) {
     std::vector<uint32_t> shard_data = std::vector<uint32_t>(total_write_size_per_shard / sizeof(uint32_t), 0);
     for (std::size_t shard_y = 0; shard_y < num_shards_y; shard_y++) {
         for (std::size_t shard_x = 0; shard_x < num_shards_x; shard_x++) {
-            auto device_shard_view = buffer.get_device_buffer(Coordinate(device_y, device_x));
+            auto device_shard_view = buffer.get_device_buffer(MeshCoordinate(device_y, device_x));
             const BufferRegion region(0, device_shard_view->size());
             this->read_shard_from_device(device_shard_view, shard_data.data(), region);
 
@@ -371,7 +373,7 @@ void MeshCommandQueue::enqueue_write_shard_to_sub_grid(
              logical_x++) {
             for (std::size_t logical_y = device_range.start_coord.y; logical_y < device_range.end_coord.y + 1;
                  logical_y++) {
-                auto device_shard_view = buffer.get_device_buffer(Coordinate(logical_y, logical_x));
+                auto device_shard_view = buffer.get_device_buffer(MeshCoordinate(logical_y, logical_x));
                 const BufferRegion region(0, device_shard_view->size());
                 this->write_shard_to_device(device_shard_view, host_data, region);
             }

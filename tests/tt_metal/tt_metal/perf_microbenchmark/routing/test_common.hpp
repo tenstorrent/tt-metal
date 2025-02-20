@@ -6,7 +6,7 @@
 
 #include <nlohmann/json.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include "hw/inc/tt_fabric_status.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "llrt.hpp"
 
 static inline std::string to_string(pkt_dest_size_choices_t choice) {

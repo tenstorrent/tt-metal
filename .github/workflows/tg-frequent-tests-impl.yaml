@@ -14,7 +14,6 @@ jobs:
           { name: "TG unit/distributed frequent tests", arch: wormhole_b0, model: unit, timeout: 90, owner_id: XXXXX}, # Add owner
         ]
     env:
-      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.test-group.arch }}
       LOGURU_LEVEL: INFO
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib

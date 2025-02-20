@@ -20,7 +20,6 @@ jobs:
         arch: [grayskull, wormhole_b0]
         frequent-type: [api]
     env:
-      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.arch }}
       LOGURU_LEVEL: INFO
       TT_METAL_SLOW_DISPATCH_MODE: 1

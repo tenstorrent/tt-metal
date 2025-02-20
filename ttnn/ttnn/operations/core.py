@@ -200,7 +200,7 @@ def from_torch(
         if layout != ttnn.TILE_LAYOUT:
             raise RuntimeError("ttnn.from_torch: bfloat8_b/bfloat4_b requires TILE_LAYOUT!")
         # Tilize tensor
-        tensor = ttnn.from_torch(tensor, layout=ttnn.TILE_LAYOUT, tile=tile, pad_value=pad_value)
+        tensor = ttnn.from_torch(tensor, layout=ttnn.TILE_LAYOUT, tile=tile, pad_value=pad_value, mesh_mapper=None)
         logical_shape = tensor.shape
         padded_shape = tensor.padded_shape
         tensor = tensor.reshape(tensor.padded_shape)
@@ -312,14 +312,14 @@ def to_torch(
         raise RuntimeError("ttnn.to_torch: Shard spec must not be None for sharded tensors")
 
     if memory_config.is_sharded() and memory_config.shard_spec.mode == ttnn.ShardMode.LOGICAL:
-        tensor = tensor.to_torch_with_logical_shape()
+        tensor = tensor.to_torch()
     else:
         if (tensor.layout != ttnn.ROW_MAJOR_LAYOUT) and not (
             tensor.dtype == ttnn.bfloat8_b or tensor.dtype == ttnn.bfloat4_b
         ):
             tensor = tensor.to(ttnn.ROW_MAJOR_LAYOUT, device)
 
-        tensor = tensor.to_torch_with_logical_shape()
+        tensor = tensor.to_torch()
 
     if torch_rank is not None:
         while len(tensor.shape) > torch_rank:

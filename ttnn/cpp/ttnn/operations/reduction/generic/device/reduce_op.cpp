@@ -222,7 +222,7 @@ Tensor reduce(
                         ttnn::operations::experimental::auto_format::AutoFormat::format_input_tensor(
                             input_tensor, device, input_tensor_pad_shape, pad_value, Layout::TILE);
                 }
-                const Tensor output_tensor = operation::run_without_autoformat(
+                const Tensor output_tensor = operation::run(
                                                  Reduce{
                                                      reduce_math,
                                                      ReduceOpDim::W,
@@ -232,7 +232,7 @@ Tensor reduce(
                                                      config},
                                                  {formatted_input_tensor})
                                                  .at(0);
-                return operation::run_without_autoformat(
+                return operation::run(
                     Reduce{
                         reduce_math,
                         ReduceOpDim::H,
