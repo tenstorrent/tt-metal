@@ -36,14 +36,23 @@ ALWI void batchnorm_bcast_tiles(
 
     // input - batch_mean
     cb_wait_front(cb_bcast, onetile);
-    DPRINT << "cb_bcast : " << ENDL();
-    DPRINT << TSLICE(cb_bcast, 0, SliceRange::h0_w0_32()) << ENDL();
+    // DPRINT_UNPACK(DPRINT << "this is the unpack cb_bcast" << ENDL());
+
+    // // DPRINT_MATH(DPRINT << "this is the math kernel - 1" << ENDL());
+    // DPRINT_PACK(DPRINT << "this is the pack kernel - 1" << ENDL());
+    // DPRINT_UNPACK(DPRINT << "this is the unpack kernel - 1" << ENDL());
+
+    // DPRINT << "cb_bcast : " << ENDL();
+    // DPRINT_UNPACK(DPRINT << "this is the unpack kernel" << ENDL());
+    // DPRINT << TSLICE(cb_bcast, 0, SliceRange::h0_w0_32()) << ENDL();
     for (uint32_t j = tile_start; j < freq; ++j) {
         cb_wait_front(cb_other, onetile);
-        DPRINT << "cb_other : " << ENDL();
-        DPRINT << TSLICE(cb_other, 0, SliceRange::h0_w0_32()) << ENDL();
+        // DPRINT_UNPACK(DPRINT << "   this is the unpack cb_other" << ENDL());
+        // DPRINT << "cb_other : " << ENDL();
+        // DPRINT << TSLICE(cb_other, 0, SliceRange::h0_w0_32()) << ENDL();
 
         cb_reserve_back(cb_num, onetile);
+        // DPRINT_PACK(DPRINT << "     this is the pack cb_num" << ENDL());
 
         sub_binary_tile_init();
         tile_regs_acquire();
@@ -63,15 +72,22 @@ ALWI void batchnorm_bcast_tiles(
         cb_push_back(cb_num, onetile);
         cb_pop_front(cb_other, onetile);
     }
-    DPRINT << "out of cb_other loop : " << ENDL();
+    // DPRINT << "out of cb_other loop : " << ENDL();
     cb_pop_front(cb_bcast, onetile);
+
+    // DPRINT_MATH(DPRINT << "this is the math kernel - 2" << ENDL());
+    // DPRINT_PACK(DPRINT << "this is the pack kernel - 2" << ENDL());
+    // DPRINT_UNPACK(DPRINT << "this is the unpack kernel - 2" << ENDL());
 
     // 1/(sqrt(batch_var + eps))
     cb_reserve_back(cb_den, onetile);
+    DPRINT_PACK(DPRINT << "this is the pack cb_den" << ENDL());
     cb_wait_front(cb_batch_var, onetile);
+    DPRINT_UNPACK(DPRINT << "this is the unpack cb_batch_var" << ENDL());
     // DPRINT << "cb_batch_var : " << ENDL();
     // DPRINT << TSLICE(cb_batch_var, 0, SliceRange::h0_w0_32()) << ENDL();
     cb_wait_front(cb_eps, onetile);
+    DPRINT_UNPACK(DPRINT << "this is the unpack cb_eps" << ENDL());
     // DPRINT << "cb_eps : " << ENDL();
     // DPRINT << TSLICE(cb_eps, 0, SliceRange::h0_w0_32()) << ENDL();
 
@@ -98,16 +114,23 @@ ALWI void batchnorm_bcast_tiles(
     cb_pop_front(cb_batch_var, onetile);
     cb_pop_front(cb_eps, onetile);
 
+    // DPRINT_MATH(DPRINT << "this is the math kernel - 3" << ENDL());
+    // DPRINT_PACK(DPRINT << "this is the pack kernel - 3" << ENDL());
+    // DPRINT_UNPACK(DPRINT << "this is the unpack kernel - 3" << ENDL());
+
     // (input - batch_mean)/(sqrt(batch_var + eps)) = result
     cb_wait_front(cb_den, onetile);
-    DPRINT << "cb_den : " << ENDL();
-    DPRINT << TSLICE(cb_den, 0, SliceRange::h0_w0_32()) << ENDL();
+    DPRINT_UNPACK(DPRINT << "this is the unpack cb_den" << ENDL());
+    // DPRINT << "cb_den : " << ENDL();
+    // DPRINT << TSLICE(cb_den, 0, SliceRange::h0_w0_32()) << ENDL();
     for (uint32_t j = tile_start; j < freq; ++j) {
         cb_wait_front(cb_num, onetile);
+        DPRINT_UNPACK(DPRINT << "this is the unpack cb_num" << ENDL());
         // DPRINT << "cb_num : " << ENDL();
         // DPRINT << TSLICE(cb_num, 0, SliceRange::h0_w0_32()) << ENDL();
 
         cb_reserve_back(cb_affine_or_out, onetile);
+        DPRINT_PACK(DPRINT << "this is the pack cb_affine_or_out" << ENDL());
 
         mul_binary_tile_init();
         tile_regs_acquire();
@@ -129,10 +152,14 @@ ALWI void batchnorm_bcast_tiles(
     }
     cb_pop_front(cb_den, onetile);
 
+    // DPRINT_MATH(DPRINT << "this is the math kernel - 4" << ENDL());
+    // DPRINT_PACK(DPRINT << "this is the pack kernel - 4" << ENDL());
+    // DPRINT_UNPACK(DPRINT << "this is the unpack kernel - 4" << ENDL());
+
     if (weight_has_value) {  // result = result * weight
         cb_wait_front(cb_weight, onetile);
-        DPRINT << "cb_weight : " << ENDL();
-        DPRINT << TSLICE(cb_weight, 0, SliceRange::h0_w0_32()) << ENDL();
+        // DPRINT << "cb_weight : " << ENDL();
+        // DPRINT << TSLICE(cb_weight, 0, SliceRange::h0_w0_32()) << ENDL();
         for (uint32_t j = tile_start; j < freq; ++j) {
             cb_wait_front(cb_affine_or_out, onetile);
             // DPRINT << "cb_affine_or_out : " << ENDL();
@@ -161,10 +188,14 @@ ALWI void batchnorm_bcast_tiles(
         cb_pop_front(cb_weight, onetile);
     }
 
+    // DPRINT_MATH(DPRINT << "this is the math kernel - 5" << ENDL());
+    // DPRINT_PACK(DPRINT << "this is the pack kernel - 5" << ENDL());
+    // DPRINT_UNPACK(DPRINT << "this is the unpack kernel - 5" << ENDL());
+
     if (bias_has_value) {  // result = result + bias
         cb_wait_front(cb_bias, onetile);
-        DPRINT << "cb_bias : " << ENDL();
-        DPRINT << TSLICE(cb_bias, 0, SliceRange::h0_w0_32()) << ENDL();
+        // DPRINT << "cb_bias : " << ENDL();
+        // DPRINT << TSLICE(cb_bias, 0, SliceRange::h0_w0_32()) << ENDL();
         for (uint32_t j = tile_start; j < freq; ++j) {
             cb_wait_front(cb_tmp_1, onetile);
             // DPRINT << "cb_tmp_1 : " << ENDL();
@@ -192,6 +223,10 @@ ALWI void batchnorm_bcast_tiles(
         }
         cb_pop_front(cb_bias, onetile);
     }
+
+    // DPRINT_MATH(DPRINT << "this is the math kernel - 6" << ENDL());
+    // DPRINT_PACK(DPRINT << "this is the pack kernel - 6" << ENDL());
+    // DPRINT_UNPACK(DPRINT << "this is the unpack kernel - 6" << ENDL());
 }
 
 void MAIN {
@@ -201,9 +236,9 @@ void MAIN {
     constexpr uint32_t weight_has_value = get_compile_time_arg_val(0) == 1;
     constexpr uint32_t bias_has_value = get_compile_time_arg_val(1) == 1;
     DPRINT << "compute kernel - 1" << ENDL();
-    DPRINT << "     num_tiles : " << num_tiles << ENDL();
-    DPRINT << "     tile_freq : " << tile_freq << ENDL();
-    DPRINT << "     tile_start : " << tile_start << ENDL();
+    // DPRINT << "     num_tiles : " << num_tiles << ENDL();
+    // DPRINT << "     tile_freq : " << tile_freq << ENDL();
+    // DPRINT << "     tile_start : " << tile_start << ENDL();
 
     if (num_tiles == 0) {
         return;
@@ -228,7 +263,10 @@ void MAIN {
 
     uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;
     uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;
+    // DPRINT << "complete_iterations: "<< complete_iterations << ENDL();
+    // DPRINT << "remaining_iterations: "<< remaining_iterations << ENDL();
     for (uint32_t i = 0; i < complete_iterations; ++i, tile_start = 0) {
+        DPRINT << "     iteration first: " << i << ENDL();
         batchnorm_bcast_tiles(
             cb_bcast,
             cb_other,
@@ -246,6 +284,7 @@ void MAIN {
             bias_has_value);
     }
     if (remaining_iterations > 0) {
+        DPRINT << "     iteration second: " << ENDL();
         batchnorm_bcast_tiles(
             cb_bcast,
             cb_other,
