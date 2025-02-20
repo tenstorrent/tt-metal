@@ -45,6 +45,7 @@ constexpr uint32_t RUN_SYNC_MSG_GO = 0x80;
 // Trigger loading CBs (and IRAM) before actually running the kernel.
 constexpr uint32_t RUN_SYNC_MSG_LOAD = 0x1;
 constexpr uint32_t RUN_SYNC_MSG_WAITING_FOR_RESET = 0x2;
+constexpr uint32_t RUN_SYNC_MSG_INIT_SYNC_REGISTERS = 0x3;
 constexpr uint32_t RUN_SYNC_MSG_DONE = 0;
 constexpr uint32_t RUN_SYNC_MSG_ALL_GO = 0x80808080;
 constexpr uint32_t RUN_SYNC_MSG_ALL_SLAVES_DONE = 0;
