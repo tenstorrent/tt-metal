@@ -143,6 +143,7 @@ typedef struct test_board {
         device_handle_map = tt::tt_metal::detail::CreateDevices(available_chip_ids);
         if (metal_fabric_init_level == 0) {
             _init_control_plane(mesh_graph_descriptor);
+            control_plane->configure_routing_tables();
         } else {
             control_plane = tt::DevicePool::instance().get_control_plane();
         }
