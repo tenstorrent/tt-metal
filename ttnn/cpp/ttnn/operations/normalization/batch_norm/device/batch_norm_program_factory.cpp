@@ -49,18 +49,31 @@ void set_or_update_runtime_arguments(
 
     constexpr bool row_major = true;
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
+    tt::log_info(tt::LogOp, "num_cores_x = {}", num_cores_x);
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    tt::log_info(tt::LogOp, "num_cores_y = {}", num_cores_y);
     uint32_t num_cores_total = num_cores_x * num_cores_y;
+    tt::log_info(tt::LogOp, "Iteration --> num_cores_total = {}", num_cores_total);
     auto all_device_cores = CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1});
+    tt::log_info(tt::LogOp, "all_device_cores = {}", all_device_cores);
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_output_tiles, row_major);
+    tt::log_info(tt::LogOp, "num_cores = {}", num_cores);
+    tt::log_info(tt::LogOp, "all_cores = {}", all_cores);
+    tt::log_info(tt::LogOp, "core_group_1 = {}", core_group_1);
+    tt::log_info(tt::LogOp, "core_group_2 = {}", core_group_2);
+    tt::log_info(tt::LogOp, "num_tiles_per_core_group_1 = {}", num_tiles_per_core_group_1);
+    tt::log_info(tt::LogOp, "num_tiles_per_core_group_2 = {}", num_tiles_per_core_group_2);
 
     auto cores = grid_to_cores(num_cores_total, num_cores_x, num_cores_y, row_major);
+    tt::log_info(tt::LogOp, "cores = {}", cores);
     constexpr size_t num_reader_args = 11;
     constexpr size_t num_writer_args = 14;
     constexpr size_t num_kernel_args = 3;
     for (uint32_t i = 0, start_tile_id = 0; i < num_cores_total; i++) {
         const auto& core = cores[i];
+        tt::log_info(tt::LogOp, "   Working on core = {}", core);
+        tt::log_info(tt::LogOp, "   Working on start_tile_id = {}", start_tile_id);
 
         uint32_t num_tiles_per_core;
         if (core_group_1.contains(core)) {
@@ -74,13 +87,16 @@ void set_or_update_runtime_arguments(
             continue;
         }
 
-        tt::log_info(tt::LogOp, "check 7");
+        tt::log_info(tt::LogOp, "Working on");
         uint32_t cHtWt = cHt * cWt;
+        tt::log_info(tt::LogOp, "check here : 1");
         const auto scalar = eps;
+        tt::log_info(tt::LogOp, "check here : 2");
         const auto packed_scalar_eps = input_tensor.get_dtype() == DataType::FLOAT32
                                            ? std::bit_cast<uint32_t>(scalar)
                                            : pack_two_bfloat16_into_uint32({scalar, scalar});
 
+        tt::log_info(tt::LogOp, "check here : 3");
         std::array reader_runtime_args = {
             packed_scalar_eps,
             input_tensor.buffer()->address(),
@@ -93,10 +109,13 @@ void set_or_update_runtime_arguments(
             cC,
             cHt,
             cWt};
+        tt::log_info(tt::LogOp, "check here : 4");
         handle_args(program, reader_kernel_id, core, reader_runtime_args);
+        tt::log_info(tt::LogOp, "check here : 5");
 
         const auto weight_addr = weight_has_value ? weight_tensor->buffer()->address() : 0;
         const auto bias_addr = bias_has_value ? bias_tensor->buffer()->address() : 0;
+        tt::log_info(tt::LogOp, "check here : 6");
         std::array writer_runtime_args = {
             batch_mean_tensor.buffer()->address(),  //  batch mean
             batch_var_tensor.buffer()->address(),   //  batch var
@@ -112,13 +131,17 @@ void set_or_update_runtime_arguments(
             cC,
             cHt,
             cWt};
+        tt::log_info(tt::LogOp, "check here : 7");
         handle_args(program, writer_kernel_id, core, writer_runtime_args);
 
         auto counter = start_tile_id % cHtWt;
         auto freq = cHtWt;
 
+        tt::log_info(tt::LogOp, "check here : 8");
         std::array compute_runtime_args = {num_tiles_per_core, freq, counter};
+        tt::log_info(tt::LogOp, "check here : 9");
         handle_args(program, compute_kernel_id, core, compute_runtime_args);
+        tt::log_info(tt::LogOp, "check here : 10");
 
         start_tile_id += num_tiles_per_core;
     }
@@ -169,6 +192,8 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
     // we parallelize the computation across the output tiles
     constexpr bool row_major = true;
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    // auto compute_with_storage_grid_size = CoreCoord{1, 1};
+    tt::log_info(tt::LogOp, "compute_with_storage_grid_size = {}", compute_with_storage_grid_size);
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     auto all_device_cores = CoreRange({0, 0}, {num_cores_x - 1, num_cores_y - 1});
