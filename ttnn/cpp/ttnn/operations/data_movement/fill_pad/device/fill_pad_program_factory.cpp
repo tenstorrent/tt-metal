@@ -93,6 +93,11 @@ operation::ProgramWithCallbacks fill_pad_multi_core(const Tensor& input_tensor, 
         compute_defines["SHARDED"] = "1";
     }
 
+    std::map<string, string> compute_defines;
+    if (sharded) {
+        compute_defines["SHARDED"] = "1";
+    }
+
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/fill_pad/device/kernels/dataflow/fill_pad_writer.cpp",
