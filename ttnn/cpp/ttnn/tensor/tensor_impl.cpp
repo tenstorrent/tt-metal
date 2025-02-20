@@ -833,15 +833,12 @@ Tensor to_device_mesh_tensor(
             },
             [&mesh_device, &mesh_buffer, &tensor_spec](const MultiDeviceHostStorage& storage) {
                 // Shard multi device host shards across devices in a mesh..
-                // TT_THROW("Sharding data across devices in a mesh.");
                 return shard_to_mesh_buffer<T>(storage, mesh_device, mesh_buffer, tensor_spec);
             },
             [](const auto& s) -> DeviceStorage { TT_THROW("Unexpected storage type {}", tt::stl::get_type_name(s)); }},
         tensor.get_storage());
 
-    auto output = Tensor(std::move(mesh_storage), tensor_spec);
-    output.set_device(mesh_device);
-    return output;
+    return Tensor(std::move(mesh_storage), tensor_spec);
 }
 
 template Tensor to_device_mesh_tensor<bfloat16>(

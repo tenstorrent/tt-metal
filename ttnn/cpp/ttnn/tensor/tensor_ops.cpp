@@ -237,7 +237,6 @@ Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout, distri
             });
         }
         tensor_modified_layout = tt::tt_metal::set_tensor_id(tensor_modified_layout);
-        tensor_modified_layout.set_device(mesh_device);
         GraphTracker::instance().track_function_end(tensor_modified_layout);
         return tensor_modified_layout;
     }

@@ -142,8 +142,6 @@ public:
 
     std::vector<IDevice*> get_workers(bool blocking = false) const;
 
-    void set_device(distributed::MeshDevice* mesh_device) { mesh_device_ = mesh_device; }
-
     // Converts a buffer of elements of type `T` to a `Tensor`.
     // Elements in the buffer are assumed to be stored in row-major order. The size of the buffer and the type of the
     // elements have to match `spec`; block float formats such as BFLOAT8_B and BFLOAT4_B require `T` equal `float`.
