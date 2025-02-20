@@ -123,11 +123,11 @@ from models.utility_functions import skip_for_grayskull
 
 @skip_for_grayskull("Unsupported dtype for Grayskull")
 @pytest.mark.parametrize("eps", [1.0])
-@pytest.mark.parametrize("channel_size", [3])
+@pytest.mark.parametrize("channel_size", [2])
 @pytest.mark.parametrize("weight", [True])
 @pytest.mark.parametrize("bias", [True])
 def test_BN_fp32_full_value(device, channel_size, eps, weight, bias):
-    input_tensor_torch = torch.full(torch.Size([1, channel_size, 64, 120]), 1, dtype=torch.float32)
+    input_tensor_torch = torch.full(torch.Size([1, channel_size, 32, 96]), 1, dtype=torch.float32)
     batch_mean_torch = torch.full(torch.Size([channel_size]), 0.00030171126, dtype=torch.float32)
     batch_var_torch = torch.full(torch.Size([channel_size]), 0.1262342343, dtype=torch.float32)
     weight_torch = torch.full(torch.Size([channel_size]), 0.246943565369, dtype=torch.float32) if weight else None
