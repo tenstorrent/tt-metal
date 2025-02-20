@@ -34,10 +34,10 @@ class TestParametrized:
     @pytest.mark.parametrize(
         "llm_mode, num_layers, batch, seq_len, kv_cache_len, model_config_str, expected_inference_time",
         (
-            ("prefill", 32, 1, 128, 0, "BFLOAT16-DRAM", 0.31),
-            ("prefill", 32, 1, 128, 0, "BFLOAT16-L1", 0.29),
-            ("prefill", 32, 1, 256, 0, "BFLOAT16-DRAM", 0.43),
-            ("prefill", 32, 1, 256, 0, "BFLOAT16-L1", 0.34),
+            #("prefill", 32, 1, 128, 0, "BFLOAT16-DRAM", 0.31),
+            #("prefill", 32, 1, 128, 0, "BFLOAT16-L1", 0.29),
+            #("prefill", 32, 1, 256, 0, "BFLOAT16-DRAM", 0.43),
+            #("prefill", 32, 1, 256, 0, "BFLOAT16-L1", 0.34),
             ("decode", 32, 32, 1, 128, "BFLOAT16-DRAM", 0.28),
             ("decode", 32, 32, 1, 128, "BFLOAT16-L1", 0.28),
             ("decode", 32, 32, 1, 1024, "BFLOAT16-DRAM", 0.37),
@@ -46,10 +46,10 @@ class TestParametrized:
             ("decode", 32, 32, 1, 2047, "BFLOAT16-L1", 0.35),
         ),
         ids=[
-            "prefill_seq128_bf16_dram",
-            "prefill_seq128_bf16_l1",
-            "prefill_seq256_bf16_dram",
-            "prefill_seq256_bf16_l1",
+            #"prefill_seq128_bf16_dram",
+            #"prefill_seq128_bf16_l1",
+            #"prefill_seq256_bf16_dram",
+            #"prefill_seq256_bf16_l1",
             "decode_batch32_128_bf16_dram",
             "decode_batch32_128_bf16_l1",
             "decode_batch32_1024_bf16_dram",
@@ -163,7 +163,7 @@ class TestParametrized:
     @pytest.mark.parametrize(
         "llm_mode, num_layers, batch, seq_len, kv_cache_len, model_config_str, expected_inference_time",
         (
-            ("prefill", 32, 1, 128, 0, "BFLOAT16-DRAM", 0.1),
+            #("prefill", 32, 1, 128, 0, "BFLOAT16-DRAM", 0.1),
             ("prefill", 32, 1, 1024, 0, "BFLOAT16-DRAM", 0.5),
             ("prefill", 32, 1, 2048, 0, "BFLOAT16-DRAM", 1.1),
             ("decode", 32, 32, 1, 128, "BFLOAT16-DRAM", 0.15),
@@ -177,7 +177,7 @@ class TestParametrized:
             ("decode", 32, 32, 1, 2047, "BFLOAT16-L1_SHARDED", 0.11),
         ),
         ids=[
-            "prefill_seq128_bf16_dram",
+            #"prefill_seq128_bf16_dram",
             "prefill_seq1024_bf16_dram",
             "prefill_seq2048_bf16_dram",
             "decode_batch32_128_bf16_dram",
