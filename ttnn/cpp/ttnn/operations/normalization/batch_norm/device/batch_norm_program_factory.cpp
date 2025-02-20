@@ -45,8 +45,6 @@ void set_or_update_runtime_arguments(
 
     uint32_t num_output_tiles = c.volume() / c.tensor_spec().tile().get_tile_hw();
 
-    tt::log_info(tt::LogOp, "check 6");
-
     constexpr bool row_major = true;
     uint32_t num_cores_x = compute_with_storage_grid_size.x;
     tt::log_info(tt::LogOp, "num_cores_x = {}", num_cores_x);
@@ -89,14 +87,11 @@ void set_or_update_runtime_arguments(
 
         // tt::log_info(tt::LogOp, "Working on");
         uint32_t cHtWt = cHt * cWt;
-        tt::log_info(tt::LogOp, "check here : 1");
         const auto scalar = eps;
-        tt::log_info(tt::LogOp, "check here : 2");
         const auto packed_scalar_eps = input_tensor.get_dtype() == DataType::FLOAT32
                                            ? std::bit_cast<uint32_t>(scalar)
                                            : pack_two_bfloat16_into_uint32({scalar, scalar});
 
-        tt::log_info(tt::LogOp, "check here : 3");
         std::array reader_runtime_args = {
             packed_scalar_eps,
             input_tensor.buffer()->address(),
@@ -109,13 +104,10 @@ void set_or_update_runtime_arguments(
             cC,
             cHt,
             cWt};
-        tt::log_info(tt::LogOp, "check here : 4");
         handle_args(program, reader_kernel_id, core, reader_runtime_args);
-        tt::log_info(tt::LogOp, "check here : 5");
 
         const auto weight_addr = weight_has_value ? weight_tensor->buffer()->address() : 0;
         const auto bias_addr = bias_has_value ? bias_tensor->buffer()->address() : 0;
-        tt::log_info(tt::LogOp, "check here : 6");
         std::array writer_runtime_args = {
             batch_mean_tensor.buffer()->address(),  //  batch mean
             batch_var_tensor.buffer()->address(),   //  batch var
@@ -131,7 +123,6 @@ void set_or_update_runtime_arguments(
             cC,
             cHt,
             cWt};
-        tt::log_info(tt::LogOp, "check here : 7");
         handle_args(program, writer_kernel_id, core, writer_runtime_args);
 
         tt::log_info(tt::LogOp, "num_tiles_per_core = {}", num_tiles_per_core);
@@ -142,11 +133,8 @@ void set_or_update_runtime_arguments(
         tt::log_info(tt::LogOp, "counter = {}", counter);
         tt::log_info(tt::LogOp, "freq = {}", freq);
 
-        tt::log_info(tt::LogOp, "check here : 8");
         std::array compute_runtime_args = {num_tiles_per_core, freq, counter};
-        tt::log_info(tt::LogOp, "check here : 9");
         handle_args(program, compute_kernel_id, core, compute_runtime_args);
-        tt::log_info(tt::LogOp, "check here : 10");
 
         start_tile_id += num_tiles_per_core;
     }
