@@ -1,6 +1,6 @@
-**TENSTORRENT BUG BOUNTY PROGRAM TERMS AND CONDITIONS**
+**TENSTORRENT BOUNTY PROGRAM TERMS AND CONDITIONS**
 
-Please read these terms and conditions (these “**Terms**”), which form a legally binding contract between Tenstorrent AI ULC and its affiliates (“**Tenstorrent**,” “**us**,” or “**our**”) and qualifying individuals (“**Participant**,” “**you**,” or “**your**”) who wish to participate in Tenstorrent’s bug bounty program (the “**Program**”) and identify software issues in and potential improvements to our in-scope products (“**Bugs**”). Participants that submit acceptable bug reports shall be eligible to earn a payout (a “**Bounty**”), as determined solely in Tenstorrent’s discretion, in accordance with these Terms.
+Please read these terms and conditions (these “**Terms**”), which form a legally binding contract between Tenstorrent AI ULC and its affiliates (“**Tenstorrent**,” “**us**,” or “**our**”) and qualifying individuals (“**Participant**,” “**you**,” or “**your**”) who wish to participate in Tenstorrent’s bounty program (the “**Program**”) and identify software issues in and potential improvements to our in-scope products (“**Bugs**”). Participants that submit acceptable bug reports shall be eligible to earn a payout (a “**Bounty**”), as determined solely in Tenstorrent’s discretion, in accordance with these Terms.
 
 These Terms include important clauses, including without limitation, instances where Participants may be liable to Tenstorrent, a class action waiver, and other limitations of your rights and remedies. Disputes will be adjudicated solely in the courts of the State of California. By participating in the Program, all Participants must agree to be bound by these Terms and comply with these Terms. If an individual does not wish to, or cannot comply with these Terms, they are ineligible for a Bounty Payout and must not participate in the Program.
 
@@ -16,10 +16,10 @@ To be eligible to participate in the Program you must:
 
 * be the legal age of majority in your country and have the legal capacity to enter into, and be bound by, these Terms;
 * if you are participating in the Program as an entity, have the legal authority to accept these Terms on the applicable entity’s behalf (in which case “you” will mean the foregoing entity);
-* not be subject to legal obligations that prevent you from participating in the bug bounty Program (for example, under your employment contract or ethical rules);
+* not be subject to legal obligations that prevent you from participating in the bounty Program (for example, under your employment contract or ethical rules);
 * not be a sanctioned person or a citizen or resident of a sanctioned country under applicable law, including under U.S. embargo or sanctions;
 * not be in violation of any applicable laws or regulations when participating in the Program;
-* not ask for payment in exchange for Bug details or dispute the applicability of the bug bounty Program to you, including the amount of any proposed or actual payment or categorization of a Bug; and
+* not ask for payment in exchange for Bug details or dispute the applicability of the bounty Program to you, including the amount of any proposed or actual payment or categorization of a Bug; and
 * not be a current employee, vendor, contractor, or agent for Tenstorrent.
 
 You may be required to provide Tenstorrent with proof of compliance and eligibility in the form requested with regard to any of your obligations hereunder. Tenstorrent reserves the right to limit or refuse your eligibility to participate in the Program for any reason in its sole discretion, including but not limited to where your participation is prohibited by any applicable law. If Tenstorrent becomes aware of any violation of these Terms, Tenstorrent may elect to, among other things, (a) withhold, amend, or cancel the benefits of or payments under the Program or (b) require return of any payment made to you, including taking any action at law to obtain such payment.
@@ -93,7 +93,7 @@ These Terms shall be governed by and construed in accordance with the laws of th
 
 These Terms will be binding on and will inure to the benefit of the legal representatives, successors and assigns of the parties hereto. These Terms (and any policies referenced herein and incorporated by reference) constitute the entire agreement between you and us with respect to the subject matter hereof, and you have not relied upon any promises or representations by us with respect to the subject matter except as set forth herein. You may not assign these Terms or assign any rights or delegate any obligations hereunder, in whole or in part, whether voluntarily or by operation of law. The governing language of these Terms is English. A person who is not a party to these Terms has no rights to enforce, or to enjoy the benefit of, any term of these Terms.
 
-**Exhibit A – Tenstorrent Bug Bounty Rewards Chart**
+**Exhibit A – Tenstorrent Bounty Rewards Chart**
 
 | Category | Definition | Examples |  Payment Range  (US Dollars) |
 | :---- | :---- | :---- | :---- |
