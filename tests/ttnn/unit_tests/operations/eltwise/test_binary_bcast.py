@@ -1005,6 +1005,7 @@ def test_inplace_binary_ops_fp32(input_shapes, ttnn_fn, device):
         (torch.Size([1, 1, 31, 32]), torch.Size([5, 3, 32, 32])),
         (torch.Size([5, 2, 64, 1]), torch.Size([1, 3, 1, 128])),
         (torch.Size([5, 1, 1, 64]), torch.Size([2, 3, 128, 1])),
+        (torch.Size([2, 2, 3, 128, 1]), torch.Size([2, 3, 128, 1])),
     ),
 )
 @pytest.mark.parametrize(
@@ -1102,6 +1103,7 @@ def test_binary_opt_output_invalid_bcast(a_shape, b_shape, out_shape, ttnn_fn, d
         ttnn_op(input_tensor_a, input_tensor_b, queue_id=cq_id, output_tensor=out_tt)
 
 
+@skip_for_grayskull()
 @pytest.mark.parametrize(
     "dtype_pt, dtype_tt",
     (
@@ -1194,7 +1196,7 @@ def test_binary_sharded_invalid_bcast(device):
 
 @pytest.mark.parametrize(
     "a_shape, b_shape",
-    ((torch.Size([5, 7, 2, 35]), torch.Size([5, 7, 2, 35])),),
+    ((torch.Size([1, 5, 7, 2, 35]), torch.Size([1, 5, 7, 2, 35])),),
 )
 @pytest.mark.parametrize(
     "shard_type, shard_size, core_range",
@@ -1204,7 +1206,7 @@ def test_binary_sharded_invalid_bcast(device):
         [ttnn.ShardStrategy.BLOCK, [32 * 5, 32], ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (1, 6))})],
     ),
 )
-def test_binary_sharded_small_tile_row_major(a_shape, b_shape, shard_type, shard_size, core_range, device):
+def test_binary_sharded_small_tile(a_shape, b_shape, shard_type, shard_size, core_range, device):
     a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.bfloat16), ttnn.bfloat16)(a_shape)
     b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.bfloat16), ttnn.bfloat16)(b_shape)
 
@@ -1237,6 +1239,30 @@ def test_binary_sharded_small_tile_row_major(a_shape, b_shape, shard_type, shard
     assert ttnn.pearson_correlation_coefficient(out_tt_sharded, out_pt) >= 0.99988
 
 
+@pytest.mark.parametrize(
+    "ttnn_fn",
+    [
+        ttnn.experimental.add,
+        ttnn.experimental.sub,
+        ttnn.experimental.mul,
+        # ttnn.experimental.div,
+        # ttnn.experimental.rsub,
+        ttnn.experimental.eq,
+        ttnn.experimental.ne,
+        ttnn.experimental.gt,
+        ttnn.experimental.gte,
+        ttnn.experimental.lt,
+        # ttnn.experimental.lte,
+        ttnn.experimental.logical_or,
+        # ttnn.experimental.logical_xor,
+        ttnn.experimental.logical_and,
+        # ttnn.experimental.ldexp,
+        # ttnn.experimental.logaddexp,
+        # ttnn.experimental.logaddexp2,
+        # ttnn.experimental.squared_difference,
+        # ttnn.experimental.bias_gelu,
+    ],
+)
 @pytest.mark.parametrize(
     "a_shape, b_shape, shard_type, shard_size, core_range",
     (
@@ -1284,7 +1310,9 @@ def test_binary_sharded_small_tile_row_major(a_shape, b_shape, shard_type, shard
         ],
     ),
 )
-def test_binary_sharded_col_major(a_shape, b_shape, shard_type, shard_size, core_range, device):
+def test_binary_sharded_col_major(a_shape, b_shape, shard_type, shard_size, core_range, ttnn_fn, device):
+    golden_function = ttnn.get_golden_function(ttnn_fn)
+
     a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.bfloat16), ttnn.bfloat16)(a_shape)
     b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.bfloat16), ttnn.bfloat16)(b_shape)
 
@@ -1319,12 +1347,12 @@ def test_binary_sharded_col_major(a_shape, b_shape, shard_type, shard_size, core
             memory_config=dst_config,
         )
 
-        out_pt = torch.add(a_pt, b_pt)
+        out_pt = golden_function(a_pt, b_pt)
 
-        out_tt_sharded = ttnn.experimental.add(a_tt, b_tt, memory_config=shard_config)
+        out_tt_sharded = ttnn_fn(a_tt, b_tt, memory_config=shard_config)
         out_tt_sharded = ttnn.to_torch(out_tt_sharded)
         assert ttnn.pearson_correlation_coefficient(out_tt_sharded, out_pt) >= 0.99988
 
-        out_tt_interleaved = ttnn.experimental.add(a_tt, b_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        out_tt_interleaved = ttnn_fn(a_tt, b_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         out_tt_interleaved = ttnn.to_torch(out_tt_interleaved)
         assert ttnn.pearson_correlation_coefficient(out_tt_interleaved, out_pt) >= 0.99988
