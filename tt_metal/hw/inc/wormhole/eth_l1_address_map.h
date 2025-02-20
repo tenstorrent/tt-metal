@@ -8,6 +8,14 @@
 
 #include "noc/noc_parameters.h"
 
+namespace eth_iram_mem {
+struct address_map {
+    static constexpr std::int32_t ERISC_IRAM_BASE = 0xFFC00000;
+    static constexpr std::int32_t ERISC_IRAM_SIZE = 16 * 1024;
+    static constexpr std::int32_t ERISC_KERNEL_BASE = ERISC_IRAM_BASE;
+};
+};  // namespace eth_iram_mem
+
 namespace eth_l1_mem {
 
 struct address_map {
@@ -38,12 +46,12 @@ struct address_map {
     // Base addresses
     static constexpr std::int32_t FIRMWARE_BASE = 0x9040;
     static constexpr std::int32_t L1_EPOCH_Q_BASE = 0x9000;  // Epoch Q start in L1.
+    static constexpr std::int32_t KERNEL_BASE = 0xA840;
     static constexpr std::int32_t COMMAND_Q_BASE = L1_EPOCH_Q_BASE + FIRMWARE_SIZE;
     static constexpr std::int32_t DATA_BUFFER_BASE = COMMAND_Q_BASE + COMMAND_Q_SIZE;
     static constexpr std::int32_t TILE_HEADER_BUFFER_BASE = DATA_BUFFER_BASE + DATA_BUFFER_SIZE;
 
     // TT Metal Specific
-    static constexpr std::int32_t ERISC_FIRMWARE_SIZE = 2 * 1024;
     // Total 160 * 1024 L1 starting from TILE_HEADER_BUFFER_BASE
     //    -   1 * 1024 misc args
     //    -  53 * 1024 eth app reserved buffer space

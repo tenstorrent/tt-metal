@@ -40,6 +40,28 @@ uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used));
 int32_t bank_to_dram_offset[NUM_DRAM_BANKS] __attribute__((used));
 int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
 
+#if defined(ARCH_WORMHOLE)
+void l1_to_erisc_iram_copy(volatile uint32_t* iram_load_reg) {
+    // Trigger copy of code from L1 to IRAM.
+    *iram_load_reg = eth_l1_mem::address_map::TILE_HEADER_BUFFER_BASE >> 4;
+    RISC_POST_STATUS(0x10000000);
+}
+
+void l1_to_erisc_iram_copy_wait(volatile uint32_t* iram_load_reg) {
+    // Wait for copy to complete.
+    while (*iram_load_reg & 0x1);
+}
+
+void iram_setup() {
+    // Copy code from L1 to IRAM.
+    //  TODO: enable/disable mac
+    volatile uint32_t* iram_load_reg;
+    l1_to_erisc_iram_copy(iram_load_reg);
+    l1_to_erisc_iram_copy_wait(iram_load_reg);
+}
+
+#endif
+
 void __attribute__((noinline)) Application(void) {
     WAYPOINT("I");
 
@@ -85,6 +107,9 @@ void __attribute__((noinline)) Application(void) {
             if (enables & DISPATCH_CLASS_MASK_ETH_DM0) {
                 WAYPOINT("R");
                 firmware_config_init(mailboxes, ProgrammableCoreType::ACTIVE_ETH, DISPATCH_CLASS_ETH_DM0);
+#if defined(ARCH_WORMHOLE)
+                iram_setup();
+#endif
                 kernel_init(0);
                 WAYPOINT("D");
             }
