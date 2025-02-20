@@ -10,7 +10,7 @@
 #include "cpp/ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
 
 void kernel_main() {
-    DPRINT << "this is the reader kernel - 1" << ENDL();
+    DPRINT << "this is the reader kernel" << ENDL();
     const auto eps = get_arg_val<uint32_t>(0);
     uint32_t src_addr = get_arg_val<uint32_t>(1);  // input tensor
     uint32_t start_tile_id = get_arg_val<uint32_t>(2);
@@ -61,9 +61,9 @@ void kernel_main() {
 
     uint32_t num_tiles_read = 0;
     for (uint32_t n = start_n; n < N && num_tiles_read < num_tiles; ++n, start_c = 0) {
-        DPRINT << "n kernel" << ENDL();
+        // DPRINT << "n kernel" << ENDL();
         for (uint32_t c = start_c; c < C && num_tiles_read < num_tiles; ++c, start_t = 0) {
-            DPRINT << "c kernel" << ENDL();
+            // DPRINT << "c kernel" << ENDL();
             for (uint32_t t = start_t; t < HtWt && num_tiles_read < num_tiles; ++t, ++num_tiles_read, ++tile_offset) {
                 // SliceRange sr = SliceRange{.h0 = 4, .h1 = 5, .hs = 1, .w0 = 0, .w1 = 32, .ws = 1};
                 cb_reserve_back(cb_id_src, onetile);
@@ -71,7 +71,7 @@ void kernel_main() {
                 noc_async_read_tile(tile_offset, src, l1_write_addr_src);
                 noc_async_read_barrier();
                 cb_push_back(cb_id_src, onetile);
-                DPRINT_UNPACK(DPRINT << "this is the reader kernel - 2" << ENDL());
+                // DPRINT_UNPACK(DPRINT << "this is the reader kernel - 2" << ENDL());
                 // DPRINT_UNPACK({ DPRINT << (uint)4 << " --READ--cin1-- " << TileSlice(0, 0, sr, true, false) <<
                 // ENDL(); });
             }
