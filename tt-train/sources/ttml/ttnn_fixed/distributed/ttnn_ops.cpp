@@ -54,7 +54,7 @@ tt::tt_metal::Tensor scatter(const tt::tt_metal::Tensor& tensor, int dim) {
     ttnn::SmallVector<uint32_t> end{tensor_shape[0], tensor_shape[1], tensor_shape[2], tensor_shape[3]};
     ttnn::SmallVector<uint32_t> stride{1U, 1U, 1U, 1U};
 
-    std::vector<tt::tt_metal::Tensor> scattered_tensors;
+    /*std::vector<tt::tt_metal::Tensor> scattered_tensors;
     scattered_tensors.reserve(num_tensor_buffers);
     for (size_t device_index = 0; device_index < num_tensor_buffers; ++device_index) {
         auto device = storage.get_buffer_for_device_id(device_index)->device();
@@ -69,7 +69,8 @@ tt::tt_metal::Tensor scatter(const tt::tt_metal::Tensor& tensor, int dim) {
     }
     auto distributed_tensor = ttnn::distributed::create_multi_device_tensor(
         scattered_tensors, ttnn::StorageType::MULTI_DEVICE, storage.strategy);
-    return distributed_tensor;
+    return distributed_tensor;*/
+    TT_THROW("Not implemented");
 }
 
 }  // namespace ttml::ttnn_fixed::distributed
