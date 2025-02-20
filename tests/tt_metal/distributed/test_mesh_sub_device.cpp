@@ -129,7 +129,8 @@ TEST_F(MeshSubDeviceTestSuite, DataCopyOnSubDevices) {
         for (std::size_t logical_x = 0; logical_x < output_buf->device()->num_cols(); logical_x++) {
             for (std::size_t logical_y = 0; logical_y < output_buf->device()->num_rows(); logical_y++) {
                 std::vector<uint32_t> dst_vec;
-                ReadShard(mesh_device_->mesh_command_queue(), dst_vec, output_buf, Coordinate(logical_y, logical_x));
+                ReadShard(
+                    mesh_device_->mesh_command_queue(), dst_vec, output_buf, MeshCoordinate(logical_y, logical_x));
                 EXPECT_EQ(dst_vec, src_vec);
             }
         }

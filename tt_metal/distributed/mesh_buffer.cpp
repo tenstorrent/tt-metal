@@ -134,10 +134,6 @@ bool MeshBuffer::is_allocated() const { return not std::holds_alternative<Deallo
 
 void MeshBuffer::deallocate() { state_ = DeallocatedState{}; }
 
-std::shared_ptr<Buffer> MeshBuffer::get_device_buffer(const Coordinate& device_coord) const {
-    return get_device_buffer(MeshCoordinate(device_coord.row, device_coord.col));
-}
-
 std::shared_ptr<Buffer> MeshBuffer::get_device_buffer(const MeshCoordinate& device_coord) const {
     return buffers_.at(device_coord);
 }
