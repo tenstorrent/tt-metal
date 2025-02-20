@@ -28,6 +28,7 @@ uint32_t get_bf16_pool_scalar(Pool2DType pool_type, uint32_t kernel_size_hw) {
     float value;
     switch (pool_type) {
         case Pool2DType::MAX_POOL2D: value = 1.; break;
+            // TODO(jongbinlimTT): 1.0 / kernel_size_hw for avg pool.
     }
     return bfloat16(value).to_packed();
 }
@@ -39,6 +40,7 @@ uint32_t get_bf16_pool_init_value(Pool2DType pool_type) {
     float value;
     switch (pool_type) {
         case Pool2DType::MAX_POOL2D: value = -std::numeric_limits<float>::infinity(); break;
+            // TODO(jongbinlimTT): 0 for avg pool.
     }
     return bfloat16(value).to_packed();
 }
@@ -302,10 +304,9 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     /**
      * Reader Kernel: input rows -> input cb
      */
-    float one = 1.;
-    uint32_t bf16_scalar = get_bf16_pool_scalar(pool_type, kernel_size_hw) << 16;  // << 16 is for maxpool.
-    // const uint32_t bf16_scalar = 1.0f; // TODO(jongbinlimTT): 1.0 for max pool, 1.0 / kernel_size for avg pool.
-    const uint32_t bf16_init_value =
+    // TODO(jongbinlimTT): 1.0 for max pool, 1.0 / kernel_size for avg pool.
+    uint32_t bf16_scalar = get_bf16_pool_scalar(pool_type, kernel_size_hw) << 16;  // << 16 is needed for maxpool.
+    uint32_t bf16_init_value =
         get_bf16_pool_init_value(pool_type);  // TODO(jongbinlimTT): -inf for max pool, 0 for avg pool.
 
     std::vector<uint32_t> reader0_ct_args = {

@@ -72,10 +72,11 @@ void kernel_main() {
     // Reduce scalar = 1
     if (reader_id == 0) {
         cb_reserve_back(in_scalar_cb_id, 1);
-        uint32_t bf16_one_u16 = bf16_scalar >> 16;  // This scalar is bf16_one_u32 for maxpool.
+
+        // uint32_t bf16_one_u16 = bf16_scalar >> 16;  // This scalar is bf16_one_u32 for maxpool.
         // fill 1 row w/ scalar
-        fill_with_val(get_write_ptr(in_scalar_cb_id), ROW_HW, bf16_one_u16);
-        // fill_with_val(get_write_ptr(in_scalar_cb_id), ROW_HW, bf16_scalar);
+        // fill_with_val(get_write_ptr(in_scalar_cb_id), ROW_HW, bf16_one_u16);
+        fill_with_val(get_write_ptr(in_scalar_cb_id), ROW_HW, bf16_scalar >> 16);
         cb_push_back(in_scalar_cb_id, 1);
     }
 

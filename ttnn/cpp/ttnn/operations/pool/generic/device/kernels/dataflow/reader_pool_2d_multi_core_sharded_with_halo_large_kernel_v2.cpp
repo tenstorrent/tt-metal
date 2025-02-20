@@ -78,14 +78,15 @@ void kernel_main() {
     if (reader_id == 0) {
         cb_reserve_back(in_scalar_cb_id, 1);
 
-        uint32_t bf16_one_u16 = bf16_scalar >> 16;  // This scalar is bf16_one_u32 for maxpool.
+        // uint32_t bf16_one_u16 = bf16_scalar >> 16;  // This scalar is bf16_one_u32 for maxpool.
+        // needed for maxpool.
         // fill interm buffer with minus_inf
         // // fill interm buffer with init_value
         fill_with_val(get_write_ptr(interm_reduction_cb_id), in_cb_sz, minus_inf);
         // // fill_with_val(get_write_ptr(interm_reduction_cb_id), in_cb_sz, bf16_init_value);
         // fill 1 row w/ scalar
-        fill_with_val(get_write_ptr(in_scalar_cb_id), ROW_HW, bf16_one_u16);
-        // fill_with_val(get_write_ptr(in_scalar_cb_id), ROW_HW, bf16_scalar);
+        // fill_with_val(get_write_ptr(in_scalar_cb_id), ROW_HW, bf16_one_u16);
+        fill_with_val(get_write_ptr(in_scalar_cb_id), ROW_HW, bf16_scalar >> 16);  // >> 16 is needed for maxpool.
         cb_push_back(in_scalar_cb_id, 1);
     }
 
