@@ -9,9 +9,9 @@
 #include "dataflow_api.h"
 #include "noc_overlay_parameters.h"
 #include "ethernet/dataflow_api.h"
-#include "tt_fabric/hw/inc/routing_table.h"
-#include "tt_fabric/hw/inc/tt_fabric_interface.h"
-#include "tt_fabric/hw/inc/eth_chan_noc_mapping.h"
+#include <fabric_host_interface.h>
+#include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
+#include "tt_metal/fabric/hw/inc/eth_chan_noc_mapping.h"
 
 using namespace tt::tt_fabric;
 
@@ -1591,9 +1591,4 @@ inline uint64_t tt_fabric_send_pull_request(uint64_t dest_addr, volatile local_p
     return words_written_addr;
 }
 
-inline void tt_fabric_init() {
-    uint32_t noc_id_reg = NOC_CMD_BUF_READ_REG(noc_index, 0, NOC_CFG(NOC_ID_LOGICAL));
-    uint32_t my_x = noc_id_reg & NOC_NODE_ID_MASK;
-    uint32_t my_y = (noc_id_reg >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
-    xy_local_addr = NOC_XY_ADDR(my_x, my_y, 0);
-}
+inline void tt_fabric_init() { xy_local_addr = get_noc_addr(0); }

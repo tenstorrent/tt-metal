@@ -157,6 +157,7 @@ public:
     virtual void init_command_queue_host() = 0;
     virtual void init_command_queue_device() = 0;
 
+    virtual void init_fabric() = 0;
     // Puts device into reset
     virtual bool close() = 0;
 

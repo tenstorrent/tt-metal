@@ -636,6 +636,10 @@ void MeshDevice::init_command_queue_device() {
     TT_THROW("init_command_queue_device() is not supported on MeshDevice - use individual devices instead");
     reference_device()->init_command_queue_device();
 }
+void MeshDevice::init_fabric() {
+    TT_THROW("init_fabric_program() is not supported on MeshDevice - use individual devices instead");
+    reference_device()->init_fabric();
+}
 void MeshDevice::synchronize() {
     // Nothing to synchronize, as all work is executed by MeshDevice is synchronous.
 }
