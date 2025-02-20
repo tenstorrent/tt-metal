@@ -105,8 +105,6 @@ Cluster::Cluster() {
         routing_info_addr_ = tt::tt_metal::hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::APP_ROUTING_INFO);
     }
 
-    this->generate_cluster_descriptor();
-
     this->initialize_device_drivers();
 
     this->reserve_ethernet_cores_for_tunneling();
@@ -143,11 +141,11 @@ void Cluster::generate_cluster_descriptor() {
     // Cluster descriptor yaml not available for Blackhole bring up
     if (this->target_type_ == TargetDevice::Simulator) {
         // Passing simulator reported physical devices as logical devices.
-        this->cluster_desc_ = tt_ClusterDescriptor::create_mock_cluster(tt_SimulationDevice::detect_available_device_ids(), this->arch_);
+        this->cluster_desc_ =
+            tt_ClusterDescriptor::create_mock_cluster(tt_SimulationDevice::detect_available_device_ids(), this->arch_)
+                .get();
     } else {
-        this->cluster_desc_ = tt_ClusterDescriptor::create_from_yaml(tt_ClusterDescriptor::get_cluster_descriptor_file_path());
-
-        // Detect cluster type
+        this->cluster_desc_ = this->driver_->get_cluster_description();
         for (const auto &chip_id : this->cluster_desc_->get_all_chips()) {
             if (this->cluster_desc_->get_board_type(chip_id) == BoardType::GALAXY) {
                 this->cluster_type_ = ClusterType::TG;
@@ -208,11 +206,17 @@ void Cluster::generate_cluster_descriptor() {
 }
 
 void Cluster::initialize_device_drivers() {
+    this->open_driver();
+    std::cout << "done opening driver" << std::endl;
+    this->generate_cluster_descriptor();
+    this->get_metal_desc_from_tt_desc(
+        this->driver_->get_virtual_soc_descriptors(), this->driver_->get_harvesting_masks_for_soc_descriptors());
+
+    std::cout << "gen cluster desc" << std::endl;
+
     for (const auto &[mmio_device_id, controlled_devices] : this->devices_grouped_by_assoc_mmio_device_) {
         this->assign_mem_channels_to_devices(mmio_device_id, controlled_devices);
     }
-
-    this->open_driver();
 
     tt_device_params default_params;
     this->start_driver(default_params);
@@ -258,7 +262,8 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
     std::unique_ptr<tt_device> device_driver;
     if (this->target_type_ == TargetDevice::Silicon) {
         const std::string sdesc_path = get_soc_description_file(this->arch_, this->target_type_);
-        std::unordered_set<chip_id_t> all_chips = this->cluster_desc_->get_all_chips();
+        std::cout << "OPENING DRIVER" << std::endl;
+        const auto& all_chips = tt::umd::Cluster::detect_available_device_ids();
         std::set<chip_id_t> all_chips_set(all_chips.begin(), all_chips.end());
         // This is the target/desired number of mem channels per arch/device.
         // Silicon driver will attempt to open this many hugepages as channels per mmio chip,
@@ -267,6 +272,7 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
         // This will remove harvested rows from the soc descriptor
         const bool perform_harvesting = true;
         const bool clean_system_resources = true;
+        std::cout << "NOW OPENING DRIVER" << std::endl;
         device_driver = std::make_unique<tt::umd::Cluster>(
             sdesc_path,
             all_chips_set,
@@ -298,8 +304,6 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
     }
     device_driver->set_barrier_address_params(barrier_params);
 
-    this->get_metal_desc_from_tt_desc(
-        device_driver->get_virtual_soc_descriptors(), device_driver->get_harvesting_masks_for_soc_descriptors());
     this->driver_ = std::move(device_driver);
 }
 
@@ -959,6 +963,11 @@ std::tuple<chip_id_t, CoreCoord> Cluster::get_connected_ethernet_core(std::tuple
         std::get<0>(eth_core));
     auto connected_eth_core =
         this->cluster_desc_->get_chip_and_channel_of_remote_ethernet_core(std::get<0>(eth_core), eth_chan);
+    std::cout << "Eth core " << std::get<1>(eth_core).str() << " (channel " << eth_chan << " ) "
+              << " on chip " << std::get<0>(eth_core) << " is connected to eth core channel "
+              << std::get<1>(connected_eth_core) << " core "
+              << soc_desc.get_eth_core_for_channel(std::get<1>(connected_eth_core)).str() << " on chip "
+              << std::get<0>(connected_eth_core) << std::endl;
     return std::make_tuple(
         std::get<0>(connected_eth_core),
         soc_desc.get_eth_core_for_channel(std::get<1>(connected_eth_core), CoordSystem::LOGICAL));
