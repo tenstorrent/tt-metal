@@ -55,19 +55,27 @@ flatbuffers::Offset<flatbuffer::CircularBufferConfig> to_flatbuffer(
         return builder.CreateVector(std::vector<uint8_t>(set.begin(), set.end()));
     };
 
-    // Optional shadow buffer for dynamically allocated CBs, get global_id or use 0 as none/nullptr.
+    // Optional shadow buffer for dynamically allocated CBs.
     auto& ctx = LightMetalCaptureContext::get();
-    auto shadow_buf_global_id = config.shadow_global_buffer ? ctx.get_global_id(config.shadow_global_buffer) : 0;
+    auto shadow_buf_global_id_offset =
+        config.shadow_global_buffer
+            ? flatbuffer::CreateUint32Optional(builder, ctx.get_global_id(config.shadow_global_buffer))
+            : 0;
+
+    auto globally_allocated_address =
+        config.globally_allocated_address()
+            ? flatbuffer::CreateUint32Optional(builder, *config.globally_allocated_address())
+            : 0;
 
     // Create the FlatBuffer object
     return flatbuffer::CreateCircularBufferConfig(
         builder,
         config.total_size(),
-        config.globally_allocated_address().value_or(0),  // Optional, default 0 if nullopt.
+        globally_allocated_address,
         create_fb_vec_of_structs(config.data_formats(), flatbuffer::CBConfigDataFormat{}),
         create_fb_vec_of_structs(config.page_sizes(), flatbuffer::CBConfigPageSize{}),
         create_fb_vec_of_structs(config.tiles(), flatbuffer::CBConfigTile{}),
-        shadow_buf_global_id,
+        shadow_buf_global_id_offset,
         create_fb_vec_of_uint8(config.buffer_indices()),
         create_fb_vec_of_uint8(config.local_buffer_indices()),
         create_fb_vec_of_uint8(config.remote_buffer_indices()),
