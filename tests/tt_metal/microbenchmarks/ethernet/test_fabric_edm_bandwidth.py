@@ -26,11 +26,11 @@ def get_device_freq():
     return freq
 
 
-def profile_results(num_mcasts, num_unicasts, line_size, packet_size):
+def profile_results(is_unicast, num_mcasts, num_unicasts, line_size, packet_size):
     freq = get_device_freq() / 1000.0
     setup = device_post_proc_config.default_setup()
     setup.deviceInputLog = profiler_log_path
-    main_test_body_string = "MAIN-WRITE-ZONE"
+    main_test_body_string = "MAIN-WRITE-UNICAST-ZONE" if is_unicast else "MAIN-WRITE-MCAST-ZONE"
     setup.timerAnalysis = {
         main_test_body_string: {
             "across": "device",
@@ -50,7 +50,7 @@ def profile_results(num_mcasts, num_unicasts, line_size, packet_size):
         ]["Average"]
         main_loop_cycles.append(main_loop_cycle)
 
-    packets_per_src_chip = num_mcasts + num_unicasts
+    packets_per_src_chip = num_unicasts if is_unicast else num_mcasts
     traffic_streams_through_boundary = line_size / 2
     total_byte_sent = packets_per_src_chip * traffic_streams_through_boundary * packet_size
     bandwidth = total_byte_sent / max(main_loop_cycles)
@@ -59,7 +59,7 @@ def profile_results(num_mcasts, num_unicasts, line_size, packet_size):
 
 
 def run_fabric_edm(
-    num_mcasts, num_unicasts, num_links, num_op_invocations, line_sync, line_size, packet_size, expected_bw
+    is_unicast, num_mcasts, num_unicasts, num_links, num_op_invocations, line_sync, line_size, packet_size, expected_bw
 ):
     os.system(f"rm -rf {os.environ['TT_METAL_HOME']}/generated/profiler/.logs/profile_log_device.csv")
 
@@ -78,7 +78,7 @@ def run_fabric_edm(
         logger.info("Error in running the test")
         assert False
 
-    bandwidth = profile_results(num_mcasts, num_unicasts, line_size, packet_size)
+    bandwidth = profile_results(is_unicast, num_mcasts, num_unicasts, line_size, packet_size)
     logger.info("bandwidth: {} B/c", bandwidth)
     assert expected_bw - 0.2 <= bandwidth <= expected_bw + 0.2
 
@@ -99,6 +99,7 @@ def test_fabric_edm_mcast_bw(
     num_mcasts, num_unicasts, num_links, num_op_invocations, line_sync, line_size, packet_size, expected_bw
 ):
     run_fabric_edm(
+        False,
         num_mcasts,
         num_unicasts,
         num_links,
@@ -111,8 +112,8 @@ def test_fabric_edm_mcast_bw(
 
 
 @pytest.mark.skipif(is_grayskull(), reason="Unsupported on GS")
-@pytest.mark.parametrize("num_mcasts", [200000])
-@pytest.mark.parametrize("num_unicasts", [0])
+@pytest.mark.parametrize("num_mcasts", [0])
+@pytest.mark.parametrize("num_unicasts", [200000])
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize("num_op_invocations", [1])
 @pytest.mark.parametrize("line_sync", [True])
@@ -126,6 +127,7 @@ def test_fabric_edm_unicast_bw(
     num_mcasts, num_unicasts, num_links, num_op_invocations, line_sync, line_size, packet_size, expected_bw
 ):
     run_fabric_edm(
+        True,
         num_mcasts,
         num_unicasts,
         num_links,
