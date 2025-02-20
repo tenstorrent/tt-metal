@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/data_movement/untilize_with_halo_v2/device/untilize_with_halo_v2_program_factory.hpp"
+#include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/operations/sliding_window/halo/device/halo_device_operation.hpp"
 #include <array>
@@ -113,10 +114,14 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
 
     DataType type = input_tensor.get_dtype();
     int num_cores = this->parallel_config_.grid.num_cores();
-    int remote_temp_size = max_ref_size * num_cores;
+    int num_cores_c = conv::get_num_cores_channels_from_parallel_config(this->parallel_config_);
+    printf("num_cores_c: %d\n", num_cores_c);
+    int stick_size = input_tensor.get_padded_shape()[3] / num_cores_c;
+    printf("stick_size: %d\n", stick_size);
+    int remote_temp_size = max_ref_size * stick_size * num_cores;
     // TODO do we need to vary this type for bfloat8?
     auto remote_temp_buffer = owned_buffer::create<bfloat16>(std::vector<bfloat16>(remote_temp_size));
-    ttnn::Shape remote_temp_shape = ttnn::Shape({num_cores, max_ref_size});
+    ttnn::Shape remote_temp_shape = ttnn::Shape({num_cores, max_ref_size, stick_size});
     Tensor remote_temp_tensor(OwnedStorage{remote_temp_buffer}, remote_temp_shape, type, Layout::ROW_MAJOR);
 
     uint32_t repeat_factor = num_cores;
@@ -139,8 +144,11 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
         sliding_window::move_config_tensor_to_device(remote_config_tensor, parallel_config_, is_block_sharded, device);
     auto remote_ref_counts_device_tensor = sliding_window::move_config_tensor_to_device(
         remote_ref_counts_tensor, parallel_config_, is_block_sharded, device);
-    auto remote_temp_device_tensor =
-        sliding_window::move_config_tensor_to_device(remote_temp_tensor, parallel_config_, is_block_sharded, device);
+
+    auto shard_shape = std::array<uint32_t, 2>({max_ref_size, stick_size});
+    ShardSpec shard_spec(parallel_config_.grid, shard_shape, ShardOrientation::ROW_MAJOR);
+    MemoryConfig memory_config{TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1, shard_spec};
+    Tensor remote_temp_device_tensor = remote_temp_tensor.to_device(device, memory_config);
 
     Program program = CreateProgram();
 
