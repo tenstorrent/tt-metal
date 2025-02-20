@@ -115,7 +115,7 @@ void MAIN {
                         }
                         cb_pop_front(mm_bias_intermediate_cb_id, out_subblock_num_tiles);
                         // reconfigure init for matmul
-                        mm_init_short();
+                        mm_init_short(in0_cb_id, in1_cb_id);
                         // reconfigure unpacker df for src B
                         reconfig_data_format(in1_cb_id, in0_cb_id);
 #endif

@@ -5,10 +5,10 @@
 // clang-format off
 #include "dataflow_api.h"
 #include "debug/dprint.h"
-#include "tt_fabric/hw/inc/tt_fabric.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric.h"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen.hpp"
-#include "tt_fabric/hw/inc/tt_fabric_interface.h"
-#include "tt_fabric/hw/inc/tt_fabric_api.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/common/kernel_utils.hpp"
 // clang-format on
 
@@ -71,7 +71,8 @@ uint32_t max_packet_size_mask;
 auto input_queue_state = select_input_queue<pkt_dest_size_choice>();
 volatile local_pull_request_t *local_pull_request = (volatile local_pull_request_t *)(data_buffer_start_addr - 1024);
 volatile tt_l1_ptr fabric_router_l1_config_t* routing_table;
-volatile fabric_client_interface_t* client_interface;
+volatile tt_l1_ptr fabric_client_interface_t* client_interface =
+    (volatile tt_l1_ptr fabric_client_interface_t*)client_interface_addr;
 
 fvc_producer_state_t test_producer __attribute__((aligned(16)));
 fvcc_inbound_state_t fvcc_test_producer __attribute__((aligned(16)));
@@ -83,10 +84,6 @@ packet_header_t packet_header __attribute__((aligned(16)));
 uint32_t target_address;
 uint32_t noc_offset;
 uint32_t rx_addr_hi;
-
-uint32_t gk_interface_addr_l;
-uint32_t gk_interface_addr_h;
-
 uint32_t controller_noc_offset;
 
 // flag to check if need to zero out notification addr
@@ -389,11 +386,9 @@ void kernel_main() {
     src_endpoint_id = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     noc_offset = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     controller_noc_offset = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
-    uint32_t routing_plane = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
+    uint32_t outbound_eth_chan = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     dest_device = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     uint32_t rx_buf_size = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
-    gk_interface_addr_l = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
-    gk_interface_addr_h = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
 
     if constexpr (ASYNC_WR & test_command) {
         base_target_address = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
@@ -462,9 +457,9 @@ void kernel_main() {
     uint32_t packet_count = 0;
 
     // initalize client
-    fabric_endpoint_init(client_interface_addr, gk_interface_addr_l, gk_interface_addr_h);
-    routing_table = reinterpret_cast<tt_l1_ptr fabric_router_l1_config_t*>(
-        client_interface->routing_tables_l1_offset + sizeof(fabric_router_l1_config_t) * routing_plane);
+    tt_fabric_init();
+    fabric_endpoint_init<RoutingType::ROUTING_TABLE>(client_interface, outbound_eth_chan);
+    routing_table = reinterpret_cast<tt_l1_ptr fabric_router_l1_config_t*>(client_interface->routing_tables_l1_offset);
 
     while (true) {
         iter++;

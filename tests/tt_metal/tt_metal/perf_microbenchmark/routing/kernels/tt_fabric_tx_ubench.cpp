@@ -5,10 +5,10 @@
 // clang-format off
 #include "dataflow_api.h"
 #include "debug/dprint.h"
-#include "tt_fabric/hw/inc/tt_fabric.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric.h"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen.hpp"
-#include "tt_fabric/hw/inc/tt_fabric_interface.h"
-#include "tt_fabric/hw/inc/tt_fabric_api.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/common/kernel_utils.hpp"
 
 // clang-format on
@@ -63,13 +63,11 @@ constexpr uint32_t w_depth = get_compile_time_arg_val(25);
 constexpr uint32_t n_depth = get_compile_time_arg_val(26);
 constexpr uint32_t s_depth = get_compile_time_arg_val(27);
 
-volatile fabric_client_interface_t* client_interface;
+volatile tt_l1_ptr fabric_client_interface_t* client_interface =
+    (volatile tt_l1_ptr fabric_client_interface_t*)client_interface_addr;
 
-uint64_t xy_local_addr;
 uint32_t target_address;
 uint32_t noc_offset;
-uint32_t gk_interface_addr_l;
-uint32_t gk_interface_addr_h;
 uint32_t controller_noc_offset;
 uint32_t time_seed;
 
@@ -94,11 +92,9 @@ void kernel_main() {
     src_endpoint_id = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     noc_offset = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     controller_noc_offset = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
-    uint32_t routing_plane = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
+    uint32_t outbound_eth_chan = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     dest_device = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     uint32_t rx_buf_size = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
-    gk_interface_addr_l = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
-    gk_interface_addr_h = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
 
     if constexpr (ASYNC_WR & test_command) {
         base_target_address = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
@@ -140,7 +136,7 @@ void kernel_main() {
     }
 
     // initalize client
-    fabric_endpoint_init(client_interface_addr, gk_interface_addr_l, gk_interface_addr_h);
+    fabric_endpoint_init<RoutingType::ROUTING_TABLE>(client_interface, outbound_eth_chan);
 
     // notify the controller kernel that this worker is ready to proceed
     notify_traffic_controller();
@@ -151,6 +147,7 @@ void kernel_main() {
     while (*(volatile tt_l1_ptr uint32_t*)signal_address == 0);
 
     fabric_setup_pull_request(
+        client_interface,           // fabric client interface
         data_buffer_start_addr,     // source address in sender’s memory
         max_packet_size_words * 16  // number of bytes to write to remote destination
     );
@@ -160,8 +157,9 @@ void kernel_main() {
     while (true) {
         client_interface->local_pull_request.pull_request.words_read = 0;
         if constexpr (mcast_data) {
-            fabric_async_write_multicast<ASYNC_WR_SEND>(
-                routing_plane,           // the network plane to use for this transaction
+            fabric_async_write_multicast<AsyncWriteMode::SEND, RoutingType::ROUTING_TABLE>(
+                client_interface,
+                0,                       // the network plane to use for this transaction
                 data_buffer_start_addr,  // source address in sender’s memory
                 dest_device >> 16,
                 dest_device & 0xFFFF,
@@ -172,8 +170,9 @@ void kernel_main() {
                 n_depth,
                 s_depth);
         } else {
-            fabric_async_write<ASYNC_WR_SEND>(
-                routing_plane,           // the network plane to use for this transaction
+            fabric_async_write<AsyncWriteMode::SEND, RoutingType::ROUTING_TABLE>(
+                client_interface,
+                0,                       // the network plane to use for this transaction
                 data_buffer_start_addr,  // source address in sender’s memory
                 dest_device >> 16,
                 dest_device & 0xFFFF,

@@ -427,7 +427,8 @@ bool RunLoopbackTest(
     // EDM Builder Setup
     ////////////////////////////////////////////////////////////////////////////
 
-    static constexpr std::size_t edm_buffer_size = 4096 + PACKET_HEADER_SIZE_BYTES;
+    static constexpr std::size_t edm_buffer_size =
+        ttnn::ccl::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes + PACKET_HEADER_SIZE_BYTES;
 
     auto chip0_worker_fabric_connection = chip_0_edm_builder.build_connection_to_worker_channel();
     ////////////////////////////////////////////////////////////////////////////
@@ -910,7 +911,8 @@ bool RunLineFabricTest(
     std::size_t page_plus_header_size = page_size + sizeof(tt::fabric::PacketHeader);
     std::size_t tensor_size_bytes = num_pages_total * page_size;
 
-    static constexpr std::size_t edm_buffer_size = 4096 + PACKET_HEADER_SIZE_BYTES;
+    static constexpr std::size_t edm_buffer_size =
+        ttnn::ccl::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes + PACKET_HEADER_SIZE_BYTES;
     const size_t local_chip_id = 0;
     const size_t remote_chip_id = 1;
     auto program_ptrs = std::vector<Program*>(devices.size());
@@ -1237,7 +1239,8 @@ int TestLoopbackEntrypoint(
     IDevice* sender_device = device_0;
     IDevice* receiver_device = device_1;
 
-    static constexpr std::size_t edm_buffer_size = 4096 + PACKET_HEADER_SIZE_BYTES;
+    static constexpr std::size_t edm_buffer_size =
+        ttnn::ccl::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes + PACKET_HEADER_SIZE_BYTES;
     const chip_id_t local_chip_id = 0;
     const chip_id_t remote_chip_id = 1;
     auto const& edm_config = ttnn::ccl::FabricEriscDatamoverConfig(edm_buffer_size, 1, 2);
@@ -2988,7 +2991,8 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
     static constexpr uint32_t source_payload_cb_index = tt::CB::c_in1;
     static constexpr size_t packet_header_cb_size_in_headers = 4;
     static constexpr bool enable_persistent_fabric_mode = true;
-    static constexpr size_t packet_payload_size_bytes = 4096;
+    static constexpr size_t packet_payload_size_bytes =
+        ttnn::ccl::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes;
     static constexpr size_t dest_buffer_size = packet_payload_size_bytes * 4;
     static constexpr tt::DataFormat cb_df = tt::DataFormat::Bfp8;
 
@@ -3589,6 +3593,17 @@ TEST(EdmFabric, BasicMcastThroughputTest_2) {
     const size_t num_op_invocations = 1;
 
     RunWriteThroughputStabilityTestWithPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
+}
+TEST(EdmFabric, BasicMcastThroughputTest_3_SingleLink) {
+    const size_t num_mcasts = 200000;
+    const size_t num_unicasts = 0;
+    const size_t num_links = 1;
+    const size_t num_op_invocations = 1;
+    const bool line_sync = true;
+    WriteThroughputStabilityTestWithPersistentFabricParams params;
+    params.line_sync = line_sync;
+    RunWriteThroughputStabilityTestWithPersistentFabric(
+        num_mcasts, num_unicasts, num_links, num_op_invocations, params);
 }
 TEST(EdmFabric, BasicMcastThroughputTest_3) {
     const size_t num_mcasts = 200000;

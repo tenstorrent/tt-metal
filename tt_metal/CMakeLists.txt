@@ -37,6 +37,7 @@ target_link_libraries(
         llrt
         detail
         distributed
+        fabric
         HAL::grayskull
         HAL::wormhole
         HAL::blackhole
@@ -131,7 +132,7 @@ set_target_properties(
     tt_metal
     PROPERTIES
         INSTALL_RPATH
-            "${PROJECT_BINARY_DIR}/lib"
+            "${PROJECT_BINARY_DIR}/lib;$ORIGIN"
         ADDITIONAL_CLEAN_FILES
             "${PROJECT_BINARY_DIR}/lib;${PROJECT_BINARY_DIR}/obj"
 )
@@ -157,6 +158,7 @@ add_subdirectory(impl)
 add_subdirectory(detail)
 add_subdirectory(distributed)
 add_subdirectory(tt_stl)
+add_subdirectory(fabric)
 
 if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.23)
     install(

@@ -71,6 +71,7 @@ def run_conv(
     input_mesh_mapper=None,
     weight_mesh_mapper=None,
     output_mesh_composer=None,
+    enable_split_reader=False,
 ):
     if isinstance(device, ttnn.MeshDevice):
         assert input_mesh_mapper is not None, "Expected mesh mapper for input tensor when using device mesh"
@@ -130,7 +131,7 @@ def run_conv(
         input_channels_alignment=8 if use_shallow_conv_variant and not auto_shard else 32,
         deallocate_activation=deallocate_activation,
         enable_act_double_buffer=False,
-        enable_split_reader=False,
+        enable_split_reader=enable_split_reader,
         enable_subblock_padding=False,
         output_layout=output_layout,
     )
@@ -382,9 +383,6 @@ def test_conv_features(
 ):
     if output_layout == ttnn.ROW_MAJOR_LAYOUT and activations_dtype == ttnn.bfloat8_b:
         pytest.skip("Row major layout not compatible with bfloat8_b")
-
-    if output_layout == ttnn.ROW_MAJOR_LAYOUT and activations_dtype == ttnn.bfloat16 and packer_l1_acc and fp32_accum:
-        pytest.skip("skipping due to pack_untilize_dst issue!")
 
     run_conv(
         device,
@@ -2591,205 +2589,6 @@ def test_conv_for_vanilla_unet(
     )
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-@pytest.mark.parametrize(
-    "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, shard_layout, config_override",
-    (
-        # unique convs in rn50 (complete list)
-        # first conv post folding and input_channels padding to tile width
-        (16, 64, 64, 14, 14, 3, 3, 1, 1, 1, 1, HS, None),
-        # rn50 layer1
-        (8, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, HS, None),
-        (16, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, HS, None),
-        (20, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, HS, None),
-        # rn50 layer2
-        (8, 128, 128, 56, 56, 3, 3, 2, 2, 1, 1, HS, None),
-        (16, 128, 128, 56, 56, 3, 3, 2, 2, 1, 1, HS, None),
-        (20, 128, 128, 56, 56, 3, 3, 2, 2, 1, 1, HS, None),
-        (8, 128, 128, 28, 28, 3, 3, 1, 1, 1, 1, HS, None),
-        (16, 128, 128, 28, 28, 3, 3, 1, 1, 1, 1, HS, None),
-        (20, 128, 128, 28, 28, 3, 3, 1, 1, 1, 1, HS, None),
-        (1, 32, 32, 240, 320, 3, 3, 1, 1, 1, 1, HS, None),
-        (1, 64, 32, 240, 320, 3, 3, 1, 1, 1, 1, HS, None),
-    ),
-)
-@pytest.mark.parametrize(
-    "weights_dtype",
-    [ttnn.bfloat8_b, ttnn.bfloat16],
-)
-@pytest.mark.parametrize(
-    "activations_dtype",
-    [ttnn.bfloat16, ttnn.float32],
-)
-@pytest.mark.parametrize("fp32_accum", [False, True], ids=["no_fp32_accum", "fp32_accum"])
-@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
-@pytest.mark.parametrize("packer_l1_acc", [True, False], ids=["pack_l1", "no_pack_l1"])
-@pytest.mark.parametrize("has_bias", [True, False], ids=["with_bias", "no_bias"])
-def test_non_tile_multiple_height_conv_wh(
-    device,
-    torch_tensor_map,
-    use_program_cache,
-    math_fidelity,
-    activations_dtype,
-    weights_dtype,
-    batch_size,
-    output_channels,
-    input_channels,
-    input_height,
-    input_width,
-    filter_height,
-    filter_width,
-    stride_h,
-    stride_w,
-    pad_h,
-    pad_w,
-    shard_layout,
-    config_override,
-    fp32_accum,
-    packer_l1_acc,
-    has_bias,
-):
-    if device.core_grid.y == 7:
-        pytest.skip("Issue #6992: Statically allocated circular buffers in program clash with L1 buffers on core range")
-
-    if (
-        is_grayskull()
-        and activations_dtype == ttnn.bfloat16
-        and batch_size == 20
-        and (
-            output_channels == 64
-            or (
-                stride_h == 2
-                and (output_channels == 256 or (output_channels == 128 and weights_dtype == ttnn.bfloat16))
-            )
-        )
-    ):
-        pytest.skip("Skipping test because it won't fit in L1!")
-
-    if activations_dtype == ttnn.float32 and (batch_size >= 16 or (output_channels == 64 or input_height >= 240)):
-        pytest.skip("Skipping test because it won't fit in L1!")
-
-    if (
-        (weights_dtype == ttnn.bfloat16 and batch_size == 20 and output_channels == 128 and input_height == 56)
-        or (weights_dtype == ttnn.bfloat16 and batch_size == 20 and output_channels == 64)
-        or (weights_dtype == ttnn.bfloat8_b and batch_size == 20 and output_channels == 128 and input_height == 56)
-    ):
-        pytest.skip("Skipping test because it won't fit in L1!")
-
-    if has_bias and packer_l1_acc and (fp32_accum or activations_dtype is ttnn.float32):
-        pytest.skip("skipping due to pack_untilize_dst issue! --> #14236")
-
-    use_shallow_conv_variant = (input_channels == 16) and device.arch() != ttnn.device.Arch.WORMHOLE_B0
-    run_conv(
-        device,
-        torch_tensor_map,
-        math_fidelity,
-        activations_dtype,
-        weights_dtype,
-        batch_size,
-        output_channels,
-        input_channels,
-        input_height,
-        input_width,
-        filter_height,
-        filter_width,
-        stride_h,
-        stride_w,
-        pad_h,
-        pad_w,
-        config_override=config_override,
-        shard_layout=shard_layout,
-        use_shallow_conv_variant=use_shallow_conv_variant,
-        packer_l1_acc=packer_l1_acc,
-        fp32_accum=fp32_accum,
-        has_bias=has_bias,
-        output_layout=ttnn.ROW_MAJOR_LAYOUT,
-    )
-
-
-@skip_for_grayskull()
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
-@pytest.mark.parametrize(
-    "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, shard_layout, config_override",
-    (
-        (1, 64, 64, 16, 16, 3, 3, 1, 1, 1, 1, BS, None),
-        (1, 64, 128, 16, 16, 3, 3, 1, 1, 1, 1, BS, None),
-        (1, 64, 192, 16, 16, 3, 3, 1, 1, 1, 1, BS, None),
-        (1, 64, 256, 16, 16, 3, 3, 1, 1, 1, 1, BS, None),
-        (1, 64, 320, 16, 16, 3, 3, 1, 1, 1, 1, BS, None),
-        (1, 64, 384, 16, 16, 3, 3, 1, 1, 1, 1, BS, None),
-        (1, 64, 448, 16, 16, 3, 3, 1, 1, 1, 1, BS, None),
-        (1, 64, 512, 16, 16, 3, 3, 1, 1, 1, 1, BS, None),
-        (1, 64, 576, 16, 16, 3, 3, 1, 1, 1, 1, BS, None),
-        (1, 64, 640, 16, 16, 3, 3, 1, 1, 1, 1, BS, None),
-        (1, 128, 64, 16, 16, 3, 3, 1, 1, 1, 1, BS, None),
-        (1, 128, 128, 16, 16, 3, 3, 1, 1, 1, 1, BS, None),
-        (1, 128, 192, 16, 16, 3, 3, 1, 1, 1, 1, BS, None),
-        (1, 128, 256, 16, 16, 3, 3, 1, 1, 1, 1, BS, None),
-        (1, 128, 320, 16, 16, 3, 3, 1, 1, 1, 1, BS, None),
-        (1, 128, 384, 16, 16, 3, 3, 1, 1, 1, 1, BS, None),
-        (1, 128, 448, 16, 16, 3, 3, 1, 1, 1, 1, BS, None),
-        (1, 128, 512, 16, 16, 3, 3, 1, 1, 1, 1, BS, None),
-        (1, 128, 576, 16, 16, 3, 3, 1, 1, 1, 1, BS, None),
-        (1, 128, 640, 16, 16, 3, 3, 1, 1, 1, 1, BS, None),
-        (1, 320, 320, 16, 16, 3, 3, 1, 1, 1, 1, BS, None),
-        (1, 640, 640, 16, 16, 3, 3, 1, 1, 1, 1, BS, None),
-    ),
-)
-@pytest.mark.parametrize(
-    "weights_dtype",
-    [ttnn.bfloat16, ttnn.bfloat8_b],
-)
-@pytest.mark.parametrize(
-    "activations_dtype",
-    [ttnn.bfloat16],
-)
-@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
-def test_non_tile_multiple_width_conv_wh(
-    device,
-    torch_tensor_map,
-    use_program_cache,
-    math_fidelity,
-    activations_dtype,
-    weights_dtype,
-    batch_size,
-    output_channels,
-    input_channels,
-    input_height,
-    input_width,
-    filter_height,
-    filter_width,
-    stride_h,
-    stride_w,
-    pad_h,
-    pad_w,
-    shard_layout,
-    config_override,
-):
-    run_conv(
-        device,
-        torch_tensor_map,
-        math_fidelity,
-        activations_dtype,
-        weights_dtype,
-        batch_size,
-        output_channels,
-        input_channels,
-        input_height,
-        input_width,
-        filter_height,
-        filter_width,
-        stride_h,
-        stride_w,
-        pad_h,
-        pad_w,
-        config_override,
-        shard_layout=shard_layout,
-        use_shallow_conv_variant=(input_channels == 16),
-        output_layout=ttnn.ROW_MAJOR_LAYOUT,
-    )
-
-
 @skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_shallow_conv_with_tiled_input(device):
@@ -2917,3 +2716,83 @@ def test_dram_input_mm_conv(device, tiled_input, input_on_device):
     passing, pcc_msg = check_with_pcc_without_tensor_printout(torch_output_tensor, torch_out_golden_tensor, pcc=0.99)
     logger.info(f"PCC = {pcc_msg}. Threshold = 0.99")
     assert passing
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, shard_layout, config_override",
+    ((16, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, HS, {"act_block_h": 32 * 49}),),
+)
+def test_split_reader_regression(
+    device,
+    torch_tensor_map,
+    use_program_cache,
+    batch_size,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    pad_h,
+    pad_w,
+    shard_layout,
+    config_override,
+):
+    run_conv(
+        device,
+        torch_tensor_map,
+        ttnn.MathFidelity.LoFi,
+        ttnn.bfloat8_b,
+        ttnn.bfloat8_b,
+        batch_size,
+        output_channels,
+        input_channels,
+        input_height,
+        input_width,
+        filter_height,
+        filter_width,
+        stride_h,
+        stride_w,
+        pad_h,
+        pad_w,
+        config_override=config_override,
+        use_shallow_conv_variant=True,
+        has_bias=False,
+        shard_layout=shard_layout,
+        enable_split_reader=True,
+    )
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+def test_small_in_large_out_channels_auto_shard(device, torch_tensor_map):
+    batch_size = 2
+    in_channels = 16
+    out_channels = 1536
+    kernel_size = (2, 2)
+    stride = (2, 2)
+    padding = (0, 0)
+    height = 128
+    width = 128
+    run_conv(
+        device,
+        torch_tensor_map,
+        ttnn.MathFidelity.LoFi,
+        ttnn.bfloat16,
+        ttnn.bfloat16,
+        batch_size,
+        out_channels,
+        in_channels,
+        height,
+        width,
+        kernel_size[0],
+        kernel_size[1],
+        stride[0],
+        stride[1],
+        padding[0],
+        padding[1],
+        None,
+        auto_shard=True,
+    )
