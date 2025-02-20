@@ -54,8 +54,6 @@ auto extract_args_to_vector(args_t&&... args) {
 template <typename operation_t, typename execute_on_worker_thread_return_t, typename... args_t>
 inline auto create_async_output_tensors(
     const Tensors& inputs, const OptionalConstTensors& optional_inputs, args_t&&... args) {
-    bool enable_autoformat_device = false;
-
     constexpr bool custom_create_async_outputs =
         requires(const operation_t& t) { t.create_async_output_tensors(inputs, optional_inputs); };
 
@@ -72,15 +70,14 @@ inline auto create_async_output_tensors(
 
         return operation_t::create_async_optional_output_tensors(std::forward<decltype(args)>(args)...);
     } else if constexpr (std::is_same_v<std::decay_t<execute_on_worker_thread_return_t>, Tensor>) {
-        return std::vector{Tensor(
-            tt::tt_metal::operation::get_workers_for_op_output(inputs, optional_inputs, enable_autoformat_device))};
+        return std::vector{Tensor(tt::tt_metal::operation::get_workers_for_op_output(inputs, optional_inputs))};
 
     } else if constexpr (detail::is_homogenous_tuple<execute_on_worker_thread_return_t, Tensor>()) {
         Tensors output_tensors;
         output_tensors.reserve(std::tuple_size_v<execute_on_worker_thread_return_t>);
         for (auto index = 0; index < std::tuple_size_v<execute_on_worker_thread_return_t>; index++) {
-            output_tensors.emplace_back(Tensor(
-                tt::tt_metal::operation::get_workers_for_op_output(inputs, optional_inputs, enable_autoformat_device)));
+            output_tensors.emplace_back(
+                Tensor(tt::tt_metal::operation::get_workers_for_op_output(inputs, optional_inputs)));
         }
         return output_tensors;
     } else {
