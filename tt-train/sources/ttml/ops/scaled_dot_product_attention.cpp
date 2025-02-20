@@ -35,11 +35,16 @@ autograd::TensorPtr scaled_dot_product_attention(
     const std::optional<autograd::TensorPtr>& mask) {
     const float scale = 1.0F / std::sqrtf(static_cast<float>(query->get_value().get_logical_shape()[-1]));
     // (B, H, S, E) x (B, H, E, S) -> (B, H, S, S)
-    auto q_scaled = ttnn::multiply(query->get_value(), scale);
+    auto q_scaled = ttnn::experimental::mul(query->get_value(), scale);
     auto qk_scaled = matmul(q_scaled, key->get_value(), /* transpose_a */ false, /* transpose_b */ true);
 
     if (mask.has_value()) {
-        qk_scaled = ttnn::where(mask.value()->get_value(), qk_scaled, /* other */ -1e9F);
+        auto mask_tensor = mask.value()->get_value();
+        // i've changed ttnn::where because mask needs batch and heads broadcasting to qk_scaled shape
+        // qk_scaled = ttnn::where(mask.value()->get_value(), qk_scaled, /* other */ -1e9F);
+        qk_scaled = ttnn::experimental::add(
+            ttnn::experimental::mul(mask_tensor, qk_scaled),
+            ttnn::experimental::mul(ttnn::experimental::sub(mask_tensor, 1.F), 1e9F));
     }
     // (B, H, S, S)
     auto attention_weights = ttnn_fixed::softmax(qk_scaled, /* axis */ 3);
@@ -66,7 +71,7 @@ autograd::TensorPtr scaled_dot_product_attention(
             /* output_mem_config */ std::nullopt,
             /* compute_kernel_config */ core::ComputeKernelConfig::precise());
 
-        grad_scaled_dot = ttnn::multiply(grad_scaled_dot, scale);
+        grad_scaled_dot = ttnn::experimental::mul(grad_scaled_dot, scale);
         auto grad_q = matmul(
             grad_scaled_dot,
             key->get_value(),

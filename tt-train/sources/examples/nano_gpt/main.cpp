@@ -477,27 +477,22 @@ int main(int argc, char **argv) {
     CachedHostData cached_data;
     std::vector<float> mask;
     auto num_heads = config.transformer_config.num_heads;
-    mask.reserve((size_t)config.batch_size * sequence_length * sequence_length * num_heads);
-    for (int sample_idx = 0; sample_idx < config.batch_size; ++sample_idx) {
-        for (int head = 0; head < num_heads; ++head) {
-            for (int i = 0; i < sequence_length; ++i) {
-                for (int j = 0; j < sequence_length; ++j) {
-                    mask.push_back(i >= j ? 1.0F : 0.0F);
-                }
-            }
+    mask.reserve(sequence_length * sequence_length);
+    for (int i = 0; i < sequence_length; ++i) {
+        for (int j = 0; j < sequence_length; ++j) {
+            mask.push_back(i >= j ? 1.0F : 0.0F);
         }
     }
 
     if (ddp) {
         ttml::core::XTensorToMeshVariant<float> float_composer =
             ttml::core::ShardXTensorToMesh<float>(device->shape(), 0);
-        xt::xarray<float> mask_xtensor =
-            xt::adapt(mask, {config.batch_size, num_heads, sequence_length, sequence_length});
+        xt::xarray<float> mask_xtensor = xt::adapt(mask, {1U, 1U, sequence_length, sequence_length});
         cached_data.masks_tensor =
             ttml::autograd::create_tensor(ttml::core::from_xtensor(mask_xtensor, device, float_composer));
     } else {
-        cached_data.masks_tensor = ttml::autograd::create_tensor(ttml::core::from_vector(
-            mask, ttml::core::create_shape({config.batch_size, num_heads, sequence_length, sequence_length}), device));
+        cached_data.masks_tensor = ttml::autograd::create_tensor(
+            ttml::core::from_vector(mask, ttml::core::create_shape({1, 1, sequence_length, sequence_length}), device));
     }
 
     std::function<BatchType(std::vector<DatasetSample> && samples)> collate_fn =
