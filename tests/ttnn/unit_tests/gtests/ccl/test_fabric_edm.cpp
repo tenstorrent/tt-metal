@@ -11,10 +11,12 @@ int main(int argc, char** argv) {
     std::size_t num_links = std::stoi(argv[arg_idx++]);
     std::size_t num_op_invocations = std::stoi(argv[arg_idx++]);
     bool line_sync = std::stoi(argv[arg_idx++]);
+    std::size_t line_size = std::stoi(argv[arg_idx++]);
     std::size_t packet_payload_size_bytes = std::stoi(argv[arg_idx++]);
 
     WriteThroughputStabilityTestWithPersistentFabricParams params;
     params.line_sync = line_sync;
+    params.line_size = line_size;
     RunWriteThroughputStabilityTestWithPersistentFabric(
         num_mcasts, num_unicasts, num_links, num_op_invocations, params, packet_payload_size_bytes);
 }
