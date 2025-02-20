@@ -52,7 +52,6 @@ ControlPlane::ControlPlane(const std::string& mesh_graph_desc_file) {
     this->routing_table_generator_->print_routing_tables();
 
     this->initialize_from_mesh_graph_desc_file(mesh_graph_desc_file);
-    this->configure_routing_tables();
 
     // Printing, only enabled with log_debug
     this->print_ethernet_channels();
