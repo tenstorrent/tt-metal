@@ -50,6 +50,9 @@ def run_tt_lib_test(
 
     tt_lib_out = tt_lib_op(*tensor_inputs, device=device, **test_args)
     pytorch_out = pytorch_op(*tensor_inputs, **test_args)
+    print("tensor_inputs --->", tensor_inputs)
+    print("tt_lib_out    --->", tt_lib_out)
+    print("pytorch_out   --->", pytorch_out)
 
     result, output = output_comparison_func(pytorch_out, tt_lib_out)
 
