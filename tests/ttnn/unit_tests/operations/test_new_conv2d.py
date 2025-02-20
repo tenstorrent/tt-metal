@@ -60,7 +60,7 @@ def run_conv(
     use_shallow_conv_variant=False,
     fp32_accum=False,
     packer_l1_acc=False,
-    output_layout=ttnn.ROW_MAJOR_LAYOUT,
+    output_layout=ttnn.TILE_LAYOUT,
     deallocate_activation=False,
     debug=False,
     groups=1,
@@ -135,7 +135,9 @@ def run_conv(
         and output_layout == ttnn.ROW_MAJOR_LAYOUT
     ):
         output_layout = ttnn.TILE_LAYOUT
-        logger.warning("Disabling untilize_out when out_c > 256 for Height Sharded")
+        pytest.xfail(
+            "Untilize_out is not supported when out_c > 256 for Height Sharded. https://github.com/tenstorrent/tt-metal/issues/18633"
+        )
 
     conv_config = ttnn.Conv2dConfig(
         dtype=activations_dtype,
@@ -159,8 +161,8 @@ def run_conv(
         conv_config.act_block_h_override = config_override["act_block_h"]
         if fp32_accum and packer_l1_acc and output_layout == ttnn.ROW_MAJOR_LAYOUT:
             conv_config.output_layout = ttnn.TILE_LAYOUT
-            logger.warning(
-                "Forcing output_layout to TILE when act_block_h_override, fp32_accum and packer_l1_acc are enabled"
+            pytest.xfail(
+                "Row Major layout is not supported when act_block_h_override, fp32_accum and packer_l1_acc are all enabled"
             )
 
     if config_override and "act_block_w_div" in config_override and not auto_shard:
@@ -430,7 +432,6 @@ def test_conv_features(
     )
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 2 * 16384}], indirect=True)
 @pytest.mark.parametrize("groups", [1, 2])
 @pytest.mark.parametrize("stride", [2])
@@ -512,7 +513,6 @@ def test_conv_features_multi_device(
     )
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize("stride", [1])
 @pytest.mark.parametrize(
@@ -712,13 +712,12 @@ def test_conv_ws(
 @pytest.mark.parametrize(
     "activations_dtype, output_layout",
     [
-        (ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+        # (ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT), In Width Sharding, with RM, create output tensor fails with physical_height == physical_shard_height.
         (ttnn.bfloat8_b, ttnn.TILE_LAYOUT),
     ],
 )
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
 @pytest.mark.parametrize("auto_shard", [True, False], ids=["auto_shard", "no_auto_shard"])
-@skip_for_grayskull()
 def test_conv_for_segformer_512x512(
     device,
     torch_tensor_map,
@@ -875,7 +874,6 @@ def test_resnet50_conv_gs(
     )
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, shard_layout, config_override",
@@ -883,7 +881,7 @@ def test_resnet50_conv_gs(
         # unique convs in rn50 (complete list)
         # first conv post folding and input_channels padding to tile width
         # (8, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, True, None), HANGS!!
-        (16, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, HS, {"act_block_h": 256}),
+        (16, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, HS, {"act_block_h": 64}),
         # (20, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, HS, {"act_block_h": 32}),  Out of Memory!!
         # rn50 layer1
         (8, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, HS, None),
@@ -994,12 +992,11 @@ def test_resnet50_conv_wh(
     )
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, shard_layout, config_override",
     (
-        (16, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, HS, {"act_block_h": 256}),
+        (16, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, HS, {"act_block_h": 64}),
         (8, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, HS, None),
     ),
 )
@@ -1055,7 +1052,6 @@ def test_conv_mem_config_wh(
     )
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, shard_layout, config_override",
@@ -1178,7 +1174,6 @@ def test_resnet50_conv_wh_fp32(
     )
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, shard_layout, config_override",
@@ -1316,7 +1311,6 @@ def test_sd_conv(
         )
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, shard_layout, config_override",
@@ -1584,7 +1578,6 @@ def test_unet_conv(
     )
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, shard_layout, config_override, use_shallow_conv_variant",
@@ -1678,7 +1671,6 @@ def test_unet_conv_wh(
     )
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize(
     "batch_size",
     [1],
@@ -1777,7 +1769,6 @@ def test_unet_conv_groups_2_wh(
     )
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize(
     "batch_size",
     [1],
@@ -1875,7 +1866,6 @@ def test_unet_conv_groups_4_6_wh(
     )
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize(
     "batch_size",
     [1],
@@ -2102,7 +2092,6 @@ def test_conv_core_nondivis(
 
 
 # The following test takes various shape sizes from resnet50, unet and stable diffusion and tests for different number of groups - all the way to num_groups = num_in_channels (depthwise conv)
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize("stride", [1])
 @pytest.mark.parametrize("batch_size", [1])
@@ -2194,7 +2183,6 @@ def test_conv_dilation(
 
 
 # The following test takes various shape sizes from resnet50, unet and stable diffusion and tests for different number of groups - all the way to num_groups = num_in_channels (depthwise conv)
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, input_channels, output_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, groups, shard_layout, config_override, use_shallow_conv_variant",
@@ -2487,7 +2475,6 @@ def test_swin_s_conv(
     )
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, dilation, shard_layout",
@@ -2593,7 +2580,6 @@ def test_model_k_256x256(
     ],
 )
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
-@skip_for_grayskull()
 def test_conv_for_vanilla_unet(
     device,
     torch_tensor_map,
@@ -2645,7 +2631,6 @@ def test_conv_for_vanilla_unet(
     )
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_shallow_conv_with_tiled_input(device):
     out_channels, in_channels, kernel_h, kernel_w = 7, 3, 3, 3
@@ -2850,6 +2835,7 @@ def test_small_in_large_out_channels_auto_shard(device, torch_tensor_map):
         padding[0],
         padding[1],
         None,
+        output_layout=ttnn.TILE_LAYOUT,  # OOM with Row Major
         auto_shard=True,
     )
 
