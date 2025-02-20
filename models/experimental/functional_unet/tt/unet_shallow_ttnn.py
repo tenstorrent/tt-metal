@@ -54,31 +54,53 @@ def concatenate(activation, residual, dim=-1, groups=4):
     assert dim < 0
     assert activation.is_sharded() and residual.is_sharded(), "Both inputs to `ttnn.concat` must be sharded"
 
-    residual_tile = ttnn.to_layout(residual, ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
-    ttnn.deallocate(residual)
+    if activation.shape[-2] == 1056 * 160:
+        print("--------- special concat")
+        residual_tile = ttnn.to_layout(residual, ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+        ttnn.deallocate(residual)
 
-    output_memory_config = residual.memory_config()
+        output_memory_config = residual.memory_config()
 
-    activation_shard_shape = activation.memory_config().shard_spec.shape
+        activation_shard_shape = activation.memory_config().shard_spec.shape
 
-    output_shard_shape = output_memory_config.shard_spec.shape
-    output_shard_shape[-1] += activation_shard_shape[-1]
-    output_memory_config.shard_spec.shape = output_shard_shape
+        output_shard_shape = output_memory_config.shard_spec.shape
+        output_shard_shape[-1] += activation_shard_shape[-1]
+        output_memory_config.shard_spec.shape = output_shard_shape
 
-    activation_reshard_shape = output_shard_shape
-    activation_reshard_shape[dim] = activation_shard_shape[dim]
+        activation_reshard_shape = output_shard_shape
+        activation_reshard_shape[dim] = activation_shard_shape[dim]
 
-    memory_config = activation.memory_config()
-    memory_config.shard_spec.shape = [output_shard_shape[0], activation_shard_shape[1]]
-    memory_config.shard_spec.grid = output_memory_config.shard_spec.grid
-    memory_config.shard_spec.orientation = output_memory_config.shard_spec.orientation
-    x = ttnn.reshard(activation, memory_config)
-    ttnn.deallocate(activation)
+        memory_config = activation.memory_config()
+        memory_config.shard_spec.shape = [output_shard_shape[0], activation_shard_shape[1]]
+        memory_config.shard_spec.grid = output_memory_config.shard_spec.grid
+        memory_config.shard_spec.orientation = output_memory_config.shard_spec.orientation
+        x = ttnn.reshard(activation, memory_config)
+        ttnn.deallocate(activation)
 
-    x_tile = ttnn.to_layout(x, ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
-    ttnn.deallocate(x)
+        x_tile = ttnn.to_layout(x, ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+        ttnn.deallocate(x)
 
-    return ttnn.concat([x_tile, residual_tile], dim=dim, memory_config=output_memory_config, groups=groups)
+        return ttnn.concat([x_tile, residual_tile], dim=dim, memory_config=output_memory_config, groups=groups)
+    else:
+        output_memory_config = residual.memory_config()
+
+        activation_shard_shape = activation.memory_config().shard_spec.shape
+
+        output_shard_shape = output_memory_config.shard_spec.shape
+        output_shard_shape[-1] += activation_shard_shape[-1]
+        output_memory_config.shard_spec.shape = output_shard_shape
+
+        activation_reshard_shape = output_shard_shape
+        activation_reshard_shape[dim] = activation_shard_shape[dim]
+
+        memory_config = activation.memory_config()
+        memory_config.shard_spec.shape = [output_shard_shape[0], activation_shard_shape[1]]
+        memory_config.shard_spec.grid = output_memory_config.shard_spec.grid
+        memory_config.shard_spec.orientation = output_memory_config.shard_spec.orientation
+        x = ttnn.reshard(activation, memory_config)
+        ttnn.deallocate(activation)
+
+        return ttnn.concat([x, residual], dim=dim, memory_config=output_memory_config, groups=groups)
 
 
 def is_valid_device_for_unet(device):
