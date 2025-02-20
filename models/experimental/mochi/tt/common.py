@@ -40,12 +40,53 @@ def stack_cos_sin(cos, sin):
     return cos, sin
 
 
+SUBBLOCK_HW_CHOICES = [
+    (4, 2),
+    (2, 4),
+    (8, 1),
+    (1, 8),  # subblock_hw = 8
+    (7, 1),
+    (1, 7),  # subblock_hw = 7
+    (3, 2),
+    (2, 3),
+    (6, 1),
+    (1, 6),  # subblock_hw = 6
+    (5, 1),
+    (1, 5),  # subblock_hw = 5
+    (2, 2),
+    (4, 1),
+    (1, 4),  # subblock_hw = 4
+    (3, 1),
+    (1, 3),  # subblock_hw = 3
+    (2, 1),
+    (1, 2),  # subblock_hw = 2
+    (1, 1),  # subblock_hw = 1
+]
+
+
+def get_subblock_sizes(m_tiles_per_core, n_tiles_per_core, out_sharded=False, fp32_dest_acc_en=False):
+    for subblock_hw in SUBBLOCK_HW_CHOICES:
+        out_subblock_h = subblock_hw[0]
+        out_subblock_w = subblock_hw[1]
+
+        if fp32_dest_acc_en:
+            if (out_subblock_h * out_subblock_w) > 4:
+                continue
+
+        if m_tiles_per_core % out_subblock_h == 0 and n_tiles_per_core % out_subblock_w == 0:
+            return (out_subblock_h, out_subblock_w)
+
+    return (1, 1)
+
+
 def matmul_config(
     m: int,
     k: int,
     n: int,
     grid_size: Tuple[int, int],
     in0_block_w: int = None,
+    out_block_h: int = None,
+    out_block_w: int = None,
     fuse_batch: bool = False,
     fused_activation=None,
 ) -> ttnn.MatmulMultiCoreReuseMultiCastProgramConfig:
@@ -53,17 +94,30 @@ def matmul_config(
     per_core_M = math.ceil(m / (TILE_SIZE * grid_size[1]))
     per_core_N = math.ceil(n / (TILE_SIZE * grid_size[0]))
 
-    out_subblock_h = 1
-    out_subblock_w = get_out_subblock_w(per_core_N, out_subblock_h)
+    MAX_OUT_BLOCK_SIZE = TILE_SIZE * 96  # 3072
+    num_out_blocks_h = math.ceil(m / MAX_OUT_BLOCK_SIZE)
+    num_out_blocks_w = math.ceil(n / MAX_OUT_BLOCK_SIZE)
+    assert (
+        per_core_M % num_out_blocks_h == 0
+    ), f"num_out_blocks_h {num_out_blocks_h} must evenly divide per_core_M {per_core_M}"
+    assert (
+        per_core_N % num_out_blocks_w == 0
+    ), f"num_out_blocks_w {num_out_blocks_w} must evenly divide per_core_N {per_core_N}"
+    out_block_h = per_core_M / num_out_blocks_h
+    out_block_w = per_core_N / num_out_blocks_w
+    out_subblock_h, out_subblock_w = get_subblock_sizes(out_block_h, out_block_w)  # want these to be 1 and 6
 
     if in0_block_w is None:
-        in0_block_w = min(4, max(1, k // (TILE_SIZE * grid_size[0])))
+        # in0_block_w = min(4, max(1, k // (TILE_SIZE * grid_size[0])))
+        in0_block_w = 6
 
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid_size,
         in0_block_w=in0_block_w,
         out_subblock_h=out_subblock_h,
         out_subblock_w=out_subblock_w,
+        out_block_h=per_core_M // num_out_blocks_h,
+        out_block_w=per_core_N // num_out_blocks_w,
         per_core_M=per_core_M,
         per_core_N=per_core_N,
         transpose_mcast=False,

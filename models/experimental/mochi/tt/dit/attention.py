@@ -9,9 +9,12 @@ from models.common.rmsnorm import RMSNorm
 from models.experimental.mochi.tt.dit.norms import modulated_rmsnorm
 from models.experimental.mochi.tt.common import (
     as_sharded_tensor,
+    as_replicated_tensor,
     col_parallel_linear,
     matmul_2d_config,
 )
+from functools import partial
+from ttnn import ConcatMeshToTensor
 
 
 class AsymmetricAttention(LightweightModule):
@@ -23,6 +26,7 @@ class AsymmetricAttention(LightweightModule):
         weight_cache_path,
         layer_num,
         dtype,
+        vision_seq_len: int,
         dim_x: int,
         dim_y: int,
         num_heads: int = 8,
@@ -56,6 +60,8 @@ class AsymmetricAttention(LightweightModule):
         self.weight_cache_path = weight_cache_path
         self.layer_num = layer_num
         self.dtype = dtype
+        self.vision_seq_len = vision_seq_len
+        self.local_vision_seq_len = self.vision_seq_len // self.num_devices
         self.dim_x = dim_x
         self.dim_y = dim_y
         self.num_heads = num_heads
@@ -71,7 +77,7 @@ class AsymmetricAttention(LightweightModule):
         self.out_bias = out_bias
 
         # Define the qkv and output projections
-        self.qkv_x, self.qkv_x_bias = self._col_parallel_qkv(
+        self.qkv_x, self.qkv_x_bias = self._load_qkv(
             "qkv_x", self.qkv_bias, weight_cache_path, state_dict, state_dict_prefix
         )
         self.qkv_y, self.qkv_y_bias = self._col_parallel_qkv(
@@ -93,15 +99,13 @@ class AsymmetricAttention(LightweightModule):
         self.q_norm_y = self._create_rmsmorn(".q_norm_y")
         self.k_norm_y = self._create_rmsmorn(".k_norm_y")
 
-        self.X_MM_SEQ_LEN = 44 * 1024
-
         # TODO: using qkv_x program config leads to worse PCC
-        # self.qkv_x_config = matmul_config(self.X_MM_SEQ_LEN, dim_x, 3 * self.n_local_heads * self.head_dim, (8, 8))
+        self.qkv_x_config = matmul_config(self.local_vision_seq_len, dim_x, 3 * self.num_heads * self.head_dim, (8, 8))
         self.proj_x_config = partial(matmul_2d_config, k=dim_x, n=dim_x // self.num_devices, grid_size=(8, 8))
         self.mm_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
+            math_approx_mode=True,
+            fp32_dest_acc_en=False,
             packer_l1_acc=True,
         )
 
@@ -147,6 +151,36 @@ class AsymmetricAttention(LightweightModule):
                 cache_file_name=weight_cache_path / (state_dict_prefix + f".{name}.bias"),
             )
         return w, b
+
+    def _load_qkv(self, name, bias, weight_cache_path, state_dict, state_dict_prefix):
+        torch_weight = lambda name, suffix: torch.transpose(state_dict[f"{state_dict_prefix}.{name}.{suffix}"], -2, -1)
+        w = torch_weight(name, "weight")
+        b = torch_weight(name, "bias") if bias else None
+
+        w = as_replicated_tensor(
+            w,
+            mesh_device=self.mesh_device,
+            cache_file_name=weight_cache_path / (state_dict_prefix + f".{name}.weight"),
+        )
+        if b is not None:
+            b = as_replicated_tensor(
+                b,
+                mesh_device=self.mesh_device,
+                cache_file_name=weight_cache_path / (state_dict_prefix + f".{name}.bias"),
+            )
+        return w, b
+
+    def _seq_to_col_parallel_tensor(self, seq_parallel_tensor):
+        seq_parallel_host_tensor = ttnn.from_device(seq_parallel_tensor)
+        torch_tensor = ttnn.to_torch(
+            seq_parallel_host_tensor, mesh_composer=ConcatMeshToTensor(self.mesh_device, dim=-2)
+        )
+        col_parallel_tensor = as_sharded_tensor(
+            torch_tensor,
+            self.mesh_device,
+            dim=-3,
+        )
+        return col_parallel_tensor
 
     def run_qkv_y(self, y):
         # Compute QKV projection
@@ -217,16 +251,15 @@ class AsymmetricAttention(LightweightModule):
             compute_kernel_config=self.mm_compute_kernel_config,
             dtype=ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            # NOTE: Running without program config is functional and keeps padding
-            program_config=None,  # self.qkv_x_config,
+            program_config=self.qkv_x_config,
         )
 
         # Split qkv_x into q, k, v
         # Need to get these tensors to shape [B, H, L, D] for rotary embeddings
         q_x_BHND, k_x_BHND, v_x_BHND = ttnn.experimental.nlp_create_qkv_heads(
             qkv_x_1BNE,
-            num_heads=self.n_local_heads,
-            num_kv_heads=self.n_local_heads,
+            num_heads=self.num_heads,
+            num_kv_heads=self.num_heads,
             transpose_k_heads=False,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
@@ -236,6 +269,11 @@ class AsymmetricAttention(LightweightModule):
         q_x_BHND = ttnn.experimental.rotary_embedding_llama(q_x_BHND, rope_cos, rope_sin, trans_mat)
         k_x_BHND = self.k_norm_x(k_x_BHND, mode="prefill")
         k_x_BHND = ttnn.experimental.rotary_embedding_llama(k_x_BHND, rope_cos, rope_sin, trans_mat)
+
+        # TODO remove this once we have an optimized conversion
+        q_x_BHND = self._seq_to_col_parallel_tensor(q_x_BHND)
+        k_x_BHND = self._seq_to_col_parallel_tensor(k_x_BHND)
+        v_x_BHND = self._seq_to_col_parallel_tensor(v_x_BHND)
 
         # Process text features if present
         if B == 1:

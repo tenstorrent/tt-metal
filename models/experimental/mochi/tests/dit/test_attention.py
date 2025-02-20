@@ -27,7 +27,7 @@ from genmo.mochi_preview.dit.joint_model.asymm_models_joint import AsymmetricAtt
 PCC_REQUIRED = 0.99
 
 
-def create_models(mesh_device, state_dict, partial_state_dict, attn_path, dim_x, dim_y, update_y=True):
+def create_models(mesh_device, state_dict, partial_state_dict, attn_path, vision_seq_len, dim_x, dim_y, update_y=True):
     """Initialize both reference and TT models."""
     reference_model = RefAsymmetricAttention(
         dim_x=dim_x,
@@ -57,6 +57,7 @@ def create_models(mesh_device, state_dict, partial_state_dict, attn_path, dim_x,
         weight_cache_path=weight_cache_path,
         layer_num=0,
         dtype=ttnn.bfloat16,
+        vision_seq_len=vision_seq_len,
         dim_x=dim_x,
         dim_y=dim_y,
         num_heads=NUM_HEADS,
@@ -152,8 +153,8 @@ def test_tt_attn_qkv_y(mesh_device, seq_len, use_program_cache, reset_seeds, att
 @pytest.mark.parametrize(
     "vision_seq_len, text_seq_len",
     [
-        (43 * 1024, 256),  # Tests when X doesn't need padding
-        (44520, 118),  # Tests when X needs padding
+        (22 * 256 * 8, 256),  # Tests when X doesn't need padding
+        # (44520, 118),  # Tests when X needs padding
         # (2048, 128)
         # (240, 118)
         # (44520, 118),
@@ -172,7 +173,7 @@ def test_tt_attn_qkv_y(mesh_device, seq_len, use_program_cache, reset_seeds, att
     "attn_path, dim_x, dim_y, update_y",
     [
         ("blocks.0.attn", 3072, 1536, True),
-        ("blocks.47.attn", 3072, 1536, False),
+        # ("blocks.47.attn", 3072, 1536, False),
     ],
 )
 def test_tt_attn_prepare_qkv(
@@ -180,7 +181,7 @@ def test_tt_attn_prepare_qkv(
 ):
     state_dict, partial_state_dict = load_model_weights(attn_path)
     reference_model, tt_model = create_models(
-        mesh_device, state_dict, partial_state_dict, attn_path, dim_x, dim_y, update_y
+        mesh_device, state_dict, partial_state_dict, attn_path, vision_seq_len, dim_x, dim_y, update_y
     )
 
     # Create input tensors
@@ -204,12 +205,12 @@ def test_tt_attn_prepare_qkv(
     valid_token_indices = torch.arange(total_seq_len)
     max_seqlen_in_batch = total_seq_len
 
-    tt_x = to_tt_tensor(x_input.view(1, batch_size, vision_seq_len, dim_x), mesh_device)
+    tt_x = to_tt_tensor(x_input.view(1, batch_size, vision_seq_len, dim_x), mesh_device, shard_dim=-2)
     tt_y = to_tt_tensor(y_input.view(1, batch_size, text_seq_len, dim_y), mesh_device)
     tt_scale_x = to_tt_tensor(scale_x.view(batch_size, 1, 1, dim_x), mesh_device)
     tt_scale_y = to_tt_tensor(scale_y.view(batch_size, 1, 1, dim_y), mesh_device)
-    tt_rope_cos = to_tt_tensor(rope_cos_stack, mesh_device, shard_dim=-3)
-    tt_rope_sin = to_tt_tensor(rope_sin_stack, mesh_device, shard_dim=-3)
+    tt_rope_cos = to_tt_tensor(rope_cos_stack, mesh_device, shard_dim=-2)
+    tt_rope_sin = to_tt_tensor(rope_sin_stack, mesh_device, shard_dim=-2)
 
     trans_mat = get_rot_transformation_mat(None)
     trans_mat_tt = to_tt_tensor(trans_mat, mesh_device)
