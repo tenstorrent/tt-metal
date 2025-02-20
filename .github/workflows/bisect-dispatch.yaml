@@ -46,6 +46,10 @@ on:
       command:
         required: true
         type: string
+      timeout:
+        required: true
+        type: string
+        description: "Timeout (eg: 5m, 1h)"
       description:
         type: string
         default: "Git bisect dispatch"
@@ -83,4 +87,4 @@ jobs:
           source ${{ github.workspace }}/python_env/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
-          ./tests/scripts/tt_bisect.sh -f "${{ inputs.command }}" -b ${{ inputs.bad-commit }} -g ${{ inputs.good-commit }}
+          ./tests/scripts/tt_bisect.sh -t ${{ inputs.timeout }} -f "${{ inputs.command }}" -b ${{ inputs.bad-commit }} -g ${{ inputs.good-commit }}
