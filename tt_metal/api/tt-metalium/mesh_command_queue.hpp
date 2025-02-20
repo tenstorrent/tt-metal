@@ -66,7 +66,7 @@ public:
 
     // Specifies host data to be written to or read from a MeshBuffer shard.
     struct ShardDataTransfer {
-        Coordinate shard_coord;
+        MeshCoordinate shard_coord;
         void* host_data = nullptr;
         std::optional<BufferRegion> region;
     };

@@ -7,6 +7,7 @@
 #include <memory>
 
 #include <tt-metalium/overloaded.hpp>
+#include "tt-metalium/mesh_coord.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/distributed/distributed_tensor_config.hpp"
@@ -26,8 +27,10 @@ std::shared_ptr<MeshDevice> open_mesh_device(
     const DispatchCoreConfig& dispatch_core_config,
     const MeshOffset& offset,
     const std::vector<int>& physical_device_ids) {
-    auto config =
-        MeshDeviceConfig{.mesh_shape = mesh_shape, .offset = offset, .physical_device_ids = physical_device_ids};
+    std::optional<MeshCoordinate> offset_opt =
+        offset.row != 0 || offset.col != 0 ? std::make_optional<MeshCoordinate>(offset.row, offset.col) : std::nullopt;
+    auto config = MeshDeviceConfig{
+        .mesh_shape = SimpleMeshShape(mesh_shape), .offset = offset_opt, .physical_device_ids = physical_device_ids};
     return MeshDevice::create(config, l1_small_size, trace_region_size, num_command_queues, dispatch_core_config);
 }
 
@@ -128,7 +131,7 @@ std::vector<int> get_t3k_physical_device_ids_ring() {
     TT_FATAL(num_devices == 8, "T3000 ring topology only works with 8 devices");
 
     auto physical_device_ids =
-        instance.get_mapped_physical_device_ids(MeshDeviceConfig{MeshShape{1, 8}, MeshOffset{0, 0}});
+        instance.get_mapped_physical_device_ids(MeshDeviceConfig{.mesh_shape = SimpleMeshShape(1, 8)});
     return physical_device_ids;
 }
 

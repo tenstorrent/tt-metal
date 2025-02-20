@@ -7,6 +7,8 @@
 #include <cstddef>
 #include <vector>
 
+#include "mesh_coord.hpp"
+
 namespace tt::tt_metal::distributed {
 
 using DeviceIds = std::vector<int>;
@@ -38,8 +40,8 @@ struct MeshShape {
  */
 
 struct MeshDeviceConfig {
-    MeshShape mesh_shape{0, 0};
-    MeshOffset offset{0, 0};
+    SimpleMeshShape mesh_shape{0, 0};
+    std::optional<MeshCoordinate> offset;
     std::vector<chip_id_t> physical_device_ids{};
 };
 

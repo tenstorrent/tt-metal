@@ -6,6 +6,7 @@
 
 #include "mesh_buffer.hpp"
 #include "mesh_command_queue.hpp"
+#include "mesh_coord.hpp"
 #include "mesh_event.hpp"
 
 namespace tt::tt_metal {
@@ -29,7 +30,7 @@ void WriteShard(
     MeshCommandQueue& mesh_cq,
     std::shared_ptr<MeshBuffer>& mesh_buffer,
     std::vector<DType>& src,
-    const Coordinate& coord,
+    const MeshCoordinate& coord,
     bool blocking = false) {
     std::vector<MeshCommandQueue::ShardDataTransfer> shard_data_transfers = {{
         .shard_coord = coord,
@@ -44,7 +45,7 @@ void ReadShard(
     MeshCommandQueue& mesh_cq,
     std::vector<DType>& dst,
     std::shared_ptr<MeshBuffer>& mesh_buffer,
-    const Coordinate& coord,
+    const MeshCoordinate& coord,
     bool blocking = true) {
     auto shard = mesh_buffer->get_device_buffer(coord);
     dst.resize(shard->page_size() * shard->num_pages() / sizeof(DType));

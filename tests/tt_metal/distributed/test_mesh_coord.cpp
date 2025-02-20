@@ -13,6 +13,7 @@ namespace {
 
 using ::testing::ElementsAre;
 using ::testing::UnorderedElementsAre;
+
 TEST(SimpleMeshShapeTest, Construction) {
     SimpleMeshShape shape_1d(3);
     EXPECT_EQ(shape_1d.dims(), 1);
@@ -172,6 +173,31 @@ TEST(MeshCoordinateRangeTest, SubrangeOneElement) {
     EXPECT_THAT(coords, ElementsAre(MeshCoordinate(1, 1, 1)));
 }
 
+TEST(MeshCoordinateRangeTest, Contains) {
+    MeshCoordinateRange range(MeshCoordinate(1, 1, 3), MeshCoordinate(1, 1, 3));
+    EXPECT_TRUE(range.contains(MeshCoordinate(1, 1, 3)));
+
+    range = MeshCoordinateRange(MeshCoordinate(0, 2), MeshCoordinate(1, 2));
+    EXPECT_TRUE(range.contains(MeshCoordinate(0, 2)));
+    EXPECT_TRUE(range.contains(MeshCoordinate(1, 2)));
+    EXPECT_FALSE(range.contains(MeshCoordinate(0, 1)));
+    EXPECT_FALSE(range.contains(MeshCoordinate(2, 1)));
+    EXPECT_FALSE(range.contains(MeshCoordinate(2, 2)));
+}
+
+TEST(MeshCoordinateRangeTest, Dimensionality) {
+    EXPECT_EQ(MeshCoordinateRange(MeshCoordinate(0), MeshCoordinate(5)).dims(), 1);
+    EXPECT_EQ(MeshCoordinateRange(MeshCoordinate(0, 1), MeshCoordinate(5, 1)).dims(), 2);
+    EXPECT_EQ(MeshCoordinateRange(MeshCoordinate(0, 1, 2), MeshCoordinate(5, 1, 2)).dims(), 3);
+}
+
+TEST(MeshCoordinateRangeTest, ContainsMismatchedDimensions) {
+    MeshCoordinateRange range(MeshCoordinate(1, 1, 3), MeshCoordinate(1, 1, 3));
+
+    EXPECT_EQ(range.dims(), 3);
+    EXPECT_ANY_THROW(range.contains(MeshCoordinate(1, 1)));
+}
+
 TEST(MeshCoordinateRangeTest, MismatchedDimensions) {
     MeshCoordinate start(1, 0);
     MeshCoordinate end(2, 3, 1);
@@ -219,6 +245,22 @@ TEST(MeshContainerTest, InitialValues) {
         initial_values.push_back(value);
     }
     EXPECT_THAT(initial_values, ElementsAre(3, 3, 3, 3, 3, 3));
+}
+
+TEST(MeshContainerTest, FromVector) {
+    SimpleMeshShape shape(2, 3);
+    MeshContainer<int> container(shape, std::vector<int>{0, 1, 2, 3, 4, 5});
+
+    std::vector<int> initial_values;
+    for (const auto& [_, value] : container) {
+        initial_values.push_back(value);
+    }
+    EXPECT_THAT(initial_values, ElementsAre(0, 1, 2, 3, 4, 5));
+}
+
+TEST(MeshContainerTest, FromVectorInvalidSize) {
+    SimpleMeshShape shape(2, 3);
+    EXPECT_ANY_THROW(MeshContainer<int>(shape, std::vector<int>{0, 1, 2, 3, 4}));
 }
 
 TEST(MeshContainerTest, ElementAccessRowMajor) {
