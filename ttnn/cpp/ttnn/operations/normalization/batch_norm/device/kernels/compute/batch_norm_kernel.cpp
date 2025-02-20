@@ -67,7 +67,7 @@ ALWI void batchnorm_bcast_tiles(
     tile_regs_release();
 
     cb_pop_front(cb_batch_var, 1);
-    cb_pop_front(cb_eps, 1);
+    // cb_pop_front(cb_eps, 1);
     cb_push_back(cb_den, onetile);
 
     // (input - batch_mean)/(sqrt(batch_var + eps)) = result

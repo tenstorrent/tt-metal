@@ -86,7 +86,7 @@ ALWI void batchnorm_bcast_tiles(
 
     cb_push_back(cb_den, onetile);
     cb_pop_front(cb_batch_var, onetile);
-    cb_pop_front(cb_eps, onetile);
+    // cb_pop_front(cb_eps, onetile);
 
     // (input - batch_mean)/(sqrt(batch_var + eps)) = result
     cb_wait_front(cb_den, onetile);
