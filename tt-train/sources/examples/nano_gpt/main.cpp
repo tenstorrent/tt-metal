@@ -206,7 +206,10 @@ void generate(
     // In case you need a pad token
     auto pad_token_id = 0U;
     auto original_vocab_size = tokenizer.get_vocab_size();
-    auto vocab_size = round_up_to_tile(original_vocab_size);
+    auto *device = &ttml::autograd::ctx().get_device();
+    auto num_devices = static_cast<uint32_t>(device->num_devices());
+    // this is workaround for multi-device case, we need to have vocab size divisible by 32 per device
+    auto vocab_size = round_up_to_tile(original_vocab_size, 32U * num_devices);
 
     // Build mask (causal) for attention
     std::vector<float> mask;
@@ -218,7 +221,6 @@ void generate(
             }
         }
     }
-    auto *device = &ttml::autograd::ctx().get_device();
     auto mask_tensor = ttml::autograd::create_tensor(ttml::core::from_vector(
         mask, ttml::core::create_shape({1, num_heads, max_sequence_length, max_sequence_length}), device));
 
@@ -377,13 +379,17 @@ int main(int argc, char **argv) {
     bool add_time_to_name = true;
     bool enable_wandb = true;
     bool ddp = false;
-    bool enable_tp = false;
+    // bool enable_tp = false;
+    bool enable_tp = true;
     app.add_option("-c,--config", config_name, "Yaml Config name")->default_val(config_name);
     app.add_option("-e,--eval", is_eval, "Is evaluation")->default_val(is_eval);
     app.add_option("-t,--add_time_to_name", add_time_to_name, "Add time to run name")->default_val(add_time_to_name);
     app.add_option("-w,--wandb", enable_wandb, "Enable wandb logging")->default_val(enable_wandb);
     app.add_option("-d,--ddp", ddp, "Enable DDP")->default_val(ddp);
     CLI11_PARSE(app, argc, argv);
+
+    // disable wandb for debugging
+    enable_wandb = false;
 
     if (ddp && enable_tp) {
         throw std::logic_error("DDP and TP cannot be enabled at the same time. Disable DDP or TP.");
@@ -544,7 +550,9 @@ int main(int argc, char **argv) {
     auto train_dataloader = DataLoader(dataset, /* batch_size */ config.batch_size, /* shuffle */ true, collate_fn);
 
     fmt::print("Overriding vocab size to be divisible by 32\n");
-    config.transformer_config.vocab_size = round_up_to_tile(tokenizer->get_vocab_size());
+    auto num_devices = static_cast<uint32_t>(device->num_devices());
+    // this is workaround for multi-device case, we need to have vocab size divisible by 32 per device
+    config.transformer_config.vocab_size = round_up_to_tile(tokenizer->get_vocab_size(), num_devices * 32U);
     // auto model = ttml::models::gpt2::create(config.transformer_config);
     auto model = ttml::models::distributed::gpt2::create(config.transformer_config);
 

@@ -16,6 +16,7 @@
 #include "autograd/graph.hpp"
 #include "autograd/graph_utils.hpp"
 #include "autograd/tensor.hpp"
+#include "core/compute_kernel_config.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
@@ -23,23 +24,33 @@ namespace ttml::ops {
 
 namespace {
 
-bool is_batch_broadcasted(const autograd::TensorPtr& a, const ttnn::Tensor& grad) {
+bool needs_broadcast(const autograd::TensorPtr& a, const ttnn::Tensor& grad) {
     auto a_shape = a->get_value().get_logical_shape();
     auto b_shape = grad.get_logical_shape();
     if (a_shape.rank() != b_shape.rank()) {
         return false;
     }
-    for (size_t i = 1; i < a_shape.size(); ++i) {
+
+    for (size_t i = 0; i < a_shape.size(); ++i) {
         if (a_shape[i] != b_shape[i]) {
-            return false;
+            return true;
         }
     }
 
-    if (a_shape[0] == 1 && b_shape[0] != 1) {
-        return true;
+    return false;
+}
+
+ttnn::SmallVector<int> get_broadcast_dimensions(const autograd::TensorPtr& a, const ttnn::Tensor& grad) {
+    ttnn::SmallVector<int> broadcast_dims;
+    auto a_shape = a->get_value().get_logical_shape();
+    auto b_shape = grad.get_logical_shape();
+    for (size_t i = 0; i < a_shape.size(); ++i) {
+        if (a_shape[i] != b_shape[i]) {
+            broadcast_dims.push_back(i);
+        }
     }
 
-    return false;
+    return broadcast_dims;
 }
 
 }  // namespace
@@ -57,14 +68,25 @@ autograd::TensorPtr operator+(const autograd::TensorPtr& a, const autograd::Tens
 
     out->set_value(ttnn::add(a->get_value(), b->get_value()));
     autograd::GradFunction grad = [a, b, out]() {
-        if (is_batch_broadcasted(a, out->get_grad())) {
-            a->add_grad(ttnn_fixed::sum_over_dim(out->get_grad(), /* axis */ 0));
+        if (needs_broadcast(a, out->get_grad())) {
+            a->add_grad(ttnn::sum(
+                out->get_grad(),
+                get_broadcast_dimensions(a, out->get_grad()),
+                /* keep_dim */ true,
+                std::nullopt,
+                core::ComputeKernelConfig::precise()));
         } else {
             a->add_grad(out->get_grad());
         }
 
-        if (is_batch_broadcasted(b, out->get_grad())) {
-            b->add_grad(ttnn_fixed::sum_over_dim(out->get_grad(), /* axis */ 0));
+        if (needs_broadcast(b, out->get_grad())) {
+            // b->add_grad(ttnn_fixed::sum_over_dim(out->get_grad(), /* axis */ 0));
+            b->add_grad(ttnn::sum(
+                out->get_grad(),
+                get_broadcast_dimensions(b, out->get_grad()),
+                /* keep_dim */ true,
+                std::nullopt,
+                core::ComputeKernelConfig::precise()));
         } else {
             b->add_grad(out->get_grad());
         }
