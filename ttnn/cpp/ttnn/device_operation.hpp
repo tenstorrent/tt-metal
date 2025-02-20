@@ -365,7 +365,6 @@ typename device_operation_t::tensor_return_value_t invoke(
     const typename device_operation_t::operation_attributes_t& operation_attributes,
     const typename device_operation_t::tensor_args_t& tensor_args) {
     ZoneScopedN("Run Device Operation");
-    log_info(tt::LogOp, "Run Device Operation HERE");
 
     // TODO: Add GraphTracker::instance().track_device_operation to track device operations specifically?
     tt::tt_metal::GraphTracker::instance().track_function_start(get_operation_name<device_operation_t>(operation_attributes), operation_attributes, tensor_args);

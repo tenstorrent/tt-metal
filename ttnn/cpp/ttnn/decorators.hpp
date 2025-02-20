@@ -117,7 +117,7 @@ template <typename T, typename... Args>
 concept FirstArgIs =
     sizeof...(Args) > 0 && std::same_as<std::decay_t<std::tuple_element_t<0, std::tuple<Args&&...>>>, T>;
 
-template <reflect::fixed_string cpp_fully_qualified_name, typename operation_t, bool auto_launch_op>
+template <reflect::fixed_string cpp_fully_qualified_name, typename operation_t>
 struct registered_operation_t {
     static constexpr auto is_primitive = PrimitiveOperationConcept<operation_t>;
 
@@ -196,22 +196,9 @@ private:
     }
 
     template <typename... args_t>
-        requires(not auto_launch_op)
     auto invoke_composite(args_t&&... args) const {
         ZoneScopedN("Run composite ttnn operation ");
         ZoneName(static_cast<const char*>(cpp_fully_qualified_name.data.data()), cpp_fully_qualified_name.size());
-        return operation_t::invoke(std::forward<decltype(args)>(args)...);
-    }
-
-    template <typename... args_t>
-        requires(auto_launch_op)
-    auto invoke_composite(args_t&&... args) const {
-        ZoneScopedN("Run composite ttnn operation (using auto async)");
-        ZoneName(static_cast<const char*>(cpp_fully_qualified_name.data.data()), cpp_fully_qualified_name.size());
-
-        // Just default to the non-auto-launch version. We can get rid of this API and search and replicate
-        // instances for register_with_auto_launch_op()
-
         return operation_t::invoke(std::forward<decltype(args)>(args)...);
     }
 };
@@ -259,10 +246,10 @@ consteval void assert_operation_in_correct_namespace() {
     }
 }
 
-template <reflect::fixed_string cpp_fully_qualified_name, typename operation_t, bool auto_launch_op>
+template <reflect::fixed_string cpp_fully_qualified_name, typename operation_t>
 constexpr auto register_operation_impl() {
     assert_operation_in_correct_namespace<cpp_fully_qualified_name, operation_t>();
-    constexpr auto operation = registered_operation_t<cpp_fully_qualified_name, operation_t, auto_launch_op>{};
+    constexpr auto operation = registered_operation_t<cpp_fully_qualified_name, operation_t>{};
     static_assert(
         not requires(operation_name_key_t<cpp_fully_qualified_name> key) { get(key); },
         "Operation with this `cpp_fully_qualified_name` was already registered. Please use a different name.");
@@ -275,12 +262,14 @@ constexpr auto register_operation_impl() {
 
 template <reflect::fixed_string cpp_fully_qualified_name, typename operation_t>
 constexpr auto register_operation() {
-    return register_operation_impl<cpp_fully_qualified_name, operation_t, false>();
+    return register_operation_impl<cpp_fully_qualified_name, operation_t>();
 }
 
+// TODO: This can just get replaced with register_operation(), but opting to defer this until after the migration
+// to minimize blast radius.
 template <reflect::fixed_string cpp_fully_qualified_name, typename operation_t>
 constexpr auto register_operation_with_auto_launch_op() {
-    return register_operation_impl<cpp_fully_qualified_name, operation_t, true>();
+    return register_operation_impl<cpp_fully_qualified_name, operation_t>();
 }
 
 }  // namespace decorators

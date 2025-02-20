@@ -474,7 +474,7 @@ void dump_tensor(
                 auto distribute_config = get_distributed_tensor_config(strategy);
                 dump_multi_device_host_storage(output_file, storage, distribute_config);
             } else {
-                // raise_unsupported_storage<StorageType>();
+                raise_unsupported_storage<StorageType>();
             }
         },
         tensor_to_dump.get_storage());

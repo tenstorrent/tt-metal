@@ -1032,9 +1032,7 @@ Tensor allocate_tensor_on_mesh(const TensorSpec& tensor_spec, distributed::MeshD
         tt::tt_metal::detail::InMainThread(), "Allocation of a tensor on mesh must be called from the main thread");
     auto mesh_buffer = tensor_impl::allocate_mesh_buffer_on_device(mesh_device, tensor_spec);
     DeviceStorage device_storage(std::move(mesh_buffer));
-    auto output = Tensor(std::move(device_storage), tensor_spec);
-    output.set_device(mesh_device);
-    return output;
+    return Tensor(std::move(device_storage), tensor_spec);
 }
 
 void write_tensor(const Tensor& host_tensor, Tensor device_tensor, QueueId cq_id) {

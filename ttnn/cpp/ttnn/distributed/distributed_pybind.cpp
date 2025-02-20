@@ -4,7 +4,6 @@
 
 #include "ttnn/distributed/distributed_pybind.hpp"
 #include <pybind11/pytypes.h>
-#include <pybind11/stl.h>
 
 #include <tt-metalium/command_queue.hpp>
 #include "tt-metalium/mesh_coord.hpp"
