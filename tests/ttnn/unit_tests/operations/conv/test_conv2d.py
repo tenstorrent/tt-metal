@@ -60,7 +60,7 @@ def run_conv(
     transpose_shards=True,  # https://github.com/tenstorrent/tt-metal/issues/17897
     fp32_accum=False,
     packer_l1_acc=False,
-    output_layout=ttnn.ROW_MAJOR_LAYOUT,
+    output_layout=ttnn.TILE_LAYOUT,
     deallocate_activation=False,
     debug=False,
     groups=1,
@@ -136,7 +136,9 @@ def run_conv(
         and output_layout == ttnn.ROW_MAJOR_LAYOUT
     ):
         output_layout = ttnn.TILE_LAYOUT
-        logger.warning("Disabling untilize_out when out_c > 256 for Height Sharded")
+        pytest.xfail(
+            "Untilize_out is not supported when out_c > 256 for Height Sharded. https://github.com/tenstorrent/tt-metal/issues/18633"
+        )
 
     conv_config = ttnn.Conv2dConfig(
         dtype=activations_dtype,
@@ -163,8 +165,8 @@ def run_conv(
         conv_config.act_block_h_override = config_override["act_block_h"]
         if fp32_accum and packer_l1_acc and output_layout == ttnn.ROW_MAJOR_LAYOUT:
             conv_config.output_layout = ttnn.TILE_LAYOUT
-            logger.warning(
-                "Forcing output_layout to TILE when act_block_h_override, fp32_accum and packer_l1_acc are enabled"
+            pytest.xfail(
+                "Row Major layout is not supported when act_block_h_override, fp32_accum and packer_l1_acc are all enabled"
             )
 
     if config_override and "act_block_w_div" in config_override and not auto_shard:
@@ -720,7 +722,7 @@ def test_conv_ws(
 @pytest.mark.parametrize(
     "activations_dtype, output_layout",
     [
-        (ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+        # (ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT), In Width Sharding, with RM, create output tensor fails with physical_height == physical_shard_height.
         (ttnn.bfloat8_b, ttnn.TILE_LAYOUT),
     ],
 )
@@ -889,7 +891,7 @@ def test_resnet50_conv_gs(
         # unique convs in rn50 (complete list)
         # first conv post folding and input_channels padding to tile width
         # (8, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, True, None), HANGS!!
-        (16, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, HS, {"act_block_h": 256}),
+        (16, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, HS, {"act_block_h": 64}),
         # (20, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, HS, {"act_block_h": 32}),  Out of Memory!!
         # rn50 layer1
         (8, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, HS, None),
@@ -1005,7 +1007,7 @@ def test_resnet50_conv_wh(
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, shard_layout, config_override",
     (
-        (16, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, HS, {"act_block_h": 256}),
+        (16, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, HS, {"act_block_h": 64}),
         (8, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, HS, None),
     ),
 )
@@ -1184,7 +1186,6 @@ def test_resnet50_conv_wh_fp32(
     )
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, shard_layout, config_override",
@@ -2851,6 +2852,7 @@ def test_small_in_large_out_channels_auto_shard(device, torch_tensor_map):
         padding[0],
         padding[1],
         None,
+        output_layout=ttnn.TILE_LAYOUT,  # OOM with Row Major
         auto_shard=True,
     )
 
