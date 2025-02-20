@@ -88,11 +88,7 @@ jobs:
       fail-fast: false
       matrix:
         card: [N150, N300]
-<<<<<<< HEAD
         model: [common_models, functional_unet, llama3.2-1B, qwen, mistral7b, mistral7b_eth, resnet50, yolov4, whisper]
-=======
-        model: [common_models, functional_unet, llama3.2-1B, qwen, mistral7b, mistral7b_eth, resnet50, yolov4, functional_mobilenetv2]
->>>>>>> #11197: MobilenetV2 bring-up in WH150 with new conv-api
     name: Nightly ${{ matrix.card }} ${{ matrix.model }}
     defaults:
       run:
