@@ -126,7 +126,7 @@ def test_shard2d_to_tensor_mesh(M, K, N, dtype, mesh_shape, mesh_device):
     core_grid = ttnn.CoreGrid(y=1, x=8)
 
     # If K < N it's FF1-like test case, else FF2-like test case
-    shard_dim = (0, 3) if K < N else (3, 0)  # None means to replicate along this dim
+    shard_dim = (0, 3) if K < N else (3, 0)
 
     K = K // mesh_shape[1] if K < N else K // mesh_shape[0]
     N = N // mesh_shape[0] if K < N else N // mesh_shape[1]
@@ -173,8 +173,8 @@ def test_concat2d_to_tensor(M, K, N, dtype, mesh_shape, mesh_device):
     core_grid = ttnn.CoreGrid(y=1, x=8)
 
     # If K < N it's FF1-like test case, else FF2-like test case
-    shard_dim = (0, 3) if K < N else (3, 0)  # None means to replicate along this dim
-    concat_dim = (3, 1) if K < N else (1, 3)  # dim 1 for reduce, dim 3 for concatenating fractures
+    shard_dim = (0, 3) if K < N else (3, 0)
+    concat_dim = (3, 1) if K < N else (1, 3)
 
     K = K // mesh_shape[1] if K < N else K // mesh_shape[0]
     N = N // mesh_shape[0] if K < N else N // mesh_shape[1]
