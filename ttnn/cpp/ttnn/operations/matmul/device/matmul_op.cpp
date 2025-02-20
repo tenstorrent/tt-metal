@@ -1528,19 +1528,6 @@ void Matmul::validate(
             this->output_dtype.value());
     }
 
-    const bool has_width_sharded_input = (input_tensor_a.is_sharded() && input_tensor_a.memory_config().memory_layout ==
-                                                                             TensorMemoryLayout::WIDTH_SHARDED) ||
-                                         (input_tensor_b.is_sharded() && input_tensor_b.memory_config().memory_layout ==
-                                                                             TensorMemoryLayout::WIDTH_SHARDED);
-
-    const bool has_block_sharded_input = (input_tensor_a.is_sharded() && input_tensor_a.memory_config().memory_layout ==
-                                                                             TensorMemoryLayout::BLOCK_SHARDED) ||
-                                         (input_tensor_b.is_sharded() && input_tensor_b.memory_config().memory_layout ==
-                                                                             TensorMemoryLayout::BLOCK_SHARDED);
-    TT_FATAL(
-        !(has_width_sharded_input && has_block_sharded_input),
-        "Cannot have one input width sharded and one input block sharded");
-
     std::visit(
         [input_tensor_a, input_tensor_b, optional_bias, in0_tile_shape, in1_tile_shape, this](
             const auto& program_config) {
@@ -1860,6 +1847,14 @@ void Matmul::validate(
                     auto tensor_b_memory_layout = input_tensor_b.memory_config().memory_layout;
                     TT_FATAL(tensor_b_memory_layout == TensorMemoryLayout::WIDTH_SHARDED, "Error");
                     if (input_tensor_b.buffer()->buffer_type() != tt_metal::BufferType::DRAM) {
+                        const auto tensor_a_memory_layout = input_tensor_a.memory_config().memory_layout;
+                        TT_FATAL(
+                            (input_tensor_a.memory_config().is_sharded() &&
+                             tensor_a_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) ||
+                                tensor_a_memory_layout == TensorMemoryLayout::INTERLEAVED,
+                            "Error - non-DRAM width sharded input B requires input A to be interleaved or height "
+                            "sharded, rather than {}",
+                            tensor_a_memory_layout);
                         TT_FATAL(
                             program_config.per_core_N ==
                                 (input_tensor_b.shard_spec().value().shape[1] / in1_tile_shape[1]),
