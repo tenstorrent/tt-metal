@@ -245,11 +245,11 @@ def create_tt_model(
             "models/demos/llama3/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
-            5120,  # max_seq_len
+            2000,  # max_seq_len
             32,  # batch_size
-            2048,  # max_generated_tokens
+            1024,  # max_generated_tokens  # TODO Update this to 4096, and make sure it fits in DRAM with correct page_params
             True,  # paged_attention  # TODO Find the correct paged_attn params to avoid hangs in this config with long context generation
-            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
+            {"page_block_size": 64, "page_max_num_blocks": 1024},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
             False,  # stop_at_eos
             True,  # ci_only
@@ -306,10 +306,6 @@ def test_llama_demo_text(
 
     if is_ci_env and (optimizations == LlamaOptimizations.accuracy or not ci_only):
         pytest.skip("CI only runs the CI-only tests")
-
-    # TODO This can be tackled by reducing the number of iterations we run on CI on N150/N300 machines
-    if is_ci_env and mesh_device.get_num_devices() < 4 and batch_size == 32:
-        pytest.skip("Some llama3 models may run out of memory with CI settings when batch_size=32")
 
     # TODO: Remove this once all batch sizes are supported on TG
     if os.environ.get("FAKE_DEVICE") == "TG" and batch_size not in [1, 32]:
