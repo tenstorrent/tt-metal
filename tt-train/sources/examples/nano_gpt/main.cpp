@@ -637,8 +637,14 @@ int main(int argc, char **argv) {
             if (gradient_accumulator_helper.should_step()) {
                 // synchronize gradients for multi-device case, no-op if single device
                 auto parameters = model->parameters();
-                ttml::core::distributed::synchronize_parameters(parameters);
+                if (!enable_tp) {
+                    ttml::core::distributed::synchronize_parameters(parameters);
+                }
+
                 if (config.use_clip_grad_norm) {
+                    if (enable_tp) {
+                        throw std::logic_error("Clip grad norm is not supported with TP");
+                    }
                     ttml::core::clip_grad_norm(parameters, config.clip_grad_norm_max_norm);
                 }
                 optimizer->step();
