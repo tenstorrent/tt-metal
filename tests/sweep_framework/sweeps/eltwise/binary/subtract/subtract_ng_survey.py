@@ -17,36 +17,36 @@ from models.utility_functions import torch_random
 # Each suite has a key name (in this case "suite_1") which will associate the test vectors to this specific suite of inputs.
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
-    "sq_diff_bcast_1": {
+    "sub_bcast_mixed_1": {
         # "input_shape": [{"self": [1, 1, 1024, 1024], "other": [1, 1, 1024, 1024]}],
         # "input_shape": [{"self": [1, 1, 512, 512], "other": [1, 1, 512, 512]}],  # for float32 and int32 dtypes
         "input_shape": [
-            {"self": [4, 8, 64, 512], "other": [1, 8, 64, 1]},  # col_b, N_b #0.98
-            {"self": [4, 8, 64, 512], "other": [4, 1, 1, 512]},  # row_b, C_b
-            {"self": [4, 8, 64, 512], "other": [4, 8, 1, 1]},  # B scalar
-            {"self": [1, 8, 64, 1], "other": [4, 8, 64, 512]},  # col_a, N_a
-            {"self": [4, 1, 1, 512], "other": [4, 8, 64, 512]},  # row_a, C_a
-            {"self": [4, 8, 1, 1], "other": [4, 8, 64, 512]},  # A scalar
-            {"self": [4, 8, 1, 512], "other": [4, 8, 64, 1]},  # row_a, col_b
-            {"self": [4, 8, 64, 1], "other": [4, 8, 1, 512]},  # row_b, col_a
+            {"self": [4, 8, 64, 512], "other": [1, 8, 64, 1]},  # col_b, N_b   # bf4b passes for [-100, 100]
+            {"self": [4, 8, 64, 512], "other": [4, 1, 1, 512]},  # row_b, C_b  # atol = nan for bf4b
+            {"self": [4, 8, 64, 512], "other": [4, 8, 1, 1]},  # B scalar      # bf4b passes for [-74, 74]
+            {"self": [1, 8, 64, 1], "other": [4, 8, 64, 512]},  # col_a, N_a   # atol = nan for bf4b
+            {"self": [4, 1, 1, 512], "other": [4, 8, 64, 512]},  # row_a, C_a  # atol = nan for bf4b
+            {"self": [4, 8, 1, 1], "other": [4, 8, 64, 512]},  # A scalar      # atol = nan for bf4b
+            {"self": [4, 8, 1, 512], "other": [4, 8, 64, 1]},  # row_a, col_b  # bf4b passes for [-100, 100]
+            {"self": [4, 8, 64, 1], "other": [4, 8, 1, 512]},  # row_b, col_a    # atol = nan for bf4b
         ],  # for bcast
         "input_dtype": [
-            {"input_a_dtype": "ttnn.bfloat16", "input_b_dtype": "ttnn.bfloat16"},
-            {"input_a_dtype": "ttnn.float32", "input_b_dtype": "ttnn.float32"},
-            {"input_a_dtype": "ttnn.bfloat8_b", "input_b_dtype": "ttnn.bfloat8_b"},
-            {"input_a_dtype": "ttnn.bfloat4_b", "input_b_dtype": "ttnn.bfloat4_b"},  # same dtype
-            # {"input_a_dtype": "ttnn.bfloat16", "input_b_dtype": "ttnn.float32"},
-            # {"input_a_dtype": "ttnn.bfloat16", "input_b_dtype": "ttnn.bfloat8_b"},
-            # {"input_a_dtype": "ttnn.bfloat16", "input_b_dtype": "ttnn.bfloat4_b"},
-            # {"input_a_dtype": "ttnn.float32", "input_b_dtype": "ttnn.bfloat16"},
-            # {"input_a_dtype": "ttnn.float32", "input_b_dtype": "ttnn.bfloat8_b"},
-            # {"input_a_dtype": "ttnn.float32", "input_b_dtype": "ttnn.bfloat4_b"},
-            # {"input_a_dtype": "ttnn.bfloat8_b", "input_b_dtype": "ttnn.float32"},
-            # {"input_a_dtype": "ttnn.bfloat8_b", "input_b_dtype": "ttnn.bfloat16"},
-            # {"input_a_dtype": "ttnn.bfloat8_b", "input_b_dtype": "ttnn.bfloat4_b"},
-            # {"input_a_dtype": "ttnn.bfloat4_b", "input_b_dtype": "ttnn.float32"},
-            # {"input_a_dtype": "ttnn.bfloat4_b", "input_b_dtype": "ttnn.bfloat16"},
-            # {"input_a_dtype": "ttnn.bfloat4_b", "input_b_dtype": "ttnn.bfloat8_b"},  # mixed dtype
+            # {"input_a_dtype": "ttnn.bfloat16", "input_b_dtype": "ttnn.bfloat16"},
+            # {"input_a_dtype": "ttnn.float32", "input_b_dtype": "ttnn.float32"},
+            # {"input_a_dtype": "ttnn.bfloat8_b", "input_b_dtype": "ttnn.bfloat8_b"},
+            # {"input_a_dtype": "ttnn.bfloat4_b", "input_b_dtype": "ttnn.bfloat4_b"},  # same dtype
+            {"input_a_dtype": "ttnn.bfloat16", "input_b_dtype": "ttnn.float32"},
+            {"input_a_dtype": "ttnn.bfloat16", "input_b_dtype": "ttnn.bfloat8_b"},
+            {"input_a_dtype": "ttnn.bfloat16", "input_b_dtype": "ttnn.bfloat4_b"},
+            {"input_a_dtype": "ttnn.float32", "input_b_dtype": "ttnn.bfloat16"},
+            {"input_a_dtype": "ttnn.float32", "input_b_dtype": "ttnn.bfloat8_b"},
+            {"input_a_dtype": "ttnn.float32", "input_b_dtype": "ttnn.bfloat4_b"},
+            {"input_a_dtype": "ttnn.bfloat8_b", "input_b_dtype": "ttnn.float32"},
+            {"input_a_dtype": "ttnn.bfloat8_b", "input_b_dtype": "ttnn.bfloat16"},
+            {"input_a_dtype": "ttnn.bfloat8_b", "input_b_dtype": "ttnn.bfloat4_b"},
+            {"input_a_dtype": "ttnn.bfloat4_b", "input_b_dtype": "ttnn.float32"},
+            {"input_a_dtype": "ttnn.bfloat4_b", "input_b_dtype": "ttnn.bfloat16"},
+            {"input_a_dtype": "ttnn.bfloat4_b", "input_b_dtype": "ttnn.bfloat8_b"},  # mixed dtype
         ],
         "input_a_layout": [ttnn.TILE_LAYOUT],
         "input_b_layout": [ttnn.TILE_LAYOUT],
@@ -202,11 +202,11 @@ def run(
     torch_input_tensor_a = ttnn.to_torch(input_tensor_a)
     torch_input_tensor_b = ttnn.to_torch(input_tensor_b)
 
-    golden_function = ttnn.get_golden_function(ttnn.experimental.squared_difference)
+    golden_function = ttnn.get_golden_function(ttnn.experimental.sub)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b)
 
     start_time = start_measuring_time()
-    result = ttnn.experimental.squared_difference(input_tensor_a, input_tensor_b)
+    result = ttnn.experimental.sub(input_tensor_a, input_tensor_b)
     output_tensor = ttnn.to_torch(result)
     e2e_perf = stop_measuring_time(start_time)
 

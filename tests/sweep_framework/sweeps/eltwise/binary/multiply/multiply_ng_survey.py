@@ -16,14 +16,24 @@ from models.utility_functions import torch_random
 # Each suite has a key name (in this case "suite_1") which will associate the test vectors to this specific suite of inputs.
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
-    "mul_mixed_1": {
+    "mul_bcast_mixed_1": {
         # "input_shape": [{"self": [1, 1, 1024, 1024], "other": [1, 1, 1024, 1024]}],
-        "input_shape": [{"self": [1, 1, 512, 512], "other": [1, 1, 512, 512]}],  # for float32 and int32 dtypes
+        # "input_shape": [{"self": [1, 1, 512, 512], "other": [1, 1, 512, 512]}],  # for float32 and int32 dtypes
+        "input_shape": [
+            {"self": [4, 8, 64, 512], "other": [1, 8, 64, 1]},  # col_b, N_b
+            {"self": [4, 8, 64, 512], "other": [4, 1, 1, 512]},  # row_b, C_b
+            {"self": [4, 8, 64, 512], "other": [4, 8, 1, 1]},  # B scalar
+            {"self": [1, 8, 64, 1], "other": [4, 8, 64, 512]},  # col_a, N_a
+            {"self": [4, 1, 1, 512], "other": [4, 8, 64, 512]},  # row_a, C_a
+            {"self": [4, 8, 1, 1], "other": [4, 8, 64, 512]},  # A scalar
+            {"self": [4, 8, 1, 512], "other": [4, 8, 64, 1]},  # row_a, col_b
+            {"self": [4, 8, 64, 1], "other": [4, 8, 1, 512]},  # row_b, col_a
+        ],  # for bcast
         "input_dtype": [
             # {"input_a_dtype": "ttnn.bfloat16", "input_b_dtype": "ttnn.bfloat16"},
             # {"input_a_dtype": "ttnn.float32", "input_b_dtype": "ttnn.float32"},
             # {"input_a_dtype": "ttnn.bfloat8_b", "input_b_dtype": "ttnn.bfloat8_b"},
-            # {"input_a_dtype": "ttnn.bfloat4_b", "input_b_dtype": "ttnn.bfloat4_b"}, # same dtype
+            # {"input_a_dtype": "ttnn.bfloat4_b", "input_b_dtype": "ttnn.bfloat4_b"},  # same dtype
             {"input_a_dtype": "ttnn.bfloat16", "input_b_dtype": "ttnn.float32"},
             {"input_a_dtype": "ttnn.bfloat16", "input_b_dtype": "ttnn.bfloat8_b"},
             {"input_a_dtype": "ttnn.bfloat16", "input_b_dtype": "ttnn.bfloat4_b"},
@@ -159,12 +169,12 @@ def run(
     input_b_dtype = return_dtype(input_dtype["input_b_dtype"])
 
     torch_input_tensor_a = gen_func_with_cast_tt(
-        partial(torch_random, low=-2, high=2, dtype=torch.float32), input_a_dtype
+        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(input_shape["self"])
 
     if isinstance(input_shape["other"], list):
         torch_input_tensor_b = gen_func_with_cast_tt(
-            partial(torch_random, low=-2, high=2, dtype=torch.float32), input_b_dtype
+            partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
         )(input_shape["other"])
     else:
         torch_input_tensor_b = torch.tensor(input_shape["other"], dtype=torch.float32)
@@ -198,5 +208,9 @@ def run(
     result = ttnn.experimental.mul(input_tensor_a, input_tensor_b)
     output_tensor = ttnn.to_torch(result)
     e2e_perf = stop_measuring_time(start_time)
+
+    diff = torch.abs(torch_output_tensor - output_tensor)
+    max_atol = torch.max(diff)
+    print(f"Max absolute tolerance (atol): {max_atol.item()}")
 
     return [check_with_pcc(torch_output_tensor, output_tensor, pcc=0.99), e2e_perf]
