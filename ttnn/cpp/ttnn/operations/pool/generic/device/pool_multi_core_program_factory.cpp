@@ -24,8 +24,6 @@ namespace {
 // }
 
 // Return a single bf16 scalar for the pool type in u32 (packed in the least 16 bits)
-// TODO(jongbinlimTT): This is tech debt from previous author. Function name shows a getter of
-// BF16, but return type is UINT32_T. This isn't correct.
 uint32_t get_bf16_pool_scalar(Pool2DType pool_type, uint32_t kernel_size_hw) {
     float value;
     switch (pool_type) {
@@ -37,8 +35,6 @@ uint32_t get_bf16_pool_scalar(Pool2DType pool_type, uint32_t kernel_size_hw) {
 }  // namespace
 
 // Return a single bf16 init value for the pool type in u32 (packed in the least 16 bits)
-// TODO(jongbinlimTT): This is tech debt from previous author. Function name shows a getter of
-// BF16, but return type is UINT32_T. This isn't correct.
 uint32_t get_bf16_pool_init_value(Pool2DType pool_type) {
     float value;
     switch (pool_type) {
