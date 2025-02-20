@@ -270,44 +270,6 @@ inline void dprint_tensix_pack_config_helper(const ckernel::packer::pack_config_
 }
 #endif  // ARCH_BLACKHOLE
 
-// PACK STRIDES
-
-inline void dprint_tensix_pack_strides_x_stride(const uint32_t& word) {
-    dprint_tensix_struct_field(word, 0xfff, 0, "x_stride", true);  // decimal
-}
-
-inline void dprint_tensix_pack_strides_y_stride(const uint32_t& word) {
-    dprint_tensix_struct_field(word, 0xfff000, 12, "y_stride", true);  // decimal
-}
-
-inline void dprint_tensix_pack_strides_z_stride(const uint32_t& word) {
-    dprint_tensix_struct_field(word, 0xfff, 0, "z_stride", true);  // decimal
-}
-
-inline void dprint_tensix_pack_strides_w_stride(const uint32_t& word) {
-    dprint_tensix_struct_field(word, 0xffff000, 12, "w_stride", true);  // decimal
-}
-
-// Printing packer strides
-inline void dprint_tensix_pack_strides_helper(uint reg_id, const volatile uint tt_reg_ptr* cfg) {
-    uint32_t reg_addr = 0;
-    switch (reg_id) {
-        case 1: reg_addr = PCK0_ADDR_CTRL_XY_REG_0_Xstride_ADDR32; break;
-        case 2: reg_addr = PCK0_ADDR_CTRL_XY_REG_1_Xstride_ADDR32; break;
-        default: DPRINT << "Aborting! Invalid register id (valid ids are between 1 and 2)" << ENDL(); break;
-    }
-
-    // word 0 xy_stride
-    uint32_t word = cfg[reg_addr];
-    dprint_tensix_pack_strides_x_stride(word);
-    dprint_tensix_pack_strides_y_stride(word);
-
-    // word 1 zw_stride
-    word = cfg[reg_addr + 1];
-    dprint_tensix_pack_strides_z_stride(word);
-    dprint_tensix_pack_strides_w_stride(word);
-}
-
 // PACK RELU CONFIG
 
 // These functions' argument should be return value of read_relu_config()
@@ -427,6 +389,61 @@ inline void dprint_tensix_dest_rd_ctrl() {
 }
 
 #endif  // END OF ELSE
+
+// PACK STRIDES
+#ifdef ARCH_BLACKHOLE
+inline void dprint_tensix_pack_strides_x_stride(const uint32_t& word) {
+    dprint_tensix_struct_field(word, 0xffff, 0, "x_stride", true);  // decimal
+}
+
+inline void dprint_tensix_pack_strides_y_stride(const uint32_t& word) {
+    dprint_tensix_struct_field(word, 0xffff0000, 16, "y_stride", true);  // decimal
+}
+
+inline void dprint_tensix_pack_strides_z_stride(const uint32_t& word) {
+    dprint_tensix_struct_field(word, 0xffff, 0, "z_stride", true);  // decimal
+}
+
+inline void dprint_tensix_pack_strides_w_stride(const uint32_t& word) {
+    dprint_tensix_struct_field(word, 0xffff0000, 16, "w_stride", true);  // decimal
+}
+#else
+inline void dprint_tensix_pack_strides_x_stride(const uint32_t& word) {
+    dprint_tensix_struct_field(word, 0xffff, 0, "x_stride", true);  // decimal
+}
+
+inline void dprint_tensix_pack_strides_y_stride(const uint32_t& word) {
+    dprint_tensix_struct_field(word, 0xffff0000, 16, "y_stride", true);  // decimal
+}
+
+inline void dprint_tensix_pack_strides_z_stride(const uint32_t& word) {
+    dprint_tensix_struct_field(word, 0xffff, 0, "z_stride", true);  // decimal
+}
+
+inline void dprint_tensix_pack_strides_w_stride(const uint32_t& word) {
+    dprint_tensix_struct_field(word, 0xffff0000, 16, "w_stride", true);  // decimal
+}
+#endif
+
+// Printing packer strides
+inline void dprint_tensix_pack_strides_helper(uint reg_id, const volatile uint tt_reg_ptr* cfg) {
+    uint32_t reg_addr = 0;
+    switch (reg_id) {
+        case 1: reg_addr = PCK0_ADDR_CTRL_XY_REG_0_Xstride_ADDR32; break;
+        case 2: reg_addr = PCK0_ADDR_CTRL_XY_REG_1_Xstride_ADDR32; break;
+        default: DPRINT << "Aborting! Invalid register id (valid ids are between 1 and 2)" << ENDL(); break;
+    }
+
+    // word 0 xy_stride
+    uint32_t word = cfg[reg_addr];
+    dprint_tensix_pack_strides_x_stride(word);
+    dprint_tensix_pack_strides_y_stride(word);
+
+    // word 1 zw_stride
+    word = cfg[reg_addr + 1];
+    dprint_tensix_pack_strides_z_stride(word);
+    dprint_tensix_pack_strides_w_stride(word);
+}
 
 // PCK_EDGE_OFFSET
 
@@ -599,5 +616,5 @@ inline void dprint_tensix_pack_strides(uint reg_id = 0) {
                 }
             }
         } else DPRINT
-        << "INVALID REGISTER ID! PLEASE CHOOSE A NUMBER BETWEEN 0 AND 4." << ENDL();)
+        << "INVALID REGISTER ID! PLEASE CHOOSE A NUMBER BETWEEN 0 AND 2." << ENDL();)
 }
