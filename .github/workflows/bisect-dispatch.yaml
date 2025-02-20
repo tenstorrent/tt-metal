@@ -10,9 +10,33 @@ on:
           - grayskull
           - wormhole_b0
           - blackhole
+      tracy:
+        required: true
+        type: boolean
+        default: false
+        description: "Build with tracy enabled"
+      build-wheel:
+        required: true
+        type: boolean
+        default: false
+        description: "Build Python Wheel"
       runner-label:
         required: true
+        type: choice
+        options:
+          - E150
+          - N150
+          - N300
+          - P150
+          - config-t3000
+          - config-tg
+          - config-tgg
+        description: "Runner Type Label"
+      extra-label:
+        required: true
         type: string
+        default: "in-service"
+        description: "Secondary tag to filter runners"
       good-commit:
         required: true
         type: string
@@ -32,6 +56,9 @@ jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     secrets: inherit
+    with:
+      tracy: ${{ inputs.tracy }}
+      build-wheel: ${{ inputs.build-wheel }}
   test-dispatch:
     needs: build-artifact
     timeout-minutes: 1440
@@ -40,7 +67,7 @@ jobs:
       ARCH_NAME: ${{ inputs.arch }}
     runs-on:
       - ${{ inputs.runner-label }}
-      - "in-service"
+      - ${{ inputs.extra-label }}
     steps:
       - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
       - name: Set up dyanmic env vars for build
