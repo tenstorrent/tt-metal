@@ -45,8 +45,6 @@ class ReplicateTensorToMesh : public TensorToMesh {
 public:
     ReplicateTensorToMesh(size_t num_devices) : num_devices_(num_devices) {}
 
-    ReplicateTensorToMesh(MeshDevice& mesh_device) : num_devices_(mesh_device.num_devices()) {}
-
     std::vector<Tensor> map(const Tensor& tensor) const override {
         std::vector<Tensor> tensors;
         tensors.reserve(num_devices_);
@@ -66,8 +64,6 @@ class ShardTensorToMesh : public TensorToMesh {
 public:
     ShardTensorToMesh(size_t num_devices, int dim) : num_devices_(num_devices), shard_dim_(dim) {}
 
-    ShardTensorToMesh(MeshDevice& mesh_device, int dim) : num_devices_(mesh_device.num_devices()), shard_dim_(dim) {}
-
     std::vector<Tensor> map(const Tensor& tensor) const override {
         return experimental::xtensor::chunk(tensor, num_devices_, shard_dim_);
     }
@@ -81,25 +77,10 @@ private:
     int shard_dim_ = -1;
 };
 
-class ShardTensor2dMesh : public TensorToMesh {
+class ShardTensorTo2dMesh : public TensorToMesh {
 public:
-    ShardTensor2dMesh(MeshDevice& mesh_device, const MeshShape& mesh_shape, const Shard2dConfig& config) :
-        mesh_shape_(mesh_shape), config_(config) {
-        TT_FATAL(
-            config.row_dim.has_value() || config.col_dim.has_value(),
-            "Sharding a tensor to 2D mesh requires at least one dimension to shard");
-        TT_FATAL(
-            mesh_shape.num_rows <= mesh_device.shape().num_rows &&  //
-                mesh_shape.num_cols <= mesh_device.shape().num_cols,
-            "Device mesh shape does not match the provided mesh shape.");
-    }
-
-    ShardTensor2dMesh(const MeshShape& mesh_shape, const Shard2dConfig& config) :
-        mesh_shape_(mesh_shape), config_(config) {
-        TT_FATAL(
-            config.row_dim.has_value() || config.col_dim.has_value(),
-            "Sharding a tensor to 2D mesh requires at least one dimension to shard");
-    }
+    ShardTensorTo2dMesh(const MeshShape& mesh_shape, const Shard2dConfig& config) :
+        mesh_shape_(mesh_shape), config_(config) {}
 
     std::vector<Tensor> map(const Tensor& tensor) const override {
         const auto [rows, cols] = mesh_shape_;
@@ -135,7 +116,7 @@ public:
 
         TT_FATAL(
             static_cast<int>(tensor_shards.size()) == rows * cols,
-            "ShardTensor2dMesh: Sharding failed. Number of shards should match the product of the mesh "
+            "ShardTensorTo2dMesh: Sharding failed. Number of shards should match the product of the mesh "
             "dimensions. Size: {}, rows: {}, cols: {}",
             tensor_shards.size(),
             rows,
@@ -145,7 +126,7 @@ public:
     }
 
     tt::tt_metal::DistributedTensorConfig config() const override {
-        return DistributedTensorConfig{ShardTensor2D{ShardMesh{.y = mesh_shape_.num_rows, .x = mesh_shape_.num_cols}}};
+        return DistributedTensorConfig{ShardTensor2D{ShardMesh{mesh_shape_.num_rows, mesh_shape_.num_cols}}};
     }
 
 private:
@@ -165,23 +146,9 @@ private:
     int concat_dim_ = -1;
 };
 
-class DeviceConcatMeshToTensor : public ConcatMeshToTensor {
+class Concat2dMeshToTensor : public MeshToTensor {
 public:
-    DeviceConcatMeshToTensor(MeshDevice& mesh_device, int dim) :
-        ConcatMeshToTensor(dim), mesh_device_(mesh_device), concat_dim_(dim) {}
-
-    Tensor compose(const Tensor& tensor) const {
-        return experimental::xtensor::concat(get_device_tensors(tensor), concat_dim_);
-    }
-
-private:
-    MeshDevice& mesh_device_;
-    int concat_dim_ = -1;
-};
-
-class ConcatMesh2dToTensor : public MeshToTensor {
-public:
-    ConcatMesh2dToTensor(MeshDevice& mesh_device, const Concat2dConfig& config) :
+    Concat2dMeshToTensor(MeshDevice& mesh_device, const Concat2dConfig& config) :
         mesh_shape_(mesh_device.shape()), config_(config) {}
 
     Tensor compose(const std::vector<Tensor>& tensors) const override {
