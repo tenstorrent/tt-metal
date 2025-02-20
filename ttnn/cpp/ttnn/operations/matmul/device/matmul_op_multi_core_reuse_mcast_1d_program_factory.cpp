@@ -718,23 +718,17 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
             in3_CB_size);
     }
 
-    // Parameters for last row, col, or block
-    uint32_t last_per_core_M = M % per_core_M == 0 ? per_core_M : M % per_core_M;
+    // Parameters for last row, col, or block, no need to re-calc h-dim since there's no split on height
     uint32_t last_per_core_N = N % per_core_N == 0 ? per_core_N : N % per_core_N;
-    uint32_t last_out_block_h = last_per_core_M % out_block_h == 0 ? out_block_h : last_per_core_M % out_block_h;
     uint32_t last_out_block_w = last_per_core_N % out_block_w == 0 ? out_block_w : last_per_core_N % out_block_w;
-    uint32_t last_block_num_nonzero_subblocks_h = (last_out_block_h - 1) / out_subblock_h + 1;
+    uint32_t last_out_num_blocks_w = (last_per_core_N - 1) / out_block_w + 1;
     uint32_t last_block_num_nonzero_subblocks_w = (last_out_block_w - 1) / out_subblock_w + 1;
-    uint32_t last_subblock_of_last_block_h =
-        last_out_block_h % out_subblock_h == 0 ? out_subblock_h : last_out_block_h % out_subblock_h;
     uint32_t last_subblock_of_last_block_w =
         last_out_block_w % out_subblock_w == 0 ? out_subblock_w : last_out_block_w % out_subblock_w;
     uint32_t last_block_padded_subblock_tiles_addr_skip =
         output_single_tile_size * (out_subblock_w - last_subblock_of_last_block_w);
     uint32_t last_block_padded_block_tiles_w_skip =
         (out_subblock_w * out_subblock_h) * (out_block_w / out_subblock_w - last_block_num_nonzero_subblocks_w);
-    uint32_t last_block_padded_block_tiles_h_skip =
-        (out_block_h / out_subblock_h - last_block_num_nonzero_subblocks_h) * (out_block_w * out_subblock_h);
 
     CoreCoord start_core_noc = top_left_core_physical;
     CoreCoord end_core_noc = bottom_right_core_physical;
@@ -842,6 +836,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
                 mm_in1_sender_writer_args.push_back(last_out_block_w);
 
                 // padding args (WRITER)
+                mm_in1_sender_writer_args.push_back(last_out_num_blocks_w);
                 mm_in1_sender_writer_args.push_back(out_block_h / out_subblock_h);
                 mm_in1_sender_writer_args.push_back(out_subblock_h);
                 mm_in1_sender_writer_args.push_back(0);
@@ -855,6 +850,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
                 mm_in1_sender_writer_args.push_back(out_block_w);
 
                 // padding args (WRITER)
+                mm_in1_sender_writer_args.push_back(out_num_blocks_x);
                 mm_in1_sender_writer_args.push_back(out_block_h / out_subblock_h);
                 mm_in1_sender_writer_args.push_back(out_subblock_h);
                 mm_in1_sender_writer_args.push_back(0);
@@ -1492,19 +1488,11 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
 
     // Parameters for last row, col, or block
     uint32_t last_per_core_M = M % per_core_M == 0 ? per_core_M : M % per_core_M;
-    uint32_t last_per_core_N = N % per_core_N == 0 ? per_core_N : N % per_core_N;
     uint32_t last_out_block_h = last_per_core_M % out_block_h == 0 ? out_block_h : last_per_core_M % out_block_h;
-    uint32_t last_out_block_w = last_per_core_N % out_block_w == 0 ? out_block_w : last_per_core_N % out_block_w;
+    uint32_t last_out_num_blocks_h = (last_per_core_M - 1) / out_block_h + 1;
     uint32_t last_block_num_nonzero_subblocks_h = (last_out_block_h - 1) / out_subblock_h + 1;
-    uint32_t last_block_num_nonzero_subblocks_w = (last_out_block_w - 1) / out_subblock_w + 1;
     uint32_t last_subblock_of_last_block_h =
         last_out_block_h % out_subblock_h == 0 ? out_subblock_h : last_out_block_h % out_subblock_h;
-    uint32_t last_subblock_of_last_block_w =
-        last_out_block_w % out_subblock_w == 0 ? out_subblock_w : last_out_block_w % out_subblock_w;
-    uint32_t last_block_padded_subblock_tiles_addr_skip =
-        output_single_tile_size * (out_subblock_w - last_subblock_of_last_block_w);
-    uint32_t last_block_padded_block_tiles_w_skip =
-        (out_subblock_w * out_subblock_h) * (out_block_w / out_subblock_w - last_block_num_nonzero_subblocks_w);
     uint32_t last_block_padded_block_tiles_h_skip =
         (out_block_h / out_subblock_h - last_block_num_nonzero_subblocks_h) * (out_block_w * out_subblock_h);
 
@@ -1541,6 +1529,7 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
                 // padding args (READER)
                 (std::uint32_t)out_block_w,  // last_block_w
                 // padding args (WRITER)
+                (std::uint32_t)out_num_blocks_x,
                 (std::uint32_t)out_block_h / out_subblock_h,
                 (std::uint32_t)out_subblock_h,
                 (std::uint32_t)0,
@@ -1575,6 +1564,8 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
 
             if (output_idx_y == num_blocks_y - 1) {
                 // padding args (WRITER)
+                mm_in1_receiver_writer_args.push_back(last_out_num_blocks_h);
+                mm_in1_receiver_writer_args.push_back(out_num_blocks_x);
                 mm_in1_receiver_writer_args.push_back(out_block_h / out_subblock_h);
                 mm_in1_receiver_writer_args.push_back(last_block_num_nonzero_subblocks_h);
                 mm_in1_receiver_writer_args.push_back(last_subblock_of_last_block_h);
@@ -1586,6 +1577,8 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
                 mm_in1_receiver_writer_args.push_back(0);
             } else {
                 // padding args (WRITER)
+                mm_in1_receiver_writer_args.push_back(out_num_blocks_y);
+                mm_in1_receiver_writer_args.push_back(out_num_blocks_x);
                 mm_in1_receiver_writer_args.push_back(out_block_h / out_subblock_h);
                 mm_in1_receiver_writer_args.push_back(out_block_h / out_subblock_h);
                 mm_in1_receiver_writer_args.push_back(out_subblock_h);
