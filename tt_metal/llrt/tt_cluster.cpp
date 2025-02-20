@@ -104,8 +104,6 @@ Cluster::Cluster() {
         routing_info_addr_ = tt::tt_metal::hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::APP_ROUTING_INFO);
     }
 
-    this->generate_cluster_descriptor();
-
     this->initialize_device_drivers();
 
     this->reserve_ethernet_cores_for_tunneling();
@@ -142,11 +140,11 @@ void Cluster::generate_cluster_descriptor() {
     // Cluster descriptor yaml not available for Blackhole bring up
     if (this->target_type_ == TargetDevice::Simulator) {
         // Passing simulator reported physical devices as logical devices.
-        this->cluster_desc_ = tt_ClusterDescriptor::create_mock_cluster(tt_SimulationDevice::detect_available_device_ids(), this->arch_);
+        this->cluster_desc_ =
+            tt_ClusterDescriptor::create_mock_cluster(tt_SimulationDevice::detect_available_device_ids(), this->arch_)
+                .get();
     } else {
-        this->cluster_desc_ = tt_ClusterDescriptor::create_from_yaml(tt_ClusterDescriptor::get_cluster_descriptor_file_path());
-
-        // Detect cluster type
+        this->cluster_desc_ = this->driver_->get_cluster_description();
         for (const auto &chip_id : this->cluster_desc_->get_all_chips()) {
             if (this->cluster_desc_->get_board_type(chip_id) == BoardType::GALAXY) {
                 this->cluster_type_ = ClusterType::TG;
@@ -204,14 +202,23 @@ void Cluster::generate_cluster_descriptor() {
             this->cluster_desc_->get_all_chips().size(),
             total_num_hugepages);
     }
+
+    if (this->arch_ == tt::ARCH::WORMHOLE_B0 and not this->is_galaxy_cluster()) {
+        // Give UMD Limited access to eth cores 8 and 9 for Non-Galaxy Wormhole Clusters
+        for (const auto& [mmio_device_id, _] : this->cluster_desc_->get_chips_with_mmio()) {
+            driver_->configure_active_ethernet_cores_for_mmio_device(mmio_device_id, {});
+        }
+    }
 }
 
 void Cluster::initialize_device_drivers() {
+    this->open_driver();
+    this->generate_cluster_descriptor();
+    this->get_metal_desc_from_tt_desc();
+
     for (const auto &[mmio_device_id, controlled_devices] : this->devices_grouped_by_assoc_mmio_device_) {
         this->assign_mem_channels_to_devices(mmio_device_id, controlled_devices);
     }
-
-    this->open_driver();
 
     tt_device_params default_params;
     this->start_driver(default_params);
@@ -255,7 +262,11 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
     std::unique_ptr<tt_device> device_driver;
     if (this->target_type_ == TargetDevice::Silicon) {
         const std::string sdesc_path = get_soc_description_file(this->arch_, this->target_type_);
-        std::unordered_set<chip_id_t> all_chips = this->cluster_desc_->get_all_chips();
+        // umd::Cluster::detect_available_device_ids only lists MMIO device ids, since we need remote chip ids
+        // generate the cluster desc and pull chip ids from there
+        auto temp_cluster_desc =
+            tt_ClusterDescriptor::create_from_yaml(tt_ClusterDescriptor::get_cluster_descriptor_file_path());
+        std::unordered_set<chip_id_t> all_chips = temp_cluster_desc->get_all_chips();
         std::set<chip_id_t> all_chips_set(all_chips.begin(), all_chips.end());
         // This is the target/desired number of mem channels per arch/device.
         // Silicon driver will attempt to open this many hugepages as channels per mmio chip,
@@ -271,12 +282,6 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
             skip_driver_allocs,
             clean_system_resources,
             perform_harvesting);
-        if (this->arch_ == tt::ARCH::WORMHOLE_B0 and not this->is_galaxy_cluster()) {
-            // Give UMD Limited access to eth cores 8 and 9 for Non-Galaxy Wormhole Clusters
-            for (const auto &[mmio_device_id, _]: this->cluster_desc_->get_chips_with_mmio()) {
-                device_driver->configure_active_ethernet_cores_for_mmio_device(mmio_device_id, {});
-            }
-        }
 
         // Adding this check is a workaround for current UMD bug that only uses this getter to populate private metadata
         // that is later expected to be populated by unrelated APIs
@@ -296,7 +301,6 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
     device_driver->set_barrier_address_params(barrier_params);
 
     this->driver_ = std::move(device_driver);
-    this->get_metal_desc_from_tt_desc();
 }
 
 void Cluster::start_driver(tt_device_params &device_params) const {
@@ -903,14 +907,28 @@ std::unordered_set<chip_id_t> Cluster::get_ethernet_connected_device_ids(chip_id
 std::unordered_set<CoreCoord> Cluster::get_active_ethernet_cores(
     chip_id_t chip_id, bool skip_reserved_tunnel_cores) const {
     std::unordered_set<CoreCoord> active_ethernet_cores;
-    const auto &connected_chips = this->get_ethernet_cores_grouped_by_connected_chips(chip_id);
-    for (const auto &[other_chip_id, eth_cores] : connected_chips) {
-        for (const auto &eth_core : eth_cores) {
-            if (this->device_eth_routing_info_.at(chip_id).at(eth_core) == EthRouterMode::BI_DIR_TUNNELING and
-                skip_reserved_tunnel_cores) {
-                continue;
+    if (arch_ == ARCH::BLACKHOLE) {
+        // Can't just use `get_ethernet_cores_grouped_by_connected_chips` because there are some active ethernet cores
+        // without links. Only risc1 on these cores is available for Metal and should not be classified as idle
+        // to ensure that Metal does not try to program both riscs.
+        const auto& soc_desc = get_soc_desc(chip_id);
+        std::set<uint32_t> logical_active_eth_channels = cluster_desc_->get_active_eth_channels(chip_id);
+        for (auto logical_active_eth_channel : logical_active_eth_channels) {
+            tt::umd::CoreCoord logical_active_eth =
+                soc_desc.get_eth_core_for_channel(logical_active_eth_channel, CoordSystem::LOGICAL);
+            active_ethernet_cores.insert(CoreCoord(logical_active_eth.x, logical_active_eth.y));
+        }
+
+    } else {
+        const auto& connected_chips = this->get_ethernet_cores_grouped_by_connected_chips(chip_id);
+        for (const auto& [other_chip_id, eth_cores] : connected_chips) {
+            for (const auto& eth_core : eth_cores) {
+                if (this->device_eth_routing_info_.at(chip_id).at(eth_core) == EthRouterMode::BI_DIR_TUNNELING and
+                    skip_reserved_tunnel_cores) {
+                    continue;
+                }
+                active_ethernet_cores.insert(eth_core);
             }
-            active_ethernet_cores.insert(eth_core);
         }
     }
     return active_ethernet_cores;
@@ -922,7 +940,6 @@ std::unordered_set<CoreCoord> Cluster::get_inactive_ethernet_cores(chip_id_t chi
     std::unordered_set<int> channels_to_skip = {};
     // UMD routing FW uses these cores for base routing
     // channel 15 is used by syseng tools.
-    // TODO (abhullar): For BH single-chip bringup we assume all ethernet cores are inactive. Update this with (#9823)
     if (this->is_galaxy_cluster()) {
         // TODO: This may need to change, if we need additional eth cores for dispatch on Galaxy
         channels_to_skip = {0, 1, 2, 3, 15};
@@ -939,6 +956,12 @@ std::unordered_set<CoreCoord> Cluster::get_inactive_ethernet_cores(chip_id_t chi
         }
     }
     return inactive_ethernet_cores;
+}
+
+bool Cluster::is_ethernet_link_up(chip_id_t chip_id, const CoreCoord& logical_core) const {
+    const auto& soc_desc = get_soc_desc(chip_id);
+    ethernet_channel_t eth_chan = soc_desc.logical_eth_core_to_chan_map.at(logical_core);
+    return this->cluster_desc_->ethernet_core_has_active_ethernet_link(chip_id, eth_chan);
 }
 
 std::tuple<chip_id_t, CoreCoord> Cluster::get_connected_ethernet_core(std::tuple<chip_id_t, CoreCoord> eth_core) const {

@@ -436,7 +436,6 @@ void EthernetKernel::read_binaries(IDevice* device) {
     int erisc_id = magic_enum::enum_integer(this->config_.processor);
     const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
         device->build_id(), erisc_core_type, dm_class_idx, erisc_id);
-    int risc_id = erisc_id + (this->config_.eth_mode == Eth::IDLE ? 6 : 5); // TODO (abhullar): clean this up when llrt helpers use HAL
     // TODO: fix when active eth supports relo
     auto load_type = (this->config_.eth_mode == Eth::IDLE) ?
         ll_api::memory::Loading::CONTIGUOUS_XIP : ll_api::memory::Loading::DISCRETE;
