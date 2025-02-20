@@ -87,7 +87,7 @@ void set_or_update_runtime_arguments(
             continue;
         }
 
-        tt::log_info(tt::LogOp, "Working on");
+        // tt::log_info(tt::LogOp, "Working on");
         uint32_t cHtWt = cHt * cWt;
         tt::log_info(tt::LogOp, "check here : 1");
         const auto scalar = eps;
@@ -134,8 +134,13 @@ void set_or_update_runtime_arguments(
         tt::log_info(tt::LogOp, "check here : 7");
         handle_args(program, writer_kernel_id, core, writer_runtime_args);
 
+        tt::log_info(tt::LogOp, "num_tiles_per_core = {}", num_tiles_per_core);
         auto counter = start_tile_id % cHtWt;
         auto freq = cHtWt;
+        tt::log_info(tt::LogOp, "start_tile_id = {}", start_tile_id);
+        tt::log_info(tt::LogOp, "cHtWt = {}", cHtWt);
+        tt::log_info(tt::LogOp, "counter = {}", counter);
+        tt::log_info(tt::LogOp, "freq = {}", freq);
 
         tt::log_info(tt::LogOp, "check here : 8");
         std::array compute_runtime_args = {num_tiles_per_core, freq, counter};
