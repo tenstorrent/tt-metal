@@ -647,8 +647,7 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
     uint32_t groups,
     uint32_t act_block_h_ntiles,
     uint32_t input_width,
-    const bool parameters_on_device,
-    bool is_non_tile_mul_width) {
+    const bool parameters_on_device) {
     validate_weight_tensor(weight_tensor);
     ttnn::Tensor weight_tensor_;  // tensor to return
     ttnn::Tensor bias_tensor_;
@@ -693,12 +692,6 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
 
     ttnn::Shape weights_channels_padded_shape(
         std::array<uint32_t, 4>({out_channels_padded, in_channels_padded, window_h, window_w}));
-    if (is_non_tile_mul_width) {
-        weights_channels_padded_shape = ttnn::Shape(std::array<uint32_t, 4>(
-            {round_up(out_channels, 32), round_up(in_channels, input_channels_alignment), window_h, window_w}));
-        out_channels_padded = tt::round_up(out_channels, 32);
-        in_channels_padded = round_up(in_channels, input_channels_alignment);
-    }
     if (weights_bias_dtype == DataType::BFLOAT8_B) {
         TT_ASSERT(weight_tensor_.get_dtype() == DataType::FLOAT32);
         if (bias_tensor.has_value()) {
@@ -881,6 +874,10 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
                  .buffer_type = tt::tt_metal::BufferType::DRAM}),
             weights_bias_dtype,
             true);
+
+        ttnn::Shape bias_target_shape(std::array<uint32_t, 4>{1, 1, 1, out_channels});
+        bias_tensor_ = ttnn::reshape(bias_tensor_, bias_target_shape, bias_tensor_.get_padded_shape());
+
         // TT_FATAL(
         //     bias_tensor_.get_logical_shape()[3] == out_channels,
         //     "Bias must have the same length as output channels");
@@ -1264,8 +1261,7 @@ template std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weigh
     uint32_t groups,
     uint32_t act_block_h_ntiles,
     uint32_t input_width,
-    const bool parameters_on_device,
-    bool is_non_tile_mul_width);
+    const bool parameters_on_device);
 
 template std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases_on_device<MeshDevice>(
     const ttnn::Tensor& weight_tensor,
@@ -1280,8 +1276,7 @@ template std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weigh
     uint32_t groups,
     uint32_t act_block_h_ntiles,
     uint32_t input_width,
-    const bool parameters_on_device,
-    bool is_non_tile_mul_width);
+    const bool parameters_on_device);
 
 template std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases_and_move_to_device<IDevice>(
     const ttnn::Tensor& weight_tensor,
