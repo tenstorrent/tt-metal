@@ -2017,7 +2017,8 @@ def test_small_matmul_pcc(device):
 
 
 @pytest.mark.parametrize("side", ["height", "width"])
-def test_padded_2d_matmul(device, side):
+@pytest.mark.parametrize("tile_count", [1376, 1375])
+def test_padded_2d_matmul(device, side, tile_count):
     """
     This test checks that when the program config specifies per_core_M and per_core_N
     which would multiply out to be larger than the true shape of the output, matmul
@@ -2026,7 +2027,7 @@ def test_padded_2d_matmul(device, side):
     pytest.skip("#17491: last tile bounds are not set up properly")
 
     if side == "height":
-        M = 43 * 1024
+        M = tile_count * 32
         K = 256
         N = 32
         out_block_h = 11
@@ -2036,7 +2037,7 @@ def test_padded_2d_matmul(device, side):
     else:
         M = 32
         K = 256
-        N = 43 * 1024
+        N = tile_count * 32
         out_block_h = 1
         out_block_w = 11
         per_core_M = 1
