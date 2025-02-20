@@ -152,3 +152,6 @@ void run_routing() {
     // receive of fd packets
     internal_::risc_context_switch();
 }
+
+FORCE_INLINE
+void run_routing_without_noc_sync() { internal_::risc_context_switch_without_noc_sync(); }
