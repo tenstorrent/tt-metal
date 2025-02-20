@@ -116,6 +116,7 @@ struct ConcreteMeshToTensor : MeshToTensor {
 void py_module_types(py::module& module) {
 <<<<<<< HEAD
 <<<<<<< HEAD
+<<<<<<< HEAD
     py::class_<MeshToTensor, ConcreteMeshToTensor, std::unique_ptr<MeshToTensor>>(module, "CppMeshToTensor");
     py::class_<TensorToMesh, ConcreteTensorToMesh, std::unique_ptr<TensorToMesh>>(module, "CppTensorToMesh");
 
@@ -162,6 +163,19 @@ void py_module_types(py::module& module) {
     py::class_<ConcatMesh2dToTensor, MeshToTensor, std::unique_ptr<ConcatMesh2dToTensor>>(
         module, "ConcatMesh2dToTensor");
 >>>>>>> fix naming errors, add tests, add imports - TODO, fix weird aliasing error with meshdevice vs ttnn.multidevice.meshdevice
+=======
+    py::class_<MeshToTensor, ConcreteMeshToTensor, std::unique_ptr<MeshToTensor>>(module, "CppMeshToTensor");
+    py::class_<TensorToMesh, ConcreteTensorToMesh, std::unique_ptr<TensorToMesh>>(module, "CppTensorToMesh");
+
+    py::class_<ReplicateTensorToMesh, TensorToMesh, std::unique_ptr<ReplicateTensorToMesh>>(
+        module, "CppReplicateTensorToMesh");
+    py::class_<ShardTensorToMesh, TensorToMesh, std::unique_ptr<ShardTensorToMesh>>(module, "CppShardTensorToMesh");
+    py::class_<ShardTensorTo2dMesh, TensorToMesh, std::unique_ptr<ShardTensorTo2dMesh>>(
+        module, "CppShardTensorTo2dMesh");
+    py::class_<ConcatMeshToTensor, MeshToTensor, std::unique_ptr<ConcatMeshToTensor>>(module, "CppConcatMeshToTensor");
+    py::class_<Concat2dMeshToTensor, MeshToTensor, std::unique_ptr<Concat2dMeshToTensor>>(
+        module, "CppConcat2dMeshToTensor");
+>>>>>>> add back distributed.py for now, clean up class overloads
 
     py::class_<ReplicateTensor>(module, "ReplicateTensor");
     py::class_<ShardTensor>(module, "ShardTensor");
@@ -654,15 +668,19 @@ void py_module(py::module& module) {
 >>>>>>> one type error left
 =======
     auto py_tensor_to_mesh = static_cast<py::class_<TensorToMesh, ConcreteTensorToMesh, std::unique_ptr<TensorToMesh>>>(
+<<<<<<< HEAD
         module.attr("TensorToMesh"));
 >>>>>>> move class definitions from from distributed_tensor.cpp to.hpp so they can be exposed to the pybind.cpp; add dummy void methods in .cpp to satisfy linker; add new constructors and factory methods to fix type errors
+=======
+        module.attr("CppTensorToMesh"));
+>>>>>>> add back distributed.py for now, clean up class overloads
     py_tensor_to_mesh
         .def(py::init([]() -> std::unique_ptr<TensorToMesh> { return std::make_unique<ConcreteTensorToMesh>(); }))
         .def("map", &TensorToMesh::map)
         .def("config", &TensorToMesh::config);
     auto py_replicate_tensor_to_mesh =
         static_cast<py::class_<ReplicateTensorToMesh, std::unique_ptr<ReplicateTensorToMesh>>>(
-            module.attr("ReplicateTensorToMesh"));
+            module.attr("CppReplicateTensorToMesh"));
     py_replicate_tensor_to_mesh
         .def(
             py::init([](MeshDevice& mesh_device) -> std::unique_ptr<ReplicateTensorToMesh> {
@@ -670,104 +688,80 @@ void py_module(py::module& module) {
             }),
             py::arg("mesh_device"))
         .def(
-            py::init([](size_t num_devices) -> std::unique_ptr<ReplicateTensorToMesh> {
-                return std::make_unique<ReplicateTensorToMesh>(ReplicateTensorToMesh(num_devices));
-            }),
-            py::arg("num_devices"))
-        .def(
             "map",
             [](const ReplicateTensorToMesh& self, const Tensor& tensor) { return self.map(tensor); },
             py::arg("tensor"))
         .def("config", &ReplicateTensorToMesh::config);
     auto py_shard_tensor_to_mesh = static_cast<py::class_<ShardTensorToMesh, std::unique_ptr<ShardTensorToMesh>>>(
-        module.attr("ShardTensorToMesh"));
+        module.attr("CppShardTensorToMesh"));
     py_shard_tensor_to_mesh
         .def(
             py::init([](MeshDevice& mesh_device, int dim) -> std::unique_ptr<ShardTensorToMesh> {
-                return std::make_unique<ShardTensorToMesh>(ShardTensorToMesh(mesh_device, dim));
+                return std::make_unique<ShardTensorToMesh>(ShardTensorToMesh(mesh_device.num_devices(), dim));
             }),
             py::arg("mesh_device"),
-            py::arg("dim"))
-        .def(
-            py::init([](size_t num_devices, int dim) -> std::unique_ptr<ShardTensorToMesh> {
-                return std::make_unique<ShardTensorToMesh>(ShardTensorToMesh(num_devices, dim));
-            }),
-            py::arg("num_devices"),
             py::arg("dim"))
         .def(
             "map",
             [](const ShardTensorToMesh& self, const Tensor& tensor) { return self.map(tensor); },
             py::arg("tensor"))
         .def("config", &ShardTensorToMesh::config);
-    auto py_shard_tensor_to_2d_mesh = static_cast<py::class_<ShardTensor2dMesh, std::unique_ptr<ShardTensor2dMesh>>>(
-        module.attr("ShardTensor2dMesh"));
+    auto py_shard_tensor_to_2d_mesh =
+        static_cast<py::class_<ShardTensorTo2dMesh, std::unique_ptr<ShardTensorTo2dMesh>>>(
+            module.attr("CppShardTensorTo2dMesh"));
     py_shard_tensor_to_2d_mesh
         .def(
             py::init(
                 [](MeshDevice& mesh_device,
-                   const MeshShape& mesh_shape,
-                   const Shard2dConfig& config) -> std::unique_ptr<ShardTensor2dMesh> {
-                    return std::make_unique<ShardTensor2dMesh>(mesh_device, mesh_shape, config);
-                }),
-            py::arg("mesh_device"),
-            py::arg("mesh_shape"),
-            py::arg("config"))
-        .def(
-            py::init(
-                [](MeshDevice& mesh_device,
-                   const std::tuple<int, int> dims,
-                   const MeshShape& mesh_shape) -> std::unique_ptr<ShardTensor2dMesh> {
-                    return std::make_unique<ShardTensor2dMesh>(
-                        mesh_device,
-                        mesh_shape,
+                   const std::tuple<int, int> mesh_shape,
+                   const std::tuple<int, int> dims) -> std::unique_ptr<ShardTensorTo2dMesh> {
+                    int shape_rows = std::get<0>(mesh_shape);
+                    int shape_cols = std::get<1>(mesh_shape);
+
+                    int config_rows = std::get<0>(dims);
+                    int config_cols = std::get<1>(dims);
+                    TT_FATAL(
+                        config_rows || config_cols,
+                        "Sharding a tensor to 2D mesh requires at least one dimension to shard");
+                    TT_FATAL(
+                        shape_rows <= mesh_device.shape().num_rows &&  //
+                            shape_cols <= mesh_device.shape().num_cols,
+                        "Device mesh shape does not match the provided mesh shape.");
+
+                    return std::make_unique<ShardTensorTo2dMesh>(
+                        MeshShape{.num_rows = shape_rows, .num_cols = shape_cols},
                         Shard2dConfig{.row_dim = std::get<0>(dims), .col_dim = std::get<1>(dims)});
                 }),
             py::arg("mesh_device"),
-            py::arg("dims"),
-            py::arg("mesh_shape"))
-        .def(
-            py::init(
-                [](const MeshShape& mesh_shape, const Shard2dConfig& config) -> std::unique_ptr<ShardTensor2dMesh> {
-                    return std::make_unique<ShardTensor2dMesh>(ShardTensor2dMesh(mesh_shape, config));
-                }),
             py::arg("mesh_shape"),
-            py::arg("config"))
+            py::arg("dims"))
         .def(
             "map",
-            [](const ShardTensor2dMesh& self, const Tensor& tensor) { return self.map(tensor); },
+            [](const ShardTensorTo2dMesh& self, const Tensor& tensor) { return self.map(tensor); },
             py::arg("tensor"))
-        .def("config", &ShardTensor2dMesh::config);
+        .def("config", &ShardTensorTo2dMesh::config);
     auto py_mesh_to_tensor = static_cast<py::class_<MeshToTensor, ConcreteMeshToTensor, std::unique_ptr<MeshToTensor>>>(
-        module.attr("MeshToTensor"));
+        module.attr("CppMeshToTensor"));
     py_mesh_to_tensor
         .def(py::init([]() -> std::unique_ptr<MeshToTensor> { return std::make_unique<ConcreteMeshToTensor>(); }))
         .def("compose", &MeshToTensor::compose);
     auto py_concat_mesh_to_tensor = static_cast<py::class_<ConcatMeshToTensor, std::unique_ptr<ConcatMeshToTensor>>>(
-        module.attr("ConcatMeshToTensor"));
+        module.attr("CppConcatMeshToTensor"));
     py_concat_mesh_to_tensor
         .def(
-            py::init([](int dim) -> std::unique_ptr<ConcatMeshToTensor> {
-                return std::make_unique<ConcatMeshToTensor>(dim);
-            }),
-            py::arg("dim"))
-        .def(
             py::init([](MeshDevice& mesh_device, int dim) -> std::unique_ptr<ConcatMeshToTensor> {
-                return std::make_unique<DeviceConcatMeshToTensor>(mesh_device, dim);
+                return std::make_unique<ConcatMeshToTensor>(dim);
             }),
             py::arg("mesh_device"),
             py::arg("dim"))
         .def(
             "compose",
             [](const ConcatMeshToTensor& self, const std::vector<Tensor>& tensors) { return self.compose(tensors); },
-            py::arg("tensors"))
-        .def(
-            "compose",
-            [](const DeviceConcatMeshToTensor& self, const Tensor& tensor) { return self.compose(tensor); },
             py::arg("tensors"));
 
     auto py_concat_2d_mesh_to_tensor =
-        static_cast<py::class_<ConcatMesh2dToTensor, std::unique_ptr<ConcatMesh2dToTensor>>>(
-            module.attr("ConcatMesh2dToTensor"));
+        static_cast<py::class_<Concat2dMeshToTensor, std::unique_ptr<Concat2dMeshToTensor>>>(
+            module.attr("CppConcat2dMeshToTensor"));
     py_concat_2d_mesh_to_tensor
 <<<<<<< HEAD
     .def(py::init<>(MeshDevice & mesh_device, const Concat2dConfig& config) {
@@ -784,27 +778,22 @@ void py_module(py::module& module) {
 =======
         .def(
             py::init(
-                [](MeshDevice& mesh_device, const Concat2dConfig& config) -> std::unique_ptr<ConcatMesh2dToTensor> {
-                    TT_FATAL(
-                        config.row_dim != config.col_dim,
-                        "Dimensions in 'dims' must be different; got row_dim: {}, col_dim: {}",
-                        config.row_dim,
-                        config.col_dim);
-                    return std::make_unique<ConcatMesh2dToTensor>(mesh_device, config);
-                }),
-            py::arg("mesh_device"),
-            py::arg("config"))
-        .def(
-            py::init(
-                [](MeshDevice& mesh_device, const std::tuple<int, int> dims) -> std::unique_ptr<ConcatMesh2dToTensor> {
+                [](MeshDevice& mesh_device,
+                   const std::tuple<int, int> mesh_shape,
+                   const std::tuple<int, int> dims) -> std::unique_ptr<Concat2dMeshToTensor> {
                     int row_dim = std::get<0>(dims);
                     int col_dim = std::get<1>(dims);
+                    TT_FATAL(
+                        std::get<0>(mesh_shape) <= mesh_device.shape().num_rows &&  //
+                            std::get<1>(mesh_shape) <= mesh_device.shape().num_cols,
+                        "Device mesh shape does not match the provided mesh shape.");
+
                     TT_FATAL(
                         row_dim != col_dim,
                         "Dimensions in 'dims' must be different; got row_dim: {}, col_dim: {}",
                         row_dim,
                         col_dim);
-                    return std::make_unique<ConcatMesh2dToTensor>(
+                    return std::make_unique<Concat2dMeshToTensor>(
                         mesh_device,
                         Concat2dConfig{
                             .row_dim = row_dim,
@@ -812,58 +801,11 @@ void py_module(py::module& module) {
                         });
                 }),
             py::arg("mesh_device"),
+            py::arg("Mesh_shape"),
             py::arg("dims"))
         .def(
-            py::init(
-                [](MeshDevice& mesh_device,
-                   const Concat2dConfig& config,
-                   MeshShape& mesh_shape) -> std::unique_ptr<ConcatMesh2dToTensor> {
-                    TT_FATAL(
-                        config.row_dim != config.col_dim,
-                        "Dimensions in 'dims' must be different; got row_dim: {}, col_dim: {}",
-                        config.row_dim,
-                        config.col_dim);
-                    TT_FATAL(
-                        mesh_shape.num_rows <= mesh_device.shape().num_rows &&  //
-                            mesh_shape.num_cols <= mesh_device.shape().num_cols,
-                        "Device mesh shape does not match the provided mesh shape.");
-
-                    return std::make_unique<ConcatMesh2dToTensor>(mesh_device, config);
-                }),
-            py::arg("mesh_device"),
-            py::arg("config"),
-            py::arg("mesh_shape"))
-        .def(
-            py::init(
-                [](MeshDevice& mesh_device,
-                   const std::tuple<int, int> dims,
-                   MeshShape& mesh_shape) -> std::unique_ptr<ConcatMesh2dToTensor> {
-                    int row_dim = std::get<0>(dims);
-                    int col_dim = std::get<1>(dims);
-
-                    TT_FATAL(
-                        row_dim != col_dim,
-                        "Dimensions in 'dims' must be different; got row_dim: {}, col_dim: {}",
-                        row_dim,
-                        col_dim);
-                    TT_FATAL(
-                        mesh_shape.num_rows <= mesh_device.shape().num_rows &&  //
-                            mesh_shape.num_cols <= mesh_device.shape().num_cols,
-                        "Device mesh shape does not match the provided mesh shape.");
-
-                    return std::make_unique<ConcatMesh2dToTensor>(
-                        mesh_device,
-                        Concat2dConfig{
-                            .row_dim = row_dim,
-                            .col_dim = col_dim,
-                        });
-                }),
-            py::arg("mesh_device"),
-            py::arg("dims"),
-            py::arg("mesh_shape"))
-        .def(
             "compose",
-            [](const ConcatMesh2dToTensor& self, const std::vector<Tensor>& tensors) -> Tensor {
+            [](const Concat2dMeshToTensor& self, const std::vector<Tensor>& tensors) -> Tensor {
                 return self.compose(tensors);
             },
             py::arg("tensors"));
@@ -1167,27 +1109,9 @@ void py_module(py::module& module) {
 >>>>>>> fix mesh device conflict, add aggregate/distribute and config pybinds, fix keyword error
     module.def(
         "concat_2d_mesh_to_tensor_composer",
-        [](MeshDevice& mesh_device, const std::tuple<int, int> dims) -> std::unique_ptr<MeshToTensor> {
-            return concat_2d_mesh_to_tensor_composer(
-                mesh_device, Concat2dConfig{.row_dim = std::get<0>(dims), .col_dim = std::get<1>(dims)});
-        },
-        py::arg("mesh_device"),
-        py::arg("dims"),
-        R"doc(
-            Create a ConcatMesh2dToTensor composer with the given mesh device and dimensions.
-
-            Args:
-                mesh_device (MeshDevice): The mesh device to create the composer for.
-                dims (Tuple[int, int]): The dimensions to create the composer for in (row, column) format.
-
-            Returns:
-                TensorToMesh: The created ConcatMesh2dToTensor composer.
-   )doc");
-    module.def(
-        "concat_2d_mesh_to_tensor_composer",
         [](MeshDevice& mesh_device,
-           const std::tuple<int, int> dims,
-           const std::tuple<int, int> mesh_shape) -> std::unique_ptr<MeshToTensor> {
+           const std::tuple<int, int> mesh_shape,
+           const std::tuple<int, int> dims) -> std::unique_ptr<MeshToTensor> {
             TT_FATAL(
                 std::get<0>(mesh_shape) <= mesh_device.shape().num_rows &&  //
                     std::get<1>(mesh_shape) <= mesh_device.shape().num_cols,
