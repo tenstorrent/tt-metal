@@ -12,6 +12,7 @@ from loguru import logger
 from tqdm.auto import tqdm
 from datasets import load_dataset
 import os
+import string
 import time
 import random
 
@@ -62,7 +63,11 @@ def tt_guide(noise_pred, guidance_scale):  # will return latents
     return noise_pred
 
 
-def run_interactive_demo_inference(device, num_inference_steps, image_size=(256, 256)):
+# Global variable for the Stable Diffusion model pipeline
+model_pipeline = None
+
+
+def create_model_pipeline(device, num_inference_steps, image_size=(256, 256)):
     disable_persistent_kernel_cache()
     device.enable_program_cache()
 
@@ -141,54 +146,14 @@ def run_interactive_demo_inference(device, num_inference_steps, image_size=(256,
 
     time_step = ttnn_scheduler.timesteps.tolist()
 
-    json_file_path = "models/demos/wormhole/stable_diffusion/demo/web_demo/input_prompts.json"
-
-    while True:
-        while not os.path.exists(json_file_path):
-            print(f"Waiting for the file {json_file_path} to be created...")
-            time.sleep(5)
-
+    # Function to generate an image from the given prompt
+    def _model_pipeline(input_prompt):
         ttnn_scheduler.set_timesteps(num_inference_steps)
-
-        # attempt to read file multiple times as web server can write to the prompt queue
-        # while it is being read, leading to invalid JSON parsing
-        NUM_ATTEMPTS = 10
-        for _attempt in range(10):
-            try:
-                with open(json_file_path, "r") as f:
-                    data = json.load(f)
-                    input_prompts = data["prompts"]
-            except json.decoder.JSONDecodeError:
-                time.sleep(0.25)
-                continue
-            else:
-                break
-
-        new_prompt = ""
-        currInd = 0
-        for i in range(len(input_prompts)):
-            if input_prompts[i]["status"] == "not generated":
-                currInd = i
-                new_prompt = input_prompts[i]["prompt"]
-                input_prompts[i]["status"] = "generated"
-                break
-
-        if new_prompt == "":
-            print("No 'not generated' prompts found, waiting...")
-            time.sleep(5)
-            continue
-
-        elif len(new_prompt) > 0:
-            input_prompt = [new_prompt]
-        if input_prompt[0] == "q":
-            break
 
         experiment_name = f"interactive_{height}x{width}"
         logger.info(f"input prompt : {input_prompt}")
         batch_size = len(input_prompt)
-
-        with open(json_file_path, "w") as f:
-            json.dump({"prompts": input_prompts}, f, indent=4)
+        assert batch_size == 1
 
         ## First, we get the text_embeddings for the prompt. These embeddings will be used to condition the UNet model.
         # Tokenizer and Text Encoder
@@ -252,27 +217,33 @@ def run_interactive_demo_inference(device, num_inference_steps, image_size=(256,
         image = image.detach().cpu().permute(0, 2, 3, 1).numpy()
         images = (image * 255).round().astype("uint8")
         pil_images = [Image.fromarray(image) for image in images][0]
-        ttnn_output_path = f"{experiment_name}_ttnn.png"
-        pil_images.save(ttnn_output_path)
+        # Generate a random file name for the image
+        random_filename = "".join(random.choices(string.ascii_lowercase + string.digits, k=10)) + ".png"
+        image_path = os.path.join("generated_images", random_filename)
+        pil_images.save(image_path)
 
-        input_prompts[currInd]["status"] = "done"
-        input_prompts[currInd]["total_acc"] = total_accum
-        input_prompts[currInd]["batch_size"] = batch_size
-        input_prompts[currInd]["steps"] = num_inference_steps
+        return image_path
 
-        with open(json_file_path, "w") as f:
-            json.dump({"prompts": input_prompts}, f, indent=4)
+    # warmup model pipeline
+    _model_pipeline(["ship"])
+    global model_pipeline
+    model_pipeline = _model_pipeline
 
 
-@skip_for_grayskull()
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
-@pytest.mark.parametrize(
-    "num_inference_steps",
-    ((50),),
-)
-@pytest.mark.parametrize(
-    "image_size",
-    ((512, 512),),
-)
-def test_interactive_demo(device, num_inference_steps, image_size):
-    return run_interactive_demo_inference(device, num_inference_steps, image_size)
+def warmup_model():
+    # create device, these constants are specific to n150 & n300
+    device_id = 0
+    device_params = {"l1_small_size": 32768}
+    dispatch_core_type = ttnn.device.DispatchCoreType.WORKER
+    dispatch_core_axis = ttnn.DispatchCoreAxis.ROW
+    dispatch_core_config = ttnn.DispatchCoreConfig(dispatch_core_type, dispatch_core_axis)
+    device_params["dispatch_core_config"] = dispatch_core_config
+    device = ttnn.CreateDevice(device_id=device_id, **device_params)
+    device.enable_program_cache()
+    num_inference_steps = 50
+    image_size = (512, 512)
+    create_model_pipeline(device, num_inference_steps, image_size)
+
+
+def generate_image_from_prompt(prompt):
+    return model_pipeline([prompt])
