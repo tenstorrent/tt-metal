@@ -31,7 +31,7 @@ template <
     bool is_width_sharded,
     bool is_read,
     bool is_col_major>
-void copy_sticks_async(
+void copy_sticks_async_temp_write(
     const tt_l1_ptr uint16_t* config_data,
     const uint16_t my_noc_x,
     const uint16_t my_noc_y,
@@ -53,12 +53,76 @@ void copy_sticks_async(
         DPRINT << "noc_x: " << noc_x << " noc_y: " << noc_y << " length: " << length << ENDL();
 
         const uint64_t base_addr = get_noc_addr(noc_x, noc_y, is_read ? in_base_l1_addr : out_base_l1_addr);
+        uint64_t dst_addr = base_addr;
+        for (uint16_t j = 0; j < length; j += 3) {
+            uint16_t src_local_idx = config_data[i + j + 0];
+            uint16_t nsticks = config_data[i + j + 2];
+            DPRINT << "src_local_idx: " << src_local_idx << " dst_local_idx: " << (dst_addr - base_addr) / stick_nbytes
+                   << " nsticks: " << nsticks << ENDL();
+            uint32_t size = nsticks * stick_nbytes;
+            uint32_t src_offset = src_local_idx * input_aligned_page_size;
+
+            uint32_t src_addr = in_base_l1_addr + src_offset;
+            if constexpr (stick_nbytes == input_aligned_page_size) {
+                noc_async_write(src_addr, dst_addr, size);
+                dst_addr += size;
+            } else {
+                for (uint16_t k = 0; k < nsticks; k++) {
+                    noc_async_write(src_addr, dst_addr, stick_nbytes);
+                    dst_addr += stick_nbytes;
+                    src_addr += input_aligned_page_size;
+                }
+            }
+        }
+
+        i += length;
+
+        if (in_place && noc_x >= noc_00_x &&
+            noc_y >= noc_00_y) {  // remote config is padded with zeros, so there are some invalid noc_x, noc_y coords =
+                                  // (0,0), we need to skip these
+            noc_async_read_barrier();
+            noc_async_write_barrier();
+            const uint64_t ref_semaphore_noc_addr = get_noc_addr(noc_x, noc_y, semaphore_addr);
+            noc_semaphore_inc(ref_semaphore_noc_addr, 1);
+        }
+    }
+}
+
+template <
+    uint32_t stick_nbytes,
+    uint32_t input_aligned_page_size,
+    bool is_block_sharded,
+    bool is_width_sharded,
+    bool is_read,
+    bool is_col_major>
+void copy_sticks_async(
+    const tt_l1_ptr uint16_t* config_data,
+    const uint16_t my_noc_x,
+    const uint16_t my_noc_y,
+    const uint32_t in_base_l1_addr,
+    const uint32_t out_base_l1_addr,
+    const uint32_t noc_00_x,
+    const uint32_t noc_00_y,
+    const uint32_t semaphore_addr = 0,
+    const bool in_place = false) {
+    int i = 0;
+    int length = config_data[i + 2];
+
+    while (length) {
+        uint16_t noc_x = ((is_block_sharded && !is_col_major) || is_width_sharded) ? my_noc_x : config_data[i + 0];
+        uint16_t noc_y = ((is_block_sharded && is_col_major) || is_width_sharded) ? my_noc_y : config_data[i + 1];
+        length = config_data[i + 2];
+        i += 3;
+
+        // DPRINT << "noc_x: " << noc_x << " noc_y: " << noc_y << " length: " << length << ENDL();
+
+        const uint64_t base_addr = get_noc_addr(noc_x, noc_y, is_read ? in_base_l1_addr : out_base_l1_addr);
         for (uint16_t j = 0; j < length; j += 3) {
             uint16_t src_local_idx = config_data[i + j + 0];
             uint16_t dst_local_idx = config_data[i + j + 1];
             uint16_t nsticks = config_data[i + j + 2];
-            DPRINT << "src_local_idx: " << src_local_idx << " dst_local_idx: " << dst_local_idx
-                   << " nsticks: " << nsticks << ENDL();
+            // DPRINT << "src_local_idx: " << src_local_idx << " dst_local_idx: " << dst_local_idx
+            //        << " nsticks: " << nsticks << ENDL();
             uint32_t size = nsticks * stick_nbytes;
             uint32_t dst_offset = dst_local_idx * stick_nbytes;
             uint32_t src_offset = src_local_idx * input_aligned_page_size;
@@ -175,7 +239,7 @@ void kernel_main() {
     if constexpr (remote_config_cb_id) {
         uint32_t config_data_l1_addr = get_read_ptr(remote_config_cb_id);
         const tt_l1_ptr uint16_t* config_data = reinterpret_cast<const tt_l1_ptr uint16_t*>(config_data_l1_addr);
-        copy_sticks_async<
+        copy_sticks_async_temp_write<
             stick_nbytes,
             input_aligned_page_size,
             is_block_sharded,
