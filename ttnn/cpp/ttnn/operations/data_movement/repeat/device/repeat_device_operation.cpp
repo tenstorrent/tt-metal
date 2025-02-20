@@ -37,29 +37,7 @@ std::vector<TensorSpec> RepeatDeviceOperation::compute_output_specs(const std::v
         mem_config.shard_spec = shard_spec;
     }
     return {TensorSpec(
-        output_shape,
-        TensorLayout::fromPaddedShape(
-            input_tensor_a.get_dtype(),
-            PageConfig(input_tensor_a.get_layout()),
-            mem_config,
-            output_shape,
-            output_shape))};  // no padding requried because we are RM only right now
-}
-
-std::vector<Tensor> RepeatDeviceOperation::create_output_tensors(const std::vector<Tensor>& input_tensors) const {
-    // Create the output tensor
-    const auto& input_tensor_a = input_tensors.at(0);
-    const auto output_shape = this->compute_output_specs(input_tensors).at(0).logical_shape();
-
-    // is this relevant?
-    auto mem_config = this->m_output_mem_config;
-    if (input_tensor_a.memory_config().is_sharded()) {
-        auto shard_spec = input_tensor_a.shard_spec().value();
-        shard_spec.shape[0] = output_shape[0];
-        mem_config.shard_spec = shard_spec;
-    }
-    return {create_device_tensor(
-        output_shape, input_tensor_a.get_dtype(), input_tensor_a.get_layout(), input_tensor_a.device(), mem_config)};
+        output_shape, TensorLayout(input_tensor_a.get_dtype(), PageConfig(input_tensor_a.get_layout()), mem_config))};
 }
 
 operation::ProgramWithCallbacks RepeatDeviceOperation::create_program(
