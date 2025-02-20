@@ -17,14 +17,13 @@
 #include "datasets/dataloader.hpp"
 #include "datasets/in_memory_token_dataset.hpp"
 #include "datasets/utils.hpp"
+#include "models/distributed/gpt2.hpp"
 #include "models/gpt2.hpp"
 #include "ops/binary_ops.hpp"
 #include "ops/losses.hpp"
 #include "optimizers/adamw.hpp"
-#include "optimizers/sgd.hpp"
 #include "tokenizers/bpe_tokenizer.hpp"
 #include "tokenizers/char_tokenizer.hpp"
-#include "ttnn_fixed/trivial_ttnn_ops.hpp"
 #include "utils.hpp"
 
 /* WANDB BLocks this signal.
@@ -378,6 +377,7 @@ int main(int argc, char **argv) {
     bool add_time_to_name = true;
     bool enable_wandb = true;
     bool ddp = false;
+    bool enable_tp = false;
     app.add_option("-c,--config", config_name, "Yaml Config name")->default_val(config_name);
     app.add_option("-e,--eval", is_eval, "Is evaluation")->default_val(is_eval);
     app.add_option("-t,--add_time_to_name", add_time_to_name, "Add time to run name")->default_val(add_time_to_name);
@@ -385,7 +385,11 @@ int main(int argc, char **argv) {
     app.add_option("-d,--ddp", ddp, "Enable DDP")->default_val(ddp);
     CLI11_PARSE(app, argc, argv);
 
-    initialize_device(ddp);
+    if (ddp && enable_tp) {
+        throw std::logic_error("DDP and TP cannot be enabled at the same time. Disable DDP or TP.");
+    }
+
+    initialize_device(ddp, enable_tp);
 
     if (enable_wandb) {
         auto result = signal(SIGINT, signal_handler);
@@ -541,7 +545,8 @@ int main(int argc, char **argv) {
 
     fmt::print("Overriding vocab size to be divisible by 32\n");
     config.transformer_config.vocab_size = round_up_to_tile(tokenizer->get_vocab_size());
-    auto model = ttml::models::gpt2::create(config.transformer_config);
+    // auto model = ttml::models::gpt2::create(config.transformer_config);
+    auto model = ttml::models::distributed::gpt2::create(config.transformer_config);
 
     auto adamw_params = ttml::optimizers::AdamWConfig();
     adamw_params.lr = config.learning_rate;
