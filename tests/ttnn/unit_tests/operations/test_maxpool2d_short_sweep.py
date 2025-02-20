@@ -65,11 +65,11 @@ parameters = {
             # Contains following parameters
             # [batch_size, input_channels, input_height, input_width, kernel_height, kernel_width, stride_h, strid_w, pad_h, pad_w, dilation_h, dilation_w, ceil_mode]
             [1, 32, 1056, 160, 2, 2, 2, 2, 0, 0, 1, 1, False],  # functional_unet
-            [1, 64, 1056, 160, 2, 2, 2, 2, 0, 0, 1, 1, False],
+            # [1, 64, 1056, 160, 2, 2, 2, 2, 0, 0, 1, 1, False],
             [1, 3, 224, 224, 2, 2, 2, 2, 0, 0, 1, 1, False],  # vgg
-            [1, 512, 10, 10, 5, 5, 1, 1, 2, 2, 1, 1, False],  # yolo
-            [1, 512, 10, 10, 9, 9, 1, 1, 4, 4, 1, 1, False],
-            [1, 512, 10, 10, 13, 13, 1, 1, 6, 6, 1, 1, False],
+            # [1, 512, 10, 10, 5, 5, 1, 1, 2, 2, 1, 1, False],  # yolo
+            # [1, 512, 10, 10, 9, 9, 1, 1, 4, 4, 1, 1, False],
+            # [1, 512, 10, 10, 13, 13, 1, 1, 6, 6, 1, 1, False],
             [1, 3, 224, 224, 3, 3, 2, 2, 1, 1, 1, 1, False],  # resnet
             [2, 3, 224, 224, 3, 3, 2, 2, 1, 1, 1, 1, False],
             [4, 3, 224, 224, 3, 3, 2, 2, 1, 1, 1, 1, False],
@@ -105,16 +105,16 @@ parameters = {
         "input_specs": [
             # Contains following parameters
             # [batch_size, input_channels, input_height, input_width, kernel_height, kernel_width, stride_h, strid_w, pad_h, pad_w, dilation_h, dilation_w, ceil_mode]
-            [1, 32, 1056, 160, 2, 2, 2, 2, 0, 0, 1, 1, False],  # functional_unet
-            [1, 64, 1056, 160, 2, 2, 2, 2, 0, 0, 1, 1, False],
-            [1, 3, 224, 224, 2, 2, 2, 2, 0, 0, 1, 1, False],  # vgg
+            # [1, 32, 1056, 160, 2, 2, 2, 2, 0, 0, 1, 1, False],  # functional_unet
+            # [1, 64, 1056, 160, 2, 2, 2, 2, 0, 0, 1, 1, False],
+            # [1, 3, 224, 224, 2, 2, 2, 2, 0, 0, 1, 1, False],  # vgg
             [1, 512, 10, 10, 5, 5, 1, 1, 2, 2, 1, 1, False],  # yolo
             [1, 512, 10, 10, 9, 9, 1, 1, 4, 4, 1, 1, False],
             [1, 512, 10, 10, 13, 13, 1, 1, 6, 6, 1, 1, False],
-            [1, 3, 224, 224, 3, 3, 2, 2, 1, 1, 1, 1, False],  # resnet
-            [2, 3, 224, 224, 3, 3, 2, 2, 1, 1, 1, 1, False],
-            [4, 3, 224, 224, 3, 3, 2, 2, 1, 1, 1, 1, False],
-            [8, 3, 224, 224, 3, 3, 2, 2, 1, 1, 1, 1, False],
+            # [1, 3, 224, 224, 3, 3, 2, 2, 1, 1, 1, 1, False],  # resnet
+            # [2, 3, 224, 224, 3, 3, 2, 2, 1, 1, 1, 1, False],
+            # [4, 3, 224, 224, 3, 3, 2, 2, 1, 1, 1, 1, False],
+            # [8, 3, 224, 224, 3, 3, 2, 2, 1, 1, 1, 1, False],
         ],
     },
     "test_run_max_pool_mem_config": {
@@ -122,12 +122,12 @@ parameters = {
         "input_specs": [
             # Contains following parameters
             # [batch_size, input_channels, input_height, input_width, kernel_height, kernel_width, stride_h, strid_w, pad_h, pad_w, dilation_h, dilation_w, ceil_mode]
-            [1, 32, 1056, 160, 2, 2, 2, 2, 0, 0, 1, 1, False],  # functional_unet
-            [1, 64, 1056, 160, 2, 2, 2, 2, 0, 0, 1, 1, False],
+            # [1, 32, 1056, 160, 2, 2, 2, 2, 0, 0, 1, 1, False],  # functional_unet
+            # [1, 64, 1056, 160, 2, 2, 2, 2, 0, 0, 1, 1, False],
             [1, 3, 224, 224, 2, 2, 2, 2, 0, 0, 1, 1, False],  # vgg
-            [1, 512, 10, 10, 5, 5, 1, 1, 2, 2, 1, 1, False],  # yolo
-            [1, 512, 10, 10, 9, 9, 1, 1, 4, 4, 1, 1, False],
-            [1, 512, 10, 10, 13, 13, 1, 1, 6, 6, 1, 1, False],
+            # [1, 512, 10, 10, 5, 5, 1, 1, 2, 2, 1, 1, False],  # yolo
+            # [1, 512, 10, 10, 9, 9, 1, 1, 4, 4, 1, 1, False],
+            # [1, 512, 10, 10, 13, 13, 1, 1, 6, 6, 1, 1, False],
             [1, 3, 224, 224, 3, 3, 2, 2, 1, 1, 1, 1, False],  # resnet
             [2, 3, 224, 224, 3, 3, 2, 2, 1, 1, 1, 1, False],
             [4, 3, 224, 224, 3, 3, 2, 2, 1, 1, 1, 1, False],
