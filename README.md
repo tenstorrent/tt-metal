@@ -168,4 +168,4 @@ Get started with [simple kernels](https://docs.tenstorrent.com/tt-metal/latest/t
 - [Matmul Multi_core Multi-Cast (Optimized)](./tech_reports/prog_examples/matmul_multi_core_optimized/data_mcast.md)
 
 # Bug Bounty Terms and Conditions
-This repo is a part of Tenstorrent’s bug bounty program. If you are interested in helping to improve tt-metal, please make sure to read the [Tenstorrent Bug Bounty Program Terms and Conditions](https://github.com/tenstorrent/tt-metal/blob/main/BUG_BOUNTY_TERMS.md) before heading to the issues tab. Look for the issues that are tagged with both “bounty” and difficulty level!
+This repo is a part of Tenstorrent’s bug bounty program. If you are interested in helping to improve tt-metal, please make sure to read the [Tenstorrent Bug Bounty Program Terms and Conditions](https://github.com/tenstorrent/tt-metal/blob/main/BOUNTY_TERMS.md) before heading to the issues tab. Look for the issues that are tagged with both “bounty” and difficulty level!
