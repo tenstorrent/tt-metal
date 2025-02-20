@@ -181,7 +181,7 @@ size_t log_worker_to_fabric_edm_sender_rt_args(std::vector<uint32_t> const& args
 
 class FabricEriscDatamoverBuilder {
    public:
-       static constexpr size_t default_firmware_context_switch_interval = 200000;
+       static constexpr size_t default_firmware_context_switch_interval = 10000;
        // payload only, no header
        static constexpr size_t default_packet_payload_size_bytes = tt::tile_size(tt::DataFormat::Bfp8_b) * 4;
 
