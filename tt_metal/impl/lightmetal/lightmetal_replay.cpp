@@ -589,13 +589,14 @@ void LightMetalReplay::execute(const tt::tt_metal::flatbuffer::CreateCircularBuf
     ::tt::tt_metal::Buffer* shadow_global_buffer = nullptr;
     auto shadow_buf_global_id = cmd->config()->shadow_buf_global_id();
 
-    if (shadow_buf_global_id != 0) {
-        auto shadow_buf = get_buffer_from_map(shadow_buf_global_id);
+    if (shadow_buf_global_id) {
+        auto global_id = shadow_buf_global_id->value();
+        auto shadow_buf = get_buffer_from_map(global_id);
         TT_FATAL(
             shadow_buf,
             "Attempted to CreateCircularBuffer() using a shadow Buffer w/ global_id: {} that was not previously "
             "created.",
-            shadow_buf_global_id);
+            global_id);
         shadow_global_buffer = shadow_buf.get();  // Set the raw pointer
     }
 
