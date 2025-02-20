@@ -121,6 +121,21 @@ def get_decode_sdpa_configs(config):
     return sdpa_batch_sharded_memcfg, sdpa_decode_progcfg, sdpa_decode_compute_kernel_config
 
 
+def functional_sdpa(query_states, key_states, value_states, scaling, attention_mask):
+    query_states *= scaling
+
+    attn_weights = query_states @ key_states
+
+    if attention_mask is not None:
+        attn_weights = attn_weights + attention_mask
+
+    attn_weights = ttnn.softmax(attn_weights, dim=-1, memory_config=WHISPER_MEMORY_CONFIG)
+
+    attn_probs = dropout(attn_weights, p=0, training=False)
+    attn_output = attn_probs @ value_states
+    return attn_output
+
+
 def whisper_attention(
     config,
     hidden_states,
@@ -137,7 +152,7 @@ def whisper_attention(
     bsz, *_, tgt_len, _ = hidden_states.shape
 
     is_cross_attention = encoder_hidden_states is not None
-    sdpa_with_kv_cache = is_decode and kv_cache is not None
+    sdpa_with_kv_cache = not is_cross_attention and is_decode and kv_cache is not None
 
     if is_cross_attention:
         query_states = hidden_states @ parameters.q_proj.weight + parameters.q_proj.bias
@@ -146,6 +161,7 @@ def whisper_attention(
         query_states = ttnn.reshape(query_states, (bsz, tgt_len, config.encoder_attention_heads, head_size))
         query_states = ttnn.transpose(query_states, 1, 2)  # 1, H, 32, d
         key_states, value_states = calculate_key_values(config, encoder_hidden_states, parameters=parameters)
+        attn_output = functional_sdpa(query_states, key_states, value_states, scaling, attention_mask)
     else:
         fused_qkv = hidden_states @ parameters.query_key_value.weight + parameters.query_key_value.bias  # 1, S, 3xHxd
         fused_qkv = ttnn.unsqueeze_to_4D(fused_qkv)
@@ -205,20 +221,8 @@ def whisper_attention(
             )  # 1, 1, H, D
 
             attn_output = ttnn.transpose(attn_output, 1, 2)
-
-    if not sdpa_with_kv_cache:
-        query_states *= scaling
-
-        attn_weights = query_states @ key_states
-
-        if attention_mask is not None:
-            attn_weights = attn_weights + attention_mask
-
-        # differences in ttnn.softmax vs torch.softmax cause the attn_weights to be slightly different
-        attn_weights = ttnn.softmax(attn_weights, dim=-1, memory_config=WHISPER_MEMORY_CONFIG)
-
-        attn_probs = dropout(attn_weights, p=0, training=False)
-        attn_output = attn_probs @ value_states
+        else:
+            attn_output = functional_sdpa(query_states, key_states, value_states, scaling, attention_mask)
 
     attn_output = ttnn.experimental.nlp_concat_heads(attn_output)
     attn_output = ttnn.squeeze(attn_output, 0)

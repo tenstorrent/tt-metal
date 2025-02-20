@@ -76,8 +76,7 @@ def init_conditional_generation_tt_model(hf_ref_model, config, ttnn_model, devic
     )
 
     # Note: config.max_length is 448 for current whisper models
-    # kv_cache = init_kv_cache(config, device, max_batch_size, max_seq_len=max_seq_len)
-    kv_cache = None
+    kv_cache = init_kv_cache(config, device, max_batch_size, max_seq_len=max_seq_len)
 
     return parameters, ttnn_linear_weight, kv_cache
 
@@ -97,6 +96,8 @@ def run_generate(
     kv_cache=None,
 ):
     unpadded_batch_size = input_embeds.shape[0]
+    assert unpadded_batch_size == 1, "Only batch size 1 is supported for inference"
+
     input_ids = torch.tensor([[1, 1]]) * config.decoder_start_token_id
 
     logits_processor = get_logits_processor(input_ids, config)
@@ -105,21 +106,25 @@ def run_generate(
 
     decoder_start_values = generation_config.pad_token_id * torch.ones(1, 32).to(torch.long)
 
+    # Initial decode positions
+    if kv_cache:
+        current_decode_pos = torch.zeros(unpadded_batch_size)
+        current_decode_pos = ttnn.from_torch(
+            current_decode_pos,
+            device=device,
+            dtype=ttnn.int32,
+        )
+    else:
+        current_decode_pos = None
+
+    # Run encoder
     encoder_hidden_states = ttnn_model.encoder(config, input_embeds, parameters=parameters.encoder)
 
-    MAX_GEN_LEN = 128
-    print_each_iter = False
-
     # Decode inference run
+    MAX_GEN_LEN = 128
+    print_each_iter = True
+    output_ids = []
     logger.info("Starting decode inference run")
-
-    # Initial decode positions
-    current_decode_pos = torch.zeros(unpadded_batch_size)
-    current_decode_pos = ttnn.from_torch(
-        current_decode_pos,
-        device=device,
-        dtype=ttnn.int32,
-    )
 
     for i in tqdm(range(MAX_GEN_LEN), desc="Decode inference iterations"):
         start_iter = time.time()
@@ -133,11 +138,14 @@ def run_generate(
             parameters=parameters.decoder,
         )
 
-        # Note: the whisper model is currently not using a kv cache and recomputes the entire sequence at each step
-        # Only run the lm head on the last tile to fix bad outputs and reduce redundant computation
-        last_tile_start_idx = i // 32 * 32
-        output_idx = i % 32
-        output = output[:, last_tile_start_idx : last_tile_start_idx + 32, :]
+        if not kv_cache:
+            # Note: if not using a kv cache, the entire sequence is recomputed at each step
+            # Only run the lm head on the last tile to fix bad outputs and reduce redundant computation
+            last_tile_start_idx = i // 32 * 32
+            output_idx = i % 32
+            output = output[:, last_tile_start_idx : last_tile_start_idx + 32, :]
+        else:
+            output_idx = 0
 
         output = output @ ttnn_linear_weight
 
@@ -149,13 +157,17 @@ def run_generate(
 
         next_tokens_scores = logits_processor(input_features, next_token_logits)
         next_tokens = torch.argmax(next_tokens_scores, dim=-1)
-
-        if (i + 1) % 32 == 0:
-            input_ids = torch.cat([input_ids, decoder_start_values], dim=1)
+        output_ids.append(next_tokens)
 
         # Update input_ids and current_decode_pos
-        input_ids[:, i + 1] = next_tokens[:, None]
-        ttnn.plus_one(current_decode_pos)
+        if not kv_cache:
+            if (i + 1) % 32 == 0:
+                input_ids = torch.cat([input_ids, decoder_start_values], dim=1)
+            input_ids[:, i + 1] = next_tokens[:, None]
+        else:
+            input_ids = next_tokens[:, None]
+            input_ids = pad_input_32(input_ids, config.pad_token_id).to(torch.long)
+            ttnn.plus_one(current_decode_pos)
 
         decoder_hidden_states, decoder_attention_mask = ttnn_model.preprocess_decoder_inputs(
             config=config, input_ids=input_ids, attention_mask=None, parameters=parameters.decoder, device=device
@@ -166,9 +178,9 @@ def run_generate(
             break
 
         if print_each_iter:
-            logger.info(processor.batch_decode(input_ids, skip_special_tokens=True)[0])
+            logger.info(processor.batch_decode(torch.stack(output_ids, dim=1), skip_special_tokens=True)[0])
 
-    ttnn_transcription = processor.batch_decode(input_ids, skip_special_tokens=True)[0]
+    ttnn_transcription = processor.batch_decode(torch.stack(output_ids, dim=1), skip_special_tokens=True)[0]
 
     return ttnn_transcription
 
