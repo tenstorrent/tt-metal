@@ -33,10 +33,10 @@ CircularBufferConfig from_flatbuffer(
     const flatbuffer::CircularBufferConfig* config_fb, const Buffer* shadow_global_buffer) {
     TT_FATAL(config_fb, "Invalid CircularBufferConfig FlatBuffer object");
 
-    std::optional<uint32_t> globally_allocated_address =
-        (config_fb->globally_allocated_address() == 0)
-            ? std::nullopt
-            : std::optional<uint32_t>(config_fb->globally_allocated_address());
+    const auto globally_allocated_address =
+        config_fb->globally_allocated_address()
+            ? std::optional<uint32_t>(config_fb->globally_allocated_address()->value())
+            : std::nullopt;
 
     std::array<std::optional<tt::DataFormat>, NUM_CIRCULAR_BUFFERS> data_formats = {};
     if (config_fb->data_formats()) {
