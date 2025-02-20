@@ -3,7 +3,7 @@ import pathlib
 
 from infra.data_collection.github import workflows
 from infra.data_collection.cicd import create_cicd_json_for_data_analysis
-from infra.data_collection.models import InfraErrorV1
+from infra.data_collection.models import InfraErrorV1, TestErrorV1
 
 
 def test_dummy():
@@ -233,3 +233,47 @@ def test_empty_gtest_xml(workflow_run_gh_environment):
     assert (
         workflows.get_tests_from_test_report_path(workflow_outputs_dir / "distributed_unit_tests_wormhole_b0.xml") == []
     )
+
+
+def test_create_pipeline_json_for_testcases_with_annotations(workflow_run_gh_environment):
+    github_runner_environment = workflow_run_gh_environment
+    github_pipeline_json_filename = (
+        "tests/_data/data_collection/cicd/all_post_commit_test_annotations_13443325356/workflow.json"
+    )
+    github_jobs_json_filename = (
+        "tests/_data/data_collection/cicd/all_post_commit_test_annotations_13443325356/workflow_jobs.json"
+    )
+
+    workflow_outputs_dir = pathlib.Path(
+        "tests/_data/data_collection/cicd/all_post_commit_test_annotations_13443325356/"
+    ).resolve()
+    assert workflow_outputs_dir.is_dir()
+    assert workflow_outputs_dir.exists()
+
+    pipeline = create_cicd_json_for_data_analysis(
+        workflow_outputs_dir,
+        github_runner_environment,
+        github_pipeline_json_filename,
+        github_jobs_json_filename,
+    )
+
+    assert pipeline.github_pipeline_id == 13443325356
+
+    for job in pipeline.jobs:
+        # failing gtest testcase
+        if job.github_job_id == 37563095078:
+            assert len(job.tests) > 0
+            assert job.job_success is False
+            # check that there are failing gtests stored in the pydantic testcase list
+            assert len([x for x in job.tests if not x.success]) == 1
+            # check that the job signature and description are present
+            assert job.failure_signature == str(TestErrorV1.CPP_TEST_FAILURE)
+            assert job.failure_description is not None and ".cpp" in job.failure_description
+        # failing pytest testcase
+        if job.github_job_id == 37563108566:
+            assert len(job.tests) > 0
+            assert job.job_success is False
+            # check that there are failing pytests stored in the pydantic testcase list
+            assert len([x for x in job.tests if not x.success]) == 1
+            assert job.failure_signature == str(TestErrorV1.PY_TEST_FAILURE)
+            assert job.failure_description is not None and ".py" in job.failure_description
