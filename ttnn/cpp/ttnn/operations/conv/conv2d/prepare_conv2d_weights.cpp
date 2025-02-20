@@ -663,6 +663,10 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
 
     weight_tensor_ = weight_tensor;
     // Convert weight tensor to 0 padded shape if groups > 1
+    if (groups > 1 and is_tensor_on_device_or_multidevice(weight_tensor_)) {
+        TT_THROW(
+            "Grouped Convolution not supported when weights are on device. Please move the weights tensor to host");
+    }
     if (!is_conv1d and groups > 1) {
         weight_tensor_ = convert_conv_weight_tensor_to_grouped_layout(weight_tensor_, groups, weights_bias_dtype);
     } else if (is_conv1d and groups > 1) {

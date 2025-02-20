@@ -111,7 +111,6 @@ def run_conv(
         torch_weight_tensor,
         weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32,
         mesh_mapper=weight_mesh_mapper,
-        device=device,
     )
     tt_bias_tensor = None
     if has_bias:
@@ -119,7 +118,6 @@ def run_conv(
             torch_bias_tensor,
             weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32,
             mesh_mapper=weight_mesh_mapper,
-            device=device,
         )
 
     tt_input_tensor = ttnn.from_torch(
