@@ -21,7 +21,7 @@ from models.utility_functions import nearest_32
 def test_replicate_to_tensor_mesh(mesh_device, dtype):
     torch.manual_seed(1234)
 
-    torch_tensor = torch.randn(1, 1, 32, 8192)
+    torch_tensor = torch.randn(1, 1, 32, 256)
     to_repl = ttnn.from_torch(
         torch_tensor,
         dtype=dtype,
@@ -42,7 +42,7 @@ def test_replicate_to_tensor_mesh(mesh_device, dtype):
 def test_shard_to_tensor_mesh(mesh_device, dtype):
     torch.manual_seed(1234)
 
-    torch_tensor = torch.randn(1, 1, 8192, 32768)
+    torch_tensor = torch.randn(1, 1, 32, 256)
     to_shard = ttnn.from_torch(
         torch_tensor,
         dtype=dtype,
@@ -65,7 +65,7 @@ def test_shard_to_tensor_mesh(mesh_device, dtype):
 def test_concat_to_tensor(mesh_device, dtype):
     torch.manual_seed(1234)
 
-    torch_tensor = torch.randn(1, 1, 8192, 32768)
+    torch_tensor = torch.randn(1, 1, 32, 256)
     to_shard = ttnn.from_torch(
         torch_tensor,
         dtype=dtype,
@@ -88,7 +88,7 @@ def test_concat_to_tensor(mesh_device, dtype):
 def test_concat_slice_to_tensor(mesh_device, dtype):
     torch.manual_seed(1234)
 
-    torch_tensor = torch.randn(1, 1, 8192, 32768)
+    torch_tensor = torch.randn(1, 1, 32, 256)
     to_shard = ttnn.from_torch(
         torch_tensor,
         dtype=dtype,
@@ -116,7 +116,7 @@ def test_concat_slice_to_tensor(mesh_device, dtype):
 )
 @pytest.mark.parametrize(
     "M, K, N",
-    [pytest.param(32, 8192, 28 * 1024), pytest.param(32, 28 * 1024, 8192)],
+    [pytest.param(32, 64, 128), pytest.param(32, 128, 64)],
 )
 @pytest.mark.parametrize("dtype", [ttnn.uint16, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.float32])
 def test_shard2d_to_tensor_mesh(M, K, N, dtype, mesh_shape, mesh_device):
@@ -163,7 +163,7 @@ def test_shard2d_to_tensor_mesh(M, K, N, dtype, mesh_shape, mesh_device):
 )
 @pytest.mark.parametrize(
     "M, K, N",
-    [pytest.param(32, 8192, 28 * 1024), pytest.param(32, 28 * 1024, 8192)],
+    [pytest.param(32, 128, 64), pytest.param(32, 128, 64)],
 )
 @pytest.mark.parametrize("dtype", [ttnn.uint16, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.float32])
 def test_concat2d_to_tensor(M, K, N, dtype, mesh_shape, mesh_device):

@@ -39,7 +39,7 @@ std::unique_ptr<TensorToMesh> shard_tensor_to_2d_mesh_mapper(
         mesh_shape.num_rows <= mesh_device.shape().num_rows &&  //
             mesh_shape.num_cols <= mesh_device.shape().num_cols,
         "Device mesh shape does not match the provided mesh shape.");
-    return std::make_unique<ShardTensor2dMesh>(mesh_shape, config);
+    return std::make_unique<ShardTensorTo2dMesh>(mesh_shape, config);
 }
 
 std::unique_ptr<MeshToTensor> concat_mesh_to_tensor_composer(int dim) {
@@ -52,7 +52,7 @@ std::unique_ptr<MeshToTensor> concat_2d_mesh_to_tensor_composer(MeshDevice& mesh
         "Dimensions in 'dims' must be different; got row_dim: {}, col_dim: {}",
         config.row_dim,
         config.col_dim);
-    return std::make_unique<ConcatMesh2dToTensor>(mesh_device, config);
+    return std::make_unique<Concat2dMeshToTensor>(mesh_device, config);
 }
 
 Tensor distribute_tensor(
