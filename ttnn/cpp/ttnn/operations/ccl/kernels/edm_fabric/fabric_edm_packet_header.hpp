@@ -26,13 +26,15 @@ enum NocSendType : uint8_t {
     NOC_UNICAST_INLINE_WRITE = 1,
     NOC_MULTICAST_WRITE = 2,
     NOC_UNICAST_ATOMIC_INC = 3,
-    NOC_MULTICAST_ATOMIC_INC = 4
+    NOC_MULTICAST_ATOMIC_INC = 4,
+    NOC_SEND_TYPE_LAST = NOC_MULTICAST_ATOMIC_INC
 };
 // How to send the payload across the cluster
 // 1 bit
 enum ChipSendType : uint8_t {
     CHIP_UNICAST = 0,
     CHIP_MULTICAST = 1,
+    CHIP_SEND_TYPE_LAST = CHIP_MULTICAST
 };
 
 struct RoutingFields {
