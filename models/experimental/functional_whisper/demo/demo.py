@@ -60,7 +60,7 @@ def load_conditional_generation_ref_model():
     )
 
 
-def init_conditional_generation_tt_model(hf_ref_model, config, ttnn_model, device, max_batch_size=1):
+def init_conditional_generation_tt_model(hf_ref_model, config, ttnn_model, device, max_batch_size=1, max_seq_len=512):
     model = hf_ref_model.model
     linear_weight = hf_ref_model.proj_out.weight
 
@@ -75,7 +75,8 @@ def init_conditional_generation_tt_model(hf_ref_model, config, ttnn_model, devic
         device=device,
     )
 
-    # kv_cache = init_kv_cache(config, device, max_batch_size, max_seq_len=config.max_length)
+    # Note: config.max_length is 448 for current whisper models
+    # kv_cache = init_kv_cache(config, device, max_batch_size, max_seq_len=max_seq_len)
     kv_cache = None
 
     return parameters, ttnn_linear_weight, kv_cache
@@ -95,6 +96,7 @@ def run_generate(
     generation_config,
     kv_cache=None,
 ):
+    unpadded_batch_size = input_embeds.shape[0]
     input_ids = torch.tensor([[1, 1]]) * config.decoder_start_token_id
 
     logits_processor = get_logits_processor(input_ids, config)
@@ -111,6 +113,14 @@ def run_generate(
     # Decode inference run
     logger.info("Starting decode inference run")
 
+    # Initial decode positions
+    current_decode_pos = torch.zeros(unpadded_batch_size)
+    current_decode_pos = ttnn.from_torch(
+        current_decode_pos,
+        device=device,
+        dtype=ttnn.int32,
+    )
+
     for i in tqdm(range(MAX_GEN_LEN), desc="Decode inference iterations"):
         start_iter = time.time()
         output = ttnn_model.decoder(
@@ -119,6 +129,7 @@ def run_generate(
             decoder_attention_mask=decoder_attention_mask,
             encoder_hidden_states=encoder_hidden_states,
             kv_cache=kv_cache,
+            current_decode_pos=current_decode_pos,
             parameters=parameters.decoder,
         )
 
@@ -142,7 +153,9 @@ def run_generate(
         if (i + 1) % 32 == 0:
             input_ids = torch.cat([input_ids, decoder_start_values], dim=1)
 
+        # Update input_ids and current_decode_pos
         input_ids[:, i + 1] = next_tokens[:, None]
+        ttnn.plus_one(current_decode_pos)
 
         decoder_hidden_states, decoder_attention_mask = ttnn_model.preprocess_decoder_inputs(
             config=config, input_ids=input_ids, attention_mask=None, parameters=parameters.decoder, device=device

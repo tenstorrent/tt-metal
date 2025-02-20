@@ -4,15 +4,16 @@
 
 import transformers
 import torch
-from typing import Optional, Tuple
+from typing import Optional
 from loguru import logger
 
 from torch.nn import functional as F
 from ttnn.model_preprocessing import preprocess_linear_weight, preprocess_linear_bias
 import ttnn
 
+from models.utility_functions import nearest_32
+
 WHISPER_MEMORY_CONFIG = ttnn.DRAM_MEMORY_CONFIG
-WHISPER_DTYPE = ttnn.bfloat8_b
 
 
 def gelu(tensor):
@@ -77,14 +78,67 @@ def calculate_key_values(config, key_value_states, *, parameters):
     return key_states, value_states
 
 
+def get_decode_sdpa_configs(config):
+    head_size = config.d_model // config.decoder_attention_heads
+    padded_num_heads = nearest_32(config.decoder_attention_heads)
+
+    # Q, K, V are batch sharded across cores (currently only supporting batch 1)
+    sdpa_batch_sharded_memcfg = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            grid=ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(
+                        # Volume must match batch size
+                        ttnn.CoreCoord(0, 0),
+                        ttnn.CoreCoord(0, 0),
+                    ),
+                }
+            ),
+            shard_shape=[
+                padded_num_heads,
+                head_size,
+            ],
+            shard_orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+
+    sdpa_decode_progcfg = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=(8, 8),
+        exp_approx_mode=False,
+        q_chunk_size=256,
+        k_chunk_size=256,
+    )
+
+    sdpa_decode_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+
+    return sdpa_batch_sharded_memcfg, sdpa_decode_progcfg, sdpa_decode_compute_kernel_config
+
+
 def whisper_attention(
-    config, hidden_states, attention_mask, is_decode, encoder_hidden_states=None, kv_cache=None, *, parameters
+    config,
+    hidden_states,
+    attention_mask,
+    is_decode,
+    encoder_hidden_states=None,
+    kv_cache=None,
+    current_decode_pos=None,
+    *,
+    parameters,
 ):
     head_size = config.d_model // config.encoder_attention_heads
     scaling = head_size**-0.5
     bsz, *_, tgt_len, _ = hidden_states.shape
 
     is_cross_attention = encoder_hidden_states is not None
+    sdpa_with_kv_cache = is_decode and kv_cache is not None
+
     if is_cross_attention:
         query_states = hidden_states @ parameters.q_proj.weight + parameters.q_proj.bias
         query_states = ttnn.unsqueeze_to_4D(query_states)
@@ -93,38 +147,78 @@ def whisper_attention(
         query_states = ttnn.transpose(query_states, 1, 2)  # 1, H, 32, d
         key_states, value_states = calculate_key_values(config, encoder_hidden_states, parameters=parameters)
     else:
-        fused_qkv = hidden_states @ parameters.query_key_value.weight + parameters.query_key_value.bias  # B, S, 3xHxd
+        fused_qkv = hidden_states @ parameters.query_key_value.weight + parameters.query_key_value.bias  # 1, S, 3xHxd
         fused_qkv = ttnn.unsqueeze_to_4D(fused_qkv)
         (
-            query_states,  # B, H, S, d
-            key_states,  # B, H, d, S
-            value_states,  # B, H, S, d
+            query_states,  # 1, H, S, d
+            key_states,  # 1, H, d, S
+            value_states,  # 1, H, S, d
         ) = ttnn.experimental.nlp_create_qkv_heads(
             fused_qkv,
             num_heads=config.decoder_attention_heads,
             num_kv_heads=config.decoder_attention_heads,
-            transpose_k_heads=True,
+            transpose_k_heads=(not sdpa_with_kv_cache),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        if is_decode and kv_cache is not None:
-            k_cache = kv_cache[0]  # 1, H, S, d
-            v_cache = kv_cache[1]  # 1, H, S, d
+        if sdpa_with_kv_cache:
+            k_cache = kv_cache[0]  # 1, H, MaxS, d
+            v_cache = kv_cache[1]  # 1, H, MaxS, d
 
-            breakpoint()
+            # Reshape qkv to 1, S, H, D
+            query_states = ttnn.transpose(query_states, 1, 2)
+            key_states = ttnn.transpose(key_states, 1, 2)
+            value_states = ttnn.transpose(value_states, 1, 2)
 
-    query_states *= scaling
+            # Unpad batch
+            unpadded_batch_size = current_decode_pos.shape[0]
+            query_states = query_states[:, :unpadded_batch_size, :, :]
+            key_states = key_states[:, :unpadded_batch_size, :, :]
+            value_states = value_states[:, :unpadded_batch_size, :, :]
 
-    attn_weights = query_states @ key_states
+            sdpa_batch_sharded_memcfg, sdpa_decode_progcfg, sdpa_decode_compute_kernel_config = get_decode_sdpa_configs(
+                config
+            )
 
-    if attention_mask is not None:
-        attn_weights = attn_weights + attention_mask
+            # Convert to sharded (required by paged_update_cache and sdpa ops)
+            query_states = ttnn.interleaved_to_sharded(query_states, sdpa_batch_sharded_memcfg)
+            key_states = ttnn.interleaved_to_sharded(key_states, sdpa_batch_sharded_memcfg)
+            value_states = ttnn.interleaved_to_sharded(value_states, sdpa_batch_sharded_memcfg)
 
-    # differences in ttnn.softmax vs torch.softmax cause the attn_weights to be slightly different
-    attn_weights = ttnn.softmax(attn_weights, dim=-1, memory_config=WHISPER_MEMORY_CONFIG)
+            # Update KV cache
+            ttnn.experimental.paged_update_cache(
+                k_cache, key_states, update_idxs_tensor=current_decode_pos, page_table=None
+            )
+            ttnn.experimental.paged_update_cache(
+                v_cache, value_states, update_idxs_tensor=current_decode_pos, page_table=None
+            )
 
-    attn_probs = dropout(attn_weights, p=0, training=False)
-    attn_output = attn_probs @ value_states
+            attn_output = ttnn.transformer.scaled_dot_product_attention_decode(
+                query_states,
+                k_cache,
+                v_cache,
+                cur_pos_tensor=current_decode_pos,
+                scale=scaling,
+                program_config=sdpa_decode_progcfg,
+                compute_kernel_config=sdpa_decode_compute_kernel_config,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )  # 1, 1, H, D
+
+            attn_output = ttnn.transpose(attn_output, 1, 2)
+
+    if not sdpa_with_kv_cache:
+        query_states *= scaling
+
+        attn_weights = query_states @ key_states
+
+        if attention_mask is not None:
+            attn_weights = attn_weights + attention_mask
+
+        # differences in ttnn.softmax vs torch.softmax cause the attn_weights to be slightly different
+        attn_weights = ttnn.softmax(attn_weights, dim=-1, memory_config=WHISPER_MEMORY_CONFIG)
+
+        attn_probs = dropout(attn_weights, p=0, training=False)
+        attn_output = attn_probs @ value_states
 
     attn_output = ttnn.experimental.nlp_concat_heads(attn_output)
     attn_output = ttnn.squeeze(attn_output, 0)
@@ -209,7 +303,9 @@ def expand_mask(mask: torch.Tensor, dtype: torch.dtype, tgt_len: Optional[int] =
     return inverted_mask.masked_fill(inverted_mask.to(torch.bool), torch.finfo(dtype).min)
 
 
-def decoder_layer(config, hidden_states, attention_mask, encoder_hidden_states, kv_cache=None, *, parameters):
+def decoder_layer(
+    config, hidden_states, attention_mask, encoder_hidden_states, kv_cache=None, current_decode_pos=None, *, parameters
+):
     residual = hidden_states
     hidden_states = ttnn.layer_norm(
         hidden_states,
@@ -223,6 +319,7 @@ def decoder_layer(config, hidden_states, attention_mask, encoder_hidden_states, 
         attention_mask=attention_mask,
         is_decode=True,
         kv_cache=kv_cache,
+        current_decode_pos=current_decode_pos,
         parameters=parameters.self_attn,
     )
     hidden_states = dropout(hidden_states, p=0, training=False)
@@ -243,6 +340,7 @@ def decoder_layer(config, hidden_states, attention_mask, encoder_hidden_states, 
         is_decode=True,
         encoder_hidden_states=encoder_hidden_states,
         kv_cache=kv_cache,
+        current_decode_pos=current_decode_pos,
         parameters=parameters.encoder_attn,
     )
 
@@ -283,8 +381,20 @@ def prepare_decoder_attention_mask(attention_mask, input_shape, input_embeds):
     return combined_attention_mask
 
 
-def decoder(config, hidden_states, decoder_attention_mask, encoder_hidden_states, kv_cache=None, *, parameters):
+def decoder(
+    config,
+    hidden_states,
+    decoder_attention_mask,
+    encoder_hidden_states,
+    kv_cache=None,
+    current_decode_pos=None,
+    *,
+    parameters,
+):
     hidden_states = dropout(hidden_states, p=0, training=False)
+
+    if kv_cache is not None:
+        assert current_decode_pos is not None, "current_decode_pos must be provided when using kv_cache"
 
     for i, decoder_layer_parameter in enumerate(parameters.layers):
         hidden_states = decoder_layer(
@@ -293,6 +403,7 @@ def decoder(config, hidden_states, decoder_attention_mask, encoder_hidden_states
             decoder_attention_mask,
             encoder_hidden_states,
             kv_cache=kv_cache[i] if kv_cache is not None else None,
+            current_decode_pos=current_decode_pos,
             parameters=decoder_layer_parameter,
         )
 
