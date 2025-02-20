@@ -43,7 +43,6 @@ jobs:
       - cloud-virtual-machine
       - in-service
     env:
-      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ inputs.arch }}
       LOGURU_LEVEL: INFO
     steps:

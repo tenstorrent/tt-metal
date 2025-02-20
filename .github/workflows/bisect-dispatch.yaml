@@ -36,7 +36,6 @@ jobs:
     needs: build-artifact
     timeout-minutes: 1440
     env:
-      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ inputs.arch }}
     runs-on:
       - ${{ inputs.runner-label }}

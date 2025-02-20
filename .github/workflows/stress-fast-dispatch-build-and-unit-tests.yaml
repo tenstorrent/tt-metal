@@ -27,7 +27,6 @@ jobs:
           {arch: wormhole_b0, runs-on: ["cloud-virtual-machine", "N300", "in-service"], machine-type: "virtual_machine", name: "N300"},
         ]
     env:
-      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.runner-info.arch }}
       TT_METAL_WATCHER: 60
       TT_METAL_WATCHER_NOINLINE: 1
