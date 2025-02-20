@@ -7,7 +7,6 @@ from gunicorn.app.base import BaseApplication
 from http import HTTPStatus
 from models.demos.wormhole.stable_diffusion.demo.web_demo.task_queue import TaskQueue
 from models.demos.wormhole.stable_diffusion.demo.web_demo.sdserver import warmup_model
-from models.utility_functions import skip_for_grayskull
 import os
 import pytest
 from threading import Thread
@@ -106,7 +105,6 @@ class GunicornApp(BaseApplication):
         thread.start()
 
 
-@skip_for_grayskull
 def test_app():
     # Ensure the generated images directory exists
     os.makedirs("generated_images", exist_ok=True)
