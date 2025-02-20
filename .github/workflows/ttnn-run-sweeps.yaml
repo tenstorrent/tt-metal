@@ -550,7 +550,6 @@ jobs:
   ttnn-generate-sweeps:
     needs: build-artifact
     env:
-      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: wormhole_b0
       ELASTIC_USERNAME: ${{ secrets.SWEEPS_ELASTIC_USERNAME }}
       ELASTIC_PASSWORD: ${{ secrets.SWEEPS_ELASTIC_PASSWORD }}
@@ -607,7 +606,6 @@ jobs:
             }
           ]
     env:
-      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.test-group.arch }}
       ELASTIC_USERNAME: ${{ secrets.SWEEPS_ELASTIC_USERNAME }}
       ELASTIC_PASSWORD: ${{ secrets.SWEEPS_ELASTIC_PASSWORD }}
