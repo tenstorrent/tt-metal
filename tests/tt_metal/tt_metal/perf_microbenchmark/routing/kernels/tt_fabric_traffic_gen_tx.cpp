@@ -456,6 +456,8 @@ void kernel_main() {
     uint32_t curr_packet_words_sent = 0;
     uint32_t packet_count = 0;
 
+    DPRINT << "Dest device = " << dest_device << "\n";
+
     // initalize client
     tt_fabric_init();
     fabric_endpoint_init<RoutingType::ROUTING_TABLE>(client_interface, outbound_eth_chan);

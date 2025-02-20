@@ -135,8 +135,12 @@ void kernel_main() {
         );
     }
 
+    DPRINT << "Outbound eth chan = " << outbound_eth_chan << ENDL();
+
     // initalize client
     fabric_endpoint_init<RoutingType::ROUTING_TABLE>(client_interface, outbound_eth_chan);
+
+    DPRINT << "Done fabric init\n";
 
     // notify the controller kernel that this worker is ready to proceed
     notify_traffic_controller();

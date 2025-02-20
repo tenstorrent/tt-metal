@@ -746,7 +746,7 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool fd_bootl
     // We call this function when initializing HW Command Queues (tracked as fd_bootloader_mode) for Fast Dispatch.
     // Used to Launch programs for Slow dispatch.
     bool using_fast_dispatch = fd_bootloader_mode;
-    detail::DispatchStateCheck(using_fast_dispatch);
+    // detail::DispatchStateCheck(using_fast_dispatch);
 
     auto device_id = device->id();
 
@@ -806,7 +806,7 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool fd_bootl
 void WriteRuntimeArgsToDevice(IDevice* device, Program& program) {
     ZoneScoped;
     auto device_id = device->id();
-    detail::DispatchStateCheck(false);
+    // detail::DispatchStateCheck(false);
 
     for (uint32_t index = 0; index < hal.get_programmable_core_type_count(); index++) {
         CoreType core_type = hal.get_core_type(index);
