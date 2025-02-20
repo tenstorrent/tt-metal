@@ -4,7 +4,6 @@
 
 #include "ttnn/distributed/distributed_pybind.hpp"
 #include <pybind11/cast.h>
-#include <cstddef>
 
 <<<<<<< HEAD
 #include <ostream>
