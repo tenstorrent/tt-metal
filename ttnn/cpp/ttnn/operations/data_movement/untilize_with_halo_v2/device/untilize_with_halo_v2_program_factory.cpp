@@ -180,6 +180,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     uint32_t semaphore_id = 0;
     bool in_place = false;
     if (remote_ref_counts.has_value()) {
+        TT_ASSERT(!remote_read, "remote_read is not supported for in place operation");
         TT_ASSERT(remote_temp.has_value(), "remote_temp should be provided if remote_ref_counts is provided");
         in_place = true;
         auto remote_ref_counts_buffer = remote_ref_counts.value().get().device_buffer();
