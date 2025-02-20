@@ -14,7 +14,9 @@ training_config:
   transformer_config:
     num_heads: 6
     embedding_dim: 384
-    dropout_prob: 0.2
+    # currently tensor parallel does not support dropout
+    dropout_prob: 0.0
+    # dropout_prob: 0.2
     num_blocks: 6
     vocab_size: 96
     max_sequence_length: 256
