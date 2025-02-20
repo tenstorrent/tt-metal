@@ -17,18 +17,19 @@ namespace ttnn::operations::pool {
 
 namespace {
 
-// ReduceOpMath get_reduce_op(Pool2DType pool_type) {
-//     switch (pool_type) {
-//         case Pool2DType::MAX_POOL2D: return tt::tt_metal::ReduceOpMath::MAX;
-//     }
-// }
+ReduceOpMath get_reduce_op(Pool2DType pool_type) {
+    switch (pool_type) {
+        case Pool2DType::MAX_POOL2D: return tt::tt_metal::ReduceOpMath::MAX;
+        case Pool2DType::AVG_POOL2D: return tt::tt_metal::ReduceOpMath::SUM;
+    }
+}
 
 // Return a single bf16 scalar for the pool type in u32 (packed in the least 16 bits)
 uint32_t get_bf16_pool_scalar(Pool2DType pool_type, uint32_t kernel_size_hw) {
     float value;
     switch (pool_type) {
         case Pool2DType::MAX_POOL2D: value = 1.; break;
-            // TODO(jongbinlimTT): 1.0 / kernel_size_hw for avg pool.
+        case Pool2DType::AVG_POOL2D: value = 1. / (float)kernel_size_hw; break;
     }
     return bfloat16(value).to_packed();
 }
@@ -40,7 +41,7 @@ uint32_t get_bf16_pool_init_value(Pool2DType pool_type) {
     float value;
     switch (pool_type) {
         case Pool2DType::MAX_POOL2D: value = -std::numeric_limits<float>::infinity(); break;
-            // TODO(jongbinlimTT): 0 for avg pool.
+        case Pool2DType::AVG_POOL2D: value = 0.; break;
     }
     return bfloat16(value).to_packed();
 }
