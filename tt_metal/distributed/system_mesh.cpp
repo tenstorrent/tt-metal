@@ -153,10 +153,10 @@ std::vector<chip_id_t> SystemMesh::Impl::get_mapped_physical_device_ids(const Me
         return true;
     };
 
-    tt::stl::SmallVector<uint32_t> rotated_dims(config.mesh_shape.cbegin(), config.mesh_shape.cend());
+    tt::stl::SmallVector<uint32_t> rotated_shape(config.mesh_shape.cbegin(), config.mesh_shape.cend());
     size_t rotations = 0;
-    while (!requested_mesh_fits(rotated_dims) && rotations < system_dimensions) {
-        std::rotate(rotated_dims.begin(), rotated_dims.begin() + 1, rotated_dims.end());
+    while (!requested_mesh_fits(rotated_shape) && rotations < system_dimensions) {
+        std::rotate(rotated_shape.begin(), rotated_shape.begin() + 1, rotated_shape.end());
         ++rotations;
     }
     // After rotating N times, no luck. The requested mesh it too big.
@@ -170,15 +170,20 @@ std::vector<chip_id_t> SystemMesh::Impl::get_mapped_physical_device_ids(const Me
 
     tt::stl::SmallVector<uint32_t> end_coord;
     for (int i = 0; i < system_dimensions; ++i) {
-        end_coord.push_back(system_offset[i] + rotated_dims[i]);
+        end_coord.push_back(system_offset[i] + rotated_shape[i] - 1);
     }
 
     MeshCoordinateRange system_range(system_offset, MeshCoordinate(end_coord));
 
     for (const auto& system_coord : system_range) {
-        auto physical_device_id = logical_to_device_id_.at(system_coord);
-        physical_device_ids.push_back(physical_device_id);
-        log_debug(LogMetal, "Logical coordinate: {}, Physical device ID: {}", system_coord, physical_device_id);
+        auto physical_device_id = logical_to_device_id_.find(system_coord);
+        TT_FATAL(
+            physical_device_id != logical_to_device_id_.end(),
+            "Logical coordinate: {} not found in SystemMesh of shape {}",
+            system_coord,
+            logical_mesh_shape_);
+        physical_device_ids.push_back(physical_device_id->second);
+        log_debug(LogMetal, "Logical coordinate: {}, Physical device ID: {}", system_coord, physical_device_id->second);
     }
     return physical_device_ids;
 }
