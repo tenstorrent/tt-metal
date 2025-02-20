@@ -228,8 +228,8 @@ std::vector<TensorSpec> OptimizedConvNew::compute_output_specs(const std::vector
             uint32_t total_height_tiles = padded_output_shape.volume() / padded_output_shape[-1] / TILE_HEIGHT;
 
             std::array<uint32_t, 2> physical_shard_shape = {
-                tt::div_up(this->parallelization_config.per_core_out_matrix_height, TILE_HEIGHT) * TILE_HEIGHT,
-                tt::div_up(this->parallelization_config.per_core_out_matrix_width, TILE_WIDTH) * TILE_WIDTH};
+                this->parallelization_config.per_core_out_matrix_height_ntile * TILE_HEIGHT,
+                this->parallelization_config.per_core_out_matrix_width_ntile * TILE_WIDTH};
             auto shard_shape = physical_shard_shape;
 
             auto shard_grid = this->memory_config.shard_spec.value().grid;
