@@ -283,6 +283,8 @@ void kernel_main() {
             case CQ_DISPATCH_CMD_TERMINATE: done = true; break;
             default: DPRINT << "dispatcher_s invalid command" << ENDL(); ASSERT(0);
         }
+        // Dispatch s only supports single page commands for now
+        ASSERT(cmd_ptr <= ((uint32_t)cmd + cb_page_size));
         cmd_ptr = round_up_pow2(cmd_ptr, cb_page_size);
         // Release a single page to prefetcher. Assumption is that all dispatch_s commands fit inside a single page for
         // now.
