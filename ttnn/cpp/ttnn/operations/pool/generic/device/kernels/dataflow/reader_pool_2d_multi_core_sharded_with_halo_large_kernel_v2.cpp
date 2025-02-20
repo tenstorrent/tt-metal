@@ -53,8 +53,7 @@ void kernel_main() {
 
     // compile time args
     // BF16 value packed in UINT32. For maxpool, value is 1.
-    constexpr uint32_t bf16_one_u32 = get_compile_time_arg_val(11);
-    // constexpr uint32_t bf16_scalar = get_compile_time_arg_val(11);
+    constexpr uint32_t bf16_scalar = get_compile_time_arg_val(11);  // This scalar is bf16_one_u32 for maxpool.
     constexpr uint32_t bf16_init_value = get_compile_time_arg_val(12);
 
     constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(13);
@@ -79,7 +78,7 @@ void kernel_main() {
     if (reader_id == 0) {
         cb_reserve_back(in_scalar_cb_id, 1);
 
-        uint32_t bf16_one_u16 = bf16_one_u32 >> 16;
+        uint32_t bf16_one_u16 = bf16_scalar >> 16;  // This scalar is bf16_one_u32 for maxpool.
         // fill interm buffer with minus_inf
         // // fill interm buffer with init_value
         fill_with_val(get_write_ptr(interm_reduction_cb_id), in_cb_sz, minus_inf);
