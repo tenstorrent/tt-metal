@@ -61,7 +61,7 @@ python models/demos/llama3/scripts/repack_weights_70b.py <path_to_checkpoint_dir
 If providing a different output directory, please copy the `params.json` and the `tokenizer.model` files to the new directory.
 
 #### Additional package
-All Llama3 model demos require extra python dependencies. Install them from:
+The library requires extra python dependencies. Install them from:
 
 ```
 pip install -r models/demos/llama3/requirements.txt
@@ -122,7 +122,7 @@ The Llama3 demo includes 3 main modes of operation and is fully parametrized to 
 - `batch-1`: Runs a small prompt (128 tokens) for a single user
 - `batch-32`: Runs a small prompt (128 tokens) for a a batch of 32 users
 - `long-context`: Runs a large prompt (64k tokens) for a single user
-- `reasoning-1`: Runs a reasoning prompt for a single user
+- `reasoning-1`: Runs a reasoning prompt for a single user (generates up to 15k tokens)
 
 If you want to provide your own demo configuration, please take a look at the pytest parametrize calls in `models/demos/llama3/demo/simple_text_demo.py`. For convenience we list all the supported params below:
 
