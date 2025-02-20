@@ -38,5 +38,8 @@ struct Pool2DOp {
 constexpr auto max_pool2d = ttnn::register_operation_with_auto_launch_op<
     "ttnn::max_pool2d",
     operations::pool::Pool2DOp<operations::pool::Pool2DType::MAX_POOL2D>>();
+constexpr auto avg_pool2d = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::avg_pool2d",
+    operations::pool::Pool2DOp<operations::pool::Pool2DType::AVG_POOL2D>>();
 
 }  // namespace ttnn
