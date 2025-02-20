@@ -30,7 +30,7 @@ ALWI bool fill_with_val(uint32_t begin_addr, uint32_t n, uint16_t val) {
 }
 
 /**
- * Max-pool 2D.
+ * Pool 2D (Max pool 2D and Avg pool 2D)
  */
 void kernel_main() {
     const uint32_t reader_nindices = get_compile_time_arg_val(0);
@@ -52,13 +52,15 @@ void kernel_main() {
     const uint32_t reader_id = get_compile_time_arg_val(10);
 
     // compile time args
-    // value of 1 in bf16 in a uin32_t
+    // BF16 value packed in UINT32. For maxpool, value is 1.
     constexpr uint32_t bf16_one_u32 = get_compile_time_arg_val(11);
-    constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(12);
-    constexpr uint32_t in_cb_sz = get_compile_time_arg_val(13);
-    constexpr uint32_t max_rows_for_reduction = get_compile_time_arg_val(14);
+    // constexpr uint32_t bf16_scalar = get_compile_time_arg_val(11);
+    constexpr uint32_t bf16_init_value = get_compile_time_arg_val(12);
 
-    constexpr uint32_t ceil_pad_w = get_compile_time_arg_val(15);
+    constexpr uint32_t in_nblocks_c = get_compile_time_arg_val(13);
+    constexpr uint32_t in_cb_sz = get_compile_time_arg_val(14);
+    constexpr uint32_t max_rows_for_reduction = get_compile_time_arg_val(15);
+    constexpr uint32_t ceil_pad_w = get_compile_time_arg_val(16);
 
     constexpr uint32_t TILE_SIZE = 32 * 32;
     constexpr uint32_t MAX_TILES_PER_REDUCTION = 8;
@@ -71,17 +73,20 @@ void kernel_main() {
     constexpr uint32_t in_scalar_cb_id = tt::CBIndex::c_4;
     constexpr uint32_t interm_reduction_cb_id = tt::CBIndex::c_25;
 
-    // minus infinity for bfp16
-    uint16_t minus_inf = 63487;
+    // minus infinity for bfp16 // TODO(jongbinlimTT): Need to check if this is necessary.
+    uint16_t minus_inf = 63487;  // TODO(jongbinlimTT): Need to check if this is necessary.
     // Reduce scalar = 1
     if (reader_id == 0) {
         cb_reserve_back(in_scalar_cb_id, 1);
 
         uint32_t bf16_one_u16 = bf16_one_u32 >> 16;
         // fill interm buffer with minus_inf
+        // // fill interm buffer with init_value
         fill_with_val(get_write_ptr(interm_reduction_cb_id), in_cb_sz, minus_inf);
+        // // fill_with_val(get_write_ptr(interm_reduction_cb_id), in_cb_sz, bf16_init_value);
         // fill 1 row w/ scalar
         fill_with_val(get_write_ptr(in_scalar_cb_id), ROW_HW, bf16_one_u16);
+        // fill_with_val(get_write_ptr(in_scalar_cb_id), ROW_HW, bf16_scalar);
         cb_push_back(in_scalar_cb_id, 1);
     }
 
@@ -105,6 +110,12 @@ void kernel_main() {
             cb_reserve_back(in_cb_id, 1);
             uint32_t out_l1_write_addr_base = get_write_ptr(in_cb_id);
             uint32_t out_l1_write_addr = out_l1_write_addr_base;
+
+            // // Fill interim buffer with init_value if we have only one chunk.
+            // if ((total_elems_to_reduce - processed_rows) < max_rows_for_reduction) {
+            //     fill_with_val(out_l1_write_addr, in_cb_sz, bf16_init_value);
+            // }
+
             for (uint32_t h = 0; h < window_h; ++h) {
                 for (uint32_t w = 0; w < window_w; w++) {
                     uint32_t stick_offset = top_left_local_index + w + h * in_w_padded;
@@ -120,8 +131,10 @@ void kernel_main() {
                         out_l1_write_addr_base = get_write_ptr(in_cb_id);
                         out_l1_write_addr = out_l1_write_addr_base;
                         // If next is last chunk, fill whole buffer with -inf.
+                        // // If next is last chunk, fill whole buffer with the init_value.
                         if ((total_elems_to_reduce - processed_rows) < max_rows_for_reduction) {
                             fill_with_val(out_l1_write_addr, in_cb_sz, minus_inf);
+                            // fill_with_val(out_l1_write_addr, in_cb_sz, bf16_init_value);
                         }
                     }
                 }

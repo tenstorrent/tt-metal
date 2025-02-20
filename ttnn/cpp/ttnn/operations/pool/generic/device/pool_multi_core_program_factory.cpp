@@ -2,8 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <limits>
+
 #include "pool_op.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"  // for reduce_op_utils
+#include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/math.hpp>
 
 /**
@@ -11,6 +14,25 @@
  */
 
 namespace ttnn::operations::pool {
+
+// namespace {
+
+// ReduceOpMath get_reduce_op(Pool2DType pool_type) {
+//     switch (pool_type) {
+//         case Pool2DType::MAX_POOL2D: return tt::tt_metal::ReduceOpMath::MAX;
+//     }
+// }
+
+// } // namespace
+
+// Return a single bf16 init value for the pool type in u32 (packed in the least 16 bits)
+uint32_t get_bf16_pool_init_value(Pool2DType pool_type) {
+    float value;
+    switch (pool_type) {
+        case Pool2DType::MAX_POOL2D: value = -std::numeric_limits<float>::infinity(); break;
+    }
+    return bfloat16(value).to_packed();
+}
 
 Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_new(
     Program& program,
@@ -35,8 +57,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
     uint32_t num_shards_c,
     const MemoryConfig& out_mem_config,
     uint32_t nblocks) {
-    TT_FATAL(pool_type == Pool2DType::MAX_POOL2D, "Currently only support max pool2d (#12151)");
-
     // This should allocate a DRAM buffer on the device
     IDevice* device = input.device();
     tt::tt_metal::Buffer* src_dram_buffer = input.buffer();
@@ -275,6 +295,12 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
      */
     float one = 1.;
     uint32_t bf16_one_u32 = *reinterpret_cast<uint32_t*>(&one);
+    // uint32_t bf16_scalar = *reinterpret_cast<uint32_t*>(&one);
+    // uint32_t bf16_scalar = static_cast<uint32_t>(one);
+    // const uint32_t bf16_scalar = 1.0f; // TODO(jongbinlimTT): 1.0 for max pool, 1.0 / kernel_size for avg pool.
+    const uint32_t bf16_init_value =
+        get_bf16_pool_init_value(pool_type);  // TODO(jongbinlimTT): -inf for max pool, 0 for avg pool.
+
     std::vector<uint32_t> reader0_ct_args = {
         out_nhw_per_core,
         kernel_size_h,
@@ -285,9 +311,10 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_cb_page_padded * in_cb_npages / tile_w,
         input_shape[3] / num_shards_c,
         nblocks,
-        split_reader,  // enable split reader
-        0,             // split reader id
-        bf16_one_u32,
+        split_reader,     // enable split reader
+        0,                // split reader id
+        bf16_one_u32,     // bf16_scalar,
+        bf16_init_value,  //
         in_nblocks_c,
         in_cb_sz,
         max_rows_for_reduction,
@@ -303,9 +330,10 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_cb_page_padded * in_cb_npages / tile_w,
         input_shape[3] / num_shards_c,
         nblocks,
-        split_reader,  // enable split reader
-        1,             // split reader id
-        bf16_one_u32,
+        split_reader,     // enable split reader
+        1,                // split reader id
+        bf16_one_u32,     // bf16_scalar,
+        bf16_init_value,  //
         in_nblocks_c,
         in_cb_sz,
         max_rows_for_reduction,
