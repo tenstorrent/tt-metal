@@ -173,14 +173,15 @@ private:
 
 class DeviceConcatMeshToTensor : public ConcatMeshToTensor {
 public:
-    DeviceConcatMeshToTensor(MeshDevice mesh_device, int dim) : mesh_device_(mesh_device), concat_dim_(dim) {}
+    DeviceConcatMeshToTensor(MeshDevice& mesh_device, int dim) :
+        ConcatMeshToTensor(dim), mesh_device_(mesh_device), concat_dim_(dim) {}
 
-    Tensor compose(const Tensor& tensor) {
+    Tensor compose(const Tensor& tensor) const {
         return experimental::xtensor::concat(get_device_tensors(tensor), concat_dim_);
     }
 
 private:
-    MeshDevice mesh_device_;
+    MeshDevice& mesh_device_;
     int concat_dim_ = -1;
 };
 
