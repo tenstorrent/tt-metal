@@ -26,4 +26,6 @@ The interface of this project is built with [Streamlit](https://streamlit.io). U
 
 The web demo utilizes a [Flask](https://flask.palletsprojects.com/en/3.0.x/) server. Use `pip install Flask` to install the Flask dependencies on your machine.
 
+The web demo utilizes a [Gunicorn](https://gunicorn.org) server to server a WSGI application. Use `pip install gunicorn==21.2.0` to install the Gunicorn dependencies on your machine.
+
 Use `python models/demos/wormhole/stable_diffusion/demo/web_demo/web_demo.py` to run the web demo. It should automatically pop-up at this [address](http://localhost:8501) (localhost:8501).
