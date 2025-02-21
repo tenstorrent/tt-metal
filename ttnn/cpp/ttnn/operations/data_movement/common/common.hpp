@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
+#include <variant>
+
 #include "ttnn/operations/data_movement/squeeze/squeeze.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 
@@ -16,7 +18,7 @@ ttnn::Shape squeeze_shape_to_4D(ttnn::Shape output_shape);
 ttnn::Tensor squeeze_from_ND_to_4D(const ttnn::Tensor& tensor);
 
 ttnn::Tensor pad_to_tile_vol(
-    QueueId queue_id,
+    uint8_t queue_id,
     const ttnn::Tensor& tensor,
     const float value,
     const bool use_multicore,
@@ -167,7 +169,7 @@ enum class ShardStrategy { BLOCK, HEIGHT, WIDTH };
 ttnn::MemoryConfig create_sharded_memory_config(
     const ttnn::Shape& logical_shape,
     const tt::tt_metal::CoreRangeSet& core_grid,
-    const ShardStrategy& strategy,
+    const std::variant<ttnn::TensorMemoryLayout, ShardStrategy>& strategy_or_layout,
     const tt::tt_metal::ShardOrientation& orientation,
     std::optional<std::array<uint32_t, 2>> shard_shape = std::nullopt,
     const tt::tt_metal::Layout& layout = tt::tt_metal::Layout::ROW_MAJOR);
