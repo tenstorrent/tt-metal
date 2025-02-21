@@ -18,6 +18,10 @@
 
 namespace tt::fabric {
 
+constexpr int STREAM_ID_UNUSED = -1;
+// currently unused
+constexpr int32_t to_downstream_sender_0_pkts_sent_id = 7;
+
 /*
  * The WorkerToFabricEdmSenderImpl acts as an adapter between the worker and the EDM, it hides details
  * of the communication between worker and EDM to provide flexibility for the implementation to change
@@ -36,8 +40,9 @@ namespace tt::fabric {
  * As the adapter writes into the EDM, it updates the local wrptr. As the EDM reads from its local L1 channel buffer,
  * it will notify the worker/adapter (here) by updating the worker remote_rdptr to carry the value of the EDM rdptr.
  */
-template <uint8_t EDM_NUM_BUFFER_SLOTS = 0>
+template <uint8_t EDM_NUM_BUFFER_SLOTS = 0, int REMOTE_DEST_FLOW_CONTROL_STREAM_ID = STREAM_ID_UNUSED>
 struct WorkerToFabricEdmSenderImpl {
+    static constexpr bool USE_STREAM_REG_UPDATE = REMOTE_DEST_FLOW_CONTROL_STREAM_ID != STREAM_ID_UNUSED;
     static constexpr bool USER_DEFINED_NUM_BUFFER_SLOTS = EDM_NUM_BUFFER_SLOTS != 0;
     static constexpr bool IS_POW2_NUM_BUFFERS = USER_DEFINED_NUM_BUFFER_SLOTS && is_power_of_2(EDM_NUM_BUFFER_SLOTS);
     static constexpr size_t BUFFER_SLOT_PTR_WRAP = EDM_NUM_BUFFER_SLOTS * 2;
@@ -130,38 +135,47 @@ struct WorkerToFabricEdmSenderImpl {
 
     FORCE_INLINE bool edm_has_space_for_packet() const {
         using namespace tt::fabric;
-        if constexpr (USER_DEFINED_NUM_BUFFER_SLOTS) {
-            auto slots_used = distance_behind<EDM_NUM_BUFFER_SLOTS>(
-                       BufferPtr{static_cast<uint8_t>(*this->from_remote_buffer_slot_rdptr_ptr)},
-                       BufferPtr{static_cast<uint8_t>(*this->buffer_slot_wrptr_ptr)});
-            return slots_used < this->num_buffers_per_channel;
-        } else {
-            auto const rdptr = *this->from_remote_buffer_slot_rdptr_ptr;
-            auto const wrptr = *this->buffer_slot_wrptr_ptr;
-            auto buffer_ptr_wrap = 2 * this->num_buffers_per_channel;
-            auto slots_used = distance_behind(
-                                 BufferPtr{static_cast<uint8_t>(rdptr)},
-                                 BufferPtr{static_cast<uint8_t>(wrptr)},
-                                 buffer_ptr_wrap);
-            return slots_used < this->num_buffers_per_channel;
-        }
+        // if constexpr (USE_STREAM_REG_UPDATE) {
+        //     ASSERT(false); // invalid path
+        //     return false;
+        // } else {
+            if constexpr (USER_DEFINED_NUM_BUFFER_SLOTS) {
+                auto slots_used = distance_behind<EDM_NUM_BUFFER_SLOTS>(
+                        BufferPtr{static_cast<uint8_t>(*this->from_remote_buffer_slot_rdptr_ptr)},
+                        BufferPtr{static_cast<uint8_t>(*this->buffer_slot_wrptr_ptr)});
+                return slots_used < this->num_buffers_per_channel;
+            } else {
+                auto const rdptr = *this->from_remote_buffer_slot_rdptr_ptr;
+                auto const wrptr = *this->buffer_slot_wrptr_ptr;
+                auto buffer_ptr_wrap = 2 * this->num_buffers_per_channel;
+                auto slots_used = distance_behind(
+                                    BufferPtr{static_cast<uint8_t>(rdptr)},
+                                    BufferPtr{static_cast<uint8_t>(wrptr)},
+                                    buffer_ptr_wrap);
+                return slots_used < this->num_buffers_per_channel;
+            }
+        // }
     }
 
     FORCE_INLINE void wait_for_empty_write_slot() const {
         using namespace tt::fabric;
-        if constexpr (USER_DEFINED_NUM_BUFFER_SLOTS) {
-            while (distance_behind<EDM_NUM_BUFFER_SLOTS>(BufferPtr{static_cast<uint8_t>(*this->from_remote_buffer_slot_rdptr_ptr)}, BufferPtr{static_cast<uint8_t>(*this->buffer_slot_wrptr_ptr)}) < this->num_buffers_per_channel);
-        } else {
-            auto const first_rdptr = *this->from_remote_buffer_slot_rdptr_ptr;
-            auto buffer_ptr_wrap = 2 * this->num_buffers_per_channel;
-            bool has_space = distance_behind(
-                                 BufferPtr{static_cast<uint8_t>(first_rdptr)},
-                                 BufferPtr{static_cast<uint8_t>(*this->buffer_slot_wrptr_ptr)},
-                                 buffer_ptr_wrap) < this->num_buffers_per_channel;
-            if (!has_space) {
-                while (first_rdptr == *this->from_remote_buffer_slot_rdptr_ptr);
+        // if constexpr (USE_STREAM_REG_UPDATE) {
+        //     ASSERT(false); // invalid path
+        // } else {
+            if constexpr (USER_DEFINED_NUM_BUFFER_SLOTS) {
+                while (distance_behind<EDM_NUM_BUFFER_SLOTS>(BufferPtr{static_cast<uint8_t>(*this->from_remote_buffer_slot_rdptr_ptr)}, BufferPtr{static_cast<uint8_t>(*this->buffer_slot_wrptr_ptr)}) < this->num_buffers_per_channel);
+            } else {
+                auto const first_rdptr = *this->from_remote_buffer_slot_rdptr_ptr;
+                auto buffer_ptr_wrap = 2 * this->num_buffers_per_channel;
+                bool has_space = distance_behind(
+                                    BufferPtr{static_cast<uint8_t>(first_rdptr)},
+                                    BufferPtr{static_cast<uint8_t>(*this->buffer_slot_wrptr_ptr)},
+                                    buffer_ptr_wrap) < this->num_buffers_per_channel;
+                if (!has_space) {
+                    while (first_rdptr == *this->from_remote_buffer_slot_rdptr_ptr);
+                }
             }
-        }
+        // }
     }
 
     FORCE_INLINE void send_payload_blocking(uint32_t cb_id, uint32_t num_pages, uint32_t page_size) {
@@ -281,8 +295,15 @@ struct WorkerToFabricEdmSenderImpl {
 private:
 
     FORCE_INLINE void update_edm_buffer_slot_wrptr() {
-        uint64_t const noc_sem_addr = get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_slot_wrptr_addr);
-        noc_inline_dw_write(noc_sem_addr, *this->buffer_slot_wrptr_ptr);
+        if constexpr (USE_STREAM_REG_UPDATE) {
+            constexpr uint32_t addr = STREAM_REG_ADDR(REMOTE_DEST_FLOW_CONTROL_STREAM_ID, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX);
+            uint64_t const noc_sem_addr = get_noc_addr(this->edm_noc_x, this->edm_noc_y, addr);
+            DPRINT << "EDMR update remote semaphore at addr " << noc_sem_addr << " for stream " << (uint32_t)REMOTE_DEST_FLOW_CONTROL_STREAM_ID << "\n";
+            noc_inline_dw_write(noc_sem_addr, 1 << REMOTE_DEST_BUF_WORDS_FREE_INC);
+        } else {
+            uint64_t const noc_sem_addr = get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_slot_wrptr_addr);
+            noc_inline_dw_write(noc_sem_addr, *this->buffer_slot_wrptr_ptr);
+        }
     }
 
     FORCE_INLINE uint8_t get_buffer_slot_index() const {
@@ -357,9 +378,9 @@ private:
     }
 };
 
-using WorkerToFabricEdmSender = WorkerToFabricEdmSenderImpl<0>;
+using WorkerToFabricEdmSender = WorkerToFabricEdmSenderImpl<0, to_downstream_sender_0_pkts_sent_id>;
 
-template <uint8_t EDM_SENDER_CHANNEL_NUM_BUFFERS>
-using EdmToEdmSender = WorkerToFabricEdmSenderImpl<EDM_SENDER_CHANNEL_NUM_BUFFERS>;
+template <uint8_t EDM_SENDER_CHANNEL_NUM_BUFFERS, int REMOTE_DEST_FLOW_CONTROL_STREAM_ID>
+using EdmToEdmSender = WorkerToFabricEdmSenderImpl<EDM_SENDER_CHANNEL_NUM_BUFFERS, REMOTE_DEST_FLOW_CONTROL_STREAM_ID>;
 
 }  // namespace tt::fabric

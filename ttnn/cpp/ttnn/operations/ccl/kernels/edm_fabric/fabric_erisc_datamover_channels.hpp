@@ -110,9 +110,30 @@ class EthChannelBuffer final {
     uint8_t channel_id;
 };
 
+template <int stream_id>
+FORCE_INLINE int32_t get_ptr_val() {
+    return NOC_STREAM_READ_REG(stream_id, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
+}
+FORCE_INLINE int32_t get_ptr_val2(uint8_t stream_id) {
+    return NOC_STREAM_READ_REG(stream_id, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
+}
 
-template <uint8_t NUM_BUFFERS>
+
+template <uint32_t stream_id>
+FORCE_INLINE uint32_t remote_update_ptr_addr() {
+    constexpr uint32_t addr = STREAM_REG_ADDR(stream_id, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX);
+    return addr;
+}
+
+// An adapter for the EDM to communicate upstream to the producer worker.
+// The default template parameter value indicating that this EDM sender channel interface (to worker)
+// does NOT communicate rdptr updates via stream register updates
+template <uint8_t NUM_BUFFERS, int REMOTE_PRODUCER_RDPTR_STREAM_ID = tt::fabric::STREAM_ID_UNUSED, int LOCAL_CHANNEL_PACKETS_RECEIVED_STREAM_ID = tt::fabric::STREAM_ID_UNUSED>
 struct EdmChannelWorkerInterface {
+    static constexpr bool USE_STREAM_REG_UPDATE_FOR_REMOTE = REMOTE_PRODUCER_RDPTR_STREAM_ID != STREAM_ID_UNUSED;
+    static constexpr bool USE_STREAM_REG_FOR_LOCAL = LOCAL_CHANNEL_PACKETS_RECEIVED_STREAM_ID != STREAM_ID_UNUSED;
+
+
     EdmChannelWorkerInterface() :
         worker_location_info_ptr(nullptr),
         remote_producer_wrptr(nullptr),
@@ -146,7 +167,13 @@ struct EdmChannelWorkerInterface {
     // local_wrptr trails from_remote_wrptr
     // we have new data if they aren't equal
     [[nodiscard]] FORCE_INLINE bool has_unsent_payload() {
-        return local_wrptr.get_ptr() != *remote_producer_wrptr;
+        if constexpr (USE_STREAM_REG_FOR_LOCAL) {
+            auto const num_unsent_packets = get_ptr_val<LOCAL_CHANNEL_PACKETS_RECEIVED_STREAM_ID>();
+            bool has_unsent = num_unsent_packets != 0;
+            return has_unsent;
+        } else {
+            return local_wrptr.get_ptr() != *remote_producer_wrptr;
+        }
     }
     [[nodiscard]] FORCE_INLINE bool has_unacked_sends() {
         return local_ackptr.get_ptr() != local_wrptr.get_ptr();
@@ -156,6 +183,14 @@ struct EdmChannelWorkerInterface {
         return worker_location_info_ptr->worker_semaphore_address;
     }
 
+    FORCE_INLINE void send_read_credits_to_producer(int32_t num_credits) {
+        auto const &worker_info = *worker_location_info_ptr;
+        const uint32_t addr = remote_update_ptr_addr<REMOTE_PRODUCER_RDPTR_STREAM_ID>();
+        // TODO: cache when we get the new connection
+        uint64_t worker_semaphore_address = get_noc_addr(
+            (uint32_t)worker_info.worker_xy.x, (uint32_t)worker_info.worker_xy.y, addr);
+        noc_inline_dw_write(worker_semaphore_address, num_credits << REMOTE_DEST_BUF_WORDS_FREE_INC);
+    }
     FORCE_INLINE void update_worker_copy_of_read_ptr(BufferPtr new_ptr_val) {
         auto const &worker_info = *worker_location_info_ptr;
         uint64_t worker_semaphore_address = get_noc_addr(
@@ -171,7 +206,7 @@ struct EdmChannelWorkerInterface {
             (uint32_t)worker_info.worker_xy.x, (uint32_t)worker_info.worker_xy.y, worker_info.worker_teardown_semaphore_address);
 
         // Set connection to unused so it's available for next worker
-        *this->connection_live_semaphore = tt::fabric::EdmToEdmSender<0>::unused_connection_value;
+        *this->connection_live_semaphore = tt::fabric::EdmToEdmSender<0,0>::unused_connection_value;
 
         *reinterpret_cast<volatile uint32_t*>(&(worker_location_info_ptr->edm_rdptr)) = last_edm_rdptr_value;
 
@@ -190,13 +225,14 @@ struct EdmChannelWorkerInterface {
         worker_location_info_ptr->edm_rdptr = local_ackptr.get_ptr();
     }
 
-    [[nodiscard]] FORCE_INLINE bool has_worker_teardown_request() const { return *connection_live_semaphore == tt::fabric::EdmToEdmSender<0>::close_connection_request_value; }
-    [[nodiscard]] FORCE_INLINE bool connection_is_live() const { return *connection_live_semaphore == tt::fabric::EdmToEdmSender<0>::open_connection_value; }
+    [[nodiscard]] FORCE_INLINE bool has_worker_teardown_request() const { return *connection_live_semaphore == tt::fabric::EdmToEdmSender<0,0>::close_connection_request_value; }
+    [[nodiscard]] FORCE_INLINE bool connection_is_live() const { return *connection_live_semaphore == tt::fabric::EdmToEdmSender<0,0>::open_connection_value; }
 
     volatile EDMChannelWorkerLocationInfo *worker_location_info_ptr;
     volatile tt_l1_ptr uint32_t *const remote_producer_wrptr;
     volatile tt_l1_ptr uint32_t *const connection_live_semaphore;
 
+    size_t count = 0;
     ChannelBufferPointer<NUM_BUFFERS> local_wrptr;
     ChannelBufferPointer<NUM_BUFFERS> local_ackptr;
     ChannelBufferPointer<NUM_BUFFERS> local_rdptr; // also used as completion_ptr

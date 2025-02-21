@@ -125,12 +125,12 @@ FORCE_INLINE void update_packet_header_for_next_hop(volatile tt::fabric::PacketH
 // !!!WARNING!!! * do NOT call before determining if the packet should be consumed locally or forwarded
 // !!!WARNING!!! * ENSURE DOWNSTREAM EDM HAS SPACE FOR PACKET BEFORE CALLING
 // !!!WARNING!!!
-template <uint8_t NUM_SENDER_BUFFERS>
+template <uint8_t NUM_SENDER_BUFFERS, int REMOTE_PRODUCER_RDPTR_STREAM_ID>
 FORCE_INLINE void forward_payload_to_downstream_edm(
     volatile tt::fabric::PacketHeader *packet_header,
     uint16_t payload_size_bytes,
     tt::fabric::RoutingFields cached_routing_fields,
-    tt::fabric::EdmToEdmSender<NUM_SENDER_BUFFERS> &downstream_edm_interface,
+    tt::fabric::EdmToEdmSender<NUM_SENDER_BUFFERS, REMOTE_PRODUCER_RDPTR_STREAM_ID> &downstream_edm_interface,
     uint8_t transaction_id
     ) {
     // TODO: PERF - this should already be getting checked by the caller so this should be redundant make it an ASSERT
