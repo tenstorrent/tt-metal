@@ -87,6 +87,7 @@ jobs:
         run: tar -xvf ttm_any.tar
       - uses: ./.github/actions/install-python-deps
       - name: Run Git Bisect
+        shell: bash
         run: |
           source ${{ github.workspace }}/python_env/bin/activate
           cd $TT_METAL_HOME

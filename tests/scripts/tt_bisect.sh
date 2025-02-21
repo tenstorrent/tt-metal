@@ -51,10 +51,7 @@ echo "Bad commit:" $bad_commit
 
 found=false
 
-foo=$(git bisect start $bad_commit $good_commit --)
-echo $foo
-echo "${foo}"
-echo -e "${foo}"
+git bisect start $bad_commit $good_commit --
 
 while [[ "$found" = "false" ]]; do
    git submodule update --recursive
@@ -78,8 +75,8 @@ while [[ "$found" = "false" ]]; do
    if [ $timeout_rc -eq 0 ]; then
       echo "Commit is good"
       increment=$(git bisect good)
-      echo $increment
-      first_line=$(echo $increment | head -n 1)
+      echo "${increment}"
+      first_line=$(echo "${increment}" | head -n 1)
    elif [ $timeout_rc -eq 124 ]; then
       echo "Test has timed out, skipping this commit"
       git bisect skip
@@ -87,8 +84,8 @@ while [[ "$found" = "false" ]]; do
    else
       echo "Commit is bad"
       increment=$(git bisect bad)
-      echo $increment
-      first_line=$(echo $increment | head -n 1)
+      echo "${increment}"
+      first_line=$(echo "${increment}" | head -n 1)
    fi
 
    if [[ $first_line == *"is the first bad commit"* ]]; then
