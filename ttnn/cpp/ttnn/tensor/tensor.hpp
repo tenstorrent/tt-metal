@@ -315,7 +315,9 @@ public:
     uint32_t element_size() const;
 
     static constexpr auto attribute_names = std::forward_as_tuple("storage", "tensor_spec");
-    const auto attribute_values() const { return std::forward_as_tuple(this->get_storage(), this->get_tensor_spec()); }
+    const auto attribute_values() const {
+        return std::forward_as_tuple(this->tensor_attributes->storage, this->tensor_attributes->tensor_spec);
+    }
 
     std::vector<uint32_t> host_page_ordering();
 
