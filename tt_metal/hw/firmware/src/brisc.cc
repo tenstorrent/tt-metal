@@ -385,6 +385,15 @@ int main() {
     noc_local_state_init(noc_index);
     uint8_t prev_noc_mode = DM_DEDICATED_NOC;
 
+
+#if defined(ARCH_BLACKHOLE)
+    // When dispatch_s is on an ethernet core on blockhole, we've been seeing
+    // issues where posted atomic incremenets seem to fail to complete.
+    const bool post_atomic_increments = false;
+#else
+    const bool post_atomic_increments = true;
+#endif
+
     while (1) {
         init_sync_registers();
         reset_ncrisc_with_iram();
@@ -423,7 +432,7 @@ int main() {
                     1,
                     31 /*wrap*/,
                     false /*linked*/,
-                    true /*posted*/);
+                    post_atomic_increments /*posted*/);
             }
         }
 
@@ -550,7 +559,7 @@ int main() {
                     1,
                     31 /*wrap*/,
                     false /*linked*/,
-                    true /*posted*/);
+                    post_atomic_increments /*posted*/);
                 mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
             }
         }
