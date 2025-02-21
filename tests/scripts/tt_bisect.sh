@@ -1,6 +1,5 @@
 #!/bin/bash
 set -euo pipefail
-set -x
 
 : << 'END'
 This script is used to find the commit that broke a test.
