@@ -66,9 +66,9 @@ if(NOT TARGET Metalium::Metal)
         message(FATAL_ERROR "libtt_metal.so not found in ${METALIUM_LIB_PATH}")
     endif()
     if(TTNN_LIBRARY)
-        add_library(TT::NN SHARED IMPORTED)
+        add_library(Metalium::PYBIND SHARED IMPORTED)
         set_target_properties(
-            TT::NN::TTNN
+            Metalium::PYBIND
             PROPERTIES
                 IMPORTED_LOCATION
                     "${TTNN_LIBRARY}"
@@ -101,7 +101,7 @@ target_link_libraries(
         pthread
         atomic
         Metalium::Metal
-        TT::NN::TTNN
+        Metalium::PYBIND
         Python::Python
         fmt::fmt-header-only
         magic_enum::magic_enum
