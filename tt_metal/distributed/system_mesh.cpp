@@ -4,11 +4,11 @@
 
 #include <system_mesh.hpp>
 
-#include "mesh_device.hpp"
 #include "small_vector.hpp"
 #include "umd/device/types/cluster_descriptor_types.h"
 #include "tt_metal/distributed/coordinate_translation.hpp"
 
+#include "indestructible.hpp"
 #include "mesh_coord.hpp"
 #include "tt_cluster.hpp"
 
@@ -21,18 +21,15 @@ private:
     std::unordered_map<MeshCoordinate, chip_id_t> logical_to_device_id_;
     std::unordered_map<PhysicalCoordinate, chip_id_t> physical_coordinate_to_device_id_;
     std::unordered_map<chip_id_t, PhysicalCoordinate> physical_device_id_to_coordinate_;
-    std::vector<std::weak_ptr<MeshDevice>> registered_mesh_devices_;
 
 public:
     Impl() = default;
-    ~Impl();
 
     bool is_system_mesh_initialized() const;
     void initialize();
     const SimpleMeshShape& get_shape() const;
     std::vector<chip_id_t> get_mapped_physical_device_ids(const MeshDeviceConfig& config) const;
     std::vector<chip_id_t> request_available_devices(const MeshDeviceConfig& config) const;
-    void register_mesh_device(std::weak_ptr<MeshDevice> mesh_device);
     chip_id_t get_physical_device_id(const MeshCoordinate& coord) const;
 };
 
@@ -88,20 +85,6 @@ chip_id_t SystemMesh::Impl::get_physical_device_id(const MeshCoordinate& coord) 
             coord);
     }
     return logical_to_device_id_.at(coord);
-}
-
-SystemMesh::Impl::~Impl() {
-    // System mesh destructor is responsible for closing all registered mesh devices that are still alive
-    // See #15290 for context.
-    for (auto& mesh_device : registered_mesh_devices_) {
-        if (auto ptr = mesh_device.lock()) {
-            ptr->close();
-        }
-    }
-}
-
-void SystemMesh::Impl::register_mesh_device(std::weak_ptr<MeshDevice> mesh_device) {
-    registered_mesh_devices_.push_back(std::move(mesh_device));
 }
 
 std::vector<chip_id_t> SystemMesh::Impl::get_mapped_physical_device_ids(const MeshDeviceConfig& config) const {
@@ -212,11 +195,11 @@ std::vector<chip_id_t> SystemMesh::Impl::request_available_devices(const MeshDev
 SystemMesh::SystemMesh() : pimpl_(std::make_unique<Impl>()) {}
 
 SystemMesh& SystemMesh::instance() {
-    static SystemMesh instance;
-    if (!instance.pimpl_->is_system_mesh_initialized()) {
-        instance.pimpl_->initialize();
+    static tt::stl::Indestructible<SystemMesh> instance;
+    if (!instance.get().pimpl_->is_system_mesh_initialized()) {
+        instance.get().pimpl_->initialize();
     }
-    return instance;
+    return instance.get();
 }
 
 chip_id_t SystemMesh::get_physical_device_id(const MeshCoordinate& coord) const {
@@ -231,10 +214,6 @@ std::vector<chip_id_t> SystemMesh::request_available_devices(const MeshDeviceCon
 
 std::vector<chip_id_t> SystemMesh::get_mapped_physical_device_ids(const MeshDeviceConfig& config) const {
     return pimpl_->get_mapped_physical_device_ids(config);
-}
-
-void SystemMesh::register_mesh_device(std::weak_ptr<MeshDevice> mesh_device) {
-    pimpl_->register_mesh_device(std::move(mesh_device));
 }
 
 }  // namespace tt::tt_metal::distributed

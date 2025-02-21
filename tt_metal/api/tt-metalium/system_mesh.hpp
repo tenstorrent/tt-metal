@@ -9,10 +9,8 @@
 
 #include "mesh_config.hpp"
 #include "mesh_coord.hpp"
-
+#include "indestructible.hpp"
 namespace tt::tt_metal::distributed {
-
-class MeshDevice;
 
 // SystemMesh creates a virtualization over the physical devices in the system.
 // It creates a logical 2D-mesh of devices and manages the mapping between logical and physical device coordinates.
@@ -23,6 +21,8 @@ private:
     std::unique_ptr<Impl> pimpl_;
     SystemMesh();
 
+    friend class tt::stl::Indestructible<SystemMesh>;
+
 public:
     static SystemMesh& instance();
     SystemMesh(const SystemMesh&) = delete;
@@ -32,9 +32,6 @@ public:
 
     // Returns the shape of the system mesh
     const SimpleMeshShape& get_shape() const;
-
-    // Registers a mesh device with the system mesh
-    void register_mesh_device(std::weak_ptr<MeshDevice> mesh_device);
 
     // Returns the physical device ID for a given logical row and column index
     chip_id_t get_physical_device_id(const MeshCoordinate& coord) const;

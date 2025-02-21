@@ -386,7 +386,6 @@ void CloseDevices(const std::map<chip_id_t, IDevice*>& devices) {
     for (auto& [id, device] : devices) {
         devices_to_close.push_back(device);
     }
-    std::cout << "closing devices" << std::endl;
     tt::DevicePool::instance().close_devices(devices_to_close);
 }
 
