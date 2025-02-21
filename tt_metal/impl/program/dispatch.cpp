@@ -265,8 +265,8 @@ uint32_t finalize_kernel_bins(
                         offset += binary_packed_size;
                         offset = tt::align(offset, l1_alignment);
                     } else {
-                        kg->kernel_text_offsets[class_id] = binaries[0]->get_text_addr();
-                        kg->launch_msg.kernel_config.kernel_text_offset[class_id] = binaries[0]->get_text_addr();
+                        kg->kernel_text_offsets[class_id] = 0x0000A840;
+                        kg->launch_msg.kernel_config.kernel_text_offset[class_id] = 0x0000A840;
                     }
                 }
             }

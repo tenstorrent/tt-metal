@@ -43,7 +43,7 @@ int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
 #if defined(ARCH_WORMHOLE)
 void l1_to_erisc_iram_copy(volatile uint32_t* iram_load_reg) {
     // Trigger copy of code from L1 to IRAM.
-    *iram_load_reg = eth_l1_mem::address_map::TILE_HEADER_BUFFER_BASE >> 4;
+    *iram_load_reg = eth_l1_mem::address_map::KERNEL_BASE >> 4;
     RISC_POST_STATUS(0x10000000);
 }
 
@@ -55,7 +55,8 @@ void l1_to_erisc_iram_copy_wait(volatile uint32_t* iram_load_reg) {
 void iram_setup() {
     // Copy code from L1 to IRAM.
     //  TODO: enable/disable mac
-    volatile uint32_t* iram_load_reg;
+    volatile uint32_t* iram_load_reg = (volatile uint32_t*)(ETH_CTRL_REGS_START + ETH_CORE_IRAM_LOAD);
+
     l1_to_erisc_iram_copy(iram_load_reg);
     l1_to_erisc_iram_copy_wait(iram_load_reg);
 }
