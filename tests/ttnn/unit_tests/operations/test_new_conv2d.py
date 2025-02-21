@@ -2850,6 +2850,7 @@ def test_small_in_large_out_channels_auto_shard(device, torch_tensor_map):
         padding[0],
         padding[1],
         None,
+        output_layout=ttnn.TILE_LAYOUT,  # OOM with Row Major
         auto_shard=True,
     )
 
