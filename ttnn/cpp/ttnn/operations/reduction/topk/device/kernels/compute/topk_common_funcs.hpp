@@ -1,4 +1,56 @@
 namespace NAMESPACE {
+void process_and_sort_tiles(
+    uint32_t input_cb_index,
+    uint32_t index_cb_index,
+    uint32_t input_transposed_cb_index,
+    uint32_t index_transposed_cb_index,
+    uint32_t Wt,
+    bool switch_dir,
+    bool& ascending,
+    int end_phase) {
+    cb_reserve_back(input_transposed_cb_index, Wt);
+    cb_reserve_back(index_transposed_cb_index, Wt);
+
+    // streaming in input and index tiles to transpose and bitonic local sort them, two tiles at a time
+    for (uint32_t wt = 0; wt < Wt; wt += 2) {
+        acquire_dst();
+        // local sort into k groups
+        cb_wait_front(input_cb_index, 2);
+        cb_wait_front(index_cb_index, 2);
+
+        reconfig_data_format_srca(input_cb_index);
+        transpose_wh_init_short(input_cb_index);
+        transpose_wh_tile(input_cb_index, 0, 0);
+        transpose_wh_tile(input_cb_index, 1, 1);
+
+        reconfig_data_format_srca(index_cb_index);
+        transpose_wh_init_short(index_cb_index);
+        transpose_wh_tile(index_cb_index, 0, 2);
+        transpose_wh_tile(index_cb_index, 1, 3);
+
+        // llk_topk_sort -> inplace
+        ckernel::topk_local_sort(0, (int)ascending, end_phase);
+
+        // pack value tiles into cb_intermed0
+        pack_reconfig_data_format(input_transposed_cb_index);
+        pack_tile(0, input_transposed_cb_index);
+        pack_tile(1, input_transposed_cb_index);
+
+        // pack index tiles into cb_intermed1
+        pack_reconfig_data_format(index_transposed_cb_index);
+        pack_tile(2, index_transposed_cb_index);
+        pack_tile(3, index_transposed_cb_index);
+
+        cb_pop_front(input_cb_index, 2);
+        cb_pop_front(index_cb_index, 2);
+        release_dst();
+        ascending = switch_dir ? !ascending : ascending;
+    }
+
+    cb_push_back(input_transposed_cb_index, Wt);
+    cb_push_back(index_transposed_cb_index, Wt);
+}
+
 void process_tile_pair(
     uint32_t left_ind,
     uint32_t right_ind,
