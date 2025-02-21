@@ -82,7 +82,7 @@ jobs:
       - name: Extract files
         run: tar -xvf ttm_any.tar
       - uses: ./.github/actions/install-python-deps
-      - name: Run pre/post regression tests in a loop
+      - name: Run Git Bisect
         run: |
           source ${{ github.workspace }}/python_env/bin/activate
           cd $TT_METAL_HOME

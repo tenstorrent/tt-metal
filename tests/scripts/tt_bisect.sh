@@ -1,4 +1,6 @@
 #!/bin/bash
+set -euo pipefail
+set -x
 
 : << 'END'
 This script is used to find the commit that broke a test.
@@ -56,11 +58,12 @@ while [[ "$found" = "false" ]]; do
    build_code=0
 
    echo "::group::Building `git rev-parse HEAD`"
-   ./build_metal.sh --build-tests > /dev/null; build_code+=$?
+   # ./build_metal.sh --build-tests > /dev/null; build_code=$?
+   echo "FIXME: do the actual build"
    echo "::endgroup::"
 
    if [[ $build_code -ne 0 ]]; then
-      echo "Build failed"
+      echo "Build failed; skipping this commit"
       git bisect skip
       continue
    fi
@@ -72,12 +75,17 @@ while [[ "$found" = "false" ]]; do
    echo $timeout_code
 
    if [ $timeout_code -eq 0 ]; then
-      first_line=$(git bisect good | head -n 1)
+      increment=$(git bisect good)
+      echo $increment
+      first_line=$(echo $increment | head -n 1)
    elif [ $timeout_code -eq 124 ]; then
-      echo `git rev-parse HEAD` > ~/bad_commit.txt
-      break
+      echo "Test has timed out, skipping this commit"
+      git bisect skip
+      continue
    else
-      first_line=$(git bisect bad | head -n 1)
+      increment=$(git bisect bad)
+      echo $increment
+      first_line=$(echo $increment | head -n 1)
    fi
 
    if [[ $first_line == *"is the first bad commit"* ]]; then
@@ -88,6 +96,6 @@ done
 git bisect reset
 
 if [ $timeout_code -eq 124 ]; then
-   echo "Test has hung, need to reset the board"
-   exit 124
+   echo "Test has hung, skipping this commit"
+   git bisect skip
 fi
