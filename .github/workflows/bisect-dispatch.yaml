@@ -88,6 +88,9 @@ jobs:
       - uses: ./.github/actions/install-python-deps
       - name: Run Git Bisect
         shell: bash
+        env:
+          GIT_COMMITTER_NAME: "GitHub Actions"
+          GIT_COMMITTER_EMAIL: "actions@github.com"
         run: |
           source ${{ github.workspace }}/python_env/bin/activate
           cd $TT_METAL_HOME
