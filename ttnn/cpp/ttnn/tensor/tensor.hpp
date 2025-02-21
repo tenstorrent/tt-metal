@@ -41,38 +41,9 @@ public:
     struct TensorAttributes : public std::enable_shared_from_this<TensorAttributes> {
         Storage storage;
         TensorSpec tensor_spec;
-        uint32_t num_shards_to_be_populated = 0;
-        uint32_t main_thread_ref_count = 0;
-        std::atomic<uint32_t> num_sibling_workers_sharing_tensor = 0;
-        std::atomic<bool> main_thread_tensor = true;
-        std::atomic<bool> metadata_populated = false;
-        std::atomic<int> num_workers_completed = 0;
-        bool deallocated = false;      // Set to true if device side storage was deallocated
-        bool dynamic_storage = false;  // Storage type can change, depending on op behaviour
-        bool track_ref_count = false;
         TensorAttributes(Storage storage, TensorSpec tensor_spec);
         TensorAttributes();
         ~TensorAttributes() = default;
-
-        // Use these functions to manage the main_thread_ref_count for a tensor attr instance.
-        // This variable is used for on device memory deallocation in async mode, where the main
-        // thread owns all tensors and enqueues a deallocate command for each shard, when a tensor
-        // is implicitly or explicitly dellocated.
-        // Call increment when a tensor is default, copy or assignment constructed, since an additional
-        // object will own a tensor_attr instance.
-        // Call decrement when a tensor is destroyed and the number of owners of the tensor_attr object
-        // decreases.
-        // Record the main thread ref count before pushing to a worker queue (number of owners in main thread).
-        // Update the main thread ref count with the recorded value after the tensor is pushed to the queue(s),
-        // since pushing to the queue requires an extra datacopy in the main thread, that gets balanced by the
-        // worker, however the worker cannot modify main_thread_ref_count.
-        void increment_main_thread_ref_count(IDevice* worker);
-
-        void decrement_main_thread_ref_count(IDevice* worker);
-
-        uint32_t record_main_thread_ref_count();
-
-        void update_main_thread_ref_count(IDevice* worker, uint32_t ref_count);
     };
 
     std::optional<std::int64_t> tensor_id = std::nullopt;
@@ -121,8 +92,6 @@ public:
         // Don't self assign
         this->tensor_id = std::move(other.tensor_id);
         if (this->tensor_attributes != other.tensor_attributes) {
-            // Update ref count for curr tensor_attr and deallocate if needed
-            perform_cleanup_for_async_mode();
             this->workers = std::move(other.workers);
             this->tensor_attributes = std::move(other.tensor_attributes);
         }
@@ -131,10 +100,6 @@ public:
     }
 
     ~Tensor();
-
-    void track_ref_count() { this->tensor_attributes->track_ref_count = true; }
-
-    void perform_cleanup_for_async_mode();
 
     void populate_buffers_and_metadata(const Tensor& other);
 
@@ -242,10 +207,7 @@ public:
     // ======================================================================================
     inline void set_storage(const Storage& storage) { this->tensor_attributes->storage = storage; }
     // We intend to remove this API once we migrate all ops to compute_output_specs, and provide TensorSpec at creation
-    inline void set_tensor_spec(const TensorSpec& tensor_spec) {
-        this->tensor_attributes->tensor_spec = tensor_spec;
-        this->tensor_attributes->metadata_populated = true;
-    }
+    inline void set_tensor_spec(const TensorSpec& tensor_spec) { this->tensor_attributes->tensor_spec = tensor_spec; }
     // ======================================================================================
     //                                      Extra Helper Functions
     // ======================================================================================
@@ -319,22 +281,6 @@ public:
     }
 
     std::vector<uint32_t> host_page_ordering();
-
-    // Main Thread - Wait for all workers in this tensor to populate the entire tensor
-    inline void wait_for_tensor_data_populated() const {
-        // Stall until all the workers for this tensor
-        // have populated the full tensor
-        while (this->tensor_attributes->num_workers_completed < this->tensor_attributes->num_shards_to_be_populated) {
-        }
-    }
-
-    // Main Thread - Wait for the first worker in this tensor to populate the global metadata fields
-    inline void wait_for_tensor_metadata_populated() const {
-        // First worker is responsible for updating all metadata fields
-        // Stall until this worker is done
-        while (not this->tensor_attributes->metadata_populated) {
-        }
-    }
 
 private:
     void init(Storage storage, TensorSpec tensor_spec);

@@ -16,6 +16,7 @@
 #include "ttnn/core.hpp"
 #include "ttnn/distributed/api.hpp"
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_common.hpp>
 #include "tools/profiler/op_profiler.hpp"
 
 namespace ttnn {
@@ -335,9 +336,7 @@ void launch_on_worker_thread(auto cq_id, auto device_operation_id, const auto& o
         auto mesh_workload = tt::tt_metal::distributed::CreateMeshWorkload();
         auto mesh_shape = mesh_device->shape();
         tt::tt_metal::distributed::AddProgramToMeshWorkload(
-            mesh_workload,
-            *program,
-            tt::tt_metal::distributed::LogicalDeviceRange({0, 0}, {mesh_shape.num_cols - 1, mesh_shape.num_rows - 1}));
+            mesh_workload, *program, LogicalDeviceRange({0, 0}, {mesh_shape.num_cols - 1, mesh_shape.num_rows - 1}));
         tt::tt_metal::distributed::EnqueueMeshWorkload(cq, mesh_workload, true);
 
     }

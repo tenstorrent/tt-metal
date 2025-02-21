@@ -989,12 +989,6 @@ void pytensor_module(py::module& m_tensor) {
                 tt_tensor = tt_tensor.to(tt_device)
         )doc")
         .def(
-            "track_ref_count",
-            [](Tensor& self) { return self.track_ref_count(); },
-            R"doc(
-                Log the reference count (as seen by the main and worker threads) of a tensor as it evolves during runtime.
-            )doc")
-        .def(
             "to",
             py::overload_cast<MeshDevice*, const MemoryConfig&, QueueId>(&Tensor::to_device, py::const_),
             py::arg("mesh_device").noconvert(),
@@ -1022,7 +1016,6 @@ void pytensor_module(py::module& m_tensor) {
 
                 tt_tensor = tt_tensor.to(tt_device)
         )doc")
-        .def("sync", [](Tensor& self) { return self.wait_for_tensor_data_populated(); })
         .def(
             "extract_shard",
             [](const Tensor& self, CoreCoord core) { return self.extract_shard(core); },

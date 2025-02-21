@@ -518,11 +518,6 @@ void launch_with_autoformat(
     Tensors& output_tensors,
     const OptionalConstTensors& optional_input_tensors,
     const OptionalTensors& optional_output_tensors) {
-    // Mark each output tensor as having dynamic storage (can be on host or device, depending
-    // on autoformat behaviour). Multi device tensors do not support dynamic storage.
-    for (auto& output_tensor : output_tensors) {
-        output_tensor.tensor_attributes->dynamic_storage = (output_tensor.workers.size() <= 1);
-    }
     launch_op(std::move(op_func), input_tensors, output_tensors, optional_input_tensors, optional_output_tensors);
 }
 

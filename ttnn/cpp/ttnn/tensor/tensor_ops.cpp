@@ -37,8 +37,6 @@ Tensor tensor_to_device(
     // functions running in main can get storage type without blocking
     Tensor device_tensor({target_device});
     // Record main thread ref count for tensors before pushing to queue.
-    uint32_t device_tensor_ref_count = device_tensor.tensor_attributes->record_main_thread_ref_count();
-    uint32_t original_tensor_ref_count = async_safe_tensor.tensor_attributes->record_main_thread_ref_count();
     target_device->push_work([async_safe_tensor, device_tensor, mem_config, target_device, cq_id]() mutable {
         if (async_safe_tensor.storage_type() == StorageType::DEVICE) {
             TT_ASSERT(async_safe_tensor.device() == target_device && "Currently do not support moving between devices");
@@ -51,11 +49,6 @@ Tensor tensor_to_device(
             device_tensor.populate_buffers_and_metadata(local_tensor);
         }
     });
-    // Update main thread ref count for tensors after pushing to queue (update original tensor and returned tensor,
-    // since both can be on device).
-    device_tensor.tensor_attributes->update_main_thread_ref_count(device_tensor.workers.at(0), device_tensor_ref_count);
-    async_safe_tensor.tensor_attributes->update_main_thread_ref_count(
-        device_tensor.workers.at(0), original_tensor_ref_count);
     device_tensor = tt::tt_metal::set_tensor_id(device_tensor);
     GraphTracker::instance().track_function_end(device_tensor);
     return device_tensor;
@@ -89,8 +82,6 @@ Tensor tensor_to_device(
     TT_FATAL(
         validate_worker_modes(workers), "All device threads/workers must be running in the same mode (ASYNC or SYNC)");
     Tensor device_tensor = Tensor(workers);
-    uint32_t device_tensor_ref_count = device_tensor.tensor_attributes->record_main_thread_ref_count();
-    uint32_t original_tensor_ref_count = input_tensor.tensor_attributes->record_main_thread_ref_count();
     uint32_t num_workers = workers.size();
     for (int worker_index = 0; worker_index < workers.size(); ++worker_index) {
         auto& worker = workers[worker_index];
@@ -101,16 +92,13 @@ Tensor tensor_to_device(
                     shard = tensor_impl::to_device_wrapper(shard, worker, mem_config, cq_id);
                 }
                 insert_buffer_and_shape_for_device(worker, shard, device_tensor, worker_index);
-                uint32_t num_workers_completed = (device_tensor.tensor_attributes->num_workers_completed)++;
-                if (not num_workers_completed) {
+                if (worker_index == 0) {
                     device_tensor.set_tensor_spec(TensorSpec(
                         input_tensor.get_logical_shape(),
                         input_tensor.get_tensor_spec().tensor_layout().with_memory_config(mem_config)));
                 }
             });
     }
-    device_tensor.tensor_attributes->update_main_thread_ref_count(workers.at(0), device_tensor_ref_count);
-    input_tensor.tensor_attributes->update_main_thread_ref_count(workers.at(0), original_tensor_ref_count);
     device_tensor = tt::tt_metal::set_tensor_id(device_tensor);
     GraphTracker::instance().track_function_end(device_tensor);
     return device_tensor;
@@ -131,7 +119,6 @@ Tensor tensor_cpu(const Tensor& input_tensor, bool blocking, QueueId cq_id) {
     TT_FATAL(
         validate_worker_modes(workers), "All device threads/workers must be running in the same mode (ASYNC or SYNC)");
     Tensor host_tensor(workers.size());
-    uint32_t original_tensor_ref_count = input_tensor.tensor_attributes->record_main_thread_ref_count();
     for (int worker_index = 0; worker_index < workers.size(); worker_index++) {
         auto target_device = workers[worker_index];
         target_device->push_work(
@@ -143,8 +130,7 @@ Tensor tensor_cpu(const Tensor& input_tensor, bool blocking, QueueId cq_id) {
                 auto shard = get_shard_for_device(input_tensor, target_device);
                 shard = tensor_impl::to_host_wrapper(shard, blocking, cq_id);
                 insert_buffer_and_shape_for_device(target_device, shard, host_tensor, worker_index);
-                uint32_t num_workers_completed = (host_tensor.tensor_attributes->num_workers_completed)++;
-                if (not num_workers_completed) {
+                if (worker_index == 0) {
                     host_tensor.set_tensor_spec(input_tensor.get_tensor_spec());
                 }
             });
@@ -153,8 +139,6 @@ Tensor tensor_cpu(const Tensor& input_tensor, bool blocking, QueueId cq_id) {
     if (blocking) {
         tt::tt_metal::detail::SynchronizeWorkerThreads(workers);
     }
-    // Update main_thread_ref_count for tensor after pushing to queue.
-    input_tensor.tensor_attributes->update_main_thread_ref_count(workers.at(0), original_tensor_ref_count);
     host_tensor = tt::tt_metal::set_tensor_id(host_tensor);
     GraphTracker::instance().track_function_end(host_tensor);
     return host_tensor;
@@ -227,8 +211,7 @@ Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout, distri
                 auto shard = get_shard_for_device(input_tensor, worker, worker_index);
                 shard = tensor_impl::to_layout_wrapper(shard, target_layout);
                 insert_buffer_and_shape_for_device(worker, shard, tensor_modified_layout, worker_index);
-                uint32_t num_workers_completed = (tensor_modified_layout.tensor_attributes->num_workers_completed)++;
-                if (not num_workers_completed) {
+                if (worker_index == 0) {
                     auto orig_layout = input_tensor.get_tensor_spec().tensor_layout();
                     auto upd_layout = TensorLayout(
                         orig_layout.get_data_type(), PageConfig(target_layout), orig_layout.get_memory_config());
