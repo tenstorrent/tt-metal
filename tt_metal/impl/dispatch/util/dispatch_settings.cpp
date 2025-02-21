@@ -8,7 +8,7 @@
 #include "magic_enum/magic_enum.hpp"
 #include "umd/device/tt_core_coordinates.h"
 #include <dispatch_settings.hpp>
-#include <helpers.hpp>
+#include "size_literals.hpp"
 
 namespace tt::tt_metal {
 

@@ -155,7 +155,7 @@ def test_erisc_write_worker_bw_bi_dir(sample_count, sample_size_expected_bw, cha
 @pytest.mark.parametrize("disable_trid", [1])
 @pytest.mark.parametrize(
     "sample_size_expected_bw",
-    [(16, 0.18), (128, 1.46), (256, 2.93), (512, 5.73), (1024, 9.15), (2048, 11.83), (4096, 12.04), (8192, 12.07)],
+    [(16, 0.18), (128, 1.70), (256, 3.79), (512, 7.72), (1024, 11.3), (2048, 11.83), (4096, 12.04), (8192, 12.07)],
 )
 def test_erisc_write_worker_bw_uni_dir_no_trid(sample_count, sample_size_expected_bw, channel_count, disable_trid):
     benchmark_type_id = 2
@@ -176,7 +176,7 @@ def test_erisc_write_worker_bw_uni_dir_no_trid(sample_count, sample_size_expecte
 @pytest.mark.parametrize("disable_trid", [1])
 @pytest.mark.parametrize(
     "sample_size_expected_bw",
-    [(16, 0.10), (128, 0.87), (256, 1.73), (512, 3.44), (1024, 5.99), (2048, 9.70), (4096, 11.82)],
+    [(16, 0.10), (128, 0.87), (256, 1.99), (512, 4.47), (1024, 9.43), (2048, 11.00), (4096, 11.82)],
 )
 def test_erisc_write_worker_bw_bi_dir_no_trid(sample_count, sample_size_expected_bw, channel_count, disable_trid):
     benchmark_type_id = 3

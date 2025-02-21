@@ -4,6 +4,10 @@
 
 loguru
 
+# For github workflow unit test failure annotations
+xmltodict
+pytest-github-actions-annotate-failures==0.3.0
+
 # During dep resolution, black may install platformdirs >=4.0.0, which is
 # a breaking dependency for virtualenv installed by pre-commit. virtualenv
 # requires <4.0.0 platformdirs, so we're pinning platformdirs here
