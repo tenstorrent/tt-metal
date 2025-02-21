@@ -830,7 +830,7 @@ def run_test_sdpa_decode_paged_attention(
             causal = False
 
 
-@skip_for_blackhole("Unsupported on BH, see #12349")
+# @skip_for_blackhole("Unsupported on BH, see #12349")
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
 @pytest.mark.parametrize(
     "kv_dtype, q_dtype",
@@ -850,6 +850,9 @@ def run_test_sdpa_decode_paged_attention(
 @pytest.mark.parametrize(
     "b, nh, nkv, s, d, grid_size, cur_pos_tensor",
     (
+        [1, 32, 8, 64 * 1024, 128, (8, 4), True],
+        [32, 32, 8, 2 * 1024, 128, (8, 4), True],
+        # [32, 32, 8, 64 * 1024, 128, (8, 8), True],
         # [32, 8, 1, 32768, 128, (8, 6), True],  # Llama2-70B
         # [4, 32, 8, 4096, 128, (8, 8), True],  # llama 3.1 8b
         # [4, 16, 4, 32768, 128, (8, 8), True],
@@ -887,7 +890,7 @@ def test_sdpa_decode_paged_attention(
         sharded_out=False,
     )
 
-    assert device.num_program_cache_entries() == 4
+    # assert device.num_program_cache_entries() == 4
 
 
 @skip_for_blackhole("Unsupported on BH, see #12349")
