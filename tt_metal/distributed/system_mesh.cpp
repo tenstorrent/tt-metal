@@ -4,6 +4,7 @@
 
 #include <system_mesh.hpp>
 
+#include "mesh_device.hpp"
 #include "small_vector.hpp"
 #include "umd/device/types/cluster_descriptor_types.h"
 #include "tt_metal/distributed/coordinate_translation.hpp"
@@ -20,17 +21,18 @@ private:
     std::unordered_map<MeshCoordinate, chip_id_t> logical_to_device_id_;
     std::unordered_map<PhysicalCoordinate, chip_id_t> physical_coordinate_to_device_id_;
     std::unordered_map<chip_id_t, PhysicalCoordinate> physical_device_id_to_coordinate_;
+    std::vector<std::weak_ptr<MeshDevice>> registered_mesh_devices_;
 
 public:
     Impl() = default;
+    ~Impl();
 
     bool is_system_mesh_initialized() const;
     void initialize();
     const SimpleMeshShape& get_shape() const;
     std::vector<chip_id_t> get_mapped_physical_device_ids(const MeshDeviceConfig& config) const;
     std::vector<chip_id_t> request_available_devices(const MeshDeviceConfig& config) const;
-
-    IDevice* get_device(const chip_id_t physical_device_id) const;
+    void register_mesh_device(std::weak_ptr<MeshDevice> mesh_device);
     chip_id_t get_physical_device_id(const MeshCoordinate& coord) const;
 };
 
@@ -88,6 +90,20 @@ chip_id_t SystemMesh::Impl::get_physical_device_id(const MeshCoordinate& coord) 
     return logical_to_device_id_.at(coord);
 }
 
+SystemMesh::Impl::~Impl() {
+    // System mesh destructor is responsible for closing all registered mesh devices that are still alive
+    // See #15290 for context.
+    for (auto& mesh_device : registered_mesh_devices_) {
+        if (auto ptr = mesh_device.lock()) {
+            ptr->close();
+        }
+    }
+}
+
+void SystemMesh::Impl::register_mesh_device(std::weak_ptr<MeshDevice> mesh_device) {
+    registered_mesh_devices_.push_back(std::move(mesh_device));
+}
+
 std::vector<chip_id_t> SystemMesh::Impl::get_mapped_physical_device_ids(const MeshDeviceConfig& config) const {
     std::vector<chip_id_t> physical_device_ids;
 
@@ -128,7 +144,7 @@ std::vector<chip_id_t> SystemMesh::Impl::get_mapped_physical_device_ids(const Me
 
         auto line_length = config.mesh_shape.mesh_size();
         for (const auto& logical_coordinate : MeshDeviceView::get_line_coordinates(line_length, shape_2d)) {
-            auto physical_device_id = logical_to_device_id_.at(logical_coordinate);
+            auto physical_device_id = get_physical_device_id(logical_coordinate);
             physical_device_ids.push_back(physical_device_id);
 
             log_debug(
@@ -176,14 +192,9 @@ std::vector<chip_id_t> SystemMesh::Impl::get_mapped_physical_device_ids(const Me
     MeshCoordinateRange system_range(system_offset, MeshCoordinate(end_coord));
 
     for (const auto& system_coord : system_range) {
-        auto physical_device_id = logical_to_device_id_.find(system_coord);
-        TT_FATAL(
-            physical_device_id != logical_to_device_id_.end(),
-            "Logical coordinate: {} not found in SystemMesh of shape {}",
-            system_coord,
-            logical_mesh_shape_);
-        physical_device_ids.push_back(physical_device_id->second);
-        log_debug(LogMetal, "Logical coordinate: {}, Physical device ID: {}", system_coord, physical_device_id->second);
+        auto physical_device_id = get_physical_device_id(system_coord);
+        physical_device_ids.push_back(physical_device_id);
+        log_debug(LogMetal, "Logical coordinate: {}, Physical device ID: {}", system_coord, physical_device_id);
     }
     return physical_device_ids;
 }
@@ -220,6 +231,10 @@ std::vector<chip_id_t> SystemMesh::request_available_devices(const MeshDeviceCon
 
 std::vector<chip_id_t> SystemMesh::get_mapped_physical_device_ids(const MeshDeviceConfig& config) const {
     return pimpl_->get_mapped_physical_device_ids(config);
+}
+
+void SystemMesh::register_mesh_device(std::weak_ptr<MeshDevice> mesh_device) {
+    pimpl_->register_mesh_device(std::move(mesh_device));
 }
 
 }  // namespace tt::tt_metal::distributed

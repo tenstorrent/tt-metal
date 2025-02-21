@@ -69,9 +69,9 @@ MeshDevice::ScopedDevices::ScopedDevices(
     size_t num_command_queues,
     const DispatchCoreConfig& dispatch_core_config,
     const MeshDeviceConfig& config) {
-    auto& system_mesh = SystemMesh::instance();
-    auto physical_device_ids = system_mesh.request_available_devices(config);
-
+    (void)tt::tt_metal::detail::CreateDevices(
+        {}, num_command_queues, l1_small_size, trace_region_size, dispatch_core_config);
+    auto physical_device_ids = SystemMesh::instance().request_available_devices(config);
     opened_devices_ = tt::tt_metal::detail::CreateDevices(
         physical_device_ids, num_command_queues, l1_small_size, trace_region_size, dispatch_core_config);
 
@@ -140,6 +140,8 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
         mesh_shape_2d,
         std::make_unique<MeshDeviceView>(devices),
         std::weak_ptr<MeshDevice>());
+
+    SystemMesh::instance().register_mesh_device(mesh_device);
 
     mesh_device->initialize(num_command_queues, l1_small_size, trace_region_size, l1_bank_remap);
     return mesh_device;

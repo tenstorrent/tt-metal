@@ -10,7 +10,6 @@
 #include <ttnn/distributed/api.hpp>
 #include "mesh_coord.hpp"
 #include "tests/tt_metal/test_utils/env_vars.hpp"
-#include "ttnn/unit_tests/gtests/ttnn_test_fixtures.hpp"
 
 namespace ttnn::distributed::test {
 namespace {
@@ -25,11 +24,26 @@ std::vector<chip_id_t> get_physical_device_ids(const MeshDevice& mesh) {
     return device_ids;
 }
 
-static constexpr std::array<MeshShape, 24> kMeshShapes{
-    {{1, 1}, {1, 2}, {1, 3}, {1, 4}, {1, 5}, {1, 6}, {1, 7}, {1, 8}, {2, 1}, {2, 2}, {2, 3}, {2, 4},
-     {3, 1}, {3, 2}, {4, 1}, {4, 2}, {8, 1}, {7, 1}, {6, 1}, {5, 1}, {4, 1}, {3, 1}, {2, 1}, {1, 1}}};
+class T3KTestFixture : public ::testing::Test {
+public:
+    void SetUp() override {
+        auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        const auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        const size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
+        if (slow_dispatch) {
+            GTEST_SKIP() << "Skipping Multi-Device test suite, since it can only be run in Fast Dispatch Mode.";
+        }
+        if (num_devices < 8 or arch != tt::ARCH::WORMHOLE_B0) {
+            GTEST_SKIP() << "Skipping T3K Multi-Device test suite on non T3K machine.";
+        }
+    }
+};
 
-class MeshConfigurationTest : public T3kMultiDeviceFixture, public ::testing::WithParamInterface<MeshShape> {};
+constexpr std::array<MeshShape, 24> kMeshShapes{{{1, 1}, {1, 2}, {1, 3}, {1, 4}, {1, 5}, {1, 6}, {1, 7}, {1, 8},
+                                                 {2, 1}, {2, 2}, {2, 3}, {2, 4}, {3, 1}, {3, 2}, {4, 1}, {4, 2},
+                                                 {8, 1}, {7, 1}, {6, 1}, {5, 1}, {4, 1}, {3, 1}, {2, 1}, {1, 1}}};
+
+class MeshConfigurationTest : public T3KTestFixture, public ::testing::WithParamInterface<MeshShape> {};
 
 TEST_P(MeshConfigurationTest, MeshConfigurations) {
     const auto& shape = GetParam();
@@ -56,7 +70,7 @@ TEST_P(MeshConfigurationTest, GetPhysicalDeviceIds) {
 // Test all possible mesh configurations on T3000
 INSTANTIATE_TEST_SUITE_P(MeshShapes, MeshConfigurationTest, ::testing::ValuesIn(kMeshShapes));
 
-class MeshReshapeRoundtripTest : public T3kMultiDeviceFixture,
+class MeshReshapeRoundtripTest : public T3KTestFixture,
                                  public ::testing::WithParamInterface<std::tuple<MeshShape, MeshShape>> {};
 
 TEST_P(MeshReshapeRoundtripTest, ReshapeBetweenConfigurations) {
@@ -100,7 +114,7 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::Combine(::testing::ValuesIn(kMeshShapes), ::testing::ValuesIn(kMeshShapes)));
 
 // Base class for non-parameterized tests
-using MeshReshapeTest = T3kMultiDeviceFixture;
+using MeshReshapeTest = T3KTestFixture;
 
 TEST_F(MeshReshapeTest, InvalidRequestedShape) {
     auto& system_mesh = tt::tt_metal::distributed::SystemMesh::instance();
