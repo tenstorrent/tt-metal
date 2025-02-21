@@ -87,12 +87,9 @@ operation::ProgramWithCallbacks fill_pad_multi_core(const Tensor& input_tensor, 
         (std::uint32_t)tt::constants::TILE_HEIGHT,
         (std::uint32_t)tt::constants::FACE_HEIGHT};
 
-    if (sharded) {
-        shard_builder::extend_sharding_compile_time_args(input_tensor, writer_compile_time_args);
-    }
-
     std::map<string, string> compute_defines;
     if (sharded) {
+        shard_builder::extend_sharding_compile_time_args(input_tensor, writer_compile_time_args);
         compute_defines["SHARDED"] = "1";
     }
 
