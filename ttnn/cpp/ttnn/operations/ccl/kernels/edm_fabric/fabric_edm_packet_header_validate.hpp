@@ -16,4 +16,9 @@ FORCE_INLINE bool is_valid(PacketHeader const& packet_header) {
     return (packet_header.chip_send_type <= CHIP_SEND_TYPE_LAST) && (packet_header.noc_send_type <= NOC_SEND_TYPE_LAST);
 }
 
+FORCE_INLINE void validate(const LowLatencyPacketHeader& packet_header) {}
+FORCE_INLINE bool is_valid(const LowLatencyPacketHeader& packet_header) {
+    return (packet_header.noc_send_type <= NOC_SEND_TYPE_LAST);
+}
+
 }  // namespace tt::fabric

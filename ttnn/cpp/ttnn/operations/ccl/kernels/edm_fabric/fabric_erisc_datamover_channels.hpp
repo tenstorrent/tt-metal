@@ -64,12 +64,14 @@ class EthChannelBuffer final {
         return this->buffer_addresses[buffer_index];
     }
 
-    [[nodiscard]] FORCE_INLINE volatile PacketHeader *get_packet_header(BufferIndex const& buffer_index) const {
-        return reinterpret_cast<volatile PacketHeader *>(this->buffer_addresses[buffer_index]);
+    template <typename T>
+    [[nodiscard]] FORCE_INLINE volatile T *get_packet_header(BufferIndex const& buffer_index) const {
+        return reinterpret_cast<volatile T *>(this->buffer_addresses[buffer_index]);
     }
 
+    template <typename T>
     [[nodiscard]] FORCE_INLINE size_t get_payload_size(BufferIndex const& buffer_index) const {
-        return get_packet_header(buffer_index)->get_payload_size_including_header();
+        return get_packet_header<T>(buffer_index)->get_payload_size_including_header();
     }
     [[nodiscard]] FORCE_INLINE size_t get_channel_buffer_max_size_in_bytes(BufferIndex const& buffer_index) const {
         return this->buffer_size_in_bytes;

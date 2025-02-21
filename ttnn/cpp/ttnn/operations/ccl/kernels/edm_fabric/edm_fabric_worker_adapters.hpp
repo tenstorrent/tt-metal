@@ -326,7 +326,7 @@ private:
     FORCE_INLINE void send_packet_header_and_notify_fabric(uint32_t source_address) {
         uint64_t buffer_address = this->compute_dest_buffer_slot_noc_addr();
 
-        send_chunk_from_address<blocking_mode>(source_address, 1, sizeof(tt::fabric::PacketHeader), buffer_address);
+        send_chunk_from_address<blocking_mode>(source_address, 1, sizeof(PACKET_HEADER_TYPE), buffer_address);
         post_send_payload_increment_pointers();
     }
 
@@ -335,23 +335,23 @@ private:
         uint64_t buffer_address = this->compute_dest_buffer_slot_noc_addr();
 
         // skip past the first part of the buffer which will be occupied by the packet header
-        send_chunk_from_address<blocking_mode>(source_address, 1, size_bytes, buffer_address + sizeof(tt::fabric::PacketHeader));
+        send_chunk_from_address<blocking_mode>(source_address, 1, size_bytes, buffer_address + sizeof(PACKET_HEADER_TYPE));
     }
     template <ttnn::ccl::EDM_IO_BLOCKING_MODE blocking_mode>
     FORCE_INLINE void send_payload_from_address_impl(uint32_t source_address, size_t size_bytes) {
         uint64_t buffer_address = this->compute_dest_buffer_slot_noc_addr();
 
         ASSERT(size_bytes <= this->buffer_size_bytes);
-        ASSERT(tt::fabric::is_valid(*const_cast<tt::fabric::PacketHeader*>(
-            reinterpret_cast<volatile tt::fabric::PacketHeader*>(source_address))));
+        ASSERT(tt::fabric::is_valid(*const_cast<PACKET_HEADER_TYPE*>(
+            reinterpret_cast<volatile PACKET_HEADER_TYPE*>(source_address))));
         send_chunk_from_address<blocking_mode>(source_address, 1, size_bytes, buffer_address);
         post_send_payload_increment_pointers();
     }
     template <ttnn::ccl::EDM_IO_BLOCKING_MODE blocking_mode>
     FORCE_INLINE void send_payload_from_address_with_trid_impl(uint32_t source_address, size_t size_bytes, uint8_t trid) {
         ASSERT(size_bytes <= this->buffer_size_bytes);
-        ASSERT(tt::fabric::is_valid(*const_cast<tt::fabric::PacketHeader*>(
-            reinterpret_cast<volatile tt::fabric::PacketHeader*>(source_address))));
+        ASSERT(tt::fabric::is_valid(*const_cast<PACKET_HEADER_TYPE*>(
+            reinterpret_cast<volatile PACKET_HEADER_TYPE*>(source_address))));
         send_chunk_from_address_with_trid<blocking_mode>(source_address, 1, size_bytes, this->edm_buffer_addr, trid, this->edm_noc_cmd_buf);
         post_send_payload_increment_pointers();
     }

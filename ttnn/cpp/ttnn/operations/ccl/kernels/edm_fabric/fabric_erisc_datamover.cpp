@@ -433,18 +433,18 @@ struct ReceiverChannelPointers {
 };
 
 struct PacketHeaderRecorder {
-    volatile tt::fabric::PacketHeader *buffer_ptr;
+    volatile uint32_t *buffer_ptr;
     size_t buffer_n_headers;
     size_t buffer_index;
 
-    PacketHeaderRecorder(volatile tt::fabric::PacketHeader *buffer_ptr, size_t buffer_n_headers) : buffer_ptr(buffer_ptr), buffer_n_headers(buffer_n_headers), buffer_index(0) {}
+    PacketHeaderRecorder(volatile uint32_t *buffer_ptr, size_t buffer_n_headers) : buffer_ptr(buffer_ptr), buffer_n_headers(buffer_n_headers), buffer_index(0) {}
 
-    void record_packet_header(volatile tt::fabric::PacketHeader *packet_header_ptr) {
-        uint32_t dest_l1_addr = (uint32_t)buffer_ptr + buffer_index * sizeof(tt::fabric::PacketHeader);
+    void record_packet_header(volatile uint32_t *packet_header_ptr) {
+        uint32_t dest_l1_addr = (uint32_t)buffer_ptr + buffer_index * sizeof(PACKET_HEADER_TYPE);
         noc_async_write(
             (uint32_t)packet_header_ptr,
             get_noc_addr(my_x[0], my_y[0], dest_l1_addr),
-            sizeof(tt::fabric::PacketHeader),
+            sizeof(PACKET_HEADER_TYPE),
             1 - noc_index // avoid the contention on main noc
         );
         buffer_index++;
@@ -541,8 +541,8 @@ FORCE_INLINE void send_next_data(
     //       NOTE: if we always send full packet, then we don't need the second branch below dedicated for
     //             channel sync
     auto volatile *pkt_header =
-        reinterpret_cast<volatile tt::fabric::PacketHeader *>(sender_buffer_channel.get_buffer_address(local_sender_wrptr_buffer_index));
-    ASSERT(tt::fabric::is_valid(*const_cast<tt::fabric::PacketHeader *>(pkt_header)));
+        reinterpret_cast<volatile PACKET_HEADER_TYPE *>(sender_buffer_channel.get_buffer_address(local_sender_wrptr_buffer_index));
+    ASSERT(tt::fabric::is_valid(*const_cast<PACKET_HEADER_TYPE *>(pkt_header)));
     size_t payload_size_bytes = pkt_header->get_payload_size_including_header();
     pkt_header->src_ch_id = sender_channel_index;
 
@@ -582,7 +582,7 @@ FORCE_INLINE void receiver_send_received_ack(
     // Set the acknowledgement bits. We have a different location than the
 
     auto receiver_buffer_index = receiver_channel_ptr.get_buffer_index();
-    auto volatile *pkt_header = reinterpret_cast<volatile tt::fabric::PacketHeader *>(local_receiver_buffer_channel.get_buffer_address(receiver_buffer_index));
+    auto volatile *pkt_header = reinterpret_cast<volatile PACKET_HEADER_TYPE *>(local_receiver_buffer_channel.get_buffer_address(receiver_buffer_index));
     const auto src_id = pkt_header->src_ch_id;
     remote_update_ptr_val(to_sender_packets_acked_streams[src_id], 1);
 }
@@ -597,7 +597,7 @@ FORCE_INLINE void receiver_send_completion_ack(
 
     auto receiver_buffer_index = receiver_channel_ptr.get_buffer_index();
 
-    auto volatile *pkt_header = reinterpret_cast<volatile tt::fabric::PacketHeader *>(local_receiver_buffer_channel.get_buffer_address(receiver_buffer_index));
+    auto volatile *pkt_header = reinterpret_cast<volatile PACKET_HEADER_TYPE *>(local_receiver_buffer_channel.get_buffer_address(receiver_buffer_index));
     const auto src_id = pkt_header->src_ch_id;
     remote_update_ptr_val(to_sender_packets_completed_streams[src_id], 1);
     receiver_channel_ptr.increment();
@@ -607,11 +607,16 @@ FORCE_INLINE void receiver_send_completion_ack(
 
 template <uint8_t SENDER_NUM_BUFFERS>
 FORCE_INLINE bool can_forward_packet_completely(
-    tt::fabric::RoutingFields cached_routing_fields,
+    ROUTING_FIELDS_TYPE cached_routing_fields,
     tt::fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>& downstream_edm_interface) {
     // We always check if it is the terminal mcast packet value. We can do this because all unicast packets have the
     // mcast terminal value masked in to the routing field. This simplifies the check here to a single compare.
-    bool deliver_locally_only = cached_routing_fields.value == tt::fabric::RoutingFields::LAST_MCAST_VAL;
+    bool deliver_locally_only;
+    if constexpr (std::is_same_v<ROUTING_FIELDS_TYPE, tt::fabric::RoutingFields>) {
+        deliver_locally_only = cached_routing_fields.value == tt::fabric::RoutingFields::LAST_MCAST_VAL;
+    } else if constexpr (std::is_same_v<ROUTING_FIELDS_TYPE, tt::fabric::LowLatencyRoutingFields>) {
+        deliver_locally_only = (cached_routing_fields.value & tt::fabric::LowLatencyRoutingFields::FIELD_MASK) == tt::fabric::LowLatencyRoutingFields::WRITE_ONLY;
+    }
     return deliver_locally_only || downstream_edm_interface.edm_has_space_for_packet();
 }
 
@@ -619,19 +624,39 @@ FORCE_INLINE bool can_forward_packet_completely(
 template <uint8_t SENDER_NUM_BUFFERS>
 FORCE_INLINE void receiver_forward_packet(
     // TODO: have a separate cached copy of the packet header to save some additional L1 loads
-    volatile tt::fabric::PacketHeader *packet_start,
-    tt::fabric::RoutingFields cached_routing_fields,
+    volatile PACKET_HEADER_TYPE *packet_start,
+    ROUTING_FIELDS_TYPE cached_routing_fields,
     tt::fabric::EdmToEdmSender<SENDER_NUM_BUFFERS> &downstream_edm_interface,
     uint8_t transaction_id) {
 
-    bool start_distance_is_terminal_value = (cached_routing_fields.value & tt::fabric::RoutingFields::HOP_DISTANCE_MASK) == tt::fabric::RoutingFields::LAST_HOP_DISTANCE_VAL;
-    uint16_t payload_size_bytes = packet_start->payload_size_bytes;
-    if (start_distance_is_terminal_value) {
-        execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id);
-    }
-    bool not_last_destination_device = cached_routing_fields.value != tt::fabric::RoutingFields::LAST_MCAST_VAL;
-    if (not_last_destination_device) {
-        forward_payload_to_downstream_edm(packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface, transaction_id);
+    if constexpr (std::is_same_v<ROUTING_FIELDS_TYPE, tt::fabric::RoutingFields>) {
+        // If the packet is a terminal packet, then we can just deliver it locally
+        bool start_distance_is_terminal_value = (cached_routing_fields.value & tt::fabric::RoutingFields::HOP_DISTANCE_MASK) == tt::fabric::RoutingFields::LAST_HOP_DISTANCE_VAL;
+        uint16_t payload_size_bytes = packet_start->payload_size_bytes;
+        if (start_distance_is_terminal_value) {
+            execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id);
+        }
+        bool not_last_destination_device = cached_routing_fields.value != tt::fabric::RoutingFields::LAST_MCAST_VAL;
+        if (not_last_destination_device) {
+            forward_payload_to_downstream_edm(packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface, transaction_id);
+        }
+    } else if constexpr (std::is_same_v<ROUTING_FIELDS_TYPE, tt::fabric::LowLatencyRoutingFields>) {
+        uint32_t routing = cached_routing_fields.value & tt::fabric::LowLatencyRoutingFields::FIELD_MASK;
+        uint16_t payload_size_bytes = packet_start->payload_size_bytes;
+        switch (routing) {
+            case tt::fabric::LowLatencyRoutingFields::WRITE_ONLY:
+                execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id);
+                break;
+            case tt::fabric::LowLatencyRoutingFields::FORWARD_ONLY:
+                forward_payload_to_downstream_edm(packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface, transaction_id);
+                break;
+            case tt::fabric::LowLatencyRoutingFields::WRITE_AND_FORWARD:
+                execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id);
+                forward_payload_to_downstream_edm(packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface, transaction_id);
+                break;
+            default:
+                ASSERT(false);
+        }
     }
 }
 
@@ -663,10 +688,10 @@ FORCE_INLINE bool run_sender_channel_step(
             bool sender_backpressured_from_sender_side = !(local_sender_channel_worker_interface.local_rdptr.distance_behind(local_sender_channel_worker_interface.local_wrptr) < SENDER_NUM_BUFFERS);
             if (!sender_backpressured_from_sender_side) {
                 did_something = true;
-                auto packet_header = reinterpret_cast<tt::fabric::PacketHeader*>(local_sender_channel.get_buffer_address(local_sender_channel_worker_interface.local_wrptr.get_buffer_index()));
+                auto packet_header = reinterpret_cast<PACKET_HEADER_TYPE*>(local_sender_channel.get_buffer_address(local_sender_channel_worker_interface.local_wrptr.get_buffer_index()));
                 if constexpr (enable_packet_header_recording) {
                     tt::fabric::validate(*packet_header);
-                    packet_header_recorder.record_packet_header(packet_header);
+                    packet_header_recorder.record_packet_header(reinterpret_cast<volatile uint32_t*>(packet_header));
                 }
                 send_next_data(
                     local_sender_channel,
@@ -780,9 +805,9 @@ FORCE_INLINE void run_receiver_channel_step(
     bool unwritten_packets = !wr_sent_ptr.is_caught_up_to(ack_ptr);
     if (unwritten_packets) {
         auto receiver_buffer_index = wr_sent_ptr.get_buffer_index();
-        volatile auto packet_header = local_receiver_channel.get_packet_header(receiver_buffer_index);
+        volatile auto packet_header = local_receiver_channel.template get_packet_header<PACKET_HEADER_TYPE>(receiver_buffer_index);
 
-        tt::fabric::RoutingFields cached_routing_fields = const_cast<tt::fabric::PacketHeader*>(packet_header)->routing_fields;
+        ROUTING_FIELDS_TYPE cached_routing_fields = const_cast<PACKET_HEADER_TYPE*>(packet_header)->routing_fields;
         bool can_send_to_all_local_chip_receivers =
             can_forward_packet_completely(
                 cached_routing_fields, downstream_edm_interface);
@@ -1054,14 +1079,14 @@ void kernel_main() {
 
     std::array<PacketHeaderRecorder, NUM_SENDER_CHANNELS> sender_channel_packet_recorders{
         PacketHeaderRecorder(
-            reinterpret_cast<volatile tt::fabric::PacketHeader *>(sender_0_completed_packet_header_cb_address),
+            reinterpret_cast<volatile uint32_t *>(sender_0_completed_packet_header_cb_address),
             sender_0_completed_packet_header_cb_size_headers),
         PacketHeaderRecorder(
-            reinterpret_cast<volatile tt::fabric::PacketHeader *>(sender_1_completed_packet_header_cb_address),
+            reinterpret_cast<volatile uint32_t *>(sender_1_completed_packet_header_cb_address),
             sender_1_completed_packet_header_cb_size_headers)
     };
     PacketHeaderRecorder receiver_channel_packet_recorder(
-        reinterpret_cast<volatile tt::fabric::PacketHeader *>(receiver_completed_packet_header_cb_address),
+        reinterpret_cast<volatile uint32_t *>(receiver_completed_packet_header_cb_address),
         receiver_completed_packet_header_cb_size_headers);
 
     static_assert(SENDER_NUM_BUFFERS > 0, "compile time argument [1]: SENDER_NUM_BUFFERS must be > 0");
@@ -1178,14 +1203,14 @@ void kernel_main() {
     auto local_receiver_channel = tt::fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>(
         local_receiver_channel_buffer_address,
         channel_buffer_size,
-        tt::fabric::header_size_bytes,
+        sizeof(PACKET_HEADER_TYPE),
         eth_transaction_ack_word_addr,  // Assume for receiver channel, this address points to a chunk of memory that
                                         // can fit 2 eth_channel_syncs cfor ack
         receiver_channel_id);
     auto remote_receiver_channel = tt::fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>(
         remote_receiver_channel_buffer_address,
         channel_buffer_size,
-        tt::fabric::header_size_bytes,
+        sizeof(PACKET_HEADER_TYPE),
         eth_transaction_ack_word_addr,  // Assume for receiver channel, this address points to a chunk of memory that
                                         // can fit 2 eth_channel_syncs cfor ack
         receiver_channel_id);
@@ -1196,13 +1221,13 @@ void kernel_main() {
         new (&local_sender_channels[i]) tt::fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>(
             local_sender_buffer_addresses[i],
             channel_buffer_size,
-            tt::fabric::header_size_bytes,
+            sizeof(PACKET_HEADER_TYPE),
             0,  // For sender channels there is no eth_transaction_ack_word_addr because they don't send acks
             i);
         new (&remote_sender_channels[i]) tt::fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>(
             remote_sender_buffer_addresses[i],
             channel_buffer_size,
-            tt::fabric::header_size_bytes,
+            sizeof(PACKET_HEADER_TYPE),
             0,  // For sender channels there is no eth_transaction_ack_word_addr because they don't send acks
             i);
 

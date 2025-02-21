@@ -28,7 +28,7 @@ FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
     uint32_t payload_size_bytes) {
     const size_t payload_l1_address = l1_read_addr;
 
-    auto pkt_hdr = reinterpret_cast<volatile tt::fabric::PacketHeader*>(packet_header_buffer_addr);
+    auto pkt_hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_buffer_addr);
 #ifdef DEBUG_PRINT_ENABLED
     pkt_hdr->reserved2 = my_chip_id;
 #endif
@@ -44,7 +44,7 @@ FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
             pkt_hdr->to_chip_unicast(unicast_args.distance_in_hops);
             fabric_conn.wait_for_empty_write_slot();
             fabric_conn.send_payload_without_header_non_blocking_from_address(l1_read_addr, payload_size_bytes);
-            fabric_conn.send_payload_flush_blocking_from_address((uint32_t)pkt_hdr, sizeof(tt::fabric::PacketHeader));
+            fabric_conn.send_payload_flush_blocking_from_address((uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
         } break;
         case ttnn::ccl::cmd::CclCommandDestType::CHIP_MULTICAST: {
             noc_async_write(
@@ -57,7 +57,7 @@ FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
                 fabric_connection.get_forward_connection().send_payload_without_header_non_blocking_from_address(
                     l1_read_addr, payload_size_bytes);
                 fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
-                    (uint32_t)pkt_hdr, sizeof(tt::fabric::PacketHeader));
+                    (uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
             }
 
             if (fabric_connection.has_backward_connection()) {
@@ -67,7 +67,7 @@ FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
                 fabric_connection.get_backward_connection().send_payload_without_header_non_blocking_from_address(
                     l1_read_addr, payload_size_bytes);
                 fabric_connection.get_backward_connection().send_payload_flush_blocking_from_address(
-                    (uint32_t)pkt_hdr, sizeof(tt::fabric::PacketHeader));
+                    (uint32_t)pkt_hdr, sizeof(PACKET_HEADER_TYPE));
             }
         } break;
         default: {
@@ -87,8 +87,8 @@ FORCE_INLINE void write_payload_then_advance_read_address(
     size_t& l1_read_addr,
     size_t payload_size_bytes) {
     static_assert(
-        ((sizeof(tt::fabric::PacketHeader) - 1) & sizeof(tt::fabric::PacketHeader)) == 0,
-        "sizeof(sizeof(tt::fabric::PacketHeader)) is not a power of two which violates the below assertion");
+        is_power_of_2(sizeof(PACKET_HEADER_TYPE)),
+        "sizeof(tt::fabric::PacketHeader) is not a power of two which violates the below assertion");
 
     switch (current_cmd_header.dest_type) {
         case ttnn::ccl::cmd::CclCommandDestType::CHIP_UNICAST: [[fallthrough]];
