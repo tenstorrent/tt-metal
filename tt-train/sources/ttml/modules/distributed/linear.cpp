@@ -93,10 +93,10 @@ autograd::TensorPtr ColumnParallelLinear::operator()(autograd::TensorPtr tensor)
 void ColumnParallelLinear::initialize_tensors(uint32_t in_features, uint32_t out_features, bool has_bias) {
     auto* device = &autograd::ctx().get_device();
     auto num_devices = static_cast<uint32_t>(device->num_devices());
-    if (in_features % num_devices != 0) {
+    if (out_features % num_devices != 0) {
         throw std::runtime_error(fmt::format(
-            "Input features must be divisible by the number of devices. Input features = {}, devices = {}",
-            in_features,
+            "Output features must be divisible by the number of devices. Output features = {}, devices = {}",
+            out_features,
             num_devices));
     }
 
