@@ -248,6 +248,7 @@ def get_job_row_from_github_job(github_job, github_job_id_to_annotations):
 
     # skipped jobs are considered passing jobs (nothing was run)
     job_success = github_job["conclusion"] in ["success", "skipped"]
+    job_status = github_job["conclusion"]
 
     is_build_job = "build" in name or "build" in labels
 
@@ -274,6 +275,7 @@ def get_job_row_from_github_job(github_job, github_job_id_to_annotations):
         "job_start_ts": job_start_ts,
         "job_end_ts": job_end_ts,
         "job_success": job_success,
+        "job_status": job_status,
         "is_build_job": is_build_job,
         "job_matrix_config": job_matrix_config,
         "docker_image": docker_image,
