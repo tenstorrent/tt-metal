@@ -55,6 +55,17 @@ struct DeviceStorage {
     const auto attribute_values() const { return std::make_tuple(this->memory_config()); }
 
     bool is_allocated() const;
+    distributed::MeshBuffer* get_mesh_buffer() const {
+        TT_FATAL(mesh_buffer != nullptr, "Mesh buffer is not allocated");
+        return mesh_buffer.get();
+    }
+    IDevice* get_device() const {
+        if (mesh_buffer != nullptr) {
+            return mesh_buffer->device();
+        }
+        TT_FATAL(buffer != nullptr, "Buffer is not allocated");
+        return buffer->device();
+    }
 };
 
 using BorrowedBuffer = std::variant<

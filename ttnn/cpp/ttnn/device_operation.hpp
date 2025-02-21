@@ -293,7 +293,6 @@ void launch_on_worker_thread(auto cq_id, auto device_operation_id, const auto& o
     };
 
     if (is_program_cache_enabled) {
-        TT_THROW("Program cache not yet supported");
         auto& program = create_or_get_program_from_cache<device_operation_t>(
             program_cache, program_cache_hit, program_hash, operation_attributes, tensor_args, tensor_return_value);
 
@@ -332,14 +331,27 @@ void launch_on_worker_thread(auto cq_id, auto device_operation_id, const auto& o
         if(tt::tt_metal::GraphTracker::instance().hook_program(program.get())) {
             return;
         }
-        auto mesh_device = dynamic_cast<tt::tt_metal::distributed::MeshDevice*>(device);
-        auto& cq = mesh_device->mesh_command_queue();
-        auto mesh_workload = tt::tt_metal::distributed::CreateMeshWorkload();
-        auto mesh_shape = mesh_device->shape();
-        tt::tt_metal::distributed::AddProgramToMeshWorkload(
-            mesh_workload, *program, LogicalDeviceRange({0, 0}, {mesh_shape.num_cols - 1, mesh_shape.num_rows - 1}));
-        tt::tt_metal::distributed::EnqueueMeshWorkload(cq, mesh_workload, true);
+        if (auto mesh_device = dynamic_cast<tt::tt_metal::distributed::MeshDevice*>(device); mesh_device != nullptr) {
+            auto& cq = mesh_device->mesh_command_queue();
+            auto mesh_workload = tt::tt_metal::distributed::CreateMeshWorkload();
+            auto mesh_shape = mesh_device->shape();
+            tt::tt_metal::distributed::AddProgramToMeshWorkload(
+                mesh_workload,
+                *program,
+                LogicalDeviceRange({0, 0}, {mesh_shape.num_cols - 1, mesh_shape.num_rows - 1}));
+            tt::tt_metal::distributed::EnqueueMeshWorkload(cq, mesh_workload, true);
+        } else {
+            enqueue_or_launch_program(*program);
 
+            TracyOpTTNNDevice(
+                device_operation_t{},
+                device_operation_id,
+                device->id(),
+                *program,
+                operation_attributes,
+                tensor_args,
+                tensor_return_value);
+        }
     }
 }
 

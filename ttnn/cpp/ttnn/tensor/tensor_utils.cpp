@@ -142,6 +142,7 @@ Tensor get_shard_for_device(const Tensor& tensor, IDevice* target_device, std::o
                     DeviceStorage{s.get_buffer_for_device(target_device)}, s.get_tensor_spec_for_device(target_device)};
             } else {
             */
+            // TODO(jchu): Handle buffer_index.
             if constexpr (std::is_same_v<T, MultiDeviceHostStorage>) {
                 return Tensor{
                     OwnedStorage{s.get_buffer(buffer_index.value())}, s.get_tensor_spec(buffer_index.value())};

@@ -168,26 +168,16 @@ DistributedTensorConfig get_distributed_tensor_config_from_tensor(const Tensor& 
 }
 
 Tensor get_device_tensor(const Tensor& multi_device_tensor, const int device_id) {
-    /*
-    if (const auto* tensor_storage = std::get_if<MultiDeviceStorage>(&multi_device_tensor.get_storage());
-        tensor_storage != nullptr && tensor_storage->has_buffer_for_device_id(device_id)) {
-        TT_THROW("TODO(jchu): Not implemented");
-        tensor_storage != nullptr && tensor_storage->has_buffer_for_device_id(device_id)) {
-        return Tensor{
-            DeviceStorage{tensor_storage->get_buffer_for_device_id(device_id)},
-            TensorSpec(
-                multi_device_tensor.get_logical_shape(),
-                TensorLayout::fromPaddedShape(
-                    multi_device_tensor.get_dtype(),
-                    PageConfig(multi_device_tensor.get_layout()),
-                    MemoryConfig{},
-                    multi_device_tensor.get_logical_shape(),
-                    multi_device_tensor.get_padded_shape()))};
-        }
-        else
-    */
     if (std::holds_alternative<tt::tt_metal::DeviceStorage>(multi_device_tensor.get_storage())) {
-        return multi_device_tensor;
+        const auto& device_storage = std::get<tt::tt_metal::DeviceStorage>(multi_device_tensor.get_storage());
+
+        auto* mesh_device = multi_device_tensor.mesh_device();
+        auto* mesh_buffer = device_storage.get_mesh_buffer();
+        auto mesh_coordinate = mesh_device->get_view().find_device(device_id);
+
+        auto device_buffer = mesh_buffer->get_device_buffer(mesh_coordinate);
+        auto tensor_spec = multi_device_tensor.get_tensor_spec();
+        return Tensor{DeviceStorage{device_buffer}, tensor_spec};
     }
 
     TT_THROW("User is trying to access a device tensor that is not on device.");

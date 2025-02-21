@@ -144,10 +144,10 @@ void Tensor::init(Storage storage, TensorSpec tensor_spec) {
         [&](auto&& storage) {
             using StorageType = std::decay_t<decltype(storage)>;
             if constexpr (std::is_same_v<StorageType, DeviceStorage>) {
-                TT_ASSERT(storage.mesh_buffer->device() != nullptr);
-                mesh_device_ = storage.mesh_buffer->device();
-
-                workers = {storage.mesh_buffer->device()};
+                if (storage.mesh_buffer != nullptr) {
+                    mesh_device_ = storage.mesh_buffer->device();
+                }
+                workers = {storage.get_device()};
                 tensor_impl::validate_on_device_dtype_and_layout(
                     tensor_attributes->tensor_spec.padded_shape(),
                     tensor_attributes->tensor_spec.data_type(),

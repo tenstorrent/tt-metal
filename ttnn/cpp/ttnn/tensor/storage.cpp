@@ -32,20 +32,21 @@ DeviceStorage::DeviceStorage(std::shared_ptr<distributed::MeshBuffer> mesh_buffe
     mesh_buffer(std::move(mesh_buffer_)) {}
 
 void DeviceStorage::insert_buffer(const std::shared_ptr<Buffer>& buffer_) {
-    // this->buffer = buffer_;
-    TT_THROW("insert_buffer not implemented for mesh buffer");
+    tt::log_warning("insert_buffer not implemented for mesh buffer");
+    this->buffer = buffer_;
 }
 
 std::shared_ptr<Buffer> DeviceStorage::get_buffer() const {
     if (this->mesh_buffer.get() == nullptr) {
-        TT_THROW("get_buffer not implemented for mesh buffer");
+        TT_FATAL(this->buffer != nullptr, "Buffer is not allocated");
+        return this->buffer;
     }
     return this->mesh_buffer->get_device_buffer(tt::tt_metal::distributed::MeshCoordinate(0, 0));
 }
 
 bool DeviceStorage::is_allocated() const {
     if (this->mesh_buffer.get() == nullptr) {
-        TT_THROW("is_allocated not implemented for mesh buffer");
+        return this->buffer != nullptr && this->buffer->is_allocated();
     }
     return this->mesh_buffer->is_allocated();
 }
