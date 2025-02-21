@@ -1,5 +1,5 @@
 
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -19,7 +19,7 @@ inline bool needs_typecast_to_bfloat16(const Tensor& input) {
 }
 
 Tensor Hypot::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const std::optional<MemoryConfig>& memory_config,

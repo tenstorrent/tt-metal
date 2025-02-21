@@ -1,5 +1,5 @@
 
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -14,7 +14,7 @@ namespace ttnn::operations::binary_ng {
 
 struct Hypot {
     static Tensor invoke(
-        uint8_t queue_id,
+        QueueId queue_id,
         const Tensor& input_tensor_a,
         const Tensor& input_tensor_b,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,

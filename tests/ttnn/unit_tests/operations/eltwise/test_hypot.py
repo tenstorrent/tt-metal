@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -140,25 +140,22 @@ def test_device_hypot_invalid_bcast(a_shape, b_shape, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-@pytest.mark.parametrize(
-    "dtype",
-    ([ttnn.float32]),
-)
-def test_device_hypot_sfpu_no_bcast(input_shapes, dtype, device):
+
+def test_device_hypot_sfpu_no_bcast(input_shapes, device):
     torch.manual_seed(0)
-    a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.float32), dtype)(input_shapes)
-    b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.float32), dtype)(input_shapes)
+    a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.float32), ttnn.float32)(input_shapes)
+    b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.float32), ttnn.float32)(input_shapes)
 
     a_tt = ttnn.from_torch(
         a_pt,
-        dtype=dtype,
+        dtype=ttnn.float32,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     b_tt = ttnn.from_torch(
         b_pt,
-        dtype=dtype,
+        dtype=ttnn.float32,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -183,25 +180,22 @@ def test_device_hypot_sfpu_no_bcast(input_shapes, dtype, device):
         (torch.Size([5, 1, 1, 64]), torch.Size([1, 3, 128, 1])),
     ),
 )
-@pytest.mark.parametrize(
-    "dtype",
-    ([ttnn.float32]),
-)
-def test_device_hypot_sfpu_scalar(a_shape, b_shape, dtype, device):
+
+def test_device_hypot_sfpu_scalar(a_shape, b_shape, device):
     torch.manual_seed(0)
-    a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.float32), dtype)(a_shape)
-    b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.float32), dtype)(b_shape)
+    a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.float32), ttnn.float32)(a_shape)
+    b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.float32), ttnn.float32)(b_shape)
 
     a_tt = ttnn.from_torch(
         a_pt,
-        dtype=dtype,
+        dtype=ttnn.float32,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     b_tt = ttnn.from_torch(
         b_pt,
-        dtype=dtype,
+        dtype=ttnn.float32,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -224,25 +218,22 @@ def test_device_hypot_sfpu_scalar(a_shape, b_shape, dtype, device):
         (torch.Size([2, 3, 5, 4]), torch.Size([2, 3, 1, 4])),  # ROW_B
     ),
 )
-@pytest.mark.parametrize(
-    "dtype",
-    ([ttnn.float32]),
-)
-def test_device_hypot_sfpu_bcast_row(a_shape, b_shape, dtype, device):
+
+def test_device_hypot_sfpu_bcast_row(a_shape, b_shape, device):
     torch.manual_seed(0)
-    a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.float32), dtype)(a_shape)
-    b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.float32), dtype)(b_shape)
+    a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.float32), ttnn.float32)(a_shape)
+    b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.float32), ttnn.float32)(b_shape)
 
     a_tt = ttnn.from_torch(
         a_pt,
-        dtype=dtype,
+        dtype=ttnn.float32,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     b_tt = ttnn.from_torch(
         b_pt,
-        dtype=dtype,
+        dtype=ttnn.float32,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -265,25 +256,22 @@ def test_device_hypot_sfpu_bcast_row(a_shape, b_shape, dtype, device):
         (torch.Size([2, 3, 5, 4]), torch.Size([2, 3, 5, 1])),  # COL_B
     ),
 )
-@pytest.mark.parametrize(
-    "dtype",
-    ([ttnn.float32]),
-)
-def test_device_hypot_sfpu_bcast_col(a_shape, b_shape, dtype, device):
+
+def test_device_hypot_sfpu_bcast_col(a_shape, b_shape, device):
     torch.manual_seed(0)
-    a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.float32), dtype)(a_shape)
-    b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.float32), dtype)(b_shape)
+    a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.float32), ttnn.float32)(a_shape)
+    b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.float32), ttnn.float32)(b_shape)
 
     a_tt = ttnn.from_torch(
         a_pt,
-        dtype=dtype,
+        dtype=ttnn.float32,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     b_tt = ttnn.from_torch(
         b_pt,
-        dtype=dtype,
+        dtype=ttnn.float32,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -307,25 +295,22 @@ def test_device_hypot_sfpu_bcast_col(a_shape, b_shape, dtype, device):
         (torch.Size([5, 1, 1, 64]), torch.Size([2, 3, 128, 1])),
     ),
 )
-@pytest.mark.parametrize(
-    "dtype",
-    ([ttnn.float32]),
-)
-def test_device_hypot_sfpu_invalid_bcast(a_shape, b_shape, dtype, device):
+
+def test_device_hypot_sfpu_invalid_bcast(a_shape, b_shape, device):
     torch.manual_seed(0)
-    a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.float32), dtype)(a_shape)
-    b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.float32), dtype)(b_shape)
+    a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.float32), ttnn.float32)(a_shape)
+    b_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.float32), ttnn.float32)(b_shape)
 
     a_tt = ttnn.from_torch(
         a_pt,
-        dtype=dtype,
+        dtype=ttnn.float32,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     b_tt = ttnn.from_torch(
         b_pt,
-        dtype=dtype,
+        dtype=ttnn.float32,
         device=device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
