@@ -66,6 +66,10 @@ int main() {
     WAYPOINT("I");
     do_crt1((uint32_t*)eth_l1_mem::address_map::MEM_ERISC_INIT_LOCAL_L1_BASE_SCRATCH);
 
+    volatile tt_l1_ptr uint32_t* debug_addr_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE);
+    debug_addr_ptr[0] = 0xDEADDEAD;
+
     // put this into scratch space similar to idle erisc
     noc_bank_table_init(eth_l1_mem::address_map::ERISC_MEM_BANK_TO_NOC_SCRATCH);
 
@@ -138,6 +142,7 @@ int main() {
                 WAYPOINT("D");
             }
 
+            WAYPOINT("HERE");
             mailboxes->go_message.signal = RUN_MSG_DONE;
 
             // Notify dispatcher core that it has completed

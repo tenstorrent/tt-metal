@@ -562,7 +562,7 @@ TEST_F(DeviceFixture, ActiveEthKernelsDirectSendAllConnectedChips) {
     }
 }
 
-TEST_F(N300DeviceFixture, ActiveEthKernelsBidirectionalDirectSend) {
+TEST_F(TwoDeviceFixture, ActiveEthKernelsBidirectionalDirectSend) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const auto& device_0 = devices_.at(0);
     const auto& device_1 = devices_.at(1);
@@ -656,7 +656,7 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsBidirectionalDirectSend) {
     }
 }
 
-TEST_F(N300DeviceFixture, ActiveEthKernelsRepeatedDirectSends) {
+TEST_F(TwoDeviceFixture, ActiveEthKernelsRepeatedDirectSends) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const auto& device_0 = devices_.at(0);
     const auto& device_1 = devices_.at(1);
@@ -691,7 +691,7 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsRepeatedDirectSends) {
     }
 }
 
-TEST_F(N300DeviceFixture, ActiveEthKernelsRandomDirectSendTests) {
+TEST_F(TwoDeviceFixture, ActiveEthKernelsRandomDirectSendTests) {  // floating point?
     using namespace CMAKE_UNIQUE_NAMESPACE;
     srand(0);
     const auto& device_0 = devices_.at(0);
@@ -736,7 +736,7 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsRandomDirectSendTests) {
             receiver_core));
     }
 }
-TEST_F(N300DeviceFixture, ActiveEthKernelsRandomEthPacketSizeDirectSendTests) {
+TEST_F(TwoDeviceFixture, ActiveEthKernelsRandomEthPacketSizeDirectSendTests) {  // floating point exception
     srand(0);
     const auto& device_0 = devices_.at(0);
     const auto& device_1 = devices_.at(1);
@@ -758,10 +758,15 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsRandomEthPacketSizeDirectSendTests) {
             auto it = connectivity.begin();
             std::advance(it, rand() % (connectivity.size()));
 
+            std::cout << "HERE -1" << std::endl;
+
             const auto& send_chip = devices_.at(std::get<0>(it->first));
             CoreCoord sender_core = std::get<1>(it->first);
+            std::cout << "send chip " << std::get<0>(it->first) << " sender core " << sender_core.str() << std::endl;
             const auto& receiver_chip = devices_.at(std::get<0>(it->second));
             CoreCoord receiver_core = std::get<1>(it->second);
+
+            std::cout << "HERE 0" << std::endl;
 
             const size_t src_eth_l1_byte_address = unit_tests::erisc::direct_send::get_rand_32_byte_aligned_address(
                 eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE,
@@ -775,6 +780,8 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsRandomEthPacketSizeDirectSendTests) {
                             num_bytes_per_send;
             int num_words = rand() % max_words + 1;
 
+            std::cout << "HERE" << std::endl;
+
             ASSERT_TRUE(unit_tests::erisc::direct_send::eth_direct_sender_receiver_kernels(
                 static_cast<DispatchFixture*>(this),
                 send_chip,
@@ -785,6 +792,8 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsRandomEthPacketSizeDirectSendTests) {
                 sender_core,
                 receiver_core,
                 num_bytes_per_send));
+
+            std::cout << "Done first iter" << std::endl;
         }
     }
 }
