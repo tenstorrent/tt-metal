@@ -199,7 +199,7 @@ void bind_hypot(
                const Tensor& input_tensor_b,
                const std::optional<Tensor>& output_tensor,
                const std::optional<MemoryConfig>& memory_config,
-               const uint8_t& queue_id) {
+               QueueId queue_id) -> ttnn::Tensor {
                 return self(queue_id, input_tensor_a, input_tensor_b, memory_config, output_tensor);
             },
             py::arg("input_tensor_a"),
@@ -207,89 +207,7 @@ void bind_hypot(
             py::kw_only(),
             py::arg("output_tensor") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
-            py::arg("queue_id") = 0});
-}
-
-template <typename T>
-void bind_hypot(
-    py::module& module,
-    const T& operation,
-    const std::string& description,
-    const std::string& math,
-    const std::string& supported_dtype = "BFLOAT16",
-    const std::string& supported_rank = "2, 3, 4",
-    const std::string& example_tensor1 =
-        "ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)",
-    const std::string& example_tensor2 =
-        "ttnn.from_torch(torch.tensor([[1, 2], [3, 4]], dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)",
-    const std::string& note = "") {
-    auto doc = fmt::format(
-        R"doc(
-        {2}
-
-        .. math::
-            {3}
-
-        Args:
-            input_tensor_a (ttnn.Tensor): the input tensor.
-            input_tensor_b (ttnn.Tensor): the input tensor.
-
-        Keyword args:
-            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
-
-        Returns:
-            ttnn.Tensor: the output tensor.
-
-        Note:
-            Supported dtypes, layouts, and ranks:
-
-            .. list-table::
-               :header-rows: 1
-
-               * - Dtypes
-                 - Layouts
-                 - Ranks
-               * - {4}
-                 - TILE
-                 - {5}
-
-            {8}
-
-        Example:
-            >>> tensor1 = {6}
-            >>> tensor2 = {7}
-            >>> output = {1}(tensor1, tensor2)
-        )doc",
-
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
-        description,
-        math,
-        supported_dtype,
-        supported_rank,
-        example_tensor1,
-        example_tensor2,
-        note);
-
-    bind_registered_operation(
-        module,
-        operation,
-        doc,
-        ttnn::pybind_overload_t{
-            [](const T& self,
-               const Tensor& input_tensor_a,
-               const Tensor& input_tensor_b,
-               const std::optional<Tensor>& output_tensor,
-               const std::optional<MemoryConfig>& memory_config,
-               const uint8_t& queue_id) {
-                return self(queue_id, input_tensor_a, input_tensor_b, memory_config, output_tensor);
-            },
-            py::arg("input_tensor_a"),
-            py::arg("input_tensor_b"),
-            py::kw_only(),
-            py::arg("output_tensor") = std::nullopt,
-            py::arg("memory_config") = std::nullopt,
-            py::arg("queue_id") = 0});
+            py::arg("queue_id") = DefaultQueueId});
 }
 
 template <typename T>
