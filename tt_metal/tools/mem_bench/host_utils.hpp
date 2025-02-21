@@ -6,10 +6,12 @@
 
 #include <span>
 #include <vector>
-#include <atomic>
+#include <condition_variable>
+#include <mutex>
 #include <thread>
 #include <tt-metalium/memcpy.hpp>
 #include <tt-metalium/tt_align.hpp>
+// #include "work_thread.hpp"
 
 namespace tt::tt_metal::tools::mem_bench {
 
@@ -78,82 +80,6 @@ double copy_to_hugepage(
     auto end = get_current_time_seconds();
 
     return end - start;
-}
-
-// Copy data to hugepage with N threads to try saturating bandwidth.
-// The total size of src_data to be copied to hugepage is split equally to the threads.
-// Returns time taken in seconds for all copies to complete. Time is calculated by latest thread end - earliest thread
-// start.
-template <bool fence = false>
-double copy_to_hugepage_threaded(
-    void* hugepage_base,
-    uint32_t hugepage_size,
-    std::span<uint32_t> src_data,
-    size_t total_size,
-    size_t page_size,
-    bool repeating_src_vector,
-    int num_threads) {
-    using namespace tt::tt_metal;
-    static_assert((MEMCPY_ALIGNMENT & ((MEMCPY_ALIGNMENT)-1)) == 0);
-    const auto bytes_per_thread = ((total_size / num_threads) + (MEMCPY_ALIGNMENT)-1) & -(MEMCPY_ALIGNMENT);
-    const auto last_thread_bytes = total_size - (bytes_per_thread * (num_threads - 1));
-
-    std::vector<double> thread_durations(num_threads);
-    std::vector<double> thread_start_times(num_threads);
-    std::vector<double> thread_end_times(num_threads);
-    std::vector<std::thread> threads(num_threads);
-    std::atomic<bool> start_flag{false};
-    std::atomic<int> threads_ready{0};
-
-    // Push back threads
-    for (int i = 0; i < num_threads; ++i) {
-        threads[i] = std::thread([i,
-                                  &threads_ready,
-                                  &start_flag,
-                                  bytes_per_thread,
-                                  hugepage_base,
-                                  hugepage_size,
-                                  repeating_src_vector,
-                                  page_size,
-                                  num_threads,
-                                  last_thread_bytes,
-                                  &src_data,
-                                  &thread_durations,
-                                  &thread_start_times,
-                                  &thread_end_times]() {
-            // Slice of the source data for this thread
-            uint64_t thread_dst = (uint64_t)hugepage_base + (i * bytes_per_thread);
-            uint64_t thread_bytes = (i == num_threads - 1) ? last_thread_bytes : bytes_per_thread;
-            std::span<uint32_t> thread_src{src_data};
-            thread_src = thread_src.subspan((i * bytes_per_thread) / sizeof(uint32_t), thread_bytes / sizeof(uint32_t));
-
-            threads_ready++;
-
-            // Wait to start
-            while (!start_flag.load()) {
-                std::this_thread::yield();
-            }
-
-            thread_start_times[i] = get_current_time_seconds();
-            thread_durations[i] = copy_to_hugepage<fence>(
-                (void*)thread_dst, hugepage_size, thread_src, thread_bytes, page_size, repeating_src_vector);
-            thread_end_times[i] = get_current_time_seconds();
-        });
-    }
-
-    while (threads_ready.load() < num_threads) {
-        std::this_thread::yield();
-    }
-
-    start_flag.store(true);
-    for (auto& thread : threads) {
-        thread.join();
-    }
-
-    double earliest_start = *std::min_element(thread_start_times.begin(), thread_start_times.end());
-    double latest_end = *std::max_element(thread_end_times.begin(), thread_end_times.end());
-
-    return latest_end - earliest_start;
 }
 
 };  // namespace tt::tt_metal::tools::mem_bench

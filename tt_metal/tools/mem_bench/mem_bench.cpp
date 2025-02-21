@@ -100,6 +100,7 @@ TestResult mem_bench_page_sizing(benchmark::State& state) {
 // Benchmark memcpy_to_device on multiple threads to try saturating host bandwidth.
 // Reports host bw.
 TestResult mem_bench_copy_multithread(benchmark::State& state) {
+    static_assert((MEMCPY_ALIGNMENT & ((MEMCPY_ALIGNMENT)-1)) == 0);
     constexpr uint32_t k_DeviceId = 0;
     TestResult results;
     Context ctx{
@@ -114,11 +115,23 @@ TestResult mem_bench_copy_multithread(benchmark::State& state) {
     };
     auto src_data = generate_random_src_data(ctx.total_size);
     auto hugepage = get_hugepage(0, 0);
-    auto hugepage_size = get_hugepage_size(0);
+    const auto hugepage_size = get_hugepage_size(0);
+    const auto bytes_per_thread = ((ctx.total_size / ctx.threads) + (MEMCPY_ALIGNMENT)-1) & -(MEMCPY_ALIGNMENT);
+    const auto last_thread_bytes = ctx.total_size - (bytes_per_thread * (ctx.threads - 1));
 
     for (auto _ : state) {
-        auto iteration_time = copy_to_hugepage_threaded(
-            hugepage, hugepage_size, src_data, ctx.total_size, ctx.page_size, false, ctx.threads);
+        auto iteration_time = execute_work_synced_start(
+            ctx.threads,
+            [&](int thread_idx) {
+                uint64_t thread_dst = (uint64_t)hugepage + (thread_idx * bytes_per_thread);
+                uint64_t thread_bytes = (thread_idx == ctx.threads - 1) ? last_thread_bytes : bytes_per_thread;
+                std::span<uint32_t> thread_src{src_data};
+                thread_src = thread_src.subspan(
+                    (thread_idx * bytes_per_thread) / sizeof(uint32_t), thread_bytes / sizeof(uint32_t));
+                copy_to_hugepage<false>(
+                    (void*)thread_dst, hugepage_size, thread_src, thread_bytes, ctx.page_size, false);
+            },
+            []() {});
 
         results.host_bytes_processed += ctx.total_size;
         results.host_time_elapsed += iteration_time;
@@ -289,6 +302,9 @@ TestResult mem_bench_multi_mmio_devices(
         for (auto& [device_id, core_range] : configured_core_ranges) {
             read_inc_data_from_cores(ctx, devices.at(device_id), core_range, results);
         }
+
+        // This test does not report host bw
+        state.SetIterationTime(1);
     }
 
     state.SetBytesProcessed(0);
@@ -489,6 +505,9 @@ void print_help() {
     ::benchmark::PrintDefaultHelp();
     std::cout << "          [--help] Shows this help message\n";
     std::cout << "          [--full] Run all tests\n";
+    std::cout << "\nCounters\n";
+    std::cout << "          bytes_per_second: Aggregate Host copy to hugepage bandwidth. 0 if not measured.\n";
+    std::cout << "          dev_bw: Average device core PCIe pull bandwidth. 0 if not measured.\n";
 }
 
 int main(int argc, char* argv[]) {
@@ -501,6 +520,8 @@ int main(int argc, char* argv[]) {
     // Force TT_METAL options
     setenv("TT_METAL_SLOW_DISPATCH_MODE", "true", true);
     setenv("TT_METAL_CLEAR_L1", "1", true);
+    // May be overridden by the user
+    setenv("TT_METAL_LOGGER_LEVEL", "FATAL", false);
 
     char arg0_default[] = "benchmark";
     char* args_default = arg0_default;
@@ -514,7 +535,7 @@ int main(int argc, char* argv[]) {
 
     // Run all benchmarks
     if (test_args::has_command_option(input_args, "--full")) {
-        // register_full_benchmark_suite();
+        register_full_benchmark_suite();
     }
 
     ::benchmark::Initialize(&argc, argv);

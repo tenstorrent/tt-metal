@@ -47,7 +47,7 @@ std::vector<int> get_mmio_device_ids(int number_of_devices, int numa_node) {
     std::vector<int> device_ids;
 
     // Assumes PCIe device IDs are iterated first
-    for (int device_id = 0; device_id < pcie_devices; ++device_id) {
+    for (int device_id = 0; device_id < pcie_devices && device_ids.size() < number_of_devices; ++device_id) {
         // Not an MMIO device
         if (cluster.get_associated_mmio_device(device_id) != device_id) {
             continue;
@@ -56,10 +56,6 @@ std::vector<int> get_mmio_device_ids(int number_of_devices, int numa_node) {
         auto associated_node = cluster.get_numa_node_for_device(device_id);
         if (numa_node == -1 || associated_node == numa_node) {
             device_ids.push_back(device_id);
-
-            if (device_ids.size() >= number_of_devices) {
-                break;
-            }
         }
     }
 
@@ -72,15 +68,11 @@ std::vector<int> get_mmio_device_ids_unique_nodes(int number_of_devices) {
     std::vector<int> device_ids;
     std::unordered_set<uint32_t> numa_nodes;
 
-    for (int device_id = 0; device_id < pcie_devices; ++device_id) {
+    for (int device_id = 0; device_id < pcie_devices && device_ids.size() < number_of_devices; ++device_id) {
         auto associated_node = cluster.get_numa_node_for_device(device_id);
         if (!numa_nodes.contains(associated_node)) {
             device_ids.push_back(device_id);
             numa_nodes.insert(associated_node);
-
-            if (numa_nodes.size() >= number_of_devices) {
-                break;
-            }
         }
     }
 

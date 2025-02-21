@@ -7,36 +7,43 @@
 #include <span>
 #include <chrono>
 #include <vector>
-#include <atomic>
 #include <thread>
+#include <condition_variable>
+#include <mutex>
 #include "host_utils.hpp"
 
 namespace tt::tt_metal::tools::mem_bench {
 
-// Execute work_fn on num_threads threads and do intermediate_fn on the calling thread
+// Execute work_fn on num_threads threads and also do intermediate_fn on the side.
 // Returns time taken in seconds for all work_fn to complete. Time is calculated by latest thread end - earliest thread
 // start.
 template <typename F, typename IntermediateF, typename... Args>
 double execute_work_synced_start(int num_threads, F&& work_fn, IntermediateF&& intermediate_fn, Args&&... args) {
+    std::mutex m;
+    int threads_ready{0};
+    std::condition_variable go_cv;         // Signal to all threads to go
+    auto total_threads = num_threads + 1;  // Including intermediate
     std::vector<double> thread_start_times(num_threads);
     std::vector<double> thread_end_times(num_threads);
-    std::vector<std::thread> threads(num_threads);
-    std::atomic<bool> start_flag{false};
-    std::atomic<int> threads_ready{0};
+    std::vector<std::thread> threads(total_threads);
 
     for (int i = 0; i < num_threads; ++i) {
         threads[i] = std::thread([i,
+                                  &m,
+                                  &go_cv,
                                   &threads_ready,
-                                  &start_flag,
                                   &thread_start_times,
                                   &thread_end_times,
+                                  total_threads,
                                   work_fn = std::forward<F>(work_fn),
                                   ... args = std::forward<Args>(args)]() mutable {
-            threads_ready++;
-
-            // Wait for start signal
-            while (!start_flag.load()) {
-                std::this_thread::yield();
+            {
+                std::unique_lock lk{m};
+                threads_ready++;
+                if (threads_ready == total_threads) {
+                    go_cv.notify_all();
+                }
+                go_cv.wait(lk, [&] { return threads_ready == total_threads; });
             }
 
             thread_start_times[i] = get_current_time_seconds();
@@ -45,13 +52,16 @@ double execute_work_synced_start(int num_threads, F&& work_fn, IntermediateF&& i
         });
     }
 
-    while (threads_ready.load() < num_threads) {
-        std::this_thread::yield();
-    }
+    threads[num_threads] = std::thread([&]() mutable {
+        std::unique_lock lk{m};
+        threads_ready++;
+        if (threads_ready == total_threads) {
+            go_cv.notify_all();
+        }
+        go_cv.wait(lk, [&] { return threads_ready == total_threads; });
 
-    // Start threads and do other work at once
-    start_flag.store(true);
-    intermediate_fn();
+        intermediate_fn();
+    });
 
     for (auto& thread : threads) {
         thread.join();
