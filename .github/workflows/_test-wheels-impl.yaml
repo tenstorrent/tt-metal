@@ -26,7 +26,6 @@ jobs:
       matrix:
         os: ${{ fromJson(inputs.from-precompiled && '["ubuntu-20.04"]' || '["ubuntu-20.04", "ubuntu-22.04"]') }}
         runner-hw-info: [
-          {arch: grayskull},
           {arch: wormhole_b0}
         ]
     runs-on: ${{ matrix.os }}
@@ -52,7 +51,6 @@ jobs:
         # We only have this for non-Docker silicon runners right now
         os: [ubuntu-20.04]
         runner-hw-info: [
-          {arch: grayskull, type: E150},
           {arch: wormhole_b0, type: N150},
           {arch: wormhole_b0, type: N300}
         ]

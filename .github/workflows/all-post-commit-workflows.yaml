@@ -64,7 +64,6 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { arch: grayskull, runner-label: E150 },
           { arch: wormhole_b0, runner-label: N150 },
           { arch: wormhole_b0, runner-label: N300 },
         ]
@@ -80,7 +79,6 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { arch: grayskull, runner-label: E150 },
           { arch: wormhole_b0, runner-label: N150 },
           { arch: wormhole_b0, runner-label: N300 },
         ]
@@ -112,7 +110,6 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { arch: grayskull, runner-label: E150 },
           { arch: wormhole_b0, runner-label: N150 },
           { arch: wormhole_b0, runner-label: N300 },
         ]
@@ -128,7 +125,6 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { arch: grayskull, runner-label: E150 },
           { arch: wormhole_b0, runner-label: N150 },
           { arch: wormhole_b0, runner-label: N300 },
         ]
@@ -144,7 +140,6 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { arch: grayskull, runner-label: E150 },
           { arch: wormhole_b0, runner-label: N150 },
           { arch: wormhole_b0, runner-label: N300 },
         ]
@@ -179,7 +174,6 @@ jobs:
       fail-fast: false
       matrix:
         test-group: [
-          { arch: grayskull, runner-label: E150 },
           { arch: wormhole_b0, runner-label: N150 },
           { arch: wormhole_b0, runner-label: N300 },
         ]

@@ -19,8 +19,6 @@ jobs:
       fail-fast: false
       matrix:
         runner-info: [
-          # E150
-          {arch: grayskull, runs-on: ["cloud-virtual-machine", "E150", "in-service"], machine-type: "virtual_machine", name: "E150"},
           # N150
           {arch: wormhole_b0, runs-on: ["cloud-virtual-machine", "N150", "in-service"], machine-type: "virtual_machine", name: "N150"},
           # N300
