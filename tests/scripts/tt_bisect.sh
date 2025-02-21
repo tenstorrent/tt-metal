@@ -7,6 +7,8 @@ Flags:
     -f | --file : test file to run, also the test that broke
     -g | --good : good commit to start bisect
     -b | --bad : bad commit to start bisect
+    -p | --path : commit-ish to cherry-pick onto each commit before building
+    -t | --timeout : timeout duration for the test
 Example:
     ./tests/scripts/tt_bisect.sh -f ./build/test/tt_metal/test_add_two_ints -b HEAD -g 1eb7930
 If the test involves multiple words you have to do "test_file":
@@ -33,6 +35,9 @@ while getopts "f:g:b:t:" opt; do
          t | timeout)
             timeout_duration=$OPTARG
             ;;
+         p | patch)
+            patch=$OPTARG
+            ;;
          \?)
             echo "Invalid option: -$OPTARG" >&2
             exit 1
@@ -48,14 +53,20 @@ fi
 echo "Time to find who broke it :)"
 echo "Good commit:" $good_commit
 echo "Bad commit:" $bad_commit
+if ([ ! -z "$patch" ]); then
+    echo "Cherry-pick commit:" $patch
+fi
 
 found=false
 
 git bisect start $bad_commit $good_commit --
 
 while [[ "$found" = "false" ]]; do
-   git submodule update --recursive
    echo "::group::Building `git rev-parse HEAD`"
+   if ([ ! -z "$patch" ]); then
+      git cherry-pick $patch
+   fi
+   git submodule update --recursive
    build_rc=0
    ./build_metal.sh --build-tests > /dev/null || build_rc=$?
    echo "::endgroup::"
@@ -70,6 +81,11 @@ while [[ "$found" = "false" ]]; do
    timeout_rc=0
    timeout "$timeout_duration" bash -c "$test" || timeout_rc=$?
    echo "Exit code: $timeout_rc"
+
+   if ([ ! -z "$patch" ]); then
+      # Must reset HEAD or git bisect good/bad will retry the merge base and we'll be stuck in a loop
+      git reset --hard HEAD^
+   fi
    echo "::endgroup::"
 
    if [ $timeout_rc -eq 0 ]; then
