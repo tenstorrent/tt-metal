@@ -8,8 +8,6 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.llama3.tt.llama_ccl import tt_all_reduce, tt_all_gather
-from models.demos.llama3.tt.llama_common import first_five
-from models.demos.llama3.tt.load_checkpoints import permute
 
 
 class TtLlamaAttention(LightweightModule):
@@ -138,7 +136,9 @@ class TtLlamaAttention(LightweightModule):
             )
             # as_tensor returns (32, dim) which is incorrect, this reshape updates the padded size to the correct size
             self.wqkv_bias_prefill = ttnn.reshape(
-                self.wqkv_bias_prefill, ttnn.Shape([1, 1, 1, self.wqkv_bias_prefill.shape[-1]])
+                self.wqkv_bias_prefill,
+                (1, 1, 1, self.wqkv_bias_prefill.shape[-1]),
+                (1, 1, self.wqkv_bias_prefill.shape[-2], self.wqkv_bias_prefill.shape[-1]),
             )
 
             # Broadcasting does not seem to be supported inside execute_trace so expand to the whole batch size
@@ -206,7 +206,7 @@ class TtLlamaAttention(LightweightModule):
         pt_wo = self.state_dict[f"{wo_str}.weight"].transpose(-1, -2).unsqueeze(0).unsqueeze(0)
 
         wo_mem_config = configuration.create_dram_sharded_mem_config(
-            configuration.dim // configuration.num_devices, configuration.dim
+            (configuration.n_heads * configuration.head_dim) // configuration.num_devices, configuration.dim
         )
 
         self.wo = ttnn.as_tensor(

@@ -70,7 +70,7 @@ CPMAddPackage(NAME magic_enum GITHUB_REPOSITORY Neargye/magic_enum GIT_TAG v0.9.
 # nlohmann/json : https://github.com/nlohmann/json
 ############################################################################################################################
 
-CPMAddPackage(NAME json GITHUB_REPOSITORY nlohmann/json GIT_TAG v3.11.3 OPTIONS "JSON_BuildTests OFF")
+CPMAddPackage(NAME nlohmann_json GITHUB_REPOSITORY nlohmann/json GIT_TAG v3.11.3 OPTIONS "JSON_BuildTests OFF")
 
 CPMAddPackage(NAME xtl GITHUB_REPOSITORY xtensor-stack/xtl GIT_TAG 0.7.7 OPTIONS "XTL_ENABLE_TESTS OFF")
 
@@ -83,8 +83,6 @@ CPMAddPackage(
     OPTIONS
         "XTENSOR_ENABLE_TESTS OFF"
 )
-
-CPMAddPackage(NAME taskflow GITHUB_REPOSITORY taskflow/taskflow GIT_TAG v3.7.0 OPTIONS "TF_BUILD_TESTS OFF")
 
 include(${PROJECT_SOURCE_DIR}/cmake/fetch_cli11.cmake)
 

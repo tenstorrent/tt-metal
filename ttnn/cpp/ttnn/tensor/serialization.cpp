@@ -24,6 +24,16 @@ using MeshDevice = distributed::MeshDevice;
 
 namespace {
 
+struct FileCloser {
+    void operator()(FILE* file) const {
+        if (file) {
+            if (fclose(file) != 0) {
+                log_warning("Failed to close file");
+            }
+        }
+    }
+};
+
 struct Padding {
     enum class PadValue { Any, Zero, Infinity, NegativeInfinity };
     struct PadDimension {
@@ -393,7 +403,7 @@ Tensor load_tensor_helper(const std::string& file_name, T device) {
     if (not input_file) {
         TT_THROW("Cannot open \"{}\"", file_name);
     }
-    std::unique_ptr<FILE, decltype(&fclose)> file_guard(input_file, &fclose);
+    std::unique_ptr<FILE, FileCloser> file_guard(input_file);
 
     std::size_t read_sentinel;
     safe_fread(&read_sentinel, sizeof(read_sentinel), 1, input_file);
@@ -435,7 +445,7 @@ void dump_tensor(
     if (not output_file) {
         TT_THROW("Cannot open \"{}\"", file_name);
     }
-    std::unique_ptr<FILE, decltype(&fclose)> file_guard(output_file, &fclose);
+    std::unique_ptr<FILE, FileCloser> file_guard(output_file);
 
     safe_fwrite(&SENTINEL_VALUE, sizeof(SENTINEL_VALUE), 1, output_file);
     safe_fwrite(&VERSION_ID, sizeof(VERSION_ID), 1, output_file);
@@ -495,7 +505,7 @@ void dump_memory_config(const std::string& file_name, const MemoryConfig& memory
     if (not output_file) {
         TT_THROW("Cannot open \"{}\"", file_name);
     }
-    std::unique_ptr<FILE, decltype(&fclose)> file_guard(output_file, &fclose);
+    std::unique_ptr<FILE, FileCloser> file_guard(output_file);
     dump_memory_config(output_file, memory_config);
 }
 
@@ -533,7 +543,7 @@ MemoryConfig load_memory_config(const std::string& file_name) {
     if (not input_file) {
         TT_THROW("Cannot open \"{}\"", file_name);
     }
-    std::unique_ptr<FILE, decltype(&fclose)> file_guard(input_file, &fclose);
+    std::unique_ptr<FILE, FileCloser> file_guard(input_file);
     return load_memory_config(input_file);
 }
 

@@ -5,10 +5,10 @@
 // clang-format off
 #include "dataflow_api.h"
 #include "debug/dprint.h"
-#include "tt_fabric/hw/inc/tt_fabric.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric.h"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen.hpp"
-#include "tt_fabric/hw/inc/tt_fabric_interface.h"
-#include "tt_fabric/hw/inc/tt_fabric_api.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/common/kernel_utils.hpp"
 // clang-format on
 
@@ -71,7 +71,8 @@ uint32_t max_packet_size_mask;
 auto input_queue_state = select_input_queue<pkt_dest_size_choice>();
 volatile local_pull_request_t *local_pull_request = (volatile local_pull_request_t *)(data_buffer_start_addr - 1024);
 volatile tt_l1_ptr fabric_router_l1_config_t* routing_table;
-volatile fabric_client_interface_t* client_interface;
+volatile tt_l1_ptr fabric_client_interface_t* client_interface =
+    (volatile tt_l1_ptr fabric_client_interface_t*)client_interface_addr;
 
 fvc_producer_state_t test_producer __attribute__((aligned(16)));
 fvcc_inbound_state_t fvcc_test_producer __attribute__((aligned(16)));
@@ -83,10 +84,6 @@ packet_header_t packet_header __attribute__((aligned(16)));
 uint32_t target_address;
 uint32_t noc_offset;
 uint32_t rx_addr_hi;
-
-uint32_t gk_interface_addr_l;
-uint32_t gk_interface_addr_h;
-
 uint32_t controller_noc_offset;
 
 // flag to check if need to zero out notification addr
@@ -389,11 +386,9 @@ void kernel_main() {
     src_endpoint_id = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     noc_offset = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     controller_noc_offset = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
-    uint32_t routing_plane = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
+    uint32_t outbound_eth_chan = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     dest_device = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     uint32_t rx_buf_size = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
-    gk_interface_addr_l = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
-    gk_interface_addr_h = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
 
     if constexpr (ASYNC_WR & test_command) {
         base_target_address = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
@@ -403,11 +398,11 @@ void kernel_main() {
     rx_addr_hi = base_target_address + rx_buf_size;
 
     zero_l1_buf(test_results, test_results_size_bytes);
-    test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_STARTED;
-    test_results[PQ_TEST_STATUS_INDEX+1] = (uint32_t) local_pull_request;
+    test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_STARTED;
+    test_results[TT_FABRIC_STATUS_INDEX + 1] = (uint32_t)local_pull_request;
 
-    test_results[PQ_TEST_MISC_INDEX] = 0xff000000;
-    test_results[PQ_TEST_MISC_INDEX + 1] = 0xcc000000 | src_endpoint_id;
+    test_results[TT_FABRIC_MISC_INDEX] = 0xff000000;
+    test_results[TT_FABRIC_MISC_INDEX + 1] = 0xcc000000 | src_endpoint_id;
 
     zero_l1_buf(reinterpret_cast<tt_l1_ptr uint32_t*>(data_buffer_start_addr), data_buffer_size_words * PACKET_WORD_SIZE_BYTES);
     zero_l1_buf((uint32_t*)local_pull_request, sizeof(local_pull_request_t));
@@ -445,7 +440,7 @@ void kernel_main() {
     // all the tx workers are ready on this chip
     while (*(volatile tt_l1_ptr uint32_t*)signal_address == 0);
 
-    test_results[PQ_TEST_MISC_INDEX] = 0xff000001;
+    test_results[TT_FABRIC_MISC_INDEX] = 0xff000001;
 
     uint64_t data_words_sent = 0;
     uint64_t iter = 0;
@@ -462,9 +457,9 @@ void kernel_main() {
     uint32_t packet_count = 0;
 
     // initalize client
-    fabric_endpoint_init(client_interface_addr, gk_interface_addr_l, gk_interface_addr_h);
-    routing_table = reinterpret_cast<tt_l1_ptr fabric_router_l1_config_t*>(
-        client_interface->routing_tables_l1_offset + sizeof(fabric_router_l1_config_t) * routing_plane);
+    tt_fabric_init();
+    fabric_endpoint_init<RoutingType::ROUTING_TABLE>(client_interface, outbound_eth_chan);
+    routing_table = reinterpret_cast<tt_l1_ptr fabric_router_l1_config_t*>(client_interface->routing_tables_l1_offset);
 
     while (true) {
         iter++;
@@ -520,9 +515,9 @@ void kernel_main() {
     uint64_t cycles_elapsed = get_timestamp() - start_timestamp;
 
     uint64_t num_packets = input_queue_state.get_num_packets();
-    set_64b_result(test_results, data_words_sent, PQ_TEST_WORD_CNT_INDEX);
-    set_64b_result(test_results, cycles_elapsed, PQ_TEST_CYCLES_INDEX);
-    set_64b_result(test_results, iter, PQ_TEST_ITER_INDEX);
+    set_64b_result(test_results, data_words_sent, TT_FABRIC_WORD_CNT_INDEX);
+    set_64b_result(test_results, cycles_elapsed, TT_FABRIC_CYCLES_INDEX);
+    set_64b_result(test_results, iter, TT_FABRIC_ITER_INDEX);
     set_64b_result(test_results, total_data_words, TX_TEST_IDX_TOT_DATA_WORDS);
     set_64b_result(test_results, num_packets, TX_TEST_IDX_NPKT);
     set_64b_result(test_results, zero_data_sent_iter, TX_TEST_IDX_ZERO_DATA_WORDS_SENT_ITER);
@@ -530,13 +525,13 @@ void kernel_main() {
     set_64b_result(test_results, many_data_sent_iter, TX_TEST_IDX_MANY_DATA_WORDS_SENT_ITER);
 
     if (test_producer.packet_corrupted) {
-        test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_BAD_HEADER;
-        test_results[PQ_TEST_MISC_INDEX] = packet_count;
+        test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_BAD_HEADER;
+        test_results[TT_FABRIC_MISC_INDEX] = packet_count;
     } else if (!timeout) {
-        test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_PASS;
-        test_results[PQ_TEST_MISC_INDEX] = packet_count;
+        test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_PASS;
+        test_results[TT_FABRIC_MISC_INDEX] = packet_count;
     } else {
-        test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_TIMEOUT;
+        test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_TIMEOUT;
         set_64b_result(test_results, words_flushed, TX_TEST_IDX_WORDS_FLUSHED);
     }
 }

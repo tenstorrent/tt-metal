@@ -8,6 +8,7 @@ set(DISTRIBUTED_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/mesh_workload_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/mesh_command_queue.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/mesh_buffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/mesh_trace.cpp
 )
 
 add_library(distributed OBJECT ${DISTRIBUTED_SRC})
@@ -17,5 +18,6 @@ target_link_libraries(
         common
     PRIVATE
         Metalium::Metal::Impl
+        Metalium::Metal::LLRT
         TT::Metalium::HostDevCommon
 )
