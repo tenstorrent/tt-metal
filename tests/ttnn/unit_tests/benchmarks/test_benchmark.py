@@ -161,8 +161,8 @@ matmul_configs = [
 @pytest.mark.parametrize("tile_w", [32])
 @pytest.mark.parametrize("num_warmup_iterations", [5])
 @pytest.mark.parametrize("num_measurement_iterations", [100])
-@pytest.mark.parametrize("dump_profiler_log", [False])
-@pytest.mark.parametrize("dump_profiler_log_single_iteration", [False])
+@pytest.mark.parametrize("dump_profiler_log", [True])
+@pytest.mark.parametrize("dump_profiler_log_single_iteration", [True])
 def test_matmul_2d_host_perf(
     device,
     tile_h,
@@ -182,7 +182,7 @@ def test_matmul_2d_host_perf(
 
     if dump_profiler_log:
         profiler_log_dump_path = PROFILER_LOGS_DIR / "matmul_sweep_log"
-        rm(profiler_log_dump_path)
+        # rm(profiler_log_dump_path)
 
     LoFi_cycle = 16
     HiFi2_cycle = LoFi_cycle * 2
@@ -190,27 +190,32 @@ def test_matmul_2d_host_perf(
     HiFi4_cycle = LoFi_cycle * 4
 
     with open(FILE_NAME, mode="a", newline="") as file:
+        # TODO add support for BH full grid (14, 10) when dispatch from ETH is enabled
+        grid_size = (13, 10) if is_blackhole() else (8, 8)
+        compute_grid_size = device.compute_with_storage_grid_size()
+
         writer = csv.writer(file)
-        writer.writerow(
-            [
-                "m",
-                "k",
-                "n",
-                "use_trace",
-                "grid_size",
-                "in0_sharded",
-                "out_sharded",
-                "in0_storage_type",
-                "in1_storage_type",
-                "out_storage_type",
-                "dtype",
-                "math_fidelity",
-                "inference_time_avg (ns)",
-                "TFLOPs (avg)",
-                "Utilization (vs user grid)",
-                "Utilization (vs 8x8 full grid)",
-            ]
-        )
+        if os.stat(FILE_NAME).st_size == 0:
+            writer.writerow(
+                [
+                    "m",
+                    "k",
+                    "n",
+                    "use_trace",
+                    "grid_size",
+                    "in0_sharded",
+                    "out_sharded",
+                    "in0_storage_type",
+                    "in1_storage_type",
+                    "out_storage_type",
+                    "dtype",
+                    "math_fidelity",
+                    "inference_time_avg (ns)",
+                    "TFLOPs (avg)",
+                    f"Utilization (vs {grid_size[0]}x{grid_size[1]} user grid)",
+                    f"Utilization (vs {compute_grid_size.x}x{compute_grid_size.y} full grid)",
+                ]
+            )
 
         COUNTER = 0
 
@@ -223,25 +228,21 @@ def test_matmul_2d_host_perf(
                 matmul_shapes = matmul_shapes_bfloat4_b
             for m, k, n, in0_sharded, out_sharded, in0_block_w_div, num_out_blocks_h, num_out_blocks_w in matmul_shapes:
                 if COUNTER != SKIP_COUNT:
-                    # logger.info(f"SKIP TEST #{COUNTER}")
                     COUNTER += 1
                     continue
 
                 profiler.clear()
 
-                if dump_profiler_log:
-                    # Create directory for profiler dump
-                    dir_name = f"{dtype}_{math_fidelity}_{use_trace}_{m}_{k}_{n}_{in0_sharded}_{out_sharded}_{in0_block_w_div}_{num_out_blocks_h}_{num_out_blocks_w}"
-                    profiler_dump_dir = profiler_log_dump_path / dir_name
-                    profiler_dump_dir.mkdir(parents=True, exist_ok=True)
-
-                # TODO add support for BH full grid (14, 10) when dispatch from ETH is enabled
-                grid_size = (8, 8) if is_blackhole() else (8, 8)
-
                 # Scale input size to match compute grid size - input sizes are based on 8x8 compute grid
                 m = (m // 8) * grid_size[1]
                 n = (n // 8) * grid_size[0]
                 k = (k // 8) * grid_size[0]
+
+                # Create directory for profiler dump if required
+                if dump_profiler_log:
+                    dir_name = f"{dtype}_{math_fidelity}_{use_trace}_{m}_{k}_{n}_{in0_sharded}_{out_sharded}_{in0_block_w_div}_{num_out_blocks_h}_{num_out_blocks_w}"
+                    profiler_dump_dir = profiler_log_dump_path / dir_name
+                    profiler_dump_dir.mkdir(parents=True, exist_ok=True)
 
                 in0_shape = [1, 1, m, k]
                 in1_shape = [1, 1, k, n]
@@ -420,7 +421,6 @@ def test_matmul_2d_host_perf(
                 elif math_fidelity == ttnn.MathFidelity.HiFi4:
                     cycle_per_tile = HiFi4_cycle
                 num_cores_user_grid = grid_size[0] * grid_size[1]
-                compute_grid_size = device.compute_with_storage_grid_size()
                 num_cores_full_grid = compute_grid_size.x * compute_grid_size.y
                 ideal_cycle_full_grid = m * k * n / tile_h / tile_w / 32 * cycle_per_tile / num_cores_full_grid
                 ideal_cycle_user_grid = m * k * n / tile_h / tile_w / 32 * cycle_per_tile / num_cores_user_grid
@@ -430,7 +430,7 @@ def test_matmul_2d_host_perf(
                 utilization_full_grid_percentage = f"{utilization_full_grid * 100:.2f}%"
                 utilization_user_grid_percentage = f"{utilization_user_grid * 100:.2f}%"
                 logger.info(
-                    f"M*K*N = {m}*{k}*{n} == inference time (avg): {inference_time_avg}, tflops (avg): {tflops}, utilization (vs user grid): {utilization_user_grid_percentage}, utilization (vs {compute_grid_size.x}x{compute_grid_size.y} grid): {utilization_full_grid_percentage}"
+                    f"M*K*N = {m}*{k}*{n} == inference time (avg): {inference_time_avg}, tflops (avg): {tflops}, utilization (vs {grid_size[0]}x{grid_size[1]} user grid): {utilization_user_grid_percentage}, utilization (vs {compute_grid_size.x}x{compute_grid_size.y} full grid): {utilization_full_grid_percentage}"
                 )
 
                 output_tensor = ttnn.to_torch(output_t)
@@ -568,7 +568,7 @@ def test_matmul_2d_host_perf_out_of_box(
                     profiler_dump_dir.mkdir(parents=True, exist_ok=True)
 
                 # TODO add support for BH full grid (14, 10) when dispatch from ETH is enabled
-                grid_size = (8, 8) if is_blackhole() else (8, 8)
+                grid_size = (13, 10) if is_blackhole() else (8, 8)
 
                 # Scale input size to match compute grid size - input sizes are based on 8x8 compute grid
                 m = (m // 8) * grid_size[1]
