@@ -96,6 +96,55 @@ namespace ttnn::distributed {
 
 namespace py = pybind11;
 
+// namespace pybind11 { namespace detail {
+
+// // Helper template that implements conversion from std::unique_ptr<Derived> to std::unique_ptr<Base>
+// template <typename Derived, typename Base>
+// struct unique_ptr_base_caster {
+//     // This macro defines the member "value" (of type std::unique_ptr<Derived>) and a type annotation.
+//     PYBIND11_TYPE_CASTER(std::unique_ptr<Derived>,
+//                          py::str("unique_ptr<") + type_id<Derived>() + py::str(">"));
+
+//     // load() is not supported for unique_ptr conversion from Python.
+//     bool load(::pybind11::handle, bool) {
+//         return false;
+//     }
+
+//     // cast() converts the C++ unique_ptr<Derived> to a Python object.
+//     static ::pybind11::handle cast(const std::unique_ptr<Derived>& src,
+//                        ::pybind11::return_value_policy policy, ::pybind11::handle parent) {
+//         // Convert the underlying raw pointer from Derived* to Base*
+//         Base* base_ptr = static_cast<Base*>(src.get());
+//         // Use py::cast on the raw pointer. Note: this does not transfer ownership.
+//         // The returned handle is then released.
+//         return py::cast(base_ptr, policy, parent).release();
+//     }
+// };
+
+// }} // namespace pybind11::detail
+// namespace pybind11 { namespace detail {
+
+// template <>
+// struct ::pybind11::detail::type_caster<std::unique_ptr<ReplicateTensorToMesh>>
+//     : unique_ptr_base_caster<ReplicateTensorToMesh, TensorToMesh> {};
+
+// template <>
+// struct ::pybind11::detail::type_caster<std::unique_ptr<ShardTensorToMesh>>
+//     : unique_ptr_base_caster<ShardTensorToMesh, TensorToMesh> {};
+
+// template <>
+// struct ::pybind11::detail::type_caster<std::unique_ptr<ShardTensorTo2dMesh>>
+//     : unique_ptr_base_caster<ShardTensorTo2dMesh, TensorToMesh> {};
+
+// struct ::pybind11::detail::type_caster<std::unique_ptr<ConcatMeshToTensor>>
+//     : unique_ptr_base_caster<ConcatMeshToTensor, MeshToTensor> {};
+
+// template <>
+// struct ::pybind11::detail::type_caster<std::unique_ptr<Concat2dMeshToTensor>>
+//     : unique_ptr_base_caster<Concat2dMeshToTensor, MeshToTensor> {};
+
+// }} // namespace pybind11::detail
+
 // Trampoline class to clear virtual method errors
 struct ConcreteTensorToMesh : TensorToMesh {
     using TensorToMesh::TensorToMesh;  // Inherit constructors
@@ -121,13 +170,12 @@ void py_module_types(py::module& module) {
 <<<<<<< HEAD
 <<<<<<< HEAD
     py::class_<MeshToTensor, ConcreteMeshToTensor, std::unique_ptr<MeshToTensor>>(module, "CppMeshToTensor");
-    py::class_<TensorToMesh, ConcreteTensorToMesh, std::unique_ptr<TensorToMesh>>(module, "CppTensorToMesh");
+    py::class_<TensorToMesh, ConcreteTensorToMesh, std::unique_ptr<TensorToMesh>>(module, "TensorToMesh");
 
     py::class_<ReplicateTensorToMesh, TensorToMesh, std::unique_ptr<ReplicateTensorToMesh>>(
-        module, "CppReplicateTensorToMesh");
-    py::class_<ShardTensorToMesh, TensorToMesh, std::unique_ptr<ShardTensorToMesh>>(module, "CppShardTensorToMesh");
-    py::class_<ShardTensorTo2dMesh, TensorToMesh, std::unique_ptr<ShardTensorTo2dMesh>>(
-        module, "CppShardTensorTo2dMesh");
+        module, "ReplicateTensorToMesh");
+    py::class_<ShardTensorToMesh, TensorToMesh, std::unique_ptr<ShardTensorToMesh>>(module, "ShardTensorToMesh");
+    py::class_<ShardTensorTo2dMesh, TensorToMesh, std::unique_ptr<ShardTensorTo2dMesh>>(module, "ShardTensorTo2dMesh");
     py::class_<ConcatMeshToTensor, MeshToTensor, std::unique_ptr<ConcatMeshToTensor>>(module, "CppConcatMeshToTensor");
     py::class_<Concat2dMeshToTensor, MeshToTensor, std::unique_ptr<Concat2dMeshToTensor>>(
         module, "CppConcat2dMeshToTensor");
@@ -648,18 +696,22 @@ void py_module(py::module& module) {
 =======
     auto py_tensor_to_mesh = static_cast<py::class_<TensorToMesh, ConcreteTensorToMesh, std::unique_ptr<TensorToMesh>>>(
 <<<<<<< HEAD
+<<<<<<< HEAD
         module.attr("TensorToMesh"));
 >>>>>>> move class definitions from from distributed_tensor.cpp to.hpp so they can be exposed to the pybind.cpp; add dummy void methods in .cpp to satisfy linker; add new constructors and factory methods to fix type errors
 =======
         module.attr("CppTensorToMesh"));
 >>>>>>> add back distributed.py for now, clean up class overloads
+=======
+        module.attr("TensorToMesh"));
+>>>>>>> interim work for supporting mappers
     py_tensor_to_mesh
         .def(py::init([]() -> std::unique_ptr<TensorToMesh> { return std::make_unique<ConcreteTensorToMesh>(); }))
         .def("map", &TensorToMesh::map)
         .def("config", &TensorToMesh::config);
     auto py_replicate_tensor_to_mesh =
         static_cast<py::class_<ReplicateTensorToMesh, std::unique_ptr<ReplicateTensorToMesh>>>(
-            module.attr("CppReplicateTensorToMesh"));
+            module.attr("ReplicateTensorToMesh"));
     py_replicate_tensor_to_mesh
         .def(
             py::init([](MeshDevice& mesh_device) -> std::unique_ptr<ReplicateTensorToMesh> {
@@ -672,7 +724,7 @@ void py_module(py::module& module) {
             py::arg("tensor"))
         .def("config", &ReplicateTensorToMesh::config);
     auto py_shard_tensor_to_mesh = static_cast<py::class_<ShardTensorToMesh, std::unique_ptr<ShardTensorToMesh>>>(
-        module.attr("CppShardTensorToMesh"));
+        module.attr("ShardTensorToMesh"));
     py_shard_tensor_to_mesh
         .def(
             py::init([](MeshDevice& mesh_device, int dim) -> std::unique_ptr<ShardTensorToMesh> {
@@ -687,7 +739,7 @@ void py_module(py::module& module) {
         .def("config", &ShardTensorToMesh::config);
     auto py_shard_tensor_to_2d_mesh =
         static_cast<py::class_<ShardTensorTo2dMesh, std::unique_ptr<ShardTensorTo2dMesh>>>(
-            module.attr("CppShardTensorTo2dMesh"));
+            module.attr("ShardTensorTo2dMesh"));
     py_shard_tensor_to_2d_mesh
         .def(
             py::init(
