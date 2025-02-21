@@ -13,6 +13,5 @@ do
     timeout $TIME_LIMIT tt-smi -r 0 || exit 1
 
     export SKIP_COUNT=$TEST_ID
-    # echo "SKIP_COUNT="$SKIP_COUNT
-    timeout $TIME_LIMIT pytest tests/ttnn/unit_tests/benchmarks/test_benchmark.py::test_matmul_2d_host_perf || echo SKIPPED $TEST_ID >> /proj_sw/user_dev/rdjogo/work/blackhole/tt-metal/generated/matmul_2d_host_perf_report.csv
+    timeout $TIME_LIMIT pytest tests/ttnn/unit_tests/benchmarks/test_benchmark.py::test_matmul_2d_host_perf || echo SKIPPED $TEST_ID >> $TT_METAL_HOME/generated/matmul_2d_host_perf_report.csv
 done
