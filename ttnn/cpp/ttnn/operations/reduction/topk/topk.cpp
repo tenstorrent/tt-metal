@@ -13,10 +13,6 @@ int32_t get_nearest_supported_shape(int32_t k) {
     // LLK only support k = 4, 8, 16, 32, 64
     if (k <= 4) {
         return 4;
-    } else if (k <= 8) {
-        return 8;
-    } else if (k <= 16) {
-        return 16;
     } else if (k <= 32) {
         return 32;
     } else {
