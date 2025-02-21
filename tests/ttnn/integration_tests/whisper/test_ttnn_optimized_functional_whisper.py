@@ -233,7 +233,13 @@ def test_encoder(device, ttnn_model, model_name, batch_size, sequence_length, us
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("encoder_sequence_size", [1500])
-@pytest.mark.parametrize("decoder_sequence_size", [32])  # tile size
+@pytest.mark.parametrize(
+    "decoder_sequence_size, use_kv_cache",
+    (
+        [32, False],
+        [1, True],
+    ),
+)
 @pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
 def test_decoder_layer(
     device,
@@ -242,6 +248,7 @@ def test_decoder_layer(
     batch_size,
     encoder_sequence_size,
     decoder_sequence_size,
+    use_kv_cache,
     use_program_cache,
     enable_async_mode,
 ):
@@ -278,8 +285,18 @@ def test_decoder_layer(
         torch_encoder_hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
     )
 
+    if use_kv_cache:
+        kv_cache = init_kv_cache(config, device, max_batch_size=batch_size, max_seq_len=512, n_layers=1)[0]
+        current_decode_pos = ttnn.from_torch(torch.zeros(batch_size), device=device, dtype=ttnn.int32)
+
     output = ttnn_model.decoder_layer(
-        config, ttnn_hidden_states, ttnn_attention_mask, ttnn_encoder_hidden_states, parameters=ttnn_parameters
+        config,
+        ttnn_hidden_states,
+        ttnn_attention_mask,
+        ttnn_encoder_hidden_states,
+        kv_cache=kv_cache if use_kv_cache else None,
+        current_decode_pos=current_decode_pos if use_kv_cache else None,
+        parameters=ttnn_parameters,
     )
     output = ttnn.to_torch(output)
 
@@ -291,7 +308,13 @@ def test_decoder_layer(
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("encoder_sequence_size", [1500])
-@pytest.mark.parametrize("decoder_sequence_size", [32])  # tile size
+@pytest.mark.parametrize(
+    "decoder_sequence_size, use_kv_cache",
+    (
+        [32, False],
+        [1, True],
+    ),
+)
 @pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
 def test_decoder(
     device,
@@ -300,6 +323,7 @@ def test_decoder(
     batch_size,
     encoder_sequence_size,
     decoder_sequence_size,
+    use_kv_cache,
     use_program_cache,
     enable_async_mode,
 ):
@@ -340,11 +364,17 @@ def test_decoder(
         config, decoder_input_ids, attention_mask, parameters=ttnn_parameters, device=device
     )
 
+    if use_kv_cache:
+        kv_cache = init_kv_cache(config, device, max_batch_size=batch_size, max_seq_len=512)
+        current_decode_pos = ttnn.from_torch(torch.zeros(batch_size), device=device, dtype=ttnn.int32)
+
     output = ttnn_model.decoder(
         config,
         hidden_states=decoder_hidden_states,
         decoder_attention_mask=decoder_attention_mask,
         encoder_hidden_states=ttnn_encoder_hidden_states,
+        kv_cache=kv_cache if use_kv_cache else None,
+        current_decode_pos=current_decode_pos if use_kv_cache else None,
         parameters=ttnn_parameters,
     )
     output = ttnn.to_torch(output)
@@ -355,10 +385,16 @@ def test_decoder(
 
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
-@pytest.mark.parametrize("decoder_sequence_size", [32])  # tile size
+@pytest.mark.parametrize(
+    "decoder_sequence_size, use_kv_cache",
+    (
+        [32, False],
+        [1, True],
+    ),
+)
 @pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
 def test_ttnn_whisper(
-    tmp_path, device, ttnn_model, model_name, decoder_sequence_size, use_program_cache, enable_async_mode
+    tmp_path, device, ttnn_model, model_name, decoder_sequence_size, use_kv_cache, use_program_cache, enable_async_mode
 ):
     torch.manual_seed(0)
     config = WhisperConfig.from_pretrained(model_name)
@@ -368,6 +404,7 @@ def test_ttnn_whisper(
     input_features = inputs.input_features
     decoder_input_ids = torch.ones(1, decoder_sequence_size).type(torch.int32) * config.decoder_start_token_id
 
+    batch_size = 1
     attention_mask = None
 
     model = WhisperModel.from_pretrained(model_name).eval()
@@ -394,11 +431,17 @@ def test_ttnn_whisper(
         device=device,
     )
 
+    if use_kv_cache:
+        kv_cache = init_kv_cache(config, device, max_batch_size=batch_size, max_seq_len=512)
+        current_decode_pos = ttnn.from_torch(torch.zeros(batch_size), device=device, dtype=ttnn.int32)
+
     last_hidden_state = ttnn_model.whisper(
         config,
         input_embeds,
         decoder_hidden_states,
         decoder_attention_mask=decoder_attention_mask,
+        kv_cache=kv_cache if use_kv_cache else None,
+        current_decode_pos=current_decode_pos if use_kv_cache else None,
         parameters=ttnn_parameters,
     )
     last_hidden_state = ttnn.to_torch(last_hidden_state)
