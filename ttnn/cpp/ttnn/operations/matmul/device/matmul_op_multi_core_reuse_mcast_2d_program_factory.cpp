@@ -1063,6 +1063,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                 }
 
                 if (in1_is_sharded and in1_is_dram) {  // in1 is dram sharded
+                    uint32_t num_iter_index = mm_in1_sender_writer_args.size() + 1;
                     vc = vc == 3 ? 0 : vc + 1;
                     mm_in1_sender_writer_args.push_back(vc);
 
@@ -1121,7 +1122,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                             worker_core_stride = stride;
                         }
                     }
-                    mm_in1_sender_writer_args.insert(mm_in1_sender_writer_args.begin() + 20, num_iter);
+                    mm_in1_sender_writer_args.insert(mm_in1_sender_writer_args.begin() + num_iter_index, num_iter);
                 }
                 if (fuse_op) {
                     fused_op_signaler->push_matmul_fused_op_rt_args(mm_in1_sender_writer_args, true);
@@ -1268,7 +1269,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0_in1(
                 writer_runtime_args[0] = src_buffer_b->address();
                 writer_runtime_args[6] = dst_buffer->address();
                 if (bias_tensor.has_value()) {
-                    writer_runtime_args[17] = (*bias_buffer)->address();
+                    writer_runtime_args[18] = (*bias_buffer)->address();
                 }
             }
 
