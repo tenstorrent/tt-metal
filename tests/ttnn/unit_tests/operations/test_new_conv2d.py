@@ -72,6 +72,7 @@ def run_conv(
     weight_mesh_mapper=None,
     output_mesh_composer=None,
     enable_split_reader=False,
+    activation="",
 ):
     if isinstance(device, ttnn.MeshDevice):
         assert input_mesh_mapper is not None, "Expected mesh mapper for input tensor when using device mesh"
@@ -134,6 +135,7 @@ def run_conv(
         enable_split_reader=enable_split_reader,
         enable_subblock_padding=False,
         output_layout=output_layout,
+        activation=activation,
     )
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -358,6 +360,10 @@ def run_conv_with_split(
         [5, 2],
     ],
 )
+@pytest.mark.parametrize(
+    "activation",
+    ["", "relu"],
+)
 @pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.HiFi4])
 @pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
 def test_conv_features(
@@ -380,6 +386,7 @@ def test_conv_features(
     output_layout,
     fp32_accum,
     packer_l1_acc,
+    activation,
 ):
     if output_layout == ttnn.ROW_MAJOR_LAYOUT and activations_dtype == ttnn.bfloat8_b:
         pytest.skip("Row major layout not compatible with bfloat8_b")
@@ -407,6 +414,7 @@ def test_conv_features(
         has_bias=True,
         fp32_accum=fp32_accum,
         packer_l1_acc=packer_l1_acc,
+        activation=activation,
     )
 
 
