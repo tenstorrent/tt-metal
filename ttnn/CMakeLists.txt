@@ -14,28 +14,49 @@ endif()
 ##################################################
 # Define a method build_library to define all the options and properties for a library
 ##################################################
-function(
-    build_library
-    LIBRARY_NAME
-    SOURCES
-    LINK_DIRECTORIES
-    INCLUDE_DIRS
-    TARGET_LINK_LIBRARIES
-    DYNAMIC_LIBRARY
-)
+function(build_library LIBRARY_NAME ALIAS)
+    set(options
+        SHARED
+        STATIC
+    )
+    set(oneValueArgs) # No single-value args
+    set(multiValueArgs
+        SOURCES
+        PUBLIC_LINK_DIRECTORIES
+        INCLUDE_DIRECTORIES
+        TARGET_LINK_LIBRARIES
+    ) # All are multi-value
+
+    cmake_parse_arguments(BUILD_LIB "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+
+    # Determine library type
+    if(BUILD_LIB_SHARED)
+        set(LIBRARY_TYPE "SHARED")
+    elseif(BUILD_LIB_STATIC)
+        set(LIBRARY_TYPE "STATIC")
+    else()
+        message(FATAL_ERROR "You must specify SHARED or STATIC for library type")
+    endif()
+
+    # Assign values
+    set(SOURCES "${BUILD_LIB_SOURCES}")
+    set(TARGET_LINK_LIBRARIES "${BUILD_LIB_TARGET_LINK_LIBRARIES}")
+    set(LINK_DIRECTORIES "${BUILD_LIB_LINK_DIRECTORIES}")
+    set(INCLUDE_DIRS "${BUILD_LIB_INCLUDE_DIRS}")
+
     ##################################################
     # Declare and define the library
     ##################################################
-
     #todo: Ideally declaring the library should be the first thing to do, sadly making it shared requires to add sources
-    string(TOUPPER "${LIBRARY_NAME}" LIBRARY_NAME_ALIAS)
-    if(DYNAMIC_LIBRARY)
-        add_library(${LIBRARY_NAME} SHARED ${SOURCES})
-    else()
-        add_library(${LIBRARY_NAME} STATIC ${SOURCES})
-    endif()
+    # Assign values to variables for clarity
 
-    add_library(TT::NN::${LIBRARY_NAME_ALIAS} ALIAS ${LIBRARY_NAME})
+    add_library(
+        ${LIBRARY_NAME}
+        ${LIBRARY_TYPE}
+        ${SOURCES}
+    )
+
+    add_library(Metalium::${ALIAS} ALIAS ${LIBRARY_NAME})
     target_include_directories(${LIBRARY_NAME} PUBLIC "${INCLUDE_DIRS}")
     target_link_directories(${LIBRARY_NAME} PUBLIC ${LINK_DIRECTORIES})
 
@@ -75,7 +96,7 @@ function(
         "$ORIGIN"
     )
 
-    if(DYNAMIC_LIBRARY)
+    if(BUILD_LIB_SHARED)
         #Make sure library built is _ttnn.so / _ttnnpycpp.so and that it can find all it's linked libraries
         #ttnn breaks if - fvisibility = hidden, so CXX_VISIBILITY_PRESET set to default
         set_target_properties(
@@ -1023,10 +1044,10 @@ list(APPEND TTNN_PUBLIC_INCLUDE_DIRS_PYBIND ${TTNN_PUBLIC_INCLUDE_DIRS})
 # Build the libraries!
 ##################################################
 
-set(BUILD_DYNAMIC_LIB ON)
+set(TTNN_CPP_BUILD_TYPE SHARED)
 if(WITH_PYTHON_BINDINGS)
     #ttnncpp will be static when building python bindings
-    set(BUILD_DYNAMIC_LIB OFF)
+    set(TTNN_CPP_BUILD_TYPE STATIC)
 endif()
 
 #there are two ways to build TTNN
@@ -1038,23 +1059,33 @@ endif()
 # ttnn as well, it should build it first without python bindings and then with them.
 # Most of the use cases will link to ttnn without caring a lot about the backend, but
 # for those who need this second use case, now it is officially supported
+
 build_library(
-    "ttnncpp"                       #LIBRARY_NAME
-    "${SOURCES_CPP}"                #SOURCES
-    "${TTNN_PUBLIC_LINK_DIRS}"      #LINK_DIRECTORIES
-    "${TTNN_PUBLIC_INCLUDE_DIRS}"   #INCLUDE_DIRS
-    "${TARGET_LINK_LIBRARIES_CPP}"  #TARGET_LINK_LIBRARIES
-    ${BUILD_DYNAMIC_LIB}            #DYNAMIC_LIBRARY
-    #if we don't build the python binding, is always dynamic
+    "ttnncpp"                        #LIBRARY_NAME
+    "TTNN"                           #ALIAS
+    ${TTNN_CPP_BUILD_TYPE}
+    SOURCES
+        "${SOURCES_CPP}"
+    PUBLIC_LINK_DIRECTORIES
+        "${TTNN_PUBLIC_LINK_DIRS}"
+    INCLUDE_DIRECTORIES
+        "${TTNN_PUBLIC_INCLUDE_DIRS}"
+    TARGET_LINK_LIBRARIES
+        "${TARGET_LINK_LIBRARIES_CPP}"
 )
 
 if(WITH_PYTHON_BINDINGS)
     build_library(
-        "ttnn"                              #LIBRARY_NAME
-        "${SOURCES_PYBIND}"                 #SOURCES
-        "${TTNN_PUBLIC_LINK_DIRS_PYBIND}"   #LINK_DIRECTORIES
-        "${TTNN_PUBLIC_INCLUDE_DIRS_PYBIND}"#INCLUDE_DIRS
-        "${TARGET_LINK_LIBRARIES_PYBIND}"   #TARGET_LINK_LIBRARIES
-        ON # if is built, is always dynamic #DYNAMIC_LIBRARY
+        "ttnn"                           #LIBRARY_NAME
+        "PYBIND"                         #ALIAS
+        SHARED
+        SOURCES
+            "${SOURCES_PYBIND}"
+        PUBLIC_LINK_DIRECTORIES
+            "${TTNN_PUBLIC_LINK_DIRS_PYBIND}"
+        INCLUDE_DIRECTORIES
+            "${TTNN_PUBLIC_INCLUDE_DIRS_PYBIND}"
+        TARGET_LINK_LIBRARIES
+            "${TARGET_LINK_LIBRARIES_PYBIND}"
     )
 endif()
