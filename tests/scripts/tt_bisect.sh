@@ -21,7 +21,8 @@ source python_env/bin/activate
 export PYTHONPATH=$TT_METAL_HOME
 
 timeout_duration=2m
-while getopts "f:g:b:t:" opt; do
+patch=""
+while getopts "f:g:b:t:p:" opt; do
     case $opt in
          f | file)
             test=$OPTARG
