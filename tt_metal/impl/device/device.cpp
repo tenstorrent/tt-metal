@@ -614,10 +614,10 @@ void Device::initialize_and_launch_firmware() {
     // The SOC descriptor can list a dram core multiple times, depending on how GDDR is assigned to banks
     // Get a list of unique DRAM cores.
     std::unordered_set<CoreCoord> unique_dram_cores(dram_cores.begin(), dram_cores.end());
-    TT_ASSERT(
+    TT_FATAL(
         pcie_cores.size() + unique_dram_cores.size() + eth_cores.size() <= MAX_NON_WORKER_CORES,
         "Detected more pcie/dram/eth cores than fit in the device mailbox.");
-    TT_ASSERT(
+    TT_FATAL(
         eth_cores.size() <= MAX_VIRTUAL_NON_WORKER_CORES,
         "Detected more eth cores (virtual non-workers) than can fit in device mailbox.");
     for (int idx = 0; idx < MAX_NON_WORKER_CORES; idx++) {
@@ -704,14 +704,20 @@ void Device::initialize_and_launch_firmware() {
 
     // Load erisc app base FW to eth cores on WH and active_erisc FW on second risc of BH active eth cores
     std::unordered_set<CoreCoord> bh_active_eth_cores;
+    bool init_aerisc = std::getenv("TT_METAL_INIT_AERISC") != nullptr;
     for (const auto &eth_core : this->get_active_ethernet_cores()) {
-        CoreCoord phys_eth_core = this->ethernet_core_from_logical_core(eth_core);
-        tt::llrt::write_hex_vec_to_core(
-            this->id(), phys_eth_core, core_info_vec, this->get_dev_addr(phys_eth_core, HalL1MemAddrType::CORE_INFO));
-        this->initialize_firmware(HalProgrammableCoreType::ACTIVE_ETH, phys_eth_core, &launch_msg, &go_msg);
-        if (this->arch() == ARCH::BLACKHOLE) {  // check if it is not cooperative
-            bh_active_eth_cores.insert(phys_eth_core);
-            not_done_cores.insert(phys_eth_core);
+        if (init_aerisc) {
+            CoreCoord phys_eth_core = this->ethernet_core_from_logical_core(eth_core);
+            tt::llrt::write_hex_vec_to_core(
+                this->id(),
+                phys_eth_core,
+                core_info_vec,
+                this->get_dev_addr(phys_eth_core, HalL1MemAddrType::CORE_INFO));
+            this->initialize_firmware(HalProgrammableCoreType::ACTIVE_ETH, phys_eth_core, &launch_msg, &go_msg);
+            if (this->arch() == ARCH::BLACKHOLE) {  // check if it is not cooperative
+                bh_active_eth_cores.insert(phys_eth_core);
+                not_done_cores.insert(phys_eth_core);
+            }
         }
     }
 
@@ -767,26 +773,26 @@ void Device::clear_l1_state() {
     // These L1 ranges are restricted becase UMD base routing FW uses L1 below FIRMWARE_BASE and
     // between TILE_HEADER_BUFFER_BASE to COMMAND_Q_BASE
     // Clear erisc sync info
-    if (this->arch() != ARCH::BLACKHOLE) {  // if it is cooperative
-        for (const auto& eth_core : this->get_active_ethernet_cores()) {
-            static const uint32_t max_l1_loading_size =
-                hal.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED) +
-                hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+    for (const auto& eth_core : this->get_active_ethernet_cores()) {
+        static const uint32_t max_l1_loading_size =
+            hal.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED) +
+            hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
 
-            static std::vector<uint32_t> zero_vec_above_tile_header_buffer(
-                (max_l1_loading_size -
-                 hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::TILE_HEADER_BUFFER)) /
-                    sizeof(uint32_t),
-                0);
-
-            CoreCoord virtual_core = this->ethernet_core_from_logical_core(eth_core);
-
-            llrt::write_hex_vec_to_core(
-                this->id(),
-                virtual_core,
-                zero_vec_above_tile_header_buffer,
-                hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::TILE_HEADER_BUFFER));
+        static uint32_t zero_vec_size = max_l1_loading_size;
+        auto zero_vec_addr = HalL1MemAddrType::UNRESERVED;
+        if (this->arch() != ARCH::BLACKHOLE) {  // if it is cooperative
+            zero_vec_size -=
+                hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::TILE_HEADER_BUFFER);
+            zero_vec_addr = HalL1MemAddrType::TILE_HEADER_BUFFER;
         }
+        std::cout << "max l1 loading size " << max_l1_loading_size << std::endl;
+
+        static std::vector<uint32_t> zero_vec(zero_vec_size / sizeof(uint32_t), 0);
+
+        CoreCoord virtual_core = this->ethernet_core_from_logical_core(eth_core);
+
+        llrt::write_hex_vec_to_core(
+            this->id(), virtual_core, zero_vec, hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, zero_vec_addr));
     }
     // TODO: clear idle eriscs as well
     tt::Cluster::instance().l1_barrier(this->id());

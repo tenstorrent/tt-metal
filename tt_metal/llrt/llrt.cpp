@@ -199,6 +199,18 @@ static bool check_if_riscs_on_specified_core_done(chip_id_t chip_id, const CoreC
         go_msg_t* core_status = (go_msg_t*)(run_mailbox_read_val.data());
         uint8_t run = core_status->signal;
         if (run != run_state && run != RUN_MSG_DONE) {
+            std::cout << "go msg address " << go_msg_addr << std::endl;
+
+            uint32_t l1_unreserved_base_val;
+            tt::Cluster::instance().read_core(
+                &l1_unreserved_base_val,
+                sizeof(uint32_t),
+                tt_cxy_pair(chip_id, core),
+                tt_metal::hal.get_dev_addr(
+                    tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::UNRESERVED));
+
+            std::cout << "l1 unreserved " << std::hex << l1_unreserved_base_val << std::dec << std::endl;
+
             fprintf(
                 stderr,
                 "Read unexpected run_mailbox value: 0x%x (expected 0x%x or 0x%x)\n",
@@ -206,8 +218,7 @@ static bool check_if_riscs_on_specified_core_done(chip_id_t chip_id, const CoreC
                 run_state,
                 RUN_MSG_DONE);
             TT_FATAL(
-                run == run_state || run == RUN_MSG_DONE,
-                "Read unexpected run_mailbox value");
+                run == run_state || run == RUN_MSG_DONE, "Read unexpected run_mailbox value from core {}", core.str());
         }
 
         return run == RUN_MSG_DONE;
