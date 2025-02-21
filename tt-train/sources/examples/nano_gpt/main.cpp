@@ -610,7 +610,7 @@ int main(int argc, char **argv) {
                 *tokenizer,
                 config.transformer_config.max_sequence_length,
                 num_heads,
-                sequence_length,
+                256,
                 eval_config.temperature,
                 eval_config.repetition_penalty,
                 eval_config.top_k,

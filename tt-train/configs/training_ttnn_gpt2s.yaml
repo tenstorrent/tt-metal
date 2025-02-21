@@ -2,20 +2,20 @@ training_config:
   project_name: "tt_train_nano_gpt"
   seed: 5489
   model_save_interval: 100
-  model_path: "ttnn_gpt2s_16k_1024_2100.msgpack"
-  batch_size: 32
+  model_path: "ttnn_gpt2s_gpt_1024_data.msgpack"
+  batch_size: 8
   num_epochs: 1
   max_steps: 5000 #2.5B tokens used for training
   learning_rate: 0.0003
   weight_decay: 0.1
   use_moreh_adamw: true
   use_kahan_summation: false
-  gradient_accumulation_steps: 8
+  gradient_accumulation_steps: 16
   tokenizer_path: "data/train_ttnn/tokenizer.json"
   tokenizer_type: bpe
-  data_path: "data/train_ttnn/tokens.dat"
+  data_path: "data/train_ttnn/data.txt"
   scheduler_type: "warmup_linear"
-  using_clip_grad_norm: false
+  using_clip_grad_norm: true
 
   transformer_config:
     weight_tying: enabled

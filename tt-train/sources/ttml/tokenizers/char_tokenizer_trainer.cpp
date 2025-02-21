@@ -20,10 +20,6 @@ std::unique_ptr<CharTokenizer> CharTokenizerTrainer::train(const std::string& te
     if (add_padding_token) {
         vocabulary[PAD_TOKEN] = 0U;
     }
-    const uint32_t special_tokens_count = 16000;
-    for (int i = 1; i < special_tokens_count + 1; i++) {
-        vocabulary["EMPTY_TOKEN_" + std::to_string(i)] = i;
-    }
 
     for (char chr : unique_chars) {
         vocabulary[std::string(1, chr)] = static_cast<uint32_t>(vocabulary.size());
