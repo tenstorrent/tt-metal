@@ -1271,14 +1271,14 @@ def test_binary_sharded_small_tile(a_shape, b_shape, shard_type, shard_size, cor
             torch.Size([1, 1, 1024, 1024]),
             ttnn.ShardStrategy.HEIGHT,
             [1024, 128],
-            ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 7))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (7, 0))}),
         ],
         [
             torch.Size([1, 1, 1024, 1024]),
             torch.Size([1, 1, 1024, 1024]),
             ttnn.ShardStrategy.WIDTH,
             [128, 1024],
-            ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 7))}),
+            ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (7, 0))}),
         ],
         [
             torch.Size([1, 1, 1024, 1024]),
