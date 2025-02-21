@@ -1,5 +1,5 @@
 
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2024-2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,6 +9,14 @@
 #include "ttnn/operations/eltwise/binary_ng/types.hpp"
 #include "ttnn/operations/copy.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
+
+inline Tensor typecast_to(DataType dtype, const Tensor& input) {
+    return input.get_dtype() == dtype ? input : ttnn::typecast(input, dtype);
+}
+
+inline bool needs_typecast_to_bfloat16(const ttnn::DataType input) {
+    return (input == ttnn::DataType::BFLOAT8_B || input == ttnn::DataType::BFLOAT4_B);
+}
 
 namespace ttnn::operations::binary_ng {
 
