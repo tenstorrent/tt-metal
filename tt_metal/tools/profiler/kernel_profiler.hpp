@@ -45,9 +45,19 @@ extern uint32_t stackSize;
 extern uint32_t sums[SUM_COUNT];
 extern uint32_t sumIDs[SUM_COUNT];
 
+constexpr uint32_t PROFILER_PUSH_TIME_OUT = 100000;
 constexpr uint32_t QUICK_PUSH_MARKER_COUNT = 2;
 constexpr int WALL_CLOCK_HIGH_INDEX = 1;
 constexpr int WALL_CLOCK_LOW_INDEX = 0;
+
+#if defined(COMPILE_FOR_BRISC)
+uint32_t core_flat_id;
+uint32_t profiler_core_count_per_dram;
+uint32_t dram_buffer_address;
+uint32_t dram_bank;
+uint32_t dram_offset_base;
+uint32_t dram_buffer_page_size;
+#endif
 
 volatile tt_l1_ptr uint32_t* profiler_control_buffer =
     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(GET_MAILBOX_ADDRESS_DEV(profiler.control_vector));
@@ -79,15 +89,6 @@ constexpr uint32_t Hash16_CT(const char (&s)[N]) {
     auto res = Hash32_CT(s, N - 1);
     return ((res & 0xFFFF) ^ ((res & 0xFFFF0000) >> 16)) & 0xFFFF;
 }
-
-#if defined(COMPILE_FOR_BRISC)
-uint32_t core_flat_id;
-uint32_t profiler_core_count_per_dram;
-uint32_t profiler_dram_profiler_address;
-uint32_t bank;
-uint32_t dram_offset_base;
-uint32_t pageSize;
-#endif
 
 enum class DoingDispatch { DISPATCH, NOT_DISPATCH };
 
@@ -130,10 +131,10 @@ __attribute__((noinline)) void init_profiler(
 
     core_flat_id = profiler_control_buffer[FLAT_ID];
     profiler_core_count_per_dram = profiler_control_buffer[CORE_COUNT_PER_DRAM];
-    profiler_dram_profiler_address = profiler_control_buffer[DRAM_PROFILER_ADDRESS];
+    dram_buffer_address = profiler_control_buffer[DRAM_PROFILER_ADDRESS];
     profiler_data_buffer[myRiscID][ID_LH] = ((core_flat_id & 0xFF) << 3) | myRiscID;
-    bank = core_flat_id / profiler_core_count_per_dram;
-    pageSize = PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * MAX_RISCV_PER_CORE * profiler_core_count_per_dram;
+    dram_bank = core_flat_id / profiler_core_count_per_dram;
+    dram_buffer_page_size = PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * MAX_RISCV_PER_CORE * profiler_core_count_per_dram;
     dram_offset_base =
         (core_flat_id % profiler_core_count_per_dram) * MAX_RISCV_PER_CORE * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC +
         (HOST_BUFFER_END_INDEX_BR_ER + myRiscID) * PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC;
@@ -208,12 +209,12 @@ __attribute__((noinline)) void quick_push() {
         wIndex += PROFILER_L1_MARKER_UINT32_SIZE;
     }
 
-    InterleavedAddrGen<true> s = {.bank_base_address = profiler_dram_profiler_address, .page_size = pageSize};
+    InterleavedAddrGen<true> s = {.bank_base_address = dram_buffer_address, .page_size = dram_buffer_page_size};
 
     uint32_t dram_offset =
         dram_offset_base + profiler_control_buffer[HOST_BUFFER_END_INDEX_BR_ER + myRiscID] * sizeof(uint32_t);
 
-    uint64_t dram_bank_dst_noc_addr = s.get_noc_addr(bank, dram_offset);
+    uint64_t dram_bank_dst_noc_addr = s.get_noc_addr(dram_bank, dram_offset);
 
     for (uint32_t i = 0; i < (wIndex % NOC_ALIGNMENT_FACTOR); i++) {
         mark_padding();
@@ -250,10 +251,12 @@ __attribute__((noinline)) void finish_profiler() {
     profiler_control_buffer[PROFILER_DONE] = 1;
     risc_finished_profiling();
 #if defined(COMPILE_FOR_BRISC)
-    uint32_t core_flat_id = profiler_control_buffer[FLAT_ID];
-    uint32_t profiler_core_count_per_dram = profiler_control_buffer[CORE_COUNT_PER_DRAM];
 
-    uint32_t pageSize = PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * MAX_RISCV_PER_CORE * profiler_core_count_per_dram;
+    // uint32_t core_flat_id = profiler_control_buffer[FLAT_ID];
+    // uint32_t profiler_core_count_per_dram = profiler_control_buffer[CORE_COUNT_PER_DRAM];
+
+    // uint32_t dram_buffer_page_size = PROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC * MAX_RISCV_PER_CORE *
+    // profiler_core_count_per_dram;
     for (uint32_t riscID = 0; riscID < PROFILER_RISC_COUNT; riscID++) {
         profiler_data_buffer[riscID][ID_LH] = ((core_flat_id & 0xFF) << 3) | riscID;
         int hostIndex = riscID;
@@ -289,7 +292,8 @@ __attribute__((noinline)) void finish_profiler() {
 
             if (do_noc) {
                 const InterleavedAddrGen<true> s = {
-                    .bank_base_address = profiler_control_buffer[DRAM_PROFILER_ADDRESS], .page_size = pageSize};
+                    .bank_base_address = profiler_control_buffer[DRAM_PROFILER_ADDRESS],
+                    .page_size = dram_buffer_page_size};
 
                 uint64_t dram_bank_dst_noc_addr =
                     s.get_noc_addr(core_flat_id / profiler_core_count_per_dram, dram_offset);
@@ -309,7 +313,7 @@ __attribute__((noinline)) void finish_profiler() {
 
 void push_time_out() {
 #if defined(COMPILE_FOR_BRISC)
-    if (time_out++ > 100000 and wIndex > CUSTOM_MARKERS + PROFILER_L1_MARKER_UINT32_SIZE) {
+    if (time_out++ > PROFILER_PUSH_TIME_OUT && wIndex > CUSTOM_MARKERS + PROFILER_L1_MARKER_UINT32_SIZE) {
         time_out = 0;
         finish_profiler();
     }
@@ -465,6 +469,8 @@ inline __attribute__((always_inline)) void recordEvent(uint16_t event_id) {
 
 #define DeviceZonesPush() kernel_profiler::push_time_out();
 
+#define DeviceProfilerInit() kernel_profiler::init_profiler();
+
 #else
 
 #define DeviceValidateProfiler(condition)
@@ -488,5 +494,7 @@ inline __attribute__((always_inline)) void recordEvent(uint16_t event_id) {
 #define DeviceRecordEvent(event_id)
 
 #define DeviceZonesPush()
+
+#define DeviceProfilerInit()
 
 #endif

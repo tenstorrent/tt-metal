@@ -82,7 +82,6 @@ int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
 namespace kernel_profiler {
     uint32_t wIndex __attribute__((used));
     uint32_t time_out __attribute__((used));
-    uint32_t doPush __attribute__((used));
     uint32_t stackSize __attribute__((used));
     uint32_t sums[SUM_COUNT] __attribute__((used));
     uint32_t sumIDs[SUM_COUNT] __attribute__((used));
@@ -385,7 +384,7 @@ int main() {
     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
     noc_local_state_init(noc_index);
     uint8_t prev_noc_mode = DM_DEDICATED_NOC;
-    kernel_profiler::init_profiler();
+    DeviceProfilerInit();
 
     while (1) {
         init_sync_registers();

@@ -95,7 +95,7 @@ int main(int argc, char *argv[]) {
     // Need to save address to jump to after BRISC resumes NCRISC
     set_ncrisc_resume_addr();
 
-    kernel_profiler::init_profiler();
+    DeviceProfilerInit();
     // Cleanup profiler buffer incase we never get the go message
     while (1) {
         WAYPOINT("W");
