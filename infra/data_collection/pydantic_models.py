@@ -9,6 +9,7 @@ Definition of the pydantic models used for data production.
 from datetime import datetime
 from typing import List, Optional
 
+from enum import Enum
 from pydantic import BaseModel, Field, model_validator
 
 
