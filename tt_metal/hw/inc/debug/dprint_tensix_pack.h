@@ -123,7 +123,7 @@ inline void dprint_tensix_pack_config_sub_l1_tile_header_size(const ckernel::pac
     DPRINT << DEC() << config.sub_l1_tile_header_size << ENDL();
 }
 
-inline void dprint tensix_pack_config_pack_start_intf_pos(const ckernel::packer::pack_config_t& config) {
+inline void dprint_tensix_pack_config_pack_start_intf_pos(const ckernel::packer::pack_config_t& config) {
     DPRINT << "0x" << HEX() << config.pack_start_intf_pos << ENDL();
 }
 
@@ -137,7 +137,7 @@ inline void dprint_tensix_pack_config_add_tile_header_size(const ckernel::packer
 }
 
 inline void dprint_tensix_pack_config_pack_dis_y_pos_start_offset(const ckernel::packer::pack_config_t& config) {
-    DPRINT < "0x" << HEX() << config.pack_dis_y_pos_start_offset << ENDL();
+    DPRINT << "0x" << HEX() << config.pack_dis_y_pos_start_offset << ENDL();
 }
 #endif
 
@@ -236,7 +236,7 @@ inline void dprint_tensix_pack_config_helper(const ckernel::packer::pack_config_
     DPRINT << "l1_dest_addr: ";
     dprint_tensix_pack_config_l1_dest_addr(config);
     DPRINT << "uncompress: ";
-    dprint_tensix_pack_config_uncompress(config);
+    dprint_tensix_pack_config_uncompressed(config);
     DPRINT << "add_l1_dest_addr_offset: ";
     dprint_tensix_pack_config_add_l1_dest_addr_offset(config);
     DPRINT << "disable_pack_zero_flag: ";
@@ -503,20 +503,25 @@ inline void dprint_tensix_pack_edge_offset(uint reg_id = 0) {
     PACK(
         edge_vec = ckernel::packer::read_pack_edge_offset();
         if (reg_id >= 1 && reg_id <= ckernel::packer::NUM_PACKERS) {
-            DPRINT << "REG_ID: " << reg_id << ENDL();
+            if (ckernel::packer::NUM_PACKERS > 1) {
+                DPRINT << "REG_ID: " << reg_id << ENDL();
+            }
             dprint_tensix_pack_edge_offset_helper(edge_vec[reg_id - 1], reg_id);
         }
         // Print all registers
         else if (reg_id == 0) {
             for (uint i = 1; i <= ckernel::packer::NUM_PACKERS; i++) {
-                DPRINT << "REG_ID: " << i << ENDL();
+                if (ckernel::packer::NUM_PACKERS > 1) {
+                    DPRINT << "REG_ID: " << i << ENDL();
+                }
                 dprint_tensix_pack_edge_offset_helper(edge_vec[i - 1], i);
                 if (i != ckernel::packer::NUM_PACKERS) {
                     DPRINT << ENDL();
                 }
             }
         } else DPRINT
-        << "INVALID REGISTER ID! PLEASE CHOOSE A NUMBER BETWEEN 0 AND " << ckernel::packer::NUM_PACKERS << "." << ENDL();)
+        << "INVALID REGISTER ID! PLEASE CHOOSE A NUMBER BETWEEN 0 AND " << ckernel::packer::NUM_PACKERS << "."
+        << ENDL();)
 }
 
 // PACK COUNTERS
@@ -563,20 +568,25 @@ inline void dprint_tensix_pack_counters(uint reg_id = 0) {
     PACK(
         counters_vec = ckernel::packer::read_pack_counters();
         if (reg_id >= 1 && reg_id <= ckernel::packer::NUM_PACKERS) {
-            DPRINT << "REG_ID: " << reg_id << ENDL();
+            if (ckernel::packer::NUM_PACKERS > 1) {
+                DPRINT << "REG_ID: " << reg_id << ENDL();
+            }
             dprint_tensix_pack_counters_helper(counters_vec[reg_id - 1]);
         }
         // Print all registers
         else if (reg_id == 0) {
             for (uint i = 1; i <= ckernel::packer::NUM_PACKERS; i++) {
-                DPRINT << "REG_ID: " << i << ENDL();
+                if (ckernel::packer::NUM_PACKERS > 1) {
+                    DPRINT << "REG_ID: " << i << ENDL();
+                }
                 dprint_tensix_pack_counters_helper(counters_vec[i - 1]);
                 if (i != ckernel::packer::NUM_PACKERS) {
                     DPRINT << ENDL();
                 }
             }
         } else DPRINT
-        << "INVALID REGISTER ID! PLEASE CHOOSE A NUMBER BETWEEN 0 AND " << ckernel::packer::NUM_PACKERS << "." << ENDL();)
+        << "INVALID REGISTER ID! PLEASE CHOOSE A NUMBER BETWEEN 0 AND " << ckernel::packer::NUM_PACKERS << "."
+        << ENDL();)
 }
 
 // Choose what register you want by id (1-4). 0 for all.
@@ -584,10 +594,14 @@ inline void dprint_tensix_pack_config(uint reg_id = 0) {
     std::array<ckernel::packer::pack_config_t, ckernel::packer::NUM_PACKERS> config_vec;
     MATH(
         config_vec = ckernel::packer::read_pack_config(); if (reg_id >= 1 && reg_id <= ckernel::packer::NUM_PACKERS) {
-            DPRINT << "REG_ID: " << reg_id << ENDL();
+            if (ckernel::packer::NUM_PACKERS > 1) {
+                DPRINT << "REG_ID: " << reg_id << ENDL();
+            }
             dprint_tensix_pack_config_helper(config_vec[reg_id - 1]);
         } else if (reg_id == 0) for (uint i = 1; i <= ckernel::packer::NUM_PACKERS; i++) {
-            DPRINT << "REG_ID: " << i << ENDL();
+            if (ckernel::packer::NUM_PACKERS > 1) {
+                DPRINT << "REG_ID: " << i << ENDL();
+            }
             dprint_tensix_pack_config_helper(config_vec[i - 1]);
             if (i != ckernel::packer::NUM_PACKERS) {
                 DPRINT << ENDL();

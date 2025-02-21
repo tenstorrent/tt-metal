@@ -127,16 +127,16 @@ void generate_pack_config(ckernel::packer::pack_config_t& config) {
 
 #if defined(ARCH_WORMHOLE) or defined(ARCH_BLACKHOLE)
 void generate_relu_config(ckernel::packer::relu_config_t& config) {
-   config.ALU_ACC_CTRL_Zero_Flag_disabled_src = 1;
-   config.ALU_ACC_CTRL_Zero_Flag_disabled_dst = 0;
-   config.STACC_RELU_ApplyRelu = 1;
-   config.STACC_RELU_ReluThreshold = 8;
-   config.DISABLE_RISC_BP_Disable_main = 0;
-   config.DISABLE_RISC_BP_Disable_trisc = 2;
-   config.DISABLE_RISC_BP_Disable_ncrisc = 1;
-   config.DISABLE_RISC_BP_Disable_bmp_clear_main = 0;
-   config.DISABLE_RISC_BP_Disable_bmp_clear_trisc = 2;
-   config.DISABLE_RISC_BP_Disable_bmp_clear_ncrisc = 1;
+    config.ALU_ACC_CTRL_Zero_Flag_disabled_src = 0;
+    config.ALU_ACC_CTRL_Zero_Flag_disabled_dst = 0;
+    config.STACC_RELU_ApplyRelu = 1;
+    config.STACC_RELU_ReluThreshold = 8;
+    config.DISABLE_RISC_BP_Disable_main = 0;
+    config.DISABLE_RISC_BP_Disable_trisc = 0;
+    config.DISABLE_RISC_BP_Disable_ncrisc = 0;
+    config.DISABLE_RISC_BP_Disable_bmp_clear_main = 0;
+    config.DISABLE_RISC_BP_Disable_bmp_clear_trisc = 0;
+    config.DISABLE_RISC_BP_Disable_bmp_clear_ncrisc = 0;
 }
 #endif
 

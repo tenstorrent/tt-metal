@@ -35,87 +35,239 @@ using namespace tt::test_utils::df;
 // Type of prints
 const std::unordered_set<std::string> format_fields = {"ALU_FORMAT_SPEC_REG0_SrcA", "ALU_FORMAT_SPEC_REG1_SrcB",
     "ALU_FORMAT_SPEC_REG2_Dstacc", "in_data_format", "out_data_format"};
-const std::unordered_set<std::string> decimal_fields = {"blobs_per_xy_plane", "x_dim", "y_dim", "z_dim", "w_dim", "blobs_y_start",
-    "digest_size", "upsample_rate", "shift_amount", "fifo_size", "row_ptr_section_size", "exp_section_size", "pack_per_xy_plane",
-    "downsample_shift_count", "exp_threshold", "STACC_RELU_ReluThreshold", "pack_reads_per_xy_plane", "pack_xys_per_til", "pack_per_xy_plane_offset"};
+const std::unordered_set<std::string> decimal_fields = {
+    "blobs_per_xy_plane",
+    "x_dim",
+    "y_dim",
+    "z_dim",
+    "w_dim",
+    "blobs_y_start",
+    "digest_size",
+    "upsample_rate",
+    "shift_amount",
+    "fifo_size",
+    "row_ptr_section_size",
+    "exp_section_size",
+    "pack_per_xy_plane",
+    "downsample_shift_count",
+    "exp_threshold",
+    "STACC_RELU_ReluThreshold",
+    "pack_reads_per_xy_plane",
+    "pack_xys_per_til",
+    "pack_per_xy_plane_offset",
+    "sub_l1_tile_header_size",
+    "add_tile_header_size"};
 
 // ALU CONFIG
-const std::vector<std::string> field_names_alu_config = {"ALU_ROUNDING_MODE_Fpu_srnd_en", "ALU_ROUNDING_MODE_Gasket_srnd_en", "ALU_ROUNDING_MODE_Packer_srnd_en",
-    "ALU_ROUNDING_MODE_Padding", "ALU_ROUNDING_MODE_GS_LF", "ALU_ROUNDING_MODE_Bfp8_HF", "ALU_FORMAT_SPEC_REG0_SrcAUnsigned",
-    "ALU_FORMAT_SPEC_REG0_SrcBUnsigned", "ALU_FORMAT_SPEC_REG0_SrcA", "ALU_FORMAT_SPEC_REG1_SrcB", "ALU_FORMAT_SPEC_REG2_Dstacc",
-    "ALU_ACC_CTRL_Fp32_enabled", "ALU_ACC_CTRL_SFPU_Fp32_enabled", "ALU_ACC_CTRL_INT8_math_enabled"};
-const std::vector<uint32_t> field_values_alu_config = {1,0,1,15,0,1,1,0,0,1,0,0,0,1};
+const std::vector<std::string> field_names_alu_config_all = {
+    "ALU_ROUNDING_MODE_Fpu_srnd_en",
+    "ALU_ROUNDING_MODE_Gasket_srnd_en",
+    "ALU_ROUNDING_MODE_Packer_srnd_en",
+    "ALU_ROUNDING_MODE_Padding",
+    "ALU_ROUNDING_MODE_GS_LF",
+    "ALU_ROUNDING_MODE_Bfp8_HF",
+    "ALU_FORMAT_SPEC_REG0_SrcAUnsigned",
+    "ALU_FORMAT_SPEC_REG0_SrcBUnsigned",
+    "ALU_FORMAT_SPEC_REG0_SrcA",
+    "ALU_FORMAT_SPEC_REG1_SrcB",
+    "ALU_FORMAT_SPEC_REG2_Dstacc",
+    "ALU_ACC_CTRL_Fp32_enabled",
+    "ALU_ACC_CTRL_SFPU_Fp32_enabled",
+    "ALU_ACC_CTRL_INT8_math_enabled"};
+const std::vector<uint32_t> field_values_alu_config_all = {1, 0, 1, 15, 0, 1, 1, 0, 0, 1, 0, 0, 0, 1};
 
 // PACK_EDGE_OFFSET
-const std::vector<std::string> field_names_pack_edge_offset = {"mask", "mode", "tile_row_set_select_pack0", "tile_row_set_select_pack1",
-    "tile_row_set_select_pack2", "tile_row_set_select_pack3", "reserved"};
-const std::vector<uint32_t> field_values_pack_edge_offset = {16,1,0,1,2,3,0};
+const std::vector<std::string> field_names_pack_edge_offset_all = {
+    "mask",
+    "mode",
+    "tile_row_set_select_pack0",
+    "tile_row_set_select_pack1",
+    "tile_row_set_select_pack2",
+    "tile_row_set_select_pack3",
+    "reserved"};
+const std::vector<uint32_t> field_values_pack_edge_offset_all = {16, 1, 0, 1, 2, 3, 0};
 
 // PACK_COUNTERS
-const std::vector<std::string> field_names_pack_counters = {"pack_per_xy_plane", "pack_reads_per_xy_plane", "pack_xys_per_til", "pack_yz_transposed",
+const std::vector<std::string> field_names_pack_counters_all = {
+    "pack_per_xy_plane",
+    "pack_reads_per_xy_plane",
+    "pack_xys_per_til",
+    "pack_yz_transposed",
     "pack_per_xy_plane_offset"};
-const std::vector<uint32_t> field_values_pack_counters = {4,8,2,0,6};
+const std::vector<uint32_t> field_values_pack_counters_all = {4, 8, 2, 0, 6};
 
 // RELU_CONFIG
-const std::vector<std::string> field_names_relu_config = {"ALU_ACC_CTRL_Zero_Flag_disabled_src", "ALU_ACC_CTRL_Zero_Flag_disabled_dst", "STACC_RELU_ApplyRelu",
-    "STACC_RELU_ReluThreshold", "DISABLE_RISC_BP_Disable_main", "DISABLE_RISC_BP_Disable_trisc", "DISABLE_RISC_BP_Disable_ncrisc", "DISABLE_RISC_BP_Disable_bmp_clear_main",
-    "DISABLE_RISC_BP_Disable_bmp_clear_trisc", "DISABLE_RISC_BP_Disable_bmp_clear_ncrisc"};
-const std::vector<uint32_t> field_values_relu_config = {1,0,1,8,0,2,1,0,2,1};
+const std::vector<std::string> field_names_relu_config_all = {
+    "ALU_ACC_CTRL_Zero_Flag_disabled_src",
+    "ALU_ACC_CTRL_Zero_Flag_disabled_dst",
+    "STACC_RELU_ApplyRelu",
+    "STACC_RELU_ReluThreshold",
+    "DISABLE_RISC_BP_Disable_main",
+    "DISABLE_RISC_BP_Disable_trisc",
+    "DISABLE_RISC_BP_Disable_ncrisc",
+    "DISABLE_RISC_BP_Disable_bmp_clear_main",
+    "DISABLE_RISC_BP_Disable_bmp_clear_trisc",
+    "DISABLE_RISC_BP_Disable_bmp_clear_ncrisc"};
+const std::vector<uint32_t> field_values_relu_config_all = {0, 0, 1, 8, 0, 0, 0, 0, 0, 0};
 
 // PACK_DEST_RD_CTRL
-const std::vector<std::string> field_names_dest_rd_ctrl = {"PCK_DEST_RD_CTRL_Read_32b_data", "PCK_DEST_RD_CTRL_Read_unsigned", "PCK_DEST_RD_CTRL_Read_int8",
-    "PCK_DEST_RD_CTRL_Round_10b_mant", "PCK_DEST_RD_CTRL_Reserved"};
-const std::vector<uint32_t> field_values_dest_rd_ctrl = {1,0,1,1,0};
+const std::vector<std::string> field_names_dest_rd_ctrl_all = {
+    "PCK_DEST_RD_CTRL_Read_32b_data",
+    "PCK_DEST_RD_CTRL_Read_unsigned",
+    "PCK_DEST_RD_CTRL_Read_int8",
+    "PCK_DEST_RD_CTRL_Round_10b_mant",
+    "PCK_DEST_RD_CTRL_Reserved"};
+const std::vector<uint32_t> field_values_dest_rd_ctrl_all = {1, 0, 1, 1, 0};
 
-#ifdef ARCH_GRAYSKULL
 // UNPACK TILE DESCRIPTOR
-const std::vector<std::string> field_names_unpack_tile_descriptor = {"in_data_format", "uncompressed", "reserved_0",
-    "blobs_per_xy_plane", "reserved_1", "x_dim", "y_dim", "z_dim", "w_dim", "blobs_y_start",
-    "digest_type", "digest_size"};
-const std::vector<uint32_t> field_values_unpack_tile_descriptor = {5,1,2,10,7,2,4,8,16,32,0,0};
+const std::vector<std::string> field_names_unpack_tile_descriptor_grayskull = {
+    "in_data_format",
+    "uncompressed",
+    "reserved_0",
+    "blobs_per_xy_plane",
+    "reserved_1",
+    "x_dim",
+    "y_dim",
+    "z_dim",
+    "w_dim",
+    "blobs_y_start",
+    "digest_type",
+    "digest_size"};
+const std::vector<uint32_t> field_values_unpack_tile_descriptor_grayskull = {5, 1, 2, 10, 7, 2, 4, 8, 16, 32, 0, 0};
 
 // UNPACK CONFIG
-const std::vector<std::string> field_names_unpack_config = {"out_data_format", "throttle_mode", "context_count", "haloize_mode",
-    "tileize_mode", "force_shared_exp", "reserved_0", "upsample_rate", "upsample_and_interlave", "shift_amount",
-    "uncompress_cntx0_3", "reserved_1", "uncompress_cntx4_7", "reserved_2", "limit_addr", "fifo_size"};
-const std::vector<uint32_t> field_values_unpack_config = {0,1,2,0,1,0,0,3,0,16,5,0,2,0,28,29};
+const std::vector<std::string> field_names_unpack_config_grayskull = {
+    "out_data_format",
+    "throttle_mode",
+    "context_count",
+    "haloize_mode",
+    "tileize_mode",
+    "force_shared_exp",
+    "reserved_0",
+    "upsample_rate",
+    "upsample_and_interlave",
+    "shift_amount",
+    "uncompress_cntx0_3",
+    "reserved_1",
+    "uncompress_cntx4_7",
+    "reserved_2",
+    "limit_addr",
+    "fifo_size"};
+const std::vector<uint32_t> field_values_unpack_config_grayskull = {0, 1, 2, 0, 1, 0, 0, 3, 0, 16, 5, 0, 2, 0, 28, 29};
 
 // PACK CONFIG
-const std::vector<std::string> field_names_pack_config = {"row_ptr_section_size", "exp_section_size", "l1_dest_addr", "uncompress", "add_l1_dest_addr_offset",
-    "reserved_0", "out_data_format", "in_data_format", "reserved_1", "src_if_sel", "pack_per_xy_plane", "l1_src_addr", "downsample_mask", "downsample_shift_count",
-    "read_mode", "exp_threshold_en", "reserved_2", "exp_threshold"};
-const std::vector<uint32_t> field_values_pack_config = {12,24,16,0,1,0,5,5,0,1,0,8,12,4,0,1,0,12};
+const std::vector<std::string> field_names_pack_config_grayskull = {
+    "row_ptr_section_size",
+    "exp_section_size",
+    "l1_dest_addr",
+    "uncompress",
+    "add_l1_dest_addr_offset",
+    "reserved_0",
+    "out_data_format",
+    "in_data_format",
+    "reserved_1",
+    "src_if_sel",
+    "pack_per_xy_plane",
+    "l1_src_addr",
+    "downsample_mask",
+    "downsample_shift_count",
+    "read_mode",
+    "exp_threshold_en",
+    "reserved_2",
+    "exp_threshold"};
+const std::vector<uint32_t> field_values_pack_config_grayskull = {
+    12, 24, 16, 0, 1, 0, 5, 5, 0, 1, 0, 8, 12, 4, 0, 1, 0, 12};
 
-
-#else // ARCH_WORMHOLE or ARCH_BLACKHOLE
 // UNPACK TILE DESCRIPTOR
-const std::vector<std::string> field_names_unpack_tile_descriptor = {"in_data_format", "uncompressed", "reserved_0",
-    "blobs_per_xy_plane", "reserved_1", "x_dim", "y_dim", "z_dim", "w_dim", "blobs_y_start_lo", "blobs_y_start_hi",
-    "digest_type", "digest_size"};
-const std::vector<uint32_t> field_values_unpack_tile_descriptor = {5,1,0,10,7,2,4,8,16,32,0,0,0};
+const std::vector<std::string> field_names_unpack_tile_descriptor_wormhole_or_blackhole = {
+    "in_data_format",
+    "uncompressed",
+    "reserved_0",
+    "blobs_per_xy_plane",
+    "reserved_1",
+    "x_dim",
+    "y_dim",
+    "z_dim",
+    "w_dim",
+    "blobs_y_start_lo",
+    "blobs_y_start_hi",
+    "digest_type",
+    "digest_size"};
+const std::vector<uint32_t> field_values_unpack_tile_descriptor_wormhole_or_blackhole = {
+    5, 1, 0, 10, 7, 2, 4, 8, 16, 32, 0, 0, 0};
 
 // UNPACK CONFIG
-const std::vector<std::string> field_names_unpack_config = {"out_data_format", "throttle_mode", "context_count", "haloize_mode",
-    "tileize_mode", "unpack_src_reg_set_update", "unpack_if_sel", "upsample_rate", "reserved_1", "upsample_and_interlave",
-    "shift_amount", "uncompress_cntx0_3", "unpack_if_sel_cntx0_3", "force_shared_exp", "reserved_2", "uncompress_cntx4_7",
-    "unpack_if_sel_cntx4_7", "reserved_3", "limit_addr", "reserved_4", "fifo_size", "reserved_5"};
-const std::vector<uint32_t> field_values_unpack_config = {0,1,2,0,1,1,0,3,0,0,16,5,6,0,0,2,3,0,28,0,29,0};
+const std::vector<std::string> field_names_unpack_config_wormhole_or_blackhole = {
+    "out_data_format",
+    "throttle_mode",
+    "context_count",
+    "haloize_mode",
+    "tileize_mode",
+    "unpack_src_reg_set_update",
+    "unpack_if_sel",
+    "upsample_rate",
+    "reserved_1",
+    "upsample_and_interlave",
+    "shift_amount",
+    "uncompress_cntx0_3",
+    "unpack_if_sel_cntx0_3",
+    "force_shared_exp",
+    "reserved_2",
+    "uncompress_cntx4_7",
+    "unpack_if_sel_cntx4_7",
+    "reserved_3",
+    "limit_addr",
+    "reserved_4",
+    "fifo_size",
+    "reserved_5"};
+const std::vector<uint32_t> field_values_unpack_config_wormhole_or_blackhole = {0, 1, 2, 0, 1, 1, 0, 3,  0, 0,  16,
+                                                                                5, 6, 0, 0, 2, 3, 0, 28, 0, 29, 0};
 
-#ifdef ARCH_BLACKHOLE
-const std::vector<std::string> field_names_pack_config = {"row_ptr_section_size", "exp_section_size", "l1_dest_addr", "uncompress", "add_l1_dest_addr_offset",
-    "disable_pack_zero_flag", "reserved_0", "out_data_format", "in_data_format", "dis_shared_exp_assembler", "auto_set_last_pacr_intf_sel",
-    "enable_out_fifo", "sub_l1_tile_header_size", "pack_start_intf_pos", "all_pack_disable_zero_compress_ovrd", "add_tile_header_size", "pack_dis_y_pos_start_offset",
+const std::vector<std::string> field_names_pack_config_blackhole = {
+    "row_ptr_section_size",
+    "exp_section_size",
+    "l1_dest_addr",
+    "uncompress",
+    "add_l1_dest_addr_offset",
+    "disable_pack_zero_flag",
+    "reserved_0",
+    "out_data_format",
+    "in_data_format",
+    "dis_shared_exp_assembler",
+    "auto_set_last_pacr_intf_sel",
+    "enable_out_fifo",
+    "sub_l1_tile_header_size",
+    "src_if_sel",
+    "pack_start_intf_pos",
+    "all_pack_disable_zero_compress_ovrd",
+    "add_tile_header_size",
+    "pack_dis_y_pos_start_offset",
     "l1_src_addr"};
-const std::vector<std::string> field_values_pack_config = {12,24,16,0,1,1,0,5,5,0,0,1,0,1,2,0,1,0,8};
-#else
+const std::vector<uint32_t> field_values_pack_config_blackhole = {
+    12, 24, 16, 0, 1, 1, 0, 5, 5, 0, 0, 1, 0, 1, 2, 0, 1, 0, 8};
 // PACK CONFIG
-const std::vector<std::string> field_names_pack_config = {"row_ptr_section_size", "exp_section_size", "l1_dest_addr", "uncompress", "add_l1_dest_addr_offset",
-    "reserved_0", "out_data_format", "in_data_format", "reserved_1", "src_if_sel", "pack_per_xy_plane", "l1_src_addr", "downsample_mask", "downsample_shift_count",
-    "read_mode", "exp_threshold_en", "pack_l1_acc_disable_pack_zero_flag", "reserved_2", "exp_threshold"};
-const std::vector<uint32_t> field_values_pack_config = {12,24,16,0,1,0,5,5,0,1,0,8,12,4,0,1,2,0,12};
-#endif
-
-#endif
+const std::vector<std::string> field_names_pack_config_wormhole = {
+    "row_ptr_section_size",
+    "exp_section_size",
+    "l1_dest_addr",
+    "uncompress",
+    "add_l1_dest_addr_offset",
+    "reserved_0",
+    "out_data_format",
+    "in_data_format",
+    "reserved_1",
+    "src_if_sel",
+    "pack_per_xy_plane",
+    "l1_src_addr",
+    "downsample_mask",
+    "downsample_shift_count",
+    "read_mode",
+    "exp_threshold_en",
+    "pack_l1_acc_disable_pack_zero_flag",
+    "reserved_2",
+    "exp_threshold"};
+const std::vector<uint32_t> field_values_pack_config_wormhole = {
+    12, 24, 16, 0, 1, 0, 5, 5, 0, 1, 0, 8, 12, 4, 0, 1, 2, 0, 12};
 
 // Configuration for Data Flow Test involving Reader, Datacopy, and Writer
 struct ConfigRegPrintTestConfig {
@@ -230,6 +382,9 @@ static void print_config_reg(
 }
 
 TEST_F(DPrintFixture, ConfigRegAluTestPrint) {
+    std::vector<std::string> field_names_alu_config = field_names_alu_config_all;
+    std::vector<uint32_t> field_values_alu_config = field_values_alu_config_all;
+
     // Setup test configuration
     ConfigRegPrintTestConfig test_config = {
         .core = CoreCoord(0, 0),
@@ -251,6 +406,18 @@ TEST_F(DPrintFixture, ConfigRegAluTestPrint) {
 
 TEST_F(DPrintFixture, ConfigRegTileDescriptorTestPrint) {
     // Setup test configuration
+
+    std::vector<std::string> field_names_unpack_tile_descriptor;
+    std::vector<uint32_t> field_values_unpack_tile_descriptor;
+
+    if (this->arch_ == ARCH::GRAYSKULL) {
+        field_names_unpack_tile_descriptor = field_names_unpack_tile_descriptor_grayskull;
+        field_values_unpack_tile_descriptor = field_values_unpack_tile_descriptor_grayskull;
+    } else {
+        field_names_unpack_tile_descriptor = field_names_unpack_tile_descriptor_wormhole_or_blackhole;
+        field_values_unpack_tile_descriptor = field_values_unpack_tile_descriptor_wormhole_or_blackhole;
+    }
+
     ConfigRegPrintTestConfig test_config = {
         .core = CoreCoord(0, 0),
         .write_kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_config_reg.cpp",
@@ -266,6 +433,17 @@ TEST_F(DPrintFixture, ConfigRegTileDescriptorTestPrint) {
 }
 
 TEST_F(DPrintFixture, ConfigRegUnpackTestPrint) {
+    std::vector<std::string> field_names_unpack_config;
+    std::vector<uint32_t> field_values_unpack_config;
+
+    if (this->arch_ == ARCH::GRAYSKULL) {
+        field_names_unpack_config = field_names_unpack_config_grayskull;
+        field_values_unpack_config = field_values_unpack_config_grayskull;
+    } else {
+        field_names_unpack_config = field_names_unpack_config_wormhole_or_blackhole;
+        field_values_unpack_config = field_values_unpack_config_wormhole_or_blackhole;
+    }
+
     // Setup test configuration
     ConfigRegPrintTestConfig test_config = {
         .core = CoreCoord(0, 0),
@@ -282,11 +460,32 @@ TEST_F(DPrintFixture, ConfigRegUnpackTestPrint) {
 }
 
 TEST_F(DPrintFixture, ConfigRegPackTestPrint) {
+    std::vector<std::string> field_names_pack_config;
+    std::vector<uint32_t> field_values_pack_config;
+
+    if (this->arch_ == ARCH::GRAYSKULL) {
+        field_names_pack_config = field_names_pack_config_grayskull;
+        field_values_pack_config = field_values_pack_config_grayskull;
+    } else if (this->arch_ == ARCH::WORMHOLE_B0) {
+        field_names_pack_config = field_names_pack_config_wormhole;
+        field_values_pack_config = field_values_pack_config_wormhole;
+    } else {
+        field_names_pack_config = field_names_pack_config_blackhole;
+        field_values_pack_config = field_values_pack_config_blackhole;
+    }
+
+    int num_of_registers;
+    if (this->arch_ == ARCH::BLACKHOLE) {
+        num_of_registers = 1;
+    } else {
+        num_of_registers = 4;
+    }
+
     // Setup test configuration
     ConfigRegPrintTestConfig test_config = {
         .core = CoreCoord(0, 0),
         .write_kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_config_reg.cpp",
-        .num_of_registers = 4,
+        .num_of_registers = num_of_registers,
         .field_names = field_names_pack_config,
         .field_values = field_values_pack_config,
         .register_name = PACK_CONFIG};
@@ -298,6 +497,9 @@ TEST_F(DPrintFixture, ConfigRegPackTestPrint) {
 }
 
 TEST_F(DPrintFixture, ConfigRegReluTestPrint) {
+    std::vector<std::string> field_names_relu_config = field_names_relu_config_all;
+    std::vector<uint32_t> field_values_relu_config = field_values_relu_config_all;
+
     // Setup test configuration
     ConfigRegPrintTestConfig test_config = {
         .core = CoreCoord(0, 0),
@@ -318,6 +520,9 @@ TEST_F(DPrintFixture, ConfigRegReluTestPrint) {
 }
 
 TEST_F(DPrintFixture, ConfigRegDestRdCtrlTestPrint) {
+    std::vector<std::string> field_names_dest_rd_ctrl = field_names_dest_rd_ctrl_all;
+    std::vector<uint32_t> field_values_dest_rd_ctrl = field_values_dest_rd_ctrl_all;
+
     // Setup test configuration
     ConfigRegPrintTestConfig test_config = {
         .core = CoreCoord(0, 0),
@@ -338,11 +543,21 @@ TEST_F(DPrintFixture, ConfigRegDestRdCtrlTestPrint) {
 }
 
 TEST_F(DPrintFixture, ConfigRegPackEdgeOffsetTestPrint) {
+    std::vector<std::string> field_names_pack_edge_offset = field_names_pack_edge_offset_all;
+    std::vector<uint32_t> field_values_pack_edge_offset = field_values_pack_edge_offset_all;
+
+    int num_of_registers;
+    if (this->arch_ == ARCH::BLACKHOLE) {
+        num_of_registers = 1;
+    } else {
+        num_of_registers = 4;
+    }
+
     // Setup test configuration
     ConfigRegPrintTestConfig test_config = {
         .core = CoreCoord(0, 0),
         .write_kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_config_reg.cpp",
-        .num_of_registers = 4,
+        .num_of_registers = num_of_registers,
         .field_names = field_names_pack_edge_offset,
         .field_values = field_values_pack_edge_offset,
         .register_name = PACK_EDGE_OFFSET};
@@ -354,11 +569,21 @@ TEST_F(DPrintFixture, ConfigRegPackEdgeOffsetTestPrint) {
 }
 
 TEST_F(DPrintFixture, ConfigRegPackCountersTestPrint) {
+    std::vector<std::string> field_names_pack_counters = field_names_pack_counters_all;
+    std::vector<uint32_t> field_values_pack_counters = field_values_pack_counters_all;
+
+    int num_of_registers;
+    if (this->arch_ == ARCH::BLACKHOLE) {
+        num_of_registers = 1;
+    } else {
+        num_of_registers = 4;
+    }
+
     // Setup test configuration
     ConfigRegPrintTestConfig test_config = {
         .core = CoreCoord(0, 0),
         .write_kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_config_reg.cpp",
-        .num_of_registers = 4,
+        .num_of_registers = num_of_registers,
         .field_names = field_names_pack_counters,
         .field_values = field_values_pack_counters,
         .register_name = PACK_COUNTERS};
