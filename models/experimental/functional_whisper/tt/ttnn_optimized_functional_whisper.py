@@ -458,17 +458,23 @@ def preprocess_encoder_inputs(input_features, *, parameters, device):
     return input_embeds
 
 
-def preprocess_decoder_inputs(config, input_ids, attention_mask, *, parameters, device):
+def preprocess_decoder_inputs(
+    config, input_ids, attention_mask, *, parameters, device, decode_pos=None, create_attention_mask=True
+):
     input_shape = input_ids.size()
     input_ids = torch.reshape(input_ids, (-1, input_shape[-1]))
     inputs_embeds = F.embedding(input_ids, parameters.embed_tokens.weight)
-    attention_mask = prepare_decoder_attention_mask(attention_mask, input_shape, inputs_embeds)
+    if create_attention_mask:
+        attention_mask = prepare_decoder_attention_mask(attention_mask, input_shape, inputs_embeds)
     if attention_mask is not None:
         # ttnn cannot broadcast when adding on the batch or channel dimensions so this is a workaround
         attention_mask = attention_mask.expand(-1, config.encoder_attention_heads, -1, -1)
         attention_mask = ttnn.from_torch(attention_mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
-    positions = parameters.embed_positions.weight[0 : input_ids.shape[-1]]
+    if decode_pos is None:
+        positions = parameters.embed_positions.weight[0 : input_ids.shape[-1]]
+    else:
+        positions = parameters.embed_positions.weight[decode_pos : decode_pos + 1]
     decoder_hidden_states = inputs_embeds + positions
 
     decoder_hidden_states = ttnn.from_torch(
@@ -486,10 +492,16 @@ def preprocess_inputs(
     attention_mask,
     parameters,
     device,
+    create_attention_mask=True,
 ):
     input_embeds = preprocess_encoder_inputs(input_features, parameters=parameters.encoder, device=device)
     (decoder_hidden_states, attention_mask) = preprocess_decoder_inputs(
-        config, input_ids, attention_mask, parameters=parameters.decoder, device=device
+        config,
+        input_ids,
+        attention_mask,
+        parameters=parameters.decoder,
+        device=device,
+        create_attention_mask=create_attention_mask,
     )
     return input_embeds, decoder_hidden_states, attention_mask
 
