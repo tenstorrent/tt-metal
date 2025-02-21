@@ -77,7 +77,6 @@ jobs:
         with:
           submodules: recursive
           fetch-depth: 0
-          ref: ${{ inputs.good-commit }}
       - name: Set up dyanmic env vars for build
         run: |
           echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
