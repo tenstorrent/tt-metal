@@ -131,7 +131,34 @@ def run_conv_transpose2d(
 
     if config_override and "act_block_w_div" in config_override:
         conv_config.act_block_w_div = config_override["act_block_w_div"]
-
+    print(
+        "Input: ",
+        tt_input_tensor.shape,
+        tt_input_tensor.memory_config(),
+        tt_input_tensor.get_layout(),
+        tt_input_tensor.get_dtype(),
+    )
+    print(
+        "Input: ",
+        tt_input_tensor.shape,
+        tt_input_tensor.memory_config(),
+        tt_input_tensor.get_layout(),
+        tt_input_tensor.get_dtype(),
+    )
+    print(
+        "weight: ",
+        tt_weight_tensor.shape,
+        tt_weight_tensor.memory_config(),
+        tt_weight_tensor.get_layout(),
+        tt_weight_tensor.get_dtype(),
+    )
+    print(
+        "bias: ",
+        tt_bias_tensor.shape,
+        tt_bias_tensor.memory_config(),
+        tt_bias_tensor.get_layout(),
+        tt_bias_tensor.get_dtype(),
+    )
     [tt_output_tensor_on_device, [out_height, out_width], [weights_device, bias_device]] = ttnn.conv_transpose2d(
         input_tensor=tt_input_tensor,
         weight_tensor=tt_weight_tensor,
@@ -155,6 +182,7 @@ def run_conv_transpose2d(
         return_weights_and_bias=True,
     )
     logger.info(f"Conv2d Transpose Input = {(input_height, input_width)} Output = {out_height, out_width}")
+    print(tt_output_tensor_on_device.memory_config())
 
     torch_output_tensor = ttnn.to_torch((tt_output_tensor_on_device).cpu())
 
@@ -213,6 +241,148 @@ def run_conv_transpose2d(
 )
 @pytest.mark.parametrize("mirror_kernel", [True, False])
 def test_simple_conv_t2d(
+    device,
+    use_program_cache,
+    activations_dtype,
+    weights_dtype,
+    batch_size,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    pad_h,
+    pad_w,
+    out_pad_h,
+    out_pad_w,
+    config,
+    shard_layout,
+    mirror_kernel,
+):
+    if device.core_grid.y != 8:
+        pytest.skip("Needs 8x8 Grid")
+    run_conv_transpose2d(
+        device,
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        activations_dtype=activations_dtype,
+        weights_dtype=weights_dtype,
+        batch_size=batch_size,
+        output_channels=output_channels,
+        input_channels=input_channels,
+        input_height=input_height,
+        input_width=input_width,
+        filter_height=filter_height,
+        filter_width=filter_width,
+        stride_h=stride_h,
+        stride_w=stride_w,
+        pad_h=pad_h,
+        pad_w=pad_w,
+        out_pad_h=out_pad_h,
+        out_pad_w=out_pad_w,
+        config_override=config,
+        shard_layout=shard_layout,
+        auto_shard=True,
+        mirror_kernel=mirror_kernel,
+    )
+
+
+@skip_for_blackhole()
+@skip_for_grayskull()
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 64 * 1024}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, input_height, input_width, input_channels, output_channels, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, out_pad_h, out_pad_w, config, shard_layout",
+    (
+        # (1, 30, 40, 512, 256, 2, 2, 2, 2, 0, 0, 0, 0, None, None),
+        (1, 60, 80, 256, 128, 2, 2, 2, 2, 0, 0, 0, 0, None, None),
+        # (1, 120, 160, 128, 64, 2, 2, 2, 2, 0, 0, 0, 0, None, None),
+    ),
+)
+@pytest.mark.parametrize(
+    "weights_dtype",
+    [
+        ttnn.bfloat16,
+    ],
+)
+@pytest.mark.parametrize(
+    "activations_dtype",
+    [
+        ttnn.bfloat16,
+    ],
+)
+@pytest.mark.parametrize("mirror_kernel", [False])
+def test_vanila_unet_deconv(
+    device,
+    use_program_cache,
+    activations_dtype,
+    weights_dtype,
+    batch_size,
+    output_channels,
+    input_channels,
+    input_height,
+    input_width,
+    filter_height,
+    filter_width,
+    stride_h,
+    stride_w,
+    pad_h,
+    pad_w,
+    out_pad_h,
+    out_pad_w,
+    config,
+    shard_layout,
+    mirror_kernel,
+):
+    if device.core_grid.y != 8:
+        pytest.skip("Needs 8x8 Grid")
+    run_conv_transpose2d(
+        device,
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        activations_dtype=activations_dtype,
+        weights_dtype=weights_dtype,
+        batch_size=batch_size,
+        output_channels=output_channels,
+        input_channels=input_channels,
+        input_height=input_height,
+        input_width=input_width,
+        filter_height=filter_height,
+        filter_width=filter_width,
+        stride_h=stride_h,
+        stride_w=stride_w,
+        pad_h=pad_h,
+        pad_w=pad_w,
+        out_pad_h=out_pad_h,
+        out_pad_w=out_pad_w,
+        config_override=config,
+        shard_layout=shard_layout,
+        auto_shard=True,
+        mirror_kernel=mirror_kernel,
+    )
+
+
+@skip_for_blackhole()
+@skip_for_grayskull()
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 64 * 1024}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, input_height, input_width, input_channels, output_channels, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, out_pad_h, out_pad_w, config, shard_layout",
+    ((1, 240, 320, 64, 32, 2, 2, 2, 2, 0, 0, 0, 0, None, None),),
+)
+@pytest.mark.parametrize(
+    "weights_dtype",
+    [
+        ttnn.bfloat16,
+    ],
+)
+@pytest.mark.parametrize(
+    "activations_dtype",
+    [
+        ttnn.bfloat16,
+    ],
+)
+@pytest.mark.parametrize("mirror_kernel", [True, False])
+def test_vanila_unet_issue_deconv(
     device,
     use_program_cache,
     activations_dtype,
