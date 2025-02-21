@@ -2098,22 +2098,43 @@ def test_padded_2d_matmul(device, side, tile_count):
     assert torch.all(upper == 4)
 
 
+@pytest.mark.parametrize("side", ["height", "width"])
 @pytest.mark.parametrize("has_program_config", [True, False])
-def test_padded_1d_matmul(device, has_program_config):
+def test_padded_1d_matmul(device, side, has_program_config):
     pytest.skip("#17491: last tile bounds are not set up properly")
-    S = 44520
-    D = 1536
+    if side == "height":
+        M = 44520
+        K = 1536
+        N = 1536
+        out_block_h = 11
+        out_block_w = 16
+        out_subblock_h = 1
+        out_subblock_w = 4
+        per_core_M = 22
+        per_core_N = 48
+        mcast_in0 = False
+    else:
+        M = 1536
+        K = 1536
+        N = 44520
+        out_block_h = 16
+        out_block_w = 11
+        out_subblock_h = 4
+        out_subblock_w = 1
+        per_core_M = 48
+        per_core_N = 22
+        mcast_in0 = True
     if has_program_config:
         program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(8, 8),
             in0_block_w=1,
-            out_block_h=11,
-            out_block_w=16,
-            out_subblock_h=1,
-            out_subblock_w=4,
-            per_core_M=22,
-            per_core_N=48,
-            mcast_in0=False,
+            out_block_h=out_block_h,
+            out_block_w=out_block_w,
+            out_subblock_h=out_subblock_h,
+            out_subblock_w=out_subblock_w,
+            per_core_M=per_core_M,
+            per_core_N=per_core_N,
+            mcast_in0=mcast_in0,
             fused_activation=None,
             fuse_batch=True,
         )
@@ -2122,12 +2143,12 @@ def test_padded_1d_matmul(device, has_program_config):
 
     torch.manual_seed(0)
     pcc = 0.99
-    torch_act = torch.rand([1, 1, S, D], dtype=torch.float32)
-    torch_weight = torch.rand([1, 1, D, D], dtype=torch.float32)
+    torch_act = torch.rand([1, 1, M, K], dtype=torch.float32)
+    torch_weight = torch.rand([1, 1, K, N], dtype=torch.float32)
     # Allocate tensors above and below where the output will be
     X = 2**8
     dummy_lower = torch.full([1, 1, X, X], 2)
-    dummy_out = torch.zeros([1, 1, S, D])
+    dummy_out = torch.zeros([1, 1, M, N])
     dummy_upper = torch.full([1, 1, X, X], 4)
 
     act = ttnn.from_torch(torch_act, layout=ttnn.TILE_LAYOUT, device=device, dtype=ttnn.bfloat16)
