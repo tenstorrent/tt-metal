@@ -494,13 +494,24 @@ def preprocess_inputs(
     return input_embeds, decoder_hidden_states, attention_mask
 
 
-def whisper(config, encoder_hidden_states, decoder_hidden_states, decoder_attention_mask, *, parameters):
+def whisper(
+    config,
+    encoder_hidden_states,
+    decoder_hidden_states,
+    decoder_attention_mask,
+    kv_cache=None,
+    current_decode_pos=None,
+    *,
+    parameters,
+):
     encoder_hidden_states = encoder(config, encoder_hidden_states, parameters=parameters.encoder)
     last_hidden_state = decoder(
         config,
         decoder_hidden_states,
         decoder_attention_mask=decoder_attention_mask,
         encoder_hidden_states=encoder_hidden_states,
+        kv_cache=kv_cache,
+        current_decode_pos=current_decode_pos,
         parameters=parameters.decoder,
     )
     return last_hidden_state
