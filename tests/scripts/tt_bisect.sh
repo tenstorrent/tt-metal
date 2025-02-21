@@ -54,34 +54,35 @@ found=false
 git bisect start $bad_commit $good_commit --
 
 while [[ "$found" = "false" ]]; do
-   build_code=0
-
    git submodule update --recursive
    echo "::group::Building `git rev-parse HEAD`"
-   ./build_metal.sh --build-tests > /dev/null; build_code=$?
+   build_rc=0
+   ./build_metal.sh --build-tests > /dev/null || build_rc=$?
    echo "::endgroup::"
 
-   if [[ $build_code -ne 0 ]]; then
+   if [[ $build_rc -ne 0 ]]; then
       echo "Build failed; skipping this commit"
       git bisect skip
       continue
    fi
 
    echo "::group::Testing `git rev-parse HEAD`"
-   timeout $timeout_duration bash -c "$test"
+   timeout_rc=0
+   timeout "$timeout_duration" bash -c "$test" || timeout_rc=$?
+   echo "Exit code: $timeout_rc"
    echo "::endgroup::"
-   timeout_code=${PIPESTATUS[0]}
-   echo $timeout_code
 
-   if [ $timeout_code -eq 0 ]; then
+   if [ $timeout_rc -eq 0 ]; then
+      echo "Commit is good"
       increment=$(git bisect good)
       echo $increment
       first_line=$(echo $increment | head -n 1)
-   elif [ $timeout_code -eq 124 ]; then
+   elif [ $timeout_rc -eq 124 ]; then
       echo "Test has timed out, skipping this commit"
       git bisect skip
       continue
    else
+      echo "Commit is bad"
       increment=$(git bisect bad)
       echo $increment
       first_line=$(echo $increment | head -n 1)
