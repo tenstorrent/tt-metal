@@ -1,46 +1,50 @@
-**TENSTORRENT BOUNTY PROGRAM TERMS AND CONDITIONS**
+# **TENSTORRENT BOUNTY PROGRAM TERMS AND CONDITIONS**
 
-Please read these terms and conditions (these “**Terms**”), which form a legally binding contract between Tenstorrent AI ULC and its affiliates (“**Tenstorrent**,” “**us**,” or “**our**”) and qualifying individuals (“**Participant**,” “**you**,” or “**your**”) who wish to participate in Tenstorrent’s bounty program (the “**Program**”) and identify software issues in and potential improvements to our in-scope products (“**Bugs**”). Participants that submit acceptable bug reports shall be eligible to earn a payout (a “**Bounty**”), as determined solely in Tenstorrent’s discretion, in accordance with these Terms.
+Please read these terms and conditions (these “**Terms**”), which form a legally binding contract between Tenstorrent AI ULC and its affiliates (“**Tenstorrent**,” “**us**,” or “**our**”) and qualifying individuals (“**Participant**,” “**you**,” or “**your**”) who wish to participate in Tenstorrent’s **contribution program** (the “**Program**”) and help improve our in-scope open-source projects **by addressing issues, implementing new features, or resolving performance challenges** (“**Contributions**”). Participants that submit **Accepted Contributions** shall be eligible to earn a payout (a “**Bounty**”), as determined solely in Tenstorrent’s discretion, in accordance with these Terms.
 
 These Terms include important clauses, including without limitation, instances where Participants may be liable to Tenstorrent, a class action waiver, and other limitations of your rights and remedies. Disputes will be adjudicated solely in the courts of the State of California. By participating in the Program, all Participants must agree to be bound by these Terms and comply with these Terms. If an individual does not wish to, or cannot comply with these Terms, they are ineligible for a Bounty Payout and must not participate in the Program.
 
-**About the Program**
+---
 
-Tenstorrent offers this Program as an initiative for our community members that are helping us to improve our open-source software. The Program is not a competition. No fees are payable or purchase is necessary to participate in the Program. All Program communication and updates will be shared via the relevant Tenstorrent open-source repository.
+## **About the Program**
 
-This Program is a discretionary initiative. Tenstorrent, in our sole discretion, may modify these Terms at any time and may modify, restrict, suspend, terminate, or otherwise change any aspect of this Program, including the fulfillment of any Bounty Payouts at any time. If Tenstorrent changes these terms of this Program, by continuing to participate in the Program you are deemed to have accepted the changes.
+Tenstorrent offers this Program as an initiative for our community members that are helping us improve our open-source software. The Program is not a competition. No fees are payable or purchase is necessary to participate in the Program. All Program communication and updates will be shared via the relevant Tenstorrent open-source repository.
 
-**Participation Eligibility**
+This Program is a discretionary initiative. Tenstorrent, in our sole discretion, may modify these Terms at any time and may modify, restrict, suspend, terminate, or otherwise change any aspect of this Program, including the fulfillment of any Bounty Payouts at any time. If Tenstorrent changes these Terms, by continuing to participate in the Program, you are deemed to have accepted the changes.
+
+---
+## **Participation Eligibility**
 
 To be eligible to participate in the Program you must:
 
 * be the legal age of majority in your country and have the legal capacity to enter into, and be bound by, these Terms;
 * if you are participating in the Program as an entity, have the legal authority to accept these Terms on the applicable entity’s behalf (in which case “you” will mean the foregoing entity);
-* not be subject to legal obligations that prevent you from participating in the bounty Program (for example, under your employment contract or ethical rules);
+* not be subject to legal obligations that prevent you from participating in the **Program** (for example, under your employment contract or ethical rules);
 * not be a sanctioned person or a citizen or resident of a sanctioned country under applicable law, including under U.S. embargo or sanctions;
 * not be in violation of any applicable laws or regulations when participating in the Program;
-* not ask for payment in exchange for Bug details or dispute the applicability of the bounty Program to you, including the amount of any proposed or actual payment or categorization of a Bug; and
+* not ask for payment in exchange for **issue details** or dispute the applicability of the **Program** to you, including the amount of any proposed or actual payment or categorization of a **Contribution**; and
 * not be a current employee, vendor, contractor, or agent for Tenstorrent.
 
 You may be required to provide Tenstorrent with proof of compliance and eligibility in the form requested with regard to any of your obligations hereunder. Tenstorrent reserves the right to limit or refuse your eligibility to participate in the Program for any reason in its sole discretion, including but not limited to where your participation is prohibited by any applicable law. If Tenstorrent becomes aware of any violation of these Terms, Tenstorrent may elect to, among other things, (a) withhold, amend, or cancel the benefits of or payments under the Program or (b) require return of any payment made to you, including taking any action at law to obtain such payment.
 
-**Bounty Scope**
+---
+## **Scope of Contributions**
 
-The Bounty will be applicable for Identified Issues in [tt-metal](https://github.com/tenstorrent/tt-metal). An “Identified Issue” are Bugs which have an open GitHub issue and are tagged with both (1) “bounty” and (2) one of the categories listed in Exhibit A.
+The **Bounty** will be applicable for **Accepted Contributions** in [tt-metal](https://github.com/tenstorrent/tt-metal). **An "Accepted Contribution" refers to merged pull requests that address an open GitHub issue which is tagged with both (1) “bounty” and (2) one of the categories listed in Exhibit A.**
 
-**Bounty Payment**
+---
 
-Subject to these Terms, you will receive payments based on the type of Bug resolved in accordance with Exhibit A. In order to receive a Bounty payment, you:
+## **Bounty Payment**
+
+Subject to these Terms, you will receive payments based on the category of **Contribution** in accordance with Exhibit A. In order to receive a Bounty payment, you:
 
 * must not be in breach of these Terms;
-* must be assigned on GitHub to the Identified Issue for which you are submitting a pull request, and your pull request must be submitted while you are still assigned to the Identified Issue (you have forfeited your right to any Bounty once the Identified Issue is re-assigned to another contributor). Tenstorrent reserves the right to re-assign any Identified Issue if the assigned contributor becomes unresponsive for over two (2) weeks or if the assigned contributor explicitly forfeits the assignment;
-* must release your contributions under the license of the repository in which you are submitting a pull request;
+* must be assigned on GitHub to the **issue** for which you are submitting a pull request, and your pull request must be submitted while you are still assigned to the **issue** (you have forfeited your right to any Bounty once the **issue** is re-assigned to another contributor). Tenstorrent reserves the right to re-assign any **issue** if the assigned contributor becomes unresponsive for over two (2) weeks or if the assigned contributor explicitly forfeits the assignment;
+* must release your **Contributions** under the license of the repository in which you are submitting a pull request;
 * provide additional information as may be required by us (such as payment information) and meet all requirements to receive such Bounty as may be required by applicable law and regulations. If you do not provide such additional information or meet such requirements, we may not provide payment; and
 * may not designate someone else to receive your Bounty payout.
 
-Bounties are paid in US dollars to your nominated bank account via ACH. Please note that we can not issue Bounty payouts to individuals, entities, or residents of countries that are listed in the U.S. Department of The Treasury Office of Foreign Assets Control (OFAC) sanctions list.
-
-You will be solely responsible for all income tax liabilities that arise from or in any way relate to any benefit or payment that Tenstorrent conveys to you, including income taxes, sales, personal property, use, VAT, excise, withholding and self-employment taxes. Tenstorrent has the right to withhold from any amounts payable to you such foreign, federal, state or local taxes as may be required to be withheld under any applicable law. You agree to report the value of the benefit or payment you receive from Tenstorrent to all applicable legal and local authorities, and complete any required tax forms that Tenstorrent requests be completed prior to receiving your benefit or payment.
+---
 
 **Your Obligations**
 
@@ -93,7 +97,7 @@ These Terms shall be governed by and construed in accordance with the laws of th
 
 These Terms will be binding on and will inure to the benefit of the legal representatives, successors and assigns of the parties hereto. These Terms (and any policies referenced herein and incorporated by reference) constitute the entire agreement between you and us with respect to the subject matter hereof, and you have not relied upon any promises or representations by us with respect to the subject matter except as set forth herein. You may not assign these Terms or assign any rights or delegate any obligations hereunder, in whole or in part, whether voluntarily or by operation of law. The governing language of these Terms is English. A person who is not a party to these Terms has no rights to enforce, or to enjoy the benefit of, any term of these Terms.
 
-**Exhibit A – Tenstorrent Bounty Rewards Chart**
+**Exhibit A – Tenstorrent Bug Bounty Rewards Chart**
 
 | Category | Definition | Examples |  Payment Range  (US Dollars) |
 | :---- | :---- | :---- | :---- |
