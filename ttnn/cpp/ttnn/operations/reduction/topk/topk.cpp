@@ -2,8 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "topk.hpp"
 #include <cstdint>
+
+#include "topk.hpp"
+#include "device/topk_op.hpp"
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/operations/core/core.hpp"
+#include "ttnn/run_operation.hpp"
+#include "ttnn/types.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
