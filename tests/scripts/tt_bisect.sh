@@ -51,7 +51,10 @@ echo "Bad commit:" $bad_commit
 
 found=false
 
-git bisect start $bad_commit $good_commit --
+foo=$(git bisect start $bad_commit $good_commit --)
+echo $foo
+echo "${foo}"
+echo -e "${foo}"
 
 while [[ "$found" = "false" ]]; do
    git submodule update --recursive
@@ -94,8 +97,3 @@ while [[ "$found" = "false" ]]; do
    fi
 done
 git bisect reset
-
-if [ $timeout_code -eq 124 ]; then
-   echo "Test has hung, skipping this commit"
-   git bisect skip
-fi
