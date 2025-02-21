@@ -44,6 +44,7 @@ CoreRangeSet cores_to_corerangeset(const std::vector<CoreCoord>& cores) {
 
 operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers(
     const Tensor& input_tensor,
+    const Tensor& all_gather_output_tensor,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
     Tensor& output_tensor,
@@ -217,7 +218,8 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
     uint32_t reduction_cb_index = tt::CBIndex::c_1;
     tt::tt_metal::CircularBufferConfig reduction_cb_config =
         tt::tt_metal::CircularBufferConfig(reduction_CB_size, {{reduction_cb_index, df}})
-            .set_page_size(reduction_cb_index, reduction_CB_single_tile_size);
+            .set_page_size(reduction_cb_index, reduction_CB_single_tile_size)
+            .set_globally_allocated_address(*all_gather_output_tensor.buffer());
     auto cb_reduction = tt::tt_metal::CreateCircularBuffer(program, all_cores, reduction_cb_config);
 
     /* out cb */
@@ -430,7 +432,7 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
     }
 
     auto override_runtime_arguments_callback =
-        [worker_sender_reader_kernel_id, worker_sender_writer_kernel_id, semaphore, sender_worker_cores, cb_out](
+        [worker_sender_reader_kernel_id, worker_sender_writer_kernel_id, sender_worker_cores, cb_out, cb_reduction](
             const void* operation,
             Program& program,
             const std::vector<Tensor>& input_tensors,
@@ -438,6 +440,7 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
             const std::vector<Tensor>& output_tensors) {
             const auto& input = input_tensors[0];
             const auto& output = output_tensors[0];
+            const auto& all_gather_output = input_tensors[1];
 
             auto semaphore = static_cast<const ttnn::AllReduceAsync*>(operation)->semaphore;
 
@@ -451,9 +454,9 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
                 // writer
                 auto& worker_writer_sender_runtime_args = worker_writer_sender_runtime_args_by_core[core.x][core.y];
                 worker_writer_sender_runtime_args[1] = semaphore.address();
-
-                UpdateDynamicCircularBufferAddress(program, cb_out, *output.buffer());
             }
+            UpdateDynamicCircularBufferAddress(program, cb_out, *output.buffer());
+            UpdateDynamicCircularBufferAddress(program, cb_reduction, *all_gather_output.buffer());
         };
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};

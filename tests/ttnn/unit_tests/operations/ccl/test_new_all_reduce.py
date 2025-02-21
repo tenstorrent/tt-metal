@@ -88,6 +88,7 @@ def run_all_reduce_impl(
         N_per_shard = round_up(math.ceil(N / input_num_cores), ttnn.TILE_SIZE)
         output_N_per_shard = round_up(math.ceil(N / output_num_cores), ttnn.TILE_SIZE)
         input_shape = [*cluster_shape, M, N]
+        intermediate_shape = [*input_shape[:-1], N * cluster_shape[cluster_axis]]
 
         CORE_RANGE = [(x, y) for y in range(compute_grid_size.y) for x in range(compute_grid_size.x)]
         core_range_set = ttnn.CoreRangeSet(
@@ -126,6 +127,15 @@ def run_all_reduce_impl(
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
         )
+        intermediate_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                output_core_range_set,
+                [M, output_N_per_shard * cluster_shape[cluster_axis]],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
 
         logger.info(f"Input shape: {input_shape[2:]}, Padded shape: {[M, N_per_shard * input_num_cores]}")
         input_tensor = torch.randn(input_shape)
@@ -137,6 +147,19 @@ def run_all_reduce_impl(
             memory_config=input_mem_config,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
         )
+
+        intermediate_tensor = torch.zeros(intermediate_shape)
+        tt_intermediate_tensors = []
+        for i in range(8):
+            tt_intermediate_tensor = ttnn.from_torch(
+                intermediate_tensor,
+                device=mesh_device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=input_dtype,
+                memory_config=intermediate_mem_config,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
+            )
+            tt_intermediate_tensors.append(tt_intermediate_tensor)
 
         # All-Reduce Golden
         output_tensor_goldens_list = [torch.sum(input_tensor, dim=cluster_axis) for _ in range(num_iters)]
@@ -150,6 +173,7 @@ def run_all_reduce_impl(
             for i in range(n_iters):
                 out = ttnn.experimental.all_reduce_async(
                     tt_input_tensor,
+                    tt_intermediate_tensors[i % 8],
                     cluster_axis=cluster_axis,
                     mesh_device=mesh_device,
                     multi_device_global_semaphore=ccl_semaphore_handles[i % 8],

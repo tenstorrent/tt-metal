@@ -99,6 +99,7 @@ uint32_t find_scatter_dim(const ttnn::Shape& input_tensor_padded_shape, size_t n
 
 operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers(
     const Tensor& input_tensor,
+    const Tensor& all_gather_output_tensor,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
     Tensor& output_tensor,
@@ -116,6 +117,7 @@ namespace ccl {
 
 Tensor all_reduce_async(
     const Tensor& input_tensor,
+    Tensor& all_gather_output_tensor,
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     const ttnn::ccl::Topology topology,

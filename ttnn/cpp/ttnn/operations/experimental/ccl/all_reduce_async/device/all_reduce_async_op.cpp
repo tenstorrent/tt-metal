@@ -81,7 +81,7 @@ uint32_t find_scatter_dim(const ttnn::Shape& input_tensor_padded_shape, size_t n
 }  // namespace ccl
 
 void AllReduceAsync::validate(const std::vector<Tensor>& input_tensors) const {
-    TT_FATAL(input_tensors.size() == 1, "Error, Input tensor size should be 1 but has {}", input_tensors.size());
+    TT_FATAL(input_tensors.size() == 2, "Error, Input tensor size should be 2 but has {}", input_tensors.size());
     const auto& input_tensor = input_tensors[0];
     const auto& layout = input_tensors[0].get_layout();
     const auto& dtype = input_tensors[0].get_dtype();
@@ -154,6 +154,7 @@ operation::ProgramWithCallbacks AllReduceAsync::create_program(
     tt::log_info(tt::LogOp, "Running TG Llama specific all_reduce_async_minimal_multi_core_with_workers");
     return all_reduce_async_minimal_multi_core_with_workers(
         input_tensors[0],
+        input_tensors[1],
         this->forward_device,
         this->backward_device,
         output_tensors[0],
@@ -177,6 +178,7 @@ namespace ccl {
 
 Tensor all_reduce_async(
     const Tensor& input_tensor,
+    Tensor& all_gather_output_tensor,
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     const ttnn::ccl::Topology topology,
@@ -220,6 +222,7 @@ Tensor all_reduce_async(
                                                                 : mesh_view.get_devices_on_row(coordinate[0]);
 
             const auto& input_tensor = input_tensors.at(0);
+            const auto& all_gather_output_tensor = input_tensors.at(1);
 
             return operation::run(
                 ttnn::ccl::all_reduce_detail::create_all_reduce_async_struct(
@@ -231,9 +234,9 @@ Tensor all_reduce_async(
                     semaphores,
                     subdevice_id,
                     enable_persistent_fabric_mode),
-                {input_tensor});
+                {input_tensor, all_gather_output_tensor});
         },
-        {input_tensor},
+        {input_tensor, all_gather_output_tensor},
         output_tensors);
     return output_tensors.at(0);
 }
