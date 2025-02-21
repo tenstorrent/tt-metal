@@ -54,9 +54,10 @@ git bisect start $bad_commit $good_commit --
 
 while [[ "$found" = "false" ]]; do
    build_code=0
-   echo "at commit `git rev-parse HEAD`"
-   echo "building Metal..."
+
+   echo "::group::Building `git rev-parse HEAD`"
    ./build_metal.sh --build-tests > /dev/null; build_code+=$?
+   echo "::endgroup::"
 
    if [[ $build_code -ne 0 ]]; then
       echo "Build failed"
@@ -64,7 +65,9 @@ while [[ "$found" = "false" ]]; do
       continue
    fi
 
+   echo "::group::Testing `git rev-parse HEAD`"
    timeout $timeout_duration bash -c "$test"
+   echo "::endgroup::"
    timeout_code=${PIPESTATUS[0]}
    echo $timeout_code
 
