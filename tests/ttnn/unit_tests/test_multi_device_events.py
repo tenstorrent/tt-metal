@@ -10,7 +10,7 @@ import tempfile
 from loguru import logger
 import os
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor, ListMeshToTensor
+from ttnn import ShardTensorToMesh, ReplicateTensorToMesh, ConcatMeshToTensor
 
 
 @pytest.mark.parametrize("shape", [(1, 1, 512, 512)])

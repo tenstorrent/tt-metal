@@ -16,11 +16,15 @@
 #include "dispatch_settings.hpp"
 #include "dprint_server.hpp"
 #include "host_api.hpp"
+#include "control_plane.hpp"
 #include <tt_metal.hpp>
 #include "tt_metal/impl/debug/noc_logging.hpp"
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"
+#include "tt_metal/jit_build/build_env_manager.hpp"
+
+#include "tt_cluster.hpp"
 
 using namespace tt::tt_metal;
 
@@ -190,6 +194,14 @@ void DevicePool::init_profiler_devices() const {
 #endif
 }
 
+void DevicePool::initialize_fabric_setting(detail::FabricSetting fabric_setting) noexcept {
+    if (_inst == nullptr) {
+        static DevicePool device_pool{};
+        _inst = &device_pool;
+    }
+    _inst->fabric_setting = fabric_setting;
+}
+
 void DevicePool::initialize(
     const std::vector<chip_id_t>& device_ids,
     const uint8_t num_hw_cqs,
@@ -218,6 +230,7 @@ void DevicePool::initialize(
     // modifying the state of this instance, for example those responsible for
     // (un)registering worker threads, can only be called in the creation thread
     _inst->device_pool_creation_thread_id = std::this_thread::get_id();
+    _inst->initialized = true;
 
     // Never skip for TG Cluster
     bool skip = not tt::Cluster::instance().is_galaxy_cluster();
@@ -245,7 +258,9 @@ void DevicePool::initialize(
 
     _inst->add_devices_to_pool(device_ids);
     _inst->init_firmware_on_active_devices();
+
     tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(true, target_mmio_ids);
+    _inst->wait_for_fabric_master_router_sync();
     _inst->init_profiler_devices();
 }
 
@@ -273,6 +288,11 @@ void DevicePool::initialize_device(IDevice* dev) const {
     dev->initialize_and_launch_firmware();
 
     watcher_attach(dev);
+
+    // TODO: add handling of EDM
+    if (this->fabric_setting == detail::FabricSetting::FABRIC) {
+        dev->init_fabric();
+    }
 
     // Set up HW command queues on device for FD
     if (this->using_fast_dispatch) {
@@ -304,18 +324,22 @@ void DevicePool::activate_device(chip_id_t id) {
             false,
             worker_core_thread_core,
             completion_queue_reader_core);
-        if (!this->firmware_built_keys.contains(device->build_key())) {
-            device->build_firmware();
-            this->firmware_built_keys.insert(device->build_key());
+        if (!this->firmware_built_keys.contains(
+                BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key)) {
+            BuildEnvManager::get_instance().build_firmware(device->build_id());
+            this->firmware_built_keys.insert(
+                BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
         }
         this->devices.emplace_back(std::unique_ptr<IDevice>(device));
     } else {
         log_debug(tt::LogMetal, "DevicePool re-initialize device {}", id);
         if (not device->is_initialized()) {
             device->initialize(num_hw_cqs, this->l1_small_size, this->trace_region_size, this->l1_bank_remap);
-            if (!this->firmware_built_keys.contains(device->build_key())) {
-                device->build_firmware();
-                this->firmware_built_keys.insert(device->build_key());
+            if (!this->firmware_built_keys.contains(
+                    BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key)) {
+                BuildEnvManager::get_instance().build_firmware(device->build_id());
+                this->firmware_built_keys.insert(
+                    BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
             }
         } else {
             TT_THROW("Cannot re-initialize device {}, must first call close()", id);
@@ -366,9 +390,49 @@ void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
             this->activate_device(device_id);
         }
     }
+    // Only can launch Fabric if all devices are active
+    if (this->fabric_setting == detail::FabricSetting::FABRIC) {
+        for (int i = 0; i < tt::Cluster::instance().number_of_devices(); i++) {
+            if (not _inst->is_device_active(i)) {
+                // Fabric currently requires all devices to be active
+                log_warning(tt::LogMetal, "Fabric is disabled because device {} is not active", i);
+                this->fabric_setting = detail::FabricSetting::DISABLED;
+                break;
+            }
+        }
+    }
+
+    // TODO: add handling of EDM
+    if (this->fabric_setting == detail::FabricSetting::FABRIC) {
+        // Initialize control plane, which writes routing tables to all ethernet cores
+        _inst->initialize_control_plane();
+    }
     this->using_fast_dispatch = (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr);
     if (this->using_fast_dispatch) {
         populate_fd_kernels(devices_to_activate, this->num_hw_cqs);
+    }
+}
+
+void DevicePool::wait_for_fabric_master_router_sync() const {
+    if (this->fabric_setting == detail::FabricSetting::FABRIC) {
+        auto fabric_router_sync_sem_addr =
+            hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+
+        std::vector<std::uint32_t> master_router_status{0};
+        for (const auto& dev : this->get_all_active_devices()) {
+            auto fabric_master_router_core = *dev->get_active_ethernet_cores().begin();  // TODO: get this from a
+                                                                                         // manager
+            std::uint32_t num_routers = dev->get_active_ethernet_cores().size();
+            while (master_router_status[0] != num_routers) {
+                tt_metal::detail::ReadFromDeviceL1(
+                    dev,
+                    fabric_master_router_core,
+                    fabric_router_sync_sem_addr,
+                    4,
+                    master_router_status,
+                    CoreType::ETH);
+            }
+        }
     }
 }
 
@@ -443,6 +507,30 @@ void DevicePool::init_firmware_on_active_devices() const {
         }
     }
 }
+
+void DevicePool::initialize_control_plane() {
+    // Default mode, auto select mesh graph descriptor. In future, we can add a way for user to specify custom
+    // descriptors
+    std::string mesh_graph_descriptor;
+    if (tt::Cluster::instance().get_cluster_type() == tt::ClusterType::N300) {
+        mesh_graph_descriptor = "n300_mesh_graph_descriptor.yaml";
+    } else if (tt::Cluster::instance().get_cluster_type() == tt::ClusterType::T3K) {
+        mesh_graph_descriptor = "t3k_mesh_graph_descriptor.yaml";
+    } else if (tt::Cluster::instance().get_cluster_type() == tt::ClusterType::GALAXY) {
+        mesh_graph_descriptor = "quanta_mesh_graph_descriptor.yaml";
+    } else if (tt::Cluster::instance().get_cluster_type() == tt::ClusterType::TG) {
+        mesh_graph_descriptor = "tg_mesh_graph_descriptor.yaml";
+    } else {
+        TT_FATAL(false, "Unknown cluster type");
+    }
+    const std::filesystem::path mesh_graph_desc_path =
+        std::filesystem::path(tt::llrt::RunTimeOptions::get_instance().get_root_dir()) /
+        "tt_metal/fabric/mesh_graph_descriptors" / mesh_graph_descriptor;
+
+    this->control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(mesh_graph_desc_path.string());
+}
+
+tt::tt_fabric::ControlPlane* DevicePool::get_control_plane() const { return this->control_plane.get(); }
 
 DevicePool::DevicePool() {
     ZoneScoped;
@@ -547,6 +635,18 @@ void DevicePool::close_devices(const std::vector<IDevice*>& devices) {
         Synchronize(dev);    // Synchronize device
     }
 
+    // Terminate fabric routers
+    if (this->fabric_setting == detail::FabricSetting::FABRIC) {
+        std::vector<uint32_t> master_router_terminate(1, 0);
+        auto fabric_router_sync_sem_addr =
+            hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+        for (const auto& dev : this->get_all_active_devices()) {
+            auto fabric_master_router_core = *dev->get_active_ethernet_cores().begin();  // TODO: get this from a
+                                                                                         // manager
+            tt_metal::detail::WriteToDeviceL1(
+                dev, fabric_master_router_core, fabric_router_sync_sem_addr, master_router_terminate, CoreType::ETH);
+        }
+    }
     tt::Cluster::instance().set_internal_routing_info_for_ethernet_cores(false);
     for (const auto& dev_id : devices_to_close) {
         auto dev = tt::DevicePool::instance().get_active_device(dev_id);

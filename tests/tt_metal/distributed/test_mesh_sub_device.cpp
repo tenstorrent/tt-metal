@@ -12,9 +12,9 @@
 namespace tt::tt_metal::distributed::test {
 namespace {
 
-using MeshSubDeviceTest = T3000MultiDeviceFixture;
+using MeshSubDeviceTestSuite = GenericMeshDeviceFixture;
 
-TEST_F(MeshSubDeviceTest, SyncWorkloadsOnSubDevice) {
+TEST_F(MeshSubDeviceTestSuite, SyncWorkloadsOnSubDevice) {
     SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))});
     SubDevice sub_device_2(std::array{CoreRangeSet(std::vector{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {4, 4})})});
 
@@ -43,7 +43,7 @@ TEST_F(MeshSubDeviceTest, SyncWorkloadsOnSubDevice) {
     Finish(mesh_device_->mesh_command_queue());
 }
 
-TEST_F(MeshSubDeviceTest, DataCopyOnSubDevices) {
+TEST_F(MeshSubDeviceTestSuite, DataCopyOnSubDevices) {
     SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {0, 0}))});
     SubDevice sub_device_2(std::array{CoreRangeSet(CoreRange({1, 1}, {1, 1}))});
     SubDevice sub_device_3(std::array{CoreRangeSet(CoreRange({2, 2}, {2, 2}))});
@@ -129,14 +129,15 @@ TEST_F(MeshSubDeviceTest, DataCopyOnSubDevices) {
         for (std::size_t logical_x = 0; logical_x < output_buf->device()->num_cols(); logical_x++) {
             for (std::size_t logical_y = 0; logical_y < output_buf->device()->num_rows(); logical_y++) {
                 std::vector<uint32_t> dst_vec;
-                ReadShard(mesh_device_->mesh_command_queue(), dst_vec, output_buf, Coordinate(logical_y, logical_x));
+                ReadShard(
+                    mesh_device_->mesh_command_queue(), dst_vec, output_buf, MeshCoordinate(logical_y, logical_x));
                 EXPECT_EQ(dst_vec, src_vec);
             }
         }
     }
 }
 
-TEST_F(MeshSubDeviceTest, SubDeviceSwitching) {
+TEST_F(MeshSubDeviceTestSuite, SubDeviceSwitching) {
     // Sub Devices for config 0
     SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))});
     SubDevice sub_device_2(std::array{CoreRangeSet(std::vector{CoreRange({3, 3}, {3, 3}), CoreRange({4, 4}, {4, 4})})});

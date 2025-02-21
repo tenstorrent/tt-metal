@@ -2,10 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <core/clip_grad_norm.hpp>
-#include <core/compute_kernel_config.hpp>
 #include <core/ttnn_all_includes.hpp>
-#include <serialization/serializable.hpp>
+#include "core/clip_grad_norm.hpp"
+#include "core/compute_kernel_config.hpp"
+#include "serialization/serializable.hpp"
 
 namespace ttml::core {
 

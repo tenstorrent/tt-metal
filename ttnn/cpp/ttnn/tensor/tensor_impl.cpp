@@ -592,7 +592,9 @@ Tensor to_host_mesh_tensor(const Tensor& tensor, bool blocking) {
     specs.reserve(num_buffers);
     buffers.reserve(num_buffers);
     shard_data_transfers.reserve(num_buffers);
-    distributed::Coordinate shard_coord = {0, 0};
+    distributed::MeshCoordinateRange coord_range(
+        distributed::MeshCoordinate(0, 0), distributed::MeshCoordinate(num_rows - 1, num_cols - 1));
+    auto shard_coord = coord_range.begin();
     for (int id : storage.ordered_device_ids) {
         std::vector<T> host_buffer;
         const auto& shard_tensor_spec = storage.specs.at(id);
@@ -602,14 +604,10 @@ Tensor to_host_mesh_tensor(const Tensor& tensor, bool blocking) {
         buffers.push_back(owned_buffer::create<T>(std::move(host_buffer)));
 
         shard_data_transfers.push_back(distributed::MeshCommandQueue::ShardDataTransfer{
-            .shard_coord = shard_coord,
+            .shard_coord = *shard_coord,
             .host_data = std::visit([](auto& b) { return b.data(); }, buffers.back()),
             .region = BufferRegion(0, tensor_size_bytes)});
-
-        if (++shard_coord.col == num_cols) {
-            shard_coord.col = 0;
-            ++shard_coord.row;
-        }
+        ++shard_coord;
     }
 
     mesh_cq.enqueue_read_shards(shard_data_transfers, mesh_buffer, /*blocking=*/true);
@@ -782,14 +780,17 @@ MultiDeviceStorage shard_to_mesh_buffer(
 
     std::vector<distributed::MeshCommandQueue::ShardDataTransfer> shard_data_transfers;
     shard_data_transfers.reserve(storage.buffers.size());
-    distributed::Coordinate shard_coord = {0, 0};
-    for (int i = 0; i < storage.buffers.size(); i++) {
+
+    distributed::MeshCoordinateRange coord_range(
+        distributed::MeshCoordinate(0, 0), distributed::MeshCoordinate(num_rows - 1, num_cols - 1));
+    auto shard_coord = coord_range.begin();
+    for (int i = 0; i < storage.buffers.size(); ++shard_coord, i++) {
         TensorSpec shard_tensor_spec(
             storage.specs[i].logical_shape(),
             storage.specs[i].tensor_layout().with_memory_config(tensor_spec.memory_config()));
         const auto& shard_host_buffer = storage.buffers[i];
 
-        const auto& shard_buffer = mesh_buffer->get_device_buffer(shard_coord);
+        const auto& shard_buffer = mesh_buffer->get_device_buffer(*shard_coord);
         ordered_device_ids.push_back(shard_buffer->device()->id());
         buffers.insert({shard_buffer->device()->id(), shard_buffer});
         specs.insert({shard_buffer->device()->id(), shard_tensor_spec});
@@ -806,13 +807,9 @@ MultiDeviceStorage shard_to_mesh_buffer(
             expected_packed_buffer_size_bytes <= tensor_spec.compute_packed_buffer_size_bytes(),
             "Shard tensor size exceeds the global tensor size!");
         shard_data_transfers.push_back(distributed::MeshCommandQueue::ShardDataTransfer{
-            .shard_coord = shard_coord,
+            .shard_coord = *shard_coord,
             .host_data = data_to_write.data(),
             .region = BufferRegion(0, input_size_bytes)});
-        if (++shard_coord.col == num_cols) {
-            shard_coord.col = 0;
-            ++shard_coord.row;
-        }
     }
 
     mesh_device->mesh_command_queue().enqueue_write_shards(mesh_buffer, shard_data_transfers, /*blocking=*/false);
@@ -882,23 +879,23 @@ Tensor to_device_mesh_tensor<bfloat8_b>(
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
-// TODO: Remove when we generalize interleaved and sharded; when we do, directly get from TensorLayout
+// TODO: Remove when we get rid of physical sharding and generalize interleaved and sharded; when we do, directly get
+// from TensorLayout
 std::array<Shape2D, 2> get_logical_and_physical_shard_shapes(const TensorSpec& tensor_spec) {
-    if (tensor_spec.memory_config().is_sharded()) {
+    const auto& logical_shape = tensor_spec.logical_shape();
+    const auto& padded_shape = tensor_spec.padded_shape();
+
+    // TODO: get_logical_shard_shape always returns shard shape from shard spec, which is not correct in physical mode
+    // if there is padding
+    if (tensor_spec.memory_config().is_sharded() and
+        (tensor_spec.memory_config().shard_spec.value().mode == ShardMode::LOGICAL or logical_shape == padded_shape)) {
         return {
             tensor_spec.tensor_layout().get_logical_shard_shape(),
             tensor_spec.tensor_layout().get_physical_shard_shape()};
     }
 
-    const auto& logical_shape = tensor_spec.logical_shape();
     Shape2D logical_shard_shape{logical_shape[-2], logical_shape[-1]};
-    auto physical_shard_shape = logical_shard_shape;
-    if (tensor_spec.layout() == Layout::TILE) {
-        const auto& tile = tensor_spec.tile();
-        auto physical_shard_height = tt::round_up(logical_shard_shape.height(), tile.get_height());
-        auto physical_shard_width = tt::round_up(logical_shard_shape.width(), tile.get_width());
-        physical_shard_shape = Shape2D{physical_shard_height, physical_shard_width};
-    }
+    Shape2D physical_shard_shape = {padded_shape[-2], padded_shape[-1]};
     return {logical_shard_shape, physical_shard_shape};
 }
 
@@ -942,6 +939,10 @@ std::vector<LogicalPhysicalMapping> compute_logical_to_physical_shards_mapping(
 
 template <typename T>
 std::vector<T> encode_tensor_data(std::vector<T>&& logical_data, const TensorSpec& tensor_spec) {
+    if (logical_data.size() == 0) {
+        return {};
+    }
+
     const auto& logical_shape = tensor_spec.logical_shape();
     TT_FATAL(
         logical_data.size() == logical_shape.volume(),
@@ -1005,6 +1006,10 @@ template std::vector<uint8_t> encode_tensor_data<uint8_t>(
 
 template <typename T>
 std::vector<T> decode_tensor_data(std::vector<T>&& physical_data, const TensorSpec& tensor_spec) {
+    if (physical_data.size() == 0) {
+        return {};
+    }
+
     const auto& physical_shape = tensor_spec.physical_shape();
     TT_FATAL(
         physical_data.size() == physical_shape.height() * physical_shape.width(),

@@ -6,13 +6,13 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/device_impl.hpp>
 #include <tt-metalium/rtoptions.hpp>
-#include "tt_fabric/control_plane.hpp"
+#include <tt-metalium/control_plane.hpp>
 // #include "tt_metal/impl/dispatch/cq_commands.hpp"
 // #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
-#include "tt_fabric/hw/inc/tt_fabric_status.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "test_common.hpp"
 #include "eth_l1_address_map.h"
-#include "tt_fabric/hw/inc/tt_fabric_interface.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
 
 using std::vector;
 using namespace tt;
@@ -226,9 +226,7 @@ int main(int argc, char** argv) {
 
     CoreCoord gk_core = {gk_x, gk_y};
 
-    std::map<string, string> defines = {
-        {"FD_CORE_TYPE", std::to_string(0)},  // todo, support dispatch on eth
-    };
+    std::map<string, string> defines;
 
     try {
         const std::filesystem::path tg_mesh_graph_desc_path =
@@ -397,7 +395,7 @@ int main(int argc, char** argv) {
 
             auto kernel = tt_metal::CreateKernel(
                 program_map[device.first],
-                "tt_fabric/impl/kernels/tt_fabric_gatekeeper.cpp",
+                "tt_metal/fabric/impl/kernels/tt_fabric_gatekeeper.cpp",
                 {gk_core},
                 tt_metal::DataMovementConfig{
                     .processor = tt_metal::DataMovementProcessor::RISCV_0,
