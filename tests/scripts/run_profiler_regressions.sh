@@ -78,6 +78,14 @@ run_additional_T3000_test(){
     fi
 }
 
+# TODO: remove the pytest from this pipeline https://tenstorrent.atlassian.net/browse/DEVINFRA-2816
+run_T3000_ubenchmark_test(){
+    remove_default_log_locations
+    mkdir -p $PROFILER_ARTIFACTS_DIR
+
+    pytest -n auto tests/tt_metal/microbenchmarks/ethernet/test_fabric_edm_bandwidth.py
+}
+
 run_profiling_test(){
     if [[ -z "$ARCH_NAME" ]]; then
       echo "Must provide ARCH_NAME in environment" 1>&2
@@ -88,6 +96,8 @@ run_profiling_test(){
 
     source python_env/bin/activate
     export PYTHONPATH=$TT_METAL_HOME
+
+    run_T3000_ubenchmark_test
 
     run_additional_T3000_test
 
