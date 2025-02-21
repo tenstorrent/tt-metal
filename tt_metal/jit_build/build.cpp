@@ -122,7 +122,11 @@ void JitBuildEnv::init(
             // TODO(MO): Standard bit mask for device side profiler options
             this->defines_ += "-DPROFILE_KERNEL=2 ";
         } else {
-            this->defines_ += "-DPROFILE_KERNEL=1 ";
+            if (tt::llrt::RunTimeOptions::get_instance().get_profiler_do_experimental()) {
+                this->defines_ += "-DPROFILE_KERNEL=3 ";
+            } else {
+                this->defines_ += "-DPROFILE_KERNEL=1 ";
+            }
         }
     }
 

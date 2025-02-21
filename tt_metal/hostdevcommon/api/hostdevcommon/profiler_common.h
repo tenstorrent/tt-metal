@@ -5,6 +5,7 @@
 #pragma once
 
 #define PROFILER_OPT_DO_DISPATCH_CORES 2
+#define PROFILER_OPT_DO_EXPERIMENTAL 3
 
 namespace kernel_profiler {
 
