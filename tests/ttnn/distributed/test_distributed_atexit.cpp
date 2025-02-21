@@ -12,7 +12,7 @@
 namespace ttnn::distributed::test {
 namespace {
 
-// Simplified test without fixture, and mesh variable moved inside test
+// Simplified test without fixture, with function local static mesh device.
 TEST(DistributedTestStandalone, TestSystemMeshTearDownWithoutClose) {
     static std::shared_ptr<ttnn::MeshDevice> mesh;
     auto& sys = tt::tt_metal::distributed::SystemMesh::instance();

@@ -3,6 +3,7 @@ add_executable(
     test_distributed.cpp
     test_distributed_reshape.cpp
 )
+# The executable is intentionally separated to test lifetimes of statics.
 add_executable(test_distributed_atexit test_distributed_atexit.cpp)
 
 # Set up properties for the target

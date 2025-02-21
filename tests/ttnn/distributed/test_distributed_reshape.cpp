@@ -56,10 +56,10 @@ TEST_P(MeshConfigurationTest, GetPhysicalDeviceIds) {
 // Test all possible mesh configurations on T3000
 INSTANTIATE_TEST_SUITE_P(MeshShapes, MeshConfigurationTest, ::testing::ValuesIn(kMeshShapes));
 
-class MeshReshapeExhaustiveTest : public T3kMultiDeviceFixture,
-                                  public ::testing::WithParamInterface<std::tuple<MeshShape, MeshShape>> {};
+class MeshReshapeRoundtripTest : public T3kMultiDeviceFixture,
+                                 public ::testing::WithParamInterface<std::tuple<MeshShape, MeshShape>> {};
 
-TEST_P(MeshReshapeExhaustiveTest, ReshapeBetweenConfigurations) {
+TEST_P(MeshReshapeRoundtripTest, ReshapeBetweenConfigurations) {
     const auto& [old_shape, new_shape] = GetParam();
 
     if ((old_shape.num_rows * old_shape.num_cols) != (new_shape.num_rows * new_shape.num_cols)) {
@@ -96,7 +96,7 @@ TEST_P(MeshReshapeExhaustiveTest, ReshapeBetweenConfigurations) {
 // Generate all possible combinations of shapes from kMeshShapes
 INSTANTIATE_TEST_SUITE_P(
     ReshapeConfigurations,
-    MeshReshapeExhaustiveTest,
+    MeshReshapeRoundtripTest,
     ::testing::Combine(::testing::ValuesIn(kMeshShapes), ::testing::ValuesIn(kMeshShapes)));
 
 // Base class for non-parameterized tests
