@@ -56,6 +56,7 @@ struct SubdeviceInfo {
     std::unordered_map<chip_id_t, SubDeviceId> fabric_subdevice_id;
 };
 
+using tt::tt_metal::distributed::MeshCoordinate;
 using tt::tt_metal::distributed::MeshDevice;
 using tt::tt_metal::distributed::MeshDeviceConfig;
 using tt::tt_metal::distributed::MeshDeviceView;
@@ -427,7 +428,8 @@ bool RunLoopbackTest(
     // EDM Builder Setup
     ////////////////////////////////////////////////////////////////////////////
 
-    static constexpr std::size_t edm_buffer_size = 4096 + PACKET_HEADER_SIZE_BYTES;
+    static constexpr std::size_t edm_buffer_size =
+        ttnn::ccl::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes + PACKET_HEADER_SIZE_BYTES;
 
     auto chip0_worker_fabric_connection = chip_0_edm_builder.build_connection_to_worker_channel();
     ////////////////////////////////////////////////////////////////////////////
@@ -910,7 +912,8 @@ bool RunLineFabricTest(
     std::size_t page_plus_header_size = page_size + sizeof(tt::fabric::PacketHeader);
     std::size_t tensor_size_bytes = num_pages_total * page_size;
 
-    static constexpr std::size_t edm_buffer_size = 4096 + PACKET_HEADER_SIZE_BYTES;
+    static constexpr std::size_t edm_buffer_size =
+        ttnn::ccl::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes + PACKET_HEADER_SIZE_BYTES;
     const size_t local_chip_id = 0;
     const size_t remote_chip_id = 1;
     auto program_ptrs = std::vector<Program*>(devices.size());
@@ -1123,7 +1126,10 @@ int TestLineFabricEntrypoint(
 
     // build a line of devices
     std::vector<IDevice*> devices = {
-        view.get_device(0, 0), view.get_device(0, 1), view.get_device(0, 2), view.get_device(0, 3)};
+        view.get_device(MeshCoordinate(0, 0)),
+        view.get_device(MeshCoordinate(0, 1)),
+        view.get_device(MeshCoordinate(0, 2)),
+        view.get_device(MeshCoordinate(0, 3))};
     std::vector<Program> programs(enable_persistent_fabric ? 1 : devices.size());
     std::optional<SubdeviceInfo> subdevice_managers = std::nullopt;
     std::optional<std::vector<Program>> fabric_programs;
@@ -1204,8 +1210,8 @@ int TestLoopbackEntrypoint(
     T3000TestDevice test_fixture;
     auto view = test_fixture.mesh_device_->get_view();
 
-    const auto& device_0 = view.get_device(0, 0);
-    const auto& device_1 = view.get_device(0, 1);
+    const auto& device_0 = view.get_device(MeshCoordinate(0, 0));
+    const auto& device_1 = view.get_device(MeshCoordinate(0, 1));
 
     auto const& active_eth_cores = device_0->get_active_ethernet_cores(true);
     auto eth_sender_core_iter = active_eth_cores.begin();
@@ -1237,7 +1243,8 @@ int TestLoopbackEntrypoint(
     IDevice* sender_device = device_0;
     IDevice* receiver_device = device_1;
 
-    static constexpr std::size_t edm_buffer_size = 4096 + PACKET_HEADER_SIZE_BYTES;
+    static constexpr std::size_t edm_buffer_size =
+        ttnn::ccl::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes + PACKET_HEADER_SIZE_BYTES;
     const chip_id_t local_chip_id = 0;
     const chip_id_t remote_chip_id = 1;
     auto const& edm_config = ttnn::ccl::FabricEriscDatamoverConfig(edm_buffer_size, 1, 2);
@@ -1387,7 +1394,7 @@ bool TestMultiInputReaderKernel(
     std::vector<IDevice*> devices;
     devices.reserve(fabric_num_devices);
     for (size_t i = 0; i < fabric_num_devices; i++) {
-        devices.push_back(view.get_device(0, i));
+        devices.push_back(view.get_device(MeshCoordinate(0, i)));
     }
 
     std::vector<Program> programs(enable_persistent_fabric ? 1 : devices.size());
@@ -2198,7 +2205,7 @@ bool RunPipelinedWorkersTest(
     T3000TestDevice test_fixture;
     auto view = test_fixture.mesh_device_->get_view();
 
-    IDevice* device = view.get_device(0, 0);
+    IDevice* device = view.get_device(MeshCoordinate(0, 0));
     ;
 
     // General setup is as follows:
@@ -2738,7 +2745,10 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
 
     // build a line of devices
     std::vector<IDevice*> devices = {
-        view.get_device(0, 1), view.get_device(1, 1), view.get_device(1, 2), view.get_device(0, 2)};
+        view.get_device(MeshCoordinate(0, 1)),
+        view.get_device(MeshCoordinate(1, 1)),
+        view.get_device(MeshCoordinate(1, 2)),
+        view.get_device(MeshCoordinate(0, 2))};
     const size_t num_devices = devices.size();
     TT_FATAL(
         test_expected_num_devices == num_devices,
@@ -2858,7 +2868,10 @@ void run_all_gather_with_persistent_fabric(const size_t dim, const size_t num_li
 
     // build a line of devices
     std::vector<IDevice*> devices = {
-        view.get_device(0, 0), view.get_device(0, 1), view.get_device(0, 2), view.get_device(0, 3)};
+        view.get_device(MeshCoordinate(0, 0)),
+        view.get_device(MeshCoordinate(0, 1)),
+        view.get_device(MeshCoordinate(0, 2)),
+        view.get_device(MeshCoordinate(0, 3))};
     const size_t num_devices = devices.size();
     TT_FATAL(
         test_expected_num_devices == num_devices,
@@ -2988,7 +3001,8 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
     static constexpr uint32_t source_payload_cb_index = tt::CB::c_in1;
     static constexpr size_t packet_header_cb_size_in_headers = 4;
     static constexpr bool enable_persistent_fabric_mode = true;
-    static constexpr size_t packet_payload_size_bytes = 4096;
+    static constexpr size_t packet_payload_size_bytes =
+        ttnn::ccl::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes;
     static constexpr size_t dest_buffer_size = packet_payload_size_bytes * 4;
     static constexpr tt::DataFormat cb_df = tt::DataFormat::Bfp8;
 
@@ -2997,7 +3011,10 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
 
     // Get the inner 4 device ring on a WH T3K device so that we can use both links for all devices
     std::vector<IDevice*> devices_ = {
-        view.get_device(0, 1), view.get_device(0, 2), view.get_device(1, 2), view.get_device(1, 1)};
+        view.get_device(MeshCoordinate(0, 1)),
+        view.get_device(MeshCoordinate(0, 2)),
+        view.get_device(MeshCoordinate(1, 2)),
+        view.get_device(MeshCoordinate(1, 1))};
     std::vector<IDevice*> devices;
     devices.reserve(line_size);
     for (size_t i = 0; i < line_size; i++) {

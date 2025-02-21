@@ -9,7 +9,11 @@
 // ETH Params
 
 #define NUM_ECC_SOURCES (5 + 4 * 3 + 2)
+#ifdef ARCH_BLACKHOLE
+#define NUM_ETH_QUEUES 3
+#else
 #define NUM_ETH_QUEUES 2
+#endif
 
 //////////////////
 // RISC debug regs
@@ -48,6 +52,9 @@
 #define ETH_TXQ_CMD_FLUSH (0x1 << 3)
 
 #define ETH_TXQ_STATUS 0x8              // IMPROVE: document (misc. internal bits for debug)
+#define ETH_TXQ_STATUS_CMD_ONGOING_BIT \
+    0x10  // On Blackhole bit 16 of the ETH_TXQ_STATUS register indicates whether a packer transfer (raw/data/reg write)
+          // is ongoing
 #define ETH_TXQ_MAX_PKT_SIZE_BYTES 0xC  // Max ethernet payload size (default = 1500 bytes)
 #define ETH_TXQ_BURST_LEN 0x10          // Value to drive on ati_q#_pbl output (default = 8)
 #define ETH_TXQ_TRANSFER_START_ADDR \

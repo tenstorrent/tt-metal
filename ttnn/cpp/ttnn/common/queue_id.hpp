@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <strong_type.hpp>
+#include <tt-metalium/strong_type.hpp>
 
 namespace ttnn {
 /*
