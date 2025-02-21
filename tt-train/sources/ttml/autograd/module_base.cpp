@@ -106,5 +106,12 @@ void ModuleBase::train() {
 void ModuleBase::eval() {
     set_run_mode(RunMode::EVAL);
 }
+autograd::TensorPtr ModuleBase::operator()(const autograd::TensorPtr& tensor) {
+    throw std::logic_error("Not implemented");
+}
+virtual autograd::TensorPtr ModuleBase::operator()(
+    const autograd::TensorPtr& tensor, const autograd::TensorPtr& other) {
+    throw std::logic_error("Not implemented");
+}
 
 }  // namespace ttml::autograd

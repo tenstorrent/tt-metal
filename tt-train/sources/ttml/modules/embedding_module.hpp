@@ -17,7 +17,7 @@ public:
     void set_weight(const autograd::TensorPtr& weight);
     [[nodiscard]] autograd::TensorPtr get_weight() const;
 
-    [[nodiscard]] autograd::TensorPtr operator()(const autograd::TensorPtr& tensor);
+    [[nodiscard]] autograd::TensorPtr operator()(const autograd::TensorPtr& tensor) override;
 };
 
 }  // namespace ttml::modules

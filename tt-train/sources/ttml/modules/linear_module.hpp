@@ -3,14 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-
-#include <memory>
-
-#include "autograd/auto_context.hpp"
-#include "autograd/graph.hpp"
 #include "autograd/module_base.hpp"
 #include "autograd/tensor.hpp"
-#include "ops/linear_op.hpp"
 
 namespace ttml::modules {
 
@@ -27,7 +21,7 @@ public:
     autograd::TensorPtr get_weight() const;
     void set_weight(const autograd::TensorPtr& weight);
 
-    [[nodiscard]] autograd::TensorPtr operator()(const autograd::TensorPtr& tensor);
+    [[nodiscard]] autograd::TensorPtr operator()(const autograd::TensorPtr& tensor) override;
 };
 
 }  // namespace ttml::modules
