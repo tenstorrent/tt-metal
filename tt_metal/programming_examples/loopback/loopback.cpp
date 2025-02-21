@@ -96,6 +96,8 @@ int main(int argc, char** argv) {
         std::vector<uint32_t> result_vec;
         EnqueueReadBuffer(cq, output_dram_buffer, result_vec, true);
 
+        DumpDeviceProfileResults(device, program);
+
         pass &= input_vec == result_vec;
 
         pass &= CloseDevice(device);
