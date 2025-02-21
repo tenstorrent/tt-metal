@@ -18,8 +18,10 @@
 #include <tt-metalium/host_api.hpp>
 #include "cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
 #include "cpp/ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
+#include <tt-metalium/mesh_graph.hpp>
 
 #include "cpp/ttnn/operations/ccl/common/uops/command_lowering.hpp"
+#include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
 
 #include "cpp/ttnn/operations/ccl/common/host/ccl_worker_builder.hpp"
 #include "cpp/ttnn/operations/ccl/common/host/command_backend_runtime_args_overrider.hpp"
@@ -127,16 +129,16 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
 //   (in other words, disable the "bidirectional" send flag)
 operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
     const Tensor& input_tensor,
-    std::optional<IDevice*> forward_device,
-    std::optional<IDevice*> backward_device,
+    // std::optional<IDevice*> forward_device,
+    // std::optional<IDevice*> backward_device,
     Tensor& output_tensor,
     const uint32_t dim,
     const uint32_t num_links,
-    const uint32_t ring_size,
-    const uint32_t ring_index,
+    const uint32_t mesh_size,
+    const mesh_id_t mesh_id,
     ccl::Topology topology,
     const GlobalSemaphore semaphore,
-    const std::optional<SubDeviceId>& sub_device_id,
+    const std::optional<SubDeviceId>& sub_device_id,  // diff between sub_device_id and device->id() ??
     bool enable_persistent_fabric_mode) {
     tt::tt_metal::Program program{};
     const bool enable_async_output_tensor = false;
@@ -144,8 +146,47 @@ operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
         ttnn::ccl::worker_detail::can_command_stream_be_lowered_to_noc_commands(input_tensor);
 
     IDevice* device = input_tensor.device();
-    bool is_first_chip = ring_index == 0;
-    bool is_last_chip = ring_index == ring_size - 1;
+
+    uint32_t num_chips_per_row = 4;  // should be an input
+    uint32_t num_chips_per_col = 4;  // should be an input
+    uint32_t direction = 0;          // should be input 0 for horizontally and 1 vertically
+
+    // bool is_first_chip = ring_index == 0;
+    // bool is_last_chip = ring_index == ring_size - 1;
+    if (direction == 0) {
+        bool is_first_chip = mesh_id % num_chips_per_row == 0;
+        bool is_last_chip = mesh_id % num_chips_per_row == num_chips_per_row - 1;
+        RoutingDirection direction0 = RoutingDirection::E;
+        RoutingDirection direction1 = RoutingDirection::W;
+    } else {
+        bool is_first_chip = mesh_id % num_chips_per_col == 0;
+        bool is_last_chip = mesh_id % num_chips_per_col == num_chips_per_col - 1;
+        RoutingDirection direction0 = RoutingDirection::N;
+        RoutingDirection direction1 = RoutingDirection::S;
+    }
+
+    ControlPlane control_plane = DevicePool::instance().get_control_plane();
+    std::pair<mesh_id_t, chip_id_t> device_mesh_chip_id =
+        control_plane->get_mesh_chip_id_from_physical_chip_id(device->id());  // not sure if sub_device_id instead
+
+    auto neighbors_dir0 =
+        control_plane->get_intra_chip_neighbors(device_mesh_chip_id.first, device_mesh_chip_id.second, direction0);
+    auto neighbors_dir1 =
+        control_plane->get_intra_chip_neighbors(device_mesh_chip_id.first, device_mesh_chip_id.second, direction1);
+    uint32_t hops_dir0 = neighbors_dir0.size();
+    uint32_t hops_dir1 = neighbors_dir1.size();
+    std::unordered_map<RoutingDirection, uint32_t> mcast_hops;
+    mcast_hops[direction0] = hops_dir0;
+    mcast_hops[direction1] = hops_dir1;
+    IDevice* dir0_device;
+    IDevice* dir1_device;
+    if (neighbors_dir0.size() > 0) {
+        dir0_device = DevicePool::instance().get_device(neighbors_dir0[0]);
+    }
+    if (neighbors_dir1.size() > 0) {
+        dir1_device = DevicePool::instance().get_device(neighbors_dir1[0]);
+    }
+
     log_trace(
         tt::LogOp,
         "DEBUG: device: {}, is_first_chip: {}, is_last_chip: {}",
@@ -154,23 +195,15 @@ operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
         is_last_chip);
 
     std::optional<ttnn::ccl::EdmLineFabricOpInterface> local_fabric_handle =
-        enable_persistent_fabric_mode
-            ? ttnn::ccl::EdmLineFabricOpInterface::build_program_builder_worker_connection_fabric(
-                  device,
-                  forward_device.value_or(nullptr),
-                  backward_device.value_or(nullptr),
-                  &program,
-                  enable_persistent_fabric_mode,
-                  num_links)
-            : ccl::EdmLineFabricOpInterface(
-                  device,
-                  forward_device.value_or(nullptr),
-                  backward_device.value_or(nullptr),
-                  &program,
-                  enable_persistent_fabric_mode,
-                  num_links);
+        ttnn::ccl::EdmLineFabricOpInterface::build_program_builder_worker_connection_fabric(
+            device,
+            dir0_device.value_or(nullptr),
+            dir1_device.value_or(nullptr),
+            &program,
+            enable_persistent_fabric_mode,
+            num_links);
 
-    LineTopology line_topology(ring_size, ring_index);
+    // LineTopology line_topology(ring_size, ring_index);
 
     std::unique_ptr<ccl::CclOpTensorConfig> input_tensor_config =
         ttnn::ccl::CclOpTensorConfig::build_all_gather_tensor_config(input_tensor);
@@ -193,7 +226,8 @@ operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
         choose_worker_cores(num_links, num_workers_per_link, enable_persistent_fabric_mode, device, sub_device_id);
 
     // L1 Scratch CB Creation
-    const size_t packet_size_bytes = local_fabric_handle->get_edm_buffer_size_bytes();
+    // packet header seems to have a constant value in tt_fabric_interface.h (not sure)
+    const size_t packet_size_bytes = PACKET_HEADER_SIZE_BYTES;  // local_fabric_handle->get_edm_buffer_size_bytes();
     uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size();
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
     uint32_t cb_num_pages = 3 * num_pages_per_packet;  // tripple buffering
@@ -215,12 +249,21 @@ operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
         1,         // partition size
         num_links  // num_workers_per_slicer, set 1 per link for now
     );
+    uint32_t partition_index;
+    uint32_t partition_size;
+    if (direction == 0) {
+        partition_index = mesh_id % num_chips_per_row;
+        partition_size = num_chips_per_row;
+    } else {
+        partition_index = mesh_id % num_chips_per_col;
+        partition_size = num_chips_per_col
+    }
     auto output_tensor_slicer = ttnn::ccl::GenericWrappedTensorSlicerV2(
         output_tensor,
         dim,
-        ring_index,  // partition index
-        ring_size,   // partition size
-        num_links    // num_workers_per_slicer, set 1 per link for now
+        output_index,    // partition index
+        partition_size,  // partition size
+        num_links        // num_workers_per_slicer, set 1 per link for now
     );
 
     // KERNEL CREATION
@@ -244,10 +287,12 @@ operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
             1,  // num_command_streams
             device->id());
 
-    const size_t forward_direction_distance_to_end_of_line =
-        line_topology.get_distance_to_end_of_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::FORWARD);
-    const size_t backward_direction_distance_to_end_of_line =
-        line_topology.get_distance_to_end_of_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD);
+    // const size_t forward_direction_distance_to_end_of_line =
+    //     line_topology.get_distance_to_end_of_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::FORWARD);
+    // const size_t backward_direction_distance_to_end_of_line =
+    //     line_topology.get_distance_to_end_of_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD);
+    const size_t forward_direction_distance_to_end_of_line = hops_dir0;
+    const size_t backward_direction_distance_to_end_of_line = hops_dir1;
 
     ttnn::ccl::cmd::MulticastCommandDestArgs mcast_dest_args = {
         forward_direction_distance_to_end_of_line, backward_direction_distance_to_end_of_line};
@@ -286,6 +331,9 @@ operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
         log_trace(tt::LogOp, "DEBUG: output tensor slice v2:");
         print_tensor_slice(output_worker_slice_v2);
 
+        std::optional<ttnn::ccl::SenderWorkerAdapterSpec> dir0_fabric_connection;  //=some_api_call
+        std::optional<ttnn::ccl::SenderWorkerAdapterSpec> dir1_fabric_connection;  // some api call
+        /*
         std::optional<ttnn::ccl::SenderWorkerAdapterSpec> forward_fabric_connection =
             line_topology.is_first_device_in_line(ttnn::ccl::EdmLineFabricOpInterface::Direction::BACKWARD)
                 ? std::nullopt
@@ -309,6 +357,7 @@ operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
             line_topology.line_index(),
             line_topology.line_size(),
             backward_fabric_connection.has_value());
+        */
 
         // READER COMMAND STREAM and RT ARGS
         std::vector<ttnn::ccl::cmd::CclHostLowLevelWorkerCommand> reader_cmd_stream;
@@ -394,8 +443,8 @@ operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
             {core},
             writer_cmd_stream,
             std::nullopt,
-            {forward_fabric_connection},
-            {backward_fabric_connection},
+            {dir0_fabric_connection},
+            {dir1_fabric_connection},
             std::nullopt,
             std::vector<size_t>{writer_tensor_command_map_idx},  // tensor indices
             &writer_rt_args_overrider_map[core]);
