@@ -50,16 +50,18 @@ Subject to these Terms, you will receive payments based on the category of **Con
 
 You shall:
 
-* only participate in the Program solely for the intended purpose of disclosing or resolving Bugs to Tenstorrent as described in these Terms and any related documentation;
+* only participate in the Program solely for the intended purpose of disclosing or resolving issues to Tenstorrent as described in these Terms and any related documentation;
 * participate in the Program for lawful purposes only and shall comply with all applicable laws and regulations; and
-* only access, disclose or modify your own user data and be solely responsible for the accuracy, completeness, appropriateness, and legality of any data or Bug solutions you upload or provide through your participation in the Program.
+* only access, disclose or modify your own user data and be solely responsible for the accuracy, completeness, appropriateness, and legality of any data or Contributions you upload or provide through your participation in the Program.
 
 You shall not:
 
 * attempt to gain access to another user’s account or data;
-* transmit any viruses or exploits through your participation in the Program, except for the sole purpose of discovery and submission of Bugs and subject to compliance with these Terms;
+* transmit any viruses or exploits through your participation in the Program, except for the sole purpose of discovery and submission of Contributions and subject to compliance with these Terms;
 * upload, input, access, store, distribute or any material that: (i) is unlawful, harmful, threatening, defamatory, obscene, infringing, harassing or racially or ethnically offensive; (ii) facilitates illegal activity; (iii) is otherwise illegal (including without limitation infringement of any third party intellectual property rights or any other rights); or (iv) causes damage or injury to any person or property; or
 * upload or input or otherwise disclose to Tenstorrent any information which you do not have the rights to or which you are under an existing contractual or other legal obligation to maintain in confidence.
+
+---
 
 **Intellectual Property Rights**
 
@@ -67,13 +69,19 @@ You acknowledge and agree that all your contributions under the Program shall be
 
 Your rights with respect to our software, related documentation, and any updates, developments, or improvements thereto are governed by the license included in the applicable GitHub repository.
 
+---
+
 **Your Information**
 
 You will provide us with all information as we may reasonably require for you to participate in the Program and, where relevant, receive a Bounty award. Tenstorrent shall only use the information you provide us to permit your participation in the Program and to tender Bounty payouts. Except for our obligations under applicable data protection laws with respect to our processing of any personal data you may provide us through your participation in Program, we disclaim all liability of any kind with respect to (i) any information, data or materials you upload or otherwise provide through your participation in the Program, (ii) third party information, (iii) any other material or services which may be accessed when participating in the Program, or (iv) for any fraud committed in connection with the Program.
 
+---
+
 **No Warranties**
 
 TENSTORRENT MAKES NO WARRANTIES, EXPRESS OR IMPLIED, GUARANTEES OR CONDITIONS WITH RESPECT TO THE PROGRAM. YOU UNDERSTAND THAT YOUR PARTICIPATION IN THE PROGRAM IS AT YOUR OWN RISK. TO THE EXTENT PERMITTED UNDER YOUR LOCAL LAW, WE EXCLUDE ANY IMPLIED WARRANTIES IN CONNECTION WITH THE PROGRAM. YOU MAY HAVE CERTAIN RIGHTS UNDER YOUR LOCAL LAW. NOTHING IN THESE TERMS IS INTENDED TO AFFECT THOSE RIGHTS, IF THEY ARE APPLICABLE.
+
+---
 
 **Limitation of Liability and Disclaimer**
 
@@ -81,21 +89,31 @@ Should your participation in the Program be found to breach legal obligations yo
 
 TO THE MAXIMUM EXTENT PERMITTED BY LAW, (A) WE SHALL NOT BE LIABLE TO YOU FOR ANY DAMAGES, CLAIMS, EXPENSES OR OTHER COSTS (INCLUDING, WITHOUT LIMITATION, ATTORNEYS’ FEES) YOU SUFFER OR INCUR AS A RESULT OF THIRD-PARTY CLAIMS RELATING TO YOUR PARTICIPATION IN THE PROGRAM, (B) UNDER NO CIRCUMSTANCES WILL WE BE LIABLE FOR ANY INDIRECT, SPECIAL, INCIDENTAL, PUNITIVE OR CONSEQUENTIAL DAMAGES, AND (C) OUR MAXIMUM AGGREGATE LIABILITY TO YOU ARISING OUT OF OR IN CONNECTION WITH THESE TERMS SHALL BE LIMITED TO $100, REGARDLESS OF THE CAUSE. WE DO NOT EXCLUDE OR LIMIT OUR LIABILITY FOR FRAUD OR FOR ANY OTHER LIABILITY WHICH CANNOT BE LIMITED OR EXCLUDED BY APPLICABLE LAW.   
 
+---
+
 **Issues**
 
 If you encounter any issues with your participation in the Program, please reach out to us at bounties@tenstorrent.com.
+
+---
 
 **Applicability of these Terms**
 
 These Terms shall apply for as long as you are participating in the Program pursuant to these Terms. Cancellation of the Program, termination of these Terms, or your explicit withdrawal from the Program shall not affect Tenstorrent’s rights and your obligations under these Terms prior to such cancellation or termination, which shall continue to apply, unless otherwise agreed in writing.
 
+---
+
 **Governing Law & Disputes**
 
 These Terms shall be governed by and construed in accordance with the laws of the State of California and any federal laws applicable therein and shall be binding upon the parties hereto in California and worldwide. The parties consent to the exclusive jurisdiction of the courts of the State of California for any dispute arising out of this Agreement. Except where prohibited, as a condition of participating in this Program, each Participant agrees that between the parties, any and all disputes, claims, and causes of action arising out of or connected with this Program, or the Bounty Payout awarded must be resolved individually, without resort to any form of class action.
 
+---
+
 **General**
 
 These Terms will be binding on and will inure to the benefit of the legal representatives, successors and assigns of the parties hereto. These Terms (and any policies referenced herein and incorporated by reference) constitute the entire agreement between you and us with respect to the subject matter hereof, and you have not relied upon any promises or representations by us with respect to the subject matter except as set forth herein. You may not assign these Terms or assign any rights or delegate any obligations hereunder, in whole or in part, whether voluntarily or by operation of law. The governing language of these Terms is English. A person who is not a party to these Terms has no rights to enforce, or to enjoy the benefit of, any term of these Terms.
+
+---
 
 **Exhibit A – Tenstorrent Bounty Rewards Chart**
 
@@ -106,4 +124,3 @@ These Terms will be binding on and will inure to the benefit of the legal repres
 | difficulty/medium | Tasks requiring significant familiarity with the code base, architecture, or domain knowledge  | \- Implementing a new feature. \- Adding support for a new model. \- Debugging and fixing non-trivial performance issues. \- Integration of a library or external tool. |  501 – 1999 |
 | difficulty/hard | Complex tasks demanding deep architectural understanding and significant effort. | \- Major feature implementation. \- Core system redesign. \- Implementing a new kernel or low-level ops. \- Optimizing performance-critical code paths. |  2000 – 3000 |
 
----
