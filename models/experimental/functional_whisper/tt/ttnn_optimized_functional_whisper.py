@@ -369,17 +369,17 @@ def decoder_layer(
     return hidden_states
 
 
-def prepare_decoder_attention_mask(attention_mask, input_shape, input_embeds):
+def prepare_decoder_attention_mask(attention_mask, input_shape, dtype=torch.bfloat16):
     # create causal mask
     # [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len]
     combined_attention_mask = None
 
     if input_shape[-1] > 1:
-        combined_attention_mask = make_causal_mask(input_shape, input_embeds.dtype)
+        combined_attention_mask = make_causal_mask(input_shape, dtype)
 
     if attention_mask is not None:
         # [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len]
-        expanded_attn_mask = expand_mask(attention_mask, input_embeds.dtype, tgt_len=input_shape[-1])
+        expanded_attn_mask = expand_mask(attention_mask, dtype, tgt_len=input_shape[-1])
         combined_attention_mask = (
             expanded_attn_mask if combined_attention_mask is None else expanded_attn_mask + combined_attention_mask
         )
@@ -426,8 +426,6 @@ def convert_to_ttnn(model, name):
     return name not in [
         "encoder.conv1",
         "encoder.conv2",
-        "decoder.embed_tokens",
-        "decoder.embed_positions",
     ]
 
 
@@ -463,9 +461,12 @@ def preprocess_decoder_inputs(
 ):
     input_shape = input_ids.size()
     input_ids = torch.reshape(input_ids, (-1, input_shape[-1]))
-    inputs_embeds = F.embedding(input_ids, parameters.embed_tokens.weight)
+    tt_input_ids = ttnn.from_torch(input_ids, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    inputs_embeds = ttnn.embedding(
+        tt_input_ids, parameters.embed_tokens.weight, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
     if create_attention_mask:
-        attention_mask = prepare_decoder_attention_mask(attention_mask, input_shape, inputs_embeds)
+        attention_mask = prepare_decoder_attention_mask(attention_mask, input_shape)
     if attention_mask is not None:
         # ttnn cannot broadcast when adding on the batch or channel dimensions so this is a workaround
         attention_mask = attention_mask.expand(-1, config.encoder_attention_heads, -1, -1)
@@ -475,11 +476,9 @@ def preprocess_decoder_inputs(
         positions = parameters.embed_positions.weight[0 : input_ids.shape[-1]]
     else:
         positions = parameters.embed_positions.weight[decode_pos : decode_pos + 1]
-    decoder_hidden_states = inputs_embeds + positions
 
-    decoder_hidden_states = ttnn.from_torch(
-        decoder_hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
-    )
+    positions = ttnn.to_layout(positions, ttnn.TILE_LAYOUT)
+    decoder_hidden_states = inputs_embeds + positions
 
     return decoder_hidden_states, attention_mask
 
