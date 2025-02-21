@@ -17,7 +17,7 @@ jobs:
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
-        arch: [grayskull, wormhole_b0]
+        arch: [wormhole_b0]
         frequent-type: [api]
     env:
       ARCH_NAME: ${{ matrix.arch }}
