@@ -3,14 +3,18 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
+#include <gmock/gmock.h>
 
 #include <tt-metalium/mesh_coord.hpp>
 
 #include <ttnn/core.hpp>
 #include <ttnn/distributed/api.hpp>
+#include "ttnn/distributed/types.hpp"
 
 namespace ttnn::distributed::test {
 
+using ::testing::IsEmpty;
+using ::testing::SizeIs;
 using ::tt::tt_metal::distributed::MeshContainer;
 
 class DistributedTest : public ::testing::Test {
@@ -47,7 +51,7 @@ TEST_F(DistributedTest, TestMemoryAllocationStatistics) {
 TEST_F(DistributedTest, TestNumDramChannels) {
     auto mesh = ttnn::distributed::open_mesh_device(
         {2, 4}, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, tt::tt_metal::DispatchCoreType::WORKER);
-    EXPECT_EQ(mesh->num_dram_channels(), 96); // 8 devices * 12 channels
+    EXPECT_EQ(mesh->num_dram_channels(), 96);  // 8 devices * 12 channels
 }
 
 TEST_F(DistributedTest, ViewIs2D) {
@@ -68,4 +72,28 @@ TEST_F(DistributedTest, ViewIs2D) {
     EXPECT_FALSE(view_3d.is_mesh_2d());
 }
 
+TEST_F(DistributedTest, Submesh) {
+    auto mesh = ttnn::distributed::open_mesh_device(
+        {2, 4}, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, tt::tt_metal::DispatchCoreType::WORKER);
+
+    EXPECT_EQ(mesh->shape().num_rows, 2);
+    EXPECT_EQ(mesh->shape().num_cols, 4);
+    EXPECT_THAT(mesh->get_devices(), SizeIs(8));
+    EXPECT_TRUE(mesh->is_parent_mesh());
+    EXPECT_THAT(mesh->get_submeshes(), IsEmpty());
+
+    auto submesh = mesh->create_submesh(MeshShape{1, 2}, MeshOffset{1, 1});
+    EXPECT_THAT(mesh->get_submeshes(), SizeIs(1));
+    EXPECT_EQ(submesh->shape().num_rows, 1);
+    EXPECT_EQ(submesh->shape().num_cols, 2);
+    EXPECT_THAT(submesh->get_devices(), SizeIs(2));
+    EXPECT_FALSE(submesh->is_parent_mesh());
+    EXPECT_THAT(submesh->get_submeshes(), IsEmpty());
+
+    // Verify coordinates are correct.
+    EXPECT_EQ(mesh->get_device(MeshCoordinate{1, 1})->id(), submesh->get_device(MeshCoordinate{0, 0})->id());
+    EXPECT_EQ(mesh->get_device(MeshCoordinate{1, 2})->id(), submesh->get_device(MeshCoordinate{0, 1})->id());
+    EXPECT_EQ(submesh->get_device(1, 1), nullptr);
+
+}  // namespace ttnn::distributed::test
 }  // namespace ttnn::distributed::test
