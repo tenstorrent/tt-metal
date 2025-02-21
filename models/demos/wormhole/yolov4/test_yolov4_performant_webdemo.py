@@ -8,12 +8,7 @@ import time
 import torch
 
 from models.utility_functions import run_for_wormhole_b0
-from models.demos.yolov4.tests.yolov4_perfomant_webdemo import (
-    run_yolov4_inference,
-    run_yolov4_trace_inference,
-    run_yolov4_trace_2cqs_inference,
-    Yolov4Trace2CQ,
-)
+from models.demos.yolov4.tests.yolov4_perfomant_webdemo import Yolov4Trace2CQ
 
 
 @run_for_wormhole_b0()

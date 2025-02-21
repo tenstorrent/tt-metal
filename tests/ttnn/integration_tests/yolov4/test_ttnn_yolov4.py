@@ -8,46 +8,13 @@ from models.demos.yolov4.reference.yolov4 import Yolov4
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.utility_functions import skip_for_grayskull
 from models.demos.yolov4.ttnn.yolov4 import TtYOLOv4
-from models.demos.yolov4.demo.demo import YoloLayer, get_region_boxes, post_processing, plot_boxes_cv2, load_class_names
+from models.demos.yolov4.demo.demo import YoloLayer, get_region_boxes, gen_yolov4_boxes_confs
+
 import cv2
 import numpy as np
 
 import pytest
 import os
-
-
-def gen_yolov4_boxes_confs(output):
-    n_classes = 80
-
-    yolo1 = YoloLayer(
-        anchor_mask=[0, 1, 2],
-        num_classes=n_classes,
-        anchors=[12, 16, 19, 36, 40, 28, 36, 75, 76, 55, 72, 146, 142, 110, 192, 243, 459, 401],
-        num_anchors=9,
-        stride=8,
-    )
-
-    yolo2 = YoloLayer(
-        anchor_mask=[3, 4, 5],
-        num_classes=n_classes,
-        anchors=[12, 16, 19, 36, 40, 28, 36, 75, 76, 55, 72, 146, 142, 110, 192, 243, 459, 401],
-        num_anchors=9,
-        stride=16,
-    )
-
-    yolo3 = YoloLayer(
-        anchor_mask=[6, 7, 8],
-        num_classes=n_classes,
-        anchors=[12, 16, 19, 36, 40, 28, 36, 75, 76, 55, 72, 146, 142, 110, 192, 243, 459, 401],
-        num_anchors=9,
-        stride=32,
-    )
-
-    y1 = yolo1(output[0])
-    y2 = yolo2(output[1])
-    y3 = yolo3(output[2])
-
-    return y1, y2, y3
 
 
 @skip_for_grayskull()
@@ -84,16 +51,7 @@ def test_yolov4(device, reset_seeds, model_location_generator):
     ttnn_input = ttnn.from_torch(input_tensor, ttnn.bfloat16)
 
     torch_model = Yolov4()
-
-    new_state_dict = {}
-    ds_state_dict = {k: v for k, v in ttnn_model.torch_model.items()}
-
-    keys = [name for name, parameter in torch_model.state_dict().items()]
-    values = [parameter for name, parameter in ds_state_dict.items()]
-
-    for i in range(len(keys)):
-        new_state_dict[keys[i]] = values[i]
-
+    new_state_dict = dict(zip(torch_model.state_dict().keys(), ttnn_model.torch_model.values()))
     torch_model.load_state_dict(new_state_dict)
     torch_model.eval()
 
@@ -109,23 +67,19 @@ def test_yolov4(device, reset_seeds, model_location_generator):
     result_boxes_padded = result_boxes_padded.permute(0, 2, 1, 3)
     result_boxes_list = []
     # Unpadding
-    result_boxes_list.append(result_boxes_padded[:, 0:6100])
-    result_boxes_list.append(result_boxes_padded[:, 6128:6228])
-    result_boxes_list.append(result_boxes_padded[:, 6256:6356])
+    # That ttnn tensor is the concat output of 3 padded tensors
+    # As a perf workaround I'm doing the unpadding on the torch output here.
+    # TODO: cleaner ttnn code when ttnn.untilize() is fully optimized
+    box_1_start_i = 0
+    box_1_end_i = 6100
+    box_2_start_i = 6128
+    box_2_end_i = 6228
+    box_3_start_i = 6256
+    box_3_end_i = 6356
+    result_boxes_list.append(result_boxes_padded[:, box_1_start_i:box_1_end_i])
+    result_boxes_list.append(result_boxes_padded[:, box_2_start_i:box_2_end_i])
+    result_boxes_list.append(result_boxes_padded[:, box_3_start_i:box_3_end_i])
     result_boxes = torch.cat(result_boxes_list, dim=1)
 
     assert_with_pcc(ref_boxes, result_boxes, 0.99)
     assert_with_pcc(ref_confs, result_confs, 0.71)
-
-    """
-    ## Giraffe image detection
-    conf_thresh = 0.3
-    nms_thresh = 0.4
-    output = [result_boxes.to(torch.float16), result_confs.to(torch.float16)]
-
-    boxes = post_processing(img, conf_thresh, nms_thresh, output)
-    namesfile = "models/demos/yolov4/demo/coco.names"
-    class_names = load_class_names(namesfile)
-    img = cv2.imread(imgfile)
-    plot_boxes_cv2(img, boxes[0], "ttnn_prediction_demo.jpg", class_names)
-    """

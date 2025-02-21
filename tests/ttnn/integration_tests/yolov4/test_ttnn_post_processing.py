@@ -7,8 +7,7 @@ import ttnn
 from models.utility_functions import skip_for_grayskull
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.demos.yolov4.ttnn.genboxes import TtGenBoxes
-from models.demos.yolov4.demo.demo import YoloLayer
-from models.demos.yolov4.demo.demo import YoloLayer, get_region_boxes, post_processing, plot_boxes_cv2, load_class_names
+from models.demos.yolov4.demo.demo import YoloLayer, get_region_boxes, gen_yolov4_boxes_confs
 
 import pytest
 import os
@@ -42,35 +41,7 @@ def test_yolov4_post_processing(device, reset_seeds, model_location_generator):
     torch_input_3 = torch_input_3.reshape(1, 10, 10, 255)
     torch_input_3 = torch.permute(torch_input_3, (0, 3, 1, 2))
 
-    n_classes = 80
-
-    yolo1 = YoloLayer(
-        anchor_mask=[0, 1, 2],
-        num_classes=n_classes,
-        anchors=[12, 16, 19, 36, 40, 28, 36, 75, 76, 55, 72, 146, 142, 110, 192, 243, 459, 401],
-        num_anchors=9,
-        stride=8,
-    )
-
-    yolo2 = YoloLayer(
-        anchor_mask=[3, 4, 5],
-        num_classes=n_classes,
-        anchors=[12, 16, 19, 36, 40, 28, 36, 75, 76, 55, 72, 146, 142, 110, 192, 243, 459, 401],
-        num_anchors=9,
-        stride=16,
-    )
-
-    yolo3 = YoloLayer(
-        anchor_mask=[6, 7, 8],
-        num_classes=n_classes,
-        anchors=[12, 16, 19, 36, 40, 28, 36, 75, 76, 55, 72, 146, 142, 110, 192, 243, 459, 401],
-        num_anchors=9,
-        stride=32,
-    )
-
-    ref1 = yolo1(torch_input_1)
-    ref2 = yolo2(torch_input_2)
-    ref3 = yolo3(torch_input_3)
+    ref1, ref2, ref3 = gen_yolov4_boxes_confs([torch_input_1, torch_input_2, torch_input_3])
 
     boxes_confs_1 = TtGenBoxes(device)
     boxes_confs_2 = TtGenBoxes(device)

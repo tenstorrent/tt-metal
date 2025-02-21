@@ -6,10 +6,7 @@ import torch
 import math
 import numpy as np
 import ttnn
-
-
-def _nearest_32(x):
-    return math.ceil(x / 32) * 32
+from models.utility_functions import _nearest_32
 
 
 def create_conv_bias_tensor(torch_tensor, N, K, pad=0):

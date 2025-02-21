@@ -52,16 +52,10 @@ def test_neck(device, reset_seeds, model_location_generator):
     torch_input_tensor2 = torch_input_tensor2.permute(0, 3, 1, 2).float()
     torch_input_tensor3 = torch_input_tensor3.permute(0, 3, 1, 2).float()
     torch_input_tensor = [torch_input_tensor1, torch_input_tensor2, torch_input_tensor3]
+
     torch_model = Neck()
-
-    new_state_dict = {}
     ds_state_dict = {k: v for k, v in ttnn_model.torch_model.items() if (k.startswith("neek."))}
-
-    keys = [name for name, parameter in torch_model.state_dict().items()]
-    values = [parameter for name, parameter in ds_state_dict.items()]
-    for i in range(len(keys)):
-        new_state_dict[keys[i]] = values[i]
-
+    new_state_dict = dict(zip(torch_model.state_dict().keys(), ds_state_dict.values()))
     torch_model.load_state_dict(new_state_dict)
     torch_model.eval()
 
