@@ -172,14 +172,14 @@ TEST_P(DeviceLocalMeshBufferShardingTest, ShardingTest) {
     std::vector<uint32_t> src_vec(buf_size / sizeof(uint32_t), 0);
     std::iota(src_vec.begin(), src_vec.end(), 0);
 
-    for (std::size_t logical_x = 0; logical_x < buf->device()->num_cols(); logical_x++) {
-        for (std::size_t logical_y = 0; logical_y < buf->device()->num_rows(); logical_y++) {
+    for (std::size_t logical_x = 0; logical_x < buf->mesh_device()->num_cols(); logical_x++) {
+        for (std::size_t logical_y = 0; logical_y < buf->mesh_device()->num_rows(); logical_y++) {
             WriteShard(mesh_device_->mesh_command_queue(), buf, src_vec, Coordinate(logical_y, logical_x));
         }
     }
 
-    for (std::size_t logical_x = 0; logical_x < buf->device()->num_cols(); logical_x++) {
-        for (std::size_t logical_y = 0; logical_y < buf->device()->num_rows(); logical_y++) {
+    for (std::size_t logical_x = 0; logical_x < buf->mesh_device()->num_cols(); logical_x++) {
+        for (std::size_t logical_y = 0; logical_y < buf->mesh_device()->num_rows(); logical_y++) {
             std::vector<uint32_t> dst_vec = {};
             ReadShard(mesh_device_->mesh_command_queue(), dst_vec, buf, Coordinate(logical_y, logical_x));
             EXPECT_EQ(dst_vec, src_vec);
@@ -302,14 +302,14 @@ TEST_F(MeshBufferTestSuite, InterleavedShardsReadWrite) {
 
             std::vector<uint32_t> src_vec(num_random_tiles * single_tile_size / sizeof(uint32_t), 0);
             std::iota(src_vec.begin(), src_vec.end(), i);
-            for (std::size_t logical_x = 0; logical_x < buf->device()->num_cols(); logical_x++) {
-                for (std::size_t logical_y = 0; logical_y < buf->device()->num_rows(); logical_y++) {
+            for (std::size_t logical_x = 0; logical_x < buf->mesh_device()->num_cols(); logical_x++) {
+                for (std::size_t logical_y = 0; logical_y < buf->mesh_device()->num_rows(); logical_y++) {
                     WriteShard(mesh_device_->mesh_command_queue(), buf, src_vec, Coordinate(logical_y, logical_x));
                 }
             }
 
-            for (std::size_t logical_x = 0; logical_x < buf->device()->num_cols(); logical_x++) {
-                for (std::size_t logical_y = 0; logical_y < buf->device()->num_rows(); logical_y++) {
+            for (std::size_t logical_x = 0; logical_x < buf->mesh_device()->num_cols(); logical_x++) {
+                for (std::size_t logical_y = 0; logical_y < buf->mesh_device()->num_rows(); logical_y++) {
                     std::vector<uint32_t> dst_vec = {};
                     ReadShard(mesh_device_->mesh_command_queue(), dst_vec, buf, Coordinate(logical_y, logical_x));
                     EXPECT_EQ(dst_vec, src_vec);

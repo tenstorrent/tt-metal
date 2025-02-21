@@ -245,8 +245,8 @@ void MeshCommandQueue::write_sharded_buffer(const MeshBuffer& buffer, const void
     auto num_shards_x = global_buffer_shape.width() / shard_shape.width();
     auto num_shards_y = global_buffer_shape.height() / shard_shape.height();
 
-    uint32_t num_devices_x = buffer.device()->num_cols();
-    uint32_t num_devices_y = buffer.device()->num_rows();
+    uint32_t num_devices_x = buffer.mesh_device()->num_cols();
+    uint32_t num_devices_y = buffer.mesh_device()->num_rows();
 
     uint32_t device_x = 0;
     uint32_t device_y = 0;
@@ -325,8 +325,8 @@ void MeshCommandQueue::read_sharded_buffer(MeshBuffer& buffer, void* dst) {
     auto total_write_size_per_shard = single_write_size * shard_shape.height();
     auto num_shards_x = global_buffer_shape.width() / shard_shape.width();
     auto num_shards_y = global_buffer_shape.height() / shard_shape.height();
-    uint32_t num_devices_x = buffer.device()->num_cols();
-    uint32_t num_devices_y = buffer.device()->num_rows();
+    uint32_t num_devices_x = buffer.mesh_device()->num_cols();
+    uint32_t num_devices_y = buffer.mesh_device()->num_rows();
 
     uint32_t device_x = 0;
     uint32_t device_y = 0;
@@ -386,7 +386,8 @@ void MeshCommandQueue::enqueue_write_shard_to_sub_grid(
 
 void MeshCommandQueue::enqueue_write_mesh_buffer(
     const std::shared_ptr<MeshBuffer>& buffer, const void* host_data, bool blocking) {
-    LogicalDeviceRange mesh_device_extent({0, 0}, {buffer->device()->num_cols() - 1, buffer->device()->num_rows() - 1});
+    LogicalDeviceRange mesh_device_extent(
+        {0, 0}, {buffer->mesh_device()->num_cols() - 1, buffer->mesh_device()->num_rows() - 1});
     this->enqueue_write_shard_to_sub_grid(*buffer, host_data, mesh_device_extent, blocking);
 }
 
@@ -421,7 +422,7 @@ void MeshCommandQueue::enqueue_read_shards(
     bool blocking) {
     // TODO: #17215 - this API is used by TTNN, as it currently implements rich ND sharding API for multi-devices.
     // In the long run, the multi-device sharding API in Metal will change, and this will most likely be replaced.
-    const auto [num_rows, num_cols] = buffer->device()->shape();
+    const auto [num_rows, num_cols] = buffer->mesh_device()->shape();
     for (const auto& shard_data_transfer : shard_data_transfers) {
         auto device_shard_view = buffer->get_device_buffer(shard_data_transfer.shard_coord);
         read_shard_from_device(

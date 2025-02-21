@@ -581,7 +581,7 @@ Tensor to_host_mesh_tensor(const Tensor& tensor, bool blocking) {
     TT_FATAL(tt::tt_metal::detail::InMainThread(), "to_host_mesh_tensor must be called from the main thread");
     const auto& storage = std::get<MultiDeviceStorage>(tensor.get_storage());
     const auto& mesh_buffer = storage.mesh_buffer;
-    ttnn::MeshDevice* device = mesh_buffer->device();
+    ttnn::MeshDevice* device = mesh_buffer->mesh_device();
     distributed::MeshCommandQueue& mesh_cq = device->mesh_command_queue();
     const auto [num_rows, num_cols] = device->shape();
     const auto num_buffers = storage.buffers.size();

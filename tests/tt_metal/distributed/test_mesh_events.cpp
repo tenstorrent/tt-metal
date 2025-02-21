@@ -47,8 +47,8 @@ TEST_F(MeshEventsTestSuite, ReplicatedAsyncIO) {
         EnqueueWaitForEvent(mesh_device_->mesh_command_queue(1), event);
 
         // Reads on CQ 1
-        for (std::size_t logical_x = 0; logical_x < buf->device()->num_cols(); logical_x++) {
-            for (std::size_t logical_y = 0; logical_y < buf->device()->num_rows(); logical_y++) {
+        for (std::size_t logical_x = 0; logical_x < buf->mesh_device()->num_cols(); logical_x++) {
+            for (std::size_t logical_y = 0; logical_y < buf->mesh_device()->num_rows(); logical_y++) {
                 readback_vecs.push_back({});
                 auto shard = buf->get_device_buffer(Coordinate(logical_y, logical_x));
                 ReadShard(

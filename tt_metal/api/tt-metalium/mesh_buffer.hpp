@@ -68,7 +68,7 @@ using MeshBufferConfig = std::variant<ReplicatedBufferConfig, ShardedBufferConfi
 
 // MeshBuffer allocates a buffer across a mesh of devices according to the specified configuration: either full
 // replication, or 2D sharding. The allocation is done in lock-step across all devices in the mesh.
-class MeshBuffer {
+class MeshBuffer : Buffer {
 public:
     static std::shared_ptr<MeshBuffer> create(
         const MeshBufferConfig& mesh_buffer_config,
@@ -76,19 +76,161 @@ public:
         MeshDevice* mesh_device,
         std::optional<DeviceAddr> address = std::nullopt);
 
+    IDevice* device() const override { return mesh_device_; }
+    Allocator* allocator() const override {
+        TT_THROW("Function to be implemented.");
+        return nullptr;
+    }
+    DeviceAddr size() const override;
     // Returns true if the MeshBuffer is allocated. Note that MeshBuffer is created in the allocated state; either the
     // destructor or the `deallocate` method deallocate the MeshBuffer.
-    bool is_allocated() const;
+    bool is_allocated() const override;
+
+    // Returns address of buffer in the first bank
+    uint32_t address() const override { return address_; };
+
+    DeviceAddr page_size() const override {
+        TT_THROW("Function to be implemented.");
+        return 0;
+    }
+    void set_page_size(DeviceAddr page_size) override { TT_THROW("Function to be implemented."); }
+
+    uint32_t num_pages() const override {
+        TT_THROW("Function to be implemented.");
+        return 0;
+    }
+    uint32_t num_dev_pages() const override {
+        TT_THROW("Function to be implemented.");
+        return 0;
+    }
+
+    BufferType buffer_type() const override {
+        TT_THROW("Function to be implemented.");
+        return BufferType::DRAM;
+    }
+    CoreType core_type() const override {
+        TT_THROW("Function to be implemented.");
+        return CoreType::WORKER;
+    }
+
+    bool is_l1() const override {
+        TT_THROW("Function to be implemented.");
+        return false;
+    }
+    bool is_dram() const override {
+        TT_THROW("Function to be implemented.");
+        return false;
+    }
+    bool is_trace() const override {
+        TT_THROW("Function to be implemented.");
+        return false;
+    }
+
+    bool is_valid_region(const BufferRegion& region) const override {
+        TT_THROW("Function to be implemented.");
+        return false;
+    }
+    bool is_valid_partial_region(const BufferRegion& region) const override {
+        TT_THROW("Function to be implemented.");
+        return false;
+    }
+
+    TensorMemoryLayout buffer_layout() const override {
+        TT_THROW("Function to be implemented.");
+        return TensorMemoryLayout::INTERLEAVED;
+    }
+
+    bool bottom_up() const override {
+        TT_THROW("Function to be implemented.");
+        return false;
+    }
+
+    uint32_t dram_channel_from_bank_id(uint32_t bank_id) const override {
+        TT_THROW("Function to be implemented.");
+        return 0;
+    }
+
+    CoreCoord logical_core_from_bank_id(uint32_t bank_id) const override {
+        TT_THROW("Function to be implemented.");
+        return {0, 0};
+    }
+
+    DeviceAddr page_address(uint32_t bank_id, uint32_t page_index) const override {
+        TT_THROW("Function to be implemented.");
+        return 0;
+    }
+
+    DeviceAddr bank_local_page_address(uint32_t bank_id, uint32_t page_index) const override {
+        TT_THROW("Function to be implemented.");
+        return 0;
+    }
+    uint32_t alignment() const override {
+        TT_THROW("Function to be implemented.");
+        return 0;
+    }
+    DeviceAddr aligned_page_size() const override {
+        TT_THROW("Function to be implemented.");
+        return 0;
+    }
+    DeviceAddr aligned_size() const override {
+        TT_THROW("Function to be implemented.");
+        return 0;
+    }
+    DeviceAddr aligned_size_per_bank() const override {
+        TT_THROW("Function to be implemented.");
+        return 0;
+    }
+
+    // SHARDED API STARTS HERE
+    // TODO: WILL SEPARATE INTO SHARDED BUFFER CLASS
+
+    DeviceAddr sharded_page_address(uint32_t bank_id, uint32_t page_index) const override {
+        TT_THROW("Function to be implemented.");
+        return 0;
+    }
+
+    ShardSpecBuffer shard_spec() const override {
+        TT_THROW("Function to be implemented.");
+        for (auto& [coord, device_buffer] : buffers_) {
+            return device_buffer->shard_spec();
+        }
+    }
+    void set_shard_spec(const ShardSpecBuffer& shard_spec) override { TT_THROW("Function to be implemented."); }
+
+    std::optional<uint32_t> num_cores() const override {
+        TT_THROW("Function to be implemented.");
+        return std::nullopt;
+    }
+
+    const std::shared_ptr<const BufferPageMapping>& get_buffer_page_mapping() override {
+        TT_THROW("Function to be implemented.");
+        for (auto& [coord, device_buffer] : buffers_) {
+            return device_buffer->get_buffer_page_mapping();
+        }
+    }
+
+    std::optional<SubDeviceId> sub_device_id() const override {
+        TT_THROW("Function to be implemented.");
+        return std::nullopt;
+    }
+    std::optional<SubDeviceManagerId> sub_device_manager_id() const override {
+        TT_THROW("Function to be implemented.");
+        return std::nullopt;
+    }
+
+    size_t unique_id() const override {
+        TT_THROW("Function to be implemented.");
+        return 0;
+    }
 
     // Deallocates the MeshBuffer.
     // TODO: Re-consider a need for explicit deallocation methods, as opposed to relying on RAII to clean up the
     // resources.
-    void deallocate();
+    void deallocate() override;
 
-    MeshDevice* device() const { return mesh_device_; }
-    DeviceAddr size() const;
+    // MeshBuffer-specific APIs
+    MeshDevice* mesh_device() const { return mesh_device_; }
     DeviceAddr device_local_size() const { return device_local_size_; }
-    DeviceAddr address() const { return address_; };
 
     MeshBufferLayout global_layout() const;
     const MeshBufferConfig& global_config() const { return config_; }

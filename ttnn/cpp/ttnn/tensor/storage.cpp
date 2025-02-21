@@ -26,7 +26,7 @@ MultiDeviceStorage::MultiDeviceStorage(
     // tensor spec.
     //
     // For now, this code ensures MeshBuffer backed tensors are compatible with the rest of the ops infra.
-    const auto [num_rows, num_cols] = mesh_buffer->device()->shape();
+    const auto [num_rows, num_cols] = mesh_buffer->mesh_device()->shape();
 
     ordered_device_ids.reserve(num_rows * num_cols);
     buffers.reserve(num_rows * num_cols);
