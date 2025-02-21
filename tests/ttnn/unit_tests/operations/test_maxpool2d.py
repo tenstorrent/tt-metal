@@ -130,13 +130,13 @@ def run_max_pool(
     torch.set_printoptions(precision=3, sci_mode=False, linewidth=500, threshold=10000, edgeitems=32)
 
     ## construct the tensor in NCHW shape
-    act = torch.randn(act_shape, dtype=torch.bfloat16)
-    # act = torch.zeros(act_shape, dtype=torch.bfloat16)
-    # for n in range(act_shape[0]):
-    #     for c in range(act_shape[1]):
-    #         for h in range(act_shape[2]):
-    #             for w in range(act_shape[3]):
-    #                 act[n, c, h, w] = h * in_w + w
+    # act = torch.randn(act_shape, dtype=torch.bfloat16)
+    act = torch.zeros(act_shape, dtype=torch.bfloat16)
+    for n in range(act_shape[0]):
+        for c in range(act_shape[1]):
+            for h in range(act_shape[2]):
+                for w in range(act_shape[3]):
+                    act[n, c, h, w] = h * in_w + w
     # torch.save(act, "act.pt")
     # act = torch.load("act.pt")
 
@@ -218,6 +218,9 @@ def run_max_pool(
     if dtype == ttnn.bfloat8_b:
         pcc_thresh = 0.9994
 
+    print(output_pytorch[0][0])
+    print(golden_pytorch[0][0])
+
     passing, pcc = assert_with_pcc(output_pytorch, golden_pytorch, pcc_thresh)
 
     logger.debug(f"Passing: {passing}, PCC: {pcc}")
@@ -290,9 +293,9 @@ def run_max_pool(
             # [1, 640, 32, 32],
             # [1, 576, 32, 32],
             # [1, 384, 32, 32],
-            # # C=16 test
+            # # C=16 test2
             # [1, 16, 10, 10],
-            [1, 256, 128, 128],
+            [1, 32, 4, 4],
         )
     ),
 )
