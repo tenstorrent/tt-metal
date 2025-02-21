@@ -2,3 +2,6 @@
 CompileFlags:
   Add:
     - "std=c++20"
+    - "-DPROFILE_NOC_EVENTS=1"
+    - "-DPROFILE_KERNEL=1"
+    - "-DCOMPILE_FOR_BRISC=1"
