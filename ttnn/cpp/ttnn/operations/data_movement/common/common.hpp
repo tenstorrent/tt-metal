@@ -296,9 +296,13 @@ std::string instantiate(const Tuple& templateArgsTuple, const Args&... construct
 // auto tupleArgs1 = std::make_tuple("int", 4);
 // std::string inst1 = instantiate<MyStruct>(tupleArgs1, arr1); // MyStruct<int, 4>({1, 2, 3, 4});
 
+template <typename Struct, typename... Args>
+concept ConstructibleFromArgs = requires { Struct{std::declval<Args>()...}; };
+
 //----------------------------------------------------------------------
-// instantiate overload for non-template types (like CompositeStruct).
+// instantiate overload for non-template types
 template <typename Struct, typename Tuple, typename... Args>
+    requires ConstructibleFromArgs<Struct, Args...>
 std::string instantiate(const Tuple& templateArgsTuple, const Args&... constructorArgs);
 
 }  // namespace data_movement
