@@ -98,13 +98,9 @@ def run_generate(
     unpadded_batch_size = input_embeds.shape[0]
     assert unpadded_batch_size == 1, "Only batch size 1 is supported for inference"
 
-    input_ids = torch.tensor([[1, 1]]) * config.decoder_start_token_id
+    input_ids = torch.tensor([[1]]) * config.decoder_start_token_id
 
     logits_processor = get_logits_processor(input_ids, config)
-
-    input_ids = pad_input_32(input_ids, config.pad_token_id).to(torch.long)
-
-    decoder_start_values = generation_config.pad_token_id * torch.ones(1, 32).to(torch.long)
 
     # Initial decode positions
     if kv_cache:
@@ -115,6 +111,8 @@ def run_generate(
             dtype=ttnn.int32,
         )
     else:
+        input_ids = pad_input_32(input_ids, config.pad_token_id).to(torch.long)
+        decoder_start_values = generation_config.pad_token_id * torch.ones(1, 32).to(torch.long)
         current_decode_pos = None
 
     # Run encoder
@@ -148,11 +146,7 @@ def run_generate(
             output_idx = 0
 
         output = output @ ttnn_linear_weight
-
-        output = ttnn.from_device(output)
-
         logits_to_torch = ttnn.to_torch(output)
-
         next_token_logits = logits_to_torch[:, output_idx, :]
 
         next_tokens_scores = logits_processor(input_features, next_token_logits)
@@ -166,7 +160,6 @@ def run_generate(
             input_ids[:, i + 1] = next_tokens[:, None]
         else:
             input_ids = next_tokens[:, None]
-            input_ids = pad_input_32(input_ids, config.pad_token_id).to(torch.long)
             ttnn.plus_one(current_decode_pos)
 
         decoder_hidden_states, decoder_attention_mask = ttnn_model.preprocess_decoder_inputs(
