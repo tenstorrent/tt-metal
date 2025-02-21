@@ -304,14 +304,15 @@ struct addressable_core_t {
     volatile AddressableCoreType type;
 };
 
-// TODO: This can move into the hal eventually, currently sized for WH.
-// This is the number of Ethernet cores on WH (Ethernet cores can be queried through Virtual Coordinates).
-// All other Non Worker Cores are not accessible through virtual coordinates. Subject to change, depending on the arch.
-constexpr static std::uint32_t MAX_VIRTUAL_NON_WORKER_CORES = 18;
-// This is the total number of Non Worker Cores on WH (first term is Ethernet, second term is PCIe and last term is
-// DRAM).
-// ??????
-constexpr static std::uint32_t MAX_NON_WORKER_CORES = MAX_VIRTUAL_NON_WORKER_CORES + 1 + 16;
+// TODO: This can move into arch specific core_config.h when dev_msgs.h is moved to be internal
+// Currently manually set MAX_VIRTUAL_NON_WORKER_CORES and MAX_PHYSICAL_NON_WORKER_CORES to be max across all archs.
+// On WH only Ethernet cores can be queried through Virtual Coordinates (18)
+// On BH Ethernet, PCIe, and DRAM cores can be queried through Virtual Coordinates (14 + 1 + 24)
+constexpr static std::uint32_t MAX_VIRTUAL_NON_WORKER_CORES = 39;
+// This is the maximum of total number of Physical Non Worker Cores across all archs
+// On WH: 18 + 1 + 16 (Eth + PCIe + DRAM)
+// On BH: 14 + 1 + 24 (Eth + PCIe + DRAM)
+constexpr static std::uint32_t MAX_PHYSICAL_NON_WORKER_CORES = 39;
 constexpr static std::uint32_t MAX_HARVESTED_ROWS = 2;
 constexpr static std::uint8_t CORE_COORD_INVALID = 0xFF;
 struct core_info_msg_t {
@@ -319,7 +320,7 @@ struct core_info_msg_t {
     volatile uint64_t noc_pcie_addr_end;
     volatile uint64_t noc_dram_addr_base;
     volatile uint64_t noc_dram_addr_end;
-    addressable_core_t non_worker_cores[MAX_NON_WORKER_CORES];
+    addressable_core_t non_worker_cores[MAX_PHYSICAL_NON_WORKER_CORES];
     addressable_core_t virtual_non_worker_cores[MAX_VIRTUAL_NON_WORKER_CORES];
     volatile uint8_t harvested_y[MAX_HARVESTED_ROWS];
     volatile uint8_t virtual_harvested_y[MAX_HARVESTED_ROWS];
@@ -327,7 +328,7 @@ struct core_info_msg_t {
     volatile uint8_t noc_size_y;
     volatile uint8_t worker_grid_size_x;
     volatile uint8_t worker_grid_size_y;
-    volatile uint8_t pad[25];
+    volatile uint8_t pad[22];
 };
 
 constexpr uint32_t launch_msg_buffer_num_entries = 8;
