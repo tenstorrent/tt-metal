@@ -193,8 +193,7 @@ Tensor copy_borrowed_tensor_in_async_mode(IDevice* worker, const Tensor& tensor)
     ZoneScopedN("ConvertBorrowedToOwned");
     // Tensor has workers (on device) or runtime mode is synchronous or tensor has multiple buffers.
     // No need to check for borrowed storage.
-    if (worker->get_worker_mode() == WorkExecutorMode::SYNCHRONOUS or
-        tensor.tensor_attributes->num_shards_to_be_populated > 1) {
+    if (worker->get_worker_mode() == WorkExecutorMode::SYNCHRONOUS) {
         return tensor;
     }
 

@@ -65,8 +65,6 @@ TEST_F(DispatchFixture, TestTensorOwnershipSanity) {
         auto thread_local_tensor = device_tensor.cpu().to_layout(Layout::ROW_MAJOR);
         readback_tensor.set_storage(thread_local_tensor.get_storage());
         readback_tensor.set_tensor_spec(thread_local_tensor.get_tensor_spec());
-        readback_tensor.tensor_attributes->metadata_populated = true;
-        readback_tensor.tensor_attributes->num_workers_completed++;
         // Ensure that the readback buffer is owned inside and outside the lambda
         std::visit(
             [](auto&& storage) {
@@ -190,8 +188,6 @@ TEST_F(DispatchFixture, TestAsyncRefCountManager) {
         // Assign tensor1 to tensor2 and ensure that ref counts are appropriately updated with the buffer for tensor2
         // deallocated
         tensor2 = tensor1;
-        EXPECT_EQ(tensor2.tensor_attributes->main_thread_ref_count, 2);
-        EXPECT_EQ(tensor1.tensor_attributes->main_thread_ref_count, 2);
         // To check if tensor2 is deallocated, create a third tensor on device and ensure that its address matches the
         // prev addr for tensor2
         Tensor tensor3 = ttnn::full(
@@ -215,7 +211,6 @@ TEST_F(DispatchFixture, TestAsyncRefCountManager) {
         // This step will copy the tensor to a temp rval and std::move it back to the caller's instance of device_tensor
         // Ensure ref count and address remain unchanged
         device_tensor = tensor_identity_copy_function(device_tensor);
-        EXPECT_EQ(device_tensor.tensor_attributes->main_thread_ref_count, 1);
         EXPECT_EQ(get_device_buffer_address(device_tensor), device_tensor_address);
     }
 
@@ -228,7 +223,6 @@ TEST_F(DispatchFixture, TestAsyncRefCountManager) {
             /*layout=*/std::nullopt,
             *device);
         Tensor tensor2 = std::move(tensor1);
-        EXPECT_EQ(tensor2.tensor_attributes->main_thread_ref_count, 1);
     }
 
     log_info(LogTest, "Testing Device tensor self-assignment");
@@ -240,7 +234,6 @@ TEST_F(DispatchFixture, TestAsyncRefCountManager) {
         *device);
     uint32_t tensor_to_self_assign_address = get_device_buffer_address(tensor_to_self_assign);
     tensor_to_self_assign = tensor_to_self_assign;
-    EXPECT_EQ(tensor_to_self_assign.tensor_attributes->main_thread_ref_count, 1);
     tensor_to_self_assign = std::move(tensor_to_self_assign);
     EXPECT_EQ(get_device_buffer_address(tensor_to_self_assign), tensor_to_self_assign_address);
     auto barrier_tensor = tensor_to_self_assign.cpu();
@@ -297,8 +290,6 @@ TEST_F(DispatchFixture, TestTensorAsyncDataMovement) {
             log_info(LogTest, "Worker populating empty host readback_tensor");
             readback_tensor.set_storage(thread_local_tensor.get_storage());
             readback_tensor.set_tensor_spec(thread_local_tensor.get_tensor_spec());
-            readback_tensor.tensor_attributes->metadata_populated = true;
-            readback_tensor.tensor_attributes->num_workers_completed++;
             // Ensure that this buffer is currently owned by both the thread_local and read_back tensors
             // This is because we explictly pass in the buffer to a new tensor_attr object
             std::visit(
