@@ -107,13 +107,18 @@ struct Conv3dConfig {
 struct Conv3dOp {
     Conv3dConfig config;
     MemoryConfig output_mem_config;
+    DeviceComputeKernelConfig compute_kernel_config;
 
-    void validate(const std::vector<Tensor>& input_tensors) const;
+    void validate(
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
 
     std::vector<TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
 
     operation::ProgramWithCallbacks create_program(
-        const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
+        const std::vector<Tensor>& input_tensors,
+        const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+        std::vector<Tensor>& output_tensors) const;
 };
 
 }  // namespace ttnn::operations::conv::conv3d
