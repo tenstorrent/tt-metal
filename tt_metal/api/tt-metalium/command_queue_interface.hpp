@@ -3,9 +3,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <climits>
 #include <magic_enum/magic_enum.hpp>
 #include <mutex>
 #include <tt-metalium/tt_align.hpp>
+#include <unordered_map>
 
 #include "cq_commands.hpp"
 #include "dispatch_core_manager.hpp"
@@ -13,6 +15,7 @@
 #include "memcpy.hpp"
 #include "hal.hpp"
 #include "dispatch_settings.hpp"
+#include "helpers.hpp"
 #include "buffer.hpp"
 #include "umd/device/tt_core_coordinates.h"
 
@@ -190,8 +193,8 @@ private:
         uint32_t prefetch_dispatch_unreserved_base =
             device_cq_addrs_[tt::utils::underlying_type<CommandQueueDeviceAddrType>(
                 CommandQueueDeviceAddrType::UNRESERVED)];
-        cmddat_q_base_ = align(prefetch_dispatch_unreserved_base + settings.prefetch_q_size_, pcie_alignment);
-        scratch_db_base_ = align(cmddat_q_base_ + settings.prefetch_cmddat_q_size_, pcie_alignment);
+        cmddat_q_base_ = prefetch_dispatch_unreserved_base + round_size(settings.prefetch_q_size_, pcie_alignment);
+        scratch_db_base_ = cmddat_q_base_ + round_size(settings.prefetch_cmddat_q_size_, pcie_alignment);
         dispatch_buffer_base_ = align(prefetch_dispatch_unreserved_base, 1 << DispatchSettings::DISPATCH_BUFFER_LOG_PAGE_SIZE);
         dispatch_buffer_block_size_pages_ = settings.dispatch_pages_ / DispatchSettings::DISPATCH_BUFFER_SIZE_BLOCKS;
         const uint32_t dispatch_cb_end = dispatch_buffer_base_ + settings.dispatch_size_;
