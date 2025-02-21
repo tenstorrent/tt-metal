@@ -516,6 +516,7 @@ std::string instantiate(const Tuple& templateArgsTuple, const Args&... construct
 //----------------------------------------------------------------------
 // instantiate overload for non-template types (like CompositeStruct).
 template <typename Struct, typename Tuple, typename... Args>
+    requires ConstructibleFromArgs<Struct, Args...>
 std::string instantiate(const Tuple& templateArgsTuple, const Args&... constructorArgs) {
     std::vector<std::string> templateArgs = tuple_to_vector_of_strings(templateArgsTuple);
     for (const auto& arg : templateArgs) {
