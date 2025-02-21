@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 namespace NAMESPACE {
 void process_and_sort_tiles(
     uint32_t input_cb_index,
