@@ -2798,6 +2798,9 @@ def test_small_in_large_out_channels_auto_shard(device, torch_tensor_map):
     padding = (0, 0)
     height = 128
     width = 128
+    if device.core_grid.y != 8 and is_wormhole_b0():
+        pytest.skip("Needs 8x8 grid for wormhole_b0")
+
     run_conv(
         device,
         torch_tensor_map,
