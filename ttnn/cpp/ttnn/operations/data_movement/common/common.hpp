@@ -179,131 +179,256 @@ std::pair<uint32_t, std::array<uint32_t, 2>> tensor_coord_to_height_sharded_coor
 
 uint32_t l1_space_post_allocation(const TensorSpec& tensor_spec, IDevice* device);
 
-// ----------------------------------------------------------------------
-// Primitive types for template argument conversion
-enum class PrimType { INT8, INT16, INT32, INT64, UINT8, UINT16, UINT32, UINT64, FLOAT16, FLOAT32, BOOL, CHAR, VOID };
+//----------------------------------------------------------------------
+// Non-templated function definitions (all inline)
 
-// ----------------------------------------------------------------------
-// Non-templated function declarations (implementations in instantiation_utils.cpp)
-std::string to_string_custom(char value);
-std::string to_string_custom(const char* s);
-std::string to_string_custom(const std::string& s);
-std::string to_string_custom(tt::DataFormat data_format);
-std::string to_string_custom(DataType data_type);
+inline std::string stringify(char value) { return std::string("'") + value + "'"; }
 
-bool validate_instantiation_string(const std::string& s);
+inline std::string stringify(const char* s) { return std::string(s); }
 
-// ----------------------------------------------------------------------
-// Template function declarations
-// (These functions must be explicitly instantiated in the source file if you wish
-// to keep their definitions out of the header.)
+inline std::string stringify(const std::string& s) { return s; }
+
+inline std::string stringify(tt::DataFormat data_format) {
+    switch (data_format) {
+        case tt::DataFormat::Float32: return "float";
+        case tt::DataFormat::UInt8: return "uint8_t";
+        case tt::DataFormat::UInt16: return "uint16_t";
+        case tt::DataFormat::UInt32: return "uint32_t";
+        case tt::DataFormat::Int8: return "int8_t";
+        case tt::DataFormat::Int32: return "int32_t";
+        default: TT_FATAL(false, "Unsupported data format for string conversion"); return "";
+    }
+}
+
+inline std::string stringify(DataType data_type) {
+    switch (data_type) {
+        case DataType::FLOAT32: return "float";
+        case DataType::UINT32: return "uint32_t";
+        case DataType::UINT8: return "uint8_t";
+        case DataType::UINT16: return "uint16_t";
+        case DataType::INT32: return "int32_t";
+        default: TT_FATAL(false, "Unsupported data type for string conversion"); return "";
+    }
+}
+
+inline bool validate_instantiation_string(const std::string& s) {
+    int paren = 0, angle = 0, curly = 0;
+    for (char c : s) {
+        if (c == '(') {
+            ++paren;
+        } else if (c == ')') {
+            --paren;
+        } else if (c == '<') {
+            ++angle;
+        } else if (c == '>') {
+            --angle;
+        } else if (c == '{') {
+            ++curly;
+        } else if (c == '}') {
+            --curly;
+        }
+        if (paren < 0 || angle < 0 || curly < 0) {
+            return false;
+        }
+    }
+    return (paren == 0 && angle == 0 && curly == 0);
+}
+
+//----------------------------------------------------------------------
+// Template function definitions
 
 // For integral types (except char)
 template <typename T>
-std::enable_if_t<std::is_integral_v<T> && !std::is_same_v<T, char>, std::string> to_string_custom(const T& value);
+inline std::enable_if_t<std::is_integral_v<T> && !std::is_same_v<T, char>, std::string> stringify(const T& value) {
+    return std::to_string(value);
+}
 
 // For floating point types
 template <typename T>
-std::enable_if_t<std::is_floating_point_v<T>, std::string> to_string_custom(const T& value);
+inline std::enable_if_t<std::is_floating_point_v<T>, std::string> stringify(const T& value) {
+    return std::to_string(value);
+}
 
-// For C-style arrays
+// For C-style arrays.
 template <typename T, std::size_t N>
-std::string to_string_custom(const T (&arr)[N]);
+inline std::string stringify(const T (&arr)[N]) {
+    std::string result = "{";
+    for (std::size_t i = 0; i < N; ++i) {
+        result += stringify(arr[i]);
+        if (i != N - 1) {
+            result += ", ";
+        }
+    }
+    result += "}";
+    return result;
+}
 
-// For std::array
+// For std::array.
 template <typename T, std::size_t N>
-std::string to_string_custom(const std::array<T, N>& arr);
+inline std::string stringify(const std::array<T, N>& arr) {
+    std::string result = "{";
+    for (std::size_t i = 0; i < arr.size(); ++i) {
+        result += stringify(arr[i]);
+        if (i != arr.size() - 1) {
+            result += ", ";
+        }
+    }
+    result += "}";
+    return result;
+}
 
-// Specialization for std::vector
+// Specialization for std::vector (output with double braces).
 template <typename T, typename Allocator>
-std::string to_string_custom(const std::vector<T, Allocator>& vec);
+inline std::string stringify(const std::vector<T, Allocator>& vec) {
+    std::string result = "{{";
+    bool first = true;
+    for (const auto& elem : vec) {
+        if (!first) {
+            result += ", ";
+        }
+        result += stringify(elem);
+        first = false;
+    }
+    result += "}}";
+    return result;
+}
 
-// A trait to check if T is iterable (has valid begin and end)
-template <typename T, typename = void>
-struct is_iterable : std::false_type {};
-
-template <typename T>
-struct is_iterable<T, std::void_t<decltype(std::begin(std::declval<T>())), decltype(std::end(std::declval<T>()))>>
-    : std::true_type {};
-
-// For generic containers (excluding std::string and C-style arrays)
+// For generic containers (excluding std::string and C-style arrays).
 template <
     typename Container,
     typename = std::enable_if_t<
-        is_iterable<Container>::value &&            // Only iterable types…
-        !std::is_same_v<Container, std::string> &&  // …excluding std::string…
-        !std::is_array_v<Container> &&              // …and C-style arrays…
-        !std::is_arithmetic_v<Container>            // …and scalar arithmetic types.
-        >>
-std::string to_string_custom(const Container& container);
+        std::
+            is_same_v<decltype(std::begin(std::declval<Container>())), decltype(std::end(std::declval<Container>()))> &&
+        !std::is_same_v<Container, std::string> && !std::is_array_v<Container>>>
+inline std::string stringify(const Container& container) {
+    std::string result = "{";
+    bool first = true;
+    for (const auto& elem : container) {
+        if (!first) {
+            result += ", ";
+        }
+        result += stringify(elem);
+        first = false;
+    }
+    result += "}";
+    return result;
+}
 
+//----------------------------------------------------------------------
 // Tuple-to-vector conversion for template arguments.
+
 template <typename T>
-std::string to_template_arg_string(const T& arg);
+inline std::string to_template_arg_string(const T& arg) {
+    if constexpr (std::is_same_v<std::decay_t<T>, std::string>) {
+        return arg;
+    } else {
+        return stringify(arg);
+    }
+}
 
 template <typename Tuple, std::size_t... I>
-std::vector<std::string> tuple_to_vector_of_strings_impl(const Tuple& tup, std::index_sequence<I...>);
+inline std::vector<std::string> tuple_to_vector_of_strings_impl(const Tuple& tup, std::index_sequence<I...>) {
+    return {to_template_arg_string(std::get<I>(tup))...};
+}
 
 template <typename Tuple>
-std::vector<std::string> tuple_to_vector_of_strings(const Tuple& tup);
+inline std::vector<std::string> tuple_to_vector_of_strings(const Tuple& tup) {
+    return tuple_to_vector_of_strings_impl(tup, std::make_index_sequence<std::tuple_size_v<std::decay_t<Tuple>>>{});
+}
 
 //----------------------------------------------------------------------
-// TemplateNameTT: the single helper trait for retrieving a type’s name,
-// For template types (passed as a template template parameter) the user specializes TemplateNameTT;
-// for non-template types the specialization is similar.
+// Helper traits for retrieving a type’s name.
+// Users must specialize these for their types.
+
 template <template <typename, auto...> class T>
-struct TemplateNameTT;  // no default definition
+struct TemplateNameTT;  // No default definition
 
-// For non-template types, we provide a separate specialization.
 template <typename T>
-struct TemplateNameTTHelper;  // primary template not defined
+struct TemplateNameTTHelper;  // No default definition
 
-// The instantiate function: constructs an instantiation string from a struct name,
-// a tuple of template arguments, and a variadic list of constructor arguments.
+//----------------------------------------------------------------------
+// The instantiate API.
+// There are three overloads provided:
+
+// 1. Instantiate using an explicit struct name.
 template <typename Tuple, typename... Args>
-std::string instantiate(const std::string& structName, const Tuple& templateArgsTuple, const Args&... constructorArgs);
+inline std::string instantiate(
+    const std::string& structName, const Tuple& templateArgsTuple, const Args&... constructorArgs) {
+    auto templateArgs = tuple_to_vector_of_strings(templateArgsTuple);
+    for (const auto& arg : templateArgs) {
+        TT_FATAL(!arg.empty(), "Template argument string should not be empty");
+    }
+    std::string result = structName;
+    if (!templateArgs.empty()) {
+        result += "<";
+        for (size_t i = 0; i < templateArgs.size(); ++i) {
+            result += templateArgs[i];
+            if (i != templateArgs.size() - 1) {
+                result += ", ";
+            }
+        }
+        result += ">";
+    }
+    result += "(";
+    bool first = true;
+    ((result += (first ? "" : ", ") + stringify(constructorArgs), first = false), ...);
+    result += ")";
+    TT_FATAL(validate_instantiation_string(result), "Generated instantiation string is not syntactically valid");
+    return result;
+}
 
-// Example usage:
-//----------------------------------------------------------------------
-// Template struct definitions (with constexpr constructors)
-
-// template<typename T, std::size_t N>
-// struct MyStruct {
-//     T myArray[N];
-//     constexpr MyStruct(const T (&arr)[N]) : myArray{} {
-//         for (std::size_t i = 0; i < N; ++i)
-//             myArray[i] = arr[i];
-//     }
-// };
-// instantiate the struct with a string and an array of ints
-// constexpr int arr[4] = {1, 2, 3, 4};
-// auto tupleArgs = std::make_tuple("int", 4);
-// std::string inst = instantiate("MyStruct", tupleArgs, arr);  // MyStruct<int, 4>({1, 2, 3, 4})
-
-//----------------------------------------------------------------------
-// instantiate overload for template types with TemplateNameTTHelper::name defines as a string.
+// 2. Overload for template types (the user must specialize TemplateNameTT).
 template <template <typename, auto...> class Struct, typename Tuple, typename... Args>
-std::string instantiate(const Tuple& templateArgsTuple, const Args&... constructorArgs);
+inline std::string instantiate(const Tuple& templateArgsTuple, const Args&... constructorArgs) {
+    auto templateArgs = tuple_to_vector_of_strings(templateArgsTuple);
+    for (const auto& arg : templateArgs) {
+        TT_FATAL(!arg.empty(), "Template argument string should not be empty");
+    }
+    std::string result = TemplateNameTT<Struct>::value;
+    if (!templateArgs.empty()) {
+        result += "<";
+        for (size_t i = 0; i < templateArgs.size(); ++i) {
+            result += templateArgs[i];
+            if (i != templateArgs.size() - 1) {
+                result += ", ";
+            }
+        }
+        result += ">";
+    }
+    result += "(";
+    bool first = true;
+    ((result += (first ? "" : ", ") + stringify(constructorArgs), first = false), ...);
+    result += ")";
+    TT_FATAL(validate_instantiation_string(result), "Generated instantiation string is not syntactically valid");
+    return result;
+}
 
-// Example usage:
-//----------------------------------------------------------------------
-// Specializations for template types:
-// template<>
-// struct TemplateNameTT<MyStruct> {
-//     static constexpr const char* value = "MyStruct";
-// };
-// constexpr int arr1[4] = {1, 2, 3, 4};
-// auto tupleArgs1 = std::make_tuple("int", 4);
-// std::string inst1 = instantiate<MyStruct>(tupleArgs1, arr1); // MyStruct<int, 4>({1, 2, 3, 4});
-
-template <typename Struct, typename... Args>
-concept ConstructibleFromArgs = requires { Struct{std::declval<Args>()...}; };
-
-//----------------------------------------------------------------------
-// instantiate overload for non-template types
+// 3. Overload for non-template types (users must specialize TemplateNameTTHelper).
 template <typename Struct, typename Tuple, typename... Args>
-    requires ConstructibleFromArgs<Struct, Args...>
-std::string instantiate(const Tuple& templateArgsTuple, const Args&... constructorArgs);
+    requires requires { Struct{std::declval<Args>()...}; }
+inline std::string instantiate(const Tuple& templateArgsTuple, const Args&... constructorArgs) {
+    auto templateArgs = tuple_to_vector_of_strings(templateArgsTuple);
+    for (const auto& arg : templateArgs) {
+        TT_FATAL(!arg.empty(), "Template argument string should not be empty");
+    }
+    std::string result = TemplateNameTTHelper<Struct>::value;
+    if (!templateArgs.empty()) {
+        result += "<";
+        for (size_t i = 0; i < templateArgs.size(); ++i) {
+            result += templateArgs[i];
+            if (i != templateArgs.size() - 1) {
+                result += ", ";
+            }
+        }
+        result += ">";
+    }
+    result += "(";
+    bool first = true;
+    ((result += (first ? "" : ", ") + stringify(constructorArgs), first = false), ...);
+    result += ")";
+    TT_FATAL(validate_instantiation_string(result), "Generated instantiation string is not syntactically valid");
+    return result;
+}
 
 }  // namespace data_movement
 }  // namespace operations
