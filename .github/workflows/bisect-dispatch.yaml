@@ -54,12 +54,8 @@ on:
         required: false
         type: string
         description: "Commit-ish to cherry-pick for each step"
-      description:
-        type: string
-        default: "Git bisect dispatch"
-        required: false
 
-run-name: ${{ inputs.description }}
+run-name: "Bisect on ${{ inputs.runner-label }}"
 jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
