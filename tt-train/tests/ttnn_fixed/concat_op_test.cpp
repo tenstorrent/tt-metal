@@ -40,6 +40,5 @@ TEST_F(ConcatOpTest, TestConcatLastDim) {
 
     auto ttnn_concat = ttnn::concat(std::vector<ttnn::Tensor>{tensor_a, tensor_b}, 3);
     auto ttnn_concat_xtensor = ttml::core::to_xtensor(ttnn_concat);
-
-    EXPECT_TRUE(xt::allclose(ttnn_concat_xtensor, expected, 5e-2F, 1e-1));
+    EXPECT_TRUE(xt::allclose(ttnn_concat_xtensor, expected, 7e-3F, 1e-6F));
 }
