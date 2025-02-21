@@ -321,7 +321,7 @@ private:
                 "Ensure that your invoke function does not have both Tensor and std::vector<Tensor> as input "
                 "parameters");
         }
-        if (single_input_tensor.size() == 0 && vec_input_tensors.size() > 2) {
+        if (single_input_tensor.size() == 0 && vec_input_tensors.size() > 1) {
             TT_THROW(
                 "You have more than one std::vector<Tensor> input parameters in the invoke. Only one vector is "
                 "allowed");
