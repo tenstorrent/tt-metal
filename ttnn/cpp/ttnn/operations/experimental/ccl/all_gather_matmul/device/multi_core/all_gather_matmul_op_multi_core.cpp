@@ -214,7 +214,7 @@ operation::ProgramWithCallbacks experimental::all_gather_matmul_multi_core_with_
     bool untilize_out
 
 ) {
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     bool use_datacopy = false; /* Enable for debugging purposes */
 
     ////////////// Params for fused op signalers //////////////

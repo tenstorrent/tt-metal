@@ -41,7 +41,7 @@ operation::ProgramWithCallbacks create_program(
     tt::DataFormat in1_data_format,
     tt::DataFormat output_data_format,
     bool untilize_out) {
-    tt_metal::Program program{};
+    tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     // TODO: We can generalize this into some special form of fuse batch, where we have B /= batch_scale_factor and M *=
     // batch_scale_factor

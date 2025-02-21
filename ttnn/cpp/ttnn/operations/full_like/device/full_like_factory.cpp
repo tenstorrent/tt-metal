@@ -58,7 +58,7 @@ FullLikeOperation::ProgramFactory::cached_program_t FullLikeOperation::ProgramFa
 
     auto num_tiles = input.volume() / TILE_HW;
 
-    Program program{};
+    Program program = tt::tt_metal::CreateProgram();
 
     auto data_format = datatype_to_dataformat_converter(dtype);
     uint32_t single_tile_size = TileSize(data_format);

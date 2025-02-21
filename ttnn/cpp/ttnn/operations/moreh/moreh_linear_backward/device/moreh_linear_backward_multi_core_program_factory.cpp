@@ -20,7 +20,7 @@ MorehBiasAddBackwardOperation::MultiCoreProgramFactory::create(
     using namespace tt;
     using namespace tt::tt_metal;
 
-    Program program{};
+    Program program = tt::tt_metal::CreateProgram();
     auto& output_grad = tensor_args.output_grad;
 
     const auto& bias_grad_shape = bias_grad.get_logical_shape();

@@ -36,7 +36,7 @@ BinaryDeviceOperation::ElementWiseMultiCoreSfpu::create(
     std::vector<UnaryWithParam> fused_activations =
         operation_attributes.activations.value_or(std::vector<UnaryWithParam>{});
 
-    Program program{};
+    Program program = tt::tt_metal::CreateProgram();
 
     tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a_dtype);
     uint32_t src0_single_tile_size = tt_metal::detail::TileSize(src0_cb_data_format);

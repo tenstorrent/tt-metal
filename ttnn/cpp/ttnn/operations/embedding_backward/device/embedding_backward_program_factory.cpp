@@ -33,7 +33,7 @@ operation::ProgramWithCallbacks embedding_backward_multi_core(
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
 
-    Program program{};
+    Program program = tt::tt_metal::CreateProgram();
 
     bool grad_is_dram = grad_tensor_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     bool index_is_dram = index_tensor_buffer->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;

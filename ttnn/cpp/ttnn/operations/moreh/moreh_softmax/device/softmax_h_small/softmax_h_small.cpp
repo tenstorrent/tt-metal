@@ -40,7 +40,7 @@ MorehSoftmaxOperation::MorehSoftmaxHSmallFactory::create(
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(arch, compute_kernel_config);
 
-    Program program = Program();
+    Program program = CreateProgram();
 
     // create circular buffers
     auto data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());

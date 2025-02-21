@@ -16,7 +16,7 @@ using namespace tt::constants;
 using namespace tt::tt_metal;
 
 operation::ProgramWithCallbacks plusone_single_core(const Tensor& input) {
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.get_dtype());
     uint32_t input_unit_size = input.element_size();

@@ -95,7 +95,7 @@ PermuteDeviceOperation::MultiCoreTileInvariant::cached_program_t PermuteDeviceOp
     auto src_buffer = input_tensor.buffer();
     auto dst_buffer = output_tensor.buffer();
 
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
     uint32_t input_page_size = detail::tile_size(input_tensor);
@@ -289,7 +289,7 @@ PermuteDeviceOperation::MultiCoreTileRowInvariant::create(
     auto src_buffer = input_tensor.buffer();
     auto dst_buffer = output_tensor.buffer();
 
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
     uint32_t input_page_size = detail::tile_size(input_tensor);
@@ -569,7 +569,7 @@ PermuteDeviceOperation::MultiCoreTiledGeneric::cached_program_t PermuteDeviceOpe
     auto src_buffer = input_tensor.buffer();
     auto dst_buffer = output_tensor.buffer();
 
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     uint32_t logical_volume = input_shape.volume();
     uint32_t num_rows = logical_volume / input_shape[rank - 1];
     uint32_t y_dim_index_in_input = dims[rank - 2];

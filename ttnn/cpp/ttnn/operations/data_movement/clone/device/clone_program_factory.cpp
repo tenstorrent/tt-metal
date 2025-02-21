@@ -16,7 +16,7 @@ CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory:
     using namespace tt::tt_metal;
     using namespace tt;
 
-    Program program;
+    Program program = CreateProgram();
 
     const auto& input = tensor_args.input;
     auto input_data_format = datatype_to_dataformat_converter(input.get_dtype());

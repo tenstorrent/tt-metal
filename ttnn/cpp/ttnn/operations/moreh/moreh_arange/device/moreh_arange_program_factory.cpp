@@ -23,7 +23,7 @@ MorehArangeOperation::ProgramFactory::cached_program_t MorehArangeOperation::Pro
         split_work_to_cores(grid, Wt);
 
     // Create program
-    Program program = Program();
+    Program program = CreateProgram();
 
     // Create circular buffer
     CreateCircularBuffer(

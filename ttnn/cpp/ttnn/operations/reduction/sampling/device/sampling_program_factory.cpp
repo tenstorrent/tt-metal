@@ -22,7 +22,7 @@ operation::ProgramWithCallbacks sampling_multicore_interleaved(
     const std::optional<CoreRangeSet>& sub_core_grids,
     Tensor& output_tensor) {
     using namespace tt::constants;
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     tt::DataFormat input_values_cb_data_format =
         tt::tt_metal::datatype_to_dataformat_converter(input_values_tensor.get_dtype());

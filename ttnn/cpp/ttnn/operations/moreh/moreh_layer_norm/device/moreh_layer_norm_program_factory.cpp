@@ -59,7 +59,7 @@ MorehLayerNormOperation::ProgramFactory::cached_program_t MorehLayerNormOperatio
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
     IDevice* device = input.device();
-    Program program = Program();
+    Program program = CreateProgram();
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup

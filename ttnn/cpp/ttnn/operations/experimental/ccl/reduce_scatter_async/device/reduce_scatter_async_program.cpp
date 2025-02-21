@@ -2487,7 +2487,7 @@ operation::ProgramWithCallbacks build_reduce_scatter_async_program(
     const tt::tt_metal::GlobalSemaphore& to_remote_sem,
     const std::optional<SubDeviceId>& sub_device_id,
     std::optional<ttnn::ccl::EdmLineFabricOpInterface>& fabric_handle_) {
-    auto program = tt::tt_metal::Program();
+    auto program = tt::tt_metal::CreateProgram();
 
     bool persistent_fabric = true;
     IDevice* device = input_tensor.device();

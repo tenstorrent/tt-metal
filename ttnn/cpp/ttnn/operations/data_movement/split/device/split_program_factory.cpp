@@ -89,7 +89,7 @@ operation::ProgramWithCallbacks split_last_dim_two_chunks_tiled(
 
     auto input_shape = input_tensor.get_padded_shape();
 
-    Program program{};
+    Program program = tt::tt_metal::CreateProgram();
     tt::tt_metal::IDevice* device = input_tensor.device();
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
 

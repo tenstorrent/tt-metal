@@ -21,7 +21,7 @@ namespace operations::data_movement {
 
 operation::ProgramWithCallbacks non_zero_indices_single_core(
     const Tensor& input, const Tensor& out_num_indices, const Tensor& out_indices) {
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     IDevice* device = input.device();
 
     uint32_t alignment_base = 32 / input.element_size();

@@ -40,7 +40,7 @@ MorehSgdOperation::ProgramFactory::cached_program_t MorehSgdOperation::ProgramFa
 
     bool has_momentum_buffer_out = momentum_buffer_out.has_value();
 
-    Program program{};
+    Program program = tt::tt_metal::CreateProgram();
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup

@@ -94,7 +94,7 @@ operation::ProgramWithCallbacks embeddings_fused(
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    Program program{};
+    Program program = tt::tt_metal::CreateProgram();
 
     bool in0_is_dram = a.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     bool weights_is_dram = weights.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
@@ -392,7 +392,7 @@ operation::ProgramWithCallbacks embeddings_rm(
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    Program program{};
+    Program program = tt::tt_metal::CreateProgram();
 
     bool in0_is_dram = a.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     bool weights_is_dram = weights.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
@@ -614,7 +614,7 @@ operation::ProgramWithCallbacks embeddings_tilized_indices(
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
-    Program program{};
+    Program program = tt::tt_metal::CreateProgram();
 
     bool in0_is_dram = a.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     bool weights_is_dram = weights.buffer()->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;

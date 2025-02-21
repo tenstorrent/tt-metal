@@ -52,7 +52,7 @@ FullOperation::ProgramFactory::cached_program_t FullOperation::ProgramFactory::c
     uint32_t single_tile_size = tt::tt_metal::detail::TileSize(data_format);
 
     // Create program
-    Program program = Program();
+    Program program = CreateProgram();
 
     // Create circular buffer
     auto cb_index = tt::CBIndex::c_24;

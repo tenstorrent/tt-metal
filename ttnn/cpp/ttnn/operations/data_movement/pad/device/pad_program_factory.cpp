@@ -25,7 +25,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(
     const ttnn::Shape& output_padded_shape,
     const ttnn::Shape& input_tensor_start,
     const float pad_value) {
-    Program program{};
+    Program program = tt::tt_metal::CreateProgram();
 
     auto output_shape = output_padded_shape;
 
@@ -180,7 +180,7 @@ operation::ProgramWithCallbacks pad_tile(
     const ttnn::Shape& output_padded_shape,
     const ttnn::Shape& input_tensor_start,
     const float pad_value) {
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     CoreRange core({0, 0}, {0, 0});
 
@@ -454,7 +454,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(
     const ttnn::Shape& output_padded_shape,
     const ttnn::Shape& input_tensor_start,
     const float pad_value) {
-    Program program{};
+    Program program = tt::tt_metal::CreateProgram();
 
     auto output_shape = output_padded_shape;
 
@@ -798,7 +798,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
     const ttnn::Shape& output_padded_shape,
     const ttnn::Shape& input_tensor_start,
     const float pad_value) {
-    Program program{};
+    Program program = tt::tt_metal::CreateProgram();
 
     auto output_shape = output_padded_shape;
     const auto& a_shape = a.get_logical_shape();
@@ -1190,7 +1190,7 @@ operation::ProgramWithCallbacks pad_rm_sharded_height_only(
     const ttnn::Shape& output_padded_shape,
     const ttnn::Shape& input_tensor_start,
     const float pad_value) {
-    Program program{};
+    Program program = tt::tt_metal::CreateProgram();
 
     auto output_shape = output_padded_shape;
     const auto& a_shape = a.get_logical_shape();
@@ -1369,7 +1369,7 @@ operation::ProgramWithCallbacks pad_rm_sharded_width_only(
     const ttnn::Shape& output_padded_shape,
     const ttnn::Shape& input_tensor_start,
     float pad_value) {
-    Program program{};
+    Program program = tt::tt_metal::CreateProgram();
 
     TT_ASSERT(
         output.shard_spec().has_value() and output.shard_spec()->shape[1] == output_padded_shape[-1],

@@ -18,7 +18,7 @@ using namespace tt::tt_metal;
 namespace ttnn::operations::data_movement {
 
 operation::ProgramWithCallbacks copy_multi_core(const Tensor& input, const Tensor& output, bool backwards) {
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     bool tilized = output.get_layout() == Layout::TILE;
 

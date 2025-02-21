@@ -13,7 +13,7 @@ namespace operations {
 namespace primary {
 
 operation::ProgramWithCallbacks prod_single_core(const Tensor& a, const Tensor& output) {
-    Program program{};
+    Program program = tt::tt_metal::CreateProgram();
 
     CoreRange core({0, 0}, {0, 0});
 

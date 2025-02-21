@@ -68,7 +68,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
         return tt::tt_metal::datatype_to_dataformat_converter(t.get_dtype());
     });
 
-    Program program{};
+    Program program = tt::tt_metal::CreateProgram();
 
     // In validate we make sure that all tensors are on the same device
     tt::tt_metal::IDevice* device = tensors[0].device();

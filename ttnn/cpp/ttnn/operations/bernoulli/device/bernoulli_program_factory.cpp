@@ -35,7 +35,7 @@ BernoulliDeviceOperation::ProgramFactory::cached_program_t BernoulliDeviceOperat
     uint32_t num_cores_y = grid.y;
     auto cores = grid_to_cores(num_cores, num_cores_x, num_cores_y);
 
-    Program program = Program();
+    Program program = CreateProgram();
 
     constexpr uint32_t num_tiles = 2;
     auto in_data_format = datatype_to_dataformat_converter(input.dtype());

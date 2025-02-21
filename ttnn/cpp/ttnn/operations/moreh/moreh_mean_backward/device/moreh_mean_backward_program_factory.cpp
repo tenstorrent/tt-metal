@@ -61,7 +61,7 @@ MorehMeanBackwardOperation::MorehMeanBackwardFactory::create(
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
     auto* device = output_grad.device();
-    auto program = Program();
+    auto program = CreateProgram();
 
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup

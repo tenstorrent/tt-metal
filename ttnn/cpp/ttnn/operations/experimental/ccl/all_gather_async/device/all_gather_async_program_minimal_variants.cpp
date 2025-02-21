@@ -65,7 +65,7 @@ operation::ProgramWithCallbacks all_gather_async_minimal_interleaved_dim3_1_1_32
     const GlobalSemaphore& semaphore,
     const std::optional<SubDeviceId>& sub_device_id,
     bool enable_persistent_fabric_mode) {
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     const bool enable_async_output_tensor = false;
     TT_FATAL(
         enable_persistent_fabric_mode,
@@ -288,7 +288,7 @@ operation::ProgramWithCallbacks all_gather_async_llama_post_binary_matmul(
     const GlobalSemaphore& semaphore,
     const std::optional<SubDeviceId>& sub_device_id,
     bool enable_persistent_fabric_mode) {
-    tt::tt_metal::Program program{};
+    tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
     const bool enable_async_output_tensor = false;
     TT_FATAL(
         enable_persistent_fabric_mode,

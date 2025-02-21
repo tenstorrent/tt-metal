@@ -21,7 +21,7 @@ namespace ttnn::operations::upsample {
 using namespace tt;
 operation::ProgramWithCallbacks upsample_single_core(
     const Tensor& input, Tensor& output, const uint32_t scale_factor_h, const uint32_t scale_factor_w) {
-    Program program{};
+    Program program = tt::tt_metal::CreateProgram();
     CoreRange core({0, 0}, {0, 0});
 
     tt::DataFormat input_cb_data_format = tt_metal::datatype_to_dataformat_converter(input.get_dtype());
