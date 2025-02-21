@@ -1266,14 +1266,11 @@ def test_padded_2d_matmul(device, side, tile_count):
 @pytest.mark.parametrize("side", ["height", "width"])
 @pytest.mark.parametrize(
     "has_program_config",
-    [
-        True,
-    ],
+    [True, False],
 )
 def test_padded_1d_matmul(device, side, has_program_config):
-    # pytest.skip("#17491: last tile bounds are not set up properly")
     if side == "height":
-        M = 10369
+        M = 10069
         K = 96
         N = 1152
         out_block_h = 21
@@ -1331,6 +1328,7 @@ def test_padded_1d_matmul(device, side, has_program_config):
     output_tensor = ttnn.matmul(
         act,
         weight,
+        core_grid=None if has_program_config else ttnn.CoreGrid(x=4, y=4),
         program_config=program_config,
         compute_kernel_config=ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2, math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False
@@ -1341,10 +1339,9 @@ def test_padded_1d_matmul(device, side, has_program_config):
     # Check that the tensors above and below the output are unchanged
     torch_output_tensor = torch.matmul(torch_act, torch_weight)
     output_tensor = ttnn.to_torch(output_tensor)
-    # assert_with_pcc(torch_output_tensor, output_tensor, pcc)
+    assert_with_pcc(torch_output_tensor, output_tensor, pcc)
     assert torch.all(lower == 2)
     assert torch.all(upper == 4)
-    # assert_with_pcc(torch_output_tensor, output_tensor, pcc)
 
 
 # fmt: off

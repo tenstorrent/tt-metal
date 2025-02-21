@@ -439,7 +439,7 @@ void kernel_main() {
                         if (bh == num_blocks_h_dim - 1 && sbh == out_num_nonzero_subblocks_h - 1) {
                             out_subblock_h_ = out_last_subblock_h;
                         }
-                        if (bw == num_blocks_w_dim_ - 1 && sbw == out_num_nonzero_subblocks_w - 1) {
+                        if (bw == num_blocks_w_dim_ - 1 && sbw == out_num_nonzero_subblocks_w_ - 1) {
                             out_subblock_w_ = out_last_subblock_w;
                             subblock_tiles_addr_skip = padded_subblock_tiles_addr_skip;
                         }
