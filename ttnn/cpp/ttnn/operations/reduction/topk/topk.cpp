@@ -9,9 +9,15 @@
 
 namespace ttnn::operations::reduction {
 
-int32_t get_nearest_power_of_2(int32_t k) {
+int32_t get_nearest_supported_shape(int32_t k) {
     // LLK only support k = 4, 8, 16, 32, 64
-    if (k <= 32) {
+    if (k <= 4) {
+        return 4;
+    } else if (k <= 8) {
+        return 8;
+    } else if (k <= 16) {
+        return 16;
+    } else if (k <= 32) {
         return 32;
     } else {
         return 64;
@@ -103,7 +109,7 @@ std::vector<Tensor> ExecuteTopK::invoke(
     auto input_memory_config = memory_config.value_or(input_tensor.memory_config());
 
     // K may not be power of 2
-    int32_t adjusted_k = get_nearest_power_of_2(k);
+    int32_t adjusted_k = get_nearest_supported_shape(k);
     // if dim is not last dimension, transpose it
     Tensor transposed_tensor = perform_transpose(input_tensor, is_dim_last_idx, dim, -1);
     // if input is not 4d, convert it to 4d
