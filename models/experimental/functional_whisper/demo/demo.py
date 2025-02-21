@@ -163,7 +163,13 @@ def run_generate(
             ttnn.plus_one(current_decode_pos)
 
         decoder_hidden_states, decoder_attention_mask = ttnn_model.preprocess_decoder_inputs(
-            config=config, input_ids=input_ids, attention_mask=None, parameters=parameters.decoder, device=device
+            config=config,
+            input_ids=input_ids,
+            attention_mask=None,
+            parameters=parameters.decoder,
+            device=device,
+            decode_pos=i if kv_cache else None,
+            create_attention_mask=(not kv_cache),
         )
         logger.info(f"Decode iter time: {time.time() - start_iter}")
 
@@ -265,6 +271,7 @@ def run_demo_functional_whisper_for_conditional_generation_inference(input_path,
             attention_mask=attention_mask,
             parameters=parameters,
             device=device,
+            create_attention_mask=(not kv_cache),
         )
 
         generation_config = hf_ref_model.generation_config
@@ -367,6 +374,7 @@ def run_demo_functional_whisper_for_conditional_generation_dataset(ttnn_model, d
         attention_mask=attention_mask,
         parameters=parameters,
         device=device,
+        create_attention_mask=(not kv_cache),
     )
 
     generation_config = hf_ref_model.generation_config
