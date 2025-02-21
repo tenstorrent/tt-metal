@@ -8,9 +8,16 @@ import torch
 import math
 import ttnn
 
-from models.utility_functions import comp_pcc
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.utility_functions import skip_for_grayskull, is_wormhole_b0, is_grayskull, is_blackhole, run_for_wormhole_b0
+from models.utility_functions import (
+    skip_for_grayskull,
+    is_wormhole_b0,
+    is_grayskull,
+    is_blackhole,
+    run_for_wormhole_b0,
+    comp_pcc,
+    torch_random,
+)
 
 
 def find_max_subblock(out_block_h, out_block_w):
@@ -2091,7 +2098,7 @@ def test_padded_2d_matmul(device, side, tile_count):
     assert torch.all(upper == 4)
 
 
-@pytest.mark.parametrize("has_program_config", [True])  # False])#, True])
+@pytest.mark.parametrize("has_program_config", [True, False])
 def test_padded_1d_matmul(device, has_program_config):
     pytest.skip("#17491: last tile bounds are not set up properly")
     S = 44520
@@ -2146,3 +2153,81 @@ def test_padded_1d_matmul(device, has_program_config):
     assert_with_pcc(torch_output_tensor, output_tensor, pcc)
     assert torch.all(lower == 2)
     assert torch.all(upper == 4)
+
+
+@pytest.mark.parametrize("n_size", [768])
+@pytest.mark.parametrize("m_size", [1920])
+@pytest.mark.parametrize("k_size", [768])
+@pytest.mark.parametrize("transpose_mcast", [True, False])
+def test_block_sharded(device, n_size, m_size, k_size, transpose_mcast):
+    pytest.skip("#17491: last tile bounds are not set up properly")
+    input_a_memory_config = ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
+    input_b_memory_config = ttnn.DRAM_MEMORY_CONFIG
+    output_memory_config = ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG
+    input_a_dtype = ttnn.DataType.BFLOAT8_B
+    input_b_dtype = ttnn.DataType.BFLOAT16
+    output_dtype = ttnn.DataType.BFLOAT8_B
+    input_layout = ttnn.Layout.TILE
+    compute_kernel_config = None
+    batch_sizes = (2,)
+    per_core_height = 576
+    per_core_width = n_size
+    num_cores_height = 7
+    num_cores_width = 1
+
+    core_grid = device.compute_with_storage_grid_size()
+
+    if transpose_mcast:
+        input_a_shard_spec = ttnn.ShardSpec(
+            ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_height - 1, num_cores_width - 1))}
+            ),
+            (per_core_height, per_core_width),
+            ttnn.ShardOrientation.COL_MAJOR,
+        )
+    else:
+        input_a_shard_spec = ttnn.ShardSpec(
+            ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_width - 1, num_cores_height - 1))}
+            ),
+            (per_core_height, per_core_width),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        )
+    input_a_memory_config.shard_spec = input_a_shard_spec
+
+    input_shape_a = (*batch_sizes, m_size, k_size)
+    input_shape_b = (k_size, n_size)
+
+    input_a_layout = input_layout
+    input_b_layout = input_layout
+
+    torch_input_tensor_a = torch_random(input_shape_a, -0.1, 0.1, dtype=torch.float32)
+    torch_input_tensor_b = torch_random(input_shape_b, -0.1, 0.1, dtype=torch.float32)
+    torch_output_tensor = torch.matmul(torch_input_tensor_a, torch_input_tensor_b)
+
+    input_tensor_a = ttnn.from_torch(
+        torch_input_tensor_a,
+        layout=input_a_layout,
+        dtype=input_a_dtype,
+        device=device,
+        memory_config=input_a_memory_config,
+    )
+    input_tensor_b = ttnn.from_torch(
+        torch_input_tensor_b,
+        layout=input_b_layout,
+        dtype=input_b_dtype,
+        device=device,
+        memory_config=input_b_memory_config,
+    )
+
+    output_tensor = ttnn.matmul(
+        input_tensor_a,
+        input_tensor_b,
+        memory_config=output_memory_config,
+        dtype=output_dtype,
+        compute_kernel_config=compute_kernel_config,
+    )
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    expected_pcc = 0.99
+    assert_with_pcc(torch_output_tensor, output_tensor, expected_pcc)
