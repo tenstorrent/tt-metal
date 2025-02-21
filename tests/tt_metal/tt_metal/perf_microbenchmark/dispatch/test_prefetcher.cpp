@@ -1715,9 +1715,6 @@ void configure_for_single_chip(
     CoreCoord phys_dispatch_core = device->worker_core_from_logical_core(dispatch_core);
     CoreCoord phys_dispatch_h_core = device->worker_core_from_logical_core(dispatch_h_core);
 
-    std::cout << "prefetch_core " << prefetch_core.str() << " " << phys_prefetch_core_g.str() << " prefetch_d_core "
-              << prefetch_d_core.str() << " " << phys_prefetch_d_core.str() << std::endl;
-
     // Packetized relay nodes - instantiated only if packetized_path_en_g is set
     CoreCoord prefetch_relay_mux_core = {1, 0};
     CoreCoord prefetch_relay_demux_core = {2, 0};

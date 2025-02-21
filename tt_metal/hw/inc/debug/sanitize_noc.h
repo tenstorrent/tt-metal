@@ -30,7 +30,6 @@
 #include "noc_parameters.h"
 #include "noc_nonblocking_api.h"
 #include "hostdevcommon/common_runtime_address_map.h"
-#include "debug/dprint.h"
 #ifndef ARCH_GRAYSKULL
 #include "eth_l1_address_map.h"
 #endif

@@ -1455,13 +1455,18 @@ void Device::generate_device_bank_to_noc_tables()
 
     dram_bank_to_noc_xy_.clear();
     dram_bank_to_noc_xy_.reserve(tt::tt_metal::hal.get_num_nocs() * dram_noc_coord_per_bank.size());
+    bool dram_is_virtualized =
+        hal.get_virtualized_core_types().find(AddressableCoreType::DRAM) != hal.get_virtualized_core_types().end();
     for (unsigned int noc = 0; noc < tt::tt_metal::hal.get_num_nocs(); noc++) {
         for (unsigned int bank_id = 0; bank_id < dram_noc_coord_per_bank.size(); bank_id++) {
-            // uint16_t noc_x = tt::tt_metal::hal.noc_coordinate(noc, soc_d.grid_size.x,
-            // dram_noc_coord_per_bank[bank_id].x); uint16_t noc_y = tt::tt_metal::hal.noc_coordinate(noc,
-            // soc_d.grid_size.y, dram_noc_coord_per_bank[bank_id].y);
-            uint16_t noc_x = dram_noc_coord_per_bank[bank_id].x;
-            uint16_t noc_y = dram_noc_coord_per_bank[bank_id].y;
+            uint16_t noc_x, noc_y;
+            if (dram_is_virtualized) {
+                noc_x = dram_noc_coord_per_bank[bank_id].x;
+                noc_y = dram_noc_coord_per_bank[bank_id].y;
+            } else {
+                noc_x = tt::tt_metal::hal.noc_coordinate(noc, soc_d.grid_size.x, dram_noc_coord_per_bank[bank_id].x);
+                noc_y = tt::tt_metal::hal.noc_coordinate(noc, soc_d.grid_size.y, dram_noc_coord_per_bank[bank_id].y);
+            }
             uint16_t xy = ((noc_y << tt::tt_metal::hal.get_noc_addr_node_id_bits()) | noc_x)
                           << tt::tt_metal::hal.get_noc_coord_reg_offset();
             dram_bank_to_noc_xy_.push_back(xy);
