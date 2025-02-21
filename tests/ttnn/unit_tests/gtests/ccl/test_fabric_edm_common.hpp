@@ -64,9 +64,9 @@ using tt::tt_metal::distributed::MeshDevice;
 using tt::tt_metal::distributed::MeshDeviceConfig;
 using tt::tt_metal::distributed::MeshDeviceView;
 using tt::tt_metal::distributed::MeshShape;
-class TestMeshDevice {
+class T3000TestDevice {
 public:
-    TestMeshDevice() : device_open(false) {
+    T3000TestDevice() : device_open(false) {
         auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         if (slow_dispatch) {
             TT_THROW("This suite can only be run without TT_METAL_SLOW_DISPATCH_MODE set");
@@ -85,7 +85,7 @@ public:
         }
         device_open = true;
     }
-    ~TestMeshDevice() {
+    ~T3000TestDevice() {
         if (device_open) {
             TearDown();
         }
@@ -1122,7 +1122,7 @@ int TestLineFabricEntrypoint(
         return 0;
     }
 
-    TestMeshDevice test_fixture;
+    T3000TestDevice test_fixture;
     auto view = test_fixture.mesh_device_->get_view();
 
     // build a line of devices
@@ -1208,7 +1208,7 @@ int TestLoopbackEntrypoint(
         return 0;
     }
 
-    TestMeshDevice test_fixture;
+    T3000TestDevice test_fixture;
     auto view = test_fixture.mesh_device_->get_view();
 
     const auto& device_0 = view.get_device(MeshCoordinate(0, 0));
@@ -1383,7 +1383,7 @@ bool TestMultiInputReaderKernel(
         log_info("Test must be run on WH");
         return true;
     }
-    TestMeshDevice test_fixture;
+    T3000TestDevice test_fixture;
 
     TT_FATAL(
         !enable_persistent_fabric || test_mode != TwoInputReaderKernelWriteMode::LOCAL_WRITEBACK,
@@ -1682,7 +1682,7 @@ bool RunPipelinedWorkersTest(
     auto programs = std::vector<Program>(1);
     Program& program = programs[0];
 
-    TestMeshDevice test_fixture;
+    T3000TestDevice test_fixture;
     auto view = test_fixture.mesh_device_->get_view();
 
     IDevice* device = view.get_device(MeshCoordinate(0, 0));
@@ -1974,7 +1974,7 @@ void run_all_gather_with_persistent_fabric(const size_t dim, const size_t num_li
         log_info("Test must be run on WH");
         return;
     }
-    TestMeshDevice test_fixture;
+    T3000TestDevice test_fixture;
     auto view = test_fixture.mesh_device_->get_view();
 
     // build a line of devices
@@ -2101,7 +2101,7 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
     size_t dest_buffer_size = packet_payload_size_bytes * 4;
     static constexpr tt::DataFormat cb_df = tt::DataFormat::Bfp8;
 
-    TestMeshDevice test_fixture;
+    T3000TestDevice test_fixture;
     auto view = test_fixture.mesh_device_->get_view();
 
     // Get the inner 4 device ring on a WH T3K device so that we can use both links for all devices
