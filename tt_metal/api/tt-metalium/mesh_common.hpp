@@ -21,3 +21,4 @@ using MeshTraceId = tt::stl::StrongType<uint32_t, struct MeshTraceIdTag>;
 
 using DeviceCoord = CoreCoord;
 using LogicalDeviceRange = CoreRange;
+using LogicalDeviceRangeSet = CoreRangeSet;

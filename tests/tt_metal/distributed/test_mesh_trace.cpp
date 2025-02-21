@@ -122,6 +122,22 @@ INSTANTIATE_TEST_SUITE_P(
     MeshTraceSweepTest,
     ::testing::Values(
         std::vector<std::vector<LogicalDeviceRange>>({
+            {LogicalDeviceRange({0, 0}, {3, 1})},  // Full grid
+            {LogicalDeviceRange({1, 0}, {1, 1})},  // Run on single center column
+            {LogicalDeviceRange({2, 0}, {2, 0})},  // Run on single device - top row, center
+            {LogicalDeviceRange({3, 1}, {3, 1})},  // Run on bottom right device
+            {LogicalDeviceRange({0, 0}, {0, 0})},  // Run on top left device
+            {LogicalDeviceRange({0, 0}, {3, 1})},  // Full grid
+        }),
+        std::vector<std::vector<LogicalDeviceRange>>({
+            {LogicalDeviceRange({0, 0}, {3, 1})},  // Full grid
+            {LogicalDeviceRange({1, 0}, {1, 1}),
+             LogicalDeviceRange({2, 0}, {2, 1}),
+             LogicalDeviceRange({3, 0}, {3, 1}),
+             LogicalDeviceRange({0, 0}, {0, 1})},                                      // Split grid into 4 columns
+            {LogicalDeviceRange({0, 0}, {3, 0}), LogicalDeviceRange({0, 1}, {3, 1})},  // Split grid into 2 rows
+        }),
+        std::vector<std::vector<LogicalDeviceRange>>({
             {LogicalDeviceRange({0, 0}, {3, 1})},                                      // Full grid
             {LogicalDeviceRange({0, 0}, {3, 0}), LogicalDeviceRange({0, 1}, {3, 1})},  // Split grid into 2 rows
             {LogicalDeviceRange({0, 0}, {1, 1}), LogicalDeviceRange({2, 0}, {3, 1})},  // Split grid into 2 columns
@@ -132,6 +148,20 @@ INSTANTIATE_TEST_SUITE_P(
              LogicalDeviceRange({1, 0}, {1, 1}),
              LogicalDeviceRange({2, 0}, {2, 1}),
              LogicalDeviceRange({3, 0}, {3, 1})},  // Split grid into 4 columns
+        }),
+        std::vector<std::vector<LogicalDeviceRange>>({
+            {LogicalDeviceRange({0, 0}, {3, 1})},  // Full grid
+            {LogicalDeviceRange({0, 0}, {0, 0}),
+             LogicalDeviceRange({1, 0}, {1, 0}),
+             LogicalDeviceRange({2, 0}, {2, 0}),
+             LogicalDeviceRange({3, 0}, {3, 0}),
+             LogicalDeviceRange({0, 1}, {0, 1}),
+             LogicalDeviceRange({1, 1}, {1, 1}),
+             LogicalDeviceRange({2, 1}, {2, 1}),
+             LogicalDeviceRange({3, 1}, {3, 1})},  // Run on individual devices
+            {LogicalDeviceRange({1, 0}, {2, 1})},  // Run on 2 center columns
+            {LogicalDeviceRange({2, 0}, {2, 1})},  // Run on single center column
+            {LogicalDeviceRange({1, 1}, {2, 1})},  // Run on 2 devices on the bottom row
         }),
         std::vector<std::vector<LogicalDeviceRange>>({
             {LogicalDeviceRange({0, 0}, {0, 1}),
