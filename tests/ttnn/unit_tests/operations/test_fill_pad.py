@@ -94,7 +94,7 @@ def test_fill_pad_bfloat16(
     )
 
     output_tensor = ttnn.fill_implicit_tile_padding(input_tensor, fill_value, memory_config=output_mem_config)
-    padded_torch_output_tensor = ttnn.from_device(output_tensor).to_torch()
+    padded_torch_output_tensor = ttnn.from_device(output_tensor).to_torch_with_padded_shape()
 
     assert_with_pcc(padded_torch_tensor, padded_torch_output_tensor)
 
@@ -140,7 +140,7 @@ def test_fill_pad_bfloat8_b(
     )
 
     output_tensor = ttnn.fill_implicit_tile_padding(input_tensor, fill_value, memory_config=output_mem_config)
-    padded_torch_output_tensor = ttnn.from_device(output_tensor).to_torch()
+    padded_torch_output_tensor = ttnn.from_device(output_tensor).to_torch_with_padded_shape()
 
     assert_with_pcc(padded_torch_tensor, padded_torch_output_tensor)
 
