@@ -28,6 +28,7 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/tensor/types.hpp"
+
 using tt::tt_metal::DataType;
 using tt::tt_metal::IDevice;
 
@@ -354,14 +355,13 @@ void test_numerically() {
                                  },
                          }},
                 };
-
         // Data movement kernel needs output tensor address to be passed as a runtime argument.
-        // auto device_output_tensor = tt::tt_metal::create_device_tensor(
-        //     device_input_tensor.tensor_attributes->shape,
-        //     device_input_tensor.tensor_attributes->dtype,
-        //     device_input_tensor.tensor_attributes->layout,
-        //     device_input_tensor.device(),
-        //     device_input_tensor.memory_config());
+        auto device_output_tensor = tt::tt_metal::create_device_tensor(
+            ttnn::TensorSpec(
+                input_tensor.get_logical_shape(),
+                TensorLayout(
+                    input_tensor.get_dtype(), PageConfig(input_tensor.get_layout()), input_tensor.memory_config())),
+            input_tensor.device());
 
         // calculate data movement runtime arguments
         uint32_t num_tiles_written = 0;
@@ -375,17 +375,16 @@ void test_numerically() {
             } else {
                 TT_ASSERT(false, "Core not in specified core ranges");
             }
-            // tt::tt_metal::SetRuntimeArgs(
-            //     program, unary_reader_kernel_id, core, {src_buffer->address(), num_tiles_per_core,
-            //     num_tiles_written});
-            // dm_attr[1].runtime_args_per_core[core] = {
-            //     device_output_tensor.buffer()->address(), num_tiles_per_core, num_tiles_written};
+            tt::tt_metal::SetRuntimeArgs(
+                program, unary_reader_kernel_id, core, {src_buffer->address(), num_tiles_per_core, num_tiles_written});
+            dm_attr[1].runtime_args_per_core[core] = {
+                device_output_tensor.buffer()->address(), num_tiles_per_core, num_tiles_written};
 
             num_tiles_written += num_tiles_per_core;
         }
         // end of data movement runtime arguments calculus
 
-        auto device_output_tensor = ttnn::generic_op(device_input_tensor, program_attributes);
+        auto device_output_tensor = ttnn::generic_op({device_input_tensor}, program_attributes);
         auto device_output = device_output_tensor.cpu();
         auto allclose = ttnn::allclose<bfloat16>(host_output, device_output, 1e-1f, 1e-5f);
         TT_FATAL(allclose, "Error");
