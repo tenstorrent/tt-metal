@@ -293,6 +293,7 @@ void launch_on_worker_thread(auto cq_id, auto device_operation_id, const auto& o
     };
 
     if (is_program_cache_enabled) {
+        TT_THROW("Program cache not yet supported");
         auto& program = create_or_get_program_from_cache<device_operation_t>(
             program_cache, program_cache_hit, program_hash, operation_attributes, tensor_args, tensor_return_value);
 

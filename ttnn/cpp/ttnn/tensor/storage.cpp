@@ -8,7 +8,7 @@
 namespace tt::tt_metal {
 
 DeviceStorage::DeviceStorage(std::shared_ptr<Buffer> buffer_) {
-    TT_THROW("DeviceStorage not implemented for Buffer");
+    tt::log_warning("Constructing DeviceStorage from Single-Device Buffer");
     buffer = std::move(buffer_);
 }
 

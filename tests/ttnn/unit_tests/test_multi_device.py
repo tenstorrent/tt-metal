@@ -578,7 +578,6 @@ def test_slicing(mesh_device):
 
 
 def test_clone(mesh_device):
-    pytest.skip("TT-Mesh: logic in clone needs to be fixed: fails with Not implemented")
     results_11BH = ttnn.from_torch(
         torch.randn(1, 1, 32, 128),
         dtype=ttnn.bfloat16,
