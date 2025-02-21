@@ -9,7 +9,7 @@
 #include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include <utility>
-#include "ttnn/operations/experimental/copy/typecast/typecast.hpp"
+#include "cpp/ttnn/operations/copy.hpp"
 
 using namespace tt::tt_metal;
 
@@ -31,7 +31,7 @@ ttnn::Tensor FillPadOperation::invoke(
     auto mutable_input_tensor = input_tensor;
     auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
     if (input_tensor.get_dtype() == DataType::BFLOAT8_B) {
-        mutable_input_tensor = experimental::copy::TypecastOperation::invoke(mutable_input_tensor, DataType::BFLOAT16);
+        mutable_input_tensor = ttnn::typecast(mutable_input_tensor, DataType::BFLOAT16);
     }
     // if input_tensor is rank > 3, then we need to reshape it to rank 3 such that the last 2 dims are the same
     if (mutable_input_tensor.get_logical_shape().rank() > 3) {
@@ -54,7 +54,7 @@ ttnn::Tensor FillPadOperation::invoke(
                              FillPad{fill_value, output_memory_config}, {mutable_input_tensor}, {}, {}, queue_id)
                              .at(0);
     if (input_tensor.get_dtype() == DataType::BFLOAT8_B) {
-        return experimental::copy::TypecastOperation::invoke(output_tensor, DataType::BFLOAT8_B);
+        return ttnn::typecast(output_tensor, DataType::BFLOAT8_B);
     }
     return output_tensor;
 }
