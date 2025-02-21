@@ -58,8 +58,7 @@ while [[ "$found" = "false" ]]; do
 
    git submodule update --recursive
    echo "::group::Building `git rev-parse HEAD`"
-   # ./build_metal.sh --build-tests > /dev/null; build_code=$?
-   echo "FIXME: do the actual build"
+   ./build_metal.sh --build-tests > /dev/null; build_code=$?
    echo "::endgroup::"
 
    if [[ $build_code -ne 0 ]]; then
