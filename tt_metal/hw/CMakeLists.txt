@@ -214,76 +214,97 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.23)
             TYPE HEADERS
             BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
             FILES
-                inc/blackhole/noc/noc_parameters.h
-                inc/blackhole/noc/noc_overlay_parameters.h
-                inc/blackhole/noc/noc.h
-                inc/blackhole/eth_l1_address_map.h
-                inc/blackhole/tensix.h
-                inc/blackhole/tensix_types.h
-                inc/blackhole/cfg_defines.h
-                inc/blackhole/stream_io_map.h
-                inc/blackhole/noc_nonblocking_api.h
-                inc/blackhole/core_config.h
-                inc/blackhole/dev_mem_map.h
-                inc/blackhole/c_tensix_core.h
-                inc/blackhole/tdma_xmov.h
-                inc/grayskull/noc/noc_parameters.h
-                inc/grayskull/noc/noc_overlay_parameters.h
-                inc/grayskull/noc/noc.h
-                inc/grayskull/eth_l1_address_map.h
-                inc/grayskull/tensix.h
-                inc/grayskull/tensix_types.h
-                inc/grayskull/cfg_defines.h
-                inc/grayskull/stream_io_map.h
-                inc/grayskull/noc_nonblocking_api.h
-                inc/grayskull/core_config.h
-                inc/grayskull/dev_mem_map.h
-                inc/grayskull/c_tensix_core.h
-                inc/grayskull/tdma_xmov.h
-                inc/wormhole/noc/noc_parameters.h
-                inc/wormhole/noc/noc_overlay_parameters.h
-                inc/wormhole/noc/noc.h
-                inc/wormhole/eth_l1_address_map.h
-                inc/wormhole/stream_io_map.h
-                inc/wormhole/noc_nonblocking_api.h
-                inc/wormhole/core_config.h
-                inc/wormhole/dev_mem_map.h
-                inc/wormhole/c_tensix_core.h
-                inc/wormhole/tdma_xmov.h
+                ckernels/blackhole/metal/common/chlkc_list.h
+                ckernels/blackhole/metal/llk_api/llk_math_common_api.h
+                ckernels/blackhole/metal/llk_api/llk_math_matmul_api.h
+                ckernels/blackhole/metal/llk_api/llk_math_unary_datacopy_api.h
+                ckernels/blackhole/metal/llk_api/llk_pack_api.h
+                ckernels/blackhole/metal/llk_api/llk_param_structs.h
+                ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_converter.h
+                ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_exp.h
+                ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_recip.h
+                ckernels/blackhole/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_exp.h
+                ckernels/blackhole/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_init.h
+                ckernels/blackhole/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_params.h
+                ckernels/blackhole/metal/llk_api/llk_sfpu_types.h
+                ckernels/blackhole/metal/llk_api/llk_unpack_AB_matmul_api.h
+                ckernels/blackhole/metal/llk_api/llk_unpack_A_api.h
+                ckernels/blackhole/metal/llk_api/llk_unpack_common_api.h
+                ckernels/blackhole/metal/llk_io/llk_io.h
+                ckernels/blackhole/metal/llk_io/llk_io_pack.h
+                ckernels/blackhole/metal/llk_io/llk_io_unpack.h
+                ckernels/blackhole/metal/llk_io/llk_operands.h
+                ckernels/blackhole/metal/llk_io/llk_outputs.h
                 inc/atomic_rwptr.h
                 inc/bit_utils.h
-                inc/circular_buffer_init.h
+                inc/blackhole/c_tensix_core.h
+                inc/blackhole/cfg_defines.h
+                inc/blackhole/core_config.h
+                inc/blackhole/dev_mem_map.h
+                inc/blackhole/eth_l1_address_map.h
+                inc/blackhole/noc/noc.h
+                inc/blackhole/noc/noc_overlay_parameters.h
+                inc/blackhole/noc/noc_parameters.h
+                inc/blackhole/noc_nonblocking_api.h
+                inc/blackhole/stream_interface.h
+                inc/blackhole/stream_io_map.h
+                inc/blackhole/tdma_xmov.h
+                inc/blackhole/tensix.h
+                inc/blackhole/tensix_types.h
                 inc/circular_buffer.h
+                inc/circular_buffer_init.h
                 inc/cmd_defs.h
                 inc/compile_time_args.h
                 inc/dataflow_api.h
                 inc/dataflow_cmd_bufs.h
                 inc/dataflow_internal.h
+                inc/debug/assert.h
+                inc/debug/dprint.h
+                inc/debug/dprint_buffer.h
+                inc/debug/dprint_tile.h
+                inc/debug/fw_debug.h
+                inc/debug/noc_logging.h
+                inc/debug/ring_buffer.h
+                inc/debug/sanitize_noc.h
+                inc/debug/stack_usage.h
+                inc/debug/watcher_common.h
+                inc/debug/waypoint.h
+                inc/ethernet/dataflow_api.h
+                inc/ethernet/erisc.h
+                inc/ethernet/tt_eth_api.h
+                inc/ethernet/tt_eth_ss_regs.h
+                inc/ethernet/tunneling.h
                 inc/firmware_common.h
+                inc/grayskull/c_tensix_core.h
+                inc/grayskull/cfg_defines.h
+                inc/grayskull/core_config.h
+                inc/grayskull/dev_mem_map.h
+                inc/grayskull/eth_l1_address_map.h
+                inc/grayskull/noc/noc.h
+                inc/grayskull/noc/noc_overlay_parameters.h
+                inc/grayskull/noc/noc_parameters.h
+                inc/grayskull/noc_nonblocking_api.h
+                inc/grayskull/stream_io_map.h
+                inc/grayskull/tdma_xmov.h
+                inc/grayskull/tensix.h
+                inc/grayskull/tensix_types.h
                 inc/mod_div_lib.h
                 inc/remote_circular_buffer_api.h
                 inc/risc_attribs.h
                 inc/risc_common.h
                 inc/tensix_functions.h
-                inc/vptr_uint.h
-                inc/debug/assert.h
-                inc/debug/fw_debug.h
-                inc/debug/dprint.h
-                inc/debug/dprint_buffer.h
-                inc/debug/dprint_tile.h
-                inc/debug/noc_logging.h
-                inc/debug/ring_buffer.h
-                inc/debug/sanitize_noc.h
-                inc/debug/stack_usage.h
-                inc/debug/waypoint.h
-                inc/debug/watcher_common.h
-                inc/ethernet/erisc.h
                 inc/utils/utils.h
-                inc/ethernet/dataflow_api.h
-                inc/ethernet/tt_eth_api.h
-                inc/ethernet/tunneling.h
-                inc/ethernet/tt_eth_ss_regs.h
-                ckernels/blackhole/metal/llk_io/llk_io.h
+                inc/vptr_uint.h
+                inc/wormhole/c_tensix_core.h
+                inc/wormhole/core_config.h
+                inc/wormhole/dev_mem_map.h
+                inc/wormhole/eth_l1_address_map.h
+                inc/wormhole/noc/noc.h
+                inc/wormhole/noc/noc_overlay_parameters.h
+                inc/wormhole/noc/noc_parameters.h
+                inc/wormhole/noc_nonblocking_api.h
+                inc/wormhole/stream_io_map.h
+                inc/wormhole/tdma_xmov.h
     )
 endif()
 
