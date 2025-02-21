@@ -32,10 +32,8 @@
     DO_PRAGMA(message(PROFILER_MSG_NAME(name))); \
     auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name));
 
-#if defined(PROFILE_KERNEL) &&                                                           \
-    (!defined(DISPATCH_KERNEL) ||                                                        \
-     (defined(DISPATCH_KERNEL) && (PROFILE_KERNEL == PROFILER_OPT_DO_DISPATCH_CORES)) && \
-         (defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_ERISC)))
+#if defined(PROFILE_KERNEL)
+
 namespace kernel_profiler {
 
 extern uint32_t wIndex;
@@ -407,48 +405,20 @@ inline __attribute__((always_inline)) void recordEvent(uint16_t event_id) {
 }
 }  // namespace kernel_profiler
 
-// Not dispatch
-#if (                            \
-    !defined(DISPATCH_KERNEL) || \
-    !(defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_ERISC)))
-
-#define DeviceZoneScopedN(name) ;
-
-#define DeviceTimestampedData(data_id, data) kernel_profiler::timeStampedData<data_id>(data);
-
-#define DeviceRecordEvent(event_id) kernel_profiler::recordEvent(event_id);
-
-// Dispatch and enabled
-#elif (                                                                                               \
-    defined(DISPATCH_KERNEL) &&                                                                       \
-    (defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_IDLE_ERISC) || defined(COMPILE_FOR_ERISC)) && \
-    (PROFILE_KERNEL == PROFILER_OPT_DO_DISPATCH_CORES))
-
-#define DeviceZoneScopedN(name) ;
-
-#define DeviceTimestampedData(data_id, data) kernel_profiler::timeStampedData<data_id, true>(data);
-
-#define DeviceRecordEvent(event_id) kernel_profiler::recordEvent<true>(event_id);
-
-// Dispatch but disabled
-#else
-
 #define DeviceZoneScopedN(name)
 
 #define DeviceTimestampedData(data_id, data)
 
 #define DeviceRecordEvent(event_id)
 
-#endif
+#define DeviceValidateProfiler(condition) ;
 
-#define DeviceValidateProfiler(condition) kernel_profiler::set_profiler_zone_valid(condition);
+#define DeviceZoneScopedPush() kernel_profiler::scopePush scope_push = kernel_profiler::scopePush();
 
 #define DeviceZoneScopedMainN(name)                                            \
     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
     auto constexpr hash = kernel_profiler::Hash16_CT(PROFILER_MSG_NAME(name)); \
     kernel_profiler::profileScopeGuaranteed<hash, 0> zone = kernel_profiler::profileScopeGuaranteed<hash, 0>();
-
-#define DeviceZoneScopedPush() kernel_profiler::scopePush scope_push = kernel_profiler::scopePush();
 
 #define DeviceZoneScopedMainChildN(name)                                       \
     DO_PRAGMA(message(PROFILER_MSG_NAME(name)));                               \
@@ -469,7 +439,7 @@ inline __attribute__((always_inline)) void recordEvent(uint16_t event_id) {
 
 #define DeviceZonesPush() kernel_profiler::push_time_out();
 
-#define DeviceProfilerInit() ;
+#define DeviceProfilerInit() kernel_profiler::init_profiler();
 
 #else
 

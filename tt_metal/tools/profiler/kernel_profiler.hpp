@@ -2,6 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#if defined(PROFILE_KERNEL) && (PROFILE_KERNEL == PROFILER_OPT_DO_EXPERIMENTAL)
+
+#include "tt_metal/tools/profiler/experimental/kernel_profiler_experimental.hpp"
+
+#else
+
 #pragma once
 
 #include <climits>
@@ -445,6 +451,12 @@ inline __attribute__((always_inline)) void recordEvent(uint16_t event_id) {
 
 #define DeviceZoneSetCounter(counter) kernel_profiler::set_host_counter(counter);
 
+#define DeviceZoneScopedPush()
+
+#define DeviceZonesPush()
+
+#define DeviceProfilerInit()
+
 #else
 
 #define DeviceValidateProfiler(condition)
@@ -465,4 +477,11 @@ inline __attribute__((always_inline)) void recordEvent(uint16_t event_id) {
 
 #define DeviceRecordEvent(event_id)
 
+#define DeviceZoneScopedPush()
+
+#define DeviceZonesPush()
+
+#define DeviceProfilerInit()
+
+#endif
 #endif
