@@ -46,7 +46,7 @@ Subject to these Terms, you will receive payments based on the category of Contr
 
 ---
 
-**Your Obligations**
+## Your Obligations
 
 You shall:
 
@@ -63,27 +63,27 @@ You shall not:
 
 ---
 
-**Intellectual Property Rights**
+## Intellectual Property Rights
 
-You acknowledge and agree that all your contributions under the Program shall be released under the license of the repository in which you are submitting a pull request. You represent and warrant that your submission of any pull request is your own work, that you haven’t used information owned by another person or entity, and that you have the legal right to submit the pull request to Tenstorrent.
+You acknowledge and agree that all your cContributions under the Program shall be released under the license of the repository in which you are submitting a pull request. You represent and warrant that your Contribution is your own work, that you haven’t used information owned by another person or entity, and that you have the legal right to submit the Contribution to Tenstorrent.
 
 Your rights with respect to our software, related documentation, and any updates, developments, or improvements thereto are governed by the license included in the applicable GitHub repository.
 
 ---
 
-**Your Information**
+## Your Information
 
 You will provide us with all information as we may reasonably require for you to participate in the Program and, where relevant, receive a Bounty award. Tenstorrent shall only use the information you provide us to permit your participation in the Program and to tender Bounty payouts. Except for our obligations under applicable data protection laws with respect to our processing of any personal data you may provide us through your participation in Program, we disclaim all liability of any kind with respect to (i) any information, data or materials you upload or otherwise provide through your participation in the Program, (ii) third party information, (iii) any other material or services which may be accessed when participating in the Program, or (iv) for any fraud committed in connection with the Program.
 
 ---
 
-**No Warranties**
+## No Warranties
 
 TENSTORRENT MAKES NO WARRANTIES, EXPRESS OR IMPLIED, GUARANTEES OR CONDITIONS WITH RESPECT TO THE PROGRAM. YOU UNDERSTAND THAT YOUR PARTICIPATION IN THE PROGRAM IS AT YOUR OWN RISK. TO THE EXTENT PERMITTED UNDER YOUR LOCAL LAW, WE EXCLUDE ANY IMPLIED WARRANTIES IN CONNECTION WITH THE PROGRAM. YOU MAY HAVE CERTAIN RIGHTS UNDER YOUR LOCAL LAW. NOTHING IN THESE TERMS IS INTENDED TO AFFECT THOSE RIGHTS, IF THEY ARE APPLICABLE.
 
 ---
 
-**Limitation of Liability and Disclaimer**
+## Limitation of Liability and Disclaimer
 
 Should your participation in the Program be found to breach legal obligations you may have with other third parties or any other rights or in the event of a breach of these Terms, we may terminate your participation in the Program and may further deem you to be ineligible for a Bounty payment. You agree to defend, indemnify and hold harmless Tenstorrent and its respective officers, directors, employees, agents, licensors, and suppliers, from and against all claims, actions or demands, liabilities, and settlements, including, without limitation, reasonable legal and accounting fees, arising in connection with such breach.
 
@@ -91,31 +91,31 @@ TO THE MAXIMUM EXTENT PERMITTED BY LAW, (A) WE SHALL NOT BE LIABLE TO YOU FOR AN
 
 ---
 
-**Issues**
+## Issues
 
 If you encounter any issues with your participation in the Program, please reach out to us at bounties@tenstorrent.com.
 
 ---
 
-**Applicability of these Terms**
+## Applicability of these Terms
 
 These Terms shall apply for as long as you are participating in the Program pursuant to these Terms. Cancellation of the Program, termination of these Terms, or your explicit withdrawal from the Program shall not affect Tenstorrent’s rights and your obligations under these Terms prior to such cancellation or termination, which shall continue to apply, unless otherwise agreed in writing.
 
 ---
 
-**Governing Law & Disputes**
+## Governing Law & Disputes
 
 These Terms shall be governed by and construed in accordance with the laws of the State of California and any federal laws applicable therein and shall be binding upon the parties hereto in California and worldwide. The parties consent to the exclusive jurisdiction of the courts of the State of California for any dispute arising out of this Agreement. Except where prohibited, as a condition of participating in this Program, each Participant agrees that between the parties, any and all disputes, claims, and causes of action arising out of or connected with this Program, or the Bounty Payout awarded must be resolved individually, without resort to any form of class action.
 
 ---
 
-**General**
+## General
 
 These Terms will be binding on and will inure to the benefit of the legal representatives, successors and assigns of the parties hereto. These Terms (and any policies referenced herein and incorporated by reference) constitute the entire agreement between you and us with respect to the subject matter hereof, and you have not relied upon any promises or representations by us with respect to the subject matter except as set forth herein. You may not assign these Terms or assign any rights or delegate any obligations hereunder, in whole or in part, whether voluntarily or by operation of law. The governing language of these Terms is English. A person who is not a party to these Terms has no rights to enforce, or to enjoy the benefit of, any term of these Terms.
 
 ---
 
-**Exhibit A – Tenstorrent Bounty Rewards Chart**
+## Exhibit A – Tenstorrent Bounty Rewards Chart
 
 | Category | Definition | Examples |  Payment Range  (US Dollars) |
 | :---- | :---- | :---- | :---- |
