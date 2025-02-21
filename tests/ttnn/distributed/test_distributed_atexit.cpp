@@ -10,6 +10,7 @@
 #include <tt-metalium/mesh_device.hpp>
 
 namespace ttnn::distributed::test {
+namespace {
 
 // Simplified test without fixture, and mesh variable moved inside test
 TEST(DistributedTestStandalone, TestSystemMeshTearDownWithoutClose) {
@@ -24,4 +25,5 @@ TEST(DistributedTestStandalone, TestSystemMeshTearDownWithoutClose) {
     EXPECT_EQ(system_shape[1], 4);
 }
 
+}  // namespace
 }  // namespace ttnn::distributed::test

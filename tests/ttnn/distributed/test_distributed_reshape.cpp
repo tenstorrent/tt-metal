@@ -10,24 +10,12 @@
 #include <ttnn/distributed/api.hpp>
 #include "mesh_coord.hpp"
 #include "tests/tt_metal/test_utils/env_vars.hpp"
+#include "ttnn/unit_tests/gtests/ttnn_test_fixtures.hpp"
 
 namespace ttnn::distributed::test {
 namespace {
 
 using ::testing::SizeIs;
-
-// Helper function to check test environment
-void check_t3k_test_environment() {
-    auto slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-    const auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-    const size_t num_devices = tt::tt_metal::GetNumAvailableDevices();
-    if (slow_dispatch) {
-        GTEST_SKIP() << "Skipping Multi-Device test suite, since it can only be run in Fast Dispatch Mode.";
-    }
-    if (num_devices < 8 or arch != tt::ARCH::WORMHOLE_B0) {
-        GTEST_SKIP() << "Skipping T3K Multi-Device test suite on non T3K machine.";
-    }
-}
 
 std::vector<chip_id_t> get_physical_device_ids(const MeshDevice& mesh) {
     std::vector<chip_id_t> device_ids;
@@ -41,10 +29,7 @@ static constexpr std::array<MeshShape, 24> kMeshShapes{
     {{1, 1}, {1, 2}, {1, 3}, {1, 4}, {1, 5}, {1, 6}, {1, 7}, {1, 8}, {2, 1}, {2, 2}, {2, 3}, {2, 4},
      {3, 1}, {3, 2}, {4, 1}, {4, 2}, {8, 1}, {7, 1}, {6, 1}, {5, 1}, {4, 1}, {3, 1}, {2, 1}, {1, 1}}};
 
-class MeshConfigurationTest : public ::testing::TestWithParam<MeshShape> {
-protected:
-    void SetUp() override { check_t3k_test_environment(); }
-};
+class MeshConfigurationTest : public T3kMultiDeviceFixture, public ::testing::WithParamInterface<MeshShape> {};
 
 TEST_P(MeshConfigurationTest, MeshConfigurations) {
     const auto& shape = GetParam();
@@ -71,12 +56,10 @@ TEST_P(MeshConfigurationTest, GetPhysicalDeviceIds) {
 // Test all possible mesh configurations on T3000
 INSTANTIATE_TEST_SUITE_P(MeshShapes, MeshConfigurationTest, ::testing::ValuesIn(kMeshShapes));
 
-class MeshReshapeTest : public ::testing::TestWithParam<std::tuple<MeshShape, MeshShape>> {
-protected:
-    void SetUp() override { check_t3k_test_environment(); }
-};
+class MeshReshapeExhaustiveTest : public T3kMultiDeviceFixture,
+                                  public ::testing::WithParamInterface<std::tuple<MeshShape, MeshShape>> {};
 
-TEST_P(MeshReshapeTest, ReshapeBetweenConfigurations) {
+TEST_P(MeshReshapeExhaustiveTest, ReshapeBetweenConfigurations) {
     const auto& [old_shape, new_shape] = GetParam();
 
     if ((old_shape.num_rows * old_shape.num_cols) != (new_shape.num_rows * new_shape.num_cols)) {
@@ -113,16 +96,13 @@ TEST_P(MeshReshapeTest, ReshapeBetweenConfigurations) {
 // Generate all possible combinations of shapes from kMeshShapes
 INSTANTIATE_TEST_SUITE_P(
     ReshapeConfigurations,
-    MeshReshapeTest,
+    MeshReshapeExhaustiveTest,
     ::testing::Combine(::testing::ValuesIn(kMeshShapes), ::testing::ValuesIn(kMeshShapes)));
 
 // Base class for non-parameterized tests
-class T3000ReshapeTest : public ::testing::Test {
-protected:
-    void SetUp() override { check_t3k_test_environment(); }
-};
+using MeshReshapeTest = T3kMultiDeviceFixture;
 
-TEST_F(T3000ReshapeTest, InvalidRequestedShape) {
+TEST_F(MeshReshapeTest, InvalidRequestedShape) {
     auto& system_mesh = tt::tt_metal::distributed::SystemMesh::instance();
 
     // Shape too big.
@@ -144,7 +124,7 @@ TEST_F(T3000ReshapeTest, InvalidRequestedShape) {
         MeshDeviceConfig{.mesh_shape = SimpleMeshShape(8), .offset = MeshCoordinate(1)}));
 }
 
-TEST_F(T3000ReshapeTest, InvalidReshapeDimensions) {
+TEST_F(MeshReshapeTest, InvalidReshapeDimensions) {
     auto mesh = ttnn::distributed::open_mesh_device(
         {1, 8}, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, tt::tt_metal::DispatchCoreType::WORKER);
 
@@ -157,7 +137,7 @@ TEST_F(T3000ReshapeTest, InvalidReshapeDimensions) {
     EXPECT_EQ(mesh->num_cols(), 8);
 }
 
-TEST_F(T3000ReshapeTest, From1x8To2x4ThenBackTo1x8) {
+TEST_F(MeshReshapeTest, From1x8To2x4ThenBackTo1x8) {
     auto mesh = ttnn::distributed::open_mesh_device(
         {1, 8}, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, tt::tt_metal::DispatchCoreType::WORKER);
 
@@ -187,7 +167,7 @@ TEST_F(T3000ReshapeTest, From1x8To2x4ThenBackTo1x8) {
     EXPECT_EQ(mesh->get_device_ids(), original_order);
 }
 
-TEST_F(T3000ReshapeTest, InvalidTotalDeviceCount) {
+TEST_F(MeshReshapeTest, InvalidTotalDeviceCount) {
     auto mesh = ttnn::distributed::open_mesh_device(
         {1, 8}, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, tt::tt_metal::DispatchCoreType::WORKER);
 
@@ -200,7 +180,7 @@ TEST_F(T3000ReshapeTest, InvalidTotalDeviceCount) {
     EXPECT_EQ(mesh->num_cols(), 8);
 }
 
-TEST_F(T3000ReshapeTest, From1x4To2x2Invalid) {
+TEST_F(MeshReshapeTest, From1x4To2x2Invalid) {
     auto mesh = ttnn::distributed::open_mesh_device(
         {1, 4}, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, tt::tt_metal::DispatchCoreType::WORKER);
 
@@ -208,7 +188,7 @@ TEST_F(T3000ReshapeTest, From1x4To2x2Invalid) {
     EXPECT_THROW(mesh->reshape({2, 2}), std::runtime_error);
 }
 
-TEST_F(T3000ReshapeTest, From1x4To2x2Valid) {
+TEST_F(MeshReshapeTest, From1x4To2x2Valid) {
     auto& system_mesh = tt::tt_metal::distributed::SystemMesh::instance();
 
     // Fetch the device ids for a physically connected 2x2 mesh.
@@ -236,7 +216,7 @@ TEST_F(T3000ReshapeTest, From1x4To2x2Valid) {
     }
 }
 
-TEST_F(T3000ReshapeTest, From2x2To1x4) {
+TEST_F(MeshReshapeTest, From2x2To1x4) {
     auto mesh = ttnn::distributed::open_mesh_device(
         {2, 2}, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, tt::tt_metal::DispatchCoreType::WORKER);
 
