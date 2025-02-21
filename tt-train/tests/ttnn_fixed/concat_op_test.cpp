@@ -22,9 +22,7 @@ protected:
     }
 };
 
-// This test currently fails due to a bug in ttnn::concat. Drop the BROKEN label
-// and invert the EXPECT_FALSE when the bug is fixed.
-TEST_F(ConcatOpTest, TestConcatLastDim_BROKEN) {
+TEST_F(ConcatOpTest, TestConcatLastDim) {
     auto* device = &ttml::autograd::ctx().get_device();
     device->enable_async(true);
     auto N = 1;
@@ -43,5 +41,5 @@ TEST_F(ConcatOpTest, TestConcatLastDim_BROKEN) {
     auto ttnn_concat = ttnn::concat(std::vector<ttnn::Tensor>{tensor_a, tensor_b}, 3);
     auto ttnn_concat_xtensor = ttml::core::to_xtensor(ttnn_concat);
 
-    EXPECT_FALSE(xt::allclose(ttnn_concat_xtensor, expected));
+    EXPECT_TRUE(xt::allclose(ttnn_concat_xtensor, expected, 5e-2F, 1e-1));
 }
