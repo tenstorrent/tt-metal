@@ -65,7 +65,7 @@ You shall not:
 
 ## Intellectual Property Rights
 
-You acknowledge and agree that all your cContributions under the Program shall be released under the license of the repository in which you are submitting a pull request. You represent and warrant that your Contribution is your own work, that you haven’t used information owned by another person or entity, and that you have the legal right to submit the Contribution to Tenstorrent.
+You acknowledge and agree that all your Contributions under the Program shall be released under the license of the repository in which you are submitting a pull request. You represent and warrant that your Contribution is your own work, that you haven’t used information owned by another person or entity, and that you have the legal right to submit the Contribution to Tenstorrent.
 
 Your rights with respect to our software, related documentation, and any updates, developments, or improvements thereto are governed by the license included in the applicable GitHub repository.
 
