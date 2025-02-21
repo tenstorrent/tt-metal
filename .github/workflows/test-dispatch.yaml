@@ -82,4 +82,12 @@ jobs:
           pip install pytest-repeat
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
-          ${{ inputs.command }}
+          for i in {1..10}; do
+            echo "iteration: $i"
+            tt-smi-metal -r0
+            ./build/test/ttnn/unit_tests_ttnn_ccl
+            tt-smi-metal -r0
+            pytest tests/ttnn/unit_tests -xv --exclude-warning-annotations -m requires_fast_runtime_mode_off
+            tt-smi-metal -r0
+            pytest tests/tt_eager/python_api_testing/unit_testing/ -xvvv --splits 7 --group 1 --exclude-warning-annotations
+          done
