@@ -84,7 +84,8 @@ class GunicornApp(BaseApplication):
             "bind": f"0.0.0.0:{7000}",  # Specify the binding address
             "workers": 1,  # Number of Gunicorn workers
             "reload": False,
-            "worker_class": "sync",
+            "worker_class": "gthread",
+            "threads": 16,
             "post_worker_init": self.post_worker_init,
             "timeout": 0,
         }
