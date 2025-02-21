@@ -267,8 +267,8 @@ public:
             if constexpr (inline_data) {
                 TT_ASSERT(data != nullptr);  // compiled out?
                 this->add_data(data, data_sizeB, data_sizeB);
-		// this->cmd_write_offsetB has been incremented by sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd) + data_sizeB
-		// need to ensure this is aligned for next cmds to be written at the correct location
+                // this->cmd_write_offsetB has been incremented by sizeof(CQPrefetchCmd) + sizeof(CQDispatchCmd) +
+                // data_sizeB need to ensure this is aligned for next cmds to be written at the correct location
                 this->cmd_write_offsetB = tt::align(this->cmd_write_offsetB, this->pcie_alignment);
             }
         } else {
@@ -454,6 +454,14 @@ public:
             DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES);
         auto data_sizeB = noc_mcast_unicast_data.size() * sizeof(uint32_t);
         uint32_t lengthB = sizeof(CQDispatchCmd) + data_sizeB;
+        if (dispatcher_type == DispatcherSelect::DISPATCH_SLAVE) {
+            constexpr uint32_t dispatch_page_size = 1 << DispatchSettings::DISPATCH_S_BUFFER_LOG_PAGE_SIZE;
+            TT_FATAL(
+                lengthB <= dispatch_page_size,
+                "Data to set go signal noc data {} must fit within one dispatch page {} when sending to dispatch_s",
+                lengthB,
+                dispatch_page_size);
+        }
         this->add_prefetch_relay_inline(true, lengthB, dispatcher_type);
         auto initialize_set_go_signal_noc_data_cmd = [&](CQDispatchCmd* set_go_signal_noc_data_cmd) {
             set_go_signal_noc_data_cmd->base.cmd_id = CQ_DISPATCH_SET_GO_SIGNAL_NOC_DATA;

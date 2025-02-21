@@ -5,10 +5,10 @@
 // clang-format off
 #include "debug/dprint.h"
 #include "dataflow_api.h"
-#include "tt_fabric/hw/inc/tt_fabric.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric.h"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen.hpp"
-#include "tt_fabric/hw/inc/tt_fabric_status.h"
-#include "tt_fabric/hw/inc/tt_fabric_interface.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/common/kernel_utils.hpp"
 // clang-format on
 

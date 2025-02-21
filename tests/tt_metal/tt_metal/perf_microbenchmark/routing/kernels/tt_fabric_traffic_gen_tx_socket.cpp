@@ -5,10 +5,10 @@
 // clang-format off
 #include "dataflow_api.h"
 #include "debug/dprint.h"
-#include "tt_fabric/hw/inc/tt_fabric.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric.h"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen.hpp"
-#include "tt_fabric/hw/inc/tt_fabric_interface.h"
-#include "tt_fabric/hw/inc/tt_fabric_api.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 // clang-format on
 
 using namespace tt::tt_fabric;
@@ -352,7 +352,7 @@ void kernel_main() {
 
     // initalize client
     tt_fabric_init();
-    fabric_endpoint_init(client_interface, gk_interface_addr_l, gk_interface_addr_h);
+    fabric_endpoint_init<RoutingType::ROUTING_TABLE>(client_interface, gk_interface_addr_l, gk_interface_addr_h);
     routing_table = reinterpret_cast<tt_l1_ptr fabric_router_l1_config_t*>(
         client_interface->routing_tables_l1_offset + sizeof(fabric_router_l1_config_t) * routing_plane);
 

@@ -40,7 +40,7 @@ TraceDescriptor from_flatbuffer(const tt::tt_metal::flatbuffer::TraceDescriptor*
     if (auto sub_device_descriptors_fb = fb_desc->sub_device_descriptors()) {
         for (const auto* mapping : *sub_device_descriptors_fb) {
             if (mapping) {
-                TraceDescriptor::Descriptor descriptor;
+                TraceWorkerDescriptor descriptor;
                 descriptor.num_completion_worker_cores = mapping->descriptor()->num_completion_worker_cores();
                 descriptor.num_traced_programs_needing_go_signal_multicast =
                     mapping->descriptor()->num_traced_programs_needing_go_signal_multicast();

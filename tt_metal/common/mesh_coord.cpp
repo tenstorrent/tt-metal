@@ -105,8 +105,19 @@ MeshCoordinateRange::MeshCoordinateRange(const MeshCoordinate& start, const Mesh
 MeshCoordinateRange::MeshCoordinateRange(const SimpleMeshShape& shape) :
     MeshCoordinateRange(zero_coordinate(shape.dims()), shape_back(shape)) {}
 
+size_t MeshCoordinateRange::dims() const { return start_.dims(); }
 const MeshCoordinate& MeshCoordinateRange::start_coord() const { return start_; }
 const MeshCoordinate& MeshCoordinateRange::end_coord() const { return end_; }
+
+bool MeshCoordinateRange::contains(const MeshCoordinate& coord) const {
+    TT_FATAL(coord.dims() == dims(), "Coordinate dimensions do not match: {} != {}", coord.dims(), dims());
+    for (int i = 0; i < coord.dims(); ++i) {
+        if (coord[i] < start_[i] || coord[i] > end_[i]) {
+            return false;
+        }
+    }
+    return true;
+}
 
 MeshCoordinateRange::Iterator::Iterator(
     const MeshCoordinateRange* range, const MeshCoordinate& current, size_t linear_index) :
@@ -142,6 +153,11 @@ MeshCoordinateRange::Iterator MeshCoordinateRange::end() const {
     // Set `start_` coordinate but `range_size` linear index as the wrap around condition.
     return Iterator(this, start_, range_size);
 }
+
+bool operator==(const MeshCoordinateRange& lhs, const MeshCoordinateRange& rhs) {
+    return lhs.start_coord() == rhs.start_coord() && lhs.end_coord() == rhs.end_coord();
+}
+bool operator!=(const MeshCoordinateRange& lhs, const MeshCoordinateRange& rhs) { return !(lhs == rhs); }
 
 size_t to_linear_index(const SimpleMeshShape& shape, const MeshCoordinate& coord) {
     TT_FATAL(

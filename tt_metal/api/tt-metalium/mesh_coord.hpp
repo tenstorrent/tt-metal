@@ -8,6 +8,7 @@
 #include <type_traits>
 #include <vector>
 
+#include "assert.hpp"
 #include "shape_base.hpp"
 #include "utils.hpp"
 
@@ -98,9 +99,15 @@ public:
     // Constructs a range that iterates over all coordinates in the mesh.
     MeshCoordinateRange(const SimpleMeshShape& shape);
 
+    // Returns the dimensionality of the range.
+    size_t dims() const;
+
     // Returns start and (inclusive) end coordinates of the range.
     const MeshCoordinate& start_coord() const;
     const MeshCoordinate& end_coord() const;
+
+    // Returns true if the range contains the given coordinate.
+    bool contains(const MeshCoordinate& coord) const;
 
     class Iterator {
     public:
@@ -186,9 +193,13 @@ template <typename T>
 class MeshContainer {
 public:
     MeshContainer(const SimpleMeshShape& shape, const T& fill_value);
+    MeshContainer(const SimpleMeshShape& shape, std::vector<T> values);
 
     // Returns a shape of the container.
     const SimpleMeshShape& shape() const;
+
+    // Returns (inclusive) range of coordinates in the container.
+    const MeshCoordinateRange& coord_range() const;
 
     // Accessor methods.
     T& at(const MeshCoordinate& coord);
@@ -252,6 +263,11 @@ public:
     std::vector<T>& values() { return values_; }
     const std::vector<T>& values() const { return values_; }
 
+    friend bool operator==(const MeshContainer& lhs, const MeshContainer& rhs) {
+        return lhs.shape() == rhs.shape() && lhs.coord_range() == rhs.coord_range() && lhs.values() == rhs.values();
+    }
+    friend bool operator!=(const MeshContainer& lhs, const MeshContainer& rhs) { return !(lhs == rhs); }
+
 private:
     SimpleMeshShape shape_;
     MeshCoordinateRange coord_range_;
@@ -263,8 +279,23 @@ MeshContainer<T>::MeshContainer(const SimpleMeshShape& shape, const T& fill_valu
     shape_(shape), coord_range_(shape), values_(shape.mesh_size(), fill_value) {}
 
 template <typename T>
+MeshContainer<T>::MeshContainer(const SimpleMeshShape& shape, std::vector<T> values) :
+    shape_(shape), coord_range_(shape), values_(std::move(values)) {
+    TT_FATAL(
+        shape.mesh_size() == values_.size(),
+        "Shape and values size mismatch; shape: {}, values: {}",
+        shape,
+        values.size());
+}
+
+template <typename T>
 const SimpleMeshShape& MeshContainer<T>::shape() const {
     return shape_;
+}
+
+template <typename T>
+const MeshCoordinateRange& MeshContainer<T>::coord_range() const {
+    return coord_range_;
 }
 
 template <typename T>

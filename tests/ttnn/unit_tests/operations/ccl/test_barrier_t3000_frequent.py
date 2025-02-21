@@ -347,7 +347,7 @@ def test_run_barrier_impl_pcie(
         # LLama
         (
             (1, 1, 32, 1024),
-            (32, 32),
+            (32, 256),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
         ),
     ),

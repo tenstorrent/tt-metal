@@ -66,6 +66,7 @@ protected:
         // The associated test will be run if the connected cluster corresponds to a supported topology.
         std::optional<MeshDeviceType> mesh_device_type;
         int num_cqs = 1;
+        uint32_t trace_region_size = 0;
     };
 
     MeshDeviceFixtureBase(const Config& fixture_config) : config_(fixture_config) {}
@@ -94,11 +95,14 @@ protected:
                 magic_enum::enum_name(*mesh_device_type),
                 magic_enum::enum_name(*config_.mesh_device_type));
         }
-
         // Use ethernet dispatch for more than 1 CQ on T3K/N300
         DispatchCoreType core_type = (config_.num_cqs >= 2) ? DispatchCoreType::ETH : DispatchCoreType::WORKER;
         mesh_device_ = MeshDevice::create(
-            MeshDeviceConfig{.mesh_shape = get_mesh_shape(*mesh_device_type)}, 0, 0, config_.num_cqs, core_type);
+            MeshDeviceConfig{.mesh_shape = get_mesh_shape(*mesh_device_type)},
+            0,
+            config_.trace_region_size,
+            config_.num_cqs,
+            core_type);
     }
 
     void TearDown() override {
@@ -143,6 +147,11 @@ protected:
 class GenericMultiCQMeshDeviceFixture : public MeshDeviceFixtureBase {
 protected:
     GenericMultiCQMeshDeviceFixture() : MeshDeviceFixtureBase(Config{.num_cqs = 2}) {}
+};
+
+class GenericMeshDeviceTraceFixture : public MeshDeviceFixtureBase {
+protected:
+    GenericMeshDeviceTraceFixture() : MeshDeviceFixtureBase(Config{.num_cqs = 1, .trace_region_size = (64 << 20)}) {}
 };
 
 // Fixtures that specify the mesh device type explicitly.

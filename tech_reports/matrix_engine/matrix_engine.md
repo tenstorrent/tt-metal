@@ -6,9 +6,12 @@ The matrix engine supports the following operations: matrix mult, reduction, elt
 
 ## Operations
 
+>[!NOTE]
+>All numbers and values apply to both Wormhole and Blackhole devices.
+
 ### Matrix Mult
 
-The WH matrix engine performs 8x16 x 16x16 = 8x16 in a single cycle. \
+The Wormhole matrix engine performs 8x16 x 16x16 = 8x16 in a single cycle. \
 This is 2*8\*16\*16 = 4096 muladds in a single cycle. At 1GHz, this is 4 TFLOPS per matrix engine. \
 The 8x16 is the smallest matrix that can be fed into in0, and 16x16 is the
 smallest matrix that can be fed into in1.
@@ -24,7 +27,7 @@ HiFi3 -> 1.33 TFLOPS \
 HiFi4 -> 1 TFLOPS
 
 ### Reduction: Max/Average/Sum
-The WH matrix engine performs 16x16 reduce max/average/sum operations in a single cycle. \
+The Wormhole matrix engine performs 16x16 reduce max/average/sum operations in a single cycle. \
 This is 2*16\*16 multiply + adds in a single cycle. At 1GHz, this is 0.512 TFLOPS per matrix engine.
 
 Reduce max does not use MATH_FIDELITY; however reduce average/sum does use MATH_FIDELITY for higher precision, and TFLOPS are calculated by dividing by the MATH_FIDELITY value.

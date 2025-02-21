@@ -202,7 +202,7 @@ void kernel_main() {
     for (uint32_t i = 0; i < demux_fan_out; i++) {
         output_queues[i].init(i + 1, remote_tx_queue_start_addr_words[i], remote_tx_queue_size_words[i],
                               remote_tx_x[i], remote_tx_y[i], remote_tx_queue_id[i], remote_tx_network_type[i],
-                              &input_queue, 1,
+                              &input_queue,
                               output_depacketize[i], output_depacketize_log_page_size[i],
                               output_depacketize_local_sem[i], output_depacketize_downstream_sem[i],
                               output_depacketize_remove_header[i]);

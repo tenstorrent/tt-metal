@@ -93,7 +93,7 @@ def test_fill_pad(
     )
 
     output_tensor = ttnn.fill_implicit_tile_padding(input_tensor, fill_value, memory_config=output_mem_config)
-    padded_torch_output_tensor = ttnn.from_device(output_tensor).to_torch()
+    padded_torch_output_tensor = ttnn.from_device(output_tensor).to_torch_with_padded_shape()
 
     assert_with_pcc(padded_torch_tensor, padded_torch_output_tensor)
 
@@ -160,7 +160,7 @@ def test_fill_pad_complex_sharding(device, fill_value, shape, shard_scheme, dtyp
     )
 
     output_tensor = ttnn.fill_implicit_tile_padding(input_tensor, fill_value, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    padded_torch_output_tensor = ttnn.from_device(output_tensor).to_torch()
+    padded_torch_output_tensor = ttnn.from_device(output_tensor).to_torch_with_padded_shape()
 
     assert_with_pcc(padded_torch_tensor, padded_torch_output_tensor, 0.99)
 
@@ -233,6 +233,6 @@ def test_fill_pad_sharded(device, fill_value, shape, shard_scheme, dtype):
     )
 
     output_tensor = ttnn.fill_implicit_tile_padding(input_tensor, fill_value, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    padded_torch_output_tensor = ttnn.from_device(output_tensor).to_torch()
+    padded_torch_output_tensor = ttnn.from_device(output_tensor).to_torch_with_padded_shape()
 
     assert_with_pcc(padded_torch_tensor, padded_torch_output_tensor, 0.99)

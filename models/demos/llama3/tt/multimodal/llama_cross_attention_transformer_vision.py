@@ -90,6 +90,7 @@ class TtLlamaCrossAttentionTransformerVision(LightweightModule):
         # Sharded weights
         self.vision_projection_weight = as_interleaved_tensor("vision_projection", "weight", dtype, dim=-1)
         self.vision_projection_bias = as_interleaved_tensor("vision_projection", "bias", ttnn.bfloat16, dim=-1)
+        self.vision_projection_bias = ttnn.reshape(self.vision_projection_bias, [1, -1])
 
     def forward(self, images, ar):
         vision_tokens = self.vision_encoder(images, ar)

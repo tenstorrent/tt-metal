@@ -33,6 +33,7 @@
 #include "eth_l1_address_map.h"
 
 using tt::tt_metal::IDevice;
+using tt::tt_metal::distributed::MeshCoordinate;
 using tt::tt_metal::distributed::MeshDevice;
 using tt::tt_metal::distributed::MeshDeviceConfig;
 using tt::tt_metal::distributed::MeshDeviceView;
@@ -453,44 +454,44 @@ int main(int argc, char** argv) {
         switch (n_hops) {
             case 2:
                 return std::vector<IDevice*>{
-                    view.get_device(0, 0),
-                    view.get_device(0, 1),
+                    view.get_device(MeshCoordinate(0, 0)),
+                    view.get_device(MeshCoordinate(0, 1)),
                 };
 
             case 4:
                 return std::vector<IDevice*>{
-                    view.get_device(1, 1),
-                    view.get_device(0, 1),
-                    view.get_device(0, 2),
-                    view.get_device(1, 2),
+                    view.get_device(MeshCoordinate(1, 1)),
+                    view.get_device(MeshCoordinate(0, 1)),
+                    view.get_device(MeshCoordinate(0, 2)),
+                    view.get_device(MeshCoordinate(1, 2)),
                 };
 
             case 8:
                 return std::vector<IDevice*>{
-                    view.get_device(1, 1),
-                    view.get_device(1, 0),
-                    view.get_device(0, 0),
-                    view.get_device(0, 1),
-                    view.get_device(0, 2),
-                    view.get_device(0, 3),
-                    view.get_device(1, 3),
-                    view.get_device(1, 2),
+                    view.get_device(MeshCoordinate(1, 1)),
+                    view.get_device(MeshCoordinate(1, 0)),
+                    view.get_device(MeshCoordinate(0, 0)),
+                    view.get_device(MeshCoordinate(0, 1)),
+                    view.get_device(MeshCoordinate(0, 2)),
+                    view.get_device(MeshCoordinate(0, 3)),
+                    view.get_device(MeshCoordinate(1, 3)),
+                    view.get_device(MeshCoordinate(1, 2)),
                 };
 
             case 12:  // Does an extra loop through the inner ring
                 return std::vector<IDevice*>{
-                    view.get_device(1, 1),
-                    view.get_device(1, 0),
-                    view.get_device(0, 0),
-                    view.get_device(0, 1),
-                    view.get_device(0, 2),
-                    view.get_device(1, 2),
-                    view.get_device(1, 1),
-                    view.get_device(0, 1),
-                    view.get_device(0, 2),
-                    view.get_device(0, 3),
-                    view.get_device(1, 3),
-                    view.get_device(1, 2),
+                    view.get_device(MeshCoordinate(1, 1)),
+                    view.get_device(MeshCoordinate(1, 0)),
+                    view.get_device(MeshCoordinate(0, 0)),
+                    view.get_device(MeshCoordinate(0, 1)),
+                    view.get_device(MeshCoordinate(0, 2)),
+                    view.get_device(MeshCoordinate(1, 2)),
+                    view.get_device(MeshCoordinate(1, 1)),
+                    view.get_device(MeshCoordinate(0, 1)),
+                    view.get_device(MeshCoordinate(0, 2)),
+                    view.get_device(MeshCoordinate(0, 3)),
+                    view.get_device(MeshCoordinate(1, 3)),
+                    view.get_device(MeshCoordinate(1, 2)),
                 };
 
             default: TT_THROW("Unsupported hop_count"); return std::vector<IDevice*>{};

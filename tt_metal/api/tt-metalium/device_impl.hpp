@@ -150,6 +150,8 @@ public:
     void init_command_queue_host() override;
     void init_command_queue_device() override;
 
+    void init_fabric() override;
+
     // Puts device into reset
     bool close() override;
 
@@ -238,6 +240,9 @@ private:
 
     std::vector<std::unique_ptr<Program>> command_queue_programs_;
     bool using_fast_dispatch_ = false;
+
+    // Fabric program includes ethernet router kernel and tensix gatekeeper kernel
+    std::unique_ptr<Program> fabric_program_;
 
     // Work Executor for this device - can asynchronously process host side work for
     // all tasks scheduled on this device

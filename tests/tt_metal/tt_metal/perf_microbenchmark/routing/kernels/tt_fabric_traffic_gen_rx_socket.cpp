@@ -5,10 +5,10 @@
 // clang-format off
 #include "debug/dprint.h"
 #include "dataflow_api.h"
-#include "tt_fabric/hw/inc/tt_fabric.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric.h"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen.hpp"
-#include "tt_fabric/hw/inc/tt_fabric_interface.h"
-#include "tt_fabric/hw/inc/tt_fabric_api.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 // clang-format on
 
 using namespace tt::tt_fabric;
@@ -82,7 +82,7 @@ void kernel_main() {
 
     // make sure fabric node gatekeeper is available.
     tt_fabric_init();
-    fabric_endpoint_init();
+    fabric_endpoint_init<RoutingType::ROUTING_TABLE>();
 
     socket_reader.init(data_buffer_start_addr, data_buffer_size_words);
     DPRINT << "Socket open on  " << dest_device << ENDL();

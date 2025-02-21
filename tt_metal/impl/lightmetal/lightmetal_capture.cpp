@@ -201,7 +201,7 @@ TraceDescriptorByTraceIdOffset to_flatbuffer(
     std::vector<flatbuffers::Offset<tt::tt_metal::flatbuffer::SubDeviceDescriptorMapping>>
         sub_device_descriptor_offsets;
     for (const auto& [sub_device_id, descriptor] : trace_desc.descriptors) {
-        auto descriptor_offset = tt::tt_metal::flatbuffer::CreateTraceDescriptorMetaData(
+        auto descriptor_offset = tt::tt_metal::flatbuffer::CreateTraceWorkerDescriptor(
             builder,
             descriptor.num_completion_worker_cores,
             descriptor.num_traced_programs_needing_go_signal_multicast,

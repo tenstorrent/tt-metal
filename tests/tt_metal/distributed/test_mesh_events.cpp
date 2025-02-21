@@ -50,9 +50,12 @@ TEST_F(MeshEventsTestSuite, ReplicatedAsyncIO) {
         for (std::size_t logical_x = 0; logical_x < buf->device()->num_cols(); logical_x++) {
             for (std::size_t logical_y = 0; logical_y < buf->device()->num_rows(); logical_y++) {
                 readback_vecs.push_back({});
-                auto shard = buf->get_device_buffer(Coordinate(logical_y, logical_x));
+                auto shard = buf->get_device_buffer(MeshCoordinate(logical_y, logical_x));
                 ReadShard(
-                    mesh_device_->mesh_command_queue(1), readback_vecs.back(), buf, Coordinate(logical_y, logical_x));
+                    mesh_device_->mesh_command_queue(1),
+                    readback_vecs.back(),
+                    buf,
+                    MeshCoordinate(logical_y, logical_x));
             }
         }
 
@@ -173,7 +176,7 @@ TEST_F(MeshEventsTestSuite, AsyncWorkloadAndIO) {
                             mesh_device_->mesh_command_queue(1),
                             dst_vec,
                             output_bufs[col_idx * worker_grid_size.y + row_idx],
-                            Coordinate(logical_y, logical_x));
+                            MeshCoordinate(logical_y, logical_x));
                         if (logical_y == 0) {
                             for (int i = 0; i < dst_vec.size(); i++) {
                                 EXPECT_EQ(dst_vec[i].to_float(), (2 * iter + 5));
@@ -224,9 +227,12 @@ TEST_F(MeshEventsTestSuite, CustomDeviceRanges) {
         for (std::size_t logical_x = devices_0.start_coord.x; logical_x < devices_0.end_coord.x; logical_x++) {
             for (std::size_t logical_y = devices_0.start_coord.y; logical_y < devices_0.end_coord.y; logical_y++) {
                 readback_vecs.push_back({});
-                auto shard = buf->get_device_buffer(Coordinate(logical_y, logical_x));
+                auto shard = buf->get_device_buffer(MeshCoordinate(logical_y, logical_x));
                 ReadShard(
-                    mesh_device_->mesh_command_queue(0), readback_vecs.back(), buf, Coordinate(logical_y, logical_x));
+                    mesh_device_->mesh_command_queue(0),
+                    readback_vecs.back(),
+                    buf,
+                    MeshCoordinate(logical_y, logical_x));
             }
         }
 
@@ -237,9 +243,12 @@ TEST_F(MeshEventsTestSuite, CustomDeviceRanges) {
         for (std::size_t logical_x = devices_1.start_coord.x; logical_x < devices_1.end_coord.x; logical_x++) {
             for (std::size_t logical_y = devices_1.start_coord.y; logical_y < devices_1.end_coord.y; logical_y++) {
                 readback_vecs.push_back({});
-                auto shard = buf->get_device_buffer(Coordinate(logical_y, logical_x));
+                auto shard = buf->get_device_buffer(MeshCoordinate(logical_y, logical_x));
                 ReadShard(
-                    mesh_device_->mesh_command_queue(0), readback_vecs.back(), buf, Coordinate(logical_y, logical_x));
+                    mesh_device_->mesh_command_queue(0),
+                    readback_vecs.back(),
+                    buf,
+                    MeshCoordinate(logical_y, logical_x));
             }
         }
         for (auto& vec : readback_vecs) {

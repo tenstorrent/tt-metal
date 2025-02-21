@@ -4,6 +4,10 @@
 
 loguru
 
+# For github workflow unit test failure annotations
+xmltodict
+pytest-github-actions-annotate-failures==0.3.0
+
 # During dep resolution, black may install platformdirs >=4.0.0, which is
 # a breaking dependency for virtualenv installed by pre-commit. virtualenv
 # requires <4.0.0 platformdirs, so we're pinning platformdirs here
@@ -21,6 +25,9 @@ mypy==1.9.0
 
 # For sweep testing
 -r ../../tests/sweep_framework/requirements-sweeps.txt
+
+# For all Llama3 demo tests
+git+https://github.com/tenstorrent/llama-models.git@tt_metal_tag
 
 # testing
 pytest==7.2.2

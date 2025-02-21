@@ -7,7 +7,7 @@
 
 #include <unordered_set>
 
-#include "tt_metal/tt_stl/strong_type.hpp"
+#include <strong_type.hpp>
 
 using MyIntId = tt::stl::StrongType<int, struct MyIntIdTag>;
 using MyStringId = tt::stl::StrongType<std::string, struct MyStringIdTag>;

@@ -67,6 +67,7 @@ FORCE_INLINE
 void eth_noc_semaphore_wait(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val, uint32_t wait_min = 0) {
     uint32_t count = 0;
     while ((*sem_addr) != val) {
+        invalidate_l1_cache();
         if (count == wait_min) {
             run_routing();
             count = 0;
@@ -95,6 +96,7 @@ FORCE_INLINE
 void eth_noc_semaphore_wait_min(volatile tt_l1_ptr uint32_t* sem_addr, uint32_t val, uint32_t wait_min = 0) {
     uint32_t count = 0;
     while ((*sem_addr) < val) {
+        invalidate_l1_cache();
         if (count == wait_min) {
             run_routing();
             count = 0;
@@ -116,6 +118,7 @@ void eth_noc_async_read_barrier() {
     while (!ncrisc_noc_reads_flushed(noc_index)) {
         run_routing();
     }
+    invalidate_l1_cache();
 }
 
 /**
@@ -290,6 +293,7 @@ void eth_wait_for_receiver_done(uint32_t wait_min = 0) {
         1);
     uint32_t count = 0;
     while (erisc_info->channels[0].bytes_sent != 0) {
+        invalidate_l1_cache();
         if (count == wait_min) {
             count = 0;
             run_routing();
@@ -352,6 +356,7 @@ void eth_wait_for_receiver_channel_done(uint32_t channel) {
     uint32_t max = 100000;
 
     while (!eth_is_receiver_channel_send_done(channel)) {
+        invalidate_l1_cache();
         count++;
         if (count > max) {
             count = 0;
@@ -378,6 +383,7 @@ FORCE_INLINE
 void eth_wait_receiver_done(uint32_t wait_min = 0) {
     uint32_t count = 0;
     while (erisc_info->channels[0].bytes_sent != 0) {
+        invalidate_l1_cache();
         if (count == wait_min) {
             count = 0;
             run_routing();
@@ -406,6 +412,7 @@ FORCE_INLINE
 void eth_wait_for_bytes(uint32_t num_bytes, uint32_t wait_min = 0) {
     uint32_t count = 0;
     while (erisc_info->channels[0].bytes_sent != num_bytes) {
+        invalidate_l1_cache();
         if (count == wait_min) {
             count = 0;
             run_routing();
@@ -454,6 +461,7 @@ void eth_wait_for_bytes_on_channel_sync_addr(
     uint32_t count = 0;
     uint32_t num_bytes_sent = eth_channel_syncs->bytes_sent;
     while (num_bytes_sent != num_bytes) {
+        invalidate_l1_cache();
         uint32_t received_this_iter = eth_channel_syncs->bytes_sent;
         if (received_this_iter != num_bytes_sent) {
             // We are currently in the process of receiving data on this channel, so we just just wait a
@@ -594,6 +602,7 @@ void eth_receiver_acknowledge(uint8_t channel = 0) {
 FORCE_INLINE
 void eth_wait_receiver_acknowledge(uint8_t channel = 0) {
     while (erisc_info->channels[channel].bytes_sent != 1) {
+        invalidate_l1_cache();
         run_routing();
     }
 }

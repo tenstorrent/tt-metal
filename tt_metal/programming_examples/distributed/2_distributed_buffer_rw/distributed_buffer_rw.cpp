@@ -19,7 +19,7 @@ int main(int argc, char** argv) {
     using namespace tt::tt_metal::distributed;
     using tt::tt_metal::distributed::ShardedBufferConfig;
 
-    auto mesh_device = MeshDevice::create(MeshDeviceConfig{.mesh_shape{2, 4}});
+    auto mesh_device = MeshDevice::create(MeshDeviceConfig{.mesh_shape = SimpleMeshShape(2, 4)});
     auto& cq = mesh_device->mesh_command_queue();
 
     // Define the shape of the shard and the distributed buffer.

@@ -38,6 +38,14 @@ enum class TargetDevice : std::uint8_t {
     Invalid = 0xFF,
 };
 
+enum class ClusterType : std::uint8_t {
+    INVALID = 0,
+    N300 = 1,    // Production N300
+    T3K = 2,     // Production T3K, built with 4 N300s
+    GALAXY = 3,  // Production Galaxy, all chips with mmio
+    TG = 4,      // Will be deprecated
+};
+
 class Cluster {
 public:
     Cluster& operator=(const Cluster&) = delete;
@@ -50,7 +58,7 @@ public:
     // For TG Galaxy systems, mmio chips are gateway chips that are only used for dispatc, so user_devices are meant for
     // user facing host apis
     size_t number_of_user_devices() const {
-        if (this->is_tg_cluster_) {
+        if (this->cluster_type_ == ClusterType::TG) {
             const auto& chips = this->cluster_desc_->get_all_chips();
             return std::count_if(chips.begin(), chips.end(), [&](const auto& id) {
                 return this->cluster_desc_->get_board_type(id) == BoardType::GALAXY;
@@ -87,8 +95,12 @@ public:
     //! device driver and misc apis
     void verify_sw_fw_versions(int device_id, std::uint32_t sw_version, std::vector<std::uint32_t>& fw_versions) const;
 
-    void deassert_risc_reset_at_core(const tt_cxy_pair& physical_chip_coord) const;
-    void assert_risc_reset_at_core(const tt_cxy_pair& physical_chip_coord) const;
+    void deassert_risc_reset_at_core(
+        const tt_cxy_pair& physical_chip_coord,
+        const TensixSoftResetOptions& soft_resets = TENSIX_DEASSERT_SOFT_RESET) const;
+    void assert_risc_reset_at_core(
+        const tt_cxy_pair& physical_chip_coord,
+        const TensixSoftResetOptions& soft_resets = TENSIX_ASSERT_SOFT_RESET) const;
 
     void write_dram_vec(
         std::vector<uint32_t>& vec, tt_target_dram dram, uint64_t addr, bool small_access = false) const;
@@ -164,6 +176,8 @@ public:
     // Returns set of logical active ethernet coordinates on chip
     // If skip_reserved_tunnel_cores is true, will return cores that dispatch is not using,
     // intended for users to grab available eth cores for testing
+    // `skip_reserved_tunnel_cores` is ignored on BH because there are no ethernet cores used for Fast Dispatch
+    // tunneling
     std::unordered_set<CoreCoord> get_active_ethernet_cores(
         chip_id_t chip_id, bool skip_reserved_tunnel_cores = false) const;
 
@@ -245,6 +259,8 @@ public:
     // Returns Wormhole chip board type.
     BoardType get_board_type(chip_id_t chip_id) const;
 
+    ClusterType get_cluster_type() const;
+
     bool is_worker_core(const CoreCoord& core, chip_id_t chip_id) const;
     bool is_ethernet_core(const CoreCoord& core, chip_id_t chip_id) const;
     CoreCoord get_logical_ethernet_core_from_virtual(chip_id_t chip, CoreCoord core) const;
@@ -306,7 +322,7 @@ private:
     std::unordered_map<BoardType, std::unordered_map<CoreCoord, int32_t>> virtual_routing_to_profiler_flat_id_;
     // Flag to tell whether we are on a TG type of system.
     // If any device has to board type of GALAXY, we are on a TG cluster.
-    bool is_tg_cluster_;
+    ClusterType cluster_type_ = ClusterType::INVALID;
 
     // Tunnels setup in cluster
     std::map<chip_id_t, std::vector<std::vector<chip_id_t>>> tunnels_from_mmio_device = {};

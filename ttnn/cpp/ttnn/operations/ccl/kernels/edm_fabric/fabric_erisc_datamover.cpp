@@ -311,11 +311,18 @@ struct WriteTransactionIdTracker {
     FORCE_INLINE bool transaction_flushed(tt::fabric::BufferIndex buffer_index) const {
         if constexpr (BOTH_PARAMS_ARE_POW2) {
             auto trid = this->get_buffer_slot_trid(buffer_index);
-            return ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc_index, trid);
+            return ncrisc_noc_nonposted_write_with_transaction_id_sent(noc_index, trid);
         } else {
             // TODO: should be able to remove compare against INVALID_TRID
             auto trid = this->get_buffer_slot_trid(buffer_index);
-            return trid == INVALID_TRID || ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc_index, trid);
+            return trid == INVALID_TRID || ncrisc_noc_nonposted_write_with_transaction_id_sent(noc_index, trid);
+        }
+    }
+    FORCE_INLINE void all_buffer_slot_transactions_acked() const {
+        for (uint8_t i = 0; i < NUM_CHANNELS; ++i) {
+            tt::fabric::BufferIndex buffer_index(i);
+            auto trid = this->get_buffer_slot_trid(buffer_index);
+            noc_async_write_barrier_with_trid(trid, noc_index);
         }
     }
     private:
@@ -886,7 +893,8 @@ void run_fabric_edm_main_loop(
     volatile tt::fabric::EdmFabricReceiverChannelCounters *receiver_channel_counters_ptr,
     std::array<volatile tt::fabric::EdmFabricSenderChannelCounters *, NUM_SENDER_CHANNELS> sender_channel_counters_ptrs,
     PacketHeaderRecorder &receiver_channel_packet_recorder,
-    std::array<PacketHeaderRecorder, NUM_SENDER_CHANNELS> &sender_channel_packet_recorders) {
+    std::array<PacketHeaderRecorder, NUM_SENDER_CHANNELS> &sender_channel_packet_recorders,
+    WriteTransactionIdTracker<RECEIVER_NUM_BUFFERS, NUM_TRANSACTION_IDS> &receiver_channel_trid_tracker) {
     std::array<SenderState, NUM_SENDER_CHANNELS> sender_states = {
         SenderState::SENDER_WAIT_WORKER_HANDSHAKE, SenderState::SENDER_WAIT_WORKER_HANDSHAKE};
     size_t sender_channel_index = 0;
@@ -904,8 +912,6 @@ void run_fabric_edm_main_loop(
     OutboundReceiverChannelPointers<RECEIVER_NUM_BUFFERS> outbound_to_receiver_channel_pointers;
     ReceiverChannelPointers<RECEIVER_NUM_BUFFERS> receiver_channel_pointers;
     std::array<bool, NUM_SENDER_CHANNELS> channel_connection_established = {false, false};
-
-    WriteTransactionIdTracker<RECEIVER_NUM_BUFFERS, NUM_TRANSACTION_IDS> receiver_channel_trid_tracker;
 
     // This value defines the number of loop iterations we perform of the main control sequence before exiting
     // to check for termination and context switch. Removing the these checks from the inner loop can drastically
@@ -964,7 +970,8 @@ void run_fabric_edm_main_loop(
         } else {
             if (did_nothing_count++ > SWITCH_INTERVAL) {
                 did_nothing_count = 0;
-                run_routing();
+                // shouldn't do noc counter sync since we are not incrementing them
+                run_routing_without_noc_sync();
             }
         }
     }
@@ -1212,6 +1219,9 @@ void kernel_main() {
     }
 
 
+    WriteTransactionIdTracker<RECEIVER_NUM_BUFFERS, NUM_TRANSACTION_IDS> receiver_channel_trid_tracker;
+
+
     if (has_downstream_edm_buffer_connection) {
         downstream_edm_noc_interface.open();
         *downstream_edm_noc_interface.from_remote_buffer_slot_rdptr_ptr = 0;
@@ -1240,7 +1250,8 @@ void kernel_main() {
         receiver_channel_counters_ptr,
         {sender_channel_0_counters_ptr, sender_channel_1_counters_ptr},
         receiver_channel_packet_recorder,
-        sender_channel_packet_recorders);
+        sender_channel_packet_recorders,
+        receiver_channel_trid_tracker);
 
 
     if constexpr (persistent_mode) {
@@ -1250,6 +1261,11 @@ void kernel_main() {
         *reinterpret_cast<volatile uint32_t*>(local_sender_channel_0_connection_buffer_index_addr) = 99;
         *sender0_worker_semaphore_ptr = 99;
     }
+
+    // make sure all the noc transactions are acked before re-init the noc counters
+    receiver_channel_trid_tracker.all_buffer_slot_transactions_acked();
+    // re-init the noc counters as the noc api used is not incrementing them
+    ncrisc_noc_counters_init();
 
     DPRINT << "EDM DONE\n";
     WAYPOINT("DONE");
