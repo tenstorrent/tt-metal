@@ -44,6 +44,9 @@ void copy_sticks_async_temp_write(
     int i = 0;
     int length = config_data[i + 2];
 
+    const uint64_t base_addr = get_noc_addr(my_noc_x, my_noc_y, out_base_l1_addr);
+    uint64_t dst_addr = base_addr;
+
     while (length) {
         uint16_t noc_x = ((is_block_sharded && !is_col_major) || is_width_sharded) ? my_noc_x : config_data[i + 0];
         uint16_t noc_y = ((is_block_sharded && is_col_major) || is_width_sharded) ? my_noc_y : config_data[i + 1];
@@ -52,8 +55,6 @@ void copy_sticks_async_temp_write(
 
         DPRINT << "noc_x: " << noc_x << " noc_y: " << noc_y << " length: " << length << ENDL();
 
-        const uint64_t base_addr = get_noc_addr(noc_x, noc_y, is_read ? in_base_l1_addr : out_base_l1_addr);
-        uint64_t dst_addr = base_addr;
         for (uint16_t j = 0; j < length; j += 3) {
             uint16_t src_local_idx = config_data[i + j + 0];
             uint16_t nsticks = config_data[i + j + 2];
@@ -108,6 +109,8 @@ void copy_sticks_async_temp_read(
     int i = 0;
     int length = config_data[i + 2];
 
+    uint64_t src_addr = in_base_l1_addr;
+
     while (length) {
         uint16_t noc_x = ((is_block_sharded && !is_col_major) || is_width_sharded) ? my_noc_x : config_data[i + 0];
         uint16_t noc_y = ((is_block_sharded && is_col_major) || is_width_sharded) ? my_noc_y : config_data[i + 1];
@@ -116,8 +119,7 @@ void copy_sticks_async_temp_read(
 
         DPRINT << "noc_x: " << noc_x << " noc_y: " << noc_y << " length: " << length << ENDL();
 
-        const uint64_t base_addr = get_noc_addr(noc_x, noc_y, is_read ? in_base_l1_addr : out_base_l1_addr);
-        uint64_t src_addr = in_base_l1_addr;
+        const uint64_t base_addr = get_noc_addr(noc_x, noc_y, out_base_l1_addr);
         for (uint16_t j = 0; j < length; j += 3) {
             uint16_t dst_local_idx = config_data[i + j + 1];
             uint16_t nsticks = config_data[i + j + 2];
@@ -290,10 +292,9 @@ void kernel_main() {
         semaphore_addr = get_semaphore(semaphore_id);
     }
 
-    DPRINT << "TEMP COPY" << ENDL();
-
     cb_wait_front(in_cb_id, in_nsticks);  // make sure untilized data is available
     if constexpr (remote_config_cb_id) {
+        DPRINT << "TEMP COPY" << ENDL();
         const uint32_t temp_base_l1_addr = get_write_ptr(out_cb_id);
         uint32_t config_data_l1_addr = get_read_ptr(remote_config_cb_id);
         const tt_l1_ptr uint16_t* config_data = reinterpret_cast<const tt_l1_ptr uint16_t*>(config_data_l1_addr);
@@ -315,9 +316,8 @@ void kernel_main() {
             in_place);
     }
 
-    DPRINT << "SEMAPHORE WAIT" << ENDL();
-
     if constexpr (in_place == true && remote_ref_counts_cb_id != 0) {
+        // DPRINT << "SEMAPHORE WAIT" << ENDL();
         uint32_t config_data_l1_addr = get_read_ptr(remote_ref_counts_cb_id);
         const tt_l1_ptr uint16_t* config_data = reinterpret_cast<const tt_l1_ptr uint16_t*>(config_data_l1_addr);
 
@@ -330,9 +330,8 @@ void kernel_main() {
         noc_semaphore_wait(my_semaphore_noc_addr_ptr, remote_refs_to_me);
     }
 
-    DPRINT << "LOCAL COPY" << ENDL();
-
     if constexpr (local_config_cb_id) {
+        // DPRINT << "LOCAL COPY" << ENDL();
         uint32_t config_data_l1_addr = get_read_ptr(local_config_cb_id);
         const tt_l1_ptr uint16_t* config_data = reinterpret_cast<const tt_l1_ptr uint16_t*>(config_data_l1_addr);
         copy_sticks_async<
@@ -344,9 +343,8 @@ void kernel_main() {
             is_col_major>(config_data, my_noc_x, my_noc_y, in_base_l1_addr, out_base_l1_addr, noc_00_x, noc_00_y);
     }
 
-    DPRINT << "REMOTE COPY" << ENDL();
-
     if constexpr (remote_config_cb_id) {
+        DPRINT << "REMOTE COPY" << ENDL();
         const uint32_t temp_base_l1_addr = get_write_ptr(out_cb_id);
         uint32_t config_data_l1_addr = get_read_ptr(remote_config_cb_id);
         const tt_l1_ptr uint16_t* config_data = reinterpret_cast<const tt_l1_ptr uint16_t*>(config_data_l1_addr);
