@@ -9,6 +9,7 @@
 #include "dev_msgs.h"
 #include "stream_io_map.h"
 #include "firmware_common.h"
+#include "dataflow_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #include "risc_attribs.h"
 #include "circular_buffer.h"

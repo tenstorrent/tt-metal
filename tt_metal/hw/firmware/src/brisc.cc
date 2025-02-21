@@ -17,6 +17,7 @@
 #include "tdma_xmov.h"
 #include "noc_nonblocking_api.h"
 #include "firmware_common.h"
+#include "dataflow_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #include "dev_msgs.h"
 #include "risc_attribs.h"

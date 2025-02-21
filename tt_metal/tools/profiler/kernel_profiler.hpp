@@ -9,7 +9,7 @@
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_ERISC) || \
     defined(COMPILE_FOR_IDLE_ERISC)
 #include "risc_common.h"
-#include "dataflow_api.h"
+#include "dataflow_api_addrgen.h"
 #else
 #include "ckernel.h"
 #endif
@@ -192,6 +192,10 @@ inline void __attribute__((always_inline)) noc_async_write_posted(
         noc, write_cmd_buf, src_local_l1_addr, dst_noc_addr, size, NOC_UNICAST_WRITE_VC, false, false, 1, true, true);
     WAYPOINT("NAWD");
 }
+
+FORCE_INLINE
+void noc_async_flush_posted_writes(uint8_t noc = noc_index) { while (!ncrisc_noc_posted_writes_sent(noc)); }
+
 #endif
 
 __attribute__((noinline)) void finish_profiler() {
@@ -253,7 +257,7 @@ __attribute__((noinline)) void finish_profiler() {
         }
     }
 
-    noc_async_posted_writes_flushed();
+    noc_async_flush_posted_writes();
     profiler_control_buffer[RUN_COUNTER]++;
     profiler_control_buffer[PROFILER_DONE] = 1;
 #endif
@@ -298,7 +302,7 @@ __attribute__((noinline)) void quick_push() {
             dram_bank_dst_noc_addr,
             wIndex * sizeof(uint32_t));
 
-        noc_async_posted_writes_flushed();
+        noc_async_flush_posted_writes();
         profiler_control_buffer[HOST_BUFFER_END_INDEX_BR_ER + myRiscID] = currEndIndex;
 
     } else {

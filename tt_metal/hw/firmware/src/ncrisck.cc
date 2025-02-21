@@ -15,6 +15,7 @@
 #include "risc_perf.h"
 #endif
 #include "firmware_common.h"
+#include "dataflow_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #include "tensix_functions.h"
 #include "c_tensix_core.h"
