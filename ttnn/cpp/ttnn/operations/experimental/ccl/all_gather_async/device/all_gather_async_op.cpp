@@ -317,36 +317,40 @@ Tensor all_gather_async(
 
     std::vector<GlobalSemaphore> semaphores = multi_device_global_semaphore.global_semaphores;
 
-    operation::launch_op(
-        [dim,
-         num_links,
-         num_devices,
-         memory_config,
-         devices,
-         ccl_topology,
-         semaphores,
-         sub_device_id,
-         enable_persistent_fabric_mode](
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
-            const auto& input_tensor = input_tensors.at(0);
+    if (!uses_2d_fabric) {
+        operation::launch_op(
+            [dim,
+             num_links,
+             num_devices,
+             memory_config,
+             devices,
+             ccl_topology,
+             semaphores,
+             sub_device_id,
+             enable_persistent_fabric_mode](
+                const std::vector<Tensor>& input_tensors,
+                const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+                const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
+                const auto& input_tensor = input_tensors.at(0);
 
-            return operation::run(
-                ttnn::ccl::all_gather_detail::create_all_gather_async_struct(
-                    input_tensor,
-                    dim,
-                    num_links,
-                    memory_config,
-                    devices,
-                    ccl_topology,
-                    semaphores,
-                    sub_device_id,
-                    enable_persistent_fabric_mode),
-                {input_tensor});
-        },
-        {input_tensor},
-        output_tensors);
+                return operation::run(
+                    ttnn::ccl::all_gather_detail::create_all_gather_async_struct(
+                        input_tensor,
+                        dim,
+                        num_links,
+                        memory_config,
+                        devices,
+                        ccl_topology,
+                        semaphores,
+                        sub_device_id,
+                        enable_persistent_fabric_mode),
+                    {input_tensor});
+            },
+            {input_tensor},
+            output_tensors);
+    } else {
+        ;  // Perform 2D fabric operation
+    }
     return output_tensors.at(0);
 }
 
@@ -384,44 +388,47 @@ Tensor all_gather_async(
     CoreCoord grid_size = devices[0]->compute_with_storage_grid_size();
     auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     std::vector<GlobalSemaphore> semaphores = multi_device_global_semaphore.global_semaphores;
+    if (!uses_2d_fabric) {
+        operation::launch_op(
+            [gather_dim,
+             num_preferred_links,
+             memory_config,
+             mesh_view,
+             cluster_axis,
+             num_devices,
+             topology,
+             semaphores,
+             sub_device_id,
+             enable_persistent_fabric_mode](
+                const std::vector<Tensor>& input_tensors,
+                const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+                const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
+                const auto& input_device_tensor = input_tensors.at(0);
 
-    operation::launch_op(
-        [gather_dim,
-         num_preferred_links,
-         memory_config,
-         mesh_view,
-         cluster_axis,
-         num_devices,
-         topology,
-         semaphores,
-         sub_device_id,
-         enable_persistent_fabric_mode](
-            const std::vector<Tensor>& input_tensors,
-            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
-            const auto& input_device_tensor = input_tensors.at(0);
+                const auto coordinate = mesh_view.find_device(input_device_tensor.device()->id());
+                std::vector<IDevice*> devices = (cluster_axis == 0) ? mesh_view.get_devices_on_column(coordinate.col)
+                                                                    : mesh_view.get_devices_on_row(coordinate.row);
 
-            const auto coordinate = mesh_view.find_device(input_device_tensor.device()->id());
-            std::vector<IDevice*> devices = (cluster_axis == 0) ? mesh_view.get_devices_on_column(coordinate.col)
-                                                               : mesh_view.get_devices_on_row(coordinate.row);
+                const auto& input_tensor = input_tensors.at(0);
 
-            const auto& input_tensor = input_tensors.at(0);
-
-            return operation::run(
-                ttnn::ccl::all_gather_detail::create_all_gather_async_struct(
-                    input_device_tensor,
-                    gather_dim,
-                    num_preferred_links.has_value() ? num_preferred_links.value() : 1,
-                    memory_config,
-                    devices,
-                    topology,
-                    semaphores,
-                    sub_device_id,
-                    enable_persistent_fabric_mode),
-                {input_tensor});
-        },
-        {input_tensor},
-        output_tensors);
+                return operation::run(
+                    ttnn::ccl::all_gather_detail::create_all_gather_async_struct(
+                        input_device_tensor,
+                        gather_dim,
+                        num_preferred_links.has_value() ? num_preferred_links.value() : 1,
+                        memory_config,
+                        devices,
+                        topology,
+                        semaphores,
+                        sub_device_id,
+                        enable_persistent_fabric_mode),
+                    {input_tensor});
+            },
+            {input_tensor},
+            output_tensors);
+    } else {
+        ;  // Perform 2D fabric operation
+    }
     return output_tensors.at(0);
 }
 
