@@ -35,6 +35,17 @@ class Test(BaseModel):
     tags: Optional[dict] = Field(None, description="Tags associated with the test, as key/value pairs.")
 
 
+class JobStatus(str, Enum):
+    success = "success"
+    failure = "failure"
+    skipped = "skipped"
+    cancelled = "cancelled"
+    neutral = "neutral"
+    unknown = "unknown"
+    timed_out = "timed_out"
+    action_required = "action_required"
+
+
 class Job(BaseModel):
     """
     Contains information about the execution of CI/CD jobs, each one associated with a
@@ -60,6 +71,11 @@ class Job(BaseModel):
         description="Job execution success, independently from the test success "
         "criteria. Failure mechanisms that are only descriptive of the "
         "job itself."
+    )
+    job_status: Optional[JobStatus] = Field(
+        None,
+        description="Job execution status, possible statuses include success, failure, "
+        "skipped, cancelled, neutral, etc.",
     )
     docker_image: Optional[str] = Field(None, description="Name of the Docker image used for the CI job.")
     is_build_job: bool = Field(description="Flag identifying if the job is a software build.")
