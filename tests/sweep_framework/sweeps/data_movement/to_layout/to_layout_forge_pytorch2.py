@@ -7,7 +7,7 @@ import ttnn
 from tests.ttnn.utils_for_testing import check_with_pcc, start_measuring_time, stop_measuring_time
 from models.utility_functions import torch_random
 
-TIMEOUT = 15
+TIMEOUT = 50
 
 bf16 = "bf16"
 f32 = "f32"

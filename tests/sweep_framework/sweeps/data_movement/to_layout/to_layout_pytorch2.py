@@ -78,13 +78,14 @@ def run(
         output_layout = ttnn.TILE_LAYOUT
     torch_dtype = dtype_dict[dtype]
     ttnn_dtype = dtype
-    # print(dtype)
-    # print(torch_dtype)
-    # print(input_layout)
-    # print(output_layout)
+    print("Start a sweep test set! llong")
+    print(dtype)
+    print(torch_dtype)
+    print(input_layout)
+    print(output_layout)
 
     tensor_shape = tuple(to_layout_specs["shape"])
-    # print(tensor_shape)
+    print(tensor_shape)
     torch_input_tensor = None
     # create random tensor in PyTorch
     # if torch dtype is interger, use randint to create tensor
