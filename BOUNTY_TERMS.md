@@ -97,7 +97,7 @@ These Terms shall be governed by and construed in accordance with the laws of th
 
 These Terms will be binding on and will inure to the benefit of the legal representatives, successors and assigns of the parties hereto. These Terms (and any policies referenced herein and incorporated by reference) constitute the entire agreement between you and us with respect to the subject matter hereof, and you have not relied upon any promises or representations by us with respect to the subject matter except as set forth herein. You may not assign these Terms or assign any rights or delegate any obligations hereunder, in whole or in part, whether voluntarily or by operation of law. The governing language of these Terms is English. A person who is not a party to these Terms has no rights to enforce, or to enjoy the benefit of, any term of these Terms.
 
-**Exhibit A – Tenstorrent Bug Bounty Rewards Chart**
+**Exhibit A – Tenstorrent Bounty Rewards Chart**
 
 | Category | Definition | Examples |  Payment Range  (US Dollars) |
 | :---- | :---- | :---- | :---- |
