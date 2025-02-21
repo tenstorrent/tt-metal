@@ -394,7 +394,6 @@ Pool2D::MultiCore::cached_program_t pool2d_multi_core_sharded_with_halo_v2_impl_
         in_nblocks_c,
         max_rows_for_reduction};
 
-    // auto reduce_op = tt::tt_metal::ReduceOpMath::MAX;
     auto reduce_op = get_reduce_op(pool_type);
     auto reduce_dim = tt::tt_metal::ReduceOpDim::H;
 
