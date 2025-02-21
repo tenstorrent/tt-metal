@@ -59,6 +59,7 @@ struct SubdeviceInfo {
     std::unordered_map<chip_id_t, SubDeviceId> fabric_subdevice_id;
 };
 
+using tt::tt_metal::distributed::MeshCoordinate;
 using tt::tt_metal::distributed::MeshDevice;
 using tt::tt_metal::distributed::MeshDeviceConfig;
 using tt::tt_metal::distributed::MeshDeviceView;
@@ -1126,7 +1127,10 @@ int TestLineFabricEntrypoint(
 
     // build a line of devices
     std::vector<IDevice*> devices = {
-        view.get_device(0, 0), view.get_device(0, 1), view.get_device(0, 2), view.get_device(0, 3)};
+        view.get_device(MeshCoordinate(0, 0)),
+        view.get_device(MeshCoordinate(0, 1)),
+        view.get_device(MeshCoordinate(0, 2)),
+        view.get_device(MeshCoordinate(0, 3))};
     std::vector<Program> programs(enable_persistent_fabric ? 1 : devices.size());
     std::optional<SubdeviceInfo> subdevice_managers = std::nullopt;
     std::optional<std::vector<Program>> fabric_programs;
@@ -1207,8 +1211,8 @@ int TestLoopbackEntrypoint(
     TestMeshDevice test_fixture;
     auto view = test_fixture.mesh_device_->get_view();
 
-    const auto& device_0 = view.get_device(0, 0);
-    const auto& device_1 = view.get_device(0, 1);
+    const auto& device_0 = view.get_device(MeshCoordinate(0, 0));
+    const auto& device_1 = view.get_device(MeshCoordinate(0, 1));
 
     const auto& active_eth_cores = device_0->get_active_ethernet_cores(true);
     auto eth_sender_core_iter = active_eth_cores.begin();
@@ -1390,7 +1394,7 @@ bool TestMultiInputReaderKernel(
     std::vector<IDevice*> devices;
     devices.reserve(fabric_num_devices);
     for (size_t i = 0; i < fabric_num_devices; i++) {
-        devices.push_back(view.get_device(0, i));
+        devices.push_back(view.get_device(MeshCoordinate(0, i)));
     }
 
     std::vector<Program> programs(enable_persistent_fabric ? 1 : devices.size());
@@ -1681,7 +1685,7 @@ bool RunPipelinedWorkersTest(
     TestMeshDevice test_fixture;
     auto view = test_fixture.mesh_device_->get_view();
 
-    IDevice* device = view.get_device(0, 0);
+    IDevice* device = view.get_device(MeshCoordinate(0, 0));
     ;
 
     // General setup is as follows:
@@ -1975,7 +1979,10 @@ void run_all_gather_with_persistent_fabric(const size_t dim, const size_t num_li
 
     // build a line of devices
     std::vector<IDevice*> devices = {
-        view.get_device(0, 0), view.get_device(0, 1), view.get_device(0, 2), view.get_device(0, 3)};
+        view.get_device(MeshCoordinate(0, 0)),
+        view.get_device(MeshCoordinate(0, 1)),
+        view.get_device(MeshCoordinate(0, 2)),
+        view.get_device(MeshCoordinate(0, 3))};
     const size_t num_devices = devices.size();
     TT_FATAL(
         test_expected_num_devices == num_devices,
@@ -2099,7 +2106,10 @@ void RunWriteThroughputStabilityTestWithPersistentFabric(
 
     // Get the inner 4 device ring on a WH T3K device so that we can use both links for all devices
     std::vector<IDevice*> devices_ = {
-        view.get_device(0, 1), view.get_device(0, 2), view.get_device(1, 2), view.get_device(1, 1)};
+        view.get_device(MeshCoordinate(0, 1)),
+        view.get_device(MeshCoordinate(0, 2)),
+        view.get_device(MeshCoordinate(1, 2)),
+        view.get_device(MeshCoordinate(1, 1))};
     std::vector<IDevice*> devices;
     devices.reserve(line_size);
     for (size_t i = 0; i < line_size; i++) {
