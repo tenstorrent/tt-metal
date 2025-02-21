@@ -27,7 +27,7 @@ MODEL_NAME = "distil-whisper/distil-large-v3"
     (
         [1500, False, False, False],
         [32, False, True, False],
-        [1, False, True, True],
+        [1, False, False, True],
         [1, True, False, False],
     ),
     ids=[
@@ -59,10 +59,6 @@ def test_whisper_attention(
         dropout=config.attention_dropout,
         is_decoder=is_decode,
     ).eval()
-    torch_hidden_states = torch_random((batch_size, sequence_size, config.d_model), -0.1, 0.1, dtype=torch.float32)
-    ttnn_hidden_states = ttnn.from_torch(
-        torch_hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
-    )
 
     if use_encoder_states:
         torch_encoder_states = torch_random((batch_size, sequence_size, config.d_model), -0.1, 0.1, dtype=torch.float32)
@@ -86,18 +82,13 @@ def test_whisper_attention(
         torch_attention_mask = None
         ttnn_attention_mask = None
 
+    past_key_values = None
     if use_kv_cache:
         kv_cache = init_kv_cache(config, device, max_batch_size=batch_size, max_seq_len=512, n_layers=1)[0]
         current_decode_pos = ttnn.from_torch(torch.zeros(batch_size), device=device, dtype=ttnn.int32)
-
-    torch_output, _, past_key_values = model(
-        torch_hidden_states,
-        attention_mask=torch_attention_mask,
-        key_value_states=torch_encoder_states,
-    )
-    if is_decode and use_kv_cache:
-        past_keys = past_key_values[0]
-        past_values = past_key_values[1]
+        generation_length = 5
+    else:
+        generation_length = 1
 
     ttnn_parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
@@ -106,48 +97,66 @@ def test_whisper_attention(
         device=device,
         prefix="encoder_attn" if use_encoder_states else "",
     )
-    output = ttnn_model.whisper_attention(
-        config,
-        ttnn_hidden_states,
-        ttnn_attention_mask,
-        is_decode=(not use_encoder_states),
-        encoder_hidden_states=ttnn_encoder_states,
-        kv_cache=kv_cache if use_kv_cache else None,
-        current_decode_pos=current_decode_pos if use_kv_cache else None,
-        parameters=ttnn_parameters,
-    )
-    output = ttnn.to_torch(output)
 
     expec_out_pcc, expec_k_cache_pcc, expec_v_cache_pcc = 0.999, 0.999, 0.999
     does_pass = True
+    for i in range(generation_length):
+        torch_hidden_states = torch_random((batch_size, sequence_size, config.d_model), -0.1, 0.1, dtype=torch.float32)
+        ttnn_hidden_states = ttnn.from_torch(
+            torch_hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        )
 
-    pcc_passed, output_pcc = comp_pcc(torch_output, output, expec_out_pcc)
-    logger.info(f"Output PCC: {output_pcc}")
-    if not pcc_passed:
-        does_pass = False
-        logger.warning(f"Output PCC {output_pcc} is lower than {expec_out_pcc}")
+        torch_output, _, past_key_values = model(
+            torch_hidden_states,
+            attention_mask=torch_attention_mask,
+            key_value_states=torch_encoder_states,
+            past_key_value=past_key_values,
+        )
+        if is_decode and use_kv_cache:
+            past_keys = past_key_values[0]
+            past_values = past_key_values[1]
 
-    if not use_kv_cache:
-        assert does_pass, f"Output PCC {output_pcc} is lower than expected {expec_out_pcc}"
+        output = ttnn_model.whisper_attention(
+            config,
+            ttnn_hidden_states,
+            ttnn_attention_mask,
+            is_decode=(not use_encoder_states),
+            encoder_hidden_states=ttnn_encoder_states,
+            kv_cache=kv_cache if use_kv_cache else None,
+            current_decode_pos=current_decode_pos if use_kv_cache else None,
+            parameters=ttnn_parameters,
+        )
+        output = ttnn.to_torch(output)
+
+        pcc_passed, output_pcc = comp_pcc(torch_output, output, expec_out_pcc)
+        logger.info(f"[pos={i}] Output PCC: {output_pcc}")
+        if not pcc_passed:
+            does_pass = False
+            logger.warning(f"[pos={i}] Output PCC {output_pcc} is lower than {expec_out_pcc}")
+
+        if use_kv_cache:
+            k_cache = ttnn.to_torch(kv_cache[0])[:, :, : (i + 1), :]
+            v_cache = ttnn.to_torch(kv_cache[1])[:, :, : (i + 1), :]
+
+            pcc_passed, k_cache_pcc = comp_pcc(past_keys, k_cache, expec_k_cache_pcc)
+            logger.info(f"[pos={i}] K Cache PCC: {k_cache_pcc}")
+            if not pcc_passed:
+                does_pass = False
+                logger.warning(f"[pos={i}] K Cache PCC {k_cache_pcc} is lower than {expec_k_cache_pcc}")
+
+            pcc_passed, v_cache_pcc = comp_pcc(past_values, v_cache, expec_v_cache_pcc)
+            logger.info(f"[pos={i}] V Cache PCC: {v_cache_pcc}")
+            if not pcc_passed:
+                does_pass = False
+                logger.warning(f"[pos={i}] V Cache PCC {v_cache_pcc} is lower than {expec_v_cache_pcc}")
+
+            # Update current decode pos
+            ttnn.plus_one(current_decode_pos)
+
+    if does_pass:
+        logger.info("All PCC checks passed!")
     else:
-        k_cache = ttnn.to_torch(kv_cache[0])[:, :, :1, :]
-        v_cache = ttnn.to_torch(kv_cache[1])[:, :, :1, :]
-
-        pcc_passed, k_cache_pcc = comp_pcc(past_keys, k_cache, expec_k_cache_pcc)
-        logger.info(f"K Cache PCC: {k_cache_pcc}")
-        if not pcc_passed:
-            does_pass = False
-            logger.warning(f"K Cache PCC {k_cache_pcc} is lower than {expec_k_cache_pcc}")
-
-        pcc_passed, v_cache_pcc = comp_pcc(past_values, v_cache, expec_v_cache_pcc)
-        logger.info(f"V Cache PCC: {v_cache_pcc}")
-        if not pcc_passed:
-            does_pass = False
-            logger.warning(f"V Cache PCC {v_cache_pcc} is lower than {expec_v_cache_pcc}")
-
-        assert (
-            does_pass
-        ), f"One of Output {output_pcc} / K Cache {k_cache_pcc} / V Cache PCC {v_cache_pcc} is lower than expected {expec_out_pcc} / {expec_k_cache_pcc} / {expec_v_cache_pcc}"
+        assert does_pass, f"PCC is lower than expected for some of the outputs. Check warnings!"
 
 
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
