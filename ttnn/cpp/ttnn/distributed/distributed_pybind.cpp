@@ -15,6 +15,7 @@
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_impl_wrapper.hpp"
 #include <tt-metalium/command_queue.hpp>
 
 // This is required for automatic conversions, as in the creation of mesh devices
@@ -689,7 +690,14 @@ void py_module(py::module& module) {
         [](const Tensor& tensor,
            const TensorToMesh& mapper,
            std::optional<std::reference_wrapper<MeshDevice>> mesh_device) -> Tensor {
-            return distribute_tensor(from_device(tensor), mapper, mesh_device);
+            Tensor cpu_tensor;
+            if (tensor.storage_type() == StorageType::MULTI_DEVICE_HOST) {
+                cpu_tensor = tt::tt_metal::tensor_impl::to_host_mesh_tensor_wrapper(tensor, true);
+            } else {
+                cpu_tensor = from_device(tensor);
+            }
+
+            return distribute_tensor(cpu_tensor, mapper, mesh_device);
         },
         py::arg("tensor"),
         py::arg("mapper"),
@@ -697,14 +705,16 @@ void py_module(py::module& module) {
     module.def(
         "aggregate_tensor",
         [](const Tensor& tensor, const MeshToTensor& composer) -> Tensor {
-            return aggregate_tensor(from_device(tensor), composer);
+            Tensor cpu_tensor = from_device(tensor);
+            return aggregate_tensor(cpu_tensor, composer);
         },
         py::arg("tensor"),
         py::arg("composer"));
     module.def(
         "aggregate_tensor",
         [](const std::vector<Tensor>& tensors, const MeshToTensor& composer) -> Tensor {
-            return aggregate_tensor(from_device(aggregate_as_tensor(tensors, AllGatherTensor{})), composer);
+            Tensor cpu_tensor = from_device(aggregate_as_tensor(tensors, AllGatherTensor{}));
+            return aggregate_tensor(cpu_tensor, composer);
         },
         py::arg("tensor"),
         py::arg("composer"));
