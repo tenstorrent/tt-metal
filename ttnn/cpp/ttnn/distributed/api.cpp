@@ -199,19 +199,11 @@ Tensor get_device_tensor(const Tensor& multi_device_tensor, const IDevice* devic
 
 bool is_host_mesh_tensor(const Tensor& tensor) { return tensor.storage_type() == StorageType::MULTI_DEVICE_HOST; }
 
-bool is_multi_device_tensor(const Tensor& tensor) {
-    TT_THROW("TODO(jchu): Not implemented");
-    return /*tensor.storage_type() == StorageType::MULTI_DEVICE or */
-        tensor.storage_type() == StorageType::MULTI_DEVICE_HOST;
-}
+bool is_multi_device_tensor(const Tensor& tensor) { return tensor.storage_type() == StorageType::MULTI_DEVICE_HOST; }
 
 bool is_mesh_buffer_tensor(const Tensor& tensor) {
-    TT_THROW("TODO(jchu): Not implemented");
-    /*
-    auto* multi_device_storage = std::get_if<MultiDeviceStorage>(&tensor.get_storage());
-    return multi_device_storage != nullptr && multi_device_storage->mesh_buffer != nullptr;
-    */
-    return false;
+    auto* device_storage = std::get_if<DeviceStorage>(&tensor.get_storage());
+    return device_storage != nullptr && device_storage->mesh_buffer != nullptr;
 }
 
 std::vector<Tensor> get_tensors_from_multi_device_storage(const Tensor& multi_device_tensor) {

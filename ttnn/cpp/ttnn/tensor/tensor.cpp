@@ -273,7 +273,9 @@ void Tensor::deallocate_impl(bool force, bool deallocation_through_destructor) {
                             [force, attr](auto&& s) {
                                 using type = std::decay_t<decltype(s)>;
                                 if constexpr (std::is_same_v<type, DeviceStorage>) {
-                                    if (force or s.buffer.use_count() == 1) {
+                                    if (s.mesh_buffer != nullptr and (force or s.mesh_buffer.use_count() == 1)) {
+                                        s.mesh_buffer->deallocate();
+                                    } else if (force or s.buffer.use_count() == 1) {
                                         DeallocateBuffer(*(s.buffer));
                                     }
                                     // Safe to reset this buf object since this is the last reference (in
