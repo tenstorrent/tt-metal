@@ -505,9 +505,15 @@ HypotNgDeviceOperation::HypotProgramFactory::cached_program_t HypotNgDeviceOpera
     std::string compute_hypot_kernel_filepath;
     if(kernel_config.compute_kernel == KernelName::ComputeNoBcast){
         compute_hypot_kernel_filepath = "ttnn/cpp/ttnn/operations/eltwise/binary_ng/hypot/device/kernels/compute/eltwise_hypot_no_bcast.cpp";
+        if(is_sfpu_op){
+            compute_hypot_kernel_filepath = "ttnn/cpp/ttnn/operations/eltwise/binary_ng/hypot/device/kernels/compute/eltwise_hypot_sfpu_no_bcast.cpp";
+        }
     }
     else if(kernel_config.compute_kernel == KernelName::ComputeBcast){
-        compute_hypot_kernel_filepath = "ttnn/cpp/ttnn/operations/eltwise/binary_ng/hypot/device/kernels/compute/eltwise_hypot_bcast.cpp";
+        compute_hypot_kernel_filepath = "ttnn/cpp/ttnn/operations/eltwise/binary_ng/hypot/device/kernels/compute/eltwise_hypot.cpp";
+        if(is_sfpu_op){
+            compute_hypot_kernel_filepath = "ttnn/cpp/ttnn/operations/eltwise/binary_ng/hypot/device/kernels/compute/eltwise_hypot_sfpu.cpp";
+        }
     }
     else{
        TT_THROW("Unexpected KernelName encountered in hypot compute kernel !!");
@@ -559,4 +565,3 @@ void HypotNgDeviceOperation::HypotProgramFactory::override_runtime_arguments(
 }
 
 }  // namespace ttnn::operations::binary_ng
-
