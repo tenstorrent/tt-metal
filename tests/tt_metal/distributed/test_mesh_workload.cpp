@@ -9,7 +9,6 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/bfloat16.hpp>
 
-#include "tests/tt_metal/tt_metal/dispatch/dispatch_test_utils.hpp"
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "tests/tt_metal/distributed/utils.hpp"
 
@@ -22,257 +21,6 @@ struct CBConfig {
     uint32_t page_size = 0;
     tt::DataFormat data_format;
 };
-
-std::vector<std::shared_ptr<Program>> create_random_programs(
-    uint32_t num_programs,
-    CoreCoord worker_grid_size,
-    uint32_t seed,
-    const std::unordered_set<CoreCoord>& active_eth_cores = {}) {
-    uint32_t MAX_LOOP = 100;
-    uint32_t page_size = 1024;
-    uint32_t max_eth_cores = 3;
-
-    uint32_t BRISC_OUTER_LOOP, BRISC_MIDDLE_LOOP, BRISC_INNER_LOOP, NUM_CBS, NUM_SEMS;
-    uint32_t NCRISC_OUTER_LOOP, NCRISC_MIDDLE_LOOP, NCRISC_INNER_LOOP;
-    uint32_t TRISC_OUTER_LOOP, TRISC_MIDDLE_LOOP, TRISC_INNER_LOOP;
-    uint32_t ERISC_OUTER_LOOP, ERISC_MIDDLE_LOOP, ERISC_INNER_LOOP;
-    bool USE_MAX_RT_ARGS;
-
-    CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
-    CoreRangeSet cr_set(cr);
-
-    std::vector<std::shared_ptr<Program>> programs;
-
-    std::map<string, string> data_movement_defines = {{"DATA_MOVEMENT", "1"}};
-    std::map<string, string> compute_defines = {{"COMPUTE", "1"}};
-    std::map<string, string> erisc_defines = {{"ERISC", "1"}};
-
-    for (uint32_t i = 0; i < num_programs; i++) {
-        Program& program = *programs.emplace_back(std::make_shared<Program>());
-        // ========== Set configs for BRISC ==========
-        if (i == 0) {
-            // Ensures that we get at least one compilation with the max amount to
-            // ensure it compiles and runs
-            BRISC_OUTER_LOOP = MAX_LOOP;
-            BRISC_MIDDLE_LOOP = MAX_LOOP;
-            BRISC_INNER_LOOP = MAX_LOOP;
-            NUM_CBS = NUM_CIRCULAR_BUFFERS;
-            NUM_SEMS = NUM_SEMAPHORES;
-            USE_MAX_RT_ARGS = true;
-        } else {
-            BRISC_OUTER_LOOP = rand() % (MAX_LOOP) + 1;
-            BRISC_MIDDLE_LOOP = rand() % (MAX_LOOP) + 1;
-            BRISC_INNER_LOOP = rand() % (MAX_LOOP) + 1;
-            NUM_CBS = rand() % (NUM_CIRCULAR_BUFFERS) + 1;
-            NUM_SEMS = rand() % (NUM_SEMAPHORES) + 1;
-            USE_MAX_RT_ARGS = false;
-        }
-        // Create CBs
-        for (uint32_t j = 0; j < NUM_CBS; j++) {
-            CircularBufferConfig cb_config = CircularBufferConfig(page_size * (j + 1), {{j, tt::DataFormat::Float16_b}})
-                                                 .set_page_size(j, page_size * (j + 1));
-            auto cb = CreateCircularBuffer(program, cr_set, cb_config);
-        }
-
-        // Create Semaphores
-        for (uint32_t j = 0; j < NUM_SEMS; j++) {
-            CreateSemaphore(program, cr_set, j + 1);
-            uint32_t curr_idx = 0;
-            if (active_eth_cores.size()) {
-                auto active_eth_core = active_eth_cores.begin();
-                for (int k = 0; k < max_eth_cores && active_eth_core != active_eth_cores.end();
-                     ++i, ++active_eth_core) {
-                    CreateSemaphore(program, *active_eth_core, j + 1, CoreType::ETH);
-                }
-            }
-        }
-
-        // Create RTAs
-        auto [brisc_unique_rtargs, brisc_common_rtargs] = create_runtime_args(USE_MAX_RT_ARGS);
-        uint32_t num_brisc_unique_rtargs = brisc_unique_rtargs.size();
-        uint32_t num_brisc_common_rtargs = brisc_common_rtargs.size();
-        std::vector<uint32_t> brisc_compile_args = {
-            BRISC_OUTER_LOOP,
-            BRISC_MIDDLE_LOOP,
-            BRISC_INNER_LOOP,
-            NUM_CBS,
-            NUM_SEMS,
-            num_brisc_unique_rtargs,
-            num_brisc_common_rtargs,
-            page_size};
-
-        // ========== Set configs for NCRISC ==========
-        if (i == 0) {
-            NCRISC_OUTER_LOOP = MAX_LOOP;
-            NCRISC_MIDDLE_LOOP = MAX_LOOP;
-            NCRISC_INNER_LOOP = MAX_LOOP;
-        } else {
-            NCRISC_OUTER_LOOP = rand() % (MAX_LOOP) + 1;
-            NCRISC_MIDDLE_LOOP = rand() % (MAX_LOOP) + 1;
-            NCRISC_INNER_LOOP = rand() % (MAX_LOOP) + 1;
-        }
-
-        auto [ncrisc_unique_rtargs, ncrisc_common_rtargs] = create_runtime_args(USE_MAX_RT_ARGS);
-        uint32_t num_ncrisc_unique_rtargs = ncrisc_unique_rtargs.size();
-        uint32_t num_ncrisc_common_rtargs = ncrisc_common_rtargs.size();
-        std::vector<uint32_t> ncrisc_compile_args = {
-            NCRISC_OUTER_LOOP,
-            NCRISC_MIDDLE_LOOP,
-            NCRISC_INNER_LOOP,
-            NUM_CBS,
-            NUM_SEMS,
-            num_ncrisc_unique_rtargs,
-            num_ncrisc_common_rtargs,
-            page_size};
-
-        // ========== Set configs for TRISC ==========
-        if (i == 0) {
-            TRISC_OUTER_LOOP = MAX_LOOP;
-            TRISC_MIDDLE_LOOP = MAX_LOOP;
-            TRISC_INNER_LOOP = MAX_LOOP;
-        } else {
-            TRISC_OUTER_LOOP = rand() % (MAX_LOOP) + 1;
-            TRISC_MIDDLE_LOOP = rand() % (MAX_LOOP) + 1;
-            TRISC_INNER_LOOP = rand() % (MAX_LOOP) + 1;
-        }
-
-        auto [trisc_unique_rtargs, trisc_common_rtargs] = create_runtime_args(USE_MAX_RT_ARGS);
-        uint32_t num_trisc_unique_rtargs = trisc_unique_rtargs.size();
-        uint32_t num_trisc_common_rtargs = trisc_common_rtargs.size();
-        std::vector<uint32_t> trisc_compile_args = {
-            TRISC_OUTER_LOOP,
-            TRISC_MIDDLE_LOOP,
-            TRISC_INNER_LOOP,
-            NUM_CBS,
-            NUM_SEMS,
-            num_trisc_unique_rtargs,
-            num_trisc_common_rtargs,
-            page_size};
-
-        if (i == 0) {
-            ERISC_OUTER_LOOP = MAX_LOOP;
-            ERISC_MIDDLE_LOOP = MAX_LOOP;
-            ERISC_INNER_LOOP = MAX_LOOP;
-        } else {
-            ERISC_OUTER_LOOP = rand() % (MAX_LOOP) + 1;
-            ERISC_MIDDLE_LOOP = rand() % (MAX_LOOP) + 1;
-            ERISC_INNER_LOOP = rand() % (MAX_LOOP) + 1;
-        }
-        // Only setup RTAs on ERISC. No Common RTAs.
-        uint32_t max_erisc_rtas = 64;
-        uint32_t num_erisc_rtas = rand() % (max_erisc_rtas + 1);
-        auto [erisc_unique_rtargs, erisc_common_rtargs] = create_runtime_args(num_erisc_rtas, 0, 0, 0);
-        uint32_t num_erisc_unique_rtargs = erisc_unique_rtargs.size();
-        uint32_t num_erisc_common_rt_args = erisc_common_rtargs.size();
-
-        std::vector<uint32_t> erisc_compile_time_args = {
-            ERISC_OUTER_LOOP,
-            ERISC_MIDDLE_LOOP,
-            ERISC_INNER_LOOP,
-            0, /* CBs are not supported on ERISC cores */
-            NUM_SEMS,
-            num_erisc_unique_rtargs,
-            num_erisc_common_rt_args,
-            page_size};
-
-        // Create Kernels
-        bool at_least_one_kernel = false;
-        if (i == 0 or ((rand() % 2) == 0)) {
-            auto dummy_brisc_kernel = CreateKernel(
-                program,
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp",
-                cr_set,
-                DataMovementConfig{
-                    .processor = DataMovementProcessor::RISCV_0,
-                    .noc = NOC::RISCV_0_default,
-                    .compile_args = brisc_compile_args,
-                    .defines = data_movement_defines});
-            SetRuntimeArgs(program, dummy_brisc_kernel, cr_set, brisc_unique_rtargs);
-            SetCommonRuntimeArgs(program, dummy_brisc_kernel, brisc_common_rtargs);
-            at_least_one_kernel = true;
-        }
-
-        if (i == 0 or ((rand() % 2) == 0)) {
-            auto dummy_ncrisc_kernel = CreateKernel(
-                program,
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp",
-                cr_set,
-                DataMovementConfig{
-                    .processor = DataMovementProcessor::RISCV_1,
-                    .noc = NOC::RISCV_1_default,
-                    .compile_args = ncrisc_compile_args,
-                    .defines = data_movement_defines});
-            SetRuntimeArgs(program, dummy_ncrisc_kernel, cr_set, ncrisc_unique_rtargs);
-            SetCommonRuntimeArgs(program, dummy_ncrisc_kernel, ncrisc_common_rtargs);
-            at_least_one_kernel = true;
-        }
-
-        if (i == 0 or ((rand() % 2) == 0)) {
-            auto dummy_trisc_kernel = CreateKernel(
-                program,
-                "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp",
-                cr_set,
-                ComputeConfig{
-                    .math_approx_mode = false, .compile_args = trisc_compile_args, .defines = compute_defines});
-            SetRuntimeArgs(program, dummy_trisc_kernel, cr_set, trisc_unique_rtargs);
-            SetCommonRuntimeArgs(program, dummy_trisc_kernel, trisc_common_rtargs);
-            at_least_one_kernel = true;
-        }
-
-        if (not at_least_one_kernel) {
-            uint32_t random_risc = rand() % 3 + 1;
-            if (random_risc == 1) {
-                auto dummy_brisc_kernel = CreateKernel(
-                    program,
-                    "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp",
-                    cr_set,
-                    DataMovementConfig{
-                        .processor = DataMovementProcessor::RISCV_0,
-                        .noc = NOC::RISCV_0_default,
-                        .compile_args = brisc_compile_args,
-                        .defines = data_movement_defines});
-                SetRuntimeArgs(program, dummy_brisc_kernel, cr_set, brisc_unique_rtargs);
-                SetCommonRuntimeArgs(program, dummy_brisc_kernel, brisc_common_rtargs);
-            } else if (random_risc == 2) {
-                auto dummy_ncrisc_kernel = CreateKernel(
-                    program,
-                    "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp",
-                    cr_set,
-                    DataMovementConfig{
-                        .processor = DataMovementProcessor::RISCV_1,
-                        .noc = NOC::RISCV_1_default,
-                        .compile_args = ncrisc_compile_args,
-                        .defines = data_movement_defines});
-                SetRuntimeArgs(program, dummy_ncrisc_kernel, cr_set, ncrisc_unique_rtargs);
-                SetCommonRuntimeArgs(program, dummy_ncrisc_kernel, ncrisc_common_rtargs);
-            } else if (random_risc == 3) {
-                auto dummy_trisc_kernel = CreateKernel(
-                    program,
-                    "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp",
-                    cr_set,
-                    ComputeConfig{
-                        .math_approx_mode = false, .compile_args = trisc_compile_args, .defines = compute_defines});
-                SetRuntimeArgs(program, dummy_trisc_kernel, cr_set, trisc_unique_rtargs);
-                SetCommonRuntimeArgs(program, dummy_trisc_kernel, trisc_common_rtargs);
-            } else {
-                TT_THROW("Invalid");
-            }
-        }
-        if (active_eth_cores.size()) {
-            auto active_eth_core = active_eth_cores.begin();
-            for (int k = 0; k < max_eth_cores && active_eth_core != active_eth_cores.end(); ++i, ++active_eth_core) {
-                auto dummy_erisc_kernel = CreateKernel(
-                    program,
-                    "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/random_program.cpp",
-                    *active_eth_core,
-                    EthernetConfig{
-                        .noc = NOC::NOC_0, .compile_args = erisc_compile_time_args, .defines = erisc_defines});
-                SetRuntimeArgs(program, dummy_erisc_kernel, *active_eth_core, erisc_unique_rtargs);
-            }
-        }
-    }
-    return programs;
-}
 
 std::vector<CBHandle> initialize_dummy_circular_buffers(
     Program& program, const CoreRangeSet& cr_set, const std::vector<CBConfig>& cb_configs) {
@@ -389,9 +137,10 @@ void validate_sems(
     }
 }
 
-using MeshWorkloadTest = T3000MultiDeviceFixture;
+using MeshWorkloadTestT3000 = T3000MeshDeviceFixture;
+using MeshWorkloadTestSuite = GenericMeshDeviceFixture;
 
-TEST_F(MeshWorkloadTest, MeshWorkloadOnActiveEthAsserts) {
+TEST_F(MeshWorkloadTestT3000, MeshWorkloadOnActiveEthAsserts) {
     // A MeshWorkload cannot be run on ethernet core - Runtime should assert if the
     // user tries this. Verify this functionality here.
     std::shared_ptr<MeshWorkload> workload = std::make_shared<MeshWorkload>();
@@ -401,16 +150,16 @@ TEST_F(MeshWorkloadTest, MeshWorkloadOnActiveEthAsserts) {
     for (std::size_t logical_x = 0; logical_x < x_end; logical_x++) {
         for (std::size_t logical_y = 0; logical_y < y_end; logical_y++) {
             IDevice* device = mesh_device_->get_device(logical_y, logical_x);
-            auto programs = create_random_programs(
+            auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
                 1, mesh_device_->compute_with_storage_grid_size(), seed, device->get_active_ethernet_cores(true));
-            LogicalDeviceRange devices = {{logical_x, logical_y}, {logical_x + 1, logical_y + 1}};
+            LogicalDeviceRange devices = {{logical_x, logical_y}, {logical_x, logical_y}};
             AddProgramToMeshWorkload(*workload, *programs[0], devices);
         }
     }
     EXPECT_THROW(EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *workload, false), std::exception);
 }
 
-TEST_F(MeshWorkloadTest, SimultaneousMeshWorkloads) {
+TEST_F(MeshWorkloadTestT3000, SimultaneousMeshWorkloads) {
     uint32_t num_programs = 100;
     uint32_t num_heterogeneous_programs = 64;
     uint32_t num_iterations = 1000;
@@ -421,7 +170,8 @@ TEST_F(MeshWorkloadTest, SimultaneousMeshWorkloads) {
 
     log_info("Create MeshWorkloads with multiple programs each");
 
-    auto programs = create_random_programs(num_programs, mesh_device_->compute_with_storage_grid_size(), seed);
+    auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
+        num_programs, mesh_device_->compute_with_storage_grid_size(), seed);
     std::vector<std::shared_ptr<MeshWorkload>> mesh_workloads = {};
 
     log_info(tt::LogTest, "Compile and load {} MeshWorkloads", num_programs);
@@ -441,7 +191,8 @@ TEST_F(MeshWorkloadTest, SimultaneousMeshWorkloads) {
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *random_workload, false);
         mesh_workloads.push_back(random_workload);
     }
-    programs = create_random_programs(num_programs, mesh_device_->compute_with_storage_grid_size(), seed);
+    programs = tt::tt_metal::distributed::test::utils::create_random_programs(
+        num_programs, mesh_device_->compute_with_storage_grid_size(), seed);
     for (int i = 0; i < num_programs; i += 4) {
         std::shared_ptr<MeshWorkload> random_workload = std::make_shared<MeshWorkload>();
         LogicalDeviceRange devices_0 = LogicalDeviceRange({0, 0}, {0, 1});
@@ -455,7 +206,8 @@ TEST_F(MeshWorkloadTest, SimultaneousMeshWorkloads) {
         EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), *random_workload, false);
         mesh_workloads.push_back(random_workload);
     }
-    programs = create_random_programs(num_heterogeneous_programs, mesh_device_->compute_with_storage_grid_size(), seed);
+    programs = tt::tt_metal::distributed::test::utils::create_random_programs(
+        num_heterogeneous_programs, mesh_device_->compute_with_storage_grid_size(), seed);
     for (int i = 0; i < num_heterogeneous_programs; i += 8) {
         std::shared_ptr<MeshWorkload> random_workload = std::make_shared<MeshWorkload>();
         LogicalDeviceRange devices_0 = LogicalDeviceRange({0, 0}, {0, 0});
@@ -490,7 +242,8 @@ TEST_F(MeshWorkloadTest, SimultaneousMeshWorkloads) {
     Finish(mesh_device_->mesh_command_queue());
 }
 
-TEST_F(MeshWorkloadTest, RandomizedMeshWorkload) {
+// MeshWorkload tests on N300 and T3000
+TEST_F(MeshWorkloadTestSuite, RandomizedMeshWorkload) {
     uint32_t num_programs = 60;
     uint32_t num_iterations = 1500;
     auto random_seed = 10;
@@ -498,10 +251,11 @@ TEST_F(MeshWorkloadTest, RandomizedMeshWorkload) {
     log_info(tt::LogTest, "Using Test Seed: {}", seed);
     srand(seed);
     log_info("Create {} MeshWorkloads", num_programs);
-    auto programs = create_random_programs(num_programs, mesh_device_->compute_with_storage_grid_size(), seed);
+    auto programs = tt::tt_metal::distributed::test::utils::create_random_programs(
+        num_programs, mesh_device_->compute_with_storage_grid_size(), seed);
     std::mt19937 rng(seed);
-    std::uniform_int_distribution<int> gen_x(1, 4);
-    std::uniform_int_distribution<int> gen_y(1, 2);
+    std::uniform_int_distribution<int> gen_x(1, mesh_device_->num_cols());
+    std::uniform_int_distribution<int> gen_y(1, mesh_device_->num_rows());
     std::vector<std::shared_ptr<MeshWorkload>> mesh_workloads = {};
 
     // Create multiple mesh workloads on grids of random sizes.
@@ -527,7 +281,7 @@ TEST_F(MeshWorkloadTest, RandomizedMeshWorkload) {
     Finish(mesh_device_->mesh_command_queue());
 }
 
-TEST_F(MeshWorkloadTest, EltwiseBinaryMeshWorkload) {
+TEST_F(MeshWorkloadTestSuite, EltwiseBinaryMeshWorkload) {
     std::vector<std::shared_ptr<MeshBuffer>> src0_bufs = {};
     std::vector<std::shared_ptr<MeshBuffer>> src1_bufs = {};
     std::vector<std::shared_ptr<MeshBuffer>> output_bufs = {};
@@ -537,8 +291,9 @@ TEST_F(MeshWorkloadTest, EltwiseBinaryMeshWorkload) {
     auto programs = tt::tt_metal::distributed::test::utils::create_eltwise_bin_programs(
         mesh_device_, src0_bufs, src1_bufs, output_bufs);
     auto mesh_workload = CreateMeshWorkload();
-    LogicalDeviceRange devices_0 = LogicalDeviceRange({0, 0}, {3, 0});
-    LogicalDeviceRange devices_1 = LogicalDeviceRange({0, 1}, {3, 1});
+    LogicalDeviceRange devices_0 = LogicalDeviceRange({0, 0}, {mesh_device_->num_cols() - 1, 0});
+    LogicalDeviceRange devices_1 = LogicalDeviceRange(
+        {0, mesh_device_->num_rows() - 1}, {mesh_device_->num_cols() - 1, mesh_device_->num_rows() - 1});
     AddProgramToMeshWorkload(mesh_workload, *programs[0], devices_0);
     AddProgramToMeshWorkload(mesh_workload, *programs[1], devices_1);
     std::vector<uint32_t> src0_vec = create_constant_vector_of_bfloat16(src0_bufs[0]->size(), 2);
@@ -567,7 +322,7 @@ TEST_F(MeshWorkloadTest, EltwiseBinaryMeshWorkload) {
                         mesh_device_->mesh_command_queue(),
                         dst_vec,
                         output_bufs[col_idx * worker_grid_size.y + row_idx],
-                        Coordinate(logical_y, logical_x));
+                        MeshCoordinate(logical_y, logical_x));
                     if (logical_y == 0) {
                         for (int i = 0; i < dst_vec.size(); i++) {
                             EXPECT_EQ(dst_vec[i].to_float(), 5);
@@ -583,7 +338,7 @@ TEST_F(MeshWorkloadTest, EltwiseBinaryMeshWorkload) {
     }
 }
 
-TEST_F(MeshWorkloadTest, MeshWorkloadSanity) {
+TEST_F(MeshWorkloadTestSuite, MeshWorkloadSanity) {
     CoreCoord worker_grid_size = mesh_device_->compute_with_storage_grid_size();
     uint32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::Float16_b);
 
@@ -648,8 +403,9 @@ TEST_F(MeshWorkloadTest, MeshWorkloadSanity) {
     }
     auto program_1 = initialize_dummy_program(worker_grid_size);
     auto mesh_workload = MeshWorkload();
-    LogicalDeviceRange devices_0 = LogicalDeviceRange({0, 0}, {3, 0});
-    LogicalDeviceRange devices_1 = LogicalDeviceRange({0, 1}, {3, 1});
+    LogicalDeviceRange devices_0 = LogicalDeviceRange({0, 0}, {mesh_device_->num_cols() - 1, 0});
+    LogicalDeviceRange devices_1 = LogicalDeviceRange(
+        {0, mesh_device_->num_rows() - 1}, {mesh_device_->num_cols() - 1, mesh_device_->num_rows() - 1});
     AddProgramToMeshWorkload(mesh_workload, program, devices_0);
     AddProgramToMeshWorkload(mesh_workload, *program_1, devices_1);
 
@@ -683,7 +439,7 @@ TEST_F(MeshWorkloadTest, MeshWorkloadSanity) {
                             mesh_device_->mesh_command_queue(),
                             dst_vec,
                             output_buffers[col_idx * worker_grid_size.y + row_idx],
-                            Coordinate(logical_y, logical_x));
+                            MeshCoordinate(logical_y, logical_x));
                         for (int i = 0; i < dst_vec.size(); i++) {
                             float ref_val = std::pow(2, (iter % 2) + 1);
                             if (i >= 512) {
@@ -698,7 +454,7 @@ TEST_F(MeshWorkloadTest, MeshWorkloadSanity) {
     }
 }
 
-TEST_F(MeshWorkloadTest, MeshWorkloadCBUpdate) {
+TEST_F(MeshWorkloadTestSuite, MeshWorkloadCBUpdate) {
     std::shared_ptr<Program> program = std::make_shared<Program>();
     CoreCoord worker_grid_size = mesh_device_->compute_with_storage_grid_size();
     CoreRange cr = CoreRange({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
@@ -714,7 +470,8 @@ TEST_F(MeshWorkloadTest, MeshWorkloadCBUpdate) {
     initialize_dummy_kernels(*program, cr_set);
 
     auto mesh_workload = CreateMeshWorkload();
-    LogicalDeviceRange devices = LogicalDeviceRange({0, 0}, {3, 1});
+    LogicalDeviceRange devices =
+        LogicalDeviceRange({0, 0}, {mesh_device_->num_cols() - 1, mesh_device_->num_rows() - 1});
 
     AddProgramToMeshWorkload(mesh_workload, *program, devices);
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload, false);
@@ -733,7 +490,7 @@ TEST_F(MeshWorkloadTest, MeshWorkloadCBUpdate) {
     verify_cb_config(mesh_device_, mesh_workload, updated_cb_config_vector, cr_set);
 }
 
-TEST_F(MeshWorkloadTest, MeshWorkloadSemaphoreSanity) {
+TEST_F(MeshWorkloadTestSuite, MeshWorkloadSemaphoreSanity) {
     auto worker_grid_size = mesh_device_->compute_with_storage_grid_size();
     auto full_grid = CoreRange({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
     Program program;
@@ -744,7 +501,8 @@ TEST_F(MeshWorkloadTest, MeshWorkloadSemaphoreSanity) {
         expected_semaphore_values.push_back(sem);
     }
     auto mesh_workload = CreateMeshWorkload();
-    LogicalDeviceRange devices = LogicalDeviceRange({0, 0}, {3, 1});
+    LogicalDeviceRange devices =
+        LogicalDeviceRange({0, 0}, {mesh_device_->num_cols() - 1, mesh_device_->num_rows() - 1});
     AddProgramToMeshWorkload(mesh_workload, program, devices);
     EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), mesh_workload, false);
     Finish(mesh_device_->mesh_command_queue());
@@ -754,7 +512,7 @@ TEST_F(MeshWorkloadTest, MeshWorkloadSemaphoreSanity) {
     }
 }
 
-TEST_F(MeshWorkloadTest, MeshWorkloadSemaphoreDifferentPrograms) {
+TEST_F(MeshWorkloadTestSuite, MeshWorkloadSemaphoreDifferentPrograms) {
     auto worker_grid_size = mesh_device_->compute_with_storage_grid_size();
     auto full_grid = CoreRange({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
     Program program0;
@@ -770,8 +528,9 @@ TEST_F(MeshWorkloadTest, MeshWorkloadSemaphoreDifferentPrograms) {
         expected_semaphore_values_1.push_back(sem + 1);
     }
     auto mesh_workload = CreateMeshWorkload();
-    LogicalDeviceRange devices_0 = LogicalDeviceRange({0, 0}, {3, 0});
-    LogicalDeviceRange devices_1 = LogicalDeviceRange({0, 1}, {3, 1});
+    LogicalDeviceRange devices_0 = LogicalDeviceRange({0, 0}, {mesh_device_->num_cols() - 1, 0});
+    LogicalDeviceRange devices_1 = LogicalDeviceRange(
+        {0, mesh_device_->num_rows() - 1}, {mesh_device_->num_cols() - 1, mesh_device_->num_rows() - 1});
 
     AddProgramToMeshWorkload(mesh_workload, program0, devices_0);
     AddProgramToMeshWorkload(mesh_workload, program1, devices_1);

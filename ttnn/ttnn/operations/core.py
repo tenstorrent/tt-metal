@@ -200,7 +200,7 @@ def from_torch(
         if layout != ttnn.TILE_LAYOUT:
             raise RuntimeError("ttnn.from_torch: bfloat8_b/bfloat4_b requires TILE_LAYOUT!")
         # Tilize tensor
-        tensor = ttnn.from_torch(tensor, layout=ttnn.TILE_LAYOUT, tile=tile, pad_value=pad_value)
+        tensor = ttnn.from_torch(tensor, layout=ttnn.TILE_LAYOUT, tile=tile, pad_value=pad_value, mesh_mapper=None)
         logical_shape = tensor.shape
         padded_shape = tensor.padded_shape
         tensor = tensor.reshape(tensor.padded_shape)
@@ -312,27 +312,14 @@ def to_torch(
         raise RuntimeError("ttnn.to_torch: Shard spec must not be None for sharded tensors")
 
     if memory_config.is_sharded() and memory_config.shard_spec.mode == ttnn.ShardMode.LOGICAL:
-        tensor = tensor.to_torch_with_logical_shape()
+        tensor = tensor.to_torch()
     else:
         if (tensor.layout != ttnn.ROW_MAJOR_LAYOUT) and not (
             tensor.dtype == ttnn.bfloat8_b or tensor.dtype == ttnn.bfloat4_b
         ):
             tensor = tensor.to(ttnn.ROW_MAJOR_LAYOUT, device)
 
-        shape_without_tile_padding = tuple(tensor.shape)
-        logical_shape_rank = len(tensor.shape)
-
-        while len(shape_without_tile_padding) < len(tensor.padded_shape):
-            shape_without_tile_padding = (1,) + shape_without_tile_padding
-
         tensor = tensor.to_torch()
-        slices = [slice(None, x) for x in shape_without_tile_padding]
-        tensor = tensor[slices]
-
-        while len(tensor.shape) > logical_shape_rank:
-            if tensor.shape[0] != 1:
-                raise RuntimeError("ttnn: Unable to squeeze to desired rank!")
-            tensor = tensor.squeeze(0)
 
     if torch_rank is not None:
         while len(tensor.shape) > torch_rank:

@@ -1,23 +1,32 @@
-set(COMMON_SRCS
-    ${CMAKE_CURRENT_SOURCE_DIR}/core_assignment.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/core_coord.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/metal_soc_descriptor.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/shape2d.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/shape_base.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/tt_backend_api_types.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/utils.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/work_split.cpp
+add_library(common OBJECT)
+add_library(TT::Metalium::Common ALIAS common)
+
+target_sources(
+    common
+    PRIVATE
+        core_assignment.cpp
+        core_coord.cpp
+        mesh_coord.cpp
+        metal_soc_descriptor.cpp
+        shape2d.cpp
+        shape_base.cpp
+        tt_backend_api_types.cpp
+        utils.cpp
+        work_split.cpp
 )
 
-add_library(common OBJECT ${COMMON_SRCS})
-add_library(Metalium::Metal::Common ALIAS common)
+target_include_directories(
+    common
+    PUBLIC
+        ${PROJECT_SOURCE_DIR}
+        ${PROJECT_SOURCE_DIR}/tt_metal
+)
 
-target_link_libraries(common PRIVATE yaml-cpp::yaml-cpp)
 target_link_libraries(
     common
     PUBLIC
         nlohmann_json::nlohmann_json
-        magic_enum
+        magic_enum::magic_enum
         fmt::fmt-header-only
         span
         small_vector
@@ -27,11 +36,5 @@ target_link_libraries(
     PRIVATE
         Tracy::TracyClient
         TT::Metalium::HostDevCommon
-)
-
-target_include_directories(
-    common
-    PUBLIC
-        ${PROJECT_SOURCE_DIR}
-        ${PROJECT_SOURCE_DIR}/tt_metal
+        yaml-cpp::yaml-cpp
 )
