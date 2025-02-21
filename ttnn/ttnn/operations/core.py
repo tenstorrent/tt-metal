@@ -156,7 +156,7 @@ def from_torch(
     layout: Optional[ttnn.Layout] = ttnn.ROW_MAJOR_LAYOUT,
     device: Optional[ttnn.Device] = None,
     memory_config: Optional[ttnn.MemoryConfig] = None,
-    mesh_mapper: Optional[Union[ttnn.TensorToMesh, ttnn.CppTensorToMesh]] = None,
+    mesh_mapper: Optional[ttnn.TensorToMesh] = None,
     cq_id: Optional[int] = ttnn.DefaultQueueId,
 ) -> ttnn.Tensor:
     """
@@ -219,9 +219,10 @@ def from_torch(
     if mesh_mapper:
         if isinstance(mesh_mapper, ttnn.MeshToTensor):
             shards = mesh_mapper.map(ttnn.to_torch(tensor))
+            tensor = ttnn.Tensor(shards, dtype, mesh_mapper.config())
         else:
-            shards = mesh_mapper.map(tensor)
-        tensor = ttnn.Tensor(shards, dtype, mesh_mapper.config())
+            # currently failing - I think this path would be easier to do than calling map and then aggregate unless I add borrowedstorage to aggregate though (non-bfloats end up with that type on tensor creation)
+            tensor = ttnn.distribute_tensor(tensor, mesh_mapper)
 
     if tile is not None:
         tensor = ttnn.Tensor(tensor, dtype, {}, tile)
@@ -523,7 +524,7 @@ def as_tensor(
     memory_config: Optional[ttnn.MemoryConfig] = None,
     cache_file_name: Optional[Union[str, pathlib.Path]] = None,
     preprocess: Optional[Callable[[ttnn.Tensor], ttnn.Tensor]] = None,
-    mesh_mapper: Optional[Union[ttnn.TensorToMesh, ttnn.CppTensorToMesh]] = None,
+    mesh_mapper: Optional[ttnn.TensorToMesh] = None,
     use_device_tilizer: bool = False,
 ) -> ttnn.Tensor:
     """

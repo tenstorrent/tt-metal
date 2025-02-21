@@ -94,13 +94,14 @@ def manage_config(name, value):
     logger.debug(f"Restored ttnn.CONFIG.{name} to {original_value}")
 
 
+# apparently the names need to match the types exactly for pybind function arguments, I think a pure python alias would face the same issue
 from ttnn._ttnn.multi_device import (
     MeshDevice,
     CppMeshToTensor,
-    CppTensorToMesh,
-    CppReplicateTensorToMesh,
-    CppShardTensorToMesh,
-    CppShardTensorTo2dMesh,
+    TensorToMesh,
+    ReplicateTensorToMesh,
+    ShardTensorToMesh,
+    ShardTensorTo2dMesh,
     CppConcatMeshToTensor,
     CppConcat2dMeshToTensor,
     ReplicateTensor,
