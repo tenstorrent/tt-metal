@@ -50,7 +50,7 @@ private:
         ScopedDevices& operator=(const ScopedDevices&) = delete;
 
         // Returns the list of devices opened by the root mesh device (i.e. not submeshes).
-        const std::vector<IDevice*>& root_mesh_devices() const;
+        const std::vector<IDevice*>& root_devices() const;
     };
 
     std::shared_ptr<ScopedDevices> scoped_devices_;
