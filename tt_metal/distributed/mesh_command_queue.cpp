@@ -106,7 +106,7 @@ void MeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool b
         dispatch_metadata);
 
     std::unordered_set<uint32_t> chip_ids_in_workload = {};
-    std::vector<CoreRangeSet> active_sub_grids = {};
+    std::vector<LogicalDeviceRangeSet> active_sub_grids = {};
     // Iterate over all programs. Update dispatch commands per program to reflect
     // current device state. Write the finalized program command sequence to each
     // physical device tied to the program.
@@ -639,12 +639,12 @@ void MeshCommandQueue::capture_program_trace_on_subgrid(
 }
 
 void MeshCommandQueue::capture_go_signal_trace_on_unused_subgrids(
-    std::vector<CoreRangeSet>& active_sub_grids,
+    std::vector<LogicalDeviceRangeSet>& active_sub_grids,
     const SubDeviceId& sub_device_id,
     uint32_t expected_num_workers_completed,
     bool mcast_go_signals,
     bool unicast_go_signals) {
-    CoreRangeSet active_ranges = active_sub_grids[0];
+    LogicalDeviceRangeSet active_ranges = active_sub_grids[0];
     for (int i = 1; i < active_sub_grids.size(); i++) {
         active_ranges = active_ranges.merge(active_sub_grids[i]);
     }
@@ -652,27 +652,28 @@ void MeshCommandQueue::capture_go_signal_trace_on_unused_subgrids(
     CoreRange active_grid = active_ranges.bounding_box();
     CoreRange full_grid = CoreRange({0, 0}, {mesh_device_->num_cols() - 1, mesh_device_->num_rows() - 1});
     if (active_grid != full_grid) {
-        CoreRange unused_grid = convex_relative_complement(full_grid, active_grid);
-
-        auto start_coord = unused_grid.start_coord;
-        auto& sysmem_manager_for_trace = mesh_device_->get_device(start_coord.y, start_coord.x)->sysmem_manager();
-        uint32_t sysmem_manager_offset = sysmem_manager_for_trace.get_issue_queue_write_ptr(id_);
-        write_go_signal(
-            id_,
-            mesh_device_,
-            sub_device_id,
-            sysmem_manager_for_trace,
-            expected_num_workers_completed,
-            this->virtual_program_dispatch_core(),
-            mcast_go_signals,
-            unicast_go_signals,
-            mesh_device_->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, sub_device_id));
-        auto mesh_trace_md = MeshTraceStagingMetadata{
-            unused_grid,
-            start_coord,
-            sysmem_manager_offset,
-            sysmem_manager_for_trace.get_issue_queue_write_ptr(id_) - sysmem_manager_offset};
-        ordered_mesh_trace_md_.push_back(mesh_trace_md);
+        LogicalDeviceRangeSet unused_grids = relative_complement(full_grid, active_grid);
+        for (auto& unused_grid : unused_grids.ranges()) {
+            auto start_coord = unused_grid.start_coord;
+            auto& sysmem_manager_for_trace = mesh_device_->get_device(start_coord.y, start_coord.x)->sysmem_manager();
+            uint32_t sysmem_manager_offset = sysmem_manager_for_trace.get_issue_queue_write_ptr(id_);
+            write_go_signal(
+                id_,
+                mesh_device_,
+                sub_device_id,
+                sysmem_manager_for_trace,
+                expected_num_workers_completed,
+                this->virtual_program_dispatch_core(),
+                mcast_go_signals,
+                unicast_go_signals,
+                mesh_device_->num_worker_cores(HalProgrammableCoreType::ACTIVE_ETH, sub_device_id));
+            auto mesh_trace_md = MeshTraceStagingMetadata{
+                unused_grid,
+                start_coord,
+                sysmem_manager_offset,
+                sysmem_manager_for_trace.get_issue_queue_write_ptr(id_) - sysmem_manager_offset};
+            ordered_mesh_trace_md_.push_back(mesh_trace_md);
+        }
     }
 }
 
