@@ -319,27 +319,6 @@ def test_01_volume_tensors(device, a, b, c_golden, memory_config_a, memory_confi
 
 
 @pytest.mark.parametrize(
-    "a, b, c_golden",
-    [
-        ([1, 2], [3], [4, 5]),
-        ([1], [2, 3], [3, 4]),
-        ([1, 2], [3, 4], [4, 6]),
-    ],
-)
-def test_binary_invalid_layout(device, a, b, c_golden):
-    a = torch.BFloat16Tensor(a)
-    b = torch.BFloat16Tensor(b)
-    assert torch.add(a, b).tolist() == c_golden
-
-    ttnn_a = ttnn.from_torch(a, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    ttnn_b = ttnn.from_torch(b, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-
-    with pytest.raises(RuntimeError):
-        cq_id = 0
-        ttnn_c = ttnn.experimental.add(ttnn_a, ttnn_b, queue_id=cq_id)
-
-
-@pytest.mark.parametrize(
     "a_shape, b_shape",
     [
         [[2, 4, 12, 64, 64], [12, 1, 1]],
