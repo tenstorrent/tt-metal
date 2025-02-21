@@ -280,7 +280,6 @@ FORCE_INLINE void cb_wait_all_pages(uint32_t n) {
     WAYPOINT("TAPW");
     do {
         invalidate_l1_cache();
-        // DPRINT << "sem addr " << HEX() << (*sem_addr) << DEC() << ENDL();
     } while ((*sem_addr & 0x7fffffff) != n);  // mask off terminate bit
     WAYPOINT("TAPD");
 }
