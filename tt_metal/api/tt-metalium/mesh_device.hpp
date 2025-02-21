@@ -33,7 +33,7 @@ private:
     class ScopedDevices {
     private:
         std::map<chip_id_t, IDevice*> opened_devices_;
-        MeshContainer<IDevice*> devices_;
+        std::vector<IDevice*> devices_;
 
     public:
         // Constructor acquires physical resources
@@ -49,8 +49,8 @@ private:
         ScopedDevices(const ScopedDevices&) = delete;
         ScopedDevices& operator=(const ScopedDevices&) = delete;
 
-        const std::vector<IDevice*>& get_devices() const;
-        IDevice* get_device(const MeshCoordinate& coord) const;
+        // Returns the list of devices opened by the root mesh device (i.e. not submeshes).
+        const std::vector<IDevice*>& root_mesh_devices() const;
     };
 
     std::shared_ptr<ScopedDevices> scoped_devices_;
@@ -71,8 +71,9 @@ private:
 
 public:
     MeshDevice(
-        std::shared_ptr<ScopedDevices> mesh_handle,
+        std::shared_ptr<ScopedDevices> scoped_devices,
         const MeshShape& mesh_shape,
+        std::unique_ptr<MeshDeviceView> mesh_device_view,
         std::weak_ptr<MeshDevice> parent_mesh = {});
     ~MeshDevice() override;
 

@@ -106,7 +106,8 @@ TEST_P(MeshReshapeTest, ReshapeBetweenConfigurations) {
     EXPECT_EQ(mesh->num_cols(), new_shape.num_cols);
 
     // Verify device ordering is preserved
-    EXPECT_EQ(mesh->get_device_ids(), original_order);
+    EXPECT_EQ(mesh->get_device_ids(), original_order)
+        << "Device ordering is not preserved " << SimpleMeshShape(old_shape) << " -> " << SimpleMeshShape(new_shape);
 }
 
 // Generate all possible combinations of shapes from kMeshShapes
