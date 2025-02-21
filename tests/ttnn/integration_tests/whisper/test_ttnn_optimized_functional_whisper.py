@@ -4,7 +4,6 @@
 
 from loguru import logger
 import pytest
-from models.experimental.functional_whisper.reference import torch_functional_whisper
 from models.experimental.functional_whisper.tt import ttnn_optimized_functional_whisper
 import transformers
 from transformers import AutoFeatureExtractor, WhisperModel, WhisperConfig
@@ -71,28 +70,20 @@ def test_whisper_attention(
         torch_attention_mask = torch_random(
             (batch_size, 1, sequence_size, sequence_size), -0.1, 0.1, dtype=torch.float32
         )
-        torch_attention_mask = torch_attention_mask.expand(-1, num_heads, -1, -1)
+        ttnn_attention_mask = torch_attention_mask.expand(-1, num_heads, -1, -1)
         ttnn_attention_mask = ttnn.from_torch(
-            torch_attention_mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+            ttnn_attention_mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
         )
     else:
         torch_attention_mask = None
         ttnn_attention_mask = None
 
-    torch_parameters = preprocess_model_parameters(
-        initialize_model=lambda: model,
-        convert_to_ttnn=lambda *_: False,
-        custom_preprocessor=torch_functional_whisper.custom_preprocessor,
-        prefix="encoder_attn" if use_encoder_states else "",
-    )
-
-    torch_output = torch_functional_whisper.whisper_attention(
-        config,
+    torch_output = model(
         torch_hidden_states,
-        torch_attention_mask,
+        attention_mask=torch_attention_mask,
         key_value_states=torch_encoder_states,
-        parameters=torch_parameters,
     )
+    torch_output = torch_output[0]
 
     ttnn_parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
@@ -124,17 +115,11 @@ def test_encoder_layer(device, ttnn_model, model_name, batch_size, sequence_size
     torch.manual_seed(0)
     config = transformers.WhisperConfig.from_pretrained(model_name)
     model = transformers.models.whisper.modeling_whisper.WhisperEncoderLayer(config).eval()
-    model = model
 
     embed_dim = config.d_model
     torch_hidden_states = torch_random((batch_size, sequence_size, embed_dim), -0.1, 0.1, dtype=torch.float32)
 
-    parameters = preprocess_model_parameters(
-        initialize_model=lambda: model,
-        convert_to_ttnn=lambda *_: False,
-        custom_preprocessor=torch_functional_whisper.custom_preprocessor,
-    )
-    torch_output = torch_functional_whisper.encoder_layer(config, torch_hidden_states, parameters=parameters)
+    torch_output = model(torch_hidden_states, attention_mask=None, layer_head_mask=None)[0]
 
     ttnn_parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
@@ -162,27 +147,11 @@ def test_encoder(device, ttnn_model, model_name, batch_size, sequence_length, us
     torch.manual_seed(0)
     config = transformers.WhisperConfig.from_pretrained(model_name)
     model = transformers.models.whisper.modeling_whisper.WhisperEncoder(config).eval()
-    model = model
 
     feature_size = config.num_mel_bins
     torch_input_features = torch_random((batch_size, feature_size, sequence_length), -0.1, 0.1, dtype=torch.float32)
 
-    parameters = preprocess_model_parameters(
-        initialize_model=lambda: model,
-        convert_to_ttnn=lambda *_: False,
-        custom_preprocessor=torch_functional_whisper.custom_preprocessor,
-    )
-
-    # torch_original_output = torch_functional_whisper.encoder_original(
-    #     torch_input_features, parameters, embed_dim, num_heads
-    # )
-
-    inputs_embeds = torch_functional_whisper.preprocess_encoder_inputs(
-        input_features=torch_input_features,
-        parameters=parameters,
-    )
-
-    torch_output = torch_functional_whisper.encoder(config, inputs_embeds, parameters=parameters)
+    torch_output = model(torch_input_features).last_hidden_state
 
     ttnn_parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
@@ -226,7 +195,6 @@ def test_decoder_layer(
     torch.manual_seed(0)
     config = transformers.WhisperConfig.from_pretrained(model_name)
     model = transformers.models.whisper.modeling_whisper.WhisperDecoderLayer(config).eval()
-    model = model
 
     num_heads = config.encoder_attention_heads
     embed_dim = config.d_model
@@ -239,18 +207,8 @@ def test_decoder_layer(
     attention_mask = torch_random(
         (batch_size, 1, decoder_sequence_size, decoder_sequence_size), -0.1, 0.1, dtype=torch.float32
     )
-    # Putting num_heads in the channel because the add does not support broadcasting outside of the h and w dimensions.
-    attention_mask = attention_mask.expand(-1, num_heads, -1, -1)
 
-    parameters = preprocess_model_parameters(
-        initialize_model=lambda: model,
-        convert_to_ttnn=lambda *_: False,
-        custom_preprocessor=torch_functional_whisper.custom_preprocessor,
-    )
-
-    torch_output = torch_functional_whisper.decoder_layer(
-        config, torch_hidden_states, attention_mask, torch_encoder_hidden_states, parameters=parameters
-    )
+    torch_output = model(torch_hidden_states, attention_mask, torch_encoder_hidden_states)[0]
 
     ttnn_parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
@@ -261,6 +219,7 @@ def test_decoder_layer(
     ttnn_hidden_states = ttnn.from_torch(
         torch_hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
     )
+    attention_mask = attention_mask.expand(-1, num_heads, -1, -1)
     ttnn_attention_mask = ttnn.from_torch(attention_mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn_encoder_hidden_states = ttnn.from_torch(
         torch_encoder_hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
@@ -304,27 +263,11 @@ def test_decoder(
 
     attention_mask = None
 
-    parameters = preprocess_model_parameters(
-        initialize_model=lambda: model,
-        convert_to_ttnn=lambda *_: False,
-        custom_preprocessor=torch_functional_whisper.custom_preprocessor,
-    )
-
-    # torch_original_output = torch_functional_whisper.decoder_original(
-    #     decoder_input_ids, attention_mask, torch_encoder_hidden_states, parameters, embed_dim, num_heads
-    # )
-
-    (decoder_hidden_states, decoder_attention_mask) = torch_functional_whisper.preprocess_decoder_inputs(
-        decoder_input_ids, attention_mask, parameters=parameters
-    )
-
-    torch_output = torch_functional_whisper.decoder(
-        config,
-        hidden_states=decoder_hidden_states,
-        decoder_attention_mask=decoder_attention_mask,
+    torch_output = model(
+        decoder_input_ids,
+        attention_mask=attention_mask,
         encoder_hidden_states=torch_encoder_hidden_states,
-        parameters=parameters,
-    )
+    ).last_hidden_state
 
     ttnn_parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
@@ -376,26 +319,11 @@ def test_ttnn_whisper(
 
     model = WhisperModel.from_pretrained(model_name).eval()
 
-    parameters = preprocess_model_parameters(
-        initialize_model=lambda: model,
-        convert_to_ttnn=lambda *_: False,
-        custom_preprocessor=torch_functional_whisper.custom_preprocessor,
-    )
-
-    (encoder_hidden_states, decoder_hidden_states, decoder_attention_mask) = torch_functional_whisper.preprocess_inputs(
-        input_features=input_features,
-        input_ids=decoder_input_ids,
+    expected_last_hidden_state = model(
+        input_features,
         attention_mask=attention_mask,
-        parameters=parameters,
-    )
-
-    expected_last_hidden_state = torch_functional_whisper.whisper(
-        config,
-        encoder_hidden_states,
-        decoder_hidden_states,
-        decoder_attention_mask=decoder_attention_mask,
-        parameters=parameters,
-    )
+        decoder_input_ids=decoder_input_ids,
+    ).last_hidden_state
 
     ttnn_parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
