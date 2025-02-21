@@ -80,7 +80,7 @@ MeshDevice::ScopedDevices::ScopedDevices(
         physical_device_ids.size() == devices_.shape().mesh_size(),
         "Device size mismatch; expected: {}, actual: {}",
         devices_.shape().mesh_size(),
-        opened_devices_.size());
+        physical_device_ids.size());
 
     auto it = devices_.begin();
     for (auto physical_device_id : physical_device_ids) {
@@ -135,10 +135,13 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
     size_t num_command_queues,
     const DispatchCoreConfig& dispatch_core_config,
     tt::stl::Span<const std::uint32_t> l1_bank_remap) {
+    // TODO: #17477 Extend to ND.
+    TT_FATAL(config.mesh_shape.dims() == 2, "Mesh shape must be 2D");
+    auto mesh_shape_2d = MeshShape{config.mesh_shape[0], config.mesh_shape[1]};
     auto mesh_device = std::make_shared<MeshDevice>(
         std::make_shared<ScopedDevices>(
             l1_small_size, trace_region_size, num_command_queues, dispatch_core_config, config),
-        config.mesh_shape);
+        mesh_shape_2d);
 
     mesh_device->initialize(num_command_queues, l1_small_size, trace_region_size, l1_bank_remap);
     return mesh_device;
@@ -169,11 +172,14 @@ std::shared_ptr<MeshDevice> MeshDevice::create_submesh(const MeshShape& submesh_
     }
 
     auto submesh = std::make_shared<MeshDevice>(scoped_devices_, submesh_shape, shared_from_this());
-    auto start_coordinate = Coordinate{offset.row, offset.col};
-    auto end_coordinate = Coordinate{offset.row + submesh_shape.num_rows - 1, offset.col + submesh_shape.num_cols - 1};
+    auto start_coordinate = MeshCoordinate{offset.row, offset.col};
+    auto end_coordinate =
+        MeshCoordinate{offset.row + submesh_shape.num_rows - 1, offset.col + submesh_shape.num_cols - 1};
 
-    auto submesh_devices = view_->get_devices(start_coordinate, end_coordinate);
-    submesh->view_ = std::make_unique<MeshDeviceView>(submesh_devices, submesh_shape);
+    MeshContainer<IDevice*> submesh_devices_container(
+        submesh_shape, view_->get_devices(MeshCoordinateRange{start_coordinate, end_coordinate}));
+
+    submesh->view_ = std::make_unique<MeshDeviceView>(submesh_devices_container);
     submeshes_.push_back(submesh);
     log_trace(
         LogMetal,
@@ -311,8 +317,11 @@ void MeshDevice::reshape(const MeshShape& new_shape) {
         new_shape.num_rows * new_shape.num_cols == this->num_devices(),
         "New shape must have the same number of devices as current shape");
 
+    MeshContainer<IDevice*> devices(new_shape, this->get_row_major_devices(new_shape));
+    auto new_view = std::make_unique<MeshDeviceView>(devices);
+
     mesh_shape_ = new_shape;
-    view_ = std::make_unique<MeshDeviceView>(this->get_row_major_devices(new_shape), new_shape);
+    view_ = std::move(new_view);
 }
 
 bool MeshDevice::close() {
@@ -575,18 +584,40 @@ void MeshDevice::release_trace(const uint32_t tid) {
         device->release_trace(tid);
     }
 }
+
+std::shared_ptr<MeshTraceBuffer>& MeshDevice::create_mesh_trace(const MeshTraceId& trace_id) {
+    auto [trace, emplaced] = trace_buffer_pool_.emplace(trace_id, MeshTrace::create_empty_mesh_trace_buffer());
+    TT_FATAL(emplaced, "Trace buffer with tid {} already exists", *trace_id);
+    return trace->second;
+}
+
+void MeshDevice::release_mesh_trace(const MeshTraceId& trace_id) { trace_buffer_pool_.erase(trace_id); }
+
+std::shared_ptr<MeshTraceBuffer> MeshDevice::get_mesh_trace(const MeshTraceId& trace_id) {
+    auto trace = trace_buffer_pool_.find(trace_id);
+    if (trace != trace_buffer_pool_.end()) {
+        return trace->second;
+    }
+    TT_THROW("Trace Instance with ID {} is not initialized", *trace_id);
+}
+
+void MeshDevice::begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) {
+    auto& mesh_trace_buffer = this->create_mesh_trace(trace_id);
+    mesh_command_queues_[cq_id]->record_begin(trace_id, mesh_trace_buffer->desc);
+}
+
+void MeshDevice::end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) {
+    auto trace_buffer = this->get_mesh_trace(trace_id);
+    mesh_command_queues_[cq_id]->record_end();
+    MeshTrace::populate_mesh_buffer(*(mesh_command_queues_[cq_id]), trace_buffer);
+}
+
 std::shared_ptr<TraceBuffer> MeshDevice::get_trace(uint32_t tid) {
     TT_THROW("get_trace() is not supported on MeshDevice - use individual devices instead");
     return reference_device()->get_trace(tid);
 }
-uint32_t MeshDevice::get_trace_buffers_size() const {
-    TT_THROW("get_trace_buffers_size() is not supported on MeshDevice - use individual devices instead");
-    return reference_device()->get_trace_buffers_size();
-}
-void MeshDevice::set_trace_buffers_size(uint32_t size) {
-    TT_THROW("set_trace_buffers_size() is not supported on MeshDevice - use individual devices instead");
-    reference_device()->set_trace_buffers_size(size);
-}
+uint32_t MeshDevice::get_trace_buffers_size() const { return trace_buffers_size_; }
+void MeshDevice::set_trace_buffers_size(uint32_t size) { trace_buffers_size_ = size; }
 
 // Light Metal
 void MeshDevice::load_trace(const uint8_t cq_id, const uint32_t trace_id, const TraceDescriptor& trace_desc) {
@@ -601,7 +632,8 @@ bool MeshDevice::initialize(
     size_t trace_region_size,
     tt::stl::Span<const std::uint32_t> l1_bank_remap,
     bool minimal) {
-    view_ = std::make_unique<MeshDeviceView>(scoped_devices_->get_devices(), mesh_shape_);
+    MeshContainer<IDevice*> devices(mesh_shape_, scoped_devices_->get_devices());
+    view_ = std::make_unique<MeshDeviceView>(devices);
 
     // For MeshDevice, we support uniform sub-devices across all devices and we do not support ethernet subdevices.
     const auto& compute_grid_size = this->compute_with_storage_grid_size();

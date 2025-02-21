@@ -11,13 +11,11 @@ jobs:
       fail-fast: false
       matrix:
         test-info: [
-          {name: "GS", arch: grayskull, runs-on: ["E150", "pipeline-perf", "bare-metal", "in-service"], machine-type: "bare_metal"},
           {name: "N300 WH B0", arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "in-service"], machine-type: "bare_metal"},
         ]
         model-type: [llm_javelin, cnn_javelin, other]
     name: "${{ matrix.model-type }} ${{ matrix.test-info.name }}"
     env:
-      TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
       ARCH_NAME: ${{ matrix.test-info.arch }}
       LOGURU_LEVEL: INFO
       LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
