@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -110,9 +110,12 @@ ALWI void process_tile(
             add_binary_tile(i * 2, i * 2 + 1);
             sqrt_tile_init();
             sqrt_tile(i * 2);
-            tile_regs_commit();
+        }
+        tile_regs_commit();
 
-            tile_regs_wait();
+        tile_regs_wait();
+
+        for (uint32_t i = 0; i < onetile; ++i) {
             pack_tile(i * 2, cb_out);
         }
         tile_regs_release();
