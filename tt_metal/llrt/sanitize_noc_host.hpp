@@ -75,6 +75,8 @@ static void watcher_sanitize_host_noc(
     const metal_SocDescriptor& soc_d,
     const std::unordered_set<CoreCoord>& virtual_worker_cores,
     const std::unordered_set<CoreCoord>& virtual_eth_cores,
+    const std::unordered_set<CoreCoord>& virtual_pcie_cores,
+    const std::unordered_set<CoreCoord>& virtual_dram_cores,
     const CoreCoord& core,
     uint64_t addr,
     uint32_t lbytes) {
@@ -109,20 +111,42 @@ void watcher_sanitize_host_noc_read(
     const metal_SocDescriptor& soc_d,
     const std::unordered_set<CoreCoord>& virtual_worker_cores,
     const std::unordered_set<CoreCoord>& virtual_eth_cores,
+    const std::unordered_set<CoreCoord>& virtual_pcie_cores,
+    const std::unordered_set<CoreCoord>& virtual_dram_cores,
     const CoreCoord& core,
     uint64_t addr,
     uint32_t lbytes) {
-    watcher_sanitize_host_noc("read", soc_d, virtual_worker_cores, virtual_eth_cores, core, addr, lbytes);
+    watcher_sanitize_host_noc(
+        "read",
+        soc_d,
+        virtual_worker_cores,
+        virtual_eth_cores,
+        virtual_pcie_cores,
+        virtual_dram_cores,
+        core,
+        addr,
+        lbytes);
 }
 
 void watcher_sanitize_host_noc_write(
     const metal_SocDescriptor& soc_d,
     const std::unordered_set<CoreCoord>& virtual_worker_cores,
     const std::unordered_set<CoreCoord>& virtual_eth_cores,
+    const std::unordered_set<CoreCoord>& virtual_pcie_cores,
+    const std::unordered_set<CoreCoord>& virtual_dram_cores,
     const CoreCoord& core,
     uint64_t addr,
     uint32_t lbytes) {
-    watcher_sanitize_host_noc("write", soc_d, virtual_worker_cores, virtual_eth_cores, core, addr, lbytes);
+    watcher_sanitize_host_noc(
+        "write",
+        soc_d,
+        virtual_worker_cores,
+        virtual_eth_cores,
+        virtual_pcie_cores,
+        virtual_dram_cores,
+        core,
+        addr,
+        lbytes);
 }
 
 }  // namespace tt
