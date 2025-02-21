@@ -66,9 +66,9 @@ inline void _llk_unpack_A_mop_config_(const bool transpose_of_faces, const std::
         } else {
             constexpr uint32_t innerloop = 1;
             constexpr uint32_t outerloop = 1; //TODO: add support for num_faces, add support for dest to srcB
-            ckernel_template tmp(outerloop, innerloop, srcb_set_z_2, unpack_srcb);
-            tmp.set_start_op(unpack_srcb);
-            tmp.set_end_op(unpack_srca_set_dvalid);
+            ckernel_template tmp(outerloop, innerloop, unpack_srcb, srcb_set_z_2);
+            tmp.set_start_op(unpack_srca_set_dvalid);
+            tmp.set_end_op(unpack_srcb);
             tmp.program(instrn_buffer);
         }
     } else if constexpr (BType == BroadcastType::ROW) {
@@ -86,9 +86,11 @@ inline void _llk_unpack_A_mop_config_(const bool transpose_of_faces, const std::
         }
     } else if constexpr (BType == BroadcastType::SCALAR) {
         static_assert((!acc_to_dest) && "accumulate into dest with broadcast scaler is not supported!");
-        const uint32_t outerloop = num_faces;
+        const uint32_t outerloop = 1;
         constexpr uint32_t innerloop = 1;
         ckernel_template tmp(outerloop, innerloop, unpack_srcb_inc_z_0);
+        // ELWADD used in datacopy due to broadcast bug, use zerosrca regardless of acc_to_dest
+        tmp.set_start_op(unpack_srca_set_dvalid);
         tmp.program(instrn_buffer);
     } else {
         if (transpose_of_faces) {

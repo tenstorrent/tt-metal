@@ -10,10 +10,13 @@
 #include "ckernel_globals.h"
 #include "llk_defs.h"
 
+#include <array>
+
 namespace ckernel::packer
 {
    constexpr uint replay_buf_offset = 16; // split replay buffer usage between fpu/sfpu
                                        // fist 16 for sfpu, next 16 for fpu
+   constexpr uint32_t NUM_PACKERS = 1; //Number of packers
 
    // Pack config
    typedef struct {
@@ -519,4 +522,87 @@ namespace ckernel::packer
       TTI_STOREIND (1, 0, p_ind::LD_16B, LO_16(0), p_ind::INC_NONE, p_gpr_pack::TILE_HEADER, p_gpr_pack::OUTPUT_ADDR);
    }
 
+   // READERS FOR CONFIG STRUCTS
+
+   inline pack_config_t read_pack_config_helper(uint32_t reg_addr, const volatile uint tt_reg_ptr* cfg) {
+
+      pack_config_u config = {.val = 0};
+   
+      config.val[0] = cfg[reg_addr];
+      config.val[1] = cfg[reg_addr + 1];
+      config.val[2] = cfg[reg_addr + 2];
+
+      return config.f;
+   }
+
+   inline std::array<pack_config_t, NUM_PACKERS> read_pack_config() {
+      std::array<pack_config_t, NUM_PACKERS> config_vec;
+      
+      // Get pointer to registers for current state ID 
+      volatile uint tt_reg_ptr* cfg = get_cfg_pointer();
+
+      config_vec[0] = read_pack_config_helper(THCON_SEC0_REG1_Row_start_section_size_ADDR32, cfg);
+
+      return config_vec;
+   }
+
+   inline relu_config_t read_relu_config() {
+
+      relu_config_u config;
+
+      // Get pointer to registers for current state ID
+      volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
+      config.val[0] = cfg[ALU_ACC_CTRL_Zero_Flag_disabled_src_ADDR32];
+
+      return config.r;
+   }
+
+   inline dest_rd_ctrl_t read_dest_rd_ctrl() {
+      dest_rd_ctrl_u dest;
+
+      // Get pointer to registers for current state ID
+      volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
+
+      dest.val = cfg[PCK_DEST_RD_CTRL_Read_32b_data_ADDR32];
+
+      return dest.f;
+   }
+
+   inline pck_edge_offset_t read_pack_edge_offset_helper(uint32_t reg_addr, const volatile uint tt_reg_ptr* cfg) {
+
+      pck_edge_offset_u edge = {.val=0};
+
+      edge.val = cfg[reg_addr];
+
+      return edge.f;
+   }
+
+   inline std::array<pck_edge_offset_t, NUM_PACKERS> read_pack_edge_offset() {
+      std::array<pck_edge_offset_t, NUM_PACKERS> edge_vec;
+
+      // Get pointer to registers for current state ID 
+      volatile uint tt_reg_ptr* cfg = get_cfg_pointer();
+
+      edge_vec[0] = read_pack_edge_offset_helper(PCK_EDGE_OFFSET_SEC0_mask_ADDR32, cfg);
+
+      return edge_vec; 
+   }
+
+   inline pack_counters_t read_pack_counters_helper(uint32_t reg_addr, const volatile uint tt_reg_ptr* cfg) {
+      pack_counters_u counters = {.val=0};
+      counters.val = cfg[reg_addr];
+
+      return counters.f;      
+   }
+
+   inline std::array<pack_counters_t, NUM_PACKERS> read_pack_counters() {
+      std::array<pack_counters_t, NUM_PACKERS> config_vec;
+
+      // Get pointer to registers for current state ID 
+      volatile uint tt_reg_ptr* cfg = get_cfg_pointer();
+
+      config_vec[0] = read_pack_counters_helper(PACK_COUNTERS_SEC0_pack_per_xy_plane_ADDR32, cfg);
+
+      return config_vec; 
+   }
 }

@@ -8,6 +8,8 @@
 #include "ckernel.h"
 #include "ckernel_globals.h"
 
+#include <array>
+
 #ifdef PERF_DUMP
 #include "perf_res_decouple.h"
 #endif
@@ -16,6 +18,7 @@ namespace ckernel::unpacker
 {
    constexpr uint32_t TILE_DESC_SIZE = 2; //Unpacker descriptor size in dwords
    constexpr uint32_t CONFIG_SIZE = 2; //Unpacker configuration size in dwords
+   constexpr uint32_t NUM_UNPACKERS = 2; //Number of unpackers
 
    // Unpack tile descriptor
    typedef struct {
@@ -448,6 +451,61 @@ namespace ckernel::unpacker
          cfg_reg_rmw_tensix<THCON_SEC0_REG5_Dest_cntx1_address_RMW>(dst_byte_addr);
       }
 
+   }
+
+   // READERS FOR STRUCTS
+
+   inline unpack_tile_descriptor_t read_unpack_tile_descriptor_helper(uint32_t reg_addr, const volatile uint tt_reg_ptr *cfg) {
+      unpack_tile_descriptor_u tile_descriptor = {.val = 0};
+
+      tile_descriptor.val[0] = cfg[reg_addr];
+      tile_descriptor.val[1] = cfg[reg_addr + 1];
+      tile_descriptor.val[2] = cfg[reg_addr + 2];
+      tile_descriptor.val[3] = cfg[reg_addr + 3];
+      
+      return tile_descriptor.f;
+   }
+
+   inline std::array<unpack_tile_descriptor_t, NUM_UNPACKERS> read_unpack_tile_descriptor() {
+      std::array<unpack_tile_descriptor_t, NUM_UNPACKERS> tile_descriptor_vec;
+      // Get pointer to registers for current state ID 
+      volatile uint tt_reg_ptr* cfg = get_cfg_pointer();
+
+      tile_descriptor_vec[0] = read_unpack_tile_descriptor_helper(THCON_SEC0_REG0_TileDescriptor_ADDR32, cfg);
+      tile_descriptor_vec[1] = read_unpack_tile_descriptor_helper(THCON_SEC1_REG0_TileDescriptor_ADDR32, cfg);
+
+      return tile_descriptor_vec;
+   }
+
+   inline unpack_config_t read_unpack_config_helper(uint32_t reg_addr, const volatile uint tt_reg_ptr *cfg) {
+      unpack_config_u config;
+
+      config.val[0] = cfg[reg_addr];
+      config.val[1] = cfg[reg_addr + 1];
+      config.val[2] = cfg[reg_addr + 2];
+      config.val[3] = cfg[reg_addr + 3];
+
+      return config.f;
+   }
+
+   inline std::array<unpack_config_t, NUM_UNPACKERS> read_unpack_config() {
+      std::array<unpack_config_t, NUM_UNPACKERS> config_vec;
+      // Get pointer to registers for current state ID 
+      volatile uint tt_reg_ptr* cfg = get_cfg_pointer();
+
+      config_vec[0] = read_unpack_config_helper(THCON_SEC0_REG2_Out_data_format_ADDR32, cfg);
+      config_vec[1] = read_unpack_config_helper(THCON_SEC1_REG2_Out_data_format_ADDR32, cfg);
+
+      return config_vec;
+   }
+
+   inline alu_config_t read_alu_config() {
+      alu_config_u config;
+      volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
+
+      config.val = cfg[ALU_ROUNDING_MODE_Fpu_srnd_en_ADDR32];
+
+      return config.f;
    }
 
 }

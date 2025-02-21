@@ -10,6 +10,8 @@
 #include "fw_debug.h"
 #include "llk_defs.h"
 
+#include <array>
+
 #define TT_OP_SETDMAREG_SHFT(Payload_SigSelSize, Payload_SigSelShft, SetSignalsMode, RegIndex16b) \
   TT_OP(0x45, (((Payload_SigSelSize) << 22) + ((Payload_SigSelShft)) + ((SetSignalsMode) << 7) + ((RegIndex16b) << 0)))
 #define TT_SETDMAREG_SHFT(Payload_SigSelSize, Payload_SigSelShft, SetSignalsMode, RegIndex16b) \
@@ -18,6 +20,7 @@
 namespace ckernel::packer
 {
    constexpr uint32_t PACK_CNT = 4;
+   constexpr uint32_t NUM_PACKERS = 4; //Number of packers
 
    //Pack src format, save src format to make reconfig writes only
    uint32_t tile_desc_pack_src_format;
@@ -55,6 +58,39 @@ namespace ckernel::packer
      uint32_t val[4];
      pack_config_t f;
    } pack_config_u;
+
+   // Pack counters
+   typedef struct {
+      uint32_t pack_per_xy_plane : 8;
+      uint32_t pack_reads_per_xy_plane : 8;
+      uint32_t pack_xys_per_til : 7;
+      uint32_t pack_yz_transposed : 1;
+      uint32_t pack_per_xy_plane_offset : 8;
+   } pack_counters_t;
+
+   static_assert(sizeof(pack_counters_t) == (sizeof(uint32_t)));
+
+   typedef union {
+      uint32_t val;
+      pack_counters_t f;
+   } pack_counters_u;
+
+      typedef struct {
+      uint32_t mask : 16;
+      uint32_t mode : 1;
+      uint32_t tile_row_set_select_pack0: 2;
+      uint32_t tile_row_set_select_pack1: 2;
+      uint32_t tile_row_set_select_pack2: 2;
+      uint32_t tile_row_set_select_pack3: 2;
+      uint32_t reserved: 7;
+   } pck_edge_offset_t;
+
+   static_assert(sizeof(pck_edge_offset_t) == (sizeof(uint32_t)));
+
+   typedef union {
+      uint32_t val;
+      pck_edge_offset_t f;
+   } pck_edge_offset_u;
 
    // Set unpacker offsets to 0, except for unpacker 0, channel 1, X, which is the tile X dimension
    inline void packer_addr_counter_init()
@@ -379,4 +415,75 @@ namespace ckernel::packer
    {
       TTI_STOREIND (1, 0, p_ind::LD_16B, LO_16(0), p_ind::INC_NONE, p_gpr_pack::TILE_HEADER, p_gpr_pack::OUTPUT_ADDR);
    }
+
+   // READERS FOR CONFIG STRUCTS
+
+   inline pack_config_t read_pack_config_helper(uint32_t reg_addr, const volatile uint tt_reg_ptr* cfg ) {
+
+      pack_config_u config = {.val = 0};
+   
+      config.val[0] = cfg[reg_addr];
+      config.val[1] = cfg[reg_addr + 1];
+      config.val[2] = cfg[reg_addr + 2];
+      config.val[3] = cfg[reg_addr + 3];
+
+      return config.f;
+   }
+
+   inline std::array<pack_config_t, NUM_PACKERS> read_pack_config() {
+      std::array<pack_config_t, NUM_PACKERS> config_vec;
+      
+      // Get pointer to registers for current state ID 
+      volatile uint tt_reg_ptr* cfg = get_cfg_pointer();
+
+      config_vec[0] = read_pack_config_helper(THCON_SEC0_REG1_Row_start_section_size_ADDR32, cfg);
+      config_vec[1] = read_pack_config_helper(THCON_SEC0_REG8_Row_start_section_size_ADDR32, cfg);
+      config_vec[2] = read_pack_config_helper(THCON_SEC1_REG1_Row_start_section_size_ADDR32, cfg);
+      config_vec[3] = read_pack_config_helper(THCON_SEC1_REG8_Row_start_section_size_ADDR32, cfg);
+
+      return config_vec;
+   }
+
+   inline pck_edge_offset_t read_pack_edge_offset_helper(uint32_t reg_addr, const volatile uint tt_reg_ptr* cfg) {
+      pck_edge_offset_u edge = {.val=0};
+      edge.val = cfg[reg_addr];
+
+      return edge.f;
+   }
+
+   inline std::array<pck_edge_offset_t, NUM_PACKERS> read_pack_edge_offset() {
+      std::array<pck_edge_offset_t, NUM_PACKERS> edge_vec;
+
+      // Get pointer to registers for current state ID 
+      volatile uint tt_reg_ptr* cfg = get_cfg_pointer();
+
+      edge_vec[0] = read_pack_edge_offset_helper(PCK_EDGE_OFFSET_SEC0_mask_ADDR32, cfg);
+      edge_vec[1] = read_pack_edge_offset_helper(PCK_EDGE_OFFSET_SEC1_mask_ADDR32, cfg);
+      edge_vec[2] = read_pack_edge_offset_helper(PCK_EDGE_OFFSET_SEC2_mask_ADDR32, cfg);
+      edge_vec[3] = read_pack_edge_offset_helper(PCK_EDGE_OFFSET_SEC3_mask_ADDR32, cfg);
+
+      return edge_vec; 
+   }
+
+   inline pack_counters_t read_pack_counters_helper(uint32_t reg_addr, const volatile uint tt_reg_ptr* cfg) {
+      pack_counters_u counters = {.val=0};
+      counters.val = cfg[reg_addr];
+
+      return counters.f;      
+   }
+
+   inline std::array<pack_counters_t, NUM_PACKERS> read_pack_counters() {
+      std::array<pack_counters_t, NUM_PACKERS> counters_vec;
+
+      // Get pointer to registers for current state ID 
+      volatile uint tt_reg_ptr* cfg = get_cfg_pointer();
+
+      counters_vec[0] = read_pack_counters_helper(PACK_COUNTERS_SEC0_pack_per_xy_plane_ADDR32, cfg);
+      counters_vec[1] = read_pack_counters_helper(PACK_COUNTERS_SEC1_pack_per_xy_plane_ADDR32, cfg);
+      counters_vec[2] = read_pack_counters_helper(PACK_COUNTERS_SEC2_pack_per_xy_plane_ADDR32, cfg);
+      counters_vec[3] = read_pack_counters_helper(PACK_COUNTERS_SEC3_pack_per_xy_plane_ADDR32, cfg);
+
+      return counters_vec; 
+   }
+
 }
