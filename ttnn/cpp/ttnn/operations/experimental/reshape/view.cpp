@@ -59,6 +59,7 @@ Tensor tensor_reshape(
                 }
                 return Tensor(updated_storage, new_spec);
             }
+            /*
             if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
                 MultiDeviceStorage updated_storage = std::get<T>(tensor.get_storage());
                 std::unordered_map<int, ttnn::TensorSpec> new_specs;
@@ -77,6 +78,7 @@ Tensor tensor_reshape(
                 updated_storage.specs = new_specs;
                 return Tensor(updated_storage, new_spec);
             }
+            */
             if constexpr (std::is_same_v<T, DeviceStorage>) {
                 if (input_tensor.get_layout() == Layout::ROW_MAJOR) {
                     if (tensor.memory_config().memory_layout != TensorMemoryLayout::HEIGHT_SHARDED) {

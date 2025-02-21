@@ -19,15 +19,16 @@ bool can_deallocate(const Tensor& input_tensor, bool from_multi_device = false) 
         [&input_tensor, &from_multi_device](auto&& storage) {
             using T = std::decay_t<decltype(storage)>;
             if constexpr (std::is_same_v<T, DeviceStorage>) {
-                return storage.buffer.use_count() == (from_multi_device ? 2 : 1);
-            } else if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
+                return storage.get_buffer().use_count() == (from_multi_device ? 2 : 1);
+            } /*else if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
                 bool can_dealloc = true;
                 auto input_tensors = distributed::get_tensors_from_multi_device_storage(input_tensor);
                 for (const auto& device_tensor : input_tensors) {
                     can_dealloc &= can_deallocate(device_tensor, true);
                 }
                 return can_dealloc;
-            } else {
+            } */
+            else {
                 return false;
             }
         },

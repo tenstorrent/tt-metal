@@ -160,7 +160,7 @@ std::vector<T> decode_tensor_data(std::vector<T>&& physical_data, const TensorSp
 // ======================================================================================
 //                                      Validators
 // ======================================================================================
-void validate_on_device_dtype_and_layout(IDevice* device, const ttnn::Shape& shape, DataType dtype, Layout layout);
+void validate_on_device_dtype_and_layout(const ttnn::Shape& shape, DataType dtype, Layout layout);
 // -----------------------------------------------------------------------------------------------------------------------------------------------
 // ===============================================================================================================================================
 //                                                              High Level APIs

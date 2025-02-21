@@ -626,6 +626,11 @@ void DevicePool::close_devices(const std::vector<IDevice*>& devices) {
     // the main thread will modify device state while the CCL is running on device.
     // On TG - this should not be done on MMIO mapped devices, since we don't run
     // any workloads on them
+    /*
+    TODO(jchu): This needs to get skipped for new TT-Mesh because this results in calls to
+    dev->synchronize() -> cq.finish() -> which results in an assertion because we're
+    trying to work on single-device CQ
+
     for (const auto& dev_id : devices_to_close) {
         auto dev = tt::DevicePool::instance().get_active_device(dev_id);
         if (tt::Cluster::instance().is_galaxy_cluster() and dev->is_mmio_capable()) {
@@ -634,6 +639,7 @@ void DevicePool::close_devices(const std::vector<IDevice*>& devices) {
         dev->synchronize();  // Synchronize worker queue
         Synchronize(dev);    // Synchronize device
     }
+    */
 
     // Terminate fabric routers
     if (this->fabric_setting == detail::FabricSetting::FABRIC) {
