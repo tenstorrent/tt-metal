@@ -463,8 +463,10 @@ def preprocess_decoder_inputs(config, input_ids, attention_mask, *, parameters, 
     input_ids = torch.reshape(input_ids, (-1, input_shape[-1]))
     inputs_embeds = F.embedding(input_ids, parameters.embed_tokens.weight)
     attention_mask = prepare_decoder_attention_mask(attention_mask, input_shape, inputs_embeds)
-    # ttnn cannot broadcast when adding on the batch or channel dimensions so this is a workaround
-    attention_mask = attention_mask.expand(-1, config.encoder_attention_heads, -1, -1)
+    if attention_mask is not None:
+        # ttnn cannot broadcast when adding on the batch or channel dimensions so this is a workaround
+        attention_mask = attention_mask.expand(-1, config.encoder_attention_heads, -1, -1)
+        attention_mask = ttnn.from_torch(attention_mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
     positions = parameters.embed_positions.weight[0 : input_ids.shape[-1]]
     decoder_hidden_states = inputs_embeds + positions
@@ -472,7 +474,6 @@ def preprocess_decoder_inputs(config, input_ids, attention_mask, *, parameters, 
     decoder_hidden_states = ttnn.from_torch(
         decoder_hidden_states, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
     )
-    attention_mask = ttnn.from_torch(attention_mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
     return decoder_hidden_states, attention_mask
 
