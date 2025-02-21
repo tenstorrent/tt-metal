@@ -57,6 +57,7 @@ git bisect start $bad_commit $good_commit --
 while [[ "$found" = "false" ]]; do
    build_code=0
 
+   git submodule update --recursive
    echo "::group::Building `git rev-parse HEAD`"
    # ./build_metal.sh --build-tests > /dev/null; build_code=$?
    echo "FIXME: do the actual build"
