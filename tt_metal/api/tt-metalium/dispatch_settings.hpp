@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -10,7 +10,6 @@
 #include "dev_msgs.h"  // go_msg_t
 #include "hal.hpp"
 #include <tt-metalium/cq_commands.hpp>
-#include <utility>
 #include "umd/device/tt_core_coordinates.h"
 
 namespace tt {
@@ -78,7 +77,7 @@ public:
         static constexpr std::array<CoreType, 2> k_SupportedCoreTypes{CoreType::ETH, CoreType::WORKER};
         auto& store = get_store();
         for (const auto& core_type : k_SupportedCoreTypes) {
-            for (int hw_cqs = 1; hw_cqs <= MAX_NUM_HW_CQS; ++hw_cqs) {
+            for (uint32_t hw_cqs = 1; hw_cqs <= MAX_NUM_HW_CQS; ++hw_cqs) {
                 DispatchSettingsContainerKey k{core_type, hw_cqs};
                 store[k] = DispatchSettings::defaults(core_type, cluster, hw_cqs);
             }
