@@ -25,7 +25,7 @@ def dropout(hidden_states, p, training):
     return hidden_states
 
 
-def init_kv_cache(config, device, max_batch_size, max_seq_len):
+def init_kv_cache(config, device, max_batch_size, max_seq_len, n_layers=None):
     """
     Generates empty KV cache and sends to device
     """
@@ -33,7 +33,9 @@ def init_kv_cache(config, device, max_batch_size, max_seq_len):
     logger.info(f"Initializing KV cache with max batch size: {max_batch_size} and max sequence length: {max_seq_len}")
 
     kv_cache = []
-    for i in range(config.decoder_layers):
+    if n_layers is None:
+        n_layers = config.decoder_layers
+    for i in range(n_layers):
         kv_cache_layer = []
         for j in range(2):
             cache_k_or_v = torch.zeros(

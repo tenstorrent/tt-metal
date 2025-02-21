@@ -5,12 +5,13 @@
 from loguru import logger
 import pytest
 from models.experimental.functional_whisper.tt import ttnn_optimized_functional_whisper
+from models.experimental.functional_whisper.tt.ttnn_optimized_functional_whisper import init_kv_cache
 import transformers
 from transformers import AutoFeatureExtractor, WhisperModel, WhisperConfig
 from datasets import load_dataset
 import torch
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
 from models.utility_functions import torch_random
 from ttnn.model_preprocessing import preprocess_model_parameters
 
@@ -22,15 +23,17 @@ MODEL_NAME = "distil-whisper/distil-large-v3"
 @pytest.mark.parametrize("model_name", [MODEL_NAME])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize(
-    "sequence_size, use_encoder_states, use_attn_mask",
+    "sequence_size, use_encoder_states, use_attn_mask, use_kv_cache",
     (
-        [1500, False, False],
-        [32, False, True],
-        [32, True, False],
+        [1500, False, False, False],
+        [32, False, True, False],
+        [1, False, True, True],
+        [1, True, False, False],
     ),
     ids=[
         "encoder_attn",
         "decoder_self_attn",
+        "decoder_self_attn_kv_cache",
         "decoder_cross_attn",
     ],
 )
@@ -43,13 +46,18 @@ def test_whisper_attention(
     sequence_size,
     use_encoder_states,
     use_attn_mask,
+    use_kv_cache,
     use_program_cache,
     enable_async_mode,
 ):
     torch.manual_seed(0)
     config = transformers.WhisperConfig.from_pretrained(model_name)
+    is_decode = use_encoder_states or use_attn_mask or use_kv_cache
     model = transformers.models.whisper.modeling_whisper.WhisperAttention(
-        embed_dim=config.d_model, num_heads=config.encoder_attention_heads, dropout=config.attention_dropout
+        embed_dim=config.d_model,
+        num_heads=config.encoder_attention_heads,
+        dropout=config.attention_dropout,
+        is_decoder=is_decode,
     ).eval()
     torch_hidden_states = torch_random((batch_size, sequence_size, config.d_model), -0.1, 0.1, dtype=torch.float32)
     ttnn_hidden_states = ttnn.from_torch(
@@ -78,12 +86,18 @@ def test_whisper_attention(
         torch_attention_mask = None
         ttnn_attention_mask = None
 
-    torch_output = model(
+    if use_kv_cache:
+        kv_cache = init_kv_cache(config, device, max_batch_size=batch_size, max_seq_len=512, n_layers=1)[0]
+        current_decode_pos = ttnn.from_torch(torch.zeros(batch_size), device=device, dtype=ttnn.int32)
+
+    torch_output, _, past_key_values = model(
         torch_hidden_states,
         attention_mask=torch_attention_mask,
         key_value_states=torch_encoder_states,
     )
-    torch_output = torch_output[0]
+    if is_decode and use_kv_cache:
+        past_keys = past_key_values[0]
+        past_values = past_key_values[1]
 
     ttnn_parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
@@ -98,12 +112,42 @@ def test_whisper_attention(
         ttnn_attention_mask,
         is_decode=(not use_encoder_states),
         encoder_hidden_states=ttnn_encoder_states,
+        kv_cache=kv_cache if use_kv_cache else None,
+        current_decode_pos=current_decode_pos if use_kv_cache else None,
         parameters=ttnn_parameters,
     )
-
     output = ttnn.to_torch(output)
-    _, pcc_message = assert_with_pcc(torch_output, output, 0.999)
-    logger.info(f"Output PCC: {pcc_message}")
+
+    expec_out_pcc, expec_k_cache_pcc, expec_v_cache_pcc = 0.999, 0.999, 0.999
+    does_pass = True
+
+    pcc_passed, output_pcc = comp_pcc(torch_output, output, expec_out_pcc)
+    logger.info(f"Output PCC: {output_pcc}")
+    if not pcc_passed:
+        does_pass = False
+        logger.warning(f"Output PCC {output_pcc} is lower than {expec_out_pcc}")
+
+    if not use_kv_cache:
+        assert does_pass, f"Output PCC {output_pcc} is lower than expected {expec_out_pcc}"
+    else:
+        k_cache = ttnn.to_torch(kv_cache[0])[:, :, :1, :]
+        v_cache = ttnn.to_torch(kv_cache[1])[:, :, :1, :]
+
+        pcc_passed, k_cache_pcc = comp_pcc(past_keys, k_cache, expec_k_cache_pcc)
+        logger.info(f"K Cache PCC: {k_cache_pcc}")
+        if not pcc_passed:
+            does_pass = False
+            logger.warning(f"K Cache PCC {k_cache_pcc} is lower than {expec_k_cache_pcc}")
+
+        pcc_passed, v_cache_pcc = comp_pcc(past_values, v_cache, expec_v_cache_pcc)
+        logger.info(f"V Cache PCC: {v_cache_pcc}")
+        if not pcc_passed:
+            does_pass = False
+            logger.warning(f"V Cache PCC {v_cache_pcc} is lower than {expec_v_cache_pcc}")
+
+        assert (
+            does_pass
+        ), f"One of Output {output_pcc} / K Cache {k_cache_pcc} / V Cache PCC {v_cache_pcc} is lower than expected {expec_out_pcc} / {expec_k_cache_pcc} / {expec_v_cache_pcc}"
 
 
 @pytest.mark.parametrize("ttnn_model", [ttnn_optimized_functional_whisper])
