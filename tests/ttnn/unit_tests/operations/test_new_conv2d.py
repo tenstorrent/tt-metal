@@ -999,7 +999,7 @@ def test_resnet50_conv_wh(
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_height, input_width, filter_height, filter_width, stride_h, stride_w, pad_h, pad_w, shard_layout, config_override",
     (
-        (16, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, HS, {"act_block_h": 256}),
+        (16, 64, 16, 115, 115, 4, 4, 1, 1, 0, 0, HS, {"act_block_h": 64}),
         (8, 64, 64, 56, 56, 3, 3, 1, 1, 1, 1, HS, None),
     ),
 )
