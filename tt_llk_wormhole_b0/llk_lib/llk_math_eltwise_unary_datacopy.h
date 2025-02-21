@@ -38,11 +38,7 @@ inline void _llk_math_eltwise_unary_datacopy_(const std::uint32_t dst_index, con
         if constexpr (type == A2D) {
             ckernel_template::run(instrn_buffer);
         } else if constexpr (type == B2D) {
-            if constexpr (src_b_bcast_type == BroadcastType::SCALAR) {
-                // Manually clear B once mop is done
-                ckernel_template::run(instrn_buffer);
-                TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, 0);
-            } else if constexpr (src_b_bcast_type == BroadcastType::COL) {
+            if constexpr (src_b_bcast_type == BroadcastType::COL) {
                 // Mop for col broadcast only does 2 outerloops.  Needs to clear B manually and call twice
                 ckernel_template::run(instrn_buffer);
                 TTI_SETRWC(p_setrwc::CLR_B, 0, 0, 0, 0, 0);
@@ -151,13 +147,15 @@ inline void eltwise_unary_configure_mop(uint rows_per_inst, uint total_rows, con
             innerloop = (total_rows >> 3);
             broadcast_type = p_movb2d::MOV_8_ROW_BRCST;
         } else if constexpr (bcast_type == BroadcastType::SCALAR) {
-            innerloop = (total_rows >> 3);
-            broadcast_type = p_movb2d::MOV_8_ROW_BRCST_D0_BRCST;
+            // ELTWADD with zeros will be used as a workaround
+            outerloop = 1;
+            innerloop = num_faces * (total_rows >> 3);
+            broadcast_type = p_elwise::SRCB_BCAST_ALL;
         }
 
         if constexpr (bcast_type == BroadcastType::SCALAR) {
-            ckernel_template tmp(outerloop, innerloop, TT_OP_MOVB2D(0, 0, addr_mod, broadcast_type, 0));
-            tmp.set_end_op(TT_OP_SETRWC(0, p_setrwc::CR_B, 0, 0, 0, p_setrwc::SET_B));
+            ckernel_template tmp(outerloop, innerloop, TT_OP_ELWADD(0, 0, broadcast_type, addr_mod, 0));
+            tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, 0));
             tmp.program(instrn_buffer);
         } else if constexpr (bcast_type == BroadcastType::COL) {
             ckernel_template tmp(outerloop, innerloop, TT_OP_ELWADD(0, 0, broadcast_type, addr_mod, 0));

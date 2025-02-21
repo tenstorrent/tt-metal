@@ -39,6 +39,7 @@
 #include "sfpu/ckernel_sfpu_sign.h"
 #include "sfpu/ckernel_sfpu_sqrt.h"
 #include "sfpu/ckernel_sfpu_square.h"
+#include "sfpu/ckernel_sfpu_sub_int32.h"
 #include "sfpu/ckernel_sfpu_tanh_derivative.h"
 #include "sfpu/ckernel_sfpu_tanh.h"
 #include "sfpu/ckernel_sfpu_topk.h"

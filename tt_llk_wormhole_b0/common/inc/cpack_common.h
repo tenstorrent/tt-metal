@@ -10,10 +10,12 @@
 #include "ckernel_globals.h"
 #include "llk_defs.h"
 
+#include <array>
 
 namespace ckernel::packer
 {
    constexpr uint32_t PACK_CNT       = 4;
+   constexpr uint32_t NUM_PACKERS = 4; //Number of packers
 
 
    constexpr uint PACK_SEL(const uint pack_count)
@@ -51,6 +53,7 @@ namespace ckernel::packer
      uint32_t pack_l1_acc_disable_pack_zero_flag : 2;
      uint32_t reserved_2 : 1;
      uint32_t exp_threshold : 8;
+
    } pack_config_t;
 
    static_assert(sizeof(pack_config_t) == (sizeof(uint32_t)*4));
@@ -630,6 +633,98 @@ namespace ckernel::packer
    inline void write_tile_header()
    {
       TTI_STOREIND (1, 0, p_ind::LD_16B, LO_16(0), p_ind::INC_NONE, p_gpr_pack::TILE_HEADER, p_gpr_pack::OUTPUT_ADDR);
+   }
+
+   // READERS FOR CONFIG STRUCTS
+
+   inline pack_config_t read_pack_config_helper(uint32_t reg_addr, const volatile uint tt_reg_ptr* cfg ) {
+
+      pack_config_u config = {.val = 0};
+   
+      config.val[0] = cfg[reg_addr];
+      config.val[1] = cfg[reg_addr + 1];
+      config.val[2] = cfg[reg_addr + 2];
+      config.val[3] = cfg[reg_addr + 3];
+
+      return config.f;
+   }
+
+   inline std::array<pack_config_t, NUM_PACKERS> read_pack_config() {
+      std::array<pack_config_t, NUM_PACKERS> config_vec;
+
+      // Get pointer to registers for current state ID 
+      volatile uint tt_reg_ptr* cfg = get_cfg_pointer();
+
+      config_vec[0] = read_pack_config_helper(THCON_SEC0_REG1_Row_start_section_size_ADDR32, cfg);
+      config_vec[1] = read_pack_config_helper(THCON_SEC0_REG8_Row_start_section_size_ADDR32, cfg);
+      config_vec[2] = read_pack_config_helper(THCON_SEC1_REG1_Row_start_section_size_ADDR32, cfg);
+      config_vec[3] = read_pack_config_helper(THCON_SEC1_REG8_Row_start_section_size_ADDR32, cfg);
+
+      return config_vec;
+   }
+
+   inline relu_config_t read_relu_config() {
+
+      relu_config_u config;
+
+      // Get pointer to registers for current state ID
+      volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
+      config.val[0] = cfg[ALU_ACC_CTRL_Zero_Flag_disabled_src_ADDR32];
+
+      return config.r;
+   }
+
+   inline dest_rd_ctrl_t read_dest_rd_ctrl() {
+      dest_rd_ctrl_u dest;
+
+      // Get pointer to registers for current state ID
+      volatile uint tt_reg_ptr *cfg = get_cfg_pointer();
+
+      dest.val = cfg[PCK_DEST_RD_CTRL_Read_32b_data_ADDR32];
+
+      return dest.f;
+   }
+
+   inline pck_edge_offset_t read_pack_edge_offset_helper(uint32_t reg_addr, const volatile uint tt_reg_ptr* cfg) {
+      pck_edge_offset_u edge = {.val=0};
+      edge.val = cfg[reg_addr];
+
+      return edge.f;
+   }
+
+   inline std::array<pck_edge_offset_t, NUM_PACKERS> read_pack_edge_offset() {
+      std::array<pck_edge_offset_t, NUM_PACKERS> edge_vec;
+
+      // Get pointer to registers for current state ID 
+      volatile uint tt_reg_ptr* cfg = get_cfg_pointer();
+
+      edge_vec[0] = read_pack_edge_offset_helper(PCK_EDGE_OFFSET_SEC0_mask_ADDR32, cfg);
+      edge_vec[1] = read_pack_edge_offset_helper(PCK_EDGE_OFFSET_SEC1_mask_ADDR32, cfg);
+      edge_vec[2] = read_pack_edge_offset_helper(PCK_EDGE_OFFSET_SEC2_mask_ADDR32, cfg);
+      edge_vec[3] = read_pack_edge_offset_helper(PCK_EDGE_OFFSET_SEC3_mask_ADDR32, cfg);
+
+      return edge_vec; 
+   }
+
+   inline pack_counters_t read_pack_counters_helper(uint32_t reg_addr, const volatile uint tt_reg_ptr* cfg) {
+      pack_counters_u counters = {.val=0};
+      counters.val = cfg[reg_addr];
+
+      return counters.f;      
+   }
+
+   inline std::array<pack_counters_t, NUM_PACKERS> read_pack_counters() {
+      std::array<pack_counters_t, NUM_PACKERS> counters_vec;
+
+      // Get pointer to registers for current state ID 
+      volatile uint tt_reg_ptr* cfg = get_cfg_pointer();
+
+      counters_vec[0] = read_pack_counters_helper(PACK_COUNTERS_SEC0_pack_per_xy_plane_ADDR32, cfg);
+      counters_vec[1] = read_pack_counters_helper(PACK_COUNTERS_SEC1_pack_per_xy_plane_ADDR32, cfg);
+      counters_vec[2] = read_pack_counters_helper(PACK_COUNTERS_SEC2_pack_per_xy_plane_ADDR32, cfg);
+      counters_vec[3] = read_pack_counters_helper(PACK_COUNTERS_SEC3_pack_per_xy_plane_ADDR32, cfg);
+
+      return counters_vec; 
    }
 
 }
