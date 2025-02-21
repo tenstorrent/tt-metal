@@ -604,12 +604,12 @@ void Device::initialize_and_launch_firmware() {
     // Get a list of unique DRAM cores.
     std::unordered_set<CoreCoord> unique_dram_cores(dram_cores.begin(), dram_cores.end());
     TT_ASSERT(
-        pcie_cores.size() + unique_dram_cores.size() + eth_cores.size() <= MAX_NON_WORKER_CORES,
+        pcie_cores.size() + unique_dram_cores.size() + eth_cores.size() <= MAX_PHYSICAL_NON_WORKER_CORES,
         "Detected more pcie/dram/eth cores than fit in the device mailbox.");
     TT_ASSERT(
         eth_cores.size() <= MAX_VIRTUAL_NON_WORKER_CORES,
         "Detected more eth cores (virtual non-workers) than can fit in device mailbox.");
-    for (int idx = 0; idx < MAX_NON_WORKER_CORES; idx++) {
+    for (int idx = 0; idx < MAX_PHYSICAL_NON_WORKER_CORES; idx++) {
         core_info->non_worker_cores[idx] = {CORE_COORD_INVALID, CORE_COORD_INVALID, AddressableCoreType::UNKNOWN};
     }
     for (int idx = 0; idx < MAX_VIRTUAL_NON_WORKER_CORES; idx++) {
@@ -617,21 +617,35 @@ void Device::initialize_and_launch_firmware() {
     }
 
     int non_worker_cores_idx = 0;
-    for (const CoreCoord &core : pcie_cores) {
+    for (const CoreCoord& core : pcie_cores) {
         core_info->non_worker_cores[non_worker_cores_idx++] = {core.x, core.y, AddressableCoreType::PCIE};
     }
-    for (const CoreCoord &core : unique_dram_cores) {
+    for (const CoreCoord& core : unique_dram_cores) {
         core_info->non_worker_cores[non_worker_cores_idx++] = {core.x, core.y, AddressableCoreType::DRAM};
     }
     for (const tt::umd::CoreCoord& core : eth_cores) {
         core_info->non_worker_cores[non_worker_cores_idx++] = {core.x, core.y, AddressableCoreType::ETH};
     }
     if (hal.is_coordinate_virtualization_enabled()) {
-        // Track Virtual Non Worker Cores (In this case only Eth) separately
+        // Track Virtual Non Worker Cores separately
         uint32_t virtual_non_worker_cores_idx = 0;
         for (const tt::umd::CoreCoord& core : eth_cores) {
             auto virtual_core = this->virtual_core_from_physical_core({core.x, core.y});
             core_info->virtual_non_worker_cores[virtual_non_worker_cores_idx++] = {virtual_core.x, virtual_core.y, AddressableCoreType::ETH};
+        }
+
+        if (this->arch() == ARCH::BLACKHOLE) {
+            for (const CoreCoord& core : pcie_cores) {
+                auto virtual_core = this->virtual_core_from_physical_core({core.x, core.y});
+                core_info->virtual_non_worker_cores[virtual_non_worker_cores_idx++] = {
+                    virtual_core.x, virtual_core.y, AddressableCoreType::PCIE};
+            }
+
+            for (const CoreCoord& core : unique_dram_cores) {
+                auto virtual_core = this->virtual_core_from_physical_core({core.x, core.y});
+                core_info->virtual_non_worker_cores[virtual_non_worker_cores_idx++] = {
+                    virtual_core.x, virtual_core.y, AddressableCoreType::DRAM};
+            }
         }
     }
 
@@ -1094,7 +1108,7 @@ CoreType Device::core_type_from_virtual_core(const CoreCoord &virtual_coord) con
 }
 
 CoreCoord Device::virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) const {
-    if (coord.x >= this->grid_size().x || coord.y >= this->grid_size().y) {
+    if (coord.x >= this->grid_size().x || coord.y >= this->grid_size().y || this->arch() == ARCH::BLACKHOLE) {
         // Coordinate already in virtual space: NOC0 and NOC1 are the same
         return coord;
     } else {
@@ -1111,7 +1125,7 @@ CoreCoord Device::virtual_noc0_coordinate(uint8_t noc_index, CoreCoord coord) co
 }
 
 CoreCoord Device::virtual_noc_coordinate(uint8_t noc_index, CoreCoord coord) const {
-     if (coord.x >= this->grid_size().x || coord.y >= this->grid_size().y) {
+    if (coord.x >= this->grid_size().x || coord.y >= this->grid_size().y || this->arch() == ARCH::BLACKHOLE) {
         // Coordinate already in virtual space: NOC0 and NOC1 are the same
         return coord;
     } else {
@@ -1423,8 +1437,8 @@ void Device::generate_device_bank_to_noc_tables()
     dram_bank_offset_map_.clear();
     dram_bank_offset_map_.resize(num_dram_banks);
     for (unsigned bank_id = 0; bank_id < num_dram_banks; bank_id++) {
-        dram_noc_coord_per_bank[bank_id] =
-            this->dram_core_from_dram_channel(allocator->get_dram_channel_from_bank_id(bank_id));
+        auto physical_dram_core = this->dram_core_from_dram_channel(allocator->get_dram_channel_from_bank_id(bank_id));
+        dram_noc_coord_per_bank[bank_id] = this->virtual_core_from_physical_core(physical_dram_core);
         dram_bank_offset_map_[bank_id] = allocator->get_bank_offset(BufferType::DRAM, bank_id);
     }
     const size_t num_l1_banks = allocator->get_num_banks(BufferType::L1);
@@ -1441,10 +1455,18 @@ void Device::generate_device_bank_to_noc_tables()
 
     dram_bank_to_noc_xy_.clear();
     dram_bank_to_noc_xy_.reserve(tt::tt_metal::hal.get_num_nocs() * dram_noc_coord_per_bank.size());
+    bool dram_is_virtualized =
+        hal.get_virtualized_core_types().find(AddressableCoreType::DRAM) != hal.get_virtualized_core_types().end();
     for (unsigned int noc = 0; noc < tt::tt_metal::hal.get_num_nocs(); noc++) {
         for (unsigned int bank_id = 0; bank_id < dram_noc_coord_per_bank.size(); bank_id++) {
-            uint16_t noc_x = tt::tt_metal::hal.noc_coordinate(noc, soc_d.grid_size.x, dram_noc_coord_per_bank[bank_id].x);
-            uint16_t noc_y = tt::tt_metal::hal.noc_coordinate(noc, soc_d.grid_size.y, dram_noc_coord_per_bank[bank_id].y);
+            uint16_t noc_x, noc_y;
+            if (dram_is_virtualized) {
+                noc_x = dram_noc_coord_per_bank[bank_id].x;
+                noc_y = dram_noc_coord_per_bank[bank_id].y;
+            } else {
+                noc_x = tt::tt_metal::hal.noc_coordinate(noc, soc_d.grid_size.x, dram_noc_coord_per_bank[bank_id].x);
+                noc_y = tt::tt_metal::hal.noc_coordinate(noc, soc_d.grid_size.y, dram_noc_coord_per_bank[bank_id].y);
+            }
             uint16_t xy = ((noc_y << tt::tt_metal::hal.get_noc_addr_node_id_bits()) | noc_x)
                           << tt::tt_metal::hal.get_noc_coord_reg_offset();
             dram_bank_to_noc_xy_.push_back(xy);

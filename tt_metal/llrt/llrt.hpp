@@ -86,8 +86,6 @@ CoreCoord logical_core_from_ethernet_core(chip_id_t chip_id, CoreCoord& ethernet
 void write_launch_msg_to_core(
     chip_id_t chip, CoreCoord core, launch_msg_t* msg, go_msg_t* go_msg, uint64_t addr, bool send_go = true);
 
-void print_worker_cores(chip_id_t chip_id = 0);
-
 bool test_load_write_read_risc_binary(
     const ll_api::memory& mem,
     chip_id_t chip_id,
