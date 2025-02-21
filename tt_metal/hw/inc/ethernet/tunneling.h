@@ -8,6 +8,7 @@
 #include "erisc.h"
 #include "eth_l1_address_map.h"
 #include "noc_nonblocking_api.h"
+#include "hw/inc/dataflow_api.h"
 
 inline void RISC_POST_STATUS(uint32_t status) {
     volatile uint32_t* ptr = (volatile uint32_t*)(NOC_CFG(ROUTER_CFG_2));
