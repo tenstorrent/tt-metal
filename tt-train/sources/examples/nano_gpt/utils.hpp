@@ -134,4 +134,4 @@ std::string generate_run_name(const TrainingConfig &config, bool add_time_to_run
     return ss.str();
 }
 
-void initialize_device(bool ddp);
+void initialize_device(bool ddp, bool tp);
