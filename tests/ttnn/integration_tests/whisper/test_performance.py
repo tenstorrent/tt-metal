@@ -4,6 +4,7 @@
 
 import pytest
 from models.experimental.functional_whisper.tt import ttnn_optimized_functional_whisper
+from models.experimental.functional_whisper.tt.ttnn_optimized_functional_whisper import init_kv_cache
 from transformers import AutoFeatureExtractor, WhisperModel, WhisperConfig
 from datasets import load_dataset
 import torch
@@ -20,8 +21,8 @@ def get_expected_times(model_name):
     Returns expected compile time and inference time.
     """
     return {
-        "openai/whisper-base": (12.8, 0.04),
-        "distil-whisper/distil-large-v3": (10.0, 0.24),
+        "openai/whisper-base": (14.0, 0.039),
+        "distil-whisper/distil-large-v3": (11.0, 0.24),
     }[model_name]
 
 
@@ -30,11 +31,19 @@ def get_expected_times(model_name):
 @pytest.mark.models_performance_virtual_machine
 @pytest.mark.parametrize("model_name", ["openai/whisper-base", "distil-whisper/distil-large-v3"])
 @pytest.mark.parametrize("batch_size", [1])
-@pytest.mark.parametrize("decoder_sequence_size", [32])  # tile size
+@pytest.mark.parametrize("decoder_sequence_size", [1])
+@pytest.mark.parametrize("use_kv_cache", [True])
 @pytest.mark.parametrize("functional_whisper", [ttnn_optimized_functional_whisper])
 @pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
 def test_performance(
-    device, use_program_cache, model_name, batch_size, decoder_sequence_size, functional_whisper, enable_async_mode
+    device,
+    use_program_cache,
+    model_name,
+    batch_size,
+    decoder_sequence_size,
+    use_kv_cache,
+    functional_whisper,
+    enable_async_mode,
 ):
     config = WhisperConfig.from_pretrained(model_name)
 
@@ -61,6 +70,10 @@ def test_performance(
         device=device,
     )
 
+    if use_kv_cache:
+        kv_cache = init_kv_cache(config, device, max_batch_size=batch_size, max_seq_len=512)
+        current_decode_pos = ttnn.from_torch(torch.zeros(batch_size), device=device, dtype=ttnn.int32)
+
     durations = []
     for _ in range(2):
         (input_embeds, decoder_hidden_states, decoder_attention_mask) = functional_whisper.preprocess_inputs(
@@ -78,6 +91,8 @@ def test_performance(
             input_embeds,
             decoder_hidden_states,
             decoder_attention_mask=decoder_attention_mask,
+            kv_cache=kv_cache if use_kv_cache else None,
+            current_decode_pos=current_decode_pos if use_kv_cache else None,
             parameters=parameters,
         )
         tt_output = ttnn.to_torch(tt_output)
