@@ -83,7 +83,7 @@ void MAIN {
 // pre-add x + y
 #ifdef FUSE_PRE_ADD
     binary_op_init_common(cb_in0, cb_in1, cb_in);
-    add_tiles_init();
+    add_tiles_init(cb_in0, cb_in1);
     cb_reserve_back(cb_in, num_tiles_per_block);
     for (uint32_t i = 0; i < block_h; i++) {
         index_subblock_w_offset = 0;
@@ -119,7 +119,7 @@ void MAIN {
 #endif
     // E[x],
     index_h_offset = 0;
-    reduce_init_delta<false>(cb_ex_partial2, cb_in0, cb_scaler);
+    reduce_init_delta<false>(cb_in0, cb_scaler, cb_ex_partial2);
 
     cb_reserve_back(cb_ex_partial2, block_h);
     for (uint32_t i = 0; i < block_h; i++) {
@@ -143,7 +143,7 @@ void MAIN {
 #endif  // not RMSNORM
 
     // X^2
-    mul_tiles_init();
+    mul_tiles_init(cb_in0, cb_in0);
     index_h_offset = 0;
     cb_reserve_back(cb_x2, num_tiles_per_block);
     for (uint32_t i = 0; i < block_h; i++) {
@@ -177,7 +177,7 @@ void MAIN {
 
     cb_reserve_back(cb_ex_partial2, block_h);  // RMS E(x2) #Layernorm //E(x) and E(x^2)
 
-    reduce_init_delta<false>(cb_ex_partial2, cb_x2, cb_scaler);
+    reduce_init_delta<false>(cb_x2, cb_scaler, cb_ex_partial2);
     index_h_offset = 0;
     for (uint32_t i = 0; i < block_h; i++) {
         tile_regs_acquire();
@@ -200,7 +200,7 @@ void MAIN {
         cb_wait_front(cb_scaler_global, 1);
         reconfig_data_format_srca(cb_x2, cb_ex_external2);
         reconfig_data_format_srcb(cb_scaler, cb_scaler_global);
-        reduce_init_delta<false>(cb_reduction_out, cb_ex_external2, cb_scaler_global);
+        reduce_init_delta<false>(cb_ex_external2, cb_scaler_global, cb_reduction_out);
         cb_reserve_back(cb_reduction_out, num_tiles_per_partial_result * num_tiles_per_allgather_worker);
 
         for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {  // loops over height

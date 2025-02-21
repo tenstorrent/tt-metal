@@ -2,39 +2,34 @@ name: "Run set of commands in Docker"
 description: "Run commands in docker"
 
 inputs:
-  run_args:
-    description: 'Commands to run in docker'
-    required: true
   image:
     description: 'Docker image to run commands in - follows os-arch format'
     required: false
     default: ubuntu-20.04-amd64
-  version:
-    description: 'Docker image version'
-    required: false
 runs:
   using: "composite"
   steps:
-    - name: Determine Docker Tag
+    - name: Deprecation warning
       shell: bash
       run: |
-        # If the version was provided use it, otherwise, determine what the version should be.
-        if [ "${{ inputs.version }}" != "" ]; then
-          echo "IMAGE_TAG=${{ inputs.version }}" >> $GITHUB_ENV
-        else
-          if [[ "${GITHUB_REF_NAME}" == "main" ]]; then
-            echo "IMAGE_TAG=latest" >> $GITHUB_ENV
-          else
-            echo "IMAGE_TAG=dev-${GITHUB_REF_NAME//\//-}" >> $GITHUB_ENV
-          fi
-        fi
-    - name: Determine Full Docker Image Tag
+        echo "::notice::[DEPRECATION] This action is deprecated. Please migrate to reading the Docker image from the pipeline."
+
+    - name: Checkout repo
+      uses: actions/checkout@v3
+      with:
+        fetch-depth: 1
+        clean: false
+
+    - name: Compute tags
+      id: tags
       shell: bash
       run: |
-        echo "TT_METAL_DOCKER_IMAGE_TAG=ghcr.io/${{ github.repository }}/${{ inputs.image }}:${{ env.IMAGE_TAG }}" >> $GITHUB_ENV
-        echo "TT_METAL_REF_IMAGE_TAG=ghcr.io/${{ github.repository }}/${{ inputs.image }}:latest" >> $GITHUB_ENV
-    - name: Output Docker Image Tag
-      shell: bash
-      run: |
-        echo "IMAGE_TAG=${{ env.IMAGE_TAG }}"
-        echo "TT_METAL_DOCKER_IMAGE_TAG=${{ env.TT_METAL_DOCKER_IMAGE_TAG}}"
+        BUILD_TAG=$(cat \
+          install_dependencies.sh \
+          dockerfile/Dockerfile \
+          tt_metal/python_env/requirements-dev.txt \
+          docs/requirements-docs.txt \
+          tests/sweep_framework/requirements-sweeps.txt \
+          | sha1sum | cut -d' ' -f1)
+        echo "BUILD_TAG=$BUILD_TAG" >> $GITHUB_ENV
+        echo "TT_METAL_DOCKER_IMAGE_TAG=ghcr.io/${{ github.repository }}/${{ inputs.image }}:${BUILD_TAG}" >> $GITHUB_ENV

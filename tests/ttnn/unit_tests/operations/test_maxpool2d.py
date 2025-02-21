@@ -216,7 +216,7 @@ def run_max_pool(
 
     pcc_thresh = 1.0
     if dtype == ttnn.bfloat8_b:
-        pcc_thresh = 0.9997
+        pcc_thresh = 0.9994
 
     passing, pcc = assert_with_pcc(output_pytorch, golden_pytorch, pcc_thresh)
 

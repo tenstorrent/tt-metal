@@ -22,8 +22,8 @@ namespace ttnn::operations::data_movement::detail {
 operation::ProgramWithCallbacks pad_rm_reader_writer(
     const Tensor& a,
     Tensor& output,
-    const ttnn::SimpleShape& output_padded_shape,
-    const ttnn::SimpleShape& input_tensor_start,
+    const ttnn::Shape& output_padded_shape,
+    const ttnn::Shape& input_tensor_start,
     const float pad_value) {
     Program program{};
 
@@ -43,10 +43,11 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(
     const Tensor pad_value_const_tensor =
         Tensor(
             OwnedStorage{pad_value_const_buffer},
-            ttnn::SimpleShape({1, 1, 1, pad_value_const_buffer_size}),
+            ttnn::Shape({1, 1, 1, pad_value_const_buffer_size}),
             DataType::BFLOAT16,
             Layout::ROW_MAJOR)
-            .to(device, MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED, .buffer_type = BufferType::L1});
+            .to_device(
+                device, MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED, .buffer_type = BufferType::L1});
     auto pad_value_const_tensor_addr = pad_value_const_tensor.buffer()->address();
 
     Buffer* src0_buffer = a.buffer();
@@ -176,8 +177,8 @@ operation::ProgramWithCallbacks pad_rm_reader_writer(
 operation::ProgramWithCallbacks pad_tile(
     const Tensor& a,
     Tensor& output,
-    const ttnn::SimpleShape& output_padded_shape,
-    const ttnn::SimpleShape& input_tensor_start,
+    const ttnn::Shape& output_padded_shape,
+    const ttnn::Shape& input_tensor_start,
     const float pad_value) {
     tt::tt_metal::Program program{};
 
@@ -450,8 +451,8 @@ split_across_cores(CoreCoord grid_size, uint32_t nbatch, uint32_t nchannel, uint
 operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(
     const Tensor& a,
     Tensor& output,
-    const ttnn::SimpleShape& output_padded_shape,
-    const ttnn::SimpleShape& input_tensor_start,
+    const ttnn::Shape& output_padded_shape,
+    const ttnn::Shape& input_tensor_start,
     const float pad_value) {
     Program program{};
 
@@ -474,10 +475,11 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(
     const Tensor pad_value_const_tensor =
         Tensor(
             OwnedStorage{pad_value_const_buffer},
-            ttnn::SimpleShape({1, 1, 1, pad_value_const_buffer_size}),
+            ttnn::Shape({1, 1, 1, pad_value_const_buffer_size}),
             DataType::BFLOAT16,
             Layout::ROW_MAJOR)
-            .to(device, MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED, .buffer_type = BufferType::L1});
+            .to_device(
+                device, MemoryConfig{.memory_layout = TensorMemoryLayout::INTERLEAVED, .buffer_type = BufferType::L1});
     auto pad_value_const_tensor_addr = pad_value_const_tensor.buffer()->address();
 
     // uint32_t ntiles_h = output_tensor_shape[0] * output_tensor_shape[1] * output_tensor_shape[2] / TILE_HEIGHT;
@@ -697,7 +699,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core(
 std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime_args_rm(
     const Tensor& input_tensor,
     Tensor& output_tensor,
-    const ttnn::SimpleShape& input_tensor_start,
+    const ttnn::Shape& input_tensor_start,
     uint32_t num_cores_total,
     uint32_t num_cores,
     uint32_t num_cores_y,
@@ -793,13 +795,14 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
 operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
     const Tensor& a,
     Tensor& output,
-    const ttnn::SimpleShape& output_padded_shape,
-    const ttnn::SimpleShape& input_tensor_start,
+    const ttnn::Shape& output_padded_shape,
+    const ttnn::Shape& input_tensor_start,
     const float pad_value) {
     Program program{};
 
     auto output_shape = output_padded_shape;
-    uint32_t W = a.shape()[3], H = a.shape()[2], C = a.shape()[1], N = a.shape()[0];
+    const auto& a_shape = a.get_logical_shape();
+    uint32_t W = a_shape[3], H = a_shape[2], C = a_shape[1], N = a_shape[0];
     uint32_t NCH = H * C * N;
     uint32_t W_padded = output_padded_shape[3], H_padded = output_padded_shape[2], C_padded = output_padded_shape[1],
              N_padded = output_padded_shape[0];
@@ -955,7 +958,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
 
             uint32_t num_cores_total = num_cores_x * num_cores_y;
 
-            auto output_tensor_shape = dst_tensor.shape();
+            auto output_tensor_shape = dst_tensor.get_logical_shape();
             uint32_t W_padded = output_tensor_shape[3], H_padded = output_tensor_shape[2],
                      C_padded = output_tensor_shape[1], N_padded = output_tensor_shape[0];
             uint32_t NCH_padded = H_padded * C_padded * N_padded;
@@ -1019,7 +1022,7 @@ inline std::vector<std::vector<uint32_t>> group_contiguous_and_repeated_values(s
 inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_pad_runtime_args_rm_sharded(
     const Tensor& input_tensor,
     Tensor& output_tensor,
-    const ttnn::SimpleShape& input_tensor_start,
+    const ttnn::Shape& input_tensor_start,
     uint32_t num_cores_padded,
     bool row_major,
     uint32_t num_cores_x_padded,
@@ -1184,13 +1187,14 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
 operation::ProgramWithCallbacks pad_rm_sharded_height_only(
     const Tensor& a,
     Tensor& output,
-    const ttnn::SimpleShape& output_padded_shape,
-    const ttnn::SimpleShape& input_tensor_start,
+    const ttnn::Shape& output_padded_shape,
+    const ttnn::Shape& input_tensor_start,
     const float pad_value) {
     Program program{};
 
     auto output_shape = output_padded_shape;
-    uint32_t W = a.shape()[3], H = a.shape()[2], C = a.shape()[1], N = a.shape()[0];
+    const auto& a_shape = a.get_logical_shape();
+    uint32_t W = a_shape[3], H = a_shape[2], C = a_shape[1], N = a_shape[0];
     uint32_t num_unpadded_sticks = H * C * N;
     uint32_t W_padded = output_padded_shape[3], H_padded = output_padded_shape[2], C_padded = output_padded_shape[1],
              N_padded = output_padded_shape[0];
@@ -1362,8 +1366,8 @@ operation::ProgramWithCallbacks pad_rm_sharded_height_only(
 operation::ProgramWithCallbacks pad_rm_sharded_width_only(
     const Tensor& input_tensor,
     Tensor& output,
-    const ttnn::SimpleShape& output_padded_shape,
-    const ttnn::SimpleShape& input_tensor_start,
+    const ttnn::Shape& output_padded_shape,
+    const ttnn::Shape& input_tensor_start,
     float pad_value) {
     Program program{};
 
@@ -1433,14 +1437,12 @@ operation::ProgramWithCallbacks pad_rm_sharded_width_only(
         TT_THROW("ttnn.pad: unsupported data type for pad_rm_sharded_stickwise");
     }
 
-    // FIXME: assumes that this was sharded using DRAM alignment so that gaps are left in the tensor.
-    // if this changes, we should change the stick step to be 16B (L1 alignment).
-    auto dram_alignment_bytes = tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::DRAM);
+    auto l1_alignment_bytes = tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::L1);
     uint32_t padded_stick_step = tt::round_up(
-        padded_stick_bytes, dram_alignment_bytes);  // round padded_stick bytes to a multiple of dram_alignment_bytes
+        padded_stick_bytes, l1_alignment_bytes);  // round padded_stick bytes to a multiple of l1_alignment_bytes
     uint32_t unpadded_stick_step = tt::round_up(
         unpadded_stick_bytes,
-        dram_alignment_bytes);  // round unpadded_stick bytes to a multiple of dram_alignment_bytes
+        l1_alignment_bytes);  // round unpadded_stick bytes to a multiple of l1_alignment_bytes
 
     std::vector<uint32_t> reader_ct_args = {
         unpadded_stick_bytes,

@@ -12,8 +12,12 @@
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 
+#include "tt-metalium/hal_exp.hpp"
+
 namespace ttnn {
 namespace ccl {
+
+using namespace tt::tt_metal::experimental;
 
 void SyncModeSpec::add_signal(uint32_t sem_id, uint32_t wait_count) {
     this->sem_ids.push_back(sem_id);
@@ -213,8 +217,8 @@ void generate_edm_kernels_for_ring_or_linear_topology(
     std::vector<ccl::EriscDatamoverBuilder> const& counter_clockwise_edm_builders,
     std::optional<uint32_t> receiver_device_id,
     std::optional<uint32_t> sender_device_id) {
-    auto sender_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(tt::Cluster::instance().arch());
-    auto receiver_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(tt::Cluster::instance().arch());
+    auto sender_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMRead(hal::get_arch());
+    auto receiver_noc = tt::tt_metal::detail::GetPreferredNOCForDRAMWrite(hal::get_arch());
     uint32_t sender_socket_idx = 0;
     uint32_t receiver_socket_idx = 0;
     if (receiver_device_id == sender_device_id) {
@@ -589,7 +593,7 @@ RingReduceScatterBaseTensorSlicer<DERIVED_SLICER_T>::create_worker_slice_shapes_
 }
 
 std::vector<tt_xy_pair> RingReduceScatterTensorSlicer::create_worker_slice_shapes_for_tile_layout(
-    const ttnn::SimpleShape& tensor_shape,
+    const ttnn::Shape& tensor_shape,
     const tt_xy_pair& tensor_slice_shape_in_tiles,
     uint32_t num_workers,
     uint32_t max_slice_size_in_pages,
@@ -795,7 +799,7 @@ std::vector<tt_xy_pair> RingReduceScatterTensorSlicer::create_worker_slice_shape
 }
 
 std::vector<tt_xy_pair> RingReduceScatterWrappedTensorSlicer::create_worker_slice_shapes_for_tile_layout(
-    const ttnn::SimpleShape& tensor_shape,
+    const ttnn::Shape& tensor_shape,
     const tt_xy_pair& tensor_slice_shape_in_tiles,
     uint32_t num_workers,
     uint32_t max_slice_size_in_pages,
@@ -1206,7 +1210,7 @@ std::vector<tt_xy_pair> GenericWrappedTensorSlicer::compute_worker_slice_offsets
 }
 
 std::vector<tt_xy_pair> GenericWrappedTensorSlicer::create_worker_slice_shapes_for_tile_layout(
-    const ttnn::SimpleShape& tensor_shape,
+    const ttnn::Shape& tensor_shape,
     const tt_xy_pair& tensor_slice_shape_in_tiles,
     uint32_t num_workers,
     uint32_t max_slice_size_in_pages,

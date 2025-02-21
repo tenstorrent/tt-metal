@@ -1,15 +1,6 @@
 # Tutorial - Add Two Integers in a Compute Kernel 🚧
 
-1. To build and execute:
-Run the appropriate command for the Tenstorrent card you have installed:
-
-| Card             | Command                              |
-|------------------|--------------------------------------|
-| Grayskull        | ```export ARCH_NAME=grayskull```     |
-| Wormhole         | ```export ARCH_NAME=wormhole_b0```   |
-| Blackhole        | ```export ARCH_NAME=blackhole```     |
-
-Then run the following:
+1. To build and execute, you may use the following commands:
 ```bash
     export TT_METAL_HOME=$(pwd)
     ./build_metal.sh --build-programming-examples
@@ -131,7 +122,7 @@ cb_push_back(cb_id_in1, 1);
 
 12. Unpack, compute, and pack the data:
 ```binary_op_init_common(cb_in0, cb_in1, cb_out0);
-add_tiles_init();
+add_tiles_init(cb_in0, cb_in1);
 
 // wait for a block of tiles in each of input CBs
 cb_wait_front(cb_in0, 1);

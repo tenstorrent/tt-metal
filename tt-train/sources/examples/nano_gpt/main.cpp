@@ -206,8 +206,8 @@ void generate(
 
     // In case you need a pad token
     auto pad_token_id = 0U;
-
-    auto vocab_size = round_up_to_tile(tokenizer.get_vocab_size());
+    auto original_vocab_size = tokenizer.get_vocab_size();
+    auto vocab_size = round_up_to_tile(original_vocab_size);
 
     // Build mask (causal) for attention
     std::vector<float> mask;
@@ -272,7 +272,7 @@ void generate(
 
         // Now we do advanced sampling from these logits
         uint32_t next_token_id = sample_with_strategy(
-            std::span<float>(logits_ptr, vocab_size),
+            std::span<float>(logits_ptr, original_vocab_size),
             prompt_tokens,  // entire history for repetition penalty
             temperature,
             repetition_penalty,
@@ -539,7 +539,7 @@ int main(int argc, char **argv) {
                 auto data_tensor = ttml::autograd::create_tensor(ttml::core::from_vector<uint32_t, DataType::UINT32>(
                     data, ttml::core::create_shape({batch_size, 1, 1, sequence_length}), device, Layout::ROW_MAJOR));
                 auto targets_tensor = ttml::autograd::create_tensor(ttml::core::from_vector<int32_t, DataType::INT32>(
-                    targets, ttnn::SimpleShape({batch_size * sequence_length}), device));
+                    targets, ttnn::Shape({batch_size * sequence_length}), device));
                 return {data_tensor, targets_tensor};
             };
 
@@ -635,14 +635,13 @@ int main(int argc, char **argv) {
             auto samples = features->get_value().get_logical_shape()[0];
             gradient_accumulator_helper.update(loss_float, samples);
 
-            // synchronize gradients for multi-device case, no-op if single device
-            auto parameters = model->parameters();
-            ttml::core::distributed::synchronize_parameters(parameters);
-            if (config.use_clip_grad_norm) {
-                ttml::core::clip_grad_norm(parameters, config.clip_grad_norm_max_norm);
-            }
-
             if (gradient_accumulator_helper.should_step()) {
+                // synchronize gradients for multi-device case, no-op if single device
+                auto parameters = model->parameters();
+                ttml::core::distributed::synchronize_parameters(parameters);
+                if (config.use_clip_grad_norm) {
+                    ttml::core::clip_grad_norm(parameters, config.clip_grad_norm_max_norm);
+                }
                 optimizer->step();
                 scheduler->step();
                 auto global_step = optimizer->get_steps();

@@ -47,7 +47,7 @@ std::vector<ttnn::TensorSpec> NLPConcatHeadsDeviceOperation::compute_output_spec
 
     auto hidden_dim = num_heads * head_dim;
 
-    SimpleShape output_shape({input_shape[0], 1, sequence_length, hidden_dim});
+    Shape output_shape({input_shape[0], 1, sequence_length, hidden_dim});
 
     if (this->output_mem_config.is_sharded()) {
         ShardSpec shard_spec = input_tensor.shard_spec().value();

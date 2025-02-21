@@ -718,23 +718,17 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
             in3_CB_size);
     }
 
-    // Parameters for last row, col, or block
-    uint32_t last_per_core_M = M % per_core_M == 0 ? per_core_M : M % per_core_M;
+    // Parameters for last row, col, or block, no need to re-calc h-dim since there's no split on height
     uint32_t last_per_core_N = N % per_core_N == 0 ? per_core_N : N % per_core_N;
-    uint32_t last_out_block_h = last_per_core_M % out_block_h == 0 ? out_block_h : last_per_core_M % out_block_h;
     uint32_t last_out_block_w = last_per_core_N % out_block_w == 0 ? out_block_w : last_per_core_N % out_block_w;
-    uint32_t last_block_num_nonzero_subblocks_h = (last_out_block_h - 1) / out_subblock_h + 1;
+    uint32_t last_out_num_blocks_w = (last_per_core_N - 1) / out_block_w + 1;
     uint32_t last_block_num_nonzero_subblocks_w = (last_out_block_w - 1) / out_subblock_w + 1;
-    uint32_t last_subblock_of_last_block_h =
-        last_out_block_h % out_subblock_h == 0 ? out_subblock_h : last_out_block_h % out_subblock_h;
     uint32_t last_subblock_of_last_block_w =
         last_out_block_w % out_subblock_w == 0 ? out_subblock_w : last_out_block_w % out_subblock_w;
     uint32_t last_block_padded_subblock_tiles_addr_skip =
         output_single_tile_size * (out_subblock_w - last_subblock_of_last_block_w);
     uint32_t last_block_padded_block_tiles_w_skip =
         (out_subblock_w * out_subblock_h) * (out_block_w / out_subblock_w - last_block_num_nonzero_subblocks_w);
-    uint32_t last_block_padded_block_tiles_h_skip =
-        (out_block_h / out_subblock_h - last_block_num_nonzero_subblocks_h) * (out_block_w * out_subblock_h);
 
     CoreCoord start_core_noc = top_left_core_physical;
     CoreCoord end_core_noc = bottom_right_core_physical;
@@ -842,6 +836,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
                 mm_in1_sender_writer_args.push_back(last_out_block_w);
 
                 // padding args (WRITER)
+                mm_in1_sender_writer_args.push_back(last_out_num_blocks_w);
                 mm_in1_sender_writer_args.push_back(out_block_h / out_subblock_h);
                 mm_in1_sender_writer_args.push_back(out_subblock_h);
                 mm_in1_sender_writer_args.push_back(0);
@@ -855,6 +850,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
                 mm_in1_sender_writer_args.push_back(out_block_w);
 
                 // padding args (WRITER)
+                mm_in1_sender_writer_args.push_back(out_num_blocks_x);
                 mm_in1_sender_writer_args.push_back(out_block_h / out_subblock_h);
                 mm_in1_sender_writer_args.push_back(out_subblock_h);
                 mm_in1_sender_writer_args.push_back(0);
@@ -945,7 +941,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
                 writer_runtime_args[0] = src_buffer_b->address();
                 writer_runtime_args[6] = dst_buffer->address();
                 if (bias_tensor.has_value()) {
-                    writer_runtime_args[17] = (*bias_buffer)->address();
+                    writer_runtime_args[18] = (*bias_buffer)->address();
                 }
             }
 
@@ -1492,19 +1488,11 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
 
     // Parameters for last row, col, or block
     uint32_t last_per_core_M = M % per_core_M == 0 ? per_core_M : M % per_core_M;
-    uint32_t last_per_core_N = N % per_core_N == 0 ? per_core_N : N % per_core_N;
     uint32_t last_out_block_h = last_per_core_M % out_block_h == 0 ? out_block_h : last_per_core_M % out_block_h;
-    uint32_t last_out_block_w = last_per_core_N % out_block_w == 0 ? out_block_w : last_per_core_N % out_block_w;
+    uint32_t last_out_num_blocks_h = (last_per_core_M - 1) / out_block_h + 1;
     uint32_t last_block_num_nonzero_subblocks_h = (last_out_block_h - 1) / out_subblock_h + 1;
-    uint32_t last_block_num_nonzero_subblocks_w = (last_out_block_w - 1) / out_subblock_w + 1;
     uint32_t last_subblock_of_last_block_h =
         last_out_block_h % out_subblock_h == 0 ? out_subblock_h : last_out_block_h % out_subblock_h;
-    uint32_t last_subblock_of_last_block_w =
-        last_out_block_w % out_subblock_w == 0 ? out_subblock_w : last_out_block_w % out_subblock_w;
-    uint32_t last_block_padded_subblock_tiles_addr_skip =
-        output_single_tile_size * (out_subblock_w - last_subblock_of_last_block_w);
-    uint32_t last_block_padded_block_tiles_w_skip =
-        (out_subblock_w * out_subblock_h) * (out_block_w / out_subblock_w - last_block_num_nonzero_subblocks_w);
     uint32_t last_block_padded_block_tiles_h_skip =
         (out_block_h / out_subblock_h - last_block_num_nonzero_subblocks_h) * (out_block_w * out_subblock_h);
 
@@ -1541,6 +1529,7 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
                 // padding args (READER)
                 (std::uint32_t)out_block_w,  // last_block_w
                 // padding args (WRITER)
+                (std::uint32_t)out_num_blocks_x,
                 (std::uint32_t)out_block_h / out_subblock_h,
                 (std::uint32_t)out_subblock_h,
                 (std::uint32_t)0,
@@ -1575,6 +1564,8 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
 
             if (output_idx_y == num_blocks_y - 1) {
                 // padding args (WRITER)
+                mm_in1_receiver_writer_args.push_back(last_out_num_blocks_h);
+                mm_in1_receiver_writer_args.push_back(out_num_blocks_x);
                 mm_in1_receiver_writer_args.push_back(out_block_h / out_subblock_h);
                 mm_in1_receiver_writer_args.push_back(last_block_num_nonzero_subblocks_h);
                 mm_in1_receiver_writer_args.push_back(last_subblock_of_last_block_h);
@@ -1586,6 +1577,8 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
                 mm_in1_receiver_writer_args.push_back(0);
             } else {
                 // padding args (WRITER)
+                mm_in1_receiver_writer_args.push_back(out_num_blocks_y);
+                mm_in1_receiver_writer_args.push_back(out_num_blocks_x);
                 mm_in1_receiver_writer_args.push_back(out_block_h / out_subblock_h);
                 mm_in1_receiver_writer_args.push_back(out_block_h / out_subblock_h);
                 mm_in1_receiver_writer_args.push_back(out_subblock_h);
@@ -1664,7 +1657,7 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
                 sender_writer_runtime_args[0] = src_buffer_b->address();
                 sender_writer_runtime_args[6] = dst_buffer->address();
                 if (bias_tensor.has_value()) {
-                    sender_writer_runtime_args[17] = (*bias_buffer)->address();
+                    sender_writer_runtime_args[18] = (*bias_buffer)->address();
                 }
             }
 
@@ -1701,6 +1694,7 @@ operation::ProgramWithCallbacks create_program_mcast_in1(
 operation::ProgramWithCallbacks create_program_gather_in0(
     tt_metal::Program& program,
     const Tensor& a,
+    const Tensor& b,
     tt_metal::IDevice* device,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
@@ -1732,6 +1726,8 @@ operation::ProgramWithCallbacks create_program_gather_in0(
     bool untilize_out,
     const std::optional<const tt::tt_metal::v1::experimental::GlobalCircularBuffer>& global_cb,
     uint32_t num_global_cb_receivers) {
+    const bool in1_is_dram_interleaved = in1_buffer->is_dram() && !b.is_sharded();
+
     /* Core setup */
     constexpr bool row_major = true;
     CoreRangeSet all_cores = a.shard_spec().value().grid;
@@ -1773,10 +1769,19 @@ operation::ProgramWithCallbacks create_program_gather_in0(
     uint32_t in0_CB_size = in0_CB_tiles * in0_single_tile_size;
 
     /* in1 */
-    uint32_t in1_shard_height_in_tiles = in1_buffer->shard_spec().shape()[0] / in1_tile.get_tile_shape()[0];
-    uint32_t in1_shard_width_in_tiles =
-        in1_buffer->shard_spec().shape()[1] / in1_tile.get_tile_shape()[1] / num_global_cb_receivers;
-    uint32_t in1_CB_tiles = in1_shard_height_in_tiles * in1_shard_width_in_tiles;
+    uint32_t in1_shard_height_in_tiles = 0;
+    uint32_t in1_shard_width_in_tiles = 0;
+    uint32_t in1_CB_tiles = 0;
+    uint32_t in1_tensor_width_in_tiles = b.get_padded_shape()[-1] / in1_tile.get_tile_shape()[1];
+
+    if (!in1_is_dram_interleaved) {
+        in1_shard_height_in_tiles = in1_buffer->shard_spec().shape()[0] / in1_tile.get_tile_shape()[0];
+        in1_shard_width_in_tiles =
+            in1_buffer->shard_spec().shape()[1] / in1_tile.get_tile_shape()[1] / num_global_cb_receivers;
+        in1_CB_tiles = in1_shard_height_in_tiles * in1_shard_width_in_tiles;
+    } else {
+        in1_CB_tiles = 2 * in0_shard_width_in_tiles * per_core_N;  // Double buffered
+    }
     uint32_t in1_CB_size = in1_CB_tiles * in1_single_tile_size;
 
     /* in2 */
@@ -1804,7 +1809,8 @@ operation::ProgramWithCallbacks create_program_gather_in0(
     uint32_t in0_block_num_tiles = out_subblock_h * in0_block_w * in0_num_subblocks;
     uint32_t in0_subblock_num_tiles = out_subblock_h * in0_block_w;
     uint32_t in1_num_subblocks = per_core_N / out_subblock_w;
-    uint32_t in1_block_num_tiles = out_subblock_w * in0_block_w * in1_num_subblocks;
+    uint32_t in1_block_height_in_tiles = in0_block_w;
+    uint32_t in1_block_num_tiles = out_subblock_w * in1_block_height_in_tiles * in1_num_subblocks;
     uint32_t in1_block_size_bytes = in1_block_num_tiles * in1_single_tile_size;
     uint32_t in1_tensor_size_bytes = in1_block_num_tiles * num_blocks * in1_single_tile_size;
     uint32_t in1_per_core_w = out_subblock_w * in1_num_subblocks;
@@ -1820,11 +1826,12 @@ operation::ProgramWithCallbacks create_program_gather_in0(
     };
 
     std::vector<uint32_t> in1_sender_writer_compile_time_args = {
-        (std::uint32_t)in1_shard_width_in_tiles,  // in1_shard_width_in_tiles
-        (std::uint32_t)in1_shard_height_in_tiles,
-        (std::uint32_t)num_blocks,           // num_blocks
-        (std::uint32_t)in1_block_num_tiles,  // in1_block_num_tiles
-        (std::uint32_t)B,                    // batch
+        (std::uint32_t)in1_is_dram_interleaved,    // in1_is_dram_interleaved
+        (std::uint32_t)in1_block_height_in_tiles,  // in1_block_height_in_tiles
+        (std::uint32_t)per_core_N,                 // in1_block_width_in_tiles
+        (std::uint32_t)in1_tensor_width_in_tiles,  // in1_tensor_width_in_tiles
+        (std::uint32_t)num_blocks,                 // num_blocks
+        (std::uint32_t)B,                          // batch
     };
 
     std::vector<uint32_t> compute_kernel_args = {
@@ -1847,7 +1854,8 @@ operation::ProgramWithCallbacks create_program_gather_in0(
         B,                       // batch
         out_block_tiles,         // out_block_num_tiles
 
-        untilize_out,  // untilize_out
+        untilize_out,             // untilize_out
+        in1_is_dram_interleaved,  // in1_is_dram_interleaved
     };
 
     /* Kernel defines */
@@ -1939,8 +1947,10 @@ operation::ProgramWithCallbacks create_program_gather_in0(
         tt_metal::CircularBufferConfig src1_cb_config =
             tt_metal::CircularBufferConfig(in1_CB_size, {{src1_cb_index, in1_data_format}})
                 .set_page_size(src1_cb_index, in1_single_tile_size)
-                .set_tile_dims(src1_cb_index, in1_tile)
-                .set_globally_allocated_address(*in1_buffer);
+                .set_tile_dims(src1_cb_index, in1_tile);
+        if (!in1_is_dram_interleaved) {
+            src1_cb_config = src1_cb_config.set_globally_allocated_address(*in1_buffer);
+        }
         cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, src1_cb_config);
     }
 
@@ -2036,6 +2046,14 @@ operation::ProgramWithCallbacks create_program_gather_in0(
             mm_in0_args.end(), unpadded_in0_shard_widths_in_tiles.begin(), unpadded_in0_shard_widths_in_tiles.end());
         tt_metal::SetRuntimeArgs(program, mm_kernel_in0_id, core, mm_in0_args);
 
+        /* in1 */
+        std::vector<uint32_t> mm_in1_args = {
+            in1_buffer->address(),  // in1_tensor_addr
+            i,                      // ring_idx
+        };
+
+        tt_metal::SetRuntimeArgs(program, mm_kernel_in1_sender_writer_id, core, mm_in1_args);
+
         /* compute */
         std::vector<uint32_t> mm_kernel_compute_args = {
             i,  // ring_idx
@@ -2100,6 +2118,15 @@ operation::ProgramWithCallbacks create_program_gather_in0(
             }
             if (out_sharded) {
                 UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
+            }
+
+            auto& writer_runtime_args_by_core = GetRuntimeArgs(program, mm_kernel_in1_sender_writer_id);
+            for (uint32_t i = 0; i < num_cores; ++i) {
+                const auto& core = cores[i];
+                auto& writer_runtime_args = writer_runtime_args_by_core[core.x][core.y];
+
+                /* in1 */
+                writer_runtime_args[0] = src_buffer_b->address();
             }
         };
 
@@ -2237,6 +2264,7 @@ operation::ProgramWithCallbacks matmul_multi_core_reuse_mcast_1d_optimized_(
         return reuse_mcast_1d_optimized_helpers::create_program_gather_in0(
             program,
             a,
+            b,
             device,
             math_fidelity,
             fp32_dest_acc_en,

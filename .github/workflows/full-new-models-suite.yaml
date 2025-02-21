@@ -12,6 +12,8 @@ on:
           - Debug
           - RelWithDebInfo
           - CI
+  schedule:
+    - cron: "0 2,11 * * *"
 
 permissions:
   actions: read
@@ -37,6 +39,10 @@ jobs:
     needs: build-artifact-profiler
     uses: ./.github/workflows/perf-device-models-impl.yaml
     secrets: inherit
+    with:
+      docker-image: ${{ needs.build-artifact-profiler.outputs.ci-build-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact-profiler.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact-profiler.outputs.wheel-artifact-name }}
   e2e-model-perf-single-card:
     needs: build-artifact
     uses: ./.github/workflows/perf-models-impl.yaml

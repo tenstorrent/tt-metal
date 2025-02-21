@@ -6,8 +6,7 @@
 
 #include "dispatch_fixture.hpp"
 
-// TODO: ARCH_NAME specific, must remove
-#include "noc/noc_parameters.h"
+#include <tt-metalium/hal.hpp>
 
 using std::vector;
 
@@ -64,7 +63,7 @@ static void test_sems_across_core_types(
 
             // Set up args
             vector<uint32_t> eth_rtas = {
-                NOC_XY_ENCODING(phys_tensix_core.x, phys_tensix_core.y),
+                hal.noc_xy_encoding(phys_tensix_core.x, phys_tensix_core.y),
                 eth_sem_id,
                 tensix_sem_id,
                 eth_sem_init_val,
@@ -80,7 +79,7 @@ static void test_sems_across_core_types(
             SetRuntimeArgs(program, eth_kernel, eth_core, eth_rtas);
 
             vector<uint32_t> tensix_rtas = {
-                NOC_XY_ENCODING(phys_eth_core.x, phys_eth_core.y),
+                hal.noc_xy_encoding(phys_eth_core.x, phys_eth_core.y),
                 tensix_sem_id,
                 eth_sem_id,
                 tensix_sem_init_val,
@@ -247,7 +246,7 @@ TEST_F(DispatchFixture, TensixActiveEthTestCBsAcrossDifferentCoreTypes) {
         // ETH core doesn't have CB
         EXPECT_TRUE(program.get_cb_size(device, core_coord, CoreType::ETH) == 0);
 
-        uint32_t cb_addr = device->get_base_allocator_addr(HalMemType::L1);
+        uint32_t cb_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);
         uint32_t intermediate_index = intermediate_cb * sizeof(uint32_t);
 
         bool addr_match_intermediate = cb_config_vector.at(intermediate_index) == ((cb_addr) >> 4);

@@ -11,13 +11,13 @@ import os
 import torch
 from typing import Optional, Dict
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
-    pre_process_input,
-    post_process_output,
     permute_conv_parameters,
     weight_to_bfp8,
-    dealloc_input,
 )
-from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import conv_cache
+from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
+    conv_cache,
+    get_default_compute_config,
+)
 from loguru import logger
 
 
@@ -182,10 +182,6 @@ class resnetBlock2D:
         self.conv2_config_override = {}
         if (out_channels, out_channels, input_height, input_width) in config_override:
             self.conv2_config_override = config_override[(out_channels, out_channels, input_height, input_width)]
-        # if use_in_shortcut:
-        #     self.conv2_config_override["grid_size"] = self.conv_shortcut.conv.grid_size
-        #     self.conv2_config_override["per_core_out_matrix_height"] = self.conv_shortcut.conv.per_core_out_matrix_height
-        #     self.conv2_config_override["per_core_weight_matrix_width"] = self.conv_shortcut.conv.per_core_out_matrix_width
 
         self.conv2_input_height = conv2_input_height
         self.conv2_input_width = conv2_input_width
@@ -497,6 +493,7 @@ class resnetBlock2D:
                     weights_format="OIHW",
                     input_memory_config=hidden_states.memory_config(),
                     input_layout=hidden_states.get_layout(),
+                    has_bias=True,
                     **conv_kwargs_1,
                 )
                 self.conv1s_bias[0] = ttnn.prepare_conv_bias(
@@ -595,6 +592,7 @@ class resnetBlock2D:
                         weights_format="OIHW",
                         input_memory_config=split_hidden_states[i].memory_config(),
                         input_layout=split_hidden_states[i].get_layout(),
+                        has_bias=True,
                         **conv_kwargs_2,
                     )
                     self.conv1s_bias[i] = ttnn.prepare_conv_bias(
@@ -719,13 +717,7 @@ class resnetBlock2D:
             transpose_shards=False,
             reshard_if_not_optimal=False,
         )
-        compute_config = ttnn.init_device_compute_kernel_config(
-            self.device.arch(),
-            math_fidelity=ttnn.MathFidelity.LoFi,
-            math_approx_mode=True,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=False,
-        )
+        compute_config = get_default_compute_config(self.device)
         if self.conv2_config_override and "act_block_h" in self.conv2_config_override:
             conv_config.act_block_h_override = self.conv2_config_override["act_block_h"]
 
@@ -750,6 +742,7 @@ class resnetBlock2D:
                 weights_format="OIHW",
                 input_memory_config=hidden_states.memory_config(),
                 input_layout=hidden_states.get_layout(),
+                has_bias=True,
                 **conv_kwargs_3,
             )
             self.conv2_bias = ttnn.prepare_conv_bias(
@@ -822,6 +815,7 @@ class resnetBlock2D:
                     weights_format="OIHW",
                     input_memory_config=input_tensor.memory_config(),
                     input_layout=input_tensor.get_layout(),
+                    has_bias=True,
                     **conv_kwargs_4,
                 )
                 self.conv_shortcut_bias = ttnn.prepare_conv_bias(

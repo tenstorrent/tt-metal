@@ -8,8 +8,8 @@
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/util.hpp>
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_log.h>
+#include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 
 bool is_power_of_two_at_least_32(uint32_t value) { return value >= 32 && (value & (value - 1)) == 0; }
 
@@ -69,6 +69,8 @@ operation::ProgramWithCallbacks fill_pad_multi_core(const Tensor& input_tensor, 
         padded_height / tt::constants::TILE_HEIGHT * padded_width / tt::constants::TILE_HEIGHT;
     uint32_t tiles_per_tile_row = padded_width / tt::constants::TILE_HEIGHT;
 
+    bool sharded = input_tensor.memory_config().memory_layout != TensorMemoryLayout::INTERLEAVED;
+
     // create kernel
     // reader compile time args
     std::vector<uint32_t> writer_compile_time_args = {
@@ -83,7 +85,12 @@ operation::ProgramWithCallbacks fill_pad_multi_core(const Tensor& input_tensor, 
         (std::uint32_t)tiles_per_2d_tensor,
         (std::uint32_t)tiles_per_tile_row,
         (std::uint32_t)tt::constants::TILE_HEIGHT,
-        (std::uint32_t)tt::constants::FACE_HEIGHT};
+        (std::uint32_t)tt::constants::FACE_HEIGHT,
+        (std::uint32_t)sharded};
+
+    if (sharded) {
+        shard_builder::extend_sharding_compile_time_args(input_tensor, writer_compile_time_args);
+    }
 
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -103,6 +110,9 @@ operation::ProgramWithCallbacks fill_pad_multi_core(const Tensor& input_tensor, 
         {
             writer_runtime_args[2] = tile_offset;
             writer_runtime_args[3] = local_num_2d_tensors;
+            if (sharded) {
+                shard_builder::extend_sharding_run_time_args(input_tensor, writer_runtime_args);
+            }
             tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
         }
 

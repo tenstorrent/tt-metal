@@ -14,11 +14,12 @@ TT_METAL_IMPL_SRCS = \
 	tt_metal/impl/kernels/kernel.cpp \
 	tt_metal/impl/allocator/algorithms/free_list.cpp \
 	tt_metal/impl/allocator/allocator.cpp \
+	tt_metal/impl/allocator/bank_manager.cpp \
 	tt_metal/impl/allocator/basic_allocator.cpp \
 	tt_metal/impl/allocator/l1_banking_allocator.cpp \
 	tt_metal/impl/program/program.cpp \
 	tt_metal/impl/dispatch/debug_tools.cpp \
-	tt_metal/impl/dispatch/command_queue.cpp \
+	tt_metal/impl/dispatch/command_queue_comands.cpp \
 	tt_metal/impl/dispatch/launch_message_ring_buffer_state.cpp \
 	tt_metal/impl/debug/dprint_server.cpp \
 	tt_metal/impl/debug/watcher_server.cpp \

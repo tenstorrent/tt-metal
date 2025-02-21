@@ -23,8 +23,8 @@ def run_topk_test(N, C, H, W, k, largest, dtype, device):
     ttnn_input = ttnn.from_torch(input, dtype, layout=ttnn.Layout.TILE, device=device)
     ttnn_topk_values, ttnn_topk_indices = ttnn.topk(ttnn_input, k, dim=-1, largest=largest, sorted=True)
 
-    assert list(ttnn_topk_values.shape.with_tile_padding()) == [N, C, H, k]
-    assert list(ttnn_topk_indices.shape.with_tile_padding()) == [N, C, H, k]
+    assert list(ttnn_topk_values.padded_shape) == [N, C, H, k]
+    assert list(ttnn_topk_indices.padded_shape) == [N, C, H, k]
 
     ttnn_torch_values = ttnn.to_torch(ttnn_topk_values)
     ttnn_torch_indices = ttnn.to_torch(ttnn_topk_indices).to(torch.int64)

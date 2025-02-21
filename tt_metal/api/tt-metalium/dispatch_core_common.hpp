@@ -7,8 +7,9 @@
 #include "core_descriptor.hpp"
 #include "core_coord.hpp"
 #include "data_types.hpp"
-#include "get_platform_architecture.hpp"
 #include "reflection.hpp"
+
+#include <umd/device/tt_core_coordinates.h>  // CoreType
 
 namespace tt::tt_metal {
 
@@ -46,10 +47,7 @@ private:
     DispatchCoreType type_;
     DispatchCoreAxis axis_;
 
-    static DispatchCoreAxis get_default_axis() {
-        return (tt::tt_metal::get_platform_architecture() == tt::ARCH::BLACKHOLE) ? DispatchCoreAxis::COL
-                                                                                  : DispatchCoreAxis::ROW;
-    }
+    static DispatchCoreAxis get_default_axis();
 
 public:
     DispatchCoreConfig() : type_(DispatchCoreType::WORKER), axis_(get_default_axis()) {}

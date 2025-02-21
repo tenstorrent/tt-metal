@@ -15,18 +15,19 @@
 
 namespace ckernel {
 
+// clang-format off
 /**
  * Init function for all binary ops
  * Followed by the specific init required with an opcode (binrary_op_specific_init)
- * | Argument       | Description                                                   | Type     | Valid Range | Required
- * |
- * |----------------|---------------------------------------------------------------|----------|------------------------------------------------|----------|
- * | icb0           | The identifier of the circular buffer (CB) containing A       | uint32_t | 0 to 31 | True     | |
- * icb1           | The identifier of the circular buffer (CB) containing B       | uint32_t | 0 to 31 | True     | |
- * ocb            | The identifier of the circular buffer (CB) containing output  | uint32_t | 0 to 31, defaults to CB
- * 16                     | True     |
+ *
+ * | Argument       | Description                                                   | Type     | Valid Range                | Required |
+ * |----------------|---------------------------------------------------------------|----------|----------------------------|----------|
+ * | icb0           | The identifier of the circular buffer (CB) containing A       | uint32_t | 0 to 31                    | True     |
+ * | icb1           | The identifier of the circular buffer (CB) containing B       | uint32_t | 0 to 31                    | True     |
+ * | ocb            | The identifier of the circular buffer (CB) containing output  | uint32_t | 0 to 31, defaults to CB 16 | True     |
  */
-ALWI void binary_op_init_common(uint32_t icb0, uint32_t icb1, uint32_t ocb = 16) {
+// clang-format on
+ALWI void binary_op_init_common(uint32_t icb0, uint32_t icb1, uint32_t ocb) {
     UNPACK((llk_unpack_AB_hw_configure_disaggregated<DST_ACCUM_MODE>(icb0, icb1)));
     UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1)));
 
@@ -48,7 +49,7 @@ ALWI void mul_tiles_init_f() { MATH((llk_math_eltwise_binary_init<ELWMUL, NONE, 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void mul_tiles_init(uint32_t icb0 = 0, uint32_t icb1 = 1) {
+ALWI void mul_tiles_init(uint32_t icb0, uint32_t icb1) {
     MATH((llk_math_eltwise_binary_init<ELWMUL, NONE, MATH_FIDELITY>()));
     UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1)));
 }
@@ -60,16 +61,18 @@ ALWI void mul_tiles_init(uint32_t icb0 = 0, uint32_t icb1 = 1) {
  */
 ALWI void add_tiles_init_nof() { MATH((llk_math_eltwise_binary_init<ELWADD, NONE>())); }
 
+// clang-format off
 /**
  * Short init function
- * | Argument       | Description                                                   | Type     | Valid Range | Required
- * |
- * |----------------|---------------------------------------------------------------|----------|------------------------------------------------|----------|
- * | icb0           | The identifier of the circular buffer (CB) containing A       | uint32_t | 0 to 31 | True     | |
- * icb1           | The identifier of the circular buffer (CB) containing B       | uint32_t | 0 to 31 | True     | |
- * acc_to_dest    | If true, operation = A + B + dst_tile_idx of add_tiles        | bool     | 0,1 | False    |
+ *
+ * | Argument       | Description                                                   | Type     | Valid Range | Required |
+ * |----------------|---------------------------------------------------------------|----------|-------------|----------|
+ * | icb0           | The identifier of the circular buffer (CB) containing A       | uint32_t | 0 to 31     | True     |
+ * | icb1           | The identifier of the circular buffer (CB) containing B       | uint32_t | 0 to 31     | True     |
+ * | acc_to_dest    | If true, operation = A + B + dst_tile_idx of add_tiles        | bool     | 0,1         | False    |
  */
-ALWI void add_tiles_init(uint32_t icb0 = 0, uint32_t icb1 = 1, bool acc_to_dest = false) {
+// clang-format on
+ALWI void add_tiles_init(uint32_t icb0, uint32_t icb1, bool acc_to_dest = false) {
     MATH((llk_math_eltwise_binary_init<ELWADD, NONE>(0 /*transpose*/, acc_to_dest)));
     UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1, 0 /*transpose*/, acc_to_dest)));
 }
@@ -81,20 +84,23 @@ ALWI void add_tiles_init(uint32_t icb0 = 0, uint32_t icb1 = 1, bool acc_to_dest 
  */
 ALWI void sub_tiles_init_nof() { MATH((llk_math_eltwise_binary_init<ELWSUB, NONE>())); }
 
+// clang-format off
 /**
  * Short init function
- * | Argument       | Description                                                   | Type     | Valid Range | Required
- * |
- * |----------------|---------------------------------------------------------------|----------|------------------------------------------------|----------|
- * | icb0           | The identifier of the circular buffer (CB) containing A       | uint32_t | 0 to 31 | True     | |
- * icb1           | The identifier of the circular buffer (CB) containing B       | uint32_t | 0 to 31 | True     | |
- * acc_to_dest    | If true, operation = A - B + dst_tile_idx of sub_tiles        | bool     | 0,1 | False    |
+ *
+ * | Argument       | Description                                                   | Type     | Valid Range | Required |
+ * |----------------|---------------------------------------------------------------|----------|-------------|----------|
+ * | icb0           | The identifier of the circular buffer (CB) containing A       | uint32_t | 0 to 31     | True     |
+ * | icb1           | The identifier of the circular buffer (CB) containing B       | uint32_t | 0 to 31     | True     |
+ * | acc_to_dest    | If true, operation = A - B + dst_tile_idx of sub_tiles        | bool     | 0,1         | False    |
  */
-ALWI void sub_tiles_init(uint32_t icb0 = 0, uint32_t icb1 = 1, bool acc_to_dest = false) {
+// clang-format on
+ALWI void sub_tiles_init(uint32_t icb0, uint32_t icb1, bool acc_to_dest = false) {
     MATH((llk_math_eltwise_binary_init<ELWSUB, NONE>(0 /*transpose*/, acc_to_dest)));
     UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1, 0 /*transpose*/, acc_to_dest)));
 }
 
+// clang-format off
 /**
  * Performs element-wise multiplication C=A*B of tiles in two CBs at given
  * indices and writes the result to the DST register at index dst_tile_index.
@@ -103,15 +109,15 @@ ALWI void sub_tiles_init(uint32_t icb0 = 0, uint32_t icb1 = 1, bool acc_to_dest 
  *
  * Return value: None
  *
- * | Argument       | Description                                              | Type     | Valid Range | Required |
+ * | Argument       | Description                                              | Type     | Valid Range                                    | Required |
  * |----------------|----------------------------------------------------------|----------|------------------------------------------------|----------|
- * | in0_cb_id      | The identifier of the circular buffer (CB) containing A  | uint32_t | 0 to 31 | True     | |
- * in1_cb_id      | The identifier of the circular buffer (CB) containing B | uint32_t | 0 to 31 | True     | |
- * in0_tile_index | The index of tile A within the first CB                  | uint32_t | Must be less than the size of
- * the CB           | True     | | in1_tile_index | The index of tile B within the second CB                 | uint32_t
- * | Must be less than the size of the CB           | True     | | dst_tile_index | The index of the tile in DST REG for
- * the result C        | uint32_t | Must be less than the acquired size of DST REG | True     |
+ * | in0_cb_id      | The identifier of the circular buffer (CB) containing A  | uint32_t | 0 to 31                                        | True     |
+ * | in1_cb_id      | The identifier of the circular buffer (CB) containing B  | uint32_t | 0 to 31                                        | True     |
+ * | in0_tile_index | The index of tile A within the first CB                  | uint32_t | Must be less than the size of the CB           | True     | 
+ * | in1_tile_index | The index of tile B within the second CB                 | uint32_t | Must be less than the size of the CB           | True     | 
+ * | dst_tile_index | The index of the tile in DST REG for the result C        | uint32_t | Must be less than the acquired size of DST REG | True     |
  */
+ // clang-format on
 ALWI void mul_tiles(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
     // static bool first = true; // TODO(AP): static initializer causes a hang, possibly investigate
     // if (first)
@@ -127,6 +133,7 @@ ALWI void mul_tiles(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itil
         icb0, icb1, idst)));
 }
 
+// clang-format off
 /**
  * Performs element-wise addition C=A+B of tiles in two CBs at given indices
  * and writes the result to the DST register at index dst_tile_index. The DST
@@ -135,21 +142,22 @@ ALWI void mul_tiles(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itil
  *
  * Return value: None
  *
- * | Argument       | Description                                              | Type     | Valid Range | Required |
+ * | Argument       | Description                                              | Type     | Valid Range                                    | Required |
  * |----------------|----------------------------------------------------------|----------|------------------------------------------------|----------|
- * | in0_cb_id      | The identifier of the circular buffer (CB) containing A  | uint32_t | 0 to 31 | True     | |
- * in1_cb_id      | The identifier of the circular buffer (CB) containing B | uint32_t | 0 to 31 | True     | |
- * in0_tile_index | The index of tile A within the first CB                  | uint32_t | Must be less than the size of
- * the CB           | True     | | in1_tile_index | The index of tile B within the second CB                 | uint32_t
- * | Must be less than the size of the CB           | True     | | dst_tile_index | The index of the tile in DST REG for
- * the result C        | uint32_t | Must be less than the acquired size of DST REG | True     |
+ * | in0_cb_id      | The identifier of the circular buffer (CB) containing A  | uint32_t | 0 to 31                                        | True     |
+ * | in1_cb_id      | The identifier of the circular buffer (CB) containing B  | uint32_t | 0 to 31                                        | True     |
+ * | in0_tile_index | The index of tile A within the first CB                  | uint32_t | Must be less than the size of the CB           | True     | 
+ * | in1_tile_index | The index of tile B within the second CB                 | uint32_t | Must be less than the size of the CB           | True     | 
+ * | dst_tile_index | The index of the tile in DST REG for the result C        | uint32_t | Must be less than the acquired size of DST REG | True     |
  */
+ // clang-format on
 ALWI void add_tiles(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
     UNPACK((llk_unpack_AB(icb0, icb1, itile0, itile1)));
     MATH((llk_math_eltwise_binary<ELWADD, NONE, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE, DST_ACCUM_MODE>(
         icb0, icb1, idst)));
 }
 
+// clang-format off
 /**
  * Performs element-wise subtraction C=A-B of tiles in two CBs at given indices
  * and writes the result to the DST register at index dst_tile_index. The DST
@@ -158,15 +166,15 @@ ALWI void add_tiles(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itil
  *
  * Return value: None
  *
- * | Argument       | Description                                              | Type     | Valid Range | Required |
+ * | Argument       | Description                                              | Type     | Valid Range                                    | Required |
  * |----------------|----------------------------------------------------------|----------|------------------------------------------------|----------|
- * | in0_cb_id      | The identifier of the circular buffer (CB) containing A  | uint32_t | 0 to 31 | True     | |
- * in1_cb_id      | The identifier of the circular buffer (CB) containing B | uint32_t | 0 to 31 | True     | |
- * in0_tile_index | The index of tile A within the first CB                  | uint32_t | Must be less than the size of
- * the CB           | True     | | in1_tile_index | The index of tile B within the second CB                 | uint32_t
- * | Must be less than the size of the CB           | True     | | dst_tile_index | The index of the tile in DST REG for
- * the result C        | uint32_t | Must be less than the acquired size of DST REG | True     |
+ * | in0_cb_id      | The identifier of the circular buffer (CB) containing A  | uint32_t | 0 to 31                                        | True     |
+ * | in1_cb_id      | The identifier of the circular buffer (CB) containing B  | uint32_t | 0 to 31                                        | True     |
+ * | in0_tile_index | The index of tile A within the first CB                  | uint32_t | Must be less than the size of the CB           | True     | 
+ * | in1_tile_index | The index of tile B within the second CB                 | uint32_t | Must be less than the size of the CB           | True     | 
+ * | dst_tile_index | The index of the tile in DST REG for the result C        | uint32_t | Must be less than the acquired size of DST REG | True     |
  */
+ // clang-format on
 ALWI void sub_tiles(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
     UNPACK((llk_unpack_AB(icb0, icb1, itile0, itile1)));
     MATH((llk_math_eltwise_binary<ELWSUB, NONE, MATH_FIDELITY, EltwiseBinaryReuseDestType::NONE, DST_ACCUM_MODE>(
@@ -180,15 +188,15 @@ ALWI void sub_tiles(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itil
  * eltwise_binary_op_type: the binary operation type
  */
 template <bool full_init = false, EltwiseBinaryType eltwise_binary_op_type = ELWADD>
-ALWI void binary_op_specific_init()  // TODO(AP): better naming
+ALWI void binary_op_specific_init(uint32_t icb0, uint32_t icb1)  // TODO(AP): better naming
 {
     if constexpr (full_init) {
         if constexpr (eltwise_binary_op_type == ELWADD) {
-            add_tiles_init();
+            add_tiles_init(icb0, icb1);
         } else if constexpr (eltwise_binary_op_type == ELWSUB) {
-            sub_tiles_init();
+            sub_tiles_init(icb0, icb1);
         } else if constexpr (eltwise_binary_op_type == ELWMUL) {
-            mul_tiles_init();
+            mul_tiles_init(icb0, icb1);
         }
     } else {
         if constexpr (eltwise_binary_op_type == ELWADD) {
@@ -212,6 +220,7 @@ ALWI void binary_dest_reuse_tiles_init(uint32_t icb0) {
     MATH((llk_math_eltwise_binary_init<eltwise_binary_type, NONE, MATH_FIDELITY, binary_reuse_dest>(false, false)));
 }
 
+// clang-format off
 /**
  * Performs element-wise binary operations, such as multiply, add, or sub of tiles.
  * If binary_reuse_dest = EltwiseBinaryReuseDestType::DST_TO_SRCA, then the tile specified by idst will be loaded from
@@ -228,13 +237,13 @@ ALWI void binary_dest_reuse_tiles_init(uint32_t icb0) {
  *
  * Return value: None
  *
- * | Argument       | Description | Type     | Valid Range                                    | Required |
+ * | Argument       | Description                                                                                               | Type     | Valid Range                                    | Required |
  * |----------------|-----------------------------------------------------------------------------------------------------------|----------|------------------------------------------------|----------|
- * | in_cb_id       | The identifier of the circular buffer (CB) containing A | uint32_t | 0 to 31 | True     | |
- * in_tile_index  | The index of tile A within the first CB | uint32_t | Must be less than the size of the CB | True |
- * | dst_tile_index | The index of tile B that will be moved to Src reg, and the index of the tile in DST REG for the
- * result C  | uint32_t | Must be less than the acquired size of DST REG | True     |
+ * | in_cb_id       | The identifier of the circular buffer (CB) containing A                                                   | uint32_t | 0 to 31                                        | True     |
+ * | in_tile_index  | The index of tile A within the first CB                                                                   | uint32_t | Must be less than the size of the CB           | True     |
+ * | dst_tile_index | The index of tile B that will be moved to Src reg, and the index of the tile in DST REG for the result C  | uint32_t | Must be less than the acquired size of DST REG | True     |
  */
+ // clang-format on
 template <
     EltwiseBinaryType eltwise_binary_type = ELWADD,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE>

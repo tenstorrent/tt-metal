@@ -15,7 +15,7 @@ namespace ttnn::operations::moreh::moreh_sum {
 MorehSumOperation::program_factory_t MorehSumOperation::select_program_factory(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     // Case for int32
-    const auto input_rank = tensor_args.input.get_shape().value.rank();
+    const auto input_rank = tensor_args.input.get_padded_shape().rank();
 
     if (tensor_args.input.dtype() == DataType::INT32) {
         if (operation_attributes.dim == input_rank - 1) {
@@ -69,7 +69,10 @@ MorehSumOperation::spec_return_value_t MorehSumOperation::compute_output_specs(
     }
 
     const auto& input = tensor_args.input;
-    const auto& input_shape = input.get_shape();
+    auto input_shape = input.get_logical_shape();
+    if (input_shape.rank() < 2) {
+        input_shape = input_shape.to_rank(2);
+    }
     const auto input_rank = input_shape.rank();
     const bool is_tile_dim = (operation_attributes.dim == input_rank - 1 || operation_attributes.dim == input_rank - 2);
     log_debug(
@@ -82,24 +85,11 @@ MorehSumOperation::spec_return_value_t MorehSumOperation::compute_output_specs(
 
     ttnn::Shape output_shape = input_shape;
     if (operation_attributes.keepdim) {
-        auto shape = input_shape.value;
-        auto padding = shape.padding();
-
-        if (is_tile_dim) {
-            // e.g. (2, 64, 64) with dim 1 to be (2, 1[32], 64)
-            shape[operation_attributes.dim] = tt::constants::TILE_HEIGHT;
-            padding[operation_attributes.dim] = Padding::PadDimension{0, 31};
-        } else {
-            // e.g. (2, 64, 64) with dim 0 to be (1, 64, 64)
-            shape[operation_attributes.dim] = 1;
-        }
-
-        output_shape = ttnn::Shape{tt::tt_metal::LegacyShape(shape, padding)};
+        // e.g. (2, 64, 64) with dim 0 to be (1, 64, 64)
+        output_shape[operation_attributes.dim] = 1;
     } else {
         ttnn::SmallVector<uint32_t> shape;
-        ttnn::SmallVector<Padding::PadDimension> pad_dimensions;
         const std::size_t output_rank = (is_tile_dim) ? (input_rank) : (input_rank - 1);
-        auto input_padding = input_shape.value.padding();
 
         // e.g. (2, 64, 64) with dim 1 to be (2, 1[32], 64)
         // e.g. (2, 64, 64) with dim 0 to be (64, 64)
@@ -109,23 +99,19 @@ MorehSumOperation::spec_return_value_t MorehSumOperation::compute_output_specs(
                 continue;
             }
 
-            shape.push_back((is_reduced_dim && is_tile_dim) ? (tt::constants::TILE_HEIGHT) : (input_shape.value[i]));
-            pad_dimensions.push_back(
-                (is_reduced_dim && is_tile_dim) ? (Padding::PadDimension{0, 31}) : (input_padding[i]));
+            shape.push_back((is_reduced_dim && is_tile_dim) ? 1 : (input_shape[i]));
         }
 
-        auto padding = Padding(pad_dimensions, input_padding.pad_value());
-        output_shape = ttnn::Shape{tt::tt_metal::LegacyShape(shape, padding)};
+        output_shape = ttnn::Shape(std::move(shape));
     }
 
     log_debug(tt::LogOp, "{}:{} output_shape {}", __func__, __LINE__, output_shape);
     return TensorSpec(
-        output_shape.logical_shape(),
-        TensorLayout::fromLegacyPaddedShape(
+        output_shape,
+        TensorLayout(
             tensor_args.input.get_dtype(),
             PageConfig(tensor_args.input.get_layout()),
-            operation_attributes.memory_config,
-            output_shape));
+            operation_attributes.memory_config));
 };
 
 MorehSumOperation::tensor_return_value_t MorehSumOperation::create_output_tensors(

@@ -9,9 +9,10 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel.hpp>
+#include "tt-metalium/kernel_types.hpp"
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/env_vars.hpp"
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/erisc_datamover_builder.hpp"
 #include "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_edm_packet_header.hpp"
@@ -55,6 +56,7 @@ struct SubdeviceInfo {
     std::unordered_map<chip_id_t, SubDeviceId> fabric_subdevice_id;
 };
 
+using tt::tt_metal::distributed::MeshCoordinate;
 using tt::tt_metal::distributed::MeshDevice;
 using tt::tt_metal::distributed::MeshDeviceConfig;
 using tt::tt_metal::distributed::MeshDeviceView;
@@ -221,6 +223,21 @@ std::tuple<std::shared_ptr<Buffer>, std::vector<uint32_t>> build_input_buffer(
         first_device, test_config.size_bytes, test_config.page_size_bytes, test_config.input_buffer_type});
     tt_metal::detail::WriteToBuffer(local_input_buffer, inputs);
     return {local_input_buffer, inputs};
+}
+
+static void build_and_enqueue(
+    const std::vector<IDevice*>& devices, std::vector<Program>& programs, bool enqueue_only = false) {
+    TT_FATAL(
+        devices.size() == programs.size(),
+        "Number of devices must match number of programs when calling build_and_enqueue in test");
+    if (!enqueue_only) {
+        for (size_t i = 0; i < devices.size(); i++) {
+            tt::tt_metal::detail::CompileProgram(devices[i], programs[i]);
+        }
+    }
+    for (size_t i = 0; i < devices.size(); i++) {
+        tt_metal::EnqueueProgram(devices[i]->command_queue(), programs[i], false);
+    }
 }
 
 struct EthLinkHop {
@@ -411,7 +428,8 @@ bool RunLoopbackTest(
     // EDM Builder Setup
     ////////////////////////////////////////////////////////////////////////////
 
-    static constexpr std::size_t edm_buffer_size = 4096 + PACKET_HEADER_SIZE_BYTES;
+    static constexpr std::size_t edm_buffer_size =
+        ttnn::ccl::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes + PACKET_HEADER_SIZE_BYTES;
 
     auto chip0_worker_fabric_connection = chip_0_edm_builder.build_connection_to_worker_channel();
     ////////////////////////////////////////////////////////////////////////////
@@ -894,7 +912,8 @@ bool RunLineFabricTest(
     std::size_t page_plus_header_size = page_size + sizeof(tt::fabric::PacketHeader);
     std::size_t tensor_size_bytes = num_pages_total * page_size;
 
-    static constexpr std::size_t edm_buffer_size = 4096 + PACKET_HEADER_SIZE_BYTES;
+    static constexpr std::size_t edm_buffer_size =
+        ttnn::ccl::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes + PACKET_HEADER_SIZE_BYTES;
     const size_t local_chip_id = 0;
     const size_t remote_chip_id = 1;
     auto program_ptrs = std::vector<Program*>(devices.size());
@@ -1074,12 +1093,7 @@ void setup_test_with_persistent_fabric(
 
         log_info(tt::LogTest, "Building EDM kernels");
         line_fabric->build_kernels();
-        for (size_t i = 0; i < devices.size(); i++) {
-            tt::tt_metal::detail::CompileProgram(devices[i], fabric_programs->at(i));
-        }
-        for (size_t i = 0; i < devices.size(); i++) {
-            tt_metal::EnqueueProgram(devices[i]->command_queue(), fabric_programs->at(i), false);
-        }
+        build_and_enqueue(devices, *fabric_programs);
     }
 }
 
@@ -1112,7 +1126,10 @@ int TestLineFabricEntrypoint(
 
     // build a line of devices
     std::vector<IDevice*> devices = {
-        view.get_device(0, 0), view.get_device(0, 1), view.get_device(0, 2), view.get_device(0, 3)};
+        view.get_device(MeshCoordinate(0, 0)),
+        view.get_device(MeshCoordinate(0, 1)),
+        view.get_device(MeshCoordinate(0, 2)),
+        view.get_device(MeshCoordinate(0, 3))};
     std::vector<Program> programs(enable_persistent_fabric ? 1 : devices.size());
     std::optional<SubdeviceInfo> subdevice_managers = std::nullopt;
     std::optional<std::vector<Program>> fabric_programs;
@@ -1193,8 +1210,8 @@ int TestLoopbackEntrypoint(
     T3000TestDevice test_fixture;
     auto view = test_fixture.mesh_device_->get_view();
 
-    const auto& device_0 = view.get_device(0, 0);
-    const auto& device_1 = view.get_device(0, 1);
+    const auto& device_0 = view.get_device(MeshCoordinate(0, 0));
+    const auto& device_1 = view.get_device(MeshCoordinate(0, 1));
 
     auto const& active_eth_cores = device_0->get_active_ethernet_cores(true);
     auto eth_sender_core_iter = active_eth_cores.begin();
@@ -1226,7 +1243,8 @@ int TestLoopbackEntrypoint(
     IDevice* sender_device = device_0;
     IDevice* receiver_device = device_1;
 
-    static constexpr std::size_t edm_buffer_size = 4096 + PACKET_HEADER_SIZE_BYTES;
+    static constexpr std::size_t edm_buffer_size =
+        ttnn::ccl::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes + PACKET_HEADER_SIZE_BYTES;
     const chip_id_t local_chip_id = 0;
     const chip_id_t remote_chip_id = 1;
     auto const& edm_config = ttnn::ccl::FabricEriscDatamoverConfig(edm_buffer_size, 1, 2);
@@ -1376,7 +1394,7 @@ bool TestMultiInputReaderKernel(
     std::vector<IDevice*> devices;
     devices.reserve(fabric_num_devices);
     for (size_t i = 0; i < fabric_num_devices; i++) {
-        devices.push_back(view.get_device(0, i));
+        devices.push_back(view.get_device(MeshCoordinate(0, i)));
     }
 
     std::vector<Program> programs(enable_persistent_fabric ? 1 : devices.size());
@@ -1402,13 +1420,13 @@ bool TestMultiInputReaderKernel(
     // multicast to a consistent destination address
     for (size_t i = 0; i < devices.size(); i++) {
         input0_tensors_device.push_back(
-            input_tensor0.to(devices.at(i), input_tensor0_mem_config, ttnn::DefaultQueueId));
+            input_tensor0.to_device(devices.at(i), input_tensor0_mem_config, ttnn::DefaultQueueId));
         input1_tensors_device.push_back(
-            input_tensor1.to(devices.at(i), input_tensor1_mem_config, ttnn::DefaultQueueId));
+            input_tensor1.to_device(devices.at(i), input_tensor1_mem_config, ttnn::DefaultQueueId));
         output0_tensors_device.push_back(
-            output_tensor0.to(devices.at(i), output_tensor0_mem_config, ttnn::DefaultQueueId));
+            output_tensor0.to_device(devices.at(i), output_tensor0_mem_config, ttnn::DefaultQueueId));
         output1_tensors_device.push_back(
-            output_tensor1.to(devices.at(i), output_tensor1_mem_config, ttnn::DefaultQueueId));
+            output_tensor1.to_device(devices.at(i), output_tensor1_mem_config, ttnn::DefaultQueueId));
     }
     TT_FATAL(
         !enable_persistent_fabric || subdevice_managers.has_value(),
@@ -1460,7 +1478,7 @@ bool TestMultiInputReaderKernel(
 
         log_info(tt::LogTest, "Finished");
         for (auto d : devices) {
-            tt_metal::Synchronize(d, ttnn::DefaultQueueId);
+            tt_metal::Synchronize(d, *ttnn::DefaultQueueId);
         }
     }
     return pass;
@@ -1470,7 +1488,8 @@ bool TestMultiInputReaderKernel(
 ///  MESSAGE COUNT TERMINATION MODE
 ////////////////////////////////////////////////////////////////////
 
-TEST(WorkerFabricEdmDatapath, FabricEDMLoopback_With_Workers_SingleMessage) {
+// Disabled non persistent fabric tests - non-persistent fabric mode not supported
+TEST(WorkerFabricEdmDatapath, DISABLED_FabricEDMLoopback_With_Workers_SingleMessage) {
     const uint32_t page_size = 2048;
     const uint32_t num_pages_total = 1;
     const bool src_is_dram = true;
@@ -1481,7 +1500,8 @@ TEST(WorkerFabricEdmDatapath, FabricEDMLoopback_With_Workers_SingleMessage) {
 }
 
 // Will wrapp sender but not receiver buffers
-TEST(WorkerFabricEdmDatapath, FabricEDMLoopback_With_Workers_2_messages) {
+// Disabled non persistent fabric tests - non-persistent fabric mode not supported
+TEST(WorkerFabricEdmDatapath, DISABLED_FabricEDMLoopback_With_Workers_2_messages) {
     const uint32_t page_size = 2048;
     const uint32_t num_pages_total = 2;
     const bool src_is_dram = true;
@@ -1491,7 +1511,8 @@ TEST(WorkerFabricEdmDatapath, FabricEDMLoopback_With_Workers_2_messages) {
     ASSERT_EQ(result, 0);
 }
 // Will wrapp sender but not receiver buffers
-TEST(WorkerFabricEdmDatapath, FabricEDMLoopback_With_Workers_10_messages) {
+// Disabled non persistent fabric tests - non-persistent fabric mode not supported
+TEST(WorkerFabricEdmDatapath, DISABLED_FabricEDMLoopback_With_Workers_10_messages) {
     const uint32_t page_size = 2048;
     const uint32_t num_pages_total = 10;
     const bool src_is_dram = true;
@@ -1502,7 +1523,8 @@ TEST(WorkerFabricEdmDatapath, FabricEDMLoopback_With_Workers_10_messages) {
 }
 
 // Will wrapp sender and receiver buffers
-TEST(WorkerFabricEdmDatapath, FabricEDMLoopback_With_Workers_20_messages) {
+// Disabled non persistent fabric tests - non-persistent fabric mode not supported
+TEST(WorkerFabricEdmDatapath, DISABLED_FabricEDMLoopback_With_Workers_20_messages) {
     const uint32_t page_size = 2048;
     const uint32_t num_pages_total = 20;
     const bool src_is_dram = true;
@@ -1512,7 +1534,8 @@ TEST(WorkerFabricEdmDatapath, FabricEDMLoopback_With_Workers_20_messages) {
     ASSERT_EQ(result, 0);
 }
 
-TEST(WorkerFabricEdmDatapath, FabricEDMLoopback_With_Workers) {
+// Disabled non persistent fabric tests - non-persistent fabric mode not supported
+TEST(WorkerFabricEdmDatapath, DISABLED_FabricEDMLoopback_With_Workers) {
     const uint32_t page_size = 2048;
     const uint32_t num_pages_total = 10000;
     const bool src_is_dram = true;
@@ -1580,7 +1603,8 @@ TEST(WorkerFabricEdmDatapath, FabricEDMLoopback_With_Workers_PersistentFabric) {
 
 ////////////////////////////////
 
-TEST(WorkerFabricEdmDatapath, LineFabricMcast_SingleMessage_SingleSource) {
+// Disabled non persistent fabric tests - non-persistent fabric mode not supported
+TEST(WorkerFabricEdmDatapath, DISABLED_LineFabricMcast_SingleMessage_SingleSource) {
     const uint32_t page_size = 2048;
     const uint32_t num_pages_total = 1;
     const bool src_is_dram = true;
@@ -1595,7 +1619,8 @@ TEST(WorkerFabricEdmDatapath, LineFabricMcast_SingleMessage_SingleSource) {
 }
 
 // Non-functional on harvested parts. Needs testing on unharvested parts.
-TEST(WorkerFabricEdmDatapath, LineFabricMcast_ManyMessages_SingleSource) {
+// Disabled non persistent fabric tests - non-persistent fabric mode not supported
+TEST(WorkerFabricEdmDatapath, DISABLED_LineFabricMcast_ManyMessages_SingleSource) {
     const uint32_t page_size = 2048;
     const uint32_t num_pages_total = 10000;
     const bool src_is_dram = true;
@@ -1646,7 +1671,7 @@ TEST(WorkerFabricEdmDatapath, LineFabricMcast_ManyMessages_SingleSource_Persiste
 ////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////
 
-ttnn::ccl::Shape4D<uint32_t> shape_to_shape_in_tiles(const ttnn::SimpleShape& shape) {
+ttnn::ccl::Shape4D<uint32_t> shape_to_shape_in_tiles(const ttnn::Shape& shape) {
     auto logical_shape = shape;
     logical_shape[-2] /= tt::constants::TILE_HEIGHT;
     logical_shape[-1] /= tt::constants::TILE_WIDTH;
@@ -1657,7 +1682,7 @@ ttnn::ccl::Shape4D<uint32_t> shape_to_shape_in_tiles(const ttnn::SimpleShape& sh
 }
 
 bool RunMultiInputReaderTestPropagateFullTensorIn(
-    const ttnn::SimpleShape& tensor_shape,
+    const ttnn::Shape& tensor_shape,
     const Layout& layout,
     const MemoryConfig& in0_memory_config,
     const MemoryConfig& in1_memory_config,
@@ -1666,9 +1691,10 @@ bool RunMultiInputReaderTestPropagateFullTensorIn(
     TwoInputReaderKernelWriteMode test_writeback_mode) {
     auto num_elems = std::reduce(tensor_shape.cbegin(), tensor_shape.cend(), 1, std::multiplies<uint32_t>());
     Tensor input_tensor0 =
-        ttnn::experimental::view(ttnn::arange(0, num_elems, 1, DataType::UINT32), tensor_shape).to(layout);
+        ttnn::experimental::view(ttnn::arange(0, num_elems, 1, DataType::UINT32), tensor_shape).to_layout(layout);
     Tensor input_tensor1 =
-        ttnn::experimental::view(ttnn::arange(num_elems, 2 * num_elems, 1, DataType::UINT32), tensor_shape).to(layout);
+        ttnn::experimental::view(ttnn::arange(num_elems, 2 * num_elems, 1, DataType::UINT32), tensor_shape)
+            .to_layout(layout);
     Tensor output_tensor0 = ttnn::experimental::view(ttnn::ones(tensor_shape, DataType::UINT32, layout), tensor_shape);
     Tensor output_tensor1 = ttnn::experimental::view(ttnn::ones(tensor_shape, DataType::UINT32, layout), tensor_shape);
     input_tensor0.set_tensor_spec(TensorSpec(
@@ -1726,7 +1752,7 @@ bool RunMultiInputReaderTestPropagateFullTensorIn(
 
 TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_SinglePageTile) {
     auto pass = RunMultiInputReaderTestPropagateFullTensorIn(
-        ttnn::SimpleShape({1, 1, 32, 32}),
+        ttnn::Shape({1, 1, 32, 32}),
         Layout::TILE,
         MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM),
         MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM),
@@ -1738,7 +1764,7 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_SinglePageTile)
 
 TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0) {
     auto pass = RunMultiInputReaderTestPropagateFullTensorIn(
-        ttnn::SimpleShape({1, 1, 32, 64}),
+        ttnn::Shape({1, 1, 32, 64}),
         Layout::TILE,
         MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM),
         MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM),
@@ -1749,7 +1775,7 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0) {
 }
 
 TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Sharded) {
-    ttnn::SimpleShape tensor_shape({1, 1, 32, 64});
+    ttnn::Shape tensor_shape({1, 1, 32, 64});
     auto mem_config = MemoryConfig(
         TensorMemoryLayout::WIDTH_SHARDED,
         BufferType::L1,
@@ -1769,7 +1795,7 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Shar
     ASSERT_TRUE(pass);
 }
 TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Sharded1) {
-    ttnn::SimpleShape tensor_shape({1, 1, 32, 128});
+    ttnn::Shape tensor_shape({1, 1, 32, 128});
     auto mem_config = MemoryConfig(
         TensorMemoryLayout::WIDTH_SHARDED,
         BufferType::L1,
@@ -1789,7 +1815,7 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Shar
     ASSERT_TRUE(pass);
 }
 TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Sharded2) {
-    ttnn::SimpleShape tensor_shape({1, 1, 32, 128});
+    ttnn::Shape tensor_shape({1, 1, 32, 128});
     auto mem_config = MemoryConfig(
         TensorMemoryLayout::WIDTH_SHARDED,
         BufferType::L1,
@@ -1809,7 +1835,7 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Shar
     ASSERT_TRUE(pass);
 }
 TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Sharded3) {
-    ttnn::SimpleShape tensor_shape({1, 1, 32, 8192});
+    ttnn::Shape tensor_shape({1, 1, 32, 8192});
     size_t ncores_x = 8;
     size_t ncores_y = 4;
     auto mem_config = MemoryConfig(
@@ -1831,7 +1857,7 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Shar
     ASSERT_TRUE(pass);
 }
 TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Sharded4) {
-    ttnn::SimpleShape tensor_shape({1, 1, 32, 1024});
+    ttnn::Shape tensor_shape({1, 1, 32, 1024});
     size_t ncores_x = 8;
     size_t ncores_y = 4;
     auto mem_config = MemoryConfig(
@@ -1854,7 +1880,7 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Shar
 }
 
 TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Sharded_WithReshard0) {
-    ttnn::SimpleShape tensor_shape({1, 1, 32, 128});
+    ttnn::Shape tensor_shape({1, 1, 32, 128});
     Layout const layout = Layout::TILE;
     auto input_mem_config = MemoryConfig(
         TensorMemoryLayout::WIDTH_SHARDED,
@@ -1884,7 +1910,7 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Shar
 }
 
 TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Sharded_WithReshard0_UniquePerStream) {
-    ttnn::SimpleShape tensor_shape({1, 1, 32, 128});
+    ttnn::Shape tensor_shape({1, 1, 32, 128});
     Layout const layout = Layout::TILE;
     size_t in_shard_grid_x = 1;
     size_t in_shard_grid_y = 1;
@@ -1924,7 +1950,7 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage0_Shar
 // Copying even slightly large tensors exposes issues in underlying tensor code
 // that isn't under test here
 TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage1) {
-    ttnn::SimpleShape tensor_shape({1, 1, 256, 256});
+    ttnn::Shape tensor_shape({1, 1, 256, 256});
     auto pass = RunMultiInputReaderTestPropagateFullTensorIn(
         tensor_shape,
         Layout::TILE,
@@ -1946,7 +1972,7 @@ TEST(WorkerCclCommandProcessingKernelLocalMode, MultiInputReader_MultiPage1) {
 // ////////////////////////////////////////////////////////////////////
 
 TEST(WorkerCclCommandProcessingKernelFabricUnicastMode, MultiInputReader_SinglePageTile_OneHop_PersistentFabric) {
-    ttnn::SimpleShape tensor_shape({1, 1, 32, 32});
+    ttnn::Shape tensor_shape({1, 1, 32, 32});
     constexpr size_t distance_dest_device = 1;
     constexpr size_t num_devices = 4;
     Layout const layout = Layout::TILE;
@@ -1957,9 +1983,10 @@ TEST(WorkerCclCommandProcessingKernelFabricUnicastMode, MultiInputReader_SingleP
 
     auto num_elems = std::reduce(tensor_shape.cbegin(), tensor_shape.cend(), 1, std::multiplies<uint32_t>());
     Tensor input_tensor0 =
-        ttnn::experimental::view(ttnn::arange(0, num_elems, 1, DataType::UINT32), tensor_shape).to(layout);
+        ttnn::experimental::view(ttnn::arange(0, num_elems, 1, DataType::UINT32), tensor_shape).to_layout(layout);
     Tensor input_tensor1 =
-        ttnn::experimental::view(ttnn::arange(num_elems, 2 * num_elems, 1, DataType::UINT32), tensor_shape).to(layout);
+        ttnn::experimental::view(ttnn::arange(num_elems, 2 * num_elems, 1, DataType::UINT32), tensor_shape)
+            .to_layout(layout);
     Tensor output_tensor0 = ttnn::experimental::view(ttnn::ones(tensor_shape, DataType::UINT32, layout), tensor_shape);
     Tensor output_tensor1 = ttnn::experimental::view(ttnn::ones(tensor_shape, DataType::UINT32, layout), tensor_shape);
 
@@ -2024,10 +2051,7 @@ TEST(WorkerCclCommandProcessingKernelFabricUnicastMode, MultiInputReader_SingleP
 // ////////////////////////////////////////////////////////////////////
 
 void RunFabricMcastFullTensorPropagateTest(
-    const ttnn::SimpleShape& tensor_shape,
-    size_t distance_dest_device,
-    size_t num_devices,
-    bool enable_persistent_fabric) {
+    const ttnn::Shape& tensor_shape, size_t distance_dest_device, size_t num_devices, bool enable_persistent_fabric) {
     Layout const layout = Layout::TILE;
     MemoryConfig const in0_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
     MemoryConfig const in1_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
@@ -2036,9 +2060,10 @@ void RunFabricMcastFullTensorPropagateTest(
 
     auto num_elems = std::reduce(tensor_shape.cbegin(), tensor_shape.cend(), 1, std::multiplies<uint32_t>());
     Tensor input_tensor1 =
-        ttnn::experimental::view(ttnn::arange(num_elems, 2 * num_elems, 1, DataType::UINT32), tensor_shape).to(layout);
+        ttnn::experimental::view(ttnn::arange(num_elems, 2 * num_elems, 1, DataType::UINT32), tensor_shape)
+            .to_layout(layout);
     Tensor input_tensor0 =
-        ttnn::experimental::view(ttnn::arange(0, num_elems, 1, DataType::UINT32), tensor_shape).to(layout);
+        ttnn::experimental::view(ttnn::arange(0, num_elems, 1, DataType::UINT32), tensor_shape).to_layout(layout);
     Tensor output_tensor1 = ttnn::experimental::view(ttnn::ones(tensor_shape, DataType::UINT32, layout), tensor_shape);
     Tensor output_tensor0 = ttnn::experimental::view(ttnn::ones(tensor_shape, DataType::UINT32, layout), tensor_shape);
     input_tensor0.set_tensor_spec(TensorSpec(
@@ -2100,45 +2125,45 @@ void RunFabricMcastFullTensorPropagateTest(
 }
 
 TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_SinglePageTile_SingleHop_PersistentFabric) {
-    ttnn::SimpleShape tensor_shape({1, 1, 32, 32});
+    ttnn::Shape tensor_shape({1, 1, 32, 32});
     constexpr size_t distance_dest_device = 1;
     constexpr size_t num_devices = 4;
     RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices, true);
 }
 
 TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_SinglePageTile_TwoHop_PersistentFabric) {
-    ttnn::SimpleShape tensor_shape({1, 1, 32, 32});
+    ttnn::Shape tensor_shape({1, 1, 32, 32});
     constexpr size_t distance_dest_device = 2;
     constexpr size_t num_devices = 4;
     RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices, true);
 }
 TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_SinglePageTile_ThreeHop_PersistentFabric) {
-    ttnn::SimpleShape tensor_shape({1, 1, 32, 32});
+    ttnn::Shape tensor_shape({1, 1, 32, 32});
     constexpr size_t distance_dest_device = 3;
     constexpr size_t num_devices = 4;
     RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices, true);
 }
 
 TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_4PageTile_SingleHop_PersistentFabric) {
-    ttnn::SimpleShape tensor_shape({1, 1, 32, 128});
+    ttnn::Shape tensor_shape({1, 1, 32, 128});
     constexpr size_t distance_dest_device = 1;
     constexpr size_t num_devices = 4;
     RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices, true);
 }
 TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, DMultiInputReader_4PageTile_TwoHop_PersistentFabric) {
-    ttnn::SimpleShape tensor_shape({1, 1, 128, 32});
+    ttnn::Shape tensor_shape({1, 1, 128, 32});
     constexpr size_t distance_dest_device = 2;
     constexpr size_t num_devices = 4;
     RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices, true);
 }
 TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_4PageTile_ThreeHop_PersistentFabric) {
-    ttnn::SimpleShape tensor_shape({1, 1, 64, 64});
+    ttnn::Shape tensor_shape({1, 1, 64, 64});
     constexpr size_t distance_dest_device = 3;
     constexpr size_t num_devices = 4;
     RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices, true);
 }
 TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_lotsPageTile_ThreeHop_PersistentFabric) {
-    ttnn::SimpleShape tensor_shape({1, 1, 64, 16384});
+    ttnn::Shape tensor_shape({1, 1, 64, 16384});
     constexpr size_t distance_dest_device = 3;
     constexpr size_t num_devices = 4;
     RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices, true);
@@ -2146,7 +2171,7 @@ TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_lotsP
 
 bool RunPipelinedWorkersTest(
 
-    ttnn::SimpleShape tensor_shape,
+    ttnn::Shape tensor_shape,
     const size_t split_dim,
 
     // In this test we will have n stages with anywhere from 1 to 8 workers per stage (this will be configurable)
@@ -2180,7 +2205,7 @@ bool RunPipelinedWorkersTest(
     T3000TestDevice test_fixture;
     auto view = test_fixture.mesh_device_->get_view();
 
-    IDevice* device = view.get_device(0, 0);
+    IDevice* device = view.get_device(MeshCoordinate(0, 0));
     ;
 
     // General setup is as follows:
@@ -2219,7 +2244,7 @@ bool RunPipelinedWorkersTest(
     device_tensors.reserve(num_tensors);
     auto num_elems = std::reduce(tensor_shape.cbegin(), tensor_shape.cend(), 1, std::multiplies<uint32_t>());
     host_tensors.push_back(
-        ttnn::experimental::view(ttnn::arange(0, num_elems, 1, DataType::UINT32), tensor_shape).to(layout));
+        ttnn::experimental::view(ttnn::arange(0, num_elems, 1, DataType::UINT32), tensor_shape).to_layout(layout));
     for (size_t i = 1; i < num_tensors; ++i) {
         host_tensors.push_back(
             ttnn::experimental::view(ttnn::ones(tensor_shape, DataType::UINT32, layout), tensor_shape));
@@ -2227,7 +2252,7 @@ bool RunPipelinedWorkersTest(
     TT_FATAL(mem_configs.size() == num_tensors, "Must have a memory config for each tensor");
     for (size_t i = 0; i < num_tensors; i++) {
         host_tensors[i].set_tensor_spec(tensor_specs[i]);
-        device_tensors.push_back(host_tensors[i].to(device, mem_configs[i]));
+        device_tensors.push_back(host_tensors[i].to_device(device, mem_configs[i]));
         log_info("Tensor[{}] allocated starting at address {}", i, device_tensors[i].buffer()->address());
     }
     TT_ASSERT(device_tensors.size() == num_tensors);
@@ -2445,7 +2470,7 @@ bool RunPipelinedWorkersTest(
 }
 
 TEST(WorkerCclCommandProcessingKernels, ChainOfCommandProcessorsWithVaryingDataReadOrders_LocalOnly0) {
-    ttnn::SimpleShape tensor_shape({1, 1, 64, 16384});
+    ttnn::Shape tensor_shape({1, 1, 64, 16384});
     const size_t split_dim = 3;
 
     // In this test we will have n stages with anywhere from 1 to 8 workers per stage (this will be configurable)
@@ -2492,7 +2517,7 @@ TEST(WorkerCclCommandProcessingKernels, ChainOfCommandProcessorsWithVaryingDataR
     ASSERT_TRUE(pass);
 }
 TEST(WorkerCclCommandProcessingKernels, ChainOfCommandProcessorsWithVaryingDataReadOrders_LocalOnly1) {
-    ttnn::SimpleShape tensor_shape({1, 1, 64, 128});
+    ttnn::Shape tensor_shape({1, 1, 64, 128});
     const size_t split_dim = 3;
 
     // In this test we will have n stages with anywhere from 1 to 8 workers per stage (this will be configurable)
@@ -2539,7 +2564,7 @@ TEST(WorkerCclCommandProcessingKernels, ChainOfCommandProcessorsWithVaryingDataR
     ASSERT_TRUE(pass);
 }
 TEST(WorkerCclCommandProcessingKernels, ChainOfCommandProcessorsWithVaryingDataReadOrders_LocalOnly2) {
-    ttnn::SimpleShape tensor_shape({1, 1, 64, 8192});
+    ttnn::Shape tensor_shape({1, 1, 64, 8192});
     const size_t split_dim = 3;
 
     // In this test we will have n stages with anywhere from 1 to 8 workers per stage (this will be configurable)
@@ -2590,13 +2615,13 @@ TEST(WorkerCclCommandProcessingKernels, ChainOfCommandProcessorsWithVaryingDataR
 TEST(
     WorkerCclCommandProcessingKernels,
     DISABLED_ChainOfCommandProcessorsWithVaryingDataReadOrders_LocalOnly_SmallSweep) {
-    std::vector<ttnn::SimpleShape> tensor_shapes = {
-        ttnn::SimpleShape({1, 1, 64, 8192}),
-        ttnn::SimpleShape({1, 4, 64, 768}),
-        ttnn::SimpleShape({4, 1, 64, 768}),
-        ttnn::SimpleShape({4, 4, 64, 768}),
-        ttnn::SimpleShape({1, 1, 64, 768}),
-        ttnn::SimpleShape({5, 3, 64, 768})};
+    std::vector<ttnn::Shape> tensor_shapes = {
+        ttnn::Shape({1, 1, 64, 8192}),
+        ttnn::Shape({1, 4, 64, 768}),
+        ttnn::Shape({4, 1, 64, 768}),
+        ttnn::Shape({4, 4, 64, 768}),
+        ttnn::Shape({1, 1, 64, 768}),
+        ttnn::Shape({5, 3, 64, 768})};
 
     const size_t split_dim = 3;
 
@@ -2720,14 +2745,17 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
 
     // build a line of devices
     std::vector<IDevice*> devices = {
-        view.get_device(0, 1), view.get_device(1, 1), view.get_device(1, 2), view.get_device(0, 2)};
+        view.get_device(MeshCoordinate(0, 1)),
+        view.get_device(MeshCoordinate(1, 1)),
+        view.get_device(MeshCoordinate(1, 2)),
+        view.get_device(MeshCoordinate(0, 2))};
     const size_t num_devices = devices.size();
     TT_FATAL(
         test_expected_num_devices == num_devices,
         "Expected {} devices but got {}",
         test_expected_num_devices,
         num_devices);
-    const ttnn::SimpleShape input_shape({1, 1, 32, 32 * num_devices});
+    const ttnn::Shape input_shape({1, 1, 32, 32 * num_devices});
     const MemoryConfig in_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
     const auto num_elems = input_shape.volume();
 
@@ -2736,12 +2764,13 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
     std::vector<Tensor> device_input_tensors;
     for (size_t i = 0; i < num_devices; i++) {
         // host_input_tensors.push_back(ttnn::numpy::random::uniform(bfloat16(-1.0f), bfloat16(1.0f) ,
-        // {input_shape[0],input_shape[1],input_shape[2],input_shape[3]}, layout).to(devices[i]));
-        auto t = ttnn::experimental::view(ttnn::arange(0, num_elems, 1, DataType::BFLOAT16), input_shape).to(layout);
+        // {input_shape[0],input_shape[1],input_shape[2],input_shape[3]}, layout).to_device(devices[i]));
+        auto t =
+            ttnn::experimental::view(ttnn::arange(0, num_elems, 1, DataType::BFLOAT16), input_shape).to_layout(layout);
         t.set_tensor_spec(TensorSpec(
             input_shape, TensorLayout(DataType::BFLOAT16, PageConfig(layout, tt_metal::Tile()), in_memory_config)));
 
-        device_input_tensors.push_back(t.to(devices[i]));
+        device_input_tensors.push_back(t.to_device(devices[i]));
     }
     // Need to make it a mesh tensor for use with the op
     const Tensor input_mesh_tensor = ttnn::distributed::aggregate_as_tensor(device_input_tensors, AllGatherTensor{});
@@ -2807,14 +2836,20 @@ TEST(CclAsyncOp, ReduceScatterSmall_PersistentFabric) {
 
     log_info(tt::LogTest, "Waiting for teardown completion");
     for (auto d : devices) {
-        tt_metal::Synchronize(d, ttnn::DefaultQueueId);
+        tt_metal::Synchronize(d, *ttnn::DefaultQueueId);
     }
     log_info(tt::LogTest, "Finished");
 }
 
+static void wait_for_worker_subdevice_program_completion(
+    const std::vector<IDevice*>& devices, const std::optional<SubdeviceInfo>& subdevice_managers) {
+    std::ranges::for_each(devices, [&](IDevice* d) {
+        tt_metal::Finish(d->command_queue(), {subdevice_managers->worker_subdevice_id.at(d->id())});
+    });
+}
+
 #include "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/all_gather_async_op.hpp"
-void run_all_gather_with_persistent_fabric(
-    const size_t dim, const size_t num_links, ttnn::SimpleShape const& input_shape) {
+void run_all_gather_with_persistent_fabric(const size_t dim, const size_t num_links, ttnn::Shape const& input_shape) {
     log_info(tt::LogTest, "entering test");
     constexpr auto layout = Layout::TILE;
     // DEVICES setuip
@@ -2833,7 +2868,10 @@ void run_all_gather_with_persistent_fabric(
 
     // build a line of devices
     std::vector<IDevice*> devices = {
-        view.get_device(0, 0), view.get_device(0, 1), view.get_device(0, 2), view.get_device(0, 3)};
+        view.get_device(MeshCoordinate(0, 0)),
+        view.get_device(MeshCoordinate(0, 1)),
+        view.get_device(MeshCoordinate(0, 2)),
+        view.get_device(MeshCoordinate(0, 3))};
     const size_t num_devices = devices.size();
     TT_FATAL(
         test_expected_num_devices == num_devices,
@@ -2848,11 +2886,11 @@ void run_all_gather_with_persistent_fabric(
     size_t page_size = tile_size(DataFormat::Float16);
     std::vector<Tensor> device_input_tensors;
     for (size_t i = 0; i < num_devices; i++) {
-        auto t = ttnn::experimental::view(ttnn::arange(0, num_elems, 1), input_shape).to(layout);
+        auto t = ttnn::experimental::view(ttnn::arange(0, num_elems, 1), input_shape).to_layout(layout);
         t.set_tensor_spec(TensorSpec(
             input_shape, TensorLayout(DataType::BFLOAT16, PageConfig(layout, tt_metal::Tile()), in_memory_config)));
 
-        device_input_tensors.push_back(t.to(devices[i]));
+        device_input_tensors.push_back(t.to_device(devices[i]));
     }
     // Need to make it a mesh tensor for use with the op
     const Tensor input_mesh_tensor = ttnn::distributed::aggregate_as_tensor(device_input_tensors, AllGatherTensor{});
@@ -2896,10 +2934,7 @@ void run_all_gather_with_persistent_fabric(
         true);
 
     // wait for op completion
-    log_info(tt::LogTest, "Waiting for Op finish");
-    std::ranges::for_each(devices, [&](IDevice* d) {
-        tt_metal::Finish(d->command_queue(), {subdevice_managers->worker_subdevice_id.at(d->id())});
-    });
+    wait_for_worker_subdevice_program_completion(devices, subdevice_managers);
     log_info(tt::LogTest, "Main op done");
 
     log_info(tt::LogTest, "Fabric teardown");
@@ -2908,22 +2943,847 @@ void run_all_gather_with_persistent_fabric(
 
     log_info(tt::LogTest, "Waiting for teardown completion");
     for (auto d : devices) {
-        tt_metal::Synchronize(d, ttnn::DefaultQueueId);
+        tt_metal::Synchronize(d, *ttnn::DefaultQueueId);
     }
     log_info(tt::LogTest, "Finished");
 }
 
 TEST(CclAsyncOp, AllGather_PersistentFabric_Dim3_Links1_Shape1_1_32_128) {
-    run_all_gather_with_persistent_fabric(3, 1, ttnn::SimpleShape({1, 1, 32, 128}));
+    run_all_gather_with_persistent_fabric(3, 1, ttnn::Shape({1, 1, 32, 128}));
 }
 TEST(CclAsyncOp, AllGather_PersistentFabric_Dim3_Links1_Shape1_1_32_8192) {
-    run_all_gather_with_persistent_fabric(3, 1, ttnn::SimpleShape({1, 1, 32, 8192}));
+    run_all_gather_with_persistent_fabric(3, 1, ttnn::Shape({1, 1, 32, 8192}));
 }
 // Mesh device setup seems to not provide the correct configuration for multi-link? To be investigated
 TEST(CclAsyncOp, DISABLED_AllGather_PersistentFabric_Dim3_Links2_Shape1_1_32_128) {
-    run_all_gather_with_persistent_fabric(3, 2, ttnn::SimpleShape({1, 1, 32, 128}));
+    run_all_gather_with_persistent_fabric(3, 2, ttnn::Shape({1, 1, 32, 128}));
 }
 // Mesh device setup seems to not provide the correct configuration for multi-link? To be investigated
 TEST(CclAsyncOp, DISABLED_AllGather_PersistentFabric_Dim3_Links2_Shape1_1_32_8192) {
-    run_all_gather_with_persistent_fabric(3, 2, ttnn::SimpleShape({1, 1, 32, 8192}));
+    run_all_gather_with_persistent_fabric(3, 2, ttnn::Shape({1, 1, 32, 8192}));
+}
+
+struct WriteThroughputStabilityTestWithPersistentFabricParams {
+    size_t line_size = 4;
+    size_t num_devices_with_workers = 0;
+    bool line_sync = true;
+};
+
+void RunWriteThroughputStabilityTestWithPersistentFabric(
+    size_t num_mcasts,
+    size_t num_unicasts,
+    size_t num_links,
+    size_t num_op_invocations,
+    const WriteThroughputStabilityTestWithPersistentFabricParams& params = {}) {
+    auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+    auto num_devices = tt::tt_metal::GetNumAvailableDevices();
+    if (num_devices < 4) {
+        log_info("This test can only be run on T3000 devices");
+        return;
+    }
+    if (arch == tt::ARCH::GRAYSKULL) {
+        log_info("Test must be run on WH");
+        return;
+    }
+
+    size_t line_size = params.line_size;
+    size_t num_devices_with_workers = params.num_devices_with_workers;
+    if (num_devices_with_workers == 0) {
+        num_devices_with_workers = line_size;
+    }
+    using namespace ttnn::ccl;
+    TT_FATAL(num_devices_with_workers <= line_size, "num_devices_with_workers must be less than or equal to num_links");
+
+    auto worker_core_logical = [](size_t link) { return CoreCoord(link, 0); };
+
+    // static constexpr size_t source_l1_buffer_address = 1000000;
+    static constexpr uint32_t packet_header_cb_index = tt::CB::c_in0;
+    static constexpr uint32_t source_payload_cb_index = tt::CB::c_in1;
+    static constexpr size_t packet_header_cb_size_in_headers = 4;
+    static constexpr bool enable_persistent_fabric_mode = true;
+    static constexpr size_t packet_payload_size_bytes =
+        ttnn::ccl::FabricEriscDatamoverBuilder::default_packet_payload_size_bytes;
+    static constexpr size_t dest_buffer_size = packet_payload_size_bytes * 4;
+    static constexpr tt::DataFormat cb_df = tt::DataFormat::Bfp8;
+
+    T3000TestDevice test_fixture;
+    auto view = test_fixture.mesh_device_->get_view();
+
+    // Get the inner 4 device ring on a WH T3K device so that we can use both links for all devices
+    std::vector<IDevice*> devices_ = {
+        view.get_device(MeshCoordinate(0, 1)),
+        view.get_device(MeshCoordinate(0, 2)),
+        view.get_device(MeshCoordinate(1, 2)),
+        view.get_device(MeshCoordinate(1, 1))};
+    std::vector<IDevice*> devices;
+    devices.reserve(line_size);
+    for (size_t i = 0; i < line_size; i++) {
+        devices.push_back(devices_[i]);
+    }
+    // build the mesh device
+
+    // Persistent Fabric Setup
+    std::vector<Program> dummy_worker_programs;
+    std::optional<SubdeviceInfo> subdevice_managers = std::nullopt;
+    std::optional<std::vector<Program>> fabric_programs;
+    std::vector<Program*> fabric_program_ptrs;
+    std::optional<ttnn::ccl::EdmLineFabricOpInterface> fabric_handle;
+    setup_test_with_persistent_fabric(
+        devices,
+        dummy_worker_programs,
+        subdevice_managers,
+        fabric_programs,
+        fabric_program_ptrs,
+        fabric_handle,
+        enable_persistent_fabric_mode,
+        num_links);
+
+    // Other boiler plate setup
+    CoreRangeSet worker_cores = CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(num_links - 1, 0)));
+    auto worker_cores_vec = corerange_to_cores(worker_cores, std::nullopt, false);
+    auto dest_core_coord = CoreCoord(2, 2);
+    auto sync_core_coord = CoreCoord(0, 0);
+
+    ttnn::SmallVector<std::shared_ptr<Buffer>> device_dest_buffers;
+    device_dest_buffers.reserve(line_size);
+    for (auto* d : devices) {
+        auto local_input_buffer =
+            CreateBuffer(InterleavedBufferConfig{d, dest_buffer_size, dest_buffer_size, BufferType::L1});
+        device_dest_buffers.push_back(local_input_buffer);
+    }
+
+    size_t dest_bank_addr = device_dest_buffers[0]->address();
+    TT_FATAL(
+        std::all_of(
+            device_dest_buffers.begin(),
+            device_dest_buffers.end(),
+            [dest_bank_addr](const auto& buffer) { return buffer->address() == dest_bank_addr; }),
+        "Test setup error: all destination buffers must have the same bank address across devices");
+
+    std::vector<tt::tt_metal::DeviceAddr> global_semaphore_addrs;
+    global_semaphore_addrs.reserve(line_size + 1);
+    std::vector<ttnn::global_semaphore::MultiDeviceGlobalSemaphore> global_semaphore_handles;
+    for (size_t i = 0; i < line_size * 4; i++) {
+        auto global_semaphores = ttnn::global_semaphore::create_global_semaphore_with_same_address(
+            test_fixture.mesh_device_.get(),
+            devices[0]->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
+            0,                             // initial value
+            tt::tt_metal::BufferType::L1,  // buffer type
+            1000                           // attempts
+        );
+        global_semaphore_handles.push_back(global_semaphores);
+        auto global_semaphore_addr =
+            ttnn::global_semaphore::get_global_semaphore_address(global_semaphores.global_semaphores.at(0));
+        global_semaphore_addrs.push_back(global_semaphore_addr);
+    }
+
+    std::vector<IDevice*> worker_devices;
+    for (size_t i = 0; i < num_devices_with_workers; i++) {
+        worker_devices.push_back(devices[i]);
+    }
+    // Worker program setup
+    std::vector<Program> programs(num_devices_with_workers);
+    TT_FATAL(
+        programs.size() == worker_devices.size(),
+        "Test misconfiguration. Mismatch in line size and devices. Expected line size of {} but got {} devices "
+        "instead.",
+        line_size,
+        worker_devices.size());
+    std::vector<KernelHandle> worker_kernel_ids;
+    std::vector<size_t> per_device_global_sem_addr_rt_arg;
+    for (size_t i = 0; i < num_devices_with_workers; i++) {
+        const size_t line_index = i;
+        auto& program = programs[i];
+        auto* device = devices[i];
+        const size_t dest_noc_x = device->worker_core_from_logical_core(dest_core_coord).x;
+        const size_t dest_noc_y = device->worker_core_from_logical_core(dest_core_coord).y;
+        const size_t sync_core_noc_x = device->worker_core_from_logical_core(sync_core_coord).x;
+        const size_t sync_core_noc_y = device->worker_core_from_logical_core(sync_core_coord).y;
+
+        IDevice* backward_device = i == 0 ? nullptr : devices[i - 1];
+        IDevice* forward_device = i == line_size - 1 ? nullptr : devices[i + 1];
+
+        // Initialize the fabric handle for worker connection
+        bool start_of_line = line_index == 0;
+        bool end_of_line = line_index == line_size - 1;
+        bool has_forward_connection = !end_of_line;
+        bool has_backward_connection = !start_of_line;
+        bool unicast_forward = !end_of_line;
+        size_t mcast_fwd_hops = line_size - line_index - 1;
+        size_t mcast_bwd_hops = line_index;
+        size_t unicast_hops = unicast_forward ? mcast_fwd_hops : mcast_bwd_hops;
+
+        auto local_device_fabric_handle =
+            ttnn::ccl::EdmLineFabricOpInterface::build_program_builder_worker_connection_fabric(
+                device, forward_device, backward_device, &program, enable_persistent_fabric_mode, num_links);
+
+        // reserve CB
+        tt_metal::CircularBufferConfig cb_src0_config =
+            tt_metal::CircularBufferConfig(
+                packet_header_cb_size_in_headers * sizeof(tt::fabric::PacketHeader), {{packet_header_cb_index, cb_df}})
+                .set_page_size(packet_header_cb_index, sizeof(tt::fabric::PacketHeader));
+        CBHandle sender_workers_cb = CreateCircularBuffer(program, worker_cores, cb_src0_config);
+
+        tt_metal::CircularBufferConfig cb_src1_config =
+            tt_metal::CircularBufferConfig(packet_payload_size_bytes, {{source_payload_cb_index, cb_df}})
+                .set_page_size(source_payload_cb_index, packet_payload_size_bytes);
+        CBHandle sender_workers_payload_cb = CreateCircularBuffer(program, worker_cores, cb_src1_config);
+
+        TT_FATAL(
+            local_device_fabric_handle.get_num_links() == num_links,
+            "Error in test setup. Expected two links between devices but got {} links for device {}",
+            local_device_fabric_handle.get_num_links(),
+            device->id());
+
+        std::vector<uint32_t> worker_ct_args = {params.line_sync, params.line_sync};
+
+        auto worker_kernel_id = tt_metal::CreateKernel(
+            program,
+            "tests/ttnn/unit_tests/gtests/ccl/kernels/edm_fabric_writer.cpp",
+            worker_cores,
+            tt_metal::WriterDataMovementConfig(worker_ct_args));
+        worker_kernel_ids.push_back(worker_kernel_id);
+        for (size_t l = 0; l < num_links; l++) {
+            auto worker_core = worker_cores_vec[l];
+            auto build_connection_args = [&local_device_fabric_handle, device, &program, &worker_core](
+                                             bool is_connected_in_direction,
+                                             ttnn::ccl::EdmLineFabricOpInterface::Direction direction,
+                                             std::vector<uint32_t>& rt_args_out) {
+                rt_args_out.push_back(is_connected_in_direction);
+                if (is_connected_in_direction) {
+                    const auto connection = local_device_fabric_handle.uniquely_connect_worker(device, direction);
+                    const auto new_rt_args =
+                        ttnn::ccl::worker_detail::generate_edm_connection_rt_args(connection, program, {worker_core});
+                    log_info(
+                        tt::LogTest,
+                        "On device: {}, connecting to EDM fabric in {} direction. EDM noc_x: {}, noc_y: {}",
+                        device->id(),
+                        direction,
+                        connection.edm_noc_x,
+                        connection.edm_noc_y);
+                    std::copy(new_rt_args.begin(), new_rt_args.end(), std::back_inserter(rt_args_out));
+                }
+            };
+            // RT ARGS
+            std::vector<uint32_t> rt_args = {
+                dest_bank_addr,
+                packet_payload_size_bytes,
+                dest_noc_x,
+                dest_noc_y,
+
+                num_mcasts,
+                mcast_fwd_hops,
+                mcast_bwd_hops,
+
+                num_unicasts,
+                unicast_hops,
+                unicast_forward,
+
+                source_payload_cb_index,  // source_l1_buffer_address,
+                packet_header_cb_index,
+                packet_header_cb_size_in_headers,
+            };
+
+            build_connection_args(has_forward_connection, ttnn::ccl::EdmLineFabricOpInterface::FORWARD, rt_args);
+            build_connection_args(has_backward_connection, ttnn::ccl::EdmLineFabricOpInterface::BACKWARD, rt_args);
+
+            if (params.line_sync) {
+                rt_args.push_back(sync_core_noc_x);
+                rt_args.push_back(sync_core_noc_y);
+                if (l == 0) {
+                    per_device_global_sem_addr_rt_arg.push_back(rt_args.size());
+                }
+                TT_FATAL(global_semaphore_addrs.at(0) != -1, "Invalid test setup. Global semaphore address is -1");
+                rt_args.push_back(global_semaphore_addrs.at(0));
+                rt_args.push_back(num_links * num_devices_with_workers);
+            }
+
+            tt_metal::SetRuntimeArgs(program, worker_kernel_id, worker_core, rt_args);
+        }
+    }
+
+    for (size_t i = 0; i < num_op_invocations; i++) {
+        log_info(tt::LogTest, "Iteration: {}", i);
+        if (i != 0 && params.line_sync) {
+            for (size_t k = 0; k < worker_kernel_ids.size(); k++) {
+                auto& worker_rt_args_by_core = GetRuntimeArgs(programs[k], worker_kernel_ids[k]);
+                auto global_sem_addr_rt_arg_idx = per_device_global_sem_addr_rt_arg[k];
+                for (size_t l = 0; l < num_links; l++) {
+                    auto& worker_rt_args = worker_rt_args_by_core[worker_cores_vec[l].x][worker_cores_vec[l].y];
+                    worker_rt_args.at(global_sem_addr_rt_arg_idx) =
+                        global_semaphore_addrs[i % global_semaphore_addrs.size()];
+                }
+            }
+        }
+
+        build_and_enqueue(worker_devices, programs, i != 0);
+
+        log_info(tt::LogTest, "Waiting for Op finish on all devices");
+        wait_for_worker_subdevice_program_completion(worker_devices, subdevice_managers);
+        log_info(tt::LogTest, "Main op done");
+    }
+
+    TT_FATAL(fabric_programs->size() == devices.size(), "Expected fabric programs size to be same as devices size");
+    log_info(tt::LogTest, "Fabric teardown");
+    persistent_fabric_teardown_sequence(
+        devices, subdevice_managers, fabric_handle.value(), tt::fabric::TerminationSignal::GRACEFULLY_TERMINATE);
+
+    log_info(tt::LogTest, "Waiting for teardown completion");
+    for (IDevice* d : devices) {
+        tt_metal::Synchronize(d, *ttnn::DefaultQueueId);
+    }
+    for (size_t i = 0; i < programs.size(); i++) {
+        auto d = worker_devices[i];
+        auto& program = programs[i];
+        tt_metal::DumpDeviceProfileResults(d, program);
+    }
+    for (size_t i = 0; i < fabric_programs->size(); i++) {
+        auto d = devices[i];
+        auto& program = fabric_programs.value()[i];
+        tt_metal::DumpDeviceProfileResults(d, program);
+    }
+    log_info(tt::LogTest, "Finished");
+}
+
+TEST(EdmFabric, BasicMcastThroughputTest_SingleLink_LineSize2_SingleMcast) {
+    const size_t num_mcasts = 1;
+    const size_t num_unicasts = 2;
+    const size_t num_links = 1;
+    const size_t num_op_invocations = 1;
+    const bool line_sync = true;
+    WriteThroughputStabilityTestWithPersistentFabricParams params;
+    params.line_sync = line_sync;
+    params.line_size = 2;
+    RunWriteThroughputStabilityTestWithPersistentFabric(
+        num_mcasts, num_unicasts, num_links, num_op_invocations, params);
+}
+
+TEST(EdmFabric, BasicMcastThroughputTest_SingleMcast) {
+    const size_t num_mcasts = 1;
+    const size_t num_unicasts = 2;
+    const size_t num_links = 2;
+    const size_t num_op_invocations = 1;
+    const bool line_sync = true;
+    WriteThroughputStabilityTestWithPersistentFabricParams params;
+    params.line_sync = line_sync;
+    RunWriteThroughputStabilityTestWithPersistentFabric(
+        num_mcasts, num_unicasts, num_links, num_op_invocations, params);
+}
+TEST(EdmFabric, DISABLED_BasicMcastThroughputTest_SenderFullNoWrap_ReceiverNoWrap_SingleWorker_2Device) {
+    const size_t num_mcasts = 9;
+    const size_t num_unicasts = 0;
+    const size_t num_links = 1;
+    const size_t num_op_invocations = 1;
+    const size_t line_size = 2;
+    const bool line_sync = false;
+    WriteThroughputStabilityTestWithPersistentFabricParams params;
+    params.line_size = line_size;
+    params.line_sync = line_sync;
+    params.num_devices_with_workers = 1;
+    RunWriteThroughputStabilityTestWithPersistentFabric(
+        num_mcasts, num_unicasts, num_links, num_op_invocations, params);
+}
+TEST(EdmFabric, BasicMcastThroughputTest_SenderFullNoWrap_ReceiverNoWrap_2Device) {
+    const size_t num_mcasts = 9;
+    const size_t num_unicasts = 0;
+    const size_t num_links = 1;
+    const size_t num_op_invocations = 1;
+    const size_t line_size = 2;
+    const bool line_sync = true;
+    WriteThroughputStabilityTestWithPersistentFabricParams params;
+    params.line_size = line_size;
+    params.line_sync = line_sync;
+    RunWriteThroughputStabilityTestWithPersistentFabric(
+        num_mcasts, num_unicasts, num_links, num_op_invocations, params);
+}
+TEST(EdmFabric, DISABLED_BasicMcastThroughputTest_SenderFullNoWrap_ReceiverNoWrap_SingleWorker_4Device) {
+    const size_t num_mcasts = 9;
+    const size_t num_unicasts = 0;
+    const size_t num_links = 1;
+    const size_t num_op_invocations = 1;
+    const size_t line_size = 4;
+    const bool line_sync = false;
+    WriteThroughputStabilityTestWithPersistentFabricParams params;
+    params.line_size = line_size;
+    params.line_sync = line_sync;
+    params.num_devices_with_workers = 1;
+    RunWriteThroughputStabilityTestWithPersistentFabric(
+        num_mcasts, num_unicasts, num_links, num_op_invocations, params);
+}
+TEST(EdmFabric, DISABLED_BasicMcastThroughputTest_SenderFullNoWrap_ReceiverNoWrap_TwoWorkers_4Device) {
+    const size_t num_mcasts = 9;
+    const size_t num_unicasts = 0;
+    const size_t num_links = 1;
+    const size_t num_op_invocations = 1;
+    const size_t line_size = 4;
+    const bool line_sync = false;
+    WriteThroughputStabilityTestWithPersistentFabricParams params;
+    params.line_size = line_size;
+    params.line_sync = line_sync;
+    params.num_devices_with_workers = 2;
+    RunWriteThroughputStabilityTestWithPersistentFabric(
+        num_mcasts, num_unicasts, num_links, num_op_invocations, params);
+}
+TEST(EdmFabric, BasicMcastThroughputTest_SenderFullNoWrap_ReceiverNoWrap) {
+    const size_t num_mcasts = 9;
+    const size_t num_unicasts = 0;
+    const size_t num_links = 1;
+    const size_t num_op_invocations = 1;
+    const bool line_sync = true;
+    WriteThroughputStabilityTestWithPersistentFabricParams params;
+    params.line_sync = line_sync;
+    RunWriteThroughputStabilityTestWithPersistentFabric(
+        num_mcasts, num_unicasts, num_links, num_op_invocations, params);
+}
+TEST(EdmFabric, DISABLED_BasicMcastThroughputTest_SenderOneElemWrap_ReceiverNoWrap_SingleWorker_2Device) {
+    const size_t num_mcasts = 10;
+    const size_t num_unicasts = 0;
+    const size_t num_links = 1;
+    const size_t num_op_invocations = 1;
+    const size_t line_size = 2;
+    const bool line_sync = false;
+    WriteThroughputStabilityTestWithPersistentFabricParams params;
+    params.line_size = line_size;
+    params.line_sync = line_sync;
+    params.num_devices_with_workers = 1;
+    RunWriteThroughputStabilityTestWithPersistentFabric(
+        num_mcasts, num_unicasts, num_links, num_op_invocations, params);
+}
+TEST(EdmFabric, BasicMcastThroughputTest_SenderOneElemWrap_ReceiverNoWrap_2Device) {
+    const size_t num_mcasts = 10;
+    const size_t num_unicasts = 0;
+    const size_t num_links = 1;
+    const size_t num_op_invocations = 1;
+    const size_t line_size = 2;
+    const bool line_sync = true;
+    WriteThroughputStabilityTestWithPersistentFabricParams params;
+    params.line_size = line_size;
+    params.line_sync = line_sync;
+    RunWriteThroughputStabilityTestWithPersistentFabric(
+        num_mcasts, num_unicasts, num_links, num_op_invocations, params);
+}
+TEST(EdmFabric, BasicMcastThroughputTest_SenderOneElemWrap_ReceiverNoWrap) {
+    const size_t num_mcasts = 10;
+    const size_t num_unicasts = 0;
+    const size_t num_links = 1;
+    const size_t num_op_invocations = 1;
+    const bool line_sync = true;
+    WriteThroughputStabilityTestWithPersistentFabricParams params;
+    params.line_sync = line_sync;
+    RunWriteThroughputStabilityTestWithPersistentFabric(
+        num_mcasts, num_unicasts, num_links, num_op_invocations, params);
+}
+TEST(EdmFabric, BasicMcastThroughputTest_SenderTwiceFilled_ReceiverOnceFilled_2Device) {
+    const size_t num_mcasts = 18;
+    const size_t num_unicasts = 0;
+    const size_t num_links = 1;
+    const size_t num_op_invocations = 1;
+    const size_t line_size = 2;
+    const bool line_sync = true;
+    WriteThroughputStabilityTestWithPersistentFabricParams params;
+    params.line_size = line_size;
+    params.line_sync = line_sync;
+    RunWriteThroughputStabilityTestWithPersistentFabric(
+        num_mcasts, num_unicasts, num_links, num_op_invocations, params);
+}
+TEST(EdmFabric, BasicMcastThroughputTest_SenderTwiceFilled_ReceiverOnceFilled) {
+    const size_t num_mcasts = 18;
+    const size_t num_unicasts = 0;
+    const size_t num_links = 1;
+    const size_t num_op_invocations = 1;
+    const bool line_sync = true;
+    WriteThroughputStabilityTestWithPersistentFabricParams params;
+    params.line_sync = line_sync;
+    RunWriteThroughputStabilityTestWithPersistentFabric(
+        num_mcasts, num_unicasts, num_links, num_op_invocations, params);
+}
+TEST(EdmFabric, BasicMcastThroughputTest_SenderTwoWrap_ReceiverOneWrap) {
+    const size_t num_mcasts = 19;
+    const size_t num_unicasts = 0;
+    const size_t num_links = 1;
+    const size_t num_op_invocations = 1;
+    const bool line_sync = true;
+    WriteThroughputStabilityTestWithPersistentFabricParams params;
+    params.line_sync = line_sync;
+    RunWriteThroughputStabilityTestWithPersistentFabric(
+        num_mcasts, num_unicasts, num_links, num_op_invocations, params);
+}
+
+TEST(EdmFabric, BasicMcastThroughputTest_SingleLink_LineSize2_SingleMcast_LineSync) {
+    const size_t num_mcasts = 1;
+    const size_t num_unicasts = 2;
+    const size_t num_links = 1;
+    const size_t num_op_invocations = 1;
+    const bool line_sync = true;
+    WriteThroughputStabilityTestWithPersistentFabricParams params;
+    params.line_sync = line_sync;
+    RunWriteThroughputStabilityTestWithPersistentFabric(
+        num_mcasts, num_unicasts, num_links, num_op_invocations, params);
+}
+
+TEST(EdmFabric, BasicMcastThroughputTest_SingleMcast_LineSync) {
+    const size_t num_mcasts = 1;
+    const size_t num_unicasts = 2;
+    const size_t num_links = 2;
+    const size_t num_op_invocations = 1;
+    const bool line_sync = true;
+    WriteThroughputStabilityTestWithPersistentFabricParams params;
+    params.line_sync = line_sync;
+    RunWriteThroughputStabilityTestWithPersistentFabric(
+        num_mcasts, num_unicasts, num_links, num_op_invocations, params);
+}
+TEST(EdmFabric, BasicMcastThroughputTest_SenderFullNoWrap_ReceiverNoWrap_LineSync) {
+    const size_t num_mcasts = 9;
+    const size_t num_unicasts = 0;
+    const size_t num_links = 1;
+    const size_t num_op_invocations = 1;
+    const bool line_sync = true;
+    WriteThroughputStabilityTestWithPersistentFabricParams params;
+    params.line_sync = line_sync;
+    RunWriteThroughputStabilityTestWithPersistentFabric(
+        num_mcasts, num_unicasts, num_links, num_op_invocations, params);
+}
+TEST(EdmFabric, BasicMcastThroughputTest_SenderOneElemWrap_ReceiverNoWrap_2Device_LineSync) {
+    const size_t num_mcasts = 10;
+    const size_t num_unicasts = 0;
+    const size_t num_links = 1;
+    const size_t num_op_invocations = 1;
+    const size_t line_size = 2;
+    const bool line_sync = true;
+    WriteThroughputStabilityTestWithPersistentFabricParams params;
+    params.line_size = line_size;
+    params.line_sync = line_sync;
+    RunWriteThroughputStabilityTestWithPersistentFabric(
+        num_mcasts, num_unicasts, num_links, num_op_invocations, params);
+}
+TEST(EdmFabric, BasicMcastThroughputTest_SenderOneElemWrap_ReceiverNoWrap_LineSync) {
+    const size_t num_mcasts = 10;
+    const size_t num_unicasts = 0;
+    const size_t num_links = 1;
+    const size_t num_op_invocations = 1;
+    const bool line_sync = true;
+    WriteThroughputStabilityTestWithPersistentFabricParams params;
+    params.line_sync = line_sync;
+    RunWriteThroughputStabilityTestWithPersistentFabric(
+        num_mcasts, num_unicasts, num_links, num_op_invocations, params);
+}
+TEST(EdmFabric, BasicMcastThroughputTest_SenderTwiceFilled_ReceiverOnceFilled_2Device_LineSync) {
+    const size_t num_mcasts = 18;
+    const size_t num_unicasts = 0;
+    const size_t num_links = 1;
+    const size_t num_op_invocations = 1;
+    const size_t line_size = 2;
+    const bool line_sync = true;
+    WriteThroughputStabilityTestWithPersistentFabricParams params;
+    params.line_size = line_size;
+    params.line_sync = line_sync;
+    RunWriteThroughputStabilityTestWithPersistentFabric(
+        num_mcasts, num_unicasts, num_links, num_op_invocations, params);
+}
+TEST(EdmFabric, BasicMcastThroughputTest_SenderTwiceFilled_ReceiverOnceFilled_LineSync) {
+    const size_t num_mcasts = 18;
+    const size_t num_unicasts = 0;
+    const size_t num_links = 1;
+    const size_t num_op_invocations = 1;
+    const bool line_sync = true;
+    WriteThroughputStabilityTestWithPersistentFabricParams params;
+    params.line_sync = line_sync;
+    RunWriteThroughputStabilityTestWithPersistentFabric(
+        num_mcasts, num_unicasts, num_links, num_op_invocations, params);
+}
+TEST(EdmFabric, DISABLED_BasicMcastThroughputTest_SenderFourTImesFilled_ReceiverTwiceFilled_2Device_1Worker) {
+    const size_t num_mcasts = 36;
+    const size_t num_unicasts = 0;
+    const size_t num_links = 1;
+    const size_t num_op_invocations = 1;
+    const size_t line_size = 2;
+    const bool line_sync = false;
+    WriteThroughputStabilityTestWithPersistentFabricParams params;
+    params.line_size = line_size;
+    params.line_sync = line_sync;
+    params.num_devices_with_workers = 1;
+    RunWriteThroughputStabilityTestWithPersistentFabric(
+        num_mcasts, num_unicasts, num_links, num_op_invocations, params);
+}
+TEST(EdmFabric, BasicMcastThroughputTest_SenderFourTImesFilled_ReceiverTwiceFilled_2Device_LineSync) {
+    const size_t num_mcasts = 36;
+    const size_t num_unicasts = 0;
+    const size_t num_links = 1;
+    const size_t num_op_invocations = 1;
+    const size_t line_size = 2;
+    const bool line_sync = true;
+    WriteThroughputStabilityTestWithPersistentFabricParams params;
+    params.line_size = line_size;
+    params.line_sync = line_sync;
+    RunWriteThroughputStabilityTestWithPersistentFabric(
+        num_mcasts, num_unicasts, num_links, num_op_invocations, params);
+}
+TEST(EdmFabric, BasicMcastThroughputTest_SenderFourTImesFilled_ReceiverTwiceFilled_LineSync) {
+    const size_t num_mcasts = 36;
+    const size_t num_unicasts = 0;
+    const size_t num_links = 1;
+    const size_t num_op_invocations = 1;
+    const bool line_sync = true;
+    WriteThroughputStabilityTestWithPersistentFabricParams params;
+    params.line_sync = line_sync;
+    RunWriteThroughputStabilityTestWithPersistentFabric(
+        num_mcasts, num_unicasts, num_links, num_op_invocations, params);
+}
+TEST(EdmFabric, BasicMcastThroughputTest_SenderTwoWrap_ReceiverOneWrap_LineSync) {
+    const size_t num_mcasts = 19;
+    const size_t num_unicasts = 0;
+    const size_t num_links = 1;
+    const size_t num_op_invocations = 1;
+    const bool line_sync = true;
+    WriteThroughputStabilityTestWithPersistentFabricParams params;
+    params.line_sync = line_sync;
+    RunWriteThroughputStabilityTestWithPersistentFabric(
+        num_mcasts, num_unicasts, num_links, num_op_invocations, params);
+}
+
+TEST(EdmFabric, BasicMcastThroughputTest_SmallPerf_2Device) {
+    const size_t num_mcasts = 70;
+    const size_t num_unicasts = 0;
+    const size_t num_links = 2;
+    const size_t num_op_invocations = 1;
+    const size_t line_size = 2;
+    const bool report_performance = true;
+    WriteThroughputStabilityTestWithPersistentFabricParams params;
+    params.line_sync = report_performance;
+    params.line_size = line_size;
+    RunWriteThroughputStabilityTestWithPersistentFabric(
+        num_mcasts, num_unicasts, num_links, num_op_invocations, params);
+}
+
+TEST(EdmFabric, BasicMcastThroughputTest_SmallPerf0) {
+    const size_t num_mcasts = 70;
+    const size_t num_unicasts = 0;
+    const size_t num_links = 2;
+    const size_t num_op_invocations = 1;
+    WriteThroughputStabilityTestWithPersistentFabricParams params;
+    params.line_sync = true;
+    RunWriteThroughputStabilityTestWithPersistentFabric(
+        num_mcasts, num_unicasts, num_links, num_op_invocations, params);
+}
+TEST(EdmFabric, BasicMcastThroughputTest_SmallPerf1) {
+    const size_t num_mcasts = 70;
+    const size_t num_unicasts = 0;
+    const size_t num_links = 2;
+    const size_t num_op_invocations = 1;
+    WriteThroughputStabilityTestWithPersistentFabricParams params;
+    params.line_sync = true;
+    RunWriteThroughputStabilityTestWithPersistentFabric(
+        num_mcasts, num_unicasts, num_links, num_op_invocations, params);
+}
+
+TEST(EdmFabric, DISABLED_BasicMcastThroughputTest_0) {
+    const size_t num_mcasts = 100;
+    const size_t num_unicasts = 2;
+    const size_t num_links = 2;
+    const size_t num_op_invocations = 1;
+    const bool line_sync = false;
+    WriteThroughputStabilityTestWithPersistentFabricParams params;
+    params.line_size = 2;
+    params.line_sync = line_sync;
+    RunWriteThroughputStabilityTestWithPersistentFabric(
+        num_mcasts, num_unicasts, num_links, num_op_invocations, params);
+}
+TEST(EdmFabric, DISABLED_BasicMcastThroughputTest_1) {
+    const size_t num_mcasts = 1000;
+    const size_t num_unicasts = 2;
+    const size_t num_links = 2;
+    const size_t num_op_invocations = 1;
+    const bool line_sync = false;
+    WriteThroughputStabilityTestWithPersistentFabricParams params;
+    params.line_sync = line_sync;
+    RunWriteThroughputStabilityTestWithPersistentFabric(
+        num_mcasts, num_unicasts, num_links, num_op_invocations, params);
+}
+TEST(EdmFabric, BasicMcastThroughputTest_2) {
+    const size_t num_mcasts = 50000;
+    const size_t num_unicasts = 2;
+    const size_t num_links = 2;
+    const size_t num_op_invocations = 1;
+
+    RunWriteThroughputStabilityTestWithPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
+}
+TEST(EdmFabric, BasicMcastThroughputTest_3_SingleLink) {
+    const size_t num_mcasts = 200000;
+    const size_t num_unicasts = 0;
+    const size_t num_links = 1;
+    const size_t num_op_invocations = 1;
+    const bool line_sync = true;
+    WriteThroughputStabilityTestWithPersistentFabricParams params;
+    params.line_sync = line_sync;
+    RunWriteThroughputStabilityTestWithPersistentFabric(
+        num_mcasts, num_unicasts, num_links, num_op_invocations, params);
+}
+TEST(EdmFabric, BasicMcastThroughputTest_3) {
+    const size_t num_mcasts = 200000;
+    const size_t num_unicasts = 2;
+    const size_t num_links = 2;
+    const size_t num_op_invocations = 1;
+    const bool line_sync = true;
+    WriteThroughputStabilityTestWithPersistentFabricParams params;
+    params.line_sync = line_sync;
+    RunWriteThroughputStabilityTestWithPersistentFabric(
+        num_mcasts, num_unicasts, num_links, num_op_invocations, params);
+}
+TEST(EdmFabric, BasicMcastThroughputTest_3_onehop) {
+    const size_t num_mcasts = 200000;
+    const size_t num_unicasts = 2;
+    const size_t num_links = 1;
+    const size_t num_op_invocations = 1;
+    const bool line_sync = true;
+    WriteThroughputStabilityTestWithPersistentFabricParams params;
+    params.line_sync = line_sync;
+    params.line_size = 2;
+    RunWriteThroughputStabilityTestWithPersistentFabric(
+        num_mcasts, num_unicasts, num_links, num_op_invocations, params);
+}
+TEST(EdmFabric, BasicMcastThroughputTest_4) {
+    const size_t num_mcasts = 800000;
+    const size_t num_unicasts = 2;
+    const size_t num_links = 2;
+    const size_t num_op_invocations = 1;
+    RunWriteThroughputStabilityTestWithPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
+}
+
+TEST(EdmFabric, BasicMcastThroughputTest_5) {
+    const size_t num_mcasts = 1;
+    const size_t num_unicasts = 2;
+    const size_t num_links = 2;
+    const size_t num_op_invocations = 20000;
+    RunWriteThroughputStabilityTestWithPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
+}
+// DISABLED due to long runtime
+TEST(EdmFabric, DISABLED_BasicMcastThroughputTest_6) {
+    const size_t num_mcasts = 100;
+    const size_t num_unicasts = 2;
+    const size_t num_links = 2;
+    const size_t num_op_invocations = 8000;
+    RunWriteThroughputStabilityTestWithPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
+}
+// DISABLED due to long runtime
+TEST(EdmFabric, DISABLED_BasicMcastThroughputTest_7) {
+    const size_t num_mcasts = 1000;
+    const size_t num_unicasts = 2;
+    const size_t num_links = 2;
+    const size_t num_op_invocations = 1000;
+    RunWriteThroughputStabilityTestWithPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
+}
+// DISABLED due to long runtime
+TEST(EdmFabric, DISABLED_BasicMcastThroughputTest_8) {
+    const size_t num_mcasts = 50000;
+    const size_t num_unicasts = 2;
+    const size_t num_links = 2;
+    const size_t num_op_invocations = 200;
+    RunWriteThroughputStabilityTestWithPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
+}
+// DISABLED due to long runtime
+TEST(EdmFabric, DISABLED_BasicMcastThroughputTest_9) {
+    const size_t num_mcasts = 200000;
+    const size_t num_unicasts = 2;
+    const size_t num_links = 2;
+    const size_t num_op_invocations = 150;
+    RunWriteThroughputStabilityTestWithPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
+}
+// DISABLED due to long runtime
+TEST(EdmFabric, DISABLED_BasicMcastThroughputTest_10) {
+    const size_t num_mcasts = 800000;
+    const size_t num_unicasts = 2;
+    const size_t num_links = 2;
+    const size_t num_op_invocations = 50;
+    RunWriteThroughputStabilityTestWithPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
+}
+TEST(EdmFabric, BasicMcastThroughputTest_6_Short) {
+    const size_t num_mcasts = 100;
+    const size_t num_unicasts = 2;
+    const size_t num_links = 2;
+    const size_t num_op_invocations = 100;
+    RunWriteThroughputStabilityTestWithPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
+}
+TEST(EdmFabric, BasicMcastThroughputTest_7_Short) {
+    const size_t num_mcasts = 1000;
+    const size_t num_unicasts = 2;
+    const size_t num_links = 2;
+    const size_t num_op_invocations = 50;
+    RunWriteThroughputStabilityTestWithPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
+}
+TEST(EdmFabric, BasicMcastThroughputTest_8_Short) {
+    const size_t num_mcasts = 50000;
+    const size_t num_unicasts = 2;
+    const size_t num_links = 2;
+    const size_t num_op_invocations = 20;
+    RunWriteThroughputStabilityTestWithPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
+}
+TEST(EdmFabric, BasicMcastThroughputTest_9_Short) {
+    const size_t num_mcasts = 200000;
+    const size_t num_unicasts = 2;
+    const size_t num_links = 2;
+    const size_t num_op_invocations = 10;
+    RunWriteThroughputStabilityTestWithPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
+}
+TEST(EdmFabric, BasicMcastThroughputTest_10_Short) {
+    const size_t num_mcasts = 800000;
+    const size_t num_unicasts = 2;
+    const size_t num_links = 2;
+    const size_t num_op_invocations = 5;
+    RunWriteThroughputStabilityTestWithPersistentFabric(num_mcasts, num_unicasts, num_links, num_op_invocations);
+}
+
+TEST(EdmFabric, BasicMcastThroughputTest_0_WithLineSync) {
+    const size_t num_mcasts = 100;
+    const size_t num_unicasts = 2;
+    const size_t num_links = 2;
+    const size_t num_op_invocations = 1;
+    const bool line_sync = true;
+    WriteThroughputStabilityTestWithPersistentFabricParams params;
+    params.line_sync = line_sync;
+    RunWriteThroughputStabilityTestWithPersistentFabric(
+        num_mcasts, num_unicasts, num_links, num_op_invocations, params);
+}
+TEST(EdmFabric, BasicMcastThroughputTest_1_WithLineSync) {
+    const size_t num_mcasts = 1000;
+    const size_t num_unicasts = 2;
+    const size_t num_links = 2;
+    const size_t num_op_invocations = 1;
+    const bool line_sync = true;
+    WriteThroughputStabilityTestWithPersistentFabricParams params;
+    params.line_sync = line_sync;
+    RunWriteThroughputStabilityTestWithPersistentFabric(
+        num_mcasts, num_unicasts, num_links, num_op_invocations, params);
+}
+TEST(EdmFabric, BasicMcastThroughputTest_2_WithLineSync) {
+    const size_t num_mcasts = 50000;
+    const size_t num_unicasts = 2;
+    const size_t num_links = 2;
+    const size_t num_op_invocations = 1;
+    const bool line_sync = true;
+    WriteThroughputStabilityTestWithPersistentFabricParams params;
+    params.line_sync = line_sync;
+    RunWriteThroughputStabilityTestWithPersistentFabric(
+        num_mcasts, num_unicasts, num_links, num_op_invocations, params);
+}
+TEST(EdmFabric, BasicMcastThroughputTest_3_WithLineSync) {
+    const size_t num_mcasts = 200000;
+    const size_t num_unicasts = 2;
+    const size_t num_links = 2;
+    const size_t num_op_invocations = 1;
+    const bool line_sync = true;
+    WriteThroughputStabilityTestWithPersistentFabricParams params;
+    params.line_sync = line_sync;
+    RunWriteThroughputStabilityTestWithPersistentFabric(
+        num_mcasts, num_unicasts, num_links, num_op_invocations, params);
+}
+TEST(EdmFabric, BasicMcastThroughputTest_4_WithLineSync) {
+    const size_t num_mcasts = 800000;
+    const size_t num_unicasts = 2;
+    const size_t num_links = 2;
+    const size_t num_op_invocations = 1;
+    const bool line_sync = true;
+    WriteThroughputStabilityTestWithPersistentFabricParams params;
+    params.line_sync = line_sync;
+    RunWriteThroughputStabilityTestWithPersistentFabric(
+        num_mcasts, num_unicasts, num_links, num_op_invocations, params);
 }

@@ -2,81 +2,41 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/common/queue_id.hpp"
+#include "ttnn/run_operation.hpp"
 #include "expand.hpp"
-
-#include <optional>
-
-#include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/data_movement/expand/device/expand_device_operation.hpp"
-#include "ttnn/tensor/tensor_impl.hpp"
-#include "ttnn/tensor/tensor_impl_wrapper.hpp"
-#include "ttnn/tensor/tensor_ops.hpp"
+#include <tt-metalium/constants.hpp>
+#include <functional>
+#include <ttnn/operations/functions.hpp>
+#include "ttnn/operations/data_movement/repeat/repeat.hpp"
 namespace ttnn::operations::expand {
 
-auto infer_size(const Tensor& input, const std::vector<int32_t>& sizes) {
-    const auto& input_shape = input.get_logical_shape();
-    auto output_shape = SmallVector<uint32_t>(sizes.size());
-    TT_FATAL(
-        input_shape.rank() <= sizes.size(),
-        "Input tensor shape {}({}) must be at least as large as the expansion size {}({}), which it is not",
-        input_shape,
-        input_shape.rank(),
-        sizes,
-        sizes.size());
 
-    int in_idx = static_cast<int>(input_shape.rank()) - 1;
-    for (int i = static_cast<int>(output_shape.size()) - 1; i >= 0; --i) {
-        if (in_idx >= 0) {
-            TT_FATAL(
-                input_shape[in_idx] == sizes[i] || input_shape[in_idx] == 1 || sizes[i] == -1,
-                "The size of tensor a ({}) must match the size of tensor b ({}) at non-singleton dimension {}",
-                input_shape[in_idx],
-                sizes[i],
-                in_idx);
-
-            if (input_shape[in_idx] == sizes[i] || sizes[i] == -1) {
-                output_shape[i] = input_shape[in_idx];
-            } else if (input_shape[in_idx] == 1) {
-                output_shape[i] = sizes[i];
-            }
-
-            --in_idx;
+ttnn::SmallVector<uint32_t> create_repetition_vector(const Tensor& tensor, std::span<const int32_t> shape) {
+    ttnn::SmallVector<uint32_t> expansion_vector(shape.size());
+    auto tensor_shape = tensor.get_logical_shape();
+    const auto source_rank = tensor_shape.rank();
+    const auto new_rank = shape.size();
+    TT_FATAL(source_rank <= new_rank, "Only size 1 dimensions can be expanded in the output shape");
+    for (auto index = 0; index < new_rank; ++index) {
+        if (index >= source_rank) {
+            expansion_vector[index] = shape[index];
+        } else if ((shape[index] == -1) || (shape[index] == tensor_shape[index])) {
+            expansion_vector[index] = 1;
         } else {
-            TT_FATAL(sizes[i] != -1, "The expanded size of the tensor (-1) is not allowed in a leading dimension");
-            output_shape[i] = sizes[i];
+            TT_FATAL(tensor_shape[index] == 1, "Only size 1 dimensions can be expanded in the output shape");
+            expansion_vector[index] = shape[index];
         }
     }
-
-#ifdef DEBUG
-    tt::log_debug("inferred output shape: ");
-    for (int i = 0; i < output_shape.size(); ++i) {
-        tt::log_debug("%d ", output_shape[i]);
-    }
-    tt::log_debug("\n");
-#endif
-
-    return output_shape;
+    return expansion_vector;
 }
 
-Tensor Expand::invoke(
-    const Tensor& input,
-    const std::vector<int32_t>& sizes,
-
-    const std::optional<Tensor>& output,
-    const std::optional<MemoryConfig>& memory_config) {
-    auto output_shape = infer_size(input, sizes);
-
-    // Convert tile tensor to row major (lmfao)
-    if (input.get_layout() == Layout::TILE) {
-        // untilize/tilize is way too inaccurate for us to even remotely use.
-        Tensor rm_input_dev = core::to_device(input.cpu(true).to(Layout::ROW_MAJOR), input.device(), std::nullopt);
-
-        Tensor rm_output_dev = ttnn::prim::expand(rm_input_dev, output_shape, std::nullopt, std::nullopt);
-
-        return core::to_device(
-            rm_output_dev.cpu(true).pad_to_tile(0).to(Layout::TILE), rm_output_dev.device(), std::nullopt);
-    }
-
-    return ttnn::prim::expand(input, output_shape, output, memory_config);
+ttnn::Tensor ExpandOperation::invoke(
+    const ttnn::Tensor& tensor,
+    const tt::stl::Span<const int32_t> shape_vector,
+    const std::optional<MemoryConfig>& memory_config,
+    const QueueId& queue_id) {
+    return ttnn::repeat(tensor, create_repetition_vector(tensor, shape_vector), memory_config, queue_id);
 }
+
 }  // namespace ttnn::operations::expand

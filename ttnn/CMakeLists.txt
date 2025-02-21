@@ -1,3 +1,9 @@
+if(ENABLE_COVERAGE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    message(STATUS "Enabling code coverage flags for all ttnn targets")
+    add_compile_options(--coverage)
+    add_link_options(--coverage)
+endif()
+
 set(TTNN_BASE_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/async_runtime.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/config.cpp
@@ -17,6 +23,7 @@ set(TTNN_BASE_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/graph/graph_pybind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/creation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/sharding_utilities.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/ccl/sharding_addrgen_helper.cpp
 )
 set(TTNN_OP_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/core/compute_kernel/compute_kernel_config.cpp
@@ -45,7 +52,6 @@ set(TTNN_OP_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/copy/copy_pybind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/copy/typecast/typecast.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/copy/typecast/typecast_pybind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/data_transfer/data_transfer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/fill_pad/device/fill_pad_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/fill_pad/fill_pad.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/fill_pad/fill_pad_pybind.cpp
@@ -78,8 +84,8 @@ set(TTNN_OP_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/permute/device/permute_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/permute/device/permute_rm_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/permute/device/permute_tiled_program_factory.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/repeat/device/repeat_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/repeat/device/repeat_program_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/repeat/device/repeat_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/repeat/device/host/repeat_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/repeat/repeat.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/repeat/repeat_pybind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/repeat_interleave/repeat_interleave.cpp
@@ -304,6 +310,8 @@ set(TTNN_OP_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/normalization/batch_norm/batch_norm_pybind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/normalization/batch_norm/device/batch_norm_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/normalization/batch_norm/device/batch_norm_program_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/normalization/batch_norm/device/running_statistics_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/normalization/batch_norm/device/running_statistics_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/normalization/groupnorm/groupnorm.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/normalization/groupnorm/groupnorm_pybind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/normalization/groupnorm/device/groupnorm_op.cpp
@@ -346,6 +354,10 @@ set(TTNN_OP_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/reduction/argmax/device/argmax_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/reduction/argmax/device/argmax_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/reduction/argmax/argmax.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/reduction/sampling/device/sampling_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/reduction/sampling/device/sampling_program_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/reduction/sampling/sampling_pybind.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/reduction/sampling/sampling.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/reduction/moe/device/moe_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/reduction/moe/device/moe_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/reduction/moe/moe.cpp
@@ -377,6 +389,8 @@ set(TTNN_OP_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/transformer/sdpa/sdpa_pybind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/transformer/sdpa/device/sdpa_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/transformer/sdpa/device/sdpa_program_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/transformer/sdpa/device/joint_sdpa_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/transformer/sdpa/device/joint_sdpa_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/transformer/sdpa_decode/sdpa_decode.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/transformer/sdpa_decode/sdpa_decode_pybind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/transformer/sdpa_decode/device/sdpa_decode_op.cpp
@@ -580,8 +594,6 @@ set(TTNN_OP_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/moreh/moreh_clip_grad_norm/moreh_clip_grad_norm_pybind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/expand/expand.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/expand/expand_pybind.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/expand/device/expand_rm_program_factory.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/data_movement/expand/device/expand_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/dropout/device/dropout_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/dropout/device/dropout_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/experimental/dropout/dropout.cpp
@@ -643,6 +655,8 @@ set(TTNN_SUBLIBRARIES
 set(TTNN_SRC)
 
 set(PYBIND_SRC
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/__init__.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/types.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/events.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/global_circular_buffer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/global_semaphore.cpp
@@ -672,14 +686,16 @@ set(TTNN_PUBLIC_INCLUDE_DIRS
     ${CMAKE_CURRENT_SOURCE_DIR} # ${PROJECT_SOURCE_DIR}/ttnn
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/deprecated # symlink to tt_eager; should become native folder once merge complete
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp
+    ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers
 )
 set(TTNN_PUBLIC_LINK_LIBRARIES
     metal_common_libs
     Metalium::Metal
-    Boost::container
+    Metalium::Metal::STL
     xtensor
     xtensor-blas
     xtl
+    FlatBuffers::FlatBuffers
 )
 set(TTNN_PUBLIC_LINK_DIRS "")
 
@@ -702,7 +718,6 @@ if(WITH_PYTHON_BINDINGS)
     list(
         APPEND
         TTNN_BASE_SRCS
-        ${PROJECT_SOURCE_DIR}/ttnn/cpp/pybind11/__init__.cpp
         ${TT_LIB_SRCS}
         ${PYBIND_SRC}
     ) # TT_LIB_SRCS from tt_eager/tt_lib/CMakeLists.txt for python bindigns
@@ -751,11 +766,6 @@ function(add_ttnn_sublibrary SUBLIBRARY_NAME)
         add_library(${SUBLIBRARY_NAME} OBJECT ${ARGN})
     endif()
     TT_ENABLE_UNITY_BUILD(${SUBLIBRARY_NAME})
-    if(WITH_PYTHON_BINDINGS)
-        target_compile_definitions(${SUBLIBRARY_NAME} PUBLIC TTNN_WITH_PYTHON_BINDINGS=1)
-    else()
-        target_compile_definitions(${SUBLIBRARY_NAME} PUBLIC TTNN_WITH_PYTHON_BINDINGS=0)
-    endif()
     target_include_directories(${SUBLIBRARY_NAME} PUBLIC ${TTNN_PUBLIC_INCLUDE_DIRS})
     target_link_libraries(${SUBLIBRARY_NAME} PUBLIC ${TTNN_PUBLIC_LINK_LIBRARIES})
     target_link_directories(${SUBLIBRARY_NAME} PUBLIC ${TTNN_PUBLIC_LINK_DIRS})
@@ -800,6 +810,8 @@ endforeach(
     ${TTNN_SUBLIBRARIES}
 )
 
+GENERATE_FBS_HEADER(${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/tensor/flatbuffer/tensor_types.fbs)
+list(APPEND TENSOR_SRCS ${FBS_GENERATED_HEADER_FILE})
 add_ttnn_sublibrary(ttnn_tensor ${TENSOR_SRCS})
 add_ttnn_sublibrary(ttnn_ccl ${CCL_TTNN_SRCS})
 add_ttnn_sublibrary(ttnn_ccl_exp ${CCL_EXPERIMENTAL_TTNN_SRCS})
@@ -818,12 +830,6 @@ target_compile_options(
         -Wno-int-to-pointer-cast
         -fno-var-tracking
 )
-
-if(WITH_PYTHON_BINDINGS)
-    target_compile_definitions(ttnn PUBLIC TTNN_WITH_PYTHON_BINDINGS=1)
-else()
-    target_compile_definitions(ttnn PUBLIC TTNN_WITH_PYTHON_BINDINGS=0)
-endif()
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     target_compile_definitions(ttnn PUBLIC DISABLE_NAMESPACE_STATIC_ASSERT)
@@ -855,6 +861,7 @@ TT_ENABLE_UNITY_BUILD(ttnn)
 set(TTNN_INSTALL_RPATH
     "${PROJECT_BINARY_DIR}/lib"
     "$ORIGIN/build/lib"
+    "$ORIGIN"
 )
 
 #Make sure library built is _ttnn.so and that it can find all it's linked libraries

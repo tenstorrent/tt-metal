@@ -61,13 +61,17 @@ def ensure_ttsmi_installed():
 
 
 def reset_device_sync(config_file):
-    reset_cmd = ["tt-smi", "-r", config_file]
-    try:
+    if os.environ.get("RESET_CMD"):
+        reset_cmd = os.environ.get("RESET_CMD").split(" ")
+        print(f"Resetting device using custom command: {reset_cmd}")
+    else:
+        reset_cmd = ["tt-smi", "-r", config_file]
         print(f"Resetting device using config file: {config_file}")
+    try:
         result = subprocess.run(reset_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         print(f"Device reset successfully: {result.stdout}")
     except subprocess.CalledProcessError as e:
-        print(f"Error during device reset: {e.stderr}")
+        print(f"Error during device reset: {e.stdout} {e.stderr}")
         sys.exit(1)
 
 
@@ -82,7 +86,7 @@ def get_device():
         device = "N150"
     elif total_devices == 8:
         device = "T3K"
-    else: # TG has 36 devices
+    else:  # TG has 36 devices
         device = "TG"
 
     # Old method of getting device name based on hostname
@@ -109,11 +113,13 @@ def list_supported_devices(device):
 # Counts number of devices using `tt-smi -ls` output
 def count_devices(output):
     # Split the output into available boards section
-    sections = output.split('All available boards on host')
-    available_boards = sections[1].split('Boards that can be reset')[0]
+    sections = output.split("All available boards on host")
+    available_boards = sections[1].split("Boards that can be reset")[0]
 
     # Count total PCI devices (ignoring N/A)
-    total_pci_devices = len([line for line in available_boards.split('\n') if ('Wormhole' or 'Grayskull' or 'Blackhole') in line])
+    total_pci_devices = len(
+        [line for line in available_boards.split("\n") if ("Wormhole" or "Grayskull" or "Blackhole") in line]
+    )
 
     return total_pci_devices
 
@@ -157,6 +163,12 @@ class OutputEntryList:
                     entry.output = entry_data["output"]
                     entry.log_id = entry_data["log_id"]
                     entry.speed = entry_data["speed"]
+                    if (
+                        "ttft" not in entry_data.keys()
+                    ):  # Verify if the new TTFT attribute is present to avoid errors with old lt versions
+                        os.remove("logs/state.json")
+                        return
+                    entry.ttft = entry_data["ttft"]
                     entry.pcc = entry_data["pcc"]
                     self._entries.append(entry)
         except (FileNotFoundError, json.JSONDecodeError):
@@ -176,6 +188,8 @@ class OutputEntryList:
             }
             if hasattr(entry, "speed"):
                 entry_data["speed"] = entry.speed
+            if hasattr(entry, "ttft"):
+                entry_data["ttft"] = entry.ttft
             if hasattr(entry, "pcc"):
                 entry_data["pcc"] = entry.pcc
             state.append(entry_data)
@@ -250,6 +264,7 @@ class Entry:
         self.lock = threading.Lock()
         self.log_id = None  # Will be set by OutputEntryList
         self.speed = None
+        self.ttft = None
         self.pcc = None
         self.thread = None
         self.changed = True  # Initialize as changed to ensure first draw
@@ -332,7 +347,7 @@ def main(stdscr):
     # Input fields positions (reordered)
     input_fields = [
         {"label": "Command [demo]", "value": "", "x": 0, "y": 0},
-        {"label": "Model (1b, 3b, 8b, 11b, 70b) [all]", "value": "", "x": 0, "y": 1},
+        {"label": "Model (1b, 3b, 8b, 11b, 70b, 70b-r1, q7b, q72b) [all]", "value": "", "x": 0, "y": 1},
         {
             "label": f"Device ({list_supported_devices(host_device)}) [all]",
             "value": "",
@@ -447,10 +462,8 @@ def main(stdscr):
                     if current_field == len(input_fields) - 1:
                         # Submit command
                         command_input = input_fields[0]["value"] or "demo"
-                        model_input = input_fields[1]["value"] or "1b,3b,8b,11b,70b"
-                        device_input = (
-                            input_fields[2]["value"] or list_supported_devices(host_device)
-                        )
+                        model_input = input_fields[1]["value"] or "1b,3b,8b,11b,70b,70b-r1,q7b,q72b"
+                        device_input = input_fields[2]["value"] or list_supported_devices(host_device)
 
                         if command_input == "modules":
                             command_input = "rmsnorm,attention,attention-prefill,mlp,lm-head"
@@ -461,6 +474,9 @@ def main(stdscr):
                         if command_input == "table":
                             command_input = "accuracy,demo,accuracy-acc,demo-acc"
 
+                        if command_input == "vision":
+                            command_input = "vision-mlp,vision-attn,vision-block,vision-xfmr,vision-xattn,vision-xblock,vision-conv,vision-class,vision-tile-pos,vision-pos,vision-encoder,vision-text-xfmr,vision-vision-xfmr"
+
                         # Parse models, devices, and commands
                         models = parse_list(model_input)
                         devices = parse_list(device_input)
@@ -469,7 +485,9 @@ def main(stdscr):
                         # Generate combinations (reordered)
                         # Ignore invalid combinations:
                         # - 11b and 11b-b models on n150 device
-                        # - 70b model on n150 and n300 devices
+                        # - 70b and 70b-r1 model on n150 and n300 devices
+                        # - 72b model on n150 and n300 devices
+                        # - q7b on anything other than N300
                         # - Vision commands on non-vision (11b) models
                         combinations = [
                             (c, m, d)
@@ -479,6 +497,9 @@ def main(stdscr):
                             if not (
                                 (m in ["11b", "11b-b"] and d == "n150")
                                 or (m == "70b" and d in ["n150", "n300"])
+                                or (m == "70b-r1" and d in ["n150", "n300"])
+                                or (m == "q72b" and d in ["n150", "n300"])
+                                or (m == "q7b" and d != "n300")
                                 or ("vision" in c and m not in ["11b", "11b-b"])
                             )
                         ]
@@ -558,6 +579,7 @@ def main(stdscr):
                         entry["status"] = "Waiting"
                         entry["output"] = ""
                         entry["speed"] = None
+                        entry["ttft"] = None
                         entry["pcc"] = None
                         entry["process"] = None
                         entry["log_file"] = None
@@ -716,6 +738,7 @@ def draw_output_entry(stdscr, entry, y, is_selected, max_x):
         entry.device,
         entry.status,
         entry.speed if entry.speed else "",
+        entry.ttft if entry.ttft else "",
         entry.pcc if entry.pcc else "",
         entry.output,
     ]
@@ -744,7 +767,9 @@ def draw_output_entry(stdscr, entry, y, is_selected, max_x):
                     color = COLOR_PAIR_WAITING
             elif i == 4:  # Speed column
                 color = COLOR_PAIR_SPEED
-            elif i == 5:  # PCC column
+            elif i == 5:  # TTFT column
+                color = COLOR_PAIR_SPEED
+            elif i == 6:  # PCC column
                 if col:
                     try:
                         pcc_value = float(col)
@@ -764,7 +789,7 @@ def draw_output_entry(stdscr, entry, y, is_selected, max_x):
 
 
 def format_header(max_x):
-    cols = ["Command", "Model", "Device", "Status", "Speed", "PCC", "Output"]
+    cols = ["Command", "Model", "Device", "Status", "Speed", "TTFT(ms)", "PCC", "Output"]
     col_widths = [20, 10, 10, 20, 10, 10, max_x - 85]  # Adjusted widths to accommodate the PCC column
     formatted_cols = []
     for col, width in zip(cols, col_widths):
@@ -827,10 +852,12 @@ def run_entry_command(entry, screen_lock, output_entries, screen_needs_update):
     command_shortcuts = {
         "accuracy": "pytest models/demos/llama3/tests/test_llama_accuracy.py -k 'attention-performance and file'",
         "accuracy-acc": "pytest models/demos/llama3/tests/test_llama_accuracy.py -k 'attention-acc and file'",
-        "demo": "pytest models/demos/llama3/demo/demo.py -k performance-batch-1",
-        "demo-acc": "pytest models/demos/llama3/demo/demo.py -k accuracy-batch-1",
-        "demo-32": "pytest models/demos/llama3/demo/demo.py -k performance-batch-32",
-        "demo-long": "pytest models/demos/llama3/demo/demo.py -k performance-long",
+        "demo": "pytest models/demos/llama3/demo/simple_text_demo.py -k performance-batch-1",
+        "demo-acc": "pytest models/demos/llama3/demo/simple_text_demo.py -k accuracy-batch-1",
+        "demo-32": "pytest models/demos/llama3/demo/simple_text_demo.py -k performance-batch-32",
+        "demo-long": "pytest models/demos/llama3/demo/simple_text_demo.py -k performance-long",
+        "demo-ci-1": "pytest models/demos/llama3/demo/simple_text_demo.py -k performance-ci-1",
+        "demo-ci-32": "pytest models/demos/llama3/demo/simple_text_demo.py -k performance-ci-32",
         "attention": "pytest models/demos/llama3/tests/test_llama_attention.py",
         "attention-prefill": "pytest models/demos/llama3/tests/test_llama_attention_prefill.py",
         "mlp": "pytest models/demos/llama3/tests/test_llama_mlp.py",
@@ -910,16 +937,18 @@ def process_output(entry, screen_lock, output_entries, screen_needs_update):
             log_file.flush()
 
             # Update status and output based on output
-            status, output, speed, pcc = parse_output_line(line, previous_line, entry.status)
+            status, output, speed, ttft, pcc = parse_output_line(line, previous_line, entry.status)
             previous_line = line.strip()
 
             with entry.lock:
-                if status != entry.status or output or speed is not None or pcc is not None:
+                if status != entry.status or output or speed is not None or ttft is not None or pcc is not None:
                     entry.status = status  # This will mark entry as changed via __setattr__
                     if output:
                         entry.output = output
                     if speed is not None:
                         entry.speed = f"{speed:.1f}"
+                    if ttft is not None:
+                        entry.ttft = f"{ttft:.0f}"
                     if pcc is not None:
                         try:
                             pcc_value = float(pcc)
@@ -975,6 +1004,12 @@ def parse_output_line(line, previous_line, current_status):
         if latency_match:
             speed = 1000 * float(latency_match.group(1))  # convert to ms
 
+    # Check for TTFT information
+    ttft = None
+    ttft_match = re.search(r"\(TTFT\)\: (\d+\.\d+)ms", line)
+    if ttft_match:
+        ttft = float(ttft_match.group(1))
+
     # Check for PCC information
     pcc = None
     pcc_match = re.search(r"PCC: (\d+\.\d+)", line)
@@ -988,42 +1023,42 @@ def parse_output_line(line, previous_line, current_status):
             pcc = f"{top1.strip():<3s}|{top5.strip():>3s}"
 
     if "Initializing device" in line:
-        return "Initializing device", None, speed, pcc
+        return "Initializing device", None, speed, ttft, pcc
     elif "Loading weights" in line:
-        return "Loading weights", None, speed, pcc
+        return "Loading weights", None, speed, ttft, pcc
     elif re.search(r"layers\.\d+\.", line):
         match = re.search(r"layers\.(\d+)\.", line)
         if match:
             layer_number = match.group(1)
-            return f"Loading layer {layer_number}", None, speed, pcc
+            return f"Loading layer {layer_number}", None, speed, ttft, pcc
     elif "Starting inference..." in line:
-        return "Starting", None, speed, pcc
+        return "Starting", None, speed, ttft, pcc
     elif "Starting prefill..." in line:
-        return "Prefill", None, speed, pcc
+        return "Prefill", None, speed, ttft, pcc
     elif "Starting decode..." in line:
-        return "Decode", None, speed, pcc
-    elif line == "output:":
-        return "Waiting for output", None, speed, pcc
-    elif current_status == "Waiting for output" and previous_line == "output:":
+        return "Decode", None, speed, ttft, pcc
+    elif "- OUTPUT" in line:
+        return "Waiting for output", None, speed, ttft, pcc
+    elif current_status == "Waiting for output" and "- OUTPUT" in previous_line:
         if "<|start_header_id|>assistant<|end_header_id|>" in line:
             output = line.split("<|start_header_id|>assistant<|end_header_id|>", 1)[1].strip()
             if output:
-                return "Running", output, speed, pcc
+                return "Running", output, speed, ttft, pcc
             else:
-                return "Assistant output", None, speed, pcc  # wait for a non-blank line
+                return "Assistant output", None, speed, ttft, pcc  # wait for a non-blank line
         else:
-            return "Running", line, speed, pcc
+            return "Running", line, speed, ttft, pcc
     elif current_status == "Assistant output" and line:  # skip blank lines
-        return "Running", line, speed, pcc
+        return "Running", line, speed, ttft, pcc
 
     # Check for test output
     test_match = re.search(r"\| models\.demos\.llama3\.tests\..+ - (.+)", line)
     if test_match:
-        if current_status.startswith("Loading") and (pcc is not None or speed is not None):
+        if current_status.startswith("Loading") and (pcc is not None or speed is not None or ttft is not None):
             current_status = "Running"
-        return current_status, test_match.group(1), speed, pcc
+        return current_status, test_match.group(1), speed, ttft, pcc
 
-    return current_status, None, speed, pcc
+    return current_status, None, speed, ttft, pcc
 
 
 def get_llama_dir(model):
@@ -1034,6 +1069,9 @@ def get_llama_dir(model):
         "11b": os.environ.get("LLAMA_32_11B_DIR", "/proj_sw/user_dev/llama32-data/Llama3.2-11B-Vision-Instruct"),
         "11b-b": os.environ.get("LLAMA_32_11B_BASE_DIR", "/proj_sw/user_dev/llama32-data/Llama3.2-11B-Vision"),
         "70b": os.environ.get("LLAMA_31_70B_DIR", "/proj_sw/llama3_1-weights/Meta-Llama-3.1-70B-Instruct/repacked"),
+        "70b-r1": os.environ.get("DEEPSEEK_R1_LLAMA_70B_DIR", "/proj_sw/deepseek/DeepSeek-R1-Distill-Llama-70B"),
+        "q7b": os.environ.get("QWEN_7B_DIR", "/proj_sw/user_dev/Qwen/Qwen2.5-7B-Instruct"),
+        "q72b": os.environ.get("QWEN_72B_DIR", "/proj_sw/user_dev/Qwen/Qwen2.5-72B-Instruct"),
     }.get(model.lower(), "")
 
     if not llama_dir or not os.path.exists(llama_dir):
@@ -1044,6 +1082,9 @@ def get_llama_dir(model):
         print("  - LLAMA_31_8B_DIR for 8b model")
         print("  - LLAMA_32_11B_DIR for 11b model")
         print("  - LLAMA_31_70B_DIR for 70b model")
+        print("  - DEEPSEEK_R1_LLAMA_70B_DIR for DeepSeek R1 Llama 70b distill model")
+        print("  - QWEN_7B_DIR for 7b Qwen2.5 model")
+        print("  - QWEN_72B_DIR for 72b Qwen2.5 model")
         sys.exit(1)
 
     return llama_dir
@@ -1203,8 +1244,9 @@ def export_results_to_markdown(output_entries, stdscr):
             key = (entry.model, entry.device)
 
             if entry.command_name == "demo" or entry.command_name == "accuracy":
-                # Get speed from demo entry
+                # Get speed and ttft from demo entry
                 speed = entry.speed if entry.command_name == "demo" else None
+                ttft = entry.ttft if entry.command_name == "demo" else None
                 # Get accuracy from accuracy entry
                 top1, top5 = "N/A", "N/A"
                 if entry.command_name == "accuracy" and entry.pcc:
@@ -1219,12 +1261,15 @@ def export_results_to_markdown(output_entries, stdscr):
                         existing_entry[3] = speed
                     if top1 != "N/A":
                         existing_entry[1:3] = [top1, top5]
+                    if ttft:
+                        existing_entry[4] = ttft
                 else:
-                    perf_entries.append([key, top1, top5, speed or "N/A"])
+                    perf_entries.append([key, top1, top5, speed or "N/A", ttft])
 
             elif entry.command_name == "demo-acc" or entry.command_name == "accuracy-acc":
                 # Same logic for accuracy configuration
                 speed = entry.speed if entry.command_name == "demo-acc" else None
+                ttft = entry.ttft if entry.command_name == "demo-acc" else None
                 top1, top5 = "N/A", "N/A"
                 if entry.command_name == "accuracy-acc" and entry.pcc:
                     match = re.match(r"(\d+)\s*\|\s*(\d+)", entry.pcc)
@@ -1237,8 +1282,10 @@ def export_results_to_markdown(output_entries, stdscr):
                         existing_entry[3] = speed
                     if top1 != "N/A":
                         existing_entry[1:3] = [top1, top5]
+                    if ttft:
+                        existing_entry[4] = ttft
                 else:
-                    acc_entries.append([key, top1, top5, speed or "N/A"])
+                    acc_entries.append([key, top1, top5, speed or "N/A", ttft])
 
     # Create markdown content
     markdown_lines = [
@@ -1246,14 +1293,25 @@ def export_results_to_markdown(output_entries, stdscr):
         "",
         "This configuration uses bfp4 MLP FF1+FF3 for all models.",
         "",
-        "| Model | Device | Top-1 (%) | Top-5 (%) | Speed (t/s/u) |",
-        "|-------|--------|-----------|-----------|---------------|",
+        "| Model | Device | Top-1 (%) | Top-5 (%) | Speed (t/s/u) | TTFT (ms) |",
+        "|-------|--------|-----------|-----------|---------------|-----------|",
     ]
+
+    fullname = {
+        "1b": "Llama-3.2-1B",
+        "3b": "Llama-3.2-3B",
+        "8b": "Llama-3.1-8B",
+        "11b": "Llama-3.2-11B",
+        "70b": "Llama-3.1-70B",
+        "70b-r1": "DeepSeek-R1-Llama-70B",
+        "q7b": "Qwen-2.5-7B",
+        "q72b": "Qwen-2.5-72B",
+    }
 
     # Add rows for performance table in original order
     for entry in perf_entries:
-        (model, device), top1, top5, speed = entry
-        markdown_lines.append(f"| {model} | {device} | {top1} | {top5} | {speed} |")
+        (model, device), top1, top5, speed, ttft = entry
+        markdown_lines.append(f"| {model} | {device} | {top1} | {top5} | {speed} | {ttft} |")
 
     # Add accuracy table
     markdown_lines.extend(
@@ -1263,15 +1321,15 @@ def export_results_to_markdown(output_entries, stdscr):
             "",
             "This configuration uses bfp4 MLP FF1+FF3 only for the 3.1-70B model.",
             "",
-            "| Model | Device | Top-1 (%) | Top-5 (%) | Speed (t/s/u) |",
-            "|-------|--------|-----------|-----------|---------------|",
+            "| Model | Device | Top-1 (%) | Top-5 (%) | Speed (t/s/u) | TTFT (ms) |",
+            "|-------|--------|-----------|-----------|---------------|-----------|",
         ]
     )
 
     # Add rows for accuracy table in original order
     for entry in acc_entries:
-        (model, device), top1, top5, speed = entry
-        markdown_lines.append(f"| {model} | {device} | {top1} | {top5} | {speed} |")
+        (model, device), top1, top5, speed, ttft = entry
+        markdown_lines.append(f"| {fullname[model]} | {device} | {top1} | {top5} | {speed} | {ttft} |")
 
     # Write to PERF.md
     with open("PERF.md", "w") as f:
@@ -1296,22 +1354,25 @@ def export_results_to_markdown(output_entries, stdscr):
 
 
 def reparse_log_file(entry, screen_needs_update):
-    """Reparse an entry's log file to update speed and pcc values."""
+    """Reparse an entry's log file to update speed, ttft and pcc values."""
     try:
         with open(entry.get_log_filename(), "r") as f:
             previous_line = ""
             status = entry.status  # Preserve the current status
 
-            # Reset speed and pcc before reparsing
+            # Reset speed, ttft and pcc before reparsing
             entry.speed = None
+            entry.ttft = None
             entry.pcc = None
 
             for line in f:
-                new_status, output, speed, pcc = parse_output_line(line, previous_line, status)
+                new_status, output, speed, ttft, pcc = parse_output_line(line, previous_line, status)
                 previous_line = line.strip()
 
                 if speed is not None:
                     entry.speed = f"{speed:.1f}"
+                if ttft is not None:
+                    entry.ttft = f"{ttft:.0f}"
                 if pcc is not None:
                     try:
                         pcc_value = float(pcc)

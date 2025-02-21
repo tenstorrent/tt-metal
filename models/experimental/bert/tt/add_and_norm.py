@@ -82,7 +82,7 @@ class TtAddAndNormModel(torch.nn.Module):
         )
 
     def forward(self, a, b):
-        print(a.shape.with_tile_padding(), b.shape.with_tile_padding())
+        print(a.padded_shape, b.padded_shape)
         return self.add_and_norm(a, b)
 
 

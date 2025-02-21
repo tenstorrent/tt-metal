@@ -11,8 +11,6 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/core_coord.hpp>
 
-#include <tt-metalium/host_api.hpp>
-
 namespace tt::tt_metal {
 
 struct PoolConfig {

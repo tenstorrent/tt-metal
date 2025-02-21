@@ -6,7 +6,6 @@
 
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/util.hpp>
-#include <tt-metalium/host_api.hpp>
 #include "cpp/ttnn/operation.hpp"
 
 #include "ttnn/operation.hpp"

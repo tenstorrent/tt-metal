@@ -26,14 +26,8 @@ MorehNllLossStep1DeviceOperation::Factory::cached_program_t MorehNllLossStep1Dev
     const uint32_t channel_size = operation_attributes.channel_size;
     const auto& compute_kernel_config = operation_attributes.compute_kernel_config;
 
-    auto target_shape = target.get_shape().value;
-    auto N = target_shape[1];
-
-    const auto target_shape_without_padding = target_shape.without_padding();
-    const auto origin_N = target_shape_without_padding[1];
-
+    auto target_shape = target.get_padded_shape();
     const bool weight_has_value = weight.has_value();
-
     auto H = target_shape[-2];
     auto W = target_shape[-1];
     auto Ht = H / tt::constants::TILE_HEIGHT;
@@ -63,7 +57,8 @@ MorehNllLossStep1DeviceOperation::Factory::cached_program_t MorehNllLossStep1Dev
     const auto data_tile_size = tt_metal::detail::TileSize(data_format);
     const auto intermed_tile_size = tt_metal::detail::TileSize(intermed_data_format);
 
-    const uint32_t available_L1 = device->l1_size_per_core() - device->get_base_allocator_addr(HalMemType::L1);
+    const uint32_t available_L1 =
+        device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(HalMemType::L1);
 
     uint32_t target_num_tile = 1;
     uint32_t weight_num_tile = weight_has_value ? div_up(channel_size, tt::constants::TILE_WIDTH) : 0;
@@ -153,7 +148,6 @@ MorehNllLossStep1DeviceOperation::Factory::cached_program_t MorehNllLossStep1Dev
             static_cast<uint32_t>(ignore_index),
             num_units_per_core,
             tile_offset,
-            origin_N,
             channel_size,
             weight_num_tile,
             element_size,

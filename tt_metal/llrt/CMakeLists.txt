@@ -82,6 +82,7 @@ target_link_libraries(
 
 set(LLRT_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/llrt.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/core_descriptor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/rtoptions.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tlb_config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tt_cluster.cpp
@@ -105,8 +106,10 @@ target_link_libraries(
         Tracy::TracyClient
         nlohmann_json::nlohmann_json
         Reflect::Reflect
-        magic_enum
+        yaml-cpp::yaml-cpp
+        magic_enum::magic_enum
         span
-        Metalium::Metal::Impl
+        common
 )
+target_include_directories(llrt PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_options(llrt PRIVATE -Wno-int-to-pointer-cast)

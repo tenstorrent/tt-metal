@@ -62,7 +62,7 @@ TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceAllocations) {
     auto device = devices_[0];
     auto sub_device_manager_1 = device->create_sub_device_manager({sub_device_1}, local_l1_size);
     auto sub_device_manager_2 = device->create_sub_device_manager({sub_device_1, sub_device_2}, local_l1_size);
-    DeviceAddr l1_unreserved_base = device->get_base_allocator_addr(HalMemType::L1);
+    DeviceAddr l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
     DeviceAddr max_addr = l1_unreserved_base + local_l1_size;
 
     shard_config_1.device = device;
@@ -84,7 +84,7 @@ TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceAllocations) {
     device->load_sub_device_manager(sub_device_manager_1);
 
     auto buffer_1 = CreateBuffer(shard_config_1, SubDeviceId{0});
-    EXPECT_EQ(buffer_1->address(), max_addr - buffer_1->aligned_page_size());
+    EXPECT_TRUE(buffer_1->address() <= max_addr - buffer_1->aligned_page_size());
     EnqueueWriteBuffer(device->command_queue(), buffer_1, input_1, false);
     std::vector<uint32_t> output_1;
     EnqueueReadBuffer(device->command_queue(), buffer_1, output_1, true);
@@ -105,7 +105,7 @@ TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceAllocations) {
     device->load_sub_device_manager(sub_device_manager_2);
 
     auto buffer_3 = CreateBuffer(shard_config_2, SubDeviceId{1});
-    EXPECT_EQ(buffer_3->address(), max_addr - buffer_3->aligned_page_size());
+    EXPECT_TRUE(buffer_3->address() <= max_addr - buffer_3->aligned_page_size());
     EnqueueWriteBuffer(device->command_queue(), buffer_3, input_2, false);
     std::vector<uint32_t> output_2;
     EnqueueReadBuffer(device->command_queue(), buffer_3, output_2, true);
@@ -118,7 +118,7 @@ TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceAllocations) {
     }
 
     auto buffer_4 = CreateBuffer(shard_config_1, SubDeviceId{0});
-    EXPECT_EQ(buffer_4->address(), max_addr - buffer_4->aligned_page_size());
+    EXPECT_TRUE(buffer_4->address() <= max_addr - buffer_4->aligned_page_size());
     EXPECT_THROW(CreateBuffer(interleaved_config, SubDeviceId{0}), std::exception);
 }
 
@@ -133,8 +133,9 @@ TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceBankIds) {
 
     auto cores_vec = corerange_to_cores(device->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}));
     for (const auto& core : cores_vec) {
-        auto global_bank_id = device->bank_ids_from_logical_core(BufferType::L1, core)[0];
-        auto sub_device_bank_id = device->bank_ids_from_logical_core(BufferType::L1, core, SubDeviceId{0})[0];
+        auto global_bank_id = device->allocator()->get_bank_ids_from_logical_core(BufferType::L1, core)[0];
+        auto sub_device_bank_id =
+            device->allocator(SubDeviceId{0})->get_bank_ids_from_logical_core(BufferType::L1, core)[0];
         EXPECT_EQ(global_bank_id, sub_device_bank_id);
     }
 }

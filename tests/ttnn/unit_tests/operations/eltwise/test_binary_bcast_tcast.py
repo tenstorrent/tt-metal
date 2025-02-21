@@ -5,7 +5,6 @@
 import torch
 import pytest
 import ttnn
-import random
 
 from functools import partial
 from tests.ttnn.unit_tests.operations.eltwise.backward.utility_funcs import compare_pcc
@@ -28,6 +27,7 @@ from models.utility_functions import torch_random, skip_for_grayskull
     ([ttnn.int32, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.float32, ttnn.bfloat4_b]),
 )
 def test_binary_scalar_ops(input_shapes, dtype, device):
+    torch.manual_seed(0)
     a_shape, b_shape = input_shapes
 
     a_pt = gen_func_with_cast_tt(partial(torch_random, low=-100, high=100, dtype=torch.float32), dtype)(a_shape)

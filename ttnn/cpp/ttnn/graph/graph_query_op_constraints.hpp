@@ -69,7 +69,7 @@ auto query_op_constraints(Op op, IDevice* device, Args&&... args) {
         }  // end of outer graph capture
 
         // extract memory footprint from the trace
-        auto interleaved_storage_cores = device->num_banks(tt::tt_metal::BufferType::L1);
+        auto interleaved_storage_cores = device->allocator()->get_num_banks(tt::tt_metal::BufferType::L1);
         size_t cb_peak_size_per_core = extract_circular_buffers_peak_size_per_core(op_trace);
         size_t l1_buffers_peak_per_core =
             extract_l1_buffer_allocation_peak_size_per_core(op_trace, interleaved_storage_cores);

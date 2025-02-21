@@ -4,7 +4,6 @@
 
 #include "ttnn/operations/data_movement/fill_pad/device/fill_pad_op.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/data_movement/fill_pad/device/fill_pad_program_factory.hpp"
 
@@ -15,12 +14,6 @@ namespace ttnn::operations::data_movement {
 void FillPad::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
     TT_FATAL(input_tensor_a.get_layout() == TILE_LAYOUT, "FillPad should only be used for tile layout");
-    TT_FATAL(
-        input_tensor_a.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED,
-        "FillPad does not currently support sharding");
-    TT_FATAL(
-        this->output_mem_config.memory_layout == TensorMemoryLayout::INTERLEAVED,
-        "FillPad does not currently support sharding");
 }
 
 std::vector<TensorSpec> FillPad::compute_output_specs(const std::vector<Tensor>& input_tensors) const {

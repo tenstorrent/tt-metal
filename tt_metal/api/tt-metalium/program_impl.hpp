@@ -56,9 +56,12 @@ namespace distributed {
     class MeshWorkload;
 } // namespace distributed
 
-class EnqueueProgramCommand;
-class HWCommandQueue;
 class JitBuildOptions;
+class EnqueueProgramCommand;
+class CommandQueue;
+// Must be removed. Only here because its a friend of a Program
+class HWCommandQueue;
+
 namespace detail{
     class Program_;
 
@@ -187,8 +190,8 @@ class Program {
     uint32_t get_cb_base_addr(IDevice* device, CoreCoord logical_core, CoreType core_type);
     uint32_t get_sem_size(IDevice* device, CoreCoord logical_core, CoreType core_type) const;
     uint32_t get_cb_size(IDevice* device, CoreCoord logical_core, CoreType core_type) const;
-    void set_last_used_command_queue_for_testing(HWCommandQueue *queue);
-    HWCommandQueue* get_last_used_command_queue() const;
+    void set_last_used_command_queue_for_testing(CommandQueue* queue);
+    CommandQueue* get_last_used_command_queue() const;
     const std::vector<SubDeviceId> &determine_sub_device_ids(const IDevice* device);
     void set_kernels_bin_buffer(const std::shared_ptr<Buffer>& buffer);
     uint32_t get_cb_memory_size() const;

@@ -5,10 +5,11 @@
 // clang-format off
 #include "debug/dprint.h"
 #include "dataflow_api.h"
-#include "tt_fabric/hw/inc/tt_fabric.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric.h"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen.hpp"
-#include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_gen_test.hpp"
-#include "tt_fabric/hw/inc/tt_fabric_interface.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
+#include "tests/tt_metal/tt_metal/perf_microbenchmark/common/kernel_utils.hpp"
 // clang-format on
 
 // seed to re-generate the data and validate against incoming data
@@ -40,6 +41,8 @@ constexpr pkt_dest_size_choices_t pkt_dest_size_choice =
 
 constexpr bool skip_pkt_content_gen = get_compile_time_arg_val(9);
 
+constexpr bool fixed_async_wr_notif_addr = get_compile_time_arg_val(10);
+
 #define PAYLOAD_MASK (0xFFFF0000)
 
 void kernel_main() {
@@ -49,16 +52,19 @@ void kernel_main() {
     bool async_wr_check_failed = false;
     uint32_t num_producers = 0;
     uint32_t rx_buf_size;
+    uint32_t time_seed;
 
     // parse runtime args
-    num_producers = get_arg_val<uint32_t>(0);
-    rx_buf_size = get_arg_val<uint32_t>(1);
+    uint32_t rt_args_idx = 0;
+    time_seed = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
+    num_producers = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
+    rx_buf_size = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
 
     zero_l1_buf(test_results, test_results_size_bytes);
-    test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_STARTED;
-    test_results[PQ_TEST_MISC_INDEX] = 0xff000000;
+    test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_STARTED;
+    test_results[TT_FABRIC_MISC_INDEX] = 0xff000000;
 
-    if constexpr (ASYNC_WR == test_command) {
+    if constexpr (ASYNC_WR & test_command) {
         uint32_t packet_rnd_seed;
         uint64_t curr_packet_words, curr_payload_words, processed_packet_words_src;
         uint32_t max_packet_size_mask, temp;
@@ -72,8 +78,10 @@ void kernel_main() {
         tt_l1_ptr uint32_t* target_addresses;
 
         // parse runtime args relevant to the command
-        src_endpoint_ids = reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(2));
-        target_addresses = reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(2 + num_producers));
+        src_endpoint_ids =
+            reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(increment_arg_idx(rt_args_idx, num_producers)));
+        target_addresses =
+            reinterpret_cast<tt_l1_ptr uint32_t*>(get_arg_addr(increment_arg_idx(rt_args_idx, num_producers)));
 
         // compute max_packet_size_mask (borrowed from tx kernel)
         if constexpr (pkt_dest_size_choice == pkt_dest_size_choices_t::RANDOM) {
@@ -97,6 +105,27 @@ void kernel_main() {
             rx_addr_hi = target_addresses[i] + rx_buf_size;
             read_addr = base_target_addr;
             processed_packet_words_src = 0;
+            uint32_t packet_index = 1;
+
+            // if fixed notification address, wait for all the packets
+            if constexpr ((test_command & ATOMIC_INC) && fixed_async_wr_notif_addr) {
+                uint64_t temp_words = 0, temp_packets = 0;
+                uint32_t temp_seed = packet_rnd_seed, temp_poll_val;
+                while (temp_words < total_data_words) {
+                    if constexpr (pkt_dest_size_choice == pkt_dest_size_choices_t::RANDOM) {
+                        temp_seed = prng_next(temp_seed);
+                        temp_words += packet_rnd_seed_to_size(temp_seed, max_packet_size_words, max_packet_size_mask);
+                    } else if constexpr (
+                        pkt_dest_size_choice == pkt_dest_size_choices_t::SAME_START_RNDROBIN_FIX_SIZE) {
+                        temp_words += max_packet_size_words;
+                    }
+                    temp_packets++;
+                }
+
+                temp_poll_val = time_seed + packet_index + (temp_packets * atomic_increment);
+                poll_addr = base_target_addr;
+                while (temp_poll_val != *poll_addr);
+            }
 
             // read out the data
             while (processed_packet_words_src < total_data_words) {
@@ -122,10 +151,22 @@ void kernel_main() {
                     start_val = packet_rnd_seed & PAYLOAD_MASK;
 
                     // get the value and addr to poll on
-                    poll_val = start_val + curr_payload_words - 1;
-                    poll_addr = read_addr + (curr_payload_words * PACKET_WORD_SIZE_BYTES / 4) - 1;
+                    if constexpr (test_command & ATOMIC_INC) {
+                        // poll on the first word in the payload
+                        poll_addr = read_addr;
+                        if constexpr (fixed_async_wr_notif_addr) {
+                            // no need to poll further in this case
+                            poll_val = *poll_addr;
+                        } else {
+                            poll_val = time_seed + packet_index + atomic_increment;
+                            packet_index++;
+                        }
+                    } else {
+                        // poll on the last word in the payload
+                        poll_val = start_val + curr_payload_words - 1;
+                        poll_addr = read_addr + (curr_payload_words * PACKET_WORD_SIZE_BYTES / 4) - 1;
+                    }
 
-                    // poll on the last word in the payload
                     while (poll_val != *poll_addr);
 
                     // check correctness
@@ -133,9 +174,9 @@ void kernel_main() {
                         read_addr, curr_payload_words, start_val, mismatch_addr, mismatch_val, expected_val);
                     if (!match) {
                         async_wr_check_failed = true;
-                        test_results[PQ_TEST_MISC_INDEX + 12] = mismatch_addr;
-                        test_results[PQ_TEST_MISC_INDEX + 13] = mismatch_val;
-                        test_results[PQ_TEST_MISC_INDEX + 14] = expected_val;
+                        test_results[TT_FABRIC_MISC_INDEX + 12] = mismatch_addr;
+                        test_results[TT_FABRIC_MISC_INDEX + 13] = mismatch_val;
+                        test_results[TT_FABRIC_MISC_INDEX + 14] = expected_val;
                         break;
                     }
                 }
@@ -158,17 +199,14 @@ void kernel_main() {
         processed_packet_words = num_packets * PACKET_HEADER_SIZE_WORDS;
     }
 
-    // auto start = std::chrono::system_clock::now();
-    /// DPRINT << "time: " << (uint32_t)start << ENDL();
-
     // write out results
-    set_64b_result(test_results, processed_packet_words, PQ_TEST_WORD_CNT_INDEX);
+    set_64b_result(test_results, processed_packet_words, TT_FABRIC_WORD_CNT_INDEX);
     set_64b_result(test_results, num_packets, TX_TEST_IDX_NPKT);
 
     if (async_wr_check_failed) {
-        test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_DATA_MISMATCH;
+        test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_DATA_MISMATCH;
     } else {
-        test_results[PQ_TEST_STATUS_INDEX] = PACKET_QUEUE_TEST_PASS;
-        test_results[PQ_TEST_MISC_INDEX] = 0xff000005;
+        test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_PASS;
+        test_results[TT_FABRIC_MISC_INDEX] = 0xff000005;
     }
 }

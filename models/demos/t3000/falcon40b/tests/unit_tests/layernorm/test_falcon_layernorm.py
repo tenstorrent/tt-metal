@@ -63,8 +63,8 @@ class TtFalconLayernorm:
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
         if self.is_sharded:
-            row_height = x.shape.with_tile_padding()[2]
-            shard_width_hidden_dim_across_32_cores = x.shape.with_tile_padding()[3] // 32
+            row_height = x.padded_shape[2]
+            shard_width_hidden_dim_across_32_cores = x.padded_shape[3] // 32
             shard_spec_32_cores_grid = ttnn.CoreRangeSet(
                 {
                     ttnn.CoreRange(

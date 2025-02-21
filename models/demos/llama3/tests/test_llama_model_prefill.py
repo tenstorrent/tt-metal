@@ -9,15 +9,10 @@ import os
 import ttnn
 from models.demos.llama3.tt.llama_common import (
     get_prefill_rot_mat,
-    get_rot_transformation_mat,
-    HostEmbedding,
-    encode_prompt_llama_instruct,
     PagedAttentionConfig,
 )
 from models.demos.llama3.tt.llama_model import TtTransformer
 from models.demos.llama3.tt.model_config import TtModelArgs, LlamaOptimizations
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 from models.utility_functions import (
     comp_pcc,
     comp_allclose,
@@ -98,7 +93,7 @@ def test_llama_model_inference(
     instruct = True
 
     model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, optimizations=optimizations, max_seq_len=seq_len)
-    tokenizer = Tokenizer(model_args.tokenizer_path)
+    tokenizer = model_args.tokenizer
 
     logger.info("Loading weights...")
     state_dict_prefix = model_args.get_state_dict_prefix("", None)
@@ -125,25 +120,24 @@ def test_llama_model_inference(
     with bz2.open(prompt_file, "rt", encoding="utf-8") as f:
         prompt = f.read()
 
-    if instruct:
-        encoded_prompt = encode_prompt_llama_instruct(tokenizer, prompt)[:seq_len]
-    else:
-        encoded_prompt = tokenizer.encode(prompt, bos=True, eos=False)[:seq_len]
+    encoded_prompt = model_args.encode_prompt(prompt, instruct=instruct)[:seq_len]
 
     if run_ref_pt:
-        reference_model = Transformer(model_args)
+        reference_model = model_args.reference_transformer()
         reference_model.load_state_dict(reference_state_dict)
+
     # Embedding on host
-    embd = HostEmbedding(model_args)
+    embd = model_args.reference_embedding()
     embd.load_state_dict({"emb.weight": state_dict[f"{state_dict_prefix}tok_embeddings.weight"]})
 
     # pre-compute the rotational embedding matrix and send to device
     rot_mats = get_prefill_rot_mat(
         model_args.head_dim,
-        model_args.max_seq_len,
         mesh_device,
-        seq_len=seq_len,
-        scale_factor=model_args.rope_scaling_factor,
+        seq_len,
+        model_args.rope_theta,
+        model_args.rope_scaling_factor,
+        model_args.orig_context_len,
     )
     # Setup page table
     page_table_tt = None

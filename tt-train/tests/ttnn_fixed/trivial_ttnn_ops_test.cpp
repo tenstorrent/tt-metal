@@ -8,7 +8,6 @@
 
 #include <core/ttnn_all_includes.hpp>
 #include <memory>
-#include <ttnn/operations/core/compute_kernel/compute_kernel_config.hpp>
 #include <vector>
 
 #include "autograd/auto_context.hpp"

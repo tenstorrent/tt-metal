@@ -88,7 +88,7 @@ void MAIN {
          * cb_stats = [sum(x0**2), sum(x0), sum(x1**2), sum(x1), ...]
          * RMSNorm packs mean(x**2) into cb_var. Layernorm just uses cb_stats_reduced.
          */
-        reduce_init_delta<false>(cb_stats_reduced, cb_stats, cb_reduce);
+        reduce_init_delta<false>(cb_stats, cb_reduce, cb_stats_reduced);
         cb_wait_front(cb_stats, stats_tiles_cols);
         cb_reserve_back(cb_stats_reduced, stats_tile_stride);
 #ifdef RMSNORM
@@ -125,7 +125,7 @@ void MAIN {
          */
         reconfig_data_format(cb_stats_reduced, cb_stats_reduced);
         pack_reconfig_data_format(cb_mean_squared);
-        mul_tiles_init();
+        mul_tiles_init(cb_stats_reduced, cb_stats_reduced);
         cb_reserve_back(cb_mean_squared, onetile);
         cb_wait_front(cb_stats_reduced, stats_tile_stride);
         ACQ();
@@ -140,7 +140,7 @@ void MAIN {
          */
         reconfig_data_format(cb_stats_reduced, cb_mean_squared);
         pack_reconfig_data_format(cb_var);
-        sub_tiles_init();
+        sub_tiles_init(cb_stats_reduced, cb_mean_squared);
 
         cb_reserve_back(cb_var, onetile);
         cb_wait_front(cb_mean_squared, 1);
@@ -182,7 +182,7 @@ void MAIN {
         reconfig_data_format(cb_var, cb_eps);
         pack_reconfig_data_format(cb_recip_sqrt_var);
 
-        add_tiles_init();
+        add_tiles_init(cb_var, cb_eps);
         ACQ();
         add_tiles(cb_var, cb_eps, 0, 0, 0);
         sqrt_tile_init();

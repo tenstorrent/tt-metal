@@ -168,7 +168,7 @@ void MAIN {
             // mask input
             index_h_offset = index_b_offset + index_g_offset;
             reconfig_data_format_srcb(cb_in0, cb_input_mask);
-            mul_tiles_init();
+            mul_tiles_init(cb_in0, cb_input_mask);
             cb_reserve_back(cb_x, block_hw);
             cb_wait_front(cb_input_mask, block_w);
             for (uint32_t i = 0; i < block_h; ++i) {
@@ -199,7 +199,7 @@ void MAIN {
 
             // Partial-E[x]
             index_h_offset = 0;
-            reduce_init_delta<false>(cb_ex_partial, cb_x, cb_scaler);
+            reduce_init_delta<false>(cb_x, cb_scaler, cb_ex_partial);
             cb_reserve_back(cb_ex_partial, 1);
             tile_regs_acquire();
             cb_wait_front(cb_scaler, 1);
@@ -219,7 +219,7 @@ void MAIN {
             reduce_revert_delta(cb_ex_partial);
 
             if constexpr (is_mcast_sender and num_cores_per_mcast_group > 1) {
-                reduce_init_delta<false>(cb_ex_global, cb_ex_external, cb_scaler_global);
+                reduce_init_delta<false>(cb_ex_external, cb_scaler_global, cb_ex_global);
                 cb_reserve_back(cb_ex_global, 1);
                 cb_reserve_back(cb_ex, 1);
                 tile_regs_acquire();
@@ -263,7 +263,7 @@ void MAIN {
 
             // zero out the garbage values by mult mask again
             reconfig_data_format_srcb(cb_ex_global, cb_input_mask);
-            mul_tiles_init();
+            mul_tiles_init(cb_xmm, cb_input_mask);
             cb_reserve_back(cb_x, block_hw);
             cb_wait_front(cb_xmm, block_hw);
             for (uint32_t i = 0; i < block_h; i++) {
@@ -291,7 +291,7 @@ void MAIN {
 
             // (x - E[x])^2
             index_h_offset = 0;
-            mul_tiles_init();
+            mul_tiles_init(cb_x, cb_x);
             cb_reserve_back(cb_xmm, block_hw);
             cb_wait_front(cb_x, block_hw);
             for (uint32_t i = 0; i < block_h; i++) {
@@ -316,7 +316,7 @@ void MAIN {
 
             // Partial-Var(x)
             index_h_offset = 0;
-            reduce_init_delta<false>(cb_ex_partial, cb_xmm, cb_scaler);
+            reduce_init_delta<false>(cb_xmm, cb_scaler, cb_ex_partial);
             cb_reserve_back(cb_ex_partial, 1);
             tile_regs_acquire();
             cb_wait_front(cb_xmm, block_hw);
@@ -337,7 +337,7 @@ void MAIN {
             reduce_revert_delta(cb_ex_partial);
 
             if constexpr (is_mcast_sender and num_cores_per_mcast_group > 1) {
-                reduce_init_delta<false>(cb_ex_global, cb_ex_external, cb_scaler_global);
+                reduce_init_delta<false>(cb_ex_external, cb_scaler_global, cb_ex_global);
                 cb_reserve_back(cb_ex_global, 1);
                 cb_reserve_back(cb_ex, 1);
                 tile_regs_acquire();
@@ -360,7 +360,7 @@ void MAIN {
             cb_reserve_back(cb_ex2pe, 1);
             // (Var + eps)
             tile_regs_acquire();
-            add_tiles_init();
+            add_tiles_init(cb_ex_global, cb_eps);
             add_tiles(cb_ex_global, cb_eps, 0, 0, dst0);
             tile_regs_wait();
             // sqrt(Var + eps)
@@ -415,7 +415,7 @@ void MAIN {
                 if (copy_or_add == true) {
                     copy_tile_init(cb_xmm);
                 } else {
-                    add_tiles_init();
+                    add_tiles_init(cb_out, cb_xmm);
                 }
 
                 for (uint32_t i = 0; i < block_h; ++i) {

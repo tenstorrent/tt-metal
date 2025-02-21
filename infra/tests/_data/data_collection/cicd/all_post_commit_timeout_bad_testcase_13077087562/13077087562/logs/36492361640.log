@@ -1,0 +1,1407 @@
+﻿2025-01-31T17:34:08.9578719Z Current runner version: '2.321.0'
+2025-01-31T17:34:08.9586234Z Runner name: 'tt-metal-ci-vm-94'
+2025-01-31T17:34:08.9587282Z Runner group name: 'Default'
+2025-01-31T17:34:08.9588566Z Machine name: 'tt-metal-ci-vm-94'
+2025-01-31T17:34:08.9592827Z ##[group]GITHUB_TOKEN Permissions
+2025-01-31T17:34:08.9595561Z Actions: read
+2025-01-31T17:34:08.9596284Z Contents: write
+2025-01-31T17:34:08.9597089Z Metadata: read
+2025-01-31T17:34:08.9597839Z Packages: write
+2025-01-31T17:34:08.9598677Z Pages: write
+2025-01-31T17:34:08.9599377Z PullRequests: write
+2025-01-31T17:34:08.9600136Z ##[endgroup]
+2025-01-31T17:34:08.9603920Z Secret source: Actions
+2025-01-31T17:34:08.9605022Z Prepare workflow directory
+2025-01-31T17:34:09.2004816Z Prepare all required actions
+2025-01-31T17:34:09.2055191Z Getting action download info
+2025-01-31T17:34:09.4194180Z Download action repository 'tenstorrent/tt-metal@main' (SHA:6c87f4c91a9ab7078af8da6513929f7ce121f2b3)
+2025-01-31T17:34:16.2628897Z Download action repository 'actions/download-artifact@v4' (SHA:fa0a91b85d4f404e444e00e005971372dc801d16)
+2025-01-31T17:34:17.0017029Z Getting action download info
+2025-01-31T17:34:17.1380726Z Download action repository 'actions/checkout@v4' (SHA:11bd71901bbe5b1630ceea73d27597364c9af683)
+2025-01-31T17:34:17.7294915Z Uses: tenstorrent/tt-metal/.github/workflows/models-post-commit.yaml@refs/heads/main (d354e26cacfcd8e868089aabfa9690f43eb56e5d)
+2025-01-31T17:34:17.7297551Z ##[group] Inputs
+2025-01-31T17:34:17.7297900Z   arch: grayskull
+2025-01-31T17:34:17.7298235Z   runner-label: E150
+2025-01-31T17:34:17.7299142Z   timeout: 45
+2025-01-31T17:34:17.7299468Z ##[endgroup]
+2025-01-31T17:34:17.7299935Z Complete job name: models-unit-tests (grayskull, E150) / model grayskull E150
+2025-01-31T17:34:17.7931409Z A job started hook has been configured by the self-hosted runner administrator
+2025-01-31T17:34:17.8068207Z ##[group]Run '/opt/tt_metal_infra/scripts/ci/grayskull/reset.sh'
+2025-01-31T17:34:17.8086492Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2025-01-31T17:34:17.8087301Z ##[endgroup]
+2025-01-31T17:34:17.8253591Z ++ date
+2025-01-31T17:34:17.8256220Z + echo Current date / time is Fri Jan 31 17:34:17 UTC 2025
+2025-01-31T17:34:17.8257166Z + set_e_was_enabled=false
+2025-01-31T17:34:17.8284726Z + [[ ehxB == *e* ]]
+2025-01-31T17:34:17.8285189Z Current date / time is Fri Jan 31 17:34:17 UTC 2025
+2025-01-31T17:34:17.8285673Z + set_e_was_enabled=true
+2025-01-31T17:34:17.8286021Z + set +e
+2025-01-31T17:34:17.8286317Z + docker image prune
+2025-01-31T17:34:17.8392725Z WARNING! This will remove all dangling images.
+2025-01-31T17:34:17.8425559Z ++ df
+2025-01-31T17:34:17.8427221Z ++ awk '{print $5}'
+2025-01-31T17:34:17.8431302Z +++ findmnt -n -o SOURCE /
+2025-01-31T17:34:17.8434416Z ++ sed s/%//
+2025-01-31T17:34:17.8454308Z ++ grep -w '^/dev/vda1'
+2025-01-31T17:34:17.8489169Z Are you sure you want to continue? [y/N] ::notice title=disk-usage-before-startup::Disk usage is 74 %
+2025-01-31T17:34:17.8490146Z + disk_usage_before=74
+2025-01-31T17:34:17.8490968Z + echo '::notice title=disk-usage-before-startup::Disk usage is 74 %'
+2025-01-31T17:34:17.8491683Z + '[' 74 -ge 90 ']'
+2025-01-31T17:34:17.8492127Z ++ df
+2025-01-31T17:34:17.8492549Z ++ awk '{print $5}'
+2025-01-31T17:34:17.8493017Z +++ findmnt -n -o SOURCE /
+2025-01-31T17:34:17.8493490Z ++ sed s/%//
+2025-01-31T17:34:17.8507965Z ++ grep -w '^/dev/vda1'
+2025-01-31T17:34:17.8551958Z ##[notice]Disk usage is 74 %
+2025-01-31T17:34:17.8559229Z + disk_usage_after=74
+2025-01-31T17:34:17.8563019Z + echo '::notice title=disk-usage-after-startup::Disk usage is 74 %'
+2025-01-31T17:34:17.8563612Z + '[' 74 -ge 90 ']'
+2025-01-31T17:34:17.8567799Z ++ lsmod
+2025-01-31T17:34:17.8571079Z + lsmod_output='Module                  Size  Used by
+2025-01-31T17:34:17.8571586Z wekafsio            70086656  1
+2025-01-31T17:34:17.8572033Z wekafsgw               40960  4 wekafsio
+2025-01-31T17:34:17.8572473Z veth                   28672  0
+2025-01-31T17:34:17.8572847Z uio_pci_generic        16384  0
+2025-01-31T17:34:17.8573227Z igb_uio                20480  0
+2025-01-31T17:34:17.8574162Z uio                    20480  2 igb_uio,uio_pci_generic
+2025-01-31T17:34:17.8574602Z xt_conntrack           16384  1
+2025-01-31T17:34:17.8574966Z xt_MASQUERADE          20480  1
+2025-01-31T17:34:17.8575351Z nf_conntrack_netlink    45056  0
+2025-01-31T17:34:17.8575792Z nfnetlink              16384  2 nf_conntrack_netlink
+2025-01-31T17:34:17.8576237Z xfrm_user              36864  1
+2025-01-31T17:34:17.8576810Z xfrm_algo              16384  1 xfrm_user
+2025-01-31T17:34:17.8577226Z iptable_nat            16384  1
+2025-01-31T17:34:17.8577656Z nf_nat                 45056  2 iptable_nat,xt_MASQUERADE
+2025-01-31T17:34:17.8578302Z nf_conntrack          139264  4 xt_conntrack,nf_nat,nf_conntrack_netlink,xt_MASQUERADE
+2025-01-31T17:34:17.8578890Z nf_defrag_ipv6         24576  1 nf_conntrack
+2025-01-31T17:34:17.8579338Z nf_defrag_ipv4         16384  1 nf_conntrack
+2025-01-31T17:34:17.8579759Z xt_addrtype            16384  2
+2025-01-31T17:34:17.8580139Z iptable_filter         16384  1
+2025-01-31T17:34:17.8580508Z bpfilter               32768  0
+2025-01-31T17:34:17.8580876Z br_netfilter           28672  0
+2025-01-31T17:34:17.8581266Z bridge                176128  1 br_netfilter
+2025-01-31T17:34:17.8581686Z stp                    16384  1 bridge
+2025-01-31T17:34:17.8582089Z llc                    16384  2 bridge,stp
+2025-01-31T17:34:17.8582545Z aufs                  262144  0
+2025-01-31T17:34:17.8582904Z xfs                  1286144  2
+2025-01-31T17:34:17.8583246Z overlay               118784  2
+2025-01-31T17:34:17.8583609Z rdma_ucm               28672  0
+2025-01-31T17:34:17.8583983Z rdma_cm               110592  1 rdma_ucm
+2025-01-31T17:34:17.8584383Z iw_cm                  49152  1 rdma_cm
+2025-01-31T17:34:17.8584982Z ib_ipoib              131072  0
+2025-01-31T17:34:17.8585386Z ib_cm                 114688  2 rdma_cm,ib_ipoib
+2025-01-31T17:34:17.8585799Z ib_umad                28672  8
+2025-01-31T17:34:17.8586155Z nls_iso8859_1          16384  1
+2025-01-31T17:34:17.8586507Z dm_multipath           32768  0
+2025-01-31T17:34:17.8586876Z scsi_dh_rdac           16384  0
+2025-01-31T17:34:17.8587234Z scsi_dh_emc            16384  0
+2025-01-31T17:34:17.8587594Z scsi_dh_alua           20480  0
+2025-01-31T17:34:17.8587944Z mlx5_ib               397312  0
+2025-01-31T17:34:17.8588338Z ib_uverbs             139264  18 rdma_ucm,mlx5_ib
+2025-01-31T17:34:17.8588760Z kvm_amd                98304  0
+2025-01-31T17:34:17.8589113Z ccp                    90112  1 kvm_amd
+2025-01-31T17:34:17.8589516Z input_leds             16384  0
+2025-01-31T17:34:17.8590105Z kvm                   667648  1 kvm_amd
+2025-01-31T17:34:17.8590500Z joydev                 24576  0
+2025-01-31T17:34:17.8590852Z serio_raw              20480  0
+2025-01-31T17:34:17.8591430Z ib_core               348160  8 rdma_cm,ib_ipoib,iw_cm,ib_umad,rdma_ucm,ib_uverbs,mlx5_ib,ib_cm
+2025-01-31T17:34:17.8592023Z tenstorrent            40960  1
+2025-01-31T17:34:17.8592429Z sch_fq_codel           20480  45
+2025-01-31T17:34:17.8592822Z binfmt_misc            24576  1
+2025-01-31T17:34:17.8593234Z msr                    16384  0
+2025-01-31T17:34:17.8593598Z efi_pstore             16384  0
+2025-01-31T17:34:17.8593985Z virtio_rng             16384  0
+2025-01-31T17:34:17.8594468Z ip_tables              32768  2 iptable_filter,iptable_nat
+2025-01-31T17:34:17.8595152Z x_tables               40960  5 xt_conntrack,iptable_filter,xt_addrtype,ip_tables,xt_MASQUERADE
+2025-01-31T17:34:17.8595746Z autofs4                45056  2
+2025-01-31T17:34:17.8596135Z btrfs                1269760  0
+2025-01-31T17:34:17.8596499Z zstd_compress         167936  1 btrfs
+2025-01-31T17:34:17.8596883Z raid10                 61440  0
+2025-01-31T17:34:17.8597231Z raid456               155648  0
+2025-01-31T17:34:17.8597608Z async_raid6_recov      24576  1 raid456
+2025-01-31T17:34:17.8598068Z async_memcpy           20480  2 raid456,async_raid6_recov
+2025-01-31T17:34:17.8598669Z async_pq               24576  2 raid456,async_raid6_recov
+2025-01-31T17:34:17.8599218Z async_xor              20480  3 async_pq,raid456,async_raid6_recov
+2025-01-31T17:34:17.8600060Z async_tx               20480  5 async_pq,async_memcpy,async_xor,raid456,async_raid6_recov
+2025-01-31T17:34:17.8600636Z xor                    24576  2 async_xor,btrfs
+2025-01-31T17:34:17.8601150Z raid6_pq              114688  4 async_pq,btrfs,raid456,async_raid6_recov
+2025-01-31T17:34:17.8601753Z libcrc32c              16384  5 nf_conntrack,nf_nat,btrfs,xfs,raid456
+2025-01-31T17:34:17.8602251Z raid1                  45056  0
+2025-01-31T17:34:17.8602625Z raid0                  24576  0
+2025-01-31T17:34:17.8602970Z multipath              20480  0
+2025-01-31T17:34:17.8603325Z linear                 20480  0
+2025-01-31T17:34:17.8603698Z hid_generic            16384  0
+2025-01-31T17:34:17.8604098Z usbhid                 57344  0
+2025-01-31T17:34:17.8605242Z hid                   131072  2 usbhid,hid_generic
+2025-01-31T17:34:17.8605681Z crct10dif_pclmul       16384  1
+2025-01-31T17:34:17.8606051Z mlx5_core            1626112  1 mlx5_ib
+2025-01-31T17:34:17.8606464Z crc32_pclmul           16384  0
+2025-01-31T17:34:17.8607397Z ghash_clmulni_intel    16384  0
+2025-01-31T17:34:17.8607767Z cirrus                 16384  0
+2025-01-31T17:34:17.8608144Z pci_hyperv_intf        16384  1 mlx5_core
+2025-01-31T17:34:17.8608554Z drm_kms_helper        184320  3 cirrus
+2025-01-31T17:34:17.8608956Z mlxdevm               172032  1 mlx5_core
+2025-01-31T17:34:17.8609386Z syscopyarea            16384  1 drm_kms_helper
+2025-01-31T17:34:17.8609844Z sysfillrect            16384  1 drm_kms_helper
+2025-01-31T17:34:17.8610283Z sysimgblt              16384  1 drm_kms_helper
+2025-01-31T17:34:17.8610738Z auxiliary              16384  2 mlx5_ib,mlx5_core
+2025-01-31T17:34:17.8611328Z aesni_intel           372736  0
+2025-01-31T17:34:17.8611743Z fb_sys_fops            16384  1 drm_kms_helper
+2025-01-31T17:34:17.8612554Z mlx_compat             65536  12 rdma_cm,ib_ipoib,mlxdevm,iw_cm,auxiliary,ib_umad,ib_core,rdma_ucm,ib_uverbs,mlx5_ib,ib_cm,mlx5_core
+2025-01-31T17:34:17.8613294Z crypto_simd            16384  1 aesni_intel
+2025-01-31T17:34:17.8613719Z tls                    73728  1 mlx5_core
+2025-01-31T17:34:17.8614192Z cryptd                 24576  2 crypto_simd,ghash_clmulni_intel
+2025-01-31T17:34:17.8614680Z ahci                   40960  0
+2025-01-31T17:34:17.8615077Z glue_helper            16384  1 aesni_intel
+2025-01-31T17:34:17.8615504Z psmouse               155648  0
+2025-01-31T17:34:17.8615867Z libahci                36864  1 ahci
+2025-01-31T17:34:17.8616276Z drm                   495616  3 drm_kms_helper,cirrus
+2025-01-31T17:34:17.8616940Z mlxfw                  32768  1 mlx5_core
+2025-01-31T17:34:17.8617337Z virtio_blk             20480  3
+2025-01-31T17:34:17.8617727Z psample                20480  1 mlx5_core'
+2025-01-31T17:34:17.8618114Z + grep -q tenstorrent
+2025-01-31T17:34:17.8630651Z + echo Module Size Used by wekafsio 70086656 1 wekafsgw 40960 4 wekafsio veth 28672 0 uio_pci_generic 16384 0 igb_uio 20480 0 uio 20480 2 igb_uio,uio_pci_generic xt_conntrack 16384 1 xt_MASQUERADE 20480 1 nf_conntrack_netlink 45056 0 nfnetlink 16384 2 nf_conntrack_netlink xfrm_user 36864 1 xfrm_algo 16384 1 xfrm_user iptable_nat 16384 1 nf_nat 45056 2 iptable_nat,xt_MASQUERADE nf_conntrack 139264 4 xt_conntrack,nf_nat,nf_conntrack_netlink,xt_MASQUERADE nf_defrag_ipv6 24576 1 nf_conntrack nf_defrag_ipv4 16384 1 nf_conntrack xt_addrtype 16384 2 iptable_filter 16384 1 bpfilter 32768 0 br_netfilter 28672 0 bridge 176128 1 br_netfilter stp 16384 1 bridge llc 16384 2 bridge,stp aufs 262144 0 xfs 1286144 2 overlay 118784 2 rdma_ucm 28672 0 rdma_cm 110592 1 rdma_ucm iw_cm 49152 1 rdma_cm ib_ipoib 131072 0 ib_cm 114688 2 rdma_cm,ib_ipoib ib_umad 28672 8 nls_iso8859_1 16384 1 dm_multipath 32768 0 scsi_dh_rdac 16384 0 scsi_dh_emc 16384 0 scsi_dh_alua 20480 0 mlx5_ib 397312 0 ib_uverbs 139264 18 rdma_ucm,mlx5_ib kvm_amd 98304 0 ccp 90112 1 kvm_amd input_leds 16384 0 kvm 667648 1 kvm_amd joydev 24576 0 serio_raw 20480 0 ib_core 348160 8 rdma_cm,ib_ipoib,iw_cm,ib_umad,rdma_ucm,ib_uverbs,mlx5_ib,ib_cm tenstorrent 40960 1 sch_fq_codel 20480 45 binfmt_misc 24576 1 msr 16384 0 efi_pstore 16384 0 virtio_rng 16384 0 ip_tables 32768 2 iptable_filter,iptable_nat x_tables 40960 5 xt_conntrack,iptable_filter,xt_addrtype,ip_tables,xt_MASQUERADE autofs4 45056 2 btrfs 1269760 0 zstd_compress 167936 1 btrfs raid10 61440 0 raid456 155648 0 async_raid6_recov 24576 1 raid456 async_memcpy 20480 2 raid456,async_raid6_recov async_pq 24576 2 raid456,async_raid6_recov async_xor 20480 3 async_pq,raid456,async_raid6_recov async_tx 20480 5 async_pq,async_memcpy,async_xor,raid456,async_raid6_recov xor 24576 2 async_xor,btrfs raid6_pq 114688 4 async_pq,btrfs,raid456,async_raid6_recov libcrc32c 16384 5 nf_conntrack,nf_nat,btrfs,xfs,raid456 raid1 45056 0 raid0 24576 0 multipath 20480 0 linear 20480 0 hid_generic 16384 0 usbhid 57344 0 hid 131072 2 usbhid,hid_generic crct10dif_pclmul 16384 1 mlx5_core 1626112 1 mlx5_ib crc32_pclmul 16384 0 ghash_clmulni_intel 16384 0 cirrus 16384 0 pci_hyperv_intf 16384 1 mlx5_core drm_kms_helper 184320 3 cirrus mlxdevm 172032 1 mlx5_core syscopyarea 16384 1 drm_kms_helper sysfillrect 16384 1 drm_kms_helper sysimgblt 16384 1 drm_kms_helper auxiliary 16384 2 mlx5_ib,mlx5_core aesni_intel 372736 0 fb_sys_fops 16384 1 drm_kms_helper mlx_compat 65536 12 rdma_cm,ib_ipoib,mlxdevm,iw_cm,auxiliary,ib_umad,ib_core,rdma_ucm,ib_uverbs,mlx5_ib,ib_cm,mlx5_core crypto_simd 16384 1 aesni_intel tls 73728 1 mlx5_core cryptd 24576 2 crypto_simd,ghash_clmulni_intel ahci 40960 0 glue_helper 16384 1 aesni_intel psmouse 155648 0 libahci 36864 1 ahci drm 495616 3 drm_kms_helper,cirrus mlxfw 32768 1 mlx5_core virtio_blk 20480 3 psample 20480 1 mlx5_core
+2025-01-31T17:34:17.8642309Z + [[ 0 -ne 0 ]]
+2025-01-31T17:34:17.8642665Z ++ lsof -w /dev/tenstorrent/0
+2025-01-31T17:34:18.0182166Z ##[notice]Touching and printing out SMI info
+2025-01-31T17:34:18.0183462Z + lsof_output=
+2025-01-31T17:34:18.0183784Z + '[' -n '' ']'
+2025-01-31T17:34:18.0184096Z + i=0
+2025-01-31T17:34:18.0184389Z + iter_limit=10
+2025-01-31T17:34:18.0184964Z + echo '::notice title=printing-smi-info-startup::Touching and printing out SMI info'
+2025-01-31T17:34:18.0185561Z + sleep 20
+2025-01-31T17:34:38.0195390Z + sudo touch /opt/tt_metal_infra/smi.log
+2025-01-31T17:34:38.0466649Z + sudo chown ubuntu /opt/tt_metal_infra/smi.log
+2025-01-31T17:34:38.0722043Z + tt-smi-metal -s -f /opt/tt_metal_infra/smi.log
+2025-01-31T17:34:38.4641290Z
+2025-01-31T17:34:38.4642933Z [95m Detected Chips: [93m1[0m
+2025-01-31T17:34:38.4663256Z [1A[J
+2025-01-31T17:34:38.4664800Z [95m Detected Chips: [93m1[0m
+2025-01-31T17:34:38.4665042Z
+2025-01-31T17:34:38.4665249Z [94m Detecting ARC: [93m|[0m
+2025-01-31T17:34:38.4665474Z
+2025-01-31T17:34:38.4665667Z [94m Detecting DRAM: [93m|[0m
+2025-01-31T17:34:38.4665902Z
+2025-01-31T17:34:38.4666242Z  [95m[][94m ETH: [93m|[0m
+2025-01-31T17:34:38.4729758Z Gathering Information ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100% 0:00:00
+2025-01-31T17:34:38.4804569Z [95m Saved tt-smi log to: /opt/tt_metal_infra/smi.log [0m
+2025-01-31T17:34:38.5416815Z + cat /opt/tt_metal_infra/smi.log
+2025-01-31T17:34:38.5423716Z {
+2025-01-31T17:34:38.5425302Z     "time": "2025-01-31T17:34:38.466386",
+2025-01-31T17:34:38.5425864Z     "host_info": {
+2025-01-31T17:34:38.5426222Z         "OS": "Linux",
+2025-01-31T17:34:38.5426567Z         "Distro": "Ubuntu 20.04.3 LTS",
+2025-01-31T17:34:38.5426974Z         "Kernel": "5.4.0-205-generic",
+2025-01-31T17:34:38.5427367Z         "Hostname": "tt-metal-ci-vm-94",
+2025-01-31T17:34:38.5427770Z         "Platform": "x86_64",
+2025-01-31T17:34:38.5428130Z         "Python": "3.8.10",
+2025-01-31T17:34:38.5428454Z         "Memory": "47.14 GB",
+2025-01-31T17:34:38.5429785Z         "Driver": "TTKMD 1.27.1"
+2025-01-31T17:34:38.5430162Z     },
+2025-01-31T17:34:38.5430501Z     "device_info": [
+2025-01-31T17:34:38.5430887Z         {
+2025-01-31T17:34:38.5431175Z             "smbus_telem": {
+2025-01-31T17:34:38.5431536Z                 "BOARD_ID": "0x10000361160704f",
+2025-01-31T17:34:38.5431960Z                 "SMBUS_TX_ENUM_VERSION": "0xba5e0001",
+2025-01-31T17:34:38.5432902Z                 "SMBUS_TX_DEVICE_ID": "0xfaca1e52",
+2025-01-31T17:34:38.5433830Z + echo '::notice title=attempting-reset-startup::Attempting to reset card(s). Sleeping first'
+2025-01-31T17:34:38.5434443Z + sleep 30
+2025-01-31T17:34:38.5434744Z                 "SMBUS_TX_ASIC_RO": null,
+2025-01-31T17:34:38.5435159Z                 "SMBUS_TX_ASIC_IDD": null,
+2025-01-31T17:34:38.5435567Z                 "SMBUS_TX_BOARD_ID_HIGH": "0x1000036",
+2025-01-31T17:34:38.5435987Z                 "SMBUS_TX_BOARD_ID_LOW": "0x1160704f",
+2025-01-31T17:34:38.5436416Z                 "SMBUS_TX_ARC0_FW_VERSION": "0x1070000",
+2025-01-31T17:34:38.5436845Z                 "SMBUS_TX_ARC1_FW_VERSION": "0x1070000",
+2025-01-31T17:34:38.5437264Z                 "SMBUS_TX_ARC2_FW_VERSION": null,
+2025-01-31T17:34:38.5437680Z                 "SMBUS_TX_ARC3_FW_VERSION": "0x1070000",
+2025-01-31T17:34:38.5438114Z                 "SMBUS_TX_SPIBOOTROM_FW_VERSION": null,
+2025-01-31T17:34:38.5438550Z                 "SMBUS_TX_ETH_FW_VERSION": null,
+2025-01-31T17:34:38.5438964Z                 "SMBUS_TX_M3_BL_FW_VERSION": null,
+2025-01-31T17:34:38.5439463Z                 "SMBUS_TX_M3_APP_FW_VERSION": null,
+2025-01-31T17:34:38.5439889Z                 "SMBUS_TX_DDR_SPEED": "0xe74",
+2025-01-31T17:34:38.5440294Z                 "SMBUS_TX_DDR_STATUS": "0x111111",
+2025-01-31T17:34:38.5440699Z                 "SMBUS_TX_ETH_STATUS0": null,
+2025-01-31T17:34:38.5441107Z                 "SMBUS_TX_ETH_STATUS1": null,
+2025-01-31T17:34:38.5441521Z                 "SMBUS_TX_PCIE_STATUS": "0x11040040",
+2025-01-31T17:34:38.5441933Z                 "SMBUS_TX_FAULTS": null,
+2025-01-31T17:34:38.5442329Z                 "SMBUS_TX_ARC0_HEALTH": "0x6a12a62",
+2025-01-31T17:34:38.5442940Z                 "SMBUS_TX_ARC1_HEALTH": null,
+2025-01-31T17:34:38.5443352Z                 "SMBUS_TX_ARC2_HEALTH": null,
+2025-01-31T17:34:38.5443745Z                 "SMBUS_TX_ARC3_HEALTH": null,
+2025-01-31T17:34:38.5444136Z                 "SMBUS_TX_FAN_SPEED": "0xff",
+2025-01-31T17:34:38.5444560Z                 "SMBUS_TX_AICLK": "0x4b200fa",
+2025-01-31T17:34:38.5445003Z                 "SMBUS_TX_AXICLK": "0x384",
+2025-01-31T17:34:38.5445433Z                 "SMBUS_TX_ARCCLK": "0x21c",
+2025-01-31T17:34:38.5445876Z                 "SMBUS_TX_THROTTLER": null,
+2025-01-31T17:34:38.5446279Z                 "SMBUS_TX_VCORE": "0x2e4",
+2025-01-31T17:34:38.5446703Z                 "SMBUS_TX_ASIC_TEMPERATURE": "0x2c00229",
+2025-01-31T17:34:38.5447137Z                 "SMBUS_TX_VREG_TEMPERATURE": null,
+2025-01-31T17:34:38.5447555Z                 "SMBUS_TX_BOARD_TEMPERATURE": null,
+2025-01-31T17:34:38.5447971Z                 "SMBUS_TX_TDP": "0xaa000a",
+2025-01-31T17:34:38.5448376Z                 "SMBUS_TX_TDC": "0x12c000c",
+2025-01-31T17:34:38.5448772Z                 "SMBUS_TX_VDD_LIMITS": "0x3a202e4",
+2025-01-31T17:34:38.5449179Z                 "SMBUS_TX_THM_LIMITS": "0x53004b",
+2025-01-31T17:34:38.5449597Z                 "SMBUS_TX_WH_FW_DATE": "0x45011317",
+2025-01-31T17:34:38.5450035Z                 "SMBUS_TX_ASIC_TMON0": "0x24232122",
+2025-01-31T17:34:38.5450444Z                 "SMBUS_TX_ASIC_TMON1": "0x2322",
+2025-01-31T17:34:38.5450865Z                 "SMBUS_TX_MVDDQ_POWER": null,
+2025-01-31T17:34:38.5451287Z                 "SMBUS_TX_GDDR_TRAIN_TEMP0": null,
+2025-01-31T17:34:38.5451720Z                 "SMBUS_TX_GDDR_TRAIN_TEMP1": null,
+2025-01-31T17:34:38.5452135Z                 "SMBUS_TX_BOOT_DATE": "0x511f0301",
+2025-01-31T17:34:38.5452561Z                 "SMBUS_TX_RT_SECONDS": null,
+2025-01-31T17:34:38.5452977Z                 "SMBUS_TX_AUX_STATUS": null,
+2025-01-31T17:34:38.5453401Z                 "SMBUS_TX_ETH_DEBUG_STATUS0": null,
+2025-01-31T17:34:38.5453825Z                 "SMBUS_TX_ETH_DEBUG_STATUS1": null,
+2025-01-31T17:34:38.5454271Z                 "SMBUS_TX_TT_FLASH_VERSION": "0x20100"
+2025-01-31T17:34:38.5454672Z             },
+2025-01-31T17:34:38.5455003Z             "board_info": {
+2025-01-31T17:34:38.5455333Z                 "bus_id": "0000:07:00.0",
+2025-01-31T17:34:38.5455823Z                 "board_type": "e150",
+2025-01-31T17:34:38.5456208Z                 "board_id": "010000361160704f",
+2025-01-31T17:34:38.5456784Z                 "coords": "N/A",
+2025-01-31T17:34:38.5457132Z                 "dram_status": true,
+2025-01-31T17:34:38.5457523Z                 "dram_speed": "3700",
+2025-01-31T17:34:38.5457907Z                 "pcie_speed": 4,
+2025-01-31T17:34:38.5458273Z                 "pcie_width": 16
+2025-01-31T17:34:38.5458611Z             },
+2025-01-31T17:34:38.5458923Z             "telemetry": {
+2025-01-31T17:34:38.5459255Z                 "voltage": "0.74",
+2025-01-31T17:34:38.5459604Z                 "current": " 12.0",
+2025-01-31T17:34:38.5459975Z                 "power": " 10.0",
+2025-01-31T17:34:38.5460331Z                 "aiclk": " 250",
+2025-01-31T17:34:38.5460694Z                 "asic_temperature": "34.6"
+2025-01-31T17:34:38.5461051Z             },
+2025-01-31T17:34:38.5461342Z             "firmwares": {
+2025-01-31T17:34:38.5461673Z                 "arc_fw": "1.7.0.0",
+2025-01-31T17:34:38.5462058Z                 "arc_fw_date": "2024-05-01",
+2025-01-31T17:34:38.5462423Z                 "eth_fw": "N/A",
+2025-01-31T17:34:38.5462760Z                 "m3_bl_fw": "N/A",
+2025-01-31T17:34:38.5463114Z                 "m3_app_fw": "N/A",
+2025-01-31T17:34:38.5463481Z                 "tt_flash_version": "0.2.1.0"
+2025-01-31T17:34:38.5463835Z             },
+2025-01-31T17:34:38.5464116Z             "limits": {
+2025-01-31T17:34:38.5464435Z                 "vdd_min": "0.74",
+2025-01-31T17:34:38.5464822Z                 "vdd_max": "0.93",
+2025-01-31T17:34:38.5465219Z                 "tdp_limit": "170",
+2025-01-31T17:34:38.5465579Z                 "tdc_limit": "300",
+2025-01-31T17:34:38.5466059Z                 "asic_fmax": "1202",
+2025-01-31T17:34:38.5466436Z                 "therm_trip_l1_limit": "83",
+2025-01-31T17:34:38.5466816Z                 "thm_limit": "75",
+2025-01-31T17:34:38.5467187Z                 "bus_peak_limit": null
+2025-01-31T17:34:38.5467558Z             }
+2025-01-31T17:34:38.5467835Z         }
+2025-01-31T17:34:38.5468113Z     ]
+2025-01-31T17:34:38.5468615Z }::notice title=attempting-reset-startup::Attempting to reset card(s). Sleeping first
+2025-01-31T17:35:08.5440908Z + '[' 0 -lt 10 ']'
+2025-01-31T17:35:08.5441630Z + (( i++ ))
+2025-01-31T17:35:08.5443547Z ++ tt-smi-metal -r 0
+2025-01-31T17:35:09.0693221Z + reset_output='[94m Starting tensix reset on GS board at pci index 0 [0m
+2025-01-31T17:35:09.0697405Z [93m Lowering clks to safe value... [0m
+2025-01-31T17:35:09.0698988Z ##[notice]tt-smi reset was successful
+2025-01-31T17:35:09.0700732Z [93m Beginning reset sequence... [0m
+2025-01-31T17:35:09.0701207Z [93m Finishing reset sequence... [0m
+2025-01-31T17:35:09.0722851Z [93m Returning clks to original values... [0m
+2025-01-31T17:35:09.0723535Z [92m Finished tensix reset on GS board at pci index 0
+2025-01-31T17:35:09.0724046Z  [0m
+2025-01-31T17:35:09.0724553Z [95m Re-initializing boards after reset.... [0m
+2025-01-31T17:35:09.0724854Z
+2025-01-31T17:35:09.0725078Z [95m Detected Chips: [93m1[0m
+2025-01-31T17:35:09.0725491Z [1A[J
+2025-01-31T17:35:09.0725834Z [95m Detected Chips: [93m1[0m
+2025-01-31T17:35:09.0726068Z
+2025-01-31T17:35:09.0726260Z [94m Detecting ARC: [93m|[0m
+2025-01-31T17:35:09.0726482Z
+2025-01-31T17:35:09.0726675Z [94m Detecting DRAM: [93m|[0m
+2025-01-31T17:35:09.0726895Z
+2025-01-31T17:35:09.0727075Z  [95m[][94m ETH: [93m|[0m'
+2025-01-31T17:35:09.0727416Z + [[ 0 -ne 0 ]]
+2025-01-31T17:35:09.0727877Z + [[ [94m Starting tensix reset on GS board at pci index 0 [0m
+2025-01-31T17:35:09.0728421Z [93m Lowering clks to safe value... [0m
+2025-01-31T17:35:09.0728877Z [93m Beginning reset sequence... [0m
+2025-01-31T17:35:09.0729342Z [93m Finishing reset sequence... [0m
+2025-01-31T17:35:09.0729827Z [93m Returning clks to original values... [0m
+2025-01-31T17:35:09.0730368Z [92m Finished tensix reset on GS board at pci index 0
+2025-01-31T17:35:09.0730894Z  [0m
+2025-01-31T17:35:09.0731305Z [95m Re-initializing boards after reset.... [0m
+2025-01-31T17:35:09.0732182Z
+2025-01-31T17:35:09.0732384Z [95m Detected Chips: [93m1[0m
+2025-01-31T17:35:09.0732764Z [1A[J
+2025-01-31T17:35:09.0733091Z [95m Detected Chips: [93m1[0m
+2025-01-31T17:35:09.0733321Z
+2025-01-31T17:35:09.0733508Z [94m Detecting ARC: [93m|[0m
+2025-01-31T17:35:09.0733742Z
+2025-01-31T17:35:09.0733937Z [94m Detecting DRAM: [93m|[0m
+2025-01-31T17:35:09.0734159Z
+2025-01-31T17:35:09.0734474Z  [95m[][94m ETH: [93m|[0m == *\N\o\ \c\h\i\p\s\ \d\e\t\e\c\t\e\d* ]]
+2025-01-31T17:35:09.0734924Z + break
+2025-01-31T17:35:09.0735176Z + '[' 1 -eq 10 ']'
+2025-01-31T17:35:09.0735658Z + echo '::notice title=reset-successful-startup::tt-smi reset was successful'
+2025-01-31T17:35:09.0736220Z + check_hugepages_service_status=0
+2025-01-31T17:35:09.0736853Z + sudo systemctl status tenstorrent-hugepages.service
+2025-01-31T17:35:09.1017830Z Unit tenstorrent-hugepages.service could not be found.
+2025-01-31T17:35:09.1028719Z + check_hugepages_service_status=4
+2025-01-31T17:35:09.1029395Z + '[' 4 -eq 4 ']'
+2025-01-31T17:35:09.1033178Z ##[warning]Hugepages service not found. Using old rc.local method
+2025-01-31T17:35:09.1034721Z + echo '::warning title=hugepages-service-not-found-startup::Hugepages service not found. Using old rc.local method'
+2025-01-31T17:35:09.1035452Z + sudo /etc/rc.local
+2025-01-31T17:35:39.1498242Z ++ date +%s
+2025-01-31T17:35:39.1508114Z + hugepages_check_start=1738344939
+2025-01-31T17:35:39.1508589Z + hugepages_check_timeout=60
+2025-01-31T17:35:39.1511476Z ++ cat /sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages
+2025-01-31T17:35:39.1517989Z + [[ 1 -eq 0 ]]
+2025-01-31T17:35:39.1519256Z + echo '::notice title=hugepages-setup-success-startup::Hugepages is now setup.'
+2025-01-31T17:35:39.1520983Z ##[notice]Hugepages is now setup.
+2025-01-31T17:35:39.1522499Z + echo 'Printing out cpu information...'
+2025-01-31T17:35:39.1522992Z + lscpu
+2025-01-31T17:35:39.1523368Z Printing out cpu information...
+2025-01-31T17:35:39.1549962Z Architecture:                       x86_64
+2025-01-31T17:35:39.1550606Z CPU op-mode(s):                     32-bit, 64-bit
+2025-01-31T17:35:39.1551180Z Byte Order:                         Little Endian
+2025-01-31T17:35:39.1551807Z Address sizes:                      40 bits physical, 48 bits virtual
+2025-01-31T17:35:39.1552404Z CPU(s):                             14
+2025-01-31T17:35:39.1552873Z On-line CPU(s) list:                0-13
+2025-01-31T17:35:39.1553348Z Thread(s) per core:                 1
+2025-01-31T17:35:39.1553861Z Core(s) per socket:                 1
+2025-01-31T17:35:39.1554263Z Socket(s):                          14
+2025-01-31T17:35:39.1554670Z NUMA node(s):                       2
+2025-01-31T17:35:39.1555134Z Vendor ID:                          AuthenticAMD
+2025-01-31T17:35:39.1555593Z CPU family:                         23
+2025-01-31T17:35:39.1556026Z Model:                              49
+2025-01-31T17:35:39.1556587Z Model name:                         AMD EPYC-Rome Processor
+2025-01-31T17:35:39.1557201Z Stepping:                           0
+2025-01-31T17:35:39.1557703Z CPU MHz:                            2299.998
+2025-01-31T17:35:39.1558236Z BogoMIPS:                           4599.99
+2025-01-31T17:35:39.1558752Z Virtualization:                     AMD-V
+2025-01-31T17:35:39.1559264Z Hypervisor vendor:                  KVM
+2025-01-31T17:35:39.1559762Z Virtualization type:                full
+2025-01-31T17:35:39.1560288Z L1d cache:                          448 KiB
+2025-01-31T17:35:39.1560811Z L1i cache:                          448 KiB
+2025-01-31T17:35:39.1561298Z L2 cache:                           7 MiB
+2025-01-31T17:35:39.1561766Z L3 cache:                           224 MiB
+2025-01-31T17:35:39.1562274Z NUMA node0 CPU(s):                  0-6
+2025-01-31T17:35:39.1562755Z NUMA node1 CPU(s):                  7-13
+2025-01-31T17:35:39.1563304Z Vulnerability Gather data sampling: Not affected
+2025-01-31T17:35:39.1563940Z Vulnerability Itlb multihit:        Not affected
+2025-01-31T17:35:39.1564554Z Vulnerability L1tf:                 Not affected
+2025-01-31T17:35:39.1565419Z Vulnerability Mds:                  Not affected
+2025-01-31T17:35:39.1565992Z Vulnerability Meltdown:             Not affected
+2025-01-31T17:35:39.1566590Z Vulnerability Mmio stale data:      Not affected
+2025-01-31T17:35:39.1567199Z Vulnerability Retbleed:             Vulnerable
+2025-01-31T17:35:39.1568204Z Vulnerability Spec store bypass:    Mitigation; Speculative Store Bypass disabled via prctl and seccomp
+2025-01-31T17:35:39.1569597Z Vulnerability Spectre v1:           Mitigation; usercopy/swapgs barriers and __user pointer sanitization
+2025-01-31T17:35:39.1571198Z Vulnerability Spectre v2:           Mitigation; Retpolines; IBPB conditional; STIBP disabled; RSB filling; PBRSB-eIBRS Not affected; BHI Not affected
+2025-01-31T17:35:39.1572414Z Vulnerability Srbds:                Not affected
+2025-01-31T17:35:39.1573021Z Vulnerability Tsx async abort:      Not affected
+2025-01-31T17:35:39.1576925Z Flags:                              fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl nonstop_tsc cpuid extd_apicid tsc_known_freq pni pclmulqdq ssse3 fma cx16 sse4_1 sse4_2 x2apic movbe popcnt aes xsave avx f16c rdrand hypervisor lahf_lm svm cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw topoext perfctr_core ssbd ibpb stibp vmmcall fsgsbase bmi1 avx2 smep bmi2 rdseed adx smap clflushopt clwb sha_ni xsaveopt xsavec xgetbv1 clzero xsaveerptr wbnoinvd arat npt nrip_save umip rdpid
+2025-01-31T17:35:39.1799368Z ##[group]Run tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
+2025-01-31T17:35:39.1799939Z with:
+2025-01-31T17:35:39.1800346Z   token: ***
+2025-01-31T17:35:39.1800628Z   fetch-depth: 1
+2025-01-31T17:35:39.1800910Z env:
+2025-01-31T17:35:39.1801163Z   LOGURU_LEVEL: INFO
+2025-01-31T17:35:39.1801461Z ##[endgroup]
+2025-01-31T17:35:39.1891786Z ##[group]Run set -x
+2025-01-31T17:35:39.1892123Z [36;1mset -x[0m
+2025-01-31T17:35:39.1892431Z [36;1mls -al[0m
+2025-01-31T17:35:39.1892777Z [36;1mif [ -f "semicolon_delimited_script" ]; then[0m
+2025-01-31T17:35:39.1893247Z [36;1m  file semicolon_delimited_script[0m
+2025-01-31T17:35:39.1893672Z [36;1m  head semicolon_delimited_script[0m
+2025-01-31T17:35:39.1894061Z [36;1mfi[0m
+2025-01-31T17:35:39.1894335Z [36;1mif [ -d ".git" ]; then[0m
+2025-01-31T17:35:39.1894697Z [36;1m  echo 'Cleaning repo'[0m
+2025-01-31T17:35:39.1895051Z [36;1m  git clean -xffd[0m
+2025-01-31T17:35:39.1895428Z [36;1m  echo 'Done git clean -xffd'[0m
+2025-01-31T17:35:39.1895864Z [36;1m  echo 'Attempting to delete any lock files'[0m
+2025-01-31T17:35:39.1896541Z [36;1m  find .git -type f -iname '*.lock' -delete[0m
+2025-01-31T17:35:39.1897009Z [36;1m  echo 'Done deleting lock files'[0m
+2025-01-31T17:35:39.1897409Z [36;1m  echo 'De-init-ing submodules'[0m
+2025-01-31T17:35:39.1897812Z [36;1m  git submodule deinit -f --all[0m
+2025-01-31T17:35:39.1898226Z [36;1m  echo 'Done de-initing submodules'[0m
+2025-01-31T17:35:39.1898616Z [36;1mfi[0m
+2025-01-31T17:35:39.1915992Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2025-01-31T17:35:39.1916432Z env:
+2025-01-31T17:35:39.1916699Z   LOGURU_LEVEL: INFO
+2025-01-31T17:35:39.1916992Z ##[endgroup]
+2025-01-31T17:35:39.1951099Z + ls -al
+2025-01-31T17:35:39.1966704Z total 703860
+2025-01-31T17:35:39.1967091Z drwxr-xr-x 24 ubuntu ubuntu      4096 Jan 31 17:33 .
+2025-01-31T17:35:39.1967613Z drwxr-xr-x  3 ubuntu ubuntu      4096 Jun 26  2024 ..
+2025-01-31T17:35:39.1968115Z drwxr-xr-x  3 ubuntu ubuntu      4096 Jan 31 17:33 .cache
+2025-01-31T17:35:39.1968701Z -rw-r--r--  1 ubuntu ubuntu      3966 Dec 20 09:34 .clang-format
+2025-01-31T17:35:39.1969268Z -rw-r--r--  1 ubuntu ubuntu      6268 Jan 26 10:07 .clang-format-ignore
+2025-01-31T17:35:39.1969831Z -rw-r--r--  1 ubuntu ubuntu      6374 Jan 26 10:07 .clang-tidy
+2025-01-31T17:35:39.1970339Z -rw-r--r--  1 ubuntu ubuntu        43 Dec 20 09:34 .clangd
+2025-01-31T17:35:39.1970898Z -rw-r--r--  1 ubuntu ubuntu       222 Dec 20 09:34 .gersemirc
+2025-01-31T17:35:39.1971684Z drwxr-xr-x 10 ubuntu ubuntu      4096 Jan 31 17:34 .git
+2025-01-31T17:35:39.1972331Z -rw-r--r--  1 ubuntu ubuntu       239 Dec 20 09:34 .git-blame-ignore-revs
+2025-01-31T17:35:39.1972976Z -rw-r--r--  1 ubuntu ubuntu        35 Dec 20 09:34 .gitattributes
+2025-01-31T17:35:39.1973563Z drwxr-xr-x  6 ubuntu ubuntu      4096 Dec 20 09:34 .github
+2025-01-31T17:35:39.1974119Z -rw-r--r--  1 ubuntu ubuntu      1730 Jan 22 04:20 .gitignore
+2025-01-31T17:35:39.1974697Z -rw-r--r--  1 ubuntu ubuntu       991 Jan 30 13:37 .gitmodules
+2025-01-31T17:35:39.1975253Z drwx------  6 ubuntu ubuntu      4096 Jan 31 17:33 .local
+2025-01-31T17:35:39.1975878Z -rw-r--r--  1 ubuntu ubuntu       932 Dec 20 09:34 .pre-commit-config.yaml
+2025-01-31T17:35:39.1976831Z -rw-r--r--  1 ubuntu ubuntu       213 Dec 20 09:34 .yamllint
+2025-01-31T17:35:39.1977425Z -rw-r--r--  1 ubuntu ubuntu     10854 Jan 30 13:37 CMakeLists.txt
+2025-01-31T17:35:39.1978067Z -rw-r--r--  1 ubuntu ubuntu      2231 Jan 30 13:37 CMakePresets.json
+2025-01-31T17:35:39.1978709Z -rw-r--r--  1 ubuntu ubuntu     11325 Jan 30 13:37 CODEOWNERS
+2025-01-31T17:35:39.1979326Z -rw-r--r--  1 ubuntu ubuntu      5253 Dec 20 09:34 CODE_OF_CONDUCT.md
+2025-01-31T17:35:39.1979984Z -rw-r--r--  1 ubuntu ubuntu     36527 Jan 14 19:00 CONTRIBUTING.md
+2025-01-31T17:35:39.1980584Z -rw-r--r--  1 ubuntu ubuntu    126373 Jan 26 10:07 Doxyfile
+2025-01-31T17:35:39.1981183Z -rw-r--r--  1 ubuntu ubuntu      6046 Jan 30 13:37 INSTALLING.md
+2025-01-31T17:35:39.1982021Z -rw-r--r--  1 ubuntu ubuntu     11825 Dec 20 09:34 LICENSE
+2025-01-31T17:35:39.1982602Z -rw-r--r--  1 ubuntu ubuntu      1562 Jan 27 05:19 MANIFEST.in
+2025-01-31T17:35:39.1983224Z -rw-r--r--  1 ubuntu ubuntu     18358 Jan 15 01:35 METALIUM_GUIDE.md
+2025-01-31T17:35:39.1983842Z -rw-r--r--  1 ubuntu ubuntu     14785 Jan 31 16:41 README.md
+2025-01-31T17:35:39.1984419Z + '[' -f semicolon_delimited_script ']'
+2025-01-31T17:35:39.1984858Z + file semicolon_delimited_script
+2025-01-31T17:35:39.1985363Z drwxr-xr-x  7 ubuntu ubuntu      4096 Jan 31 17:32 build
+2025-01-31T17:35:39.1985952Z -rwxr-xr-x  1 ubuntu ubuntu     10102 Jan 30 13:37 build_metal.sh
+2025-01-31T17:35:39.1986661Z -rw-r--r--  1 ubuntu ubuntu      1438 Dec 20 09:34 check_copyright_config.yaml
+2025-01-31T17:35:39.1987309Z -rw-r--r--  1 ubuntu ubuntu      1821 Dec 20 09:34 cloc.sh
+2025-01-31T17:35:39.1987860Z drwxr-xr-x  4 ubuntu ubuntu      4096 Jan 30 13:37 cmake
+2025-01-31T17:35:39.1988442Z -rw-r--r--  1 ubuntu ubuntu     23208 Jan 26 10:07 conftest.py
+2025-01-31T17:35:39.1989066Z drwxr-xr-x  2 ubuntu ubuntu      4096 Dec 20 09:34 contributing
+2025-01-31T17:35:39.1989711Z -rwxr-xr-x  1 ubuntu ubuntu      1420 Dec 20 09:34 create_venv.sh
+2025-01-31T17:35:39.1990301Z drwxr-xr-x  2 ubuntu ubuntu      4096 Jan 31 16:58 data
+2025-01-31T17:35:39.1990893Z drwxr-xr-x  2 ubuntu ubuntu      4096 Jan 30 13:37 dependencies
+2025-01-31T17:35:39.1991518Z drwxr-xr-x  2 ubuntu ubuntu      4096 Jan 31 14:33 dockerfile
+2025-01-31T17:35:39.1992109Z drwxr-xr-x  3 ubuntu ubuntu      4096 Jan 28 11:26 docs
+2025-01-31T17:35:39.1992653Z drwxr-xr-x  4 ubuntu ubuntu      4096 Jan 31 14:33 infra
+2025-01-31T17:35:39.1993293Z -rwxr-xr-x  1 ubuntu ubuntu      3750 Jan 16 17:59 install_dependencies.sh
+2025-01-31T17:35:39.1993952Z drwxr-xr-x  9 ubuntu ubuntu      4096 Jan 31 17:31 models
+2025-01-31T17:35:39.1994550Z -rw-r--r--  1 ubuntu ubuntu      1042 Dec 20 09:34 pyproject.toml
+2025-01-31T17:35:39.1995158Z -rw-r--r--  1 ubuntu ubuntu      1200 Dec 20 09:34 pytest.ini
+2025-01-31T17:35:39.1995761Z drwxr-xr-x  7 ubuntu ubuntu      4096 Jan 17 18:20 python_env
+2025-01-31T17:35:39.1996352Z drwxr-xr-x  4 ubuntu ubuntu      4096 Jan 31 16:58 runtime
+2025-01-31T17:35:39.1996955Z drwxr-xr-x  5 ubuntu ubuntu      4096 Jan 14 19:00 scripts
+2025-01-31T17:35:39.1997636Z -rw-r--r--  1 root   root         422 Jan 31 17:33 semicolon_delimited_script
+2025-01-31T17:35:39.1998255Z -rw-r--r--  1 ubuntu ubuntu      7551 Jan 31 14:33 setup.py
+2025-01-31T17:35:39.1998879Z drwxr-xr-x 24 ubuntu ubuntu      4096 Jan 14 19:00 tech_reports
+2025-01-31T17:35:39.1999739Z drwxr-xr-x 11 ubuntu ubuntu      4096 Jan 15 01:35 tests
+2025-01-31T17:35:39.2000391Z drwxr-xr-x 11 ubuntu ubuntu      4096 Jan 30 13:37 tt-train
+2025-01-31T17:35:39.2001059Z drwxr-xr-x  5 ubuntu ubuntu      4096 Jan 30 13:37 tt_fabric
+2025-01-31T17:35:39.2001717Z drwxr-xr-x 22 ubuntu ubuntu      4096 Jan 31 16:41 tt_metal
+2025-01-31T17:35:39.2002384Z -rw-r--r--  1 ubuntu ubuntu 720261120 Jan 31 17:32 ttm_any.tar
+2025-01-31T17:35:39.2003012Z drwxr-xr-x 10 ubuntu ubuntu      4096 Jan 31 17:33 ttnn
+2025-01-31T17:35:39.2027772Z semicolon_delimited_script: ASCII text
+2025-01-31T17:35:39.2029243Z + head semicolon_delimited_script
+2025-01-31T17:35:39.2037557Z set -eu
+2025-01-31T17:35:39.2037766Z
+2025-01-31T17:35:39.2038276Z install_wheel=false
+2025-01-31T17:35:39.2038713Z if [ "${install_wheel,,}" == "true" ]; then
+2025-01-31T17:35:39.2039241Z   WHEEL_FILENAME=$(ls -1 *.whl)
+2025-01-31T17:35:39.2039649Z   pip3 install "$WHEEL_FILENAME"
+2025-01-31T17:35:39.2040067Z fi
+2025-01-31T17:35:39.2040240Z
+2025-01-31T17:35:39.2040432Z pip install --force-reinstall pip==21.2.4
+2025-01-31T17:35:39.2041072Z pip install -r tt_metal/python_env/requirements-dev.txt
+2025-01-31T17:35:39.2041598Z + '[' -d .git ']'
+2025-01-31T17:35:39.2041899Z + echo 'Cleaning repo'
+2025-01-31T17:35:39.2042249Z + git clean -xffd
+2025-01-31T17:35:39.2042535Z Cleaning repo
+2025-01-31T17:35:41.9113923Z Removing .cache/
+2025-01-31T17:35:41.9114286Z Removing .local/
+2025-01-31T17:35:41.9114578Z Removing build/
+2025-01-31T17:35:41.9116932Z Removing data/
+2025-01-31T17:35:41.9117280Z Removing python_env/
+2025-01-31T17:35:41.9117595Z Removing runtime/
+2025-01-31T17:35:41.9117910Z Removing semicolon_delimited_script
+2025-01-31T17:35:41.9118284Z Removing ttm_any.tar
+2025-01-31T17:35:41.9118603Z Removing ttnn/ttnn.egg-info/
+2025-01-31T17:35:41.9118960Z Removing ttnn/ttnn/_ttnn.so
+2025-01-31T17:35:41.9128301Z + echo 'Done git clean -xffd'
+2025-01-31T17:35:41.9128680Z Done git clean -xffd
+2025-01-31T17:35:41.9129090Z + echo 'Attempting to delete any lock files'
+2025-01-31T17:35:41.9129563Z + find .git -type f -iname '*.lock' -delete
+2025-01-31T17:35:41.9130038Z Attempting to delete any lock files
+2025-01-31T17:35:41.9571702Z + echo 'Done deleting lock files'
+2025-01-31T17:35:41.9572125Z Done deleting lock files
+2025-01-31T17:35:41.9572498Z De-init-ing submodules
+2025-01-31T17:35:41.9572877Z + echo 'De-init-ing submodules'
+2025-01-31T17:35:41.9573237Z + git submodule deinit -f --all
+2025-01-31T17:35:41.9832341Z Cleared directory 'models/demos/t3000/llama2_70b/reference/llama'
+2025-01-31T17:35:41.9865542Z Submodule 'models/demos/t3000/llama2_70b/reference/llama' (https://github.com/tenstorrent-metal/llama.git) unregistered for path 'models/demos/t3000/llama2_70b/reference/llama'
+2025-01-31T17:35:41.9866667Z Cleared directory 'tt-train/3rd_party/wandb-cpp'
+2025-01-31T17:35:42.0219947Z Submodule '3rd_party/wandb-cpp' (https://github.com/yhisaki/wandb-cpp) unregistered for path 'tt-train/3rd_party/wandb-cpp'
+2025-01-31T17:35:42.0258740Z Cleared directory 'tt_metal/third_party/tracy'
+2025-01-31T17:35:42.0260005Z Submodule 'tt_metal/third_party/tracy' (https://github.com/tenstorrent-metal/tracy.git) unregistered for path 'tt_metal/third_party/tracy'
+2025-01-31T17:35:42.0261288Z Cleared directory 'tt_metal/third_party/tt_llk_blackhole'
+2025-01-31T17:35:42.0290982Z Submodule 'tt_metal/third_party/tt_llk_blackhole' (https://github.com/tenstorrent/tt-llk-bh.git) unregistered for path 'tt_metal/third_party/tt_llk_blackhole'
+2025-01-31T17:35:42.0292384Z Cleared directory 'tt_metal/third_party/tt_llk_grayskull'
+2025-01-31T17:35:42.0324893Z Submodule 'tt_metal/third_party/tt_llk_grayskull' (https://github.com/tenstorrent/tt-llk-gs.git) unregistered for path 'tt_metal/third_party/tt_llk_grayskull'
+2025-01-31T17:35:42.0325968Z Cleared directory 'tt_metal/third_party/tt_llk_wormhole_b0'
+2025-01-31T17:35:42.0457557Z Submodule 'tt_metal/third_party/tt_llk_wormhole_b0' (https://github.com/tenstorrent/tt-llk-wh-b0.git) unregistered for path 'tt_metal/third_party/tt_llk_wormhole_b0'
+2025-01-31T17:35:42.0458843Z Cleared directory 'tt_metal/third_party/umd'
+2025-01-31T17:35:42.0476554Z Submodule 'tt_metal/third_party/umd' (https://github.com/tenstorrent/tt-umd.git) unregistered for path 'tt_metal/third_party/umd'
+2025-01-31T17:35:42.0488937Z + echo 'Done de-initing submodules'
+2025-01-31T17:35:42.0489383Z Done de-initing submodules
+2025-01-31T17:35:42.0588404Z ##[group]Run actions/checkout@v4
+2025-01-31T17:35:42.0588767Z with:
+2025-01-31T17:35:42.0589274Z   token: ***
+2025-01-31T17:35:42.0589564Z   fetch-depth: 1
+2025-01-31T17:35:42.0589855Z   lfs: false
+2025-01-31T17:35:42.0590148Z   submodules: recursive
+2025-01-31T17:35:42.0590460Z   clean: true
+2025-01-31T17:35:42.0590768Z   repository: tenstorrent/tt-metal
+2025-01-31T17:35:42.0591121Z   ssh-strict: true
+2025-01-31T17:35:42.0591415Z   ssh-user: git
+2025-01-31T17:35:42.0591728Z   persist-credentials: true
+2025-01-31T17:35:42.0592095Z   sparse-checkout-cone-mode: true
+2025-01-31T17:35:42.0592467Z   fetch-tags: false
+2025-01-31T17:35:42.0592769Z   show-progress: true
+2025-01-31T17:35:42.0593109Z   set-safe-directory: true
+2025-01-31T17:35:42.0593429Z env:
+2025-01-31T17:35:42.0593678Z   LOGURU_LEVEL: INFO
+2025-01-31T17:35:42.0593976Z ##[endgroup]
+2025-01-31T17:35:42.1831214Z Syncing repository: tenstorrent/tt-metal
+2025-01-31T17:35:42.1832681Z ##[group]Getting Git version info
+2025-01-31T17:35:42.1833244Z Working directory is '/home/ubuntu/actions-runner/_work/tt-metal/tt-metal'
+2025-01-31T17:35:42.1834495Z [command]/usr/bin/git version
+2025-01-31T17:35:42.1847156Z git version 2.25.1
+2025-01-31T17:35:42.1882827Z ##[endgroup]
+2025-01-31T17:35:42.1906040Z Temporarily overriding HOME='/home/ubuntu/actions-runner/_work/_temp/4319d612-8c43-492c-bd6b-adc3834e1db4' before making global git config changes
+2025-01-31T17:35:42.1908573Z Adding repository directory to the temporary git global config as a safe directory
+2025-01-31T17:35:42.1927409Z [command]/usr/bin/git config --global --add safe.directory /home/ubuntu/actions-runner/_work/tt-metal/tt-metal
+2025-01-31T17:35:42.1976590Z [command]/usr/bin/git config --local --get remote.origin.url
+2025-01-31T17:35:42.1998422Z https://github.com/tenstorrent/tt-metal
+2025-01-31T17:35:42.2018449Z ##[group]Removing previously created refs, to avoid conflicts
+2025-01-31T17:35:42.2024971Z [command]/usr/bin/git rev-parse --symbolic-full-name --verify --quiet HEAD
+2025-01-31T17:35:42.2046937Z refs/heads/main
+2025-01-31T17:35:42.2059549Z [command]/usr/bin/git checkout --detach
+2025-01-31T17:35:42.2672954Z HEAD is now at 6c87f4c9 #0: Update pgm_dispatch_golden.json
+2025-01-31T17:35:42.3337445Z [command]/usr/bin/git branch --delete --force main
+2025-01-31T17:35:42.3379032Z Deleted branch main (was 6c87f4c9).
+2025-01-31T17:35:42.3574692Z ##[endgroup]
+2025-01-31T17:35:42.3579172Z [command]/usr/bin/git submodule status
+2025-01-31T17:35:42.3861947Z -29125b7ad8b5513eeaa4417ed92892bf39c8bd74 models/demos/t3000/llama2_70b/reference/llama
+2025-01-31T17:35:42.3863963Z -368cd07f89f497df20a66936fbfae3956f151af4 tt-train/3rd_party/wandb-cpp
+2025-01-31T17:35:42.3864757Z -71d4c8d378b52af7da7012b9b595a61e9304f0bb tt_metal/third_party/tracy
+2025-01-31T17:35:42.3865494Z -c6b6fb75d3028c49ea8a7f4de5a24532737607c1 tt_metal/third_party/tt_llk_blackhole
+2025-01-31T17:35:42.3866305Z -0c04db64275a4bd36a7e14d3c533855cb33f6a20 tt_metal/third_party/tt_llk_grayskull
+2025-01-31T17:35:42.3867380Z -1a637922ff0779bb692aeb922c033716ea7b9401 tt_metal/third_party/tt_llk_wormhole_b0
+2025-01-31T17:35:42.3868156Z -a8e5223672f9118aef7b502b77e128003a71741b tt_metal/third_party/umd
+2025-01-31T17:35:42.3871636Z ##[group]Cleaning the repository
+2025-01-31T17:35:42.3876208Z [command]/usr/bin/git clean -ffdx
+2025-01-31T17:35:42.4129149Z [command]/usr/bin/git reset --hard HEAD
+2025-01-31T17:35:42.4679125Z HEAD is now at 6c87f4c9 #0: Update pgm_dispatch_golden.json
+2025-01-31T17:35:42.4692410Z ##[endgroup]
+2025-01-31T17:35:42.4693783Z ##[group]Disabling automatic garbage collection
+2025-01-31T17:35:42.4697974Z [command]/usr/bin/git config --local gc.auto 0
+2025-01-31T17:35:42.4726129Z ##[endgroup]
+2025-01-31T17:35:42.4726616Z ##[group]Setting up auth
+2025-01-31T17:35:42.4732845Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2025-01-31T17:35:42.4766938Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2025-01-31T17:35:42.5042409Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2025-01-31T17:35:42.5069442Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2025-01-31T17:35:42.5337277Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2025-01-31T17:35:42.5372692Z ##[endgroup]
+2025-01-31T17:35:42.5373559Z ##[group]Fetching the repository
+2025-01-31T17:35:42.5381383Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +d354e26cacfcd8e868089aabfa9690f43eb56e5d:refs/remotes/origin/main
+2025-01-31T17:35:43.0358686Z From https://github.com/tenstorrent/tt-metal
+2025-01-31T17:35:43.0359745Z  + 6c87f4c9...d354e26c d354e26cacfcd8e868089aabfa9690f43eb56e5d -> origin/main  (forced update)
+2025-01-31T17:35:43.0388866Z ##[endgroup]
+2025-01-31T17:35:43.0389768Z ##[group]Determining the checkout info
+2025-01-31T17:35:43.0390396Z ##[endgroup]
+2025-01-31T17:35:43.0390889Z ##[group]Checking out the ref
+2025-01-31T17:35:43.0394955Z [command]/usr/bin/git checkout --progress --force -B main refs/remotes/origin/main
+2025-01-31T17:35:43.0851885Z Warning: you are leaving 1 commit behind, not connected to
+2025-01-31T17:35:43.0852402Z any of your branches:
+2025-01-31T17:35:43.0852620Z
+2025-01-31T17:35:43.0852798Z   6c87f4c9 #0: Update pgm_dispatch_golden.json
+2025-01-31T17:35:43.0853111Z
+2025-01-31T17:35:43.0853356Z If you want to keep it by creating a new branch, this may be a good time
+2025-01-31T17:35:43.0853837Z to do so with:
+2025-01-31T17:35:43.0853997Z
+2025-01-31T17:35:43.0854344Z  git branch <new-branch-name> 6c87f4c9
+2025-01-31T17:35:43.0854603Z
+2025-01-31T17:35:43.1063896Z Switched to a new branch 'main'
+2025-01-31T17:35:43.1064364Z Branch 'main' set up to track remote branch 'main' from 'origin'.
+2025-01-31T17:35:43.1670076Z ##[endgroup]
+2025-01-31T17:35:43.1670630Z ##[group]Setting up auth for fetching submodules
+2025-01-31T17:35:43.1678358Z [command]/usr/bin/git config --global http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2025-01-31T17:35:43.1715557Z [command]/usr/bin/git config --global --unset-all url.https://github.com/.insteadOf
+2025-01-31T17:35:43.1746512Z [command]/usr/bin/git config --global --add url.https://github.com/.insteadOf git@github.com:
+2025-01-31T17:35:43.1774986Z [command]/usr/bin/git config --global --add url.https://github.com/.insteadOf org-64161552@github.com:
+2025-01-31T17:35:43.1802365Z ##[endgroup]
+2025-01-31T17:35:43.1803058Z ##[group]Fetching submodules
+2025-01-31T17:35:43.1805856Z [command]/usr/bin/git submodule sync --recursive
+2025-01-31T17:35:43.2085355Z [command]/usr/bin/git -c protocol.version=2 submodule update --init --force --depth=1 --recursive
+2025-01-31T17:35:43.2365575Z Submodule 'models/demos/t3000/llama2_70b/reference/llama' (https://github.com/tenstorrent-metal/llama.git) registered for path 'models/demos/t3000/llama2_70b/reference/llama'
+2025-01-31T17:35:43.2368466Z Submodule '3rd_party/wandb-cpp' (https://github.com/yhisaki/wandb-cpp) registered for path 'tt-train/3rd_party/wandb-cpp'
+2025-01-31T17:35:43.2374047Z Submodule 'tt_metal/third_party/tracy' (https://github.com/tenstorrent-metal/tracy.git) registered for path 'tt_metal/third_party/tracy'
+2025-01-31T17:35:43.2378105Z Submodule 'tt_metal/third_party/tt_llk_blackhole' (https://github.com/tenstorrent/tt-llk-bh.git) registered for path 'tt_metal/third_party/tt_llk_blackhole'
+2025-01-31T17:35:43.2381757Z Submodule 'tt_metal/third_party/tt_llk_grayskull' (https://github.com/tenstorrent/tt-llk-gs.git) registered for path 'tt_metal/third_party/tt_llk_grayskull'
+2025-01-31T17:35:43.2386009Z Submodule 'tt_metal/third_party/tt_llk_wormhole_b0' (https://github.com/tenstorrent/tt-llk-wh-b0.git) registered for path 'tt_metal/third_party/tt_llk_wormhole_b0'
+2025-01-31T17:35:43.2390440Z Submodule 'tt_metal/third_party/umd' (https://github.com/tenstorrent/tt-umd.git) registered for path 'tt_metal/third_party/umd'
+2025-01-31T17:35:43.2887556Z Submodule path 'models/demos/t3000/llama2_70b/reference/llama': checked out '29125b7ad8b5513eeaa4417ed92892bf39c8bd74'
+2025-01-31T17:35:43.3272835Z Submodule path 'tt-train/3rd_party/wandb-cpp': checked out '368cd07f89f497df20a66936fbfae3956f151af4'
+2025-01-31T17:35:43.4749821Z Submodule path 'tt_metal/third_party/tracy': checked out '71d4c8d378b52af7da7012b9b595a61e9304f0bb'
+2025-01-31T17:35:43.5102973Z Submodule path 'tt_metal/third_party/tt_llk_blackhole': checked out 'c6b6fb75d3028c49ea8a7f4de5a24532737607c1'
+2025-01-31T17:35:43.5405825Z Submodule path 'tt_metal/third_party/tt_llk_grayskull': checked out '0c04db64275a4bd36a7e14d3c533855cb33f6a20'
+2025-01-31T17:35:43.5742360Z Submodule path 'tt_metal/third_party/tt_llk_wormhole_b0': checked out '1a637922ff0779bb692aeb922c033716ea7b9401'
+2025-01-31T17:35:43.8463314Z WARNING: Multiple 'url.*..insteadof' keys with the same alias: "git@github.com:"
+2025-01-31T17:35:43.8464579Z WARNING: Multiple 'url.*..insteadof' keys with the same alias: "org-64161552@github.com:"
+2025-01-31T17:35:43.8540636Z Submodule path 'tt_metal/third_party/umd': checked out 'a8e5223672f9118aef7b502b77e128003a71741b'
+2025-01-31T17:35:43.8626883Z [command]/usr/bin/git submodule foreach --recursive git config --local gc.auto 0
+2025-01-31T17:35:43.8879692Z Entering 'models/demos/t3000/llama2_70b/reference/llama'
+2025-01-31T17:35:43.8918664Z Entering 'tt-train/3rd_party/wandb-cpp'
+2025-01-31T17:35:43.8958490Z Entering 'tt_metal/third_party/tracy'
+2025-01-31T17:35:43.9001306Z Entering 'tt_metal/third_party/tt_llk_blackhole'
+2025-01-31T17:35:43.9044545Z Entering 'tt_metal/third_party/tt_llk_grayskull'
+2025-01-31T17:35:43.9084317Z Entering 'tt_metal/third_party/tt_llk_wormhole_b0'
+2025-01-31T17:35:43.9120667Z Entering 'tt_metal/third_party/umd'
+2025-01-31T17:35:43.9173551Z ##[endgroup]
+2025-01-31T17:35:43.9174116Z ##[group]Persisting credentials for submodules
+2025-01-31T17:35:43.9181284Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'url\.https\:\/\/github\.com\/\.insteadOf' && git config --local --unset-all 'url.https://github.com/.insteadOf' || :"
+2025-01-31T17:35:43.9421436Z Entering 'models/demos/t3000/llama2_70b/reference/llama'
+2025-01-31T17:35:43.9447705Z url.https://github.com/.insteadof
+2025-01-31T17:35:43.9480325Z url.https://github.com/.insteadof
+2025-01-31T17:35:43.9502903Z Entering 'tt-train/3rd_party/wandb-cpp'
+2025-01-31T17:35:43.9530093Z url.https://github.com/.insteadof
+2025-01-31T17:35:43.9530577Z url.https://github.com/.insteadof
+2025-01-31T17:35:43.9563672Z Entering 'tt_metal/third_party/tracy'
+2025-01-31T17:35:43.9589709Z url.https://github.com/.insteadof
+2025-01-31T17:35:43.9590235Z url.https://github.com/.insteadof
+2025-01-31T17:35:43.9625591Z Entering 'tt_metal/third_party/tt_llk_blackhole'
+2025-01-31T17:35:43.9650643Z url.https://github.com/.insteadof
+2025-01-31T17:35:43.9651111Z url.https://github.com/.insteadof
+2025-01-31T17:35:43.9683858Z Entering 'tt_metal/third_party/tt_llk_grayskull'
+2025-01-31T17:35:43.9713862Z url.https://github.com/.insteadof
+2025-01-31T17:35:43.9714347Z url.https://github.com/.insteadof
+2025-01-31T17:35:43.9746637Z Entering 'tt_metal/third_party/tt_llk_wormhole_b0'
+2025-01-31T17:35:43.9773923Z url.https://github.com/.insteadof
+2025-01-31T17:35:43.9774430Z url.https://github.com/.insteadof
+2025-01-31T17:35:43.9806686Z Entering 'tt_metal/third_party/umd'
+2025-01-31T17:35:43.9835302Z url.https://github.com/.insteadof
+2025-01-31T17:35:43.9836246Z url.https://github.com/.insteadof
+2025-01-31T17:35:43.9882819Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local 'http.https://github.com/.extraheader' 'AUTHORIZATION: basic ***' && git config --local --show-origin --name-only --get-regexp remote.origin.url"
+2025-01-31T17:35:44.0132584Z Entering 'models/demos/t3000/llama2_70b/reference/llama'
+2025-01-31T17:35:44.0170693Z file:/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/.git/modules/models/demos/t3000/llama2_70b/reference/llama/config	remote.origin.url
+2025-01-31T17:35:44.0189472Z Entering 'tt-train/3rd_party/wandb-cpp'
+2025-01-31T17:35:44.0231264Z file:/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/.git/modules/3rd_party/wandb-cpp/config	remote.origin.url
+2025-01-31T17:35:44.0251146Z Entering 'tt_metal/third_party/tracy'
+2025-01-31T17:35:44.0292651Z file:/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/.git/modules/tt_metal/third_party/tracy/config	remote.origin.url
+2025-01-31T17:35:44.0313875Z Entering 'tt_metal/third_party/tt_llk_blackhole'
+2025-01-31T17:35:44.0357378Z file:/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/.git/modules/tt_metal/third_party/tt_llk_blackhole/config	remote.origin.url
+2025-01-31T17:35:44.0378618Z Entering 'tt_metal/third_party/tt_llk_grayskull'
+2025-01-31T17:35:44.0417928Z file:/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/.git/modules/tt_metal/third_party/tt_llk_grayskull/config	remote.origin.url
+2025-01-31T17:35:44.0437746Z Entering 'tt_metal/third_party/tt_llk_wormhole_b0'
+2025-01-31T17:35:44.0478422Z file:/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/.git/modules/tt_metal/third_party/tt_llk_wormhole_b0/config	remote.origin.url
+2025-01-31T17:35:44.0498342Z Entering 'tt_metal/third_party/umd'
+2025-01-31T17:35:44.0537739Z file:/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/.git/modules/tt_metal/third_party/umd/config	remote.origin.url
+2025-01-31T17:35:44.0610631Z [command]/usr/bin/git submodule foreach --recursive git config --local --add 'url.https://github.com/.insteadOf' 'git@github.com:'
+2025-01-31T17:35:44.0855429Z Entering 'models/demos/t3000/llama2_70b/reference/llama'
+2025-01-31T17:35:44.0893517Z Entering 'tt-train/3rd_party/wandb-cpp'
+2025-01-31T17:35:44.0931496Z Entering 'tt_metal/third_party/tracy'
+2025-01-31T17:35:44.0973709Z Entering 'tt_metal/third_party/tt_llk_blackhole'
+2025-01-31T17:35:44.1010478Z Entering 'tt_metal/third_party/tt_llk_grayskull'
+2025-01-31T17:35:44.1048809Z Entering 'tt_metal/third_party/tt_llk_wormhole_b0'
+2025-01-31T17:35:44.1086294Z Entering 'tt_metal/third_party/umd'
+2025-01-31T17:35:44.1136941Z [command]/usr/bin/git submodule foreach --recursive git config --local --add 'url.https://github.com/.insteadOf' 'org-64161552@github.com:'
+2025-01-31T17:35:44.1388560Z Entering 'models/demos/t3000/llama2_70b/reference/llama'
+2025-01-31T17:35:44.1426106Z Entering 'tt-train/3rd_party/wandb-cpp'
+2025-01-31T17:35:44.1465325Z Entering 'tt_metal/third_party/tracy'
+2025-01-31T17:35:44.1510661Z Entering 'tt_metal/third_party/tt_llk_blackhole'
+2025-01-31T17:35:44.1544747Z Entering 'tt_metal/third_party/tt_llk_grayskull'
+2025-01-31T17:35:44.1581027Z Entering 'tt_metal/third_party/tt_llk_wormhole_b0'
+2025-01-31T17:35:44.1618867Z Entering 'tt_metal/third_party/umd'
+2025-01-31T17:35:44.1668002Z ##[endgroup]
+2025-01-31T17:35:44.1715951Z [command]/usr/bin/git log -1 --format=%H
+2025-01-31T17:35:44.1753648Z d354e26cacfcd8e868089aabfa9690f43eb56e5d
+2025-01-31T17:35:44.1894463Z ##[group]Run git submodule foreach 'git clean -xffd'
+2025-01-31T17:35:44.1894997Z [36;1mgit submodule foreach 'git clean -xffd'[0m
+2025-01-31T17:35:44.1913268Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2025-01-31T17:35:44.1913710Z env:
+2025-01-31T17:35:44.1913978Z   LOGURU_LEVEL: INFO
+2025-01-31T17:35:44.1914277Z ##[endgroup]
+2025-01-31T17:35:44.2194170Z Entering 'models/demos/t3000/llama2_70b/reference/llama'
+2025-01-31T17:35:44.2215672Z Entering 'tt-train/3rd_party/wandb-cpp'
+2025-01-31T17:35:44.2236692Z Entering 'tt_metal/third_party/tracy'
+2025-01-31T17:35:44.2269055Z Entering 'tt_metal/third_party/tt_llk_blackhole'
+2025-01-31T17:35:44.2292598Z Entering 'tt_metal/third_party/tt_llk_grayskull'
+2025-01-31T17:35:44.2320440Z Entering 'tt_metal/third_party/tt_llk_wormhole_b0'
+2025-01-31T17:35:44.2344732Z Entering 'tt_metal/third_party/umd'
+2025-01-31T17:35:44.2433341Z Prepare all required actions
+2025-01-31T17:35:44.2485008Z ##[group]Run ./.github/actions/retry-command
+2025-01-31T17:35:44.2485399Z with:
+2025-01-31T17:35:44.2485666Z   timeout-seconds: 100
+2025-01-31T17:35:44.2485983Z   max-retries: 10
+2025-01-31T17:35:44.2486279Z   backoff-seconds: 60
+2025-01-31T17:35:44.2486656Z   command: ./.github/scripts/cloud_utils/mount_weka.sh
+2025-01-31T17:35:44.2487056Z env:
+2025-01-31T17:35:44.2487314Z   LOGURU_LEVEL: INFO
+2025-01-31T17:35:44.2487622Z ##[endgroup]
+2025-01-31T17:35:44.2518483Z ##[group]Run set +e
+2025-01-31T17:35:44.2518895Z [36;1mset +e[0m
+2025-01-31T17:35:44.2519172Z [36;1m[0m
+2025-01-31T17:35:44.2519452Z [36;1mmax_retries="10"[0m
+2025-01-31T17:35:44.2519802Z [36;1mcount=0[0m
+2025-01-31T17:35:44.2520083Z [36;1m[0m
+2025-01-31T17:35:44.2520376Z [36;1mwhile (( count < max_retries )); do[0m
+2025-01-31T17:35:44.2520851Z [36;1m  echo "Attempt $((count + 1)) of $max_retries..."[0m
+2025-01-31T17:35:44.2521280Z [36;1m[0m
+2025-01-31T17:35:44.2521620Z [36;1m  # Execute the command with timeout[0m
+2025-01-31T17:35:44.2522382Z [36;1m  if timeout 100 "./.github/scripts/cloud_utils/mount_weka.sh"; then[0m
+2025-01-31T17:35:44.2522948Z [36;1m    echo "Command succeeded."[0m
+2025-01-31T17:35:44.2523330Z [36;1m    exit 0[0m
+2025-01-31T17:35:44.2523643Z [36;1m  else[0m
+2025-01-31T17:35:44.2524035Z [36;1m    echo "Command failed or timed out. Backing off..."[0m
+2025-01-31T17:35:44.2524485Z [36;1m    count=$((count + 1))[0m
+2025-01-31T17:35:44.2524835Z [36;1m  fi[0m
+2025-01-31T17:35:44.2525109Z [36;1m[0m
+2025-01-31T17:35:44.2525424Z [36;1m  # Optional: Add a delay between retries[0m
+2025-01-31T17:35:44.2525823Z [36;1m  sleep 60[0m
+2025-01-31T17:35:44.2526120Z [36;1mdone[0m
+2025-01-31T17:35:44.2526400Z [36;1m[0m
+2025-01-31T17:35:44.2526757Z [36;1mecho "Command failed after $max_retries attempts."[0m
+2025-01-31T17:35:44.2527190Z [36;1mexit 1[0m
+2025-01-31T17:35:44.2545334Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2025-01-31T17:35:44.2545799Z env:
+2025-01-31T17:35:44.2546078Z   LOGURU_LEVEL: INFO
+2025-01-31T17:35:44.2546369Z ##[endgroup]
+2025-01-31T17:35:44.2581126Z Attempt 1 of 10...
+2025-01-31T17:36:12.5606484Z total 0
+2025-01-31T17:36:12.5607057Z drwxr-xr-x 1 root root 0 Sep  8  2022 .
+2025-01-31T17:36:12.5607544Z drwxr-xr-x 1 root root 0 Oct 15 18:18 ..
+2025-01-31T17:36:12.5608059Z drwxr-xrwx 1 root root 0 Nov 11  2022 bit_error_logs
+2025-01-31T17:36:12.5608716Z drwxr-xr-x 1 root root 0 Nov 10  2022 bit_error_past_data
+2025-01-31T17:36:12.5609537Z drwxr-xr-x 1 root root 0 Nov 16  2022 bit_error_releases
+2025-01-31T17:36:12.5610120Z drwxr-xrwx 1 root root 0 Nov 11  2022 bit_error_results
+2025-01-31T17:36:12.5610736Z drwxr-xrwx 1 root root 0 Nov 11  2022 bit_error_smi_logs
+2025-01-31T17:36:12.5611332Z drwxr-xr-x 1 root root 0 Jul 25  2022 bit_error_smi_results
+2025-01-31T17:36:12.5612030Z drwxr-xr-x 1 root root 0 Nov  9  2022 bit_error_test_configs
+2025-01-31T17:36:12.5987304Z Unit tenstorrent-hugepages.service could not be found.
+2025-01-31T17:36:12.5994996Z ##[warning]Hugepages service not found. Using old rc.local method
+2025-01-31T17:36:42.6489389Z Command succeeded.
+2025-01-31T17:36:42.6567487Z ##[group]Run actions/download-artifact@v4
+2025-01-31T17:36:42.6567904Z with:
+2025-01-31T17:36:42.6568186Z   name: eager-dist-ubuntu-20.04-any
+2025-01-31T17:36:42.6568563Z   merge-multiple: false
+2025-01-31T17:36:42.6568895Z   repository: tenstorrent/tt-metal
+2025-01-31T17:36:42.6569253Z   run-id: 13077087562
+2025-01-31T17:36:42.6569536Z env:
+2025-01-31T17:36:42.6569791Z   LOGURU_LEVEL: INFO
+2025-01-31T17:36:42.6570084Z ##[endgroup]
+2025-01-31T17:36:42.9112131Z Downloading single artifact
+2025-01-31T17:36:43.1252334Z Preparing to download the following artifacts:
+2025-01-31T17:36:43.1252963Z - eager-dist-ubuntu-20.04-any (ID: 2518091238, Size: 338151615)
+2025-01-31T17:36:43.2413174Z Redirecting to blob download url: https://productionresultssa16.blob.core.windows.net/actions-results/d0d96a0d-ae39-460d-8ab1-1f5521cc98b0/workflow-job-run-e81d79b7-c27a-56aa-2547-1f3d2a8fd5b1/artifacts/ffedbb332ab4fbd8f59e578f996a3f032b31fb9a44590fd9d79fffc9e9576b78.zip
+2025-01-31T17:36:43.2415033Z Starting download of artifact to: /home/ubuntu/actions-runner/_work/tt-metal/tt-metal
+2025-01-31T17:36:43.5436214Z (node:1361726) [DEP0005] DeprecationWarning: Buffer() is deprecated due to security and usability issues. Please use the Buffer.alloc(), Buffer.allocUnsafe(), or Buffer.from() methods instead.
+2025-01-31T17:36:43.5437433Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2025-01-31T17:37:04.3658952Z Artifact download completed successfully.
+2025-01-31T17:37:04.3662762Z Total of 1 artifact(s) downloaded
+2025-01-31T17:37:04.3665950Z Download artifact has finished successfully
+2025-01-31T17:37:04.3832820Z Prepare all required actions
+2025-01-31T17:37:04.3833270Z Getting action download info
+2025-01-31T17:37:04.6008447Z Download action repository 'docker/login-action@v3' (SHA:9780b0c442fbb1117ed29e0efdff1e18412f7567)
+2025-01-31T17:37:05.4040470Z Download action repository 'tenstorrent/docker-run-action@v5' (SHA:f939ca6b256fc7d5c78538d8af38b00a287e3415)
+2025-01-31T17:37:05.7520134Z ##[group]Run ./.github/actions/docker-run
+2025-01-31T17:37:05.7520523Z with:
+2025-01-31T17:37:05.7520789Z   install_wheel: true
+2025-01-31T17:37:05.7521462Z   docker_password: ***
+2025-01-31T17:37:05.7521813Z   docker_opts: -e ARCH_NAME=grayskull
+
+2025-01-31T17:37:05.7522459Z   run_args: source tests/scripts/run_python_model_tests.sh && run_python_model_tests_grayskull
+
+2025-01-31T17:37:05.7523121Z   docker_os_arch: tt-metalium/ubuntu-20.04-amd64
+2025-01-31T17:37:05.7523548Z   docker_username: tt-aho
+2025-01-31T17:37:05.7524064Z   device: -v /dev/hugepages-1G:/dev/hugepages-1G
+--device /dev/tenstorrent
+
+2025-01-31T17:37:05.7524619Z env:
+2025-01-31T17:37:05.7524881Z   LOGURU_LEVEL: INFO
+2025-01-31T17:37:05.7525182Z ##[endgroup]
+2025-01-31T17:37:05.7546746Z ##[group]Build container for action use: '/home/ubuntu/actions-runner/_work/_actions/tenstorrent/docker-run-action/v5/Dockerfile'.
+2025-01-31T17:37:05.7588931Z ##[command]/usr/bin/docker build -t 209fdb:1e33dea5ca2f4a16bef84b0612a537c1 -f "/home/ubuntu/actions-runner/_work/_actions/tenstorrent/docker-run-action/v5/Dockerfile" "/home/ubuntu/actions-runner/_work/_actions/tenstorrent/docker-run-action/v5"
+2025-01-31T17:37:06.1083162Z #0 building with "default" instance using docker driver
+2025-01-31T17:37:06.1083516Z
+2025-01-31T17:37:06.1083704Z #1 [internal] load build definition from Dockerfile
+2025-01-31T17:37:06.1084141Z #1 transferring dockerfile: 171B done
+2025-01-31T17:37:06.1084504Z #1 DONE 0.0s
+2025-01-31T17:37:06.1084659Z
+2025-01-31T17:37:06.1084933Z #2 [internal] load metadata for public.ecr.aws/docker/library/docker:20.10
+2025-01-31T17:37:06.3876835Z #2 DONE 0.4s
+2025-01-31T17:37:06.4179673Z
+2025-01-31T17:37:06.4180029Z #3 [internal] load .dockerignore
+2025-01-31T17:37:06.4180406Z #3 transferring context: 2B done
+2025-01-31T17:37:06.4180768Z #3 DONE 0.0s
+2025-01-31T17:37:06.4180934Z
+2025-01-31T17:37:06.4181461Z #4 [1/3] FROM public.ecr.aws/docker/library/docker:20.10@sha256:2967f0819c84dd589ed0a023b9d25dcfe7a3c123d5bf784ffbb77edf55335f0c
+2025-01-31T17:37:06.4182214Z #4 DONE 0.0s
+2025-01-31T17:37:06.4182366Z
+2025-01-31T17:37:06.4182489Z #5 [internal] load build context
+2025-01-31T17:37:06.4182845Z #5 transferring context: 35B done
+2025-01-31T17:37:06.4183183Z #5 DONE 0.0s
+2025-01-31T17:37:06.4183334Z
+2025-01-31T17:37:06.4183455Z #6 [2/3] RUN apk add bash
+2025-01-31T17:37:06.4183833Z #6 CACHED
+2025-01-31T17:37:06.4183983Z
+2025-01-31T17:37:06.4184127Z #7 [3/3] COPY entrypoint.sh /entrypoint.sh
+2025-01-31T17:37:06.4184500Z #7 CACHED
+2025-01-31T17:37:06.4185482Z
+2025-01-31T17:37:06.4185607Z #8 exporting to image
+2025-01-31T17:37:06.4186052Z #8 exporting layers done
+2025-01-31T17:37:06.4186626Z #8 writing image sha256:d1c5afc396061abe220ead696da67880bbd43eef86f363201e8fcc1e5ebb8787 done
+2025-01-31T17:37:06.4187409Z #8 naming to docker.io/library/209fdb:1e33dea5ca2f4a16bef84b0612a537c1 done
+2025-01-31T17:37:06.4187922Z #8 DONE 0.0s
+2025-01-31T17:37:06.4276371Z ##[endgroup]
+2025-01-31T17:37:06.4311683Z Prepare all required actions
+2025-01-31T17:37:06.4360515Z ##[group]Run ./.github/actions/generate-docker-tag
+2025-01-31T17:37:06.4360949Z with:
+2025-01-31T17:37:06.4361252Z   image: tt-metalium/ubuntu-20.04-amd64
+2025-01-31T17:37:06.4361627Z env:
+2025-01-31T17:37:06.4361878Z   LOGURU_LEVEL: INFO
+2025-01-31T17:37:06.4362184Z ##[endgroup]
+2025-01-31T17:37:06.4391424Z ##[group]Run # If the version was provided use it, otherwise, determine what the version should be.
+2025-01-31T17:37:06.4392329Z [36;1m# If the version was provided use it, otherwise, determine what the version should be.[0m
+2025-01-31T17:37:06.4392961Z [36;1mif [ "" != "" ]; then[0m
+2025-01-31T17:37:06.4393613Z [36;1m  echo "IMAGE_TAG=" >> $GITHUB_ENV[0m
+2025-01-31T17:37:06.4394019Z [36;1melse[0m
+2025-01-31T17:37:06.4394366Z [36;1m  if [[ "${GITHUB_REF_NAME}" == "main" ]]; then[0m
+2025-01-31T17:37:06.4394838Z [36;1m    echo "IMAGE_TAG=latest" >> $GITHUB_ENV[0m
+2025-01-31T17:37:06.4395232Z [36;1m  else[0m
+2025-01-31T17:37:06.4395646Z [36;1m    echo "IMAGE_TAG=dev-${GITHUB_REF_NAME//\//-}" >> $GITHUB_ENV[0m
+2025-01-31T17:37:06.4396138Z [36;1m  fi[0m
+2025-01-31T17:37:06.4396429Z [36;1mfi[0m
+2025-01-31T17:37:06.4415491Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2025-01-31T17:37:06.4415997Z env:
+2025-01-31T17:37:06.4416267Z   LOGURU_LEVEL: INFO
+2025-01-31T17:37:06.4416749Z ##[endgroup]
+2025-01-31T17:37:06.4491122Z ##[group]Run echo "TT_METAL_DOCKER_IMAGE_TAG=ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:latest" >> $GITHUB_ENV
+2025-01-31T17:37:06.4492284Z [36;1mecho "TT_METAL_DOCKER_IMAGE_TAG=ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:latest" >> $GITHUB_ENV[0m
+2025-01-31T17:37:06.4493387Z [36;1mecho "TT_METAL_REF_IMAGE_TAG=ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:latest" >> $GITHUB_ENV[0m
+2025-01-31T17:37:06.4512189Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2025-01-31T17:37:06.4512654Z env:
+2025-01-31T17:37:06.4512921Z   LOGURU_LEVEL: INFO
+2025-01-31T17:37:06.4513223Z   IMAGE_TAG: latest
+2025-01-31T17:37:06.4513507Z ##[endgroup]
+2025-01-31T17:37:06.4576124Z ##[group]Run echo "IMAGE_TAG=latest"
+2025-01-31T17:37:06.4594713Z [36;1mecho "IMAGE_TAG=latest"[0m
+2025-01-31T17:37:06.4595429Z [36;1mecho "TT_METAL_DOCKER_IMAGE_TAG=ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:latest"[0m
+2025-01-31T17:37:06.4610320Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2025-01-31T17:37:06.4610777Z env:
+2025-01-31T17:37:06.4611043Z   LOGURU_LEVEL: INFO
+2025-01-31T17:37:06.4611357Z   IMAGE_TAG: latest
+2025-01-31T17:37:06.4611919Z   TT_METAL_DOCKER_IMAGE_TAG: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:latest
+2025-01-31T17:37:06.4612743Z   TT_METAL_REF_IMAGE_TAG: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:latest
+2025-01-31T17:37:06.4613311Z ##[endgroup]
+2025-01-31T17:37:06.4648355Z IMAGE_TAG=latest
+2025-01-31T17:37:06.4649634Z TT_METAL_DOCKER_IMAGE_TAG=ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:latest
+2025-01-31T17:37:06.4686383Z ##[group]Run echo "RUNNER_UID=$(id -u)" >> $GITHUB_ENV
+2025-01-31T17:37:06.4686878Z [36;1mecho "RUNNER_UID=$(id -u)" >> $GITHUB_ENV[0m
+2025-01-31T17:37:06.4687335Z [36;1mecho "RUNNER_GID=$(id -g)" >> $GITHUB_ENV[0m
+2025-01-31T17:37:06.4701342Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2025-01-31T17:37:06.4701794Z env:
+2025-01-31T17:37:06.4702072Z   LOGURU_LEVEL: INFO
+2025-01-31T17:37:06.4702374Z   IMAGE_TAG: latest
+2025-01-31T17:37:06.4702911Z   TT_METAL_DOCKER_IMAGE_TAG: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:latest
+2025-01-31T17:37:06.4704021Z   TT_METAL_REF_IMAGE_TAG: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:latest
+2025-01-31T17:37:06.4704601Z ##[endgroup]
+2025-01-31T17:37:06.4817909Z ##[group]Run docker/login-action@v3
+2025-01-31T17:37:06.4818275Z with:
+2025-01-31T17:37:06.4818577Z   registry: https://ghcr.io
+2025-01-31T17:37:06.4820340Z   username: tt-aho
+2025-01-31T17:37:06.4820888Z   password: ***
+2025-01-31T17:37:06.4821185Z   ecr: auto
+2025-01-31T17:37:06.4821446Z   logout: true
+2025-01-31T17:37:06.4821726Z env:
+2025-01-31T17:37:06.4821996Z   LOGURU_LEVEL: INFO
+2025-01-31T17:37:06.4822295Z   IMAGE_TAG: latest
+2025-01-31T17:37:06.4822835Z   TT_METAL_DOCKER_IMAGE_TAG: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:latest
+2025-01-31T17:37:06.4823656Z   TT_METAL_REF_IMAGE_TAG: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:latest
+2025-01-31T17:37:06.4824266Z   RUNNER_UID: 1000
+2025-01-31T17:37:06.4824550Z   RUNNER_GID: 1000
+2025-01-31T17:37:06.4824857Z ##[endgroup]
+2025-01-31T17:37:06.8312706Z Logging into https://ghcr.io...
+2025-01-31T17:37:07.3196150Z Login Succeeded!
+2025-01-31T17:37:07.3322148Z ##[group]Run docker pull ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:latest
+2025-01-31T17:37:07.3323006Z [36;1mdocker pull ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:latest[0m
+2025-01-31T17:37:07.3341229Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2025-01-31T17:37:07.3341685Z env:
+2025-01-31T17:37:07.3341958Z   LOGURU_LEVEL: INFO
+2025-01-31T17:37:07.3342280Z   IMAGE_TAG: latest
+2025-01-31T17:37:07.3342818Z   TT_METAL_DOCKER_IMAGE_TAG: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:latest
+2025-01-31T17:37:07.3343646Z   TT_METAL_REF_IMAGE_TAG: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:latest
+2025-01-31T17:37:07.3344257Z   RUNNER_UID: 1000
+2025-01-31T17:37:07.3344593Z   RUNNER_GID: 1000
+2025-01-31T17:37:07.3344903Z ##[endgroup]
+2025-01-31T17:37:07.8575817Z latest: Pulling from tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64
+2025-01-31T17:37:07.8593561Z Digest: sha256:7d48e2a5331bf4afad2e0bcfc29fc2040e992c3f65fdbb7b934afc76e72bd1be
+2025-01-31T17:37:07.8594392Z Status: Image is up to date for ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:latest
+2025-01-31T17:37:07.8602833Z ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:latest
+2025-01-31T17:37:07.8687097Z ##[group]Run tenstorrent/docker-run-action@v5
+2025-01-31T17:37:07.8687533Z with:
+2025-01-31T17:37:07.8687804Z   shell: bash
+2025-01-31T17:37:07.8688084Z   username: tt-aho
+2025-01-31T17:37:07.8688631Z   password: ***
+2025-01-31T17:37:07.8688930Z   registry: ghcr.io
+2025-01-31T17:37:07.8689399Z   image: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:latest
+2025-01-31T17:37:07.8692367Z   options: -u 1000:1000
+--rm
+-v /etc/passwd:/etc/passwd:ro
+-v /etc/shadow:/etc/shadow:ro
+-v /etc/bashrc:/etc/bashrc:ro
+-v /home/ubuntu/actions-runner/_work/tt-metal/tt-metal:/home/ubuntu/actions-runner/_work/tt-metal/tt-metal
+--net=host
+--log-driver local
+--log-opt max-size=50m
+-e ARCH_NAME=grayskull
+
+-e LOGURU_LEVEL=INFO
+-e PYTHONPATH=/home/ubuntu/actions-runner/_work/tt-metal/tt-metal
+-e HOME=/home/ubuntu/actions-runner/_work/tt-metal/tt-metal
+-v /dev/hugepages-1G:/dev/hugepages-1G
+--device /dev/tenstorrent
+
+-w /home/ubuntu/actions-runner/_work/tt-metal/tt-metal
+
+2025-01-31T17:37:07.8695765Z   run: set -eu
+
+install_wheel=true
+if [ "${install_wheel,,}" == "true" ]; then
+  WHEEL_FILENAME=$(ls -1 *.whl)
+  pip3 install "$WHEEL_FILENAME"
+fi
+
+source tests/scripts/run_python_model_tests.sh && run_python_model_tests_grayskull
+
+
+2025-01-31T17:37:07.8697017Z env:
+2025-01-31T17:37:07.8697287Z   LOGURU_LEVEL: INFO
+2025-01-31T17:37:07.8697598Z   IMAGE_TAG: latest
+2025-01-31T17:37:07.8698131Z   TT_METAL_DOCKER_IMAGE_TAG: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:latest
+2025-01-31T17:37:07.8698944Z   TT_METAL_REF_IMAGE_TAG: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:latest
+2025-01-31T17:37:07.8699794Z   RUNNER_UID: 1000
+2025-01-31T17:37:07.8700090Z   RUNNER_GID: 1000
+2025-01-31T17:37:07.8700388Z ##[endgroup]
+2025-01-31T17:37:07.8820499Z ##[command]/usr/bin/docker run --name fdb1e33dea5ca2f4a16bef84b0612a537c1_f819b1 --label 209fdb --workdir /github/workspace --rm -e "LOGURU_LEVEL" -e "IMAGE_TAG" -e "TT_METAL_DOCKER_IMAGE_TAG" -e "TT_METAL_REF_IMAGE_TAG" -e "RUNNER_UID" -e "RUNNER_GID" -e "INPUT_SHELL" -e "INPUT_USERNAME" -e "INPUT_PASSWORD" -e "INPUT_REGISTRY" -e "INPUT_IMAGE" -e "INPUT_OPTIONS" -e "INPUT_RUN" -e "INPUT_DOCKER_NETWORK" -e "HOME" -e "GITHUB_JOB" -e "GITHUB_REF" -e "GITHUB_SHA" -e "GITHUB_REPOSITORY" -e "GITHUB_REPOSITORY_OWNER" -e "GITHUB_REPOSITORY_OWNER_ID" -e "GITHUB_RUN_ID" -e "GITHUB_RUN_NUMBER" -e "GITHUB_RETENTION_DAYS" -e "GITHUB_RUN_ATTEMPT" -e "GITHUB_REPOSITORY_ID" -e "GITHUB_ACTOR_ID" -e "GITHUB_ACTOR" -e "GITHUB_TRIGGERING_ACTOR" -e "GITHUB_WORKFLOW" -e "GITHUB_HEAD_REF" -e "GITHUB_BASE_REF" -e "GITHUB_EVENT_NAME" -e "GITHUB_SERVER_URL" -e "GITHUB_API_URL" -e "GITHUB_GRAPHQL_URL" -e "GITHUB_REF_NAME" -e "GITHUB_REF_PROTECTED" -e "GITHUB_REF_TYPE" -e "GITHUB_WORKFLOW_REF" -e "GITHUB_WORKFLOW_SHA" -e "GITHUB_WORKSPACE" -e "GITHUB_EVENT_PATH" -e "GITHUB_PATH" -e "GITHUB_ENV" -e "GITHUB_STEP_SUMMARY" -e "GITHUB_STATE" -e "GITHUB_OUTPUT" -e "GITHUB_ACTION" -e "GITHUB_ACTION_REPOSITORY" -e "GITHUB_ACTION_REF" -e "GITHUB_ACTION_PATH" -e "RUNNER_OS" -e "RUNNER_ARCH" -e "RUNNER_NAME" -e "RUNNER_ENVIRONMENT" -e "RUNNER_TOOL_CACHE" -e "RUNNER_TEMP" -e "RUNNER_WORKSPACE" -e "ACTIONS_RUNTIME_URL" -e "ACTIONS_RUNTIME_TOKEN" -e "ACTIONS_CACHE_URL" -e "ACTIONS_ID_TOKEN_REQUEST_URL" -e "ACTIONS_ID_TOKEN_REQUEST_TOKEN" -e "ACTIONS_RESULTS_URL" -e GITHUB_ACTIONS=true -e CI=true -v "/var/run/docker.sock":"/var/run/docker.sock" -v "/home/ubuntu/actions-runner/_work/_temp/_github_home":"/github/home" -v "/home/ubuntu/actions-runner/_work/_temp/_github_workflow":"/github/workflow" -v "/home/ubuntu/actions-runner/_work/_temp/_runner_file_commands":"/github/file_commands" -v "/home/ubuntu/actions-runner/_work/tt-metal/tt-metal":"/github/workspace" 209fdb:1e33dea5ca2f4a16bef84b0612a537c1
+2025-01-31T17:37:08.8394305Z WARNING! Your password will be stored unencrypted in /github/home/.docker/config.json.
+2025-01-31T17:37:08.8404644Z Configure a credential helper to remove this warning. See
+2025-01-31T17:37:08.8405387Z https://docs.docker.com/engine/reference/commandline/login/#credentials-store
+2025-01-31T17:37:08.8405845Z
+2025-01-31T17:37:08.8406001Z Login Succeeded
+2025-01-31T17:37:09.9359511Z Processing ./ttnn-0.56.0rc3.dev18+any-cp38-cp38-linux_x86_64.whl
+2025-01-31T17:37:13.4771506Z Collecting graphviz==0.20.3
+2025-01-31T17:37:13.5136530Z   Downloading graphviz-0.20.3-py3-none-any.whl (47 kB)
+2025-01-31T17:37:13.5669794Z Requirement already satisfied: pandas==2.0.3 in /usr/local/lib/python3.8/dist-packages (from ttnn==0.56.0rc3.dev18+any) (2.0.3)
+2025-01-31T17:37:13.8135811Z Collecting plotly==5.18.0
+2025-01-31T17:37:13.8225005Z   Downloading plotly-5.18.0-py3-none-any.whl (15.6 MB)
+2025-01-31T17:37:15.8260392Z Collecting loguru==0.6.0
+2025-01-31T17:37:15.8340555Z   Downloading loguru-0.6.0-py3-none-any.whl (58 kB)
+2025-01-31T17:37:15.8841250Z Requirement already satisfied: pyyaml>=5.4 in /usr/local/lib/python3.8/dist-packages (from ttnn==0.56.0rc3.dev18+any) (6.0.2)
+2025-01-31T17:37:15.8858256Z Requirement already satisfied: numpy<2,>=1.24.4 in /usr/local/lib/python3.8/dist-packages (from ttnn==0.56.0rc3.dev18+any) (1.24.4)
+2025-01-31T17:37:15.9981391Z Collecting ipywidgets==8.1.1
+2025-01-31T17:37:16.0061997Z   Downloading ipywidgets-8.1.1-py3-none-any.whl (139 kB)
+2025-01-31T17:37:16.1035065Z Collecting toolz==0.12.0
+2025-01-31T17:37:16.1159798Z   Downloading toolz-0.12.0-py3-none-any.whl (55 kB)
+2025-01-31T17:37:17.0029245Z Collecting Pillow==10.3.0
+2025-01-31T17:37:17.0124283Z   Downloading pillow-10.3.0-cp38-cp38-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (4.4 MB)
+2025-01-31T17:37:17.6005199Z Collecting jupyterlab==4.2.5
+2025-01-31T17:37:17.6102415Z   Downloading jupyterlab-4.2.5-py3-none-any.whl (11.6 MB)
+2025-01-31T17:37:18.2787393Z Collecting bokeh==3.1.1
+2025-01-31T17:37:18.2886929Z   Downloading bokeh-3.1.1-py3-none-any.whl (8.3 MB)
+2025-01-31T17:37:18.8175725Z Collecting dash==2.15.0
+2025-01-31T17:37:18.8384304Z   Downloading dash-2.15.0-py3-none-any.whl (10.2 MB)
+2025-01-31T17:37:19.2689582Z Requirement already satisfied: torch==2.2.1+cpu in /usr/local/lib/python3.8/dist-packages (from ttnn==0.56.0rc3.dev18+any) (2.2.1+cpu)
+2025-01-31T17:37:19.2751412Z Requirement already satisfied: networkx==3.1 in /usr/local/lib/python3.8/dist-packages (from ttnn==0.56.0rc3.dev18+any) (3.1)
+2025-01-31T17:37:19.3357518Z Collecting click==8.1.7
+2025-01-31T17:37:19.3436692Z   Downloading click-8.1.7-py3-none-any.whl (97 kB)
+2025-01-31T17:37:20.0230482Z Collecting matplotlib==3.7.1
+2025-01-31T17:37:20.0351526Z   Downloading matplotlib-3.7.1-cp38-cp38-manylinux_2_12_x86_64.manylinux2010_x86_64.whl (9.2 MB)
+2025-01-31T17:37:20.4107094Z Collecting seaborn==0.13.2
+2025-01-31T17:37:20.4190077Z   Downloading seaborn-0.13.2-py3-none-any.whl (294 kB)
+2025-01-31T17:37:20.4821145Z Requirement already satisfied: pytz>=2020.1 in /usr/local/lib/python3.8/dist-packages (from pandas==2.0.3->ttnn==0.56.0rc3.dev18+any) (2024.2)
+2025-01-31T17:37:20.4840307Z Requirement already satisfied: tzdata>=2022.1 in /usr/local/lib/python3.8/dist-packages (from pandas==2.0.3->ttnn==0.56.0rc3.dev18+any) (2025.1)
+2025-01-31T17:37:20.4852086Z Requirement already satisfied: python-dateutil>=2.8.2 in /usr/local/lib/python3.8/dist-packages (from pandas==2.0.3->ttnn==0.56.0rc3.dev18+any) (2.9.0.post0)
+2025-01-31T17:37:20.5566847Z Collecting tenacity>=6.2.0
+2025-01-31T17:37:20.5758328Z   Downloading tenacity-9.0.0-py3-none-any.whl (28 kB)
+2025-01-31T17:37:20.6128048Z Requirement already satisfied: packaging in /usr/local/lib/python3.8/dist-packages (from plotly==5.18.0->ttnn==0.56.0rc3.dev18+any) (24.2)
+2025-01-31T17:37:20.6590955Z Collecting comm>=0.1.3
+2025-01-31T17:37:20.6673606Z   Downloading comm-0.2.2-py3-none-any.whl (7.2 kB)
+2025-01-31T17:37:20.7000362Z Requirement already satisfied: ipython>=6.1.0 in /usr/local/lib/python3.8/dist-packages (from ipywidgets==8.1.1->ttnn==0.56.0rc3.dev18+any) (8.12.3)
+2025-01-31T17:37:20.7523956Z Requirement already satisfied: traitlets>=4.3.1 in /usr/local/lib/python3.8/dist-packages (from ipywidgets==8.1.1->ttnn==0.56.0rc3.dev18+any) (5.14.3)
+2025-01-31T17:37:20.9120587Z Collecting widgetsnbextension~=4.0.9
+2025-01-31T17:37:20.9202502Z   Downloading widgetsnbextension-4.0.13-py3-none-any.whl (2.3 MB)
+2025-01-31T17:37:21.1164032Z Collecting jupyterlab-widgets~=3.0.9
+2025-01-31T17:37:21.1244826Z   Downloading jupyterlab_widgets-3.0.13-py3-none-any.whl (214 kB)
+2025-01-31T17:37:21.1671700Z Requirement already satisfied: jinja2>=3.0.3 in /usr/local/lib/python3.8/dist-packages (from jupyterlab==4.2.5->ttnn==0.56.0rc3.dev18+any) (3.1.5)
+2025-01-31T17:37:21.1705251Z Requirement already satisfied: importlib-resources>=1.4; python_version < "3.9" in /usr/local/lib/python3.8/dist-packages (from jupyterlab==4.2.5->ttnn==0.56.0rc3.dev18+any) (6.4.5)
+2025-01-31T17:37:21.3227025Z Collecting ipykernel>=6.5.0
+2025-01-31T17:37:21.3316235Z   Downloading ipykernel-6.29.5-py3-none-any.whl (117 kB)
+2025-01-31T17:37:21.3949005Z Requirement already satisfied: setuptools>=40.1.0 in /usr/lib/python3/dist-packages (from jupyterlab==4.2.5->ttnn==0.56.0rc3.dev18+any) (45.2.0)
+2025-01-31T17:37:21.4793880Z Collecting httpx>=0.25.0
+2025-01-31T17:37:21.4894067Z   Downloading httpx-0.28.1-py3-none-any.whl (73 kB)
+2025-01-31T17:37:21.5369857Z Requirement already satisfied: tomli>=1.2.2; python_version < "3.11" in /usr/local/lib/python3.8/dist-packages (from jupyterlab==4.2.5->ttnn==0.56.0rc3.dev18+any) (2.2.1)
+2025-01-31T17:37:21.5381825Z Requirement already satisfied: jupyter-core in /usr/local/lib/python3.8/dist-packages (from jupyterlab==4.2.5->ttnn==0.56.0rc3.dev18+any) (5.7.2)
+2025-01-31T17:37:21.6067621Z Collecting jupyter-lsp>=2.0.0
+2025-01-31T17:37:21.6153586Z   Downloading jupyter_lsp-2.2.5-py3-none-any.whl (69 kB)
+2025-01-31T17:37:21.7066341Z Collecting notebook-shim>=0.2
+2025-01-31T17:37:21.7176602Z   Downloading notebook_shim-0.2.4-py3-none-any.whl (13 kB)
+2025-01-31T17:37:21.7542173Z Requirement already satisfied: tornado>=6.2.0 in /usr/local/lib/python3.8/dist-packages (from jupyterlab==4.2.5->ttnn==0.56.0rc3.dev18+any) (6.4.2)
+2025-01-31T17:37:21.8738902Z Collecting jupyterlab-server<3,>=2.27.1
+2025-01-31T17:37:21.8819311Z   Downloading jupyterlab_server-2.27.3-py3-none-any.whl (59 kB)
+2025-01-31T17:37:21.9917686Z Collecting async-lru>=1.0.0
+2025-01-31T17:37:21.9994825Z   Downloading async_lru-2.0.4-py3-none-any.whl (6.1 kB)
+2025-01-31T17:37:22.2075541Z Collecting jupyter-server<3,>=2.4.0
+2025-01-31T17:37:22.2160477Z   Downloading jupyter_server-2.14.2-py3-none-any.whl (383 kB)
+2025-01-31T17:37:22.3044525Z Requirement already satisfied: importlib-metadata>=4.8.3; python_version < "3.10" in /usr/local/lib/python3.8/dist-packages (from jupyterlab==4.2.5->ttnn==0.56.0rc3.dev18+any) (8.5.0)
+2025-01-31T17:37:22.3859724Z Collecting xyzservices>=2021.09.1
+2025-01-31T17:37:22.3944717Z   Downloading xyzservices-2025.1.0-py3-none-any.whl (88 kB)
+2025-01-31T17:37:22.4334950Z Requirement already satisfied: contourpy>=1 in /usr/local/lib/python3.8/dist-packages (from bokeh==3.1.1->ttnn==0.56.0rc3.dev18+any) (1.1.1)
+2025-01-31T17:37:22.5040835Z Collecting dash-html-components==2.0.0
+2025-01-31T17:37:22.5123699Z   Downloading dash_html_components-2.0.0-py3-none-any.whl (4.1 kB)
+2025-01-31T17:37:22.5441109Z Requirement already satisfied: requests in /usr/local/lib/python3.8/dist-packages (from dash==2.15.0->ttnn==0.56.0rc3.dev18+any) (2.32.3)
+2025-01-31T17:37:22.5986828Z Collecting dash-table==5.0.0
+2025-01-31T17:37:22.6068672Z   Downloading dash_table-5.0.0-py3-none-any.whl (3.9 kB)
+2025-01-31T17:37:22.7443643Z Collecting Werkzeug<3.1
+2025-01-31T17:37:22.7522358Z   Downloading werkzeug-3.0.6-py3-none-any.whl (227 kB)
+2025-01-31T17:37:22.8434040Z Collecting retrying
+2025-01-31T17:37:22.8512886Z   Downloading retrying-1.3.4-py3-none-any.whl (11 kB)
+2025-01-31T17:37:22.9513613Z Collecting nest-asyncio
+2025-01-31T17:37:22.9590505Z   Downloading nest_asyncio-1.6.0-py3-none-any.whl (5.2 kB)
+2025-01-31T17:37:23.0731380Z Collecting dash-core-components==2.0.0
+2025-01-31T17:37:23.0819172Z   Downloading dash_core_components-2.0.0-py3-none-any.whl (3.8 kB)
+2025-01-31T17:37:23.1898870Z Collecting Flask<3.1,>=1.0.4
+2025-01-31T17:37:23.1978962Z   Downloading flask-3.0.3-py3-none-any.whl (101 kB)
+2025-01-31T17:37:23.2421731Z Requirement already satisfied: typing-extensions>=4.1.1 in /usr/local/lib/python3.8/dist-packages (from dash==2.15.0->ttnn==0.56.0rc3.dev18+any) (4.12.2)
+2025-01-31T17:37:23.2433171Z Requirement already satisfied: filelock in /usr/local/lib/python3.8/dist-packages (from torch==2.2.1+cpu->ttnn==0.56.0rc3.dev18+any) (3.16.1)
+2025-01-31T17:37:23.2545487Z Requirement already satisfied: fsspec in /usr/local/lib/python3.8/dist-packages (from torch==2.2.1+cpu->ttnn==0.56.0rc3.dev18+any) (2023.9.2)
+2025-01-31T17:37:23.3282871Z Requirement already satisfied: sympy in /usr/local/lib/python3.8/dist-packages (from torch==2.2.1+cpu->ttnn==0.56.0rc3.dev18+any) (1.13.3)
+2025-01-31T17:37:23.3326456Z Requirement already satisfied: kiwisolver>=1.0.1 in /usr/local/lib/python3.8/dist-packages (from matplotlib==3.7.1->ttnn==0.56.0rc3.dev18+any) (1.4.7)
+2025-01-31T17:37:23.3339842Z Requirement already satisfied: fonttools>=4.22.0 in /usr/local/lib/python3.8/dist-packages (from matplotlib==3.7.1->ttnn==0.56.0rc3.dev18+any) (4.55.7)
+2025-01-31T17:37:23.3692459Z Requirement already satisfied: pyparsing>=2.3.1 in /usr/local/lib/python3.8/dist-packages (from matplotlib==3.7.1->ttnn==0.56.0rc3.dev18+any) (3.1.4)
+2025-01-31T17:37:23.3723441Z Requirement already satisfied: cycler>=0.10 in /usr/local/lib/python3.8/dist-packages (from matplotlib==3.7.1->ttnn==0.56.0rc3.dev18+any) (0.12.1)
+2025-01-31T17:37:23.3781524Z Requirement already satisfied: six>=1.5 in /usr/lib/python3/dist-packages (from python-dateutil>=2.8.2->pandas==2.0.3->ttnn==0.56.0rc3.dev18+any) (1.14.0)
+2025-01-31T17:37:23.3791281Z Requirement already satisfied: pickleshare in /usr/local/lib/python3.8/dist-packages (from ipython>=6.1.0->ipywidgets==8.1.1->ttnn==0.56.0rc3.dev18+any) (0.7.5)
+2025-01-31T17:37:23.3815292Z Requirement already satisfied: pexpect>4.3; sys_platform != "win32" in /usr/local/lib/python3.8/dist-packages (from ipython>=6.1.0->ipywidgets==8.1.1->ttnn==0.56.0rc3.dev18+any) (4.9.0)
+2025-01-31T17:37:23.3831826Z Requirement already satisfied: jedi>=0.16 in /usr/local/lib/python3.8/dist-packages (from ipython>=6.1.0->ipywidgets==8.1.1->ttnn==0.56.0rc3.dev18+any) (0.19.2)
+2025-01-31T17:37:23.4096216Z Requirement already satisfied: stack-data in /usr/local/lib/python3.8/dist-packages (from ipython>=6.1.0->ipywidgets==8.1.1->ttnn==0.56.0rc3.dev18+any) (0.6.3)
+2025-01-31T17:37:23.4161274Z Requirement already satisfied: pygments>=2.4.0 in /usr/local/lib/python3.8/dist-packages (from ipython>=6.1.0->ipywidgets==8.1.1->ttnn==0.56.0rc3.dev18+any) (2.19.1)
+2025-01-31T17:37:23.4182191Z Requirement already satisfied: backcall in /usr/local/lib/python3.8/dist-packages (from ipython>=6.1.0->ipywidgets==8.1.1->ttnn==0.56.0rc3.dev18+any) (0.2.0)
+2025-01-31T17:37:23.4190459Z Requirement already satisfied: matplotlib-inline in /usr/local/lib/python3.8/dist-packages (from ipython>=6.1.0->ipywidgets==8.1.1->ttnn==0.56.0rc3.dev18+any) (0.1.7)
+2025-01-31T17:37:23.4211789Z Requirement already satisfied: prompt-toolkit!=3.0.37,<3.1.0,>=3.0.30 in /usr/local/lib/python3.8/dist-packages (from ipython>=6.1.0->ipywidgets==8.1.1->ttnn==0.56.0rc3.dev18+any) (3.0.50)
+2025-01-31T17:37:23.4229023Z Requirement already satisfied: decorator in /usr/local/lib/python3.8/dist-packages (from ipython>=6.1.0->ipywidgets==8.1.1->ttnn==0.56.0rc3.dev18+any) (5.1.1)
+2025-01-31T17:37:23.4241201Z Requirement already satisfied: MarkupSafe>=2.0 in /usr/local/lib/python3.8/dist-packages (from jinja2>=3.0.3->jupyterlab==4.2.5->ttnn==0.56.0rc3.dev18+any) (2.1.5)
+2025-01-31T17:37:23.4258181Z Requirement already satisfied: zipp>=3.1.0; python_version < "3.10" in /usr/local/lib/python3.8/dist-packages (from importlib-resources>=1.4; python_version < "3.9"->jupyterlab==4.2.5->ttnn==0.56.0rc3.dev18+any) (3.20.2)
+2025-01-31T17:37:23.9103231Z Collecting debugpy>=1.6.5
+2025-01-31T17:37:23.9228577Z   Downloading debugpy-1.8.12-cp38-cp38-manylinux_2_5_x86_64.manylinux1_x86_64.manylinux_2_17_x86_64.manylinux2014_x86_64.whl (3.6 MB)
+2025-01-31T17:37:24.1059324Z Requirement already satisfied: psutil in /usr/local/lib/python3.8/dist-packages (from ipykernel>=6.5.0->jupyterlab==4.2.5->ttnn==0.56.0rc3.dev18+any) (6.1.1)
+2025-01-31T17:37:24.1224179Z Requirement already satisfied: jupyter-client>=6.1.12 in /usr/local/lib/python3.8/dist-packages (from ipykernel>=6.5.0->jupyterlab==4.2.5->ttnn==0.56.0rc3.dev18+any) (8.6.3)
+2025-01-31T17:37:24.1397890Z Requirement already satisfied: pyzmq>=24 in /usr/local/lib/python3.8/dist-packages (from ipykernel>=6.5.0->jupyterlab==4.2.5->ttnn==0.56.0rc3.dev18+any) (26.2.0)
+2025-01-31T17:37:24.2706889Z Collecting anyio
+2025-01-31T17:37:24.2815546Z   Downloading anyio-4.5.2-py3-none-any.whl (89 kB)
+2025-01-31T17:37:24.3401253Z Requirement already satisfied: certifi in /usr/lib/python3/dist-packages (from httpx>=0.25.0->jupyterlab==4.2.5->ttnn==0.56.0rc3.dev18+any) (2019.11.28)
+2025-01-31T17:37:24.3409284Z Requirement already satisfied: idna in /usr/lib/python3/dist-packages (from httpx>=0.25.0->jupyterlab==4.2.5->ttnn==0.56.0rc3.dev18+any) (2.8)
+2025-01-31T17:37:24.4211640Z Collecting httpcore==1.*
+2025-01-31T17:37:24.4304094Z   Downloading httpcore-1.0.7-py3-none-any.whl (78 kB)
+2025-01-31T17:37:24.4732056Z Requirement already satisfied: platformdirs>=2.5 in /usr/local/lib/python3.8/dist-packages (from jupyter-core->jupyterlab==4.2.5->ttnn==0.56.0rc3.dev18+any) (3.11.0)
+2025-01-31T17:37:24.5535475Z Collecting json5>=0.9.0
+2025-01-31T17:37:24.5650520Z   Downloading json5-0.10.0-py3-none-any.whl (34 kB)
+2025-01-31T17:37:24.6061857Z Requirement already satisfied: babel>=2.10 in /usr/local/lib/python3.8/dist-packages (from jupyterlab-server<3,>=2.27.1->jupyterlab==4.2.5->ttnn==0.56.0rc3.dev18+any) (2.16.0)
+2025-01-31T17:37:24.6111325Z Requirement already satisfied: jsonschema>=4.18.0 in /usr/local/lib/python3.8/dist-packages (from jupyterlab-server<3,>=2.27.1->jupyterlab==4.2.5->ttnn==0.56.0rc3.dev18+any) (4.23.0)
+2025-01-31T17:37:24.6774318Z Collecting send2trash>=1.8.2
+2025-01-31T17:37:24.6896643Z   Downloading Send2Trash-1.8.3-py3-none-any.whl (18 kB)
+2025-01-31T17:37:24.7814920Z Collecting jupyter-events>=0.9.0
+2025-01-31T17:37:24.7922581Z   Downloading jupyter_events-0.10.0-py3-none-any.whl (18 kB)
+2025-01-31T17:37:24.8887466Z Collecting jupyter-server-terminals>=0.4.4
+2025-01-31T17:37:24.8964281Z   Downloading jupyter_server_terminals-0.5.3-py3-none-any.whl (13 kB)
+2025-01-31T17:37:25.0151872Z Collecting websocket-client>=1.7
+2025-01-31T17:37:25.0233251Z   Downloading websocket_client-1.8.0-py3-none-any.whl (58 kB)
+2025-01-31T17:37:25.1278181Z Collecting terminado>=0.8.3
+2025-01-31T17:37:25.1366373Z   Downloading terminado-0.18.1-py3-none-any.whl (14 kB)
+2025-01-31T17:37:25.1777578Z Requirement already satisfied: nbformat>=5.3.0 in /usr/local/lib/python3.8/dist-packages (from jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->ttnn==0.56.0rc3.dev18+any) (5.10.4)
+2025-01-31T17:37:25.2820896Z Collecting argon2-cffi>=21.1
+2025-01-31T17:37:25.2896804Z   Downloading argon2_cffi-23.1.0-py3-none-any.whl (15 kB)
+2025-01-31T17:37:25.3998409Z Collecting prometheus-client>=0.9
+2025-01-31T17:37:25.4075513Z   Downloading prometheus_client-0.21.1-py3-none-any.whl (54 kB)
+2025-01-31T17:37:25.5079116Z Collecting overrides>=5.0
+2025-01-31T17:37:25.5160289Z   Downloading overrides-7.7.0-py3-none-any.whl (17 kB)
+2025-01-31T17:37:25.5489186Z Requirement already satisfied: nbconvert>=6.4.4 in /usr/local/lib/python3.8/dist-packages (from jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->ttnn==0.56.0rc3.dev18+any) (7.16.6)
+2025-01-31T17:37:25.5809597Z Requirement already satisfied: charset-normalizer<4,>=2 in /usr/local/lib/python3.8/dist-packages (from requests->dash==2.15.0->ttnn==0.56.0rc3.dev18+any) (3.4.1)
+2025-01-31T17:37:25.5832664Z Requirement already satisfied: urllib3<3,>=1.21.1 in /usr/local/lib/python3.8/dist-packages (from requests->dash==2.15.0->ttnn==0.56.0rc3.dev18+any) (2.2.3)
+2025-01-31T17:37:25.6402753Z Collecting itsdangerous>=2.1.2
+2025-01-31T17:37:25.6499485Z   Downloading itsdangerous-2.2.0-py3-none-any.whl (16 kB)
+2025-01-31T17:37:25.7293681Z Collecting blinker>=1.6.2
+2025-01-31T17:37:25.7388181Z   Downloading blinker-1.8.2-py3-none-any.whl (9.5 kB)
+2025-01-31T17:37:25.7702541Z Requirement already satisfied: mpmath<1.4,>=1.1.0 in /usr/local/lib/python3.8/dist-packages (from sympy->torch==2.2.1+cpu->ttnn==0.56.0rc3.dev18+any) (1.3.0)
+2025-01-31T17:37:25.7778441Z Requirement already satisfied: ptyprocess>=0.5 in /usr/local/lib/python3.8/dist-packages (from pexpect>4.3; sys_platform != "win32"->ipython>=6.1.0->ipywidgets==8.1.1->ttnn==0.56.0rc3.dev18+any) (0.7.0)
+2025-01-31T17:37:25.7789984Z Requirement already satisfied: parso<0.9.0,>=0.8.4 in /usr/local/lib/python3.8/dist-packages (from jedi>=0.16->ipython>=6.1.0->ipywidgets==8.1.1->ttnn==0.56.0rc3.dev18+any) (0.8.4)
+2025-01-31T17:37:25.7840442Z Requirement already satisfied: pure-eval in /usr/local/lib/python3.8/dist-packages (from stack-data->ipython>=6.1.0->ipywidgets==8.1.1->ttnn==0.56.0rc3.dev18+any) (0.2.3)
+2025-01-31T17:37:25.7859587Z Requirement already satisfied: executing>=1.2.0 in /usr/local/lib/python3.8/dist-packages (from stack-data->ipython>=6.1.0->ipywidgets==8.1.1->ttnn==0.56.0rc3.dev18+any) (2.2.0)
+2025-01-31T17:37:25.7923891Z Requirement already satisfied: asttokens>=2.1.0 in /usr/local/lib/python3.8/dist-packages (from stack-data->ipython>=6.1.0->ipywidgets==8.1.1->ttnn==0.56.0rc3.dev18+any) (3.0.0)
+2025-01-31T17:37:25.7970875Z Requirement already satisfied: wcwidth in /usr/local/lib/python3.8/dist-packages (from prompt-toolkit!=3.0.37,<3.1.0,>=3.0.30->ipython>=6.1.0->ipywidgets==8.1.1->ttnn==0.56.0rc3.dev18+any) (0.2.13)
+2025-01-31T17:37:25.8426068Z Collecting sniffio>=1.1
+2025-01-31T17:37:25.8504020Z   Downloading sniffio-1.3.1-py3-none-any.whl (10 kB)
+2025-01-31T17:37:25.8835589Z Requirement already satisfied: exceptiongroup>=1.0.2; python_version < "3.11" in /usr/local/lib/python3.8/dist-packages (from anyio->httpx>=0.25.0->jupyterlab==4.2.5->ttnn==0.56.0rc3.dev18+any) (1.2.2)
+2025-01-31T17:37:25.9729639Z Collecting h11<0.15,>=0.13
+2025-01-31T17:37:25.9815089Z   Downloading h11-0.14.0-py3-none-any.whl (58 kB)
+2025-01-31T17:37:26.0199577Z Requirement already satisfied: rpds-py>=0.7.1 in /usr/local/lib/python3.8/dist-packages (from jsonschema>=4.18.0->jupyterlab-server<3,>=2.27.1->jupyterlab==4.2.5->ttnn==0.56.0rc3.dev18+any) (0.20.1)
+2025-01-31T17:37:26.0214227Z Requirement already satisfied: referencing>=0.28.4 in /usr/local/lib/python3.8/dist-packages (from jsonschema>=4.18.0->jupyterlab-server<3,>=2.27.1->jupyterlab==4.2.5->ttnn==0.56.0rc3.dev18+any) (0.35.1)
+2025-01-31T17:37:26.0244177Z Requirement already satisfied: pkgutil-resolve-name>=1.3.10; python_version < "3.9" in /usr/local/lib/python3.8/dist-packages (from jsonschema>=4.18.0->jupyterlab-server<3,>=2.27.1->jupyterlab==4.2.5->ttnn==0.56.0rc3.dev18+any) (1.3.10)
+2025-01-31T17:37:26.0256032Z Requirement already satisfied: attrs>=22.2.0 in /usr/local/lib/python3.8/dist-packages (from jsonschema>=4.18.0->jupyterlab-server<3,>=2.27.1->jupyterlab==4.2.5->ttnn==0.56.0rc3.dev18+any) (25.1.0)
+2025-01-31T17:37:26.0689305Z Requirement already satisfied: jsonschema-specifications>=2023.03.6 in /usr/local/lib/python3.8/dist-packages (from jsonschema>=4.18.0->jupyterlab-server<3,>=2.27.1->jupyterlab==4.2.5->ttnn==0.56.0rc3.dev18+any) (2023.12.1)
+2025-01-31T17:37:26.1178901Z Collecting rfc3339-validator
+2025-01-31T17:37:26.1257220Z   Downloading rfc3339_validator-0.1.4-py2.py3-none-any.whl (3.5 kB)
+2025-01-31T17:37:26.1998116Z Collecting rfc3986-validator>=0.1.1
+2025-01-31T17:37:26.2080776Z   Downloading rfc3986_validator-0.1.1-py2.py3-none-any.whl (4.2 kB)
+2025-01-31T17:37:26.2946569Z Collecting python-json-logger>=2.0.4
+2025-01-31T17:37:26.3031638Z   Downloading python_json_logger-3.2.1-py3-none-any.whl (14 kB)
+2025-01-31T17:37:26.3545821Z Requirement already satisfied: fastjsonschema>=2.15 in /usr/local/lib/python3.8/dist-packages (from nbformat>=5.3.0->jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->ttnn==0.56.0rc3.dev18+any) (2.21.1)
+2025-01-31T17:37:26.4142304Z Collecting argon2-cffi-bindings
+2025-01-31T17:37:26.4293197Z   Downloading argon2_cffi_bindings-21.2.0-cp36-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (86 kB)
+2025-01-31T17:37:26.4683583Z Requirement already satisfied: bleach[css]!=5.0.0 in /usr/local/lib/python3.8/dist-packages (from nbconvert>=6.4.4->jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->ttnn==0.56.0rc3.dev18+any) (6.1.0)
+2025-01-31T17:37:26.4737231Z Requirement already satisfied: defusedxml in /usr/local/lib/python3.8/dist-packages (from nbconvert>=6.4.4->jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->ttnn==0.56.0rc3.dev18+any) (0.7.1)
+2025-01-31T17:37:26.4764548Z Requirement already satisfied: beautifulsoup4 in /usr/local/lib/python3.8/dist-packages (from nbconvert>=6.4.4->jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->ttnn==0.56.0rc3.dev18+any) (4.12.3)
+2025-01-31T17:37:26.4815498Z Requirement already satisfied: pandocfilters>=1.4.1 in /usr/local/lib/python3.8/dist-packages (from nbconvert>=6.4.4->jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->ttnn==0.56.0rc3.dev18+any) (1.5.1)
+2025-01-31T17:37:26.4833019Z Requirement already satisfied: nbclient>=0.5.0 in /usr/local/lib/python3.8/dist-packages (from nbconvert>=6.4.4->jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->ttnn==0.56.0rc3.dev18+any) (0.10.1)
+2025-01-31T17:37:26.5062061Z Requirement already satisfied: jupyterlab-pygments in /usr/local/lib/python3.8/dist-packages (from nbconvert>=6.4.4->jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->ttnn==0.56.0rc3.dev18+any) (0.3.0)
+2025-01-31T17:37:26.5075359Z Requirement already satisfied: mistune<4,>=2.0.3 in /usr/local/lib/python3.8/dist-packages (from nbconvert>=6.4.4->jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->ttnn==0.56.0rc3.dev18+any) (3.1.1)
+2025-01-31T17:37:26.5102623Z Requirement already satisfied: cffi>=1.0.1 in /usr/local/lib/python3.8/dist-packages (from argon2-cffi-bindings->argon2-cffi>=21.1->jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->ttnn==0.56.0rc3.dev18+any) (1.17.1)
+2025-01-31T17:37:26.5117151Z Requirement already satisfied: webencodings in /usr/local/lib/python3.8/dist-packages (from bleach[css]!=5.0.0->nbconvert>=6.4.4->jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->ttnn==0.56.0rc3.dev18+any) (0.5.1)
+2025-01-31T17:37:26.5134827Z Requirement already satisfied: tinycss2<1.3,>=1.1.0; extra == "css" in /usr/local/lib/python3.8/dist-packages (from bleach[css]!=5.0.0->nbconvert>=6.4.4->jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->ttnn==0.56.0rc3.dev18+any) (1.2.1)
+2025-01-31T17:37:26.5186494Z Requirement already satisfied: soupsieve>1.2 in /usr/local/lib/python3.8/dist-packages (from beautifulsoup4->nbconvert>=6.4.4->jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->ttnn==0.56.0rc3.dev18+any) (2.6)
+2025-01-31T17:37:26.5198154Z Requirement already satisfied: pycparser in /usr/local/lib/python3.8/dist-packages (from cffi>=1.0.1->argon2-cffi-bindings->argon2-cffi>=21.1->jupyter-server<3,>=2.4.0->jupyterlab==4.2.5->ttnn==0.56.0rc3.dev18+any) (2.22)
+2025-01-31T17:37:28.4663282Z Installing collected packages: graphviz, tenacity, plotly, loguru, comm, widgetsnbextension, jupyterlab-widgets, ipywidgets, toolz, Pillow, debugpy, nest-asyncio, ipykernel, sniffio, anyio, h11, httpcore, httpx, send2trash, rfc3339-validator, rfc3986-validator, python-json-logger, jupyter-events, terminado, jupyter-server-terminals, websocket-client, argon2-cffi-bindings, argon2-cffi, prometheus-client, overrides, jupyter-server, jupyter-lsp, notebook-shim, json5, jupyterlab-server, async-lru, jupyterlab, xyzservices, bokeh, dash-html-components, dash-table, Werkzeug, retrying, dash-core-components, itsdangerous, click, blinker, Flask, dash, matplotlib, seaborn, ttnn
+2025-01-31T17:37:39.8491221Z   WARNING: The script debugpy is installed in '/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/.local/bin' which is not on PATH.
+2025-01-31T17:37:39.8494639Z   Consider adding this directory to PATH or, if you prefer to suppress this warning, use --no-warn-script-location.
+2025-01-31T17:37:40.1698292Z   WARNING: The script httpx is installed in '/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/.local/bin' which is not on PATH.
+2025-01-31T17:37:40.1699408Z   Consider adding this directory to PATH or, if you prefer to suppress this warning, use --no-warn-script-location.
+2025-01-31T17:37:40.1858046Z   WARNING: The script send2trash is installed in '/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/.local/bin' which is not on PATH.
+2025-01-31T17:37:40.1859180Z   Consider adding this directory to PATH or, if you prefer to suppress this warning, use --no-warn-script-location.
+2025-01-31T17:37:40.2197305Z   WARNING: The script jupyter-events is installed in '/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/.local/bin' which is not on PATH.
+2025-01-31T17:37:40.2198437Z   Consider adding this directory to PATH or, if you prefer to suppress this warning, use --no-warn-script-location.
+2025-01-31T17:37:40.2788383Z   WARNING: The script wsdump is installed in '/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/.local/bin' which is not on PATH.
+2025-01-31T17:37:40.2789510Z   Consider adding this directory to PATH or, if you prefer to suppress this warning, use --no-warn-script-location.
+2025-01-31T17:37:40.4961585Z   WARNING: The script jupyter-server is installed in '/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/.local/bin' which is not on PATH.
+2025-01-31T17:37:40.4962773Z   Consider adding this directory to PATH or, if you prefer to suppress this warning, use --no-warn-script-location.
+2025-01-31T17:37:40.6001451Z   WARNING: The script pyjson5 is installed in '/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/.local/bin' which is not on PATH.
+2025-01-31T17:37:40.6002597Z   Consider adding this directory to PATH or, if you prefer to suppress this warning, use --no-warn-script-location.
+2025-01-31T17:37:41.1860946Z   WARNING: The scripts jlpm, jupyter-lab, jupyter-labextension and jupyter-labhub are installed in '/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/.local/bin' which is not on PATH.
+2025-01-31T17:37:41.1862314Z   Consider adding this directory to PATH or, if you prefer to suppress this warning, use --no-warn-script-location.
+2025-01-31T17:37:42.0562464Z   WARNING: The script bokeh is installed in '/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/.local/bin' which is not on PATH.
+2025-01-31T17:37:42.0564019Z   Consider adding this directory to PATH or, if you prefer to suppress this warning, use --no-warn-script-location.
+2025-01-31T17:37:42.3528997Z   WARNING: The script flask is installed in '/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/.local/bin' which is not on PATH.
+2025-01-31T17:37:42.3531200Z   Consider adding this directory to PATH or, if you prefer to suppress this warning, use --no-warn-script-location.
+2025-01-31T17:37:42.8204534Z   WARNING: The scripts dash-generate-components, dash-update-components and renderer are installed in '/home/ubuntu/actions-runner/_work/tt-metal/tt-metal/.local/bin' which is not on PATH.
+2025-01-31T17:37:42.8205970Z   Consider adding this directory to PATH or, if you prefer to suppress this warning, use --no-warn-script-location.
+2025-01-31T17:37:49.0558379Z Successfully installed Flask-3.0.3 Pillow-10.3.0 Werkzeug-3.0.6 anyio-4.5.2 argon2-cffi-23.1.0 argon2-cffi-bindings-21.2.0 async-lru-2.0.4 blinker-1.8.2 bokeh-3.1.1 click-8.1.7 comm-0.2.2 dash-2.15.0 dash-core-components-2.0.0 dash-html-components-2.0.0 dash-table-5.0.0 debugpy-1.8.12 graphviz-0.20.3 h11-0.14.0 httpcore-1.0.7 httpx-0.28.1 ipykernel-6.29.5 ipywidgets-8.1.1 itsdangerous-2.2.0 json5-0.10.0 jupyter-events-0.10.0 jupyter-lsp-2.2.5 jupyter-server-2.14.2 jupyter-server-terminals-0.5.3 jupyterlab-4.2.5 jupyterlab-server-2.27.3 jupyterlab-widgets-3.0.13 loguru-0.6.0 matplotlib-3.7.1 nest-asyncio-1.6.0 notebook-shim-0.2.4 overrides-7.7.0 plotly-5.18.0 prometheus-client-0.21.1 python-json-logger-3.2.1 retrying-1.3.4 rfc3339-validator-0.1.4 rfc3986-validator-0.1.1 seaborn-0.13.2 send2trash-1.8.3 sniffio-1.3.1 tenacity-9.0.0 terminado-0.18.1 toolz-0.12.0 ttnn-0.56.0rc3.dev18+any websocket-client-1.8.0 widgetsnbextension-4.0.13 xyzservices-2025.1.0
+2025-01-31T17:37:53.4736800Z ============================= test session starts ==============================
+2025-01-31T17:37:53.4737509Z platform linux -- Python 3.8.10, pytest-7.2.2, pluggy-1.5.0 -- /usr/bin/python3
+2025-01-31T17:37:53.4738049Z cachedir: .pytest_cache
+2025-01-31T17:37:53.4738584Z rootdir: /home/ubuntu/actions-runner/_work/tt-metal/tt-metal, configfile: pytest.ini
+2025-01-31T17:37:53.4739293Z plugins: dash-2.15.0, anyio-4.5.2, split-0.8.2, timeout-2.2.0, xdist-3.6.1
+2025-01-31T17:37:53.4739784Z timeout: 300.0s
+2025-01-31T17:37:53.4740071Z timeout method: signal
+2025-01-31T17:37:53.4740386Z timeout func_only: False
+2025-01-31T17:37:53.7126278Z collecting ... collected 724 items / 714 deselected / 10 selected
+2025-01-31T17:37:53.7126664Z
+2025-01-31T17:37:53.7139772Z models/experimental/bert_large_performant/unit_tests/test_bert_large_ff1_matmul.py::test_bert_large_ff1_matmul_test[BFLOAT8_B-in0_L1-in1_L1-bias_L1-out_L1-gelu_activation] [38;2;000;128;000m                 Device[0m | [1m[38;2;100;149;237mINFO    [0m | Opening user mode device driver
+2025-01-31T17:37:53.7205632Z
+2025-01-31T17:37:53.7279273Z [32m2025-01-31 17:37:53.727[0m | [1m[38;2;100;149;237mINFO    [0m | [36mSiliconDriver  [0m - Opened PCI device 0; KMD version: 1.27.1, IOMMU: disabled
+2025-01-31T17:37:53.7290944Z [32m2025-01-31 17:37:53.728[0m | [1m[38;2;100;149;237mINFO    [0m | [36mSiliconDriver  [0m - Detected PCI devices: [0]
+2025-01-31T17:37:53.7292117Z [32m2025-01-31 17:37:53.728[0m | [1m[38;2;100;149;237mINFO    [0m | [36mSiliconDriver  [0m - Using local chip ids: {0} and remote chip ids {}
+2025-01-31T17:37:53.7406668Z [32m2025-01-31 17:37:53.740[0m | [1m[38;2;255;165;000mWARNING [0m | [36mSiliconDriver  [0m - init_detect_tt_device_numanodes(): Could not determine NumaNodeSet for TT device (physical_device_id: 0 pci_bus_id: 0000:07:00.0)
+2025-01-31T17:37:53.7408994Z [32m2025-01-31 17:37:53.740[0m | [1m[38;2;255;165;000mWARNING [0m | [36mSiliconDriver  [0m - Could not find NumaNodeSet for TT Device (physical_device_id: 0 pci_bus_id: 0000:07:00.0)
+2025-01-31T17:37:53.7419341Z [32m2025-01-31 17:37:53.741[0m | [1m[38;2;255;165;000mWARNING [0m | [36mSiliconDriver  [0m - bind_area_memory_nodeset(): Unable to determine TT Device to NumaNode mapping for physical_device_id: 0. Skipping membind.
+2025-01-31T17:37:53.7425056Z [32m2025-01-31 17:37:53.741[0m | [1m[38;2;255;165;000mWARNING [0m | [36mSiliconDriver  [0m - ---- ttSiliconDevice::init_hugepage: bind_area_to_memory_nodeset() failed (physical_device_id: 0 ch: 0). Hugepage allocation is not on NumaNode matching TT Device. Side-Effect is decreased Device->Host perf (Issue #893).
+2025-01-31T17:37:53.7575659Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Initializing device 0. Program cache is NOT enabled
+2025-01-31T17:37:53.7577121Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | AI CLK for device 0 is:   1202 MHz
+2025-01-31T17:37:53.7584574Z [38;2;000;128;000m           BuildKernels[0m | [1m[38;2;100;149;237mINFO    [0m | GIT_COMMIT_HASH not found
+2025-01-31T17:37:57.3324675Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;255;165;000mWARNING [0m | Circular buffer indices are not contiguous starting at 0. This will hurt dispatch performance. Non-contiguous indices: 3,4,5. First unused index: 2. Kernels: reader_bmm_tile_layout_in1_receiver_writer_padding, reader_bmm_tile_layout_in0_receiver, bmm_large_block_zm_fused_bias_activation
+2025-01-31T17:37:57.3328100Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;255;165;000mWARNING [0m | Circular buffer indices are not contiguous starting at 0. This will hurt dispatch performance. Non-contiguous indices: 3,4,5. First unused index: 2. Kernels: reader_bmm_tile_layout_in1_receiver_writer_padding, reader_bmm_tile_layout_in0_sender_padding, bmm_large_block_zm_fused_bias_activation
+2025-01-31T17:37:57.3331314Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;255;165;000mWARNING [0m | Circular buffer indices are not contiguous starting at 0. This will hurt dispatch performance. Non-contiguous indices: 3,4,5. First unused index: 2. Kernels: reader_bmm_tile_layout_in1_sender_writer_padding, reader_bmm_tile_layout_in0_receiver, bmm_large_block_zm_fused_bias_activation
+2025-01-31T17:37:57.3334436Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;255;165;000mWARNING [0m | Circular buffer indices are not contiguous starting at 0. This will hurt dispatch performance. Non-contiguous indices: 3,4,5. First unused index: 2. Kernels: reader_bmm_tile_layout_in1_sender_writer_padding, reader_bmm_tile_layout_in0_sender_padding, bmm_large_block_zm_fused_bias_activation
+2025-01-31T17:37:58.3889742Z PASSED[38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Closing device 0
+2025-01-31T17:37:58.3898629Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Disabling and clearing program cache on device 0
+2025-01-31T17:37:58.3909582Z
+2025-01-31T17:37:58.3917004Z models/experimental/bert_large_performant/unit_tests/test_bert_large_ff1_matmul.py::test_bert_large_ff1_matmul_test[BFLOAT8_B-in0_L1-in1_L1-bias_L1-out_L1-no_activation] [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Initializing device 0. Program cache is NOT enabled
+2025-01-31T17:37:58.3960546Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | AI CLK for device 0 is:   1202 MHz
+2025-01-31T17:37:58.3964232Z [38;2;000;128;000m           BuildKernels[0m | [1m[38;2;100;149;237mINFO    [0m | GIT_COMMIT_HASH not found
+2025-01-31T17:38:00.6102558Z PASSED[38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Closing device 0
+2025-01-31T17:38:00.6112676Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Disabling and clearing program cache on device 0
+2025-01-31T17:38:00.6121983Z
+2025-01-31T17:38:00.6129399Z models/experimental/bert_large_performant/unit_tests/test_bert_large_ff1_matmul.py::test_bert_large_ff1_matmul_test[BFLOAT16-in0_L1-in1_L1-bias_L1-out_L1-gelu_activation] [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Initializing device 0. Program cache is NOT enabled
+2025-01-31T17:38:00.6182007Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | AI CLK for device 0 is:   1202 MHz
+2025-01-31T17:38:00.6187432Z [38;2;000;128;000m           BuildKernels[0m | [1m[38;2;100;149;237mINFO    [0m | GIT_COMMIT_HASH not found
+2025-01-31T17:38:00.6268434Z SKIPPED (Skipping test since these tensors won't fit on device!)[38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Closing device 0
+2025-01-31T17:38:00.6278459Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Disabling and clearing program cache on device 0
+2025-01-31T17:38:00.6284187Z
+2025-01-31T17:38:00.6293337Z models/experimental/bert_large_performant/unit_tests/test_bert_large_ff1_matmul.py::test_bert_large_ff1_matmul_test[BFLOAT16-in0_L1-in1_L1-bias_L1-out_L1-no_activation] [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Initializing device 0. Program cache is NOT enabled
+2025-01-31T17:38:00.6295138Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | AI CLK for device 0 is:   1202 MHz
+2025-01-31T17:38:00.6296031Z [38;2;000;128;000m           BuildKernels[0m | [1m[38;2;100;149;237mINFO    [0m | GIT_COMMIT_HASH not found
+2025-01-31T17:38:00.6373646Z SKIPPED (Skipping test since these tensors won't fit on device!)[38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Closing device 0
+2025-01-31T17:38:00.6381176Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Disabling and clearing program cache on device 0
+2025-01-31T17:38:00.6386470Z
+2025-01-31T17:38:00.6391745Z models/experimental/bert_large_performant/unit_tests/test_bert_large_ff2_matmul.py::test_bert_large_ff2_matmul_test[BFLOAT8_B-in0_L1-in1_L1-bias_L1-out_L1] [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Initializing device 0. Program cache is NOT enabled
+2025-01-31T17:38:00.6393492Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | AI CLK for device 0 is:   1202 MHz
+2025-01-31T17:38:00.6394393Z [38;2;000;128;000m           BuildKernels[0m | [1m[38;2;100;149;237mINFO    [0m | GIT_COMMIT_HASH not found
+2025-01-31T17:38:04.0060007Z PASSED[38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Closing device 0
+2025-01-31T17:38:04.0069724Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Disabling and clearing program cache on device 0
+2025-01-31T17:38:04.0080320Z
+2025-01-31T17:38:04.0088294Z models/experimental/bert_large_performant/unit_tests/test_bert_large_ff2_matmul.py::test_bert_large_ff2_matmul_test[BFLOAT16-in0_L1-in1_L1-bias_L1-out_L1] [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Initializing device 0. Program cache is NOT enabled
+2025-01-31T17:38:04.0121979Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | AI CLK for device 0 is:   1202 MHz
+2025-01-31T17:38:04.0127499Z [38;2;000;128;000m           BuildKernels[0m | [1m[38;2;100;149;237mINFO    [0m | GIT_COMMIT_HASH not found
+2025-01-31T17:38:07.1841595Z PASSED[38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Closing device 0
+2025-01-31T17:38:07.1850632Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Disabling and clearing program cache on device 0
+2025-01-31T17:38:07.1861866Z
+2025-01-31T17:38:07.1870132Z models/experimental/bert_large_performant/unit_tests/test_bert_large_fused_qkv_matmul.py::test_bert_large_fused_qkv_matmul_test[BFLOAT8_B-in0_L1-in1_L1-bias_L1-out_L1] [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Initializing device 0. Program cache is NOT enabled
+2025-01-31T17:38:07.1941237Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | AI CLK for device 0 is:   1202 MHz
+2025-01-31T17:38:07.1946417Z [38;2;000;128;000m           BuildKernels[0m | [1m[38;2;100;149;237mINFO    [0m | GIT_COMMIT_HASH not found
+2025-01-31T17:38:09.5466813Z PASSED[38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Closing device 0
+2025-01-31T17:38:09.5477018Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Disabling and clearing program cache on device 0
+2025-01-31T17:38:09.5489601Z
+2025-01-31T17:38:09.5498098Z models/experimental/bert_large_performant/unit_tests/test_bert_large_fused_qkv_matmul.py::test_bert_large_fused_qkv_matmul_test[BFLOAT16-in0_L1-in1_L1-bias_L1-out_L1] [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Initializing device 0. Program cache is NOT enabled
+2025-01-31T17:38:09.5500346Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | AI CLK for device 0 is:   1202 MHz
+2025-01-31T17:38:09.5506300Z [38;2;000;128;000m           BuildKernels[0m | [1m[38;2;100;149;237mINFO    [0m | GIT_COMMIT_HASH not found
+2025-01-31T17:38:12.0732613Z PASSED[38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Closing device 0
+2025-01-31T17:38:12.0743472Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Disabling and clearing program cache on device 0
+2025-01-31T17:38:12.0754492Z
+2025-01-31T17:38:12.0763020Z models/experimental/bert_large_performant/unit_tests/test_bert_large_selfout_matmul.py::test_bert_large_selfout_matmul_test[BFLOAT8_B-in0_L1-in1_L1-bias_L1-out_L1] [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Initializing device 0. Program cache is NOT enabled
+2025-01-31T17:38:12.0830179Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | AI CLK for device 0 is:   1202 MHz
+2025-01-31T17:38:12.0836054Z [38;2;000;128;000m           BuildKernels[0m | [1m[38;2;100;149;237mINFO    [0m | GIT_COMMIT_HASH not found
+2025-01-31T17:38:13.6279304Z PASSED[38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Closing device 0
+2025-01-31T17:38:13.6289469Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Disabling and clearing program cache on device 0
+2025-01-31T17:38:13.6302384Z
+2025-01-31T17:38:13.6310501Z models/experimental/bert_large_performant/unit_tests/test_bert_large_selfout_matmul.py::test_bert_large_selfout_matmul_test[BFLOAT16-in0_L1-in1_L1-bias_L1-out_L1] [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | Initializing device 0. Program cache is NOT enabled
+2025-01-31T17:38:13.6312629Z [38;2;000;128;000m                  Metal[0m | [1m[38;2;100;149;237mINFO    [0m | AI CLK for device 0 is:   1202 MHz
+2025-01-31T17:38:13.6314051Z [38;2;000;128;000m           BuildKernels[0m | [1m[38;2;100;149;237mINFO    [0m | GIT_COMMIT_HASH not found
+2025-01-31T18:22:14.3892863Z ##[error]The action has timed out.
+2025-01-31T18:22:14.3942660Z Prepare all required actions
+2025-01-31T18:22:14.3943088Z Getting action download info
+2025-01-31T18:22:14.6993893Z Download action repository 'slackapi/slack-github-action@v1.26.0' (SHA:70cd7be8e40a46e8b0eced40b0de447bdb42f68e)
+2025-01-31T18:22:15.3695412Z ##[group]Run ./.github/actions/slack-report
+2025-01-31T18:22:15.3695810Z with:
+2025-01-31T18:22:15.3696819Z   slack_webhook_url: ***
+2025-01-31T18:22:15.3697145Z   owner: U06CXU895AP
+2025-01-31T18:22:15.3697685Z env:
+2025-01-31T18:22:15.3697935Z   LOGURU_LEVEL: INFO
+2025-01-31T18:22:15.3698232Z   IMAGE_TAG: latest
+2025-01-31T18:22:15.3698765Z   TT_METAL_DOCKER_IMAGE_TAG: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:latest
+2025-01-31T18:22:15.3699574Z   TT_METAL_REF_IMAGE_TAG: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:latest
+2025-01-31T18:22:15.3700139Z   RUNNER_UID: 1000
+2025-01-31T18:22:15.3700434Z   RUNNER_GID: 1000
+2025-01-31T18:22:15.3700749Z ##[endgroup]
+2025-01-31T18:22:15.3756743Z ##[group]Run slackapi/slack-github-action@v1.26.0
+2025-01-31T18:22:15.3757149Z with:
+2025-01-31T18:22:15.3758453Z   payload: {
+  "text": "just so you know `tt-aho` broke All post-commit tests with https://github.com/tenstorrent/tt-metal/commit/d354e26cacfcd8e868089aabfa9690f43eb56e5d at https://github.com/tenstorrent/tt-metal/actions/runs/13077087562",
+  "owner": "U06CXU895AP"
+}
+
+2025-01-31T18:22:15.3759894Z   payload-file-path-parsed: true
+2025-01-31T18:22:15.3760263Z env:
+2025-01-31T18:22:15.3760637Z   LOGURU_LEVEL: INFO
+2025-01-31T18:22:15.3760967Z   IMAGE_TAG: latest
+2025-01-31T18:22:15.3761520Z   TT_METAL_DOCKER_IMAGE_TAG: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:latest
+2025-01-31T18:22:15.3762332Z   TT_METAL_REF_IMAGE_TAG: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:latest
+2025-01-31T18:22:15.3762914Z   RUNNER_UID: 1000
+2025-01-31T18:22:15.3763195Z   RUNNER_GID: 1000
+2025-01-31T18:22:15.3763876Z   SLACK_WEBHOOK_URL: ***
+2025-01-31T18:22:15.3764192Z ##[endgroup]
+2025-01-31T18:22:16.0011892Z Prepare all required actions
+2025-01-31T18:22:16.0012409Z Getting action download info
+2025-01-31T18:22:16.1267652Z Download action repository 'actions/upload-artifact@v4' (SHA:65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08)
+2025-01-31T18:22:16.8246822Z ##[group]Run ./.github/actions/upload-artifact-with-job-uuid
+2025-01-31T18:22:16.8247489Z with:
+2025-01-31T18:22:16.8247875Z   path: generated/test_reports/
+
+2025-01-31T18:22:16.8248362Z   prefix: test_reports_
+2025-01-31T18:22:16.8248804Z env:
+2025-01-31T18:22:16.8249140Z   LOGURU_LEVEL: INFO
+2025-01-31T18:22:16.8249546Z   IMAGE_TAG: latest
+2025-01-31T18:22:16.8250257Z   TT_METAL_DOCKER_IMAGE_TAG: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:latest
+2025-01-31T18:22:16.8251407Z   TT_METAL_REF_IMAGE_TAG: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:latest
+2025-01-31T18:22:16.8252489Z   RUNNER_UID: 1000
+2025-01-31T18:22:16.8252909Z   RUNNER_GID: 1000
+2025-01-31T18:22:16.8253270Z ##[endgroup]
+2025-01-31T18:22:16.8282945Z ##[group]Run uuid=$(uuidgen)
+2025-01-31T18:22:16.8283448Z [36;1muuid=$(uuidgen)[0m
+2025-01-31T18:22:16.8283935Z [36;1martifact_name="test_reports_$uuid"[0m
+2025-01-31T18:22:16.8284904Z [36;1mecho "[UPLOAD-ARTIFACT-UUID] $artifact_name"[0m
+2025-01-31T18:22:16.8285678Z [36;1mecho "artifact-name=$artifact_name" >> "$GITHUB_OUTPUT"[0m
+2025-01-31T18:22:16.8309544Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2025-01-31T18:22:16.8310146Z env:
+2025-01-31T18:22:16.8310519Z   LOGURU_LEVEL: INFO
+2025-01-31T18:22:16.8310930Z   IMAGE_TAG: latest
+2025-01-31T18:22:16.8311660Z   TT_METAL_DOCKER_IMAGE_TAG: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:latest
+2025-01-31T18:22:16.8312776Z   TT_METAL_REF_IMAGE_TAG: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:latest
+2025-01-31T18:22:16.8313584Z   RUNNER_UID: 1000
+2025-01-31T18:22:16.8313974Z   RUNNER_GID: 1000
+2025-01-31T18:22:16.8314347Z ##[endgroup]
+2025-01-31T18:22:16.8374822Z [UPLOAD-ARTIFACT-UUID] test_reports_b1aa39d7-0f73-44e6-b411-eba3d78e234c
+2025-01-31T18:22:16.8466492Z ##[group]Run actions/upload-artifact@v4
+2025-01-31T18:22:16.8466923Z with:
+2025-01-31T18:22:16.8467307Z   name: test_reports_b1aa39d7-0f73-44e6-b411-eba3d78e234c
+2025-01-31T18:22:16.8467810Z   path: generated/test_reports/
+
+2025-01-31T18:22:16.8468210Z   if-no-files-found: warn
+2025-01-31T18:22:16.8468557Z   compression-level: 6
+2025-01-31T18:22:16.8468901Z   overwrite: false
+2025-01-31T18:22:16.8469556Z   include-hidden-files: false
+2025-01-31T18:22:16.8469911Z env:
+2025-01-31T18:22:16.8470206Z   LOGURU_LEVEL: INFO
+2025-01-31T18:22:16.8470538Z   IMAGE_TAG: latest
+2025-01-31T18:22:16.8471112Z   TT_METAL_DOCKER_IMAGE_TAG: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:latest
+2025-01-31T18:22:16.8471963Z   TT_METAL_REF_IMAGE_TAG: ghcr.io/tenstorrent/tt-metal/tt-metalium/ubuntu-20.04-amd64:latest
+2025-01-31T18:22:16.8472590Z   RUNNER_UID: 1000
+2025-01-31T18:22:16.8472918Z   RUNNER_GID: 1000
+2025-01-31T18:22:16.8473242Z ##[endgroup]
+2025-01-31T18:22:17.1181331Z With the provided path, there will be 1 file uploaded
+2025-01-31T18:22:17.1186968Z Artifact name is valid!
+2025-01-31T18:22:17.1188499Z Root directory input is valid!
+2025-01-31T18:22:17.3560712Z Beginning upload of artifact content to blob storage
+2025-01-31T18:22:17.7032219Z Uploaded bytes 710
+2025-01-31T18:22:17.7590920Z Finished uploading artifact content to blob storage!
+2025-01-31T18:22:17.7596641Z SHA256 hash of uploaded artifact zip is ded67d2e48f5cbefef2792949cce3a42755562745be72cd49b58b950d972844b
+2025-01-31T18:22:17.7601005Z Finalizing artifact upload
+2025-01-31T18:22:17.8614701Z Artifact test_reports_b1aa39d7-0f73-44e6-b411-eba3d78e234c.zip successfully finalized. Artifact ID 2518531096
+2025-01-31T18:22:17.8617935Z Artifact test_reports_b1aa39d7-0f73-44e6-b411-eba3d78e234c has been successfully uploaded! Final size is 710 bytes. Artifact ID is 2518531096
+2025-01-31T18:22:17.8628613Z Artifact download URL: https://github.com/tenstorrent/tt-metal/actions/runs/13077087562/artifacts/2518531096
+2025-01-31T18:22:17.8861901Z Post job cleanup.
+2025-01-31T18:22:17.8907014Z Post job cleanup.
+2025-01-31T18:22:18.2452190Z [command]/usr/bin/docker logout https://ghcr.io
+2025-01-31T18:22:18.2631736Z Removing login credentials for ghcr.io
+2025-01-31T18:22:18.2680886Z ##[group]Post cache
+2025-01-31T18:22:18.2682469Z State not set
+2025-01-31T18:22:18.2683496Z ##[endgroup]
+2025-01-31T18:22:18.2850140Z Post job cleanup.
+2025-01-31T18:22:18.2920074Z Post job cleanup.
+2025-01-31T18:22:18.4054975Z [command]/usr/bin/git version
+2025-01-31T18:22:18.4097293Z git version 2.25.1
+2025-01-31T18:22:18.4144833Z Temporarily overriding HOME='/home/ubuntu/actions-runner/_work/_temp/673e3987-7f74-48c2-bf4d-785dd6d1c911' before making global git config changes
+2025-01-31T18:22:18.4145954Z Adding repository directory to the temporary git global config as a safe directory
+2025-01-31T18:22:18.4150426Z [command]/usr/bin/git config --global --add safe.directory /home/ubuntu/actions-runner/_work/tt-metal/tt-metal
+2025-01-31T18:22:18.4196813Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
+2025-01-31T18:22:18.4229202Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2025-01-31T18:22:18.4489638Z Entering 'models/demos/t3000/llama2_70b/reference/llama'
+2025-01-31T18:22:18.4534781Z Entering 'tt-train/3rd_party/wandb-cpp'
+2025-01-31T18:22:18.4592154Z Entering 'tt_metal/third_party/tracy'
+2025-01-31T18:22:18.4644054Z Entering 'tt_metal/third_party/tt_llk_blackhole'
+2025-01-31T18:22:18.4693727Z Entering 'tt_metal/third_party/tt_llk_grayskull'
+2025-01-31T18:22:18.4738187Z Entering 'tt_metal/third_party/tt_llk_wormhole_b0'
+2025-01-31T18:22:18.4782998Z Entering 'tt_metal/third_party/umd'
+2025-01-31T18:22:18.4846142Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2025-01-31T18:22:18.4871261Z http.https://github.com/.extraheader
+2025-01-31T18:22:18.4883601Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
+2025-01-31T18:22:18.4913406Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2025-01-31T18:22:18.5161391Z Entering 'models/demos/t3000/llama2_70b/reference/llama'
+2025-01-31T18:22:18.5184395Z http.https://github.com/.extraheader
+2025-01-31T18:22:18.5220271Z Entering 'tt-train/3rd_party/wandb-cpp'
+2025-01-31T18:22:18.5244354Z http.https://github.com/.extraheader
+2025-01-31T18:22:18.5277872Z Entering 'tt_metal/third_party/tracy'
+2025-01-31T18:22:18.5305395Z http.https://github.com/.extraheader
+2025-01-31T18:22:18.5340587Z Entering 'tt_metal/third_party/tt_llk_blackhole'
+2025-01-31T18:22:18.5363833Z http.https://github.com/.extraheader
+2025-01-31T18:22:18.5397323Z Entering 'tt_metal/third_party/tt_llk_grayskull'
+2025-01-31T18:22:18.5425433Z http.https://github.com/.extraheader
+2025-01-31T18:22:18.5464131Z Entering 'tt_metal/third_party/tt_llk_wormhole_b0'
+2025-01-31T18:22:18.5493399Z http.https://github.com/.extraheader
+2025-01-31T18:22:18.5526161Z Entering 'tt_metal/third_party/umd'
+2025-01-31T18:22:18.5552727Z http.https://github.com/.extraheader
+2025-01-31T18:22:18.5704911Z A job completed hook has been configured by the self-hosted runner administrator
+2025-01-31T18:22:18.5735848Z ##[group]Run '/opt/tt_metal_infra/scripts/ci/grayskull/cleanup.sh'
+2025-01-31T18:22:18.5755448Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
+2025-01-31T18:22:18.5755963Z ##[endgroup]
+2025-01-31T18:22:18.5876083Z Current date / time is Fri Jan 31 18:22:18 UTC 2025
+2025-01-31T18:22:18.8269866Z Cleaning up orphan processes

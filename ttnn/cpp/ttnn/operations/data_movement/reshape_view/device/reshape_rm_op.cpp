@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/data_movement/reshape_view/device/reshape_rm_op.hpp"
-#include <tt-metalium/host_api.hpp>
 
 #include <cstdint>
 
@@ -26,17 +25,17 @@ std::vector<TensorSpec> RM_RESHAPE_STRUCT::compute_output_specs(const std::vecto
     auto mem_config = this->output_mem_config;
     if (input_tensor_a.memory_config().is_sharded()) {
         auto shard_spec = input_tensor_a.shard_spec().value();
-        shard_spec.shape[0] = output_shape[0];
+        shard_spec.shape[0] = logical_output_shape[0];
         mem_config.shard_spec = shard_spec;
     }
     return {TensorSpec(
-        output_shape.logical_shape(),
+        logical_output_shape,
         TensorLayout::fromPaddedShape(
             input_tensor_a.get_dtype(),
             PageConfig(input_tensor_a.get_layout()),
             mem_config,
-            output_shape.logical_shape(),
-            output_shape.padded_shape()))};
+            logical_output_shape,
+            padded_output_shape))};
 }
 
 operation::ProgramWithCallbacks RM_RESHAPE_STRUCT::create_program( const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const

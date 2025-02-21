@@ -8,6 +8,8 @@
 #include <tt-metalium/event.hpp>
 #include "ttnn/distributed/types.hpp"
 
+#include <tt-metalium/host_api.hpp>
+
 using namespace tt::tt_metal;
 
 namespace ttnn::events {
@@ -29,28 +31,28 @@ std::shared_ptr<Event> create_event(IDevice* device) {
     return event;
 }
 
-void record_event(uint8_t cq_id, const std::shared_ptr<Event>& event, const std::vector<SubDeviceId>& sub_device_ids) {
+void record_event(QueueId cq_id, const std::shared_ptr<Event>& event, const std::vector<SubDeviceId>& sub_device_ids) {
     IDevice* device = event->device;
     device->push_work([device, event, cq_id, sub_device_ids] {
-        EnqueueRecordEvent(device->command_queue(cq_id), event, sub_device_ids);
+        EnqueueRecordEvent(device->command_queue(*cq_id), event, sub_device_ids);
     });
 }
 
-void wait_for_event(uint8_t cq_id, const std::shared_ptr<Event>& event) {
+void wait_for_event(QueueId cq_id, const std::shared_ptr<Event>& event) {
     IDevice* device = event->device;
-    device->push_work([device, event, cq_id] { EnqueueWaitForEvent(device->command_queue(cq_id), event); });
+    device->push_work([device, event, cq_id] { EnqueueWaitForEvent(device->command_queue(*cq_id), event); });
 }
 
 MultiDeviceEvent create_event(MeshDevice* mesh_device) { return MultiDeviceEvent(mesh_device); }
 
 void record_event(
-    uint8_t cq_id, const MultiDeviceEvent& multi_device_event, const std::vector<SubDeviceId>& sub_device_ids) {
+    QueueId cq_id, const MultiDeviceEvent& multi_device_event, const std::vector<SubDeviceId>& sub_device_ids) {
     for (auto& event : multi_device_event.events) {
         record_event(cq_id, event, sub_device_ids);
     }
 }
 
-void wait_for_event(uint8_t cq_id, const MultiDeviceEvent& multi_device_event) {
+void wait_for_event(QueueId cq_id, const MultiDeviceEvent& multi_device_event) {
     for (auto& event : multi_device_event.events) {
         wait_for_event(cq_id, event);
     }

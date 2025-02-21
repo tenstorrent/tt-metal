@@ -97,7 +97,7 @@ def run(
             scalar = torch.tensor(1, dtype=torch.bfloat16).uniform_(-100, 100).item()
 
     golden_function = ttnn.get_golden_function(ttnn.remainder)
-    torch_output_tensor = golden_function(torch_input_tensor_a, scalar)
+    torch_output_tensor = golden_function(torch_input_tensor_a, scalar, device=device)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,

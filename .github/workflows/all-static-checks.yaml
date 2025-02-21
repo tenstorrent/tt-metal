@@ -67,6 +67,19 @@ jobs:
         run: sudo apt-get install -y aspell
       - name: Run checks on docs
         run: TT_METAL_HOME=$(pwd) docs/spellcheck.sh
+  check-docs-links:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          clean: false
+      - name: Link Checker
+        uses: lycheeverse/lychee-action@v2
+        with:
+          args: --verbose './README.md' './INSTALLING.md'  './docs/source/**/*.rst' './docs/source/**/*.md'
+          fail: true
   check-forbidden-imports:
     runs-on: ubuntu-latest
     steps:
@@ -104,23 +117,13 @@ jobs:
     - uses: lukka/get-cmake@b516803a3c5fac40e2e922349d15cdebdba01e60
       if: steps.changed-cmake-files.outputs.any_changed == 'true'
       with:
-        cmakeVersion: "~3.18.0"
+        cmakeVersion: "~3.24.0"
     - name: Check CMake version
       if: steps.changed-cmake-files.outputs.any_changed == 'true'
       run: cmake --version
-    - name: Install LLVM and Clang
+    - name: Install Build Dependencies
       if: steps.changed-cmake-files.outputs.any_changed == 'true'
-      run: |
-        wget https://apt.llvm.org/llvm.sh
-        chmod u+x llvm.sh
-        sudo ./llvm.sh 17
-    - name: Install deps
-      if: steps.changed-cmake-files.outputs.any_changed == 'true'
-      env:
-        DEBIAN_FRONTEND: noninteractive
-      run: |
-        sudo apt update
-        sudo xargs -a scripts/docker/requirements-22.04.txt apt install -y --no-install-recommends
+      run: sudo ./install_dependencies.sh --mode build
     - name: Check CMake compatibility
       if: steps.changed-cmake-files.outputs.any_changed == 'true'
       env:
@@ -129,5 +132,4 @@ jobs:
       # TODO: Use a lukka/run-cmake with a preset after upgrading to a more modern CMake
       run: |
         echo "Checking compatibility with $(cmake --version)"
-        # FIXME: Why is HAVE_STD_REGEX needed? Clean up when we solve it.
-        cmake -DCMAKE_TOOLCHAIN_FILE=cmake/x86_64-linux-clang-17-libcpp-toolchain.cmake -DHAVE_STD_REGEX=ON -B build .
+        cmake -D BUILD_PROGRAMMING_EXAMPLES=ON -D TT_METAL_BUILD_TESTS=ON -B build .

@@ -123,7 +123,7 @@ def test_unet_trace_perf_multi_device(
     total_num_samples = result.batch * result.groups * result.num_devices
     expected_inference_time = total_num_samples / expected_throughput
     prep_perf_report(
-        model_name="unet_shallow-trace_2cq_same_io-multi_device",
+        model_name=model_name,
         batch_size=total_num_samples,
         inference_and_compile_time=result.inference_and_compile_time,
         inference_time=result.inference_time,

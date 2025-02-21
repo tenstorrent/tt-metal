@@ -125,7 +125,7 @@ kernel:
 ```
 namespace NAMESPACE {
 void MAIN {
-  mm_init();
+  mm_init(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
   acquire_dst();
 
   cb_wait_front(tt::CBIndex::c_0, /* number of tiles */ 1);
@@ -297,7 +297,7 @@ with `tile_regs_..()` functions like:
 ```
 namespace NAMESPACE {
 void MAIN {
-  mm_init();
+  mm_init(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
 
   cb_wait_front(tt::CBIndex::c_0, /* number of tiles */ 1);
   cb_wait_front(tt::CBIndex::c_1, /* number of tiles */ 1);
@@ -372,7 +372,7 @@ void MAIN {
     constexpr auto cb_out0 =  tt::CBIndex::c_16;
 
     binary_op_init_common(cb_in0, cb_in1, cb_out0);
-    add_tiles_init();
+    add_tiles_init(cb_in0, cb_in1);
 
     for(uint32_t block = 0; block < per_core_block_cnt; ++block) {
 

@@ -11,7 +11,7 @@
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/types.hpp"
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "cpp/ttnn/operations/data_movement/squeeze/squeeze.hpp"
 #include "ttnn/operations/core/core.hpp"
 
@@ -37,7 +37,7 @@ inline Tensor prod_all(const Tensor& input_a, const MemoryConfig& output_mem_con
     if (formatted_input_tensor.get_layout() == Layout::ROW_MAJOR) {
         auto a_pad_shape = AutoFormat::pad_to_tile_shape(input_a.get_padded_shape(), false, false, true, true);
         auto out_shape = input_a.get_padded_shape();
-        out_shape = ttnn::SimpleShape({out_shape[0], out_shape[1], out_shape[2], out_shape[3]});
+        out_shape = ttnn::Shape({out_shape[0], out_shape[1], out_shape[2], out_shape[3]});
         if (!AutoFormat::check_input_tensor_format(input_a, a_pad_shape)) {
             formatted_input_tensor =
                 AutoFormat::format_input_tensor(input_a, input_a.device(), a_pad_shape, 1.0, Layout::TILE);
@@ -53,7 +53,7 @@ inline Tensor prod_nc(const Tensor& temp, int64_t dim, const MemoryConfig& outpu
     if (formatted_input_tensor.get_layout() == Layout::ROW_MAJOR) {
         auto a_pad_shape = AutoFormat::pad_to_tile_shape(temp.get_padded_shape(), false, false, true, true);
         auto out_shape = temp.get_padded_shape();
-        out_shape = ttnn::SimpleShape({out_shape[0], out_shape[1], out_shape[2], out_shape[3]});
+        out_shape = ttnn::Shape({out_shape[0], out_shape[1], out_shape[2], out_shape[3]});
         if (!AutoFormat::check_input_tensor_format(temp, a_pad_shape)) {
             formatted_input_tensor =
                 AutoFormat::format_input_tensor(temp, temp.device(), a_pad_shape, 1.0, Layout::TILE);
@@ -68,7 +68,7 @@ inline Tensor prod_nc(const Tensor& temp, int64_t dim, const MemoryConfig& outpu
         input_shape[2],
         input_shape[3]};
 
-    auto ttnn_shape = ttnn::SimpleShape(required);
+    auto ttnn_shape = ttnn::Shape(required);
     auto ttnn_device = formatted_input_tensor.device();
 
     return tt::operations::primary::prod_nc(
@@ -132,8 +132,7 @@ Tensor ProdOperation::invoke(
         const auto& input_shape = input_tensor_4d.get_logical_shape();
         ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
         ttnn::SmallVector<uint32_t> end_index = {input_shape[0], input_shape[1], 1, input_shape[3]};
-        result = ttnn::squeeze_from_4D(
-            ttnn::slice(DefaultQueueId, required, start_index, end_index, step, std::nullopt), old_rank);
+        result = ttnn::squeeze_from_4D(ttnn::slice(required, start_index, end_index, step, std::nullopt), old_rank);
     } else {  // dim 3
         // permute
         ttnn::SmallVector<int64_t> after_permute_dims = {1, 2, 0, 3};
@@ -142,7 +141,7 @@ Tensor ProdOperation::invoke(
         const auto& input_shape = input_tensor_4d.get_logical_shape();
         ttnn::SmallVector<uint32_t> start_index = {0, 0, 0, 0};
         ttnn::SmallVector<uint32_t> end_index = {input_shape[0], input_shape[1], 1, input_shape[2]};
-        Tensor new_unpad_tensor = ttnn::slice(DefaultQueueId, required, start_index, end_index, step, std::nullopt);
+        Tensor new_unpad_tensor = ttnn::slice(required, start_index, end_index, step, std::nullopt);
         // permute back
         after_permute_dims = {0, 1, 3, 2};
         Tensor res_host = ttnn::permute(new_unpad_tensor, after_permute_dims, output_mem_config);

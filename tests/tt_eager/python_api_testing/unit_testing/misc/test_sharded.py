@@ -164,7 +164,7 @@ def test_sharded_rm(
         ),
     )
 
-    yt = ttnn.interleaved_to_sharded(xt, grid_size, shard_size, shard_scheme, shard_orientation)
+    yt = ttnn.interleaved_to_sharded(xt, grid_size, shard_size, shard_scheme, shard_orientation, keep_l1_aligned=True)
 
     zt = ttnn.sharded_to_interleaved(
         yt,
@@ -172,6 +172,7 @@ def test_sharded_rm(
             memory_layout=ttnn.TensorMemoryLayout.INTERLEAVED,
             buffer_type=ttnn.BufferType.L1,
         ),
+        is_l1_aligned=True,
     )
 
     tt_og = xt.cpu().to_torch()
@@ -1461,8 +1462,8 @@ def test_sharded_untilize_padded_shard(in_sharded, out_sharded, dtype, device, f
             xt,
             grid_size,
             [
-                math.ceil((xt.shape.with_tile_padding()[-2] // 32) / grid_size[0]) * 32,
-                xt.shape.with_tile_padding()[-1] // grid_size[1],
+                math.ceil((xt.padded_shape[-2] // 32) / grid_size[0]) * 32,
+                xt.padded_shape[-1] // grid_size[1],
             ],
             ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             ttnn.ShardOrientation.COL_MAJOR,
@@ -1547,8 +1548,8 @@ def test_sharded_binary_padded_shard(
             xt,
             grid_size,
             [
-                math.ceil((xt.shape.with_tile_padding()[-2] // 32) / grid_size[0]) * 32,
-                xt.shape.with_tile_padding()[-1] // grid_size[1],
+                math.ceil((xt.padded_shape[-2] // 32) / grid_size[0]) * 32,
+                xt.padded_shape[-1] // grid_size[1],
             ],
             ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             ttnn.ShardOrientation.COL_MAJOR,
@@ -1557,8 +1558,8 @@ def test_sharded_binary_padded_shard(
             yt,
             grid_size,
             [
-                math.ceil((xt.shape.with_tile_padding()[-2] // 32) / grid_size[0]) * 32,
-                xt.shape.with_tile_padding()[-1] // grid_size[1],
+                math.ceil((xt.padded_shape[-2] // 32) / grid_size[0]) * 32,
+                xt.padded_shape[-1] // grid_size[1],
             ],
             ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             ttnn.ShardOrientation.COL_MAJOR,
@@ -1621,8 +1622,8 @@ def test_block_sharded_untilize_with_unpadding(in_sharded, out_sharded, dtype, d
             xt,
             grid_size,
             [
-                math.ceil((xt.shape.with_tile_padding()[-2] // 32) / grid_size[0]) * 32,
-                xt.shape.with_tile_padding()[-1] // grid_size[1],
+                math.ceil((xt.padded_shape[-2] // 32) / grid_size[0]) * 32,
+                xt.padded_shape[-1] // grid_size[1],
             ],
             ttnn.TensorMemoryLayout.BLOCK_SHARDED,
             ttnn.ShardOrientation.COL_MAJOR,
@@ -1796,7 +1797,7 @@ def test_sharded_tilize_with_val_padding(input_shape, sharding_config, output_dt
             interleaved_mem_config,
         )
 
-    tt_got_back = yt.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+    tt_got_back = yt.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch_with_padded_shape()
 
     y = torch.nn.functional.pad(x, [0, 0, 0, roundup32(H) - H], "constant", 1.0)
 

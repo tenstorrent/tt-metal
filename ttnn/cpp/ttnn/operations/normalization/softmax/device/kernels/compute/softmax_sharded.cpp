@@ -25,7 +25,7 @@ ALWI void calc_numeric_stable(uint32_t cb_in, uint32_t cb_bcast_scaler, uint32_t
     reconfig_data_format(cb_in, cb_bcast_scaler);
     pack_reconfig_data_format(cb_max);
     cb_reserve_back(cb_max, 1);
-    reduce_init_delta<false, PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_max, cb_in, cb_bcast_scaler);
+    reduce_init_delta<false, PoolType::MAX, ReduceDim::REDUCE_ROW>(cb_in, cb_bcast_scaler, cb_max);
     cb_wait_front(cb_bcast_scaler, 1);
     for (uint32_t w = 0; w < block_w; w++) {
         constexpr uint32_t bcast_scaler0 = 0;
@@ -124,7 +124,7 @@ void MAIN {
         index_subblock_w_offset = 0;
 
 #ifdef CAUSAL_MASK
-        add_tiles_init();
+        add_tiles_init(cb_scale_mask, cb_fused_attn);
 #else
         add_bcast_rows_init_short(cb_scale_mask, cb_fused_attn);
 #endif
@@ -203,7 +203,7 @@ void MAIN {
 
         // sum(exp(x))
         ACQ();
-        reduce_init_delta<false>(cb_recipsumexps, cb_exps, cb_bcast_scaler);
+        reduce_init_delta<false>(cb_exps, cb_bcast_scaler, cb_recipsumexps);
         cb_wait_front(cb_exps, block_w);
         cb_wait_front(cb_bcast_scaler, 1);
         cb_reserve_back(cb_recipsumexps, 1);

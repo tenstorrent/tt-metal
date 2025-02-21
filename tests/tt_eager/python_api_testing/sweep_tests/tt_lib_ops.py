@@ -60,7 +60,7 @@ def linear(
     if bias is not None:
         tt_bias = setup_tt_tensor(bias, device, layout[2], input_mem_config[2], dtype[2])
 
-    _, __, out_features, in_features = tt_weight.shape.with_tile_padding()
+    _, __, out_features, in_features = tt_weight.padded_shape
     tt_linear = tt_Linear(in_features, out_features, tt_weight, tt_bias)
 
     t1 = tt_linear(t0)
@@ -1718,7 +1718,7 @@ def tilize_with_zero_padding(x, *args, device, dtype, layout, input_mem_config, 
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = ttnn.tilize_with_zero_padding(t0, memory_config=output_mem_config)
 
-    return t1.cpu().to_torch()
+    return t1.cpu().to_torch_with_padded_shape()
 
 
 @setup_host_and_device
@@ -1742,7 +1742,7 @@ def tilize_with_val_padding(
         memory_config=output_mem_config,
     )
 
-    return t1.cpu().to_torch()
+    return t1.cpu().to_torch_with_padded_shape()
 
 
 @setup_host_and_device
@@ -2224,7 +2224,10 @@ def tensor_pad(
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = t0.pad(output_tensor_shape, input_tensor_start, pad_value)
 
-    return tt2torch_tensor(t1)
+    tt_output = t1.cpu()
+    if tt_output.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+        tt_output = tt_output.to(ttnn.ROW_MAJOR_LAYOUT)
+    return tt_output.to_torch_with_padded_shape()
 
 
 @setup_host_and_device
@@ -2271,7 +2274,10 @@ def pad_to_tile(
     t0 = setup_tt_tensor(x, device, layout[0], input_mem_config[0], dtype[0])
     t1 = t0.pad_to_tile(pad_value)
 
-    return tt2torch_tensor(t1)
+    tt_output = t1.cpu()
+    if tt_output.get_layout() != ttnn.ROW_MAJOR_LAYOUT:
+        tt_output = tt_output.to(ttnn.ROW_MAJOR_LAYOUT)
+    return tt_output.to_torch_with_padded_shape()
 
 
 @setup_host_and_device

@@ -5,7 +5,7 @@ on:
     inputs:
       test_workflow_run_id:
         description: "Unique GitHub workflow run ID to use for test"
-        default: 1278872273u
+        default: 12788722730
         type: number
       test_workflow_run_attempt:
         description: "Run attempt of the workflow run"
@@ -14,6 +14,7 @@ on:
   workflow_run:
     workflows:
       - "All post-commit tests"
+      - "(Single-card) Tests for new models"
     types:
       - completed
 
@@ -46,14 +47,21 @@ jobs:
 
           echo "::notice title=target-workflow-link::The workflow being analyzed is available at https://github.com/tenstorrent/tt-metal/actions/runs/$run_id/attempts/$attempt_number"
       - name: Determine if we should continue
+        id: determine-should-continue
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          MAX_ATTEMPTS=5
-          if [[ "${{ steps.get-run-id-and-attempt.outputs.attempt_number }}" == "$MAX_ATTEMPTS" ]]; then
+          MAX_ATTEMPTS=3
+          read original_trigger conclusion <<< $(gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }} --jq '.event + " " + .conclusion')
+          if [[ "${{ steps.get-run-id-and-attempt.outputs.attempt-number }}" -ge "$MAX_ATTEMPTS" ]]; then
             echo "::notice title=no-continue-max-tries::This workflow has exceeded max tries. Not re-trying"
             should_continue=false
-          elif [[ "${{ github.event_name }}" != "workflow_dispatch" ]]; then
-            echo "::notice title=no-continue-is-on-branch::This workflow was not dispatched - not retrying"
+          elif [[ "$original_trigger" == "workflow_dispatch" ]]; then
+            echo "::notice title=no-continue-is-on-branch::This workflow was a workflow dispatched on a branch, not main. Not re-trying"
+            should_continue=false
+          elif [[ "$conclusion" != "failure" ]]; then
+            echo "::notice title=no-continue-did-not-fail::This workflow did not fail. Not re-trying"
             should_continue=false
           else
             should_continue=true
@@ -61,10 +69,16 @@ jobs:
 
           echo "should-continue=$should_continue" >> "$GITHUB_OUTPUT"
       - name: Re-run failed jobs
+        if: ${{ steps.determine-should-continue.outputs.should-continue == 'true' }}
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.RETRY_WORKFLOW_TOKEN }}
         run: |
           echo "Re-running jobs here"
+          # gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/timing
+          gh api --method POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/rerun-failed-jobs
       - uses: ./.github/actions/slack-report
         if: ${{ failure() }}
         with:

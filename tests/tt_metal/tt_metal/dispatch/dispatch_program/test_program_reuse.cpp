@@ -168,7 +168,7 @@ TEST_F(CommandQueueMultiDeviceFixture, TestProgramReuseSanity) {
     DummyProgramMultiCBConfig cb_config = {
         .cr_set = sem_cr_set, .cb_config_vector = {cb_config_0, cb_config_1, cb_config_2, cb_config_3}};
 
-    uint32_t rta_base_addr = devices_[0]->get_base_allocator_addr(HalMemType::L1);
+    uint32_t rta_base_addr = devices_[0]->allocator()->get_base_allocator_addr(HalMemType::L1);
     auto program = create_program_multi_core_rta(
         rta_program_config, sem_program_config, dummy_cr0_args, dummy_cr1_args, dummy_sems, cb_config, rta_base_addr);
 
@@ -259,7 +259,7 @@ TEST_F(CommandQueueMultiDeviceFixture, TestProgramReuseSanity) {
                 program->get_cb_base_addr(device, core_coord, CoreType::WORKER),
                 cb_config_buffer_size,
                 cb_config_vector);
-            uint32_t cb_addr = device->get_base_allocator_addr(HalMemType::L1);
+            uint32_t cb_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);
             for (uint32_t i = 0; i < cb_config.cb_config_vector.size(); i++) {
                 const uint32_t index = cb_config.cb_config_vector[i].cb_id * sizeof(uint32_t);
                 const uint32_t cb_num_pages = cb_config.cb_config_vector[i].num_pages;

@@ -4,11 +4,10 @@
 
 #include "permute.hpp"
 
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
 
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/experimental/auto_format/auto_format.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -82,6 +81,8 @@ ttnn::Tensor permute_impl(
             output = transpose_hc(transpose_wh(formatted_input_tensor));
         } else if (N == 0 && C == 3 && H == 2 && W == 1) {
             output = transpose_wh(transpose_hc(transpose_wh(formatted_input_tensor)));
+        } else {
+            TT_FATAL(false, "Sharded permute not supported for this permutation");
         }
     } else {
         if (N == 0 && C == 1 && H == 2 && W == 3) {
@@ -175,7 +176,7 @@ bool is_permute_nop(const ttnn::Tensor& a, const ttnn::SmallVector<uint32_t>& di
 }  // namespace detail
 
 ttnn::Tensor ExecutePermute::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::SmallVector<int64_t>& dims,
     const std::optional<MemoryConfig>& memory_config,

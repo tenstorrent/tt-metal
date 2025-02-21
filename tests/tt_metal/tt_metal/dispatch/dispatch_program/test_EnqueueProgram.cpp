@@ -12,13 +12,11 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/device_impl.hpp>
 #include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/kernel.hpp>
 #include "umd/device/tt_soc_descriptor.h"
-
-// TODO: ARCH_NAME specific, must remove
-#include "eth_l1_address_map.h"
 
 using std::vector;
 using namespace tt::tt_metal;
@@ -95,7 +93,7 @@ bool cb_config_successful(IDevice* device, Program& program, const DummyProgramM
     uint32_t cb_config_buffer_size =
         NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
 
-    uint32_t l1_unreserved_base = device->get_base_allocator_addr(HalMemType::L1);
+    uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
     for (const CoreRange& core_range : program_config.cr_set.ranges()) {
         for (const CoreCoord& core_coord : core_range) {
             tt::tt_metal::detail::ReadFromDeviceL1(
@@ -129,7 +127,8 @@ bool test_dummy_EnqueueProgram_with_runtime_args(IDevice* device, const CoreCoor
     auto eth_noc_xy = device->ethernet_core_from_logical_core(eth_core_coord);
 
     constexpr uint32_t num_runtime_args0 = 9;
-    constexpr uint32_t rta_base0 = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
+    uint32_t rta_base0 =
+        hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
     std::map<string, string> dummy_defines0 = {
         {"DATA_MOVEMENT", "1"},
         {"NUM_RUNTIME_ARGS", std::to_string(num_runtime_args0)},
@@ -151,7 +150,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args(IDevice* device, const CoreCoor
     vector<uint32_t> dummy_kernel0_args_readback = tt::llrt::read_hex_vec_from_core(
         device->id(),
         eth_noc_xy,
-        eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE,
+        hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED),
         dummy_kernel0_args.size() * sizeof(uint32_t));
 
     pass &= (dummy_kernel0_args == dummy_kernel0_args_readback);
@@ -264,7 +263,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args(
 
     CoreRangeSet cr_set = program_config.cr_set;
 
-    uint32_t rta_base_dm0 = device->get_base_allocator_addr(HalMemType::L1);
+    uint32_t rta_base_dm0 = device->allocator()->get_base_allocator_addr(HalMemType::L1);
     ;
     uint32_t rta_base_dm1 = rta_base_dm0 + num_runtime_args_dm0 * sizeof(uint32_t);
     uint32_t rta_base_compute = rta_base_dm1 + num_runtime_args_dm1 * sizeof(uint32_t);
@@ -370,7 +369,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
 
     CoreRangeSet cr_set = program_config.cr_set;
 
-    uint32_t rta_base_dm0 = device->get_base_allocator_addr(HalMemType::L1);
+    uint32_t rta_base_dm0 = device->allocator()->get_base_allocator_addr(HalMemType::L1);
     ;
     uint32_t rta_base_dm1 = rta_base_dm0 + 1024 * sizeof(uint32_t);
     uint32_t rta_base_compute = rta_base_dm1 + 2048 * sizeof(uint32_t);
@@ -637,7 +636,7 @@ bool test_increment_runtime_args_sanity(
 
     switch (riscv) {
         case tt::RISCV::BRISC:
-            unique_args_addr = device->get_base_allocator_addr(HalMemType::L1);
+            unique_args_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);
             common_args_addr = unique_args_addr + 3 * 256 * sizeof(uint32_t);
             compile_args[2] = unique_args_addr;
             compile_args[3] = common_args_addr;
@@ -652,7 +651,7 @@ bool test_increment_runtime_args_sanity(
                 });
             break;
         case tt::RISCV::NCRISC:
-            unique_args_addr = device->get_base_allocator_addr(HalMemType::L1) + 256 * sizeof(uint32_t);
+            unique_args_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1) + 256 * sizeof(uint32_t);
             common_args_addr = unique_args_addr + 4 * 256 * sizeof(uint32_t);
             compile_args[2] = unique_args_addr;
             compile_args[3] = common_args_addr;
@@ -667,7 +666,8 @@ bool test_increment_runtime_args_sanity(
                 });
             break;
         case tt::RISCV::COMPUTE:
-            unique_args_addr = device->get_base_allocator_addr(HalMemType::L1) + 2 * 256 * sizeof(uint32_t);
+            unique_args_addr =
+                device->allocator()->get_base_allocator_addr(HalMemType::L1) + 2 * 256 * sizeof(uint32_t);
             common_args_addr = unique_args_addr + 5 * 256 * sizeof(uint32_t);
             compile_args[2] = unique_args_addr;
             compile_args[3] = common_args_addr;
@@ -848,7 +848,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestMultiCBSharedAddressSpace
             program.get_cb_base_addr(device, core_coord, CoreType::WORKER),
             cb_config_buffer_size,
             cb_config_vector);
-        uint32_t cb_addr = device->get_base_allocator_addr(HalMemType::L1);
+        uint32_t cb_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);
         uint32_t intermediate_index = intermediate_cb * sizeof(uint32_t);
 
         bool addr_match_intermediate = cb_config_vector.at(intermediate_index) == (cb_addr);

@@ -3,20 +3,36 @@ name: "Code analysis"
 on:
   workflow_call:
     inputs:
-      os:
+      distro:
         required: false
         type: string
-        default: "ubuntu-22.04-amd64"
+        default: "ubuntu"
+      version:
+        required: false
+        type: string
+        default: "22.04"
+      architecture:
+        required: false
+        type: string
+        default: "amd64"
       full-scan:
         required: false
         type: boolean
         default: false
   workflow_dispatch:
     inputs:
-      os:
+      distro:
         required: false
         type: string
-        default: "ubuntu-22.04-amd64"
+        default: "ubuntu"
+      version:
+        required: false
+        type: string
+        default: "22.04"
+      architecture:
+        required: false
+        type: string
+        default: "amd64"
       full-scan:
         required: false
         type: boolean
@@ -27,51 +43,57 @@ jobs:
     uses: ./.github/workflows/build-docker-artifact.yaml
     secrets: inherit
     with:
-      os: ${{ inputs.os }}
-
+      distro: ${{ inputs.distro }}
+      version: ${{ inputs.version }}
+      architecture: ${{ inputs.architecture }}
   clang-tidy:
+    name: 🤖 Clang Tidy
     needs: build-docker-image
-    env:
-      ARCH_NAME: wormhole_b0
     runs-on:
       - build
       - in-service
+    container:
+      image: ${{ needs.build-docker-image.outputs.ci-build-tag }}
+      env:
+        CCACHE_TEMPDIR: /tmp/ccache
+        CARGO_HOME: /tmp/.cargo
+        TT_FROM_PRECOMPILED_DIR: /work
+      volumes:
+        - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
+        - /home/ubuntu/.ccache-ci:/github/home/.ccache # HOME is hardcoded for no clear reason: https://github.com/actions/runner/issues/863
+        - /mnt/MLPerf/ccache:/mnt/MLPerf/ccache
+      # Group 1457 is for the shared ccache drive
+      # tmpfs is for efficiency
+      options: >
+        --group-add 1457
+        --tmpfs /tmp
+    defaults:
+      run:
+        shell: bash
+        working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: Verify ccache availability
-        shell: bash
         run: |
           if [ ! -d "/mnt/MLPerf/ccache" ]; then
             echo "::error title=ccache-mlperf-not-mounted::NFS drive is not mounted; build machine not properly provisioned."
             exit 1
           fi
-          if [ ! -d "$HOME/.ccache-ci" ]; then
+          if [ ! -d "$HOME/.ccache" ]; then
             echo "::error title=ccache-not-provisioned::Ccache is not properly provisioned."
             exit 1
           fi
-      - name: Set up dynamic env vars for build
+
+      - name: Create ccache tmpdir
         run: |
-          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
-          echo "RUNNER_UID=$(id -u)" >> $GITHUB_ENV
-          echo "RUNNER_GID=$(id -g)" >> $GITHUB_ENV
-      - name: Generate docker tag
-        id: generate-docker-tag
-        uses: ./.github/actions/generate-docker-tag
-        with:
-          image: tt-metalium/${{ inputs.os }}
-      - name: Docker login
-        uses: docker/login-action@v3
-        with:
-          registry: https://ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Pull docker image
-        run: docker pull ${{ env.TT_METAL_DOCKER_IMAGE_TAG }}
+          mkdir -p /tmp/ccache
 
       - name: Check out repo
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          fetch-tags: true
           submodules: recursive
+          path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
           clean: true
 
       - name: Determine merge base
@@ -88,103 +110,79 @@ jobs:
         with:
           ref: ${{ env.MERGE_BASE }}
           fetch-depth: 0
+          fetch-tags: true
           submodules: recursive
+          path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
           clean: true
 
-      - name: Create baseline
+      - name: Create shim
+        run: |
+          # Suppress clang-tidy to first get an up-to-date build tree
+          ln -sf /usr/bin/true ./clang-tidy-shim
+
+      - name: 🔧 CMake configure
+        run: |
+          cmake --preset clang-tidy -DCMAKE_CXX_CLANG_TIDY="$(pwd)/clang-tidy-shim;--warnings-as-errors=*" -DCMAKE_C_CLANG_TIDY="$(pwd)/clang-tidy-shim;--warnings-as-errors=*"
+
+      - name: Prepare baseline ccache summary
         if: github.ref_name != 'main' && !inputs.full-scan
-        uses: tenstorrent/docker-run-action@v5
-        with:
-          image: ${{ env.TT_METAL_DOCKER_IMAGE_TAG }}
-          options: |
-            --rm
-            --tmpfs /tmp
-            -u ${{ env.RUNNER_UID }}:${{ env.RUNNER_GID }}
-            --group-add 1457
-            -v ${{ github.workspace }}:${{ github.workspace }}
-            -v /etc/passwd:/etc/passwd:ro
-            -v /etc/shadow:/etc/shadow:ro
-            -v /etc/bashrc:/etc/bashrc:ro
-            -v /home/ubuntu/.ccache-ci:/home/ubuntu/.ccache
-            -v /mnt/MLPerf/ccache:/mnt/MLPerf/ccache
-            -e ARCH_NAME=${{ env.ARCH_NAME }}
-            -e CARGO_HOME=${{ github.workspace }}/.cargo
-            -w ${{ github.workspace }}
-          run: |
-            set -eu # basic shell hygiene
+        run: |
+          # Zero out the stats so we can see how we did this build
+          # NOTE: may be inaccurate if we have >1 build runner on the same machine, using the same local cache
+          ccache -z
 
-            # /tmp is a tmpfs; more efficient than persisted storage
-            mkdir -p /tmp/ccache
-            export CCACHE_TEMPDIR=/tmp/ccache
-
-            # Zero out the stats so we can see how we did this build
-            # NOTE: may be inaccurate if we have >1 build runner on the same machine, using the same local cache
-            ccache -z
-
-            # Suppress clang-tidy to first get an up-to-date build tree
-            ln -sf /usr/bin/true ./clang-tidy-shim
-
-            cmake --preset clang-tidy -DCMAKE_CXX_CLANG_TIDY="$(pwd)/clang-tidy-shim;--warnings-as-errors=*" -DCMAKE_C_CLANG_TIDY="$(pwd)/clang-tidy-shim;--warnings-as-errors=*"
-            nice -n 19 cmake --build --preset clang-tidy
-
-            mkdir -p out
-            ccache -s > out/ccache.stats
+      - name: 🛠️ Baseline Build
+        if: github.ref_name != 'main' && !inputs.full-scan
+        run: |
+          nice -n 19 cmake --build --preset clang-tidy
 
       - name: Publish Ccache summary
         if: github.ref_name != 'main' && !inputs.full-scan
         run: |
-          echo '## CCache Summary (baseline)' >> $GITHUB_STEP_SUMMARY
+          echo '## CCache Summary' >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-          cat out/ccache.stats >> $GITHUB_STEP_SUMMARY
+          ccache -s >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
 
       - name: Checkout repo
         uses: actions/checkout@v4
         with:
+          fetch-depth: 0
+          fetch-tags: true
           submodules: recursive
+          path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
           clean: false
 
-      - name: Analyze code with clang-tidy
-        uses: tenstorrent/docker-run-action@v5
-        with:
-          image: ${{ env.TT_METAL_DOCKER_IMAGE_TAG }}
-          options: |
-            --rm
-            --tmpfs /tmp
-            -u ${{ env.RUNNER_UID }}:${{ env.RUNNER_GID }}
-            --group-add 1457
-            -v ${{ github.workspace }}:${{ github.workspace }}
-            -v /etc/passwd:/etc/passwd:ro
-            -v /etc/shadow:/etc/shadow:ro
-            -v /etc/bashrc:/etc/bashrc:ro
-            -v /home/ubuntu/.ccache-ci:/home/ubuntu/.ccache
-            -v /mnt/MLPerf/ccache:/mnt/MLPerf/ccache
-            -e ARCH_NAME=${{ env.ARCH_NAME }}
-            -e CARGO_HOME=${{ github.workspace }}/.cargo
-            -w ${{ github.workspace }}
-          run: |
-            set -eu # basic shell hygiene
+      - name: Restore shim
+        run: |
+          # Restore shim to legit clang-tidy
+          # Symlink tomfoolery here so that Ninja believes the build command has not changed from the previous run
+          ln -sf $(which clang-tidy-17) ./clang-tidy-shim
 
-            # /tmp is a tmpfs; more efficient than persisted storage
-            mkdir -p /tmp/ccache
-            export CCACHE_TEMPDIR=/tmp/ccache
+      - name: Prepare ccache summary
+        run: |
+          # Zero out the stats so we can see how we did this build
+          # NOTE: may be inaccurate if we have >1 build runner on the same machine, using the same local cache
+          ccache -z
 
-            # Zero out the stats so we can see how we did this build
-            # NOTE: may be inaccurate if we have >1 build runner on the same machine, using the same local cache
-            ccache -z
+      - name: 🔍 Analyze code with clang-tidy
+        run: |
+          nice -n 19 cmake --build --preset clang-tidy
 
-            # Restore shim to legit clang-tidy
-            # Symlink tomfoolery here so that Ninja believes the build command has not changed from the previous run
-            ln -sf $(which clang-tidy-17) ./clang-tidy-shim
-
-            # Keep this line _exactly_ the same as the one in the "Create baseline" or it will not be incremental
-            cmake --preset clang-tidy -DCMAKE_CXX_CLANG_TIDY="$(pwd)/clang-tidy-shim;--warnings-as-errors=*" -DCMAKE_C_CLANG_TIDY="$(pwd)/clang-tidy-shim;--warnings-as-errors=*"
-            nice -n 19 cmake --build --preset clang-tidy
-            mkdir -p out
-            ccache -s > out/ccache.stats
       - name: Publish Ccache summary
         run: |
           echo '## CCache Summary' >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-          cat out/ccache.stats >> $GITHUB_STEP_SUMMARY
+          ccache -s >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Cleanup
+        if: always()
+        run: |
+          # We are forced to checkout the repo into a subdir of the host's workdir; this pollutes the host
+          # with root-owned files.  Be sure to clean up after ourselves in case we're on a non-ephemeral runner.
+          echo "pre rm"
+          ls -al /__w/tt-metal/tt-metal
+          rm -rf /__w/tt-metal/tt-metal/docker-job
+          echo "post rm"
+          ls -al /__w/tt-metal/tt-metal

@@ -5,6 +5,7 @@
 #include "dataflow_api.h"
 #include "debug/dprint.h"
 #include "tt_metal/impl/dispatch/kernels/packet_queue.hpp"
+#include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/traffic_gen.hpp"
 
 constexpr uint32_t src_endpoint_id = get_compile_time_arg_val(0);

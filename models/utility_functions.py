@@ -313,7 +313,7 @@ def pad_by_zero(
 
 
 def unpad_from_zero(x, desired_shape):
-    if x.shape.with_tile_padding()[-1] == desired_shape[-1] and x.shape.with_tile_padding()[-2] == desired_shape[-2]:
+    if x.padded_shape[-1] == desired_shape[-1] and x.padded_shape[-2] == desired_shape[-2]:
         x = tt2torch_tensor(x)
     else:
         x = x.cpu()
@@ -887,6 +887,10 @@ def skip_for_wormhole_b0(reason_str="not working for Wormhole B0"):
 
 def skip_for_grayskull(reason_str="not working for Grayskull"):
     return pytest.mark.skipif(is_grayskull(), reason=reason_str)
+
+
+def run_for_blackhole(reason_str="only runs for Blackhole"):
+    return pytest.mark.skipif(not is_blackhole(), reason=reason_str)
 
 
 def run_for_wormhole_b0(reason_str="only runs for Wormhole B0"):

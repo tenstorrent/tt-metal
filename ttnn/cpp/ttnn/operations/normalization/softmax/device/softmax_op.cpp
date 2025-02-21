@@ -10,7 +10,6 @@
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/run_operation.hpp"
 
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/util.hpp>
@@ -45,7 +44,7 @@ void Softmax::validate(
                 TT_FATAL(mask.get_padded_shape() == input_tensor.get_padded_shape(), "Error");
             } else {
                 if (mask.get_layout() == Layout::ROW_MAJOR) {
-                    ttnn::SimpleShape expected_shape(
+                    ttnn::Shape expected_shape(
                         {mask.get_padded_shape()[0], 1, input_tensor.get_padded_shape()[-1] / TILE_WIDTH, TILE_WIDTH});
                     TT_FATAL(mask.get_padded_shape() == expected_shape, "Error");
                 }
@@ -290,9 +289,8 @@ Tensor scale_mask_softmax(
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             auto& input_tensor = input_tensors.at(0);
             auto& mask = optional_input_tensors.at(0);
-            ttnn::SimpleShape input_pad_shape =
-                ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(
-                    input_tensor.get_padded_shape());
+            ttnn::Shape input_pad_shape = ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(
+                input_tensor.get_padded_shape());
             ttnn::operations::experimental::auto_format::FormatParams input_format_params = {
                 .pad_shape = input_pad_shape,
                 .pad_value = -std::numeric_limits<float>::infinity(),
@@ -307,9 +305,8 @@ Tensor scale_mask_softmax(
                 for (uint32_t i = 1; i < input_tensor.get_padded_shape().rank() - 2; i++) {
                     TT_FATAL(mask.value().get_padded_shape()[i] == 1, "Error");
                 }
-                ttnn::SimpleShape mask_pad_shape =
-                    ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(
-                        mask.value().get_padded_shape());
+                ttnn::Shape mask_pad_shape = ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(
+                    mask.value().get_padded_shape());
                 mask_format_params = {
                     .pad_shape = mask_pad_shape,
                     .pad_value = -std::numeric_limits<float>::infinity(),

@@ -30,7 +30,7 @@ void MAIN {
     const uint32_t Wt = get_arg_val<uint32_t>(2);
     const uint32_t ndst = get_arg_val<uint32_t>(3);
     const uint32_t start_ht = get_arg_val<uint32_t>(4);
-    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_2);
+    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_16);
 
     constexpr uint32_t onetile = 1;
     // reserve one tile for zeros on cb_in2
@@ -125,7 +125,7 @@ void MAIN {
 
         ACQ();
         cb_reserve_back(cb_recipsumexps, onetile);
-        reduce_init_delta<false>(cb_recipsumexps, cb_exps, cb_bcast_scaler);
+        reduce_init_delta<false>(cb_exps, cb_bcast_scaler, cb_recipsumexps);
         for (uint32_t wt = 0; wt < Wt; wt++) {
             cb_wait_front(cb_exps, wt + 1);        // must be a cumulative wait for correctness
             constexpr uint32_t bcast_scaler0 = 0;  // 0th index from bcast_scaler CB
