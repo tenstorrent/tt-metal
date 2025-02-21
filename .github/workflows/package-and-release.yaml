@@ -31,6 +31,12 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     with:
       tracy: true
+  test-wheels:
+    needs: build-artifact
+    uses: ./.github/workflows/_test-wheels-impl.yaml
+    with:
+      from-precompiled: true
+    secrets: inherit
   single-card-demos:
     needs: build-artifact
     uses: ./.github/workflows/single-card-demo-tests-impl.yaml
@@ -133,7 +139,7 @@ jobs:
           path: RELEASE_NOTES.txt
   # Candidate for breaking up
   create-and-upload-draft-release:
-    needs: [create-tag, create-release-notes, build-artifact]
+    needs: [create-tag, create-release-notes, build-artifact, test-wheels]
     # May accidentally create two releases without restricting to 1 job
     concurrency: create_upload_draft_release
     runs-on: ubuntu-latest

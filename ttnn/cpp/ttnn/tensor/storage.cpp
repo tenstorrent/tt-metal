@@ -34,7 +34,7 @@ MultiDeviceStorage::MultiDeviceStorage(
 
     for (int row = 0; row < num_rows; ++row) {
         for (int col = 0; col < num_cols; ++col) {
-            auto buffer = mesh_buffer->get_device_buffer(distributed::Coordinate{row, col});
+            auto buffer = mesh_buffer->get_device_buffer(distributed::MeshCoordinate(row, col));
             const int device_id = buffer->device()->id();
             ordered_device_ids.push_back(device_id);
             buffers.emplace(device_id, std::move(buffer));
