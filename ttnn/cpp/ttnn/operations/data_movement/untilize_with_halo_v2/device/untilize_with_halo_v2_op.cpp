@@ -87,6 +87,7 @@ operation::ProgramWithCallbacks UntilizeWithHaloV2::create_program(
         input_tensor,
         pad_val_,
         ncores_nhw_,
+        ncores_c_,
         max_out_nsticks_per_core_,
         padding_config,
         local_config,

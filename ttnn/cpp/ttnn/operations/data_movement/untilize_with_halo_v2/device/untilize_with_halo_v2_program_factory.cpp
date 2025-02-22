@@ -26,6 +26,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     const Tensor& input_tensor,
     const uint32_t pad_val,
     const uint32_t ncores_nhw,
+    const uint32_t ncores_c,
     const uint32_t max_out_nsticks_per_core,
     const Tensor& padding_config,
     const Tensor& local_config,
@@ -40,6 +41,9 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     Buffer* src_buffer = input_tensor.buffer();
     Buffer* dst_buffer = output_tensor.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+
+    printf("NUM CORES NHW: %d\n", ncores_nhw);
+    printf("NUM CORES C: %d\n", ncores_c);
 
     bool skip_untilize = input_tensor.get_layout() == Layout::ROW_MAJOR;
 
@@ -240,8 +244,9 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         aligned_input_nstick_nbytes,
         noc_00.x,
         noc_00.y,
+        ncores_nhw,
+        ncores_c,
         num_cores_x,
-        num_cores_y,
         semaphore_id,
         in_place};
 
