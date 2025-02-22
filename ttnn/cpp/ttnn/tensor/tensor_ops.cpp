@@ -100,6 +100,11 @@ Tensor tensor_to_device(
 
 Tensor tensor_cpu(const Tensor& input_tensor, bool blocking, QueueId cq_id) {
     ZoneScoped;
+
+    if (input_tensor.storage_type() == StorageType::OWNED || input_tensor.storage_type() == StorageType::BORROWED) {
+        return input_tensor;
+    }
+
     GraphTracker::instance().track_function_start("Tensor::cpu", input_tensor, blocking);
     auto workers = input_tensor.get_workers(blocking);
     if (not workers.size()) {
