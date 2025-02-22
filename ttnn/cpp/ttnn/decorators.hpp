@@ -315,19 +315,19 @@ private:
             detail::extract_args_to_vector<std::optional<const ttnn::Tensor>>(args...);
         std::vector<std::vector<ttnn::Tensor>> vec_input_tensors =
             detail::extract_args_to_vector<std::vector<ttnn::Tensor>>(args...);
-        if (single_input_tensor.size() > 0 && vec_input_tensors.size() > 0) {
+        if (!(single_input_tensor.empty() || vec_input_tensors.empty())) {
             TT_THROW(
                 "Only one of single_input_tensor or vec_input_tensors can be specified."
                 "Ensure that your invoke function does not have both Tensor and std::vector<Tensor> as input "
                 "parameters");
         }
-        if (single_input_tensor.size() == 0 && vec_input_tensors.size() > 1) {
+        if (single_input_tensor.empty() && vec_input_tensors.size() > 1) {
             TT_THROW(
                 "You have more than one std::vector<Tensor> input parameters in the invoke. Only one vector is "
                 "allowed");
         }
 
-        auto& input_tensors = vec_input_tensors.size() > 0 ? vec_input_tensors[0] : single_input_tensor;
+        auto& input_tensors = !vec_input_tensors.empty() ? vec_input_tensors[0] : single_input_tensor;
 
         auto output_tensors = detail::create_async_output_tensors<operation_t, execute_on_worker_thread_return_t>(
             input_tensors, optional_input_tensors, args...);
