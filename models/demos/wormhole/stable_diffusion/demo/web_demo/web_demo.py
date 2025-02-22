@@ -1,21 +1,29 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
+import argparse
 import subprocess
 import signal
 import sys
 import os
 
+# Create the argument parser
+parser = argparse.ArgumentParser(description="Stable Diffusion web demo")
+
+# Add the 'port' argument with a default value of 7000
+parser.add_argument("--port", type=int, default=7000, help="Port number to run the web demo on (default: 7000)")
+
+# Parse the command-line arguments
+args = parser.parse_args()
+
 # Two scripts to run
-script1 = "pytest models/demos/wormhole/stable_diffusion/demo/web_demo/sdserver.py"
-script2 = "python3 models/demos/wormhole/stable_diffusion/demo/web_demo/flaskserver.py"
-script3 = "streamlit run models/demos/wormhole/stable_diffusion/demo/web_demo/streamlit_app.py"
+script1 = f"pytest models/demos/wormhole/stable_diffusion/demo/web_demo/flaskserver.py --port {args.port} "
+script2 = f"streamlit run models/demos/wormhole/stable_diffusion/demo/web_demo/streamlit_app.py -- --port {args.port}"
 
 # Start both scripts using subprocess
 process1 = subprocess.Popen(script1, shell=True)
 process2 = subprocess.Popen(script2, shell=True)
-process3 = subprocess.Popen(script3, shell=True)
 
 
 # Function to kill process using port 5000

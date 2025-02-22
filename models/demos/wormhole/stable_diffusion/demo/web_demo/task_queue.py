@@ -1,6 +1,10 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
 import queue
 import uuid
-from models.demos.wormhole.stable_diffusion.demo.web_demo.sdserver import generate_image_from_prompt
+from models.demos.wormhole.stable_diffusion.demo.web_demo.model import generate_image_from_prompt
 
 
 class TaskQueue:

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -6,7 +6,7 @@ from flask import Flask, request, jsonify, send_from_directory
 from gunicorn.app.base import BaseApplication
 from http import HTTPStatus
 from models.demos.wormhole.stable_diffusion.demo.web_demo.task_queue import TaskQueue
-from models.demos.wormhole.stable_diffusion.demo.web_demo.sdserver import warmup_model
+from models.demos.wormhole.stable_diffusion.demo.web_demo.model import warmup_model
 import os
 import pytest
 from threading import Thread
@@ -72,8 +72,9 @@ def fetch_image(task_id):
 
 
 class GunicornApp(BaseApplication):
-    def __init__(self, app):
+    def __init__(self, app, port):
         self.app = app
+        self.port = port
         super().__init__()
 
     def load(self):
@@ -81,7 +82,7 @@ class GunicornApp(BaseApplication):
 
     def load_config(self):
         config = {
-            "bind": f"0.0.0.0:{7000}",  # Specify the binding address
+            "bind": f"0.0.0.0:{self.port}",  # Specify the binding address
             "workers": 1,  # Number of Gunicorn workers
             "reload": False,
             "worker_class": "gthread",
@@ -106,8 +107,8 @@ class GunicornApp(BaseApplication):
         thread.start()
 
 
-def test_app():
+def test_app(port):
     # Ensure the generated images directory exists
     os.makedirs("generated_images", exist_ok=True)
-    gunicorn_app = GunicornApp(app)
+    gunicorn_app = GunicornApp(app, port)
     gunicorn_app.run()
