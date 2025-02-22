@@ -45,8 +45,7 @@ struct AllShardSpecs {
     ShardSpec c_shard_spec;
 };
 
-ShardSpec adjust_to_shape(
-    const ShardSpec& shard_spec, const ttnn::Shape& from_shape, const ttnn::Shape& to_shape) {
+ShardSpec adjust_to_shape(const ShardSpec& shard_spec, const ttnn::Shape& from_shape, const ttnn::Shape& to_shape) {
     auto ret = shard_spec;
 
     ret.shape[0] = (ret.shape[0] * to_shape[-2]) / from_shape[-2];
@@ -168,10 +167,12 @@ void set_or_update_runtime_arguments(
     const auto [cN, cC, cHt, cWt] = get_shape_dims(c);
     const uint32_t cHt_unrolled = cN * cC * cHt;
 
-    bool row_major = true;
     const auto shard_specs = get_shard_specs(a, b, c);
     const bool has_sharding = shard_specs.has_value();
     auto grid = has_sharding ? shard_specs->a_shard_spec.grid : CoreRangeSet{};
+
+    bool row_major =
+        has_sharding ? shard_specs->a_shard_spec.orientation == ShardOrientation::ROW_MAJOR ? true : false : true;
 
     // zero_start_grid is a flag to indicate that we are using a single rectangular grid that starts at (0, 0)
     // as well as having the sharded tensors (if any) start at (0, 0)
@@ -180,7 +181,7 @@ void set_or_update_runtime_arguments(
     bool zero_start_grid = false;
     CoreCoord compute_with_storage_grid;
     const auto& all_device_cores = operation_attributes.worker_grid;
-    if (all_device_cores.size() == 1) {
+    if (grid.size() == 1) {
         const auto& cr = *all_device_cores.ranges().begin();
         if (cr.start_coord.x == 0 && cr.start_coord.y == 0) {
             if (has_sharding) {
@@ -384,7 +385,6 @@ BinaryNgDeviceOperation::ProgramFactory::cached_program_t BinaryNgDeviceOperatio
     uint32_t c_single_tile_size = tt_metal::detail::TileSize(c_data_format);
 
     // we parallelize the computation across the output tiles
-    constexpr bool row_major = true;
     const auto& all_device_cores = operation_attributes.worker_grid;
 
     Buffer* a_buffer = a.buffer();
