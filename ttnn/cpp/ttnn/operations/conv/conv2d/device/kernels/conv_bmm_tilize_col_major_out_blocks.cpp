@@ -20,14 +20,6 @@
 #define DEBUG_PRINT 0
 // #include "debug_macros.h"
 
-// SliceRange srt = SliceRange{.h0 = 0, .h1 = 4, .hs = 1, .w0 = 0, .w1 = 8, .ws = 1};
-// SliceRange srr = SliceRange{.h0 = 0, .h1 = 1, .hs = 8, .w0 = 0, .w1 = 32, .ws = 1};
-// SliceRange srr1 = SliceRange{.h0 = 1, .h1 = 2, .hs = 8, .w0 = 0, .w1 = 32, .ws = 1};
-// SliceRange src = SliceRange{.h0 = 0, .h1 = 32, .hs = 1, .w0 = 0, .w1 = 1, .ws = 1};
-// SliceRange row_range = SliceRange{.h0 = 0, .h1 = 1, .hs = 1, .w0 = 0, .w1 = 16, .ws = 1};
-// SliceRange col_range = SliceRange{.h0 = 0, .h1 = 16, .hs = 1, .w0 = 0, .w1 = 1, .ws = 1};
-// SliceRange sq_range = SliceRange{.h0 = 0, .h1 = 4, .hs = 1, .w0 = 0, .w1 = 4, .ws = 1};
-
 inline void tilize_in(
     uint32_t in_cb_id, uint32_t in_subblock_h, uint32_t in_block_w, uint32_t in_num_subblocks, uint32_t out_cb_id) {
     tilize_init_short(in_cb_id, in_block_w, out_cb_id);
