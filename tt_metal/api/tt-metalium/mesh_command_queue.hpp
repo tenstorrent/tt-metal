@@ -13,6 +13,7 @@
 #include "mesh_device.hpp"
 #include "mesh_workload.hpp"
 #include "mesh_trace.hpp"
+#include <tt-metalium/thread_pool.hpp>
 
 namespace tt::tt_metal::distributed {
 
@@ -110,9 +111,11 @@ private:
     CoreCoord dispatch_core_;
     CoreType dispatch_core_type_ = CoreType::WORKER;
     std::queue<std::shared_ptr<MeshReadEventDescriptor>> event_descriptors_;
+    // The MeshCQ is provided a reference to a thread-pool currently owned by the MeshDevice
+    ThreadPool& thread_pool_;
 
 public:
-    MeshCommandQueue(MeshDevice* mesh_device, uint32_t id);
+    MeshCommandQueue(MeshDevice* mesh_device, uint32_t id, ThreadPool& thread_pool);
     MeshDevice* device() const { return mesh_device_; }
     uint32_t id() const { return id_; }
     WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) { return config_buffer_mgr_[index]; };
