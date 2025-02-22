@@ -83,15 +83,6 @@ void copy_sticks_async_temp_write(
         }
 
         i += length;
-
-        if (in_place && noc_x >= noc_00_x &&
-            noc_y >= noc_00_y) {  // remote config is padded with zeros, so there are some invalid noc_x, noc_y coords =
-                                  // (0,0), we need to skip these
-            noc_async_read_barrier();
-            noc_async_write_barrier();
-            const uint64_t ref_semaphore_noc_addr = get_noc_addr(noc_x, noc_y, semaphore_addr);
-            noc_semaphore_inc(ref_semaphore_noc_addr, 1);
-        }
     }
 }
 
@@ -222,15 +213,6 @@ void copy_sticks_async(
         }
 
         i += length;
-
-        if (in_place && noc_x >= noc_00_x &&
-            noc_y >= noc_00_y) {  // remote config is padded with zeros, so there are some invalid noc_x, noc_y coords =
-                                  // (0,0), we need to skip these
-            noc_async_read_barrier();
-            noc_async_write_barrier();
-            const uint64_t ref_semaphore_noc_addr = get_noc_addr(noc_x, noc_y, semaphore_addr);
-            noc_semaphore_inc(ref_semaphore_noc_addr, 1);
-        }
     }
 }
 
@@ -255,8 +237,13 @@ void kernel_main() {
     constexpr uint32_t noc_00_x = get_compile_time_arg_val(17);
     constexpr uint32_t noc_00_y = get_compile_time_arg_val(18);
     constexpr uint32_t num_cores_x = get_compile_time_arg_val(19);
-    constexpr uint32_t semaphore_id = get_compile_time_arg_val(20);
-    constexpr uint32_t in_place = get_compile_time_arg_val(21);
+    constexpr uint32_t num_cores_y = get_compile_time_arg_val(20);
+    constexpr uint32_t semaphore_id = get_compile_time_arg_val(21);
+    constexpr uint32_t in_place = get_compile_time_arg_val(22);
+
+    constexpr uint32_t num_cores = num_cores_x * num_cores_y;
+
+    // IMPORTANT TODO: deal with situations where num_cores is smaller than entire grid
 
     constexpr uint32_t elem_nbytes = sizeof(uint16_t);
     constexpr uint16_t pad_core_id = 0xFFFF;
@@ -302,32 +289,9 @@ void kernel_main() {
             semaphore_addr,
             in_place);
     }
-    // if constexpr (remote_config_cb_id) {
-    //     uint32_t config_data_l1_addr = get_read_ptr(remote_config_cb_id);
-    //     tt_l1_ptr uint16_t const* config_data = reinterpret_cast<tt_l1_ptr uint16_t const*>(config_data_l1_addr);
-    //     copy_sticks_async<
-    //         stick_nbytes,
-    //         input_aligned_page_size,
-    //         is_block_sharded,
-    //         is_width_sharded,
-    //         remote_read,
-    //         is_col_major>(config_data, my_noc_x, my_noc_y, in_base_l1_addr, out_base_l1_addr, noc_00_x, noc_00_y,
-    //         semaphore_addr, in_place);
-    // }
 
-    if constexpr (in_place == true && remote_ref_counts_cb_id != 0) {
-        // DPRINT << "SEMAPHORE WAIT" << ENDL();
-        uint32_t config_data_l1_addr = get_read_ptr(remote_ref_counts_cb_id);
-        const tt_l1_ptr uint16_t* config_data = reinterpret_cast<const tt_l1_ptr uint16_t*>(config_data_l1_addr);
-
-        uint16_t remote_ref_index = my_noc_x - noc_00_x + (my_noc_y - noc_00_y) * num_cores_x;
-        uint16_t remote_refs_to_me = config_data[remote_ref_index];
-
-        const uint64_t my_semaphore_noc_addr = get_noc_addr(my_noc_x, my_noc_y, semaphore_addr);
-        volatile tt_l1_ptr uint32_t* my_semaphore_noc_addr_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(my_semaphore_noc_addr);
-        noc_semaphore_wait(my_semaphore_noc_addr_ptr, remote_refs_to_me);
-    }
+    noc_async_read_barrier();
+    noc_async_write_barrier();
 
     if constexpr (local_config_cb_id) {
         // DPRINT << "LOCAL COPY" << ENDL();
@@ -342,8 +306,18 @@ void kernel_main() {
             is_col_major>(config_data, my_noc_x, my_noc_y, in_base_l1_addr, out_base_l1_addr, noc_00_x, noc_00_y);
     }
 
-    noc_async_read_barrier();
-    noc_async_write_barrier();
+    if (in_place) {
+        noc_async_read_barrier();
+        noc_async_write_barrier();
+        for (uint16_t noc_x = 0; noc_x < num_cores_x; ++noc_x) {
+            for (uint16_t noc_y = 0; noc_y < num_cores_y; ++noc_y) {
+                const uint64_t ref_semaphore_noc_addr =
+                    get_noc_addr(noc_x + noc_00_x, noc_y + noc_00_y, semaphore_addr);
+                // DPRINT << "INCREMENTING noc_x: " << noc_x + noc_00_x << " noc_y: " << noc_y + noc_00_y << ENDL();
+                noc_semaphore_inc(ref_semaphore_noc_addr, 1);
+            }
+        }
+    }
 
     if constexpr (padding_config_cb_id) {
         // construct the pad stick in its buffer
@@ -372,6 +346,14 @@ void kernel_main() {
     }
 
     if constexpr (remote_config_cb_id) {
+        if constexpr (in_place) {
+            DPRINT << "WAITING ON THIS MANY SIGNALS: " << 2 * num_cores << ENDL();
+            const uint64_t my_semaphore_noc_addr = get_noc_addr(my_noc_x, my_noc_y, semaphore_addr);
+            volatile tt_l1_ptr uint32_t* my_semaphore_noc_addr_ptr =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(my_semaphore_noc_addr);
+            DPRINT << "SEMAPHORE VALUE: " << *my_semaphore_noc_addr_ptr << ENDL();
+            noc_semaphore_wait(my_semaphore_noc_addr_ptr, 2 * num_cores);
+        }
         DPRINT << "REMOTE COPY" << ENDL();
         const uint32_t temp_base_l1_addr = get_write_ptr(out_cb_id);
         uint32_t config_data_l1_addr = get_read_ptr(remote_config_cb_id);
@@ -389,6 +371,6 @@ void kernel_main() {
     noc_async_write_barrier();
 
     if constexpr (remote_config_cb_id) {
-        // tt::data_movement::common::print_bf16_pages(out_base_l1_addr, 32, 128);
+        tt::data_movement::common::print_bf16_pages(out_base_l1_addr, 32, 128);
     }
 }
