@@ -291,7 +291,7 @@ MultiDeviceHostStorage load_multi_device_host_storage(
 template <typename T>
 Storage load_storage(
     FILE* input_file, DataType data_type, Layout layout, StorageType storage_type, T device, uint8_t version_id) {
-    if (storage_type == StorageType::MULTI_DEVICE_HOST or storage_type == StorageType::MULTI_DEVICE) {
+    if (storage_type == StorageType::MULTI_DEVICE_HOST or storage_type == StorageType::DEVICE) {
         if constexpr (std::is_same_v<T, MeshDevice*>) {
             return load_multi_device_host_storage(input_file, data_type, layout, device, version_id);
         } else {

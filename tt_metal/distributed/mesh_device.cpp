@@ -359,9 +359,11 @@ std::vector<std::shared_ptr<MeshDevice>> MeshDevice::get_submeshes() const { ret
 std::ostream& operator<<(std::ostream& os, const MeshDevice& mesh_device) { return os << mesh_device.to_string(); }
 
 void MeshDevice::enable_async(bool enable) {
+    /*
     for (auto device : this->get_devices()) {
         device->enable_async(enable);
     }
+    */
 }
 
 void MeshDevice::enable_program_cache() {

@@ -617,7 +617,6 @@ def test_device_shard_to_torch(mesh_device):
 @pytest.mark.parametrize("height", [7])
 @pytest.mark.parametrize("width", [3])
 def test_validate_as_tensor(tmp_path, mesh_device, height, width):
-    pytest.skip("TT-Mesh: logic in device_shard_to_torch needs to be fixed - segfault")
     torch_input_tensor = torch.rand((height, width), dtype=torch.float32)
 
     memory_config = ttnn.L1_MEMORY_CONFIG
@@ -631,7 +630,7 @@ def test_validate_as_tensor(tmp_path, mesh_device, height, width):
         cache_file_name=tmp_path / "cache_file",
     )
     assert tensor.dtype == ttnn.float32
-    # assert tensor.devices() == mesh_device.get_devices()
+    # assert tensor.devices() == mesh_device.get_devices() # TODO(jchu): fix
     assert tensor.layout == ttnn.TILE_LAYOUT
     assert ttnn.get_memory_config(tensor) == memory_config
 
@@ -645,7 +644,7 @@ def test_validate_as_tensor(tmp_path, mesh_device, height, width):
         cache_file_name=tmp_path / "cache_file",
     )
     assert tensor.dtype == ttnn.float32
-    # assert tensor.devices() == mesh_device.get_devices()
+    # assert tensor.devices() == mesh_device.get_devices() # TODO(jchu): fix
     assert tensor.layout == ttnn.TILE_LAYOUT
     assert ttnn.get_memory_config(tensor) == memory_config
 
