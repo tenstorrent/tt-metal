@@ -371,6 +371,6 @@ void kernel_main() {
     noc_async_write_barrier();
 
     if constexpr (remote_config_cb_id) {
-        tt::data_movement::common::print_bf16_pages(out_base_l1_addr, 32, 128);
+        // tt::data_movement::common::print_bf16_pages(out_base_l1_addr, 32, 128);
     }
 }
