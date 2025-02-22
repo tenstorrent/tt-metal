@@ -12,6 +12,8 @@
 #include <tt-metalium/persistent_kernel_cache.hpp>
 #include <tt-metalium/compilation_reporter.hpp>
 #include <tt-metalium/memory_reporter.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/logger.hpp>
 #include <tt-metalium/device_impl.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -176,7 +178,24 @@ void device_module(py::module& m_device) {
                 "num_program_cache_entries",
                 &IDevice::num_program_cache_entries,
                 "Number of entries in the program cache for this device")
-            .def("enable_async", &IDevice::enable_async)
+            .def(
+                "enable_async",
+                [](IDevice* device, bool enable) {
+                    if (!enable) {
+                        device->enable_async(false);
+                        return;
+                    }
+
+                    bool single_device = true;
+                    if (auto mesh_device = dynamic_cast<MeshDevice*>(device)) {
+                        single_device = mesh_device->get_devices().size() == 1;
+                    }
+                    if (single_device) {
+                        tt::log_warning("Async mode is disabled for single device, ignoring enable_async call");
+                    } else {
+                        device->enable_async(true);
+                    }
+                })
             .def(
                 "create_sub_device_manager",
                 [](IDevice* device,
@@ -260,13 +279,13 @@ void device_module(py::module& m_device) {
                 Args:
                     sub_device_manager_id (SubDeviceManagerId): The ID of the sub-device manager to remove.
             )doc")
-        .def(
-            "set_sub_device_stall_group",
-            [](IDevice* device, const std::vector<SubDeviceId>& sub_device_ids) {
-                device->push_work([device, sub_device_ids] { device->set_sub_device_stall_group(sub_device_ids); });
-            },
-            py::arg("sub_device_ids"),
-            R"doc(
+            .def(
+                "set_sub_device_stall_group",
+                [](IDevice* device, const std::vector<SubDeviceId>& sub_device_ids) {
+                    device->push_work([device, sub_device_ids] { device->set_sub_device_stall_group(sub_device_ids); });
+                },
+                py::arg("sub_device_ids"),
+                R"doc(
                 Set the SubDevice IDs that will be stalled on by default for Fast Dispatch commands such as reading, writing, synchronizing.
                 Stalling here refers to the Fast Dispatch cores waiting for programs to complete execution on the specified SubDevices before proceeding with the specified instruction.
                 The default SubDevice IDs to stall on are set to all SubDevice IDs, and whenever a new SubDevice Manager is loaded.
@@ -274,25 +293,25 @@ void device_module(py::module& m_device) {
                 Args:
                     sub_device_ids (List[SubDeviceId]): The IDs of the SubDevices to stall on.
             )doc")
-        .def(
-            "reset_sub_device_stall_group",
-            [](IDevice* device) { device->push_work([device] { device->reset_sub_device_stall_group(); }); },
-            R"doc(
+            .def(
+                "reset_sub_device_stall_group",
+                [](IDevice* device) { device->push_work([device] { device->reset_sub_device_stall_group(); }); },
+                R"doc(
                 Resets the sub_device_ids that will be stalled on by default for Fast Dispatch commands such as reading, writing, synchronizing
                 back to all SubDevice IDs.
             )doc")
-        .def(
-            "sfpu_eps",
-            [](IDevice* device) { return tt::tt_metal::experimental::hal::get_eps(); },
-            R"doc(Returns machine epsilon value for current architecture.)doc")
-        .def(
-            "sfpu_nan",
-            [](IDevice* device) { return tt::tt_metal::experimental::hal::get_nan(); },
-            R"doc(Returns NaN value for current architecture.)doc")
-        .def(
-            "sfpu_inf",
-            [](IDevice* device) { return tt::tt_metal::experimental::hal::get_inf(); },
-            R"doc(Returns Infinity value for current architecture.)doc");
+            .def(
+                "sfpu_eps",
+                [](IDevice* device) { return tt::tt_metal::experimental::hal::get_eps(); },
+                R"doc(Returns machine epsilon value for current architecture.)doc")
+            .def(
+                "sfpu_nan",
+                [](IDevice* device) { return tt::tt_metal::experimental::hal::get_nan(); },
+                R"doc(Returns NaN value for current architecture.)doc")
+            .def(
+                "sfpu_inf",
+                [](IDevice* device) { return tt::tt_metal::experimental::hal::get_inf(); },
+                R"doc(Returns Infinity value for current architecture.)doc");
 
     auto pyDevice = static_cast<py::class_<tt::tt_metal::Device, IDevice, std::unique_ptr<tt::tt_metal::Device, py::nodelete>>>(m_device.attr("Device"));
     pyDevice
