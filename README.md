@@ -68,7 +68,7 @@
 
 ## Diffusion
 
-| Model                                                                       | Batch | Hardware                                                 | img/s     | Target img/s | Release     |
+| Model                                                                       | Batch | Hardware                                                 | s/img     | Target s/img | Release     |
 |-----------------------------------------------------------------------------|-------|----------------------------------------------------------|---------|------------|-------------|
 | [Stable Diffusion 1.4 (512x512)](./models/demos/wormhole/stable_diffusion)  | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 5.988   | 3.33        |             |
 | [Stable Diffusion 3.5 medium (512x512)](https://github.com/tenstorrent/tt-metal/blob/mbahnas/sd35_medium_512_spacelike_feb05/models/experimental/stable_diffusion3)  | 1     | [n150](https://tenstorrent.com/hardware/wormhole)        | 16.67   | 3.33        |             |
