@@ -154,9 +154,7 @@ void launch_with_autoformat(
     const OptionalTensors& optional_output_tensors = {});
 
 std::vector<IDevice*> get_workers_for_op_output(
-    const std::vector<Tensor>& inputs,
-    const std::vector<std::optional<const Tensor>>& optional_inputs = {},
-    bool enable_autoformat_device = true);
+    const std::vector<Tensor>& inputs, const std::vector<std::optional<const Tensor>>& optional_inputs = {});
 
 namespace detail {
 IDevice* get_device(const Tensors& input_tensors, const OptionalConstTensors& optional_input_tensors = {});
