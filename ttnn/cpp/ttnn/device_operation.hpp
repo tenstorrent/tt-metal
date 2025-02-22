@@ -256,7 +256,8 @@ void launch_on_worker_thread(auto cq_id, auto device_operation_id, const auto& o
     auto program_hash = 0;
     bool program_cache_hit = false;
 
-    auto is_program_cache_enabled = program_cache.is_enabled();
+    // auto is_program_cache_enabled = program_cache.is_enabled();
+    auto is_program_cache_enabled = false;
     if (is_program_cache_enabled) {
         program_hash = compute_program_hash<device_operation_t>(operation_attributes, tensor_args);
         program_cache_hit = program_cache.contains(program_hash);
