@@ -157,6 +157,7 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
         input_tensor,
         pad_val_,
         config_.num_cores_nhw,
+        config_.num_cores_c,
         max_out_nsticks_per_core_,
         pad_config_device_tensor,
         local_config_device_tensor,

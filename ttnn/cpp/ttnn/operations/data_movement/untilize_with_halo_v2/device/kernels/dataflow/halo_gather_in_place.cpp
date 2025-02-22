@@ -245,12 +245,13 @@ void kernel_main() {
     constexpr uint32_t input_aligned_page_size = get_compile_time_arg_val(16);
     constexpr uint32_t noc_00_x = get_compile_time_arg_val(17);
     constexpr uint32_t noc_00_y = get_compile_time_arg_val(18);
-    constexpr uint32_t num_cores_x = get_compile_time_arg_val(19);
-    constexpr uint32_t num_cores_y = get_compile_time_arg_val(20);
-    constexpr uint32_t semaphore_id = get_compile_time_arg_val(21);
-    constexpr uint32_t in_place = get_compile_time_arg_val(22);
+    constexpr uint32_t num_cores_nhw = get_compile_time_arg_val(19);
+    constexpr uint32_t num_cores_c = get_compile_time_arg_val(20);
+    constexpr uint32_t num_cores_x = get_compile_time_arg_val(21);
+    constexpr uint32_t semaphore_id = get_compile_time_arg_val(22);
+    constexpr uint32_t in_place = get_compile_time_arg_val(23);
 
-    constexpr uint32_t num_cores = num_cores_x * num_cores_y;
+    constexpr uint32_t num_cores = num_cores_nhw * num_cores_c;
 
     // IMPORTANT TODO: deal with situations where num_cores is smaller than entire grid
 
@@ -318,13 +319,12 @@ void kernel_main() {
     if (in_place) {
         noc_async_read_barrier();
         noc_async_write_barrier();
-        for (uint16_t noc_x = 0; noc_x < num_cores_x; ++noc_x) {
-            for (uint16_t noc_y = 0; noc_y < num_cores_y; ++noc_y) {
-                const uint64_t ref_semaphore_noc_addr =
-                    get_noc_addr(noc_x + noc_00_x, noc_y + noc_00_y, semaphore_addr);
-                // DPRINT << "INCREMENTING noc_x: " << noc_x + noc_00_x << " noc_y: " << noc_y + noc_00_y << ENDL();
-                noc_semaphore_inc(ref_semaphore_noc_addr, 1);
-            }
+        for (uint16_t noc = 0; noc < num_cores; ++noc) {
+            uint16_t noc_x = noc % num_cores_x;
+            uint16_t noc_y = noc / num_cores_x;
+            const uint64_t ref_semaphore_noc_addr = get_noc_addr(noc_x + noc_00_x, noc_y + noc_00_y, semaphore_addr);
+            // DPRINT << "INCREMENTING noc_x: " << noc_x + noc_00_x << " noc_y: " << noc_y + noc_00_y << ENDL();
+            noc_semaphore_inc(ref_semaphore_noc_addr, 1);
         }
     }
 
