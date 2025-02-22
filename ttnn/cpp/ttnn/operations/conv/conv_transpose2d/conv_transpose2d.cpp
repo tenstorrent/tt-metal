@@ -338,7 +338,7 @@ Result conv_transpose2d(
         out_channels,
         groups,
         conv_config.output_layout == Layout::ROW_MAJOR,
-        conv_config.activation == "relu",
+        conv_config.activation,
         opt_conv_op_parallel_config,
         opt_conv_op_block_config,
         conv_out_memory_config,

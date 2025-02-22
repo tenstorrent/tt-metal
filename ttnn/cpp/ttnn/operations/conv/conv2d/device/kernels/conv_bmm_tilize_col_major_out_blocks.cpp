@@ -399,6 +399,7 @@ void MAIN {
                     }
 
 #ifdef SFPU_OP_INIT_ACTIVATION
+                    SFPU_OP_INIT_ACTIVATION
                     for (uint32_t i = 0; i < out_subblock_num_tiles; ++i) {
                         SFPU_OP_FUNC_ACTIVATION
                     }
