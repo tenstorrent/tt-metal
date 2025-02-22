@@ -21,7 +21,6 @@ void kernel_main() {
     constexpr uint32_t tile_size = get_compile_time_arg_val(10);
     constexpr uint32_t tile_hw = tile_size * tile_size;
     constexpr uint32_t face_size = get_compile_time_arg_val(11);
-#define SHARDED get_compile_time_arg_val(12) == 1
     constexpr uint32_t face_hw = face_size * face_size;
     constexpr uint32_t alignment_adjustor = 16;
 
@@ -31,15 +30,15 @@ void kernel_main() {
     uint32_t starting_tile_offset = get_arg_val<uint32_t>(rt_arg_ind++);
     uint32_t num_2d_tensors = get_arg_val<uint32_t>(rt_arg_ind++);
 
-#if (SHARDED)
+#ifdef SHARDED
     typedef ShardedInfo<
-        get_compile_time_arg_val(13),
-        get_compile_time_arg_val(14),
-        get_compile_time_arg_val(15),
-        get_compile_time_arg_val(16),
-        get_compile_time_arg_val(17),
-        get_compile_time_arg_val(18),
-        get_compile_time_arg_val(19)>
+        get_compile_time_arg_val(12),  // Memory layout
+        get_compile_time_arg_val(13),  // The number of sharding cores
+        get_compile_time_arg_val(14),  // The page size we offset each write to
+        get_compile_time_arg_val(15),  // The number of pages in each sharding row not including padding pages
+        get_compile_time_arg_val(16),  // This defines times when contiguous pages can't be calculated
+        get_compile_time_arg_val(17),  // pages_per_shard_x
+        get_compile_time_arg_val(18)>  // pages_per_shard_y
         tensor_shard_info;
 
     const auto [mapping_table, rt_increment] =
