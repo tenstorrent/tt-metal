@@ -4,6 +4,7 @@
 
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 #include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
+#include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/constants.hpp>
@@ -48,7 +49,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     uint32_t groups,
     bool untilize_out,
     bool has_bias,
-    bool fuse_relu,
+    std::optional<unary::UnaryWithParam> fused_activation,
     const OptimizedConvParallelizationConfig& parallelization_config,
     const OptimizedConvBlockConfig& block_config,
     bool use_shallow_conv_variant,
@@ -386,7 +387,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
     uint32_t groups,
     bool untilize_out,
     bool has_bias,
-    bool fuse_relu,
+    std::optional<unary::UnaryWithParam> fused_activation,
     const OptimizedConvParallelizationConfig& parallelization_config,
     const OptimizedConvBlockConfig& block_config,
     bool use_shallow_conv_variant,
@@ -1279,9 +1280,13 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_impl(
         writer_mcast_sender_defines["FUSE_BIAS"] = "1";
         compute_defines["FUSE_BIAS"] = "1";
     }
-
-    if (fuse_relu) {
-        compute_defines["PACK_RELU"] = "1";
+    if (fused_activation.has_value()) {
+        if (fused_activation.value().op_type == unary::UnaryOpType::RELU) {
+            compute_defines["PACK_RELU"] = "1";
+        } else {
+            compute_defines.merge(ttnn::operations::unary::utils::get_defines(
+                fused_activation.value().op_type, fused_activation.value().params, "ACTIVATION", "i"));
+        }
     }
 
     if (!tilize_in0) {
@@ -1751,7 +1756,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(
     uint32_t output_channels,
     uint32_t groups,
     bool untilize_out,
-    bool fuse_relu,
+    std::optional<unary::UnaryWithParam> fused_activation,
     const OptimizedConvParallelizationConfig& parallelization_config,
     const OptimizedConvBlockConfig& block_config,
     DataType output_dtype,
@@ -1801,7 +1806,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(
             groups,
             untilize_out,
             bias.has_value(),
-            fuse_relu,
+            fused_activation,
             parallelization_config,
             block_config,
             use_shallow_conv_variant,
@@ -1824,7 +1829,7 @@ operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_v2_new(
         groups,
         untilize_out,
         bias.has_value(),
-        fuse_relu,
+        fused_activation,
         parallelization_config,
         block_config,
         use_shallow_conv_variant,
