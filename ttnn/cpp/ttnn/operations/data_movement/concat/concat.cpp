@@ -159,9 +159,6 @@ MassagedConcat build_untilize_rm_retilize_concat(
                          const std::vector<ttnn::Tensor>& tensors, int dim, unsigned int groups) -> ttnn::Tensor {
             std::vector<ttnn::Tensor> itensors(tensors);
             auto res = concat_impl(itensors, dim, groups, output_memory_config);
-            for (auto& tensor : itensors) {
-                tensor.deallocate();
-            }
             return res;
         }});
 }
@@ -323,9 +320,6 @@ ttnn::Tensor ConcatOperation::invoke(
 
     std::vector<ttnn::Tensor> itensors(input_tensors);
     auto res = massaged_concat(itensors, dim, groups);
-    for (auto& tensor : itensors) {
-        tensor.deallocate();
-    }
     return res;
 }
 

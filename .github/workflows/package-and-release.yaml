@@ -139,7 +139,7 @@ jobs:
           path: RELEASE_NOTES.txt
   # Candidate for breaking up
   create-and-upload-draft-release:
-    needs: [create-tag, create-release-notes, build-artifact, test-wheels]
+    needs: [create-tag, create-release-notes, build-artifact, test-wheels, single-card-demos]
     # May accidentally create two releases without restricting to 1 job
     concurrency: create_upload_draft_release
     runs-on: ubuntu-latest
@@ -210,7 +210,7 @@ jobs:
       create-and-upload-draft-release
     ]
     if: ${{ needs.get-params.outputs.is-release-candidate !='true' && needs.get-params.outputs.should-create-release == 'true' }}
-    uses: ./.github/workflows/docs-release.yaml
+    uses: ./.github/workflows/docs-latest-public.yaml
     with:
       version: ${{ needs.create-tag.outputs.version }}
     secrets: inherit

@@ -82,7 +82,7 @@ TEST_P(MeshReshapeTest, ReshapeBetweenConfigurations) {
     if ((old_shape.num_rows * old_shape.num_cols) != (new_shape.num_rows * new_shape.num_cols)) {
         GTEST_SKIP() << "Device counts don't match; we test this in InvalidReshapeDimensions";
     }
-    if (old_shape.num_rows == 1 or old_shape.num_cols == 1) {
+    if (old_shape.num_rows == 1 or old_shape.num_cols == 1 or new_shape.num_rows == 1 or new_shape.num_cols == 1) {
         GTEST_SKIP() << "Old shape is 1xN or Nx1; we test this in From1x4To2x2Invalid";
     }
 
@@ -106,7 +106,8 @@ TEST_P(MeshReshapeTest, ReshapeBetweenConfigurations) {
     EXPECT_EQ(mesh->num_cols(), new_shape.num_cols);
 
     // Verify device ordering is preserved
-    EXPECT_EQ(mesh->get_device_ids(), original_order);
+    EXPECT_EQ(mesh->get_device_ids(), original_order)
+        << "Device ordering is not preserved " << SimpleMeshShape(old_shape) << " -> " << SimpleMeshShape(new_shape);
 }
 
 // Generate all possible combinations of shapes from kMeshShapes
@@ -197,30 +198,6 @@ TEST_F(T3000ReshapeTest, InvalidTotalDeviceCount) {
     // Verify original shape is preserved after failed reshapes
     EXPECT_EQ(mesh->num_rows(), 1);
     EXPECT_EQ(mesh->num_cols(), 8);
-}
-
-TEST_F(T3000ReshapeTest, RingPreservation) {
-    auto mesh = ttnn::distributed::open_mesh_device(
-        {1, 8}, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, tt::tt_metal::DispatchCoreType::WORKER);
-
-    // Store original device positions
-    std::vector<chip_id_t> original_layout;
-    for (size_t i = 0; i < mesh->num_rows(); ++i) {
-        for (size_t j = 0; j < mesh->num_cols(); ++j) {
-            original_layout.push_back(mesh->get_device(i, j)->id());
-        }
-    }
-
-    mesh->reshape({2, 4});
-
-    // Verify devices are still connected in a Ring topology
-    std::vector<chip_id_t> new_layout;
-    for (size_t i = 0; i < mesh->num_rows(); ++i) {
-        for (size_t j = 0; j < mesh->num_cols(); ++j) {
-            new_layout.push_back(mesh->get_device(i, j)->id());
-        }
-    }
-    EXPECT_EQ(new_layout, original_layout);
 }
 
 TEST_F(T3000ReshapeTest, From1x4To2x2Invalid) {

@@ -170,12 +170,12 @@ void JitBuildEnv::init(
                       this->arch_name_ + "_defines " + "-I" + this->root_ + "tt_metal/hw/inc/" +
                       this->aliased_arch_name_ + "/noc " + "-I" + this->root_ + "tt_metal/hw/ckernels/" +
                       this->arch_name_ + "/metal/common " + "-I" + this->root_ + "tt_metal/hw/ckernels/" +
-                      this->arch_name_ + "/metal/llk_io " + "-I" + this->root_ + "tt_metal/third_party/tt_llk_" +
+                      this->arch_name_ + "/metal/llk_io " + "-I" + this->root_ + "tt_metal/third_party/tt_llk/tt_llk_" +
                       this->arch_name_ + "/common/inc " +  // TODO(fixme) datamovement fw shouldn't read this
                       "-I" + this->root_ + "tt_metal/api/" + this->aliased_arch_name_ + " " + "-I" + this->root_ +
                       "tt_metal/api/" + this->aliased_arch_name_ + "/tt-metalium " + "-I" + this->root_ +
                       "tt_metal/api/tt-metalium/ " + "-I" + this->root_ + "tt_metal/api/ " + "-I" + this->root_ +
-                      "tt_metal/third_party/tt_llk_" + this->arch_name_ + "/llk_lib ";
+                      "tt_metal/third_party/tt_llk/tt_llk_" + this->arch_name_ + "/llk_lib ";
 
     this->lflags_ = common_flags;
     this->lflags_ += "-fno-exceptions -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles ";
@@ -345,7 +345,7 @@ JitBuildCompute::JitBuildCompute(const JitBuildEnv& env, const JitBuiltStateConf
                       "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/llk_api " + "-I" + env_.root_ +
                       "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/llk_api/llk_sfpu " + "-I" + env_.root_ +
                       "runtime/sfpi/include " + "-I" + env_.root_ + "tt_metal/hw/firmware/src " + "-I" + env_.root_ +
-                      "tt_metal/third_party/tt_llk_" + env.arch_name_ + "/llk_lib ";
+                      "tt_metal/third_party/tt_llk/tt_llk_" + env.arch_name_ + "/llk_lib ";
 
     if (this->is_fw_) {
         this->srcs_.push_back("tt_metal/hw/firmware/src/trisc.cc");
