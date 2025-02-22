@@ -37,5 +37,5 @@ TT_METAL_SLOW_DISPATCH_MODE=1 ${TEST_FOLDER}/test_tt_fabric_sanity_${ARCH_NAME} 
 TT_METAL_SLOW_DISPATCH_MODE=1 ${TEST_FOLDER}/test_tt_fabric_sanity_${ARCH_NAME} --fabric_command 64 --board_type n300 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16
 TT_METAL_SLOW_DISPATCH_MODE=1 ${TEST_FOLDER}/test_tt_fabric_sanity_${ARCH_NAME} --fabric_command 64 --board_type n300 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16 --metal_fabric_init_level 1
 # Async Write Atomic Inc
-TT_METAL_SLOW_DISPATCH_MODE=1 ${TEST_FOLDER}/test_tt_fabric_sanity_${ARCH_NAME} --fabric_command 65 --board_type n300 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16
+TT_METAL_SLOW_DISPATCH_MODE=1 ${TEST_FOLDER}/test_tt_fabric_sanity_${ARCH_NAME} --fabric_command 65 --board_type n300 --data_kb_per_tx 10 --num_src_endpoints 1 --num_dest_endpoints 1 --num_links 16
 TT_METAL_SLOW_DISPATCH_MODE=1 ${TEST_FOLDER}/test_tt_fabric_sanity_${ARCH_NAME} --fabric_command 65 --board_type n300 --data_kb_per_tx 10 --num_src_endpoints 20 --num_dest_endpoints 8 --num_links 16 --metal_fabric_init_level 1

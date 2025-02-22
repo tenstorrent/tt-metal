@@ -82,6 +82,7 @@ inline void notify_slave_routers(uint32_t notification) {
 }
 
 void kernel_main() {
+    DPRINT << "Initialize fabric router\n";
     tt_fabric_init();
     fvc_producer_state_t fvc_producer_state;
     rtos_context_switch_ptr = (void (*)())RtosTable[0];
@@ -147,6 +148,9 @@ void kernel_main() {
     uint32_t launch_msg_rd_ptr = *GET_MAILBOX_ADDRESS_DEV(launch_msg_rd_ptr);
     tt_l1_ptr launch_msg_t* const launch_msg = GET_MAILBOX_ADDRESS_DEV(launch[launch_msg_rd_ptr]);
     while (1) {
+        if (launch_msg->kernel_config.exit_erisc_kernel) {
+            break;
+        }
         // Handle Ethernet Outbound Data
         if (!fvc_req_buf_is_empty(fvc_consumer_req_buf) && fvc_req_valid(fvc_consumer_req_buf)) {
             uint32_t req_index = fvc_consumer_req_buf->rdptr.ptr & CHAN_REQ_BUF_SIZE_MASK;
@@ -184,8 +188,10 @@ void kernel_main() {
         if (fvc_producer_state.get_curr_packet_valid()) {
             fvc_producer_state.process_inbound_packet();
             loop_count = 0;
+            DPRINT << "FABRIC INBOUND DATA RECEV\n";
         } else if (fvc_producer_state.packet_corrupted) {
             write_kernel_status(kernel_status, TT_FABRIC_STATUS_INDEX, TT_FABRIC_STATUS_BAD_HEADER);
+            DPRINT << "FABRIC INBOUND BAD HEADER\n";
             return;
         }
 
@@ -217,6 +223,7 @@ void kernel_main() {
             return;
         }
     }
+    DPRINT << "Fabric router exited\n";
     uint64_t cycles_elapsed = fvc_producer_state.packet_timestamp - start_timestamp;
 
     write_kernel_status(kernel_status, TT_FABRIC_MISC_INDEX, 0xff000002);

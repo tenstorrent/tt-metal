@@ -165,6 +165,7 @@ typedef struct fvc_consumer_state {
             if constexpr (barrier) {
                 noc_async_read_barrier();
             }
+            DPRINT << "SEND PACKET ETH 0x" << HEX() << dest_addr << " (DEST ADDR)\n";
             internal_::eth_send_packet(
                 0, src_addr / PACKET_WORD_SIZE_BYTES, dest_addr / PACKET_WORD_SIZE_BYTES, chunk_to_forward);
             advance_out_rdptr(chunk_to_forward);
@@ -173,7 +174,7 @@ typedef struct fvc_consumer_state {
 
         // send word credits to receiver
         eth_write_remote_reg((uint32_t)words_sent_remote_update, words_to_forward << REMOTE_DEST_BUF_WORDS_FREE_INC);
-
+        DPRINT << "FABRIC SEND DATA\n";
         return words_to_forward;
     }
 

@@ -389,7 +389,8 @@ void kernel_main() {
     uint32_t outbound_eth_chan = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     dest_device = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     uint32_t rx_buf_size = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
-
+    DPRINT << "TRAFFIC GEN TX ============= outbound eth chan = " << outbound_eth_chan
+           << " dest mesh = " << (dest_device >> 16) << " dest device = " << (dest_device & 0xFFFF) << ENDL();
     if constexpr (ASYNC_WR & test_command) {
         base_target_address = get_arg_val<uint32_t>(increment_arg_idx(rt_args_idx));
     }

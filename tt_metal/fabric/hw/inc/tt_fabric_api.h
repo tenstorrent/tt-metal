@@ -1,14 +1,13 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
-#include "hw/inc/dataflow_api.h"
+#include "risc_attribs.h"
+#include "dataflow_api.h"
 #include "noc_overlay_parameters.h"
-#include "tt_fabric_interface.h"
-#include "eth_chan_noc_mapping.h"
-#include "tt_fabric.h"
+#include "ethernet/dataflow_api.h"
 
 namespace tt::tt_fabric {
 
