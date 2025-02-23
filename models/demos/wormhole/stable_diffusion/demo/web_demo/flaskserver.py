@@ -5,6 +5,7 @@
 from flask import Flask, request, jsonify, send_from_directory
 from gunicorn.app.base import BaseApplication
 from http import HTTPStatus
+from loguru import logger
 from models.demos.wormhole.stable_diffusion.demo.web_demo.task_queue import TaskQueue
 from models.demos.wormhole.stable_diffusion.demo.web_demo.model import warmup_model
 import os
@@ -28,7 +29,7 @@ def create_worker():
             if task_id:
                 task_queue.process_task(task_id)
     except Exception as error:
-        print(error)
+        logger.error(error)
 
 
 @app.route("/")
