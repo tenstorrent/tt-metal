@@ -13,22 +13,22 @@ template <typename T>
 struct Buffer {
     using value_type = T;
 
-    explicit Buffer() = default;
-    explicit Buffer(T* data_ptr, std::size_t size) : data_ptr_(data_ptr), size_(size) {}
+    Buffer() = default;
+    Buffer(T* data_ptr, std::size_t size) : data_ptr_(data_ptr), size_(size) {}
 
-    const std::size_t size() const { return this->size_; }
+    std::size_t size() const { return this->size_; }
 
-    inline T& operator[](std::size_t index) noexcept { return this->data_ptr_[index]; }
-    inline const T& operator[](std::size_t index) const noexcept { return this->data_ptr_[index]; }
+    T& operator[](std::size_t index) noexcept { return this->data_ptr_[index]; }
+    const T& operator[](std::size_t index) const noexcept { return this->data_ptr_[index]; }
 
-    inline T* begin() noexcept { return this->data_ptr_; }
-    inline T* end() noexcept { return this->data_ptr_ + this->size(); }
+    T* begin() noexcept { return this->data_ptr_; }
+    T* end() noexcept { return this->data_ptr_ + this->size(); }
 
-    inline const T* begin() const noexcept { return this->data_ptr_; }
-    inline const T* end() const noexcept { return this->data_ptr_ + this->size(); }
+    const T* begin() const noexcept { return this->data_ptr_; }
+    const T* end() const noexcept { return this->data_ptr_ + this->size(); }
 
-    inline void* data() noexcept { return static_cast<void*>(this->data_ptr_); }
-    inline const void* data() const noexcept { return static_cast<void*>(this->data_ptr_); }
+    void* data() noexcept { return static_cast<void*>(this->data_ptr_); }
+    const void* data() const noexcept { return static_cast<void*>(this->data_ptr_); }
 
 private:
     T* data_ptr_ = nullptr;

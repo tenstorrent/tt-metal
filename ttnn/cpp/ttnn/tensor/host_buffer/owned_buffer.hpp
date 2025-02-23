@@ -13,7 +13,7 @@ template <typename T>
 struct Buffer {
     using value_type = T;
 
-    explicit Buffer() = default;
+    Buffer() = default;
     explicit Buffer(std::shared_ptr<std::vector<T>>&& shared_vector) :
         shared_vector_(shared_vector),
         pointer_for_faster_access_(shared_vector->data()),
@@ -23,25 +23,25 @@ struct Buffer {
         pointer_for_faster_access_(shared_vector->data()),
         size_(shared_vector->size()) {}
 
-    const std::size_t size() const { return this->size_; }
+    std::size_t size() const { return this->size_; }
 
-    inline T& operator[](std::size_t index) noexcept { return this->pointer_for_faster_access_[index]; }
-    inline const T& operator[](std::size_t index) const noexcept { return this->pointer_for_faster_access_[index]; }
+    T& operator[](std::size_t index) noexcept { return this->pointer_for_faster_access_[index]; }
+    const T& operator[](std::size_t index) const noexcept { return this->pointer_for_faster_access_[index]; }
 
-    inline T* begin() noexcept { return this->pointer_for_faster_access_; }
-    inline T* end() noexcept { return this->pointer_for_faster_access_ + this->size(); }
+    T* begin() noexcept { return this->pointer_for_faster_access_; }
+    T* end() noexcept { return this->pointer_for_faster_access_ + this->size(); }
 
-    inline const T* begin() const noexcept { return this->pointer_for_faster_access_; }
-    inline const T* end() const noexcept { return this->pointer_for_faster_access_ + this->size(); }
+    const T* begin() const noexcept { return this->pointer_for_faster_access_; }
+    const T* end() const noexcept { return this->pointer_for_faster_access_ + this->size(); }
 
-    inline bool is_allocated() const { return bool(this->shared_vector_); }
-    inline const std::vector<T>& get() const { return *this->shared_vector_; }
-    inline const std::shared_ptr<std::vector<T>> get_ptr() const noexcept { return this->shared_vector_; }
-    inline void reset() { this->shared_vector_.reset(); }
+    bool is_allocated() const { return bool(this->shared_vector_); }
+    const std::vector<T>& get() const { return *this->shared_vector_; }
+    const std::shared_ptr<std::vector<T>> get_ptr() const noexcept { return this->shared_vector_; }
+    void reset() { this->shared_vector_.reset(); }
 
-    inline void* data() noexcept { return static_cast<void*>(this->pointer_for_faster_access_); }
-    inline const void* data() const noexcept { return static_cast<void*>(this->pointer_for_faster_access_); }
-    inline uint32_t use_count() const noexcept { return this->shared_vector_.use_count(); }
+    void* data() noexcept { return static_cast<void*>(this->pointer_for_faster_access_); }
+    const void* data() const noexcept { return static_cast<void*>(this->pointer_for_faster_access_); }
+    uint32_t use_count() const noexcept { return this->shared_vector_.use_count(); }
 
 private:
     std::shared_ptr<std::vector<T>> shared_vector_;
