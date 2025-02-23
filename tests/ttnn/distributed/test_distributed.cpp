@@ -10,6 +10,7 @@
 #include <ttnn/core.hpp>
 #include <ttnn/distributed/api.hpp>
 #include "ttnn/distributed/types.hpp"
+#include "ttnn/device.hpp"
 
 namespace ttnn::distributed::test {
 
@@ -36,6 +37,17 @@ TEST_F(DistributedTest, TestSystemMeshTearDownWithoutClose) {
     ASSERT_EQ(system_shape.dims(), 2);
     EXPECT_EQ(system_shape[0], 2);
     EXPECT_EQ(system_shape[1], 4);
+}
+
+TEST_F(DistributedTest, TestMeshBufferDestructor) {
+    for (int i = 0; i < 100; i++) {
+        auto mesh = ttnn::distributed::open_mesh_device(
+            {1, 1}, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, tt::tt_metal::DispatchCoreType::WORKER);
+        auto tensor = allocate_tensor_on_mesh(
+            TensorSpec(Shape({32, 32}), TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), MemoryConfig{})),
+            mesh.get());
+        mesh.reset();
+    }
 }
 
 TEST_F(DistributedTest, TestMemoryAllocationStatistics) {

@@ -75,6 +75,7 @@ public:
         const DeviceLocalBufferConfig& device_local_layout,
         MeshDevice* mesh_device,
         std::optional<DeviceAddr> address = std::nullopt);
+    ~MeshBuffer();
 
     // Returns true if the MeshBuffer is allocated. Note that MeshBuffer is created in the allocated state; either the
     // destructor or the `deallocate` method deallocate the MeshBuffer.
@@ -85,7 +86,7 @@ public:
     // resources.
     void deallocate();
 
-    MeshDevice* device() const { return mesh_device_; }
+    std::shared_ptr<MeshDevice> device() const { return mesh_device_.lock(); }
     DeviceAddr size() const;
     DeviceAddr device_local_size() const { return device_local_size_; }
     DeviceAddr address() const { return address_; };
@@ -114,7 +115,7 @@ private:
         buffers_(SimpleMeshShape(mesh_device->shape()), nullptr),
         config_(config),
         device_local_config_(device_local_config),
-        mesh_device_(mesh_device),
+        mesh_device_(mesh_device->shared_from_this()),
         address_(backing_buffer->address()),
         device_local_size_(device_local_size),
         state_(OwnedBufferState{std::move(backing_buffer)}) {}
@@ -129,7 +130,7 @@ private:
         buffers_(SimpleMeshShape(mesh_device->shape()), /*fill_value=*/nullptr),
         config_(config),
         device_local_config_(device_local_config),
-        mesh_device_(mesh_device),
+        mesh_device_(mesh_device->shared_from_this()),
         address_(address),
         device_local_size_(device_local_size),
         state_(ExternallyOwnedState{}) {}
@@ -137,7 +138,7 @@ private:
     void initialize_device_buffers();
     MeshBufferConfig config_;
     DeviceLocalBufferConfig device_local_config_;
-    MeshDevice* mesh_device_ = nullptr;
+    std::weak_ptr<MeshDevice> mesh_device_;
     DeviceAddr address_ = 0;
     DeviceAddr device_local_size_ = 0;
 

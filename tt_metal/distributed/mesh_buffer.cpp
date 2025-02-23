@@ -114,7 +114,7 @@ std::shared_ptr<MeshBuffer> MeshBuffer::create(
 void MeshBuffer::initialize_device_buffers() {
     auto init_device_buffer_at_address = [this](const MeshCoordinate& coord) {
         std::shared_ptr<Buffer> buffer = Buffer::create(
-            mesh_device_->get_device(coord),
+            device()->get_device(coord),
             address_,
             device_local_size_,
             device_local_config_.page_size,
@@ -132,7 +132,22 @@ void MeshBuffer::initialize_device_buffers() {
 
 bool MeshBuffer::is_allocated() const { return not std::holds_alternative<DeallocatedState>(state_); }
 
-void MeshBuffer::deallocate() { state_ = DeallocatedState{}; }
+MeshBuffer::~MeshBuffer() { deallocate(); }
+
+void MeshBuffer::deallocate() {
+    auto mesh_device = device();
+    if (mesh_device) {
+        state_ = DeallocatedState{};
+        return;
+    }
+
+    // Special handling is required if MeshDevice is already deallocated
+    if (std::holds_alternative<OwnedBufferState>(state_)) {
+        auto& owned_state = std::get<OwnedBufferState>(state_);
+        owned_state.backing_buffer->mark_as_deallocated();
+    }
+    state_ = DeallocatedState{};
+}
 
 std::shared_ptr<Buffer> MeshBuffer::get_device_buffer(const MeshCoordinate& device_coord) const {
     return buffers_.at(device_coord);

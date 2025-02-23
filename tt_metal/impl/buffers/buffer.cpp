@@ -401,7 +401,14 @@ void Buffer::deallocate() {
     });
 }
 
+void Buffer::mark_as_deallocated() {
+    allocation_status_.store(AllocationStatus::DEALLOCATED, std::memory_order::relaxed);
+}
+
 void Buffer::deleter(Buffer* buffer) {
+    if (buffer->allocation_status_.load(std::memory_order::relaxed) == AllocationStatus::DEALLOCATED) {
+        return;
+    }
     buffer->device_->push_work([buffer] {
         std::unique_ptr<Buffer> unique_buffer = std::unique_ptr<Buffer>(buffer);
         buffer->deallocate_impl();
