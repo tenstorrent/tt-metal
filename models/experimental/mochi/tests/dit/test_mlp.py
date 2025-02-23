@@ -70,12 +70,14 @@ def test_tt_feedforward_inference(mesh_device, seq_len, use_program_cache, reset
         seq_shard=seq_shard,
     )
     torch_input = torch.randn(1, 1, seq_len, in_feat)
+    if seq_shard:
+        mapper = ttnn.ShardTensorToMesh(mesh_device, dim=-2)
+    else:
+        mapper = ttnn.ReplicateTensorToMesh(mesh_device)
     tt_input = ttnn.from_torch(
         torch_input,
         device=mesh_device,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-2)
-        if seq_shard
-        else ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=mapper,
         dtype=ttnn.bfloat16,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.TILE_LAYOUT,
