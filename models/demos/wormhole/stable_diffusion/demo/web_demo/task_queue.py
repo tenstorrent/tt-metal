@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from loguru import logger
 import queue
 import uuid
 from models.demos.wormhole.stable_diffusion.demo.web_demo.model import generate_image_from_prompt
@@ -33,14 +34,14 @@ class TaskQueue:
         task["status"] = "In Progress"
 
         # Simulate image generation (you can replace this with actual image generation code)
-        print(f"Processing task {task_id} for prompt: {task['prompt']}")
+        logger.info(f"Processing task {task_id} for prompt: {task['prompt']}")
         image_path = generate_image_from_prompt(task["prompt"])
 
         # Update task status and store image path
         task["status"] = "Completed"
         task["image_path"] = image_path
 
-        print(f"Task {task_id} completed, image saved at {image_path}")
+        logger.info(f"Task {task_id} completed, image saved at {image_path}")
 
     def get_task_status(self, task_id):
         return self.tasks.get(task_id)

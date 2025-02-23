@@ -205,7 +205,7 @@ def create_model_pipeline(device, num_inference_steps, image_size=(256, 256)):
             ttnn_latents = ttnn_scheduler.step(noise_pred, t, ttnn_latents).prev_sample
             total_accum += time.time() - t0
             iter += 1
-        print(f"Time taken for {iter} iterations: total: {total_accum:.3f}")
+        logger.info(f"Time taken for {iter} iterations: total: {total_accum:.3f}")
 
         latents = ttnn.to_torch(ttnn_latents).to(torch.float32)
 
