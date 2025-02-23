@@ -682,11 +682,13 @@ FORCE_INLINE bool run_sender_channel_step(
     //       when moving to stream regs to manage rd/wr ptrs
     // TODO: update to be stream reg based. Initialize to space available and simply check for non-zero
     bool receiver_has_space_for_packet = outbound_to_receiver_channel_pointers.has_space_for_packet();
-    if (receiver_has_space_for_packet && !internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ)) {
-        bool has_unsent_packet = local_sender_channel_worker_interface.has_unsent_payload();
-        if (has_unsent_packet) {
-            bool sender_backpressured_from_sender_side = !(local_sender_channel_worker_interface.local_rdptr.distance_behind(local_sender_channel_worker_interface.local_wrptr) < SENDER_NUM_BUFFERS);
-            if (!sender_backpressured_from_sender_side) {
+    bool has_unsent_packet = local_sender_channel_worker_interface.has_unsent_payload();
+    bool sender_backpressured_from_sender_side = !(local_sender_channel_worker_interface.local_rdptr.distance_behind(local_sender_channel_worker_interface.local_wrptr) < SENDER_NUM_BUFFERS);
+    bool can_send = receiver_has_space_for_packet && !internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ) && has_unsent_packet && !sender_backpressured_from_sender_side;
+    if (can_send) {
+    // if (receiver_has_space_for_packet && !internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ)) {
+        // if (has_unsent_packet) {
+        //     if (!sender_backpressured_from_sender_side) {
                 did_something = true;
                 auto packet_header = reinterpret_cast<PACKET_HEADER_TYPE*>(local_sender_channel.get_buffer_address(local_sender_channel_worker_interface.local_wrptr.get_buffer_index()));
                 if constexpr (enable_packet_header_recording) {
@@ -699,8 +701,8 @@ FORCE_INLINE bool run_sender_channel_step(
                     outbound_to_receiver_channel_pointers,
                     remote_receiver_channel,
                     sender_channel_index);
-            }
-        }
+        //     }
+        // }
     }
 
     // Process COMPLETIONs from receiver
