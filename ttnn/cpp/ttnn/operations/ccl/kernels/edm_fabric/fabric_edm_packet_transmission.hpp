@@ -64,6 +64,7 @@ FORCE_INLINE void print_pkt_header(volatile tt::fabric::PacketHeader *const pack
 
 
 // Since we unicast to local, we must omit the packet header
+__attribute__((optimize("jump-tables")))
 FORCE_INLINE void execute_chip_unicast_to_local_chip(
     volatile tt::fabric::PacketHeader *const packet_start, uint16_t payload_size_bytes, uint32_t transaction_id) {
     auto const& header = *packet_start;
@@ -102,9 +103,15 @@ FORCE_INLINE void execute_chip_unicast_to_local_chip(
         } break;
 
         case tt::fabric::NocSendType::NOC_MULTICAST_ATOMIC_INC:
-        default: {
-            ASSERT(false);
-        } break;
+            break;
+        case tt::fabric::NocSendType::INVALID0:
+        case tt::fabric::NocSendType::INVALID1:
+        case tt::fabric::NocSendType::INVALID2:
+            __builtin_unreachable();
+            break;
+        // default:
+            // ASSERT(false);
+        // break;
     };
 }
 

@@ -27,7 +27,10 @@ enum NocSendType : uint8_t {
     NOC_MULTICAST_WRITE = 2,
     NOC_UNICAST_ATOMIC_INC = 3,
     NOC_MULTICAST_ATOMIC_INC = 4,
-    NOC_SEND_TYPE_LAST = NOC_MULTICAST_ATOMIC_INC
+    NOC_SEND_TYPE_LAST = NOC_MULTICAST_ATOMIC_INC,
+    INVALID0 = 5,
+    INVALID1 = 6,
+    INVALID2 = 7,
 };
 // How to send the payload across the cluster
 // 1 bit
