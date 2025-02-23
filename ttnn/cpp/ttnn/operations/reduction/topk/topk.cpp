@@ -99,7 +99,7 @@ std::vector<Tensor> post_topk_transform_tensor(
 std::vector<Tensor> ExecuteTopK::invoke(
     QueueId queue_id,
     const Tensor& input_tensor,
-    const int16_t k,
+    const int32_t k,
     const int8_t dim,
     const bool largest,
     const bool sorted,
@@ -134,7 +134,7 @@ std::vector<Tensor> ExecuteTopK::invoke(
 
 auto ExecuteTopK::invoke(
     const Tensor& input_tensor,
-    const int16_t k,
+    const int32_t k,
     const int8_t dim,
     const bool largest,
     const bool sorted,
