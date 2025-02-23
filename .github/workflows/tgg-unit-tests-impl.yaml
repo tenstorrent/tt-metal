@@ -6,6 +6,9 @@ on:
       docker-image:
         required: true
         type: string
+      wheel-artifact-name:
+        required: true
+        type: string
 
 jobs:
   TGG-tests:
@@ -52,11 +55,18 @@ jobs:
           path: /work
       - name: Extract files
         run: tar -xvf ttm_any.tar
-      - uses: ./.github/actions/install-python-deps
+      - name: ⬇️ Download Wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.wheel-artifact-name }}
+          path: /work
+      - name: Install Wheel
+        run: |
+          WHEEL_FILENAME=$(ls -1 *.whl)
+          pip3 install $WHEEL_FILENAME
       - name: Run unit regression tests
         timeout-minutes: 60
         run: |
-          source ${{ github.workspace }}/python_env/bin/activate
           ${{ matrix.test-group.cmd }}
       - name: Cleanup
         if: always()
