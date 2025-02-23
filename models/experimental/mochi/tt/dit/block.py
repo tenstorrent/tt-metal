@@ -3,10 +3,12 @@ from typing import Optional, Tuple
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 
-from models.experimental.mochi.tt.common import create_linear_layer
+from models.experimental.mochi.tt.common import create_linear_layer, as_sharded_tensor
 from models.experimental.mochi.tt.dit.attention import AsymmetricAttention
 from models.experimental.mochi.tt.dit.mlp import FeedForward
 from models.experimental.mochi.tt.dit.norms import modulated_rmsnorm, residual_tanh_gated_rmsnorm
+
+from ttnn import ConcatMeshToTensor
 
 
 class AsymmetricJointBlock(LightweightModule):
@@ -18,6 +20,7 @@ class AsymmetricJointBlock(LightweightModule):
         weight_cache_path,
         layer_num,
         dtype,
+        vision_seq_len: int,
         hidden_size_x: int,
         hidden_size_y: int,
         num_heads: int,
@@ -76,6 +79,7 @@ class AsymmetricJointBlock(LightweightModule):
             weight_cache_path=weight_cache_path,
             layer_num=layer_num,
             dtype=dtype,
+            vision_seq_len=vision_seq_len,
             dim_x=hidden_size_x,
             dim_y=hidden_size_y,
             num_heads=num_heads,
@@ -96,6 +100,7 @@ class AsymmetricJointBlock(LightweightModule):
             multiple_of=multiple_of,
             ffn_dim_multiplier=ffn_dim_multiplier,
             state_dict_prefix=f"{state_dict_prefix}.mlp_x",
+            seq_shard=True,
         )
 
         if self.update_y:
@@ -111,6 +116,7 @@ class AsymmetricJointBlock(LightweightModule):
                 multiple_of=multiple_of,
                 ffn_dim_multiplier=ffn_dim_multiplier,
                 state_dict_prefix=f"{state_dict_prefix}.mlp_y",
+                seq_shard=False,
             )
 
     def ff_block_x(self, x_1BNX: ttnn.Tensor, scale_x_B11X: ttnn.Tensor, gate_x_B11X: ttnn.Tensor) -> ttnn.Tensor:
@@ -126,12 +132,7 @@ class AsymmetricJointBlock(LightweightModule):
         """
         x_mod_1BNX = modulated_rmsnorm(x_1BNX, scale_x_B11X)
         x_res_shard_1BNX = self.mlp_x(x_mod_1BNX)
-        if self.num_devices > 1:
-            # Collect hidden-dim-fractured MLP outputs
-            x_res_1BNX = ttnn.all_gather(x_res_shard_1BNX, dim=3)
-        else:
-            x_res_1BNX = x_res_shard_1BNX
-        x_1BNX = residual_tanh_gated_rmsnorm(x_1BNX, x_res_1BNX, gate_x_B11X)
+        x_1BNX = residual_tanh_gated_rmsnorm(x_1BNX, x_res_shard_1BNX, gate_x_B11X)
         return x_1BNX
 
     def ff_block_y(self, y_1BLY: ttnn.Tensor, scale_y_B11Y: ttnn.Tensor, gate_y_B11Y: ttnn.Tensor) -> ttnn.Tensor:
@@ -154,6 +155,18 @@ class AsymmetricJointBlock(LightweightModule):
             y_res_1BLY = y_res_shard_1BLY
         y_1BLY = residual_tanh_gated_rmsnorm(y_1BLY, y_res_1BLY, gate_y_B11Y)
         return y_1BLY
+
+    def _col_to_seq_parallel_tensor(self, col_parallel_tensor, col_dim, seq_dim):
+        col_parallel_host_tensor = ttnn.from_device(col_parallel_tensor)
+        torch_tensor = ttnn.to_torch(
+            col_parallel_host_tensor, mesh_composer=ConcatMeshToTensor(self.mesh_device, dim=col_dim)
+        )
+        seq_parallel_tensor = as_sharded_tensor(
+            torch_tensor,
+            self.mesh_device,
+            dim=seq_dim,
+        )
+        return seq_parallel_tensor
 
     def forward(
         self,
@@ -248,7 +261,7 @@ class AsymmetricJointBlock(LightweightModule):
 
         if self.num_devices > 1:
             # Collect hidden-dim-fractured attention outputs
-            x_attn_1BNX = ttnn.all_gather(x_attn_shard_1BNX, dim=3)
+            x_attn_1BNX = self._col_to_seq_parallel_tensor(x_attn_shard_1BNX, col_dim=3, seq_dim=2)
         else:
             x_attn_1BNX = x_attn_shard_1BNX
 
@@ -267,5 +280,7 @@ class AsymmetricJointBlock(LightweightModule):
             if self.update_y:
                 y_1BLY = residual_tanh_gated_rmsnorm(y_1BLY, y_attn_1BLY, gate_msa_y_B11Y)
                 y_1BLY = self.ff_block_y(y_1BLY, scale_mlp_y_B11Y, gate_mlp_y_B11Y)
+
+        x_1BNX = ttnn.all_gather(x_1BNX, dim=2)
 
         return x_1BNX, y_1BLY

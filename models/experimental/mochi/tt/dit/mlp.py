@@ -18,6 +18,7 @@ class FeedForward(LightweightModule):
         multiple_of: int,
         ffn_dim_multiplier: float = None,
         state_dict_prefix=None,
+        seq_shard: bool = False,
     ):
         super().__init__()
         # assert len(mesh_device.get_devices()) == 1, "Only single-device inference is supported for feedforward layers"
@@ -36,11 +37,14 @@ class FeedForward(LightweightModule):
         cache_name = lambda name: weight_cache_path / (state_dict_prefix + f".{name}")
 
         # TODO: Handle swizzling data when fracturing w1 on columns
+        self.seq_shard = seq_shard
         as_tensor = lambda name, pt_tensor, type, dim: ttnn.as_tensor(
             pt_tensor,
             dtype=type,
             device=self.mesh_device,
-            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=dim),
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device)
+            if self.seq_shard
+            else ttnn.ShardTensorToMesh(self.mesh_device, dim=dim),
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_file_name=cache_name(name),
@@ -58,8 +62,16 @@ class FeedForward(LightweightModule):
         self.w3 = as_tensor("w3", w3_tensor, ttnn.bfloat16, dim=-1)
         self.w2 = as_tensor("w2", torch_weight("w2"), ttnn.bfloat16, dim=-2)
 
-        self.w13_config = partial(matmul_2d_config, k=in_features, n=hidden_size // self.num_devices, grid_size=(8, 8))
-        self.w2_config = partial(matmul_2d_config, k=hidden_size // self.num_devices, n=in_features, grid_size=(8, 8))
+        if seq_shard:
+            self.w13_config = partial(matmul_2d_config, k=in_features, n=hidden_size, grid_size=(8, 8))
+            self.w2_config = partial(matmul_2d_config, k=hidden_size, n=in_features, grid_size=(8, 8))
+        else:
+            self.w13_config = partial(
+                matmul_2d_config, k=in_features, n=hidden_size // self.num_devices, grid_size=(8, 8)
+            )
+            self.w2_config = partial(
+                matmul_2d_config, k=hidden_size // self.num_devices, n=in_features, grid_size=(8, 8)
+            )
 
     def forward(self, x_1BSD: ttnn.Tensor) -> ttnn.Tensor:
         B = x_1BSD.shape[1]
@@ -105,7 +117,7 @@ class FeedForward(LightweightModule):
         )
 
         # # All reduce for multi-chip setups
-        if self.num_devices > 1:
+        if self.num_devices > 1 and not self.seq_shard:
             result_1BSD = ttnn.reduce_scatter(
                 result_1BSD,
                 dim=3,
@@ -114,5 +126,5 @@ class FeedForward(LightweightModule):
                 memory_config=result_1BSD.memory_config(),
             )
 
-        result_1BSD = ttnn.reshape(result_1BSD, (1, B, S, D // self.num_devices))
+        result_1BSD = ttnn.reshape(result_1BSD, (1, B, S, D // (1 if self.seq_shard else self.num_devices)))
         return result_1BSD

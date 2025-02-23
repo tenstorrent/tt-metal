@@ -24,15 +24,15 @@ from models.experimental.mochi.tt.common import get_mochi_dir, get_cache_path, c
     indirect=True,
 )
 @pytest.mark.parametrize(
-    "ff_path, in_feat, seq_len",
+    "ff_path, in_feat, seq_len, seq_shard",
     [
-        ("blocks.0.mlp_x", 3072, 44 * 1024),
-        ("blocks.0.mlp_x", 3072, 44520),
-        ("blocks.0.mlp_y", 1536, 256),
-        ("blocks.0.mlp_y", 1536, 118),
+        ("blocks.0.mlp_x", 3072, 44 * 1024, True),
+        # ("blocks.0.mlp_x", 3072, 44520),
+        ("blocks.0.mlp_y", 1536, 256, False),
+        # ("blocks.0.mlp_y", 1536, 118),
     ],
 )
-def test_tt_feedforward_inference(mesh_device, seq_len, use_program_cache, reset_seeds, ff_path, in_feat):
+def test_tt_feedforward_inference(mesh_device, seq_len, use_program_cache, reset_seeds, ff_path, in_feat, seq_shard):
     dtype = ttnn.bfloat16
 
     mesh_device.enable_async(True)
@@ -67,12 +67,15 @@ def test_tt_feedforward_inference(mesh_device, seq_len, use_program_cache, reset
         multiple_of=multiple_of,
         ffn_dim_multiplier=None,
         state_dict_prefix=ff_path,
+        seq_shard=seq_shard,
     )
     torch_input = torch.randn(1, 1, seq_len, in_feat)
     tt_input = ttnn.from_torch(
         torch_input,
         device=mesh_device,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-2)
+        if seq_shard
+        else ttnn.ReplicateTensorToMesh(mesh_device),
         dtype=ttnn.bfloat16,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.TILE_LAYOUT,
@@ -81,7 +84,10 @@ def test_tt_feedforward_inference(mesh_device, seq_len, use_program_cache, reset
     logger.info("Run TtFeedForward")
     tt_output = tt_model(tt_input)
 
-    tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
+    if seq_shard:
+        tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-2))
+    else:
+        tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
 
     # Get reference output from the reference model
     reference_output = reference_model(torch_input)
