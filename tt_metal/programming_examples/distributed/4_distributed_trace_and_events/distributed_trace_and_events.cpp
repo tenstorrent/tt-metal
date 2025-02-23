@@ -25,9 +25,9 @@ using namespace tt::tt_metal::distributed;
 // synchronization
 
 std::shared_ptr<Program> EltwiseBinaryProgramGenerator(
-    std::shared_ptr<MeshBuffer> src0_buf,
-    std::shared_ptr<MeshBuffer> src1_buf,
-    std::shared_ptr<MeshBuffer> output_buf,
+    const std::shared_ptr<MeshBuffer>& src0_buf,
+    const std::shared_ptr<MeshBuffer>& src1_buf,
+    const std::shared_ptr<MeshBuffer>& output_buf,
     const SubDevice& sub_device_for_program,
     uint32_t num_tiles,
     uint32_t single_tile_size,
