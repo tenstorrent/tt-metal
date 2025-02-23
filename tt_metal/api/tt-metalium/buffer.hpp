@@ -252,6 +252,9 @@ class Buffer final {
 
     size_t unique_id() const { return unique_id_; }
 
+    // Mark the buffer as deallocated, without releasing underlying device memory
+    void mark_as_deallocated();
+
     Buffer(
         IDevice* device,
         DeviceAddr size,
