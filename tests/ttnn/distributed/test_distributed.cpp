@@ -10,7 +10,6 @@
 #include <ttnn/core.hpp>
 #include <ttnn/distributed/api.hpp>
 #include "ttnn/distributed/types.hpp"
-#include "ttnn/device.hpp"
 
 namespace ttnn::distributed::test {
 
