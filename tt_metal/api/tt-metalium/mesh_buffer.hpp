@@ -86,7 +86,7 @@ public:
     // resources.
     void deallocate();
 
-    std::shared_ptr<MeshDevice> device() const { return mesh_device_.lock(); }
+    std::shared_ptr<MeshDevice> device() const;
     DeviceAddr size() const;
     DeviceAddr device_local_size() const { return device_local_size_; }
     DeviceAddr address() const { return address_; };

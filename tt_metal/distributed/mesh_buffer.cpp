@@ -135,7 +135,7 @@ bool MeshBuffer::is_allocated() const { return not std::holds_alternative<Deallo
 MeshBuffer::~MeshBuffer() { deallocate(); }
 
 void MeshBuffer::deallocate() {
-    auto mesh_device = device();
+    auto mesh_device = mesh_device_.lock();
     if (mesh_device) {
         state_ = DeallocatedState{};
         return;
@@ -147,6 +147,12 @@ void MeshBuffer::deallocate() {
         owned_state.backing_buffer->mark_as_deallocated();
     }
     state_ = DeallocatedState{};
+}
+
+std::shared_ptr<MeshDevice> MeshBuffer::device() const {
+    auto device = mesh_device_.lock();
+    TT_FATAL(device, "Can't get device from mesh buffer, already deallocated");
+    return device;
 }
 
 std::shared_ptr<Buffer> MeshBuffer::get_device_buffer(const MeshCoordinate& device_coord) const {
