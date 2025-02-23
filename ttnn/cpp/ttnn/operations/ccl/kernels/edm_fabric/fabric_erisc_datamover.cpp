@@ -753,6 +753,7 @@ FORCE_INLINE bool run_sender_channel_step(
             }
             did_something = true;
             channel_connection_established = true;
+            local_sender_channel_worker_interface.cache_producer_noc_addr();
             if constexpr (enable_first_level_ack) {
                 local_sender_channel_worker_interface.update_worker_copy_of_read_ptr(local_sender_channel_worker_interface.local_ackptr.get_ptr());
             } else {
