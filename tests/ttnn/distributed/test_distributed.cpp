@@ -12,6 +12,7 @@
 #include "ttnn/distributed/types.hpp"
 
 namespace ttnn::distributed::test {
+namespace {
 
 using ::testing::IsEmpty;
 using ::testing::SizeIs;
@@ -94,6 +95,7 @@ TEST_F(DistributedTest, Submesh) {
     EXPECT_EQ(mesh->get_device(MeshCoordinate{1, 1})->id(), submesh->get_device(MeshCoordinate{0, 0})->id());
     EXPECT_EQ(mesh->get_device(MeshCoordinate{1, 2})->id(), submesh->get_device(MeshCoordinate{0, 1})->id());
     EXPECT_EQ(submesh->get_device(1, 1), nullptr);
+}
 
-}  // namespace ttnn::distributed::test
+}  // namespace
 }  // namespace ttnn::distributed::test

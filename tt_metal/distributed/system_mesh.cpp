@@ -8,6 +8,7 @@
 #include "umd/device/types/cluster_descriptor_types.h"
 #include "tt_metal/distributed/coordinate_translation.hpp"
 
+#include "indestructible.hpp"
 #include "mesh_coord.hpp"
 #include "tt_cluster.hpp"
 
@@ -29,8 +30,6 @@ public:
     const SimpleMeshShape& get_shape() const;
     std::vector<chip_id_t> get_mapped_physical_device_ids(const MeshDeviceConfig& config) const;
     std::vector<chip_id_t> request_available_devices(const MeshDeviceConfig& config) const;
-
-    IDevice* get_device(const chip_id_t physical_device_id) const;
     chip_id_t get_physical_device_id(const MeshCoordinate& coord) const;
 };
 
@@ -128,7 +127,7 @@ std::vector<chip_id_t> SystemMesh::Impl::get_mapped_physical_device_ids(const Me
 
         auto line_length = config.mesh_shape.mesh_size();
         for (const auto& logical_coordinate : MeshDeviceView::get_line_coordinates(line_length, shape_2d)) {
-            auto physical_device_id = logical_to_device_id_.at(logical_coordinate);
+            auto physical_device_id = get_physical_device_id(logical_coordinate);
             physical_device_ids.push_back(physical_device_id);
 
             log_debug(
@@ -176,14 +175,9 @@ std::vector<chip_id_t> SystemMesh::Impl::get_mapped_physical_device_ids(const Me
     MeshCoordinateRange system_range(system_offset, MeshCoordinate(end_coord));
 
     for (const auto& system_coord : system_range) {
-        auto physical_device_id = logical_to_device_id_.find(system_coord);
-        TT_FATAL(
-            physical_device_id != logical_to_device_id_.end(),
-            "Logical coordinate: {} not found in SystemMesh of shape {}",
-            system_coord,
-            logical_mesh_shape_);
-        physical_device_ids.push_back(physical_device_id->second);
-        log_debug(LogMetal, "Logical coordinate: {}, Physical device ID: {}", system_coord, physical_device_id->second);
+        auto physical_device_id = get_physical_device_id(system_coord);
+        physical_device_ids.push_back(physical_device_id);
+        log_debug(LogMetal, "Logical coordinate: {}, Physical device ID: {}", system_coord, physical_device_id);
     }
     return physical_device_ids;
 }
@@ -201,11 +195,11 @@ std::vector<chip_id_t> SystemMesh::Impl::request_available_devices(const MeshDev
 SystemMesh::SystemMesh() : pimpl_(std::make_unique<Impl>()) {}
 
 SystemMesh& SystemMesh::instance() {
-    static SystemMesh instance;
-    if (!instance.pimpl_->is_system_mesh_initialized()) {
-        instance.pimpl_->initialize();
+    static tt::stl::Indestructible<SystemMesh> instance;
+    if (!instance.get().pimpl_->is_system_mesh_initialized()) {
+        instance.get().pimpl_->initialize();
     }
-    return instance;
+    return instance.get();
 }
 
 chip_id_t SystemMesh::get_physical_device_id(const MeshCoordinate& coord) const {
