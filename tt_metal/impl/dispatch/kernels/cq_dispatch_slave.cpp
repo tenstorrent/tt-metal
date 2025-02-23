@@ -204,6 +204,7 @@ void process_go_signal_mcast_cmd() {
     uint8_t go_signal_noc_data_idx = cmd->mcast.noc_data_start_index;
     // send go signal update here
     for (uint32_t i = 0, num_mcasts = cmd->mcast.num_mcast_txns; i < num_mcasts; ++i) {
+        uint64_t mcast_xy = go_signal_noc_data[go_signal_noc_data_idx];
         uint64_t dst = get_noc_addr_helper(go_signal_noc_data[go_signal_noc_data_idx++], mcast_go_signal_addr);
         // packed_write_max_unicast_sub_cmds is the total number of compute cores (num_mcast_dests for this txn)
         noc_async_write_multicast_one_packet(

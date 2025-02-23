@@ -49,7 +49,7 @@ typedef bool debug_sanitize_noc_which_core_t;
 AddressableCoreType get_core_type(uint8_t noc_id, uint8_t x, uint8_t y, bool& is_virtual_coord) {
     core_info_msg_t tt_l1_ptr* core_info = GET_MAILBOX_ADDRESS_DEV(core_info);
     // Check if the target NOC endpoint is a valid non-Tensix core in the Physical Coordinate Space
-    for (uint32_t idx = 0; idx < MAX_NON_WORKER_CORES; idx++) {
+    for (uint32_t idx = 0; idx < MAX_PHYSICAL_NON_WORKER_CORES; idx++) {
         uint8_t core_x = core_info->non_worker_cores[idx].x;
         uint8_t core_y = core_info->non_worker_cores[idx].y;
         if (x == NOC_0_X_PHYS_COORD(noc_id, core_info->noc_size_x, (uint32_t)core_x) &&
@@ -92,39 +92,42 @@ AddressableCoreType get_core_type(uint8_t noc_id, uint8_t x, uint8_t y, bool& is
         }
     }
 
-    // Check if NOC endpoint is valid in the Tensix Physical Coordinate Space.
-    if (noc_id == 0) {
-        if (x >= NOC_0_X_PHYS_COORD(noc_id, core_info->noc_size_x, (uint32_t)0) &&
-            x <= NOC_0_X_PHYS_COORD(noc_id, core_info->noc_size_x, (uint32_t)core_info->noc_size_x - 1) &&
-            y >= NOC_0_Y_PHYS_COORD(noc_id, core_info->noc_size_y, (uint32_t)0) &&
-            y <= NOC_0_Y_PHYS_COORD(noc_id, core_info->noc_size_y, (uint32_t)core_info->noc_size_y - 1)) {
-            is_virtual_coord = false;
+    if constexpr (COORDINATE_VIRTUALIZATION_ENABLED) {
+        // Check if NOC endpoint is valid in the Tensix Virtual Coordinate Space.
+#ifdef ARCH_BLACKHOLE
+        // BH Tensix virtual coords are not continuous
+        uint32_t virtual_end_x = (uint32_t)core_info->noc_size_x - 1;
+        uint32_t virtual_end_y = (uint32_t)core_info->noc_size_y - 1;
+#else
+        // Use worker grid size instead of noc size because virtual coords are continuous
+        uint32_t virtual_end_x = (uint32_t)VIRTUAL_TENSIX_START_X + core_info->worker_grid_size_x - 1;
+        uint32_t virtual_end_y = (uint32_t)VIRTUAL_TENSIX_START_Y + core_info->worker_grid_size_y - 1;
+#endif
+        if (x >= NOC_0_X(noc_id, core_info->noc_size_x, (uint32_t)VIRTUAL_TENSIX_START_X) &&
+            x <= NOC_0_X(noc_id, core_info->noc_size_x, virtual_end_x) &&
+            y >= NOC_0_Y(noc_id, core_info->noc_size_y, (uint32_t)VIRTUAL_TENSIX_START_Y) &&
+            y <= NOC_0_Y(noc_id, core_info->noc_size_y, virtual_end_y)) {
+            is_virtual_coord = true;
             return AddressableCoreType::TENSIX;
         }
     } else {
-        if (x <= NOC_0_X_PHYS_COORD(noc_id, core_info->noc_size_x, (uint32_t)0) &&
-            x >= NOC_0_X_PHYS_COORD(noc_id, core_info->noc_size_x, (uint32_t)core_info->noc_size_x - 1) &&
-            y <= NOC_0_Y_PHYS_COORD(noc_id, core_info->noc_size_y, (uint32_t)0) &&
-            y >= NOC_0_Y_PHYS_COORD(noc_id, core_info->noc_size_y, (uint32_t)core_info->noc_size_y - 1)) {
-            is_virtual_coord = false;
-            return AddressableCoreType::TENSIX;
-        }
-    }
-    if constexpr (COORDINATE_VIRTUALIZATION_ENABLED) {
-        // Check if NOC endpoint is valid in the Tensix Virtual Coordinate Space. Use worker grid size instead of noc
-        // size because virtual coords are continuous.
-        if (x >= NOC_0_X(noc_id, core_info->noc_size_x, (uint32_t)VIRTUAL_TENSIX_START_X) &&
-            x <= NOC_0_X(
-                     noc_id,
-                     core_info->noc_size_x,
-                     (uint32_t)VIRTUAL_TENSIX_START_X + core_info->worker_grid_size_x - 1) &&
-            y >= NOC_0_Y(noc_id, core_info->noc_size_y, (uint32_t)VIRTUAL_TENSIX_START_Y) &&
-            y <= NOC_0_Y(
-                     noc_id,
-                     core_info->noc_size_y,
-                     (uint32_t)VIRTUAL_TENSIX_START_Y + core_info->worker_grid_size_y - 1)) {
-            is_virtual_coord = true;
-            return AddressableCoreType::TENSIX;
+        // Check if NOC endpoint is valid in the Tensix Physical Coordinate Space.
+        if (noc_id == 0) {
+            if (x >= NOC_0_X_PHYS_COORD(noc_id, core_info->noc_size_x, (uint32_t)0) &&
+                x <= NOC_0_X_PHYS_COORD(noc_id, core_info->noc_size_x, (uint32_t)core_info->noc_size_x - 1) &&
+                y >= NOC_0_Y_PHYS_COORD(noc_id, core_info->noc_size_y, (uint32_t)0) &&
+                y <= NOC_0_Y_PHYS_COORD(noc_id, core_info->noc_size_y, (uint32_t)core_info->noc_size_y - 1)) {
+                is_virtual_coord = false;
+                return AddressableCoreType::TENSIX;
+            }
+        } else {
+            if (x <= NOC_0_X_PHYS_COORD(noc_id, core_info->noc_size_x, (uint32_t)0) &&
+                x >= NOC_0_X_PHYS_COORD(noc_id, core_info->noc_size_x, (uint32_t)core_info->noc_size_x - 1) &&
+                y <= NOC_0_Y_PHYS_COORD(noc_id, core_info->noc_size_y, (uint32_t)0) &&
+                y >= NOC_0_Y_PHYS_COORD(noc_id, core_info->noc_size_y, (uint32_t)core_info->noc_size_y - 1)) {
+                is_virtual_coord = false;
+                return AddressableCoreType::TENSIX;
+            }
         }
     }
 
