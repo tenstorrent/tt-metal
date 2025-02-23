@@ -23,7 +23,6 @@
 #include "fmt/base.h"
 #include <logger.hpp>
 #include <metal_soc_descriptor.h>
-#include <test_common.hpp>
 #include <tt_backend_api_types.hpp>
 #include "umd/device/types/arch.h"
 #include "umd/device/tt_cluster_descriptor.h"
