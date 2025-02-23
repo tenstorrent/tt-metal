@@ -12,8 +12,8 @@
 
 FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
     uint64_t noc0_dest_noc_addr,
-    volatile tt::fabric::PacketHeader* pkt_hdr_forward,
-    volatile tt::fabric::PacketHeader* pkt_hdr_backward,
+    volatile PACKET_HEADER_TYPE* pkt_hdr_forward,
+    volatile PACKET_HEADER_TYPE* pkt_hdr_backward,
     FabricConnectionManager& fabric_connection,
     size_t& l1_read_addr,
     uint32_t payload_size_bytes) {
@@ -29,7 +29,7 @@ FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
         fabric_connection.get_forward_connection().send_payload_without_header_non_blocking_from_address(
             l1_read_addr, payload_size_bytes);
         fabric_connection.get_forward_connection().send_payload_flush_blocking_from_address(
-            (uint32_t)pkt_hdr_forward, sizeof(tt::fabric::PacketHeader));
+            (uint32_t)pkt_hdr_forward, sizeof(PACKET_HEADER_TYPE));
     }
 
     if (fabric_connection.has_backward_connection()) {
@@ -37,7 +37,7 @@ FORCE_INLINE void write_and_advance_local_read_address_for_fabric_write(
         fabric_connection.get_backward_connection().send_payload_without_header_non_blocking_from_address(
             l1_read_addr, payload_size_bytes);
         fabric_connection.get_backward_connection().send_payload_flush_blocking_from_address(
-            (uint32_t)pkt_hdr_backward, sizeof(tt::fabric::PacketHeader));
+            (uint32_t)pkt_hdr_backward, sizeof(PACKET_HEADER_TYPE));
     }
 
     noc_async_writes_flushed();

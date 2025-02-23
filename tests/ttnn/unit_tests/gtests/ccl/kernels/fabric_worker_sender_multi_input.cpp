@@ -52,10 +52,10 @@ auto forward_to_fabric_from_cb(
 
     // bit of a hack to extract X/Y
     const auto noc0_dest_address = get_noc_addr(current_page, dest_addr_gen, 0, NORMALIZED_NOC_INDEX);
-    const size_t packet_size = page_size + sizeof(tt::fabric::PacketHeader);
+    const size_t packet_size = page_size + sizeof(PACKET_HEADER_TYPE);
 
     auto packet_addr = get_read_ptr(cb_id);
-    auto &packet_header = *reinterpret_cast<tt::fabric::PacketHeader*>(packet_addr);
+    auto& packet_header = *reinterpret_cast<PACKET_HEADER_TYPE*>(packet_addr);
     if constexpr (mcast_mode) {
         packet_header
             .to_chip_multicast(tt::fabric::MulticastRoutingCommandHeader{config.mcast.distance, config.mcast.range})
@@ -182,7 +182,7 @@ void kernel_main() {
     sender.wait_for_empty_write_slot();
 
     constexpr size_t kLoopbackNumHopsToMyChip = 2;
-    auto &packet_header = *reinterpret_cast<tt::fabric::PacketHeader*>(a_packet_header_addr);
+    auto& packet_header = *reinterpret_cast<PACKET_HEADER_TYPE*>(a_packet_header_addr);
     ASSERT(*last_message_semaphore_address == 0);
     packet_header.reserved = 0xE;
     packet_header.reserved2 = 0xFFFF;

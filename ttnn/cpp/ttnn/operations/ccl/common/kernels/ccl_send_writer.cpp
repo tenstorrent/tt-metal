@@ -125,7 +125,7 @@ void kernel_main() {
     //    out when we start enabling other modes
     const size_t packet_size_in_pages = get_arg_val<uint32_t>(arg_idx++);
     const size_t payload_page_size = get_arg_val<uint32_t>(arg_idx++);
-    const size_t l1_scratch_page_size = payload_page_size + sizeof(tt::fabric::PacketHeader);
+    const size_t l1_scratch_page_size = payload_page_size + sizeof(PACKET_HEADER_TYPE);
     const size_t forward_direction_num_hops = get_arg_val<uint32_t>(arg_idx++);
     const size_t backward_direction_num_hops = get_arg_val<uint32_t>(arg_idx++);
     const bool has_forward_fabric_connection = get_arg_val<uint32_t>(arg_idx++) != 0;
@@ -248,7 +248,7 @@ void kernel_main() {
         DPRINT << "ccl_send_writer Sending payload completion sync signals\n";
         ASSERT(some_buffering_addr != 0);
         some_buffering_addr =
-            (some_buffering_addr + (sizeof(tt::fabric::PacketHeader))) & ~(sizeof(tt::fabric::PacketHeader) - 1);
+            (some_buffering_addr + (sizeof(PACKET_HEADER_TYPE))) & ~(sizeof(PACKET_HEADER_TYPE) - 1);
 
         mcast_sync_signal_to_addr(
             some_buffering_addr,
