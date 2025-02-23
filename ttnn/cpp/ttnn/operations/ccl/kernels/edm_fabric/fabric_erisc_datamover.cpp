@@ -851,10 +851,15 @@ FORCE_INLINE void run_receiver_channel_step(
         auto &wr_flush_ptr = receiver_channel_pointers.wr_flush_ptr;
         // Currently unclear if it's better to loop here or not... Also unclear if merging these
         // two pointers is better or not... Seems to be maybe 5-10% better merged but need more data
-        if (!wr_flush_ptr.is_caught_up_to(wr_sent_ptr) && !internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ)) {
-            auto receiver_buffer_index = wr_flush_ptr.get_buffer_index();
-            bool next_trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
-            if (next_trid_flushed) {
+        bool unflushed_writes_and_eth_txq_not_busy = !wr_flush_ptr.is_caught_up_to(wr_sent_ptr) && !internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ);
+        auto receiver_buffer_index = wr_flush_ptr.get_buffer_index();
+        bool next_trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
+        bool can_send_completion = unflushed_writes_and_eth_txq_not_busy && next_trid_flushed;
+        if (can_send_completion) {
+        // if (unflushed_writes_and_eth_txq_not_busy) {
+        //     auto receiver_buffer_index = wr_flush_ptr.get_buffer_index();
+        //     bool next_trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
+        //     if (next_trid_flushed) {
                 auto &completion_ptr = receiver_channel_pointers.completion_ptr;
                 wr_flush_ptr.increment();
                 receiver_channel_trid_tracker.clear_trid_at_buffer_slot(receiver_buffer_index);
@@ -863,7 +868,8 @@ FORCE_INLINE void run_receiver_channel_step(
                     remote_sender_channnels,
                     completion_ptr,
                     local_receiver_channel);
-            }
+        //     }
+        // }
         }
 
     }
