@@ -657,6 +657,7 @@ FORCE_INLINE void receiver_forward_packet(
             default:
                 ASSERT(false);
         }
+    }
 }
 
 ////////////////////////////////////
