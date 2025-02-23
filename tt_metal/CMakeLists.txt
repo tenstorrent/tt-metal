@@ -142,7 +142,7 @@ if(BUILD_PROGRAMMING_EXAMPLES)
 endif()
 
 # Allow internal files to access the public API "by default" and without the
-# scoping that external consumers must use.  Scaoping may still be used if desired.
+# scoping that external consumers must use.  Scoping may still be used if desired.
 include_directories(
     api
     api/tt-metalium

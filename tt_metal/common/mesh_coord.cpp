@@ -82,9 +82,12 @@ bool operator==(const MeshCoordinate& lhs, const MeshCoordinate& rhs) {
 bool operator!=(const MeshCoordinate& lhs, const MeshCoordinate& rhs) { return !(lhs == rhs); }
 
 std::ostream& operator<<(std::ostream& os, const MeshCoordinate& coord) {
-    os << "MeshCoordinate(" << coord.dims() << ", [";
-    for (size_t dim : coord.coords()) {
-        os << dim << ", ";
+    os << "MeshCoordinate([";
+    for (size_t i = 0; i < coord.dims(); ++i) {
+        if (i > 0) {
+            os << ", ";
+        }
+        os << coord[i];
     }
     os << "])";
     return os;
