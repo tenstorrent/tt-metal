@@ -114,6 +114,7 @@ template struct ExecuteUnary<UnaryOpType::TANH>;
 template struct ExecuteUnary<UnaryOpType::SIGMOID, UnaryOpType::LOG>;
 template struct ExecuteUnary<UnaryOpType::TILED_PROD>;
 template struct ExecuteUnary<UnaryOpType::BITWISE_NOT>;
+template struct ExecuteUnary<UnaryOpType::INTERLEAVED_COMPLEX_ROTATE90>;
 
 template <UnaryOpType unary_op_type>
 Tensor ExecuteUnaryWithFastAndApproximateMode<unary_op_type>::invoke(
