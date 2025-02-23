@@ -562,7 +562,7 @@ TEST_F(DeviceFixture, ActiveEthKernelsDirectSendAllConnectedChips) {
     }
 }
 
-TEST_F(N300DeviceFixture, ActiveEthKernelsBidirectionalDirectSend) {
+TEST_F(TwoDeviceFixture, ActiveEthKernelsBidirectionalDirectSend) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const auto& device_0 = devices_.at(0);
     const auto& device_1 = devices_.at(1);
@@ -656,7 +656,7 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsBidirectionalDirectSend) {
     }
 }
 
-TEST_F(N300DeviceFixture, ActiveEthKernelsRepeatedDirectSends) {
+TEST_F(TwoDeviceFixture, ActiveEthKernelsRepeatedDirectSends) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const auto& device_0 = devices_.at(0);
     const auto& device_1 = devices_.at(1);
@@ -691,7 +691,7 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsRepeatedDirectSends) {
     }
 }
 
-TEST_F(N300DeviceFixture, ActiveEthKernelsRandomDirectSendTests) {
+TEST_F(TwoDeviceFixture, ActiveEthKernelsRandomDirectSendTests) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     srand(0);
     const auto& device_0 = devices_.at(0);
@@ -736,7 +736,7 @@ TEST_F(N300DeviceFixture, ActiveEthKernelsRandomDirectSendTests) {
             receiver_core));
     }
 }
-TEST_F(N300DeviceFixture, ActiveEthKernelsRandomEthPacketSizeDirectSendTests) {
+TEST_F(TwoDeviceFixture, ActiveEthKernelsRandomEthPacketSizeDirectSendTests) {
     srand(0);
     const auto& device_0 = devices_.at(0);
     const auto& device_1 = devices_.at(1);

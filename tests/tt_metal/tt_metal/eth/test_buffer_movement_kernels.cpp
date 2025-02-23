@@ -300,7 +300,7 @@ bool chip_to_chip_interleaved_buffer_transfer(
 
 }  // namespace unit_tests::erisc::kernels
 
-TEST_F(N300DeviceFixture, ActiveEthKernelsSendDramBufferChip0ToChip1) {
+TEST_F(TwoDeviceFixture, ActiveEthKernelsSendDramBufferChip0ToChip1) {
     const auto& sender_device = devices_.at(0);
     const auto& receiver_device = devices_.at(1);
 
