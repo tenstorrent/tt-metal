@@ -32,7 +32,6 @@ jobs:
         PYTHONPATH: /work
         LD_LIBRARY_PATH: /work/build/lib
         LOGURU_LEVEL: INFO
-        TT_METAL_ENV: ${{ vars.TT_METAL_ENV }}
         ARCH_NAME: ${{ matrix.test-group.arch }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
@@ -67,6 +66,10 @@ jobs:
       - name: Run unit regression tests
         timeout-minutes: 60
         run: |
+          set -x
+          pwd
+          echo $PYTHONPATH
+          ls -al
           ${{ matrix.test-group.cmd }}
       - name: Cleanup
         if: always()
