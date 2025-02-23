@@ -10,7 +10,7 @@
 namespace ttnn::operations::moreh::moreh_getitem {
 struct MorehGetItem {
     static Tensor invoke(
-        const Tensor& input,
+        const std::optional<const Tensor>& input,
         const std::vector<Tensor>& index_tensors,
         const ttnn::SmallVector<uint32_t>& index_dims,
         const std::optional<Tensor>& output,
