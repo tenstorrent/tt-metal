@@ -68,7 +68,7 @@ int main(int argc, char** argv) {
     static const std::string k_DummyKernelSrc =
         "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/kernels/dummy_kernel.cpp";
 
-    CoreCoord core{0, 0};
+    CoreCoord core{2, 2};
     auto pgm_0 = tt::tt_metal::CreateProgram();
     auto pgm_1 = tt::tt_metal::CreateProgram();
     // Mesh info for the destination device
@@ -85,6 +85,9 @@ int main(int argc, char** argv) {
     auto& mem_map = DispatchMemMap::get(CoreType::WORKER, 1);
     auto cb_base = mem_map.dispatch_buffer_base();
     auto fabric_interface_addr = mem_map.get_device_command_queue_addr(CommandQueueDeviceAddrType::FABRIC_STATE);
+
+    auto device_0_downstream_phy = devices[1]->virtual_core_from_logical_core(core, CoreType::WORKER);
+    auto device_1_upstream_phy = devices[0]->virtual_core_from_logical_core(core, CoreType::WORKER);
 
     // Upstream (device 0)
     tt::tt_metal::CreateKernel(
@@ -103,6 +106,8 @@ int main(int argc, char** argv) {
                     dev_0_chan,
                     cb_base,
                     fabric_interface_addr,
+                    device_0_downstream_phy.x,
+                    device_0_downstream_phy.y,
                 },
         });
 
@@ -123,11 +128,13 @@ int main(int argc, char** argv) {
                     dev_1_chan,
                     cb_base,
                     fabric_interface_addr,
+                    device_1_upstream_phy.x,
+                    device_1_upstream_phy.y,
                 },
         });
 
-    tt::tt_metal::detail::LaunchProgram(devices[0], pgm_0);
-    tt::tt_metal::detail::LaunchProgram(devices[1], pgm_1);
+    tt::tt_metal::detail::LaunchProgram(devices[0], pgm_0, false);
+    tt::tt_metal::detail::LaunchProgram(devices[1], pgm_1, false);
     tt::tt_metal::detail::WaitProgramDone(devices[0], pgm_0);
     tt::tt_metal::detail::WaitProgramDone(devices[1], pgm_1);
 

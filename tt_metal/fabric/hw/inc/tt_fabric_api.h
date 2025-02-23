@@ -92,6 +92,7 @@ inline void fabric_wait_for_pull_request_bytes_flushed(
 
 inline void fabric_wait_for_pull_request_flushed(volatile tt_l1_ptr fabric_client_interface_t* client_interface) {
     uint32_t words_written = client_interface->local_pull_request.pull_request.words_written;
+    DPRINT << "Wait for pull finished: " << words_written * 16 << "B\n";
     fabric_wait_for_pull_request_words_flushed(client_interface, words_written);
 }
 

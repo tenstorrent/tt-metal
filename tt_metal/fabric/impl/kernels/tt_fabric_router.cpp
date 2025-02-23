@@ -188,10 +188,8 @@ void kernel_main() {
         if (fvc_producer_state.get_curr_packet_valid()) {
             fvc_producer_state.process_inbound_packet();
             loop_count = 0;
-            DPRINT << "FABRIC INBOUND DATA RECEV\n";
         } else if (fvc_producer_state.packet_corrupted) {
             write_kernel_status(kernel_status, TT_FABRIC_STATUS_INDEX, TT_FABRIC_STATUS_BAD_HEADER);
-            DPRINT << "FABRIC INBOUND BAD HEADER\n";
             return;
         }
 
@@ -223,7 +221,6 @@ void kernel_main() {
             return;
         }
     }
-    DPRINT << "Fabric router exited\n";
     uint64_t cycles_elapsed = fvc_producer_state.packet_timestamp - start_timestamp;
 
     write_kernel_status(kernel_status, TT_FABRIC_MISC_INDEX, 0xff000002);
