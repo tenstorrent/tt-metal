@@ -407,6 +407,7 @@ void Buffer::mark_as_deallocated() {
 
 void Buffer::deleter(Buffer* buffer) {
     if (buffer->allocation_status_.load(std::memory_order::relaxed) == AllocationStatus::DEALLOCATED) {
+        delete buffer;
         return;
     }
     buffer->device_->push_work([buffer] {
