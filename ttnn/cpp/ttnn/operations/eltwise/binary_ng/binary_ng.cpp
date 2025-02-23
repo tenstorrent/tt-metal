@@ -403,6 +403,7 @@ template struct BinaryNg<BinaryOpType::LOGICAL_XOR>;
 template struct BinaryNg<BinaryOpType::LDEXP>;
 template struct BinaryNg<BinaryOpType::LOGADDEXP>;
 template struct BinaryNg<BinaryOpType::LOGADDEXP2>;
+template struct BinaryNg<BinaryOpType::GCD>;
 
 template struct BinaryNgBitwise<BinaryOpType::BITWISE_AND>;
 template struct BinaryNgBitwise<BinaryOpType::BITWISE_OR>;
@@ -430,5 +431,6 @@ template struct InplaceBinaryNg<BinaryOpType::LOGICAL_XOR>;
 template struct InplaceBinaryNg<BinaryOpType::LDEXP>;
 template struct InplaceBinaryNg<BinaryOpType::LOGADDEXP>;
 template struct InplaceBinaryNg<BinaryOpType::LOGADDEXP2>;
+template struct InplaceBinaryNg<BinaryOpType::GCD>;
 
 }  // namespace ttnn::operations::binary_ng
