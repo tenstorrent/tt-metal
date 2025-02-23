@@ -626,12 +626,12 @@ FORCE_INLINE void receiver_forward_packet(
 
     bool start_distance_is_terminal_value = (cached_routing_fields.value & tt::fabric::RoutingFields::HOP_DISTANCE_MASK) == tt::fabric::RoutingFields::LAST_HOP_DISTANCE_VAL;
     uint16_t payload_size_bytes = packet_start->payload_size_bytes;
-    if (start_distance_is_terminal_value) {
-        execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id);
-    }
     bool not_last_destination_device = cached_routing_fields.value != tt::fabric::RoutingFields::LAST_MCAST_VAL;
     if (not_last_destination_device) {
         forward_payload_to_downstream_edm(packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface, transaction_id);
+    }
+    if (start_distance_is_terminal_value) {
+        execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id);
     }
 }
 
