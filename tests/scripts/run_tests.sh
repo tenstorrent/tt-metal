@@ -431,7 +431,13 @@ set_up_chdir() {
         return
       fi
     done
-      echo "Could not find the 'tt-metal' directory in your PYTHONPATH." 1>&2
+    for ENTRY in "${ENTRIES[@]}"; do
+      if [[ -d "$ENTRY/tt_metal" ]]; then
+        cd "$ENTRY"
+        return
+      fi
+    done
+    echo "Could not find the 'tt-metal' directory in your PYTHONPATH." 1>&2
     exit 1
 }
 
