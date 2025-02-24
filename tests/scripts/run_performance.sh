@@ -47,6 +47,8 @@ run_perf_models_other() {
 
     env pytest -n auto models/demos/roberta/tests/test_performance.py -m $test_marker
 
+    env pytest -n auto models/experimental/functional_yolov8x/tests/test_yolov8x.py -m $test_marker
+
     ## Merge all the generated reports
     env python3 models/perf/merge_perf_results.py
 }
