@@ -686,23 +686,18 @@ FORCE_INLINE bool run_sender_channel_step(
     bool sender_backpressured_from_sender_side = !(local_sender_channel_worker_interface.local_rdptr.distance_behind(local_sender_channel_worker_interface.local_wrptr) < SENDER_NUM_BUFFERS);
     bool can_send = receiver_has_space_for_packet && !internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ) && has_unsent_packet && !sender_backpressured_from_sender_side;
     if (can_send) {
-    // if (receiver_has_space_for_packet && !internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ)) {
-        // if (has_unsent_packet) {
-        //     if (!sender_backpressured_from_sender_side) {
-                did_something = true;
-                auto packet_header = reinterpret_cast<PACKET_HEADER_TYPE*>(local_sender_channel.get_buffer_address(local_sender_channel_worker_interface.local_wrptr.get_buffer_index()));
-                if constexpr (enable_packet_header_recording) {
-                    tt::fabric::validate(*packet_header);
-                    packet_header_recorder.record_packet_header(reinterpret_cast<volatile uint32_t*>(packet_header));
-                }
-                send_next_data(
-                    local_sender_channel,
-                    local_sender_channel_worker_interface,
-                    outbound_to_receiver_channel_pointers,
-                    remote_receiver_channel,
-                    sender_channel_index);
-        //     }
-        // }
+        did_something = true;
+        auto packet_header = reinterpret_cast<PACKET_HEADER_TYPE*>(local_sender_channel.get_buffer_address(local_sender_channel_worker_interface.local_wrptr.get_buffer_index()));
+        if constexpr (enable_packet_header_recording) {
+            tt::fabric::validate(*packet_header);
+            packet_header_recorder.record_packet_header(reinterpret_cast<volatile uint32_t*>(packet_header));
+        }
+        send_next_data(
+            local_sender_channel,
+            local_sender_channel_worker_interface,
+            outbound_to_receiver_channel_pointers,
+            remote_receiver_channel,
+            sender_channel_index);
     }
 
     // Process COMPLETIONs from receiver
@@ -856,20 +851,14 @@ FORCE_INLINE void run_receiver_channel_step(
         bool next_trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
         bool can_send_completion = unflushed_writes_and_eth_txq_not_busy && next_trid_flushed;
         if (can_send_completion) {
-        // if (unflushed_writes_and_eth_txq_not_busy) {
-        //     auto receiver_buffer_index = wr_flush_ptr.get_buffer_index();
-        //     bool next_trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
-        //     if (next_trid_flushed) {
-                auto &completion_ptr = receiver_channel_pointers.completion_ptr;
-                wr_flush_ptr.increment();
-                receiver_channel_trid_tracker.clear_trid_at_buffer_slot(receiver_buffer_index);
-                receiver_send_completion_ack(
-                    remote_eth_sender_wrptrs,
-                    remote_sender_channnels,
-                    completion_ptr,
-                    local_receiver_channel);
-        //     }
-        // }
+            auto &completion_ptr = receiver_channel_pointers.completion_ptr;
+            wr_flush_ptr.increment();
+            receiver_channel_trid_tracker.clear_trid_at_buffer_slot(receiver_buffer_index);
+            receiver_send_completion_ack(
+                remote_eth_sender_wrptrs,
+                remote_sender_channnels,
+                completion_ptr,
+                local_receiver_channel);
         }
 
     }
