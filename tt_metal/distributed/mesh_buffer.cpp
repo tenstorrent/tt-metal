@@ -149,10 +149,10 @@ void MeshBuffer::deallocate() {
     state_ = DeallocatedState{};
 }
 
-std::shared_ptr<MeshDevice> MeshBuffer::device() const {
+MeshDevice* MeshBuffer::device() const {
     auto device = mesh_device_.lock();
     TT_FATAL(device, "Can't get device from mesh buffer, already deallocated");
-    return device;
+    return device.get();
 }
 
 std::shared_ptr<Buffer> MeshBuffer::get_device_buffer(const MeshCoordinate& device_coord) const {

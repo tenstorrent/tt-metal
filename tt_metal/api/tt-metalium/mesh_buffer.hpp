@@ -86,7 +86,8 @@ public:
     // resources.
     void deallocate();
 
-    std::shared_ptr<MeshDevice> device() const;
+    // Throws an exception if the corresponding MeshDevice is already deallocated
+    MeshDevice* device() const;
     DeviceAddr size() const;
     DeviceAddr device_local_size() const { return device_local_size_; }
     DeviceAddr address() const { return address_; };
