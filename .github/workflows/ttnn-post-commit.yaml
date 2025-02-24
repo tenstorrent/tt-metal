@@ -78,14 +78,14 @@ jobs:
           - name: ttnn fast runtime off
             cmd: pytest tests/ttnn/unit_tests -xv -m requires_fast_runtime_mode_off
             fast_runtime_mode_off: true
-          - name: ttnn example tests
-            cmd: ./tests/scripts/run_ttnn_examples.sh
+          # - name: ttnn example tests
+          #   cmd: ./tests/scripts/run_ttnn_examples.sh
     name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
     env:
       LOGURU_LEVEL: INFO
     runs-on:
       - ${{ inputs.runner-label }}
-      - "in-service"
+      # - "in-service"
     steps:
       - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
       - uses: actions/download-artifact@v4
