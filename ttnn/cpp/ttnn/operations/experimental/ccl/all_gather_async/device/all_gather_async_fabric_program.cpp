@@ -19,6 +19,8 @@
 #include "cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
 #include "cpp/ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
 #include <tt-metalium/mesh_graph.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh_device_view.hpp>
 
 #include "cpp/ttnn/operations/ccl/common/uops/command_lowering.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
@@ -124,6 +126,43 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
     return {sender_worker_core_range, corerange_to_cores(sender_worker_core_range, std::nullopt, true)};
 }
 
+void getNeighborsCountAndOffset(
+    const Coordinate& device_coord,
+    const size_t num_rows,
+    const size_t num_cols,
+    bool row_order,
+    int& eastCount,
+    int& westCount,
+    int& upCount,
+    int& downCount,
+    int& offset) {
+    // Calculate East (right direction)
+    if (device_coord.col < num_cols - 1) {
+        eastCount = num_cols - device_coord.col - 1;
+    }
+
+    // Calculate West (left direction)
+    if (device_coord.col > 0) {
+        westCount = device_coord.col;
+    }
+
+    // Calculate Up (above direction)
+    if (device_coord.row > 0) {
+        upCount = device_coord.row;
+    }
+
+    // Calculate Down (below direction)
+    if (device_coord.row < num_rows - 1) {
+        downCount = num_rows - device_coord.row - 1;  // Devices below
+    }
+
+    if (row_order) {  // Row-major order
+        offset = device_coord.row * num_cols + device_coord.col;
+    } else {  // Column-major order
+        offset = device_coord.col * num_rows + device_coord.row;
+    }
+}
+
 // For ring all-gather, we can send sub-sections of input tensor in opposite directions
 // For linear all-gather though, we must ensure we send full tensors in BOTH directions
 //   (in other words, disable the "bidirectional" send flag)
@@ -134,59 +173,54 @@ operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
     Tensor& output_tensor,
     const uint32_t dim,
     const uint32_t num_links,
-    const uint32_t mesh_size,
-    const mesh_id_t mesh_id,
+    MeshDevice* mesh_device,
     ccl::Topology topology,
     const GlobalSemaphore semaphore,
-    const std::optional<SubDeviceId>& sub_device_id,  // diff between sub_device_id and device->id() ??
-    bool enable_persistent_fabric_mode) {
+    const std::optional<SubDeviceId>& sub_device_id,
+    bool enable_persistent_fabric_mode,
+    const bool row_order) {
     tt::tt_metal::Program program{};
     const bool enable_async_output_tensor = false;
     const bool lower_command_stream_to_noc_commands =
         ttnn::ccl::worker_detail::can_command_stream_be_lowered_to_noc_commands(input_tensor);
 
     IDevice* device = input_tensor.device();
+    auto device_id = device->id();
 
-    uint32_t num_chips_per_row = 4;  // should be an input
-    uint32_t num_chips_per_col = 4;  // should be an input
-    uint32_t direction = 0;          // should be input 0 for horizontally and 1 vertically
+    auto mesh_device_view = MeshDeviceView(mesh_device);
+    Coordinate device_coord = mesh_device_view.find_device(device_id);
+    auto grid_size = mesh_device.shape();
+    auto num_rows = mesh_device.num_rows();
+    auto num_cols = mesh_device.num_cols();
+
+    uint32_t eastCount, westCount, upCount, downCount, device_offset = 0;
+    getNeighborsCount(
+        device_coord, num_rows, num_cols, row_order, eastCount, westCount, upCount, downCount, device_offset);
 
     // bool is_first_chip = ring_index == 0;
     // bool is_last_chip = ring_index == ring_size - 1;
-    if (direction == 0) {
-        bool is_first_chip = mesh_id % num_chips_per_row == 0;
-        bool is_last_chip = mesh_id % num_chips_per_row == num_chips_per_row - 1;
-        RoutingDirection direction0 = RoutingDirection::E;
-        RoutingDirection direction1 = RoutingDirection::W;
-    } else {
-        bool is_first_chip = mesh_id % num_chips_per_col == 0;
-        bool is_last_chip = mesh_id % num_chips_per_col == num_chips_per_col - 1;
-        RoutingDirection direction0 = RoutingDirection::N;
-        RoutingDirection direction1 = RoutingDirection::S;
-    }
+
+    RoutingDirection direction0 = RoutingDirection::E;
+    RoutingDirection direction1 = RoutingDirection::W;
+    RoutingDirection direction2 = RoutingDirection::N;
+    RoutingDirection direction3 = RoutingDirection::S;
 
     ControlPlane control_plane = DevicePool::instance().get_control_plane();
     std::pair<mesh_id_t, chip_id_t> device_mesh_chip_id =
-        control_plane->get_mesh_chip_id_from_physical_chip_id(device->id());  // not sure if sub_device_id instead
+        control_plane->get_mesh_chip_id_from_physical_chip_id(device->id());
 
     auto neighbors_dir0 =
         control_plane->get_intra_chip_neighbors(device_mesh_chip_id.first, device_mesh_chip_id.second, direction0);
     auto neighbors_dir1 =
         control_plane->get_intra_chip_neighbors(device_mesh_chip_id.first, device_mesh_chip_id.second, direction1);
-    uint32_t hops_dir0 = neighbors_dir0.size();
-    uint32_t hops_dir1 = neighbors_dir1.size();
-    std::unordered_map<RoutingDirection, uint32_t> mcast_hops;
-    mcast_hops[direction0] = hops_dir0;
-    mcast_hops[direction1] = hops_dir1;
-    IDevice* dir0_device;
-    IDevice* dir1_device;
-    if (neighbors_dir0.size() > 0) {
-        dir0_device = DevicePool::instance().get_device(neighbors_dir0[0]);
-    }
-    if (neighbors_dir1.size() > 0) {
-        dir1_device = DevicePool::instance().get_device(neighbors_dir1[0]);
-    }
+    auto neighbors_dir2 =
+        control_plane->get_intra_chip_neighbors(device_mesh_chip_id.first, device_mesh_chip_id.second, direction2);
+    auto neighbors_dir3 =
+        control_plane->get_intra_chip_neighbors(device_mesh_chip_id.first, device_mesh_chip_id.second, direction3);
 
+    std::unordered_map < RoutingDirection, std::pair<mesh_id_t, chip_id_t> mcast_destinations;
+
+    /*
     log_trace(
         tt::LogOp,
         "DEBUG: device: {}, is_first_chip: {}, is_last_chip: {}",
@@ -204,6 +238,7 @@ operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
             num_links);
 
     // LineTopology line_topology(ring_size, ring_index);
+    */
 
     std::unique_ptr<ccl::CclOpTensorConfig> input_tensor_config =
         ttnn::ccl::CclOpTensorConfig::build_all_gather_tensor_config(input_tensor);
