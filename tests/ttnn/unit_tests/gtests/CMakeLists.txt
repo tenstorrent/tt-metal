@@ -9,6 +9,7 @@ set(TTNN_UNIT_TESTS_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/test_graph_query_op_runtime.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_reflect.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_to_and_from_json.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_sliding_window_infra.cpp
 )
 
 set(TTNN_CCL_UNIT_TESTS_SRC
