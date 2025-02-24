@@ -145,6 +145,25 @@ TEST(MeshBufferTest, DeallocationWithoutMeshDevice) {
     }
 }
 
+TEST(MeshBufferTest, DeallocationWithMeshDeviceClosed) {
+    for (int i = 0; i < 100; i++) {
+        auto config =
+            MeshDeviceConfig{.mesh_shape = SimpleMeshShape(1, 1), .offset = std::nullopt, .physical_device_ids = {}};
+        auto mesh_device =
+            MeshDevice::create(config, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreType::WORKER);
+
+        const DeviceLocalBufferConfig device_local_config{
+            .page_size = 2048,
+            .buffer_type = BufferType::DRAM,
+            .buffer_layout = TensorMemoryLayout::INTERLEAVED,
+            .bottom_up = false};
+        const ReplicatedBufferConfig buffer_config{.size = 2048};
+        auto buffer = MeshBuffer::create(buffer_config, device_local_config, mesh_device.get());
+
+        mesh_device->close();
+    }
+}
+
 TEST_F(MeshBufferTestT3000, GetDeviceBuffer) {
     const DeviceLocalBufferConfig device_local_config{
         .page_size = 1024,
