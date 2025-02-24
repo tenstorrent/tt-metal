@@ -708,16 +708,17 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
             TT_ASSERT(bias_tensor.value().get_dtype() == weights_bias_dtype);
         }
     }
-    weight_tensor_ = ttnn::pad(
-        weight_tensor_,
-        weights_channels_padded_shape.to_array_4D(),
-        tt::tt_metal::Array4D({0, 0, 0, 0}),
-        0.0f,
-        true,
-        std::nullopt);
 
     // Block sharding re-orders the weights by dividing the input_channels along number of in_channel_cores.
     if (input_parallel_config.shard_scheme == TensorMemoryLayout::BLOCK_SHARDED) {
+        weight_tensor_ = ttnn::pad(
+            weight_tensor_,
+            weights_channels_padded_shape.to_array_4D(),
+            tt::tt_metal::Array4D({0, 0, 0, 0}),
+            0.0f,
+            true,
+            std::nullopt);
+
         TT_FATAL(
             input_num_cores_channels == output_num_cores_channels,
             "Input and output cores must be the same for Block Sharded Conv2d");
@@ -779,11 +780,16 @@ std::pair<ttnn::Tensor, std::optional<ttnn::Tensor>> prepare_conv_weights_biases
             weight_tensor_,
             ttnn::Shape({1, 1, rounded_weight_block_height * input_num_cores_channels, final_out_channels_padded}));
     } else {
-        // Reshape the weights to 5D, and permute in 5D.
-        weight_tensor_ = ttnn::reshape(
-            weight_tensor_, ttnn::Shape({1, out_channels_padded, in_channels_padded, window_h, window_w}));
+        weight_tensor_ = ttnn::permute(weight_tensor_, ttnn::SmallVector<int64_t>({2, 3, 1, 0}));
 
-        weight_tensor_ = ttnn::permute(weight_tensor_, ttnn::SmallVector<int64_t>({0, 3, 4, 2, 1}));
+        weight_tensor_ = ttnn::pad(
+            weight_tensor_,
+            tt::tt_metal::Array4D({window_h, window_w, in_channels_padded, out_channels_padded}),
+            tt::tt_metal::Array4D({0, 0, 0, 0}),
+            0.0f,
+            true,
+            std::nullopt);
+
         // Shape is now {1, window_h, window_w, in_channels_padded, out_channels_padded}
         auto weight_block_h_datums = weight_block_h_ntiles * constants::TILE_HEIGHT;
         if ((weight_block_h_datums > (window_w * in_channels_padded)) &&
