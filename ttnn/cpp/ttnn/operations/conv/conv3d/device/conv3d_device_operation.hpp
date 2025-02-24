@@ -36,6 +36,7 @@ struct Conv3dConfig {
         uint32_t T_out_block_ = 1,
         uint32_t W_out_block_ = 1,
         uint32_t H_out_block_ = 1,
+        uint32_t C_out_block_ = 0,
         uint32_t output_channels_ = 0,
         std::array<uint32_t, 3> kernel_size_ = {1, 1, 1},
         std::array<uint32_t, 3> stride_ = {1, 1, 1},
@@ -48,6 +49,7 @@ struct Conv3dConfig {
         T_out_block(T_out_block_),
         W_out_block(W_out_block_),
         H_out_block(H_out_block_),
+        C_out_block(C_out_block_),
         output_channels(output_channels_),
         kernel_size(kernel_size_),
         stride(stride_),
@@ -65,7 +67,7 @@ struct Conv3dConfig {
     uint32_t T_out_block;
     uint32_t W_out_block;
     uint32_t H_out_block;
-
+    uint32_t C_out_block;
     uint32_t output_channels;
     std::array<uint32_t, 3> kernel_size;
     std::array<uint32_t, 3> stride;
@@ -80,6 +82,7 @@ struct Conv3dConfig {
         "T_out_block",
         "W_out_block",
         "H_out_block",
+        "C_out_block",
         "output_channels",
         "kernel_size",
         "stride",
@@ -95,6 +98,7 @@ struct Conv3dConfig {
             std::cref(this->T_out_block),
             std::cref(this->W_out_block),
             std::cref(this->H_out_block),
+            std::cref(this->C_out_block),
             std::cref(this->output_channels),
             std::cref(this->kernel_size),
             std::cref(this->stride),

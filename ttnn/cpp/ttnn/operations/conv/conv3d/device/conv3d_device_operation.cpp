@@ -41,6 +41,18 @@ void Conv3dOp::validate(
         config.padding_mode == "zeros" || config.padding_mode == "replicate",
         "Padding mode must be zeros or replicate.");
 
+    // TODO: Use tile_width instead of 32
+    if (config.C_out_block > 0) {
+        TT_FATAL(
+            config.output_channels % config.C_out_block == 0 && config.C_out_block % 32 == 0,
+            "C_out_block must be a multiple of 32 and divide evenly into output channels. Got C_out_block={} and "
+            "output_channels={}.",
+            config.C_out_block,
+            config.output_channels);
+    }
+
+    TT_FATAL(config.output_channels % 32 == 0, "Output channels must be a multiple of 32.");
+
     if (optional_input_tensors.at(0).has_value()) {
         const auto& bias_tensor = optional_input_tensors.at(0).value();
         TT_FATAL(!bias_tensor.memory_config().is_sharded(), "Bias tensor must be interleaved.");

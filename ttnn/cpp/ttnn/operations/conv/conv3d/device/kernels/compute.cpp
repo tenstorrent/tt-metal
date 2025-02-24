@@ -10,6 +10,8 @@
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/bcast.h"
 
+#include "debug/dprint_pages.h"
+
 // Slightly modified from compute_common.hpp
 void matmul_blocks(
     const uint32_t& in0_cb,
@@ -117,83 +119,115 @@ void MAIN {
     constexpr uint32_t T_block_size = get_compile_time_arg_val(14);
     constexpr uint32_t H_block_size = get_compile_time_arg_val(15);
     constexpr uint32_t W_block_size = get_compile_time_arg_val(16);
+    constexpr uint32_t C_out_num_blocks = get_compile_time_arg_val(17);
 
     // matmul parameters
-    constexpr uint32_t in0_num_subblocks = get_compile_time_arg_val(17);
-    constexpr uint32_t in1_num_subblocks = get_compile_time_arg_val(18);
-    constexpr uint32_t in0_block_w = get_compile_time_arg_val(19);
-    constexpr uint32_t subblock_h = get_compile_time_arg_val(20);
-    constexpr uint32_t subblock_w = get_compile_time_arg_val(21);
+    constexpr uint32_t in0_num_subblocks = get_compile_time_arg_val(18);
+    constexpr uint32_t in1_num_subblocks = get_compile_time_arg_val(19);
+    constexpr uint32_t in0_block_w = get_compile_time_arg_val(20);
+    constexpr uint32_t subblock_h = get_compile_time_arg_val(21);
+    constexpr uint32_t subblock_w = get_compile_time_arg_val(22);
 
     constexpr uint32_t patch_tiles = matmul_M_t * matmul_K_t;
     constexpr uint32_t weight_tiles = matmul_K_t * matmul_N_t;
 
     mm_init(cb_vol2col_tiled, cb_weight_tiled, cb_matmul_interm_tiled);
 
-    cb_wait_front(cb_weight_tiled, weight_tiles);
+    for (uint32_t c_out_block = 0; c_out_block < C_out_num_blocks; c_out_block++) {
+        // Wait for new weights and bias
+        cb_wait_front(cb_weight_tiled, weight_tiles);
 
-    if constexpr (use_bias) {
-        cb_wait_front(cb_bias_tiled, matmul_N_t);
-    }
+        if constexpr (use_bias) {
+            cb_wait_front(cb_bias_tiled, matmul_N_t);
+        }
+        // 3D blocking loops:
+        for (uint32_t t_block = 0; t_block < T_out; t_block += T_block_size) {
+            const uint32_t t_block_end = (t_block + T_block_size < T_out) ? t_block + T_block_size : T_out;
 
-    // 3D blocking loops:
-    for (uint32_t t_block = 0; t_block < T_out; t_block += T_block_size) {
-        const uint32_t t_block_end = (t_block + T_block_size < T_out) ? t_block + T_block_size : T_out;
+            for (uint32_t h_block = 0; h_block < H_out; h_block += H_block_size) {
+                const uint32_t h_block_end = (h_block + H_block_size < H_out) ? h_block + H_block_size : H_out;
+                for (uint32_t w_block = 0; w_block < W_out; w_block += W_block_size) {
+                    const uint32_t w_block_end = (w_block + W_block_size < W_out) ? w_block + W_block_size : W_out;
+                    // Tilize row-major patches
+                    uint32_t patch_rows_left = num_patches;
+                    tilize_init_short(cb_vol2col_rm, matmul_K_t, cb_vol2col_tiled);
+                    for (uint32_t patch_t = 0; patch_t < matmul_M_t; patch_t++) {
+                        // Reader produces row pages, which may not be tile aligned. Wait on the correct number of rows.
+                        uint32_t current_patch_rows =
+                            patch_rows_left < tt::constants::TILE_HEIGHT ? patch_rows_left : tt::constants::TILE_HEIGHT;
+                        cb_wait_front(cb_vol2col_rm, current_patch_rows);
+                        cb_reserve_back(cb_vol2col_tiled, matmul_K_t);
+                        tilize_block(cb_vol2col_rm, matmul_K_t, cb_vol2col_tiled);
+                        cb_push_back(cb_vol2col_tiled, matmul_K_t);
+                        cb_pop_front(cb_vol2col_rm, current_patch_rows);
+                        patch_rows_left -= current_patch_rows;
+                    }
+                    tilize_uninit(cb_vol2col_rm, cb_vol2col_tiled);
 
-        for (uint32_t h_block = 0; h_block < H_out; h_block += H_block_size) {
-            const uint32_t h_block_end = (h_block + H_block_size < H_out) ? h_block + H_block_size : H_out;
-            for (uint32_t w_block = 0; w_block < W_out; w_block += W_block_size) {
-                const uint32_t w_block_end = (w_block + W_block_size < W_out) ? w_block + W_block_size : W_out;
-                // Tilize row-major patches
-                uint32_t patch_rows_left = num_patches;
-                tilize_init_short(cb_vol2col_rm, matmul_K_t, cb_vol2col_tiled);
-                for (uint32_t patch_t = 0; patch_t < matmul_M_t; patch_t++) {
-                    // Reader produces row pages, which may not be tile aligned. Wait on the correct number of rows.
-                    uint32_t current_patch_rows =
-                        patch_rows_left < tt::constants::TILE_HEIGHT ? patch_rows_left : tt::constants::TILE_HEIGHT;
-                    cb_wait_front(cb_vol2col_rm, current_patch_rows);
-                    cb_reserve_back(cb_vol2col_tiled, matmul_K_t);
-                    tilize_block(cb_vol2col_rm, matmul_K_t, cb_vol2col_tiled);
-                    cb_push_back(cb_vol2col_tiled, matmul_K_t);
-                    cb_pop_front(cb_vol2col_rm, current_patch_rows);
-                    patch_rows_left -= current_patch_rows;
+                    // Apply matmul blocks
+                    cb_wait_front(cb_vol2col_tiled, patch_tiles);
+                    // if (t_block == 0 && h_block == 0 && w_block == 0) {
+                    //     for (uint32_t i = 0; i < matmul_K_t; i++) {
+                    //         UNPACK(DPRINT << "COMPUTE: tilized patch, col_idx: " << i << ENDL());
+                    //         UNPACK(tt::compute::common::print_tile_rows(cb_vol2col_tiled, num_patches, i, true));
+                    //     }
+
+                    //     for (uint32_t r = 0; r < matmul_K_t; r++) {
+                    //         for (uint32_t c = 0; c < matmul_N_t; c++) {
+                    //             UNPACK(DPRINT << "COMPUTE: weight, row_idx: " << r << " col_idx: " << c << ENDL());
+                    //             UNPACK(tt::compute::common::print_full_tile(cb_weight_tiled, r * matmul_N_t + c,
+                    //             true));
+                    //         }
+                    //     }
+                    // }
+                    matmul_blocks(
+                        cb_vol2col_tiled,
+                        cb_weight_tiled,
+                        cb_matmul_interm_tiled,
+                        matmul_M_t,
+                        matmul_N_t,
+                        matmul_K_t,
+                        in0_num_subblocks,
+                        in1_num_subblocks,
+                        in0_block_w,
+                        subblock_h,
+                        subblock_w,
+                        false /* transpose */);
+                    cb_pop_front(cb_vol2col_tiled, patch_tiles);
+
+                    // Apply bias
+                    if constexpr (use_bias) {
+                        add_bias_inplace<matmul_M_t, matmul_N_t>(cb_matmul_interm_tiled, cb_bias_tiled);
+                    }
+
+                    // if (t_block == 0 && h_block == 0 && w_block == 0) {
+                    // for (uint32_t i = 0; i < matmul_N_t; i++) {
+                    //     UNPACK(DPRINT << "COMPUTE: matmul_interm_tiled, col_idx: " << i << ENDL());
+                    //     UNPACK(tt::compute::common::print_tile_rows(cb_matmul_interm_tiled, num_patches, i, true));
+                    // }
+                    // UNPACK(DPRINT << "COMPUTE: wait for matmul_N_t: " << matmul_N_t << " reserve back: " <<
+                    // tt::constants::TILE_HEIGHT << ENDL());
+                    // }
+
+                    // Untilize result
+                    cb_wait_front(cb_matmul_interm_tiled, matmul_M_t * matmul_N_t);
+                    // UNPACK((llk_unpack_untilize_hw_configure_disaggregated<DST_ACCUM_MODE>(cb_matmul_interm_tiled)));
+                    // MATH((llk_math_hw_configure_disaggregated(cb_matmul_interm_tiled, cb_matmul_interm_tiled)));
+                    untilize_init_short(cb_matmul_interm_tiled);
+                    for (uint32_t patch_t = 0; patch_t < matmul_M_t; patch_t++) {
+                        cb_reserve_back(cb_matmul_result_rm, matmul_N_t);
+                        untilize_block(cb_matmul_interm_tiled, matmul_N_t, cb_matmul_result_rm);
+                        cb_push_back(cb_matmul_result_rm, matmul_N_t);
+                        cb_pop_front(cb_matmul_interm_tiled, matmul_N_t);
+                    }
+                    untilize_uninit(cb_matmul_interm_tiled);
                 }
-                tilize_uninit(cb_vol2col_rm, cb_vol2col_tiled);
-
-                // Apply matmul blocks
-                cb_wait_front(cb_vol2col_tiled, patch_tiles);
-
-                matmul_blocks(
-                    cb_vol2col_tiled,
-                    cb_weight_tiled,
-                    cb_matmul_interm_tiled,
-                    matmul_M_t,
-                    matmul_N_t,
-                    matmul_K_t,
-                    in0_num_subblocks,
-                    in1_num_subblocks,
-                    in0_block_w,
-                    subblock_h,
-                    subblock_w,
-                    false /* transpose */);
-                cb_pop_front(cb_vol2col_tiled, patch_tiles);
-
-                // Apply bias
-                if constexpr (use_bias) {
-                    add_bias_inplace<matmul_M_t, matmul_N_t>(cb_matmul_interm_tiled, cb_bias_tiled);
-                }
-
-                // Untilize result
-                untilize_init_short(cb_matmul_interm_tiled);
-                for (uint32_t patch_t = 0; patch_t < matmul_M_t; patch_t++) {
-                    cb_wait_front(cb_matmul_interm_tiled, matmul_N_t);
-                    cb_reserve_back(cb_matmul_result_rm, tt::constants::TILE_HEIGHT);
-                    untilize_block(cb_matmul_interm_tiled, matmul_N_t, cb_matmul_result_rm);
-                    cb_push_back(cb_matmul_result_rm, tt::constants::TILE_HEIGHT);
-                    cb_pop_front(cb_matmul_interm_tiled, matmul_N_t);
-                }
-                untilize_uninit(cb_matmul_interm_tiled);
             }
+        }
+        // Free space for next block of weights
+        cb_pop_front(cb_weight_tiled, weight_tiles);
+        if constexpr (use_bias) {
+            cb_pop_front(cb_bias_tiled, matmul_N_t);
         }
     }
 }

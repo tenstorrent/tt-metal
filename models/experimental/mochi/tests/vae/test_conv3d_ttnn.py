@@ -137,6 +137,7 @@ def run_vol2col_test_sweep_blocks(device, input_shape, out_channels, kernel_size
 
     # Create a random input tensor.
     input_tensor = torch.randn(N, C, D, H, W, dtype=torch.float32)
+    # input_tensor = torch.full((N, C, D, H, W), 0.1, dtype=torch.float32)
     print(f"input_tensor.shape NCTHW = {input_tensor.shape}")
 
     # Create a Conv3d module with chosen parameters.
@@ -152,6 +153,10 @@ def run_vol2col_test_sweep_blocks(device, input_shape, out_channels, kernel_size
         bias=True,
         padding_mode=padding_mode,
     )
+
+    # DEBUG
+    # conv3d_module.weight.data = torch.ones_like(conv3d_module.weight.data)
+    # conv3d_module.bias.data = torch.ones_like(conv3d_module.bias.data)
 
     gt_output = conv3d_module(input_tensor)
 
@@ -179,52 +184,63 @@ def run_vol2col_test_sweep_blocks(device, input_shape, out_channels, kernel_size
     )
     import math
 
-    for T_out_block in [2**i for i in range(int(math.log2(D_out)))]:
-        for W_out_block in [2**i for i in range(int(math.log2(W_out)))]:
-            for H_out_block in [2**i for i in range(int(math.log2(H_out)))]:
-                config = ttnn.Conv3dConfig(
-                    dtype=ttnn.bfloat16,
-                    weights_dtype=ttnn.bfloat16,
-                    output_layout=ttnn.ROW_MAJOR_LAYOUT,
-                    T_out_block=T_out_block,
-                    W_out_block=W_out_block,
-                    H_out_block=H_out_block,
-                    output_channels=out_channels,
-                    kernel_size=kernel_size,
-                    stride=stride,
-                    padding=padding,
-                    padding_mode=padding_mode,
-                    groups=1,
-                )
-                kernel_config = ttnn.WormholeComputeKernelConfig(
-                    math_fidelity=ttnn.MathFidelity.HiFi2,
-                    math_approx_mode=False,
-                    fp32_dest_acc_en=True,
-                    packer_l1_acc=False,
-                )
+    for C_out_block in range(32, out_channels + 1, 32):
+        for T_out_block in [2**i for i in range(int(math.log2(D_out)))]:
+            for W_out_block in [2**i for i in range(int(math.log2(W_out)))]:
+                for H_out_block in [2**i for i in range(int(math.log2(H_out)))]:
+                    print(
+                        f"C_out_block={C_out_block}, T_out_block={T_out_block}, W_out_block={W_out_block}, H_out_block={H_out_block}"
+                    )
+                    config = ttnn.Conv3dConfig(
+                        dtype=ttnn.bfloat16,
+                        weights_dtype=ttnn.bfloat16,
+                        output_layout=ttnn.ROW_MAJOR_LAYOUT,
+                        T_out_block=T_out_block,
+                        W_out_block=W_out_block,
+                        H_out_block=H_out_block,
+                        C_out_block=C_out_block,
+                        output_channels=out_channels,
+                        kernel_size=kernel_size,
+                        stride=stride,
+                        padding=padding,
+                        padding_mode=padding_mode,
+                        groups=1,
+                    )
+                    kernel_config = ttnn.WormholeComputeKernelConfig(
+                        math_fidelity=ttnn.MathFidelity.HiFi2,
+                        math_approx_mode=False,
+                        fp32_dest_acc_en=True,
+                        packer_l1_acc=False,
+                    )
 
-                tt_output = ttnn.conv3d(
-                    input_tensor=tt_input,
-                    weight_tensor=tt_weight,
-                    bias_tensor=tt_bias,
-                    config=config,
-                    compute_kernel_config=kernel_config,
-                )
+                    # try:
+                    tt_output = ttnn.conv3d(
+                        input_tensor=tt_input,
+                        weight_tensor=tt_weight,
+                        bias_tensor=tt_bias,
+                        config=config,
+                        compute_kernel_config=kernel_config,
+                    )
 
-                tt_output = ttnn.to_torch(tt_output, device=device, dtype=torch.float32)
+                    tt_output = ttnn.to_torch(tt_output, device=device, dtype=torch.float32)
+                    # except Exception as e:
+                    #     print(f"Error: {e}")
+                    #     print("Quitting this spec")
+                    #     break
 
-                tt_output = tt_output.reshape(N, D_out, H_out, W_out, out_channels)
-                tt_output = tt_output.permute(0, 4, 1, 2, 3)
+                    tt_output = tt_output.reshape(N, D_out, H_out, W_out, out_channels)
+                    tt_output = tt_output.permute(0, 4, 1, 2, 3)
 
-                assert tt_output.shape == gt_output.shape
-                pcc, mse, mae = compute_metrics(gt_output, tt_output)
-                min_pcc = 0.999
-                # if pcc < min_pcc:
-                #     import pdb
-                #     pdb.set_trace()
-                assert (
-                    pcc > min_pcc
-                ), f"PCC = {pcc}, MSE = {mse}, MAE = {mae} on T_out_block={T_out_block}, W_out_block={W_out_block}, H_out_block={H_out_block}"
+                    assert tt_output.shape == gt_output.shape
+                    pcc, mse, mae = compute_metrics(gt_output, tt_output)
+                    min_pcc = 0.999
+                    if not pcc > min_pcc:
+                        import pdb
+
+                        pdb.set_trace()
+                    assert (
+                        pcc > min_pcc
+                    ), f"PCC = {pcc}, MSE = {mse}, MAE = {mae} on C_out_block={C_out_block}, T_out_block={T_out_block}, W_out_block={W_out_block}, H_out_block={H_out_block}"
 
 
 # @pytest.mark.parametrize(
@@ -317,11 +333,14 @@ def test_vol2col_sweep(device, B, C_in, C_out, T, H, W, kernel_size, stride, pad
         # [(1, 256, 21, 240, 424), 256, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
         # [(1, 128, 21, 480, 848), 128, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
         # Relatively small shape to try
-        [(1, 32, 16, 16, 16), 32, (3, 3, 3), (1, 1, 1), (0, 1, 1), "zeros"],
+        # [(1, 32, 16, 16, 16), 64, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
+        [(1, 64, 16, 16, 16), 64, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
+        [(1, 128, 16, 16, 16), 128, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
+        [(1, 256, 16, 16, 16), 256, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
+        [(1, 512, 16, 16, 16), 512, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
+        [(1, 768, 16, 16, 16), 768, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
     ],
     # ids=["variant0", "variant1", "variant2", "variant3", "variant4"]
 )
 def test_vol2col_torch_mochi_shapes(device, input_shape, out_channels, kernel_size, stride, padding, padding_mode):
-    # def test_vol2col_torch(device, N, C, D, H, W, out_channels, kernel_size, stride, padding, padding_mode):
-    # Set a manual seed for reproducibility.
     run_vol2col_test_sweep_blocks(device, input_shape, out_channels, kernel_size, stride, padding, padding_mode)

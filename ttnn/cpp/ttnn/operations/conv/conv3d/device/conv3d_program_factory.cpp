@@ -59,9 +59,14 @@ operation::ProgramWithCallbacks conv3d_factory(
     uint32_t patch_size = config.kernel_size[0] * config.kernel_size[1] * config.kernel_size[2] * C_in;
     uint32_t num_patches = config.T_out_block * config.H_out_block * config.W_out_block;
 
+    // If C_out_block is set, use it. Otherwise, use the full number of output channels.
+    uint32_t C_out_block = config.C_out_block > 0 ? config.C_out_block : C_out;
+    uint32_t C_out_num_blocks = tt::div_up(C_out, C_out_block);
+    TT_FATAL(C_out_num_blocks * C_out_block == C_out, "C_out_num_blocks * C_out_block must equal C_out");
+
     uint32_t matmul_M_t = tt::div_up(num_patches, tt::constants::TILE_HEIGHT);
     uint32_t matmul_K_t = tt::div_up(patch_size, tt::constants::TILE_WIDTH);
-    uint32_t matmul_N_t = tt::div_up(C_out, tt::constants::TILE_WIDTH);
+    uint32_t matmul_N_t = tt::div_up(C_out_block, tt::constants::TILE_WIDTH);
 
     uint32_t num_patches_tile_padded = tt::round_up(num_patches, tt::constants::TILE_HEIGHT);
 
@@ -69,17 +74,18 @@ operation::ProgramWithCallbacks conv3d_factory(
     uint32_t patch_size_bytes =
         tt::round_up(patch_size, tt::constants::TILE_WIDTH) * dtype_bytes;  // bytes per patch row
     // NOTE: Also padded up to tile size
-    uint32_t C_out_tile_padded_bytes =
-        tt::round_up(C_out, tt::constants::TILE_WIDTH) * dtype_bytes;  // bytes per output channel row
+    uint32_t C_out_block_bytes = C_out_block * dtype_bytes;  // bytes per output channel row
 
     log_info("Block sizes:");
     log_info("  T_out_block: {}", config.T_out_block);
     log_info("  H_out_block: {}", config.H_out_block);
     log_info("  W_out_block: {}", config.W_out_block);
+    log_info("  C_out_block: {}", C_out_block);
+    log_info("  C_out_num_blocks: {}", C_out_num_blocks);
     log_info("Patch size: {}", patch_size);
     log_info("Num patches: {}", num_patches);
     log_info("Patch size bytes: {}", patch_size_bytes);
-    log_info("C_out tile padded bytes: {}", C_out_tile_padded_bytes);
+    log_info("C_out block bytes: {}", C_out_block_bytes);
     log_info("Num patches tile padded: {}", num_patches_tile_padded);
     log_info("Matmul M_t: {}", matmul_M_t);
     log_info("Matmul K_t: {}", matmul_K_t);
@@ -93,7 +99,7 @@ operation::ProgramWithCallbacks conv3d_factory(
 
     log_info("CB matmul_interm_tiled: page_size={} bytes, num_pages={}", tile_size, matmul_M_t * matmul_N_t);
 
-    log_info("CB matmul_result_rm: page_size={} bytes, num_pages={}", C_out_tile_padded_bytes, num_patches_tile_padded);
+    log_info("CB matmul_result_rm: page_size={} bytes, num_pages={}", C_out_block_bytes, num_patches_tile_padded);
 
     uint32_t cb_vol2col_rm_id = tt::CBIndex::c_0;
     uint32_t cb_vol2col_tiled_id = tt::CBIndex::c_1;
@@ -115,12 +121,14 @@ operation::ProgramWithCallbacks conv3d_factory(
     auto [_____, cb_matmul_interm_tiled_handle] = tt::tt_metal::create_cb(
         cb_matmul_interm_tiled_id, program, core_grid, tile_size, matmul_M_t * matmul_N_t, data_format);
 
+    // NOTE: Most kernels create RM CB with tile_size pages and num_tile number of pages.
+    // Using stick pages led to PCC issues.
     auto [______, cb_matmul_result_rm_handle] = tt::tt_metal::create_cb(
         cb_matmul_result_rm_id,
         program,
         core_grid,
-        C_out_tile_padded_bytes,
-        num_patches_tile_padded,  // untilize will write padded rows, so this must be sized to avoid overflowing CB
+        tile_size,
+        matmul_M_t * matmul_N_t,  // untilize will write padded rows, so this must be sized to avoid overflowing CB
         data_format);
 
     if (use_bias) {
@@ -164,6 +172,7 @@ operation::ProgramWithCallbacks conv3d_factory(
         config.T_out_block,
         config.H_out_block,
         config.W_out_block,
+        C_out_num_blocks,
         in_row_size_bytes,
         out_row_size_bytes,
         is_padding_zeros,
@@ -222,6 +231,7 @@ operation::ProgramWithCallbacks conv3d_factory(
         config.T_out_block,
         config.H_out_block,
         config.W_out_block,
+        C_out_num_blocks,
         in0_num_subblocks,
         in1_num_subblocks,
         in0_block_w,
@@ -249,12 +259,13 @@ operation::ProgramWithCallbacks conv3d_factory(
         config.T_out_block,
         config.H_out_block,
         config.W_out_block,
+        C_out_num_blocks,
         matmul_M_t,
         matmul_K_t,
         matmul_N_t,
         num_patches_tile_padded,
         out_row_size_bytes,
-        C_out_tile_padded_bytes,
+        C_out_block_bytes,
         (uint32_t)use_bias,
     };
 
