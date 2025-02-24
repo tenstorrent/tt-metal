@@ -740,6 +740,7 @@ class TestEltwiseUnary:
 
     @pytest.mark.parametrize("unary_kind", ["add_unary", "sub_unary", "mul_unary", "div_unary"])
     @pytest.mark.parametrize("scalar", [-2.0, 1.0, 2.0, 8.0])
+    @skip_for_grayskull()
     def test_run_eltwise_binop_to_unary_ops(
         self,
         unary_kind,
