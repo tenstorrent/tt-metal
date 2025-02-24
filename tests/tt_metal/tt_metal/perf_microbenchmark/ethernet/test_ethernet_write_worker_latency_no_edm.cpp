@@ -29,6 +29,8 @@
 
 #include "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/eth_ubenchmark_types.hpp"
 
+#include "tt_cluster.hpp"
+
 // TODO: ARCH_NAME specific, must remove
 #include "eth_l1_address_map.h"
 
@@ -84,6 +86,9 @@ void validation(const std::shared_ptr<tt::tt_metal::Buffer>& worker_buffer_0) {
     tt::tt_metal::detail::ReadFromBuffer(worker_buffer_0, result_vec);
 
     bool pass = golden_vec == result_vec;
+    for (auto x : result_vec) {
+        std::cout << (uint32_t)x << std::endl;
+    }
     TT_FATAL(pass, "validation failed");
 }
 
@@ -140,18 +145,22 @@ std::vector<Program> build(
         static_cast<uint32_t>(num_samples),
         static_cast<uint32_t>(sample_page_size)};
 
+    std::cout << "handshake addr " << std::hex << eth_sender_receiver_rt_args[0] << std::dec << std::endl;
+    std::cout << "sender " << eth_sender_core.str() << " "
+              << device0->virtual_core_from_logical_core(eth_sender_core, CoreType::ETH).str() << std::endl;
+    std::cout << "rvr " << eth_receiver_core.str() << " "
+              << device1->virtual_core_from_logical_core(eth_receiver_core, CoreType::ETH).str() << std::endl;
+
     local_kernel = tt_metal::CreateKernel(
         program0,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/"
-        "ethernet_write_worker_latency_ubench_sender.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/ethernet_ubench_sender.cpp",
         eth_sender_core,
         tt_metal::EthernetConfig{.noc = tt_metal::NOC::RISCV_0_default, .compile_args = eth_sender_ct_args});
     tt_metal::SetRuntimeArgs(program0, local_kernel, eth_sender_core, eth_sender_receiver_rt_args);
 
     remote_kernel = tt_metal::CreateKernel(
         program1,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/"
-        "ethernet_write_worker_latency_ubench_receiver.cpp",
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/erisc/ethernet_ubench_receiver.cpp",
         eth_receiver_core,
         tt_metal::EthernetConfig{.noc = tt_metal::NOC::RISCV_0_default, .compile_args = eth_receiver_ct_args});
     tt_metal::SetRuntimeArgs(program1, remote_kernel, eth_receiver_core, eth_sender_receiver_rt_args);
@@ -195,6 +204,18 @@ void run(
     }
     tt::tt_metal::detail::DumpDeviceProfileResults(device0);
     tt::tt_metal::detail::DumpDeviceProfileResults(device1);
+
+    std::vector<uint8_t> result_vec(worker_buffer_0->size(), 0);
+    tt::Cluster::instance().read_core(result_vec.data(), worker_buffer_0->size(), tt_cxy_pair(0, 25, 17), 104880);
+    for (auto x : result_vec) {
+        std::cout << "eth sender: " << (uint32_t)x << std::endl;
+    }
+
+    std::vector<uint8_t> result_vec1(worker_buffer_0->size(), 0);
+    tt::Cluster::instance().read_core(result_vec1.data(), worker_buffer_0->size(), tt_cxy_pair(1, 25, 16), 104880);
+    for (auto y : result_vec1) {
+        std::cout << "eth rcvr: " << (uint32_t)y << std::endl;
+    }
 
     if (benchmark_type == BenchmarkType::EthEthTensixUniDir or benchmark_type == BenchmarkType::EthEthTensixBiDir) {
         validation(worker_buffer_1);

@@ -97,6 +97,9 @@ void kernel_main() {
         asm volatile("nop");
     }
 
+    init_ptr_val<to_receiver_pkts_sent_id>(0);
+    init_ptr_val<to_sender_pkts_acked_id>(0);
+
     eth_setup_handshake(handshake_addr, false);
 
     run_loop_iteration<false>(channel_addrs, channel_sync_addrs);
