@@ -170,7 +170,7 @@ class LMHead(LightweightModule):
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
-        return output
+        return [output]
 
     def forward(self, x: ttnn.Tensor):
         # workaround for OOM issue
@@ -193,15 +193,15 @@ class LMHead(LightweightModule):
 
             # ttnn.synchronize_devices(self.mesh_device, sub_device_ids=[self.tt_ccl.worker_sub_device_id])
 
-            # outputs.append(output)
-            outputs.append(ttnn.sharded_to_interleaved(output, memory_config=ttnn.DRAM_MEMORY_CONFIG))
+            outputs.append(output)
+            # outputs.append(ttnn.sharded_to_interleaved(output, memory_config=ttnn.DRAM_MEMORY_CONFIG))
             # weight_l1.deallocate(True)
             # output.deallocate(True)
 
         outputs_reduced = []
         for output in outputs:
-            output_reduced = self.tt_ccl.line_all_reduce_old(
-                output, cluster_axis=1, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            output_reduced = self.tt_ccl.line_all_reduce(
+                output, cluster_axis=1, num_links=3, memory_config=output.memory_config(), lm_head=True
             )  # self.output_memory_config
 
             outputs_reduced.append(output_reduced)

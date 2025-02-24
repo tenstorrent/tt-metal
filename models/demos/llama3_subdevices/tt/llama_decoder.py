@@ -135,7 +135,7 @@ class TtTransformerBlock(LightweightModule):
             assert False, "Failed to run attention norm"
         # NOTE: donnot deallocate x here as it updated inplace and returns new h
         # Attention takes replicated inputs and produces fractured outputs
-        print("done attention norm")
+        # print("done attention norm")
         # pad attn input
         attn_in_sharded = ttnn.to_memory_config(attn_in, self.model_config["SHARDED_ATTN_INPUT_RING_MEMCFG"])
         attn_in.deallocate(True)
@@ -150,7 +150,7 @@ class TtTransformerBlock(LightweightModule):
             chunk_start_idx=chunk_start_idx,
             kv_cache=kv_cache,
         )
-        print("done attention")
+        # print("done attention")
 
         # Norms take fractured inputs and output replicated across devices
 
@@ -161,12 +161,12 @@ class TtTransformerBlock(LightweightModule):
         # MLP takes replicated inputs and produces fractured outputs
         ff_in_sharded = ttnn.to_memory_config(ff_in, self.model_config["SHARDED_FF12_RING_MEMCFG"])
         ff_in.deallocate(True)
-        print("done ff norm")
+        # print("done ff norm")
         ff_out = self.feed_forward.forward(ff_in_sharded, mode)
-        print("done feed forward")
+        # print("done feed forward")
         if self.layer_num == self.n_layers - 1:
             out = ttnn.add(h, ff_out, memory_config=skip_mem_cfg)
         else:
             out = ff_out
-        print("done add")
+        # print("done add")
         return out, h  # fractured across devices

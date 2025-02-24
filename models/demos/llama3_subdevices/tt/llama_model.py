@@ -337,7 +337,7 @@ class TtTransformer(LightweightModule):
         get_last_token=-1,
         kv_cache=None,
     ):
-        print("model start")
+        # print("model start")
         # No-op if callers already provide the right memory config
 
         garbage_tensor = ttnn.dram_prefetcher(
@@ -345,9 +345,9 @@ class TtTransformer(LightweightModule):
             num_layers=self.n_layers,
             global_cb=self.prefetcher_setup.global_circular_buffer,
         )
-        print("prefetcher done")
+        # print("prefetcher done")
         self.mesh_device.set_sub_device_stall_group([self.prefetcher_setup.worker_sub_device_id])
-        print("stall group done")
+        # print("stall group done")
         if mode == "decode" and not self.args.is_galaxy:
             x = ttnn.to_memory_config(x, self.model_config["DECODE_RESIDUAL_MEMCFG"])
 
@@ -368,7 +368,7 @@ class TtTransformer(LightweightModule):
         ttnn.deallocate(h)
 
         ttnn.deallocate(garbage_tensor)
-        print("decoder done")
+        # print("decoder done")
 
         # Output norm
         x_norm, res = self.norm(x, res=None, mode=mode)

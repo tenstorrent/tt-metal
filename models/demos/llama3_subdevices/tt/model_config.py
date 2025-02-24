@@ -25,6 +25,7 @@ from dataclasses import dataclass
 
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_matmul_1d_gather_in0 import (
     PREFETCHER_NOC1_GRID,
+    LM_HEAD_GRID,
     num_cores_to_rectangle_grid,
     get_physical_to_logical_core_mapping,
 )
@@ -735,15 +736,20 @@ class TtModelArgs:
             )
             LM_HEAD_RING_SIZE = 16
             self.lm_head_shape = (8192 // 4, 128 * 1024 // 8)
-            lm_head_ring_core_range_set = ttnn.CoreRangeSet(
-                {
-                    core_range,
-                }
-            )
-
-            # ttnn.num_cores_to_corerangeset_in_subcoregrids(
+            # lm_head_ring_core_range_set = ttnn.num_cores_to_corerangeset_in_subcoregrids(
             #     self.start_core, LM_HEAD_RING_SIZE, self.sub_core_grids, row_wise=False
             # )
+
+            lm_head_ring_core_range_set = ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(x, y),
+                        ttnn.CoreCoord(x, y),
+                    )
+                    for x, y in LM_HEAD_GRID
+                ]
+            )
+
             self.model_config["SHARDED_LM_HEAD_INPUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
                 shape=(32, self.lm_head_shape[0] // LM_HEAD_RING_SIZE),
                 core_grid=lm_head_ring_core_range_set,
