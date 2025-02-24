@@ -4,6 +4,45 @@
 
 #include "ethernet_ubench_common.hpp"
 
+template <bool write_to_worker>
+FORCE_INLINE void receiver_uni_dir(
+    const std::array<uint32_t, NUM_BUFFER_SLOTS>& receiver_buffer_slot_addrs,
+    uint32_t message_size,
+    uint32_t full_payload_size,
+    uint32_t num_messages,
+    uint64_t worker_noc_addr) {
+    uint32_t total_msgs;
+    if constexpr (measurement_type == MeasurementType::Latency) {
+        total_msgs = num_messages;
+    } else {
+        total_msgs = num_messages * NUM_BUFFER_SLOTS;
+    }
+
+    DPRINT << "RECEIVER MAIN LOOP" << ENDL();
+
+    uint32_t receiver_buffer_read_ptr = 0;
+    uint32_t receiver_buffer_write_ptr = 0;
+    uint32_t receiver_num_messages_ack = 0;
+
+    if constexpr (write_to_worker) {
+        noc_async_write_one_packet_with_trid_set_state(worker_noc_addr);
+    }
+
+    while (receiver_num_messages_ack < total_msgs) {
+        update_receiver_state<write_to_worker>(
+            receiver_buffer_slot_addrs,
+            worker_noc_addr,
+            message_size,
+            full_payload_size,
+            receiver_num_messages_ack,
+            receiver_buffer_read_ptr,
+            receiver_buffer_write_ptr);
+
+        // not called in normal execution mode
+        switch_context_if_debug();
+    }
+}
+
 void kernel_main() {
     uint32_t arg_idx = 0;
     const uint32_t handshake_addr = get_arg_val<uint32_t>(arg_idx++);
@@ -33,8 +72,7 @@ void kernel_main() {
 
     uint64_t worker_noc_addr = get_noc_addr(worker_noc_x, worker_noc_y, worker_buffer_addr);
 
-    init_ptr_val<to_receiver_pkts_sent_id>(0);
-    init_ptr_val<receiver_buffer_availability_id>(NUM_BUFFER_SLOTS);
+    init_ptr_val<sync_reg_id>(0);
 
     eth_setup_handshake(handshake_addr, false);
 
@@ -85,9 +123,9 @@ void kernel_main() {
         default: WAYPOINT("!ETH"); ASSERT(0);
     }
 
-    // need to do a delay as trid writes are not waiting for acks, so need to make sure noc response is back.
-    for (int i = 0; i < 1000; ++i) {
-        asm volatile("nop");
+    for (uint32_t i = 0; i < NUM_BUFFER_SLOTS; ++i) {
+        uint32_t trid = get_buffer_slot_trid(i);
+        noc_async_write_barrier_with_trid(trid);
     }
     ncrisc_noc_counters_init();
 }

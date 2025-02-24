@@ -20,20 +20,23 @@ FORCE_INLINE void send_uni_dir(
     uint32_t sender_buffer_read_ptr = 0;
     uint32_t sender_buffer_write_ptr = 0;
     uint32_t sender_num_messages_ack = 0;
-    uint32_t sender_num_messages_send = total_msgs;
-    int32_t sender_view_of_receiver_buffer = get_ptr_val<receiver_buffer_availability_id>();
+    uint32_t sender_num_messages_send = 0;
 
-    while (sender_num_messages_ack < total_msgs) {
+    while (sender_num_messages_send < total_msgs) {
         update_sender_state(
             buffer_slot_addrs,
             full_payload_size,
-            sender_num_messages_ack,
             sender_num_messages_send,
+            total_msgs,
             sender_buffer_read_ptr,
-            sender_buffer_write_ptr,
-            sender_view_of_receiver_buffer);
+            sender_buffer_write_ptr);
 
         // not called in normal execution mode
+        switch_context_if_debug();
+    }
+
+    // wait until we got all the acks back
+    while (get_ptr_val<sync_reg_id>() != NUM_BUFFER_SLOTS) {
         switch_context_if_debug();
     }
 }
@@ -65,8 +68,7 @@ void kernel_main() {
         asm volatile("nop");
     }
 
-    init_ptr_val<to_receiver_pkts_sent_id>(0);
-    init_ptr_val<receiver_buffer_availability_id>(NUM_BUFFER_SLOTS);
+    init_ptr_val<sync_reg_id>(NUM_BUFFER_SLOTS);
 
     eth_setup_handshake(handshake_addr, true);
 
@@ -116,9 +118,10 @@ void kernel_main() {
         default: WAYPOINT("!ETH"); ASSERT(0);
     }
 
-    // need to do a delay as trid writes are not waiting for acks, so need to make sure noc response is back.
-    for (int i = 0; i < 1000; ++i) {
-        asm volatile("nop");
+    // do a barrier before any noc init
+    for (uint32_t i = 0; i < NUM_BUFFER_SLOTS; ++i) {
+        uint32_t trid = get_buffer_slot_trid(i);
+        noc_async_write_barrier_with_trid(trid);
     }
     ncrisc_noc_counters_init();
 }

@@ -86,9 +86,9 @@ void validation(const std::shared_ptr<tt::tt_metal::Buffer>& worker_buffer_0) {
     tt::tt_metal::detail::ReadFromBuffer(worker_buffer_0, result_vec);
 
     bool pass = golden_vec == result_vec;
-    for (auto x : result_vec) {
-        std::cout << (uint32_t)x << std::endl;
-    }
+    // for (auto x : result_vec) {
+    //     std::cout << (uint32_t)x << std::endl;
+    // }
     TT_FATAL(pass, "validation failed");
 }
 
@@ -207,15 +207,15 @@ void run(
 
     std::vector<uint8_t> result_vec(worker_buffer_0->size(), 0);
     tt::Cluster::instance().read_core(result_vec.data(), worker_buffer_0->size(), tt_cxy_pair(0, 25, 17), 104880);
-    for (auto x : result_vec) {
-        std::cout << "eth sender: " << (uint32_t)x << std::endl;
-    }
+    // for (auto x : result_vec) {
+    //     std::cout << "eth sender: " << (uint32_t)x << std::endl;
+    // }
 
     std::vector<uint8_t> result_vec1(worker_buffer_0->size(), 0);
     tt::Cluster::instance().read_core(result_vec1.data(), worker_buffer_0->size(), tt_cxy_pair(1, 25, 16), 104880);
-    for (auto y : result_vec1) {
-        std::cout << "eth rcvr: " << (uint32_t)y << std::endl;
-    }
+    // for (auto y : result_vec1) {
+    //     std::cout << "eth rcvr: " << (uint32_t)y << std::endl;
+    // }
 
     if (benchmark_type == BenchmarkType::EthEthTensixUniDir or benchmark_type == BenchmarkType::EthEthTensixBiDir) {
         validation(worker_buffer_1);
