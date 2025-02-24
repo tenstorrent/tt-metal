@@ -653,7 +653,10 @@ void JitBuildState::compile(const string& log_file, const string& out_dir, const
             events);
     }
 
-    sync_build_step(events);
+    for (auto& f : events) {
+        f.get();
+    }
+
     if (tt::llrt::RunTimeOptions::get_instance().get_watcher_enabled()) {
         dump_kernel_defines_and_args(env_.get_out_kernel_root_path());
     }
@@ -755,7 +758,10 @@ void jit_build_set(const JitBuildStateSet& build_set, const JitBuildSettings* se
         auto& build = build_set[i];
         launch_build_step([build, settings] { build->build(settings); }, events);
     }
-    sync_build_step(events);
+
+    for (auto& f : events) {
+        f.get();
+    }
 }
 
 void jit_build_subset(const JitBuildStateSubset& build_subset, const JitBuildSettings* settings) {
@@ -765,7 +771,10 @@ void jit_build_subset(const JitBuildStateSubset& build_subset, const JitBuildSet
         auto& build = build_subset.build_ptr[i];
         launch_build_step([build, settings] { build->build(settings); }, events);
     }
-    sync_build_step(events);
+
+    for (auto& f : events) {
+        f.get();
+    }
 }
 
 void launch_build_step(const std::function<void()>& build_func, std::vector<std::shared_future<void>>& events) {
