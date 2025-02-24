@@ -17,7 +17,7 @@ from models.utility_functions import torch_random
 # Each suite has a key name (in this case "suite_1") which will associate the test vectors to this specific suite of inputs.
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
-    "abs-survey": {
+    "reciprocal-survey": {
         "input_shape": [{"self": [1, 1, 1024, 1024]}],
         "input_dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b],
         "input_layout": [ttnn.TILE_LAYOUT],
@@ -119,10 +119,10 @@ def run(
 
     torch_input_tensor = ttnn.to_torch(input_tensor)
 
-    golden_function = ttnn.get_golden_function(ttnn.abs)
+    golden_function = ttnn.get_golden_function(ttnn.reciprocal)
     torch_output_tensor = golden_function(torch_input_tensor, device=device)
     start_time = start_measuring_time()
-    result = ttnn.abs(input_tensor)
+    result = ttnn.reciprocal(input_tensor)
     output_tensor = ttnn.to_torch(result)
     print("torch_output_tensor", torch_output_tensor)
     print("output_tensor", output_tensor)
