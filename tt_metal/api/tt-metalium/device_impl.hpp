@@ -270,6 +270,8 @@ private:
     program_cache::detail::ProgramCache program_cache_;
 
     uint32_t trace_buffers_size_ = 0;
+    bool uninitialized_error_fired_ =
+        false;  // To avoid spam with warnings about calling Device methods when it's not initialized.
 };
 
 }  // namespace v0

@@ -9,6 +9,7 @@
 #include <tt-metalium/cq_commands.hpp>
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include "test_common.hpp"
+#include "routing_test_common.hpp"
 
 using std::vector;
 using namespace tt;
