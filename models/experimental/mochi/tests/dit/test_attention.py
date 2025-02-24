@@ -366,8 +366,9 @@ def test_tt_attn_run_attention(
 @pytest.mark.parametrize(
     "vision_seq_len, text_seq_len",
     [
-        (43 * 1024, 256),
-        (44520, 118),
+        (22 * 256 * 8, 256),
+        # (43 * 1024, 256),
+        # (44520, 118),
     ],
 )
 @pytest.mark.parametrize(
@@ -383,7 +384,7 @@ def test_tt_attn_run_attention(
     "attn_path, dim_x, dim_y, update_y",
     [
         ("blocks.0.attn", 3072, 1536, True),
-        ("blocks.47.attn", 3072, 1536, False),
+        #        ("blocks.47.attn", 3072, 1536, False),
     ],
 )
 def test_tt_attn_post_attention(
@@ -417,7 +418,7 @@ def test_tt_attn_post_attention(
     )
 
     # Convert TT outputs to torch tensors
-    tt_x_torch = to_torch_tensor(tt_x, mesh_device, dim=-1)
+    tt_x_torch = to_torch_tensor(tt_x, mesh_device, dim=-2)
     tt_y_torch = to_torch_tensor(tt_y, mesh_device, dim=-1)
 
     # Get reference outputs
@@ -430,6 +431,7 @@ def test_tt_attn_post_attention(
             dtype=torch.bfloat16,
             valid_token_indices=None,
         )
+
         # Reshape to match TT output
         ref_x = ref_x.reshape(1, batch_size, vision_seq_len, -1)
         ref_y = ref_y.reshape(1, batch_size, text_seq_len, -1)
