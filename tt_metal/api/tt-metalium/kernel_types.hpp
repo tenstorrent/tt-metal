@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -15,6 +15,18 @@ namespace tt::tt_metal {
 
 using KernelHandle = std::uint32_t;
 
+// Option that controls compiler optimization level
+enum class KernelBuildOptLevel : uint8_t {
+    O1,     // Level 1 optimization. Same as O.
+    O2,     // Level 2 optimization. Turns on all flags specified by O1.
+    O3,     // Level 3 optimizaiton. Turns on all flags specified by O2.
+    O0,     // Reduce compilation time and make debugging produce the expected results.
+    Os,     // Optimize for size. Enables O2 optimizations except for those that increase binary size.
+    Ofast,  // Enable all O3 and non standard optimizations.
+    Og,     // Optimize for debugging.
+    Oz,     // Aggresively optimize for size rather than speed.
+};
+
 struct DataMovementConfig {
     DataMovementProcessor processor = DataMovementProcessor::RISCV_0;  // For data transfer kernels: NCRISC & BRISC
     NOC noc = NOC::RISCV_0_default;
@@ -24,6 +36,8 @@ struct DataMovementConfig {
     // Each unique combination of defines will produce a unique compiled instantiation
     // This file is then automatically included in the generated compiled kernel files
     std::map<std::string, std::string> defines;
+    // Kernel optimization level
+    KernelBuildOptLevel opt_level = KernelBuildOptLevel::Os;
 };
 
 struct ReaderDataMovementConfig : public DataMovementConfig {
@@ -46,6 +60,8 @@ struct ComputeConfig {
     // Each unique combination of defines will produce a unique compiled instantiation
     // This file is then automatically included in the generated compiled kernel files
     std::map<std::string, std::string> defines;
+    // Kernel optimization level
+    KernelBuildOptLevel opt_level = KernelBuildOptLevel::O3;
 };
 
 struct EthernetConfig {
@@ -57,6 +73,8 @@ struct EthernetConfig {
     // Each unique combination of defines will produce a unique compiled instantiation
     // This file is then automatically included in the generated compiled kernel files
     std::map<std::string, std::string> defines;
+    // Kernel optimization level
+    KernelBuildOptLevel opt_level = KernelBuildOptLevel::Os;
 };
 
 }  // namespace tt::tt_metal
