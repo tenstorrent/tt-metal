@@ -1,15 +1,14 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include "gtest/gtest.h"
+#include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/rtoptions.hpp>
-#include <tt-metalium/control_plane.hpp>
-#include <tt-metalium/device_pool.hpp>
 
 namespace tt::tt_fabric {
 namespace fabric_router_tests {
@@ -36,15 +35,14 @@ class FabricFixture : public ::testing::Test {
 protected:
     tt::ARCH arch_;
     std::map<chip_id_t, IDevice*> devices_map_;
-    tt::tt_fabric::ControlPlane* control_plane_;
+    std::vector<IDevice*> devices_;
     bool slow_dispatch_;
 
     void SetUp() override {
-        auto slow_dispatch_ = getenv("TT_METAL_SLOW_DISPATCH_MODE");
-        if (slow_dispatch_) {
+        slow_dispatch_ = getenv("TT_METAL_SLOW_DISPATCH_MODE");
+        if (!slow_dispatch_) {
             tt::log_info(
-                tt::LogTest,
-                "Fabric test suite can only be run with fast dispatch or TT_METAL_SLOW_DISPATCH_MODE unset");
+                tt::LogTest, "Fabric test suite can only be run with slow dispatch or TT_METAL_SLOW_DISPATCH_MODE set");
             GTEST_SKIP();
         }
         // Set up all available devices
@@ -56,13 +54,12 @@ protected:
         }
         tt::tt_metal::detail::InitializeFabricSetting(tt::tt_metal::detail::FabricSetting::FABRIC);
         devices_map_ = tt::tt_metal::detail::CreateDevices(ids);
-        control_plane_ = tt::DevicePool::instance().get_control_plane();
+        for (auto& [id, device] : devices_map_) {
+            devices_.push_back(device);
+        }
     }
 
-    void TearDown() override {
-        std::cout << " TEARDOWN" << std::endl;
-        tt::tt_metal::detail::CloseDevices(devices_map_);
-    }
+    void TearDown() override { tt::tt_metal::detail::CloseDevices(devices_map_); }
 };
 
 }  // namespace tt::tt_fabric

@@ -157,7 +157,7 @@ void kernel_main() {
     while (true) {
         client_interface->local_pull_request.pull_request.words_read = 0;
         if constexpr (mcast_data) {
-            fabric_async_write_multicast<AsyncWriteMode::SEND, RoutingType::ROUTING_TABLE>(
+            fabric_async_write_multicast<AsyncWriteMode::SEND_PR, RoutingType::ROUTING_TABLE>(
                 client_interface,
                 0,                       // the network plane to use for this transaction
                 data_buffer_start_addr,  // source address in sender’s memory
@@ -170,7 +170,7 @@ void kernel_main() {
                 n_depth,
                 s_depth);
         } else {
-            fabric_async_write<AsyncWriteMode::SEND, RoutingType::ROUTING_TABLE>(
+            fabric_async_write<AsyncWriteMode::SEND_PR, RoutingType::ROUTING_TABLE>(
                 client_interface,
                 0,                       // the network plane to use for this transaction
                 data_buffer_start_addr,  // source address in sender’s memory
