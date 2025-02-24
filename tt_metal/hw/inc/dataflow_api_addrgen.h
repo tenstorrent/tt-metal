@@ -275,6 +275,14 @@ std::uint64_t get_noc_addr(std::uint32_t addr, uint8_t noc = noc_index) {
     return NOC_XY_ADDR(my_x[noc], my_y[noc], addr);
 }
 
+// Forward declare noc_async_read and default template, arg vals here to AVOID
+// circular dependency between InterleavedAddrGen::noc_async_read (defined and
+// implemented here) and free function noc_async_read() defined in
+// dataflow_api.h
+template <uint32_t max_page_size = NOC_MAX_BURST_SIZE + 1>
+void noc_async_read(
+    std::uint64_t src_noc_addr, std::uint32_t dst_local_l1_addr, std::uint32_t size, uint8_t noc = noc_index);
+
 template <bool DRAM>
 struct InterleavedAddrGen {
     uint32_t bank_base_address;  // Base address for the whole tensor.
