@@ -47,9 +47,6 @@ tests/scripts/t3000/ @tenstorrent/metalium-developers-infra
 tests/scripts/tg/ @tenstorrent/metalium-developers-infra
 tests/scripts/tgg/ @tenstorrent/metalium-developers-infra
 
-# fabric
-tt_fabric/ @ubcheema @aliuTT @aagarwalTT
-
 # Metalium - public API
 tt_metal/api @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @ubcheema @cfjchu @omilyutin-tt
 
@@ -58,6 +55,9 @@ tt_metal/ @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @ubcheema @
 tt_metal/host_api.hpp @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @davorchap @cfjchu @omilyutin-tt
 tt_metal/impl/device/ @abhullar-tt @pgkeller @aliuTT @tt-aho @tt-dma @tt-asaigal @ubcheema @davorchap @cfjchu @omilyutin-tt
 tt_metal/**/requirements*.txt @tenstorrent/metalium-developers-infra
+
+# fabric
+tt_metal/fabric/ @ubcheema @aliuTT @aagarwalTT
 
 # metal - dispatch
 tt_metal/impl/dispatch/kernels/packet_* @ubcheema @aliuTT
@@ -80,7 +80,7 @@ tt_metal/hw/firmware/src/*erisc* @aliuTT @ubcheema
 tt_metal/hw/inc/ethernet/ @aliuTT @ubcheema
 tt_metal/hw/inc/wormhole/eth_l1_address_map.h @aliuTT @ubcheema
 tt_metal/third_party/tt_llk_* @rtawfik01 @ttmtrajkovic @rdjogoTT
-tt_metal/tt_stl/ @patrickroberts @ayerofieiev-tt @dmakoviichuk-tt @sminakov-tt
+tt_metal/tt_stl/ @patrickroberts @ayerofieiev-tt @dmakoviichuk-tt @sminakov-tt @omilyutin-tt
 
 sfpi/ @pgkeller
 
@@ -176,10 +176,12 @@ models/demos/t3000/mixtral8x7b @yieldthought @mtairum @uaydonat
 models/demos/tg/llama3_70b @cglagovichTT @uaydonat @johanna-rock-tt @djordje-tt @kpaigwar
 models/demos/tg/falcon7b @skhorasganiTT @djordje-tt @uaydonat
 models/demos/grayskull @uaydonat
-models/demos/yolov4 @dvartaniansTT @tenstorrent/metalium-developers-convolutions
-models/demos/wormhole/yolov4 @dvartaniansTT @tenstorrent/metalium-developers-convolutions
+models/demos/yolov4 @dvartaniansTT @mbahnasTT @tenstorrent/metalium-developers-convolutions
+models/demos/wormhole/yolov4 @dvartaniansTT @mbahnasTT @tenstorrent/metalium-developers-convolutions
 models/demos/**/*resnet*  @tt-aho @tenstorrent/metalium-developers-convolutions
 models/experimental/functional_unet @esmalTT @uaydonat @tenstorrent/metalium-developers-convolutions
+models/experimental/functional_vit @mbahnasTT @uaydonat
+models/demos/segformer @mbahnasTT @uaydonat @tenstorrent/metalium-developers-convolutions
 models/perf/ @uaydonat
 models/perf/perf_report.py @yieldthought @uaydonat
 models/perf/benchmarking_utils.py @skhorasganiTT

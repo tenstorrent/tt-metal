@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <optional>
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/run_operation.hpp"
@@ -61,6 +62,13 @@ struct Conv2dConfig {
     // BFLOAT8 is always Tile layout.
     Layout output_layout = Layout::TILE;
 
+    // Select between preprocessing weights on device or on host.
+    bool preprocess_weights_on_device = true;
+
+    // If false, only preprocess weights if they are originally located on host.
+    // If true, preprocess weights regarding of original location.
+    bool always_preprocess_weights = false;
+
     // Doubles the size of the CBs for activation.
     // Increased perf, but increased L1 usage.
     bool enable_act_double_buffer = false;
@@ -73,6 +81,7 @@ struct Conv2dConfig {
     bool enable_split_reader = false;
 
     bool enable_subblock_padding = false;
+
     static constexpr auto attribute_names = std::make_tuple(
         "dtype",
         "weights_dtype",
@@ -88,6 +97,7 @@ struct Conv2dConfig {
         "core_grid",
         "transpose_shards",
         "output_layout",
+        "preprocess_weights_on_device",
         "enable_act_double_buffer",
         "enable_weights_double_buffer",
         "enable_split_reader",
@@ -108,6 +118,7 @@ struct Conv2dConfig {
             std::cref(this->core_grid),
             std::cref(this->transpose_shards),
             std::cref(this->output_layout),
+            std::cref(this->preprocess_weights_on_device),
             std::cref(this->enable_act_double_buffer),
             std::cref(this->enable_weights_double_buffer),
             std::cref(this->enable_split_reader),
@@ -122,13 +133,8 @@ struct OptimizedConvParallelizationConfig {
     CoreCoord grid_size;  // (x,y)
     uint32_t num_cores_nhw = 1;
     uint32_t num_cores_c = 1;
-    uint32_t per_core_out_matrix_height = 1;
-    uint32_t per_core_out_matrix_width = 1;
-    // std::size_t in0_block_w;
-    // std::size_t out_subblock_h;
-    // std::size_t out_subblock_w;
-    // std::size_t per_core_M;
-    // std::size_t per_core_N;
+    uint32_t per_core_out_matrix_height_ntile = 1;
+    uint32_t per_core_out_matrix_width_ntile = 1;
 
     CoreCoord get_grid_size() const { return this->grid_size; }
 };
@@ -159,8 +165,7 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_sharded_
     bool enable_act_double_buffer,
     bool enable_weights_double_buffer,
     bool enable_split_reader,
-    bool enable_subblock_padding,
-    bool use_non_tile_height);
+    bool enable_subblock_padding);
 
 // new micro op
 struct OptimizedConvNew {
@@ -179,7 +184,6 @@ struct OptimizedConvNew {
     bool enable_weights_double_buffer;
     bool enable_split_reader;
     bool enable_subblock_padding;
-    bool use_non_tile_height;
     uint32_t pre_op_l1_allocation_size_bytes;
     OptimizedConvNew(
         const sliding_window::SlidingWindowConfig& sliding_window_config,
@@ -198,8 +202,7 @@ struct OptimizedConvNew {
         bool enable_act_double_buffer,
         bool enable_weights_double_buffer,
         bool enable_split_reader,
-        bool enable_subblock_padding,
-        bool use_non_tile_height) :
+        bool enable_subblock_padding) :
         output_channels(output_channels),
         groups(groups),
         sliding_window_config(sliding_window_config),
@@ -216,8 +219,7 @@ struct OptimizedConvNew {
         enable_act_double_buffer(enable_act_double_buffer),
         enable_weights_double_buffer(enable_weights_double_buffer),
         enable_split_reader(enable_split_reader),
-        enable_subblock_padding(enable_subblock_padding),
-        use_non_tile_height(use_non_tile_height) {}
+        enable_subblock_padding(enable_subblock_padding) {}
 
     void validate(
         const std::vector<Tensor>& input_tensors,
@@ -290,8 +292,7 @@ Tensor optimized_conv_new(
     bool enable_act_double_buffer = false,
     bool enable_weights_double_buffer = false,
     bool enable_split_reader = false,
-    bool enable_subblock_padding = false,
-    bool use_non_tile_height = false);
+    bool enable_subblock_padding = false);
 
 // Only enable packer l1 accumulation when there are in0_num_blocks_w > 2, otherwise
 // unnecessary overhead for reconfigs are added. Last iteration of l1 accumulation
@@ -317,7 +318,6 @@ conv_op_l1_usage calculate_L1_usage(
     const Conv2dConfig& conv_config,
     const MemoryConfig& output_memory_config,
     bool enable_bias,
-    bool use_non_tile_height,
     bool is_1d_depthwise_conv);
 
 }  // namespace conv2d

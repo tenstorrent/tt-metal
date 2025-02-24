@@ -119,7 +119,23 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_repeater_last_dim(
             }
         }
     }
-    return {.program = std::move(program)};
+    auto override_runtime_args_callback = [reader_kernel_id, total_cores](
+                                              const void* operation,
+                                              const tt::tt_metal::Program& program,
+                                              const std::vector<Tensor>& input_tensors,
+                                              const std::vector<std::optional<const Tensor>>&,
+                                              const std::vector<Tensor>& output_tensors) {
+        auto input = input_tensors.at(0);
+        auto output = output_tensors.at(0);
+        auto& runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
+        for (const auto& core : total_cores) {
+            auto& runtime_args = runtime_args_by_core[core.x][core.y];
+            runtime_args.at(0) = input.buffer()->address();
+            runtime_args.at(1) = output.buffer()->address();
+        }
+    };
+
+    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
 }
 
 tt::tt_metal::operation::ProgramWithCallbacks rm_repeater(
@@ -162,15 +178,17 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_repeater(
     uint32_t cb_size_bytes = READ_ALIGNMENT * 2 + page_size_bytes;
     uint32_t src0_cb_index = 0;
     uint32_t src1_cb_index = 1;
+
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(cb_size_bytes, {{src0_cb_index, cb_data_format}})
             .set_page_size(src0_cb_index, cb_size_bytes);
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
+
     tt::tt_metal::CircularBufferConfig cb_src1_config =
         tt::tt_metal::CircularBufferConfig(cb_size_bytes, {{src1_cb_index, cb_data_format}})
             .set_page_size(src1_cb_index, cb_size_bytes);
-
     auto cb_src1 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src1_config);
+
     bool page_is_pow_2 = tt::tt_metal::is_power_of_two_at_least_32(page_size_bytes);
     uint32_t page_pow_2 = page_is_pow_2 ? (std::uint32_t)std::log2(page_size_bytes) : 0;
     std::vector<uint32_t> compile_time_args = {
@@ -245,7 +263,22 @@ tt::tt_metal::operation::ProgramWithCallbacks rm_repeater(
             }
         }
     }
-    return {.program = std::move(program)};
+    auto override_runtime_args_callback = [reader_kernel_id, total_cores](
+                                              const void* operation,
+                                              const tt::tt_metal::Program& program,
+                                              const std::vector<Tensor>& input_tensors,
+                                              const std::vector<std::optional<const Tensor>>&,
+                                              const std::vector<Tensor>& output_tensors) {
+        auto input = input_tensors.at(0);
+        auto output = output_tensors.at(0);
+        auto& runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
+        for (const auto& core : total_cores) {
+            auto& runtime_args = runtime_args_by_core[core.x][core.y];
+            runtime_args.at(0) = input.buffer()->address();
+            runtime_args.at(1) = output.buffer()->address();
+        }
+    };
+    return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_args_callback};
 }
 
 tt::tt_metal::operation::ProgramWithCallbacks rm_repeat_program_factory(

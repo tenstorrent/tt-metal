@@ -23,6 +23,7 @@ from tests.ttnn.unit_tests.operations.ccl.test_reduce_scatter_TG_nightly import 
 from tests.ttnn.unit_tests.operations.ccl.test_all_reduce_async import (
     run_all_reduce_with_mesh_tensor_along_row,
 )
+from models.perf.benchmarking_utils import BenchmarkProfiler
 
 
 PREFETCHER_NOC1_RING = [
@@ -79,22 +80,25 @@ def get_core_range_set(output_core_grid):
     "num_devices, num_links",
     [
         (4, 3),
-        (4, 2),
-        (4, 1),
     ],
 )
 @pytest.mark.parametrize(
     "input_dtype",
     [
-        ttnn.bfloat16,
         ttnn.bfloat8_b,
+    ],
+)
+@pytest.mark.parametrize(
+    "num_iters",
+    [
+        5000,
     ],
 )
 @pytest.mark.parametrize("shard_grid_orientation", [ttnn.ShardOrientation.ROW_MAJOR])
 @pytest.mark.parametrize(
-    "tensor_mem_layout, output_shape, dim, input_shard_shape,input_shard_grid,output_shard_shape, output_shard_grid, layout",
+    "tensor_mem_layout, output_shape, dim, input_shard_shape,input_shard_grid,output_shard_shape, output_shard_grid, layout, perf_target_us",
     (
-        (  # AllGather after SDPA (~160 us)
+        (  # AllGather after SDPA
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             (1, 32, 32, 128),
             1,
@@ -108,8 +112,9 @@ def get_core_range_set(output_core_grid):
                 }
             ),
             ttnn.TILE_LAYOUT,
+            32,
         ),
-        (  # AllGather after Binary Mult+Silu (~160 us)
+        (  # AllGather after Binary Mult+Silu
             ttnn.TensorMemoryLayout.WIDTH_SHARDED,
             (1, 1, 32, 3840),
             3,
@@ -118,6 +123,7 @@ def get_core_range_set(output_core_grid):
             (32, 160),
             get_core_range_set(PREFETCHER_NOC1_RING),
             ttnn.TILE_LAYOUT,
+            25,
         ),
     ),
 )
@@ -143,7 +149,8 @@ def test_line_all_gather_sharded_on_TG_rows_llama(
     function_level_defaults,
     enable_async,
     replication_factor,
-    num_iters=100,
+    num_iters,
+    perf_target_us,
 ):
     if len(mesh_device.get_devices()) != 32:
         pytest.skip("Not TG!")
@@ -161,6 +168,8 @@ def test_line_all_gather_sharded_on_TG_rows_llama(
         )
     else:
         output_shard_spec = None
+
+    profiler = BenchmarkProfiler()
 
     run_line_all_gather_on_TG_with_mesh_tensor_along_rows(
         mesh_device,
@@ -180,12 +189,19 @@ def test_line_all_gather_sharded_on_TG_rows_llama(
         output_shard_spec=output_shard_spec,
         num_all_gather_instances=replication_factor,
         cluster_axis=1,
+        profiler=profiler,
         trace_mode=True,
         use_all_gather_async=True,
         enable_persistent_fabric=True,
         create_persistent_fabric=True,
         teardown_persistent_fabric=True,
     )
+
+    latency_us = profiler.get_duration("all-gather-async-trace") / num_iters * 1e6
+    if perf_target_us is not None:
+        assert (
+            latency_us < perf_target_us
+        ), f"Measured latency {latency_us} us is greater than target {perf_target_us} us"
 
 
 @skip_for_grayskull("Requires eth connected devices to run")

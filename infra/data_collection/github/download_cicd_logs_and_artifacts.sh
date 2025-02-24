@@ -17,7 +17,9 @@ download_artifacts() {
     local repo=$1
     local workflow_run_id=$2
 
-    if gh api --paginate /repos/$repo/actions/runs/$workflow_run_id/artifacts | jq '.artifacts[] | .name' | grep -q "test_reports_"; then
+    echo "[info] Downloading test reports for workflow run $workflow_run_id"
+    api_output=$(gh api --paginate /repos/$repo/actions/runs/$workflow_run_id/artifacts | jq -r '.artifacts[] | .name')
+    if echo "$api_output" | grep -q "test_reports_"; then
         gh run download --repo $repo -D generated/cicd/$workflow_run_id/artifacts --pattern test_reports_* $workflow_run_id
     else
         echo "[Warning] Test reports not found for workflow run $workflow_run_id"
@@ -34,7 +36,7 @@ download_logs_for_all_jobs() {
         job_id=$(echo "$job" | jq -r '.id')
         job_conclusion=$(echo "$job" | jq -r '.conclusion')
         echo "[info] download logs for job with id $job_id, attempt number $attempt_number"
-        gh api /repos/$repo/actions/jobs/$job_id/logs > generated/cicd/$workflow_run_id/logs/$job_id.log
+        gh api /repos/$repo/actions/jobs/$job_id/logs > generated/cicd/$workflow_run_id/logs/$job_id.log || true
 
         # Only download annotations for failed jobs
         if [[ "$job_conclusion" == "failure" ]]; then

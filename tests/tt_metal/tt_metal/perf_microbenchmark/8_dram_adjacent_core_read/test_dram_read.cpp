@@ -21,6 +21,8 @@
 #include <tt-metalium/work_split.hpp>
 #include <yaml-cpp/yaml.h>
 
+#include "test_common.hpp"
+
 using namespace tt;
 using std::chrono::duration_cast;
 using std::chrono::microseconds;

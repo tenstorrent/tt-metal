@@ -19,14 +19,12 @@ on:
         required: true
         type: choice
         options:
-          - grayskull
           - wormhole_b0
           - blackhole
       runner-label:
         required: true
         type: choice
         options:
-          - E150
           - N150
           - N300
           - BH
@@ -50,13 +48,13 @@ jobs:
       matrix:
         os: ["ubuntu-20.04"]
         test-group:
-          - name: ttnn example tests
-            cmd: ./tests/scripts/run_ttnn_examples.sh
-    name: ${{ matrix.test-group.name }} ${{ inputs.arch }} ${{ inputs.runner-label }}
+          - name: ttnn nightly tests
+            cmd: pytest tests/ttnn/nightly/unit_tests -xv -m "not disable_fast_runtime_mode"
+    name: ${{ matrix.test-group.name }}
     env:
       LOGURU_LEVEL: INFO
     runs-on:
-      - ${{ inputs.runner-label }}
+      - ${{ inputs.runner-label || 'N150' }}
       - "in-service"
     steps:
       - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
@@ -64,13 +62,13 @@ jobs:
         with:
           name: eager-dist-${{ matrix.os }}-any
       - name: ${{ matrix.test-group.name }} tests
-        timeout-minutes: ${{ inputs.timeout }}
+        timeout-minutes: ${{ inputs.timeout || '45' }}
         uses: ./.github/actions/docker-run
         with:
           docker_username: ${{ github.actor }}
           docker_password: ${{ secrets.GITHUB_TOKEN }}
           docker_opts: |
-            -e ARCH_NAME=${{ inputs.arch }}
+            -e ARCH_NAME=${{ inputs.arch || 'wormhole_b0' }}
           run_args: |
             WHEEL_FILENAME=$(ls -1 *.whl)
             pip3 install --user $WHEEL_FILENAME

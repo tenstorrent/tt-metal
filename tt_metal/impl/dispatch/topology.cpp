@@ -6,6 +6,7 @@
 #include "kernel_config/fd_kernel.hpp"
 #include <device_pool.hpp>
 #include <tt_metal.hpp>
+#include <host_api.hpp>
 #include "kernel_config/fd_kernel.hpp"
 #include "kernel_config/prefetch.hpp"
 #include "kernel_config/dispatch.hpp"
@@ -14,11 +15,14 @@
 #include "kernel_config/demux.hpp"
 #include "kernel_config/eth_router.hpp"
 #include "kernel_config/eth_tunneler.hpp"
+#include "fabric_host_interface.h"
+
+#include "tt_cluster.hpp"
 
 namespace tt::tt_metal {
 
 // For readablity, unset = x = -1
-#define x -1
+constexpr int x = -1;
 
 void increment_node_ids(DispatchKernelNode& node, uint32_t inc) {
     node.id += inc;
@@ -745,6 +749,69 @@ void configure_dispatch_cores(IDevice* device) {
         if (node_id_to_kernel[idx]->GetDeviceId() == device->id()) {
             node_id_to_kernel[idx]->ConfigureCore();
         }
+    }
+}
+
+std::unique_ptr<Program> create_and_compile_fabric_program(IDevice* device) {
+    auto fabric_program_ptr = std::make_unique<Program>();
+    std::uint32_t num_routers = device->get_active_ethernet_cores().size();  // TODO: should get this from control plane
+
+    std::map<string, string> router_defines = {};
+
+    // TODO: Manual clear of semaphore, move this to proper Metal sempahore apis
+    std::vector<uint32_t> fabric_sem_zero_buf(1, 0);
+
+    std::uint32_t router_mask = 0;
+    for (const auto& router_logical_core : device->get_active_ethernet_cores()) {
+        router_mask += 0x1 << router_logical_core.y;
+    }
+
+    auto master_router_chan = (*device->get_active_ethernet_cores().begin()).y;
+    // setup runtime args
+    std::vector<uint32_t> router_runtime_args = {
+        num_routers,         // 0: number of active fabric routers
+        router_mask,         // 1: active fabric router mask
+        master_router_chan,  // 2: master router channel
+    };
+
+    // create router kernels
+    std::vector<uint32_t> router_compile_args = {
+        (tt::tt_fabric::DEFAULT_ROUTER_RX_QUEUE_SIZE_BYTES >> 4),  // 0: rx_queue_size_words
+        0,                                                         // 1: test_results_addr
+        0,                                                         // 2: test_results_size
+        0,  // 3: timeout_mcycles * 1000 * 1000 * 4, // 3: timeout_cycles
+        0,  // 4: is_master_router
+    };
+
+    for (const auto& router_logical_core : device->get_active_ethernet_cores()) {
+        if (master_router_chan == router_logical_core.y) {
+            router_compile_args[4] = 1;
+        } else {
+            router_compile_args[4] = 0;
+        }
+        auto kernel = tt_metal::CreateKernel(
+            *fabric_program_ptr,
+            "tt_metal/fabric/impl/kernels/tt_fabric_router.cpp",
+            router_logical_core,
+            tt_metal::EthernetConfig{
+                .noc = tt_metal::NOC::NOC_0, .compile_args = router_compile_args, .defines = router_defines});
+
+        tt_metal::SetRuntimeArgs(*fabric_program_ptr, kernel, router_logical_core, router_runtime_args);
+    }
+
+    detail::CompileProgram(device, *fabric_program_ptr, /*fd_bootloader_mode=*/true);
+    return fabric_program_ptr;
+}
+
+void configure_fabric_cores(IDevice* device) {
+    std::vector<uint32_t> router_zero_buf(1, 0);
+
+    for (const auto& router_logical_core : device->get_active_ethernet_cores()) {
+        // initialize the semaphore
+        auto fabric_router_sync_sem_addr =
+            hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
+        detail::WriteToDeviceL1(
+            device, router_logical_core, fabric_router_sync_sem_addr, router_zero_buf, CoreType::ETH);
     }
 }
 

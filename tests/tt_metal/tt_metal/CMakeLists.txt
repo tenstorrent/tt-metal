@@ -48,6 +48,7 @@ foreach(TEST_SRC ${TT_METAL_TESTS_SRCS})
         PRIVATE
             "$<TARGET_PROPERTY:Metalium::Metal,INCLUDE_DIRECTORIES>"
             ${PROJECT_SOURCE_DIR}/tests
+            ${PROJECT_SOURCE_DIR}/tests/tt_metal/test_utils
             ${CMAKE_CURRENT_SOURCE_DIR}
     )
     set_target_properties(
@@ -83,9 +84,7 @@ add_custom_target(
         unit_tests_debug_tools_wormhole_b0
         unit_tests_debug_tools_blackhole
         unit_tests_device
-        unit_tests_dispatch_grayskull
-        unit_tests_dispatch_wormhole_b0
-        unit_tests_dispatch_blackhole
+        unit_tests_dispatch
         unit_tests_eth_grayskull
         unit_tests_eth_wormhole_b0
         unit_tests_eth_blackhole

@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "core_coord.hpp"
-#include <tt_cluster.hpp>
+
+#include <umd/device/types/arch.h>  // tt::ARCH
 
 namespace tt {
 namespace tt_metal {
@@ -12,7 +13,7 @@ namespace tt_metal {
 // a DRAM read or write.
 // Worker cores are derived based on architecture, harvesting configurations and DRAM Controller placement.
 std::vector<CoreCoord> get_optimal_dram_to_physical_worker_assignment(
-    ARCH arch,
+    tt::ARCH arch,
     const std::vector<CoreCoord>& dram_phy_coords,
     uint32_t full_grid_size_x,
     uint32_t full_grid_size_y,

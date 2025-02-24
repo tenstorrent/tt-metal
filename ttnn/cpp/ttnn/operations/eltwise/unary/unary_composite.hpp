@@ -22,7 +22,7 @@ struct ExecuteUnaryCompositeOp {
 
 struct ExecuteTrunc {
     static Tensor invoke(
-        uint8_t queue_id,
+        QueueId queue_id,
         const Tensor& input_tensor,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt);
@@ -112,7 +112,7 @@ struct ExecuteUnaryCompositeOpWithInt {
 
 struct ExecuteRdiv {
     static Tensor invoke(
-        uint8_t queue_id,
+        QueueId queue_id,
         const Tensor& input_tensor,
         float value,
         const std::optional<std::string>& round_mode = std::nullopt,

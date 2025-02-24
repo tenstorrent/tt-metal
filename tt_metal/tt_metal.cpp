@@ -293,8 +293,6 @@ inline void SetRuntimeArgsImpl(
 
 }  // namespace
 
-// #define DEBUG_PRINT_SHARD
-
 namespace detail {
 
 bool WriteToDeviceDRAMChannel(IDevice* device, int dram_channel, uint32_t address, std::vector<uint32_t>& host_buffer) {
@@ -338,10 +336,11 @@ bool ReadFromDeviceL1(
     const CoreCoord& logical_core,
     uint32_t address,
     uint32_t size,
-    std::vector<uint32_t>& host_buffer) {
+    std::vector<uint32_t>& host_buffer,
+    CoreType core_type) {
     tt::Cluster::instance().l1_barrier(device->id());
-    auto worker_core = device->worker_core_from_logical_core(logical_core);
-    host_buffer = llrt::read_hex_vec_from_core(device->id(), worker_core, address, size);
+    auto virtual_core = device->virtual_core_from_logical_core(logical_core, core_type);
+    host_buffer = llrt::read_hex_vec_from_core(device->id(), virtual_core, address, size);
     return true;
 }
 
@@ -350,6 +349,10 @@ bool ReadRegFromDevice(IDevice* device, const CoreCoord& logical_core, uint32_t 
     auto worker_core = device->worker_core_from_logical_core(logical_core);
     tt::Cluster::instance().read_reg(&regval, tt_cxy_pair(device->id(), worker_core), address);
     return true;
+}
+
+void InitializeFabricSetting(detail::FabricSetting fabric_setting) {
+    tt::DevicePool::initialize_fabric_setting(detail::FabricSetting::FABRIC);
 }
 
 std::map<chip_id_t, IDevice*> CreateDevices(
@@ -586,9 +589,6 @@ void ReadFromDeviceSharded(Buffer& buffer, uint8_t* host_buffer, bool shard_orde
     TensorMemoryLayout buffer_layout = buffer.buffer_layout();
 
     auto device = buffer.device();
-#ifdef DEBUG_PRINT_SHARD
-    std::cout << "Reading From Device Height Sharded " << std::endl;
-#endif
 
     auto total_pages = buffer.num_dev_pages();
     uint32_t page_size = buffer.page_size();
@@ -1253,6 +1253,8 @@ void SetRuntimeArgs(
     const std::vector<CoreCoord>& core_spec,
     const std::vector<std::vector<uint32_t>>& runtime_args) {
     ZoneScoped;
+    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
+    LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureSetRuntimeArgsUint32VecPerCore, program, kernel, core_spec, runtime_args);
     TT_FATAL(
         core_spec.size() == runtime_args.size(),
         "Mistmatch between number of cores {} and number of runtime args {} getting updated",
@@ -1326,7 +1328,7 @@ void EndTraceCapture(IDevice* device, const uint8_t cq_id, const uint32_t tid) {
 void ReplayTrace(IDevice* device, const uint8_t cq_id, const uint32_t tid, const bool blocking) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureReplayTrace, device, cq_id, tid, blocking);
-    device->replay_trace(cq_id, tid, blocking);
+    device->replay_trace(cq_id, tid, blocking /* block_on_device */, blocking /* block_on_worker_thread */);
 }
 
 void ReleaseTrace(IDevice* device, const uint32_t tid) {
