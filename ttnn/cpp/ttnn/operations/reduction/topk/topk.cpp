@@ -18,9 +18,7 @@ namespace ttnn::operations::reduction {
 
 int32_t get_nearest_supported_shape(int32_t k) {
     // LLK only support k = 4, 8, 16, 32, 64
-    if (k <= 4) {
-        return 4;
-    } else if (k <= 32) {
+    if (k <= 32) {
         return 32;
     } else {
         return 64;
