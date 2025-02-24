@@ -186,22 +186,28 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     uint32_t semaphore_id = 0;
     if (in_place) {
         TT_ASSERT(!remote_read, "remote_read is not supported for in place operation");
-        TT_ASSERT(remote_ref_counts.has_value(), "remote_ref_counts should be provided if in_place is true");
-        TT_ASSERT(remote_temp.has_value(), "remote_temp should be provided if in_place is provided");
-        auto remote_ref_counts_buffer = remote_ref_counts.value().get().device_buffer();
-        auto remote_ref_counts_cb_config =
-            CircularBufferConfig(
-                remote_ref_counts_buffer->size() / num_cores, {{remote_ref_counts_cb_id, kernel_config_df}})
-                .set_page_size(remote_ref_counts_cb_id, remote_ref_counts_buffer->page_size())
-                .set_globally_allocated_address(*remote_ref_counts_buffer);
-        CBHandle remote_ref_counts_cb = CreateCircularBuffer(program, all_cores, remote_ref_counts_cb_config);
+        TT_ASSERT(
+            (remote_ref_counts.has_value() && remote_temp.has_value()) ||
+                (!remote_ref_counts.has_value() && !remote_temp.has_value()),
+            "remote_ref_counts and remote_temp should be both present or absent");
+        if (remote_ref_counts.has_value()) {  // it is possible to have a halo with no remote refs, we still want
+            auto remote_ref_counts_buffer = remote_ref_counts.value().get().device_buffer();
+            auto remote_ref_counts_cb_config =
+                CircularBufferConfig(
+                    remote_ref_counts_buffer->size() / num_cores, {{remote_ref_counts_cb_id, kernel_config_df}})
+                    .set_page_size(remote_ref_counts_cb_id, remote_ref_counts_buffer->page_size())
+                    .set_globally_allocated_address(*remote_ref_counts_buffer);
+            CBHandle remote_ref_counts_cb = CreateCircularBuffer(program, all_cores, remote_ref_counts_cb_config);
+        }
 
-        auto remote_temp_buffer = remote_temp.value().get().device_buffer();
-        auto remote_temp_cb_config =
-            CircularBufferConfig(remote_temp_buffer->size() / num_cores, {{remote_temp_cb_id, kernel_config_df}})
-                .set_page_size(remote_temp_cb_id, remote_temp_buffer->page_size())
-                .set_globally_allocated_address(*remote_temp_buffer);
-        CBHandle remote_temp_cb = CreateCircularBuffer(program, all_cores, remote_temp_cb_config);
+        if (remote_temp.has_value()) {
+            auto remote_temp_buffer = remote_temp.value().get().device_buffer();
+            auto remote_temp_cb_config =
+                CircularBufferConfig(remote_temp_buffer->size() / num_cores, {{remote_temp_cb_id, kernel_config_df}})
+                    .set_page_size(remote_temp_cb_id, remote_temp_buffer->page_size())
+                    .set_globally_allocated_address(*remote_temp_buffer);
+            CBHandle remote_temp_cb = CreateCircularBuffer(program, all_cores, remote_temp_cb_config);
+        }
 
         auto core_id_to_noc_coords = [is_block_sharded, transpose_mcast, device](uint32_t core_id) -> CoreCoord {
             auto num_cores_x = device->compute_with_storage_grid_size().x;
@@ -247,8 +253,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         ncores_nhw,
         ncores_c,
         num_cores_x,
-        semaphore_id,
-        in_place};
+        semaphore_id};
 
     reader_ct_args[0] = 0;
     reader_ct_args[1] = local_config_cb_id;

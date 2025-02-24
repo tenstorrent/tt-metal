@@ -39,8 +39,7 @@ void copy_sticks_async_temp_write(
     const uint32_t out_base_l1_addr,
     const uint32_t noc_00_x,
     const uint32_t noc_00_y,
-    const uint32_t semaphore_addr = 0,
-    const bool in_place = false) {
+    const uint32_t semaphore_addr = 0) {
     int i = 0;
     int length = config_data[i + 2];
 
@@ -106,8 +105,7 @@ void copy_sticks_async_temp_read(
     const uint32_t out_base_l1_addr,
     const uint32_t noc_00_x,
     const uint32_t noc_00_y,
-    const uint32_t semaphore_addr = 0,
-    const bool in_place = false) {
+    const uint32_t semaphore_addr = 0) {
     int i = 0;
     int length = config_data[i + 2];
 
@@ -170,9 +168,7 @@ void copy_sticks_async(
     const uint32_t in_base_l1_addr,
     const uint32_t out_base_l1_addr,
     const uint32_t noc_00_x,
-    const uint32_t noc_00_y,
-    const uint32_t semaphore_addr = 0,
-    const bool in_place = false) {
+    const uint32_t noc_00_y) {
     int i = 0;
     int length = config_data[i + 2];
 
@@ -249,7 +245,6 @@ void kernel_main() {
     constexpr uint32_t num_cores_c = get_compile_time_arg_val(20);
     constexpr uint32_t num_cores_x = get_compile_time_arg_val(21);
     constexpr uint32_t semaphore_id = get_compile_time_arg_val(22);
-    constexpr uint32_t in_place = get_compile_time_arg_val(23);
 
     constexpr uint32_t num_cores = num_cores_nhw * num_cores_c;
 
@@ -272,12 +267,10 @@ void kernel_main() {
     }
 
     uint32_t semaphore_addr = 0;
-    if constexpr (in_place) {
-        semaphore_addr = get_semaphore(semaphore_id);
-    }
+    semaphore_addr = get_semaphore(semaphore_id);
 
     cb_wait_front(in_cb_id, in_nsticks);  // make sure untilized data is available
-    if constexpr (remote_config_cb_id) {
+    if constexpr (remote_config_cb_id && remote_temp_cb_id) {
         DPRINT << "TEMP COPY" << ENDL();
         const uint32_t temp_base_l1_addr = get_write_ptr(remote_temp_cb_id);
         uint32_t config_data_l1_addr = get_read_ptr(remote_config_cb_id);
@@ -289,15 +282,7 @@ void kernel_main() {
             is_width_sharded,
             remote_read,
             is_col_major>(
-            config_data,
-            my_noc_x,
-            my_noc_y,
-            in_base_l1_addr,
-            temp_base_l1_addr,
-            noc_00_x,
-            noc_00_y,
-            semaphore_addr,
-            in_place);
+            config_data, my_noc_x, my_noc_y, in_base_l1_addr, temp_base_l1_addr, noc_00_x, noc_00_y, semaphore_addr);
     }
 
     noc_async_read_barrier();
@@ -316,16 +301,14 @@ void kernel_main() {
             is_col_major>(config_data, my_noc_x, my_noc_y, in_base_l1_addr, out_base_l1_addr, noc_00_x, noc_00_y);
     }
 
-    if (in_place) {
-        noc_async_read_barrier();
-        noc_async_write_barrier();
-        for (uint16_t noc = 0; noc < num_cores; ++noc) {
-            uint16_t noc_x = noc % num_cores_x;
-            uint16_t noc_y = noc / num_cores_x;
-            const uint64_t ref_semaphore_noc_addr = get_noc_addr(noc_x + noc_00_x, noc_y + noc_00_y, semaphore_addr);
-            // DPRINT << "INCREMENTING noc_x: " << noc_x + noc_00_x << " noc_y: " << noc_y + noc_00_y << ENDL();
-            noc_semaphore_inc(ref_semaphore_noc_addr, 1);
-        }
+    noc_async_read_barrier();
+    noc_async_write_barrier();
+    for (uint16_t noc = 0; noc < num_cores; ++noc) {
+        uint16_t noc_x = noc % num_cores_x;
+        uint16_t noc_y = noc / num_cores_x;
+        const uint64_t ref_semaphore_noc_addr = get_noc_addr(noc_x + noc_00_x, noc_y + noc_00_y, semaphore_addr);
+        // DPRINT << "INCREMENTING noc_x: " << noc_x + noc_00_x << " noc_y: " << noc_y + noc_00_y << ENDL();
+        noc_semaphore_inc(ref_semaphore_noc_addr, 1);
     }
 
     if constexpr (padding_config_cb_id) {
@@ -354,15 +337,14 @@ void kernel_main() {
         }
     }
 
-    if constexpr (remote_config_cb_id) {
-        if constexpr (in_place) {
-            DPRINT << "WAITING ON THIS MANY SIGNALS: " << 2 * num_cores << ENDL();
-            const uint64_t my_semaphore_noc_addr = get_noc_addr(my_noc_x, my_noc_y, semaphore_addr);
-            volatile tt_l1_ptr uint32_t* my_semaphore_noc_addr_ptr =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(my_semaphore_noc_addr);
-            DPRINT << "SEMAPHORE VALUE: " << *my_semaphore_noc_addr_ptr << ENDL();
-            noc_semaphore_wait(my_semaphore_noc_addr_ptr, 2 * num_cores);
-        }
+    if constexpr (remote_config_cb_id && remote_temp_cb_id) {
+        DPRINT << "WAITING ON THIS MANY SIGNALS: " << 2 * num_cores << ENDL();
+        const uint64_t my_semaphore_noc_addr = get_noc_addr(my_noc_x, my_noc_y, semaphore_addr);
+        volatile tt_l1_ptr uint32_t* my_semaphore_noc_addr_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(my_semaphore_noc_addr);
+        DPRINT << "SEMAPHORE VALUE: " << *my_semaphore_noc_addr_ptr << ENDL();
+        noc_semaphore_wait(my_semaphore_noc_addr_ptr, 2 * num_cores);
+
         DPRINT << "REMOTE COPY" << ENDL();
         const uint32_t temp_base_l1_addr = get_read_ptr(remote_temp_cb_id);
         uint32_t config_data_l1_addr = get_read_ptr(remote_config_cb_id);

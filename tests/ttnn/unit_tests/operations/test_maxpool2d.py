@@ -294,7 +294,7 @@ def run_max_pool(
             # [1, 384, 32, 32],
             # # C=16 test2
             # [1, 16, 10, 10],
-            [1, 256, 100, 100],
+            [1, 2048, 8, 8],
         )
     ),
 )
@@ -358,7 +358,7 @@ def test_run_max_pool(
         dilation,
         device,
         dtype,
-        shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        shard_scheme=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ceil_mode=ceil_mode,
         in_place_halo=in_place_halo,
     )
