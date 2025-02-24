@@ -50,12 +50,12 @@ on:
         required: true
         type: string
         description: "Timeout (eg: 5m, 1h)"
-      description:
-        type: string
-        default: "Git bisect dispatch"
+      patch:
         required: false
+        type: string
+        description: "Commit-ish to cherry-pick for each step"
 
-run-name: ${{ inputs.description }}
+run-name: "Bisect on ${{ inputs.runner-label }}"
 jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
@@ -88,8 +88,11 @@ jobs:
       - uses: ./.github/actions/install-python-deps
       - name: Run Git Bisect
         shell: bash
+        env:
+          GIT_COMMITTER_NAME: "GitHub Actions"
+          GIT_COMMITTER_EMAIL: "actions@github.com"
         run: |
           source ${{ github.workspace }}/python_env/bin/activate
           cd $TT_METAL_HOME
           export PYTHONPATH=$TT_METAL_HOME
-          ./tests/scripts/tt_bisect.sh -t ${{ inputs.timeout }} -f "${{ inputs.command }}" -b ${{ inputs.bad-commit }} -g ${{ inputs.good-commit }}
+          ./tests/scripts/tt_bisect.sh -t ${{ inputs.timeout }} -f "${{ inputs.command }}" -b ${{ inputs.bad-commit }} -g ${{ inputs.good-commit }} -p "${{ inputs.patch }}"
