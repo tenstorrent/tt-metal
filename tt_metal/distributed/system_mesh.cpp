@@ -111,12 +111,7 @@ std::vector<chip_id_t> SystemMesh::Impl::get_mapped_physical_device_ids(const Me
         }
     }();
 
-    const bool line_topology = [&config]() {
-        const int non_unit_dims =
-            std::count_if(config.mesh_shape.cbegin(), config.mesh_shape.cend(), [](int dim) { return dim != 1; });
-        return non_unit_dims <= 1;
-    }();
-    if (line_topology) {
+    if (is_line_topology(config.mesh_shape)) {
         TT_FATAL(
             std::all_of(system_offset.coords().begin(), system_offset.coords().end(), [](int dim) { return dim == 0; }),
             "Offsets are unsupported for a line mesh");
