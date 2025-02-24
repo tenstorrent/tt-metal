@@ -31,7 +31,7 @@ def sanity_check_test_xml_(root_element, is_pytest=True):
 
 
 def is_pytest_junit_xml(root_element):
-    is_pytest = root_element[0].get("name") == "pytest"
+    is_pytest = len(root_element) > 0 and root_element[0].get("name") == "pytest"
 
     if is_pytest:
         sanity_check_test_xml_(root_element)
@@ -40,7 +40,7 @@ def is_pytest_junit_xml(root_element):
 
 
 def is_gtest_xml(root_element):
-    is_gtest = root_element[0].get("name") != "pytest"
+    is_gtest = len(root_element) > 0 and root_element[0].get("name") != "pytest"
 
     if is_gtest:
         sanity_check_test_xml_(root_element, is_pytest=False)
