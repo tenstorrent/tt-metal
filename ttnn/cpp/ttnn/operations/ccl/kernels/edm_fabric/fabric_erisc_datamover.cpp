@@ -633,12 +633,12 @@ FORCE_INLINE void receiver_forward_packet(
         // If the packet is a terminal packet, then we can just deliver it locally
         bool start_distance_is_terminal_value = (cached_routing_fields.value & tt::fabric::RoutingFields::HOP_DISTANCE_MASK) == tt::fabric::RoutingFields::LAST_HOP_DISTANCE_VAL;
         uint16_t payload_size_bytes = packet_start->payload_size_bytes;
-        if (start_distance_is_terminal_value) {
-            execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id);
-        }
         bool not_last_destination_device = cached_routing_fields.value != tt::fabric::RoutingFields::LAST_MCAST_VAL;
         if (not_last_destination_device) {
             forward_payload_to_downstream_edm(packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface, transaction_id);
+        }
+        if (start_distance_is_terminal_value) {
+            execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id);
         }
     } else if constexpr (std::is_same_v<ROUTING_FIELDS_TYPE, tt::fabric::LowLatencyRoutingFields>) {
         uint32_t routing = cached_routing_fields.value & tt::fabric::LowLatencyRoutingFields::FIELD_MASK;
@@ -682,25 +682,22 @@ FORCE_INLINE bool run_sender_channel_step(
     //       when moving to stream regs to manage rd/wr ptrs
     // TODO: update to be stream reg based. Initialize to space available and simply check for non-zero
     bool receiver_has_space_for_packet = outbound_to_receiver_channel_pointers.has_space_for_packet();
-    if (receiver_has_space_for_packet && !internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ)) {
-        bool has_unsent_packet = local_sender_channel_worker_interface.has_unsent_payload();
-        if (has_unsent_packet) {
-            bool sender_backpressured_from_sender_side = !(local_sender_channel_worker_interface.local_rdptr.distance_behind(local_sender_channel_worker_interface.local_wrptr) < SENDER_NUM_BUFFERS);
-            if (!sender_backpressured_from_sender_side) {
-                did_something = true;
-                auto packet_header = reinterpret_cast<PACKET_HEADER_TYPE*>(local_sender_channel.get_buffer_address(local_sender_channel_worker_interface.local_wrptr.get_buffer_index()));
-                if constexpr (enable_packet_header_recording) {
-                    tt::fabric::validate(*packet_header);
-                    packet_header_recorder.record_packet_header(reinterpret_cast<volatile uint32_t*>(packet_header));
-                }
-                send_next_data(
-                    local_sender_channel,
-                    local_sender_channel_worker_interface,
-                    outbound_to_receiver_channel_pointers,
-                    remote_receiver_channel,
-                    sender_channel_index);
-            }
+    bool has_unsent_packet = local_sender_channel_worker_interface.has_unsent_payload();
+    bool sender_backpressured_from_sender_side = !(local_sender_channel_worker_interface.local_rdptr.distance_behind(local_sender_channel_worker_interface.local_wrptr) < SENDER_NUM_BUFFERS);
+    bool can_send = receiver_has_space_for_packet && !internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ) && has_unsent_packet && !sender_backpressured_from_sender_side;
+    if (can_send) {
+        did_something = true;
+        auto packet_header = reinterpret_cast<PACKET_HEADER_TYPE*>(local_sender_channel.get_buffer_address(local_sender_channel_worker_interface.local_wrptr.get_buffer_index()));
+        if constexpr (enable_packet_header_recording) {
+            tt::fabric::validate(*packet_header);
+            packet_header_recorder.record_packet_header(reinterpret_cast<volatile uint32_t*>(packet_header));
         }
+        send_next_data(
+            local_sender_channel,
+            local_sender_channel_worker_interface,
+            outbound_to_receiver_channel_pointers,
+            remote_receiver_channel,
+            sender_channel_index);
     }
 
     // Process COMPLETIONs from receiver
@@ -753,6 +750,7 @@ FORCE_INLINE bool run_sender_channel_step(
             }
             did_something = true;
             channel_connection_established = true;
+            local_sender_channel_worker_interface.cache_producer_noc_addr();
             if constexpr (enable_first_level_ack) {
                 local_sender_channel_worker_interface.update_worker_copy_of_read_ptr(local_sender_channel_worker_interface.local_ackptr.get_ptr());
             } else {
@@ -848,19 +846,19 @@ FORCE_INLINE void run_receiver_channel_step(
         auto &wr_flush_ptr = receiver_channel_pointers.wr_flush_ptr;
         // Currently unclear if it's better to loop here or not... Also unclear if merging these
         // two pointers is better or not... Seems to be maybe 5-10% better merged but need more data
-        if (!wr_flush_ptr.is_caught_up_to(wr_sent_ptr) && !internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ)) {
-            auto receiver_buffer_index = wr_flush_ptr.get_buffer_index();
-            bool next_trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
-            if (next_trid_flushed) {
-                auto &completion_ptr = receiver_channel_pointers.completion_ptr;
-                wr_flush_ptr.increment();
-                receiver_channel_trid_tracker.clear_trid_at_buffer_slot(receiver_buffer_index);
-                receiver_send_completion_ack(
-                    remote_eth_sender_wrptrs,
-                    remote_sender_channnels,
-                    completion_ptr,
-                    local_receiver_channel);
-            }
+        bool unflushed_writes_and_eth_txq_not_busy = !wr_flush_ptr.is_caught_up_to(wr_sent_ptr) && !internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ);
+        auto receiver_buffer_index = wr_flush_ptr.get_buffer_index();
+        bool next_trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
+        bool can_send_completion = unflushed_writes_and_eth_txq_not_busy && next_trid_flushed;
+        if (can_send_completion) {
+            auto &completion_ptr = receiver_channel_pointers.completion_ptr;
+            wr_flush_ptr.increment();
+            receiver_channel_trid_tracker.clear_trid_at_buffer_slot(receiver_buffer_index);
+            receiver_send_completion_ack(
+                remote_eth_sender_wrptrs,
+                remote_sender_channnels,
+                completion_ptr,
+                local_receiver_channel);
         }
 
     }
