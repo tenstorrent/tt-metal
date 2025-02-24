@@ -398,6 +398,9 @@ KernelGroup::KernelGroup(
                     // if noc mode is already set to DM_DYNAMIC_NOC then we can't change back to DM_DEDICATED_NOC
                     if (std::get<DataMovementConfig>(kernel->config()).noc_mode == NOC_MODE::DM_DYNAMIC_NOC) {
                         this->launch_msg.kernel_config.brisc_noc_mode = NOC_MODE::DM_DYNAMIC_NOC;
+                    } else if (
+                        std::get<DataMovementConfig>(kernel->config()).noc_mode == NOC_MODE::DM_DYNAMIC_NOC_DIDT) {
+                        this->launch_msg.kernel_config.brisc_noc_mode = NOC_MODE::DM_DYNAMIC_NOC_DIDT;
                     }
                 } else if (class_id == utils::underlying_type<DataMovementProcessor>(DataMovementProcessor::RISCV_1)) {
                     // Use 1-ncrisc's noc (the other noc) if ncrisc specifies a noc
@@ -406,6 +409,8 @@ KernelGroup::KernelGroup(
                     // if noc mode is already set to DM_DYNAMIC_NOC then we can't change back to DM_DEDICATED_NOC
                     if (this->launch_msg.kernel_config.brisc_noc_mode == NOC_MODE::DM_DYNAMIC_NOC) {
                         this->launch_msg.kernel_config.brisc_noc_mode = NOC_MODE::DM_DYNAMIC_NOC;
+                    } else if (this->launch_msg.kernel_config.brisc_noc_mode == NOC_MODE::DM_DYNAMIC_NOC_DIDT) {
+                        this->launch_msg.kernel_config.brisc_noc_mode = NOC_MODE::DM_DYNAMIC_NOC_DIDT;
                     }
                 }
             }

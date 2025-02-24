@@ -19,7 +19,8 @@ enum NOC : byte {
 
 enum NOC_MODE : byte {
   DM_DEDICATED_NOC,
-  DM_DYNAMIC_NOC
+  DM_DYNAMIC_NOC,
+  DM_DYNAMIC_NOC_DIDT
 }
 
 enum EthMode : ubyte {

@@ -16,7 +16,6 @@
 #include "compute_kernel_api/eltwise_unary/sfpu_split_includes.h"
 
 #include "dataflow_api.h"
-// #include "debug/dprint.h"
 
 // Please update
 // tests/tt_metal/tt_metal/perf_microbenchmark/1_compute_mm/kernels/bmm_large_block_zm_fused_bias_activation_copy.cpp

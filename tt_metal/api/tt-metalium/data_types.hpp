@@ -21,6 +21,7 @@ enum NOC : uint8_t {
 enum NOC_MODE : uint8_t {
     DM_DEDICATED_NOC = 0,
     DM_DYNAMIC_NOC = 1,
+    DM_DYNAMIC_NOC_DIDT = 2,
 };
 
 enum Eth : uint8_t {

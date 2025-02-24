@@ -26,6 +26,7 @@ NOC_MODE from_flatbuffer(flatbuffer::NOC_MODE in) {
     switch (in) {
         case flatbuffer::NOC_MODE::DM_DEDICATED_NOC: return NOC_MODE::DM_DEDICATED_NOC;
         case flatbuffer::NOC_MODE::DM_DYNAMIC_NOC: return NOC_MODE::DM_DYNAMIC_NOC;
+        case flatbuffer::NOC_MODE::DM_DYNAMIC_NOC_DIDT: return NOC_MODE::DM_DYNAMIC_NOC_DIDT;
     }
     TT_THROW("Unsupported NOC_MODE from flatbuffer.");
 }

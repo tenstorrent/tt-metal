@@ -87,7 +87,8 @@ enum noc_index {
 enum noc_mode : uint8_t {
     DM_DEDICATED_NOC = 0,
     DM_DYNAMIC_NOC = 1,
-    DM_INVALID_NOC = 2,
+    DM_DYNAMIC_NOC_DIDT = 2,
+    DM_INVALID_NOC = 3,
 };
 
 // Address offsets to kernel runtime configuration components

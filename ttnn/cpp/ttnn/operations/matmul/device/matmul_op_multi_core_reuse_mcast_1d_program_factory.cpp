@@ -259,6 +259,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
     // Mcast args
     auto in0_mcast_sender_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
     auto in0_mcast_receiver_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
+    auto didt_sync_semaphore_id = tt_metal::CreateSemaphore(program, all_cores, INVALID);
 
     CoreCoord top_left_core = in0_mcast_receiver_cores_bounding_box.start_coord;
     CoreCoord bottom_right_core = in0_mcast_receiver_cores_bounding_box.end_coord;
@@ -454,8 +455,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
     mm_kernel_in1_sender_writer_defines["SKIP_MCAST"] = "1";
 
     // in1 is the reader of weights/output writer, and we choose to make it use the optimized reader noc
-    tt_metal::NOC in0_noc = detail::GetPreferredNOCForDRAMWrite(device->arch());
-    tt_metal::NOC in1_noc = detail::GetPreferredNOCForDRAMRead(device->arch());
+    tt_metal::NOC in0_noc = detail::GetPreferredNOCForDRAMWrite(device->arch());  // NOC1
+    tt_metal::NOC in1_noc = detail::GetPreferredNOCForDRAMRead(device->arch());   // NOC0
 
     if (fuse_op) {
         // Create semaphores
@@ -477,6 +478,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_1,
             .noc = in0_noc,
+            .noc_mode = tt_metal::NOC_MODE::DM_DYNAMIC_NOC_DIDT,
             .compile_args = in0_sender_compile_time_args,
             .defines = mm_kernel_in0_sender_writer_defines});
 
@@ -494,6 +496,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
                 tt_metal::DataMovementConfig{
                     .processor = tt_metal::DataMovementProcessor::RISCV_1,
                     .noc = in0_noc,
+                    .noc_mode = tt_metal::NOC_MODE::DM_DYNAMIC_NOC_DIDT,
                     .compile_args = in0_sender_compile_time_args,
                     .defines = mm_kernel_in0_sender_writer_defines});
         }
@@ -508,6 +511,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
                 tt_metal::DataMovementConfig{
                     .processor = tt_metal::DataMovementProcessor::RISCV_1,
                     .noc = in0_noc,
+                    .noc_mode = tt_metal::NOC_MODE::DM_DYNAMIC_NOC_DIDT,
                     .compile_args = in0_sender_compile_time_args,
                     .defines = mm_kernel_in0_sender_writer_defines});
         }
@@ -522,6 +526,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_1,
                 .noc = in0_noc,
+                .noc_mode = tt_metal::NOC_MODE::DM_DYNAMIC_NOC_DIDT,
                 .compile_args = in0_receiver_compile_time_args});
     }
 
@@ -532,6 +537,7 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
         tt_metal::DataMovementConfig{
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = in1_noc,
+            .noc_mode = tt_metal::NOC_MODE::DM_DYNAMIC_NOC_DIDT,
             .compile_args = in1_sender_writer_compile_time_args,
             .defines = mm_kernel_in1_sender_writer_defines});
 
@@ -565,8 +571,8 @@ operation::ProgramWithCallbacks create_program_mcast_in0(
         B,                       // batch
         out_block_tiles,         // out_block_num_tiles
 
-        untilize_out,                                  // untilize_out
-        (std::uint32_t)in0_mcast_sender_semaphore_id,  // didt workaround sem
+        untilize_out,                           // untilize_out
+        (std::uint32_t)didt_sync_semaphore_id,  // didt workaround sem
     };
 
     // Create compute kernel

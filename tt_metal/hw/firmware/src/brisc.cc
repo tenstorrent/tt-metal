@@ -464,9 +464,17 @@ int main() {
                 }
             } else {
                 if (prev_noc_mode != noc_mode) {
-                    dynamic_noc_init();
+                    // if (noc_mode == DM_DYNAMIC_NOC_DIDT) {
+                    dynamic_noc_didt_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
+                    // } else {
+                    //     dynamic_noc_init();
+                    // }
                 }
-                dynamic_noc_local_state_init();
+                // if (noc_mode == DM_DYNAMIC_NOC_DIDT) {
+                dynamic_noc_didt_local_state_init();
+                // } else {
+                //     dynamic_noc_local_state_init();
+                // }
             }
             prev_noc_mode = noc_mode;
 
@@ -513,14 +521,14 @@ int main() {
 
             wait_ncrisc_trisc();
 
-            if (noc_mode == DM_DYNAMIC_NOC) {
+            if (noc_mode == DM_DYNAMIC_NOC || noc_mode == DM_DYNAMIC_NOC_DIDT) {
                 // barrier to make sure all writes are finished
                 while (!ncrisc_dynamic_noc_nonposted_writes_flushed<proc_type>(noc_index));
                 while (!ncrisc_dynamic_noc_nonposted_writes_flushed<proc_type>(1 - noc_index));
             }
 
 #if defined(PROFILE_KERNEL)
-            if (noc_mode == DM_DYNAMIC_NOC) {
+            if (noc_mode == DM_DYNAMIC_NOC || noc_mode == DM_DYNAMIC_NOC_DIDT) {
                 // re-init for profiler to able to run barrier in dedicated noc mode
                 noc_local_state_init(noc_index);
             }

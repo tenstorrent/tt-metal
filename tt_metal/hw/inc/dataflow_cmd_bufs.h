@@ -8,17 +8,40 @@
 
 #if defined(KERNEL_BUILD)
 #if defined(COMPILE_FOR_BRISC)
-constexpr uint32_t read_cmd_buf = NOC_MODE == DM_DEDICATED_NOC ? BRISC_RD_CMD_BUF : DYNAMIC_NOC_BRISC_RD_CMD_BUF;
-constexpr uint32_t write_cmd_buf = NOC_MODE == DM_DEDICATED_NOC ? BRISC_WR_CMD_BUF : DYNAMIC_NOC_BRISC_WR_CMD_BUF;
-constexpr uint32_t write_reg_cmd_buf =
-    NOC_MODE == DM_DEDICATED_NOC ? BRISC_WR_REG_CMD_BUF : DYNAMIC_NOC_BRISC_WR_REG_CMD_BUF;
-constexpr uint32_t write_at_cmd_buf = NOC_MODE == DM_DEDICATED_NOC ? BRISC_AT_CMD_BUF : DYNAMIC_NOC_BRISC_AT_CMD_BUF;
+constexpr uint32_t read_cmd_buf = NOC_MODE == DM_DEDICATED_NOC ? BRISC_RD_CMD_BUF
+                                  : NOC_MODE == DM_DYNAMIC_NOC ? DYNAMIC_NOC_BRISC_RD_CMD_BUF
+                                                               : DYNAMIC_NOC_DIDT_BRISC_RD_CMD_BUF;
+constexpr uint32_t write_cmd_buf = NOC_MODE == DM_DEDICATED_NOC ? BRISC_WR_CMD_BUF
+                                   : NOC_MODE == DM_DYNAMIC_NOC ? DYNAMIC_NOC_BRISC_WR_CMD_BUF
+                                                                : DYNAMIC_NOC_DIDT_BRISC_WR_CMD_BUF;
+constexpr uint32_t write_reg_cmd_buf = NOC_MODE == DM_DEDICATED_NOC ? BRISC_WR_REG_CMD_BUF
+                                       : NOC_MODE == DM_DYNAMIC_NOC ? DYNAMIC_NOC_BRISC_WR_REG_CMD_BUF
+                                                                    : DYNAMIC_NOC_DIDT_BRISC_WR_REG_CMD_BUF;
+constexpr uint32_t write_at_cmd_buf = NOC_MODE == DM_DEDICATED_NOC ? BRISC_AT_CMD_BUF
+                                      : NOC_MODE == DM_DYNAMIC_NOC ? DYNAMIC_NOC_BRISC_AT_CMD_BUF
+                                                                   : DYNAMIC_NOC_DIDT_BRISC_AT_CMD_BUF;
 #elif defined(COMPILE_FOR_NCRISC)
-constexpr uint32_t read_cmd_buf = NOC_MODE == DM_DEDICATED_NOC ? NCRISC_RD_CMD_BUF : DYNAMIC_NOC_NCRISC_RD_CMD_BUF;
-constexpr uint32_t write_cmd_buf = NOC_MODE == DM_DEDICATED_NOC ? NCRISC_WR_CMD_BUF : DYNAMIC_NOC_NCRISC_WR_CMD_BUF;
+constexpr uint32_t read_cmd_buf = NOC_MODE == DM_DEDICATED_NOC ? NCRISC_RD_CMD_BUF
+                                  : NOC_MODE == DM_DYNAMIC_NOC ? DYNAMIC_NOC_NCRISC_RD_CMD_BUF
+                                                               : DYNAMIC_NOC_DIDT_NCRISC_RD_CMD_BUF;
+constexpr uint32_t write_cmd_buf = NOC_MODE == DM_DEDICATED_NOC ? NCRISC_WR_CMD_BUF
+                                   : NOC_MODE == DM_DYNAMIC_NOC ? DYNAMIC_NOC_NCRISC_WR_CMD_BUF
+                                                                : DYNAMIC_NOC_DIDT_NCRISC_WR_CMD_BUF;
+constexpr uint32_t write_reg_cmd_buf = NOC_MODE == DM_DEDICATED_NOC ? NCRISC_WR_REG_CMD_BUF
+                                       : NOC_MODE == DM_DYNAMIC_NOC ? DYNAMIC_NOC_NCRISC_WR_REG_CMD_BUF
+                                                                    : DYNAMIC_NOC_DIDT_NCRISC_WR_REG_CMD_BUF;
+constexpr uint32_t write_at_cmd_buf = NOC_MODE == DM_DEDICATED_NOC ? NCRISC_AT_CMD_BUF
+                                      : NOC_MODE == DM_DYNAMIC_NOC ? DYNAMIC_NOC_NCRISC_AT_CMD_BUF
+                                                                   : DYNAMIC_NOC_DIDT_NCRISC_AT_CMD_BUF;
+#elif defined(COMPILE_FOR_TRISC)
+constexpr uint32_t read_cmd_buf =
+    NOC_MODE == DM_DYNAMIC_NOC_DIDT ? DYNAMIC_NOC_DIDT_TRISC_RD_CMD_BUF : NCRISC_RD_CMD_BUF;
+constexpr uint32_t write_cmd_buf =
+    NOC_MODE == DM_DYNAMIC_NOC_DIDT ? DYNAMIC_NOC_DIDT_TRISC_WR_CMD_BUF : NCRISC_WR_CMD_BUF;
 constexpr uint32_t write_reg_cmd_buf =
-    NOC_MODE == DM_DEDICATED_NOC ? NCRISC_WR_REG_CMD_BUF : DYNAMIC_NOC_NCRISC_WR_REG_CMD_BUF;
-constexpr uint32_t write_at_cmd_buf = NOC_MODE == DM_DEDICATED_NOC ? NCRISC_AT_CMD_BUF : DYNAMIC_NOC_NCRISC_AT_CMD_BUF;
+    NOC_MODE == DM_DYNAMIC_NOC_DIDT ? DYNAMIC_NOC_DIDT_TRISC_WR_REG_CMD_BUF : NCRISC_WR_REG_CMD_BUF;
+constexpr uint32_t write_at_cmd_buf =
+    NOC_MODE == DM_DYNAMIC_NOC_DIDT ? DYNAMIC_NOC_DIDT_TRISC_AT_CMD_BUF : NCRISC_AT_CMD_BUF;
 #else  // use the default cmf buffers for compute/eth
 constexpr uint32_t read_cmd_buf = NCRISC_RD_CMD_BUF;
 constexpr uint32_t write_cmd_buf = NCRISC_WR_CMD_BUF;
