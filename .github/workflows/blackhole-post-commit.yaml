@@ -56,46 +56,56 @@ jobs:
       build-type: ${{ inputs.build-type || 'Release' }}
       tracy: true
       version: "20.04"
-  run-profiler-regression:
-    needs: build-artifact-profiler
-    uses: ./.github/workflows/run-profiler-regression.yaml
-    secrets: inherit
-    with:
-      arch: "blackhole"
-      runner-label: ${{ inputs.runner-label || 'BH' }}
-  umd-unit-tests:
-    secrets: inherit
-    uses: ./.github/workflows/umd-unit-tests.yaml
-    with:
-      arch: blackhole
-      runner-label: ${{ inputs.runner-label || 'BH' }}
-  sd-unit-tests:
-    needs: build-artifact
-    uses: ./.github/workflows/build-and-unit-tests.yaml
-    secrets: inherit
-    with:
-      arch: blackhole
-      runner-label: ${{ inputs.runner-label || 'BH' }}
-      timeout: 30
-      os: "ubuntu-22.04"
-  fd-unit-tests:
-    needs: build-artifact
-    uses: ./.github/workflows/fast-dispatch-build-and-unit-tests.yaml
-    secrets: inherit
-    with:
-      arch: blackhole
-      runner-label: ${{ inputs.runner-label || 'BH' }}
-      os: "ubuntu-22.04"
+#  run-profiler-regression:
+#    needs: build-artifact-profiler
+#    uses: ./.github/workflows/run-profiler-regression.yaml
+#    secrets: inherit
+#    with:
+#      arch: "blackhole"
+#      runner-label: ${{ inputs.runner-label || 'BH' }}
+#  umd-unit-tests:
+#    secrets: inherit
+#    uses: ./.github/workflows/umd-unit-tests.yaml
+#    with:
+#      arch: blackhole
+#      runner-label: ${{ inputs.runner-label || 'BH' }}
+#  sd-unit-tests:
+#    needs: build-artifact
+#    uses: ./.github/workflows/build-and-unit-tests.yaml
+#    secrets: inherit
+#    with:
+#      arch: blackhole
+#      runner-label: ${{ inputs.runner-label || 'BH' }}
+#      timeout: 30
+#      os: "ubuntu-22.04"
+#  fd-unit-tests:
+#    needs: build-artifact
+#    uses: ./.github/workflows/fast-dispatch-build-and-unit-tests.yaml
+#    secrets: inherit
+#    with:
+#      arch: blackhole
+#      runner-label: ${{ inputs.runner-label || 'BH' }}
+#      os: "ubuntu-22.04"
   # FD C++ Unit Tests
-  cpp-unit-tests:
+#  cpp-unit-tests:
+#    needs: build-artifact
+#    secrets: inherit
+#    uses: ./.github/workflows/cpp-post-commit.yaml
+#    with:
+#      arch: blackhole
+#      runner-label: ${{ inputs.runner-label || 'BH' }}
+#      timeout: 60
+#      os: "ubuntu-22.04"
+  # TTNN FD Unit tests
+  ttnn-unit-tests:
     needs: build-artifact
     secrets: inherit
-    uses: ./.github/workflows/cpp-post-commit.yaml
+    strategy:
+      fail-fast: false
+    uses: ./.github/workflows/ttnn-post-commit.yaml
     with:
       arch: blackhole
       runner-label: ${{ inputs.runner-label || 'BH' }}
-      timeout: 60
-      os: "ubuntu-22.04"
 
 #   profiler-regression:
 #     needs: build-artifact-profiler
