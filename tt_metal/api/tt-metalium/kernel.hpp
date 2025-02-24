@@ -1,9 +1,10 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
+#include <string_view>
 #include <vector>
 #include <map>
 #include <variant>
@@ -176,7 +177,11 @@ class DataMovementKernel : public Kernel {
 
     void process_defines(const std::function<void (const string& define, const string &value)>) const override;
 
-   private:
+    std::string_view get_compiler_opt_level() const override;
+
+    std::string_view get_linker_opt_level() const override;
+
+private:
     const DataMovementConfig config_;
 
     uint8_t expected_num_binaries() const override;
@@ -204,7 +209,11 @@ class EthernetKernel : public Kernel {
 
     void process_defines(const std::function<void(const string &define, const string &value)>) const override;
 
-   private:
+    std::string_view get_compiler_opt_level() const override;
+
+    std::string_view get_linker_opt_level() const override;
+
+private:
     const EthernetConfig config_;
 
     uint8_t expected_num_binaries() const override;
@@ -233,7 +242,11 @@ class ComputeKernel : public Kernel {
 
     void process_defines(const std::function<void (const string& define, const string &value)>) const override;
 
-   private:
+    std::string_view get_compiler_opt_level() const override;
+
+    std::string_view get_linker_opt_level() const override;
+
+private:
     const ComputeConfig config_;
 
     uint8_t expected_num_binaries() const override;

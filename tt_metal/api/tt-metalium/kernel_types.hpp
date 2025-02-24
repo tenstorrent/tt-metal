@@ -15,15 +15,14 @@ namespace tt::tt_metal {
 
 using KernelHandle = std::uint32_t;
 
-// Option that controls compiler optimization level
+// Option that controls build optimization level
 enum class KernelBuildOptLevel : uint8_t {
-    O1,     // Level 1 optimization. Same as O.
-    O2,     // Level 2 optimization. Turns on all flags specified by O1.
-    O3,     // Level 3 optimizaiton. Turns on all flags specified by O2.
+    O1,     // Turns on level 1 optimization. Same as O.
+    O2,     // Turns on level 2 optimization and also all flags specified by O1.
+    O3,     // Turns on level 3 optimization and also all flags specified by O2.
     O0,     // Reduce compilation time and make debugging produce the expected results.
-    Os,     // Optimize for size. Enables O2 optimizations except for those that increase binary size.
-    Ofast,  // Enable all O3 and non standard optimizations.
-    Og,     // Optimize for debugging.
+    Os,     // Optimize for size and also O2 optimizations except for those that increase binary size.
+    Ofast,  // Turns on level O3 and also non standard optimizations.
     Oz,     // Aggresively optimize for size rather than speed.
 };
 
@@ -36,7 +35,7 @@ struct DataMovementConfig {
     // Each unique combination of defines will produce a unique compiled instantiation
     // This file is then automatically included in the generated compiled kernel files
     std::map<std::string, std::string> defines;
-    // Kernel optimization level
+    // Set the compiler and linker optimization level
     KernelBuildOptLevel opt_level = KernelBuildOptLevel::Os;
 };
 
@@ -60,7 +59,7 @@ struct ComputeConfig {
     // Each unique combination of defines will produce a unique compiled instantiation
     // This file is then automatically included in the generated compiled kernel files
     std::map<std::string, std::string> defines;
-    // Kernel optimization level
+    // Set the compiler and linker optimization level
     KernelBuildOptLevel opt_level = KernelBuildOptLevel::O3;
 };
 
@@ -73,7 +72,7 @@ struct EthernetConfig {
     // Each unique combination of defines will produce a unique compiled instantiation
     // This file is then automatically included in the generated compiled kernel files
     std::map<std::string, std::string> defines;
-    // Kernel optimization level
+    // Set the compiler and linker optimization level
     KernelBuildOptLevel opt_level = KernelBuildOptLevel::Os;
 };
 
