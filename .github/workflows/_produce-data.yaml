@@ -44,6 +44,7 @@ on:
       - "Blackhole post-commit tests"
       - "Custom test dispatch"
       - "PR Gate"
+      - "Nightly tt-metal L2 tests"
     types:
       - completed
 
