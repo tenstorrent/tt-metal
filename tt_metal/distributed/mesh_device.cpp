@@ -205,7 +205,7 @@ std::vector<std::shared_ptr<MeshDevice>> MeshDevice::create_submeshes(const Mesh
     return submeshes;
 }
 
-MeshDevice::~MeshDevice() {}
+MeshDevice::~MeshDevice() { close(); }
 
 IDevice* MeshDevice::get_device(chip_id_t physical_device_id) const {
     for (auto device : this->get_devices()) {
@@ -327,12 +327,12 @@ bool MeshDevice::close() {
         submesh->close();
     }
     submeshes_.clear();
+    sub_device_manager_tracker_.reset();
     if (scoped_devices_) {
         scoped_devices_.reset();
     }
     parent_mesh_.reset();
     view_.reset();
-    sub_device_manager_tracker_.reset();
     return true;
 }
 
