@@ -126,6 +126,45 @@ def matmul_config(
     )
 
 
+def ff_matmul_config(
+    m,
+    k,
+    n,
+    in0_block_w,
+    num_out_blocks_h,
+    num_out_blocks_w,
+    grid_size,
+):
+    TILE_SIZE = 32
+    per_core_M = math.ceil(m / (TILE_SIZE * grid_size[1]))
+    per_core_N = math.ceil(n / (TILE_SIZE * grid_size[0]))
+    k_tiles = math.ceil(k / TILE_SIZE)
+
+    assert (
+        per_core_M % num_out_blocks_h == 0
+    ), f"num_out_blocks_h {num_out_blocks_h} must evenly divide per_core_M {per_core_M}"
+    assert (
+        per_core_N % num_out_blocks_w == 0
+    ), f"num_out_blocks_w {num_out_blocks_w} must evenly divide per_core_N {per_core_N}"
+    out_block_h = per_core_M // num_out_blocks_h
+    out_block_w = per_core_N // num_out_blocks_w
+    out_subblock_h, out_subblock_w = get_subblock_sizes(out_block_h, out_block_w, False, False)
+
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=grid_size,
+        in0_block_w=in0_block_w,
+        out_block_h=out_block_h,
+        out_block_w=out_block_w,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=False,
+    )
+
+
 def matmul_2d_config(
     m,
     k,
