@@ -43,7 +43,7 @@ def test_run_resnet50_inference(
 
 
 @run_for_wormhole_b0()
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "trace_region_size": 800768}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576, "trace_region_size": 803016}], indirect=True)
 @pytest.mark.parametrize(
     "device_batch_size, act_dtype, weight_dtype, math_fidelity",
     ((16, ttnn.bfloat8_b, ttnn.bfloat8_b, ttnn.MathFidelity.LoFi),),
@@ -98,7 +98,7 @@ def test_run_resnet50_2cqs_inference(
 
 @run_for_wormhole_b0()
 @pytest.mark.parametrize(
-    "device_params", [{"l1_small_size": 24576, "trace_region_size": 800768, "num_command_queues": 2}], indirect=True
+    "device_params", [{"l1_small_size": 24576, "trace_region_size": 803016, "num_command_queues": 2}], indirect=True
 )
 @pytest.mark.parametrize(
     "device_batch_size, act_dtype, weight_dtype, math_fidelity",
