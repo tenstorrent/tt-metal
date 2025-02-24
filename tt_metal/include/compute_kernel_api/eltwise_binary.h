@@ -40,18 +40,47 @@ ALWI void binary_op_init_common(uint32_t icb0, uint32_t icb1, uint32_t ocb) {
 }
 
 /**
+ Enums for readibility in function definitions
+ */
+enum class Fidelity {
+    LOW,
+    HIGH
+};
+
+enum class UnpackNeeded {
+    NO,
+    YES
+};
+
+/**
+ * Template for initializing element-wise binary operations.
+ */
+template<EltwiseBinaryType eltwise_binary_type, Fidelity fidelity, UnpackNeeded needs_unpack>
+ALWI void binary_tiles_init(uint32_t icb0 = 0, uint32_t icb1 = 1, bool acc_to_dest = false) {
+    if constexpr (fidelity == Fidelity::HIGH) {
+        MATH(( llk_math_eltwise_binary_init<eltwise_binary_type, NONE, MATH_FIDELITY>(0 /*transpose*/, acc_to_dest) ));
+    } else {
+        MATH(( llk_math_eltwise_binary_init<eltwise_binary_type, NONE>(0 /*transpose*/, acc_to_dest) ));
+    }
+    if constexpr (needs_unpack == UnpackNeeded::YES) {
+        UNPACK(( llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1, 0 /*transpose*/, acc_to_dest) ));
+    }
+}
+
+/**
  * Please refer to documentation for any_init.
  * f means high fidelity with resepect to accuracy
  * this is set during createprogram
  */
-ALWI void mul_tiles_init_f() { MATH((llk_math_eltwise_binary_init<ELWMUL, NONE, MATH_FIDELITY>())); }
+ALWI void mul_tiles_init_f() {
+    binary_tiles_init<ELWMUL, Fidelity::HIGH, UnpackNeeded::NO>();
+}
 
 /**
  * Please refer to documentation for any_init.
  */
-ALWI void mul_tiles_init(uint32_t icb0, uint32_t icb1) {
-    MATH((llk_math_eltwise_binary_init<ELWMUL, NONE, MATH_FIDELITY>()));
-    UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1)));
+ALWI void mul_tiles_init(uint32_t icb0 = 0, uint32_t icb1 = 1) {
+    binary_tiles_init<ELWMUL, Fidelity::HIGH, UnpackNeeded::YES>(icb0, icb1);
 }
 
 /**
@@ -59,7 +88,9 @@ ALWI void mul_tiles_init(uint32_t icb0, uint32_t icb1) {
  * nof means low fidelity with resepect to accuracy
  * this is set during createprogram
  */
-ALWI void add_tiles_init_nof() { MATH((llk_math_eltwise_binary_init<ELWADD, NONE>())); }
+ALWI void add_tiles_init_nof() {
+    binary_tiles_init<ELWADD, Fidelity::LOW, UnpackNeeded::NO>();
+}
 
 // clang-format off
 /**
@@ -73,8 +104,7 @@ ALWI void add_tiles_init_nof() { MATH((llk_math_eltwise_binary_init<ELWADD, NONE
  */
 // clang-format on
 ALWI void add_tiles_init(uint32_t icb0, uint32_t icb1, bool acc_to_dest = false) {
-    MATH((llk_math_eltwise_binary_init<ELWADD, NONE>(0 /*transpose*/, acc_to_dest)));
-    UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1, 0 /*transpose*/, acc_to_dest)));
+    binary_tiles_init<ELWADD, Fidelity::LOW, UnpackNeeded::YES>(icb0, icb1, acc_to_dest);
 }
 
 /**
@@ -82,7 +112,9 @@ ALWI void add_tiles_init(uint32_t icb0, uint32_t icb1, bool acc_to_dest = false)
  * nof means low fidelity with respect to accuracy
  * this is set during createprogram
  */
-ALWI void sub_tiles_init_nof() { MATH((llk_math_eltwise_binary_init<ELWSUB, NONE>())); }
+ALWI void sub_tiles_init_nof() {
+    binary_tiles_init<ELWSUB, Fidelity::LOW, UnpackNeeded::NO>();
+}
 
 // clang-format off
 /**
@@ -96,8 +128,7 @@ ALWI void sub_tiles_init_nof() { MATH((llk_math_eltwise_binary_init<ELWSUB, NONE
  */
 // clang-format on
 ALWI void sub_tiles_init(uint32_t icb0, uint32_t icb1, bool acc_to_dest = false) {
-    MATH((llk_math_eltwise_binary_init<ELWSUB, NONE>(0 /*transpose*/, acc_to_dest)));
-    UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1, 0 /*transpose*/, acc_to_dest)));
+    binary_tiles_init<ELWSUB, Fidelity::LOW, UnpackNeeded::YES>(icb0, icb1, acc_to_dest);
 }
 
 // clang-format off
