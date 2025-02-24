@@ -96,11 +96,12 @@ public:
     const ShardedBufferConfig& global_shard_spec() const;
     const DeviceLocalBufferConfig& device_local_config() const { return device_local_config_; }
 
-    std::shared_ptr<Buffer> get_device_buffer(const Coordinate& device_coord) const;
     std::shared_ptr<Buffer> get_device_buffer(const MeshCoordinate& device_coord) const;
     uint32_t datum_size_bytes() const;
     Shape2D physical_shard_shape() const;
     std::pair<bool, bool> replicated_dims() const;
+    uint32_t page_size() const { return device_local_config_.page_size; }
+    uint32_t num_pages() const { return page_size() == 0 ? 0 : device_local_size_ / page_size(); }
 
 private:
     // Creates an owning `MeshBuffer`, backed by an allocation made through `backing_buffer`.
