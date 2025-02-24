@@ -57,7 +57,6 @@ private:
 
     std::shared_ptr<ScopedDevices> scoped_devices_;
     MeshDeviceID mesh_id_;
-    MeshShape mesh_shape_;
     std::unique_ptr<MeshDeviceView> view_;
     std::vector<std::shared_ptr<MeshDevice>>
         submeshes_;                          // Parent owns submeshes and is responsible for their destruction
@@ -75,7 +74,6 @@ private:
 public:
     MeshDevice(
         std::shared_ptr<ScopedDevices> scoped_devices,
-        const MeshShape& mesh_shape,
         std::unique_ptr<MeshDeviceView> mesh_device_view,
         std::weak_ptr<MeshDevice> parent_mesh = {});
     ~MeshDevice() override;
@@ -217,15 +215,19 @@ public:
     // Returns the devices in the mesh in row-major order.
     std::vector<IDevice*> get_devices() const;
     IDevice* get_device(chip_id_t physical_device_id) const;
-    IDevice* get_device(size_t row_idx, size_t col_idx) const;
     IDevice* get_device(const MeshCoordinate& coord) const;
 
     const DeviceIds get_device_ids() const;
 
     size_t num_devices() const;
+
+    // The following methods assume 2D mesh, and throw if the mesh is not 2D.
+    // TODO: #17477 - Remove the methods that assume 2D mesh.
     size_t num_rows() const;
     size_t num_cols() const;
-    MeshShape shape() const;
+    IDevice* get_device(size_t row_idx, size_t col_idx) const;
+
+    const MeshShape& shape() const;
 
     // Reshapes the logical mesh and re-maps the physical devices to the new logical coordinates.
     // Reshaping Rules:
@@ -251,7 +253,7 @@ public:
     std::vector<std::shared_ptr<MeshDevice>> get_submeshes() const;
 
     std::shared_ptr<MeshDevice> create_submesh(
-        const MeshShape& submesh_shape, const MeshOffset& offset = MeshOffset{0, 0});
+        const MeshShape& submesh_shape, const std::optional<MeshCoordinate>& offset = std::nullopt);
 
     std::vector<std::shared_ptr<MeshDevice>> create_submeshes(const MeshShape& submesh_shape);
 

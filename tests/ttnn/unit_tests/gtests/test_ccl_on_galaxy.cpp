@@ -73,14 +73,13 @@ bool is_tgg_system() {
 }
 
 ttnn::MeshShape get_mesh_shape() {
-    ttnn::MeshShape shape;
     if (is_tg_system()) {
-        shape = {8, 4};
+        return ttnn::MeshShape{8, 4};
+    } else if (is_tgg_system()) {
+        return ttnn::MeshShape{8, 8};
     } else {
-        TT_FATAL(is_tgg_system(), "Unsupported Galaxy system");
-        shape = {8, 8};
+        TT_THROW("Unsupported Galaxy system");
     }
-    return shape;
 }
 
 void validate_num_tunnels_and_tunnel_depth() {
@@ -212,7 +211,7 @@ TEST(GalaxyTests, TestReduceScatterDeadlock) {
     auto view = ttnn::MeshDeviceView(*mesh);
     std::vector<IDevice*> ring_devices = view.get_devices_on_row(0);  // Tunnel 0
     std::vector<IDevice*> ring_devices_1 =
-        view.get_devices_on_column(mesh_shape.num_cols - 1);  // Orthogonal to tunnel .. no deadlocks
+        view.get_devices_on_column(mesh_shape[1] - 1);  // Orthogonal to tunnel .. no deadlocks
     ring_devices_1 = std::vector<IDevice*>(ring_devices_1.begin() + 1, ring_devices_1.end());
     std::vector<IDevice*> ring_devices_2 =
         view.get_devices_on_row(7);  // Tunnel 7 .. potential deadlocks with lack of buffering

@@ -32,7 +32,7 @@ int main() {
     const size_t num_targets = 32;
     const float noise = 0.0F;
     const bool bias = true;
-    ttml::autograd::ctx().set_mesh_shape({1, 2});
+    ttml::autograd::ctx().set_mesh_shape(tt::tt_metal::distributed::MeshShape(1, 2));
 
     auto training_params = ttml::datasets::MakeRegressionParams{
         .n_samples = training_samples_count,
