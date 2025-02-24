@@ -86,9 +86,8 @@ public:
     const std::unordered_set<CoreCoord>& get_virtual_worker_cores(chip_id_t chip_id) const;
     const std::unordered_set<CoreCoord>& get_virtual_eth_cores(chip_id_t chip_id) const;
 
-    uint32_t get_harvested_rows(chip_id_t chip) const;
     uint32_t get_harvesting_mask(chip_id_t chip) const {
-        return this->driver_->get_harvesting_masks_for_soc_descriptors().at(chip);
+        return this->driver_->get_soc_descriptor(chip).harvesting_masks.tensix_harvesting_mask;
     }
 
     //! device driver and misc apis
@@ -282,9 +281,7 @@ private:
     void open_driver(const bool& skip_driver_allocs = false);
     void start_driver(tt_device_params& device_params) const;
 
-    void get_metal_desc_from_tt_desc(
-        const std::unordered_map<chip_id_t, tt_SocDescriptor>& input,
-        const std::unordered_map<chip_id_t, uint32_t>& per_chip_id_harvesting_masks);
+    void get_metal_desc_from_tt_desc();
     void generate_virtual_to_umd_coord_mapping();
     void generate_virtual_to_profiler_flat_id_mapping();
 

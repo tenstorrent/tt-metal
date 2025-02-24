@@ -66,7 +66,7 @@ const core_descriptor_t& get_core_descriptor_config(
         config_by_arch;
 
     ARCH arch = tt::Cluster::instance().arch();
-    uint32_t harvesting_mask = tt::Cluster::instance().get_harvested_rows(device_id);
+    uint32_t harvesting_mask = tt::Cluster::instance().get_harvesting_mask(device_id);
     std::bitset<32> mask_bitset(harvesting_mask);
     uint32_t num_harvested_rows = mask_bitset.count();
 
