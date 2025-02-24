@@ -58,6 +58,31 @@ AllGatherAsync create_all_gather_async_struct(
 }  // namespace all_gather_detail
 }  // namespace ccl
 
+void AllGather2D::validate(const std::vector<Tensor>& input_tensors) const {
+    TT_FATAL(input_tensors.size() == 1, "Error, Input tensor size should be 1 but has {}", input_tensors.size());
+    const auto& input_tensor = input_tensors[0];
+    const auto& layout = input_tensors[0].get_layout();
+    const auto& dtype = input_tensors[0].get_dtype();
+    const auto& page_size = input_tensors[0].buffer()->page_size();
+    TT_FATAL(page_size % input_tensors[0].buffer()->alignment() == 0, "All Gather currently requires aligned pages");
+
+    TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_gather need to be on device!");
+    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to all_gather need to be allocated in buffers on device!");
+    auto num_devices = this->mesh_device.get_view().num_devices();
+    TT_FATAL(num_devices > 0, "Error, num_links should be more than 0 but has {}", num_devices);
+    TT_FATAL(
+        num_devices <= input_tensor.device()->compute_with_storage_grid_size().y,
+        "Worker cores used by links are parallelizaed over rows");
+
+    TT_FATAL(
+        input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED ||
+            input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED ||
+            input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED ||
+            input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED,
+        "Unsupported memory layout {}.",
+        input_tensor.memory_config().memory_layout);
+}
+
 void AllGatherAsync::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(input_tensors.size() == 1, "Error, Input tensor size should be 1 but has {}", input_tensors.size());
     const auto& input_tensor = input_tensors[0];
@@ -82,20 +107,13 @@ void AllGatherAsync::validate(const std::vector<Tensor>& input_tensors) const {
         input_tensor.memory_config().memory_layout);
 }
 
-static void validate_output_tensor_allocation(const std::vector<Tensor>& output_tensors) {
-    for (const auto& output_tensor : output_tensors) {
-        const auto& buffers = output_tensor.buffers();
-        const auto first_address = buffers.front()->address();
-        TT_FATAL(
-            std::all_of(
-                buffers.begin(),
-                buffers.end(),
-                [&first_address](const auto& buffer) {
-                    return buffer != nullptr && buffer->address() == first_address;
-                }),
-            "Output buffers for all_gather async must be lock-step allocated but some of the tensors were allocated at "
-            "different addresses across devices.");
-    }
+std::vector<ttnn::TensorSpec> AllGather2D::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
+    const auto& input_tensor = input_tensors[0];
+    auto shape = input_tensor.get_padded_shape();  // TODO: Replace with get_logical_shape()
+    shape[this->dim] *= this->mesh_device.get_view().num_devices();
+    return {TensorSpec(
+        shape,
+        TensorLayout(input_tensor.get_dtype(), input_tensor.get_tensor_spec().page_config(), output_mem_config))};
 }
 
 std::vector<ttnn::TensorSpec> AllGatherAsync::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
@@ -106,6 +124,8 @@ std::vector<ttnn::TensorSpec> AllGatherAsync::compute_output_specs(const std::ve
         shape,
         TensorLayout(input_tensor.get_dtype(), input_tensor.get_tensor_spec().page_config(), output_mem_config))};
 }
+
+AllGather2DVersion AllGather2D::select_version(const Tensor& input_tensor) const { return AllGather2DVersion::GENERIC; }
 
 AllGatherAsyncVersion AllGatherAsync::select_version(const Tensor& input_tensor) const {
     auto input_tensor_shape = input_tensor.get_padded_shape();
@@ -176,6 +196,34 @@ AllGatherAsyncVersion AllGatherAsync::select_version(const Tensor& input_tensor)
     }
     log_trace(tt::LogOp, "All conditions matched for generic case");
     return AllGatherAsyncVersion::GENERIC;
+}
+
+operation::ProgramWithCallbacks AllGather2D::create_program(
+    const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
+    tt::log_debug(tt::LogOp, "DEBUG: create_program is called");
+
+    AllGather2DVersion version = select_version(input_tensors[0]);
+
+    log_trace(tt::LogOp, "version: {}", static_cast<uint32_t>(version));
+    const auto num_devices = this->mesh_device.get_view().num_devices();
+
+    switch (version) {
+        case AllGather2DVersion::GENERIC:
+        default:
+            log_trace(tt::LogOp, "Running generic all_gather_async_multi_core_with_workers");
+            return all_gather_2D_multi_core_with_workers(
+                input_tensors[0],
+                output_tensors[0],
+                this->mesh_device,
+                this->dim,
+                this->output_mem_config,
+                this->topology,
+                this->semaphore,
+                this->page_stride,
+                this->num_chunks,
+                num_devices,
+                this->sub_device_id);
+    }
 }
 
 operation::ProgramWithCallbacks AllGatherAsync::create_program(
@@ -349,7 +397,7 @@ Tensor all_gather_async(
             {input_tensor},
             output_tensors);
     } else {
-        ;  // Perform 2D fabric operation
+        TT_FATAL(false, "Can't perform 2D fabric without supplying the mesh device");
     }
     return output_tensors.at(0);
 }
@@ -427,7 +475,7 @@ Tensor all_gather_async(
             {input_tensor},
             output_tensors);
     } else {
-        ;  // Perform 2D fabric operation
+        TT_FATAL(enable_persistent_fabric_mode, "Persistent fabric mode is necessary for 2D fabric");
     }
     return output_tensors.at(0);
 }
