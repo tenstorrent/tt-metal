@@ -58,11 +58,12 @@ jobs:
       - name: ⬇️ Download Wheel
         uses: actions/download-artifact@v4
         with:
-          name: ${{ inputs.wheel-artifact-name }}
+          name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
           path: /work
       - name: Install Wheel
         run: |
-          pip3 install ${{ inputs.wheel-artifact-name }}
+          WHEEL_FILENAME=$(ls -1 *.whl)
+          pip3 install $WHEEL_FILENAME
       - name: Run demo regression tests
         timeout-minutes: 180
         run: |
