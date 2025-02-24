@@ -16,7 +16,7 @@ namespace tt::tt_metal::distributed {
 
 class SystemMesh::Impl {
 private:
-    SimpleMeshShape logical_mesh_shape_;
+    MeshShape logical_mesh_shape_;
     CoordinateTranslationMap logical_to_physical_coordinates_;
     std::unordered_map<MeshCoordinate, chip_id_t> logical_to_device_id_;
     std::unordered_map<PhysicalCoordinate, chip_id_t> physical_coordinate_to_device_id_;
@@ -27,7 +27,7 @@ public:
 
     bool is_system_mesh_initialized() const;
     void initialize();
-    const SimpleMeshShape& get_shape() const;
+    const MeshShape& get_shape() const;
     std::vector<chip_id_t> get_mapped_physical_device_ids(const MeshDeviceConfig& config) const;
     std::vector<chip_id_t> request_available_devices(const MeshDeviceConfig& config) const;
     chip_id_t get_physical_device_id(const MeshCoordinate& coord) const;
@@ -68,7 +68,7 @@ void SystemMesh::Impl::initialize() {
     }
 }
 
-const SimpleMeshShape& SystemMesh::Impl::get_shape() const { return logical_mesh_shape_; }
+const MeshShape& SystemMesh::Impl::get_shape() const { return logical_mesh_shape_; }
 
 chip_id_t SystemMesh::Impl::get_physical_device_id(const MeshCoordinate& coord) const {
     TT_FATAL(
@@ -206,7 +206,7 @@ chip_id_t SystemMesh::get_physical_device_id(const MeshCoordinate& coord) const 
     return pimpl_->get_physical_device_id(coord);
 }
 
-const SimpleMeshShape& SystemMesh::get_shape() const { return pimpl_->get_shape(); }
+const MeshShape& SystemMesh::get_shape() const { return pimpl_->get_shape(); }
 
 std::vector<chip_id_t> SystemMesh::request_available_devices(const MeshDeviceConfig& config) const {
     return pimpl_->request_available_devices(config);
