@@ -25,132 +25,113 @@ struct BlockSplit {
 };
 
 struct BlockSplitWH {
-    uint32_t ncores;
+    uint32_t ncores = 0;
     CoreRangeSet all_cores;
     CoreRangeSet core_range;
     CoreRangeSet cliff_row_core_range;
     CoreRangeSet cliff_col_core_range;
     CoreRangeSet cliff_col_row_core_range;
-    uint32_t nblocks_per_core;
-    uint32_t single_block_size;
-    uint32_t single_block_size_cliff_row;
-    uint32_t single_block_size_cliff_col;
-    bool has_cliff_row;
-    bool has_cliff_col;
-    uint32_t full_cores_per_row;
-    uint32_t full_cores_per_col;
+    uint32_t nblocks_per_core = 0;
+    uint32_t single_block_size = 0;
+    uint32_t single_block_size_cliff_row = 0;
+    uint32_t single_block_size_cliff_col = 0;
+    bool has_cliff_row = false;
+    bool has_cliff_col = false;
+    uint32_t full_cores_per_row = 0;
+    uint32_t full_cores_per_col = 0;
 };
 
 inline std::pair<int, int> closest_square_larger_than_b(int b, int width, int height, int ref) {
     if (ref <= 0) {
         return {1, 1};
     }
-    int sqrt_b = std::sqrt(b);
-    bool is_perfect_square = (sqrt_b * sqrt_b == b);
 
-    if (is_perfect_square) {
-        if ((std::ceil(static_cast<float>(width) / std::sqrt(b))) *
-                (std::ceil(static_cast<float>(height) / std::sqrt(b))) <
-            ref) {
+    int sqrt_b = static_cast<int>(std::sqrt(b));
+
+    // Check if b is a perfect square and if it meets the condition using integer arithmetic for ceiling.
+    if (sqrt_b * sqrt_b == b) {
+        int numX = (width + sqrt_b - 1) / sqrt_b;   // equivalent to ceil(width / sqrt_b)
+        int numY = (height + sqrt_b - 1) / sqrt_b;  // equivalent to ceil(height / sqrt_b)
+        if (numX * numY < ref) {
             return {b, sqrt_b};
         }
     }
 
-    int candidate = sqrt_b + 1;
-    int max_candidate = width * height;
-    int max_iterations = max_candidate - sqrt_b;
-    int counter = 0;
-    while (counter < max_iterations) {
+    // Iterate over candidate values, starting from sqrt_b + 1,
+    // and check the condition using integer arithmetic.
+    for (int candidate = sqrt_b + 1; candidate <= width * height; ++candidate) {
         int square = candidate * candidate;
-
-        if ((std::ceil(static_cast<float>(width) / std::sqrt(square))) *
-                (std::ceil(static_cast<float>(height) / std::sqrt(square))) <
-            ref) {
+        int numX = (width + candidate - 1) / candidate;   // equivalent to ceil(width / candidate)
+        int numY = (height + candidate - 1) / candidate;  // equivalent to ceil(height / candidate)
+        if (numX * numY < ref) {
             return {square, candidate};
         }
-
-        candidate++;
-        counter++;
     }
+
     return {1, 1};
 }
 
 inline BlockSplitWH split_blocks_for_tilize_wh(
     CoreCoord grid_size, uint32_t nblocks, uint32_t width_tiles, uint32_t height_tiles) {
-    size_t grid_area = grid_size.x * grid_size.y;
-    uint32_t nblocks_per_core = grid_area == 0 ? 1 : std::ceil(static_cast<float>(nblocks) / grid_area);
+    // Compute grid area and initial blocks-per-core using integer math.
+    const uint32_t grid_area = grid_size.x * grid_size.y;
+    uint32_t nblocks_per_core = (grid_area == 0) ? 1 : (nblocks + grid_area - 1) / grid_area;
 
-    auto [nblocks_per_core_adjusted, single_block_size] =
+    // Adjust nblocks_per_core and determine the optimal block size.
+    auto [adjusted_nblocks_per_core, single_block_size] =
         closest_square_larger_than_b(nblocks_per_core, width_tiles, height_tiles, grid_area);
-    nblocks_per_core = nblocks_per_core_adjusted;
+    nblocks_per_core = adjusted_nblocks_per_core;
 
-    uint32_t total_blocks_width = std::ceil(static_cast<float>(width_tiles) / single_block_size);
-    uint32_t total_blocks_height = std::ceil(static_cast<float>(height_tiles) / single_block_size);
-
-    uint32_t total_blocks = total_blocks_height * total_blocks_width;
-    const uint32_t ncores = nblocks_per_core == 0 ? nblocks : total_blocks;
-
+    // Helper lambda for ceiling division.
+    auto divCeil = [](uint32_t a, uint32_t b) -> uint32_t { return (a + b - 1) / b; };
+    const uint32_t total_blocks_width = divCeil(width_tiles, single_block_size);
+    const uint32_t total_blocks_height = divCeil(height_tiles, single_block_size);
+    const uint32_t total_blocks = total_blocks_width * total_blocks_height;
+    const uint32_t ncores = (nblocks_per_core == 0) ? nblocks : total_blocks;
     const uint32_t ncores_x = grid_size.x;
-    const uint32_t ncores_y = ncores_x == 0 ? 0 : std::ceil(static_cast<float>(ncores) / ncores_x);
-
+    const uint32_t ncores_y = (ncores_x == 0) ? 0 : divCeil(ncores, ncores_x);
+    // Sets to hold different core ranges.
     std::set<CoreRange> core_range, cliff_col_core_range, cliff_row_core_range, cliff_col_row_core_range;
     std::set<CoreRange> all_cores;
-
-    uint32_t full_cores_per_row = width_tiles / single_block_size;
-    bool has_cliff_row = full_cores_per_row < total_blocks_width;
-
-    uint32_t full_cores_per_col = height_tiles / single_block_size;
-    bool has_cliff_col = full_cores_per_col < total_blocks_height;
-
-    uint32_t single_block_size_cliff_row = width_tiles - full_cores_per_row * single_block_size;
-
-    uint32_t single_block_size_cliff_col = height_tiles - full_cores_per_col * single_block_size;
-
+    const uint32_t full_cores_per_row = width_tiles / single_block_size;
+    const bool has_cliff_row = (full_cores_per_row < total_blocks_width);
+    const uint32_t full_cores_per_col = height_tiles / single_block_size;
+    const bool has_cliff_col = (full_cores_per_col < total_blocks_height);
+    const uint32_t single_block_size_cliff_row = width_tiles - full_cores_per_row * single_block_size;
+    const uint32_t single_block_size_cliff_col = height_tiles - full_cores_per_col * single_block_size;
+    // Coordinates for assigning cores sequentially.
     uint32_t i_x = 0;
     uint32_t i_y = 0;
-    for (uint32_t i = 0; i < full_cores_per_col; i++) {
-        for (uint32_t full = 0; full < full_cores_per_row; full++) {
-            auto range = CoreRange{CoreCoord{i_x, i_y}, CoreCoord{i_x, i_y}};
-            core_range.insert(range);
-            all_cores.insert(range);
-            if (i_x == grid_size.x - 1) {
-                i_x = 0;
-                i_y++;
-            } else {
-                i_x++;
-            }
+    auto addCore = [&](std::set<CoreRange>& targetSet) {
+        CoreRange range{CoreCoord{i_x, i_y}, CoreCoord{i_x, i_y}};
+        targetSet.insert(range);
+        all_cores.insert(range);
+        // Update core coordinates in a cyclic row-wise manner.
+        if (i_x == grid_size.x - 1) {
+            i_x = 0;
+            i_y++;
+        } else {
+            i_x++;
+        }
+    };
+    // Distribute cores over full rows (each row may have an extra "cliff" block at the end).
+    for (uint32_t row = 0; row < full_cores_per_col; row++) {
+        for (uint32_t col = 0; col < full_cores_per_row; col++) {
+            addCore(core_range);
         }
         if (has_cliff_row) {
-            auto range_row_cliff_core = CoreRange{CoreCoord{i_x, i_y}, CoreCoord{i_x, i_y}};
-            cliff_row_core_range.insert(range_row_cliff_core);
-            all_cores.insert(range_row_cliff_core);
-            if (i_x == grid_size.x - 1) {
-                i_x = 0;
-                i_y++;
-            } else {
-                i_x++;
-            }
+            addCore(cliff_row_core_range);
         }
     }
+    // Add the cliff column if present.
     if (has_cliff_col) {
-        for (uint32_t cliff = 0; cliff < full_cores_per_row; cliff++) {
-            auto range_col_cliff = CoreRange{CoreCoord{i_x, i_y}, CoreCoord{i_x, i_y}};
-            cliff_col_core_range.insert(range_col_cliff);
-            all_cores.insert(range_col_cliff);
-            if (i_x == grid_size.x - 1) {
-                i_x = 0;
-                i_y++;
-            } else {
-                i_x++;
-            }
+        for (uint32_t col = 0; col < full_cores_per_row; col++) {
+            addCore(cliff_col_core_range);
         }
         if (has_cliff_row) {
-            auto range_col_row_cliff = CoreRange{CoreCoord{i_x, i_y}, CoreCoord{i_x, i_y}};
-            cliff_col_row_core_range.insert(range_col_row_cliff);
-            all_cores.insert(range_col_row_cliff);
+            addCore(cliff_col_row_core_range);
         }
     }
-
     return BlockSplitWH{
         ncores,
         all_cores,

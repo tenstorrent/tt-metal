@@ -459,10 +459,13 @@ operation::ProgramWithCallbacks untilize_multi_core_block(
     IDevice* device = a.device();
     CoreCoord grid_size = device->compute_with_storage_grid_size();
 
-    uint32_t num_tiles_per_row = a.get_padded_shape()[-1] / TILE_WIDTH;
-    uint32_t num_tiles_per_col = a.get_padded_shape()[-2] / TILE_HEIGHT;
+    uint32_t a_tile_width = a.get_tensor_spec().tile().get_width();
+    uint32_t a_tile_height = a.get_tensor_spec().tile().get_height();
 
-    uint32_t num_blocks = (a.get_padded_shape()[-1] * a.get_padded_shape()[-2]) / (TILE_HEIGHT * TILE_WIDTH);
+    uint32_t num_tiles_per_row = a.get_padded_shape()[-1] / a_tile_width;
+    uint32_t num_tiles_per_col = a.get_padded_shape()[-2] / a_tile_height;
+
+    uint32_t num_blocks = (a.get_padded_shape()[-1] * a.get_padded_shape()[-2]) / (a_tile_height * a_tile_width);
 
     auto
         [ncores,

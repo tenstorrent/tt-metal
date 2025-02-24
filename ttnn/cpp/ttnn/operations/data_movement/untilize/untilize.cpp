@@ -56,9 +56,9 @@ ttnn::Tensor ExecuteUntilize::invoke(
     uint32_t num_tiles_per_col = input_tensor.get_padded_shape()[-2] / tt::constants::TILE_HEIGHT;
 
     bool enough_space_width =
-        enough_available_space(input_tensor, input_single_tile_size, output_single_tile_size, num_tiles_per_col);
+        is_enough_space(input_tensor, input_single_tile_size, output_single_tile_size, num_tiles_per_col);
     bool enough_space_height =
-        enough_available_space(input_tensor, input_single_tile_size, output_single_tile_size, num_tiles_per_row);
+        is_enough_space(input_tensor, input_single_tile_size, output_single_tile_size, num_tiles_per_row);
 
     auto base_untilize = [=](const ttnn::Tensor& input_tensor) {
         return operation::run(
