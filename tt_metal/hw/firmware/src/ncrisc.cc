@@ -22,8 +22,6 @@
 #include "debug/stack_usage.h"
 // clang-format on
 
-#define NCRISC_FIRMWARE_IN_IRAM (defined(ARCH_GRAYSKULL))
-
 uint32_t halt_stack_ptr_save;
 
 tt_l1_ptr mailboxes_t *const mailboxes = (tt_l1_ptr mailboxes_t *)(MEM_MAILBOX_BASE);
@@ -64,20 +62,9 @@ namespace kernel_profiler {
 }
 #endif
 
-extern "C" void ncrisc_resume(void);
-extern "C" void notify_brisc_and_halt(uint32_t status);
 extern "C" void notify_brisc_and_halt_to_iram(uint32_t status, uint32_t first_argument);
 
-inline __attribute__((always_inline)) void set_ncrisc_resume_addr() {
-#if NCRISC_FIRMWARE_IN_IRAM
-    mailboxes->ncrisc_halt.resume_addr = (uint32_t)ncrisc_resume;
-#endif
-}
-
 inline __attribute__((always_inline)) void notify_brisc_and_wait() {
-#if NCRISC_FIRMWARE_IN_IRAM
-    notify_brisc_and_halt(RUN_SYNC_MSG_DONE);
-#else
     while (true) {
         uint8_t run_value = *ncrisc_run;
         if (run_value == RUN_SYNC_MSG_GO || run_value == RUN_SYNC_MSG_LOAD) {
@@ -85,14 +72,9 @@ inline __attribute__((always_inline)) void notify_brisc_and_wait() {
         }
         invalidate_l1_cache();
     }
-#endif
 }
 
-inline __attribute__((always_inline)) void signal_ncrisc_completion() {
-#if !NCRISC_FIRMWARE_IN_IRAM
-    *ncrisc_run = RUN_SYNC_MSG_DONE;
-#endif
-}
+inline __attribute__((always_inline)) void signal_ncrisc_completion() { *ncrisc_run = RUN_SYNC_MSG_DONE; }
 
 #if defined(ARCH_WORMHOLE)
 #define MEM_MOVER_VIEW_IRAM_BASE_ADDR (0x4 << 12)
@@ -118,10 +100,6 @@ int main(int argc, char *argv[]) {
     noc_bank_table_init(MEM_BANK_TO_NOC_SCRATCH);
 
     risc_init();
-
-    // If NCRISC has IRAM it needs to halt before BRISC copies data from L1 to IRAM
-    // Need to save address to jump to after BRISC resumes NCRISC
-    set_ncrisc_resume_addr();
 
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
@@ -162,17 +140,15 @@ int main(int argc, char *argv[]) {
 
         void (*kernel_address)(uint32_t) = (void (*)(uint32_t))
             (kernel_config_base + launch_msg->kernel_config.kernel_text_offset[index]);
-#ifdef ARCH_BLACKHOLE
+#if !defined(ARCH_WORMHOLE)
         while (*ncrisc_run != RUN_SYNC_MSG_GO) {
             invalidate_l1_cache();
         }
         (*kernel_address)((uint32_t)kernel_address);
-#elif defined(ARCH_WORMHOLE)
+#else
         // Jumping to IRAM causes bizarre behavior, so signal the brisc to reset the ncrisc to the IRAM address.
         mailboxes->ncrisc_halt.resume_addr = (uint32_t)kernel_init;
         notify_brisc_and_halt_to_iram(RUN_SYNC_MSG_WAITING_FOR_RESET, (uint32_t)kernel_address);
-#else
-        kernel_init((uint32_t)kernel_address);
 #endif
         RECORD_STACK_USAGE();
         WAYPOINT("D");
