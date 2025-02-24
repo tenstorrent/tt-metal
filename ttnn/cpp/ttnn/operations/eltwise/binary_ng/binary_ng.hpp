@@ -202,6 +202,10 @@ constexpr auto logaddexp2 = ttnn::register_operation_with_auto_launch_op<
     "ttnn::experimental::logaddexp2",
     ttnn::operations::binary_ng::BinaryNg<operations::binary_ng::BinaryOpType::LOGADDEXP2>>();
 
+constexpr auto gcd = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::experimental::gcd",
+    ttnn::operations::binary_ng::BinaryNg<operations::binary_ng::BinaryOpType::GCD>>();
+
 constexpr auto bitwise_and = ttnn::register_operation_with_auto_launch_op<
     "ttnn::experimental::bitwise_and",
     ttnn::operations::binary_ng::BinaryNgBitwise<operations::binary_ng::BinaryOpType::BITWISE_AND>>();
@@ -301,5 +305,9 @@ constexpr auto logaddexp_ = ttnn::register_operation_with_auto_launch_op<
 constexpr auto logaddexp2_ = ttnn::register_operation_with_auto_launch_op<
     "ttnn::experimental::logaddexp2_",
     ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::LOGADDEXP2>>();
+
+constexpr auto gcd_ = ttnn::register_operation_with_auto_launch_op<
+    "ttnn::experimental::gcd_",
+    ttnn::operations::binary_ng::InplaceBinaryNg<operations::binary_ng::BinaryOpType::GCD>>();
 
 }  // namespace ttnn::experimental

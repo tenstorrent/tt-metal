@@ -19,7 +19,7 @@ namespace detail {
 constexpr bool is_associative(BinaryOpType op) {
     return op == BinaryOpType::ADD || op == BinaryOpType::MUL || op == BinaryOpType::EQ || op == BinaryOpType::NE ||
            op == BinaryOpType::LOGICAL_AND || op == BinaryOpType::LOGICAL_OR || op == BinaryOpType::LOGADDEXP ||
-           op == BinaryOpType::LOGADDEXP2 || op == BinaryOpType::LOGICAL_XOR;
+           op == BinaryOpType::LOGADDEXP2 || op == BinaryOpType::LOGICAL_XOR || op == BinaryOpType::GCD;
 }
 
 constexpr bool is_dtype_supported(BinaryOpType op, DataType dtype) {
@@ -33,7 +33,9 @@ constexpr bool is_dtype_supported(BinaryOpType op, DataType dtype) {
         case BinaryOpType::BITWISE_AND:
         case BinaryOpType::BITWISE_OR:
         case BinaryOpType::LEFT_SHIFT:
-        case BinaryOpType::RIGHT_SHIFT: return dtype == DataType::INT32;
+        case BinaryOpType::RIGHT_SHIFT:
+        case BinaryOpType::GCD:
+            return dtype == DataType::INT32;
         default:
             return (
                 dtype == DataType::FLOAT32 || dtype == DataType::BFLOAT16 || dtype == DataType::BFLOAT8_B ||
