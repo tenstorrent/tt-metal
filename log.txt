@@ -1,0 +1,240 @@
+0:(x=0,y=7):NC: prefetcher_11: start
+0:(x=1,y=7):NC: dispatch_11: start
+0:(x=1,y=7):BR: dispatch_s : start
+0:(x=1,y=7):NC: cmd_wait
+0:(x=1,y=7):NC:  DISPATCH WAIT 185f0 count 0
+0:(x=1,y=7):NC: cmd_write_paged is_dram: 1
+0:(x=1,y=7):NC: cmd_wait
+0:(x=1,y=7):NC:  DISPATCH WAIT 185f0 count 0
+0:(x=1,y=7):NC: cmd_write_paged is_dram: 1
+0:(x=1,y=7):NC: cmd_wait
+0:(x=1,y=7):NC:  DISPATCH WAIT 185f0 count 0
+0:(x=1,y=7):NC: cmd_write_paged is_dram: 1
+0:(x=1,y=7):NC: cmd_wait
+0:(x=1,y=7):NC:  DISPATCH WAIT 185f0 count 0
+0:(x=1,y=7):NC: cmd_write_paged is_dram: 1
+0:(x=1,y=7):NC: cmd_wait
+0:(x=1,y=7):NC:  DISPATCH WAIT 185f0 count 0
+0:(x=1,y=7):NC: cmd_write_paged is_dram: 1
+0:(x=1,y=7):NC: cmd_wait
+0:(x=1,y=7):NC:  DISPATCH WAIT 185f0 count 0
+0:(x=1,y=7):NC: cmd_write_paged is_dram: 1
+0:(x=1,y=7):NC: write offset: 0 28816 102256
+0:(x=1,y=7):NC: cmd_wait
+0:(x=1,y=7):NC:  DISPATCH BARRIER
+0:(x=1,y=7):NC:  DISPATCH WAIT 185f0 count 0
+0:(x=1,y=7):NC: cmd_write_packed
+0:(x=1,y=7):NC: cmd_write_packed_large
+0:(x=1,y=7):NC: cmd_write_packed_large
+0:(x=1,y=7):NC: cmd_write_packed
+0:(x=1,y=7):NC: cmd_notify_dispatch_s_go_signal
+0:(x=1,y=7):NC:  DISPATCH_S_NOTIFY BARRIER
+0:(x=1,y=7):NC: cmd_wait
+0:(x=1,y=7):NC:  DISPATCH WAIT 185f0 count 56
+0:(x=1,y=7):NC: cmd_write_paged is_dram: 1
+0:(x=1,y=7):NC: write offset: 0 33696 102256
+0:(x=1,y=7):NC: cmd_wait
+0:(x=1,y=7):NC:  DISPATCH BARRIER
+0:(x=1,y=7):NC:  DISPATCH WAIT 185f0 count 56
+0:(x=1,y=7):NC: cmd_write_packed
+0:(x=1,y=7):NC: cmd_write_packed_large
+0:(x=1,y=7):NC: cmd_write_packed_large
+0:(x=1,y=7):NC: cmd_write_packed
+0:(x=1,y=7):NC: cmd_notify_dispatch_s_go_signal
+0:(x=1,y=7):NC:  DISPATCH_S_NOTIFY BARRIER
+0:(x=1,y=7):NC: cmd_wait
+0:(x=1,y=7):NC:  DISPATCH WAIT 185f0 count 112
+0:(x=1,y=7):NC: cmd_write_paged is_dram: 1
+0:(x=1,y=7):NC: write offset: 0 38672 102256
+0:(x=1,y=7):NC: cmd_wait
+0:(x=1,y=7):NC:  DISPATCH BARRIER
+0:(x=1,y=7):NC:  DISPATCH WAIT 185f0 count 112
+0:(x=1,y=7):NC: cmd_write_packed
+0:(x=1,y=7):NC: cmd_write_packed_large
+0:(x=1,y=7):NC: cmd_write_packed_large
+0:(x=1,y=7):NC: cmd_write_packed
+0:(x=1,y=7):NC: cmd_notify_dispatch_s_go_signal
+0:(x=1,y=7):NC:  DISPATCH_S_NOTIFY BARRIER
+0:(x=1,y=7):NC: cmd_wait
+0:(x=1,y=7):NC:  DISPATCH WAIT 185f0 count 168
+0:(x=1,y=7):NC: cmd_write_paged is_dram: 1
+0:(x=1,y=7):NC: write offset: 0 39552 102256
+0:(x=1,y=7):NC: cmd_wait
+0:(x=1,y=7):NC:  DISPATCH BARRIER
+0:(x=1,y=7):NC:  DISPATCH WAIT 185f0 count 168
+0:(x=1,y=7):NC: cmd_write_packed
+0:(x=1,y=7):NC: cmd_write_packed_large
+0:(x=1,y=7):NC: cmd_write_packed_large
+0:(x=1,y=7):NC: cmd_write_packed
+0:(x=1,y=7):NC: cmd_notify_dispatch_s_go_signal
+0:(x=1,y=7):NC:  DISPATCH_S_NOTIFY BARRIER
+0:(x=1,y=7):NC: cmd_wait
+0:(x=1,y=7):NC:  DISPATCH WAIT 185f0 count 224
+0:(x=1,y=7):NC: cmd_write_paged is_dram: 1
+0:(x=1,y=7):NC: write offset: 0 42256 102256
+0:(x=1,y=7):NC: cmd_wait
+0:(x=1,y=7):NC:  DISPATCH BARRIER
+0:(x=1,y=7):NC:  DISPATCH WAIT 185f0 count 224
+0:(x=1,y=7):NC: cmd_write_packed
+0:(x=1,y=7):NC: cmd_write_packed_large
+0:(x=1,y=7):NC: cmd_write_packed_large
+0:(x=1,y=7):NC: cmd_write_packed
+0:(x=1,y=7):NC: cmd_notify_dispatch_s_go_signal
+0:(x=1,y=7):NC:  DISPATCH_S_NOTIFY BARRIER
+0:(x=1,y=7):NC: cmd_wait
+0:(x=1,y=7):NC:  DISPATCH WAIT 185f0 count 280
+0:(x=1,y=7):NC: cmd_write_paged is_dram: 1
+0:(x=1,y=7):NC: write offset: 0 47024 102256
+0:(x=1,y=7):NC: cmd_wait
+0:(x=1,y=7):NC:  DISPATCH BARRIER
+0:(x=1,y=7):NC:  DISPATCH WAIT 185f0 count 280
+0:(x=1,y=7):NC: cmd_write_packed
+0:(x=1,y=7):NC: cmd_write_packed_large
+0:(x=1,y=7):NC: cmd_write_packed_large
+0:(x=1,y=7):NC: cmd_write_packed
+0:(x=1,y=7):NC: cmd_notify_dispatch_s_go_signal
+0:(x=1,y=7):NC:  DISPATCH_S_NOTIFY BARRIER
+0:(x=1,y=7):NC: cmd_wait
+0:(x=1,y=7):NC:  DISPATCH WAIT 185f0 count 336
+0:(x=1,y=7):NC: cmd_write_paged is_dram: 1
+0:(x=1,y=7):NC: write offset: 0 49728 102256
+0:(x=1,y=7):NC: cmd_wait
+0:(x=1,y=7):NC:  DISPATCH BARRIER
+0:(x=1,y=7):NC:  DISPATCH WAIT 185f0 count 336
+0:(x=1,y=7):NC: cmd_write_packed
+0:(x=1,y=7):NC: cmd_write_packed_large
+0:(x=1,y=7):NC: cmd_write_packed_large
+0:(x=1,y=7):NC: cmd_write_packed
+0:(x=1,y=7):NC: cmd_notify_dispatch_s_go_signal
+0:(x=1,y=7):NC:  DISPATCH_S_NOTIFY BARRIER
+0:(x=1,y=7):NC: cmd_wait
+0:(x=1,y=7):NC:  DISPATCH WAIT 185f0 count 392
+0:(x=1,y=7):NC: cmd_write_paged is_dram: 1
+0:(x=1,y=7):NC: write offset: 0 54304 102256
+0:(x=1,y=7):NC: cmd_wait
+0:(x=1,y=7):NC:  DISPATCH BARRIER
+0:(x=1,y=7):NC:  DISPATCH WAIT 185f0 count 392
+0:(x=1,y=7):NC: cmd_write_packed
+0:(x=1,y=7):NC: cmd_write_packed_large
+0:(x=1,y=7):NC: cmd_write_packed_large
+0:(x=1,y=7):NC: cmd_write_packed
+0:(x=1,y=7):NC: cmd_notify_dispatch_s_go_signal
+0:(x=1,y=7):NC:  DISPATCH_S_NOTIFY BARRIER
+0:(x=1,y=7):NC: cmd_wait
+0:(x=1,y=7):NC:  DISPATCH WAIT 185f0 count 448
+0:(x=1,y=7):NC: cmd_write_paged is_dram: 1
+0:(x=1,y=7):NC: write offset: 0 59184 102256
+0:(x=1,y=7):NC: cmd_wait
+0:(x=1,y=7):NC:  DISPATCH BARRIER
+0:(x=1,y=7):NC:  DISPATCH WAIT 185f0 count 448
+0:(x=1,y=7):NC: cmd_write_packed
+0:(x=1,y=7):NC: cmd_write_packed_large
+0:(x=1,y=7):NC: cmd_write_packed_large
+0:(x=1,y=7):NC: cmd_write_packed
+0:(x=1,y=7):NC: cmd_notify_dispatch_s_go_signal
+0:(x=1,y=7):NC:  DISPATCH_S_NOTIFY BARRIER
+0:(x=1,y=7):NC: cmd_wait
+0:(x=1,y=7):NC:  DISPATCH WAIT 185f0 count 504
+0:(x=1,y=7):NC: cmd_write_paged is_dram: 1
+0:(x=1,y=7):NC: write offset: 0 64160 102256
+0:(x=1,y=7):NC: cmd_wait
+0:(x=1,y=7):NC:  DISPATCH BARRIER
+0:(x=1,y=7):NC:  DISPATCH WAIT 185f0 count 504
+0:(x=1,y=7):NC: cmd_write_packed
+0:(x=1,y=7):NC: cmd_write_packed_large
+0:(x=1,y=7):NC: cmd_write_packed_large
+0:(x=1,y=7):NC: cmd_write_packed
+0:(x=1,y=7):NC: cmd_notify_dispatch_s_go_signal
+0:(x=1,y=7):NC:  DISPATCH_S_NOTIFY BARRIER
+0:(x=1,y=7):NC: cmd_wait
+0:(x=1,y=7):NC:  DISPATCH WAIT 185f0 count 560
+0:(x=1,y=7):NC: cmd_write_paged is_dram: 1
+0:(x=1,y=7):NC: write offset: 0 65040 102256
+0:(x=1,y=7):NC: cmd_wait
+0:(x=1,y=7):NC:  DISPATCH BARRIER
+0:(x=1,y=7):NC:  DISPATCH WAIT 185f0 count 560
+0:(x=1,y=7):NC: cmd_write_packed
+0:(x=1,y=7):NC: cmd_write_packed_large
+0:(x=1,y=7):NC: cmd_write_packed_large
+0:(x=1,y=7):NC: cmd_write_packed
+0:(x=1,y=7):NC: cmd_notify_dispatch_s_go_signal
+0:(x=1,y=7):NC:  DISPATCH_S_NOTIFY BARRIER
+0:(x=1,y=7):NC: cmd_wait
+0:(x=1,y=7):NC:  DISPATCH WAIT 185f0 count 616
+0:(x=1,y=7):NC: cmd_write_paged is_dram: 1
+0:(x=1,y=7):NC: write offset: 0 67744 102256
+0:(x=1,y=7):NC: cmd_wait
+0:(x=1,y=7):NC:  DISPATCH BARRIER
+0:(x=1,y=7):NC:  DISPATCH WAIT 185f0 count 616
+0:(x=1,y=7):NC: cmd_write_packed
+0:(x=1,y=7):NC: cmd_write_packed_large
+0:(x=1,y=7):NC: cmd_write_packed_large
+0:(x=1,y=7):NC: cmd_write_packed
+0:(x=1,y=7):NC: cmd_notify_dispatch_s_go_signal
+0:(x=1,y=7):NC:  DISPATCH_S_NOTIFY BARRIER
+0:(x=1,y=7):NC: cmd_wait
+0:(x=1,y=7):NC:  DISPATCH WAIT 185f0 count 672
+0:(x=1,y=7):NC: cmd_write_paged is_dram: 1
+0:(x=1,y=7):NC: write offset: 0 72512 102256
+0:(x=1,y=7):NC: cmd_wait
+0:(x=1,y=7):NC:  DISPATCH BARRIER
+0:(x=1,y=7):NC:  DISPATCH WAIT 185f0 count 672
+0:(x=1,y=7):NC: cmd_write_packed
+0:(x=1,y=7):NC: cmd_write_packed_large
+0:(x=1,y=7):NC: cmd_write_packed_large
+0:(x=1,y=7):NC: cmd_write_packed
+0:(x=1,y=7):NC: cmd_notify_dispatch_s_go_signal
+0:(x=1,y=7):NC:  DISPATCH_S_NOTIFY BARRIER
+0:(x=1,y=7):NC: cmd_wait
+0:(x=1,y=7):NC:  DISPATCH WAIT 185f0 count 728
+0:(x=1,y=7):NC: cmd_write_paged is_dram: 1
+0:(x=1,y=7):NC: write offset: 0 75216 102256
+0:(x=1,y=7):NC: cmd_wait
+0:(x=1,y=7):NC:  DISPATCH BARRIER
+0:(x=1,y=7):NC:  DISPATCH WAIT 185f0 count 728
+0:(x=1,y=7):NC: cmd_write_packed
+0:(x=1,y=7):NC: cmd_write_packed_large
+0:(x=1,y=7):NC: cmd_write_packed_large
+0:(x=1,y=7):NC: cmd_write_packed
+0:(x=1,y=7):NC: cmd_notify_dispatch_s_go_signal
+0:(x=1,y=7):NC:  DISPATCH_S_NOTIFY BARRIER
+0:(x=1,y=7):NC: cmd_wait
+0:(x=1,y=7):NC:  DISPATCH WAIT 185f0 count 784
+0:(x=1,y=7):NC: cmd_write_paged is_dram: 1
+0:(x=1,y=7):NC: write offset: 0 79792 102256
+0:(x=1,y=7):NC: cmd_wait
+0:(x=1,y=7):NC:  DISPATCH BARRIER
+0:(x=1,y=7):NC:  DISPATCH WAIT 185f0 count 784
+0:(x=1,y=7):NC: cmd_write_packed
+0:(x=1,y=7):NC: cmd_write_packed_large
+0:(x=1,y=7):NC: cmd_write_packed_large
+0:(x=1,y=7):NC: cmd_write_packed
+0:(x=1,y=7):NC: cmd_notify_dispatch_s_go_signal
+0:(x=1,y=7):NC:  DISPATCH_S_NOTIFY BARRIER
+0:(x=1,y=7):NC: cmd_wait
+0:(x=1,y=7):NC:  DISPATCH WAIT 185f0 count 840
+0:(x=1,y=7):NC: cmd_write_paged is_dram: 1
+0:(x=1,y=7):NC: write offset: 0 28816 102256
+0:(x=1,y=7):NC: cmd_wait
+0:(x=1,y=7):NC:  DISPATCH BARRIER
+0:(x=1,y=7):NC:  DISPATCH WAIT 185f0 count 840
+0:(x=1,y=7):NC: cmd_write_packed
+0:(x=1,y=7):NC: cmd_write_packed_large
+0:(x=1,y=7):NC: cmd_write_packed_large
+0:(x=0,y=0):NC: this is the reader kernel
+0:(x=0,y=0):TR0: this is the unpack cb_eps
+0:(x=0,y=0):TR0:      iteration first: 0
+0:(x=0,y=0):TR0: doneeeeee :
+0:(x=0,y=0):TR0: this is the unpack cb_batch_var
+0:(x=0,y=0):TR0: wait 1 :
+0:(x=0,y=0):TR1:      iteration first: 0
+0:(x=0,y=0):TR1: doneeeeee :
+0:(x=0,y=0):TR1: wait 1 :
+0:(x=0,y=0):TR2:      iteration first: 0
+0:(x=0,y=0):BR: writer kernel
+0:(x=1,y=7):NC: cmd_write_packed
+0:(x=1,y=7):NC: cmd_notify_dispatch_s_go_signal
+0:(x=1,y=7):NC:  DISPATCH_S_NOTIFY BARRIER
+0:(x=1,y=7):NC: cmd_wait
+0:(x=1,y=7):NC:  DISPATCH BARRIER
+0:(x=1,y=7):NC:  DISPATCH WAIT 185f0 count 896
