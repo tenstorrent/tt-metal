@@ -8,13 +8,18 @@
 #include "modules/distributed/linear.hpp"
 #include "modules/distributed/multi_head_attention.hpp"
 #include "modules/dropout_module.hpp"
+#include "modules/gpt_block.hpp"
 #include "modules/layer_norm_module.hpp"
+#include "modules/linear_module.hpp"
+#include "modules/multi_head_attention.hpp"
 
 namespace ttml::modules::distributed {
 
 class DistributedGPTMLP : public autograd::ModuleBase {
+    // std::shared_ptr<LinearLayer> fc1;
     std::shared_ptr<distributed::ColumnParallelLinear> fc1;
     std::shared_ptr<distributed::RowParallelLinear> fc2;
+    // std::shared_ptr<LinearLayer> fc2;
     std::shared_ptr<DropoutLayer> dropout;
 
 public:
@@ -25,9 +30,11 @@ public:
 
 class DistributedGPTBlock : public autograd::ModuleBase {
     std::shared_ptr<DistributedGPTMLP> mlp;
+    // std::shared_ptr<GPTMLP> mlp;
     std::shared_ptr<LayerNormLayer> ln1;
     std::shared_ptr<LayerNormLayer> ln2;
     std::shared_ptr<DistributedMultiHeadAttention> attention;
+    // std::shared_ptr<MultiHeadAttention> attention;
 
 public:
     explicit DistributedGPTBlock(

@@ -10,6 +10,7 @@
 #include "init/tensor_initializers.hpp"
 #include "modules/distributed/gpt_block.hpp"
 #include "modules/distributed/linear.hpp"
+#include "modules/gpt_block.hpp"
 #include "modules/positional_embeddings.hpp"
 #include "ops/binary_ops.hpp"
 #include "ops/unary_ops.hpp"

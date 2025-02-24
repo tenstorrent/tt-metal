@@ -10,6 +10,7 @@
 #include "modules/distributed/gpt_block.hpp"
 #include "modules/distributed/linear.hpp"
 #include "modules/embedding_module.hpp"
+#include "modules/gpt_block.hpp"
 #include "modules/layer_norm_module.hpp"
 #include "modules/positional_embeddings.hpp"
 

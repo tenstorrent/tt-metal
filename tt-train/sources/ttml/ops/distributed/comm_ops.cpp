@@ -14,16 +14,22 @@
 namespace ttml::ops::distributed {
 
 autograd::TensorPtr scatter(const autograd::TensorPtr& tensor, int dim) {
+    fmt::println("scatter dim {} shape {}", dim, tensor->get_value().get_logical_shape());
     auto out = autograd::create_tensor(ttnn_fixed::distributed::scatter(tensor->get_value(), dim));
-    autograd::GradFunction grad = [tensor, out, dim]() { tensor->add_grad(ttnn::all_gather(out->get_grad(), dim)); };
+    autograd::GradFunction grad = [tensor, out, dim]() {
+        fmt::println("[bw] gather dim {} shape {}", dim, out->get_grad().get_logical_shape());
+        tensor->add_grad(ttnn::all_gather(out->get_grad(), dim));
+    };
     auto links = autograd::get_links(tensor);
     out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
     return out;
 }
 
 autograd::TensorPtr all_gather(const autograd::TensorPtr& tensor, int dim) {
+    fmt::println("gather dim {} shape {}", dim, tensor->get_value().get_logical_shape());
     auto out = autograd::create_tensor(ttnn::all_gather(tensor->get_value(), dim));
     autograd::GradFunction grad = [tensor, out, dim]() {
+        fmt::println("[bw] scatter dim {} shape {}", dim, out->get_grad().get_logical_shape());
         tensor->add_grad(ttnn_fixed::distributed::scatter(out->get_grad(), dim));
     };
     auto links = autograd::get_links(tensor);
@@ -32,6 +38,7 @@ autograd::TensorPtr all_gather(const autograd::TensorPtr& tensor, int dim) {
 }
 
 autograd::TensorPtr all_reduce(const autograd::TensorPtr& tensor) {
+    fmt::println("all reduce shape {}", tensor->get_value().get_logical_shape());
     auto out = autograd::create_tensor(ttnn::experimental::all_reduce(
         tensor->get_value(), ttnn::operations::reduction::ReduceType::Sum, 1, std::nullopt, ttnn::ccl::Topology::Ring));
     autograd::GradFunction grad = [tensor, out]() { tensor->add_grad(out->get_grad()); };
