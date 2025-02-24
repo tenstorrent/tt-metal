@@ -17,7 +17,8 @@ static inline std::string to_string(pkt_dest_size_choices_t choice) {
     }
 }
 
-static inline void log_phys_coord_to_json(nlohmann::json& config, const std::vector<CoreCoord>& phys_cores, const std::string& name) {
+static inline void log_phys_coord_to_json(
+    nlohmann::json& config, const std::vector<CoreCoord>& phys_cores, const std::string& name) {
     for (int i = 0; i < phys_cores.size(); ++i) {
         config[fmt::format("{}_{}", name, i)] = fmt::format("({}, {})", phys_cores[i].x, phys_cores[i].y);
     }
@@ -28,9 +29,9 @@ static inline void log_phys_coord_to_json(nlohmann::json& config, const CoreCoor
 }
 
 inline uint64_t get_64b_result(uint32_t* buf, uint32_t index) {
-    return (((uint64_t)buf[index]) << 32) | buf[index+1];
+    return (((uint64_t)buf[index]) << 32) | buf[index + 1];
 }
 
 inline uint64_t get_64b_result(const std::vector<uint32_t>& vec, uint32_t index) {
-    return (((uint64_t)vec[index]) << 32) | vec[index+1];
+    return (((uint64_t)vec[index]) << 32) | vec[index + 1];
 }

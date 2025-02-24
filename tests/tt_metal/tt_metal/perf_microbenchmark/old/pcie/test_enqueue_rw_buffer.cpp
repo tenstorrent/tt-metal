@@ -8,7 +8,7 @@
 
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/test_common.hpp>
+#include "test_common.hpp"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/command_queue.hpp>
 

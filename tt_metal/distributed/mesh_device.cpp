@@ -69,9 +69,7 @@ MeshDevice::ScopedDevices::ScopedDevices(
     size_t num_command_queues,
     const DispatchCoreConfig& dispatch_core_config,
     const MeshDeviceConfig& config) {
-    auto& system_mesh = SystemMesh::instance();
-    auto physical_device_ids = system_mesh.request_available_devices(config);
-
+    auto physical_device_ids = SystemMesh::instance().request_available_devices(config);
     opened_devices_ = tt::tt_metal::detail::CreateDevices(
         physical_device_ids, num_command_queues, l1_small_size, trace_region_size, dispatch_core_config);
 
