@@ -199,15 +199,13 @@ void MAIN {
                                 // in0_block_w is passed as innder dim (kt) to matmul_block, interally used to stride
                                 // in0
 
-                                // #ifdef ARCH_BLACKHOLE
-                                //                                 // FIXME: This is a temporary workaround to avoid
-                                //                                 hangs on blackhole.
-                                //                                 //
-                                //                                 https://github.com/tenstorrent/tt-metal/issues/16439
-                                //                                 for (uint32_t i = 0; i < 10; i++) {
-                                //                                     asm volatile("nop");
-                                //                                 }
-                                // #endif
+#ifdef ARCH_BLACKHOLE
+                                // FIXME: This is a temporary workaround to avoid hangs on blackhole.
+                                // https://github.com/tenstorrent/tt-metal/issues/16439
+                                for (uint32_t i = 0; i < 100; i++) {
+                                    asm volatile("nop");
+                                }
+#endif
                                 matmul_block(
                                     in0_cb_id,
                                     in1_cb_id,
