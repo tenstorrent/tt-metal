@@ -111,6 +111,18 @@ std::vector<ttnn::Tensor> unpad_output_tensor(
     return {concat_tensor};
 }
 
+std::vector<ttnn::Tensor> unpad_all_reduce_output_tensor(
+    const std::vector<ttnn::Tensor>& output_tensor, const ttnn::SmallVector<uint32_t>& unpad_elements) {
+    ttnn::SmallVector<uint32_t> begins = {0, 0, 0, 0};
+    ttnn::SmallVector<uint32_t> ends = {1, 1, 1, 1};
+    ttnn::SmallVector<uint32_t> step = {1, 1, 1, 1};
+    ends = unpad_elements;
+
+    ttnn::Tensor sliced_tensor = ttnn::slice(output_tensor.at(0), begins, ends, step);
+
+    return {sliced_tensor};
+}
+
 RingTopology::RingTopology(
     IDevice const* device,
     Topology topology,

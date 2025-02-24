@@ -42,6 +42,10 @@ std::vector<ttnn::Tensor> unpad_output_tensor(
     const ttnn::SmallVector<uint32_t>& unpad_elements,
     const int dim);
 
+std::vector<ttnn::Tensor> unpad_all_reduce_output_tensor(
+    const std::vector<ttnn::Tensor>& output_tensor,
+    const ttnn::SmallVector<uint32_t>& unpad_elements);
+
 class LineTopology {
    public:
     LineTopology(
