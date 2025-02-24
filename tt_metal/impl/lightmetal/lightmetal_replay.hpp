@@ -117,6 +117,8 @@ private:
     bool show_reads_ = false;                                      // Flag to show read buffer contents
     bool disable_checking_ = false;  // Optionally disable equality checking in Compare command.
 
+    void clear_object_maps();
+
     // System related members ----------------------
     void setup_devices();
     void close_devices();
