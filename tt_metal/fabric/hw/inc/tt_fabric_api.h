@@ -8,15 +8,18 @@
 #include "dataflow_api.h"
 #include "noc_overlay_parameters.h"
 #include "ethernet/dataflow_api.h"
+#include "tt_fabric.h"
 #include "tt_fabric_interface.h"
+#include "eth_chan_noc_mapping.h"
 
 namespace tt::tt_fabric {
 
 enum AsyncWriteMode : uint8_t {
     ADD_PR = 0x01,
-    SEND = 0x02,
+    SEND_PR = 0x02,
     ADD_HEADER = 0x04,
-    ALL = ADD_HEADER | ADD_PR | SEND,
+    ADD_AND_SEND_PR = ADD_PR | SEND_PR,
+    ALL = ADD_HEADER | ADD_PR | SEND_PR,
 };
 
 enum RoutingType : uint8_t {
@@ -135,7 +138,7 @@ inline void fabric_async_write(
         fabric_setup_pull_request(client_interface, src_addr, size);
     }
 
-    if constexpr (mode & AsyncWriteMode::SEND) {
+    if constexpr (mode & AsyncWriteMode::SEND_PR) {
         fabric_send_pull_request<routing_type>(client_interface, routing, dst_mesh_id, dst_dev_id);
     }
 }
@@ -189,7 +192,7 @@ inline void fabric_async_write_multicast(
         fabric_setup_pull_request(client_interface, src_addr, size);
     }
 
-    if constexpr (mode & AsyncWriteMode::SEND) {
+    if constexpr (mode & AsyncWriteMode::SEND_PR) {
         fabric_send_pull_request<routing_type>(client_interface, routing, dst_mesh_id, dst_dev_id);
     }
 }
@@ -235,7 +238,7 @@ inline void fabric_atomic_inc(
         fabric_setup_pull_request(client_interface, src_addr, PACKET_HEADER_SIZE_BYTES);
     }
 
-    if constexpr (mode & AsyncWriteMode::SEND) {
+    if constexpr (mode & AsyncWriteMode::SEND_PR) {
         fabric_send_pull_request<routing_type>(client_interface, routing, dst_mesh_id, dst_dev_id);
     }
 }
@@ -285,7 +288,7 @@ inline void fabric_async_write_atomic_inc(
         fabric_setup_pull_request(client_interface, src_addr, size);
     }
 
-    if constexpr (mode & AsyncWriteMode::SEND) {
+    if constexpr (mode & AsyncWriteMode::SEND_PR) {
         fabric_send_pull_request<routing_type>(client_interface, routing, dst_mesh_id, dst_dev_id);
     }
 }
