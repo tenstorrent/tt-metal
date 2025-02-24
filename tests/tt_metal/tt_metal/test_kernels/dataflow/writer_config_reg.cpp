@@ -161,7 +161,7 @@ void generate_pack_edge_offset(ckernel::packer::pck_edge_offset_t& edge) {
 }
 
 void generate_pack_counters(ckernel::packer::pack_counters_t& counter) {
-    counter.pack_per_xy_plane = 4;
+    counter.pack_per_xy_plane = 0;
     counter.pack_reads_per_xy_plane = 8;
     counter.pack_xys_per_til = 2;
     counter.pack_yz_transposed = 0;

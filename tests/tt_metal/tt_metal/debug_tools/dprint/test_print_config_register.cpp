@@ -98,7 +98,7 @@ const std::vector<std::string> field_names_pack_counters_all = {
     "pack_xys_per_til",
     "pack_yz_transposed",
     "pack_per_xy_plane_offset"};
-const std::vector<uint32_t> field_values_pack_counters_all = {4, 8, 2, 0, 6};
+const std::vector<uint32_t> field_values_pack_counters_all = {0, 8, 2, 0, 6};
 
 // RELU_CONFIG
 const std::vector<std::string> field_names_relu_config_all = {
