@@ -31,6 +31,38 @@ enum class AllGatherAsyncVersion {
     LLAMA_POST_BINARY_MATMUL = 2,
 };
 
+enum class AllGather2DVersion {
+    GENERIC = 0,
+};
+
+struct AllGather2D {
+    const MeshDevice& mesh_device;
+    const uint32_t dim;
+    const MemoryConfig output_mem_config;
+    const ccl::Topology topology;
+    const GlobalSemaphore semaphore;
+    std::optional<SubDeviceId> sub_device_id;
+    const uint32_t page_stride;
+    const uint32_t num_chunks;
+
+    auto attributes() const {
+        using tt::stl::reflection::Attribute;
+        std::vector<std::tuple<std::string, Attribute>> attrs;
+
+        attrs.emplace_back("dim", dim);
+        attrs.emplace_back("output_mem_config", output_mem_config);
+        attrs.emplace_back("topology", topology);
+        attrs.emplace_back("semaphore", semaphore);
+
+        return attrs;
+    }
+    void validate(const std::vector<Tensor>& input_tensors) const;
+    std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
+    operation::ProgramWithCallbacks create_program(
+        const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
+    AllGather2DVersion select_version(const Tensor& input_tensor) const;
+};
+
 struct AllGatherAsync {
     std::optional<IDevice*> forward_device;
     std::optional<IDevice*> backward_device;
@@ -111,6 +143,19 @@ AllGatherAsync create_all_gather_async_struct(
 // All Gather Variants
 std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
     size_t num_links, size_t num_workers_per_link, bool persistent_fabric_mode, IDevice* device, const std::optional<SubDeviceId>& sub_device_id);
+
+operation::ProgramWithCallbacks all_gather_2D_multi_core_with_workers(
+    const Tensor& input_tensor,
+    Tensor& output_tensor,
+    const MeshDevice& mesh_device,
+    const uint32_t dim,
+    const MemoryConfig output_mem_config,
+    const ccl::Topology topology,
+    const GlobalSemaphore semaphore,
+    const uint32_t page_stride,
+    const uint32_t num_chunks,
+    const uint32_t num_devices,
+    const std::optional<SubDeviceId>& sub_device_id);
 operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
     const Tensor& input_tensor,
     std::optional<IDevice*> forward_device,
