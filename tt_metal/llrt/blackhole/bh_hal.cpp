@@ -114,6 +114,8 @@ void Hal::initialize_bh() {
     this->coordinate_virtualization_enabled_ = COORDINATE_VIRTUALIZATION_ENABLED;
     this->virtual_worker_start_x_ = VIRTUAL_TENSIX_START_X;
     this->virtual_worker_start_y_ = VIRTUAL_TENSIX_START_Y;
+    this->virtualized_core_types_ = {
+        AddressableCoreType::TENSIX, AddressableCoreType::ETH, AddressableCoreType::PCIE, AddressableCoreType::DRAM};
 
     this->eps_ = EPS_BH;
     this->nan_ = NAN_BH;

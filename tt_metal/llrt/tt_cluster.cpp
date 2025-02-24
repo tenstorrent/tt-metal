@@ -245,7 +245,10 @@ void Cluster::get_metal_desc_from_tt_desc(
     const std::unordered_map<chip_id_t, uint32_t> &per_chip_id_harvesting_masks) {
     for (const auto& it : input) {
         chip_id_t id = it.first;
-        this->sdesc_per_chip_.emplace(id, metal_SocDescriptor(it.second, per_chip_id_harvesting_masks.at(id), this->cluster_desc_->get_board_type(id)));
+        this->sdesc_per_chip_.emplace(
+            id,
+            metal_SocDescriptor(
+                it.second, per_chip_id_harvesting_masks.at(id), this->cluster_desc_->get_board_type(id)));
     }
 }
 
@@ -360,6 +363,18 @@ void Cluster::generate_virtual_to_umd_coord_mapping() {
         this->virtual_eth_cores_[chip_id] = {};
         for (const tt::umd::CoreCoord& core : get_soc_desc(chip_id).get_cores(CoreType::ETH, CoordSystem::TRANSLATED)) {
             this->virtual_eth_cores_[chip_id].insert({core.x, core.y});
+        }
+        if (this->arch_ == ARCH::BLACKHOLE) {
+            this->virtual_pcie_cores_[chip_id] = {};
+            for (const tt::umd::CoreCoord& core :
+                 get_soc_desc(chip_id).get_cores(CoreType::PCIE, CoordSystem::TRANSLATED)) {
+                this->virtual_pcie_cores_[chip_id].insert({core.x, core.y});
+            }
+            this->virtual_dram_cores_[chip_id] = {};
+            for (const tt::umd::CoreCoord& core :
+                 get_soc_desc(chip_id).get_cores(CoreType::DRAM, CoordSystem::TRANSLATED)) {
+                this->virtual_dram_cores_[chip_id].insert({core.x, core.y});
+            }
         }
     }
 }
@@ -524,8 +539,17 @@ void Cluster::write_dram_vec(std::vector<uint32_t> &vec, tt_target_dram dram, ui
         d_subchannel < desc_to_use.dram_cores.at(d_chan).size(),
         "Trying to address dram sub channel that doesnt exist in the device descriptor");
     tt_cxy_pair dram_core = tt_cxy_pair(chip_id, desc_to_use.get_core_for_dram_channel(d_chan, d_subchannel));
+
+    tt::umd::CoreCoord translated_coord =
+        desc_to_use.translate_coord_to({dram_core, CoreType::DRAM, CoordSystem::VIRTUAL}, CoordSystem::TRANSLATED);
+
     size_t offset = desc_to_use.get_address_offset(d_view);
-    write_core(vec.data(), vec.size() * sizeof(uint32_t), dram_core, addr + offset, small_access);
+    write_core(
+        vec.data(),
+        vec.size() * sizeof(uint32_t),
+        tt_cxy_pair(chip_id, translated_coord.x, translated_coord.y),
+        addr + offset,
+        small_access);
 }
 
 void Cluster::read_dram_vec(
@@ -543,8 +567,11 @@ void Cluster::read_dram_vec(
         d_subchannel < desc_to_use.dram_cores.at(d_chan).size(),
         "Trying to address dram sub channel that doesnt exist in the device descriptor");
     tt_cxy_pair dram_core = tt_cxy_pair(chip_id, desc_to_use.get_core_for_dram_channel(d_chan, d_subchannel));
+    tt::umd::CoreCoord translated_coord =
+        desc_to_use.translate_coord_to({dram_core, CoreType::DRAM, CoordSystem::VIRTUAL}, CoordSystem::TRANSLATED);
     size_t offset = desc_to_use.get_address_offset(d_view);
-    read_core(vec, sz_in_bytes, dram_core, addr + offset, small_access);
+    read_core(
+        vec, sz_in_bytes, tt_cxy_pair(chip_id, translated_coord.x, translated_coord.y), addr + offset, small_access);
 }
 
 void Cluster::write_core(
@@ -552,8 +579,15 @@ void Cluster::write_core(
     chip_id_t chip_id = core.chip;
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(chip_id);
     if (tt::llrt::RunTimeOptions::get_instance().get_watcher_enabled()) {
-        tt::watcher_sanitize_host_noc_write(soc_desc, this->virtual_worker_cores_.at(chip_id), this->virtual_eth_cores_.at(chip_id), {core.x, core.y}, addr, sz_in_bytes);
-
+        tt::watcher_sanitize_host_noc_write(
+            soc_desc,
+            this->virtual_worker_cores_.at(chip_id),
+            this->virtual_eth_cores_.at(chip_id),
+            this->virtual_pcie_cores_.at(chip_id),
+            this->virtual_dram_cores_.at(chip_id),
+            {core.x, core.y},
+            addr,
+            sz_in_bytes);
     }
     tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
 
@@ -569,7 +603,15 @@ void Cluster::read_core(
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(chip_id);
 
     if (tt::llrt::RunTimeOptions::get_instance().get_watcher_enabled()) {
-        tt::watcher_sanitize_host_noc_read(soc_desc, this->virtual_worker_cores_.at(chip_id), this->virtual_eth_cores_.at(chip_id), {core.x, core.y}, addr, size_in_bytes);
+        tt::watcher_sanitize_host_noc_read(
+            soc_desc,
+            this->virtual_worker_cores_.at(chip_id),
+            this->virtual_eth_cores_.at(chip_id),
+            this->virtual_pcie_cores_.at(chip_id),
+            this->virtual_dram_cores_.at(chip_id),
+            {core.x, core.y},
+            addr,
+            size_in_bytes);
     }
     tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
 
@@ -588,7 +630,15 @@ void Cluster::write_reg(const std::uint32_t *mem_ptr, tt_cxy_pair target, uint64
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(chip_id);
 
     if (tt::llrt::RunTimeOptions::get_instance().get_watcher_enabled()) {
-        tt::watcher_sanitize_host_noc_write(soc_desc, this->virtual_worker_cores_.at(chip_id), this->virtual_eth_cores_.at(chip_id), {target.x, target.y}, addr, size_in_bytes);
+        tt::watcher_sanitize_host_noc_write(
+            soc_desc,
+            this->virtual_worker_cores_.at(chip_id),
+            this->virtual_eth_cores_.at(chip_id),
+            this->virtual_pcie_cores_.at(chip_id),
+            this->virtual_dram_cores_.at(chip_id),
+            {target.x, target.y},
+            addr,
+            size_in_bytes);
     }
     tt::umd::CoreCoord target_coord = soc_desc.get_coord_at(target, CoordSystem::TRANSLATED);
     this->driver_->write_to_device(mem_ptr, size_in_bytes, target.chip, target_coord, addr, "REG_TLB");
@@ -603,7 +653,15 @@ void Cluster::read_reg(std::uint32_t *mem_ptr, tt_cxy_pair target, uint64_t addr
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(chip_id);
 
     if (tt::llrt::RunTimeOptions::get_instance().get_watcher_enabled()) {
-        tt::watcher_sanitize_host_noc_read(soc_desc, this->virtual_worker_cores_.at(chip_id), this->virtual_eth_cores_.at(chip_id), {target.x, target.y}, addr, size_in_bytes);
+        tt::watcher_sanitize_host_noc_read(
+            soc_desc,
+            this->virtual_worker_cores_.at(chip_id),
+            this->virtual_eth_cores_.at(chip_id),
+            this->virtual_pcie_cores_.at(chip_id),
+            this->virtual_dram_cores_.at(chip_id),
+            {target.x, target.y},
+            addr,
+            size_in_bytes);
     }
     tt::umd::CoreCoord target_coord = soc_desc.get_coord_at(target, CoordSystem::TRANSLATED);
     this->driver_->read_from_device(mem_ptr, target.chip, target_coord, addr, size_in_bytes, "REG_TLB");
