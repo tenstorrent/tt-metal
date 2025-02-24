@@ -68,7 +68,7 @@ def run_fabric_edm(
                 {num_unicasts} \
                 {num_links} \
                 {num_op_invocations} \
-                {1 if line_sync == True else 0} \
+                {int(line_sync)} \
                 {line_size} \
                 {packet_size} "
     rc = os.system(cmd)
