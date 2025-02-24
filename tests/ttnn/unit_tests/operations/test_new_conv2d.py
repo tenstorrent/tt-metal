@@ -2668,7 +2668,7 @@ def test_dram_input_mm_conv(device, torch_tensor_map, tiled_input, input_on_devi
 
     kernel_shape = (out_channels, in_channels, kernel_h, kernel_w)
     torch_kernel = randomize_torch_tensor(torch_tensor_map, kernel_shape)
-    tt_kernel = ttnn.from_torch(torch_kernel)
+    tt_kernel = ttnn.from_torch(torch_kernel, dtype=ttnn.bfloat16)
 
     torch_input = randomize_torch_tensor(torch_tensor_map, input_shape)
     if input_on_device:
@@ -2677,7 +2677,7 @@ def test_dram_input_mm_conv(device, torch_tensor_map, tiled_input, input_on_devi
         tt_input = ttnn.reshape(tt_input, (1, 1, batch_size * img_h * img_w, in_channels))
     else:
         torch_input_nhwc = torch.permute(torch_input, (0, 2, 3, 1))
-        tt_input = ttnn.from_torch(torch_input_nhwc)
+        tt_input = ttnn.from_torch(torch_input_nhwc, dtype=ttnn.bfloat16)
 
     if tiled_input:
         tt_input = ttnn.to_layout(tt_input, ttnn.TILE_LAYOUT)
