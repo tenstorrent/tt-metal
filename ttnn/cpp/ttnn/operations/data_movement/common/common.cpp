@@ -125,21 +125,29 @@ std::array<uint32_t, 2> compute_height_sharded_shard_shape(const std::array<uint
 ttnn::MemoryConfig create_sharded_memory_config(
     const ttnn::Shape& logical_shape,
     const tt::tt_metal::CoreRangeSet& core_grid,
-    const ShardStrategy& strategy,
+    const std::variant<ttnn::TensorMemoryLayout, ShardStrategy>& strategy_or_layout,
     const tt::tt_metal::ShardOrientation& orientation,
     std::optional<std::array<uint32_t, 2>> shard_shape,
     const tt::tt_metal::Layout& layout) {
     auto rank = logical_shape.rank();
     TT_FATAL(rank >= 2, "rank of tensor to shard must be at least 2.");
 
-    ttnn::TensorMemoryLayout tensor_memory_layout;
-    if (strategy == ShardStrategy::BLOCK) {
-        tensor_memory_layout = ttnn::TensorMemoryLayout::BLOCK_SHARDED;
-    } else if (strategy == ShardStrategy::WIDTH) {
-        tensor_memory_layout = ttnn::TensorMemoryLayout::WIDTH_SHARDED;
-    } else if (strategy == ShardStrategy::HEIGHT) {
-        tensor_memory_layout = ttnn::TensorMemoryLayout::HEIGHT_SHARDED;
-    }
+    ttnn::TensorMemoryLayout tensor_memory_layout = std::visit(
+        [](auto&& v) -> ttnn::TensorMemoryLayout {
+            using T = std::decay_t<decltype(v)>;
+            if constexpr (std::is_same_v<T, ShardStrategy>) {
+                switch (v) {
+                    case ShardStrategy::BLOCK: return ttnn::TensorMemoryLayout::BLOCK_SHARDED;
+                    case ShardStrategy::WIDTH: return ttnn::TensorMemoryLayout::WIDTH_SHARDED;
+                    case ShardStrategy::HEIGHT: return ttnn::TensorMemoryLayout::HEIGHT_SHARDED;
+                }
+            } else if constexpr (std::is_same_v<T, ttnn::TensorMemoryLayout>) {
+                return v;
+            } else {
+                static_assert(false);
+            }
+        },
+        strategy_or_layout);
 
     auto height = logical_shape[-2];
     auto width = logical_shape[-1];
@@ -159,14 +167,14 @@ ttnn::MemoryConfig create_sharded_memory_config(
         auto total_num_cores = core_grid.num_cores();
         CoreCoord grid_size = core_grid.bounding_box().grid_size();
 
-        switch (strategy) {
-            case ShardStrategy::BLOCK:
+        switch (tensor_memory_layout) {
+            case ttnn::TensorMemoryLayout::BLOCK_SHARDED:
                 computed_shard_shape = compute_block_sharded_shard_shape(squeezed_tensor_hw, layout, grid_size, orientation, total_num_cores);
                 break;
-            case ShardStrategy::WIDTH:
+            case ttnn::TensorMemoryLayout::WIDTH_SHARDED:
                 computed_shard_shape = compute_width_sharded_shard_shape(squeezed_tensor_hw, total_num_cores);
                 break;
-            case ShardStrategy::HEIGHT:
+            case ttnn::TensorMemoryLayout::HEIGHT_SHARDED:
                 computed_shard_shape = compute_height_sharded_shard_shape(squeezed_tensor_hw, layout, total_num_cores);
                 break;
             default:
