@@ -14,12 +14,19 @@ fi
 
 export TT_METAL_CLEAR_L1=1
 
+cd $TT_METAL_HOME
+
+#############################################
+# FABRIC UNIT TESTS                         #
+#############################################
+echo "Running fabric unit tests now...";
+
+TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FabricFixture.*"
+
 #############################################
 # FABRIC SANITY TESTS                       #
 #############################################
 echo "Running fabric sanity tests now...";
-
-cd $TT_METAL_HOME
 
 TEST_FOLDER="./build/test/tt_metal/perf_microbenchmark/routing"
 
