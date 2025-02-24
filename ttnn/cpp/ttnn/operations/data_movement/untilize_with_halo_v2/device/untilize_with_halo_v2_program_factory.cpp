@@ -36,7 +36,8 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     const bool remote_read,
     const bool transpose_mcast,
     Tensor& output_tensor,
-    const bool capture_buffers) {
+    const bool capture_buffers,
+    const bool in_place) {
     IDevice* device = input_tensor.device();
     Buffer* src_buffer = input_tensor.buffer();
     Buffer* dst_buffer = output_tensor.buffer();
@@ -183,11 +184,10 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     uint32_t num_cores_x = 0;
     uint32_t num_cores_y = 0;
     uint32_t semaphore_id = 0;
-    bool in_place = false;
-    if (remote_ref_counts.has_value()) {
+    if (in_place) {
         TT_ASSERT(!remote_read, "remote_read is not supported for in place operation");
-        TT_ASSERT(remote_temp.has_value(), "remote_temp should be provided if remote_ref_counts is provided");
-        in_place = true;
+        TT_ASSERT(remote_ref_counts.has_value(), "remote_ref_counts should be provided if in_place is true");
+        TT_ASSERT(remote_temp.has_value(), "remote_temp should be provided if in_place is provided");
         auto remote_ref_counts_buffer = remote_ref_counts.value().get().device_buffer();
         auto remote_ref_counts_cb_config =
             CircularBufferConfig(
@@ -258,7 +258,10 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
 
     KernelHandle reader_kernel_id0 = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/untilize_with_halo_v2/device/kernels/dataflow/halo_gather_in_place.cpp",
+        in_place
+            ? "ttnn/cpp/ttnn/operations/data_movement/untilize_with_halo_v2/device/kernels/dataflow/"
+              "halo_gather_in_place.cpp"
+            : "ttnn/cpp/ttnn/operations/data_movement/untilize_with_halo_v2/device/kernels/dataflow/halo_gather.cpp",
         all_cores,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = reader_ct_args});
@@ -271,7 +274,10 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
 
     KernelHandle reader_kernel_id1 = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/untilize_with_halo_v2/device/kernels/dataflow/halo_gather_in_place.cpp",
+        in_place
+            ? "ttnn/cpp/ttnn/operations/data_movement/untilize_with_halo_v2/device/kernels/dataflow/"
+              "halo_gather_in_place.cpp"
+            : "ttnn/cpp/ttnn/operations/data_movement/untilize_with_halo_v2/device/kernels/dataflow/halo_gather.cpp",
         all_cores,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_ct_args});

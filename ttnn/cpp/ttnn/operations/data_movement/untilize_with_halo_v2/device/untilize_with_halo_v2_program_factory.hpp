@@ -23,7 +23,8 @@ tt::tt_metal::operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     const bool remote_read,
     const bool transpose_mcast,
     Tensor& output_tensor,
-    const bool capture_buffers);  // Used by halo op to cache internally created config buffers with the program
-                                  // Untilize with Halo V2 op takes them as inputs from the user, so doesn't capture
+    const bool capture_buffers,
+    bool in_place = false);  // Used by halo op to cache internally created config buffers with the program
+                             // Untilize with Halo V2 op takes them as inputs from the user, so doesn't capture
 
 }  // namespace ttnn::operations::data_movement::detail

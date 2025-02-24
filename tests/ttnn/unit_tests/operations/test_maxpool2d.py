@@ -25,6 +25,7 @@ def run_max_pool(
     memory_config=None,
     shard_scheme=None,
     ceil_mode=False,
+    in_place_halo=False,
 ):
     in_n, in_c, in_h, in_w = act_shape
     kernel_h, kernel_w = kernel_size
@@ -192,6 +193,7 @@ def run_max_pool(
         memory_config=memory_config,
         applied_shard_scheme=shard_scheme,
         ceil_mode=ceil_mode,
+        in_place_halo=in_place_halo,
     )
 
     output_host = output.cpu()
@@ -217,9 +219,6 @@ def run_max_pool(
     pcc_thresh = 1.0
     if dtype == ttnn.bfloat8_b:
         pcc_thresh = 0.9994
-
-    print(output_pytorch[0][0])
-    print(golden_pytorch[0][0])
 
     passing, pcc = assert_with_pcc(output_pytorch, golden_pytorch, pcc_thresh)
 
@@ -341,7 +340,16 @@ def run_max_pool(
         # True,
     ],
 )
-def test_run_max_pool(act_shape, kernel_size, padding, stride, dilation, device, dtype, use_program_cache, ceil_mode):
+@pytest.mark.parametrize(
+    "in_place_halo",
+    [
+        False,
+        True,
+    ],
+)
+def test_run_max_pool(
+    act_shape, kernel_size, padding, stride, dilation, device, dtype, use_program_cache, ceil_mode, in_place_halo
+):
     run_max_pool(
         act_shape,
         kernel_size,
@@ -352,6 +360,7 @@ def test_run_max_pool(act_shape, kernel_size, padding, stride, dilation, device,
         dtype,
         shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
         ceil_mode=ceil_mode,
+        in_place_halo=in_place_halo,
     )
 
 
@@ -421,6 +430,13 @@ def test_run_max_pool(act_shape, kernel_size, padding, stride, dilation, device,
         True,
     ],
 )
+@pytest.mark.parametrize(
+    "in_place_halo",
+    [
+        False,
+        True,
+    ],
+)
 def test_run_max_pool_width_shard(
     act_shape,
     kernel_size,
@@ -431,6 +447,7 @@ def test_run_max_pool_width_shard(
     dtype,
     use_program_cache,
     ceil_mode,
+    in_place_halo,
 ):
     run_max_pool(
         act_shape,
@@ -442,6 +459,7 @@ def test_run_max_pool_width_shard(
         dtype,
         shard_scheme=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ceil_mode=ceil_mode,
+        in_place_halo=in_place_halo,
     )
 
 
@@ -531,6 +549,13 @@ def test_run_max_pool_width_shard(
         True,
     ],
 )
+@pytest.mark.parametrize(
+    "in_place_halo",
+    [
+        False,
+        True,
+    ],
+)
 def test_run_max_pool_block_shard(
     act_shape,
     kernel_size,
@@ -541,6 +566,7 @@ def test_run_max_pool_block_shard(
     dtype,
     use_program_cache,
     ceil_mode,
+    in_place_halo,
 ):
     run_max_pool(
         act_shape,
@@ -552,6 +578,7 @@ def test_run_max_pool_block_shard(
         dtype,
         shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         ceil_mode=ceil_mode,
+        in_place_halo=in_place_halo,
     )
 
 

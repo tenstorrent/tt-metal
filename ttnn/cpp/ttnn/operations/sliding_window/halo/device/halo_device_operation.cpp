@@ -71,8 +71,11 @@ std::vector<TensorSpec> HaloDeviceOperation::compute_output_specs(const std::vec
     }
 
     if (this->in_place_) {
+        printf("HITING IN PLACE\n");
         tt::log_info(tt::LogAlways, "halo_device_operation - Using in-place mode so deallocating input buffer");
         DeallocateBuffer(*input_tensor.buffer());
+    } else {
+        printf("HITING NOT IN PLACE\n");
     }
 
     auto out_mem_config = output_memory_config_;
@@ -172,7 +175,8 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
         remote_read_,
         transpose_mcast_,
         output_tensor,
-        /*capture_buffers=*/true)};
+        /*capture_buffers=*/true,
+        this->in_place_)};
 }
 
 Tensor halo_op(

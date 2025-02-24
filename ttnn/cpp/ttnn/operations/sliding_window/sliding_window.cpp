@@ -515,13 +515,13 @@ generate_halo_kernel_config_tensors(
         int max_ref_size = 0;
         int core = 0;
         for (auto& core_config : config) {
-            printf("core: %d\n", core);
+            // printf("core: %d\n", core);
             std::vector<uint16_t> flat_data(max_len, 0);
             uint32_t idx = 0;
             int ref_size = 0;
             for (auto& key_data : core_config) {
                 auto [nocx, nocy, len] = key_data.first;
-                printf("  nocx: %d, nocy: %d, len: %d\n", nocx, nocy, len);
+                // printf("  nocx: %d, nocy: %d, len: %d\n", nocx, nocy, len);
                 flat_data[idx++] = nocx;
                 flat_data[idx++] = nocy;
                 flat_data[idx++] = len;
@@ -529,7 +529,7 @@ generate_halo_kernel_config_tensors(
                 remote_ref_counts[ref_ind]++;
                 for (size_t i = 0; i < key_data.second.size(); ++i) {
                     auto [src_start, dst_start, length] = key_data.second[i];
-                    printf("    src_start: %d, dst_start: %d, length: %d\n", src_start, dst_start, length);
+                    // printf("    src_start: %d, dst_start: %d, length: %d\n", src_start, dst_start, length);
                     flat_data[idx++] = src_start;
                     flat_data[idx++] = dst_start;
                     flat_data[idx++] = length;
