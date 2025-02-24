@@ -23,7 +23,7 @@ uint32_t get_estimated_size_of_cbs(
 
 uint32_t get_max_l1_space(const Tensor& input_tensor_a);
 
-bool enough_available_space(
+bool is_enough_space(
     const Tensor& input_tensor_a,
     const uint32_t input_single_tile_size,
     const uint32_t output_single_tile_size,
