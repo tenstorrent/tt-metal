@@ -63,8 +63,8 @@ constexpr uint32_t w_depth = get_compile_time_arg_val(25);
 constexpr uint32_t n_depth = get_compile_time_arg_val(26);
 constexpr uint32_t s_depth = get_compile_time_arg_val(27);
 
-volatile tt_l1_ptr fabric_client_interface_t* client_interface =
-    (volatile tt_l1_ptr fabric_client_interface_t*)client_interface_addr;
+volatile tt_l1_ptr fabric_pull_client_interface_t* client_interface =
+    (volatile tt_l1_ptr fabric_pull_client_interface_t*)client_interface_addr;
 
 uint32_t target_address;
 uint32_t noc_offset;

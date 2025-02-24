@@ -36,6 +36,7 @@ static_assert(
     "LOG_BASE_2_NUM_CHANNELS_PER_UINT32 must be equal to log2(sizeof(std::uint32_t) / sizeof(chan_id_t))");
 
 static constexpr std::uint32_t CLIENT_INTERFACE_SIZE = 3280;
+static constexpr std::uint32_t PULL_CLIENT_INTERFACE_SIZE = 112;
 static constexpr std::uint32_t PACKET_WORD_SIZE_BYTES = 16;
 static constexpr std::uint32_t PACKET_HEADER_SIZE_BYTES = 48;
 static constexpr std::uint32_t PACKET_HEADER_SIZE_WORDS = PACKET_HEADER_SIZE_BYTES / PACKET_WORD_SIZE_BYTES;

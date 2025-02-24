@@ -300,7 +300,7 @@ int main(int argc, char** argv) {
         uint32_t routing_table_addr = hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
         uint32_t gk_interface_addr = routing_table_addr + sizeof(fabric_router_l1_config_t) * 4;
         uint32_t client_interface_addr = routing_table_addr + sizeof(fabric_router_l1_config_t) * 4;
-        uint32_t client_pull_req_buf_addr = client_interface_addr + sizeof(fabric_client_interface_t);
+        uint32_t client_pull_req_buf_addr = client_interface_addr + sizeof(fabric_pull_client_interface_t);
         uint32_t socket_info_addr = gk_interface_addr + sizeof(gatekeeper_info_t);
         log_info(LogTest, "GK Routing Table Addr = 0x{:08X}", routing_table_addr);
         log_info(LogTest, "GK Info Addr = 0x{:08X}", gk_interface_addr);

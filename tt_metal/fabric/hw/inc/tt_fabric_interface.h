@@ -339,8 +339,19 @@ typedef struct _fabric_client_interface {
     socket_handle_t socket_handles[MAX_SOCKETS];
 } fabric_client_interface_t;
 
+typedef struct _fabric_pull_client_interface {
+    uint64_t pull_req_buf_addr;
+    uint32_t num_routing_planes;
+    uint32_t routing_tables_l1_offset;
+    uint32_t return_status[3];
+    local_pull_request_t local_pull_request;
+} fabric_pull_client_interface_t;
+
 static_assert(sizeof(fabric_client_interface_t) % 16 == 0);
 static_assert(sizeof(fabric_client_interface_t) == CLIENT_INTERFACE_SIZE);
+
+static_assert(sizeof(fabric_pull_client_interface_t) % 16 == 0);
+static_assert(sizeof(fabric_pull_client_interface_t) == PULL_CLIENT_INTERFACE_SIZE);
 
 constexpr uint32_t FABRIC_ROUTER_MISC_START = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
 constexpr uint32_t FABRIC_ROUTER_MISC_SIZE = 256;
