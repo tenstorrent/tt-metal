@@ -18,6 +18,13 @@ using FlatbufferCoreCoordVector = flatbuffers::Offset<flatbuffers::Vector<flatbu
 using FlatbufferUInt32VecOfVec =
     flatbuffers::Offset<flatbuffers::Vector<flatbuffers::Offset<flatbuffer::UInt32Vector>>>;
 
+flatbuffers::Offset<flatbuffer::CoreCoord> to_flatbuffer(
+    flatbuffers::FlatBufferBuilder& builder, const CoreCoord& coord);
+flatbuffers::Offset<flatbuffer::CoreRange> to_flatbuffer(
+    flatbuffers::FlatBufferBuilder& builder, const CoreRange& range);
+flatbuffers::Offset<flatbuffer::CoreRangeSet> to_flatbuffer(
+    flatbuffers::FlatBufferBuilder& builder, const CoreRangeSet& range_set);
+
 std::pair<flatbuffer::CoreSpec, ::flatbuffers::Offset<void>> to_flatbuffer(
     flatbuffers::FlatBufferBuilder& builder, const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec);
 
