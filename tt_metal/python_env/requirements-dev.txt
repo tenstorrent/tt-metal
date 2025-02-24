@@ -4,8 +4,7 @@
 
 loguru
 
-# For github workflow unit test failure annotations
-xmltodict
+# For github workflow pytest failure annotations
 pytest-github-actions-annotate-failures==0.3.0
 
 # During dep resolution, black may install platformdirs >=4.0.0, which is

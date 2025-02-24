@@ -6,3 +6,5 @@ pydantic
 toolz
 defusedxml
 pytest
+# For github workflow gtest failure annotations
+xmltodict

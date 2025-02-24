@@ -9,9 +9,15 @@ inputs:
 runs:
   using: "composite"
   steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: 3.8
+        cache: 'pip'
+        cache-dependency-path: 'infra/requirements-infra.txt'
     - name: Generate gtest failure messages
       id: generate-gtest-message
       shell: bash
       run: |
         set +e
+        pip install -r infra/requirements-infra.txt
         python3 .github/scripts/data_analysis/print_gtest_annotations.py ${{ inputs.path }}
