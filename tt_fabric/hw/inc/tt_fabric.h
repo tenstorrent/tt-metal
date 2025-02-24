@@ -178,9 +178,6 @@ typedef struct fvc_outbound_push_state {
                 // Wait for a full packet header to arrive before advancing to next packet.
                 // uint32_t num_words_before_wrap = words_before_local_buffer_wrap();
                 uint32_t* packet_size = (uint32_t*)(get_local_buffer_read_addr());
-                // if (num_words_before_wrap < 3) {
-                //     packet_size = (uint32_t*)(buffer_start + (2 - num_words_before_wrap) * 16);
-                // }
                 uint32_t temp = *packet_size << 2;
                 packet_words_remaining = ((temp + ((PACKET_WORD_SIZE_BYTES << 2) - 1)) >> 6);
                 *packet_size = (temp >> 2) | buffer_id_patch;
@@ -207,36 +204,14 @@ typedef struct fvc_outbound_push_state {
             words_to_forward = remote_fvc_buffer_space;
         }
 
-        // uint32_t words_remaining = words_to_forward;
         uint32_t num_words_before_wrap =
             min(words_before_local_buffer_wrap(), words_before_remote_buffer_wrap(remote_wrptr));
-        // num_words_before_wrap = min(num_words_before_wrap, words_before_remote_buffer_wrap());
         words_to_forward = min(words_to_forward, num_words_before_wrap);
 
         uint32_t src_addr = buffer_start + (local_rdptr << 4);
         uint32_t dest_addr = remote_buffer_start + (remote_wrptr << 4);
 
         internal_::eth_send_packet_v2(0, src_addr, dest_addr, words_to_forward);
-        /*
-                if (words_remaining <= num_words_before_wrap) {
-                    //uint32_t offset = local_rdptr << 4;
-                    uint32_t src_addr = buffer_start + (local_rdptr << 4);
-                    uint32_t dest_addr = remote_buffer_start + (remote_wrptr << 4);
-
-                    internal_::eth_send_packet_v2(0, src_addr, dest_addr, words_remaining);
-                    advance_local_rdptr(words_remaining);
-                    advance_remote_wrptr(words_remaining);
-                } else {
-                    uint32_t src_addr = get_local_buffer_read_addr();
-                    uint32_t dest_addr = remote_buffer_start + (remote_wrptr << 4);
-                    internal_::eth_send_packet_v2(0, src_addr, dest_addr, num_words_before_wrap);
-                    internal_::eth_send_packet_v2(
-                        0, buffer_start, remote_buffer_start, words_remaining - num_words_before_wrap);
-                    local_rdptr = words_remaining - num_words_before_wrap;
-                    remote_wrptr = words_remaining - num_words_before_wrap;
-                    *update_receiver_buffer_space = (-words_remaining) << REMOTE_DEST_BUF_WORDS_FREE_INC;
-                }
-        */
         // send word credits to receiver
         eth_write_remote_reg((uint32_t)words_sent_remote_update, words_to_forward << REMOTE_DEST_BUF_WORDS_FREE_INC);
         advance_local_rdptr(words_to_forward);
@@ -254,7 +229,6 @@ typedef struct fvc_inbound_push_state {
     chan_payload_ptr inbound_wrptr;
     chan_payload_ptr inbound_rdptr;
     uint32_t my_id;
-    uint32_t packet_in_progress;
     uint32_t command;
     uint32_t for_local_chip;
     uint32_t words_inbound;
@@ -268,7 +242,6 @@ typedef struct fvc_inbound_push_state {
     uint32_t remote_wrptr[4];
     uint32_t remote_wrptr_direction;
     uint32_t router_push_addr;
-    bool curr_packet_valid;
     bool packet_corrupted;
     uint32_t packet_dest;
     uint32_t* packet_word_0;
@@ -473,13 +446,11 @@ typedef struct fvc_inbound_push_state {
 
     template <uint8_t fvc_mode = FVC_MODE_ROUTER>
     FORCE_INLINE bool get_curr_packet_valid() {
-        if (!curr_packet_valid) {
-            if (get_num_words_available<fvc_mode>() >= PACKET_HEADER_SIZE_WORDS) {
-                // Wait for a full packet header to arrive before advancing to next packet.
-                this->advance_next_packet<fvc_mode>();
-            }
+        if (get_num_words_available<fvc_mode>() >= PACKET_HEADER_SIZE_WORDS) {
+            // Wait for a full packet header to arrive before advancing to next packet.
+            return this->advance_next_packet<fvc_mode>();
         }
-        return curr_packet_valid;
+        return false;
     }
 
     FORCE_INLINE uint32_t get_local_buffer_read_addr() {
@@ -509,30 +480,26 @@ typedef struct fvc_inbound_push_state {
     }
 
     template <uint8_t fvc_mode = FVC_MODE_ROUTER>
-    FORCE_INLINE void advance_next_packet() {
-        // tt_l1_ptr uint32_t* packet_header_ptr = (uint32_t*)&current_packet_header;
-        // volatile tt_l1_ptr uint32_t* next_header_ptr =
-        //     reinterpret_cast<tt_l1_ptr uint32_t*>(get_local_buffer_read_addr());
+    FORCE_INLINE bool advance_next_packet() {
         packet_word_0 = (uint32_t*)get_local_buffer_read_addr();
         packet_word_1 =
             reinterpret_cast<tt_l1_ptr uint32_t*>(buffer_start + (out_rdptr_inc(1) * PACKET_WORD_SIZE_BYTES));
         packet_word_2 =
             reinterpret_cast<tt_l1_ptr uint32_t*>(buffer_start + (out_rdptr_inc(2) * PACKET_WORD_SIZE_BYTES));
 
-        // uint32_t words_before_wrap = words_before_buffer_wrap(fvc_out_rdptr);
         uint32_t temp = packet_word_0[0];
         sender_buffer_index = temp >> 30;
         temp &= 0x3FFFFFFF;
         packet_words_remaining = (temp + PACKET_WORD_SIZE_BYTES - 1) >> 4;
         if (words_inbound < packet_words_remaining) {
             // Full packet not received.
-            return;
+            return false;
         }
         if constexpr (fvc_mode == FVC_MODE_ROUTER) {
             free_sender_buffer_space(packet_words_remaining);
         }
         for_local_chip = packet_word_0[1] == my_id;
-        curr_packet_valid = true;
+        return true;
     }
 
     uint32_t get_next_hop_router_noc_xy() {
@@ -633,7 +600,6 @@ typedef struct fvc_inbound_push_state {
         uint32_t words_available = packet_words_remaining;
         words_cleared += packet_words_remaining;
         packet_words_remaining = 0;
-        curr_packet_valid = false;
         return words_available;
     }
 
@@ -688,7 +654,6 @@ typedef struct fvc_inbound_push_state {
                         31,
                         false);
                 }
-                curr_packet_valid = false;
             } else if (command & ATOMIC_INC) {
                 uint64_t noc_addr = ((uint64_t)current_packet_header.session.target_offset_h << 32) |
                                     current_packet_header.session.target_offset_l;
@@ -704,7 +669,6 @@ typedef struct fvc_inbound_push_state {
                 packet_words_remaining = 0;
                 advance_out_rdptr(PACKET_HEADER_SIZE_WORDS);
                 free_receiver_buffer_space(PACKET_HEADER_SIZE_WORDS);
-                curr_packet_valid = false;
             }
         } else {
             // push to next hop.
