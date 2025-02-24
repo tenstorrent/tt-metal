@@ -323,11 +323,11 @@ void MeshDevice::reshape(const MeshShape& new_shape) {
 }
 
 bool MeshDevice::close() {
-    sub_device_manager_tracker_.reset();
     for (const auto& submesh : submeshes_) {
         submesh->close();
     }
     submeshes_.clear();
+    sub_device_manager_tracker_.reset();
     if (scoped_devices_) {
         scoped_devices_.reset();
     }
