@@ -2168,6 +2168,7 @@ TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, MultiInputReader_lotsP
     constexpr size_t num_devices = 4;
     RunFabricMcastFullTensorPropagateTest(tensor_shape, distance_dest_device, num_devices, true);
 }
+TEST(WorkerCclCommandProcessingKernelFabricMulticastMode, DoNotSubmit) { ASSERT_EQ(0, 1); }
 
 bool RunPipelinedWorkersTest(
 
