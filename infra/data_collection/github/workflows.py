@@ -264,5 +264,5 @@ def get_tests_from_test_report_path(test_report_path):
 
         return tests
     else:
-        logger.warning("XML is not pytest junit format (gtest?), skipping for now")
+        logger.warning("XML is not pytest junit or gtest format, or no tests were found in the XML, skipping for now")
         return []

@@ -134,18 +134,18 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
         int worker_endpoint = dram_view["worker_endpoint"].as<int>();
         size_t address_offset = dram_view["address_offset"].as<size_t>();
 
-        if (channel >= dram_cores.size()) {
+        if (channel >= get_grid_size(CoreType::DRAM).x) {
             TT_THROW(
                 "DRAM channel {} does not exist in the device descriptor, but is specified in dram_view.channel",
                 channel);
         }
-        if (eth_endpoint >= dram_cores[channel].size()) {
+        if (eth_endpoint >= get_grid_size(CoreType::DRAM).y) {
             TT_THROW(
                 "DRAM subchannel {} does not exist in the device descriptor, but is specified in "
                 "dram_view.eth_endpoint",
                 eth_endpoint);
         }
-        if (worker_endpoint >= dram_cores[channel].size()) {
+        if (worker_endpoint >= get_grid_size(CoreType::DRAM).y) {
             TT_THROW(
                 "DRAM subchannel {} does not exist in the device descriptor, but is specified in "
                 "dram_view.worker_endpoint",
@@ -153,8 +153,12 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
         }
 
         this->dram_view_channels.push_back(channel);
-        this->dram_view_eth_cores.push_back(dram_cores[channel][eth_endpoint]);
-        this->dram_view_worker_cores.push_back(dram_cores[channel][worker_endpoint]);
+        tt::umd::CoreCoord eth_dram_endpoint_coord =
+            get_dram_core_for_channel(channel, eth_endpoint, CoordSystem::VIRTUAL);
+        this->dram_view_eth_cores.push_back({eth_dram_endpoint_coord.x, eth_dram_endpoint_coord.y});
+        tt::umd::CoreCoord worker_endpoint_coord =
+            get_dram_core_for_channel(channel, worker_endpoint, CoordSystem::VIRTUAL);
+        this->dram_view_worker_cores.push_back({worker_endpoint_coord.x, worker_endpoint_coord.y});
         this->dram_view_address_offsets.push_back(address_offset);
     }
 }
@@ -226,8 +230,7 @@ void metal_SocDescriptor::update_pcie_cores(const BoardType& board_type) {
 // removing the harvested physical coordiniates Metal needs the true harvesting state so we generate physical
 // descriptors from virtual coordinates We also initialize additional lookup tables to translate physical coordinates to
 // virtual coordinates because UMD APIs expect virtual coordinates.
-metal_SocDescriptor::metal_SocDescriptor(
-    const tt_SocDescriptor& other, uint32_t harvesting_mask, const BoardType& board_type) :
+metal_SocDescriptor::metal_SocDescriptor(const tt_SocDescriptor& other, const BoardType& board_type) :
     tt_SocDescriptor(other) {
     this->load_dram_metadata_from_device_descriptor();
     this->generate_logical_eth_coords_mapping();
