@@ -2676,7 +2676,7 @@ def test_shallow_conv_with_tiled_input(device):
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize("tiled_input", [True, False])
 @pytest.mark.parametrize("input_on_device", [True, False])
-def test_dram_input_mm_conv(device, tiled_input, input_on_device):
+def test_dram_input_mm_conv(device, torch_tensor_map, tiled_input, input_on_device):
     batch_size = 1
     out_channels, in_channels = 256, 1024
     img_h, img_w = 128, 128
@@ -2689,10 +2689,10 @@ def test_dram_input_mm_conv(device, tiled_input, input_on_device):
     pad = (0, 0)
 
     kernel_shape = (out_channels, in_channels, kernel_h, kernel_w)
-    torch_kernel = torch.randn(kernel_shape, dtype=torch.bfloat16)
+    torch_kernel = randomize_torch_tensor(torch_tensor_map, kernel_shape)
     tt_kernel = ttnn.from_torch(torch_kernel)
 
-    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+    torch_input = randomize_torch_tensor(torch_tensor_map, input_shape)
     if input_on_device:
         tt_input = ttnn.from_torch(torch_input, device=device)
         tt_input = ttnn.permute(tt_input, (0, 2, 3, 1))

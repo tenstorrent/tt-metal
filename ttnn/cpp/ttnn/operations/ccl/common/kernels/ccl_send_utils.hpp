@@ -96,7 +96,7 @@ void mcast_contig_pages_to_noc_address(
     size_t backward_direction_num_hops) {
     const size_t payload_size_bytes = contig_pages_advanced * payload_page_size;
     const auto [dest_noc_xy, dest_addr] = get_noc_address_components(noc0_dest_addr);
-    const size_t payload_l1_address = l1_read_addr + sizeof(tt::fabric::PacketHeader);
+    const size_t payload_l1_address = l1_read_addr + sizeof(PACKET_HEADER_TYPE);
 
     // Local chip write
     noc_async_write(
@@ -106,15 +106,15 @@ void mcast_contig_pages_to_noc_address(
         // coords it is necessary
         get_noc_addr(dest_noc_xy.x, dest_noc_xy.y, dest_addr, noc_index),
         payload_size_bytes);
-    size_t packet_send_size_bytes = payload_size_bytes + sizeof(tt::fabric::PacketHeader);
+    size_t packet_send_size_bytes = payload_size_bytes + sizeof(PACKET_HEADER_TYPE);
 
     // Forward fabric connection
     if (has_forward_fabric_connection) {
         static_assert(
-            ((sizeof(tt::fabric::PacketHeader) - 1) & sizeof(tt::fabric::PacketHeader)) == 0,
-            "sizeof(sizeof(tt::fabric::PacketHeader)) is not a power of two which violates the below assertion");
+            is_power_of_2(sizeof(PACKET_HEADER_TYPE)),
+            "sizeof(tt::fabric::PacketHeader) is not a power of two which violates the below assertion");
 
-        auto& pkt_hdr = *reinterpret_cast<tt::fabric::PacketHeader*>(l1_read_addr);
+        auto& pkt_hdr = *reinterpret_cast<PACKET_HEADER_TYPE*>(l1_read_addr);
         pkt_hdr
             .to_chip_multicast(
                 tt::fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(forward_direction_num_hops)})
@@ -125,7 +125,7 @@ void mcast_contig_pages_to_noc_address(
 
     // Backward fabric connection
     if (has_backward_fabric_connection) {
-        auto& pkt_hdr = *reinterpret_cast<tt::fabric::PacketHeader*>(l1_read_addr);
+        auto& pkt_hdr = *reinterpret_cast<PACKET_HEADER_TYPE*>(l1_read_addr);
         pkt_hdr
             .to_chip_multicast(
                 tt::fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(backward_direction_num_hops)})
@@ -286,11 +286,11 @@ void mcast_sync_signal_to_addr(
                                size_t remote_sem_l1_addr,
                                size_t directional_num_hops) {
         static_assert(
-            ((sizeof(tt::fabric::PacketHeader) - 1) & sizeof(tt::fabric::PacketHeader)) == 0,
-            "sizeof(sizeof(tt::fabric::PacketHeader)) is not a power of two which violates the below assertion");
-        ASSERT((pkt_addr & (sizeof(tt::fabric::PacketHeader) - 1)) == 0);
+            is_power_of_2(sizeof(PACKET_HEADER_TYPE)),
+            "sizeof(tt::fabric::PacketHeader) is not a power of two which violates the below assertion");
+        ASSERT((pkt_addr & (sizeof(PACKET_HEADER_TYPE) - 1)) == 0);
 
-        auto& pkt_hdr = *reinterpret_cast<tt::fabric::PacketHeader*>(pkt_addr);
+        auto& pkt_hdr = *reinterpret_cast<PACKET_HEADER_TYPE*>(pkt_addr);
         pkt_hdr
             .to_chip_multicast(tt::fabric::MulticastRoutingCommandHeader{1, static_cast<uint8_t>(directional_num_hops)})
             .to_noc_unicast_atomic_inc(tt::fabric::NocUnicastAtomicIncCommandHeader{
