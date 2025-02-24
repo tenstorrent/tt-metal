@@ -48,6 +48,10 @@ void Transpose::validate(const std::vector<Tensor>& input_tensors) const {
     }
     uint32_t ROW_MAJOR_STICK_WIDTH = 16;
     if (this->dim == TransposeOpDim::WH) {
+        TT_FATAL(
+            !(input_tensor.element_size() > 2 && input_tensor.device()->arch() == tt::ARCH::GRAYSKULL),
+            "Grayskull does not support 4B or bigger element sizes for LLK transposes");
+        TT_FATAL(input_tensor.get_dtype() != DataType::UINT32, "Uint32 is not a supported data type for LLK transpose");
         if (row_major) {
             TT_FATAL(
                 (W * input_tensor.element_size()) % ROW_MAJOR_STICK_WIDTH == 0 &&

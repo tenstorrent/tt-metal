@@ -44,6 +44,18 @@ void PermuteDeviceOperation::validate_on_program_cache_miss(
         attributes.dims.size() == tensor_args.input_tensor.get_logical_shape().rank(),
         "Permute dimensions must match input tensor rank");
     TT_FATAL(tensor_args.input_tensor.is_sharded() == false, "Permute operation does not support sharded input tensor");
+    TT_FATAL(
+        !(tensor_args.input_tensor.element_size() > 2 &&
+          tensor_args.input_tensor.device()->arch() == tt::ARCH::GRAYSKULL),
+        "Grayskull does not support 4B or bigger element sizes for LLK transposes");
+    bool tile_invariant =
+        ((dims[rank - 1] == rank - 1 && dims[rank - 2] == rank - 2) ||
+         (dims[rank - 1] == rank - 2 && dims[rank - 2] == rank - 1));
+    TT_FATAL(
+        tensor_args.input_tensor.get_dtype() == DataType::BFLOAT16 ||
+            tensor_args.input_tensor.get_dtype() == DataType::FLOAT32 ||
+            (tile_invariant && (tensor_args.input_tensor.get_dtype() == DataType::BFLOAT8_B)),
+        "Only float32, bfloat16 and non-tile breaking bfloat8_b data type permutes are supported");
 }
 
 void PermuteDeviceOperation::validate_on_program_cache_hit(
