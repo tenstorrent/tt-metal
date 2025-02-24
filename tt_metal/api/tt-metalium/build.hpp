@@ -46,6 +46,8 @@ class JitBuildEnv {
     friend class JitBuildActiveEthernet;
     friend class JitBuildIdleEthernet;
 
+    static const bool USE_CCACHE;
+
 public:
     JitBuildEnv();
     void init(uint32_t build_key, tt::ARCH arch, const std::map<std::string, std::string>& device_kernel_defines);
