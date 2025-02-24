@@ -537,7 +537,7 @@ def test_tt_attn_forward(
     )
 
     # Convert TT outputs to torch tensors
-    tt_x_torch = to_torch_tensor(tt_x_out, mesh_device, dim=-1)
+    tt_x_torch = to_torch_tensor(tt_x_out, mesh_device, dim=-2)
     tt_y_torch = to_torch_tensor(tt_y_out, mesh_device, dim=-1)
 
     # unpad TT

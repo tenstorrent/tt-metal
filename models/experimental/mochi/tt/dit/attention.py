@@ -11,6 +11,7 @@ from models.experimental.mochi.tt.common import (
     as_sharded_tensor,
     as_replicated_tensor,
     col_parallel_linear,
+    load_linear,
     matmul_2d_config,
 )
 from functools import partial
@@ -84,7 +85,7 @@ class AsymmetricAttention(LightweightModule):
             "qkv_y", self.qkv_bias, weight_cache_path, state_dict, state_dict_prefix
         )
 
-        self.proj_x, self.proj_x_bias = col_parallel_linear(
+        self.proj_x, self.proj_x_bias = load_linear(
             "proj_x", self.out_bias, weight_cache_path, state_dict, state_dict_prefix, self.mesh_device
         )
         if update_y:
@@ -101,7 +102,7 @@ class AsymmetricAttention(LightweightModule):
 
         # TODO: using qkv_x program config leads to worse PCC
         self.qkv_x_config = matmul_config(self.local_vision_seq_len, dim_x, 3 * self.num_heads * self.head_dim, (8, 8))
-        self.proj_x_config = partial(matmul_2d_config, k=dim_x, n=dim_x // self.num_devices, grid_size=(8, 8))
+        self.proj_x_config = partial(matmul_config, k=dim_x, n=dim_x, in0_block_w=4, grid_size=(8, 8))
         self.mm_compute_kernel_config = ttnn.WormholeComputeKernelConfig(
             math_fidelity=ttnn.MathFidelity.HiFi2,
             math_approx_mode=True,
@@ -181,6 +182,18 @@ class AsymmetricAttention(LightweightModule):
             dim=-3,
         )
         return col_parallel_tensor
+
+    def _col_to_seq_parallel_tensor(self, col_parallel_tensor, col_dim, seq_dim):
+        col_parallel_host_tensor = ttnn.from_device(col_parallel_tensor)
+        torch_tensor = ttnn.to_torch(
+            col_parallel_host_tensor, mesh_composer=ConcatMeshToTensor(self.mesh_device, dim=col_dim)
+        )
+        seq_parallel_tensor = as_sharded_tensor(
+            torch_tensor,
+            self.mesh_device,
+            dim=seq_dim,
+        )
+        return seq_parallel_tensor
 
     def run_qkv_y(self, y):
         # Compute QKV projection
@@ -388,16 +401,14 @@ class AsymmetricAttention(LightweightModule):
             y: (B, L, dim_y) Text token features
         """
         assert B == 1, "Batch size must be 1"
-        N = out_1BNX.shape[2]
         assert out_1BNX.shape[1] == B, "Batch size must be 1"
         assert (out_joint_1BLX is None) == uncond
-        local_dim = self.dim_x // self.num_devices  # No head parallel support yet
+        local_dim = self.dim_x  # No head parallel support yet
 
         if self.num_devices > 1:
-            out_1BNX = ttnn.all_gather(
-                out_1BNX,
-                dim=3,
-            )
+            out_1BNX = self._col_to_seq_parallel_tensor(out_1BNX, col_dim=3, seq_dim=2)
+
+        N = out_1BNX.shape[2]
 
         # BUG: This linear clobbers `out_joint_1BLX` if padded and certain program configs are used
         out_1BNX = ttnn.linear(

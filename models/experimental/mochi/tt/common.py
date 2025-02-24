@@ -280,6 +280,23 @@ def col_parallel_linear(name, bias, weight_cache_path, state_dict, state_dict_pr
     return w, b
 
 
+def load_linear(name, bias, weight_cache_path, state_dict, state_dict_prefix, mesh_device):
+    w = torch.transpose(state_dict[f"{state_dict_prefix}.{name}.weight"], -2, -1)
+    b = state_dict[f"{state_dict_prefix}.{name}.bias"] if bias else None
+    w = as_replicated_tensor(
+        w,
+        mesh_device,
+        cache_file_name=weight_cache_path / (state_dict_prefix + f".{name}.weight"),
+    )
+    if b is not None:
+        b = as_replicated_tensor(
+            b,
+            mesh_device,
+            cache_file_name=weight_cache_path / (state_dict_prefix + f".{name}.bias"),
+        )
+    return w, b
+
+
 def create_linear_layer(
     name: str,
     weight_cache_path: Path,

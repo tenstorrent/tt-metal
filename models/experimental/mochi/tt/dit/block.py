@@ -156,18 +156,6 @@ class AsymmetricJointBlock(LightweightModule):
         y_1BLY = residual_tanh_gated_rmsnorm(y_1BLY, y_res_1BLY, gate_y_B11Y)
         return y_1BLY
 
-    def _col_to_seq_parallel_tensor(self, col_parallel_tensor, col_dim, seq_dim):
-        col_parallel_host_tensor = ttnn.from_device(col_parallel_tensor)
-        torch_tensor = ttnn.to_torch(
-            col_parallel_host_tensor, mesh_composer=ConcatMeshToTensor(self.mesh_device, dim=col_dim)
-        )
-        seq_parallel_tensor = as_sharded_tensor(
-            torch_tensor,
-            self.mesh_device,
-            dim=seq_dim,
-        )
-        return seq_parallel_tensor
-
     def forward(
         self,
         x: ttnn.Tensor,
@@ -248,7 +236,7 @@ class AsymmetricJointBlock(LightweightModule):
                 scale_msa_y_B11Y = mod_y_B11C
 
         # Self-attention block
-        x_attn_shard_1BNX, y_attn_shard_1BLY = self.attn(
+        x_attn_1BNX, y_attn_shard_1BLY = self.attn(
             x_1BNX,
             y_1BLY,
             scale_x=scale_msa_x_B11X,
@@ -258,12 +246,6 @@ class AsymmetricJointBlock(LightweightModule):
             trans_mat=trans_mat,
             uncond=uncond,
         )
-
-        if self.num_devices > 1:
-            # Collect hidden-dim-fractured attention outputs
-            x_attn_1BNX = self._col_to_seq_parallel_tensor(x_attn_shard_1BNX, col_dim=3, seq_dim=2)
-        else:
-            x_attn_1BNX = x_attn_shard_1BNX
 
         assert x_attn_1BNX.shape[2] == N
         x_1BNX = residual_tanh_gated_rmsnorm(x_1BNX, x_attn_1BNX, gate_msa_x_B11X)
