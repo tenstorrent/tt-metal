@@ -181,20 +181,11 @@ void device_module(py::module& m_device) {
             .def(
                 "enable_async",
                 [](IDevice* device, bool enable) {
-                    if (!enable) {
-                        device->enable_async(false);
+                    if (enable) {
+                        tt::log_warning("Async mode is disabled for single device, ignoring enable_async call");
                         return;
                     }
-
-                    bool single_device = true;
-                    if (auto mesh_device = dynamic_cast<MeshDevice*>(device)) {
-                        single_device = mesh_device->get_devices().size() == 1;
-                    }
-                    if (single_device) {
-                        tt::log_warning("Async mode is disabled for single device, ignoring enable_async call");
-                    } else {
-                        device->enable_async(true);
-                    }
+                    device->enable_async(enable);
                 })
             .def(
                 "create_sub_device_manager",

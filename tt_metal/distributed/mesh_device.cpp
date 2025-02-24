@@ -356,7 +356,12 @@ std::vector<std::shared_ptr<MeshDevice>> MeshDevice::get_submeshes() const { ret
 std::ostream& operator<<(std::ostream& os, const MeshDevice& mesh_device) { return os << mesh_device.to_string(); }
 
 void MeshDevice::enable_async(bool enable) {
-    for (auto device : this->get_devices()) {
+    auto devices = this->get_devices();
+    if (enable && devices.size() == 1) {
+        tt::log_warning("Async mode is disabled for single device, ignoring enable_async call");
+        return;
+    }
+    for (auto device : devices) {
         device->enable_async(enable);
     }
 }
