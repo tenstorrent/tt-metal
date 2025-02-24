@@ -38,7 +38,8 @@ void kernel_main() {
     uint32_t src_buffer_l1_addr = get_write_ptr(cb_id_in0);
     volatile tt_l1_ptr uint16_t* in_stick = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(src_buffer_l1_addr);
 
-    uint32_t index[dims - 1];  // To hold current index in each of the first dims-1 dimensions
+    uint32_t index[dims];  // To hold current index in each of the first dims-1 dimensions
+    index[dims - 1] = 0;   // Initialize the last index to 0
     for (uint32_t i = 0; i < dims - 1; i++) {
         index[i] = starts[i];  // Initialize the index with the start values
     }
@@ -68,16 +69,19 @@ void kernel_main() {
             out_stick_id++;
         }
         cb_push_back(cb_id_out0, 1);
-
-        // Increment the indices for the first dims-1 dimensions
-        for (int32_t i = dims - 2; i >= 0; i--) {  // Start from the last of the first dims-1
-            index[i] += strides[i];
-            if (index[i] < ends[i]) {
-                break;  // Successfully incremented this dimension, no carry over
-            } else {
-                index[i] = starts[i];  // Reset this dimension and carry over to the next
-                if (i == 0) {
-                    done = true;  // If the first dimension is reset, we've completed all iterations
+        if constexpr (dims == 1) {
+            break;  // If there's only one dimension, we're done
+        } else {
+            // Increment the indices for the first dims-1 dimensions
+            for (int32_t i = dims - 2; i >= 0; i--) {  // Start from the last of the first dims-1
+                index[i] += strides[i];
+                if (index[i] < ends[i]) {
+                    break;  // Successfully incremented this dimension, no carry over
+                } else {
+                    index[i] = starts[i];  // Reset this dimension and carry over to the next
+                    if (i == 0) {
+                        done = true;  // If the first dimension is reset, we've completed all iterations
+                    }
                 }
             }
         }
