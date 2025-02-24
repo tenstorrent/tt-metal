@@ -42,8 +42,10 @@ constexpr uint32_t RUN_MSG_DONE = 0;
 // 0x80808000 is a micro-optimization, calculated with 1 riscv insn
 constexpr uint32_t RUN_SYNC_MSG_INIT = 0x40;
 constexpr uint32_t RUN_SYNC_MSG_GO = 0x80;
+// Trigger loading CBs (and IRAM) before actually running the kernel.
+constexpr uint32_t RUN_SYNC_MSG_LOAD = 0x1;
+constexpr uint32_t RUN_SYNC_MSG_WAITING_FOR_RESET = 0x2;
 constexpr uint32_t RUN_SYNC_MSG_DONE = 0;
-constexpr uint32_t RUN_SYNC_MSG_ALL_TRISCS_GO = 0x80808000;
 constexpr uint32_t RUN_SYNC_MSG_ALL_GO = 0x80808080;
 constexpr uint32_t RUN_SYNC_MSG_ALL_SLAVES_DONE = 0;
 
