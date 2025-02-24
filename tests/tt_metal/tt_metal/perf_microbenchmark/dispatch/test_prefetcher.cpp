@@ -21,6 +21,8 @@
 #include <tt-metalium/hal.hpp>
 #include "llrt.hpp"
 
+#include "test_common.hpp"
+
 #define CQ_PREFETCH_CMD_BARE_MIN_SIZE tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::HOST)
 
 constexpr uint32_t DEFAULT_TEST_TYPE = 0;

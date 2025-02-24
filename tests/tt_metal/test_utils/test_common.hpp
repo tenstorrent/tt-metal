@@ -23,7 +23,7 @@ template <class T>
 constexpr std::false_type always_false{};
 
 template <class T>
-T parse(std::string const& s) {
+T parse(const std::string& s) {
     if constexpr (std::is_same_v<T, std::uint32_t>) {
         return std::stoul(s, 0, 0);
     } else if constexpr (std::is_same_v<T, int>) {
@@ -39,7 +39,7 @@ T parse(std::string const& s) {
     }
 }
 
-inline std::string strip(std::string const& s) {
+inline std::string strip(const std::string& s) {
     std::string whitespace = " \t\n";
     std::size_t start = s.find_first_not_of(whitespace);
     std::size_t end = s.find_last_not_of(whitespace);

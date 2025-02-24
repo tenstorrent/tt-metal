@@ -27,6 +27,8 @@
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 #include "tt_metal/tt_metal/common/matmul_test_utils.hpp"
 
+#include "test_common.hpp"
+
 using std::vector;
 using namespace tt;
 using std::chrono::duration_cast;

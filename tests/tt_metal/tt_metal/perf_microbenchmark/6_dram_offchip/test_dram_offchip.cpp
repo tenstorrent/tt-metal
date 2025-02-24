@@ -19,6 +19,8 @@
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 #include <tt-metalium/work_split.hpp>
 
+#include "test_common.hpp"
+
 using namespace tt;
 using std::chrono::duration_cast;
 using std::chrono::microseconds;

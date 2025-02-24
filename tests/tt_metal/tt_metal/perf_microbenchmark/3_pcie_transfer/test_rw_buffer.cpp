@@ -17,6 +17,8 @@
 #include "tt_cluster.hpp"
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 
+#include "test_common.hpp"
+
 using namespace tt;
 using namespace tt::tt_metal;
 using std::chrono::duration_cast;

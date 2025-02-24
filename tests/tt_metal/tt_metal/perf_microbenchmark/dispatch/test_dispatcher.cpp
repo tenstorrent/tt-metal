@@ -14,6 +14,8 @@
 #include <tt-metalium/cq_commands.hpp>
 #include "common.h"
 
+#include "test_common.hpp"
+
 constexpr uint32_t DEFAULT_ITERATIONS = 10000;
 constexpr uint32_t DEFAULT_WARMUP_ITERATIONS = 100;
 constexpr uint32_t DEFAULT_DISPATCH_BUFFER_LOG_PAGE_SIZE = 12;

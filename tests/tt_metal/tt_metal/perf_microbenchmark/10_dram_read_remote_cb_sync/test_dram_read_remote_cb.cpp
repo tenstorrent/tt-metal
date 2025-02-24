@@ -28,6 +28,8 @@
 #include "tt_metal/tt_metal/common/matmul_test_utils.hpp"
 #include <yaml-cpp/yaml.h>
 
+#include "test_common.hpp"
+
 using std::vector;
 using namespace tt;
 using std::chrono::duration_cast;

@@ -13,6 +13,7 @@
 //#include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "test_common.hpp"
+#include "routing_test_common.hpp"
 #include "eth_l1_address_map.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
 #include <numeric>

@@ -13,6 +13,8 @@
 #include <tt-metalium/command_queue.hpp>
 #include "tt_metal/tt_metal/perf_microbenchmark/common/util.hpp"
 
+#include "test_common.hpp"
+
 using std::vector;
 using namespace tt;
 using namespace tt::tt_metal;
