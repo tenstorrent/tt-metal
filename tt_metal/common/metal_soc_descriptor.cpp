@@ -215,7 +215,7 @@ void metal_SocDescriptor::update_pcie_cores(const BoardType& board_type) {
         case UNKNOWN: {  // Workaround for BHs running FW that does not return board type in the cluster yaml
             this->pcie_cores = {CoreCoord(11, 0)};
         } break;
-        case P150A: {
+        case P150: {
             this->pcie_cores = {CoreCoord(2, 0)};
         } break;
         default: TT_THROW("Need to update PCIe core assignment for new Blackhole type, file issue to abhullar");
