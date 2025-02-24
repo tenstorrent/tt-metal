@@ -11,8 +11,6 @@ import csv
 from tt_metal.tools.profiler.process_device_log import import_log_run_stats
 import tt_metal.tools.profiler.device_post_proc_config as device_post_proc_config
 
-from models.utility_functions import is_grayskull
-
 from tt_metal.tools.profiler.common import PROFILER_LOGS_DIR, PROFILER_DEVICE_SIDE_LOG
 
 profiler_log_path = PROFILER_LOGS_DIR / PROFILER_DEVICE_SIDE_LOG
@@ -61,9 +59,9 @@ def profile_results(is_unicast, num_mcasts, num_unicasts, line_size, packet_size
 def run_fabric_edm(
     is_unicast, num_mcasts, num_unicasts, num_links, num_op_invocations, line_sync, line_size, packet_size, expected_bw
 ):
+    logger.warning("removing file profile_log_device.csv")
     os.system(f"rm -rf {os.environ['TT_METAL_HOME']}/generated/profiler/.logs/profile_log_device.csv")
 
-    ARCH_NAME = os.getenv("ARCH_NAME")
     cmd = f"TT_METAL_DEVICE_PROFILER=1 \
             {os.environ['TT_METAL_HOME']}/build/test/ttnn/unit_tests_ttnn_fabric_edm \
                 {num_mcasts} \
@@ -83,7 +81,6 @@ def run_fabric_edm(
     assert expected_bw - 0.2 <= bandwidth <= expected_bw + 0.2
 
 
-@pytest.mark.skipif(is_grayskull(), reason="Unsupported on GS")
 @pytest.mark.parametrize("num_mcasts", [200000])
 @pytest.mark.parametrize("num_unicasts", [0])
 @pytest.mark.parametrize("num_links", [1])
@@ -111,7 +108,6 @@ def test_fabric_edm_mcast_bw(
     )
 
 
-@pytest.mark.skipif(is_grayskull(), reason="Unsupported on GS")
 @pytest.mark.parametrize("num_mcasts", [0])
 @pytest.mark.parametrize("num_unicasts", [200000])
 @pytest.mark.parametrize("num_links", [1])
