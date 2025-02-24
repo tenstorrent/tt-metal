@@ -2651,7 +2651,6 @@ def test_shallow_conv_with_tiled_input(device):
 
 # Tests running conv2d which maps to matmul w/o sharding the input tensor.
 # Output tensor is in DRAM.
-@pytest.mark.skip("#18237: Need to fix after pre-calculation revert")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize("tiled_input", [True, False])
 @pytest.mark.parametrize("input_on_device", [True, False])
