@@ -51,16 +51,14 @@ autograd::TensorPtr gelu(const autograd::TensorPtr& tensor) {
 }
 
 autograd::TensorPtr silu(const autograd::TensorPtr& tensor) {
-    auto out = autograd::create_tensor();
-    out->set_value(ttnn::silu(tensor->get_value()));
+    auto out = autograd::create_tensor(ttnn::silu(tensor->get_value()));
     autograd::GradFunction grad = [tensor, out]() {
-        tt::tt_metal::MemoryConfig mem_config;  // FIXME?: use default memory config as above, is this correct?
-        auto res = ttnn::silu_bw(out->get_grad(), tensor->get_value(), mem_config);
+        auto res = ttnn::silu_bw(out->get_grad(), tensor->get_value());
         assert(res.size() == 1U && "Silu backward should return only one gradient");
         tensor->add_grad(res.front().value());
     };
 
-    std::vector<autograd::NodeId> links = autograd::get_links(tensor);
+    auto links = autograd::get_links(tensor);
     out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
 
     return out;
