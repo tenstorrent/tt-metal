@@ -24,6 +24,29 @@ from framework.sweeps_logger import sweeps_logger as logger
 
 ARCH = os.getenv("ARCH_NAME")
 
+current_directory = os.getcwd()
+file_path = os.path.join(current_directory, "test_results.txt")
+print(f"Pass Results will be saved to: {file_path}")
+
+if os.path.exists(file_path):
+    os.remove(file_path)
+
+
+def write_to_file(test_vector, status, message):
+    with open(file_path, "a") as f:
+        binary_op = test_vector.get("binary_op", {})
+        input_dtype = test_vector.get("input_dtype", {})
+        input_mem_config = test_vector.get("input_mem_config", {})
+
+        op = binary_op.get("tt_op", "unknown")
+        input_a_dtype = input_dtype.get("input_a_dtype", "unknown")
+        input_b_dtype = input_dtype.get("input_b_dtype", "unknown")
+        a_mem = input_mem_config.get("a_mem", "unknown")
+        b_mem = input_mem_config.get("b_mem", "unknown")
+
+        # Write to file in a single line
+        f.write(f"{op} : ({input_a_dtype}, {input_b_dtype}) - ({a_mem}, {b_mem}) - {message}\n")
+
 
 def git_hash():
     try:
@@ -95,6 +118,18 @@ def run(test_module, input_queue, output_queue):
                 output_queue.put([status, message, e2e_perf, perf_result])
             else:
                 output_queue.put([status, message, e2e_perf, None])
+            if status:
+                write_to_file(test_vector, status, message)
+                # print("-----------------------")
+                # print("current parameter ", test_vector)
+                # print("STATUS", status)
+                # print("message", message)
+            # if not status:
+            #     print("********* FAILED *********")
+            #     print("current parameter ", test_vector)
+            #     print("STATUS", status)
+            #     print("message", message)
+            #     print("**************************")
     except Empty as e:
         try:
             # Run teardown in mesh_device_fixture
