@@ -638,7 +638,8 @@ void Device::initialize_and_launch_firmware() {
     // Determine which noc-coords are harvested
     // TODO(PGK/Almeet): fix this w/ new UMD
     std::vector<uint32_t> harvested_rows;
-    uint32_t harvested_noc_rows = tt::Cluster::instance().get_harvested_rows(this->id());
+    uint32_t harvested_noc_rows = CoordinateManager::shuffle_tensix_harvesting_mask_to_noc0_coords(
+        tt::Cluster::instance().get_soc_desc(this->id()).arch, tt::Cluster::instance().get_harvesting_mask(this->id()));
     for (uint32_t y = 0; y < soc_d.grid_size.y; y++) {
         bool row_harvested = (harvested_noc_rows >> y) & 0x1;
         if (row_harvested) {
@@ -900,6 +901,35 @@ void Device::init_command_queue_device() {
     }
 }
 
+void Device::init_fabric() {
+    fabric_program_ = create_and_compile_fabric_program(this);
+    configure_fabric_cores(this);
+
+    program_dispatch::finalize_program_offsets(*fabric_program_, this);
+
+    detail::WriteRuntimeArgsToDevice(this, *fabric_program_);
+    detail::ConfigureDeviceWithProgram(this, *fabric_program_);
+
+    // Note: the l1_barrier below is needed to be sure writes to cores that
+    // don't get the GO mailbox (eg, storage cores) have all landed
+    tt::Cluster::instance().l1_barrier(this->id());
+    std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = fabric_program_->logical_cores();
+    for (uint32_t programmable_core_type_index = 0; programmable_core_type_index < logical_cores_used_in_program.size();
+         programmable_core_type_index++) {
+        CoreType core_type = hal.get_core_type(programmable_core_type_index);
+        for (const auto& logical_core : logical_cores_used_in_program[programmable_core_type_index]) {
+            launch_msg_t* msg =
+                &fabric_program_->kernels_on_core(logical_core, programmable_core_type_index)->launch_msg;
+            go_msg_t* go_msg = &fabric_program_->kernels_on_core(logical_core, programmable_core_type_index)->go_msg;
+            msg->kernel_config.host_assigned_id = fabric_program_->get_runtime_id();
+
+            auto physical_core = this->virtual_core_from_logical_core(logical_core, core_type);
+            tt::llrt::write_launch_msg_to_core(
+                this->id(), physical_core, msg, go_msg, this->get_dev_addr(physical_core, HalL1MemAddrType::LAUNCH));
+        }
+    }
+}
+
 bool Device::initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t trace_region_size, tt::stl::Span<const std::uint32_t> l1_bank_remap, bool minimal) {
     ZoneScoped;
     log_info(tt::LogMetal, "Initializing device {}. Program cache is {}enabled", this->id_, this->program_cache_.is_enabled() ? "": "NOT ");
@@ -932,7 +962,10 @@ bool Device::initialize(const uint8_t num_hw_cqs, size_t l1_small_size, size_t t
 
 void Device::push_work(std::function<void()> work, bool blocking) {
     if (not this->initialized_) {
-        log_warning("Attempting to push work to Device {} which is not initialized. Ignoring...", this->id_);
+        if (!uninitialized_error_fired_) {
+            log_fatal("Attempting to push work to Device {} which is not initialized. Ignoring...", this->id_);
+            uninitialized_error_fired_ = true;
+        }
         return;
     }
     this->work_executor_.push_work(std::move(work), blocking);

@@ -311,11 +311,18 @@ struct WriteTransactionIdTracker {
     FORCE_INLINE bool transaction_flushed(tt::fabric::BufferIndex buffer_index) const {
         if constexpr (BOTH_PARAMS_ARE_POW2) {
             auto trid = this->get_buffer_slot_trid(buffer_index);
-            return ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc_index, trid);
+            return ncrisc_noc_nonposted_write_with_transaction_id_sent(noc_index, trid);
         } else {
             // TODO: should be able to remove compare against INVALID_TRID
             auto trid = this->get_buffer_slot_trid(buffer_index);
-            return trid == INVALID_TRID || ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc_index, trid);
+            return trid == INVALID_TRID || ncrisc_noc_nonposted_write_with_transaction_id_sent(noc_index, trid);
+        }
+    }
+    FORCE_INLINE void all_buffer_slot_transactions_acked() const {
+        for (uint8_t i = 0; i < NUM_CHANNELS; ++i) {
+            tt::fabric::BufferIndex buffer_index(i);
+            auto trid = this->get_buffer_slot_trid(buffer_index);
+            noc_async_write_barrier_with_trid(trid, noc_index);
         }
     }
     private:
@@ -426,18 +433,18 @@ struct ReceiverChannelPointers {
 };
 
 struct PacketHeaderRecorder {
-    volatile tt::fabric::PacketHeader *buffer_ptr;
+    volatile uint32_t *buffer_ptr;
     size_t buffer_n_headers;
     size_t buffer_index;
 
-    PacketHeaderRecorder(volatile tt::fabric::PacketHeader *buffer_ptr, size_t buffer_n_headers) : buffer_ptr(buffer_ptr), buffer_n_headers(buffer_n_headers), buffer_index(0) {}
+    PacketHeaderRecorder(volatile uint32_t *buffer_ptr, size_t buffer_n_headers) : buffer_ptr(buffer_ptr), buffer_n_headers(buffer_n_headers), buffer_index(0) {}
 
-    void record_packet_header(volatile tt::fabric::PacketHeader *packet_header_ptr) {
-        uint32_t dest_l1_addr = (uint32_t)buffer_ptr + buffer_index * sizeof(tt::fabric::PacketHeader);
+    void record_packet_header(volatile uint32_t *packet_header_ptr) {
+        uint32_t dest_l1_addr = (uint32_t)buffer_ptr + buffer_index * sizeof(PACKET_HEADER_TYPE);
         noc_async_write(
             (uint32_t)packet_header_ptr,
             get_noc_addr(my_x[0], my_y[0], dest_l1_addr),
-            sizeof(tt::fabric::PacketHeader),
+            sizeof(PACKET_HEADER_TYPE),
             1 - noc_index // avoid the contention on main noc
         );
         buffer_index++;
@@ -534,8 +541,8 @@ FORCE_INLINE void send_next_data(
     //       NOTE: if we always send full packet, then we don't need the second branch below dedicated for
     //             channel sync
     auto volatile *pkt_header =
-        reinterpret_cast<volatile tt::fabric::PacketHeader *>(sender_buffer_channel.get_buffer_address(local_sender_wrptr_buffer_index));
-    ASSERT(tt::fabric::is_valid(*const_cast<tt::fabric::PacketHeader *>(pkt_header)));
+        reinterpret_cast<volatile PACKET_HEADER_TYPE *>(sender_buffer_channel.get_buffer_address(local_sender_wrptr_buffer_index));
+    ASSERT(tt::fabric::is_valid(*const_cast<PACKET_HEADER_TYPE *>(pkt_header)));
     size_t payload_size_bytes = pkt_header->get_payload_size_including_header();
     pkt_header->src_ch_id = sender_channel_index;
 
@@ -575,7 +582,7 @@ FORCE_INLINE void receiver_send_received_ack(
     // Set the acknowledgement bits. We have a different location than the
 
     auto receiver_buffer_index = receiver_channel_ptr.get_buffer_index();
-    auto volatile *pkt_header = reinterpret_cast<volatile tt::fabric::PacketHeader *>(local_receiver_buffer_channel.get_buffer_address(receiver_buffer_index));
+    auto volatile *pkt_header = reinterpret_cast<volatile PACKET_HEADER_TYPE *>(local_receiver_buffer_channel.get_buffer_address(receiver_buffer_index));
     const auto src_id = pkt_header->src_ch_id;
     remote_update_ptr_val(to_sender_packets_acked_streams[src_id], 1);
 }
@@ -590,7 +597,7 @@ FORCE_INLINE void receiver_send_completion_ack(
 
     auto receiver_buffer_index = receiver_channel_ptr.get_buffer_index();
 
-    auto volatile *pkt_header = reinterpret_cast<volatile tt::fabric::PacketHeader *>(local_receiver_buffer_channel.get_buffer_address(receiver_buffer_index));
+    auto volatile *pkt_header = reinterpret_cast<volatile PACKET_HEADER_TYPE *>(local_receiver_buffer_channel.get_buffer_address(receiver_buffer_index));
     const auto src_id = pkt_header->src_ch_id;
     remote_update_ptr_val(to_sender_packets_completed_streams[src_id], 1);
     receiver_channel_ptr.increment();
@@ -600,11 +607,16 @@ FORCE_INLINE void receiver_send_completion_ack(
 
 template <uint8_t SENDER_NUM_BUFFERS>
 FORCE_INLINE bool can_forward_packet_completely(
-    tt::fabric::RoutingFields cached_routing_fields,
+    ROUTING_FIELDS_TYPE cached_routing_fields,
     tt::fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>& downstream_edm_interface) {
     // We always check if it is the terminal mcast packet value. We can do this because all unicast packets have the
     // mcast terminal value masked in to the routing field. This simplifies the check here to a single compare.
-    bool deliver_locally_only = cached_routing_fields.value == tt::fabric::RoutingFields::LAST_MCAST_VAL;
+    bool deliver_locally_only;
+    if constexpr (std::is_same_v<ROUTING_FIELDS_TYPE, tt::fabric::RoutingFields>) {
+        deliver_locally_only = cached_routing_fields.value == tt::fabric::RoutingFields::LAST_MCAST_VAL;
+    } else if constexpr (std::is_same_v<ROUTING_FIELDS_TYPE, tt::fabric::LowLatencyRoutingFields>) {
+        deliver_locally_only = (cached_routing_fields.value & tt::fabric::LowLatencyRoutingFields::FIELD_MASK) == tt::fabric::LowLatencyRoutingFields::WRITE_ONLY;
+    }
     return deliver_locally_only || downstream_edm_interface.edm_has_space_for_packet();
 }
 
@@ -612,19 +624,39 @@ FORCE_INLINE bool can_forward_packet_completely(
 template <uint8_t SENDER_NUM_BUFFERS>
 FORCE_INLINE void receiver_forward_packet(
     // TODO: have a separate cached copy of the packet header to save some additional L1 loads
-    volatile tt::fabric::PacketHeader *packet_start,
-    tt::fabric::RoutingFields cached_routing_fields,
+    volatile PACKET_HEADER_TYPE *packet_start,
+    ROUTING_FIELDS_TYPE cached_routing_fields,
     tt::fabric::EdmToEdmSender<SENDER_NUM_BUFFERS> &downstream_edm_interface,
     uint8_t transaction_id) {
 
-    bool start_distance_is_terminal_value = (cached_routing_fields.value & tt::fabric::RoutingFields::HOP_DISTANCE_MASK) == tt::fabric::RoutingFields::LAST_HOP_DISTANCE_VAL;
-    uint16_t payload_size_bytes = packet_start->payload_size_bytes;
-    if (start_distance_is_terminal_value) {
-        execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id);
-    }
-    bool not_last_destination_device = cached_routing_fields.value != tt::fabric::RoutingFields::LAST_MCAST_VAL;
-    if (not_last_destination_device) {
-        forward_payload_to_downstream_edm(packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface, transaction_id);
+    if constexpr (std::is_same_v<ROUTING_FIELDS_TYPE, tt::fabric::RoutingFields>) {
+        // If the packet is a terminal packet, then we can just deliver it locally
+        bool start_distance_is_terminal_value = (cached_routing_fields.value & tt::fabric::RoutingFields::HOP_DISTANCE_MASK) == tt::fabric::RoutingFields::LAST_HOP_DISTANCE_VAL;
+        uint16_t payload_size_bytes = packet_start->payload_size_bytes;
+        bool not_last_destination_device = cached_routing_fields.value != tt::fabric::RoutingFields::LAST_MCAST_VAL;
+        if (not_last_destination_device) {
+            forward_payload_to_downstream_edm(packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface, transaction_id);
+        }
+        if (start_distance_is_terminal_value) {
+            execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id);
+        }
+    } else if constexpr (std::is_same_v<ROUTING_FIELDS_TYPE, tt::fabric::LowLatencyRoutingFields>) {
+        uint32_t routing = cached_routing_fields.value & tt::fabric::LowLatencyRoutingFields::FIELD_MASK;
+        uint16_t payload_size_bytes = packet_start->payload_size_bytes;
+        switch (routing) {
+            case tt::fabric::LowLatencyRoutingFields::WRITE_ONLY:
+                execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id);
+                break;
+            case tt::fabric::LowLatencyRoutingFields::FORWARD_ONLY:
+                forward_payload_to_downstream_edm(packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface, transaction_id);
+                break;
+            case tt::fabric::LowLatencyRoutingFields::WRITE_AND_FORWARD:
+                execute_chip_unicast_to_local_chip(packet_start, payload_size_bytes, transaction_id);
+                forward_payload_to_downstream_edm(packet_start, payload_size_bytes, cached_routing_fields, downstream_edm_interface, transaction_id);
+                break;
+            default:
+                ASSERT(false);
+        }
     }
 }
 
@@ -650,25 +682,22 @@ FORCE_INLINE bool run_sender_channel_step(
     //       when moving to stream regs to manage rd/wr ptrs
     // TODO: update to be stream reg based. Initialize to space available and simply check for non-zero
     bool receiver_has_space_for_packet = outbound_to_receiver_channel_pointers.has_space_for_packet();
-    if (receiver_has_space_for_packet && !internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ)) {
-        bool has_unsent_packet = local_sender_channel_worker_interface.has_unsent_payload();
-        if (has_unsent_packet) {
-            bool sender_backpressured_from_sender_side = !(local_sender_channel_worker_interface.local_rdptr.distance_behind(local_sender_channel_worker_interface.local_wrptr) < SENDER_NUM_BUFFERS);
-            if (!sender_backpressured_from_sender_side) {
-                did_something = true;
-                auto packet_header = reinterpret_cast<tt::fabric::PacketHeader*>(local_sender_channel.get_buffer_address(local_sender_channel_worker_interface.local_wrptr.get_buffer_index()));
-                if constexpr (enable_packet_header_recording) {
-                    tt::fabric::validate(*packet_header);
-                    packet_header_recorder.record_packet_header(packet_header);
-                }
-                send_next_data(
-                    local_sender_channel,
-                    local_sender_channel_worker_interface,
-                    outbound_to_receiver_channel_pointers,
-                    remote_receiver_channel,
-                    sender_channel_index);
-            }
+    bool has_unsent_packet = local_sender_channel_worker_interface.has_unsent_payload();
+    bool sender_backpressured_from_sender_side = !(local_sender_channel_worker_interface.local_rdptr.distance_behind(local_sender_channel_worker_interface.local_wrptr) < SENDER_NUM_BUFFERS);
+    bool can_send = receiver_has_space_for_packet && !internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ) && has_unsent_packet && !sender_backpressured_from_sender_side;
+    if (can_send) {
+        did_something = true;
+        auto packet_header = reinterpret_cast<PACKET_HEADER_TYPE*>(local_sender_channel.get_buffer_address(local_sender_channel_worker_interface.local_wrptr.get_buffer_index()));
+        if constexpr (enable_packet_header_recording) {
+            tt::fabric::validate(*packet_header);
+            packet_header_recorder.record_packet_header(reinterpret_cast<volatile uint32_t*>(packet_header));
         }
+        send_next_data(
+            local_sender_channel,
+            local_sender_channel_worker_interface,
+            outbound_to_receiver_channel_pointers,
+            remote_receiver_channel,
+            sender_channel_index);
     }
 
     // Process COMPLETIONs from receiver
@@ -721,6 +750,7 @@ FORCE_INLINE bool run_sender_channel_step(
             }
             did_something = true;
             channel_connection_established = true;
+            local_sender_channel_worker_interface.cache_producer_noc_addr();
             if constexpr (enable_first_level_ack) {
                 local_sender_channel_worker_interface.update_worker_copy_of_read_ptr(local_sender_channel_worker_interface.local_ackptr.get_ptr());
             } else {
@@ -773,9 +803,9 @@ FORCE_INLINE void run_receiver_channel_step(
     bool unwritten_packets = !wr_sent_ptr.is_caught_up_to(ack_ptr);
     if (unwritten_packets) {
         auto receiver_buffer_index = wr_sent_ptr.get_buffer_index();
-        volatile auto packet_header = local_receiver_channel.get_packet_header(receiver_buffer_index);
+        volatile auto packet_header = local_receiver_channel.template get_packet_header<PACKET_HEADER_TYPE>(receiver_buffer_index);
 
-        tt::fabric::RoutingFields cached_routing_fields = const_cast<tt::fabric::PacketHeader*>(packet_header)->routing_fields;
+        ROUTING_FIELDS_TYPE cached_routing_fields = const_cast<PACKET_HEADER_TYPE*>(packet_header)->routing_fields;
         bool can_send_to_all_local_chip_receivers =
             can_forward_packet_completely(
                 cached_routing_fields, downstream_edm_interface);
@@ -816,19 +846,19 @@ FORCE_INLINE void run_receiver_channel_step(
         auto &wr_flush_ptr = receiver_channel_pointers.wr_flush_ptr;
         // Currently unclear if it's better to loop here or not... Also unclear if merging these
         // two pointers is better or not... Seems to be maybe 5-10% better merged but need more data
-        if (!wr_flush_ptr.is_caught_up_to(wr_sent_ptr) && !internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ)) {
-            auto receiver_buffer_index = wr_flush_ptr.get_buffer_index();
-            bool next_trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
-            if (next_trid_flushed) {
-                auto &completion_ptr = receiver_channel_pointers.completion_ptr;
-                wr_flush_ptr.increment();
-                receiver_channel_trid_tracker.clear_trid_at_buffer_slot(receiver_buffer_index);
-                receiver_send_completion_ack(
-                    remote_eth_sender_wrptrs,
-                    remote_sender_channnels,
-                    completion_ptr,
-                    local_receiver_channel);
-            }
+        bool unflushed_writes_and_eth_txq_not_busy = !wr_flush_ptr.is_caught_up_to(wr_sent_ptr) && !internal_::eth_txq_is_busy(DEFAULT_ETH_TXQ);
+        auto receiver_buffer_index = wr_flush_ptr.get_buffer_index();
+        bool next_trid_flushed = receiver_channel_trid_tracker.transaction_flushed(receiver_buffer_index);
+        bool can_send_completion = unflushed_writes_and_eth_txq_not_busy && next_trid_flushed;
+        if (can_send_completion) {
+            auto &completion_ptr = receiver_channel_pointers.completion_ptr;
+            wr_flush_ptr.increment();
+            receiver_channel_trid_tracker.clear_trid_at_buffer_slot(receiver_buffer_index);
+            receiver_send_completion_ack(
+                remote_eth_sender_wrptrs,
+                remote_sender_channnels,
+                completion_ptr,
+                local_receiver_channel);
         }
 
     }
@@ -886,7 +916,8 @@ void run_fabric_edm_main_loop(
     volatile tt::fabric::EdmFabricReceiverChannelCounters *receiver_channel_counters_ptr,
     std::array<volatile tt::fabric::EdmFabricSenderChannelCounters *, NUM_SENDER_CHANNELS> sender_channel_counters_ptrs,
     PacketHeaderRecorder &receiver_channel_packet_recorder,
-    std::array<PacketHeaderRecorder, NUM_SENDER_CHANNELS> &sender_channel_packet_recorders) {
+    std::array<PacketHeaderRecorder, NUM_SENDER_CHANNELS> &sender_channel_packet_recorders,
+    WriteTransactionIdTracker<RECEIVER_NUM_BUFFERS, NUM_TRANSACTION_IDS> &receiver_channel_trid_tracker) {
     std::array<SenderState, NUM_SENDER_CHANNELS> sender_states = {
         SenderState::SENDER_WAIT_WORKER_HANDSHAKE, SenderState::SENDER_WAIT_WORKER_HANDSHAKE};
     size_t sender_channel_index = 0;
@@ -904,8 +935,6 @@ void run_fabric_edm_main_loop(
     OutboundReceiverChannelPointers<RECEIVER_NUM_BUFFERS> outbound_to_receiver_channel_pointers;
     ReceiverChannelPointers<RECEIVER_NUM_BUFFERS> receiver_channel_pointers;
     std::array<bool, NUM_SENDER_CHANNELS> channel_connection_established = {false, false};
-
-    WriteTransactionIdTracker<RECEIVER_NUM_BUFFERS, NUM_TRANSACTION_IDS> receiver_channel_trid_tracker;
 
     // This value defines the number of loop iterations we perform of the main control sequence before exiting
     // to check for termination and context switch. Removing the these checks from the inner loop can drastically
@@ -964,7 +993,8 @@ void run_fabric_edm_main_loop(
         } else {
             if (did_nothing_count++ > SWITCH_INTERVAL) {
                 did_nothing_count = 0;
-                run_routing();
+                // shouldn't do noc counter sync since we are not incrementing them
+                run_routing_without_noc_sync();
             }
         }
     }
@@ -1047,14 +1077,14 @@ void kernel_main() {
 
     std::array<PacketHeaderRecorder, NUM_SENDER_CHANNELS> sender_channel_packet_recorders{
         PacketHeaderRecorder(
-            reinterpret_cast<volatile tt::fabric::PacketHeader *>(sender_0_completed_packet_header_cb_address),
+            reinterpret_cast<volatile uint32_t *>(sender_0_completed_packet_header_cb_address),
             sender_0_completed_packet_header_cb_size_headers),
         PacketHeaderRecorder(
-            reinterpret_cast<volatile tt::fabric::PacketHeader *>(sender_1_completed_packet_header_cb_address),
+            reinterpret_cast<volatile uint32_t *>(sender_1_completed_packet_header_cb_address),
             sender_1_completed_packet_header_cb_size_headers)
     };
     PacketHeaderRecorder receiver_channel_packet_recorder(
-        reinterpret_cast<volatile tt::fabric::PacketHeader *>(receiver_completed_packet_header_cb_address),
+        reinterpret_cast<volatile uint32_t *>(receiver_completed_packet_header_cb_address),
         receiver_completed_packet_header_cb_size_headers);
 
     static_assert(SENDER_NUM_BUFFERS > 0, "compile time argument [1]: SENDER_NUM_BUFFERS must be > 0");
@@ -1171,14 +1201,14 @@ void kernel_main() {
     auto local_receiver_channel = tt::fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>(
         local_receiver_channel_buffer_address,
         channel_buffer_size,
-        tt::fabric::header_size_bytes,
+        sizeof(PACKET_HEADER_TYPE),
         eth_transaction_ack_word_addr,  // Assume for receiver channel, this address points to a chunk of memory that
                                         // can fit 2 eth_channel_syncs cfor ack
         receiver_channel_id);
     auto remote_receiver_channel = tt::fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>(
         remote_receiver_channel_buffer_address,
         channel_buffer_size,
-        tt::fabric::header_size_bytes,
+        sizeof(PACKET_HEADER_TYPE),
         eth_transaction_ack_word_addr,  // Assume for receiver channel, this address points to a chunk of memory that
                                         // can fit 2 eth_channel_syncs cfor ack
         receiver_channel_id);
@@ -1189,13 +1219,13 @@ void kernel_main() {
         new (&local_sender_channels[i]) tt::fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>(
             local_sender_buffer_addresses[i],
             channel_buffer_size,
-            tt::fabric::header_size_bytes,
+            sizeof(PACKET_HEADER_TYPE),
             0,  // For sender channels there is no eth_transaction_ack_word_addr because they don't send acks
             i);
         new (&remote_sender_channels[i]) tt::fabric::EthChannelBuffer<SENDER_NUM_BUFFERS>(
             remote_sender_buffer_addresses[i],
             channel_buffer_size,
-            tt::fabric::header_size_bytes,
+            sizeof(PACKET_HEADER_TYPE),
             0,  // For sender channels there is no eth_transaction_ack_word_addr because they don't send acks
             i);
 
@@ -1210,6 +1240,9 @@ void kernel_main() {
                 local_sender_flow_control_semaphores[i]),
             reinterpret_cast<volatile tt_l1_ptr uint32_t *const>(connection_live_semaphore_ptr));
     }
+
+
+    WriteTransactionIdTracker<RECEIVER_NUM_BUFFERS, NUM_TRANSACTION_IDS> receiver_channel_trid_tracker;
 
 
     if (has_downstream_edm_buffer_connection) {
@@ -1240,7 +1273,8 @@ void kernel_main() {
         receiver_channel_counters_ptr,
         {sender_channel_0_counters_ptr, sender_channel_1_counters_ptr},
         receiver_channel_packet_recorder,
-        sender_channel_packet_recorders);
+        sender_channel_packet_recorders,
+        receiver_channel_trid_tracker);
 
 
     if constexpr (persistent_mode) {
@@ -1250,6 +1284,11 @@ void kernel_main() {
         *reinterpret_cast<volatile uint32_t*>(local_sender_channel_0_connection_buffer_index_addr) = 99;
         *sender0_worker_semaphore_ptr = 99;
     }
+
+    // make sure all the noc transactions are acked before re-init the noc counters
+    receiver_channel_trid_tracker.all_buffer_slot_transactions_acked();
+    // re-init the noc counters as the noc api used is not incrementing them
+    ncrisc_noc_counters_init();
 
     DPRINT << "EDM DONE\n";
     WAYPOINT("DONE");

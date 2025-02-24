@@ -4,16 +4,18 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/device_pool.hpp>
 #include <tt-metalium/device_impl.hpp>
 #include <tt-metalium/rtoptions.hpp>
-#include "tt_fabric/control_plane.hpp"
-#include "tt_fabric/mesh_graph.hpp"
+#include <tt-metalium/mesh_graph.hpp>
+#include <tt-metalium/control_plane.hpp>
 //#include <tt-metalium/cq_commands.hpp>
 //#include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
-#include "tt_fabric/hw/inc/tt_fabric_status.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
 #include "test_common.hpp"
+#include "routing_test_common.hpp"
 #include "eth_l1_address_map.h"
-#include "tt_fabric/hw/inc/tt_fabric_interface.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_interface.h"
 #include <numeric>
 #include <algorithm>
 #include <random>
@@ -42,11 +44,16 @@ bool bidirectional_traffic;
 // benchmark test mode
 bool benchmark_mode;
 
+// Metal fabric initialization level
+// 0: No fabric initialization
+// 1: Initialize metal fabric with default settings
+uint32_t metal_fabric_init_level;
+
 uint32_t tx_signal_address;
 uint32_t host_signal_address;
 
 // kernels
-const std::string router_kernel_src = "tt_fabric/impl/kernels/tt_fabric_router.cpp";
+const std::string router_kernel_src = "tt_metal/fabric/impl/kernels/tt_fabric_router.cpp";
 const std::string traffic_controller_src =
     "tests/tt_metal/tt_metal/perf_microbenchmark/routing/kernels/tt_fabric_traffic_controller.cpp";
 const std::string rx_kernel_src =
@@ -85,9 +92,11 @@ typedef struct test_board {
     std::vector<chip_id_t> physical_chip_ids;
     std::vector<std::pair<chip_id_t, std::vector<chip_id_t>>> tx_rx_map;
     std::map<chip_id_t, IDevice*> device_handle_map;
-    std::unique_ptr<tt::tt_fabric::ControlPlane> control_plane;
+    tt::tt_fabric::ControlPlane* control_plane;
+    std::unique_ptr<tt::tt_fabric::ControlPlane> cp_owning_ptr;
     uint32_t num_chips_to_use;
     std::string mesh_graph_descriptor;
+    tt::tt_metal::DispatchCoreType dispatch_core_type = tt::tt_metal::DispatchCoreType::WORKER;
 
     test_board(std::string& board_type_) {
         if ("n300" == board_type_) {
@@ -129,8 +138,16 @@ typedef struct test_board {
             throw std::runtime_error("Odd number of chips detected, not supported currently");
         }
 
-        device_handle_map = tt::tt_metal::detail::CreateDevices(available_chip_ids);
-        _init_control_plane(mesh_graph_descriptor);
+        if (metal_fabric_init_level != 0) {
+            tt::tt_metal::detail::InitializeFabricSetting(tt::tt_metal::detail::FabricSetting::FABRIC);
+        }
+        device_handle_map =
+            tt::tt_metal::detail::CreateDevices(available_chip_ids, 1, 0, 0, DispatchCoreConfig{dispatch_core_type});
+        if (metal_fabric_init_level == 0) {
+            _init_control_plane(mesh_graph_descriptor);
+        } else {
+            control_plane = tt::DevicePool::instance().get_control_plane();
+        }
 
         if (num_chips_to_use != available_chip_ids.size()) {
             // initialize partial board to get the set of physical chip IDs for fabric kernels
@@ -171,8 +188,9 @@ typedef struct test_board {
         try {
             const std::filesystem::path mesh_graph_desc_path =
                 std::filesystem::path(tt::llrt::RunTimeOptions::get_instance().get_root_dir()) /
-                "tt_fabric/mesh_graph_descriptors" / mesh_graph_descriptor;
-            control_plane = std::make_unique<tt::tt_fabric::ControlPlane>(mesh_graph_desc_path.string());
+                "tt_metal/fabric/mesh_graph_descriptors" / mesh_graph_descriptor;
+            cp_owning_ptr = std::make_unique<tt::tt_fabric::ControlPlane>(mesh_graph_desc_path.string());
+            control_plane = cp_owning_ptr.get();
         } catch (const std::exception& e) {
             log_fatal(e.what());
         }
@@ -1301,7 +1319,10 @@ int main(int argc, char **argv) {
         log_info(
             LogTest, "  --device_id: Device on which the test will be run, default = {}", default_test_device_id_l);
         log_info(
-            LogTest, "  --device_id_r: Device on which the test will be run, default = {}", default_test_device_id_r);
+            LogTest, "  --device_id_r: DDevice on which the test will be run, default = {}", default_test_device_id_r);
+
+        log_info(
+            LogTest, "  --metal_fabric_init_level: use Metal runtime to load fabric, 0 is disable, 1 is enable", 0);
         return 0;
     }
 
@@ -1402,6 +1423,7 @@ int main(int argc, char **argv) {
     if (mcast && bidirectional_traffic) {
         throw std::runtime_error("Bidirectional traffic is not supported for mcast");
     }
+    metal_fabric_init_level = test_args::get_command_option_uint32(input_args, "--metal_fabric_init_level", 0);
 
     bool pass = true;
     uint32_t num_available_devices, num_allocated_devices = 0;
@@ -1544,17 +1566,19 @@ int main(int argc, char **argv) {
         uint32_t worker_unreserved_base_addr =
             hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED);
 
-        // create router kernels
-        std::vector<uint32_t> router_compile_args = {
-            (tunneler_queue_size_bytes >> 4),  // 0: rx_queue_size_words
-            tunneler_test_results_addr,        // 1: test_results_addr
-            tunneler_test_results_size,        // 2: test_results_size
-            0,                                 // timeout_mcycles * 1000 * 1000 * 4, // 3: timeout_cycles
-        };
-        for (auto& [chip_id, test_device] : test_devices) {
-            test_device->create_router_kernels(router_compile_args, defines);
+        if (metal_fabric_init_level == 0) {
+            // manual init fabric
+            // create router kernels
+            std::vector<uint32_t> router_compile_args = {
+                (tunneler_queue_size_bytes >> 4),  // 0: rx_queue_size_words
+                tunneler_test_results_addr,        // 1: test_results_addr
+                tunneler_test_results_size,        // 2: test_results_size
+                0,                                 // timeout_mcycles * 1000 * 1000 * 4, // 3: timeout_cycles
+            };
+            for (auto& [chip_id, test_device] : test_devices) {
+                test_device->create_router_kernels(router_compile_args, defines);
+            }
         }
-
         if (check_txrx_timeout) {
             defines["CHECK_TIMEOUT"] = "";
         }
@@ -1624,9 +1648,11 @@ int main(int argc, char **argv) {
             tt_metal::detail::LaunchProgram(test_device->device_handle, test_device->program_handle, false);
         }
 
-        // wait for all routers to handshake with master router
-        for (auto& [chip_id, test_device] : test_devices) {
-            test_device->wait_for_router_sync();
+        if (metal_fabric_init_level == 0) {
+            // wait for all routers to handshake with master router
+            for (auto& [chip_id, test_device] : test_devices) {
+                test_device->wait_for_router_sync();
+            }
         }
 
         // notify tx controller to signal the tx workers
@@ -1638,16 +1664,17 @@ int main(int argc, char **argv) {
         for (auto& traffic : fabric_traffic) {
             traffic.wait_for_rx_workers_to_finish();
         }
-        // terminate fabric routers
-        for (auto& [chip_id, test_device] : test_devices) {
-            test_device->terminate_router_kernels();
+        // terminate fabric routers if control plane is not managed by DevicePool
+        if (metal_fabric_init_level == 0) {
+            for (auto& [chip_id, test_device] : test_devices) {
+                test_device->terminate_router_kernels();
+            }
         }
 
         // wait for programs to exit
         for (auto& [chip_id, test_device] : test_devices) {
             tt_metal::detail::WaitProgramDone(test_device->device_handle, test_device->program_handle);
         }
-
         auto end = std::chrono::system_clock::now();
 
         std::chrono::duration<double> elapsed_seconds = (end-start);

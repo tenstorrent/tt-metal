@@ -113,3 +113,9 @@ jobs:
       - name: Generate system logs on failure
         uses: ./.github/actions/generate-system-logs
         if: ${{ failure() }}
+      - name: Generate gtest annotations on failure
+        uses: ./.github/actions/generate-gtest-failure-message
+        if: ${{ failure() }}
+        with:
+          path: |
+            generated/test_reports/

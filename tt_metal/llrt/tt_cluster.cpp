@@ -23,7 +23,6 @@
 #include "fmt/base.h"
 #include <logger.hpp>
 #include <metal_soc_descriptor.h>
-#include <test_common.hpp>
 #include <tt_backend_api_types.hpp>
 #include "umd/device/types/arch.h"
 #include "umd/device/tt_cluster_descriptor.h"
@@ -130,9 +129,10 @@ void Cluster::detect_arch_and_target() {
         this->target_type_);
 }
 
-bool Cluster::is_galaxy_cluster() const {
-    return this->is_tg_cluster_;
-}
+// TODO: remove this when we deprecate TG
+bool Cluster::is_galaxy_cluster() const { return this->cluster_type_ == ClusterType::TG; }
+
+ClusterType Cluster::get_cluster_type() const { return this->cluster_type_; }
 
 BoardType Cluster::get_board_type(chip_id_t chip_id) const {
   return this->cluster_desc_->get_board_type(chip_id);
@@ -145,11 +145,29 @@ void Cluster::generate_cluster_descriptor() {
         this->cluster_desc_ = tt_ClusterDescriptor::create_mock_cluster(tt_SimulationDevice::detect_available_device_ids(), this->arch_);
     } else {
         this->cluster_desc_ = tt_ClusterDescriptor::create_from_yaml(tt_ClusterDescriptor::get_cluster_descriptor_file_path());
+
+        // Detect cluster type
         for (const auto &chip_id : this->cluster_desc_->get_all_chips()) {
             if (this->cluster_desc_->get_board_type(chip_id) == BoardType::GALAXY) {
-                this->is_tg_cluster_ = true;
+                this->cluster_type_ = ClusterType::TG;
                 break;
             }
+        }
+        bool all_n300 = true;
+        for (const auto& chip_id : this->cluster_desc_->get_all_chips()) {
+            all_n300 &= (this->cluster_desc_->get_board_type(chip_id) == BoardType::N300);
+        }
+        if (all_n300) {
+            if (this->cluster_desc_->get_all_chips().size() == 2) {
+                this->cluster_type_ = ClusterType::N300;
+            } else if (this->cluster_desc_->get_all_chips().size() == 8) {
+                this->cluster_type_ = ClusterType::T3K;
+            }
+        }
+
+        if ((this->cluster_desc_->get_all_chips().size() == this->cluster_desc_->get_chips_with_mmio().size()) and
+            (this->cluster_desc_->get_all_chips().size() == 32)) {
+            this->cluster_type_ = ClusterType::GALAXY;
         }
     }
 
@@ -168,7 +186,7 @@ void Cluster::generate_cluster_descriptor() {
     }
 
     uint32_t total_num_hugepages = tt::umd::get_num_hugepages();
-    if (this->is_tg_cluster_) {
+    if (this->cluster_type_ == ClusterType::TG) {
         // TODO: don't think this check is correct, we want to have total num hugepages == num chips even for Galaxy
         TT_FATAL(
             this->arch_ == tt::ARCH::BLACKHOLE or total_num_hugepages >= this->cluster_desc_->get_all_chips().size()/4,
@@ -177,8 +195,8 @@ void Cluster::generate_cluster_descriptor() {
             this->cluster_desc_->get_all_chips().size()/4,
             this->cluster_desc_->get_all_chips().size(),
             total_num_hugepages);
-    } else if (this->target_type_ != TargetDevice::Simulator){
-    // TODO (abhullar): ignore hugepage set up for BH bringup
+    } else if (this->target_type_ != TargetDevice::Simulator) {
+        // TODO (abhullar): ignore hugepage set up for BH bringup
         TT_FATAL(
             this->arch_ == tt::ARCH::BLACKHOLE or total_num_hugepages >= this->cluster_desc_->get_all_chips().size(),
             "Machine setup error: Insufficient number of hugepages available, expected one per device ({}) but have {}. "
@@ -222,12 +240,10 @@ void Cluster::assign_mem_channels_to_devices(
     }
 }
 
-void Cluster::get_metal_desc_from_tt_desc(
-    const std::unordered_map<chip_id_t, tt_SocDescriptor> &input,
-    const std::unordered_map<chip_id_t, uint32_t> &per_chip_id_harvesting_masks) {
-    for (const auto& it : input) {
-        chip_id_t id = it.first;
-        this->sdesc_per_chip_.emplace(id, metal_SocDescriptor(it.second, per_chip_id_harvesting_masks.at(id), this->cluster_desc_->get_board_type(id)));
+void Cluster::get_metal_desc_from_tt_desc() {
+    for (const auto& id : this->driver_->get_target_device_ids()) {
+        this->sdesc_per_chip_.emplace(
+            id, metal_SocDescriptor(this->driver_->get_soc_descriptor(id), this->cluster_desc_->get_board_type(id)));
     }
 }
 
@@ -279,9 +295,8 @@ void Cluster::open_driver(const bool &skip_driver_allocs) {
     }
     device_driver->set_barrier_address_params(barrier_params);
 
-    this->get_metal_desc_from_tt_desc(
-        device_driver->get_virtual_soc_descriptors(), device_driver->get_harvesting_masks_for_soc_descriptors());
     this->driver_ = std::move(device_driver);
+    this->get_metal_desc_from_tt_desc();
 }
 
 void Cluster::start_driver(tt_device_params &device_params) const {
@@ -456,14 +471,6 @@ const std::unordered_map<int, int> Cluster::get_worker_logical_to_virtual_y(chip
     return worker_logical_to_virtual_y;
 }
 
-uint32_t Cluster::get_harvested_rows(chip_id_t chip) const {
-    if (this->target_type_ == TargetDevice::Simulator) {
-        return 0;
-    } else {
-        return this->driver_->harvested_rows_per_target.at(chip);
-    }
-}
-
 int Cluster::get_device_aiclk(const chip_id_t &chip_id) const {
     if (this->arch_ == tt::ARCH::BLACKHOLE) {
         // For Blackhole bring up remove AICLK query due to lack of ARC message support
@@ -480,16 +487,16 @@ int Cluster::get_device_aiclk(const chip_id_t &chip_id) const {
     return 0;
 }
 
-void Cluster::deassert_risc_reset_at_core(const tt_cxy_pair &core) const {
+void Cluster::deassert_risc_reset_at_core(const tt_cxy_pair& core, const TensixSoftResetOptions& soft_resets) const {
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(core.chip);
     tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
-    this->driver_->deassert_risc_reset_at_core(core.chip, core_coord);
+    this->driver_->deassert_risc_reset_at_core(core.chip, core_coord, soft_resets);
 }
 
-void Cluster::assert_risc_reset_at_core(const tt_cxy_pair &core) const {
+void Cluster::assert_risc_reset_at_core(const tt_cxy_pair& core, const TensixSoftResetOptions& soft_resets) const {
     const metal_SocDescriptor &soc_desc = this->get_soc_desc(core.chip);
     tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
-    this->driver_->assert_risc_reset_at_core(core.chip, core_coord);
+    this->driver_->assert_risc_reset_at_core(core.chip, core_coord, soft_resets);
 }
 
 void Cluster::write_dram_vec(std::vector<uint32_t> &vec, tt_target_dram dram, uint64_t addr, bool small_access) const {

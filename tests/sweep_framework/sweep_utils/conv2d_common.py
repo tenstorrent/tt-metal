@@ -220,7 +220,6 @@ def run_conv2d_short_sweep(
             dilation_w,
             has_bias,
         ] = input_specs
-    print(input_specs)
 
     if is_forge_suite:
         torch_input_dtype = torch.bfloat16 if input_dtype == ttnn.DataType(ttnn.bfloat16) else torch.float32
@@ -317,7 +316,6 @@ def run_conv2d_short_sweep(
 
     torch_output_tensor = torch.permute(torch_output_tensor, (0, 3, 1, 2))
 
-    print("End of test case")
     return [check_with_pcc(torch_output_tensor, torch_out_golden_tensor, pcc=0.985), e2e_perf]
 
 

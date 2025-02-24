@@ -21,8 +21,8 @@ set(TYPES
 
 include(FetchContent)
 set(SFPI_x86_64_Linux_RELEASE
-    "v6.1.0/sfpi-release.tgz"
-    "da98a135fe95a462c3b6b4e054dc159f"
+    "v6.2.0/sfpi-release.tgz"
+    "c546b57c3161b06d03de7473c4add5e5"
 )
 if(DEFINED SFPI_${CMAKE_HOST_SYSTEM_PROCESSOR}_${CMAKE_HOST_SYSTEM_NAME}_RELEASE)
     set(SFPI_RELEASE "${SFPI_${CMAKE_HOST_SYSTEM_PROCESSOR}_${CMAKE_HOST_SYSTEM_NAME}_RELEASE}")
@@ -167,8 +167,8 @@ foreach(ARCH IN LISTS ARCHS)
     list(APPEND GPP_INCLUDES -I${PROJECT_SOURCE_DIR}/tt_metal/third_party/umd/device/${ARCH})
     list(APPEND GPP_INCLUDES -I${PROJECT_SOURCE_DIR}/tt_metal/hw/ckernels/${ARCH_B0}/metal/common)
     list(APPEND GPP_INCLUDES -I${PROJECT_SOURCE_DIR}/tt_metal/hw/ckernels/${ARCH_B0}/metal/llk_io)
-    list(APPEND GPP_INCLUDES -I${PROJECT_SOURCE_DIR}/tt_metal/third_party/tt_llk_${ARCH_B0}/common/inc)
-    list(APPEND GPP_INCLUDES -I${PROJECT_SOURCE_DIR}/tt_metal/third_party/tt_llk_${ARCH_B0}/llk_lib)
+    list(APPEND GPP_INCLUDES -I${PROJECT_SOURCE_DIR}/tt_metal/third_party/tt_llk/tt_llk_${ARCH_B0}/common/inc)
+    list(APPEND GPP_INCLUDES -I${PROJECT_SOURCE_DIR}/tt_metal/third_party/tt_llk/tt_llk_${ARCH_B0}/llk_lib)
 
     foreach(HWLIB IN LISTS HWLIBS)
         if("${ARCH}" STREQUAL "blackhole" AND "${HWLIB}" STREQUAL "ncrisc-halt")

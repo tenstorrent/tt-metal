@@ -1,6 +1,7 @@
 import pytest
 import pathlib
 
+from infra.data_collection.github import workflows
 from infra.data_collection.cicd import create_cicd_json_for_data_analysis
 from infra.data_collection.models import InfraErrorV1
 
@@ -224,3 +225,11 @@ def test_create_pipeline_json_for_gtest_testcases(workflow_run_gh_environment):
 
     # fails validation, job is expected be skipped
     assert len([x for x in pipeline.jobs if x.github_job_id == 37190219113]) == 0
+
+
+def test_empty_gtest_xml(workflow_run_gh_environment):
+    github_runner_environment = workflow_run_gh_environment
+    workflow_outputs_dir = pathlib.Path("tests/_data/data_collection/cicd/all_post_commit_job_37712709106/").resolve()
+    assert (
+        workflows.get_tests_from_test_report_path(workflow_outputs_dir / "distributed_unit_tests_wormhole_b0.xml") == []
+    )
