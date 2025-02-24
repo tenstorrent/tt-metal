@@ -401,6 +401,12 @@ owned_buffer::Buffer<T> create_row_major_owned_buffer(
         return owned_buffer;
     }
 
+    // No modifications needed; direclty return buffer
+    if (tensor_spec.layout() == Layout::ROW_MAJOR and tensor_spec.logical_2d_shape() == tensor_spec.physical_shape()) {
+        return owned_buffer;
+    }
+
+    // TODO: Switch to use span in decode_tensor_data and avoid data copy here
     auto physical_data = owned_buffer.get();
 
     // See implementation for documentation
