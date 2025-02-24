@@ -53,13 +53,13 @@ public:
 
     // Get devices spanning the region defined by `range` in row-major order with start/end coordinates inclusive
     [[nodiscard]] DeviceView get_devices(const MeshCoordinateRange& range) const;
-    [[nodiscard]] DeviceView get_devices(const SimpleMeshShape& submesh_shape) const;
+    [[nodiscard]] DeviceView get_devices(const MeshShape& submesh_shape) const;
     [[nodiscard]] DeviceView get_devices() const;
     [[nodiscard]] size_t num_devices() const;
 
     [[nodiscard]] bool empty() const noexcept;
     [[nodiscard]] size_t size() const noexcept;
-    [[nodiscard]] SimpleMeshShape shape() const noexcept;
+    [[nodiscard]] const MeshShape& shape() const noexcept;
     [[nodiscard]] bool contains(const MeshCoordinate& coord) const noexcept;
     [[nodiscard]] IDevice* get_device(const MeshCoordinate& coord) const;
     [[nodiscard]] const IDevice* at(const MeshCoordinate& coord) const noexcept;
@@ -77,7 +77,7 @@ public:
     // Throws if the `coord` is out of bounds of this view.
     [[nodiscard]] chip_id_t find_device_id(const MeshCoordinate& coord) const;
 
-    // TODO: Remove the methods that assume 2D mesh.
+    // TODO: #17477 - Remove the methods that assume 2D mesh.
     [[nodiscard]] bool is_mesh_2d() const;
     [[nodiscard]] size_t num_rows() const;
     [[nodiscard]] size_t num_cols() const;
@@ -95,6 +95,7 @@ public:
     // The current support only provides left-to-right and right-to-left snaking of the line.
     //
     // Important: these utilities currently only support 2D meshes.
+    // TODO: #17477 - Remove the methods that assume 2D mesh.
     [[nodiscard]] static std::vector<MeshCoordinate> get_line_coordinates(size_t length, const Shape2D& mesh_shape);
     [[nodiscard]] static std::vector<MeshCoordinate> get_ring_coordinates(
         const Shape2D& ring_shape, const Shape2D& mesh_shape);
@@ -106,7 +107,7 @@ private:
     std::unordered_map<chip_id_t, MeshCoordinate> device_coordinates_;
 
     // Set if the view is 2D to enable row/col APIs, otherwise nullopt.
-    // TODO: remove this?
+    // TODO: #17477 - Remove this?
     std::optional<Shape2D> shape_2d_;
 };
 

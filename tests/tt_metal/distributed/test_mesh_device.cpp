@@ -55,30 +55,37 @@ TEST_F(MeshDeviceTest, NumDramChannels) {
 TEST_F(MeshDeviceTest, ViewIs2D) {
     std::vector<IDevice*> devices = mesh_device_->get_devices();
 
-    MeshContainer<IDevice*> container_1d(SimpleMeshShape(8), devices);
+    MeshContainer<IDevice*> container_1d(MeshShape(8), devices);
     MeshDeviceView view_1d(container_1d);
     EXPECT_FALSE(view_1d.is_mesh_2d());
 
-    MeshContainer<IDevice*> container_2d(SimpleMeshShape(2, 4), devices);
+    MeshContainer<IDevice*> container_2d(MeshShape(2, 4), devices);
     MeshDeviceView view_2d(container_2d);
     EXPECT_TRUE(view_2d.is_mesh_2d());
 
-    MeshContainer<IDevice*> container_3d(SimpleMeshShape(2, 2, 2), devices);
+    MeshContainer<IDevice*> container_3d(MeshShape(2, 2, 2), devices);
     MeshDeviceView view_3d(container_3d);
     EXPECT_FALSE(view_3d.is_mesh_2d());
 }
 
-TEST_F(MeshDeviceTest, Submesh) {
-    EXPECT_EQ(mesh_device_->shape().num_rows, 2);
-    EXPECT_EQ(mesh_device_->shape().num_cols, 4);
+TEST_F(MeshDeviceTest, CreateSubmeshInvalidConfig) {
+    EXPECT_EQ(mesh_device_->shape(), MeshShape(2, 4));
+
+    EXPECT_ANY_THROW(mesh_device_->create_submesh(MeshShape{1, 3}, MeshCoordinate{1}));
+    EXPECT_ANY_THROW(mesh_device_->create_submesh(MeshShape{0, 3}, MeshCoordinate{0, 0}));
+    EXPECT_ANY_THROW(mesh_device_->create_submesh(MeshShape{2, 4}, MeshCoordinate{1, 1}));
+    EXPECT_ANY_THROW(mesh_device_->create_submesh(MeshShape{2, 4, 1}, MeshCoordinate{0, 0}));
+}
+
+TEST_F(MeshDeviceTest, CreateSubmesh) {
+    EXPECT_EQ(mesh_device_->shape(), MeshShape(2, 4));
     EXPECT_THAT(mesh_device_->get_devices(), SizeIs(8));
     EXPECT_TRUE(mesh_device_->is_parent_mesh());
     EXPECT_THAT(mesh_device_->get_submeshes(), IsEmpty());
 
-    auto submesh = mesh_device_->create_submesh(MeshShape{1, 2}, MeshOffset{1, 1});
+    auto submesh = mesh_device_->create_submesh(MeshShape{1, 2}, MeshCoordinate{1, 1});
     EXPECT_THAT(mesh_device_->get_submeshes(), SizeIs(1));
-    EXPECT_EQ(submesh->shape().num_rows, 1);
-    EXPECT_EQ(submesh->shape().num_cols, 2);
+    EXPECT_EQ(submesh->shape(), MeshShape(1, 2));
     EXPECT_THAT(submesh->get_devices(), SizeIs(2));
     EXPECT_FALSE(submesh->is_parent_mesh());
     EXPECT_THAT(submesh->get_submeshes(), IsEmpty());
@@ -86,7 +93,25 @@ TEST_F(MeshDeviceTest, Submesh) {
     // Verify coordinates are correct.
     EXPECT_EQ(mesh_device_->get_device(MeshCoordinate{1, 1})->id(), submesh->get_device(MeshCoordinate{0, 0})->id());
     EXPECT_EQ(mesh_device_->get_device(MeshCoordinate{1, 2})->id(), submesh->get_device(MeshCoordinate{0, 1})->id());
-    EXPECT_EQ(submesh->get_device(1, 1), nullptr);
+    EXPECT_EQ(submesh->get_device(MeshCoordinate{1, 1}), nullptr);
+}
+
+TEST_F(MeshDeviceTest, CreateSubmeshesNonDivisibleSubshape) {
+    EXPECT_EQ(mesh_device_->shape(), MeshShape(2, 4));
+    EXPECT_ANY_THROW(mesh_device_->create_submeshes(MeshShape{1, 3}));
+}
+
+TEST_F(MeshDeviceTest, CreateSubmeshes) {
+    EXPECT_EQ(mesh_device_->shape(), MeshShape(2, 4));
+
+    auto submeshes = mesh_device_->create_submeshes(MeshShape{1, 2});
+    EXPECT_THAT(submeshes, SizeIs(4));
+    for (const auto& submesh : submeshes) {
+        EXPECT_EQ(submesh->shape(), MeshShape(1, 2));
+        EXPECT_THAT(submesh->get_devices(), SizeIs(2));
+    }
+
+    EXPECT_EQ(mesh_device_->get_submeshes(), submeshes);
 }
 
 }  // namespace

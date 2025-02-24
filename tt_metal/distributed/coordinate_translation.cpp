@@ -4,6 +4,7 @@
 
 #include "tt_metal/distributed/coordinate_translation.hpp"
 
+#include "indestructible.hpp"
 #include "tt_cluster.hpp"
 
 #include <nlohmann/json.hpp>
@@ -51,20 +52,20 @@ CoordinateTranslationMap load_translation_map(const std::string& filename, const
 
 }  // namespace
 
-const std::pair<CoordinateTranslationMap, SimpleMeshShape>& get_system_mesh_coordinate_translation_map() {
-    static const auto* cached_translation_map = new std::pair<CoordinateTranslationMap, SimpleMeshShape>([] {
+const std::pair<CoordinateTranslationMap, MeshShape>& get_system_mesh_coordinate_translation_map() {
+    static tt::stl::Indestructible<std::pair<CoordinateTranslationMap, MeshShape>> kTranslationMap([]() {
         const auto system_num_devices = tt::Cluster::instance().number_of_user_devices();
 
         const bool is_qg = tt::Cluster::instance().number_of_pci_devices() == system_num_devices;
 
         // TODO: #17477 - This assumes shapes and coordinates are in 2D. This will be extended for 3D.
         // Consider if 1D can be used for single device and N300.
-        const std::unordered_map<size_t, std::pair<std::string, SimpleMeshShape>> system_mesh_translation_map = {
-            {1, std::make_pair("device.json", SimpleMeshShape(1, 1))},
-            {2, std::make_pair("N300.json", SimpleMeshShape(1, 2))},
-            {8, std::make_pair("T3000.json", SimpleMeshShape(2, 4))},
-            {32, std::make_pair(is_qg ? "QG.json" : "TG.json", SimpleMeshShape(8, 4))},
-            {64, std::make_pair("TGG.json", SimpleMeshShape(8, 8))},
+        const std::unordered_map<size_t, std::pair<std::string, MeshShape>> system_mesh_translation_map = {
+            {1, std::make_pair("device.json", MeshShape(1, 1))},
+            {2, std::make_pair("N300.json", MeshShape(1, 2))},
+            {8, std::make_pair("T3000.json", MeshShape(2, 4))},
+            {32, std::make_pair(is_qg ? "QG.json" : "TG.json", MeshShape(8, 4))},
+            {64, std::make_pair("TGG.json", MeshShape(8, 8))},
         };
         TT_FATAL(
             system_mesh_translation_map.contains(system_num_devices),
@@ -79,12 +80,12 @@ const std::pair<CoordinateTranslationMap, SimpleMeshShape>& get_system_mesh_coor
             shape.mesh_size());
         log_debug(LogMetal, "Logical SystemMesh Shape: {}", shape);
 
-        return std::pair<CoordinateTranslationMap, SimpleMeshShape>{
+        return std::pair<CoordinateTranslationMap, MeshShape>{
             load_translation_map(get_config_path(translation_config_file), /*key=*/"logical_to_physical_coordinates"),
             shape};
     }());
 
-    return *cached_translation_map;
+    return kTranslationMap.get();
 }
 
 }  // namespace tt::tt_metal::distributed
