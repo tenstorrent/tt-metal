@@ -358,7 +358,7 @@ std::ostream& operator<<(std::ostream& os, const MeshDevice& mesh_device) { retu
 void MeshDevice::enable_async(bool enable) {
     auto devices = this->get_devices();
     if (enable && devices.size() == 1) {
-        tt::log_warning("Async mode is disabled for single device, ignoring enable_async call");
+        tt::log_warning("Async mode is always disabled for a single device, ignoring enable_async call");
         return;
     }
     for (auto device : devices) {

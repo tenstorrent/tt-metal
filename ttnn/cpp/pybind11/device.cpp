@@ -12,7 +12,6 @@
 #include <tt-metalium/persistent_kernel_cache.hpp>
 #include <tt-metalium/compilation_reporter.hpp>
 #include <tt-metalium/memory_reporter.hpp>
-#include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/logger.hpp>
 #include <tt-metalium/device_impl.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -182,7 +181,8 @@ void device_module(py::module& m_device) {
                 "enable_async",
                 [](IDevice* device, bool enable) {
                     if (enable) {
-                        tt::log_warning("Async mode is disabled for single device, ignoring enable_async call");
+                        tt::log_warning(
+                            "Async mode is always disabled for a single device, ignoring enable_async call");
                         return;
                     }
                     device->enable_async(enable);
