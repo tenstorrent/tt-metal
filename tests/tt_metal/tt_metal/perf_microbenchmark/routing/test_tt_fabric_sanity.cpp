@@ -96,7 +96,6 @@ typedef struct test_board {
     std::unique_ptr<tt::tt_fabric::ControlPlane> cp_owning_ptr;
     uint32_t num_chips_to_use;
     std::string mesh_graph_descriptor;
-    tt::tt_metal::DispatchCoreType dispatch_core_type = tt::tt_metal::DispatchCoreType::WORKER;
 
     test_board(std::string& board_type_) {
         if ("n300" == board_type_) {
@@ -141,8 +140,7 @@ typedef struct test_board {
         if (metal_fabric_init_level != 0) {
             tt::tt_metal::detail::InitializeFabricSetting(tt::tt_metal::detail::FabricSetting::FABRIC);
         }
-        device_handle_map =
-            tt::tt_metal::detail::CreateDevices(available_chip_ids, 1, 0, 0, DispatchCoreConfig{dispatch_core_type});
+        device_handle_map = tt::tt_metal::detail::CreateDevices(available_chip_ids);
         if (metal_fabric_init_level == 0) {
             _init_control_plane(mesh_graph_descriptor);
             control_plane->configure_routing_tables();
