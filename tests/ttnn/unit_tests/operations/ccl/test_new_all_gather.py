@@ -176,6 +176,7 @@ def run_all_gather_impl(
             0,
             enable_persistent_fabric,
             wrap_fabric_around_mesh=wrap_fabric_around_mesh,
+            context_switch_interval_override=200000,
         )
         mesh_device.set_sub_device_stall_group(sub_device_stall_group)
 
