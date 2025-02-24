@@ -241,6 +241,36 @@ void LightMetalReplay::setup_devices() {
 // TODO (kmabee) - Hardcode for now, eventually capture/replay "systemdesc" from binary or let user call.
 void LightMetalReplay::close_devices() { CloseDevice(this->device_); }
 
+// Clear object maps for items not deallocated/destroyed naturally during replay.
+// Later can update these to be asserts once all paths covered properly.
+void LightMetalReplay::clear_object_maps() {
+    // Later can update these to be asserts.
+    if (buffer_map_.size()) {
+        log_debug(tt::LogMetalTrace, "Cleared LightMetalReplay BufferMap: {} entries", buffer_map_.size());
+        buffer_map_.clear();
+    }
+
+    if (program_map_.size()) {
+        log_debug(tt::LogMetalTrace, "Cleared LightMetalReplay ProgramMap: {} entries", program_map_.size());
+        program_map_.clear();
+    }
+
+    if (kernel_handle_map_.size()) {
+        log_debug(tt::LogMetalTrace, "Cleared LightMetalReplay KernelHandleMap: {} entries", kernel_handle_map_.size());
+        kernel_handle_map_.clear();
+    }
+
+    if (kernel_map_.size()) {
+        log_debug(tt::LogMetalTrace, "Cleared LightMetalReplay KernelMap: {} entries", kernel_map_.size());
+        kernel_map_.clear();
+    }
+
+    if (cb_handle_map_.size()) {
+        log_debug(tt::LogMetalTrace, "Cleared LightMetalReplay CBHandleMap: {} entries", cb_handle_map_.size());
+        cb_handle_map_.clear();
+    }
+}
+
 //////////////////////////////////////
 // Executor                         //
 //////////////////////////////////////
@@ -688,10 +718,12 @@ bool LightMetalReplay::execute_binary() {
             execute(cmd);
         }
 
+        clear_object_maps();
         close_devices();
 
         return true;
     } catch (const std::exception& e) {
+        clear_object_maps();
         close_devices();
         log_fatal(e.what());
         return false;
