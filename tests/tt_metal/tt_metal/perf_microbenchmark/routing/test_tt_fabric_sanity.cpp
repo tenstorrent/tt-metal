@@ -1584,7 +1584,7 @@ int main(int argc, char **argv) {
 
         uint32_t client_interface_addr = worker_unreserved_base_addr;
         uint32_t client_pull_req_buf_addr =
-            client_interface_addr + sizeof(fabric_client_interface_t) + sizeof(fabric_router_l1_config_t) * 4;
+            client_interface_addr + sizeof(fabric_pull_client_interface_t) + sizeof(fabric_router_l1_config_t) * 4;
 
         std::vector<uint32_t> tx_compile_args = {
             0,                           //(device->id() << 8) + src_endpoint_start_id + i,  // 0: src_endpoint_id
