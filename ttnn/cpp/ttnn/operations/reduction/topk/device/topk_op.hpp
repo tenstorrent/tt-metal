@@ -12,7 +12,7 @@
 namespace ttnn::operations::reduction {
 
 struct TopK {
-    const uint16_t k;
+    const uint32_t k;
     const int8_t dim;
     const bool largest;
     const bool sorted;
