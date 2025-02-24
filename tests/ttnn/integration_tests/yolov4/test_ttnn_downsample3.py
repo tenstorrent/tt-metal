@@ -36,15 +36,8 @@ def test_down3(device, reset_seeds, model_location_generator):
     ttnn_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16)
     torch_input = torch_input.permute(0, 3, 1, 2).float()
     torch_model = DownSample3()
-
-    new_state_dict = {}
     ds_state_dict = {k: v for k, v in ttnn_model.torch_model.items() if (k.startswith("down3."))}
-
-    keys = [name for name, parameter in torch_model.state_dict().items()]
-    values = [parameter for name, parameter in ds_state_dict.items()]
-    for i in range(len(keys)):
-        new_state_dict[keys[i]] = values[i]
-
+    new_state_dict = dict(zip(torch_model.state_dict().keys(), ds_state_dict.values()))
     torch_model.load_state_dict(new_state_dict)
     torch_model.eval()
 
@@ -58,4 +51,4 @@ def test_down3(device, reset_seeds, model_location_generator):
     ref = torch_model(torch_input)
     ref = ref.permute(0, 2, 3, 1)
     result = result.reshape(ref.shape)
-    assert_with_pcc(result, ref, 0.95)  # PCC 0.95 - The PCC will improve once #3612 is resolved.
+    assert_with_pcc(result, ref, 0.96)  # PCC 0.96 - The PCC will improve once #3612 is resolved.
