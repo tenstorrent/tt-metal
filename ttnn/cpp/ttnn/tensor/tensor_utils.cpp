@@ -152,18 +152,22 @@ void insert_buffer_and_shape_for_device(
         [target_device, &shard, buffer_index](auto&& s) {
             using T = std::decay_t<decltype(s)>;
             if constexpr (std::is_same_v<T, MultiDeviceHostStorage>) {
+                TT_FATAL(shard.storage_type() == StorageType::OWNED, "Shard must be an owned tensor");
                 s.insert_buffer_and_spec_for_device(
                     buffer_index.value(),
                     std::get<OwnedStorage>(shard.tensor_attributes->storage).get_buffer(),
                     shard.tensor_attributes->tensor_spec);
             } else if constexpr (std::is_same_v<T, MultiDeviceStorage>) {
+                TT_FATAL(shard.storage_type() == StorageType::DEVICE, "Shard must be a device tensor");
                 s.insert_buffer_and_spec_for_device(
                     target_device,
                     std::get<DeviceStorage>(shard.tensor_attributes->storage).get_buffer(),
                     shard.tensor_attributes->tensor_spec);
             } else if constexpr (std::is_same_v<T, OwnedStorage>) {
+                TT_FATAL(shard.storage_type() == StorageType::OWNED, "Shard must be an owned tensor");
                 s.insert_buffer(std::get<OwnedStorage>(shard.tensor_attributes->storage).get_buffer());
             } else if constexpr (std::is_same_v<T, DeviceStorage>) {
+                TT_FATAL(shard.storage_type() == StorageType::DEVICE, "Shard must be a device tensor");
                 s.insert_buffer(std::get<DeviceStorage>(shard.tensor_attributes->storage).get_buffer());
             } else {
                 TT_THROW("Unsupported storage in insert_buffer_and_shape_for_device");
