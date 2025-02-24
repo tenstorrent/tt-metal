@@ -51,21 +51,6 @@ public:
     static ttnn::Shape pad_to_tile_shape(const ttnn::Shape& unpadded_shape);
 
     /**
-     * Checks if a shape is legal for tile layout
-     * @param shape Shape to check
-     * @return True if shape dimensions are properly aligned for tile layout
-     */
-    static bool legal_tile_shape(const ttnn::Shape& shape);
-
-    /**
-     * Checks if a shape is legal for a specific device layout
-     * @param shape Shape to check
-     * @param layout Target layout
-     * @return True if shape is legal for the specified layout
-     */
-    static bool legal_device_shape(const ttnn::Shape& shape, tt::tt_metal::Layout layout);
-
-    /**
      * Checks if a tensor matches the required format specifications
      * @param a Input tensor to check
      * @param shape Required shape

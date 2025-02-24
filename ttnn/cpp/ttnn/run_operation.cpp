@@ -570,9 +570,7 @@ void validate_workers_and_storage(
 }
 
 std::vector<IDevice*> get_workers_for_op_output(
-    const std::vector<Tensor>& inputs,
-    const std::vector<std::optional<const Tensor>>& optional_inputs,
-    bool enable_autoformat_device) {
+    const std::vector<Tensor>& inputs, const std::vector<std::optional<const Tensor>>& optional_inputs) {
     using ttnn::operations::experimental::auto_format::AutoFormat;
     std::vector<IDevice*> workers_for_op = {};
     // Infer output workers from inputs. For multi-device tensors the number
@@ -597,18 +595,6 @@ std::vector<IDevice*> get_workers_for_op_output(
                     workers_for_op = workers;
                 }
             }
-        }
-    }
-    if (enable_autoformat_device) {
-        validate_workers_and_storage(inputs, optional_inputs, workers_for_op);
-        // Workers not specified - inputs are on host and not multi-device.
-        // Use the default device from autoformat.
-        if (not workers_for_op.size()) {
-            TT_FATAL(
-                AutoFormat::GetDefaultDevice(),
-                "Default device must be specified using AutoFormat::SetDefaultDevice, if workers are not specified for "
-                "inputs to op.");
-            workers_for_op = {AutoFormat::GetDefaultDevice()};
         }
     }
     return workers_for_op;

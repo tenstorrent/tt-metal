@@ -14,9 +14,10 @@
 namespace tt::tt_metal::distributed::test {
 namespace {
 
-using MeshEventsTest = T3000MultiCQMultiDeviceFixture;
+using MeshEventsTestT3000 = T3000MultiCQMeshDeviceFixture;
+using MeshEventsTestSuite = GenericMultiCQMeshDeviceFixture;
 
-TEST_F(MeshEventsTest, ReplicatedAsyncIO) {
+TEST_F(MeshEventsTestSuite, ReplicatedAsyncIO) {
     uint32_t NUM_TILES = 1000;
     uint32_t num_iterations = 20;
     int32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);
@@ -49,9 +50,12 @@ TEST_F(MeshEventsTest, ReplicatedAsyncIO) {
         for (std::size_t logical_x = 0; logical_x < buf->device()->num_cols(); logical_x++) {
             for (std::size_t logical_y = 0; logical_y < buf->device()->num_rows(); logical_y++) {
                 readback_vecs.push_back({});
-                auto shard = buf->get_device_buffer(Coordinate(logical_y, logical_x));
+                auto shard = buf->get_device_buffer(MeshCoordinate(logical_y, logical_x));
                 ReadShard(
-                    mesh_device_->mesh_command_queue(1), readback_vecs.back(), buf, Coordinate(logical_y, logical_x));
+                    mesh_device_->mesh_command_queue(1),
+                    readback_vecs.back(),
+                    buf,
+                    MeshCoordinate(logical_y, logical_x));
             }
         }
 
@@ -61,7 +65,7 @@ TEST_F(MeshEventsTest, ReplicatedAsyncIO) {
     }
 }
 
-TEST_F(MeshEventsTest, ShardedAsyncIO) {
+TEST_F(MeshEventsTestT3000, ShardedAsyncIO) {
     uint32_t num_iterations = 20;
     uint32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);
 
@@ -108,7 +112,7 @@ TEST_F(MeshEventsTest, ShardedAsyncIO) {
     }
 }
 
-TEST_F(MeshEventsTest, AsyncWorkloadAndIO) {
+TEST_F(MeshEventsTestSuite, AsyncWorkloadAndIO) {
     uint32_t num_iters = 5;
     std::vector<std::shared_ptr<MeshBuffer>> src0_bufs = {};
     std::vector<std::shared_ptr<MeshBuffer>> src1_bufs = {};
@@ -119,8 +123,8 @@ TEST_F(MeshEventsTest, AsyncWorkloadAndIO) {
     auto programs = tt::tt_metal::distributed::test::utils::create_eltwise_bin_programs(
         mesh_device_, src0_bufs, src1_bufs, output_bufs);
     auto mesh_workload = CreateMeshWorkload();
-    LogicalDeviceRange devices_0 = LogicalDeviceRange({0, 0}, {3, 0});
-    LogicalDeviceRange devices_1 = LogicalDeviceRange({0, 1}, {3, 1});
+    LogicalDeviceRange devices_0 = LogicalDeviceRange({0, 0}, {mesh_device_->num_cols() - 1, 0});
+    LogicalDeviceRange devices_1 = LogicalDeviceRange({0, 1}, {mesh_device_->num_cols() - 1, 1});
 
     AddProgramToMeshWorkload(mesh_workload, *programs[0], devices_0);
     AddProgramToMeshWorkload(mesh_workload, *programs[1], devices_1);
@@ -172,7 +176,7 @@ TEST_F(MeshEventsTest, AsyncWorkloadAndIO) {
                             mesh_device_->mesh_command_queue(1),
                             dst_vec,
                             output_bufs[col_idx * worker_grid_size.y + row_idx],
-                            Coordinate(logical_y, logical_x));
+                            MeshCoordinate(logical_y, logical_x));
                         if (logical_y == 0) {
                             for (int i = 0; i < dst_vec.size(); i++) {
                                 EXPECT_EQ(dst_vec[i].to_float(), (2 * iter + 5));
@@ -189,7 +193,7 @@ TEST_F(MeshEventsTest, AsyncWorkloadAndIO) {
     }
 }
 
-TEST_F(MeshEventsTest, CustomDeviceRanges) {
+TEST_F(MeshEventsTestSuite, CustomDeviceRanges) {
     uint32_t NUM_TILES = 1000;
     uint32_t num_iterations = 20;
     int32_t single_tile_size = ::tt::tt_metal::detail::TileSize(DataFormat::UInt32);
@@ -209,8 +213,8 @@ TEST_F(MeshEventsTest, CustomDeviceRanges) {
     for (std::size_t i = 0; i < num_iterations; i++) {
         std::vector<uint32_t> src_vec(NUM_TILES * single_tile_size / sizeof(uint32_t), i);
         std::iota(src_vec.begin(), src_vec.end(), i);
-        LogicalDeviceRange devices_0 = LogicalDeviceRange({0, 0}, {3, 0});
-        LogicalDeviceRange devices_1 = LogicalDeviceRange({0, 1}, {3, 1});
+        LogicalDeviceRange devices_0 = LogicalDeviceRange({0, 0}, {mesh_device_->num_cols() - 1, 0});
+        LogicalDeviceRange devices_1 = LogicalDeviceRange({0, 1}, {mesh_device_->num_cols() - 1, 1});
 
         std::vector<std::vector<uint32_t>> readback_vecs = {};
         std::shared_ptr<MeshEvent> event_0 = std::make_shared<MeshEvent>();
@@ -223,9 +227,12 @@ TEST_F(MeshEventsTest, CustomDeviceRanges) {
         for (std::size_t logical_x = devices_0.start_coord.x; logical_x < devices_0.end_coord.x; logical_x++) {
             for (std::size_t logical_y = devices_0.start_coord.y; logical_y < devices_0.end_coord.y; logical_y++) {
                 readback_vecs.push_back({});
-                auto shard = buf->get_device_buffer(Coordinate(logical_y, logical_x));
+                auto shard = buf->get_device_buffer(MeshCoordinate(logical_y, logical_x));
                 ReadShard(
-                    mesh_device_->mesh_command_queue(0), readback_vecs.back(), buf, Coordinate(logical_y, logical_x));
+                    mesh_device_->mesh_command_queue(0),
+                    readback_vecs.back(),
+                    buf,
+                    MeshCoordinate(logical_y, logical_x));
             }
         }
 
@@ -236,9 +243,12 @@ TEST_F(MeshEventsTest, CustomDeviceRanges) {
         for (std::size_t logical_x = devices_1.start_coord.x; logical_x < devices_1.end_coord.x; logical_x++) {
             for (std::size_t logical_y = devices_1.start_coord.y; logical_y < devices_1.end_coord.y; logical_y++) {
                 readback_vecs.push_back({});
-                auto shard = buf->get_device_buffer(Coordinate(logical_y, logical_x));
+                auto shard = buf->get_device_buffer(MeshCoordinate(logical_y, logical_x));
                 ReadShard(
-                    mesh_device_->mesh_command_queue(0), readback_vecs.back(), buf, Coordinate(logical_y, logical_x));
+                    mesh_device_->mesh_command_queue(0),
+                    readback_vecs.back(),
+                    buf,
+                    MeshCoordinate(logical_y, logical_x));
             }
         }
         for (auto& vec : readback_vecs) {

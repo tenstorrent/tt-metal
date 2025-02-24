@@ -85,14 +85,14 @@ Program CreateEltwiseAddProgram(
 // The example showcases TT-Metalium's ability to abstract away the complexity
 // of distributed memory management and compute.
 int main(int argc, char** argv) {
-    auto mesh_device = MeshDevice::create(MeshDeviceConfig{.mesh_shape{2, 4}});
+    auto mesh_device = MeshDevice::create(MeshDeviceConfig{.mesh_shape = SimpleMeshShape(2, 4)});
 
     // Define the global buffer shape and shard shape for distributed buffers
     auto shard_shape = Shape2D{32, 32};
     auto distributed_buffer_shape =
         Shape2D{shard_shape.height() * mesh_device->num_rows(), shard_shape.width() * mesh_device->num_cols()};
     auto num_tiles = 1;
-    auto tile_size_bytes = detail::TileSize(tt::DataFormat::Float16_b);
+    auto tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
     auto distributed_buffer_size_bytes = mesh_device->num_rows() * mesh_device->num_cols() * tile_size_bytes;
 
     // Configure device-local buffer settings

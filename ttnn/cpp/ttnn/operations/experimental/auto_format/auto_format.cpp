@@ -20,6 +20,35 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::experimental::auto_format {
 
+namespace {
+namespace CMAKE_UNIQUE_NAMESPACE {
+
+/**
+ * Checks if a shape is legal for tile layout
+ * @param shape Shape to check
+ * @return True if shape dimensions are properly aligned for tile layout
+ */
+bool legal_tile_shape(const ttnn::Shape& shape) {
+    return (shape[2] % tt::constants::TILE_HEIGHT == 0 && shape[3] % tt::constants::TILE_WIDTH == 0);
+}
+
+/**
+ * Checks if a shape is legal for a specific device layout
+ * @param shape Shape to check
+ * @param layout Target layout
+ * @return True if shape is legal for the specified layout
+ */
+bool legal_device_shape(const ttnn::Shape& shape, tt::tt_metal::Layout layout) {
+    switch (layout) {
+        case tt::tt_metal::Layout::ROW_MAJOR: return true;
+        case tt::tt_metal::Layout::TILE: return legal_tile_shape(shape);
+        default: return true;
+    }
+}
+
+}  // namespace CMAKE_UNIQUE_NAMESPACE
+}  // anonymous namespace
+
 Tensor AutoFormat::move_tensor_to_device(const Tensor& input, IDevice* device, const MemoryConfig& mem_config) {
     if (input.storage_type() != StorageType::DEVICE) {
         return input.to_device(device, mem_config);
@@ -96,7 +125,7 @@ Tensor AutoFormat::format_input_tensor(
                     padded_shape.to_array_4D(),
                     tt::tt_metal::Array4D({0, 0, 0, 0}),
                     pad_value,
-                    false, /* multicore */
+                    /* multicore */ false,
                     mem_config);
             }
         } else if (convert_layout && pad_input) {
@@ -117,7 +146,7 @@ Tensor AutoFormat::format_input_tensor(
                     padded_shape.to_array_4D(),
                     tt::tt_metal::Array4D({0, 0, 0, 0}),
                     pad_value,
-                    false, /* multicore */
+                    /* multicore */ false,
                     mem_config);
             }
         }
@@ -276,18 +305,6 @@ ttnn::Shape AutoFormat::pad_to_tile_shape(const ttnn::Shape& unpadded_shape) {
         padded_shape_vec[rank - 2] = h;
     }
     return Shape(padded_shape_vec);
-}
-
-bool AutoFormat::legal_tile_shape(const ttnn::Shape& shape) {
-    return (shape[2] % tt::constants::TILE_HEIGHT == 0 && shape[3] % tt::constants::TILE_WIDTH == 0);
-}
-
-bool AutoFormat::legal_device_shape(const ttnn::Shape& shape, tt::tt_metal::Layout layout) {
-    switch (layout) {
-        case tt::tt_metal::Layout::ROW_MAJOR: return true;
-        case tt::tt_metal::Layout::TILE: return legal_tile_shape(shape);
-        default: return true;
-    }
 }
 
 bool AutoFormat::check_input_tensor_format(

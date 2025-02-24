@@ -30,6 +30,9 @@ def repack_mixtral_weights(ckpt_dir, repack_dir):
         )
     }
 
+    # clear the state dict to lower the memory footprint
+    state_dict.clear()
+
     base_address = "feed_forward."
     for l in range(model_args.n_layers):
         print(f"Updating layer {l}...")

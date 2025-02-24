@@ -204,6 +204,7 @@ class TtModelArgs:
                 "DeepSeek-R1-Distill-Llama-70B": {"N150": None, "N300": None, "T3K": 32, "TG": 128},
                 "Qwen2.5-7B": {"N150": 4, "N300": 64, "T3K": 128, "TG": 128},
                 "Qwen2.5-72B": {"N150": None, "N300": None, "T3K": 32, "TG": 128},
+                "Phi-3.5-mini-instruct": {"N150": 128, "N300": 128, "T3K": 128, "TG": 128},
             }
             try:
                 max_prefill_chunk_size_div1024 = MAX_PREFILL_CHUNK_SIZES_DIV1024[self.base_model_name][self.device_name]
@@ -376,16 +377,18 @@ class TtModelArgs:
             else:
                 self.model_config["ATTN_ALL_GATHER_MATMUL_PROGCFG"] = None
 
-            prefill_rows = lambda seq_len: min(seq_len, 1024) // self.tile_size
+            # For maximum performance, set the prefill grid row to 8, even if it can fit in a smaller grid
+            # prefill_rows = lambda seq_len: min(seq_len, 1024) // self.tile_size
+            prefill_rows = 8
             mlp1_3_grid = lambda seq_len: (
                 (8, min(min(seq_len, 1024) // 32, 4))
                 if self.is_galaxy
-                else self.find_prefill_grid(prefill_rows(seq_len), self.dim // self.tile_size)
+                else self.find_prefill_grid(prefill_rows, self.dim // self.tile_size)
             )
             mlp2_grid = lambda seq_len: (
                 (8, min(min(seq_len, 1024) // 32, 4))
                 if self.is_galaxy
-                else self.find_prefill_grid(prefill_rows(seq_len), self.hidden_dim // self.tile_size)
+                else self.find_prefill_grid(prefill_rows, self.hidden_dim // self.tile_size)
             )
 
             self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"] = lambda seq_len: self.matmul_config(
@@ -402,14 +405,23 @@ class TtModelArgs:
             )
 
             k_dim = self.dim // self.cluster_shape[0] if self.is_galaxy else self.dim
-            n_dim = self.dim // self.cluster_shape[1] if self.is_galaxy else self.dim
+            # n_dim = self.dim // self.cluster_shape[1] if self.is_galaxy else self.dim
+            n_dim = (
+                self.dim // self.cluster_shape[1]
+                if self.is_galaxy
+                else (
+                    1024
+                    if self.ccl_topology() == ttnn.Topology.Ring and 1024 % (self.dim / self.num_devices) == 0
+                    else self.dim
+                )
+            )
             num_rows = lambda seq_len: min(seq_len, 1024 if self.is_galaxy else 2048)
             self.model_config["WO_PREFILL_PROGCFG"] = lambda seq_len: self.matmul_config(
                 m=num_rows(seq_len),
                 k=k_dim,
                 n=n_dim,
                 grid_size=self.find_prefill_grid(num_rows(seq_len), n_dim // self.tile_size),
-                in0_block_w=1,
+                in0_block_w=1 if self.is_galaxy else self.dim // 1024,
                 fuse_batch=seq_len <= 1024,  # if self.is_galaxy else 2048),
             )
 
