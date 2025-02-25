@@ -4,18 +4,17 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
+#include "permute_struct.hpp"
 
 void kernel_main() {
-    constexpr bool src0_is_dram = (bool)get_compile_time_arg_val(0);
-    constexpr uint32_t N = get_compile_time_arg_val(1);
-    constexpr uint32_t page_size = get_compile_time_arg_val(2);
-    constexpr uint32_t num_rows = get_compile_time_arg_val(3);
+    constexpr auto PermuteReaderArgs = PERMUTE_READER_STRUCT;
 
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
     const uint32_t start_row = get_arg_val<uint32_t>(1);
     const uint32_t end_row = get_arg_val<uint32_t>(2);
 
-    const InterleavedAddrGen<src0_is_dram> s0 = {.bank_base_address = src_addr, .page_size = page_size};
+    const InterleavedAddrGen<PermuteReaderArgs.src_is_dram> s0 = {
+        .bank_base_address = src_addr, .page_size = PermuteReaderArgs.input_rm_page_size};
 
     uint32_t curr_addr = src_addr;
     for (uint32_t row = start_row; row < end_row; ++row) {

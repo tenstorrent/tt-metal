@@ -5,6 +5,7 @@
 #include "ttnn/operations/data_movement/squeeze/squeeze.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 
+#include "cpp/ttnn/tensor/shape/shape.hpp"
 #include "cpp/ttnn/tensor/types.hpp"
 #include "cpp/ttnn/tensor/tensor.hpp"
 
@@ -249,6 +250,48 @@ inline std::enable_if_t<std::is_floating_point_v<T>, std::string> stringify(cons
     return std::to_string(value);
 }
 
+// ----------------------------------------------------------------------
+// Primitive types for template argument conversion
+enum class PrimType {
+    INT,
+    INT8,
+    INT16,
+    INT32,
+    INT64,
+    UINT8,
+    UINT16,
+    UINT32,
+    UINT64,
+    FLOAT16,
+    FLOAT32,
+    BOOL,
+    CHAR,
+    VOID
+};
+
+// For primitive types
+inline std::string stringify(PrimType prim_type) {
+    switch (prim_type) {
+        case PrimType::INT: return "int";
+        case PrimType::INT8: return "int8_t";
+        case PrimType::INT16: return "int16_t";
+        case PrimType::INT32: return "int32_t";
+        case PrimType::INT64: return "int64_t";
+        case PrimType::UINT8: return "uint8_t";
+        case PrimType::UINT16: return "uint16_t";
+        case PrimType::UINT32: return "uint32_t";
+        case PrimType::UINT64: return "uint64_t";
+        case PrimType::FLOAT16: return "float16_t";
+        case PrimType::FLOAT32: return "float";
+        case PrimType::BOOL: return "bool";
+        case PrimType::CHAR: return "char";
+        case PrimType::VOID: return "void";
+        default: {
+            TT_FATAL(false, "Unsupported primitive type for string conversion");
+        }
+    }
+}
+
 // For C-style arrays.
 template <typename T, std::size_t N>
 inline std::string stringify(const T (&arr)[N]) {
@@ -277,22 +320,6 @@ inline std::string stringify(const std::array<T, N>& arr) {
     return result;
 }
 
-// Specialization for std::vector (output with double braces).
-template <typename T, typename Allocator>
-inline std::string stringify(const std::vector<T, Allocator>& vec) {
-    std::string result = "{{";
-    bool first = true;
-    for (const auto& elem : vec) {
-        if (!first) {
-            result += ", ";
-        }
-        result += stringify(elem);
-        first = false;
-    }
-    result += "}}";
-    return result;
-}
-
 // For generic containers (excluding std::string and C-style arrays).
 template <
     typename Container,
@@ -313,6 +340,8 @@ inline std::string stringify(const Container& container) {
     result += "}";
     return result;
 }
+
+inline std::string stringify(const tt::tt_metal::Shape& shape) { return stringify(shape.view()); }
 
 //----------------------------------------------------------------------
 // Tuple-to-vector conversion for template arguments.
@@ -336,21 +365,7 @@ inline std::vector<std::string> tuple_to_vector_of_strings(const Tuple& tup) {
     return tuple_to_vector_of_strings_impl(tup, std::make_index_sequence<std::tuple_size_v<std::decay_t<Tuple>>>{});
 }
 
-//----------------------------------------------------------------------
-// Helper traits for retrieving a type’s name.
-// Users must specialize these for their types.
-
-template <template <typename, auto...> class T>
-struct TemplateNameTT;  // No default definition
-
-template <typename T>
-struct TemplateNameTTHelper;  // No default definition
-
-//----------------------------------------------------------------------
-// The instantiate API.
-// There are three overloads provided:
-
-// 1. Instantiate using an explicit struct name.
+// Instantiate using an explicit struct name.
 template <typename Tuple, typename... Args>
 inline std::string instantiate(
     const std::string& structName, const Tuple& templateArgsTuple, const Args&... constructorArgs) {
@@ -359,59 +374,6 @@ inline std::string instantiate(
         TT_FATAL(!arg.empty(), "Template argument string should not be empty");
     }
     std::string result = structName;
-    if (!templateArgs.empty()) {
-        result += "<";
-        for (size_t i = 0; i < templateArgs.size(); ++i) {
-            result += templateArgs[i];
-            if (i != templateArgs.size() - 1) {
-                result += ", ";
-            }
-        }
-        result += ">";
-    }
-    result += "(";
-    bool first = true;
-    ((result += (first ? "" : ", ") + stringify(constructorArgs), first = false), ...);
-    result += ")";
-    TT_FATAL(validate_instantiation_string(result), "Generated instantiation string is not syntactically valid");
-    return result;
-}
-
-// 2. Overload for template types (the user must specialize TemplateNameTT).
-template <template <typename, auto...> class Struct, typename Tuple, typename... Args>
-inline std::string instantiate(const Tuple& templateArgsTuple, const Args&... constructorArgs) {
-    auto templateArgs = tuple_to_vector_of_strings(templateArgsTuple);
-    for (const auto& arg : templateArgs) {
-        TT_FATAL(!arg.empty(), "Template argument string should not be empty");
-    }
-    std::string result = TemplateNameTT<Struct>::value;
-    if (!templateArgs.empty()) {
-        result += "<";
-        for (size_t i = 0; i < templateArgs.size(); ++i) {
-            result += templateArgs[i];
-            if (i != templateArgs.size() - 1) {
-                result += ", ";
-            }
-        }
-        result += ">";
-    }
-    result += "(";
-    bool first = true;
-    ((result += (first ? "" : ", ") + stringify(constructorArgs), first = false), ...);
-    result += ")";
-    TT_FATAL(validate_instantiation_string(result), "Generated instantiation string is not syntactically valid");
-    return result;
-}
-
-// 3. Overload for non-template types (users must specialize TemplateNameTTHelper).
-template <typename Struct, typename Tuple, typename... Args>
-    requires requires { Struct{std::declval<Args>()...}; }
-inline std::string instantiate(const Tuple& templateArgsTuple, const Args&... constructorArgs) {
-    auto templateArgs = tuple_to_vector_of_strings(templateArgsTuple);
-    for (const auto& arg : templateArgs) {
-        TT_FATAL(!arg.empty(), "Template argument string should not be empty");
-    }
-    std::string result = TemplateNameTTHelper<Struct>::value;
     if (!templateArgs.empty()) {
         result += "<";
         for (size_t i = 0; i < templateArgs.size(); ++i) {
