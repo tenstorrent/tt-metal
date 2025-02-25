@@ -1046,6 +1046,21 @@ TEST_F(MultiCommandQueueSingleDeviceBufferFixture, TestIssueMultipleReadWriteCom
         local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue(this->device_, cqs, config));
 }
 
+TEST_F(CommandQueueMultiDeviceBufferFixture, TestMultipleUnalignedPagesLargerThanMaxPrefetchCommandSize) {
+    for (IDevice* device : devices_) {
+        tt::log_info("Running On Device {}", device->id());
+        CoreType dispatch_core_type = dispatch_core_manager::instance().get_dispatch_core_type(device->id());
+        const uint32_t max_prefetch_command_size = DispatchMemMap::get(dispatch_core_type).max_prefetch_command_size();
+        TestBufferConfig config = {
+            .num_pages = 50, .page_size = max_prefetch_command_size + 4, .buftype = BufferType::DRAM};
+
+        CommandQueue& a = device->command_queue(0);
+        vector<std::reference_wrapper<CommandQueue>> cqs = {a};
+        EXPECT_TRUE(
+            local_test_functions::test_EnqueueWriteBuffer_and_EnqueueReadBuffer_multi_queue(device, cqs, config));
+    }
+}
+
 }  // end namespace dram_tests
 
 namespace l1_tests {
