@@ -3,88 +3,20 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/distributed/distributed_pybind.hpp"
-<<<<<<< HEAD
-<<<<<<< HEAD
 #include <pybind11/cast.h>
-<<<<<<< HEAD
-<<<<<<< HEAD
-
-<<<<<<< HEAD
-#include <ostream>
-=======
-=======
-#include <pybind11/cast.h>
-<<<<<<< HEAD
->>>>>>> one type error left
-#include <cstddef>
-#include <memory>
-#include <pybind11/pytypes.h>
->>>>>>> expose classes to python
-=======
-<<<<<<< HEAD
-#include <cstddef>
-#include <memory>
-#include <pybind11/pytypes.h>
-=======
->>>>>>> clean up imports, fix test cases and change them to use mapper/composer functions, fix storage error by using from_device instead of cpu
->>>>>>> clean up imports, fix test cases and change them to use mapper/composer functions, fix storage error by using from_device instead of cpu
-
-=======
-#include <pybind11/pytypes.h>
->>>>>>> fix rebase
-=======
-#include <cstddef>
-=======
->>>>>>> remove unused import
 
 #include <pybind11/pytypes.h>
->>>>>>> fix rebase
 #include <tt-metalium/command_queue.hpp>
-<<<<<<< HEAD
 #include "tt-metalium/mesh_coord.hpp"
 #include "distributed_tensor.hpp"
 #include "tt-metalium/assert.hpp"
-<<<<<<< HEAD
-=======
-#include "distributed_tensor.hpp"
-<<<<<<< HEAD
-<<<<<<< HEAD
->>>>>>> expose classes to python
-#include "ttnn/distributed/api.hpp"
-<<<<<<< HEAD
-#include "ttnn/distributed/types.hpp"
-=======
-#include "ttnn/distributed/distributed_tensor_config.hpp"
-#include "ttnn/distributed/types.hpp"
-#include "ttnn/operations/core/core.hpp"
-<<<<<<< HEAD
-<<<<<<< HEAD
-#include "ttnn/tensor/tensor_utils.hpp"
->>>>>>> one type error left
-=======
->>>>>>> clean up imports, fix test cases and change them to use mapper/composer functions, fix storage error by using from_device instead of cpu
-=======
-#include "distributed_tensor.cpp"
-=======
->>>>>>> move class definitions from from distributed_tensor.cpp to.hpp so they can be exposed to the pybind.cpp; add dummy void methods in .cpp to satisfy linker; add new constructors and factory methods to fix type errors
-=======
->>>>>>> fix test mappers, convert to cpu_tensor
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/distributed_tensor_config.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
->>>>>>> one type error left
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_impl_wrapper.hpp"
 #include <tt-metalium/command_queue.hpp>
-=======
-#include "ttnn/tensor/tensor.hpp"
-#include <tt-metalium/command_queue.hpp>
-<<<<<<< HEAD
->>>>>>> clean up imports, fix test cases and change them to use mapper/composer functions, fix storage error by using from_device instead of cpu
->>>>>>> clean up imports, fix test cases and change them to use mapper/composer functions, fix storage error by using from_device instead of cpu
-=======
->>>>>>> fix rebase
 
 // This is required for automatic conversions, as in the creation of mesh devices
 // https://github.com/tenstorrent/tt-metal/issues/18082
@@ -95,55 +27,6 @@ using namespace tt::tt_metal;
 namespace ttnn::distributed {
 
 namespace py = pybind11;
-
-// namespace pybind11 { namespace detail {
-
-// // Helper template that implements conversion from std::unique_ptr<Derived> to std::unique_ptr<Base>
-// template <typename Derived, typename Base>
-// struct unique_ptr_base_caster {
-//     // This macro defines the member "value" (of type std::unique_ptr<Derived>) and a type annotation.
-//     PYBIND11_TYPE_CASTER(std::unique_ptr<Derived>,
-//                          py::str("unique_ptr<") + type_id<Derived>() + py::str(">"));
-
-//     // load() is not supported for unique_ptr conversion from Python.
-//     bool load(::pybind11::handle, bool) {
-//         return false;
-//     }
-
-//     // cast() converts the C++ unique_ptr<Derived> to a Python object.
-//     static ::pybind11::handle cast(const std::unique_ptr<Derived>& src,
-//                        ::pybind11::return_value_policy policy, ::pybind11::handle parent) {
-//         // Convert the underlying raw pointer from Derived* to Base*
-//         Base* base_ptr = static_cast<Base*>(src.get());
-//         // Use py::cast on the raw pointer. Note: this does not transfer ownership.
-//         // The returned handle is then released.
-//         return py::cast(base_ptr, policy, parent).release();
-//     }
-// };
-
-// }} // namespace pybind11::detail
-// namespace pybind11 { namespace detail {
-
-// template <>
-// struct ::pybind11::detail::type_caster<std::unique_ptr<ReplicateTensorToMesh>>
-//     : unique_ptr_base_caster<ReplicateTensorToMesh, TensorToMesh> {};
-
-// template <>
-// struct ::pybind11::detail::type_caster<std::unique_ptr<ShardTensorToMesh>>
-//     : unique_ptr_base_caster<ShardTensorToMesh, TensorToMesh> {};
-
-// template <>
-// struct ::pybind11::detail::type_caster<std::unique_ptr<ShardTensorTo2dMesh>>
-//     : unique_ptr_base_caster<ShardTensorTo2dMesh, TensorToMesh> {};
-
-// struct ::pybind11::detail::type_caster<std::unique_ptr<ConcatMeshToTensor>>
-//     : unique_ptr_base_caster<ConcatMeshToTensor, MeshToTensor> {};
-
-// template <>
-// struct ::pybind11::detail::type_caster<std::unique_ptr<Concat2dMeshToTensor>>
-//     : unique_ptr_base_caster<Concat2dMeshToTensor, MeshToTensor> {};
-
-// }} // namespace pybind11::detail
 
 // Trampoline class to clear virtual method errors
 struct ConcreteTensorToMesh : TensorToMesh {
@@ -166,67 +49,17 @@ struct ConcreteMeshToTensor : MeshToTensor {
 };
 
 void py_module_types(py::module& module) {
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
     py::class_<MeshToTensor, ConcreteMeshToTensor, std::unique_ptr<MeshToTensor>>(module, "CppMeshToTensor");
     py::class_<TensorToMesh, ConcreteTensorToMesh, std::unique_ptr<TensorToMesh>>(module, "TensorToMesh");
 
     py::class_<ReplicateTensorToMesh, TensorToMesh, std::unique_ptr<ReplicateTensorToMesh>>(
         module, "ReplicateTensorToMesh");
     py::class_<ShardTensorToMesh, TensorToMesh, std::unique_ptr<ShardTensorToMesh>>(module, "ShardTensorToMesh");
-    py::class_<ShardTensorTo2dMesh, TensorToMesh, std::unique_ptr<ShardTensorTo2dMesh>>(module, "ShardTensorTo2dMesh");
+    py::class_<ShardTensor2dMesh, TensorToMesh, std::unique_ptr<ShardTensor2dMesh>>(
+        module, "ShardTensor2dMesh");
     py::class_<ConcatMeshToTensor, MeshToTensor, std::unique_ptr<ConcatMeshToTensor>>(module, "CppConcatMeshToTensor");
-    py::class_<Concat2dMeshToTensor, MeshToTensor, std::unique_ptr<Concat2dMeshToTensor>>(
-        module, "CppConcat2dMeshToTensor");
-
-    py::class_<ReplicateTensor>(module, "ReplicateTensor");
-    py::class_<ShardTensor>(module, "ShardTensor");
-    py::class_<ShardTensor2D>(module, "ShardTensor2d");
-    py::class_<ShardMesh>(module, "ShardMesh");
-    py::class_<AllGatherTensor>(module, "AllGatherTensor");
-    py::class_<DistributedTensorConfig>(module, "DistributedTensorConfig");
-
-    py::class_<Shard2dConfig>(module, "Shard2dConfig");
-    py::class_<Concat2dConfig>(module, "Concat2dConfig");
-=======
-    py::class_<MeshToTensor, std::unique_ptr<MeshToTensor>>(module, "MeshToTensor");
-    py::class_<TensorToMesh, std::unique_ptr<TensorToMesh>>(module, "TensorToMesh");
-    py::class_<TensorToMesh, TensorToMesh>(module, "TensorToMesh");
-    py::class_<ShardTensorToMesh, TensorToMesh>(module, "ShardTensorToMesh");
-    py::class_<ShardTensorTo2dMesh, TensorToMesh>(module, "ShardTensorTo2dMesh");
-    py::class_<ConcatMeshToTensor, MeshToTensor>(module, "ConcatMeshToTensor");
-    py::class_<Concat2dMeshToTensor, MeshToTensor>(module, "Concat2dMeshToTensor");
->>>>>>> expose classes to python
-=======
-    py::class_<MeshToTensor, ConcreteMeshToTensor, std::unique_ptr<MeshToTensor>>(module, "MeshToTensor");
-    py::class_<TensorToMesh, ConcreteTensorToMesh, std::unique_ptr<TensorToMesh>>(module, "TensorToMesh");
-    py::class_<ReplicateTensorToMesh, TensorToMesh, std::unique_ptr<ReplicateTensorToMesh>>(
-        module, "ReplicateTensorToMesh");
-    py::class_<ShardTensorToMesh, TensorToMesh, std::unique_ptr<ShardTensorToMesh>>(module, "ShardTensorToMesh");
-    py::class_<ShardTensor2dMesh, TensorToMesh, std::unique_ptr<ShardTensor2dMesh>>(module, "ShardTensor2dMesh");
-    py::class_<ConcatMeshToTensor, MeshToTensor, std::unique_ptr<ConcatMeshToTensor>>(module, "ConcatMeshToTensor");
-<<<<<<< HEAD
-    py::class_<Concat2dMeshToTensor, MeshToTensor, std::unique_ptr<Concat2dMeshToTensor>>(
-        module, "Concat2dMeshToTensor");
->>>>>>> one type error left
-=======
     py::class_<ConcatMesh2dToTensor, MeshToTensor, std::unique_ptr<ConcatMesh2dToTensor>>(
         module, "ConcatMesh2dToTensor");
->>>>>>> fix naming errors, add tests, add imports - TODO, fix weird aliasing error with meshdevice vs ttnn.multidevice.meshdevice
-=======
-    py::class_<MeshToTensor, ConcreteMeshToTensor, std::unique_ptr<MeshToTensor>>(module, "CppMeshToTensor");
-    py::class_<TensorToMesh, ConcreteTensorToMesh, std::unique_ptr<TensorToMesh>>(module, "CppTensorToMesh");
-
-    py::class_<ReplicateTensorToMesh, TensorToMesh, std::unique_ptr<ReplicateTensorToMesh>>(
-        module, "CppReplicateTensorToMesh");
-    py::class_<ShardTensorToMesh, TensorToMesh, std::unique_ptr<ShardTensorToMesh>>(module, "CppShardTensorToMesh");
-    py::class_<ShardTensorTo2dMesh, TensorToMesh, std::unique_ptr<ShardTensorTo2dMesh>>(
-        module, "CppShardTensorTo2dMesh");
-    py::class_<ConcatMeshToTensor, MeshToTensor, std::unique_ptr<ConcatMeshToTensor>>(module, "CppConcatMeshToTensor");
-    py::class_<Concat2dMeshToTensor, MeshToTensor, std::unique_ptr<Concat2dMeshToTensor>>(
-        module, "CppConcat2dMeshToTensor");
->>>>>>> add back distributed.py for now, clean up class overloads
 
     py::class_<ReplicateTensor>(module, "ReplicateTensor");
     py::class_<ShardTensor>(module, "ShardTensor");
@@ -241,91 +74,60 @@ void py_module_types(py::module& module) {
     py::class_<MeshDevice, std::shared_ptr<MeshDevice>>(module, "MeshDevice");
     py::class_<MeshSubDeviceManagerId>(module, "MeshSubDeviceManagerId");
     py::class_<MeshShape>(module, "MeshShape", "Struct representing the shape of a mesh device.");
-    py::class_<MeshCoordinate>(module, "MeshCoordinate", "Struct representing the coordinate of a mesh device.");
+    py::class_<MeshOffset>(module, "MeshOffset", "Struct representing the offset of a mesh device.");
 }
 
 void py_module(py::module& module) {
-    // TODO: #17477 - Remove overloads that accept 'row' and 'col'. Instead, use generic ND terms.
     static_cast<py::class_<MeshShape>>(module.attr("MeshShape"))
         .def(
             py::init([](size_t num_rows, size_t num_cols) { return MeshShape(num_rows, num_cols); }),
-            "Constructor with the specified number of rows and columns.",
+            "Constructor with specified number of rows and columns.",
             py::arg("num_rows"),
             py::arg("num_cols"))
         .def(
-<<<<<<< HEAD
-<<<<<<< HEAD
-            py::init([](size_t x, size_t y, size_t z) { return MeshShape(x, y, z); }),
-            "Constructor with the specified 3D shape.",
-            py::arg("x"),
-            py::arg("y"),
-            py::arg("z"))
-        .def(
-            py::init([](const std::vector<uint32_t>& shape) { return MeshShape(shape); }),
-            "Constructor with the specified ND shape.",
-            py::arg("shape"))
-=======
-=======
->>>>>>> Replace none types, expose configs, fix tuple errors
             py::init([](const std::tuple<int, int>& dims) { return MeshShape(std::get<0>(dims), std::get<1>(dims)); }),
             "Constructor with specified number of rows and columns as a tuple (rows, columns).",
             py::arg("dims"))
         .def_readwrite("num_rows", &MeshShape::num_rows, "Number of rows in the mesh.")
         .def_readwrite("num_cols", &MeshShape::num_cols, "Number of columns in the mesh.")
->>>>>>> Replace none types, expose configs, fix tuple errors
         .def(
             "__repr__",
             [](const MeshShape& ms) {
-                std::ostringstream str;
-                str << ms;
-                return str.str();
+                return "<MeshShape num_rows=" + std::to_string(ms.num_rows) +
+                       " num_cols=" + std::to_string(ms.num_cols) + ">";
             })
+        .def("__iter__", [](const MeshShape& ms) { return py::iter(py::make_tuple(ms.num_rows, ms.num_cols)); });
+    static_cast<py::class_<MeshOffset>>(module.attr("MeshOffset"))
         .def(
-            "__iter__",
-            [](const MeshShape& ms) { return py::make_iterator(ms.view().begin(), ms.view().end()); },
-            py::keep_alive<0, 1>());
-    static_cast<py::class_<MeshCoordinate>>(module.attr("MeshCoordinate"))
-        .def(
-            py::init([](size_t row, size_t col) { return MeshCoordinate(row, col); }),
+            py::init([](size_t row, size_t col) { return MeshOffset(row, col); }),
             "Constructor with specified row and column offsets.",
             py::arg("row"),
             py::arg("col"))
-        .def(
-            py::init([](size_t x, size_t y, size_t z) { return MeshCoordinate(x, y, z); }),
-            "Constructor with the specified 3D coordinate.",
-            py::arg("x"),
-            py::arg("y"),
-            py::arg("z"))
-        .def(
-            py::init([](const std::vector<uint32_t>& coords) { return MeshCoordinate(coords); }),
-            "Constructor with the specified ND coordinate.",
-            py::arg("coords"))
+        .def_readwrite("row", &MeshOffset::row, "Row offset in the mesh.")
+        .def_readwrite("col", &MeshOffset::col, "Column offset in the mesh.")
         .def(
             "__repr__",
-            [](const MeshCoordinate& mc) {
-                std::ostringstream str;
-                str << mc;
-                return str.str();
+            [](const MeshOffset& mo) {
+                return "<MeshOffset row=" + std::to_string(mo.row) + " col=" + std::to_string(mo.col) + ">";
             })
-        .def(
-            "__iter__",
-            [](const MeshCoordinate& mc) { return py::make_iterator(mc.coords().begin(), mc.coords().end()); },
-            py::keep_alive<0, 1>());
+        .def("__iter__", [](const MeshOffset& mo) { return py::iter(py::make_tuple(mo.row, mo.col)); });
 
     auto py_mesh_device = static_cast<py::class_<MeshDevice, std::shared_ptr<MeshDevice>>>(module.attr("MeshDevice"));
     py_mesh_device
         .def(
-            py::init([](const MeshShape& mesh_shape,
+            py::init([](const MeshShape& mesh_device_shape,
                         size_t l1_small_size,
                         size_t trace_region_size,
                         size_t num_command_queues,
                         const DispatchCoreConfig& dispatch_core_config,
-                        const std::optional<MeshCoordinate>& offset,
+                        const MeshOffset& offset,
                         const std::vector<chip_id_t>& physical_device_ids) {
                 return MeshDevice::create(
                     MeshDeviceConfig{
-                        .mesh_shape = mesh_shape,
-                        .offset = offset,
+                        .mesh_shape = SimpleMeshShape(mesh_device_shape),
+                        .offset = offset.row != 0 || offset.col != 0
+                                      ? std::make_optional<MeshCoordinate>(offset.row, offset.col)
+                                      : std::nullopt,
                         .physical_device_ids = physical_device_ids,
                     },
                     l1_small_size,
@@ -560,151 +362,8 @@ void py_module(py::module& module) {
                back to all SubDevice IDs.
            )doc");
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
     auto py_tensor_to_mesh = static_cast<py::class_<TensorToMesh, ConcreteTensorToMesh, std::unique_ptr<TensorToMesh>>>(
         module.attr("CppTensorToMesh"));
-    py_tensor_to_mesh
-        .def(py::init([]() -> std::unique_ptr<TensorToMesh> { return std::make_unique<ConcreteTensorToMesh>(); }))
-        .def("map", &TensorToMesh::map)
-        .def("config", &TensorToMesh::config);
-    auto py_replicate_tensor_to_mesh =
-        static_cast<py::class_<ReplicateTensorToMesh, std::unique_ptr<ReplicateTensorToMesh>>>(
-            module.attr("CppReplicateTensorToMesh"));
-    py_replicate_tensor_to_mesh
-        .def(
-            py::init([](MeshDevice& mesh_device) -> std::unique_ptr<ReplicateTensorToMesh> {
-                return std::make_unique<ReplicateTensorToMesh>(ReplicateTensorToMesh(mesh_device.num_devices()));
-            }),
-            py::arg("mesh_device"))
-        .def(
-            "map",
-            [](const ReplicateTensorToMesh& self, const Tensor& tensor) { return self.map(tensor); },
-            py::arg("tensor"))
-        .def("config", &ReplicateTensorToMesh::config);
-    auto py_shard_tensor_to_mesh = static_cast<py::class_<ShardTensorToMesh, std::unique_ptr<ShardTensorToMesh>>>(
-        module.attr("CppShardTensorToMesh"));
-    py_shard_tensor_to_mesh
-        .def(
-            py::init([](MeshDevice& mesh_device, int dim) -> std::unique_ptr<ShardTensorToMesh> {
-                return std::make_unique<ShardTensorToMesh>(ShardTensorToMesh(mesh_device.num_devices(), dim));
-            }),
-            py::arg("mesh_device"),
-            py::arg("dim"))
-        .def(
-            "map",
-            [](const ShardTensorToMesh& self, const Tensor& tensor) { return self.map(tensor); },
-            py::arg("tensor"))
-        .def("config", &ShardTensorToMesh::config);
-    auto py_shard_tensor_to_2d_mesh =
-        static_cast<py::class_<ShardTensorTo2dMesh, std::unique_ptr<ShardTensorTo2dMesh>>>(
-            module.attr("CppShardTensorTo2dMesh"));
-    py_shard_tensor_to_2d_mesh
-        .def(
-            py::init(
-                [](MeshDevice& mesh_device,
-                   const std::tuple<int, int> mesh_shape,
-                   const std::tuple<int, int> dims) -> std::unique_ptr<ShardTensorTo2dMesh> {
-                    int shape_rows = std::get<0>(mesh_shape);
-                    int shape_cols = std::get<1>(mesh_shape);
-
-                    int config_rows = std::get<0>(dims);
-                    int config_cols = std::get<1>(dims);
-                    TT_FATAL(
-                        config_rows || config_cols,
-                        "Sharding a tensor to 2D mesh requires at least one dimension to shard");
-                    TT_FATAL(
-                        shape_rows <= mesh_device.shape().num_rows &&  //
-                            shape_cols <= mesh_device.shape().num_cols,
-                        "Device mesh shape does not match the provided mesh shape.");
-
-                    return std::make_unique<ShardTensorTo2dMesh>(
-                        MeshShape{.num_rows = shape_rows, .num_cols = shape_cols},
-                        Shard2dConfig{.row_dim = std::get<0>(dims), .col_dim = std::get<1>(dims)});
-                }),
-            py::arg("mesh_device"),
-            py::arg("mesh_shape"),
-            py::arg("dims"))
-        .def(
-            "map",
-            [](const ShardTensorTo2dMesh& self, const Tensor& tensor) { return self.map(tensor); },
-            py::arg("tensor"))
-        .def("config", &ShardTensorTo2dMesh::config);
-    auto py_mesh_to_tensor = static_cast<py::class_<MeshToTensor, ConcreteMeshToTensor, std::unique_ptr<MeshToTensor>>>(
-        module.attr("CppMeshToTensor"));
-    py_mesh_to_tensor
-        .def(py::init([]() -> std::unique_ptr<MeshToTensor> { return std::make_unique<ConcreteMeshToTensor>(); }))
-        .def("compose", &MeshToTensor::compose);
-    auto py_concat_mesh_to_tensor = static_cast<py::class_<ConcatMeshToTensor, std::unique_ptr<ConcatMeshToTensor>>>(
-        module.attr("CppConcatMeshToTensor"));
-    py_concat_mesh_to_tensor
-        .def(
-            py::init([](MeshDevice& mesh_device, int dim) -> std::unique_ptr<ConcatMeshToTensor> {
-                return std::make_unique<ConcatMeshToTensor>(dim);
-            }),
-            py::arg("mesh_device"),
-            py::arg("dim"))
-        .def(
-            "compose",
-            [](const ConcatMeshToTensor& self, const std::vector<Tensor>& tensors) { return self.compose(tensors); },
-            py::arg("tensors"));
-
-    auto py_concat_2d_mesh_to_tensor =
-        static_cast<py::class_<Concat2dMeshToTensor, std::unique_ptr<Concat2dMeshToTensor>>>(
-            module.attr("CppConcat2dMeshToTensor"));
-    py_concat_2d_mesh_to_tensor
-        .def(
-            py::init(
-                [](MeshDevice& mesh_device,
-                   const std::tuple<int, int> mesh_shape,
-                   const std::tuple<int, int> dims) -> std::unique_ptr<Concat2dMeshToTensor> {
-                    int row_dim = std::get<0>(dims);
-                    int col_dim = std::get<1>(dims);
-                    TT_FATAL(
-                        std::get<0>(mesh_shape) <= mesh_device.shape().num_rows &&  //
-                            std::get<1>(mesh_shape) <= mesh_device.shape().num_cols,
-                        "Device mesh shape does not match the provided mesh shape.");
-
-                    TT_FATAL(
-                        row_dim != col_dim,
-                        "Dimensions in 'dims' must be different; got row_dim: {}, col_dim: {}",
-                        row_dim,
-                        col_dim);
-                    return std::make_unique<Concat2dMeshToTensor>(
-                        mesh_device,
-                        Concat2dConfig{
-                            .row_dim = row_dim,
-                            .col_dim = col_dim,
-                        });
-                }),
-            py::arg("mesh_device"),
-            py::arg("Mesh_shape"),
-            py::arg("dims"))
-        .def(
-            "compose",
-            [](const Concat2dMeshToTensor& self, const std::vector<Tensor>& tensors) -> Tensor {
-                return self.compose(tensors);
-            },
-            py::arg("tensors"));
-=======
-    auto py_tensor_to_mesh = static_cast<TensorToMesh, std::unique_ptr<TensorToMesh>>>(module.attr("TensorToMesh"));
-=======
-    auto py_tensor_to_mesh =
-        static_cast<py::class_<TensorToMesh, std::unique_ptr<TensorToMesh>>>(module.attr("TensorToMesh"));
->>>>>>> one type error left
-=======
-    auto py_tensor_to_mesh = static_cast<py::class_<TensorToMesh, ConcreteTensorToMesh, std::unique_ptr<TensorToMesh>>>(
-<<<<<<< HEAD
-<<<<<<< HEAD
-        module.attr("TensorToMesh"));
->>>>>>> move class definitions from from distributed_tensor.cpp to.hpp so they can be exposed to the pybind.cpp; add dummy void methods in .cpp to satisfy linker; add new constructors and factory methods to fix type errors
-=======
-        module.attr("CppTensorToMesh"));
->>>>>>> add back distributed.py for now, clean up class overloads
-=======
-        module.attr("TensorToMesh"));
->>>>>>> interim work for supporting mappers
     py_tensor_to_mesh
         .def(py::init([]() -> std::unique_ptr<TensorToMesh> { return std::make_unique<ConcreteTensorToMesh>(); }))
         .def("map", &TensorToMesh::map)
@@ -738,14 +397,14 @@ void py_module(py::module& module) {
             py::arg("tensor"))
         .def("config", &ShardTensorToMesh::config);
     auto py_shard_tensor_to_2d_mesh =
-        static_cast<py::class_<ShardTensorTo2dMesh, std::unique_ptr<ShardTensorTo2dMesh>>>(
-            module.attr("ShardTensorTo2dMesh"));
+        static_cast<py::class_<ShardTensor2dMesh, std::unique_ptr<ShardTensor2dMesh>>>(
+            module.attr("ShardTensor2dMesh"));
     py_shard_tensor_to_2d_mesh
         .def(
             py::init(
                 [](MeshDevice& mesh_device,
                    const std::tuple<int, int> mesh_shape,
-                   const std::tuple<int, int> dims) -> std::unique_ptr<ShardTensorTo2dMesh> {
+                   const std::tuple<int, int> dims) -> std::unique_ptr<ShardTensor2dMesh> {
                     int shape_rows = std::get<0>(mesh_shape);
                     int shape_cols = std::get<1>(mesh_shape);
 
@@ -759,7 +418,7 @@ void py_module(py::module& module) {
                             shape_cols <= mesh_device.shape().num_cols,
                         "Device mesh shape does not match the provided mesh shape.");
 
-                    return std::make_unique<ShardTensorTo2dMesh>(
+                    return std::make_unique<ShardTensor2dMesh>(
                         MeshShape{.num_rows = shape_rows, .num_cols = shape_cols},
                         Shard2dConfig{.row_dim = std::get<0>(dims), .col_dim = std::get<1>(dims)});
                 }),
@@ -768,9 +427,9 @@ void py_module(py::module& module) {
             py::arg("dims"))
         .def(
             "map",
-            [](const ShardTensorTo2dMesh& self, const Tensor& tensor) { return self.map(tensor); },
+            [](const ShardTensor2dMesh& self, const Tensor& tensor) { return self.map(tensor); },
             py::arg("tensor"))
-        .def("config", &ShardTensorTo2dMesh::config);
+        .def("config", &ShardTensor2dMesh::config);
     auto py_mesh_to_tensor = static_cast<py::class_<MeshToTensor, ConcreteMeshToTensor, std::unique_ptr<MeshToTensor>>>(
         module.attr("CppMeshToTensor"));
     py_mesh_to_tensor
@@ -791,27 +450,14 @@ void py_module(py::module& module) {
             py::arg("tensors"));
 
     auto py_concat_2d_mesh_to_tensor =
-        static_cast<py::class_<Concat2dMeshToTensor, std::unique_ptr<Concat2dMeshToTensor>>>(
-            module.attr("CppConcat2dMeshToTensor"));
+        static_cast<py::class_<ConcatMesh2dToTensor, std::unique_ptr<ConcatMesh2dToTensor>>>(
+            module.attr("ConcatMesh2dToTensor"));
     py_concat_2d_mesh_to_tensor
-<<<<<<< HEAD
-    .def(py::init<>(MeshDevice & mesh_device, const Concat2dConfig& config) {
-        return concat_2d_mesh_to_tensor_composer(mesh_device, config);
-    },
-         py::kw_only(),
-         py::arg("mesh_device"),
-         py::arg("config"))
-         .def("compose",[](self, const std::vector<Tensor>& tensors) {
-            return self.compose(tensors);
-         },
-         .py::arg("tensors"));
->>>>>>> expose classes to python
-=======
         .def(
             py::init(
                 [](MeshDevice& mesh_device,
                    const std::tuple<int, int> mesh_shape,
-                   const std::tuple<int, int> dims) -> std::unique_ptr<Concat2dMeshToTensor> {
+                   const std::tuple<int, int> dims) -> std::unique_ptr<ConcatMesh2dToTensor> {
                     int row_dim = std::get<0>(dims);
                     int col_dim = std::get<1>(dims);
                     TT_FATAL(
@@ -824,7 +470,7 @@ void py_module(py::module& module) {
                         "Dimensions in 'dims' must be different; got row_dim: {}, col_dim: {}",
                         row_dim,
                         col_dim);
-                    return std::make_unique<Concat2dMeshToTensor>(
+                    return std::make_unique<ConcatMesh2dToTensor>(
                         mesh_device,
                         Concat2dConfig{
                             .row_dim = row_dim,
@@ -836,11 +482,10 @@ void py_module(py::module& module) {
             py::arg("dims"))
         .def(
             "compose",
-            [](const Concat2dMeshToTensor& self, const std::vector<Tensor>& tensors) -> Tensor {
+            [](const ConcatMesh2dToTensor& self, const std::vector<Tensor>& tensors) -> Tensor {
                 return self.compose(tensors);
             },
             py::arg("tensors"));
->>>>>>> one type error left
 
     module.def(
         "open_mesh_device",
@@ -874,15 +519,7 @@ void py_module(py::module& module) {
     auto py_replicate_tensor_config = static_cast<py::class_<ReplicateTensor>>(module.attr("ShardTensor"));
     py_replicate_tensor_config.def(py::init<>())
         .def(py::init<int>(), py::arg("replication_factor") = 1)
-<<<<<<< HEAD
-<<<<<<< HEAD
         .def_readwrite("shard_dimension", &ReplicateTensor::replication_factor)
-=======
-        .def_readwrite("shard_dimension", &ShardTensor::shard_dimension)
->>>>>>> add configs to pybind
-=======
-        .def_readwrite("shard_dimension", &ReplicateTensor::replication_factor)
->>>>>>> fix test mappers, convert to cpu_tensor
         .def("__eq__", [](const ReplicateTensor& a, const ReplicateTensor& b) {
             return a.replication_factor == b.replication_factor;
         });
@@ -891,8 +528,6 @@ void py_module(py::module& module) {
     py_shard_tensor_config.def(py::init<int>(), py::arg("shard_dimension"))
         .def_readwrite("shard_dimension", &ShardTensor::shard_dimension)
         .def("__eq__", [](const ShardTensor& a, const ShardTensor& b) { return a == b; });
-<<<<<<< HEAD
-<<<<<<< HEAD
     auto py_shard_mesh = static_cast<py::class_<ShardMesh>>(module.attr("ShardMesh"));
     py_shard_mesh.def(py::init<>()).def_readwrite("y", &ShardMesh::y).def_readwrite("x", &ShardMesh::x);
     auto py_shard_tensor2d = static_cast<py::class_<ShardTensor2D>>(module.attr("ShardTensor2d"));
@@ -903,39 +538,6 @@ void py_module(py::module& module) {
         static_cast<py::class_<AllGatherTensor>>(module.attr("AllGatherTensor"))
             .def(py::init<>())
             .def("__eq__", [](const AllGatherTensor& a, const AllGatherTensor& b) { return a == b; });
-
-    auto py_shard2d_config = static_cast<py::class_<Shard2dConfig>>(module.attr("Shard2dConfig"));
-    py_shard2d_config.def(py::init<int, int>(), py::arg("row_dim"), py::arg("col_dim"))
-        .def_readwrite("row_dim", &Shard2dConfig::row_dim)
-        .def_readwrite("col_dim", &Shard2dConfig::col_dim);
-    auto py_concat2d_config = static_cast<py::class_<Concat2dConfig>>(module.attr("Concat2dConfig"));
-    py_concat2d_config.def(py::init<int, int>(), py::arg("row_dim"), py::arg("col_dim"))
-        .def_readwrite("row_dim", &Concat2dConfig::row_dim)
-        .def_readwrite("col_dim", &Concat2dConfig::col_dim);
-=======
-
-=======
->>>>>>> add shard2dconfig, concat2dconfig methods and map/compose constructors
-    auto py_shard_mesh = static_cast<py::class_<ShardMesh>>(module.attr("ShardMesh"));
-    py_shard_mesh.def(py::init<>()).def_readwrite("y", &ShardMesh::y).def_readwrite("x", &ShardMesh::x);
-    auto py_shard_tensor2d = static_cast<py::class_<ShardTensor2D>>(module.attr("ShardTensor2d"));
-    py_shard_tensor2d.def(py::init<ShardMesh>(), py::arg("mesh"))
-        .def_readonly("shard_mesh", &ShardTensor2D::shard_mesh)
-        .def("__eq__", [](const ShardTensor2D& a, const ShardTensor2D& b) { return a == b; });
-<<<<<<< HEAD
-
-<<<<<<< HEAD
-    auto py_allgather_config = static_cast<py::class_<AllGatherTensor>>(module.attr("AllGatherTensor"));
-    .def(py::init<>()).def("__eq__", [](const AllGatherTensor& a, const AllGatherTensor& b) { return a == b; });
->>>>>>> add configs to pybind
-=======
-=======
->>>>>>> add shard2dconfig, concat2dconfig methods and map/compose constructors
-    auto py_allgather_config =
-        static_cast<py::class_<AllGatherTensor>>(module.attr("AllGatherTensor"))
-            .def(py::init<>())
-            .def("__eq__", [](const AllGatherTensor& a, const AllGatherTensor& b) { return a == b; });
->>>>>>> fix test mappers, convert to cpu_tensor
 
     auto py_shard2d_config = static_cast<py::class_<Shard2dConfig>>(module.attr("Shard2dConfig"));
     py_shard2d_config.def(py::init<int, int>(), py::arg("row_dim"), py::arg("col_dim"))
@@ -958,31 +560,6 @@ void py_module(py::module& module) {
                 "item": "field",
             }
         )doc");
-<<<<<<< HEAD
-    module.def(
-        "get_shard2d_config",
-        &get_shard2d_config,
-        py::arg("metadata"),
-        R"doc(
-            Returns a Shard2dConfig object given a valid metadata object of the type
-            {
-                "row_dim": "field",
-                "col_dim": "field",
-            }
-        )doc");
-    module.def(
-        "get_concat2d_config",
-        &get_concat2d_config,
-        py::arg("metadata"),
-        R"doc(
-            Returns a Concat2dConfig object given a valid metadata object of the type
-            {
-                "row_dim": "field",
-                "col_dim": "field",
-            }
-    )doc");
-=======
->>>>>>> add configs to pybind
     module.def(
         "get_shard2d_config",
         &get_shard2d_config,
@@ -1014,14 +591,6 @@ void py_module(py::module& module) {
         R"doc(
        Get the tensor shard corresponding to the device.
 
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
-<<<<<<< HEAD
-
->>>>>>> clean up imports, fix test cases and change them to use mapper/composer functions, fix storage error by using from_device instead of cpu
-=======
->>>>>>> fix rebase
        Args:
            tensor (Tensor): The tensor to get the shard from.
            device (Device): The device to get the shard for.
@@ -1031,16 +600,7 @@ void py_module(py::module& module) {
            Tensor: The shard of the tensor corresponding to the device.
    )doc");
     module.def("get_device_tensors", &get_device_tensors, py::arg("tensor"), py::kw_only());
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
     // TODO: Add rdocs
-=======
->>>>>>> move class definitions from from distributed_tensor.cpp to.hpp so they can be exposed to the pybind.cpp; add dummy void methods in .cpp to satisfy linker; add new constructors and factory methods to fix type errors
-=======
-    // TODO: Add rdocs
->>>>>>> fix mesh device conflict, add aggregate/distribute and config pybinds, fix keyword error
     module.def(
         "replicate_tensor_to_mesh_mapper",
         [](MeshDevice& mesh_device) -> std::unique_ptr<TensorToMesh> {
@@ -1065,10 +625,6 @@ void py_module(py::module& module) {
         py::arg("mesh_shape"),
         py::arg("config"));
     module.def(
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
->>>>>>> Replace none types, expose configs, fix tuple errors
         "shard_tensor_to_2d_mesh_mapper",
         [](MeshDevice& mesh_device,
            const std::tuple<int, int> mesh_shape,
@@ -1093,11 +649,6 @@ void py_module(py::module& module) {
                 TensorToMesh: The created ShardTensor2dMesh mapper.
    )doc");
     module.def(
-<<<<<<< HEAD
-=======
->>>>>>> move class definitions from from distributed_tensor.cpp to.hpp so they can be exposed to the pybind.cpp; add dummy void methods in .cpp to satisfy linker; add new constructors and factory methods to fix type errors
-=======
->>>>>>> Replace none types, expose configs, fix tuple errors
         "concat_mesh_to_tensor_composer",
         [](int dim) -> std::unique_ptr<MeshToTensor> { return concat_mesh_to_tensor_composer(dim); },
         py::arg("dim"));
@@ -1108,36 +659,6 @@ void py_module(py::module& module) {
         },
         py::arg("mesh_device"),
         py::arg("config"));
-<<<<<<< HEAD
-<<<<<<< HEAD
-    module.def(
-        "concat_2d_mesh_to_tensor_composer",
-        [](MeshDevice& mesh_device,
-           const std::tuple<int, int> mesh_shape,
-           const std::tuple<int, int> dims) -> std::unique_ptr<MeshToTensor> {
-            TT_FATAL(
-                std::get<0>(mesh_shape) <= mesh_device.shape().num_rows &&  //
-                    std::get<1>(mesh_shape) <= mesh_device.shape().num_cols,
-                "Device mesh shape does not match the provided mesh shape.");
-            return concat_2d_mesh_to_tensor_composer(
-                mesh_device, Concat2dConfig{.row_dim = std::get<0>(dims), .col_dim = std::get<1>(dims)});
-        },
-        py::arg("mesh_device"),
-        py::arg("dims"),
-        py::arg("mesh_shape"),
-        R"doc(
-            Create a ConcatMesh2dToTensor composer with the given mesh device and dimensions.
-
-            Args:
-                mesh_device (MeshDevice): The mesh device to create the composer for.
-                dims (Tuple[int, int]): The dimensions to create the composer for in (row, column) format.
-                mesh_shape (Tuple[int, int]): The shape of the 2D mesh as (num_rows, num_cols).
-
-            Returns:
-                TensorToMesh: The created ConcatMesh2dToTensor composer.
-   )doc");
-=======
->>>>>>> fix mesh device conflict, add aggregate/distribute and config pybinds, fix keyword error
     module.def(
         "concat_2d_mesh_to_tensor_composer",
         [](MeshDevice& mesh_device,
@@ -1169,10 +690,14 @@ void py_module(py::module& module) {
         [](const Tensor& tensor,
            const TensorToMesh& mapper,
            std::optional<std::reference_wrapper<MeshDevice>> mesh_device) -> Tensor {
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
-            return distribute_tensor(from_device(tensor), mapper, mesh_device);
+            Tensor cpu_tensor;
+            if (tensor.storage_type() == StorageType::MULTI_DEVICE_HOST) {
+                cpu_tensor = tt::tt_metal::tensor_impl::to_host_mesh_tensor_wrapper(tensor, true);
+            } else {
+                cpu_tensor = from_device(tensor);
+            }
+
+            return distribute_tensor(cpu_tensor, mapper, mesh_device);
         },
         py::arg("tensor"),
         py::arg("mapper"),
@@ -1180,63 +705,19 @@ void py_module(py::module& module) {
     module.def(
         "aggregate_tensor",
         [](const Tensor& tensor, const MeshToTensor& composer) -> Tensor {
-            return aggregate_tensor(from_device(tensor), composer);
+            Tensor cpu_tensor = from_device(tensor);
+            return aggregate_tensor(cpu_tensor, composer);
         },
-=======
-            return distribute_tensor(tensor, mapper, mesh_device);
-=======
-            return distribute_tensor(get_cpu_tensor(tensor), mapper, mesh_device);
->>>>>>> fix test mappers, convert to cpu_tensor
-=======
-            return distribute_tensor(from_device(tensor), mapper, mesh_device);
->>>>>>> clean up imports, fix test cases and change them to use mapper/composer functions, fix storage error by using from_device instead of cpu
-        },
-        py::arg("tensor"),
-        py::arg("mapper"),
-        py::arg("mesh_device"));
-    module.def(
-        "aggregate_tensor",
-<<<<<<< HEAD
-        [](const Tensor& tensor, const MeshToTensor& composer) -> Tensor { return aggregate_tensor(tensor, composer); },
->>>>>>> fix mesh device conflict, add aggregate/distribute and config pybinds, fix keyword error
-=======
-        [](const Tensor& tensor, const MeshToTensor& composer) -> Tensor {
-            return aggregate_tensor(from_device(tensor), composer);
-        },
->>>>>>> fix test mappers, convert to cpu_tensor
         py::arg("tensor"),
         py::arg("composer"));
     module.def(
         "aggregate_tensor",
         [](const std::vector<Tensor>& tensors, const MeshToTensor& composer) -> Tensor {
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
-            return aggregate_tensor(from_device(aggregate_as_tensor(tensors, AllGatherTensor{})), composer);
+            Tensor cpu_tensor = from_device(aggregate_as_tensor(tensors, AllGatherTensor{}));
+            return aggregate_tensor(cpu_tensor, composer);
         },
         py::arg("tensor"),
         py::arg("composer"));
-=======
-    //TODO: overload this method to enable selection of a subset of shards with a config or something before passing to aggregate 
->>>>>>> expose classes to python
-=======
-=======
->>>>>>> move class definitions from from distributed_tensor.cpp to.hpp so they can be exposed to the pybind.cpp; add dummy void methods in .cpp to satisfy linker; add new constructors and factory methods to fix type errors
-    // TODO: overload this method to enable selection of a subset of shards with a config or something before passing to
-    // aggregate
->>>>>>> one type error left
-=======
-            return aggregate_tensor(aggregate_as_tensor(tensors, AllGatherTensor{}), composer);
-=======
-            return aggregate_tensor(get_cpu_tensor(aggregate_as_tensor(tensors, AllGatherTensor{})), composer);
->>>>>>> fix test mappers, convert to cpu_tensor
-=======
-            return aggregate_tensor(from_device(aggregate_as_tensor(tensors, AllGatherTensor{})), composer);
->>>>>>> clean up imports, fix test cases and change them to use mapper/composer functions, fix storage error by using from_device instead of cpu
-        },
-        py::arg("tensor"),
-        py::arg("composer"));
->>>>>>> fix mesh device conflict, add aggregate/distribute and config pybinds, fix keyword error
     module.def(
         "aggregate_as_tensor",
         [](const std::vector<Tensor>& tensors) -> Tensor { return aggregate_as_tensor(tensors, AllGatherTensor{}); },
