@@ -13,16 +13,16 @@
 #include "core/tt_tensor_utils.hpp"
 #include "ops/losses.hpp"
 
-namespace ttml::core::tests {
+namespace ttml::ops::tests {
 
 class UnaryOpsTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        ttml::autograd::ctx().open_device();
+        autograd::ctx().open_device();
     }
 
     void TearDown() override {
-        ttml::autograd::ctx().close_device();
+        autograd::ctx().close_device();
     }
 };
 
@@ -30,11 +30,11 @@ TEST_F(UnaryOpsTest, GlobalMean) {
     std::vector<float> test_data = {1.F, 2.F, 3.F, 4.F, 1.F, 2.F, 3.F, 4.F};
 
     auto shape = core::create_shape({2, 1, 1, 4});
-    auto tensor = core::from_vector(test_data, shape, &ttml::autograd::ctx().get_device());
+    auto tensor = core::from_vector(test_data, shape, &autograd::ctx().get_device());
 
-    auto tensor_ptr = ttml::autograd::create_tensor(tensor);
+    auto tensor_ptr = autograd::create_tensor(tensor);
 
-    auto result = ttml::ops::mean(tensor_ptr);
+    auto result = mean(tensor_ptr);
     auto result_data = core::to_vector(result->get_value());
 
     ASSERT_EQ(result_data.size(), 1);
@@ -49,11 +49,11 @@ TEST_F(UnaryOpsTest, GlobalMean) {
 }
 
 TEST_F(UnaryOpsTest, LogSoftmax) {
-    auto* device = &ttml::autograd::ctx().get_device();
+    auto* device = &autograd::ctx().get_device();
     std::vector<float> test_data = {-0.1F, -0.2F, -0.3F, -0.4F, 0.F, -0.2F, -0.3F, -0.4F};
     auto tensor = core::from_vector(test_data, core::create_shape({2, 1, 1, 4}), device);
-    auto tensor_ptr = ttml::autograd::create_tensor(tensor);
-    auto result = ttml::ops::log_softmax_moreh(tensor_ptr, 3);
+    auto tensor_ptr = autograd::create_tensor(tensor);
+    auto result = log_softmax_moreh(tensor_ptr, 3);
     auto result_data = core::to_vector(result->get_value());
     std::vector<float> expected_data = {
         -1.24253553F, -1.34253553F, -1.44253553F, -1.54253553F, -1.17244159F, -1.37244159F, -1.47244159F, -1.57244159F};
@@ -151,8 +151,8 @@ TEST_F(UnaryOpsTest, Silu) {
           {-0.24990F, 0.66764F, 0.54719F, 0.06169F, 0.55270F},   {0.52230F, 0.15071F, -0.21740F, -0.13528F, -0.17301F},
           {-0.12822F, 0.23997F, 0.27616F, 0.46224F, 0.54701F},   {0.47818F, 0.52986F, -0.08640F, 0.35622F, 0.53103F}}}};
 
-    auto a_tensor = ttml::autograd::create_tensor(core::from_xtensor(a, &ttml::autograd::ctx().get_device()));
-    auto computed_silu = ttml::ops::silu(a_tensor);
+    auto a_tensor = autograd::create_tensor(core::from_xtensor(a, &autograd::ctx().get_device()));
+    auto computed_silu = silu(a_tensor);
     auto computed_silu_xtensor = core::to_xtensor(computed_silu->get_value());
     EXPECT_TRUE(xt::allclose(computed_silu_xtensor, expected_silu, 8e-3F, 4e-2F));
 
@@ -229,11 +229,11 @@ TEST_F(UnaryOpsTest, Silu) {
           {-0.00023F, 0.00083F, 0.00099F, 0.00190F, 0.00235F},   {0.00198F, 0.00226F, -0.00017F, 0.00136F, 0.00226F}}}};
     xt::xarray<float> expected_silu_grad = expected_silu_grad_.reshape({N, C, H, W});
 
-    auto target = ttml::autograd::create_tensor(core::zeros_like(computed_silu->get_value()));
-    auto result = ttml::ops::mse_loss(computed_silu, target);
+    auto target = autograd::create_tensor(core::zeros_like(computed_silu->get_value()));
+    auto result = mse_loss(computed_silu, target);
     result->backward();
     auto computed_silu_grad = core::to_xtensor(computed_silu->get_grad());
     EXPECT_TRUE(xt::allclose(computed_silu_grad, expected_silu_grad, 8e-3F, 4e-2F));
 }
 
-}  // namespace ttml::core::tests
+}  // namespace ttml::ops::tests
