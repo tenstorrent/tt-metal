@@ -31,7 +31,7 @@ Download the weights [directly from Meta](https://llama.meta.com/llama-downloads
 The downloaded directories include weight files (e.g. `consolidated.00.pth`), the tokenizer `tokenizer.model` and configuration file `params.json`.
 
 #### Llama3.1-70B only
-Llama3.1-70B requires repacked weights. We provide a script to facilitate this in `models/demos/llama3/scripts/repack_weights_70b.py`.
+Llama3.1-70B requires repacked weights. We provide a script to facilitate this in `models/tt_transformers/scripts/repack_weights_70b.py`.
 
 The repacked output directory can be same as the checkpoint directory, since the new files will have different names.
 If providing a different path, please make sure that you keep the string `3.1-70B` in the new path name, since the Llama3 codebase relies on the weights directory name to identify the correct model.
@@ -40,7 +40,7 @@ Note: Use the default value of `10` for `chunk_size`.
 
 ```
 # This concatenates the sharded checkpoints and makes it easier for us to load.
-python models/demos/llama3/scripts/repack_weights_70b.py <path_to_checkpoint_dir> <repacked_output_dir>
+python models/tt_transformers/scripts/repack_weights_70b.py <path_to_checkpoint_dir> <repacked_output_dir>
 ```
 
 If providing a different output directory, please copy the `params.json` and the `tokenizer.model` files to the new directory.
@@ -49,7 +49,7 @@ If providing a different output directory, please copy the `params.json` and the
 The library requires extra python dependencies. Install them from:
 
 ```
-pip install -r models/demos/llama3/requirements.txt
+pip install -r models/tt_transformers/requirements.txt
 ```
 
 ### HuggingFace models (e.g. DeepSeek R1 Distill Llama 3.3 70B, Qwen 2.5 7B, ...)
@@ -109,9 +109,9 @@ The Llama3 demo includes 3 main modes of operation and is fully parametrized to 
 - `long-context`: Runs a large prompt (64k tokens) for a single user
 - `reasoning-1`: Runs a reasoning prompt for a single user (generates up to 15k tokens)
 
-If you want to provide your own demo configuration, please take a look at the pytest parametrize calls in `models/demos/llama3/demo/simple_text_demo.py`. For convenience we list all the supported params below:
+If you want to provide your own demo configuration, please take a look at the pytest parametrize calls in `models/tt_transformers/demo/simple_text_demo.py`. For convenience we list all the supported params below:
 
-- `input_prompts (string)`: input json file with prompts to process. See `models/demos/llama3/demo/*.json` for a list of input files
+- `input_prompts (string)`: input json file with prompts to process. See `models/tt_transformers/demo/*.json` for a list of input files
 - `instruct (bool)`: Whether to use Llama instruct weights or general weights
 - `repeat_batches (int)`: Number of consecutive batches of users to run (default: 1)
 - `max_seq_len (int)`: Maximum context length supported by the model (refer to the table above)
@@ -136,25 +136,25 @@ Example: `export FAKE_DEVICE=N150`, will enable running a single-chip demo on a 
 # Examples of how to run the demo for any supported Llama3 models
 
 # Batch-1
-pytest models/demos/llama3/demo/simple_text_demo.py -k "performance and batch-1"
+pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and batch-1"
 
 # Batch-32
-pytest models/demos/llama3/demo/simple_text_demo.py -k "performance and batch-32"
+pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and batch-32"
 
 # Long-context
-pytest models/demos/llama3/demo/simple_text_demo.py -k "performance and long"
+pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and long"
 ```
 
 The above examples are run in `LlamaOptimizations.performance` mode.
 You can override this by setting the `optimizations` argument in the demo. To use instead the accuracy mode you can call the above tests with `-k "accuracy and ..."` instead of performance.
 
 #### Custom input arguments
-To facilitate testing different configurations, `simple_text_demo.py` supports argument overrides. The full list of overrides is included in `models/demos/llama3/demo/conftest.py`.
+To facilitate testing different configurations, `simple_text_demo.py` supports argument overrides. The full list of overrides is included in `models/tt_transformers/demo/conftest.py`.
 
 An example usage where the `batch-1` test is modified to run with 16 users and keep generating tokens until 1024 are generated:
 
 ```
-pytest models/demos/llama3/demo/simple_text_demo.py -k "performance and batch-1" --batch_size 16 --max_generated_tokens 1024 --stop_at_eos 0
+pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and batch-1" --batch_size 16 --max_generated_tokens 1024 --stop_at_eos 0
 ```
 
 ### Expected performance and accuracy
@@ -175,6 +175,6 @@ Max Prefill Chunk Sizes (text-only):
 | Llama3.1-70B | Not supported | Not supported | 32k tokens     | 128k tokens |
 | DeepSeek-R1-Distill-Llama3.3-70B | Not supported | Not supported | 32k tokens     | 128k tokens |
 
-- These max chunk sizes are specific to max context length 128k and are configured via `MAX_PREFILL_CHUNK_SIZES_DIV1024` in [model_config.py](https://github.com/tenstorrent/tt-metal/blob/main/models/demos/llama3/tt/model_config.py). If the max context length is set to a smaller value using the `max_seq_len` flag (see [Run the demo](#run-the-demo)), these chunk sizes can possibly be increased due to using a smaller KV cache.
+- These max chunk sizes are specific to max context length 128k and are configured via `MAX_PREFILL_CHUNK_SIZES_DIV1024` in [model_config.py](tt/model_config.py). If the max context length is set to a smaller value using the `max_seq_len` flag (see [Run the demo](#run-the-demo)), these chunk sizes can possibly be increased due to using a smaller KV cache.
 
 **Chunked prefill (Llama3.2-11B multimodal)**: Llama3.2-11B multimodal is currently only supported on N300 and T3000. On N300, a max prefill context length of 8k is supported, while T3000 supports a max context length of 128k.

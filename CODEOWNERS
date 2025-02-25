@@ -164,7 +164,7 @@ models/demos @uaydonat
 models/demos/metal_BERT_large_11 @tt-aho @TT-BrianLiu
 models/demos/wormhole @uaydonat
 models/demos/t3000 @uaydonat
-models/demos/llama3 @cglagovichTT @yieldthought @mtairum @uaydonat
+models/tt_transformers @cglagovichTT @yieldthought @mtairum @uaydonat
 models/demos/qwen @sraizada-tt @mtairum @uaydonat @yieldthought
 models/demos/falcon7b_common @skhorasganiTT @djordje-tt @uaydonat
 models/demos/wormhole/mamba @esmalTT @uaydonat @kpaigwar
