@@ -371,7 +371,10 @@ class EdmLineFabricOpInterface {
     size_t firmware_context_switch_interval = FabricEriscDatamoverBuilder::default_firmware_context_switch_interval;
 };
 
-void initialize_edm_fabric(distributed::MeshDevice* mesh_device, bool wrap_fabric_around_mesh = false);
+void initialize_edm_fabric(
+    distributed::MeshDevice* mesh_device,
+    bool wrap_fabric_around_mesh = false,
+    std::optional<size_t> context_switch_interval_override = std::nullopt);
 void teardown_edm_fabric(distributed::MeshDevice* mesh_device);
 
 };  // namespace ccl

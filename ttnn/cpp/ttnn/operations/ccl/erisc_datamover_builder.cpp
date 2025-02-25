@@ -825,7 +825,10 @@ void EdmLineFabricOpInterface::set_firmware_context_switch_interval(size_t inter
     }
 }
 
-void initialize_edm_fabric(distributed::MeshDevice* mesh_device, bool wrap_fabric_around_mesh) {
+void initialize_edm_fabric(
+    distributed::MeshDevice* mesh_device,
+    bool wrap_fabric_around_mesh,
+    std::optional<size_t> context_switch_interval_override) {
     if (wrap_fabric_around_mesh) {
         auto devices = mesh_device->get_view().get_ring_devices();
         std::vector<Program*> program_ptrs;
@@ -835,6 +838,9 @@ void initialize_edm_fabric(distributed::MeshDevice* mesh_device, bool wrap_fabri
         std::transform(
             programs.begin(), programs.end(), std::back_inserter(program_ptrs), [](Program& p) { return &p; });
         EdmLineFabricOpInterface fabric_device_builders = EdmLineFabricOpInterface(devices, program_ptrs, true);
+        if (context_switch_interval_override.has_value()) {
+            fabric_device_builders.set_firmware_context_switch_interval(context_switch_interval_override.value());
+        }
         fabric_device_builders.build_kernels();
 
         for (size_t i = 0; i < devices.size(); i++) {
@@ -865,6 +871,9 @@ void initialize_edm_fabric(distributed::MeshDevice* mesh_device, bool wrap_fabri
             });
             row_fabric_lines.push_back(
                 EdmLineFabricOpInterface(mesh_device->get_view().get_row_views()[i], program_ptrs, true));
+            if (context_switch_interval_override.has_value()) {
+                row_fabric_lines.back().set_firmware_context_switch_interval(context_switch_interval_override.value());
+            }
         }
 
         for (size_t i = 0; i < num_cols; i++) {
@@ -875,6 +884,9 @@ void initialize_edm_fabric(distributed::MeshDevice* mesh_device, bool wrap_fabri
             }
             col_fabric_lines.push_back(
                 EdmLineFabricOpInterface(mesh_device->get_view().get_column_views()[i], program_ptrs, true));
+            if (context_switch_interval_override.has_value()) {
+                col_fabric_lines.back().set_firmware_context_switch_interval(context_switch_interval_override.value());
+            }
         }
 
         std::for_each(row_fabric_lines.begin(), row_fabric_lines.end(), [](auto& line) { line.build_kernels(); });
