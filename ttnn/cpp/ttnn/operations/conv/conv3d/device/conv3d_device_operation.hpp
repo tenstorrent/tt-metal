@@ -42,7 +42,8 @@ struct Conv3dConfig {
         std::array<uint32_t, 3> stride_ = {1, 1, 1},
         std::array<uint32_t, 3> padding_ = {0, 0, 0},
         std::string padding_mode_ = "zeros",
-        uint32_t groups_ = 1) :
+        uint32_t groups_ = 1,
+        CoreCoord compute_with_storage_grid_size_ = {1, 1}) :
         dtype(dtype_),
         weights_dtype(weights_dtype_),
         output_layout(output_layout_),
@@ -55,7 +56,8 @@ struct Conv3dConfig {
         stride(stride_),
         padding(padding_),
         padding_mode(padding_mode_),
-        groups(groups_) {
+        groups(groups_),
+        compute_with_storage_grid_size(compute_with_storage_grid_size_) {
         // constructor body if needed
     }
 
@@ -75,6 +77,9 @@ struct Conv3dConfig {
     std::string padding_mode;
     uint32_t groups;
 
+    // Add grid size configuration
+    CoreCoord compute_with_storage_grid_size;
+
     static constexpr auto attribute_names = std::make_tuple(
         "dtype",
         "weights_dtype",
@@ -88,7 +93,8 @@ struct Conv3dConfig {
         "stride",
         "padding",
         "padding_mode",
-        "groups");
+        "groups",
+        "compute_with_storage_grid_size");
 
     const auto attribute_values() const {
         return std::make_tuple(
@@ -104,7 +110,8 @@ struct Conv3dConfig {
             std::cref(this->stride),
             std::cref(this->padding),
             std::cref(this->padding_mode),
-            std::cref(this->groups));
+            std::cref(this->groups),
+            std::cref(this->compute_with_storage_grid_size));
     }
 };
 

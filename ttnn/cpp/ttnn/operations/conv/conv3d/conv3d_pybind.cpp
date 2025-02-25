@@ -58,7 +58,8 @@ void py_bind_conv3d(py::module& module) {
             std::array<uint32_t, 3>,
             std::array<uint32_t, 3>,
             std::string,
-            uint32_t>(),
+            uint32_t,
+            CoreCoord>(),
         py::kw_only(),
         py::arg("dtype") = DataType::BFLOAT16,
         py::arg("weights_dtype") = DataType::BFLOAT16,
@@ -72,7 +73,8 @@ void py_bind_conv3d(py::module& module) {
         py::arg("stride"),
         py::arg("padding"),
         py::arg("padding_mode") = "zeros",
-        py::arg("groups") = 1);
+        py::arg("groups") = 1,
+        py::arg("compute_with_storage_grid_size") = CoreCoord{1, 1});
 
     py_conv3d_config.def_readwrite("dtype", &Conv3dConfig::dtype);
     py_conv3d_config.def_readwrite("weights_dtype", &Conv3dConfig::weights_dtype);
@@ -87,6 +89,7 @@ void py_bind_conv3d(py::module& module) {
     py_conv3d_config.def_readwrite("padding", &Conv3dConfig::padding);
     py_conv3d_config.def_readwrite("padding_mode", &Conv3dConfig::padding_mode);
     py_conv3d_config.def_readwrite("groups", &Conv3dConfig::groups);
+    py_conv3d_config.def_readwrite("compute_with_storage_grid_size", &Conv3dConfig::compute_with_storage_grid_size);
 
     py_conv3d_config.def("__repr__", [](const Conv3dConfig& config) { return fmt::format("{}", config); });
 }

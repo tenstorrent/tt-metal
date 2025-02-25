@@ -43,6 +43,14 @@ void kernel_main() {
     const uint32_t out_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t weight_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t bias_addr = get_arg_val<uint32_t>(argidx++);
+    const uint32_t c_out_block_start = get_arg_val<uint32_t>(argidx++);  // Block index
+    const uint32_t c_out_block_end = get_arg_val<uint32_t>(argidx++);    // Block index
+    const uint32_t t_out_start = get_arg_val<uint32_t>(argidx++);
+    const uint32_t t_out_end = get_arg_val<uint32_t>(argidx++);
+    const uint32_t h_out_start = get_arg_val<uint32_t>(argidx++);
+    const uint32_t h_out_end = get_arg_val<uint32_t>(argidx++);
+    const uint32_t w_out_start = get_arg_val<uint32_t>(argidx++);
+    const uint32_t w_out_end = get_arg_val<uint32_t>(argidx++);
 
     constexpr uint32_t tile_bytes = get_tile_size(cb_weight_tiled);
     constexpr DataFormat data_format = get_dataformat(cb_weight_tiled);
@@ -56,9 +64,11 @@ void kernel_main() {
     constexpr uint32_t weight_tiles = matmul_K_t * matmul_N_t;
     constexpr uint32_t C_out_t = C_out_num_blocks * matmul_N_t;
 
-    for (uint32_t c_out_block = 0; c_out_block < C_out_num_blocks; c_out_block++) {
+    // Iterate only over assigned C_out blocks
+    for (uint32_t c_out_block = c_out_block_start; c_out_block < c_out_block_end; c_out_block++) {
         const uint32_t c_out_offset_t = c_out_block * matmul_N_t;
-        // Read weight in row-major order into CB
+
+        // Read weights and bias for this block
         cb_reserve_back(cb_weight_tiled, weight_tiles);
         uint32_t weight_write_ptr = get_write_ptr(cb_weight_tiled);
         for (uint32_t row = 0; row < matmul_K_t; row++) {
@@ -71,7 +81,6 @@ void kernel_main() {
         noc_async_read_barrier();
         cb_push_back(cb_weight_tiled, weight_tiles);
 
-        // Read bias
         if constexpr (use_bias) {
             cb_reserve_back(cb_bias_tiled, matmul_N_t);
             uint32_t bias_write_ptr = get_write_ptr(cb_bias_tiled);
@@ -84,39 +93,26 @@ void kernel_main() {
             cb_push_back(cb_bias_tiled, matmul_N_t);
         }
 
-        // Write output
-        /*
-            Output shape: N x T_out x H_out x W_out x C_out
-        */
-        for (uint32_t t_block = 0; t_block < T_out; t_block += T_block_size) {
-            // TODO: Use clamping here
-            const uint32_t t_block_end = (t_block + T_block_size < T_out) ? t_block + T_block_size : T_out;
+        // Write output for assigned ranges
+        for (uint32_t t_block = t_out_start; t_block < t_out_end; t_block += T_block_size) {
+            const uint32_t t_block_end = std::min(t_block + T_block_size, t_out_end);
 
-            for (uint32_t h_block = 0; h_block < H_out; h_block += H_block_size) {
-                const uint32_t h_block_end = (h_block + H_block_size < H_out) ? h_block + H_block_size : H_out;
+            for (uint32_t h_block = h_out_start; h_block < h_out_end; h_block += H_block_size) {
+                const uint32_t h_block_end = std::min(h_block + H_block_size, h_out_end);
 
-                for (uint32_t w_block = 0; w_block < W_out; w_block += W_block_size) {
-                    const uint32_t w_block_end = (w_block + W_block_size < W_out) ? w_block + W_block_size : W_out;
+                for (uint32_t w_block = w_out_start; w_block < w_out_end; w_block += W_block_size) {
+                    const uint32_t w_block_end = std::min(w_block + W_block_size, w_out_end);
 
-                    // Compute produces `num_patches`, but padded to tile height
-                    // if (t_block == 0 && h_block == 0 && w_block == 0) {
-                    //     DPRINT << "WRITER: wait for num_patches_tile_padded: " << num_patches_tile_padded << ENDL();
-                    // }
                     cb_wait_front(cb_matmul_result_rm, output_tiles);
                     uint32_t cb_read_ptr = get_read_ptr(cb_matmul_result_rm);
-                    // DPRINT << "WRITER: cb_read_ptr: " << cb_read_ptr << " for t_block = " << t_block << " h_block = "
-                    // << h_block << " w_block = " << w_block << ENDL(); if (t_block == 0 && h_block == 0 && w_block ==
-                    // 0) { dprint_rm(cb_read_ptr, T_block_size*H_block_size*W_block_size, C_out_block_bytes/2);
-                    // }
+
                     for (uint32_t t = t_block; t < t_block_end; ++t) {
                         for (uint32_t h = h_block; h < h_block_end; ++h) {
                             for (uint32_t w = w_block; w < w_block_end; ++w) {
-                                // TODO: Use C_out_block to get noc address to write to
                                 uint32_t out_page_idx = t * H_out * W_out + h * W_out + w;
                                 uint64_t dst_addr = get_noc_addr(out_page_idx, out_writer);
-                                dst_addr += c_out_block * C_out_block_bytes;  // offset for C_out_block
+                                dst_addr += c_out_block * C_out_block_bytes;  // Using block index directly
                                 noc_async_write(cb_read_ptr, dst_addr, C_out_block_bytes);
-
                                 cb_read_ptr += C_out_block_bytes;
                             }
                         }

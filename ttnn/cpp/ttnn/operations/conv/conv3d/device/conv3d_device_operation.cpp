@@ -59,6 +59,17 @@ void Conv3dOp::validate(
         TT_FATAL(bias_tensor.get_layout() == Layout::TILE, "Bias tensor must be tile-major.");
         TT_FATAL(bias_tensor.dtype() == DataType::BFLOAT16, "Bias tensor must be bfloat16.");
     }
+
+    // Add grid size validation
+    const auto& device_grid = input_tensor_a.device()->compute_with_storage_grid_size();
+    TT_FATAL(
+        config.compute_with_storage_grid_size.x <= device_grid.x &&
+            config.compute_with_storage_grid_size.y <= device_grid.y,
+        "Requested grid size ({}, {}) exceeds device grid size ({}, {})",
+        config.compute_with_storage_grid_size.x,
+        config.compute_with_storage_grid_size.y,
+        device_grid.x,
+        device_grid.y);
 }
 
 std::vector<TensorSpec> Conv3dOp::compute_output_specs(const std::vector<Tensor>& input_tensors) const {

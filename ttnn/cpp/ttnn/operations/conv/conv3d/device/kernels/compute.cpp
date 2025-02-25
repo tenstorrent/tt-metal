@@ -133,21 +133,36 @@ void MAIN {
 
     mm_init(cb_vol2col_tiled, cb_weight_tiled, cb_matmul_interm_tiled);
 
-    for (uint32_t c_out_block = 0; c_out_block < C_out_num_blocks; c_out_block++) {
+    // Load range parameters
+    uint32_t argidx = 0;
+    const uint32_t c_out_block_start = get_arg_val<uint32_t>(argidx++);  // Block index
+    const uint32_t c_out_block_end = get_arg_val<uint32_t>(argidx++);    // Block index
+    const uint32_t t_out_start = get_arg_val<uint32_t>(argidx++);
+    const uint32_t t_out_end = get_arg_val<uint32_t>(argidx++);
+    const uint32_t h_out_start = get_arg_val<uint32_t>(argidx++);
+    const uint32_t h_out_end = get_arg_val<uint32_t>(argidx++);
+    const uint32_t w_out_start = get_arg_val<uint32_t>(argidx++);
+    const uint32_t w_out_end = get_arg_val<uint32_t>(argidx++);
+
+    // Process only assigned C_out blocks
+    for (uint32_t c_out_block = c_out_block_start; c_out_block < c_out_block_end; c_out_block++) {
         // Wait for new weights and bias
         cb_wait_front(cb_weight_tiled, weight_tiles);
 
         if constexpr (use_bias) {
             cb_wait_front(cb_bias_tiled, matmul_N_t);
         }
-        // 3D blocking loops:
-        for (uint32_t t_block = 0; t_block < T_out; t_block += T_block_size) {
-            const uint32_t t_block_end = (t_block + T_block_size < T_out) ? t_block + T_block_size : T_out;
 
-            for (uint32_t h_block = 0; h_block < H_out; h_block += H_block_size) {
-                const uint32_t h_block_end = (h_block + H_block_size < H_out) ? h_block + H_block_size : H_out;
-                for (uint32_t w_block = 0; w_block < W_out; w_block += W_block_size) {
-                    const uint32_t w_block_end = (w_block + W_block_size < W_out) ? w_block + W_block_size : W_out;
+        // 3D blocking loops over assigned ranges:
+        for (uint32_t t_block = t_out_start; t_block < t_out_end; t_block += T_block_size) {
+            const uint32_t t_block_end = std::min(t_block + T_block_size, t_out_end);
+
+            for (uint32_t h_block = h_out_start; h_block < h_out_end; h_block += H_block_size) {
+                const uint32_t h_block_end = std::min(h_block + H_block_size, h_out_end);
+
+                for (uint32_t w_block = w_out_start; w_block < w_out_end; w_block += W_block_size) {
+                    const uint32_t w_block_end = std::min(w_block + W_block_size, w_out_end);
+
                     // Tilize row-major patches
                     uint32_t patch_rows_left = num_patches;
                     tilize_init_short(cb_vol2col_rm, matmul_K_t, cb_vol2col_tiled);
@@ -166,20 +181,6 @@ void MAIN {
 
                     // Apply matmul blocks
                     cb_wait_front(cb_vol2col_tiled, patch_tiles);
-                    // if (t_block == 0 && h_block == 0 && w_block == 0) {
-                    //     for (uint32_t i = 0; i < matmul_K_t; i++) {
-                    //         UNPACK(DPRINT << "COMPUTE: tilized patch, col_idx: " << i << ENDL());
-                    //         UNPACK(tt::compute::common::print_tile_rows(cb_vol2col_tiled, num_patches, i, true));
-                    //     }
-
-                    //     for (uint32_t r = 0; r < matmul_K_t; r++) {
-                    //         for (uint32_t c = 0; c < matmul_N_t; c++) {
-                    //             UNPACK(DPRINT << "COMPUTE: weight, row_idx: " << r << " col_idx: " << c << ENDL());
-                    //             UNPACK(tt::compute::common::print_full_tile(cb_weight_tiled, r * matmul_N_t + c,
-                    //             true));
-                    //         }
-                    //     }
-                    // }
                     matmul_blocks(
                         cb_vol2col_tiled,
                         cb_weight_tiled,
@@ -200,19 +201,8 @@ void MAIN {
                         add_bias_inplace<matmul_M_t, matmul_N_t>(cb_matmul_interm_tiled, cb_bias_tiled);
                     }
 
-                    // if (t_block == 0 && h_block == 0 && w_block == 0) {
-                    // for (uint32_t i = 0; i < matmul_N_t; i++) {
-                    //     UNPACK(DPRINT << "COMPUTE: matmul_interm_tiled, col_idx: " << i << ENDL());
-                    //     UNPACK(tt::compute::common::print_tile_rows(cb_matmul_interm_tiled, num_patches, i, true));
-                    // }
-                    // UNPACK(DPRINT << "COMPUTE: wait for matmul_N_t: " << matmul_N_t << " reserve back: " <<
-                    // tt::constants::TILE_HEIGHT << ENDL());
-                    // }
-
                     // Untilize result
                     cb_wait_front(cb_matmul_interm_tiled, matmul_M_t * matmul_N_t);
-                    // UNPACK((llk_unpack_untilize_hw_configure_disaggregated<DST_ACCUM_MODE>(cb_matmul_interm_tiled)));
-                    // MATH((llk_math_hw_configure_disaggregated(cb_matmul_interm_tiled, cb_matmul_interm_tiled)));
                     untilize_init_short(cb_matmul_interm_tiled);
                     for (uint32_t patch_t = 0; patch_t < matmul_M_t; patch_t++) {
                         cb_reserve_back(cb_matmul_result_rm, matmul_N_t);

@@ -7,6 +7,7 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/cb_utils.hpp"
+#include <algorithm>
 
 namespace ttnn::operations::conv::conv3d::detail {
 
@@ -18,9 +19,10 @@ operation::ProgramWithCallbacks conv3d_factory(
     const Tensor& output_tensor,
     const DeviceComputeKernelConfig& compute_kernel_config) {
     Program program = CreateProgram();
-    auto core_grid = CoreRange({0, 0}, {0, 0});
+
+    auto grid_size = config.compute_with_storage_grid_size;
+    auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     auto num_cores = core_grid.size();
-    auto grid_size = core_grid.grid_size();
     /*
     First implementation just performs vol2col on a single core.
     */
@@ -277,15 +279,132 @@ operation::ProgramWithCallbacks conv3d_factory(
         core_grid,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
-    CoreCoord core = {0, 0};
-
-    SetRuntimeArgs(program, reader_kernels_id, core, {input_tensor.buffer()->address()});
-
+    uint32_t input_addr = input_tensor.buffer()->address();
     uint32_t out_addr = output_tensor.buffer()->address();
     uint32_t weight_addr = weight_tensor.buffer()->address();
     uint32_t bias_addr = bias_tensor.has_value() ? bias_tensor.value().buffer()->address() : 0;
-    log_info("Out addr: {}", out_addr);
-    SetRuntimeArgs(program, writer_kernels_id, core, {out_addr, weight_addr, bias_addr});
+
+    /**
+     * Compute parallelism for multi-core.
+     * Distribute work across C_out, T_out, H_out, and W_out dimensions.
+     */
+
+    // Calculate number of blocks along each dimension
+    uint32_t T_out_blocks = tt::div_up(T_out, config.T_out_block);
+    uint32_t H_out_blocks = tt::div_up(H_out, config.H_out_block);
+    uint32_t W_out_blocks = tt::div_up(W_out, config.W_out_block);
+
+    // Define parallelization factors for each dimension
+    uint32_t c_out_parallel_factor = std::min(C_out_num_blocks, (uint32_t)num_cores);
+    uint32_t t_out_parallel_factor = std::min((uint32_t)(num_cores / c_out_parallel_factor), T_out_blocks);
+    uint32_t h_out_parallel_factor =
+        std::min((uint32_t)(num_cores / (c_out_parallel_factor * t_out_parallel_factor)), H_out_blocks);
+    uint32_t w_out_parallel_factor = std::min(
+        (uint32_t)(num_cores / (c_out_parallel_factor * t_out_parallel_factor * h_out_parallel_factor)), W_out_blocks);
+
+    TT_FATAL(
+        c_out_parallel_factor * t_out_parallel_factor * h_out_parallel_factor * w_out_parallel_factor <= num_cores,
+        "Parallelism must not exceed number of cores. Got {}, expected at most {}.",
+        c_out_parallel_factor * t_out_parallel_factor * h_out_parallel_factor * w_out_parallel_factor,
+        num_cores);
+
+    log_info("Parallelization scheme:");
+    log_info("C_out_parallel_factor: {}", c_out_parallel_factor);
+    log_info("T_out_parallel_factor: {}", t_out_parallel_factor);
+    log_info("H_out_parallel_factor: {}", h_out_parallel_factor);
+    log_info("W_out_parallel_factor: {}", w_out_parallel_factor);
+
+    // Calculate blocks per core using ceiling division
+    const uint32_t c_out_per_core = tt::div_up(C_out_num_blocks, c_out_parallel_factor);
+    const uint32_t t_out_per_core = tt::div_up(T_out_blocks, t_out_parallel_factor);
+    const uint32_t h_out_per_core = tt::div_up(H_out_blocks, h_out_parallel_factor);
+    const uint32_t w_out_per_core = tt::div_up(W_out_blocks, w_out_parallel_factor);
+
+    // Set runtime args for each core
+    for (uint32_t core_id = 0; core_id < num_cores; ++core_id) {
+        CoreCoord core = {core_id % grid_size.x, core_id / grid_size.x};
+
+        // Calculate start/end ranges using mathematical mapping
+        uint32_t c_idx = core_id / (t_out_parallel_factor * h_out_parallel_factor * w_out_parallel_factor);
+        uint32_t t_idx = (core_id / (h_out_parallel_factor * w_out_parallel_factor)) % t_out_parallel_factor;
+        uint32_t h_idx = (core_id / w_out_parallel_factor) % h_out_parallel_factor;
+        uint32_t w_idx = core_id % w_out_parallel_factor;
+
+        uint32_t c_out_block_start = std::min(c_idx * c_out_per_core, C_out_num_blocks);
+        uint32_t c_out_block_end = std::min(c_out_block_start + c_out_per_core, C_out_num_blocks);
+        uint32_t t_out_block_start = std::min(t_idx * t_out_per_core, T_out_blocks);
+        uint32_t t_out_block_end = std::min(t_out_block_start + t_out_per_core, T_out_blocks);
+        uint32_t h_out_block_start = std::min(h_idx * h_out_per_core, H_out_blocks);
+        uint32_t h_out_block_end = std::min(h_out_block_start + h_out_per_core, H_out_blocks);
+        uint32_t w_out_block_start = std::min(w_idx * w_out_per_core, W_out_blocks);
+        uint32_t w_out_block_end = std::min(w_out_block_start + w_out_per_core, W_out_blocks);
+
+        // Convert block indices to actual indices
+        // Note that in C_out, we just use the block index rather than the absolute index
+        uint32_t t_out_start = std::min(t_out_block_start * config.T_out_block, T_out);
+        uint32_t t_out_end = std::min(t_out_block_end * config.T_out_block, T_out);
+        uint32_t h_out_start = std::min(h_out_block_start * config.H_out_block, H_out);
+        uint32_t h_out_end = std::min(h_out_block_end * config.H_out_block, H_out);
+        uint32_t w_out_start = std::min(w_out_block_start * config.W_out_block, W_out);
+        uint32_t w_out_end = std::min(w_out_block_end * config.W_out_block, W_out);
+
+        log_info(
+            "Core {},{}: C_out=[{},{}), T_out=[{},{}), H_out=[{},{}), W_out=[{},{})",
+            core.x,
+            core.y,
+            c_out_block_start,
+            c_out_block_end,
+            t_out_start,
+            t_out_end,
+            h_out_start,
+            h_out_end,
+            w_out_start,
+            w_out_end);
+
+        // Set runtime args
+        SetRuntimeArgs(
+            program,
+            reader_kernels_id,
+            core,
+            {input_addr,
+             c_out_block_start,
+             c_out_block_end,
+             t_out_start,
+             t_out_end,
+             h_out_start,
+             h_out_end,
+             w_out_start,
+             w_out_end});
+
+        SetRuntimeArgs(
+            program,
+            compute_kernels_id,
+            core,
+            {c_out_block_start,
+             c_out_block_end,
+             t_out_start,
+             t_out_end,
+             h_out_start,
+             h_out_end,
+             w_out_start,
+             w_out_end});
+
+        SetRuntimeArgs(
+            program,
+            writer_kernels_id,
+            core,
+            {out_addr,
+             weight_addr,
+             bias_addr,
+             c_out_block_start,
+             c_out_block_end,
+             t_out_start,
+             t_out_end,
+             h_out_start,
+             h_out_end,
+             w_out_start,
+             w_out_end});
+    }
 
     auto override_runtime_arguments_callback =
         [num_cores, grid_size, reader_kernels_id, writer_kernels_id](

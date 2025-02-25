@@ -71,9 +71,17 @@ void kernel_main() {
     constexpr uint32_t out_row_size_bytes = get_compile_time_arg_val(21);
     constexpr bool is_padding_zeros = get_compile_time_arg_val(22) == 1;
 
-    // Load input/output addresses
+    // Load input/output addresses and range parameters
     uint32_t argidx = 0;
     const uint32_t in_addr = get_arg_val<uint32_t>(argidx++);
+    const uint32_t c_out_block_start = get_arg_val<uint32_t>(argidx++);
+    const uint32_t c_out_block_end = get_arg_val<uint32_t>(argidx++);
+    const uint32_t t_out_start = get_arg_val<uint32_t>(argidx++);
+    const uint32_t t_out_end = get_arg_val<uint32_t>(argidx++);
+    const uint32_t h_out_start = get_arg_val<uint32_t>(argidx++);
+    const uint32_t h_out_end = get_arg_val<uint32_t>(argidx++);
+    const uint32_t w_out_start = get_arg_val<uint32_t>(argidx++);
+    const uint32_t w_out_end = get_arg_val<uint32_t>(argidx++);
 
     // Interleaved address generators
     constexpr bool is_dram = true;
@@ -83,17 +91,17 @@ void kernel_main() {
     constexpr uint32_t num_patches = T_block_size * H_block_size * W_block_size;
     // DPRINT << "num_patches: " << num_patches << ENDL();
 
-    for (uint32_t c_out_block = 0; c_out_block < C_out_num_blocks; c_out_block++) {
-        // 3D blocking loops:
-        for (uint32_t t_block = 0; t_block < T_out; t_block += T_block_size) {
-            // TODO: Use clamping here
-            const uint32_t t_block_end = (t_block + T_block_size < T_out) ? t_block + T_block_size : T_out;
+    // Iterate only over assigned C_out blocks
+    for (uint32_t c_out_block = c_out_block_start; c_out_block < c_out_block_end; c_out_block++) {
+        // 3D blocking loops over assigned ranges:
+        for (uint32_t t_block = t_out_start; t_block < t_out_end; t_block += T_block_size) {
+            const uint32_t t_block_end = std::min(t_block + T_block_size, t_out_end);
 
-            for (uint32_t h_block = 0; h_block < H_out; h_block += H_block_size) {
-                const uint32_t h_block_end = (h_block + H_block_size < H_out) ? h_block + H_block_size : H_out;
+            for (uint32_t h_block = h_out_start; h_block < h_out_end; h_block += H_block_size) {
+                const uint32_t h_block_end = std::min(h_block + H_block_size, h_out_end);
 
-                for (uint32_t w_block = 0; w_block < W_out; w_block += W_block_size) {
-                    const uint32_t w_block_end = (w_block + W_block_size < W_out) ? w_block + W_block_size : W_out;
+                for (uint32_t w_block = w_out_start; w_block < w_out_end; w_block += W_block_size) {
+                    const uint32_t w_block_end = std::min(w_block + W_block_size, w_out_end);
 
                     // Now iterate through the sub-tile
                     cb_reserve_back(cb_vol2col, num_patches);
@@ -111,7 +119,7 @@ void kernel_main() {
                                         for (uint32_t kw = 0; kw < kW; kw++) {
                                             const uint32_t cb_stick_idx = kt * kH * kW + kh * kW + kw;
 
-                                            // “Unpadded” indices before we clamp/pad
+                                            // "Unpadded" indices before we clamp/pad
                                             int32_t t_idx = (int32_t)(t + kt) - padding_t;
                                             int32_t h_idx = (int32_t)(h + kh) - padding_h;
                                             int32_t w_idx = (int32_t)(w + kw) - padding_w;
