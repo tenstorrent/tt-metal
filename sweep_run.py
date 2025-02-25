@@ -2,7 +2,7 @@ import os
 import re
 
 # List of operations
-ops = ["leaky_relu", "log", "log2", "sigmoid", "tanh"]
+ops = ["elu", "heaviside", "rsqrt", "relu6", "erfc"]
 
 
 # Function to modify the file
