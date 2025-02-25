@@ -31,9 +31,13 @@ struct ExecuteTopK {
         const bool largest,
         const bool sorted,
         const std::optional<MemoryConfig>& memory_config,
+        const std::optional<CoreRangeSet>& sub_core_grids,
         std::optional<std::tuple<Tensor, Tensor>> optional_output_tensors = std::nullopt) {
+        CoreRangeSet sub_core_grids_value = sub_core_grids.value_or(ttnn::CoreRangeSet(
+            ttnn::CoreRange(ttnn::CoreCoord(0, 0), input_tensor.device()->compute_with_storage_grid_size())));
+        tt::log_info("sub_core_grids_value: {}", sub_core_grids_value);
         return operation::run(
-            TopK{k, dim, largest, sorted, memory_config.value_or(input_tensor.memory_config())},
+            TopK{k, dim, largest, sorted, memory_config.value_or(input_tensor.memory_config()), sub_core_grids_value},
             {input_tensor},
             {},
             optional_output_tensors.has_value() ? tuple_to_vector_optional(optional_output_tensors.value())
@@ -48,8 +52,18 @@ struct ExecuteTopK {
         const bool largest,
         const bool sorted,
         const std::optional<MemoryConfig>& memory_config,
+        const std::optional<CoreRangeSet>& sub_core_grids,
         std::optional<std::tuple<Tensor, Tensor>> optional_output_tensors) {
-        return invoke(DefaultQueueId, input_tensor, k, dim, largest, sorted, memory_config, optional_output_tensors);
+        return invoke(
+            DefaultQueueId,
+            input_tensor,
+            k,
+            dim,
+            largest,
+            sorted,
+            memory_config,
+            sub_core_grids,
+            optional_output_tensors);
     }
 
     static inline std::vector<Tensor> create_async_output_tensors(
