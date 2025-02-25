@@ -5,9 +5,9 @@
 #pragma once
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "ckernel_globals.h"
 #include "ckernel_template.h"
 #include "cunpack_common.h"
-#include "ckernel_globals.h"
 
 using namespace ckernel;
 using namespace ckernel::unpacker;
@@ -25,10 +25,10 @@ inline void _llk_unpack_AB_mop_config_() {
 #endif
 
     if constexpr (BType == BroadcastType::COL) {
-        static constexpr uint unpack_srcb_set_z = TT_OP_SETADCZW(0b010, 0, 0, 0, 2, 0b0001);
-        ckernel_unpack_template tmp = ckernel_unpack_template(
-            false,  // src B
-            true,   // halo - just used for 4 unpacks
+        static constexpr uint   unpack_srcb_set_z = TT_OP_SETADCZW(0b010, 0, 0, 0, 2, 0b0001);
+        ckernel_unpack_template tmp               = ckernel_unpack_template(
+            false, // src B
+            true,  // halo - just used for 4 unpacks
             unpack_srcb,
             unpack_srca,
             unpack_srca,
@@ -38,10 +38,10 @@ inline void _llk_unpack_AB_mop_config_() {
             0);
         tmp.program(instrn_buffer);
     } else if constexpr (BType == BroadcastType::ROW) {
-        static constexpr uint unpack_srcb_clear_z = TT_OP_SETADCZW(0b010, 0, 0, 0, 0, 0b0001);
-        ckernel_unpack_template tmp = ckernel_unpack_template(
-            true,  // src B
-            true,  // halo - just used for 4 unpacks
+        static constexpr uint   unpack_srcb_clear_z = TT_OP_SETADCZW(0b010, 0, 0, 0, 0, 0b0001);
+        ckernel_unpack_template tmp                 = ckernel_unpack_template(
+            true, // src B
+            true, // halo - just used for 4 unpacks
             unpack_srcb,
             unpack_srca,
             unpack_srcb,
@@ -52,8 +52,8 @@ inline void _llk_unpack_AB_mop_config_() {
         tmp.program(instrn_buffer);
     } else if constexpr (BType == BroadcastType::SCALAR) {
         ckernel_unpack_template tmp = ckernel_unpack_template(
-            true,  // src B
-            true,  // halo - just used for 4 unpacks
+            true, // src B
+            true, // halo - just used for 4 unpacks
             unpack_srca,
             unpack_srca,
             unpack_srca,
@@ -64,8 +64,8 @@ inline void _llk_unpack_AB_mop_config_() {
         tmp.program(instrn_buffer);
     } else {
         ckernel_unpack_template tmp = ckernel_unpack_template(
-            true,   // src B
-            false,  // halo - just used for 4 unpacks
+            true,  // src B
+            false, // halo - just used for 4 unpacks
             unpack_srca,
             0,
             0,
@@ -78,30 +78,27 @@ inline void _llk_unpack_AB_mop_config_() {
 }
 
 inline void _llk_unpack_AB_hw_configure_(
-    const std::uint32_t unpA_src_format, const std::uint32_t unpB_src_format,
-    const std::uint32_t unpA_dst_format, const std::uint32_t unpB_dst_format) {
-    configure_unpack_AB(
-        unpA_src_format,
-        unpB_src_format,
-        unpA_dst_format,
-        unpB_dst_format
-    );
+    const std::uint32_t unpA_src_format,
+    const std::uint32_t unpB_src_format,
+    const std::uint32_t unpA_dst_format,
+    const std::uint32_t unpB_dst_format) {
+    configure_unpack_AB(unpA_src_format, unpB_src_format, unpA_dst_format, unpB_dst_format);
 }
 
 template <BroadcastType BType = BroadcastType::NONE>
-inline void _llk_unpack_AB_init_(const std::uint32_t transpose=0 /* unused */, const std::uint32_t acc_to_dest=0 /* unused */) {
+inline void _llk_unpack_AB_init_(
+    const std::uint32_t transpose = 0 /* unused */, const std::uint32_t acc_to_dest = 0 /* unused */) {
     _llk_unpack_AB_mop_config_<BType>();
 }
 
 template <BroadcastType BType = BroadcastType::NONE>
 inline void _llk_unpack_AB_(
     const std::uint32_t address_a, const std::uint32_t address_b, const bool transpose_of_faces = 0 /*not used*/) {
-
     // Clear z/w start counters
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
 
     // Program srcA and srcB base addresses
-    volatile uint tt_reg_ptr *cfg = get_cfg_pointer();  // get pointer to registers for current state ID
+    volatile uint tt_reg_ptr *cfg = get_cfg_pointer(); // get pointer to registers for current state ID
 
     // Wait for free context
     wait_for_next_context(2);

@@ -4,17 +4,14 @@
 
 #pragma once
 
-#include "ckernel_defs.h"
 #include "ckernel.h"
-
+#include "ckernel_defs.h"
 #include "sfpi.h"
 
 using namespace sfpi;
 
-namespace ckernel
-{
-namespace sfpu
-{
+namespace ckernel {
+namespace sfpu {
 
 template <bool APPROXIMATION_MODE, bool SIGN_MAGNITUDE_FORMAT, int ITERATIONS>
 inline void _add_int32_(const uint dst_offset) {
@@ -29,7 +26,7 @@ inline void _add_int32_(const uint dst_offset) {
     // If LOAD/STORE have the value in INT sign-magnitude format and SFPU needs it as 2's complement.
     constexpr auto INSTR_MOD_CAST = InstrModCast::INT_SIGN_MAGN_TO_INT32_2S_COMP;
 
-    #pragma GCC unroll 8
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         // operand A - int32
         TTI_SFPLOAD(0 /*lreg*/, INSTR_MOD_LOAD_STORE, ADDR_MOD_7, 0 /*dest_reg_addr */);
@@ -44,7 +41,7 @@ inline void _add_int32_(const uint dst_offset) {
         if constexpr (SIGN_MAGNITUDE_FORMAT) {
             TTI_SFPCAST(1 /*lreg*/, 2 /*ldest*/, INSTR_MOD_CAST);
             // Required after cast due to a bug in Blackhole RTL.
-            TTI_SFPSETSGN(0 /* imm */, 2 /*lreg_c*/, 1 /*ldest*/ , 0 /*imod*/);
+            TTI_SFPSETSGN(0 /* imm */, 2 /*lreg_c*/, 1 /*ldest*/, 0 /*imod*/);
         }
 
         TTI_SFPIADD(0 /*imm*/, 1 /*lreg_c*/, 0 /*lreg_dest*/, 4 /*imod*/);
@@ -55,7 +52,7 @@ inline void _add_int32_(const uint dst_offset) {
         if constexpr (SIGN_MAGNITUDE_FORMAT) {
             TTI_SFPCAST(0 /*lreg*/, 1 /*ldest*/, INSTR_MOD_CAST);
             // Required after cast due to a bug in Blackhole RTL.
-            TTI_SFPSETSGN (0 /* imm */, 1 /*lreg_c*/, 0 /*ldest*/, 0 /*imod*/);
+            TTI_SFPSETSGN(0 /* imm */, 1 /*lreg_c*/, 0 /*ldest*/, 0 /*imod*/);
         }
         TTI_SFPSTORE(0, INSTR_MOD_LOAD_STORE, ADDR_MOD_7, 0);
         dst_reg++;
