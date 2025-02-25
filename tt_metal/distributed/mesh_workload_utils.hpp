@@ -20,6 +20,4 @@ void write_go_signal(
     bool send_unicasts,
     int num_unicast_txns = -1);
 
-LogicalDeviceRangeSet relative_complement(const LogicalDeviceRange& parent, const LogicalDeviceRange& intersection);
-
 }  // namespace tt::tt_metal::distributed

@@ -21,7 +21,7 @@ namespace distributed {
 
 MeshWorkload CreateMeshWorkload();
 
-void AddProgramToMeshWorkload(MeshWorkload& mesh_workload, Program& program, const LogicalDeviceRange& device_range);
+void AddProgramToMeshWorkload(MeshWorkload& mesh_workload, Program&& program, const MeshCoordinateRange& device_range);
 
 void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload, bool blocking);
 
@@ -83,13 +83,13 @@ void EnqueueRecordEvent(
     MeshCommandQueue& mesh_cq,
     const std::shared_ptr<MeshEvent>& event,
     tt::stl::Span<const SubDeviceId> sub_device_ids = {},
-    const std::optional<LogicalDeviceRange>& device_range = std::nullopt);
+    const std::optional<MeshCoordinateRange>& device_range = std::nullopt);
 
 void EnqueueRecordEventToHost(
     MeshCommandQueue& mesh_cq,
     const std::shared_ptr<MeshEvent>& event,
     tt::stl::Span<const SubDeviceId> sub_device_ids = {},
-    const std::optional<LogicalDeviceRange>& device_range = std::nullopt);
+    const std::optional<MeshCoordinateRange>& device_range = std::nullopt);
 
 void EnqueueWaitForEvent(MeshCommandQueue& mesh_cq, const std::shared_ptr<MeshEvent>& event);
 

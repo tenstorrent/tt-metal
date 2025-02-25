@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,12 +6,15 @@
 #include <gmock/gmock.h>
 #include <unordered_set>
 
+#include "gmock/gmock.h"
 #include "mesh_coord.hpp"
 
 namespace tt::tt_metal::distributed {
 namespace {
 
 using ::testing::ElementsAre;
+using ::testing::Eq;
+using ::testing::IsEmpty;
 using ::testing::UnorderedElementsAre;
 
 TEST(MeshShapeTest, Construction) {
@@ -195,6 +198,12 @@ TEST(MeshCoordinateRangeTest, SubrangeOneElement) {
     EXPECT_THAT(coords, ElementsAre(MeshCoordinate(1, 1, 1)));
 }
 
+TEST(MeshCoordinateRangeTest, ContainsInvalidDimensions) {
+    MeshCoordinateRange range(MeshCoordinate(1, 1, 3), MeshCoordinate(1, 1, 3));
+    EXPECT_ANY_THROW(range.contains(MeshCoordinate(1, 1)));
+    EXPECT_ANY_THROW(range.contains(MeshCoordinateRange(MeshCoordinate(1, 1), MeshCoordinate(1, 1))));
+}
+
 TEST(MeshCoordinateRangeTest, Contains) {
     MeshCoordinateRange range(MeshCoordinate(1, 1, 3), MeshCoordinate(1, 1, 3));
     EXPECT_TRUE(range.contains(MeshCoordinate(1, 1, 3)));
@@ -205,6 +214,52 @@ TEST(MeshCoordinateRangeTest, Contains) {
     EXPECT_FALSE(range.contains(MeshCoordinate(0, 1)));
     EXPECT_FALSE(range.contains(MeshCoordinate(2, 1)));
     EXPECT_FALSE(range.contains(MeshCoordinate(2, 2)));
+}
+
+TEST(MeshCoordinateRangeTest, ContainsRange) {
+    MeshCoordinateRange range(MeshCoordinate(1, 1, 3), MeshCoordinate(1, 1, 3));
+    EXPECT_TRUE(range.contains(range));
+
+    EXPECT_FALSE(range.contains(MeshCoordinateRange(MeshCoordinate(1, 1, 2), MeshCoordinate(1, 1, 3))));
+    EXPECT_FALSE(range.contains(MeshCoordinateRange(MeshCoordinate(1, 1, 3), MeshCoordinate(1, 1, 4))));
+
+    range = MeshCoordinateRange(MeshCoordinate(1, 1), MeshCoordinate(2, 2));
+    EXPECT_FALSE(range.contains(MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 0))));
+    EXPECT_FALSE(range.contains(MeshCoordinateRange(MeshCoordinate(0, 3), MeshCoordinate(0, 3))));
+    EXPECT_FALSE(range.contains(MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 1))));
+    EXPECT_FALSE(range.contains(MeshCoordinateRange(MeshCoordinate(0, 2), MeshCoordinate(1, 2))));
+    EXPECT_TRUE(range.contains(MeshCoordinateRange(MeshCoordinate(1, 1), MeshCoordinate(1, 2))));
+}
+
+TEST(MeshCoordinateRangeTest, Intersection) {
+    MeshCoordinateRange range(MeshCoordinate(1, 1), MeshCoordinate(3, 3));
+    auto intersection = range.intersection(MeshCoordinateRange(MeshCoordinate(2, 2), MeshCoordinate(4, 4)));
+    ASSERT_TRUE(intersection.has_value());
+    EXPECT_EQ(intersection->start_coord(), MeshCoordinate(2, 2));
+    EXPECT_EQ(intersection->end_coord(), MeshCoordinate(3, 3));
+
+    intersection = range.intersection(MeshCoordinateRange(MeshCoordinate(1, 1), MeshCoordinate(1, 1)));
+    ASSERT_TRUE(intersection.has_value());
+    EXPECT_EQ(intersection->start_coord(), MeshCoordinate(1, 1));
+    EXPECT_EQ(intersection->end_coord(), MeshCoordinate(1, 1));
+
+    intersection = range.intersection(MeshCoordinateRange(MeshCoordinate(3, 3), MeshCoordinate(3, 3)));
+    ASSERT_TRUE(intersection.has_value());
+    EXPECT_EQ(intersection->start_coord(), MeshCoordinate(3, 3));
+    EXPECT_EQ(intersection->end_coord(), MeshCoordinate(3, 3));
+
+    intersection = range.intersection(MeshCoordinateRange(MeshCoordinate(2, 2), MeshCoordinate(2, 2)));
+    ASSERT_TRUE(intersection.has_value());
+    EXPECT_EQ(intersection->start_coord(), MeshCoordinate(2, 2));
+    EXPECT_EQ(intersection->end_coord(), MeshCoordinate(2, 2));
+
+    intersection = range.intersection(MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(5, 5)));
+    ASSERT_TRUE(intersection.has_value());
+    EXPECT_EQ(intersection->start_coord(), MeshCoordinate(1, 1));
+    EXPECT_EQ(intersection->end_coord(), MeshCoordinate(3, 3));
+
+    intersection = range.intersection(MeshCoordinateRange(MeshCoordinate(5, 5), MeshCoordinate(6, 6)));
+    EXPECT_FALSE(intersection.has_value());
 }
 
 TEST(MeshCoordinateRangeTest, Dimensionality) {
@@ -230,6 +285,85 @@ TEST(MeshCoordinateRangeTest, InvalidRange) {
     MeshCoordinate start(1, 2, 0);
     MeshCoordinate end(1, 1, 1);
     EXPECT_ANY_THROW(MeshCoordinateRange(start, end));
+}
+
+TEST(MeshCoordinateRangeSetTest, MergeInvalidDimensions) {
+    MeshCoordinateRangeSet range_set;
+    range_set.merge(MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(1, 1)));
+
+    EXPECT_ANY_THROW(range_set.merge(MeshCoordinateRange(MeshCoordinate(0, 0, 0), MeshCoordinate(1, 1, 1))));
+}
+
+TEST(MeshCoordinateRangeSetTest, Merge1D) {
+    MeshCoordinateRangeSet set;
+    // Merge first range: [0, 3].
+    MeshCoordinateRange r1(MeshCoordinate(0), MeshCoordinate(3));
+    set.merge(r1);
+
+    // Merge an adjacent range: [4, 6] (adjacent to r1, since 3 and 4 touch).
+    MeshCoordinateRange r2(MeshCoordinate(4), MeshCoordinate(6));
+    set.merge(r2);
+    ASSERT_EQ(set.size(), 1);
+    auto merged_range = set.ranges().front();
+    EXPECT_EQ(merged_range.start_coord(), MeshCoordinate(0));
+    EXPECT_EQ(merged_range.end_coord(), MeshCoordinate(6));
+
+    // Merge a separate range: [8, 10].
+    MeshCoordinateRange r3(MeshCoordinate(8), MeshCoordinate(10));
+    set.merge(r3);
+    ASSERT_EQ(set.size(), 2);
+
+    // Merge a range bridging the gap: [7, 7] should merge all into one [0, 10].
+    MeshCoordinateRange r4(MeshCoordinate(7), MeshCoordinate(7));
+    set.merge(r4);
+    ASSERT_EQ(set.size(), 1);
+    merged_range = set.ranges().front();
+    EXPECT_EQ(merged_range.start_coord(), MeshCoordinate(0));
+    EXPECT_EQ(merged_range.end_coord(), MeshCoordinate(10));
+}
+
+TEST(MeshCoordinateRangeSetTest, SubtractInvalidDimensions) {
+    EXPECT_ANY_THROW(subtract(
+        MeshCoordinateRange(MeshCoordinate(0, 0, 0), MeshCoordinate(1, 1, 1)),
+        MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(1, 1))));
+}
+
+TEST(MeshCoordinateRangeSetTest, SubtractNoIntersection) {
+    MeshCoordinateRange parent(MeshCoordinate(0, 0), MeshCoordinate(4, 10));
+    MeshCoordinateRange intersection(MeshCoordinate(5, 5), MeshCoordinate(12, 12));
+    EXPECT_THAT(subtract(parent, intersection).ranges(), ElementsAre(Eq(parent)));
+}
+
+TEST(MeshCoordinateRangeSetTest, SubtractParentEqualsIntersection) {
+    MeshCoordinateRange parent(MeshCoordinate(0, 0), MeshCoordinate(4, 10));
+    MeshCoordinateRange intersection(MeshCoordinate(0, 0), MeshCoordinate(4, 10));
+    EXPECT_THAT(subtract(parent, intersection).ranges(), IsEmpty());
+}
+
+TEST(MeshCoordinateRangeSetTest, Subtract1DAdjacentIntersection) {
+    // Parent [0, 10] and intersection [3, 7] should yield [0,2] and [8,10].
+    MeshCoordinateRange parent(MeshCoordinate(0), MeshCoordinate(10));
+    MeshCoordinateRange intersection(MeshCoordinate(3), MeshCoordinate(7));
+
+    EXPECT_THAT(
+        subtract(parent, intersection).ranges(),
+        ElementsAre(
+            Eq(MeshCoordinateRange(MeshCoordinate(0), MeshCoordinate(2))),
+            Eq(MeshCoordinateRange(MeshCoordinate(8), MeshCoordinate(10)))));
+}
+
+TEST(MeshCoordinateRangeSetTest, Subtract2DNonAdjacentIntersection) {
+    // Parent [(0,0) to (2,2)] and intersection [(1,1) to (1,1)].
+    MeshCoordinateRange parent(MeshCoordinate(0, 0), MeshCoordinate(2, 2));
+    MeshCoordinateRange intersection(MeshCoordinate(1, 1), MeshCoordinate(1, 1));
+
+    EXPECT_THAT(
+        subtract(parent, intersection).ranges(),
+        UnorderedElementsAre(
+            Eq(MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 2))),
+            Eq(MeshCoordinateRange(MeshCoordinate(1, 0), MeshCoordinate(2, 0))),
+            Eq(MeshCoordinateRange(MeshCoordinate(2, 1), MeshCoordinate(2, 1))),
+            Eq(MeshCoordinateRange(MeshCoordinate(1, 2), MeshCoordinate(2, 2)))));
 }
 
 TEST(ToLinearIndexTest, Basic) {
