@@ -265,7 +265,7 @@ int main(int argc, char** argv) {
 
         std::map<chip_id_t, std::vector<CoreCoord>> device_router_map;
 
-        auto const& device_active_eth_cores = device_map[test_device_id_l]->get_active_ethernet_cores();
+        const auto& device_active_eth_cores = device_map[test_device_id_l]->get_active_ethernet_cores();
 
         if (device_active_eth_cores.size() == 0) {
             log_info(
@@ -309,20 +309,19 @@ int main(int argc, char** argv) {
         log_info(LogTest, "GK Socket Info Addr = 0x{:08X}", socket_info_addr);
 
         for (auto device : device_map) {
-            auto neighbors = tt::Cluster::instance().get_ethernet_connected_device_ids(device.second->id());
+            auto neighbors = tt::Cluster::instance().get_ethernet_cores_grouped_by_connected_chips(device.second->id());
             std::vector<CoreCoord> device_router_cores;
             std::vector<CoreCoord> device_router_phys_cores;
             uint32_t router_mask = 0;
-            for (auto neighbor : neighbors) {
-                if (device_map.contains(neighbor)) {
+            for (const auto& [neighbor_chip, connected_logical_cores] : neighbors) {
+                if (device_map.contains(neighbor_chip)) {
                     if (!router_core_found && device.first == test_device_id_l) {
                         // pick a router so that tx and read in routing tables from this core on the
                         // sender device.
-                        router_logical_core = device.second->get_ethernet_sockets(neighbor)[0];
+                        router_logical_core = connected_logical_cores[0];
                         router_phys_core = device.second->ethernet_core_from_logical_core(router_logical_core);
                         router_core_found = true;
                     }
-                    auto connected_logical_cores = device.second->get_ethernet_sockets(neighbor);
                     for (auto logical_core : connected_logical_cores) {
                         device_router_cores.push_back(logical_core);
                         device_router_phys_cores.push_back(
@@ -334,7 +333,7 @@ int main(int argc, char** argv) {
                         LogTest,
                         "Device {} skiping Neighbor Device {} since it is not in test device map.",
                         device.first,
-                        neighbor);
+                        neighbor_chip);
                 }
             }
 

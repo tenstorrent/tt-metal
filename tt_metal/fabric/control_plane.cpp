@@ -51,7 +51,10 @@ ControlPlane::ControlPlane(const std::string& mesh_graph_desc_file) {
     // Printing, only enabled with log_debug
     this->routing_table_generator_->print_routing_tables();
 
+    // Initialize the control plane routers based on mesh graph
     this->initialize_from_mesh_graph_desc_file(mesh_graph_desc_file);
+
+    this->convert_fabric_routing_table_to_chip_routing_table();
 
     // Printing, only enabled with log_debug
     this->print_ethernet_channels();
@@ -222,6 +225,22 @@ void ControlPlane::initialize_from_mesh_graph_desc_file(const std::string& mesh_
     const auto& intra_mesh_connectivity = this->routing_table_generator_->get_intra_mesh_connectivity();
     const auto& inter_mesh_connectivity = this->routing_table_generator_->get_inter_mesh_connectivity();
 
+    auto add_ethernet_channel_to_router_mapping = [&](mesh_id_t mesh_id,
+                                                      chip_id_t chip_id,
+                                                      const CoreCoord& eth_core,
+                                                      RoutingDirection direction) {
+        auto physical_chip_id = this->logical_mesh_chip_id_to_physical_chip_id_mapping_[mesh_id][chip_id];
+        auto fabric_router_channels_on_chip = tt::Cluster::instance().get_fabric_ethernet_channels(physical_chip_id);
+        auto chan_id = tt::Cluster::instance().get_soc_desc(physical_chip_id).logical_eth_core_to_chan_map.at(eth_core);
+        // TODO: add logic here to disable unsed routers, e.g. Mesh on Torus system
+        if (fabric_router_channels_on_chip.contains(chan_id)) {
+            this->router_port_directions_to_physical_eth_chan_map_[mesh_id][chip_id][direction].push_back(chan_id);
+        } else {
+            log_debug(
+                tt::LogFabric, "Control Plane: Disabling router on M{}D{} eth channel {}", mesh_id, chip_id, chan_id);
+        }
+    };
+
     // Initialize the bookkeeping for mapping from mesh/chip/direction to physical ethernet channels
     this->router_port_directions_to_physical_eth_chan_map_.resize(intra_mesh_connectivity.size());
     for (mesh_id_t mesh_id = 0; mesh_id < intra_mesh_connectivity.size(); mesh_id++) {
@@ -244,10 +263,7 @@ void ControlPlane::initialize_from_mesh_graph_desc_file(const std::string& mesh_
                 for (const auto& eth_core : connected_eth_cores) {
                     // There could be an optimization here to create entry for both chips here, assuming links are
                     // bidirectional
-                    this->router_port_directions_to_physical_eth_chan_map_[mesh_id][chip_id][edge.port_direction]
-                        .push_back(tt::Cluster::instance()
-                                       .get_soc_desc(physical_chip_id)
-                                       .logical_eth_core_to_chan_map.at(eth_core));
+                    add_ethernet_channel_to_router_mapping(mesh_id, chip_id, eth_core, edge.port_direction);
                 }
             }
         }
@@ -265,17 +281,12 @@ void ControlPlane::initialize_from_mesh_graph_desc_file(const std::string& mesh_
                                                                                [logical_connected_chip_id];
                     const auto& connected_eth_cores = connected_chips_and_eth_cores.at(physical_connected_chip_id);
                     for (const auto& eth_core : connected_eth_cores) {
-                        this->router_port_directions_to_physical_eth_chan_map_[mesh_id][chip_id][edge.port_direction]
-                            .push_back(tt::Cluster::instance()
-                                           .get_soc_desc(physical_chip_id)
-                                           .logical_eth_core_to_chan_map.at(eth_core));
+                        add_ethernet_channel_to_router_mapping(mesh_id, chip_id, eth_core, edge.port_direction);
                     }
                 }
             }
         }
     }
-
-    this->convert_fabric_routing_table_to_chip_routing_table();
 }
 
 routing_plane_id_t ControlPlane::get_routing_plane_id(chan_id_t eth_chan_id) const {
@@ -287,6 +298,9 @@ routing_plane_id_t ControlPlane::get_routing_plane_id(chan_id_t eth_chan_id) con
 
 chan_id_t ControlPlane::get_downstream_eth_chan_id(
     chan_id_t src_chan_id, const std::vector<chan_id_t>& candidate_target_chans) const {
+    if (candidate_target_chans.empty()) {
+        return eth_chan_magic_values::INVALID_ROUTING_TABLE_ENTRY;
+    }
     // Explicitly map router plane channels based on mod
     //   - chan 0,4,8,12 talk to each other
     //   - chan 1,5,9,13 talk to each other
@@ -347,8 +361,8 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table() {
                                 src_chan_id;
                         } else {
                             const auto& eth_chans_in_target_direction =
-                                this->router_port_directions_to_physical_eth_chan_map_[mesh_id][src_chip_id].at(
-                                    target_direction);
+                                this->router_port_directions_to_physical_eth_chan_map_[mesh_id][src_chip_id]
+                                                                                      [target_direction];
                             this->intra_mesh_routing_tables_[mesh_id][src_chip_id][src_chan_id][dst_chip_id] =
                                 this->get_downstream_eth_chan_id(src_chan_id, eth_chans_in_target_direction);
                         }
@@ -400,8 +414,8 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table() {
                                 src_chan_id;
                         } else {
                             const auto& eth_chans_in_target_direction =
-                                this->router_port_directions_to_physical_eth_chan_map_[src_mesh_id][src_chip_id].at(
-                                    target_direction);
+                                this->router_port_directions_to_physical_eth_chan_map_[src_mesh_id][src_chip_id]
+                                                                                      [target_direction];
                             this->inter_mesh_routing_tables_[src_mesh_id][src_chip_id][src_chan_id][dst_mesh_id] =
                                 this->get_downstream_eth_chan_id(src_chan_id, eth_chans_in_target_direction);
                         }
@@ -478,6 +492,12 @@ void ControlPlane::write_routing_tables_to_chip(mesh_id_t mesh_id, chip_id_t chi
                     tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt_metal::HalL1MemAddrType::FABRIC_ROUTER_CONFIG) ==
                     sizeof(tt::tt_fabric::fabric_router_l1_config_t),
                 "ControlPlane: Fabric router config size mismatch");
+            log_debug(
+                tt::LogFabric,
+                "ControlPlane: Writing routing table to on M{}D{} eth channel {}",
+                mesh_id,
+                chip_id,
+                eth_chan);
             tt::Cluster::instance().write_core(
                 (void*)&fabric_router_config,
                 sizeof(tt::tt_fabric::fabric_router_l1_config_t),
@@ -619,6 +639,17 @@ std::vector<chip_id_t> ControlPlane::get_intra_chip_neighbors(
         }
     }
     return {};
+}
+
+size_t ControlPlane::get_num_active_fabric_routers(mesh_id_t mesh_id, chip_id_t chip_id) const {
+    // Return the number of active fabric routers on the chip
+    // Not always all the available FABRIC_ROUTER cores given by Cluster, since some may be disabled
+    size_t num_routers = 0;
+    for (const auto& [direction, eth_chans] :
+         this->router_port_directions_to_physical_eth_chan_map_[mesh_id][chip_id]) {
+        num_routers += eth_chans.size();
+    }
+    return num_routers;
 }
 
 void ControlPlane::configure_routing_tables() const {

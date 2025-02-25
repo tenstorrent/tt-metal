@@ -33,10 +33,3 @@ target_precompile_headers(
 )
 
 target_compile_options(fabric PRIVATE -Wno-int-to-pointer-cast)
-
-#set_target_properties(
-#    fabric
-#    PROPERTIES
-#        INSTALL_RPATH
-#            "${PROJECT_BINARY_DIR}/lib"
-#)
