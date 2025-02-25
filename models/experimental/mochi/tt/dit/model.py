@@ -159,8 +159,8 @@ class AsymmDiTJoint(LightweightModule):
 
         trans_mat = get_rot_transformation_mat(None)
 
-        tt_rope_cos_1HND = to_tt_tensor(unsqueeze_to_4d(rope_cos_1HND), self.mesh_device, shard_dim=-3)
-        tt_rope_sin_1HND = to_tt_tensor(unsqueeze_to_4d(rope_sin_1HND), self.mesh_device, shard_dim=-3)
+        tt_rope_cos_1HND = to_tt_tensor(unsqueeze_to_4d(rope_cos_1HND), self.mesh_device, shard_dim=-2)
+        tt_rope_sin_1HND = to_tt_tensor(unsqueeze_to_4d(rope_sin_1HND), self.mesh_device, shard_dim=-2)
         tt_trans_mat = to_tt_tensor(trans_mat, self.mesh_device)
 
         return tt_rope_cos_1HND, tt_rope_sin_1HND, tt_trans_mat
@@ -275,7 +275,7 @@ class AsymmDiTJoint(LightweightModule):
         pH, pW = H // self.patch_size, W // self.patch_size
         x = x.reshape(B, C, T, pH, self.patch_size, pW, self.patch_size)
         x = x.permute(0, 2, 3, 5, 1, 4, 6).reshape(1, B, T * pH * pW, C * self.patch_size * self.patch_size)
-        x = to_tt_tensor(x, self.mesh_device)
+        x = to_tt_tensor(x, self.mesh_device, shard_dim=-2)
         return x
 
     def reverse_preprocess(self, x, T, H, W):
@@ -349,7 +349,7 @@ class AsymmDiTJoint(LightweightModule):
         x_1BNI = self.final_layer(x_1BNX, c_11BX)
 
         if self.num_devices > 1:
-            x_1BND = ttnn.all_gather(x_1BND, dim=2)
+            x_1BNI = ttnn.all_gather(x_1BNI, dim=2)
 
         return x_1BNI
 

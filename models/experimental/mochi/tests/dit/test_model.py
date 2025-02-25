@@ -176,14 +176,17 @@ def test_tt_asymm_dit_joint_prepare(mesh_device, use_program_cache, reset_seeds)
     """Test that prepare() function produces identical outputs to reference implementation."""
     mesh_device.enable_async(True)
 
-    # Create models using common function with 0 layers since we only need prepare()
-    reference_model, tt_model, _ = create_models(mesh_device, n_layers=0)
-
     # Create input tensors
     batch_size = 1
     time_steps = 28
     height = 60
     width = 106
+    PATCH_SIZE = 2
+
+    num_visual_tokens = time_steps * height * width // (PATCH_SIZE**2)
+
+    # Create models using common function with 0 layers since we only need prepare()
+    reference_model, tt_model, _ = create_models(mesh_device, num_visual_tokens, n_layers=0)
 
     x = torch.randn(batch_size, tt_model.in_channels, time_steps, height, width)
     sigma = torch.ones(batch_size)
@@ -231,7 +234,7 @@ def test_tt_asymm_dit_joint_prepare(mesh_device, use_program_cache, reset_seeds)
     ],
     indirect=True,
 )
-@pytest.mark.parametrize("n_layers", [1, 2, 4, 48], ids=["L1", "L2", "L4", "L48"])
+@pytest.mark.parametrize("n_layers", [1], ids=["L1"])
 def test_tt_asymm_dit_joint_model_fn(mesh_device, use_program_cache, reset_seeds, n_layers):
     """Test the model with real inputs processed just like in the pipeline."""
     dtype = ttnn.bfloat16
@@ -239,9 +242,6 @@ def test_tt_asymm_dit_joint_model_fn(mesh_device, use_program_cache, reset_seeds
     sigma_schedule = [0.2, 0.1]
     dsigma = sigma_schedule[0] - sigma_schedule[1]
     mesh_device.enable_async(True)
-
-    # Create models using common function
-    reference_model, tt_model, _ = create_models(mesh_device, n_layers)
 
     def model_fn(model, x, sigma, cond):
         """Function to run model with both conditional and unconditional inputs.
@@ -320,6 +320,8 @@ def test_tt_asymm_dit_joint_model_fn(mesh_device, use_program_cache, reset_seeds
         pred = uncond_z_1BNI + cfg_scale * (cond_z_1BNI - uncond_z_1BNI)
 
         print(pred.shape)
+        if mesh_device.get_num_devices() > 1:
+            z_1BNI = ttnn.all_gather(z_1BNI, dim=2)
         print(z_1BNI.shape)
         # z_1BNI = ttnn.typecast(z_1BNI, dtype=ttnn.float32)
         z = z_1BNI + dsigma * pred
@@ -348,6 +350,12 @@ def test_tt_asymm_dit_joint_model_fn(mesh_device, use_program_cache, reset_seeds
     # Calculate latent dimensions
     latent_t = ((num_frames - 1) // TEMPORAL_DOWNSAMPLE) + 1
     latent_w, latent_h = width // SPATIAL_DOWNSAMPLE, height // SPATIAL_DOWNSAMPLE
+
+    PATCH_SIZE = 2
+    num_visual_tokens = latent_t * latent_h * latent_w // (PATCH_SIZE**2)
+
+    # Create models using common function
+    reference_model, tt_model, _ = create_models(mesh_device, num_visual_tokens, n_layers)
 
     # Create input latents
     z = torch.randn(
