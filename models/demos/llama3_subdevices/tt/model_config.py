@@ -1147,7 +1147,7 @@ class TtModelArgs:
             x = ttnn.from_torch(
                 x,
                 device=self.mesh_device if not on_host else None,
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
                 mesh_mapper=mesh_mapper,
                 memory_config=input_mem_cfg if not on_host else None,

@@ -267,6 +267,7 @@ class TtLlamaAttention(LightweightModule):
             memory_config=self.model_config["SHARDED_QKV_OUT_RING_MEMCFG"],
             compute_kernel_config=self.compute_kernel_config_hifi2,
             global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
+            dtype=ttnn.bfloat16,
         )
         ttnn.deallocate(x)
         # print("done matmul")
@@ -398,6 +399,7 @@ class TtLlamaAttention(LightweightModule):
             memory_config=self.model_config["SHARDED_WO_OUT_RING_MEMCFG"],
             compute_kernel_config=self.compute_kernel_config_hifi2,
             global_cb=self.prefetcher_setup.global_circular_buffer if self.model_config["USE_PREFETCHER"] else None,
+            dtype=ttnn.bfloat8_b,
         )
         # [1, 1, 32, 2304]
         ttnn.deallocate(attn_output_cat)

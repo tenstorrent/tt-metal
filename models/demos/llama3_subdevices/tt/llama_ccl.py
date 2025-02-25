@@ -394,26 +394,18 @@ def tt_sharded_distributed_rmsnorm(
     # inp = ttnn.to_memory_config(inp, memory_config=ln_sharded_input_memcfg)
 
     # Run distributed rmsnorm part 1
-    tt_stats = ttnn.rms_norm_pre_all_gather(inp, residual_input_tensor=res, program_config=ln_sharded_progcfg)
-    # print("tt_stats")
-    # All gather stats
-    # tt_stats = ttnn.all_gather(
-    #     tt_stats,
-    #     3,
-    #     num_links=1,
-    #     cluster_axis=1,
-    #     mesh_device=mesh_device,
-    #     memory_config=ln_sharded_stats_memcfg,
-    #     topology=ttnn.Topology.Linear,
-    # )
-    tt_stats_dram = ttnn.to_memory_config(tt_stats, ttnn.DRAM_MEMORY_CONFIG)
-    ttnn.deallocate(tt_stats)
+    try:
+        tt_stats = ttnn.rms_norm_pre_all_gather(inp, residual_input_tensor=res, program_config=ln_sharded_progcfg)
+    except Exception as e:
+        logger.error(f"Exception in rms_norm_pre_all_gather: {e}")
+        raise e
+
+    # tt_stats_dram = ttnn.to_memory_config(tt_stats, ttnn.DRAM_MEMORY_CONFIG)
+    # ttnn.deallocate(tt_stats)
     # print("mem cfg")
-    tt_global_stats = tt_ccl.line_all_gather(
-        tt_stats_dram, dim=3, cluster_axis=1, num_links=1, memory_config=ttnn.DRAM_MEMORY_CONFIG
-    )
+
     # ttnn.synchronize_devices(tt_ccl.mesh_device, sub_device_ids=[tt_ccl.worker_sub_device_id])
-    ttnn.deallocate(tt_stats_dram)
+    # ttnn.deallocate(tt_stats_dram)
     # print("all gather stats", tt_global_stats.shape)
 
     grid_offset = ttnn.CoreCoord(1, 0)
@@ -423,18 +415,24 @@ def tt_sharded_distributed_rmsnorm(
         strategy=ttnn.ShardStrategy.WIDTH,
         use_height_and_width_as_shard_shape=True,
     )
-    tt_global_stats_sharded = ttnn.to_memory_config(tt_global_stats, memory_config=tt_stats_sharded_config)
-    ttnn.deallocate(tt_global_stats)
-    # print("sharded stats")
+    # tt_global_stats_sharded = ttnn.to_memory_config(tt_global_stats, memory_config=tt_stats_sharded_config)
+    # ttnn.deallocate(tt_global_stats)
 
-    # Run distributed rmsnorm part 2
-    tt_out = ttnn.rms_norm_post_all_gather(
-        inp,
-        epsilon=epsilon,
-        weight=gamma,
-        program_config=ln_sharded_progcfg,
-        stats=tt_global_stats_sharded,
+    tt_global_stats_sharded = tt_ccl.line_all_gather(
+        tt_stats, dim=3, cluster_axis=1, num_links=1, memory_config=tt_stats_sharded_config
     )
+    # Run distributed rmsnorm part 2
+    try:
+        tt_out = ttnn.rms_norm_post_all_gather(
+            inp,
+            epsilon=epsilon,
+            weight=gamma,
+            program_config=ln_sharded_progcfg,
+            stats=tt_global_stats_sharded,
+        )
+    except Exception as e:
+        logger.error(f"Exception in rms_norm_post_all_gather: {e}")
+        raise e
+
     ttnn.deallocate(tt_global_stats_sharded)
-    # print("rmsnorm post all gather", tt_out.shape)
     return tt_out, inp
