@@ -741,7 +741,21 @@ Tensor Tensor::to_device(IDevice* target_device, const MemoryConfig& mem_config,
 
 Tensor Tensor::to_device(distributed::MeshDevice* mesh_device, const MemoryConfig& mem_config, QueueId cq_id) const {
     std::vector<IDevice*> workers_to_use = ttnn::distributed::get_mapped_devices(*this, *mesh_device);
-    return tensor_ops::tensor_to_device(*this, workers_to_use, mem_config, cq_id);
+
+    // TODO: remove
+    std::cout << "debugprint" << std::endl;
+    for (auto worker : workers_to_use) {
+        std::cout << worker->id() << std::endl;
+    }
+    std::cout << "configs" << std::endl;
+    std::cout << mem_config.is_sharded() << std::endl;
+    std::cout << mem_config.is_dram() << std::endl;
+
+    std::cout << "tensorinfo" << std::endl;
+    std::cout << this->is_allocated() << std::endl;
+
+    // return tensor_ops::tensor_to_device(*this, workers_to_use, mem_config, cq_id);
+    return *this;
 }
 
 Tensor Tensor::to_device(const std::vector<IDevice*>& workers, const MemoryConfig& mem_config, QueueId cq_id) const {
