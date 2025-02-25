@@ -20,6 +20,7 @@ class TtLlamaEmbedding(LightweightModule):
 
         self.state_dict = state_dict
         self.mesh_device = mesh_device
+        self.args = args
 
         base_name = args.get_state_dict_prefix("", None) + "tok_embeddings.weight"
         torch_weight = self.state_dict[base_name].unsqueeze(0).unsqueeze(0)
@@ -35,5 +36,9 @@ class TtLlamaEmbedding(LightweightModule):
         )
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        x = ttnn.embedding(x, self.weights, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        x = ttnn.reshape(x, ttnn.Shape((1, 1, 1, x.shape[-2] * x.shape[-1])))
+        x = ttnn.embedding(
+            x, self.weights, layout=ttnn.TILE_LAYOUT, memory_config=self.args.model_config["DECODE_RESIDUAL_MEMCFG"]
+        )
+        x = ttnn.reshape(x, ttnn.Shape((1, 1, x.shape[-2], x.shape[-1])))
         return x
