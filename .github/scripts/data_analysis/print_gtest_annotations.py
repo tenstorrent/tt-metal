@@ -1,5 +1,5 @@
 import argparse
-import xmltodict
+import xml.etree.ElementTree as ET
 import glob
 import os
 from typing import Union
@@ -61,29 +61,18 @@ if __name__ == "__main__":
 
     # Iterate through each XML file
     for xml_file in xml_files:
-        with open(xml_file, "r") as f:
-            results = xmltodict.parse(f.read())
-
-        # Check for failed tests
-        failed_tests = []
-        for testsuite in _guaranteed_list(results["testsuites"]["testsuite"]):
-            for testcase in _guaranteed_list(testsuite["testcase"]):
-                if "failure" in testcase:
-                    failed_tests.append(testcase)
-
-        # Create error annotations for each failed test
-        for failed_test in failed_tests:
-            failure_messages = _guaranteed_list(failed_test["failure"])
-            if failure_messages:
-                # first message is often enough
-                failure_message = failure_messages[0]["@message"]
-            else:
-                failure_message = "unknown_failure_message"
-
-            msg = _build_workflow_command(
-                command_name="error",
-                file=failed_test["@file"].lstrip("/work/"),
-                line=int(failed_test["@line"]),
-                message=failure_message,
-            )
-            print(msg)
+        tree = ET.parse(xml_file)
+        root = tree.getroot()
+        for testsuite in root.findall("testsuite"):
+            for testcase in testsuite.findall("testcase"):
+                failure = testcase.find("failure")
+                # If failure exists, print the failure message
+                if failure is not None:
+                    failure_message = failure.attrib.get("message")
+                    msg = _build_workflow_command(
+                        command_name="error",
+                        file=testcase.attrib.get("file", "").lstrip("/work/"),
+                        line=int(testcase.attrib["line"]),
+                        message=failure_message,
+                    )
+                    print(msg)
