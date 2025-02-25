@@ -192,7 +192,9 @@ def get_job_row_from_github_job(github_job, github_job_id_to_annotations):
 
     name = github_job["name"]
 
-    assert github_job["status"] == "completed", f"{github_job_id} is not completed"
+    if github_job["status"] != "completed":
+        logger.warning(f"{github_job_id} is not completed, skipping this job")
+        return None
 
     # Best effort card type getting
 
@@ -286,9 +288,10 @@ def get_job_row_from_github_job(github_job, github_job_id_to_annotations):
 
 
 def get_job_rows_from_github_info(github_pipeline_json, github_jobs_json, github_job_id_to_annotations):
-    return list(
+    job_rows = list(
         map(lambda job: get_job_row_from_github_job(job, github_job_id_to_annotations), github_jobs_json["jobs"])
     )
+    return [x for x in job_rows if x is not None]
 
 
 def get_github_partial_benchmark_json_filenames():
