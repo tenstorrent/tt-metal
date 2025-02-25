@@ -21,7 +21,7 @@ public:
     void initialize_tensors(uint32_t features);
     explicit RMSNormLayer(uint32_t features, float epsilon = 1e-5F);
 
-    [[nodiscard]] autograd::TensorPtr operator()(const autograd::TensorPtr& tensor);
+    [[nodiscard]] autograd::TensorPtr operator()(const autograd::TensorPtr& tensor) override;
 };
 
 }  // namespace ttml::modules
