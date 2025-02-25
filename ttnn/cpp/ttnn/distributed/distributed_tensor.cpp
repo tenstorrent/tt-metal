@@ -68,7 +68,7 @@ Tensor distribute_tensor(
     std::vector<Tensor> tensors = mapper.map(tensor);
     Tensor output = aggregate_as_tensor(tensors, mapper.config());
     if (mesh_device.has_value()) {
-        return output.to_device(&(mesh_device->get()));
+        return output.to_device(&(mesh_device->get()), output.memory_config());
     }
     return output;
 }
