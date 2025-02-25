@@ -403,12 +403,9 @@ void DevicePool::add_devices_to_pool(const std::vector<chip_id_t>& device_ids) {
     }
 
     // TODO: add handling of EDM
-    // Initialize control plane, does not configure kernels/routing tables
-    // We always need a control plane for mapping of logical devices to physical devices
-    _inst->initialize_control_plane();
     if (this->fabric_setting == detail::FabricSetting::FABRIC) {
-        // write routing tables to all ethernet cores
-        this->control_plane->configure_routing_tables();
+        // Initialize control plane, which writes routing tables to all ethernet cores
+        _inst->initialize_control_plane();
     }
     this->using_fast_dispatch = (std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr);
     if (this->using_fast_dispatch) {
