@@ -268,4 +268,5 @@ void kernel_main() {
 #ifdef SHARDED_OUT
     cb_wait_front(cb_id_out0, output_rows_tiles);
 #endif
+    noc_async_write_barrier();
 }
