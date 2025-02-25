@@ -15,16 +15,6 @@ using DeviceIds = std::vector<int>;
 using MeshDeviceID = int;
 using chip_id_t = int;
 
-struct MeshOffset {
-    size_t row = 0;
-    size_t col = 0;
-};
-
-struct MeshShape {
-    size_t num_rows = 0;
-    size_t num_cols = 0;
-};
-
 /**
  * @brief Defines the organization of physical devices in a user-defined MeshDevice.
  *
@@ -40,7 +30,7 @@ struct MeshShape {
  */
 
 struct MeshDeviceConfig {
-    SimpleMeshShape mesh_shape{0, 0};
+    MeshShape mesh_shape{0, 0};
     std::optional<MeshCoordinate> offset;
     std::vector<chip_id_t> physical_device_ids{};
 };

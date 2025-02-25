@@ -37,7 +37,7 @@ MeshDeviceView::MeshDeviceView(const MeshContainer<IDevice*>& devices) : devices
 }
 
 MeshDeviceView::MeshDeviceView(const MeshDevice& mesh_device) :
-    MeshDeviceView(MeshContainer<IDevice*>(SimpleMeshShape(mesh_device.shape()), mesh_device.get_devices())) {}
+    MeshDeviceView(MeshContainer<IDevice*>(MeshShape(mesh_device.shape()), mesh_device.get_devices())) {}
 
 MeshDeviceView::DeviceView MeshDeviceView::get_devices(const MeshCoordinateRange& range) const {
     DeviceView devices_in_region;
@@ -47,7 +47,7 @@ MeshDeviceView::DeviceView MeshDeviceView::get_devices(const MeshCoordinateRange
     return devices_in_region;
 }
 
-MeshDeviceView::DeviceView MeshDeviceView::get_devices(const SimpleMeshShape& submesh_shape) const {
+MeshDeviceView::DeviceView MeshDeviceView::get_devices(const MeshShape& submesh_shape) const {
     return get_devices(MeshCoordinateRange(submesh_shape));
 }
 
@@ -91,7 +91,7 @@ std::vector<std::vector<IDevice*>> MeshDeviceView::get_column_views() const {
 
 bool MeshDeviceView::empty() const noexcept { return devices_.shape().mesh_size() == 0; }
 size_t MeshDeviceView::size() const noexcept { return devices_.shape().mesh_size(); }
-SimpleMeshShape MeshDeviceView::shape() const noexcept { return devices_.shape(); }
+const MeshShape& MeshDeviceView::shape() const noexcept { return devices_.shape(); }
 
 bool MeshDeviceView::contains(const MeshCoordinate& coord) const noexcept {
     return devices_.coord_range().contains(coord);

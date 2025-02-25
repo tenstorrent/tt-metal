@@ -34,7 +34,7 @@ protected:
         if (!check_board_is_n300()) {
             GTEST_SKIP() << "Skipping N300 specific tests";
         }
-        ttml::autograd::ctx().set_mesh_shape({1, 2});
+        ttml::autograd::ctx().set_mesh_shape(tt::tt_metal::distributed::MeshShape(1, 2));
         ttml::autograd::ctx().open_device();
     }
 

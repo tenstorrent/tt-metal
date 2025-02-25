@@ -34,7 +34,7 @@ protected:
     tt::tt_metal::distributed::MeshShape m_mesh_shape;
 
     size_t get_num_devices() const {
-        return m_mesh_shape.num_rows * m_mesh_shape.num_cols;
+        return m_mesh_shape.mesh_size();
     }
 };
 
@@ -90,8 +90,8 @@ public:
             throw std::invalid_argument("ShardTensor2dMesh requires at least one dimension to shard");
         }
 
-        int rows = Base::m_mesh_shape.num_rows;
-        int cols = Base::m_mesh_shape.num_cols;
+        int rows = Base::m_mesh_shape[0];
+        int cols = Base::m_mesh_shape[1];
         auto row_dim = m_dims.first;
         auto col_dim = m_dims.second;
 
@@ -138,8 +138,8 @@ public:
     std::unordered_map<std::string, std::string> config_impl() const {
         return {
             {"strategy", "shard_2d"},
-            {"mesh_shape_y", std::to_string(Base::m_mesh_shape.num_rows)},
-            {"mesh_shape_x", std::to_string(Base::m_mesh_shape.num_cols)}};
+            {"mesh_shape_y", std::to_string(Base::m_mesh_shape[0])},
+            {"mesh_shape_x", std::to_string(Base::m_mesh_shape[1])}};
     }
 
 private:
@@ -153,16 +153,16 @@ public:
     ConcatMesh2dToTensor(
         tt::tt_metal::distributed::MeshShape mesh_shape, const tt::tt_metal::distributed::MeshShape& dims) :
         Base(std::move(mesh_shape)), m_dims(dims) {
-        if (m_dims.num_rows == m_dims.num_cols) {
+        if (m_dims[0] == m_dims[1]) {
             throw std::invalid_argument("Dimensions in 'dims' must be different");
         }
     }
 
     std::vector<xt::xarray<T>> compose_impl(const std::vector<xt::xarray<T>>& tensors) const {
-        int rows = Base::m_mesh_shape.num_rows;
-        int cols = Base::m_mesh_shape.num_cols;
-        size_t row_dim = m_dims.num_rows;
-        size_t col_dim = m_dims.num_cols;
+        int rows = Base::m_mesh_shape[0];
+        int cols = Base::m_mesh_shape[1];
+        size_t row_dim = m_dims[0];
+        size_t col_dim = m_dims[1];
 
         std::vector<xt::xarray<T>> row_concatenated;
         row_concatenated.reserve(static_cast<size_t>(rows));

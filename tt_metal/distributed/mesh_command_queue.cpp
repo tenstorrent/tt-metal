@@ -434,7 +434,6 @@ void MeshCommandQueue::enqueue_read_shards(
     bool blocking) {
     // TODO: #17215 - this API is used by TTNN, as it currently implements rich ND sharding API for multi-devices.
     // In the long run, the multi-device sharding API in Metal will change, and this will most likely be replaced.
-    const auto [num_rows, num_cols] = buffer->device()->shape();
     for (const auto& shard_data_transfer : shard_data_transfers) {
         auto device_shard_view = buffer->get_device_buffer(shard_data_transfer.shard_coord);
         read_shard_from_device(

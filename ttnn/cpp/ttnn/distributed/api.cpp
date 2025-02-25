@@ -25,12 +25,10 @@ std::shared_ptr<MeshDevice> open_mesh_device(
     size_t trace_region_size,
     size_t num_command_queues,
     const DispatchCoreConfig& dispatch_core_config,
-    const MeshOffset& offset,
+    const std::optional<MeshCoordinate>& offset,
     const std::vector<int>& physical_device_ids) {
-    std::optional<MeshCoordinate> offset_opt =
-        offset.row != 0 || offset.col != 0 ? std::make_optional<MeshCoordinate>(offset.row, offset.col) : std::nullopt;
-    auto config = MeshDeviceConfig{
-        .mesh_shape = SimpleMeshShape(mesh_shape), .offset = offset_opt, .physical_device_ids = physical_device_ids};
+    auto config =
+        MeshDeviceConfig{.mesh_shape = mesh_shape, .offset = offset, .physical_device_ids = physical_device_ids};
     return MeshDevice::create(config, l1_small_size, trace_region_size, num_command_queues, dispatch_core_config);
 }
 
@@ -130,8 +128,7 @@ std::vector<int> get_t3k_physical_device_ids_ring() {
     auto num_devices = instance.get_shape().mesh_size();
     TT_FATAL(num_devices == 8, "T3000 ring topology only works with 8 devices");
 
-    auto physical_device_ids =
-        instance.get_mapped_physical_device_ids(MeshDeviceConfig{.mesh_shape = SimpleMeshShape(1, 8)});
+    auto physical_device_ids = instance.get_mapped_physical_device_ids(MeshDeviceConfig{.mesh_shape = MeshShape(1, 8)});
     return physical_device_ids;
 }
 
@@ -154,7 +151,9 @@ std::vector<IDevice*> get_mapped_devices(const Tensor& tensor, MeshDevice& mesh_
         return std::visit(
             tt::stl::overloaded{
                 [&](const ShardTensor2D& s) {
-                    return mesh_device.get_view().get_devices(MeshShape{s.shard_mesh.y, s.shard_mesh.x});
+                    const tt::tt_metal::distributed::MeshCoordinateRange range(
+                        MeshShape(s.shard_mesh.y, s.shard_mesh.x));
+                    return mesh_device.get_view().get_devices(range);
                 },
                 [&](const auto&) { return get_workers_for_tensor(mesh_device.get_devices()); }},
             host_storage.strategy);
