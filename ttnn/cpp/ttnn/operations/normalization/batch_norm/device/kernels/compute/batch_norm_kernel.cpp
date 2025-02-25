@@ -53,7 +53,6 @@ ALWI void batchnorm_bcast_tiles(
     // 1/(sqrt(batch_var + eps))
     cb_reserve_back(cb_den, onetile);
     cb_wait_front(cb_batch_var, 1);
-    cb_wait_front(cb_eps, 1);
 
     tile_regs_acquire();
     add_tiles_init_with_dt(cb_batch_var, cb_eps);
@@ -67,7 +66,6 @@ ALWI void batchnorm_bcast_tiles(
     tile_regs_release();
 
     cb_pop_front(cb_batch_var, 1);
-    cb_pop_front(cb_eps, 1);
     cb_push_back(cb_den, onetile);
 
     // (input - batch_mean)/(sqrt(batch_var + eps)) = result
@@ -164,6 +162,9 @@ void MAIN {
     sub_tiles_init(cb_other, cb_bcast);
     uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;
     uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;
+
+    cb_wait_front(cb_eps, 1);
+
     for (uint32_t i = 0; i < complete_iterations; ++i, tile_start = 0) {
         batchnorm_bcast_tiles(
             cb_bcast,
@@ -198,8 +199,5 @@ void MAIN {
             weight_has_value,
             bias_has_value);
     }
-
-    constexpr uint32_t onetile = 1;
-    constexpr int dst0 = 0;
 }
 }  // namespace NAMESPACE
