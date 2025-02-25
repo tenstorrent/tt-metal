@@ -360,9 +360,6 @@ Tensor all_gather_async(
     tt::log_debug(tt::LogOp, "DEBUG: line_fabric is created");
 
     // create this semaphore for all cores since we don't know which core will be used for teardown draining
-    CoreCoord grid_size = devices[0]->compute_with_storage_grid_size();
-    auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
-
     std::vector<GlobalSemaphore> semaphores = multi_device_global_semaphore.global_semaphores;
 
     if (!uses_2d_fabric) {
@@ -414,15 +411,7 @@ Tensor all_gather_async(
     const std::optional<size_t> num_preferred_links,
     std::optional<SubDeviceId> sub_device_id,
     bool enable_persistent_fabric_mode) {
-    TT_FATAL(
-        topology == ttnn::ccl::Topology::Linear,
-        "This all_gather API with cluster_axis is currently supported only for the Linear topology");
-    const auto mesh_view = mesh_device.get_view();
-    auto devices = input_tensor.get_workers();
-    std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
-
     int32_t rank = input_tensor.get_logical_shape().rank();
-
     int32_t gather_dim = (dim < 0) ? rank + dim : dim;
 
     TT_FATAL(
@@ -433,50 +422,53 @@ Tensor all_gather_async(
         dim);
 
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
-    CoreCoord grid_size = devices[0]->compute_with_storage_grid_size();
-    auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     std::vector<GlobalSemaphore> semaphores = multi_device_global_semaphore.global_semaphores;
     if (!uses_2d_fabric) {
-      operation::launch_op(
-          [gather_dim,
-           num_preferred_links,
-           memory_config,
-           mesh_view,
-           cluster_axis,
-           num_devices,
-           topology,
-           semaphores,
-           sub_device_id,
-           enable_persistent_fabric_mode](
-              const std::vector<Tensor>& input_tensors,
-              const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-              const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
-              const auto& input_device_tensor = input_tensors.at(0);
+        TT_FATAL(
+            topology == ttnn::ccl::Topology::Linear,
+            "This all_gather API with cluster_axis is currently supported only for the Linear topology");
+        const auto mesh_view = mesh_device.get_view();
+        std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
+        operation::launch_op(
+            [gather_dim,
+             num_preferred_links,
+             memory_config,
+             mesh_view,
+             cluster_axis,
+             num_devices,
+             topology,
+             semaphores,
+             sub_device_id,
+             enable_persistent_fabric_mode](
+                const std::vector<Tensor>& input_tensors,
+                const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+                const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
+                const auto& input_device_tensor = input_tensors.at(0);
 
-              TT_FATAL(
-                  mesh_view.is_mesh_2d(),
-                  "all-gather invoked with cluster_axis API on >2D mesh, which is currently unsupported");
-              const auto coordinate = mesh_view.find_device(input_device_tensor.device()->id());
-              std::vector<IDevice*> devices = (cluster_axis == 0) ? mesh_view.get_devices_on_column(coordinate[1])
-                                                                  : mesh_view.get_devices_on_row(coordinate[0]);
+                TT_FATAL(
+                    mesh_view.is_mesh_2d(),
+                    "all-gather invoked with cluster_axis API on >2D mesh, which is currently unsupported");
+                const auto coordinate = mesh_view.find_device(input_device_tensor.device()->id());
+                std::vector<IDevice*> devices = (cluster_axis == 0) ? mesh_view.get_devices_on_column(coordinate[1])
+                                                                    : mesh_view.get_devices_on_row(coordinate[0]);
 
-              const auto& input_tensor = input_tensors.at(0);
+                const auto& input_tensor = input_tensors.at(0);
 
-              return operation::run(
-                  ttnn::ccl::all_gather_detail::create_all_gather_async_struct(
-                      input_device_tensor,
-                      gather_dim,
-                      num_preferred_links.has_value() ? num_preferred_links.value() : 1,
-                      memory_config,
-                      devices,
-                      topology,
-                      semaphores,
-                      sub_device_id,
-                      enable_persistent_fabric_mode),
-                  {input_tensor});
-          },
-          {input_tensor},
-          output_tensors);
+                return operation::run(
+                    ttnn::ccl::all_gather_detail::create_all_gather_async_struct(
+                        input_device_tensor,
+                        gather_dim,
+                        num_preferred_links.has_value() ? num_preferred_links.value() : 1,
+                        memory_config,
+                        devices,
+                        topology,
+                        semaphores,
+                        sub_device_id,
+                        enable_persistent_fabric_mode),
+                    {input_tensor});
+            },
+            {input_tensor},
+            output_tensors);
     }
     else {
       TT_FATAL(enable_persistent_fabric_mode, "Persistent fabric mode is necessary for 2D fabric");
