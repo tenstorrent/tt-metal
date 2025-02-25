@@ -415,6 +415,35 @@ JitBuildCompute::JitBuildCompute(const JitBuildEnv& env, const JitBuiltStateConf
 
 JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const JitBuiltStateConfig& build_config) :
     JitBuildState(env, build_config) {
+    // Super short-lived
+    auto validate_opt_level_override = [](const char* opt_level_override) {
+        TT_FATAL(
+            opt_level_override,
+            "validate_opt_level_override for override 'TT_METAL_ACTIVE_ETH_OPT_LEVEL_OVERRIDE' called with nullptr");
+        TT_FATAL(
+            opt_level_override[0] == 'O',
+            "Invalid opt level override for 'TT_METAL_ACTIVE_ETH_OPT_LEVEL_OVERRIDE'. Valid strings are \"Os\", "
+            "\"O1\", \"O2\", and \"O3\" but provided string is '{}'.",
+            opt_level_override);
+        switch (opt_level_override[1]) {
+            case '0':
+            case 's':
+            case '1':
+            case '2':
+            case '3': break;
+            default:
+                TT_THROW(
+                    "Invalid opt level override for 'TT_METAL_ACTIVE_ETH_OPT_LEVEL_OVERRIDE'. Valid strings are "
+                    "\"O0\", \"Os\", \"O1\", \"O2\", and \"O3\" but provided string is '{}'.",
+                    opt_level_override);
+        };
+        TT_FATAL(
+            opt_level_override[2] == '\0',
+            "Invalid opt level override for 'TT_METAL_ACTIVE_ETH_OPT_LEVEL_OVERRIDE'. Valid strings are \"Os\", "
+            "\"O1\", \"O2\", and \"O3\" but provided string is '{}'.",
+            opt_level_override);
+    };
+
     TT_ASSERT(this->core_id_ >= 0 && this->core_id_ < 1, "Invalid active ethernet processor");
     this->out_path_ = this->is_fw_ ? env_.out_firmware_root_ : env_.out_kernel_root_;
 
@@ -430,6 +459,14 @@ JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const Jit
         this->defines_ += "-DDISABLE_L1_DATA_CACHE ";
     }
 
+    std::string default_opt_level = "-Os ";
+    const char* opt_level_override = std::getenv("TT_METAL_ACTIVE_ETH_OPT_LEVEL_OVERRIDE");
+    if (opt_level_override) {
+        validate_opt_level_override(opt_level_override);
+        default_opt_level[1] = opt_level_override[0];
+        default_opt_level[2] = opt_level_override[1];
+    }
+
     // 0: core_id = 0 and not cooperative
     // 1: core_id = 0 and cooperative
     uint32_t build_class = (this->core_id_ << 1) | uint32_t(build_config.is_cooperative);
@@ -437,8 +474,8 @@ JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const Jit
     switch (build_class) {
         case 0: {
             this->target_name_ = "active_erisc";
-            this->cflags_ =
-                env_.cflags_ + "-Os " + "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
+            this->cflags_ = env_.cflags_ + default_opt_level +
+                            "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
 
             this->defines_ +=
                 "-DCOMPILE_FOR_ERISC "
@@ -452,7 +489,7 @@ JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const Jit
             } else {
                 this->srcs_.push_back("tt_metal/hw/firmware/src/active_erisck.cc");
             }
-            this->lflags_ = env_.lflags_ + "-Os ";
+            this->lflags_ = env_.lflags_ + default_opt_level;
 
             if (this->is_fw_) {
                 this->lflags_ +=
@@ -466,7 +503,7 @@ JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const Jit
         }
         case 1: {
             this->target_name_ = "erisc";
-            this->cflags_ = env_.cflags_ + "-Os -fno-delete-null-pointer-checks ";
+            this->cflags_ = env_.cflags_ + default_opt_level + "-fno-delete-null-pointer-checks ";
 
             this->defines_ +=
                 "-DCOMPILE_FOR_ERISC "
@@ -489,10 +526,7 @@ JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const Jit
             } else {
                 linker_str = "tt_metal/hw/toolchain/erisc-b0-kernel.ld ";
             }
-            this->lflags_ = env_.lflags_ +
-                            "-Os "
-                            "-L" +
-                            env_.root_ +
+            this->lflags_ = env_.lflags_ + default_opt_level + "-L" + env_.root_ +
                             "/tt_metal/hw/toolchain "
                             "-T" +
                             env_.root_ + linker_str;
