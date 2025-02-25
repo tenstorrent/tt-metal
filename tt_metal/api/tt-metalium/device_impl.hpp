@@ -156,6 +156,7 @@ public:
     bool close() override;
 
     void enable_async(bool enable) override;
+    void force_enable_async(bool enable);
     void synchronize() override;
     WorkExecutorMode get_worker_mode() override { return work_executor_.get_worker_mode(); }
     bool is_worker_queue_empty() const override { return work_executor_.worker_queue.empty(); }

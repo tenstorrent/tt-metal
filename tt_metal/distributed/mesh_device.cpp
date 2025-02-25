@@ -363,7 +363,7 @@ void MeshDevice::enable_async(bool enable) {
         return;
     }
     for (auto device : devices) {
-        device->enable_async(enable);
+        static_cast<Device*>(device)->force_enable_async(enable);
     }
 }
 
@@ -680,6 +680,7 @@ WorkExecutorMode MeshDevice::get_worker_mode() { return WorkExecutorMode::SYNCHR
 bool MeshDevice::is_worker_queue_empty() const { return true; }
 void MeshDevice::push_work(std::function<void()> work, bool blocking) {
     // Execute inline synchronously.
+    std::lock_guard lock(push_work_mutex);
     work();
 }
 program_cache::detail::ProgramCache& MeshDevice::get_program_cache() { return reference_device()->get_program_cache(); }

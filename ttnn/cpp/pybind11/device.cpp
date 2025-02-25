@@ -12,7 +12,6 @@
 #include <tt-metalium/persistent_kernel_cache.hpp>
 #include <tt-metalium/compilation_reporter.hpp>
 #include <tt-metalium/memory_reporter.hpp>
-#include <tt-metalium/logger.hpp>
 #include <tt-metalium/device_impl.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -177,16 +176,7 @@ void device_module(py::module& m_device) {
                 "num_program_cache_entries",
                 &IDevice::num_program_cache_entries,
                 "Number of entries in the program cache for this device")
-            .def(
-                "enable_async",
-                [](IDevice* device, bool enable) {
-                    if (enable) {
-                        tt::log_warning(
-                            "Async mode is always disabled for a single device, ignoring enable_async call");
-                        return;
-                    }
-                    device->enable_async(enable);
-                })
+            .def("enable_async", &IDevice::enable_async)
             .def(
                 "create_sub_device_manager",
                 [](IDevice* device,
