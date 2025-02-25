@@ -261,7 +261,7 @@ __attribute__((noinline)) void finish_profiler() {
         }
     }
 
-    noc_async_flush_posted_writes();
+    profiler_noc_async_flush_posted_write();
     profiler_control_buffer[RUN_COUNTER]++;
     profiler_control_buffer[PROFILER_DONE] = 1;
 #endif
@@ -306,7 +306,7 @@ __attribute__((noinline)) void quick_push() {
             dram_bank_dst_noc_addr,
             wIndex * sizeof(uint32_t));
 
-        noc_async_flush_posted_writes();
+        profiler_noc_async_flush_posted_write();
         profiler_control_buffer[HOST_BUFFER_END_INDEX_BR_ER + myRiscID] = currEndIndex;
 
     } else {
