@@ -37,20 +37,19 @@ enum class AllGather2DVersion {
 
 struct AllGather2D {
     const MeshDevice& mesh_device;
-    const uint32_t dim;
     const MemoryConfig output_mem_config;
     const ccl::Topology topology;
     const GlobalSemaphore semaphore;
-    std::optional<SubDeviceId> sub_device_id;
-    const uint32_t page_stride;
-    const uint32_t num_chunks;
-    const uint32_t row_order;
+    const uint32_t dim;
+    const uint32_t lower_pages;
+    const uint32_t higher_pages;
+    const uint32_t page_size;
+    bool is_horizontal;
 
     auto attributes() const {
         using tt::stl::reflection::Attribute;
         std::vector<std::tuple<std::string, Attribute>> attrs;
 
-        attrs.emplace_back("dim", dim);
         attrs.emplace_back("output_mem_config", output_mem_config);
         attrs.emplace_back("topology", topology);
         attrs.emplace_back("semaphore", semaphore);
@@ -149,15 +148,14 @@ operation::ProgramWithCallbacks all_gather_2D_multi_core_with_workers(
     const Tensor& input_tensor,
     Tensor& output_tensor,
     const MeshDevice& mesh_device,
-    const uint32_t dim,
     const MemoryConfig output_mem_config,
     const ccl::Topology topology,
     const GlobalSemaphore semaphore,
-    const uint32_t page_stride,
-    const uint32_t num_chunks,
+    const uint32_t lower_pages,
+    const uint32_t higher_pages,
     const uint32_t num_devices,
-    const std::optional<SubDeviceId>& sub_device_id,
-    const uint32_t row_order);
+    const uint32_t page_size,
+    bool is_horizontal);
 operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
     const Tensor& input_tensor,
     std::optional<IDevice*> forward_device,
