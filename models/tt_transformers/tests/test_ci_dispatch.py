@@ -29,12 +29,12 @@ def test_llama_ci_dispatch(llama3_model):
     os.environ["LLAMA_DIR"] = llama3_model
     pytest.main(
         [
-            "models/demos/llama3/tests/test_llama_embedding.py",
-            "models/demos/llama3/tests/test_llama_rms_norm.py",
-            "models/demos/llama3/tests/test_llama_mlp.py",
-            "models/demos/llama3/tests/test_llama_attention.py",
-            "models/demos/llama3/tests/test_llama_attention_prefill.py",
-            "models/demos/llama3/tests/test_llama_decoder.py",
-            "models/demos/llama3/tests/test_llama_decoder_prefill.py",
+            "models/tt_transformers/tests/test_embedding.py",
+            "models/tt_transformers/tests/test_rms_norm.py",
+            "models/tt_transformers/tests/test_mlp.py",
+            "models/tt_transformers/tests/test_attention.py",
+            "models/tt_transformers/tests/test_attention_prefill.py",
+            "models/tt_transformers/tests/test_decoder.py",
+            "models/tt_transformers/tests/test_decoder_prefill.py",
         ]
     )

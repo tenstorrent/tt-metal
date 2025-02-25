@@ -54,7 +54,7 @@ run_python_model_tests_wormhole_b0() {
 
     # Run all Llama3 tests for 8B, 1B, and 3B weights - dummy weights with tight PCC check
     for llama_dir in  "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
-        LLAMA_DIR=$llama_dir WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/llama3/tests/test_llama_model.py -k "quick" ; fail+=$?
+        LLAMA_DIR=$llama_dir WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/tt_transformers/tests/test_model.py -k "quick" ; fail+=$?
         echo "LOG_METAL: Llama3 tests for $llama_dir completed"
     done
 }
