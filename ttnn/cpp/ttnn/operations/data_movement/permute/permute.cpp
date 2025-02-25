@@ -19,11 +19,6 @@
 namespace ttnn::operations::data_movement {
 namespace detail {
 
-inline bool is_on_device(const Tensor& t) {
-    return ttnn::has_storage_type_of(t, ttnn::StorageType::DEVICE) or
-           ttnn::has_storage_type_of(t, ttnn::StorageType::MULTI_DEVICE);
-}
-
 ttnn::Tensor permute_impl(
     const ttnn::Tensor& a,
     const ttnn::SmallVector<uint32_t>& dims,
@@ -185,7 +180,7 @@ ttnn::Tensor ExecutePermute::invoke(
     TT_FATAL(
         input_rank == dims.size(),
         "The number of dimensions in the tensor input does not match the length of the desired ordering");
-    TT_FATAL(detail::is_on_device(input_tensor), "Tensor must already be on device");
+    TT_FATAL(is_tensor_on_device_or_multidevice(input_tensor), "Tensor must already be on device");
 
     SmallVector<uint32_t> normalized_dims(dims.size());
     std::transform(dims.begin(), dims.end(), normalized_dims.begin(), [input_tensor](std::int64_t idx) {
