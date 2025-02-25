@@ -32,7 +32,6 @@ def get_expected_compile_time_sec():
 def get_expected_inference_time_sec():
     return 0.37
 
-
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(

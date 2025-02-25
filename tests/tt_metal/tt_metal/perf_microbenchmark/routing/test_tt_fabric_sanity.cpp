@@ -96,7 +96,6 @@ typedef struct test_board {
     std::unique_ptr<tt::tt_fabric::ControlPlane> cp_owning_ptr;
     uint32_t num_chips_to_use;
     std::string mesh_graph_descriptor;
-    tt::tt_metal::DispatchCoreType dispatch_core_type = tt::tt_metal::DispatchCoreType::WORKER;
 
     test_board(std::string& board_type_) {
         if ("n300" == board_type_) {
@@ -141,8 +140,7 @@ typedef struct test_board {
         if (metal_fabric_init_level != 0) {
             tt::tt_metal::detail::InitializeFabricSetting(tt::tt_metal::detail::FabricSetting::FABRIC);
         }
-        device_handle_map =
-            tt::tt_metal::detail::CreateDevices(available_chip_ids, 1, 0, 0, DispatchCoreConfig{dispatch_core_type});
+        device_handle_map = tt::tt_metal::detail::CreateDevices(available_chip_ids);
         if (metal_fabric_init_level == 0) {
             _init_control_plane(mesh_graph_descriptor);
         } else {
@@ -1585,7 +1583,7 @@ int main(int argc, char **argv) {
 
         uint32_t client_interface_addr = worker_unreserved_base_addr;
         uint32_t client_pull_req_buf_addr =
-            client_interface_addr + sizeof(fabric_client_interface_t) + sizeof(fabric_router_l1_config_t) * 4;
+            client_interface_addr + sizeof(fabric_pull_client_interface_t) + sizeof(fabric_router_l1_config_t) * 4;
 
         std::vector<uint32_t> tx_compile_args = {
             0,                           //(device->id() << 8) + src_endpoint_start_id + i,  // 0: src_endpoint_id

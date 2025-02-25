@@ -14,21 +14,19 @@
 
 namespace tt::tt_metal::distributed {
 
-struct MeshShape;
-
-// TODO: #17477 - Rename to `MeshShape` when the legacy type is gone.
-class SimpleMeshShape : public ShapeBase {
+class MeshShape : public ShapeBase {
 public:
-    using ShapeBase::ShapeBase;
     using ShapeBase::operator[];
 
     // Shorthands for constructing 1D, 2D and 3D shapes.
-    explicit SimpleMeshShape(uint32_t x);
-    SimpleMeshShape(uint32_t x, uint32_t y);
-    SimpleMeshShape(uint32_t x, uint32_t y, uint32_t z);
+    explicit MeshShape(uint32_t x);
+    MeshShape(uint32_t x, uint32_t y);
+    MeshShape(uint32_t x, uint32_t y, uint32_t z);
 
-    // Temporary constructor for transitioning to `SimpleMeshShape`.
-    SimpleMeshShape(const MeshShape& legacy_shape);
+    explicit MeshShape(const tt::stl::SmallVector<uint32_t>& shape);
+    explicit MeshShape(tt::stl::SmallVector<uint32_t>&& shape);
+    explicit MeshShape(std::initializer_list<uint32_t> ilist);
+    explicit MeshShape(tt::stl::Span<const uint32_t> span);
 
     // Returns the dimensionality of the mesh.
     size_t dims() const;
@@ -43,17 +41,21 @@ public:
     static constexpr auto attribute_names = std::forward_as_tuple("value");
     auto attribute_values() const { return std::forward_as_tuple(value_); }
 
-    friend bool operator==(const SimpleMeshShape& lhs, const SimpleMeshShape& rhs);
-    friend bool operator!=(const SimpleMeshShape& lhs, const SimpleMeshShape& rhs);
-    friend std::ostream& operator<<(std::ostream& os, const SimpleMeshShape& shape);
+    friend bool operator==(const MeshShape& lhs, const MeshShape& rhs);
+    friend bool operator!=(const MeshShape& lhs, const MeshShape& rhs);
+    friend std::ostream& operator<<(std::ostream& os, const MeshShape& shape);
 
 private:
     using ShapeBase::empty;
+    using ShapeBase::ShapeBase;
     using ShapeBase::size;
 
     void compute_strides();
     tt::stl::SmallVector<size_t> strides_;
 };
+
+// Returns true if the mesh shape is in a line topology: at most 1 dimension can be non-unit.
+bool is_line_topology(const MeshShape& shape);
 
 class MeshCoordinate {
 public:
@@ -64,6 +66,9 @@ public:
 
     // Constructs a generic N-dimensional coordinate.
     explicit MeshCoordinate(tt::stl::Span<const uint32_t> coords);
+
+    // Returns a zero-initialized N-dimensional coordinate.
+    static MeshCoordinate zero_coordinate(size_t dimensions);
 
     // Returns the dimensionality of the coordinate.
     size_t dims() const;
@@ -88,7 +93,7 @@ private:
 
 // Converts a MeshCoordinate to a linear index.
 // Throws if `coord` is out of bounds of `shape`.
-size_t to_linear_index(const SimpleMeshShape& shape, const MeshCoordinate& coord);
+size_t to_linear_index(const MeshShape& shape, const MeshCoordinate& coord);
 
 // Represents a range of MeshCoordinates. Requires that mesh coordinates have the same dimensionality.
 class MeshCoordinateRange {
@@ -97,7 +102,7 @@ public:
     MeshCoordinateRange(const MeshCoordinate& start, const MeshCoordinate& end);
 
     // Constructs a range that iterates over all coordinates in the mesh.
-    MeshCoordinateRange(const SimpleMeshShape& shape);
+    explicit MeshCoordinateRange(const MeshShape& shape);
 
     // Returns the dimensionality of the range.
     size_t dims() const;
@@ -192,11 +197,11 @@ private:
 template <typename T>
 class MeshContainer {
 public:
-    MeshContainer(const SimpleMeshShape& shape, const T& fill_value);
-    MeshContainer(const SimpleMeshShape& shape, std::vector<T> values);
+    MeshContainer(const MeshShape& shape, const T& fill_value);
+    MeshContainer(const MeshShape& shape, std::vector<T> values);
 
     // Returns a shape of the container.
-    const SimpleMeshShape& shape() const;
+    const MeshShape& shape() const;
 
     // Returns (inclusive) range of coordinates in the container.
     const MeshCoordinateRange& coord_range() const;
@@ -269,17 +274,17 @@ public:
     friend bool operator!=(const MeshContainer& lhs, const MeshContainer& rhs) { return !(lhs == rhs); }
 
 private:
-    SimpleMeshShape shape_;
+    MeshShape shape_;
     MeshCoordinateRange coord_range_;
     std::vector<T> values_;
 };
 
 template <typename T>
-MeshContainer<T>::MeshContainer(const SimpleMeshShape& shape, const T& fill_value) :
+MeshContainer<T>::MeshContainer(const MeshShape& shape, const T& fill_value) :
     shape_(shape), coord_range_(shape), values_(shape.mesh_size(), fill_value) {}
 
 template <typename T>
-MeshContainer<T>::MeshContainer(const SimpleMeshShape& shape, std::vector<T> values) :
+MeshContainer<T>::MeshContainer(const MeshShape& shape, std::vector<T> values) :
     shape_(shape), coord_range_(shape), values_(std::move(values)) {
     TT_FATAL(
         shape.mesh_size() == values_.size(),
@@ -289,7 +294,7 @@ MeshContainer<T>::MeshContainer(const SimpleMeshShape& shape, std::vector<T> val
 }
 
 template <typename T>
-const SimpleMeshShape& MeshContainer<T>::shape() const {
+const MeshShape& MeshContainer<T>::shape() const {
     return shape_;
 }
 

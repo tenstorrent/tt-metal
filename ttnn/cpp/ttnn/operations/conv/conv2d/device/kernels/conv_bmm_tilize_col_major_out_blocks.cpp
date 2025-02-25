@@ -445,6 +445,9 @@ void MAIN {
 
                 if constexpr (!tilize_in0) {
                     mm_block_init_short(mm_in0_cb_id, in1_cb_id, false, out_subblock_w, out_subblock_h, in0_block_w);
+#ifdef PACK_RELU
+                    PACK((llk_pack_relu_config(ReluType::NO_RELU)));
+#endif
                 }
             }
         }  // for in0_num_blocks_h
