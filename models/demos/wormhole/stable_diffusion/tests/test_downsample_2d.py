@@ -22,19 +22,20 @@ from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions
     preprocess_and_push_input_to_device,
     post_process_output_and_move_to_host,
 )
+from models.demos.wormhole.stable_diffusion.tests.parametrizations import CROSS_DOWN_BLOCKS_HIDDEN_STATES_INFO
 
 
 @skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize(
-    "block_index, hidden_states, shard_end_core, shard_shape",
-    [
-        (0, [2, 320, 64, 64], (4, 7), (1024, 64)),
-        (1, [2, 640, 32, 32], (4, 7), (256, 128)),
-        (2, [2, 1280, 16, 16], (7, 7), (64, 160)),
-    ],
+    "hidden_states, shard_layout, shard_end_core, shard_shape, block_index",
+    (
+        CROSS_DOWN_BLOCKS_HIDDEN_STATES_INFO[0] + (0,),
+        CROSS_DOWN_BLOCKS_HIDDEN_STATES_INFO[1] + (1,),
+        CROSS_DOWN_BLOCKS_HIDDEN_STATES_INFO[2] + (2,),
+    ),
 )
-def test_downblock_512x512(reset_seeds, device, block_index, hidden_states, shard_end_core, shard_shape):
+def test_downsample_512x512(reset_seeds, device, hidden_states, shard_layout, shard_end_core, shard_shape, block_index):
     # Initialize PyTorch component
     pipe = StableDiffusionPipeline.from_pretrained("CompVis/stable-diffusion-v1-4", torch_dtype=torch.float32)
     unet = pipe.unet
@@ -66,7 +67,7 @@ def test_downblock_512x512(reset_seeds, device, block_index, hidden_states, shar
         device,
         hidden_states,
         memory_config=ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            shard_layout,
             ttnn.BufferType.L1,
             ttnn.ShardSpec(
                 ttnn.CoreRangeSet(
