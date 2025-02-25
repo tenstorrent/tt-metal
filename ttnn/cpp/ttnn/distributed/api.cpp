@@ -7,8 +7,10 @@
 #include <memory>
 
 #include <tt-metalium/overloaded.hpp>
+#include "tt-metalium/assert.hpp"
 #include "tt-metalium/mesh_coord.hpp"
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/tensor_impl.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/distributed/distributed_tensor_config.hpp"
 #include <tt-metalium/mesh_device.hpp>
@@ -90,6 +92,28 @@ Tensor aggregate_as_tensor(
                     shard_tile.get_height(),
                     shard_tile.get_width());
             }
+        }
+        auto storage = MultiDeviceHostStorage{config, std::move(host_owned_buffers), specs};
+        return Tensor(std::move(storage), reference_shard.get_tensor_spec());
+    } else if (storage_type == StorageType::BORROWED) {
+        std::vector<ttnn::TensorSpec> specs;
+        std::vector<OwnedBuffer> host_owned_buffers;
+        for (const auto& shard : tensor_shards) {
+            auto buffer = std::get<BorrowedStorage>(shard.get_storage()).buffer;
+
+            auto visitor = tt::stl::overloaded{[&shard, &host_owned_buffers](const auto& buffer) -> OwnedBuffer {
+                using BufferType = std::decay_t<decltype(buffer)>;
+                using ValueType = typename BufferType::value_type;
+
+                std::vector<ValueType> physical_data(buffer.begin(), buffer.end());
+
+                std::vector<ValueType> logical_data =
+                    tensor_impl::decode_tensor_data(std::move(physical_data), shard.get_tensor_spec());
+
+                return owned_buffer::create(std::move(logical_data));
+            }};
+
+            host_owned_buffers.push_back(std::visit(visitor, buffer));
         }
         auto storage = MultiDeviceHostStorage{config, std::move(host_owned_buffers), specs};
         return Tensor(std::move(storage), reference_shard.get_tensor_spec());
