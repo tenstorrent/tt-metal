@@ -76,7 +76,7 @@ def load_inputs(user_input, batch, instruct):
         user_input = user_input * batch
 
     in_prompt = []
-    cache_dir = Path("models/demos/llama3/demo/context_cache")
+    cache_dir = Path("models/tt_transformers/demo/context_cache")
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     # The demo supports a custom prompt file, where the context is provided by a link to a book from the gutenberg project
@@ -160,7 +160,7 @@ def create_tt_model(
 
 # List of supported Parameters for demo.py
 #
-# input_prompts (string): input json file with prompts to process. See models/demos/llama3/demo/*.json for list of input files
+# input_prompts (string): input json file with prompts to process. See models/tt_transformers/demo/*.json for list of input files
 # instruct (bool): Whether to use instruct weights or general weights
 # repeat_batches (int): Number of consecutive batches of users to run (default: 1)
 # max_seq_len (int): Maximum context length supported by the model (Llama3.1 and Llama3.2 models have a maximum context length of 128k, i.e., 128 * 1024)
@@ -177,7 +177,7 @@ def create_tt_model(
     "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, ci_only",
     [
         (  # Batch-1 run (Latency) - single user, small prompt
-            "models/demos/llama3/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             1024,  # max_seq_len
@@ -190,7 +190,7 @@ def create_tt_model(
             False,  # ci_only
         ),
         (  # Batch-32 run (Throughput) - 32 users, small prompt
-            "models/demos/llama3/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             1024,  # max_seq_len
@@ -203,7 +203,7 @@ def create_tt_model(
             False,  # ci_only
         ),
         (  # Long-context run - Single user, long prompt (adapted to the model being used and architecture)
-            "models/demos/llama3/demo/sample_prompts/input_data_long_64k.json",  # input_prompts
+            "models/tt_transformers/demo/sample_prompts/input_data_long_64k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
@@ -216,7 +216,7 @@ def create_tt_model(
             False,  # ci_only
         ),
         (  # Batch-1 run (Reasoning) - single user, small prompt, long thinking time
-            "models/demos/llama3/demo/input_data_questions_reasoning.json",  # input_prompts
+            "models/tt_transformers/demo/input_data_questions_reasoning.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             16 * 1024,  # max_seq_len
@@ -229,7 +229,7 @@ def create_tt_model(
             False,  # ci_only
         ),
         (  # CI Batch-1 run - Measures the performance of a single user over 4096 iterations
-            "models/demos/llama3/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             8192,  # max_seq_len
@@ -242,7 +242,7 @@ def create_tt_model(
             True,  # ci_only
         ),
         (  # CI Batch-32 run - Measures the performance of a 32 users over 4096 iterations
-            "models/demos/llama3/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             2000,  # max_seq_len
@@ -341,7 +341,7 @@ def test_llama_demo_text(
     if print_to_file:
         # Creat batch output file
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        output_directory = "models/demos/llama3/demo/output"
+        output_directory = "models/tt_transformers/demo/output"
         os.makedirs(output_directory, exist_ok=True)
         os.chmod(output_directory, 0o755)
         output_filename = f"{output_directory}/llama_text_demo_output_{timestamp}.txt"

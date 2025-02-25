@@ -92,7 +92,7 @@ run_t3000_llama3_perplexity_tests_single_card() {
 
   for FAKE_DEVICE in N150 N300; do
     for LLAMA_DIR in "$llama1b" "$llama3b" "$llama8b" "$llama11b"; do
-      FAKE_DEVICE=FAKE_DEVICE LLAMA_DIR=$LLAMA_DIR WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/llama3/tests/test_llama_accuracy.py --timeout=3600 ; fail+=$?
+      FAKE_DEVICE=FAKE_DEVICE LLAMA_DIR=$LLAMA_DIR WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/tt_transformers/tests/test_accuracy.py --timeout=3600 ; fail+=$?
     done
   done
 
@@ -121,7 +121,7 @@ run_t3000_llama3_perplexity_tests_t3000() {
 
   for FAKE_DEVICE in T3K; do
     for LLAMA_DIR in "$llama1b" "$llama3b" "$llama8b" "$llama11b" "$llama70b"; do
-      FAKE_DEVICE=FAKE_DEVICE LLAMA_DIR=$LLAMA_DIR WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/llama3/tests/test_llama_accuracy.py --timeout=3600 ; fail+=$?
+      FAKE_DEVICE=FAKE_DEVICE LLAMA_DIR=$LLAMA_DIR WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/tt_transformers/tests/test_accuracy.py --timeout=3600 ; fail+=$?
     done
   done
 

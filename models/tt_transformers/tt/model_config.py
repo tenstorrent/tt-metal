@@ -91,11 +91,11 @@ class TtModelArgs:
     )
 
     LOCAL_LLAMA_PARAMS = {
-        "LLAMA3_2_1B_PARAMS": "models/demos/llama3/model_params/Llama3.2-1B-Instruct",
-        "LLAMA3_2_3B_PARAMS": "models/demos/llama3/model_params/Llama3.2-3B-Instruct",
-        "LLAMA3_1_8B_PARAMS": "models/demos/llama3/model_params/Llama3.1-8B-Instruct",
-        "LLAMA3_2_11B_PARAMS": "models/demos/llama3/model_params/Llama3.2-11B-Vision-Instruct",
-        "LLAMA3_1_70B_PARAMS": "models/demos/llama3/model_params/Llama3.1-70B-Instruct",
+        "LLAMA3_2_1B_PARAMS": "models/tt_transformers/model_params/Llama3.2-1B-Instruct",
+        "LLAMA3_2_3B_PARAMS": "models/tt_transformers/model_params/Llama3.2-3B-Instruct",
+        "LLAMA3_1_8B_PARAMS": "models/tt_transformers/model_params/Llama3.1-8B-Instruct",
+        "LLAMA3_2_11B_PARAMS": "models/tt_transformers/model_params/Llama3.2-11B-Vision-Instruct",
+        "LLAMA3_1_70B_PARAMS": "models/tt_transformers/model_params/Llama3.1-70B-Instruct",
     }
 
     def __init__(
@@ -148,7 +148,7 @@ class TtModelArgs:
             # Check if weights exist in the specified folder. If not warn the user to run the download and untar script.
         #            assert os.path.isfile(
         #                self.DEFAULT_CKPT_DIR + "/consolidated.00.pth"
-        #            ), f"weights consolidated.00.pth file does not exist. Please use the script `models/demos/llama3/scripts/get_weights.py` to download and untar the weights."
+        #            ), f"weights consolidated.00.pth file does not exist. Please use the script `models/tt_transformers/scripts/get_weights.py` to download and untar the weights."
 
         logger.info(f"Checkpoint directory: {self.DEFAULT_CKPT_DIR}")
         logger.info(f"Tokenizer file: {self.DEFAULT_TOKENIZER_PATH + '/tokenizer.model'}")
