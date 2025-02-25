@@ -496,7 +496,7 @@ def run_llama3_demo(
         #     {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
         # ),
         (  # Batch-32 run (Throughput) - 32 users, small prompt
-            "models/demos/llama3/demo/input_data_questions_prefill_128.json",  # input_prompts
+            "models/demos/llama3/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             1024,  # max_seq_len
