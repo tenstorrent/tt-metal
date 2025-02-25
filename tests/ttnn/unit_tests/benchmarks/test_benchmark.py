@@ -162,7 +162,7 @@ matmul_configs = [
 @pytest.mark.parametrize("num_warmup_iterations", [5])
 @pytest.mark.parametrize("num_measurement_iterations", [100])
 @pytest.mark.parametrize("dump_profiler_log", [True])
-@pytest.mark.parametrize("dump_profiler_log_single_iteration", [True])
+@pytest.mark.parametrize("dump_profiler_log_single_iteration", [False])
 def test_matmul_2d_host_perf(
     device,
     tile_h,
@@ -196,26 +196,33 @@ def test_matmul_2d_host_perf(
 
         writer = csv.writer(file)
         if os.stat(FILE_NAME).st_size == 0:
-            writer.writerow(
-                [
-                    "m",
-                    "k",
-                    "n",
-                    "use_trace",
-                    "grid_size",
-                    "in0_sharded",
-                    "out_sharded",
-                    "in0_storage_type",
-                    "in1_storage_type",
-                    "out_storage_type",
-                    "dtype",
-                    "math_fidelity",
-                    "inference_time_avg (ns)",
-                    "TFLOPs (avg)",
-                    f"Utilization (vs {grid_size[0]}x{grid_size[1]} user grid)",
-                    f"Utilization (vs {compute_grid_size.x}x{compute_grid_size.y} full grid)",
-                ]
-            )
+            csv_header = [
+                "m",
+                "k",
+                "n",
+                "use_trace",
+                "grid_size",
+                "in0_sharded",
+                "out_sharded",
+                "in0_storage_type",
+                "in1_storage_type",
+                "out_storage_type",
+                "dtype",
+                "math_fidelity",
+                "inference_time_avg (ns)",
+                "TFLOPs (avg)",
+                f"Utilization (vs {grid_size[0]}x{grid_size[1]} user grid)",
+                f"Utilization (vs {compute_grid_size.x}x{compute_grid_size.y} full grid)",
+            ]
+            if dump_profiler_log:
+                csv_header.extend(
+                    [
+                        "trisc0_kernel_cycles",
+                        "trisc1_kernel_cycles",
+                        "trisc2_kernel_cycles",
+                    ]
+                )
+            writer.writerow(csv_header)
 
         COUNTER = 0
 
@@ -410,6 +417,21 @@ def test_matmul_2d_host_perf(
                     profiler_log_dump = profiler_dump_dir / "all_iterations.csv"
                     shutil.copy(profiler_log_path, profiler_log_dump)
 
+                    # Read statistic from profiler log (simple test code)
+                    setup = device_post_proc_config.perf_analysis()
+                    setup.deviceInputLog = profiler_log_path
+                    deviceData = import_log_run_stats(setup)
+                    trisc0_duration = deviceData["devices"][0]["cores"]["DEVICE"]["analysis"]["trisc0_kernel_duration"][
+                        "stats"
+                    ]["Average"]
+                    trisc1_duration = deviceData["devices"][0]["cores"]["DEVICE"]["analysis"]["trisc1_kernel_duration"][
+                        "stats"
+                    ]["Average"]
+                    trisc2_duration = deviceData["devices"][0]["cores"]["DEVICE"]["analysis"]["trisc2_kernel_duration"][
+                        "stats"
+                    ]["Average"]
+                    # logger.info(f"Average TRISC0 kernel legth: {trisc0_duration}, Average TRISC1 kernel legth: {trisc1_duration}, Average TRISC2 kernel legth: {trisc2_duration}")
+
                 inference_time_avg = profiler.get("run") / num_measurement_iterations
                 tflops = 2 * m * k * n / 1e12 / inference_time_avg
                 if math_fidelity == ttnn.MathFidelity.LoFi:
@@ -437,26 +459,33 @@ def test_matmul_2d_host_perf(
                 ttnn.deallocate(output_t)
                 ttnn.deallocate(in0_t)
                 ttnn.deallocate(in1_t)
-                writer.writerow(
-                    [
-                        m,
-                        k,
-                        n,
-                        f"{True}" if use_trace else f"{False}",
-                        grid_size,
-                        in0_sharded,
-                        out_sharded,
-                        in0_storage_type,
-                        in1_storage_type,
-                        out_storage_type,
-                        dtype,
-                        math_fidelity,
-                        f"{inference_time_avg * 1e9:.2f}",
-                        f"{tflops:.2f}",
-                        utilization_user_grid_percentage,
-                        utilization_full_grid_percentage,
-                    ]
-                )
+                csv_data = [
+                    m,
+                    k,
+                    n,
+                    f"{True}" if use_trace else f"{False}",
+                    grid_size,
+                    in0_sharded,
+                    out_sharded,
+                    in0_storage_type,
+                    in1_storage_type,
+                    out_storage_type,
+                    dtype,
+                    math_fidelity,
+                    f"{inference_time_avg * 1e9:.2f}",
+                    f"{tflops:.2f}",
+                    utilization_user_grid_percentage,
+                    utilization_full_grid_percentage,
+                ]
+                if profiler_log_dump:
+                    csv_data.extend(
+                        [
+                            trisc0_duration,
+                            trisc1_duration,
+                            trisc2_duration,
+                        ]
+                    )
+                writer.writerow(csv_data)
                 file.flush()
                 logger.info(f"FINISHED TEST #{COUNTER}")
                 COUNTER += 1

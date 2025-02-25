@@ -117,6 +117,42 @@ class default_setup(metaclass=MergeMetaclass):
     deviceTarball = "device_perf_results.tgz"
 
 
+class perf_analysis(default_setup):
+    timerAnalysis = {
+        "trisc0_math_block_duration": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {"core": "ANY", "risc": "TRISC_0", "zone_name": "MATH-BLOCK"},
+            "end": {"core": "ANY", "risc": "TRISC_0", "zone_name": "MATH-BLOCK"},
+        },
+        "trisc0_kernel_duration": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {"core": "ANY", "risc": "TRISC_0", "zone_name": "TRISC-KERNEL"},
+            "end": {"core": "ANY", "risc": "TRISC_0", "zone_name": "TRISC-KERNEL"},
+        },
+        "trisc0_kernel_duration": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {"core": "ANY", "risc": "TRISC_0", "zone_name": "TRISC-KERNEL"},
+            "end": {"core": "ANY", "risc": "TRISC_0", "zone_name": "TRISC-KERNEL"},
+        },
+        "trisc1_kernel_duration": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {"core": "ANY", "risc": "TRISC_1", "zone_name": "TRISC-KERNEL"},
+            "end": {"core": "ANY", "risc": "TRISC_1", "zone_name": "TRISC-KERNEL"},
+        },
+        "trisc2_kernel_duration": {
+            "across": "core",
+            "type": "adjacent",
+            "start": {"core": "ANY", "risc": "TRISC_2", "zone_name": "TRISC-KERNEL"},
+            "end": {"core": "ANY", "risc": "TRISC_2", "zone_name": "TRISC-KERNEL"},
+        },
+    }
+    detectOps = False
+
+
 class test_timestamped_events(default_setup):
     timerAnalysis = {
         "erisc_events": {
