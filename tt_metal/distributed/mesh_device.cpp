@@ -363,7 +363,7 @@ void MeshDevice::enable_async(bool enable) {
         return;
     }
     for (auto device : devices) {
-        static_cast<Device*>(device)->force_enable_async(enable);
+        dynamic_cast<Device*>(device)->force_enable_async(enable);
     }
 }
 
