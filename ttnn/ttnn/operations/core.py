@@ -625,6 +625,10 @@ def as_tensor(
 
         cache_file_name = f"{cache_file_name}{storage_type}_dtype_{dtype_name}_layout_{layout_name}.bin"
 
+        cache_path = pathlib.Path(cache_file_name)
+        if not cache_path.exists() or not cache_path.is_file():
+            return from_torch_and_dump(tensor, dtype, layout, cache_file_name, mesh_mapper)
+
         try:
             tensor = ttnn._ttnn.tensor.load_tensor(cache_file_name, device=device)
             if tuple(tensor.shape) != tuple(tensor.shape):
@@ -633,7 +637,8 @@ def as_tensor(
                 )
                 tensor = from_torch_and_dump(tensor, dtype, layout, cache_file_name, mesh_mapper)
             logger.debug(f"Loaded cache for {cache_file_name} of shape {tensor.shape}")
-        except (FileNotFoundError, RuntimeError):
+        except RuntimeError as e:
+            log.warning(f"Failed to load cache for {cache_file_name}: {e}")
             tensor = from_torch_and_dump(tensor, dtype, layout, cache_file_name, mesh_mapper)
         return tensor
 
