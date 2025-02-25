@@ -256,7 +256,7 @@ void kernel_main() {
                         // On Blackhole the flush is needed because NoC latency is higher than L1 <-> RISCV latency
                         // which means data could be changed before
                         //  write is issued.
-                        noc_async_writes_flushed();
+                        noc_async_write_barrier();
 #endif
 
                     } else if constexpr (core_in_in0_receiver_mcast_grid) {
