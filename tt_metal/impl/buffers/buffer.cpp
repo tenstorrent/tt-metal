@@ -445,6 +445,10 @@ void Buffer::deallocate_impl() {
             validate_sub_device_manager_id(sub_device_manager_id_, device_);
             allocator_->deallocate_buffer(this);
         }
+
+        // Capture deallocates here instead of higher levels.
+        LIGHT_METAL_TRACE_FUNCTION_ENTRY();
+        LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureDeallocateBuffer, *this);
     }
 
     allocation_status_.store(AllocationStatus::DEALLOCATED, std::memory_order::relaxed);
