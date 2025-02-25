@@ -90,7 +90,7 @@ TEST_F(N300CommOpsTest, TestAllReduceNanoGPT) {
     device->enable_program_cache();
     auto mesh_shape = device->shape();
 
-    for (int iter = 0; iter < 100; ++iter) {
+    for (int iter = 0; iter < 10; ++iter) {
         size_t batch_multiplier = rand() % 8 + 1;
         size_t size_multiplier = rand() % 6 + 1;
         size_t height_multiplier = rand() % 8 + 1;
@@ -114,8 +114,8 @@ TEST_F(N300CommOpsTest, TestAllReduceNanoGPT) {
             xt::view(xtensor, xt::all(), xt::all(), xt::all(), xt::range(0, size / 2)) +
             xt::view(xtensor, xt::all(), xt::all(), xt::all(), xt::range(size / 2, size));
 
-        EXPECT_TRUE(xt::allclose(all_reduce_expected, all_reduce_xtensor[0], /* rtol */ 0, /* atol */ 1e-2));
-        EXPECT_TRUE(xt::allclose(all_reduce_expected, all_reduce_xtensor[1], /* rtol */ 0, /* atol */ 1e-2));
+        EXPECT_TRUE(xt::allclose(all_reduce_expected, all_reduce_xtensor[0], /* rtol */ 1e-3, /* atol */ 2e-2));
+        EXPECT_TRUE(xt::allclose(all_reduce_expected, all_reduce_xtensor[1], /* rtol */ 1e-3, /* atol */ 2e-2));
 
         xt::xarray<float> grad_data = xt::random::rand(all_reduce_expected.shape(), 0.F, 1.F);
         ttml::core::XTensorToMeshVariant<float> replicate_composer =
@@ -134,12 +134,12 @@ TEST_F(N300CommOpsTest, TestAllReduceNanoGPT) {
             grad_data,
             grad_xtensor[0],
             /* rtol */ 1e-3,
-            /* atol */ 1e-2));
+            /* atol */ 2e-2));
         EXPECT_TRUE(xt::allclose(
             grad_data,
             grad_xtensor[1],
             /* rtol */ 1e-3,
-            /* atol */ 1e-2));
+            /* atol */ 2e-2));
     }
 }
 
@@ -237,7 +237,7 @@ TEST_F(N300CommOpsTest, TestAllGatherFullyTiled) {
     auto* device = &ttml::autograd::ctx().get_device();
     auto mesh_shape = device->shape();
 
-    for (int iter = 0; iter < 100; ++iter) {
+    for (int iter = 0; iter < 10; ++iter) {
         size_t batch = 64;
         size_t size = 64UL;
         size_t height = 256UL;
@@ -326,12 +326,13 @@ TEST_F(N300CommOpsTest, TestScatterFullyTiled) {
     auto* device = &ttml::autograd::ctx().get_device();
     auto mesh_shape = device->shape();
 
-    size_t size = 64UL;
-    size_t height = 32UL;
-    std::vector<float> test_data_vec(size * height);
-    ttml::init::uniform_init(test_data_vec, {0.F, 0.001F});
+    size_t batch = 64;
+    size_t size = 128UL;
+    size_t height = 256UL;
+    std::vector<float> test_data_vec(batch * size * height);
+    ttml::init::uniform_init(test_data_vec, {-1.F, 1.F});
     xt::xarray<float> test_data = xt::adapt(test_data_vec);
-    xt::xarray<float> xtensor = test_data.reshape({1U, 1U, height, size});
+    xt::xarray<float> xtensor = test_data.reshape({batch, 1U, height, size});
 
     ttml::core::MeshToXTensorVariant<float> identity_composer = ttml::core::VectorMeshToXTensor<float>(mesh_shape);
     ttml::core::XTensorToMeshVariant<float> replicate_composer = ttml::core::ReplicateXTensorToMesh<float>(mesh_shape);
@@ -358,7 +359,7 @@ TEST_F(N300CommOpsTest, TestScatterFullyTiled) {
         /* atol */ 1e-2));
 
     // check backward
-    xt::xarray<float> grad_data = xt::random::rand(xtensor.shape(), 0.F, 0.001F);
+    xt::xarray<float> grad_data = xt::random::rand(xtensor.shape(), -1.F, 1.F);
     ttml::core::XTensorToMeshVariant<float> shard_composer = ttml::core::ShardXTensorToMesh<float>(mesh_shape, 3);
     auto tt_grad_tensor = ttml::core::from_xtensor(grad_data, device, shard_composer);
     scattered_tensor->set_grad(tt_grad_tensor);

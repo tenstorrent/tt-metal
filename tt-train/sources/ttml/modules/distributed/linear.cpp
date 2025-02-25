@@ -83,6 +83,7 @@ ColumnParallelLinear::ColumnParallelLinear(
 }
 
 autograd::TensorPtr ColumnParallelLinear::operator()(autograd::TensorPtr tensor) {
+    tensor = ops::distributed::broadcast(tensor);
     tensor = ops::linear_op(tensor, m_weight, m_bias);
     if (m_gather_output) {
         tensor = ops::distributed::all_gather(tensor, tensor->get_rank() - 1U);
