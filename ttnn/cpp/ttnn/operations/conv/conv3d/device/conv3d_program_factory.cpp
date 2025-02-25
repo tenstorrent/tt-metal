@@ -19,6 +19,8 @@ operation::ProgramWithCallbacks conv3d_factory(
     const DeviceComputeKernelConfig& compute_kernel_config) {
     Program program = CreateProgram();
     auto core_grid = CoreRange({0, 0}, {0, 0});
+    auto num_cores = core_grid.size();
+    auto grid_size = core_grid.grid_size();
     /*
     First implementation just performs vol2col on a single core.
     */
@@ -276,8 +278,8 @@ operation::ProgramWithCallbacks conv3d_factory(
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args));
 
     CoreCoord core = {0, 0};
-    SetRuntimeArgs(
-        program, reader_kernels_id, core, {input_tensor.buffer()->address(), output_tensor.buffer()->address()});
+
+    SetRuntimeArgs(program, reader_kernels_id, core, {input_tensor.buffer()->address()});
 
     uint32_t out_addr = output_tensor.buffer()->address();
     uint32_t weight_addr = weight_tensor.buffer()->address();
@@ -286,11 +288,31 @@ operation::ProgramWithCallbacks conv3d_factory(
     SetRuntimeArgs(program, writer_kernels_id, core, {out_addr, weight_addr, bias_addr});
 
     auto override_runtime_arguments_callback =
-        [](const void* operation,
-           Program& program,
-           const std::vector<Tensor>& input_tensors,
-           const std::vector<std::optional<const Tensor>>& optional_input_tensors,
-           const std::vector<Tensor>& output_tensors) { TT_FATAL(false, "not implemented"); };
+        [num_cores, grid_size, reader_kernels_id, writer_kernels_id](
+            const void* operation,
+            Program& program,
+            const std::vector<Tensor>& input_tensors,
+            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+            const std::vector<Tensor>& output_tensors) {
+            auto& reader_args_by_core = GetRuntimeArgs(program, reader_kernels_id);
+            auto& writer_args_by_core = GetRuntimeArgs(program, writer_kernels_id);
+
+            auto input_addr = input_tensors.at(0).buffer()->address();
+            auto weight_addr = input_tensors.at(1).buffer()->address();
+            auto output_addr = output_tensors.at(0).buffer()->address();
+            auto bias_addr =
+                optional_input_tensors.at(0).has_value() ? optional_input_tensors.at(0).value().buffer()->address() : 0;
+
+            for (uint32_t i = 0; i < num_cores; ++i) {
+                CoreCoord core = {i % grid_size.x, i / grid_size.x};
+                auto& reader_args = reader_args_by_core[core.x][core.y];
+                auto& writer_args = writer_args_by_core[core.x][core.y];
+                reader_args[0] = input_addr;
+                writer_args[0] = output_addr;
+                writer_args[1] = weight_addr;
+                writer_args[2] = bias_addr;
+            }
+        };
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
 }
 

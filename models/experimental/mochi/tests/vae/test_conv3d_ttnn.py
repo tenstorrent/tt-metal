@@ -344,3 +344,39 @@ def test_vol2col_sweep(device, B, C_in, C_out, T, H, W, kernel_size, stride, pad
 )
 def test_vol2col_torch_mochi_shapes(device, input_shape, out_channels, kernel_size, stride, padding, padding_mode):
     run_vol2col_test_sweep_blocks(device, input_shape, out_channels, kernel_size, stride, padding, padding_mode)
+
+
+@pytest.mark.parametrize(
+    "input_shape, out_channels, kernel_size, stride, padding, padding_mode",
+    [
+        [(1, 64, 16, 16, 16), 64, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
+    ],
+)
+def test_vol2col_cache_address(
+    device, input_shape, out_channels, kernel_size, stride, padding, padding_mode, use_program_cache
+):
+    # Test that program cache updates the addresses of the inputs
+    dummy = []
+    for _ in range(3):
+        dummy.append(ttnn.from_torch(torch.randn(input_shape), device=device, layout=ttnn.TILE_LAYOUT))
+        run_vol2col_test(device, input_shape, out_channels, kernel_size, stride, padding, padding_mode)
+
+
+@pytest.mark.parametrize(
+    "input_shape, out_channels, kernel_size, stride, padding, padding_mode",
+    [
+        [(1, 64, 16, 16, 16), 64, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
+    ],
+)
+def test_vol2col_cache_hash(
+    device, input_shape, out_channels, kernel_size, stride, padding, padding_mode, use_program_cache
+):
+    # Test that program cache does not re-use the same program for different inputs
+    dummy = []
+    for _ in range(3):
+        for i in range(2):
+            new_shape = (input_shape[0], input_shape[1] * (i + 1), input_shape[2], input_shape[3], input_shape[4])
+            dummy.append(ttnn.from_torch(torch.randn(new_shape), device=device, layout=ttnn.TILE_LAYOUT))
+            run_vol2col_test(device, new_shape, out_channels, kernel_size, stride, padding, padding_mode)
+
+    assert device.num_program_cache_entries() == 2

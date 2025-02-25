@@ -89,6 +89,13 @@ std::vector<TensorSpec> Conv3dOp::compute_output_specs(const std::vector<Tensor>
             dtype, PageConfig(Layout::ROW_MAJOR), memory_config, output_shape, output_shape))};
 }
 
+operation::Hash Conv3dOp::compute_program_hash(
+    const std::vector<Tensor>& input_tensors,
+    const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
+    return operation::hash_operation<Conv3dOp>(
+        input_tensors, optional_input_tensors, config, output_mem_config, compute_kernel_config);
+}
+
 operation::ProgramWithCallbacks Conv3dOp::create_program(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors,
