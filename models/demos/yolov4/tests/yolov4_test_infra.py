@@ -11,6 +11,8 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 import ttnn
 from models.demos.yolov4.reference.yolov4 import Yolov4
 from models.demos.yolov4.ttnn.yolov4 import TtYOLOv4
+from models.demos.yolov4.demo.demo import YoloLayer, get_region_boxes, gen_yolov4_boxes_confs
+
 
 from models.utility_functions import (
     is_wormhole_b0,
@@ -40,15 +42,7 @@ def load_yolov4_weight(model_location_generator=None):
 
 def load_yolov4_model(ttnn_model):
     torch_model = Yolov4()
-    new_state_dict = {}
-    ds_state_dict = {k: v for k, v in ttnn_model.torch_model.items()}
-
-    keys = [name for name, parameter in torch_model.state_dict().items()]
-    values = [parameter for name, parameter in ds_state_dict.items()]
-
-    for i in range(len(keys)):
-        new_state_dict[keys[i]] = values[i]
-
+    new_state_dict = dict(zip(torch_model.state_dict().keys(), ttnn_model.torch_model.values()))
     torch_model.load_state_dict(new_state_dict)
     torch_model.eval()
     return torch_model
@@ -72,13 +66,16 @@ class Yolov4TestInfra:
         self.act_dtype = act_dtype
         self.weight_dtype = weight_dtype
         self.model_location_generator = model_location_generator
-        self.ttnn_yolov4_model = TtYOLOv4(device, load_yolov4_weight(self.model_location_generator))
+        self.ttnn_yolov4_model = TtYOLOv4(load_yolov4_weight(self.model_location_generator), device)
+
         torch_model = load_yolov4_model(self.ttnn_yolov4_model)
         input_shape = (1, 320, 320, 3)
         torch_input_tensor = torch.randn(input_shape, dtype=torch.float32)
         self.input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
         self.torch_input_tensor = torch_input_tensor.permute(0, 3, 1, 2)
         self.torch_output_tensor = torch_model(self.torch_input_tensor)
+        ref1, ref2, ref3 = gen_yolov4_boxes_confs(self.torch_output_tensor)
+        self.ref_boxes, self.ref_confs = get_region_boxes([ref1, ref2, ref3])
 
     def run(self):
         self.output_tensor = self.ttnn_yolov4_model(self.input_tensor)
@@ -130,38 +127,42 @@ class Yolov4TestInfra:
 
     def validate(self, output_tensor=None):
         output_tensor = self.output_tensor if output_tensor is None else output_tensor
-        output_tensor = ttnn.to_torch(self.output_tensor[0])
-        output_tensor = output_tensor.reshape(1, 40, 40, 255)
-        output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
+        result_boxes_padded = ttnn.to_torch(self.output_tensor[0])
+        result_confs = ttnn.to_torch(self.output_tensor[1])
 
-        valid_pcc = 0.985
-        self.pcc_passed, self.pcc_message = assert_with_pcc(self.torch_output_tensor[0], output_tensor, pcc=valid_pcc)
+        result_boxes_padded = result_boxes_padded.permute(0, 2, 1, 3)
+        result_boxes_list = []
+        # That ttnn tensor is the concat output of 3 padded tensors
+        # As a perf workaround I'm doing the unpadding on the torch output here.
+        # TODO: cleaner ttnn code when ttnn.untilize() is fully optimized
+        box_1_start_i = 0
+        box_1_end_i = 6100
+        box_2_start_i = 6128
+        box_2_end_i = 6228
+        box_3_start_i = 6256
+        box_3_end_i = 6356
+        result_boxes_list.append(result_boxes_padded[:, box_1_start_i:box_1_end_i])
+        result_boxes_list.append(result_boxes_padded[:, box_2_start_i:box_2_end_i])
+        result_boxes_list.append(result_boxes_padded[:, box_3_start_i:box_3_end_i])
+        result_boxes = torch.cat(result_boxes_list, dim=1)
+
+        valid_pcc = 0.99
+        self.pcc_passed, self.pcc_message = assert_with_pcc(self.ref_boxes, result_boxes, pcc=valid_pcc)
 
         logger.info(
-            f"Yolov4 batch_size={self.batch_size}, act_dtype={self.act_dtype}, weight_dtype={self.weight_dtype}, PCC={self.pcc_message}"
+            f"Yolov4 - Bboxes. batch_size={self.batch_size}, act_dtype={self.act_dtype}, weight_dtype={self.weight_dtype}, PCC={self.pcc_message}"
         )
 
-        output_tensor = ttnn.to_torch(self.output_tensor[1])
-        output_tensor = torch.reshape(output_tensor, (self.batch_size, 20, 20, 255))
-        output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
-        self.pcc_passed, self.pcc_message = assert_with_pcc(self.torch_output_tensor[1], output_tensor, pcc=valid_pcc)
+        valid_pcc = 0.71
+        self.pcc_passed, self.pcc_message = assert_with_pcc(self.ref_confs, result_confs, pcc=valid_pcc)
 
         logger.info(
-            f"Yolov4 batch_size={self.batch_size}, act_dtype={self.act_dtype}, weight_dtype={self.weight_dtype}, PCC={self.pcc_message}"
-        )
-
-        output_tensor = ttnn.to_torch(self.output_tensor[2])
-        output_tensor = torch.reshape(output_tensor, (self.batch_size, 10, 10, 255))
-        output_tensor = torch.permute(output_tensor, (0, 3, 1, 2))
-        self.pcc_passed, self.pcc_message = assert_with_pcc(self.torch_output_tensor[2], output_tensor, pcc=valid_pcc)
-        logger.info(
-            f"Yolov4 batch_size={self.batch_size}, act_dtype={self.act_dtype}, weight_dtype={self.weight_dtype}, PCC={self.pcc_message}"
+            f"Yolov4 - Confs. batch_size={self.batch_size}, act_dtype={self.act_dtype}, weight_dtype={self.weight_dtype}, PCC={self.pcc_message}"
         )
 
     def dealloc_output(self):
         ttnn.deallocate(self.output_tensor[0])
         ttnn.deallocate(self.output_tensor[1])
-        ttnn.deallocate(self.output_tensor[2])
 
 
 def create_test_infra(
