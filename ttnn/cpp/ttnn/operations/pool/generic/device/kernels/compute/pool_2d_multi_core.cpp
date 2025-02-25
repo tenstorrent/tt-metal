@@ -8,7 +8,7 @@
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/pack_untilize.h"
 
-#define DEBUG_PRINT 0
+#define DEBUG_PRINT 1
 
 #if DEBUG_PRINT == 1
 #include "debug/dprint.h"
@@ -77,7 +77,16 @@ void MAIN {
         in_ntiles_c < MAX_TILES_PER_REDUCTION ? in_ntiles_c : MAX_TILES_PER_REDUCTION;
     constexpr uint32_t partial_iter_output_tiles =
         in_ntiles_c % MAX_TILES_PER_REDUCTION == 0 ? max_tiles_per_iter : in_ntiles_c % MAX_TILES_PER_REDUCTION;
-    tilizeA_B_reduce_init(in_cb_id, in_scalar_cb_id, max_tiles_per_iter, out_cb_id, num_faces_in_tile, window_size_hw);
+
+    // static_assert(REDUCE_OP == PoolType::MAX || REDUCE_OP == PoolType::Sum, "Only supports REDUCE_OP = MAX or Sum");
+
+    constexpr bool neginf_srca_maxpool = (REDUCE_OP == PoolType::MAX) ? true : false;
+    constexpr bool zero_srca_avgpool = (REDUCE_OP == PoolType::MAX) ? false : true;
+    DPRINT << "neginf_srca_maxpool : " << (uint32_t)neginf_srca_maxpool << ENDL();
+    DPRINT << "zero_srca_avgpool : " << (uint32_t)zero_srca_avgpool << ENDL();
+
+    tilizeA_B_reduce_init<neginf_srca_maxpool, zero_srca_avgpool>(
+        in_cb_id, in_scalar_cb_id, max_tiles_per_iter, out_cb_id, num_faces_in_tile, window_size_hw);
     pack_untilize_dst_init_short<in_ntiles_c>(out_cb_id, num_out_rows, num_faces_in_tile);
 
     cb_wait_front(in_scalar_cb_id, 1);
