@@ -18,7 +18,7 @@ ThreadPool::WorkerQueue::WorkerQueue() {
     tail_ = ring_buffer_;
 }
 
-void ThreadPool::WorkerQueue::push(std::packaged_task<void()>&& task) {
+void ThreadPool::WorkerQueue::push(std::function<void()>&& task) {
     // Stall condition: this push will update the tail (wptr)
     // to match the location of head (rptr). The current push can
     // thus overwrite data that's being read. Stall until head
@@ -30,7 +30,7 @@ void ThreadPool::WorkerQueue::push(std::packaged_task<void()>&& task) {
     tail_.store(tail_.load()->next);
 }
 
-std::packaged_task<void()>&& ThreadPool::WorkerQueue::pop() {
+std::function<void()>&& ThreadPool::WorkerQueue::pop() {
     ThreadPool::WorkerQueue::Node* old_head = pop_head();
     return std::move(old_head->data);
 }
@@ -52,7 +52,7 @@ ThreadPool::ThreadPool(size_t thread_count) : shutdown_(false) {
     for (size_t i = 0; i < thread_count; ++i) {
         workers_.emplace_back([this] {
             while (true) {
-                std::packaged_task<void()> task;  // Task container for this thread
+                std::function<void()> task;  // Task container for this thread
                 {
                     task_semaphore_.acquire();  // Ensures 1:1 task to worker mapping
                     if (shutdown_) {
@@ -61,10 +61,14 @@ ThreadPool::ThreadPool(size_t thread_count) : shutdown_(false) {
                     // The lock free queue only allows a single reader/single writer
                     // With multiple readers, we must use a lock to synchronize
                     std::unique_lock<std::mutex> lock(mutex_);
-                    task = std::move(tasks_.pop());  // Move the packaged_task
+                    task = std::move(tasks_.pop());  // Move the function out of the queue
                 }
-                task();     // Execute the packaged_task
-                counter_--;  // Notify maibn thread that a task was completed
+                task();  // Execute the function
+                // Atomically decrement counter used to synchronize with main thread
+                // and notify the main thread if all tasks have completed
+                if (counter_.fetch_sub(1, std::memory_order_release) == 1) {
+                    counter_.notify_all();
+                }
             }
         });
     }
@@ -81,7 +85,15 @@ ThreadPool::~ThreadPool() {
     }
 }
 
-void ThreadPool::barrier() const noexcept { while (counter_); }
+void ThreadPool::barrier() const noexcept {
+    // Wait until all tasks have completed (counter_ == 0)
+    // To avoid spinning, sleep until notified by the worker threads
+    // or counter_ changes (this only happens with a spurious wakeup)
+    int current;
+    while ((current = counter_.load(std::memory_order_acquire)) > 0) {
+        counter_.wait(current, std::memory_order_relaxed);
+    }
+}
 
 std::size_t ThreadPool::num_threads() const noexcept { return workers_.size(); }
 

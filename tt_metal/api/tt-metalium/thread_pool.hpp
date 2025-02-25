@@ -20,9 +20,7 @@ public:
 
     template <class F>
     void enqueue(F&& f) {
-        // Bind the function to a packaged_task
-        auto task = std::packaged_task<void()>(std::forward<F>(f));
-        tasks_.push(std::move(task));  // Move the task directly into queue
+        tasks_.push(std::move(f));     // Move the task directly into queue
         task_semaphore_.release();     // Notify a worker that a task is available
         // Light-Weight counter increment to track the number of tasks in flight
         // Need this because a counting_semaphore does not allow querying state
@@ -36,17 +34,13 @@ private:
     class WorkerQueue {
     public:
         WorkerQueue();
-        void push(std::packaged_task<void()>&& task);
-        std::packaged_task<void()>&& pop();
+        void push(std::function<void()>&& task);
+        std::function<void()>&& pop();
         bool empty() const;
 
     private:
         struct Node {
-            // Use packaged_task, since it is
-            // move only. Forces us to ensure
-            // that tasks are enqueued in a
-            // light-weight manner
-            std::packaged_task<void()> data;
+            std::function<void()> data;
             Node* next = nullptr;
         };
 
