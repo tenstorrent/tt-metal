@@ -109,8 +109,7 @@ void ModuleBase::eval() {
 autograd::TensorPtr ModuleBase::operator()(const autograd::TensorPtr& tensor) {
     throw std::logic_error("Not implemented");
 }
-virtual autograd::TensorPtr ModuleBase::operator()(
-    const autograd::TensorPtr& tensor, const autograd::TensorPtr& other) {
+autograd::TensorPtr ModuleBase::operator()(const autograd::TensorPtr& tensor, const autograd::TensorPtr& other) {
     throw std::logic_error("Not implemented");
 }
 
