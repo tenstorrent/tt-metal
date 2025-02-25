@@ -266,9 +266,7 @@ uint32_t calculate_partial_page_size(const Buffer& buffer) {
         TT_ASSERT(buffer.is_l1());
         mem_alignment = hal.get_alignment(HalMemType::L1);
     }
-    while (partial_page_size % pcie_alignment != 0 || partial_page_size % mem_alignment != 0) {
-        partial_page_size += 1;
-    }
+    partial_page_size = tt::align(partial_page_size, std::lcm(pcie_alignment, mem_alignment));
     return partial_page_size;
 }
 
