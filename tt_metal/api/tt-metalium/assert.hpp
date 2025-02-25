@@ -102,8 +102,12 @@ template <typename... Args>
     trace_message_ss << tt::assert::backtrace_to_string(100, 3, " --- ");
     trace_message_ss << std::flush;
     if (std::getenv("TT_ASSERT_ABORT")) {
+        log_fatal(args...);
         abort();
+    } else {
+        log_info(args...);
     }
+    Logger::get().flush();
     throw std::runtime_error(trace_message_ss.str());
 }
 
