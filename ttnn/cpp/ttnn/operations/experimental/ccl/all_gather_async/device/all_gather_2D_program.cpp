@@ -81,19 +81,38 @@ void getNeighborsCountAndOffset(
 // For ring all-gather, we can send sub-sections of input tensor in opposite directions
 // For linear all-gather though, we must ensure we send full tensors in BOTH directions
 //   (in other words, disable the "bidirectional" send flag)
+
+/*
+E devices and we are on device e
+
+E num_devices
+HP = higher_pages = a1*a2*a3
+LP = lower_pages
+PS = page_size
+
+(a1,a2,a3,a4,b,c,d) -> AG(E) -> (a,e*b,c,d)
+
+Lower_Pages: Tile: b*ceil(c/32) * ceil(d/32), Row Major b*c
+
+for i in range (a):
+    for k in range (Lower_Pages):
+        read_from_shard (i*LP+k)
+        write_to_tensor (i*E*LP+k+e*LP)
+
+*/
+
 operation::ProgramWithCallbacks all_gather_2D_multi_core_with_workers(
     const Tensor& input_tensor,
     Tensor& output_tensor,
     const MeshDevice& mesh_device,
-    const uint32_t dim,
     const MemoryConfig output_mem_config,
     const ccl::Topology topology,
     const GlobalSemaphore semaphore,
-    const uint32_t page_stride,
-    const uint32_t num_chunks,
+    const uint32_t lower_pages,
+    const uint32_t higher_pages,
     const uint32_t num_devices,
-    const std::optional<SubDeviceId>& sub_device_id,
-    const uint32_t row_order) {
+    const uint32_t page_size,
+    bool is_horizontal) {
     tt::tt_metal::Program program{};
 
     IDevice* device = input_tensor.device();
