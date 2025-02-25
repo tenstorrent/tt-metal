@@ -137,7 +137,8 @@ Tensor ExecuteMaximum::invoke(
     return result;
 }
 
-Tensor _atan2(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor _atan2(const Tensor& input_b, const Tensor& input_a, const std::optional<MemoryConfig>& output_mem_config) {
+    tt::log_info(tt::LogOp, "Input arguments for the atan2 function are in the format (y, x)");
     Tensor result(input_a);
     {
         Tensor atan_input =
@@ -171,7 +172,7 @@ Tensor _atan2(const Tensor& input_a, const Tensor& input_b, const std::optional<
                     altz_bltz,
                     ttnn::subtract(result, M_PI, std::nullopt, output_mem_config),
                     ttnn::where(
-                        az_bltz, M_PI_2, ttnn::where(az_bgtz, -M_PI_2, 0.0, output_mem_config), output_mem_config),
+                        az_bltz, -M_PI_2, ttnn::where(az_bgtz, M_PI_2, 0.0, output_mem_config), output_mem_config),
                     output_mem_config),
                 output_mem_config),
             output_mem_config);
