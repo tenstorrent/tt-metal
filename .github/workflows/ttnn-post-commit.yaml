@@ -57,7 +57,6 @@ jobs:
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
-        os: ${{ inputs.os }}
         test-group:
           - name: ttnn group 1
             cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 1 -m "not disable_fast_runtime_mode"
@@ -98,7 +97,7 @@ jobs:
       - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
       - uses: actions/download-artifact@v4
         with:
-          name: eager-dist-${{ matrix.os }}-any
+          name: eager-dist-${{ inputs.os }}-any
       - name: Set ttnn fast runtime if exists in config
         if: ${{ matrix.test-group.fast_runtime_mode_off }}
         run: |
