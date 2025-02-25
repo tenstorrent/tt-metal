@@ -14,6 +14,7 @@
 
 #include "hal.hpp"
 #include "wormhole/wh_hal.hpp"
+#include "hw/inc/wormhole/eth_l1_address_map.h"
 
 // Reserved DRAM addresses
 // Host writes (4B value) to and reads from DRAM_BARRIER_BASE across all channels to ensure previous writes have been
@@ -57,7 +58,11 @@ void Hal::initialize_wh() {
     this->mem_alignments_[static_cast<std::size_t>(HalMemType::HOST)] = PCIE_ALIGNMENT;
 
     this->relocate_func_ = [](uint64_t addr, uint64_t local_init_addr) {
-        if ((addr & MEM_LOCAL_BASE) == MEM_LOCAL_BASE) {
+        auto erisc_iram_base = static_cast<uint64_t>(static_cast<uint32_t>(eth_iram_mem::address_map::ERISC_IRAM_BASE));
+        auto firmware_base = static_cast<uint64_t>(static_cast<uint32_t>(eth_l1_mem::address_map::FIRMWARE_BASE));
+        if (addr == erisc_iram_base && local_init_addr == firmware_base) {
+            return (uint64_t)eth_l1_mem::address_map::KERNEL_BASE;
+        } else if ((addr & MEM_LOCAL_BASE) == MEM_LOCAL_BASE) {
             // Move addresses in the local memory range to l1 (copied by kernel)
             return (addr & ~MEM_LOCAL_BASE) + local_init_addr;
         } else if ((addr & MEM_NCRISC_IRAM_BASE) == MEM_NCRISC_IRAM_BASE) {
