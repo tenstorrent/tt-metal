@@ -6,12 +6,15 @@
 
 INCLUDE "erisc-b0-memory.ld"
 
-REGION_ALIAS("REGION_APP_IRAM_CODE", ERISC_APP_IRAM_CODE)
+#if defined(ENABLE_IRAM)
+REGION_ALIAS("REGION_APP_KERNEL_CODE", ERISC_APP_IRAM_CODE)
+#else
 REGION_ALIAS("REGION_APP_KERNEL_CODE", ERISC_APP_KERNEL_CODE)
+#endif
 REGION_ALIAS("REGION_APP_KERNEL_DATA", ERISC_APP_KERNEL_DATA)
 REGION_ALIAS("REGION_LDM", LOCAL_DATA_MEM)
 
-__firmware_start = ORIGIN(REGION_APP_IRAM_CODE);
+__firmware_start = ORIGIN(REGION_APP_KERNEL_CODE);
 
 OUTPUT_FORMAT("elf32-littleriscv", "elf32-littleriscv",
 	      "elf32-littleriscv")
@@ -38,13 +41,13 @@ SECTIONS
     *(.text .stub .text.* .gnu.linkonce.t.*)
     /* .gnu.warning sections are handled specially by elf32.em.  */
     *(.gnu.warning)
-  } > REGION_APP_IRAM_CODE :text
+  } > REGION_APP_KERNEL_CODE :text
   .init.fini :
   {
     /* We don't use .init/.fini (this isn't the '90s), make sure there aren't any.  */
     KEEP (*(.init .fini))
     ASSERT(SIZEOF(.init.fini) == 0, ".init/.fini sections present");
-  } > REGION_APP_IRAM_CODE :text
+  } > REGION_APP_KERNEL_CODE :text
 
   .data : ALIGN(16) {
     *(.rodata .rodata.* .gnu.linkonce.r.*)

@@ -45,6 +45,77 @@ foreach(ARCH IN LISTS ARCHS)
     set(DEV_MEM_MAP "${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${ARCH}/dev_mem_map.h")
     set(HW_INCLUDES "${PROJECT_SOURCE_DIR}/tt_metal/hw/inc/${ARCH}")
     set(HW_OUTPUT_DIR "${PROJECT_SOURCE_DIR}/runtime/hw/toolchain/${ARCH}")
+
+    if("${ARCH}" STREQUAL "wormhole")
+        set(WH_MEMORY_FILE "${PROJECT_SOURCE_DIR}/tt_metal/hw/toolchain/erisc-b0-memory.ld")
+        set(WH_KERNEL_FILE "${PROJECT_SOURCE_DIR}/tt_metal/hw/toolchain/erisc-b0-kernel.ld.S")
+        set(WH_KERNEL_IRAM_FILE "${PROJECT_SOURCE_DIR}/tt_metal/hw/toolchain/erisc-b0-kernel_iram.ld.S")
+        set(WH_APP_FILE "${PROJECT_SOURCE_DIR}/tt_metal/hw/toolchain/erisc-b0-app.ld.S")
+        set(WH_APP_IRAM_FILE "${PROJECT_SOURCE_DIR}/tt_metal/hw/toolchain/erisc-b0-app_iram.ld.S")
+
+        add_custom_command(
+            OUTPUT
+                ${WH_KERNEL_FILE}
+            COMMAND
+                ${CMAKE_CXX_COMPILER} -I${HW_INCLUDES} -E -P -x c -o ${WH_KERNEL_FILE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/erisc-b0-kernel.ld
+            DEPENDS
+                ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/erisc-b0-kernel.ld
+                ${WH_MEMORY_FILE}
+            COMMENT "Preprocessing toolchain/erisc-b0-kernel.ld"
+            VERBATIM
+        )
+
+        add_custom_command(
+            OUTPUT
+                ${WH_KERNEL_IRAM_FILE}
+            COMMAND
+                ${CMAKE_CXX_COMPILER} -DENABLE_IRAM -I${HW_INCLUDES} -E -P -x c -o ${WH_KERNEL_IRAM_FILE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/erisc-b0-kernel.ld
+            DEPENDS
+                ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/erisc-b0-kernel.ld
+                ${WH_MEMORY_FILE}
+            COMMENT "Preprocessing toolchain/erisc-b0-kernel.ld with IRAM"
+            VERBATIM
+        )
+
+        add_custom_command(
+            OUTPUT
+                ${WH_APP_FILE}
+            COMMAND
+                ${CMAKE_CXX_COMPILER} -I${HW_INCLUDES} -E -P -x c -o ${WH_APP_FILE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/erisc-b0-app.ld
+            DEPENDS
+                ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/erisc-b0-app.ld
+                ${WH_MEMORY_FILE}
+            COMMENT "Preprocessing toolchain/erisc-b0-app.ld"
+            VERBATIM
+        )
+
+        add_custom_command(
+            OUTPUT
+                ${WH_APP_IRAM_FILE}
+            COMMAND
+                ${CMAKE_CXX_COMPILER} -DENABLE_IRAM -I${HW_INCLUDES} -E -P -x c -o ${WH_APP_IRAM_FILE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/erisc-b0-app.ld
+            DEPENDS
+                ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/erisc-b0-app.ld
+                ${WH_MEMORY_FILE}
+            COMMENT "Preprocessing toolchain/erisc-b0-app.ld with IRAM"
+            VERBATIM
+        )
+
+        list(
+            APPEND
+            PREPROCESSED_LD_FILES
+            ${WH_MEMORY_FILE}
+            ${WH_KERNEL_FILE}
+            ${WH_KERNEL_IRAM_FILE}
+            ${WH_APP_FILE}
+            ${WH_APP_IRAM_FILE}
+        )
+    endif()
+
     foreach(PROC IN LISTS PROCS)
         foreach(TYPE IN LISTS TYPES)
             set(HW_OUTPUT_FILE "${HW_OUTPUT_DIR}/${TYPE}_${PROC}.ld")
