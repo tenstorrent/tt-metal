@@ -217,12 +217,7 @@ def from_torch(
         tensor = ttnn.Tensor(tensor, dtype)
 
     if mesh_mapper:
-        if isinstance(mesh_mapper, ttnn.MeshToTensor):
-            shards = mesh_mapper.map(ttnn.to_torch(tensor))
-            tensor = ttnn.Tensor(shards, dtype, mesh_mapper.config())
-        else:
-            # currently failing - I think this path would be easier to do than calling map and then aggregate unless I add borrowedstorage to aggregate though (non-bfloats end up with that type on tensor creation)
-            tensor = ttnn.distribute_tensor(tensor, mesh_mapper)
+        tensor = ttnn.distribute_tensor(tensor, mesh_mapper, device)
 
     if tile is not None:
         tensor = ttnn.Tensor(tensor, dtype, {}, tile)

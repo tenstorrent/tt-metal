@@ -55,7 +55,7 @@ void py_module_types(py::module& module) {
     py::class_<ShardTensorTo2dMesh, TensorToMesh, std::unique_ptr<ShardTensorTo2dMesh>>(module, "ShardTensorTo2dMesh");
     py::class_<ConcatMeshToTensor, MeshToTensor, std::unique_ptr<ConcatMeshToTensor>>(module, "CppConcatMeshToTensor");
     py::class_<Concat2dMeshToTensor, MeshToTensor, std::unique_ptr<Concat2dMeshToTensor>>(
-        module, "Concat2dMeshToTensor");
+        module, "CppConcat2dMeshToTensor");
 
     py::class_<ReplicateTensor>(module, "ReplicateTensor");
     py::class_<ShardTensor>(module, "ShardTensor");
@@ -403,7 +403,7 @@ void py_module(py::module& module) {
            )doc");
 
     auto py_tensor_to_mesh = static_cast<py::class_<TensorToMesh, ConcreteTensorToMesh, std::unique_ptr<TensorToMesh>>>(
-        module.attr("CppTensorToMesh"));
+        module.attr("TensorToMesh"));
     py_tensor_to_mesh
         .def(py::init([]() -> std::unique_ptr<TensorToMesh> { return std::make_unique<ConcreteTensorToMesh>(); }))
         .def("map", &TensorToMesh::map)
@@ -492,7 +492,7 @@ void py_module(py::module& module) {
 
     auto py_concat_2d_mesh_to_tensor =
         static_cast<py::class_<Concat2dMeshToTensor, std::unique_ptr<Concat2dMeshToTensor>>>(
-            module.attr("Concat2dMeshToTensor"));
+            module.attr("CppConcat2dMeshToTensor"));
     py_concat_2d_mesh_to_tensor
         .def(
             py::init(
@@ -724,7 +724,7 @@ void py_module(py::module& module) {
         "distribute_tensor",
         [](const Tensor& tensor,
            const TensorToMesh& mapper,
-           std::optional<std::reference_wrapper<MeshDevice>> mesh_device) -> Tensor {
+           std::optional<std::reference_wrapper<MeshDevice>> mesh_device = std::nullopt) -> Tensor {
             Tensor cpu_tensor;
             if (tensor.storage_type() == StorageType::MULTI_DEVICE_HOST) {
                 cpu_tensor = tt::tt_metal::tensor_impl::to_host_mesh_tensor_wrapper(tensor, true);
@@ -736,11 +736,16 @@ void py_module(py::module& module) {
         },
         py::arg("tensor"),
         py::arg("mapper"),
-        py::arg("mesh_device"));
+        py::arg("mesh_device") = py::none());
     module.def(
         "aggregate_tensor",
         [](const Tensor& tensor, const MeshToTensor& composer) -> Tensor {
-            Tensor cpu_tensor = from_device(tensor);
+            Tensor cpu_tensor;
+            if (tensor.storage_type() == StorageType::MULTI_DEVICE_HOST) {
+                cpu_tensor = tt::tt_metal::tensor_impl::to_host_mesh_tensor_wrapper(tensor, true);
+            } else {
+                cpu_tensor = from_device(tensor);
+            }
             return aggregate_tensor(cpu_tensor, composer);
         },
         py::arg("tensor"),
@@ -748,7 +753,13 @@ void py_module(py::module& module) {
     module.def(
         "aggregate_tensor",
         [](const std::vector<Tensor>& tensors, const MeshToTensor& composer) -> Tensor {
-            Tensor cpu_tensor = from_device(aggregate_as_tensor(tensors, AllGatherTensor{}));
+            Tensor aggregated_tensor = from_device(aggregate_as_tensor(tensors, AllGatherTensor{}));
+            Tensor cpu_tensor;
+            if (aggregated_tensor.storage_type() == StorageType::MULTI_DEVICE_HOST) {
+                cpu_tensor = tt::tt_metal::tensor_impl::to_host_mesh_tensor_wrapper(aggregated_tensor, true);
+            } else {
+                cpu_tensor = from_device(aggregated_tensor);
+            }
             return aggregate_tensor(cpu_tensor, composer);
         },
         py::arg("tensor"),
