@@ -11,7 +11,7 @@ namespace tt::tt_metal::distributed {
 class MeshEvent {
 public:
     MeshDevice* device = nullptr;
-    LogicalDeviceRange device_range = LogicalDeviceRange({0, 0});
+    MeshCoordinateRange device_range = MeshCoordinateRange(MeshCoordinate(0, 0), MeshCoordinate(0, 0));
     uint32_t cq_id = 0;
     uint32_t event_id = 0;
 };

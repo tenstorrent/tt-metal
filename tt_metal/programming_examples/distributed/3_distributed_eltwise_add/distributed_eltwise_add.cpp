@@ -128,12 +128,9 @@ int main(int argc, char** argv) {
 
     // Create mesh workload and broadcast the program across all devices
     auto mesh_workload = CreateMeshWorkload();
-    auto device_range = LogicalDeviceRange{
-        DeviceCoord{0, 0} /* start_coord */, DeviceCoord{mesh_device->num_cols() - 1, mesh_device->num_rows() - 1}
-        /* end_coord */
-    };
+    auto device_range = MeshCoordinateRange(mesh_device->shape());
 
-    AddProgramToMeshWorkload(mesh_workload, program, device_range);
+    AddProgramToMeshWorkload(mesh_workload, std::move(program), device_range);
     EnqueueMeshWorkload(cq, mesh_workload, false /* blocking */);
 
     // Read back results

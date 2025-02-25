@@ -45,10 +45,10 @@ private:
     std::vector<std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>> kernels_;
     std::vector<std::vector<std::shared_ptr<KernelGroup>>> kernel_groups_;
     std::vector<Semaphore> semaphores_;
-    std::unordered_map<LogicalDeviceRange, Program> programs_;
-    std::vector<LogicalDeviceRange> logical_device_ranges_;
+    std::unordered_map<MeshCoordinateRange, Program> programs_;
+    std::vector<MeshCoordinateRange> logical_device_ranges_;
     bool finalized_ = false;
-    std::unordered_map<LogicalDeviceRange, std::unordered_map<KernelHandle, RuntimeArgsPerCore>> runtime_args_;
+    std::unordered_map<MeshCoordinateRange, std::unordered_map<KernelHandle, RuntimeArgsPerCore>> runtime_args_;
     MeshCommandQueue* last_used_command_queue_ = nullptr;
 
     template <typename T>
@@ -61,12 +61,11 @@ private:
 public:
     // Main User-Facing API building blocks
     MeshWorkload();
-    void add_program(const LogicalDeviceRange& device_range, Program&& program);
-    const std::unordered_map<LogicalDeviceRange, Program>& get_programs() const { return this->programs_; }
-    const std::vector<LogicalDeviceRange> get_logical_device_ranges() const { return this->logical_device_ranges_; }
-    Program& get_program_on_device_range(const LogicalDeviceRange& device_range) {
-        return this->programs_.at(device_range);
-    }
+    void add_program(const MeshCoordinateRange& device_range, Program&& program);
+    const std::unordered_map<MeshCoordinateRange, Program>& get_programs() const { return programs_; }
+    const std::vector<MeshCoordinateRange> get_logical_device_ranges() const { return logical_device_ranges_; }
+    Program& get_program_on_device_range(const MeshCoordinateRange& device_range) { return programs_.at(device_range); }
+
     // For testing purposes only
     void set_last_used_command_queue_for_testing(MeshCommandQueue* mesh_cq);
     MeshCommandQueue* get_last_used_command_queue() const;

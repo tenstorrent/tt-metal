@@ -10,6 +10,15 @@
 #include "tt_metal/distributed/mesh_workload_utils.hpp"
 
 namespace tt::tt_metal::distributed {
+namespace {
+
+// TODO: Consider how this can be extended to ND.
+uint32_t encode_device_range(const MeshCoordinate& coord) {
+    TT_FATAL(coord.dims() == 2, "Expected 2D coordinate: {}", coord);
+    return (coord[0] << 24) | (coord[1] << 16);
+}
+
+}  // namespace
 
 MeshWorkload::MeshWorkload() {
     // A MeshWorkload tracks maintains its own handles to kernels across all
@@ -18,7 +27,7 @@ MeshWorkload::MeshWorkload() {
     kernels_.resize(hal.get_programmable_core_type_count());
 }
 
-void MeshWorkload::add_program(const LogicalDeviceRange& device_range, Program&& program) {
+void MeshWorkload::add_program(const MeshCoordinateRange& device_range, Program&& program) {
     // Add a program to a MeshWorkload and tie it a specific logical device range
     programs_[device_range] = std::move(program);
     logical_device_ranges_.push_back(device_range);
@@ -73,7 +82,6 @@ void MeshWorkload::load_binaries(MeshCommandQueue& mesh_cq) {
                 MeshBuffer::create(global_kernel_bin_buf_config, device_local_kernel_bin_buf_config, mesh_device);
             // Iterate over the sub-grids and EnqueueWriteMeshBuffer to each sub-grid that runs an individual program
             for (auto& [device_range, program] : this->programs_) {
-                auto& grid_start = device_range.start_coord;
                 std::size_t kernel_bin_size = program.get_program_transfer_info().binary_data.size() * sizeof(uint32_t);
                 global_kernel_bin_buf_config.size = kernel_bin_size;
                 auto kernel_bin_buf_view = MeshBuffer::create(
@@ -155,9 +163,9 @@ bool MeshWorkload::kernel_binary_always_stored_in_ringbuffer() {
 std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& MeshWorkload::get_kernels(
     uint32_t programmable_core_type_index) {
     // Get all kernels across all programs in the MeshWorkload
-    if (not kernels_.at(programmable_core_type_index).size()) {
+    if (kernels_.at(programmable_core_type_index).empty()) {
         for (auto& [device_range, program] : programs_) {
-            uint32_t device_range_handle = (device_range.start_coord.y << 24) | (device_range.start_coord.x << 16);
+            uint32_t device_range_handle = encode_device_range(device_range.start_coord());
             for (const auto& kernel : program.get_kernels(programmable_core_type_index)) {
                 KernelHandle handle = (device_range_handle | kernel.first);
                 kernels_.at(programmable_core_type_index).insert({handle, kernel.second});
@@ -169,9 +177,9 @@ std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& MeshWorkload::get_ker
 
 std::vector<std::shared_ptr<KernelGroup>>& MeshWorkload::get_kernel_groups(uint32_t programmable_core_type_index) {
     // Get all kernel groups across all programs in the MeshWorkload
-    if (not kernel_groups_.at(programmable_core_type_index).size()) {
+    if (kernel_groups_.at(programmable_core_type_index).empty()) {
         for (auto& [device_range, program] : programs_) {
-            uint32_t device_range_handle = (device_range.start_coord.y << 24) | (device_range.start_coord.x << 16);
+            uint32_t device_range_handle = encode_device_range(device_range.start_coord());
             for (auto& kg : program.get_kernel_groups(programmable_core_type_index)) {
                 for (auto& optional_kernel_id : kg->kernel_ids) {
                     if (optional_kernel_id.has_value()) {
@@ -216,8 +224,7 @@ std::unordered_set<SubDeviceId> MeshWorkload::determine_sub_device_ids(MeshDevic
     // Get the sub device ids for all program across all devices in the Workload
     std::unordered_set<SubDeviceId> sub_devices_;
     for (auto& [device_range, program] : programs_) {
-        auto grid_start = device_range.start_coord;
-        IDevice* device = mesh_device->get_device(grid_start.y, grid_start.x);
+        IDevice* device = mesh_device->get_device(device_range.start_coord());
         auto sub_devs_for_program = program.determine_sub_device_ids(mesh_device);
         for (auto& sub_dev : sub_devs_for_program) {
             sub_devices_.insert(sub_dev);
