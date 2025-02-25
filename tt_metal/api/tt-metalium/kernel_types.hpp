@@ -36,7 +36,7 @@ struct DataMovementConfig {
     // This file is then automatically included in the generated compiled kernel files
     std::map<std::string, std::string> defines;
     // Set the compiler and linker optimization level
-    KernelBuildOptLevel opt_level = KernelBuildOptLevel::Os;
+    KernelBuildOptLevel opt_level = KernelBuildOptLevel::O2;
 };
 
 struct ReaderDataMovementConfig : public DataMovementConfig {
