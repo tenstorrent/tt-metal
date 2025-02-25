@@ -983,7 +983,7 @@ conv_op_l1_usage conv2d::calculate_L1_usage(
 
         // CB 24
         uint32_t matmul_partial_cb_24_size = partials_block_num_bytes;
-        if (interm_dtype == conv_config.dtype) {
+        if (untilize_out == false && interm_dtype == conv_config.dtype) {
             matmul_partial_cb_24_size = 0;
         } else {
             tt::log_debug(tt::LogOp, "CB24 Size: {}", matmul_partial_cb_24_size);
