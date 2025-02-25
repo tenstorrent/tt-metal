@@ -4,6 +4,7 @@
 
 #include "debug/dprint_tensix_pack.h"
 #include "debug/dprint_tensix_unpack.h"
+#include "ckernel.h"
 
 #include <array>
 
@@ -161,7 +162,7 @@ void generate_pack_edge_offset(ckernel::packer::pck_edge_offset_t& edge) {
 }
 
 void generate_pack_counters(ckernel::packer::pack_counters_t& counter) {
-    counter.pack_per_xy_plane = 0;
+    counter.pack_per_xy_plane = 4;
     counter.pack_reads_per_xy_plane = 8;
     counter.pack_xys_per_til = 2;
     counter.pack_yz_transposed = 0;
@@ -240,7 +241,9 @@ void MAIN {
             ckernel::unpacker::alu_config_u alu_config_original;
             alu_config_original.f = ckernel::unpacker::read_alu_config();
             write_alu_config(cfg, ALU_ROUNDING_MODE_Fpu_srnd_en_ADDR32, alu_config);
+            wait(100);
             dprint_tensix_alu_config();
+            wait(100);
             write_alu_config(cfg, ALU_ROUNDING_MODE_Fpu_srnd_en_ADDR32, alu_config_original);
             break;
 #endif
@@ -252,7 +255,9 @@ void MAIN {
             tile_descriptor_vec = ckernel::unpacker::read_unpack_tile_descriptor();
             write_unpack_tile_descriptor(cfg, THCON_SEC0_REG0_TileDescriptor_ADDR32, 4, tile_descriptor);
             write_unpack_tile_descriptor(cfg, THCON_SEC1_REG0_TileDescriptor_ADDR32, 4, tile_descriptor);
+            wait(100);
             dprint_tensix_unpack_tile_descriptor();
+            wait(100);
             tile_descriptor.f = tile_descriptor_vec[0];
             write_unpack_tile_descriptor(cfg, THCON_SEC0_REG0_TileDescriptor_ADDR32, 4, tile_descriptor);
             tile_descriptor.f = tile_descriptor_vec[1];
@@ -270,7 +275,9 @@ void MAIN {
             unpack_config_vec = ckernel::unpacker::read_unpack_config();
             write_unpack_config(cfg, THCON_SEC0_REG2_Out_data_format_ADDR32, num_of_words_unpack_config, unpack_config);
             write_unpack_config(cfg, THCON_SEC1_REG2_Out_data_format_ADDR32, num_of_words_unpack_config, unpack_config);
+            wait(100);
             dprint_tensix_unpack_config();
+            wait(100);
             unpack_config.f = unpack_config_vec[0];
             write_unpack_config(cfg, THCON_SEC0_REG2_Out_data_format_ADDR32, num_of_words_unpack_config, unpack_config);
             unpack_config.f = unpack_config_vec[1];
@@ -296,7 +303,9 @@ void MAIN {
             write_pack_config(
                 cfg, THCON_SEC1_REG8_Row_start_section_size_ADDR32, num_of_words_pack_config, pack_config);
 #endif
+            wait(100);
             dprint_tensix_pack_config();
+            wait(100);
             pack_config.f = pack_config_vec[0];
             write_pack_config(
                 cfg, THCON_SEC0_REG1_Row_start_section_size_ADDR32, num_of_words_pack_config, pack_config);
@@ -330,7 +339,9 @@ void MAIN {
             ckernel::packer::dest_rd_ctrl_u dest_original;
             dest_original.f = ckernel::packer::read_dest_rd_ctrl();
             write_dest_rd_ctrl(cfg, PCK_DEST_RD_CTRL_Read_32b_data_ADDR32, dest);
+            wait(100);
             dprint_tensix_dest_rd_ctrl();
+            wait(100);
             write_dest_rd_ctrl(cfg, PCK_DEST_RD_CTRL_Read_32b_data_ADDR32, dest_original);
             break;
 #endif
@@ -345,7 +356,9 @@ void MAIN {
             write_pack_edge_offset(cfg, PCK_EDGE_OFFSET_SEC2_mask_ADDR32, edge);
             write_pack_edge_offset(cfg, PCK_EDGE_OFFSET_SEC3_mask_ADDR32, edge);
 #endif
+            wait(100);
             dprint_tensix_pack_edge_offset();
+            wait(100);
             edge.f = edge_vec[0];
             write_pack_edge_offset(cfg, PCK_EDGE_OFFSET_SEC0_mask_ADDR32, edge);
 #if defined(ARCH_GRAYSKULL) or defined(ARCH_WORMHOLE)
@@ -368,7 +381,9 @@ void MAIN {
             write_pack_counters(cfg, PACK_COUNTERS_SEC2_pack_per_xy_plane_ADDR32, counter);
             write_pack_counters(cfg, PACK_COUNTERS_SEC3_pack_per_xy_plane_ADDR32, counter);
 #endif
+            wait(100);
             dprint_tensix_pack_counters();
+            wait(100);
             counter.f = counter_vec[0];
             write_pack_counters(cfg, PACK_COUNTERS_SEC0_pack_per_xy_plane_ADDR32, counter);
 #if defined(ARCH_GRAYSKULL) or defined(ARCH_WORMHOLE)
