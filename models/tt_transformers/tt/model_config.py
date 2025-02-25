@@ -157,13 +157,15 @@ class ModelArgs:
         HF_MODEL = os.getenv("HF_MODEL")
         assert not (LLAMA_DIR and HF_MODEL), "Only one of LLAMA_DIR or HF_MODEL should be set"
         if LLAMA_DIR:
-            if any([os.getenv("LLAMA_CKPT_DIR"), os.getenv("LLAMA_TOKENIZER_PATH"), os.getenv("TT_CACHE_PATH")]):
+            if any([os.getenv("LLAMA_CKPT_DIR"), os.getenv("LLAMA_TOKENIZER_PATH")]):
                 logger.warning(
-                    "LLAMA_DIR is set and will override LLAMA_CKPT_DIR, LLAMA_TOKENIZER_PATH, and TT_CACHE_PATH"
+                    "LLAMA_DIR will override LLAMA_CKPT_DIR and LLAMA_TOKENIZER_PATH"
                 )
             self.CKPT_DIR = LLAMA_DIR
             self.TOKENIZER_PATH = LLAMA_DIR
-            self.CACHE_PATH = os.path.join(LLAMA_DIR, self.device_name)
+            self.CACHE_PATH = os.getenv("TT_CACHE_PATH")
+            if not self.CACHE_PATH:
+                self.CACHE_PATH = os.path.join(LLAMA_DIR, self.device_name)
             self.model_name = os.path.basename(LLAMA_DIR)  # May be overridden by config
         elif HF_MODEL:
             self.CKPT_DIR = HF_MODEL
@@ -184,10 +186,6 @@ class ModelArgs:
                 self.CKPT_DIR
             ), f"Checkpoint directory {self.CKPT_DIR} does not exist, please set LLAMA_DIR=... or LLAMA_CKPT_DIR=..."
             os.makedirs(self.CACHE_PATH, exist_ok=True)
-            # Check if weights exist in the specified folder. If not warn the user to run the download and untar script.
-        #            assert os.path.isfile(
-        #                self.CKPT_DIR + "/consolidated.00.pth"
-        #            ), f"weights consolidated.00.pth file does not exist. Please use the script `models/tt_transformers/scripts/get_weights.py` to download and untar the weights."
 
         logger.info(f"Checkpoint directory: {self.CKPT_DIR}")
         logger.info(f"Tokenizer file: {self.TOKENIZER_PATH + '/tokenizer.model'}")
