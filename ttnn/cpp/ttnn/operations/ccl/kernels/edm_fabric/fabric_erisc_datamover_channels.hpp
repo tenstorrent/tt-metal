@@ -164,7 +164,8 @@ struct EdmChannelWorkerInterface {
     }
 
     FORCE_INLINE void update_worker_copy_of_read_ptr(BufferPtr new_ptr_val) {
-        noc_inline_dw_write(this->cached_worker_semaphore_address, new_ptr_val, this->edm_noc_cmd_buf);
+        // for producer-sender ack path use the other NoC, so they can be made stateful
+        noc_inline_dw_write(this->cached_worker_semaphore_address, new_ptr_val, 0xF, this->edm_noc_cmd_buf, 1-noc_index);
     }
 
     // Connection management methods
@@ -184,10 +185,12 @@ struct EdmChannelWorkerInterface {
 
     FORCE_INLINE void cache_producer_noc_addr() {
         auto const &worker_info = *worker_location_info_ptr;
+        // for producer-sender ack path use the other NoC, so they can be made stateful
         uint64_t worker_semaphore_address = get_noc_addr(
             (uint32_t)worker_info.worker_xy.x,
             (uint32_t)worker_info.worker_xy.y,
-            worker_info.worker_semaphore_address);
+            worker_info.worker_semaphore_address,
+            1-noc_index);
         this->cached_worker_semaphore_address = worker_semaphore_address;
     }
 
