@@ -137,7 +137,7 @@ const std::vector<std::string> field_names_unpack_tile_descriptor_grayskull = {
     "blobs_y_start",
     "digest_type",
     "digest_size"};
-const std::vector<uint32_t> field_values_unpack_tile_descriptor_grayskull = {5, 1, 2, 10, 7, 2, 4, 8, 16, 32, 0, 0};
+const std::vector<uint32_t> field_values_unpack_tile_descriptor_grayskull = {5, 1, 0, 10, 7, 2, 4, 8, 16, 32, 0, 0};
 
 // UNPACK CONFIG
 const std::vector<std::string> field_names_unpack_config_grayskull = {

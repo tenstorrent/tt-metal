@@ -251,7 +251,7 @@ inline void dprint_tensix_unpack_config_helper(const ckernel::unpacker::unpack_c
     dprint_tensix_unpack_config_reserved_0(config);
     DPRINT << "upsample_rate: ";
     dprint_tensix_unpack_config_upsample_rate(config);
-    DPRINT << "upsamle_and_interlave: ";
+    DPRINT << "upsample_and_interlave: ";
     dprint_tensix_unpack_config_upsample_and_interlave(config);
     DPRINT << "shift_amount: ";
     dprint_tensix_unpack_config_shift_amount(config);
