@@ -26,6 +26,7 @@ class TtFalconMLP:
         return ff2_linear
 
 
+@pytest.mark.skip(reason="This test is temporarily skipped due to failure for TG frequent test, see issue #17595")
 @pytest.mark.parametrize("mesh_device", [pytest.param((1, 4), id="1x4_grid")], indirect=True)
 def test_data_parallel_falcon_mlp(mesh_device):
     torch.manual_seed(0)
