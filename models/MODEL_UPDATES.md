@@ -4,6 +4,19 @@
 >
 > Please refer to the front-page [README](../README.md) for the latest verified release for each model.
 
+## February 24, 2025
+
+### [DeepSeek R1 Distill Llama 3.3 70B](demos/llama3)
+- Added support for DeepSeek R1 Distill Llama 3.3 70B on T3000.
+
+### [Qwen 2.5](demos/llama3)
+- Added support for Qwen2.5-7B on N300 and Qwen2.5-72B on T3000.
+
+### [Llama 3.1/3.2](demos/llama3)
+> **Note:** This feature is available as of release [v0.56.0-rc37](https://github.com/tenstorrent/tt-metal/tree/v0.56.0-rc37)
+- Overhauled the demo script (now called [simple_text_demo.py](demos/llama3/demo/simple_text_demo.py)) to use a simplified causal generation interface.
+- Added support for custom input argument overrides to the demo.
+
 ## February 10, 2025
 
 ### [Llama 3.1/3.2](demos/llama3)
