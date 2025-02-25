@@ -13,6 +13,7 @@
 #include "dispatch_core_manager.hpp"
 #include "buffer.hpp"
 #include "profiler.hpp"
+#include "llrt/tt_cluster.hpp"
 
 namespace tt::tt_metal {
 inline namespace v0 {
@@ -23,15 +24,13 @@ class IDevice;
 
 namespace detail {
 
-enum class FabricSetting { DISABLED = 0, FABRIC = 1, EDM = 2, DEFAULT = 3 };
-
 bool DispatchStateCheck(bool isFastDispatch);
 
 bool InWorkerThread();
 inline bool InMainThread() { return not InWorkerThread(); }
 
-// Call before CreateDevices to enable fabric, which uses all ethernet cores and some tensix cores
-void InitializeFabricSetting(detail::FabricSetting fabric_setting);
+// Call before CreateDevices to enable fabric, which uses all free ethernet cores
+void InitializeFabricConfig(FabricConfig fabric_config);
 
 std::map<chip_id_t, IDevice*> CreateDevices(
     // TODO: delete this in favour of DevicePool
@@ -165,7 +164,7 @@ void CompileProgram(IDevice* device, Program& program, bool fd_bootloader_mode =
  * | program             | The program holding the runtime args                                   | const Program & | |
  * Yes      |
  */
-void WriteRuntimeArgsToDevice(IDevice* device, Program& program);
+void WriteRuntimeArgsToDevice(IDevice* device, Program& program, bool fd_bootloader_mode = false);
 
 // Configures a given device with a given program.
 // - Loads all kernel binaries into L1s of assigned Tensix cores
