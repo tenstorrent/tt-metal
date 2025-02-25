@@ -199,5 +199,7 @@ void MAIN {
             weight_has_value,
             bias_has_value);
     }
+
+    cb_pop_front(cb_eps, onetile);
 }
 }  // namespace NAMESPACE

@@ -66,6 +66,8 @@ ALWI void batchnorm_bcast_tiles(
 
     add_binary_tile_init();
     rsqrt_tile_init();
+    tile_regs_acquire();
+    tile_regs_wait();
     copy_tile_to_dst_init_short_with_dt(cb_eps, cb_batch_var);
     for (uint32_t i = 0; i < onetile; ++i) {
         copy_tile(cb_batch_var, i, i * 2);
@@ -76,9 +78,8 @@ ALWI void batchnorm_bcast_tiles(
 
         add_binary_tile(i * 2, i * 2 + 1);
         rsqrt_tile(i * 2);
-        tile_regs_commit();
 
-        tile_regs_wait();
+        tile_regs_commit();
         pack_tile(i * 2, cb_den);
     }
     tile_regs_release();
@@ -238,5 +239,7 @@ void MAIN {
             weight_has_value,
             bias_has_value);
     }
+
+    cb_pop_front(cb_eps, onetile);
 }
 }  // namespace NAMESPACE
