@@ -31,7 +31,6 @@ try:
 except KeyError:
     print("models.experimental.yolov11.reference.yolov11 not found.")
 
-
 def save_yolo_predictions_by_model(result, save_dir, image_path, model_name):
     model_save_dir = os.path.join(save_dir, model_name)
     os.makedirs(model_save_dir, exist_ok=True)
@@ -60,11 +59,8 @@ def save_yolo_predictions_by_model(result, save_dir, image_path, model_name):
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_name = f"prediction_{timestamp}.jpg"
     output_path = os.path.join(model_save_dir, output_name)
-
     cv2.imwrite(output_path, image)
-
     print(f"Predictions saved to {output_path}")
-
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize(

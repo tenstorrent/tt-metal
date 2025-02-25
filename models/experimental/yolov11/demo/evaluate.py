@@ -11,16 +11,12 @@ from datetime import datetime
 import ttnn
 from functools import partial
 from loguru import logger
-from pdb import set_trace as bp
-
 import sys
 from tqdm import tqdm
 from models.utility_functions import disable_persistent_kernel_cache
-
 import pytest
 from models.experimental.yolov11.demo.demo_utils import LoadImages, preprocess, postprocess
 from torch import nn
-
 import numpy as np
 import shutil
 from sklearn.metrics import precision_recall_curve, average_precision_score
@@ -356,9 +352,6 @@ def evaluation(
 
     print(f"Mean Average Precision for val 50-95 (mAPval 50-95): {mAPval50_95_value:.4f}")
 
-
-
-
 @pytest.mark.parametrize(
     "model_type",
     [
@@ -438,4 +431,3 @@ def test_yolo11n(device, model_type, res, reset_seeds):
         save_dir=save_dir,
         model_name=model_name,
     )
-
