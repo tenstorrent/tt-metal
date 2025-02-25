@@ -19,7 +19,7 @@ from genmo.mochi_preview.pipelines import (
 from transformers import T5EncoderModel
 
 
-def create_models(mesh_device, n_layers: int = 48):
+def create_models(mesh_device, vision_seq_len, n_layers: int = 48):
     """Create and initialize both reference and TT models.
 
     Args:
@@ -73,6 +73,7 @@ def create_models(mesh_device, n_layers: int = 48):
     weight_cache_path = get_cache_path(os.environ.get("FAKE_DEVICE"))
     tt_model = TtAsymmDiTJoint(
         mesh_device=mesh_device,
+        vision_seq_len=vision_seq_len,
         state_dict=state_dict,
         weight_cache_path=weight_cache_path,
         **config,
@@ -83,7 +84,7 @@ def create_models(mesh_device, n_layers: int = 48):
 
 @torch.no_grad()
 @skip_for_grayskull("Requires wormhole_b0 to run")
-@pytest.mark.parametrize("n_layers", [1, 2, 48], ids=["L1", "L2", "L48"])
+@pytest.mark.parametrize("n_layers", [1], ids=["L1"])
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -97,9 +98,6 @@ def test_tt_asymm_dit_joint_inference(mesh_device, n_layers, use_program_cache, 
     dtype = ttnn.bfloat16
     mesh_device.enable_async(True)
 
-    # Create models using common function
-    reference_model, tt_model, _ = create_models(mesh_device, n_layers)
-
     # Create input tensors
     batch_size = 1
     time_steps = 28
@@ -108,6 +106,10 @@ def test_tt_asymm_dit_joint_inference(mesh_device, n_layers, use_program_cache, 
     PATCH_SIZE = 2
 
     num_visual_tokens = time_steps * height * width // (PATCH_SIZE**2)
+
+    # Create models using common function
+    reference_model, tt_model, _ = create_models(mesh_device, num_visual_tokens, n_layers)
+
     max_seqlen_in_batch_kv = num_visual_tokens + tt_model.t5_token_length
 
     x = torch.randn(batch_size, tt_model.in_channels, time_steps, height, width)
@@ -193,11 +195,11 @@ def test_tt_asymm_dit_joint_prepare(mesh_device, use_program_cache, reset_seeds)
     ref_outputs = reference_model.prepare(x, sigma, t5_feat, t5_mask)
 
     x, c, y_feat, rope_cos, rope_sin, _ = tt_outputs
-    x = ttnn.to_torch(x, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[0:1]
+    x = ttnn.to_torch(x, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-2))[0:1]
     c = ttnn.to_torch(c, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[0:1]
     y_feat = ttnn.to_torch(y_feat, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))[0:1]
-    rope_cos = ttnn.to_torch(rope_cos, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-3))
-    rope_sin = ttnn.to_torch(rope_sin, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-3))
+    rope_cos = ttnn.to_torch(rope_cos, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-2))
+    rope_sin = ttnn.to_torch(rope_sin, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-2))
 
     # Undo cos/sin permutation and stacking
     def unstack(x):

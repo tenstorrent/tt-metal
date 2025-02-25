@@ -263,6 +263,4 @@ class AsymmetricJointBlock(LightweightModule):
                 y_1BLY = residual_tanh_gated_rmsnorm(y_1BLY, y_attn_1BLY, gate_msa_y_B11Y)
                 y_1BLY = self.ff_block_y(y_1BLY, scale_mlp_y_B11Y, gate_mlp_y_B11Y)
 
-        x_1BNX = ttnn.all_gather(x_1BNX, dim=2)
-
         return x_1BNX, y_1BLY

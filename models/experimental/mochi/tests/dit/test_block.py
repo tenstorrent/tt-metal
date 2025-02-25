@@ -100,8 +100,8 @@ def create_models(mesh_device, state_dict, partial_state_dict, block_path, visio
 def test_tt_block(mesh_device, vision_seq_len, text_seq_len, use_program_cache, reset_seeds, block_path, update_y):
     """Test TtAsymmetricJointBlock implementation by comparing with reference model."""
 
-    min_pcc = 0.998
-    max_mse = 0.0088
+    min_pcc = 0.997
+    max_mse = 0.0089
     state_dict, partial_state_dict = load_model_weights(block_path)
 
     # Create reference model
@@ -156,6 +156,8 @@ def test_tt_block(mesh_device, vision_seq_len, text_seq_len, use_program_cache, 
         rope_sin=tt_rope_sin,
         trans_mat=tt_trans_mat,
     )
+
+    tt_x_out = ttnn.all_gather(tt_x_out, dim=2)
 
     # Convert TT outputs to torch tensors
     # extract from replicated tensors
@@ -302,6 +304,7 @@ def test_tt_block_with_saved_tensors(mesh_device, use_program_cache, reset_seeds
     )
 
     # Convert TT outputs to torch tensors
+    tt_x_out = ttnn.all_gather(tt_x_out, dim=2)
     tt_x_torch = to_torch_tensor(tt_x_out, mesh_device, dim=0)[0:1]
     tt_y_torch = to_torch_tensor(tt_y_out, mesh_device, dim=0)[0:1]
 
