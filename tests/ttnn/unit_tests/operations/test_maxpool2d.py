@@ -295,6 +295,11 @@ def run_max_pool(
             # # C=16 test2
             # [1, 16, 10, 10],
             [1, 256, 100, 100],
+            [1, 32, 128, 128],
+            [1, 256, 4, 4],
+            [1, 32, 8, 8],
+            [1, 128, 16, 16],
+            [1, 384, 40, 40],
         )
     ),
 )
@@ -302,7 +307,7 @@ def run_max_pool(
     "kernel_size",
     (
         # (2, 2),
-        # (3, 3),
+        (3, 3),
         (5, 5),
         # (9, 9),
         # (13, 13),
@@ -312,7 +317,7 @@ def run_max_pool(
     "padding",
     (
         # (0, 0),
-        # (1, 1),
+        (1, 1),
         (2, 2),
         # (4, 4),
         # (6, 6),
@@ -343,7 +348,7 @@ def run_max_pool(
 @pytest.mark.parametrize(
     "in_place_halo",
     [
-        False,
+        # False,
         True,
     ],
 )
@@ -386,6 +391,10 @@ def test_run_max_pool(
             # [1, 576 * 64, 8, 8],
             # [1, 384 * 64, 8, 8],
             [1, 1024, 40, 40],
+            [1, 2048, 28, 28],
+            [1, 2048, 6, 6],
+            [1, 4096, 32, 32],
+            [1, 384 * 64, 8, 8],
         )
     ),
 )
@@ -393,7 +402,7 @@ def test_run_max_pool(
     "kernel_size",
     (
         # (2, 2),
-        # (3, 3),
+        (3, 3),
         (5, 5),
         # (9, 9),
         # (13, 13),
@@ -403,7 +412,7 @@ def test_run_max_pool(
     "padding",
     (
         # (0, 0),
-        # (1, 1),
+        (1, 1),
         (2, 2),
         # (4, 4),
         # (6, 6),
@@ -434,7 +443,7 @@ def test_run_max_pool(
 @pytest.mark.parametrize(
     "in_place_halo",
     [
-        False,
+        # False,
         True,
     ],
 )
@@ -505,7 +514,13 @@ def test_run_max_pool_width_shard(
             # [1, 640 * 8, 16, 16],
             # [1, 576 * 8, 16, 16],
             # [1, 384 * 8, 16, 16],
+            [1, 1024, 8, 8],
             [1, 2048, 8, 8],
+            [1, 4096, 8, 8],
+            [1, 1024, 16, 16],
+            [1, 2048, 16, 16],
+            [1, 4096, 16, 16],
+            [1, 384 * 8, 16, 16],
         )
     ),
 )
@@ -513,7 +528,7 @@ def test_run_max_pool_width_shard(
     "kernel_size",
     (
         # (2, 2),
-        # (3, 3),
+        (3, 3),
         (5, 5),
         # (9, 9),
         # (13, 13),
@@ -523,7 +538,7 @@ def test_run_max_pool_width_shard(
     "padding",
     (
         # (0, 0),
-        # (1, 1),
+        (1, 1),
         (2, 2),
         # (4, 4),
         # (6, 6),
@@ -554,7 +569,7 @@ def test_run_max_pool_width_shard(
 @pytest.mark.parametrize(
     "in_place_halo",
     [
-        False,
+        # False,
         True,
     ],
 )

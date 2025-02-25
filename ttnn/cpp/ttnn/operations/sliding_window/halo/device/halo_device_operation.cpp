@@ -70,13 +70,10 @@ std::vector<TensorSpec> HaloDeviceOperation::compute_output_specs(const std::vec
         TT_FATAL(input_core_w == output_core_w, "Error");
     }
 
-    // if (this->in_place_) {
-    //     printf("HITING IN PLACE\n");
-    //     tt::log_info(tt::LogAlways, "halo_device_operation - Using in-place mode so deallocating input buffer");
-    //     DeallocateBuffer(*input_tensor.buffer());
-    // } else {
-    //     printf("HITING NOT IN PLACE\n");
-    // }
+    if (this->in_place_) {
+        tt::log_info(tt::LogAlways, "halo_device_operation - Using in-place mode so deallocating input buffer");
+        DeallocateBuffer(*input_tensor.buffer());
+    }
 
     auto out_mem_config = output_memory_config_;
     std::array<uint32_t, 2> shard_shape = {
@@ -123,9 +120,9 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
     DataType type = input_tensor.get_dtype();
     int num_cores = this->parallel_config_.grid.num_cores();
     int num_cores_c = conv::get_num_cores_channels_from_parallel_config(this->parallel_config_);
-    printf("num_cores_c: %d\n", num_cores_c);
+    // printf("num_cores_c: %d\n", num_cores_c);
     int stick_size = input_tensor.get_padded_shape()[3] / num_cores_c;
-    printf("stick_size: %d\n", stick_size);
+    // printf("stick_size: %d\n", stick_size);
 
     auto pad_config_device_tensor =
         sliding_window::move_config_tensor_to_device(pad_config_tensor, parallel_config_, is_block_sharded, device);
@@ -161,9 +158,7 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
         auto shard_shape = std::array<uint32_t, 2>({max_ref_size, stick_size});
         ShardSpec shard_spec(parallel_config_.grid, shard_shape, ShardOrientation::ROW_MAJOR);
         MemoryConfig memory_config{TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1, shard_spec};
-        printf("before to device\n");
         remote_temp_device_tensor = remote_temp_tensor.to_device(device, memory_config);
-        printf("after to device\n");
     }
 
     Program program = CreateProgram();

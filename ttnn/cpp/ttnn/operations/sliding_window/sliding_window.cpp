@@ -480,6 +480,7 @@ generate_halo_kernel_config_tensors(
             flat_data[1] = nocy;
             flat_data[2] = len;
             uint32_t idx = 3;
+            // for (size_t i = 0; i < data.size(); ++i) {
             for (size_t i = data.size(); i-- > 0;) {  // reverse the order of the local config for in place operaiton
                                                       // (this has no negative effect on non-in place operation)
                 auto [src_start, dst_start, length] = data[i];
@@ -577,7 +578,7 @@ generate_halo_kernel_config_tensors(
     align_config(flattened_local_config, 2);
     align_config(flattened_remote_config, 2);
 
-    printf("max_ref_size: %d\n", max_ref_size);
+    // printf("max_ref_size: %d\n", max_ref_size);
 
     return std::make_tuple(
         flattened_pad_config, flattened_local_config, flattened_remote_config, remote_ref_counts, max_ref_size);
