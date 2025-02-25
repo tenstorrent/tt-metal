@@ -93,8 +93,10 @@ def run_fabric_edm(
     [6.5],
 )
 def test_fabric_edm_mcast_bw(
-    num_mcasts, num_unicasts, num_links, num_op_invocations, line_sync, line_size, packet_size, expected_bw
+    mesh_device, num_mcasts, num_unicasts, num_links, num_op_invocations, line_sync, line_size, packet_size, expected_bw
 ):
+    if len(mesh_device.get_device_ids()) != 8:
+        pytest.skip("Skipping test because it only works with T3000")
     run_fabric_edm(
         False,
         num_mcasts,
@@ -120,8 +122,10 @@ def test_fabric_edm_mcast_bw(
     [7.5],
 )
 def test_fabric_edm_unicast_bw(
-    num_mcasts, num_unicasts, num_links, num_op_invocations, line_sync, line_size, packet_size, expected_bw
+    mesh_device, num_mcasts, num_unicasts, num_links, num_op_invocations, line_sync, line_size, packet_size, expected_bw
 ):
+    if len(mesh_device.get_device_ids()) != 8:
+        pytest.skip("Skipping test because it only works with T3000")
     run_fabric_edm(
         True,
         num_mcasts,
