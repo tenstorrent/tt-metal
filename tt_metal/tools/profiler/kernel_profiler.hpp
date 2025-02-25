@@ -184,7 +184,7 @@ inline __attribute__((always_inline)) void risc_finished_profiling() {
 
 #if defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_ERISC) || \
     defined(COMPILE_FOR_IDLE_ERISC)
-inline void __attribute__((always_inline)) noc_async_write_posted(
+inline void __attribute__((always_inline)) profiler_noc_async_write_posted(
     std::uint32_t src_local_l1_addr, std::uint64_t dst_noc_addr, std::uint32_t size, uint8_t noc = noc_index) {
     WAYPOINT("NAWW");
     DEBUG_SANITIZE_NOC_WRITE_TRANSACTION(noc, dst_noc_addr, src_local_l1_addr, size);
@@ -194,7 +194,11 @@ inline void __attribute__((always_inline)) noc_async_write_posted(
 }
 
 FORCE_INLINE
-void noc_async_flush_posted_writes(uint8_t noc = noc_index) { while (!ncrisc_noc_posted_writes_sent(noc)); }
+void profiler_noc_async_flush_posted_write(uint8_t noc = noc_index) {
+    WAYPOINT("NPPW");
+    while (!ncrisc_noc_posted_writes_sent(noc));
+    WAYPOINT("NPPD")
+}
 
 #endif
 
@@ -250,7 +254,7 @@ __attribute__((noinline)) void finish_profiler() {
                 uint64_t dram_bank_dst_noc_addr =
                     s.get_noc_addr(core_flat_id / profiler_core_count_per_dram, dram_offset);
 
-                noc_async_write_posted(
+                profiler_noc_async_write_posted(
                     reinterpret_cast<uint32_t>(profiler_data_buffer[hostIndex]), dram_bank_dst_noc_addr, send_size);
             }
             profiler_control_buffer[deviceIndex] = 0;
@@ -297,7 +301,7 @@ __attribute__((noinline)) void quick_push() {
     uint32_t currEndIndex = profiler_control_buffer[HOST_BUFFER_END_INDEX_BR_ER + myRiscID] + wIndex;
 
     if (currEndIndex <= PROFILER_FULL_HOST_VECTOR_SIZE_PER_RISC) {
-        noc_async_write_posted(
+        profiler_noc_async_write_posted(
             reinterpret_cast<uint32_t>(profiler_data_buffer[myRiscID]),
             dram_bank_dst_noc_addr,
             wIndex * sizeof(uint32_t));
