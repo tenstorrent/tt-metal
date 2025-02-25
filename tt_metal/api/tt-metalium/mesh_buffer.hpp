@@ -113,7 +113,7 @@ private:
         DeviceAddr device_local_size,
         MeshDevice* mesh_device,
         std::shared_ptr<Buffer> backing_buffer) :
-        buffers_(SimpleMeshShape(mesh_device->shape()), nullptr),
+        buffers_(MeshShape(mesh_device->shape()), nullptr),
         config_(config),
         device_local_config_(device_local_config),
         mesh_device_(mesh_device->shared_from_this()),
@@ -128,7 +128,7 @@ private:
         DeviceAddr address,
         DeviceAddr device_local_size,
         MeshDevice* mesh_device) :
-        buffers_(SimpleMeshShape(mesh_device->shape()), /*fill_value=*/nullptr),
+        buffers_(MeshShape(mesh_device->shape()), /*fill_value=*/nullptr),
         config_(config),
         device_local_config_(device_local_config),
         mesh_device_(mesh_device->shared_from_this()),

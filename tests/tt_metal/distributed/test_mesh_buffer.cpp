@@ -129,7 +129,7 @@ TEST_F(MeshBufferTestT3000, Deallocation) {
 TEST(MeshBufferTest, DeallocationWithoutMeshDevice) {
     for (int i = 0; i < 100; i++) {
         auto config =
-            MeshDeviceConfig{.mesh_shape = SimpleMeshShape(1, 1), .offset = std::nullopt, .physical_device_ids = {}};
+            MeshDeviceConfig{.mesh_shape = MeshShape(1, 1), .offset = std::nullopt, .physical_device_ids = {}};
         auto mesh_device =
             MeshDevice::create(config, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreType::WORKER);
 
@@ -148,7 +148,7 @@ TEST(MeshBufferTest, DeallocationWithoutMeshDevice) {
 TEST(MeshBufferTest, DeallocationWithMeshDeviceClosed) {
     for (int i = 0; i < 100; i++) {
         auto config =
-            MeshDeviceConfig{.mesh_shape = SimpleMeshShape(1, 1), .offset = std::nullopt, .physical_device_ids = {}};
+            MeshDeviceConfig{.mesh_shape = MeshShape(1, 1), .offset = std::nullopt, .physical_device_ids = {}};
         auto mesh_device =
             MeshDevice::create(config, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreType::WORKER);
 
