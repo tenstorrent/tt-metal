@@ -11,6 +11,8 @@
 #include <future>
 #include <memory>
 
+#include <tt-metalium/assert.hpp>
+
 namespace tt::tt_metal {
 
 class ThreadPool {
@@ -20,6 +22,9 @@ public:
 
     template <class F>
     void enqueue(F&& f) {
+        TT_ASSERT(
+            std::this_thread::get_id() == application_thread_id_,
+            "Can only push to thread-pool from the owning thread.");
         tasks_.push(std::move(f));     // Move the task directly into queue
         task_semaphore_.release();     // Notify a worker that a task is available
         // Light-Weight counter increment to track the number of tasks in flight
@@ -69,6 +74,11 @@ private:
     // main thread when all tasks are complete
     std::atomic<int> counter_ = 0;
     bool shutdown_;
+    // Track the application thread owning this pool
+    // Currently only support a single producer to
+    // thread pool. Additional funcitonality for multi-producer
+    // use cases can be added in future.
+    std::atomic<std::thread::id> application_thread_id_;
 };
 
 }  // namespace tt::tt_metal

@@ -48,7 +48,7 @@ ThreadPool::WorkerQueue::Node* ThreadPool::WorkerQueue::pop_head() {
 
 ThreadPool::ThreadPool(size_t thread_count) : shutdown_(false) {
     workers_.reserve(thread_count);
-
+    application_thread_id_ = std::this_thread::get_id();
     for (size_t i = 0; i < thread_count; ++i) {
         workers_.emplace_back([this] {
             while (true) {
