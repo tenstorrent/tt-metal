@@ -111,8 +111,7 @@ void MeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool b
     // Iterate over all programs. Update dispatch commands per program to reflect
     // current device state. Write the finalized program command sequence to each
     // physical device tied to the program.
-    for (const auto& device_range : mesh_workload.get_logical_device_ranges()) {
-        auto& program = mesh_workload.get_program_on_device_range(device_range);
+    for (auto& [device_range, program] : mesh_workload.get_programs()) {
         auto& program_cmd_seq = mesh_workload.get_dispatch_cmds_for_program(program);
         program_dispatch::update_program_dispatch_commands(
             program,
