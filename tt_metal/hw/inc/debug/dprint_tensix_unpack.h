@@ -210,7 +210,7 @@ inline void dprint_tensix_unpack_tile_descriptor_helper(
     DPRINT << "digest_type: ";
     dprint_tensix_unpack_tile_descriptor_digest_type(tile_descriptor);
     DPRINT << "digest_size: ";
-    dprint_tensix_unpack_tile_descriptor_digest_type(tile_descriptor);
+    dprint_tensix_unpack_tile_descriptor_digest_size(tile_descriptor);
 }
 
 inline void dprint_tensix_unpack_tile_descriptor(uint reg_id = 0) {
