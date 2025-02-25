@@ -1,0 +1,97 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+
+# SPDX-License-Identifier: Apache-2.0
+
+import torch
+import pytest
+from loguru import logger
+import os
+import ttnn
+from models.demos.qwen25_vl.tt.mlp import MLP
+from models.demos.qwen25_vl.tt.model_config import VisionModelArgs
+from models.utility_functions import (
+    comp_pcc,
+    comp_allclose,
+)
+from models.utility_functions import skip_for_grayskull
+
+from models.tt_transformers.tt.load_checkpoints import convert_hf_to_meta
+
+
+@torch.no_grad()
+@skip_for_grayskull("Requires wormhole_b0 to run")
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
+            os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids())
+        )
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "rows",
+    (
+        14336,  # TODO: fix padding issues
+        # 14308, # from 3B test image
+    ),
+)
+@pytest.mark.parametrize(
+    "batch_size",
+    (1,),
+)
+def test_mlp_inference(rows, batch_size, mesh_device, use_program_cache, reset_seeds, ensure_gc):
+    dtype = ttnn.bfloat8_b
+    mode = "prefill"  # Vision processing is prefill only (generating token embeddings)
+
+    mesh_device.enable_async(True)
+
+    model_args = VisionModelArgs(mesh_device, dummy_weights=True, max_batch_size=batch_size, max_seq_len=rows)
+    reference_model = model_args.reference_mlp()
+    state_dict = convert_hf_to_meta(reference_model.state_dict(), model_args.head_dim)
+    state_dict_prefix = model_args.get_state_dict_prefix("MLP", 0)
+    state_dict = {f"{state_dict_prefix}.{k}": v for k, v in state_dict.items()}
+
+    tt_model = MLP(
+        mesh_device=mesh_device,
+        args=model_args,
+        state_dict=state_dict,
+        weight_cache_path=None,  # Don't cache random weights
+        layer_num=0,
+    )
+    torch_input = torch.randn(1, 1, rows, model_args.hf_config.vision_config.hidden_size)
+    reference_output = reference_model(torch_input)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensor2dMesh(
+            mesh_device,
+            dims=(None, 3) if model_args.is_galaxy else (None, None),
+            mesh_shape=model_args.cluster_shape,
+        ),  # When both dims are None, the mapper used is `ReplicateTensorToMesh`
+        dtype=ttnn.bfloat8_b,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        layout=ttnn.TILE_LAYOUT,
+    )
+
+    logger.info("Run MLP")
+    tt_output = tt_model(tt_input, mode)
+
+    tt_output_torch = ttnn.to_torch(
+        tt_output,
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
+    )
+
+    tt_output_torch = tt_output_torch[:, :1, :, :]
+
+    pcc_required = 0.99
+    passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
+
+    logger.info(comp_allclose(reference_output, tt_output_torch))
+    logger.info(f"PCC: {pcc_message}")
+    if passing:
+        logger.info("MLP Passed!")
+    else:
+        logger.warning("MLP Failed!")
+
+    assert passing, f"MLP output does not meet PCC requirement {pcc_required}: {pcc_message}."

@@ -3,6 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ast
+import gc
+
+
+@pytest.fixture(autouse=True)
+def ensure_gc():
+    gc.collect()
 
 import pytest
 import torchvision.transforms as transforms

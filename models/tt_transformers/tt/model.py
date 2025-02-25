@@ -27,6 +27,7 @@ class Transformer(LightweightModule):
         weight_cache_path,
         paged_attention_config=None,
         use_paged_kv_cache=False,
+        attention_class=None,
     ):
         super().__init__()
         self.args = args
@@ -69,6 +70,7 @@ class Transformer(LightweightModule):
                 transformation_mats=self.trans_mats_dict,
                 paged_attention_config=paged_attention_config,
                 use_paged_kv_cache=use_paged_kv_cache,
+                attention_class=attention_class,
             )
             for i in tqdm(range(self.n_layers))
         ]
@@ -108,6 +110,7 @@ class Transformer(LightweightModule):
         TODO: Debate whether this function is responsible for padding
         """
 
+        assert tokens.dim() == 2, "tokens must be a 2D tensor"
         tokens = tokens.reshape(1, 1, 1, -1)
         S = tokens.shape[-1]
         tokens = ttnn.from_torch(

@@ -374,11 +374,20 @@ def get_out_subblock_w(per_core_N, out_subblock_h):
     return out_subblock_w
 
 
-def first_five(tensor, mesh_device):
+def first_five(tensor, mesh_device, start=0, end=5):
     """
-    Helper function to return the first 5 elements of a tensor via torch
+    Helper function to return the first 5 elements of a tensor via torch, or optionally another slice
     """
-    return torch.Tensor(ttnn.to_torch(tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1)))[0, 0, 0, :5]
+    return torch.Tensor(ttnn.to_torch(tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1)))[
+        0, 0, 0, start:end
+    ]
+
+
+def last_five(tensor, mesh_device):
+    """
+    Helper function to return the last 5 elements of a tensor via torch
+    """
+    return torch.Tensor(ttnn.to_torch(tensor, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1)))[0, 0, 0, -5:]
 
 
 # Sample logits from a distribution
@@ -485,7 +494,7 @@ def pad_to_size(x: torch.Tensor, dim: int, size: int) -> torch.Tensor:
     if dim < 0:
         dim = x.dim() + dim
     assert isinstance(x, torch.Tensor), "Input must be a torch.Tensor"
-    assert -x.dim() <= dim < x.dim(), f"Dimension out of range (expected between {-x.dim()} and {x.dim()-1})"
+    assert -x.dim() <= dim < x.dim(), f"Dimension {dim} out of range (expected between {-x.dim()} and {x.dim()-1})"
     dim = x.dim() + dim if dim < 0 else dim
 
     current_size = x.size(dim)

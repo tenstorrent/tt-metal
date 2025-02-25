@@ -413,6 +413,8 @@ class ModelArgs:
         "Mistral-7B-Instruct-v0.3": "models/tt_transformers/model_params/Mistral-7B-Instruct-v0.3",
     }
 
+    MAX_QKV_MM_SEQ_LEN = 2048
+
     def __init__(
         self,
         mesh_device,
@@ -860,7 +862,6 @@ class ModelArgs:
             )
             self.qkv_size = self.head_dim * (2 * self.n_kv_heads + self.n_heads)
             self.min_kv_prefill_shard_seqlen = (self.tile_size * 8 * 8) / (self.n_kv_heads // self.cluster_shape[1])
-            self.MAX_QKV_MM_SEQ_LEN = 2048
             self.model_config["XQKV_PREFILL_PROGCFG"] = lambda seq_len: ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=(8, 8),
                 in0_block_w=1,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
@@ -876,15 +877,10 @@ class ModelArgs:
                 fused_activation=None,
                 fuse_batch=seq_len <= self.MAX_QKV_MM_SEQ_LEN,
             )
+            # self.model_config["XQKV_PREFILL_PROGCFG"] = lambda seq_len: self.get_xqkv_prefill_progcfg(seq_len)
 
             assert self.n_kv_heads % self.cluster_shape[1] == 0, "n_kv_heads must be divisible by num_devices"
-            self.model_config["KV_PREFILL_MEM_CFG"] = lambda seq_len: ttnn.create_sharded_memory_config(
-                (((self.n_kv_heads // self.cluster_shape[1]) * seq_len // (8 * 8)), self.head_dim),
-                ttnn.CoreGrid(y=8, x=8),
-                ttnn.ShardStrategy.HEIGHT,
-                ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
+            self.model_config["KV_PREFILL_MEM_CFG"] = lambda seq_len: self.get_xqkv_prefill_mem_cfg(seq_len)
 
             self.model_config["CREATE_QKV_DECODE_SHARD"] = (
                 ttnn.create_sharded_memory_config(
@@ -1289,6 +1285,30 @@ class ModelArgs:
             )
             logger.info(f"LM head grid: {self.lm_head_core_grid}")
 
+    def get_xqkv_prefill_progcfg(self, seq_len):
+        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=(8, 8),
+            in0_block_w=1,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
+            out_subblock_h=1,  # Must be divisible by per_core_M
+            out_subblock_w=1,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
+            per_core_M=max(
+                1, 8 if seq_len >= self.MAX_QKV_MM_SEQ_LEN else seq_len // self.tile_size // 8  # 8 rows
+            ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
+            per_core_N=math.ceil(self.qkv_size / self.cluster_shape[1] / 32 / 8),  # N / TILE_WIDTH / grid width
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=seq_len <= self.MAX_QKV_MM_SEQ_LEN,
+        )
+
+    def get_xqkv_prefill_mem_cfg(self, seq_len):
+        return ttnn.create_sharded_memory_config(
+            (((self.n_kv_heads // self.cluster_shape[1]) * seq_len // (8 * 8)), self.head_dim),
+            ttnn.CoreGrid(y=8, x=8),
+            ttnn.ShardStrategy.HEIGHT,
+            ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
     def is_distributed_norm(self, mode):
         if not self.is_multichip:
             return False
@@ -1386,7 +1406,7 @@ class ModelArgs:
         self.full_model_n_layers = self.n_layers
         self.norm_eps = params.get("norm_eps", params.get("rms_norm_eps"))
         self.vocab_size = params["vocab_size"]
-        self.padded_vocab_size = 128 * 1024 if self.is_galaxy else None
+        self.padded_vocab_size = nearest_32(self.vocab_size)
         self.head_dim = params.get("head_dim", self.dim // self.n_heads)
         if is_hf:
             self.max_context_len = params.get("max_position_embeddings")
@@ -1537,16 +1557,21 @@ class ModelArgs:
 
     def _set_hf_params(self, checkpoint_dir):
         if self.from_hf_url:
-            from transformers import AutoConfig
+            # Special case Qwen2.5-VL models until they are fully integrated into a HF release
+            if "Qwen/Qwen2.5-VL" in self.model_name:
+                from transformers.models.qwen2_5_vl.configuration_qwen2_5_vl import Qwen2_5_VLConfig as AutoConfig
+            else:
+                from transformers import AutoConfig
 
             if self.dummy_weights:
                 logger.info(
                     f"Loading state param for dummy {self.model_name} from {self.LOCAL_HF_PARAMS[self.model_name]}"
                 )
-                config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name]).to_dict()
+                self.hf_config = AutoConfig.from_pretrained(self.LOCAL_HF_PARAMS[self.model_name])
             else:
-                config = AutoConfig.from_pretrained(self.CKPT_DIR).to_dict()
+                self.hf_config = AutoConfig.from_pretrained(self.CKPT_DIR)
 
+            config = self.hf_config.to_dict()
         else:
             config_file = os.path.join(checkpoint_dir, "config.json")
             assert os.path.exists(config_file), f"config.json file not found at {config_file}"
@@ -1623,7 +1648,15 @@ class ModelArgs:
         else:
             assert self.checkpoint_type == CheckpointType.HuggingFace
             if self.from_hf_url:
-                from transformers import AutoConfig, AutoModelForCausalLM
+                # Special case Qwen2.5-VL models until they are fully integrated into a HF release
+                if "Qwen/Qwen2.5-VL" in self.model_name:
+                    from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
+                        Qwen2_5_VLForConditionalGeneration as AutoModelForCausalLM,
+                    )
+
+                    print("Loading Qwen2.5-VL model: ", AutoModelForCausalLM)
+                else:
+                    from transformers import AutoModelForCausalLM
 
                 model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
                 self.cached_hf_model = model
@@ -1631,7 +1664,16 @@ class ModelArgs:
             else:
                 state_dict = load_hf_state_dict(self.CKPT_DIR)
 
-        if self.checkpoint_type == CheckpointType.HuggingFace:
+            all_keys = tuple(state_dict.keys())
+            new_state_dict = {}
+            for k in all_keys:
+                if "model.visual." in k:
+                    new_state_dict[k.replace("model.visual.", "visual.")] = state_dict[k]
+                elif "model.language_model." in k:
+                    new_state_dict[k.replace("model.language_model.", "model.")] = state_dict[k]
+                else:
+                    new_state_dict[k] = state_dict[k]
+            state_dict = new_state_dict
             state_dict = standardize_hf_keys(state_dict)
             state_dict = convert_hf_to_meta(state_dict, self.head_dim)
 
@@ -2010,7 +2052,14 @@ class ModelArgs:
                 model.load_state_dict(self.load_state_dict())
             return model
         else:
-            from transformers import AutoConfig, AutoModelForCausalLM
+            # Special case Qwen2.5-VL models until they are fully integrated into a HF release
+            if "Qwen/Qwen2.5-VL" in self.model_name:
+                from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
+                    Qwen2_5_VLForConditionalGeneration as AutoModelForCausalLM,
+                )
+                from transformers.models.qwen2_5_vl.configuration_qwen2_5_vl import Qwen2_5_VLConfig as AutoConfig
+            else:
+                from transformers import AutoConfig, AutoModelForCausalLM
 
             # HF is much faster at loading from a checkpoint than generating from config
             # so use that by preference unless we don't have a checkpoint
