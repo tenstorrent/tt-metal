@@ -34,6 +34,29 @@ def test_sub_fp32(device, ttnn_function):
 @pytest.mark.parametrize(
     "ttnn_function",
     [
+        ttnn.experimental.sub,
+    ],
+)
+def test_sub_scalar_fp32(device, ttnn_function):
+    x_torch = torch.tensor([[1]], dtype=torch.float32)
+    y_torch = 0.00030171126
+    golden_fn = ttnn.get_golden_function(ttnn_function)
+    z_torch = golden_fn(x_torch, y_torch)
+    x_tt = ttnn.from_torch(x_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    y_tt = y_torch
+    z_tt_sub = ttnn.experimental.sub(x_tt, y_tt)
+    tt_out = ttnn.to_torch(z_tt_sub)
+
+    print("tt_out", tt_out)
+    print("z_torch", z_torch)
+    status = torch.allclose(z_torch, tt_out, atol=1e-10, rtol=1e-5, equal_nan=False)
+    assert status
+
+
+@skip_for_grayskull("Unsupported dtype for Grayskull")
+@pytest.mark.parametrize(
+    "ttnn_function",
+    [
         ttnn.experimental.rsub,
     ],
 )
