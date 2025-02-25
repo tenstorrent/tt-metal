@@ -37,11 +37,12 @@ struct Conv3dConfig {
         uint32_t W_out_block_ = 1,
         uint32_t H_out_block_ = 1,
         uint32_t C_out_block_ = 0,
+        uint32_t C_in_block_ = 0,
         uint32_t output_channels_ = 0,
-        std::array<uint32_t, 3> kernel_size_ = {1, 1, 1},
-        std::array<uint32_t, 3> stride_ = {1, 1, 1},
-        std::array<uint32_t, 3> padding_ = {0, 0, 0},
-        std::string padding_mode_ = "zeros",
+        const std::array<uint32_t, 3> kernel_size_ = {1, 1, 1},
+        const std::array<uint32_t, 3> stride_ = {1, 1, 1},
+        const std::array<uint32_t, 3> padding_ = {0, 0, 0},
+        const std::string padding_mode_ = "zeros",
         uint32_t groups_ = 1,
         CoreCoord compute_with_storage_grid_size_ = {1, 1}) :
         dtype(dtype_),
@@ -51,33 +52,29 @@ struct Conv3dConfig {
         W_out_block(W_out_block_),
         H_out_block(H_out_block_),
         C_out_block(C_out_block_),
+        C_in_block(C_in_block_),
         output_channels(output_channels_),
         kernel_size(kernel_size_),
         stride(stride_),
         padding(padding_),
         padding_mode(padding_mode_),
         groups(groups_),
-        compute_with_storage_grid_size(compute_with_storage_grid_size_) {
-        // constructor body if needed
-    }
+        compute_with_storage_grid_size(compute_with_storage_grid_size_) {}
 
-    // ...the rest of your struct...
     DataType dtype;
     DataType weights_dtype;
     Layout output_layout;
-
     uint32_t T_out_block;
     uint32_t W_out_block;
     uint32_t H_out_block;
     uint32_t C_out_block;
+    uint32_t C_in_block;
     uint32_t output_channels;
     std::array<uint32_t, 3> kernel_size;
     std::array<uint32_t, 3> stride;
     std::array<uint32_t, 3> padding;
     std::string padding_mode;
     uint32_t groups;
-
-    // Add grid size configuration
     CoreCoord compute_with_storage_grid_size;
 
     static constexpr auto attribute_names = std::make_tuple(
@@ -88,6 +85,7 @@ struct Conv3dConfig {
         "W_out_block",
         "H_out_block",
         "C_out_block",
+        "C_in_block",
         "output_channels",
         "kernel_size",
         "stride",
@@ -105,6 +103,7 @@ struct Conv3dConfig {
             std::cref(this->W_out_block),
             std::cref(this->H_out_block),
             std::cref(this->C_out_block),
+            std::cref(this->C_in_block),
             std::cref(this->output_channels),
             std::cref(this->kernel_size),
             std::cref(this->stride),

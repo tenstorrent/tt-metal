@@ -70,6 +70,17 @@ void Conv3dOp::validate(
         config.compute_with_storage_grid_size.y,
         device_grid.x,
         device_grid.y);
+
+    // Validate C_in_block if specified
+    uint32_t C_in = input_tensor_a.shape()[4];
+    if (config.C_in_block > 0) {
+        TT_FATAL(
+            C_in % config.C_in_block == 0,
+            "Input channels ({}) must be divisible by C_in_block ({})",
+            C_in,
+            config.C_in_block);
+        TT_FATAL(config.C_in_block % 32 == 0, "C_in_block ({}) must be a multiple of 32", config.C_in_block);
+    }
 }
 
 std::vector<TensorSpec> Conv3dOp::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
