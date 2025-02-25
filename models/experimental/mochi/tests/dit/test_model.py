@@ -446,10 +446,14 @@ def test_tt_asymm_dit_joint_model_fn(mesh_device, use_program_cache, reset_seeds
 def test_tt_asymm_dit_joint_preprocess(mesh_device, use_program_cache, reset_seeds):
     """Test that we can reverse the preprocessing of input"""
     mesh_device.enable_async(True)
-    _, tt_model, _ = create_models(mesh_device, n_layers=0)
     B, C, T, H, W = 1, 12, 28, 60, 106
+    PATCH_SIZE = 2
+    num_visual_tokens = T * H * W // (PATCH_SIZE**2)
+    _, tt_model, _ = create_models(mesh_device, num_visual_tokens, n_layers=0)
     x = torch.randn(B, C, T, H, W)
     x_1BNI = tt_model.preprocess_input(x)
+    if mesh_device.get_num_devices() > 1:
+        x_1BNI = ttnn.all_gather(x_1BNI, dim=2)
     x_back = tt_model.reverse_preprocess(x_1BNI, T, H, W)
     pcc, mse, mae = compute_metrics(x, x_back)
     logger.info(f"PCC: {pcc}, MSE: {mse}, MAE: {mae}")
