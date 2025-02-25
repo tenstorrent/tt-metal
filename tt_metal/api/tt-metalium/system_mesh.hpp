@@ -31,7 +31,7 @@ public:
     SystemMesh& operator=(SystemMesh&&) = delete;
 
     // Returns the shape of the system mesh
-    const SimpleMeshShape& get_shape() const;
+    const MeshShape& get_shape() const;
 
     // Returns the physical device ID for a given logical row and column index
     chip_id_t get_physical_device_id(const MeshCoordinate& coord) const;

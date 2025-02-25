@@ -102,15 +102,16 @@ TEST_F(TensorDistributionTest, Shard1D) {
 }
 
 TEST_F(TensorDistributionTest, Shard2DInvalidMeshShape) {
-    const auto [num_rows, num_cols] = mesh_device_->shape();
-    ASSERT_EQ(num_rows, 2);
-    ASSERT_EQ(num_cols, 4);
+    ASSERT_EQ(mesh_device_->shape(), MeshShape(2, 4));
 
     EXPECT_ANY_THROW(
         shard_tensor_to_2d_mesh_mapper(*mesh_device_, MeshShape{3, 1}, Shard2dConfig{.row_dim = 1, .col_dim = 2}));
 
     EXPECT_ANY_THROW(
         shard_tensor_to_2d_mesh_mapper(*mesh_device_, MeshShape{2, 5}, Shard2dConfig{.row_dim = 1, .col_dim = 2}));
+
+    EXPECT_ANY_THROW(
+        shard_tensor_to_2d_mesh_mapper(*mesh_device_, MeshShape{1, 1, 2}, Shard2dConfig{.row_dim = 1, .col_dim = 2}));
 }
 
 TEST_F(TensorDistributionTest, Shard2DInvalidShardConfig) {
@@ -122,19 +123,18 @@ TEST_F(TensorDistributionTest, Concat2DInvalidConfig) {
 }
 
 TEST_F(TensorDistributionTest, Shard2DReplicateDim) {
-    const auto [num_rows, num_cols] = mesh_device_->shape();
-    ASSERT_EQ(num_rows, 2);
-    ASSERT_EQ(num_cols, 4);
-    const int num_devices = num_rows * num_cols;
+    constexpr size_t kNumRows = 2;
+    constexpr size_t kNumCols = 4;
+    ASSERT_EQ(mesh_device_->shape(), MeshShape(kNumRows, kNumCols));
 
     std::vector<float> test_data = {0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0};
     Tensor input_tensor =
-        Tensor::from_vector(test_data, get_tensor_spec(ttnn::Shape{1, num_rows, num_cols, 1}, DataType::FLOAT32));
+        Tensor::from_vector(test_data, get_tensor_spec(ttnn::Shape{1, kNumRows, kNumCols, 1}, DataType::FLOAT32));
     input_tensor.print();
 
     auto mapper = shard_tensor_to_2d_mesh_mapper(
         *mesh_device_,
-        MeshShape{num_rows, num_cols},
+        MeshShape{kNumRows, kNumCols},
         Shard2dConfig{
             .row_dim = 1,
         });
@@ -154,21 +154,21 @@ TEST_F(TensorDistributionTest, Shard2DReplicateDim) {
 }
 
 TEST_F(TensorDistributionTest, Shard2D) {
-    const auto [num_rows, num_cols] = mesh_device_->shape();
-    ASSERT_EQ(num_rows, 2);
-    ASSERT_EQ(num_cols, 4);
-    const int num_devices = num_rows * num_cols;
+    constexpr size_t kNumRows = 2;
+    constexpr size_t kNumCols = 4;
+    ASSERT_EQ(mesh_device_->shape(), MeshShape(kNumRows, kNumCols));
+    const int num_devices = kNumRows * kNumCols;
 
     std::vector<float> test_data;
     for (int i = 0; i < num_devices; i++) {
         test_data.insert(test_data.end(), {i * 1.F, i * 2.F, i * 3.F});
     }
     Tensor input_tensor =
-        Tensor::from_vector(test_data, get_tensor_spec(ttnn::Shape{1, num_rows, num_cols, 3}, DataType::FLOAT32));
+        Tensor::from_vector(test_data, get_tensor_spec(ttnn::Shape{1, kNumRows, kNumCols, 3}, DataType::FLOAT32));
 
     auto mapper = shard_tensor_to_2d_mesh_mapper(
         *mesh_device_,
-        MeshShape{num_rows, num_cols},
+        MeshShape{kNumRows, kNumCols},
         Shard2dConfig{
             .row_dim = 1,
             .col_dim = 2,
@@ -190,7 +190,7 @@ TEST_F(TensorDistributionTest, Shard2D) {
     Tensor concatenated_tensor = aggregate_tensor(sharded_tensor, *composer);
 
     Tensor expected_tensor =
-        Tensor::from_vector(test_data, get_tensor_spec(ttnn::Shape{num_rows, 1, num_cols, 3}, DataType::FLOAT32));
+        Tensor::from_vector(test_data, get_tensor_spec(ttnn::Shape{kNumRows, 1, kNumCols, 3}, DataType::FLOAT32));
     EXPECT_TRUE(ttnn::allclose<float>(concatenated_tensor, expected_tensor));
 }
 

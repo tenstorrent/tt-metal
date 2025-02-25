@@ -11,6 +11,7 @@
 
 namespace {
 
+using MetalMeshShape = ::tt::tt_metal::distributed::MeshShape;
 using ::testing::SizeIs;
 
 template <typename T>
@@ -23,7 +24,7 @@ using TestTypes = ::testing::Types<uint32_t, float>;
 TYPED_TEST_SUITE(MeshOpsTest, TestTypes);
 
 TYPED_TEST(MeshOpsTest, ShardXTensorToMeshBasicShard) {
-    tt::tt_metal::distributed::MeshShape mesh_shape = {1, 4};
+    MetalMeshShape mesh_shape{1, 4};
 
     // A simple 1D tensor to shard across 4 devices
     auto tensor = xt::arange<TypeParam>(8);  // [0,...,7]
@@ -40,7 +41,7 @@ TYPED_TEST(MeshOpsTest, ShardXTensorToMeshBasicShard) {
 
 TYPED_TEST(MeshOpsTest, ShardTensor2dMeshTwoDimSharding) {
     // Mesh shape: 2x2, total 4 devices
-    tt::tt_metal::distributed::MeshShape mesh_shape = {2, 2};
+    MetalMeshShape mesh_shape{2, 2};
 
     // Create a 2D tensor shape: (4,4)
     auto tensor = xt::arange<TypeParam>(16).reshape({4, 4});
@@ -58,8 +59,8 @@ TYPED_TEST(MeshOpsTest, ShardTensor2dMeshTwoDimSharding) {
 }
 
 TYPED_TEST(MeshOpsTest, ReplicateXTensorToMeshReplication) {
-    tt::tt_metal::distributed::MeshShape mesh_shape = {2, 2};
-    int num_devices = mesh_shape.num_rows * mesh_shape.num_cols;  // 4
+    MetalMeshShape mesh_shape{2, 2};
+    int num_devices = mesh_shape.mesh_size();  // 4
 
     auto tensor = xt::arange<TypeParam>(4);  // [0,1,2,3]
 
@@ -73,7 +74,7 @@ TYPED_TEST(MeshOpsTest, ReplicateXTensorToMeshReplication) {
 }
 
 TYPED_TEST(MeshOpsTest, ConcatMesh2dToTensorRecomposition) {
-    tt::tt_metal::distributed::MeshShape mesh_shape = {2, 2};
+    MetalMeshShape mesh_shape{2, 2};
 
     // Create shards that would come from a 4x4 tensor:
     // Expected final tensor:
@@ -90,7 +91,7 @@ TYPED_TEST(MeshOpsTest, ConcatMesh2dToTensorRecomposition) {
 
     std::vector<xt::xarray<TypeParam>> shards = {top_left, top_right, bot_left, bot_right};
 
-    ttml::core::ConcatMesh2dToTensor<TypeParam> composer(mesh_shape, {0, 1});
+    ttml::core::ConcatMesh2dToTensor<TypeParam> composer(mesh_shape, MetalMeshShape{0, 1});
     auto composed = composer.compose(shards);
 
     xt::xarray<TypeParam> expected = {
@@ -103,7 +104,7 @@ TYPED_TEST(MeshOpsTest, ConcatMesh2dToTensorRecomposition) {
 }
 
 TYPED_TEST(MeshOpsTest, ConcatMeshToXTensorOneDimConcatenation) {
-    tt::tt_metal::distributed::MeshShape mesh_shape = {1, 3};
+    MetalMeshShape mesh_shape{1, 3};
 
     // Create a few shards: [0,1], [2,3], [4,5]
     xt::xarray<TypeParam> s1 = {TypeParam(0), TypeParam(1)};
@@ -120,7 +121,7 @@ TYPED_TEST(MeshOpsTest, ConcatMeshToXTensorOneDimConcatenation) {
 }
 
 TYPED_TEST(MeshOpsTest, VectorMeshToXTensorVectorReturn) {
-    tt::tt_metal::distributed::MeshShape mesh_shape = {2, 2};
+    MetalMeshShape mesh_shape{2, 2};
     ttml::core::VectorMeshToXTensor<TypeParam> vectorComposer(mesh_shape);
 
     std::vector<xt::xarray<TypeParam>> shards = {
@@ -134,7 +135,7 @@ TYPED_TEST(MeshOpsTest, VectorMeshToXTensorVectorReturn) {
 }
 
 TYPED_TEST(MeshOpsTest, ConcatenateSameParametersAsCompose) {
-    tt::tt_metal::distributed::MeshShape mesh_shape = {1, 3};
+    MetalMeshShape mesh_shape{1, 3};
 
     // Create a few shards: [0,1], [2,3], [4,5]
     xt::xarray<TypeParam> s1 = {TypeParam(0), TypeParam(1)};
