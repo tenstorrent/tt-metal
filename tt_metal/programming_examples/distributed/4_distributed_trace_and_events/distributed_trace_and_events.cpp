@@ -172,10 +172,10 @@ int main(int argc, char** argv) {
     // =========== Step 3: Create Workloads to run on the Virtual Mesh ===========
     // Specify Device Ranges on which the Workloads will run
     MeshCoordinateRange all_devices(mesh_device->shape());
-    MeshCoordinateRange top_row(MeshCoordinate{0, 0}, MeshCoordinate{mesh_device->num_cols() - 1, 0});
+    MeshCoordinateRange top_row(MeshCoordinate{0, 0}, MeshCoordinate{0, mesh_device->num_cols() - 1});
     MeshCoordinateRange bottom_row(
-        MeshCoordinate{0, mesh_device->num_rows() - 1},
-        MeshCoordinate{mesh_device->num_cols() - 1, mesh_device->num_rows() - 1});
+        MeshCoordinate{mesh_device->num_rows() - 1, 0},
+        MeshCoordinate{mesh_device->num_rows() - 1, mesh_device->num_cols() - 1});
     // Create three eltwise binary ops using a simple program generation function
     auto add_program = EltwiseBinaryProgramGenerator(
         add_src0_buf,
