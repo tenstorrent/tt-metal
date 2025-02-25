@@ -41,11 +41,7 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
     uint32_t tile_bytes = get_tile_size(cb_id_in0);
 
-#ifdef KERNEL_COMPILE_TIME_ARG_0
-    constexpr bool read_from_dram = get_compile_time_arg_val(0);
-#else
-    constexpr bool read_from_dram = true;
-#endif
+    constexpr bool read_from_dram = (kernel_compile_time_args.size() > 0) ? get_compile_time_arg_val(0) : true;
 
     const InterleavedPow2AddrGen<read_from_dram> src_a = {src_addr, 11};
 
