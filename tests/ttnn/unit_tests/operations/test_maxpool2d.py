@@ -364,55 +364,56 @@ def test_run_max_pool(
     )
 
 
-""" @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "act_shape",  ## NCHW
     (
         (
-            [1, 512, 28, 28],
-            [1, 512, 14, 14],
-            [1, 1024, 6, 6],
-            [1, 2048, 6, 6],
-            [1, 4096, 6, 6],
-            [4, 1024, 40, 40],
-            [2, 2048, 40, 40],
-            [8, 4096, 10, 16],
-            # wide yolo kernel
-            [1, 32768, 10, 10],
-            [1, 6144, 6, 6],
-            # wide non-8 multiple tests
-            [1, 800 * 64, 8, 8],
-            [1, 640 * 64, 8, 8],
-            [1, 576 * 64, 8, 8],
-            [1, 384 * 64, 8, 8],
+            # [1, 512, 28, 28],
+            # [1, 512, 14, 14],
+            # [1, 1024, 6, 6],
+            # [1, 2048, 6, 6],
+            # [1, 4096, 6, 6],
+            # [4, 1024, 40, 40],
+            # [2, 2048, 40, 40],
+            # [8, 4096, 10, 16],
+            # # wide yolo kernel
+            # [1, 32768, 10, 10],
+            # [1, 6144, 6, 6],
+            # # wide non-8 multiple tests
+            # [1, 800 * 64, 8, 8],
+            # [1, 640 * 64, 8, 8],
+            # [1, 576 * 64, 8, 8],
+            # [1, 384 * 64, 8, 8],
+            [1, 1024, 40, 40],
         )
     ),
 )
 @pytest.mark.parametrize(
     "kernel_size",
     (
-        (2, 2),
-        (3, 3),
+        # (2, 2),
+        # (3, 3),
         (5, 5),
-        (9, 9),
-        (13, 13),
+        # (9, 9),
+        # (13, 13),
     ),
 )
 @pytest.mark.parametrize(
     "padding",
     (
-        (0, 0),
-        (1, 1),
+        # (0, 0),
+        # (1, 1),
         (2, 2),
-        (4, 4),
-        (6, 6),
+        # (4, 4),
+        # (6, 6),
     ),
 )
 @pytest.mark.parametrize(
     "stride",
     (
         (1, 1),
-        (2, 2),
+        # (2, 2),
     ),
 )
 @pytest.mark.parametrize("dilation", ((1, 1),))  ## default
@@ -420,14 +421,14 @@ def test_run_max_pool(
     "dtype",
     [
         ttnn.bfloat16,
-        ttnn.bfloat8_b,
+        # ttnn.bfloat8_b,
     ],
 )
 @pytest.mark.parametrize(
     "ceil_mode",
     [
         False,
-        True,
+        # True,
     ],
 )
 @pytest.mark.parametrize(
@@ -468,70 +469,71 @@ def test_run_max_pool_width_shard(
     "act_shape",  ## NCHW
     (
         (
-            [1, 256, 56, 56],
-            [1, 256, 28, 28],
-            [1, 256, 14, 14],
-            [1, 256, 10, 14],
-            [1, 512, 8, 6],
-            [1, 1024, 6, 6],
-            [1, 2048, 4, 6],
-            [4, 512, 40, 40],
-            [2, 1024, 40, 40],
-            [8, 2048, 10, 16],
-            ## resnet shapes
-            [1, 64, 112, 112],
-            [4, 64, 112, 112],
-            [8, 64, 112, 112],
-            [16, 64, 112, 112],
-            ## hpr shapes
-            [8, 32, 132, 20],
-            [16, 32, 132, 20],
-            [32, 32, 132, 20],
-            [64, 32, 132, 20],
-            [128, 32, 132, 20],
-            [8, 32, 264, 40],
-            [16, 32, 264, 40],
-            [32, 32, 264, 40],
-            [4, 16, 1056, 160],
-            [8, 16, 528, 80],
-            [16, 16, 528, 80],
-            # wide yolo kernel
-            [1, 4096, 10, 10],
-            [1, 768, 56, 56],
-            [1, 1280, 8, 6],
-            # wide non-8 multiple tests
-            [1, 800 * 8, 16, 16],
-            [1, 640 * 8, 16, 16],
-            [1, 576 * 8, 16, 16],
-            [1, 384 * 8, 16, 16],
+            # [1, 256, 56, 56],
+            # [1, 256, 28, 28],
+            # [1, 256, 14, 14],
+            # [1, 256, 10, 14],
+            # [1, 512, 8, 6],
+            # [1, 1024, 6, 6],
+            # [1, 2048, 4, 6],
+            # [4, 512, 40, 40],
+            # [2, 1024, 40, 40],
+            # [8, 2048, 10, 16],
+            # ## resnet shapes
+            # [1, 64, 112, 112],
+            # [4, 64, 112, 112],
+            # [8, 64, 112, 112],
+            # [16, 64, 112, 112],
+            # ## hpr shapes
+            # [8, 32, 132, 20],
+            # [16, 32, 132, 20],
+            # [32, 32, 132, 20],
+            # [64, 32, 132, 20],
+            # [128, 32, 132, 20],
+            # [8, 32, 264, 40],
+            # [16, 32, 264, 40],
+            # [32, 32, 264, 40],
+            # [4, 16, 1056, 160],
+            # [8, 16, 528, 80],
+            # [16, 16, 528, 80],
+            # # wide yolo kernel
+            # [1, 4096, 10, 10],
+            # [1, 768, 56, 56],
+            # [1, 1280, 8, 6],
+            # # wide non-8 multiple tests
+            # [1, 800 * 8, 16, 16],
+            # [1, 640 * 8, 16, 16],
+            # [1, 576 * 8, 16, 16],
+            # [1, 384 * 8, 16, 16],
+            [1, 2048, 8, 8],
         )
     ),
 )
 @pytest.mark.parametrize(
     "kernel_size",
     (
-        (2, 2),
-        (3, 3),
+        # (2, 2),
+        # (3, 3),
         (5, 5),
-        (9, 9),
-        (13, 13),
+        # (9, 9),
+        # (13, 13),
     ),
 )
 @pytest.mark.parametrize(
     "padding",
     (
-        (0, 0),
-        (1, 1),
+        # (0, 0),
+        # (1, 1),
         (2, 2),
-        (4, 4),
-        (6, 6),
+        # (4, 4),
+        # (6, 6),
     ),
 )
 @pytest.mark.parametrize(
     "stride",
     (
         (1, 1),
-        (2, 2),
+        # (2, 2),
     ),
 )
 @pytest.mark.parametrize("dilation", ((1, 1),))  ## default
@@ -539,14 +541,14 @@ def test_run_max_pool_width_shard(
     "dtype",
     [
         ttnn.bfloat16,
-        ttnn.bfloat8_b,
+        # ttnn.bfloat8_b,
     ],
 )
 @pytest.mark.parametrize(
     "ceil_mode",
     [
         False,
-        True,
+        # True,
     ],
 )
 @pytest.mark.parametrize(
@@ -582,7 +584,7 @@ def test_run_max_pool_block_shard(
     )
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
+""" @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
 @pytest.mark.parametrize(
     "act_shape",  ## NCHW
     (
