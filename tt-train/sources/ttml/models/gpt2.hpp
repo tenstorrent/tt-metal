@@ -7,7 +7,7 @@
 #include <yaml-cpp/yaml.h>
 
 #include "modules/embedding_module.hpp"
-#include "modules/gpt_block.hpp"
+#include "modules/llama_block.hpp"
 #include "modules/positional_embeddings.hpp"
 #include "modules/rms_norm_module.hpp"
 
