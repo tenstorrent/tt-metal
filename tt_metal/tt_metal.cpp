@@ -1235,8 +1235,8 @@ std::shared_ptr<Buffer> CreateBuffer(const ShardedBufferConfig& config, SubDevic
 
 void DeallocateBuffer(Buffer& buffer) {
     PUBLIC_API_ENTRY();
-    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
-    LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureDeallocateBuffer, buffer);
+    // LIGHT_METAL_TRACE_FUNCTION_ENTRY();
+    // LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureDeallocateBuffer, buffer);
     buffer.deallocate();
 }
 
