@@ -1066,6 +1066,7 @@ void copy_completion_queue_data_into_user_space(
                                 src_offset_increment += pad_size_bytes;
                                 // Only pad data left in queue
                             } else {
+                                src_offset_increment += rem_bytes_in_cq;
                                 offset_in_completion_q_data = pad_size_bytes - rem_bytes_in_cq;
                             }
                         }
