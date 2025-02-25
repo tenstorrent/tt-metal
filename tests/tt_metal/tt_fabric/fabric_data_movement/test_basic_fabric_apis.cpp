@@ -152,10 +152,10 @@ TEST_F(FabricFixture, TestAsyncWrite) {
     tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver_logical_core, receiver_runtime_args);
 
     // Launch sender and receiver programs and wait for them to finish
-    tt_metal::detail::LaunchProgram(receiver_device, receiver_program, false);
-    tt_metal::detail::LaunchProgram(sender_device, sender_program, false);
-    tt_metal::detail::WaitProgramDone(sender_device, sender_program);
-    tt_metal::detail::WaitProgramDone(receiver_device, receiver_program);
+    this->RunProgramNonblocking(receiver_device, receiver_program);
+    this->RunProgramNonblocking(sender_device, sender_program);
+    this->WaitForSingleProgramDone(sender_device, sender_program);
+    this->WaitForSingleProgramDone(receiver_device, receiver_program);
 
     // Validate the data received by the receiver
     std::vector<uint32_t> received_buffer_data;
@@ -302,10 +302,10 @@ TEST_F(FabricFixture, TestAtomicInc) {
     tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver_logical_core, receiver_runtime_args);
 
     // Launch sender and receiver programs and wait for them to finish
-    tt_metal::detail::LaunchProgram(receiver_device, receiver_program, false);
-    tt_metal::detail::LaunchProgram(sender_device, sender_program, false);
-    tt_metal::detail::WaitProgramDone(sender_device, sender_program);
-    tt_metal::detail::WaitProgramDone(receiver_device, receiver_program);
+    this->RunProgramNonblocking(receiver_device, receiver_program);
+    this->RunProgramNonblocking(sender_device, sender_program);
+    this->WaitForSingleProgramDone(sender_device, sender_program);
+    this->WaitForSingleProgramDone(receiver_device, receiver_program);
 
     // Validate the data received by the receiver
     std::vector<uint32_t> received_buffer_data;
@@ -469,10 +469,10 @@ TEST_F(FabricFixture, TestAsyncWriteAtomicInc) {
     tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver_logical_core, receiver_runtime_args);
 
     // Launch sender and receiver programs and wait for them to finish
-    tt_metal::detail::LaunchProgram(receiver_device, receiver_program, false);
-    tt_metal::detail::LaunchProgram(sender_device, sender_program, false);
-    tt_metal::detail::WaitProgramDone(sender_device, sender_program);
-    tt_metal::detail::WaitProgramDone(receiver_device, receiver_program);
+    this->RunProgramNonblocking(receiver_device, receiver_program);
+    this->RunProgramNonblocking(sender_device, sender_program);
+    this->WaitForSingleProgramDone(sender_device, sender_program);
+    this->WaitForSingleProgramDone(receiver_device, receiver_program);
 
     // Validate the data received by the receiver
     std::vector<uint32_t> received_buffer_data;
@@ -586,7 +586,7 @@ TEST_F(FabricFixture, TestAsyncWriteMulticast) {
             };
             tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver_logical_core, receiver_runtime_args);
 
-            tt_metal::detail::LaunchProgram(receiver_device, receiver_program, false);
+            this->RunProgramNonblocking(receiver_device, receiver_program);
             receiver_programs.push_back(std::move(receiver_program));
             receiver_buffers.push_back(std::move(receiver_buffer));
         }
@@ -676,12 +676,12 @@ TEST_F(FabricFixture, TestAsyncWriteMulticast) {
     tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
 
     // Launch sender and receiver programs and wait for them to finish
-    tt_metal::detail::LaunchProgram(sender_device, sender_program, false);
-    tt_metal::detail::WaitProgramDone(sender_device, sender_program);
+    this->RunProgramNonblocking(sender_device, sender_program);
+    this->WaitForSingleProgramDone(sender_device, sender_program);
     for (auto [routing_direction, physical_end_device_ids] : physical_end_device_ids_by_dir) {
         for (uint32_t i = 0; i < physical_end_device_ids.size(); i++) {
             auto* receiver_device = DevicePool::instance().get_active_device(physical_end_device_ids[i]);
-            tt_metal::detail::WaitProgramDone(receiver_device, receiver_programs[i]);
+            this->WaitForSingleProgramDone(receiver_device, receiver_programs[i]);
         }
     }
 
@@ -799,7 +799,7 @@ TEST_F(FabricFixture, TestAsyncWriteMulticastMultidirectional) {
             };
             tt_metal::SetRuntimeArgs(receiver_program, receiver_kernel, receiver_logical_core, receiver_runtime_args);
 
-            tt_metal::detail::LaunchProgram(receiver_device, receiver_program, false);
+            this->RunProgramNonblocking(receiver_device, receiver_program);
             receiver_programs.push_back(std::move(receiver_program));
             receiver_buffers.push_back(std::move(receiver_buffer));
         }
@@ -894,12 +894,12 @@ TEST_F(FabricFixture, TestAsyncWriteMulticastMultidirectional) {
     tt_metal::SetRuntimeArgs(sender_program, sender_kernel, sender_logical_core, sender_runtime_args);
 
     // Launch sender and receiver programs and wait for them to finish
-    tt_metal::detail::LaunchProgram(sender_device, sender_program, false);
-    tt_metal::detail::WaitProgramDone(sender_device, sender_program);
+    this->RunProgramNonblocking(sender_device, sender_program);
+    this->WaitForSingleProgramDone(sender_device, sender_program);
     for (auto [routing_direction, physical_end_device_ids] : physical_end_device_ids_by_dir) {
         for (uint32_t i = 0; i < physical_end_device_ids.size(); i++) {
             auto* receiver_device = DevicePool::instance().get_active_device(physical_end_device_ids[i]);
-            tt_metal::detail::WaitProgramDone(receiver_device, receiver_programs[i]);
+            this->WaitForSingleProgramDone(receiver_device, receiver_programs[i]);
         }
     }
 

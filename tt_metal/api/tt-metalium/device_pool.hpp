@@ -36,11 +36,9 @@ public:
     DevicePool(DevicePool&& other) noexcept = delete;
 
     static DevicePool& instance() noexcept {
-        TT_ASSERT((_inst != nullptr) and (_inst->initialized), "Trying to get DevicePool without initializing it");
+        TT_ASSERT(_inst != nullptr, "Trying to get DevicePool without initializing it");
         return *_inst;
     }
-
-    static void initialize_fabric_setting(detail::FabricSetting fabric_setting) noexcept;
 
     static void initialize(
         const std::vector<chip_id_t>& device_ids,
@@ -81,10 +79,7 @@ private:
     bool skip_remote_devices;
     std::unordered_set<uint32_t> firmware_built_keys;
 
-    detail::FabricSetting fabric_setting = detail::FabricSetting::DEFAULT;
     std::unique_ptr<tt::tt_fabric::ControlPlane> control_plane;
-
-    bool initialized = false;
 
     // Determine which CPU cores the worker threads need to be placed on for each device
     std::unordered_map<uint32_t, uint32_t> worker_thread_to_cpu_core_map;
