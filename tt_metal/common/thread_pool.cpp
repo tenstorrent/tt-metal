@@ -4,16 +4,18 @@
 
 #include <tt-metalium/thread_pool.hpp>
 
+namespace tt::tt_metal {
+
 ThreadPool::WorkerQueue::WorkerQueue() {
     // Initialize ring buffer for traversal. Each node points to the subsequent node, except for the last one, which
     // points to the head.
-    for (int node_idx = 0; node_idx < ring_buffer_size; node_idx++) {
-        (node_idx < ring_buffer_size - 1) ? ring_buffer[node_idx].next = (&ring_buffer[node_idx + 1])
-                                          : ring_buffer[node_idx].next = &(ring_buffer[0]);
+    for (int node_idx = 0; node_idx < ring_buffer_size_; node_idx++) {
+        (node_idx < ring_buffer_size_ - 1) ? ring_buffer_[node_idx].next = (&ring_buffer_[node_idx + 1])
+                                           : ring_buffer_[node_idx].next = &(ring_buffer_[0]);
     }
     // Initialize head and tail ptrs to start of ring buffer.
-    this->head = ring_buffer;
-    this->tail = ring_buffer;
+    head_ = ring_buffer_;
+    tail_ = ring_buffer_;
 }
 
 void ThreadPool::WorkerQueue::push(std::packaged_task<void()>&& task) {
@@ -21,27 +23,27 @@ void ThreadPool::WorkerQueue::push(std::packaged_task<void()>&& task) {
     // to match the location of head (rptr). The current push can
     // thus overwrite data that's being read. Stall until head
     // has progressed (data has been read).
-    // A stall is only required when the ring_buffer backing the queue
+    // A stall is only required when the ring_buffer_ backing the queue
     // is full. Realistically, this should never happen, given the size
-    while (tail.load()->next == head.load());
-    tail.load()->data = std::move(task);
-    tail.store(tail.load()->next);
+    while (tail_.load()->next == head_.load());
+    tail_.load()->data = std::move(task);
+    tail_.store(tail_.load()->next);
 }
 
 std::packaged_task<void()>&& ThreadPool::WorkerQueue::pop() {
-    ThreadPool::WorkerQueue::Node* oldHead = pop_head();
-    return std::move(oldHead->data);
+    ThreadPool::WorkerQueue::Node* old_head = pop_head();
+    return std::move(old_head->data);
 }
 
-bool ThreadPool::WorkerQueue::empty() const { return head.load() == tail.load(); }
+bool ThreadPool::WorkerQueue::empty() const { return head_.load() == tail_.load(); }
 
 ThreadPool::WorkerQueue::Node* ThreadPool::WorkerQueue::pop_head() {
-    ThreadPool::WorkerQueue::Node* oldHead = head.load();
-    if (oldHead == tail.load()) {
+    ThreadPool::WorkerQueue::Node* old_head = head_.load();
+    if (old_head == tail_.load()) {
         return nullptr;  // Queue is empty
     }
-    head.store(oldHead->next);
-    return oldHead;
+    head_.store(old_head->next);
+    return old_head;
 }
 
 ThreadPool::ThreadPool(size_t thread_count) : shutdown_(false) {
@@ -52,7 +54,7 @@ ThreadPool::ThreadPool(size_t thread_count) : shutdown_(false) {
             while (true) {
                 std::packaged_task<void()> task;  // Task container for this thread
                 {
-                    task_semaphore.acquire();  // Ensures 1:1 task to worker mapping
+                    task_semaphore_.acquire();  // Ensures 1:1 task to worker mapping
                     if (shutdown_) {
                         return;
                     }
@@ -62,7 +64,7 @@ ThreadPool::ThreadPool(size_t thread_count) : shutdown_(false) {
                     task = std::move(tasks_.pop());  // Move the packaged_task
                 }
                 task();     // Execute the packaged_task
-                counter--;  // Notify maibn thread that a task was completed
+                counter_--;  // Notify maibn thread that a task was completed
             }
         });
     }
@@ -72,13 +74,15 @@ ThreadPool::~ThreadPool() {
     shutdown_ = true;
     // Notify all workers that a shutdown signal was sent
     for (size_t i = 0; i < workers_.size(); ++i) {
-        task_semaphore.release();
+        task_semaphore_.release();
     }
     for (std::thread& worker : workers_) {
         worker.join();
     }
 }
 
-void ThreadPool::barrier() const noexcept { while (counter); }
+void ThreadPool::barrier() const noexcept { while (counter_); }
 
 std::size_t ThreadPool::num_threads() const noexcept { return workers_.size(); }
+
+}  // namespace tt::tt_metal

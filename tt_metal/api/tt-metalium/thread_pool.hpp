@@ -11,6 +11,8 @@
 #include <future>
 #include <memory>
 
+namespace tt::tt_metal {
+
 class ThreadPool {
 public:
     explicit ThreadPool(size_t thread_count = std::thread::hardware_concurrency());
@@ -21,10 +23,10 @@ public:
         // Bind the function to a packaged_task
         auto task = std::packaged_task<void()>(std::forward<F>(f));
         tasks_.push(std::move(task));  // Move the task directly into queue
-        task_semaphore.release();      // Notify a worker that a task is available
+        task_semaphore_.release();     // Notify a worker that a task is available
         // Light-Weight counter increment to track the number of tasks in flight
         // Need this because a counting_semaphore does not allow querying state
-        counter++;
+        counter_++;
     }
     void barrier() const noexcept;
 
@@ -48,15 +50,15 @@ private:
             Node* next = nullptr;
         };
 
-        std::atomic<Node*> head;
-        std::atomic<Node*> tail;
+        std::atomic<Node*> head_;
+        std::atomic<Node*> tail_;
 
         Node* pop_head();
         // Statically allocated ring buffer containing
         // node objects, which contain handles to data
         // and another node object to traverse ring buffer.
-        const static uint32_t ring_buffer_size = 32768;
-        Node ring_buffer[ring_buffer_size];
+        const static uint32_t ring_buffer_size_ = 32768;
+        Node ring_buffer_[ring_buffer_size_];
     };
 
     // Worker threads backing the pool
@@ -68,9 +70,11 @@ private:
     std::mutex mutex_;
     // Counting Semaphore used by main thread to
     // notify workers when a task is available
-    std::counting_semaphore<> task_semaphore{0};
+    std::counting_semaphore<> task_semaphore_{0};
     // Atomic counter used by workers to notify
     // main thread when all tasks are complete
-    std::atomic<int> counter = 0;
+    std::atomic<int> counter_ = 0;
     bool shutdown_;
 };
+
+}  // namespace tt::tt_metal
