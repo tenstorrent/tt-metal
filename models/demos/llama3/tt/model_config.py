@@ -123,9 +123,9 @@ class TtModelArgs:
 
         LLAMA_DIR = os.getenv("LLAMA_DIR")
         if LLAMA_DIR:
-            if any([os.getenv("LLAMA_CKPT_DIR"), os.getenv("LLAMA_TOKENIZER_PATH"), os.getenv("LLAMA_CACHE_PATH")]):
+            if any([os.getenv("LLAMA_CKPT_DIR"), os.getenv("LLAMA_TOKENIZER_PATH")]):
                 logger.warning(
-                    "LLAMA_DIR is set and will override LLAMA_CKPT_DIR, LLAMA_TOKENIZER_PATH, and LLAMA_CACHE_PATH"
+                    "LLAMA_DIR will override LLAMA_CKPT_DIR and LLAMA_TOKENIZER_PATH, and will set LLAMA_CACHE_PATH"
                 )
             self.DEFAULT_CKPT_DIR = LLAMA_DIR
             self.DEFAULT_TOKENIZER_PATH = LLAMA_DIR
@@ -133,23 +133,23 @@ class TtModelArgs:
         else:
             assert "Please set $LLAMA_DIR to a valid checkpoint directory"
 
+        if CACHE_PATH := os.getenv("LLAMA_CACHE_PATH"):
+            logger.warning("LLAMA_CACHE_PATH is set and will override LLAMA_CACHE_PATH")
+            self.DEFAULT_CACHE_PATH = os.path.join(CACHE_PATH, self.device_name)
+
         if not dummy_weights:
             # Assert if all folders and files exist
             assert os.path.exists(
                 self.DEFAULT_CKPT_DIR
-            ), f"Checkpoint directory {self.DEFAULT_CKPT_DIR} does not exist, please set LLAMA_DIR=... or LLAMA_CKPT_DIR=..."
+            ), f"Checkpoint directory {self.DEFAULT_CKPT_DIR} does not exist, please set LLAMA_DIR=..."
             assert os.path.isfile(
                 self.DEFAULT_TOKENIZER_PATH + "/tokenizer.model"
-            ), f"Tokenizer file {self.DEFAULT_TOKENIZER_PATH + '/tokenizer.model'} does not exist, please set LLAMA_TOKENIZER_PATH=..."
+            ), f"Tokenizer file {self.DEFAULT_TOKENIZER_PATH + '/tokenizer.model'} does not exist, please set LLAMA_DIR=..."
             if not os.path.exists(self.DEFAULT_CACHE_PATH):
                 os.makedirs(self.DEFAULT_CACHE_PATH)
             assert os.path.exists(
                 self.DEFAULT_CACHE_PATH
-            ), f"Cache directory {self.DEFAULT_CACHE_PATH} does not exist, please set LLAMA_CACHE_PATH=..."
-            # Check if weights exist in the specified folder. If not warn the user to run the download and untar script.
-        #            assert os.path.isfile(
-        #                self.DEFAULT_CKPT_DIR + "/consolidated.00.pth"
-        #            ), f"weights consolidated.00.pth file does not exist. Please use the script `models/demos/llama3/scripts/get_weights.py` to download and untar the weights."
+            ), f"Cache directory {self.DEFAULT_CACHE_PATH} does not exist, please set LLAMA_DIR=... or LLAMA_CACHE_PATH=..."
 
         logger.info(f"Checkpoint directory: {self.DEFAULT_CKPT_DIR}")
         logger.info(f"Tokenizer file: {self.DEFAULT_TOKENIZER_PATH + '/tokenizer.model'}")
