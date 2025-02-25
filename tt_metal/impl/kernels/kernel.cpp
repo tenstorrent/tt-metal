@@ -401,7 +401,7 @@ void DataMovementKernel::read_binaries(IDevice* device) {
         load_type);
     binaries.push_back(&binary_mem);
     uint32_t binary_size = binary_mem.get_packed_size();
-    log_debug(LogLoader, "RISC {} kernel binary size: {} in bytes", riscv_id, binary_size);
+    log_debug(LogLoader, "RISC={}, name={}, size={} (bytes)", riscv_id, this->name(), binary_size);
     this->set_binaries(
         BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key, std::move(binaries));
 }
@@ -424,7 +424,7 @@ void EthernetKernel::read_binaries(IDevice* device) {
         load_type);
     binaries.push_back(&binary_mem);
     uint32_t binary_size = binary_mem.get_packed_size();
-    log_debug(LogLoader, "ERISC {} kernel binary size: {} in bytes", erisc_id, binary_size);
+    log_debug(LogLoader, "ERISC={}, name={}, size={} (bytes)", erisc_id, this->name(), binary_size);
     this->set_binaries(
         BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key, std::move(binaries));
 }
@@ -442,7 +442,7 @@ void ComputeKernel::read_binaries(IDevice* device) {
             ll_api::memory::Loading::CONTIGUOUS_XIP);
         binaries.push_back(&binary_mem);
         uint32_t binary_size = binary_mem.get_packed_size();
-        log_debug(LogLoader, "RISC {} kernel binary size: {} in bytes", trisc_id + 2, binary_size);
+        log_debug(LogLoader, "RISC={}, name={}, size={} (bytes)", trisc_id + 2, this->name(), binary_size);
     }
     this->set_binaries(
         BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key, std::move(binaries));
