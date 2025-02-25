@@ -358,7 +358,7 @@ def test_run_max_pool(
         dilation,
         device,
         dtype,
-        shard_scheme=ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        shard_scheme=ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         ceil_mode=ceil_mode,
         in_place_halo=in_place_halo,
     )

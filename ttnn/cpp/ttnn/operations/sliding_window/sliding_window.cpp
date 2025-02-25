@@ -509,9 +509,11 @@ generate_halo_kernel_config_tensors(
             max_len = std::max(max_len, curr_len);  // each key is 3, data is 3 * data.size()
         }
         std::vector<std::vector<uint16_t>> flattened_config;
-        std::vector<uint16_t> remote_ref_counts(config.size(), 0);
-        CoreCoord noc_00 = core_id_to_noc_coords(0);
         int num_cores_x = device->compute_with_storage_grid_size().x;
+        int num_cores_y = device->compute_with_storage_grid_size().y;
+        int num_cores = num_cores_x * num_cores_y;
+        std::vector<uint16_t> remote_ref_counts(num_cores, 0);
+        CoreCoord noc_00 = core_id_to_noc_coords(0);
         int max_ref_size = 0;
         int core = 0;
         for (auto& core_config : config) {
