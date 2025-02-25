@@ -44,6 +44,7 @@ struct AllGather2D {
     std::optional<SubDeviceId> sub_device_id;
     const uint32_t page_stride;
     const uint32_t num_chunks;
+    const uint32_t row_order;
 
     auto attributes() const {
         using tt::stl::reflection::Attribute;
@@ -155,7 +156,8 @@ operation::ProgramWithCallbacks all_gather_2D_multi_core_with_workers(
     const uint32_t page_stride,
     const uint32_t num_chunks,
     const uint32_t num_devices,
-    const std::optional<SubDeviceId>& sub_device_id);
+    const std::optional<SubDeviceId>& sub_device_id,
+    const uint32_t row_order);
 operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
     const Tensor& input_tensor,
     std::optional<IDevice*> forward_device,

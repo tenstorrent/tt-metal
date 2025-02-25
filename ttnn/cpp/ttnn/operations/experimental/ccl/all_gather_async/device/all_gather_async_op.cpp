@@ -222,7 +222,8 @@ operation::ProgramWithCallbacks AllGather2D::create_program(
                 this->page_stride,
                 this->num_chunks,
                 num_devices,
-                this->sub_device_id);
+                this->sub_device_id,
+                this->row_order);
     }
 }
 
