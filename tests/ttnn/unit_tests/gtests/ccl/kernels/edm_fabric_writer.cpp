@@ -131,7 +131,7 @@ void kernel_main() {
     unicast_packet_header->to_chip_unicast(static_cast<uint8_t>(unicast_hops));
 
     {
-        DeviceZoneScopedN("MAIN-WRITE-ZONE");
+        DeviceZoneScopedN("MAIN-WRITE-MCAST-ZONE");
         for (size_t i = 0; i < num_mcasts; i++) {
             auto noc0_dest_addr = safe_get_noc_addr(
                 static_cast<uint8_t>(dest_noc_x), static_cast<uint8_t>(dest_noc_y), dest_bank_addr, 0);
@@ -165,16 +165,19 @@ void kernel_main() {
         }
     }
 
-    for (size_t i = 0; i < num_unicasts; i++) {
-        auto noc0_dest_addr =
-            safe_get_noc_addr(static_cast<uint8_t>(dest_noc_x), static_cast<uint8_t>(dest_noc_y), dest_bank_addr, 0);
-        auto& fabric_conn =
-            unicast_is_fwd ? fabric_connection.get_forward_connection() : fabric_connection.get_backward_connection();
-        unicast_packet_header->to_noc_unicast_write(NocUnicastCommandHeader{noc0_dest_addr}, packet_payload_size_bytes);
-        fabric_conn.wait_for_empty_write_slot();
-        fabric_conn.send_payload_without_header_non_blocking_from_address(
-            source_l1_buffer_address, packet_payload_size_bytes);
-        fabric_conn.send_payload_blocking_from_address((uint32_t)unicast_packet_header, sizeof(PACKET_HEADER_TYPE));
+    {
+        DeviceZoneScopedN("MAIN-WRITE-UNICAST-ZONE");
+        for (size_t i = 0; i < num_unicasts; i++) {
+            auto noc0_dest_addr =
+                safe_get_noc_addr(static_cast<uint8_t>(dest_noc_x), static_cast<uint8_t>(dest_noc_y), dest_bank_addr, 0);
+            auto& fabric_conn =
+                unicast_is_fwd ? fabric_connection.get_forward_connection() : fabric_connection.get_backward_connection();
+            unicast_packet_header->to_noc_unicast_write(NocUnicastCommandHeader{noc0_dest_addr}, packet_payload_size_bytes);
+            fabric_conn.wait_for_empty_write_slot();
+            fabric_conn.send_payload_without_header_non_blocking_from_address(
+                source_l1_buffer_address, packet_payload_size_bytes);
+            fabric_conn.send_payload_blocking_from_address((uint32_t)unicast_packet_header, sizeof(PACKET_HEADER_TYPE));
+        }
     }
 
     if (enable_finish_synchronization) {
