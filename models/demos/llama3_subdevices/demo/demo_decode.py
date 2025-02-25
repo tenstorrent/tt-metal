@@ -356,6 +356,8 @@ def run_llama3_demo(
 
     profiler.end(f"capture_trace")
 
+    ttnn.synchronize_devices(mesh_device)
+
     # Start decoding
     iteration = 0
     users_decoding = True  # reset to handle next batch
