@@ -681,7 +681,7 @@ def test_all_gather_multiple_submeshes(mesh_device):
         pytest.skip()
 
     def model(submesh):
-        # Reshape to a linear mesh to enforce linearly connected topological order.
+        # Reshape to a 1x4 mesh to enforce ring connected topological order.
         submesh.reshape(ttnn.MeshShape(1, 4))
         full_tensor = torch.ones((1, 1, 32, 32 * submesh.get_num_devices()), dtype=torch.bfloat16)
         for i in range(submesh.get_num_devices()):
