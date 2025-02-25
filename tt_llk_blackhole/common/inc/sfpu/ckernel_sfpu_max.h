@@ -4,28 +4,21 @@
 
 #pragma once
 
-#include "ckernel_defs.h"
 #include "ckernel.h"
-
+#include "ckernel_defs.h"
 #include "sfpi.h"
 
 using namespace sfpi;
 
-namespace ckernel
-{
-namespace sfpu
-{
+namespace ckernel {
+namespace sfpu {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _calculate_max_(const int iterations)
-{
-    for (int d = 0; d < iterations; d++)
-    {
+inline void _calculate_max_(const int iterations) {
+    for (int d = 0; d < iterations; d++) {
         vFloat a = dst_reg[0];
         vFloat b = dst_reg[32];
-        v_if(a < b) {
-            dst_reg[0] = b;
-        }
+        v_if(a < b) { dst_reg[0] = b; }
         v_endif;
 
         dst_reg++;

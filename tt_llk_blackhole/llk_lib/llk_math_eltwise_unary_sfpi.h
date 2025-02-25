@@ -2,32 +2,35 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-
-#include "ckernel_include.h"
-#include "ckernel_template.h"
 #include <type_traits>
 
+#include "ckernel_globals.h"
+#include "ckernel_include.h"
+#include "ckernel_sfpi.h"
+#include "ckernel_template.h"
 #include "cmath_common.h"
 #include "llk_math_common.h"
-#include "ckernel_globals.h"
-#include "ckernel_sfpi.h"
 
 using namespace ckernel;
+
 template <SfpiTestType sfpu_type>
 void static_assert_sfpi_type_dependent() {
     static_assert(sfpu_type == SfpiTestType::unused_test, "sfpu_type exception");
 }
+
 // local function declarations
-inline void eltwise_unary_sfpi_configure_addrmod(){
+inline void eltwise_unary_sfpi_configure_addrmod() {
     // NOTE: this kernel is typically used in conjunction with
     //       A2D, which is using ADDR_MOD_0 and ADDR_MOD_2, so use one
     //       that doesn't conflict!
-    addr_mod_t{
+    addr_mod_t {
         .srca = {.incr = 0},
         .srcb = {.incr = 0},
         .dest = {.incr = 0},
-    }.set(ADDR_MOD_3);
+    }
+        .set(ADDR_MOD_3);
 }
+
 inline void eltwise_unary_sfpi_configure_mop();
 
 template <SfpiTestType sfpu_op, DstSync Dst>

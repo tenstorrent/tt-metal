@@ -4,25 +4,21 @@
 
 #pragma once
 
-#include "ckernel_defs.h"
 #include "ckernel.h"
-#include "noc_nonblocking_api.h"
+#include "ckernel_defs.h"
 #include "ckernel_sfpu_exp.h"
-
+#include "noc_nonblocking_api.h"
 #include "sfpi.h"
 
 using namespace sfpi;
 
-namespace ckernel
-{
-namespace sfpu
-{
+namespace ckernel {
+namespace sfpu {
 
 template <bool APPROXIMATION_MODE>
-sfpi_inline vFloat _calculate_gelu_core_(vFloat in)
-{
+sfpi_inline vFloat _calculate_gelu_core_(vFloat in) {
     constexpr uint imm0 = 0x18FF;
-    constexpr uint imm1 = (APPROXIMATION_MODE)? 0x212C : 0x2010;
+    constexpr uint imm1 = (APPROXIMATION_MODE) ? 0x212C : 0x2010;
     constexpr uint imm2 = 0xFF00;
 
     // SFPU microcode:
@@ -48,25 +44,22 @@ sfpi_inline vFloat _calculate_gelu_core_(vFloat in)
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _calculate_gelu_()
-{
-    constexpr uint imm1 = (APPROXIMATION_MODE)? 0x212C : 0x2010;
+inline void _calculate_gelu_() {
+    constexpr uint imm1 = (APPROXIMATION_MODE) ? 0x212C : 0x2010;
     constexpr uint imm2 = 0xFF00;
-    vUInt l0 = l_reg[LRegs::LReg0];
+    vUInt          l0   = l_reg[LRegs::LReg0];
 
-    // SFPU microcode
-    #pragma GCC unroll 4
-    for (int d = 0; d < ITERATIONS; d++)
-    {
+// SFPU microcode
+#pragma GCC unroll 4
+    for (int d = 0; d < ITERATIONS; d++) {
         vFloat val = dst_reg[0];
-        vUInt l1;
-        vUInt l2;
+        vUInt  l1;
+        vUInt  l2;
         vFloat result;
 
-        if constexpr (APPROXIMATION_MODE)
-        {
-            l1 = imm1;
-            l2 = imm2;
+        if constexpr (APPROXIMATION_MODE) {
+            l1     = imm1;
+            l2     = imm2;
             result = val;
         } else {
             // f = (0.044715*x^3 + x)
@@ -96,13 +89,12 @@ inline void _calculate_gelu_()
 }
 
 template <bool APPROXIMATION_MODE>
-inline void _init_gelu_()
-{
+inline void _init_gelu_() {
     uint imm0;
     uint imm1;
     uint imm2;
     imm0 = 0x18FF;
-    imm1 = (APPROXIMATION_MODE)? 0x212C : 0x2010;
+    imm1 = (APPROXIMATION_MODE) ? 0x212C : 0x2010;
     imm2 = 0xFF00;
     TTI_SFPLOADI(0, 2, imm0);
     TTI_SFPLOADI(1, 2, imm1);
@@ -110,17 +102,15 @@ inline void _init_gelu_()
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _calculate_gelu_derivative_()
-{
-    // SFPU microcode:
-    #pragma GCC unroll 0
-    for (int d = 0; d < ITERATIONS; d++)
-    {
-        vFloat val = dst_reg[0];
+inline void _calculate_gelu_derivative_() {
+// SFPU microcode:
+#pragma GCC unroll 0
+    for (int d = 0; d < ITERATIONS; d++) {
+        vFloat val    = dst_reg[0];
         vFloat result = val * val * vConstNeg0p5;
 
         // exp = e^(val) * 1/sqrt(2*pi)
-        if constexpr(APPROXIMATION_MODE) {
+        if constexpr (APPROXIMATION_MODE) {
             vFloat exp = _calculate_exponential_body_<APPROXIMATION_MODE, APPROXIMATION_MODE>(result);
             exp *= 0.39844F;
             dst_reg[0] = exp * val;

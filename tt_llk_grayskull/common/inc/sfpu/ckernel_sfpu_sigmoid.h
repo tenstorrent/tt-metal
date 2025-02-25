@@ -4,29 +4,24 @@
 
 #pragma once
 
-#include "ckernel_defs.h"
 #include "ckernel.h"
+#include "ckernel_defs.h"
 #include "noc_nonblocking_api.h"
-
 #include "sfpi.h"
 
 using namespace sfpi;
 
-namespace ckernel
-{
-namespace sfpu
-{
+namespace ckernel {
+namespace sfpu {
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _calculate_sigmoid_()
-{
+inline void _calculate_sigmoid_() {
     // SFPU microcode
     vUInt l0 = l_reg[LRegs::LReg0];
     vUInt l1 = l_reg[LRegs::LReg1];
     vUInt l2 = l_reg[LRegs::LReg2];
 
-    for (int d = 0; d < ITERATIONS; d++)
-    {
+    for (int d = 0; d < ITERATIONS; d++) {
         vFloat val = dst_reg[0];
 
         val = lut(val, l0, l1, l2);
@@ -42,8 +37,7 @@ inline void _calculate_sigmoid_()
 }
 
 template <bool APPROXIMATION_MODE>
-inline void _init_sigmoid_()
-{
+inline void _init_sigmoid_() {
     uint imm0;
     uint imm1;
     uint imm2;
