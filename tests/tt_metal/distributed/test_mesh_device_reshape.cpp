@@ -8,6 +8,7 @@
 #include <array>
 
 #include "host_api.hpp"
+#include "indestructible.hpp"
 #include "mesh_config.hpp"
 #include "mesh_device.hpp"
 #include "mesh_coord.hpp"
@@ -43,22 +44,26 @@ public:
     }
 };
 
-constexpr std::array<MeshShape, 24> kMeshShapes{{{1, 1}, {1, 2}, {1, 3}, {1, 4}, {1, 5}, {1, 6}, {1, 7}, {1, 8},
-                                                 {2, 1}, {2, 2}, {2, 3}, {2, 4}, {3, 1}, {3, 2}, {4, 1}, {4, 2},
-                                                 {8, 1}, {7, 1}, {6, 1}, {5, 1}, {4, 1}, {3, 1}, {2, 1}, {1, 1}}};
+const std::vector<MeshShape> get_mesh_shapes() {
+    static tt::stl::Indestructible<std::vector<MeshShape>> kMeshShapes(std::vector<MeshShape>{
+        MeshShape{1, 1}, MeshShape{1, 2}, MeshShape{1, 3}, MeshShape{1, 4}, MeshShape{1, 5}, MeshShape{1, 6},
+        MeshShape{1, 7}, MeshShape{1, 8}, MeshShape{2, 1}, MeshShape{2, 2}, MeshShape{2, 3}, MeshShape{2, 4},
+        MeshShape{3, 1}, MeshShape{3, 2}, MeshShape{4, 1}, MeshShape{4, 2}, MeshShape{8, 1}, MeshShape{7, 1},
+        MeshShape{6, 1}, MeshShape{5, 1}, MeshShape{4, 1}, MeshShape{3, 1}, MeshShape{2, 1}, MeshShape{1, 1}});
+    return kMeshShapes.get();
+}
 
 class MeshConfigurationTest : public T3KTestFixture, public ::testing::WithParamInterface<MeshShape> {};
 
 TEST_P(MeshConfigurationTest, MeshConfigurations) {
     const auto& shape = GetParam();
     auto mesh = tt::tt_metal::distributed::MeshDevice::create(
-        MeshDeviceConfig{.mesh_shape = SimpleMeshShape(shape.num_rows, shape.num_cols)},
+        MeshDeviceConfig{.mesh_shape = MeshShape(shape)},
         DEFAULT_L1_SMALL_SIZE,
         DEFAULT_TRACE_REGION_SIZE,
         1,
         tt::tt_metal::DispatchCoreType::WORKER);
-    EXPECT_EQ(mesh->num_rows(), shape.num_rows);
-    EXPECT_EQ(mesh->num_cols(), shape.num_cols);
+    EXPECT_EQ(mesh->shape(), shape);
     mesh->close();
 }
 
@@ -67,12 +72,12 @@ TEST_P(MeshConfigurationTest, GetPhysicalDeviceIds) {
 
     auto& system_mesh = SystemMesh::instance();
     EXPECT_THAT(
-        system_mesh.get_mapped_physical_device_ids(MeshDeviceConfig{.mesh_shape = SimpleMeshShape(shape)}),
-        SizeIs(shape.num_cols * shape.num_rows));
+        system_mesh.get_mapped_physical_device_ids(MeshDeviceConfig{.mesh_shape = MeshShape(shape)}),
+        SizeIs(shape.mesh_size()));
 }
 
 // Test all possible mesh configurations on T3000
-INSTANTIATE_TEST_SUITE_P(AllMeshShapes, MeshConfigurationTest, ::testing::ValuesIn(kMeshShapes));
+INSTANTIATE_TEST_SUITE_P(AllMeshShapes, MeshConfigurationTest, ::testing::ValuesIn(get_mesh_shapes()));
 
 class MeshDeviceReshapeRoundtripTest : public T3KTestFixture,
                                        public ::testing::WithParamInterface<std::tuple<MeshShape, MeshShape>> {};
@@ -80,42 +85,40 @@ class MeshDeviceReshapeRoundtripTest : public T3KTestFixture,
 TEST_P(MeshDeviceReshapeRoundtripTest, ReshapeBetweenConfigurations) {
     const auto& [old_shape, new_shape] = GetParam();
 
-    if ((old_shape.num_rows * old_shape.num_cols) != (new_shape.num_rows * new_shape.num_cols)) {
+    if (old_shape.mesh_size() != new_shape.mesh_size()) {
         GTEST_SKIP() << "Device counts don't match; we test this in InvalidReshapeDimensions";
     }
-    if (old_shape.num_rows == 1 or old_shape.num_cols == 1 or new_shape.num_rows == 1 or new_shape.num_cols == 1) {
-        GTEST_SKIP() << "Old shape is 1xN or Nx1; we test this in From1x4To2x2Invalid";
+    if (is_line_topology(old_shape) or is_line_topology(new_shape)) {
+        GTEST_SKIP() << "Either old or new shape is in line configuration; we test this in From1x4To2x2Invalid";
     }
 
     auto mesh = tt::tt_metal::distributed::MeshDevice::create(
-        MeshDeviceConfig{.mesh_shape = SimpleMeshShape(old_shape.num_rows, old_shape.num_cols)},
+        MeshDeviceConfig{.mesh_shape = MeshShape(old_shape)},
         DEFAULT_L1_SMALL_SIZE,
         DEFAULT_TRACE_REGION_SIZE,
         1,
         tt::tt_metal::DispatchCoreType::WORKER);
 
-    EXPECT_EQ(mesh->num_rows(), old_shape.num_rows);
-    EXPECT_EQ(mesh->num_cols(), old_shape.num_cols);
+    EXPECT_EQ(mesh->shape(), old_shape);
 
     auto original_order = mesh->get_device_ids();
 
     // Attempt reshape
-    mesh->reshape({new_shape.num_rows, new_shape.num_cols});
+    mesh->reshape(new_shape);
 
     // Verify new shape
-    EXPECT_EQ(mesh->num_rows(), new_shape.num_rows);
-    EXPECT_EQ(mesh->num_cols(), new_shape.num_cols);
+    EXPECT_EQ(mesh->shape(), new_shape);
 
     // Verify device ordering is preserved
     EXPECT_EQ(mesh->get_device_ids(), original_order)
-        << "Device ordering is not preserved " << SimpleMeshShape(old_shape) << " -> " << SimpleMeshShape(new_shape);
+        << "Device ordering is not preserved " << MeshShape(old_shape) << " -> " << new_shape;
 }
 
 // Generate all possible combinations of shapes from kMeshShapes
 INSTANTIATE_TEST_SUITE_P(
     AllMeshShapes,
     MeshDeviceReshapeRoundtripTest,
-    ::testing::Combine(::testing::ValuesIn(kMeshShapes), ::testing::ValuesIn(kMeshShapes)));
+    ::testing::Combine(::testing::ValuesIn(get_mesh_shapes()), ::testing::ValuesIn(get_mesh_shapes())));
 
 // Base class for non-parameterized tests
 using MeshDeviceReshapeTest = T3KTestFixture;
@@ -124,57 +127,54 @@ TEST_F(MeshDeviceReshapeTest, InvalidRequestedShape) {
     auto& system_mesh = tt::tt_metal::distributed::SystemMesh::instance();
 
     // Shape too big.
-    EXPECT_ANY_THROW(system_mesh.get_mapped_physical_device_ids(MeshDeviceConfig{.mesh_shape = SimpleMeshShape(9)}));
-    EXPECT_ANY_THROW(system_mesh.get_mapped_physical_device_ids(MeshDeviceConfig{.mesh_shape = SimpleMeshShape(2, 5)}));
+    EXPECT_ANY_THROW(system_mesh.get_mapped_physical_device_ids(MeshDeviceConfig{.mesh_shape = MeshShape(9)}));
+    EXPECT_ANY_THROW(system_mesh.get_mapped_physical_device_ids(MeshDeviceConfig{.mesh_shape = MeshShape(2, 5)}));
 
     // Invalid offset.
     EXPECT_ANY_THROW(system_mesh.get_mapped_physical_device_ids(
-        MeshDeviceConfig{.mesh_shape = SimpleMeshShape(1, 8), .offset = MeshCoordinate(0, 1)}));
+        MeshDeviceConfig{.mesh_shape = MeshShape(1, 8), .offset = MeshCoordinate(0, 1)}));
     EXPECT_ANY_THROW(system_mesh.get_mapped_physical_device_ids(
-        MeshDeviceConfig{.mesh_shape = SimpleMeshShape(2, 3), .offset = MeshCoordinate(1, 1)}));
+        MeshDeviceConfig{.mesh_shape = MeshShape(2, 3), .offset = MeshCoordinate(1, 1)}));
 
     // Offset dimensionality mismatch.
     EXPECT_ANY_THROW(system_mesh.get_mapped_physical_device_ids(
-        MeshDeviceConfig{.mesh_shape = SimpleMeshShape(2, 3), .offset = MeshCoordinate(1)}));
+        MeshDeviceConfig{.mesh_shape = MeshShape(2, 3), .offset = MeshCoordinate(1)}));
 
     // Mismatch system mesh shape.
     EXPECT_ANY_THROW(system_mesh.get_mapped_physical_device_ids(
-        MeshDeviceConfig{.mesh_shape = SimpleMeshShape(8), .offset = MeshCoordinate(1)}));
+        MeshDeviceConfig{.mesh_shape = MeshShape(8), .offset = MeshCoordinate(1)}));
 }
 
 TEST_F(MeshDeviceReshapeTest, InvalidReshapeDimensions) {
     auto mesh = tt::tt_metal::distributed::MeshDevice::create(
-        MeshDeviceConfig{.mesh_shape = SimpleMeshShape(1, 8)},
+        MeshDeviceConfig{.mesh_shape = MeshShape(1, 8)},
         DEFAULT_L1_SMALL_SIZE,
         DEFAULT_TRACE_REGION_SIZE,
         1,
         tt::tt_metal::DispatchCoreType::WORKER);
 
     // Test reshaping to dimensions that don't match total device count
-    EXPECT_THROW(mesh->reshape({3, 3}), std::runtime_error);  // 9 devices != 8
-    EXPECT_THROW(mesh->reshape({1, 9}), std::runtime_error);  // 9 devices != 8
+    EXPECT_THROW(mesh->reshape(MeshShape(3, 3)), std::runtime_error);  // 9 devices != 8
+    EXPECT_THROW(mesh->reshape(MeshShape(1, 9)), std::runtime_error);  // 9 devices != 8
 
     // Verify original shape is preserved after failed reshapes
-    EXPECT_EQ(mesh->num_rows(), 1);
-    EXPECT_EQ(mesh->num_cols(), 8);
+    EXPECT_EQ(mesh->shape(), MeshShape(1, 8));
 }
 
 TEST_F(MeshDeviceReshapeTest, From1x8To2x4ThenBackTo1x8) {
     auto mesh = tt::tt_metal::distributed::MeshDevice::create(
-        MeshDeviceConfig{.mesh_shape = SimpleMeshShape(1, 8)},
+        MeshDeviceConfig{.mesh_shape = MeshShape(1, 8)},
         DEFAULT_L1_SMALL_SIZE,
         DEFAULT_TRACE_REGION_SIZE,
         1,
         tt::tt_metal::DispatchCoreType::WORKER);
 
-    EXPECT_EQ(mesh->num_rows(), 1);
-    EXPECT_EQ(mesh->num_cols(), 8);
+    EXPECT_EQ(mesh->shape(), MeshShape(1, 8));
     auto original_order = mesh->get_device_ids();
 
-    mesh->reshape({2, 4});
+    mesh->reshape(MeshShape(2, 4));
 
-    EXPECT_EQ(mesh->num_rows(), 2);
-    EXPECT_EQ(mesh->num_cols(), 4);
+    EXPECT_EQ(mesh->shape(), MeshShape(2, 4));
     std::vector<chip_id_t> expected_physical_device_id_order = {
         original_order[0],
         original_order[1],
@@ -189,37 +189,36 @@ TEST_F(MeshDeviceReshapeTest, From1x8To2x4ThenBackTo1x8) {
     auto new_order = mesh->get_device_ids();
     EXPECT_EQ(new_order, expected_physical_device_id_order);
 
-    mesh->reshape({1, 8});
+    mesh->reshape(MeshShape(1, 8));
     EXPECT_EQ(mesh->get_device_ids(), original_order);
 }
 
 TEST_F(MeshDeviceReshapeTest, InvalidTotalDeviceCount) {
     auto mesh = tt::tt_metal::distributed::MeshDevice::create(
-        MeshDeviceConfig{.mesh_shape = SimpleMeshShape(1, 8)},
+        MeshDeviceConfig{.mesh_shape = MeshShape(1, 8)},
         DEFAULT_L1_SMALL_SIZE,
         DEFAULT_TRACE_REGION_SIZE,
         1,
         tt::tt_metal::DispatchCoreType::WORKER);
 
     // Test reshaping to dimensions that don't match total device count
-    EXPECT_THROW(mesh->reshape({3, 3}), std::runtime_error);  // 9 devices != 8
-    EXPECT_THROW(mesh->reshape({1, 9}), std::runtime_error);  // 9 devices != 8
+    EXPECT_THROW(mesh->reshape(MeshShape(3, 3)), std::runtime_error);  // 9 devices != 8
+    EXPECT_THROW(mesh->reshape(MeshShape(1, 9)), std::runtime_error);  // 9 devices != 8
 
     // Verify original shape is preserved after failed reshapes
-    EXPECT_EQ(mesh->num_rows(), 1);
-    EXPECT_EQ(mesh->num_cols(), 8);
+    EXPECT_EQ(mesh->shape(), MeshShape(1, 8));
 }
 
 TEST_F(MeshDeviceReshapeTest, From1x4To2x2Invalid) {
     auto mesh = tt::tt_metal::distributed::MeshDevice::create(
-        MeshDeviceConfig{.mesh_shape = SimpleMeshShape(1, 4)},
+        MeshDeviceConfig{.mesh_shape = MeshShape(1, 4)},
         DEFAULT_L1_SMALL_SIZE,
         DEFAULT_TRACE_REGION_SIZE,
         1,
         tt::tt_metal::DispatchCoreType::WORKER);
 
     // This is an invalid reshape because the 1x4 mesh does not fully cover the 2x2 mesh
-    EXPECT_THROW(mesh->reshape({2, 2}), std::runtime_error);
+    EXPECT_THROW(mesh->reshape(MeshShape(2, 2)), std::runtime_error);
 }
 
 TEST_F(MeshDeviceReshapeTest, From1x4To2x2Valid) {
@@ -227,21 +226,20 @@ TEST_F(MeshDeviceReshapeTest, From1x4To2x2Valid) {
 
     // Fetch the device ids for a physically connected 2x2 mesh.
     auto physical_device_ids = system_mesh.get_mapped_physical_device_ids(MeshDeviceConfig{
-        .mesh_shape = SimpleMeshShape(2, 2),
+        .mesh_shape = MeshShape(2, 2),
     });
 
     // Supply the physical device ids to the mesh constructor that we know we know is 2x2 physically connected.
     // We will create a 1x4 mesh and then reshape it to 2x2.
     auto mesh = tt::tt_metal::distributed::MeshDevice::create(
-        MeshDeviceConfig{.mesh_shape = SimpleMeshShape(1, 4), .physical_device_ids = physical_device_ids},
+        MeshDeviceConfig{.mesh_shape = MeshShape(1, 4), .physical_device_ids = physical_device_ids},
         DEFAULT_L1_SMALL_SIZE,
         DEFAULT_TRACE_REGION_SIZE,
         1,
         tt::tt_metal::DispatchCoreType::WORKER);
 
-    mesh->reshape({2, 2});
-    EXPECT_EQ(mesh->num_rows(), 2);
-    EXPECT_EQ(mesh->num_cols(), 2);
+    mesh->reshape(MeshShape(2, 2));
+    EXPECT_EQ(mesh->shape(), MeshShape(2, 2));
     auto new_layout = mesh->get_device_ids();
     for (auto physical_device_id : physical_device_ids) {
         EXPECT_TRUE(std::find(new_layout.begin(), new_layout.end(), physical_device_id) != new_layout.end());
@@ -250,7 +248,7 @@ TEST_F(MeshDeviceReshapeTest, From1x4To2x2Valid) {
 
 TEST_F(MeshDeviceReshapeTest, From2x2To1x4) {
     auto mesh = tt::tt_metal::distributed::MeshDevice::create(
-        MeshDeviceConfig{.mesh_shape = SimpleMeshShape(2, 2)},
+        MeshDeviceConfig{.mesh_shape = MeshShape(2, 2)},
         DEFAULT_L1_SMALL_SIZE,
         DEFAULT_TRACE_REGION_SIZE,
         1,
@@ -258,9 +256,8 @@ TEST_F(MeshDeviceReshapeTest, From2x2To1x4) {
 
     auto mesh_2x2_device_ids = mesh->get_device_ids();
 
-    mesh->reshape({1, 4});
-    EXPECT_EQ(mesh->num_rows(), 1);
-    EXPECT_EQ(mesh->num_cols(), 4);
+    mesh->reshape(MeshShape(1, 4));
+    EXPECT_EQ(mesh->shape(), MeshShape(1, 4));
 
     auto mesh_1x4_device_ids = mesh->get_device_ids();
     std::vector<chip_id_t> expected_1x4_device_ids = {

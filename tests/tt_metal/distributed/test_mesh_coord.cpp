@@ -14,26 +14,26 @@ namespace {
 using ::testing::ElementsAre;
 using ::testing::UnorderedElementsAre;
 
-TEST(SimpleMeshShapeTest, Construction) {
-    SimpleMeshShape shape_1d(3);
+TEST(MeshShapeTest, Construction) {
+    MeshShape shape_1d(3);
     EXPECT_EQ(shape_1d.dims(), 1);
     EXPECT_EQ(shape_1d[0], 3);
     EXPECT_EQ(shape_1d.mesh_size(), 3);
 
-    SimpleMeshShape shape_2d(3, 4);
+    MeshShape shape_2d(3, 4);
     EXPECT_EQ(shape_2d.dims(), 2);
     EXPECT_EQ(shape_2d[0], 3);
     EXPECT_EQ(shape_2d[1], 4);
     EXPECT_EQ(shape_2d.mesh_size(), 12);
 
-    SimpleMeshShape shape_3d(2, 3, 4);
+    MeshShape shape_3d(2, 3, 4);
     EXPECT_EQ(shape_3d.dims(), 3);
     EXPECT_EQ(shape_3d[0], 2);
     EXPECT_EQ(shape_3d[1], 3);
     EXPECT_EQ(shape_3d[2], 4);
     EXPECT_EQ(shape_3d.mesh_size(), 24);
 
-    SimpleMeshShape shape_5d({2, 3, 4, 5, 6});
+    MeshShape shape_5d({2, 3, 4, 5, 6});
     EXPECT_EQ(shape_5d.dims(), 5);
     EXPECT_EQ(shape_5d[0], 2);
     EXPECT_EQ(shape_5d[1], 3);
@@ -43,25 +43,41 @@ TEST(SimpleMeshShapeTest, Construction) {
     EXPECT_EQ(shape_5d.mesh_size(), 720);
 }
 
-TEST(SimpleMeshShapeTest, ZeroShape) {
-    SimpleMeshShape shape({});
+TEST(MeshShapeTest, ZeroShape) {
+    MeshShape shape({});
     EXPECT_EQ(shape.dims(), 0);
     EXPECT_EQ(shape.mesh_size(), 0);
 }
 
-TEST(SimpleMeshShapeTest, Strides) {
-    SimpleMeshShape shape(2, 3, 4);
+TEST(MeshShapeTest, Strides) {
+    MeshShape shape(2, 3, 4);
     EXPECT_EQ(shape.get_stride(0), 12);  // 3 * 4
     EXPECT_EQ(shape.get_stride(1), 4);   // 4
     EXPECT_EQ(shape.get_stride(2), 1);   // 1
 }
 
-TEST(SimpleMeshShapeTest, Comparison) {
-    SimpleMeshShape shape(2, 3);
+TEST(MeshShapeTest, Comparison) {
+    MeshShape shape(2, 3);
 
-    EXPECT_EQ(shape, SimpleMeshShape(2, 3));
-    EXPECT_NE(shape, SimpleMeshShape(3, 2));
-    EXPECT_NE(shape, SimpleMeshShape(1, 2, 3));
+    EXPECT_EQ(shape, MeshShape(2, 3));
+    EXPECT_NE(shape, MeshShape(3, 2));
+    EXPECT_NE(shape, MeshShape(1, 2, 3));
+}
+
+TEST(MeshShapeTest, LinearTopology) {
+    EXPECT_TRUE(is_line_topology(MeshShape(1)));
+    EXPECT_TRUE(is_line_topology(MeshShape(3)));
+    EXPECT_TRUE(is_line_topology(MeshShape(1, 1)));
+    EXPECT_TRUE(is_line_topology(MeshShape(1, 3)));
+    EXPECT_TRUE(is_line_topology(MeshShape(3, 1)));
+    EXPECT_FALSE(is_line_topology(MeshShape(3, 3)));
+    EXPECT_TRUE(is_line_topology(MeshShape(1, 1, 1)));
+    EXPECT_TRUE(is_line_topology(MeshShape(1, 1, 3)));
+    EXPECT_TRUE(is_line_topology(MeshShape(1, 3, 1)));
+    EXPECT_TRUE(is_line_topology(MeshShape(3, 1, 1)));
+    EXPECT_FALSE(is_line_topology(MeshShape(1, 3, 3)));
+    EXPECT_FALSE(is_line_topology(MeshShape(3, 1, 3)));
+    EXPECT_FALSE(is_line_topology(MeshShape(3, 3, 3)));
 }
 
 TEST(MeshCoordinateTest, Construction) {
@@ -117,8 +133,14 @@ TEST(MeshCoordinateTest, UnorderedSet) {
             MeshCoordinate(0, 0, 2)));
 }
 
+TEST(MeshCoordinateTest, ZeroCoordinate) {
+    EXPECT_EQ(MeshCoordinate::zero_coordinate(1), MeshCoordinate(0));
+    EXPECT_EQ(MeshCoordinate::zero_coordinate(2), MeshCoordinate(0, 0));
+    EXPECT_EQ(MeshCoordinate::zero_coordinate(3), MeshCoordinate(0, 0, 0));
+}
+
 TEST(MeshCoordinateRangeTest, FromShape) {
-    SimpleMeshShape shape(2, 3);
+    MeshShape shape(2, 3);
     MeshCoordinateRange range(shape);
 
     std::vector<MeshCoordinate> coords;
@@ -211,7 +233,7 @@ TEST(MeshCoordinateRangeTest, InvalidRange) {
 }
 
 TEST(ToLinearIndexTest, Basic) {
-    SimpleMeshShape shape(2, 2, 3);
+    MeshShape shape(2, 2, 3);
 
     EXPECT_EQ(to_linear_index(shape, MeshCoordinate(0, 0, 0)), 0);
     EXPECT_EQ(to_linear_index(shape, MeshCoordinate(0, 0, 1)), 1);
@@ -228,16 +250,16 @@ TEST(ToLinearIndexTest, Basic) {
 }
 
 TEST(ToLinearIndexTest, MismatchedDimensions) {
-    EXPECT_ANY_THROW(to_linear_index(SimpleMeshShape(1, 2, 3), MeshCoordinate(0, 0)));
+    EXPECT_ANY_THROW(to_linear_index(MeshShape(1, 2, 3), MeshCoordinate(0, 0)));
 }
 
 TEST(ToLinearIndexTest, OutOfBounds) {
-    EXPECT_ANY_THROW(to_linear_index(SimpleMeshShape(2, 3), MeshCoordinate(2, 0)));
-    EXPECT_ANY_THROW(to_linear_index(SimpleMeshShape(2, 3), MeshCoordinate(0, 3)));
+    EXPECT_ANY_THROW(to_linear_index(MeshShape(2, 3), MeshCoordinate(2, 0)));
+    EXPECT_ANY_THROW(to_linear_index(MeshShape(2, 3), MeshCoordinate(0, 3)));
 }
 
 TEST(MeshContainerTest, InitialValues) {
-    SimpleMeshShape shape(2, 3);
+    MeshShape shape(2, 3);
     MeshContainer<int> container(shape, 3);
 
     std::vector<int> initial_values;
@@ -248,7 +270,7 @@ TEST(MeshContainerTest, InitialValues) {
 }
 
 TEST(MeshContainerTest, FromVector) {
-    SimpleMeshShape shape(2, 3);
+    MeshShape shape(2, 3);
     MeshContainer<int> container(shape, std::vector<int>{0, 1, 2, 3, 4, 5});
 
     std::vector<int> initial_values;
@@ -259,12 +281,12 @@ TEST(MeshContainerTest, FromVector) {
 }
 
 TEST(MeshContainerTest, FromVectorInvalidSize) {
-    SimpleMeshShape shape(2, 3);
+    MeshShape shape(2, 3);
     EXPECT_ANY_THROW(MeshContainer<int>(shape, std::vector<int>{0, 1, 2, 3, 4}));
 }
 
 TEST(MeshContainerTest, ElementAccessRowMajor) {
-    SimpleMeshShape shape(2, 3);
+    MeshShape shape(2, 3);
     MeshContainer<int> container(shape, 0);
 
     container.at(MeshCoordinate(0, 0)) = 0;
@@ -294,7 +316,7 @@ TEST(MeshContainerTest, ElementAccessRowMajor) {
 }
 
 TEST(MeshContainerTest, ConstContainer) {
-    SimpleMeshShape shape(2, 3);
+    MeshShape shape(2, 3);
     const MeshContainer<int> container(shape, 0);
 
     std::vector<MeshCoordinate> coords;
@@ -317,7 +339,7 @@ TEST(MeshContainerTest, ConstContainer) {
 }
 
 TEST(MeshContainerTest, MutateThroughProxy) {
-    SimpleMeshShape shape(2, 3);
+    MeshShape shape(2, 3);
     MeshContainer<int> container(shape, 0);
 
     // Proxy class provides access to the container value through the mutable reference.
@@ -340,7 +362,7 @@ TEST(MeshContainerTest, MutateThroughProxy) {
 }
 
 TEST(MeshContainerTest, OutOfBounds) {
-    SimpleMeshShape shape(2, 3);
+    MeshShape shape(2, 3);
     MeshContainer<int> container(shape, 0);
 
     EXPECT_ANY_THROW(container.at(MeshCoordinate(2, 0)));
