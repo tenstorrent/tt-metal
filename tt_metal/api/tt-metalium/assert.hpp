@@ -103,11 +103,12 @@ template <typename... Args>
     trace_message_ss << std::flush;
     if (std::getenv("TT_ASSERT_ABORT")) {
         log_fatal(args...);
+        Logger::get().flush();
         abort();
     } else {
-        log_info(args...);
+        log_debug(args...);
+        Logger::get().flush();
     }
-    Logger::get().flush();
     throw std::runtime_error(trace_message_ss.str());
 }
 
