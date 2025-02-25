@@ -7,18 +7,14 @@
 #include <assert.hpp>
 #include <cstdint>
 #include <mesh_coord.hpp>
-#include <mesh_config.hpp>
 #include <reflection.hpp>
 #include <span.hpp>
 
 namespace tt::tt_metal::distributed {
 namespace {
 
-// Returns a zero coordinate of dimensionality `dims`.
-MeshCoordinate zero_coordinate(size_t dims) { return MeshCoordinate(tt::stl::SmallVector<uint32_t>(dims, 0)); }
-
 // Returns the last valid coordinate for the provided `shape`.
-MeshCoordinate shape_back(const SimpleMeshShape& shape) {
+MeshCoordinate shape_back(const MeshShape& shape) {
     tt::stl::SmallVector<uint32_t> coords;
     for (int i = 0; i < shape.dims(); i++) {
         coords.push_back(shape[i] - 1);
@@ -28,14 +24,16 @@ MeshCoordinate shape_back(const SimpleMeshShape& shape) {
 
 }  // namespace
 
-SimpleMeshShape::SimpleMeshShape(uint32_t x) : ShapeBase({x}) { compute_strides(); }
-SimpleMeshShape::SimpleMeshShape(uint32_t x, uint32_t y) : ShapeBase({x, y}) { compute_strides(); }
-SimpleMeshShape::SimpleMeshShape(uint32_t x, uint32_t y, uint32_t z) : ShapeBase({x, y, z}) { compute_strides(); }
+MeshShape::MeshShape(uint32_t x) : MeshShape({x}) {}
+MeshShape::MeshShape(uint32_t x, uint32_t y) : MeshShape({x, y}) {}
+MeshShape::MeshShape(uint32_t x, uint32_t y, uint32_t z) : MeshShape({x, y, z}) {}
 
-SimpleMeshShape::SimpleMeshShape(const MeshShape& legacy_shape) :
-    SimpleMeshShape(legacy_shape.num_rows, legacy_shape.num_cols) {}
+MeshShape::MeshShape(const tt::stl::SmallVector<uint32_t>& shape) : ShapeBase(shape) { compute_strides(); }
+MeshShape::MeshShape(tt::stl::SmallVector<uint32_t>&& shape) : ShapeBase(std::move(shape)) { compute_strides(); }
+MeshShape::MeshShape(std::initializer_list<uint32_t> ilist) : ShapeBase(ilist) { compute_strides(); }
+MeshShape::MeshShape(tt::stl::Span<const uint32_t> span) : ShapeBase(span) { compute_strides(); }
 
-void SimpleMeshShape::compute_strides() {
+void MeshShape::compute_strides() {
     size_t stride = 1;
     strides_.resize(dims());
     for (int dim = dims() - 1; dim >= 0; --dim) {
@@ -44,18 +42,18 @@ void SimpleMeshShape::compute_strides() {
     }
 }
 
-size_t SimpleMeshShape::get_stride(size_t dim) const { return strides_[dim]; }
+size_t MeshShape::get_stride(size_t dim) const { return strides_[dim]; }
 
-size_t SimpleMeshShape::dims() const { return size(); }
-size_t SimpleMeshShape::mesh_size() const {
+size_t MeshShape::dims() const { return size(); }
+size_t MeshShape::mesh_size() const {
     return empty() ? 0 : std::accumulate(value_.begin(), value_.end(), 1, std::multiplies<size_t>());
 }
 
-bool operator==(const SimpleMeshShape& lhs, const SimpleMeshShape& rhs) = default;
-bool operator!=(const SimpleMeshShape& lhs, const SimpleMeshShape& rhs) = default;
+bool operator==(const MeshShape& lhs, const MeshShape& rhs) = default;
+bool operator!=(const MeshShape& lhs, const MeshShape& rhs) = default;
 
-std::ostream& operator<<(std::ostream& os, const SimpleMeshShape& shape) {
-    os << "SimpleMeshShape([";
+std::ostream& operator<<(std::ostream& os, const MeshShape& shape) {
+    os << "MeshShape([";
     for (size_t i = 0; i < shape.dims(); ++i) {
         if (i > 0) {
             os << ", ";
@@ -66,11 +64,19 @@ std::ostream& operator<<(std::ostream& os, const SimpleMeshShape& shape) {
     return os;
 }
 
-MeshCoordinate::MeshCoordinate(uint32_t coord) : value_({coord}) {}
+bool is_line_topology(const MeshShape& shape) {
+    return std::count_if(shape.cbegin(), shape.cend(), [](size_t dim) { return dim != 1; }) <= 1;
+}
+
+MeshCoordinate::MeshCoordinate(uint32_t x) : value_({x}) {}
 MeshCoordinate::MeshCoordinate(uint32_t x, uint32_t y) : value_({x, y}) {}
 MeshCoordinate::MeshCoordinate(uint32_t x, uint32_t y, uint32_t z) : value_({x, y, z}) {}
 
 MeshCoordinate::MeshCoordinate(tt::stl::Span<const uint32_t> coords) : value_(coords.begin(), coords.end()) {}
+
+MeshCoordinate MeshCoordinate::zero_coordinate(size_t dimensions) {
+    return MeshCoordinate(tt::stl::SmallVector<uint32_t>(dimensions, 0));
+}
 
 size_t MeshCoordinate::dims() const { return value_.size(); }
 tt::stl::Span<const uint32_t> MeshCoordinate::coords() const { return value_; }
@@ -105,8 +111,8 @@ MeshCoordinateRange::MeshCoordinateRange(const MeshCoordinate& start, const Mesh
     }
 }
 
-MeshCoordinateRange::MeshCoordinateRange(const SimpleMeshShape& shape) :
-    MeshCoordinateRange(zero_coordinate(shape.dims()), shape_back(shape)) {}
+MeshCoordinateRange::MeshCoordinateRange(const MeshShape& shape) :
+    MeshCoordinateRange(MeshCoordinate::zero_coordinate(shape.dims()), shape_back(shape)) {}
 
 size_t MeshCoordinateRange::dims() const { return start_.dims(); }
 const MeshCoordinate& MeshCoordinateRange::start_coord() const { return start_; }
@@ -162,7 +168,7 @@ bool operator==(const MeshCoordinateRange& lhs, const MeshCoordinateRange& rhs) 
 }
 bool operator!=(const MeshCoordinateRange& lhs, const MeshCoordinateRange& rhs) { return !(lhs == rhs); }
 
-size_t to_linear_index(const SimpleMeshShape& shape, const MeshCoordinate& coord) {
+size_t to_linear_index(const MeshShape& shape, const MeshCoordinate& coord) {
     TT_FATAL(
         shape.dims() == coord.dims(),
         "Shape and coordinate dimensions do not match: {} != {}",
