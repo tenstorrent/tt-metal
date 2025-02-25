@@ -2,7 +2,7 @@ name: Release Cleanup
 
 on:
   schedule:
-    - cron: "0 0 * * *"  # Runs daily at midnight UTC
+    - cron: "0 7 * * *"  # Runs daily at midnight UTC
   workflow_dispatch:
     inputs:
       months_back:
