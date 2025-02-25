@@ -143,7 +143,7 @@ def test_tt_model_acc(
 
     if use_reference_file:
         # Existing reference file loading logic
-        reference_data_file = f"models/demos/llama3/tests/reference_outputs/{model_args.model_name}.refpt"
+        reference_data_file = f"models/tt_transformers/tests/reference_outputs/{model_args.model_name}.refpt"
         logger.info(f"Loading reference data from {reference_data_file}")
         assert os.path.exists(reference_data_file)
         reference_data = torch.load(reference_data_file)
