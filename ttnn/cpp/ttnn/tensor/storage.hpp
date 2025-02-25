@@ -200,7 +200,7 @@ struct MultiDeviceHostStorage {
 
     TensorSpec get_tensor_spec(int spec_index) const {
         std::lock_guard<std::mutex> lock(mtx);
-        TT_ASSERT(spec_index < specs.size(), "Spec for device {} not found in spec list, was buffer added?", spec_index);
+        TT_ASSERT(spec_index < specs.size(), "Spec for device {} not found in spec list, were buffer and spec added?", spec_index);
         return specs[spec_index];
     }
 
