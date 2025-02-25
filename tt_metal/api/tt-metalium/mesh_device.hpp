@@ -11,6 +11,7 @@
 
 #include "device.hpp"
 
+#include "mesh_common.hpp"
 #include "mesh_config.hpp"
 #include "mesh_coord.hpp"
 #include "mesh_device_view.hpp"
@@ -26,6 +27,7 @@ namespace distributed {
 class MeshCommandQueue;
 class MeshDeviceView;
 class MeshSubDeviceManagerId;
+class MeshTraceBuffer;
 
 class MeshDevice : public IDevice, public std::enable_shared_from_this<MeshDevice> {
 private:
@@ -33,7 +35,7 @@ private:
     class ScopedDevices {
     private:
         std::map<chip_id_t, IDevice*> opened_devices_;
-        MeshContainer<IDevice*> devices_;
+        std::vector<IDevice*> devices_;
 
     public:
         // Constructor acquires physical resources
@@ -49,20 +51,20 @@ private:
         ScopedDevices(const ScopedDevices&) = delete;
         ScopedDevices& operator=(const ScopedDevices&) = delete;
 
-        const std::vector<IDevice*>& get_devices() const;
-        IDevice* get_device(const MeshCoordinate& coord) const;
+        // Returns the list of devices opened by the root mesh device (i.e. not submeshes).
+        const std::vector<IDevice*>& root_devices() const;
     };
 
     std::shared_ptr<ScopedDevices> scoped_devices_;
     MeshDeviceID mesh_id_;
-    MeshShape mesh_shape_;
     std::unique_ptr<MeshDeviceView> view_;
     std::vector<std::shared_ptr<MeshDevice>>
         submeshes_;                          // Parent owns submeshes and is responsible for their destruction
     std::weak_ptr<MeshDevice> parent_mesh_;  // Submesh created with reference to parent mesh
     std::vector<std::unique_ptr<MeshCommandQueue>> mesh_command_queues_;
     std::unique_ptr<SubDeviceManagerTracker> sub_device_manager_tracker_;
-
+    std::unordered_map<MeshTraceId, std::shared_ptr<MeshTraceBuffer>> trace_buffer_pool_;
+    uint32_t trace_buffers_size_ = 0;
     // This is a reference device used to query properties that are the same for all devices in the mesh.
     IDevice* reference_device() const;
 
@@ -71,8 +73,8 @@ private:
 
 public:
     MeshDevice(
-        std::shared_ptr<ScopedDevices> mesh_handle,
-        const MeshShape& mesh_shape,
+        std::shared_ptr<ScopedDevices> scoped_devices,
+        std::unique_ptr<MeshDeviceView> mesh_device_view,
         std::weak_ptr<MeshDevice> parent_mesh = {});
     ~MeshDevice() override;
 
@@ -144,8 +146,16 @@ public:
         const bool block_on_worker_thread) override;
     void release_trace(const uint32_t tid) override;
     std::shared_ptr<TraceBuffer> get_trace(uint32_t tid) override;
+
+    // MeshTrace Internal APIs - these should be used to deprecate the single device backed trace APIs
+    void begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id);
+    void end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id);
+    void release_mesh_trace(const MeshTraceId& trace_id);
+    std::shared_ptr<MeshTraceBuffer> get_mesh_trace(const MeshTraceId& trace_id);
+    std::shared_ptr<MeshTraceBuffer>& create_mesh_trace(const MeshTraceId& trace_id);
     uint32_t get_trace_buffers_size() const override;
     void set_trace_buffers_size(uint32_t size) override;
+
     // Light Metal
     void load_trace(uint8_t cq_id, uint32_t trace_id, const TraceDescriptor& trace_desc) override;
 
@@ -205,15 +215,19 @@ public:
     // Returns the devices in the mesh in row-major order.
     std::vector<IDevice*> get_devices() const;
     IDevice* get_device(chip_id_t physical_device_id) const;
-    IDevice* get_device(size_t row_idx, size_t col_idx) const;
     IDevice* get_device(const MeshCoordinate& coord) const;
 
     const DeviceIds get_device_ids() const;
 
     size_t num_devices() const;
+
+    // The following methods assume 2D mesh, and throw if the mesh is not 2D.
+    // TODO: #17477 - Remove the methods that assume 2D mesh.
     size_t num_rows() const;
     size_t num_cols() const;
-    MeshShape shape() const;
+    IDevice* get_device(size_t row_idx, size_t col_idx) const;
+
+    const MeshShape& shape() const;
 
     // Reshapes the logical mesh and re-maps the physical devices to the new logical coordinates.
     // Reshaping Rules:
@@ -239,7 +253,7 @@ public:
     std::vector<std::shared_ptr<MeshDevice>> get_submeshes() const;
 
     std::shared_ptr<MeshDevice> create_submesh(
-        const MeshShape& submesh_shape, const MeshOffset& offset = MeshOffset{0, 0});
+        const MeshShape& submesh_shape, const std::optional<MeshCoordinate>& offset = std::nullopt);
 
     std::vector<std::shared_ptr<MeshDevice>> create_submeshes(const MeshShape& submesh_shape);
 

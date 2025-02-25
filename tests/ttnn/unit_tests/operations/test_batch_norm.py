@@ -19,9 +19,7 @@ from models.utility_functions import skip_for_grayskull
     [
         *(torch.Size([n, c, 32, 32]) for n, c in product([1, 2, 3, 4], [1, 2, 3, 4])),
         *(torch.Size([n, c, 23, 23]) for n, c in product([1, 2, 3, 4], [1, 2, 3, 4])),
-        *(torch.Size([n, c, 64, 120]) for n, c in product([1, 2], [1, 2, 3])),
-        torch.Size([3, 1, 64, 120]),
-        torch.Size([3, 2, 64, 120]),
+        *(torch.Size([n, c, 64, 120]) for n, c in product([1, 2, 3], [1, 2, 3, 4])),
     ],
 )
 @pytest.mark.parametrize(
@@ -171,9 +169,7 @@ def test_BN_fp32_full_value(device, channel_size, eps, weight, bias):
     [
         *(torch.Size([n, c, 32, 32]) for n, c in product([1, 2, 3, 4], [1, 2, 3, 4])),
         *(torch.Size([n, c, 23, 23]) for n, c in product([1, 2, 3, 4], [1, 2, 3, 4])),
-        *(torch.Size([n, c, 64, 120]) for n, c in product([1, 2], [1, 2, 3])),
-        torch.Size([3, 1, 64, 120]),
-        torch.Size([3, 2, 64, 120]),
+        *(torch.Size([n, c, 64, 120]) for n, c in product([1, 2, 3], [1, 2, 3, 4])),
     ],
 )
 @pytest.mark.parametrize(
@@ -248,9 +244,7 @@ def test_batch_norm_fp32(
     [
         *(torch.Size([n, c, 32, 32]) for n, c in product([1, 2, 3, 4], [1, 2, 3, 4])),
         *(torch.Size([n, c, 23, 23]) for n, c in product([1, 2, 3, 4], [1, 2, 3, 4])),
-        *(torch.Size([n, c, 64, 120]) for n, c in product([1, 2], [1, 2, 3])),
-        torch.Size([3, 1, 64, 120]),
-        torch.Size([3, 2, 64, 120]),
+        *(torch.Size([n, c, 64, 120]) for n, c in product([1, 2, 3], [1, 2, 3, 4])),
     ],
 )
 @pytest.mark.parametrize(

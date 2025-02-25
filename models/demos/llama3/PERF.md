@@ -31,6 +31,9 @@ This configuration uses bfp4 MLP FF1+FF3 for all models. **Batch_size=1 and pref
 | Llama3.1-70B   | TG     | 95        | 100       | 12.7          |           |
 | Qwen2.5-7B     | N300   | 80        | 96        | 37.9          |           |
 | Qwen2.5-72B    | T3K    | 98        | 100       | 12.8          |           |
+| Phi3.5-mini    | N150   |           |           | 43.2          | 98        |
+| Phi3.5-mini    | N300   |           |           | 57.8          | 62        |
+| Phi3.5-mini    | T3K    |           |           | 48.8          | 51        |
 
 
 ## Accuracy
@@ -58,6 +61,9 @@ This configuration uses bfp4 MLP FF1+FF3 only for the 3.1-70B model and the Qwen
 | Llama3.1-70B   | TG     | 95        | 100       | 12.7          |           |
 | Qwen2.5-7B     | N300   | 80        | 96        | 33.4          |           |
 | Qwen2.5-72B    | T3K    | 99        | 100       | 12.8          |           |
+| Phi3.5-mini    | N150   |           |           | 38.8          | 92        |
+| Phi3.5-mini    | N300   |           |           | 53.9          | 63        |
+| Phi3.5-mini    | T3K    |           |           | 48.6          | 53        |
 
 ##  Long-context (64K Tokens)
 

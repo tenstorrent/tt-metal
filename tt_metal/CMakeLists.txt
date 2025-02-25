@@ -64,36 +64,36 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.23)
                 core_descriptors/grayskull_120_arch.yaml
                 core_descriptors/wormhole_b0_80_arch.yaml
                 core_descriptors/blackhole_140_arch.yaml
-                third_party/tt_llk_blackhole/common/inc/ckernel.h
-                third_party/tt_llk_blackhole/common/inc/ckernel_include.h
-                third_party/tt_llk_blackhole/common/inc/ckernel_defs.h
-                third_party/tt_llk_blackhole/common/inc/ckernel_instr_params.h
-                third_party/tt_llk_blackhole/common/inc/ckernel_addrmod.h
-                third_party/tt_llk_blackhole/common/inc/ckernel_gpr_map.h
-                third_party/tt_llk_blackhole/common/inc/ckernel_structs.h
-                third_party/tt_llk_blackhole/common/inc/ckernel_ops.h
-                third_party/tt_llk_blackhole/common/inc/ckernel_globals.h
-                third_party/tt_llk_blackhole/llk_lib/llk_defs.h
-                third_party/tt_llk_wormhole_b0/common/inc/ckernel.h
-                third_party/tt_llk_wormhole_b0/common/inc/ckernel_include.h
-                third_party/tt_llk_wormhole_b0/common/inc/ckernel_defs.h
-                third_party/tt_llk_wormhole_b0/common/inc/ckernel_instr_params.h
-                third_party/tt_llk_wormhole_b0/common/inc/ckernel_addrmod.h
-                third_party/tt_llk_wormhole_b0/common/inc/ckernel_gpr_map.h
-                third_party/tt_llk_wormhole_b0/common/inc/ckernel_structs.h
-                third_party/tt_llk_wormhole_b0/common/inc/ckernel_ops.h
-                third_party/tt_llk_wormhole_b0/common/inc/ckernel_globals.h
-                third_party/tt_llk_wormhole_b0/llk_lib/llk_defs.h
-                third_party/tt_llk_grayskull/common/inc/ckernel.h
-                third_party/tt_llk_grayskull/common/inc/ckernel_include.h
-                third_party/tt_llk_grayskull/common/inc/ckernel_defs.h
-                third_party/tt_llk_grayskull/common/inc/ckernel_instr_params.h
-                third_party/tt_llk_grayskull/common/inc/ckernel_addrmod.h
-                third_party/tt_llk_grayskull/common/inc/ckernel_gpr_map.h
-                third_party/tt_llk_grayskull/common/inc/ckernel_structs.h
-                third_party/tt_llk_grayskull/common/inc/ckernel_ops.h
-                third_party/tt_llk_grayskull/common/inc/ckernel_globals.h
-                third_party/tt_llk_grayskull/llk_lib/llk_defs.h
+                third_party/tt_llk/tt_llk_blackhole/common/inc/ckernel.h
+                third_party/tt_llk/tt_llk_blackhole/common/inc/ckernel_include.h
+                third_party/tt_llk/tt_llk_blackhole/common/inc/ckernel_defs.h
+                third_party/tt_llk/tt_llk_blackhole/common/inc/ckernel_instr_params.h
+                third_party/tt_llk/tt_llk_blackhole/common/inc/ckernel_addrmod.h
+                third_party/tt_llk/tt_llk_blackhole/common/inc/ckernel_gpr_map.h
+                third_party/tt_llk/tt_llk_blackhole/common/inc/ckernel_structs.h
+                third_party/tt_llk/tt_llk_blackhole/common/inc/ckernel_ops.h
+                third_party/tt_llk/tt_llk_blackhole/common/inc/ckernel_globals.h
+                third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_defs.h
+                third_party/tt_llk/tt_llk_wormhole_b0/common/inc/ckernel.h
+                third_party/tt_llk/tt_llk_wormhole_b0/common/inc/ckernel_include.h
+                third_party/tt_llk/tt_llk_wormhole_b0/common/inc/ckernel_defs.h
+                third_party/tt_llk/tt_llk_wormhole_b0/common/inc/ckernel_instr_params.h
+                third_party/tt_llk/tt_llk_wormhole_b0/common/inc/ckernel_addrmod.h
+                third_party/tt_llk/tt_llk_wormhole_b0/common/inc/ckernel_gpr_map.h
+                third_party/tt_llk/tt_llk_wormhole_b0/common/inc/ckernel_structs.h
+                third_party/tt_llk/tt_llk_wormhole_b0/common/inc/ckernel_ops.h
+                third_party/tt_llk/tt_llk_wormhole_b0/common/inc/ckernel_globals.h
+                third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_defs.h
+                third_party/tt_llk/tt_llk_grayskull/common/inc/ckernel.h
+                third_party/tt_llk/tt_llk_grayskull/common/inc/ckernel_include.h
+                third_party/tt_llk/tt_llk_grayskull/common/inc/ckernel_defs.h
+                third_party/tt_llk/tt_llk_grayskull/common/inc/ckernel_instr_params.h
+                third_party/tt_llk/tt_llk_grayskull/common/inc/ckernel_addrmod.h
+                third_party/tt_llk/tt_llk_grayskull/common/inc/ckernel_gpr_map.h
+                third_party/tt_llk/tt_llk_grayskull/common/inc/ckernel_structs.h
+                third_party/tt_llk/tt_llk_grayskull/common/inc/ckernel_ops.h
+                third_party/tt_llk/tt_llk_grayskull/common/inc/ckernel_globals.h
+                third_party/tt_llk/tt_llk_grayskull/llk_lib/llk_defs.h
                 tools/profiler/kernel_profiler.hpp
                 impl/dispatch/kernels/cq_common.hpp
                 impl/dispatch/kernels/cq_helpers.hpp
@@ -142,7 +142,7 @@ if(BUILD_PROGRAMMING_EXAMPLES)
 endif()
 
 # Allow internal files to access the public API "by default" and without the
-# scoping that external consumers must use.  Scaoping may still be used if desired.
+# scoping that external consumers must use.  Scoping may still be used if desired.
 include_directories(
     api
     api/tt-metalium

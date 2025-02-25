@@ -51,6 +51,7 @@ import ttnn
 ttnn_dtype_to_torch_dtype = {
     ttnn.uint32: torch.int32,
     ttnn.bfloat16: torch.float32,
+    ttnn.bfloat8_b: torch.bfloat16,
 }
 
 
@@ -70,11 +71,11 @@ ttnn_dtype_to_torch_dtype = {
         (1, 2, 3, 2, 1, 2, 97, 97),
     ],
 )
-@pytest.mark.parametrize("fill_value", [1])
-@pytest.mark.parametrize("dtype", [ttnn.uint32, ttnn.bfloat16])
+@pytest.mark.parametrize("fill_value", [1.5, float("inf"), float("-inf")])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("input_mem_config", [ttnn.DRAM_MEMORY_CONFIG])
 @pytest.mark.parametrize("output_mem_config", [ttnn.DRAM_MEMORY_CONFIG])
-def test_fill_pad(
+def test_fill_pad_bfloat16(
     device,
     shape,
     fill_value,
@@ -93,7 +94,97 @@ def test_fill_pad(
     )
 
     output_tensor = ttnn.fill_implicit_tile_padding(input_tensor, fill_value, memory_config=output_mem_config)
-    padded_torch_output_tensor = ttnn.from_device(output_tensor).to_torch()
+    padded_torch_output_tensor = ttnn.from_device(output_tensor).to_torch_with_padded_shape()
+
+    assert_with_pcc(padded_torch_tensor, padded_torch_output_tensor)
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (1, 32),
+        (16, 32),
+        (1, 32),
+        (17, 32),
+        (16, 32),
+        (17, 32),
+        (31, 32),
+        (33, 32),
+        (65, 64),
+        (97, 96),
+        (1, 2, 3, 2, 1, 2, 97, 96),
+    ],
+)
+
+# separate test for bfloat8_b where last dim is tile_width aligned (required for bf8b)
+@pytest.mark.parametrize("fill_value", [1.5, float("inf"), float("-inf")])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b])
+@pytest.mark.parametrize("input_mem_config", [ttnn.DRAM_MEMORY_CONFIG])
+@pytest.mark.parametrize("output_mem_config", [ttnn.DRAM_MEMORY_CONFIG])
+def test_fill_pad_bfloat8_b(
+    device,
+    shape,
+    fill_value,
+    dtype,
+    input_mem_config,
+    output_mem_config,
+):
+    torch.manual_seed(1234)
+    torch_input_tensor, padded_torch_tensor = create_nd_padded_tiled_tensor(
+        shape, 32, fill_value, ttnn_dtype_to_torch_dtype[dtype]
+    )
+    input_tensor = ttnn.to_device(
+        ttnn.from_torch(torch_input_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT),
+        device,
+        memory_config=input_mem_config,
+    )
+
+    output_tensor = ttnn.fill_implicit_tile_padding(input_tensor, fill_value, memory_config=output_mem_config)
+    padded_torch_output_tensor = ttnn.from_device(output_tensor).to_torch_with_padded_shape()
+
+    assert_with_pcc(padded_torch_tensor, padded_torch_output_tensor)
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        (1, 16),
+        (16, 1),
+        (1, 17),
+        (17, 1),
+        (16, 16),
+        (17, 17),
+        (31, 31),
+        (33, 33),
+        (65, 65),
+        (97, 97),
+        (1, 2, 3, 2, 1, 2, 97, 97),
+    ],
+)
+@pytest.mark.parametrize("fill_value", [1])
+@pytest.mark.parametrize("dtype", [ttnn.uint32])
+@pytest.mark.parametrize("input_mem_config", [ttnn.DRAM_MEMORY_CONFIG])
+@pytest.mark.parametrize("output_mem_config", [ttnn.DRAM_MEMORY_CONFIG])
+def test_fill_pad_int(
+    device,
+    shape,
+    fill_value,
+    dtype,
+    input_mem_config,
+    output_mem_config,
+):
+    torch.manual_seed(1234)
+    torch_input_tensor, padded_torch_tensor = create_nd_padded_tiled_tensor(
+        shape, 32, fill_value, ttnn_dtype_to_torch_dtype[dtype]
+    )
+    input_tensor = ttnn.to_device(
+        ttnn.from_torch(torch_input_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT),
+        device,
+        memory_config=input_mem_config,
+    )
+
+    output_tensor = ttnn.fill_implicit_tile_padding(input_tensor, fill_value, memory_config=output_mem_config)
+    padded_torch_output_tensor = ttnn.from_device(output_tensor).to_torch_with_padded_shape()
 
     assert_with_pcc(padded_torch_tensor, padded_torch_output_tensor)
 
@@ -160,7 +251,7 @@ def test_fill_pad_complex_sharding(device, fill_value, shape, shard_scheme, dtyp
     )
 
     output_tensor = ttnn.fill_implicit_tile_padding(input_tensor, fill_value, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    padded_torch_output_tensor = ttnn.from_device(output_tensor).to_torch()
+    padded_torch_output_tensor = ttnn.from_device(output_tensor).to_torch_with_padded_shape()
 
     assert_with_pcc(padded_torch_tensor, padded_torch_output_tensor, 0.99)
 
@@ -233,6 +324,6 @@ def test_fill_pad_sharded(device, fill_value, shape, shard_scheme, dtype):
     )
 
     output_tensor = ttnn.fill_implicit_tile_padding(input_tensor, fill_value, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    padded_torch_output_tensor = ttnn.from_device(output_tensor).to_torch()
+    padded_torch_output_tensor = ttnn.from_device(output_tensor).to_torch_with_padded_shape()
 
     assert_with_pcc(padded_torch_tensor, padded_torch_output_tensor, 0.99)

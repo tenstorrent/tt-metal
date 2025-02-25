@@ -587,12 +587,6 @@ jobs:
         test-group:
           [
             {
-              name: "Grayskull E150 Sweeps",
-              arch: grayskull,
-              runs-on: ["cloud-virtual-machine", "E150", "in-service"],
-              tt-smi-cmd: "tt-smi-metal -r 0"
-            },
-            {
               name: "Wormhole N150 Sweeps",
               arch: wormhole_b0,
               runs-on: ["cloud-virtual-machine", "N150", "in-service"],

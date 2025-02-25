@@ -96,36 +96,6 @@ public:
     constexpr bool has_side_effects() { return true; }
 };
 
-class EnqueueTraceCommand : public Command {
-private:
-    uint32_t command_queue_id;
-    Buffer& buffer;
-    IDevice* device;
-    SystemMemoryManager& manager;
-    std::shared_ptr<TraceDescriptor>& descriptor;
-    std::array<uint32_t, DispatchSettings::DISPATCH_MESSAGE_ENTRIES>& expected_num_workers_completed;
-    bool clear_count;
-    NOC noc_index;
-    CoreCoord dispatch_core;
-
-public:
-    EnqueueTraceCommand(
-        uint32_t command_queue_id,
-        IDevice* device,
-        SystemMemoryManager& manager,
-        std::shared_ptr<TraceDescriptor>& descriptor,
-        Buffer& buffer,
-        std::array<uint32_t, DispatchSettings::DISPATCH_MESSAGE_ENTRIES>& expected_num_workers_completed,
-        NOC noc_index,
-        CoreCoord dispatch_core);
-
-    void process();
-
-    EnqueueCommandType type() { return EnqueueCommandType::ENQUEUE_TRACE; }
-
-    constexpr bool has_side_effects() { return true; }
-};
-
 class EnqueueTerminateCommand : public Command {
 private:
     uint32_t command_queue_id;

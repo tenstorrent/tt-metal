@@ -3,13 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 
 // Stand-alone example demonstrating usage of native multi-device TT-Metalium APIs
 // for issuing a program dispatch across a mesh of devices.
 int main(int argc, char** argv) {
     using namespace tt::tt_metal::distributed;
 
-    auto mesh_device = MeshDevice::create(MeshDeviceConfig{.mesh_shape{2, 4}});
+    auto mesh_device = MeshDevice::create(MeshDeviceConfig{.mesh_shape = MeshShape(2, 4)});
     auto& cq = mesh_device->mesh_command_queue();
 
     // In a typical single-device fashion, instantiate a program with
