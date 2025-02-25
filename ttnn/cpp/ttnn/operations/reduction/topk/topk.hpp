@@ -4,14 +4,10 @@
 
 #pragma once
 
-#include "ttnn/common/queue_id.hpp"
+#include <optional>
+#include <functional>
+
 #include "ttnn/decorators.hpp"
-#include "ttnn/operations/core/core.hpp"
-
-#include "ttnn/run_operation.hpp"
-
-#include "device/topk_op.hpp"
-#include "ttnn/types.hpp"
 
 template <class Tuple, class T = std::decay_t<std::tuple_element_t<0, std::decay_t<Tuple>>>>
 std::vector<std::optional<T>> tuple_to_vector_optional(Tuple&& tuple) {
@@ -23,34 +19,24 @@ namespace ttnn {
 namespace operations::reduction {
 
 struct ExecuteTopK {
-    static inline std::vector<Tensor> invoke(
+    static std::vector<Tensor> invoke(
         QueueId queue_id,
         const Tensor& input_tensor,
-        const uint16_t k,
+        const int32_t k,
         const int8_t dim,
         const bool largest,
         const bool sorted,
         const std::optional<MemoryConfig>& memory_config,
-        std::optional<std::tuple<Tensor, Tensor>> optional_output_tensors = std::nullopt) {
-        return operation::run(
-            TopK{k, dim, largest, sorted, memory_config.value_or(input_tensor.memory_config())},
-            {input_tensor},
-            {},
-            optional_output_tensors.has_value() ? tuple_to_vector_optional(optional_output_tensors.value())
-                                                : std::vector<std::optional<Tensor>>{},
-            queue_id);
-    }
+        std::optional<std::tuple<Tensor, Tensor>> optional_output_tensors = std::nullopt);
 
-    static inline auto invoke(
+    static auto invoke(
         const Tensor& input_tensor,
-        const uint16_t k,
+        const int32_t k,
         const int8_t dim,
         const bool largest,
         const bool sorted,
         const std::optional<MemoryConfig>& memory_config,
-        std::optional<std::tuple<Tensor, Tensor>> optional_output_tensors) {
-        return invoke(DefaultQueueId, input_tensor, k, dim, largest, sorted, memory_config, optional_output_tensors);
-    }
+        std::optional<std::tuple<Tensor, Tensor>> optional_output_tensors = std::nullopt);
 
     static inline std::vector<Tensor> create_async_output_tensors(
         const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs) {
