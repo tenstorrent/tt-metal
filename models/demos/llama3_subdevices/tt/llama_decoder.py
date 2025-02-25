@@ -137,8 +137,10 @@ class TtTransformerBlock(LightweightModule):
         # Attention takes replicated inputs and produces fractured outputs
         # print("done attention norm")
         # pad attn input
-        attn_in_sharded = ttnn.to_memory_config(attn_in, self.model_config["SHARDED_ATTN_INPUT_RING_MEMCFG"])
-        attn_in.deallocate(True)
+        attn_in_sharded = ttnn.to_memory_config(
+            attn_in, self.model_config["SHARDED_ATTN_INPUT_RING_MEMCFG"]
+        )  # TODO: check if we need this here
+        attn_in.deallocate(True)  # TODO: check if we need this here
         attn_out = self.attention.forward(
             attn_in_sharded,
             current_pos,

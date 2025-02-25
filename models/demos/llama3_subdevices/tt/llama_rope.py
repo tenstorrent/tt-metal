@@ -36,7 +36,9 @@ class TtLlamaRotarySetup(LightweightModule):
         self.is_mesh_device = isinstance(device, ttnn._ttnn.multi_device.MeshDevice)
         self.num_devices = device.get_num_devices() if self.is_mesh_device else 1
         if self.num_devices == 32:
-            self.batch_size_per_device_group = max(self.batch_size // list(device.shape)[1], 1) * 2
+            self.batch_size_per_device_group = (
+                max(self.batch_size // list(device.shape)[1], 1) * 2
+            )  # TODO: fix for batch=1
         else:
             self.batch_size_per_device_group = self.batch_size
         self.core_grid = device.compute_with_storage_grid_size()
