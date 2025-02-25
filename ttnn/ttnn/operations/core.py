@@ -156,7 +156,7 @@ def from_torch(
     layout: Optional[ttnn.Layout] = ttnn.ROW_MAJOR_LAYOUT,
     device: Optional[ttnn.Device] = None,
     memory_config: Optional[ttnn.MemoryConfig] = None,
-    mesh_mapper: Optional[ttnn.TensorToMesh] = None,
+    mesh_mapper: Optional[Union[ttnn.TensorToMesh, ttnn.CppTensorToMesh]] = None,
     cq_id: Optional[int] = ttnn.DefaultQueueId,
 ) -> ttnn.Tensor:
     """
@@ -216,6 +216,7 @@ def from_torch(
 
     if mesh_mapper:
         shards = mesh_mapper.map(tensor)
+
         if tile is not None:
             tensor = ttnn.Tensor(shards, dtype, mesh_mapper.config(), tile)
         else:
@@ -269,7 +270,7 @@ def to_torch(
     dtype: Optional[torch.dtype] = None,
     *,
     torch_rank: Optional[int] = None,
-    mesh_composer: Optional[ttnn.MeshToTensor] = None,
+    mesh_composer: Optional[Union[ttnn.MeshToTensor, ttnn.CppMeshToTensor]] = None,
     device: Optional[ttnn.Device] = None,
     cq_id: Optional[int] = ttnn.DefaultQueueId,
 ) -> "torch.Tensor":
@@ -302,7 +303,10 @@ def to_torch(
         tensor = ttnn.from_device(tensor, cq_id=cq_id)
 
     if mesh_composer:
-        return mesh_composer.compose(tensor)
+        if isinstance(mesh_composer, ttnn.MeshToTensor):
+            return mesh_composer.compose(tensor)
+        else:
+            return mesh_composer.compose(ttnn.get_device_tensors(tensor))
 
     if tensor.storage_type() == ttnn.DEVICE_STORAGE_TYPE:
         raise RuntimeError("ttnn.Tensor cannot be on device when converting to torch.Tensor!")
