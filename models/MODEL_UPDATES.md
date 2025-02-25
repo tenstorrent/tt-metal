@@ -14,7 +14,7 @@
 
 ### [Llama 3.1/3.2](demos/llama3)
 > **Note:** This feature is available as of release [v0.56.0-rc37](https://github.com/tenstorrent/tt-metal/tree/v0.56.0-rc37)
-- Overhauled the demo script (now called [simple_text_demo.py](demos/llama3/demo/simple_text_demo.py) to use a simplified causal generation interface.
+- Overhauled the demo script (now called [simple_text_demo.py](demos/llama3/demo/simple_text_demo.py)) to use a simplified causal generation interface.
 - Added support for custom input argument overrides to the demo.
 
 ## February 10, 2025
