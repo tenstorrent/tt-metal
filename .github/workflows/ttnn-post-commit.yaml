@@ -17,6 +17,10 @@ on:
         required: false
         type: number
         default: 12
+      os:
+        required: false
+        type: string
+        default: "ubuntu-20.04"
   workflow_dispatch:
     inputs:
       arch:
@@ -32,6 +36,10 @@ on:
           - N150
           - N300
           - BH
+      os:
+        required: false
+        type: string
+        default: "ubuntu-20.04"
       timeout:
         required: false
         type: number
@@ -49,7 +57,7 @@ jobs:
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
-        os: ["ubuntu-20.04"]
+        os: ${{ inputs.os }}
         test-group:
           - name: ttnn group 1
             cmd: pytest tests/ttnn/unit_tests -xv --splits ${{ inputs.num-groups }} --group 1 -m "not disable_fast_runtime_mode"

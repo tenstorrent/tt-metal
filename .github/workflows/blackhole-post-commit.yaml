@@ -106,6 +106,7 @@ jobs:
     with:
       arch: blackhole
       runner-label: ${{ inputs.runner-label || 'BH' }}
+      os: "ubuntu-22.04"
 
 #   profiler-regression:
 #     needs: build-artifact-profiler
