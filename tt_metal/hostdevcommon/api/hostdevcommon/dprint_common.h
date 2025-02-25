@@ -182,6 +182,7 @@ static inline constexpr uint32_t dprint_datum_size(const CommonDataFormat& forma
         case CommonDataFormat::Float32: return 4;
         case CommonDataFormat::Int8: return 1;
         case CommonDataFormat::Lf8: return 1;
+        case CommonDataFormat::Fp8_e4m3: return 1;
         case CommonDataFormat::UInt8: return 1;
         case CommonDataFormat::UInt16: return 2;
         case CommonDataFormat::UInt32: return 4;
@@ -204,6 +205,7 @@ static inline constexpr bool is_bfp(const CommonDataFormat& format) {
         case CommonDataFormat::Float32:
         case CommonDataFormat::Int8:
         case CommonDataFormat::Lf8:
+        case CommonDataFormat::Fp8_e4m3:
         case CommonDataFormat::UInt8:
         case CommonDataFormat::UInt16:
         case CommonDataFormat::UInt32:
@@ -230,6 +232,7 @@ static inline constexpr bool is_supported_format(const CommonDataFormat& format)
         case CommonDataFormat::UInt32:
         case CommonDataFormat::Int32: return true;
         case CommonDataFormat::Lf8:
+        case CommonDataFormat::Fp8_e4m3:
         case CommonDataFormat::Invalid:
         default: return false;
     }

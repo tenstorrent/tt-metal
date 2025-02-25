@@ -64,6 +64,7 @@ uint32_t Tile::get_tile_size(const DataFormat& format) const {
         case DataFormat::Tf32: throw std::invalid_argument("TF32 unsupported atm");
         case DataFormat::Int8: return tile_hw;
         case DataFormat::Lf8: return tile_hw;
+        case DataFormat::Fp8_e4m3: return tile_hw;
         case DataFormat::UInt8: return tile_hw;
         case DataFormat::UInt16: return (tile_hw * 2);
         case DataFormat::UInt32: return (tile_hw * 4);
