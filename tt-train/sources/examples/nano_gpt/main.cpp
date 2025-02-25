@@ -374,6 +374,7 @@ int main(int argc, char **argv) {
     argv = app.ensure_utf8(argv);
 
     std::string config_name = std::string(CONFIGS_FOLDER) + "/training_shakespear_nanogpt.yaml";
+    std::string run_name = "";
     bool is_eval = false;
     bool add_time_to_name = true;
     bool enable_wandb = true;
@@ -383,6 +384,7 @@ int main(int argc, char **argv) {
     app.add_option("-t,--add_time_to_name", add_time_to_name, "Add time to run name")->default_val(add_time_to_name);
     app.add_option("-w,--wandb", enable_wandb, "Enable wandb logging")->default_val(enable_wandb);
     app.add_option("-d,--ddp", ddp, "Enable DDP")->default_val(ddp);
+    app.add_option("-n,--name", run_name, "Run name")->default_val(run_name);
     CLI11_PARSE(app, argc, argv);
 
     initialize_device(ddp);
@@ -400,7 +402,7 @@ int main(int argc, char **argv) {
     EvalConfig eval_config = parse_eval_config(yaml_config);
 
     if (enable_wandb) {
-        wandbcpp::init({.project = config.project_name, .name = generate_run_name(config, add_time_to_name)});
+        wandbcpp::init({.project = config.project_name, .name = generate_run_name(run_name, config, add_time_to_name)});
         wandbcpp::update_config({
             {"model", "transformer"},
             {"num_heads", static_cast<int>(config.transformer_config.num_heads)},
