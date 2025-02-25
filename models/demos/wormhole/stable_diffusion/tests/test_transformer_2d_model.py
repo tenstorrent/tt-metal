@@ -16,24 +16,50 @@ from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_p
 
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_transformer_2d_new_conv import transformer_2d_model
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
-    pre_process_input,
     post_process_output_and_move_to_host,
+    preprocess_and_push_input_to_device,
 )
 
 
 @skip_for_grayskull()
 @pytest.mark.parametrize(
-    "input_shape, index1, index2, attention_head_dim, block ",
+    "input_shape, shard_layout, shard_end_core, shard_shape, index1, index2, attention_head_dim, block ",
     [
         (
             (2, 320, 64, 64),
-            3,
-            2,
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            (4, 7),
+            (1024, 64),
+            0,
+            0,
             40,
-            "up",
+            "down",
+        ),
+        (
+            (2, 320, 64, 64),
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            (4, 7),
+            (1024, 64),
+            0,
+            1,
+            40,
+            "down",
         ),
         (
             (2, 640, 32, 32),
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            (4, 7),
+            (256, 128),
+            1,
+            0,
+            80,
+            "down",
+        ),
+        (
+            (2, 640, 32, 32),
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            (4, 7),
+            (256, 128),
             1,
             1,
             80,
@@ -41,13 +67,19 @@ from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions
         ),
         (
             (2, 1280, 16, 16),
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            (7, 7),
+            (64, 160),
             2,
-            1,
+            0,
             160,
             "down",
         ),
         (
-            (2, 1280, 8, 8),
+            (2, 1280, 16, 16),
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+            (7, 7),
+            (64, 160),
             2,
             1,
             160,
@@ -58,9 +90,18 @@ from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions
 @pytest.mark.parametrize("model_name", ["CompVis/stable-diffusion-v1-4"])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 def test_transformer_2d_model_512x512(
-    input_shape, index1, index2, block, attention_head_dim, model_name, device, reset_seeds
+    input_shape,
+    shard_layout,
+    shard_end_core,
+    shard_shape,
+    index1,
+    index2,
+    block,
+    attention_head_dim,
+    model_name,
+    device,
+    reset_seeds,
 ):
-    # TODO
     torch.manual_seed(0)
     encoder_hidden_states = [1, 2, 77, 768]
     timestep = (None,)
@@ -117,14 +158,25 @@ def test_transformer_2d_model_512x512(
     model = transformer_2d_model(
         device, parameters, input_shape[0], input_shape[2], input_shape[3], compute_kernel_config
     )
-    ttnn_hidden_state = pre_process_input(ttnn_hidden_state)
-    ttnn_hidden_state = ttnn.reshape(
-        ttnn_hidden_state,
-        (
-            1,
-            1,
-            ttnn_hidden_state.shape[0] * ttnn_hidden_state.shape[1] * ttnn_hidden_state.shape[2],
-            ttnn_hidden_state.shape[-1],
+
+    ttnn_hidden_state = preprocess_and_push_input_to_device(
+        device,
+        input,
+        memory_config=ttnn.MemoryConfig(
+            shard_layout,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                ttnn.CoreRangeSet(
+                    {
+                        ttnn.CoreRange(
+                            ttnn.CoreCoord(0, 0),
+                            ttnn.CoreCoord(shard_end_core[0], shard_end_core[1]),
+                        ),
+                    }
+                ),
+                shard_shape,
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
         ),
     )
 

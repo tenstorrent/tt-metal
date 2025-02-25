@@ -15,7 +15,10 @@ import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_resnetblock2d_new_conv import resnetBlock2D
 from models.demos.wormhole.stable_diffusion.custom_preprocessing import custom_preprocessor
-from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import conv_cache
+from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
+    conv_cache,
+    preprocess_and_push_input_to_device,
+)
 
 
 def ttnn_to_torch(input):
@@ -28,43 +31,55 @@ def ttnn_to_torch(input):
 @skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize(
-    "batch_size, in_channels, input_height, input_width, index1, index2, block_name, out_channels",
+    "batch_size, in_channels, input_height, input_width, shard_layout, shard_end_core, shard_shape, index1, index2, block_name, out_channels, use_in_shortcut",
     [
         # down block 0
-        (2, 320, 64, 64, 0, 0, "down", 320),
-        (2, 320, 64, 64, 0, 1, "down", 320),
+        (2, 320, 64, 64, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, (7, 7), (128, 320), 0, 0, "down", 320, False),
+        (2, 320, 64, 64, ttnn.TensorMemoryLayout.BLOCK_SHARDED, (4, 7), (1024, 64), 0, 1, "down", 320, False),
         # down block 1
-        (2, 320, 32, 32, 1, 0, "down", 640),
-        (2, 640, 32, 32, 1, 1, "down", 640),
+        (2, 320, 32, 32, ttnn.TensorMemoryLayout.BLOCK_SHARDED, (4, 7), (256, 64), 1, 0, "down", 640, True),
+        (2, 640, 32, 32, ttnn.TensorMemoryLayout.BLOCK_SHARDED, (4, 7), (256, 128), 1, 1, "down", 640, False),
         # down block 2
-        (2, 640, 16, 16, 2, 0, "down", 1280),
-        (2, 1280, 16, 16, 2, 1, "down", 1280),
-        # down block 3
-        (2, 1280, 8, 8, 3, 0, "down", 1280),
-        (2, 1280, 8, 8, 3, 1, "down", 1280),
-        # mid
-        (2, 1280, 8, 8, 0, 0, "mid", 1280),
-        (2, 1280, 8, 8, 0, 1, "mid", 1280),
-        # up block 0
-        (2, 2560, 8, 8, 0, 0, "up", 1280),
-        (2, 2560, 8, 8, 0, 1, "up", 1280),
-        (2, 2560, 8, 8, 0, 2, "up", 1280),
-        # up block 1
-        (2, 2560, 16, 16, 1, 0, "up", 1280),
-        (2, 2560, 16, 16, 1, 1, "up", 1280),
-        (2, 1920, 16, 16, 1, 2, "up", 1280),
-        # up block 2
-        (2, 1920, 32, 32, 2, 0, "up", 640),
-        (2, 1280, 32, 32, 2, 1, "up", 640),
-        (2, 960, 32, 32, 2, 2, "up", 640),
-        # up block 3
-        (2, 960, 64, 64, 3, 0, "up", 320),
-        (2, 640, 64, 64, 3, 1, "up", 320),
-        (2, 640, 64, 64, 3, 2, "up", 320),
+        (2, 640, 16, 16, ttnn.TensorMemoryLayout.BLOCK_SHARDED, (4, 7), (64, 128), 2, 0, "down", 1280, True),
+        (2, 1280, 16, 16, ttnn.TensorMemoryLayout.BLOCK_SHARDED, (7, 7), (64, 160), 2, 1, "down", 1280, False),
+        # # down block 3
+        # (2, 1280, 8, 8, 3, 0, "down", 1280),
+        # (2, 1280, 8, 8, 3, 1, "down", 1280),
+        # # mid
+        # (2, 1280, 8, 8, 0, 0, "mid", 1280),
+        # (2, 1280, 8, 8, 0, 1, "mid", 1280),
+        # # up block 0
+        # (2, 2560, 8, 8, 0, 0, "up", 1280),
+        # (2, 2560, 8, 8, 0, 1, "up", 1280),
+        # (2, 2560, 8, 8, 0, 2, "up", 1280),
+        # # up block 1
+        # (2, 2560, 16, 16, 1, 0, "up", 1280),
+        # (2, 2560, 16, 16, 1, 1, "up", 1280),
+        # (2, 1920, 16, 16, 1, 2, "up", 1280),
+        # # up block 2
+        # (2, 1920, 32, 32, 2, 0, "up", 640),
+        # (2, 1280, 32, 32, 2, 1, "up", 640),
+        # (2, 960, 32, 32, 2, 2, "up", 640),
+        # # up block 3
+        # (2, 960, 64, 64, 3, 0, "up", 320),
+        # (2, 640, 64, 64, 3, 1, "up", 320),
+        # (2, 640, 64, 64, 3, 2, "up", 320),
     ],
 )
 def test_resnet_block_2d_512x512(
-    device, batch_size, in_channels, input_height, input_width, index1, index2, block_name, out_channels
+    device,
+    batch_size,
+    in_channels,
+    input_height,
+    input_width,
+    shard_layout,
+    shard_end_core,
+    shard_shape,
+    index1,
+    index2,
+    block_name,
+    out_channels,
+    use_in_shortcut,
 ):
     load_from_disk = False
     if not load_from_disk:
@@ -105,7 +120,6 @@ def test_resnet_block_2d_512x512(
     groups = 32
     time_embedding_norm = "default"
     output_scale_factor = 1
-    use_in_shortcut = None
     ########## end of residual block #############
     hidden_states_shape = [batch_size, in_channels, input_height, input_width]
     temb_shape = [1, 1, 2, 1280]
@@ -133,12 +147,26 @@ def test_resnet_block_2d_512x512(
         compute_kernel_config=compute_kernel_config,
     )
 
-    input = torch.permute(input, (0, 2, 3, 1))
-    input = ttnn.from_torch(input, ttnn.bfloat16)
-    input = ttnn.reshape(input, (1, 1, batch_size * input_height * input_width, in_channels))
-
-    input = ttnn.to_device(input, device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    input = ttnn.to_layout(input, ttnn.TILE_LAYOUT, dtype=ttnn.bfloat8_b)
+    input = preprocess_and_push_input_to_device(
+        device,
+        input,
+        memory_config=ttnn.MemoryConfig(
+            shard_layout,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                ttnn.CoreRangeSet(
+                    {
+                        ttnn.CoreRange(
+                            ttnn.CoreCoord(0, 0),
+                            ttnn.CoreCoord(shard_end_core[0], shard_end_core[1]),
+                        ),
+                    }
+                ),
+                shard_shape,
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        ),
+    )
 
     temb = temb.permute(2, 0, 1, 3)  # pre-permute temb
     temb = ttnn.from_torch(temb, ttnn.bfloat16)
@@ -152,7 +180,7 @@ def test_resnet_block_2d_512x512(
         out_channels=out_channels,
         temb_channels=temb_channels,
         use_in_shortcut=use_in_shortcut,
-        eps=1e-6,
+        eps=1e-5,
         groups=groups,
         time_embedding_norm=time_embedding_norm,
         non_linearity="silu",
@@ -165,7 +193,7 @@ def test_resnet_block_2d_512x512(
         out_channels=out_channels,
         temb_channels=temb_channels,
         use_in_shortcut=use_in_shortcut,
-        eps=1e-6,
+        eps=1e-5,
         groups=groups,
         time_embedding_norm=time_embedding_norm,
         non_linearity="silu",

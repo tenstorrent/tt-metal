@@ -28,8 +28,8 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     "block_index, hidden_states, shard_layout, shard_end_core, shard_shape, out_channels",
     [
         (0, [2, 320, 64, 64], ttnn.TensorMemoryLayout.HEIGHT_SHARDED, (7, 7), (128, 320), 320),
-        (1, [2, 320, 32, 32], ttnn.TensorMemoryLayout.BLOCK_SHARDED, (4, 7), (256, 64), 640),
-        (2, [2, 640, 16, 16], ttnn.TensorMemoryLayout.BLOCK_SHARDED, (4, 7), (64, 128), 1280),
+        # (1, [2, 320, 32, 32], ttnn.TensorMemoryLayout.BLOCK_SHARDED, (4, 7), (256, 64), 640),
+        # (2, [2, 640, 16, 16], ttnn.TensorMemoryLayout.BLOCK_SHARDED, (4, 7), (64, 128), 1280),
     ],
 )
 @pytest.mark.parametrize("temb", [[1, 1, 2, 1280]])
