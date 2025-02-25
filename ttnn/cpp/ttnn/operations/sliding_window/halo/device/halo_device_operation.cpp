@@ -70,13 +70,13 @@ std::vector<TensorSpec> HaloDeviceOperation::compute_output_specs(const std::vec
         TT_FATAL(input_core_w == output_core_w, "Error");
     }
 
-    if (this->in_place_) {
-        printf("HITING IN PLACE\n");
-        tt::log_info(tt::LogAlways, "halo_device_operation - Using in-place mode so deallocating input buffer");
-        DeallocateBuffer(*input_tensor.buffer());
-    } else {
-        printf("HITING NOT IN PLACE\n");
-    }
+    // if (this->in_place_) {
+    //     printf("HITING IN PLACE\n");
+    //     tt::log_info(tt::LogAlways, "halo_device_operation - Using in-place mode so deallocating input buffer");
+    //     DeallocateBuffer(*input_tensor.buffer());
+    // } else {
+    //     printf("HITING NOT IN PLACE\n");
+    // }
 
     auto out_mem_config = output_memory_config_;
     std::array<uint32_t, 2> shard_shape = {

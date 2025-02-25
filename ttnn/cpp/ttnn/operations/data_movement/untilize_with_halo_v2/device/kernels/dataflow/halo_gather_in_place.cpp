@@ -178,15 +178,15 @@ void copy_sticks_async(
         length = config_data[i + 2];
         i += 3;
 
-        // DPRINT << "noc_x: " << noc_x << " noc_y: " << noc_y << " length: " << length << ENDL();
+        DPRINT << "noc_x: " << noc_x << " noc_y: " << noc_y << " length: " << length << ENDL();
 
         const uint64_t base_addr = get_noc_addr(noc_x, noc_y, is_read ? in_base_l1_addr : out_base_l1_addr);
         for (uint16_t j = 0; j < length; j += 3) {
             uint16_t src_local_idx = config_data[i + j + 0];
             uint16_t dst_local_idx = config_data[i + j + 1];
             uint16_t nsticks = config_data[i + j + 2];
-            // DPRINT << "src_local_idx: " << src_local_idx << " dst_local_idx: " << dst_local_idx
-            //        << " nsticks: " << nsticks << ENDL();
+            DPRINT << "src_local_idx: " << src_local_idx << " dst_local_idx: " << dst_local_idx
+                   << " nsticks: " << nsticks << ENDL();
             uint32_t size = nsticks * stick_nbytes;
             uint32_t dst_offset = dst_local_idx * stick_nbytes;
             uint32_t src_offset = src_local_idx * input_aligned_page_size;
@@ -258,6 +258,10 @@ void kernel_main() {
     const uint32_t in_base_l1_addr = get_read_ptr(in_cb_id);
     const uint32_t out_base_l1_addr = get_write_ptr(out_cb_id);
 
+    if constexpr (remote_config_cb_id) {
+        // tt::data_movement::common::print_bf16_pages(in_base_l1_addr, 32, 64);
+    }
+
     DPRINT << "my_noc_x: " << my_noc_x << " my_noc_y: " << my_noc_y << ENDL();
 
     // input shards
@@ -312,6 +316,13 @@ void kernel_main() {
     }
 
     if constexpr (padding_config_cb_id) {
+        DPRINT << "WAITING ON THIS MANY SIGNALS: " << 2 * num_cores << ENDL();
+        const uint64_t my_semaphore_noc_addr = get_noc_addr(my_noc_x, my_noc_y, semaphore_addr);
+        volatile tt_l1_ptr uint32_t* my_semaphore_noc_addr_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(my_semaphore_noc_addr);
+        DPRINT << "SEMAPHORE VALUE: " << *my_semaphore_noc_addr_ptr << ENDL();
+        noc_semaphore_wait(my_semaphore_noc_addr_ptr, 2 * num_cores);
+
         // construct the pad stick in its buffer
         cb_reserve_back(pad_cb_id, 1);
         const uint16_t pad_val = pad_val_u32;
@@ -338,13 +349,6 @@ void kernel_main() {
     }
 
     if constexpr (remote_config_cb_id && remote_temp_cb_id) {
-        DPRINT << "WAITING ON THIS MANY SIGNALS: " << 2 * num_cores << ENDL();
-        const uint64_t my_semaphore_noc_addr = get_noc_addr(my_noc_x, my_noc_y, semaphore_addr);
-        volatile tt_l1_ptr uint32_t* my_semaphore_noc_addr_ptr =
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(my_semaphore_noc_addr);
-        DPRINT << "SEMAPHORE VALUE: " << *my_semaphore_noc_addr_ptr << ENDL();
-        noc_semaphore_wait(my_semaphore_noc_addr_ptr, 2 * num_cores);
-
         DPRINT << "REMOTE COPY" << ENDL();
         const uint32_t temp_base_l1_addr = get_read_ptr(remote_temp_cb_id);
         uint32_t config_data_l1_addr = get_read_ptr(remote_config_cb_id);
@@ -362,6 +366,7 @@ void kernel_main() {
     noc_async_write_barrier();
 
     if constexpr (remote_config_cb_id) {
-        // tt::data_movement::common::print_bf16_pages(out_base_l1_addr, 32, 128);
+        DPRINT << "in_base_l1_addr: " << in_base_l1_addr << " out_base_l1_addr: " << out_base_l1_addr << ENDL();
+        // tt::data_movement::common::print_bf16_pages(in_base_l1_addr, 32, 144);
     }
 }

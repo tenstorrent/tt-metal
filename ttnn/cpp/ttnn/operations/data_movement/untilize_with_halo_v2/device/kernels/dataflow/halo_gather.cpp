@@ -7,7 +7,7 @@
 
 #include "dataflow_api.h"
 
-#define ENABLE_DEBUG 0
+#define ENABLE_DEBUG 1
 
 #if ENABLE_DEBUG
 #include "debug/dprint.h"
@@ -110,6 +110,10 @@ void kernel_main() {
     const uint32_t in_base_l1_addr = get_read_ptr(in_cb_id);
     const uint32_t out_base_l1_addr = get_write_ptr(out_cb_id);
 
+    if constexpr (remote_config_cb_id) {
+        // tt::data_movement::common::print_bf16_pages(in_base_l1_addr, 32, 64);
+    }
+
     if constexpr (padding_config_cb_id) {
         // construct the pad stick in its buffer
         cb_reserve_back(pad_cb_id, 1);
@@ -169,4 +173,8 @@ void kernel_main() {
 
     noc_async_read_barrier();
     noc_async_write_barrier();
+
+    if constexpr (remote_config_cb_id) {
+        // tt::data_movement::common::print_bf16_pages(out_base_l1_addr, 32, 144);
+    }
 }
