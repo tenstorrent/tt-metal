@@ -14,6 +14,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from pathlib import Path
 import os
 import shutil
+import numpy as np
 
 
 SUBBLOCK_HW_CHOICES = [
@@ -81,6 +82,27 @@ def get_device_freq():
     deviceData = import_log_run_stats(setup)
     freq = deviceData["deviceInfo"]["freq"]
     return freq
+
+
+def get_profiler_data():
+    # Import profiler log file and run perf related statistic calculation
+    setup = device_post_proc_config.perf_analysis()
+    setup.deviceInputLog = profiler_log_path
+    deviceData = import_log_run_stats(setup)
+    data = []
+
+    # Add TRISC kernel average duration time - TRISC kernel zones are always present in profiler log
+    data.append(deviceData["devices"][0]["cores"]["DEVICE"]["analysis"]["trisc0_kernel_duration"]["stats"]["Average"])
+    data.append(deviceData["devices"][0]["cores"]["DEVICE"]["analysis"]["trisc1_kernel_duration"]["stats"]["Average"])
+    data.append(deviceData["devices"][0]["cores"]["DEVICE"]["analysis"]["trisc2_kernel_duration"]["stats"]["Average"])
+
+    # Add MATH-BKLOCK average duration time if MATH-BLOCK profiler zone is enabled in code
+    if "trisc0_math_block_duration" in deviceData["devices"][0]["cores"]["DEVICE"]["analysis"].keys():
+        data.append(
+            deviceData["devices"][0]["cores"]["DEVICE"]["analysis"]["trisc0_math_block_duration"]["stats"]["Average"]
+        )
+
+    return data
 
 
 # (m, k, n, in0_sharded, out_sharded, in0_block_w_div, num_out_blocks_h, num_out_blocks_w)
@@ -222,6 +244,8 @@ def test_matmul_2d_host_perf(
                         "trisc2_kernel_cycles",
                     ]
                 )
+                if dump_profiler_log_single_iteration:
+                    csv_header.append("trisc0_math_block_cycles")
             writer.writerow(csv_header)
 
         COUNTER = 0
@@ -368,6 +392,10 @@ def test_matmul_2d_host_perf(
                 # Clear profiler log from warmup data before measurement iterations starts
                 ttnn.DumpDeviceProfiler(device)
                 rm(profiler_log_path)
+                trisc0_kernel_duration = []
+                trisc1_kernel_duration = []
+                trisc2_kernel_duration = []
+                trisc0_math_duration = []
 
                 if use_trace:
                     tid = ttnn.begin_trace_capture(device, cq_id=0)
@@ -404,6 +432,14 @@ def test_matmul_2d_host_perf(
                             ttnn.DumpDeviceProfiler(device)
                             profiler_log_dump = profiler_dump_dir / f"iteration_{iter}.csv"
                             shutil.copy(profiler_log_path, profiler_log_dump)
+
+                            # Read statistic from profiler log
+                            profiler_data = get_profiler_data()
+                            trisc0_kernel_duration.append(profiler_data[0])
+                            trisc1_kernel_duration.append(profiler_data[1])
+                            trisc2_kernel_duration.append(profiler_data[2])
+                            trisc0_math_duration.append(profiler_data[3])
+
                             # Skip deleting profiler log at last iteration since it will be used to read device freq
                             if iter < (num_measurement_iterations - 1):
                                 rm(profiler_log_path)
@@ -416,21 +452,11 @@ def test_matmul_2d_host_perf(
                     # Save device profiler log after all iterations are finished
                     profiler_log_dump = profiler_dump_dir / "all_iterations.csv"
                     shutil.copy(profiler_log_path, profiler_log_dump)
-
-                    # Read statistic from profiler log (simple test code)
-                    setup = device_post_proc_config.perf_analysis()
-                    setup.deviceInputLog = profiler_log_path
-                    deviceData = import_log_run_stats(setup)
-                    trisc0_duration = deviceData["devices"][0]["cores"]["DEVICE"]["analysis"]["trisc0_kernel_duration"][
-                        "stats"
-                    ]["Average"]
-                    trisc1_duration = deviceData["devices"][0]["cores"]["DEVICE"]["analysis"]["trisc1_kernel_duration"][
-                        "stats"
-                    ]["Average"]
-                    trisc2_duration = deviceData["devices"][0]["cores"]["DEVICE"]["analysis"]["trisc2_kernel_duration"][
-                        "stats"
-                    ]["Average"]
-                    # logger.info(f"Average TRISC0 kernel legth: {trisc0_duration}, Average TRISC1 kernel legth: {trisc1_duration}, Average TRISC2 kernel legth: {trisc2_duration}")
+                    # Read statistic from profiler log
+                    profiler_data = get_profiler_data()
+                    trisc0_kernel_duration.append(profiler_data[0])
+                    trisc1_kernel_duration.append(profiler_data[1])
+                    trisc2_kernel_duration.append(profiler_data[2])
 
                 inference_time_avg = profiler.get("run") / num_measurement_iterations
                 tflops = 2 * m * k * n / 1e12 / inference_time_avg
@@ -477,14 +503,16 @@ def test_matmul_2d_host_perf(
                     utilization_user_grid_percentage,
                     utilization_full_grid_percentage,
                 ]
-                if profiler_log_dump:
+                if dump_profiler_log:
                     csv_data.extend(
                         [
-                            trisc0_duration,
-                            trisc1_duration,
-                            trisc2_duration,
+                            np.mean(trisc0_kernel_duration),
+                            np.mean(trisc1_kernel_duration),
+                            np.mean(trisc2_kernel_duration),
                         ]
                     )
+                    if dump_profiler_log_single_iteration:
+                        csv_data.append(np.mean(trisc0_math_duration))
                 writer.writerow(csv_data)
                 file.flush()
                 logger.info(f"FINISHED TEST #{COUNTER}")

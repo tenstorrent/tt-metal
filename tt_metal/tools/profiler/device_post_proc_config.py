@@ -131,12 +131,6 @@ class perf_analysis(default_setup):
             "start": {"core": "ANY", "risc": "TRISC_0", "zone_name": "TRISC-KERNEL"},
             "end": {"core": "ANY", "risc": "TRISC_0", "zone_name": "TRISC-KERNEL"},
         },
-        "trisc0_kernel_duration": {
-            "across": "core",
-            "type": "adjacent",
-            "start": {"core": "ANY", "risc": "TRISC_0", "zone_name": "TRISC-KERNEL"},
-            "end": {"core": "ANY", "risc": "TRISC_0", "zone_name": "TRISC-KERNEL"},
-        },
         "trisc1_kernel_duration": {
             "across": "core",
             "type": "adjacent",
