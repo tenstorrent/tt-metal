@@ -43,7 +43,8 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<size_t> num_preferred_links,
     std::optional<SubDeviceId> subdevice_id,
-    bool enable_persistent_fabric_mode) {
+    bool enable_persistent_fabric_mode,
+    bool transpose_mesh_direction) {
     return ttnn::operations::experimental::ccl::all_gather_async(
         input_tensor,
         dim,
@@ -55,7 +56,8 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
         memory_config,
         num_preferred_links,
         subdevice_id,
-        enable_persistent_fabric_mode);
+        enable_persistent_fabric_mode,
+        transpose_mesh_direction);
 }
 
 }  // namespace ttnn::operations::experimental::ccl

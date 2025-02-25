@@ -410,7 +410,8 @@ Tensor all_gather_async(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<size_t> num_preferred_links,
     std::optional<SubDeviceId> sub_device_id,
-    bool enable_persistent_fabric_mode) {
+    bool enable_persistent_fabric_mode,
+    bool transpose_mesh_dimension) {
     int32_t rank = input_tensor.get_logical_shape().rank();
     int32_t gather_dim = (dim < 0) ? rank + dim : dim;
 

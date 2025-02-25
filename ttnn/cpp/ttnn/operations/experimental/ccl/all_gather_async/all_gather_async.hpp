@@ -34,7 +34,8 @@ struct ExecuteAllGatherAsync {
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<size_t> num_preferred_links = std::nullopt,
         std::optional<SubDeviceId> subdevice_id = std::nullopt,
-        bool enable_persistent_fabric_mode = false);
+        bool enable_persistent_fabric_mode = false,
+        bool transpose_mesh_direction = false);
 };
 
 }  // namespace operations::experimental::ccl
