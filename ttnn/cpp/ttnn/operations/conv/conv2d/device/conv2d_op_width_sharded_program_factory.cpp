@@ -624,67 +624,14 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     std::map<string, string> writer_mcast_sender_defines;
     std::map<string, string> compute_defines;
 
-    compute_defines["WIDTH_SHARDED"] = "1";
-
-    if (output.memory_config().is_sharded()) {
-        writer_defines["SHARDED_OUT"] = "1";
-        writer_mcast_sender_defines["SHARDED_OUT"] = "1";
-    }
-    if (output_num_cores == 1) {
-        writer_mcast_sender_defines["SKIP_MCAST"] = "1";
-    }
-    if (has_bias) {
-        writer_defines["FUSE_BIAS"] = "1";
-        writer_mcast_sender_defines["FUSE_BIAS"] = "1";
-        compute_defines["FUSE_BIAS"] = "1";
-    }
-
-    if (fuse_relu) {
-        compute_defines["PACK_RELU"] = "1";
-    }
-
-    if (split_reader) {
-        reader_defines["SPLIT_READER"] = "1";
-        compute_defines["SPLIT_READER"] = "1";
-    }
-
-    if (packer_l1_acc) {
-        compute_defines["PACKER_L1_ACC"] = "1";
-    }
     uint32_t num_output_tiles = per_core_out_matrix_height_ntiles * p_config.per_core_out_matrix_width_ntile;
-    compute_kernel_args = {
-        act_block_w_ntiles,      // in0_block_w
-        act_num_subblocks,       // in0_num_sublocks
-        act_block_num_tiles,     // in0_block_num_tiles,
-        act_subblock_num_tiles,  // in0_sublock_num_tiles
-        act_subblock_h_ntiles,   // in0_subblock_h
-
-        weight_num_subblocks,    // in1_num_sublocks
-        weight_block_num_tiles,  // in1_block_num_tiles,
-        weight_block_w_ntiles,   // in1_block_w
-
-        num_blocks_act_h_per_core,     // in0_num_blocks_h
-        num_blocks_act_w,              // in0_num_blocks_w,
-        num_blocks_weight_w_per_core,  // in1_num_blocks_w
-
-        out_subblock_h_ntiles_padded,  // out_sublock_h
-        out_subblock_w_ntiles,         // out_sublock_w
-        out_subblock_num_tiles,        // out_sublock_num_tiles
-
-        tilize_in0,    // tilize_in0
-        untilize_out,  // untilize_out
-
-        bias_ntiles,
-
-        out0_cb,
-
-        input_num_cores,  // in0_nblocks_w_tilize. Repeat tilize after all cores have done one round of MCAST.
-    };
 
     uint32_t act_tile_size = tt_metal::detail::TileSize(act_df);
     uint32_t tilized_act_tile_size = tt_metal::detail::TileSize(tilized_act_df);
     uint32_t weight_tile_size = tt_metal::detail::TileSize(weight_df);
 
+    CBHandle cb_output = 0;
+    CBHandle cb_matmul_partials = 0;
     // Local L1 to store temp vars
     // Used for act_mcast_sender_semaphore_valid_addr_ptr
     CircularBufferConfig cb_for_l1_array_config =
@@ -759,8 +706,6 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
     uint32_t out_tile_size = tt_metal::detail::TileSize(out_df);
     uint32_t interm0_single_tile_size = tt_metal::detail::TileSize(interm0_df);
 
-    // Share buffer if same data format
-    CBHandle cb_output = 0;
     if (interm0_df == out_df && untilize_out == false) {
         // CoreRangeSet cores(std::set<CoreRange>({core}));
         std::map<uint8_t, tt::DataFormat> cb_output_data_format_spec = {
@@ -780,12 +725,13 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
                 out_tile_size);
         }
         cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_matmul_partials_config);
+        cb_matmul_partials = cb_output;
     } else {
         // Separate buffer if not same data format
         CircularBufferConfig cb_matmul_partials_config =
             CircularBufferConfig(num_output_tiles * interm0_single_tile_size, {{matmul_partials_cb, interm0_df}})
                 .set_page_size(matmul_partials_cb, interm0_single_tile_size);
-        auto cb_matmul_partials = tt_metal::CreateCircularBuffer(program, all_cores, cb_matmul_partials_config);
+        cb_matmul_partials = tt_metal::CreateCircularBuffer(program, all_cores, cb_matmul_partials_config);
         log_debug(
             LogOp,
             "Matmul Partials CB: {}, npages: {}, pagesize: {}",
@@ -801,6 +747,76 @@ tt::tt_metal::operation::ProgramWithCallbacks multi_core_optimized_conv_width_sh
         }
         cb_output = tt_metal::CreateCircularBuffer(program, all_cores, cb_output_config);
     }
+    bool partials_cb_uses_output = false;
+    CircularBufferConfig cb_config_output = GetCircularBufferConfig(program, cb_output);
+    CircularBufferConfig cb_config_matmul_partials = GetCircularBufferConfig(program, cb_matmul_partials);
+    if (cb_config_matmul_partials.globally_allocated_address().has_value() &&
+        cb_config_output.globally_allocated_address().has_value()) {
+        partials_cb_uses_output = cb_config_matmul_partials.globally_allocated_address().value() ==
+                                  cb_config_output.globally_allocated_address().value();
+    }
+    log_info(
+        LogOp,
+        "Conv2D Matmul Partials CB uses output memory: {}, Handles : {} {}",
+        partials_cb_uses_output,
+        cb_output,
+        cb_matmul_partials);
+
+    compute_defines["WIDTH_SHARDED"] = "1";
+
+    if (output.memory_config().is_sharded()) {
+        writer_defines["SHARDED_OUT"] = "1";
+        writer_mcast_sender_defines["SHARDED_OUT"] = "1";
+    }
+    if (output_num_cores == 1) {
+        writer_mcast_sender_defines["SKIP_MCAST"] = "1";
+    }
+    if (has_bias) {
+        writer_defines["FUSE_BIAS"] = "1";
+        writer_mcast_sender_defines["FUSE_BIAS"] = "1";
+        compute_defines["FUSE_BIAS"] = "1";
+    }
+
+    if (fuse_relu) {
+        compute_defines["PACK_RELU"] = "1";
+    }
+
+    if (split_reader) {
+        reader_defines["SPLIT_READER"] = "1";
+        compute_defines["SPLIT_READER"] = "1";
+    }
+
+    if (packer_l1_acc) {
+        compute_defines["PACKER_L1_ACC"] = "1";
+    }
+    compute_kernel_args = {
+        act_block_w_ntiles,      // in0_block_w
+        act_num_subblocks,       // in0_num_sublocks
+        act_block_num_tiles,     // in0_block_num_tiles,
+        act_subblock_num_tiles,  // in0_sublock_num_tiles
+        act_subblock_h_ntiles,   // in0_subblock_h
+
+        weight_num_subblocks,    // in1_num_sublocks
+        weight_block_num_tiles,  // in1_block_num_tiles,
+        weight_block_w_ntiles,   // in1_block_w
+
+        num_blocks_act_h_per_core,     // in0_num_blocks_h
+        num_blocks_act_w,              // in0_num_blocks_w,
+        num_blocks_weight_w_per_core,  // in1_num_blocks_w
+
+        out_subblock_h_ntiles_padded,  // out_sublock_h
+        out_subblock_w_ntiles,         // out_sublock_w
+        out_subblock_num_tiles,        // out_sublock_num_tiles
+
+        tilize_in0,    // tilize_in0
+        untilize_out,  // untilize_out
+
+        bias_ntiles,
+
+        out0_cb,
+        partials_cb_uses_output,
+        input_num_cores,  // in0_nblocks_w_tilize. Repeat tilize after all cores have done one round of MCAST.
+    };
 
     auto act_kernel_id = CreateKernel(
         program,
