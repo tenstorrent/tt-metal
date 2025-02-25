@@ -680,6 +680,7 @@ WorkExecutorMode MeshDevice::get_worker_mode() { return WorkExecutorMode::SYNCHR
 bool MeshDevice::is_worker_queue_empty() const { return true; }
 void MeshDevice::push_work(std::function<void()> work, bool blocking) {
     // Execute inline synchronously.
+    // Using a lock to provide the same call serialization guarantee as an async single device scheduling.
     std::lock_guard lock(push_work_mutex);
     work();
 }

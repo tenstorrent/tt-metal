@@ -143,6 +143,7 @@ public:
         if (use_passthrough()) {
             // Worker is pushing to itself (nested work) or worker thread is not running. Execute work in current
             // thread.
+            // Using a lock to provide the same call serialization guarantee as with worker queue.
             std::lock_guard guard(passthrough_mutex);
             work_executor();
         } else {
