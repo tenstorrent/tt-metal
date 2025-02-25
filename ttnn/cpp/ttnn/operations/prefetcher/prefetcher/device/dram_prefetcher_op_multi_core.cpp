@@ -169,7 +169,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt::tt_metal::NOC::RISCV_0_default,
-            .noc_mode = tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC,
+            // .noc_mode = tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC,
             .compile_args = reader_ct_args});
 
     // Writer kernel
@@ -190,7 +190,7 @@ operation::ProgramWithCallbacks dram_prefetcher_multi_core(
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt::tt_metal::NOC::RISCV_0_default,
-            .noc_mode = tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC,
+            // .noc_mode = tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC,
             .compile_args = writer_ct_args});
 
     /* Runtime args */

@@ -35,14 +35,14 @@ class TT_CCL:
         if teardown_persistent_fabric:
             assert enable_persistent_fabric
 
-        self.num_cbs = 8
+        self.num_cbs = 2
         self.from_remote_semaphore_handles = []
         self.to_remote_semaphore_handles = []
 
         # Double buffered on each axis
         self.gather_semaphore_handles = [[], []]
         for i in range(2):
-            for _ in range(2):
+            for _ in range(self.num_cbs):
                 self.gather_semaphore_handles[i].append(
                     create_global_semaphore_with_same_address(self.mesh_device, self.sub_device_crs, 0)
                 )
@@ -51,10 +51,6 @@ class TT_CCL:
         self.buffer_idx = [0, 0]
 
         self.persistent_buffers = self.get_persistent_buffers()
-
-    def reset_gather_and_buffer_idx(self):
-        self.gather_idx = [0, 0]
-        self.buffer_idx = [0, 0]
 
     def get_persistent_buffers(self):
         """
@@ -82,7 +78,7 @@ class TT_CCL:
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
         )
-        for _ in range(2):
+        for _ in range(self.num_cbs):
             tt_buffer = ttnn.from_torch(
                 torch.zeros((*cluster_shape, M, N_per_shard * num_cores)),
                 device=self.mesh_device,
@@ -105,7 +101,7 @@ class TT_CCL:
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
         )
-        for _ in range(2):
+        for _ in range(self.num_cbs):
             tt_buffer = ttnn.from_torch(
                 torch.zeros((*cluster_shape, M, N_per_shard * num_cores)),
                 device=self.mesh_device,
@@ -158,8 +154,8 @@ class TT_CCL:
         )
         # ttnn.synchronize_devices(self.mesh_device, sub_device_ids=[self.worker_sub_device_id])
 
-        self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % 2
-        self.buffer_idx[cluster_axis] = (self.buffer_idx[cluster_axis] + 1) % 2
+        self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
+        self.buffer_idx[cluster_axis] = (self.buffer_idx[cluster_axis] + 1) % self.num_cbs
         return output_tensor_mesh
 
     def line_reduce_scatter(
@@ -196,7 +192,7 @@ class TT_CCL:
             subdevice_id=self.worker_sub_device_id,
             enable_persistent_fabric_mode=self.enable_persistent_fabric,
         )
-        self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % 2
+        self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
         # ttnn.synchronize_devices(self.mesh_device, sub_device_ids=[self.worker_sub_device_id])
         return ttnn_tensor_out
 
@@ -398,20 +394,19 @@ def tt_sharded_distributed_rmsnorm(
     # inp = ttnn.to_memory_config(inp, memory_config=ln_sharded_input_memcfg)
 
     # Run distributed rmsnorm part 1
-    try:
-        tt_stats = ttnn.rms_norm_pre_all_gather(inp, residual_input_tensor=res, program_config=ln_sharded_progcfg)
-    except Exception as e:
-        logger.error(f"Exception in rms_norm_pre_all_gather: {e}")
-        raise e
-
+    tt_stats = ttnn.rms_norm_pre_all_gather(inp, residual_input_tensor=res, program_config=ln_sharded_progcfg)
+    # print("tt_stats")
+    # All gather stats
+    # tt_stats = ttnn.all_gather(
+    #     tt_stats,
+    #     3,
+    #     num_links=1,
+    #     cluster_axis=1,
+    #     mesh_device=mesh_device,
+    #     memory_config=ln_sharded_stats_memcfg,
+    #     topology=ttnn.Topology.Linear,
+    # )
     # tt_stats_dram = ttnn.to_memory_config(tt_stats, ttnn.DRAM_MEMORY_CONFIG)
-    # ttnn.deallocate(tt_stats)
-    # print("mem cfg")
-
-    # ttnn.synchronize_devices(tt_ccl.mesh_device, sub_device_ids=[tt_ccl.worker_sub_device_id])
-    # ttnn.deallocate(tt_stats_dram)
-    # print("all gather stats", tt_global_stats.shape)
-
     grid_offset = ttnn.CoreCoord(1, 0)
     tt_stats_sharded_config = ttnn.create_sharded_memory_config(
         shape=(32, 128),
@@ -419,24 +414,27 @@ def tt_sharded_distributed_rmsnorm(
         strategy=ttnn.ShardStrategy.WIDTH,
         use_height_and_width_as_shard_shape=True,
     )
-    # tt_global_stats_sharded = ttnn.to_memory_config(tt_global_stats, memory_config=tt_stats_sharded_config)
-    # ttnn.deallocate(tt_global_stats)
-
+    # ttnn.deallocate(tt_stats)
+    # print("mem cfg")
     tt_global_stats_sharded = tt_ccl.line_all_gather(
         tt_stats, dim=3, cluster_axis=1, num_links=1, memory_config=tt_stats_sharded_config
     )
-    # Run distributed rmsnorm part 2
-    try:
-        tt_out = ttnn.rms_norm_post_all_gather(
-            inp,
-            epsilon=epsilon,
-            weight=gamma,
-            program_config=ln_sharded_progcfg,
-            stats=tt_global_stats_sharded,
-        )
-    except Exception as e:
-        logger.error(f"Exception in rms_norm_post_all_gather: {e}")
-        raise e
+    # ttnn.synchronize_devices(tt_ccl.mesh_device, sub_device_ids=[tt_ccl.worker_sub_device_id])
+    # ttnn.deallocate(tt_stats_dram)
+    # print("all gather stats", tt_global_stats.shape)
 
+    # tt_global_stats_sharded = ttnn.to_memory_config(tt_global_stats, memory_config=tt_stats_sharded_config)
+    ttnn.deallocate(tt_stats)
+    # print("sharded stats")
+
+    # Run distributed rmsnorm part 2
+    tt_out = ttnn.rms_norm_post_all_gather(
+        inp,
+        epsilon=epsilon,
+        weight=gamma,
+        program_config=ln_sharded_progcfg,
+        stats=tt_global_stats_sharded,
+    )
     ttnn.deallocate(tt_global_stats_sharded)
+    # print("rmsnorm post all gather", tt_out.shape)
     return tt_out, inp
