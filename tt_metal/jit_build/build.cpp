@@ -489,15 +489,15 @@ JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const Jit
             string linker_str;
             if (this->is_fw_) {
                 if (std::getenv("TT_METAL_ENABLE_IRAM")) {
-                    linker_str = "tt_metal/hw/toolchain/erisc-b0-app_iram.ld.S ";
+                    linker_str = "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/erisc-b0-app_iram.ld ";
                 } else {
-                    linker_str = "tt_metal/hw/toolchain/erisc-b0-app.ld.S ";
+                    linker_str = "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/erisc-b0-app.ld ";
                 }
             } else {
                 if (std::getenv("TT_METAL_ENABLE_IRAM")) {
-                    linker_str = "tt_metal/hw/toolchain/erisc-b0-kernel_iram.ld.S ";
+                    linker_str = "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/erisc-b0-kernel_iram.ld ";
                 } else {
-                    linker_str = "tt_metal/hw/toolchain/erisc-b0-kernel.ld.S ";
+                    linker_str = "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/erisc-b0-kernel.ld ";
                 }
             }
             this->lflags_ = env_.lflags_ +

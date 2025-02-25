@@ -19,6 +19,16 @@ set(TYPES
     kernel
 )
 
+# for wormhole, we need to generate two different linker scripts
+set(WH_LD_SCRIPTS
+    kernel # base name
+    app # base name
+)
+set(IRAM_OPTIONS
+    "" # No IRAM
+    ENABLE_IRAM # With IRAM
+)
+
 include(FetchContent)
 set(SFPI_x86_64_Linux_RELEASE
     "v6.2.0/sfpi-release.tgz"
@@ -47,73 +57,34 @@ foreach(ARCH IN LISTS ARCHS)
     set(HW_OUTPUT_DIR "${PROJECT_SOURCE_DIR}/runtime/hw/toolchain/${ARCH}")
 
     if("${ARCH}" STREQUAL "wormhole")
-        set(WH_MEMORY_FILE "${PROJECT_SOURCE_DIR}/tt_metal/hw/toolchain/erisc-b0-memory.ld")
-        set(WH_KERNEL_FILE "${PROJECT_SOURCE_DIR}/tt_metal/hw/toolchain/erisc-b0-kernel.ld.S")
-        set(WH_KERNEL_IRAM_FILE "${PROJECT_SOURCE_DIR}/tt_metal/hw/toolchain/erisc-b0-kernel_iram.ld.S")
-        set(WH_APP_FILE "${PROJECT_SOURCE_DIR}/tt_metal/hw/toolchain/erisc-b0-app.ld.S")
-        set(WH_APP_IRAM_FILE "${PROJECT_SOURCE_DIR}/tt_metal/hw/toolchain/erisc-b0-app_iram.ld.S")
+        foreach(SCRIPT_TYPE IN LISTS WH_LD_SCRIPTS)
+            foreach(IRAM_OPT IN LISTS IRAM_OPTIONS)
+                if(IRAM_OPT)
+                    set(OUTPUT_FILE "${HW_OUTPUT_DIR}/erisc-b0-${SCRIPT_TYPE}_iram.ld")
+                    set(IRAM_FLAG "-D${IRAM_OPT}")
+                    set(IRAM_COMMENT " with IRAM")
+                else()
+                    set(OUTPUT_FILE "${HW_OUTPUT_DIR}/erisc-b0-${SCRIPT_TYPE}.ld")
+                    set(IRAM_FLAG "")
+                    set(IRAM_COMMENT "")
+                endif()
 
-        add_custom_command(
-            OUTPUT
-                ${WH_KERNEL_FILE}
-            COMMAND
-                ${CMAKE_CXX_COMPILER} -I${HW_INCLUDES} -E -P -x c -o ${WH_KERNEL_FILE}
-                ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/erisc-b0-kernel.ld
-            DEPENDS
-                ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/erisc-b0-kernel.ld
-                ${WH_MEMORY_FILE}
-            COMMENT "Preprocessing toolchain/erisc-b0-kernel.ld"
-            VERBATIM
-        )
+                add_custom_command(
+                    OUTPUT
+                        ${OUTPUT_FILE}
+                    COMMAND
+                        ${CMAKE_CXX_COMPILER} ${IRAM_FLAG} -I${HW_INCLUDES} -E -P -x c -o ${OUTPUT_FILE}
+                        ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/erisc-b0-${SCRIPT_TYPE}.ld
+                    DEPENDS
+                        ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/erisc-b0-${SCRIPT_TYPE}.ld
+                    COMMENT "Preprocessing toolchain/erisc-b0-${SCRIPT_TYPE}.ld${IRAM_COMMENT}"
+                    VERBATIM
+                )
 
-        add_custom_command(
-            OUTPUT
-                ${WH_KERNEL_IRAM_FILE}
-            COMMAND
-                ${CMAKE_CXX_COMPILER} -DENABLE_IRAM -I${HW_INCLUDES} -E -P -x c -o ${WH_KERNEL_IRAM_FILE}
-                ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/erisc-b0-kernel.ld
-            DEPENDS
-                ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/erisc-b0-kernel.ld
-                ${WH_MEMORY_FILE}
-            COMMENT "Preprocessing toolchain/erisc-b0-kernel.ld with IRAM"
-            VERBATIM
-        )
-
-        add_custom_command(
-            OUTPUT
-                ${WH_APP_FILE}
-            COMMAND
-                ${CMAKE_CXX_COMPILER} -I${HW_INCLUDES} -E -P -x c -o ${WH_APP_FILE}
-                ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/erisc-b0-app.ld
-            DEPENDS
-                ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/erisc-b0-app.ld
-                ${WH_MEMORY_FILE}
-            COMMENT "Preprocessing toolchain/erisc-b0-app.ld"
-            VERBATIM
-        )
-
-        add_custom_command(
-            OUTPUT
-                ${WH_APP_IRAM_FILE}
-            COMMAND
-                ${CMAKE_CXX_COMPILER} -DENABLE_IRAM -I${HW_INCLUDES} -E -P -x c -o ${WH_APP_IRAM_FILE}
-                ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/erisc-b0-app.ld
-            DEPENDS
-                ${CMAKE_CURRENT_SOURCE_DIR}/toolchain/erisc-b0-app.ld
-                ${WH_MEMORY_FILE}
-            COMMENT "Preprocessing toolchain/erisc-b0-app.ld with IRAM"
-            VERBATIM
-        )
-
-        list(
-            APPEND
-            PREPROCESSED_LD_FILES
-            ${WH_MEMORY_FILE}
-            ${WH_KERNEL_FILE}
-            ${WH_KERNEL_IRAM_FILE}
-            ${WH_APP_FILE}
-            ${WH_APP_IRAM_FILE}
-        )
+                # Add to preprocessed files list
+                list(APPEND PREPROCESSED_LD_FILES ${OUTPUT_FILE})
+            endforeach()
+        endforeach()
     endif()
 
     foreach(PROC IN LISTS PROCS)
