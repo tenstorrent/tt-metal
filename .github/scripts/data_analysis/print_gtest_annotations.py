@@ -5,15 +5,6 @@ import os
 from typing import Union
 
 
-def _guaranteed_list(x):
-    if not x:
-        return []
-    elif isinstance(x, list):
-        return x
-    else:
-        return [x]
-
-
 def _build_workflow_command(
     command_name: str,
     file: str,
