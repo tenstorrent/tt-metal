@@ -155,7 +155,10 @@ public:
     // Puts device into reset
     bool close() override;
 
+    // Calls to enable_async are ignored in effort to forcefully disable async for single device use-cases
+    // MeshDevice calls force_enable_async directly avoiding enable_async call for multi-device use-case
     void enable_async(bool enable) override;
+    void force_enable_async(bool enable);
     void synchronize() override;
     WorkExecutorMode get_worker_mode() override { return work_executor_.get_worker_mode(); }
     bool is_worker_queue_empty() const override { return work_executor_.worker_queue.empty(); }

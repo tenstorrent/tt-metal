@@ -1256,6 +1256,14 @@ void Device::set_worker_mode(const WorkExecutorMode& mode) {
 }
 
 void Device::enable_async(bool enable) {
+    if (enable) {
+        tt::log_warning("Async mode is always disabled for a single device, ignoring enable_async call");
+    } else {
+        force_enable_async(false);
+    }
+}
+
+void Device::force_enable_async(bool enable) {
     auto mode = enable ? WorkExecutorMode::ASYNCHRONOUS : WorkExecutorMode::SYNCHRONOUS;
     this->set_worker_mode(mode);
     // If a worker thread is spawned for a device, register/track it in a runtime structure.
