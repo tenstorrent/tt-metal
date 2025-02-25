@@ -56,7 +56,7 @@ void EndTraceCapture(MeshDevice* device, uint8_t cq_id, const MeshTraceId& trace
 }
 
 void ReplayTrace(MeshDevice* device, uint8_t cq_id, const MeshTraceId& trace_id, bool blocking) {
-    device->mesh_command_queue(cq_id).enqueue_trace(trace_id, blocking);
+    device->replay_mesh_trace(cq_id, trace_id, blocking);
 }
 
 void ReleaseTrace(MeshDevice* device, const MeshTraceId& trace_id) { device->release_mesh_trace(trace_id); }

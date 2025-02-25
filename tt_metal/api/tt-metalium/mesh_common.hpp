@@ -8,6 +8,3 @@
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/strong_type.hpp>
 
-// Define common types used across TT-Mesh data-structures and APIs
-
-using MeshTraceId = tt::stl::StrongType<uint32_t, struct MeshTraceIdTag>;
