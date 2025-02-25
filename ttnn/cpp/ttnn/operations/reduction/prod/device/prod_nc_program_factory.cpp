@@ -80,10 +80,10 @@ operation::ProgramWithCallbacks prod_nc_format(const Tensor& input, const Tensor
         all_cores,
         cb_data_format,
         {
-            {CBIndex::c_0, in0_t},         // input
-            {CBIndex::c_1, in1_t},         // zero
-            {CBIndex::c_24, intermed0_t},  // accumulated sum
-            {CBIndex::c_16, out0_t},       // output
+            {CBIndex::c_0, in0_t},        // input
+            {CBIndex::c_1, in1_t},        // zero
+            {CBIndex::c_2, intermed0_t},  // accumulated sum
+            {CBIndex::c_3, out0_t},       // output
         });
 
     ////////////////////////////////////////////////////////////////////////////
@@ -95,7 +95,7 @@ operation::ProgramWithCallbacks prod_nc_format(const Tensor& input, const Tensor
     std::vector<uint32_t> reader_compile_time_args = {(std::uint32_t)input_is_dram, static_cast<uint32_t>(dim)};
 
     tt_metal::Buffer* output_buffer_type = output.buffer();
-    constexpr uint32_t cb_id_out = CBIndex::c_16;
+    constexpr uint32_t cb_id_out = CBIndex::c_3;
     bool output_is_dram = output_buffer_type->buffer_type() == tt_metal::BufferType::DRAM ? 1 : 0;
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)cb_id_out, (std::uint32_t)output_is_dram};
 
