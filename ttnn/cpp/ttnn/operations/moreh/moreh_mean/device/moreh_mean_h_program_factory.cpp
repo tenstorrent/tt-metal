@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <iterator>
 #include <vector>
 
 #include <tt-metalium/bfloat16.hpp>
@@ -115,16 +116,13 @@ MorehMeanOperation::MorehMeanHFactory::cached_program_t MorehMeanOperation::More
         compute_defines["FP32_DEST_ACC_EN"] = 1;
         unpack_to_dest_mode[tt::CBIndex::c_24] = UnpackToDestMode::UnpackToDestFp32;
     }
-    std::vector<uint32_t> compute_kernel_args_group_1 = {
-        Ht,                      // Ht
-        units_per_core_group_1,  // Wt
-        1,                       // NC
-        origin_H};
-    std::vector<uint32_t> compute_kernel_args_group_2 = {
-        Ht,                      // Ht
-        units_per_core_group_2,  // Wt
-        1,                       // NC
-        origin_H};
+    std::vector<uint32_t> compute_kernel_args_group_1 = {units_per_core_group_1};
+    std::vector<uint32_t> compute_kernel_args_group_2 = {units_per_core_group_2};
+    std::vector<uint32_t> compute_crtas = {
+        Ht,  // Ht
+        1,   // NC
+        origin_H,
+    };
 
     auto compute_kernel_ids = CreateComputeKernel(
         program,
@@ -139,6 +137,12 @@ MorehMeanOperation::MorehMeanHFactory::cached_program_t MorehMeanOperation::More
             .unpack_to_dest_mode = unpack_to_dest_mode,
             .math_approx_mode = math_approx_mode,
             .defines = compute_defines});
+
+    std::cout << "HOST: Ht=" << Ht << std::endl;
+    std::cout << "HOST: NC=" << 1 << std::endl;
+    std::cout << "HOST: origin_H=" << origin_H << std::endl;
+    SetCommonRuntimeArgs(program, compute_kernel_ids[0], compute_crtas);
+    SetCommonRuntimeArgs(program, compute_kernel_ids[1], compute_crtas);
 
     for (uint32_t i = 0, tile_offset = 0; i < num_cores; i++) {
         CoreCoord core = {i / core_h, i % core_h};

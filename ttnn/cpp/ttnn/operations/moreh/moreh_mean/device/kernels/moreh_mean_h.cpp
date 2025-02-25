@@ -9,13 +9,19 @@
 #include "compute_kernel_api/reduce.h"
 #include "compute_kernel_api/tile_move_copy.h"
 #include "cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
+#include "debug/dprint.h"
 
 namespace NAMESPACE {
 void MAIN {
-    uint32_t Ht = get_compile_time_arg_val(0);
-    uint32_t Wt = get_compile_time_arg_val(1);
-    uint32_t NC = get_compile_time_arg_val(2);
-    constexpr uint32_t origin_H = get_compile_time_arg_val(3);
+    uint32_t Wt = get_compile_time_arg_val(0);
+
+    uint32_t Ht = get_common_arg_val<uint32_t>(0);
+    uint32_t NC = get_common_arg_val<uint32_t>(1);
+    uint32_t origin_H = get_common_arg_val<uint32_t>(2);
+
+    DPRINT << "DEVICE: Ht=" << Ht << "\n";
+    DPRINT << "DEVICE: NC=" << NC << "\n";
+    DPRINT << "DEVICE: origin_H=" << origin_H << "\n";
 
     auto cb_input = tt::CBIndex::c_0;
     constexpr auto cb_scaler = tt::CBIndex::c_2;
@@ -23,7 +29,7 @@ void MAIN {
     constexpr auto cb_accum_dst = tt::CBIndex::c_24;
     constexpr auto cb_masked_input = tt::CBIndex::c_25;
     constexpr auto cb_out = tt::CBIndex::c_16;
-    constexpr bool do_mask_h = (origin_H % TILE_HEIGHT) != 0;
+    bool do_mask_h = (origin_H % TILE_HEIGHT) != 0;
 
     binary_op_init_common(cb_input, cb_input, cb_out);
 
