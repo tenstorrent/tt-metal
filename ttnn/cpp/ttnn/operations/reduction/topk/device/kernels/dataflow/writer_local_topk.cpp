@@ -16,14 +16,14 @@ void kernel_main() {
     uint32_t start_ht = get_arg_val<uint32_t>(0);
     uint32_t start_wt = get_arg_val<uint32_t>(1);
 
-    constexpr uint32_t values_cb_index = tt::CBIndex::c_16;
-    constexpr uint32_t output_ind_cb_index = tt::CBIndex::c_17;
+    constexpr uint32_t values_cb_index = tt::CBIndex::c_4;
+    constexpr uint32_t output_ind_cb_index = tt::CBIndex::c_5;
 
-    constexpr uint32_t topk_local_values_cb_index = tt::CBIndex::c_24;
-    constexpr uint32_t topk_local_indices_cb_index = tt::CBIndex::c_25;
+    constexpr uint32_t topk_local_values_cb_index = tt::CBIndex::c_2;
+    constexpr uint32_t topk_local_indices_cb_index = tt::CBIndex::c_3;
 
-    constexpr uint32_t final_values_cb_index = tt::CBIndex::c_26;
-    constexpr uint32_t final_indices_cb_index = tt::CBIndex::c_27;
+    constexpr uint32_t final_values_cb_index = tt::CBIndex::c_6;
+    constexpr uint32_t final_indices_cb_index = tt::CBIndex::c_7;
 
     // can amortize the noc reads by doing them side by side for the two tensors
     constexpr uint32_t onetile = 1;

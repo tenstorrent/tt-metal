@@ -39,7 +39,7 @@ void MAIN {
     constexpr uint32_t index_dest_end = 3;
     // init pack, compute and unpack
 
-    init_sfpu(input_cb_index, tt::CBIndex::c_16);
+    init_sfpu(input_cb_index, tt::CBIndex::c_4);
     ckernel::topk_tile_init();
 
     for (uint32_t ht = 0; ht < Ht; ++ht) {

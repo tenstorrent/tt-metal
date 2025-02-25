@@ -14,14 +14,14 @@ void MAIN {
 
     constexpr auto cb_in0 = tt::CBIndex::c_0;
     constexpr auto cb_in1 = tt::CBIndex::c_1;
-    constexpr auto cb_out0 = tt::CBIndex::c_16;
-    constexpr auto cb_intermed0 = tt::CBIndex::c_24;
+    constexpr auto cb_out0 = tt::CBIndex::c_3;
+    constexpr auto cb_intermed0 = tt::CBIndex::c_2;
     constexpr uint32_t onetile = 1;
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t dst1 = 1;
     constexpr uint32_t first_tile = 0;
 
-    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_16);
+    binary_op_init_common(tt::CBIndex::c_0, tt::CBIndex::c_1, tt::CBIndex::c_3);
     cb_wait_front(cb_in1, onetile);
 
     for (uint32_t i = 0; i < num_output_tiles; i++) {

@@ -33,11 +33,11 @@ operation::ProgramWithCallbacks prod_single_core(const Tensor& a, const Tensor& 
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, core, cb_src0_config);
 
     tt_metal::CircularBufferConfig cb_inter_config =
-        tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{tt::CBIndex::c_24, cb_data_format}})
-            .set_page_size(tt::CBIndex::c_24, single_tile_size);
+        tt_metal::CircularBufferConfig(num_input_tiles * single_tile_size, {{tt::CBIndex::c_2, cb_data_format}})
+            .set_page_size(tt::CBIndex::c_2, single_tile_size);
     auto cb_interm = tt_metal::CreateCircularBuffer(program, core, cb_inter_config);
 
-    uint32_t output_cb_index = tt::CBIndex::c_16;
+    uint32_t output_cb_index = tt::CBIndex::c_3;
     uint32_t num_output_tiles = 2;
     tt_metal::CircularBufferConfig cb_output_config =
         tt_metal::CircularBufferConfig(num_output_tiles * single_tile_size, {{output_cb_index, cb_data_format}})
