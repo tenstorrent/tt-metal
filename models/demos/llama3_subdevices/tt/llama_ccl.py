@@ -52,6 +52,10 @@ class TT_CCL:
 
         self.persistent_buffers = self.get_persistent_buffers()
 
+    def reset_gather_and_buffer_idx(self):
+        self.gather_idx = [0, 0]
+        self.buffer_idx = [0, 0]
+
     def get_persistent_buffers(self):
         """
         Currently, this is hardcoded with llama specific shapes.
