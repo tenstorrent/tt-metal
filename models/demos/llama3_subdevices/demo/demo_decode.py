@@ -309,7 +309,7 @@ def run_llama3_demo(
     logger.info(f"Capturing model trace...")
     profiler.start(f"capture_trace")
 
-    tt_model.tt_ccl.reset_sem_flags()
+    tt_model.tt_ccl.reset_gather_and_buffer_idx()
 
     trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
 
@@ -368,7 +368,6 @@ def run_llama3_demo(
     profiler.start(f"inference_decode", iteration=iteration)
 
     while users_decoding:
-        tt_model.tt_ccl.reset_sem_flags()
         if iteration == 0:  # First iteration also accounts for compile time
             profiler.start(f"compile_decode", iteration=iteration)
         iteration_time_start = time()
