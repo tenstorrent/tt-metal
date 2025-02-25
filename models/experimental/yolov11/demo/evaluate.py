@@ -37,7 +37,6 @@ def iou(pred_box, gt_box):
     union = (x2_pred - x1_pred) * (y2_pred - y1_pred) + (x2_gt - x1_gt) * (y2_gt - y1_gt) - intersection
     return intersection / union
 
-
 def calculate_map(predictions, ground_truths, iou_threshold=0.5, num_classes=3):
     """Calculate mAP for object detection."""
     ap_scores = []

@@ -30,6 +30,7 @@ try:
     sys.modules["ultralytics.nn.modules.head"] = yolov11
 except KeyError:
     print("models.experimental.yolov11.reference.yolov11 not found.")
+    
 
 def save_yolo_predictions_by_model(result, save_dir, image_path, model_name):
     model_save_dir = os.path.join(save_dir, model_name)
