@@ -85,58 +85,58 @@ private:
 
 class ShardTensorTo2dMesh : public TensorToMesh {
 public:
-    ShardTensorTo2dMesh(const MeshShape& mesh_shape, const Shard2dConfig& config) :
-        mesh_shape_(mesh_shape), config_(config) {}
+    ShardTensorTo2dMesh(size_t mesh_rows, size_t mesh_cols, const Shard2dConfig& config) :
+        mesh_rows_(mesh_rows), mesh_cols_(mesh_cols), config_(config) {}
 
     std::vector<Tensor> map(const Tensor& tensor) const override {
-        const auto [rows, cols] = mesh_shape_;
         const auto [row_dim, col_dim] = config_;
 
         std::vector<Tensor> row_tensors;
 
         // Shard along rows
         if (!row_dim.has_value()) {
-            row_tensors.reserve(rows);
-            for (int i = 0; i < rows; ++i) {
+            row_tensors.reserve(mesh_rows_);
+            for (int i = 0; i < mesh_rows_; ++i) {
                 row_tensors.push_back(tensor);
             }
         } else {
-            row_tensors = experimental::xtensor::chunk(tensor, rows, *row_dim);
+            row_tensors = experimental::xtensor::chunk(tensor, mesh_rows_, *row_dim);
         }
 
         std::vector<Tensor> tensor_shards;
-        tensor_shards.reserve(rows * cols);
+        tensor_shards.reserve(mesh_rows_ * mesh_cols_);
         // Shard along columns
         if (!col_dim.has_value()) {
             for (const auto& t : row_tensors) {
-                for (int i = 0; i < cols; ++i) {
+                for (int i = 0; i < mesh_cols_; ++i) {
                     tensor_shards.push_back(t);
                 }
             }
         } else {
             for (const auto& t : row_tensors) {
-                auto col_chunks = experimental::xtensor::chunk(t, cols, *col_dim);
+                auto col_chunks = experimental::xtensor::chunk(t, mesh_cols_, *col_dim);
                 tensor_shards.insert(tensor_shards.end(), col_chunks.begin(), col_chunks.end());
             }
         }
 
         TT_FATAL(
-            static_cast<int>(tensor_shards.size()) == rows * cols,
+            static_cast<int>(tensor_shards.size()) == mesh_rows_ * mesh_cols_,
             "ShardTensorTo2dMesh: Sharding failed. Number of shards should match the product of the mesh "
             "dimensions. Size: {}, rows: {}, cols: {}",
             tensor_shards.size(),
-            rows,
-            cols);
+            mesh_rows_,
+            mesh_cols_);
 
         return tensor_shards;
     }
 
     tt::tt_metal::DistributedTensorConfig config() const override {
-        return DistributedTensorConfig{ShardTensor2D{ShardMesh{mesh_shape_.num_rows, mesh_shape_.num_cols}}};
+        return DistributedTensorConfig{ShardTensor2D{ShardMesh{mesh_rows_, mesh_cols_}}};
     }
 
 private:
-    MeshShape mesh_shape_;
+    size_t mesh_rows_ = 0;
+    size_t mesh_cols_ = 0;
     Shard2dConfig config_;
 };
 
@@ -154,18 +154,17 @@ private:
 
 class Concat2dMeshToTensor : public MeshToTensor {
 public:
-    Concat2dMeshToTensor(MeshDevice& mesh_device, const Concat2dConfig& config) :
-        mesh_shape_(mesh_device.shape()), config_(config) {}
+    Concat2dMeshToTensor(size_t mesh_rows, size_t mesh_cols, const Concat2dConfig& config) :
+        mesh_rows_(mesh_rows), mesh_cols_(mesh_cols), config_(config) {}
 
     Tensor compose(const std::vector<Tensor>& tensors) const override {
-        const auto [rows, cols] = mesh_shape_;
         const auto [row_dim, col_dim] = config_;
 
         std::vector<Tensor> row_concatenated;
-        row_concatenated.reserve(rows);
-        for (int i = 0; i < rows; ++i) {
-            auto row_start = tensors.begin() + i * cols;
-            auto row_end = row_start + cols;
+        row_concatenated.reserve(mesh_rows_);
+        for (int i = 0; i < mesh_rows_; ++i) {
+            auto row_start = tensors.begin() + i * mesh_cols_;
+            auto row_end = row_start + mesh_cols_;
             std::vector<Tensor> row_tensors(row_start, row_end);
             row_concatenated.push_back(experimental::xtensor::concat(row_tensors, col_dim));
         }
@@ -174,7 +173,8 @@ public:
     }
 
 private:
-    MeshShape mesh_shape_;
+    size_t mesh_rows_ = 0;
+    size_t mesh_cols_ = 0;
     Concat2dConfig config_;
 };
 

@@ -161,23 +161,7 @@ std::unique_ptr<TensorToMesh> shard_tensor_to_2d_mesh_mapper(
         mesh_shape[0] <= mesh_device.shape()[0] &&  //
             mesh_shape[1] <= mesh_device.shape()[1],
         "Device mesh shape does not match the provided mesh shape.");
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
     return std::make_unique<ShardTensorTo2dMesh>(mesh_shape[0], mesh_shape[1], config);
-=======
-    return std::make_unique<ShardTensor2dMesh>(mesh_shape, config);
->>>>>>> fix naming errors, add tests, add imports - TODO, fix weird aliasing error with meshdevice vs ttnn.multidevice.meshdevice
-=======
-    return std::make_unique<ShardTensorTo2dMesh>(mesh_shape, config);
->>>>>>> add back distributed.py for now, clean up class overloads
-=======
-    return std::make_unique<ShardTensor2dMesh>(mesh_shape, config);
->>>>>>> fix naming errors, add tests, add imports - TODO, fix weird aliasing error with meshdevice vs ttnn.multidevice.meshdevice
-=======
-    return std::make_unique<ShardTensorTo2dMesh>(mesh_shape, config);
->>>>>>> add back distributed.py for now, clean up class overloads
 }
 
 std::unique_ptr<MeshToTensor> concat_mesh_to_tensor_composer(int dim) {
@@ -190,24 +174,8 @@ std::unique_ptr<MeshToTensor> concat_2d_mesh_to_tensor_composer(MeshDevice& mesh
         "Dimensions in 'dims' must be different; got row_dim: {}, col_dim: {}",
         config.row_dim,
         config.col_dim);
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
-<<<<<<< HEAD
     TT_FATAL(mesh_device.shape().dims() == 2, "Mesh device is not configured as a 2D mesh: {}", mesh_device.shape());
     return std::make_unique<Concat2dMeshToTensor>(mesh_device.shape()[0], mesh_device.shape()[1], config);
-=======
-    return std::make_unique<ConcatMesh2dToTensor>(mesh_device, config);
->>>>>>> fix naming errors, add tests, add imports - TODO, fix weird aliasing error with meshdevice vs ttnn.multidevice.meshdevice
-=======
-    return std::make_unique<Concat2dMeshToTensor>(mesh_device, config);
->>>>>>> add back distributed.py for now, clean up class overloads
-=======
-    return std::make_unique<ConcatMesh2dToTensor>(mesh_device, config);
->>>>>>> fix naming errors, add tests, add imports - TODO, fix weird aliasing error with meshdevice vs ttnn.multidevice.meshdevice
-=======
-    return std::make_unique<Concat2dMeshToTensor>(mesh_device, config);
->>>>>>> add back distributed.py for now, clean up class overloads
 }
 
 Tensor distribute_tensor(
@@ -230,27 +198,11 @@ Tensor aggregate_tensor(const Tensor& tensor, const MeshToTensor& composer) {
                                           : composer.compose({tensor});
 }
 
-<<<<<<< HEAD
-<<<<<<< HEAD
 Shard2dConfig get_shard2d_config(const std::unordered_map<std::string, std::string>& metadata) {
     return Shard2dConfig(std::stoi(metadata.at("row_dim")), std::stoi(metadata.at("col_dim")));
 }
 
 Concat2dConfig get_concat2d_config(const std::unordered_map<std::string, std::string>& metadata) {
-=======
-static Shard2dConfig get_shard2d_config(const std::unordered_map<std::string, std::string>& metadata) {
-    return Shard2dConfig(std::stoi(metadata.at("row_dim")), std::stoi(metadata.at("col_dim")));
-}
-
-static Concat2dConfig get_concat2d_config(const std::unordered_map<std::string, std::string>& metadata) {
->>>>>>> add shard2dconfig, concat2dconfig methods and map/compose constructors
-=======
-Shard2dConfig get_shard2d_config(const std::unordered_map<std::string, std::string>& metadata) {
-    return Shard2dConfig(std::stoi(metadata.at("row_dim")), std::stoi(metadata.at("col_dim")));
-}
-
-Concat2dConfig get_concat2d_config(const std::unordered_map<std::string, std::string>& metadata) {
->>>>>>> Replace none types, expose configs, fix tuple errors
     return Concat2dConfig(std::stoi(metadata.at("row_dim")), std::stoi(metadata.at("col_dim")));
 }
 
