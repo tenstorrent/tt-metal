@@ -13,6 +13,7 @@
 #include <noc/noc_parameters.h>
 
 #include <algorithm>
+#include <array>
 #include <stdint.h>
 
 #include "core_config.h"
@@ -150,6 +151,18 @@ FORCE_INLINE T get_common_arg_val(int arg_idx) {
     return *((tt_l1_ptr T*)(get_common_arg_addr(arg_idx)));
 }
 
+// #if defined(KERNEL_COMPILE_TIME_ARGS)
+template <class T, class... Ts>
+FORCE_INLINE constexpr std::array<T, sizeof...(Ts)> make_array(Ts... values) {
+    return {T(values)...};
+}
+
+#if defined(KERNEL_COMPILE_TIME_ARGS)
+constexpr auto kernel_compile_time_args = make_array<std::uint32_t>(KERNEL_COMPILE_TIME_ARGS);
+#else
+constexpr auto kernel_compile_time_args = make_array<std::uint32_t>();
+#endif
+
 // clang-format off
 /**
  * Returns the value of a constexpr argument from kernel_compile_time_args array provided during kernel creation using
@@ -162,7 +175,8 @@ FORCE_INLINE T get_common_arg_val(int arg_idx) {
  * | arg_idx               | The index of the argument          | uint32_t              | 0 to 31     | True     |
  */
 // clang-format on
-#define get_compile_time_arg_val(arg_idx) KERNEL_COMPILE_TIME_ARG_##arg_idx
+FORCE_INLINE constexpr uint32_t get_compile_time_arg_val(uint32_t arg_idx) { return kernel_compile_time_args[arg_idx]; }
+// #endif
 
 // clang-format off
 /**
