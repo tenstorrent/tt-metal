@@ -1,7 +1,6 @@
 name: Release Cleanup
 
 on:
-  pr:
   schedule:
     - cron: "0 7 * * *"  # Runs daily at midnight UTC
   workflow_dispatch:
