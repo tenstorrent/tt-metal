@@ -50,13 +50,7 @@ ttnn::Tensor squeeze_from_4D(const ttnn::Tensor& tensor, const int rank) {
 
 ttnn::Tensor to_device(
     const ttnn::Tensor& tensor, IDevice* device, const std::optional<MemoryConfig>& memory_config, QueueId cq_id) {
-    auto mem_config = memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
-    if (mem_config.is_sharded() and (device->arch() == tt::ARCH::BLACKHOLE)) {
-        auto interleaved_tensor = tensor.to_device(device, ttnn::DRAM_MEMORY_CONFIG, cq_id);
-        return ttnn::interleaved_to_sharded(ttnn::DefaultQueueId, interleaved_tensor, mem_config, std::nullopt);
-    } else {
-        return tensor.to_device(device, memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG), cq_id);
-    }
+    return tensor.to_device(device, memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG), cq_id);
 }
 
 ttnn::Tensor to_device(
