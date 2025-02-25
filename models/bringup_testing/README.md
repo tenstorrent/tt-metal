@@ -11,7 +11,7 @@ Welcome to the Model Bring-Up and Testing Landing Page!
 
 ## Model Bring-Up and Testing
 
-- **Model Bring-Up** - [Model Bring-Up](https://github.com/tenstorrent/tt-training/blob/main/models/Model_Bring_Up.md)
+- **Model Bring-Up** - [Model Bring-Up](https://github.com/tenstorrent/tt-metal/tree/main/models/model_bring_up.md)
 
 ## Model Optimization
 
