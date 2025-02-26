@@ -2062,6 +2062,105 @@ void run_all_gather_with_persistent_fabric(const size_t dim, const size_t num_li
     log_info(tt::LogTest, "Finished");
 }
 
+void run_all_gather_2D_test(const size_t dim, const size_t num_links, const ttnn::Shape& input_shape) {
+    log_info(tt::LogTest, "entering test");
+    constexpr auto layout = Layout::TILE;
+    // DEVICES setuip
+    auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+    constexpr size_t test_expected_num_devices = 4;
+    if (tt::tt_metal::GetNumAvailableDevices() < test_expected_num_devices) {
+        log_info("This test can only be run on T3000 devices");
+        return;
+    }
+    if (arch == tt::ARCH::GRAYSKULL) {
+        log_info("Test must be run on WH");
+        return;
+    }
+    T3000TestDevice test_fixture;
+    auto view = test_fixture.mesh_device_->get_view();
+
+    // build a line of devices
+    std::vector<IDevice*> devices = {
+        view.get_device(MeshCoordinate(0, 0)),
+        view.get_device(MeshCoordinate(0, 1)),
+        view.get_device(MeshCoordinate(0, 2)),
+        view.get_device(MeshCoordinate(0, 3))};
+    const size_t num_devices = devices.size();
+    TT_FATAL(
+        test_expected_num_devices == num_devices,
+        "Expected {} devices but got {}",
+        test_expected_num_devices,
+        num_devices);
+    const MemoryConfig in_memory_config = MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::DRAM);
+    const auto num_elems = input_shape.volume();
+
+    // INPUT TENSOR setup
+    log_info(tt::LogTest, "setting up input tensors");
+    size_t page_size = tile_size(DataFormat::Float16);
+    std::vector<Tensor> device_input_tensors;
+    for (size_t i = 0; i < num_devices; i++) {
+        auto t = ttnn::experimental::view(ttnn::arange(0, num_elems, 1), input_shape).to_layout(layout);
+        t.set_tensor_spec(TensorSpec(
+            input_shape, TensorLayout(DataType::BFLOAT16, PageConfig(layout, tt_metal::Tile()), in_memory_config)));
+
+        device_input_tensors.push_back(t.to_device(devices[i]));
+    }
+    // Need to make it a mesh tensor for use with the op
+    const Tensor input_mesh_tensor = ttnn::distributed::aggregate_as_tensor(device_input_tensors, AllGatherTensor{});
+
+    // FABRIC setup
+    const bool enable_persistent_fabric = true;
+
+    std::vector<Program> dummy_worker_programs;
+    std::optional<SubdeviceInfo> subdevice_managers = std::nullopt;
+    std::optional<std::vector<Program>> fabric_programs;
+    std::vector<Program*> fabric_program_ptrs;
+    std::optional<ttnn::ccl::EdmLineFabricOpInterface> fabric_handle;
+    setup_test_with_persistent_fabric(
+        devices,
+        dummy_worker_programs,
+        subdevice_managers,
+        fabric_programs,
+        fabric_program_ptrs,
+        fabric_handle,
+        enable_persistent_fabric,
+        num_links);
+    log_info(tt::LogTest, "Lauching op");
+
+    ttnn::global_semaphore::MultiDeviceGlobalSemaphore multi_device_global_semaphore =
+        ttnn::global_semaphore::create_global_semaphore_with_same_address(
+            test_fixture.mesh_device_.get(),
+            devices[0]->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}),
+            0,                             // initial value
+            tt::tt_metal::BufferType::L1,  // buffer type
+            10                             // attempts
+        );
+
+    auto output_tensor = ttnn::operations::experimental::ccl::all_gather_async(
+        input_mesh_tensor,
+        dim,
+        multi_device_global_semaphore,
+        num_links,
+        operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        ttnn::ccl::Topology::Linear,
+        SubDeviceId(0),
+        true);
+
+    // wait for op completion
+    wait_for_worker_subdevice_program_completion(devices, subdevice_managers);
+    log_info(tt::LogTest, "Main op done");
+
+    log_info(tt::LogTest, "Fabric teardown");
+    persistent_fabric_teardown_sequence(
+        devices, subdevice_managers, fabric_handle.value(), tt::fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
+
+    log_info(tt::LogTest, "Waiting for teardown completion");
+    for (auto d : devices) {
+        tt_metal::Synchronize(d, *ttnn::DefaultQueueId);
+    }
+    log_info(tt::LogTest, "Finished");
+}
+
 struct WriteThroughputStabilityTestWithPersistentFabricParams {
     size_t line_size = 4;
     size_t num_devices_with_workers = 0;
