@@ -1246,14 +1246,36 @@ void kernel_main() {
         auto connection_worker_info_ptr = reinterpret_cast<volatile tt::fabric::EDMChannelWorkerLocationInfo *>(
             local_sender_connection_info_addresses[i]);
         connection_worker_info_ptr->edm_rdptr = 0;
-        uint8_t channel_worker_noc_cmd_buf = i == 0 ? write_at_cmd_buf : read_cmd_buf;
-        new (&local_sender_channel_worker_interfaces[i]) tt::fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS>(
-            connection_worker_info_ptr,
-            reinterpret_cast<volatile tt_l1_ptr uint32_t *const>(
-                local_sender_flow_control_semaphores[i]),
-            reinterpret_cast<volatile tt_l1_ptr uint32_t *const>(connection_live_semaphore_ptr),
-            channel_worker_noc_cmd_buf);
+        // uint8_t channel_worker_noc_cmd_buf = i == 0 ? write_at_cmd_buf : read_cmd_buf;
+        // new (&local_sender_channel_worker_interfaces[i]) tt::fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS>(
+        //     connection_worker_info_ptr,
+        //     reinterpret_cast<volatile tt_l1_ptr uint32_t *const>(
+        //         local_sender_flow_control_semaphores[i]),
+        //     reinterpret_cast<volatile tt_l1_ptr uint32_t *const>(connection_live_semaphore_ptr),
+        //     channel_worker_noc_cmd_buf);
     }
+
+    // unroll the sender channels so we can pass in different
+    // sender channel 0
+    new (&local_sender_channel_worker_interfaces[0])
+        tt::fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS, true, write_at_cmd_buf>(
+            reinterpret_cast<volatile tt::fabric::EDMChannelWorkerLocationInfo *>(
+                local_sender_connection_info_addresses[0]),
+            reinterpret_cast<volatile tt_l1_ptr uint32_t *const>(
+                local_sender_flow_control_semaphores[0]),
+            reinterpret_cast<volatile tt_l1_ptr uint32_t *const>(
+                local_sender_connection_live_semaphore_addresses[0]));
+
+    // sender channel 1
+    new (&local_sender_channel_worker_interfaces[1])
+        tt::fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS, true, write_cmd_buf>(
+            reinterpret_cast<volatile tt::fabric::EDMChannelWorkerLocationInfo *>(
+                local_sender_connection_info_addresses[1]),
+            reinterpret_cast<volatile tt_l1_ptr uint32_t *const>(
+                local_sender_flow_control_semaphores[1]),
+            reinterpret_cast<volatile tt_l1_ptr uint32_t *const>(
+                local_sender_connection_live_semaphore_addresses[1]));
+
 
 
     WriteTransactionIdTracker<RECEIVER_NUM_BUFFERS, NUM_TRANSACTION_IDS> receiver_channel_trid_tracker;

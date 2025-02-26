@@ -14,11 +14,11 @@ int main(int argc, char** argv) {
     std::size_t line_size = std::stoi(argv[arg_idx++]);
     std::size_t packet_payload_size_bytes = std::stoi(argv[arg_idx++]);
 
-    uint32_t test_expected_num_devices = 8;
-    if (tt::tt_metal::GetNumAvailableDevices() < test_expected_num_devices) {
-        tt::log_warning("This test can only be run on T3000 devices");
-        return 1;
-    }
+    // uint32_t test_expected_num_devices = 8;
+    // if (tt::tt_metal::GetNumAvailableDevices() < test_expected_num_devices) {
+    //     tt::log_warning("This test can only be run on T3000 devices");
+    //     return 1;
+    // }
 
     WriteThroughputStabilityTestWithPersistentFabricParams params;
     params.line_sync = line_sync;

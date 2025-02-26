@@ -36,7 +36,7 @@ namespace tt::fabric {
  * As the adapter writes into the EDM, it updates the local wrptr. As the EDM reads from its local L1 channel buffer,
  * it will notify the worker/adapter (here) by updating the worker remote_rdptr to carry the value of the EDM rdptr.
  */
-template <uint8_t EDM_NUM_BUFFER_SLOTS = 0>
+template <uint8_t EDM_NUM_BUFFER_SLOTS = 0, bool USE_STATEFUL_NOC_API = false, uint8_t DATA_NOC_CMD_BUF = write_reg_cmd_buf, uint8_t PTR_UPDATE_NOC_CMD_BUF = write_at_cmd_buf>
 struct WorkerToFabricEdmSenderImpl {
     static constexpr bool USER_DEFINED_NUM_BUFFER_SLOTS = EDM_NUM_BUFFER_SLOTS != 0;
     static constexpr bool IS_POW2_NUM_BUFFERS = USER_DEFINED_NUM_BUFFER_SLOTS && is_power_of_2(EDM_NUM_BUFFER_SLOTS);
@@ -121,18 +121,26 @@ struct WorkerToFabricEdmSenderImpl {
         num_buffers_per_channel(num_buffers_per_channel),
         last_buffer_index(num_buffers_per_channel - 1),
         edm_noc_x(edm_worker_x),
-        edm_noc_y(edm_worker_y),
-        edm_noc_cmd_buf(write_reg_cmd_buf) {
-        setup_edm_noc_cmd_buf(write_reg_cmd_buf);
+        edm_noc_y(edm_worker_y) {
+        setup_edm_data_cmd_buffer_noc_state();
+        if constexpr (USE_STATEFUL_NOC_API) {
+            setup_edm_ptr_cmd_buffer_noc_state();
+        }
+
         ASSERT(buffer_size_bytes > 0);
         if constexpr (USER_DEFINED_NUM_BUFFER_SLOTS) {
             ASSERT(num_buffers_per_channel == EDM_NUM_BUFFER_SLOTS);
         }
     }
 
-    FORCE_INLINE void setup_edm_noc_cmd_buf(uint8_t cmd_buf) const {
+    FORCE_INLINE void setup_edm_data_cmd_buffer_noc_state() const {
         uint64_t edm_noc_addr = get_noc_addr(this->edm_noc_x, this->edm_noc_y, 0);
-        noc_async_write_one_packet_with_trid_set_state(edm_noc_addr, cmd_buf);
+        noc_async_write_one_packet_with_trid_set_state(edm_noc_addr, DATA_NOC_CMD_BUF);
+    }
+
+    FORCE_INLINE void setup_edm_ptr_cmd_buffer_noc_state() const {
+        uint64_t const noc_sem_addr = get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_slot_wrptr_addr);
+        noc_inline_dw_write_set_state(noc_sem_addr, 0xF, PTR_UPDATE_NOC_CMD_BUF);
     }
 
     FORCE_INLINE bool edm_has_space_for_packet() const {
@@ -217,11 +225,11 @@ struct WorkerToFabricEdmSenderImpl {
 
         const uint64_t remote_buffer_index_addr = dest_noc_addr_coord_only | edm_buffer_index_addr;
         ASSERT(remote_buffer_index_addr > 0);
-        noc_async_read(remote_buffer_index_addr, reinterpret_cast<size_t>(this->buffer_slot_wrptr_ptr), sizeof(uint32_t));
+        noc_async_read(remote_buffer_index_addr, reinterpret_cast<size_t>(this->buffer_slot_wrptr_ptr), sizeof(uint32_t), 1-noc_index);
 
         tt::fabric::EDMChannelWorkerLocationInfo* worker_location_info_ptr = reinterpret_cast<tt::fabric::EDMChannelWorkerLocationInfo*>(edm_worker_location_info_addr);
         const uint64_t edm_rdptr_addr = dest_noc_addr_coord_only | reinterpret_cast<size_t>(edm_worker_location_info_addr + offsetof(tt::fabric::EDMChannelWorkerLocationInfo, edm_rdptr));
-        noc_async_read(edm_rdptr_addr, reinterpret_cast<size_t>(this->from_remote_buffer_slot_rdptr_ptr), sizeof(uint32_t));
+        noc_async_read(edm_rdptr_addr, reinterpret_cast<size_t>(this->from_remote_buffer_slot_rdptr_ptr), sizeof(uint32_t), 1-noc_index);
         // TODO: Need to change byte enable to be word enable
         const uint64_t dest_edm_location_info_addr            = dest_noc_addr_coord_only | edm_worker_location_info_addr;
         const uint64_t edm_teardown_semaphore_address_address = dest_noc_addr_coord_only | reinterpret_cast<uint64_t>(&(worker_location_info_ptr->worker_teardown_semaphore_address));
@@ -232,7 +240,7 @@ struct WorkerToFabricEdmSenderImpl {
 
         const uint64_t edm_connection_handshake_noc_addr = dest_noc_addr_coord_only | edm_connection_handshake_l1_addr;
         noc_inline_dw_write(edm_connection_handshake_noc_addr, open_connection_value);
-        noc_async_read_barrier();
+        noc_async_read_barrier(1-noc_index);
 
         this->edm_buffer_addr = this->edm_buffer_base_addr + (this->get_buffer_slot_index() * (this->buffer_size_bytes + sizeof(eth_channel_sync_t)));
         ASSERT(*this->buffer_slot_wrptr_ptr < 20);
@@ -285,14 +293,15 @@ struct WorkerToFabricEdmSenderImpl {
     uint8_t edm_noc_x;
     uint8_t edm_noc_y;
 
-    // the cmd buffer is used for edm-edm path
-    uint8_t edm_noc_cmd_buf;
-
 private:
 
     FORCE_INLINE void update_edm_buffer_slot_wrptr() {
-        uint64_t const noc_sem_addr = get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_slot_wrptr_addr);
-        noc_inline_dw_write(noc_sem_addr, *this->buffer_slot_wrptr_ptr);
+        if constexpr (USE_STATEFUL_NOC_API) {
+            noc_inline_dw_write_with_state(*this->buffer_slot_wrptr_ptr, PTR_UPDATE_NOC_CMD_BUF);
+        } else {
+            uint64_t const noc_sem_addr = get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_slot_wrptr_addr);
+            noc_inline_dw_write(noc_sem_addr, *this->buffer_slot_wrptr_ptr, 0xF, PTR_UPDATE_NOC_CMD_BUF);
+        }
     }
 
     FORCE_INLINE uint8_t get_buffer_slot_index() const {
@@ -352,7 +361,7 @@ private:
         ASSERT(size_bytes <= this->buffer_size_bytes);
         ASSERT(tt::fabric::is_valid(*const_cast<PACKET_HEADER_TYPE*>(
             reinterpret_cast<volatile PACKET_HEADER_TYPE*>(source_address))));
-        send_chunk_from_address_with_trid<blocking_mode>(source_address, 1, size_bytes, this->edm_buffer_addr, trid, this->edm_noc_cmd_buf);
+        send_chunk_from_address_with_trid<blocking_mode>(source_address, 1, size_bytes, this->edm_buffer_addr, trid, DATA_NOC_CMD_BUF);
         post_send_payload_increment_pointers();
     }
 
@@ -368,6 +377,6 @@ private:
 using WorkerToFabricEdmSender = WorkerToFabricEdmSenderImpl<0>;
 
 template <uint8_t EDM_SENDER_CHANNEL_NUM_BUFFERS>
-using EdmToEdmSender = WorkerToFabricEdmSenderImpl<EDM_SENDER_CHANNEL_NUM_BUFFERS>;
+using EdmToEdmSender = WorkerToFabricEdmSenderImpl<EDM_SENDER_CHANNEL_NUM_BUFFERS, true, write_reg_cmd_buf, read_cmd_buf>;
 
 }  // namespace tt::fabric

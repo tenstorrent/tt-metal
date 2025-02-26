@@ -113,14 +113,13 @@ class EthChannelBuffer final {
 };
 
 
-template <uint8_t NUM_BUFFERS>
+template <uint8_t NUM_BUFFERS, bool USE_STATEFUL_NOC_API = false, uint8_t PTR_UPDATE_NOC_CMD_BUF = write_at_cmd_buf>
 struct EdmChannelWorkerInterface {
     EdmChannelWorkerInterface() :
         worker_location_info_ptr(nullptr),
         cached_worker_semaphore_address(0),
         remote_producer_wrptr(nullptr),
         connection_live_semaphore(nullptr),
-        edm_noc_cmd_buf(write_at_cmd_buf),
         local_wrptr(),
         local_ackptr(),
         local_rdptr() {}
@@ -134,13 +133,11 @@ struct EdmChannelWorkerInterface {
         // semaphore directly (saving on regenerating it each time)
         volatile EDMChannelWorkerLocationInfo *worker_location_info_ptr,
         volatile tt_l1_ptr uint32_t *const remote_producer_wrptr,
-        volatile tt_l1_ptr uint32_t *const connection_live_semaphore,
-        uint32_t edm_noc_cmd_buf) :
+        volatile tt_l1_ptr uint32_t *const connection_live_semaphore) :
         worker_location_info_ptr(worker_location_info_ptr),
         cached_worker_semaphore_address(0),
         remote_producer_wrptr(remote_producer_wrptr),
         connection_live_semaphore(connection_live_semaphore),
-        edm_noc_cmd_buf(edm_noc_cmd_buf),
         local_wrptr(),
         local_ackptr(),
         local_rdptr() {
@@ -164,8 +161,12 @@ struct EdmChannelWorkerInterface {
     }
 
     FORCE_INLINE void update_worker_copy_of_read_ptr(BufferPtr new_ptr_val) {
-        // for producer-sender ack path use the other NoC, so they can be made stateful
-        noc_inline_dw_write(this->cached_worker_semaphore_address, new_ptr_val, 0xF, this->edm_noc_cmd_buf, 1-noc_index);
+        if constexpr (USE_STATEFUL_NOC_API) {
+            // for producer-sender ack path use the other NoC, so they can be made stateful
+            noc_inline_dw_write_with_state(new_ptr_val, PTR_UPDATE_NOC_CMD_BUF, 1-noc_index);
+        } else {
+            noc_inline_dw_write(this->cached_worker_semaphore_address, new_ptr_val, 0xF, PTR_UPDATE_NOC_CMD_BUF, 1-noc_index);
+        }
     }
 
     // Connection management methods
@@ -192,6 +193,9 @@ struct EdmChannelWorkerInterface {
             worker_info.worker_semaphore_address,
             1-noc_index);
         this->cached_worker_semaphore_address = worker_semaphore_address;
+        if constexpr (USE_STATEFUL_NOC_API) {
+            noc_inline_dw_write_set_state(worker_semaphore_address, 0xF, PTR_UPDATE_NOC_CMD_BUF);
+        }
     }
 
     FORCE_INLINE bool all_eth_packets_acked() const {
@@ -208,9 +212,6 @@ struct EdmChannelWorkerInterface {
     uint64_t cached_worker_semaphore_address = 0;
     volatile tt_l1_ptr uint32_t *const remote_producer_wrptr;
     volatile tt_l1_ptr uint32_t *const connection_live_semaphore;
-
-    // the cmd buffer is used for producer-sender path
-    uint8_t edm_noc_cmd_buf;
 
     ChannelBufferPointer<NUM_BUFFERS> local_wrptr;
     ChannelBufferPointer<NUM_BUFFERS> local_ackptr;

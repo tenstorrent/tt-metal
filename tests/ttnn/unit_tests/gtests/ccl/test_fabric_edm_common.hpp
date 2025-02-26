@@ -74,7 +74,7 @@ public:
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
 
         num_devices_ = tt::tt_metal::GetNumAvailableDevices();
-        if (arch_ == tt::ARCH::WORMHOLE_B0 and num_devices_ == 8 and tt::tt_metal::GetNumPCIeDevices() == 4) {
+        if (arch_ == tt::ARCH::WORMHOLE_B0 and tt::tt_metal::GetNumPCIeDevices() == 4) {
             mesh_device_ = MeshDevice::create(MeshDeviceConfig{.mesh_shape = MeshShape{2, 4}});
 
             std::vector<chip_id_t> ids(num_devices_, 0);
