@@ -84,7 +84,8 @@ void MAIN {
                 largest,
                 switch_dir,
                 logk,
-                seq_per_2tiles);
+                seq_per_2tiles,
+                largest);
         }
 
         constexpr uint32_t Kt = K % TILE_WIDTH == 0 ? K / TILE_WIDTH : K / TILE_WIDTH + 1;

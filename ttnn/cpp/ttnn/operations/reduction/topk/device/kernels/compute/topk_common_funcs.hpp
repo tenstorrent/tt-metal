@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "debug/dprint.h"  // required in all kernels using DPRINT
+
 namespace NAMESPACE {
 void process_and_sort_tiles(
     uint32_t input_cb_index,
@@ -118,6 +120,7 @@ void process_tiles(
     uint32_t input_dest_end,
     uint32_t index_dest_start,
     uint32_t index_dest_end,
+    bool largest,
     int seq_per_2tiles) {
     uint32_t dist = ((1 << m_iter) * K) >> 5;
     for (uint32_t i = 0; i < num_k_sequences; i += seq_per_2tiles) {
@@ -144,7 +147,13 @@ void process_tiles(
             copy_tile(index_transposed_cb_index, right_tile_id, index_dest_end);
 
             // merge values - move larger 32 values into 0th dest and lower 32 values into 1st dest
-            ckernel::topk_merge(0, m_iter, K);
+            if (largest) {
+                ckernel::topk_merge<false>(0, m_iter, K);
+            } else {
+                ckernel::topk_merge<true>(0, m_iter, K);
+            }
+
+            // ckernel::topk_merge(0, m_iter, K);
 
             // pack value tiles in-place in the single-buffered cb_intermed0, we only need the upper 32 values
             // for topk, which was in input_dest_start
@@ -177,7 +186,8 @@ void process_iteration(
     bool largest,
     bool switch_dir,
     uint32_t logk,
-    int& seq_per_2tiles) {
+    int& seq_per_2tiles,
+    bool largest_param) {
     cb_wait_front(input_transposed_cb_index, Wt);
     cb_wait_front(index_transposed_cb_index, Wt);
 
@@ -193,6 +203,7 @@ void process_iteration(
         input_dest_end,
         index_dest_start,
         index_dest_end,
+        largest_param,
         seq_per_2tiles);
 
     cb_reserve_back(input_transposed_cb_index, Wt);

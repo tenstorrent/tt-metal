@@ -89,7 +89,8 @@ void MAIN {
                 !direction_init,
                 switch_dir,
                 logk,
-                seq_per_2tiles);
+                seq_per_2tiles,
+                largest);
         }
 
         // copy local chunk's topk value tiles into output buffer to send off to the gather core to get the final topk

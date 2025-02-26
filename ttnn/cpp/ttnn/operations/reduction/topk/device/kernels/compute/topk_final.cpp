@@ -109,7 +109,8 @@ void MAIN {
                 largest,
                 switch_dir,
                 logk,
-                seq_per_2tiles);
+                seq_per_2tiles,
+                largest);
         }
 
         // transpose value tiles and pack into output buffer
