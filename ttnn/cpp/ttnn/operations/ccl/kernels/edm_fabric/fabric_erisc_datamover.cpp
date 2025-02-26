@@ -1192,7 +1192,7 @@ void kernel_main() {
     }
     auto downstream_edm_noc_interface =
         has_downstream_edm_buffer_connection
-            ? tt::fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>(
+            ? tt::fabric::EdmToEdmSender<SENDER_NUM_BUFFERS, false, write_reg_cmd_buf, write_at_cmd_buf, noc_index>(
                  //persistent_mode -> hardcode to false because for EDM -> EDM
                  // connections we must always use semaphore lookup
                   false,
@@ -1208,7 +1208,7 @@ void kernel_main() {
                   reinterpret_cast<volatile uint32_t *const>(edm_forwarding_semaphore_address),
                   reinterpret_cast<volatile uint32_t *const>(edm_teardown_semaphore_address),
                   downstream_noc_interface_buffer_index_local_addr)
-            : tt::fabric::EdmToEdmSender<SENDER_NUM_BUFFERS>();
+            : tt::fabric::EdmToEdmSender<SENDER_NUM_BUFFERS, false, write_reg_cmd_buf, write_at_cmd_buf, noc_index>();
 
     auto local_receiver_channel = tt::fabric::EthChannelBuffer<RECEIVER_NUM_BUFFERS>(
         local_receiver_channel_buffer_address,
@@ -1258,7 +1258,7 @@ void kernel_main() {
     // unroll the sender channels so we can pass in different
     // sender channel 0
     new (&local_sender_channel_worker_interfaces[0])
-        tt::fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS, true, write_at_cmd_buf>(
+        tt::fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS, false, write_at_cmd_buf, noc_index>(
             reinterpret_cast<volatile tt::fabric::EDMChannelWorkerLocationInfo *>(
                 local_sender_connection_info_addresses[0]),
             reinterpret_cast<volatile tt_l1_ptr uint32_t *const>(
@@ -1268,7 +1268,7 @@ void kernel_main() {
 
     // sender channel 1
     new (&local_sender_channel_worker_interfaces[1])
-        tt::fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS, true, write_cmd_buf>(
+        tt::fabric::EdmChannelWorkerInterface<SENDER_NUM_BUFFERS, false, write_at_cmd_buf, noc_index>(
             reinterpret_cast<volatile tt::fabric::EDMChannelWorkerLocationInfo *>(
                 local_sender_connection_info_addresses[1]),
             reinterpret_cast<volatile tt_l1_ptr uint32_t *const>(

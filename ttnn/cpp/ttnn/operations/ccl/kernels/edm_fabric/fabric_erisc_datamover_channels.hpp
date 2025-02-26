@@ -113,7 +113,7 @@ class EthChannelBuffer final {
 };
 
 
-template <uint8_t NUM_BUFFERS, bool USE_STATEFUL_NOC_API = false, uint8_t PTR_UPDATE_NOC_CMD_BUF = write_at_cmd_buf>
+template <uint8_t NUM_BUFFERS, bool USE_STATEFUL_NOC_API = false, uint8_t PTR_UPDATE_NOC_CMD_BUF = write_at_cmd_buf, uint8_t PTR_UPDATE_NOC_INDEX = noc_index>
 struct EdmChannelWorkerInterface {
     EdmChannelWorkerInterface() :
         worker_location_info_ptr(nullptr),
@@ -163,9 +163,9 @@ struct EdmChannelWorkerInterface {
     FORCE_INLINE void update_worker_copy_of_read_ptr(BufferPtr new_ptr_val) {
         if constexpr (USE_STATEFUL_NOC_API) {
             // for producer-sender ack path use the other NoC, so they can be made stateful
-            noc_inline_dw_write_with_state(new_ptr_val, PTR_UPDATE_NOC_CMD_BUF, 1-noc_index);
+            noc_inline_dw_write_with_state(new_ptr_val, PTR_UPDATE_NOC_CMD_BUF, PTR_UPDATE_NOC_INDEX);
         } else {
-            noc_inline_dw_write(this->cached_worker_semaphore_address, new_ptr_val, 0xF, PTR_UPDATE_NOC_CMD_BUF, 1-noc_index);
+            noc_inline_dw_write(this->cached_worker_semaphore_address, new_ptr_val, 0xF, PTR_UPDATE_NOC_CMD_BUF, PTR_UPDATE_NOC_INDEX);
         }
     }
 
@@ -191,7 +191,7 @@ struct EdmChannelWorkerInterface {
             (uint32_t)worker_info.worker_xy.x,
             (uint32_t)worker_info.worker_xy.y,
             worker_info.worker_semaphore_address,
-            1-noc_index);
+            PTR_UPDATE_NOC_INDEX);
         this->cached_worker_semaphore_address = worker_semaphore_address;
         if constexpr (USE_STATEFUL_NOC_API) {
             noc_inline_dw_write_set_state(worker_semaphore_address, 0xF, PTR_UPDATE_NOC_CMD_BUF);
