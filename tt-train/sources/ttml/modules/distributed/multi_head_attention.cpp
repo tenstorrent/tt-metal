@@ -27,7 +27,7 @@ DistributedMultiHeadAttention::DistributedMultiHeadAttention(
     // create layers
     m_qkv_linear = std::make_shared<ColumnParallelLinear>(
         m_embedding_dim, m_embedding_dim * 3, /* has_bias */ true, /* gather_output */ false);
-    m_dropout = std::make_shared<ttml::modules::DropoutLayer>(dropout_prob_);
+    m_dropout = std::make_shared<ttml::modules::DropoutLayer>(dropout_prob_, /* use_per_device_seed */ false);
     m_out_linear = std::make_shared<RowParallelLinear>(
         m_embedding_dim, m_embedding_dim, /* has_bias */ true, /* input_is_parallel */ true);
 

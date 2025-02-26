@@ -17,17 +17,8 @@ DistributedGPTMLP::DistributedGPTMLP(uint32_t embedding_size, float dropout_prob
         embedding_size, embedding_size * 4, /* has_bias */ true, /* gather_output */ false);
     fc2 = std::make_shared<RowParallelLinear>(
         embedding_size * 4, embedding_size, /* has_bias */ true, /* input_is_parallel */ true);
-    // fc1 = std::make_shared<ColumnParallelLinear>(
-    //     embedding_size, embedding_size * 4, /* has_bias */ true, /* gather_output */ true);
-    // fc2 = std::make_shared<LinearLayer>(embedding_size * 4, embedding_size, /* has_bias */ true);
-    // fc2 = std::make_shared<RowParallelLinear>(
-    //     embedding_size * 4, embedding_size, /* has_bias */ true, /* input_is_parallel */ false);
 
-    // fc1 = std::make_shared<LinearLayer>(embedding_size, embedding_size * 4, /* has_bias */ true);
-    // fc2 = std::make_shared<RowParallelLinear>(
-    //     embedding_size * 4, embedding_size, /* has_bias */ true, /* input_is_parallel */ false);
-
-    dropout = std::make_shared<DropoutLayer>(dropout_prob);
+    dropout = std::make_shared<DropoutLayer>(dropout_prob, /* use_per_device_seed */ false);
 
     create_name("gpt_mlp");
     register_module(fc1, "fc1");
@@ -46,11 +37,9 @@ autograd::TensorPtr DistributedGPTMLP::operator()(const autograd::TensorPtr& inp
 DistributedGPTBlock::DistributedGPTBlock(
     uint32_t embedding_size, uint32_t num_heads, float dropout_prob, bool use_composite_layernorm) {
     mlp = std::make_shared<DistributedGPTMLP>(embedding_size, dropout_prob);
-    // mlp = std::make_shared<GPTMLP>(embedding_size, dropout_prob);
     ln1 = std::make_shared<LayerNormLayer>(embedding_size, use_composite_layernorm);
     ln2 = std::make_shared<LayerNormLayer>(embedding_size, use_composite_layernorm);
     attention = std::make_shared<DistributedMultiHeadAttention>(embedding_size, num_heads, dropout_prob);
-    // attention = std::make_shared<MultiHeadAttention>(embedding_size, num_heads, dropout_prob);
 
     create_name("gpt_block");
     register_module(mlp, "mlp");
@@ -65,15 +54,10 @@ autograd::TensorPtr DistributedGPTBlock::operator()(const autograd::TensorPtr& i
     x = (*attention)(x, mask);
     x = ops::add(x, residual);
 
-    // auto* device = &autograd::ctx().get_device();
-    // device->synchronize();
-
     residual = x;
     x = (*ln2)(x);
     x = (*mlp)(x);
     x = ops::add(x, residual);
-
-    // device->synchronize();
 
     return x;
 }

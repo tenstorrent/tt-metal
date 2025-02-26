@@ -388,9 +388,6 @@ int main(int argc, char **argv) {
     app.add_option("-d,--ddp", ddp, "Enable DDP")->default_val(ddp);
     CLI11_PARSE(app, argc, argv);
 
-    // disable wandb for debugging
-    enable_wandb = false;
-
     if (ddp && enable_tp) {
         throw std::logic_error("DDP and TP cannot be enabled at the same time. Disable DDP or TP.");
     }
@@ -552,7 +549,8 @@ int main(int argc, char **argv) {
     fmt::print("Overriding vocab size to be divisible by 32\n");
     auto num_devices = static_cast<uint32_t>(device->num_devices());
     // this is workaround for multi-device case, we need to have vocab size divisible by 32 per device
-    config.transformer_config.vocab_size = round_up_to_tile(tokenizer->get_vocab_size(), num_devices * 32U);
+    config.transformer_config.vocab_size =
+        round_up_to_tile(tokenizer->get_vocab_size(), (enable_tp ? num_devices : 1U) * 32U);
     // auto model = ttml::models::gpt2::create(config.transformer_config);
     auto model = ttml::models::distributed::gpt2::create(config.transformer_config);
 
