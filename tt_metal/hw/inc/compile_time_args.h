@@ -18,5 +18,6 @@ constexpr auto kernel_compile_time_args = make_array<std::uint32_t>(KERNEL_COMPI
 constexpr auto kernel_compile_time_args = make_array<std::uint32_t>();
 #endif
 
-#define get_compile_time_arg_val(arg_idx) kernel_compile_time_args[arg_idx]
+#define get_compile_time_arg_val(arg_idx) \
+    ((arg_idx) < kernel_compile_time_args.size() ? kernel_compile_time_args[(arg_idx)] : 0)
 }  // namespace ckernel
