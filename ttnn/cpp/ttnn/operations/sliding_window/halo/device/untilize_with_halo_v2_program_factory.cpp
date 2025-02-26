@@ -166,8 +166,8 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
             .set_globally_allocated_address(*remote_config_buffer);
     CBHandle remote_config_cb = CreateCircularBuffer(program, all_cores, remote_config_cb_config);
 
-    bool const is_block_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
-    bool const is_width_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED;
+    const bool is_block_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED;
+    const bool is_width_sharded = input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED;
 
     auto aligned_input_nstick_nbytes = out_stick_nbytes;
     log_debug(tt::LogOp, "out_stick_nbytes = {}", out_stick_nbytes);
@@ -200,7 +200,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
 
     KernelHandle reader_kernel_id0 = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/untilize_with_halo_v2/device/kernels/dataflow/halo_gather.cpp",
+        "ttnn/cpp/ttnn/operations/sliding_window/halo/device/kernels/dataflow/halo_gather.cpp",
         all_cores,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = reader_ct_args});
@@ -211,7 +211,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
 
     KernelHandle reader_kernel_id1 = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/data_movement/untilize_with_halo_v2/device/kernels/dataflow/halo_gather.cpp",
+        "ttnn/cpp/ttnn/operations/sliding_window/halo/device/kernels/dataflow/halo_gather.cpp",
         all_cores,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .compile_args = reader_ct_args});
