@@ -174,7 +174,7 @@ constexpr auto kernel_compile_time_args = make_array<std::uint32_t>();
  * | arg_idx               | The index of the argument          | uint32_t              | 0 to 31     | True     |
  */
 // clang-format on
-FORCE_INLINE constexpr uint32_t get_compile_time_arg_val(uint32_t arg_idx) { return kernel_compile_time_args[arg_idx]; }
+#define get_compile_time_arg_val(arg_idx) kernel_compile_time_args[arg_idx]
 
 // clang-format off
 /**
