@@ -1465,3 +1465,31 @@ def test_binary_sharded_uneven_invalid(a_shape, b_shape, shard_type, shard_size,
     with pytest.raises(RuntimeError) as e:
         out_tt_sharded = ttnn.experimental.add(a_tt, b_tt, memory_config=shard_config)
         assert "Invalid un-even shard size" in str(e.value)
+
+
+@pytest.mark.parametrize("scalar", [-0.25, -16.5, 0.0, 0.05, 1.7, 19.0])
+def test_binary_sharded_scalar(scalar, device):
+    torch.manual_seed(0)
+
+    a_shape = torch.Size([1, 4 * 32])
+    a_sharded_config = ttnn.create_sharded_memory_config(
+        [32, 4 * 32],
+        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 0))}),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+    a_pt = gen_func_with_cast_tt(partial(torch_random, low=-50, high=50, dtype=torch.bfloat16), ttnn.bfloat16)(a_shape)
+    a_tt = ttnn.from_torch(
+        a_pt,
+        dtype=ttnn.bfloat16,
+        device=device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=a_sharded_config,
+    )
+
+    out_pt = torch.add(a_pt, scalar)
+    out_tt_sharded = ttnn.experimental.add(a_tt, scalar, memory_config=a_sharded_config)
+    out_tt_sharded = ttnn.to_torch(out_tt_sharded)
+    torch.testing.assert_close(out_tt_sharded, out_pt)
