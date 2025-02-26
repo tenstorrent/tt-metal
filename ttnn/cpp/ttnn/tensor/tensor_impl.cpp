@@ -356,6 +356,11 @@ void to_string_row_major(
     const std::size_t buffer_offset,
     int64_t rank,
     int64_t dim = 0) {
+    if (shape.rank() == 0) {
+        ss << "[]";
+        return;
+    }
+
     auto stride = strides[dim];
 
     std::string spaces = std::string(TENSOR_TYPE_STRING_PLUS_OPEN_PARENTHESIS_LENGTH + dim, ' ');
