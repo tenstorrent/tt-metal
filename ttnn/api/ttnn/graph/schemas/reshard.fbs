@@ -1,0 +1,19 @@
+namespace ttnn;
+
+table Reshard {
+    in_grid: string;
+    out_grid: string;
+    group: string;
+    coef: float;
+    intercept: float;
+    r_sq: float;
+    rrmse: float;
+    rmsre: float;
+    num_points: int;
+}
+
+table ReshardTable {
+    rows: [Reshard];
+}
+
+root_type ReshardTable;
