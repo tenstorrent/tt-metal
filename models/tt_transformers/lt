@@ -840,7 +840,7 @@ def run_entry_command(entry, screen_lock, output_entries, screen_needs_update):
 
     # Set environment variables
     env = os.environ.copy()
-    env["FAKE_DEVICE"] = entry["device"]
+    env["MESH_DEVICE"] = entry["device"]
     env["LLAMA_DIR"] = get_dir(entry["model"])
 
     # Open log file
@@ -909,7 +909,7 @@ def run_entry_command(entry, screen_lock, output_entries, screen_needs_update):
 
     # Write the command to the log file
     entry["log_file"].write(
-        f"FAKE_DEVICE={entry['device']} LLAMA_DIR={get_dir(entry['model'])} ACTUAL_DEVICE={get_device()} {command_input}"
+        f"MESH_DEVICE={entry['device']} LLAMA_DIR={get_dir(entry['model'])} ACTUAL_DEVICE={get_device()} {command_input}"
         + "\n"
     )
 
