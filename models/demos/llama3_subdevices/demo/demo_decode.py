@@ -285,23 +285,23 @@ def run_llama3_demo(
 
     # Compile
     logger.info(f"Compiling model trace...")
-    for i in range(24):
-        tt_decode_input = tt_embd(tt_out_tok)
-        # logger.info(f"tt_decode_input done")
 
-        tt_out = tt_model(
-            tt_decode_input,
-            current_pos_tensor,
-            rot_mats=rot_mats,
-            mode="decode",
-            page_table=page_table_tt,
-        )
-        # logger.info(f"tt_out done")
+    tt_decode_input = tt_embd(tt_out_tok)
+    # logger.info(f"tt_decode_input done")
 
-        # Sampling
-        tt_out_tok_reset = tt_sampling(tt_out[0])
-        # logger.info(f"sampling done")
+    tt_out = tt_model(
+        tt_decode_input,
+        current_pos_tensor,
+        rot_mats=rot_mats,
+        mode="decode",
+        page_table=page_table_tt,
+    )
+    logger.info(f"tt_out done")
 
+    # Sampling
+    tt_out_tok_reset = tt_sampling(tt_out[0])
+    logger.info(f"sampling done")
+    ttnn.synchronize_devices(mesh_device)
     ttnn.plus_one(current_pos_tensor)
     # profiler.end(f"plus one position done")
 
@@ -323,12 +323,13 @@ def run_llama3_demo(
         mode="decode",
         page_table=page_table_tt,
     )
-    tt_out_tok_reset = tt_sampling(tt_out[0])
+    tt_out_tok = tt_sampling(tt_out[0])
 
     ttnn.plus_one(current_pos_tensor)
     # ttnn.plus_one(rot_mat_idxs)  # FIXME <- This won't work since embedding requires uint32 and plus_one only works for int32
 
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    ttnn.synchronize_devices(mesh_device)
 
     # Reset the decoding position for the proper run of the model
     current_pos_reset = ttnn.from_torch(
@@ -527,7 +528,7 @@ def run_llama3_demo(
 @pytest.mark.parametrize(
     "weights, layers",
     [
-        ("random", 1),
+        ("random", 3),
         ("instruct", 80),
     ],
     ids=["quick", "full"],

@@ -40,7 +40,7 @@ class TTSampling(LightweightModule):
         self.tt_indices_device_offsets = ttnn.from_torch(
             indices_device_offsets,
             device=self.mesh_device,
-            dtype=ttnn.uint32,
+            dtype=ttnn.int32,
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(None, None), mesh_shape=self.args.cluster_shape),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
