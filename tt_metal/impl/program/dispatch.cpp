@@ -10,9 +10,9 @@
 #include <mesh_command_queue.hpp>
 #include <mesh_workload.hpp>
 #include <tt_align.hpp>
+#include <sub_device_types.hpp>
 #include <vector>
 
-#include "sub_device_types.hpp"
 #include "tt_metal/impl/dispatch/data_collection.hpp"
 #include "tt_metal/impl/dispatch/device_command_calculator.hpp"
 #include "tt_metal/impl/dispatch/dispatch_query_manager.hpp"

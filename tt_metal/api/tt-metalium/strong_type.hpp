@@ -55,7 +55,7 @@ namespace tt::stl {
 template <typename T, typename Tag>
 class StrongType {
 public:
-    using backing_type = T;
+    using value_type = T;
 
     constexpr explicit StrongType(T v) : value_(std::move(v)) {}
 
