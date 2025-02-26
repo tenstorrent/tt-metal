@@ -46,7 +46,6 @@ private:
     std::vector<std::vector<std::shared_ptr<KernelGroup>>> kernel_groups_;
     std::vector<Semaphore> semaphores_;
     std::unordered_map<MeshCoordinateRange, Program> programs_;
-    std::vector<MeshCoordinateRange> logical_device_ranges_;
     bool finalized_ = false;
     std::unordered_map<MeshCoordinateRange, std::unordered_map<KernelHandle, RuntimeArgsPerCore>> runtime_args_;
     MeshCommandQueue* last_used_command_queue_ = nullptr;
@@ -62,9 +61,7 @@ public:
     // Main User-Facing API building blocks
     MeshWorkload();
     void add_program(const MeshCoordinateRange& device_range, Program&& program);
-    const std::unordered_map<MeshCoordinateRange, Program>& get_programs() const { return programs_; }
-    const std::vector<MeshCoordinateRange> get_logical_device_ranges() const { return logical_device_ranges_; }
-    Program& get_program_on_device_range(const MeshCoordinateRange& device_range) { return programs_.at(device_range); }
+    std::unordered_map<MeshCoordinateRange, Program>& get_programs() { return programs_; }
 
     // For testing purposes only
     void set_last_used_command_queue_for_testing(MeshCommandQueue* mesh_cq);
