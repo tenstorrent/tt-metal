@@ -338,7 +338,8 @@ void launch_on_worker_thread(auto cq_id, auto device_operation_id, const auto& o
             tt::tt_metal::distributed::AddProgramToMeshWorkload(
                 mesh_workload,
                 std::move(*program),
-                tt::tt_metal::distributed::MeshCoordinateRange({0, 0}, {mesh_device->num_cols() - 1, mesh_device->num_rows() - 1}));
+                tt::tt_metal::distributed::MeshCoordinateRange(
+                    {0, 0}, {mesh_device->num_rows() - 1, mesh_device->num_cols() - 1}));
             tt::tt_metal::distributed::EnqueueMeshWorkload(cq, mesh_workload, true);
         } else {
             enqueue_or_launch_program(*program);
