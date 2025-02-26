@@ -13,6 +13,7 @@
 #include "mesh_device.hpp"
 #include "mesh_workload.hpp"
 #include "mesh_trace.hpp"
+#include "mesh_trace_id.hpp"
 
 namespace tt::tt_metal::distributed {
 

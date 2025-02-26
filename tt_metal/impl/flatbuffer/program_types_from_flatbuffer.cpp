@@ -115,4 +115,27 @@ std::vector<std::vector<uint32_t>> from_flatbuffer(
     return result;
 }
 
+CoreCoord from_flatbuffer(const flatbuffer::CoreCoord* fb_core_coord) {
+    TT_FATAL(fb_core_coord, "Invalid CoreCoord data from flatbuffer.");
+    return CoreCoord{fb_core_coord->x(), fb_core_coord->y()};
+}
+
+CoreRange from_flatbuffer(const flatbuffer::CoreRange* fb_core_range) {
+    TT_FATAL(
+        fb_core_range && fb_core_range->start() && fb_core_range->end(), "Invalid CoreRange data from flatbuffer.");
+    return CoreRange{
+        from_flatbuffer(fb_core_range->start()),  // Reuse CoreCoord deserialization
+        from_flatbuffer(fb_core_range->end())};
+}
+
+CoreRangeSet from_flatbuffer(const flatbuffer::CoreRangeSet* fb_core_range_set) {
+    TT_FATAL(fb_core_range_set, "Invalid CoreRangeSet data from flatbuffer.");
+
+    std::vector<CoreRange> ranges;
+    for (const auto* range : *fb_core_range_set->ranges()) {
+        ranges.emplace_back(from_flatbuffer(range));  // Reuse CoreRange deserialization
+    }
+    return CoreRangeSet{ranges};
+}
+
 }  // namespace tt::tt_metal

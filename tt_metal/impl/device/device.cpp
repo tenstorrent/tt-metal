@@ -597,14 +597,14 @@ void Device::initialize_and_launch_firmware() {
     core_info->noc_dram_addr_base = 0;
     core_info->noc_dram_addr_end = soc_d.dram_core_size;
 
-    const std::vector<CoreCoord> &pcie_cores = soc_d.get_pcie_cores();
-    const std::vector<CoreCoord> &dram_cores = soc_d.get_dram_cores();
+    const std::vector<tt::umd::CoreCoord>& pcie_cores = soc_d.get_cores(CoreType::PCIE, soc_d.get_umd_coord_system());
+    const std::vector<tt::umd::CoreCoord>& dram_cores = soc_d.get_cores(CoreType::DRAM, soc_d.get_umd_coord_system());
     const std::vector<tt::umd::CoreCoord>& eth_cores = soc_d.get_cores(CoreType::ETH, CoordSystem::PHYSICAL);
     // The SOC descriptor can list a dram core multiple times, depending on how GDDR is assigned to banks
     // Get a list of unique DRAM cores.
     std::unordered_set<CoreCoord> unique_dram_cores(dram_cores.begin(), dram_cores.end());
     TT_ASSERT(
-        pcie_cores.size() + unique_dram_cores.size() + eth_cores.size() <= MAX_NON_WORKER_CORES,
+        pcie_cores.size() + dram_cores.size() + eth_cores.size() <= MAX_NON_WORKER_CORES,
         "Detected more pcie/dram/eth cores than fit in the device mailbox.");
     TT_ASSERT(
         eth_cores.size() <= MAX_VIRTUAL_NON_WORKER_CORES,
@@ -617,10 +617,10 @@ void Device::initialize_and_launch_firmware() {
     }
 
     int non_worker_cores_idx = 0;
-    for (const CoreCoord &core : pcie_cores) {
+    for (const tt::umd::CoreCoord& core : pcie_cores) {
         core_info->non_worker_cores[non_worker_cores_idx++] = {core.x, core.y, AddressableCoreType::PCIE};
     }
-    for (const CoreCoord &core : unique_dram_cores) {
+    for (const tt::umd::CoreCoord& core : dram_cores) {
         core_info->non_worker_cores[non_worker_cores_idx++] = {core.x, core.y, AddressableCoreType::DRAM};
     }
     for (const tt::umd::CoreCoord& core : eth_cores) {
