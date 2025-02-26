@@ -10,27 +10,32 @@ YOLOv8 is the latest iteration in the YOLO series of real-time object detectors,
 The entry point to yolov8x model is YOLOv8x in `models/experimental/functional_yolov8x/tt/ttnn_yolov8x.py`.
 
 Use the following command to run the model :
-`pytest --disable-warnings tests/ttnn/integration_tests/yolov8x/test_ttnn_yolov8x.py::test_yolov8x_640`
+` pytest -k "pretrained_weight_true" tests/ttnn/integration_tests/yolov8x/test_ttnn_yolov8x.py::test_yolov8x_640`
+
+Use the following command to run the e2e perf :
+` pytest -k "pretrained_weight_true" models/experimental/functional_yolov8x/tests/test_yolov8x.py::test_yolov8x`
+
+Use the following command to run the device perf :
+` pytest models/experimental/functional_yolov8x/tests/test_yolov8x.py::test_perf_device_bare_metal_yolov8x`
 
 ## Batch size: 1
-
-Batch Size determines the number of input sequences processed simultaneously during training or inference, impacting computational efficiency and memory usage. It's recommended to set the `batch_size` to 1.
+The batch Size determines the number of input sequences processed simultaneously during training or inference, affecting computational efficiency and memory usage. It's recommended to set the `batch_size` to 1.
 
 Use the following command to run the yolov8x demo:
-`pytest --disable-warnings models/experimental/functional_yolov8x/demo/demo.py`
+`pytest -k "pretrained_weight_true" models/experimental/functional_yolov8x/demo/demo.py`
 
 #### Note: The post-processing is performed using PyTorch.
-
-Use the following command to run the yolov8x performant impelementation:
-  `pytest tests/ttnn/integration_tests/yolov8x/test_yolov8x_performant.py::test_run_yolov8x_trace_2cqs_inference`
+Use the following command to run the yolov8x performant implementation:
+  `pytest tests/ttnn/integration_tests/yolov8x/test_yolov8x_performant.py::test_run_yolov8x_trace_2cq_inference`
 
 
 ## Inputs
-
-The demo receives inputs from `models/experimental/functional_yolov8x/demo/images` dir by default. To test the model on different input data, it is recommended to add new image file to this directory.
+The demo receives inputs from `models/experimental/functional_yolov8x/demo/images` dir by default. To test the model on different input data, it is recommended to add a new image file to this directory.
 
 ## Outputs
+A runs folder will be created inside the `models/experimental/functional_yolov8x/demo/` directory. For reference, the model output will be stored in the torch_model directory, while the TTNN model output will be stored in the tt_model directory.
 
-The runs folder will be created inside the `models/experimental/functional_yolov8x/demo/` dir. For reference, the model output will be stored in `torch_model` dir, while the ttnn model output will be stored in `tt_model` dir.
+## Additional Information:
+The tests can be run with  randomly initialized weights and pre-trained real weights.  To run only for the pre-trained weights, specify pretrained_weight_true when running the tests.
 
 ### Owner: [Sabira](https://github.com/sabira-mcw), [Sudhanshu](https://github.com/ssinghalTT), [Saichand](https://github.com/tenstorrent/tt-metal/pulls/saichandax)

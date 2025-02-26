@@ -62,7 +62,7 @@ run_common_func_tests() {
   pytest --disable-warnings models/demos/roberta/demo/demo.py --timeout 600; fail+=$?
 
   #yolov8x
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest --disable-warnings models/experimental/functional_yolov8x/demo/demo.py --timeout 600; fail+=$?
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -k "pretrained_weight_false" models/experimental/functional_yolov8x/demo/demo.py --timeout 600; fail+=$?
 
 
   return $fail

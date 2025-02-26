@@ -7,7 +7,6 @@ import ttnn
 import torch
 import torch.nn as nn
 from loguru import logger
-from functools import partial
 from pathlib import Path
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.functional_yolov8x.tt.ttnn_yolov8x import YOLOv8xModel
@@ -27,7 +26,7 @@ try:
     sys.modules["ultralytics.nn.modules.head"] = yolov8x_utils
 
 except KeyError:
-    print("models.experimental.functional_yolov8x.reference.yolov8x_utils not found.")
+    logger.info("models.experimental.functional_yolov8x.reference.yolov8x_utils not found.")
 
 
 class Ensemble(nn.ModuleList):
@@ -51,22 +50,22 @@ def attempt_download(file, repo="ultralytics/assets"):
         msg = f"{file_path} missing, try downloading from https://github.com/{repo}/releases/"
         try:
             url = f"https://github.com/{repo}/releases/download/v8.3.0/{name}"
-            print(f"Downloading {url} to {file_path}...")
+            logger.info(f"Downloading {url} to {file_path}...")
             torch.hub.download_url_to_file(url, file_path)
 
             assert file_path.exists() and file_path.stat().st_size > 1e6, f"Download failed for {name}"
         except Exception as e:
-            print(f"Error downloading from GitHub: {e}. Trying secondary source...")
+            logger.info(f"Error downloading from GitHub: {e}. Trying secondary source...")
 
             url = f"https://storage.googleapis.com/{repo}/ckpt/{name}"
-            print(f"Downloading {url} to {file_path}...")
+            logger.info(f"Downloading {url} to {file_path}...")
             os.system(f"curl -L {url} -o {file_path}")
 
             if not file_path.exists() or file_path.stat().st_size < 1e6:
                 file_path.unlink(missing_ok=True)
-                print(f"ERROR: Download failure for {msg}")
+                logger.info(f"ERROR: Download failure for {msg}")
             else:
-                print(f"Download succeeded from secondary source!")
+                logger.info(f"Download succeeded from secondary source!")
     return file_path
 
 
@@ -74,7 +73,7 @@ def attempt_load(weights, map_location=None):
     model = Ensemble()
     for w in weights if isinstance(weights, list) else [weights]:
         weight_path = attempt_download(w)
-        print("Loading weights from:", weight_path)
+        logger.info("Loading weights from:", weight_path)
         ckpt = torch.load(weight_path, map_location=map_location)
         model.append(ckpt["ema" if ckpt.get("ema") else "model"].float().eval())
     for m in model.modules():
