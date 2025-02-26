@@ -292,7 +292,7 @@ def run_max_pool(
             [1, 640, 32, 32],
             [1, 576, 32, 32],
             [1, 384, 32, 32],
-            # C=16 test2
+            # C=16 test
             [1, 16, 10, 10],
             # in place halo stress cases
             [1, 128, 256, 256],

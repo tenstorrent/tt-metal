@@ -67,8 +67,8 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     uint32_t in_page_size = tt::tt_metal::detail::TileSize(in_df);
     uint32_t out_tile_size = tt::tt_metal::detail::TileSize(out_df);
 
-    uint32_t in_nbytes = datum_size(in_df);
     if (skip_untilize) {
+        uint32_t in_nbytes = datum_size(in_df);
         in_page_size = input_shard_shape[1] * in_nbytes;
         input_npages = remapped_input_shard_shape_for_output_grid;
     }
@@ -82,9 +82,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     uint32_t out_cb_id = tt::CBIndex::c_17;
 
     // input CB (sharded)
-    uint32_t input_cb_size = input_npages * in_page_size;
-    uint32_t input_cb_size_bytes = input_cb_size * in_nbytes;
-    auto src_cb_config = CircularBufferConfig(input_cb_size, {{src_cb_id, in_df}})
+    auto src_cb_config = CircularBufferConfig(input_npages * in_page_size, {{src_cb_id, in_df}})
                              .set_page_size(src_cb_id, in_page_size)
                              .set_globally_allocated_address(*src_buffer);
     auto src_cb = CreateCircularBuffer(program, all_cores, src_cb_config);

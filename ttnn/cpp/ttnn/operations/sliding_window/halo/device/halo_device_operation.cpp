@@ -120,9 +120,7 @@ operation::ProgramWithCallbacks HaloDeviceOperation::create_program(
     DataType type = input_tensor.get_dtype();
     int num_cores = this->parallel_config_.grid.num_cores();
     int num_cores_c = conv::get_num_cores_channels_from_parallel_config(this->parallel_config_);
-    // printf("num_cores_c: %d\n", num_cores_c);
     int stick_size = input_tensor.get_padded_shape()[3] / num_cores_c;
-    // printf("stick_size: %d\n", stick_size);
 
     auto pad_config_device_tensor =
         sliding_window::move_config_tensor_to_device(pad_config_tensor, parallel_config_, is_block_sharded, device);
