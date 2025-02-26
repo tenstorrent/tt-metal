@@ -21,10 +21,11 @@ TEST_F(DeviceFixture, TensixTestFourHundredCompileTimeArgs) {
 
         const uint32_t num_compile_time_args = 400;
         std::vector<uint32_t> compile_time_args;
-        compile_time_args.push_back(num_compile_time_args);
-        for (uint32_t i = 1; i < num_compile_time_args; i++) {
+        for (uint32_t i = 0; i < num_compile_time_args; i++) {
             compile_time_args.push_back(i);
         }
+
+        const std::map<string, string>& defines = {{"NUM_COMPILE_TIME_ARGS", std::to_string(num_compile_time_args)}};
 
         CreateKernel(
             program,
@@ -33,7 +34,8 @@ TEST_F(DeviceFixture, TensixTestFourHundredCompileTimeArgs) {
             DataMovementConfig{
                 .processor = DataMovementProcessor::RISCV_0,
                 .noc = NOC::RISCV_0_default,
-                .compile_args = compile_time_args});
+                .compile_args = compile_time_args,
+                .defines = defines});
         this->RunProgram(device, program);
     }
 }
@@ -44,11 +46,14 @@ TEST_F(DeviceFixture, TensixTestZeroCompileTimeArgs) {
         CoreCoord core = {0, 0};
         Program program;
 
+        const std::map<string, string>& defines = {{"NUM_COMPILE_TIME_ARGS", "0"}};
+
         CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/misc/compile_time_args_kernel.cpp",
             core,
-            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+            DataMovementConfig{
+                .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .defines = defines});
         this->RunProgram(device, program);
     }
 }
