@@ -1396,6 +1396,10 @@ if __name__ == "__main__":
             logger.error("You must specify a module with a local file.")
             exit(1)
         READ_FILE = args.read_file
+        if args.read_file == "AUTO":
+            READ_FILE = "tests/sweep_framework/vectors_export/" + args.module_name + ".json"
+        else:
+            READ_FILE = args.read_file
     else:
         # Using PostgreSQL database or other non-elastic backend
         READ_FILE = None
