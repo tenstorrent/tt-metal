@@ -5,7 +5,6 @@
 #pragma once
 
 #include "mesh_buffer.hpp"
-#include "mesh_common.hpp"
 #include "mesh_trace_id.hpp"
 #include "trace_buffer.hpp"
 

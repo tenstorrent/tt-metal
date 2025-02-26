@@ -11,7 +11,6 @@
 
 #include "device.hpp"
 
-#include "mesh_common.hpp"
 #include "mesh_config.hpp"
 #include "mesh_coord.hpp"
 #include "mesh_device_view.hpp"
