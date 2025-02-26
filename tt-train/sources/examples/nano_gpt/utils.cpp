@@ -97,6 +97,6 @@ std::unique_ptr<ttml::schedulers::LRSchedulerBase> create_warmup_with_linear_sch
 void initialize_device(bool ddp, bool tp) {
     if (ddp || tp) {
         // currently supports only N300 device
-        ttml::autograd::ctx().set_mesh_shape({1, 2});
+        ttml::autograd::ctx().set_mesh_shape(tt::tt_metal::distributed::MeshShape(1, 2));
     }
 }

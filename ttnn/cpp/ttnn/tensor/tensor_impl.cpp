@@ -583,7 +583,6 @@ Tensor to_host_mesh_tensor(const Tensor& tensor, bool blocking) {
     const auto& mesh_buffer = storage.mesh_buffer;
     ttnn::MeshDevice* device = mesh_buffer->device();
     distributed::MeshCommandQueue& mesh_cq = device->mesh_command_queue();
-    const auto [num_rows, num_cols] = device->shape();
     const auto num_buffers = storage.buffers.size();
 
     std::vector<distributed::MeshCommandQueue::ShardDataTransfer> shard_data_transfers;
@@ -592,8 +591,7 @@ Tensor to_host_mesh_tensor(const Tensor& tensor, bool blocking) {
     specs.reserve(num_buffers);
     buffers.reserve(num_buffers);
     shard_data_transfers.reserve(num_buffers);
-    distributed::MeshCoordinateRange coord_range(
-        distributed::MeshCoordinate(0, 0), distributed::MeshCoordinate(num_rows - 1, num_cols - 1));
+    distributed::MeshCoordinateRange coord_range(device->shape());
     auto shard_coord = coord_range.begin();
     for (int id : storage.ordered_device_ids) {
         std::vector<T> host_buffer;
@@ -771,7 +769,7 @@ MultiDeviceStorage shard_to_mesh_buffer(
     buffers.reserve(storage.buffers.size());
     specs.reserve(storage.buffers.size());
 
-    const auto [num_rows, num_cols] = mesh_device->shape();
+    const auto& mesh_shape = mesh_device->shape();
     TT_FATAL(
         storage.buffers.size() <= mesh_device->num_devices(),
         "Number of host buffers {} exceeds the number of shards {}",
@@ -781,8 +779,7 @@ MultiDeviceStorage shard_to_mesh_buffer(
     std::vector<distributed::MeshCommandQueue::ShardDataTransfer> shard_data_transfers;
     shard_data_transfers.reserve(storage.buffers.size());
 
-    distributed::MeshCoordinateRange coord_range(
-        distributed::MeshCoordinate(0, 0), distributed::MeshCoordinate(num_rows - 1, num_cols - 1));
+    distributed::MeshCoordinateRange coord_range(mesh_shape);
     auto shard_coord = coord_range.begin();
     for (int i = 0; i < storage.buffers.size(); ++shard_coord, i++) {
         TensorSpec shard_tensor_spec(
