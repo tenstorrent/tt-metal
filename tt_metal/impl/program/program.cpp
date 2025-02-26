@@ -410,7 +410,7 @@ KernelGroup::KernelGroup(
                     // If both brisc and ncrisc set the noc, then this is safe due to prior correctness validation
                     this->launch_msg.kernel_config.brisc_noc_id = 1 - std::get<DataMovementConfig>(kernel->config()).noc;
                     // if noc mode is already set to DM_DYNAMIC_NOC then we can't change back to DM_DEDICATED_NOC
-                    if (this->launch_msg.kernel_config.brisc_noc_mode == NOC_MODE::DM_DYNAMIC_NOC) {
+                    if (std::get<DataMovementConfig>(kernel->config()).noc_mode == NOC_MODE::DM_DYNAMIC_NOC) {
                         this->launch_msg.kernel_config.brisc_noc_mode = NOC_MODE::DM_DYNAMIC_NOC;
                     }
                 }
