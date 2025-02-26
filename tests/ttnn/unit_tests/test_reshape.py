@@ -535,19 +535,22 @@ def test_reshape_zero_element(input_shape, output_shape, layout, ttnn_reshape, u
     assert tt_output_tensor.shape == torch.Size(output_shape)
 
 
+@pytest.mark.xfail(
+    reason="Test that the previously supported reshape accounting for the physical shape is no longer possible"
+)
 @pytest.mark.parametrize(
     "input_shape, output_shape",
     [
-        ((1, 256, 1), (1, 256)),
-        ((1, 1024, 1), (1, 4, 256)),
-        ((1, 128, 1), (1, 128)),
+        ([32, 256], [1, 256]),
     ],
 )
-def test_reshape_replicated_tensor(input_shape, output_shape, mesh_device):
-    torch_input_tensor = torch.rand(input_shape, dtype=torch.bfloat16)
+def test_reshape_replicated_tensor(mesh_device, input_shape, output_shape):
+    torch_input_tensor = torch.randn(input_shape)
     mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
-    tt_input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, mesh_mapper=mesh_mapper)
-    tt_output_tensor = ttnn.reshape(tt_input_tensor, output_shape)
+    tt_input_tensor = ttnn.from_torch(
+        torch_input_tensor, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=mesh_mapper, device=mesh_device
+    )
+    tt_output_tensor = ttnn.reshape(tt_input_tensor, ttnn.Shape(output_shape))
 
     for tensor_shard in ttnn.get_device_tensors(tt_output_tensor):
         tt_output_tensor = ttnn.to_torch(tensor_shard)
