@@ -4,6 +4,8 @@
 
 #include "bernoulli_device_operation.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::bernoulli {
 
 BernoulliDeviceOperation::program_factory_t BernoulliDeviceOperation::select_program_factory(

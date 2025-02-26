@@ -7,6 +7,8 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/xtensor/conversion_utils.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::experimental::xtensor {
 namespace {
 

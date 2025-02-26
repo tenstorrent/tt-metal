@@ -4,6 +4,6 @@
 
 namespace ttnn::operations::data_movement::detail {
 
-operation::ProgramWithCallbacks fill_pad_multi_core(const Tensor& input_tensor, float fill_value);
+tt::tt_metal::operation::ProgramWithCallbacks fill_pad_multi_core(const Tensor& input_tensor, float fill_value);
 
 }  // namespace ttnn::operations::data_movement::detail

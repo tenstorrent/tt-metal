@@ -14,6 +14,7 @@
 // Result is read from L1
 ////////////////////////////////////////////////////////////////////////////
 using namespace tt;
+using namespace tt::tt_metal;
 
 int main(int argc, char** argv) {
     bool pass = true;

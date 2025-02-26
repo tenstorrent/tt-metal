@@ -10,6 +10,8 @@
 #include "fabric_fixture.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
 
+using namespace tt::tt_metal;
+
 namespace tt::tt_fabric {
 
 TEST_F(FabricFixture, TestAsyncWrite) {

@@ -9,6 +9,7 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/bfloat16.hpp>
+#include "tt_metal.hpp"
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////
@@ -21,6 +22,7 @@
 // 5. Host reads from buffer written to in step 4.
 //////////////////////////////////////////////////////////////////////////////////////
 using namespace tt;
+using namespace tt::tt_metal;
 
 int main(int argc, char** argv) {
     bool pass = true;
@@ -32,7 +34,8 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
-        int device_id tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
+        int device_id = 0;
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Input Data Setup

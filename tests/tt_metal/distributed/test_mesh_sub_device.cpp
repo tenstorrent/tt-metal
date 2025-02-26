@@ -12,6 +12,7 @@
 namespace tt::tt_metal::distributed::test {
 namespace {
 
+using namespace tt::tt_metal;
 using MeshSubDeviceTestSuite = GenericMeshDeviceFixture;
 
 TEST_F(MeshSubDeviceTestSuite, SyncWorkloadsOnSubDevice) {

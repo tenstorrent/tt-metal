@@ -6,6 +6,8 @@
 
 #include <utility>
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::experimental::transformer {
 
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> NLPCreateHeadsSegformerOperation::invoke(

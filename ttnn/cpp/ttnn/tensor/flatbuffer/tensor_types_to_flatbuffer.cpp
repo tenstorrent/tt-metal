@@ -4,6 +4,8 @@
 
 #include "tensor_types_to_flatbuffer.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn {
 
 flatbuffer::ShardOrientation to_flatbuffer(ShardOrientation orientation) {

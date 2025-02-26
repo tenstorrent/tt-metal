@@ -147,7 +147,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ExecuteJointAttention::invoke(
         JointScaledDotProductAttention{
             .joint_strategy = joint_strategy,
             .scale = scale,
-            .output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+            .output_mem_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
             .program_config = std::move(program_config),
             .compute_kernel_config = kernel_config_val},
         {input_tensor_q, input_tensor_k, input_tensor_v, joint_tensor_q, joint_tensor_k, joint_tensor_v},

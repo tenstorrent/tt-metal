@@ -4,6 +4,7 @@
 
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/hal.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -43,6 +44,14 @@ int main(int argc, char** argv) {
     Finish(cq);
     printf("Thank you, Core {0, 0} on Device 0, for the completed task.\n");
     CloseDevice(device);
+
+    auto& hal = HalSingleton::getInstance();
+    std::cout << "Active Eth Unreserved = 0x" << std::hex
+              << hal.get_dev_addr(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED) << "\n";
+    std::cout << "Idle Eth Unreserved = 0x" << std::hex
+              << hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED) << "\n";
+    std::cout << "Tensix Unreserved = 0x" << std::hex
+              << hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED) << "\n";
 
     return 0;
 }

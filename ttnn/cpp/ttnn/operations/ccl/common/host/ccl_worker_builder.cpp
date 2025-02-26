@@ -22,6 +22,8 @@
 #include <variant>
 #include <vector>
 
+using namespace tt::tt_metal;
+
 namespace ttnn::ccl::worker_detail {
 
 CCLWorkerArgBuilder::CCLWorkerArgBuilder(

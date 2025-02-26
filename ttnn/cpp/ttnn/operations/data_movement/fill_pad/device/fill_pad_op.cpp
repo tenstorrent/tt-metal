@@ -7,9 +7,10 @@
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/data_movement/fill_pad/device/fill_pad_program_factory.hpp"
 
-using namespace tt;
-
 namespace ttnn::operations::data_movement {
+
+using namespace tt;
+using namespace tt::tt_metal;
 
 void FillPad::validate(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);

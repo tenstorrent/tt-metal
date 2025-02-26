@@ -31,7 +31,8 @@ public:
         int node_id, chip_id_t device_id, chip_id_t servicing_device_id, uint8_t cq_id, noc_selection_t noc_selection) :
         FDKernel(node_id, device_id, servicing_device_id, cq_id, noc_selection) {
         uint16_t channel = tt::Cluster::instance().get_assigned_channel_for_device(device_id);
-        this->logical_core_ = dispatch_core_manager::instance().dispatcher_s_core(device_id, channel, cq_id_);
+        this->logical_core_ =
+            tt::tt_metal::dispatch_core_manager::instance().dispatcher_s_core(device_id, channel, cq_id_);
     }
     void CreateKernel() override;
     void GenerateStaticConfigs() override;

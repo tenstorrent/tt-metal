@@ -23,6 +23,7 @@
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 
 using namespace tt::constants;
+using namespace tt::tt_metal;
 
 namespace ttnn::operations::upsample {
 using namespace tt;

@@ -22,7 +22,8 @@ struct ExecuteReduceScatter {
         const MeshDevice& mesh_device,
         ttnn::operations::reduction::ReduceType reduce_op = ttnn::operations::reduction::ReduceType::Sum,
         const uint32_t num_links = 1,
-        const std::optional<ttnn::MemoryConfig>& output_mem_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        const std::optional<ttnn::MemoryConfig>& output_mem_config =
+            tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
         const std::optional<size_t> user_defined_num_workers = std::nullopt,
         const std::optional<size_t> user_defined_num_buffers_per_channel = std::nullopt);

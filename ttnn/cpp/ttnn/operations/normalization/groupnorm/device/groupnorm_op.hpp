@@ -29,13 +29,13 @@ Ref: https://pytorch.org/docs/stable/generated/torch.nn.GroupNorm.html
 struct GroupNormShardedMultiCoreProgramConfig {
     CoreCoord compute_with_storage_grid_size;
     MathFidelity math_fidelity;
-    DataType im_data_format;
-    DataType out_data_format;
+    tt::tt_metal::DataType im_data_format;
+    tt::tt_metal::DataType out_data_format;
     bool inplace;
-    Layout output_layout;
+    tt::tt_metal::Layout output_layout;
 };
 
-operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
+tt::tt_metal::operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     const Tensor& a,
     const std::optional<const Tensor>& gamma,
     const std::optional<const Tensor>& beta,
@@ -45,14 +45,14 @@ operation::ProgramWithCallbacks groupnorm_multi_core_sharded(
     const uint32_t num_groups,
     const uint32_t num_batches,
     MathFidelity fidelity,
-    DataType im_data_format,
+    tt::tt_metal::DataType im_data_format,
     CoreCoord grid_size,
     bool inplace);
 
 struct GroupNorm {
     float eps;
     uint32_t num_groups;
-    MemoryConfig output_mem_config;
+    tt::tt_metal::MemoryConfig output_mem_config;
     GroupNormShardedMultiCoreProgramConfig program_config;
 
     void validate(
@@ -60,7 +60,7 @@ struct GroupNorm {
         const std::vector<std::optional<const Tensor>>& optional_input_tensors) const;
     std::vector<TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
     std::vector<Tensor> create_output_tensors(const std::vector<Tensor>& input_tensors) const;
-    operation::ProgramWithCallbacks create_program(
+    tt::tt_metal::operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor>& input_tensors,
         const std::vector<std::optional<const Tensor>>& optional_input_tensors,
         std::vector<Tensor>& output_tensors) const;

@@ -7,6 +7,8 @@
 #include <gtest/gtest.h>
 #include "dispatch_fixture.hpp"
 
+using namespace tt::tt_metal;
+
 class ProgramWithKernelCreatedFromStringFixture : public DispatchFixture {
 protected:
     void SetUp() override {

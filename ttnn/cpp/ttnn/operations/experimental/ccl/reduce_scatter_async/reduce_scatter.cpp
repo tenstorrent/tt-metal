@@ -7,6 +7,8 @@
 #include "cpp/ttnn/operations/experimental/ccl/reduce_scatter_async/device/reduce_scatter_async_op.hpp"
 #include "cpp/ttnn/global_semaphore.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::experimental::ccl {
 
 ttnn::Tensor ExecuteReduceScatter::invoke(

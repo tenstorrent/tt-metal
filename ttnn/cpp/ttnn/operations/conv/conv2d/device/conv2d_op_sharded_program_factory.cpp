@@ -12,6 +12,7 @@
 #include <tt-metalium/host_api.hpp>
 
 using namespace tt::constants;
+using namespace tt::tt_metal;
 
 namespace ttnn::operations::conv {
 namespace conv2d {

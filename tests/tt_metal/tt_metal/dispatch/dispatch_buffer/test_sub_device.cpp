@@ -17,6 +17,8 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "command_queue_fixture.hpp"
 
+using namespace tt::tt_metal;
+
 TEST_F(CommandQueueSingleCardFixture, TensixTestSubDeviceAllocations) {
     uint32_t local_l1_size = 3200;
     SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))});

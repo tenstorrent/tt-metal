@@ -8,6 +8,8 @@
 
 namespace ttnn::operations::full_like {
 
+using namespace tt::tt_metal;
+
 Tensor FullLike::invoke(
     const Tensor& input,
     const std::variant<float, int> fill_value,

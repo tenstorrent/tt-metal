@@ -9,6 +9,8 @@
 
 #include <utility>
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::experimental::matmul {
 
 ttnn::Tensor GroupAttnMatmulOperation::invoke(

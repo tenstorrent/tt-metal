@@ -17,6 +17,8 @@
 #include "ttnn/tensor/shape/shape.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::moreh::moreh_clip_grad_norm {
 
 inline uint32_t get_num_device_cores(IDevice* device) {

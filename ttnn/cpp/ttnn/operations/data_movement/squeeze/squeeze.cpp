@@ -7,6 +7,8 @@
 
 namespace ttnn::operations::data_movement {
 
+using namespace tt::tt_metal;
+
 ttnn::Tensor SqueezeOperation::invoke(const ttnn::Tensor& input_tensor, const int dim) {
     const auto original_logical_shape = input_tensor.get_logical_shape();
     const auto padded_shape = input_tensor.get_padded_shape();

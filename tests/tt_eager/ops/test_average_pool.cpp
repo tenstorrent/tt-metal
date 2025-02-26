@@ -13,6 +13,7 @@ using tt::tt_metal::DataType;
 using tt::tt_metal::IDevice;
 using tt::tt_metal::Layout;
 using tt::tt_metal::Tensor;
+using namespace tt::tt_metal;
 
 Tensor run_avg_pool_2d_resnet(ttnn::Shape& tensor_shape, IDevice* device) {
     using ttnn::operations::experimental::auto_format::AutoFormat;

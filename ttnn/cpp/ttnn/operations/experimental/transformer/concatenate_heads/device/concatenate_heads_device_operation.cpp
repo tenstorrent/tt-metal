@@ -8,6 +8,8 @@
 
 namespace ttnn::operations::experimental::transformer {
 
+using namespace tt::tt_metal;
+
 void ConcatenateHeadsDeviceOperation::validate_with_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);

@@ -18,6 +18,8 @@
 #include "dispatch_test_utils.hpp"
 #include "sub_device_test_utils.hpp"
 
+using namespace tt::tt_metal;
+
 TEST_F(CommandQueueSingleCardTraceFixture, TensixTestSubDeviceTraceBasicPrograms) {
     auto* device = devices_[0];
     SubDevice sub_device_1(std::array{CoreRangeSet(CoreRange({0, 0}, {2, 2}))});

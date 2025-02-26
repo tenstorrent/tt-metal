@@ -6,6 +6,8 @@
 #include "device/upsample_op.hpp"
 #include "ttnn/run_operation.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::upsample {
 
 ttnn::Tensor ExecuteUpSample::invoke(

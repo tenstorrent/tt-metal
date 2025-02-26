@@ -11,6 +11,8 @@
 
 #include <cstddef>
 
+using namespace tt::tt_metal;
+
 TEST(
     CclTensorSlicer_SliceWorkerSplitting,
     page_based_1worker_TensorShape_1_1_4_1__SliceShape_1_1_1_1__SliceOffset_0_0_3_0__Workers1) {

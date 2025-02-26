@@ -16,6 +16,7 @@
 // TODO: explain what test does
 //////////////////////////////////////////////////////////////////////////////////////////
 using namespace tt;
+using namespace tt::tt_metal;
 
 // Given a tensor that is row-major datums, make it tilized
 // so that its row major within a tile, and each tile's data

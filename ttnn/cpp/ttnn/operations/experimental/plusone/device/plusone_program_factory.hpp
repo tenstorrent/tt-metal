@@ -7,6 +7,6 @@ namespace ttnn::operations::experimental::detail {
 
 using namespace tt::constants;
 
-operation::ProgramWithCallbacks plusone_single_core(const Tensor& input);
+tt::tt_metal::operation::ProgramWithCallbacks plusone_single_core(const Tensor& input);
 
 }  // namespace ttnn::operations::experimental::detail

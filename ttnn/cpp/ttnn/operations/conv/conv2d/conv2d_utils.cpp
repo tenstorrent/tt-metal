@@ -26,6 +26,7 @@
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 
 using namespace tt;
+using namespace tt::tt_metal;
 namespace ttnn {
 namespace operations::conv {
 using sliding_window::ParallelConfig;

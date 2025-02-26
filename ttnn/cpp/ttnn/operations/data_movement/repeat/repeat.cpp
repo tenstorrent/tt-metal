@@ -19,6 +19,8 @@
 #include "device/repeat_device_operation.hpp"
 #include "repeat.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::data_movement {
 
 namespace detail {

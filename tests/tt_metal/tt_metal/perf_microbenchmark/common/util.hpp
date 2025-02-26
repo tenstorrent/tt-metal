@@ -20,12 +20,13 @@ inline uint64_t get_t0_to_any_riscfw_end_cycle(tt::tt_metal::IDevice* device, co
     enum BufferIndex { BUFFER_END_INDEX, DROPPED_MARKER_COUNTER, MARKER_DATA_START };
     enum TimerDataIndex { TIMER_ID, TIMER_VAL_L, TIMER_VAL_H, TIMER_DATA_UINT32_SIZE };
     auto worker_cores_used_in_program = device->worker_cores_from_logical_cores(
-        program.logical_cores()[hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)]);
+        program.logical_cores()[tt::tt_metal::hal.get_programmable_core_type_index(
+            tt::tt_metal::HalProgrammableCoreType::TENSIX)]);
     auto device_id = device->id();
     uint64_t min_cycle = -1;
     uint64_t max_cycle = 0;
-    dprint_buf_msg_t* dprint_msg =
-        hal.get_dev_addr<dprint_buf_msg_t*>(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DPRINT);
+    dprint_buf_msg_t* dprint_msg = tt::tt_metal::hal.get_dev_addr<dprint_buf_msg_t*>(
+        tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::DPRINT);
 
     // This works for tensix only, will need to be updated for eth
     std::vector<uint64_t> print_buffer_addrs = {

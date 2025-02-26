@@ -4,6 +4,8 @@
 
 #include "example_device_operation.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::examples {
 
 ExampleDeviceOperation::program_factory_t ExampleDeviceOperation::select_program_factory(

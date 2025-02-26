@@ -10,7 +10,7 @@
 
 namespace ttnn::operations::experimental::reduction::detail {
 
-operation::ProgramWithCallbacks reduce_nc_factory(
+tt::tt_metal::operation::ProgramWithCallbacks reduce_nc_factory(
     const ttnn::Tensor& input,
     const ttnn::Tensor& output,
     int64_t dim,

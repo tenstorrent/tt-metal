@@ -8,6 +8,8 @@
 #include "ttnn/operations/matmul/matmul.hpp"
 #include "ttnn/types.hpp"
 
+using namespace tt::tt_metal;
+
 struct TestMemoryConfigParams {
     ttnn::MemoryConfig memory_config;
 };

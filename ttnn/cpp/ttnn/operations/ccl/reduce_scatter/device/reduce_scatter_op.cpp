@@ -6,6 +6,8 @@
 
 #include <cstdint>
 
+using namespace tt::tt_metal;
+
 namespace ttnn {
 namespace ccl {
 namespace reduce_scatter_detail {

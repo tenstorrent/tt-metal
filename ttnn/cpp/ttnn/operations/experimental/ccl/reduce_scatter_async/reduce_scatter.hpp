@@ -27,7 +27,7 @@ struct ExecuteReduceScatter {
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
         ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear,
         const std::optional<size_t> num_links = std::nullopt,
-        std::optional<SubDeviceId> worker_subdevice_id_opt = std::nullopt);
+        std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt = std::nullopt);
 
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
@@ -40,7 +40,7 @@ struct ExecuteReduceScatter {
         const std::optional<ttnn::MemoryConfig>& memory_config,
         ttnn::ccl::Topology topology,
         const std::optional<size_t> num_preferred_links,
-        std::optional<SubDeviceId> worker_subdevice_id_opt);
+        std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt);
 };
 
 }  // namespace ccl

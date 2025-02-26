@@ -13,7 +13,7 @@
 namespace tt {
 namespace tt_metal {
 
-operation::ProgramWithCallbacks rotary_embedding_llama_fused_qk_multi_core_sharded(
+tt::tt_metal::operation::ProgramWithCallbacks rotary_embedding_llama_fused_qk_multi_core_sharded(
     const Tensor& q_input,
     const Tensor& k_input,
     const Tensor& cos,

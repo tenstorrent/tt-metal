@@ -14,6 +14,7 @@
 bool is_power_of_two_at_least_32(uint32_t value) { return value >= 32 && (value & (value - 1)) == 0; }
 
 using namespace tt;
+using namespace tt::tt_metal;
 
 std::map<DataType, uint32_t> data_type_to_size = {
     {DataType::BFLOAT16, 2},

@@ -16,6 +16,8 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/types.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn {
 
 namespace operations {

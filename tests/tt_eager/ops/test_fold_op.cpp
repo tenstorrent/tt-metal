@@ -14,6 +14,7 @@
 using namespace tt;
 using namespace tt::tt_metal;
 using namespace constants;
+using namespace tt::tt_metal;
 
 void run_fold(IDevice* device, const ttnn::Shape& shape) {
     Tensor input_tensor = ttnn::random::random(shape).to_layout(Layout::ROW_MAJOR).to_device(device);

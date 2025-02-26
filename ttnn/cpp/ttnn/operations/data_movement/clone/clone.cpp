@@ -7,6 +7,9 @@
 #include "device/clone_device_operation.hpp"
 
 namespace ttnn::operations::data_movement::clone {
+
+using namespace tt::tt_metal;
+
 Tensor Clone::invoke(
     const Tensor& input,
     const std::optional<DataType>& dtype,

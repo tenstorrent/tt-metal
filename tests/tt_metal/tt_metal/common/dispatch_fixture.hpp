@@ -14,6 +14,8 @@
 #include <tt-metalium/device_pool.hpp>
 #include "llrt.hpp"
 
+namespace tt::tt_metal {
+
 // A dispatch-agnostic test fixture
 class DispatchFixture : public ::testing::Test {
 public:
@@ -129,3 +131,5 @@ protected:
         }
     }
 };
+
+}  // namespace tt::tt_metal

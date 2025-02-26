@@ -14,6 +14,8 @@
 #include <ttnn/distributed/types.hpp>
 #include <ttnn/distributed/distributed_tensor.hpp>
 
+using namespace tt::tt_metal;
+
 namespace ttnn::distributed::test {
 namespace {
 

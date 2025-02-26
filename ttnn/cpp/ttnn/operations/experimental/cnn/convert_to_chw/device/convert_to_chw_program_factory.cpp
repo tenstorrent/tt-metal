@@ -7,6 +7,7 @@
 namespace ttnn::operations::experimental::cnn::detail {
 
 using namespace tt::constants;
+using namespace tt::tt_metal;
 
 operation::ProgramWithCallbacks multi_core_convert_to_chw(
     const Tensor& a, Tensor& output, CoreCoord compute_with_storage_grid_size) {

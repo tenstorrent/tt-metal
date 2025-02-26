@@ -5,6 +5,8 @@
 #include <gtest/gtest.h>
 #include <tt-metalium/blockfloat_common.hpp>
 
+using namespace tt::tt_metal;
+
 namespace {
 
 void roundtrip_test_for_mantissa_rounding_with_bfp8(

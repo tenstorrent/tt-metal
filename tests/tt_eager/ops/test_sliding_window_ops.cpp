@@ -16,6 +16,7 @@
 
 using std::vector;
 using tt::tt_metal::Tensor;
+using namespace tt::tt_metal;
 using namespace ttnn::operations::sliding_window;
 
 // From owned_buffer of type bfloat16 of create float vector for convolution operation.

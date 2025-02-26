@@ -29,6 +29,7 @@
 #include "tt_cluster.hpp"
 
 using namespace tt;
+using namespace tt::tt_metal;
 
 const uint32_t CB_ELEMENTS = 2048;
 const uint32_t DEFAULT_SECONDS = 10;

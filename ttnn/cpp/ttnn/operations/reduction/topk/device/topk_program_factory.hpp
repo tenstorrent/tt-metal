@@ -10,7 +10,7 @@
 
 namespace ttnn::operations::reduction::detail {
 
-operation::ProgramWithCallbacks topk_single_core_interleaved(
+tt::tt_metal::operation::ProgramWithCallbacks topk_single_core_interleaved(
     const Tensor& input_tensor,
     const uint16_t k,
     const int8_t dim,
@@ -144,9 +144,9 @@ operation::ProgramWithCallbacks topk_single_core_interleaved(
         tt::tt_metal::ComputeConfig{.compile_args = compute_args});
 
     auto override_runtime_args_callback = [unary_reader_kernel_id, binary_writer_kernel_id](
-                                              const Program& program,
-                                              const std::vector<Buffer*>& input_buffers,
-                                              const std::vector<Buffer*>& output_buffers) {
+                                              const tt::tt_metal::Program& program,
+                                              const std::vector<tt::tt_metal::Buffer*>& input_buffers,
+                                              const std::vector<tt::tt_metal::Buffer*>& output_buffers) {
         auto input_buffer = input_buffers.at(0);
         auto values_buffer = output_buffers.at(0);
         auto index_buffer = output_buffers.at(1);
@@ -207,7 +207,7 @@ static inline std::tuple<uint16_t, uint16_t, uint16_t, uint16_t> cores_utilized(
  * Then gather the results of each split onto a single core, where the final topk values and indices are computed.
  *
  */
-operation::ProgramWithCallbacks topk_multicore_interleaved(
+tt::tt_metal::operation::ProgramWithCallbacks topk_multicore_interleaved(
     const Tensor& input_tensor,
     const uint16_t k,
     const int8_t dim,
@@ -484,9 +484,9 @@ operation::ProgramWithCallbacks topk_multicore_interleaved(
     }
 
     auto override_runtime_args_callback = [unary_reader_kernel_id, binary_writer_final_kernel_id, num_cores](
-                                              const Program& program,
-                                              const std::vector<Buffer*>& input_buffers,
-                                              const std::vector<Buffer*>& output_buffers) {
+                                              const tt::tt_metal::Program& program,
+                                              const std::vector<tt::tt_metal::Buffer*>& input_buffers,
+                                              const std::vector<tt::tt_metal::Buffer*>& output_buffers) {
         auto input_buffer = input_buffers.at(0);
         auto values_buffer = output_buffers.at(0);
         auto index_buffer = output_buffers.at(1);

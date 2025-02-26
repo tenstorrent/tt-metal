@@ -29,7 +29,7 @@ void bind_fast_reduce_nc(pybind11::module& module) {
             pybind11::kw_only(),
             pybind11::arg("dims").noconvert() = ttnn::SmallVector<int32_t>(),
             pybind11::arg("output").noconvert() = std::nullopt,
-            pybind11::arg("memory_config").noconvert() = operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+            pybind11::arg("memory_config").noconvert() = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
             pybind11::arg("compute_kernel_config").noconvert() = std::nullopt,
             pybind11::arg("queue_id") = DefaultQueueId});
 }

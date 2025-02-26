@@ -10,10 +10,11 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/host_api.hpp>
 
-using namespace tt;
-using namespace tt::test_utils;
-
 namespace unit_tests::multichip::cluster {
+
+using namespace tt;
+using namespace tt::tt_metal;
+using namespace tt::test_utils;
 
 // Run this on Nebula X2 only, validate etherent core apis are correct
 // Known connectivity: chip 0 (x=9, y=6) <--> chip 1 (x=9, y=0)

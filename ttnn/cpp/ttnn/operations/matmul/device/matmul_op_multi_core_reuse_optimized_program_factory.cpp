@@ -11,12 +11,11 @@
 #include "ttnn/operations/matmul/device/matmul_op.hpp"
 
 using namespace tt::constants;
+using namespace tt::tt_metal;
 using namespace tt;
 
 namespace reuse_optimized_helpers {
-using namespace tt::constants;
-using namespace tt;
-using namespace tt_metal;
+
 operation::ProgramWithCallbacks create_program(
     tt_metal::IDevice* device,
     MathFidelity math_fidelity,

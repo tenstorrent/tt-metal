@@ -32,8 +32,8 @@ struct MorehGetItemOperation {
 
     struct MorehGetItemRmFactory {
         struct shared_variables_t {
-            KernelHandle unary_reader_kernel_id;
-            KernelHandle unary_writer_kernel_id;
+            tt::tt_metal::KernelHandle unary_reader_kernel_id;
+            tt::tt_metal::KernelHandle unary_writer_kernel_id;
             std::size_t num_cores;
             uint32_t core_h;
             ttnn::SmallVector<uint32_t> index_dims;
@@ -56,8 +56,8 @@ struct MorehGetItemOperation {
 
     struct MorehGetItemTilizedFactory {
         struct shared_variables_t {
-            KernelHandle unary_reader_kernel_id;
-            KernelHandle unary_writer_kernel_id;
+            tt::tt_metal::KernelHandle unary_reader_kernel_id;
+            tt::tt_metal::KernelHandle unary_writer_kernel_id;
             std::size_t num_cores;
             uint32_t core_h;
             ttnn::SmallVector<uint32_t> index_dims;

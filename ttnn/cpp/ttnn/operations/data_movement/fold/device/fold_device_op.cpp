@@ -4,6 +4,8 @@
 
 #include "fold_device_op.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::data_movement {
 
 Fold::program_factory_t Fold::select_program_factory(

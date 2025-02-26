@@ -29,6 +29,7 @@ using namespace tt::tt_metal::experimental;
 
 namespace ttnn::ccl {
 
+using namespace tt::tt_metal;
 
 // The channel structure is as follows:
 //              &header->  |----------------| channel_base_address

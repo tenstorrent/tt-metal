@@ -22,7 +22,7 @@ ttnn::Tensor SamplingOperation::invoke(
     const uint32_t seed,
     const std::optional<CoreRangeSet>& sub_core_grids,
     std::optional<Tensor> optional_output_tensor) {
-    return operation::run(
+    return tt::tt_metal::operation::run(
                Sampling{k, p, seed, sub_core_grids},
                {input_values_tensor, input_indices_tensor},
                {},

@@ -12,6 +12,8 @@
 
 namespace ttnn::operations::experimental::transformer {
 
+using namespace tt::tt_metal;
+
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> NLPCreateHeadsDecodeOperation::invoke(
     QueueId queue_id,
     const Tensor& input_tensor,

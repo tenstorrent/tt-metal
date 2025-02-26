@@ -6,6 +6,8 @@
 #include <tt-metalium/allocator.hpp>
 #include "tt_metal/impl/allocator/algorithms/free_list_opt.hpp"
 
+using namespace tt::tt_metal;
+
 // UDL to convert integer literals to SI units
 constexpr size_t operator"" _KiB(unsigned long long x) { return x * 1024; }
 constexpr size_t operator"" _MiB(unsigned long long x) { return x * 1024 * 1024; }

@@ -16,6 +16,7 @@
 //////////////////////////////////////////////////////////////////////////////////////////
 using std::vector;
 using namespace tt;
+using namespace tt::tt_metal;
 
 namespace unary_datacopy {
 // #include "hlks/eltwise_copy.cpp"

@@ -3,10 +3,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "all_gather_async_op.hpp"
+#include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/math.hpp"
 #include "cpp/ttnn/global_semaphore.hpp"
 
 #include "ttnn/tensor/tensor_utils.hpp"
+
+using namespace tt::tt_metal;
 
 namespace ttnn {
 namespace ccl {

@@ -19,6 +19,7 @@ using ttnn::ccl::cmd::tensor_slice_offset_command_arg_t;
 using ttnn::ccl::cmd::tensor_slice_shape_command_arg_t;
 using ttnn::ccl::cmd::worker_pages_command_arg_t;
 using ttnn::ccl::cmd::worker_start_offset_command_arg_t;
+using namespace tt::tt_metal;
 
 const Shape4D<uint32_t> uninitialized_test_shape = {
     std::numeric_limits<uint32_t>::max(),

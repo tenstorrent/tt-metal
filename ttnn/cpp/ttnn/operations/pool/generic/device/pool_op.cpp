@@ -11,6 +11,8 @@
  * Generic pool implementation that uses the new sliding window infrastructure.
  */
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::pool {
 
 Pool2D::program_factory_t Pool2D::select_program_factory(const operation_attributes_t&, const tensor_args_t&) {

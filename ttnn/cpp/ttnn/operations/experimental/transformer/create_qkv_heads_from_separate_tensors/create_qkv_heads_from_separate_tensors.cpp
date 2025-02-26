@@ -10,6 +10,8 @@
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/common/queue_id.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::experimental::transformer {
 
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> CreateQKVHeadsSeparateTensorsOperation::invoke(

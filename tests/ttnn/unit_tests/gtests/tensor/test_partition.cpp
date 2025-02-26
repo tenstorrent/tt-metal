@@ -10,6 +10,8 @@
 #include "ttnn/tensor/xtensor/partition.hpp"
 #include "ttnn/tensor/xtensor/xtensor_all_includes.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn {
 namespace {
 

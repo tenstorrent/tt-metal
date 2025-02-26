@@ -17,6 +17,8 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/rtoptions.hpp>
 
+namespace tt::tt_metal {
+
 class MultiCommandQueueSingleDeviceFixture : public DispatchFixture {
 protected:
     void SetUp() override {
@@ -152,3 +154,5 @@ protected:
 class MultiCommandQueueMultiDeviceBufferFixture : public MultiCommandQueueMultiDeviceFixture {};
 
 class MultiCommandQueueMultiDeviceEventFixture : public MultiCommandQueueMultiDeviceFixture {};
+
+}  // namespace tt::tt_metal

@@ -16,6 +16,8 @@
 #include "ttnn/run_operation.hpp"
 #include "cpp/ttnn/operations/copy.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::data_movement {
 namespace detail {
 

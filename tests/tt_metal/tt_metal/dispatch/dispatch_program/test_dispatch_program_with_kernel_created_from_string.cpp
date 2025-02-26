@@ -14,6 +14,9 @@
 #include "umd/device/types/cluster_descriptor_types.h"
 #include "program_with_kernel_created_from_string_fixture.hpp"
 
+using namespace tt;
+using namespace tt::tt_metal;
+
 TEST_F(ProgramWithKernelCreatedFromStringFixture, TensixDataMovementKernel) {
     const CoreRange cores({0, 0}, {1, 1});
     const string& kernel_src_code = R"(
@@ -30,11 +33,11 @@ TEST_F(ProgramWithKernelCreatedFromStringFixture, TensixDataMovementKernel) {
 
     for (IDevice* device : this->devices_) {
         Program program = CreateProgram();
-        tt_metal::CreateKernelFromString(
+        CreateKernelFromString(
             program,
             kernel_src_code,
             cores,
-            tt_metal::DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
         this->RunProgram(device, program);
     };
 }
@@ -58,11 +61,11 @@ TEST_F(ProgramWithKernelCreatedFromStringFixture, TensixComputeKernel) {
 
     for (IDevice* device : this->devices_) {
         Program program = CreateProgram();
-        tt_metal::CreateKernelFromString(
+        CreateKernelFromString(
             program,
             kernel_src_code,
             cores,
-            tt_metal::ComputeConfig{
+            ComputeConfig{
                 .math_fidelity = MathFidelity::HiFi4,
                 .fp32_dest_acc_en = false,
                 .math_approx_mode = false,

@@ -26,6 +26,7 @@ constexpr uint32_t MAX_ARGS = 255;
 //////////////////////////////////////////////////////////////////////////////////////////
 using std::vector;
 using namespace tt;
+using namespace tt::tt_metal;
 
 struct TestInfo {
     uint32_t iterations = DEFAULT_ITERATIONS;

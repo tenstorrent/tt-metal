@@ -66,6 +66,7 @@ constexpr CoreType DISPATCH_CORE_TYPE = CoreType::WORKER;
 //////////////////////////////////////////////////////////////////////////////////////////
 using std::vector;
 using namespace tt;
+using namespace tt::tt_metal;
 
 uint32_t iterations_g = DEFAULT_ITERATIONS;
 

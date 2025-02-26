@@ -16,6 +16,8 @@ namespace ttnn::operations::data_movement {
 
 namespace detail {
 
+using namespace tt::tt_metal;
+
 std::vector<Tensor> split_dim_n_chunks_rm(
     const Tensor& input_tensor, int dim, int num_splits, const MemoryConfig& mem_config) {
     TT_FATAL(input_tensor.get_layout() == Layout::ROW_MAJOR, "ttnn.split only supports row major tensors.");
@@ -92,7 +94,7 @@ std::vector<Tensor> impl_split_last_dim_two_chunks_tiled(const Tensor& input_ten
     auto padded_input_shape = ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(input_shape);
     ttnn::operations::experimental::auto_format::FormatParams input_format_params = {
         .pad_shape = padded_input_shape, .pad_value = 0.0, .target_layout = Layout::TILE};
-    return operation::run_with_autoformat(
+    return tt::tt_metal::operation::run_with_autoformat(
         SplitDeviceOperation{2, 3, mem_config}, {input_tensor}, {input_format_params}, {Layout::TILE, Layout::TILE});
 }
 

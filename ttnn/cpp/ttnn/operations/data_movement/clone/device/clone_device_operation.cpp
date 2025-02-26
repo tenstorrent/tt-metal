@@ -4,6 +4,8 @@
 
 #include "clone_device_operation.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::data_movement::clone {
 void CloneOperation::validate_inputs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {

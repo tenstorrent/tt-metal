@@ -22,6 +22,7 @@
 // 5. Host reads from buffer written to in step 4.
 //////////////////////////////////////////////////////////////////////////////////////
 using namespace tt;
+using namespace tt::tt_metal;
 
 int main(int argc, char** argv) {
     bool pass = true;

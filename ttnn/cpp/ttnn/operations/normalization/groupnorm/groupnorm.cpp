@@ -7,6 +7,8 @@
 
 #include "ttnn/operations/core/core.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::normalization {
 
 ttnn::Tensor ExecuteGroupNorm::invoke(

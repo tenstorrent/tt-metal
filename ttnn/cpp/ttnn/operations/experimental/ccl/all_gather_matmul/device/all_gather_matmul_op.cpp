@@ -14,6 +14,8 @@
 #include "cpp/ttnn/operations/matmul/device/matmul_op.hpp"
 #include "cpp/ttnn/operations/matmul/matmul.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn {
 namespace experimental {
 

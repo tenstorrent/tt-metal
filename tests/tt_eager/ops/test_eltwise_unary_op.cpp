@@ -21,6 +21,7 @@ using tt::tt_metal::IDevice;
 using tt::tt_metal::Layout;
 using tt::tt_metal::OwnedStorage;
 using tt::tt_metal::Tensor;
+using namespace tt::tt_metal;
 
 namespace detail {
 float sqrt(float x) { return std::sqrt(x); }
@@ -159,7 +160,7 @@ namespace tt_metal {
 template <bool approx_value = false>
 struct exp_with_param {
     static Tensor fn(const tt::tt_metal::Tensor& t) {
-        return ttnn::exp(t, approx_value, operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
+        return ttnn::exp(t, approx_value, tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG);
     }
 };
 }  // namespace tt_metal

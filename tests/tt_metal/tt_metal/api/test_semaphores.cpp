@@ -11,6 +11,7 @@
 
 using std::vector;
 using namespace tt;
+using namespace tt::tt_metal;
 
 namespace unit_tests::initialize_semaphores {
 

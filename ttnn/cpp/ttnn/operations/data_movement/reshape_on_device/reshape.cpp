@@ -13,6 +13,8 @@
 
 #include "cpp/ttnn/operations/experimental/reshape/view.hpp"
 
+using namespace tt::tt_metal;
+
 namespace ttnn::operations::data_movement {
 
 namespace detail {

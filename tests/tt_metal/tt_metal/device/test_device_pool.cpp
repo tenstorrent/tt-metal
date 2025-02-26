@@ -8,6 +8,7 @@
 #include <tt-metalium/device_pool.hpp>
 
 using namespace tt;
+using namespace tt::tt_metal;
 
 TEST(DevicePool, DevicePoolOpenClose) {
     std::vector<chip_id_t> device_ids{0};

@@ -27,6 +27,7 @@
 #include "eth_l1_address_map.h"
 
 using namespace tt;
+using namespace tt::tt_metal;
 using namespace tt::test_utils;
 using namespace tt::test_utils::df;
 

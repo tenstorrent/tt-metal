@@ -35,8 +35,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> RotaryEmbeddingLlamaFusedQKOperation::inv
             auto kernel_config_val =
                 init_device_compute_kernel_config(arch, compute_kernel_config, MathFidelity::HiFi4, true, false, false);
 
-            tt::tt_metal::MemoryConfig q_output_memory_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG;
-            tt::tt_metal::MemoryConfig k_output_memory_config = operation::DEFAULT_OUTPUT_MEMORY_CONFIG;
+            tt::tt_metal::MemoryConfig q_output_memory_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG;
+            tt::tt_metal::MemoryConfig k_output_memory_config = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG;
             if (q_input_tensor.storage_type() == StorageType::DEVICE) {
                 q_output_memory_config = q_input_tensor.memory_config();
             }

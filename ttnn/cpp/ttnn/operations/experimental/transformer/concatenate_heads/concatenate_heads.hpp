@@ -18,7 +18,7 @@ struct ConcatenateHeadsOperation {
         const CoreCoord& compute_with_storage_grid_size,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt) {
-        return operation::run(
+        return tt::tt_metal::operation::run(
                    ConcatenateHeadsDeviceOperation{
                        compute_with_storage_grid_size, memory_config.value_or(input_tensor.memory_config())},
                    {input_tensor},

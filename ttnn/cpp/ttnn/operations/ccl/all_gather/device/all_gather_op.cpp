@@ -14,6 +14,7 @@
 #include "cpp/ttnn/operations/copy.hpp"
 
 using namespace tt::tt_metal::experimental;
+using namespace tt::tt_metal;
 
 namespace ttnn {
 namespace ccl {

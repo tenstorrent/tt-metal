@@ -9,6 +9,8 @@
 
 namespace ttnn::operations::index_fill {
 
+using namespace tt::tt_metal;
+
 Tensor IndexFill::invoke(
     const Tensor& input,
     const uint32_t dim,
