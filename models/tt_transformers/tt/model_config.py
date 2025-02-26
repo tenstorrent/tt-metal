@@ -1116,7 +1116,6 @@ class ModelArgs:
 
         # Meta-style config dicts don't specity model name or rope_scaling_factor so hard-code these
         # Set the model name based on the checkpoint directory being loaded
-        # FIXME: add a llama prefix to all llama-specific models and names
         if "3.2-1B" in checkpoint_dir:
             self.model_name = "Llama3.2-1B" + "-Instruct" if self.instruct else ""
             self.rope_scaling_factor = 32
