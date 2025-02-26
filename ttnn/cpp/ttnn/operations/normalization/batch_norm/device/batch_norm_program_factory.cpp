@@ -54,8 +54,8 @@ void set_or_update_runtime_arguments(
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_output_tiles, row_major);
 
     auto cores = grid_to_cores(num_cores_total, num_cores_x, num_cores_y, row_major);
-    constexpr size_t num_reader_args = 13;
-    constexpr size_t num_writer_args = 10;
+    constexpr size_t num_reader_args = 14;
+    constexpr size_t num_writer_args = 9;
     constexpr size_t num_kernel_args = 3;
     for (uint32_t i = 0, start_tile_id = 0; i < num_cores_total; i++) {
         const auto& core = cores[i];
@@ -79,6 +79,7 @@ void set_or_update_runtime_arguments(
                                            : pack_two_bfloat16_into_uint32({scalar, scalar});
 
         const auto weight_addr = weight_has_value ? weight_tensor->buffer()->address() : 0;
+        const auto bias_addr = bias_has_value ? bias_tensor->buffer()->address() : 0;
 
         std::array reader_runtime_args = {
             packed_scalar_eps,
@@ -93,14 +94,13 @@ void set_or_update_runtime_arguments(
             bHt * bWt * bC * (bN > 1),
             bHt * bWt * (bC > 1),
             batch_var_tensor.buffer()->address(),  //  batch var
-            weight_addr                            // weight
+            weight_addr,                           // weight
+            bias_addr                              // bias
         };
         handle_args(program, reader_kernel_id, core, reader_runtime_args);
 
-        const auto bias_addr = bias_has_value ? bias_tensor->buffer()->address() : 0;
         std::array writer_runtime_args = {
             batch_mean_tensor.buffer()->address(),  //  batch mean
-            bias_addr,                              // bias
             c.buffer()->address(),                  // output
             start_tile_id,
             num_tiles_per_core,
@@ -244,7 +244,10 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
              batch_var_tensor_cb,
              e_is_dram,
              weight_tensor_cb,
-             static_cast<uint32_t>(weight_has_value)},
+             static_cast<uint32_t>(weight_has_value),
+             bias_tensor_cb,
+             f_is_dram,
+             static_cast<uint32_t>(bias_has_value)},
             std::move(reader_defines)));
 
     // WRITER KERNEL

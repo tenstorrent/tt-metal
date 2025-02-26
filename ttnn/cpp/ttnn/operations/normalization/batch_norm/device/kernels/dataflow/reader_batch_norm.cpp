@@ -22,6 +22,7 @@ void kernel_main() {
     uint32_t c_stride_stat = get_arg_val<uint32_t>(10);
     uint32_t batch_var_addr = get_arg_val<uint32_t>(11);  // batch_var
     uint32_t weight_addr = get_arg_val<uint32_t>(12);     // weight
+    uint32_t bias_addr = get_arg_val<uint32_t>(13);       // bias
 
     constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
 
@@ -85,6 +86,17 @@ void kernel_main() {
 
     constexpr bool weight_has_value = get_compile_time_arg_val(7) == 1;
 
+    // bias
+    constexpr auto cb_id_bias = get_compile_time_arg_val(8);
+    constexpr bool bias_is_dram = get_compile_time_arg_val(9) == 1;
+    const uint32_t bias_tile_bytes = get_tile_size(cb_id_bias);
+    const DataFormat bias_data_format = get_dataformat(cb_id_bias);
+
+    const InterleavedAddrGenFast<bias_is_dram> bias = {
+        .bank_base_address = bias_addr, .page_size = bias_tile_bytes, .data_format = bias_data_format};
+
+    constexpr bool bias_has_value = get_compile_time_arg_val(10) == 1;
+
     uint32_t num_tiles_read = 0;
     for (uint32_t n = start_n; n < N && num_tiles_read < num_tiles; ++n, start_c = 0) {
         for (uint32_t c = start_c; c < C && num_tiles_read < num_tiles; ++c, start_t = 0) {
@@ -103,6 +115,15 @@ void kernel_main() {
                 noc_async_read_barrier();
                 FILL_TILE_WITH_FIRST_ELEMENT(cb_id_weight);
                 cb_push_back(cb_id_weight, onetile);
+            }
+
+            if constexpr (bias_has_value) {  // read a tile from bias tensor
+                cb_reserve_back(cb_id_bias, onetile);
+                uint32_t l1_bias_write_addr = get_write_ptr(cb_id_bias);
+                noc_async_read_tile(tile_offset_stat, bias, l1_bias_write_addr);
+                noc_async_read_barrier();
+                FILL_TILE_WITH_FIRST_ELEMENT(cb_id_bias);
+                cb_push_back(cb_id_bias, onetile);
             }
 
             for (uint32_t t = start_t; t < HtWt && num_tiles_read < num_tiles; ++t, ++num_tiles_read, ++tile_offset) {
