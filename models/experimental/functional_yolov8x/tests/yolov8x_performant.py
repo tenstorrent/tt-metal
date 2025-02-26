@@ -4,7 +4,6 @@
 
 
 import ttnn
-import pytest
 from models.experimental.functional_yolov8x.tests.yolov8x_test_infra import create_test_infra
 
 try:
