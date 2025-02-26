@@ -252,8 +252,7 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         ncores_nhw,
         ncores_c,
         num_cores_x,
-        semaphore_id,
-        input_cb_size_bytes};
+        semaphore_id};
 
     reader_ct_args[0] = 0;
     reader_ct_args[1] = local_config_cb_id;
