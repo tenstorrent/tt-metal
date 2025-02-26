@@ -19,12 +19,27 @@ def write_binary_to_file(binary_data, dir, filename):
     binary_data.save_to_file(str(bin_file))
 
 
+# Helper function to reset a device, and run light metal binary.
+def reset_device_and_replay_binary(reset_device, device, binary_data):
+    logger.info("Resetting device, and running Light Metal Binary via LightMetalReplay now...")
+    device = reset_device(device)
+    lm_replay = ttnn.LightMetalReplay.create(binary_data, device)
+    success = lm_replay.run()
+
+    if success == 0:
+        logger.info("Light Metal Binary failed to execute or encountered errors.")
+    else:
+        logger.info("Light Metal Binary executed successfully!")
+
+    assert success == 1, "Light Metal Binary replay failure"
+
+
 # Simple bringup single op test to see if everything uses host APIs and if it can be light-metal traced.
 @pytest.mark.parametrize("shape", [[1, 3, 1024, 1024], (1, 1, 512, 512), (1, 3, 32, 32)])
 @pytest.mark.parametrize("enable_async", [False])
 @pytest.mark.parametrize("blocking", [True])
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 200000}])
-def test_single_op_test_light_metal_capture(device, shape, enable_async, blocking, tmp_path):
+def test_single_op_test_light_metal_capture(device, reset_device, shape, enable_async, blocking, tmp_path):
     ttnn.light_metal_begin_capture()
 
     device.enable_async(enable_async)
@@ -39,9 +54,9 @@ def test_single_op_test_light_metal_capture(device, shape, enable_async, blockin
 
     binary_data = ttnn.light_metal_end_capture()
     write_binary_to_file(binary_data, tmp_path, inspect.currentframe().f_code.co_name)
+    reset_device_and_replay_binary(reset_device, device, binary_data)
 
     # TODO (kmabee) - Add capture vs replay verification check
-    # TODO (kmabee) - Add e2e replay
 
 
 # Simple bringup, multiple ops in chain
@@ -49,7 +64,7 @@ def test_single_op_test_light_metal_capture(device, shape, enable_async, blockin
 @pytest.mark.parametrize("enable_async", [False])
 @pytest.mark.parametrize("blocking", [True])
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 200000}])
-def test_chain_op_test_light_metal_capture(device, shape, enable_async, blocking, tmp_path):
+def test_chain_op_test_light_metal_capture(device, reset_device, shape, enable_async, blocking, tmp_path):
     ttnn.light_metal_begin_capture()
 
     device.enable_async(enable_async)
@@ -68,9 +83,9 @@ def test_chain_op_test_light_metal_capture(device, shape, enable_async, blocking
 
     binary_data = ttnn.light_metal_end_capture()
     write_binary_to_file(binary_data, tmp_path, inspect.currentframe().f_code.co_name)
+    reset_device_and_replay_binary(reset_device, device, binary_data)
 
     # TODO (kmabee) - Add capture vs replay verification check
-    # TODO (kmabee) - Add e2e replay
 
 
 # TODO (kmabee) - Add more tests, including version with metal-trace.
