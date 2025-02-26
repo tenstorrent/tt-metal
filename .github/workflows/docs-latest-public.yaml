@@ -69,6 +69,7 @@ jobs:
         run: |
           touch gh_pages/index.html
       - name: Deploy to GitHub Pages
+        if: ${{ github.ref == 'refs/heads/main' }}
         uses: JamesIves/github-pages-deploy-action@v4
         id: deployment
         with:
