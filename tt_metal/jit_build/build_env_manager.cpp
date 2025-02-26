@@ -70,7 +70,7 @@ std::map<std::string, std::string> initialize_device_kernel_defines(chip_id_t de
 
     // TODO (abhullar): Until we switch to virtual coordinates, we need to pass physical PCIe coordinates to device
     //  because Blackhole PCIe endpoint is dependent on board type
-    auto pcie_cores = soc_d.get_pcie_cores();
+    auto pcie_cores = soc_d.get_cores(CoreType::PCIE, soc_d.get_umd_coord_system());
     CoreCoord pcie_core = pcie_cores.empty() ? soc_d.grid_size : pcie_cores[0];
 
     device_kernel_defines.emplace("PCIE_NOC_X", std::to_string(pcie_core.x));

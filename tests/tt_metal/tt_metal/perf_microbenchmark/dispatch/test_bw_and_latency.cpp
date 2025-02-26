@@ -208,7 +208,7 @@ int main(int argc, char** argv) {
             case 0:
             default: {
                 src_mem = "FROM_PCIE";
-                vector<CoreCoord> pcie_cores = soc_d.get_pcie_cores();
+                vector<tt::umd::CoreCoord> pcie_cores = soc_d.get_cores(CoreType::PCIE, soc_d.get_umd_coord_system());
                 TT_ASSERT(pcie_cores.size() > 0);
                 noc_addr_x = pcie_cores[0].x;
                 noc_addr_y = pcie_cores[0].y;
@@ -216,7 +216,7 @@ int main(int argc, char** argv) {
             } break;
             case 1: {
                 src_mem = "FROM_DRAM";
-                vector<CoreCoord> dram_cores = soc_d.get_dram_cores();
+                vector<tt::umd::CoreCoord> dram_cores = soc_d.get_cores(CoreType::DRAM, soc_d.get_umd_coord_system());
                 TT_ASSERT(dram_cores.size() > dram_channel_g);
                 noc_addr_x = dram_cores[dram_channel_g].x;
                 noc_addr_y = dram_cores[dram_channel_g].y;
