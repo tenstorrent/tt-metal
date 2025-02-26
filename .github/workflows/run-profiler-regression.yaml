@@ -17,9 +17,7 @@ on:
         required: false
         type: string
         default: "ubuntu-20.04"
-  workflow_dispatch:
-    inputs:
-      arch:
+      docker-image:
         required: true
         type: choice
         options:
@@ -39,7 +37,6 @@ on:
       os:
         required: false
         type: string
-        default: "ubuntu-20.04"
 
 jobs:
   profiler-regression:
