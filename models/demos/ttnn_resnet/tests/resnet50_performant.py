@@ -5,6 +5,7 @@
 import pytest
 import torch
 import ttnn
+from loguru import logger
 from models.utility_functions import (
     is_wormhole_b0,
 )
@@ -50,24 +51,19 @@ def run_resnet50_inference(
 
     tt_inputs_host, input_mem_config = test_infra.setup_l1_sharded_input(device)
 
+    binary_path = f"resnet_single_run_capture.bin"
+    logger.info("KCM output binary: {}", binary_path)
+    logger.info("KCM_START light-metal trace")
+    ttnn.light_metal_begin_capture()
+
     # First run configures convs JIT
     test_infra.input_tensor = tt_inputs_host.to(device, input_mem_config)
     test_infra.run()
     test_infra.validate()
 
-    # Optimized run
-    test_infra.input_tensor = tt_inputs_host.to(device, input_mem_config)
-    test_infra.run()
-    test_infra.validate()
-
-    # More optimized run with caching
-    if use_signpost:
-        signpost(header="start")
-    test_infra.input_tensor = tt_inputs_host.to(device, input_mem_config)
-    test_infra.run()
-    if use_signpost:
-        signpost(header="stop")
-    test_infra.validate()
+    logger.info("KCM_DONE light-metal trace")
+    binary_data = ttnn.light_metal_end_capture()
+    binary_data.save_to_file(binary_path)
 
 
 def run_resnet50_trace_inference(
