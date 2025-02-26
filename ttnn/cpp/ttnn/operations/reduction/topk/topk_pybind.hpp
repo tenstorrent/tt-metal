@@ -7,5 +7,5 @@
 #include <pybind11/pybind11.h>
 
 namespace ttnn::operations::reduction::detail {
-void bind_reduction_topk_operation(py::module& module);
+void bind_reduction_topk_operation(pybind11::module& module);
 }  // namespace ttnn::operations::reduction::detail
