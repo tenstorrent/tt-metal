@@ -130,7 +130,7 @@ When running the demo, do not forget to setup the `$LLAMA_DIR` environment varia
 Additionally, we also support the use of a fake device. This enables running a smaller chip demo in a larger multichip device.
 Supported devices: [`N150`, `N300`, `T3K`, `TG`].
 
-Example: `export FAKE_DEVICE=N150`, will enable running a single-chip demo on a multi-chip system.
+Example: `export MESH_DEVICE=N150`, will enable running a single-chip demo on a multi-chip system.
 
 ```
 # Examples of how to run the demo for any supported Llama3 models
