@@ -7,9 +7,9 @@
 #include <yaml-cpp/yaml.h>
 
 #include "modules/embedding_module.hpp"
-#include "modules/llama_block.hpp"
+#include "modules/gpt_block.hpp"
+#include "modules/layer_norm_module.hpp"
 #include "modules/positional_embeddings.hpp"
-#include "modules/rms_norm_module.hpp"
 
 namespace ttml::models::gpt2 {
 
@@ -50,8 +50,8 @@ private:
     RunnerType runner_type = RunnerType::Default;
     std::shared_ptr<ttml::modules::Embedding> tok_emb;
     std::shared_ptr<ttml::modules::PositionalEmbeddingBase> pos_emb;
-    std::vector<std::shared_ptr<ttml::modules::LlamaBlock>> blocks;
-    std::shared_ptr<ttml::modules::RMSNormLayer> ln_fc;
+    std::vector<std::shared_ptr<ttml::modules::GPTBlock>> blocks;
+    std::shared_ptr<ttml::modules::LayerNormLayer> ln_fc;
     std::shared_ptr<ttml::modules::LinearLayer> fc;
 
 public:

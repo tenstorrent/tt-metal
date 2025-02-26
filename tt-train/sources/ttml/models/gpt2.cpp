@@ -8,7 +8,6 @@
 #include "autograd/tensor.hpp"
 #include "core/scoped.hpp"
 #include "init/tensor_initializers.hpp"
-#include "modules/llama_block.hpp"
 #include "modules/positional_embeddings.hpp"
 #include "ops/binary_ops.hpp"
 #include "ops/unary_ops.hpp"
@@ -130,10 +129,10 @@ Transformer::Transformer(const TransformerConfig& config) {
     pos_emb = create_positional_embedding();
     blocks.reserve(num_blocks);
     for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
-        blocks.push_back(std::make_shared<ttml::modules::LlamaBlock>(
-            embedding_dim, num_heads, dropout_prob, use_composite_layernorm));
+        blocks.push_back(
+            std::make_shared<ttml::modules::GPTBlock>(embedding_dim, num_heads, dropout_prob, use_composite_layernorm));
     }
-    ln_fc = std::make_shared<ttml::modules::RMSNormLayer>(embedding_dim);
+    ln_fc = std::make_shared<ttml::modules::LayerNormLayer>(embedding_dim, use_composite_layernorm);
     fc = std::make_shared<ttml::modules::LinearLayer>(embedding_dim, vocab_size, /* bias */ false);
 
     create_name("transformer");
