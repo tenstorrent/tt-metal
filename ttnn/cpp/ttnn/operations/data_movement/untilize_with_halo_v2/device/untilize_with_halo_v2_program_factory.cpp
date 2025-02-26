@@ -194,11 +194,18 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         (uint32_t)(transpose_mcast ? 1 : 0),
         is_width_sharded,
         aligned_input_nstick_nbytes,
-        true};
+        enable_split_reader,
+        false};
 
-    reader_ct_args[0] = padding_config_cb_id;
-    reader_ct_args[1] = local_config_cb_id;
-    reader_ct_args[2] = remote_config_cb_id;
+    if (enable_split_reader) {
+        reader_ct_args[0] = padding_config_cb_id;
+        reader_ct_args[1] = local_config_cb_id;
+        reader_ct_args[2] = remote_config_cb_id;
+    } else {
+        reader_ct_args[0] = 0;
+        reader_ct_args[1] = local_config_cb_id;
+        reader_ct_args[2] = 0;
+    }
     KernelHandle reader_kernel_id0 = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/data_movement/untilize_with_halo_v2/device/kernels/dataflow/halo_gather.cpp",
@@ -206,10 +213,13 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = reader_ct_args});
 
-    reader_ct_args[0] = padding_config_cb_id;
-    reader_ct_args[1] = local_config_cb_id;
-    reader_ct_args[2] = remote_config_cb_id;
-    reader_ct_args[15] = false;
+    if (enable_split_reader) {
+        reader_ct_args[16] = true;
+    } else {
+        reader_ct_args[0] = padding_config_cb_id;
+        reader_ct_args[1] = 0;
+        reader_ct_args[2] = remote_config_cb_id;
+    }
 
     KernelHandle reader_kernel_id1 = CreateKernel(
         program,
