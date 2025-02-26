@@ -34,7 +34,7 @@ std::vector<Tensor> PlusOne::create_output_tensors(
 operation::ProgramWithCallbacks PlusOne::create_program(
     const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    return detail::plusone_single_core(input_tensor);
+    return detail::plusone_single_core(input_tensor, sub_core_grids);
 }
 
 }  // namespace ttnn::operations::experimental
