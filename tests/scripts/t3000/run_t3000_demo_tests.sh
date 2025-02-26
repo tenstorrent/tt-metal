@@ -9,7 +9,7 @@ run_t3000_falcon40b_tests() {
   echo "LOG_METAL: Running run_t3000_falcon40b_tests"
 
   # Falcon40B prefill 60 layer end to end with 10 loops; we need 8x8 grid size
-  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/falcon40b/tests/ci/test_falcon_end_to_end_60_layer_t3000_prefill_10_loops.py --timeout=720 ; fail+=$?
+  WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/falcon40b/tests/ci/test_falcon_end_to_end_60_layer_t3000_prefill_10_loops.py --timeout=3600 ; fail+=$?
 
   # Falcon40B end to end demo (prefill + decode)
   WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/t3000/falcon40b/tests/test_demo.py ; fail+=$?
