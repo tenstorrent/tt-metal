@@ -15,6 +15,8 @@
 
 namespace ttml::modules::distributed {
 
+using namespace ttnn;
+
 RowParallelLinear::RowParallelLinear(
     uint32_t in_features, uint32_t out_features, bool has_bias, bool input_is_parallel) :
     m_input_is_parallel(input_is_parallel) {

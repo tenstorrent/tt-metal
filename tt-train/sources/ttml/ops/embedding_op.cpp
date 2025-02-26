@@ -10,6 +10,8 @@
 #include "autograd/graph_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 
+using namespace ttnn;
+
 namespace ttml::ops {
 
 autograd::TensorPtr embedding_op(const autograd::TensorPtr& tensor, const autograd::TensorPtr& weight) {

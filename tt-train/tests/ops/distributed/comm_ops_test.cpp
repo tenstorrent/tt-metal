@@ -15,6 +15,8 @@
 #include "core/tt_tensor_utils.hpp"
 #include "init/cpu_initializers.hpp"
 
+using namespace ttnn;
+
 namespace {
 
 auto check_board_is_n300() {

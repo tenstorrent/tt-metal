@@ -30,6 +30,8 @@ protected:
 };
 
 using ttml::autograd::TensorPtr;
+using namespace ttml;
+using namespace ttnn;
 
 using DatasetSample = std::pair<std::span<const uint32_t>, std::span<const uint32_t>>;
 // tokens, targets, mask

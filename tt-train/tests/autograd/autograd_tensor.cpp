@@ -12,6 +12,7 @@
 #include "core/tt_tensor_utils.hpp"
 
 using namespace ttml;
+using namespace ttnn;
 
 class AutogradTensorTest : public ::testing::Test {
 protected:
@@ -26,7 +27,7 @@ protected:
 
 TEST_F(AutogradTensorTest, AutogradTensorFLOAT32) {
     auto tensor = autograd::create_tensor(
-        core::ones(core::create_shape({1, 1, 1, 32}), &autograd::ctx().get_device(), DataType::FLOAT32));
+        ttml::core::ones(ttml::core::create_shape({1, 1, 1, 32}), &autograd::ctx().get_device(), DataType::FLOAT32));
     const auto& half_precision_tensor = tensor->get_value();
     const auto& full_precision_tensor = tensor->get_value(autograd::PreferredPrecision::FULL);
 
@@ -36,7 +37,7 @@ TEST_F(AutogradTensorTest, AutogradTensorFLOAT32) {
 
 TEST_F(AutogradTensorTest, AutogradTensorBFLOAT16) {
     auto tensor = autograd::create_tensor(
-        core::ones(core::create_shape({1, 1, 1, 32}), &autograd::ctx().get_device(), DataType::BFLOAT16));
+        ttml::core::ones(ttml::core::create_shape({1, 1, 1, 32}), &autograd::ctx().get_device(), DataType::BFLOAT16));
     const auto& half_precision_tensor = tensor->get_value();
     const auto& full_precision_tensor = tensor->get_value(autograd::PreferredPrecision::FULL);
 
@@ -45,7 +46,8 @@ TEST_F(AutogradTensorTest, AutogradTensorBFLOAT16) {
 }
 
 TEST_F(AutogradTensorTest, AutocastTensor) {
-    auto tt_tensor = core::ones(core::create_shape({1, 1, 1, 32}), &autograd::ctx().get_device(), DataType::FLOAT32);
+    auto tt_tensor =
+        ttml::core::ones(ttml::core::create_shape({1, 1, 1, 32}), &autograd::ctx().get_device(), DataType::FLOAT32);
     auto autocast_tensor = autograd::AutocastTensor(tt_tensor);
     const auto& half_precision_tensor = autocast_tensor.get_tensor();
     const auto& full_precision_tensor = autocast_tensor.get_tensor(autograd::PreferredPrecision::FULL);

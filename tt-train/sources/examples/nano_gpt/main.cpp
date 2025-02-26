@@ -57,6 +57,7 @@ ttml::serialization::NamedParameters get_model_parameters(Model &model) {
 }
 
 using ttml::autograd::TensorPtr;
+using namespace ttnn;
 
 using DatasetSample = std::pair<std::span<const uint32_t>, std::span<const uint32_t>>;
 // tokens, targets, masks

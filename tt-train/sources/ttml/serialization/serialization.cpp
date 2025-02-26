@@ -17,6 +17,8 @@
 #include "optimizers/sgd.hpp"
 namespace ttml::serialization {
 
+using namespace ttnn;
+
 // demangle type name
 
 // trivial type to the std::string

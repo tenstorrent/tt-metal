@@ -24,6 +24,7 @@
 #include "utils.hpp"
 
 using ttml::autograd::TensorPtr;
+using namespace ttnn;
 
 using DatasetSample = std::pair<std::vector<uint8_t>, uint8_t>;
 using BatchType = std::pair<TensorPtr, TensorPtr>;

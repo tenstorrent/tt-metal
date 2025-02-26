@@ -12,6 +12,8 @@
 #include "core/tt_tensor_utils.hpp"
 #include "core/xtensor_utils.hpp"
 
+using namespace ttnn;
+
 class TensorUtilsTest : public ::testing::Test {
 protected:
     void SetUp() override {

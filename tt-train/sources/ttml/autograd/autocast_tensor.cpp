@@ -9,12 +9,14 @@
 namespace {
 
 inline bool is_castable_tensor(const tt::tt_metal::Tensor &tensor) {
-    return tensor.get_dtype() == DataType::FLOAT32;
+    return tensor.get_dtype() == ttnn::DataType::FLOAT32;
 }
 
 }  // namespace
 
 namespace ttml::autograd {
+
+using namespace ttnn;
 
 void AutocastTensor::set_tensor(const tt::tt_metal::Tensor &tensor) {
     if (tensor.get_dtype() == DataType::FLOAT32) {
