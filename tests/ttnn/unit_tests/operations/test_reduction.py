@@ -203,6 +203,7 @@ def test_sum_4d_tensor_dims(device, batch_size, c, h, w, dim, keepdim):
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
+# returns larger padded tensor instead of desired shape
 @pytest.mark.parametrize("dim1", [1])
 @pytest.mark.parametrize("dim2", [50257])
 @pytest.mark.parametrize("dim", [1])
@@ -249,6 +250,7 @@ def test_2d_topk(device, dim1, dim2, dim, k, largest, dtype):
     assert_with_pcc(pyt_topk_values, ttnn_torch_values, pcc_values)
 
 
+# fails on dim=3 for float8_b
 @pytest.mark.parametrize("dim1", [1])
 @pytest.mark.parametrize("dim2", [1])
 @pytest.mark.parametrize("dim3", [8])
