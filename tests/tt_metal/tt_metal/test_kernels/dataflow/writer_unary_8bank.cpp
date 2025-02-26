@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dataflow_api.h"
-#include "debug/dprint.h"
 
 void kernel_main() {
     uint32_t dst_addr  = get_arg_val<uint32_t>(0);
@@ -16,7 +15,6 @@ void kernel_main() {
 
     constexpr bool write_to_dram = (kernel_compile_time_args.size() > 0) ? get_compile_time_arg_val(0) : true;
 
-    DPRINT << "Inside kernel" << ENDL();
     const InterleavedAddrGenFast<write_to_dram> s = {
         .bank_base_address = dst_addr, .page_size = tile_bytes, .data_format = data_format};
 
