@@ -58,11 +58,11 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         dim,
         gather_multi_device_global_semaphore,
         num_preferred_links.value_or(1),
-        false,
         out_memory_config,
         topology,
         worker_subdevice_id_opt,
-        true);
+        true,
+        false);
 }
 
 ttnn::Tensor ExecuteAllReduceAsync::invoke(
@@ -101,11 +101,11 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         mesh_device,
         topology,
         gather_multi_device_global_semaphore,
-        false,
         out_memory_config,
         num_preferred_links,
         worker_subdevice_id_opt,
-        true);
+        true,
+        false);
 }
 
 }  // namespace ttnn::operations::experimental::ccl

@@ -123,6 +123,8 @@ Tensor all_gather_async_2D(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<size_t> num_preferred_links,
     bool transpose_mesh_dimension) {
+    /*
+    //swap to this when we have barrier on semaphores
     // Call the operation on the rows/cols
     auto output_tensor = all_gather_2D_helper(
         input_tensor,
@@ -145,6 +147,17 @@ Tensor all_gather_async_2D(
         memory_config,
         num_preferred_links,
         transpose_mesh_dimension);
+    */
+    return all_gather_2D_helper(
+        input_tensor,
+        dim,
+        rank,
+        mesh_device,
+        topology,
+        semaphores,
+        memory_config,
+        num_preferred_links,
+        !transpose_mesh_dimension);
 }
 
 AllGatherAsync create_all_gather_async_struct(
@@ -505,11 +518,11 @@ Tensor all_gather_async(
     const uint32_t dim,
     const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
     const uint32_t num_links,
-    bool uses_2d_fabric,
     const std::optional<MemoryConfig>& memory_config,
     const ttnn::ccl::Topology topology,
     std::optional<SubDeviceId> sub_device_id,
-    bool enable_persistent_fabric_mode) {
+    bool enable_persistent_fabric_mode,
+    bool uses_2d_fabric) {
     TT_FATAL(
         std::getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr,
         "all_gather_async op is only supported for Fast Dispatch");
@@ -574,12 +587,12 @@ Tensor all_gather_async(
     const MeshDevice& mesh_device,
     const ttnn::ccl::Topology topology,
     const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
-    bool uses_2d_fabric,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<size_t> num_preferred_links,
     std::optional<SubDeviceId> sub_device_id,
     bool enable_persistent_fabric_mode,
-    bool transpose_mesh_dimension) {
+    bool transpose_mesh_dimension,
+    bool uses_2d_fabric) {
     int32_t rank = input_tensor.get_logical_shape().rank();
     int32_t gather_dim = (dim < 0) ? rank + dim : dim;
 

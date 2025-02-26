@@ -16,12 +16,12 @@ struct ExecuteAllGatherAsync {
         const ttnn::Tensor& input_tensor,
         const int32_t dim,
         const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
-        bool uses_2d_fabric = false,
         const uint32_t num_links = 1,
         const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
         const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
         std::optional<SubDeviceId> subdevice_id = std::nullopt,
-        bool enable_persistent_fabric_mode = false);
+        bool enable_persistent_fabric_mode = false,
+        bool uses_2d_fabric = false);
 
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
@@ -30,12 +30,12 @@ struct ExecuteAllGatherAsync {
         const MeshDevice& mesh_device,
         const ttnn::ccl::Topology topology,
         const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
-        bool uses_2d_fabric = false,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<size_t> num_preferred_links = std::nullopt,
         std::optional<SubDeviceId> subdevice_id = std::nullopt,
         bool enable_persistent_fabric_mode = false,
-        bool transpose_mesh_direction = false);
+        bool transpose_mesh_direction = false,
+        bool uses_2d_fabric = false);
 };
 
 }  // namespace operations::experimental::ccl
