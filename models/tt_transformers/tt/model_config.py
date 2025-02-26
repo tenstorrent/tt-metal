@@ -119,76 +119,77 @@ class ModelArgs:
 
         LLAMA_DIR = os.getenv("LLAMA_DIR")
         HF_MODEL = os.getenv("HF_MODEL")
+        assert not (LLAMA_DIR and HF_MODEL), "Only one of LLAMA_DIR or HF_MODEL should be set"
         if LLAMA_DIR:
-            if any([os.getenv("LLAMA_CKPT_DIR"), os.getenv("LLAMA_TOKENIZER_PATH"), os.getenv("LLAMA_CACHE_PATH")]):
+            if any([os.getenv("LLAMA_CKPT_DIR"), os.getenv("LLAMA_TOKENIZER_PATH"), os.getenv("TT_CACHE_PATH")]):
                 logger.warning(
-                    "LLAMA_DIR is set and will override LLAMA_CKPT_DIR, LLAMA_TOKENIZER_PATH, and LLAMA_CACHE_PATH"
+                    "LLAMA_DIR is set and will override LLAMA_CKPT_DIR, LLAMA_TOKENIZER_PATH, and TT_CACHE_PATH"
                 )
-            self.DEFAULT_CKPT_DIR = LLAMA_DIR
-            self.DEFAULT_TOKENIZER_PATH = LLAMA_DIR
-            self.DEFAULT_CACHE_PATH = os.path.join(LLAMA_DIR, self.device_name)
+            self.CKPT_DIR = LLAMA_DIR
+            self.TOKENIZER_PATH = LLAMA_DIR
+            self.CACHE_PATH = os.path.join(LLAMA_DIR, self.device_name)
             self.model_name = os.path.basename(LLAMA_DIR)  # May be overridden by config
         elif HF_MODEL:
-            self.DEFAULT_CKPT_DIR = HF_MODEL
-            self.DEFAULT_TOKENIZER_PATH = HF_MODEL
-            self.DEFAULT_CACHE_PATH = os.getenv("LLAMA_CACHE_PATH")
-            if not self.DEFAULT_CACHE_PATH:
-                self.DEFAULT_CACHE_PATH = os.path.join("model_cache", HF_MODEL, self.device_name)
+            self.CKPT_DIR = HF_MODEL
+            self.TOKENIZER_PATH = HF_MODEL
+            self.CACHE_PATH = os.getenv("TT_CACHE_PATH")
+            if not self.CACHE_PATH:
+                self.CACHE_PATH = os.path.join("model_cache", HF_MODEL, self.device_name)
             self.model_name = HF_MODEL  # May be overridden by config
             self.from_hf_url = True
         else:
-            assert "Please set $LLAMA_DIR to a valid checkpoint directory"
+            assert "Please set HF_MODEL to a HuggingFace name e.g. meta-llama/Llama-3.1-8B-Instruct or LLAMA_DIR to a Meta-style checkpoint directory"
 
         if not dummy_weights and not HF_MODEL:
             # Assert if all folders and files exist
             assert os.path.exists(
-                self.DEFAULT_CKPT_DIR
-            ), f"Checkpoint directory {self.DEFAULT_CKPT_DIR} does not exist, please set LLAMA_DIR=... or LLAMA_CKPT_DIR=..."
-            os.makedirs(self.DEFAULT_CACHE_PATH, exist_ok=True)
+                self.CKPT_DIR
+            ), f"Checkpoint directory {self.CKPT_DIR} does not exist, please set LLAMA_DIR=... or LLAMA_CKPT_DIR=..."
+            os.makedirs(self.CACHE_PATH, exist_ok=True)
             # Check if weights exist in the specified folder. If not warn the user to run the download and untar script.
         #            assert os.path.isfile(
-        #                self.DEFAULT_CKPT_DIR + "/consolidated.00.pth"
+        #                self.CKPT_DIR + "/consolidated.00.pth"
         #            ), f"weights consolidated.00.pth file does not exist. Please use the script `models/tt_transformers/scripts/get_weights.py` to download and untar the weights."
 
-        logger.info(f"Checkpoint directory: {self.DEFAULT_CKPT_DIR}")
-        logger.info(f"Tokenizer file: {self.DEFAULT_TOKENIZER_PATH + '/tokenizer.model'}")
-        logger.info(f"Cache directory: {self.DEFAULT_CACHE_PATH}")
+        logger.info(f"Checkpoint directory: {self.CKPT_DIR}")
+        logger.info(f"Tokenizer file: {self.TOKENIZER_PATH + '/tokenizer.model'}")
+        logger.info(f"Cache directory: {self.CACHE_PATH}")
 
         # Some consumers like SentencePiece only accept str not Path for files
-        self.model_base_path = Path(self.DEFAULT_CKPT_DIR)
-        self.model_cache_path = Path(self.DEFAULT_CACHE_PATH)
+        self.model_base_path = Path(self.CKPT_DIR)
+        self.model_cache_path = Path(self.CACHE_PATH)
 
         # Load weights and tokenizer
-        self.consolidated_weights_path = self.DEFAULT_CKPT_DIR + "/consolidated.00.pth"
-        self.tokenizer_path = self.DEFAULT_TOKENIZER_PATH + "/tokenizer.model"
+        self.consolidated_weights_path = self.CKPT_DIR + "/consolidated.00.pth"
+        self.tokenizer_path = self.TOKENIZER_PATH + "/tokenizer.model"
 
         self.instruct = instruct
         # If the weights file contain the keyword `instruct` also set self.instruct to true
-        if "instruct" in self.DEFAULT_CACHE_PATH.lower():
+        if "instruct" in self.CACHE_PATH.lower():
             self.instruct = True
 
         # Load model params
         if HF_MODEL:
             self.checkpoint_type = CheckpointType.HuggingFace
-            self._set_hf_params(self.DEFAULT_CKPT_DIR)
+            self._set_hf_params(self.CKPT_DIR)
         elif not dummy_weights:
             self.checkpoint_type = self.detect_checkpoint_type()
-            self._set_model_params(self.DEFAULT_CKPT_DIR)
+            self._set_model_params(self.CKPT_DIR)
         else:  # With Dummy weights, set the params from the local copy inside the model folder. This is required for CI pipeline that doesn't mount the external folders.
             self.checkpoint_type = CheckpointType.Meta
-            if "3.2-1B" in self.DEFAULT_CKPT_DIR:
+            if "3.2-1B" in self.CKPT_DIR:
                 local_params = "LLAMA3_2_1B_PARAMS"
-            elif "3.2-3B" in self.DEFAULT_CKPT_DIR:
+            elif "3.2-3B" in self.CKPT_DIR:
                 local_params = "LLAMA3_2_3B_PARAMS"
-            elif "3.1-8B" in self.DEFAULT_CKPT_DIR:
+            elif "3.1-8B" in self.CKPT_DIR:
                 local_params = "LLAMA3_1_8B_PARAMS"
-            elif "3.2-11B" in self.DEFAULT_CKPT_DIR:
+            elif "3.2-11B" in self.CKPT_DIR:
                 local_params = "LLAMA3_2_11B_PARAMS"
-            elif "3.1-70B" in self.DEFAULT_CKPT_DIR:
+            elif "3.1-70B" in self.CKPT_DIR:
                 local_params = "LLAMA3_1_70B_PARAMS"
             else:
                 raise ValueError(
-                    f"No local params found for {self.DEFAULT_CKPT_DIR}, dummy weights are not supported for this model"
+                    f"No local params found for {self.CKPT_DIR}, dummy weights are not supported for this model"
                 )
             self._set_model_params(self.LOCAL_LLAMA_PARAMS[local_params])
 
@@ -1204,16 +1205,16 @@ class ModelArgs:
             state_dict_prefix = self.get_state_dict_prefix("", None)
             state_dict = {f"{state_dict_prefix}{k}": torch.randn_like(v) for k, v in state_dict.items()}
         elif self.checkpoint_type == CheckpointType.Meta:
-            state_dict = load_meta_state_dict(self.DEFAULT_CKPT_DIR, self.n_layers)
+            state_dict = load_meta_state_dict(self.CKPT_DIR, self.n_layers)
         else:
             assert self.checkpoint_type == CheckpointType.HuggingFace
             if self.from_hf_url:
                 from transformers import AutoModelForCausalLM
 
-                model = AutoModelForCausalLM.from_pretrained(self.DEFAULT_CKPT_DIR)
+                model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
                 state_dict = model.state_dict()
             else:
-                state_dict = load_hf_state_dict(self.DEFAULT_CKPT_DIR)
+                state_dict = load_hf_state_dict(self.CKPT_DIR)
             state_dict = standardize_hf_keys(state_dict)
             state_dict = convert_hf_to_meta(state_dict, self.head_dim)
         keys_dict = list(state_dict.keys())[:]
@@ -1513,8 +1514,8 @@ class ModelArgs:
         Raises:
             ValueError: If neither Meta nor HuggingFace checkpoint format is detected
         """
-        config_path = os.path.join(self.DEFAULT_CKPT_DIR, "config.json")
-        params_path = os.path.join(self.DEFAULT_CKPT_DIR, "params.json")
+        config_path = os.path.join(self.CKPT_DIR, "config.json")
+        params_path = os.path.join(self.CKPT_DIR, "params.json")
 
         if os.path.exists(config_path):
             with open(config_path) as f:
@@ -1526,7 +1527,7 @@ class ModelArgs:
             return CheckpointType.Meta
 
         raise ValueError(
-            f"Could not detect Meta or HuggingFace checkpoint format in {self.DEFAULT_CKPT_DIR}. "
+            f"Could not detect Meta or HuggingFace checkpoint format in {self.CKPT_DIR}. "
             "Directory should contain either config.json (HuggingFace) or params.json (Meta)."
         )
 
@@ -1541,7 +1542,7 @@ class ModelArgs:
             # Create a HuggingFace AutoTokenizer
             from transformers import AutoTokenizer
 
-            tokenizer = AutoTokenizer.from_pretrained(self.DEFAULT_TOKENIZER_PATH)
+            tokenizer = AutoTokenizer.from_pretrained(self.TOKENIZER_PATH)
 
             # Add meta-compatible stop token list to the HF tokenizer
             if not "stop_tokens" in tokenizer.__dict__:
@@ -1590,11 +1591,11 @@ class ModelArgs:
             # HF is much faster at loading from a checkpoint than generating from config
             # so use that by preference unless we don't have a checkpoint
             if self.dummy_weights and not load_checkpoint:
-                config = AutoConfig.from_pretrained(self.DEFAULT_CKPT_DIR)
+                config = AutoConfig.from_pretrained(self.CKPT_DIR)
                 config.num_layers = self.n_layers
                 model = AutoModelForCausalLM.from_config(config)
             else:
-                model = AutoModelForCausalLM.from_pretrained(self.DEFAULT_CKPT_DIR)
+                model = AutoModelForCausalLM.from_pretrained(self.CKPT_DIR)
             if wrap:
                 wrapper = HfModelWrapper(model, self.head_dim)
                 return wrapper

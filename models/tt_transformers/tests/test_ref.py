@@ -86,7 +86,7 @@ def test_attention_inference(
 
     from transformers import AutoModelForCausalLM
 
-    hf_transformer = AutoModelForCausalLM.from_pretrained(model_args.DEFAULT_CKPT_DIR)
+    hf_transformer = AutoModelForCausalLM.from_pretrained(model_args.CKPT_DIR)
     hf_model = hf_transformer.model.layers[0].self_attn
     hf_model.eval()
 
