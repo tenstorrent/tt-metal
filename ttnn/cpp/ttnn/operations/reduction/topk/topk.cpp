@@ -129,18 +129,6 @@ std::vector<Tensor> ExecuteTopK::invoke(
         transposed_tensor, output_tensor_vec, dim, is_dim_last_idx, k, adjusted_k, input_memory_config);
 }
 
-auto ExecuteTopK::invoke(
-    const Tensor& input_tensor,
-    const int32_t k,
-    const int8_t dim,
-    const bool largest,
-    const bool sorted,
-    const std::optional<MemoryConfig>& memory_config,
-    std::optional<std::tuple<Tensor, Tensor>> optional_output_tensors) {
-    return invoke(
-        DefaultQueueId, input_tensor, k, dim, largest, sorted, memory_config, std::move(optional_output_tensors));
-}
-
 std::vector<Tensor> ExecuteTopK::create_async_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<const Tensor>>& optional_inputs) {
     const auto& input_tensor = input_tensors.at(0);
