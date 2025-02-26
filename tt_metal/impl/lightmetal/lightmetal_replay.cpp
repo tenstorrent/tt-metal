@@ -110,6 +110,7 @@ LightMetalReplay::LightMetalReplay(LightMetalBinary&& binary, IDevice* device) :
         log_warning(tt::LogMetalTrace, "Empty LightMetalBinary provided to LightMetalReplay.");
     }
 
+    log_info(tt::LogMetalTrace, "LightMetalReplay created.");
     show_reads_ = parse_env("TT_LIGHT_METAL_SHOW_READS", false);
     disable_checking_ = parse_env("TT_LIGHT_METAL_DISABLE_CHECKING", false);
     fb_binary_ = parse_flatbuffer_binary();  // Parse and store the FlatBuffer binary
@@ -692,6 +693,7 @@ void LightMetalReplay::execute(const ::tt::tt_metal::flatbuffer::LightMetalCompa
 
 // Main entry point to execute a light metal binary blob, return true if pass.
 bool LightMetalReplay::execute_binary() {
+    log_info(tt::LogMetalTrace, "KCM Inside ExecuteBinary");
     if (!fb_binary_) {
         std::cerr << "Cannot Replay empty/uninitialized Light Metal Binary." << std::endl;
         return false;
@@ -716,6 +718,8 @@ bool LightMetalReplay::execute_binary() {
         if (replay_manages_device) {
             setup_devices();
         }
+
+        setup_devices();
 
         // Just loop over all commands, and execute. This is purposely kept simple for prototyping v0.
         // TODO (kmabee) - should expand to cover, multiple devices, cqs, etc.
