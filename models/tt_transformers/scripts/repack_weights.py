@@ -4,7 +4,7 @@
 
 import torch
 import argparse
-from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs
+from models.demos.t3000.mixtral8x7b.tt.model_config import ModelArgs
 
 
 # Helper function to recreate Mixtral state dictionary.
@@ -13,7 +13,7 @@ from models.demos.t3000.mixtral8x7b.tt.model_config import TtModelArgs
 def repack_mixtral_weights(ckpt_dir, repack_dir):
     state_dict = {}
     # Set dummy_weights to True to avoid going through asserts that check for repack weights file (repack_weights.pt)
-    model_args = TtModelArgs(dummy_weights=True)
+    model_args = ModelArgs(dummy_weights=True)
     consolidated_weights_path = lambda i: str(ckpt_dir + f"/consolidated.{i:02d}.pt")
 
     for i in range(1 + (model_args.n_layers - 1) // 4):

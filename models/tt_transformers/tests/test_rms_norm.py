@@ -6,8 +6,8 @@ import pytest
 from loguru import logger
 import os
 import ttnn
-from models.common.rmsnorm import RMSNorm as TtRMSNorm
-from models.tt_transformers.tt.model_config import TtModelArgs
+from models.common.rmsnorm import RMSNorm as RMSNorm
+from models.tt_transformers.tt.model_config import ModelArgs
 from models.utility_functions import (
     comp_pcc,
     comp_allclose,
@@ -36,7 +36,7 @@ from models.tt_transformers.tt.distributed_norm import DistributedNorm
     (128,),  # For decode-only unit test, there's no need to run with large sequence lengths
 )
 @pytest.mark.parametrize("mode", ["prefill", "decode"])
-def test_llama_rms_norm_inference(
+def test_rms_norm_inference(
     max_seq_len,
     batch_size,
     mode,
@@ -49,7 +49,7 @@ def test_llama_rms_norm_inference(
 
     mesh_device.enable_async(True)
 
-    model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len)
+    model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len)
 
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
@@ -57,7 +57,7 @@ def test_llama_rms_norm_inference(
     first_layer_prefix = state_dict_prefix + "attention_norm."
 
     # Create the inner RMSNormxw
-    tt_inner_norm = TtRMSNorm(
+    tt_inner_norm = RMSNorm(
         device=mesh_device,
         dim=model_args.dim,
         state_dict=state_dict,
@@ -110,8 +110,8 @@ def test_llama_rms_norm_inference(
     logger.info(f"PCC: {pcc_message}")
 
     if passing:
-        logger.info("Llama_rms_norm Passed!")
+        logger.info("rms_norm Passed!")
     else:
-        logger.warning("Llama_rms_norm Failed!")
+        logger.warning("rms_norm Failed!")
 
-    assert passing, f"Llama_rms_norm output does not meet PCC requirement {0.99}."
+    assert passing, f"rms_norm output does not meet PCC requirement {0.99}."

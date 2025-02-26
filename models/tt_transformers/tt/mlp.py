@@ -9,7 +9,7 @@ from models.tt_transformers.tt.common import pad_to_size
 from models.tt_transformers.tt.ccl import tt_all_reduce
 
 
-class TtLlamaMLP(LightweightModule):
+class MLP(LightweightModule):
     def __init__(
         self, mesh_device, args, state_dict, weight_cache_path, layer_num, dtype, model_config, state_dict_prefix=None
     ):

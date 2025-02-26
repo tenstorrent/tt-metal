@@ -36,7 +36,7 @@ from models.utility_functions import skip_for_grayskull
         "batch_2",
     ],
 )
-def test_llama_cross_attention_transformer_block_inference(
+def test_cross_attention_transformer_block_inference(
     text_seq_len, batch, mesh_device, use_program_cache, reset_seeds, ensure_gc
 ):
     dtype = ttnn.bfloat16

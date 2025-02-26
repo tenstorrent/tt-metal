@@ -8,7 +8,7 @@ from loguru import logger
 import os
 import ttnn
 from models.tt_transformers.tt.lm_head import LMHead
-from models.tt_transformers.tt.model_config import TtModelArgs
+from models.tt_transformers.tt.model_config import ModelArgs
 from models.utility_functions import (
     comp_pcc,
     comp_allclose,
@@ -35,12 +35,12 @@ from models.utility_functions import skip_for_grayskull
     ],
     indirect=True,
 )
-def test_llama_lm_head_inference(seq_len, batch_size, mesh_device, use_program_cache, reset_seeds):
+def test_lm_head_inference(seq_len, batch_size, mesh_device, use_program_cache, reset_seeds):
     dtype = ttnn.bfloat8_b
 
     mesh_device.enable_async(True)
 
-    model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=seq_len)
+    model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=seq_len)
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
 
@@ -76,7 +76,7 @@ def test_llama_lm_head_inference(seq_len, batch_size, mesh_device, use_program_c
         layout=ttnn.TILE_LAYOUT,
     )
 
-    logger.info("Run Llama_LM_Head")
+    logger.info("Run LM_Head")
     tt_output = tt_model(tt_input)
     tt_output_torch = ttnn.to_torch(
         tt_output,
@@ -92,8 +92,8 @@ def test_llama_lm_head_inference(seq_len, batch_size, mesh_device, use_program_c
     logger.info(comp_allclose(reference_output, tt_output_torch))
     logger.info(f"PCC: {pcc_message}")
     if passing:
-        logger.info("Llama_LM_Head Passed!")
+        logger.info("LM_Head Passed!")
     else:
-        logger.warning("Llama_LM_Head Failed!")
+        logger.warning("LM_Head Failed!")
 
-    assert passing, f"Llama_LM_Head output does not meet PCC requirement {pcc_required}: {pcc_message}."
+    assert passing, f"LM_Head output does not meet PCC requirement {pcc_required}: {pcc_message}."

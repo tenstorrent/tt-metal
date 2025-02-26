@@ -72,7 +72,7 @@ If you are bringing up a new model that is similar to these but is not listed ab
 
 You should also watch out for:
 - RoPE encoding style. `llama3` and of course none are both supported. We have a [branch](https://github.com/tenstorrent/tt-metal/tree/llama-yarn) with `yarn` support in progress.
-- Our [accuracy test](tests/test_llama_accuracy.py) will require you to [generate some reference logits](tests/generate_reference_hf.py) and perhaps update the test to use them.
+- Our [accuracy test](tests/test_accuracy.py) will require you to [generate some reference logits](tests/generate_reference_hf.py) and perhaps update the test to use them.
 - We parallelise attention over the number of heads. If this number is e.g. 14 then you will not be able to run it on more than 2 chips (because 14/2=7, a prime number). We do not support head-padding or similar mitigations at this time but a PR would be cool.
 
 ### Setup TT environment

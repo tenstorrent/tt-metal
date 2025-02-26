@@ -16,7 +16,7 @@ def compute_gather_cos_sin(dhead, end, theta, scale_factor, orig_context_len, po
     return gather_cos_sin(position_ids, cos, sin)
 
 
-class TtLlamaRotarySetup(LightweightModule):
+class RotarySetup(LightweightModule):
     def __init__(
         self,
         device,

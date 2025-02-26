@@ -10,7 +10,7 @@ from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.ccl import tt_all_reduce, tt_all_gather
 
 
-class TtLlamaAttention(LightweightModule):
+class Attention(LightweightModule):
     def __init__(
         self,
         mesh_device,

@@ -2,14 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 import ttnn
-from models.tt_transformers.tt.attention import TtLlamaAttention
-from models.tt_transformers.tt.mlp import TtLlamaMLP
+from models.tt_transformers.tt.attention import Attention
+from models.tt_transformers.tt.mlp import MLP
 from models.common.rmsnorm import RMSNorm
 from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 
 
-class TtTransformerBlock(LightweightModule):
+class TransformerBlock(LightweightModule):
     def __init__(
         self,
         args,
@@ -40,7 +40,7 @@ class TtTransformerBlock(LightweightModule):
 
         self.layer_num = layer_num
 
-        self.attention = TtLlamaAttention(
+        self.attention = Attention(
             mesh_device=mesh_device,
             state_dict=state_dict,
             weight_cache_path=weight_cache_path,
@@ -51,7 +51,7 @@ class TtTransformerBlock(LightweightModule):
             paged_attention_config=paged_attention_config,
             use_paged_kv_cache=use_paged_kv_cache,
         )
-        self.feed_forward = TtLlamaMLP(
+        self.feed_forward = MLP(
             mesh_device=mesh_device,
             args=args,
             state_dict=state_dict,

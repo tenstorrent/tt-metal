@@ -23,7 +23,7 @@ import os
 import ttnn
 import time
 
-from models.tt_transformers.tt.generator import LlamaGenerator
+from models.tt_transformers.tt.generator import Generator
 
 
 def get_batch_sampler(temperature, top_p, tokenizer):
@@ -43,9 +43,9 @@ def get_batch_sampler(temperature, top_p, tokenizer):
 
 def create_multimodal_model(mesh_device, max_batch_size, max_seq_len, dtype=ttnn.bfloat16, use_paged_kv_cache=False):
     from models.tt_transformers.tt.multimodal.llama_vision_model import CrossAttentionTransformer
-    from models.tt_transformers.tt.model_config import TtModelArgs
+    from models.tt_transformers.tt.model_config import ModelArgs
 
-    tt_model_args = TtModelArgs(mesh_device, max_batch_size=max_batch_size)
+    tt_model_args = ModelArgs(mesh_device, max_batch_size=max_batch_size)
     # limit length or we'll run out of space
     tt_model_args.max_seq_len = max_seq_len
     checkpoint = torch.load(tt_model_args.consolidated_weights_path, map_location="cpu", weights_only=True)
@@ -85,7 +85,7 @@ def create_multimodal_model(mesh_device, max_batch_size, max_seq_len, dtype=ttnn
     ids=["batch1-notrace", "batch1-trace", "batch32-trace", "batch4-trace-with-text-prompts"],
 )
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 14951424, "num_command_queues": 2}], indirect=True)
-def test_llama_multimodal_demo_text(
+def test_multimodal_demo_text(
     mesh_device,
     warmup_iters,
     enable_trace,
@@ -107,7 +107,7 @@ def test_llama_multimodal_demo_text(
     mesh_device.enable_program_cache()
     mesh_device.enable_async(True)
     model_args, model = create_multimodal_model(mesh_device, max_batch_size=max_batch_size, max_seq_len=max_seq_len)
-    generator = LlamaGenerator(model, model_args, mesh_device)
+    generator = Generator(model, model_args, mesh_device)
     tokenizer = Tokenizer(model_path=tokenizer_path)
     formatter = ChatFormat(tokenizer)
 

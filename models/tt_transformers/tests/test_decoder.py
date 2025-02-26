@@ -10,9 +10,9 @@ from models.tt_transformers.tt.common import (
     precompute_freqs,
     PagedAttentionConfig,
 )
-from models.tt_transformers.tt.model_config import TtModelArgs
-from models.tt_transformers.tt.decoder import TtTransformerBlock
-from models.tt_transformers.tt.rope import TtLlamaRotarySetup
+from models.tt_transformers.tt.model_config import ModelArgs
+from models.tt_transformers.tt.decoder import TransformerBlock
+from models.tt_transformers.tt.rope import RotarySetup
 from models.utility_functions import (
     comp_pcc,
     comp_allclose,
@@ -54,7 +54,7 @@ from models.utility_functions import skip_for_grayskull
     "max_seq_len",
     (256,),  # For decode-only unit test, there's no need to run with large sequence lengths
 )
-def test_llama_decoder_inference(
+def test_decoder_inference(
     max_seq_len,
     batch_size,
     paged_attention,
@@ -67,13 +67,13 @@ def test_llama_decoder_inference(
     dtype = ttnn.bfloat8_b
     mesh_device.enable_async(True)
 
-    model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len)
+    model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len)
     model_args.n_layers = 1
 
     state_dict = model_args.load_state_dict()
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
-    first_layer_prefix = model_args.get_state_dict_prefix("TtTransformerBlock", 0)
+    first_layer_prefix = model_args.get_state_dict_prefix("TransformerBlock", 0)
     partial_state_dict = {
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     }
@@ -85,7 +85,7 @@ def test_llama_decoder_inference(
     all_tests_pass = True
 
     # Setup RoPE transformation matrices
-    rope_setup = TtLlamaRotarySetup(
+    rope_setup = RotarySetup(
         mesh_device,
         model_args.max_batch_size,
         model_args.head_dim,
@@ -125,7 +125,7 @@ def test_llama_decoder_inference(
         )
 
     # Initialize TT model
-    tt_model = TtTransformerBlock(
+    tt_model = TransformerBlock(
         args=model_args,
         mesh_device=mesh_device,
         dtype=dtype,

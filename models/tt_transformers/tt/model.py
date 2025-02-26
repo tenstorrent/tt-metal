@@ -6,18 +6,18 @@ import ttnn
 import torch
 import torch.nn as nn
 from tqdm import tqdm
-from models.tt_transformers.tt.decoder import TtTransformerBlock
+from models.tt_transformers.tt.decoder import TransformerBlock
 from models.common.rmsnorm import RMSNorm
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.tt_transformers.tt.distributed_norm import DistributedNorm
 from models.tt_transformers.tt.lm_head import LMHead
 from models.tt_transformers.tt.common import copy_host_to_device
-from models.tt_transformers.tt.rope import TtLlamaRotarySetup
-from models.tt_transformers.tt.embedding import TtLlamaEmbedding
+from models.tt_transformers.tt.rope import RotarySetup
+from models.tt_transformers.tt.embedding import Embedding
 
 
-class TtTransformer(LightweightModule):
+class Transformer(LightweightModule):
     def __init__(
         self,
         args,
@@ -39,7 +39,7 @@ class TtTransformer(LightweightModule):
         self.grid_size = self.args.max_grid_size
         state_dict_prefix = args.get_state_dict_prefix("", None)
 
-        self.embd = TtLlamaEmbedding(
+        self.embd = Embedding(
             mesh_device=mesh_device,
             args=args,
             weight_cache_path=args.weight_cache_path(dtype),
@@ -47,7 +47,7 @@ class TtTransformer(LightweightModule):
             dtype=ttnn.bfloat16,  # Row major layout requires bfloat16
         )
 
-        self.rope_setup = TtLlamaRotarySetup(
+        self.rope_setup = RotarySetup(
             mesh_device,
             args.max_batch_size,
             args.head_dim,
@@ -59,7 +59,7 @@ class TtTransformer(LightweightModule):
         self.trans_mats_dict = self.rope_setup.get_both_trans_mats()
 
         self.layers = [
-            TtTransformerBlock(
+            TransformerBlock(
                 args=args,
                 mesh_device=mesh_device,
                 dtype=dtype,

@@ -24,7 +24,7 @@ from models.utility_functions import skip_for_grayskull
         "llama3.2-11B",
     ],
 )
-def test_llama_ci_dispatch(llama3_model):
+def test_ci_dispatch(llama3_model):
     logger.info(f"Running fast dispatch tests for {llama3_model}")
     os.environ["LLAMA_DIR"] = llama3_model
     pytest.main(

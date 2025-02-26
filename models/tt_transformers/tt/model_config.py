@@ -16,7 +16,7 @@ from models.tt_transformers.tt.common import (
     num_to_core_range_set,
     calculate_hidden_dim,
     get_out_subblock_w,
-    encode_prompt_llama_instruct,
+    encode_prompt_instruct,
     encode_prompt_hf,
     nearest_multiple,
 )
@@ -64,7 +64,7 @@ class CheckpointType(Enum):
     HuggingFace = auto()
 
 
-class TtModelArgs:
+class ModelArgs:
     OP_KEYS = (
         # Embedding
         "EMB_WEIGHTS",
@@ -257,7 +257,7 @@ class TtModelArgs:
         device = mesh_device.get_devices()[0] if mesh_device is not None else None
         self.cluster_shape = list(mesh_device.shape)
         self.is_galaxy = self.num_devices == 32
-        if device is not None:  # Avoid issue with test_llama_torch.py not having a device
+        if device is not None:  # Avoid issue with test_torch.py not having a device
             self.n_local_heads = self.n_heads // self.cluster_shape[1]
 
             grid = device.compute_with_storage_grid_size()
@@ -1100,13 +1100,13 @@ class TtModelArgs:
 
     def _set_model_params(self, checkpoint_dir):
         if self.checkpoint_type == CheckpointType.Meta:
-            self._set_llama_params(checkpoint_dir)
+            self._set_params(checkpoint_dir)
         elif self.checkpoint_type == CheckpointType.HuggingFace:
             self._set_hf_params(checkpoint_dir)
         else:
             raise ValueError(f"Unsupported checkpoint type: {self.checkpoint_type}")
 
-    def _set_llama_params(self, checkpoint_dir):
+    def _set_params(self, checkpoint_dir):
         params_file = os.path.join(checkpoint_dir, "params.json")
         assert os.path.exists(params_file), f"params.json file not found at {params_file}"
         with open(params_file, "r") as f:
@@ -1174,9 +1174,9 @@ class TtModelArgs:
         text_prefix = "text_model." if self.is_vision() else ""
         layer_prefix = f"layers.{layer_num}." if layer_num is not None else ""
         module_map = {
-            "TtLlamaMLP": "feed_forward",
-            "TtLlamaAttention": "attention",
-            "TtTransformerBlock": "",
+            "MLP": "feed_forward",
+            "Attention": "attention",
+            "TransformerBlock": "",
             "": "",  # If no module is given, just get layer prefix
         }
         return text_prefix + layer_prefix + module_map[module_name]
@@ -1551,7 +1551,7 @@ class TtModelArgs:
     def encode_prompt(self, prompt_text, system_prompt_text=None, instruct=True):
         if self.checkpoint_type == CheckpointType.Meta:
             if instruct:
-                return encode_prompt_llama_instruct(self.tokenizer, prompt_text, system_prompt_text)
+                return encode_prompt_instruct(self.tokenizer, prompt_text, system_prompt_text)
             else:
                 return self.tokenizer.encode(prompt_text, bos=True, eos=False)
         else:

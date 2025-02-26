@@ -37,7 +37,7 @@ from models.utility_functions import skip_for_grayskull
     ],
     indirect=True,
 )
-def test_llama_image_transformer_inference(
+def test_image_transformer_inference(
     batch, num_chunks, mesh_device, is_global, use_program_cache, reset_seeds, ensure_gc
 ):
     dtype = ttnn.bfloat16

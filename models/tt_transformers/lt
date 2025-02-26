@@ -841,7 +841,7 @@ def run_entry_command(entry, screen_lock, output_entries, screen_needs_update):
     # Set environment variables
     env = os.environ.copy()
     env["FAKE_DEVICE"] = entry["device"]
-    env["LLAMA_DIR"] = get_llama_dir(entry["model"])
+    env["LLAMA_DIR"] = get_dir(entry["model"])
 
     # Open log file
     entry.open_log_file()
@@ -870,19 +870,19 @@ def run_entry_command(entry, screen_lock, output_entries, screen_needs_update):
         "model-quick": "pytest models/tt_transformers/tests/test_model.py -k 'performance-256 and quick'",
         "model-prefill": "pytest models/tt_transformers/tests/test_model_prefill.py -k performance-4096",
         # Vision tests (require 11B weights)
-        "vision-mlp": "pytest models/tt_transformers/tests/multimodal/test_llama_image_mlp.py",
-        "vision-attn": "pytest models/tt_transformers/tests/multimodal/test_llama_image_attention.py",
-        "vision-block": "pytest models/tt_transformers/tests/multimodal/test_llama_image_block.py",
-        "vision-xfmr": "pytest models/tt_transformers/tests/multimodal/test_llama_image_transformer.py",
-        "vision-xattn": "pytest models/tt_transformers/tests/multimodal/test_llama_cross_attention.py",
-        "vision-xblock": "pytest models/tt_transformers/tests/multimodal/test_llama_cross_block.py",
-        "vision-conv": "pytest models/tt_transformers/tests/multimodal/test_llama_conv2d_patch.py",
-        "vision-class": "pytest models/tt_transformers/tests/multimodal/test_llama_class_embedding.py",
-        "vision-tile-pos": "pytest models/tt_transformers/tests/multimodal/test_llama_tile_position_embedding.py",
-        "vision-pos": "pytest models/tt_transformers/tests/multimodal/test_llama_positional_embedding.py",
-        "vision-encoder": "pytest models/tt_transformers/tests/multimodal/test_llama_vision_encoder.py",
-        "vision-text-xfmr": "pytest models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_text.py",
-        "vision-vision-xfmr": "pytest models/tt_transformers/tests/multimodal/test_llama_cross_attention_transformer_vision.py",
+        "vision-mlp": "pytest models/tt_transformers/tests/multimodal/test_image_mlp.py",
+        "vision-attn": "pytest models/tt_transformers/tests/multimodal/test_image_attention.py",
+        "vision-block": "pytest models/tt_transformers/tests/multimodal/test_image_block.py",
+        "vision-xfmr": "pytest models/tt_transformers/tests/multimodal/test_image_transformer.py",
+        "vision-xattn": "pytest models/tt_transformers/tests/multimodal/test_cross_attention.py",
+        "vision-xblock": "pytest models/tt_transformers/tests/multimodal/test_cross_block.py",
+        "vision-conv": "pytest models/tt_transformers/tests/multimodal/test_conv2d_patch.py",
+        "vision-class": "pytest models/tt_transformers/tests/multimodal/test_class_embedding.py",
+        "vision-tile-pos": "pytest models/tt_transformers/tests/multimodal/test_tile_position_embedding.py",
+        "vision-pos": "pytest models/tt_transformers/tests/multimodal/test_positional_embedding.py",
+        "vision-encoder": "pytest models/tt_transformers/tests/multimodal/test_vision_encoder.py",
+        "vision-text-xfmr": "pytest models/tt_transformers/tests/multimodal/test_cross_attention_transformer_text.py",
+        "vision-vision-xfmr": "pytest models/tt_transformers/tests/multimodal/test_cross_attention_transformer_vision.py",
     }
 
     # Check if the command is a shortcut and replace it if necessary
@@ -909,7 +909,7 @@ def run_entry_command(entry, screen_lock, output_entries, screen_needs_update):
 
     # Write the command to the log file
     entry["log_file"].write(
-        f"FAKE_DEVICE={entry['device']} LLAMA_DIR={get_llama_dir(entry['model'])} ACTUAL_DEVICE={get_device()} {command_input}"
+        f"FAKE_DEVICE={entry['device']} LLAMA_DIR={get_dir(entry['model'])} ACTUAL_DEVICE={get_device()} {command_input}"
         + "\n"
     )
 
@@ -1061,7 +1061,7 @@ def parse_output_line(line, previous_line, current_status):
     return current_status, None, speed, ttft, pcc
 
 
-def get_llama_dir(model):
+def get_dir(model):
     llama_dir = {
         "1b": os.environ.get("LLAMA_32_1B_DIR", "/proj_sw/user_dev/llama32-data/Llama3.2-1B-Instruct"),
         "3b": os.environ.get("LLAMA_32_3B_DIR", "/proj_sw/user_dev/llama32-data/Llama3.2-3B-Instruct"),
