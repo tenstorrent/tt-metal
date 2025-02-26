@@ -55,7 +55,7 @@ void kernel_main() {
 
     constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
     constexpr bool dst_is_dram = get_compile_time_arg_val(1) == 1;
-#define src_stick_size_is_pow2 get_compile_time_arg_val(2) == 1
+    constexpr bool src_stick_size_is_pow2 = get_compile_time_arg_val(2) == 1;
 
 #if (src_stick_size_is_pow2)
     constexpr uint32_t src_log_base_2_of_page_size = get_compile_time_arg_val(3);
@@ -67,7 +67,7 @@ void kernel_main() {
     const InterleavedAddrGen<src0_is_dram> s0 = {.bank_base_address = src_addr, .page_size = unpadded_X_nbytes};
 #endif
 
-#define dst_stick_size_is_pow2 get_compile_time_arg_val(4) == 1
+    constexpr bool dst_stick_size_is_pow2 = get_compile_time_arg_val(4) == 1;
 #if (dst_stick_size_is_pow2)
     constexpr uint32_t dst_log_base_2_of_page_size = get_compile_time_arg_val(5);
     const InterleavedPow2AddrGen<dst_is_dram> s1 = {

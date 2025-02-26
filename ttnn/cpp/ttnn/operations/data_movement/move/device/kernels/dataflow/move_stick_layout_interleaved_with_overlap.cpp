@@ -39,7 +39,7 @@ void kernel_main() {
     constexpr bool src_is_dram = get_compile_time_arg_val(1) == 1;
     constexpr bool dst_is_dram = get_compile_time_arg_val(2) == 1;
 
-#define page_size_is_pow2 get_compile_time_arg_val(3) == 1
+    constexpr bool page_size_is_pow2 = get_compile_time_arg_val(3) == 1;
 
 #if (page_size_is_pow2)
     const InterleavedPow2AddrGen<src_is_dram> src_addrgen = {

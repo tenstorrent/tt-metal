@@ -18,7 +18,7 @@ void kernel_main() {
     // interleaved accessor args
     constexpr uint32_t out_is_dram = get_compile_time_arg_val(0);
 // WRITER COMPILE TIME ARGS
-#define block_size_is_one get_compile_time_arg_val(1) == 1
+    constexpr bool block_size_is_one = get_compile_time_arg_val(1) == 1;
     constexpr uint32_t block_size = get_compile_time_arg_val(2);
     constexpr uint32_t out_num_blocks_per_tensor = get_compile_time_arg_val(3);
     constexpr uint32_t out_num_c_per_block = get_compile_time_arg_val(4);

@@ -4,7 +4,7 @@
 
 #include "dataflow_api.h"
 
-#define DILATION_W get_compile_time_arg_val(3)
+constexpr uint32_t DILATION_W = get_compile_time_arg_val(3);
 void kernel_main() {
     constexpr uint32_t stride_h = get_compile_time_arg_val(0);
     constexpr uint32_t stride_w = get_compile_time_arg_val(1);

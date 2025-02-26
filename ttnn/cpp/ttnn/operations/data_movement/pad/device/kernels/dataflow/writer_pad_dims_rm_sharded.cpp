@@ -55,7 +55,7 @@ void kernel_main() {
     constexpr uint32_t num_zero_pad_sticks_read = get_compile_time_arg_val(7);
     constexpr uint32_t zero_pad_stick_size = get_compile_time_arg_val(8);
 
-#define not_pad_by_zero get_compile_time_arg_val(9) == 1
+    constexpr bool not_pad_by_zero = get_compile_time_arg_val(9) == 1;
 #if (not_pad_by_zero)
     constexpr uint32_t packed_pad_value = get_compile_time_arg_val(10);
     constexpr uint32_t row_major_min_bytes = get_compile_time_arg_val(11);
