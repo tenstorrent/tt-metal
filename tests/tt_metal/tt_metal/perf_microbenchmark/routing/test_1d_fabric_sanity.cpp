@@ -214,6 +214,26 @@ struct TestDevice {
     }
 
     void launch_program() { tt_metal::detail::LaunchProgram(IDevice_handle, program_handle, false); }
+
+    void wait_for_EDM_handshake() {
+        uint32_t expected_val = 0xA0B1C2D3;
+        for (auto& [eth_chan, edm_builder] : edm_workers) {
+            uint32_t edm_status = 0;
+            uint32_t edm_status_address = edm_builder.termination_signal_ptr + 4;
+            CoreCoord virtual_eth_core = tt::Cluster::instance().get_virtual_eth_core_from_channel(chip_id, eth_chan);
+            while (edm_status != expected_val) {
+                edm_status = tt::llrt::read_hex_vec_from_core(chip_id, virtual_eth_core, edm_status_address, 4)[0];
+            }
+        }
+    }
+
+    void terminate_EDM_kernels() {
+        tt::fabric::TerminationSignal termination_mode = tt::fabric::TerminationSignal::GRACEFULLY_TERMINATE;
+        for (auto& [eth_chan, edm_builder] : edm_workers) {
+            edm_builder.teardown_from_host(IDevice_handle, termination_mode);
+        }
+    }
+
     void wait_for_program_done() { tt_metal::detail::WaitProgramDone(IDevice_handle, program_handle); }
 };
 
@@ -223,6 +243,7 @@ struct TestFabricTraffic {
     TestDevice* tx_device;
     std::vector<TestDevice*> rx_devices;
     CoreCoord tx_logical_core;
+    CoreCoord tx_virtual_core;
     std::vector<CoreCoord> rx_logical_cores;
     std::vector<uint32_t> tx_results;
     std::vector<std::vector<uint32_t>> rx_results;
@@ -236,7 +257,9 @@ struct TestFabricTraffic {
 
         // TODO: select the optimal tx/rx worker based on the proximity from the ethernet core
         tx_logical_core = tx_device->select_random_worker_cores(1)[0];
+        tx_virtual_core = tx_device->IDevice_handle->worker_core_from_logical_core(tx_logical_core);
 
+        // TODO: for mcast, choose the same rx core
         for (auto& rx_device : rx_devices) {
             rx_logical_cores.push_back(rx_device->select_random_worker_cores(1)[0]);
         }
@@ -247,12 +270,14 @@ struct TestFabricTraffic {
         uint32_t packet_header_address = 0x25000;
         uint32_t source_l1_buffer_address = 0x30000;
         uint32_t packet_payload_size_bytes = 4096;
-        uint32_t num_packets = 5000;
+        uint32_t num_packets = 5;
         uint32_t test_results_address = 0x100000;
         uint32_t test_results_size_bytes = 128;
         uint32_t target_address = 0x30000;
+        uint32_t notfication_address = 0x24000;
 
         std::map<string, string> defines;
+        std::vector<uint32_t> zero_buf(1, 0);
 
         // build sender kernel
         std::vector<uint32_t> compile_args = {test_results_address, test_results_size_bytes, target_address};
@@ -271,6 +296,9 @@ struct TestFabricTraffic {
         for (auto& arg : edm_rt_args) {
             tx_runtime_args.push_back(arg);
         }
+
+        // zero out host notification address
+        tt::llrt::write_hex_vec_to_core(tx_device->chip_id, tx_virtual_core, zero_buf, notfication_address);
 
         auto tx_kernel = tt_metal::CreateKernel(
             tx_device->program_handle,
@@ -315,6 +343,38 @@ struct TestFabricTraffic {
             rx_logical_cores[0].y);
     }
 
+    void notify_tx_worker() {
+        uint32_t notfication_address = 0x24000;
+        std::vector<uint32_t> start_signal(1, 1);
+        tt::llrt::write_hex_vec_to_core(tx_device->chip_id, tx_virtual_core, start_signal, notfication_address);
+    }
+
+    void wait_for_workers_to_finish() {
+        uint32_t test_results_address = 0x100000;
+
+        // wait for rx workers
+        for (auto i = 0; i < rx_devices.size(); i++) {
+            CoreCoord rx_virtual_core =
+                rx_devices[i]->IDevice_handle->worker_core_from_logical_core(rx_logical_cores[i]);
+            while (true) {
+                auto rx_status =
+                    tt::llrt::read_hex_vec_from_core(rx_devices[i]->chip_id, rx_virtual_core, test_results_address, 4);
+                if ((rx_status[0] & 0xFFFF) != 0) {
+                    break;
+                }
+            }
+        }
+
+        // wait for tx worker
+        while (true) {
+            auto tx_status =
+                tt::llrt::read_hex_vec_from_core(tx_device->chip_id, tx_virtual_core, test_results_address, 4);
+            if ((tx_status[0] & 0xFFFF) != 0) {
+                break;
+            }
+        }
+    }
+
     bool collect_results() {
         uint32_t test_results_address = 0x100000;
         bool pass = true;
@@ -332,7 +392,6 @@ struct TestFabricTraffic {
 
         // collect rx results
         // TODO: avoid invoking the device handle directly
-        rx_results.resize(rx_devices.size());
         for (auto i = 0; i < rx_devices.size(); i++) {
             CoreCoord rx_virtual_core =
                 rx_devices[i]->IDevice_handle->worker_core_from_logical_core(rx_logical_cores[i]);
@@ -427,9 +486,8 @@ void generate_traffic_instances(
 
         // find the distance b/w tx and rx chips
         uint32_t num_hops = std::abs(std::distance(
-                                std::find(chips_in_fabric.begin(), chips_in_fabric.end(), tx_device.first),
-                                std::find(chips_in_fabric.begin(), chips_in_fabric.end(), rx_chip_id))) -
-                            1;
+            std::find(chips_in_fabric.begin(), chips_in_fabric.end(), tx_device.first),
+            std::find(chips_in_fabric.begin(), chips_in_fabric.end(), rx_chip_id)));
 
         TestFabricTraffic traffic_instance(
             tx_device.second,
@@ -466,9 +524,9 @@ struct TestLineFabric {
         for (auto i = 1; i < connection_info.size(); i++) {
             auto curr_chip_id = connection_info[i].first;
             auto prev_chip_id = connection_info[i - 1].first;
-            auto test_device = test_board.get_test_device(curr_chip_id);
 
             if (curr_chip_id == prev_chip_id) {
+                auto test_device = test_board.get_test_device(curr_chip_id);
                 test_device->connect_EDM_workers(connection_info[i - 1].second, connection_info[i].second);
             }
         }
@@ -478,9 +536,20 @@ struct TestLineFabric {
     }
 
     void build_kernels() {
-        // build worker kernels
         for (auto& instance : traffic_instances) {
             instance.build_worker_kernels();
+        }
+    }
+
+    void notify_tx_workers() {
+        for (auto& instance : traffic_instances) {
+            instance.notify_tx_worker();
+        }
+    }
+
+    void wait_for_workers_to_finish() {
+        for (auto& instance : traffic_instances) {
+            instance.wait_for_workers_to_finish();
         }
     }
 
@@ -574,11 +643,33 @@ int main(int argc, char** argv) {
             fabric.build_kernels();
         }
 
-        auto start = std::chrono::system_clock::now();
-
         // launch programs
         for (auto& [chip, device] : test_board.test_device_map) {
             device->launch_program();
+        }
+
+        // wait for EDM handshake to be done
+        for (auto& [chip, device] : test_board.test_device_map) {
+            device->wait_for_EDM_handshake();
+        }
+
+        // start traffic
+        for (auto& fabric : line_fabrics) {
+            fabric.notify_tx_workers();
+        }
+
+        auto start = std::chrono::system_clock::now();
+
+        // wait for all workers to finish
+        // if we only wait for rx workers and there is a data mismatch, rx kernels will terminate earlier
+        // while the tx kernels might still have an active connection with the EDM
+        for (auto& fabric : line_fabrics) {
+            fabric.wait_for_workers_to_finish();
+        }
+
+        // gracefully terminate EDM kernels
+        for (auto& [chip, device] : test_board.test_device_map) {
+            device->terminate_EDM_kernels();
         }
 
         // wait for program done

@@ -1234,6 +1234,10 @@ void kernel_main() {
         erisc::datamover::handshake::receiver_side_finish(handshake_addr, DEFAULT_HANDSHAKE_CONTEXT_SWITCH_TIMEOUT);
     }
 
+    // TODO: clean-up
+    tt_l1_ptr uint32_t* edm_status_address = reinterpret_cast<tt_l1_ptr uint32_t*>(get_compile_time_arg_val(14) + 4);
+    *edm_status_address = 0xA0B1C2D3;
+
     //////////////////////////////
     //////////////////////////////
     //        MAIN LOOP

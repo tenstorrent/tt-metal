@@ -35,6 +35,8 @@ void kernel_main() {
     uint32_t rx_noc_encoding = get_arg_val<uint32_t>(rt_args_idx++);
     uint32_t time_seed = get_arg_val<uint32_t>(rt_args_idx++);
 
+    volatile tt_l1_ptr uint32_t* host_notification_addr = reinterpret_cast<tt_l1_ptr uint32_t*>(0x24000);
+
     uint64_t noc_dest_addr = get_noc_addr_helper(rx_noc_encoding, target_address);
 
     auto fabric_connection =
@@ -43,24 +45,31 @@ void kernel_main() {
     zero_l1_buf(test_results, test_results_size_bytes);
     test_results[TT_FABRIC_STATUS_INDEX] = TT_FABRIC_STATUS_STARTED;
 
+    // wait for signal from host
+    // TODO: cleanup
+    while (*host_notification_addr == 0);
+
     // connect to edm
     fabric_connection.open();
 
-    // construct packet header?
-    auto* unicast_packet_header =
-        reinterpret_cast<PacketHeader*>(packet_header_buffer_address + sizeof(tt::fabric::PacketHeader) * 2);
+    // construct packet header
+    volatile auto* unicast_packet_header = reinterpret_cast<PacketHeader*>(packet_header_buffer_address);
     unicast_packet_header->to_chip_unicast(static_cast<uint8_t>(unicast_hops));
+    unicast_packet_header->to_noc_unicast_write(NocUnicastCommandHeader{noc_dest_addr}, packet_payload_size_bytes);
 
     uint64_t start_timestamp = get_timestamp();
 
     // loop over for num packets
     for (uint32_t i = 0; i < num_packets; i++) {
-        unicast_packet_header->to_noc_unicast_write(NocUnicastCommandHeader{noc_dest_addr}, packet_payload_size_bytes);
 #ifndef BENCHMARK_MODE
+        unicast_packet_header->to_noc_unicast_write(NocUnicastCommandHeader{noc_dest_addr}, packet_payload_size_bytes);
         // fill packet data for sanity testing
         tt_l1_ptr uint32_t* start_addr = reinterpret_cast<tt_l1_ptr uint32_t*>(source_l1_buffer_address);
         time_seed = prng_next(time_seed);
         fill_packet_data(start_addr, packet_payload_size_bytes / 16, time_seed);
+        tt_l1_ptr uint32_t* last_word_addr =
+            reinterpret_cast<tt_l1_ptr uint32_t*>(source_l1_buffer_address + packet_payload_size_bytes - 4);
+        noc_dest_addr += packet_payload_size_bytes;
 #endif
         fabric_connection.wait_for_empty_write_slot();
         fabric_connection.send_payload_without_header_non_blocking_from_address(
