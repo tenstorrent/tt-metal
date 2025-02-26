@@ -2,33 +2,32 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+
 #pragma once
 
+#include "ckernel_include.h"
+#include "ckernel_template.h"
 #include <type_traits>
 
-#include "ckernel_globals.h"
-#include "ckernel_include.h"
-#include "ckernel_sfpu.h"
-#include "ckernel_template.h"
 #include "cmath_common.h"
 #include "llk_math_common.h"
+#include "ckernel_globals.h"
+#include "ckernel_sfpu.h"
 
 using namespace ckernel;
-
 // local function declarations
-inline void eltwise_binary_sfpu_configure_addrmod() {
+inline void eltwise_binary_sfpu_configure_addrmod(){
     // NOTE: this kernel is typically used in conjunction with
     //       A2D, which is using ADDR_MOD_0 and ADDR_MOD_2, so use one
     //       that doesn't conflict!
 
-    addr_mod_t {
+    addr_mod_t{
         .srca = {.incr = 0},
         .srcb = {.incr = 0},
         .dest = {.incr = 0},
-    }
-        .set(ADDR_MOD_7);
-}
+    }.set(ADDR_MOD_7);
 
+}
 inline void eltwise_binary_sfpu_configure_mop();
 
 template <DstSync Dst>

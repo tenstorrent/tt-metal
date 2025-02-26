@@ -4,15 +4,18 @@
 
 #pragma once
 
-#include "ckernel.h"
 #include "ckernel_defs.h"
+#include "ckernel.h"
 #include "noc_nonblocking_api.h"
+
 #include "sfpi.h"
 
 using namespace sfpi;
 
-namespace ckernel {
-namespace sfpu {
+namespace ckernel
+{
+namespace sfpu
+{
 
 template <bool APPROXIMATION_MODE, bool SIGN_MAGNITUDE_FORMAT, int ITERATIONS>
 inline void _add_int32_(const uint dst_offset) {
@@ -20,10 +23,10 @@ inline void _add_int32_(const uint dst_offset) {
     // because TTI_SFPIADD requires 2's complement format in LREGs
     constexpr int sfpload_instr_mod = SIGN_MAGNITUDE_FORMAT ? 12 : 4;
 
-// Operand A is input1 (int32)
-// Operand B is input2 (int32)
-// Output is int32
-#pragma GCC unroll 8
+    // Operand A is input1 (int32)
+    // Operand B is input2 (int32)
+    // Output is int32
+    #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         // operand A - int32
         TTI_SFPLOAD(0, sfpload_instr_mod, 3, 0);

@@ -4,19 +4,23 @@
 
 #pragma once
 
-#include "ckernel.h"
 #include "ckernel_defs.h"
+#include "ckernel.h"
 #include "ckernel_sfpu_exp.h"
 #include "ckernel_sfpu_load_config.h"
+
 #include "sfpi.h"
 
 using namespace sfpi;
 
-namespace ckernel {
-namespace sfpu {
+namespace ckernel
+{
+namespace sfpu
+{
 
 template <bool APPROXIMATION_MODE>
-inline vFloat _calculate_gelu_core_(vFloat in) {
+inline vFloat _calculate_gelu_core_(vFloat in)
+{
     // SFPU microcode:
     // result = (APPROX_MODE == 1)
     //   ? (1 + erf(x/sqrt(2)))
@@ -34,7 +38,8 @@ inline vFloat _calculate_gelu_core_(vFloat in) {
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _calculate_gelu_(const int iterations) {
+inline void _calculate_gelu_(const int iterations)
+{
     vUInt l0 = l_reg[LRegs::LReg0];
     vUInt l1 = l_reg[LRegs::LReg1];
     vUInt l2 = l_reg[LRegs::LReg2];
@@ -42,8 +47,9 @@ inline void _calculate_gelu_(const int iterations) {
     vUInt l5 = l_reg[LRegs::LReg5];
     vUInt l6 = l_reg[LRegs::LReg6];
 
-#pragma GCC unroll 8
-    for (int d = 0; d < iterations; d++) {
+    #pragma GCC unroll 8
+    for (int d = 0; d < iterations; d++)
+    {
         // vFloat in = dst_reg[0];
         // vFloat result = calculate_gelu_core<APPROXIMATION_MODE>(in);
 
@@ -51,24 +57,24 @@ inline void _calculate_gelu_(const int iterations) {
         // result = lut(result, l0, l1, l2);
         // result = half_in * result + half_in;
 
-        // dst_reg[0] = result;
+        //dst_reg[0] = result;
 
-        vFloat in      = dst_reg[0];
-        vFloat half    = vConstFloatPrgm0;
+        vFloat in = dst_reg[0];
+        vFloat half = vConstFloatPrgm0;
         vFloat half_in = in * half;
-        vFloat result  = lut2_sign(in, l0, l1, l2, l4, l5, l6);
-        result         = half_in + result;
+        vFloat result = lut2_sign(in, l0, l1, l2, l4, l5, l6);
+        result = half_in + result;
 
         dst_reg[0] = result;
 
         dst_reg++;
 
         // dst_reg++;
-        // TTI_SFPLOAD(3, 0, 1/*load addr mode*/,0);    // load from dest
+        //TTI_SFPLOAD(3, 0, 1/*load addr mode*/,0);    // load from dest
         ////TTI_SFPMUL(3,11,9,7,0);           // lreg7 = 0.5*lreg3
-        // TTI_SFPLUTFP32(7, 2);                // lreg7= LUT(3)
-        // TTI_SFPMAD(3,12,7,3,0);            // lreg3 = 0.5*lreg3+lregm7
-        // TTI_SFPSTORE(3, 0, 3/*store_addr_mod3*/, 0);   // and INCRWC by 4 using mode 3
+        //TTI_SFPLUTFP32(7, 2);                // lreg7= LUT(3)
+        //TTI_SFPMAD(3,12,7,3,0);            // lreg3 = 0.5*lreg3+lregm7
+        //TTI_SFPSTORE(3, 0, 3/*store_addr_mod3*/, 0);   // and INCRWC by 4 using mode 3
     }
 
     l_reg[LRegs::LReg0] = l0;
@@ -80,7 +86,8 @@ inline void _calculate_gelu_(const int iterations) {
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _calculate_gelu_derivative_(const int iterations) {
+inline void _calculate_gelu_derivative_(const int iterations)
+{
     if constexpr (APPROXIMATION_MODE) {
         constexpr int lut_mode = 1; // SFPLUTFP32_MOD0_FP16_6ENTRY_TABLE1
 
@@ -91,15 +98,19 @@ inline void _calculate_gelu_derivative_(const int iterations) {
         vUInt l5 = l_reg[LRegs::LReg5];
         vUInt l6 = l_reg[LRegs::LReg6];
 
-// SFPU microcode:
-#pragma GCC unroll 0
-        for (int d = 0; d < iterations; d++) {
+        // SFPU microcode:
+        #pragma GCC unroll 0
+        for (int d = 0; d < iterations; d++)
+        {
             vFloat val = dst_reg[0];
-            val        = lut2(val, l0, l1, l2, l4, l5, l6, lut_mode);
-            v_if(val < 0.0F) { val = val + 1.0f; }
+            val = lut2(val, l0, l1, l2, l4, l5, l6, lut_mode);
+            v_if (val < 0.0F) {
+                val = val + 1.0f;
+            }
             v_endif;
             dst_reg[0] = val;
             dst_reg++;
+
         }
 
         l_reg[LRegs::LReg0] = l0;
@@ -114,10 +125,11 @@ inline void _calculate_gelu_derivative_(const int iterations) {
         vUInt l0 = l_reg[LRegs::LReg0];
         vUInt l1 = l_reg[LRegs::LReg1];
 
-// SFPU microcode:
-#pragma GCC unroll 0
-        for (int d = 0; d < iterations; d++) {
-            vFloat in             = dst_reg[0];
+        // SFPU microcode:
+        #pragma GCC unroll 0
+        for (int d = 0; d < iterations; d++)
+        {
+            vFloat in = dst_reg[0];
             vFloat neg_half_sq_in = in * in * -0.5f;
 
             // exp = e^(val)
@@ -140,7 +152,8 @@ inline void _calculate_gelu_derivative_(const int iterations) {
 }
 
 template <bool APPROXIMATION_MODE>
-inline void _init_gelu_() {
+inline void _init_gelu_()
+{
     vConstFloatPrgm0 = 0.5f;
 
     // // >= 3.0f
@@ -161,18 +174,19 @@ inline void _init_gelu_() {
     // // 0.0f -> 0.5f
     // lreg0_lo=0.1928f;//322B
     // lreg4_lo=-0.0150f;//A3AE
-    _sfpu_load_imm32_(0, 0x37E7322B);
-    _sfpu_load_imm32_(4, 0xB12286D8);
+    _sfpu_load_imm32_(0,0x37E7322B);
+    _sfpu_load_imm32_(4,0xB12286D8);
 
-    _sfpu_load_imm32_(1, 0x38E138F3);
-    _sfpu_load_imm32_(5, 0xB437B479);
+    _sfpu_load_imm32_(1,0x38E138F3);
+    _sfpu_load_imm32_(5,0xB437B479);
 
-    _sfpu_load_imm32_(2, 0x38003852);
-    _sfpu_load_imm32_(6, 0x7c00afa4);
+    _sfpu_load_imm32_(2,0x38003852);
+    _sfpu_load_imm32_(6,0x7c00afa4);
 }
 
 template <bool APPROXIMATION_MODE>
-inline void _init_gelu_derivative_() {
+inline void _init_gelu_derivative_()
+{
     vConstFloatPrgm0 = 1.442695f; // ln2_recip
     vConstFloatPrgm1 = 2.0f;
     vConstFloatPrgm2 = 0.863281f;

@@ -3,13 +3,14 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
-#include "ckernel.h"
-#include "ckernel_defs.h"
-#include "ckernel_globals.h"
-#include "ckernel_template.h"
-#include "cunpack_common.h"
 #include "llk_io_unpack.h"
 #include "llk_param_structs.h"
+
+#include "ckernel.h"
+#include "ckernel_defs.h"
+#include "ckernel_template.h"
+#include "cunpack_common.h"
+#include "ckernel_globals.h"
 
 // Need this for hw configure
 #include "llk_unpack_A.h"
@@ -18,6 +19,7 @@ using namespace ckernel;
 using namespace ckernel::unpacker;
 
 inline void llk_unpack_transpose_yz_mop_config() {
+
 #if SKIP_UNP == 1
     static constexpr uint unpack_srca = TT_OP_NOP;
 #else
@@ -27,24 +29,22 @@ inline void llk_unpack_transpose_yz_mop_config() {
     ckernel_unpack_template tmp = ckernel_unpack_template::lA(unpack_srca);
     tmp.program(instrn_buffer);
 }
-
-inline void llk_unpack_transpose_yz_init(uint32_t within_face_16x16_transpose = 0) {
+inline void llk_unpack_transpose_yz_init(uint32_t within_face_16x16_transpose=0) {
     TT_LLK_DUMP("llk_unpack_transpose_yz_init({})", within_face_16x16_transpose);
     llk_unpack_transpose_yz_mop_config();
 }
-
 inline void llk_unpack_transpose_yz(std::uint32_t operand, std::uint32_t tile_index, std::uint32_t phase) {
     TT_LLK_DUMP("llk_unpack_transpose_yz({}, {}, {})", operand, tile_index, phase);
-    std::uint32_t input          = get_operand_id(operand);
-    std::uint32_t base_address   = operands[input].f.fifo_rd_ptr;
+    std::uint32_t input = get_operand_id(operand);
+    std::uint32_t base_address = operands[input].f.fifo_rd_ptr;
     std::uint32_t offset_address = MUL_TILE_SIZE_AND_INDEX((uint)unpack_src_format[input], tile_index);
-    std::uint32_t address        = base_address + offset_address;
+    std::uint32_t address = base_address + offset_address;
 
     // Clear z/w start counters
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
 
     // Program srcA and srcB base addresses
-    volatile uint tt_reg_ptr *cfg = get_cfg_pointer(); // get pointer to registers for current state ID
+    volatile uint tt_reg_ptr *cfg = get_cfg_pointer();  // get pointer to registers for current state ID
 
     // Wait for free context
     wait_for_next_context(2);

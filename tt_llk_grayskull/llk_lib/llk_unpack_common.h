@@ -6,8 +6,8 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "cunpack_common.h"
 #include "fw_debug.h"
+#include "cunpack_common.h"
 
 #ifdef PERF_DUMP
 #include "ckernel_perf_api.h"
@@ -17,6 +17,7 @@ using namespace ckernel;
 using namespace ckernel::unpacker;
 
 inline void _llk_zero_operand_(const std::uint32_t base_address, const std::uint32_t size) {
+
     TT_SETDMAREG(0, 0, 0, LO_16(p_gpr_unpack::OPERAND_OFFSET_ADDR));
     TT_SETDMAREG(0, 0, 0, HI_16(p_gpr_unpack::OPERAND_OFFSET_ADDR));
 
@@ -34,34 +35,37 @@ inline void _llk_zero_operand_(const std::uint32_t base_address, const std::uint
     }
 }
 
-template <bool mail2math = true, bool mail2pack = true>
+template <bool mail2math=true, bool mail2pack=true>
 inline void _llk_unpack_get_tile_(const std::uint32_t address, std::uint32_t *p_tile) {
-    std::uint32_t byte_address = (address) << 4;
+    std::uint32_t byte_address = (address)<<4;
 
     if constexpr (mail2math) {
-        mailbox_write(ThreadId::MathThreadId, byte_address);
-        semaphore_post(semaphore::UNPACK_OPERAND_SYNC);
+       mailbox_write(ThreadId::MathThreadId, byte_address);
+       semaphore_post(semaphore::UNPACK_OPERAND_SYNC);
     }
 
     if constexpr (mail2pack) {
-        mailbox_write(ThreadId::PackThreadId, byte_address);
-        semaphore_post(semaphore::UNPACK_OPERAND_SYNC);
+       mailbox_write(ThreadId::PackThreadId, byte_address);
+       semaphore_post(semaphore::UNPACK_OPERAND_SYNC);
     }
 
     *p_tile = byte_address;
 }
 
-template <bool mail2math = true, bool mail2pack = true>
+template <bool mail2math=true, bool mail2pack=true>
 inline void _llk_unpack_release_tile_() {
     while (semaphore_read(semaphore::UNPACK_OPERAND_SYNC) > 0);
 }
 
-inline void _llk_unpack_debug_dump_(std::uint8_t *data, std::uint32_t byte_size) { debug_dump(data, byte_size); }
+inline void _llk_unpack_debug_dump_(std::uint8_t *data, std::uint32_t byte_size) {
+    debug_dump(data, byte_size);
+}
 
-inline void _llk_unpack_debug_dump_seek_(std::uint8_t offset) { debug_dump_seek(offset); }
+inline void _llk_unpack_debug_dump_seek_(std::uint8_t offset) {
+    debug_dump_seek(offset);
+}
 
-inline void _llk_unpack_reconfig_data_format_srca_impl_(
-    const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format) {
+inline void _llk_unpack_reconfig_data_format_srca_impl_(const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format) {
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK0);
 
     uint32_t alu_config_data = gl_alu_format_spec_reg;
@@ -81,8 +85,7 @@ inline void _llk_unpack_reconfig_data_format_srca_impl_(
         UNP0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32);
 }
 
-inline void _llk_unpack_reconfig_data_format_srcb_impl_(
-    const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format) {
+inline void _llk_unpack_reconfig_data_format_srcb_impl_(const std::uint32_t unpack_src_format, const std::uint32_t unpack_dst_format) {
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK1);
 
     uint32_t alu_config_data = gl_alu_format_spec_reg;
@@ -103,15 +106,13 @@ inline void _llk_unpack_reconfig_data_format_srcb_impl_(
 }
 
 inline void _llk_unpack_reconfig_data_format_impl_(
-    const std::uint32_t unpA_src_format,
-    const std::uint32_t unpB_src_format,
-    const std::uint32_t unpA_dst_format,
-    const std::uint32_t unpB_dst_format) {
+    const std::uint32_t unpA_src_format, const std::uint32_t unpB_src_format,
+    const std::uint32_t unpA_dst_format, const std::uint32_t unpB_dst_format) {
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK);
 
-    uint alu_src_format =
-        (unpB_dst_format << ALU_FORMAT_SPEC_REG1_SrcB_SHAMT) | (unpA_dst_format << ALU_FORMAT_SPEC_REG0_SrcA_SHAMT);
-    uint     alu_src_mask    = ALU_FORMAT_SPEC_REG0_SrcA_MASK | ALU_FORMAT_SPEC_REG1_SrcB_MASK;
+    uint alu_src_format = (unpB_dst_format << ALU_FORMAT_SPEC_REG1_SrcB_SHAMT) |
+                          (unpA_dst_format << ALU_FORMAT_SPEC_REG0_SrcA_SHAMT);
+    uint alu_src_mask = ALU_FORMAT_SPEC_REG0_SrcA_MASK | ALU_FORMAT_SPEC_REG1_SrcB_MASK;
     uint32_t alu_config_data = gl_alu_format_spec_reg;
 
     gl_alu_format_spec_reg = cfg_rmw_mmio_rd_tensix_wr(
@@ -131,11 +132,11 @@ inline void _llk_unpack_reconfig_data_format_impl_(
         UNP1_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32);
 }
 
-inline void _llk_unpack_dbg_feature_disable_() {
+inline void _llk_unpack_dbg_feature_disable_(){
     TT_LLK_DUMP("llk_unpack_dbg_feature_disable()");
-    // TBD
+    //TBD
 }
 
-inline void _llk_unpack_clear_dbg_feature_disable_() {
-    reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 0); // Unset debug feature disable
+inline void _llk_unpack_clear_dbg_feature_disable_(){
+    reg_write(RISCV_DEBUG_REG_DBG_FEATURE_DISABLE, 0);     // Unset debug feature disable
 }

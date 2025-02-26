@@ -4,25 +4,31 @@
 
 #pragma once
 
-#include "ckernel.h"
 #include "ckernel_defs.h"
+#include "ckernel.h"
 #include "ckernel_sfpu_converter.h"
+
 #include "sfpi.h"
 
 using namespace sfpi;
 
-namespace ckernel {
-namespace sfpu {
+namespace ckernel
+{
+namespace sfpu
+{
 
 template <bool APPROXIMATION_MODE>
-inline void _calculate_lrelu_(const int iterations, uint slope) {
+inline void _calculate_lrelu_(const int iterations, uint slope)
+{
     vFloat s = Converter::to_float(slope);
 
-#pragma GCC unroll 0
+    #pragma GCC unroll 0
     for (int d = 0; d < iterations; d++) {
         vFloat v = dst_reg[0];
 
-        v_if(v < 0.0f) { v *= s; }
+        v_if (v < 0.0f) {
+            v *= s;
+        }
         v_endif;
 
         dst_reg[0] = v;
@@ -32,13 +38,19 @@ inline void _calculate_lrelu_(const int iterations, uint slope) {
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _relu_max_(const int iterations, uint uint_threshold) {
+inline void _relu_max_(const int iterations, uint uint_threshold)
+{
     vFloat threshold = s2vFloat16(uint_threshold, s2vFloat16::fp16a);
-    for (int d = 0; d < iterations; d++) {
+    for (int d = 0; d < iterations; d++)
+    {
         vFloat a = dst_reg[0];
-        v_if(a > threshold) { a = threshold; }
+        v_if(a > threshold) {
+            a = threshold;
+        }
         v_endif;
-        v_if(a < 0.0f) { a = 0.0f; }
+        v_if(a < 0.0f) {
+            a = 0.0f;
+        }
         v_endif;
         dst_reg[0] = a;
         dst_reg++;
@@ -46,11 +58,15 @@ inline void _relu_max_(const int iterations, uint uint_threshold) {
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _relu_min_(const int iterations, uint uint_threshold) {
+inline void _relu_min_(const int iterations, uint uint_threshold)
+{
     vFloat threshold = s2vFloat16(uint_threshold, s2vFloat16::fp16a);
-    for (int d = 0; d < iterations; d++) {
+    for (int d = 0; d < iterations; d++)
+    {
         vFloat a = dst_reg[0];
-        v_if(a < threshold) { a = 0.0f; }
+        v_if(a < threshold) {
+            a = 0.0f;
+        }
         v_endif;
         dst_reg[0] = a;
         dst_reg++;

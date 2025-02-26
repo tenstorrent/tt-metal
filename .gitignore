@@ -1,9 +1,0 @@
-build/
-*.o
-*.elf
-*.d/
-.cache/**
-.envrc
-.vscode/
-*.log
-*.csv
