@@ -238,3 +238,48 @@ def test_silu_llm(
         shard_orientation,
         op,
     )
+
+
+@pytest.mark.parametrize(
+    "batch_size, input_channels, input_height, input_width, ncores, grid_size, shard_strategy, shard_orientation",
+    (
+        # 640x640 resolution
+        (1, 32, 320, 320, 64, (14, 8), ttnn.ShardStrategy.HEIGHT, ttnn.ShardOrientation.ROW_MAJOR),
+        (1, 64, 320, 320, 64, (14, 8), ttnn.ShardStrategy.HEIGHT, ttnn.ShardOrientation.ROW_MAJOR),
+        (1, 32, 160, 160, 64, (14, 8), ttnn.ShardStrategy.HEIGHT, ttnn.ShardOrientation.ROW_MAJOR),
+        (1, 128, 80, 80, 64, (14, 8), ttnn.ShardStrategy.HEIGHT, ttnn.ShardOrientation.ROW_MAJOR),
+        (1, 64, 80, 80, 64, (14, 8), ttnn.ShardStrategy.HEIGHT, ttnn.ShardOrientation.ROW_MAJOR),
+        (1, 256, 40, 40, 64, (14, 8), ttnn.ShardStrategy.HEIGHT, ttnn.ShardOrientation.ROW_MAJOR),
+        (1, 128, 40, 40, 64, (14, 8), ttnn.ShardStrategy.HEIGHT, ttnn.ShardOrientation.ROW_MAJOR),
+        (1, 512, 20, 20, 64, (14, 8), ttnn.ShardStrategy.HEIGHT, ttnn.ShardOrientation.ROW_MAJOR),
+        (1, 256, 20, 220, 64, (14, 8), ttnn.ShardStrategy.HEIGHT, ttnn.ShardOrientation.ROW_MAJOR),
+        (1, 64, 40, 40, 64, (14, 8), ttnn.ShardStrategy.HEIGHT, ttnn.ShardOrientation.ROW_MAJOR),
+        (1, 64, 20, 20, 64, (14, 8), ttnn.ShardStrategy.HEIGHT, ttnn.ShardOrientation.ROW_MAJOR),
+        (1, 128, 20, 20, 64, (14, 8), ttnn.ShardStrategy.HEIGHT, ttnn.ShardOrientation.ROW_MAJOR),
+    ),
+)
+@pytest.mark.parametrize("op", ["silu"])
+def test_silu_yolov8s_world(
+    device,
+    batch_size,
+    input_channels,
+    input_height,
+    input_width,
+    grid_size,
+    ncores,
+    shard_strategy,
+    shard_orientation,
+    op,
+):
+    run_elt_silu_relu(
+        device,
+        batch_size,
+        input_channels,
+        input_height,
+        input_width,
+        grid_size,
+        ncores,
+        shard_strategy,
+        shard_orientation,
+        op,
+    )
