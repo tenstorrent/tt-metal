@@ -54,8 +54,8 @@ void set_or_update_runtime_arguments(
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_output_tiles, row_major);
 
     auto cores = grid_to_cores(num_cores_total, num_cores_x, num_cores_y, row_major);
-    constexpr size_t num_reader_args = 11;
-    constexpr size_t num_writer_args = 14;
+    constexpr size_t num_reader_args = 9;
+    constexpr size_t num_writer_args = 12;
     constexpr size_t num_kernel_args = 3;
     for (uint32_t i = 0, start_tile_id = 0; i < num_cores_total; i++) {
         const auto& core = cores[i];
@@ -87,9 +87,7 @@ void set_or_update_runtime_arguments(
             aHt * aWt * aC * (aN > 1),
             aHt * aWt * (aC > 1),
             cN,
-            cC,
-            cHt,
-            cWt};
+            cC};
         handle_args(program, reader_kernel_id, core, reader_runtime_args);
 
         const auto weight_addr = weight_has_value ? weight_tensor->buffer()->address() : 0;
@@ -106,9 +104,7 @@ void set_or_update_runtime_arguments(
             bHt * bWt * bC * (bN > 1),
             bHt * bWt * (bC > 1),
             cN,
-            cC,
-            cHt,
-            cWt};
+            cC};
         handle_args(program, writer_kernel_id, core, writer_runtime_args);
 
         auto counter = start_tile_id % cHtWt;
