@@ -16,7 +16,6 @@
 #include "ttnn/core.hpp"
 #include "ttnn/distributed/api.hpp"
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/mesh_common.hpp>
 #include "tools/profiler/op_profiler.hpp"
 
 namespace ttnn {

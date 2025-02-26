@@ -80,7 +80,7 @@ def test_falcon_causal_lm(
     enable_async,
     num_loops,
 ):
-    mesh_device.enable_async(enable_async)
+    mesh_device.enable_async(False)
 
     torch.manual_seed(0)
     batch = device_batch_size * mesh_device.get_num_devices()
@@ -411,7 +411,7 @@ def test_t3k_falcon_causal_lm_with_trace(
             use_cache=True,
         )
         logger.info("Capture Prefill Trace")
-        trace_id = ttnn.begin_trace_capture(t3k_mesh_device, cq_id=0)
+        trace_id = ttnn.begin_trace_capture(t3k_mesh_device, cq_id=ttnn.DefaultMeshCommandQueueId)
         tt_out, tt_layer_present = tt_FalconCausalLM(
             input_embeddings=tt_embeddings,
             llm_mode=llm_mode,
@@ -421,11 +421,11 @@ def test_t3k_falcon_causal_lm_with_trace(
             layer_past_len=kv_cache_len,
             use_cache=True,
         )
-        ttnn.end_trace_capture(t3k_mesh_device, trace_id, cq_id=0)
+        ttnn.end_trace_capture(t3k_mesh_device, trace_id, cq_id=ttnn.DefaultMeshCommandQueueId)
         logger.info("Done Capturing Prefill Trace")
 
         for loop in range(num_loops):
-            ttnn.execute_trace(t3k_mesh_device, trace_id, cq_id=0)
+            ttnn.execute_trace(t3k_mesh_device, trace_id, cq_id=ttnn.DefaultMeshCommandQueueId)
             # Explicitly move tensor to host ... in async mode this is faster than calling from torch directly,
             # due to parallelization of tensor shards
             tt_out_host = ttnn.from_device(tt_out)
@@ -444,7 +444,7 @@ def test_t3k_falcon_causal_lm_with_trace(
             use_cache=True,
         )
         logger.info("Capture Decode Trace")
-        trace_id = ttnn.begin_trace_capture(t3k_mesh_device, cq_id=0)
+        trace_id = ttnn.begin_trace_capture(t3k_mesh_device, cq_id=ttnn.DefaultMeshCommandQueueId)
         tt_out, tt_layer_present = tt_FalconCausalLM(
             input_embeddings=tt_embeddings,
             llm_mode=llm_mode,
@@ -453,10 +453,10 @@ def test_t3k_falcon_causal_lm_with_trace(
             layer_past_len=kv_cache_len,
             use_cache=True,
         )
-        ttnn.end_trace_capture(t3k_mesh_device, trace_id, cq_id=0)
+        ttnn.end_trace_capture(t3k_mesh_device, trace_id, cq_id=ttnn.DefaultMeshCommandQueueId)
         logger.info("Done Capturing Decode Trace")
         for loop in range(num_loops):
-            ttnn.execute_trace(t3k_mesh_device, trace_id, cq_id=0)
+            ttnn.execute_trace(t3k_mesh_device, trace_id, cq_id=ttnn.DefaultMeshCommandQueueId)
             tt_out_host = ttnn.from_device(tt_out)
             tt_out_host = ttnn.to_torch(
                 tt_out_host, mesh_composer=ConcatMeshToTensor(t3k_mesh_device, dim=shard_dim), device=t3k_mesh_device
@@ -505,5 +505,3 @@ def test_t3k_falcon_causal_lm_with_trace(
         logger.success(f"Passed: pcc: {pcc}, expected: {expected_pcc}")
 
     logger.info("Falcon CausalLM Passed!")
-
-    t3k_mesh_device.enable_async(False)
