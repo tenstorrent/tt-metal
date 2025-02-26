@@ -173,7 +173,7 @@ source python_env/bin/activate
 ---
 
 ### Option 2: From Docker Release Image
-Installing from Docker Release Image is the quickest way to access our APIs and to start runnig AI models.
+Installing from Docker Release Image is the quickest way to access our APIs and to start running AI models.
 
 Download the latest Docker release from our [Docker registry](https://github.com/orgs/tenstorrent/packages?q=tt-metalium-ubuntu&tab=packages&q=tt-metalium-ubuntu-20.04-amd64-release) page
 
