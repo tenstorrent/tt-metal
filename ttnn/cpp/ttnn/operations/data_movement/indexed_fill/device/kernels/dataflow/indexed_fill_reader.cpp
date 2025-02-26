@@ -21,7 +21,7 @@ void kernel_main() {
     constexpr bool batch_ids_is_dram = get_compile_time_arg_val(2) == 1;
     constexpr bool src0_is_dram = get_compile_time_arg_val(3) == 1;
     constexpr bool src1_is_dram = get_compile_time_arg_val(4) == 1;
-#define src_stick_size_is_pow2 get_compile_time_arg_val(5) == 1
+    constexpr bool src_stick_size_is_pow2 = get_compile_time_arg_val(5) == 1;
 #if (src_stick_size_is_pow2)
     constexpr uint32_t src_log_base_2_of_page_size = get_compile_time_arg_val(6);
     const InterleavedPow2AddrGen<src0_is_dram> s0 = {

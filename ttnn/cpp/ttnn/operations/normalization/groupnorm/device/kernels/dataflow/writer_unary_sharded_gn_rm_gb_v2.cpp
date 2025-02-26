@@ -27,7 +27,7 @@ void kernel_main() {
     constexpr uint32_t num_batches_per_core = get_compile_time_arg_val(11);
     constexpr uint32_t block_w = get_compile_time_arg_val(12);
 
-#define stick_size_is_pow2 get_compile_time_arg_val(13) == 1
+    constexpr bool stick_size_is_pow2 = get_compile_time_arg_val(13) == 1;
 #if (stick_size_is_pow2)
     constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(14);
 #else

@@ -34,7 +34,7 @@ void kernel_main() {
     const InterleavedAddrGenFast<src0_is_dram> src_a = {
         .bank_base_address = src_addr, .page_size = src0_tile_bytes, .data_format = src0_data_format};
 
-#define stick_size_is_pow2 get_compile_time_arg_val(5) == 1
+    constexpr bool stick_size_is_pow2 = get_compile_time_arg_val(5) == 1;
 #if (stick_size_is_pow2)
     const uint32_t log_base_2_of_page_size = get_compile_time_arg_val(6);
 #else

@@ -17,7 +17,7 @@ void kernel_main() {
     constexpr uint32_t cb_attn = tt::CBIndex::c_3;
     uint32_t mask_tile_bytes = get_tile_size(cb_attn);
 
-#define stick_size_is_pow2 get_compile_time_arg_val(2) == 1
+    constexpr bool stick_size_is_pow2 = get_compile_time_arg_val(2) == 1;
 #if (stick_size_is_pow2)
     constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(3);
 #else

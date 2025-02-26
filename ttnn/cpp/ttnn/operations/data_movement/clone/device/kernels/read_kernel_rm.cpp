@@ -13,7 +13,7 @@ void kernel_main() {
     constexpr uint32_t src_cb_id = get_compile_time_arg_val(0);
     constexpr bool input_is_dram = get_compile_time_arg_val(1) == 1;
 
-#define src_stick_size_is_power_of_two get_compile_time_arg_val(2) == 1
+    constexpr bool src_stick_size_is_power_of_two = get_compile_time_arg_val(2) == 1;
 #if (src_stick_size_is_power_of_two)
     constexpr uint32_t src_log_base_2_of_page_size = get_compile_time_arg_val(3);
     const InterleavedPow2AddrGen<input_is_dram> s = {

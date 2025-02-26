@@ -22,7 +22,7 @@ void kernel_main() {
 
     const uint32_t num_tiles_per_row = padded_X_size >> (FLOAT32_DTYPE ? 7 : 6);
 
-#define stick_size_is_power_of_two get_compile_time_arg_val(1) == 1
+    constexpr bool stick_size_is_power_of_two = get_compile_time_arg_val(1) == 1;
 
 #if (stick_size_is_power_of_two)
     constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(2);

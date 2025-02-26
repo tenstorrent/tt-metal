@@ -17,7 +17,7 @@ void kernel_main() {
     constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(0);
 
     constexpr bool dst0_is_dram = get_compile_time_arg_val(1) == 1;
-#define dst_stick_size_is_pow2 get_compile_time_arg_val(2) == 1
+    constexpr bool dst_stick_size_is_pow2 = get_compile_time_arg_val(2) == 1;
 #if (dst_stick_size_is_pow2)
     constexpr uint32_t dst_log_base_2_of_page_size = get_compile_time_arg_val(3);
     const InterleavedPow2AddrGen<dst0_is_dram> s0 = {
