@@ -21,6 +21,7 @@
 namespace tt::tt_metal {
 
 class SubDeviceManagerTracker;
+class ThreadPool;
 
 namespace distributed {
 
@@ -65,6 +66,7 @@ private:
     std::unique_ptr<SubDeviceManagerTracker> sub_device_manager_tracker_;
     std::unordered_map<MeshTraceId, std::shared_ptr<MeshTraceBuffer>> trace_buffer_pool_;
     uint32_t trace_buffers_size_ = 0;
+    std::shared_ptr<ThreadPool> thread_pool_;
     std::recursive_mutex push_work_mutex_;
     // This is a reference device used to query properties that are the same for all devices in the mesh.
     IDevice* reference_device() const;

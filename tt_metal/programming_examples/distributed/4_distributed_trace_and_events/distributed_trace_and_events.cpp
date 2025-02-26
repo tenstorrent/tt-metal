@@ -128,8 +128,8 @@ int main(int argc, char** argv) {
     // Initialize command queue ids used for data movement and workload dispatch
     constexpr uint8_t data_movement_cq_id = 1;
     constexpr uint8_t workload_cq_id = 0;
-    auto data_movement_cq = mesh_device->mesh_command_queue(data_movement_cq_id);
-    auto workload_cq = mesh_device->mesh_command_queue(workload_cq_id);
+    auto& data_movement_cq = mesh_device->mesh_command_queue(data_movement_cq_id);
+    auto& workload_cq = mesh_device->mesh_command_queue(workload_cq_id);
 
     // =========== Step 1: Initialize and load two SubDevices ===========
     // Each SubDevice contains a single core. This SubDevice configuration is loaded on each physical device
