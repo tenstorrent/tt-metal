@@ -452,10 +452,9 @@ generate_halo_kernel_config_tensors(
                 flat_data[idx++] = length;
             }
             // null plug
-            flat_data.emplace_back(0);
-            flat_data.emplace_back(0);
-            flat_data.emplace_back(0);
-            flat_data.emplace_back(0);
+            for (uint16_t i = 0; i < 4; i++) {
+                flat_data.emplace_back(0);
+            }
             flattened_config.emplace_back(flat_data);
         }
         return flattened_config;
@@ -483,9 +482,6 @@ generate_halo_kernel_config_tensors(
                 flat_data[idx++] = length;
             }
             // null plug
-            flat_data.emplace_back(0);
-            flat_data.emplace_back(0);
-            flat_data.emplace_back(0);
             flat_data.emplace_back(0);
             flat_data.emplace_back(0);
             flat_data.emplace_back(0);
@@ -521,9 +517,6 @@ generate_halo_kernel_config_tensors(
                 }
             }
             // null plug
-            flat_data.emplace_back(0);
-            flat_data.emplace_back(0);
-            flat_data.emplace_back(0);
             flat_data.emplace_back(0);
             flat_data.emplace_back(0);
             flat_data.emplace_back(0);
