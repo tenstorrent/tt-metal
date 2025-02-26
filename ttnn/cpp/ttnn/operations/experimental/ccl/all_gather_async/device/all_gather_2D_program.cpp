@@ -112,7 +112,8 @@ operation::ProgramWithCallbacks all_gather_2D_multi_core_with_workers(
     const uint32_t higher_pages,
     const uint32_t num_devices,
     const uint32_t page_size,
-    bool is_horizontal) {
+    bool is_horizontal,
+    const uint32_t semaphore_target_value) {
     tt::tt_metal::Program program{};
 
     IDevice* device = input_tensor.device();
@@ -202,9 +203,13 @@ operation::ProgramWithCallbacks all_gather_2D_multi_core_with_workers(
 
     uint32_t input_cb_index = tt::CBIndex::c_4;
     tt::tt_metal::CircularBufferConfig cb_input_config =
-        tt::tt_metal::CircularBufferConfig(cb_num_pages * page_size, {{input_cb_index, input_cb_data_format}})
+        tt::tt_metal::CircularBufferConfig(
+            cb_num_pages * page_size * input_tensor.element_size(), {{input_cb_index, input_cb_data_format}})
             .set_page_size(input_cb_index, page_size);
     CBHandle cb_worker = CreateCircularBuffer(program, core, cb_input_config);
+
+    CoreCoord drain_sync_core = {0, 0};
+    auto sem_noc_encoding = tt::tt_metal::hal.noc_xy_encoding(drain_sync_core.x, drain_sync_core.y);
 
     // Allocate space for the client interface
     uint32_t num_directions = 2;
@@ -225,7 +230,7 @@ operation::ProgramWithCallbacks all_gather_2D_multi_core_with_workers(
     std::vector<uint32_t> bd_reader_compile_time_args = {src_is_dram, input_cb_index, lower_pages, higher_pages};
     auto bd_reader_kernel = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/broadcast_kernel_2d_reader.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/all_gather_reader_kernel_2d.cpp",
         core,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
@@ -233,10 +238,18 @@ operation::ProgramWithCallbacks all_gather_2D_multi_core_with_workers(
             .compile_args = bd_reader_compile_time_args});
 
     uint32_t dst_is_dram = dst_buffer->buffer_type() == BufferType::DRAM ? 1 : 0;
-    std::vector<uint32_t> bd_writer_compile_time_args = {client_interface_cb_index, is_horizontal, dst_is_dram, input_cb_index, num_devices, device_id, output_tensor.element_size()};
+    std::vector<uint32_t> bd_writer_compile_time_args = {
+        client_interface_cb_index,
+        is_horizontal,
+        dst_is_dram,
+        input_cb_index,
+        num_devices,
+        device_id,
+        output_tensor.element_size(),
+        semaphore_target_value};
     auto bd_writer_kernel = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/broadcast_kernel_2d.cpp",
+        "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/all_gather_writer_kernel_2d.cpp",
         core,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
@@ -248,11 +261,11 @@ operation::ProgramWithCallbacks all_gather_2D_multi_core_with_workers(
         page_size * input_tensor.element_size() //num_bytes
     };
     std::vector<uint32_t> bd_writer_runtime_args = {
-        src0_buffer->address(), //src_addr
-        dst_buffer->address(), //dst_addr
+        src0_buffer->address(),  // src_addr
+        dst_buffer->address(),   // dst_addr
         lower_pages,
         higher_pages,
-        page_size * input_tensor.element_size(), //num_bytes
+        page_size * input_tensor.element_size(),  // num_bytes
         page_size,
         mesh_id_dir0,
         chip_id_dir0,
@@ -263,8 +276,9 @@ operation::ProgramWithCallbacks all_gather_2D_multi_core_with_workers(
         depth_dir1,
         router_noc_xy_dir1,
         first_device,
-        last_device
-    };
+        last_device,
+        semaphore.address(),
+        sem_noc_encoding};
     tt::tt_metal::SetRuntimeArgs(program, bd_reader_kernel, core, bd_reader_runtime_args);
     tt::tt_metal::SetRuntimeArgs(program, bd_writer_kernel, core, bd_writer_runtime_args);
 
