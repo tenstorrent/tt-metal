@@ -41,6 +41,10 @@ on:
         required: false
         type: boolean
         default: false
+      tg-nightly:
+        required: false
+        type: boolean
+        default: false
 
 run-name: ${{ inputs.description }}
 jobs:
@@ -92,3 +96,8 @@ jobs:
     secrets: inherit
     uses: ./.github/workflows/tg-model-perf-tests-impl.yaml
     if: ${{ inputs.tg-model-perf }}
+  tg-nightly-tests:
+    needs: build-artifact
+    secrets: inherit
+    uses: ./.github/workflows/tg-nightly-tests-impl.yaml
+    if: ${{ inputs.tg-nightly }}
