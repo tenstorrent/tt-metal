@@ -13,7 +13,7 @@ from models.tt_transformers.tt.common import (
     num_blocks_in_seq,
 )
 from models.tt_transformers.tt.model import Transformer
-from models.tt_transformers.tt.model_config import ModelArgs, LlamaOptimizations
+from models.tt_transformers.tt.model_config import ModelArgs, ModelOptimizations
 from models.tt_transformers.tt.generator import Generator
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer
 from models.utility_functions import (
@@ -51,7 +51,7 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.parametrize(
     "optimizations",
     [
-        pytest.param(LlamaOptimizations.accuracy, id="accuracy"),
+        pytest.param(ModelOptimizations.accuracy, id="accuracy"),
     ],
 )
 def test_chunked_prefill_single_user(
@@ -72,10 +72,10 @@ def test_chunked_prefill_single_user(
     batch_size = 1  # For prefill we only support batch_size = 1
 
     # This sets the minimum PCC for each iteration based on optimization mode
-    if optimizations == LlamaOptimizations.accuracy:
+    if optimizations == ModelOptimizations.accuracy:
         pcc = 0.91  # TODO Look on improving PCC
     else:  # performance mode
-        assert optimizations == LlamaOptimizations.performance
+        assert optimizations == ModelOptimizations.performance
         pcc = 0.869  # TODO Look on improving PCC
 
     model_args = ModelArgs(mesh_device, max_batch_size=batch_size, optimizations=optimizations, max_seq_len=seq_len)

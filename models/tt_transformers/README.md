@@ -121,7 +121,7 @@ If you want to provide your own demo configuration, please take a look at the py
 - `page_params (dict)`: Page parameters for paged attention - [`block_size`, `max_num_blocks`]. For smaller context lengths use `block_size=32` and `max_num_blocks=1024`, for larger context use block_size=64 and max_num_blocks=2048
 - `sampling_params (dict)`: Sampling parameters for decoding -[`temperature`, `top_p`]. If temperature is set to 0, argmax (greedy decode) is used.
 - `stop_at_eos (bool)`: Flag to stop decoding when the model generates an EoS token
-- `optimization (LlamaOptimizations)`: Optimization level to use for the model [`performance`, `accuracy`]
+- `optimization (ModelOptimizations)`: Optimization level to use for the model [`performance`, `accuracy`]
 
 Please note that using `argmax` with `batch_size > 1` or using `top-p` sampling with any batch size, these ops will be run on host. This is because those ops are not yet fully supported on device. A decrease in performance is expected when these configurations are enabled.
 
@@ -145,7 +145,7 @@ pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and batch
 pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and long"
 ```
 
-The above examples are run in `LlamaOptimizations.performance` mode.
+The above examples are run in `ModelOptimizations.performance` mode.
 You can override this by setting the `optimizations` argument in the demo. To use instead the accuracy mode you can call the above tests with `-k "accuracy and ..."` instead of performance.
 
 #### Custom input arguments

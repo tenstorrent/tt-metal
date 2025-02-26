@@ -11,7 +11,7 @@ import ttnn
 
 from models.tt_transformers.tt.generator import Generator
 from models.tt_transformers.tt.model import Transformer
-from models.tt_transformers.tt.model_config import LlamaOptimizations, ModelArgs
+from models.tt_transformers.tt.model_config import ModelOptimizations, ModelArgs
 from models.tt_transformers.demo.simple_vision_demo import create_multimodal_model
 from models.utility_functions import nearest_32
 
@@ -27,7 +27,7 @@ def initialize_vllm_text_transformer(
     max_seq_len,
     n_layers=None,
     dtype=ttnn.bfloat8_b,
-    optimizations=LlamaOptimizations.performance,
+    optimizations=ModelOptimizations.performance,
 ):
     # Load model args, weights
     model_args = ModelArgs(
@@ -185,7 +185,7 @@ class ForCausalLM(Generator):
             max_seq_len=131072,
             n_layers=n_layers,
             dtype=ttnn.bfloat8_b,
-            optimizations=LlamaOptimizations.performance,
+            optimizations=ModelOptimizations.performance,
         )
         return cls(tt_model, model_args, mesh_device)
 
@@ -213,7 +213,7 @@ class Qwen2ForCausalLM(Generator):
             max_seq_len=131072,
             n_layers=n_layers,
             dtype=ttnn.bfloat8_b,
-            optimizations=LlamaOptimizations.performance,
+            optimizations=ModelOptimizations.performance,
         )
         return cls(tt_model, model_args, mesh_device)
 

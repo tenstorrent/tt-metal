@@ -21,7 +21,7 @@ import ttnn
 from llama_models.llama3.api.tokenizer import Tokenizer
 
 from models.tt_transformers.tt.generator import Generator
-from models.tt_transformers.tt.model_config import LlamaOptimizations
+from models.tt_transformers.tt.model_config import ModelOptimizations
 from models.tt_transformers.tt.common import (
     preprocess_inputs_prefill,
     get_rot_transformation_mat,
@@ -171,7 +171,7 @@ def create_tt_model(
 # sampling_params (dict): Sampling parameters for decoding (temperature, top_p). If temperature is set to 0, argmax (greedy decode) is used.
 # stop_at_eos (bool): Whether to stop decoding when the model generates an EoS token
 #
-# optimization (LlamaOptimizations): Optimization level to use for the model (performance or accuracy)
+# optimization (ModelOptimizations): Optimization level to use for the model (performance or accuracy)
 # FAKE_DEVICE (str): Fake device to use for testing (N150, N300, T3K, TG). Usage: `export FAKE_DEVICE=N150`, will enable running a single-chip demo on a multi-chip system.
 @pytest.mark.parametrize(
     "input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stop_at_eos, ci_only",
@@ -267,8 +267,8 @@ def create_tt_model(
 @pytest.mark.parametrize(
     "optimizations",
     [
-        LlamaOptimizations.performance,
-        LlamaOptimizations.accuracy,
+        ModelOptimizations.performance,
+        ModelOptimizations.accuracy,
     ],
 )
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 23887872, "num_command_queues": 2}], indirect=True)
@@ -301,10 +301,10 @@ def test_demo_text(
     request,
 ):
     """
-    Simple Llama demo with limited dependence on reference code.
+    Simple demo with limited dependence on reference code.
     """
 
-    if is_ci_env and (optimizations == LlamaOptimizations.accuracy or not ci_only):
+    if is_ci_env and (optimizations == ModelOptimizations.accuracy or not ci_only):
         pytest.skip("CI only runs the CI-only tests")
 
     # TODO: Remove this once all batch sizes are supported on TG

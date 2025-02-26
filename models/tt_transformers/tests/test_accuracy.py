@@ -13,11 +13,11 @@ from models.tt_transformers.tt.common import (
     preprocess_inputs_prefill,
 )
 from models.tt_transformers.tt.model import Transformer
-from models.tt_transformers.tt.model_config import ModelArgs, LlamaOptimizations
+from models.tt_transformers.tt.model_config import ModelArgs, ModelOptimizations
 from pathlib import Path
 
 
-def get_accuracy_thresholds(base_model_name: str, device_name: str, optimizations: LlamaOptimizations):
+def get_accuracy_thresholds(base_model_name: str, device_name: str, optimizations: ModelOptimizations):
     """Parse accuracy thresholds from PERF.md for the given model, optimization mode, and device."""
     # Read PERF.md
     perf_file = Path(__file__).parent.parent / "PERF.md"
@@ -75,8 +75,8 @@ def get_accuracy_thresholds(base_model_name: str, device_name: str, optimization
 @pytest.mark.parametrize(
     "optimizations",
     [
-        pytest.param(LlamaOptimizations.accuracy, id="accuracy"),
-        pytest.param(LlamaOptimizations.performance, id="performance"),
+        pytest.param(ModelOptimizations.accuracy, id="accuracy"),
+        pytest.param(ModelOptimizations.performance, id="performance"),
     ],
 )
 @pytest.mark.parametrize(

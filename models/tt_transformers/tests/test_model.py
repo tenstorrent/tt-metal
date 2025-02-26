@@ -10,7 +10,7 @@ from models.tt_transformers.tt.common import (
     sample_host,
     PagedAttentionConfig,
 )
-from models.tt_transformers.tt.model_config import ModelArgs, LlamaOptimizations
+from models.tt_transformers.tt.model_config import ModelArgs, ModelOptimizations
 from models.tt_transformers.tt.model import Transformer
 from models.utility_functions import (
     comp_pcc,
@@ -57,8 +57,8 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.parametrize(
     "optimizations",
     [
-        pytest.param(LlamaOptimizations.accuracy, id="accuracy"),
-        pytest.param(LlamaOptimizations.performance, id="performance"),
+        pytest.param(ModelOptimizations.accuracy, id="accuracy"),
+        pytest.param(ModelOptimizations.performance, id="performance"),
     ],
 )
 @pytest.mark.parametrize(
@@ -87,7 +87,7 @@ def test_model_inference(
     cache_pcc = layers == 1  # Flag to measure KV cache PCC. Avoid running for all layers to speed up test time.
     dtype = ttnn.bfloat8_b
     mesh_device.enable_async(True)
-    mode_accuracy = optimizations == LlamaOptimizations.accuracy
+    mode_accuracy = optimizations == ModelOptimizations.accuracy
     instruct = False  # True if weights == "instruct" else False
     dummy_weights = True if weights == "random" else False
     model_args = ModelArgs(
@@ -259,7 +259,7 @@ def test_model_inference(
     )
 
     for i in range(generation_length):
-        logger.info(f"[Llama3 Model] Generating token {i}")
+        logger.info(f"[Model] Generating token {i}")
 
         decode_input = model_args.prepare_residual_tensor_decode(
             tt_decode_input,
@@ -347,9 +347,9 @@ def test_model_inference(
             logger.info(f"PCC: {pcc_message}")
 
             if passing:
-                logger.info("Llama Model Passed!")
+                logger.info("Model Passed!")
             else:
-                logger.warning("Llama Model Failed!")
+                logger.warning("Model Failed!")
             if not passing:
                 all_tests_pass = False
 
@@ -434,9 +434,9 @@ def test_model_inference(
 
     if run_ref_pt:
         if all_tests_pass:
-            logger.info(f"All {generation_length} Llama decode iterations Passed!")
+            logger.info(f"All {generation_length} decode iterations Passed!")
         else:
-            logger.warning("One or more iterations of Llama decode had bad PCC")
+            logger.warning("One or more iterations of decode had bad PCC")
             if layers == 1:
                 assert final_tests_pass, f"PCC value is lower than {final_model_pcc} for final output. Check Warnings!"
             assert kv_cache_tests_pass, f"KV Cache PCC value is lower expected for some of the outputs. Check Warnings!"
