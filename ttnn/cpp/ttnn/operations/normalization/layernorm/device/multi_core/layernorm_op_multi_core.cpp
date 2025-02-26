@@ -272,7 +272,7 @@ operation::ProgramWithCallbacks layernorm_multi_core(
         use_row_major_kernel ? "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
                                "reader_unary_interleaved_ln_rm_gb.cpp"
                              : "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/dataflow/"
-                               "reader_unary_interleaved_ln.cpp",
+                               "reader_unary_interleaved_ln_three_pass.cpp",
         all_cores,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reader_defines));
 
@@ -285,9 +285,10 @@ operation::ProgramWithCallbacks layernorm_multi_core(
 
     std::vector<uint32_t> compute_args = {Wt, block_size, gamma.has_value(), beta.has_value(), fp32_dest_acc_en};
 
+    // grep
     auto compute_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm.cpp",
+        "ttnn/cpp/ttnn/operations/normalization/layernorm/device/kernels/compute/layernorm_three_pass.cpp",
         all_cores,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
