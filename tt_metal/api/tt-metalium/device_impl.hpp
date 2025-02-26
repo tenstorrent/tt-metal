@@ -9,7 +9,7 @@
 
 #include "device.hpp"
 #include "hostdevcommon/common_values.hpp"
-#include "work_executor.hpp"
+#include "work_executor_types.hpp"
 #include "basic_allocator.hpp"
 #include "l1_banking_allocator.hpp"
 #include "data_types.hpp"
@@ -160,8 +160,8 @@ public:
     void enable_async(bool enable) override;
     void force_enable_async(bool enable);
     void synchronize() override;
-    WorkExecutorMode get_worker_mode() override { return work_executor_.get_worker_mode(); }
-    bool is_worker_queue_empty() const override { return work_executor_.worker_queue.empty(); }
+    WorkExecutorMode get_worker_mode() override;
+    bool is_worker_queue_empty() const override;
 
     void push_work(std::function<void()> work, bool blocking) override;
 
@@ -249,7 +249,7 @@ private:
 
     // Work Executor for this device - can asynchronously process host side work for
     // all tasks scheduled on this device
-    WorkExecutor work_executor_;
+    std::shared_ptr<WorkExecutor> work_executor_;
     uint32_t worker_thread_core_ = 0;
     uint32_t completion_queue_reader_core_ = 0;
     std::unique_ptr<SystemMemoryManager> sysmem_manager_;
