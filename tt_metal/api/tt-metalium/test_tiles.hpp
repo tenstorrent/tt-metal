@@ -229,9 +229,11 @@ inline std::vector<T> untilize_nchw(
     return result;
 }
 
-inline std::uint32_t round_up_to_mul16(std::uint32_t val) { return ((val & 15) == 0) ? val : (val | 15)+1; }
+inline std::uint32_t round_up_to_mul16(std::uint32_t val) { return ((val & 15) == 0) ? val : (val | 15) + 1; }
 
-inline std::uint32_t round_up_to_mul32(std::uint32_t val) { return ((val & 31) == 0) ? val : (val | 31)+1; }
+inline std::uint32_t round_up_to_mul32(std::uint32_t val) { return ((val & 31) == 0) ? val : (val | 31) + 1; }
+
+inline std::uint32_t round_up_to_mul64(std::uint32_t val) { return ((val & 63) == 0) ? val : (val | 63) + 1; }
 
 inline std::uint32_t round_up_to_tile(int val, int tile_val) { return (val + tile_val - 1) & ~(tile_val - 1); }
 
