@@ -8,8 +8,7 @@ namespace tt::tt_metal::distributed {
 
 MeshWorkload CreateMeshWorkload() { return MeshWorkload(); }
 
-void AddProgramToMeshWorkload(
-    MeshWorkload& mesh_workload, Program& program, const LogicalDeviceRange& device_range) {
+void AddProgramToMeshWorkload(MeshWorkload& mesh_workload, Program&& program, const MeshCoordinateRange& device_range) {
     mesh_workload.add_program(device_range, std::move(program));
 }
 
@@ -24,7 +23,7 @@ void EnqueueRecordEvent(
     MeshCommandQueue& mesh_cq,
     const std::shared_ptr<MeshEvent>& event,
     tt::stl::Span<const SubDeviceId> sub_device_ids,
-    const std::optional<LogicalDeviceRange>& device_range) {
+    const std::optional<MeshCoordinateRange>& device_range) {
     mesh_cq.enqueue_record_event(event, sub_device_ids, device_range);
 }
 
@@ -32,7 +31,7 @@ void EnqueueRecordEventToHost(
     MeshCommandQueue& mesh_cq,
     const std::shared_ptr<MeshEvent>& event,
     tt::stl::Span<const SubDeviceId> sub_device_ids,
-    const std::optional<LogicalDeviceRange>& device_range) {
+    const std::optional<MeshCoordinateRange>& device_range) {
     mesh_cq.enqueue_record_event_to_host(event, sub_device_ids, device_range);
 }
 
@@ -57,7 +56,7 @@ void EndTraceCapture(MeshDevice* device, uint8_t cq_id, const MeshTraceId& trace
 }
 
 void ReplayTrace(MeshDevice* device, uint8_t cq_id, const MeshTraceId& trace_id, bool blocking) {
-    device->mesh_command_queue(cq_id).enqueue_trace(trace_id, blocking);
+    device->replay_mesh_trace(cq_id, trace_id, blocking);
 }
 
 void ReleaseTrace(MeshDevice* device, const MeshTraceId& trace_id) { device->release_mesh_trace(trace_id); }

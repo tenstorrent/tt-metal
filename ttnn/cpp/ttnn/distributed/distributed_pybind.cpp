@@ -5,9 +5,12 @@
 #include "ttnn/distributed/distributed_pybind.hpp"
 #include <pybind11/pytypes.h>
 
+#include <ostream>
+
 #include <tt-metalium/command_queue.hpp>
 #include "tt-metalium/mesh_coord.hpp"
 #include "ttnn/distributed/api.hpp"
+#include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 
@@ -25,56 +28,80 @@ void py_module_types(py::module& module) {
     py::class_<MeshDevice, std::shared_ptr<MeshDevice>>(module, "MeshDevice");
     py::class_<MeshSubDeviceManagerId>(module, "MeshSubDeviceManagerId");
     py::class_<MeshShape>(module, "MeshShape", "Struct representing the shape of a mesh device.");
-    py::class_<MeshOffset>(module, "MeshOffset", "Struct representing the offset of a mesh device.");
+    py::class_<MeshCoordinate>(module, "MeshCoordinate", "Struct representing the coordinate of a mesh device.");
 }
 
 void py_module(py::module& module) {
+    // TODO: #17477 - Remove overloads that accept 'row' and 'col'. Instead, use generic ND terms.
     static_cast<py::class_<MeshShape>>(module.attr("MeshShape"))
         .def(
             py::init([](size_t num_rows, size_t num_cols) { return MeshShape(num_rows, num_cols); }),
-            "Constructor with specified number of rows and columns.",
+            "Constructor with the specified number of rows and columns.",
             py::arg("num_rows"),
             py::arg("num_cols"))
-        .def_readwrite("num_rows", &MeshShape::num_rows, "Number of rows in the mesh.")
-        .def_readwrite("num_cols", &MeshShape::num_cols, "Number of columns in the mesh.")
+        .def(
+            py::init([](size_t x, size_t y, size_t z) { return MeshShape(x, y, z); }),
+            "Constructor with the specified 3D shape.",
+            py::arg("x"),
+            py::arg("y"),
+            py::arg("z"))
+        .def(
+            py::init([](const std::vector<uint32_t>& shape) { return MeshShape(shape); }),
+            "Constructor with the specified ND shape.",
+            py::arg("shape"))
         .def(
             "__repr__",
             [](const MeshShape& ms) {
-                return "<MeshShape num_rows=" + std::to_string(ms.num_rows) +
-                       " num_cols=" + std::to_string(ms.num_cols) + ">";
+                std::ostringstream str;
+                str << ms;
+                return str.str();
             })
-        .def("__iter__", [](const MeshShape& ms) { return py::iter(py::make_tuple(ms.num_rows, ms.num_cols)); });
-    static_cast<py::class_<MeshOffset>>(module.attr("MeshOffset"))
         .def(
-            py::init([](size_t row, size_t col) { return MeshOffset(row, col); }),
+            "__iter__",
+            [](const MeshShape& ms) { return py::make_iterator(ms.view().begin(), ms.view().end()); },
+            py::keep_alive<0, 1>());
+    static_cast<py::class_<MeshCoordinate>>(module.attr("MeshCoordinate"))
+        .def(
+            py::init([](size_t row, size_t col) { return MeshCoordinate(row, col); }),
             "Constructor with specified row and column offsets.",
             py::arg("row"),
             py::arg("col"))
-        .def_readwrite("row", &MeshOffset::row, "Row offset in the mesh.")
-        .def_readwrite("col", &MeshOffset::col, "Column offset in the mesh.")
+        .def(
+            py::init([](size_t x, size_t y, size_t z) { return MeshCoordinate(x, y, z); }),
+            "Constructor with the specified 3D coordinate.",
+            py::arg("x"),
+            py::arg("y"),
+            py::arg("z"))
+        .def(
+            py::init([](const std::vector<uint32_t>& coords) { return MeshCoordinate(coords); }),
+            "Constructor with the specified ND coordinate.",
+            py::arg("coords"))
         .def(
             "__repr__",
-            [](const MeshOffset& mo) {
-                return "<MeshOffset row=" + std::to_string(mo.row) + " col=" + std::to_string(mo.col) + ">";
+            [](const MeshCoordinate& mc) {
+                std::ostringstream str;
+                str << mc;
+                return str.str();
             })
-        .def("__iter__", [](const MeshOffset& mo) { return py::iter(py::make_tuple(mo.row, mo.col)); });
+        .def(
+            "__iter__",
+            [](const MeshCoordinate& mc) { return py::make_iterator(mc.coords().begin(), mc.coords().end()); },
+            py::keep_alive<0, 1>());
 
     auto py_mesh_device = static_cast<py::class_<MeshDevice, std::shared_ptr<MeshDevice>>>(module.attr("MeshDevice"));
     py_mesh_device
         .def(
-            py::init([](const MeshShape& mesh_device_shape,
+            py::init([](const MeshShape& mesh_shape,
                         size_t l1_small_size,
                         size_t trace_region_size,
                         size_t num_command_queues,
                         const DispatchCoreConfig& dispatch_core_config,
-                        const MeshOffset& offset,
+                        const std::optional<MeshCoordinate>& offset,
                         const std::vector<chip_id_t>& physical_device_ids) {
                 return MeshDevice::create(
                     MeshDeviceConfig{
-                        .mesh_shape = SimpleMeshShape(mesh_device_shape),
-                        .offset = offset.row != 0 || offset.col != 0
-                                      ? std::make_optional<MeshCoordinate>(offset.row, offset.col)
-                                      : std::nullopt,
+                        .mesh_shape = mesh_shape,
+                        .offset = offset,
                         .physical_device_ids = physical_device_ids,
                     },
                     l1_small_size,
@@ -365,6 +392,7 @@ void py_module(py::module& module) {
         py::arg("tensors"),
         py::kw_only());
     module.def("get_t3k_physical_device_ids_ring", &get_t3k_physical_device_ids_ring);
+    module.attr("DefaultMeshCommandQueueId") = ttnn::DefaultMeshCommandQueueId;
 }
 
 }  // namespace ttnn::distributed
