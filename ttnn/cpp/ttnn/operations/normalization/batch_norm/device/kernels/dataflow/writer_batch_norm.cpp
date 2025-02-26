@@ -20,8 +20,8 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
 
     // output
-    constexpr auto cb_id_dst = get_compile_time_arg_val(8);
-    constexpr bool dst_is_dram = get_compile_time_arg_val(1) == 1;
+    constexpr auto cb_id_dst = get_compile_time_arg_val(1);
+    constexpr bool dst_is_dram = get_compile_time_arg_val(0) == 1;
     const uint32_t dst_tile_bytes = get_tile_size(cb_id_dst);
     const DataFormat dst_data_format = get_dataformat(cb_id_dst);
 
