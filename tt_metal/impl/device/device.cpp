@@ -1477,10 +1477,6 @@ void Device::generate_device_bank_to_noc_tables()
     }
 }
 
-size_t Device::get_device_kernel_defines_hash() {
-    return tt::utils::DefinesHash{}(this->device_kernel_defines_);
-}
-
 uint8_t Device::num_noc_mcast_txns(SubDeviceId sub_device_id) const {
     return sub_device_manager_tracker_->get_active_sub_device_manager()->num_noc_mcast_txns(sub_device_id);
 }
