@@ -4,10 +4,10 @@
 
 #include "device_fixture.hpp"
 #include "gtest/gtest.h"
-#include "tt_metal/common/logger.hpp"
-#include "tt_metal/common/math.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -34,7 +34,7 @@ namespace local_test_functions {
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool reader_cb_writer(Device* device, const BankedConfig& cfg, const bool banked_reader, const bool banked_writer) {
+bool reader_cb_writer(IDevice* device, const BankedConfig& cfg, const bool banked_reader, const bool banked_writer) {
     bool pass = true;
 
     const uint32_t cb_id = 0;
@@ -82,17 +82,9 @@ bool reader_cb_writer(Device* device, const BankedConfig& cfg, const bool banked
     auto output_buffer = CreateBuffer(out_config);
 
     tt::log_debug(
-        tt::LogTest,
-        "Input buffer: [address: {} B, size: {} B] at noc coord {}",
-        input_buffer->address(),
-        input_buffer->size(),
-        input_buffer->noc_coordinates().str());
+        tt::LogTest, "Input buffer: [address: {} B, size: {} B]", input_buffer->address(), input_buffer->size());
     tt::log_debug(
-        tt::LogTest,
-        "Output buffer: [address: {} B, size: {} B] at noc coord {}",
-        output_buffer->address(),
-        output_buffer->size(),
-        output_buffer->noc_coordinates().str());
+        tt::LogTest, "Output buffer: [address: {} B, size: {} B]", output_buffer->address(), output_buffer->size());
 
     TT_FATAL(cfg.num_tiles * cfg.page_size_bytes == cfg.size_bytes, "Error");
     constexpr uint32_t num_pages_cb = 1;
@@ -103,6 +95,10 @@ bool reader_cb_writer(Device* device, const BankedConfig& cfg, const bool banked
 
     bool input_is_dram = cfg.input_buffer_type == BufferType::DRAM;
     bool output_is_dram = cfg.output_buffer_type == BufferType::DRAM;
+    std::map<std::string, std::string> reader_defines = {
+        {"INTERFACE_WITH_L1", std::to_string((uint32_t)(not input_is_dram))}};
+    std::map<std::string, std::string> writer_defines = {
+        {"INTERFACE_WITH_L1", std::to_string((uint32_t)(not output_is_dram))}};
 
     auto reader_kernel = CreateKernel(
         program,
@@ -111,7 +107,8 @@ bool reader_cb_writer(Device* device, const BankedConfig& cfg, const bool banked
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
             .noc = NOC::NOC_0,
-            .compile_args = {cb_id, uint32_t(input_buffer->page_size()), (uint32_t)input_is_dram}});
+            .compile_args = {cb_id, uint32_t(input_buffer->page_size()), (uint32_t)input_is_dram},
+            .defines = reader_defines});
     auto writer_kernel = CreateKernel(
         program,
         writer_kernel_name,
@@ -119,15 +116,15 @@ bool reader_cb_writer(Device* device, const BankedConfig& cfg, const bool banked
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
             .noc = NOC::NOC_1,
-            .compile_args = {cb_id, uint32_t(output_buffer->page_size()), (uint32_t)output_is_dram}});
+            .compile_args = {cb_id, uint32_t(output_buffer->page_size()), (uint32_t)output_is_dram},
+            .defines = writer_defines});
 
     if (banked_reader) {
         reader_runtime_args = {(uint32_t)input_buffer->address(), (uint32_t)cfg.num_tiles};
     } else {
         reader_runtime_args = {
             (uint32_t)input_buffer->address(),
-            (uint32_t)input_buffer->noc_coordinates().x,
-            (uint32_t)input_buffer->noc_coordinates().y,
+            0,
             (uint32_t)cfg.num_tiles,
         };
     }
@@ -136,8 +133,7 @@ bool reader_cb_writer(Device* device, const BankedConfig& cfg, const bool banked
     } else {
         writer_runtime_args = {
             (uint32_t)output_buffer->address(),
-            (uint32_t)output_buffer->noc_coordinates().x,
-            (uint32_t)output_buffer->noc_coordinates().y,
+            0,
             (uint32_t)cfg.num_tiles,
         };
     }
@@ -166,7 +162,7 @@ bool reader_cb_writer(Device* device, const BankedConfig& cfg, const bool banked
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool reader_datacopy_writer(Device* device, const BankedConfig& cfg) {
+bool reader_datacopy_writer(IDevice* device, const BankedConfig& cfg) {
     bool pass = true;
 
     const uint32_t input0_cb_index = 0;
@@ -281,8 +277,9 @@ TEST_F(DeviceFixture, TensixTestSingleCoreSingleTileBankedL1ReaderOnly) {
 TEST_F(DeviceFixture, TensixTestSingleCoreMultiTileBankedL1ReaderOnly) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         BankedConfig test_config;
-        TT_FATAL(this->devices_.at(id)->num_banks(BufferType::L1) % 2 == 0, "Error");
-        size_t num_tiles = this->devices_.at(id)->num_banks(BufferType::L1) / 2;
+        auto num_banks = devices_.at(id)->allocator()->get_num_banks(BufferType::L1);
+        TT_FATAL(num_banks % 2 == 0, "Error");
+        size_t num_tiles = num_banks / 2;
         size_t tile_increment = num_tiles;
         uint32_t num_iterations = 3;
         uint32_t index = 0;
@@ -308,8 +305,9 @@ TEST_F(DeviceFixture, TensixTestSingleCoreSingleTileBankedDramReaderOnly) {
 TEST_F(DeviceFixture, TensixTestSingleCoreMultiTileBankedDramReaderOnly) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         BankedConfig test_config;
-        TT_FATAL(this->devices_.at(id)->num_banks(BufferType::DRAM) % 2 == 0, "Error");
-        size_t num_tiles = this->devices_.at(id)->num_banks(BufferType::DRAM) / 2;
+        auto num_banks = devices_.at(id)->allocator()->get_num_banks(BufferType::DRAM);
+        TT_FATAL(num_banks % 2 == 0, "Error");
+        size_t num_tiles = num_banks / 2;
         size_t tile_increment = num_tiles;
         uint32_t num_iterations = 6;
         uint32_t index = 0;
@@ -335,8 +333,9 @@ TEST_F(DeviceFixture, TensixTestSingleCoreSingleTileBankedL1WriterOnly) {
 TEST_F(DeviceFixture, TensixTestSingleCoreMultiTileBankedL1WriterOnly) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         BankedConfig test_config;
-        TT_FATAL(this->devices_.at(id)->num_banks(BufferType::L1) % 2 == 0, "Error");
-        size_t num_tiles = this->devices_.at(id)->num_banks(BufferType::L1) / 2;
+        auto num_banks = devices_.at(id)->allocator()->get_num_banks(BufferType::L1);
+        TT_FATAL(num_banks % 2 == 0, "Error");
+        size_t num_tiles = num_banks / 2;
         size_t tile_increment = num_tiles;
         uint32_t num_iterations = 3;
         uint32_t index = 0;
@@ -362,8 +361,9 @@ TEST_F(DeviceFixture, TensixTestSingleCoreSingleTileBankedDramWriterOnly) {
 TEST_F(DeviceFixture, TensixTestSingleCoreMultiTileBankedDramWriterOnly) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         BankedConfig test_config;
-        TT_FATAL(this->devices_.at(id)->num_banks(BufferType::DRAM) % 2 == 0, "Error");
-        size_t num_tiles = this->devices_.at(id)->num_banks(BufferType::DRAM) / 2;
+        auto num_banks = devices_.at(id)->allocator()->get_num_banks(BufferType::DRAM);
+        TT_FATAL(num_banks % 2 == 0, "Error");
+        size_t num_tiles = num_banks / 2;
         size_t tile_increment = num_tiles;
         uint32_t num_iterations = 6;
         uint32_t index = 0;
@@ -389,7 +389,7 @@ TEST_F(DeviceFixture, TensixTestSingleCoreSingleTileBankedL1ReaderAndWriter) {
 TEST_F(DeviceFixture, TensixTestSingleCoreMultiTileBankedL1ReaderAndWriter) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         BankedConfig test_config;
-        size_t num_tiles = this->devices_.at(id)->num_banks(BufferType::L1);
+        size_t num_tiles = devices_.at(id)->allocator()->get_num_banks(BufferType::L1);
         TT_FATAL(num_tiles % 2 == 0, "Error");
         size_t tile_increment = num_tiles / 2;
         uint32_t num_iterations = 6;
@@ -416,7 +416,7 @@ TEST_F(DeviceFixture, TensixTestSingleCoreSingleTileBankedDramReaderAndWriter) {
 TEST_F(DeviceFixture, TensixTestSingleCoreMultiTileBankedDramReaderAndWriter) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         BankedConfig test_config;
-        size_t num_tiles = this->devices_.at(id)->num_banks(BufferType::L1);
+        size_t num_tiles = devices_.at(id)->allocator()->get_num_banks(BufferType::L1);
         TT_FATAL(num_tiles % 2 == 0, "Error");
         size_t tile_increment = num_tiles / 2;
         uint32_t num_iterations = 6;
@@ -446,7 +446,7 @@ TEST_F(DeviceFixture, TensixTestSingleCoreMultiTileBankedDramReaderAndL1Writer) 
         BankedConfig test_config;
         test_config.input_buffer_type = BufferType::DRAM;
 
-        size_t num_tiles = this->devices_.at(id)->num_banks(BufferType::L1);
+        size_t num_tiles = devices_.at(id)->allocator()->get_num_banks(BufferType::L1);
         TT_FATAL(num_tiles % 2 == 0, "Error");
         size_t tile_increment = num_tiles / 2;
         uint32_t num_iterations = 6;
@@ -474,7 +474,7 @@ TEST_F(DeviceFixture, TensixTestSingleCoreMultiTileBankedL1ReaderAndDramWriter) 
         BankedConfig test_config;
         test_config.output_buffer_type = BufferType::DRAM;
 
-        size_t num_tiles = this->devices_.at(id)->num_banks(BufferType::L1);
+        size_t num_tiles = devices_.at(id)->allocator()->get_num_banks(BufferType::L1);
         TT_FATAL(num_tiles % 2 == 0, "Error");
         size_t tile_increment = num_tiles / 2;
         uint32_t num_iterations = 6;
@@ -492,12 +492,12 @@ TEST_F(DeviceFixture, TensixTestSingleCoreMultiTileBankedL1ReaderAndDramWriter) 
 TEST_F(DeviceFixture, TensixTestSingleCoreMultiTileBankedL1ReaderDataCopyL1Writer) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         BankedConfig test_config;
-        size_t num_tiles = this->devices_.at(id)->num_banks(BufferType::L1);
+        size_t num_tiles = devices_.at(id)->allocator()->get_num_banks(BufferType::L1);
         TT_FATAL(num_tiles % 2 == 0, "Error");
         size_t tile_increment = num_tiles / 2;
         uint32_t num_iterations = 6;
         uint32_t index = 0;
-        test_config.logical_core = this->devices_.at(id)->logical_core_from_bank_id(0);
+        test_config.logical_core = this->devices_.at(id)->allocator()->get_logical_core_from_bank_id(0);
         while (index < num_iterations) {
             test_config.num_tiles = num_tiles;
             test_config.size_bytes = test_config.num_tiles * 2 * 32 * 32;
@@ -511,7 +511,7 @@ TEST_F(DeviceFixture, TensixTestSingleCoreMultiTileBankedL1ReaderDataCopyL1Write
 TEST_F(DeviceFixture, TensixTestSingleCoreMultiTileBankedDramReaderDataCopyDramWriter) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         BankedConfig test_config;
-        size_t num_tiles = this->devices_.at(id)->num_banks(BufferType::DRAM);
+        size_t num_tiles = devices_.at(id)->allocator()->get_num_banks(BufferType::DRAM);
         TT_FATAL(num_tiles % 2 == 0, "Error");
         size_t tile_increment = num_tiles / 2;
         uint32_t num_iterations = 6;
@@ -531,12 +531,12 @@ TEST_F(DeviceFixture, TensixTestSingleCoreMultiTileBankedDramReaderDataCopyDramW
 TEST_F(DeviceFixture, TensixTestSingleCoreMultiTileBankedL1ReaderDataCopyDramWriter) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         BankedConfig test_config;
-        size_t num_tiles = this->devices_.at(id)->num_banks(BufferType::L1);
+        size_t num_tiles = devices_.at(id)->allocator()->get_num_banks(BufferType::L1);
         TT_FATAL(num_tiles % 2 == 0, "Error");
         size_t tile_increment = num_tiles / 2;
         uint32_t num_iterations = 6;
         uint32_t index = 0;
-        test_config.logical_core = this->devices_.at(id)->logical_core_from_bank_id(0);
+        test_config.logical_core = this->devices_.at(id)->allocator()->get_logical_core_from_bank_id(0);
         test_config.input_buffer_type = BufferType::L1;
         test_config.output_buffer_type = BufferType::DRAM;
         while (index < num_iterations) {
@@ -552,7 +552,7 @@ TEST_F(DeviceFixture, TensixTestSingleCoreMultiTileBankedL1ReaderDataCopyDramWri
 TEST_F(DeviceFixture, TensixTestSingleCoreMultiTileBankedDramReaderDataCopyL1Writer) {
     for (unsigned int id = 0; id < num_devices_; id++) {
         BankedConfig test_config;
-        size_t num_tiles = this->devices_.at(id)->num_banks(BufferType::L1);
+        size_t num_tiles = devices_.at(id)->allocator()->get_num_banks(BufferType::L1);
         TT_FATAL(num_tiles % 2 == 0, "Error");
         size_t tile_increment = num_tiles / 2;
         uint32_t num_iterations = 6;

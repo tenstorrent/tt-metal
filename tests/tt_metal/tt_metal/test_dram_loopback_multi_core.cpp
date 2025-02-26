@@ -7,8 +7,8 @@
 #include <functional>
 #include <random>
 
-#include "tt_metal/host_api.hpp"
-#include "common/bfloat16.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////
@@ -32,7 +32,7 @@ int main(int argc, char** argv) {
         ////////////////////////////////////////////////////////////////////////////
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
-        int device_id tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        int device_id tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Input Data Setup
@@ -80,9 +80,6 @@ int main(int argc, char** argv) {
         auto output_dram_buffer = CreateBuffer(dram_config);
         uint32_t dram_buffer_dst_addr = output_dram_buffer->address();
 
-        auto input_dram_noc_xy = input_dram_buffer->noc_coordinates();
-        auto output_dram_noc_xy = output_dram_buffer->noc_coordinates();
-
         // Loader (producer kernel) running on BRISC on logical core {0, 0}
         auto producer_kernel = tt_metal::CreateKernel(
             program,
@@ -113,31 +110,29 @@ int main(int argc, char** argv) {
             producer_kernel,
             loader_logical_core,
             {dram_buffer_src_addr,
-             (uint32_t)input_dram_noc_xy.x,
-             (uint32_t)input_dram_noc_xy.y,
-             loader_buffer_address,
-             (uint32_t)writer_worker_core.x,
-             (uint32_t)writer_worker_core.y,
-             stream_register_address,
-             num_output_tiles,
-             transient_buffer_size_tiles,
-             transient_buffer_size_bytes});
+            0,
+            loader_buffer_address,
+            (uint32_t)writer_worker_core.x,
+            (uint32_t)writer_worker_core.y,
+            stream_register_address,
+            num_output_tiles,
+            transient_buffer_size_tiles,
+            transient_buffer_size_bytes});
 
         tt_metal::SetRuntimeArgs(
             program,
             consumer_kernel,
             writer_logical_core,
             {loader_buffer_address,
-             (uint32_t)loader_worker_core.x,
-             (uint32_t)loader_worker_core.y,
-             dram_buffer_dst_addr,
-             (uint32_t)output_dram_noc_xy.x,
-             (uint32_t)output_dram_noc_xy.y,
-             writer_buffer_address,
-             stream_register_address,
-             num_output_tiles,
-             transient_buffer_size_tiles,
-             transient_buffer_size_bytes});
+            (uint32_t)loader_worker_core.x,
+            (uint32_t)loader_worker_core.y,
+            dram_buffer_dst_addr,
+            0,
+            writer_buffer_address,
+            stream_register_address,
+            num_output_tiles,
+            transient_buffer_size_tiles,
+            transient_buffer_size_bytes});
 
         tt_metal::detail::LaunchProgram(device, program);
 

@@ -27,12 +27,14 @@ public:
     struct Segment {
         std::vector<offset_t> relocs;      // 32-bit relocs to apply
         std::span<word_t const> contents;  // Non-owning span
-        address_t address = 0;             // byte address or 0 for XIP
-        offset_t bss = 0;                  // words of BSS
+        address_t address = 0;             // Byte execution address (0 for
+                                           // XIP)
+        address_t lma = 0;                 // Byte load address
+        offset_t membytes = 0;             // Byte size of memory image.
 
     public:
-        inline Segment(std::span<word_t const> contents, address_t addr, offset_t bss) :
-            contents(contents), address(addr), bss(bss) {}
+        inline Segment(std::span<word_t const> contents, address_t addr, address_t lma, offset_t membytes) :
+            contents(contents), address(addr), lma(lma), membytes(membytes) {}
     };
 
 public:

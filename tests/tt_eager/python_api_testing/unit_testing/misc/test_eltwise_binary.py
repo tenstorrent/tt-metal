@@ -7,9 +7,9 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.utility_functions import untilize, comp_pcc
-from models.utility_functions import is_grayskull
-from models.utility_functions import torch2tt_tensor, tt2torch_tensor, pad_by_zero
+from models.utility_functions import comp_pcc
+from models.utility_functions import is_grayskull, run_for_wormhole_b0
+from models.utility_functions import torch2tt_tensor, tt2torch_tensor
 
 
 @pytest.mark.skipif(is_grayskull(), reason="GS does not support fp32")
@@ -67,5 +67,116 @@ def test_run_elt_binary(dtype, test_func_name, torch_func_name, pre_in0_silu, de
         passing, output = comp_pcc(out, torch_func_name(torch_silu(in0), in1), 0.9999)
     else:
         passing, output = comp_pcc(out, torch_func_name(in0, in1), 0.9999)
+    logger.info(output)
+    assert passing
+
+
+@run_for_wormhole_b0()
+@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
+def test_run_elt_binary_add_with_sub_devices(device):
+    unharvested_grid_size = (7, 10)
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if unharvested_grid_size[0] > compute_grid_size.x or unharvested_grid_size[1] > compute_grid_size.y:
+        pytest.skip(f"Need {unharvested_grid_size} grid size to run this test but core grid is {compute_grid_size}")
+
+    shape = (1, 1, 32, 2048)
+    torch.manual_seed(10)
+
+    start_core = ttnn.CoreCoord(1, 0)
+    core_grid = ttnn.CoreRangeSet(
+        [
+            ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
+            ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
+        ]
+    )
+    shard_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(start_core, 32, core_grid, row_wise=True)
+    shard_spec = ttnn.ShardSpec(shard_grid, (32, 64), ttnn.ShardOrientation.ROW_MAJOR)
+    output_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        shard_spec,
+    )
+    in0 = torch.randn(shape).bfloat16().float()
+    in1 = torch.randn(shape).bfloat16().float()
+    in0_t = ttnn.from_torch(
+        in0,
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    in1_t = ttnn.from_torch(
+        in0,
+        device=device,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=output_mem_config,
+    )
+    in1 = ttnn.to_torch(in1_t)
+
+    out_t = ttnn.add(in0_t, in1_t, dtype=ttnn.bfloat16, memory_config=output_mem_config)
+
+    out = ttnn.to_torch(out_t)
+
+    passing, output = comp_pcc(out, torch.add(in0, in1), 0.9999)
+    logger.info(output)
+    assert passing
+
+
+@run_for_wormhole_b0()
+@pytest.mark.parametrize("device_params", [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}], indirect=True)
+def test_run_elt_binary_mul_with_sub_devices(device):
+    unharvested_grid_size = (7, 10)
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if unharvested_grid_size[0] > compute_grid_size.x or unharvested_grid_size[1] > compute_grid_size.y:
+        pytest.skip(f"Need {unharvested_grid_size} grid size to run this test but core grid is {compute_grid_size}")
+
+    shape = (1, 1, 32, 896)
+    torch.manual_seed(10)
+
+    start_core = ttnn.CoreCoord(1, 0)
+    core_grid = ttnn.CoreRangeSet(
+        [
+            ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
+            ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
+        ]
+    )
+    shard_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(start_core, 28, core_grid, row_wise=True)
+    shard_spec = ttnn.ShardSpec(shard_grid, (32, 32), ttnn.ShardOrientation.ROW_MAJOR)
+    output_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        shard_spec,
+    )
+    in0 = torch.randn(shape).bfloat16().float()
+    in1 = torch.randn(shape).bfloat16().float()
+    in0_t = ttnn.from_torch(
+        in0,
+        device=device,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=output_mem_config,
+    )
+    in0 = ttnn.to_torch(in0_t)
+    in1_t = ttnn.from_torch(
+        in0,
+        device=device,
+        dtype=ttnn.bfloat8_b,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=output_mem_config,
+    )
+    in1 = ttnn.to_torch(in1_t)
+
+    out_t = ttnn.mul(
+        in0_t,
+        in1_t,
+        input_tensor_a_activation=ttnn.UnaryOpType.SILU,
+        dtype=ttnn.bfloat8_b,
+        memory_config=output_mem_config,
+    )
+
+    out = ttnn.to_torch(out_t)
+    torch_silu = torch.nn.SiLU()
+    passing, output = comp_pcc(out, torch.mul(torch_silu(in0), in1), 0.999)
     logger.info(output)
     assert passing

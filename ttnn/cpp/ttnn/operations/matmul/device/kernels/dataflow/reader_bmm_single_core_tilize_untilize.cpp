@@ -8,7 +8,7 @@
 // #include "debug/dprint.h"
 
 #ifdef FUSE_BIAS
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/reader_bmm_single_core_bias.hpp"
+#include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/reader_bmm_single_core_bias.hpp"
 #endif
 
 /**

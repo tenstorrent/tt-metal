@@ -6,7 +6,6 @@ Table of Contents
 - [Table of Contents](#table-of-contents)
   - [Contributing to tt-metal](#contributing-to-tt-metal)
   - [Machine setup](#machine-setup)
-    - [Hugepages setup](#hugepages-setup)
   - [Developing tt-metal](#developing-tt-metal)
     - [Setting logger level](#setting-logger-level)
     - [Building and viewing the documentation locally](#building-and-viewing-the-documentation-locally)
@@ -77,7 +76,7 @@ set up for users.
 
 Please refer to the [README](README.md) for source installation and environment
 setup instructions, then please read the [Getting Started
-page](docs/source/get_started/get_started.rst).
+page](docs/source/tt-metalium/get_started/get_started.rst).
 
 ### Setting logger level
 
@@ -93,7 +92,7 @@ TT_METAL_LOGGER_LEVEL=Debug ./build/test/tt_metal/test_add_two_ints
 ### Building and viewing the documentation locally
 
 1. First, ensure that you have [built the project and activated the Python
-environment](docs/source/get_started/get_started.rst), along with any required
+environment](docs/source/tt-metalium/get_started/get_started.rst), along with any required
 `PYTHONPATH` variables.
 
 2. Build the HTML documentation.
@@ -281,7 +280,7 @@ running such tests.
   - To debug the C++ binding file itself:
     - Ensure the python file you wish to debug is standalone and has a main function.
     - Run `gdb --args python <python file>`
-  - Breakpoints can be added for future loaded libraries. For example, to add a breakpoint to `Device` object construtor:
+  - Breakpoints can be added for future loaded libraries. For example, to add a breakpoint to `Device` object constructor:
 ```
 (gdb) b device.cpp:Device::Device
 No source file named device.cpp.
@@ -322,19 +321,19 @@ Breakpoint 1, tt::tt_metal::Device::Device (this=0x3c, device_id=21845, num_hw_c
 TT_METAL_WATCHER=10 ./your_program
 ...
                  Always | WARNING  | Watcher detected NOC error and stopped device: bad alignment in NOC transaction.
-                 Always | WARNING  | Device 0 worker core(x= 0,y= 0) phys(x= 1,y= 1): brisc using noc0 tried to access DRAM core w/ physical coords (x=0,y=11) DRAM[addr=0x00003820,len=102400], misaligned with local L1[addr=0x00064010]
+                 Always | WARNING  | Device 0 worker core(x= 0,y= 0) virtual(x= 1,y= 1): brisc using noc0 tried to access DRAM core w/ physical coords (x=0,y=11) DRAM[addr=0x00003820,len=102400], misaligned with local L1[addr=0x00064010]
                  Always | INFO     | Last waypoint: NARW,   W,   W,   W,   W
                  Always | INFO     | While running kernels:
                  Always | INFO     |  brisc : tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy.cpp
                  Always | INFO     |  ncrisc: blank
                  Always | INFO     |  triscs: blank
-                   Test | INFO     | Reported error: Device 0 worker core(x= 0,y= 0) phys(x= 1,y= 1): brisc using noc0 tried to access DRAM core w/ physical coords (x=0,y=11) DRAM[addr=0x00003820,len=102400], misaligned with local L1[addr=0x00064010]
+                   Test | INFO     | Reported error: Device 0 worker core(x= 0,y= 0) virtual(x= 1,y= 1): brisc using noc0 tried to access DRAM core w/ physical coords (x=0,y=11) DRAM[addr=0x00003820,len=102400], misaligned with local L1[addr=0x00064010]
                  Always | FATAL    | Watcher detected NOC error and stopped device: bad alignment in NOC transaction.
 ```
   - If no such error is reported, but the program is hanging, check the watcher log generated in `generated/watcher/watcher.log`. There is a legend at the top of the log showing how to interpret it, and a sample portion of a log is shown below:
 ```
 Legend:
-    Comma separated list specifices waypoint for BRISC,NCRISC,TRISC0,TRISC1,TRISC2
+    Comma separated list specifies waypoint for BRISC,NCRISC,TRISC0,TRISC1,TRISC2
     I=initialization sequence
     W=wait (top of spin loop)
     R=run (entering kernel)
@@ -352,22 +351,22 @@ Legend:
     k_ids:<brisc id>|<ncrisc id>|<trisc id> (ID map to file at end of section)
 ...
 Dump #7 at 8.992s
-Device 0 worker core(x= 0,y= 0) phys(x= 1,y= 1):   GW,   W,   W,   W,   W  rmsg:D0D|BNT smsg:DDDD k_ids:14|13|15
-Device 0 worker core(x= 1,y= 0) phys(x= 2,y= 1):   GW,   W,   W,   W,   W  rmsg:D0D|BNT smsg:DDDD k_ids:14|13|15
-Device 0 worker core(x= 2,y= 0) phys(x= 3,y= 1):   GW,   W,   W,   W,   W  rmsg:D0D|BNT smsg:DDDD k_ids:14|13|15
-Device 0 worker core(x= 3,y= 0) phys(x= 4,y= 1):   GW,   W,   W,   W,   W  rmsg:D0D|BNT smsg:DDDD k_ids:14|13|15
-Device 0 worker core(x= 4,y= 0) phys(x= 6,y= 1):   GW,   W,   W,   W,   W  rmsg:D0D|BNT smsg:DDDD k_ids:14|13|15
-Device 0 worker core(x= 5,y= 0) phys(x= 7,y= 1):   GW,   W,   W,   W,   W  rmsg:D0D|BNT smsg:DDDD k_ids:14|13|15
-Device 0 worker core(x= 6,y= 0) phys(x= 8,y= 1):   GW,   W,   W,   W,   W  rmsg:D0D|BNT smsg:DDDD k_ids:14|13|15
-Device 0 worker core(x= 7,y= 0) phys(x= 9,y= 1):   GW,   W,   W,   W,   W  rmsg:D0D|BNT smsg:DDDD k_ids:14|13|15
-Device 0 worker core(x= 0,y= 7) phys(x= 1,y=10):  NTW,UAPW,   W,   W,   W  rmsg:H1G|bNt smsg:GDDD k_ids:0|2|0
-Device 0 worker core(x= 1,y= 7) phys(x= 2,y=10):  NTW, HQW,   W,   W,   W  rmsg:H1G|bNt smsg:GDDD k_ids:0|1|0
-Device 0 worker core(x= 2,y= 7) phys(x= 3,y=10):  NTW, HQW,   W,   W,   W  rmsg:H1G|bNt smsg:GDDD k_ids:0|3|0
-Device 0 worker core(x= 3,y= 7) phys(x= 4,y=10):  NTW,UAPW,   W,   W,   W  rmsg:H1G|bNt smsg:GDDD k_ids:0|7|0
-Device 0 worker core(x= 4,y= 7) phys(x= 6,y=10): NABD,   W,   W,   W,   W  rmsg:H0G|Bnt smsg:DDDD k_ids:4|0|0
-Device 0 worker core(x= 5,y= 7) phys(x= 7,y=10): NABD,   W,   W,   W,   W  rmsg:H0G|Bnt smsg:DDDD k_ids:6|0|0
-Device 0 worker core(x= 6,y= 7) phys(x= 8,y=10):   GW,   W,   W,   W,   W  rmsg:H0D|bnt smsg:DDDD k_ids:0|0|0
-Device 0 worker core(x= 7,y= 7) phys(x= 9,y=10):   GW,   W,   W,   W,   W  rmsg:H0D|bnt smsg:DDDD k_ids:0|0|0
+Device 0 worker core(x= 0,y= 0) virtual(x= 1,y= 1):   GW,   W,   W,   W,   W  rmsg:D0D|BNT smsg:DDDD k_ids:14|13|15
+Device 0 worker core(x= 1,y= 0) virtual(x= 2,y= 1):   GW,   W,   W,   W,   W  rmsg:D0D|BNT smsg:DDDD k_ids:14|13|15
+Device 0 worker core(x= 2,y= 0) virtual(x= 3,y= 1):   GW,   W,   W,   W,   W  rmsg:D0D|BNT smsg:DDDD k_ids:14|13|15
+Device 0 worker core(x= 3,y= 0) virtual(x= 4,y= 1):   GW,   W,   W,   W,   W  rmsg:D0D|BNT smsg:DDDD k_ids:14|13|15
+Device 0 worker core(x= 4,y= 0) virtual(x= 6,y= 1):   GW,   W,   W,   W,   W  rmsg:D0D|BNT smsg:DDDD k_ids:14|13|15
+Device 0 worker core(x= 5,y= 0) virtual(x= 7,y= 1):   GW,   W,   W,   W,   W  rmsg:D0D|BNT smsg:DDDD k_ids:14|13|15
+Device 0 worker core(x= 6,y= 0) virtual(x= 8,y= 1):   GW,   W,   W,   W,   W  rmsg:D0D|BNT smsg:DDDD k_ids:14|13|15
+Device 0 worker core(x= 7,y= 0) virtual(x= 9,y= 1):   GW,   W,   W,   W,   W  rmsg:D0D|BNT smsg:DDDD k_ids:14|13|15
+Device 0 worker core(x= 0,y= 7) virtual(x= 1,y=10):  NTW,UAPW,   W,   W,   W  rmsg:H1G|bNt smsg:GDDD k_ids:0|2|0
+Device 0 worker core(x= 1,y= 7) virtual(x= 2,y=10):  NTW, HQW,   W,   W,   W  rmsg:H1G|bNt smsg:GDDD k_ids:0|1|0
+Device 0 worker core(x= 2,y= 7) virtual(x= 3,y=10):  NTW, HQW,   W,   W,   W  rmsg:H1G|bNt smsg:GDDD k_ids:0|3|0
+Device 0 worker core(x= 3,y= 7) virtual(x= 4,y=10):  NTW,UAPW,   W,   W,   W  rmsg:H1G|bNt smsg:GDDD k_ids:0|7|0
+Device 0 worker core(x= 4,y= 7) virtual(x= 6,y=10): NABD,   W,   W,   W,   W  rmsg:H0G|Bnt smsg:DDDD k_ids:4|0|0
+Device 0 worker core(x= 5,y= 7) virtual(x= 7,y=10): NABD,   W,   W,   W,   W  rmsg:H0G|Bnt smsg:DDDD k_ids:6|0|0
+Device 0 worker core(x= 6,y= 7) virtual(x= 8,y=10):   GW,   W,   W,   W,   W  rmsg:H0D|bnt smsg:DDDD k_ids:0|0|0
+Device 0 worker core(x= 7,y= 7) virtual(x= 9,y=10):   GW,   W,   W,   W,   W  rmsg:H0D|bnt smsg:DDDD k_ids:0|0|0
 k_id[0]: blank
 k_id[1]: tt_metal/impl/dispatch/kernels/cq_prefetch.cpp
 k_id[2]: tt_metal/impl/dispatch/kernels/cq_dispatch.cpp
@@ -509,7 +508,7 @@ To set up pre-commit on your local machine, follow these steps:
   on the link to [all post-commit workflows](https://github.com/tenstorrent/tt-metal/actions/workflows/all-post-commit-workflows.yaml), clicking "Run workflow",
   selecting your branch, and pressing "Run workflow".
 
-  ![Dropdown menu of all post-commit workflows and Run Workflow button](docs/source/_static/all-post-commit-workflows-button.png)
+  ![Dropdown menu of all post-commit workflows and Run Workflow button](docs/source/common/_static/all-post-commit-workflows-button.png)
 
   You can see the status of your CI run by clicking on the specific run you
   dispatched.

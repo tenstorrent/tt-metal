@@ -5,19 +5,20 @@
 #pragma once
 
 #include "gtest/gtest.h"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
-#include "tt_metal/impl/program/program.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "tt_metal/impl/device/device.hpp"
-#include "tt_metal/impl/device/device_pool.hpp"
+#include <tt-metalium/program_impl.hpp>
+#include <tt-metalium/command_queue.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/device_pool.hpp>
+#include "llrt.hpp"
 
 // A dispatch-agnostic test fixture
 class DispatchFixture : public ::testing::Test {
 public:
     // A function to run a program, according to which dispatch mode is set.
-    void RunProgram(tt::tt_metal::Device* device, tt::tt_metal::Program& program, const bool skip_finish = false) {
+    void RunProgram(tt::tt_metal::IDevice* device, tt::tt_metal::Program& program, const bool skip_finish = false) {
         const uint64_t program_id = program.get_id();
         if (this->slow_dispatch_) {
             tt::tt_metal::detail::LaunchProgram(device, program);
@@ -29,14 +30,14 @@ public:
             }
         }
     }
-    void FinishCommands(tt::tt_metal::Device* device) {
+    void FinishCommands(tt::tt_metal::IDevice* device) {
         if (!this->IsSlowDispatch()) {
             tt::tt_metal::CommandQueue& cq = device->command_queue();
             tt::tt_metal::Finish(cq);
         }
     }
     void WriteBuffer(
-        tt::tt_metal::Device* device, std::shared_ptr<tt::tt_metal::Buffer> in_buffer, std::vector<uint32_t>& src_vec) {
+        tt::tt_metal::IDevice* device, std::shared_ptr<tt::tt_metal::Buffer> in_buffer, std::vector<uint32_t>& src_vec) {
         if (this->slow_dispatch_) {
             tt::tt_metal::detail::WriteToBuffer(in_buffer, src_vec);
         } else {
@@ -45,8 +46,8 @@ public:
         }
     }
     void ReadBuffer(
-        tt::tt_metal::Device* device,
-        std::shared_ptr<tt::tt_metal::Buffer> out_buffer,
+        tt::tt_metal::IDevice* device,
+        const std::shared_ptr<tt::tt_metal::Buffer>& out_buffer,
         std::vector<uint32_t>& dst_vec) {
         if (this->slow_dispatch_) {
             tt::tt_metal::detail::ReadFromBuffer(out_buffer, dst_vec);
@@ -60,7 +61,7 @@ public:
 
 protected:
     tt::ARCH arch_;
-    std::vector<tt::tt_metal::v1::DeviceHandle> devices_;
+    std::vector<tt::tt_metal::IDevice*> devices_;
     bool slow_dispatch_;
 
     void SetUp() override {
@@ -75,10 +76,10 @@ protected:
             }
             ids.push_back(id);
         }
-        const auto& dispatch_core_config = tt::llrt::OptionsG.get_dispatch_core_config();
+        const auto& dispatch_core_config = tt::llrt::RunTimeOptions::get_instance().get_dispatch_core_config();
         tt::DevicePool::initialize(
             ids,
-            tt::llrt::OptionsG.get_num_hw_cqs(),
+            tt::llrt::RunTimeOptions::get_instance().get_num_hw_cqs(),
             DEFAULT_L1_SMALL_SIZE,
             DEFAULT_TRACE_REGION_SIZE,
             dispatch_core_config);
@@ -108,7 +109,7 @@ protected:
         return false;
     }
 
-    void RunTestOnDevice(const std::function<void()>& run_function, tt::tt_metal::Device* device) {
+    void RunTestOnDevice(const std::function<void()>& run_function, tt::tt_metal::IDevice* device) {
         if (SkipTest(device->id())) {
             return;
         }

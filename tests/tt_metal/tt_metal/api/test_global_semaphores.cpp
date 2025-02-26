@@ -7,10 +7,10 @@
 #include <vector>
 
 #include "device_fixture.hpp"
-#include "tt_metal/common/core_coord.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/buffers/global_semaphore.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/global_semaphore.hpp>
 
 TEST_F(DispatchFixture, InitializeGlobalSemaphores) {
     CoreRangeSet cores(CoreRange({0, 0}, {1, 1}));
@@ -20,8 +20,8 @@ TEST_F(DispatchFixture, InitializeGlobalSemaphores) {
         {
             uint32_t initial_value = 1;
             auto global_semaphore = tt::tt_metal::CreateGlobalSemaphore(device, cores, initial_value);
-            auto address = global_semaphore->address();
-
+            auto address = global_semaphore.address();
+            Synchronize(device);
             for (const auto& core : cores_vec) {
                 auto sem_vals = tt::llrt::read_hex_vec_from_core(
                     device->id(), device->worker_core_from_logical_core(core), address, sizeof(uint32_t));
@@ -32,8 +32,8 @@ TEST_F(DispatchFixture, InitializeGlobalSemaphores) {
         {
             uint32_t initial_value = 2;
             auto global_semaphore = tt::tt_metal::CreateGlobalSemaphore(device, cores, initial_value);
-            auto address = global_semaphore->address();
-
+            auto address = global_semaphore.address();
+            Synchronize(device);
             for (const auto& core : cores_vec) {
                 auto sem_vals = tt::llrt::read_hex_vec_from_core(
                     device->id(), device->worker_core_from_logical_core(core), address, sizeof(uint32_t));
@@ -53,21 +53,25 @@ TEST_F(DispatchFixture, CreateMultipleGlobalSemaphoresOnSameCore) {
     }
     for (auto device : devices_) {
         {
-            std::vector<std::shared_ptr<tt::tt_metal::GlobalSemaphore>> global_semaphores;
+            std::vector<tt::tt_metal::GlobalSemaphore> global_semaphores;
             global_semaphores.reserve(cores.size());
             std::vector<DeviceAddr> addresses;
             addresses.reserve(cores.size());
             for (size_t i = 0; i < cores.size(); i++) {
                 global_semaphores.push_back(tt::tt_metal::CreateGlobalSemaphore(device, cores[i], initial_values[i]));
-                addresses.push_back(global_semaphores[i]->address());
+                addresses.push_back(global_semaphores[i].address());
             }
+            Synchronize(device);
             for (size_t i = 0; i < cores.size(); i++) {
                 const auto& address = addresses[i];
                 const auto& initial_value = initial_values[i];
                 const auto& cores_vec = cores_vecs[i];
                 for (const auto& core : cores_vec) {
                     auto sem_vals = tt::llrt::read_hex_vec_from_core(
-                        device->id(), device->worker_core_from_logical_core(core), address, sizeof(uint32_t));
+                        device->id(),
+                        device->worker_core_from_logical_core(core),
+                        address,
+                        sizeof(uint32_t));
                     EXPECT_EQ(sem_vals[0], initial_value);
                 }
             }
@@ -82,10 +86,11 @@ TEST_F(DispatchFixture, ResetGlobalSemaphores) {
     for (auto device : devices_) {
         {
             uint32_t initial_value = 1;
+            uint32_t reset_value = 2;
             std::vector<uint32_t> overwrite_value = {2};
             auto global_semaphore = tt::tt_metal::CreateGlobalSemaphore(device, cores, initial_value);
-            auto address = global_semaphore->address();
-
+            auto address = global_semaphore.address();
+            Synchronize(device);
             for (const auto& core : cores_vec) {
                 auto sem_vals = tt::llrt::read_hex_vec_from_core(
                     device->id(), device->worker_core_from_logical_core(core), address, sizeof(uint32_t));
@@ -100,13 +105,14 @@ TEST_F(DispatchFixture, ResetGlobalSemaphores) {
 
                 EXPECT_EQ(sem_vals[0], overwrite_value[0]);
             }
-            global_semaphore->reset_semaphore_value();
+            global_semaphore.reset_semaphore_value(reset_value);
+            Synchronize(device);
             for (const auto& core : cores_vec) {
                 auto sem_vals = tt::llrt::read_hex_vec_from_core(
                     device->id(), device->worker_core_from_logical_core(core), address, sizeof(uint32_t));
                 tt::llrt::write_hex_vec_to_core(
                     device->id(), device->worker_core_from_logical_core(core), overwrite_value, address);
-                EXPECT_EQ(sem_vals[0], initial_value);
+                EXPECT_EQ(sem_vals[0], reset_value);
             }
         }
     }

@@ -26,6 +26,11 @@ struct address_map {
     static constexpr std::int32_t DATA_BUFFER_SIZE_ETH = 4 * 1024;
     static constexpr std::int32_t DATA_BUFFER_SIZE_NOC = 16 * 1024;
     static constexpr std::int32_t DATA_BUFFER_SIZE = 24 * 1024;
+    // Memory for (dram/l1)_bank_to_noc_xy arrays, size needs to be atleast 2 * NUM_NOCS * (NUM_DRAM_BANKS + NUM_L1_BANKS)
+    static constexpr std::int32_t ERISC_MEM_BANK_TO_NOC_XY_SIZE = 1024;
+    // Memory for bank_to_dram_offset and bank_to_l1_offset arrays, size needs to be atleast 4 * (NUM_DRAM_BANKS + NUM_L1_BANKS)
+    static constexpr std::int32_t ERISC_MEM_BANK_OFFSET_SIZE = 1024;
+
     // Kernel config buffer is WIP
     // Size is presently based on the old sizes of the RTAs + CB config + Sems
     static constexpr std::int32_t ERISC_L1_KERNEL_CONFIG_SIZE = 96 * 4 + 8 * 16;
@@ -51,24 +56,26 @@ struct address_map {
     static constexpr std::int32_t ERISC_APP_ROUTING_INFO_BASE = TILE_HEADER_BUFFER_BASE;
     static constexpr std::int32_t ERISC_APP_SYNC_INFO_BASE = ERISC_APP_ROUTING_INFO_BASE + ERISC_APP_ROUTING_INFO_SIZE;
 
-    static constexpr uint32_t ISSUE_CQ_CB_BASE = ERISC_APP_SYNC_INFO_BASE + ERISC_APP_SYNC_INFO_SIZE;
-    static constexpr uint32_t COMPLETION_CQ_CB_BASE = ISSUE_CQ_CB_BASE + 7 * L1_ALIGNMENT;
+    static constexpr std::int32_t ERISC_MEM_MAILBOX_BASE = ERISC_APP_SYNC_INFO_BASE + ERISC_APP_SYNC_INFO_SIZE;
 
-    static constexpr std::int32_t ERISC_MEM_MAILBOX_BASE = COMPLETION_CQ_CB_BASE + 7 * L1_ALIGNMENT;
-
-    static constexpr std::uint32_t ERISC_MEM_MAILBOX_SIZE = 3232;
+    static constexpr std::uint32_t ERISC_MEM_MAILBOX_SIZE = 3616;
     static constexpr std::uint32_t ERISC_MEM_MAILBOX_END = ERISC_MEM_MAILBOX_BASE + ERISC_MEM_MAILBOX_SIZE;
     static constexpr std::int32_t ERISC_L1_KERNEL_CONFIG_BASE = ERISC_MEM_MAILBOX_END;
-    static constexpr std::int32_t ERISC_L1_UNRESERVED_BASE =
+    static constexpr std::int32_t FABRIC_ROUTER_CONFIG_BASE =
         (ERISC_L1_KERNEL_CONFIG_BASE + ERISC_L1_KERNEL_CONFIG_SIZE + 31) & ~31;
+    static constexpr std::int32_t FABRIC_ROUTER_CONFIG_SIZE = 2064;
+    static constexpr std::int32_t ERISC_L1_UNRESERVED_BASE =
+        (FABRIC_ROUTER_CONFIG_BASE + FABRIC_ROUTER_CONFIG_SIZE + 31) & ~31;
     static constexpr std::int32_t ERISC_L1_UNRESERVED_SIZE = MAX_L1_LOADING_SIZE - ERISC_L1_UNRESERVED_BASE;
 
     static_assert((ERISC_L1_UNRESERVED_BASE % 32) == 0);
 
-    static constexpr std::int32_t LAUNCH_ERISC_APP_FLAG = L1_EPOCH_Q_BASE + 4;
+    // This scratch address is same as ERISC_L1_UNRESERVED_BASE, as the scratch space is used to copy data during
+    // runtime build, and is unused once FW copies the data to local memory during FW initialization.
+    static constexpr std::int32_t ERISC_MEM_BANK_TO_NOC_SCRATCH = ERISC_L1_UNRESERVED_BASE;
+    static constexpr std::int32_t ERISC_MEM_BANK_TO_NOC_SIZE = ERISC_MEM_BANK_TO_NOC_XY_SIZE + ERISC_MEM_BANK_OFFSET_SIZE;
 
-    // BIDIR Tunneling Kernel Space
-    static constexpr std::int32_t ERISC_L1_TUNNEL_BUFFER_SIZE = ERISC_L1_UNRESERVED_SIZE / 2;
+    static constexpr std::int32_t LAUNCH_ERISC_APP_FLAG = L1_EPOCH_Q_BASE + 4;
 
     template <std::size_t A, std::size_t B>
     struct TAssertEquality {
@@ -82,7 +89,6 @@ struct address_map {
                      // l1 locations listed above into internal local memory that starts
                      // at RISC_LOCAL_MEM_BASE address
 
-    static constexpr std::uint32_t FW_VERSION_ADDR = 0x210;
     static constexpr std::uint32_t RETRAIN_COUNT_ADDR = 0x1EDC;
     static constexpr std::uint32_t RETRAIN_FORCE_ADDR = 0x1EFC;
 };

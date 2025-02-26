@@ -4,8 +4,8 @@
 
 #include "global_circular_buffer.hpp"
 
-#include "tt_metal/impl/buffers/global_circular_buffer.hpp"
-#include "ttnn/cpp/ttnn/global_circular_buffer.hpp"
+#include <tt-metalium/global_circular_buffer_impl.hpp>
+#include "cpp/ttnn/global_circular_buffer.hpp"
 #include "pybind11/pybind11.h"
 
 namespace ttnn::global_circular_buffer {
@@ -19,8 +19,8 @@ void py_module(py::module& module) {
     // Single Device APIs
     module.def(
         "create_global_circular_buffer",
-        py::overload_cast<Device*, const std::unordered_map<CoreCoord, CoreRangeSet>&, uint32_t, BufferType>(
-            &create_global_circular_buffer),
+        py::overload_cast<IDevice*, const std::vector<std::pair<CoreCoord, CoreRangeSet>>&, uint32_t, BufferType>(
+            &ttnn::global_circular_buffer::create_global_circular_buffer),
         py::arg("device"),
         py::arg("sender_receiver_core_mapping"),
         py::arg("size"),
@@ -30,16 +30,16 @@ void py_module(py::module& module) {
 
             Args:
                 device (Device): The device on which to create the global circular buffer.
-                sender_receiver_core_mapping (dict): The mapping of remote sender to remote receiver cores for the circular buffer.
+                sender_receiver_core_mapping (List[Tuple[CoreCoord, CoreRangeSet]]): The mapping of remote sender to remote receiver cores for the circular buffer.
                 size (int): Size of the global circular buffer per core in bytes.
-                buffer_type (BufferType): The type of buffer to use for the global circular buffer.
+                buffer_type (BufferType): The type of buffer to use for the global circular buffer.\
             )doc");
 
     // Multi Device APIs
     module.def(
         "create_global_circular_buffer",
-        py::overload_cast<MeshDevice*, const std::unordered_map<CoreCoord, CoreRangeSet>&, uint32_t, BufferType>(
-            &create_global_circular_buffer),
+        py::overload_cast<MeshDevice*, const std::vector<std::pair<CoreCoord, CoreRangeSet>>&, uint32_t, BufferType>(
+            &ttnn::global_circular_buffer::create_global_circular_buffer),
         py::arg("mesh_device"),
         py::arg("sender_receiver_core_mapping"),
         py::arg("size"),
@@ -49,7 +49,7 @@ void py_module(py::module& module) {
 
             Args:
                 mesh_device (MeshDevice): The mesh device on which to create the global circular buffer.
-                sender_receiver_core_mapping (dict): The mapping of remote sender to remote receiver cores for the circular buffer.
+                sender_receiver_core_mapping (List[Tuple[CoreCoord, CoreRangeSet]]): The mapping of remote sender to remote receiver cores for the circular buffer.
                 size (int): Size of the global circular buffer per core in bytes.
                 buffer_type (BufferType): The type of buffer to use for the global circular buffer.
             )doc");

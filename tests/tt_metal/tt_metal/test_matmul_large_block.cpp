@@ -6,11 +6,11 @@
 #include <functional>
 #include <random>
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "common/bfloat16.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
-#include "test_tiles.hpp"
+#include <tt-metalium/test_tiles.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
@@ -94,7 +94,7 @@ void print_faces(std::vector<bfloat16> data, string name) {
 
 void create_CBs_for_fused_matmul(
     tt_metal::Program& program,
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     CoreCoord core,
     bool activations_rm,
     bool output_rm,
@@ -226,7 +226,7 @@ void create_CBs_for_fused_matmul(
     }
 }
 
-bool test_matmul_large_block(tt_metal::Device* device, bool activations_rm, bool output_rm) {
+bool test_matmul_large_block(tt_metal::IDevice* device, bool activations_rm, bool output_rm) {
     bool pass = true;
 
     auto slow_dispatch_mode = getenv("TT_METAL_SLOW_DISPATCH_MODE");
@@ -279,17 +279,11 @@ bool test_matmul_large_block(tt_metal::Device* device, bool activations_rm, bool
         auto src1_dram_buffer = CreateBuffer(weights_config);
         auto dst_dram_buffer = CreateBuffer(dst_config);
 
-        auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
-        auto dram_src1_noc_xy = src1_dram_buffer->noc_coordinates();
-        auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
-
         const std::array mm_reader_rt_args{
             src0_dram_buffer->address(),
-            (std::uint32_t)dram_src0_noc_xy.x,
-            (std::uint32_t)dram_src0_noc_xy.y,
+            (uint32_t)0,
             src1_dram_buffer->address(),
-            (std::uint32_t)dram_src1_noc_xy.x,
-            (std::uint32_t)dram_src1_noc_xy.y,
+            (uint32_t)0,
             (std::uint32_t)(K / in0_block_w),     // num_blocks
             M * in0_block_w,                      // input 0 block num tiles
             N * in0_block_w,                      // input 1 block num tiles
@@ -300,17 +294,12 @@ bool test_matmul_large_block(tt_metal::Device* device, bool activations_rm, bool
         string writer_kernel;
         if (output_rm) {
             writer_kernel = "tt_metal/kernels/dataflow/writer_unary.cpp";
-            writer_rt_args = {
-                dst_dram_buffer->address(),
-                (std::uint32_t)dram_dst_noc_xy.x,
-                (std::uint32_t)dram_dst_noc_xy.y,
-                uint(M * N)};
+            writer_rt_args = {dst_dram_buffer->address(), (uint32_t)0, uint(M * N)};
         } else {
             writer_kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unswizzle.cpp";
             writer_rt_args = {
                 dst_dram_buffer->address(),
-                (std::uint32_t)dram_dst_noc_xy.x,
-                (std::uint32_t)dram_dst_noc_xy.y,
+                (uint32_t)0,
                 (std::uint32_t)out_subblock_h,      // num tiles per sub block m
                 (std::uint32_t)out_subblock_w,      // num tiles per sub block n
                 (std::uint32_t)M / out_subblock_h,  // num sub blocks m
@@ -466,7 +455,7 @@ int main(int argc, char** argv) {
     std::vector<std::string> input_args(argv, argv + argc);
 
     int device_id = 0;
-    tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+    tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
     // Tilized input, Tilized output
     pass &= test_matmul_large_block(device, false, false);

@@ -37,8 +37,7 @@ def run(
     torch_result = m(tt_input)
     torch_result = torch_result.permute(0, 2, 3, 1)
 
-    ## ttnn uses NHWC, so need to set scale_factor_c = 1
-    scale_factor = (scale_h, scale_w, 1)
+    scale_factor = (scale_h, scale_w)
     input_tensor = ttnn.from_torch(input, device=device)
     output_tensor = ttnn.upsample(input_tensor, scale_factor)
     output_tensor = ttnn.to_torch(output_tensor)

@@ -20,10 +20,17 @@ from models.utility_functions import (
 from models.perf.perf_utils import prep_perf_report
 from models.perf.device_perf_utils import run_device_perf, check_device_perf, prep_device_perf_report
 from models.utility_functions import is_grayskull
+from models.utility_functions import (
+    profiler,
+)
 
 
-def get_expected_times():
-    return (40, 16)
+def get_expected_compile_time_sec():
+    return 75
+
+
+def get_expected_inference_time_sec():
+    return 0.37
 
 
 @pytest.mark.models_performance_bare_metal
@@ -40,6 +47,7 @@ def test_yolov4(
     model_location_generator,
 ):
     disable_persistent_kernel_cache()
+    profiler.clear()
     model_path = model_location_generator("models", model_subdir="Yolo")
     batch_size = input_shape[0]
 
@@ -52,22 +60,43 @@ def test_yolov4(
         weights_pth = "tests/ttnn/integration_tests/yolov4/yolov4.pth"
     else:
         weights_pth = str(model_path / "yolov4.pth")
-    ttnn_model = TtYOLOv4(weights_pth)
+    ttnn_model = TtYOLOv4(weights_pth, device)
 
     torch_input_tensor = torch.rand(input_shape, dtype=torch.bfloat16)
+    ttnn_input = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
 
-    durations = []
-    for i in range(2):
-        tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
-        start = time.time()
-        ttnn_output = ttnn_model(device, tt_input_tensor)
-        end = time.time()
-        durations.append(end - start)
-        enable_persistent_kernel_cache()
+    logger.info(f"Compiling model with warmup run")
+    profiler.start(f"inference_and_compile_time")
+    ttnn_output_tensor = ttnn_model(ttnn_input)
 
-    inference_and_compile_time, inference_time, *_ = durations
+    profiler.end(f"inference_and_compile_time")
 
-    expected_compile_time, expected_inference_time = get_expected_times()
+    inference_and_compile_time = profiler.get("inference_and_compile_time")
+    logger.info(f"Model compiled with warmup run in {(inference_and_compile_time):.2f} s")
+
+    iterations = 16
+    outputs = []
+    logger.info(f"Running inference for {iterations} iterations")
+    for idx in range(iterations):
+        profiler.start("inference_time")
+        profiler.start(f"inference_time_{idx}")
+        ttnn_output_tensor = ttnn_model(ttnn_input)
+
+        profiler.end(f"inference_time_{idx}")
+        profiler.end("inference_time")
+
+    mean_inference_time = profiler.get("inference_time")
+    inference_time = profiler.get(f"inference_time_{iterations - 1}")
+    compile_time = inference_and_compile_time - inference_time
+    logger.info(f"Model compilation took {compile_time:.1f} s")
+    logger.info(f"Inference time on last iterations was completed in {(inference_time * 1000.0):.2f} ms")
+    logger.info(
+        f"Mean inference time for {batch_size} (batch) images was {(mean_inference_time * 1000.0):.2f} ms ({batch_size / mean_inference_time:.2f} fps)"
+    )
+
+    expected_compile_time = get_expected_compile_time_sec()
+    expected_inference_time = get_expected_inference_time_sec()
+
     prep_perf_report(
         model_name="yolov4",
         batch_size=batch_size,
@@ -96,7 +125,7 @@ def test_perf_device_bare_metal_yolov4(batch_size, model_name):
     num_iterations = 1
     margin = 0.03
 
-    expected_perf = 197.89
+    expected_perf = 102
     command = f"pytest tests/ttnn/integration_tests/yolov4/test_ttnn_yolov4.py"
 
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]

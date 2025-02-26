@@ -1,0 +1,48 @@
+name: "[internal] TG demo tests impl"
+
+on:
+  workflow_call:
+
+jobs:
+  tg-demo-tests:
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: [
+          { name: "TG Llama3 demo tests", arch: wormhole_b0, model: llama3, timeout: 180, owner_id: U06F3ER8X9A}, # Stuti Raizada
+          { name: "TG Falcon7b demo tests", arch: wormhole_b0, model: falcon7b, timeout: 120, owner_id: U05RWH3QUPM}, # Salar Hosseini
+        ]
+    env:
+      ARCH_NAME: ${{ matrix.test-group.arch }}
+      LOGURU_LEVEL: INFO
+      LD_LIBRARY_PATH: ${{ github.workspace }}/build/lib
+    runs-on:
+      - arch-wormhole_b0
+      - config-tg
+      - in-service
+      - bare-metal
+      - pipeline-functional
+    steps:
+      - uses: tenstorrent/tt-metal/.github/actions/checkout-with-submodule-lfs@main
+      - name: Set up dynamic env vars for build
+        run: |
+          echo "TT_METAL_HOME=$(pwd)" >> $GITHUB_ENV
+      - uses: actions/download-artifact@v4
+        with:
+          name: TTMetal_build_any
+      - name: Extract files
+        run: tar -xvf ttm_any.tar
+      - uses: ./.github/actions/install-python-deps
+      - name: Run demo regression tests
+        timeout-minutes: ${{ matrix.test-group.timeout }}
+        run: |
+          source ${{ github.workspace }}/python_env/bin/activate
+          cd $TT_METAL_HOME
+          export PYTHONPATH=$TT_METAL_HOME
+          ./tests/scripts/run_tests.sh --tt-arch wormhole_b0 --pipeline-type demos_tg_device --dispatch-mode "" --model ${{ matrix.test-group.model }}
+      - uses: ./.github/actions/slack-report
+        if: ${{ failure() }}
+        with:
+          slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+          owner: ${{ matrix.test-group.owner_id }}

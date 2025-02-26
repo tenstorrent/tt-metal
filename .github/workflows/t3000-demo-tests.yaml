@@ -9,8 +9,6 @@ on:
 jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
-    with:
-      arch: '["wormhole_b0"]'
     secrets: inherit
   t3000-demo-tests:
     needs: build-artifact

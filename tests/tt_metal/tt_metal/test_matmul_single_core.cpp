@@ -6,11 +6,11 @@
 #include <functional>
 #include <random>
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "common/bfloat16.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
-#include "test_tiles.hpp"
+#include <tt-metalium/test_tiles.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // TODO: explain what test does
@@ -154,7 +154,7 @@ int main(int argc, char** argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
@@ -217,10 +217,6 @@ int main(int argc, char** argv) {
         auto src1_dram_buffer = CreateBuffer(weights_config);
         auto dst_dram_buffer = CreateBuffer(dst_config);
 
-        auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
-        auto dram_src1_noc_xy = src1_dram_buffer->noc_coordinates();
-        auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
-
         uint32_t src0_cb_index = 0;
         uint32_t cb0_tiles = M * in0_block_w * 2;
         tt_metal::CircularBufferConfig cb_src0_config =
@@ -249,11 +245,9 @@ int main(int argc, char** argv) {
 
         const std::array mm_reader_rt_args{
             src0_dram_buffer->address(),
-            (std::uint32_t)dram_src0_noc_xy.x,
-            (std::uint32_t)dram_src0_noc_xy.y,
+            (uint32_t)0,
             src1_dram_buffer->address(),
-            (std::uint32_t)dram_src1_noc_xy.x,
-            (std::uint32_t)dram_src1_noc_xy.y,
+            (uint32_t)0,
             (std::uint32_t)(K / in0_block_w),     // num_blocks
             M * in0_block_w,                      // input 0 block num tiles
             N * in0_block_w,                      // input 1 block num tiles
@@ -262,8 +256,7 @@ int main(int argc, char** argv) {
 
         const std::array writer_rt_args{
             dst_dram_buffer->address(),
-            (std::uint32_t)dram_dst_noc_xy.x,
-            (std::uint32_t)dram_dst_noc_xy.y,
+            (uint32_t)0,
             (std::uint32_t)out_subblock_h,      // num tiles per sub block m
             (std::uint32_t)out_subblock_w,      // num tiles per sub block n
             (std::uint32_t)M / out_subblock_h,  // num sub blocks m

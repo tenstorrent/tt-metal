@@ -30,9 +30,10 @@ from models.utility_functions import skip_for_grayskull
 )
 @pytest.mark.parametrize(
     "batch",
-    (1,),
+    (1, 2),
     ids=[
         "batch_1",
+        "batch_2",
     ],
 )
 def test_llama_cross_attention_transformer_block_inference(
@@ -57,6 +58,7 @@ def test_llama_cross_attention_transformer_block_inference(
     dim = model_args.dim
     head_dim = model_args.head_dim
     n_heads = model_args.n_heads
+    n_kv_heads = model_args.n_kv_heads
     reference_model = llama_reference_mod.CrossAttentionTransformerBlock(args=model_args, layer_id=0, no_ffn=False)
     reference_model.load_state_dict(partial_state_dict)
 
@@ -83,12 +85,14 @@ def test_llama_cross_attention_transformer_block_inference(
     """
     pt_xattn_cache = reference_model.compute_xattn_kv_cache(pt_xattn_tokens)
     pt_xattn_cache_chunks = torch.chunk(pt_xattn_cache, 2, dim=0)
-    pt_xattn_cache_chunks = [x.view(batch, n_heads, vision_seq_len, head_dim) for x in pt_xattn_cache]
+    pt_xattn_cache_chunks = [
+        x.view(batch, n_heads, vision_seq_len, head_dim)[:, :: n_heads // n_kv_heads] for x in pt_xattn_cache
+    ]
 
     # Preallocate K and V caches
     tt_xattn_cache = [
         ttnn.from_torch(
-            torch.zeros(batch, n_heads, vision_seq_len, head_dim),
+            torch.zeros(batch, n_kv_heads, vision_seq_len, head_dim),
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -136,26 +140,25 @@ def test_llama_cross_attention_transformer_block_inference(
         full_text_mask = full_text_mask.unsqueeze(1).unsqueeze(-1)
         full_text_mask_expand_1NSH = full_text_mask.expand(-1, n_heads // model_args.num_devices, -1, head_dim)
 
-        full_text_mask_expand_11SD = full_text_mask.expand(-1, -1, -1, dim)
-
         pt_out = reference_model.forward(
             pt_x, xattn_mask=xattn_mask, full_text_row_masked_out_mask=full_text_mask, xattn_cache=pt_xattn_cache
         )
 
         if mode == "prefill":
+            full_text_mask_expand_11SD = full_text_mask.expand(-1, -1, -1, dim)
             outputs = []
             for b in range(batch):
-                tt_tensor_xattn_tokens = model_args.prepare_inputs_ttnn_prefill(
+                tt_tensor_xattn_tokens = model_args.prepare_residual_tensor_prefill(
                     tt_xattn_tokens[b : b + 1],
                     force_replicated=True,
                 )
-                tt_tensor_x = model_args.prepare_inputs_ttnn_prefill(
+                tt_tensor_x = model_args.prepare_residual_tensor_prefill(
                     tt_x[b : b + 1],
                 )
                 tt_xattn_mask = ttnn.from_torch(
-                    xattn_mask_expand[b : b + 1],
+                    xattn_mask[b : b + 1],
                     device=mesh_device,
-                    dtype=ttnn.bfloat8_b,
+                    dtype=ttnn.bfloat4_b,
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
@@ -163,7 +166,7 @@ def test_llama_cross_attention_transformer_block_inference(
                 tt_full_text_mask_expand_1NSH = ttnn.from_torch(
                     full_text_mask_expand_1NSH[b : b + 1],
                     device=mesh_device,
-                    dtype=ttnn.bfloat8_b,
+                    dtype=ttnn.bfloat4_b,
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
@@ -171,7 +174,7 @@ def test_llama_cross_attention_transformer_block_inference(
                 tt_full_text_mask_expand_11SD = ttnn.from_torch(
                     full_text_mask_expand_11SD[b : b + 1],
                     device=mesh_device,
-                    dtype=ttnn.bfloat8_b,
+                    dtype=ttnn.bfloat4_b,
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
@@ -193,49 +196,60 @@ def test_llama_cross_attention_transformer_block_inference(
             tt_output_torch = torch.cat(outputs, dim=0).view(batch, seq_len, dim)
 
         else:
-            tt_x = model_args.prepare_inputs_ttnn_decode(
+            tt_x = model_args.prepare_residual_tensor_decode(
                 tt_x,
-                ttnn.DRAM_MEMORY_CONFIG,
+                model_args.model_config["DECODE_RESIDUAL_MEMCFG"],
             )
             xattn_mask_expand = xattn_mask_expand.permute(2, 0, 1, 3).contiguous()
             tt_xattn_mask = ttnn.from_torch(
                 xattn_mask_expand,
                 device=mesh_device,
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat4_b,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
             )
             tt_xattn_mask = ttnn.reshape(
                 tt_xattn_mask,
-                shape=ttnn.Shape(
-                    [1, batch, n_heads // model_args.num_devices, vision_seq_len],
-                    [1, batch, 32, vision_seq_len],
-                ),
+                [1, batch, n_heads // model_args.num_devices, vision_seq_len],
+                [1, batch, 32, vision_seq_len],
             )
 
             full_text_mask_expand_1NSH = full_text_mask_expand_1NSH.permute(2, 0, 1, 3).contiguous()
             tt_full_text_mask_expand_1NSH = ttnn.from_torch(
                 full_text_mask_expand_1NSH,
                 device=mesh_device,
-                dtype=ttnn.bfloat8_b,
+                dtype=ttnn.bfloat4_b,
                 layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
             )
             tt_full_text_mask_expand_1NSH = ttnn.reshape(
                 tt_full_text_mask_expand_1NSH,
-                shape=ttnn.Shape(
-                    [1, batch, n_heads // model_args.num_devices, head_dim],
-                    [1, batch, 32, head_dim],
-                ),
+                [1, batch, n_heads // model_args.num_devices, head_dim],
+                [1, batch, 32, head_dim],
             )
+
+            full_text_mask_expand_11SD = full_text_mask.transpose(0, 2)
+            if batch < 32:
+                full_text_mask_expand_11SD = torch.cat(
+                    [full_text_mask_expand_11SD, torch.zeros(1, 1, 32 - batch, 1)], dim=2
+                )
+            full_text_mask_expand_11SD = full_text_mask_expand_11SD.expand(-1, -1, -1, dim // model_args.num_devices)
+            tt_full_text_mask_expand_11SD = ttnn.from_torch(
+                full_text_mask_expand_11SD,
+                device=mesh_device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            )
+            tt_full_text_mask_expand_11SD = ttnn.to_layout(tt_full_text_mask_expand_11SD, ttnn.TILE_LAYOUT)
 
             tt_out = tt_model(
                 tt_x,
                 xattn_mask=tt_xattn_mask,
                 full_text_row_masked_out_mask_1NSH=tt_full_text_mask_expand_1NSH,
-                full_text_row_masked_out_mask_11SD=None,
+                full_text_row_masked_out_mask_11SD=tt_full_text_mask_expand_11SD,
                 xattn_cache=tt_xattn_cache,
                 mode=mode,
             )
@@ -252,7 +266,7 @@ def test_llama_cross_attention_transformer_block_inference(
             tt_xattn_cache_torch = [
                 ttnn.to_torch(x, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1)).view(
                     batch,
-                    n_heads,
+                    n_kv_heads,
                     vision_seq_len,
                     head_dim,
                 )

@@ -6,9 +6,9 @@
 #include <functional>
 #include <random>
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "common/bfloat16.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/bfloat16.hpp>
 // #include "tt_gdb/tt_gdb.hpp"
 
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -27,7 +27,7 @@ int main(int argc, char** argv) {
         //                      Device Setup
         ////////////////////////////////////////////////////////////////////////////
         int device_id = 0;
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         ////////////////////////////////////////////////////////////////////////////
         //                      Application Setup
@@ -69,7 +69,6 @@ int main(int argc, char** argv) {
                     .buffer_type = tt_metal::BufferType::DRAM};
                 auto src_dram_buffer = CreateBuffer(dram_config);
                 uint32_t dram_buffer_src_addr = src_dram_buffer->address();
-                auto dram_src_noc_xy = src_dram_buffer->noc_coordinates();
                 tt_metal::detail::WriteToBuffer(src_dram_buffer, src_vec);
 
                 auto l1_to_l1_kernel = tt_metal::CreateKernel(
@@ -84,15 +83,14 @@ int main(int argc, char** argv) {
                     l1_to_l1_kernel,
                     core,
                     {dram_buffer_src_addr,
-                     (std::uint32_t)dram_src_noc_xy.x,
-                     (std::uint32_t)dram_src_noc_xy.y,
-                     l1_buffer_addr,
-                     l1_buffer_addr,
-                     (uint32_t)dst_soc_core.x,
-                     (uint32_t)dst_soc_core.y,
-                     num_tiles,
-                     tile_size_bytes,
-                     total_tiles_size_bytes});
+                    0,
+                    l1_buffer_addr,
+                    l1_buffer_addr,
+                    (uint32_t)dst_soc_core.x,
+                    (uint32_t)dst_soc_core.y,
+                    num_tiles,
+                    tile_size_bytes,
+                    total_tiles_size_bytes});
             }
         }
 

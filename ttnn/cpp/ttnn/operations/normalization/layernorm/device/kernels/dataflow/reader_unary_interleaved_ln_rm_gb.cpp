@@ -4,8 +4,8 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
+#include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_reduce_scaler.hpp"
+#include "cpp/ttnn/deprecated/tt_dnn/kernels/dataflow/generate_bcast_scalar.hpp"
 
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -112,8 +112,9 @@ void kernel_main() {
                     uint32_t l1_write_addr = get_write_ptr(cb_id_gamma);
                     for (uint32_t r = 0; r < blk; r++) {
                         uint64_t gamma_noc_addr = get_noc_addr(wt + r, addrg);
-                        noc_async_read(gamma_noc_addr, l1_write_addr, 32);
-                        gamma_noc_addr += 32;
+                        noc_async_read(gamma_noc_addr, l1_write_addr, 64);
+                        gamma_noc_addr = get_noc_addr(l1_write_addr + 32);
+                        noc_async_read_barrier();
                         noc_async_read(gamma_noc_addr, l1_write_addr + 512, 32);
                         l1_write_addr += gamma_tile_bytes;
                     }
@@ -128,8 +129,9 @@ void kernel_main() {
                     uint32_t l1_write_addr = get_write_ptr(cb_id_beta);
                     for (uint32_t r = 0; r < blk; r++) {
                         uint64_t beta_noc_addr = get_noc_addr(wt + r, addrb);
-                        noc_async_read(beta_noc_addr, l1_write_addr, 32);
-                        beta_noc_addr += 32;
+                        noc_async_read(beta_noc_addr, l1_write_addr, 64);
+                        beta_noc_addr = get_noc_addr(l1_write_addr + 32);
+                        noc_async_read_barrier();
                         noc_async_read(beta_noc_addr, l1_write_addr + 512, 32);
                         l1_write_addr += beta_tile_bytes;
                     }

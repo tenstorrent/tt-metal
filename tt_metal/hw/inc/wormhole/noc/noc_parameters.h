@@ -13,6 +13,12 @@
 #define NOC_Y_SIZE 1
 #endif
 
+// Coordinate Virtualization is fully supported by WH NOC Hardware and Firmware.
+// Tensix cores start at coorddinate <x = 18, y = 18> in Virtual Space and are contiguous.
+#define VIRTUAL_TENSIX_START_X 18
+#define VIRTUAL_TENSIX_START_Y 18
+#define COORDINATE_VIRTUALIZATION_ENABLED 1
+
 #define NUM_NOCS 2
 #define NUM_TENSIXES 80
 
@@ -267,9 +273,8 @@
         (((uint32_t)(x)) << (NOC_ADDR_LOCAL_BITS % 32))
 
 // Address formats
-#define NOC_XY_PCIE_ENCODING(x, y, noc_index)                                             \
-    ((uint64_t(NOC_XY_ENCODING(x, y)) << (NOC_ADDR_LOCAL_BITS - NOC_COORD_REG_OFFSET))) | \
-        ((noc_index ? (x == PCIE_NOC1_X and y == PCIE_NOC1_Y) : (x == PCIE_NOC_X and y == PCIE_NOC_Y)) * 0x800000000)
+#define NOC_XY_PCIE_ENCODING(x, y) \
+    ((uint64_t(NOC_XY_ENCODING(x, y)) << (NOC_ADDR_LOCAL_BITS - NOC_COORD_REG_OFFSET)) | 0x800000000)
 
 #define NOC_MULTICAST_ENCODING(x_start, y_start, x_end, y_end)                                \
     (((uint32_t)(x_start)) << ((NOC_ADDR_LOCAL_BITS % 32) + 2 * NOC_ADDR_NODE_ID_BITS)) |     \

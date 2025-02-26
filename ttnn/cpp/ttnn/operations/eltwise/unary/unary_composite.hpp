@@ -12,62 +12,6 @@ namespace ttnn {
 namespace operations {
 namespace unary {
 
-struct ExecutePower {
-    static Tensor invoke(
-        uint8_t queue_id,
-        const Tensor& input_tensor,
-        uint32_t exponent,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt) {
-        return OpHandler<UnaryCompositeOpType::POW>::handle(
-            queue_id,
-            input_tensor,
-            exponent,
-            memory_config.value_or(input_tensor.memory_config()),
-            optional_output_tensor);
-    }
-
-    static Tensor invoke(
-        const Tensor& input_tensor,
-        uint32_t exponent,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt) {
-        return OpHandler<UnaryCompositeOpType::POW>::handle(
-            DefaultQueueId,
-            input_tensor,
-            exponent,
-            memory_config.value_or(input_tensor.memory_config()),
-            optional_output_tensor);
-    }
-
-    static Tensor invoke(
-        uint8_t queue_id,
-        const Tensor& input_tensor,
-        float exponent,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt) {
-        return OpHandler<UnaryCompositeOpType::POW>::handle(
-            queue_id,
-            input_tensor,
-            exponent,
-            memory_config.value_or(input_tensor.memory_config()),
-            optional_output_tensor);
-    }
-
-    static Tensor invoke(
-        const Tensor& input_tensor,
-        float exponent,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        std::optional<Tensor> optional_output_tensor = std::nullopt) {
-        return OpHandler<UnaryCompositeOpType::POW>::handle(
-            DefaultQueueId,
-            input_tensor,
-            exponent,
-            memory_config.value_or(input_tensor.memory_config()),
-            optional_output_tensor);
-    }
-};
-
 template <UnaryCompositeOpType unary_comp_op_type>
 struct ExecuteUnaryCompositeOp {
     static Tensor invoke(const Tensor& input_tensor, const std::optional<MemoryConfig>& memory_config = std::nullopt) {
@@ -78,7 +22,7 @@ struct ExecuteUnaryCompositeOp {
 
 struct ExecuteTrunc {
     static Tensor invoke(
-        uint8_t queue_id,
+        QueueId queue_id,
         const Tensor& input_tensor,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         std::optional<Tensor> optional_output_tensor = std::nullopt);
@@ -168,7 +112,7 @@ struct ExecuteUnaryCompositeOpWithInt {
 
 struct ExecuteRdiv {
     static Tensor invoke(
-        uint8_t queue_id,
+        QueueId queue_id,
         const Tensor& input_tensor,
         float value,
         const std::optional<std::string>& round_mode = std::nullopt,
@@ -228,7 +172,6 @@ auto transform_first_matching_arg(Lambda lambda, First&& first, Rest&&... rest) 
 
 constexpr auto rdiv = ttnn::register_operation_with_auto_launch_op<"ttnn::rdiv", operations::unary::ExecuteRdiv>();
 
-constexpr auto pow = ttnn::register_operation_with_auto_launch_op<"ttnn::pow", operations::unary::ExecutePower>();
 constexpr auto tanhshrink = ttnn::register_operation_with_auto_launch_op<
     "ttnn::tanhshrink",
     operations::unary::ExecuteUnaryCompositeOp<operations::unary::UnaryCompositeOpType::TANHSHRINK>>();

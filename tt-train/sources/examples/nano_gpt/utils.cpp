@@ -4,6 +4,7 @@
 
 #include "utils.hpp"
 
+#include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
 #include "ops/binary_ops.hpp"
 
@@ -72,4 +73,30 @@ void GradientAccumulator::reset() {
 
 float GradientAccumulator::average_loss() const {
     return m_total_loss / static_cast<float>(m_total_samples);
+}
+
+std::unique_ptr<ttml::schedulers::LRSchedulerBase> create_idendity_scheduler(
+    ttml::optimizers::OptimizerBase *optimizer, [[maybe_unused]] size_t total_steps) {
+    return std::make_unique<ttml::schedulers::LambdaScheduler>(optimizer, [](int epoch) { return 1.0F; });
+}
+
+std::unique_ptr<ttml::schedulers::LRSchedulerBase> create_warmup_with_linear_scheduler(
+    ttml::optimizers::OptimizerBase *optimizer, size_t total_steps) {
+    const float default_warmup_factor = 0.1F;
+    const size_t warmup_steps = size_t(total_steps * default_warmup_factor);
+    const size_t linear_decay_steps = total_steps - warmup_steps;
+
+    std::vector<std::unique_ptr<ttml::schedulers::LRSchedulerBase>> schedulers;
+    schedulers.push_back(std::make_unique<ttml::schedulers::LinearScheduler>(optimizer, 0.0F, 1.0F, warmup_steps));
+    schedulers.push_back(
+        std::make_unique<ttml::schedulers::LinearScheduler>(optimizer, 1.0F, 0.01F, linear_decay_steps));
+    std::vector<size_t> steps = {warmup_steps, linear_decay_steps};
+    return std::make_unique<ttml::schedulers::SequentialScheduler>(optimizer, std::move(schedulers), std::move(steps));
+}
+
+void initialize_device(bool ddp) {
+    if (ddp) {
+        // currently supports only N300 device
+        ttml::autograd::ctx().set_mesh_shape(tt::tt_metal::distributed::MeshShape(1, 2));
+    }
 }

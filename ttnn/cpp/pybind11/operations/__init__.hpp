@@ -7,13 +7,13 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 
+#include "pybind11/types.hpp"
 #include "pybind11/operations/copy.hpp"
 #include "pybind11/operations/core.hpp"
 #include "pybind11/operations/creation.hpp"
+#include "pybind11/operations/trace.hpp"
 #include "ttnn/operations/bernoulli/bernoulli_pybind.hpp"
-#include "ttnn/operations/ccl/all_gather/all_gather_pybind.hpp"
-#include "ttnn/operations/ccl/reduce_scatter/reduce_scatter_pybind.hpp"
-#include "ttnn/operations/ccl/barrier/barrier_pybind.hpp"
+#include "cpp/ttnn/operations/ccl/ccl_pybind.hpp"
 #include "ttnn/operations/conv/conv_pybind.hpp"
 #include "ttnn/operations/data_movement/data_movement_pybind.hpp"
 #include "ttnn/operations/eltwise/binary/binary_pybind.hpp"
@@ -45,6 +45,7 @@
 #include "ttnn/operations/reduction/reduction_pybind.hpp"
 #include "ttnn/operations/sliding_window/sliding_window_pybind.hpp"
 #include "ttnn/operations/transformer/transformer_pybind.hpp"
+#include "ttnn/operations/prefetcher/prefetcher_pybind.hpp"
 #include "ttnn/operations/uniform/uniform_pybind.hpp"
 
 namespace py = pybind11;
@@ -57,6 +58,10 @@ void py_module(py::module& module) {
     auto m_core = module.def_submodule("core", "core operations");
     core::py_module_types(m_core);
     core::py_module(m_core);
+
+    auto m_trace = module.def_submodule("trace", "trace operations");
+    trace::py_module_types(m_trace);
+    trace::py_module(m_trace);
 
     auto m_examples = module.def_submodule("examples", "examples of operations");
     examples::py_module(m_examples);
@@ -93,9 +98,7 @@ void py_module(py::module& module) {
     complex_unary_backward::py_module(m_complex_unary_backward);
 
     auto m_ccl = module.def_submodule("ccl", "collective communication operations");
-    ccl::py_bind_all_gather(m_ccl);
-    ccl::py_bind_reduce_scatter(m_ccl);
-    ccl::py_bind_barrier(m_ccl);
+    ccl::py_module(m_ccl);
 
     auto m_creation = module.def_submodule("creation", "creation operations");
     creation::py_module(m_creation);
@@ -135,6 +138,9 @@ void py_module(py::module& module) {
 
     auto m_transformer = module.def_submodule("transformer", "transformer operations");
     transformer::py_module(m_transformer);
+
+    auto m_prefetcher = module.def_submodule("prefetcher", "prefetcher operations");
+    prefetcher::py_module(m_prefetcher);
 
     auto m_reduction = module.def_submodule("reduction", "reduction operations");
     reduction::py_module(m_reduction);

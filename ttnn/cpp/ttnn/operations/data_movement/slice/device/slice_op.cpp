@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "tt_metal/common/constants.hpp"
+#include <tt-metalium/constants.hpp>
 #include "slice_op.hpp"
 #include "slice_program_factory.hpp"
 
@@ -10,14 +10,15 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement {
 
-inline __attribute__((always_inline)) uint32_t get_upper_dims_compressed(const tt::tt_metal::LegacyShape& shape) {
-    return std::accumulate(shape.begin(), shape.end() - 2, 1, std::multiplies<uint32_t>{});
+inline __attribute__((always_inline)) uint32_t get_upper_dims_compressed(const ttnn::Shape& shape) {
+    return std::accumulate(shape.cbegin(), shape.cend() - 2, 1, std::multiplies<uint32_t>{});
 }
 
-inline __attribute__((always_inline)) uint32_t get_upper_start_offset(const Tensor& tensor, const Shape& slice_start) {
+inline __attribute__((always_inline)) uint32_t
+get_upper_start_offset(const Tensor& tensor, const ttnn::Shape& slice_start) {
     // offset for every dim except last 2
     uint32_t start_offset = 0;
-    const auto& shape = tensor.get_legacy_shape();
+    const auto& shape = tensor.get_padded_shape();
 
     uint32_t num_pages = tensor.volume();
     if (tensor.get_layout() == Layout::TILE) {
@@ -37,10 +38,10 @@ inline __attribute__((always_inline)) uint32_t get_upper_start_offset(const Tens
     return start_offset;
 }
 
-uint32_t get_tiled_start_offset(const Tensor& input_tensor, const Shape& slice_start) {
+uint32_t get_tiled_start_offset(const Tensor& input_tensor, const ttnn::Shape& slice_start) {
     using namespace tt::constants;
     uint32_t num_input_pages = input_tensor.volume() / (TILE_HW);
-    const auto& shape = input_tensor.get_legacy_shape();
+    const auto& shape = input_tensor.get_padded_shape();
     uint32_t upper_dims_compressed = get_upper_dims_compressed(shape);
     uint32_t num_pages_width = num_input_pages / (upper_dims_compressed * (shape[-2] / TILE_HEIGHT));
 
@@ -51,11 +52,11 @@ uint32_t get_tiled_start_offset(const Tensor& input_tensor, const Shape& slice_s
     return start_offset;
 }
 
-uint32_t get_rm_start_offset(const Tensor& tensor, const Shape& slice_start) {
+uint32_t get_rm_start_offset(const Tensor& tensor, const ttnn::Shape& slice_start) {
     uint32_t start_offset = 0;
 
-    if (tensor.get_legacy_shape().rank() >= 2) {
-        const auto& shape = tensor.get_legacy_shape();
+    if (tensor.get_padded_shape().rank() >= 2) {
+        const auto& shape = tensor.get_padded_shape();
         uint32_t num_pages = tensor.volume() / shape[-1];
         uint32_t upper_dims_compressed = get_upper_dims_compressed(shape);
         start_offset = get_upper_start_offset(tensor, slice_start);
@@ -68,22 +69,22 @@ uint32_t get_rm_start_offset(const Tensor& tensor, const Shape& slice_start) {
 void SliceDeviceOperation::validate_with_output_tensors(
     const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
     using namespace tt::constants;
-    const bool has_step = std::any_of(this->step.begin(), this->step.end(), [](uint32_t s) { return s != 1; });
+    const bool has_step = std::any_of(this->step.cbegin(), this->step.cend(), [](uint32_t s) { return s != 1; });
     const auto& input_tensor_a = input_tensors.at(0);
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to unpad need to be on device!");
     TT_FATAL(input_tensor_a.buffer() != nullptr, "Operands to unpad need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.get_layout() == Layout::TILE || input_tensor_a.get_layout() == Layout::ROW_MAJOR, "Error");
     TT_FATAL(
-        input_tensor_a.get_legacy_shape().rank() == this->slice_start.rank() &&
+        input_tensor_a.get_padded_shape().rank() == this->slice_start.rank() &&
             this->slice_start.rank() == this->slice_end.rank(),
         "Error");
-    for (uint32_t i = 0; i < input_tensor_a.get_legacy_shape().rank(); i++) {
-        TT_FATAL(this->slice_start[i] < input_tensor_a.get_legacy_shape()[i], "Error");
+    for (uint32_t i = 0; i < input_tensor_a.get_padded_shape().rank(); i++) {
+        TT_FATAL(this->slice_start[i] < input_tensor_a.get_padded_shape()[i], "Error");
         TT_FATAL(
-            this->slice_end[i] <= input_tensor_a.get_legacy_shape()[i],
+            this->slice_end[i] <= input_tensor_a.get_padded_shape()[i],
             "Ends {} must be less than or equal to the shape of the tensor {}",
             this->slice_end[i],
-            input_tensor_a.get_legacy_shape()[i]);
+            input_tensor_a.get_padded_shape()[i]);
         // Check if start shape is <= end shape
         TT_FATAL(this->slice_start[i] <= this->slice_end[i], "Error");
     }
@@ -118,7 +119,7 @@ void SliceDeviceOperation::validate_with_output_tensors(
             "Can only unpad tilized tensor with full tiles");
     } else if (input_tensor_a.get_layout() == Layout::ROW_MAJOR) {
         if (has_step) {
-            for (uint32_t i = 0; i < input_tensor_a.get_legacy_shape().rank(); i++) {
+            for (uint32_t i = 0; i < input_tensor_a.get_padded_shape().rank(); i++) {
                 TT_FATAL(step[i] > 0, "Step({}) = {} should be positive", i, step[i]);
             }
         }
@@ -136,7 +137,7 @@ std::vector<ttnn::TensorSpec> SliceDeviceOperation::compute_output_specs(
     for (uint32_t i = 0; i < out_shape.size(); i++) {
         out_shape[i] = output_dim_i(i);
     }
-    ttnn::SimpleShape output_tensor_shape(std::move(out_shape));
+    ttnn::Shape output_tensor_shape(std::move(out_shape));
     return {ttnn::TensorSpec(
         output_tensor_shape,
         tt::tt_metal::TensorLayout(

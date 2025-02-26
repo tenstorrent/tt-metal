@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
+#include "cpp/ttnn/deprecated/tt_dnn/kernels/compute/moreh_common.hpp"
 
 ALWI bool need_to_do_mask_h(uint32_t tile_idx, uint32_t ht, uint32_t wt) { return (((tile_idx / wt) + 1) % ht) == 0; }
 
@@ -45,7 +45,7 @@ void MAIN {
     const auto ht = (origin_h + TILE_H - 1) / TILE_H;
     const auto wt = (origin_w + TILE_W - 1) / TILE_W;
 
-    binary_op_init_common(cb_logx, cb_decimal);
+    binary_op_init_common(cb_logx, cb_decimal, cb_y);
 
     cb_wait_front(cb_decimal, onetile);  // comes from the reader
     cb_wait_front(cb_one, onetile);      // comes from the reader
@@ -58,15 +58,15 @@ void MAIN {
     for (uint32_t tile_idx = 0; tile_idx < num_tiles; tile_idx++) {
         // Comput cb_xabs and mask(optional)
         // |x|
-        ACQ();
+        tile_regs_acquire();
         cb_wait_front(cb_x, onetile);  // comes from the reader
         cb_reserve_back(cb_xabs, onetile);
 
-        copy_tile_init();
+        copy_tile_init(cb_x);
         copy_tile(cb_x, 0, dst0);
 
         if (do_mask_h && need_to_do_mask_h(tile_idx, ht, wt)) {
-            copy_tile_init();
+            copy_tile_init(cb_mask_h_w);
             copy_tile(cb_mask_h_w, 0, dst1);
 
             mask_tile_init();
@@ -74,7 +74,7 @@ void MAIN {
         }
 
         if (do_mask_w && ((tile_idx + 1) % wt) == 0) {
-            copy_tile_init();
+            copy_tile_init(cb_mask_h_w);
             copy_tile(cb_mask_h_w, 1, dst1);
 
             mask_tile_init();
@@ -83,61 +83,68 @@ void MAIN {
 
         abs_tile_init();
         abs_tile(dst0);
-
-        pack_tile(dst0, cb_xabs);
-
         cb_pop_front(cb_x, onetile);
+        tile_regs_commit();
+
+        tile_regs_wait();
+        pack_tile(dst0, cb_xabs);
         cb_push_back(cb_xabs, onetile);
-        REL();
+        tile_regs_release();
 
         // |x + decimal|^p
         power_tile_to_cb(cb_xabs, cb_xpow, cb_logx, cb_decimal, cb_exp_lxmd, cb_correct_xpow, p, p_is_negative);
 
         if (tile_idx == 0) {
-            ACQ();
+            tile_regs_acquire();
             cb_wait_front(cb_correct_xpow, onetile);
             cb_reserve_back(cb_xpowadd, onetile);
 
-            copy_tile_init();
+            copy_tile_init(cb_correct_xpow);
             copy_tile(cb_correct_xpow, 0, dst0);
+            tile_regs_commit();
 
+            tile_regs_wait();
             pack_tile(dst0, cb_xpowadd);
 
             cb_pop_front(cb_correct_xpow, onetile);
             cb_push_back(cb_xpowadd, onetile);
-            REL();
+            tile_regs_release();
         } else {
-            ACQ();
+            tile_regs_acquire();
             cb_wait_front(cb_correct_xpow, onetile);
             cb_wait_front(cb_xpowadd, onetile);
             cb_reserve_back(cb_xpowadd, onetile);
 
-            add_tiles_init();
+            add_tiles_init(cb_correct_xpow, cb_xpowadd);
             add_tiles(cb_correct_xpow, cb_xpowadd, 0, 0, dst0);
+            tile_regs_commit();
 
+            tile_regs_wait();
             pack_tile(dst0, cb_xpowadd);
 
             cb_pop_front(cb_correct_xpow, onetile);
             cb_pop_front(cb_xpowadd, onetile);
             cb_push_back(cb_xpowadd, onetile);
-            REL();
+            tile_regs_release();
         }
     }
 
     // Compute cb_y
-    ACQ();
+    tile_regs_acquire();
     cb_wait_front(cb_xpowadd, onetile);
     cb_reserve_back(cb_y, onetile);
 
-    reduce_init_delta<false>();
+    reduce_init_delta<false>(cb_xpowadd, cb_one, cb_y);
     reduce_tile(cb_xpowadd, cb_one, 0, 0, dst0);
-    reduce_revert_delta();
+    reduce_revert_delta(cb_y);
+    tile_regs_commit();
 
+    tile_regs_wait();
     pack_tile(dst0, cb_y);
 
     cb_pop_front(cb_xpowadd, onetile);
     cb_push_back(cb_y, onetile);
-    REL();
+    tile_regs_release();
 
     cb_pop_front(cb_decimal, onetile);
     cb_pop_front(cb_one, onetile);

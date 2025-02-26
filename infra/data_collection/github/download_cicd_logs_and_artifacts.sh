@@ -17,7 +17,9 @@ download_artifacts() {
     local repo=$1
     local workflow_run_id=$2
 
-    if gh api --paginate /repos/$repo/actions/runs/$workflow_run_id/artifacts | jq '.artifacts[] | .name' | grep -q "test_reports_"; then
+    echo "[info] Downloading test reports for workflow run $workflow_run_id"
+    api_output=$(gh api --paginate /repos/$repo/actions/runs/$workflow_run_id/artifacts | jq -r '.artifacts[] | .name')
+    if echo "$api_output" | grep -q "test_reports_"; then
         gh run download --repo $repo -D generated/cicd/$workflow_run_id/artifacts --pattern test_reports_* $workflow_run_id
     else
         echo "[Warning] Test reports not found for workflow run $workflow_run_id"
@@ -27,16 +29,23 @@ download_artifacts() {
 download_logs_for_all_jobs() {
     local repo=$1
     local workflow_run_id=$2
-    local max_attempts=$3
+    local attempt_number=$3
 
-    echo "[info] downloading logs for job with id $job_id for all attempts up to $max_attempts"
-    for attempt_number in $(seq 1 $max_attempts); do
-        echo "[Info] Downloading for attempt $attempt_number"
+    echo "[info] Downloading logs for workflow with id $workflow_run_id for attempt $attempt_number"
+    gh api /repos/$repo/actions/runs/$workflow_run_id/attempts/$attempt_number/jobs --paginate | jq -c '.jobs[] | {id: .id, conclusion: .conclusion}' | while read -r job; do
+        job_id=$(echo "$job" | jq -r '.id')
+        job_conclusion=$(echo "$job" | jq -r '.conclusion')
+        echo "[info] download logs for job with id $job_id, attempt number $attempt_number"
+        # https://github.com/tenstorrent/tt-metal/issues/12966
+        # We bypass any log download that returned a non-zero exit code so the downloader doesn't crash midway.
+        # williamly: We may want to check http status code for robustness in the future again but it may be costly in terms of api calls used.
+        gh api /repos/$repo/actions/jobs/$job_id/logs > generated/cicd/$workflow_run_id/logs/$job_id.log || true
 
-        gh api /repos/$repo/actions/runs/$workflow_run_id/attempts/$attempt_number/jobs --paginate | jq '.jobs[].id' | while read -r job_id; do
-            echo "[info] download logs for job with id $job_id, attempt number $attempt_number"
-            gh api /repos/$repo/actions/jobs/$job_id/logs > generated/cicd/$workflow_run_id/logs/$job_id.log
-        done
+        # Only download annotations for failed jobs
+        if [[ "$job_conclusion" == "failure" ]]; then
+            echo "[info] downloading annotations for failed job $job_id"
+            gh api /repos/$repo/check-runs/$job_id/annotations > generated/cicd/$workflow_run_id/logs/${job_id}_annotations.json
+        fi
     done
 
 }

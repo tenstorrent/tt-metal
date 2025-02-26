@@ -206,6 +206,8 @@ class TtLlamaAttention_optimized:
         page_table=None,
         kv_cache=None,
         mode="decode",
+        chunk_page_table=None,
+        chunk_start_idx=None,
     ):
         # Decode should have input tensor of shape (seqlen=1, 1, batch, hidden_size)
         if mode == "decode":
@@ -219,7 +221,15 @@ class TtLlamaAttention_optimized:
             )
         # Prefill should have input tensor of shape (1, batch=1, seqlen, hidden_size)
         elif mode == "prefill":
-            return self.prefill_forward(xs, rot_mats, user_id, page_table=page_table, kv_cache=kv_cache)
+            return self.prefill_forward(
+                xs,
+                rot_mats,
+                user_id,
+                page_table=page_table,
+                kv_cache=kv_cache,
+                chunk_page_table=chunk_page_table,
+                chunk_start_idx=chunk_start_idx,
+            )
         else:
             raise ValueError(f"Unknown llm_mode: {mode}")
 
@@ -246,10 +256,9 @@ class TtLlamaAttention_optimized:
         )
         xs.deallocate(True)
 
-        d = fused_query_key_value.shape.with_tile_padding()[-1]
+        d = fused_query_key_value.padded_shape[-1]
         fused_query_key_value = ttnn.reshape(
-            fused_query_key_value,
-            ttnn.Shape((1, 1, self.max_batch_size, d), (1, 1, self.model_config["PADDED_BATCH_SIZE"], d)),
+            fused_query_key_value, (1, 1, self.max_batch_size, d), (1, 1, self.model_config["PADDED_BATCH_SIZE"], d)
         )
 
         # Split QKV
@@ -350,10 +359,26 @@ class TtLlamaAttention_optimized:
 
         return tt_matmul_out_tensor
 
-    def prefill_forward(self, xs, rot_mats, user_id: int = 0, page_table=None, kv_cache=None):
+    def prefill_forward(
+        self,
+        xs,
+        rot_mats,
+        user_id: int = 0,
+        page_table=None,
+        kv_cache=None,
+        chunk_page_table=None,
+        chunk_start_idx=None,
+    ):
         query_layer, key_layer, value_layer = self.prefill_attn_qkv(xs, rot_mats)
         attn_outputs = self.prefill_attn_mqa(
-            query_layer, key_layer, value_layer, user_id, page_table=page_table, kv_cache=kv_cache
+            query_layer,
+            key_layer,
+            value_layer,
+            user_id,
+            page_table=page_table,
+            kv_cache=kv_cache,
+            chunk_page_table=chunk_page_table,
+            chunk_start_idx=chunk_start_idx,
         )
         return self.prefill_attn_selfout(attn_outputs)
 
@@ -429,7 +454,17 @@ class TtLlamaAttention_optimized:
 
         return query_layer_ret, key_layer_ret, value_layer
 
-    def prefill_attn_mqa(self, query_layer, key_layer, value_layer, user_id: int = 0, page_table=None, kv_cache=None):
+    def prefill_attn_mqa(
+        self,
+        query_layer,
+        key_layer,
+        value_layer,
+        user_id: int = 0,
+        page_table=None,
+        kv_cache=None,
+        chunk_page_table=None,
+        chunk_start_idx=None,
+    ):
         if kv_cache:
             keys = kv_cache[self.layer_num][0]
             values = kv_cache[self.layer_num][1]
@@ -438,11 +473,21 @@ class TtLlamaAttention_optimized:
             values = self.layer_past[1]
 
         if page_table:
+            # In the case that the tokens have been padded along the seq len dimension, we need to fill the cache with the unpadded k/v values.
+            # Assume that the page table does not have padding, so we can use it to get the unpadded page len.
+            block_size = keys.shape[2]
+            # If chunked prefill, use chunk_page_table if given, otherwise use page_table.
+            fill_page_table = chunk_page_table if chunk_page_table is not None else page_table
+            page_len = fill_page_table.shape[1] * block_size
+
+            k_fill_sliced = key_layer[:, :, :page_len, :] if page_len < key_layer.shape[2] else key_layer
+            v_fill_sliced = value_layer[:, :, :page_len, :] if page_len < value_layer.shape[2] else value_layer
+
             ttnn.experimental.paged_fill_cache(
-                keys, ttnn.experimental.typecast(key_layer, self.kv_dtype), page_table, batch_idx=user_id
+                keys, ttnn.experimental.typecast(k_fill_sliced, self.kv_dtype), fill_page_table, batch_idx=user_id
             )
             ttnn.experimental.paged_fill_cache(
-                values, ttnn.experimental.typecast(value_layer, self.kv_dtype), page_table, batch_idx=user_id
+                values, ttnn.experimental.typecast(v_fill_sliced, self.kv_dtype), fill_page_table, batch_idx=user_id
             )
         else:
             ttnn.fill_cache(keys, ttnn.experimental.typecast(key_layer, self.kv_dtype), user_id)
@@ -450,21 +495,37 @@ class TtLlamaAttention_optimized:
 
         seq_len = query_layer.shape[2]
         q_chunk_size = 128 if seq_len % 128 == 0 else 32
-        k_chunk_size = q_chunk_size
+        k_chunk_size = 512 if seq_len % 512 == 0 else 128 if seq_len % 128 == 0 else 32
 
         pc_sdpa = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=[8, 7],
             q_chunk_size=q_chunk_size,
             k_chunk_size=k_chunk_size,
+            exp_approx_mode=False,
         )
-        attn_output = ttnn.transformer.scaled_dot_product_attention(
-            query_layer,
-            key_layer,
-            value_layer,
-            is_causal=True,
-            scale=self.scale,
-            program_config=pc_sdpa,
-        )
+        if chunk_start_idx is not None:
+            """
+            Chunked prefill mode uses the chunk_start_idx to offset Q into the filled paged K and V cache.
+            """
+            attn_output = ttnn.transformer.chunked_scaled_dot_product_attention(
+                query_layer,
+                keys,
+                values,
+                page_table,
+                chunk_start_idx,
+                program_config=pc_sdpa,
+                compute_kernel_config=self.model_config["SDPA_COMPUTE_KERNEL_CONFIG"],
+            )
+        else:
+            attn_output = ttnn.transformer.scaled_dot_product_attention(
+                query_layer,
+                key_layer,
+                value_layer,
+                is_causal=True,
+                scale=self.scale,
+                program_config=pc_sdpa,
+                compute_kernel_config=self.model_config["SDPA_COMPUTE_KERNEL_CONFIG"],
+            )
 
         # deallocate keys and values
         query_layer.deallocate(True)

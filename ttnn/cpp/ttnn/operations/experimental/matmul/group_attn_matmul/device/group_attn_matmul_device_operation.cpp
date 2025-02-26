@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "group_attn_matmul_device_operation.hpp"
-#include "tt_metal/common/work_split.hpp"
-#include "tt_metal/common/constants.hpp"
+#include <tt-metalium/work_split.hpp>
+#include <tt-metalium/constants.hpp>
 
 using namespace tt::tt_metal;
 
@@ -32,8 +32,8 @@ void GroupAttnMatmulDeviceOperation::validate(const std::vector<Tensor>& input_t
         "Operands to matmul need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.device() == input_tensor_b.device(), "Operands to matmul need to be on the same device!");
 
-    const auto ashape = input_tensor_a.get_legacy_shape();
-    const auto bshape = input_tensor_b.get_legacy_shape();
+    const auto ashape = input_tensor_a.get_padded_shape();
+    const auto bshape = input_tensor_b.get_padded_shape();
     TT_FATAL((ashape[0] == 1), "Input q_len must be 1!");
     TT_FATAL((ashape[1] % bshape[1] == 0), "Number of q_heads must be divisible by kv_heads!");
     TT_FATAL((ashape[2] == bshape[0]), "Num of users must match!");
@@ -75,7 +75,7 @@ void GroupAttnMatmulDeviceOperation::validate(const std::vector<Tensor>& input_t
         // If user passes in output_mem_config with shard_spec, assert that it is the same as the one calculated in
         // GroupAttnMatmulDeviceOperation::create_output_tensors
         if (this->output_mem_config.shard_spec.has_value()) {
-            const tt::tt_metal::LegacyShape output_shape = this->compute_output_shapes(input_tensors).at(0);
+            const ttnn::Shape output_shape = this->compute_output_specs(input_tensors).at(0).padded_shape();
             const uint32_t num_cores = output_shape[1];
             CoreRangeSet all_cores =
                 num_cores_to_corerangeset(num_cores, this->compute_with_storage_grid_size, this->row_major);
@@ -120,7 +120,7 @@ void GroupAttnMatmulDeviceOperation::validate(const std::vector<Tensor>& input_t
     }
 }
 
-std::vector<tt::tt_metal::LegacyShape> GroupAttnMatmulDeviceOperation::compute_output_shapes(
+std::vector<ttnn::TensorSpec> GroupAttnMatmulDeviceOperation::compute_output_specs(
     const std::vector<Tensor>& input_tensors) const {
     // input_a: [q_len, q_heads, batch, head_dim]
     // input_b: [batch, kv_heads, head_dim, kv_len]
@@ -128,27 +128,20 @@ std::vector<tt::tt_metal::LegacyShape> GroupAttnMatmulDeviceOperation::compute_o
     // output: [q_len, q_heads, batch, kv_len]
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_b = input_tensors.at(1);
-    const auto ashape = input_tensor_a.get_legacy_shape();
-    const auto bshape = input_tensor_b.get_legacy_shape();
+    const auto ashape = input_tensor_a.get_padded_shape();
+    const auto bshape = input_tensor_b.get_padded_shape();
 
     uint32_t N = bshape[3];
     if (this->transpose_hw.value_or(false)) {
         N = this->num_tokens.value();
     }
+    Shape output_shape({1, ashape[1], ashape[2], N});
 
-    return {tt::tt_metal::LegacyShape{1, ashape[1], ashape[2], N}};
-}
-
-std::vector<Tensor> GroupAttnMatmulDeviceOperation::create_output_tensors(
-    const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0);
-    const auto& input_tensor_b = input_tensors.at(1);
     if (this->output_mem_config.is_sharded()) {
         auto output_mem_config = this->output_mem_config;
         if (this->output_mem_config.shard_spec.has_value()) {
             output_mem_config.shard_spec = this->output_mem_config.shard_spec.value();
         } else {
-            const tt::tt_metal::LegacyShape output_shape = this->compute_output_shapes(input_tensors).at(0);
             const uint32_t num_cores = output_shape[1];
             CoreRangeSet all_cores =
                 num_cores_to_corerangeset(num_cores, this->compute_with_storage_grid_size, this->row_major);
@@ -158,21 +151,9 @@ std::vector<Tensor> GroupAttnMatmulDeviceOperation::create_output_tensors(
             ShardSpec shard_spec = ShardSpec{all_cores, {output_shape[2], output_shape[3]}, shard_orientation};
             output_mem_config.shard_spec = shard_spec;
         }
-        return {create_device_tensor(
-            this->compute_output_shapes(input_tensors).at(0),
-            this->output_dtype,
-            Layout::TILE,
-            input_tensor_a.device(),
-            output_mem_config)};
-    } else {
-        const auto& input_tensor = input_tensors.at(0);
-        return {create_device_tensor(
-            compute_output_shapes(input_tensors).at(0),
-            this->output_dtype,
-            Layout::TILE,
-            input_tensor.device(),
-            this->output_mem_config)};
+        return {TensorSpec(output_shape, TensorLayout(output_dtype, PageConfig(Layout::TILE), output_mem_config))};
     }
+    return {TensorSpec(output_shape, TensorLayout(output_dtype, PageConfig(Layout::TILE), output_mem_config))};
 }
 
 operation::ProgramWithCallbacks GroupAttnMatmulDeviceOperation::create_program(

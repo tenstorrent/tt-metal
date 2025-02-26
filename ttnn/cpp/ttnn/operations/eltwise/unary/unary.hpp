@@ -21,20 +21,10 @@ struct ExecuteUnaryInvokeResult {
     using type = ComplexTensor;
 };
 
-template <>
-struct ExecuteUnaryInvokeResult<UnaryOpType::ABS> {
-    using type = Tensor;
-};
-
 template <UnaryOpType... unary_op_types>
 struct ExecuteUnary {
     static Tensor invoke(
-        uint8_t queue_id,
-        const Tensor& input_tensor,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
-
-    static Tensor invoke(
+        QueueId queue_id,
         const Tensor& input_tensor,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
@@ -46,13 +36,7 @@ struct ExecuteUnary {
 template <UnaryOpType unary_op_type>
 struct ExecuteUnaryWithFastAndApproximateMode {
     static Tensor invoke(
-        uint8_t queue_id,
-        const Tensor& input_tensor,
-        const bool parameter = false,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
-
-    static Tensor invoke(
+        QueueId queue_id,
         const Tensor& input_tensor,
         const bool parameter = false,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
@@ -62,13 +46,7 @@ struct ExecuteUnaryWithFastAndApproximateMode {
 template <UnaryOpType unary_op_type>
 struct ExecuteUnaryWithFloatParameter {
     static Tensor invoke(
-        uint8_t queue_id,
-        const Tensor& input_tensor,
-        const float parameter,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
-
-    static Tensor invoke(
+        QueueId queue_id,
         const Tensor& input_tensor,
         const float parameter,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
@@ -77,12 +55,7 @@ struct ExecuteUnaryWithFloatParameter {
 
 struct Sigmoid_accurate {
     static Tensor invoke(
-        uint8_t queue_id,
-        const Tensor& input,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
-
-    static Tensor invoke(
+        QueueId queue_id,
         const Tensor& input,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
@@ -90,13 +63,7 @@ struct Sigmoid_accurate {
 
 struct Unary_chain {
     static Tensor invoke(
-        uint8_t queue_id,
-        const Tensor& input_tensor,
-        const std::vector<UnaryWithParam>& ops_chain,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
-
-    static Tensor invoke(
+        QueueId queue_id,
         const Tensor& input_tensor,
         const std::vector<UnaryWithParam>& ops_chain,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
@@ -105,14 +72,7 @@ struct Unary_chain {
 
 struct Softplus {
     static Tensor invoke(
-        uint8_t queue_id,
-        const Tensor& input,
-        const float beta,
-        const float threshold,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
-
-    static Tensor invoke(
+        QueueId queue_id,
         const Tensor& input,
         const float beta,
         const float threshold,
@@ -122,13 +82,7 @@ struct Softplus {
 
 struct Prelu {
     static Tensor invoke(
-        uint8_t queue_id,
-        const Tensor& input,
-        float value,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
-
-    static Tensor invoke(
+        QueueId queue_id,
         const Tensor& input,
         float value,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
@@ -137,28 +91,39 @@ struct Prelu {
 
 struct Identity {
     static Tensor invoke(
-        uint8_t queue_id,
-        const Tensor& input_tensor,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
-
-    static Tensor invoke(
+        QueueId queue_id,
         const Tensor& input_tensor,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
-struct Dropout {
+struct Abs {
     static Tensor invoke(
-        const Tensor& input,
-        const uint32_t seed,
-        const float probability,
-        const float scale,
+        QueueId queue_id,
+        const Tensor& input_tensor,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
+    static Tensor invoke(const ComplexTensor& input_tensor, const MemoryConfig& memory_config);
+};
+
+struct Floor {
     static Tensor invoke(
-        uint8_t queue_id,
+        QueueId queue_id,
+        const Tensor& input_tensor,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
+struct Ceil {
+    static Tensor invoke(
+        QueueId queue_id,
+        const Tensor& input_tensor,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+struct Dropout {
+    static Tensor invoke(
         const Tensor& input,
         const uint32_t seed,
         const float probability,
@@ -170,13 +135,7 @@ struct Dropout {
 template <UnaryOpType unary_op_type, typename T = int32_t>
 struct ExecuteUnaryWithIntegerParameter {
     static Tensor invoke(
-        uint8_t queue_id,
-        const Tensor& input_tensor,
-        T parameter,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
-
-    static Tensor invoke(
+        QueueId queue_id,
         const Tensor& input_tensor,
         T parameter,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
@@ -186,26 +145,14 @@ struct ExecuteUnaryWithIntegerParameter {
 template <UnaryOpType unary_op_type, typename T = float>
 struct SymmetricBinop {
     static Tensor invoke(
-        uint8_t queue_id,
+        QueueId queue_id,
         const Tensor& input_tensor,
         T param,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
     static Tensor invoke(
-        uint8_t queue_id,
-        T param,
-        const Tensor& input_tensor,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
-
-    static Tensor invoke(
-        const Tensor& input_tensor,
-        T param,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
-
-    static Tensor invoke(
+        QueueId queue_id,
         T param,
         const Tensor& input_tensor,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
@@ -215,26 +162,14 @@ struct SymmetricBinop {
 template <UnaryOpType unary_op_type, UnaryOpType unary_op_rev_type>
 struct AsymmetricBinop {
     static Tensor invoke(
-        uint8_t queue_id,
+        QueueId queue_id,
         const Tensor& input_tensor,
         float param,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
     static Tensor invoke(
-        uint8_t queue_id,
-        float param,
-        const Tensor& input_tensor,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
-
-    static Tensor invoke(
-        const Tensor& input_tensor,
-        float param,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
-
-    static Tensor invoke(
+        QueueId queue_id,
         float param,
         const Tensor& input_tensor,
         const std::optional<MemoryConfig>& memory_config = std::nullopt,
@@ -247,11 +182,6 @@ struct AsymmetricBinop {
 #define REGISTER_UNARY_OPERATION(operation_name, operation_type)                  \
     constexpr auto operation_name = ttnn::register_operation_with_auto_launch_op< \
         "ttnn::" #operation_name,                                                 \
-        ttnn::operations::unary::ExecuteUnary<ttnn::operations::unary::UnaryOpType::operation_type>>();
-
-#define REGISTER_UNARY_OPERATION_OVERLOAD(operation_name, operation_type) \
-    constexpr auto operation_name = ttnn::register_operation<             \
-        "ttnn::" #operation_name,                                         \
         ttnn::operations::unary::ExecuteUnary<ttnn::operations::unary::UnaryOpType::operation_type>>();
 
 #define REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(operation_name, operation_type) \
@@ -272,7 +202,6 @@ struct AsymmetricBinop {
         ttnn::operations::unary::                                                                  \
             ExecuteUnaryWithIntegerParameter<ttnn::operations::unary::UnaryOpType::operation_type, data_type>>();
 
-REGISTER_UNARY_OPERATION_OVERLOAD(abs, ABS);
 REGISTER_UNARY_OPERATION(acos, ACOS);
 REGISTER_UNARY_OPERATION(asin, ASIN);
 REGISTER_UNARY_OPERATION(atan, ATAN);
@@ -281,8 +210,6 @@ REGISTER_UNARY_OPERATION(erfinv, ERFINV);
 REGISTER_UNARY_OPERATION(exp2, EXP2);
 REGISTER_UNARY_OPERATION(expm1, EXPM1);
 REGISTER_UNARY_OPERATION(eqz, EQZ);
-REGISTER_UNARY_OPERATION(floor, FLOOR);
-REGISTER_UNARY_OPERATION(ceil, CEIL);
 REGISTER_UNARY_OPERATION(gez, GEZ);
 REGISTER_UNARY_OPERATION(gtz, GTZ);
 REGISTER_UNARY_OPERATION(i0, I0);
@@ -300,7 +227,7 @@ REGISTER_UNARY_OPERATION(logical_not, LOGICAL_NOT_UNARY);
 REGISTER_UNARY_OPERATION(ltz, LTZ);
 REGISTER_UNARY_OPERATION(neg, NEG);
 REGISTER_UNARY_OPERATION(nez, NEZ);
-REGISTER_UNARY_OPERATION_OVERLOAD(reciprocal, RECIP);
+REGISTER_UNARY_OPERATION(reciprocal, RECIP);
 REGISTER_UNARY_OPERATION(relu, RELU);
 REGISTER_UNARY_OPERATION(relu6, RELU6);
 REGISTER_UNARY_OPERATION(sigmoid, SIGMOID);
@@ -329,7 +256,6 @@ REGISTER_UNARY_OPERATION_WITH_FAST_AND_APPROXIMATE_MODE(rsqrt, RSQRT);
 
 // Unaries with float parameter
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(elu, ELU);
-REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(rsub, RSUB);
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(heaviside, HEAVISIDE);
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(leaky_relu, LEAKY_RELU);
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(relu_max, RELU_MAX);
@@ -343,17 +269,14 @@ REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(ne_unary, UNARY_NE);
 
 // Unaries with integer parameter
 REGISTER_UNARY_OPERATION_WITH_INTEGER_PARAMETER(power, POWER, uint32_t);
-REGISTER_UNARY_OPERATION_WITH_INTEGER_PARAMETER(bitwise_left_shift, LEFT_SHIFT, int32_t);
-REGISTER_UNARY_OPERATION_WITH_INTEGER_PARAMETER(bitwise_right_shift, RIGHT_SHIFT, int32_t);
-REGISTER_UNARY_OPERATION_WITH_INTEGER_PARAMETER(bitwise_and, BITWISE_AND, int32_t);
-REGISTER_UNARY_OPERATION_WITH_INTEGER_PARAMETER(bitwise_or, BITWISE_OR, int32_t);
-REGISTER_UNARY_OPERATION_WITH_INTEGER_PARAMETER(bitwise_xor, BITWISE_XOR, int32_t);
 
 // Other unaries
-constexpr auto dropout =
-    ttnn::register_operation_with_auto_launch_op<"ttnn::dropout", ttnn::operations::unary::Dropout>();
 constexpr auto identity =
     ttnn::register_operation_with_auto_launch_op<"ttnn::identity", ttnn::operations::unary::Identity>();
+constexpr auto abs = ttnn::register_operation_with_auto_launch_op<"ttnn::abs", ttnn::operations::unary::Abs>();
+constexpr auto floor =
+    ttnn::register_operation_with_auto_launch_op<"ttnn::floor", ttnn::operations::unary::Floor>();
+constexpr auto ceil = ttnn::register_operation_with_auto_launch_op<"ttnn::ceil", ttnn::operations::unary::Ceil>();
 constexpr auto softplus =
     ttnn::register_operation_with_auto_launch_op<"ttnn::softplus", ttnn::operations::unary::Softplus>();
 constexpr auto prelu_sfpu =

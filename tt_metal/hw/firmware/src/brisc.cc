@@ -20,7 +20,6 @@
 #include "tools/profiler/kernel_profiler.hpp"
 #include "dev_msgs.h"
 #include "risc_attribs.h"
-#include "generated_bank_to_noc_coord_mapping.h"
 #include "circular_buffer.h"
 #include "circular_buffer_init.h"
 #include "dataflow_api.h"
@@ -41,7 +40,11 @@ constexpr uint32_t RISCV_IC_TRISC1_MASK = 0x4;
 constexpr uint32_t RISCV_IC_TRISC2_MASK = 0x8;
 constexpr uint32_t RISCV_IC_TRISC_ALL_MASK = RISCV_IC_TRISC0_MASK | RISCV_IC_TRISC1_MASK | RISCV_IC_TRISC2_MASK;
 
+#ifdef NCRISC_HAS_IRAM
 constexpr uint32_t num_cbs_to_early_init = 4;  // safe small number to overlap w/ ncrisc copy
+#else
+constexpr uint32_t num_cbs_to_early_init = 0;
+#endif
 
 tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE);
 uint32_t ncrisc_kernel_start_offset16;
@@ -66,6 +69,13 @@ CBInterface cb_interface[NUM_CIRCULAR_BUFFERS] __attribute__((used));
 uint32_t tt_l1_ptr *rta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr *crta_l1_base __attribute__((used));
 uint32_t tt_l1_ptr *sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used));
+
+// These arrays are stored in local memory of FW, but primarily used by the kernel which shares
+// FW symbols. Hence mark these as 'used' so that FW compiler doesn't optimize it out.
+uint16_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS] __attribute__((used));
+uint16_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used));
+int32_t bank_to_dram_offset[NUM_DRAM_BANKS] __attribute__((used));
+int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
 
 #define MEM_MOVER_VIEW_IRAM_BASE_ADDR (0x4 << 12)
 
@@ -325,23 +335,29 @@ inline void finish_ncrisc_copy_and_run(dispatch_core_processor_masks enables) {
 
         l1_to_ncrisc_iram_copy_wait();
 
+#ifdef NCRISC_HAS_IRAM
         // Note: only ncrisc is in reset, so just deasserts ncrisc
         deassert_all_reset();
+#endif
     }
 }
 
 inline void wait_ncrisc_trisc() {
     WAYPOINT("NTW");
-    while (mailboxes->slave_sync.all != RUN_SYNC_MSG_ALL_SLAVES_DONE);
+    while (mailboxes->slave_sync.all != RUN_SYNC_MSG_ALL_SLAVES_DONE) {
+        invalidate_l1_cache();
+    }
     WAYPOINT("NTD");
 }
 
 int main() {
-    conditionally_disable_l1_cache();
+    configure_l1_data_cache();
     DIRTY_STACK_MEMORY();
     WAYPOINT("I");
 
     do_crt1((uint32_t*)MEM_BRISC_INIT_LOCAL_L1_BASE_SCRATCH);
+
+    noc_bank_table_init(MEM_BANK_TO_NOC_SCRATCH);
 
     mailboxes->launch_msg_rd_ptr = 0; // Initialize the rdptr to 0
     noc_index = 0;
@@ -369,13 +385,30 @@ int main() {
     noc_local_state_init(noc_index);
     uint8_t prev_noc_mode = DM_DEDICATED_NOC;
 
+
+#if defined(ARCH_BLACKHOLE)
+    // When dispatch_s is on an ethernet core on blockhole, we've been seeing
+    // issues where posted atomic incremenets seem to fail to complete.
+    const bool post_atomic_increments = false;
+#else
+    const bool post_atomic_increments = true;
+#endif
+
     while (1) {
         init_sync_registers();
         reset_ncrisc_with_iram();
 
         WAYPOINT("GW");
         uint8_t go_message_signal = RUN_MSG_DONE;
-        while ((go_message_signal = mailboxes->go_message.signal) != RUN_MSG_GO) {
+        // kernel_configs.preload is last in the launch message. so other data is
+        // valid by the time it's set. All multicast data from the dispatcher is
+        // written in order, so it will arrive in order. We also have a barrier
+        // before mcasting the launch message (as a hang workaround), which
+        // ensures that the unicast data will also have been received.
+        while (
+            ((go_message_signal = mailboxes->go_message.signal) != RUN_MSG_GO) &&
+            !(mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.preload & DISPATCH_ENABLE_FLAG_PRELOAD)) {
+            invalidate_l1_cache();
             // While the go signal for kernel execution is not sent, check if the worker was signalled
             // to reset its launch message read pointer.
             if (go_message_signal == RUN_MSG_RESET_READ_PTR) {
@@ -384,9 +417,10 @@ int main() {
                 // Querying the noc_index is safe here, since the RUN_MSG_RESET_READ_PTR go signal is currently guaranteed
                 // to only be seen after a RUN_MSG_GO signal, which will set the noc_index to a valid value.
                 // For future proofing, the noc_index value is initialized to 0, to ensure an invalid NOC txn is not issued.
-                uint64_t dispatch_addr =
-                    NOC_XY_ADDR(NOC_X(mailboxes->go_message.master_x),
-                    NOC_Y(mailboxes->go_message.master_y), DISPATCH_MESSAGE_ADDR + mailboxes->go_message.dispatch_message_offset);
+                uint64_t dispatch_addr = NOC_XY_ADDR(
+                    NOC_X(mailboxes->go_message.master_x),
+                    NOC_Y(mailboxes->go_message.master_y),
+                    DISPATCH_MESSAGE_ADDR + mailboxes->go_message.dispatch_message_offset);
                 mailboxes->go_message.signal = RUN_MSG_DONE;
                 // Notify dispatcher that this has been done
                 DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
@@ -397,7 +431,8 @@ int main() {
                     NOC_UNICAST_WRITE_VC,
                     1,
                     31 /*wrap*/,
-                    false /*linked*/);
+                    false /*linked*/,
+                    post_atomic_increments /*posted*/);
             }
         }
 
@@ -423,7 +458,8 @@ int main() {
             volatile tt_reg_ptr uint32_t* cfg_regs = core.cfg_regs_base(0);
             cfg_regs[RISCV_IC_INVALIDATE_InvalidateAll_ADDR32] = RISCV_IC_BRISC_MASK | RISCV_IC_TRISC_ALL_MASK | RISCV_IC_NCRISC_MASK;
 
-            enum dispatch_core_processor_masks enables = (enum dispatch_core_processor_masks)launch_msg_address->kernel_config.enables;
+            enum dispatch_core_processor_masks enables =
+                (enum dispatch_core_processor_masks)launch_msg_address->kernel_config.enables;
 
             run_triscs(enables);
 
@@ -480,6 +516,7 @@ int main() {
                     uint32_t end_cb_index = launch_msg_address->kernel_config.min_remote_cb_start_index;
                     experimental::setup_remote_cb_interfaces<true>(cb_l1_base, end_cb_index);
                 }
+                wait_for_go_message();
             }
             WAYPOINT("D");
 
@@ -504,9 +541,11 @@ int main() {
             if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_DEV) {
                 // Set launch message to invalid, so that the next time this slot is encountered, kernels are only run if a valid launch message is sent.
                 launch_msg_address->kernel_config.enables = 0;
-                uint64_t dispatch_addr =
-                    NOC_XY_ADDR(NOC_X(mailboxes->go_message.master_x),
-                        NOC_Y(mailboxes->go_message.master_y), DISPATCH_MESSAGE_ADDR + mailboxes->go_message.dispatch_message_offset);
+                launch_msg_address->kernel_config.preload = 0;
+                uint64_t dispatch_addr = NOC_XY_ADDR(
+                    NOC_X(mailboxes->go_message.master_x),
+                    NOC_Y(mailboxes->go_message.master_y),
+                    DISPATCH_MESSAGE_ADDR + mailboxes->go_message.dispatch_message_offset);
                 DEBUG_SANITIZE_NOC_ADDR(noc_index, dispatch_addr, 4);
                 // Only executed if watcher is enabled. Ensures that we don't report stale data due to invalid launch
                 // messages in the ring buffer. Must be executed before the atomic increment, as after that the launch
@@ -519,7 +558,8 @@ int main() {
                     NOC_UNICAST_WRITE_VC,
                     1,
                     31 /*wrap*/,
-                    false /*linked*/);
+                    false /*linked*/,
+                    post_atomic_increments /*posted*/);
                 mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
             }
         }

@@ -10,7 +10,7 @@ namespace ttnn::operations::upsample {
 
 ttnn::Tensor ExecuteUpSample::invoke(
     const ttnn::Tensor& input_tensor,
-    std::variant<int, tt::tt_metal::Array2D, tt::tt_metal::Array3D, tt::tt_metal::Array4D> scale_factor,
+    std::variant<int, tt::tt_metal::Array2D> scale_factor,
     const std::string& mode,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
@@ -27,21 +27,8 @@ ttnn::Tensor ExecuteUpSample::invoke(
                 scale_h = sf;
                 scale_w = sf;
             } else if constexpr (std::is_same_v<T, tt::tt_metal::Array2D>) {
-                scale_w = sf.at(0);
-                int scale_c = sf.at(1);
-                TT_FATAL(scale_c == 1, "Error");
-            } else if constexpr (std::is_same_v<T, tt::tt_metal::Array3D>) {
                 scale_h = sf.at(0);
                 scale_w = sf.at(1);
-                int scale_c = sf.at(2);
-                TT_FATAL(scale_c == 1, "Error");
-            } else if constexpr (std::is_same_v<T, tt::tt_metal::Array4D>) {
-                int scale_n = sf.at(0);
-                scale_h = sf.at(1);
-                scale_w = sf.at(2);
-                int scale_c = sf.at(3);
-                TT_FATAL(scale_n == 1, "Error");
-                TT_FATAL(scale_c == 1, "Error");
             } else {
                 // static_assert(false, "Unsupported scale factor");
                 static_assert(sizeof(T) != 0, "Type check failed.");
@@ -55,10 +42,11 @@ ttnn::Tensor ExecuteUpSample::invoke(
     if (input_tensor.is_sharded()) {
         // TT_FATAL(not input_tensor.is_sharded(), "Error");
         int shard_height = input_tensor.memory_config().shard_spec.value().shape[0];
-        const auto batch_size = input_tensor.get_shape()[0];
-        const auto input_h = input_tensor.get_shape()[1];
-        const auto input_w = input_tensor.get_shape()[2];
-        const auto num_channels = input_tensor.get_shape()[3];
+        const auto& input_shape = input_tensor.get_logical_shape();
+        const auto batch_size = input_shape[0];
+        const auto input_h = input_shape[1];
+        const auto input_w = input_shape[2];
+        const auto num_channels = input_shape[3];
         if (shard_height % input_w != 0) {
             TT_FATAL(shard_height % input_w != 0, "Error");
         }

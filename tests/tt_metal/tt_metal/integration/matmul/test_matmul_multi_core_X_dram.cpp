@@ -5,12 +5,12 @@
 #include <algorithm>
 
 #include "dispatch_fixture.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "common/bfloat16.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/bfloat16.hpp>
 #include "tt_metal/test_utils/deprecated/tensor.hpp"
-#include "test_tiles.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
+#include <tt-metalium/test_tiles.hpp>
+#include <tt-metalium/command_queue.hpp>
 #include "tests/tt_metal/test_utils/tilization.hpp"
 #include "matmul_test_utils.hpp"
 
@@ -26,7 +26,7 @@ struct MatmulConfig {
 };
 
 std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> create_program(
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     const MatmulConfig& cfg,
     int num_cores_r,
     int num_cores_c,
@@ -143,7 +143,7 @@ std::tuple<tt_metal::Program, tt_metal::KernelHandle, tt_metal::KernelHandle> cr
     return {std::move(program), mm_reader_kernel, unary_writer_kernel};
 }
 
-bool matmul_multi_core_single_dram(tt_metal::Device* device) {
+bool matmul_multi_core_single_dram(tt_metal::IDevice* device) {
     bool pass = true;
     CoreCoord compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     int num_cores_r = compute_with_storage_grid_size.y;
@@ -158,7 +158,7 @@ bool matmul_multi_core_single_dram(tt_metal::Device* device) {
     int per_core_M = M / num_cores_r;
     int per_core_N = N / num_cores_c;
     uint32_t single_tile_size = 2 * 1024;
-    uint32_t dram_unreserved_base = device->get_base_allocator_addr(HalMemType::DRAM);
+    uint32_t dram_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::DRAM);
     log_info(LogTest, "M = {}, N = {}, K = {}", M, N, K);
     log_info(LogTest, "Activation = {}x{}", M * 32, K * 32);
     log_info(LogTest, "Weights = {}x{}", K * 32, N * 32);
@@ -242,10 +242,6 @@ bool matmul_multi_core_single_dram(tt_metal::Device* device) {
                 dram_buffer_dst_addr,
                 dram_buffer_size_out);
 
-            auto dram_src0_noc_xy = device->dram_core_from_dram_channel(dram_src0_channel_id);
-            auto dram_src1_noc_xy = device->dram_core_from_dram_channel(dram_src1_channel_id);
-            auto dram_dst_noc_xy = device->dram_core_from_dram_channel(dram_dst_channel_id);
-
             auto activations_tilized = test_utils::tilize(activation_slice, per_core_M * 32, K * 32);
             auto activations_tile_layout = convert_to_tile_layout(activations_tilized);
             auto activations = pack_bfloat16_vec_into_uint32_vec(activations_tile_layout);
@@ -261,11 +257,9 @@ bool matmul_multi_core_single_dram(tt_metal::Device* device) {
 
             const std::array mm_reader_args = {
                 (std::uint32_t)dram_buffer_src0_addr,
-                (std::uint32_t)dram_src0_noc_xy.x,
-                (std::uint32_t)dram_src0_noc_xy.y,
+                (std::uint32_t)0,
                 (std::uint32_t)dram_buffer_src1_addr,
-                (std::uint32_t)dram_src1_noc_xy.x,
-                (std::uint32_t)dram_src1_noc_xy.y,
+                (std::uint32_t)0,
                 (std::uint32_t)(K / in0_block_w),                            // num_blocks
                 (std::uint32_t)per_core_M * in0_block_w,                     // input 0 block num tiles
                 (std::uint32_t)per_core_N * in0_block_w,                     // input 1 block num tiles
@@ -274,8 +268,7 @@ bool matmul_multi_core_single_dram(tt_metal::Device* device) {
 
             const std::array writer_args = {
                 (std::uint32_t)dram_buffer_dst_addr,
-                (std::uint32_t)dram_dst_noc_xy.x,
-                (std::uint32_t)dram_dst_noc_xy.y,
+                (std::uint32_t)0,
                 (std::uint32_t)out_subblock_h,               // num tiles per sub block m
                 (std::uint32_t)out_subblock_w,               // num tiles per sub block n
                 (std::uint32_t)per_core_M / out_subblock_h,  // num sub blocks m
@@ -324,7 +317,7 @@ bool matmul_multi_core_single_dram(tt_metal::Device* device) {
 }
 
 bool assign_runtime_args_to_program(
-    tt_metal::Device* device,
+    tt_metal::IDevice* device,
     tt_metal::Program& program,
     int num_cores_r,
     int num_cores_c,
@@ -417,7 +410,7 @@ bool assign_runtime_args_to_program(
     return pass;
 }
 
-bool matmul_multi_core_multi_dram(DispatchFixture* fixture, tt_metal::Device* device) {
+bool matmul_multi_core_multi_dram(DispatchFixture* fixture, tt_metal::IDevice* device) {
     bool pass = true;
     int num_cores_r = device->compute_with_storage_grid_size().y;
     int num_cores_c = device->compute_with_storage_grid_size().x;
@@ -548,11 +541,10 @@ bool matmul_multi_core_multi_dram(DispatchFixture* fixture, tt_metal::Device* de
 }  // namespace unit_tests_common::matmul::test_matmul_multi_core_X_dram
 
 TEST_F(DispatchFixture, TensixMatmulMultiCoreSingleDRAM) {
-    const char* arch = getenv("ARCH_NAME");
     if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
         log_info(LogTest, "This test is only supported in slow dispatch mode");
         GTEST_SKIP();
-    } else if (strcasecmp(arch, "wormhole_b0") == 0) {
+    } else if (this->arch_ == tt::ARCH::WORMHOLE_B0) {
         tt::log_info("This test is disabled in WH B0");
         GTEST_SKIP();
     }

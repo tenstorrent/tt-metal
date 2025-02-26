@@ -3,17 +3,16 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "softmax_op.hpp"
-#include "tt_metal/common/assert.hpp"
-#include "common/base_types.hpp"
+#include <tt-metalium/assert.hpp>
+#include <tt-metalium/base_types.hpp>
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/math.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/run_operation.hpp"
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/common/math.hpp"
-#include "tt_metal/detail/util.hpp"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/util.hpp>
 
 #include <optional>
 #include <type_traits>
@@ -42,15 +41,15 @@ void Softmax::validate(
             TT_FATAL(input_tensor.device() == mask.device(), "Error");
             if (mask.is_sharded()) {  // sharded mask
                 TT_FATAL(mask.get_layout() == Layout::TILE, "Error");
-                TT_FATAL(mask.get_legacy_shape() == input_tensor.get_legacy_shape(), "Error");
+                TT_FATAL(mask.get_padded_shape() == input_tensor.get_padded_shape(), "Error");
             } else {
                 if (mask.get_layout() == Layout::ROW_MAJOR) {
-                    tt::tt_metal::LegacyShape expected_shape = {
-                        mask.get_legacy_shape()[0], 1, input_tensor.get_legacy_shape()[-1] / TILE_WIDTH, TILE_WIDTH};
-                    TT_FATAL(mask.get_legacy_shape() == expected_shape, "Error");
+                    ttnn::Shape expected_shape(
+                        {mask.get_padded_shape()[0], 1, input_tensor.get_padded_shape()[-1] / TILE_WIDTH, TILE_WIDTH});
+                    TT_FATAL(mask.get_padded_shape() == expected_shape, "Error");
                 }
-                for (uint32_t i = 1; i < input_tensor.get_legacy_shape().rank() - 2; i++) {
-                    TT_FATAL(mask.get_legacy_shape()[i] == 1, "Error");
+                for (uint32_t i = 1; i < input_tensor.get_padded_shape().rank() - 2; i++) {
+                    TT_FATAL(mask.get_padded_shape()[i] == 1, "Error");
                 }
             }
 
@@ -58,10 +57,10 @@ void Softmax::validate(
                 [&](const auto& program_config) {
                     using ProgramConfigType = std::decay_t<decltype(program_config)>;
                     if constexpr (std::is_same_v<ProgramConfigType, SoftmaxDefaultProgramConfig>) {
-                        TT_FATAL(input_tensor.get_legacy_shape()[0] == mask.get_legacy_shape()[0], "Error");
+                        TT_FATAL(input_tensor.get_padded_shape()[0] == mask.get_padded_shape()[0], "Error");
                         TT_FATAL(!this->is_scale_causal_mask_hw_dims_softmax, "Error");
                     } else if constexpr (std::is_same_v<ProgramConfigType, SoftmaxShardedMultiCoreProgramConfig>) {
-                        const auto shape = input_tensor.get_legacy_shape();
+                        const auto shape = input_tensor.get_padded_shape();
                         uint32_t M = input_tensor.volume() / shape[-1];
                         uint32_t K = shape[-1];
 
@@ -135,7 +134,7 @@ operation::ProgramWithCallbacks Softmax::create_program(
     auto& input_tensor = input_tensors.at(0);
     auto& output_tensor = output_tensors.at(0);
     const auto& mask = optional_input_tensors.at(0);
-    // bool causal_mask = mask.has_value() ? mask.value().get_legacy_shape()[-2] == mask.value().get_legacy_shape()[-1]
+    // bool causal_mask = mask.has_value() ? mask.value().get_padded_shape()[-2] == mask.value().get_padded_shape()[-1]
     // : false;
     bool causal_mask = this->is_causal_mask;
 
@@ -290,26 +289,24 @@ Tensor scale_mask_softmax(
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
             auto& input_tensor = input_tensors.at(0);
             auto& mask = optional_input_tensors.at(0);
-            tt::tt_metal::LegacyShape input_pad_shape =
-                ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(
-                    input_tensor.get_legacy_shape());
+            ttnn::Shape input_pad_shape = ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(
+                input_tensor.get_padded_shape());
             ttnn::operations::experimental::auto_format::FormatParams input_format_params = {
                 .pad_shape = input_pad_shape,
                 .pad_value = -std::numeric_limits<float>::infinity(),
                 .target_layout = Layout::TILE};
             std::optional<ttnn::operations::experimental::auto_format::FormatParams> mask_format_params = std::nullopt;
             if (mask.has_value()) {
-                TT_FATAL(input_tensor.get_legacy_shape()[-1] == mask.value().get_legacy_shape()[-1], "Error");
-                TT_FATAL(input_tensor.get_legacy_shape()[0] == mask.value().get_legacy_shape()[0], "Error");
+                TT_FATAL(input_tensor.get_padded_shape()[-1] == mask.value().get_padded_shape()[-1], "Error");
+                TT_FATAL(input_tensor.get_padded_shape()[0] == mask.value().get_padded_shape()[0], "Error");
                 TT_FATAL(
-                    mask.value().get_legacy_shape()[-2] == 1 or mask.value().get_legacy_shape()[-2] == TILE_HEIGHT,
+                    mask.value().get_padded_shape()[-2] == 1 or mask.value().get_padded_shape()[-2] == TILE_HEIGHT,
                     "Error");
-                for (uint32_t i = 1; i < input_tensor.get_legacy_shape().rank() - 2; i++) {
-                    TT_FATAL(mask.value().get_legacy_shape()[i] == 1, "Error");
+                for (uint32_t i = 1; i < input_tensor.get_padded_shape().rank() - 2; i++) {
+                    TT_FATAL(mask.value().get_padded_shape()[i] == 1, "Error");
                 }
-                tt::tt_metal::LegacyShape mask_pad_shape =
-                    ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(
-                        mask.value().get_legacy_shape());
+                ttnn::Shape mask_pad_shape = ttnn::operations::experimental::auto_format::AutoFormat::pad_to_tile_shape(
+                    mask.value().get_padded_shape());
                 mask_format_params = {
                     .pad_shape = mask_pad_shape,
                     .pad_value = -std::numeric_limits<float>::infinity(),

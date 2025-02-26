@@ -8,7 +8,7 @@
 #include <pybind11/stl.h>
 
 #include "untilize.hpp"
-#include "ttnn/cpp/pybind11/decorators.hpp"
+#include "cpp/pybind11/decorators.hpp"
 
 namespace ttnn::operations::data_movement::detail {
 namespace py = pybind11;
@@ -30,6 +30,7 @@ void bind_untilize(py::module& module) {
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
                 use_multicore (bool, optional): Whether to use multicore. Defaults to `True`.
                 use_pack_untilize (bool, optional): Whether to use pack untilize. Defaults to `True`.
+                sub_core_grids (ttnn.CoreRangeSet, optional): Sub core grids. Defaults to `None`.
                 queue_id (int, optional): command queue id. Defaults to `0`.
 
             Returns:
@@ -48,15 +49,17 @@ void bind_untilize(py::module& module) {
                const std::optional<MemoryConfig>& memory_config,
                bool use_multicore,
                bool use_pack_untilize,
-               uint8_t queue_id) {
-                return self(queue_id, input_tensor, memory_config, use_multicore, use_pack_untilize);
+               const std::optional<CoreRangeSet>&& sub_core_grids,
+               QueueId queue_id) {
+                return self(queue_id, input_tensor, memory_config, use_multicore, use_pack_untilize, sub_core_grids);
             },
             py::arg("input_tensor"),
             py::kw_only(),
             py::arg("memory_config") = std::nullopt,
             py::arg("use_multicore") = true,
             py::arg("use_pack_untilize") = true,
-            py::arg("queue_id") = 0,
+            py::arg("sub_core_grids") = std::nullopt,
+            py::arg("queue_id") = DefaultQueueId,
         });
 }
 }  // namespace ttnn::operations::data_movement::detail

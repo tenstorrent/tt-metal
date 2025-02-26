@@ -4,12 +4,14 @@
 
 #pragma once
 
-#include "third_party/json/json.hpp"
+#include <nlohmann/json.hpp>
 #include "ttnn/tensor/types.hpp"
 
 #include <vector>
 
 namespace ttnn::graph {
+
+enum class ExecutionStatus { Success, Error };
 
 uint32_t extract_peak_L1_memory_usage(const nlohmann::json& trace);
 uint32_t extract_l1_output_buffer_allocation_size_per_core(

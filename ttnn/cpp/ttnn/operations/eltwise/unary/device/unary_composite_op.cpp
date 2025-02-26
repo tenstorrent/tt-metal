@@ -7,12 +7,12 @@
 #include <functional>
 #include <optional>
 
-#include <magic_enum.hpp>
+#include <magic_enum/magic_enum.hpp>
 #include <utility>
-#include "tt_metal/common/bfloat16.hpp"
+#include <tt-metalium/bfloat16.hpp>
 #include "ttnn/operations/data_movement/reshape_on_device/reshape.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
-#include "ttnn/operations/numpy/functions.hpp"
+#include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
@@ -22,6 +22,7 @@
 #include "ttnn/run_operation.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
+#include <tt-metalium/hal_exp.hpp>
 
 namespace ttnn::operations::unary {
 
@@ -40,53 +41,6 @@ Tensor _tanhshrink(const Tensor& x, const std::optional<MemoryConfig>& output_me
     Tensor tan_x = ttnn::tanh(x, output_mem_config);
     Tensor result = ttnn::subtract(x, tan_x, std::nullopt, output_mem_config);
     return result;
-}
-
-// power - floating point exponent
-Tensor _power(
-    uint8_t queue_id,
-    const Tensor& input_a,
-    float exponent,
-    const std::optional<MemoryConfig>& output_mem_config,
-    std::optional<Tensor> output_tensor) {
-    TT_FATAL(exponent >= 0.0f, "works for positive exponents only");
-    const uint32_t exponent_floor = static_cast<uint32_t>(std::floor(exponent));
-    if (static_cast<float>(exponent_floor) == exponent) {
-        if (output_tensor.has_value()) {
-            ttnn::power(queue_id, input_a, exponent_floor, output_mem_config, output_tensor);
-            return output_tensor.value();
-        }
-        return ttnn::power(queue_id, input_a, exponent_floor, output_mem_config);
-    }
-    const float exponent_trunc = exponent - static_cast<float>(exponent_floor);
-    Tensor pow_trunc_log = ttnn::multiply(
-        queue_id, ttnn::log(queue_id, input_a, output_mem_config), exponent_trunc, std::nullopt, output_mem_config);
-    Tensor pow_frac = ttnn::exp(queue_id, pow_trunc_log, false, output_mem_config);
-    pow_trunc_log.deallocate();
-    float t_nan = std::nanf("");
-    Tensor result = ttnn::multiply(
-        queue_id,
-        ttnn::power(queue_id, input_a, exponent_floor, output_mem_config),
-        pow_frac,
-        std::nullopt,
-        output_mem_config);
-    // To handle negative inputs:
-    // in torch For -ve inputs with float exponent power returns nan
-    auto output_memory_config = output_tensor.has_value() ? output_tensor.value().memory_config()
-                                                          : output_mem_config.value_or(input_a.memory_config());
-    result = ttnn::where(
-        ttnn::ltz(queue_id, input_a, output_mem_config), t_nan, result, output_memory_config, output_tensor);
-    return result;
-}
-
-// power - integer exponent
-Tensor _power(
-    uint8_t queue_id,
-    const Tensor& input,
-    uint32_t exponent,
-    const std::optional<MemoryConfig>& output_mem_config,
-    std::optional<Tensor> output_tensor) {
-    return ttnn::power(queue_id, input, exponent, output_mem_config, output_tensor);
 }
 
 // acosh(x) = log(x + sqrt(x^2 - 1))
@@ -113,7 +67,7 @@ Tensor _acosh(const Tensor& input_a, const std::optional<MemoryConfig>& output_m
         // input > 1, output is acosh(input)
         Tensor nan_res = ttnn::multiply(
             ttnn::le(input_a, t_one, std::nullopt, output_mem_config),
-            input_a.device()->sfpu_nan(),
+            tt::tt_metal::experimental::hal::get_nan(),
             std::nullopt,
             output_mem_config);
         t_result = ttnn::multiply(
@@ -411,7 +365,7 @@ Tensor _swish(const Tensor& a, const std::optional<MemoryConfig>& output_mem_con
 }
 
 Tensor ExecuteTrunc::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& input,
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> output_tensor) {
@@ -450,13 +404,13 @@ Tensor _variance_impl(
     const std::optional<MemoryConfig>& output_mem_config) {
     ttnn::SmallVector<int> dims = {2, 3};
     constexpr float correction = 0.0f;
-    auto shape_wh = y.get_legacy_shape();
+    auto shape_wh = y.padded_shape();
     float scale = 1.0f / ((float)(shape_wh[3] * shape_wh[2]) - correction);
     Tensor sqr_y_minus_mean_y = ttnn::square(y_minus_mean_y, output_mem_config);
     return ttnn::sum(sqr_y_minus_mean_y, dims, true, std::nullopt, std::nullopt, scale);
 }
 Tensor _variance_impl(const Tensor& y, const Tensor& mean_y, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor y_minus_mean_y = ttnn::bcast(0, y, mean_y, ttnn::BcastOpMath::SUB, ttnn::BcastOpDim::HW);
+    Tensor y_minus_mean_y = ttnn::bcast(ttnn::DefaultQueueId, y, mean_y, ttnn::BcastOpMath::SUB, ttnn::BcastOpDim::HW);
     return _variance_impl(y, mean_y, y_minus_mean_y, output_mem_config);
 }
 
@@ -491,7 +445,7 @@ Tensor _std_overload(const Tensor& y, const std::optional<MemoryConfig>& output_
 Tensor _normalize(const Tensor& y, const std::optional<MemoryConfig>& output_mem_config) {
     ttnn::SmallVector<int> dims = {2, 3};
     Tensor mean_y = ttnn::mean(y, dims, true);
-    Tensor y_minus_mean_y = ttnn::bcast(0, y, mean_y, ttnn::BcastOpMath::SUB, ttnn::BcastOpDim::HW);
+    Tensor y_minus_mean_y = ttnn::bcast(ttnn::DefaultQueueId, y, mean_y, ttnn::BcastOpMath::SUB, ttnn::BcastOpDim::HW);
     Tensor std_y = _std(y, mean_y, y_minus_mean_y, output_mem_config);
     Tensor recip_std_y = ttnn::reciprocal(std_y, output_mem_config);
     Tensor z = ttnn::multiply(y_minus_mean_y, recip_std_y, std::nullopt, output_mem_config);
@@ -562,13 +516,11 @@ Tensor ExecuteUnaryCompositeClamp::invoke(
     } else if (min.value() > max.value()) {
         return full_like(a, max.value());
     }
-    const Tensor h_const = full_like(a, max.value());
-    Tensor a_max = ttnn::minimum(a, h_const, output_memory_config);
+    Tensor a_max = ttnn::minimum(a, max.value(), output_memory_config);
     if (min.value() == 0.0f) {
         return ttnn::relu(a_max, output_memory_config);
     } else {
-        const Tensor l_const = full_like(a, min.value());
-        return ttnn::maximum(a_max, l_const, output_memory_config);
+        return ttnn::maximum(a_max, min.value(), output_memory_config);
     }
 }
 
@@ -648,10 +600,10 @@ Tensor ExecuteUnaryCompositeThreshold::invoke(
 std::vector<Tensor> split_tensor_for_glu(
     const Tensor& input_a, int32_t dim, const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> t_split;
-    tt::tt_metal::LegacyShape inshape(input_a.get_legacy_shape());
+    ttnn::Shape inshape(input_a.padded_shape());
     TT_FATAL(((inshape[dim] / 2) % tt::constants::TILE_WIDTH == 0), "Split tensor dimension should be in full tile");
     ttnn::SmallVector<uint32_t> s_a = {0, 0, 0, 0};
-    ttnn::SmallVector<uint32_t> e_a = {input_a.get_legacy_shape()[0], inshape[1], inshape[2], inshape[3] / 2};
+    ttnn::SmallVector<uint32_t> e_a = {input_a.padded_shape()[0], inshape[1], inshape[2], inshape[3] / 2};
 
     ttnn::SmallVector<uint32_t> s_b = {0, 0, 0, inshape[3] / 2};
     ttnn::SmallVector<uint32_t> e_b = {inshape[0], inshape[1], inshape[2], inshape[3]};
@@ -721,8 +673,9 @@ Tensor _swiglu(const Tensor& input_a, int32_t dim, const std::optional<MemoryCon
 
 // tril : select lower triangular region of input matrix
 Tensor _tril(const Tensor& input_a, int32_t diag, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor index_l = numpy::index_tril<::bfloat16>(
-        input_a.get_legacy_shape(),
+    Tensor index_l = ttnn::index_tril<::bfloat16>(
+        input_a.get_logical_shape(),
+        input_a.get_padded_shape(),
         diag,
         DataType::BFLOAT16,
         Layout::TILE,
@@ -733,8 +686,9 @@ Tensor _tril(const Tensor& input_a, int32_t diag, const std::optional<MemoryConf
 
 // triu : select upper triangular region of input matrix
 Tensor _triu(const Tensor& input_a, int32_t diag, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor index_u = numpy::index_triu<::bfloat16>(
-        input_a.get_legacy_shape(),
+    Tensor index_u = ttnn::index_triu<::bfloat16>(
+        input_a.get_logical_shape(),
+        input_a.get_padded_shape(),
         diag,
         DataType::BFLOAT16,
         Layout::TILE,
@@ -806,7 +760,7 @@ Tensor _polygamma(const Tensor& input_a, int32_t k, const std::optional<MemoryCo
 
 // rdiv
 Tensor ExecuteRdiv::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& input_tensor,
     float value,
     const std::optional<std::string>& round_mode,
@@ -856,28 +810,38 @@ Tensor _softshrink(const Tensor& a, float param, const std::optional<MemoryConfi
 
 // logit(input, eps)=log(input / 1 - input)
 Tensor _logit(const Tensor& input_a, float eps, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor t_eps = ttnn::full_like(input_a, eps);
-    Tensor t1m_eps = ttnn::full_like(input_a, (1 - eps));
+    float t1m_eps = 1 - eps;
     Tensor logit_input = ttnn::where(
-        ttnn::ltz(t_eps, output_mem_config),
-        input_a,
-        ttnn::where(
-            ttnn::lt(input_a, t_eps, std::nullopt, output_mem_config),
-            t_eps,
-            ttnn::where(ttnn::gt(input_a, t1m_eps, std::nullopt, output_mem_config), t1m_eps, input_a)));
+        ttnn::lt(input_a, eps, std::nullopt, output_mem_config),
+        eps,
+        ttnn::where(ttnn::gt(input_a, t1m_eps, std::nullopt, output_mem_config), t1m_eps, input_a));
     Tensor linput_m1 = ttnn::rsub(logit_input, 1.0, output_mem_config);
     Tensor log_input =
         ttnn::multiply(logit_input, ttnn::reciprocal(linput_m1, output_mem_config), std::nullopt, output_mem_config);
     linput_m1.deallocate();
     Tensor t_inf = ttnn::multiply(
-        ttnn::sign(input_a, output_mem_config), input_a.device()->sfpu_inf(), std::nullopt, output_mem_config);
-    Tensor logit_result = ttnn::where(
-        ttnn::eq(logit_input, 1.0, std::nullopt, output_mem_config),
-        t_inf,
-        ttnn::where(
-            ttnn::ltz(log_input, output_mem_config),
-            input_a.device()->sfpu_nan(),
-            ttnn::log(log_input, output_mem_config)));
+        ttnn::sign(input_a, output_mem_config),
+        tt::tt_metal::experimental::hal::get_inf(),
+        std::nullopt,
+        output_mem_config);
+    Tensor logit_result;
+    if (eps == 0.0 || eps == 1.0) {
+        logit_result = ttnn::where(
+            ttnn::eqz(logit_input, output_mem_config),
+            t_inf,
+            ttnn::where(
+                ttnn::eq(logit_input, 1.0, std::nullopt, output_mem_config),
+                tt::tt_metal::experimental::hal::get_inf(),
+                ttnn::log(log_input, output_mem_config)));
+    } else {
+        logit_result = ttnn::where(
+            ttnn::eq(logit_input, 1.0, std::nullopt, output_mem_config),
+            t_inf,
+            ttnn::where(
+                ttnn::ltz(log_input, output_mem_config),
+                tt::tt_metal::experimental::hal::get_nan(),
+                ttnn::log(log_input, output_mem_config)));
+    }
     return logit_result;
 }
 
@@ -915,27 +879,27 @@ Tensor _rpow(const Tensor& a, float k, const std::optional<MemoryConfig>& output
 using HWFunctionT = std::function<Tensor(const Tensor& y, const std::optional<MemoryConfig>&)>;
 Tensor _make_global_from_hw_impl(
     const HWFunctionT& fn, const Tensor& y, const std::optional<MemoryConfig>& output_mem_config) {
-    TT_FATAL(y.get_legacy_shape().rank() == 4, "Cannot support non-rank 4 Tensor");
+    TT_FATAL(y.get_padded_shape().rank() == 4, "Cannot support non-rank 4 Tensor");
 
     // format to HW
     Tensor y_hw = ttnn::reshape_on_device(
         y,
-        ttnn::SimpleShape{
+        ttnn::Shape{
             1,
             1,
-            y.get_legacy_shape()[2],
-            y.get_legacy_shape()[3] * y.get_legacy_shape()[1] * y.get_legacy_shape()[0]});
+            y.get_padded_shape()[2],
+            y.get_padded_shape()[3] * y.get_padded_shape()[1] * y.get_padded_shape()[0]});
 
     // compute @fn
     Tensor z_0 = fn(y_hw, output_mem_config);
-    TT_FATAL(y_hw.get_legacy_shape() == z_0.get_legacy_shape(), "shape match");
+    TT_FATAL(y_hw.get_padded_shape() == z_0.get_padded_shape(), "shape match");
     y_hw.deallocate();
 
     // reformat
     Tensor z_1 = ttnn::reshape_on_device(
         z_0,
-        ttnn::SimpleShape{
-            y.get_legacy_shape()[0], y.get_legacy_shape()[1], y.get_legacy_shape()[2], y.get_legacy_shape()[3]});
+        ttnn::Shape{
+            y.get_padded_shape()[0], y.get_padded_shape()[1], y.get_padded_shape()[2], y.get_padded_shape()[3]});
     z_0.deallocate();
 
     return z_1;

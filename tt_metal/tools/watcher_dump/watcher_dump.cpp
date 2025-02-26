@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <iostream>
 #include <filesystem>
-#include "tt_metal/host_api.hpp"
+#include <host_api.hpp>
 #include "impl/debug/watcher_server.hpp"
 #include "impl/debug/noc_logging.hpp"
 #include "impl/dispatch/debug_tools.hpp"
@@ -26,13 +26,13 @@ void dump_data(
     bool eth_dispatch,
     int num_hw_cqs) {
     // Don't clear L1, this way we can dump the state.
-    llrt::OptionsG.set_clear_l1(false);
+    llrt::RunTimeOptions::get_instance().set_clear_l1(false);
 
     // Watcher should be disabled for this, so we don't (1) overwrite the kernel_names.txt and (2) do any other dumping
     // than the one we want.
-    llrt::OptionsG.set_watcher_enabled(false);
+    llrt::RunTimeOptions::get_instance().set_watcher_enabled(false);
 
-    std::filesystem::path parent_dir(tt::llrt::OptionsG.get_root_dir() + output_dir_name);
+    std::filesystem::path parent_dir(tt::llrt::RunTimeOptions::get_instance().get_root_dir() + output_dir_name);
     std::filesystem::path cq_dir(parent_dir.string() + "command_queue_dump/");
     std::filesystem::create_directories(cq_dir);
 
@@ -44,14 +44,14 @@ void dump_data(
     }
 
     // Only look at user-specified devices
-    vector<Device*> devices;
+    vector<IDevice*> devices;
     for (unsigned id : device_ids) {
         string cq_fname = cq_dir.string() + fmt::format("device_{}_completion_q.txt", id);
         std::ofstream cq_file = std::ofstream(cq_fname);
         string iq_fname = cq_dir.string() + fmt::format("device_{}_issue_q.txt", id);
         std::ofstream iq_file = std::ofstream(iq_fname);
         // Minimal setup, since we'll be attaching to a potentially hanging chip.
-        Device* device = tt::tt_metal::CreateDeviceMinimal(
+        IDevice* device = tt::tt_metal::CreateDeviceMinimal(
             id, num_hw_cqs, DispatchCoreConfig{eth_dispatch ? DispatchCoreType::ETH : DispatchCoreType::WORKER});
         devices.push_back(device);
         if (dump_cqs) {
@@ -142,7 +142,7 @@ int main(int argc, char* argv[]) {
         } else if (s == "--dump-cqs-data") {
             dump_cqs_raw_data = true;
         } else if (s == "--dump-noc-transfer-data") {
-            tt::llrt::OptionsG.set_record_noc_transfers(true);
+            tt::llrt::RunTimeOptions::get_instance().set_record_noc_transfers(true);
             dump_noc_xfers = true;
         } else if (s == "--eth-dispatch") {
             eth_dispatch = true;

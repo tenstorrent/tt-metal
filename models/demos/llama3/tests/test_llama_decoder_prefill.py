@@ -13,7 +13,7 @@ from models.demos.llama3.tt.llama_common import (
 )
 from models.demos.llama3.tt.llama_decoder import TtTransformerBlock
 from models.demos.llama3.tt.model_config import TtModelArgs
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import TransformerBlock, precompute_freqs_cis
+from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import precompute_freqs_cis
 from models.utility_functions import (
     comp_pcc,
     comp_allclose,
@@ -48,10 +48,6 @@ from models.utility_functions import skip_for_grayskull
     [{"page_block_size": 32, "page_max_num_blocks": 1024}],
 )
 @pytest.mark.parametrize(
-    "batch_size",
-    (1,),
-)
-@pytest.mark.parametrize(
     "max_seq_len",
     (
         4096,
@@ -60,7 +56,6 @@ from models.utility_functions import skip_for_grayskull
 )
 def test_llama_decoder_inference(
     max_seq_len,
-    batch_size,
     paged_attention,
     page_params,
     mesh_device,
@@ -69,6 +64,8 @@ def test_llama_decoder_inference(
     ensure_gc,
 ):
     dtype = ttnn.bfloat8_b
+    batch_size = 1  # For prefill we only support batch_size = 1
+
     mesh_device.enable_async(True)
 
     model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len)
@@ -82,7 +79,7 @@ def test_llama_decoder_inference(
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     }
 
-    reference_model = TransformerBlock(layer_id=0, args=model_args)
+    reference_model = model_args.reference_decoder()
     reference_model.load_state_dict(partial_state_dict)
 
     generation_start_pos = 0
@@ -90,7 +87,14 @@ def test_llama_decoder_inference(
     all_tests_pass = True
 
     # pre-compute the rotational embedding matrix and send to device
-    rot_mats = get_prefill_rot_mat(model_args.head_dim, model_args.max_seq_len, mesh_device, seq_len=max_seq_len)
+    rot_mats = get_prefill_rot_mat(
+        model_args.head_dim,
+        mesh_device,
+        max_seq_len,
+        model_args.rope_theta,
+        model_args.rope_scaling_factor,
+        model_args.orig_context_len,
+    )
     transformation_mat_torch = get_rot_transformation_mat(model_args.head_dim)
     transformation_mats_prefill = ttnn.as_tensor(
         transformation_mat_torch,
@@ -142,12 +146,15 @@ def test_llama_decoder_inference(
         logger.info(f"[Decoder] Generating token {i}")
         pt_decode_input = (torch.rand(batch_size, max_seq_len, model_args.dim) * 2) - 1
         tt_decode_input = pt_decode_input.clone()
-        decode_input = model_args.prepare_inputs_ttnn_prefill(
+        decode_input = model_args.prepare_residual_tensor_prefill(
             tt_decode_input,
         )
         positions = torch.LongTensor(range(max_seq_len))
         freqs_cis_i = precompute_freqs_cis(
-            model_args.head_dim, model_args.max_seq_len * 2, model_args.rope_theta, model_args.use_scaled_rope
+            model_args.head_dim,
+            model_args.max_seq_len * 2,
+            model_args.rope_theta,
+            model_args.rope_scaling_factor,
         )[positions]
 
         # Reference model
@@ -155,17 +162,12 @@ def test_llama_decoder_inference(
         attn_mask_torch = torch.triu(attn_mask, diagonal=1)
         ref_output = reference_model(pt_decode_input, positions[0], freqs_cis_i, mask=attn_mask_torch)
         # Run TT model
-        tt_out = tt_model(
-            decode_input,
-            current_pos=None,
-            rot_mats=rot_mats,
-            user_id=0,
-            mode="prefill",
-            page_table=page_table_tt,
+        tt_out = tt_model(decode_input, None, rot_mats, user_id=0, mode="prefill", page_table=page_table_tt)
+        tt_out = ttnn.to_torch(
+            tt_out,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
         )
-        tt_output_torch = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))[
-            0, :, :, : model_args.dim
-        ].view(
+        tt_output_torch = tt_out[:, 0:1, :, : model_args.dim].view(
             batch_size, max_seq_len, -1
         )  # [ batch_size, seq, hidden_dim]
         passing, pcc_message = comp_pcc(ref_output, tt_output_torch)

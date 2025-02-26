@@ -4,9 +4,9 @@
 
 #include "dispatch_fixture.hpp"
 #include "command_queue_fixture.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "common/bfloat16.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/bfloat16.hpp>
 
 using std::vector;
 using namespace tt;
@@ -61,7 +61,7 @@ inline std::vector<uint32_t> gold_standard_flatten(std::vector<uint32_t> src_vec
     return expected_dst_vec;
 }
 
-bool flatten(DispatchFixture* fixture, tt_metal::Device* device, uint32_t num_tiles_r = 5, uint32_t num_tiles_c = 5) {
+bool flatten(DispatchFixture* fixture, tt_metal::IDevice* device, uint32_t num_tiles_r = 5, uint32_t num_tiles_c = 5) {
     bool pass = true;
 
     tt_metal::Program program = tt_metal::CreateProgram();
@@ -86,9 +86,6 @@ bool flatten(DispatchFixture* fixture, tt_metal::Device* device, uint32_t num_ti
     uint32_t dram_buffer_src_addr = src_dram_buffer->address();
     auto dst_dram_buffer = CreateBuffer(dram_config);
     uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
-
-    auto dram_src_noc_xy = src_dram_buffer->noc_coordinates();
-    auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
 
     // input CB is larger than the output CB, to test the backpressure from the output CB all the way into the input CB
     // CB_out size = 1 forces the serialization of packer and writer kernel, generating backpressure to math kernel,
@@ -146,21 +143,9 @@ bool flatten(DispatchFixture* fixture, tt_metal::Device* device, uint32_t num_ti
     fixture->WriteBuffer(device, src_dram_buffer, src_vec);
 
     tt_metal::SetRuntimeArgs(
-        program,
-        flatten_kernel,
-        core,
-        {dram_buffer_src_addr,
-         (std::uint32_t)dram_src_noc_xy.x,
-         (std::uint32_t)dram_src_noc_xy.y,
-         num_tiles_r,
-         num_tiles_c,
-         num_bytes_per_tensor_row});
+        program, flatten_kernel, core, {dram_buffer_src_addr, 0, num_tiles_r, num_tiles_c, num_bytes_per_tensor_row});
 
-    tt_metal::SetRuntimeArgs(
-        program,
-        unary_writer_kernel,
-        core,
-        {dram_buffer_dst_addr, (std::uint32_t)dram_dst_noc_xy.x, (std::uint32_t)dram_dst_noc_xy.y, num_tiles * 32});
+    tt_metal::SetRuntimeArgs(program, unary_writer_kernel, core, {dram_buffer_dst_addr, 0, num_tiles * 32});
 
     fixture->RunProgram(device, program);
 
@@ -188,7 +173,7 @@ bool flatten(DispatchFixture* fixture, tt_metal::Device* device, uint32_t num_ti
     return pass;
 }
 
-bool flatten_stress(Device* device, uint32_t num_tiles_r = 5, uint32_t num_tiles_c = 5) {
+bool flatten_stress(IDevice* device, uint32_t num_tiles_r = 5, uint32_t num_tiles_c = 5) {
     // Test Simulating Program Caching with Async Command Queues
     bool pass = true;
     // Create a program used across all loops
@@ -246,8 +231,6 @@ bool flatten_stress(Device* device, uint32_t num_tiles_r = 5, uint32_t num_tiles
         auto src_dram_buffer = CreateBuffer(dram_config);
         auto dst_dram_buffer = CreateBuffer(dram_config);
 
-        auto dram_src_noc_xy = src_dram_buffer->noc_coordinates();
-        auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
         // Create the source vector
         std::shared_ptr<std::vector<uint32_t>> src_vec =
             std::make_shared<std::vector<uint32_t>>(create_random_vector_of_bfloat16(
@@ -258,14 +241,8 @@ bool flatten_stress(Device* device, uint32_t num_tiles_r = 5, uint32_t num_tiles
         std::shared_ptr<RuntimeArgs> writer_runtime_args = std::make_shared<RuntimeArgs>();
         std::shared_ptr<RuntimeArgs> compute_runtime_args = std::make_shared<RuntimeArgs>();
         *compute_runtime_args = {
-            src_dram_buffer.get(),
-            (std::uint32_t)dram_src_noc_xy.x,
-            (std::uint32_t)dram_src_noc_xy.y,
-            num_tiles_r,
-            num_tiles_c,
-            num_bytes_per_tensor_row};
-        *writer_runtime_args = {
-            dst_dram_buffer.get(), (std::uint32_t)dram_dst_noc_xy.x, (std::uint32_t)dram_dst_noc_xy.y, num_tiles * 32};
+            src_dram_buffer.get(), (uint32_t)0, num_tiles_r, num_tiles_c, num_bytes_per_tensor_row};
+        *writer_runtime_args = {dst_dram_buffer.get(), (uint32_t)0, num_tiles * 32};
 
         SetRuntimeArgs(device, detail::GetKernel(program, flatten_kernel), core, compute_runtime_args);
 
@@ -321,18 +298,4 @@ TEST_F(DispatchFixture, TensixFlatten) {
         }
         ASSERT_TRUE(test_flatten::flatten(this, this->devices_.at(id), num_tiles_r, num_tiles_c));
     }
-}
-
-TEST_F(CommandQueueProgramFixture, DISABLED_TensixTestAsyncFlattenStress) {
-    auto& command_queue = this->device_->command_queue();
-    auto current_mode = CommandQueue::default_mode();
-    command_queue.set_mode(CommandQueue::CommandQueueMode::ASYNC);
-    uint32_t num_tiles_r = 2;
-    uint32_t num_tiles_c = 2;
-    if (!this->IsSlowDispatch()) {
-        num_tiles_r = 1;
-        num_tiles_c = 1;
-    }
-    ASSERT_TRUE(test_flatten::flatten_stress(this->device_, num_tiles_r, num_tiles_c));
-    command_queue.set_mode(current_mode);
 }

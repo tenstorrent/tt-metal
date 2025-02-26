@@ -27,11 +27,41 @@ random.seed(0)
 parameters = {
     "xfail": {
         "input_shape": gen_shapes([1, 1, 32, 32], [6, 12, 256, 256], [1, 1, 32, 32], 16)
-        + gen_shapes([1, 1, 1, 1], [6, 12, 256, 256], [1, 1, 1, 1], 2),
-        "dim": [0, 1, 2, 3],
-        "grad_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
-        "input_a_dtype": [ttnn.bfloat16],
-        "input_layout": [ttnn.TILE_LAYOUT],
+        + gen_shapes([1, 1, 1, 1], [6, 12, 256, 256], [1, 1, 1, 1], 2)
+        + gen_shapes([3, 4, 5, 6], [6, 12, 256, 256], [7, 8, 9, 10], 2)
+        + gen_shapes([1, 1, 1, 1], [6, 12, 187, 188], [1, 1, 1, 1], 7)
+        + gen_shapes([1, 32, 64], [6, 48, 128], [1, 1, 1], 2)
+        + gen_shapes([1, 32, 64], [6, 77, 128], [1, 1, 1], 7)
+        + gen_shapes([1, 32, 64], [6, 10222, 1023], [1, 1, 1], 8)
+        + gen_shapes([1, 1], [6, 6], [1, 1], 2)
+        + gen_shapes([1, 1], [7, 7], [1, 2], 3)
+        + gen_shapes([1, 1], [8, 8], [1, 3], 4)
+        + gen_shapes([1], [4], [1], 2)
+        + gen_shapes([1], [14], [11], 12)
+        + gen_shapes([1], [24], [21], 22),
+        "dim": [
+            0,
+            1,
+            2,
+            3,
+            None,
+            [0, 1],
+            [0, 2],
+            [0, 3],
+            [1, 2],
+            [1, 3],
+            [2, 3],
+            [0, 1, 2],
+            [0, 1, 3],
+            [0, 1, 3],
+            [0, 2, 3],
+            [1, 2, 3],
+            [0, 1, 2, 3],
+        ],
+        "keepdim": [True, False],
+        "grad_dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b],
+        "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        "input_layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
         "grad_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
@@ -45,10 +75,18 @@ parameters = {
 def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT:
         return True, "Unary operation requires tensor to be in Tile layout when working with non-sharded input tensor"
-    if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT and (
-        test_vector["grad_dtype"] == ttnn.bfloat8_b or test_vector["input_a_dtype"] == ttnn.bfloat8_b
-    ):
-        return True, "bfloat8_b is only supported on tiled layout"
+    if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT:
+        if (test_vector["input_a_dtype"] == ttnn.float32 and test_vector["grad_dtype"] == ttnn.float32) or (
+            test_vector["input_a_dtype"] == ttnn.bfloat16 or test_vector["grad_dtype"] == ttnn.bfloat16
+        ):
+            return False, None
+        else:
+            return True, "Row major is only supported for fp32 & fp16"
+    if not test_vector["keepdim"]:
+        return True, "keepdim = false is not supported"
+    if not isinstance(test_vector["dim"], int):
+        return True, "dim can only be integer value"
+
     return False, None
 
 
@@ -59,6 +97,7 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 def run(
     input_shape,
     dim,
+    keepdim,
     grad_dtype,
     input_a_dtype,
     input_layout,
@@ -71,16 +110,16 @@ def run(
     data_seed = random.randint(0, 20000000)
     torch.manual_seed(data_seed)
 
+    if (input_a_dtype == ttnn.float32 or grad_dtype == ttnn.float32) and ttnn.device.is_grayskull(device):
+        return [(False, "Dest Fp32 mode is not supported for arch grayskull"), 0]
+
     torch_input_tensor_a = gen_func_with_cast_tt(
         partial(torch_random, low=0, high=100, dtype=torch.float32), input_a_dtype
     )(input_shape)
     torch_input_tensor_a.requires_grad = True
     torch_input_tensor_a.retain_grad()
 
-    max_dim = len(input_shape) - 1
-    dim = random.randint(-max_dim - 1, max_dim)
-
-    intermediate_result = torch.prod(torch_input_tensor_a, dim=dim, keepdim=True)
+    intermediate_result = torch.prod(torch_input_tensor_a, dim=dim, keepdim=keepdim)
     torch_grad_tensor = gen_func_with_cast_tt(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), grad_dtype
     )(intermediate_result.shape)

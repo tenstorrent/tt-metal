@@ -5,6 +5,11 @@
 #ifndef _NOC_PARAMETERS_H_
 #define _NOC_PARAMETERS_H_
 
+// Coordinate Virtualization is not currently supported on BH (requires syseng support for updating FW).
+#define VIRTUAL_TENSIX_START_X 0
+#define VIRTUAL_TENSIX_START_Y 0
+#define COORDINATE_VIRTUALIZATION_ENABLED 0
+
 #define NUM_NOCS 2
 #define NUM_TENSIXES 140
 
@@ -355,10 +360,8 @@
 #define NOC_XY_ENCODING(x, y) ((((uint32_t)(y)) << (NOC_ADDR_NODE_ID_BITS)) | (((uint32_t)(x))))
 
 // Base address pulled from tt::umd::Cluster::get_pcie_base_addr_from_device
-#define NOC_XY_PCIE_ENCODING(x, y, noc_index)                                                            \
-    ((uint64_t(NOC_XY_ENCODING(x, y)) << (NOC_ADDR_LOCAL_BITS - NOC_COORD_REG_OFFSET))) |                \
-        ((noc_index ? (x == PCIE_NOC1_X and y == PCIE_NOC1_Y) : (x == PCIE_NOC_X and y == PCIE_NOC_Y)) * \
-         0x1000000000000000)
+#define NOC_XY_PCIE_ENCODING(x, y) \
+    ((uint64_t(NOC_XY_ENCODING(x, y)) << (NOC_ADDR_LOCAL_BITS - NOC_COORD_REG_OFFSET)) | 0x1000000000000000)
 
 #define NOC_MULTICAST_ENCODING(x_start, y_start, x_end, y_end)                                                         \
     ((((uint32_t)(x_start)) << (2 * NOC_ADDR_NODE_ID_BITS)) | (((uint32_t)(y_start)) << (3 * NOC_ADDR_NODE_ID_BITS)) | \

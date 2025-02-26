@@ -46,6 +46,7 @@ def run_conv(
     debug=False,
     groups=1,
     auto_shard=False,
+    shard_layout=None,
 ):
     # has_bias = False
     has_bias = False
@@ -79,21 +80,25 @@ def run_conv(
 
     tt_input_tensor = ttnn.from_torch(torch_input_tensor, ttnn.bfloat16)
 
-    shard_layout = (
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED if use_1d_systolic_array else ttnn.TensorMemoryLayout.BLOCK_SHARDED
-    )
+    if shard_layout is None:
+        shard_layout = (
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED if use_1d_systolic_array else ttnn.TensorMemoryLayout.BLOCK_SHARDED
+        )
     if auto_shard:
         shard_layout = None
 
     conv_config = ttnn.Conv1dConfig(
         dtype=output_dtype,
         weights_dtype=weights_dtype,
-        math_fidelity=math_fidelity,
         shard_layout=shard_layout,
         input_channels_alignment=(16 if use_shallow_conv_variant else 32),
         deallocate_activation=deallocate_activation,
-        fp32_dest_acc_enabled=fp32_accum,
-        packer_l1_accum_enabled=packer_l1_acc,
+    )
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=math_fidelity,
+        fp32_dest_acc_en=fp32_accum,
+        packer_l1_acc=packer_l1_acc,
     )
     if config_override and "act_block_h" in config_override:
         conv_config.act_block_h_override = config_override["act_block_h"]
@@ -104,7 +109,7 @@ def run_conv(
             conv_config.override_sharding_config = True
             print("Setting num_cores_nhw to 98")
 
-    [tt_output_tensor_on_device, out_length, weights_device, bias_device] = ttnn.Conv1d(
+    [tt_output_tensor_on_device, out_length, [weights_device, bias_device]] = ttnn.Conv1d(
         input_tensor=tt_input_tensor,
         weight_tensor=tt_weight_tensor,
         in_channels=input_channels,
@@ -117,9 +122,12 @@ def run_conv(
         batch_size=batch_size,
         input_length=input_length,
         conv_config=conv_config,
+        compute_config=compute_config,
         conv_op_cache=reader_patterns_cache,
         debug=debug,
         groups=groups,
+        return_output_dim=True,
+        return_weights_and_bias=True,
     )
 
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
@@ -292,6 +300,82 @@ def test_conv1d(
         config_override,
         use_shallow_conv_variant=use_shallow_conv_variant,
         transpose_mcast=use_1d_systolic_array,  ## use RM (transpose_mcast=False) with 2D on WH
+        padded_input_channels=None,
+        output_layout=output_layout,
+        groups=groups,
+    )
+
+
+@skip_for_grayskull()
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize(
+    "batch_size, output_channels, input_channels, input_length, kernel_size, stride, padding, groups, shard_layout, config_override, use_shallow_conv_variant",
+    (
+        # (8, 768, 768, 384, 1, 1, 0, 4, True, None, False), #Pass
+        (8, 768, 3072, 384, 1, 1, 0, 4, ttnn.TensorMemoryLayout.WIDTH_SHARDED, {"act_block_h": 1536}, False),
+        (8, 3072, 768, 384, 1, 1, 0, 4, ttnn.TensorMemoryLayout.WIDTH_SHARDED, None, False),
+    ),
+)
+@pytest.mark.parametrize(
+    "weights_dtype",
+    [
+        ttnn.bfloat8_b,
+    ],
+)
+@pytest.mark.parametrize(
+    "activations_dtype",
+    [ttnn.bfloat16],
+)
+@pytest.mark.parametrize(
+    "output_dtype",
+    [ttnn.bfloat16],
+)
+@pytest.mark.parametrize("math_fidelity", [ttnn.MathFidelity.LoFi])
+@pytest.mark.parametrize("output_layout", [ttnn.TILE_LAYOUT])
+def test_squeezebert_conv1d(
+    device,
+    use_program_cache,
+    math_fidelity,
+    activations_dtype,
+    weights_dtype,
+    output_dtype,
+    batch_size,
+    output_channels,
+    input_channels,
+    input_length,
+    kernel_size,
+    stride,
+    padding,
+    groups,
+    shard_layout,
+    config_override,
+    use_shallow_conv_variant,
+    output_layout,
+):
+    if activations_dtype == ttnn.bfloat8_b:
+        pytest.skip("Row major layout not compatible with bfloat8_b")
+    # if groups > 5120 or input_channels > 5120 or output_channels > 5120:
+    #     pytest.skip("OOM")
+    # if (input_channels > 2560 or output_channels > 2560) and output_dtype == ttnn.bfloat16:
+    #     pytest.skip("OOM")
+
+    run_conv(
+        device,
+        math_fidelity,
+        activations_dtype,
+        weights_dtype,
+        output_dtype,
+        batch_size,
+        output_channels,
+        input_channels,
+        input_length,
+        kernel_size,
+        stride,
+        padding,
+        False,
+        config_override,
+        use_shallow_conv_variant=use_shallow_conv_variant,
+        shard_layout=shard_layout,
         padded_input_channels=None,
         output_layout=output_layout,
         groups=groups,

@@ -6,12 +6,12 @@
 #include <functional>
 #include <random>
 
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/device.hpp>
 
-#include "common/bfloat16.hpp"
+#include <tt-metalium/bfloat16.hpp>
 
-#include <magic_enum.hpp>
+#include <magic_enum/magic_enum.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -71,7 +71,7 @@ int main(int argc, char** argv) {
          * Silicon accelerator setup
          */
         constexpr int device_id = 0;
-        Device* device = CreateDevice(device_id);
+        IDevice* device = CreateDevice(device_id);
 
         /*
          * Setup program to execute along with its buffers and kernels to use
@@ -96,7 +96,10 @@ int main(int argc, char** argv) {
         std::shared_ptr<tt::tt_metal::Buffer> src0_dram_buffer = CreateBuffer(dram_config);
         std::shared_ptr<tt::tt_metal::Buffer> src1_dram_buffer = CreateBuffer(dram_config);
         std::shared_ptr<tt::tt_metal::Buffer> dst_dram_buffer = CreateBuffer(dram_config);
-
+        // Since all interleaved buffers have size == page_size, they are entirely contained in the first DRAM bank
+        uint32_t src0_bank_id = 0;
+        uint32_t src1_bank_id = 0;
+        uint32_t dst_bank_id = 0;
         /*
          * Use circular buffers to set input and output buffers that the
          * compute engine will use.
@@ -182,25 +185,16 @@ int main(int argc, char** argv) {
             binary_reader_kernel_id,
             core,
             {src0_dram_buffer->address(),
-             static_cast<uint32_t>(src0_dram_buffer->noc_coordinates().x),
-             static_cast<uint32_t>(src0_dram_buffer->noc_coordinates().y),
+             src0_bank_id,
              num_tiles,
              src1_dram_buffer->address(),
-             static_cast<uint32_t>(src1_dram_buffer->noc_coordinates().x),
-             static_cast<uint32_t>(src1_dram_buffer->noc_coordinates().y),
+             src1_bank_id,
              num_tiles,
              0});
 
         SetRuntimeArgs(program, eltwise_binary_kernel_id, core, {num_tiles, 1});
 
-        SetRuntimeArgs(
-            program,
-            unary_writer_kernel_id,
-            core,
-            {dst_dram_buffer->address(),
-             static_cast<uint32_t>(dst_dram_buffer->noc_coordinates().x),
-             static_cast<uint32_t>(dst_dram_buffer->noc_coordinates().y),
-             num_tiles});
+        SetRuntimeArgs(program, unary_writer_kernel_id, core, {dst_dram_buffer->address(), dst_bank_id, num_tiles});
 
         EnqueueProgram(cq, program, false);
         Finish(cq);
@@ -268,25 +262,16 @@ int main(int argc, char** argv) {
             binary_reader_kernel_id,
             core,
             {src0_dram_buffer->address(),
-             static_cast<uint32_t>(src0_dram_buffer->noc_coordinates().x),
-             static_cast<uint32_t>(src0_dram_buffer->noc_coordinates().y),
+             src0_bank_id,
              num_tiles,
              src1_dram_buffer->address(),
-             static_cast<uint32_t>(src1_dram_buffer->noc_coordinates().x),
-             static_cast<uint32_t>(src1_dram_buffer->noc_coordinates().y),
+             src1_bank_id,
              num_tiles,
              0});
 
         SetRuntimeArgs(program_mul, eltwise_binary_kernel_id, core, {num_tiles, 1});
 
-        SetRuntimeArgs(
-            program_mul,
-            unary_writer_kernel_id,
-            core,
-            {dst_dram_buffer->address(),
-             static_cast<uint32_t>(dst_dram_buffer->noc_coordinates().x),
-             static_cast<uint32_t>(dst_dram_buffer->noc_coordinates().y),
-             num_tiles});
+        SetRuntimeArgs(program_mul, unary_writer_kernel_id, core, {dst_dram_buffer->address(), dst_bank_id, num_tiles});
 
         /*
          * Execute.

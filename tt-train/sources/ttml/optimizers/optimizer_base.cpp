@@ -4,11 +4,12 @@
 
 #include "optimizer_base.hpp"
 
+#include "autograd/auto_context.hpp"
 #include "core/tt_tensor_utils.hpp"
 
 namespace ttml::optimizers {
 
-OptimizerBase::OptimizerBase(autograd::NamedParameters&& parameters) : m_parameters(std::move(parameters)) {
+OptimizerBase::OptimizerBase(serialization::NamedParameters&& parameters) : m_parameters(std::move(parameters)) {
 }
 
 void OptimizerBase::print_stats() const {

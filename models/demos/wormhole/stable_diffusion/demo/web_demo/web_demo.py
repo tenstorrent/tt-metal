@@ -9,7 +9,7 @@ import os
 
 # Two scripts to run
 script1 = "pytest models/demos/wormhole/stable_diffusion/demo/web_demo/sdserver.py"
-script2 = "python models/demos/wormhole/stable_diffusion/demo/web_demo/flaskserver.py"
+script2 = "python3 models/demos/wormhole/stable_diffusion/demo/web_demo/flaskserver.py"
 script3 = "streamlit run models/demos/wormhole/stable_diffusion/demo/web_demo/streamlit_app.py"
 
 # Start both scripts using subprocess

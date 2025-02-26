@@ -53,7 +53,7 @@ def _golden_function(input_tensor: ttnn.Tensor, padding, value):
 def _postprocess_golden_function_outputs(output_tensor, args, kwargs):
     output_tensor = ttnn.decorators.default_postprocess_golden_function_outputs(output_tensor, args, kwargs)
     # Padding always turns the intended shape to the shape with tile padding. For simplicity of the operation
-    output_tensor = ttnn.reshape(output_tensor, shape=output_tensor.shape.with_tile_padding())
+    output_tensor = ttnn.reshape(output_tensor, shape=output_tensor.padded_shape)
     return output_tensor
 
 
@@ -83,10 +83,44 @@ def _golden_function(input_tensor, dims, **_):
 ttnn.attach_golden_function(ttnn.permute, golden_function=_golden_function)
 
 
-def _golden_function(tensors, dim=0, **_):
+def _golden_function(tensors, dim=0, groups=1, **_):
     import torch
 
-    return torch.concat(tensors, dim)
+    def grouped_concat(activations, residuals, groups):
+        """
+        Concatenate activations and residuals with flexible interleaving based on groups.
+
+        Args:
+            activations (torch.Tensor): Activation tensor with shape [N, H, W, C].
+            residuals (torch.Tensor): Residual tensor with shape [N, H, W, C].
+            groups (int): Number of groups to split channels into.
+
+        Returns:
+            torch.Tensor: Concatenated tensor with interleaved groups.
+        """
+
+        assert (
+            activations.shape[:-1] == residuals.shape[:-1]
+        ), "Activations and residuals must have the same shape in all dims but -1"
+
+        N, H, W, activation_channels = activations.shape
+        assert activation_channels % groups == 0, "Channel count must be divisible by the number of groups"
+
+        N, H, W, residual_channels = residuals.shape
+        assert residual_channels % groups == 0, "Channel count must be divisible by the number of groups"
+
+        act_groups = activations.view(N, H, W, groups, activation_channels // groups)
+        res_groups = residuals.view(N, H, W, groups, residual_channels // groups)
+
+        # Interleave activations and residuals along the channel axis
+        interleaved = torch.cat([act_groups, res_groups], dim=-1)  # Shape: [N, H, W, groups, 2 * group_size]
+
+        # Reshape to combine groups and channels correctly
+        interleaved = interleaved.permute(0, 1, 2, 3, 4).reshape(N, H, W, residual_channels + activation_channels)
+
+        return interleaved
+
+    return grouped_concat(tensors[0], tensors[1], groups=groups) if groups > 1 else torch.concat(tensors, dim)
 
 
 ttnn.attach_golden_function(

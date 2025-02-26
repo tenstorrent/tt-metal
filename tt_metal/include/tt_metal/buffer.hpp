@@ -4,8 +4,8 @@
 
 #pragma once
 
-#include "tt_metal/impl/buffers/buffer.hpp"
-#include "tt_metal/types.hpp"
+#include <buffer.hpp>
+#include <types.hpp>
 //==================================================
 //                  BUFFER HANDLING
 //==================================================

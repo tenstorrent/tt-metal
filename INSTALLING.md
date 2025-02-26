@@ -20,9 +20,9 @@ Note the current compatibility matrix:
 
 | Device              | OS              | Python   | Driver (TT-KMD)    | Firmware (TT-Flash)                        | TT-SMI                | TT-Topology                    |
 |---------------------|-----------------|----------|--------------------|--------------------------------------------|-----------------------|--------------------------------|
-| Grayskull           | Ubuntu 20.04    | 3.8.10   | v1.29              | fw_pack-80.9.0.0 (v80.9.0.0)               | v2.2.0 or above       | N/A                            |
 | Wormhole            | Ubuntu 20.04    | 3.8.10   | v1.29              | fw_pack-80.13.0.0 (v80.13.0.0)             | v2.2.0 or above       | N/A                            |
 | T3000 (Wormhole)    | Ubuntu 20.04    | 3.8.10   | v1.29              | fw_pack-80.13.0.0 (v80.13.0.0)             | v2.2.0 or above       | v1.1.3 or above, `mesh` config |
+| Blackhole           | Ubuntu 20.04    | 3.10     | v1.31              | fw_pack-80.15.0.0 (v80.15.0.0)             | v3.0.5 or above       | v1.1.3 or above, 'mesh' config |
 
 #### Install System-level Dependencies
 ```
@@ -30,13 +30,6 @@ wget https://raw.githubusercontent.com/tenstorrent/tt-metal/refs/heads/main/inst
 chmod a+x install_dependencies.sh
 sudo ./install_dependencies.sh
 ```
-
-- Note: Some advanced build configurations like unity builds require at least `CMake 3.20`.
-  To upgrade Cmake run:
-    ```sh
-    sudo apt update
-    sudo apt install cmake
-    ```
 
 ---
 
@@ -66,10 +59,10 @@ cd ..
 
 #### Update Device TT-Firmware with TT-Flash
 - Install Cargo (Rust package manager):
-  | OS | Command |
-  |---|---|
+  | OS              | Command                      |
+  |-----------------|------------------------------|
   | Ubuntu / Debian | ```sudo apt install cargo``` |
-  | Fedora / EL9 | ```sudo dnf install cargo``` |
+  | Fedora / EL9    | ```sudo dnf install cargo``` |
   
 - Install TT-Flash:
 
@@ -128,7 +121,7 @@ Once hardware and system software are installed, verify that the system has been
 
 ---
 
-### TT-Metalium Installation
+### TT-NN / TT-Metalium Installation
 
 #### There are three options for installing TT-Metalium:
 
@@ -147,14 +140,12 @@ Once hardware and system software are installed, verify that the system has been
 --- 
 
 ### Option 1: From Source
-Install from source if you are a developer who wants to be close to the metal or the source code.
+Install from source if you are a developer who wants to be close to the metal and the source code. Recommended for running the demo models.
 
 #### Step 1. Clone the Repository:
 
 ```sh
 git clone https://github.com/tenstorrent/tt-metal.git --recurse-submodules
-cd tt-metal
-git submodule foreach 'git lfs fetch --all && git lfs pull'
 ```
 
 #### Step 2. Invoke our Build Scripts:
@@ -184,18 +175,17 @@ source python_env/bin/activate
 ### Option 2: From Docker Release Image
 Installing from Docker Release Image is the quickest way to access our APIs and to start runnig AI models.
 
-- Download the Latest Docker Release Image by running the command for the Tenstorrent card architecture you have installed:
+Download the latest Docker release from our [Docker registry](https://github.com/orgs/tenstorrent/packages?q=tt-metalium-ubuntu&tab=packages&q=tt-metalium-ubuntu-20.04-amd64-release) page
 
-  - For Grayskull:
-  ```
-  docker pull ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-20.04-amd64-release/grayskull:latest-rc
-  docker run -it --rm -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-20.04-amd64-release/grayskull:latest-rc bash
-  ```
-  - For Wormhole:
-  ```
-  docker pull ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-20.04-amd64-release/wormhole_b0:latest-rc
-  docker run -it --rm -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-20.04-amd64-release/wormhole_b0:latest-rc bash
-  ```
+```sh
+docker pull ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-20.04-amd64-release:latest-rc
+docker run -it --rm -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent ghcr.io/tenstorrent/tt-metal/tt-metalium-ubuntu-20.04-amd64-release:latest-rc bash
+```
+
+When inside of the container,
+```sh
+python3 -c "import ttnn"
+```
 
 - For more information on the Docker Release Images, visit our [Docker registry page](https://github.com/orgs/tenstorrent/packages?q=tt-metalium-ubuntu&tab=packages&q=tt-metalium-ubuntu-20.04-amd64-release).
 

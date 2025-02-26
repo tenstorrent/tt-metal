@@ -4,7 +4,7 @@
 
 #include <variant>
 #include "device_fixture.hpp"
-#include "tt_metal/common/bfloat8.hpp"
+#include <tt-metalium/bfloat8.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 
 using std::vector;
@@ -42,7 +42,7 @@ using VariantVectorType = std::variant<std::vector<float>, std::vector<bfloat16>
 /// @param device
 /// @param test_config - Configuration of the test -- see struct
 /// @return
-bool single_core_reconfig(tt_metal::Device* device, const ReconfigConfig& test_config) {
+bool single_core_reconfig(tt_metal::IDevice* device, const ReconfigConfig& test_config) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
@@ -91,27 +91,22 @@ bool single_core_reconfig(tt_metal::Device* device, const ReconfigConfig& test_c
     // This will be srcB in Bfp8_b
     auto input0_dram_buffer = CreateBuffer(dram_config_bfp8b);
     uint32_t input0_dram_byte_address = input0_dram_buffer->address();
-    auto input0_dram_noc_xy = input0_dram_buffer->noc_coordinates();
 
     // This will be srcA in Float16_b
     auto input1_dram_buffer = CreateBuffer(dram_config_bfp16b);
     uint32_t input1_dram_byte_address = input1_dram_buffer->address();
-    auto input1_dram_noc_xy = input1_dram_buffer->noc_coordinates();
 
     // This will be DEST in Float16_b
     auto input2_dram_buffer = CreateBuffer(dram_config_bfp16b);
     uint32_t input2_dram_byte_address = input2_dram_buffer->address();
-    auto input2_dram_noc_xy = input2_dram_buffer->noc_coordinates();
 
     // This will be Output0 in Float32 or Float16_b depending on fp32_dest_acc_en
     auto output0_dram_buffer = CreateBuffer(dram_config_out0);
     uint32_t output0_dram_byte_address = output0_dram_buffer->address();
-    auto output0_dram_noc_xy = output0_dram_buffer->noc_coordinates();
 
     // This will be Output1 in Bfp8_b
     auto output1_dram_buffer = CreateBuffer(dram_config_bfp8b);
     uint32_t output1_dram_byte_address = output1_dram_buffer->address();
-    auto output1_dram_noc_xy = output1_dram_buffer->noc_coordinates();
 
     tt_metal::CircularBufferConfig l1_input0_cb_config =
         tt_metal::CircularBufferConfig(dram_buffer_size_bfp8b, {{in0_id, tt::DataFormat::Bfp8_b}})
@@ -254,21 +249,24 @@ bool single_core_reconfig(tt_metal::Device* device, const ReconfigConfig& test_c
     tt_metal::detail::WriteToBuffer(input1_dram_buffer, src1_vec);
     tt_metal::detail::WriteToBuffer(input2_dram_buffer, src2_vec);
 
+    static constexpr uint32_t k_input0_dram_bank_id = 0;
+    static constexpr uint32_t k_input1_dram_bank_id = 0;
+    static constexpr uint32_t k_input2_dram_bank_id = 0;
+    static constexpr uint32_t k_output0_dram_bank_id = 0;
+    static constexpr uint32_t k_output1_dram_bank_id = 0;
+
     tt_metal::SetRuntimeArgs(
         program,
         reader_kernel,
         core,
         {
             (uint32_t)input0_dram_byte_address,
-            (uint32_t)input0_dram_noc_xy.x,
-            (uint32_t)input0_dram_noc_xy.y,
+            k_input0_dram_bank_id,  // dram bank id
             (uint32_t)input1_dram_byte_address,
-            (uint32_t)input1_dram_noc_xy.x,
-            (uint32_t)input1_dram_noc_xy.y,
+            k_input1_dram_bank_id,
             (uint32_t)test_config.num_tiles,
             (uint32_t)input2_dram_byte_address,
-            (uint32_t)input2_dram_noc_xy.x,
-            (uint32_t)input2_dram_noc_xy.y,
+            k_input2_dram_bank_id,
         });
     tt_metal::SetRuntimeArgs(
         program,
@@ -276,12 +274,10 @@ bool single_core_reconfig(tt_metal::Device* device, const ReconfigConfig& test_c
         core,
         {
             (uint32_t)output0_dram_byte_address,
-            (uint32_t)output0_dram_noc_xy.x,
-            (uint32_t)output0_dram_noc_xy.y,
+            k_output0_dram_bank_id,
             (uint32_t)out0_id,
             (uint32_t)output1_dram_byte_address,
-            (uint32_t)output1_dram_noc_xy.x,
-            (uint32_t)output1_dram_noc_xy.y,
+            k_output1_dram_bank_id,
             (uint32_t)out1_id,
             (uint32_t)test_config.num_tiles,
             (uint32_t)test_config.ublock_size_tiles,

@@ -7,7 +7,7 @@ test-list:
         interval: [1, 1, 32, 32]
         num-dims: [2, 3, 4]
         num-shapes: 1
-        num-samples: 128
+        num-samples: 256
         args-sampling-strategy: "all"
       datagen:
         function: gen_rand

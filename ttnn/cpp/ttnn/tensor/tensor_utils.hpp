@@ -12,52 +12,9 @@
 namespace tt {
 
 namespace tt_metal {
-// Converts convolution weights to tilized 2d matrix layout.
-// Returns a new tensor with layout=Tile
-Tensor convert_conv_weight_tensor_to_tiled_layout(
-    const Tensor& conv_weight_tensor,
-    uint32_t in1_block_h,
-    uint32_t in1_block_w,
-    std::optional<DataType> output_dtype = std::nullopt);
+const ttnn::Shape infer_dims_for_reshape(const Tensor& tensor, tt::stl::Span<const int32_t> shape);
 
-// Converts convolution weights to tilized 2d matrix layout for block sharded conv. Adds zero padding between weight
-// blocks based on output shard width padding. Returns a new tensor with layout=Tile
-Tensor convert_conv_weight_tensor_to_tiled_layout_block_sharded(
-    const Tensor& conv_weight_tensor, uint32_t num_channel_shards, std::optional<DataType> output_dtype = std::nullopt);
-
-// Converts convolution bias to tilized layout for block sharded conv. Adds zero padding between bias blocks based on
-// output shard width padding. Returns a new tensor with layout=Tile
-Tensor convert_conv_bias_tensor_to_tiled_layout_block_sharded(
-    const Tensor& conv_bias_tensor, uint32_t num_channel_shards, std::optional<DataType> output_dtype = std::nullopt);
-
-// Converts convolution weights to tilized 2d matrix layout with special block height padding
-// Returns a new tensor with layout=Tile
-Tensor convert_conv_weight_tensor_to_special_padding_tiled_layout(
-    const Tensor& conv_weight_tensor,
-    uint32_t in1_block_h,
-    uint32_t in1_block_w,
-    std::optional<DataType> output_dtype = std::nullopt);
-
-// Converts convolution weights to grouped layout with padded zeros
-Tensor convert_conv_weight_tensor_to_grouped_layout(
-    const Tensor& conv_weight_tensor, uint32_t num_groups, DataType output_dtype);
-
-// Converts convolution weights to depthwise layout with broadcasted weights
-Tensor convert_conv_weight_tensor_to_depthwise_layout(
-    Tensor conv_weight_tensor, uint32_t act_block_h_ntiles, DataType output_dtype);
-
-const ttnn::SimpleShape infer_dims_for_reshape(const Tensor& tensor, tt::stl::Span<const int32_t> shape);
-
-// TODO: Remove this once we switch to SimpleShape .volume()
-static std::size_t compute_volume(const tt::tt_metal::LegacyShape& shape) {
-    size_t volume = 1;
-    for (auto index = 0; index < shape.rank(); index++) {
-        volume *= shape[index];
-    }
-    return volume;
-}
-
-static ttnn::SmallVector<uint32_t> compute_strides(const ttnn::SimpleShape& shape) {
+static ttnn::SmallVector<uint32_t> compute_strides(const ttnn::Shape& shape) {
     if (shape.rank() == 0) {
         return {};
     }
@@ -85,7 +42,7 @@ static int compute_flat_indices(tt::stl::Span<const int> indices, tt::stl::Span<
     return flat_index;
 };
 
-static std::size_t compute_buffer_size(const ttnn::SimpleShape& shape, DataType data_type, const Tile& tile) {
+static std::size_t compute_buffer_size(const ttnn::Shape& shape, DataType data_type, const Tile& tile) {
     const size_t volume = shape.volume();
     auto tile_hw = tile.get_tile_hw();
     if (data_type == DataType::BFLOAT8_B) {
@@ -127,54 +84,20 @@ Tensor transform(const Tensor& tensor, std::function<Tensor(const Tensor&)> tran
 void apply(const Tensor& tensor, const std::function<void(const Tensor&)>& callable);
 
 // Given a multi-device tensor, returns all the devices it is mapped to.
-std::vector<Device*> get_devices(const Tensor& multi_device_tensor);
+std::vector<IDevice*> get_devices(const Tensor& multi_device_tensor);
 
 uint32_t num_buffers_in_tensor(const Tensor& tensor);
 
 Tensor get_shard_for_device(
-    const Tensor& tensor, Device* target_device, std::optional<int> buffer_index = std::nullopt);
+    const Tensor& tensor, IDevice* target_device, std::optional<int> buffer_index = std::nullopt);
 
 void insert_buffer_and_shape_for_device(
-    Device* target_device,
+    IDevice* target_device,
     const Tensor& shard,
     Tensor& tensor_to_modify,
     std::optional<int> buffer_index = std::nullopt);
 
-Tensor copy_borrowed_tensor_in_async_mode(Device* worker, const Tensor& tensor);
-
-template <typename TensorContainer>
-auto get_device_tensors(Device* device, const TensorContainer& input_tensors) {
-    // Could be Tensor, const Tensor, std::optional<Tensor>, or std::optional<const Tensor>
-    using ValueType = typename TensorContainer::value_type;
-
-    // We need a way to extract the underlying Tensor type (const or non-const) from ValueType
-    // and to decide whether we are dealing with an optional type.
-    using IsOptional = std::conditional_t<
-        std::is_same_v<ValueType, std::optional<Tensor>> || std::is_same_v<ValueType, std::optional<const Tensor>>,
-        std::true_type,
-        std::false_type>;
-    using TensorType = std::conditional_t<
-        std::is_same_v<ValueType, std::optional<Tensor>> || std::is_same_v<ValueType, Tensor>,
-        Tensor,
-        const Tensor>;
-
-    // Result container type adjustment based on input type
-    using ResultType = std::conditional_t<IsOptional::value, std::optional<TensorType>, TensorType>;
-    std::vector<ResultType> transformed_tensors;
-
-    for (const auto& tensor : input_tensors) {
-        if constexpr (IsOptional::value) {
-            if (tensor.has_value()) {
-                transformed_tensors.emplace_back(get_device_tensor(tensor.value(), device));
-            } else {
-                transformed_tensors.emplace_back(std::nullopt);
-            }
-        } else {
-            transformed_tensors.emplace_back(get_device_tensor(tensor, device));
-        }
-    }
-    return transformed_tensors;
-}
+Tensor copy_borrowed_tensor_in_async_mode(IDevice* worker, const Tensor& tensor);
 
 inline bool is_tensor_on_device(const ttnn::Tensor& tensor) { return tensor.storage_type() == StorageType::DEVICE; }
 
@@ -195,6 +118,20 @@ inline uint32_t get_batch_size(const T& shape) {
     return result;
 }
 
-}  // namespace tt_metal
+// Useful information about how a shard_shape cuts a 2D shape
+// - num_shards_height: Number of shards along the height (including partial last shard, if any)
+// - last_shard_height: Height of last partial shard (if None, it will be same as full shard shape height)
+// - num_shards_width: Number of shards along the width (including partial last shard, if any)
+// - last_shard_width: Width of last partial shard (if None, it will be same as full shard shape width)
+struct ShardDivisionSpec {
+    size_t num_shards_height = 0;
+    size_t last_shard_height = 0;
+    size_t num_shards_width = 0;
+    size_t last_shard_width = 0;
+};
 
+// Returns ShardDivisionSpecs given 2D shape and shard_shape
+ShardDivisionSpec compute_shard_division_spec(const Shape2D& shape, const Shape2D& shard_shape);
+
+}  // namespace tt_metal
 }  // namespace tt

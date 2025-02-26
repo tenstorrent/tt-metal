@@ -16,10 +16,10 @@ set_up_end_to_end_tests_env() {
 
   source env/bin/activate
 
-  python -m pip config set global.extra-index-url https://download.pytorch.org/whl/cpu
+  python3 -m pip config set global.extra-index-url https://download.pytorch.org/whl/cpu
 
-  python -m pip install -r requirements.txt
-  python -m pip install ../../metal_libs-*.whl
+  python3 -m pip install -r requirements.txt
+  python3 -m pip install ../../ttnn-*.whl
 
   cd ../../
   rm -rf tt_metal tt_eager ttnn models

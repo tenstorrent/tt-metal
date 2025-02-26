@@ -6,8 +6,8 @@
 
 void kernel_main() {
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
-    uint32_t dst_noc_x = get_arg_val<uint32_t>(1);
-    uint32_t dst_noc_y = get_arg_val<uint32_t>(2);
+    uint32_t dst_dram_bank_id = get_arg_val<uint32_t>(1);
+    // uint32_t unused = get_arg_val<uint32_t>(2);
     // uint32_t num_tiles = get_arg_val<uint32_t>(3);
     uint32_t N = get_arg_val<uint32_t>(4);
     uint32_t Ht = get_arg_val<uint32_t>(5);
@@ -26,9 +26,9 @@ void kernel_main() {
     // this writer will write a NWH tensor in NHW order
     for (uint32_t n = 0; n < N; n++) {
         dst_addr = dst_addrN;
-        for (uint32_t w = 0; w < Wt; w++) {
-            for (uint32_t h = 0; h < Ht; h++) {
-                uint64_t dst_noc_addr = get_noc_addr(dst_noc_x, dst_noc_y, dst_addr);
+        for (uint32_t w = 0; w<Wt; w++) {
+            for (uint32_t h = 0; h<Ht; h++) {
+                uint64_t dst_noc_addr = get_noc_addr_from_bank_id<true>(dst_dram_bank_id, dst_addr);
                 cb_wait_front(cb_id_out0, ublock_size_tiles);
                 uint32_t l1_read_addr = get_read_ptr(cb_id_out0);
                 noc_async_write(l1_read_addr, dst_noc_addr, ublock_size_bytes);

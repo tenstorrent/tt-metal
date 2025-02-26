@@ -4,22 +4,11 @@
 
 #pragma once
 #include <optional>
-#include <unordered_set>
 
-#include "conv2d_utils.hpp"
-#include "ttnn/core.hpp"
-#include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/matmul/matmul.hpp"
-#include "ttnn/operations/matmul/device/matmul_op.hpp"
 #include "ttnn/types.hpp"
-#include "ttnn/tensor/tensor_utils.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "tt_metal/common/math.hpp"
-#include "ttnn/operations/data_movement/pad/pad.hpp"
-#include "ttnn/operations/conv/conv2d/device/conv2d_op.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/operations/sliding_window/sliding_window.hpp"
-#include "ttnn/operations/sliding_window/halo/halo.hpp"
+#include "ttnn/decorators.hpp"
+#include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
 
 namespace ttnn {
 
@@ -34,7 +23,7 @@ template <typename T>
 Result conv2d(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
-    T * device,
+    T* device,
     uint32_t in_channels,
     uint32_t out_channels,
     uint32_t batch_size,
@@ -47,15 +36,15 @@ Result conv2d(
     uint32_t groups,
     std::optional<const ttnn::Tensor> bias_tensor = std::nullopt,
     const std::optional<const Conv2dConfig>& conv_config_ = std::nullopt,
+    const std::optional<const DeviceComputeKernelConfig>& compute_config_ = std::nullopt,
     const std::optional<const MemoryConfig>& memory_config = std::nullopt);
 
-
-struct Conv2dOperation{
+struct Conv2dOperation {
     static Result invoke(
-        uint8_t queue_id,
+        QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& weight_tensor,
-        Device * device,
+        IDevice* device,
         uint32_t in_channels,
         uint32_t out_channels,
         uint32_t batch_size,
@@ -68,13 +57,14 @@ struct Conv2dOperation{
         uint32_t groups,
         std::optional<const ttnn::Tensor> bias_tensor = std::nullopt,
         const std::optional<const Conv2dConfig>& conv_config_ = std::nullopt,
+        const std::optional<const DeviceComputeKernelConfig>& compute_config_ = std::nullopt,
         const std::optional<const MemoryConfig>& memory_config = std::nullopt);
 
     static Result invoke(
-        uint8_t queue_id,
+        QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& weight_tensor,
-        MeshDevice * device,
+        MeshDevice* device,
         uint32_t in_channels,
         uint32_t out_channels,
         uint32_t batch_size,
@@ -87,12 +77,13 @@ struct Conv2dOperation{
         uint32_t groups,
         std::optional<const ttnn::Tensor> bias_tensor = std::nullopt,
         const std::optional<const Conv2dConfig>& conv_config_ = std::nullopt,
+        const std::optional<const DeviceComputeKernelConfig>& compute_config_ = std::nullopt,
         const std::optional<const MemoryConfig>& memory_config = std::nullopt);
 };
 }  // namespace conv2d
 }  // namespace operations::conv
 }  // namespace ttnn
 
-namespace ttnn{
-    constexpr auto conv2d = ttnn::register_operation<"ttnn::conv2d", operations::conv::conv2d::Conv2dOperation>();
+namespace ttnn {
+constexpr auto conv2d = ttnn::register_operation<"ttnn::conv2d", operations::conv::conv2d::Conv2dOperation>();
 }

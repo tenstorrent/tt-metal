@@ -6,10 +6,11 @@
 #include <functional>
 #include <random>
 
-#include "common/bfloat16.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
+#include "test_common.hpp"
+#include <tt-metalium/command_queue.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -55,7 +56,7 @@ int main(int argc, char** argv) {
 
         // Device Setup
         int device_id = 0;
-        tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+        tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
         // Application Setup
         uint32_t single_tile_size = 2 * 1024;

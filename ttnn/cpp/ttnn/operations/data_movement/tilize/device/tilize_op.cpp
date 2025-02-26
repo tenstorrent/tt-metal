@@ -5,7 +5,7 @@
 #include "tilize_op.hpp"
 #include "tilize_program_factory.hpp"
 #include "ttnn/run_operation.hpp"
-#include "tt_metal/common/constants.hpp"
+#include <tt-metalium/constants.hpp>
 
 using namespace tt::tt_metal;
 
@@ -18,7 +18,7 @@ void Tilize::validate(const std::vector<Tensor>& input_tensors) const {
 
     TT_FATAL(input_tensor_a.volume() % tt::constants::TILE_HW == 0, "Error");
 
-    auto width = input_tensor_a.get_legacy_shape()[-1];
+    auto width = input_tensor_a.get_padded_shape()[-1];
     uint32_t stick_s = width;
     uint32_t num_sticks = input_tensor_a.volume() / width;
     TT_FATAL(
@@ -40,28 +40,29 @@ void Tilize::validate(const std::vector<Tensor>& input_tensors) const {
     }
 }
 
-std::vector<tt::tt_metal::LegacyShape> Tilize::compute_output_shapes(const std::vector<Tensor>& input_tensors) const {
-    const auto& input_tensor_a = input_tensors.at(0);
-    auto output_shape = input_tensor_a.get_legacy_shape();
-    return {output_shape};
-}
-
-std::vector<Tensor> Tilize::create_output_tensors(
-    const std::vector<Tensor>& input_tensors, const std::vector<std::optional<Tensor>>& output_tensors) const {
+std::vector<ttnn::TensorSpec> Tilize::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
     if (input_tensor.memory_config().is_sharded()) {
         auto mem_config = this->output_mem_config;
         mem_config.shard_spec = input_tensor.memory_config().shard_spec;
-        return {create_device_tensor(
-            this->compute_output_shapes(input_tensors).at(0),
-            this->output_dtype,
-            Layout::TILE,
-            input_tensor.device(),
-            mem_config)};
-    } else {
-        return operation::generic_create_output_tensors(
-            *this, input_tensors, this->output_dtype, Layout::TILE, this->output_mem_config);
+        return {TensorSpec(
+            input_tensor.get_logical_shape(),
+            TensorLayout::fromPaddedShape(
+                output_dtype,
+                PageConfig(Layout::TILE),
+                mem_config,
+                input_tensor.get_logical_shape(),
+                input_tensor.get_padded_shape()))};
     }
+
+    return {TensorSpec(
+        input_tensor.get_logical_shape(),
+        TensorLayout::fromPaddedShape(
+            output_dtype,
+            PageConfig(Layout::TILE),
+            output_mem_config,
+            input_tensor.get_logical_shape(),
+            input_tensor.get_padded_shape()))};
 }
 
 operation::ProgramWithCallbacks Tilize::create_program(

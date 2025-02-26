@@ -27,10 +27,38 @@ random.seed(0)
 parameters = {
     "nightly": {
         "input_shape": gen_shapes([1, 1, 1, 1], [2, 6, 128, 128], [1, 1, 1, 1], 32)
+        + gen_shapes([1, 1, 1, 1], [2, 9, 167, 128], [1, 1, 1, 1], 32)
+        + gen_shapes([1, 1, 1, 1], [2, 6, 69, 129], [1, 1, 1, 1], 15)
         + gen_shapes([1, 1, 1], [6, 128, 128], [1, 1, 1], 32)
-        + gen_shapes([1, 1], [128, 128], [1, 1], 32),
-        "dim": [0, 1, 2, 3, None],
-        "input_a_dtype": [ttnn.bfloat16, ttnn.bfloat8_b],
+        + gen_shapes([1, 1, 1], [6, 128, 128], [1, 2, 3], 3)
+        + gen_shapes([1, 1, 1], [6, 127, 257], [1, 1, 1], 16)
+        + gen_shapes([1, 1], [128, 128], [1, 1], 32)
+        + gen_shapes([1, 1], [8, 100], [2, 3], 7)
+        + gen_shapes([1, 1], [255, 255], [1, 1], 4)
+        + gen_shapes([1], [128], [1], 32)
+        + gen_shapes([1], [128], [1], 7)
+        + gen_shapes([1], [250], [3], 4),
+        "dim": [
+            0,
+            1,
+            2,
+            3,
+            None,
+            [0, 1],
+            [0, 2],
+            [0, 3],
+            [1, 2],
+            [1, 3],
+            [2, 3],
+            [0, 1, 2],
+            [0, 1, 3],
+            [0, 1, 3],
+            [0, 2, 3],
+            [1, 2, 3],
+            [0, 1, 2, 3],
+        ],
+        "keepdim": [True, False],
+        "input_a_dtype": [ttnn.float32, ttnn.bfloat16, ttnn.bfloat8_b],
         "input_layout": [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT],
         "input_a_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
         "output_memory_config": [ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG],
@@ -53,8 +81,15 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
             return True, "Absolute value of dim must be less or equal than the rank of input tensor"
     if test_vector["input_layout"] == ttnn.TILE_LAYOUT:
         return True, "Tiled layout not supported"
-    if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT and test_vector["input_a_dtype"] == ttnn.bfloat8_b:
-        return True, "bfloat8_b is only supported on tiled layout"
+    if test_vector["input_a_dtype"] != ttnn.bfloat16:
+        return True, "Only BFLOAT16 is supported for inputs!"
+    if test_vector["input_layout"] == ttnn.ROW_MAJOR_LAYOUT and not (
+        test_vector["input_a_dtype"] == ttnn.float32 or test_vector["input_a_dtype"] == ttnn.bfloat16
+    ):
+        return True, "Row major is only supported for fp32 & fp16"
+    if not test_vector["keepdim"]:
+        return True, "keepdim = false is not supported"
+
     return False, None
 
 
@@ -65,6 +100,7 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
 def run(
     input_shape,
     dim,
+    keepdim,
     input_a_dtype,
     input_layout,
     input_a_memory_config,
@@ -75,6 +111,9 @@ def run(
     data_seed = random.randint(0, 20000000)
     torch.manual_seed(data_seed)
 
+    if input_a_dtype == ttnn.float32 and ttnn.device.is_grayskull(device):
+        return [(False, "Dest Fp32 mode is not supported for arch grayskull"), 0]
+
     if input_layout == ttnn.ROW_MAJOR_LAYOUT:
         input_shape = sanitize_shape_rm(input_shape)
 
@@ -83,7 +122,7 @@ def run(
     )(input_shape)
 
     golden_function = ttnn.get_golden_function(ttnn.argmax)
-    torch_output_tensor = golden_function(torch_input_tensor_a, dim=dim)
+    torch_output_tensor = golden_function(torch_input_tensor_a, dim=dim, keepdim=keepdim)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,

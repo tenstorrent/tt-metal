@@ -13,7 +13,7 @@
 
 // NCRISC and BRISC setup read and write
 // TRISC sets up read or write
-inline void setup_local_cb_read_write_interfaces(
+FORCE_INLINE void setup_local_cb_read_write_interfaces(
     uint32_t tt_l1_ptr* cb_l1_base,
     uint32_t start_cb_index,
     uint32_t max_cb_index,
@@ -25,10 +25,10 @@ inline void setup_local_cb_read_write_interfaces(
 
     for (uint32_t cb_id = start_cb_index; cb_id < max_cb_index; cb_id++) {
         // NOTE: fifo_addr, fifo_size and fifo_limit in 16B words!
-        uint32_t fifo_addr = circular_buffer_config_addr[0];
-        uint32_t fifo_size = circular_buffer_config_addr[1];
+        uint32_t fifo_addr = circular_buffer_config_addr[0] >> cb_addr_shift;
+        uint32_t fifo_size = circular_buffer_config_addr[1] >> cb_addr_shift;
         uint32_t fifo_num_pages = circular_buffer_config_addr[2];
-        uint32_t fifo_page_size = circular_buffer_config_addr[3];
+        uint32_t fifo_page_size = circular_buffer_config_addr[3] >> cb_addr_shift;
         uint32_t fifo_limit = fifo_addr + fifo_size;
 
         LocalCBInterface& local_interface = get_local_cb_interface(cb_id);

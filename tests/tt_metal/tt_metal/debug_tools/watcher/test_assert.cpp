@@ -12,31 +12,31 @@ using namespace tt;
 using namespace tt::tt_metal;
 
 namespace CMAKE_UNIQUE_NAMESPACE {
-static void RunTest(WatcherFixture *fixture, Device *device, riscv_id_t riscv_type) {
+static void RunTest(WatcherFixture *fixture, IDevice* device, riscv_id_t riscv_type) {
     // Set up program
     Program program = Program();
 
     // Depending on riscv type, choose one core to run the test on (since the test hangs the board).
-    CoreCoord logical_core, phys_core;
+    CoreCoord logical_core, virtual_core;
     if (riscv_type == DebugErisc) {
         if (device->get_active_ethernet_cores(true).empty()) {
             log_info(LogTest, "Skipping this test since device has no active ethernet cores.");
             GTEST_SKIP();
         }
         logical_core = *(device->get_active_ethernet_cores(true).begin());
-        phys_core = device->ethernet_core_from_logical_core(logical_core);
+        virtual_core = device->ethernet_core_from_logical_core(logical_core);
     } else if (riscv_type == DebugIErisc) {
         if (device->get_inactive_ethernet_cores().empty()) {
             log_info(LogTest, "Skipping this test since device has no inactive ethernet cores.");
             GTEST_SKIP();
         }
         logical_core = *(device->get_inactive_ethernet_cores().begin());
-        phys_core = device->ethernet_core_from_logical_core(logical_core);
+        virtual_core = device->ethernet_core_from_logical_core(logical_core);
     } else {
         logical_core = CoreCoord{0, 0};
-        phys_core = device->worker_core_from_logical_core(logical_core);
+        virtual_core = device->worker_core_from_logical_core(logical_core);
     }
-    log_info(LogTest, "Running test on device {} core {}...", device->id(), phys_core.str());
+    log_info(LogTest, "Running test on device {} core {}...", device->id(), virtual_core.str());
 
     // Set up the kernel on the correct risc
     KernelHandle assert_kernel;
@@ -155,18 +155,19 @@ static void RunTest(WatcherFixture *fixture, Device *device, riscv_id_t riscv_ty
     // We should be able to find the expected watcher error in the log as well,
     // expected error message depends on the risc we're running on.
     string kernel = "tests/tt_metal/tt_metal/test_kernels/misc/watcher_asserts.cpp";
-    int line_num = 56;
+    int line_num = 57;
 
     string expected = fmt::format(
-        "Device {} {} core(x={:2},y={:2}) phys(x={:2},y={:2}): {} tripped an assert on line {}. Current kernel: {}.",
+        "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} tripped an assert on line {}. Current kernel: {}.",
         device->id(),
-        (riscv_type == DebugErisc) ? "ethnet" : "worker",
-        logical_core.x, logical_core.y,
-        phys_core.x, phys_core.y,
+        (riscv_type == DebugErisc) ? "active ethnet" : "worker",
+        logical_core.x,
+        logical_core.y,
+        virtual_core.x,
+        virtual_core.y,
         risc,
         line_num,
-        kernel
-    );
+        kernel);
     expected += " Note that file name reporting is not yet implemented, and the reported line number for the assert may be from a different file.";
 
     log_info(LogTest, "Expected error: {}", expected);
@@ -179,69 +180,69 @@ static void RunTest(WatcherFixture *fixture, Device *device, riscv_id_t riscv_ty
 }
 }
 
-TEST_F(WatcherFixture, TensixTestWatcherAssertBrisc) {
+TEST_F(WatcherFixture, TestWatcherAssertBrisc) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     if (this->slow_dispatch_)
         GTEST_SKIP();
 
     // Only run on device 0 because this test takes the watcher server down.
     this->RunTestOnDevice(
-        [](WatcherFixture *fixture, Device *device){RunTest(fixture, device, DebugBrisc);},
+        [](WatcherFixture *fixture, IDevice* device){RunTest(fixture, device, DebugBrisc);},
         this->devices_[0]
     );
 }
 
-TEST_F(WatcherFixture, TensixTestWatcherAssertNCrisc) {
+TEST_F(WatcherFixture, TestWatcherAssertNCrisc) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     if (this->slow_dispatch_)
         GTEST_SKIP();
     this->RunTestOnDevice(
-        [](WatcherFixture *fixture, Device *device){RunTest(fixture, device, DebugNCrisc);},
+        [](WatcherFixture *fixture, IDevice* device){RunTest(fixture, device, DebugNCrisc);},
         this->devices_[0]
     );
 }
 
-TEST_F(WatcherFixture, TensixTestWatcherAssertTrisc0) {
+TEST_F(WatcherFixture, TestWatcherAssertTrisc0) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     if (this->slow_dispatch_)
         GTEST_SKIP();
     this->RunTestOnDevice(
-        [](WatcherFixture *fixture, Device *device){RunTest(fixture, device, DebugTrisc0);},
+        [](WatcherFixture *fixture, IDevice* device){RunTest(fixture, device, DebugTrisc0);},
         this->devices_[0]
     );
 }
 
-TEST_F(WatcherFixture, TensixTestWatcherAssertTrisc1) {
+TEST_F(WatcherFixture, TestWatcherAssertTrisc1) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     if (this->slow_dispatch_)
         GTEST_SKIP();
     this->RunTestOnDevice(
-        [](WatcherFixture *fixture, Device *device){RunTest(fixture, device, DebugTrisc1);},
+        [](WatcherFixture *fixture, IDevice* device){RunTest(fixture, device, DebugTrisc1);},
         this->devices_[0]
     );
 }
 
-TEST_F(WatcherFixture, TensixTestWatcherAssertTrisc2) {
+TEST_F(WatcherFixture, TestWatcherAssertTrisc2) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     if (this->slow_dispatch_)
         GTEST_SKIP();
     this->RunTestOnDevice(
-        [](WatcherFixture *fixture, Device *device){RunTest(fixture, device, DebugTrisc2);},
+        [](WatcherFixture *fixture, IDevice* device){RunTest(fixture, device, DebugTrisc2);},
         this->devices_[0]
     );
 }
 
-TEST_F(WatcherFixture, ActiveEthTestWatcherAssertErisc) {
+TEST_F(WatcherFixture, TestWatcherAssertErisc) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     if (this->slow_dispatch_)
         GTEST_SKIP();
     this->RunTestOnDevice(
-        [](WatcherFixture *fixture, Device *device){RunTest(fixture, device, DebugErisc);},
+        [](WatcherFixture *fixture, IDevice* device){RunTest(fixture, device, DebugErisc);},
         this->devices_[0]
     );
 }
 
-TEST_F(WatcherFixture, IdleEthTestWatcherAssertIErisc) {
+TEST_F(WatcherFixture, TestWatcherAssertIErisc) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
     if (!this->IsSlowDispatch()) {
         log_info(tt::LogTest, "FD-on-idle-eth not supported.");
@@ -250,7 +251,7 @@ TEST_F(WatcherFixture, IdleEthTestWatcherAssertIErisc) {
     if (this->slow_dispatch_)
         GTEST_SKIP();
     this->RunTestOnDevice(
-        [](WatcherFixture *fixture, Device *device){RunTest(fixture, device, DebugIErisc);},
+        [](WatcherFixture *fixture, IDevice* device){RunTest(fixture, device, DebugIErisc);},
         this->devices_[0]
     );
 }

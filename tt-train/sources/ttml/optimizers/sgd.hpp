@@ -4,12 +4,8 @@
 
 #pragma once
 
-#include <ttnn/tensor/tensor.hpp>
-
-#include "autograd/module_base.hpp"
-#include "autograd/tensor.hpp"
-#include "core/tt_tensor_utils.hpp"
 #include "optimizers/optimizer_base.hpp"
+#include "serialization/serializable.hpp"
 
 namespace ttml::optimizers {
 
@@ -23,22 +19,30 @@ struct SGDConfig {
 
 class SGD : public OptimizerBase {
 public:
-    explicit SGD(ttml::autograd::NamedParameters parameters, const SGDConfig& config);
+    explicit SGD(ttml::serialization::NamedParameters parameters, const SGDConfig& config);
 
     void zero_grad() override;
 
     void step() override;
 
-    [[nodiscard]] autograd::NamedParameters get_state_dict() const override;
-    void set_state_dict(const autograd::NamedParameters& dict) override;
+    [[nodiscard]] serialization::StateDict get_state_dict() const override;
+    void set_state_dict(const serialization::StateDict& dict) override;
 
     [[nodiscard]] size_t get_steps() const override;
     void set_steps(size_t steps) override;
 
+    [[nodiscard]] float get_lr() const override {
+        return m_config.lr;
+    }
+
+    void set_lr(float lr) override {
+        m_config.lr = lr;
+    }
+
 private:
-    size_t steps{0};
+    size_t m_steps{0};
     SGDConfig m_config;
-    ttml::autograd::NamedParameters m_theta;
+    ttml::serialization::NamedParameters m_theta;
 };
 
 }  // namespace ttml::optimizers

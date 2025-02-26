@@ -154,7 +154,7 @@ def run_test_LlamaModel_end_to_end(
         if user_id == 0 or user_id == 25:
             profiler.start(f"processing_of_prefill_input_{user_id}")
 
-        tt_inp_emb, start_pos, rot_mat, _, _ = tt_model.prepare_device_inputs(
+        tt_inp_emb, start_pos, rot_mat, *_ = tt_model.prepare_inputs(
             prefill_ids[user_id : user_id + 1], start_pos=0, mode="prefill"
         )
         if user_id == 0 or user_id == 25:
@@ -204,7 +204,7 @@ def run_test_LlamaModel_end_to_end(
         if cur_pos == 0 or cur_pos == 35:  # Skip the first few iterations to warm up
             profiler.start(f"processing_of_decode_input_{cur_pos}")
 
-        tt_inp_emb, start_pos, rot_mat, cache_idxs, _ = tt_model.prepare_device_inputs(
+        tt_inp_emb, start_pos, rot_mat, cache_idxs, _ = tt_model.prepare_device_inputs_decode(
             decode_ids, start_pos, mode="decode"
         )
 

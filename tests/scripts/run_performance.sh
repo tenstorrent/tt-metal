@@ -21,6 +21,8 @@ run_perf_models_other() {
         env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/bert_tiny/tests/test_performance.py -m $test_marker
 
         env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/yolov4/tests/test_perf_yolo.py -m $test_marker
+
+        env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/distilbert/tests/test_perf_distilbert.py -m $test_marker
     fi
 
     env pytest -n auto tests/ttnn/integration_tests/bert/test_performance.py -m $test_marker
@@ -41,8 +43,12 @@ run_perf_models_other() {
 
     env pytest -n auto models/demos/mnist/tests -m $test_marker
 
+    env pytest -n auto models/demos/squeezebert/tests/test_performance.py -m $test_marker
+
+    env pytest -n auto models/demos/roberta/tests/test_performance.py -m $test_marker
+
     ## Merge all the generated reports
-    env python models/perf/merge_perf_results.py
+    env python3 models/perf/merge_perf_results.py
 }
 
 run_perf_models_llm_javelin() {
@@ -62,7 +68,7 @@ run_perf_models_llm_javelin() {
         env pytest -n auto models/demos/wormhole/mamba/tests -m $test_marker
     fi
     ## Merge all the generated reports
-    env python models/perf/merge_perf_results.py
+    env python3 models/perf/merge_perf_results.py
 }
 
 run_perf_models_cnn_javelin() {
@@ -70,18 +76,18 @@ run_perf_models_cnn_javelin() {
     local test_marker=$2
 
     # Run tests
-    env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/experimental/functional_unet/tests/test_unet_perf.py -m $test_marker
-    env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto tests/device_perf_tests/stable_diffusion -m $test_marker --timeout=480
+    env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/experimental/functional_unet/tests -m $test_marker
+    env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/wormhole/stable_diffusion/tests -m $test_marker --timeout=480
 
     ## Merge all the generated reports
-    env python models/perf/merge_perf_results.py
+    env python3 models/perf/merge_perf_results.py
 }
 
 run_device_perf_models() {
     set -eo pipefail
     local test_marker=$1
 
-    env pytest tests/device_perf_tests/stable_diffusion -m $test_marker --timeout=600
+    env pytest models/demos/wormhole/stable_diffusion/tests -m $test_marker --timeout=600
 
     env pytest models/demos/distilbert/tests -m $test_marker
 
@@ -92,6 +98,10 @@ run_device_perf_models() {
     env pytest models/demos/bert_tiny/tests/ -m $test_marker
 
     env pytest models/demos/mnist/tests -m $test_marker
+
+    env pytest models/demos/squeezebert/tests -m $test_marker
+
+    env pytest models/demos/roberta/tests/ -m $test_marker
 
     if [ "$tt_arch" == "grayskull" ]; then
         #TODO(MO): Until #6560 is fixed, GS device profiler test are grouped with
@@ -121,10 +131,12 @@ run_device_perf_models() {
         env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/bert_tiny/tests -m $test_marker
 
         env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/yolov4/tests/ -m $test_marker
+
+        env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest models/demos/wormhole/distilbert/tests -m $test_marker
     fi
 
     ## Merge all the generated reports
-    env python models/perf/merge_device_perf_results.py
+    env python3 models/perf/merge_device_perf_results.py
 }
 
 run_device_perf_ops() {

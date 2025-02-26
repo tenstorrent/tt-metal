@@ -6,6 +6,7 @@ import contextlib
 from typing import Optional, List
 
 import ttnn
+import os
 
 
 def get_device_core_grid(device):
@@ -20,13 +21,11 @@ DispatchCoreType = ttnn._ttnn.device.DispatchCoreType
 DispatchCoreAxis = ttnn._ttnn.device.DispatchCoreAxis
 DispatchCoreConfig = ttnn._ttnn.device.DispatchCoreConfig
 Arch = ttnn._ttnn.device.Arch
-EPS_GS = ttnn._ttnn.device.EPS_GS
-EPS_WHB0 = ttnn._ttnn.device.EPS_WHB0
-EPS_BH = ttnn._ttnn.device.EPS_BH
 DEFAULT_L1_SMALL_SIZE = ttnn._ttnn.device.DEFAULT_L1_SMALL_SIZE
 DEFAULT_TRACE_REGION_SIZE = ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE
 
 open_device = ttnn._ttnn.device.open_device
+init_device_compute_kernel_config = ttnn._ttnn.operations.core.init_device_compute_kernel_config
 
 
 def close_device(device: "ttnn.device.Device"):
@@ -88,8 +87,8 @@ CloseDevice = ttnn._ttnn.device.CloseDevice
 CloseDevices = ttnn._ttnn.device.CloseDevices
 
 
-def DumpDeviceProfiler(device, last_dump: bool = False):
-    ttnn._ttnn.device.DumpDeviceProfiler(device, last_dump)
+def DumpDeviceProfiler(device):
+    ttnn._ttnn.device.DumpDeviceProfiler(device)
 
 
 GetNumAvailableDevices = ttnn._ttnn.device.GetNumAvailableDevices
@@ -99,7 +98,6 @@ EnableCompilationReports = ttnn._ttnn.device.EnableCompilationReports
 DisableCompilationReports = ttnn._ttnn.device.DisableCompilationReports
 EnableMemoryReports = ttnn._ttnn.device.EnableMemoryReports
 DisableMemoryReports = ttnn._ttnn.device.DisableMemoryReports
-SetLazyCommandQueueMode = ttnn._ttnn.device.SetLazyCommandQueueMode
 DeallocateBuffers = ttnn._ttnn.device.deallocate_buffers
 
 
@@ -132,12 +130,29 @@ def dump_device_memory_state(device, prefix=""):
     ttnn._ttnn.device.DumpDeviceMemoryState(device, prefix)
 
 
-def is_wormhole_b0(device):
-    return device.arch() == ttnn._ttnn.device.Arch.WORMHOLE_B0
+def get_memory_view(device, buffer_type):
+    return ttnn._ttnn.device.GetMemoryView(device, buffer_type)
 
 
-def is_grayskull(device):
-    return device.arch() == ttnn._ttnn.device.Arch.GRAYSKULL
+def is_wormhole_b0(device=None):
+    if device is not None:
+        return device.arch() == ttnn._ttnn.device.Arch.WORMHOLE_B0
+    ARCH_NAME = ttnn.get_arch_name()
+    return "wormhole_b0" in ARCH_NAME
+
+
+def is_grayskull(device=None):
+    if device is not None:
+        return device.arch() == ttnn._ttnn.device.Arch.GRAYSKULL
+    ARCH_NAME = ttnn.get_arch_name()
+    return "grayskull" in ARCH_NAME
+
+
+def is_blackhole(device=None):
+    if device is not None:
+        return device.arch() == ttnn._ttnn.device.Arch.BLACKHOLE
+    ARCH_NAME = ttnn.get_arch_name()
+    return "blackhole" in ARCH_NAME
 
 
 SetDefaultDevice = ttnn._ttnn.device.SetDefaultDevice
@@ -147,6 +162,9 @@ format_output_tensor = ttnn._ttnn.device.format_output_tensor
 pad_to_tile_shape = ttnn._ttnn.device.pad_to_tile_shape
 
 SubDevice = ttnn._ttnn.device.SubDevice
+SubDeviceId = ttnn._ttnn.device.SubDeviceId
 SubDeviceManagerId = ttnn._ttnn.device.SubDeviceManagerId
+
+DefaultQueueId = ttnn._ttnn.device.DefaultQueueId
 
 __all__ = []

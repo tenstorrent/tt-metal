@@ -6,12 +6,12 @@
 
 #include <optional>
 
-#include "impl/buffers/buffer.hpp"
+#include <tt-metalium/buffer.hpp>
 #include "sdpa_decode_op.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/common/logger.hpp"
-#include "tt_metal/detail/util.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/logger.hpp>
+#include <tt-metalium/util.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "ttnn/operation.hpp"
 
 using namespace tt;
@@ -96,7 +96,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
 
     Program program = CreateProgram();
 
-    Device* device = input_tensor_q.device();
+    IDevice* device = input_tensor_q.device();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
         get_compute_kernel_config_args(device->arch(), compute_kernel_config);
@@ -122,8 +122,19 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     CoreCoord grid_size = program_config.has_value() ? program_config->compute_with_storage_grid_size
                                                      : device->compute_with_storage_grid_size();
 
-    auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     uint32_t num_cores_available = grid_size.x * grid_size.y;
+
+    CoreRangeSet core_grid;
+    bool on_subcoregrid = false;
+    if (program_config.has_value() && program_config->sub_core_grids.has_value()) {
+        core_grid = program_config->sub_core_grids.value();
+        TT_FATAL(
+            core_grid.num_cores() == num_cores_available,
+            "Number of cores in sub_core_grids must match the number of cores available");
+        on_subcoregrid = true;
+    } else {
+        core_grid = CoreRangeSet(std::vector{CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1})});
+    }
 
     uint32_t num_cores_in_grid = device->compute_with_storage_grid_size().x * device->compute_with_storage_grid_size().y;
     TT_FATAL(num_cores_available <= num_cores_in_grid, "Expected number of cores available to be less than or equal to the number of cores in the grid, got {} and {}", num_cores_available, num_cores_in_grid);
@@ -132,12 +143,14 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
     // balance the number of cores to use based on batch
     uint32_t max_num_cores_for_compute = program_config->max_cores_per_head_batch * B * num_kv_heads;
     uint32_t num_cores_per_batch = std::min(num_cores_available, max_num_cores_for_compute) / B;
-    uint32_t num_active_cores = num_cores_per_batch * B;
     //// for core assignment, it is the same whether there's 1 core for head or 1 core for many heads
     uint32_t num_cores_per_head = std::max((uint32_t)1, num_cores_per_batch / num_kv_heads);
-    uint32_t num_heads_per_core = std::max((uint32_t)1, num_kv_heads / num_cores_per_batch);
+    uint32_t num_heads_per_core = std::max((uint32_t)1, (uint32_t)std::ceil((float)num_kv_heads / num_cores_per_batch));
     uint32_t num_reducer_cores = num_kv_heads * B / num_heads_per_core;
     uint32_t num_output_cores = B;
+    uint32_t num_active_cores = num_cores_per_head * num_kv_heads * B / num_heads_per_core;
+    //// recalculate num_cores_per_batch based on num_active_cores
+    num_cores_per_batch = num_active_cores / B;
 
     TT_FATAL(
         ((num_cores_per_head >= 1) && (num_heads_per_core == 1)) ||
@@ -146,38 +159,59 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
 
     // create core group, assume n batch and k_heads:
     // this is a 1D list of cores sorted by batch_output1, worker, ..., batch_output2, worker, ..., batch_output n,
-    // worker, ... Within each batch, we will assign head reducers. e.g. the following mapping: (batch_output1, worker1,
-    // worker2),   (worker3,       worker4,   worker5),   ..., (... worker3*k-1, worker3*k) (head_reducer1,  h_worker1,
-    // h_worker2), (head_reducer2, h_worker1, h_worker2), ..., (head_reducerk, h_worker1, h_worker2) head_reducer2 to
-    // head_reducerk then send the result to head_reducer1, which is also the batch_output1
+    // worker, ... Within each batch, we will assign head reducers. e.g. the following mapping:
+    // (batch_output1, worker1,   worker2),   (worker3,       worker4,   worker5),   ..., (... worker3*k-1, worker3*k)
+    // (head_reducer1, h_worker1, h_worker2), (head_reducer2, h_worker1, h_worker2), ..., (head_reducerk, h_worker1,
+    // h_worker2) head_reducer2 to head_reducerk then send the result to head_reducer1, which is also the batch_output1
     std::vector<CoreCoord> core_group;
     std::vector<CoreCoord> core_group_idle;
-    if (is_q_sharded || is_output_sharded) {
-        int reducer_idx = 0;
-        int worker_idx = num_output_cores;
-
-        for (int i = 0; i < num_cores_available; ++i) {
-            CoreCoord core;
-            if (i % num_cores_per_batch == 0 && reducer_idx < num_output_cores) {
-                core = {reducer_idx % grid_size.x, reducer_idx / grid_size.x};
-                reducer_idx++;
-            } else {
-                core = {worker_idx % grid_size.x, worker_idx / grid_size.x};
-                worker_idx++;
+    if (on_subcoregrid) {
+        if (is_q_sharded || is_output_sharded) {
+            auto cores_vec = corerange_to_cores(core_grid, num_cores_available, true);
+            int reducer_idx = 0;
+            int worker_idx = num_output_cores;
+            for (int i = 0; i < num_cores_available; ++i) {
+                if (i % num_cores_per_batch == 0 && reducer_idx < num_output_cores) {
+                    i < num_active_cores ? core_group.push_back(cores_vec[reducer_idx])
+                                         : core_group_idle.push_back(cores_vec[reducer_idx]);
+                    reducer_idx++;
+                } else {
+                    i < num_active_cores ? core_group.push_back(cores_vec[worker_idx])
+                                         : core_group_idle.push_back(cores_vec[worker_idx]);
+                    worker_idx++;
+                }
             }
-            if (i < num_active_cores) {
-                core_group.push_back(core);
-            } else {
-                core_group_idle.push_back(core);
-            }
+        } else {
+            TT_FATAL(false, "We only support SDPA on subcoregrids with sharded Q and sharded output");
         }
     } else {
-        for (int i = 0; i < num_cores_available; ++i) {
-            CoreCoord core = {i % grid_size.x, i / grid_size.x};
-            if (i < num_active_cores) {
-                core_group.push_back(core);
-            } else {
-                core_group_idle.push_back(core);
+        if (is_q_sharded || is_output_sharded) {
+            int reducer_idx = 0;
+            int worker_idx = num_output_cores;
+
+            for (int i = 0; i < num_cores_available; ++i) {
+                CoreCoord core;
+                if (i % num_cores_per_batch == 0 && reducer_idx < num_output_cores) {
+                    core = {reducer_idx % grid_size.x, reducer_idx / grid_size.x};
+                    reducer_idx++;
+                } else {
+                    core = {worker_idx % grid_size.x, worker_idx / grid_size.x};
+                    worker_idx++;
+                }
+                if (i < num_active_cores) {
+                    core_group.push_back(core);
+                } else {
+                    core_group_idle.push_back(core);
+                }
+            }
+        } else {
+            for (int i = 0; i < num_cores_available; ++i) {
+                CoreCoord core = {i % grid_size.x, i / grid_size.x};
+                if (i < num_active_cores) {
+                    core_group.push_back(core);
+                } else {
+                    core_group_idle.push_back(core);
+                }
             }
         }
     }
@@ -329,8 +363,8 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         page_table_stick_size = page_table_buffer->aligned_page_size();
 
         // cb page_table
-        auto c_in9_config = CircularBufferConfig(page_table_tile_size, {{CBIndex::c_9, page_table_df}})
-                                .set_page_size(CBIndex::c_9, page_table_tile_size);
+        auto c_in9_config = CircularBufferConfig(page_table_stick_size, {{CBIndex::c_9, page_table_df}})
+                                .set_page_size(CBIndex::c_9, page_table_stick_size);
         auto cb_in9_id = CreateCircularBuffer(program, core_grid, c_in9_config);
     }
 
@@ -564,6 +598,7 @@ operation::ProgramWithCallbacks sdpa_decode_multi_core(
         PNHt,
         St,
         DHt,
+        Sk_chunk_t,
         packed_identity_scalar,
         scale_union.u,
         num_cores_per_batch,

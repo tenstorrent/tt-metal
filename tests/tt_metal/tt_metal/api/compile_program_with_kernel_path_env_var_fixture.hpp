@@ -5,7 +5,7 @@
 #pragma once
 
 #include <gtest/gtest.h>
-#include "host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 #include "logger.hpp"
 
 using namespace tt;
@@ -38,24 +38,24 @@ protected:
     }
 
     void setup_kernel_dir(const string& orig_kernel_file, const string& new_kernel_file) {
-        const string& kernel_dir = llrt::OptionsG.get_kernel_dir();
+        const string& kernel_dir = llrt::RunTimeOptions::get_instance().get_kernel_dir();
         const std::filesystem::path& kernel_file_path_under_kernel_dir(kernel_dir + new_kernel_file);
         const std::filesystem::path& dirs_under_kernel_dir = kernel_file_path_under_kernel_dir.parent_path();
         std::filesystem::create_directories(dirs_under_kernel_dir);
 
-        const string& metal_root = llrt::OptionsG.get_root_dir();
+        const string& metal_root = llrt::RunTimeOptions::get_instance().get_root_dir();
         const std::filesystem::path& kernel_file_path_under_metal_root(metal_root + orig_kernel_file);
         std::filesystem::copy(kernel_file_path_under_metal_root, kernel_file_path_under_kernel_dir);
     }
 
     void cleanup_kernel_dir() {
-        const string& kernel_dir = llrt::OptionsG.get_kernel_dir();
+        const string& kernel_dir = llrt::RunTimeOptions::get_instance().get_kernel_dir();
         for (const std::filesystem::directory_entry& entry : std::filesystem::directory_iterator(kernel_dir)) {
             std::filesystem::remove_all(entry);
         }
     }
 
-    Device* device_;
+    IDevice* device_;
     Program program_;
 
 private:
@@ -63,11 +63,11 @@ private:
 
     bool are_env_vars_set() {
         bool are_set = true;
-        if (!llrt::OptionsG.is_root_dir_specified()) {
+        if (!llrt::RunTimeOptions::get_instance().is_root_dir_specified()) {
             log_info(LogTest, "Skipping test: TT_METAL_HOME must be set");
             are_set = false;
         }
-        if (!llrt::OptionsG.is_kernel_dir_specified()) {
+        if (!llrt::RunTimeOptions::get_instance().is_kernel_dir_specified()) {
             log_info(LogTest, "Skipping test: TT_METAL_KERNEL_PATH must be set");
             are_set = false;
         }
@@ -76,7 +76,7 @@ private:
 
     bool is_kernel_dir_valid() {
         bool is_valid = true;
-        const string& kernel_dir = llrt::OptionsG.get_kernel_dir();
+        const string& kernel_dir = llrt::RunTimeOptions::get_instance().get_kernel_dir();
         if (!this->does_path_exist(kernel_dir) || !this->is_path_a_directory(kernel_dir) ||
             !this->is_dir_empty(kernel_dir)) {
             log_info(LogTest, "Skipping test: TT_METAL_KERNEL_PATH must be an existing, empty directory");

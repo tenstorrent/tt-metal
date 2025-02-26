@@ -1,9 +1,9 @@
 # Tutorial - Add Two Integers in a Compute Kernel 🚧
 
-1. To build and execute use the following commands
-```export ARCH_NAME=<arch name>
-    export TT_METAL_HOME=<this repo dir>
-    ./build_metal.sh  --build-tests
+1. To build and execute, you may use the following commands:
+```bash
+    export TT_METAL_HOME=$(pwd)
+    ./build_metal.sh --build-programming-examples
     ./build/programming_examples/add_2_integers_in_compute
 ```
 
@@ -27,27 +27,18 @@ tt_metal::InterleavedBufferConfig dram_config{
             .page_size = single_tile_size,
             .buffer_type = tt_metal::BufferType::DRAM
 };
+uint32_t src0_bank_id = 0;
+uint32_t src1_bank_id = 0;
+uint32_t dst_bank_id = 0;
 ```
 
-5. Define the tile size to fit BFloat16 values:
+5. Allocate memory for each buffer:
 ```std::shared_ptr<tt::tt_metal::Buffer> src0_dram_buffer = CreateBuffer(dram_config);
 std::shared_ptr<tt::tt_metal::Buffer> src1_dram_buffer = CreateBuffer(dram_config);
 std::shared_ptr<tt::tt_metal::Buffer> dst_dram_buffer = CreateBuffer(dram_config);
 ```
 
-6.Allocate memory for each buffer:
-```auto src0_dram_noc_coord = src0_dram_buffer->noc_coordinates();
-auto src1_dram_noc_coord = src1_dram_buffer->noc_coordinates();
-auto dst_dram_noc_coord = dst_dram_buffer->noc_coordinates();
-uint32_t src0_dram_noc_x = src0_dram_noc_coord.x;
-uint32_t src0_dram_noc_y = src0_dram_noc_coord.y;
-uint32_t src1_dram_noc_x = src1_dram_noc_coord.x;
-uint32_t src1_dram_noc_y = src1_dram_noc_coord.y;
-uint32_t dst_dram_noc_x = dst_dram_noc_coord.x;
-uint32_t dst_dram_noc_y = dst_dram_noc_coord.y;
-```
-
-7. Specify NoC Coordinates:
+6. Create circular buffers and assign them to the program:
 ```constexpr uint32_t src0_cb_index = CB::c_in0;
 constexpr uint32_t num_input_tiles = 1;
 CircularBufferConfig cb_src0_config = CircularBufferConfig(num_input_tiles * single_tile_size, {{src0_cb_index, tt::DataFormat::Float16_b}}).set_page_size(src0_cb_index, single_tile_size);
@@ -63,7 +54,7 @@ CircularBufferConfig cb_output_config = CircularBufferConfig(num_output_tiles * 
 CBHandle cb_output = tt_metal::CreateCircularBuffer(program, core, cb_output_config);
 ```
 
-8. Create a data movement kernel:
+7. Create a data movement kernel:
 ```KernelHandle binary_reader_kernel_id = CreateKernel(
     program,
     "tt_metal/programming_examples/add_2_integers_in_compute/kernels/dataflow/reader_binary_1_tile.cpp",
@@ -77,7 +68,7 @@ KernelHandle unary_writer_kernel_id = CreateKernel(
     DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
 ```
 
-9. Create a compute kernel:
+8. Create a compute kernel:
 ```vector<uint32_t> compute_kernel_args = {};
 KernelHandle eltwise_binary_kernel_id = CreateKernel(
     program,
@@ -92,7 +83,7 @@ KernelHandle eltwise_binary_kernel_id = CreateKernel(
 );
 ```
 
-10. Create two source vectors:
+9. Create two source vectors:
 ```std::vector<uint32_t> src0_vec;
 std::vector<uint32_t> src1_vec;
 src0_vec = create_constant_vector_of_bfloat16(single_tile_size, 14.0f);
@@ -102,8 +93,8 @@ EnqueueWriteBuffer(cq, src0_dram_buffer, src0_vec, false);
 EnqueueWriteBuffer(cq, src1_dram_buffer, src1_vec, false);
 ```
 
-11. Setup corresponding runtime arguments:
-```SetRuntimeArgs(program, binary_reader_kernel_id, core, { src0_dram_buffer->address(), src1_dram_buffer->address(), src0_dram_noc_x, src0_dram_noc_y, src1_dram_noc_x, src1_dram_noc_y});
+10. Setup corresponding runtime arguments:
+```SetRuntimeArgs(program, binary_reader_kernel_id, core, { src0_dram_buffer->address(), src1_dram_buffer->address(), src0_bank_id, src1_bank_id, dst_bank_id});
 SetRuntimeArgs(program, eltwise_binary_kernel_id, core, {});
 SetRuntimeArgs(program, unary_writer_kernel_id, core, {dst_dram_buffer->address(), dst_dram_noc_x, dst_dram_noc_y});
 
@@ -111,7 +102,7 @@ EnqueueProgram(cq, program, false);
 Finish(cq);
 ```
 
-12. Execute the Program:
+11. Execute the Program:
 ```uint32_t ublock_size_bytes_0 = get_tile_size(cb_id_in0);
 uint32_t ublock_size_bytes_1 = get_tile_size(cb_id_in1);
 
@@ -129,9 +120,9 @@ noc_async_read_barrier();
 cb_push_back(cb_id_in1, 1);
 ```
 
-13. Unpack, compute, and pack the data:
+12. Unpack, compute, and pack the data:
 ```binary_op_init_common(cb_in0, cb_in1, cb_out0);
-add_tiles_init();
+add_tiles_init(cb_in0, cb_in1);
 
 // wait for a block of tiles in each of input CBs
 cb_wait_front(cb_in0, 1);
@@ -153,8 +144,8 @@ cb_pop_front(cb_in1, 1);
 cb_push_back(cb_out0, 1);
 ```
 
-14. Write integer values to the DRAM:
-```uint64_t dst_noc_addr = get_noc_addr(dst_dram_noc_x, dst_dram_noc_y, dst_addr);
+13. Write integer values to the DRAM:
+```uint64_t dst_noc_addr = get_noc_addr_from_bank_id<true>(dst_bank_id, dst_dram);
 
 constexpr uint32_t cb_id_out0 = tt::CB::c_out0;
 uint32_t ublock_size_bytes = get_tile_size(cb_id_out0);
@@ -166,6 +157,6 @@ noc_async_write_barrier();
 cb_pop_front(cb_id_out0, 1);
 ```
 
-15. Close the device:
+14. Close the device:
 ```CloseDevice(device);
 ```

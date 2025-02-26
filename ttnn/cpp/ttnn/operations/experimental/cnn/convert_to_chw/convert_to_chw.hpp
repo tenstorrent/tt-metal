@@ -11,8 +11,10 @@ namespace ttnn::operations::experimental::cnn {
 
 struct ExecuteConvertToCHW {
     static ttnn::Tensor invoke(
-        uint8_t queue_id, const Tensor& a, const std::optional<MemoryConfig>& memory_config = std::nullopt, const std::optional<DataType>& dtype = std::nullopt);
-    static ttnn::Tensor invoke(const Tensor& a, const std::optional<MemoryConfig>& memory_config = std::nullopt, const std::optional<DataType>& dtype = std::nullopt);
+        QueueId queue_id,
+        const Tensor& a,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<DataType>& dtype = std::nullopt);
 };
 
 }  // namespace ttnn::operations::experimental::cnn

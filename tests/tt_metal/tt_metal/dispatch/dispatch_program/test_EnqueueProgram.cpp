@@ -9,16 +9,14 @@
 #include "random_program_fixture.hpp"
 #include "dispatch_test_utils.hpp"
 #include "gtest/gtest.h"
-#include "impl/buffers/buffer.hpp"
-#include "impl/device/device.hpp"
-#include "impl/kernels/kernel_types.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/impl/kernels/kernel.hpp"
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/device_impl.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/kernel.hpp>
 #include "umd/device/tt_soc_descriptor.h"
-
-// TODO: ARCH_NAME specific, must remove
-#include "eth_l1_address_map.h"
 
 using std::vector;
 using namespace tt::tt_metal;
@@ -86,7 +84,7 @@ std::vector<CBHandle> initialize_dummy_circular_buffers(
     return cb_handles;
 }
 
-bool cb_config_successful(Device* device, Program& program, const DummyProgramMultiCBConfig& program_config) {
+bool cb_config_successful(IDevice* device, Program& program, const DummyProgramMultiCBConfig& program_config) {
     bool pass = true;
 
     // Need to use old APIs to read since we cannot allocate a buffer in the reserved space we're trying
@@ -95,13 +93,13 @@ bool cb_config_successful(Device* device, Program& program, const DummyProgramMu
     uint32_t cb_config_buffer_size =
         NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
 
-    uint32_t l1_unreserved_base = device->get_base_allocator_addr(HalMemType::L1);
+    uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
     for (const CoreRange& core_range : program_config.cr_set.ranges()) {
         for (const CoreCoord& core_coord : core_range) {
             tt::tt_metal::detail::ReadFromDeviceL1(
                 device,
                 core_coord,
-                program.get_sem_base_addr(device, core_coord, CoreType::WORKER),
+                program.get_cb_base_addr(device, core_coord, CoreType::WORKER),
                 cb_config_buffer_size,
                 cb_config_vector);
 
@@ -110,8 +108,8 @@ bool cb_config_successful(Device* device, Program& program, const DummyProgramMu
                 const uint32_t index = program_config.cb_config_vector[i].cb_id * sizeof(uint32_t);
                 const uint32_t cb_num_pages = program_config.cb_config_vector[i].num_pages;
                 const uint32_t cb_size = cb_num_pages * program_config.cb_config_vector[i].page_size;
-                const bool addr_match = cb_config_vector.at(index) == ((cb_addr) >> 4);
-                const bool size_match = cb_config_vector.at(index + 1) == (cb_size >> 4);
+                const bool addr_match = cb_config_vector.at(index) == cb_addr;
+                const bool size_match = cb_config_vector.at(index + 1) == cb_size;
                 const bool num_pages_match = cb_config_vector.at(index + 2) == cb_num_pages;
                 pass &= (addr_match and size_match and num_pages_match);
 
@@ -123,13 +121,14 @@ bool cb_config_successful(Device* device, Program& program, const DummyProgramMu
     return pass;
 }
 
-bool test_dummy_EnqueueProgram_with_runtime_args(Device* device, const CoreCoord& eth_core_coord) {
+bool test_dummy_EnqueueProgram_with_runtime_args(IDevice* device, const CoreCoord& eth_core_coord) {
     Program program;
     bool pass = true;
     auto eth_noc_xy = device->ethernet_core_from_logical_core(eth_core_coord);
 
     constexpr uint32_t num_runtime_args0 = 9;
-    constexpr uint32_t rta_base0 = eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE;
+    uint32_t rta_base0 =
+        hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
     std::map<string, string> dummy_defines0 = {
         {"DATA_MOVEMENT", "1"},
         {"NUM_RUNTIME_ARGS", std::to_string(num_runtime_args0)},
@@ -151,7 +150,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args(Device* device, const CoreCoord
     vector<uint32_t> dummy_kernel0_args_readback = tt::llrt::read_hex_vec_from_core(
         device->id(),
         eth_noc_xy,
-        eth_l1_mem::address_map::ERISC_L1_UNRESERVED_BASE,
+        hal.get_dev_addr(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH, tt::tt_metal::HalL1MemAddrType::UNRESERVED),
         dummy_kernel0_args.size() * sizeof(uint32_t));
 
     pass &= (dummy_kernel0_args == dummy_kernel0_args_readback);
@@ -159,7 +158,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args(Device* device, const CoreCoord
     return pass;
 }
 
-bool test_dummy_EnqueueProgram_with_cbs(Device* device, CommandQueue& cq, DummyProgramMultiCBConfig& program_config) {
+bool test_dummy_EnqueueProgram_with_cbs(IDevice* device, CommandQueue& cq, DummyProgramMultiCBConfig& program_config) {
     Program program;
 
     initialize_dummy_circular_buffers(program, program_config.cr_set, program_config.cb_config_vector);
@@ -172,7 +171,7 @@ bool test_dummy_EnqueueProgram_with_cbs(Device* device, CommandQueue& cq, DummyP
 }
 
 bool test_dummy_EnqueueProgram_with_cbs_update_size(
-    Device* device, CommandQueue& cq, const DummyProgramMultiCBConfig& program_config) {
+    IDevice* device, CommandQueue& cq, const DummyProgramMultiCBConfig& program_config) {
     Program program;
 
     const std::vector<CBHandle>& cb_handles =
@@ -199,7 +198,7 @@ bool test_dummy_EnqueueProgram_with_cbs_update_size(
 }
 
 bool test_dummy_EnqueueProgram_with_sems(
-    Device* device,
+    IDevice* device,
     CommandQueue& cq,
     Program& program,
     const DummyProgramConfig& program_config,
@@ -239,7 +238,7 @@ bool test_dummy_EnqueueProgram_with_sems(
     return are_all_semaphore_values_correct;
 }
 
-bool test_dummy_EnqueueProgram_with_sems(Device* device, CommandQueue& cq, const DummyProgramConfig& program_config) {
+bool test_dummy_EnqueueProgram_with_sems(IDevice* device, CommandQueue& cq, const DummyProgramConfig& program_config) {
     Program program;
     vector<uint32_t> expected_semaphore_values;
 
@@ -252,7 +251,7 @@ bool test_dummy_EnqueueProgram_with_sems(Device* device, CommandQueue& cq, const
 }
 
 bool test_dummy_EnqueueProgram_with_runtime_args(
-    Device* device,
+    IDevice* device,
     CommandQueue& cq,
     const DummyProgramConfig& program_config,
     uint32_t num_runtime_args_dm0,
@@ -264,7 +263,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args(
 
     CoreRangeSet cr_set = program_config.cr_set;
 
-    uint32_t rta_base_dm0 = device->get_base_allocator_addr(HalMemType::L1);
+    uint32_t rta_base_dm0 = device->allocator()->get_base_allocator_addr(HalMemType::L1);
     ;
     uint32_t rta_base_dm1 = rta_base_dm0 + num_runtime_args_dm0 * sizeof(uint32_t);
     uint32_t rta_base_compute = rta_base_dm1 + num_runtime_args_dm1 * sizeof(uint32_t);
@@ -357,7 +356,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args(
 }
 
 bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
-    Device* device,
+    IDevice* device,
     CommandQueue& cq,
     const DummyProgramConfig& program_config,
     uint32_t num_runtime_args_for_cr0,
@@ -370,7 +369,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
 
     CoreRangeSet cr_set = program_config.cr_set;
 
-    uint32_t rta_base_dm0 = device->get_base_allocator_addr(HalMemType::L1);
+    uint32_t rta_base_dm0 = device->allocator()->get_base_allocator_addr(HalMemType::L1);
     ;
     uint32_t rta_base_dm1 = rta_base_dm0 + 1024 * sizeof(uint32_t);
     uint32_t rta_base_compute = rta_base_dm1 + 2048 * sizeof(uint32_t);
@@ -549,7 +548,7 @@ bool test_dummy_EnqueueProgram_with_runtime_args_multi_crs(
     return pass;
 }
 
-bool test_EnqueueWrap_on_EnqueueWriteBuffer(Device* device, CommandQueue& cq, const TestBufferConfig& config) {
+bool test_EnqueueWrap_on_EnqueueWriteBuffer(IDevice* device, CommandQueue& cq, const TestBufferConfig& config) {
     EnqueueWriteBuffer_prior_to_wrap(device, cq, config);
 
     /*
@@ -569,14 +568,14 @@ bool test_EnqueueWrap_on_EnqueueWriteBuffer(Device* device, CommandQueue& cq, co
     return true;
 }
 
-bool test_EnqueueWrap_on_Finish(Device* device, CommandQueue& cq, const TestBufferConfig& config) {
+bool test_EnqueueWrap_on_Finish(IDevice* device, CommandQueue& cq, const TestBufferConfig& config) {
     bool pass = true;
     EnqueueWriteBuffer_prior_to_wrap(device, cq, config);
 
     return pass;
 }
 
-bool test_EnqueueWrap_on_EnqueueProgram(Device* device, CommandQueue& cq, const TestBufferConfig& config) {
+bool test_EnqueueWrap_on_EnqueueProgram(IDevice* device, CommandQueue& cq, const TestBufferConfig& config) {
     bool pass = true;
     EnqueueWriteBuffer_prior_to_wrap(device, cq, config);
 
@@ -586,7 +585,7 @@ bool test_EnqueueWrap_on_EnqueueProgram(Device* device, CommandQueue& cq, const 
 // Verify RT args for a core at a given address by comparing to expected values.
 bool verify_rt_args(
     bool unique,
-    Device* device,
+    IDevice* device,
     CoreCoord logical_core,
     const tt::RISCV& riscv,
     uint32_t addr,
@@ -598,19 +597,10 @@ bool verify_rt_args(
     tt::Cluster::instance().l1_barrier(device->id());
     auto noc_xy = riscv == tt::RISCV::ERISC ? device->ethernet_core_from_logical_core(logical_core)
                                             : device->worker_core_from_logical_core(logical_core);
-    std::vector<uint32_t> args_readback =
-        tt::llrt::read_hex_vec_from_core(device->id(), noc_xy, addr, expected_rt_args.size() * sizeof(uint32_t));
-    log_debug(
-        tt::LogTest,
-        "Verifying {} {} RT args for {} (Logical: {}) at addr: 0x{:x} w/ incr_val: {}",
-        expected_rt_args.size(),
-        label,
-        noc_xy,
-        logical_core.str(),
-        addr,
-        incr_val);
+    std::vector<uint32_t> args_readback = tt::llrt::read_hex_vec_from_core(device->id(), noc_xy, addr, expected_rt_args.size() * sizeof(uint32_t));
+    log_debug(tt::LogTest, "Verifying {} {} RT args for {} (Logical: {}) at addr: 0x{:x} w/ incr_val: {}", expected_rt_args.size(), label, noc_xy, logical_core.str(), addr, incr_val);
 
-    for (int i = 0; i < expected_rt_args.size(); i++) {
+    for(int i=0; i<expected_rt_args.size(); i++){
         uint32_t expected_val = expected_rt_args[i] + incr_val;
         log_debug(
             tt::LogTest,
@@ -627,7 +617,7 @@ bool verify_rt_args(
 
 // Write unique and common RT args, increment in kernel, and verify correctness via readback.
 bool test_increment_runtime_args_sanity(
-    Device* device,
+    IDevice* device,
     const DummyProgramConfig& program_config,
     uint32_t num_unique_rt_args,
     uint32_t num_common_rt_args,
@@ -646,7 +636,7 @@ bool test_increment_runtime_args_sanity(
 
     switch (riscv) {
         case tt::RISCV::BRISC:
-            unique_args_addr = device->get_base_allocator_addr(HalMemType::L1);
+            unique_args_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);
             common_args_addr = unique_args_addr + 3 * 256 * sizeof(uint32_t);
             compile_args[2] = unique_args_addr;
             compile_args[3] = common_args_addr;
@@ -661,7 +651,7 @@ bool test_increment_runtime_args_sanity(
                 });
             break;
         case tt::RISCV::NCRISC:
-            unique_args_addr = device->get_base_allocator_addr(HalMemType::L1) + 256 * sizeof(uint32_t);
+            unique_args_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1) + 256 * sizeof(uint32_t);
             common_args_addr = unique_args_addr + 4 * 256 * sizeof(uint32_t);
             compile_args[2] = unique_args_addr;
             compile_args[3] = common_args_addr;
@@ -676,7 +666,8 @@ bool test_increment_runtime_args_sanity(
                 });
             break;
         case tt::RISCV::COMPUTE:
-            unique_args_addr = device->get_base_allocator_addr(HalMemType::L1) + 2 * 256 * sizeof(uint32_t);
+            unique_args_addr =
+                device->allocator()->get_base_allocator_addr(HalMemType::L1) + 2 * 256 * sizeof(uint32_t);
             common_args_addr = unique_args_addr + 5 * 256 * sizeof(uint32_t);
             compile_args[2] = unique_args_addr;
             compile_args[3] = common_args_addr;
@@ -752,7 +743,7 @@ namespace basic_tests {
 namespace compiler_workaround_hardware_bug_tests {
 
 TEST_F(CommandQueueSingleCardProgramFixture, TensixTestArbiterDoesNotHang) {
-    for (Device* device : devices_) {
+    for (IDevice* device : devices_) {
         Program program;
 
         CoreRange cr({0, 0}, {0, 0});
@@ -780,7 +771,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestSingleCbConfigCorrectlySe
 
     DummyProgramMultiCBConfig config = {.cr_set = cr_set, .cb_config_vector = {cb_config}};
 
-    for (Device* device : devices_) {
+    for (IDevice* device : devices_) {
         EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs(device, device->command_queue(), config));
     }
 }
@@ -797,7 +788,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestMultiCbSeqConfigCorrectly
     DummyProgramMultiCBConfig config = {
         .cr_set = cr_set, .cb_config_vector = {cb_config_0, cb_config_1, cb_config_2, cb_config_3}};
 
-    for (Device* device : devices_) {
+    for (IDevice* device : devices_) {
         EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs(device, device->command_queue(), config));
     }
 }
@@ -814,7 +805,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestMultiCbRandomConfigCorrec
     DummyProgramMultiCBConfig config = {
         .cr_set = cr_set, .cb_config_vector = {cb_config_0, cb_config_1, cb_config_2, cb_config_3}};
 
-    for (Device* device : devices_) {
+    for (IDevice* device : devices_) {
         EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs(device, device->command_queue(), config));
     }
 }
@@ -836,7 +827,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestMultiCBSharedAddressSpace
         NUM_CIRCULAR_BUFFERS * UINT32_WORDS_PER_LOCAL_CIRCULAR_BUFFER_CONFIG * sizeof(uint32_t);
     CoreCoord core_coord(0, 0);
 
-    for (Device* device : devices_) {
+    for (IDevice* device : devices_) {
         Program program;
         CircularBufferConfig cb_config = CircularBufferConfig(cb_size, intermediate_and_out_data_format_spec)
                                              .set_page_size(intermediate_cb, single_tile_size)
@@ -857,18 +848,18 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestMultiCBSharedAddressSpace
             program.get_cb_base_addr(device, core_coord, CoreType::WORKER),
             cb_config_buffer_size,
             cb_config_vector);
-        uint32_t cb_addr = device->get_base_allocator_addr(HalMemType::L1);
+        uint32_t cb_addr = device->allocator()->get_base_allocator_addr(HalMemType::L1);
         uint32_t intermediate_index = intermediate_cb * sizeof(uint32_t);
 
-        bool addr_match_intermediate = cb_config_vector.at(intermediate_index) == ((cb_addr) >> 4);
-        bool size_match_intermediate = cb_config_vector.at(intermediate_index + 1) == (cb_size >> 4);
+        bool addr_match_intermediate = cb_config_vector.at(intermediate_index) == (cb_addr);
+        bool size_match_intermediate = cb_config_vector.at(intermediate_index + 1) == (cb_size);
         bool num_pages_match_intermediate = cb_config_vector.at(intermediate_index + 2) == num_tiles;
         bool pass_intermediate = (addr_match_intermediate and size_match_intermediate and num_pages_match_intermediate);
         EXPECT_TRUE(pass_intermediate);
 
         uint32_t out_index = out_cb * sizeof(uint32_t);
-        bool addr_match_out = cb_config_vector.at(out_index) == ((cb_addr) >> 4);
-        bool size_match_out = cb_config_vector.at(out_index + 1) == (cb_size >> 4);
+        bool addr_match_out = cb_config_vector.at(out_index) == cb_addr;
+        bool size_match_out = cb_config_vector.at(out_index + 1) == cb_size;
         bool num_pages_match_out = cb_config_vector.at(out_index + 2) == num_tiles;
         bool pass_out = (addr_match_out and size_match_out and num_pages_match_out);
         EXPECT_TRUE(pass_out);
@@ -883,7 +874,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestSingleCbConfigCorrectlyUp
 
     DummyProgramMultiCBConfig config = {.cr_set = cr_set, .cb_config_vector = {cb_config}};
 
-    for (Device* device : devices_) {
+    for (IDevice* device : devices_) {
         EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_cbs_update_size(
             device, device->command_queue(), config));
     }
@@ -895,13 +886,13 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestSingleSemaphoreConfigCorr
 
     DummyProgramConfig config = {.cr_set = cr_set, .num_sems = NUM_SEMAPHORES};
 
-    for (Device* device : devices_) {
+    for (IDevice* device : devices_) {
         EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_sems(device, device->command_queue(), config));
     }
 }
 
 TEST_F(CommandQueueSingleCardProgramFixture, TensixTestAutoInsertedBlankBriscKernelInDeviceDispatchMode) {
-    for (Device* device : devices_) {
+    for (IDevice* device : devices_) {
         Program program;
 
         CoreRange cr({0, 0}, {0, 0});
@@ -924,7 +915,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixIncrementRuntimeArgsSanitySin
     CoreRange cr0({0, 0}, {0, 0});
     CoreRangeSet cr_set({cr0});
     DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
-    for (Device* device : devices_) {
+    for (IDevice* device : devices_) {
         EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(
             device, dummy_program_config, 8, 8, tt::RISCV::COMPUTE));
     }
@@ -941,7 +932,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, ActiveEthEnqueueDummyProgram) {
 // Sanity test for setting and verifying common and unique runtime args to single cores via ERISC. Some arch may return
 // 0 active eth cores, that's okay.
 TEST_F(CommandQueueSingleCardProgramFixture, ActiveEthIncrementRuntimeArgsSanitySingleCoreDataMovementErisc) {
-    for (Device* device : devices_) {
+    for (IDevice* device : devices_) {
         for (const auto& eth_core : device->get_active_ethernet_cores(true)) {
             CoreRange cr0(eth_core);
             CoreRangeSet cr_set({cr0});
@@ -958,7 +949,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, ActiveEthIncrementRuntimeArgsSanity
 // FIXME - Re-enable when FD-on-idle-eth is supported
 TEST_F(
     CommandQueueSingleCardProgramFixture, DISABLED_ActiveEthIncrementRuntimeArgsSanitySingleCoreDataMovementEriscIdle) {
-    for (Device* device : devices_) {
+    for (IDevice* device : devices_) {
         for (const auto& eth_core : device->get_active_ethernet_cores(true)) {
             CoreRange cr0(eth_core);
             CoreRangeSet cr_set({cr0});
@@ -976,7 +967,7 @@ TEST_F(
 TEST_F(
     CommandQueueSingleCardProgramFixture,
     DISABLED_IdleEthIncrementRuntimeArgsSanitySingleCoreDataMovementEriscInactive) {
-    for (Device* device : devices_) {
+    for (IDevice* device : devices_) {
         for (const auto& eth_core : device->get_inactive_ethernet_cores()) {
             CoreRange cr0(eth_core);
             CoreRangeSet cr_set({cr0});
@@ -994,7 +985,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestRuntimeArgsCorrectlySentS
     CoreRangeSet cr_set({cr});
 
     DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
-    for (Device* device : devices_) {
+    for (IDevice* device : devices_) {
         EXPECT_TRUE(local_test_functions::test_dummy_EnqueueProgram_with_runtime_args(
             device, device->command_queue(), dummy_program_config, 9, 12, 15, 1));
     }
@@ -1011,7 +1002,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestAllCbConfigsCorrectlySent
         cb_config_vector[i].cb_id = i;
     }
 
-    for (Device* device : devices_) {
+    for (IDevice* device : devices_) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
         CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
@@ -1031,7 +1022,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestAllCbConfigsCorrectlySent
         cb_config_vector[i].cb_id = i;
     }
 
-    for (Device* device : devices_) {
+    for (IDevice* device : devices_) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
         CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
@@ -1052,7 +1043,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestMultiCbConfigsCorrectlySe
 
     std::vector<CBConfig> cb_config_vector = {cb_config_0, cb_config_1, cb_config_2, cb_config_3};
 
-    for (Device* device : devices_) {
+    for (IDevice* device : devices_) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
         CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
@@ -1073,7 +1064,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestAllCbConfigsCorrectlySent
         cb_config_vector[i].cb_id = i;
     }
 
-    for (Device* device : devices_) {
+    for (IDevice* device : devices_) {
         CoreRange cr0({0, 0}, {1, 1});
 
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
@@ -1096,7 +1087,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestAllCbConfigsCorrectlySent
         cb_config_vector[i].cb_id = i;
     }
 
-    for (Device* device : devices_) {
+    for (IDevice* device : devices_) {
         CoreRange cr0({0, 0}, {1, 1});
 
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
@@ -1120,7 +1111,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestMultiCbConfigsCorrectlySe
 
     std::vector<CBConfig> cb_config_vector = {cb_config_0, cb_config_1, cb_config_2, cb_config_3};
 
-    for (Device* device : devices_) {
+    for (IDevice* device : devices_) {
         CoreRange cr0({0, 0}, {1, 1});
 
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
@@ -1137,7 +1128,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestMultiCbConfigsCorrectlySe
 }
 
 TEST_F(CommandQueueSingleCardProgramFixture, TensixTestAllSemConfigsCorrectlySentMultiCore) {
-    for (Device* device : devices_) {
+    for (IDevice* device : devices_) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
         CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
@@ -1150,7 +1141,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestAllSemConfigsCorrectlySen
 }
 
 TEST_F(CommandQueueSingleCardProgramFixture, TensixTestAllSemaphoreConfigsCorrectlySentMultipleCoreRanges) {
-    for (Device* device : devices_) {
+    for (IDevice* device : devices_) {
         CoreRange first_cr({0, 0}, {1, 1});
 
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
@@ -1189,7 +1180,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestAllSemaphoreConfigsCorrec
 }
 
 TEST_F(CommandQueueSingleCardProgramFixture, TensixTestAllRuntimeArgsCorrectlySentMultiCore) {
-    for (Device* device : devices_) {
+    for (IDevice* device : devices_) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
         CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
@@ -1202,7 +1193,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestAllRuntimeArgsCorrectlySe
 }
 
 TEST_F(CommandQueueSingleCardProgramFixture, TensixTestAllRuntimeArgsCorrectlySentMultiCore_255_PerKernel) {
-    for (Device* device : devices_) {
+    for (IDevice* device : devices_) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
         CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});
@@ -1215,7 +1206,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestAllRuntimeArgsCorrectlySe
 }
 
 TEST_F(CommandQueueSingleCardProgramFixture, TensixTestSendRuntimeArgsMultiCoreRange) {
-    for (Device* device : devices_) {
+    for (IDevice* device : devices_) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
         CoreRange cr0({0, 0}, {worker_grid_size.x - 1, 3});
@@ -1230,7 +1221,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestSendRuntimeArgsMultiCoreR
 
 TEST_F(CommandQueueSingleCardProgramFixture, TensixTestSendRuntimeArgsMultiNonOverlappingCoreRange) {
     // Core ranges get merged in kernel groups, this one does not
-    for (Device* device : devices_) {
+    for (IDevice* device : devices_) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
         CoreRange cr0({0, 0}, {worker_grid_size.x - 1, 3});
@@ -1244,7 +1235,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixTestSendRuntimeArgsMultiNonOv
 }
 
 TEST_F(CommandQueueSingleCardProgramFixture, TensixTestUpdateRuntimeArgsMultiCoreRange) {
-    for (Device* device : devices_) {
+    for (IDevice* device : devices_) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
         CoreRange cr0({0, 0}, {worker_grid_size.x - 1, 3});
@@ -1263,7 +1254,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixIncrementRuntimeArgsSanityMul
     CoreRange cr1({3, 3}, {4, 4});
     CoreRangeSet cr_set(std::vector{cr0, cr1});
     DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
-    for (Device* device : devices_) {
+    for (IDevice* device : devices_) {
         EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(
             device, dummy_program_config, 16, 16, tt::RISCV::COMPUTE));
     }
@@ -1275,7 +1266,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixIncrementRuntimeArgsSanityMul
     CoreRange cr1({3, 3}, {4, 4});
     CoreRangeSet cr_set(std::vector{cr0, cr1});
     DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
-    for (Device* device : devices_) {
+    for (IDevice* device : devices_) {
         EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(
             device, dummy_program_config, 255, 0, tt::RISCV::COMPUTE));
     }
@@ -1287,7 +1278,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixIncrementRuntimeArgsSanityMul
     CoreRange cr1({3, 3}, {4, 4});
     CoreRangeSet cr_set(std::vector{cr0, cr1});
     DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
-    for (Device* device : devices_) {
+    for (IDevice* device : devices_) {
         EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(
             device, dummy_program_config, 0, 255, tt::RISCV::COMPUTE));
     }
@@ -1299,7 +1290,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixIncrementRuntimeArgsSanityMul
     CoreRange cr1({3, 3}, {4, 4});
     CoreRangeSet cr_set(std::vector{cr0, cr1});
     DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
-    for (Device* device : devices_) {
+    for (IDevice* device : devices_) {
         EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(
             device, dummy_program_config, 16, 16, tt::RISCV::BRISC));
     }
@@ -1311,7 +1302,7 @@ TEST_F(CommandQueueSingleCardProgramFixture, TensixIncrementRuntimeArgsSanityMul
     CoreRange cr1({3, 3}, {4, 4});
     CoreRangeSet cr_set(std::vector{cr0, cr1});
     DummyProgramConfig dummy_program_config = {.cr_set = cr_set};
-    for (Device* device : devices_) {
+    for (IDevice* device : devices_) {
         EXPECT_TRUE(local_test_functions::test_increment_runtime_args_sanity(
             device, dummy_program_config, 16, 16, tt::RISCV::NCRISC));
     }
@@ -1586,7 +1577,7 @@ TEST_F(MultiCommandQueueSingleDeviceProgramFixture, TensixTestRandomizedProgram)
 
 TEST_F(CommandQueueSingleCardProgramFixture, DISABLED_TensixTestFillDispatchCoreBuffer) {
     uint32_t NUM_ITER = 100000;
-    for (Device* device : devices_) {
+    for (IDevice* device : devices_) {
         CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
 
         CoreRange cr({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1});

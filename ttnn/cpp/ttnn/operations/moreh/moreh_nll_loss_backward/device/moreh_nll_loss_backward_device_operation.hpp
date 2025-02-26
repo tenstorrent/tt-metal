@@ -31,7 +31,7 @@ struct MorehNllLossBackwardDeviceOperation {
         const std::optional<Tensor>& input_grad_tensor;
     };
 
-    using shape_return_value_t = ttnn::Shape;
+    using spec_return_value_t = ttnn::TensorSpec;
 
     using tensor_return_value_t = ttnn::Tensor;
 
@@ -66,7 +66,7 @@ struct MorehNllLossBackwardDeviceOperation {
 
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
 
-    static shape_return_value_t compute_output_shapes(const operation_attributes_t&, const tensor_args_t&);
+    static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 

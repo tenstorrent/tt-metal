@@ -11,9 +11,9 @@
 
 #include "device_fixture.hpp"
 #include "multi_device_fixture.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/kernels/kernel.hpp"
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/kernel.hpp>
 #include "tt_metal/test_utils/comparison.hpp"
 #include "tt_metal/test_utils/df/df.hpp"
 #include "tt_metal/test_utils/print_helpers.hpp"
@@ -81,11 +81,12 @@ std::vector<int> get_hamiltonian_cycle(vector<vector<int>>& adj, int N, int s = 
     return {};
 }
 
-std::vector<v1::DeviceHandle> get_device_ring(std::vector<tt::tt_metal::v1::DeviceHandle> devices) {
+std::vector<IDevice* > get_device_ring(std::vector<tt::tt_metal::IDevice*> devices) {
     std::vector<std::vector<int>> adj(devices.size(), std::vector<int>(devices.size(), 0));
     for (uint32_t i = 0; i < devices.size(); ++i) {
         const auto& device = devices[i];
-        for (const auto& connected_device_id : device->get_ethernet_connected_device_ids()) {
+        auto ethernet_connected_device_ids = tt::Cluster::instance().get_ethernet_connected_device_ids(device->id());
+        for (const auto& connected_device_id : ethernet_connected_device_ids) {
             for (uint32_t j = 0; j < devices.size(); ++j) {
                 if (devices[j]->id() == connected_device_id) {
                     adj[i][j] = 1;
@@ -95,7 +96,7 @@ std::vector<v1::DeviceHandle> get_device_ring(std::vector<tt::tt_metal::v1::Devi
     }
 
     const auto& device_ring_idx = get_hamiltonian_cycle(adj, devices.size(), 0);
-    std::vector<v1::DeviceHandle> device_ring;
+    std::vector<IDevice* > device_ring;
     device_ring.reserve(device_ring_idx.size());
     for (const auto& device_idx : device_ring_idx) {
         device_ring.push_back(devices[device_idx]);
@@ -103,9 +104,9 @@ std::vector<v1::DeviceHandle> get_device_ring(std::vector<tt::tt_metal::v1::Devi
     return device_ring;
 }
 
-std::vector<std::tuple<Device*, Device*, CoreCoord, CoreCoord>> get_sender_receiver_cores(
-    std::vector<tt::tt_metal::v1::DeviceHandle> device_ring) {
-    std::vector<std::tuple<Device*, Device*, CoreCoord, CoreCoord>> sender_receivers;
+std::vector<std::tuple<IDevice*, IDevice*, CoreCoord, CoreCoord>> get_sender_receiver_cores(
+    std::vector<tt::tt_metal::IDevice* > device_ring) {
+    std::vector<std::tuple<IDevice*, IDevice*, CoreCoord, CoreCoord>> sender_receivers;
     sender_receivers.reserve(device_ring.size() - 1);
 
     // Special case for 2 devices to ensure core pairs are not the same for send and receive
@@ -116,7 +117,7 @@ std::vector<std::tuple<Device*, Device*, CoreCoord, CoreCoord>> get_sender_recei
         for (const auto& first_eth_core : first_device->get_active_ethernet_cores(true)) {
             auto [device_id, second_eth_core] = first_device->get_connected_ethernet_core(first_eth_core);
             if (second_device->id() == device_id) {
-                Device *sender_device, *receiver_device;
+                IDevice* sender_device, *receiver_device;
                 CoreCoord sender_eth_core, receiver_eth_core;
                 if (i == 0) {
                     sender_device = first_device, receiver_device = second_device;
@@ -174,7 +175,7 @@ namespace unit_tests::erisc::kernels {
  *                                         ╚══════╝░░░╚═╝░░░╚═╝░░╚═╝
  */
 bool eth_direct_ring_gather_sender_receiver_kernels(
-    std::vector<tt::tt_metal::v1::DeviceHandle> device_ring,
+    std::vector<tt::tt_metal::IDevice* > device_ring,
     const size_t& byte_size_per_device,
     const size_t& src_eth_l1_byte_address,
     const size_t& dst_eth_l1_byte_address,
@@ -318,7 +319,7 @@ bool eth_direct_ring_gather_sender_receiver_kernels(
 }
 
 bool eth_interleaved_ring_gather_sender_receiver_kernels(
-    std::vector<tt::tt_metal::v1::DeviceHandle> device_ring,
+    std::vector<tt::tt_metal::IDevice* > device_ring,
     const BankedConfig& cfg,
     const size_t& src_eth_l1_byte_address,
     const size_t& dst_eth_l1_byte_address,

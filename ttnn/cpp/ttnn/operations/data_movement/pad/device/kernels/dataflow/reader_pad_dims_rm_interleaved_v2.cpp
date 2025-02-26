@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <stdint.h>
+#include <cstring>
 #include "dataflow_api.h"
 
 inline __attribute__((always_inline)) void fill_pad_cb_with_val(
@@ -37,8 +38,12 @@ void kernel_main() {
     constexpr uint32_t stick_size_padded_end = get_compile_time_arg_val(10);
     constexpr uint32_t num_zero_pad_sticks_read = get_compile_time_arg_val(11);
     constexpr uint32_t last_zero_stick_size = get_compile_time_arg_val(12);
+    constexpr uint32_t stick_size_padded_aligned = get_compile_time_arg_val(21);
 
 #define not_pad_by_zero get_compile_time_arg_val(13) == 1
+#define front_padding get_compile_time_arg_val(9)
+#define unaligned get_compile_time_arg_val(22) == 1
+
 #if (not_pad_by_zero)
     constexpr uint32_t packed_pad_value = get_compile_time_arg_val(14);
     constexpr uint32_t row_major_min_bytes = get_compile_time_arg_val(15);
@@ -47,8 +52,9 @@ void kernel_main() {
     constexpr uint32_t num_sticks_padded_read = get_compile_time_arg_val(18);
 #endif
 
-    constexpr auto cb_in0 = tt::CBIndex::c_0;
-    constexpr auto cb_pad = tt::CBIndex::c_1;
+    constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
+    constexpr uint32_t cb_pad = tt::CBIndex::c_1;
+    constexpr uint32_t cb_pad_align = tt::CBIndex::c_2;
 
 #define stick_size_is_pow2 get_compile_time_arg_val(19) == 1
 #if (stick_size_is_pow2)
@@ -68,8 +74,14 @@ void kernel_main() {
     uint64_t pad_val_addr = get_read_ptr(cb_pad);
     uint64_t pad_val_noc_addr = get_noc_addr(pad_val_addr);
 
+    uint64_t pad_align_addr = get_read_ptr(cb_pad_align);
+    uint64_t pad_align_write_addr = get_write_ptr(cb_pad_align);
+    uint64_t pad_align_noc_addr = get_noc_addr(pad_align_addr);
+
 #if (not_pad_by_zero)
-    fill_pad_cb_with_val(cb_pad, row_major_min_bytes, packed_pad_value);
+    fill_pad_cb_with_val(cb_pad, stick_size_padded, packed_pad_value);
+#else
+    fill_pad_cb_with_val(cb_pad, stick_size_padded, 0);
 #endif
 
     uint32_t i_stick = start_id;
@@ -82,55 +94,29 @@ void kernel_main() {
             bool read_stick = (curr_h >= front_pad_h and curr_h < H) and (curr_c >= front_pad_c and curr_c < C) and
                               (curr_n >= front_pad_n and curr_n < N);
             uint64_t read_noc_addr = get_noc_addr(i_stick, s);
+            noc_async_read(pad_val_noc_addr, l1_write_addr, stick_size_padded);
 
             if (read_stick) {
-#if (not_pad_by_zero)
-                if constexpr (stick_size_padded_front != 0) {
-                    for (uint32_t j = 0; j < num_front_pad_sticks_read; ++j) {
-                        noc_async_read(pad_val_noc_addr, l1_write_addr, row_major_min_bytes);
-                        l1_write_addr += row_major_min_bytes;
-                    }
-                }
+#if (front_padding)
+                // Read noc into cb_pad_align l1
+                noc_async_read(read_noc_addr, get_write_ptr(cb_pad_align), stick_size_bytes);
+                noc_async_read_barrier();
+                memmove(
+                    (void*)(l1_write_addr + stick_size_padded_front),
+                    (void*)(get_read_ptr(cb_pad_align)),
+                    (size_t)(stick_size_bytes));
 #else
-                if constexpr (stick_size_padded_front != 0) {
-                    noc_async_read(zeros_noc_addr, l1_write_addr, stick_size_padded_front);
-                    l1_write_addr += stick_size_padded_front;
-                }
-#endif
-
+#if (unaligned)
+                noc_async_read(read_noc_addr, get_write_ptr(cb_pad_align), stick_size_bytes);
+                noc_async_read_barrier();
+                noc_async_read(pad_align_noc_addr, l1_write_addr, stick_size_bytes);
+#else
                 noc_async_read(read_noc_addr, l1_write_addr, stick_size_bytes);
-                l1_write_addr += stick_size_bytes;
+#endif
+#endif
                 i_stick++;
-
-#if (not_pad_by_zero)
-                if constexpr (stick_size_padded_end != 0) {
-                    for (uint32_t j = 0; j < num_end_pad_sticks_read; ++j) {
-                        noc_async_read(pad_val_noc_addr, l1_write_addr, row_major_min_bytes);
-                        l1_write_addr += row_major_min_bytes;
-                    }
-                }
-#else
-                if constexpr (stick_size_padded_end != 0) {
-                    noc_async_read(zeros_noc_addr, l1_write_addr, stick_size_padded_end);
-                    l1_write_addr += stick_size_padded_end;
-                }
-#endif
-
-            } else {
-#if (not_pad_by_zero)
-                for (uint32_t j = 0; j < num_sticks_padded_read; ++j) {
-                    noc_async_read(pad_val_noc_addr, l1_write_addr, row_major_min_bytes);
-                    l1_write_addr += row_major_min_bytes;
-                }
-#else
-                for (uint32_t j = 0; j < num_zero_pad_sticks_read; ++j) {
-                    auto read_bytes = j == num_zero_pad_sticks_read - 1 ? last_zero_stick_size : 512;
-                    noc_async_read(zeros_noc_addr, l1_write_addr, read_bytes);
-                    l1_write_addr += read_bytes;
-                }
-#endif
             }
-
+            l1_write_addr += stick_size_padded_aligned;
             curr_h++;
             if (curr_h == H_padded) {
                 curr_c++;
@@ -142,7 +128,6 @@ void kernel_main() {
             }
         }
         noc_async_read_barrier();
-
         cb_push_back(cb_in0, num_read_per_barrier);
     }
 }

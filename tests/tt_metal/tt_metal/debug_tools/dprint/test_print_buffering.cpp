@@ -7,8 +7,8 @@
 #include "debug_tools_fixture.hpp"
 #include "gtest/gtest.h"
 #include "debug_tools_test_utils.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
 
 ////////////////////////////////////////////////////////////////////////////////
 // A test for checking that prints are properly buffered before being displayed to the user.
@@ -56,7 +56,7 @@ little mouse learned that bravery and kindness can change the world.",
     "contains several newline characters",
     "and should be displayed over multiple lines."};
 
-static void RunTest(DPrintFixture* fixture, Device* device) {
+static void RunTest(DPrintFixture* fixture, IDevice* device) {
     std::vector<CoreCoord> cores;
     cores.emplace_back(0, 0);
     cores.emplace_back(0, 1);
@@ -85,8 +85,8 @@ static void RunTest(DPrintFixture* fixture, Device* device) {
 }  // namespace
 
 TEST_F(DPrintFixture, TensixTestPrintBuffering) {
-    for (Device* device : this->devices_) {
+    for (IDevice* device : this->devices_) {
         this->RunTestOnDevice(
-            [](DPrintFixture* fixture, Device* device) { CMAKE_UNIQUE_NAMESPACE::RunTest(fixture, device); }, device);
+            [](DPrintFixture* fixture, IDevice* device) { CMAKE_UNIQUE_NAMESPACE::RunTest(fixture, device); }, device);
     }
 }

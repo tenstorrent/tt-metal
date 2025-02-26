@@ -5,11 +5,11 @@
 #include "circular_buffer_test_utils.hpp"
 #include "device_fixture.hpp"
 #include "gtest/gtest.h"
-#include "tt_metal/detail/tt_metal.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/buffers/circular_buffer.hpp"
+#include <tt-metalium/tt_metal.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/circular_buffer.hpp>
 
-#include "tt_metal/common/core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
 
 #include "gtest/gtest.h"
 
@@ -25,7 +25,7 @@ constexpr size_t cb_page_size = 16;
 constexpr size_t n_cbs = 32;
 constexpr size_t data_buffer_size = cb_n_pages * cb_n_pages;
 
-std::vector<std::shared_ptr<Buffer>> create_output_buffers(Program& program, Device* device) {
+std::vector<std::shared_ptr<Buffer>> create_output_buffers(Program& program, IDevice* device) {
     std::vector<std::shared_ptr<Buffer>> output_buffers;
     output_buffers.reserve(n_cbs);
     for (size_t i = 0; i < n_cbs; i++) {
@@ -40,7 +40,6 @@ std::vector<std::shared_ptr<Buffer>> create_output_buffers(Program& program, Dev
                 CoreRangeSet(CoreRange(worker_core)),
                 {cb_n_pages, cb_n_pages},
                 ShardOrientation::ROW_MAJOR,
-                false,
                 {cb_n_pages, cb_n_pages},
                 {1, 1}),
         };
@@ -63,7 +62,7 @@ std::vector<uint32_t> generate_rt_args(
 
 TEST_F(DeviceFixture, TensixTestCircularBufferNonBlockingAPIs) {
     Program program;
-    Device* device = devices_.at(0);
+    IDevice* device = devices_.at(0);
 
     auto const master_semaphore = CreateSemaphore(program, worker_core, 0, CoreType::WORKER);
     auto const slave_semaphore = CreateSemaphore(program, worker_core, 0, CoreType::WORKER);

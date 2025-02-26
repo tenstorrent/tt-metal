@@ -9,26 +9,11 @@ import pytest
 from models.utility_functions import (
     is_wormhole_b0,
     skip_for_grayskull,
-    is_grayskull,
-    is_wormhole_b0,
-    is_x2_harvested,
-    is_blackhole,
-    skip_for_blackhole,
-    is_blackhole,
 )
-from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc, check_with_pcc_without_tensor_printout
+from tests.ttnn.utils_for_testing import check_with_pcc_without_tensor_printout
 import ttnn
-import readline  # optional, will allow Up/Down/History in the console
-import code
 
 torch.set_printoptions(linewidth=400, profile="full", sci_mode=False)
-
-
-def drop_to_interpreter():
-    variables = globals().copy()
-    variables.update(locals())
-    shell = code.InteractiveConsole(variables)
-    shell.interact()
 
 
 def run_conv_transpose2d(
@@ -64,6 +49,7 @@ def run_conv_transpose2d(
     has_bias=True,
     shard_layout=None,
     auto_shard=False,
+    mirror_kernel=True,
 ):
     torch.manual_seed(0)
     conv_input_shape = [batch_size, input_channels, input_height, input_width]
@@ -89,6 +75,11 @@ def run_conv_transpose2d(
     tt_weight_tensor = ttnn.from_torch(
         torch_weight_tensor, weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32
     )
+    if not mirror_kernel:
+        torch_flipped_weights = torch.flip(torch_weight_tensor, [2, 3])
+        tt_weight_tensor = ttnn.from_torch(
+            torch_flipped_weights, weights_dtype if weights_dtype != ttnn.bfloat8_b else ttnn.float32
+        )
     tt_bias_tensor = None
     if has_bias:
         tt_bias_tensor = ttnn.from_torch(
@@ -104,18 +95,21 @@ def run_conv_transpose2d(
     conv_config = ttnn.Conv2dConfig(
         dtype=activations_dtype,
         weights_dtype=weights_dtype,
-        math_fidelity=math_fidelity,
         shard_layout=shard_layout,
         input_channels_alignment=(
             16 if use_shallow_conv_variant or (input_channels == 16 and input_height == 115) else 32
         ),
         deallocate_activation=deallocate_activation,
-        fp32_dest_acc_enabled=fp32_accum,
-        packer_l1_accum_enabled=packer_l1_acc,
         enable_act_double_buffer=False,
         enable_split_reader=False,
         enable_subblock_padding=False,
         output_layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=math_fidelity,
+        fp32_dest_acc_en=fp32_accum,
+        packer_l1_acc=packer_l1_acc,
     )
     if config_override and "act_block_h" in config_override:
         conv_config.act_block_h_override = config_override["act_block_h"]
@@ -123,7 +117,7 @@ def run_conv_transpose2d(
     if config_override and "act_block_w_div" in config_override:
         conv_config.act_block_w_div = config_override["act_block_w_div"]
 
-    [tt_output_tensor_on_device, out_height, out_width, weights_device, bias_device] = ttnn.conv_transpose2d(
+    [tt_output_tensor_on_device, [out_height, out_width], [weights_device, bias_device]] = ttnn.conv_transpose2d(
         input_tensor=tt_input_tensor,
         weight_tensor=tt_weight_tensor,
         in_channels=input_channels,
@@ -139,7 +133,11 @@ def run_conv_transpose2d(
         input_height=input_height,
         input_width=input_width,
         conv_config=conv_config,
+        compute_config=compute_config,
         groups=groups,
+        mirror_kernel=mirror_kernel,
+        return_output_dim=True,
+        return_weights_and_bias=True,
     )
     logger.info(f"Conv2d Transpose Input = {(input_height, input_width)} Output = {out_height, out_width}")
 
@@ -165,7 +163,6 @@ def run_conv_transpose2d(
     assert passing
 
 
-@skip_for_blackhole()
 @skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 64 * 1024}], indirect=True)
 @pytest.mark.parametrize(
@@ -198,6 +195,7 @@ def run_conv_transpose2d(
         ttnn.bfloat16,
     ],
 )
+@pytest.mark.parametrize("mirror_kernel", [True, False])
 def test_simple_conv_t2d(
     device,
     use_program_cache,
@@ -218,9 +216,10 @@ def test_simple_conv_t2d(
     out_pad_w,
     config,
     shard_layout,
+    mirror_kernel,
 ):
-    if device.core_grid.y != 8:
-        pytest.skip("Needs 8x8 Grid")
+    if device.core_grid.y != 8 and is_wormhole_b0():
+        pytest.skip("Needs 8x8 Grid for Wormhole_b0")
     run_conv_transpose2d(
         device,
         math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -242,4 +241,5 @@ def test_simple_conv_t2d(
         config_override=config,
         shard_layout=shard_layout,
         auto_shard=True,
+        mirror_kernel=mirror_kernel,
     )

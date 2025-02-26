@@ -73,7 +73,7 @@ def test_llama_attention_inference(batch, num_chunks, mesh_device, use_program_c
     mask = encoder_utils.build_encoder_attention_mask(pt_block_input, ar, ntok, num_chunks, 1)
     pt_block_input = pt_block_input.reshape(batch, -1, dim)
 
-    attention_input = model_args.prepare_inputs_ttnn_prefill(
+    attention_input = model_args.prepare_residual_tensor_prefill(
         tt_attention_input.view(num_chunks, ntok, dim),
         force_replicated=True,
     )

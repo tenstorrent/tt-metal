@@ -5,12 +5,13 @@
 #pragma once
 
 #include <cstddef>
-#include "common/core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
 
 namespace ttnn::operations::transformer {
 
 struct SDPAProgramConfig {
     CoreCoord compute_with_storage_grid_size;
+    std::optional<CoreRangeSet> sub_core_grids;
     std::size_t q_chunk_size;
     std::size_t k_chunk_size;
     std::optional<bool> exp_approx_mode;

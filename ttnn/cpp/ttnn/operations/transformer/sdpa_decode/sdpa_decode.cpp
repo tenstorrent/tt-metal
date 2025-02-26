@@ -4,8 +4,10 @@
 
 #include "sdpa_decode.hpp"
 
+#include <utility>
+
 #include "device/sdpa_decode_op.hpp"
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/run_operation.hpp"
 
 using namespace tt::tt_metal;
@@ -31,7 +33,7 @@ inline uint32_t get_chunk_size(uint32_t s) {
 namespace ttnn::operations::transformer {
 
 ttnn::Tensor ExecuteScaledDotProductAttentionDecode::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const ttnn::Tensor& input_tensor_v,
@@ -107,12 +109,12 @@ ttnn::Tensor ExecuteScaledDotProductAttentionDecode::invoke(
         cur_pos_tensor,
         scale,
         memory_config,
-        program_config,
+        std::move(program_config),
         compute_kernel_config);
 }
 
 ttnn::Tensor ExecutePagedScaledDotProductAttentionDecode::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const ttnn::Tensor& input_tensor_v,
@@ -188,7 +190,7 @@ ttnn::Tensor ExecutePagedScaledDotProductAttentionDecode::invoke(
         cur_pos_tensor,
         scale,
         memory_config,
-        program_config,
+        std::move(program_config),
         compute_kernel_config);
 }
 

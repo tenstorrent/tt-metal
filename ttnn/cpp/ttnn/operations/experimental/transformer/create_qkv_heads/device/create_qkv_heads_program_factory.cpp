@@ -3,12 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "create_qkv_heads_device_operation.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/common/constants.hpp"
-#include "tt_metal/detail/util.hpp"
-
-// FIXME: ARCH_NAME specific include
-#include "tensix_types.h"  // L1_SIZE
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/util.hpp>
 
 using namespace tt::constants;
 using namespace tt;
@@ -34,7 +31,7 @@ static inline operation::ProgramWithCallbacks create_heads_combined_qkv_sharded(
     const uint32_t tiles_per_group =
         elements_per_group / TILE_WIDTH;  // head_dim % TILE_WIDTH == 0 so guaranteed to fit evenly
 
-    const auto& input_shape = input_tensor.get_legacy_shape();
+    const auto& input_shape = input_tensor.get_padded_shape();
 
     TT_FATAL(
         input_shape[3] % elements_per_group == 0,
@@ -92,14 +89,15 @@ static inline operation::ProgramWithCallbacks create_heads_combined_qkv_sharded(
         block_ht * TILE_HEIGHT);
     uint32_t per_core_tiles = block_ht * block_wt;
 
+    const uint32_t l1_size = input_tensor.device()->l1_size_per_core();
     auto data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
     uint32_t single_tile_size = tile_size(data_format);
     TT_FATAL(
-        L1_SIZE >= 2 * per_core_tiles * single_tile_size,
+        l1_size >= 2 * per_core_tiles * single_tile_size,
         "Workload of Tiles {} at Tile Size {} (times 2 for output) exceeds L1 capacity {}",
         per_core_tiles,
         single_tile_size,
-        L1_SIZE);
+        l1_size);
 
     std::vector<uint32_t> num_tiles_per_group;
     num_tiles_per_group.reserve(output.size());

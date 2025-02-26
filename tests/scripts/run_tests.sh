@@ -6,6 +6,7 @@ set -eo pipefail
 default_tt_arch="grayskull"
 default_pipeline_type="post_commit"
 default_dispatch_mode="fast"
+default_model="None"
 
 assert_requested_module_matches() {
     local actual=$1
@@ -64,9 +65,11 @@ run_post_commit_pipeline_tests() {
     # Switch to modules only soon
     # run_module_tests "$tt_arch" "llrt" "$pipeline_type"
     if [[ $dispatch_mode == "slow" ]]; then
-        ./tests/scripts/run_pre_post_commit_regressions_slow_dispatch.sh
+        ./tests/scripts/run_cpp_fd2_tests.sh
+        ./tests/scripts/run_cpp_unit_tests.sh
     elif [[ $dispatch_mode == "fast" ]]; then
-        ./tests/scripts/run_pre_post_commit_regressions_fast_dispatch.sh
+        ./tests/scripts/run_python_api_unit_tests.sh
+        ./tests/scripts/run_cpp_unit_tests.sh
     fi
 }
 
@@ -125,9 +128,11 @@ run_stress_post_commit_pipeline_tests() {
         echo "Info: [stress] Doing iteration $iter"
         start_time=$(date +%s%N) # capture nanoseconds
         if [[ $dispatch_mode == "slow" ]]; then
-            ./tests/scripts/run_pre_post_commit_regressions_slow_dispatch.sh
+            ./tests/scripts/run_cpp_fd2_tests.sh
+            ./tests/scripts/run_cpp_unit_tests.sh
         else
-            ./tests/scripts/run_pre_post_commit_regressions_fast_dispatch.sh
+            ./tests/scripts/run_python_api_unit_tests.sh
+            ./tests/scripts/run_cpp_unit_tests.sh
         fi
         end_time=$(date +%s%N)
         elapsed=$((end_time - start_time))/1000000000
@@ -198,6 +203,17 @@ run_ccl_microbenchmarks_pipeline_tests() {
     fi
 }
 
+run_T3K_microbenchmarks_pipeline_tests() {
+    local tt_arch=$1
+    local pipeline_type=$2
+    local dispatch_mode=$3
+
+    export TT_METAL_DEVICE_PROFILER=1
+
+    source python_env/bin/activate
+    pytest -svv tests/tt_metal/microbenchmarks/ethernet/test_fabric_edm_bandwidth.py
+}
+
 run_ttnn_sweeps_pipeline_tests() {
     local tt_arch=$1
     local pipeline_type=$2
@@ -250,8 +266,9 @@ unit_tg_device() {
     local tt_arch=$1
     local pipeline_type=$2
     local dispatch_mode=$3
+    local model=$4
 
-    ./tests/scripts/tg/run_tg_unit_tests.sh
+    ./tests/scripts/tg/run_tg_unit_tests.sh --model "$model"
 }
 
 # Run tg frequent tests
@@ -259,8 +276,9 @@ frequent_tg_device() {
     local tt_arch=$1
     local pipeline_type=$2
     local dispatch_mode=$3
+    local model=$4
 
-    ./tests/scripts/tg/run_tg_frequent_tests.sh
+    ./tests/scripts/tg/run_tg_frequent_tests.sh --model "$model"
 }
 
 # Run tg demo tests
@@ -268,8 +286,9 @@ demos_tg_device() {
     local tt_arch=$1
     local pipeline_type=$2
     local dispatch_mode=$3
+    local model=$4
 
-    ./tests/scripts/tg/run_tg_demo_tests.sh
+    ./tests/scripts/tg/run_tg_demo_tests.sh --model "$model"
 }
 
 # Run tg model perf tests
@@ -324,6 +343,7 @@ run_pipeline_tests() {
     local tt_arch=$1
     local pipeline_type=$2
     local dispatch_mode=$3
+    local model=$4
 
     # Add your logic here for pipeline-specific tests
     echo "Running tests for pipeline: $pipeline_type with tt-arch: $tt_arch"
@@ -342,6 +362,8 @@ run_pipeline_tests() {
         run_microbenchmarks_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
     elif [[ $pipeline_type == "ccl_microbenchmarks" ]]; then
         run_ccl_microbenchmarks_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
+    elif [[ $pipeline_type == "T3K_microbenchmark" ]]; then
+        run_T3K_microbenchmarks_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
     elif [[ $pipeline_type == "ttnn_sweeps" ]]; then
         run_ttnn_sweeps_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
     # T3000 pipelines
@@ -355,13 +377,13 @@ run_pipeline_tests() {
         model_perf_t3000_device "$tt_arch" "$pipeline_type" "$dispatch_mode"
     # TG pipelines
     elif [[ $pipeline_type == "unit_tg_device" ]]; then
-        unit_tg_device "$tt_arch" "$pipeline_type" "$dispatch_mode"
+        unit_tg_device "$tt_arch" "$pipeline_type" "$dispatch_mode" "$model"
     elif [[ $pipeline_type == "frequent_tg_device" ]]; then
-        frequent_tg_device "$tt_arch" "$pipeline_type" "$dispatch_mode"
+        frequent_tg_device "$tt_arch" "$pipeline_type" "$dispatch_mode" "$model"
     elif [[ $pipeline_type == "demos_tg_device" ]]; then
-        demos_tg_device "$tt_arch" "$pipeline_type" "$dispatch_mode"
+        demos_tg_device "$tt_arch" "$pipeline_type" "$dispatch_mode" "$model"
     elif [[ $pipeline_type == *"model_perf_tg_device" ]]; then
-        model_perf_tg_device "$tt_arch" "$pipeline_type" "$dispatch_mode"
+        model_perf_tg_device "$tt_arch" "$pipeline_type" "$dispatch_mode" "$model"
     elif [[ $pipeline_type == "ccl_perf_tg_device" ]]; then
         ./tests/ttnn/unit_tests/operations/ccl/perf/run_all_gather_profile.sh -t tg
         ./tests/ttnn/unit_tests/operations/ccl/perf/run_reduce_scatter_profile.sh -t tg
@@ -422,7 +444,13 @@ set_up_chdir() {
         return
       fi
     done
-      echo "Could not find the 'tt-metal' directory in your PYTHONPATH." 1>&2
+    for ENTRY in "${ENTRIES[@]}"; do
+      if [[ -d "$ENTRY/tt_metal" ]]; then
+        cd "$ENTRY"
+        return
+      fi
+    done
+    echo "Could not find the 'tt-metal' directory in your PYTHONPATH." 1>&2
     exit 1
 }
 
@@ -446,6 +474,10 @@ main() {
                 pipeline_type=$2
                 shift
                 ;;
+            --model)
+                model=$2
+                shift
+                ;;
             *)
                 echo "Unknown option: $1"
                 exit 1
@@ -458,6 +490,7 @@ main() {
     tt_arch=${tt_arch:-$default_tt_arch}
     dispatch_mode=${dispatch_mode:-$default_dispatch_mode}
     pipeline_type=${pipeline_type:-$default_pipeline_type}
+    model=${model:-$default_model}
 
     available_dispatch_modes=("fast" "slow")
     available_tt_archs=("grayskull" "wormhole_b0" "blackhole")
@@ -482,7 +515,7 @@ main() {
         # Module invocation
         run_module_tests "$tt_arch" "$module" "$pipeline_type"
     elif [[ -n $pipeline_type ]]; then
-        run_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode"
+        run_pipeline_tests "$tt_arch" "$pipeline_type" "$dispatch_mode" "$model"
     else
         echo "You must have at least a module or pipeline_type specified"
         exit 1

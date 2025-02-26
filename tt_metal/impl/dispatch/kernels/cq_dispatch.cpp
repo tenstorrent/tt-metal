@@ -12,7 +12,7 @@
 
 #include "debug/assert.h"
 #include "debug/dprint.h"
-#include "tt_metal/impl/dispatch/cq_commands.hpp"
+#include <cq_commands.hpp>
 #include "tt_metal/impl/dispatch/kernels/cq_common.hpp"
 #include "tt_metal/impl/dispatch/kernels/packet_queue_ctrl.hpp"
 
@@ -60,10 +60,8 @@ constexpr uint32_t downstream_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_NOC_X
 constexpr uint32_t dispatch_s_noc_xy = uint32_t(NOC_XY_ENCODING(DOWNSTREAM_SLAVE_NOC_X, DOWNSTREAM_SLAVE_NOC_Y));
 constexpr uint8_t my_noc_index = NOC_INDEX;
 constexpr uint32_t my_noc_xy = uint32_t(NOC_XY_ENCODING(MY_NOC_X, MY_NOC_Y));
-constexpr uint64_t pcie_noc_xy = uint64_t(NOC_XY_PCIE_ENCODING(
-    NOC_0_X(static_cast<uint8_t>(NOC_INDEX), noc_size_x, PCIE_NOC_X),
-    NOC_0_Y(static_cast<uint8_t>(NOC_INDEX), noc_size_y, PCIE_NOC_Y),
-    NOC_INDEX));
+constexpr uint64_t pcie_noc_xy =
+    uint64_t(NOC_XY_PCIE_ENCODING(NOC_X_PHYS_COORD(PCIE_NOC_X), NOC_Y_PHYS_COORD(PCIE_NOC_Y)));
 constexpr uint32_t dispatch_cb_page_size = 1 << dispatch_cb_log_page_size;
 
 constexpr uint32_t completion_queue_end_addr = completion_queue_base_addr + completion_queue_size;
@@ -399,17 +397,24 @@ void process_exec_buf_end_d(uint32_t& block_noc_writes_to_clear, uint32_t block_
 
 // Note that for non-paged writes, the number of writes per page is always 1
 // This means each noc_write frees up a page
-template <bool multicast>
 void process_write_linear(
     uint32_t num_mcast_dests, uint32_t& block_noc_writes_to_clear, uint32_t block_next_start_addr[]) {
     volatile tt_l1_ptr CQDispatchCmd* cmd = (volatile tt_l1_ptr CQDispatchCmd*)cmd_ptr;
+    bool multicast = num_mcast_dests > 0;
+    if (not multicast) {
+        num_mcast_dests = 1;
+    }
 
     uint32_t dst_noc = cmd->write_linear.noc_xy_addr;
     uint32_t write_offset_index = cmd->write_linear.write_offset_index;
     uint32_t dst_addr = cmd->write_linear.addr + write_offset[write_offset_index];
     uint32_t length = cmd->write_linear.length;
     uint32_t data_ptr = cmd_ptr + sizeof(CQDispatchCmd);
-    cq_noc_async_write_init_state<CQ_NOC_sNdl, multicast>(0, get_noc_addr_helper(dst_noc, dst_addr));
+    if (multicast) {
+        cq_noc_async_write_init_state<CQ_NOC_sNdl, true>(0, get_noc_addr_helper(dst_noc, dst_addr));
+    } else {
+        cq_noc_async_write_init_state<CQ_NOC_sNdl, false>(0, get_noc_addr_helper(dst_noc, dst_addr));
+    }
 
     while (length != 0) {
         // More data needs to be written, but we've exhausted the CB. Acquire more pages.
@@ -436,11 +441,7 @@ void process_write_linear(
         uint32_t available_data = cb_fence - data_ptr;
         uint32_t xfer_size = length > available_data ? available_data : length;
 
-        if constexpr (multicast) {
-            cq_noc_async_write_with_state_any_len(data_ptr, dst_addr, xfer_size, num_mcast_dests);
-        } else {
-            cq_noc_async_write_with_state_any_len(data_ptr, dst_addr, xfer_size);
-        }
+        cq_noc_async_write_with_state_any_len(data_ptr, dst_addr, xfer_size, num_mcast_dests);
         // Increment counters based on the number of packets that were written
         uint32_t num_noc_packets_written = div_up(xfer_size, NOC_MAX_BURST_SIZE);
         noc_nonposted_writes_num_issued[noc_index] += num_noc_packets_written;
@@ -456,11 +457,7 @@ void process_write_linear(
 void process_write(uint32_t& block_noc_writes_to_clear, uint32_t block_next_start_addr[]) {
     volatile tt_l1_ptr CQDispatchCmd* cmd = (volatile tt_l1_ptr CQDispatchCmd*)cmd_ptr;
     uint32_t num_mcast_dests = cmd->write_linear.num_mcast_dests;
-    if (num_mcast_dests == 0) {
-        process_write_linear<false>(1, block_noc_writes_to_clear, block_next_start_addr);
-    } else {
-        process_write_linear<true>(num_mcast_dests, block_noc_writes_to_clear, block_next_start_addr);
-    }
+    process_write_linear(num_mcast_dests, block_noc_writes_to_clear, block_next_start_addr);
 }
 
 template <bool is_dram>
@@ -575,6 +572,18 @@ void process_write_packed(
     // dst_addr << " " << ENDL();
     uint32_t writes = 0;
     uint32_t mcasts = 0;
+    auto wait_for_barrier = [&]() {
+        if (!mcast) {
+            return;
+        }
+        noc_nonposted_writes_num_issued[noc_index] += writes;
+        noc_nonposted_writes_acked[noc_index] += mcasts;
+        writes = 0;
+        mcasts = 0;
+        // Workaround mcast path reservation hangs by always waiting for a write
+        // barrier before doing an mcast that isn't linked to a previous mcast.
+        noc_async_write_barrier();
+    };
     WritePackedSubCmd* sub_cmd_ptr = (WritePackedSubCmd*)l1_cache;
     while (count != 0) {
         uint32_t dst_noc = sub_cmd_ptr->noc_xy_addr;
@@ -589,6 +598,7 @@ void process_write_packed(
             if (cb_fence == block_next_start_addr[rd_block_idx]) {
                 orphan_size = cb_fence - data_ptr;
                 if (orphan_size != 0) {
+                    wait_for_barrier();
                     cq_noc_async_write_with_state<CQ_NOC_SNdL>(data_ptr, dst, orphan_size, num_dests);
                     writes++;
                     mcasts += num_dests;
@@ -622,6 +632,7 @@ void process_write_packed(
                 uint32_t remainder_xfer_size = xfer_size - orphan_size;
                 // Creating full NOC addr not needed as we are not programming the noc coords
                 uint32_t remainder_dst_addr = dst_addr + orphan_size;
+                wait_for_barrier();
                 cq_noc_async_write_with_state<CQ_NOC_SnDL>(
                     data_ptr, remainder_dst_addr, remainder_xfer_size, num_dests);
                 // Reset values expected below
@@ -636,6 +647,7 @@ void process_write_packed(
             }
         }
 
+        wait_for_barrier();
         cq_noc_async_write_with_state<CQ_NOC_SNdl>(data_ptr, dst, xfer_size, num_dests);
         writes++;
         mcasts += num_dests;
@@ -686,12 +698,26 @@ void process_write_packed_large(
     CQDispatchWritePackedLargeSubCmd* sub_cmd_ptr = (CQDispatchWritePackedLargeSubCmd*)l1_cache;
 
     bool init_state = true;
+    bool must_barrier = true;
     while (count != 0) {
         uint32_t dst_addr = sub_cmd_ptr->addr + local_write_offset;
         uint32_t length = sub_cmd_ptr->length;
         uint32_t num_dests = sub_cmd_ptr->num_mcast_dests;
-        uint32_t pad_size = align(length, alignment) - length;
+        uint32_t pad_size = align_power_of_2(length, alignment) - length;
         uint32_t unlink = sub_cmd_ptr->flags & CQ_DISPATCH_CMD_PACKED_WRITE_LARGE_FLAG_UNLINK;
+        auto wait_for_barrier = [&]() {
+            if (!must_barrier) {
+                return;
+            }
+            noc_nonposted_writes_num_issued[noc_index] += writes;
+
+            mcasts += num_dests * writes;
+            noc_nonposted_writes_acked[noc_index] = mcasts;
+            writes = 0;
+            // Workaround mcast path reservation hangs by always waiting for a write
+            // barrier before doing an mcast that isn't linked to a previous mcast.
+            noc_async_write_barrier();
+        };
 
         // Only re-init state after we have unlinked the last transaction
         // Otherwise we assume NOC coord hasn't changed
@@ -699,8 +725,8 @@ void process_write_packed_large(
         // to determine linking
         if (init_state) {
             uint32_t dst_noc = sub_cmd_ptr->noc_xy_addr;
-            // TODO: Linking should be set to true once atomic txn is handled properly
             cq_noc_async_write_init_state<CQ_NOC_sNdl, true, true>(0, get_noc_addr_helper(dst_noc, dst_addr));
+            must_barrier = true;
         }
 
         sub_cmd_ptr++;
@@ -733,10 +759,13 @@ void process_write_packed_large(
             uint32_t xfer_size;
             if (length > available_data) {
                 xfer_size = available_data;
+                wait_for_barrier();
                 cq_noc_async_write_with_state_any_len(data_ptr, dst_addr, xfer_size, num_dests);
+                must_barrier = false;
             } else {
                 xfer_size = length;
                 if (unlink) {
+                    wait_for_barrier();
                     uint32_t rem_xfer_size =
                         cq_noc_async_write_with_state_any_len<false>(data_ptr, dst_addr, xfer_size, num_dests);
                     // Unset Link flag
@@ -744,8 +773,12 @@ void process_write_packed_large(
                     uint32_t data_offset = xfer_size - rem_xfer_size;
                     cq_noc_async_write_with_state<CQ_NOC_SnDL, CQ_NOC_wait>(
                         data_ptr + data_offset, dst_addr + data_offset, rem_xfer_size, num_dests);
+                    // Later writes must barrier, but the `must_barrier = true` in the `if (init_state)` block above
+                    // will see to that.
                 } else {
+                    wait_for_barrier();
                     cq_noc_async_write_with_state_any_len(data_ptr, dst_addr, xfer_size, num_dests);
+                    must_barrier = false;
                 }
             }
             writes += div_up(xfer_size, NOC_MAX_BURST_SIZE);
@@ -881,7 +914,9 @@ void process_go_signal_mcast_cmd() {
     volatile uint32_t tt_l1_ptr* aligned_go_signal_storage = (volatile uint32_t tt_l1_ptr*)cmd_ptr;
     *aligned_go_signal_storage = cmd->mcast.go_signal;
 
-    while (*worker_sem_addr < cmd->mcast.wait_count);
+    while (*worker_sem_addr < cmd->mcast.wait_count) {
+        invalidate_l1_cache();
+    }
     uint8_t go_signal_noc_data_idx = cmd->mcast.noc_data_start_index;
     // send go signal update here
     for (uint32_t i = 0, num_mcasts = cmd->mcast.num_mcast_txns; i < num_mcasts; ++i) {
@@ -950,7 +985,7 @@ re_run_command:
     switch (cmd->base.cmd_id) {
         case CQ_DISPATCH_CMD_WRITE_LINEAR:
             WAYPOINT("DWB");
-            DPRINT << "cmd_write\n";
+            DPRINT << "cmd_write_linear\n";
             process_write(block_noc_writes_to_clear, block_next_start_addr);
             WAYPOINT("DWD");
             break;
@@ -1215,6 +1250,8 @@ void kernel_main() {
 
     // Confirm expected number of pages, spinning here is a leak
     cb_wait_all_pages<my_dispatch_cb_sem_id>(upstream_total_acquired_page_count);
+
+    noc_async_full_barrier();
 
     DPRINT << "dispatch_" << is_h_variant << is_d_variant << ": out" << ENDL();
 }

@@ -4,7 +4,6 @@
 
 #include "interleaved_to_sharded_op.hpp"
 
-#include "tt_metal/host_api.hpp"
 
 #include "interleaved_to_sharded_program_factory.hpp"
 
@@ -29,16 +28,14 @@ void InterleavedToShardedDeviceOperation::validate(const std::vector<Tensor>& in
 }
 
 
-std::vector<tt::tt_metal::LegacyShape> InterleavedToShardedDeviceOperation::compute_output_shapes(const std::vector<Tensor> &input_tensors) const {
+std::vector<ttnn::TensorSpec> InterleavedToShardedDeviceOperation::compute_output_specs(const std::vector<Tensor> &input_tensors) const {
     const auto& input_tensor = input_tensors.at(0);
-    return {input_tensor.get_legacy_shape()};
-}
-
-
-std::vector<Tensor> InterleavedToShardedDeviceOperation::create_output_tensors(const std::vector<Tensor> &input_tensors) const {
-    const auto& input_tensor = input_tensors.at(0);
-    return operation::generic_create_output_tensors(
-        *this, input_tensors, this->output_dtype, input_tensor.get_layout(), this->output_mem_config);
+    return {TensorSpec(input_tensor.get_logical_shape(), TensorLayout::fromPaddedShape(
+        output_dtype,
+        PageConfig(input_tensor.get_layout()),
+        output_mem_config,
+        input_tensor.get_logical_shape(),
+        input_tensor.get_padded_shape()))};
 }
 
 operation::ProgramWithCallbacks InterleavedToShardedDeviceOperation::create_program(const std::vector<Tensor>& input_tensors, std::vector<Tensor> &output_tensors) const {

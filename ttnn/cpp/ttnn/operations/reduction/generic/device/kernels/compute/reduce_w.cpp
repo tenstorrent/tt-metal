@@ -18,9 +18,9 @@ void MAIN {
     uint32_t NC = get_compile_time_arg_val(2);
 
 #ifndef REDUCE_ROW_SUM_VIA_MM
-    reduce_init<true>(tt::CBIndex::c_0, tt::CBIndex::c_2);
+    reduce_init<true>(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_16);
 #else
-    mm_init(tt::CBIndex::c_0, tt::CBIndex::c_2);
+    mm_init(tt::CBIndex::c_0, tt::CBIndex::c_2, tt::CBIndex::c_16);
 #endif
 
     cb_wait_front(tt::CBIndex::c_2, 1);  // scaler tile from the reader

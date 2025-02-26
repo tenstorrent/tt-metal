@@ -1,0 +1,82 @@
+namespace tt.tt_metal.flatbuffer;
+
+
+enum Arch: uint {
+  Grayskull = 0,
+  Wormhole_b0 = 1,
+  Blackhole = 2,
+}
+
+enum DataMovementProcessor : byte {
+  RISCV_0,
+  RISCV_1
+}
+
+enum NOC : byte {
+  NOC_0,
+  NOC_1
+}
+
+enum NOC_MODE : byte {
+  DM_DEDICATED_NOC,
+  DM_DYNAMIC_NOC
+}
+
+enum EthMode : ubyte {
+  SENDER = 0,
+  RECEIVER = 1,
+  IDLE = 2
+}
+
+enum MathFidelity : ubyte {
+  LoFi = 0,
+  HiFi2 = 2,
+  HiFi3 = 3,
+  HiFi4 = 4,
+  Invalid = 255
+}
+
+enum DataFormat : uint8 {
+  Float32 = 0,
+  Float16 = 1,
+  Bfp8 = 2,
+  Bfp4 = 3,
+  Bfp2 = 11,
+  Float16_b = 5,
+  Bfp8_b = 6,
+  Bfp4_b = 7,
+  Bfp2_b = 15,
+  Lf8 = 10,
+  Fp8_e4m3 = 26, // 0x1A in decimal
+  Int8 = 14,
+  Tf32 = 4,
+  UInt8 = 30,
+  UInt16 = 9,
+  Int32 = 8,
+  UInt32 = 24,
+  RawUInt8 = 240, // 0xf0 in decimal
+  RawUInt16 = 241, // 0xf1 in decimal
+  RawUInt32 = 242, // 0xf2 in decimal
+  Invalid = 255
+}
+
+enum UnpackToDestMode : byte {
+  Default,
+  UnpackToDestFp32
+}
+
+table DefineEntry {
+  key: string;
+  value: string;
+}
+
+// Rather than serialize all members, use Tile constructor arguments.
+struct Tile {
+  tile_shape: [uint32:2];
+  transpose_tile: bool;
+}
+
+// Wrappers to support std::optional scalars in flatbuffers.
+table BoolOptional { value: bool; }
+table Uint8Optional { value: uint8; }
+table Uint32Optional { value: uint32; }

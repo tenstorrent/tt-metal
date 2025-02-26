@@ -131,7 +131,7 @@ class TtLlamaCrossAttention(LightweightModule):
             eps=self.norm_eps,
         )
 
-    def compute_xattn_kv_cache(self, xattn_tokens, user_id, xattn_cache):
+    def compute_xattn_kv_cache(self, xattn_tokens, user_id, xattn_cache, cross_page_table=None):
         """
         Uses xattn_tokens to compute K, V. Should be run inside of forward_prefill.
         Updates xattn_cache with K, V (TODO: support page table for KV cache)
@@ -187,23 +187,29 @@ class TtLlamaCrossAttention(LightweightModule):
 
         xk = self.k_norm(xk, mode="decode")
 
-        # NOTE: Doing repeat in xattn_cache generation to avoid massive overhead in forward
-        xk = ttnn.repeat_interleave(xk, self.n_local_heads // self.n_local_kv_heads, dim=1)
-        xv = ttnn.repeat_interleave(xv, self.n_local_heads // self.n_local_kv_heads, dim=1)
-
         k_cache, v_cache = xattn_cache
 
-        # Work around fill_cache memory constraint by making these sharded
-        k_fill = ttnn.interleaved_to_sharded(xk, self.model_config["XATTN_KV_PREFILL_MEM_CFG"](seqlen_y))
-        v_fill = ttnn.interleaved_to_sharded(xv, self.model_config["XATTN_KV_PREFILL_MEM_CFG"](seqlen_y))
+        if cross_page_table:
+            ttnn.experimental.paged_fill_cache(
+                k_cache, ttnn.experimental.typecast(xk, k_cache.dtype), cross_page_table, batch_idx=user_id
+            )
+            ttnn.experimental.paged_fill_cache(
+                v_cache, ttnn.experimental.typecast(xv, v_cache.dtype), cross_page_table, batch_idx=user_id
+            )
+        else:
+            # Work around fill_cache memory constraint by making these sharded
+            k_fill = ttnn.interleaved_to_sharded(xk, self.model_config["XATTN_KV_PREFILL_MEM_CFG"](seqlen_y))
+            v_fill = ttnn.interleaved_to_sharded(xv, self.model_config["XATTN_KV_PREFILL_MEM_CFG"](seqlen_y))
 
-        ttnn.fill_cache(k_cache, k_fill, user_id)
-        ttnn.fill_cache(v_cache, v_fill, user_id)
+            ttnn.fill_cache(k_cache, k_fill, user_id)
+            ttnn.fill_cache(v_cache, v_fill, user_id)
 
         return xk, xv
 
-    def forward_decode(self, x_11SH, xattn_mask, full_text_row_masked_out_mask_1NSH, xattn_cache):
-        batch = xattn_cache[0].shape[0]
+    def forward_decode(
+        self, x_11SH, xattn_mask, full_text_row_masked_out_mask_1NSH, xattn_cache, cross_page_table=None
+    ):
+        batch = xattn_mask.shape[1]
 
         x_11SH = ttnn.sharded_to_interleaved(x_11SH, ttnn.L1_MEMORY_CONFIG)  # TODO support sharded input
 
@@ -237,17 +243,29 @@ class TtLlamaCrossAttention(LightweightModule):
         )
 
         # TODO: Can I get rid of the KV repeat_interleave?
-
-        output = ttnn.transformer.scaled_dot_product_attention_decode(
-            xq,
-            xk,
-            xv,
-            is_causal=False,
-            attn_mask=xattn_mask,
-            scale=self.scale,
-            program_config=program_config,
-            compute_kernel_config=self.compute_kernel_config_sdpa,
-        )
+        if cross_page_table:
+            output = ttnn.transformer.paged_scaled_dot_product_attention_decode(
+                xq,
+                xk,
+                xv,
+                is_causal=False,
+                attn_mask=xattn_mask,
+                page_table_tensor=cross_page_table,
+                scale=self.scale,
+                program_config=program_config,
+                compute_kernel_config=self.compute_kernel_config_sdpa,
+            )
+        else:
+            output = ttnn.transformer.scaled_dot_product_attention_decode(
+                xq,
+                xk,
+                xv,
+                is_causal=False,
+                attn_mask=xattn_mask,
+                scale=self.scale,
+                program_config=program_config,
+                compute_kernel_config=self.compute_kernel_config_sdpa,
+            )
 
         # WARNING: this broadcast is also broken, must broadcast on host
         output = ttnn.mul(output, full_text_row_masked_out_mask_1NSH)
@@ -274,20 +292,30 @@ class TtLlamaCrossAttention(LightweightModule):
                 dim=3,
                 math_op=ttnn.ReduceType.Sum,
                 num_links=1,
+                topology=self.configuration.ccl_topology(),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
         return ttnn.to_memory_config(output, self.model_config["DECODE_RESIDUAL_MEMCFG"])
 
     def forward_prefill(
-        self, x_11SH, xattn_mask, full_text_row_masked_out_mask_1NSH, xattn_cache, user_id, vision_tokens
+        self,
+        x_11SH,
+        xattn_mask,
+        full_text_row_masked_out_mask_1NSH,
+        xattn_cache,
+        user_id,
+        vision_tokens,
+        cross_page_table=None,
     ):
         seq_len = x_11SH.shape[-2]
         # B, S, D
         assert seq_len % 32 == 0 and seq_len > 0, "Seqlen must be divisible by 32"
 
         # Compute cross attention cache. Return contiguous caches
-        k_cache_user, v_cache_user = self.compute_xattn_kv_cache(vision_tokens, user_id, xattn_cache)
+        k_cache_user, v_cache_user = self.compute_xattn_kv_cache(
+            vision_tokens, user_id, xattn_cache, cross_page_table=cross_page_table
+        )
         cache_seq_len = k_cache_user.shape[-2]
 
         if seq_len > 1024:
@@ -312,27 +340,22 @@ class TtLlamaCrossAttention(LightweightModule):
 
         xq = self.q_norm(xq, mode="prefill")
 
-        scores = ttnn.matmul(
-            xq,
-            ttnn.transpose(k_cache_user, -1, -2),
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config_hifi2,
-            program_config=self.model_config["VISION_XATTN_SCORE_PROGCFG"](seq_len, cache_seq_len),
+        program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=self.mesh_device.compute_with_storage_grid_size(),
+            q_chunk_size=128,
+            k_chunk_size=128,
+            exp_approx_mode=False,
         )
 
-        scores = ttnn.multiply(scores, self.scale)
-        # WARNING: This add is buggy if xattn_mask has to be broadcasted to n_local_heads. Workaround is to broadcast on host side
-        scores = ttnn.add(scores, xattn_mask)
-        scores = ttnn.softmax(scores, dim=-1, numeric_stable=True)
-
-        output = ttnn.matmul(
-            scores,
+        output = ttnn.transformer.scaled_dot_product_attention(
+            xq,
+            k_cache_user,
             v_cache_user,
-            dtype=ttnn.bfloat16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config_hifi4,
-            program_config=self.model_config["VISION_XATTN_OUTPUT_PROGCFG"](seq_len, cache_seq_len),
+            is_causal=False,
+            attn_mask=xattn_mask,
+            scale=self.scale,
+            program_config=program_config,
+            compute_kernel_config=self.compute_kernel_config_sdpa,
         )
 
         # WARNING: this broadcast is also broken, must broadcast on host
@@ -360,6 +383,7 @@ class TtLlamaCrossAttention(LightweightModule):
                 dim=3,
                 math_op=ttnn.ReduceType.Sum,
                 num_links=1,
+                topology=self.configuration.ccl_topology(),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             return dense_out_reduced
@@ -367,7 +391,15 @@ class TtLlamaCrossAttention(LightweightModule):
             return output
 
     def forward(
-        self, x_11SH, xattn_mask, full_text_row_masked_out_mask_1NSH, xattn_cache, mode, user_id=0, vision_tokens=None
+        self,
+        x_11SH,
+        xattn_mask,
+        full_text_row_masked_out_mask_1NSH,
+        xattn_cache,
+        mode,
+        user_id=0,
+        vision_tokens=None,
+        cross_page_table=None,
     ):
         if mode == "prefill":
             return self.forward_prefill(
@@ -377,6 +409,9 @@ class TtLlamaCrossAttention(LightweightModule):
                 xattn_cache,
                 user_id=user_id,
                 vision_tokens=vision_tokens,
+                cross_page_table=cross_page_table,
             )
         else:
-            return self.forward_decode(x_11SH, xattn_mask, full_text_row_masked_out_mask_1NSH, xattn_cache)
+            return self.forward_decode(
+                x_11SH, xattn_mask, full_text_row_masked_out_mask_1NSH, xattn_cache, cross_page_table=cross_page_table
+            )

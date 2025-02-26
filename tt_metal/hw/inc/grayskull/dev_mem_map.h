@@ -40,18 +40,23 @@
 #define MEM_NCRISC_LOCAL_SIZE (4 * 1024)
 #define MEM_TRISC_LOCAL_SIZE (2 * 1024)
 
+// Memory for (dram/l1)_bank_to_noc_xy arrays, size needs to be atleast 2 * NUM_NOCS * (NUM_DRAM_BANKS + NUM_L1_BANKS)
+#define MEM_BANK_TO_NOC_XY_SIZE 1024
+// Memory for bank_to_dram_offset and bank_to_l1_offset arrays, size needs to be atleast 4 * (NUM_DRAM_BANKS + NUM_L1_BANKS)
+#define MEM_BANK_OFFSET_SIZE 1024
+
 #define NCRISC_HAS_IRAM 1
 #define MEM_NCRISC_IRAM_BASE 0xFFC00000
 #define MEM_NCRISC_IRAM_SIZE (16 * 1024)
 
 /////////////
 // Firmware/kernel code holes
-#define MEM_BRISC_FIRMWARE_SIZE (5 * 1024 + 416)
+#define MEM_BRISC_FIRMWARE_SIZE (5 * 1024 + 624)
 // TODO: perhaps put NCRISC FW in the scratch area and free 1.5K after init (GS/WH)
-#define MEM_NCRISC_FIRMWARE_SIZE 1616
-#define MEM_TRISC0_FIRMWARE_SIZE 1536
+#define MEM_NCRISC_FIRMWARE_SIZE 1824
+#define MEM_TRISC0_FIRMWARE_SIZE (1536 + 128)
 #define MEM_TRISC1_FIRMWARE_SIZE 1536
-#define MEM_TRISC2_FIRMWARE_SIZE 1536
+#define MEM_TRISC2_FIRMWARE_SIZE (1536 + 128)
 
 #define MEM_BRISC_KERNEL_SIZE (24 * 1024)
 #define MEM_NCRISC_KERNEL_SIZE MEM_NCRISC_IRAM_SIZE
@@ -66,7 +71,7 @@
 #define MEM_L1_BARRIER 12
 #define MEM_MAILBOX_BASE 16
 // Magic size must be big enough to hold dev_msgs_t.  static_asserts will fire if this is too small
-#define MEM_MAILBOX_SIZE 12256
+#define MEM_MAILBOX_SIZE 12640
 // These are used in ncrisc-halt.S, asserted in ncrisc.cc to be valid
 #define MEM_NCRISC_HALT_STACK_MAILBOX_ADDRESS MEM_MAILBOX_BASE + 4
 #define MEM_SLAVE_RUN_MAILBOX_ADDRESS MEM_MAILBOX_BASE + 8
@@ -100,6 +105,9 @@
 #define MEM_TRISC1_INIT_LOCAL_L1_BASE_SCRATCH (MEM_TRISC0_INIT_LOCAL_L1_BASE_SCRATCH + MEM_TRISC_LOCAL_SIZE)
 #define MEM_TRISC2_INIT_LOCAL_L1_BASE_SCRATCH (MEM_TRISC1_INIT_LOCAL_L1_BASE_SCRATCH + MEM_TRISC_LOCAL_SIZE)
 
+#define MEM_BANK_TO_NOC_SCRATCH (MEM_TRISC2_INIT_LOCAL_L1_BASE_SCRATCH + MEM_TRISC_LOCAL_SIZE)
+#define MEM_BANK_TO_NOC_SIZE (MEM_BANK_TO_NOC_XY_SIZE + MEM_BANK_OFFSET_SIZE)
+
 /////////////
 // Stack info
 // Increasing the stack size comes at the expense of less local memory for globals
@@ -125,5 +133,7 @@
 #define MEM_IERISC_MAP_END 0
 #define MEM_IERISC_INIT_LOCAL_L1_BASE_SCRATCH 0
 #define MEM_IERISC_STACK_SIZE 0
+#define MEM_IERISC_BANK_TO_NOC_SCRATCH 0
+#define MEM_IERISC_BANK_TO_NOC_SIZE 0
 
 #define MEM_IERISC_KERNEL_PAD 0

@@ -309,46 +309,63 @@ def get_ops(timeseries):
                 opsDict[opID].append(ts)
 
     ordered_ops = list(opsDict.keys())
+    # sort over timestamps
     ordered_ops.sort(key=lambda x: opsDict[x][0][1])
 
     ops = []
 
+    ops.append({"timeseries": []})
     for opID in ordered_ops:
+        if opID == 0:
+            continue
         op = opsDict[opID]
-        ops.append({"timeseries": []})
-        coresOp = {}
+        opCores = {}
+
+        op.sort(key=lambda ts: ts[1])
+        for ts in op:
+            if len(ts) == 5:
+                timerID, tsValue, statData, risc, core = ts
+                opCores[core] = None
+
         for ts in op:
             timerID, *_ = ts
             if timerID["id"] == 0:
                 continue
+            opIsDone = False
             if len(ts) == 5:
                 timerID, tsValue, statData, risc, core = ts
-                if core in coresOp:
+                if opCores[core]:
                     if (risc == "BRISC" and timerID["zone_name"] == "BRISC-FW" and timerID["type"] == "ZONE_START") or (
                         risc == "ERISC" and timerID["zone_name"] == "ERISC-FW" and timerID["type"] == "ZONE_START"
                     ):
-                        for opDuration in coresOp.values():
-                            assert len(opDuration) == 2, "Unexpected FW start"
-
-                        ops.append({"timeseries": []})
-                        coresOp = {}
+                        assert False, "Unexpected FW start"
                     elif (risc == "BRISC" and timerID["zone_name"] == "BRISC-FW" and timerID["type"] == "ZONE_END") or (
                         risc == "ERISC" and timerID["zone_name"] == "ERISC-FW" and timerID["type"] == "ZONE_END"
                     ):
-                        assert len(coresOp[core]) == 1, "Unexpected FW end"
-                        coresOp[core] = (coresOp[core][0], timerID)
+                        assert len(opCores[core]) == 1, "Unexpected FW end"
+                        opCores[core] = (opCores[core][0], timerID)
+                        opIsDone = True
+                        for core, coreOp in opCores.items():
+                            if not coreOp or len(coreOp) != 2:
+                                opIsDone = False
+                                break
                 else:
                     if (risc == "BRISC" and timerID["zone_name"] == "BRISC-FW" and timerID["type"] == "ZONE_START") or (
                         risc == "ERISC" and timerID["zone_name"] == "ERISC-FW" and timerID["type"] == "ZONE_START"
                     ):
-                        coresOp[core] = (timerID,)
+                        opCores[core] = (timerID,)
             if len(ts) == 4:
                 timerID, tsValue, statData, risc = ts
-                if (risc == "BRISC" and timerID["zone_name"] == "BRISC-FW" and timerID["type"] == "ZONE_START") or (
-                    risc == "ERISC" and timerID["zone_name"] == "ERISC-FW" and timerID["type"] == "ZONE_START"
+                if (risc == "BRISC" and timerID["zone_name"] == "BRISC-FW" and timerID["type"] == "ZONE_END") or (
+                    risc == "ERISC" and timerID["zone_name"] == "ERISC-FW" and timerID["type"] == "ZONE_END"
                 ):
-                    ops.append({"timeseries": []})
+                    opIsDone = True
             ops[-1]["timeseries"].append(ts)
+            if opIsDone:
+                ops.append({"timeseries": []})
+                for core in opCores:
+                    opCores[core] = None
+    ops.pop()
     return ops
 
 
@@ -419,16 +436,19 @@ def translate_metaData(metaData, core, risc):
 def determine_conditions(timerID, metaData, analysis):
     currCore = analysis["start"]["core"] if "core" in analysis["start"].keys() else None
     currRisc = analysis["start"]["risc"]
-    currStart = (timerID["zone_name"],) + translate_metaData(metaData, currCore, currRisc)
+    currPhase = (timerID["type"],) if "zone_phase" in analysis["start"].keys() else (None,)
+    currStart = (timerID["zone_name"],) + currPhase + translate_metaData(metaData, currCore, currRisc)
 
     currCore = analysis["end"]["core"] if "core" in analysis["end"].keys() else None
     currRisc = analysis["end"]["risc"]
-    currEnd = (timerID["zone_name"],) + translate_metaData(metaData, currCore, currRisc)
+    currPhase = (timerID["type"],) if "zone_phase" in analysis["end"].keys() else (None,)
+    currEnd = (timerID["zone_name"],) + currPhase + translate_metaData(metaData, currCore, currRisc)
 
     if type(analysis["start"]["zone_name"]) == list:
         desStart = [
             (
                 zoneName,
+                analysis["start"]["zone_phase"] if "zone_phase" in analysis["start"].keys() else None,
                 analysis["start"]["core"] if "core" in analysis["start"].keys() else None,
                 analysis["start"]["risc"],
             )
@@ -438,6 +458,7 @@ def determine_conditions(timerID, metaData, analysis):
         desStart = [
             (
                 analysis["start"]["zone_name"],
+                analysis["start"]["zone_phase"] if "zone_phase" in analysis["start"].keys() else None,
                 analysis["start"]["core"] if "core" in analysis["start"].keys() else None,
                 analysis["start"]["risc"],
             )
@@ -447,6 +468,7 @@ def determine_conditions(timerID, metaData, analysis):
         desEnd = [
             (
                 zoneName,
+                analysis["end"]["zone_phase"] if "zone_phase" in analysis["end"].keys() else None,
                 analysis["end"]["core"] if "core" in analysis["end"].keys() else None,
                 analysis["end"]["risc"],
             )
@@ -456,6 +478,7 @@ def determine_conditions(timerID, metaData, analysis):
         desEnd = [
             (
                 analysis["end"]["zone_name"],
+                analysis["end"]["zone_phase"] if "zone_phase" in analysis["end"].keys() else None,
                 analysis["end"]["core"] if "core" in analysis["end"].keys() else None,
                 analysis["end"]["risc"],
             )
@@ -489,7 +512,6 @@ def first_last_analysis(timeseries, analysis):
                     )
                 )
                 break
-
     return durations
 
 
@@ -499,6 +521,22 @@ def session_first_last_analysis(riscData, analysis):
 
 def op_first_last_analysis(riscData, analysis):
     return first_last_analysis(riscData["timeseries"], analysis)
+
+
+def op_core_first_last_analysis(riscData, analysis):
+    core_ops = {}
+    durations = []
+    for ts in riscData["timeseries"]:
+        assert len(ts) == 5
+        core = ts[4]
+        if core in core_ops:
+            core_ops[core].append(ts)
+        else:
+            core_ops[core] = [ts]
+    for core, timeseries in core_ops.items():
+        durations.append(first_last_analysis(timeseries, analysis)[0])
+
+    return durations
 
 
 def get_duration(riscData, analysis):
@@ -547,6 +585,8 @@ def timeseries_analysis(riscData, name, analysis):
         tmpList = session_first_last_analysis(riscData, analysis)
     elif analysis["type"] == "op_first_last":
         tmpList = op_first_last_analysis(riscData, analysis)
+    elif analysis["type"] == "op_core_first_last":
+        tmpList = op_core_first_last_analysis(riscData, analysis)
     elif analysis["type"] == "sum":
         tmpList = get_duration(riscData, analysis)
     else:

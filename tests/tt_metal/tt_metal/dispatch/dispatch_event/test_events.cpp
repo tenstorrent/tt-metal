@@ -4,17 +4,17 @@
 
 #include "command_queue_fixture.hpp"
 #include "gtest/gtest.h"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/detail/tt_metal.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include "impl/debug/watcher_server.hpp"
-#include "tt_metal/impl/event/event.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
+#include <tt-metalium/event.hpp>
+#include <tt-metalium/command_queue.hpp>
 
 using std::vector;
 using namespace tt::tt_metal;
 
 constexpr uint32_t completion_queue_event_offset = sizeof(CQDispatchCmd);
-constexpr uint32_t completion_queue_page_size = dispatch_constants::TRANSFER_PAGE_SIZE;
+constexpr uint32_t completion_queue_page_size = DispatchSettings::TRANSFER_PAGE_SIZE;
 
 enum class DataMovementMode : uint8_t { WRITE = 0, READ = 1 };
 
@@ -122,7 +122,7 @@ TEST_F(CommandQueueEventFixture, TestEventsEnqueueRecordEventAndSynchronize) {
 // Negative test. Host syncing on a future event that isn't actually issued.
 // Ensure that expected hang is seen, which indicates event sync feature is working properly.
 TEST_F(CommandQueueEventFixture, TestEventsEnqueueRecordEventAndSynchronizeHang) {
-    tt::llrt::OptionsG.set_test_mode_enabled(true);  // Required for finish hang breakout.
+    tt::llrt::RunTimeOptions::get_instance().set_test_mode_enabled(true);  // Required for finish hang breakout.
 
     auto future_event = std::make_shared<Event>();
     EnqueueRecordEvent(this->device_->command_queue(), future_event);
@@ -153,7 +153,7 @@ TEST_F(CommandQueueEventFixture, TestEventsEnqueueRecordEventAndSynchronizeHang)
 TEST_F(CommandQueueEventFixture, TestEventsQueueWaitForEventHang) {
     // Skip this test until #7216 is implemented.
     GTEST_SKIP();
-    tt::llrt::OptionsG.set_test_mode_enabled(true);  // Required for finish hang breakout.
+    tt::llrt::RunTimeOptions::get_instance().set_test_mode_enabled(true);  // Required for finish hang breakout.
 
     auto future_event = std::make_shared<Event>();
     EnqueueRecordEvent(this->device_->command_queue(), future_event);

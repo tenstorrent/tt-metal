@@ -10,6 +10,10 @@
 #include <sstream>
 
 #include "autograd/tensor.hpp"
+#include "schedulers/lambda_scheduler.hpp"
+#include "schedulers/linear_scheduler.hpp"
+#include "schedulers/scheduler_base.hpp"
+#include "schedulers/sequential_scheduler.hpp"
 #include "serialization/msgpack_file.hpp"
 #include "serialization/serialization.hpp"
 
@@ -25,32 +29,42 @@ public:
     void reset();
 };
 
+std::unique_ptr<ttml::schedulers::LRSchedulerBase> create_idendity_scheduler(
+    ttml::optimizers::OptimizerBase *optimizer, [[maybe_unused]] size_t total_steps);
+
+std::unique_ptr<ttml::schedulers::LRSchedulerBase> create_warmup_with_linear_scheduler(
+    ttml::optimizers::OptimizerBase *optimizer, size_t total_steps);
+
 std::string read_file_to_str(const std::string &file_path);
 
-template <typename Model, typename Optimizer>
-void save_model_and_optimizer(
+template <typename Model>
+void save_training_state(
     std::string &model_path,
     const std::shared_ptr<Model> &model,
-    Optimizer &optimizer,
+    const std::unique_ptr<ttml::schedulers::LRSchedulerBase> &scheduler,
     const std::string &model_name,
     const std::string &optimizer_name) {
     ttml::serialization::MsgPackFile serializer;
     ttml::serialization::write_module(serializer, model_name, model.get());
-    ttml::serialization::write_optimizer(serializer, optimizer_name, &optimizer);
+    ttml::serialization::write_optimizer(serializer, optimizer_name, scheduler->get_optimizer().get());
+    ttml::serialization::write_state_dict(serializer, "scheduler", scheduler->get_state_dict());
     serializer.serialize(model_path);
 }
 
-template <typename Model, typename Optimizer>
-void load_model_and_optimizer(
+template <typename Model>
+void load_training_state(
     std::string &model_path,
     const std::shared_ptr<Model> &model,
-    Optimizer &optimizer,
+    const std::unique_ptr<ttml::schedulers::LRSchedulerBase> &scheduler,
     const std::string &model_name,
     const std::string &optimizer_name) {
     ttml::serialization::MsgPackFile deserializer;
     deserializer.deserialize(model_path);
     ttml::serialization::read_module(deserializer, model_name, model.get());
-    ttml::serialization::read_optimizer(deserializer, optimizer_name, &optimizer);
+    ttml::serialization::read_optimizer(deserializer, optimizer_name, scheduler->get_optimizer().get());
+    auto state_dict = scheduler->get_state_dict();
+    ttml::serialization::read_state_dict(deserializer, "scheduler", state_dict);
+    scheduler->set_state_dict(state_dict);
 }
 
 uint32_t round_up_to_tile(uint32_t value, uint32_t tile_size = 32);
@@ -110,11 +124,14 @@ std::string generate_run_name(const TrainingConfig &config, bool add_time_to_run
     if (config.gradient_accumulation_steps > 1) {
         ss << "_grad_acc_" << config.gradient_accumulation_steps;
     }
-
+    ss << "_sched_" << config.scheduler_type;
     if (add_time_to_run_name) {
         auto now = std::chrono::system_clock::now();
         std::time_t current_time = std::chrono::system_clock::to_time_t(now);
         ss << "_date_" << std::put_time(std::localtime(&current_time), "%Y-%m-%d_%H:%M:%S");
     }
+
     return ss.str();
 }
+
+void initialize_device(bool ddp);

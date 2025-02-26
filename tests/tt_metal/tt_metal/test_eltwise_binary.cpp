@@ -6,11 +6,11 @@
 #include <functional>
 #include <random>
 
-#include "common/bfloat16.hpp"
+#include <tt-metalium/bfloat16.hpp>
 #include "test_gold_impls.hpp"
-#include "tt_metal/host_api.hpp"
-#include "tt_metal/impl/dispatch/command_queue.hpp"
-#include "tt_metal/impl/device/device.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/command_queue.hpp>
+#include <tt-metalium/device.hpp>
 
 using std::vector;
 using namespace tt;
@@ -35,7 +35,7 @@ int main(int argc, char** argv) {
     //                      Device Setup
     ////////////////////////////////////////////////////////////////////////////
     int device_id = 0;
-    tt_metal::Device* device = tt_metal::CreateDevice(device_id);
+    tt_metal::IDevice* device = tt_metal::CreateDevice(device_id);
 
     CommandQueue& cq = device->command_queue();
 
@@ -76,10 +76,6 @@ int main(int argc, char** argv) {
             auto dst_dram_buffer = CreateBuffer(dram_config);
 
             uint32_t dram_buffer_dst_addr = dst_dram_buffer->address();
-
-            auto dram_src0_noc_xy = src0_dram_buffer->noc_coordinates();
-            auto dram_src1_noc_xy = src1_dram_buffer->noc_coordinates();
-            auto dram_dst_noc_xy = dst_dram_buffer->noc_coordinates();
 
             uint32_t src0_cb_index = tt::CBIndex::c_0;
             uint32_t num_input_tiles = 2;
@@ -158,19 +154,17 @@ int main(int argc, char** argv) {
 
             EnqueueWriteBuffer(cq, std::ref(src1_dram_buffer), src1_vec, false);
 
-            const std::array<uint32_t, 9> reader_args = {
+            const std::array<uint32_t, 7> reader_args = {
                 dram_buffer_src0_addr,
-                (std::uint32_t)dram_src0_noc_xy.x,
-                (std::uint32_t)dram_src0_noc_xy.y,
+                0,
                 num_tiles,
                 dram_buffer_src1_addr,
-                (std::uint32_t)dram_src1_noc_xy.x,
-                (std::uint32_t)dram_src1_noc_xy.y,
+                0,
                 num_tiles,
                 0};
 
-            const std::array<uint32_t, 4> writer_args = {
-                dram_buffer_dst_addr, (std::uint32_t)dram_dst_noc_xy.x, (std::uint32_t)dram_dst_noc_xy.y, num_tiles};
+            const std::array<uint32_t, 3> writer_args = {
+                dram_buffer_dst_addr, 0, num_tiles};
 
             SetRuntimeArgs(program, unary_writer_kernel, core, writer_args);
             SetRuntimeArgs(program, binary_reader_kernel, core, reader_args);

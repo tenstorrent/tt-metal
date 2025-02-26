@@ -12,7 +12,7 @@ namespace tt {
 
 namespace tt_metal {
 inline namespace v0 {
-class Device;
+class IDevice;
 }  // namespace v0
 }  // namespace tt_metal
 
@@ -25,7 +25,7 @@ class Device;
 
 This call is not thread safe, and there is only one instance of print server supported at a time.
 */
-void DprintServerAttach(tt::tt_metal::Device* device);
+void DprintServerAttach(tt::tt_metal::IDevice* device);
 
 /*
 @brief Detach a device so it is no longer monitored by the print server. If no devices are present
@@ -36,7 +36,7 @@ void DprintServerAttach(tt::tt_metal::Device* device);
 
 Note that this api call is not thread safe at the moment.
 */
-void DprintServerDetach(tt::tt_metal::Device* device);
+void DprintServerDetach(tt::tt_metal::IDevice* device);
 
 /**
 @brief Set device side profiler state.
@@ -92,6 +92,6 @@ void DPrintServerClearSignals();
 /**
 @brief Returns true if the DPRINT server reads any dispatch cores on a given device.
 */
-bool DPrintServerReadsDispatchCores(tt::tt_metal::Device* device);
+bool DPrintServerReadsDispatchCores(tt::tt_metal::IDevice* device);
 
 }  // namespace tt

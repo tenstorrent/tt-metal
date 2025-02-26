@@ -4,15 +4,15 @@
 
 import torch
 import ttnn
-from ttnn import ReplicateTensorToMesh, ConcatMeshToTensor
+from ttnn import ReplicateTensorToMesh, ShardTensor2dMesh
 from models.common.lightweightmodule import LightweightModule
 from models.demos.llama3.tt.llama_common import precompute_freqs, get_rot_transformation_mat, gather_cos_sin
 from models.utility_functions import nearest_32
 from loguru import logger
 
 
-def compute_gather_cos_sin(dhead, end, theta, position_ids, use_scaled_rope):
-    cos, sin = precompute_freqs(dhead, end, theta, use_scaled_rope)
+def compute_gather_cos_sin(dhead, end, theta, scale_factor, orig_context_len, position_ids):
+    cos, sin = precompute_freqs(dhead, end, theta, scale_factor, orig_context_len)
     return gather_cos_sin(position_ids, cos, sin)
 
 
@@ -23,8 +23,9 @@ class TtLlamaRotarySetup(LightweightModule):
         batch_size: int,
         head_dim: int,
         max_seq_len: int,
-        rope_theta: float = 10000,
-        use_scaled_rope: bool = False,
+        rope_theta: float,
+        scale_factor: float,  # use None to disable rope scaling
+        orig_context_len: int,  # only used if scaling enabled
         datatype=ttnn.bfloat16,
     ):
         super().__init__()
@@ -34,30 +35,33 @@ class TtLlamaRotarySetup(LightweightModule):
         self.device = device
         self.is_mesh_device = isinstance(device, ttnn._ttnn.multi_device.MeshDevice)
         self.num_devices = device.get_num_devices() if self.is_mesh_device else 1
-
+        if self.num_devices == 32:
+            self.batch_size_per_device_group = max(self.batch_size // list(device.shape)[1], 1)
+        else:
+            self.batch_size_per_device_group = self.batch_size
         self.core_grid = device.compute_with_storage_grid_size()
-        num_cores = self.core_grid.x * self.core_grid.y
 
         # Generate the cos/sin matrices needed for ttnn.embedding op
         cos_matrix, sin_matrix = compute_gather_cos_sin(
             dhead=head_dim,
             end=max_seq_len * 2,
             theta=rope_theta,
+            scale_factor=scale_factor,
+            orig_context_len=orig_context_len,
             position_ids=torch.arange(max_seq_len),
-            use_scaled_rope=use_scaled_rope,
         )
 
         self.cos_matrix = ttnn.from_torch(
             cos_matrix,
             device=device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
+            layout=ttnn.TILE_LAYOUT,
             dtype=datatype,
             mesh_mapper=ReplicateTensorToMesh(device) if self.is_mesh_device else None,
         )
         self.sin_matrix = ttnn.from_torch(
             sin_matrix,
             device=device,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
+            layout=ttnn.TILE_LAYOUT,
             dtype=datatype,
             mesh_mapper=ReplicateTensorToMesh(device) if self.is_mesh_device else None,
         )
@@ -68,7 +72,7 @@ class TtLlamaRotarySetup(LightweightModule):
             1,
             1,
             batch_size,
-            1
+            1,
             # 1, 1, num_cores, 1
         )  # Repeat across all cores on device
         trans_mat_mem_config = ttnn.create_sharded_memory_config(
@@ -84,12 +88,32 @@ class TtLlamaRotarySetup(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
             dtype=datatype,
             memory_config=trans_mat_mem_config,
+            mesh_mapper=(
+                ShardTensor2dMesh(
+                    device,
+                    dims=(None, 2) if (self.num_devices == 32 and batch_size > 1) else (None, None),
+                    mesh_shape=list(device.shape),
+                )
+                if self.is_mesh_device
+                else None
+            ),
+        )
+
+        # TODO: Colman, should this be TILE_SIZE or head_dim? Why should it be different for prefill and decode?
+        prefill_trans_mat_torch = get_rot_transformation_mat(dhead=head_dim)
+        self.transformation_mat_prefill = ttnn.from_torch(
+            prefill_trans_mat_torch,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=datatype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ReplicateTensorToMesh(device) if self.is_mesh_device else None,
         )
 
-    def get_trans_mats(self):
+    def get_both_trans_mats(self):
         assert self.transformation_mat is not None, "Transformation matrix not initialized"
-        return self.transformation_mat
+        assert self.transformation_mat_prefill is not None, "Prefill Transformation matrix not initialized"
+        return {"decode": self.transformation_mat, "prefill": self.transformation_mat_prefill}
 
     def get_rot_idxs(self, position_idxs, on_host=False):
         assert isinstance(position_idxs, torch.Tensor), "Position ids must be a torch tensor"
@@ -109,7 +133,7 @@ class TtLlamaRotarySetup(LightweightModule):
                 position_idxs,
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ReplicateTensorToMesh(self.device) if self.num_devices > 1 else None,
+                mesh_mapper=ReplicateTensorToMesh(self.device) if self.is_mesh_device else None,
             )
         else:  # On device
             rot_idxs = ttnn.as_tensor(
@@ -147,9 +171,9 @@ class TtLlamaRotarySetup(LightweightModule):
         cos = ttnn.transpose(cos, 1, 2)  # [1, batch, 1[32], head_dim]
         sin = ttnn.transpose(sin, 1, 2)  # [1, batch, 1[32], head_dim]
 
-        if self.batch_size % ttnn.TILE_SIZE != 0:
-            cos = cos[:, : self.batch_size, :, :]
-            sin = sin[:, : self.batch_size, :, :]
+        if self.batch_size_per_device_group % ttnn.TILE_SIZE != 0:
+            cos = cos[:, : self.batch_size_per_device_group, :, :]
+            sin = sin[:, : self.batch_size_per_device_group, :, :]
 
         grid = ttnn.num_cores_to_corerangeset(self.batch_size, self.core_grid, row_wise=True)
         mem_config = ttnn.create_sharded_memory_config(

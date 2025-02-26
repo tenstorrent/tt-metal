@@ -13,7 +13,6 @@ from models.demos.llama3.tt.llama_common import (
     precompute_freqs,
     PagedAttentionConfig,
 )
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Attention
 from models.utility_functions import (
     comp_pcc,
     comp_allclose,
@@ -53,7 +52,7 @@ from models.utility_functions import skip_for_grayskull
 )
 @pytest.mark.parametrize(
     "max_seq_len",
-    (128,),  # For decode-only unit test, there's no need to run with large sequence lengths
+    (256,),  # For decode-only unit test, there's no need to run with large sequence lengths
 )
 def test_llama_attention_inference(
     max_seq_len,
@@ -71,7 +70,7 @@ def test_llama_attention_inference(
     mesh_device.enable_async(True)
 
     model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len)
-    model_args.n_layers = 1  # For the unit test, just run a sigle layer
+    model_args.n_layers = 1  # For the unit test, just run a single layer
 
     state_dict = model_args.load_state_dict()
 
@@ -81,7 +80,7 @@ def test_llama_attention_inference(
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     }
 
-    reference_model = Attention(args=model_args)
+    reference_model = model_args.reference_attention()
     reference_model.load_state_dict(partial_state_dict)
 
     seq_len = 1
@@ -97,11 +96,11 @@ def test_llama_attention_inference(
         model_args.head_dim,
         model_args.max_seq_len,
         model_args.rope_theta,
-        model_args.use_scaled_rope,
+        model_args.rope_scaling_factor,
+        model_args.orig_context_len,
     )
 
-    transformation_mats = rope_setup.get_trans_mats()
-    transformation_mats = {"decode": transformation_mats}
+    transformation_mats = rope_setup.get_both_trans_mats()
 
     page_table_tt = None
     paged_attention_config = None
@@ -124,7 +123,11 @@ def test_llama_attention_inference(
             device=mesh_device,
             dtype=ttnn.int32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device,
+                dims=(None, -2) if (model_args.is_galaxy and batch_size > 1) else (None, None),
+                mesh_shape=model_args.cluster_shape,
+            ),
         )
 
     tt_model = TtLlamaAttention(
@@ -139,7 +142,11 @@ def test_llama_attention_inference(
     )
 
     cos, sin = precompute_freqs(
-        model_args.head_dim, model_args.max_seq_len * 2, model_args.rope_theta, model_args.use_scaled_rope
+        model_args.head_dim,
+        model_args.max_seq_len * 2,
+        model_args.rope_theta,
+        model_args.rope_scaling_factor,
+        model_args.orig_context_len,
     )
     freqs_cis = torch.complex(cos, sin)
 
@@ -149,19 +156,23 @@ def test_llama_attention_inference(
         current_pos,
         device=mesh_device,
         dtype=ttnn.int32,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=ttnn.ShardTensor2dMesh(
+            mesh_device,
+            dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
+            mesh_shape=model_args.cluster_shape,
+        ),
     )
 
     for i in range(generation_length):
         # 70B attention block typically sees tensors with mean 0 and std 0.03 - 0.05 in layer 1
-        pt_attention_input = torch.randn(batch_size, seq_len, model_args.dim) * 0.05
+        pt_attention_input = torch.randn(batch_size, seq_len, model_args.dim)  # Qwen2.5 0.5B sees 0.1 to 2.1
 
         tt_attention_input = pt_attention_input.clone()
 
-        attention_input = model_args.prepare_inputs_ttnn_decode(
+        attention_input = model_args.prepare_residual_tensor_decode(
             tt_attention_input,
             model_args.model_config["SHARDED_ATTN_INPUT_MEMCFG"],
-            force_replicated=True,
+            force_replicated=False if model_args.is_galaxy else True,
         )
 
         # Get cos/sin matrices for the current position of each user
@@ -175,14 +186,13 @@ def test_llama_attention_inference(
             page_table=page_table_tt,
         )
         # multi-device attention module returns replicated output
+        tt_out = ttnn.to_torch(
+            tt_out,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),
+        )
+        tt_output_torch = tt_out[:, 0:1, : model_args.max_batch_size, : model_args.dim].view(-1, 1, model_args.dim)
 
-        tt_output_torch = (
-            ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))[0, :, :, : model_args.dim]
-            .view(1, -1, model_args.dim)
-            .permute(1, 0, 2)[: model_args.max_batch_size, :, :]
-        )  # [ batch_size, seq, hidden_dim]
-
-        # In this test all users have the same position
+        # In this test all users have the same position (if using batch > 1)
         freqs_cis_i = freqs_cis[current_pos[0], :].unsqueeze(0)
 
         reference_output = reference_model(pt_attention_input, current_pos[0], freqs_cis_i, mask=None)
@@ -198,12 +208,16 @@ def test_llama_attention_inference(
             all_tests_pass = False
 
         # Increment position
-        current_pos = torch.tensor([generation_start_pos + i for _ in range(batch_size)])
+        current_pos = torch.tensor([generation_start_pos + i + 1 for _ in range(batch_size)])
         current_pos_tensor = ttnn.from_torch(
             current_pos,
             device=mesh_device,
             dtype=ttnn.int32,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device,
+                dims=(None, 0) if (model_args.is_galaxy and batch_size > 1) else (None, None),
+                mesh_shape=model_args.cluster_shape,
+            ),
         )
 
         check_kv_cache = True
@@ -217,9 +231,14 @@ def test_llama_attention_inference(
             if paged_attention:
                 tt_layer_present = [
                     (
-                        ttnn.to_torch(cache, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))[
-                            reverse_permutation
-                        ]
+                        ttnn.to_torch(
+                            cache,
+                            mesh_composer=ttnn.ConcatMesh2dToTensor(
+                                mesh_device,
+                                dims=(1, 3) if model_args.is_galaxy else (0, 1),
+                                mesh_shape=model_args.cluster_shape,
+                            ),
+                        )[reverse_permutation][:, : model_args.n_kv_heads, :, : model_args.head_dim]
                         .reshape(
                             model_args.max_batch_size,
                             paged_attention_config.max_num_blocks // model_args.max_batch_size,
@@ -236,24 +255,26 @@ def test_llama_attention_inference(
                 ]
             else:
                 tt_layer_present = [
-                    ttnn.to_torch(cache, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=1))
+                    ttnn.to_torch(
+                        cache,
+                        mesh_composer=ttnn.ConcatMesh2dToTensor(
+                            mesh_device,
+                            dims=(1, 0) if model_args.is_galaxy else (0, 1),
+                            mesh_shape=model_args.cluster_shape,
+                        ),
+                    )[:batch_size, :, :, :]
                     for cache in tt_model.layer_past
                 ]
-
-            for i, (cache_pt, cache_tt) in enumerate(zip(pytorch_layer_present, tt_layer_present)):
-                cache_length_to_check = min(model_args.max_seq_len, generation_start_pos + generation_length + 1)
+            for label, cache_pt, cache_tt in zip(["K", "V"], pytorch_layer_present, tt_layer_present):
+                cache_length_to_check = min(model_args.max_seq_len, generation_start_pos + i + 1)
                 cache_pt = cache_pt[:, :, generation_start_pos:cache_length_to_check, :]
                 cache_tt = cache_tt[:, :, generation_start_pos:cache_length_to_check, :]
                 does_pass, output_pcc = comp_pcc(cache_pt, cache_tt, pcc)
-                if i == 0:
-                    logger.info(f"K cache output: {output_pcc}")
-                else:
-                    logger.info(f"V cache output: {output_pcc}")
-
+                logger.info(f"{label} cache output: {output_pcc}")
                 if does_pass:
-                    logger.info(f"KV Cache Passed!")
+                    logger.info(f"{label} cache Passed!")
                 else:
-                    logger.warning(f"KV Cache Failed! PCC value is lower than {pcc}")
+                    logger.warning(f"{label} Cache Failed! PCC value is lower than {pcc}")
                     all_tests_pass = False
 
     if all_tests_pass:

@@ -11,9 +11,9 @@
 #include <unordered_map>  // for unordered_map
 
 #include "fmt/base.h"                      // for format_string
-#include "tt_metal/common/assert.hpp"      // for tt_throw, TT_FATAL
-#include "tt_metal/common/base_types.hpp"  // for UnpackToDestMode
-#include "tt_metal/hw/inc/circular_buffer_constants.h"
+#include <assert.hpp>      // for tt_throw, TT_FATAL
+#include <base_types.hpp>  // for UnpackToDestMode
+#include <circular_buffer_constants.h>
 
 namespace tt {
 

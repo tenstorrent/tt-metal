@@ -20,10 +20,11 @@ FORCE_INLINE void enhanced_noc_async_read(
     const uint64_t src_noc_addr, const uint32_t dst_l1_addr, const uint32_t bytes) {
     // If you do not know the max_transfer_size at compile time write 0 to it.
     // only reads is true if we ONLY use noc_async_read and all calls to tt_memmove have use_read_datamover as True
-    if constexpr (((max_transfer_size < NOC_MAX_BURST_SIZE) && (max_transfer_size != 0)) || only_reads) {
+    if constexpr (only_reads) {
         noc_async_read_one_packet(src_noc_addr, dst_l1_addr, bytes);
     } else {
-        noc_async_read(src_noc_addr, dst_l1_addr, bytes);
+        noc_async_read<max_transfer_size == 0 ? NOC_MAX_BURST_SIZE + 1 : max_transfer_size>(
+            src_noc_addr, dst_l1_addr, bytes);
     }
 }
 
@@ -137,4 +138,48 @@ template <uint32_t a, uint32_t b>
 FORCE_INLINE constexpr uint32_t round_up() {
     return b * div_up<a, b>();
 }
+
+// Function template to swap two elements in a uint32_t array
+template <size_t N>
+FORCE_INLINE void swap_elements(uint32_t (&array)[N], size_t i, size_t j) {
+    // Perform the swap
+    uint32_t temp = array[i];
+    array[i] = array[j];
+    array[j] = temp;
+}
+
+// 2D Transpose function for debug use in reader/writer kernels
+FORCE_INLINE void transpose_2d(
+    uint32_t input_l1_addr,
+    uint32_t output_l1_addr,
+    uint32_t X,
+    uint32_t W,
+    uint32_t element_size,
+    uint32_t input_page_size,
+    uint32_t output_page_size) {
+    volatile tt_l1_ptr uint8_t* input_ptr = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(input_l1_addr);
+    volatile tt_l1_ptr uint8_t* output_ptr = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(output_l1_addr);
+    // transpose from XW, where X is outer and W inner, to WX, where W is outer and X is inner
+    // each element is element_size bytes
+    // each row is W elements, and each row is separated by input_page_size bytes
+    // each output row is X elements, and each row is separated by output_page_size bytes
+
+    for (uint32_t x = 0; x < X; ++x) {
+        for (uint32_t w = 0; w < W; ++w) {
+            // Compute the input and output addresses
+            uint32_t input_addr = x * input_page_size + w * element_size;
+            uint32_t output_addr = w * output_page_size + x * element_size;
+            // Copy the element - do we have memcpy? use this for now
+            for (uint32_t i = 0; i < element_size; ++i) {
+                output_ptr[output_addr + i] = input_ptr[input_addr + i];
+            }
+        }
+    }
+}
+
+template <uint32_t AlignReq>
+FORCE_INLINE uint32_t align_address(const uint32_t address, const uint64_t mask) {
+    return (address & mask) + AlignReq;
+}
+
 }  // namespace tt::data_movement::common

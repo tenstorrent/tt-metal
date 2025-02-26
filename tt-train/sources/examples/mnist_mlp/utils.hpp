@@ -38,8 +38,8 @@ private:
 };
 
 template <typename Model, typename Optimizer>
-void save_model_and_optimizer(
-    std::string &model_path,
+void save_training_state(
+    const std::string &model_path,
     const std::shared_ptr<Model> &model,
     Optimizer &optimizer,
     const std::string &model_name,
@@ -51,8 +51,8 @@ void save_model_and_optimizer(
 }
 
 template <typename Model, typename Optimizer>
-void load_model_and_optimizer(
-    std::string &model_path,
+void load_training_state(
+    const std::string &model_path,
     const std::shared_ptr<Model> &model,
     Optimizer &optimizer,
     const std::string &model_name,

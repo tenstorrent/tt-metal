@@ -6,7 +6,7 @@
 
 #include "dataflow_api.h"
 #include "debug/assert.h"
-#include "ttnn/cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include "cpp/ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 
 using ttnn::ccl::ShardType;
 using ttnn::ccl::WorkerXY;
@@ -21,6 +21,7 @@ static FORCE_INLINE coord_t coord_from_args(std::size_t& arg_idx) {
 }
 
 enum EDM_IO_BLOCKING_MODE {
+    FLUSH_BLOCKING,
     BLOCKING,
     NON_BLOCKING
 };
@@ -50,10 +51,24 @@ FORCE_INLINE void fetch_chunk(
 }
 
 template<ttnn::ccl::EDM_IO_BLOCKING_MODE blocking_mode = ttnn::ccl::EDM_IO_BLOCKING_MODE::BLOCKING>
+FORCE_INLINE void send_chunk_from_address_with_trid(
+    const uint32_t& local_l1_address, const uint32_t& num_pages, const uint32_t& page_size, uint32_t remote_l1_write_addr, uint8_t trid, uint8_t cmd_buf) {
+    noc_async_write_one_packet_with_trid_with_state(local_l1_address, remote_l1_write_addr, page_size * num_pages, trid, cmd_buf);
+    // TODO: this barrier will no longer be functional since we are not incrementing noc counters, remove
+    if constexpr (blocking_mode == ttnn::ccl::EDM_IO_BLOCKING_MODE::FLUSH_BLOCKING) {
+        noc_async_writes_flushed();
+    } else if constexpr (blocking_mode == ttnn::ccl::EDM_IO_BLOCKING_MODE::BLOCKING) {
+        noc_async_write_barrier();
+    }
+}
+
+template<ttnn::ccl::EDM_IO_BLOCKING_MODE blocking_mode = ttnn::ccl::EDM_IO_BLOCKING_MODE::BLOCKING>
 FORCE_INLINE void send_chunk_from_address(
     const uint32_t& local_l1_address, const uint32_t& num_pages, const uint32_t& page_size, uint64_t remote_l1_write_addr) {
     noc_async_write(local_l1_address, remote_l1_write_addr, page_size * num_pages);
-    if constexpr (blocking_mode == ttnn::ccl::EDM_IO_BLOCKING_MODE::BLOCKING) {
+    if constexpr (blocking_mode == ttnn::ccl::EDM_IO_BLOCKING_MODE::FLUSH_BLOCKING) {
+        noc_async_writes_flushed();
+    } else if constexpr (blocking_mode == ttnn::ccl::EDM_IO_BLOCKING_MODE::BLOCKING) {
         noc_async_write_barrier();
     }
 }
@@ -64,7 +79,10 @@ FORCE_INLINE void send_chunk(
     cb_wait_front(cb_id, num_pages);
     uint32_t l1_read_addr = get_read_ptr(cb_id);
     noc_async_write(l1_read_addr, remote_l1_write_addr, page_size * num_pages);
-    if constexpr (blocking_mode == ttnn::ccl::EDM_IO_BLOCKING_MODE::BLOCKING) {
+    if constexpr (blocking_mode == ttnn::ccl::EDM_IO_BLOCKING_MODE::FLUSH_BLOCKING) {
+        noc_async_writes_flushed();
+        cb_pop_front(cb_id, num_pages);
+    } else if constexpr (blocking_mode == ttnn::ccl::EDM_IO_BLOCKING_MODE::BLOCKING) {
         noc_async_write_barrier();
         cb_pop_front(cb_id, num_pages);
     }

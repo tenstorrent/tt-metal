@@ -6,7 +6,7 @@
 
 #include "moreh_sum_device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
-#include "tt_metal/common/work_split.hpp"
+#include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
 namespace ttnn::operations::moreh::moreh_sum {
@@ -20,7 +20,7 @@ MorehSumOperation::MorehSumWIntFactory::cached_program_t MorehSumOperation::More
     auto memory_config = operation_attributes.memory_config;
     const DeviceComputeKernelConfig& compute_kernel_config = operation_attributes.compute_kernel_config;
 
-    tt::tt_metal::Device* device{input.device()};
+    tt::tt_metal::IDevice* device{input.device()};
     tt::tt_metal::Program program{tt::tt_metal::CreateProgram()};
 
     ////////////////////////////////////////////////////////////////////////////

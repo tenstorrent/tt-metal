@@ -19,37 +19,59 @@ def convnet_mnist(
     conv_config = ttnn.Conv2dConfig(
         dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat16,
-        math_fidelity=ttnn.MathFidelity.LoFi,
         activation="",
         shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        math_approx_mode_enabled=True,
-        fp32_dest_acc_enabled=False,
-        packer_l1_accum_enabled=False,
         input_channels_alignment=32,
         transpose_shards=False,
         reshard_if_not_optimal=True,
         deallocate_activation=True,
         reallocate_halo_output=True,
     )
-
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
     x = ttnn.to_layout(input_tensor, layout=ttnn.ROW_MAJOR_LAYOUT)
-    [x, out_height, out_width, weights_device, bias_device] = ttnn.conv2d(
+
+    tt_weight = parameters.conv1.weight
+    tt_bias = parameters.conv1.bias
+    conv_kwargs = {
+        "in_channels": 1,
+        "out_channels": 32,
+        "batch_size": batch_size,
+        "input_height": input_tensor.shape[1],
+        "input_width": input_tensor.shape[2],
+        "kernel_size": (3, 3),
+        "stride": (1, 1),
+        "padding": (0, 0),
+        "dilation": (1, 1),
+        "groups": 1,
+        "device": device,
+        "conv_config": conv_config,
+    }
+
+    if not ttnn.is_tensor_storage_on_device(tt_weight):
+        tt_weight = ttnn.prepare_conv_weights(
+            weight_tensor=tt_weight,
+            weights_format="OIHW",
+            input_memory_config=x.memory_config(),
+            input_layout=x.get_layout(),
+            has_bias=True,
+            **conv_kwargs,
+        )
+        tt_weight = ttnn.to_device(tt_weight, device)
+
+    x = ttnn.conv2d(
         input_tensor=x,
-        weight_tensor=parameters.conv1.weight,
-        in_channels=1,
-        out_channels=32,
-        device=device,
-        bias_tensor=parameters.conv1.bias,
-        kernel_size=(3, 3),
-        stride=(1, 1),
-        padding=(0, 0),
-        batch_size=batch_size,
-        input_height=input_tensor.shape[1],
-        input_width=input_tensor.shape[2],
-        conv_config=conv_config,
+        weight_tensor=tt_weight,
+        bias_tensor=tt_bias,
+        **conv_kwargs,
+        compute_config=compute_config,
         conv_op_cache={},
         debug=True,
-        groups=1,
     )
     x = ttnn.relu(x)
 
@@ -76,23 +98,43 @@ def convnet_mnist(
             dilation=[1, 1],
         )
 
-    [x, out_height, out_width, weights_device, bias_device] = ttnn.conv2d(
+    tt_weight = parameters.conv2.weight
+    tt_bias = parameters.conv2.bias
+    conv_kwargs = {
+        "in_channels": 32,
+        "out_channels": 64,
+        "batch_size": batch_size,
+        "input_height": 15,
+        "input_width": 15,
+        "kernel_size": (3, 3),
+        "stride": (1, 1),
+        "padding": (0, 0),
+        "dilation": (1, 1),
+        "groups": 1,
+        "device": device,
+        "conv_config": conv_config,
+    }
+
+    if not ttnn.is_tensor_storage_on_device(tt_weight):
+        tt_weight = ttnn.prepare_conv_weights(
+            weight_tensor=tt_weight,
+            weights_format="OIHW",
+            input_memory_config=x.memory_config(),
+            input_layout=x.get_layout(),
+            has_bias=True,
+            **conv_kwargs,
+        )
+        tt_weight = ttnn.to_device(tt_weight, device)
+
+    x, [out_height, out_width] = ttnn.conv2d(
         input_tensor=x,
-        weight_tensor=parameters.conv2.weight,
-        in_channels=32,
-        out_channels=64,
-        device=device,
-        bias_tensor=parameters.conv2.bias,
-        kernel_size=(3, 3),
-        stride=(1, 1),
-        padding=(0, 0),
-        batch_size=batch_size,
-        input_height=15,
-        input_width=15,
-        conv_config=conv_config,
+        weight_tensor=tt_weight,
+        bias_tensor=tt_bias,
+        **conv_kwargs,
         conv_op_cache={},
         debug=False,
-        groups=1,
+        return_output_dim=True,
+        return_weights_and_bias=False,
     )
 
     x = ttnn.relu(x)

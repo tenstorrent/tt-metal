@@ -5,6 +5,7 @@
 #pragma once
 #include <cstdint>
 #include "ttnn/operations/conv/conv2d/conv2d_utils.hpp"
+#include "ttnn/decorators.hpp"
 
 namespace ttnn {
 
@@ -15,12 +16,12 @@ using OutputHeight = uint32_t;
 using OutputWidth = uint32_t;
 using Result = std::tuple<ttnn::Tensor, OutputHeight, OutputWidth, ttnn::Tensor, std::optional<ttnn::Tensor>>;
 
-struct ConvTranpose2dOperation{
+struct ConvTranpose2dOperation {
     static Result invoke(
-        uint8_t queue_id,
+        QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& weight_tensor,
-        Device * device,
+        IDevice* device,
         uint32_t in_channels,
         uint32_t out_channels,
         uint32_t batch_size,
@@ -34,13 +35,15 @@ struct ConvTranpose2dOperation{
         uint32_t groups,
         std::optional<const ttnn::Tensor> bias_tensor = std::nullopt,
         const std::optional<const Conv2dConfig>& conv_config_ = std::nullopt,
-        const std::optional<const MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<const DeviceComputeKernelConfig>& compute_config_ = std::nullopt,
+        const std::optional<const MemoryConfig>& memory_config = std::nullopt,
+        bool mirror_kernel = true);
 
     static Result invoke(
-        uint8_t queue_id,
+        QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         const ttnn::Tensor& weight_tensor,
-        MeshDevice * device,
+        MeshDevice* device,
         uint32_t in_channels,
         uint32_t out_channels,
         uint32_t batch_size,
@@ -54,13 +57,16 @@ struct ConvTranpose2dOperation{
         uint32_t groups,
         std::optional<const ttnn::Tensor> bias_tensor = std::nullopt,
         const std::optional<const Conv2dConfig>& conv_config_ = std::nullopt,
-        const std::optional<const MemoryConfig>& memory_config = std::nullopt);
+        const std::optional<const DeviceComputeKernelConfig>& compute_config_ = std::nullopt,
+        const std::optional<const MemoryConfig>& memory_config = std::nullopt,
+        bool mirror_kernel = true);
 };
 
 }  // namespace conv_transpose2d
 }  // namespace operations::conv
 }  // namespace ttnn
 
-namespace ttnn{
-    constexpr auto conv_transpose2d = ttnn::register_operation<"ttnn::conv_transpose2d", operations::conv::conv_transpose2d::ConvTranpose2dOperation>();
+namespace ttnn {
+constexpr auto conv_transpose2d =
+    ttnn::register_operation<"ttnn::conv_transpose2d", operations::conv::conv_transpose2d::ConvTranpose2dOperation>();
 }

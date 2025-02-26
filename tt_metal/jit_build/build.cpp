@@ -1,8 +1,8 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "jit_build/build.hpp"
+#include <build.hpp>
 
 #include <chrono>
 #include <filesystem>
@@ -17,10 +17,10 @@
 #include "common/executor.hpp"
 #include "jit_build/genfiles.hpp"
 #include "jit_build/kernel_args.hpp"
-#include "tools/profiler/common.hpp"
-#include "tools/profiler/profiler_state.hpp"
-#include "tt_metal/impl/dispatch/command_queue_interface.hpp"
-#include "tt_metal/impl/kernels/kernel.hpp"
+#include <common.hpp>
+#include <profiler_state.hpp>
+#include <command_queue_interface.hpp>
+#include <kernel.hpp>
 #include "tt_metal/llrt/tt_elffile.hpp"
 
 namespace fs = std::filesystem;
@@ -41,14 +41,40 @@ static std::string get_string_aliased_arch_lowercase(tt::ARCH arch) {
 
 JitBuildEnv::JitBuildEnv() {}
 
+void check_built_dir(const std::filesystem::path& dir_path, const std::filesystem::path& git_hash_path)
+{
+    if (dir_path.compare(git_hash_path) != 0) {
+        std::filesystem::remove_all(dir_path);
+    }
+}
+
 void JitBuildEnv::init(
     uint32_t build_key, tt::ARCH arch, const std::map<std::string, std::string>& device_kernel_defines) {
     // Paths
-    this->root_ = llrt::OptionsG.get_root_dir();
+    this->root_ = llrt::RunTimeOptions::get_instance().get_root_dir();
     this->out_root_ = this->root_ + "built/";
     this->arch_ = arch;
     this->arch_name_ = get_string_lowercase(arch);
     this->aliased_arch_name_ = get_string_aliased_arch_lowercase(arch);
+
+#ifndef GIT_COMMIT_HASH
+    log_info(tt::LogBuildKernels, "GIT_COMMIT_HASH not found");
+#else
+    std::string git_hash(GIT_COMMIT_HASH);
+
+    std::filesystem::path git_hash_path(this->out_root_ + git_hash);
+    std::filesystem::path root_path(this->out_root_);
+    if ((not llrt::RunTimeOptions::get_instance().get_skip_deleting_built_cache()) &&
+        std::filesystem::exists(root_path)) {
+        std::ranges::for_each(
+            std::filesystem::directory_iterator{root_path},
+            [&git_hash_path](const auto& dir_entry) { check_built_dir(dir_entry.path(), git_hash_path); });
+    } else {
+        log_info(tt::LogBuildKernels, "Skipping deleting built cache");
+    }
+
+    this->out_root_ = this->out_root_  + git_hash + "/";
+#endif
 
     this->out_firmware_root_ = this->out_root_ + to_string(build_key) + "/firmware/";
     this->out_kernel_root_ = this->out_root_ + to_string(build_key) + "/kernels/";
@@ -66,7 +92,7 @@ void JitBuildEnv::init(
     }
     common_flags += "-std=c++17 -flto -ffast-math ";
 
-    if (tt::llrt::OptionsG.get_riscv_debug_info_enabled()) {
+    if (tt::llrt::RunTimeOptions::get_instance().get_riscv_debug_info_enabled()) {
         common_flags += "-g ";
     }
 
@@ -92,7 +118,7 @@ void JitBuildEnv::init(
     this->defines_ += "-DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 ";
 
     if (tt::tt_metal::getDeviceProfilerState()) {
-        if (tt::llrt::OptionsG.get_profiler_do_dispatch_cores()) {
+        if (tt::llrt::RunTimeOptions::get_instance().get_profiler_do_dispatch_cores()) {
             // TODO(MO): Standard bit mask for device side profiler options
             this->defines_ += "-DPROFILE_KERNEL=2 ";
         } else {
@@ -100,49 +126,56 @@ void JitBuildEnv::init(
         }
     }
 
-    if (tt::llrt::OptionsG.get_watcher_enabled()) {
+    if (tt::llrt::RunTimeOptions::get_instance().get_watcher_enabled()) {
         this->defines_ += "-DWATCHER_ENABLED ";
     }
-    if (tt::llrt::OptionsG.get_watcher_noinline()) {
+    if (tt::llrt::RunTimeOptions::get_instance().get_watcher_noinline()) {
         this->defines_ += "-DWATCHER_NOINLINE ";
     }
-    for (auto& feature : tt::llrt::OptionsG.get_watcher_disabled_features()) {
+    for (auto& feature : tt::llrt::RunTimeOptions::get_instance().get_watcher_disabled_features()) {
         this->defines_ += "-DWATCHER_DISABLE_" + feature + " ";
     }
 
-    if (tt::llrt::OptionsG.get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
+    if (tt::llrt::RunTimeOptions::get_instance().get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
         this->defines_ += "-DDEBUG_PRINT_ENABLED -DL1_UNRESERVED_BASE=" +
                           to_string(hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::UNRESERVED)) +
                           " ";
     }
 
-    if (tt::llrt::OptionsG.get_record_noc_transfers()) {
+    if (tt::llrt::RunTimeOptions::get_instance().get_record_noc_transfers()) {
         this->defines_ += "-DNOC_LOGGING_ENABLED ";
     }
 
-    if (tt::llrt::OptionsG.get_kernels_nullified()) {
+    if (tt::llrt::RunTimeOptions::get_instance().get_kernels_nullified()) {
         this->defines_ += "-DDEBUG_NULL_KERNELS ";
     }
 
-    if (tt::llrt::OptionsG.get_watcher_debug_delay()) {
-        this->defines_ += "-DWATCHER_DEBUG_DELAY=" + to_string(tt::llrt::OptionsG.get_watcher_debug_delay()) + " ";
+    if (tt::llrt::RunTimeOptions::get_instance().get_watcher_debug_delay()) {
+        this->defines_ +=
+            "-DWATCHER_DEBUG_DELAY=" + to_string(tt::llrt::RunTimeOptions::get_instance().get_watcher_debug_delay()) +
+            " ";
+    }
+
+    if (tt::llrt::RunTimeOptions::get_instance().get_hw_cache_invalidation_enabled()) {
+        this->defines_ += "-DENABLE_HW_CACHE_INVALIDATION ";
     }
 
     // Includes
     // TODO(pgk) this list is insane
-    this->includes_ = string("") + "-I. " + "-I.. " + "-I" + this->root_ + " " + "-I" + this->root_ + "tt_metal " +
-                      "-I" + this->root_ + "tt_metal/include " + "-I" + this->root_ + "tt_metal/hw/inc " + "-I" +
-                      this->root_ + "tt_metal/hw/inc/debug " + "-I" + this->root_ + "tt_metal/hw/inc/" +
-                      this->aliased_arch_name_ + " " + "-I" + this->root_ + "tt_metal/hw/inc/" +
-                      this->aliased_arch_name_ + "/" + this->arch_name_ + "_defines " + "-I" + this->root_ +
-                      "tt_metal/hw/inc/" + this->aliased_arch_name_ + "/noc " + "-I" + this->root_ +
-                      "tt_metal/third_party/umd/device/api " + "-I" + this->root_ +
-                      "tt_metal/third_party/umd/device/" + this->arch_name_ + " " +  // TODO(fixme)
-                      "-I" + this->root_ + "tt_metal/hw/ckernels/" + this->arch_name_ + "/metal/common " + "-I" +
-                      this->root_ + "tt_metal/hw/ckernels/" + this->arch_name_ + "/metal/llk_io " + "-I" + this->root_ +
-                      "tt_metal/third_party/tt_llk_" + this->arch_name_ +
-                      "/common/inc " +  // TODO(fixme) datamovement fw shouldn't read this
-                      "-I" + this->root_ + "tt_metal/third_party/tt_llk_" + this->arch_name_ + "/llk_lib ";
+    this->includes_ = string("") + "-I. " + "-I.. " + "-I" + this->root_ + " " + "-I" + this->root_ + "ttnn " + "-I" +
+                      this->root_ + "tt_metal " + "-I" + this->root_ + "tt_metal/include " + "-I" + this->root_ +
+                      "tt_metal/hw/inc " + "-I" + this->root_ + "tt_metal/hostdevcommon/api " + "-I" + this->root_ +
+                      "tt_metal/hw/inc/debug " + "-I" + this->root_ + "tt_metal/hw/inc/" + this->aliased_arch_name_ +
+                      " " + "-I" + this->root_ + "tt_metal/hw/inc/" + this->aliased_arch_name_ + "/" +
+                      this->arch_name_ + "_defines " + "-I" + this->root_ + "tt_metal/hw/inc/" +
+                      this->aliased_arch_name_ + "/noc " + "-I" + this->root_ + "tt_metal/hw/ckernels/" +
+                      this->arch_name_ + "/metal/common " + "-I" + this->root_ + "tt_metal/hw/ckernels/" +
+                      this->arch_name_ + "/metal/llk_io " + "-I" + this->root_ + "tt_metal/third_party/tt_llk/tt_llk_" +
+                      this->arch_name_ + "/common/inc " +  // TODO(fixme) datamovement fw shouldn't read this
+                      "-I" + this->root_ + "tt_metal/api/" + this->aliased_arch_name_ + " " + "-I" + this->root_ +
+                      "tt_metal/api/" + this->aliased_arch_name_ + "/tt-metalium " + "-I" + this->root_ +
+                      "tt_metal/api/tt-metalium/ " + "-I" + this->root_ + "tt_metal/api/ " + "-I" + this->root_ +
+                      "tt_metal/third_party/tt_llk/tt_llk_" + this->arch_name_ + "/llk_lib ";
 
     this->lflags_ = common_flags;
     this->lflags_ += "-fno-exceptions -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles ";
@@ -183,7 +216,8 @@ void JitBuildState::finish_init() {
     }
 
     // Append hw build objects compiled offline
-    std::string build_dir = llrt::OptionsG.get_root_dir() + "runtime/hw/lib/" + get_alias(env_.arch_) + "/";
+    std::string build_dir =
+        llrt::RunTimeOptions::get_instance().get_root_dir() + "runtime/hw/lib/" + get_alias(env_.arch_) + "/";
     if (this->is_fw_) {
         if (this->target_name_ == "brisc") {
             this->link_objs_ += build_dir + "tdma_xmov.o ";
@@ -218,20 +252,20 @@ void JitBuildState::finish_init() {
 JitBuildDataMovement::JitBuildDataMovement(const JitBuildEnv& env, const JitBuiltStateConfig& build_config) :
     JitBuildState(env, build_config) {
     TT_ASSERT(this->core_id_ >= 0 && this->core_id_ < 2, "Invalid data movement processor");
-
+    this->lflags_ = env.lflags_;
+    this->cflags_ = env.cflags_;
+    this->default_compile_opt_level_ = "Os";
+    this->default_linker_opt_level_ = "Os";
     this->out_path_ = this->is_fw_ ? env_.out_firmware_root_ : env_.out_kernel_root_;
-
-    this->cflags_ = env_.cflags_ + "-Os " + "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
+    this->cflags_ = env_.cflags_ + "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
     this->includes_ = env_.includes_ + "-I " + env_.root_ + "tt_metal/hw/firmware/src " + "-I " + env_.root_ +
                       "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/common " + "-I " + env_.root_ +
                       "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/llk_io ";
 
     this->defines_ = env_.defines_;
 
-    uint32_t l1_cache_disable_mask =
-        tt::llrt::OptionsG.get_feature_riscv_mask(tt::llrt::RunTimeDebugFeatureDisableL1DataCache);
-
-    this->lflags_ = env_.lflags_ + "-Os ";
+    uint32_t l1_cache_disable_mask = tt::llrt::RunTimeOptions::get_instance().get_feature_riscv_mask(
+        tt::llrt::RunTimeDebugFeatureDisableL1DataCache);
 
     switch (this->core_id_) {
         case 0:
@@ -290,14 +324,15 @@ JitBuildDataMovement::JitBuildDataMovement(const JitBuildEnv& env, const JitBuil
 JitBuildCompute::JitBuildCompute(const JitBuildEnv& env, const JitBuiltStateConfig& build_config) :
     JitBuildState(env, build_config) {
     TT_ASSERT(this->core_id_ >= 0 && this->core_id_ < 3, "Invalid compute processor");
-
+    this->lflags_ = env.lflags_;
+    this->cflags_ = env.cflags_;
+    this->default_compile_opt_level_ = "O3";
+    this->default_linker_opt_level_ = "O3";
     this->out_path_ = this->is_fw_ ? env_.out_firmware_root_ : env_.out_kernel_root_;
 
-    this->cflags_ = env_.cflags_ + "-O3 ";
-
     this->defines_ = env_.defines_;
-    uint32_t l1_cache_disable_mask =
-        tt::llrt::OptionsG.get_feature_riscv_mask(tt::llrt::RunTimeDebugFeatureDisableL1DataCache);
+    uint32_t l1_cache_disable_mask = tt::llrt::RunTimeOptions::get_instance().get_feature_riscv_mask(
+        tt::llrt::RunTimeDebugFeatureDisableL1DataCache);
     uint32_t debug_compute_mask =
         (tt::llrt::DebugHartFlags::RISCV_TR0 | tt::llrt::DebugHartFlags::RISCV_TR1 |
          tt::llrt::DebugHartFlags::RISCV_TR2);
@@ -311,15 +346,13 @@ JitBuildCompute::JitBuildCompute(const JitBuildEnv& env, const JitBuiltStateConf
                       "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/llk_api " + "-I" + env_.root_ +
                       "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/llk_api/llk_sfpu " + "-I" + env_.root_ +
                       "runtime/sfpi/include " + "-I" + env_.root_ + "tt_metal/hw/firmware/src " + "-I" + env_.root_ +
-                      "tt_metal/third_party/tt_llk_" + env.arch_name_ + "/llk_lib ";
+                      "tt_metal/third_party/tt_llk/tt_llk_" + env.arch_name_ + "/llk_lib ";
 
     if (this->is_fw_) {
         this->srcs_.push_back("tt_metal/hw/firmware/src/trisc.cc");
     } else {
         this->srcs_.push_back("tt_metal/hw/firmware/src/trisck.cc");
     }
-
-    this->lflags_ = env_.lflags_ + "-O3 ";
 
     switch (this->core_id_) {
         case 0:
@@ -382,31 +415,65 @@ JitBuildCompute::JitBuildCompute(const JitBuildEnv& env, const JitBuiltStateConf
 JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const JitBuiltStateConfig& build_config) :
     JitBuildState(env, build_config) {
     TT_ASSERT(this->core_id_ >= 0 && this->core_id_ < 1, "Invalid active ethernet processor");
+    this->lflags_ = env.lflags_;
+    this->cflags_ = env.cflags_;
+    this->default_compile_opt_level_ = "Os";
+    this->default_linker_opt_level_ = "Os";
     this->out_path_ = this->is_fw_ ? env_.out_firmware_root_ : env_.out_kernel_root_;
 
     this->includes_ = env_.includes_ + "-I " + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ +
                       "/metal/common " + "-I " + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ +
-                      "/metal/llk_io ";
+                      "/metal/llk_io " + "-I " + env_.root_ + "tt_metal/hw/inc/ethernet ";
 
     this->defines_ = env_.defines_;
-    uint32_t l1_cache_disable_mask =
-        tt::llrt::OptionsG.get_feature_riscv_mask(tt::llrt::RunTimeDebugFeatureDisableL1DataCache);
-    if ((l1_cache_disable_mask & tt::llrt::DebugHartFlags::RISCV_ER) == tt::llrt::DebugHartFlags::RISCV_ER) {
+    uint32_t l1_cache_disable_mask = tt::llrt::RunTimeOptions::get_instance().get_feature_riscv_mask(
+        tt::llrt::RunTimeDebugFeatureDisableL1DataCache);
+    uint32_t erisc_mask = (tt::llrt::DebugHartFlags::RISCV_ER0 | tt::llrt::DebugHartFlags::RISCV_ER1);
+    if ((l1_cache_disable_mask & erisc_mask) == erisc_mask) {
         this->defines_ += "-DDISABLE_L1_DATA_CACHE ";
     }
 
-    switch (this->core_id_) {
+    // 0: core_id = 0 and not cooperative
+    // 1: core_id = 0 and cooperative
+    uint32_t build_class = (this->core_id_ << 1) | uint32_t(build_config.is_cooperative);
+
+    switch (build_class) {
         case 0: {
-            this->target_name_ = "erisc";
-            this->cflags_ = env_.cflags_ + "-Os -fno-delete-null-pointer-checks ";
+            this->target_name_ = "active_erisc";
+            this->cflags_ = env_.cflags_ + "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
 
             this->defines_ +=
                 "-DCOMPILE_FOR_ERISC "
                 "-DERISC "
                 "-DRISC_B0_HW ";
+
+            this->includes_ += "-I " + env_.root_ + "tt_metal/hw/firmware/src ";
+
             if (this->is_fw_) {
-                this->defines_ += "-DLOADING_NOC=0 ";
+                this->srcs_.push_back("tt_metal/hw/firmware/src/active_erisc.cc");
+            } else {
+                this->srcs_.push_back("tt_metal/hw/firmware/src/active_erisck.cc");
             }
+
+            if (this->is_fw_) {
+                this->lflags_ +=
+                    "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/firmware_aerisc.ld ";
+            } else {
+                this->lflags_ +=
+                    "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/kernel_aerisc.ld ";
+            }
+
+            break;
+        }
+        case 1: {
+            this->target_name_ = "erisc";
+            this->cflags_ = env_.cflags_ + " -fno-delete-null-pointer-checks ";
+
+            this->defines_ +=
+                "-DCOMPILE_FOR_ERISC "
+                "-DERISC "
+                "-DRISC_B0_HW "
+                "-DCOOPERATIVE_ERISC ";
 
             this->includes_ += "-I " + env_.root_ + "tt_metal/hw/inc/ethernet ";
 
@@ -423,16 +490,18 @@ JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const Jit
             } else {
                 linker_str = "tt_metal/hw/toolchain/erisc-b0-kernel.ld ";
             }
-            this->lflags_ = env_.lflags_ +
-                            "-Os "
-                            "-L" +
-                            env_.root_ +
+            this->lflags_ = env_.lflags_ + "-L" + env_.root_ +
                             "/tt_metal/hw/toolchain "
                             "-T" +
                             env_.root_ + linker_str;
+
             break;
         }
-        default: TT_THROW("Invalid processor ID {} for Active Ethernet core.", this->core_id_);
+        default:
+            TT_THROW(
+                "Invalid processor ID {} and cooperative scheme {} for Active Ethernet core.",
+                this->core_id_,
+                build_config.is_cooperative);
     }
     this->process_defines_at_compile = true;
 
@@ -442,6 +511,10 @@ JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const Jit
 JitBuildIdleEthernet::JitBuildIdleEthernet(const JitBuildEnv& env, const JitBuiltStateConfig& build_config) :
     JitBuildState(env, build_config) {
     TT_ASSERT(this->core_id_ >= 0 && this->core_id_ < 2, "Invalid idle ethernet processor");
+    this->lflags_ = env.lflags_;
+    this->cflags_ = env.cflags_;
+    this->default_compile_opt_level_ = "Os";
+    this->default_linker_opt_level_ = "Os";
     this->out_path_ = this->is_fw_ ? env_.out_firmware_root_ : env_.out_kernel_root_;
 
     this->includes_ = env_.includes_ + "-I " + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ +
@@ -449,17 +522,17 @@ JitBuildIdleEthernet::JitBuildIdleEthernet(const JitBuildEnv& env, const JitBuil
                       "/metal/llk_io ";
 
     this->defines_ = env_.defines_;
-    uint32_t l1_cache_disable_mask =
-        tt::llrt::OptionsG.get_feature_riscv_mask(tt::llrt::RunTimeDebugFeatureDisableL1DataCache);
-    if ((l1_cache_disable_mask & tt::llrt::DebugHartFlags::RISCV_ER) == tt::llrt::DebugHartFlags::RISCV_ER) {
+    uint32_t l1_cache_disable_mask = tt::llrt::RunTimeOptions::get_instance().get_feature_riscv_mask(
+        tt::llrt::RunTimeDebugFeatureDisableL1DataCache);
+    uint32_t erisc_mask = (tt::llrt::DebugHartFlags::RISCV_ER0 | tt::llrt::DebugHartFlags::RISCV_ER1);
+    if ((l1_cache_disable_mask & erisc_mask) == erisc_mask) {
         this->defines_ += "-DDISABLE_L1_DATA_CACHE ";
     }
 
     switch (this->core_id_) {
         case 0: {
             this->target_name_ = "idle_erisc";
-            this->cflags_ =
-                env_.cflags_ + "-Os " + "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
+            this->cflags_ = env_.cflags_ + "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
 
             this->defines_ +=
                 "-DCOMPILE_FOR_IDLE_ERISC=0 "
@@ -473,7 +546,6 @@ JitBuildIdleEthernet::JitBuildIdleEthernet(const JitBuildEnv& env, const JitBuil
             } else {
                 this->srcs_.push_back("tt_metal/hw/firmware/src/idle_erisck.cc");
             }
-            this->lflags_ = env_.lflags_ + "-Os ";
 
             if (this->is_fw_) {
                 this->lflags_ +=
@@ -487,8 +559,7 @@ JitBuildIdleEthernet::JitBuildIdleEthernet(const JitBuildEnv& env, const JitBuil
         }
         case 1: {
             this->target_name_ = "slave_idle_erisc";
-            this->cflags_ =
-                env_.cflags_ + "-Os " + "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
+            this->cflags_ = env_.cflags_ + "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
             this->defines_ +=
                 "-DCOMPILE_FOR_IDLE_ERISC=1 "
                 "-DERISC "
@@ -499,7 +570,6 @@ JitBuildIdleEthernet::JitBuildIdleEthernet(const JitBuildEnv& env, const JitBuil
             } else {
                 this->srcs_.push_back("tt_metal/hw/firmware/src/idle_erisck.cc");
             }
-            this->lflags_ = env_.lflags_ + "-Os ";
             if (this->is_fw_) {
                 this->lflags_ +=
                     "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/firmware_slave_ierisc.ld ";
@@ -537,9 +607,11 @@ void JitBuildState::compile_one(
     // ZoneScoped;
     fs::create_directories(out_dir);
 
-    // Add kernel specific defines
+    string cmd{"cd " + out_dir + " && " + env_.gpp_};
     string defines = this->defines_;
-    if (settings != nullptr) {
+
+    if (settings) {
+        // Append user args
         if (process_defines_at_compile) {
             settings->process_defines([&defines](const string& define, const string& value) {
                 defines += "-D" + define + "='" + value + "' ";
@@ -549,19 +621,21 @@ void JitBuildState::compile_one(
         settings->process_compile_time_args([&defines](int i, uint32_t value) {
             defines += "-DKERNEL_COMPILE_TIME_ARG_" + to_string(i) + "=" + to_string(value) + " ";
         });
+
+        cmd += fmt::format("-{} ", settings->get_compiler_opt_level());
+    } else {
+        cmd += fmt::format("-{} ", this->default_compile_opt_level_);
     }
 
-    string cmd;
-    cmd = "cd " + out_dir + " && ";
-    cmd += env_.gpp_;
+    // Append common args provided by the build state
     cmd += this->cflags_;
-    cmd += defines;
     cmd += this->includes_;
-    cmd += "-c -o " + obj + " " + src;
+    cmd += "-c -o " + obj + " " + src + " ";
+    cmd += defines;
 
     log_debug(tt::LogBuildKernels, "    g++ compile cmd: {}", cmd);
 
-    if (tt::llrt::OptionsG.get_watcher_enabled() && settings) {
+    if (tt::llrt::RunTimeOptions::get_instance().get_watcher_enabled() && settings) {
         log_kernel_defines_and_args(out_dir, settings->get_full_kernel_name(), defines);
     }
 
@@ -582,23 +656,21 @@ void JitBuildState::compile(const string& log_file, const string& out_dir, const
     }
 
     sync_build_step(events);
-    if (tt::llrt::OptionsG.get_watcher_enabled()) {
+    if (tt::llrt::RunTimeOptions::get_instance().get_watcher_enabled()) {
         dump_kernel_defines_and_args(env_.get_out_kernel_root_path());
     }
 }
 
-void JitBuildState::link(const string& log_file, const string& out_dir) const {
+void JitBuildState::link(const string& log_file, const string& out_dir, const JitBuildSettings* settings) const {
     // ZoneScoped;
+    string cmd{"cd " + out_dir + " && " + env_.gpp_};
     string lflags = this->lflags_;
-    if (tt::llrt::OptionsG.get_build_map_enabled()) {
+    if (tt::llrt::RunTimeOptions::get_instance().get_build_map_enabled()) {
         lflags += "-Wl,-Map=" + out_dir + "linker.map ";
     }
 
-    string cmd;
-    cmd = "cd " + out_dir + " && ";
-    cmd += env_.gpp_;
-    cmd += lflags;
-    cmd += this->link_objs_;
+    // Append user args
+    cmd += fmt::format("-{} ", settings ? settings->get_linker_opt_level() : this->default_linker_opt_level_);
 
     if (!this->is_fw_) {
         string weakened_elf_name =
@@ -606,6 +678,9 @@ void JitBuildState::link(const string& log_file, const string& out_dir) const {
         cmd += "-Wl,--just-symbols=" + weakened_elf_name + " ";
     }
 
+    // Append common args provided by the build state
+    cmd += lflags;
+    cmd += this->link_objs_;
     cmd += "-o " + out_dir + this->target_name_ + ".elf";
     log_debug(tt::LogBuildKernels, "    g++ link cmd: {}", cmd);
     if (!tt::utils::run_command(cmd, log_file, false)) {
@@ -659,9 +734,8 @@ void JitBuildState::build(const JitBuildSettings* settings) const {
     if (fs::exists(log_file)) {
         std::remove(log_file.c_str());
     }
-
     compile(log_file, out_dir, settings);
-    link(log_file, out_dir);
+    link(log_file, out_dir, settings);
     if (this->is_fw_) {
         weaken(log_file, out_dir);
     }
@@ -694,6 +768,10 @@ void jit_build_subset(const JitBuildStateSubset& build_subset, const JitBuildSet
         launch_build_step([build, settings] { build->build(settings); }, events);
     }
     sync_build_step(events);
+}
+
+void launch_build_step(const std::function<void()>& build_func, std::vector<std::shared_future<void>>& events) {
+    events.emplace_back(detail::async(build_func));
 }
 
 }  // namespace tt::tt_metal
