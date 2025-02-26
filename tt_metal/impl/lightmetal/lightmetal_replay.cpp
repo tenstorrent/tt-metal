@@ -232,10 +232,11 @@ void LightMetalReplay::setup_devices() {
     log_info(tt::LogMetalTrace, "LightMetalReplay(setup_devices) - Using hardcoded CreateDevices() as temp hack.");
     const size_t trace_region_size = 4096;  // Default is 0
     const int device_id = 0;
-    const auto dispatch_core_type = tt_metal::DispatchCoreType::WORKER;
+    // FIXME - Hack for resnet until this is captured in binary.
+    const auto dispatch_core_type = tt_metal::DispatchCoreType::ETH;
     const chip_id_t mmio_device_id = 0;
-    auto devices_map = tt::tt_metal::detail::CreateDevices(
-        {mmio_device_id}, 1, DEFAULT_L1_SMALL_SIZE, trace_region_size, dispatch_core_type);
+    auto devices_map =
+        tt::tt_metal::detail::CreateDevices({mmio_device_id}, 1, 24576, trace_region_size, dispatch_core_type);
     this->device_ = devices_map.at(mmio_device_id);
 }
 
