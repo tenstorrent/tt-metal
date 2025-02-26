@@ -15,8 +15,6 @@
 #include "core/tt_tensor_utils.hpp"
 #include "modules/linear_module.hpp"
 
-using namespace ttnn;
-
 namespace {
 
 auto check_board_is_n300() {
@@ -67,7 +65,7 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasNotInputParallel) {
 
     xt::xarray<float> test_data = xt::random::rand({in_features}, 0.F, 1.F).reshape({1U, 1U, 1U, in_features});
     ttml::core::XTensorToMeshVariant<float> replicate_composer = ttml::core::ReplicateXTensorToMesh<float>(mesh_shape);
-    auto tt_tensor = ttml::core::from_xtensor<float, DataType::BFLOAT16>(test_data, device, replicate_composer);
+    auto tt_tensor = ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(test_data, device, replicate_composer);
     auto tensor = ttml::autograd::create_tensor(tt_tensor);
     auto output = layer(tensor);
 
@@ -109,7 +107,7 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearNoBiasNotInputParallel) {
 
     xt::xarray<float> test_data = xt::random::rand({in_features}, 0.F, 1.F).reshape({1U, 1U, 1U, in_features});
     ttml::core::XTensorToMeshVariant<float> replicate_composer = ttml::core::ReplicateXTensorToMesh<float>(mesh_shape);
-    auto tt_tensor = ttml::core::from_xtensor<float, DataType::BFLOAT16>(test_data, device, replicate_composer);
+    auto tt_tensor = ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(test_data, device, replicate_composer);
     auto tensor = ttml::autograd::create_tensor(tt_tensor);
     auto output = layer(tensor);
 
@@ -147,7 +145,7 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasInputParallel) {
 
     xt::xarray<float> test_data = xt::random::rand({in_features}, 0.F, 1.F).reshape({1U, 1U, 1U, in_features});
     ttml::core::XTensorToMeshVariant<float> shard_composer = ttml::core::ShardXTensorToMesh<float>(mesh_shape, 3);
-    auto tt_tensor = ttml::core::from_xtensor<float, DataType::BFLOAT16>(test_data, device, shard_composer);
+    auto tt_tensor = ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(test_data, device, shard_composer);
     auto tensor = ttml::autograd::create_tensor(tt_tensor);
     auto output = layer(tensor);
 
@@ -185,7 +183,7 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearNoBiasInputParallel) {
 
     xt::xarray<float> test_data = xt::random::rand({in_features}, 0.F, 1.F).reshape({1U, 1U, 1U, in_features});
     ttml::core::XTensorToMeshVariant<float> shard_composer = ttml::core::ShardXTensorToMesh<float>(mesh_shape, 3);
-    auto tt_tensor = ttml::core::from_xtensor<float, DataType::BFLOAT16>(test_data, device, shard_composer);
+    auto tt_tensor = ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(test_data, device, shard_composer);
     auto tensor = ttml::autograd::create_tensor(tt_tensor);
     auto output = layer(tensor);
 
@@ -220,7 +218,7 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearHasBiasAllGather) {
 
     xt::xarray<float> test_data = xt::random::rand({in_features}, 0.F, 1.F).reshape({1U, 1U, 1U, in_features});
     ttml::core::XTensorToMeshVariant<float> replicate_composer = ttml::core::ReplicateXTensorToMesh<float>(mesh_shape);
-    auto tt_tensor = ttml::core::from_xtensor<float, DataType::BFLOAT16>(test_data, device, replicate_composer);
+    auto tt_tensor = ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(test_data, device, replicate_composer);
     auto tensor = ttml::autograd::create_tensor(tt_tensor);
     auto output = layer(tensor);
 
@@ -260,7 +258,7 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearNoBiasAllGather) {
 
     xt::xarray<float> test_data = xt::random::rand({in_features}, 0.F, 1.F).reshape({1U, 1U, 1U, in_features});
     ttml::core::XTensorToMeshVariant<float> replicate_composer = ttml::core::ReplicateXTensorToMesh<float>(mesh_shape);
-    auto tt_tensor = ttml::core::from_xtensor<float, DataType::BFLOAT16>(test_data, device, replicate_composer);
+    auto tt_tensor = ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(test_data, device, replicate_composer);
     auto tensor = ttml::autograd::create_tensor(tt_tensor);
     auto output = layer(tensor);
 
@@ -296,7 +294,7 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearHasBiasNoAllGather) {
 
     xt::xarray<float> test_data = xt::random::rand({in_features}, 0.F, 1.F).reshape({1U, 1U, 1U, in_features});
     ttml::core::XTensorToMeshVariant<float> replicate_composer = ttml::core::ReplicateXTensorToMesh<float>(mesh_shape);
-    auto tt_tensor = ttml::core::from_xtensor<float, DataType::BFLOAT16>(test_data, device, replicate_composer);
+    auto tt_tensor = ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(test_data, device, replicate_composer);
     auto tensor = ttml::autograd::create_tensor(tt_tensor);
     auto output = layer(tensor);
 
@@ -344,7 +342,7 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearNoBiasNoAllGather) {
 
     xt::xarray<float> test_data = xt::random::rand({in_features}, 0.F, 1.F).reshape({1U, 1U, 1U, in_features});
     ttml::core::XTensorToMeshVariant<float> replicate_composer = ttml::core::ReplicateXTensorToMesh<float>(mesh_shape);
-    auto tt_tensor = ttml::core::from_xtensor<float, DataType::BFLOAT16>(test_data, device, replicate_composer);
+    auto tt_tensor = ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(test_data, device, replicate_composer);
     auto tensor = ttml::autograd::create_tensor(tt_tensor);
     auto output = layer(tensor);
 

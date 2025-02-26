@@ -25,7 +25,6 @@ protected:
 };
 
 TEST_F(EmbeddingOpTest, EmbeddingForwardBackward) {
-    using namespace ttnn;
     using namespace ttml;
 
     auto* device = &autograd::ctx().get_device();
@@ -38,8 +37,8 @@ TEST_F(EmbeddingOpTest, EmbeddingForwardBackward) {
     uint32_t sentence_size = 32;
     std::vector<uint32_t> input_data((size_t)batch_size * sentence_size);
     std::iota(input_data.begin(), input_data.end(), 0U);
-    auto input_tensor = ttml::core::from_vector<uint32_t, DataType::UINT32>(
-        input_data, ttml::core::create_shape({batch_size, 1, 1, sentence_size}), device, Layout::ROW_MAJOR);
+    auto input_tensor = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
+        input_data, ttml::core::create_shape({batch_size, 1, 1, sentence_size}), device, ttnn::Layout::ROW_MAJOR);
     autograd::TensorPtr input = autograd::create_tensor(input_tensor);
 
     autograd::TensorPtr embeddings = ops::embedding_op(input, weight);

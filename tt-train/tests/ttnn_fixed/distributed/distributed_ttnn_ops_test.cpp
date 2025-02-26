@@ -15,8 +15,6 @@
 #include "core/tt_tensor_utils.hpp"
 #include "ttnn_fixed/distributed/ttnn_ops.hpp"
 
-using namespace ttnn;
-
 namespace {
 
 auto check_board_is_n300() {

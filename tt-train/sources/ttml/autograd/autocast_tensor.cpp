@@ -16,12 +16,10 @@ inline bool is_castable_tensor(const tt::tt_metal::Tensor &tensor) {
 
 namespace ttml::autograd {
 
-using namespace ttnn;
-
 void AutocastTensor::set_tensor(const tt::tt_metal::Tensor &tensor) {
-    if (tensor.get_dtype() == DataType::FLOAT32) {
+    if (tensor.get_dtype() == ttnn::DataType::FLOAT32) {
         m_full_precision_tensor = tensor;
-        m_half_precision_tensor = ttnn::typecast(tensor, DataType::BFLOAT16);
+        m_half_precision_tensor = ttnn::typecast(tensor, ttnn::DataType::BFLOAT16);
         return;
     }
 
