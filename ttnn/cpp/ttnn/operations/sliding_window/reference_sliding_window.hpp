@@ -44,7 +44,7 @@ owned_buffer::Buffer<bfloat16> conv_using_op_trace_metadata(
 owned_buffer::Buffer<bfloat16> conv_using_shard_boundaries(
     const owned_buffer::Buffer<bfloat16>& input_padded_tensor_buf,
     const std::vector<float>& filter_vector,
-    const std::vector<std::pair<uint32_pair_t, uint32_pair_t>>& shard_boundaries,
+    const std::vector<ShardBoundary>& shard_boundaries,
     uint32_t stride_h,
     uint32_t stride_w,
     uint32_t padded_input_h,
@@ -60,7 +60,7 @@ owned_buffer::Buffer<bfloat16> conv_using_sliding_window_op_config(
     const owned_buffer::Buffer<bfloat16>& input_padded_tensor_buf,
     const std::vector<float>& filter_vector,
     const std::vector<uint32_t>& op_trace_metadata,
-    const std::vector<std::pair<uint32_pair_t, uint32_pair_t>>& shard_boundaries,
+    const std::vector<ShardBoundary>& shard_boundaries,
     const std::vector<std::vector<uint16_t>>& sharded_input_top_left_indices,
     uint32_t input_h,
     uint32_t input_w,
@@ -72,23 +72,22 @@ owned_buffer::Buffer<bfloat16> conv_using_sliding_window_op_config(
     uint32_t out_tensor_size);
 
 // Calculate Padding using tensor metadata.
-std::vector<bool> pad_metadata_from_tensor_metadata(const std::vector<std::pair<bool, uint32_pair_t>>& tensor_metadata);
+std::vector<bool> pad_metadata_from_tensor_metadata(const std::vector<PixelMetadata>& tensor_metadata);
 
 // Calculate Indices of pads in padded input buffer using halo kernel config's flattened pad config.
 std::vector<uint32_t> pad_indices_from_flattened_pad_config(
-    const std::vector<std::vector<uint16_t>>& flattened_pad_config,
-    const std::vector<std::pair<uint32_pair_t, uint32_pair_t>>& shard_boundaries);
+    const std::vector<std::vector<uint16_t>>& flattened_pad_config, const std::vector<ShardBoundary>& shard_boundaries);
 
 // Calculate Indices of valid inputs in padded input buffer using halo kernel config's flattened local configs.
 std::vector<uint32_t> input_indices_from_flattened_local_config(
     const std::vector<std::vector<uint16_t>>& flattened_local_config,
-    const std::vector<std::pair<uint32_pair_t, uint32_pair_t>>& shard_boundaries);
+    const std::vector<ShardBoundary>& shard_boundaries);
 
 // Calculate Indices of valid inputs in padded input buffer using halo kernel config's flattened remote configs.
 std::vector<uint32_t> input_indices_from_flattened_remote_config(
     tt::tt_metal::IDevice* device,
     const std::vector<std::vector<uint16_t>>& flattened_remote_config,
-    const std::vector<std::pair<uint32_pair_t, uint32_pair_t>>& shard_boundaries,
+    const std::vector<ShardBoundary>& shard_boundaries,
     bool remote_read = false,
     bool is_block_sharded = false,
     bool transpose_mcast = false);
