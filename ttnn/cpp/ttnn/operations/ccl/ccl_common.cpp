@@ -269,7 +269,8 @@ KernelHandle generate_edm_kernel_impl(
     EDMBuilder const& edm_builder,
     std::string const& kernel_path,
     CoreCoord const& eth_core,
-    NOC noc_id) {
+    NOC noc_id,
+    std::optional<tt::tt_metal::KernelBuildOptLevel> opt_level = std::nullopt) {
     edm_builder.dump_to_log();
 
     std::vector<uint32_t> const edm_kernel_rt_args = edm_builder.get_runtime_args();
@@ -281,11 +282,15 @@ KernelHandle generate_edm_kernel_impl(
         log_trace(tt::LogOp, "\t{}", s);
     }
 
+    auto kernel_config = tt::tt_metal::EthernetConfig{.noc = noc_id, .compile_args = eth_sender_ct_args};
+    if (opt_level.has_value()) {
+        kernel_config.opt_level = opt_level.value();
+    }
     auto eth_sender_kernel = tt::tt_metal::CreateKernel(
         program,
         kernel_path,
         eth_core,
-        tt::tt_metal::EthernetConfig{.noc = noc_id, .compile_args = eth_sender_ct_args});
+        kernel_config);
 
     tt::tt_metal::SetRuntimeArgs(program, eth_sender_kernel, eth_core, edm_kernel_rt_args);
 
@@ -311,7 +316,8 @@ KernelHandle generate_edm_kernel(
         edm_builder,
         "ttnn/cpp/ttnn/operations/ccl/kernels/edm_fabric/fabric_erisc_datamover.cpp",
         eth_core,
-        noc_id);
+        noc_id,
+        tt::tt_metal::KernelBuildOptLevel::O3);
 }
 
 KernelHandle generate_edm_kernel(
@@ -327,7 +333,7 @@ KernelHandle generate_edm_kernel(
 ccl::EriscDatamoverBuilder create_erisc_datamover_builder(
     std::size_t num_channels,
     uint32_t page_size,
-    std::size_t num_buffers_per_channel,
+    size_t num_buffers_per_channel,
     ccl::EriscDataMoverBufferSharingMode buffer_sharing_mode,
     ccl::EriscDataMoverTerminationMode termination_mode) {
     ccl::EriscDatamoverConfig config;
