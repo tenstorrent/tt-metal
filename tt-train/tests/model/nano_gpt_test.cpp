@@ -12,7 +12,7 @@
 #include "datasets/dataloader.hpp"
 #include "datasets/in_memory_token_dataset.hpp"
 #include "datasets/utils.hpp"
-#include "models/transformer.hpp"
+#include "models/gpt2.hpp"
 #include "ops/losses.hpp"
 #include "optimizers/adamw.hpp"
 #include "optimizers/optimizer_base.hpp"
@@ -50,14 +50,14 @@ struct TrainingConfig {
     float weight_decay = 1e-2F;
     std::string model_path;
     std::string data_path;
-    ttml::models::transformer::TransformerConfig transformer_config;
+    ttml::models::gpt2::TransformerConfig transformer_config;
 };
 
 void train_test(bool use_moreh_adamw = false, bool memory_efficient = false) {
     auto config = TrainingConfig();
     config.transformer_config.dropout_prob = 0.0F;
-    config.transformer_config.runner_type = memory_efficient ? ttml::models::transformer::RunnerType::MemoryEfficient
-                                                             : ttml::models::transformer::RunnerType::Default;
+    config.transformer_config.runner_type =
+        memory_efficient ? ttml::models::gpt2::RunnerType::MemoryEfficient : ttml::models::gpt2::RunnerType::Default;
     config.data_path = "/shakespeare.txt";
 
     // set seed
@@ -139,7 +139,7 @@ void train_test(bool use_moreh_adamw = false, bool memory_efficient = false) {
 
     fmt::print("Overriding vocab size to be divisible by 32\n");
     config.transformer_config.vocab_size = (tokenizer->get_vocab_size() + 31) / 32 * 32;
-    auto model = ttml::models::transformer::create(config.transformer_config);
+    auto model = ttml::models::gpt2::create(config.transformer_config);
 
     auto adamw_params = ttml::optimizers::AdamWConfig();
     adamw_params.lr = config.learning_rate;

@@ -11,7 +11,7 @@
 #include "modules/layer_norm_module.hpp"
 #include "modules/positional_embeddings.hpp"
 
-namespace ttml::models::transformer {
+namespace ttml::models::gpt2 {
 
 enum class PositionalEmbeddingType {
     Trainable,
@@ -65,4 +65,4 @@ public:
 [[nodiscard]] std::shared_ptr<Transformer> create(const TransformerConfig& config);
 [[nodiscard]] std::shared_ptr<Transformer> create(const YAML::Node& config);
 
-}  // namespace ttml::models::transformer
+}  // namespace ttml::models::gpt2
