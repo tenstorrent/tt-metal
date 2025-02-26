@@ -16,27 +16,29 @@
 namespace ttml::modules::distributed {
 
 class DistributedGPTMLP : public autograd::ModuleBase {
-    std::shared_ptr<distributed::ColumnParallelLinear> fc1;
-    std::shared_ptr<distributed::RowParallelLinear> fc2;
-    std::shared_ptr<DropoutLayer> dropout;
-
 public:
     DistributedGPTMLP(uint32_t embedding_size, float dropout_prob);
 
     autograd::TensorPtr operator()(const autograd::TensorPtr& input);
+
+private:
+    std::shared_ptr<distributed::ColumnParallelLinear> m_fc1;
+    std::shared_ptr<distributed::RowParallelLinear> m_fc2;
+    std::shared_ptr<DropoutLayer> m_dropout;
 };
 
 class DistributedGPTBlock : public autograd::ModuleBase {
-    std::shared_ptr<DistributedGPTMLP> mlp;
-    std::shared_ptr<LayerNormLayer> ln1;
-    std::shared_ptr<LayerNormLayer> ln2;
-    std::shared_ptr<DistributedMultiHeadAttention> attention;
-
 public:
     explicit DistributedGPTBlock(
         uint32_t embedding_size, uint32_t num_heads, float dropout_prob, bool use_composite_layernorm = false);
 
     autograd::TensorPtr operator()(const autograd::TensorPtr& input, const autograd::TensorPtr& mask);
+
+private:
+    std::shared_ptr<DistributedGPTMLP> m_mlp;
+    std::shared_ptr<LayerNormLayer> m_ln1;
+    std::shared_ptr<LayerNormLayer> m_ln2;
+    std::shared_ptr<DistributedMultiHeadAttention> m_attention;
 };
 
 }  // namespace ttml::modules::distributed
