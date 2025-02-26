@@ -163,7 +163,8 @@ void MAIN {
     uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;
     uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;
 
-    cb_wait_front(cb_eps, 1);
+    constexpr uint32_t onetile = 1;
+    cb_wait_front(cb_eps, onetile);
 
     for (uint32_t i = 0; i < complete_iterations; ++i, tile_start = 0) {
         batchnorm_bcast_tiles(
