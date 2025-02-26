@@ -17,7 +17,7 @@ from models.utility_functions import nearest_32
     ],
     indirect=True,
 )
-@pytest.mark.parametrize("dtype", [ttnn.uint16, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.float32])
+@pytest.mark.parametrize("dtype", [ttnn.uint16, ttnn.int32, ttnn.uint8, ttnn.uint32])
 def test_direct_replicate_to_tensor_mesh(mesh_device, dtype):
     torch.manual_seed(1234)
 
@@ -28,7 +28,7 @@ def test_direct_replicate_to_tensor_mesh(mesh_device, dtype):
         torch_tensor,
         dtype=dtype,
         layout=ttnn.TILE_LAYOUT,
-        mesh_mapper = mapper,
+        mesh_mapper=mapper,
         device=mesh_device,
     )
 
@@ -37,6 +37,29 @@ def test_direct_replicate_to_tensor_mesh(mesh_device, dtype):
     out_pass, out_pcc = comp_pcc(ttnn.to_torch(out_tensors[0]), torch_tensor, pcc=0.99)
     logger.info(f"PCC value: {out_pcc}")
     assert out_pass
+
+
+# # @pytest.mark.parametrize("dtype", [ttnn.uint16, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.float32])
+# @pytest.mark.parametrize("dtype", [ttnn.uint16, ttnn.int32, ttnn.uint8, ttnn.uint32])
+# def test_direct_replicate_to_tensor_mesh(mesh_device, dtype):
+#     torch.manual_seed(1234)
+
+#     mapper = ttnn.CppReplicateTensorToMesh(mesh_device)
+
+#     torch_tensor = torch.randn(1, 1, 32, 256)
+#     replicated_tensors = ttnn.from_torch(
+#         torch_tensor,
+#         dtype=dtype,
+#         layout=ttnn.TILE_LAYOUT,
+#         mesh_mapper = mapper,
+#         device=mesh_device,
+#     )
+
+#     out_tensors = ttnn.get_device_tensors(replicated_tensors)
+
+#     out_pass, out_pcc = comp_pcc(ttnn.to_torch(out_tensors[0]), torch_tensor, pcc=0.99)
+#     logger.info(f"PCC value: {out_pcc}")
+#     assert out_pass
 
 # @pytest.mark.parametrize("dtype", [ttnn.uint16, ttnn.bfloat16, ttnn.bfloat4_b, ttnn.bfloat8_b, ttnn.float32])
 # def test_direct_shard_to_tensor_mesh(mesh_device, dtype):
