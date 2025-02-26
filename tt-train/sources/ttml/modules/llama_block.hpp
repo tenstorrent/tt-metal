@@ -21,7 +21,7 @@ private:
     std::shared_ptr<DropoutLayer> m_dropout;
 
 public:
-    LlamaMLP(uint32_t embedding_size, float dropout_prob = 0.0F, uint32_t multiple_of = 256);
+    LlamaMLP(uint32_t embedding_size, float dropout_prob = 0.0F);
 
     autograd::TensorPtr operator()(const autograd::TensorPtr& input);
 };
@@ -30,12 +30,11 @@ class LlamaBlock : public autograd::ModuleBase {
 private:
     std::shared_ptr<LlamaMLP> m_mlp;
     std::shared_ptr<RMSNormLayer> m_attention_norm;
-    std::shared_ptr<RMSNormLayer> m_ffn_norm;
+    std::shared_ptr<RMSNormLayer> m_mlp_norm;
     std::shared_ptr<MultiHeadAttention> m_attention;
 
 public:
-    explicit LlamaBlock(
-        uint32_t embedding_size, uint32_t num_heads, float dropout_prob = 0.0F, bool use_composite_layernorm = false);
+    explicit LlamaBlock(uint32_t embedding_size, uint32_t num_heads, float dropout_prob = 0.0F);
 
     autograd::TensorPtr operator()(const autograd::TensorPtr& input, const autograd::TensorPtr& mask);
 };

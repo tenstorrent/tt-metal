@@ -10,7 +10,8 @@
 
 namespace ttml::modules {
 
-LlamaMLP::LlamaMLP(uint32_t embedding_size, float dropout_prob, uint32_t multiple_of) {
+LlamaMLP::LlamaMLP(uint32_t embedding_size, float dropout_prob) {
+    uint32_t multiple_of = 256;
     const uint32_t unrounded_size = static_cast<uint32_t>(static_cast<float>(4 * embedding_size) * (2.0F / 3.0F));
     const uint32_t hidden_size = ((unrounded_size + multiple_of - 1) / multiple_of) * multiple_of;
     m_w1 = std::make_shared<LinearLayer>(embedding_size, hidden_size);
@@ -34,16 +35,16 @@ autograd::TensorPtr LlamaMLP::operator()(const autograd::TensorPtr& input) {
     return x;
 }
 
-LlamaBlock::LlamaBlock(uint32_t embedding_size, uint32_t num_heads, float dropout_prob, bool use_composite_layernorm) {
+LlamaBlock::LlamaBlock(uint32_t embedding_size, uint32_t num_heads, float dropout_prob) {
     m_mlp = std::make_shared<LlamaMLP>(embedding_size, dropout_prob);
-    m_attention_norm = std::make_shared<RMSNormLayer>(embedding_size, use_composite_layernorm);
-    m_ffn_norm = std::make_shared<RMSNormLayer>(embedding_size, use_composite_layernorm);
+    m_attention_norm = std::make_shared<RMSNormLayer>(embedding_size);
+    m_mlp_norm = std::make_shared<RMSNormLayer>(embedding_size);
     m_attention = std::make_shared<MultiHeadAttention>(embedding_size, num_heads, dropout_prob);
 
     create_name("llama_block");
     register_module(m_mlp, "mlp");
     register_module(m_attention_norm, "attention_norm");
-    register_module(m_ffn_norm, "ffn_norm");
+    register_module(m_mlp_norm, "mlp_norm");
     register_module(m_attention, "attention");
 }
 
@@ -54,7 +55,7 @@ autograd::TensorPtr LlamaBlock::operator()(const autograd::TensorPtr& input, con
     h = ops::add(h, residual);
 
     residual = h;
-    auto x = (*m_ffn_norm)(h);
+    auto x = (*m_mlp_norm)(h);
     x = (*m_mlp)(x);
     x = ops::add(x, residual);
 
