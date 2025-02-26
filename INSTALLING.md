@@ -194,7 +194,7 @@ python3 -c "import ttnn"
 ---
 
 ### Option 3: From Wheel
-Instal from wheel for quick access to our APIs and to get an AI model running
+Install from wheel for quick access to our APIs and to get an AI model running
 
 #### Step 1. Download and Install the Latest Wheel:
 
