@@ -1,1 +1,1 @@
-../../../../models/demos/llama3/tests/test_llama_ci_dispatch.py
+../../../../models/tt_transformers/tests/test_ci_dispatch.py
