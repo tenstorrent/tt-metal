@@ -1,8 +1,9 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <string_view>
 #include <thread>
 #include <string>
 #include <future>
@@ -101,6 +102,14 @@ protected:
 
     string link_objs_;
 
+    // Default compiler optimization setting
+    // Used when JitBuildSettings is not provided
+    string default_compile_opt_level_;
+
+    // Default linker optimization setting
+    // Used when JitBuildSettings is not provided
+    string default_linker_opt_level_;
+
     void compile(const string& log_file, const string& out_path, const JitBuildSettings* settings) const;
     void compile_one(
         const string& log_file,
@@ -108,7 +117,7 @@ protected:
         const JitBuildSettings* settings,
         const string& src,
         const string& obj) const;
-    void link(const string& log_file, const string& out_path) const;
+    void link(const string& log_file, const string& out_path, const JitBuildSettings* settings) const;
     void weaken(const string& log_file, const string& out_path) const;
     void copy_kernel(const string& kernel_in_path, const string& op_out_path) const;
     void extract_zone_src_locations(const string& log_file) const;
@@ -169,12 +178,19 @@ public:
 // (eg, API specified settings)
 class JitBuildSettings {
 public:
-    virtual const string& get_full_kernel_name() const = 0;
+    // Returns the full kernel name
+    virtual const std::string& get_full_kernel_name() const = 0;
+    // Returns the compiler optimization level
+    virtual std::string_view get_compiler_opt_level() const = 0;
+    // Returns the linker optimization level
+    virtual std::string_view get_linker_opt_level() const = 0;
+
+    // Called to process the user defines
     virtual void process_defines(const std::function<void(const string& define, const string& value)>) const = 0;
+    // Called to process the user compile time args
     virtual void process_compile_time_args(const std::function<void(int i, uint32_t value)>) const = 0;
 
-private:
-    bool use_multi_threaded_compile = true;
+    virtual ~JitBuildSettings() = default;
 };
 
 void jit_build(const JitBuildState& build, const JitBuildSettings* settings);

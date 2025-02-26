@@ -1,5 +1,6 @@
 set(JIT_BUILD_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/build.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/build_env_manager.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/genfiles.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/kernel_args.cpp
@@ -12,7 +13,8 @@ target_link_libraries(
     PUBLIC
         common
     PRIVATE
-        Metalium::Metal::Common
+        TT::Metalium::Common
+        Metalium::Metal::LLRT
         Tracy::TracyClient
         Taskflow::Taskflow
         TT::Metalium::HostDevCommon

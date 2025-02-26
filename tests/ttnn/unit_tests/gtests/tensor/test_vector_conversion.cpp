@@ -371,12 +371,11 @@ TEST_P(ShardVectorConversionTest, BlockfloatRoundtripTilizedShardMapping) {
 INSTANTIATE_TEST_SUITE_P(
     ShardVectorConversionTests,
     ShardVectorConversionTest,
-    ::testing::Values(
-        TensorMemoryLayout::INTERLEAVED,
-        TensorMemoryLayout::SINGLE_BANK,
-        TensorMemoryLayout::HEIGHT_SHARDED,
-        TensorMemoryLayout::WIDTH_SHARDED,
-        TensorMemoryLayout::BLOCK_SHARDED));
+    ::testing::Values(TensorMemoryLayout::INTERLEAVED, TensorMemoryLayout::SINGLE_BANK));
+// #17806: Fix illegal shard spec and re-enable!
+// TensorMemoryLayout::HEIGHT_SHARDED,
+// TensorMemoryLayout::WIDTH_SHARDED,
+// TensorMemoryLayout::BLOCK_SHARDED));
 
 }  // namespace
 

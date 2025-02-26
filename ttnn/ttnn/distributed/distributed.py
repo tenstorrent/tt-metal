@@ -138,7 +138,7 @@ def open_mesh_device(
     trace_region_size: int = ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE,
     num_command_queues: int = 1,
     dispatch_core_config: ttnn.DispatchCoreConfig = ttnn.DispatchCoreConfig(),
-    offset: ttnn.MeshOffset = ttnn.MeshOffset(row=0, col=0),
+    offset: Optional[ttnn.MeshCoordinate] = None,
     physical_device_ids: List[int] = [],
 ):
     """
@@ -150,7 +150,7 @@ def open_mesh_device(
         trace_region_size (int, optional): Size of the trace region. Defaults to ttnn._ttnn.device.DEFAULT_TRACE_REGION_SIZE.
         num_command_queues (int, optional): Number of command queues. Defaults to 1.
         dispatch_core_type (int, optional): Type of dispatch core. Defaults to DispatchCoreType.WORKER.
-        offset (ttnn.MeshOffset, optional): Offset in logical mesh coordinates for the mesh device. Defaults to (0, 0).
+        offset (ttnn.MeshCoordinate, optional): Offset in logical mesh coordinates for the mesh device. Defaults to None.
         physical_device_ids (List[int], optional): List of physical device IDs to use. Defaults to [].
 
     Returns:
@@ -440,18 +440,6 @@ class ConcatMeshToTensor(MeshToTensor):
             ttnn.to_torch(tt_input_tensor, mesh_composer=None) for tt_input_tensor in ttnn.get_device_tensors(tensor)
         ]
         return torch.cat(device_shards_converted_to_torch, dim=self.concat_dim)
-
-
-# TODO: #15061 - Remove this function, as it does not abide to the MeshToTensor interface.
-# Instead, lift this implementation to the caller.
-class ListMeshToTensor(MeshToTensor):
-    def __init__(self, mesh_device: MeshDevice):
-        self.mesh_device = mesh_device
-
-    def compose(self, tensor: ttnn.Tensor) -> List["torch.Tensor"]:
-        return [
-            ttnn.to_torch(tt_input_tensor, mesh_composer=None) for tt_input_tensor in ttnn.get_device_tensors(tensor)
-        ]
 
 
 @contextlib.contextmanager

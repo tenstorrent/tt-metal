@@ -4,6 +4,28 @@
 >
 > Please refer to the front-page [README](../README.md) for the latest verified release for each model.
 
+## February 24, 2025
+
+### [DeepSeek R1 Distill Llama 3.3 70B](demos/llama3)
+- Added support for DeepSeek R1 Distill Llama 3.3 70B on T3000.
+
+### [Qwen 2.5](demos/llama3)
+- Added support for Qwen2.5-7B on N300 and Qwen2.5-72B on T3000.
+
+### [Llama 3.1/3.2](demos/llama3)
+> **Note:** This feature is available as of release [v0.56.0-rc37](https://github.com/tenstorrent/tt-metal/tree/v0.56.0-rc37)
+- Overhauled the demo script (now called [simple_text_demo.py](demos/llama3/demo/simple_text_demo.py)) to use a simplified causal generation interface.
+- Added support for custom input argument overrides to the demo.
+
+## February 10, 2025
+
+### [Llama 3.1/3.2](demos/llama3)
+> **Note:** This feature is available as of release [v0.56.0-rc16](https://github.com/tenstorrent/tt-metal/tree/v0.56.0-rc16)
+- Added support for loading HuggingFace model formats (previously loaded Meta checkpoint formats), which will also enable easier adoption of future derivative models.
+
+### [Llama 3.2-11B-Vision](demos/llama3)
+- Added support for processing text-only prompts to the model and the [vLLM fork](https://github.com/tenstorrent/vllm/tree/dev/tt_metal).
+
 ## January 13, 2025
 
 ### [Llama 3.1/3.2](demos/llama3)
@@ -20,7 +42,7 @@
 
 ### [Llama 3.1/3.2](demos/llama3)
 - Improved the decode performance of the 1B/3B/8B/11B text models (for 8B, increased from ~23 t/s/u to ~28 t/s/u) by using BFP4 weights (instead of BFP8) for FF1 and FF3 in the MLP.
-- Added the option to specify custom model configurations, with two defaults for performance and accuracy already provided. 
+- Added the option to specify custom model configurations, with two defaults for performance and accuracy already provided.
 
 ## November 18, 2024
 
@@ -76,7 +98,7 @@
 ### [Mistral7B](demos/wormhole/mistral7b)
 - Updated the demo to support multiple batches of users
 
-### [Mamba-2.8B](demos/wormhole/mamba) 
+### [Mamba-2.8B](demos/wormhole/mamba)
 - Updated the demo to use the full prefill graph instead of processing a single token of the prompt at a time using decode
 
 ### [Mixtral7Bx8](demos/t3000/mixtral8x7b)

@@ -7,7 +7,6 @@
 #include "dataflow_api.h"
 
 void kernel_main() {
-    DPRINT << "start syncer" << ENDL();
     uint32_t sem_addr = get_arg_val<uint32_t>(0);
     uint32_t remote_x = get_arg_val<uint32_t>(1);
     uint32_t remote_y = get_arg_val<uint32_t>(2);

@@ -85,14 +85,14 @@ Program CreateEltwiseAddProgram(
 // The example showcases TT-Metalium's ability to abstract away the complexity
 // of distributed memory management and compute.
 int main(int argc, char** argv) {
-    auto mesh_device = MeshDevice::create(MeshDeviceConfig{.mesh_shape{2, 4}});
+    auto mesh_device = MeshDevice::create(MeshDeviceConfig{.mesh_shape = MeshShape(2, 4)});
 
     // Define the global buffer shape and shard shape for distributed buffers
     auto shard_shape = Shape2D{32, 32};
     auto distributed_buffer_shape =
         Shape2D{shard_shape.height() * mesh_device->num_rows(), shard_shape.width() * mesh_device->num_cols()};
     auto num_tiles = 1;
-    auto tile_size_bytes = detail::TileSize(tt::DataFormat::Float16_b);
+    auto tile_size_bytes = tt::tt_metal::detail::TileSize(tt::DataFormat::Float16_b);
     auto distributed_buffer_size_bytes = mesh_device->num_rows() * mesh_device->num_cols() * tile_size_bytes;
 
     // Configure device-local buffer settings
@@ -128,12 +128,9 @@ int main(int argc, char** argv) {
 
     // Create mesh workload and broadcast the program across all devices
     auto mesh_workload = CreateMeshWorkload();
-    auto device_range = LogicalDeviceRange{
-        DeviceCoord{0, 0} /* start_coord */, DeviceCoord{mesh_device->num_cols() - 1, mesh_device->num_rows() - 1}
-        /* end_coord */
-    };
+    auto device_range = MeshCoordinateRange(mesh_device->shape());
 
-    AddProgramToMeshWorkload(mesh_workload, program, device_range);
+    AddProgramToMeshWorkload(mesh_workload, std::move(program), device_range);
     EnqueueMeshWorkload(cq, mesh_workload, false /* blocking */);
 
     // Read back results

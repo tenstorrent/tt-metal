@@ -4,7 +4,7 @@
 
 #include "view.hpp"
 
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/run_operation.hpp"
 #include <tt-metalium/constants.hpp>
 #include <ttnn/operations/functions.hpp>
@@ -108,7 +108,7 @@ Tensor tensor_reshape(
                         shard_spec.shape[1] = new_logical_shape[-1];
 
                         shard_spec_buffer.page_shape = {1, new_logical_shape[-1]};
-                        shard_spec_buffer.tensor2d_shape = {shard_spec.shape[0], 1};
+                        shard_spec_buffer.tensor2d_shape_in_pages = {shard_spec.shape[0], 1};
                         shard_spec_buffer.set_shard_spec(shard_spec);
 
                         device_buffer->set_shard_spec(shard_spec_buffer);

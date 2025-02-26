@@ -74,9 +74,10 @@ void set_or_update_runtime_arguments(
         }
 
         uint32_t cHtWt = cHt * cWt;
-        class bfloat16 bfloat_scalar_momentum(momentum);
-        uint32_t packed_scalar_momentum =
-            pack_two_bfloat16_into_uint32({bfloat_scalar_momentum, bfloat_scalar_momentum});
+        const auto scalar = momentum;
+        const auto packed_scalar_momentum = batch_mean_tensor.get_dtype() == DataType::FLOAT32
+                                                ? std::bit_cast<uint32_t>(scalar)
+                                                : pack_two_bfloat16_into_uint32({scalar, scalar});
         std::array reader_runtime_args = {
             packed_scalar_momentum,
             batch_mean_tensor.buffer()->address(),
@@ -168,37 +169,37 @@ RunningStatistics::RunningStatisticsProgramFactory::create(
     uint32_t b_num_tiles_per_cb = num_tiles_per_cb;
 
     // Input buffers
-    auto [a_cb, a_cb_handle] = create_cb(
+    auto [batch_mean_tensor_cb, batch_mean_tensor_cb_handle] = create_cb(
         tt::CBIndex::c_0,
         program,
         all_device_cores,
         a_single_tile_size,
         num_tiles_per_cb,
         a_data_format);  // batch_mean
-    auto [b_cb, b_cb_handle] = create_cb(
+    auto [batch_var_tensor_cb, batch_var_tensor_cb_handle] = create_cb(
         tt::CBIndex::c_1,
         program,
         all_device_cores,
         b_single_tile_size,
         b_num_tiles_per_cb,
         b_data_format);  // batch_var
-    auto [c_cb, c_cb_handle] = create_cb(
+    auto [output_tensor_cb, output_tensor_cb_handle] = create_cb(
         tt::CBIndex::c_2, program, all_device_cores, c_single_tile_size, num_tiles_per_cb, c_data_format);  // output
-    auto [d_cb, d_cb_handle] = create_cb(
+    auto [old_running_mean_tensor_cb, old_running_mean_tensor_cb_handle] = create_cb(
         tt::CBIndex::c_3,
         program,
         all_device_cores,
         d_single_tile_size,
         b_num_tiles_per_cb,
         d_data_format);  // old running mean
-    auto [e_cb, e_cb_handle] = create_cb(
+    auto [old_running_var_tensor_cb, old_running_var_tensor_cb_handle] = create_cb(
         tt::CBIndex::c_4,
         program,
         all_device_cores,
         e_single_tile_size,
         b_num_tiles_per_cb,
         e_data_format);  // old running var
-    auto [f_cb, f_cb_handle] = create_cb(
+    auto [momentum_cb, momentum_cb_handle] = create_cb(
         tt::CBIndex::c_5,
         program,
         all_device_cores,
@@ -213,30 +214,29 @@ RunningStatistics::RunningStatisticsProgramFactory::create(
         b_num_tiles_per_cb,
         b_data_format);  // to store 1
     auto [updated_m_cb, updated_m_cb_handle] = create_cb(
-        tt::CBIndex::c_27,
+        tt::CBIndex::c_7,
         program,
         all_device_cores,
         d_single_tile_size,
         b_num_tiles_per_cb,
         d_data_format);  // updated running mean
     auto [updated_v_cb, updated_v_cb_handle] = create_cb(
-        tt::CBIndex::c_28,
+        tt::CBIndex::c_8,
         program,
         all_device_cores,
         e_single_tile_size,
         b_num_tiles_per_cb,
         e_data_format);  // updated running var
 
-    // Intermediate buffers required for uodation of running stats
-
+    // Intermediate buffers required for updation of running stats
     auto [tmp1_cb, tmp1_cb_handle] =
-        create_cb(tt::CBIndex::c_21, program, all_device_cores, b_single_tile_size, b_num_tiles_per_cb, b_data_format);
+        create_cb(tt::CBIndex::c_9, program, all_device_cores, b_single_tile_size, b_num_tiles_per_cb, b_data_format);
 
     auto [tmp2_cb, tmp2_cb_handle] =
-        create_cb(tt::CBIndex::c_22, program, all_device_cores, b_single_tile_size, b_num_tiles_per_cb, b_data_format);
+        create_cb(tt::CBIndex::c_10, program, all_device_cores, b_single_tile_size, b_num_tiles_per_cb, b_data_format);
 
     auto [tmp3_cb, tmp3_cb_handle] =
-        create_cb(tt::CBIndex::c_23, program, all_device_cores, b_single_tile_size, b_num_tiles_per_cb, b_data_format);
+        create_cb(tt::CBIndex::c_11, program, all_device_cores, b_single_tile_size, b_num_tiles_per_cb, b_data_format);
 
     auto a_is_dram = static_cast<uint32_t>(batch_mean_tensor.buffer()->buffer_type() == tt_metal::BufferType::DRAM);
     auto b_is_dram = static_cast<uint32_t>(batch_var_tensor.buffer()->buffer_type() == tt_metal::BufferType::DRAM);
@@ -246,37 +246,95 @@ RunningStatistics::RunningStatisticsProgramFactory::create(
     const auto e_is_dram =
         running_var_has_value and running_var_tensor->buffer()->buffer_type() == tt_metal::BufferType::DRAM;
 
+    std::map<std::string, std::string> dataflow_defines;  // Currently support only for fp32, bf16
+    if (batch_mean_tensor.get_dtype() == DataType::FLOAT32) {
+        dataflow_defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element<float>";
+        dataflow_defines["FILL_WITH_VALUE_FLOAT"] = "fill_with_val<1024, float>";
+    } else {
+        dataflow_defines["FILL_TILE_WITH_FIRST_ELEMENT"] = "fill_tile_with_first_element_bfloat16";
+        dataflow_defines["FILL_WITH_VALUE"] = "fill_with_val_bfloat16";
+    }
+
     // READER KERNEL
+    auto reader_defines = dataflow_defines;
     auto reader_kernel_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/dataflow/reader_running_statistics.cpp",
         all_device_cores,
-        tt_metal::ReaderDataMovementConfig({a_is_dram}));
+        tt_metal::ReaderDataMovementConfig(
+            {a_is_dram, batch_mean_tensor_cb, momentum_cb, one_cb}, std::move(reader_defines)));
 
     // WRITER KERNEL
+    auto writer_defines = dataflow_defines;
     auto writer_kernel_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/dataflow/writer_running_statistics.cpp",
         all_device_cores,
-        tt_metal::WriterDataMovementConfig({
-            b_is_dram,
-            c_is_dram,
-            d_is_dram,
-            e_is_dram,
-            static_cast<uint32_t>(running_mean_has_value),
-            static_cast<uint32_t>(running_var_has_value),
-        }));
+        tt_metal::WriterDataMovementConfig(
+            {
+                b_is_dram,
+                c_is_dram,
+                d_is_dram,
+                e_is_dram,
+                static_cast<uint32_t>(running_mean_has_value),
+                static_cast<uint32_t>(running_var_has_value),
+                batch_var_tensor_cb,
+                output_tensor_cb,
+                old_running_mean_tensor_cb,
+                old_running_var_tensor_cb,
+                updated_m_cb,
+                updated_v_cb,
+            },
+            std::move(writer_defines)));
 
     // COMPUTE KERNEL
     bool fp32_dest_acc_en = c_data_format == tt::DataFormat::UInt32 || c_data_format == tt::DataFormat::Int32 ||
                             c_data_format == tt::DataFormat::Float32;
+
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    if (fp32_dest_acc_en) {
+        for (const auto cb_index :
+             {batch_mean_tensor_cb,
+              batch_var_tensor_cb,
+              output_tensor_cb,
+              old_running_mean_tensor_cb,
+              old_running_var_tensor_cb,
+              updated_m_cb,
+              updated_v_cb,
+              momentum_cb,
+              one_cb,
+              tmp1_cb,
+              tmp2_cb,
+              tmp3_cb}) {
+            unpack_to_dest_mode[cb_index] = UnpackToDestMode::UnpackToDestFp32;
+        }
+    }
+
     std::vector<uint32_t> compute_kernel_args = {
-        static_cast<uint32_t>(running_mean_has_value), static_cast<uint32_t>(running_var_has_value)};
+        static_cast<uint32_t>(running_mean_has_value),
+        static_cast<uint32_t>(running_var_has_value),
+        batch_mean_tensor_cb,
+        batch_var_tensor_cb,
+        output_tensor_cb,
+        old_running_mean_tensor_cb,
+        old_running_var_tensor_cb,
+        updated_m_cb,
+        updated_v_cb,
+        momentum_cb,
+        one_cb,
+        tmp1_cb,
+        tmp2_cb,
+        tmp3_cb};
     auto compute_kernel_id = tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/compute/running_statistics_kernel.cpp",
+        fmt::format(
+            "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/compute/running_statistics_{}.cpp",
+            fp32_dest_acc_en ? "sfpu_kernel" : "kernel"),
         all_device_cores,
-        tt_metal::ComputeConfig{.fp32_dest_acc_en = fp32_dest_acc_en, .compile_args = compute_kernel_args});
+        tt_metal::ComputeConfig{
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .unpack_to_dest_mode = std::move(unpack_to_dest_mode),
+            .compile_args = compute_kernel_args});
 
     auto set_runtime_args = [](Program& program, KernelHandle kernel_id, CoreCoord core, auto&& args) {
         tt_metal::SetRuntimeArgs(program, kernel_id, core, args);

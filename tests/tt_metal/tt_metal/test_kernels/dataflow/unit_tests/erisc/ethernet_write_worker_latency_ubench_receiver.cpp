@@ -4,100 +4,6 @@
 
 #include "ethernet_write_worker_latency_ubench_common.hpp"
 
-FORCE_INLINE void main_loop_uni_dir(
-    const std::array<uint32_t, NUM_BUFFER_SLOTS>& receiver_buffer_slot_addrs,
-    const std::array<volatile eth_buffer_slot_sync_t*, NUM_BUFFER_SLOTS>& receiver_buffer_slot_sync_addrs,
-    uint32_t message_size,
-    uint32_t num_messages,
-    uint64_t worker_noc_addr) {
-    uint32_t total_msgs =
-#ifdef TEST_LATENCY
-        num_messages;
-#else
-        num_messages * NUM_BUFFER_SLOTS;
-#endif
-
-    DPRINT << "RECEIVER MAIN LOOP" << ENDL();
-
-    uint32_t receiver_buffer_read_ptr = 0;
-    uint32_t receiver_buffer_write_ptr = 0;
-    uint32_t receiver_num_messages_ack = 0;
-
-    noc_async_write_one_packet_with_trid_set_state(worker_noc_addr);
-
-    while (receiver_num_messages_ack < total_msgs) {
-        update_receiver_state(
-            receiver_buffer_slot_addrs,
-            receiver_buffer_slot_sync_addrs,
-            worker_noc_addr,
-            message_size,
-            receiver_num_messages_ack,
-            receiver_buffer_read_ptr,
-            receiver_buffer_write_ptr);
-
-        // not called in normal execution mode
-        switch_context_if_debug();
-    }
-}
-
-FORCE_INLINE void main_loop_bi_dir(
-    const std::array<uint32_t, NUM_BUFFER_SLOTS>& sender_buffer_slot_addrs,
-    const std::array<volatile eth_buffer_slot_sync_t*, NUM_BUFFER_SLOTS>& sender_buffer_slot_sync_addrs,
-    const std::array<uint32_t, NUM_BUFFER_SLOTS>& receiver_buffer_slot_addrs,
-    const std::array<volatile eth_buffer_slot_sync_t*, NUM_BUFFER_SLOTS>& receiver_buffer_slot_sync_addrs,
-    uint32_t full_payload_size,
-    uint32_t message_size,
-    uint32_t num_messages,
-    uint64_t worker_noc_addr) {
-    uint32_t total_msgs =
-#ifdef TEST_LATENCY
-        num_messages * 2;
-#else
-        num_messages * NUM_BUFFER_SLOTS * 2;
-#endif
-
-    DPRINT << "RECEIVER MAIN LOOP" << ENDL();
-
-    uint32_t sender_buffer_read_ptr = 0;
-    uint32_t sender_buffer_write_ptr = 0;
-
-    uint32_t receiver_buffer_read_ptr = 0;
-    uint32_t receiver_buffer_write_ptr = 0;
-
-    uint32_t num_messages_ack = 0;
-    uint32_t sender_num_messages_send =
-#ifdef TEST_LATENCY
-        num_messages;
-#else
-        num_messages * NUM_BUFFER_SLOTS;
-#endif
-
-    noc_async_write_one_packet_with_trid_set_state(worker_noc_addr);
-
-    while (num_messages_ack < total_msgs) {
-        update_sender_state(
-            sender_buffer_slot_addrs,
-            sender_buffer_slot_sync_addrs,
-            full_payload_size,
-            num_messages_ack,
-            sender_num_messages_send,
-            sender_buffer_read_ptr,
-            sender_buffer_write_ptr);
-
-        update_receiver_state(
-            receiver_buffer_slot_addrs,
-            receiver_buffer_slot_sync_addrs,
-            worker_noc_addr,
-            message_size,
-            num_messages_ack,
-            receiver_buffer_read_ptr,
-            receiver_buffer_write_ptr);
-
-        // not called in normal execution mode
-        switch_context_if_debug();
-    }
-}
-
 void kernel_main() {
     uint32_t arg_idx = 0;
     const uint32_t handshake_addr = get_arg_val<uint32_t>(arg_idx++);
@@ -116,39 +22,83 @@ void kernel_main() {
     buffer_start_addr = setup_receiver_buffer(
         receiver_buffer_slot_addrs, receiver_buffer_slot_sync_addrs, buffer_start_addr, message_size);
 
-#ifdef ENABLE_BI_DIRECTION
+    // Only used for bi-directional cases
     std::array<uint32_t, NUM_BUFFER_SLOTS> sender_buffer_slot_addrs;
     std::array<volatile eth_buffer_slot_sync_t*, NUM_BUFFER_SLOTS> sender_buffer_slot_sync_addrs;
-    setup_sender_buffer(sender_buffer_slot_addrs, sender_buffer_slot_sync_addrs, buffer_start_addr, message_size);
-#endif
+    if constexpr (benchmark_type == BenchmarkType::EthOnlyBiDir or benchmark_type == BenchmarkType::EthEthTensixBiDir) {
+        setup_sender_buffer(sender_buffer_slot_addrs, sender_buffer_slot_sync_addrs, buffer_start_addr, message_size);
+    }
 
     // Avoids hang in issue https://github.com/tenstorrent/tt-metal/issues/9963
     for (uint32_t i = 0; i < 2000000000; i++) {
         asm volatile("nop");
     }
 
-    // worker noc address
     uint64_t worker_noc_addr = get_noc_addr(worker_noc_x, worker_noc_y, worker_buffer_addr);
 
     eth_setup_handshake(handshake_addr, false);
 
-    {
-        DeviceZoneScopedN("MAIN-TEST-BODY");
-#ifdef ENABLE_BI_DIRECTION
-        main_loop_bi_dir(
-            sender_buffer_slot_addrs,
-            sender_buffer_slot_sync_addrs,
-            receiver_buffer_slot_addrs,
-            receiver_buffer_slot_sync_addrs,
-            full_payload_size,
-            message_size,
-            num_messages,
-            worker_noc_addr);
-#else
-        main_loop_uni_dir(
-            receiver_buffer_slot_addrs, receiver_buffer_slot_sync_addrs, message_size, num_messages, worker_noc_addr);
-#endif
+    switch (benchmark_type) {
+        case EthOnlyUniDir: {
+            DeviceZoneScopedN("MAIN-TEST-BODY");
+            receiver_uni_dir<false>(
+                receiver_buffer_slot_addrs,
+                receiver_buffer_slot_sync_addrs,
+                message_size,
+                full_payload_size,
+                num_messages,
+                worker_noc_addr);
+        } break;
+        case EthOnlyBiDir: {
+            DeviceZoneScopedN("MAIN-TEST-BODY");
+            send_receiver_bi_dir<false>(
+                sender_buffer_slot_addrs,
+                sender_buffer_slot_sync_addrs,
+                receiver_buffer_slot_addrs,
+                receiver_buffer_slot_sync_addrs,
+                full_payload_size,
+                message_size,
+                num_messages,
+                worker_noc_addr);
+        } break;
+        case EthEthTensixUniDir: {
+            DeviceZoneScopedN("MAIN-TEST-BODY");
+            receiver_uni_dir<true>(
+                receiver_buffer_slot_addrs,
+                receiver_buffer_slot_sync_addrs,
+                message_size,
+                full_payload_size,
+                num_messages,
+                worker_noc_addr);
+        } break;
+        case EthEthTensixBiDir: {
+            DeviceZoneScopedN("MAIN-TEST-BODY");
+            send_receiver_bi_dir<true>(
+                sender_buffer_slot_addrs,
+                sender_buffer_slot_sync_addrs,
+                receiver_buffer_slot_addrs,
+                receiver_buffer_slot_sync_addrs,
+                full_payload_size,
+                message_size,
+                num_messages,
+                worker_noc_addr);
+
+        } break;
+        case TensixPushEth: {
+            ASSERT(0);
+        } break;
+        case EthMcastTensix: {
+            ASSERT(0);
+        } break;
+        case EthToLocalEth: {
+            ASSERT(0);
+        } break;
+        case EthToLocalEthAndMcastTensix: {
+            ASSERT(0);
+        } break;
+        default: WAYPOINT("!ETH"); ASSERT(0);
     }
+
     // need to do a delay as trid writes are not waiting for acks, so need to make sure noc response is back.
     for (int i = 0; i < 1000; ++i) {
         asm volatile("nop");

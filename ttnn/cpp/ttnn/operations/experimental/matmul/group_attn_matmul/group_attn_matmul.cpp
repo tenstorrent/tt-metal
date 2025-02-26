@@ -12,7 +12,7 @@
 namespace ttnn::operations::experimental::matmul {
 
 ttnn::Tensor GroupAttnMatmulOperation::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const CoreCoord& compute_with_storage_grid_size,

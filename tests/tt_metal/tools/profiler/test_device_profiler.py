@@ -230,8 +230,8 @@ def test_dispatch_cores():
 @skip_for_grayskull()
 def test_ethernet_dispatch_cores():
     REF_COUNT_DICT = {
-        "Ethernet CQ Dispatch": [17, 12, 3902],
-        "Ethernet CQ Prefetch": [18, 1954],
+        "Ethernet CQ Dispatch": [17, 12, 3899],
+        "Ethernet CQ Prefetch": [18, 1951],
     }
     os.environ["TT_METAL_DEVICE_PROFILER_DISPATCH"] = "1"
     devicesData = run_device_profiler_test(
@@ -354,16 +354,16 @@ def test_timestamped_events():
 def test_sub_device_profiler():
     ARCH_NAME = os.getenv("ARCH_NAME")
     run_gtest_profiler_test(
-        "./build/test/tt_metal/unit_tests_dispatch" + "_" + ARCH_NAME,
+        "./build/test/tt_metal/unit_tests_dispatch",
         "CommandQueueSingleCardFixture.TensixTestSubDeviceBasicPrograms",
     )
     os.environ["TT_METAL_PROFILER_SYNC"] = "1"
     run_gtest_profiler_test(
-        "./build/test/tt_metal/unit_tests_dispatch" + "_" + ARCH_NAME,
+        "./build/test/tt_metal/unit_tests_dispatch",
         "CommandQueueSingleCardFixture.TensixActiveEthTestSubDeviceBasicEthPrograms",
     )
     os.environ["TT_METAL_PROFILER_SYNC"] = "0"
     run_gtest_profiler_test(
-        "./build/test/tt_metal/unit_tests_dispatch" + "_" + ARCH_NAME,
+        "./build/test/tt_metal/unit_tests_dispatch",
         "CommandQueueSingleCardTraceFixture.TensixTestSubDeviceTraceBasicPrograms",
     )

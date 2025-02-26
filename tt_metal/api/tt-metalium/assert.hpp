@@ -92,20 +92,25 @@ inline std::string backtrace_to_string(int size = 64, int skip = 2, const std::s
 template <typename... Args>
 [[noreturn]] void tt_throw_impl(
     char const* file, int line, char const* assert_type, char const* condition_str, Args const&... args) {
+    if (std::getenv("TT_ASSERT_ABORT")) {
+        if constexpr (sizeof...(args) > 0) {
+            log_fatal(args...);
+            Logger::get().flush();
+        }
+        abort();
+    }
+
     std::stringstream trace_message_ss = {};
     trace_message_ss << assert_type << " @ " << file << ":" << line << ": " << condition_str << std::endl;
     if constexpr (sizeof...(args) > 0) {
         trace_message_ss << "info:" << std::endl;
         trace_message_ss << fmt::format(args...) << std::endl;
-        log_fatal(args...);
+        log_debug(args...);
+        Logger::get().flush();
     }
     trace_message_ss << "backtrace:\n";
     trace_message_ss << tt::assert::backtrace_to_string(100, 3, " --- ");
     trace_message_ss << std::flush;
-    Logger::get().flush();
-    if (std::getenv("TT_ASSERT_ABORT")) {
-        abort();
-    }
     throw std::runtime_error(trace_message_ss.str());
 }
 

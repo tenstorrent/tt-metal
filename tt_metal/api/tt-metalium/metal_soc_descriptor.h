@@ -20,16 +20,12 @@ public:
     std::vector<CoreCoord> dram_view_eth_cores;     // per dram view preferred eth endpoint
     std::vector<size_t> dram_view_address_offsets;  // starting address offset
 
-    std::vector<CoreCoord> logical_ethernet_cores;
     uint64_t dram_core_size;
     uint64_t dram_view_size;
 
-    std::vector<tt_xy_pair> physical_ethernet_cores;
-
     std::map<CoreCoord, int> logical_eth_core_to_chan_map;
-    std::map<int, CoreCoord> chan_to_logical_eth_core_map;
 
-    metal_SocDescriptor(const tt_SocDescriptor& other, uint32_t harvesting_mask, const BoardType& board_type);
+    metal_SocDescriptor(const tt_SocDescriptor& other, const BoardType& board_type);
     metal_SocDescriptor() = default;
 
     CoreCoord get_preferred_worker_core_for_dram_view(int dram_view) const;
@@ -38,9 +34,6 @@ public:
     size_t get_address_offset(int dram_view) const;
     size_t get_channel_for_dram_view(int dram_view) const;
     size_t get_num_dram_views() const;
-
-    const std::vector<CoreCoord>& get_logical_ethernet_cores() const;
-    const std::vector<CoreCoord>& get_physical_ethernet_cores() const;
 
     int get_dram_channel_from_logical_core(const CoreCoord& logical_coord) const;
 

@@ -7,6 +7,7 @@
 #include <memory>
 
 #include <tt-metalium/overloaded.hpp>
+#include "tt-metalium/mesh_coord.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/distributed/distributed_tensor_config.hpp"
@@ -24,7 +25,7 @@ std::shared_ptr<MeshDevice> open_mesh_device(
     size_t trace_region_size,
     size_t num_command_queues,
     const DispatchCoreConfig& dispatch_core_config,
-    const MeshOffset& offset,
+    const std::optional<MeshCoordinate>& offset,
     const std::vector<int>& physical_device_ids) {
     auto config =
         MeshDeviceConfig{.mesh_shape = mesh_shape, .offset = offset, .physical_device_ids = physical_device_ids};
@@ -124,11 +125,10 @@ Tensor aggregate_as_tensor(
 std::vector<int> get_t3k_physical_device_ids_ring() {
     using namespace tt::tt_metal::distributed;
     auto& instance = SystemMesh::instance();
-    auto num_devices = instance.get_num_devices();
+    auto num_devices = instance.get_shape().mesh_size();
     TT_FATAL(num_devices == 8, "T3000 ring topology only works with 8 devices");
 
-    auto physical_device_ids =
-        instance.get_mapped_physical_device_ids(MeshDeviceConfig{MeshShape{1, 8}, MeshOffset{0, 0}});
+    auto physical_device_ids = instance.get_mapped_physical_device_ids(MeshDeviceConfig{.mesh_shape = MeshShape(1, 8)});
     return physical_device_ids;
 }
 
@@ -151,9 +151,10 @@ std::vector<IDevice*> get_mapped_devices(const Tensor& tensor, MeshDevice& mesh_
         return std::visit(
             tt::stl::overloaded{
                 [&](const ShardTensor2D& s) {
-                    return mesh_device.get_view().get_devices(MeshShape{s.shard_mesh.y, s.shard_mesh.x});
+                    const tt::tt_metal::distributed::MeshCoordinateRange range(
+                        MeshShape(s.shard_mesh.y, s.shard_mesh.x));
+                    return mesh_device.get_view().get_devices(range);
                 },
-                [&](const ShardTensor& s) { return get_workers_for_tensor(mesh_device.get_view().get_line_devices()); },
                 [&](const auto&) { return get_workers_for_tensor(mesh_device.get_devices()); }},
             host_storage.strategy);
     } else if (std::holds_alternative<MultiDeviceStorage>(tensor.get_storage())) {

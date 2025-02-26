@@ -62,7 +62,7 @@ void LightMetalCaptureContext::reset() {
     cmds_vec_.clear();
     trace_descs_vec_.clear();
     buffer_to_global_id_map_.clear();
-    program_to_global_id_map_.clear();
+    program_id_to_global_id_map_.clear();
     kernel_to_global_id_map_.clear();
     cb_handle_to_global_id_map_.clear();
 }
@@ -101,31 +101,31 @@ uint32_t LightMetalCaptureContext::get_global_id(const Buffer* obj) {
 }
 
 bool LightMetalCaptureContext::is_in_map(const Program* obj) {
-    return program_to_global_id_map_.find(obj) != program_to_global_id_map_.end();
+    return program_id_to_global_id_map_.find(obj->get_id()) != program_id_to_global_id_map_.end();
 }
 
 uint32_t LightMetalCaptureContext::add_to_map(const Program* obj) {
     if (is_in_map(obj)) {
-        log_warning(tt::LogMetalTrace, "Program already exists in global_id map.");
+        log_warning(tt::LogMetalTrace, "Program id: {} already exists in global_id map.", obj->get_id());
     }
     uint32_t global_id = next_global_id_++;
-    program_to_global_id_map_[obj] = global_id;
+    program_id_to_global_id_map_[obj->get_id()] = global_id;
     return global_id;
 }
 
 void LightMetalCaptureContext::remove_from_map(const Program* obj) {
     if (!is_in_map(obj)) {
-        log_warning(tt::LogMetalTrace, "Program not found in global_id map.");
+        log_warning(tt::LogMetalTrace, "Program id: {} not found in global_id map.", obj->get_id());
     }
-    program_to_global_id_map_.erase(obj);
+    program_id_to_global_id_map_.erase(obj->get_id());
 }
 
 uint32_t LightMetalCaptureContext::get_global_id(const Program* obj) {
-    auto it = program_to_global_id_map_.find(obj);
-    if (it != program_to_global_id_map_.end()) {
+    auto it = program_id_to_global_id_map_.find(obj->get_id());
+    if (it != program_id_to_global_id_map_.end()) {
         return it->second;
     } else {
-        TT_THROW("Program not found in global_id map.");
+        TT_THROW("Program id: {} not found in global_id map.", obj->get_id());
     }
 }
 
@@ -201,7 +201,7 @@ TraceDescriptorByTraceIdOffset to_flatbuffer(
     std::vector<flatbuffers::Offset<tt::tt_metal::flatbuffer::SubDeviceDescriptorMapping>>
         sub_device_descriptor_offsets;
     for (const auto& [sub_device_id, descriptor] : trace_desc.descriptors) {
-        auto descriptor_offset = tt::tt_metal::flatbuffer::CreateTraceDescriptorMetaData(
+        auto descriptor_offset = tt::tt_metal::flatbuffer::CreateTraceWorkerDescriptor(
             builder,
             descriptor.num_completion_worker_cores,
             descriptor.num_traced_programs_needing_go_signal_multicast,

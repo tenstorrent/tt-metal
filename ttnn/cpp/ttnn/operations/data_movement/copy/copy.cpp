@@ -7,7 +7,7 @@
 #include <utility>
 
 #include "device/copy_device_operation.hpp"
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/decorators.hpp"
 #include "ttnn/run_operation.hpp"
 
@@ -15,7 +15,7 @@ using namespace tt::tt_metal;
 
 namespace ttnn::operations::data_movement {
 
-ttnn::Tensor CopyOperation::invoke(uint8_t queue_id, const Tensor& src_tensor, const Tensor& dst_tensor) {
+ttnn::Tensor CopyOperation::invoke(QueueId queue_id, const Tensor& src_tensor, const Tensor& dst_tensor) {
     operation::run(
         CopyDeviceOperation{dst_tensor.memory_config(), dst_tensor.get_dtype()},
         {src_tensor, dst_tensor},
@@ -30,7 +30,7 @@ ttnn::Tensor CopyOperation::invoke(const Tensor& src_tensor, const Tensor& dst_t
 }
 
 ttnn::Tensor AssignOperation::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& input,
     const MemoryConfig& output_mem_config,
     std::optional<const DataType> output_dtype,
@@ -49,7 +49,7 @@ ttnn::Tensor AssignOperation::invoke(
     return invoke(ttnn::DefaultQueueId, input, output_mem_config, output_dtype);
 }
 
-ttnn::Tensor AssignOperation::invoke(uint8_t queue_id, const Tensor& input_a, const Tensor& input_b) {
+ttnn::Tensor AssignOperation::invoke(QueueId queue_id, const Tensor& input_a, const Tensor& input_b) {
     operation::run(
         CopyDeviceOperation{input_b.memory_config(), input_b.get_dtype()}, {input_a, input_b}, {}, {}, queue_id);
     return input_b;

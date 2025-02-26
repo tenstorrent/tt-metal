@@ -456,7 +456,7 @@ def enable_tracing():
     global ENABLE_TRACER
     global GRAPH_STACK
     if ttnn.CONFIG.enable_fast_runtime_mode:
-        raise ValueError("Tracing is only supported in fast runtime mode.")
+        raise ValueError("Tracing is not supported in fast runtime mode.")
     if ENABLE_TRACER:
         raise ValueError("Tracing is already enabled.")
     ENABLE_TRACER = True

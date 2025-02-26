@@ -53,7 +53,6 @@ ALWI void batchnorm_bcast_tiles(
     // 1/(sqrt(batch_var + eps))
     cb_reserve_back(cb_den, onetile);
     cb_wait_front(cb_batch_var, 1);
-    cb_wait_front(cb_eps, 1);
 
     tile_regs_acquire();
     add_tiles_init_with_dt(cb_batch_var, cb_eps);
@@ -67,7 +66,6 @@ ALWI void batchnorm_bcast_tiles(
     tile_regs_release();
 
     cb_pop_front(cb_batch_var, 1);
-    cb_pop_front(cb_eps, 1);
     cb_push_back(cb_den, onetile);
 
     // (input - batch_mean)/(sqrt(batch_var + eps)) = result
@@ -144,17 +142,17 @@ void MAIN {
         return;
     }
 
-    constexpr auto cb_input = tt::CBIndex::c_0;       // input
-    constexpr auto cb_batch_mean = tt::CBIndex::c_1;  // batch_mean
+    constexpr auto cb_input = get_compile_time_arg_val(2);       // input
+    constexpr auto cb_batch_mean = get_compile_time_arg_val(3);  // batch_mean
     constexpr auto cb_output_0 =
-        tt::CBIndex::c_2;  // output -- > [(input - batch_mean)/(sqrt(batch_var + eps))] * weight
-    constexpr auto cb_batch_var = tt::CBIndex::c_3;  // batch_var
-    constexpr auto cb_eps = tt::CBIndex::c_4;        // eps
-    constexpr auto cb_den = tt::CBIndex::c_5;        // 1/(sqrt(batch_var + eps))
-    constexpr auto cb_num = tt::CBIndex::c_6;        // input - batch_mean
-    constexpr auto cb_weight = tt::CBIndex::c_16;    // weight tensor
-    constexpr auto cb_tmp_1 = tt::CBIndex::c_17;     // (input - batch_mean)/(sqrt(batch_var + eps))
-    constexpr auto cb_bias = tt::CBIndex::c_18;      // bias tensor
+        get_compile_time_arg_val(4);  // output -- > [(input - batch_mean)/(sqrt(batch_var + eps))] * weight
+    constexpr auto cb_batch_var = get_compile_time_arg_val(5);  // batch_var
+    constexpr auto cb_eps = get_compile_time_arg_val(6);        // eps
+    constexpr auto cb_den = get_compile_time_arg_val(7);        // 1/(sqrt(batch_var + eps))
+    constexpr auto cb_num = get_compile_time_arg_val(8);        // input - batch_mean
+    constexpr auto cb_weight = get_compile_time_arg_val(9);     // weight tensor
+    constexpr auto cb_tmp_1 = get_compile_time_arg_val(10);     // (input - batch_mean)/(sqrt(batch_var + eps))
+    constexpr auto cb_bias = get_compile_time_arg_val(11);      // bias tensor
 
     auto cb_bcast = cb_batch_mean;
     auto cb_other = cb_input;
@@ -164,6 +162,9 @@ void MAIN {
     sub_tiles_init(cb_other, cb_bcast);
     uint32_t complete_iterations = (num_tiles + tile_start) / tile_freq;
     uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;
+
+    cb_wait_front(cb_eps, 1);
+
     for (uint32_t i = 0; i < complete_iterations; ++i, tile_start = 0) {
         batchnorm_bcast_tiles(
             cb_bcast,
@@ -198,8 +199,5 @@ void MAIN {
             weight_has_value,
             bias_has_value);
     }
-
-    constexpr uint32_t onetile = 1;
-    constexpr int dst0 = 0;
 }
 }  // namespace NAMESPACE

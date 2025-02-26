@@ -9,21 +9,16 @@ import os
 import ttnn
 from models.demos.llama3.tt.llama_common import (
     get_prefill_rot_mat,
-    HostEmbedding,
     PagedAttentionConfig,
+    preprocess_inputs_prefill,
 )
 from models.demos.llama3.tt.llama_model import TtTransformer
 from models.demos.llama3.tt.model_config import TtModelArgs, LlamaOptimizations
-from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
-from models.demos.llama3.demo.demo import preprocess_inputs_prefill
 from pathlib import Path
 
 
-def get_accuracy_thresholds(model_name: str, device_name: str, optimizations: LlamaOptimizations):
+def get_accuracy_thresholds(base_model_name: str, device_name: str, optimizations: LlamaOptimizations):
     """Parse accuracy thresholds from PERF.md for the given model, optimization mode, and device."""
-    # Get model size (e.g., "1b", "3b", etc.)
-    model_size = model_name.split("-")[1].lower()
-
     # Read PERF.md
     perf_file = Path(__file__).parent.parent / "PERF.md"
     with open(perf_file, "r") as f:
@@ -31,22 +26,28 @@ def get_accuracy_thresholds(model_name: str, device_name: str, optimizations: Ll
 
     # Split into sections based on optimization mode
     sections = content.split("## ")
-    target_section = next(s for s in sections if s.startswith(f"LlamaOptimizations.{optimizations.__name__}\n"))
+    target_section = next(s for s in sections if s.lower().startswith(f"{optimizations.__name__}\n"))
 
     # Parse the table and find the row for our model and device
+    # Potential lines have the form "| Llama3.1-8b    | T3K    | 91        | 99        | 49.8          |"
+    correct_line = (
+        lambda line: "|" in line
+        and base_model_name.lower() in line.split("|")[1].strip().lower()
+        and device_name.lower() in line.split("|")[2].strip().lower()
+    )
     rows = [
         line.split("|")[1:]  # Each row starts with a separator
-        for line in target_section.replace(" ", "").split("\n")
-        if f"|{model_size}|{device_name}|" in line
+        for line in target_section.split("\n")
+        if correct_line(line)
     ]
     if not rows:
         raise ValueError(
-            f"Could not find accuracy data for {model_size} on {device_name} in {optimizations.__name__} mode"
+            f"Could not find accuracy data for {base_model_name} on {device_name} in {optimizations.__name__} mode"
         )
 
     assert (
         len(rows) == 1
-    ), f"Found multiple rows for {model_size} on {device_name} in {optimizations.__name__} mode in PERF.md"
+    ), f"Found multiple rows for {base_model_name} on {device_name} in {optimizations.__name__} mode in PERF.md"
     row = rows[0]
     top1_acc = float(row[2].strip())
     top5_acc = float(row[3].strip())
@@ -60,11 +61,12 @@ def get_accuracy_thresholds(model_name: str, device_name: str, optimizations: Ll
 @pytest.mark.parametrize(
     "prefill_len, decode_len, max_seq_len",  # Max seqlen should be at least prefill_len + decode_len
     ((512, 128, 1024),),
+    #    ((131072-8192, 8192-1, 131072),),
 )
 @pytest.mark.parametrize(
     "mesh_device",
     [
-        {"N150": (1, 1), "N300": (1, 2), "T3K": (1, 8), "TG": (8, 4)}.get(
+        {"N150": (1, 1), "N300": (1, 2), "N150x4": (1, 4), "T3K": (1, 8), "TG": (8, 4)}.get(
             os.environ.get("FAKE_DEVICE"), len(ttnn.get_device_ids())
         )
     ],
@@ -130,7 +132,7 @@ def test_tt_model_acc(
         mesh_device, optimizations=optimizations, max_batch_size=batch_size, max_seq_len=max_seq_len
     )
 
-    tokenizer = Tokenizer(model_args.tokenizer_path)
+    tokenizer = model_args.tokenizer
 
     # Load state_dict for TT model
     logger.info("Loading weights...")
@@ -138,11 +140,10 @@ def test_tt_model_acc(
     logger.info("Finished loading weights...")
 
     # Load the reference data
-    model_size = model_args.model_name.split("-")[1].lower()  # e.g., "1b", "3b", "8b", "70b"
 
     if use_reference_file:
         # Existing reference file loading logic
-        reference_data_file = f"models/demos/llama3/tests/reference_outputs/{model_size}.refpt"
+        reference_data_file = f"models/demos/llama3/tests/reference_outputs/{model_args.model_name}.refpt"
         logger.info(f"Loading reference data from {reference_data_file}")
         assert os.path.exists(reference_data_file)
         reference_data = torch.load(reference_data_file)
@@ -156,7 +157,7 @@ def test_tt_model_acc(
             text = f.read()
 
         # Encode text to tokens
-        encoded_tokens = tokenizer.encode(text, bos=True, eos=False)
+        encoded_tokens = model_args.encode_prompt(text, system_prompt_text=None, instruct=False)
         total_length = prefill_len + decode_len + 1
         reference_tokens = torch.tensor(encoded_tokens[:total_length]).unsqueeze(0)
         top5_tokens = None  # Will be computed during inference
@@ -201,7 +202,7 @@ def test_tt_model_acc(
         paged_attention_config=paged_attention_config,
     )
     # Initialize embedding
-    embd = HostEmbedding(model_args)
+    embd = model_args.reference_embedding()
     state_dict_prefix = model_args.get_state_dict_prefix("", None)
     embd.load_state_dict({"emb.weight": state_dict[f"{state_dict_prefix}tok_embeddings.weight"]})
 
@@ -228,10 +229,11 @@ def test_tt_model_acc(
         # Pre-compute the rotational embedding matrix and send to device
         rot_mats_prefill = get_prefill_rot_mat(
             model_args.head_dim,
-            model_args.max_seq_len,
             mesh_device,
-            seq_len=prefill_lens[0],
-            scale_factor=model_args.rope_scaling_factor,
+            prefill_lens[0],
+            model_args.rope_theta,
+            model_args.rope_scaling_factor,
+            model_args.orig_context_len,
         )
 
         prefill_input = model_args.prepare_residual_tensor_prefill(
@@ -436,17 +438,18 @@ def test_tt_model_acc(
                 true_word = sanitize(tokenizer.decode([true_token]))
                 logger.info(f"{error['position']}: {context}[{incorrect}] != [{expected}], true: [{true_word}]")
 
-    # Get accuracy thresholds from PERF.md
-    min_top1_acc, min_top5_acc = get_accuracy_thresholds(
-        model_args.model_name,
-        model_args.device_name,
-        optimizations,
-    )
+    if use_reference_file:
+        # Get accuracy thresholds from PERF.md
+        min_top1_acc, min_top5_acc = get_accuracy_thresholds(
+            model_args.base_model_name,
+            model_args.device_name,
+            optimizations,
+        )
 
-    logger.info(f"Top-1: {total_top1_acc:.0f}% | Top-5: {total_top5_acc:.0f}%")
-    assert (
-        total_top1_acc >= min_top1_acc
-    ), f"Top-1 accuracy {total_top1_acc:.1f}% is too low (expected >={min_top1_acc}%)"
-    assert (
-        total_top5_acc >= min_top5_acc
-    ), f"Top-5 accuracy {total_top5_acc:.1f}% is too low (expected >={min_top5_acc}%)"
+        logger.info(f"Top-1: {total_top1_acc:.0f}% | Top-5: {total_top5_acc:.0f}%")
+        assert (
+            total_top1_acc >= min_top1_acc
+        ), f"Top-1 accuracy {total_top1_acc:.1f}% is too low (expected >={min_top1_acc}%)"
+        assert (
+            total_top5_acc >= min_top5_acc
+        ), f"Top-5 accuracy {total_top5_acc:.1f}% is too low (expected >={min_top5_acc}%)"

@@ -5,7 +5,7 @@
 #include <gtest/gtest.h>
 
 #include "galaxy_fixture.hpp"
-#include <tt-metalium/tt_cluster.hpp>
+#include "tt_cluster.hpp"
 #include <tt-metalium/host_api.hpp>
 
 using namespace tt;
@@ -115,7 +115,7 @@ TEST_F(GalaxyFixture, ValidateAllGalaxyChipsAreUnharvested) {
     for (IDevice* device : this->devices_) {
         const chip_id_t device_id = device->id();
         if (is_galaxy_device(device_id)) {
-            const uint32_t harvest_mask = tt::Cluster::instance().get_harvested_rows(device_id);
+            const uint32_t harvest_mask = tt::Cluster::instance().get_harvesting_mask(device_id);
             ASSERT_TRUE(harvest_mask == 0)
                 << "Harvest mask for chip " << device_id << ": " << harvest_mask << std::endl;
         }
@@ -128,7 +128,7 @@ TEST_F(GalaxyFixture, ValidateAllMMIOChipsHaveSingleRowHarvested) {
         const chip_id_t device_id = device->id();
         if (!is_galaxy_device(device_id)) {
             uint32_t num_rows_harvested = 0;
-            uint32_t harvest_mask = tt::Cluster::instance().get_harvested_rows(device_id);
+            uint32_t harvest_mask = tt::Cluster::instance().get_harvesting_mask(device_id);
             while (harvest_mask) {
                 if (harvest_mask & 1) {
                     num_rows_harvested++;

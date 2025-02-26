@@ -20,7 +20,7 @@ ttnn::Tensor convert_tensor_to_rm_reshape_convert_back_to_orig_layout(
     const uint32_t tile_first_dim,
     const uint32_t tile_second_dim,
     const MemoryConfig& memory_config,
-    const uint8_t queue_id,
+    const QueueId queue_id,
     const PadValue& pad_value);
 ttnn::Tensor fix_shape_and_perform_reshape_on_2D_RM(
     const ttnn::Tensor& tensor,
@@ -29,7 +29,7 @@ ttnn::Tensor fix_shape_and_perform_reshape_on_2D_RM(
     const uint32_t tile_first_dim,
     const uint32_t tile_second_dim,
     const MemoryConfig& memory_config,
-    const uint8_t queue_id);
+    const QueueId queue_id);
 ttnn::Tensor fix_shape_and_perform_reshape_on_3D_TILE(
     const ttnn::Tensor& tensor,
     const ttnn::Shape& logical_shape,
@@ -37,14 +37,14 @@ ttnn::Tensor fix_shape_and_perform_reshape_on_3D_TILE(
     const uint32_t tile_first_dim,
     const uint32_t tile_second_dim,
     const MemoryConfig& memory_config,
-    const uint8_t queue_id,
+    const QueueId queue_id,
     const PadValue& pad_value);
 ttnn::Tensor perform_reshape_on_2D_RM(
     const ttnn::Tensor& tensor,
     const ttnn::Shape& logical_shape,
     const ttnn::Shape& padded_shape,
     const MemoryConfig& memory_config,
-    const uint8_t queue_id);
+    const QueueId queue_id);
 ttnn::Tensor convert_tile_to_rm(
     const ttnn::Tensor& tensor,
     const ttnn::Shape& logical_shape,
@@ -52,7 +52,7 @@ ttnn::Tensor convert_tile_to_rm(
     const uint32_t tile_first_dim,
     const uint32_t tile_second_dim,
     const MemoryConfig& memory_config,
-    const uint8_t queue_id,
+    const QueueId queue_id,
     const PadValue& pad_value);
 }
 
@@ -69,28 +69,24 @@ ttnn::Tensor PerformView(
 
 struct ReshapeViewOperation {
     static ttnn::Tensor invoke(
+        const QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         const ttnn::Shape& logical_shape,
-        const std::optional<MemoryConfig>& memory_config,
-        const uint8_t queue_id,
-        const std::optional<PadValue>& pad_value);
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<PadValue>& pad_value = std::nullopt);
     static ttnn::Tensor invoke(
+        const QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         const ttnn::Shape& logical_shape,
         const ttnn::Shape& padded_shape,
-        const std::optional<MemoryConfig>& memory_config,
-        const uint8_t queue_id,
-        const std::optional<PadValue>& pad_value);
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<PadValue>& pad_value = std::nullopt);
     static ttnn::Tensor invoke(
+        const QueueId queue_id,
         const ttnn::Tensor& input_tensor,
         tt::stl::Span<const int32_t> shape_vector,
-        const std::optional<MemoryConfig>& memory_config,
-        const uint8_t queue_id,
-        const std::optional<PadValue>& pad_value);
-    static ttnn::Tensor invoke(const ttnn::Tensor& input_tensor, const ttnn::Shape& logical_shape);
-    static ttnn::Tensor invoke(
-        const ttnn::Tensor& input_tensor, const ttnn::Shape& logical_shape, const ttnn::Shape& padded_shape);
-    static ttnn::Tensor invoke(const ttnn::Tensor& input_tensor, tt::stl::Span<const int32_t> shape_vector);
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<PadValue>& pad_value = std::nullopt);
 };
 
 }  // namespace operations::data_movement

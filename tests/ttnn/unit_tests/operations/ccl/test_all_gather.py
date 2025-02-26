@@ -1959,24 +1959,29 @@ def test_all_gather_fp32(  # https://github.com/tenstorrent/tt-metal/issues/9686
         ttnn.bfloat16,
     ],
 )
-@pytest.mark.parametrize(
-    "tensor_mem_layout",
-    [
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
-    ],
-)
 @pytest.mark.parametrize("orientation", [ttnn.ShardOrientation.ROW_MAJOR])
 @pytest.mark.parametrize("num_links", [1])
 @pytest.mark.parametrize(
-    "input_shape, input_shard_shape,shard_grid",
+    "input_shape, input_shard_shape,shard_grid,tensor_mem_layout",
     (
         # LLama
         (
             (4, 1, 256, 32),
             (32, 32),
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ),
+        (
+            (1, 1, 64, 1024),
+            (64, 32),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ),
+        (
+            (4, 1, 256, 64),
+            (256, 32),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 3))}),
+            ttnn.TensorMemoryLayout.BLOCK_SHARDED,
         ),
     ),
 )

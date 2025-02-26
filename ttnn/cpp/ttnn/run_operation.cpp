@@ -278,7 +278,7 @@ OutputTensors run(
     const Tensors& input_tensors,
     const OptionalConstTensors& optional_input_tensors,
     const OptionalTensors& optional_output_tensors,
-    uint8_t cq_id) {
+    QueueId cq_id) {
     if constexpr (std::is_same_v<OutputTensors, Tensors>) {
         return ttnn::prim::old_infra_device_operation(
             cq_id, std::move(operation), input_tensors, optional_input_tensors, optional_output_tensors);
@@ -293,14 +293,14 @@ template Tensors run(
     const Tensors& input_tensors,
     const OptionalConstTensors& optional_input_tensors,
     const OptionalTensors& optional_output_tensors,
-    uint8_t cq_id);
+    QueueId cq_id);
 
 template OptionalTensors run(
     DeviceOperation<OptionalTensors>&& operation,
     const Tensors& input_tensors,
     const OptionalConstTensors& optional_input_tensors,
     const OptionalTensors& optional_output_tensors,
-    uint8_t cq_id);
+    QueueId cq_id);
 
 template <class OutputTensors>
 OutputTensors run_without_autoformat(
@@ -308,7 +308,7 @@ OutputTensors run_without_autoformat(
     const Tensors& input_tensors,
     const OptionalConstTensors& optional_input_tensors,
     const OptionalTensors& optional_output_tensors,
-    uint8_t cq_id) {
+    QueueId cq_id) {
     using ttnn::operations::experimental::auto_format::AutoFormat;
     ZoneScoped;
     IDevice* device = detail::get_device(input_tensors, optional_input_tensors);
@@ -340,14 +340,14 @@ template Tensors run_without_autoformat<Tensors>(
     const Tensors& input_tensors,
     const OptionalConstTensors& optional_input_tensors,
     const OptionalTensors& optional_output_tensors,
-    uint8_t cq_id);
+    QueueId cq_id);
 
 template OptionalTensors run_without_autoformat<OptionalTensors>(
     DeviceOperation<OptionalTensors>&& operation,
     const Tensors& input_tensors,
     const OptionalConstTensors& optional_input_tensors,
     const OptionalTensors& optional_output_tensors,
-    uint8_t cq_id);
+    QueueId cq_id);
 
 std::vector<Shape> extract_padded_shapes(
     const std::vector<ttnn::TensorSpec>& tensor_specs,
@@ -373,7 +373,7 @@ Tensors run_with_autoformat(
     const OptionalTensors& optional_output_tensors,
     const float pad_value,
     const bool pad_c,
-    uint8_t cq_id) {
+    QueueId cq_id) {
     using ttnn::operations::experimental::auto_format::AutoFormat;
     ZoneScoped;
     IDevice* device = detail::get_device(input_tensors, optional_input_tensors);
@@ -445,7 +445,7 @@ Tensors run_with_autoformat(
     const OptionalConstTensors& optional_input_tensors,
     const std::vector<std::optional<FormatParams>>& optional_input_formatting,
     const OptionalTensors& optional_output_tensors,
-    uint8_t cq_id) {
+    ttnn::QueueId cq_id) {
     using ttnn::operations::experimental::auto_format::AutoFormat;
     ZoneScoped;
     IDevice* device = detail::get_device(input_tensors, optional_input_tensors);
@@ -571,9 +571,7 @@ void validate_workers_and_storage(
 }
 
 std::vector<IDevice*> get_workers_for_op_output(
-    const std::vector<Tensor>& inputs,
-    const std::vector<std::optional<const Tensor>>& optional_inputs,
-    bool enable_autoformat_device) {
+    const std::vector<Tensor>& inputs, const std::vector<std::optional<const Tensor>>& optional_inputs) {
     using ttnn::operations::experimental::auto_format::AutoFormat;
     std::vector<IDevice*> workers_for_op = {};
     // Infer output workers from inputs. For multi-device tensors the number
@@ -600,18 +598,6 @@ std::vector<IDevice*> get_workers_for_op_output(
             }
         }
     }
-    if (enable_autoformat_device) {
-        validate_workers_and_storage(inputs, optional_inputs, workers_for_op);
-        // Workers not specified - inputs are on host and not multi-device.
-        // Use the default device from autoformat.
-        if (not workers_for_op.size()) {
-            TT_FATAL(
-                AutoFormat::GetDefaultDevice(),
-                "Default device must be specified using AutoFormat::SetDefaultDevice, if workers are not specified for "
-                "inputs to op.");
-            workers_for_op = {AutoFormat::GetDefaultDevice()};
-        }
-    }
     return workers_for_op;
 }
 
@@ -621,18 +607,18 @@ void launch_op_func(
     const Tensors input_tensors,
     OutputType& output_tensors,
     const OptionalConstTensors optional_input_tensors,
-    const OptionalTensors optional_output_tensors,
-    bool enable_autoformat_device) {
+    const OptionalTensors optional_output_tensors) {
     // Send host side op compile and run to the worker queue
     // Assert to ensure that worker threads are specified.
     ZoneScopedN("LaunchOp");
     auto& workers = detail::get_workers(output_tensors);
     std::size_t workers_size = workers.size();
-    if (not enable_autoformat_device and workers.empty() or tt::tt_metal::detail::InWorkerThread()) {
+    if (workers.size() <= 1 || tt::tt_metal::detail::InWorkerThread()) {
         // Run in main thread or immediately in worker thread
         output_tensors = op_func(input_tensors, optional_input_tensors, optional_output_tensors);
         return;
     }
+
     detail::check_output(output_tensors, workers);
     validate_worker_modes(workers);
     // Record ref counts for all tensors before pushing to worker queue.
@@ -681,27 +667,6 @@ void launch_op_func(
     // If so, mark them in use by current worker. Tensors shared across workers
     // are only supported when each tensor is tied to a single device/worker
     // (example all-gather).
-    if (workers_size == 1) {
-        // Single worker per tensor and.
-        for (int i = 0; i < async_safe_input_tensors.size(); i++) {
-            if (async_safe_input_tensors[i].get_workers().size() and
-                async_safe_input_tensors[i].get_workers()[0] != workers[0]) {
-                // This input has a worker assigned that doesn't match the worker of the output being created (its
-                // shared).
-                async_safe_input_tensors[i].tensor_attributes->num_sibling_workers_sharing_tensor++;
-                cross_worker_input_tensor_idx.insert(i);
-            }
-        }
-        for (int i = 0; i < async_safe_optional_input_tensors.size(); i++) {
-            if (async_safe_optional_input_tensors[i].has_value() and
-                async_safe_optional_input_tensors[i].value().get_workers().size() and
-                async_safe_optional_input_tensors[i].value().get_workers()[0] != workers[0]) {
-                async_safe_optional_input_tensors[i].value().tensor_attributes->num_sibling_workers_sharing_tensor++;
-                cross_worker_optional_input_tensor_idx.insert(i);
-            }
-        }
-    }
-
     {
         ZoneScopedN("PushOpToWorkers");
         auto work_lambda = std::make_shared<std::function<void(IDevice*)>>(
@@ -824,14 +789,12 @@ template void launch_op_func<Tensors>(
     const Tensors input_tensors,
     Tensors& output_tensors,
     const OptionalConstTensors optional_input_tensors,
-    const OptionalTensors optional_output_tensors,
-    bool enable_autoformat_device);
+    const OptionalTensors optional_output_tensors);
 template void launch_op_func<OptionalTensors>(
     const std::function<OptionalTensors(const Tensors&, const OptionalConstTensors&, const OptionalTensors&)>& op_func,
     const Tensors input_tensors,
     OptionalTensors& output_tensors,
     const OptionalConstTensors optional_input_tensors,
-    const OptionalTensors optional_output_tensors,
-    bool enable_autoformat_device);
+    const OptionalTensors optional_output_tensors);
 
 }  // namespace tt::tt_metal::operation

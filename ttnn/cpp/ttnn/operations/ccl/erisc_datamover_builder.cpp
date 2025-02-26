@@ -75,24 +75,43 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     TT_FATAL(sender_channel_1_buffer_index_address != sender_channel_0_buffer_index_address, "FabricEriscDatamoverConfig was constructed with illegal buffer index address");
     const size_t min_buffer_size = sizeof(tt::fabric::PacketHeader) + 2 * FabricEriscDatamoverConfig::eth_channel_sync_size;
     TT_FATAL(channel_buffer_size_bytes >= min_buffer_size, "FabricEriscDatamoverConfig was constructed with `channel_buffer_size_bytes` argument set smaller than minimum size of {}", min_buffer_size);
+
+    constexpr size_t default_pow2_num_sender_buffer_slots = 8;
+    constexpr size_t default_pow2_num_receiver_buffer_slots = 16;
+
     const std::size_t channel_buffer_size_with_channel_sync =
         channel_buffer_size_bytes + sizeof(tt::fabric::PacketHeader); // + 16 // sizeof(tt::fabric::PacketHeader);
 
-    this->channel_buffer_size_bytes = channel_buffer_size_bytes;
+    const size_t next_lowest_power_of_2_buffer_slot_count =
+
+        this->channel_buffer_size_bytes = channel_buffer_size_bytes;
     this->channel_buffer_size_bytes_with_channel_sync = channel_buffer_size_with_channel_sync;
     const std::size_t total_ratio_count = 2 * sender_ratio_size + receiver_ratio_size;
+
     this->sender_0_channel_size_bytes = tt::round_down(
         (available_channel_buffering_space / total_ratio_count) * sender_ratio_size,
         channel_buffer_size_with_channel_sync);
-    this->sender_0_num_buffers = this->sender_0_channel_size_bytes / channel_buffer_size_with_channel_sync;
+    if constexpr (FabricEriscDatamoverConfig::constrain_to_power_of_2_buffer_slot_counts) {
+        this->sender_0_num_buffers = default_pow2_num_sender_buffer_slots;
+    } else {
+        this->sender_0_num_buffers = this->sender_0_channel_size_bytes / channel_buffer_size_with_channel_sync;
+    }
     this->sender_1_channel_size_bytes = tt::round_down(
         (available_channel_buffering_space / total_ratio_count) * sender_ratio_size,
         channel_buffer_size_with_channel_sync);
-    this->sender_1_num_buffers = this->sender_1_channel_size_bytes / channel_buffer_size_with_channel_sync;
+    if constexpr (FabricEriscDatamoverConfig::constrain_to_power_of_2_buffer_slot_counts) {
+        this->sender_1_num_buffers = default_pow2_num_sender_buffer_slots;
+    } else {
+        this->sender_1_num_buffers = this->sender_1_channel_size_bytes / channel_buffer_size_with_channel_sync;
+    }
     this->receiver_channel_size_bytes = tt::round_down(
         (available_channel_buffering_space / total_ratio_count) * receiver_ratio_size,
         channel_buffer_size_with_channel_sync);
-    this->receiver_num_buffers = this->receiver_channel_size_bytes / channel_buffer_size_with_channel_sync;
+    if constexpr (FabricEriscDatamoverConfig::constrain_to_power_of_2_buffer_slot_counts) {
+        this->receiver_num_buffers = default_pow2_num_receiver_buffer_slots;
+    } else {
+        this->receiver_num_buffers = this->receiver_channel_size_bytes / channel_buffer_size_with_channel_sync;
+    }
 
     this->sender_0_channel_base_address = buffer_region_start;
     this->sender_1_channel_base_address = this->sender_0_channel_base_address + this->sender_0_channel_size_bytes;
@@ -806,7 +825,10 @@ void EdmLineFabricOpInterface::set_firmware_context_switch_interval(size_t inter
     }
 }
 
-void initialize_edm_fabric(distributed::MeshDevice* mesh_device, bool wrap_fabric_around_mesh) {
+void initialize_edm_fabric(
+    distributed::MeshDevice* mesh_device,
+    bool wrap_fabric_around_mesh,
+    std::optional<size_t> context_switch_interval_override) {
     if (wrap_fabric_around_mesh) {
         auto devices = mesh_device->get_view().get_ring_devices();
         std::vector<Program*> program_ptrs;
@@ -816,6 +838,9 @@ void initialize_edm_fabric(distributed::MeshDevice* mesh_device, bool wrap_fabri
         std::transform(
             programs.begin(), programs.end(), std::back_inserter(program_ptrs), [](Program& p) { return &p; });
         EdmLineFabricOpInterface fabric_device_builders = EdmLineFabricOpInterface(devices, program_ptrs, true);
+        if (context_switch_interval_override.has_value()) {
+            fabric_device_builders.set_firmware_context_switch_interval(context_switch_interval_override.value());
+        }
         fabric_device_builders.build_kernels();
 
         for (size_t i = 0; i < devices.size(); i++) {
@@ -846,6 +871,9 @@ void initialize_edm_fabric(distributed::MeshDevice* mesh_device, bool wrap_fabri
             });
             row_fabric_lines.push_back(
                 EdmLineFabricOpInterface(mesh_device->get_view().get_row_views()[i], program_ptrs, true));
+            if (context_switch_interval_override.has_value()) {
+                row_fabric_lines.back().set_firmware_context_switch_interval(context_switch_interval_override.value());
+            }
         }
 
         for (size_t i = 0; i < num_cols; i++) {
@@ -856,6 +884,9 @@ void initialize_edm_fabric(distributed::MeshDevice* mesh_device, bool wrap_fabri
             }
             col_fabric_lines.push_back(
                 EdmLineFabricOpInterface(mesh_device->get_view().get_column_views()[i], program_ptrs, true));
+            if (context_switch_interval_override.has_value()) {
+                col_fabric_lines.back().set_firmware_context_switch_interval(context_switch_interval_override.value());
+            }
         }
 
         std::for_each(row_fabric_lines.begin(), row_fabric_lines.end(), [](auto& line) { line.build_kernels(); });

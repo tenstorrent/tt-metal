@@ -106,7 +106,9 @@ class PytorchLlamaRotaryModel(torch.nn.Module):
 
 
 def compute_gather_cos_sin(dhead, end, position_ids):
-    cos, sin = precompute_freqs(dhead, end, theta=10000.0, use_scaled=False)  # Using reference defaults
+    cos, sin = precompute_freqs(
+        dhead, end, theta=10000.0, scale_factor=None, orig_context_len=131072
+    )  # Using reference defaults (no scaling)
     position_id_expanded = position_ids.unsqueeze(1).expand(-1, cos.shape[-1])
     cos = cos.gather(0, position_id_expanded)
     sin = sin.gather(0, position_id_expanded)
@@ -178,8 +180,10 @@ def run_test_rotary_embedding_llama(
         # inp: [seq_len, batch, n_heads, head_dim]
 
         if fuse_qk:
-            # Set up rope with 2 * batch size (for fused qk)
-            rope_setup_decode = TtLlamaRotarySetup(device, batch * 2, head_dim, max_seq_len)
+            # Set up rope with 2 * batch size (for fused qk) (no scaling)
+            rope_setup_decode = TtLlamaRotarySetup(
+                device, batch * 2, head_dim, max_seq_len, rope_theta=10000, scale_factor=None, orig_context_len=131072
+            )
             tt_model.transformation_mat = rope_setup_decode.transformation_mat
             cos, sin = rope_setup_decode.get_rot_mats(position_ids.repeat(2))
 
@@ -217,8 +221,11 @@ def run_test_rotary_embedding_llama(
             input_mem_configs = [q_input_mem_config, k_input_mem_config]
 
         else:
-            # Set up rope with batch size
-            rope_setup_decode = TtLlamaRotarySetup(device, batch, head_dim, max_seq_len)
+            # Set up rope with batch size (no scaling)
+            rope_setup_decode = TtLlamaRotarySetup(
+                device, batch, head_dim, max_seq_len, rope_theta=10000, scale_factor=None, orig_context_len=131072
+            )
+
             tt_model.transformation_mat = rope_setup_decode.transformation_mat
             cos, sin = rope_setup_decode.get_rot_mats(position_ids)
 
@@ -447,7 +454,7 @@ def test_rotary_embedding_llama_with_program_cache(
 
     num_ops = 2  # 2 * rope
     if mode == "decode":
-        num_ops += 3  # embedding + transpose + interleaved_to_sharded
+        num_ops += 4  # untilize cos/sin + embedding + transpose + interleaved_to_sharded
 
         if batch % ttnn.TILE_SIZE != 0:
             num_ops += 1  # slice

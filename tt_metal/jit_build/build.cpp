@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -170,12 +170,12 @@ void JitBuildEnv::init(
                       this->arch_name_ + "_defines " + "-I" + this->root_ + "tt_metal/hw/inc/" +
                       this->aliased_arch_name_ + "/noc " + "-I" + this->root_ + "tt_metal/hw/ckernels/" +
                       this->arch_name_ + "/metal/common " + "-I" + this->root_ + "tt_metal/hw/ckernels/" +
-                      this->arch_name_ + "/metal/llk_io " + "-I" + this->root_ + "tt_metal/third_party/tt_llk_" +
+                      this->arch_name_ + "/metal/llk_io " + "-I" + this->root_ + "tt_metal/third_party/tt_llk/tt_llk_" +
                       this->arch_name_ + "/common/inc " +  // TODO(fixme) datamovement fw shouldn't read this
                       "-I" + this->root_ + "tt_metal/api/" + this->aliased_arch_name_ + " " + "-I" + this->root_ +
                       "tt_metal/api/" + this->aliased_arch_name_ + "/tt-metalium " + "-I" + this->root_ +
                       "tt_metal/api/tt-metalium/ " + "-I" + this->root_ + "tt_metal/api/ " + "-I" + this->root_ +
-                      "tt_metal/third_party/tt_llk_" + this->arch_name_ + "/llk_lib ";
+                      "tt_metal/third_party/tt_llk/tt_llk_" + this->arch_name_ + "/llk_lib ";
 
     this->lflags_ = common_flags;
     this->lflags_ += "-fno-exceptions -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles ";
@@ -252,10 +252,12 @@ void JitBuildState::finish_init() {
 JitBuildDataMovement::JitBuildDataMovement(const JitBuildEnv& env, const JitBuiltStateConfig& build_config) :
     JitBuildState(env, build_config) {
     TT_ASSERT(this->core_id_ >= 0 && this->core_id_ < 2, "Invalid data movement processor");
-
+    this->lflags_ = env.lflags_;
+    this->cflags_ = env.cflags_;
+    this->default_compile_opt_level_ = "Os";
+    this->default_linker_opt_level_ = "Os";
     this->out_path_ = this->is_fw_ ? env_.out_firmware_root_ : env_.out_kernel_root_;
-
-    this->cflags_ = env_.cflags_ + "-Os " + "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
+    this->cflags_ = env_.cflags_ + "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
     this->includes_ = env_.includes_ + "-I " + env_.root_ + "tt_metal/hw/firmware/src " + "-I " + env_.root_ +
                       "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/common " + "-I " + env_.root_ +
                       "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/llk_io ";
@@ -264,8 +266,6 @@ JitBuildDataMovement::JitBuildDataMovement(const JitBuildEnv& env, const JitBuil
 
     uint32_t l1_cache_disable_mask = tt::llrt::RunTimeOptions::get_instance().get_feature_riscv_mask(
         tt::llrt::RunTimeDebugFeatureDisableL1DataCache);
-
-    this->lflags_ = env_.lflags_ + "-Os ";
 
     switch (this->core_id_) {
         case 0:
@@ -324,10 +324,11 @@ JitBuildDataMovement::JitBuildDataMovement(const JitBuildEnv& env, const JitBuil
 JitBuildCompute::JitBuildCompute(const JitBuildEnv& env, const JitBuiltStateConfig& build_config) :
     JitBuildState(env, build_config) {
     TT_ASSERT(this->core_id_ >= 0 && this->core_id_ < 3, "Invalid compute processor");
-
+    this->lflags_ = env.lflags_;
+    this->cflags_ = env.cflags_;
+    this->default_compile_opt_level_ = "O3";
+    this->default_linker_opt_level_ = "O3";
     this->out_path_ = this->is_fw_ ? env_.out_firmware_root_ : env_.out_kernel_root_;
-
-    this->cflags_ = env_.cflags_ + "-O3 ";
 
     this->defines_ = env_.defines_;
     uint32_t l1_cache_disable_mask = tt::llrt::RunTimeOptions::get_instance().get_feature_riscv_mask(
@@ -345,15 +346,13 @@ JitBuildCompute::JitBuildCompute(const JitBuildEnv& env, const JitBuiltStateConf
                       "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/llk_api " + "-I" + env_.root_ +
                       "tt_metal/hw/ckernels/" + env.arch_name_ + "/metal/llk_api/llk_sfpu " + "-I" + env_.root_ +
                       "runtime/sfpi/include " + "-I" + env_.root_ + "tt_metal/hw/firmware/src " + "-I" + env_.root_ +
-                      "tt_metal/third_party/tt_llk_" + env.arch_name_ + "/llk_lib ";
+                      "tt_metal/third_party/tt_llk/tt_llk_" + env.arch_name_ + "/llk_lib ";
 
     if (this->is_fw_) {
         this->srcs_.push_back("tt_metal/hw/firmware/src/trisc.cc");
     } else {
         this->srcs_.push_back("tt_metal/hw/firmware/src/trisck.cc");
     }
-
-    this->lflags_ = env_.lflags_ + "-O3 ";
 
     switch (this->core_id_) {
         case 0:
@@ -416,6 +415,10 @@ JitBuildCompute::JitBuildCompute(const JitBuildEnv& env, const JitBuiltStateConf
 JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const JitBuiltStateConfig& build_config) :
     JitBuildState(env, build_config) {
     TT_ASSERT(this->core_id_ >= 0 && this->core_id_ < 1, "Invalid active ethernet processor");
+    this->lflags_ = env.lflags_;
+    this->cflags_ = env.cflags_;
+    this->default_compile_opt_level_ = "Os";
+    this->default_linker_opt_level_ = "Os";
     this->out_path_ = this->is_fw_ ? env_.out_firmware_root_ : env_.out_kernel_root_;
 
     this->includes_ = env_.includes_ + "-I " + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ +
@@ -437,8 +440,7 @@ JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const Jit
     switch (build_class) {
         case 0: {
             this->target_name_ = "active_erisc";
-            this->cflags_ =
-                env_.cflags_ + "-Os " + "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
+            this->cflags_ = env_.cflags_ + "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
 
             this->defines_ +=
                 "-DCOMPILE_FOR_ERISC "
@@ -452,7 +454,6 @@ JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const Jit
             } else {
                 this->srcs_.push_back("tt_metal/hw/firmware/src/active_erisck.cc");
             }
-            this->lflags_ = env_.lflags_ + "-Os ";
 
             if (this->is_fw_) {
                 this->lflags_ +=
@@ -466,12 +467,13 @@ JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const Jit
         }
         case 1: {
             this->target_name_ = "erisc";
-            this->cflags_ = env_.cflags_ + "-Os -fno-delete-null-pointer-checks ";
+            this->cflags_ = env_.cflags_ + " -fno-delete-null-pointer-checks ";
 
             this->defines_ +=
                 "-DCOMPILE_FOR_ERISC "
                 "-DERISC "
-                "-DRISC_B0_HW ";
+                "-DRISC_B0_HW "
+                "-DCOOPERATIVE_ERISC ";
 
             this->includes_ += "-I " + env_.root_ + "tt_metal/hw/inc/ethernet ";
 
@@ -488,10 +490,7 @@ JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const Jit
             } else {
                 linker_str = "tt_metal/hw/toolchain/erisc-b0-kernel.ld ";
             }
-            this->lflags_ = env_.lflags_ +
-                            "-Os "
-                            "-L" +
-                            env_.root_ +
+            this->lflags_ = env_.lflags_ + "-L" + env_.root_ +
                             "/tt_metal/hw/toolchain "
                             "-T" +
                             env_.root_ + linker_str;
@@ -512,6 +511,10 @@ JitBuildActiveEthernet::JitBuildActiveEthernet(const JitBuildEnv& env, const Jit
 JitBuildIdleEthernet::JitBuildIdleEthernet(const JitBuildEnv& env, const JitBuiltStateConfig& build_config) :
     JitBuildState(env, build_config) {
     TT_ASSERT(this->core_id_ >= 0 && this->core_id_ < 2, "Invalid idle ethernet processor");
+    this->lflags_ = env.lflags_;
+    this->cflags_ = env.cflags_;
+    this->default_compile_opt_level_ = "Os";
+    this->default_linker_opt_level_ = "Os";
     this->out_path_ = this->is_fw_ ? env_.out_firmware_root_ : env_.out_kernel_root_;
 
     this->includes_ = env_.includes_ + "-I " + env_.root_ + "tt_metal/hw/ckernels/" + env.arch_name_ +
@@ -529,8 +532,7 @@ JitBuildIdleEthernet::JitBuildIdleEthernet(const JitBuildEnv& env, const JitBuil
     switch (this->core_id_) {
         case 0: {
             this->target_name_ = "idle_erisc";
-            this->cflags_ =
-                env_.cflags_ + "-Os " + "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
+            this->cflags_ = env_.cflags_ + "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
 
             this->defines_ +=
                 "-DCOMPILE_FOR_IDLE_ERISC=0 "
@@ -544,7 +546,6 @@ JitBuildIdleEthernet::JitBuildIdleEthernet(const JitBuildEnv& env, const JitBuil
             } else {
                 this->srcs_.push_back("tt_metal/hw/firmware/src/idle_erisck.cc");
             }
-            this->lflags_ = env_.lflags_ + "-Os ";
 
             if (this->is_fw_) {
                 this->lflags_ +=
@@ -558,8 +559,7 @@ JitBuildIdleEthernet::JitBuildIdleEthernet(const JitBuildEnv& env, const JitBuil
         }
         case 1: {
             this->target_name_ = "slave_idle_erisc";
-            this->cflags_ =
-                env_.cflags_ + "-Os " + "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
+            this->cflags_ = env_.cflags_ + "-fno-tree-loop-distribute-patterns ";  // don't use memcpy for cpy loops
             this->defines_ +=
                 "-DCOMPILE_FOR_IDLE_ERISC=1 "
                 "-DERISC "
@@ -570,7 +570,6 @@ JitBuildIdleEthernet::JitBuildIdleEthernet(const JitBuildEnv& env, const JitBuil
             } else {
                 this->srcs_.push_back("tt_metal/hw/firmware/src/idle_erisck.cc");
             }
-            this->lflags_ = env_.lflags_ + "-Os ";
             if (this->is_fw_) {
                 this->lflags_ +=
                     "-T" + env_.root_ + "runtime/hw/toolchain/" + get_alias(env_.arch_) + "/firmware_slave_ierisc.ld ";
@@ -608,9 +607,11 @@ void JitBuildState::compile_one(
     // ZoneScoped;
     fs::create_directories(out_dir);
 
-    // Add kernel specific defines
+    string cmd{"cd " + out_dir + " && " + env_.gpp_};
     string defines = this->defines_;
-    if (settings != nullptr) {
+
+    if (settings) {
+        // Append user args
         if (process_defines_at_compile) {
             settings->process_defines([&defines](const string& define, const string& value) {
                 defines += "-D" + define + "='" + value + "' ";
@@ -620,15 +621,17 @@ void JitBuildState::compile_one(
         settings->process_compile_time_args([&defines](int i, uint32_t value) {
             defines += "-DKERNEL_COMPILE_TIME_ARG_" + to_string(i) + "=" + to_string(value) + " ";
         });
+
+        cmd += fmt::format("-{} ", settings->get_compiler_opt_level());
+    } else {
+        cmd += fmt::format("-{} ", this->default_compile_opt_level_);
     }
 
-    string cmd;
-    cmd = "cd " + out_dir + " && ";
-    cmd += env_.gpp_;
+    // Append common args provided by the build state
     cmd += this->cflags_;
-    cmd += defines;
     cmd += this->includes_;
-    cmd += "-c -o " + obj + " " + src;
+    cmd += "-c -o " + obj + " " + src + " ";
+    cmd += defines;
 
     log_debug(tt::LogBuildKernels, "    g++ compile cmd: {}", cmd);
 
@@ -658,18 +661,16 @@ void JitBuildState::compile(const string& log_file, const string& out_dir, const
     }
 }
 
-void JitBuildState::link(const string& log_file, const string& out_dir) const {
+void JitBuildState::link(const string& log_file, const string& out_dir, const JitBuildSettings* settings) const {
     // ZoneScoped;
+    string cmd{"cd " + out_dir + " && " + env_.gpp_};
     string lflags = this->lflags_;
     if (tt::llrt::RunTimeOptions::get_instance().get_build_map_enabled()) {
         lflags += "-Wl,-Map=" + out_dir + "linker.map ";
     }
 
-    string cmd;
-    cmd = "cd " + out_dir + " && ";
-    cmd += env_.gpp_;
-    cmd += lflags;
-    cmd += this->link_objs_;
+    // Append user args
+    cmd += fmt::format("-{} ", settings ? settings->get_linker_opt_level() : this->default_linker_opt_level_);
 
     if (!this->is_fw_) {
         string weakened_elf_name =
@@ -677,6 +678,9 @@ void JitBuildState::link(const string& log_file, const string& out_dir) const {
         cmd += "-Wl,--just-symbols=" + weakened_elf_name + " ";
     }
 
+    // Append common args provided by the build state
+    cmd += lflags;
+    cmd += this->link_objs_;
     cmd += "-o " + out_dir + this->target_name_ + ".elf";
     log_debug(tt::LogBuildKernels, "    g++ link cmd: {}", cmd);
     if (!tt::utils::run_command(cmd, log_file, false)) {
@@ -730,9 +734,8 @@ void JitBuildState::build(const JitBuildSettings* settings) const {
     if (fs::exists(log_file)) {
         std::remove(log_file.c_str());
     }
-
     compile(log_file, out_dir, settings);
-    link(log_file, out_dir);
+    link(log_file, out_dir, settings);
     if (this->is_fw_) {
         weaken(log_file, out_dir);
     }

@@ -5,6 +5,7 @@
 #include "ops/distributed/comm_ops.hpp"
 
 #include <gtest/gtest.h>
+#include <umd/device/tt_cluster_descriptor.h>
 
 #include <core/ttnn_all_includes.hpp>
 #include <core/xtensor_utils.hpp>
@@ -17,7 +18,7 @@
 namespace {
 
 auto check_board_is_n300() {
-    return tt::Cluster::instance().get_board_type(0) == BoardType::N300;
+    return tt_ClusterDescriptor::create()->get_board_type(0) == BoardType::N300;
 }
 
 }  // namespace
@@ -28,7 +29,7 @@ protected:
         if (!check_board_is_n300()) {
             GTEST_SKIP() << "Skipping N300 specific tests";
         }
-        ttml::autograd::ctx().set_mesh_shape({1, 2});
+        ttml::autograd::ctx().set_mesh_shape(tt::tt_metal::distributed::MeshShape(1, 2));
         ttml::autograd::ctx().open_device();
     }
 

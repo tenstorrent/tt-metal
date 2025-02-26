@@ -1,5 +1,6 @@
 set(UNIT_TESTS_STL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/test_any_range.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_indestructible.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_slotmap.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/test_strong_type.cpp
 )

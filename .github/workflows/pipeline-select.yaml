@@ -57,6 +57,10 @@ jobs:
     secrets: inherit
     uses: ./.github/workflows/perf-device-models-impl.yaml
     if: ${{ inputs.perf-device-models }}
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.ci-build-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
   single-card-nightly:
     needs: build-artifact
     secrets: inherit

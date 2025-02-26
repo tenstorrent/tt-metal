@@ -28,7 +28,6 @@ public:
     ~HWCommandQueue() override;
 
     const CoreCoord& virtual_enqueue_program_dispatch_core() const override;
-    const CoreCoord& completion_queue_writer_core() const override;
 
     volatile bool is_dprint_server_hung() override;
     volatile bool is_noc_hung() override;
@@ -51,41 +50,25 @@ public:
 
     void terminate() override;
 
-    // These functions are temporarily needed since MeshCommandQueue relies on the CommandQueue object
-    uint32_t get_expected_num_workers_completed_for_sub_device(uint32_t sub_device_index) const override;
-    void set_expected_num_workers_completed_for_sub_device(uint32_t sub_device_index, uint32_t num_workers) override;
+    // This function is temporarily needed since MeshCommandQueue relies on the CommandQueue object
     WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) override;
 
     void enqueue_trace(const uint32_t trace_id, bool blocking) override;
     void enqueue_program(Program& program, bool blocking) override;
     void enqueue_read_buffer(
-        std::shared_ptr<Buffer>& buffer,
-        void* dst,
-        const BufferRegion& region,
-        bool blocking,
-        tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
-    void enqueue_read_buffer(
-        Buffer& buffer,
+        const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
         void* dst,
         const BufferRegion& region,
         bool blocking,
         tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
 
     void enqueue_record_event(
-        const std::shared_ptr<Event>& event,
-        bool clear_count = false,
-        tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
-    void enqueue_wait_for_event(const std::shared_ptr<Event>& sync_event, bool clear_count = false) override;
+        const std::shared_ptr<Event>& event, tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
+    void enqueue_wait_for_event(const std::shared_ptr<Event>& sync_event) override;
 
     void enqueue_write_buffer(
         const std::variant<std::reference_wrapper<Buffer>, std::shared_ptr<Buffer>>& buffer,
         HostDataType src,
-        const BufferRegion& region,
-        bool blocking,
-        tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;
-    void enqueue_write_buffer(
-        Buffer& buffer,
-        const void* src,
         const BufferRegion& region,
         bool blocking,
         tt::stl::Span<const SubDeviceId> sub_device_ids = {}) override;

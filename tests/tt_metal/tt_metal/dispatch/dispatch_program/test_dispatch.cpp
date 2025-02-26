@@ -6,8 +6,7 @@
 
 #include "dispatch_fixture.hpp"
 
-// TODO: ARCH_NAME specific, must remove
-#include "noc/noc_parameters.h"
+#include <tt-metalium/hal.hpp>
 
 using std::vector;
 
@@ -64,7 +63,7 @@ static void test_sems_across_core_types(
 
             // Set up args
             vector<uint32_t> eth_rtas = {
-                NOC_XY_ENCODING(phys_tensix_core.x, phys_tensix_core.y),
+                hal.noc_xy_encoding(phys_tensix_core.x, phys_tensix_core.y),
                 eth_sem_id,
                 tensix_sem_id,
                 eth_sem_init_val,
@@ -80,7 +79,7 @@ static void test_sems_across_core_types(
             SetRuntimeArgs(program, eth_kernel, eth_core, eth_rtas);
 
             vector<uint32_t> tensix_rtas = {
-                NOC_XY_ENCODING(phys_eth_core.x, phys_eth_core.y),
+                hal.noc_xy_encoding(phys_eth_core.x, phys_eth_core.y),
                 tensix_sem_id,
                 eth_sem_id,
                 tensix_sem_init_val,

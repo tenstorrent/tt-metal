@@ -4,7 +4,7 @@
 
 #include "permute.hpp"
 
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/data_movement/permute/device/permute_device_operation.hpp"
 
@@ -18,11 +18,6 @@
 
 namespace ttnn::operations::data_movement {
 namespace detail {
-
-inline bool is_on_device(const Tensor& t) {
-    return ttnn::has_storage_type_of(t, ttnn::StorageType::DEVICE) or
-           ttnn::has_storage_type_of(t, ttnn::StorageType::MULTI_DEVICE);
-}
 
 ttnn::Tensor permute_impl(
     const ttnn::Tensor& a,
@@ -176,7 +171,7 @@ bool is_permute_nop(const ttnn::Tensor& a, const ttnn::SmallVector<uint32_t>& di
 }  // namespace detail
 
 ttnn::Tensor ExecutePermute::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const ttnn::Tensor& input_tensor,
     const ttnn::SmallVector<int64_t>& dims,
     const std::optional<MemoryConfig>& memory_config,
@@ -185,7 +180,7 @@ ttnn::Tensor ExecutePermute::invoke(
     TT_FATAL(
         input_rank == dims.size(),
         "The number of dimensions in the tensor input does not match the length of the desired ordering");
-    TT_FATAL(detail::is_on_device(input_tensor), "Tensor must already be on device");
+    TT_FATAL(is_tensor_on_device_or_multidevice(input_tensor), "Tensor must already be on device");
 
     SmallVector<uint32_t> normalized_dims(dims.size());
     std::transform(dims.begin(), dims.end(), normalized_dims.begin(), [input_tensor](std::int64_t idx) {

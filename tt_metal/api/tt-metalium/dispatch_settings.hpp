@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -7,11 +7,14 @@
 #include <cstdint>
 #include <magic_enum/magic_enum.hpp>
 #include <unordered_map>
+#include "dev_msgs.h"  // go_msg_t
 #include "hal.hpp"
-#include "tt_cluster.hpp"
 #include <tt-metalium/cq_commands.hpp>
-#include <utility>
 #include "umd/device/tt_core_coordinates.h"
+
+namespace tt {
+class Cluster;
+}
 
 namespace tt::tt_metal {
 
@@ -74,7 +77,7 @@ public:
         static constexpr std::array<CoreType, 2> k_SupportedCoreTypes{CoreType::ETH, CoreType::WORKER};
         auto& store = get_store();
         for (const auto& core_type : k_SupportedCoreTypes) {
-            for (int hw_cqs = 1; hw_cqs <= MAX_NUM_HW_CQS; ++hw_cqs) {
+            for (uint32_t hw_cqs = 1; hw_cqs <= MAX_NUM_HW_CQS; ++hw_cqs) {
                 DispatchSettingsContainerKey k{core_type, hw_cqs};
                 store[k] = DispatchSettings::defaults(core_type, cluster, hw_cqs);
             }
@@ -113,9 +116,9 @@ public:
 
     static constexpr uint32_t DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES = 64;
 
-    // dispatch_s CB page size is 128 bytes. This should currently be enough to accomodate all commands that
-    // are sent to it. Change as needed, once this endpoint is required to handle more than go signal mcasts.
-    static constexpr uint32_t DISPATCH_S_BUFFER_LOG_PAGE_SIZE = 7;
+    // dispatch_s CB page size is 256 bytes. This should currently be enough to accomodate all commands that
+    // are sent to it. Change as needed.
+    static constexpr uint32_t DISPATCH_S_BUFFER_LOG_PAGE_SIZE = 8;
 
     static constexpr uint32_t GO_SIGNAL_BITS_PER_TXN_TYPE = 4;
 

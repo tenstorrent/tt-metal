@@ -55,14 +55,14 @@ void bind_pad(py::module& module) {
                const float value,
                const bool use_multicore,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               uint8_t queue_id) { return self(queue_id, input_tensor, padding, value, use_multicore, memory_config); },
+               QueueId queue_id) { return self(queue_id, input_tensor, padding, value, use_multicore, memory_config); },
             py::arg("input_tensor"),
             py::arg("padding"),
             py::arg("value"),
             py::kw_only(),
             py::arg("use_multicore") = true,
             py::arg("memory_config") = std::nullopt,
-            py::arg("queue_id") = 0,
+            py::arg("queue_id") = DefaultQueueId,
         },
         ttnn::pybind_overload_t{
             [](const OperationType& self,
@@ -72,7 +72,7 @@ void bind_pad(py::module& module) {
                const float value,
                const bool use_multicore,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               uint8_t queue_id) {
+               QueueId queue_id) {
                 return self(
                     queue_id,
                     input_tensor,
@@ -89,7 +89,7 @@ void bind_pad(py::module& module) {
             py::kw_only(),
             py::arg("use_multicore") = false,
             py::arg("memory_config") = std::nullopt,
-            py::arg("queue_id") = 0,
+            py::arg("queue_id") = DefaultQueueId,
         },
         ttnn::pybind_overload_t{
             [](const OperationType& self,
@@ -99,7 +99,7 @@ void bind_pad(py::module& module) {
                const float value,
                const bool use_multicore,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               uint8_t queue_id) {
+               QueueId queue_id) {
                 return self(
                     queue_id,
                     input_tensor,
@@ -116,7 +116,7 @@ void bind_pad(py::module& module) {
             py::kw_only(),
             py::arg("use_multicore") = false,
             py::arg("memory_config") = std::nullopt,
-            py::arg("queue_id") = 0,
+            py::arg("queue_id") = DefaultQueueId,
         },
         ttnn::pybind_overload_t{
             [](const OperationType& self,
@@ -126,7 +126,7 @@ void bind_pad(py::module& module) {
                const float value,
                const bool use_multicore,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               uint8_t queue_id) {
+               QueueId queue_id) {
                 return self(
                     queue_id,
                     input_tensor,
@@ -143,7 +143,7 @@ void bind_pad(py::module& module) {
             py::kw_only(),
             py::arg("use_multicore") = false,
             py::arg("memory_config") = std::nullopt,
-            py::arg("queue_id") = 0,
+            py::arg("queue_id") = DefaultQueueId,
         },
         ttnn::pybind_overload_t{
             [](const OperationType& self,
@@ -153,7 +153,7 @@ void bind_pad(py::module& module) {
                const float value,
                const bool use_multicore,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               uint8_t queue_id) {
+               QueueId queue_id) {
                 return self(
                     queue_id,
                     input_tensor,
@@ -170,7 +170,7 @@ void bind_pad(py::module& module) {
             py::kw_only(),
             py::arg("use_multicore") = false,
             py::arg("memory_config") = std::nullopt,
-            py::arg("queue_id") = 0,
+            py::arg("queue_id") = DefaultQueueId,
         },
         ttnn::pybind_overload_t{
             [](const OperationType& self,
@@ -180,7 +180,7 @@ void bind_pad(py::module& module) {
                const float value,
                const bool use_multicore,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               uint8_t queue_id) {
+               QueueId queue_id) {
                 return self(
                     queue_id,
                     input_tensor,
@@ -197,7 +197,7 @@ void bind_pad(py::module& module) {
             py::kw_only(),
             py::arg("use_multicore") = false,
             py::arg("memory_config") = std::nullopt,
-            py::arg("queue_id") = 0,
+            py::arg("queue_id") = DefaultQueueId,
         },
         ttnn::pybind_overload_t{
             [](const OperationType& self,
@@ -207,7 +207,7 @@ void bind_pad(py::module& module) {
                const float value,
                const bool use_multicore,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               uint8_t queue_id) {
+               QueueId queue_id) {
                 return self(
                     queue_id,
                     input_tensor,
@@ -224,7 +224,7 @@ void bind_pad(py::module& module) {
             py::kw_only(),
             py::arg("use_multicore") = false,
             py::arg("memory_config") = std::nullopt,
-            py::arg("queue_id") = 0,
+            py::arg("queue_id") = DefaultQueueId,
         },
         ttnn::pybind_overload_t{
             [](const OperationType& self,
@@ -234,7 +234,7 @@ void bind_pad(py::module& module) {
                const float value,
                const bool use_multicore,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               uint8_t queue_id) {
+               QueueId queue_id) {
                 return self(
                     queue_id,
                     input_tensor,
@@ -251,7 +251,7 @@ void bind_pad(py::module& module) {
             py::kw_only(),
             py::arg("use_multicore") = false,
             py::arg("memory_config") = std::nullopt,
-            py::arg("queue_id") = 0,
+            py::arg("queue_id") = DefaultQueueId,
         },
         ttnn::pybind_overload_t{
             [](const OperationType& self,
@@ -261,7 +261,7 @@ void bind_pad(py::module& module) {
                const float value,
                const bool use_multicore,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               uint8_t queue_id) {
+               QueueId queue_id) {
                 return self(
                     queue_id,
                     input_tensor,
@@ -278,7 +278,7 @@ void bind_pad(py::module& module) {
             py::kw_only(),
             py::arg("use_multicore") = false,
             py::arg("memory_config") = std::nullopt,
-            py::arg("queue_id") = 0,
+            py::arg("queue_id") = DefaultQueueId,
         });
 }
 }  // namespace ttnn::operations::data_movement::detail

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include <tt-metalium/math.hpp>
@@ -88,7 +88,7 @@ MassagedConcat build_unsqueeze_concat(int input_rank, const MemoryConfig& output
 }
 
 MassagedConcat build_untilize_rm_retilize_concat(
-    uint8_t queue_id, const MemoryConfig& output_memory_config, ttnn::Shape& logical_output_shape) {
+    QueueId queue_id, const MemoryConfig& output_memory_config, ttnn::Shape& logical_output_shape) {
     return MassagedConcat(MassagedConcatParams{
         .predicate = [](const std::vector<ttnn::Tensor>& tensors, int dim, unsigned int groups) -> bool {
             // untilize_rm_retilize if the concat dim is padded for tilized tensors
@@ -159,15 +159,12 @@ MassagedConcat build_untilize_rm_retilize_concat(
                          const std::vector<ttnn::Tensor>& tensors, int dim, unsigned int groups) -> ttnn::Tensor {
             std::vector<ttnn::Tensor> itensors(tensors);
             auto res = concat_impl(itensors, dim, groups, output_memory_config);
-            for (auto& tensor : itensors) {
-                tensor.deallocate();
-            }
             return res;
         }});
 }
 
 MassagedConcat build_prepost_transpose_concat(
-    uint8_t queue_id, const MemoryConfig& output_memory_config, int dim1, int dim2) {
+    QueueId queue_id, const MemoryConfig& output_memory_config, int dim1, int dim2) {
     return MassagedConcat(MassagedConcatParams{
         .predicate = [dim1, dim2](const std::vector<ttnn::Tensor>& tensors, int dim, unsigned int groups) -> bool {
             bool res = dim1 != dim2;
@@ -210,7 +207,7 @@ MassagedConcat build_prepost_transpose_concat(
 }
 
 MassagedConcat build_non_aligned_last_dim_concat(
-    const std::vector<ttnn::Tensor>& tensors, uint8_t queue_id, const MemoryConfig& output_memory_config) {
+    const std::vector<ttnn::Tensor>& tensors, QueueId queue_id, const MemoryConfig& output_memory_config) {
     // this is a special case of pre-post transpose concat where we're
     // concatting on the last dim and the last dims of the input tensors are
     // not all aligned
@@ -249,7 +246,7 @@ MassagedConcat build_non_aligned_last_dim_concat(
 
 // Wrapper for TTDNN
 ttnn::Tensor ConcatOperation::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const std::vector<ttnn::Tensor>& input_tensors,
     int dim,
     const std::optional<MemoryConfig>& memory_config,
@@ -323,19 +320,7 @@ ttnn::Tensor ConcatOperation::invoke(
 
     std::vector<ttnn::Tensor> itensors(input_tensors);
     auto res = massaged_concat(itensors, dim, groups);
-    for (auto& tensor : itensors) {
-        tensor.deallocate();
-    }
     return res;
-}
-
-ttnn::Tensor ConcatOperation::invoke(
-    const std::vector<ttnn::Tensor>& input_tensors,
-    int dim,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<ttnn::Tensor>& optional_output_tensor,
-    unsigned int groups) {
-    return invoke(DefaultQueueId, input_tensors, dim, memory_config, std::move(optional_output_tensor), groups);
 }
 
 }  // namespace data_movement

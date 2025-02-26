@@ -60,14 +60,6 @@ size_t metal_SocDescriptor::get_channel_for_dram_view(int dram_view) const {
 
 size_t metal_SocDescriptor::get_num_dram_views() const { return this->dram_view_eth_cores.size(); }
 
-const std::vector<CoreCoord>& metal_SocDescriptor::get_physical_ethernet_cores() const {
-    return this->physical_ethernet_cores;
-}
-
-const std::vector<CoreCoord>& metal_SocDescriptor::get_logical_ethernet_cores() const {
-    return this->logical_ethernet_cores;
-}
-
 int metal_SocDescriptor::get_dram_channel_from_logical_core(const CoreCoord& logical_coord) const {
     const uint32_t num_dram_views = this->get_num_dram_views();
     TT_FATAL(
@@ -79,25 +71,15 @@ int metal_SocDescriptor::get_dram_channel_from_logical_core(const CoreCoord& log
 }
 
 CoreCoord metal_SocDescriptor::get_physical_ethernet_core_from_logical(const CoreCoord& logical_coord) const {
-    const auto& eth_chan_map = this->logical_eth_core_to_chan_map;
-    TT_FATAL(
-        (eth_chan_map.find(logical_coord) != eth_chan_map.end()),
-        "Bounds-Error -- Logical_core={} is outside of ethernet logical grid",
-        logical_coord.str());
-    return this->physical_ethernet_cores.at(eth_chan_map.at(logical_coord));
+    tt::umd::CoreCoord physical_coord =
+        translate_coord_to({logical_coord, CoreType::ETH, CoordSystem::LOGICAL}, CoordSystem::PHYSICAL);
+    return {physical_coord.x, physical_coord.y};
 }
 
 CoreCoord metal_SocDescriptor::get_logical_ethernet_core_from_physical(const CoreCoord& physical_coord) const {
-    const auto& phys_eth_map = this->physical_ethernet_cores;
-    auto it = std::find(phys_eth_map.begin(), phys_eth_map.end(), physical_coord);
-
-    TT_FATAL(
-        (it != phys_eth_map.end()),
-        "Bounds-Error -- Physical_core={} is outside of ethernet physical grid",
-        physical_coord.str());
-
-    int chan = it - phys_eth_map.begin();
-    return this->chan_to_logical_eth_core_map.at(chan);
+    tt::umd::CoreCoord logical_coord =
+        translate_coord_to({physical_coord, CoreType::ETH, CoordSystem::PHYSICAL}, CoordSystem::LOGICAL);
+    return {logical_coord.x, logical_coord.y};
 }
 
 CoreCoord metal_SocDescriptor::get_physical_tensix_core_from_logical(const CoreCoord& logical_coord) const {
@@ -137,18 +119,18 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
         int worker_endpoint = dram_view["worker_endpoint"].as<int>();
         size_t address_offset = dram_view["address_offset"].as<size_t>();
 
-        if (channel >= dram_cores.size()) {
+        if (channel >= get_grid_size(CoreType::DRAM).x) {
             TT_THROW(
                 "DRAM channel {} does not exist in the device descriptor, but is specified in dram_view.channel",
                 channel);
         }
-        if (eth_endpoint >= dram_cores[channel].size()) {
+        if (eth_endpoint >= get_grid_size(CoreType::DRAM).y) {
             TT_THROW(
                 "DRAM subchannel {} does not exist in the device descriptor, but is specified in "
                 "dram_view.eth_endpoint",
                 eth_endpoint);
         }
-        if (worker_endpoint >= dram_cores[channel].size()) {
+        if (worker_endpoint >= get_grid_size(CoreType::DRAM).y) {
             TT_THROW(
                 "DRAM subchannel {} does not exist in the device descriptor, but is specified in "
                 "dram_view.worker_endpoint",
@@ -156,8 +138,12 @@ void metal_SocDescriptor::load_dram_metadata_from_device_descriptor() {
         }
 
         this->dram_view_channels.push_back(channel);
-        this->dram_view_eth_cores.push_back(dram_cores[channel][eth_endpoint]);
-        this->dram_view_worker_cores.push_back(dram_cores[channel][worker_endpoint]);
+        tt::umd::CoreCoord eth_dram_endpoint_coord =
+            get_dram_core_for_channel(channel, eth_endpoint, CoordSystem::VIRTUAL);
+        this->dram_view_eth_cores.push_back({eth_dram_endpoint_coord.x, eth_dram_endpoint_coord.y});
+        tt::umd::CoreCoord worker_endpoint_coord =
+            get_dram_core_for_channel(channel, worker_endpoint, CoordSystem::VIRTUAL);
+        this->dram_view_worker_cores.push_back({worker_endpoint_coord.x, worker_endpoint_coord.y});
         this->dram_view_address_offsets.push_back(address_offset);
     }
 }
@@ -174,12 +160,8 @@ CoordSystem metal_SocDescriptor::get_umd_coord_system() const {
 }
 
 void metal_SocDescriptor::generate_logical_eth_coords_mapping() {
-    this->physical_ethernet_cores = this->ethernet_cores;
-    for (int i = 0; i < this->physical_ethernet_cores.size(); i++) {
-        CoreCoord core = {0, static_cast<size_t>(i)};
-        this->logical_eth_core_to_chan_map.insert({core, i});
-        this->chan_to_logical_eth_core_map.insert({i, core});
-        this->logical_ethernet_cores.emplace_back(core);
+    for (int i = 0; i < this->get_cores(CoreType::ETH).size(); i++) {
+        this->logical_eth_core_to_chan_map.insert({{0, i}, i});
     }
 }
 
@@ -189,7 +171,7 @@ void metal_SocDescriptor::generate_physical_routing_to_profiler_flat_id() {
         this->physical_routing_to_profiler_flat_id.emplace((CoreCoord){core.x, core.y}, 0);
     }
 
-    for (auto& core : this->physical_ethernet_cores) {
+    for (auto& core : this->get_cores(CoreType::ETH, CoordSystem::PHYSICAL)) {
         this->physical_routing_to_profiler_flat_id.emplace((CoreCoord){core.x, core.y}, 0);
     }
 
@@ -216,8 +198,7 @@ void metal_SocDescriptor::generate_physical_routing_to_profiler_flat_id() {
 // removing the harvested physical coordiniates Metal needs the true harvesting state so we generate physical
 // descriptors from virtual coordinates We also initialize additional lookup tables to translate physical coordinates to
 // virtual coordinates because UMD APIs expect virtual coordinates.
-metal_SocDescriptor::metal_SocDescriptor(
-    const tt_SocDescriptor& other, uint32_t harvesting_mask, const BoardType& board_type) :
+metal_SocDescriptor::metal_SocDescriptor(const tt_SocDescriptor& other, const BoardType& board_type) :
     tt_SocDescriptor(other) {
     this->load_dram_metadata_from_device_descriptor();
     this->generate_logical_eth_coords_mapping();

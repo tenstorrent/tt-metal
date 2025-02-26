@@ -14,8 +14,18 @@
 
 namespace tt::tt_metal {
 
+using FlatbufferCoreCoordVector = flatbuffers::Offset<flatbuffers::Vector<flatbuffers::Offset<flatbuffer::CoreCoord>>>;
+using FlatbufferUInt32VecOfVec =
+    flatbuffers::Offset<flatbuffers::Vector<flatbuffers::Offset<flatbuffer::UInt32Vector>>>;
+
 std::pair<flatbuffer::CoreSpec, ::flatbuffers::Offset<void>> to_flatbuffer(
     flatbuffers::FlatBufferBuilder& builder, const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec);
+
+FlatbufferCoreCoordVector to_flatbuffer(
+    flatbuffers::FlatBufferBuilder& builder, const std::vector<CoreCoord>& core_spec);
+
+FlatbufferUInt32VecOfVec to_flatbuffer(
+    flatbuffers::FlatBufferBuilder& builder, const std::vector<std::vector<uint32_t>>& vec_of_vec);
 
 std::pair<flatbuffer::KernelConfig, flatbuffers::Offset<void>> to_flatbuffer(
     flatbuffers::FlatBufferBuilder& builder, const DataMovementConfig& config);

@@ -8,12 +8,12 @@
 #include "device/nlp_create_qkv_heads_decode_device_operation.hpp"
 #include "ttnn/run_operation.hpp"
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/common/constants.hpp"
+#include "ttnn/common/queue_id.hpp"
 
 namespace ttnn::operations::experimental::transformer {
 
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> NLPCreateHeadsDecodeOperation::invoke(
-    uint8_t queue_id,
+    QueueId queue_id,
     const Tensor& input_tensor,
     const uint32_t num_heads,
     const std::optional<const uint32_t> num_kv_heads,

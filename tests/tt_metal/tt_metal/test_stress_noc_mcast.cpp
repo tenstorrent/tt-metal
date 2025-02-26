@@ -18,6 +18,7 @@
 #include "logger.hpp"
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "test_common.hpp"
 #include <tt-metalium/rtoptions.hpp>
 #include <tt-metalium/metal_soc_descriptor.h>
 #include <tt-metalium/event.hpp>
@@ -25,6 +26,7 @@
 #include <tt-metalium/device_impl.hpp>
 #include <tt-metalium/metal_soc_descriptor.h>
 #include <tt-metalium/hal.hpp>
+#include "tt_cluster.hpp"
 
 using namespace tt;
 
