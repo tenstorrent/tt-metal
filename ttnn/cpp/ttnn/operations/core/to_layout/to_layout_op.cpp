@@ -14,6 +14,7 @@
 #include <tt-metalium/constants.hpp>
 #include "cpp/ttnn/operations/experimental/reshape/view.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/tensor/types.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn {
@@ -104,6 +105,7 @@ Tensor to_layout_impl(
                 TT_ASSERT(not dtype.has_value(), "dtype cannot be specified when converting to ROW_MAJOR_LAYOUT!");
                 return ttnn::untilize(tensor, output_memory_config, use_multicore_untilize);
             } else if (layout == ttnn::TILE_LAYOUT) {
+                std::cout << "tilizing1" << std::endl;
                 if (tensor.is_sharded()) {
                     const auto tensor_tile = tensor.get_tensor_spec().tile();
                     uint32_t tile_height = tensor_tile.get_height();
