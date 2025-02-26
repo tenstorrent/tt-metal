@@ -378,8 +378,8 @@ void finalize_program_offsets(T& workload, IDevice* device) {
         if constexpr (std::is_same_v<T, Program>) {
             set_program_offsets_and_sizes(workload, index);
         } else {
-            for (const auto& device_range : workload.get_logical_device_ranges()) {
-                set_program_offsets_and_sizes(workload.get_program_on_device_range(device_range), index);
+            for (auto& [_, program] : workload.get_programs()) {
+                set_program_offsets_and_sizes(program, index);
             }
         }
     }
@@ -387,8 +387,8 @@ void finalize_program_offsets(T& workload, IDevice* device) {
     if constexpr (std::is_same_v<T, Program>) {
         set_program_attrs_across_core_types(workload);
     } else {
-        for (const auto& device_range : workload.get_logical_device_ranges()) {
-            set_program_attrs_across_core_types(workload.get_program_on_device_range(device_range));
+        for (auto& [_, program] : workload.get_programs()) {
+            set_program_attrs_across_core_types(program);
         }
     }
     workload.set_finalized();
