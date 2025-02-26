@@ -20,7 +20,7 @@ void kernel_main() {
     const uint32_t mcast_dest_noc_end_x = get_arg_val<uint32_t>(2);
     const uint32_t mcast_dest_noc_end_y = get_arg_val<uint32_t>(3);
 
-    constexpr uint32_t cb_stats_reduced = tt::CBIndex::c_28;  // [E[x], E[x^2]] local to sender
+    constexpr uint32_t cb_stats_reduced = tt::CBIndex::c_21;  // [E[x], E[x^2]] local to sender
     constexpr uint32_t cb_ex_global = tt::CBIndex::c_15;      // [E[x], E[X^2]] global to all cores
 
     const uint64_t multicast_data_noc = get_noc_multicast_addr(

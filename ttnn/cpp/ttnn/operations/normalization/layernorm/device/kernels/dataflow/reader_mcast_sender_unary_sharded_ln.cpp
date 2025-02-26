@@ -42,7 +42,7 @@ void kernel_main() {
     constexpr uint32_t cb_ex_partial2 = tt::CBIndex::c_11;
     constexpr uint32_t cb_ex2 = tt::CBIndex::c_12;
     constexpr uint32_t cb_ex_external2 = tt::CBIndex::c_13;
-    constexpr uint32_t cb_ex2pe = tt::CBIndex::c_27;
+    constexpr uint32_t cb_ex2pe = tt::CBIndex::c_20;
     constexpr uint32_t cb_ex_global = tt::CBIndex::c_15;  // E[x] global reduce
 
     const uint32_t single_tile_size_bytes = get_tile_size(cb_ex_partial2);

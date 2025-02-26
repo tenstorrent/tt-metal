@@ -68,12 +68,12 @@ void MAIN {
     constexpr uint32_t cb_ex = tt::CBIndex::c_9;              // E[x] global reduce
     constexpr uint32_t cb_ex2 = tt::CBIndex::c_12;            // E[x^2]
     constexpr uint32_t cb_stats = tt::CBIndex::c_7;           // E[(x-E[x])^2] global reduce
-    constexpr uint32_t cb_stats_reduced = tt::CBIndex::c_28;  // E[(x-E[x])^2] global reduce
+    constexpr uint32_t cb_stats_reduced = tt::CBIndex::c_21;  // E[(x-E[x])^2] global reduce
     constexpr uint32_t cb_ex_global = tt::CBIndex::c_15;      // E[x] global reduce
-    constexpr uint32_t cb_reciprocal = tt::CBIndex::c_27;     // [E[x^2]-E[x]^2]+eps
-    constexpr uint32_t cb_fusion = tt::CBIndex::c_25;         // stream gamma/beta
+    constexpr uint32_t cb_reciprocal = tt::CBIndex::c_20;     // [E[x^2]-E[x]^2]+eps
+    constexpr uint32_t cb_fusion = tt::CBIndex::c_18;         // stream gamma/beta
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
-    constexpr uint32_t cb_var = tt::CBIndex::c_26;
+    constexpr uint32_t cb_var = tt::CBIndex::c_19;
     constexpr uint32_t cb_ex_sqr = tt::CBIndex::c_24;  // E[x]^2
 
 #ifdef RMSNORM
@@ -83,7 +83,7 @@ void MAIN {
 #else
     binary_op_init_common(cb_stats, cb_scaler_global, cb_stats_reduced);
     constexpr uint32_t stats_tiles = 2;
-    constexpr uint32_t cb_xmm = tt::CBIndex::c_25;  // x minus mean
+    constexpr uint32_t cb_xmm = tt::CBIndex::c_18;  // x minus mean
 #endif
 
     // set block_h to volatile to disable automatically unroll of the loops, avoid code overflow
