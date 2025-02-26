@@ -88,7 +88,7 @@ def test_llama_model_inference(
     reset_seeds,
     ensure_gc,
 ):
-    run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
+    run_ref_pt = False  # Flag to run reference PyTorch model and compare PCC
     cache_pcc = False  # Flag to measure KV cache PCC. Avoid running for all layers to speed up test time.
     dtype = ttnn.bfloat8_b
     mesh_device.enable_async(False)
@@ -260,6 +260,7 @@ def test_llama_model_inference(
         ),
     )
     all_pccs = []
+
     try:
         for i in range(generation_length):
             logger.info(f"[Llama3 Model] Generating token {i}")
@@ -287,10 +288,10 @@ def test_llama_model_inference(
             )
 
             outs = [ttnn.to_torch(out, mesh_composer=mesh_composer) for out in tt_out]
-            logger.info(f"TT output shape: {outs[0].shape}")
+            # logger.info(f"TT output shape: {outs[0].shape}")
             outs = torch.concat(outs, dim=-1)
-            for t in tt_out:
-                t.deallocate(True)
+            # for t in tt_out:
+            #     t.deallocate(True)
             tt_output_torch = outs.permute(2, 1, 0, 3).squeeze(2)[
                 : model_args.max_batch_size, 0:1, : model_args.vocab_size
             ]
@@ -324,7 +325,33 @@ def test_llama_model_inference(
                     pt_decode_input = embd(encoded_prompts_tensor[:, i]).view(batch, seqlen, -1)
             else:
                 # Greedy decode (temperature = 0) the generated token and save it to print out later
-                tt_out_tok = sample_host(tt_output_torch, None, temperature=0, top_p=0.8)
+                # tt_out_tok_host = sample_host(tt_output_torch, None, temperature=0, top_p=0.8)
+                sub_core_grids = ttnn.CoreRangeSet(
+                    [
+                        ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
+                        ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
+                    ]
+                )
+                tt_out_gathered = tt_model.tt_ccl.line_all_gather(
+                    tt_out[0], dim=3, num_links=2, cluster_axis=0, memory_config=ttnn.DRAM_MEMORY_CONFIG
+                )
+                tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True, sub_core_grids=sub_core_grids)
+                ttnn.deallocate(tt_out_gathered)
+                tt_out_tok = ttnn.argmax(  # FIXME When ttnn.argmax supports multicore, avoid falling back to host
+                    tt_out_rm, dim=3, use_multicore=True, sub_core_grids=sub_core_grids
+                )
+
+                tt_out_tok = ttnn.to_torch(
+                    tt_out_tok,
+                    mesh_composer=ttnn.ConcatMesh2dToTensor(
+                        mesh_device,
+                        dims=(3, 1) if model_args.is_galaxy else (1, 3),
+                        mesh_shape=model_args.cluster_shape,
+                    ),
+                )[0, 0, 0, :32].view(32, 1)
+                for tttt in range(1, 32):
+                    tt_out_tok[tttt][0] = 0
+                # print(tt_out_tok.shape, tt_out_tok_host.shape)
                 tt_decode_input = embd(tt_out_tok)
                 all_outputs.append(tt_out_tok.squeeze(1).tolist()[0])  # Update generated token to list of TT outputs
                 if run_ref_pt:
