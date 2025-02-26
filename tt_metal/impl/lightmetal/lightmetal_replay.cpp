@@ -12,7 +12,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/command_queue.hpp>
 #include <tt-metalium/device_impl.hpp>
-#include "lightmetal/lightmetal_replay.hpp"
+#include <tt-metalium/lightmetal_replay.hpp>
 #include "flatbuffer/base_types_from_flatbuffer.hpp"
 #include "flatbuffer/program_types_from_flatbuffer.hpp"
 #include "flatbuffer/buffer_types_from_flatbuffer.hpp"
@@ -691,7 +691,7 @@ void LightMetalReplay::execute(const ::tt::tt_metal::flatbuffer::LightMetalCompa
 }
 
 // Main entry point to execute a light metal binary blob, return true if pass.
-bool LightMetalReplay::execute_binary() {
+bool LightMetalReplay::run() {
     if (!fb_binary_) {
         std::cerr << "Cannot Replay empty/uninitialized Light Metal Binary." << std::endl;
         return false;
