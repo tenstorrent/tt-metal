@@ -4,7 +4,6 @@
 
 
 import ttnn
-import pytest
 from models.experimental.functional_yolov8x.tests.yolov8x_test_infra import create_test_infra
 
 try:
@@ -118,10 +117,11 @@ def run_yolov8x_trace_2cqs_inference(
     )
     tt_inputs_host, sharded_mem_config_DRAM, input_mem_config = test_infra.setup_dram_sharded_input(device)
     tt_image_res = tt_inputs_host.to(device, sharded_mem_config_DRAM)
-    op_event = ttnn.create_event(device)
-    write_event = ttnn.create_event(device)
+
     # Initialize the op event so we can write
-    ttnn.record_event(0, op_event)
+    op_event = ttnn.record_event(device, 0)
+    write_event = ttnn.record_event(device, 0)
+    # ttnn.record_event(0, op_event)
 
     # First run configures convs JIT
     ttnn.wait_for_event(1, op_event)
