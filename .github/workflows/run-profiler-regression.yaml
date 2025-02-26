@@ -23,6 +23,9 @@ on:
       wheel-artifact-name:
         required: true
         type: string
+      docker-image:
+        required: true
+        type: string
   workflow_dispatch:
     inputs:
       arch:
@@ -50,6 +53,9 @@ on:
         required: true
         type: string
       wheel-artifact-name:
+        required: true
+        type: string
+      docker-image:
         required: true
         type: string
 
