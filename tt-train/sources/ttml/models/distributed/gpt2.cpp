@@ -6,7 +6,9 @@
 
 #include "autograd/graph_utils.hpp"
 #include "autograd/tensor.hpp"
+#include "core/distributed_mapping.hpp"
 #include "core/scoped.hpp"
+#include "core/tt_tensor_utils.hpp"
 #include "init/tensor_initializers.hpp"
 #include "modules/distributed/gpt_block.hpp"
 #include "modules/distributed/linear.hpp"
@@ -68,8 +70,14 @@ void weights_initialization(DistributedTransformer& model) {
     for (auto& [name, tensor_ptr] : params) {
         const auto& tensor = tensor_ptr->get_value();
         if (name.find("weight") != std::string::npos) {
-            // init::normal_init(tensor_ptr, tensor.get_logical_shape(), {0.F, 0.02F});
-            // initialize tensor shards
+            auto tensor_shape = tensor.get_logical_shape();
+            auto* device = &autograd::ctx().get_device();
+            auto num_devices = static_cast<uint32_t>(device->num_devices());
+            tensor_shape[0] *= num_devices;
+            core::XTensorToMeshVariant<float> shard_composer = core::ShardXTensorToMesh<float>(device->shape(), 0);
+            auto weight_xtensor = init::normal_init(tensor_shape, {0.F, 0.02F});
+            tensor_ptr->set_value(
+                core::from_xtensor<float, DataType::BFLOAT16>(weight_xtensor, device, shard_composer));
         } else if (name.find("bias") != std::string::npos) {
             init::constant_init(tensor_ptr, tensor.get_logical_shape(), 0.F);
         }
