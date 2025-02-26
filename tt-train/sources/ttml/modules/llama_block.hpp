@@ -21,7 +21,7 @@ private:
     std::shared_ptr<DropoutLayer> m_dropout;
 
 public:
-    LlamaMLP(uint32_t embedding_size, float dropout_prob = 0.0F);
+    LlamaMLP(uint32_t embedding_size, float dropout_prob = 0.0F, uint32_t multiple_of = 256);
 
     autograd::TensorPtr operator()(const autograd::TensorPtr& input);
 };
