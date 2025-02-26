@@ -10,7 +10,7 @@ These instructions will guide you through the installation of Tenstorrent system
 ## Prerequisites:
 
 ### 1: Set Up the Hardware
-- Follow the intructions for the Tenstorrent device you are using at: [Hardware Setup](https://docs.tenstorrent.com)
+- Follow the instructions for the Tenstorrent device you are using at: [Hardware Setup](https://docs.tenstorrent.com)
 
 ---
 
@@ -46,9 +46,8 @@ sudo ./install_dependencies.sh
 ```
 git clone https://github.com/tenstorrent/tt-kmd.git
 cd tt-kmd
-git checkout -b ttkmd-1.29 ttkmd-1.29
 sudo dkms add .
-sudo dkms install tenstorrent/1.29
+sudo dkms install tenstorrent/1.31
 sudo modprobe tenstorrent
 cd ..
 ```
@@ -131,7 +130,7 @@ Once hardware and system software are installed, verify that the system has been
 
 - [Option 2: From Docker Release Image](#option-2-from-docker-release-image)
 
-  Installing from Docker Release Image is the quickest way to access our APIs and to start runnig AI models.
+  Installing from Docker Release Image is the quickest way to access our APIs and to start running AI models.
 
 - [Option 3: From Wheel](#option-3-from-wheel)
 
