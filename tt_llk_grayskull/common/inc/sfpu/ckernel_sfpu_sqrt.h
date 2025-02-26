@@ -4,27 +4,33 @@
 
 #pragma once
 
-#include "ckernel.h"
 #include "ckernel_defs.h"
+#include "ckernel.h"
 #include "noc_nonblocking_api.h"
+
 #include "sfpi.h"
 
 using namespace sfpi;
 
-namespace ckernel {
-namespace sfpu {
+namespace ckernel
+{
+namespace sfpu
+{
 
-template <bool APPROXIMATION_MODE, int ITERATIONS = 4, int RECIPROCAL_ITERATIONS = 2>
-inline void _calculate_sqrt_() {
-#pragma GCC unroll 4
-    for (int d = 0; d < ITERATIONS; d++) {
+template <bool APPROXIMATION_MODE, int ITERATIONS=4, int RECIPROCAL_ITERATIONS=2>
+inline void _calculate_sqrt_()
+{
+    #pragma GCC unroll 4
+    for (int d = 0; d < ITERATIONS; d++)
+    {
         vFloat val = dst_reg[0];
 
-        if constexpr (APPROXIMATION_MODE) {
+        if constexpr (APPROXIMATION_MODE)
+        {
             vUInt magic = l_reg[LRegs::LReg2];
 
-            // sqrt initial approximation
-            //  adjust bias
+            //sqrt initial approximation
+            // adjust bias
             vUInt val_s = magic + reinterpret<vUInt>(val);
 
             // approximation of square root
@@ -32,19 +38,22 @@ inline void _calculate_sqrt_() {
             dst_reg[0] = reinterpret<vFloat>(val_s);
 
             l_reg[LRegs::LReg2] = magic;
-        } else {
+        }
+        else
+        {
             // Recip root method
             //// Init approx
-            // u.i = SQRT_MAGIC_F - (u.i >> 1);
-            vUInt  magic  = reinterpret<vUInt>(vFloat(s2vFloat16b(0x5f37)));
+            //u.i = SQRT_MAGIC_F - (u.i >> 1);
+            vUInt magic = reinterpret<vUInt>(vFloat(s2vFloat16b(0x5f37)));
             vFloat approx = reinterpret<vFloat>(magic - (reinterpret<vUInt>(val) >> 1));
 
             // Re-load to save a MOV
             val = dst_reg[0];
 
-            // Reciproot iterations
-            for (int r = 0; r < RECIPROCAL_ITERATIONS; r++) {
-                // x*r*(1.5f - xhalf*r*r);
+            //Reciproot iterations
+            for (int r = 0; r < RECIPROCAL_ITERATIONS; r++)
+            {
+                //x*r*(1.5f - xhalf*r*r);
                 approx = (approx * approx * val * vConstNeg0p5 + vConst1 + 0.5F) * approx;
             }
 
@@ -56,8 +65,11 @@ inline void _calculate_sqrt_() {
 }
 
 template <bool APPROXIMATION_MODE>
-inline void _init_sqrt_() {
-    if (APPROXIMATION_MODE) { TTI_SFPLOADI(2, 0, 127 << 7); }
+inline void _init_sqrt_()
+{
+    if (APPROXIMATION_MODE) {
+        TTI_SFPLOADI(2, 0, 127 << 7);
+    }
 }
 
 } // namespace sfpu

@@ -2,17 +2,18 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+
 #pragma once
 
 namespace ckernel {
 
 enum VectorMode {
-    None      = 0,
-    R         = 1,
-    C         = 2,
-    RC        = 4,
-    RC_custom = 6,
-    Invalid   = 0xFF,
+  None      = 0,
+  R         = 1,
+  C         = 2,
+  RC        = 4,
+  RC_custom = 6,
+  Invalid   = 0xFF,
 };
 
 enum ReduceDim {
@@ -46,23 +47,23 @@ enum EltwiseBinaryType {
 };
 
 enum class EltwiseBinaryReuseDestType {
-    NONE         = 0,
+    NONE = 0,
     DEST_TO_SRCA = 1,
     DEST_TO_SRCB = 2,
 };
 
 enum DstSync {
-    SyncHalf   = 0,
-    SyncFull   = 1,
+    SyncHalf = 0,
+    SyncFull = 1,
     SyncTile16 = 2,
-    SyncTile2  = 3,
+    SyncTile2 = 3,
 };
 
 enum BroadcastType {
-    NONE   = 0x0, // A - None || B - None
-    COL    = 0x1, // A - None || B - Col Broadcast
-    ROW    = 0x2, // A - None || B - Row Broadcast
-    SCALAR = 0x3, // A - None || B - Scalar Broadcast
+    NONE = 0x0,    // A - None || B - None
+    COL = 0x1,     // A - None || B - Col Broadcast
+    ROW = 0x2,     // A - None || B - Row Broadcast
+    SCALAR = 0x3,  // A - None || B - Scalar Broadcast
 };
 
 enum src_op_id_e {
@@ -96,7 +97,7 @@ enum ReluType {
     MAX_THRESHOLD_RELU,
 };
 
-constexpr bool UnpackToDestEn  = true;
+constexpr bool UnpackToDestEn = true;
 constexpr bool UnpackToDestDis = false;
 
 /*
@@ -109,34 +110,36 @@ Stochastic rounding modes:
     All: Enables fpu, pack and gasket rounding.
 */
 enum struct StochRndType {
-    None = 0,
-    Fpu  = 1,
-    Pack = 2,
-    All  = 0xf,
+    None    = 0,
+    Fpu     = 1,
+    Pack    = 2,
+    All     = 0xf,
 };
 
 // This is populated per Blackhole ISA for SFPLOAD/SFPSTORE instructions.
-enum InstrModLoadStore {
-    DEFAULT       = 0,
-    FP16A         = 1,
-    FP16B         = 2,
-    FP32          = 3,
-    INT32         = 4,
-    INT8          = 5,
-    LO16          = 6,
-    HI16          = 7,
+enum InstrModLoadStore
+{
+    DEFAULT = 0,
+    FP16A = 1,
+    FP16B = 2,
+    FP32 = 3,
+    INT32 = 4,
+    INT8 = 5,
+    LO16 = 6,
+    HI16 = 7,
     INT32_2S_COMP = 12,
-    INT8_2S_COMP  = 13,
-    LO16_ONLY     = 14,
-    HI16_ONLY     = 15
+    INT8_2S_COMP = 13,
+    LO16_ONLY = 14,
+    HI16_ONLY = 15
 };
 
 // This is populated per Blackhole ISA for SFPCAST instruction.
-enum InstrModCast {
-    INT32_TO_FP32_NEAREST_EVEN     = 0,
-    INT32_TO_FP32_STOCHASTIC       = 1,
+enum InstrModCast
+{
+    INT32_TO_FP32_NEAREST_EVEN = 0,
+    INT32_TO_FP32_STOCHASTIC = 1,
     INT32_2S_COMP_TO_INT_SIGN_MAGN = 2,
     INT_SIGN_MAGN_TO_INT32_2S_COMP = 3
 };
 
-} // namespace ckernel
+}  // namespace ckernel

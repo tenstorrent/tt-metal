@@ -4,21 +4,26 @@
 
 #pragma once
 
-#include "ckernel.h"
 #include "ckernel_defs.h"
+#include "ckernel.h"
 #include "noc_nonblocking_api.h"
+
 #include "sfpi.h"
 
 using namespace sfpi;
 
-namespace ckernel {
-namespace sfpu {
+namespace ckernel
+{
+namespace sfpu
+{
 
 template <bool APPROXIMATION_MODE, int ITERATIONS>
-inline void _calculate_abs_() {
+inline void _calculate_abs_()
+{
     // SFPU microcode
-    for (int d = 0; d < ITERATIONS; d++) {
-        vFloat v   = dst_reg[0];
+    for (int d = 0; d < ITERATIONS; d++)
+    {
+        vFloat v = dst_reg[0];
         dst_reg[0] = sfpi::abs(v);
         dst_reg++;
     }

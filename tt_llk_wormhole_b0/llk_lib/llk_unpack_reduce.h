@@ -2,12 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+
 #pragma once
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "ckernel_globals.h"
 #include "ckernel_template.h"
 #include "cunpack_common.h"
+#include "ckernel_globals.h"
 
 using namespace ckernel;
 using namespace ckernel::unpacker;
@@ -27,28 +28,20 @@ inline void _llk_unpack_reduce_mop_config_(const std::uint32_t num_faces) {
     static constexpr uint unpack_srcb =
         TT_OP_UNPACR(SrcB, 0b0, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
 #endif
-    const uint32_t     outerloop = num_faces;
+    const uint32_t outerloop = num_faces;
     constexpr uint32_t innerloop = 1;
-    ckernel_template   tmp(outerloop, innerloop, unpack_zerosrca, unpack_srca);
+    ckernel_template tmp(outerloop, innerloop, unpack_zerosrca, unpack_srca);
     tmp.set_start_op(unpack_srcb);
     tmp.program(instrn_buffer);
 }
 
 template <bool is_fp32_dest_acc_en = false, StochRndType stoch_rnd_mode = StochRndType::None>
-inline void _llk_unpack_reduce_hw_configure_(
-    const std::uint32_t unpA_src_format,
-    const std::uint32_t unpB_src_format,
-    const std::uint32_t unpA_dst_format,
-    const std::uint32_t unpB_dst_format,
-    const std::uint32_t unpA_face_r_dim             = FACE_R_DIM,
-    const std::uint32_t unpB_face_r_dim             = FACE_R_DIM,
-    const std::uint32_t within_face_16x16_transpose = 0,
-    const std::uint32_t unpA_num_faces              = 4,
-    const std::uint32_t unpB_num_faces              = 4) {
-    constexpr bool is_row_pool  = true;
+inline void _llk_unpack_reduce_hw_configure_(const std::uint32_t unpA_src_format, const std::uint32_t unpB_src_format, const std::uint32_t unpA_dst_format, const std::uint32_t unpB_dst_format,  const std::uint32_t unpA_face_r_dim = FACE_R_DIM, const std::uint32_t unpB_face_r_dim = FACE_R_DIM, const std::uint32_t within_face_16x16_transpose = 0, const std::uint32_t unpA_num_faces = 4, const std::uint32_t unpB_num_faces = 4) {
+
+    constexpr bool is_row_pool = true;
     constexpr bool stoch_rnd_en = (stoch_rnd_mode == StochRndType::All);
-    constexpr bool fpu_srnd_en  = stoch_rnd_en || (stoch_rnd_mode == StochRndType::Fpu);
-    constexpr bool pack_srnd_en = stoch_rnd_en || (stoch_rnd_mode == StochRndType::Pack);
+    constexpr bool fpu_srnd_en = stoch_rnd_en || (stoch_rnd_mode == StochRndType::Fpu);
+    constexpr bool pack_srnd_en = stoch_rnd_en ||(stoch_rnd_mode == StochRndType::Pack);
 
     configure_unpack_AB<is_row_pool, is_fp32_dest_acc_en, fpu_srnd_en, pack_srnd_en>(
         unpA_src_format,
@@ -63,15 +56,14 @@ inline void _llk_unpack_reduce_hw_configure_(
 }
 
 template <PoolType type, ReduceDim dim>
-inline void _llk_unpack_reduce_init_(
-    const std::uint32_t within_face_16x16_transpose = 0, const std::uint32_t num_faces = 4) {
+inline void _llk_unpack_reduce_init_(const std::uint32_t within_face_16x16_transpose=0, const std::uint32_t num_faces = 4) {
+
     // REDUCE_ROW requires transpose itself; additionaly, within_face_16x16_transpose flag could require transpose;
     // if we have the flag set with REDUCE_ROW, we don't need to do anything
-    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(
-        ReduceDim::REDUCE_ROW == dim ? !within_face_16x16_transpose : within_face_16x16_transpose);
+    cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(ReduceDim::REDUCE_ROW == dim ? !within_face_16x16_transpose : within_face_16x16_transpose);
 
-    TTI_SETADCXX(p_setadc::UNP0, FACE_R_DIM * FACE_C_DIM - 1, 0x0);
-    TTI_SETADCXX(p_setadc::UNP1, FACE_C_DIM - 1, 0x0);
+    TTI_SETADCXX(p_setadc::UNP0, FACE_R_DIM*FACE_C_DIM-1, 0x0);
+    TTI_SETADCXX(p_setadc::UNP1, FACE_C_DIM-1, 0x0);
 
     _llk_unpack_reduce_mop_config_<type, dim>(num_faces);
 }
@@ -82,7 +74,7 @@ inline void _llk_unpack_reduce_(const std::uint32_t address) {
     TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
 
     // Program srcA and srcB base addresses
-    volatile uint tt_reg_ptr *cfg = get_cfg_pointer(); // get pointer to registers for current state ID
+    volatile uint tt_reg_ptr *cfg = get_cfg_pointer();  // get pointer to registers for current state ID
 
     // Wait for free context
     wait_for_next_context(2);

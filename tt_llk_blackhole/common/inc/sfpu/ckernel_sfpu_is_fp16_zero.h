@@ -4,16 +4,20 @@
 
 #pragma once
 
-#include "ckernel.h"
 #include "ckernel_defs.h"
+#include "ckernel.h"
+
 #include "sfpi.h"
 
 using namespace sfpi;
 
-namespace ckernel {
-namespace sfpu {
+namespace ckernel
+{
+namespace sfpu
+{
 
-sfpi_inline vInt _sfpu_is_fp16_zero_(const vFloat& v, uint exponent_size_8) {
+sfpi_inline vInt _sfpu_is_fp16_zero_(const vFloat& v, uint exponent_size_8)
+{
     if (exponent_size_8) {
         // fp16b
         return v == 0.0F;
