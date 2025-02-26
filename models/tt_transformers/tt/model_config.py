@@ -713,29 +713,29 @@ class ModelArgs:
                 packer_l1_acc=False,
             )
 
-            # Useful core grid based on batch size
-            if self.max_batch_size == 32:
-                grid_by_batch = (8, 4)
-            elif self.max_batch_size == 16:
-                grid_by_batch = (8, 2)
-            elif self.max_batch_size == 8:
-                grid_by_batch = (8, 1)
-            elif self.max_batch_size == 4:
-                grid_by_batch = (4, 1)
-            elif self.max_batch_size == 2:
-                grid_by_batch = (2, 1)
-            elif self.max_batch_size == 1:
-                grid_by_batch = (1, 1)
-            else:
-                raise ValueError(f"Batch size {self.max_batch_size} not supported")
-            core_range_set_by_batch = ttnn.CoreRangeSet(
-                {
-                    ttnn.CoreRange(
-                        ttnn.CoreCoord(0, 0),
-                        ttnn.CoreCoord(grid_by_batch[0] - 1, grid_by_batch[1] - 1),
-                    ),
-                }
-            )
+            # # Useful core grid based on batch size
+            # if self.max_batch_size == 32:
+            #     grid_by_batch = (8, 4)
+            # elif self.max_batch_size == 16:
+            #     grid_by_batch = (8, 2)
+            # elif self.max_batch_size == 8:
+            #     grid_by_batch = (8, 1)
+            # elif self.max_batch_size == 4:
+            #     grid_by_batch = (4, 1)
+            # elif self.max_batch_size == 2:
+            #     grid_by_batch = (2, 1)
+            # elif self.max_batch_size == 1:
+            #     grid_by_batch = (1, 1)
+            # else:
+            #     raise ValueError(f"Batch size {self.max_batch_size} not supported")
+            # core_range_set_by_batch = ttnn.CoreRangeSet(
+            #     {
+            #         ttnn.CoreRange(
+            #             ttnn.CoreCoord(0, 0),
+            #             ttnn.CoreCoord(grid_by_batch[0] - 1, grid_by_batch[1] - 1),
+            #         ),
+            #     }
+            # )
 
             self.model_config[
                 "SCORES_BATCHED_MM_OUTPUT_MEMCFG"
@@ -746,18 +746,18 @@ class ModelArgs:
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
             )
-            self.model_config["ROT_MAT_MEMCONFIG"] = ttnn.MemoryConfig(
-                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-                ttnn.BufferType.L1,
-                ttnn.ShardSpec(
-                    core_range_set_by_batch,
-                    [
-                        128,
-                        128,
-                    ],
-                    ttnn.ShardOrientation.ROW_MAJOR,
-                ),
-            )
+            # self.model_config["ROT_MAT_MEMCONFIG"] = ttnn.MemoryConfig(
+            #     ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            #     ttnn.BufferType.L1,
+            #     ttnn.ShardSpec(
+            #         core_range_set_by_batch,
+            #         [
+            #             128,
+            #             128,
+            #         ],
+            #         ttnn.ShardOrientation.ROW_MAJOR,
+            #     ),
+            # )
 
             # MLP configs
             mlp_core_grid = (

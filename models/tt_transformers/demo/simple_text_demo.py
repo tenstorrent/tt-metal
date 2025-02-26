@@ -264,6 +264,13 @@ def create_tt_model(
     ],
 )
 @pytest.mark.parametrize(
+    "data_parallel",
+    [
+        # 1, 2, 4,
+        8,
+    ],
+)
+@pytest.mark.parametrize(
     "optimizations",
     [
         ModelOptimizations.performance,
@@ -290,6 +297,7 @@ def test_demo_text(
     paged_attention,
     page_params,
     sampling_params,
+    data_parallel,
     optimizations,
     stop_at_eos,
     mesh_device,
@@ -324,6 +332,9 @@ def test_demo_text(
     repeat_batches = request.config.getoption("--repeat_batches") or repeat_batches
     max_seq_len = request.config.getoption("--max_seq_len") or max_seq_len
     batch_size = request.config.getoption("--batch_size") or batch_size
+
+    batch_size *= data_parallel
+
     max_generated_tokens = request.config.getoption("--max_generated_tokens") or max_generated_tokens
     paged_attention = request.config.getoption("--paged_attention") or paged_attention
     page_params = request.config.getoption("--page_params") or page_params
@@ -366,18 +377,33 @@ def test_demo_text(
     for i in range(repeat_batches):
         repeat_batch_prompts.append([input_prompts[(j + i) % len(input_prompts)] for j in range(len(input_prompts))])
 
-    model_args, model, page_table, tt_kv_cache = create_tt_model(
-        mesh_device,
-        instruct=instruct,
-        max_batch_size=batch_size,
-        optimizations=optimizations,
-        max_seq_len=max_seq_len,
-        page_params=page_params,
-        dtype=ttnn.bfloat8_b,
-        use_paged_kv_cache=paged_attention,
-    )
+    # Hybrid requires a model per submesh
+    model_args = []
+    model = []
+    page_table = []
+    tt_kv_cache = []
 
-    tokenizer = model_args.tokenizer
+    # Partition the mesh, singular model implemented for TP on 1xN mesh
+    mesh_shape = list(mesh_device.shape)
+    submesh_devices = mesh_device.create_submeshes(ttnn.MeshShape(mesh_shape[0], mesh_shape[1] // data_parallel))
+
+    for submesh in submesh_devices:
+        model_args_i, model_i, page_table_i, tt_kv_cache_i = create_tt_model(
+            submesh,
+            instruct=instruct,
+            max_batch_size=batch_size // data_parallel,
+            optimizations=optimizations,
+            max_seq_len=max_seq_len,
+            page_params=page_params,
+            dtype=ttnn.bfloat8_b,
+            use_paged_kv_cache=paged_attention,
+        )
+        model_args.append(model_args_i)
+        model.append(model_i)
+        page_table.append(page_table_i)
+        tt_kv_cache.append(tt_kv_cache_i)
+
+    tokenizer = [arg.tokenizer for arg in model_args]
     generator = Generator(model, model_args, mesh_device, tokenizer=tokenizer)
 
     num_tokens_generated_decode = []
@@ -447,8 +473,8 @@ def test_demo_text(
 
         user_done = [False] * batch_size  # Keeps track when a user reaches EoD token
 
-        # TODO Argmax on device is only supported for batch_size=1
-        argmax_on_device = False if (batch_size > 1 or sampling_params["temperature"] != 0) else True
+        # TODO Argmax on device is only supported for batch_size=1 (per submesh)
+        argmax_on_device = False if (batch_size // data_parallel > 1 or sampling_params["temperature"] != 0) else True
 
         # Initial positions
         current_pos = torch.tensor([decoding_pos[b] for b in range(batch_size)])
@@ -478,10 +504,11 @@ def test_demo_text(
                 kv_cache=tt_kv_cache,
                 argmax_on_device=argmax_on_device,
             )
-
+            logits = torch.cat(logits, 0)
             # Get the next token
             if argmax_on_device:
                 out_tok = logits.unsqueeze(1)
+                out_tok = out_tok[:, 0, 0, : (batch_size // data_parallel)].to(torch.int)
             else:
                 # TODO Fix use case with temperature > 0
                 _, out_tok = sample_host(
@@ -511,7 +538,7 @@ def test_demo_text(
             for user in range(batch_size):
                 user_tok = out_tok[user].item()
                 if (
-                    user_tok not in tokenizer.stop_tokens and user_done[user] == False
+                    user_tok not in tokenizer[0].stop_tokens and user_done[user] == False
                 ):  # Read until an eos token (e.g. <|eot_id|>); create_tokenizer adds stop_tokens to HF tokenizers
                     all_outputs[user].append(user_tok)
                 else:
@@ -526,7 +553,7 @@ def test_demo_text(
             # Print out generated outputs for each user at the end of every iteration
             if not is_ci_env:
                 for user in range(batch_size):
-                    text = "".join(tokenizer.decode(all_outputs[user]))
+                    text = "".join(tokenizer[0].decode(all_outputs[user]))
                     if len(text) > 100:
                         text = "..." + text[-97:]
                     text = text.replace("\n", " ")
@@ -543,9 +570,9 @@ def test_demo_text(
                 profiler.start(f"log_saving_file", iteration=batch_idx)
                 logger.info("Finished decoding, printing the final outputs...\n")
                 for i, (output, prompt) in enumerate(zip(all_outputs, input_prompts)):
-                    text = tokenizer.decode(output)
-                    prompt_including_assistant_tags = tokenizer.decode(
-                        model_args.encode_prompt(prompt, instruct=instruct)
+                    text = tokenizer[0].decode(output)
+                    prompt_including_assistant_tags = tokenizer[0].decode(
+                        model_args[0].encode_prompt(prompt, instruct=instruct)
                     )
                     text_after_prompt = text.replace(prompt_including_assistant_tags, "", 1)
                     if print_to_file:
@@ -648,9 +675,9 @@ def test_demo_text(
     supported_models = ["Llama3.2-1B", "Llama3.2-3B", "Llama3.1-8B", "Llama3.2-11B", "Llama3.1-70B"]
     supported_devices = ["N150", "P150", "P300", "N300", "P150x4", "T3K", "TG"]
 
-    tt_device_name = model_args.device_name
+    tt_device_name = model_args[0].device_name
 
-    if model_args.base_model_name in supported_models:
+    if model_args[0].base_model_name in supported_models:
         assert tt_device_name in supported_devices, f"Device {tt_device_name} not supported"
 
         # Set the target times to first token for every combination of device and model
@@ -681,7 +708,7 @@ def test_demo_text(
             "N300_Llama3.1-70B": 1050,  # TODO Update target
             "T3K_Llama3.1-70B": 1050,  # TODO Update target
             "TG_Llama3.1-70B": 1050,  # TODO Update target
-        }[f"{tt_device_name}_{model_args.base_model_name}"]
+        }[f"{tt_device_name}_{model_args[0].base_model_name}"]
 
         # Set the target decode timesfor every combination of device and model
         target_decode_tok_s_u = {
@@ -709,7 +736,7 @@ def test_demo_text(
             #
             "T3K_Llama3.1-70B": 20,  # TODO Update target
             "TG_Llama3.1-70B": 20,  # TODO Update target
-        }[f"{tt_device_name}_{model_args.base_model_name}"]
+        }[f"{tt_device_name}_{model_args[0].base_model_name}"]
 
         target_decode_tok_s = target_decode_tok_s_u * batch_size
         targets = {
@@ -718,7 +745,7 @@ def test_demo_text(
             "decode_t/s/u": target_decode_tok_s_u,
         }
     else:
-        logger.warning(f"Model {model_args.base_model_name} not does not have performance targets set")
+        logger.warning(f"Model {model_args[0].base_model_name} not does not have performance targets set")
         targets = {}
 
     # Save benchmark data for CI dashboard
@@ -756,9 +783,9 @@ def test_demo_text(
         benchmark_data.save_partial_run_json(
             profiler,
             run_type=f"{tt_device_name}-demo",
-            ml_model_name=model_args.base_model_name,
+            ml_model_name=model_args[0].base_model_name,
             ml_model_type="llm",
-            num_layers=model_args.n_layers,
+            num_layers=model_args[0].n_layers,
             batch_size=batch_size,
             input_sequence_length=max(prefill_lens),
             output_sequence_length=num_tokens_generated_decode[0],

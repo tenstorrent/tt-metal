@@ -46,15 +46,17 @@ class Generator:
 
     def prefill_forward_text(self, tokens: torch.Tensor, page_table=None, kv_cache=None, prompt_lens=None):
         batch, batch_seq_len = tokens.shape
-        output_logits = torch.zeros(batch, 1, self.model_args.vocab_size)
+        output_logits = torch.zeros(batch, 1, self.model_args[0].vocab_size)
         prompt_lens = prompt_lens if prompt_lens is not None else torch.tensor([batch_seq_len] * batch)
 
         if page_table is not None:
-            assert isinstance(
-                page_table, torch.Tensor
+            assert isinstance(page_table, torch.Tensor) or isinstance(
+                page_table, list
             ), "page_table must be a torch.Tensor when passing into prefill_forward"
-
+        out_list = []
         for user_id in range(batch):
+            model_id = user_id % len(self.model_args)
+
             logger.info(f"Prefilling User {user_id + 1}")
             seq_len = prompt_lens[user_id]
             last_token_idx = seq_len - 1
@@ -64,26 +66,34 @@ class Generator:
                 [tokens[user_id : user_id + 1, :seq_len], torch.zeros(1, prefill_seq_len - seq_len).long()], dim=-1
             )
             if page_table is not None:
-                page_table_user = self._get_prefill_user_page_table(page_table, kv_cache, seq_len)
+                page_table_user = self._get_prefill_user_page_table(page_table[model_id], kv_cache[model_id], seq_len)
 
             logits = self.prefill_forward_single_user_text(
                 prefill_ids,
                 page_table=page_table_user if page_table is not None else None,
-                user_id=user_id,
+                user_id=user_id // len(self.model_args),
                 last_token_idx=last_token_idx,
-                kv_cache=kv_cache,
+                kv_cache=kv_cache[model_id],
+                model_id=model_id,
             )
 
             # Since we give unpadded_seq_len, only the tile containing the last token is returned
-            output_logits[user_id] = logits
+            # output_logits[user_id] = logits
+            out_list.append(logits)
 
         logger.info(f"Finished prefill for all users up to {batch_seq_len} tokens, Starting decode...")
-
+        for user_id, out in enumerate(out_list):
+            model_id = user_id % len(self.model_args)
+            seq_len = prompt_lens[user_id]
+            last_token_idx = seq_len - 1
+            output_logits[user_id] = self.model[model_id].process_output_prefill(
+                out, last_token_idx=(last_token_idx % 32)
+            )
         return output_logits
 
-    def prefill_forward_single_user_text(self, tokens, page_table, user_id, last_token_idx, kv_cache=None):
+    def prefill_forward_single_user_text(self, tokens, page_table, user_id, last_token_idx, kv_cache=None, model_id=-1):
         seq_len = tokens.shape[-1]
-        use_chunked_prefill = seq_len > self.model_args.max_prefill_chunk_size
+        use_chunked_prefill = seq_len > self.model_args[model_id].max_prefill_chunk_size
         if use_chunked_prefill:
             """
             Chunked prefill requires paged attention. There are some strange constraints which we must meet:
@@ -99,7 +109,7 @@ class Generator:
             assert (
                 last_token_idx is not None and last_token_idx < seq_len
             ), "last_token_idx must be provided and less than seq_len"
-            chunk_size = get_max_prefill_chunk_size(seq_len, self.model_args.max_prefill_chunk_size)
+            chunk_size = get_max_prefill_chunk_size(seq_len, self.model_args[model_id].max_prefill_chunk_size)
             block_size = get_block_size(kv_cache)
             last_token_idx_in_chunk = last_token_idx % chunk_size
             # Calculate which chunk contains the last_token_idx
@@ -125,13 +135,13 @@ class Generator:
                     chunk_rot_mats_prefill,
                     page_table_tt,
                     chunk_page_table_tt,
-                ) = self.model.prepare_inputs_prefill(
+                ) = self.model[model_id].prepare_inputs_prefill(
                     chunk_tokens,
                     start_pos=chunk_start,
                     page_table=page_table_user_padded,
                     chunk_page_table=chunk_page_table,
                 )
-                tt_logits = self.model.ttnn_prefill_forward(
+                tt_logits = self.model[model_id].ttnn_prefill_forward(
                     chunk_prefill_input,
                     rot_mats=chunk_rot_mats_prefill,
                     user_id=CHUNK_USER_ID,
@@ -143,17 +153,18 @@ class Generator:
                 )
 
                 if chunk_start == last_chunk_start:
-                    logits = self.model.process_output_prefill(tt_logits, last_token_idx=(last_token_idx_in_chunk % 32))
-                    return logits
+                    # logits = self.model[model_id].process_output_prefill(tt_logits, last_token_idx=(last_token_idx_in_chunk % 32))
+                    # return logits
+                    return tt_logits
                 else:
                     del tt_logits
         else:
-            prefill_input, rot_mats_prefill, page_table_tt, _ = self.model.prepare_inputs_prefill(
+            prefill_input, rot_mats_prefill, page_table_tt, _ = self.model[model_id].prepare_inputs_prefill(
                 tokens,
                 page_table=page_table,
             )
 
-            tt_logits = self.model.ttnn_prefill_forward(
+            tt_logits = self.model[model_id].ttnn_prefill_forward(
                 prefill_input,
                 rot_mats=rot_mats_prefill,
                 user_id=user_id,
@@ -162,9 +173,10 @@ class Generator:
                 kv_cache=kv_cache,
             )
 
-            logits = self.model.process_output_prefill(tt_logits, last_token_idx=(last_token_idx % 32))
+            # logits = self.model[model_id].process_output_prefill(tt_logits, last_token_idx=(last_token_idx % 32))
 
-            return logits
+            # return logits
+            return tt_logits
 
     def decode_forward_text(
         self,
@@ -176,6 +188,9 @@ class Generator:
         read_from_device=True,
         argmax_on_device=False,
     ):
+        tokens = torch.chunk(tokens, len(self.model_args), 0)
+        start_pos = torch.chunk(start_pos, len(self.model_args), 0)
+
         decode_kwargs = {
             "current_pos": start_pos,
             "tokens": tokens,
@@ -189,7 +204,10 @@ class Generator:
             tt_logits = self._decode_forward_no_trace_text(**decode_kwargs)
 
         if read_from_device:
-            return self.read_decode_output(tt_logits, tokens.shape[0], argmax_on_device)
+            ret = []
+            for i, t in enumerate(tokens):
+                ret.append(self.read_decode_output(tt_logits[i], t.shape[0], i))
+            return ret
         else:
             return tt_logits
 
@@ -205,17 +223,21 @@ class Generator:
         Performs text decode step.
         Returns tt_logits on device
         """
-        tt_tokens, tt_current_pos, tt_rot_mats, tt_page_table = self.model.prepare_inputs_decode(
-            tokens, current_pos, page_table
-        )
-        tt_logits = self.model.ttnn_decode_forward(
-            tt_tokens,
-            tt_current_pos,
-            rot_mats=tt_rot_mats,
-            page_table=tt_page_table,
-            kv_cache=kv_cache,
-            argmax_on_device=argmax_on_device,
-        )
+        tt_logits = []
+
+        for i in range(len(self.model)):
+            tt_tokens, tt_current_pos, tt_rot_mats, tt_page_table = self.model[i].prepare_inputs_decode(
+                tokens[i], current_pos[i], page_table[i]
+            )
+            tt_logits_i = self.model[i].ttnn_decode_forward(
+                tt_tokens,
+                tt_current_pos,
+                rot_mats=tt_rot_mats,
+                page_table=tt_page_table,
+                kv_cache=kv_cache[i],
+                argmax_on_device=argmax_on_device,
+            )
+            tt_logits.append(tt_logits_i)
 
         return tt_logits
 
@@ -238,17 +260,25 @@ class Generator:
         logger.info("Done Compiling Model")
 
         # Get inputs ready for trace run
-        host_inputs = self.model.prepare_decode_inputs_host(tokens, current_pos, page_table=page_table)
+        device_inputs = []
+        tt_out_trace = []
+        for i in range(len(self.model)):
+            host_inputs = self.model[i].prepare_decode_inputs_host(tokens[i], current_pos[i], page_table=page_table[i])
 
-        device_inputs = copy_host_to_device(host_inputs, mesh_device=self.mesh_device)
+            device_inputs_i = copy_host_to_device(host_inputs, mesh_device=self.model_args[i].mesh_device)
+            device_inputs.append(device_inputs_i)
 
-        trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
-        transformed_inputs = self.model.transform_decode_inputs_device(*device_inputs)
-        tt_out_trace = self.model.ttnn_decode_forward(
-            *transformed_inputs, kv_cache=kv_cache, argmax_on_device=argmax_on_device
-        )
+        trace_id = ttnn.begin_trace_capture(self.model_args[i].mesh_device, cq_id=0)
+        for i in range(len(self.model)):
+            transformed_inputs = self.model[i].transform_decode_inputs_device(*(device_inputs[i]))
+            tt_out_trace.append(
+                self.model[i].ttnn_decode_forward(
+                    *transformed_inputs, kv_cache=kv_cache[i], argmax_on_device=argmax_on_device
+                )
+            )
 
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+
         logger.info("Done Capturing Decode Trace")
         return trace_id, tt_out_trace, *device_inputs
 
@@ -264,13 +294,20 @@ class Generator:
         """
         Executes the trace for the decode_forward method but does not read back outputs.
         """
-        host_inputs = self.model.prepare_decode_inputs_host(tokens, current_pos, page_table)
+        host_inputs = []
+        for i in range(len(self.model)):
+            host_inputs_i = self.model[i].prepare_decode_inputs_host(tokens[i], current_pos[i], page_table[i])
+            host_inputs.append(host_inputs_i)
 
-        device_inputs = copy_host_to_device(
-            host_tensors=host_inputs,
-            device_tensors=device_inputs,
-        )
-
+        tmp = []
+        for i in range(len(self.model)):
+            tmp.append(
+                copy_host_to_device(
+                    host_tensors=host_inputs[i],
+                    device_tensors=device_inputs[i],
+                )
+            )
+        device_inputs = tmp
         ttnn.execute_trace(self.mesh_device, trace_id, cq_id=0, blocking=False)
 
         return tt_out_trace
@@ -464,12 +501,17 @@ class Generator:
             tt_logits = self._decode_forward_no_trace(**decode_kwargs)
 
         if read_from_device:
-            return self.read_decode_output(tt_logits, tokens.shape[0])
+            ret = []
+            for i, t in enumerate(tokens):
+                ret.append(self.read_decode_output(tt_logits, t.shape[0], i))
+            return ret
         else:
             return tt_logits
 
-    def read_decode_output(self, tt_logits, unpadded_batch, argmax_on_device=False):
-        logits = self.model.process_output_decode(tt_logits, B=unpadded_batch, S=1, argmax_on_device=argmax_on_device)
+    def read_decode_output(self, tt_logits, unpadded_batch, i, argmax_on_device=False):
+        logits = self.model[i].process_output_decode(
+            tt_logits, B=unpadded_batch, S=1, argmax_on_device=argmax_on_device
+        )
         return logits
 
     def _decode_forward_no_trace(
