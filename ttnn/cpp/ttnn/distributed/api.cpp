@@ -100,6 +100,7 @@ Tensor aggregate_as_tensor(
         std::vector<OwnedBuffer> host_owned_buffers;
         for (const auto& shard : tensor_shards) {
             auto buffer = std::get<BorrowedStorage>(shard.get_storage()).buffer;
+            specs.push_back(shard.get_tensor_spec());
 
             auto visitor = tt::stl::overloaded{[&shard, &host_owned_buffers](const auto& buffer) -> OwnedBuffer {
                 using BufferType = std::decay_t<decltype(buffer)>;
