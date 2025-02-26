@@ -2,8 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "debug/dprint.h"  // required in all kernels using DPRINT
-
 namespace NAMESPACE {
 void process_and_sort_tiles(
     uint32_t input_cb_index,
