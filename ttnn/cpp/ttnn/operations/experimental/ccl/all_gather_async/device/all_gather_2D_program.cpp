@@ -105,7 +105,7 @@ operation::ProgramWithCallbacks all_gather_2D_multi_core_with_workers(
     const Tensor& input_tensor,
     Tensor& output_tensor,
     const tt::tt_metal::distributed::MeshCoordinate device_coord,
-    const CoreCoord grid_size,
+    const MeshShape grid_size,
     const size_t num_rows,
     const size_t num_cols,
     const MemoryConfig output_mem_config,

@@ -36,7 +36,11 @@ enum class AllGather2DVersion {
 };
 
 struct AllGather2D {
-    const MeshDevice& mesh_device;
+    const tt::tt_metal::distributed::MeshCoordinate device_coord;
+    const MeshShape grid_size;
+    const size_t num_rows;
+    const size_t num_cols;
+    const size_t num_devices;
     const MemoryConfig output_mem_config;
     const ccl::Topology topology;
     const GlobalSemaphore semaphore;
@@ -45,6 +49,33 @@ struct AllGather2D {
     const uint32_t higher_pages;
     const uint32_t page_size;
     bool is_horizontal;
+    AllGather2D(
+        const tt::tt_metal::distributed::MeshCoordinate device_coord,
+        const MeshShape grid_size,
+        const size_t num_rows,
+        const size_t num_cols,
+        const size_t num_devices,
+        const MemoryConfig output_mem_config,
+        const ccl::Topology topology,
+        const GlobalSemaphore semaphore,
+        const uint32_t dim,
+        const uint32_t lower_pages,
+        const uint32_t higher_pages,
+        const uint32_t page_size,
+        bool is_horizontal) :
+        device_coord(device_coord),
+        grid_size(grid_size),
+        num_rows(num_rows),
+        num_cols(num_cols),
+        num_devices(num_devices),
+        output_mem_config(output_mem_config),
+        topology(topology),
+        semaphore(semaphore),
+        dim(dim),
+        lower_pages(lower_pages),
+        higher_pages(higher_pages),
+        page_size(page_size),
+        is_horizontal(is_horizontal) {}
 
     auto attributes() const {
         using tt::stl::reflection::Attribute;
@@ -61,6 +92,7 @@ struct AllGather2D {
     operation::ProgramWithCallbacks create_program(
         const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
     AllGather2DVersion select_version(const Tensor& input_tensor) const;
+    const operation::Hash compute_program_hash(const std::vector<Tensor>& input_tensors) const;
 };
 
 struct AllGatherAsync {
@@ -147,7 +179,10 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
 operation::ProgramWithCallbacks all_gather_2D_multi_core_with_workers(
     const Tensor& input_tensor,
     Tensor& output_tensor,
-    const MeshDevice& mesh_device,
+    const tt::tt_metal::distributed::MeshCoordinate device_coord,
+    const MeshShape grid_size,
+    const size_t num_rows,
+    const size_t num_cols,
     const MemoryConfig output_mem_config,
     const ccl::Topology topology,
     const GlobalSemaphore semaphore,
