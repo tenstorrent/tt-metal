@@ -18,6 +18,9 @@ void kernel_main() {
     uint32_t c_stride = get_arg_val<uint32_t>(6);
     uint32_t N = get_arg_val<uint32_t>(7);
     uint32_t C = get_arg_val<uint32_t>(8);
+    uint32_t n_stride_stat = get_arg_val<uint32_t>(9);
+    uint32_t c_stride_stat = get_arg_val<uint32_t>(10);
+    uint32_t batch_var_addr = get_arg_val<uint32_t>(11);  // batch_var
 
     constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
 
@@ -54,12 +57,33 @@ void kernel_main() {
     // Input tile offset
     uint32_t tile_offset = start_n * n_stride + start_c * c_stride + start_t;
 
+    // Inputs stats offset
+    uint32_t tile_offset_stat = start_n * n_stride_stat + start_c * c_stride_stat;
+    uint32_t next_batch_shift_stat = n_stride_stat - c_stride_stat * C;
+
     uint32_t next_channel_shift = c_stride - HtWt;
     uint32_t next_batch_shift = n_stride - c_stride * C;
+
+    // batch_var
+    constexpr auto cb_id_batch_var = get_compile_time_arg_val(4);
+    constexpr bool batch_var_is_dram = get_compile_time_arg_val(3) == 1;
+    const uint32_t batch_var_tile_bytes = get_tile_size(cb_id_batch_var);
+    const DataFormat batch_var_data_format = get_dataformat(cb_id_batch_var);
+
+    const InterleavedAddrGenFast<batch_var_is_dram> batch_var = {
+        .bank_base_address = batch_var_addr, .page_size = batch_var_tile_bytes, .data_format = batch_var_data_format};
 
     uint32_t num_tiles_read = 0;
     for (uint32_t n = start_n; n < N && num_tiles_read < num_tiles; ++n, start_c = 0) {
         for (uint32_t c = start_c; c < C && num_tiles_read < num_tiles; ++c, start_t = 0) {
+            // read a tile from batch variance
+            cb_reserve_back(cb_id_batch_var, onetile);
+            uint32_t l1_batch_var_write_addr = get_write_ptr(cb_id_batch_var);
+            noc_async_read_tile(tile_offset_stat, batch_var, l1_batch_var_write_addr);
+            noc_async_read_barrier();
+            FILL_TILE_WITH_FIRST_ELEMENT(cb_id_batch_var);
+            cb_push_back(cb_id_batch_var, onetile);
+
             for (uint32_t t = start_t; t < HtWt && num_tiles_read < num_tiles; ++t, ++num_tiles_read, ++tile_offset) {
                 cb_reserve_back(cb_id_src, onetile);
                 uint32_t l1_write_addr_src = get_write_ptr(cb_id_src);
@@ -68,7 +92,9 @@ void kernel_main() {
                 cb_push_back(cb_id_src, onetile);
             }
             tile_offset += next_channel_shift;
+            tile_offset_stat += c_stride_stat;
         }
         tile_offset += next_batch_shift;
+        tile_offset_stat += next_batch_shift_stat;
     }
 }
