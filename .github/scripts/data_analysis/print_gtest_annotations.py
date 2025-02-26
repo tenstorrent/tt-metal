@@ -55,6 +55,10 @@ if __name__ == "__main__":
         tree = ET.parse(xml_file)
         root = tree.getroot()
         for testsuite in root.findall("testsuite"):
+            # Skip printing out pytest information
+            # It's already handled by pytest-github-actions-annotate-failures plugin
+            if testsuite.attrib.get("name") == "pytest":
+                continue
             for testcase in testsuite.findall("testcase"):
                 failure = testcase.find("failure")
                 # If failure exists, print the failure message
