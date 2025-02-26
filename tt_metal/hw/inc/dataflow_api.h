@@ -151,7 +151,6 @@ FORCE_INLINE T get_common_arg_val(int arg_idx) {
     return *((tt_l1_ptr T*)(get_common_arg_addr(arg_idx)));
 }
 
-// #if defined(KERNEL_COMPILE_TIME_ARGS)
 template <class T, class... Ts>
 FORCE_INLINE constexpr std::array<T, sizeof...(Ts)> make_array(Ts... values) {
     return {T(values)...};
@@ -176,7 +175,6 @@ constexpr auto kernel_compile_time_args = make_array<std::uint32_t>();
  */
 // clang-format on
 FORCE_INLINE constexpr uint32_t get_compile_time_arg_val(uint32_t arg_idx) { return kernel_compile_time_args[arg_idx]; }
-// #endif
 
 // clang-format off
 /**
