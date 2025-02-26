@@ -14,22 +14,24 @@
 namespace ttml::modules {
 
 class LlamaMLP : public autograd::ModuleBase {
-    std::shared_ptr<LinearLayer> w1;
-    std::shared_ptr<LinearLayer> w3;
-    std::shared_ptr<LinearLayer> w2;
-    std::shared_ptr<DropoutLayer> dropout;
+private:
+    std::shared_ptr<LinearLayer> m_w1;
+    std::shared_ptr<LinearLayer> m_w3;
+    std::shared_ptr<LinearLayer> m_w2;
+    std::shared_ptr<DropoutLayer> m_dropout;
 
 public:
-    LlamaMLP(uint32_t embedding_size, float dropout_prob);
+    LlamaMLP(uint32_t embedding_size, float dropout_prob = 0.0F);
 
     autograd::TensorPtr operator()(const autograd::TensorPtr& input);
 };
 
 class LlamaBlock : public autograd::ModuleBase {
-    std::shared_ptr<LlamaMLP> mlp;
-    std::shared_ptr<RMSNormLayer> attention_norm;
-    std::shared_ptr<RMSNormLayer> ffn_norm;
-    std::shared_ptr<MultiHeadAttention> attention;
+private:
+    std::shared_ptr<LlamaMLP> m_mlp;
+    std::shared_ptr<RMSNormLayer> m_attention_norm;
+    std::shared_ptr<RMSNormLayer> m_ffn_norm;
+    std::shared_ptr<MultiHeadAttention> m_attention;
 
 public:
     explicit LlamaBlock(
