@@ -34,13 +34,13 @@ FlatbufferCoreCoordVector to_flatbuffer(
 FlatbufferUInt32VecOfVec to_flatbuffer(
     flatbuffers::FlatBufferBuilder& builder, const std::vector<std::vector<uint32_t>>& vec_of_vec);
 
-std::pair<flatbuffer::KernelConfig, flatbuffers::Offset<void>> to_flatbuffer(
+flatbuffers::Offset<flatbuffer::DataMovementConfig> to_flatbuffer(
     flatbuffers::FlatBufferBuilder& builder, const DataMovementConfig& config);
 
-std::pair<flatbuffer::KernelConfig, flatbuffers::Offset<void>> to_flatbuffer(
+flatbuffers::Offset<flatbuffer::ComputeConfig> to_flatbuffer(
     flatbuffers::FlatBufferBuilder& builder, const ComputeConfig& config);
 
-std::pair<flatbuffer::KernelConfig, flatbuffers::Offset<void>> to_flatbuffer(
+flatbuffers::Offset<flatbuffer::EthernetConfig> to_flatbuffer(
     flatbuffers::FlatBufferBuilder& builder, const EthernetConfig& config);
 
 std::pair<flatbuffer::KernelConfig, flatbuffers::Offset<void>> to_flatbuffer(

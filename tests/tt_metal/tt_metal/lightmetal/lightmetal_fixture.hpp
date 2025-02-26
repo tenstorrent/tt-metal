@@ -16,6 +16,10 @@
 #include "command_queue_fixture.hpp"
 #include <lightmetal_binary.hpp>
 
+// Flatbuffer roundtrip tests
+#include "flatbuffer/program_types_to_flatbuffer.hpp"
+#include "flatbuffer/program_types_from_flatbuffer.hpp"
+
 class SingleDeviceLightMetalFixture : public CommandQueueFixture {
 protected:
     bool replay_binary_;
@@ -76,6 +80,57 @@ protected:
             FAIL() << "Light Metal Binary failed to execute or encountered errors.";
         } else {
             log_info(tt::LogMetalTrace, "Light Metal Binary executed successfully!");
+        }
+    }
+};
+
+class LightMetalFlatbufferRoundtripTest : public ::testing::Test {
+protected:
+    flatbuffers::FlatBufferBuilder fbb;
+
+    template <typename FBType, typename T>
+    T fb_roundtrip(const T& obj) {
+        fbb.Clear();
+        auto offset = to_flatbuffer(fbb, obj);
+        fbb.Finish(offset);
+        // Get the correct pointer to the actual FlatBuffer object
+        const FBType* fb_ptr = flatbuffers::GetRoot<FBType>(fbb.GetBufferPointer());
+        return from_flatbuffer(fb_ptr);
+    }
+
+    template <typename FBType, typename T>
+    void VerifyFlatbufferRoundtrip(const T& obj, bool compare_to_orig = false) {
+        fbb.Clear();
+        auto offset = to_flatbuffer(fbb, obj);
+        fbb.Finish(offset);
+
+        // Store the first serialization result
+        std::vector<uint8_t> original_buffer(fbb.GetBufferPointer(), fbb.GetBufferPointer() + fbb.GetSize());
+
+        // Deserialize and reserialize
+        const FBType* fb_ptr = flatbuffers::GetRoot<FBType>(fbb.GetBufferPointer());
+        T obj_roundtrip = from_flatbuffer(fb_ptr);
+
+        fbb.Clear();
+        auto new_offset = to_flatbuffer(fbb, obj_roundtrip);
+        fbb.Finish(new_offset);
+
+        // Store the second serialization result
+        std::vector<uint8_t> roundtrip_buffer(fbb.GetBufferPointer(), fbb.GetBufferPointer() + fbb.GetSize());
+
+        log_info(
+            tt::LogTest,
+            "Original buffer size: {}, Roundtrip buffer size: {}",
+            original_buffer.size(),
+            roundtrip_buffer.size());
+        // Ensure the serialized buffers match exactly
+        ASSERT_EQ(original_buffer.size(), roundtrip_buffer.size());
+        ASSERT_EQ(memcmp(original_buffer.data(), roundtrip_buffer.data(), original_buffer.size()), 0);
+
+        // Optional, only supported by some object types.
+        if (compare_to_orig) {
+            // Ensure the roundtrip object matches the original object
+            ASSERT_EQ(obj, obj_roundtrip);
         }
     }
 };

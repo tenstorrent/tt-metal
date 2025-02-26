@@ -63,6 +63,19 @@ struct ComputeConfig {
     KernelBuildOptLevel opt_level = KernelBuildOptLevel::O3;
 };
 
+// Needed for flatbuffer roundtrip verification.
+// inline bool operator==(const ComputeConfig& lhs, const ComputeConfig& rhs) {
+//     return lhs.math_fidelity == rhs.math_fidelity &&
+//         lhs.fp32_dest_acc_en == rhs.fp32_dest_acc_en &&
+//         lhs.dst_full_sync_en == rhs.dst_full_sync_en &&
+//         lhs.unpack_to_dest_mode == rhs.unpack_to_dest_mode &&
+//         lhs.bfp8_pack_precise == rhs.bfp8_pack_precise &&
+//         lhs.math_approx_mode == rhs.math_approx_mode &&
+//         lhs.compile_args == rhs.compile_args &&
+//         lhs.defines == rhs.defines &&
+//         lhs.opt_level == rhs.opt_level;
+// }
+
 struct EthernetConfig {
     Eth eth_mode = Eth::SENDER;
     NOC noc = NOC::NOC_0;

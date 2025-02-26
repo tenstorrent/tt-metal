@@ -68,8 +68,29 @@ FlatbufferUInt32VecOfVec to_flatbuffer(
     return builder.CreateVector(vec_offsets);
 }
 
+namespace {
+
+std::pair<flatbuffer::KernelConfig, flatbuffers::Offset<void>> to_flatbuffer_union(
+    flatbuffers::FlatBufferBuilder& builder, const DataMovementConfig& config) {
+    auto config_offset = to_flatbuffer(builder, config);
+    return {flatbuffer::KernelConfig::DataMovementConfig, config_offset.Union()};
+}
+
+std::pair<flatbuffer::KernelConfig, flatbuffers::Offset<void>> to_flatbuffer_union(
+    flatbuffers::FlatBufferBuilder& builder, const ComputeConfig& config) {
+    auto config_offset = to_flatbuffer(builder, config);
+    return {flatbuffer::KernelConfig::ComputeConfig, config_offset.Union()};
+}
+
+std::pair<flatbuffer::KernelConfig, flatbuffers::Offset<void>> to_flatbuffer_union(
+    flatbuffers::FlatBufferBuilder& builder, const EthernetConfig& config) {
+    auto config_offset = to_flatbuffer(builder, config);
+    return {flatbuffer::KernelConfig::EthernetConfig, config_offset.Union()};
+}
+}  // namespace
+
 // Original types defined in kernel_types.hpp
-std::pair<flatbuffer::KernelConfig, flatbuffers::Offset<void>> to_flatbuffer(
+flatbuffers::Offset<flatbuffer::DataMovementConfig> to_flatbuffer(
     flatbuffers::FlatBufferBuilder& builder, const DataMovementConfig& config) {
     // Convert defines (map) to FlatBuffer format
     std::vector<flatbuffers::Offset<flatbuffer::DefineEntry>> defines_vector;
@@ -81,18 +102,16 @@ std::pair<flatbuffer::KernelConfig, flatbuffers::Offset<void>> to_flatbuffer(
     auto defines_offset = builder.CreateVector(defines_vector);
 
     auto compile_args_offset = builder.CreateVector(config.compile_args);
-    auto config_offset = flatbuffer::CreateDataMovementConfig(
+    return flatbuffer::CreateDataMovementConfig(
         builder,
         to_flatbuffer(config.processor),
         to_flatbuffer(config.noc),
         to_flatbuffer(config.noc_mode),
         compile_args_offset,
         defines_offset);
-
-    return {flatbuffer::KernelConfig::DataMovementConfig, config_offset.Union()};
 }
 
-std::pair<flatbuffer::KernelConfig, flatbuffers::Offset<void>> to_flatbuffer(
+flatbuffers::Offset<flatbuffer::ComputeConfig> to_flatbuffer(
     flatbuffers::FlatBufferBuilder& builder, const ComputeConfig& config) {
     // Convert defines (map) to FlatBuffer format
     std::vector<flatbuffers::Offset<flatbuffer::DefineEntry>> defines_vector;
@@ -111,7 +130,7 @@ std::pair<flatbuffer::KernelConfig, flatbuffers::Offset<void>> to_flatbuffer(
     auto unpack_modes_offset = builder.CreateVector(unpack_modes);
 
     auto compile_args_offset = builder.CreateVector(config.compile_args);
-    auto config_offset = flatbuffer::CreateComputeConfig(
+    return flatbuffer::CreateComputeConfig(
         builder,
         to_flatbuffer(config.math_fidelity),
         config.fp32_dest_acc_en,
@@ -121,11 +140,9 @@ std::pair<flatbuffer::KernelConfig, flatbuffers::Offset<void>> to_flatbuffer(
         config.math_approx_mode,
         compile_args_offset,
         defines_offset);
-
-    return {flatbuffer::KernelConfig::ComputeConfig, config_offset.Union()};
 }
 
-std::pair<flatbuffer::KernelConfig, flatbuffers::Offset<void>> to_flatbuffer(
+flatbuffers::Offset<flatbuffer::EthernetConfig> to_flatbuffer(
     flatbuffers::FlatBufferBuilder& builder, const EthernetConfig& config) {
     // Convert defines (map) to FlatBuffer format
     std::vector<flatbuffers::Offset<flatbuffer::DefineEntry>> defines_vector;
@@ -137,15 +154,13 @@ std::pair<flatbuffer::KernelConfig, flatbuffers::Offset<void>> to_flatbuffer(
     auto defines_offset = builder.CreateVector(defines_vector);
 
     auto compile_args_offset = builder.CreateVector(config.compile_args);
-    auto config_offset = flatbuffer::CreateEthernetConfig(
+    return flatbuffer::CreateEthernetConfig(
         builder,
         to_flatbuffer(config.eth_mode),
         to_flatbuffer(config.noc),
         to_flatbuffer(config.processor),
         compile_args_offset,
         defines_offset);
-
-    return {flatbuffer::KernelConfig::EthernetConfig, config_offset.Union()};
 }
 
 // Generic function for variant, specialized for each type above.
@@ -159,7 +174,7 @@ std::pair<flatbuffer::KernelConfig, flatbuffers::Offset<void>> to_flatbuffer(
                 std::is_same_v<T, DataMovementConfig> || std::is_same_v<T, ComputeConfig> ||
                     std::is_same_v<T, EthernetConfig>,
                 "Unhandled config type in to_flatbuffer.");
-            return to_flatbuffer(builder, cfg);
+            return to_flatbuffer_union(builder, cfg);
         },
         config);
 }
@@ -167,13 +182,13 @@ std::pair<flatbuffer::KernelConfig, flatbuffers::Offset<void>> to_flatbuffer(
 std::pair<flatbuffer::KernelConfig, flatbuffers::Offset<void>> to_flatbuffer(
     flatbuffers::FlatBufferBuilder& builder, const ReaderDataMovementConfig& config) {
     const DataMovementConfig& base_config = config;  // Cast to base
-    return to_flatbuffer(builder, base_config);
+    return to_flatbuffer_union(builder, base_config);
 }
 
 std::pair<flatbuffer::KernelConfig, flatbuffers::Offset<void>> to_flatbuffer(
     flatbuffers::FlatBufferBuilder& builder, const WriterDataMovementConfig& config) {
     const DataMovementConfig& base_config = config;  // Cast to base
-    return to_flatbuffer(builder, base_config);
+    return to_flatbuffer_union(builder, base_config);
 }
 
 flatbuffers::Offset<flatbuffer::RuntimeArg> create_runtime_arg(
