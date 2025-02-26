@@ -25,7 +25,8 @@ from dataclasses import dataclass
 
 from tests.tt_eager.python_api_testing.unit_testing.misc.test_matmul_1d_gather_in0 import (
     PREFETCHER_NOC1_GRID,
-    LM_HEAD_GRID,
+    LM_HEAD_16_GRID,
+    LM_HEAD_32_GRID,
     num_cores_to_rectangle_grid,
     get_physical_to_logical_core_mapping,
 )
@@ -759,7 +760,7 @@ class TtModelArgs:
             core_range = ttnn.CoreRange(
                 grid_offset, ttnn.CoreCoord(core_grid_ln[1] + grid_offset.x - 1, core_grid_ln[0] + grid_offset.y - 1)
             )
-            LM_HEAD_RING_SIZE = 16
+            LM_HEAD_RING_SIZE = 32
             self.lm_head_shape = (8192 // 4, 128 * 1024 // 8)
             # lm_head_ring_core_range_set = ttnn.num_cores_to_corerangeset_in_subcoregrids(
             #     self.start_core, LM_HEAD_RING_SIZE, self.sub_core_grids, row_wise=False
@@ -771,13 +772,29 @@ class TtModelArgs:
                         ttnn.CoreCoord(x, y),
                         ttnn.CoreCoord(x, y),
                     )
-                    for x, y in LM_HEAD_GRID
+                    for x, y in LM_HEAD_32_GRID
                 ]
             )
 
-            self.model_config["SHARDED_LM_HEAD_INPUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
+            lm_head_ring_16_core_range_set = ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(
+                        ttnn.CoreCoord(x, y),
+                        ttnn.CoreCoord(x, y),
+                    )
+                    for x, y in LM_HEAD_16_GRID
+                ]
+            )
+            self.model_config["SHARDED_LM_HEAD_INPUT_32_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
                 shape=(32, self.lm_head_shape[0] // LM_HEAD_RING_SIZE),
                 core_grid=lm_head_ring_core_range_set,
+                strategy=ttnn.ShardStrategy.WIDTH,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            )
+            self.model_config["SHARDED_LM_HEAD_INPUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
+                shape=(32, self.lm_head_shape[0] // 16),
+                core_grid=lm_head_ring_16_core_range_set,
                 strategy=ttnn.ShardStrategy.WIDTH,
                 orientation=ttnn.ShardOrientation.ROW_MAJOR,
                 use_height_and_width_as_shard_shape=True,
@@ -1172,7 +1189,7 @@ class TtModelArgs:
             x = ttnn.from_torch(
                 x,
                 device=self.mesh_device if not on_host else None,
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.bfloat8_b,
                 layout=ttnn.TILE_LAYOUT,
                 mesh_mapper=mesh_mapper,
                 memory_config=input_mem_cfg if not on_host else None,

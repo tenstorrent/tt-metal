@@ -329,6 +329,7 @@ def run_llama3_demo(
     # ttnn.plus_one(rot_mat_idxs)  # FIXME <- This won't work since embedding requires uint32 and plus_one only works for int32
 
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
+    ttnn.synchronize_devices(mesh_device)
 
     # Reset the decoding position for the proper run of the model
     current_pos_reset = ttnn.from_torch(

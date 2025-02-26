@@ -177,7 +177,7 @@ class LMHead(LightweightModule):
         # return self.forward_on_host(x)
 
         # ttnn.device.dump_device_memory_state(self.mesh_device.get_device(self.mesh_device.get_device_ids()[0]), prefix="")
-
+        x = ttnn.to_memory_config(x, self.args.model_config["SHARDED_LM_HEAD_INPUT_32_RING_MEMCFG"])
         outputs = []
         for weight, pc in zip(self.output_weights, self.program_configs):
             weight_l1 = weight  # ttnn.to_memory_config(weight, self.args.model_config["LM_HEAD_RING_MEMCFG"])
@@ -203,8 +203,8 @@ class LMHead(LightweightModule):
             output_reduced = self.tt_ccl.line_all_reduce(
                 output, cluster_axis=1, num_links=3, memory_config=output.memory_config(), lm_head=True
             )  # self.output_memory_config
-
-            outputs_reduced.append(output_reduced)
+            outputs_reduced.append(ttnn.sharded_to_interleaved(output_reduced, memory_config=ttnn.DRAM_MEMORY_CONFIG))
+            # outputs_reduced.append(output_reduced)
 
         # ttnn.synchronize_devices(self.mesh_device, sub_device_ids=[self.tt_ccl.worker_sub_device_id])
 

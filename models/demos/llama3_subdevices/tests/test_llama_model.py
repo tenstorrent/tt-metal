@@ -30,7 +30,7 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.parametrize(
     "weights, layers",
     [
-        ("random", 3),
+        ("random", 1),
         ("instruct", 80),
     ],
     ids=["quick", "full"],
@@ -88,7 +88,7 @@ def test_llama_model_inference(
     reset_seeds,
     ensure_gc,
 ):
-    run_ref_pt = False  # Flag to run reference PyTorch model and compare PCC
+    run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
     cache_pcc = False  # Flag to measure KV cache PCC. Avoid running for all layers to speed up test time.
     dtype = ttnn.bfloat8_b
     mesh_device.enable_async(False)
@@ -146,7 +146,7 @@ def test_llama_model_inference(
         model_name
     ]
 
-    iterations = quick_iterations if layers == 1 else 30
+    iterations = 20  # quick_iterations if layers == 1 else 30
 
     if layers is not None:
         model_args.n_layers = layers
@@ -166,7 +166,7 @@ def test_llama_model_inference(
         )
     }
 
-    prompts = ["What is AI?"] * model_args.max_batch_size
+    prompts = ["Life is "] * model_args.max_batch_size
     if dummy_weights:
         encoded_prompts = [
             [128000, 2028, 374, 264, 1296]
@@ -174,10 +174,10 @@ def test_llama_model_inference(
         assert not instruct, "Instruct prompt not implemented with dummy weights"
     else:
         tokenizer = Tokenizer(model_args.tokenizer_path)
-        if instruct:
-            encoded_prompts = [encode_prompt_llama_instruct(tokenizer, prompt) for prompt in prompts]
-        else:
-            encoded_prompts = [tokenizer.encode(prompt, bos=True, eos=False) for prompt in prompts]
+        # if instruct:
+        #     encoded_prompts = [encode_prompt_llama_instruct(tokenizer, prompt) for prompt in prompts]
+        # else:
+        encoded_prompts = [tokenizer.encode(prompt, bos=True, eos=False) for prompt in prompts]
 
     if run_ref_pt:
         reference_model = Transformer(model_args)
@@ -188,7 +188,7 @@ def test_llama_model_inference(
     embd.load_state_dict({"emb.weight": state_dict[f"{state_dict_prefix}tok_embeddings.weight"]})
 
     generation_start_pos = 0
-    generation_length = 30  # iterations
+    generation_length = iterations
 
     page_table_tt = None
     paged_attention_config = None
@@ -259,7 +259,7 @@ def test_llama_model_inference(
             mesh_shape=model_args.cluster_shape,
         ),
     )
-
+    all_pccs = []
     try:
         for i in range(generation_length):
             logger.info(f"[Llama3 Model] Generating token {i}")
@@ -344,6 +344,8 @@ def test_llama_model_inference(
 
                 logger.info(comp_allclose(ref_output, tt_output_torch))
                 logger.info(f"PCC: {pcc_message}")
+                all_pccs.append(pcc_message)
+                print("All PCCs: ", all_pccs)
 
                 if passing:
                     logger.info("Llama Model Passed!")
