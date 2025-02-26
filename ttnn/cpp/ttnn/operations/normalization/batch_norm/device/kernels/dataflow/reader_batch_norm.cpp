@@ -112,20 +112,17 @@ void kernel_main() {
     uint32_t num_tiles_read = 0;
     for (uint32_t n = start_n; n < N && num_tiles_read < num_tiles; ++n, start_c = 0) {
         for (uint32_t c = start_c; c < C && num_tiles_read < num_tiles; ++c, start_t = 0) {
-            // read a tile from batch_mean
+            // read a tile from batch_mean, batch variance
             cb_reserve_back(cb_id_batch_mean, onetile);
-            uint32_t l1_write_addr = get_write_ptr(cb_id_batch_mean);
-            noc_async_read_tile(tile_offset_stat, batch_mean, l1_write_addr);
-            noc_async_read_barrier();
-            FILL_TILE_WITH_FIRST_ELEMENT(cb_id_batch_mean);
-            cb_push_back(cb_id_batch_mean, onetile);
-
-            // read a tile from batch variance
             cb_reserve_back(cb_id_batch_var, onetile);
+            uint32_t l1_write_addr = get_write_ptr(cb_id_batch_mean);
             uint32_t l1_batch_var_write_addr = get_write_ptr(cb_id_batch_var);
+            noc_async_read_tile(tile_offset_stat, batch_mean, l1_write_addr);
             noc_async_read_tile(tile_offset_stat, batch_var, l1_batch_var_write_addr);
             noc_async_read_barrier();
+            FILL_TILE_WITH_FIRST_ELEMENT(cb_id_batch_mean);
             FILL_TILE_WITH_FIRST_ELEMENT(cb_id_batch_var);
+            cb_push_back(cb_id_batch_mean, onetile);
             cb_push_back(cb_id_batch_var, onetile);
 
             if constexpr (weight_has_value) {  // read a tile from weight tensor
