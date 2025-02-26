@@ -185,7 +185,9 @@ def main():
     parser.add_argument(
         "--output_file", type=str, default="reference_outputs.pt", help="Output file path for reference data"
     )
-    parser.add_argument("--model", type=str, help="Optional: HuggingFace model name (e.g., 'meta-llama/Llama-2-7b-hf')")
+    parser.add_argument(
+        "--model", type=str, help="Optional: HuggingFace model name (e.g., 'meta-llama/Llama-3.1-8B-Instruct')"
+    )
     args = parser.parse_args()
 
     generate_reference_outputs(total_length=args.total_length, output_file=args.output_file, hf_model_name=args.model)
