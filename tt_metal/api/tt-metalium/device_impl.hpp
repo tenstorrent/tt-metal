@@ -176,8 +176,6 @@ public:
 
     std::vector<std::pair<transfer_info_cores, uint32_t>> extract_dst_noc_multicast_info(const std::vector<CoreRange>& ranges, const CoreType core_type) override;
 
-    size_t get_device_kernel_defines_hash() override;
-
     uint8_t num_noc_mcast_txns(SubDeviceId sub_device_id) const override;
     uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const override;
     uint8_t noc_data_start_index(SubDeviceId sub_device_id, bool mcast_data=true, bool unicast_data=true) const override;
@@ -262,8 +260,6 @@ private:
     std::set<CoreCoord> storage_only_cores_;
     std::set<CoreCoord> ethernet_cores_;
     std::vector<CoreCoord> optimal_dram_bank_to_logical_worker_assignment_;
-
-    std::map<std::string, std::string> device_kernel_defines_;
 
     std::vector<int32_t> dram_bank_offset_map_;
     std::vector<int32_t> l1_bank_offset_map_;
