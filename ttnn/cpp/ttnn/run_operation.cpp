@@ -585,7 +585,8 @@ void launch_op_func(
     const Tensors input_tensors,
     OutputType& output_tensors,
     const OptionalConstTensors optional_input_tensors,
-    const OptionalTensors optional_output_tensors) {
+    const OptionalTensors optional_output_tensors,
+    bool enable_autoformat_device) {
     // Send host side op compile and run to the worker queue
     // Assert to ensure that worker threads are specified.
     ZoneScopedN("LaunchOp");
@@ -600,12 +601,14 @@ template void launch_op_func<Tensors>(
     const Tensors input_tensors,
     Tensors& output_tensors,
     const OptionalConstTensors optional_input_tensors,
-    const OptionalTensors optional_output_tensors);
+    const OptionalTensors optional_output_tensors,
+    bool enable_autoformat_device);
 template void launch_op_func<OptionalTensors>(
     const std::function<OptionalTensors(const Tensors&, const OptionalConstTensors&, const OptionalTensors&)>& op_func,
     const Tensors input_tensors,
     OptionalTensors& output_tensors,
     const OptionalConstTensors optional_input_tensors,
-    const OptionalTensors optional_output_tensors);
+    const OptionalTensors optional_output_tensors,
+    bool enable_autoformat_device);
 
 }  // namespace tt::tt_metal::operation
