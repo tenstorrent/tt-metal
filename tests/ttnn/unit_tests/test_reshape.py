@@ -533,3 +533,22 @@ def test_reshape_zero_element(input_shape, output_shape, layout, ttnn_reshape, u
     tt_output_tensor = ttnn.from_device(tt_output_tensor)
     tt_output_tensor = ttnn.to_torch(tt_output_tensor)
     assert tt_output_tensor.shape == torch.Size(output_shape)
+
+
+@pytest.mark.parametrize(
+    "input_shape, output_shape",
+    [
+        ((1, 256, 1), (1, 256)),
+        ((1, 1024, 1), (1, 4, 256)),
+        ((1, 128, 1), (1, 128)),
+    ],
+)
+def test_reshape_replicated_tensor(input_shape, output_shape, mesh_device):
+    torch_input_tensor = torch.rand(input_shape, dtype=torch.bfloat16)
+    mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+    tt_input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, mesh_mapper=mesh_mapper)
+    tt_output_tensor = ttnn.reshape(tt_input_tensor, output_shape)
+
+    for tensor_shard in ttnn.get_device_tensors(tt_output_tensor):
+        tt_output_tensor = ttnn.to_torch(tensor_shard)
+        assert tt_output_tensor.shape == torch.Size(output_shape)
