@@ -13,11 +13,12 @@
 #include "ttnn/operations/data_movement/slice/slice.hpp"
 #include "ttnn/operations/data_movement/transpose/transpose.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 
 namespace ttnn::operations::reduction {
 
 int32_t get_nearest_supported_shape(int32_t k) {
-    // LLK only support k = 4, 8, 16, 32, 64
+    // LLK only support k = 32, 64 for now
     if (k <= 32) {
         return 32;
     } else {
@@ -32,20 +33,6 @@ inline Tensor perform_transpose(
 
 inline Tensor transform_to_4d_tensor(const Tensor& input_tensor, const bool is_rank_le_4d) {
     return is_rank_le_4d ? ttnn::unsqueeze_to_4D(input_tensor) : data_movement::squeeze_from_ND_to_4D(input_tensor);
-}
-
-inline Tensor perform_padding(const Tensor& input_tensor, const bool largest) {
-    auto input_shape = input_tensor.get_padded_shape();
-    auto last_dim = input_shape[-1];
-    auto new_last_dim = tt::round_up(last_dim, tt::constants::TILE_WIDTH);
-    if (last_dim == new_last_dim) {
-        return input_tensor;
-    }
-    return ttnn::pad(
-        input_tensor,
-        tt::tt_metal::Array4D({input_shape[0], input_shape[1], input_shape[2], new_last_dim}),
-        tt::tt_metal::Array4D({0, 0, 0, 0}),
-        largest ? std::numeric_limits<float>::min() : std::numeric_limits<float>::max());
 }
 
 // one stop for all transformations needed after executing top-k
@@ -64,7 +51,7 @@ std::vector<Tensor> post_topk_transform_tensor(
     auto input_shape = input_tensor.get_padded_shape();
     const auto orig_rank = input_shape.rank();
 
-    // case 1 : K is not pow of 2
+    // case 1 : K is not a supported shape
     if (adjusted_k != k) {
         auto output_shape = result[0].get_padded_shape();
         ttnn::SmallVector<uint32_t> step = {1, 1, 1, 1};
@@ -109,14 +96,15 @@ std::vector<Tensor> ExecuteTopK::invoke(
 
     auto input_memory_config = memory_config.value_or(input_tensor.memory_config());
 
-    // K may not be power of 2
+    // K must be a supported shape
     int32_t adjusted_k = get_nearest_supported_shape(k);
     // if dim is not last dimension, transpose it
     Tensor transposed_tensor = perform_transpose(input_tensor, is_dim_last_idx, dim, -1);
     // if input is not 4d, convert it to 4d
     Tensor transformed_tensor = transform_to_4d_tensor(transposed_tensor, is_rank_le_4d);
     // add padding if needed
-    Tensor padded_tensor = perform_padding(transformed_tensor, largest);
+    Tensor padded_tensor = ttnn::fill_implicit_tile_padding(
+        transformed_tensor, largest ? std::numeric_limits<float>::min() : std::numeric_limits<float>::max());
 
     auto output_tensor_vec = operation::run(
         TopK{adjusted_k, -1, largest, sorted, input_memory_config},
