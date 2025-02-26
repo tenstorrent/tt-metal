@@ -695,11 +695,6 @@ std::vector<std::pair<transfer_info_cores, uint32_t>> MeshDevice::extract_dst_no
     return reference_device()->extract_dst_noc_multicast_info(ranges, core_type);
 }
 
-size_t MeshDevice::get_device_kernel_defines_hash() {
-    return validate_and_get_reference_value(
-        scoped_devices_->root_devices(), [](const auto& device) { return device->get_device_kernel_defines_hash(); });
-}
-
 // Methods for SubDevice Management
 uint8_t MeshDevice::num_noc_mcast_txns(SubDeviceId sub_device_id) const {
     return sub_device_manager_tracker_->get_active_sub_device_manager()->num_noc_mcast_txns(sub_device_id);

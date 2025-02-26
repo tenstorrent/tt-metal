@@ -121,7 +121,6 @@ JitBuildStateSet create_build_state(JitBuildEnv& build_env, chip_id_t device_id,
     // Prepare the container for build states
     uint32_t num_build_states = hal.get_num_risc_processors();
     std::vector<std::shared_ptr<JitBuildState>> build_states(num_build_states);
-    ;
 
     // Helper lambda to create a build state based on the core type and processor info.
     auto create_jit_build_state = [&](HalProgrammableCoreType core_type,
