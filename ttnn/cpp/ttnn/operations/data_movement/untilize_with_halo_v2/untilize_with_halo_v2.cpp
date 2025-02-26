@@ -23,7 +23,8 @@ ttnn::Tensor ExecuteUntilizeWithHaloV2::invoke(
     const uint32_t max_out_nsticks_per_core,
     const std::optional<MemoryConfig>& memory_config,
     const bool remote_read,
-    const bool transpose_mcast) {
+    const bool transpose_mcast,
+    const bool enable_split_reader) {
     TT_ASSERT(input_tensor.memory_config().is_sharded());
     TT_ASSERT(
         input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED ||
@@ -36,7 +37,8 @@ ttnn::Tensor ExecuteUntilizeWithHaloV2::invoke(
                    max_out_nsticks_per_core,
                    memory_config.value_or(input_tensor.memory_config()),
                    remote_read,
-                   transpose_mcast},
+                   transpose_mcast,
+                   enable_split_reader},
                {input_tensor, padding_config, local_config, remote_config},
                {},
                {},
@@ -54,7 +56,8 @@ ttnn::Tensor ExecuteUntilizeWithHaloV2::invoke(
     const uint32_t max_out_nsticks_per_core,
     const std::optional<MemoryConfig>& memory_config,
     const bool remote_read,
-    const bool transpose_mcast) {
+    const bool transpose_mcast,
+    const bool enable_split_reader) {
     return invoke(
         DefaultQueueId,
         input_tensor,
@@ -66,7 +69,8 @@ ttnn::Tensor ExecuteUntilizeWithHaloV2::invoke(
         max_out_nsticks_per_core,
         memory_config,
         remote_read,
-        transpose_mcast);
+        transpose_mcast,
+        enable_split_reader);
 }
 
 }  // namespace ttnn::operations::data_movement

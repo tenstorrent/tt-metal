@@ -32,6 +32,7 @@ void bind_untilize_with_halo_v2(py::module& module) {
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
             remote_read (bool, optional): Remote read.  Defaults to `False`.
             transpose_mcast (bool, optional): Transpose mcast.  Defaults to `False`.
+            enable_split_reader (bool, optional): Enable split reader.  Defaults to `False`.
             queue_id (int, optional): command queue id. Defaults to `0`.
         Returns:
             ttnn.Tensor: the output tensor.
@@ -55,6 +56,7 @@ void bind_untilize_with_halo_v2(py::module& module) {
                const std::optional<MemoryConfig>& memory_config,
                const bool remote_read,
                const bool transpose_mcast,
+               const bool enable_split_reader,
                QueueId queue_id) {
                 return self(
                     queue_id,
@@ -67,7 +69,8 @@ void bind_untilize_with_halo_v2(py::module& module) {
                     max_out_nsticks_per_core,
                     memory_config,
                     remote_read,
-                    transpose_mcast);
+                    transpose_mcast,
+                    enable_split_reader);
             },
             py::arg("input_tensor"),
             py::arg("padding_config"),
@@ -80,6 +83,7 @@ void bind_untilize_with_halo_v2(py::module& module) {
             py::arg("memory_config") = std::nullopt,
             py::arg("remote_read") = false,
             py::arg("transpose_mcast") = false,
+            py::arg("enable_split_reader") = false,
             py::arg("queue_id") = DefaultQueueId,
         });
 }

@@ -31,7 +31,8 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
     const bool remote_read,
     const bool transpose_mcast,
     Tensor& output_tensor,
-    const bool capture_buffers) {
+    const bool capture_buffers,
+    const bool enable_split_reader) {
     IDevice* device = input_tensor.device();
     Buffer* src_buffer = input_tensor.buffer();
     Buffer* dst_buffer = output_tensor.buffer();
@@ -177,7 +178,6 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         aligned_input_nstick_nbytes = tt::round_up(out_stick_nbytes, input_tensor.buffer()->alignment());
     }
     // reader kernel
-    bool enable_split_reader = true;
     std::vector<uint32_t> reader_ct_args = {
         0,  // padding_config_cb_id
         0,  // local_config_cb_id

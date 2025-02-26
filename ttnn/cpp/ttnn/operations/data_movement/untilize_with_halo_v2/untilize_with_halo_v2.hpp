@@ -21,7 +21,8 @@ struct ExecuteUntilizeWithHaloV2 {
         const uint32_t max_out_nsticks_per_core,
         const std::optional<MemoryConfig>& memory_config,
         const bool remote_read,
-        const bool transpose_mcast);
+        const bool transpose_mcast,
+        const bool enable_split_reader);
 
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
@@ -33,7 +34,8 @@ struct ExecuteUntilizeWithHaloV2 {
         const uint32_t max_out_nsticks_per_core,
         const std::optional<MemoryConfig>& memory_config,
         const bool remote_read,
-        const bool transpose_mcast);
+        const bool transpose_mcast,
+        const bool enable_split_reader);
 };
 
 }  // namespace operations::data_movement
