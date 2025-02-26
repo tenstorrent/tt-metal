@@ -15,7 +15,7 @@ void kernel_main() {
     constexpr bool dst_is_dram = get_compile_time_arg_val(1) == 1;
     constexpr uint32_t new_stick_size = get_compile_time_arg_val(2);
 
-#define stick_size_is_pow2 get_compile_time_arg_val(3) == 1
+    constexpr bool stick_size_is_pow2 = get_compile_time_arg_val(3) == 1;
 #if (stick_size_is_pow2)
     constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(4);
 #else

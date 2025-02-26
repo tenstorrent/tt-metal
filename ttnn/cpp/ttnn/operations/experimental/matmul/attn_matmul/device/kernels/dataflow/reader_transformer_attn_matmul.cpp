@@ -21,7 +21,7 @@ void kernel_main() {
 
     constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
     constexpr bool src1_is_dram = get_compile_time_arg_val(1) == 1;
-#define transpose_hw_bool get_compile_time_arg_val(2) == 1
+    constexpr bool transpose_hw_bool = get_compile_time_arg_val(2) == 1;
     constexpr bool fp32_acc_en = get_compile_time_arg_val(3) == 1;
 
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;

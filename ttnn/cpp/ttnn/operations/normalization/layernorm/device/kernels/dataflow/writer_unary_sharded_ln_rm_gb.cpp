@@ -56,7 +56,7 @@ void kernel_main() {
     const uint32_t eps = get_arg_val<uint32_t>(2);
     generate_bcast_col_scalar(eps_cb_id, eps);
 
-#define stick_size_is_pow2 get_compile_time_arg_val(6) == 1
+    constexpr bool stick_size_is_pow2 = get_compile_time_arg_val(6) == 1;
 #if (stick_size_is_pow2)
     constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(7);
 #else

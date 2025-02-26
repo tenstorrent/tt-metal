@@ -32,7 +32,7 @@ void kernel_main() {
     uint32_t stick_id = 0;
 
     constexpr bool dst_is_dram = get_compile_time_arg_val(0) == 1;
-#define stick_size_is_pow2 get_compile_time_arg_val(1) == 1
+    constexpr bool stick_size_is_pow2 = get_compile_time_arg_val(1) == 1;
     constexpr bool FLOAT32_DTYPE = get_compile_time_arg_val(3) == 1;
 
     const uint32_t num_tiles_block_c =
