@@ -138,7 +138,7 @@ std::string generate_run_name(const std::string &run_name, const TrainingConfig 
     if (add_time_to_run_name) {
         auto now = std::chrono::system_clock::now();
         std::time_t current_time = std::chrono::system_clock::to_time_t(now);
-        ss << "_" << std::put_time(std::localtime(&current_time), "%Y-%m-%d_%H:%M:%S");
+        ss << "_date_" << std::put_time(std::localtime(&current_time), "%Y-%m-%d_%H:%M:%S");
     }
 
     return ss.str();

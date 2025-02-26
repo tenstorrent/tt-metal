@@ -2,105 +2,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#pragma once
-
-#include <yaml-cpp/yaml.h>
-
-#include <concepts>
-#include <type_traits>
+#include "gpt2.hpp"
 
 #include "autograd/graph_utils.hpp"
 #include "autograd/tensor.hpp"
 #include "core/scoped.hpp"
 #include "init/tensor_initializers.hpp"
-#include "modules/embedding_module.hpp"
-#include "modules/linear_module.hpp"
+#include "modules/llama_block.hpp"
 #include "modules/positional_embeddings.hpp"
 #include "ops/binary_ops.hpp"
 #include "ops/unary_ops.hpp"
 
-namespace ttml::models::transformer {
+namespace ttml::models::gpt2 {
 
-// Runtime configuration enums (still needed for YAML parsing)
-enum class PositionalEmbeddingType {
-    Trainable,
-    Fixed,
-};
-
-enum class RunnerType {
-    MemoryEfficient,
-    Default,
-};
-
-enum class WeightTyingType {
-    Disabled,
-    Enabled,
-};
-
-// Define concepts for component types
-
-// Concept for normalization layers
-template <typename T>
-concept NormLayer = requires(T t, const ttml::autograd::TensorPtr& x) {
-    { t(x) } -> std::convertible_to<ttml::autograd::TensorPtr>;
-    requires std::derived_from<T, ttml::autograd::ModuleBase>;
-};
-
-// Concept for transformer blocks
-template <typename T>
-concept TransformerBlock = requires(T t, const ttml::autograd::TensorPtr& x, const ttml::autograd::TensorPtr& mask) {
-    { t(x, mask) } -> std::convertible_to<ttml::autograd::TensorPtr>;
-    requires std::derived_from<T, ttml::autograd::ModuleBase>;
-};
-
-// Base configuration struct
-struct TransformerConfig {
-    uint32_t num_heads = 6;
-    uint32_t embedding_dim = 384;
-    float dropout_prob = 0.2F;
-    uint32_t num_blocks = 6;
-    uint32_t vocab_size = 256;
-    uint32_t max_sequence_length = 256;
-    RunnerType runner_type = RunnerType::Default;
-    WeightTyingType weight_tying = WeightTyingType::Disabled;
-    PositionalEmbeddingType positional_embedding_type = PositionalEmbeddingType::Trainable;
-
-    struct Experimental {
-        bool use_composite_layernorm = false;
-    };
-    Experimental experimental;
-};
-
-// Templatized transformer implementation
-template <TransformerBlock BlockT, NormLayer NormLayerT>
-class Transformer : public ttml::autograd::ModuleBase {
-private:
-    RunnerType runner_type;
-    std::shared_ptr<ttml::modules::Embedding> tok_emb;
-    std::shared_ptr<ttml::modules::PositionalEmbeddingBase> pos_emb;
-    std::vector<std::shared_ptr<BlockT>> blocks;
-    std::shared_ptr<NormLayerT> ln_fc;
-    std::shared_ptr<ttml::modules::LinearLayer> fc;
-
-public:
-    explicit Transformer(const TransformerConfig& config);
-
-    ttml::autograd::TensorPtr operator()(const ttml::autograd::TensorPtr& x, const ttml::autograd::TensorPtr& mask);
-};
-
-[[nodiscard]] TransformerConfig read_config(const YAML::Node& config);
-[[nodiscard]] YAML::Node write_config(const TransformerConfig& config);
-
-template <TransformerBlock BlockT, NormLayer NormLayerT>
-[[nodiscard]] std::shared_ptr<Transformer<BlockT, NormLayerT>> create(const TransformerConfig& config);
-
-template <TransformerBlock BlockT, NormLayer NormLayerT>
-[[nodiscard]] std::shared_ptr<Transformer<BlockT, NormLayerT>> create(const YAML::Node& config);
-
-}  // namespace ttml::models::transformer
-
-// impls
-namespace ttml::models::transformer {
 namespace {
 
 autograd::TensorPtr memory_efficient_runner(
@@ -147,8 +61,7 @@ autograd::TensorPtr memory_efficient_runner(
     return out;
 }
 
-template <TransformerBlock BlockT, NormLayer NormLayerT>
-void weights_initialization(Transformer<BlockT, NormLayerT>& model) {
+void weights_initialization(Transformer& model) {
     auto params = model.parameters();
     for (auto& [name, tensor_ptr] : params) {
         const auto& tensor = tensor_ptr->get_value();
@@ -162,8 +75,7 @@ void weights_initialization(Transformer<BlockT, NormLayerT>& model) {
 
 }  // namespace
 
-template <TransformerBlock BlockT, NormLayer NormLayerT>
-Transformer<BlockT, NormLayerT>::Transformer(const TransformerConfig& config) {
+Transformer::Transformer(const TransformerConfig& config) {
     uint32_t vocab_size = config.vocab_size;
     uint32_t max_sequence_length = config.max_sequence_length;
     uint32_t embedding_dim = config.embedding_dim;
@@ -218,16 +130,17 @@ Transformer<BlockT, NormLayerT>::Transformer(const TransformerConfig& config) {
     pos_emb = create_positional_embedding();
     blocks.reserve(num_blocks);
     for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
-        blocks.push_back(std::make_shared<BlockT>(embedding_dim, num_heads, dropout_prob, use_composite_layernorm));
+        blocks.push_back(std::make_shared<ttml::modules::LlamaBlock>(
+            embedding_dim, num_heads, dropout_prob, use_composite_layernorm));
     }
-    ln_fc = std::make_shared<NormLayerT>(embedding_dim);
+    ln_fc = std::make_shared<ttml::modules::RMSNormLayer>(embedding_dim);
     fc = std::make_shared<ttml::modules::LinearLayer>(embedding_dim, vocab_size, /* bias */ false);
 
     create_name("transformer");
     register_module(tok_emb, "tok_emb");
     register_module(pos_emb, "pos_emb");
     for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
-        register_module(blocks[block_idx], fmt::format("transformer_block_{}", block_idx));
+        register_module(blocks[block_idx], fmt::format("gpt_block_{}", block_idx));
     }
     register_module(ln_fc, "ln_fc");
     register_module(fc, "fc");
@@ -240,8 +153,7 @@ Transformer<BlockT, NormLayerT>::Transformer(const TransformerConfig& config) {
     weights_initialization(*this);
 }
 
-template <TransformerBlock BlockT, NormLayer NormLayerT>
-ttml::autograd::TensorPtr Transformer<BlockT, NormLayerT>::operator()(
+ttml::autograd::TensorPtr Transformer::operator()(
     const ttml::autograd::TensorPtr& x, const ttml::autograd::TensorPtr& mask) {
     auto tok_emb_out = (*tok_emb)(x);
     auto out = (*pos_emb)(tok_emb_out);
@@ -260,15 +172,79 @@ ttml::autograd::TensorPtr Transformer<BlockT, NormLayerT>::operator()(
     return log_softmax;
 }
 
-template <TransformerBlock BlockT, NormLayer NormLayerT>
-std::shared_ptr<Transformer<BlockT, NormLayerT>> create(const TransformerConfig& config) {
-    return std::make_shared<Transformer<BlockT, NormLayerT>>(config);
+RunnerType read_runner_type(const YAML::Node& config) {
+    auto runner_type_str = config["runner_type"].as<std::string>("default");
+    if (runner_type_str == "default") {
+        return RunnerType::Default;
+    } else if (runner_type_str == "memory_efficient") {
+        return RunnerType::MemoryEfficient;
+    } else {
+        throw std::runtime_error(fmt::format(
+            "Unknown runner type: {}. Supported runner types [default, memory_efficient]", runner_type_str));
+    }
 }
 
-template <TransformerBlock BlockT, NormLayer NormLayerT>
-std::shared_ptr<Transformer<BlockT, NormLayerT>> create(const YAML::Node& config) {
+PositionalEmbeddingType read_positional_embedding_type(const YAML::Node& config) {
+    auto positional_embedding_str = config["positional_embedding_type"].as<std::string>("trainable");
+    if (positional_embedding_str == "trainable") {
+        return PositionalEmbeddingType::Trainable;
+    } else if (positional_embedding_str == "fixed") {
+        return PositionalEmbeddingType::Fixed;
+    } else {
+        throw std::runtime_error(fmt::format(
+            "Unknown positional embedding type: {}. Supported positional embedding types [trainable, fixed]",
+            positional_embedding_str));
+    }
+}
+
+WeightTyingType read_weight_tying_type(const YAML::Node& config) {
+    auto weight_tying_str = config["weight_tying"].as<std::string>("disabled");
+    if (weight_tying_str == "disabled") {
+        return WeightTyingType::Disabled;
+    } else if (weight_tying_str == "enabled") {
+        return WeightTyingType::Enabled;
+    } else {
+        throw std::runtime_error(fmt::format(
+            "Unknown weight tying type: {}. Supported weight tying types [disabled, enabled]", weight_tying_str));
+    }
+}
+
+TransformerConfig read_config(const YAML::Node& config) {
+    TransformerConfig transformer_config;
+    transformer_config.num_heads = config["num_heads"].as<uint32_t>();
+    transformer_config.embedding_dim = config["embedding_dim"].as<uint32_t>();
+    transformer_config.dropout_prob = config["dropout_prob"].as<float>();
+    transformer_config.num_blocks = config["num_blocks"].as<uint32_t>();
+    transformer_config.vocab_size = config["vocab_size"].as<uint32_t>();
+    transformer_config.max_sequence_length = config["max_sequence_length"].as<uint32_t>();
+    transformer_config.positional_embedding_type = read_positional_embedding_type(config);
+    transformer_config.runner_type = read_runner_type(config);
+    transformer_config.weight_tying = read_weight_tying_type(config);
+
+    if (auto experimental_config = config["experimental"]) {
+        transformer_config.experimental.use_composite_layernorm =
+            experimental_config["use_composite_layernorm"].as<bool>();
+    }
+    return transformer_config;
+}
+
+YAML::Node write_config(const TransformerConfig& mlp_config) {
+    YAML::Node config;
+    config["num_heads"] = mlp_config.num_heads;
+    config["embedding_dim"] = mlp_config.embedding_dim;
+    config["dropout_prob"] = mlp_config.dropout_prob;
+    config["num_blocks"] = mlp_config.num_blocks;
+    config["vocab_size"] = mlp_config.vocab_size;
+    config["max_sequence_length"] = mlp_config.max_sequence_length;
+    return config;
+}
+
+std::shared_ptr<Transformer> create(const TransformerConfig& config) {
+    return std::make_shared<Transformer>(config);
+}
+std::shared_ptr<Transformer> create(const YAML::Node& config) {
     TransformerConfig transformer_config = read_config(config);
-    return std::make_shared<Transformer<BlockT, NormLayerT>>(transformer_config);
+    return std::make_shared<Transformer>(transformer_config);
 }
 
-}  // namespace ttml::models::transformer
+}  // namespace ttml::models::gpt2

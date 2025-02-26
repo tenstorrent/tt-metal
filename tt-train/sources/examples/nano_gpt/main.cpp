@@ -17,9 +17,7 @@
 #include "datasets/dataloader.hpp"
 #include "datasets/in_memory_token_dataset.hpp"
 #include "datasets/utils.hpp"
-#include "models/transformer.hpp"
-#include "modules/gpt_block.hpp"
-#include "modules/rms_norm_module.hpp"
+#include "models/gpt2.hpp"
 #include "ops/binary_ops.hpp"
 #include "ops/losses.hpp"
 #include "optimizers/adamw.hpp"
@@ -335,7 +333,7 @@ struct TrainingConfig {
     std::string scheduler_type = "identity";
     bool use_clip_grad_norm = false;
     float clip_grad_norm_max_norm = 1.0F;
-    ttml::models::transformer::TransformerConfig transformer_config;
+    ttml::models::gpt2::TransformerConfig transformer_config;
 };
 
 TrainingConfig parse_config(const YAML::Node &yaml_config) {
@@ -361,7 +359,7 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     config.clip_grad_norm_max_norm =
         training_config["clip_grad_norm_max_norm"].as<float>(config.clip_grad_norm_max_norm);
 
-    config.transformer_config = ttml::models::transformer::read_config(training_config["transformer_config"]);
+    config.transformer_config = ttml::models::gpt2::read_config(training_config["transformer_config"]);
     return config;
 }
 
@@ -422,7 +420,7 @@ int main(int argc, char **argv) {
             {"gradient_accumulation_steps", static_cast<int>(config.gradient_accumulation_steps)},
             {"positional_embedding_type",
              config.transformer_config.positional_embedding_type ==
-                     ttml::models::transformer::PositionalEmbeddingType::Trainable
+                     ttml::models::gpt2::PositionalEmbeddingType::Trainable
                  ? "trainable"
                  : "fixed"},
             {"scheduler_type", config.scheduler_type},
@@ -559,8 +557,7 @@ int main(int argc, char **argv) {
 
     fmt::print("Overriding vocab size to be divisible by 32\n");
     config.transformer_config.vocab_size = round_up_to_tile(tokenizer->get_vocab_size());
-    auto model = ttml::models::transformer::create<ttml::modules::GPTBlock, ttml::modules::RMSNormLayer>(
-        config.transformer_config);
+    auto model = ttml::models::gpt2::create(config.transformer_config);
 
     auto adamw_params = ttml::optimizers::AdamWConfig();
     adamw_params.lr = config.learning_rate;
