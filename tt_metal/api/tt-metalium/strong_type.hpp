@@ -55,7 +55,7 @@ namespace tt::stl {
 template <typename T, typename Tag>
 class StrongType {
 public:
-    explicit StrongType(T v) : value_(std::move(v)) {}
+    constexpr explicit StrongType(T v) : value_(std::move(v)) {}
 
     StrongType(const StrongType&) = default;
     StrongType(StrongType&&) = default;

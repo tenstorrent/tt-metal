@@ -12,6 +12,7 @@
 #include <tt-metalium/small_vector.hpp>
 
 #include "export_enum.hpp"
+#include "ttnn/common/queue_id.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast_types.hpp"
@@ -28,6 +29,15 @@ void py_module_types(py::module& module) {
         .def(
             "__repr__",
             [](const ttnn::QueueId& self) { return "QueueId(" + std::to_string(static_cast<int>(*self)) + ")"; })
+        .def(py::self == py::self);
+    py::class_<ttnn::MeshCommandQueueId>(module, "MeshCommandQueueId")
+        .def(py::init<uint32_t>())
+        .def("__int__", [](const ttnn::MeshCommandQueueId& self) { return static_cast<int>(*self); })
+        .def(
+            "__repr__",
+            [](const ttnn::MeshCommandQueueId& self) {
+                return "MeshCommandQueueId(" + std::to_string(static_cast<int>(*self)) + ")";
+            })
         .def(py::self == py::self);
 
     export_enum<ttnn::BcastOpMath>(module, "BcastOpMath");

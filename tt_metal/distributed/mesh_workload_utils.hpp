@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <host_api.hpp>
-#include <mesh_common.hpp>
 
 // Utility functions for dispatch MeshWorkloads
 // Used by MeshCommandQueue
