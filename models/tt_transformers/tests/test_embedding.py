@@ -6,8 +6,8 @@ import pytest
 from loguru import logger
 import os
 import ttnn
-from models.tt_transformers.tt.embedding import TtLlamaEmbedding
-from models.tt_transformers.tt.model_config import TtModelArgs
+from models.tt_transformers.tt.embedding import Embedding
+from models.tt_transformers.tt.model_config import ModelArgs
 from models.utility_functions import (
     comp_pcc,
     comp_allclose,
@@ -34,11 +34,11 @@ from models.utility_functions import skip_for_grayskull
     "max_seq_len",
     (128,),  # For decode-only unit test, there's no need to run with large sequence lengths
 )
-def test_llama_embedding(max_seq_len, batch_size, mesh_device, use_program_cache, reset_seeds, ensure_gc):
+def test_embedding(max_seq_len, batch_size, mesh_device, use_program_cache, reset_seeds, ensure_gc):
     dtype = ttnn.bfloat16
     mesh_device.enable_async(True)
 
-    model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len)
+    model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len)
     model_args.n_layers = 1
 
     state_dict = model_args.load_state_dict()
@@ -51,7 +51,7 @@ def test_llama_embedding(max_seq_len, batch_size, mesh_device, use_program_cache
         layer_name = "tok_embeddings.weight"
     reference_emb.load_state_dict({"emb.weight": state_dict[layer_name]})
 
-    tt_emb = TtLlamaEmbedding(
+    tt_emb = Embedding(
         mesh_device=mesh_device,
         args=model_args,
         weight_cache_path=model_args.weight_cache_path(dtype),
@@ -83,8 +83,8 @@ def test_llama_embedding(max_seq_len, batch_size, mesh_device, use_program_cache
     logger.info(comp_allclose(reference_output, tt_output_torch))
     logger.info(f"PCC: {pcc_message}")
     if passing:
-        logger.info("Llama_embedding Passed!")
+        logger.info("embedding Passed!")
     else:
-        logger.warning("Llama_embedding Failed!")
+        logger.warning("embedding Failed!")
 
-    assert passing, f"Llama_embedding output does not meet PCC requirement {0.99}."
+    assert passing, f"embedding output does not meet PCC requirement {0.99}."

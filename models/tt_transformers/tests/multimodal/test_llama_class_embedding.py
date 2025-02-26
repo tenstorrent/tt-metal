@@ -72,7 +72,7 @@ class ClassEmbedding(nn.Module):
         ttnn.TILE_LAYOUT,
     ],
 )
-def test_llama_class_embedding_inference(
+def test_class_embedding_inference(
     mesh_device,
     use_program_cache,
     reset_seeds,

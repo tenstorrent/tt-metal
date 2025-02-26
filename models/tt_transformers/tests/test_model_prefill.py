@@ -11,8 +11,8 @@ from models.tt_transformers.tt.common import (
     get_prefill_rot_mat,
     PagedAttentionConfig,
 )
-from models.tt_transformers.tt.model import TtTransformer
-from models.tt_transformers.tt.model_config import TtModelArgs, LlamaOptimizations
+from models.tt_transformers.tt.model import Transformer
+from models.tt_transformers.tt.model_config import ModelArgs, LlamaOptimizations
 from models.utility_functions import (
     comp_pcc,
     comp_allclose,
@@ -60,7 +60,7 @@ from models.utility_functions import skip_for_grayskull
         pytest.param(LlamaOptimizations.performance, id="performance"),
     ],
 )
-def test_llama_model_inference(
+def test_model_inference(
     seq_len,
     paged_attention,
     page_params,
@@ -92,7 +92,7 @@ def test_llama_model_inference(
     # Use instruct weights instead of general weights
     instruct = True
 
-    model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, optimizations=optimizations, max_seq_len=seq_len)
+    model_args = ModelArgs(mesh_device, max_batch_size=batch_size, optimizations=optimizations, max_seq_len=seq_len)
     tokenizer = model_args.tokenizer
 
     logger.info("Loading weights...")
@@ -164,7 +164,7 @@ def test_llama_model_inference(
         )
 
     # Load TTNN model
-    tt_model = TtTransformer(
+    tt_model = Transformer(
         args=model_args,
         mesh_device=mesh_device,
         dtype=dtype,

@@ -21,7 +21,7 @@ from pkg_resources import resource_filename
 
 IMG_PATH = Path(resource_filename("llama_models", "scripts/resources/"))
 
-from models.tt_transformers.tt.generator import LlamaGenerator
+from models.tt_transformers.tt.generator import Generator
 from models.tt_transformers.demo.simple_vision_demo import create_multimodal_model
 
 
@@ -38,7 +38,7 @@ from models.tt_transformers.demo.simple_vision_demo import create_multimodal_mod
     "target",
     ("tt", "cpu"),
 )
-def test_llama_multimodal_demo_chat(
+def test_multimodal_demo_chat(
     mesh_device,
     target,
     temperature: float = 0.5,
@@ -67,7 +67,7 @@ def test_llama_multimodal_demo_chat(
         model_args, model = create_multimodal_model(mesh_device, max_batch_size=max_batch_size, max_seq_len=max_seq_len)
         tokenizer = Tokenizer(model_path=tokenizer_path)
         formatter = ChatFormat(tokenizer)
-        generator = LlamaGenerator(model, model_args, mesh_device, tokenizer=tokenizer, formatter=formatter)
+        generator = Generator(model, model_args, mesh_device, tokenizer=tokenizer, formatter=formatter)
 
     # image understanding
     dialogs = []

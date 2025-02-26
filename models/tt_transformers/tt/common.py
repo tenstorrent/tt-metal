@@ -24,7 +24,7 @@ class PagedAttentionConfig:
         self.max_num_blocks = max_num_blocks
 
 
-def encode_prompt_llama_instruct(tokenizer, prompt_text, system_prompt_text=None):
+def encode_prompt_instruct(tokenizer, prompt_text, system_prompt_text=None):
     """<|begin_of_text|><|start_header_id|>system<|end_header_id|>
     {{ system_prompt }}<|eot_id|><|start_header_id|>user<|end_header_id|>
     {{ user_msg_1 }}<|eot_id|><|start_header_id|>assistant<|end_header_id|>

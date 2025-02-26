@@ -12,8 +12,8 @@ from models.tt_transformers.tt.common import (
     PagedAttentionConfig,
     preprocess_inputs_prefill,
 )
-from models.tt_transformers.tt.model import TtTransformer
-from models.tt_transformers.tt.model_config import TtModelArgs, LlamaOptimizations
+from models.tt_transformers.tt.model import Transformer
+from models.tt_transformers.tt.model_config import ModelArgs, LlamaOptimizations
 from pathlib import Path
 
 
@@ -128,9 +128,7 @@ def test_tt_model_acc(
     mesh_device.enable_async(True)
 
     # Load model args and tokenizer
-    model_args = TtModelArgs(
-        mesh_device, optimizations=optimizations, max_batch_size=batch_size, max_seq_len=max_seq_len
-    )
+    model_args = ModelArgs(mesh_device, optimizations=optimizations, max_batch_size=batch_size, max_seq_len=max_seq_len)
 
     tokenizer = model_args.tokenizer
 
@@ -193,7 +191,7 @@ def test_tt_model_acc(
         )
 
     # Initialize TT model
-    tt_model = TtTransformer(
+    tt_model = Transformer(
         args=model_args,
         mesh_device=mesh_device,
         dtype=dtype,

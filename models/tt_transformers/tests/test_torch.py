@@ -4,16 +4,16 @@
 import torch
 
 # import ttnn
-from models.tt_transformers.tt.model_config import TtModelArgs
+from models.tt_transformers.tt.model_config import ModelArgs
 
 from loguru import logger
 
 
 @torch.no_grad()
-def test_llama_torch_inference(ensure_gc):
+def test_torch_inference(ensure_gc):
     iterations = 20
 
-    model_args = TtModelArgs(mesh_device=None)
+    model_args = ModelArgs(mesh_device=None)
     state_dict = model_args.load_state_dict()
     tokenizer = model_args.tokenizer
 

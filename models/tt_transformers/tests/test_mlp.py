@@ -7,8 +7,8 @@ import pytest
 from loguru import logger
 import os
 import ttnn
-from models.tt_transformers.tt.mlp import TtLlamaMLP
-from models.tt_transformers.tt.model_config import TtModelArgs
+from models.tt_transformers.tt.mlp import MLP
+from models.tt_transformers.tt.model_config import ModelArgs
 from models.utility_functions import (
     comp_pcc,
     comp_allclose,
@@ -39,18 +39,18 @@ from models.utility_functions import skip_for_grayskull
     "batch_size",
     (1,),
 )
-def test_llama_mlp_inference(seq_len, batch_size, mesh_device, use_program_cache, reset_seeds, ensure_gc):
+def test_mlp_inference(seq_len, batch_size, mesh_device, use_program_cache, reset_seeds, ensure_gc):
     dtype = ttnn.bfloat8_b
     mode = "decode" if seq_len <= 32 else "prefill"
 
     mesh_device.enable_async(True)
 
-    model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=128)
+    model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=128)
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
-    first_layer_prefix = model_args.get_state_dict_prefix("TtLlamaMLP", 0)
+    first_layer_prefix = model_args.get_state_dict_prefix("MLP", 0)
     partial_state_dict = {
         k[len(first_layer_prefix) + 1 :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     }
@@ -59,7 +59,7 @@ def test_llama_mlp_inference(seq_len, batch_size, mesh_device, use_program_cache
     reference_model = model_args.reference_mlp()
     reference_model.load_state_dict(partial_state_dict)
 
-    tt_model = TtLlamaMLP(
+    tt_model = MLP(
         mesh_device=mesh_device,
         args=model_args,
         state_dict=state_dict,
@@ -89,7 +89,7 @@ def test_llama_mlp_inference(seq_len, batch_size, mesh_device, use_program_cache
         layout=ttnn.TILE_LAYOUT,
     )
 
-    logger.info("Run Llama_MLP")
+    logger.info("Run MLP")
     tt_output = tt_model(tt_input, mode)
 
     tt_output_torch = ttnn.to_torch(
@@ -105,8 +105,8 @@ def test_llama_mlp_inference(seq_len, batch_size, mesh_device, use_program_cache
     logger.info(comp_allclose(reference_output, tt_output_torch))
     logger.info(f"PCC: {pcc_message}")
     if passing:
-        logger.info("Llama_MLP Passed!")
+        logger.info("MLP Passed!")
     else:
-        logger.warning("Llama_MLP Failed!")
+        logger.warning("MLP Failed!")
 
-    assert passing, f"Llama_MLP output does not meet PCC requirement {pcc_required}: {pcc_message}."
+    assert passing, f"MLP output does not meet PCC requirement {pcc_required}: {pcc_message}."

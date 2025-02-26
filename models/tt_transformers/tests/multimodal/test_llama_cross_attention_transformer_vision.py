@@ -29,7 +29,7 @@ from models.utility_functions import skip_for_grayskull
     ],
     indirect=True,
 )
-def test_llama_vision_transformer_inference(mesh_device, use_program_cache, reset_seeds):
+def test_vision_transformer_inference(mesh_device, use_program_cache, reset_seeds):
     dtype = ttnn.bfloat16
     pcc_required = 0.79
 

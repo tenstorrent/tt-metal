@@ -20,12 +20,12 @@ import ttnn
 
 from llama_models.llama3.api.tokenizer import Tokenizer
 
-from models.tt_transformers.tt.generator import LlamaGenerator
+from models.tt_transformers.tt.generator import Generator
 from models.tt_transformers.tt.model_config import LlamaOptimizations
 from models.tt_transformers.tt.common import (
     preprocess_inputs_prefill,
     get_rot_transformation_mat,
-    encode_prompt_llama_instruct,
+    encode_prompt_instruct,
     PagedAttentionConfig,
     sample_host,
 )
@@ -110,10 +110,10 @@ def create_tt_model(
     dtype=ttnn.bfloat8_b,
     use_paged_kv_cache=False,
 ):
-    from models.tt_transformers.tt.model import TtTransformer
-    from models.tt_transformers.tt.model_config import TtModelArgs
+    from models.tt_transformers.tt.model import Transformer
+    from models.tt_transformers.tt.model_config import ModelArgs
 
-    tt_model_args = TtModelArgs(
+    tt_model_args = ModelArgs(
         mesh_device,
         instruct=instruct,
         max_batch_size=max_batch_size,
@@ -143,7 +143,7 @@ def create_tt_model(
             max_num_blocks=page_params["page_max_num_blocks"],
         )
 
-    model = TtTransformer(
+    model = Transformer(
         args=tt_model_args,
         mesh_device=mesh_device,
         dtype=dtype,
@@ -281,7 +281,7 @@ def create_tt_model(
     ],
     indirect=True,
 )
-def test_llama_demo_text(
+def test_demo_text(
     input_prompts,
     instruct,
     repeat_batches,
@@ -378,7 +378,7 @@ def test_llama_demo_text(
     )
 
     tokenizer = model_args.tokenizer
-    generator = LlamaGenerator(model, model_args, mesh_device, tokenizer=tokenizer)
+    generator = Generator(model, model_args, mesh_device, tokenizer=tokenizer)
 
     num_tokens_generated_decode = []
 

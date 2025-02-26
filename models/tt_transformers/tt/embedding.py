@@ -7,7 +7,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 
 
-class TtLlamaEmbedding(LightweightModule):
+class Embedding(LightweightModule):
     def __init__(
         self,
         mesh_device,

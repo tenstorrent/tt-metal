@@ -6,9 +6,9 @@ import pytest
 from loguru import logger
 import os
 import ttnn
-from models.tt_transformers.tt.attention import TtLlamaAttention
-from models.tt_transformers.tt.rope import TtLlamaRotarySetup
-from models.tt_transformers.tt.model_config import TtModelArgs
+from models.tt_transformers.tt.attention import Attention
+from models.tt_transformers.tt.rope import RotarySetup
+from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.common import (
     precompute_freqs,
     PagedAttentionConfig,
@@ -55,7 +55,7 @@ from models.tt_transformers.tt.load_checkpoints import convert_meta_to_hf, conve
     "max_seq_len",
     (128,),  # For decode-only unit test, there's no need to run with large sequence lengths
 )
-def test_llama_attention_inference(
+def test_attention_inference(
     max_seq_len,
     batch_size,
     paged_attention,
@@ -70,12 +70,12 @@ def test_llama_attention_inference(
 
     mesh_device.enable_async(True)
 
-    model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len)
+    model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len)
     model_args.n_layers = 1  # For the unit test, just run a single layer
 
     state_dict = model_args.load_state_dict()
 
-    first_layer_prefix = model_args.get_state_dict_prefix("TtLlamaAttention", 0) + "."
+    first_layer_prefix = model_args.get_state_dict_prefix("Attention", 0) + "."
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
     partial_state_dict = {
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))

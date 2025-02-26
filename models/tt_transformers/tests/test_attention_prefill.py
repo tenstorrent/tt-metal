@@ -6,8 +6,8 @@ import pytest
 from loguru import logger
 import os
 import ttnn
-from models.tt_transformers.tt.attention import TtLlamaAttention
-from models.tt_transformers.tt.model_config import TtModelArgs
+from models.tt_transformers.tt.attention import Attention
+from models.tt_transformers.tt.model_config import ModelArgs
 from models.tt_transformers.tt.common import (
     get_prefill_rot_mat,
     get_rot_transformation_mat,
@@ -56,7 +56,7 @@ from models.utility_functions import skip_for_grayskull
         # 1024 * 64,
     ),
 )
-def test_llama_attention_inference(
+def test_attention_inference(
     max_seq_len,
     paged_attention,
     page_params,
@@ -71,12 +71,12 @@ def test_llama_attention_inference(
 
     mesh_device.enable_async(True)
 
-    model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len)
+    model_args = ModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len)
     model_args.n_layers = 1
     state_dict = model_args.load_state_dict()
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
-    first_layer_prefix = model_args.get_state_dict_prefix("TtLlamaAttention", 0) + "."
+    first_layer_prefix = model_args.get_state_dict_prefix("Attention", 0) + "."
     partial_state_dict = {
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     }
@@ -132,7 +132,7 @@ def test_llama_attention_inference(
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
 
-    tt_model = TtLlamaAttention(
+    tt_model = Attention(
         mesh_device,
         state_dict,
         weight_cache_path=model_args.weight_cache_path(dtype),
@@ -178,9 +178,9 @@ def test_llama_attention_inference(
     logger.info(comp_allclose(reference_output, tt_output_torch))
     logger.info(f"PCC: {pcc_message}")
     if passing:
-        logger.info(f"Llama_Attention Passed!")
+        logger.info(f"Attention Passed!")
     else:
-        logger.warning(f"Llama_Attention Failed!")
+        logger.warning(f"Attention Failed!")
         all_tests_pass = False
 
     check_kv_cache = True  # May want to disable: Issue #10648

@@ -12,9 +12,9 @@ from models.tt_transformers.tt.common import (
     get_block_size,
     num_blocks_in_seq,
 )
-from models.tt_transformers.tt.model import TtTransformer
-from models.tt_transformers.tt.model_config import TtModelArgs, LlamaOptimizations
-from models.tt_transformers.tt.generator import LlamaGenerator
+from models.tt_transformers.tt.model import Transformer
+from models.tt_transformers.tt.model_config import ModelArgs, LlamaOptimizations
+from models.tt_transformers.tt.generator import Generator
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.model import Transformer
 from models.utility_functions import (
     comp_pcc,
@@ -78,7 +78,7 @@ def test_chunked_prefill_single_user(
         assert optimizations == LlamaOptimizations.performance
         pcc = 0.869  # TODO Look on improving PCC
 
-    model_args = TtModelArgs(mesh_device, max_batch_size=batch_size, optimizations=optimizations, max_seq_len=seq_len)
+    model_args = ModelArgs(mesh_device, max_batch_size=batch_size, optimizations=optimizations, max_seq_len=seq_len)
     model_args.max_prefill_chunk_size = prefill_chunk_size
 
     logger.info("Loading weights...")
@@ -118,7 +118,7 @@ def test_chunked_prefill_single_user(
     )
 
     # Load TTNN model
-    tt_model = TtTransformer(
+    tt_model = Transformer(
         args=model_args,
         mesh_device=mesh_device,
         dtype=dtype,
@@ -126,7 +126,7 @@ def test_chunked_prefill_single_user(
         weight_cache_path=model_args.weight_cache_path(dtype),
         paged_attention_config=paged_attention_config,
     )
-    generator = LlamaGenerator(tt_model, model_args, mesh_device)
+    generator = Generator(tt_model, model_args, mesh_device)
 
     logger.info("Model and caches loaded.")
 

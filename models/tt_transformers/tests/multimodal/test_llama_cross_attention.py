@@ -40,7 +40,7 @@ from models.utility_functions import skip_for_grayskull
         "batch_2",
     ],
 )
-def test_llama_cross_attention_inference(text_seq_len, batch, mesh_device, reset_seeds, ensure_gc):
+def test_cross_attention_inference(text_seq_len, batch, mesh_device, reset_seeds, ensure_gc):
     dtype = ttnn.bfloat16
     pcc_required = 0.99
 
