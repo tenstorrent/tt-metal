@@ -86,7 +86,7 @@ class PositionalEmbedding(nn.Module):
     "bsz, num_concurrent_media, num_chunks",
     [(1, 4, 4)],
 )
-def test_llama_positional_embedding_inference(
+def test_positional_embedding_inference(
     mesh_device,
     use_program_cache,
     reset_seeds,

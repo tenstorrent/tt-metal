@@ -10,8 +10,8 @@ from models.tt_transformers.tt.common import (
     sample_host,
     PagedAttentionConfig,
 )
-from models.tt_transformers.tt.model_config import TtModelArgs, LlamaOptimizations
-from models.tt_transformers.tt.model import TtTransformer
+from models.tt_transformers.tt.model_config import ModelArgs, LlamaOptimizations
+from models.tt_transformers.tt.model import Transformer
 from models.utility_functions import (
     comp_pcc,
     comp_allclose,
@@ -70,7 +70,7 @@ from models.utility_functions import skip_for_grayskull
     ],
     indirect=True,
 )
-def test_llama_model_inference(
+def test_model_inference(
     weights,
     layers,
     max_seq_len,
@@ -90,7 +90,7 @@ def test_llama_model_inference(
     mode_accuracy = optimizations == LlamaOptimizations.accuracy
     instruct = False  # True if weights == "instruct" else False
     dummy_weights = True if weights == "random" else False
-    model_args = TtModelArgs(
+    model_args = ModelArgs(
         mesh_device,
         instruct=instruct,
         dummy_weights=dummy_weights,
@@ -217,7 +217,7 @@ def test_llama_model_inference(
         )
 
     # Load TTNN model
-    tt_model = TtTransformer(
+    tt_model = Transformer(
         args=model_args,
         mesh_device=mesh_device,
         dtype=dtype,

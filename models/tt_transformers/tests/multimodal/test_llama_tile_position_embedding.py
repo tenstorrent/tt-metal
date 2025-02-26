@@ -52,7 +52,7 @@ import llama_models.llama3.reference_impl.multimodal.model as llama_reference_mo
     ],
 )
 @pytest.mark.parametrize("pre_embed", [False, True])
-def test_llama_conv2d_inference(
+def test_conv2d_inference(
     mesh_device,
     use_program_cache,
     reset_seeds,

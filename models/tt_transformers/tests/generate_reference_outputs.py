@@ -5,7 +5,7 @@ import torch
 import bz2
 import os
 import argparse
-from models.tt_transformers.tt.model_config import TtModelArgs, CheckpointType
+from models.tt_transformers.tt.model_config import ModelArgs, CheckpointType
 from loguru import logger
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -29,7 +29,7 @@ def generate_reference_outputs(total_length, output_file, hf_model_name=None):
 
     else:
         # Original path - load reference model
-        model_args = TtModelArgs(mesh_device=None)
+        model_args = ModelArgs(mesh_device=None)
         model_args.max_seq_len = total_length
         tokenizer = Tokenizer(model_args.tokenizer_path)
 

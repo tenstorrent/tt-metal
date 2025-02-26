@@ -6,7 +6,7 @@ import pytest
 from loguru import logger
 import os
 import ttnn
-from models.tt_transformers.tt.model_config import TtModelArgs
+from models.tt_transformers.tt.model_config import ModelArgs
 from models.utility_functions import skip_for_grayskull
 
 
@@ -21,14 +21,14 @@ from models.utility_functions import skip_for_grayskull
     ],
     indirect=True,
 )
-def test_llama_decoder_inference(mesh_device, use_program_cache, reset_seeds):
+def test_decoder_inference(mesh_device, use_program_cache, reset_seeds):
     mesh_device.enable_async(True)
 
-    model_args = TtModelArgs(mesh_device)
+    model_args = ModelArgs(mesh_device)
     state_dict = torch.load(model_args.consolidated_weights_path, map_location=torch.device("cpu"))
 
     # Ref model needs partial state dict, but our models use full state dict keys as cached weight names
-    first_layer_prefix = model_args.get_state_dict_prefix("TtTransformerBlock", 0)
+    first_layer_prefix = model_args.get_state_dict_prefix("TransformerBlock", 0)
     partial_state_dict = {
         k[len(first_layer_prefix) :]: v for k, v in state_dict.items() if (k.startswith(first_layer_prefix))
     }

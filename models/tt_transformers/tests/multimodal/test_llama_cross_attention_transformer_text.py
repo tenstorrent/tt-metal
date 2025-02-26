@@ -47,7 +47,7 @@ from models.utility_functions import skip_for_grayskull
     ],
 )
 @torch.no_grad()
-def test_llama_cross_attention_transformer_text_inference(
+def test_cross_attention_transformer_text_inference(
     text_seq_len,
     batch,
     mesh_device,

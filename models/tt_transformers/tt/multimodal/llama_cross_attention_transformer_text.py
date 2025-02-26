@@ -104,7 +104,7 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
             as_interleaved_tensor("output", "weight", idx, ttnn.bfloat8_b, dim=-1) for idx in range(len(lm_head_torch))
         ]
 
-        self.n_llama_layers = configuration.n_layers
+        self.n_layers = configuration.n_layers
         self.model_dim = configuration.dim
 
         self.fusion_schedule = self._init_fusion_schedule(configuration.vision_num_cross_attention_layers)
@@ -184,7 +184,7 @@ class TtLlamaCrossAttentionTransformerText(LightweightModule):
         self,
         num_layers: int,
     ):
-        llama_layers = list(range(self.n_llama_layers))
+        llama_layers = list(range(self.n_layers))
 
         # uniformly spread the layers
         k = math.ceil(len(llama_layers) / num_layers)

@@ -26,7 +26,7 @@ from models.tt_transformers.tt.common import (
 )
 
 
-class LlamaGenerator:
+class Generator:
     def __init__(self, model, model_args, mesh_device, tokenizer=None, formatter=None):
         """
         Creating a LlamaVision wrapper requires only a mesh_device and model_args.
@@ -944,5 +944,5 @@ class LlamaGenerator:
         if hasattr(self, "trace_id_text"):
             ttnn.release_trace(self.mesh_device, self.trace_id_text)
 
-        if hasattr(super(LlamaGenerator, self), "__del__"):
+        if hasattr(super(Generator, self), "__del__"):
             super().__del__()

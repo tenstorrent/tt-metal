@@ -9,9 +9,9 @@ import PIL
 from llama_models.llama3.api.chat_format import create_vision_mask
 import ttnn
 
-from models.tt_transformers.tt.generator import LlamaGenerator
-from models.tt_transformers.tt.model import TtTransformer
-from models.tt_transformers.tt.model_config import LlamaOptimizations, TtModelArgs
+from models.tt_transformers.tt.generator import Generator
+from models.tt_transformers.tt.model import Transformer
+from models.tt_transformers.tt.model_config import LlamaOptimizations, ModelArgs
 from models.tt_transformers.demo.simple_vision_demo import create_multimodal_model
 from models.utility_functions import nearest_32
 
@@ -30,7 +30,7 @@ def initialize_vllm_text_transformer(
     optimizations=LlamaOptimizations.performance,
 ):
     # Load model args, weights
-    model_args = TtModelArgs(
+    model_args = ModelArgs(
         mesh_device,
         instruct=("Instruct" in hf_config._name_or_path or "DeepSeek-R1-Distill-Llama-70B" in hf_config._name_or_path),
         max_batch_size=max_batch_size,
@@ -44,7 +44,7 @@ def initialize_vllm_text_transformer(
         model_args.n_layers = n_layers
     state_dict = model_args.load_state_dict()
 
-    tt_model = TtTransformer(
+    tt_model = Transformer(
         args=model_args,
         mesh_device=mesh_device,
         dtype=dtype,
@@ -99,7 +99,7 @@ def input_processor_for_mllama(ctx: InputContext, inputs: Union[DecoderOnlyInput
     return inputs
 
 
-def input_processor_for_llama_text(ctx: InputContext, inputs: Union[DecoderOnlyInputs, EncoderDecoderInputs]):
+def input_processor_for_text(ctx: InputContext, inputs: Union[DecoderOnlyInputs, EncoderDecoderInputs]):
     hf_model_name = ctx.model_config.hf_config._name_or_path
     if ("3.1-8B" in hf_model_name or "3.2-11B" in hf_model_name) and os.environ.get("MESH_DEVICE") == "N150":
         prompt_len = len(inputs.get("prompt_token_ids"))
@@ -113,7 +113,7 @@ def input_processor_for_llama_text(ctx: InputContext, inputs: Union[DecoderOnlyI
 
 # @MULTIMODAL_REGISTRY.register_image_input_mapper()  # TODO: Add once model can accept inputs from multi_modal_input_mapper (raw pixel values)
 @INPUT_REGISTRY.register_input_processor(input_processor_for_mllama)
-class TtMllamaForConditionalGeneration(LlamaGenerator, SupportsMultiModal):
+class MllamaForConditionalGeneration(Generator, SupportsMultiModal):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -144,7 +144,7 @@ class TtMllamaForConditionalGeneration(LlamaGenerator, SupportsMultiModal):
         cross_page_table: torch.Tensor,
     ):
         """
-        Replaces prefill_forward from LlamaGenerator with a version that supports mask creation.
+        Replaces prefill_forward from Generator with a version that supports mask creation.
         """
         batch = tokens.shape[0]
 
@@ -171,8 +171,8 @@ class TtMllamaForConditionalGeneration(LlamaGenerator, SupportsMultiModal):
         )
 
 
-@INPUT_REGISTRY.register_input_processor(input_processor_for_llama_text)
-class TtLlamaForCausalLM(LlamaGenerator):
+@INPUT_REGISTRY.register_input_processor(input_processor_for_text)
+class ForCausalLM(Generator):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
@@ -200,7 +200,7 @@ class TtLlamaForCausalLM(LlamaGenerator):
         return super().decode_forward_text(*args, **kwargs)
 
 
-class TtQwen2ForCausalLM(LlamaGenerator):
+class Qwen2ForCausalLM(Generator):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 

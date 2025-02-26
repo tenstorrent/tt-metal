@@ -33,7 +33,7 @@ from models.utility_functions import skip_for_grayskull
     ],
     indirect=True,
 )
-def test_llama_mlp_inference(batch, num_chunks, mesh_device, use_program_cache, reset_seeds, ensure_gc):
+def test_mlp_inference(batch, num_chunks, mesh_device, use_program_cache, reset_seeds, ensure_gc):
     dtype = ttnn.bfloat16
 
     mesh_device.enable_async(True)
