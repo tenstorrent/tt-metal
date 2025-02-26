@@ -60,7 +60,10 @@ def preprocess_inputs_prefill(
     if max_prefill_len == 128 * 1024:
         max_prefill_len = 128 * 1024 - max_generated_tokens
 
-    encoded_prompts = [model_args.encode_prompt(prompt, instruct=instruct) for prompt in input_prompts]
+    encoded_prompts = [
+        model_args[idx % len(model_args)].encode_prompt(prompt, instruct=instruct)
+        for idx, prompt in enumerate(input_prompts)
+    ]
 
     # Print the length of encoded prompts
     logger.info("Encoded prompt lengths:" + ", ".join(str(len(prompt)) for prompt in encoded_prompts))
@@ -80,10 +83,19 @@ def preprocess_inputs_prefill(
             # 3. Shorten the tokenized clipped prompt by the overhead and convert back to text
             # 4. Tokenize the result with instruct tokenization
             # 5. Assert that the length of this is equal to the max_prefill_len
-            raw_prompts = [model_args.encode_prompt(prompt, instruct=False) for prompt in input_prompts]
+            raw_prompts = [
+                model_args[idx % len(model_args)].encode_prompt(prompt, instruct=False)
+                for idx, prompt in enumerate(input_prompts)
+            ]
             overhead = [len(e) - len(r) for e, r in zip(encoded_prompts, raw_prompts)]
-            shortened = [tokenizer.decode(e[-(max_prefill_len - o) :]) for e, o in zip(raw_prompts, overhead)]
-            encoded_prompts = [model_args.encode_prompt(prompt, instruct=instruct) for prompt in shortened]
+            shortened = [
+                tokenizer[idx % len(model_args)].decode(e[-(max_prefill_len - o) :])
+                for idx, e, o in enumerate(zip(raw_prompts, overhead))
+            ]
+            encoded_prompts = [
+                model_args[idx % len(model_args)].encode_prompt(prompt, instruct=instruct)
+                for idx, prompt in enumerate(shortened)
+            ]
             assert all(
                 len(e) == max_prefill_len for e in encoded_prompts
             ), f"Clipped prompts are not of the correct length, expected {max_prefill_len} but got {[len(e) for e in encoded_prompts]}"
@@ -94,10 +106,10 @@ def preprocess_inputs_prefill(
         prompt_lens = [len(x) for x in encoded_prompts]
         min_prompt_len = min(prompt_lens)
         max_prompt_len = max(prompt_lens)
-
-    assert (
-        max_prompt_len <= model_args.max_seq_len
-    ), f"Max prompt length {max_prompt_len} exceeds model max seq len {model_args.max_seq_len}"
+    for m in model_args:
+        assert (
+            max_prompt_len <= m.max_seq_len
+        ), f"Max prompt length {max_prompt_len} exceeds model max seq len {m.max_seq_len}"
     assert min_prompt_len > 0, "Minimum prompt length must be greater than 0"
     assert min_prompt_len <= max_prompt_len, f"Minimum prompt length {min_prompt_len} exceeds max len {max_prompt_len}"
 
