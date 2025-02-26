@@ -15,10 +15,43 @@
 #include <typeindex>
 #include <unordered_map>
 #include "ttnn/core.hpp"
-
+#pragma optimize("", off)
 using namespace tt::tt_metal;
 
 namespace {
+std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Layout& layout) {
+    switch (layout) {
+        case Layout::ROW_MAJOR:     return os << "Row Major";
+        case Layout::TILE:          return os << "Tile";
+        case Layout::INVALID:       return os << "Invalid";
+        default:                    return os << "Unknown layout";
+    }
+}
+
+std::ostream& operator<<(std::ostream& os, const Tile& config) {
+    tt::stl::reflection::operator<<(os, config);
+    return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const Tensor& tensor) {
+    tt::stl::reflection::operator<<(os, tensor);
+    return os;
+}
+
+std::ostream& operator<<(std::ostream& os, const tt::stl::StrongType<unsigned char, ttnn::QueueIdTag>& h) {
+    return os << *h;
+}
+
+template <typename T>
+std::ostream& operator<<(std::ostream& os, const std::optional<T>& optional_value) {
+    if (optional_value.has_value()) {
+        os << optional_value.value();
+    } else {
+        os << "nullopt";
+    }
+    return os;
+}
+
 std::string demangle(const char* name) {
     int status = -4;
 
@@ -32,6 +65,55 @@ std::string demangle(const char* name) {
 
     return ret_val;
 }
+
+struct AnyToString {
+    using ConvertionFunction = std::function<std::string(const std::any&)>;
+
+    static std::unordered_map<std::type_index, ConvertionFunction>& registry() {
+        static std::unordered_map<std::type_index, ConvertionFunction> map;
+        return map;
+    }
+
+    template <typename T>
+    static void register_type() {
+        registry()[typeid(T)] = [](const std::any& value) -> std::string {
+            std::ostringstream oss;
+            auto reference_value = std::any_cast<T>(value);
+            oss << reference_value.get();
+            std::string result = oss.str();
+            return result;
+        };
+    }
+
+    static std::string to_string(const std::span<std::any>& span) {
+        std::ostringstream oss;
+        for (const auto& element : span) {
+            if (!element.has_value()) {
+                oss << "[any, empty],";
+                continue;
+            }
+
+            auto it = registry().find(element.type());
+            oss << "[ ";
+            if (it != registry().end()) {
+                 oss << it->second(element) << ", ";
+            } else {
+                oss << "unsupported type" << " , ";
+            }
+
+            oss << demangle(element.type().name());
+            oss << "],";
+        }
+
+        std::string result = oss.str();
+        if (!result.empty() && result.back() == ',')
+        {
+            result.pop_back(); // Remove last comma
+        }
+
+        return result;
+    }
+};
 
 std::string tensorMemoryLayoutToString(TensorMemoryLayout layout) {
     switch (layout) {
@@ -54,6 +136,7 @@ nlohmann::json to_json(const ttnn::graph::GraphProcessor::Vertex& data) {
     j[ttnn::graph::kCounter] = data.counter;
     j[ttnn::graph::kNodeType] = data.node_type;
     j[ttnn::graph::kParams] = data.params;
+    j[ttnn::graph::kArguments] = data.arguments;
     j[ttnn::graph::kConnections] = data.connections;
     return j;
 }
@@ -100,7 +183,45 @@ GraphProcessor::GraphProcessor(RunMode mode) : run_mode(mode) {
     end_function_any_map[typeid(std::reference_wrapper<Tensor>)] = [ptr = this](const std::any& val) mutable {
         ptr->end_function_process_tensor(val);
     };
+
+    AnyToString::register_type<std::reference_wrapper<bool>>();
+    AnyToString::register_type<std::reference_wrapper<bool const>>();
+    AnyToString::register_type<std::reference_wrapper<int>>();
+    AnyToString::register_type<std::reference_wrapper<int const>>();
+    AnyToString::register_type<std::reference_wrapper<long>>();
+    AnyToString::register_type<std::reference_wrapper<long const>>();
+    AnyToString::register_type<std::reference_wrapper<std::optional<float> const>>();
+    AnyToString::register_type<std::reference_wrapper<std::optional<tt::tt_metal::DataType> const>>();
+    AnyToString::register_type<std::reference_wrapper<std::optional<tt::tt_metal::DataType>>>();
+    AnyToString::register_type<std::reference_wrapper<std::optional<tt::tt_metal::DataType const>>>();
+    AnyToString::register_type<std::reference_wrapper<std::optional<tt::tt_metal::Layout> const>>();
+    AnyToString::register_type<std::reference_wrapper<std::optional<tt::tt_metal::Layout>>>();
+    AnyToString::register_type<std::reference_wrapper<std::optional<tt::tt_metal::Layout const>>>();
+    AnyToString::register_type<std::reference_wrapper<std::optional<tt::tt_metal::MemoryConfig> const>>();
+    AnyToString::register_type<std::reference_wrapper<std::optional<tt::tt_metal::MemoryConfig>>>();
+    AnyToString::register_type<std::reference_wrapper<std::optional<tt::tt_metal::Shape>>>();
+    AnyToString::register_type<std::reference_wrapper<std::optional<tt::tt_metal::Shape const>>>();
+    AnyToString::register_type<std::reference_wrapper<std::optional<tt::tt_metal::Tensor> const>>();
+    AnyToString::register_type<std::reference_wrapper<std::optional<tt::tt_metal::Tile> const>>();
+    AnyToString::register_type<std::reference_wrapper<std::optional<tt::tt_metal::Tile>>>();
+    AnyToString::register_type<std::reference_wrapper<std::optional<tt::tt_metal::Tile const>>>();
+    AnyToString::register_type<std::reference_wrapper<tt::stl::SmallVector<long, 8ul>>>();
+    AnyToString::register_type<std::reference_wrapper<tt::stl::SmallVector<long, 8ul> const>>();
+    AnyToString::register_type<std::reference_wrapper<tt::stl::SmallVector<unsigned int, 8ul>>>();
+    AnyToString::register_type<std::reference_wrapper<tt::stl::StrongType<unsigned char, ttnn::QueueIdTag>>>();
+    AnyToString::register_type<std::reference_wrapper<tt::tt_metal::DataType>>();
+    AnyToString::register_type<std::reference_wrapper<tt::tt_metal::DataType const>>();
+    AnyToString::register_type<std::reference_wrapper<tt::tt_metal::Layout>>();
+    AnyToString::register_type<std::reference_wrapper<tt::tt_metal::Layout const>>();
+    AnyToString::register_type<std::reference_wrapper<tt::tt_metal::MemoryConfig>>();
+    AnyToString::register_type<std::reference_wrapper<tt::tt_metal::MemoryConfig const>>();
+    AnyToString::register_type<std::reference_wrapper<tt::tt_metal::Shape>>();
+    AnyToString::register_type<std::reference_wrapper<tt::tt_metal::Shape const>>();
+    AnyToString::register_type<std::reference_wrapper<tt::tt_metal::Tensor const>>();
+    AnyToString::register_type<std::reference_wrapper<tt::tt_metal::Tile>>();
+    AnyToString::register_type<std::reference_wrapper<tt::tt_metal::Tile const>>();
 }
+
 void GraphProcessor::track_allocate(const tt::tt_metal::Buffer* buffer) {
     const std::lock_guard<std::mutex> lock(mutex);
     auto buffer_id = add_buffer(buffer);
@@ -117,7 +238,7 @@ void GraphProcessor::track_allocate(const tt::tt_metal::Buffer* buffer) {
         {kDeviceId, std::to_string(buffer->device()->id())}};
     {
         graph.push_back(
-            Vertex{.counter = counter, .node_type = kNodeBufferAllocate, .params = params, .connections = {buffer_id}});
+            Vertex{.counter = counter, .node_type = kNodeBufferAllocate, .params = params, .arguments = {}, .connections = {buffer_id}});
         graph[current_op_id.top()].connections.push_back(counter);
     }
 }
@@ -135,7 +256,7 @@ void GraphProcessor::track_deallocate(tt::tt_metal::Buffer* buffer) {
         {kDeviceId, std::to_string(buffer->device()->id())}};
     {
         graph.push_back(Vertex{
-            .counter = counter, .node_type = kNodeBufferDeallocate, .params = params, .connections = {buffer_id}});
+            .counter = counter, .node_type = kNodeBufferDeallocate, .params = params, .arguments = {}, .connections = {buffer_id}});
         graph[current_op_id.top()].connections.push_back(counter);
     }
 }
@@ -170,6 +291,7 @@ void GraphProcessor::track_deallocate_cb(const tt::tt_metal::IDevice* device) {
             .counter = counter,
             .node_type = kNodeCBDeallocateAll,
             .params = {{kDeviceId, std::to_string(device->id())}},
+            .arguments = {},
             .connections = {current_op_id.top()}});
         graph[current_op_id.top()].connections.push_back(counter);
     }
@@ -198,12 +320,17 @@ void GraphProcessor::track_function_start(std::string_view function_name, std::s
         {kInputs, std::to_string(input_parameters.size())},
         {kName, std::string(function_name)},
     };
+
+    auto serialized_arguments = AnyToString::to_string(input_parameters);
+    TT_ASSERT(serialized_arguments.size());
+
     auto counter = graph.size();
     {
         graph.push_back(Vertex{
             .counter = counter,
             .node_type = kNodeFunctionStart,
             .params = params,
+            .arguments = serialized_arguments,
             .connections = {/*current_op_id.top()*/}});
         if (last_finished_op_id != -1) {
             graph[last_finished_op_id].connections.push_back(counter);
@@ -232,7 +359,7 @@ void GraphProcessor::track_function_end_impl() {
     auto counter = graph.size();
     {
         graph.push_back(
-            Vertex{.counter = counter, .node_type = kNodeFunctionEnd, .params = {{kName, name}}, .connections = {}});
+            Vertex{.counter = counter, .node_type = kNodeFunctionEnd, .params = {{kName, name}}, .arguments = {}, .connections = {}});
         graph[current_op_id.top()].connections.push_back(counter);
     }
     last_finished_op_id = counter;
@@ -291,7 +418,7 @@ int GraphProcessor::add_tensor(const Tensor& t) {
 
     if (tensor_id_to_counter.count(tensor_id) == 0) {
         graph.push_back(
-            Vertex{.counter = tensor_counter, .node_type = kNodeTensor, .params = params, .connections = {}});
+            Vertex{.counter = tensor_counter, .node_type = kNodeTensor, .params = params, .arguments = {}, .connections = {}});
         tensor_id_to_counter[tensor_id] = tensor_counter;
     }
 
@@ -318,7 +445,7 @@ int GraphProcessor::add_buffer(const tt::tt_metal::Buffer* buffer) {
             {kLayout, tensorMemoryLayoutToString(buffer->buffer_layout())},
             {kDeviceId, std::to_string(buffer->device()->id())}};
 
-        graph.push_back(Vertex{.counter = counter, .node_type = kNodeBuffer, .params = params, .connections = {}});
+        graph.push_back(Vertex{.counter = counter, .node_type = kNodeBuffer, .params = params, .arguments = {}, .connections = {}});
         graph[current_op_id.top()].connections.push_back(counter);
         buffer_id_to_counter[buffer_id] = counter;
         return counter;
@@ -427,7 +554,7 @@ void GraphProcessor::begin_capture(RunMode mode) {
     graph.clear();
     buffer_id_to_counter.clear();
     tensor_id_to_counter.clear();
-    graph.push_back(Vertex{.counter = 0, .node_type = kNodeCaptureStart, .params = {}, .connections = {}});
+    graph.push_back(Vertex{.counter = 0, .node_type = kNodeCaptureStart, .params = {}, .arguments = {}, .connections = {}});
 
     if (!tt::tt_metal::GraphTracker::instance().get_hook()) {
         hook = std::make_shared<ProcessorHooks>();
@@ -439,7 +566,7 @@ void GraphProcessor::begin_capture(RunMode mode) {
 nlohmann::json GraphProcessor::end_capture() {
     const std::lock_guard<std::mutex> lock(mutex);
     int counter = graph.size();
-    graph.push_back(Vertex{.counter = counter, .node_type = kNodeCaptureEnd, .params = {}, .connections = {}});
+    graph.push_back(Vertex{.counter = counter, .node_type = kNodeCaptureEnd, .params = {}, .arguments = {}, .connections = {}});
     if (last_finished_op_id != -1) {
         graph[last_finished_op_id].connections.push_back(counter);
     } else {
