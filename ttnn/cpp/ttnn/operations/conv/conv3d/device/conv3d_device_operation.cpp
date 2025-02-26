@@ -71,7 +71,6 @@ void Conv3dOp::validate(
         device_grid.x,
         device_grid.y);
 
-    // Validate C_in_block if specified
     uint32_t C_in = input_tensor_a.shape()[4];
     if (config.C_in_block > 0) {
         TT_FATAL(
@@ -81,6 +80,16 @@ void Conv3dOp::validate(
             config.C_in_block);
         TT_FATAL(config.C_in_block % 32 == 0, "C_in_block ({}) must be a multiple of 32", config.C_in_block);
     }
+
+    // Verify number of C_in_blocks is <= the number of cores
+    uint32_t C_in_block = (config.C_in_block > 0) ? config.C_in_block : C_in;
+    uint32_t C_in_blocks = C_in / C_in_block;
+    uint32_t total_cores = config.compute_with_storage_grid_size.x * config.compute_with_storage_grid_size.y;
+    TT_FATAL(
+        C_in_blocks <= total_cores,
+        "Number of C_in blocks ({}) must be <= the number of cores ({})",
+        C_in_blocks,
+        total_cores);
 }
 
 std::vector<TensorSpec> Conv3dOp::compute_output_specs(const std::vector<Tensor>& input_tensors) const {

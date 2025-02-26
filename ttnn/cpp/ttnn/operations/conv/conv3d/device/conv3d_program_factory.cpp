@@ -148,7 +148,7 @@ operation::ProgramWithCallbacks conv3d_factory(
             cb_reduction_tiled_id, program, core_grid, tile_size, matmul_M_t * matmul_N_t, data_format);
 
         auto [_____, cb_worker_ack_back_handle] =
-            tt::tt_metal::create_cb(cb_worker_ack_back_id, program, core_grid, 1, 1, data_format);
+            tt::tt_metal::create_cb(cb_worker_ack_back_id, program, core_grid, tile_size, 1, data_format);
     }
 
     if (use_bias) {
@@ -406,27 +406,6 @@ operation::ProgramWithCallbacks conv3d_factory(
         // Calculate reduction group ID (same as output_idx)
         uint32_t reduction_group_id = output_idx;
 
-        // Add this core to its reduction group
-        reduction_groups[reduction_group_id].push_back(core_id);
-
-        // Mark as reducer if this is the first core in the C_in dimension for this output block
-        bool is_reducer = (c_in_idx == 0);
-
-        // Track reducer and worker cores
-        if (is_reducer) {
-            reducer_core_ids[reduction_group_id] = core_id;
-            // Get physical coordinates for reducer core
-            auto reducer_core_physical = device->worker_core_from_logical_core(core);
-            reducer_core_physical_xs[reduction_group_id] = (uint32_t)reducer_core_physical.x;
-            reducer_core_physical_ys[reduction_group_id] = (uint32_t)reducer_core_physical.y;
-        } else {
-            worker_core_ids[reduction_group_id].push_back(core_id);
-            // Get physical coordinates for worker core
-            auto worker_core_physical = device->worker_core_from_logical_core(core);
-            worker_core_physical_xs[reduction_group_id].push_back((uint32_t)worker_core_physical.x);
-            worker_core_physical_ys[reduction_group_id].push_back((uint32_t)worker_core_physical.y);
-        }
-
         // Calculate block ranges
         uint32_t c_in_block_start = c_in_idx * c_in_per_core;
         uint32_t c_in_block_end = std::min(c_in_block_start + c_in_per_core, C_in_num_blocks);
@@ -453,9 +432,36 @@ operation::ProgramWithCallbacks conv3d_factory(
         uint32_t w_out_start = w_out_block_start * config.W_out_block;
         uint32_t w_out_end = std::min(w_out_block_end * config.W_out_block, W_out);
 
+        // Check if this core has actual work to do
+        bool has_work = (c_in_block_end > c_in_block_start) && (c_out_block_end > c_out_block_start) &&
+                        (t_out_end > t_out_start) && (h_out_end > h_out_start) && (w_out_end > w_out_start);
+
+        bool is_reducer = has_work && c_in_idx == 0;
+
+        // Only include in reduction group if there's actual work to do
+        if (has_work) {
+            // Add this core to its reduction group
+            reduction_groups[reduction_group_id].push_back(core_id);
+
+            // Track reducer and worker cores
+            if (is_reducer) {
+                reducer_core_ids[reduction_group_id] = core_id;
+                // Get physical coordinates for reducer core
+                auto reducer_core_physical = device->worker_core_from_logical_core(core);
+                reducer_core_physical_xs[reduction_group_id] = (uint32_t)reducer_core_physical.x;
+                reducer_core_physical_ys[reduction_group_id] = (uint32_t)reducer_core_physical.y;
+            } else {
+                worker_core_ids[reduction_group_id].push_back(core_id);
+                // Get physical coordinates for worker core
+                auto worker_core_physical = device->worker_core_from_logical_core(core);
+                worker_core_physical_xs[reduction_group_id].push_back((uint32_t)worker_core_physical.x);
+                worker_core_physical_ys[reduction_group_id].push_back((uint32_t)worker_core_physical.y);
+            }
+        }
+
         log_debug(
             "Core {},{}: C_in=[{},{}), C_out=[{},{}), T_out=[{},{}), H_out=[{},{}), W_out=[{},{}), "
-            "ReductionGroup={}, C_in_idx={}, IsReducer={}",
+            "ReductionGroup={}, C_in_idx={}, HasWork={}, IsReducer={}",
             core.x,
             core.y,
             c_in_block_start,
@@ -470,6 +476,7 @@ operation::ProgramWithCallbacks conv3d_factory(
             w_out_end,
             reduction_group_id,
             c_in_idx,
+            has_work,
             is_reducer);
 
         // Store runtime args for later use
@@ -554,7 +561,7 @@ operation::ProgramWithCallbacks conv3d_factory(
         auto& writer_args = writer_args_per_core[core_id];
 
         // Get is_reducer value from the stored arguments
-        bool is_reducer = (reader_args[13] == 1);
+        bool is_reducer = (writer_args[13] == 1);
 
         // Add reducer core coordinates
         if (reducer_core_ids[reduction_group_id] != UINT32_MAX) {

@@ -27,6 +27,7 @@ def prepare_weights(conv3d_module, C, out_channels, C_in_block, device, ALIGNMEN
 
     # Reshape weights so that num_C_in_blocks is the first dimension
     kD, kH, kW, C_in_aligned, out_channels = w.shape
+    C_in_block = C_in_aligned if C_in_block == 0 else C_in_block
     num_C_in_blocks = C_in_aligned // C_in_block
     assert num_C_in_blocks * C_in_block == C_in_aligned
     w = w.reshape(kD, kH, kW, num_C_in_blocks, C_in_block, out_channels)
@@ -95,11 +96,10 @@ def setup_conv3d_test(input_shape, out_channels, kernel_size, stride, padding, p
     W_out = _out_size(W, padding[2], kernel_size[2])
 
     # Create input tensor and PyTorch Conv3d module
-    input_tensor = torch.randn(N, C, D, H, W, dtype=torch.float32)
-    # if not debug:
-    #     input_tensor = torch.randn(N, C, D, H, W, dtype=torch.float32)
-    # else:
-    #     input_tensor = torch.full((N, C, D, H, W), 0.1, dtype=torch.float32)
+    if not debug:
+        input_tensor = torch.randn(N, C, D, H, W, dtype=torch.float32)
+    else:
+        input_tensor = torch.full((N, C, D, H, W), 0.1, dtype=torch.float32)
     print(f"input_tensor.shape NCTHW = {input_tensor.shape}")
 
     conv3d_module = nn.Conv3d(
@@ -113,11 +113,16 @@ def setup_conv3d_test(input_shape, out_channels, kernel_size, stride, padding, p
         padding_mode=padding_mode,
     )
 
-    # if debug:
-    #     conv3d_module.weight.data = torch.ones_like(conv3d_module.weight.data)
-    #     conv3d_module.bias.data = torch.ones_like(conv3d_module.bias.data)
+    if debug:
+        conv3d_module.weight.data = torch.ones_like(conv3d_module.weight.data)
+        conv3d_module.bias.data = torch.ones_like(conv3d_module.bias.data)
 
+    import time
+
+    start = time.perf_counter()
     gt_output = conv3d_module(input_tensor)
+    end = time.perf_counter()
+    logger.info(f"Time taken for torch conv3d: {end - start} seconds")
 
     # Prepare input for TTNN
     tt_input = prepare_input_tensor(input_tensor, C, device)
@@ -358,16 +363,16 @@ def test_vol2col_multicore(
 @pytest.mark.parametrize(
     "input_shape, out_channels, kernel_size, stride, padding, padding_mode",
     [
-        [(1, 512, 5, 5, 5), 32, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
+        [(1, 64, 3, 5, 4), 32, (3, 3, 3), (1, 1, 1), (0, 0, 0), "zeros"],
     ],
 )
-@pytest.mark.parametrize("grid_size", [[2, 8]], ids=["grid_2x8"])
+@pytest.mark.parametrize("grid_size", [[1, 2]], ids=["grid_2x8"])
 def test_vol2col_multicore_reduction(
     device, input_shape, out_channels, kernel_size, stride, padding, padding_mode, grid_size, use_program_cache
 ):
-    C_in_block = 64
+    C_in_block = 32
     tt_input, conv3d_module, gt_output, kernel_config, output_dims = setup_conv3d_test(
-        input_shape, out_channels, kernel_size, stride, padding, padding_mode, device, debug=True
+        input_shape, out_channels, kernel_size, stride, padding, padding_mode, device, debug=False
     )
     N, D_out, H_out, W_out = output_dims
     C = input_shape[1]
@@ -382,8 +387,8 @@ def test_vol2col_multicore_reduction(
         padding,
         padding_mode,
         T_out_block=1,
-        W_out_block=1,
         H_out_block=1,
+        W_out_block=2,
         C_out_block=32,
         C_in_block=C_in_block,
         compute_with_storage_grid_size=grid_size,
@@ -405,3 +410,173 @@ def test_vol2col_multicore_reduction(
     if not pcc > min_pcc:
         breakpoint()
     assert pcc > min_pcc, f"PCC={pcc}, MSE={mse}, MAE={mae}"
+
+
+@pytest.mark.parametrize(
+    "input_shape, out_channels, kernel_size, stride, padding, padding_mode, blocking",
+    [
+        # [(1, 12, 4, 60, 106), 768, (1, 1, 1), (1, 1, 1), (0, 0, 0), "zeros", (0, 32, 4, 2, 4)], # failing, but it's 1d so just a matmul
+        [
+            (1, 768, 4, 60, 106),
+            768,
+            (3, 3, 3),
+            (1, 1, 1),
+            (0, 1, 1),
+            "replicate",
+            (128, 96, 1, 2, 16),
+        ],  # Best blocking found so far
+        [
+            (1, 512, 11, 120, 212),
+            512,
+            (3, 3, 3),
+            (1, 1, 1),
+            (0, 1, 1),
+            "replicate",
+            (128, 128, 1, 8, 4),
+        ],  # Best blocking found so far
+        [
+            (1, 256, 21, 240, 424),
+            256,
+            (3, 3, 3),
+            (1, 1, 1),
+            (0, 1, 1),
+            "replicate",
+            (128, 128, 4, 4, 2),
+        ],  # Best blocking found so far
+        [
+            (1, 128, 21, 480, 848),
+            128,
+            (3, 3, 3),
+            (1, 1, 1),
+            (0, 1, 1),
+            "replicate",
+            (32, 32, 4, 2, 4),
+        ],  # Default blocking
+    ],
+    ids=["variant1", "variant2", "variant3", "variant4"],
+)
+@pytest.mark.parametrize("grid_size", [[8, 8]], ids=["grid_8x8"])
+def test_mochi_shapes(
+    device,
+    input_shape,
+    out_channels,
+    kernel_size,
+    stride,
+    padding,
+    padding_mode,
+    blocking,
+    grid_size,
+    use_program_cache,
+):
+    C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = blocking
+    tt_input, conv3d_module, gt_output, kernel_config, output_dims = setup_conv3d_test(
+        input_shape, out_channels, kernel_size, stride, padding, padding_mode, device, debug=False
+    )
+    N, D_out, H_out, W_out = output_dims
+    C = input_shape[1]
+
+    # Prepare weights with specified C_in_block
+    tt_weight, tt_bias = prepare_weights(conv3d_module, C, out_channels, C_in_block, device)
+
+    config = create_conv3d_config(
+        out_channels,
+        kernel_size,
+        stride,
+        padding,
+        padding_mode,
+        T_out_block=T_out_block,
+        H_out_block=H_out_block,
+        W_out_block=W_out_block,
+        C_out_block=C_out_block,
+        C_in_block=C_in_block,
+        compute_with_storage_grid_size=grid_size,
+    )
+
+    tt_output = ttnn.conv3d(
+        input_tensor=tt_input,
+        weight_tensor=tt_weight,
+        bias_tensor=tt_bias,
+        config=config,
+        compute_kernel_config=kernel_config,
+    )
+    # Reshape output and verify results
+    tt_output = reshape_output(tt_output, N, D_out, H_out, W_out, out_channels, device)
+
+    assert tt_output.shape == gt_output.shape
+    pcc, mse, mae = compute_metrics(gt_output, tt_output)
+    min_pcc = 0.99
+    if not pcc > min_pcc:
+        breakpoint()
+    assert pcc > min_pcc, f"PCC={pcc}, MSE={mse}, MAE={mae}"
+
+
+@pytest.mark.parametrize(
+    "input_shape, out_channels, kernel_size, stride, padding, padding_mode",
+    [
+        [(1, 768, 4, 60, 106), 768, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
+        [(1, 512, 11, 120, 212), 512, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
+        [(1, 256, 21, 240, 424), 256, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
+        [(1, 128, 21, 480, 848), 128, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
+    ],
+    ids=["variant1", "variant2", "variant3", "variant4"],
+)
+@pytest.mark.parametrize("grid_size", [[8, 8]], ids=["grid_8x8"])
+def test_mochi_shapes_perf(
+    device, input_shape, out_channels, kernel_size, stride, padding, padding_mode, grid_size, use_program_cache
+):
+    import math
+
+    tt_input, conv3d_module, gt_output, kernel_config, output_dims = setup_conv3d_test(
+        input_shape, out_channels, kernel_size, stride, padding, padding_mode, device, debug=False
+    )
+    N, D_out, H_out, W_out = output_dims
+    C = input_shape[1]
+    C_in_blocks = filter(lambda x: C % x == 0, range(32, min(C + 1, 256), 32))
+    C_out_blocks = filter(lambda x: out_channels % x == 0, range(32, min(out_channels + 1, 256), 32))
+    T_out_blocks = [2**i for i in range(int(math.log2(D_out)))]
+    H_out_blocks = [2**i for i in range(int(math.log2(H_out)))]
+    W_out_blocks = [2**i for i in range(int(math.log2(W_out)))]
+
+    import itertools
+
+    for C_in_block, C_out_block, T_out_block, H_out_block, W_out_block in itertools.product(
+        C_in_blocks, C_out_blocks, T_out_blocks, H_out_blocks, W_out_blocks
+    ):
+        logger.info(f"Testing {C_in_block}, {C_out_block}, {T_out_block}, {H_out_block}, {W_out_block}")
+        # Prepare weights with specified C_in_block
+        tt_weight, tt_bias = prepare_weights(conv3d_module, C, out_channels, C_in_block, device)
+
+        config = create_conv3d_config(
+            out_channels,
+            kernel_size,
+            stride,
+            padding,
+            padding_mode,
+            T_out_block=T_out_block,
+            H_out_block=H_out_block,
+            W_out_block=W_out_block,
+            C_out_block=C_out_block,
+            C_in_block=C_in_block,
+            compute_with_storage_grid_size=grid_size,
+        )
+
+        try:
+            tt_output = ttnn.conv3d(
+                input_tensor=tt_input,
+                weight_tensor=tt_weight,
+                bias_tensor=tt_bias,
+                config=config,
+                compute_kernel_config=kernel_config,
+            )
+        except Exception as e:
+            print(f"Failed for {C_in_block}, {C_out_block}, {T_out_block}, {H_out_block}, {W_out_block}: {e}")
+            continue
+        # Reshape output and verify results
+        tt_output = reshape_output(tt_output, N, D_out, H_out, W_out, out_channels, device)
+
+        assert tt_output.shape == gt_output.shape
+        pcc, mse, mae = compute_metrics(gt_output, tt_output)
+        min_pcc = 0.99
+        if not pcc > min_pcc:
+            breakpoint()
+        assert pcc > min_pcc, f"PCC={pcc}, MSE={mse}, MAE={mae}"

@@ -93,9 +93,7 @@ void kernel_main() {
             // Read weights and bias for this block
             cb_reserve_back(cb_weight_tiled, weight_tiles);
             uint32_t weight_write_ptr = get_write_ptr(cb_weight_tiled);
-            DPRINT << "c_in_block: " << c_in_block << ", c_out_block: " << c_out_block << ENDL();
-            DPRINT << "c_in_offset_t: " << c_in_offset_t << ", matmul_K_t: " << matmul_K_t << ENDL();
-            DPRINT << "c_out_offset_t: " << c_out_offset_t << ", matmul_N_t: " << matmul_N_t << ENDL();
+
             for (uint32_t row = c_in_offset_t; row < c_in_offset_t + matmul_K_t; row++) {
                 for (uint32_t col = c_out_offset_t; col < c_out_offset_t + matmul_N_t; col++) {
                     uint32_t weight_idx = row * C_out_t + col;
@@ -106,6 +104,7 @@ void kernel_main() {
             noc_async_read_barrier();
             cb_push_back(cb_weight_tiled, weight_tiles);
 
+            // TODO: Only do bias if reducer core
             if constexpr (use_bias) {
                 cb_reserve_back(cb_bias_tiled, matmul_N_t);
                 uint32_t bias_write_ptr = get_write_ptr(cb_bias_tiled);

@@ -9,6 +9,7 @@
 #include "compute_kernel_api/tilize.h"
 #include "compute_kernel_api/matmul.h"
 #include "compute_kernel_api/bcast.h"
+#include "compute_kernel_api/eltwise_binary.h"
 
 #include "debug/dprint_pages.h"
 
@@ -107,10 +108,10 @@ void add_block_inplace(uint32_t in0_cb, uint32_t in1_cb) {
 
     constexpr uint32_t dst_tiles = 1;
 
-    add_bcast_rows_init_short(in0_cb, in1_cb);
+    add_tiles_init(in0_cb, in1_cb);
     for (uint32_t i = 0; i < num_tiles; ++i) {
         tile_regs_acquire();
-        add_tiles_bcast_rows(in0_cb, in1_cb, 0, 0, 0);
+        add_tiles(in0_cb, in1_cb, 0, 0, 0);
         tile_regs_commit();
         cb_pop_front(in0_cb, dst_tiles);
         cb_pop_front(in1_cb, dst_tiles);
@@ -183,6 +184,7 @@ void MAIN {
             // Wait for new weights and bias
             cb_wait_front(cb_weight_tiled, weight_tiles);
 
+            // TODO: ONly do bias if reducer core
             if constexpr (use_bias) {
                 cb_wait_front(cb_bias_tiled, matmul_N_t);
             }
@@ -232,11 +234,6 @@ void MAIN {
                             false /* transpose */);
                         cb_pop_front(cb_vol2col_tiled, patch_tiles);
 
-                        // Apply bias
-                        if constexpr (use_bias) {
-                            add_bias_inplace<matmul_M_t, matmul_N_t>(cb_matmul_interm_tiled, cb_bias_tiled);
-                        }
-
                         // Stall on matmul/bias to finish
                         cb_wait_front(cb_matmul_interm_tiled, output_tiles);
 
@@ -266,6 +263,11 @@ void MAIN {
 
                                 // By freeing the reduction buffer, we signal to the writer that we have used the
                                 // partial results. This is done inside add_block_inplace.
+                            }
+
+                            // Apply bias only if we are a reducer, and do it after reduction
+                            if constexpr (use_bias) {
+                                add_bias_inplace<matmul_M_t, matmul_N_t>(cb_matmul_interm_tiled, cb_bias_tiled);
                             }
 
                             // After reduction (if any), untilize result
