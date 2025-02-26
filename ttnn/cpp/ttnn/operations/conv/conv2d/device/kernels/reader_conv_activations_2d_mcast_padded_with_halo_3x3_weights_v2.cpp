@@ -59,7 +59,7 @@ void read_channels(
     }
 }
 
-#define DILATION_W get_compile_time_arg_val(4)
+constexpr uint32_t DILATION_W = get_compile_time_arg_val(4);
 void kernel_main() {
     constexpr bool act_in_dram = get_compile_time_arg_val(0) == 1;
     constexpr uint32_t stride_h = get_compile_time_arg_val(1);
