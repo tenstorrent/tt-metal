@@ -39,7 +39,7 @@ inline Tensor convert_to_cpp_supported_dtype(const Tensor& input_tensor) {
                     "Tensor MultiDeviceHostStorage cannot be converted to torch directly. Use composer(..) "
                     "functionality.");
             } else {
-                raise_unsupported_storage<T>();
+                tt::tt_metal::raise_unsupported_storage<T>();
             }
         },
         input_tensor.get_storage());

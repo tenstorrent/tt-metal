@@ -19,6 +19,9 @@ namespace core {
 void py_module_types(py::module& module) { py::class_<ttnn::Config>(module, "Config"); }
 
 void py_module(py::module& module) {
+    using tt::tt_metal::LightMetalBeginCapture;
+    using tt::tt_metal::LightMetalBinary;
+    using tt::tt_metal::LightMetalEndCapture;
     auto py_config = static_cast<py::class_<ttnn::Config>>(module.attr("Config"));
     py_config.def(py::init<const ttnn::Config&>()).def("__repr__", [](const ttnn::Config& config) {
         return fmt::format("{}", config);

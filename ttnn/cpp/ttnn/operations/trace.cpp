@@ -11,6 +11,8 @@
 
 namespace ttnn::operations::trace {
 
+using namespace tt::tt_metal;
+
 uint32_t begin_trace_capture(IDevice* device, QueueId cq_id) {
     ZoneScoped;
     uint32_t trace_id = Trace::next_id();

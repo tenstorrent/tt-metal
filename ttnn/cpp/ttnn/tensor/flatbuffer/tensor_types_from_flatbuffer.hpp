@@ -21,6 +21,6 @@ CoreRangeSet from_flatbuffer(const flatbuffer::CoreRangeSet* fb_coord);
 tt::tt_metal::ShardSpec from_flatbuffer(const flatbuffer::ShardSpec* spec);
 tt::tt_metal::MemoryConfig from_flatbuffer(const flatbuffer::MemoryConfig* config);
 tt::tt_metal::TensorLayout from_flatbuffer(const flatbuffer::TensorLayout* layout);
-TensorSpec from_flatbuffer(const flatbuffer::TensorSpec* spec);
+tt::tt_metal::TensorSpec from_flatbuffer(const flatbuffer::TensorSpec* spec);
 
 }  // namespace ttnn

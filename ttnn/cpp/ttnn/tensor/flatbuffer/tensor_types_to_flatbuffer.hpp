@@ -32,6 +32,6 @@ flatbuffers::Offset<flatbuffer::MemoryConfig> to_flatbuffer(
 flatbuffers::Offset<flatbuffer::TensorLayout> to_flatbuffer(
     const tt::tt_metal::TensorLayout& layout, flatbuffers::FlatBufferBuilder& builder);
 flatbuffers::Offset<flatbuffer::TensorSpec> to_flatbuffer(
-    const TensorSpec& spec, flatbuffers::FlatBufferBuilder& builder);
+    const tt::tt_metal::TensorSpec& spec, flatbuffers::FlatBufferBuilder& builder);
 
 }  // namespace ttnn

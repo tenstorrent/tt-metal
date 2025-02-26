@@ -141,7 +141,7 @@ flatbuffers::Offset<flatbuffer::TensorLayout> to_flatbuffer(
 }
 
 flatbuffers::Offset<flatbuffer::TensorSpec> to_flatbuffer(
-    const TensorSpec& spec, flatbuffers::FlatBufferBuilder& builder) {
+    const tt::tt_metal::TensorSpec& spec, flatbuffers::FlatBufferBuilder& builder) {
     const auto& shape = spec.logical_shape();
     auto flat_shape = builder.CreateVector(shape.view().data(), shape.rank());
     return flatbuffer::CreateTensorSpec(builder, flat_shape, to_flatbuffer(spec.tensor_layout(), builder));
