@@ -35,6 +35,27 @@ void signal_handler(int signum) {
     exit(signum);
 }
 
+using Model = std::variant<
+    std::shared_ptr<ttml::models::gpt2::Transformer>,
+    std::shared_ptr<ttml::models::distributed::gpt2::DistributedTransformer>>;
+
+void model_to_eval(Model &model) {
+    std::visit([](auto &model) { model->eval(); }, model);
+}
+
+void model_to_train(Model &model) {
+    std::visit([](auto &model) { model->train(); }, model);
+}
+
+ttml::autograd::TensorPtr run_model(
+    Model &model, const ttml::autograd::TensorPtr &data, const ttml::autograd::TensorPtr &mask) {
+    return std::visit([&data, &mask](auto &model) { return (*model)(data, mask); }, model);
+}
+
+ttml::serialization::NamedParameters get_model_parameters(Model &model) {
+    return std::visit([](auto &model) { return model->parameters(); }, model);
+}
+
 using ttml::autograd::TensorPtr;
 
 using DatasetSample = std::pair<std::span<const uint32_t>, std::span<const uint32_t>>;
@@ -179,19 +200,20 @@ inline uint32_t sample_with_strategy(
     return static_cast<uint32_t>(vocab_size - 1);
 }
 
-template <typename Model, typename Tokenizer>
+template <typename Tokenizer>
 void generate(
-    const std::shared_ptr<Model> &model,
+    Model &model,
     const Tokenizer &tokenizer,
     uint32_t max_sequence_length,
     uint32_t num_heads,
     uint32_t tokens_to_generate = 1024U,
+    bool enable_tp = false,
     // Additional sampling params:
     float temperature = 1.0F,
     float repetition_penalty = 1.0F,
     int top_k = -1,
     float top_p = 1.0F) {
-    model->eval();  // set model to eval mode if needed
+    model_to_eval(model);
 
     std::string prompt;
     fmt::print("Enter a prompt: ");
@@ -208,21 +230,20 @@ void generate(
     auto original_vocab_size = tokenizer.get_vocab_size();
     auto *device = &ttml::autograd::ctx().get_device();
     auto num_devices = static_cast<uint32_t>(device->num_devices());
-    // this is workaround for multi-device case, we need to have vocab size divisible by 32 per device
-    auto vocab_size = round_up_to_tile(original_vocab_size, 32U * num_devices);
+    // this is workaround for tensor parallel case, we need to have vocab size divisible by 32 per device
+    auto vocab_size = round_up_to_tile(original_vocab_size, (enable_tp ? num_devices : 1U) * 32U);
 
     // Build mask (causal) for attention
     std::vector<float> mask;
-    mask.reserve(static_cast<size_t>(max_sequence_length * max_sequence_length * num_heads));
-    for (uint32_t head = 0; head < num_heads; ++head) {
-        for (uint32_t i = 0; i < max_sequence_length; ++i) {
-            for (uint32_t j = 0; j < max_sequence_length; ++j) {
-                mask.push_back(i >= j ? 1.0F : 0.0F);
-            }
+    mask.reserve(static_cast<size_t>(max_sequence_length * max_sequence_length));
+    for (uint32_t i = 0; i < max_sequence_length; ++i) {
+        for (uint32_t j = 0; j < max_sequence_length; ++j) {
+            mask.push_back(i >= j ? 1.0F : 0.0F);
         }
     }
+
     auto mask_tensor = ttml::autograd::create_tensor(ttml::core::from_vector(
-        mask, ttml::core::create_shape({1, num_heads, max_sequence_length, max_sequence_length}), device));
+        mask, ttml::core::create_shape({1, 1, max_sequence_length, max_sequence_length}), device));
 
     // Prepare a padded buffer for the prompt
     std::vector<uint32_t> prompt_tokens_padded(max_sequence_length, pad_token_id);
@@ -255,7 +276,7 @@ void generate(
 
         // Forward pass
         // 'output' shape is presumably [batch=1, 1, seq_len, vocab_size] or something similar
-        auto output = (*model)(prompt_tensor, mask_tensor);
+        auto output = run_model(model, prompt_tensor, mask_tensor);
 
         // Convert last position's logits to a std::vector
         auto output_vector = ttml::core::to_vector(output->get_value());
@@ -291,7 +312,7 @@ void generate(
     }
 
     fmt::print("\n*******************\n");
-    model->train();  // return model to train mode if needed
+    model_to_train(model);  // return model to train mode if needed
 }
 
 struct EvalConfig {
@@ -405,6 +426,16 @@ int main(int argc, char **argv) {
     auto yaml_config = YAML::LoadFile(config_name);
     TrainingConfig config = parse_config(yaml_config);
     EvalConfig eval_config = parse_eval_config(yaml_config);
+
+    if (enable_tp) {
+        if (!config.model_path.empty()) {
+            throw std::runtime_error("Save and load is not supported with Tensor Parallel model");
+        }
+
+        if (is_eval) {
+            throw std::runtime_error("Evaluation is not supported with Tensor Parallel model");
+        }
+    }
 
     if (enable_wandb) {
         wandbcpp::init({.project = config.project_name, .name = generate_run_name(config, add_time_to_name)});
@@ -548,13 +579,16 @@ int main(int argc, char **argv) {
 
     fmt::print("Overriding vocab size to be divisible by 32\n");
     auto num_devices = static_cast<uint32_t>(device->num_devices());
-    // this is workaround for multi-device case, we need to have vocab size divisible by 32 per device
+    // this is workaround for tensor parallel case, we need to have vocab size divisible by 32 per device
     config.transformer_config.vocab_size =
         round_up_to_tile(tokenizer->get_vocab_size(), (enable_tp ? num_devices : 1U) * 32U);
-    // hardcode for debugging
-    // config.transformer_config.vocab_size = 128U;
-    auto model = ttml::models::gpt2::create(config.transformer_config);
-    // auto model = ttml::models::distributed::gpt2::create(config.transformer_config);
+
+    Model model;
+    if (enable_tp) {
+        model = ttml::models::distributed::gpt2::create(config.transformer_config);
+    } else {
+        model = ttml::models::gpt2::create(config.transformer_config);
+    }
 
     auto adamw_params = ttml::optimizers::AdamWConfig();
     adamw_params.lr = config.learning_rate;
@@ -567,9 +601,9 @@ int main(int argc, char **argv) {
     auto select_optimizer = [&model,
                              &adamw_params](bool use_moreh_adamw) -> std::unique_ptr<ttml::optimizers::OptimizerBase> {
         if (use_moreh_adamw) {
-            return std::make_unique<ttml::optimizers::MorehAdamW>(model->parameters(), adamw_params);
+            return std::make_unique<ttml::optimizers::MorehAdamW>(get_model_parameters(model), adamw_params);
         } else {
-            return std::make_unique<ttml::optimizers::AdamW>(model->parameters(), adamw_params);
+            return std::make_unique<ttml::optimizers::AdamW>(get_model_parameters(model), adamw_params);
         }
     };
 
@@ -590,6 +624,7 @@ int main(int argc, char **argv) {
                 config.transformer_config.max_sequence_length,
                 num_heads,
                 sequence_length,
+                enable_tp,
                 eval_config.temperature,
                 eval_config.repetition_penalty,
                 eval_config.top_k,
@@ -623,7 +658,7 @@ int main(int argc, char **argv) {
             if (gradient_accumulator_helper.should_zero_grad()) {
                 optimizer->zero_grad();
             }
-            auto output = (*model)(features, masks);
+            auto output = run_model(model, features, masks);
             auto loss = ttml::ops::nll_loss(output, target);
             loss = gradient_accumulator_helper.scale(loss);
             float loss_float = get_loss_value(loss);
@@ -636,7 +671,7 @@ int main(int argc, char **argv) {
 
             if (gradient_accumulator_helper.should_step()) {
                 // synchronize gradients for multi-device case, no-op if single device
-                auto parameters = model->parameters();
+                auto parameters = get_model_parameters(model);
                 if (!enable_tp) {
                     ttml::core::distributed::synchronize_parameters(parameters);
                 }
