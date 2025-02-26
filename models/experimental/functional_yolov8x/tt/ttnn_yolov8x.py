@@ -616,7 +616,6 @@ class DetectionModel:
 
     def __call__(self, x):
         conv_0, out_h, out_w = self.conv_0(x)
-        # ttnn.deallocate(x)
         conv_1, out_h, out_w = self.conv_1(conv_0)
         ttnn.deallocate(conv_0)
         c2f_2, out_h, out_w = self.c2f_2(conv_1)

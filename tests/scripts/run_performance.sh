@@ -28,6 +28,7 @@ run_perf_models_other() {
 
         env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml pytest -n auto models/demos/metal_BERT_large_11/tests -m $test_marker
         env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml  pytest -n auto models/experimental/functional_yolov8x/tests/test_yolov8x.py -m $test_marker
+        env WH_ARCH_YAML=wormhole_b0_80_arch_eth_dispatch.yaml  pytest -k "pretrained_weight_false" models/experimental/functional_yolov8x/tests/test_yolov8x.py -m $test_marker
     fi
 
     env pytest -n auto tests/ttnn/integration_tests/bert/test_performance.py -m $test_marker

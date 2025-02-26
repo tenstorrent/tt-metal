@@ -12,10 +12,10 @@ from pathlib import Path
 import torch.nn as nn
 from loguru import logger
 from datetime import datetime
-from functools import partial
-from models.utility_functions import disable_persistent_kernel_cache, skip_for_grayskull
+from models.experimental.functional_yolov8x.reference import yolov8x
 from models.experimental.functional_yolov8x.reference import yolov8x_utils
 from models.experimental.functional_yolov8x.tt.ttnn_yolov8x import YOLOv8xModel
+from models.utility_functions import disable_persistent_kernel_cache
 from models.experimental.functional_yolov8x.tt.ttnn_yolov8x_utils import custom_preprocessor
 from models.experimental.functional_yolov8x.demo.demo_utils import LoadImages, preprocess, postprocess
 
@@ -27,7 +27,7 @@ try:
     sys.modules["ultralytics.nn.modules.head"] = yolov8x_utils
 
 except KeyError:
-    print("models.experimental.functional_yolov8x.reference.yolov8x_utils not found.")
+    logger.info("models.experimental.functional_yolov8x.reference.yolov8x_utils not found.")
 
 
 class Ensemble(nn.ModuleList):
@@ -50,22 +50,22 @@ def attempt_download(file, repo="ultralytics/assets"):
         msg = f"{file_path} missing, try downloading from https://github.com/{repo}/releases/"
         try:
             url = f"https://github.com/{repo}/releases/download/v8.3.0/{name}"
-            print(f"Downloading {url} to {file_path}...")
+            logger.info(f"Downloading {url} to {file_path}...")
             torch.hub.download_url_to_file(url, file_path)
 
             assert file_path.exists() and file_path.stat().st_size > 1e6, f"Download failed for {name}"
         except Exception as e:
-            print(f"Error downloading from GitHub: {e}. Trying secondary source...")
+            logger.info(f"Error downloading from GitHub: {e}. Trying secondary source...")
 
             url = f"https://storage.googleapis.com/{repo}/ckpt/{name}"
-            print(f"Downloading {url} to {file_path}...")
+            logger.info(f"Downloading {url} to {file_path}...")
             os.system(f"curl -L {url} -o {file_path}")
 
             if not file_path.exists() or file_path.stat().st_size < 1e6:
                 file_path.unlink(missing_ok=True)
-                print(f"ERROR: Download failure for {msg}")
+                logger.info(f"ERROR: Download failure for {msg}")
             else:
-                print(f"Download succeeded from secondary source!")
+                logger.info(f"Download succeeded from secondary source!")
     return file_path
 
 
@@ -73,7 +73,7 @@ def attempt_load(weights, map_location=None):
     model = Ensemble()
     for w in weights if isinstance(weights, list) else [weights]:
         weight_path = attempt_download(w)
-        print("Loading weights from:", weight_path)
+        logger.info("Loading weights from:", weight_path)
         ckpt = torch.load(weight_path, map_location=map_location)
         model.append(ckpt["ema" if ckpt.get("ema") else "model"].float().eval())
     for m in model.modules():
@@ -120,27 +120,49 @@ def save_yolo_predictions_by_model(result, save_dir, image_path, model_name):
 
     cv2.imwrite(output_path, image)
 
-    print(f"Predictions saved to {output_path}")
+    logger.info(f"Predictions saved to {output_path}")
 
 
-@skip_for_grayskull()
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize(
     "source, model_type",
     [
         ("models/experimental/functional_yolov8x/demo/images/bus.jpg", "torch_model"),
         ("models/experimental/functional_yolov8x/demo/images/bus.jpg", "tt_model"),
+        ("models/experimental/functional_yolov8x/demo/images/test1.jpg", "torch_model"),
+        ("models/experimental/functional_yolov8x/demo/images/test1.jpg", "tt_model"),
+        ("models/experimental/functional_yolov8x/demo/images/test2.jpg", "torch_model"),
+        ("models/experimental/functional_yolov8x/demo/images/test2.jpg", "tt_model"),
+        ("models/experimental/functional_yolov8x/demo/images/test3.jpg", "torch_model"),
+        ("models/experimental/functional_yolov8x/demo/images/test3.jpg", "tt_model"),
+    ],
+)
+@pytest.mark.parametrize(
+    "use_pretrained_weight",
+    [True, False],
+    ids=[
+        "pretrained_weight_true",
+        "pretrained_weight_false",
     ],
 )
 @pytest.mark.parametrize("res", [(640, 640)])
-def test_demo(device, source, model_type, res):
+def test_demo(device, source, model_type, res, use_pretrained_weight):
     disable_persistent_kernel_cache()
 
     if model_type == "torch_model":
-        model = attempt_load("yolov8x.pt", map_location="cpu")
+        if use_pretrained_weight:
+            model = attempt_load("yolov8x.pt", map_location="cpu")
+        else:
+            model = yolov8x.DetectionModel()
+
         logger.info("Inferencing using Torch Model")
     else:
-        state_dict = attempt_load("yolov8x.pt", map_location="cpu").state_dict()
+        if use_pretrained_weight:
+            state_dict = attempt_load("yolov8x.pt", map_location="cpu").state_dict()
+
+        else:
+            torch_model = yolov8x.DetectionModel()
+            state_dict = torch_model.state_dict()
         parameters = custom_preprocessor(device, state_dict, inp_h=res[0], inp_w=res[1])
         model = YOLOv8xModel(device=device, parameters=parameters)
         logger.info("Inferencing using ttnn Model")
@@ -253,4 +275,4 @@ def test_demo(device, source, model_type, res):
 
         save_yolo_predictions_by_model(results, save_dir, source, model_type)
 
-    print("Inference done")
+    logger.info("Inference done")
