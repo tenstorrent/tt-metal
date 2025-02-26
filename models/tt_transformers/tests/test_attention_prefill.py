@@ -246,7 +246,7 @@ def test_attention_inference(
                 all_tests_pass = False
 
     if all_tests_pass:
-        logger.info("Llama Attention output Passed!")
+        logger.info("Attention output Passed!")
     else:
-        logger.warning("Llama Attention output Failed!")
+        logger.warning("Attention output Failed!")
         assert all_tests_pass, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"

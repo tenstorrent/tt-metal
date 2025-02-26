@@ -36,7 +36,7 @@ from models.tt_transformers.tt.load_checkpoints import (
 
 
 @dataclass
-class LlamaOptimizations:
+class ModelOptimizations:
     bfp4_mlp: bool
     # Future fields will go here:
     # bfp8_activations: bool
@@ -105,7 +105,7 @@ class ModelArgs:
         dummy_weights=False,
         max_batch_size=1,
         max_seq_len=1024 * 128,
-        optimizations=LlamaOptimizations.accuracy,
+        optimizations=ModelOptimizations.accuracy,
     ):
         self.num_devices = mesh_device.get_num_devices() if mesh_device else 0
         self.mesh_device = mesh_device

@@ -175,13 +175,13 @@ def test_decoder_inference(
         logger.info(comp_allclose(ref_output, tt_output_torch))
         logger.info(f"PCC: {pcc_message}")
         if passing:
-            logger.info("Llama Decoder Block Passed!")
+            logger.info("Decoder Block Passed!")
         else:
-            logger.warning("Llama Decoder Block Failed!")
+            logger.warning("Decoder Block Failed!")
             all_tests_pass = False
 
     if all_tests_pass:
-        logger.info(f"All Llama decode iterations Passed!")
+        logger.info(f"All decode iterations Passed!")
     else:
-        logger.warning("One or more iterations of Llama decode Failed!")
+        logger.warning("One or more iterations of decode Failed!")
         assert all_tests_pass, f"PCC value is lower than {0.99} for some of the outputs. Check Warnings!"

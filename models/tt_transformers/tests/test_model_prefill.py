@@ -12,7 +12,7 @@ from models.tt_transformers.tt.common import (
     PagedAttentionConfig,
 )
 from models.tt_transformers.tt.model import Transformer
-from models.tt_transformers.tt.model_config import ModelArgs, LlamaOptimizations
+from models.tt_transformers.tt.model_config import ModelArgs, ModelOptimizations
 from models.utility_functions import (
     comp_pcc,
     comp_allclose,
@@ -56,8 +56,8 @@ from models.utility_functions import skip_for_grayskull
 @pytest.mark.parametrize(
     "optimizations",
     [
-        pytest.param(LlamaOptimizations.accuracy, id="accuracy"),
-        pytest.param(LlamaOptimizations.performance, id="performance"),
+        pytest.param(ModelOptimizations.accuracy, id="accuracy"),
+        pytest.param(ModelOptimizations.performance, id="performance"),
     ],
 )
 def test_model_inference(
@@ -71,7 +71,7 @@ def test_model_inference(
     ensure_gc,
     is_ci_env,
 ):
-    if is_ci_env and optimizations == LlamaOptimizations.accuracy:
+    if is_ci_env and optimizations == ModelOptimizations.accuracy:
         pytest.skip("CI test only runs performance mode to reduce CI pipeline load")
 
     run_ref_pt = True  # Flag to run reference PyTorch model and compare PCC
@@ -81,10 +81,10 @@ def test_model_inference(
     batch_size = 1  # For prefill we only support batch_size = 1
 
     # This sets the minimum PCC for each iteration based on optimization mode
-    if optimizations == LlamaOptimizations.accuracy:
+    if optimizations == ModelOptimizations.accuracy:
         pcc = 0.91  # TODO Look on improving PCC
     else:  # performance mode
-        assert optimizations == LlamaOptimizations.performance
+        assert optimizations == ModelOptimizations.performance
         pcc = 0.869  # TODO Look on improving PCC
 
     mesh_device.enable_async(True)
@@ -218,9 +218,9 @@ def test_model_inference(
             logger.info(f"PCC: {pcc_message}")
 
             if passing:
-                logger.info("Llama Model Passed!")
+                logger.info("Model Passed!")
             else:
-                logger.warning("Llama Model Failed!")
+                logger.warning("Model Failed!")
             if not passing:
                 all_tests_pass = False
 
@@ -316,7 +316,7 @@ def test_model_inference(
 
     if run_ref_pt:
         if all_tests_pass:
-            logger.info(f"All Llama prefill iterations Passed!")
+            logger.info(f"All prefill iterations Passed!")
         else:
-            logger.warning("One or more iterations of Llama prefill had bad PCC")
+            logger.warning("One or more iterations of prefill had bad PCC")
             assert all_tests_pass, f"PCC value is lower than {pcc} for some of the outputs. Check Warnings!"
