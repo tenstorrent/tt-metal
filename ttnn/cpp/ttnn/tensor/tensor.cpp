@@ -263,6 +263,11 @@ void Tensor::deallocate_impl(bool force, bool deallocation_through_destructor) {
                 }
             },
             [force, this, &get_tensor_ref_count, deallocation_through_destructor](DeviceStorage& storage) {
+                if (storage.mesh_buffer) {
+                    if (!storage.mesh_buffer->device()) {
+                        return;
+                    }
+                }
                 if (not this->workers.at(0)->is_initialized()) {
                     return;
                 }

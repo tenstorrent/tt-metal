@@ -94,6 +94,9 @@ uint8_t MeshDevice::num_hw_cqs() const {
 }
 
 bool MeshDevice::is_initialized() const {
+    if (!scoped_devices_) {
+        return false;
+    }
     return validate_and_get_reference_value(
         scoped_devices_->root_devices(), [](const auto& device) { return device->is_initialized(); });
 }
