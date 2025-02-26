@@ -75,3 +75,8 @@ struct Tile {
   tile_shape: [uint32:2];
   transpose_tile: bool;
 }
+
+// Wrappers to support std::optional scalars in flatbuffers.
+table BoolOptional { value: bool; }
+table Uint8Optional { value: uint8; }
+table Uint32Optional { value: uint32; }
