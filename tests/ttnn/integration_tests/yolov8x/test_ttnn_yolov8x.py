@@ -18,6 +18,7 @@ from models.experimental.functional_yolov8x.tt.ttnn_yolov8x_utils import (
     ttnn_decode_bboxes,
     custom_preprocessor,
 )
+from models.experimental.functional_yolov8x.reference import yolov8x
 
 try:
     sys.modules["ultralytics"] = yolov8x_utils
@@ -134,21 +135,35 @@ def run_submodule(x, submodule):
     [torch.rand((1, 3, 640, 640))],
     ids=["input_tensor1"],
 )
+@pytest.mark.parametrize(
+    "use_pretrained_weight",
+    [
+        False,
+        # True      # uncomment  to run the model for real weights
+    ],
+    ids=[
+        "pretrained_weight_false",
+        # "pretrained_weight_true",    # uncomment to run the model for real weights
+    ],
+)
 @skip_for_grayskull()
-def test_yolov8x_640(device, input_tensor):
+def test_yolov8x_640(device, input_tensor, use_pretrained_weight):
     disable_persistent_kernel_cache()
 
-    torch_model = attempt_load("yolov8x.pt", map_location="cpu")
-    state_dict = torch_model.state_dict()
     inp_h, inp_w = input_tensor.shape[2], input_tensor.shape[3]
-
+    if use_pretrained_weight:
+        torch_model = attempt_load("yolov8x.pt", map_location="cpu")
+        state_dict = torch_model.state_dict()
+    else:
+        torch_model = yolov8x.DetectionModel()
+        state_dict = torch_model.state_dict()
+    parameters = custom_preprocessor(device, state_dict, inp_h, inp_w)
+    ttnn_model = YOLOv8xModel(device=device, parameters=parameters)
     parameters = custom_preprocessor(device, state_dict, inp_h=inp_h, inp_w=inp_w)
 
     ttnn_input = input_tensor.permute((0, 2, 3, 1))
     ttnn_input = ttnn_input.reshape(1, 1, ttnn_input.shape[0] * ttnn_input.shape[1] * ttnn_input.shape[2], 3)
     ttnn_input = ttnn.from_torch(ttnn_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-
-    ttnn_model = YOLOv8xModel(device, parameters, res=(inp_h, inp_w))
 
     with torch.inference_mode():
         ttnn_model_output = ttnn_model(ttnn_input)[0]

@@ -18,6 +18,7 @@ from models.experimental.functional_yolov8x.reference import yolov8x_utils
 from models.experimental.functional_yolov8x.tt.ttnn_yolov8x import YOLOv8xModel
 from models.experimental.functional_yolov8x.tt.ttnn_yolov8x_utils import custom_preprocessor
 from models.experimental.functional_yolov8x.demo.demo_utils import LoadImages, preprocess, postprocess
+from models.experimental.functional_yolov8x.reference import yolov8x
 
 try:
     sys.modules["ultralytics"] = yolov8x_utils
@@ -130,17 +131,40 @@ def save_yolo_predictions_by_model(result, save_dir, image_path, model_name):
     [
         ("models/experimental/functional_yolov8x/demo/images/bus.jpg", "torch_model"),
         ("models/experimental/functional_yolov8x/demo/images/bus.jpg", "tt_model"),
+        ("models/experimental/functional_yolov8x/demo/images/test1.jpg", "torch_model"),
+        ("models/experimental/functional_yolov8x/demo/images/test1.jpg", "tt_model"),
+        ("models/experimental/functional_yolov8x/demo/images/test2.jpg", "torch_model"),
+        ("models/experimental/functional_yolov8x/demo/images/test2.jpg", "tt_model"),
+        ("models/experimental/functional_yolov8x/demo/images/test3.jpg", "torch_model"),
+        ("models/experimental/functional_yolov8x/demo/images/test3.jpg", "tt_model"),
+    ],
+)
+@pytest.mark.parametrize(
+    "use_pretrained_weight",
+    [True, False],
+    ids=[
+        "pretrained_weight_true",
+        "pretrained_weight_false",
     ],
 )
 @pytest.mark.parametrize("res", [(640, 640)])
-def test_demo(device, source, model_type, res):
+def test_demo(device, source, model_type, res, use_pretrained_weight):
     disable_persistent_kernel_cache()
 
     if model_type == "torch_model":
-        model = attempt_load("yolov8x.pt", map_location="cpu")
+        if use_pretrained_weight:
+            model = attempt_load("yolov8x.pt", map_location="cpu")
+        else:
+            model = yolov8x.DetectionModel()
+
         logger.info("Inferencing using Torch Model")
     else:
-        state_dict = attempt_load("yolov8x.pt", map_location="cpu").state_dict()
+        if use_pretrained_weight:
+            state_dict = attempt_load("yolov8x.pt", map_location="cpu").state_dict()
+
+        else:
+            torch_model = yolov8x.DetectionModel()
+            state_dict = torch_model.state_dict()
         parameters = custom_preprocessor(device, state_dict, inp_h=res[0], inp_w=res[1])
         model = YOLOv8xModel(device=device, parameters=parameters)
         logger.info("Inferencing using ttnn Model")
