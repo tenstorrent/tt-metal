@@ -317,7 +317,7 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table() {
             const auto& physical_chip_id =
                 this->logical_mesh_chip_id_to_physical_chip_id_mapping_[mesh_id][src_chip_id];
             std::uint32_t num_ports_per_chip =
-                tt::Cluster::instance().get_soc_desc(physical_chip_id).ethernet_cores.size();
+                tt::Cluster::instance().get_soc_desc(physical_chip_id).get_cores(CoreType::ETH).size();
             this->intra_mesh_routing_tables_[mesh_id][src_chip_id].resize(
                 num_ports_per_chip);  // contains more entries than needed, this size is for all eth channels on chip
             for (int i = 0; i < num_ports_per_chip; i++) {
@@ -368,7 +368,7 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table() {
             const auto& physical_chip_id =
                 this->logical_mesh_chip_id_to_physical_chip_id_mapping_[src_mesh_id][src_chip_id];
             std::uint32_t num_ports_per_chip =
-                tt::Cluster::instance().get_soc_desc(physical_chip_id).ethernet_cores.size();
+                tt::Cluster::instance().get_soc_desc(physical_chip_id).get_cores(CoreType::ETH).size();
             this->inter_mesh_routing_tables_[src_mesh_id][src_chip_id].resize(
                 num_ports_per_chip);  // contains more entries than needed
             for (int i = 0; i < num_ports_per_chip; i++) {
