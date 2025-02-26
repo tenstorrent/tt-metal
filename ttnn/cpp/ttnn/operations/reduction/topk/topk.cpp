@@ -27,7 +27,7 @@ std::vector<std::optional<T>> tuple_to_vector_optional(Tuple&& tuple) {
         std::forward<Tuple>(tuple));
 }
 
-int32_t get_nearest_supported_shape(int32_t k) {
+int32_t get_nearest_supported_k_value(int32_t k) {
     // LLK only support k = 32, 64 for now
     if (k <= 32) {
         return 32;
@@ -55,9 +55,6 @@ std::vector<Tensor> post_topk_transform_tensor(
     const int32_t k,
     const int32_t adjusted_k,
     const MemoryConfig& input_memory_config) {
-    TT_ASSERT(result[0].get_padded_shape().rank() == 4, "Output shape rank must be 4");
-    TT_ASSERT(result[1].get_padded_shape().rank() == 4, "Output shape rank must be 4");
-
     auto input_shape = input_tensor.get_padded_shape();
     const auto orig_rank = input_shape.rank();
 
@@ -110,7 +107,7 @@ std::vector<Tensor> ExecuteTopK::invoke(
     auto input_memory_config = memory_config.value_or(input_tensor.memory_config());
 
     // K must be a supported shape
-    int32_t adjusted_k = CMAKE_UNIQUE_NAMESPACE::get_nearest_supported_shape(k);
+    int32_t adjusted_k = CMAKE_UNIQUE_NAMESPACE::get_nearest_supported_k_value(k);
     // if dim is not last dimension, transpose it
     Tensor transposed_tensor = CMAKE_UNIQUE_NAMESPACE::perform_transpose(input_tensor, is_dim_last_idx, dim, -1);
     // if input is not 4d, convert it to 4d
