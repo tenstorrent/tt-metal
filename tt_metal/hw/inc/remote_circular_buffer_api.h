@@ -31,7 +31,16 @@ FORCE_INLINE void update_pages_sent(
             NOC_XY_ENCODING(DYNAMIC_NOC_X(noc, remote_noc_xy_ptr[0]), DYNAMIC_NOC_Y(noc, remote_noc_xy_ptr[1])));
         *pages_sent_ptr += aligned_page_adjustment;
         uint64_t remote_ack_ptr_addr = get_noc_addr_helper(remote_noc_xy, (uint32_t)pages_sent_ptr);
-        noc_semaphore_inc(remote_ack_ptr_addr, aligned_page_adjustment, noc);
+        noc_fast_atomic_increment(
+            noc,
+            write_at_cmd_buf,
+            remote_ack_ptr_addr,
+            NOC_UNICAST_WRITE_VC,
+            aligned_page_adjustment,
+            31 /*wrap*/,
+            false /*linked*/,
+            true /*posted*/,
+            MEM_NOC_ATOMIC_RET_VAL_ADDR);
         pages_sent_ptr += 2 * L1_ALIGNMENT / sizeof(uint32_t);
         remote_noc_xy_ptr += 2;
     }
@@ -48,11 +57,23 @@ FORCE_INLINE void update_pages_acked(
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(aligned_pages_acked_addr);
     *pages_acked_ptr += aligned_page_adjustment;
     uint64_t remote_ack_ptr_addr = get_noc_addr(sender_noc_x, sender_noc_y, (uint32_t)pages_acked_ptr, noc);
-    noc_semaphore_inc(remote_ack_ptr_addr, aligned_page_adjustment, noc);
+    noc_fast_atomic_increment(
+        noc,
+        write_at_cmd_buf,
+        remote_ack_ptr_addr,
+        NOC_UNICAST_WRITE_VC,
+        aligned_page_adjustment,
+        31 /*wrap*/,
+        false /*linked*/,
+        true /*posted*/,
+        MEM_NOC_ATOMIC_RET_VAL_ADDR);
 }
 #else
+static constexpr uint8_t default_noc_mode = 0;
+template <uint8_t nm = default_noc_mode, bool barrier_atomics = false>
 FORCE_INLINE void update_pages_sent(
     const RemoteSenderCBInterface& sender_cb_interface, uint32_t aligned_page_adjustment, uint8_t noc) {}
+template <uint8_t nm = default_noc_mode, bool barrier_atomics = false>
 FORCE_INLINE void update_pages_acked(
     const RemoteReceiverCBInterface& receiver_cb_interface, uint32_t aligned_page_adjustment, uint8_t noc) {}
 #endif

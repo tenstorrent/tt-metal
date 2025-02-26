@@ -29,6 +29,8 @@
 #include "debug/waypoint.h"
 #include "debug/dprint.h"
 #include "debug/stack_usage.h"
+
+#include "debug/ring_buffer.h"
 // clang-format on
 
 uint8_t noc_index;
@@ -450,6 +452,10 @@ int main() {
                     31 /*wrap*/,
                     false /*linked*/,
                     post_atomic_increments /*posted*/);
+#if defined(ARCH_BLACKHOLE)
+                // flush for BH since this is non-posted, which could cause counter mismatch
+                while (!ncrisc_noc_nonposted_atomics_flushed(noc_index));
+#endif
             }
         }
 
@@ -512,12 +518,11 @@ int main() {
                 uint32_t end_cb_index = launch_msg_address->kernel_config.max_local_cb_end_index;
                 setup_local_cb_read_write_interfaces(
                     cb_l1_base, num_cbs_to_early_init, end_cb_index, true, true, false);
-
+                start_ncrisc_kernel_run(enables);
                 cb_l1_base =
                     (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg_address->kernel_config.remote_cb_offset);
                 end_cb_index = launch_msg_address->kernel_config.min_remote_cb_start_index;
-                experimental::setup_remote_cb_interfaces<true>(cb_l1_base, end_cb_index);
-                start_ncrisc_kernel_run(enables);
+                experimental::setup_remote_cb_interfaces<true>(cb_l1_base, end_cb_index, noc_index);
                 int index = static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::DM0);
                 void (*kernel_address)(uint32_t) = (void (*)(uint32_t))
                     (kernel_config_base + launch_msg_address->kernel_config.kernel_text_offset[index]);
@@ -531,15 +536,15 @@ int main() {
                     noc_local_state_init(noc_index);
                 }
 #endif
+                start_ncrisc_kernel_run(enables);
                 // Brisc is responsible for issuing any noc cmds needed when initializing remote cbs
                 // So have brisc setup remote cb interfaces even when brisc is not in use
                 if (launch_msg_address->kernel_config.enables) {
                     cb_l1_base =
                         (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg_address->kernel_config.remote_cb_offset);
                     uint32_t end_cb_index = launch_msg_address->kernel_config.min_remote_cb_start_index;
-                    experimental::setup_remote_cb_interfaces<true>(cb_l1_base, end_cb_index);
+                    experimental::setup_remote_cb_interfaces<true>(cb_l1_base, end_cb_index, noc_index);
                 }
-                start_ncrisc_kernel_run(enables);
                 wait_for_go_message();
             }
             WAYPOINT("D");
@@ -548,10 +553,20 @@ int main() {
 
             trigger_sync_register_init();
 
-            if (noc_mode == DM_DYNAMIC_NOC) {
-                // barrier to make sure all writes are finished
-                while (!ncrisc_dynamic_noc_nonposted_writes_flushed<proc_type>(noc_index));
-                while (!ncrisc_dynamic_noc_nonposted_writes_flushed<proc_type>(1 - noc_index));
+            if constexpr (WATCHER_ASSERT_ENABLED) {
+                if (noc_mode == DM_DYNAMIC_NOC) {
+                    WAYPOINT("NKFW");
+                    // Assert that no noc transactions are outstanding, to ensure that all reads and writes have landed
+                    // and the NOC interface is in a known idle state for the next kernel.
+                    for (int noc = 0; noc < NUM_NOCS; noc++) {
+                        ASSERT(ncrisc_dynamic_noc_reads_flushed(noc));
+                        ASSERT(ncrisc_dynamic_noc_nonposted_writes_sent(noc));
+                        ASSERT(ncrisc_dynamic_noc_nonposted_writes_flushed(noc));
+                        ASSERT(ncrisc_dynamic_noc_nonposted_atomics_flushed(noc));
+                        ASSERT(ncrisc_dynamic_noc_posted_writes_sent(noc));
+                    }
+                    WAYPOINT("NKFD");
+                }
             }
 
 #if defined(PROFILE_KERNEL)
@@ -577,6 +592,7 @@ int main() {
                 // messages in the ring buffer. Must be executed before the atomic increment, as after that the launch
                 // message is no longer owned by us.
                 CLEAR_PREVIOUS_LAUNCH_MESSAGE_ENTRY_FOR_WATCHER();
+
                 noc_fast_atomic_increment(
                     noc_index,
                     NCRISC_AT_CMD_BUF,
@@ -586,6 +602,21 @@ int main() {
                     31 /*wrap*/,
                     false /*linked*/,
                     post_atomic_increments /*posted*/);
+#if defined(ARCH_BLACKHOLE)
+                if (noc_mode == DM_DYNAMIC_NOC) {
+                    // inc dm noc counter for BH as this is non-posted
+                    inc_noc_counter_val<
+                        static_cast<std::underlying_type_t<TensixProcessorTypes>>(TensixProcessorTypes::DM0),
+                        NocBarrierType::NONPOSTED_ATOMICS_ACKED>(noc_index, 1);
+                    // barrier till the atomic response is back
+                    while (!ncrisc_dynamic_noc_nonposted_atomics_flushed(noc_index));
+                    // reset local counters
+                    noc_local_state_init(noc_index);
+                } else {
+                    // flush for BH since this is non-posted, which could cause counter mismatch in the next iter
+                    while (!ncrisc_noc_nonposted_atomics_flushed(noc_index));
+                }
+#endif
                 mailboxes->launch_msg_rd_ptr = (launch_msg_rd_ptr + 1) & (launch_msg_buffer_num_entries - 1);
             }
         }

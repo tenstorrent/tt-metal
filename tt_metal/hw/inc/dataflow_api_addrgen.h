@@ -347,12 +347,21 @@ struct InterleavedAddrGenFast {
         while (!noc_cmd_buf_ready(noc, read_cmd_buf));
         WAYPOINT("NRTD");
 
+        if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+            uint32_t noc_rd_cmd_field =
+                NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1);
+            NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_CTRL, noc_rd_cmd_field);
+        }
         NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_RET_ADDR_LO, dest_addr);
         NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_TARG_ADDR_LO, src_addr);            // (uint32_t)src_addr
         NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_TARG_ADDR_COORDINATE, src_noc_xy);  // src_addr >> 32
         NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_AT_LEN_BE, this->page_size);        // len_bytes
         NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
-        noc_reads_num_issued[noc] += 1;
+        if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+            inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, 1);
+        } else {
+            noc_reads_num_issued[noc] += 1;
+        }
     }
 
     FORCE_INLINE
@@ -381,7 +390,8 @@ struct InterleavedAddrGenFast {
         NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_AT_LEN_BE, this->page_size);        // len_bytes
         NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
         if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-            inc_noc_nonposted_writes_acked<proc_type>(noc);
+            inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
+            inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, 1);
         } else {
             noc_nonposted_writes_num_issued[noc] += 1;
             noc_nonposted_writes_acked[noc] += 1;  // num_dests
@@ -436,13 +446,22 @@ struct InterleavedPow2AddrGenFast {
         while (!noc_cmd_buf_ready(noc, read_cmd_buf));
         WAYPOINT("NRPD");
 
+        if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+            uint32_t noc_rd_cmd_field =
+                NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1);
+            NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_CTRL, noc_rd_cmd_field);
+        }
         NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_RET_ADDR_LO, dest_addr);
         NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_TARG_ADDR_LO, src_addr);            // (uint32_t)src_addr
         NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_TARG_ADDR_COORDINATE, src_noc_xy);  // src_addr >> 32
         NOC_CMD_BUF_WRITE_REG(
             noc, read_cmd_buf, NOC_AT_LEN_BE, 1 << this->aligned_log_base_2_of_page_size);  // len_bytes
         NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
-        noc_reads_num_issued[noc] += 1;
+        if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+            inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, 1);
+        } else {
+            noc_reads_num_issued[noc] += 1;
+        }
     }
 
     FORCE_INLINE
@@ -462,12 +481,21 @@ struct InterleavedPow2AddrGenFast {
         WAYPOINT("RP1D");
         DEBUG_SANITIZE_NOC_READ_TRANSACTION(noc, get_noc_addr_helper(src_noc_xy, src_addr), dest_addr, size);
 
+        if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+            uint32_t noc_rd_cmd_field =
+                NOC_CMD_CPY | NOC_CMD_RD | NOC_CMD_RESP_MARKED | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(1);
+            NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_CTRL, noc_rd_cmd_field);
+        }
         NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_RET_ADDR_LO, dest_addr);
         NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_TARG_ADDR_LO, src_addr);            // (uint32_t)src_addr
         NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_TARG_ADDR_COORDINATE, src_noc_xy);  // src_addr >> 32
         NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_AT_LEN_BE, size);                   // len_bytes
         NOC_CMD_BUF_WRITE_REG(noc, read_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
-        noc_reads_num_issued[noc] += 1;
+        if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+            inc_noc_counter_val<proc_type, NocBarrierType::READS_NUM_ISSUED>(noc, 1);
+        } else {
+            noc_reads_num_issued[noc] += 1;
+        }
     }
 
     FORCE_INLINE
@@ -501,7 +529,8 @@ struct InterleavedPow2AddrGenFast {
         NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_AT_LEN_BE, write_size_bytes);       // len_bytes
         NOC_CMD_BUF_WRITE_REG(noc, write_cmd_buf, NOC_CMD_CTRL, NOC_CTRL_SEND_REQ);
         if constexpr (noc_mode == DM_DYNAMIC_NOC) {
-            inc_noc_nonposted_writes_acked<proc_type>(noc);
+            inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
+            inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, 1);
         } else {
             noc_nonposted_writes_num_issued[noc] += 1;
             noc_nonposted_writes_acked[noc] += 1;  // num_dests
