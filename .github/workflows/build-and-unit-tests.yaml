@@ -69,7 +69,7 @@ jobs:
     runs-on:
       - ${{ inputs.runner-label }}
       - cloud-virtual-machine
-      - in-service
+      # - in-service
     env:
       ARCH_NAME: ${{ inputs.arch }}
       LOGURU_LEVEL: INFO
