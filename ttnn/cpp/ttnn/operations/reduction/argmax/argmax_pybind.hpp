@@ -59,7 +59,7 @@ void bind_reduction_argmax_operation(py::module& module) {
                const bool use_multicore,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                std::optional<ttnn::Tensor> optional_output_tensor,
-               uint8_t queue_id) {
+               QueueId queue_id) {
                 return self(
                     queue_id, input_tensor, dim, sub_core_grids, use_multicore, memory_config, optional_output_tensor);
             },
