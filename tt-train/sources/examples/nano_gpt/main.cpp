@@ -379,13 +379,13 @@ int main(int argc, char **argv) {
     bool add_time_to_name = true;
     bool enable_wandb = true;
     bool ddp = false;
-    // bool enable_tp = false;
-    bool enable_tp = true;
+    bool enable_tp = false;
     app.add_option("-c,--config", config_name, "Yaml Config name")->default_val(config_name);
     app.add_option("-e,--eval", is_eval, "Is evaluation")->default_val(is_eval);
     app.add_option("-t,--add_time_to_name", add_time_to_name, "Add time to run name")->default_val(add_time_to_name);
     app.add_option("-w,--wandb", enable_wandb, "Enable wandb logging")->default_val(enable_wandb);
     app.add_option("-d,--ddp", ddp, "Enable DDP")->default_val(ddp);
+    app.add_option("-p,--tp", enable_tp, "Enable TP")->default_val(enable_tp);
     CLI11_PARSE(app, argc, argv);
 
     if (ddp && enable_tp) {
@@ -551,8 +551,10 @@ int main(int argc, char **argv) {
     // this is workaround for multi-device case, we need to have vocab size divisible by 32 per device
     config.transformer_config.vocab_size =
         round_up_to_tile(tokenizer->get_vocab_size(), (enable_tp ? num_devices : 1U) * 32U);
-    // auto model = ttml::models::gpt2::create(config.transformer_config);
-    auto model = ttml::models::distributed::gpt2::create(config.transformer_config);
+    // hardcode for debugging
+    // config.transformer_config.vocab_size = 128U;
+    auto model = ttml::models::gpt2::create(config.transformer_config);
+    // auto model = ttml::models::distributed::gpt2::create(config.transformer_config);
 
     auto adamw_params = ttml::optimizers::AdamWConfig();
     adamw_params.lr = config.learning_rate;

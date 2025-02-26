@@ -40,8 +40,7 @@ autograd::TensorPtr scaled_dot_product_attention(
 
     if (mask.has_value()) {
         auto mask_tensor = mask.value()->get_value();
-        // i've changed ttnn::where because mask needs batch and heads broadcasting to qk_scaled shape
-        // qk_scaled = ttnn::where(mask.value()->get_value(), qk_scaled, /* other */ -1e9F);
+        // ttnn::where when mask is not of the same shape as qk_scaled
         qk_scaled = ttnn::experimental::add(
             ttnn::experimental::mul(mask_tensor, qk_scaled),
             ttnn::experimental::mul(ttnn::experimental::sub(mask_tensor, 1.F), 1e9F));
