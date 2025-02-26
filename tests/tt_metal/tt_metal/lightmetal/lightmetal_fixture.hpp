@@ -12,7 +12,7 @@
 #include <circular_buffer_constants.h>
 #include <tt-metalium/kernel.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include "lightmetal/lightmetal_replay.hpp"
+#include <tt-metalium/lightmetal_replay.hpp>
 #include "command_queue_fixture.hpp"
 #include <lightmetal_binary.hpp>
 
@@ -83,11 +83,11 @@ protected:
         }
     }
 
-    // Mimic the light-metal standalone run replay tool by executing the binary.
+    // Mimic the light-metal standalone run replay tool by running the binary.
     // Note: Replay tool will open device if nullptr is provided.
     void RunLightMetalBinary(LightMetalBinary&& binary, IDevice* device) {
         tt::tt_metal::LightMetalReplay lm_replay(std::move(binary), device);
-        bool success = lm_replay.execute_binary();
+        bool success = lm_replay.run();
         if (!success) {
             FAIL() << "Light Metal Binary failed to execute or encountered errors.";
         } else {
