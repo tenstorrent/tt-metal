@@ -104,7 +104,10 @@ for i in range (a):
 operation::ProgramWithCallbacks all_gather_2D_multi_core_with_workers(
     const Tensor& input_tensor,
     Tensor& output_tensor,
-    const MeshDevice& mesh_device,
+    const tt::tt_metal::distributed::MeshCoordinate device_coord,
+    const MeshShape grid_size,
+    const size_t num_rows,
+    const size_t num_cols,
     const MemoryConfig output_mem_config,
     const ccl::Topology topology,
     const GlobalSemaphore semaphore,
@@ -115,15 +118,8 @@ operation::ProgramWithCallbacks all_gather_2D_multi_core_with_workers(
     bool is_horizontal,
     const uint32_t semaphore_target_value) {
     tt::tt_metal::Program program{};
-
     IDevice* device = input_tensor.device();
     auto device_id = device->id();
-
-    auto mesh_device_view = mesh_device.get_view();
-    tt::tt_metal::distributed::MeshCoordinate device_coord = mesh_device_view.find_device(device_id);
-    auto grid_size = mesh_device.shape();
-    auto num_rows = mesh_device.num_rows();
-    auto num_cols = mesh_device.num_cols();
 
     uint32_t eastCount, westCount, upCount, downCount, device_offset = 0;
     //I might not need this

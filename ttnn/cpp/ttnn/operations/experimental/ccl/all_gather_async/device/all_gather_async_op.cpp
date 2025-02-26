@@ -12,6 +12,141 @@ namespace ttnn {
 namespace ccl {
 namespace all_gather_detail {
 
+Tensor all_gather_2D_helper(
+    const Tensor& input_tensor,
+    const int32_t dim,
+    const int32_t rank,
+    const MeshDevice& mesh_device,
+    const ttnn::ccl::Topology topology,
+    std::vector<GlobalSemaphore> semaphores,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<size_t> num_preferred_links,
+    bool do_horizontal) {
+    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
+    // Calculate lower pages
+    uint32_t lower_pages = 1;
+    uint32_t higher_pages = 1;
+    uint32_t page_size = 1;
+    const auto& tensor_shape = input_tensor.get_padded_shape();
+    if (input_tensor.get_layout() == Layout::TILE) {
+        TT_FATAL(
+            input_tensor.get_padded_shape() == input_tensor.get_logical_shape(),
+            "padding currently not supported in all gather");
+        page_size = input_tensor.get_tensor_spec().tile().get_tile_hw();
+        if (dim == (rank - 1)) {
+            lower_pages = tensor_shape[-1] / input_tensor.get_tensor_spec().tile().get_width();
+            higher_pages = tensor_shape[-2] / input_tensor.get_tensor_spec().tile().get_height();
+            for (int i = 0; i < rank - 2; i++) {
+                higher_pages *= tensor_shape[i];
+            }
+        } else {
+            lower_pages = tensor_shape[-1] / input_tensor.get_tensor_spec().tile().get_width() * tensor_shape[-2] /
+                          input_tensor.get_tensor_spec().tile().get_height();
+            for (int i = dim; i < rank - 2; i++) {
+                lower_pages *= tensor_shape[i];
+            }
+            for (int i = 0; i < dim; i++) {
+                higher_pages *= tensor_shape[i];
+            }
+        }
+    } else {
+        TT_FATAL(dim != (rank - 1), "Can't currently support last dim all gather in row major");
+        page_size = tensor_shape[-1];
+        for (int i = dim; i < rank - 1; i++) {
+            lower_pages *= tensor_shape[i];
+        }
+        for (int i = 0; i < dim; i++) {
+            higher_pages *= tensor_shape[i];
+        }
+    }
+    const auto mesh_view = mesh_device.get_view();
+    auto grid_size = mesh_device.shape();
+    auto num_rows = mesh_device.num_rows();
+    auto num_cols = mesh_device.num_cols();
+    operation::launch_op(
+        [dim,
+         memory_config,
+         mesh_view,
+         grid_size,
+         num_rows,
+         num_cols,
+         topology,
+         semaphores,
+         lower_pages,
+         higher_pages,
+         page_size,
+         do_horizontal](
+            const std::vector<Tensor>& input_tensors,
+            const std::vector<std::optional<const Tensor>>& optional_input_tensors,
+            const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
+            const auto& input_device_tensor = input_tensors.at(0);
+            const auto coordinate = mesh_view.find_device(input_device_tensor.device()->id());
+            std::vector<IDevice*> devices = (do_horizontal) ? mesh_view.get_devices_on_row(coordinate[0])
+                                                            : mesh_view.get_devices_on_column(coordinate[1]);
+            std::size_t num_devices = (do_horizontal) ? mesh_view.num_cols() : mesh_view.num_rows();
+            std::optional<GlobalSemaphore> semaphore = std::nullopt;
+            for (uint32_t i = 0; i < num_devices; ++i) {
+                if (devices.at(i) == input_device_tensor.device()) {
+                    semaphore = semaphores.at(i);  // Get raw pointer
+                }
+            }
+            return operation::run(
+                AllGather2D{
+                    coordinate,
+                    grid_size,
+                    num_rows,
+                    num_cols,
+                    mesh_view.num_devices(),
+                    memory_config.value_or(input_device_tensor.memory_config()),
+                    topology,
+                    semaphore.value(),
+                    dim,
+                    lower_pages,
+                    higher_pages,
+                    page_size,
+                    do_horizontal},
+                {input_device_tensor});
+        },
+        {input_tensor},
+        output_tensors);
+
+    return output_tensors.at(0);
+}
+
+Tensor all_gather_async_2D(
+    const Tensor& input_tensor,
+    const int32_t dim,
+    const int32_t rank,
+    const MeshDevice& mesh_device,
+    const ttnn::ccl::Topology topology,
+    std::vector<GlobalSemaphore> semaphores,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<size_t> num_preferred_links,
+    bool transpose_mesh_dimension) {
+    // Call the operation on the rows/cols
+    auto output_tensor = all_gather_2D_helper(
+        input_tensor,
+        dim,
+        rank,
+        mesh_device,
+        topology,
+        semaphores,
+        memory_config,
+        num_preferred_links,
+        !transpose_mesh_dimension);
+    // Call the operation on the cols/rows
+    return all_gather_2D_helper(
+        output_tensor,
+        dim,
+        rank,
+        mesh_device,
+        topology,
+        semaphores,
+        memory_config,
+        num_preferred_links,
+        transpose_mesh_dimension);
+}
+
 AllGatherAsync create_all_gather_async_struct(
     const Tensor& input_tensor,
     const uint32_t dim,
@@ -68,7 +203,7 @@ void AllGather2D::validate(const std::vector<Tensor>& input_tensors) const {
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_gather need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to all_gather need to be allocated in buffers on device!");
-    auto num_devices = this->mesh_device.get_view().num_devices();
+    auto num_devices = this->num_devices;
     TT_FATAL(num_devices > 0, "Error, num_links should be more than 0 but has {}", num_devices);
     TT_FATAL(
         num_devices <= input_tensor.device()->compute_with_storage_grid_size().y,
@@ -110,7 +245,7 @@ void AllGatherAsync::validate(const std::vector<Tensor>& input_tensors) const {
 std::vector<ttnn::TensorSpec> AllGather2D::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors[0];
     auto shape = input_tensor.get_padded_shape();  // TODO: Replace with get_logical_shape()
-    shape[this->dim] *= this->mesh_device.get_view().num_devices();
+    shape[this->dim] *= this->num_devices;
     return {TensorSpec(
         shape,
         TensorLayout(input_tensor.get_dtype(), input_tensor.get_tensor_spec().page_config(), output_mem_config))};
@@ -205,7 +340,7 @@ operation::ProgramWithCallbacks AllGather2D::create_program(
     AllGather2DVersion version = select_version(input_tensors[0]);
 
     log_trace(tt::LogOp, "version: {}", static_cast<uint32_t>(version));
-    const auto num_devices = this->mesh_device.get_view().num_devices();
+    const auto num_devices = this->num_devices;
 
     switch (version) {
         case AllGather2DVersion::GENERIC:
@@ -214,7 +349,10 @@ operation::ProgramWithCallbacks AllGather2D::create_program(
             return all_gather_2D_multi_core_with_workers(
                 input_tensors[0],
                 output_tensors[0],
-                this->mesh_device,
+                this->device_coord,
+                this->grid_size,
+                this->num_rows,
+                this->num_cols,
                 this->output_mem_config,
                 this->topology,
                 this->semaphore,
@@ -289,6 +427,36 @@ operation::ProgramWithCallbacks AllGatherAsync::create_program(
                 this->sub_device_id,
                 this->enable_persistent_fabric_mode);
     }
+}
+
+const operation::Hash AllGather2D::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
+    log_trace(tt::LogOp, "compute_program_hash is called");
+    AllGather2DVersion version = select_version(input_tensors[0]);
+    log_trace(tt::LogOp, "version: {}", static_cast<uint32_t>(version));
+    auto input_shape = input_tensors[0].get_padded_shape();
+    auto input_memory_layout = input_tensors[0].get_layout();
+    auto input_dtype = input_tensors[0].get_dtype();
+    auto input_memory_config = input_tensors[0].memory_config();
+    // TODO figure out if we need to hash device coordinate
+
+    // An IF condition can be made if the models team adds custom 2D versions
+    uint32_t semaphore_address = this->semaphore.address();
+    return operation::hash_operation<AllGatherAsync>(
+        this->grid_size,
+        this->num_rows,
+        this->num_cols,
+        this->num_devices,
+        this->dim,
+        this->lower_pages,
+        this->higher_pages,
+        this->page_size,
+        this->is_horizontal,
+        this->topology,
+        input_shape,
+        input_memory_layout,
+        input_dtype,
+        input_memory_config,
+        semaphore_address);
 }
 
 const operation::Hash AllGatherAsync::compute_program_hash(const std::vector<Tensor>& input_tensors) const {
@@ -421,14 +589,13 @@ Tensor all_gather_async(
         rank,
         rank - 1,
         dim);
-
-    std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
     std::vector<GlobalSemaphore> semaphores = multi_device_global_semaphore.global_semaphores;
     if (!uses_2d_fabric) {
+        const auto mesh_view = mesh_device.get_view();
+        std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
         TT_FATAL(
             topology == ttnn::ccl::Topology::Linear,
             "This all_gather API with cluster_axis is currently supported only for the Linear topology");
-        const auto mesh_view = mesh_device.get_view();
         std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
         operation::launch_op(
             [gather_dim,
@@ -470,11 +637,21 @@ Tensor all_gather_async(
             },
             {input_tensor},
             output_tensors);
+        return output_tensors.at(0);
     }
     else {
       TT_FATAL(enable_persistent_fabric_mode, "Persistent fabric mode is necessary for 2D fabric");
+      return ttnn::ccl::all_gather_detail::all_gather_async_2D(
+          input_tensor,
+          gather_dim,
+          rank,
+          mesh_device,
+          topology,
+          semaphores,
+          memory_config,
+          num_preferred_links,
+          transpose_mesh_dimension);
     }
-    return output_tensors.at(0);
 }
 
 }  // namespace ccl
