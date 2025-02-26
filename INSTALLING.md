@@ -42,12 +42,13 @@ sudo ./install_dependencies.sh
 | Fedora                 | ```dnf install dkms```                             |
 | Enterprise Linux Based | ```dnf install epel-release && dnf install dkms``` |
 
-- Install the driver TT-KMD:
+- Install the latest TT-KMD version:
 ```
 git clone https://github.com/tenstorrent/tt-kmd.git
 cd tt-kmd
 sudo dkms add .
-sudo dkms install tenstorrent/1.31
+latest_version=$(./tools/current-version)
+sudo dkms install "tenstorrent/$latest_version"
 sudo modprobe tenstorrent
 cd ..
 ```
@@ -57,12 +58,6 @@ cd ..
 ---
 
 #### Update Device TT-Firmware with TT-Flash
-- Install Cargo (Rust package manager):
-  | OS              | Command                      |
-  |-----------------|------------------------------|
-  | Ubuntu / Debian | ```sudo apt install cargo``` |
-  | Fedora / EL9    | ```sudo dnf install cargo``` |
-
 - Install TT-Flash:
 
 ```
