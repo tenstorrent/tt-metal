@@ -54,8 +54,8 @@ void set_or_update_runtime_arguments(
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_output_tiles, row_major);
 
     auto cores = grid_to_cores(num_cores_total, num_cores_x, num_cores_y, row_major);
-    constexpr size_t num_reader_args = 9;
-    constexpr size_t num_writer_args = 12;
+    constexpr size_t num_reader_args = 15;
+    constexpr size_t num_writer_args = 8;
     constexpr size_t num_kernel_args = 3;
     for (uint32_t i = 0, start_tile_id = 0; i < num_cores_total; i++) {
         const auto& core = cores[i];
@@ -78,6 +78,9 @@ void set_or_update_runtime_arguments(
                                            ? std::bit_cast<uint32_t>(scalar)
                                            : pack_two_bfloat16_into_uint32({scalar, scalar});
 
+        const auto weight_addr = weight_has_value ? weight_tensor->buffer()->address() : 0;
+        const auto bias_addr = bias_has_value ? bias_tensor->buffer()->address() : 0;
+
         std::array reader_runtime_args = {
             packed_scalar_eps,
             input_tensor.buffer()->address(),
@@ -87,17 +90,18 @@ void set_or_update_runtime_arguments(
             aHt * aWt * aC * (aN > 1),
             aHt * aWt * (aC > 1),
             cN,
-            cC};
+            cC,
+            bHt * bWt * bC * (bN > 1),
+            bHt * bWt * (bC > 1),
+            batch_var_tensor.buffer()->address(),  // batch var
+            weight_addr,                           // weight
+            bias_addr,                             // bias
+            batch_mean_tensor.buffer()->address()  // batch mean
+        };
         handle_args(program, reader_kernel_id, core, reader_runtime_args);
 
-        const auto weight_addr = weight_has_value ? weight_tensor->buffer()->address() : 0;
-        const auto bias_addr = bias_has_value ? bias_tensor->buffer()->address() : 0;
         std::array writer_runtime_args = {
-            batch_mean_tensor.buffer()->address(),  //  batch mean
-            batch_var_tensor.buffer()->address(),   //  batch var
-            weight_addr,                            // weight
-            bias_addr,                              // bias
-            c.buffer()->address(),                  // output
+            c.buffer()->address(),  // output
             start_tile_id,
             num_tiles_per_core,
             cHtWt,
@@ -225,7 +229,21 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
         program,
         "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/dataflow/reader_batch_norm.cpp",
         all_device_cores,
-        tt_metal::ReaderDataMovementConfig({a_is_dram, input_tensor_cb, eps_cb}, std::move(reader_defines)));
+        tt_metal::ReaderDataMovementConfig(
+            {a_is_dram,
+             input_tensor_cb,
+             eps_cb,
+             d_is_dram,
+             batch_var_tensor_cb,
+             e_is_dram,
+             weight_tensor_cb,
+             static_cast<uint32_t>(weight_has_value),
+             bias_tensor_cb,
+             f_is_dram,
+             static_cast<uint32_t>(bias_has_value),
+             b_is_dram,
+             batch_mean_tensor_cb},
+            std::move(reader_defines)));
 
     // WRITER KERNEL
     auto writer_defines = dataflow_defines;
@@ -235,18 +253,8 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
         all_device_cores,
         tt_metal::WriterDataMovementConfig(
             {
-                b_is_dram,
                 c_is_dram,
-                d_is_dram,
-                e_is_dram,
-                f_is_dram,
-                static_cast<uint32_t>(weight_has_value),
-                static_cast<uint32_t>(bias_has_value),
-                batch_mean_tensor_cb,
                 output_tensor_cb,
-                batch_var_tensor_cb,
-                weight_tensor_cb,
-                bias_tensor_cb,
             },
             std::move(writer_defines)));
 
