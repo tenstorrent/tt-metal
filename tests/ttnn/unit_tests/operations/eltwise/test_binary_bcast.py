@@ -1468,14 +1468,35 @@ def test_binary_sharded_uneven_invalid(a_shape, b_shape, shard_type, shard_size,
 
 
 @pytest.mark.parametrize("scalar", [-0.25, -16.5, 0.0, 0.05, 1.7, 19.0])
-def test_binary_sharded_scalar(scalar, device):
+@pytest.mark.parametrize(
+    "a_shape, shard_type, shard_size, core_range",
+    (
+        [
+            torch.Size([1, 4 * 32]),
+            ttnn.ShardStrategy.HEIGHT,
+            [32, 4 * 32],
+            ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 0))}),
+        ],
+        [
+            torch.Size([1, 4 * 32]),
+            ttnn.ShardStrategy.WIDTH,
+            [32, 32],
+            ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 3))}),
+        ],
+        [
+            torch.Size([1, 4 * 32]),
+            ttnn.ShardStrategy.BLOCK,
+            [32, 32],
+            ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (3, 0))}),
+        ],
+    ),
+)
+def test_binary_sharded_scalar(scalar, a_shape, shard_type, shard_size, core_range, device):
     torch.manual_seed(0)
-
-    a_shape = torch.Size([1, 4 * 32])
     a_sharded_config = ttnn.create_sharded_memory_config(
-        [32, 4 * 32],
-        core_grid=ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (0, 0))}),
-        strategy=ttnn.ShardStrategy.HEIGHT,
+        shard_size,
+        core_grid=core_range,
+        strategy=shard_type,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
     )
