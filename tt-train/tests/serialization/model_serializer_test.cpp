@@ -6,8 +6,8 @@
 
 #include <vector>
 
-#include "models/gpt2.hpp"
 #include "models/mlp.hpp"
+#include "models/transformer.hpp"
 
 class MultiLayerPerceptronParametersTest : public ::testing::Test {
 protected:
@@ -83,7 +83,7 @@ TEST_F(MultiLayerPerceptronParametersTest, InvalidDataTypes) {
 
 TEST_F(TransformerConfigTest, BasicReadWrite) {
     // Original configuration
-    ttml::models::gpt2::TransformerConfig original_config;
+    ttml::models::transformer::TransformerConfig original_config;
     original_config.num_heads = 8;
     original_config.embedding_dim = 512;
     original_config.dropout_prob = 0.1f;
@@ -92,10 +92,10 @@ TEST_F(TransformerConfigTest, BasicReadWrite) {
     original_config.max_sequence_length = 512;
 
     // Write to YAML
-    YAML::Node yaml_node = ttml::models::gpt2::write_config(original_config);
+    YAML::Node yaml_node = ttml::models::transformer::write_config(original_config);
 
     // Read from YAML
-    auto read_config_result = ttml::models::gpt2::read_config(yaml_node);
+    auto read_config_result = ttml::models::transformer::read_config(yaml_node);
 
     // Assertions to verify correctness
     EXPECT_EQ(original_config.num_heads, read_config_result.num_heads);
@@ -116,7 +116,7 @@ TEST_F(TransformerConfigTest, MissingFields) {
     yaml_node["vocab_size"] = 10000;
     yaml_node["max_sequence_length"] = 512;
 
-    EXPECT_THROW({ auto read_config_result = ttml::models::gpt2::read_config(yaml_node); }, YAML::Exception);
+    EXPECT_THROW({ auto read_config_result = ttml::models::transformer::read_config(yaml_node); }, YAML::Exception);
 }
 
 TEST_F(TransformerConfigTest, InvalidDataTypes) {
@@ -129,5 +129,5 @@ TEST_F(TransformerConfigTest, InvalidDataTypes) {
     yaml_node["vocab_size"] = 10000;
     yaml_node["max_sequence_length"] = 512;
 
-    EXPECT_THROW({ auto read_config_result = ttml::models::gpt2::read_config(yaml_node); }, YAML::Exception);
+    EXPECT_THROW({ auto read_config_result = ttml::models::transformer::read_config(yaml_node); }, YAML::Exception);
 }

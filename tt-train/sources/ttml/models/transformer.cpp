@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "gpt2.hpp"
+#include "transformer.hpp"
 
 #include "autograd/graph_utils.hpp"
 #include "autograd/tensor.hpp"
@@ -12,7 +12,7 @@
 #include "ops/binary_ops.hpp"
 #include "ops/unary_ops.hpp"
 
-namespace ttml::models::gpt2 {
+namespace ttml::models::transformer {
 
 namespace {
 
@@ -246,4 +246,4 @@ std::shared_ptr<Transformer> create(const YAML::Node& config) {
     return std::make_shared<Transformer>(transformer_config);
 }
 
-}  // namespace ttml::models::gpt2
+}  // namespace ttml::models::transformer
