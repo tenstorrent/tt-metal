@@ -15,7 +15,7 @@
 #include <typeindex>
 #include <unordered_map>
 #include "ttnn/core.hpp"
-#pragma optimize("", off)
+
 using namespace tt::tt_metal;
 
 namespace {
