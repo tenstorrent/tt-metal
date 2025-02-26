@@ -185,8 +185,6 @@ TEST_F(DispatchFixture, TestAsyncRefCountManager) {
             /*layout=*/std::nullopt,
             *device);
         uint32_t tensor2_device_buf_addr = get_device_buffer_address(tensor2);
-        // Assign tensor1 to tensor2 and ensure that ref counts are appropriately updated with the buffer for tensor2
-        // deallocated
         tensor2 = tensor1;
         // To check if tensor2 is deallocated, create a third tensor on device and ensure that its address matches the
         // prev addr for tensor2

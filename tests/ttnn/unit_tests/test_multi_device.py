@@ -663,6 +663,8 @@ def test_all_gather_multiple_submeshes(mesh_device):
     pytest.skip("TT-Mesh: Skipping pending CCL port to fabric")
 
     def model(submesh):
+        # Reshape to a 1x4 mesh to enforce ring connected topological order.
+        submesh.reshape(ttnn.MeshShape(1, 4))
         full_tensor = torch.ones((1, 1, 32, 32 * submesh.get_num_devices()), dtype=torch.bfloat16)
         for i in range(submesh.get_num_devices()):
             full_tensor[..., i * 32 : (i + 1) * 32] = i

@@ -335,11 +335,10 @@ void launch_on_worker_thread(auto cq_id, auto device_operation_id, const auto& o
         if (auto mesh_device = dynamic_cast<tt::tt_metal::distributed::MeshDevice*>(device); mesh_device != nullptr) {
             auto& cq = mesh_device->mesh_command_queue();
             auto mesh_workload = tt::tt_metal::distributed::CreateMeshWorkload();
-            auto mesh_shape = mesh_device->shape();
             tt::tt_metal::distributed::AddProgramToMeshWorkload(
                 mesh_workload,
-                *program,
-                LogicalDeviceRange({0, 0}, {mesh_shape.num_cols - 1, mesh_shape.num_rows - 1}));
+                std::move(*program),
+                tt::tt_metal::distributed::MeshCoordinateRange({0, 0}, {mesh_device->num_cols() - 1, mesh_device->num_rows() - 1}));
             tt::tt_metal::distributed::EnqueueMeshWorkload(cq, mesh_workload, true);
         } else {
             enqueue_or_launch_program(*program);

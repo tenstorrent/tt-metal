@@ -10,7 +10,7 @@
 int main(int argc, char** argv) {
     using namespace tt::tt_metal::distributed;
 
-    auto mesh_device = MeshDevice::create(MeshDeviceConfig{.mesh_shape = SimpleMeshShape(2, 4)});
+    auto mesh_device = MeshDevice::create(MeshDeviceConfig{.mesh_shape = MeshShape(2, 4)});
     auto& cq = mesh_device->mesh_command_queue();
 
     // In a typical single-device fashion, instantiate a program with
@@ -33,12 +33,9 @@ int main(int argc, char** argv) {
     // Instantiate a MeshWorkload and attach the example program. We'll broadcast
     // this program by enqueueing it across all devices in our 2x4 mesh.
     auto mesh_workload = CreateMeshWorkload();
-    auto target_devices = LogicalDeviceRange{
-        DeviceCoord{0, 0} /* start_coord */, DeviceCoord{mesh_device->num_cols() - 1, mesh_device->num_rows() - 1}
-        /* end_coord */
-    };
+    auto target_devices = MeshCoordinateRange(mesh_device->shape());
 
-    AddProgramToMeshWorkload(mesh_workload, example_program, target_devices);
+    AddProgramToMeshWorkload(mesh_workload, std::move(example_program), target_devices);
     EnqueueMeshWorkload(cq, mesh_workload, false /* blocking */);
 
     // Synchronize the mesh command queue to ensure the workload has completed.

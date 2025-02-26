@@ -83,8 +83,6 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncPreallocatedOutputs) {
     EXPECT_EQ(ttnn::event_query(workload_event), true);
     // Read output back, once workload is complete
     ttnn::read_buffer(io_cq, output_tensor, {readback_data});
-    // Ensure that reference count book keeping is done correctly
-    // Tensors only have one reference in the main thread. Ensure this is true.
     // Buffers are currently jointly owned by the original buffer object, the storage object and the tensor (3).
     EXPECT_EQ(input_buffer.use_count(), 3);
     EXPECT_EQ(output_buffer.use_count(), 3);

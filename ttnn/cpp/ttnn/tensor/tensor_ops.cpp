@@ -153,7 +153,7 @@ Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout, IDevic
     ZoneScoped;
     GraphTracker::instance().track_function_start("Tensor::to_layout", input_tensor, target_layout, worker);
     // Only push layout conversion to worker if running in async mode
-    if (worker and worker->get_worker_mode() == WorkExecutorMode::ASYNCHRONOUS) {
+    if (worker && worker->get_worker_mode() == WorkExecutorMode::ASYNCHRONOUS) {
         // Tensor can be using borrowed storage. If so, when running in async mode, copy this tensor to owned storage.
         Tensor async_safe_tensor = copy_borrowed_tensor_in_async_mode(worker, input_tensor);
         Tensor tensor_modified_layout = Tensor(1);
@@ -170,12 +170,18 @@ Tensor tensor_to_layout(const Tensor& input_tensor, Layout target_layout, IDevic
         GraphTracker::instance().track_function_end(tensor_modified_layout);
         return tensor_modified_layout;
     }
+
     // Running without worker threads (non-async)
     TT_ASSERT(
         input_tensor.storage_type() != StorageType::DEVICE or
         input_tensor.storage_type() != StorageType::MULTI_DEVICE &&
             "Bring tensor to host before converting to target layout");
-    auto output = tensor_impl::to_layout_wrapper(input_tensor, target_layout);
+    Tensor output;
+    if (worker) {
+        worker->push_work([&] { output = tensor_impl::to_layout_wrapper(input_tensor, target_layout); });
+    } else {
+        output = tensor_impl::to_layout_wrapper(input_tensor, target_layout);
+    }
     output = tt::tt_metal::set_tensor_id(output);
     GraphTracker::instance().track_function_end(output);
     return output;
