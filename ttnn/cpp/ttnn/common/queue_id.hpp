@@ -5,6 +5,7 @@
 #pragma once
 
 #include <tt-metalium/strong_type.hpp>
+#include <cstdint>
 
 namespace ttnn {
 /*

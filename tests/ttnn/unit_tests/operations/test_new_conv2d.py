@@ -72,6 +72,7 @@ def run_conv(
     weight_mesh_mapper=None,
     output_mesh_composer=None,
     enable_split_reader=False,
+    activation="",
 ):
     if isinstance(device, ttnn.MeshDevice):
         assert input_mesh_mapper is not None, "Expected mesh mapper for input tensor when using device mesh"
@@ -102,6 +103,8 @@ def run_conv(
         dilation=(dilation, dilation),
         groups=groups,
     )
+    if activation == "relu":
+        torch_out_golden_tensor = torch.nn.functional.relu(torch_out_golden_tensor)
 
     reader_patterns_cache = {}
 
@@ -134,6 +137,7 @@ def run_conv(
         enable_split_reader=enable_split_reader,
         enable_subblock_padding=False,
         output_layout=output_layout,
+        activation=activation,
     )
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
@@ -2668,7 +2672,7 @@ def test_dram_input_mm_conv(device, torch_tensor_map, tiled_input, input_on_devi
 
     kernel_shape = (out_channels, in_channels, kernel_h, kernel_w)
     torch_kernel = randomize_torch_tensor(torch_tensor_map, kernel_shape)
-    tt_kernel = ttnn.from_torch(torch_kernel)
+    tt_kernel = ttnn.from_torch(torch_kernel, dtype=ttnn.bfloat16)
 
     torch_input = randomize_torch_tensor(torch_tensor_map, input_shape)
     if input_on_device:
@@ -2677,7 +2681,7 @@ def test_dram_input_mm_conv(device, torch_tensor_map, tiled_input, input_on_devi
         tt_input = ttnn.reshape(tt_input, (1, 1, batch_size * img_h * img_w, in_channels))
     else:
         torch_input_nhwc = torch.permute(torch_input, (0, 2, 3, 1))
-        tt_input = ttnn.from_torch(torch_input_nhwc)
+        tt_input = ttnn.from_torch(torch_input_nhwc, dtype=ttnn.bfloat16)
 
     if tiled_input:
         tt_input = ttnn.to_layout(tt_input, ttnn.TILE_LAYOUT)
@@ -2795,4 +2799,56 @@ def test_small_in_large_out_channels_auto_shard(device, torch_tensor_map):
         padding[1],
         None,
         auto_shard=True,
+    )
+
+
+# fmt: off
+@pytest.mark.parametrize(
+    "batch, input_channels, output_channels, input_height, input_width, kernel, stride, padding",
+    (
+        (1, 64, 64, 128, 128, (3, 3), (1, 1), (1, 1)),
+    ),
+)
+#fmt: on
+
+@pytest.mark.parametrize("shard_layout", [BS])
+@pytest.mark.parametrize("activation", ["relu"])
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384*2}], indirect=True)
+def test_block_sharding_relu_act_block_h(
+    device,
+    torch_tensor_map,
+    batch,
+    input_channels,
+    output_channels,
+    input_height,
+    input_width,
+    kernel,
+    stride,
+    padding,
+    shard_layout,
+    activation,
+):
+    config_override = {}
+    config_override["act_block_h"] = 32
+    run_conv(
+        device,
+        torch_tensor_map,
+        ttnn.MathFidelity.LoFi,
+        ttnn.bfloat16,
+        ttnn.bfloat16,
+        batch,
+        output_channels,
+        input_channels,
+        input_height,
+        input_width,
+        kernel[0],
+        kernel[1],
+        stride[0],
+        stride[1],
+        padding[0],
+        padding[1],
+        config_override=config_override,
+        shard_layout=shard_layout,
+        activation=activation,
     )
