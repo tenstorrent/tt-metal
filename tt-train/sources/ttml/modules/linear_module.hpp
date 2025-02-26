@@ -17,9 +17,9 @@ private:
 
 public:
     LinearLayer(uint32_t in_features, uint32_t out_features, bool has_bias = true);
-
+    LinearLayer(const autograd::TensorPtr& weight, const autograd::TensorPtr& bias);
+    LinearLayer(const autograd::TensorPtr& weight, bool has_bias = true);
     autograd::TensorPtr get_weight() const;
-    void set_weight(const autograd::TensorPtr& weight);
 
     [[nodiscard]] autograd::TensorPtr operator()(const autograd::TensorPtr& tensor) override;
 };

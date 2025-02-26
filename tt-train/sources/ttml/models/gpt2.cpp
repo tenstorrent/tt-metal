@@ -112,7 +112,12 @@ Transformer::Transformer(const TransformerConfig& config) {
             "embedding_dim={}",
             embedding_dim));
     }
-    tok_emb = std::make_shared<ttml::modules::Embedding>(vocab_size_divisible_by_32, embedding_dim);
+
+    if (config.weight_tying == WeightTyingType::Enabled) {
+        tok_emb = std::make_shared<ttml::modules::Embedding>(fc->get_weight());
+    } else {
+        tok_emb = std::make_shared<ttml::modules::Embedding>(vocab_size_divisible_by_32, embedding_dim);
+    }
 
     auto create_positional_embedding = [position_embedding_type,
                                         max_sequence_length,
@@ -143,11 +148,6 @@ Transformer::Transformer(const TransformerConfig& config) {
     }
     register_module(ln_fc, "ln_fc");
     register_module(fc, "fc");
-
-    if (config.weight_tying == WeightTyingType::Enabled) {
-        // tie weights between embedding and fc
-        tok_emb->set_weight(fc->get_weight());
-    }
 
     weights_initialization(*this);
 }
