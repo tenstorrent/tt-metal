@@ -81,6 +81,7 @@ def run_fabric_edm(
     assert expected_bw - 0.2 <= bandwidth <= expected_bw + 0.2
 
 
+# @pytest.mark.parametrize("mesh_device", [pytest.param((1, 8), id="1x8_grid")], indirect=True)
 @pytest.mark.parametrize("num_mcasts", [200000])
 @pytest.mark.parametrize("num_unicasts", [0])
 @pytest.mark.parametrize("num_links", [1])
@@ -93,9 +94,12 @@ def run_fabric_edm(
     [6.5],
 )
 def test_fabric_edm_mcast_bw(
-    mesh_device, num_mcasts, num_unicasts, num_links, num_op_invocations, line_sync, line_size, packet_size, expected_bw
+    num_mcasts, num_unicasts, num_links, num_op_invocations, line_sync, line_size, packet_size, expected_bw
 ):
-    if len(mesh_device.get_device_ids()) != 8:
+    import ttnn
+
+    device_ids = ttnn.get_device_ids()
+    if len(device_ids) != 8:
         pytest.skip("Skipping test because it only works with T3000")
     run_fabric_edm(
         False,
@@ -122,9 +126,12 @@ def test_fabric_edm_mcast_bw(
     [7.5],
 )
 def test_fabric_edm_unicast_bw(
-    mesh_device, num_mcasts, num_unicasts, num_links, num_op_invocations, line_sync, line_size, packet_size, expected_bw
+    num_mcasts, num_unicasts, num_links, num_op_invocations, line_sync, line_size, packet_size, expected_bw
 ):
-    if len(mesh_device.get_device_ids()) != 8:
+    import ttnn
+
+    device_ids = ttnn.get_device_ids()
+    if len(device_ids) != 8:
         pytest.skip("Skipping test because it only works with T3000")
     run_fabric_edm(
         True,
