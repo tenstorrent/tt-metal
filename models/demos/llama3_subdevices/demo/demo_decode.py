@@ -82,12 +82,12 @@ def load_inputs(user_input, batch, instruct_mode):
                 )
             else:
                 context_text = load_and_cache_context(user_input[i]["context"], cache_dir)
-            if instruct_mode:
-                prompt = (
-                    "```" + context_text + "```\n\n" + prompt
-                )  # Add the markdown block to the context to comply with the prompt
-            else:
-                prompt = context_text
+            # if instruct_mode:
+            #     prompt = (
+            #         "```" + context_text + "```\n\n" + prompt
+            #     )  # Add the markdown block to the context to comply with the prompt
+            # else:
+            prompt = context_text
         in_prompt.append(prompt)
     return in_prompt
 
@@ -221,10 +221,10 @@ def run_llama3_demo(
             [128000, 2028, 374, 264, 1296]
         ] * model_args.max_batch_size  # "This is a test" encoded prompt
     else:
-        if instruct_mode:
-            encoded_prompts = [encode_prompt_llama_instruct(tokenizer, prompt) for prompt in input_prompts]
-        else:
-            encoded_prompts = [tokenizer.encode(prompt, bos=True, eos=False) for prompt in input_prompts]
+        # if instruct_mode:
+        #     encoded_prompts = [encode_prompt_llama_instruct(tokenizer, prompt) for prompt in input_prompts]
+        # else:
+        encoded_prompts = [tokenizer.encode(prompt, bos=True, eos=False) for prompt in input_prompts]
 
     # Prefill by decode: start at first token; pad to 32 (tile size)
     max_prompt_length = max([len(prompt) for prompt in encoded_prompts])
@@ -287,7 +287,7 @@ def run_llama3_demo(
     logger.info(f"Compiling model trace...")
     for i in range(24):
         tt_decode_input = tt_embd(tt_out_tok)
-        # logger.info(f"tt_decode_input done")
+        logger.info(f"tt_decode_input done")
 
         tt_out = tt_model(
             tt_decode_input,
@@ -296,13 +296,35 @@ def run_llama3_demo(
             mode="decode",
             page_table=page_table_tt,
         )
-        # logger.info(f"tt_out done")
+        logger.info(f"tt_out done")
 
         # Sampling
-        tt_out_tok_reset = tt_sampling(tt_out[0])
-        # logger.info(f"sampling done")
+        # tt_out_tok_reset = tt_sampling(tt_out[0], tt_out_tok)
 
-    ttnn.plus_one(current_pos_tensor)
+        sub_core_grids = ttnn.CoreRangeSet(
+            [
+                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
+                ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
+            ]
+        )
+        tt_out_gathered = tt_model.tt_ccl.line_all_gather(
+            tt_out[0], dim=3, num_links=2, cluster_axis=0, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+        print("done gather")
+        tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True, sub_core_grids=sub_core_grids)
+        print("done untilize")
+        ttnn.deallocate(tt_out_gathered)
+        tt_out_tok = ttnn.argmax(  # FIXME When ttnn.argmax supports multicore, avoid falling back to host
+            tt_out_rm, dim=3, use_multicore=True, output_tensor=tt_out_tok, sub_core_grids=sub_core_grids
+        )
+        print("done argmax")
+
+        logger.info(f"sampling done")
+
+    ttnn.plus_one(
+        current_pos_tensor,
+        sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
+    )
     # profiler.end(f"plus one position done")
 
     # Capture Trace
@@ -323,13 +345,24 @@ def run_llama3_demo(
         mode="decode",
         page_table=page_table_tt,
     )
-    tt_out_tok_reset = tt_sampling(tt_out[0])
+    tt_out_gathered = tt_model.tt_ccl.line_all_gather(
+        tt_out[0], dim=3, num_links=2, cluster_axis=0, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True, sub_core_grids=sub_core_grids)
+    ttnn.deallocate(tt_out_gathered)
+    tt_out_tok = ttnn.argmax(  # FIXME When ttnn.argmax supports multicore, avoid falling back to host
+        tt_out_rm, dim=3, use_multicore=True, output_tensor=tt_out_tok, sub_core_grids=sub_core_grids
+    )
 
-    ttnn.plus_one(current_pos_tensor)
+    ttnn.plus_one(
+        current_pos_tensor,
+        sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
+    )
     # ttnn.plus_one(rot_mat_idxs)  # FIXME <- This won't work since embedding requires uint32 and plus_one only works for int32
 
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     ttnn.synchronize_devices(mesh_device)
+    print("done capture")
 
     # Reset the decoding position for the proper run of the model
     current_pos_reset = ttnn.from_torch(
@@ -387,41 +420,49 @@ def run_llama3_demo(
 
         # Write to host
         tt_output_torch = ttnn.to_torch(
-            tt_out_tok.cpu(blocking=True, cq_id=1),
+            tt_out_tok.cpu(blocking=True, cq_id=0),
             mesh_composer=ttnn.ConcatMesh2dToTensor(
                 mesh_device,
                 dims=(3, 1),
                 mesh_shape=model_args.cluster_shape,
             ),
         )[0, 0, 0, :batch_size]
-
+        # print("done iteration",iteration, tt_output_torch)
         # Append the generated token to the list of outputs
-        if i in range(len(encoded_prompts[0])):
-            breakpoint()
+        if iteration in range(len(encoded_prompts[0])):
+            # breakpoint()
+            # print("in prefill")
+            # print(encoded_prompts_tensor_whole_sequence)
+            # print(encoded_prompts)
             # While in "prefill" mode, use the prompt tokens as the output
-            all_outputs.append(encoded_prompts_tensor_whole_sequence[0, i])  # Update list of TT outputs
-            tt_out_tok = ttnn.from_torch(
-                encoded_prompts_tensor_whole_sequence[:, i].reshape(1, 1, 1, batch_size),
+            all_outputs.append(encoded_prompts[0][iteration])  # Update list of TT outputs
+            tt_out_tok_reset = ttnn.from_torch(
+                encoded_prompts_tensor_whole_sequence[:, iteration].reshape(1, 1, 1, batch_size),
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=model_args.cluster_shape),
             )
+            ttnn.copy_host_to_device_tensor(tt_out_tok_reset, tt_out_tok)
         else:
-            breakpoint()
-            all_outputs.append(tt_output_torch.squeeze(1).tolist()[0])  # Update generated token to list of TT outputs
-
+            # breakpoint()
+            # print("in deocde", tt_output_torch.tolist()[0])
+            all_outputs.append(tt_output_torch.tolist()[0])  # Update generated token to list of TT outputs
+        # print("done", tt_output_torch)
         # Save output token to print out later
-        for user in range(batch_size):
-            user_tok = tt_output_torch[user].tolist()
-            if (
-                user_tok != 128009 and user_done[user] == False
-            ):  # Stop saving the ouput after hitting the eos token (<|eot_id|>) (128009)
-                all_outputs[user].append(user_tok)
-            else:
-                user_done[user] = True
-                logger.trace(f"[User {user}] Finished decoding at iteration {iteration}")
-                if all(user_done):
-                    users_decoding = False
+        # for user in range(1):
+        #     try:
+        #         user_tok = tt_output_torch[user].tolist()[0]
+        #         if (
+        #             user_tok != 128009 and user_done[user] == False
+        #         ):  # Stop saving the ouput after hitting the eos token (<|eot_id|>) (128009)
+        #             all_outputs.append(user_tok)
+        #         else:
+        #             user_done[user] = True
+        #             logger.trace(f"[User {user}] Finished decoding at iteration {iteration}")
+        #             if all(user_done):
+        #                 users_decoding = False
+        #     except Exception as e:
+        #         logger.error(f"Error decoding user {user} at iteration {iteration}. Error: {str(e)}")
 
         # Print out generated outputs for each user at the end of every iteration
         iteration_time = time() - iteration_time_start
@@ -436,15 +477,15 @@ def run_llama3_demo(
         profiler.start(f"log_printing_iter_{iteration}", iteration=iteration)
         # Print out generated outputs for each user at the end of every iteration
         if not is_ci_env:
-            if len(user_input) == 1:
-                logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs[0]))))
-            else:
-                for user in range(batch_size):
-                    text = "".join(tokenizer.decode(all_outputs[user]))
-                    if len(text) > 100:
-                        text = "..." + text[-97:]
-                    text = text.replace("\n", " ")
-                    logger.info("[User {}] {}".format(user, text))
+            # if len(user_input) == 1:
+            logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs))))
+            # else:
+            #     for user in range(batch_size):
+            #         text = "".join(tokenizer.decode(all_outputs[user]))
+            #         if len(text) > 100:
+            #             text = "..." + text[-97:]
+            #         text = text.replace("\n", " ")
+            #         logger.info("[User {}] {}".format(user, text))
 
         # Always print perf at every iteration
         logger.info(
@@ -497,7 +538,7 @@ def run_llama3_demo(
         #     {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
         # ),
         (  # Batch-32 run (Throughput) - 32 users, small prompt
-            "models/demos/llama3/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            "models/demos/llama3_subdevices/demo/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
             1024,  # max_seq_len
