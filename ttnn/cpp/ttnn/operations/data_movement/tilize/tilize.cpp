@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tilize.hpp"
+#include <string>
 
 #include "device/tilize_op.hpp"
 #include "ttnn/common/queue_id.hpp"
