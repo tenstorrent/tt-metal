@@ -49,6 +49,7 @@ struct AllGather2D {
     const uint32_t higher_pages;
     const uint32_t page_size;
     bool is_horizontal;
+    const uint32_t semaphore_target_value;
     AllGather2D(
         const tt::tt_metal::distributed::MeshCoordinate device_coord,
         const MeshShape grid_size,
@@ -62,7 +63,8 @@ struct AllGather2D {
         const uint32_t lower_pages,
         const uint32_t higher_pages,
         const uint32_t page_size,
-        bool is_horizontal) :
+        bool is_horizontal,
+        const uint32_t semaphore_target_value) :
         device_coord(device_coord),
         grid_size(grid_size),
         num_rows(num_rows),
@@ -75,6 +77,7 @@ struct AllGather2D {
         lower_pages(lower_pages),
         higher_pages(higher_pages),
         page_size(page_size),
+        semaphore_target_value(semaphore_target_value),
         is_horizontal(is_horizontal) {}
 
     auto attributes() const {
@@ -190,7 +193,8 @@ operation::ProgramWithCallbacks all_gather_2D_multi_core_with_workers(
     const uint32_t higher_pages,
     const uint32_t num_devices,
     const uint32_t page_size,
-    bool is_horizontal);
+    bool is_horizontal,
+    const uint32_t semaphore_target_value);
 operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
     const Tensor& input_tensor,
     std::optional<IDevice*> forward_device,

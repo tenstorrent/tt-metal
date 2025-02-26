@@ -21,7 +21,8 @@ Tensor all_gather_2D_helper(
     std::vector<GlobalSemaphore> semaphores,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<size_t> num_preferred_links,
-    bool do_horizontal) {
+    bool do_horizontal,
+    bool is_first) {
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
     // Calculate lower pages
     uint32_t lower_pages = 1;
@@ -75,7 +76,8 @@ Tensor all_gather_2D_helper(
          lower_pages,
          higher_pages,
          page_size,
-         do_horizontal](
+         do_horizontal,
+         is_first](
             const std::vector<Tensor>& input_tensors,
             const std::vector<std::optional<const Tensor>>& optional_input_tensors,
             const std::vector<std::optional<Tensor>>& optional_output_tensors) mutable -> std::vector<Tensor> {
@@ -90,13 +92,14 @@ Tensor all_gather_2D_helper(
                     semaphore = semaphores.at(i);  // Get raw pointer
                 }
             }
+            auto number_of_devices = mesh_view.num_devices();
             return operation::run(
                 AllGather2D{
                     coordinate,
                     grid_size,
                     num_rows,
                     num_cols,
-                    mesh_view.num_devices(),
+                    number_of_devices,
                     memory_config.value_or(input_device_tensor.memory_config()),
                     topology,
                     semaphore.value(),
@@ -104,7 +107,8 @@ Tensor all_gather_2D_helper(
                     lower_pages,
                     higher_pages,
                     page_size,
-                    do_horizontal},
+                    do_horizontal,
+                    is_first ? number_of_devices : number_of_devices * 2},
                 {input_device_tensor});
         },
         {input_tensor},
@@ -135,7 +139,8 @@ Tensor all_gather_async_2D(
         semaphores,
         memory_config,
         num_preferred_links,
-        !transpose_mesh_dimension);
+        !transpose_mesh_dimension,
+        true);
     // Call the operation on the cols/rows
     return all_gather_2D_helper(
         output_tensor,
@@ -146,7 +151,8 @@ Tensor all_gather_async_2D(
         semaphores,
         memory_config,
         num_preferred_links,
-        transpose_mesh_dimension);
+        transpose_mesh_dimension
+        false);
     */
     return all_gather_2D_helper(
         input_tensor,
@@ -157,7 +163,8 @@ Tensor all_gather_async_2D(
         semaphores,
         memory_config,
         num_preferred_links,
-        !transpose_mesh_dimension);
+        !transpose_mesh_dimension,
+        true);
 }
 
 AllGatherAsync create_all_gather_async_struct(
@@ -373,7 +380,8 @@ operation::ProgramWithCallbacks AllGather2D::create_program(
                 this->higher_pages,
                 num_devices,
                 this->page_size,
-                this->is_horizontal);
+                this->is_horizontal,
+                this->semaphore_target_value);
     }
 }
 
