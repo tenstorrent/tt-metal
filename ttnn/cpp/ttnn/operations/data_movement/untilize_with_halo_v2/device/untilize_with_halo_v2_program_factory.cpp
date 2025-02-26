@@ -256,9 +256,10 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
 
     reader_ct_args[0] = 0;
     reader_ct_args[1] = local_config_cb_id;
-    reader_ct_args[2] = 0;
+    reader_ct_args[2] = in_place ? remote_config_cb_id : 0;
+    ;
     reader_ct_args[3] = 0;
-    reader_ct_args[4] = 0;
+    reader_ct_args[4] = in_place ? remote_temp_cb_id : 0;
 
     KernelHandle reader_kernel_id0 = CreateKernel(
         program,
@@ -272,9 +273,9 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
 
     reader_ct_args[0] = padding_config_cb_id;
     reader_ct_args[1] = 0;
-    reader_ct_args[2] = remote_config_cb_id;
+    reader_ct_args[2] = in_place ? 0 : remote_config_cb_id;
     reader_ct_args[3] = 0;
-    reader_ct_args[4] = remote_temp_cb_id;
+    reader_ct_args[4] = in_place ? 0 : remote_temp_cb_id;
 
     KernelHandle reader_kernel_id1 = CreateKernel(
         program,
