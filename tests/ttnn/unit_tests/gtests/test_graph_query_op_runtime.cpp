@@ -28,11 +28,11 @@ namespace ttnn::operations::binary::test {
 
 class TTNNFixtureWithTraceEnabledDevice : public TTNNFixture {
 protected:
-    ttnn::IDevice* device_ = nullptr;
+    std::shared_ptr<ttnn::MeshDevice> device_;
 
     void SetUp() override {
         TTNNFixture::SetUp();
-        device_ = &ttnn::open_device(0, DEFAULT_L1_SMALL_SIZE, /* trace region size= */ 200000);
+        device_ = ttnn::open_device(0, DEFAULT_L1_SMALL_SIZE, /* trace region size= */ 200000);
     }
 
     void TearDown() override {
@@ -40,7 +40,7 @@ protected:
         TTNNFixture::TearDown();
     }
 
-    ttnn::IDevice& getDevice() { return *device_; }
+    ttnn::MeshDevice& getDevice() { return *device_; }
 
 public:
     static const ttnn::TensorSpec m_interleaved_1_3_1024_1024_tiled;

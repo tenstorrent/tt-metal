@@ -26,19 +26,19 @@ class Add1DTensorAndScalarFixture : public TTNNFixture,
 TEST_P(Add1DTensorAndScalarFixture, AddsScalarCorrectly) {
     auto param = GetParam();
     const auto device_id = 0;
-    auto& device = ttnn::open_device(device_id);
+    auto device = ttnn::open_device(device_id);
     std::array<uint32_t, 2> dimensions = {param.h, param.w};
     ttnn::Shape shape(dimensions);
 
     {
-        const auto input_tensor = ttnn::zeros(shape, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
+        const auto input_tensor = ttnn::zeros(shape, DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device);
         const auto output_tensor = input_tensor + param.scalar;
         const auto expected_tensor =
-            ttnn::operations::creation::full(shape, param.scalar, DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
+            ttnn::operations::creation::full(shape, param.scalar, DataType::BFLOAT16, ttnn::TILE_LAYOUT, *device);
         TT_FATAL(
             ttnn::allclose<::bfloat16>(ttnn::from_device(expected_tensor), ttnn::from_device(output_tensor)), "Error");
     }
-    ttnn::close_device(device);
+    ttnn::close_device(*device);
 }
 
 INSTANTIATE_TEST_SUITE_P(

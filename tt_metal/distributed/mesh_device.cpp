@@ -80,6 +80,17 @@ MeshDevice::ScopedDevices::ScopedDevices(
     }
 }
 
+MeshDevice::ScopedDevices::ScopedDevices(
+    int device_id,
+    size_t l1_small_size,
+    size_t trace_region_size,
+    size_t num_command_queues,
+    const DispatchCoreConfig& dispatch_core_config) {
+    opened_devices_ = tt::tt_metal::detail::CreateDevices(
+        {device_id}, num_command_queues, l1_small_size, trace_region_size, dispatch_core_config);
+    devices_.push_back(opened_devices_.at(device_id));
+}
+
 MeshDevice::ScopedDevices::~ScopedDevices() {
     if (!opened_devices_.empty()) {
         tt::tt_metal::detail::CloseDevices(opened_devices_);
@@ -129,6 +140,23 @@ std::shared_ptr<MeshDevice> MeshDevice::create(
     auto scoped_devices = std::make_shared<ScopedDevices>(
         l1_small_size, trace_region_size, num_command_queues, dispatch_core_config, config);
     MeshContainer<IDevice*> devices(config.mesh_shape, scoped_devices->root_devices());
+    auto mesh_device = std::make_shared<MeshDevice>(
+        std::move(scoped_devices), std::make_unique<MeshDeviceView>(devices), std::weak_ptr<MeshDevice>());
+
+    mesh_device->initialize(num_command_queues, l1_small_size, trace_region_size, l1_bank_remap);
+    return mesh_device;
+}
+
+std::shared_ptr<MeshDevice> MeshDevice::create_single_device(
+    int device_id,
+    size_t l1_small_size,
+    size_t trace_region_size,
+    size_t num_command_queues,
+    const DispatchCoreConfig& dispatch_core_config,
+    tt::stl::Span<const std::uint32_t> l1_bank_remap) {
+    auto scoped_devices = std::make_shared<ScopedDevices>(
+        device_id, l1_small_size, trace_region_size, num_command_queues, dispatch_core_config);
+    MeshContainer<IDevice*> devices(MeshShape{1, 1}, scoped_devices->root_devices());
     auto mesh_device = std::make_shared<MeshDevice>(
         std::move(scoped_devices), std::make_unique<MeshDeviceView>(devices), std::weak_ptr<MeshDevice>());
 

@@ -45,6 +45,12 @@ private:
             size_t num_command_queues,
             const DispatchCoreConfig& dispatch_core_config,
             const MeshDeviceConfig& config);
+        ScopedDevices(
+            int device_id,
+            size_t l1_small_size,
+            size_t trace_region_size,
+            size_t num_command_queues,
+            const DispatchCoreConfig& dispatch_core_config);
 
         // Destructor releases physical resources
         ~ScopedDevices();
@@ -277,6 +283,13 @@ public:
 
     static std::shared_ptr<MeshDevice> create(
         const MeshDeviceConfig& config,
+        size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
+        size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
+        size_t num_command_queues = 1,
+        const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
+        tt::stl::Span<const std::uint32_t> l1_bank_remap = {});
+    static std::shared_ptr<MeshDevice> create_single_device(
+        int device_id,
         size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
         size_t trace_region_size = DEFAULT_TRACE_REGION_SIZE,
         size_t num_command_queues = 1,
