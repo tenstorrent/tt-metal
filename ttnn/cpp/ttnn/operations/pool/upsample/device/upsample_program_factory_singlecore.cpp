@@ -4,6 +4,7 @@
 
 #include <math.h>
 
+#include "tt-metalium/hal.hpp"
 #include "upsample_op.hpp"
 #include "ttnn/operations/math.hpp"
 
@@ -39,7 +40,7 @@ operation::ProgramWithCallbacks upsample_single_core(
     // circulat buffer for input
     uint32_t src0_cb_index = CBIndex::c_0;
     uint32_t num_input_units = 2;
-    uint32_t aligned_input_unit_size = round_up_to_mul32(input_unit_size);
+    uint32_t aligned_input_unit_size = tt::round_up(input_unit_size, hal.get_alignment(HalMemType::DRAM));
     tt_metal::CircularBufferConfig cb_src0_config =
         tt_metal::CircularBufferConfig(
             num_input_units * aligned_input_unit_size, {{src0_cb_index, input_cb_data_format}})
