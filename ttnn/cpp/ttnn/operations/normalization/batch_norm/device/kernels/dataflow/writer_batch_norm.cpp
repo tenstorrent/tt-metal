@@ -8,25 +8,16 @@
 #include "cpp/ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
 
 void kernel_main() {
-    uint32_t src_addr = get_arg_val<uint32_t>(0);        // batch_mean
-    uint32_t dst_addr = get_arg_val<uint32_t>(1);        // output
-    uint32_t start_tile_id = get_arg_val<uint32_t>(2);
-    uint32_t num_tiles = get_arg_val<uint32_t>(3);
-    uint32_t HtWt = get_arg_val<uint32_t>(4);
-    uint32_t n_stride = get_arg_val<uint32_t>(5);
-    uint32_t c_stride = get_arg_val<uint32_t>(6);
-    uint32_t N = get_arg_val<uint32_t>(7);
-    uint32_t C = get_arg_val<uint32_t>(8);
+    uint32_t dst_addr = get_arg_val<uint32_t>(0);  // output
+    uint32_t start_tile_id = get_arg_val<uint32_t>(1);
+    uint32_t num_tiles = get_arg_val<uint32_t>(2);
+    uint32_t HtWt = get_arg_val<uint32_t>(3);
+    uint32_t n_stride = get_arg_val<uint32_t>(4);
+    uint32_t c_stride = get_arg_val<uint32_t>(5);
+    uint32_t N = get_arg_val<uint32_t>(6);
+    uint32_t C = get_arg_val<uint32_t>(7);
+
     constexpr uint32_t onetile = 1;
-
-    // batch_mean
-    constexpr auto cb_id_src = get_compile_time_arg_val(7);
-    constexpr bool src_is_dram = get_compile_time_arg_val(0) == 1;
-    const uint32_t src_tile_bytes = get_tile_size(cb_id_src);
-    const DataFormat src_data_format = get_dataformat(cb_id_src);
-
-    const InterleavedAddrGenFast<src_is_dram> src = {
-        .bank_base_address = src_addr, .page_size = src_tile_bytes, .data_format = src_data_format};
 
     // output
     constexpr auto cb_id_dst = get_compile_time_arg_val(8);
@@ -50,14 +41,6 @@ void kernel_main() {
     uint32_t num_tiles_written = 0;
     for (uint32_t n = start_n; n < N && num_tiles_written < num_tiles; ++n, start_c = 0) {
         for (uint32_t c = start_c; c < C && num_tiles_written < num_tiles; ++c, start_t = 0) {
-            // read a tile from src
-            cb_reserve_back(cb_id_src, onetile);
-            uint32_t l1_write_addr = get_write_ptr(cb_id_src);
-            noc_async_read_tile(tile_offset, src, l1_write_addr);
-            noc_async_read_barrier();
-            FILL_TILE_WITH_FIRST_ELEMENT(cb_id_src);
-            cb_push_back(cb_id_src, onetile);
-
             for (uint32_t t = start_t; t < HtWt && num_tiles_written < num_tiles; ++t, ++num_tiles_written) {
                 // write a tile to dst
                 cb_wait_front(cb_id_dst, onetile);
