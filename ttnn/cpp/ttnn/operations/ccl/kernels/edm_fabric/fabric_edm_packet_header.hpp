@@ -112,13 +112,11 @@ struct PacketHeaderBase {
     //   -> unicast_write, mcast_write, unicast_seminc, mcast_seminc
     // For now, kept it separate so I could do reads which would be handled differently
     // but for our purposes we shouldn't need read so we should be able to omit the support
-    NocSendType noc_send_type : 3;
-    // ChipSendType only used by PacketHeader, but keep here for now for bit-fields
-    ChipSendType chip_send_type : 1;
+    NocSendType noc_send_type;
     // Used only by the EDM sender and receiver channels. Populated by EDM sender channel to
     // indicate to the receiver channel what channel was the source of this packet. Reserved
     // otherwise.
-    uint8_t src_ch_id : 4;
+    uint8_t src_ch_id;
 
     // Returns size of payload in bytes - TODO: convert to words (4B)
     size_t get_payload_size_excluding_header() volatile const {
@@ -244,6 +242,7 @@ struct PacketHeaderBase {
 };
 
 struct PacketHeader : public PacketHeaderBase<PacketHeader> {
+    ChipSendType chip_send_type;
     RoutingFields routing_fields;
     // Sort of hack to work-around DRAM read alignment issues that must be 32B aligned
     // To simplify worker kernel code, we for now decide to pad up the packet header
@@ -253,9 +252,7 @@ struct PacketHeader : public PacketHeaderBase<PacketHeader> {
     // Future changes will remove this padding and require the worker kernel to be aware of this bug
     // and pad their own CBs conditionally when reading from DRAM. It'll be up to the users to
     // manage this complexity.
-    uint32_t padding0;
-    uint32_t padding1;
-
+    uint8_t padding0[10];
     private:
 
     inline static uint32_t calculate_chip_unicast_routing_fields_value(uint8_t distance_in_hops) {
@@ -305,9 +302,8 @@ struct LowLatencyRoutingFields {
 };
 
 struct LowLatencyPacketHeader : public PacketHeaderBase<LowLatencyPacketHeader> {
-    uint8_t padding0;
     LowLatencyRoutingFields routing_fields;
-    uint32_t padding1;
+    uint8_t padding0[8];
 
     private:
 
