@@ -4,6 +4,7 @@
 
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -25,9 +26,9 @@ using namespace tt::tt_metal::distributed;
 // synchronization
 
 std::shared_ptr<Program> EltwiseBinaryProgramGenerator(
-    std::shared_ptr<MeshBuffer> src0_buf,
-    std::shared_ptr<MeshBuffer> src1_buf,
-    std::shared_ptr<MeshBuffer> output_buf,
+    const std::shared_ptr<MeshBuffer>& src0_buf,
+    const std::shared_ptr<MeshBuffer>& src1_buf,
+    const std::shared_ptr<MeshBuffer>& output_buf,
     const SubDevice& sub_device_for_program,
     uint32_t num_tiles,
     uint32_t single_tile_size,
@@ -170,10 +171,11 @@ int main(int argc, char** argv) {
 
     // =========== Step 3: Create Workloads to run on the Virtual Mesh ===========
     // Specify Device Ranges on which the Workloads will run
-    LogicalDeviceRange all_devices({0, 0}, {mesh_device->num_cols() - 1, mesh_device->num_rows() - 1});
-    LogicalDeviceRange top_row({0, 0}, {mesh_device->num_cols() - 1, 0});
-    LogicalDeviceRange bottom_row(
-        {0, mesh_device->num_rows() - 1}, {mesh_device->num_cols() - 1, mesh_device->num_rows() - 1});
+    MeshCoordinateRange all_devices(mesh_device->shape());
+    MeshCoordinateRange top_row(MeshCoordinate{0, 0}, MeshCoordinate{0, mesh_device->num_cols() - 1});
+    MeshCoordinateRange bottom_row(
+        MeshCoordinate{mesh_device->num_rows() - 1, 0},
+        MeshCoordinate{mesh_device->num_rows() - 1, mesh_device->num_cols() - 1});
     // Create three eltwise binary ops using a simple program generation function
     auto add_program = EltwiseBinaryProgramGenerator(
         add_src0_buf,
@@ -204,14 +206,14 @@ int main(int argc, char** argv) {
     auto add_mesh_workload = CreateMeshWorkload();
     auto multiply_and_subtract_mesh_workload = CreateMeshWorkload();
     AddProgramToMeshWorkload(
-        add_mesh_workload, *add_program, all_devices);  // Addition runs on the full grid (sub_device 1)
+        add_mesh_workload, std::move(*add_program), all_devices);  // Addition runs on the full grid (sub_device 1)
     AddProgramToMeshWorkload(
         multiply_and_subtract_mesh_workload,
-        *multiply_program,
+        std::move(*multiply_program),
         top_row);  // Multiplication runs on the top row (sub_device 2)
     AddProgramToMeshWorkload(
         multiply_and_subtract_mesh_workload,
-        *subtract_program,
+        std::move(*subtract_program),
         bottom_row);  // Subtraction runs on the bottom row (sub device 2)
 
     // =========== Step 4: Compile and Load Workloads on the Mesh ===========

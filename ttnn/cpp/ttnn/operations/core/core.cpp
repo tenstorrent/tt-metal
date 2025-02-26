@@ -126,27 +126,4 @@ Tensor reallocate(const Tensor& input_tensor, const std::optional<MemoryConfig>&
     return ttnn::move(input_tensor, memory_config);
 }
 
-// Trace APIs - Single Device
-uint32_t begin_trace_capture(IDevice* device, const QueueId cq_id) {
-    ZoneScoped;
-    uint32_t tid = Trace::next_id();
-    device->begin_trace(*cq_id, tid);
-    return tid;
-}
-
-void end_trace_capture(IDevice* device, const uint32_t tid, const QueueId cq_id) {
-    ZoneScoped;
-    device->end_trace(*cq_id, tid);
-}
-
-void execute_trace(IDevice* device, const uint32_t tid, const QueueId cq_id, bool blocking) {
-    ZoneScoped;
-    device->replay_trace(*cq_id, tid, blocking /* block_on_device */, blocking /* block_on_worker_thread */);
-}
-
-void release_trace(IDevice* device, const uint32_t tid) {
-    ZoneScoped;
-    device->release_trace(tid);
-}
-
 }  // namespace ttnn::operations::core

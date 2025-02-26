@@ -4,6 +4,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <mesh_command_queue.hpp>
+#include <mesh_coord.hpp>
 #include <mesh_trace.hpp>
 
 #include "tt_metal/distributed/mesh_workload_utils.hpp"
@@ -21,7 +22,7 @@ void MeshTraceDescriptor::assemble_dispatch_commands(
     auto& trace_data = this->ordered_trace_data;
     for (auto& trace_md : mesh_trace_md) {
         auto& sysmem_mgr_coord = trace_md.sysmem_manager_coord;
-        auto& sysmem_manager = mesh_device->get_device(sysmem_mgr_coord.y, sysmem_mgr_coord.x)->sysmem_manager();
+        auto& sysmem_manager = mesh_device->get_device(sysmem_mgr_coord)->sysmem_manager();
         auto trace_data_word_offset = trace_md.offset / sizeof(uint32_t);
         auto trace_data_size_words = trace_md.size / sizeof(uint32_t);
         auto& bypass_data = sysmem_manager.get_bypass_data();
@@ -31,13 +32,13 @@ void MeshTraceDescriptor::assemble_dispatch_commands(
         std::vector<uint32_t> program_cmds_vector(
             std::make_move_iterator(bypass_data.begin() + trace_data_word_offset),
             std::make_move_iterator(bypass_data.begin() + trace_data_word_offset + trace_data_size_words));
-        std::vector<LogicalDeviceRange> device_ranges_to_invalidate = {};
+        std::vector<MeshCoordinateRange> device_ranges_to_invalidate;
         for (auto& program : trace_data) {
             if (program.device_range.intersects(trace_md.device_range)) {
                 // The current program intersects with a program that was previously
                 // placed on the Mesh.
                 intersection_found = true;
-                auto intersection = program.device_range.intersection(trace_md.device_range).value();
+                auto intersection = *program.device_range.intersection(trace_md.device_range);
                 if (intersection == program.device_range) {
                     // Intersection matches the originally placed program.
                     program.data.insert(
@@ -46,8 +47,8 @@ void MeshTraceDescriptor::assemble_dispatch_commands(
                         std::make_move_iterator(program_cmds_vector.end()));
                 } else {
                     // Intersection is a subset of the originally placed program.
-                    auto complement = relative_complement(program.device_range, intersection);
-                    for (auto& complement_range : complement.ranges()) {
+                    auto complement = subtract(program.device_range, intersection);
+                    for (const auto& complement_range : complement.ranges()) {
                         intermed_trace_data.push_back(MeshTraceData{complement_range, program.data});
                     }
                     intermed_trace_data.push_back(MeshTraceData{intersection, program.data});
@@ -77,7 +78,7 @@ void MeshTraceDescriptor::assemble_dispatch_commands(
         }
         this->total_trace_size += trace_md.size;
     }
-    auto bcast_device_range = LogicalDeviceRange({0, 0}, {mesh_device->num_cols() - 1, mesh_device->num_rows() - 1});
+    MeshCoordinateRange bcast_device_range(mesh_device->shape());
     std::vector<uint32_t> exec_buf_end = {};
 
     DeviceCommand command_sequence(hal.get_alignment(HalMemType::HOST));
@@ -134,7 +135,7 @@ void MeshTrace::populate_mesh_buffer(MeshCommandQueue& mesh_cq, std::shared_ptr<
     trace_buffer->mesh_buffer =
         MeshBuffer::create(global_trace_buf_config, device_local_trace_buf_config, mesh_cq.device());
 
-    std::unordered_map<LogicalDeviceRange, uint32_t> write_offset_per_device_range = {};
+    std::unordered_map<MeshCoordinateRange, uint32_t> write_offset_per_device_range = {};
     for (auto& mesh_trace_data : trace_buffer->desc->ordered_trace_data) {
         auto& device_range = mesh_trace_data.device_range;
         if (write_offset_per_device_range.find(device_range) == write_offset_per_device_range.end()) {

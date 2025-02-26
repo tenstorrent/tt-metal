@@ -32,7 +32,14 @@ FORCE_INLINE void print_pkt_hdr_routing_fields(volatile tt::fabric::PacketHeader
 #endif
 }
 
-FORCE_INLINE void print_pkt_header_noc_fields(volatile tt::fabric::PacketHeader *const packet_start) {
+FORCE_INLINE void print_pkt_hdr_routing_fields(volatile tt::fabric::LowLatencyPacketHeader *const packet_start) {
+    #ifdef DEBUG_PRINT_ENABLED
+        DPRINT << "ROUTE:" << packet_start->routing_fields.value << "\n";
+    #endif
+}
+
+template <typename T>
+FORCE_INLINE void print_pkt_header_noc_fields(volatile T *const packet_start) {
 #ifdef DEBUG_PRINT_ENABLED
     switch (packet_start->noc_send_type) {
         case tt::fabric::NocSendType::NOC_UNICAST_WRITE: {
@@ -62,12 +69,23 @@ FORCE_INLINE void print_pkt_header(volatile tt::fabric::PacketHeader *const pack
 #endif
 }
 
+FORCE_INLINE void print_pkt_header(volatile tt::fabric::LowLatencyPacketHeader *const packet_start) {
+#ifdef DEBUG_PRINT_ENABLED
+    auto const& header = *packet_start;
+    DPRINT << "PKT: nsnd_t:" << (uint32_t) packet_start->noc_send_type <<
+        ", src_chip:" << (uint32_t) packet_start->src_ch_id <<
+        ", payload_size_bytes:" << (uint32_t) packet_start->payload_size_bytes << "\n";
+    print_pkt_hdr_routing_fields(packet_start);
+    print_pkt_header_noc_fields(packet_start);
+#endif
+}
+
 
 // Since we unicast to local, we must omit the packet header
 FORCE_INLINE void execute_chip_unicast_to_local_chip(
-    volatile tt::fabric::PacketHeader *const packet_start, uint16_t payload_size_bytes, uint32_t transaction_id) {
+    volatile PACKET_HEADER_TYPE *const packet_start, uint16_t payload_size_bytes, uint32_t transaction_id) {
     auto const& header = *packet_start;
-    uint32_t payload_start_address = reinterpret_cast<size_t>(packet_start) + sizeof(tt::fabric::PacketHeader);
+    uint32_t payload_start_address = reinterpret_cast<size_t>(packet_start) + sizeof(PACKET_HEADER_TYPE);
 
     tt::fabric::NocSendType noc_send_type = packet_start->noc_send_type;
     switch (noc_send_type) {
@@ -116,6 +134,10 @@ FORCE_INLINE void update_packet_header_for_next_hop(volatile tt::fabric::PacketH
     packet_header->routing_fields.value = cached_routing_fields.value - decrement_val;
 }
 
+FORCE_INLINE void update_packet_header_for_next_hop(volatile tt::fabric::LowLatencyPacketHeader * packet_header, tt::fabric::LowLatencyRoutingFields cached_routing_fields) {
+    packet_header->routing_fields.value >>= tt::fabric::LowLatencyRoutingFields::FIELD_WIDTH;
+}
+
 // This function forwards a packet to the downstream EDM channel for eventual sending
 // to the next chip in the line/ring
 //
@@ -127,9 +149,9 @@ FORCE_INLINE void update_packet_header_for_next_hop(volatile tt::fabric::PacketH
 // !!!WARNING!!!
 template <uint8_t NUM_SENDER_BUFFERS>
 FORCE_INLINE void forward_payload_to_downstream_edm(
-    volatile tt::fabric::PacketHeader *packet_header,
+    volatile PACKET_HEADER_TYPE *packet_header,
     uint16_t payload_size_bytes,
-    tt::fabric::RoutingFields cached_routing_fields,
+    ROUTING_FIELDS_TYPE cached_routing_fields,
     tt::fabric::EdmToEdmSender<NUM_SENDER_BUFFERS> &downstream_edm_interface,
     uint8_t transaction_id
     ) {
@@ -141,6 +163,6 @@ FORCE_INLINE void forward_payload_to_downstream_edm(
     update_packet_header_for_next_hop(packet_header, cached_routing_fields);
     downstream_edm_interface.send_payload_non_blocking_from_address_with_trid(
         reinterpret_cast<size_t>(packet_header),
-        payload_size_bytes + sizeof(tt::fabric::PacketHeader),
+        payload_size_bytes + sizeof(PACKET_HEADER_TYPE),
         transaction_id);
 }
