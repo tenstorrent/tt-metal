@@ -40,9 +40,9 @@ void kernel_main() {
     constexpr uint32_t last_zero_stick_size = get_compile_time_arg_val(12);
     constexpr uint32_t stick_size_padded_aligned = get_compile_time_arg_val(21);
 
-#define not_pad_by_zero get_compile_time_arg_val(13) == 1
-#define front_padding get_compile_time_arg_val(9)
-#define unaligned get_compile_time_arg_val(22) == 1
+    constexpr bool not_pad_by_zero = get_compile_time_arg_val(13) == 1;
+    constexpr uint32_t front_padding = get_compile_time_arg_val(9);
+    constexpr bool unaligned = get_compile_time_arg_val(22) == 1;
 
 #if (not_pad_by_zero)
     constexpr uint32_t packed_pad_value = get_compile_time_arg_val(14);
@@ -56,7 +56,7 @@ void kernel_main() {
     constexpr uint32_t cb_pad = tt::CBIndex::c_1;
     constexpr uint32_t cb_pad_align = tt::CBIndex::c_2;
 
-#define stick_size_is_pow2 get_compile_time_arg_val(19) == 1
+    constexpr bool stick_size_is_pow2 = get_compile_time_arg_val(19) == 1;
 #if (stick_size_is_pow2)
     constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(20);
 #else
