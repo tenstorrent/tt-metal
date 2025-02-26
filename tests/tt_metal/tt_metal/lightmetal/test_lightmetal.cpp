@@ -465,5 +465,61 @@ TEST_F(LightMetalBasicTest, TwoProgramTraceCapture) {
     ReleaseTrace(device_, tid);
 }
 
+// Flatbuffer verification tests for various types/objects. A roundtrip where
+// object is created, serialized, deserialized and compared to original.
+// FIXME (kmabee) - Don't need silicon device, could be moved elsewhere.
+// FIXME (kmabee) - instead of comparing original to unserialized, do something else.
+
+TEST_F(LightMetalFlatbufferRoundtripTest, Primitive_CoreCoord) {
+    CoreCoord core = {6, 3};
+    auto core_roundtrip = fb_roundtrip<flatbuffer::CoreCoord>(core);
+    EXPECT_EQ(core, core_roundtrip);
+
+    // Add an object to struct, not covered
+    VerifyFlatbufferRoundtrip<flatbuffer::CoreCoord>(core);
+}
+
+TEST_F(LightMetalFlatbufferRoundtripTest, Primitive_CoreRange) {
+    CoreRange core_range = {CoreCoord{6, 3}, CoreCoord{6, 5}};
+    auto core_range_roundtrip = fb_roundtrip<flatbuffer::CoreRange>(core_range);
+    EXPECT_EQ(core_range, core_range_roundtrip);
+
+    VerifyFlatbufferRoundtrip<flatbuffer::CoreRange>(core_range);
+}
+
+TEST_F(LightMetalFlatbufferRoundtripTest, Primitive_CoreRangeSet) {
+    CoreRangeSet core_range_set(
+        std::vector{CoreRange{CoreCoord{6, 3}, CoreCoord{6, 5}}, CoreRange{CoreCoord{1, 1}, CoreCoord{3, 4}}});
+    auto core_range_set_roundtrip = fb_roundtrip<flatbuffer::CoreRangeSet>(core_range_set);
+    EXPECT_EQ(core_range_set, core_range_set_roundtrip);
+
+    VerifyFlatbufferRoundtrip<flatbuffer::CoreRangeSet>(core_range_set);
+}
+
+// TODO a version for CoreRangeSet with multiple CoreRanges:
+
+// TEST_F(LightMetalFlatbufferRoundtripTest, Primitive_DataMovementConfig) {
+//     DataMovementConfig config = {DataMovementProcessor::RISCV_0, NOC::RISCV_0_default};
+//     VerifyFlatbufferRoundtrip<flatbuffer::DataMovementConfig>(config);
+// }
+
+// TEST_F(LightMetalFlatbufferRoundtripTest, Primitive_ComputeConfig) {
+//     ComputeConfig config = {
+//         .math_fidelity = MathFidelity::HiFi4,
+//         .fp32_dest_acc_en = false,
+//         .dst_full_sync_en = false,
+//         .unpack_to_dest_mode = {},
+//         .bfp8_pack_precise = false,
+//         .math_approx_mode = true,
+//         .compile_args = {1, 1},
+//         .defines = {{"SFPU_OP_EXP_INCLUDE", "1"}, {"SFPU_OP_CHAIN_0", "exp_tile_init(); exp_tile(0);"}},
+//         .opt_level = KernelBuildOptLevel::O3
+//     };
+
+//     auto roundtrip = fb_roundtrip<flatbuffer::ComputeConfig>(config);
+//     EXPECT_EQ(config, roundtrip);
+//     // VerifyFlatbufferRoundtrip<flatbuffer::ComputeConfig>(config, true);
+// }
+
 }  // namespace
 }  // namespace tt::tt_metal

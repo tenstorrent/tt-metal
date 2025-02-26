@@ -105,8 +105,9 @@ target_include_directories(
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/debug
         ${PROJECT_SOURCE_DIR}/tt_metal/include
-    PRIVATE
         ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers
+    # PRIVATE
+    #     ${CMAKE_CURRENT_BINARY_DIR}/flatbuffers
 )
 
 target_compile_options(impl PUBLIC -Wno-int-to-pointer-cast)
