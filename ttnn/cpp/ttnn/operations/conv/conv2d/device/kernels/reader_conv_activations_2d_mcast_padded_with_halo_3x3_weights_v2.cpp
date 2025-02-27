@@ -273,4 +273,6 @@ void kernel_main() {
         }  // act_w_num_outer
         cb_pop_front(tilized_in0_cb_id, act_block_num_tiles);
     }
+
+    noc_async_write_barrier();
 }
