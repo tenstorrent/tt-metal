@@ -8,10 +8,12 @@
 #include "autograd/tensor.hpp"
 #include "core/scoped.hpp"
 #include "init/tensor_initializers.hpp"
+#include "modules/embedding_module.hpp"
+#include "modules/gpt_block.hpp"
+#include "modules/layer_norm_module.hpp"
 #include "modules/positional_embeddings.hpp"
 #include "ops/binary_ops.hpp"
 #include "ops/unary_ops.hpp"
-
 namespace ttml::models::gpt2 {
 
 namespace {
@@ -112,9 +114,9 @@ Transformer::Transformer(const TransformerConfig& config) {
             "embedding_dim={}",
             embedding_dim));
     }
-
+    auto last_fc = std::make_shared<ttml::modules::LinearLayer>(embedding_dim, vocab_size, /* bias */ false);
     if (config.weight_tying == WeightTyingType::Enabled) {
-        tok_emb = std::make_shared<ttml::modules::Embedding>(fc->get_weight());
+        tok_emb = std::make_shared<ttml::modules::Embedding>(last_fc->get_weight());
     } else {
         tok_emb = std::make_shared<ttml::modules::Embedding>(vocab_size_divisible_by_32, embedding_dim);
     }
@@ -122,7 +124,7 @@ Transformer::Transformer(const TransformerConfig& config) {
     auto create_positional_embedding = [position_embedding_type,
                                         max_sequence_length,
                                         embedding_dim,
-                                        dropout_prob]() -> std::shared_ptr<modules::PositionalEmbeddingBase> {
+                                        dropout_prob]() -> std::shared_ptr<autograd::ModuleBase> {
         if (position_embedding_type == PositionalEmbeddingType::Trainable) {
             return std::make_shared<ttml::modules::TrainablePositionalEmbedding>(
                 ttml::modules::PositionalEmbeddingConfig{
@@ -145,7 +147,7 @@ Transformer::Transformer(const TransformerConfig& config) {
             std::make_shared<ttml::modules::GPTBlock>(embedding_dim, num_heads, dropout_prob, use_composite_layernorm));
     }
     ln_fc = std::make_shared<ttml::modules::LayerNormLayer>(embedding_dim, use_composite_layernorm);
-    fc = std::make_shared<ttml::modules::LinearLayer>(embedding_dim, vocab_size, /* bias */ false);
+    fc = last_fc;
 
     create_name("transformer");
     register_module(tok_emb, "tok_emb");
