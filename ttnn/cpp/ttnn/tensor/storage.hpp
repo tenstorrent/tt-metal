@@ -325,11 +325,12 @@ struct MultiDeviceStorage {
 
     inline std::shared_ptr<Buffer> get_buffer_for_device(IDevice* device) const {
         std::lock_guard<std::mutex> lock(buffer_mtx);
-        TT_FATAL(buffers.find(device->id()) != buffers.end(), "Buffer not found for device {}", device->id());
+        auto buffer_it = buffers.find(device->id());
+        TT_FATAL(buffer_it != buffers.end(), "Buffer not found for device {}", device->id());
         TT_ASSERT(
-            buffers.at(device->id())->device() == device,
+            buffer_it->device() == device,
             "Mismatch between device derived from buffer and device derived from MultiDeviceStorage.");
-        return buffers.at(device->id());
+        return buffer_it;
     }
 
     inline std::shared_ptr<Buffer>& get_buffer_for_device(IDevice* device) {
