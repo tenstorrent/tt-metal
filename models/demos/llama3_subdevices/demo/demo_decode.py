@@ -417,7 +417,7 @@ def run_llama3_demo(
         current_pos += 1
         rot_mat_idxs_updated = tt_model.rope_setup.get_rot_idxs(current_pos, on_host=True)
         ttnn.copy_host_to_device_tensor(rot_mat_idxs_updated, rot_mat_idxs)
-        ttnn.synchronize_devices(mesh_device)
+        # ttnn.synchronize_devices(mesh_device)
         # Write to host
         tt_output_torch = ttnn.to_torch(
             tt_out_tok.cpu(blocking=True, cq_id=0),
@@ -435,7 +435,7 @@ def run_llama3_demo(
             # print(encoded_prompts_tensor_whole_sequence)
             # print(encoded_prompts)
             # While in "prefill" mode, use the prompt tokens as the output
-            ttnn.synchronize_devices(mesh_device)
+            # ttnn.synchronize_devices(mesh_device)
             all_outputs.append(encoded_prompts[0][iteration])  # Update list of TT outputs
             tt_out_tok_reset = ttnn.from_torch(
                 encoded_prompts_tensor_whole_sequence[:, iteration].reshape(1, 1, 1, batch_size),
