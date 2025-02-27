@@ -40,12 +40,12 @@ std::string read_file_to_str(const std::string &file_path);
 template <typename Model>
 void save_training_state(
     std::string &model_path,
-    const std::shared_ptr<Model> &model,
+    Model &model,
     const std::unique_ptr<ttml::schedulers::LRSchedulerBase> &scheduler,
     const std::string &model_name,
     const std::string &optimizer_name) {
     ttml::serialization::MsgPackFile serializer;
-    ttml::serialization::write_module(serializer, model_name, model.get());
+    std::visit([&](auto &model) { ttml::serialization::write_module(serializer, model_name, model.get()); }, model);
     ttml::serialization::write_optimizer(serializer, optimizer_name, scheduler->get_optimizer().get());
     ttml::serialization::write_state_dict(serializer, "scheduler", scheduler->get_state_dict());
     serializer.serialize(model_path);
@@ -54,13 +54,13 @@ void save_training_state(
 template <typename Model>
 void load_training_state(
     std::string &model_path,
-    const std::shared_ptr<Model> &model,
+    Model &model,
     const std::unique_ptr<ttml::schedulers::LRSchedulerBase> &scheduler,
     const std::string &model_name,
     const std::string &optimizer_name) {
     ttml::serialization::MsgPackFile deserializer;
     deserializer.deserialize(model_path);
-    ttml::serialization::read_module(deserializer, model_name, model.get());
+    std::visit([&](auto &model) { ttml::serialization::read_module(deserializer, model_name, model.get()); }, model);
     ttml::serialization::read_optimizer(deserializer, optimizer_name, scheduler->get_optimizer().get());
     auto state_dict = scheduler->get_state_dict();
     ttml::serialization::read_state_dict(deserializer, "scheduler", state_dict);
@@ -144,4 +144,4 @@ std::string generate_run_name(const std::string &run_name, const TrainingConfig 
     return ss.str();
 }
 
-void initialize_device(bool ddp);
+void initialize_device(bool ddp, bool tp);
