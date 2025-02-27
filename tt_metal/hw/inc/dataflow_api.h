@@ -1511,7 +1511,7 @@ FORCE_INLINE void noc_async_write_one_packet_with_trid_set_state(
     std::uint64_t dst_noc_addr, uint8_t cmd_buf = write_cmd_buf, uint8_t noc = noc_index) {
 #ifndef ARCH_GRAYSKULL
     WAYPOINT("NAWW");
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID_SET_STATE, dst_noc_addr, size, vc);
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID_SET_STATE, dst_noc_addr, 0, NOC_UNICAST_WRITE_VC);
     while (!noc_cmd_buf_ready(noc, cmd_buf));
     WAYPOINT("NAWD");
     uint32_t noc_cmd_field = NOC_CMD_CPY | NOC_CMD_WR | NOC_CMD_VC_STATIC | NOC_CMD_STATIC_VC(NOC_UNICAST_WRITE_VC) |
@@ -1538,7 +1538,7 @@ FORCE_INLINE void noc_async_write_one_packet_with_trid_with_state(
     uint8_t noc = noc_index) {
 #ifndef ARCH_GRAYSKULL
     WAYPOINT("NWPW");
-    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID_WITH_STATE, 0ull, 0, -1);
+    RECORD_NOC_EVENT_WITH_ADDR(NocEventType::WRITE_WITH_TRID_WITH_STATE, 0ull, size, -1);
     while (!noc_cmd_buf_ready(noc, cmd_buf));
     WAYPOINT("NWPD");
 
