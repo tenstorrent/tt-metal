@@ -23,7 +23,7 @@
 #include "ttnn/types.hpp"
 #include "ttnn/operations/data_movement/bcast/bcast.hpp"
 #include <tt-metalium/hal_exp.hpp>
-
+#include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 namespace ttnn::operations::unary {
 
 Tensor _deg2rad(const Tensor& input_tensor, const std::optional<MemoryConfig>& output_mem_config) {
@@ -155,11 +155,12 @@ Tensor _cosh(const Tensor& input_a, const std::optional<MemoryConfig>& output_me
 // TODO: In future will uplift the op once the floor and tan has supported.
 // digamma support for the range of (1, inf)
 Tensor _digamma(const Tensor& input_a, const std::optional<MemoryConfig>& output_mem_config) {
-    Tensor t_log_out = ttnn::log(input_a, output_mem_config);  // negative log is not useful here
+    Tensor input = input_a.dtype() == DataType::BFLOAT8_B ? ttnn::fill_implicit_tile_padding(input_a, 1.0f) : input_a;
+    Tensor t_log_out = ttnn::log(input, output_mem_config);  // negative log is not useful here
 
     // 1/2(z)
-    Tensor output = ttnn::multiply(ttnn::reciprocal(input_a, output_mem_config), 0.5f, std::nullopt, output_mem_config);
-    Tensor tmp = ttnn::square(ttnn::reciprocal(input_a, output_mem_config), output_mem_config);
+    Tensor output = ttnn::multiply(ttnn::reciprocal(input, output_mem_config), 0.5f, std::nullopt, output_mem_config);
+    Tensor tmp = ttnn::square(ttnn::reciprocal(input, output_mem_config), output_mem_config);
     Tensor val_square = tmp;
     // (1/12) * x^2
     output = ttnn::subtract(output, ttnn::multiply(tmp, 0.083333333f), std::nullopt, output_mem_config);

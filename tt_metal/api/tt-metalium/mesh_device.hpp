@@ -190,7 +190,6 @@ public:
     HalProgrammableCoreType get_programmable_core_type(CoreCoord virtual_core) const override;
     std::vector<std::pair<transfer_info_cores, uint32_t>> extract_dst_noc_multicast_info(
         const std::vector<CoreRange>& ranges, const CoreType core_type) override;
-    size_t get_device_kernel_defines_hash() override;
     uint8_t num_noc_mcast_txns(SubDeviceId sub_device_id) const override;
     uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const override;
     uint8_t noc_data_start_index(SubDeviceId sub_device_id, bool mcast_data=true, bool unicast_data=true) const override;

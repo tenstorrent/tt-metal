@@ -9,7 +9,7 @@
 
 #include "device.hpp"
 #include "hostdevcommon/common_values.hpp"
-#include "work_executor.hpp"
+#include "work_executor_types.hpp"
 #include "basic_allocator.hpp"
 #include "l1_banking_allocator.hpp"
 #include "data_types.hpp"
@@ -49,8 +49,8 @@ public:
     Device(const Device &other) = delete;
     Device& operator=(const Device &other) = delete;
 
-    Device(Device &&other) = default;
-    Device& operator=(Device &&other) = default;
+    Device(Device&& other);
+    Device& operator=(Device&& other);
 
     tt::ARCH arch() const override;
 
@@ -160,8 +160,8 @@ public:
     void enable_async(bool enable) override;
     void force_enable_async(bool enable);
     void synchronize() override;
-    WorkExecutorMode get_worker_mode() override { return work_executor_.get_worker_mode(); }
-    bool is_worker_queue_empty() const override { return work_executor_.worker_queue.empty(); }
+    WorkExecutorMode get_worker_mode() override;
+    bool is_worker_queue_empty() const override;
 
     void push_work(std::function<void()> work, bool blocking) override;
 
@@ -175,8 +175,6 @@ public:
     HalProgrammableCoreType get_programmable_core_type(CoreCoord virtual_core) const override;
 
     std::vector<std::pair<transfer_info_cores, uint32_t>> extract_dst_noc_multicast_info(const std::vector<CoreRange>& ranges, const CoreType core_type) override;
-
-    size_t get_device_kernel_defines_hash() override;
 
     uint8_t num_noc_mcast_txns(SubDeviceId sub_device_id) const override;
     uint8_t num_noc_unicast_txns(SubDeviceId sub_device_id) const override;
@@ -249,7 +247,7 @@ private:
 
     // Work Executor for this device - can asynchronously process host side work for
     // all tasks scheduled on this device
-    WorkExecutor work_executor_;
+    std::unique_ptr<WorkExecutor> work_executor_;
     uint32_t worker_thread_core_ = 0;
     uint32_t completion_queue_reader_core_ = 0;
     std::unique_ptr<SystemMemoryManager> sysmem_manager_;
@@ -262,8 +260,6 @@ private:
     std::set<CoreCoord> storage_only_cores_;
     std::set<CoreCoord> ethernet_cores_;
     std::vector<CoreCoord> optimal_dram_bank_to_logical_worker_assignment_;
-
-    std::map<std::string, std::string> device_kernel_defines_;
 
     std::vector<int32_t> dram_bank_offset_map_;
     std::vector<int32_t> l1_bank_offset_map_;

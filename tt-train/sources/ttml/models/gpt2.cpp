@@ -125,10 +125,17 @@ Transformer::Transformer(const TransformerConfig& config) {
                                         dropout_prob]() -> std::shared_ptr<modules::PositionalEmbeddingBase> {
         if (position_embedding_type == PositionalEmbeddingType::Trainable) {
             return std::make_shared<ttml::modules::TrainablePositionalEmbedding>(
-                embedding_dim, dropout_prob, max_sequence_length);
+                ttml::modules::PositionalEmbeddingConfig{
+                    .embedding_dim = embedding_dim,
+                    .sequence_length = max_sequence_length,
+                    .dropout_prob = dropout_prob,
+                    .use_dropout_seed_per_device = false});
         } else {
-            return std::make_shared<ttml::modules::PositionalEmbedding>(
-                embedding_dim, dropout_prob, max_sequence_length);
+            return std::make_shared<ttml::modules::PositionalEmbedding>(ttml::modules::PositionalEmbeddingConfig{
+                .embedding_dim = embedding_dim,
+                .sequence_length = max_sequence_length,
+                .dropout_prob = dropout_prob,
+                .use_dropout_seed_per_device = false});
         }
     };
     pos_emb = create_positional_embedding();
