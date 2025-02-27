@@ -5,7 +5,7 @@ file(
     LIST_DIRECTORIES true
     *.hpp
     *.cpp
-) # I am a bad person
+) # I am a really bad person
 
 # Check if Metalium::Metal target exists
 # If it does not exist, assume that we are building with tt-train as top level project

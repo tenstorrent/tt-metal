@@ -13,6 +13,7 @@ def create_and_load_sub_device_manager_with_fabric_interface(
     local_allocator_size,
     enable_persistent_fabric=True,
     wrap_fabric_around_mesh=False,
+    context_switch_interval_override=None,
 ):
     assert ccl_worker_sub_device_id < len(worker_sub_devices)
     mesh_sub_device_manager_id, fabric_subdevice_id = mesh_device.create_sub_device_manager_with_fabric(
@@ -21,11 +22,16 @@ def create_and_load_sub_device_manager_with_fabric_interface(
     # fabric sub-device id can also be queried from device, no need to explicitly pass it in
     mesh_device.load_sub_device_manager(mesh_sub_device_manager_id)
     if enable_persistent_fabric:
-        ttnn.initialize_edm_fabric(mesh_device, wrap_fabric_around_mesh=wrap_fabric_around_mesh)
+        ttnn.initialize_edm_fabric(
+            mesh_device,
+            wrap_fabric_around_mesh=wrap_fabric_around_mesh,
+            context_switch_interval_override=context_switch_interval_override,
+        )
     return mesh_sub_device_manager_id
 
 
 def teardown_fabric_interface(mesh_device):
+    logger.debug(f"Tearing down fabric (this may take a while if context switch interval is large)")
     ttnn.teardown_edm_fabric(mesh_device)
     ttnn.synchronize_devices(mesh_device)
 

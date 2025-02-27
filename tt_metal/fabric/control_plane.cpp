@@ -317,7 +317,7 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table() {
             const auto& physical_chip_id =
                 this->logical_mesh_chip_id_to_physical_chip_id_mapping_[mesh_id][src_chip_id];
             std::uint32_t num_ports_per_chip =
-                tt::Cluster::instance().get_soc_desc(physical_chip_id).ethernet_cores.size();
+                tt::Cluster::instance().get_soc_desc(physical_chip_id).get_cores(CoreType::ETH).size();
             this->intra_mesh_routing_tables_[mesh_id][src_chip_id].resize(
                 num_ports_per_chip);  // contains more entries than needed, this size is for all eth channels on chip
             for (int i = 0; i < num_ports_per_chip; i++) {
@@ -368,7 +368,7 @@ void ControlPlane::convert_fabric_routing_table_to_chip_routing_table() {
             const auto& physical_chip_id =
                 this->logical_mesh_chip_id_to_physical_chip_id_mapping_[src_mesh_id][src_chip_id];
             std::uint32_t num_ports_per_chip =
-                tt::Cluster::instance().get_soc_desc(physical_chip_id).ethernet_cores.size();
+                tt::Cluster::instance().get_soc_desc(physical_chip_id).get_cores(CoreType::ETH).size();
             this->inter_mesh_routing_tables_[src_mesh_id][src_chip_id].resize(
                 num_ports_per_chip);  // contains more entries than needed
             for (int i = 0; i < num_ports_per_chip; i++) {
@@ -580,6 +580,35 @@ std::vector<std::pair<chip_id_t, chan_id_t>> ControlPlane::get_fabric_route(
     }
 
     return route;
+}
+
+std::vector<std::pair<routing_plane_id_t, CoreCoord>> ControlPlane::get_routers_to_chip(
+    mesh_id_t src_mesh_id, chip_id_t src_chip_id, mesh_id_t dst_mesh_id, chip_id_t dst_chip_id) const {
+    std::vector<std::pair<routing_plane_id_t, CoreCoord>> routers;
+    const auto& router_direction_eth_channels =
+        router_port_directions_to_physical_eth_chan_map_[src_mesh_id][src_chip_id];
+    for (const auto& [direction, eth_chans] : router_direction_eth_channels) {
+        for (const auto& src_chan_id : eth_chans) {
+            chan_id_t next_chan_id = 0;
+            if (src_mesh_id != dst_mesh_id) {
+                // Inter-mesh routing
+                next_chan_id = this->inter_mesh_routing_tables_[src_mesh_id][src_chip_id][src_chan_id][dst_mesh_id];
+
+            } else if (src_chip_id != dst_chip_id) {
+                // Intra-mesh routing
+                next_chan_id = this->intra_mesh_routing_tables_[src_mesh_id][src_chip_id][src_chan_id][dst_chip_id];
+            }
+            if (src_chan_id != next_chan_id) {
+                continue;
+            }
+            const auto& physical_chip_id =
+                this->logical_mesh_chip_id_to_physical_chip_id_mapping_[src_mesh_id][src_chip_id];
+            routers.emplace_back(
+                this->get_routing_plane_id(src_chan_id),
+                tt::Cluster::instance().get_virtual_eth_core_from_channel(physical_chip_id, src_chan_id));
+        }
+    }
+    return routers;
 }
 
 std::vector<chip_id_t> ControlPlane::get_intra_chip_neighbors(

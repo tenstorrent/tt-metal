@@ -19,6 +19,6 @@ using CoordinateTranslationMap = std::unordered_map<MeshCoordinate, PhysicalCoor
 // Returns a translation map between logical coordinates in logical ND space
 // to the physical coordinates as defined by the UMD layer.
 // TODO: #17477 - Return MeshContainer<PhysicalCoordinate> that contains everything we need.
-const std::pair<CoordinateTranslationMap, SimpleMeshShape>& get_system_mesh_coordinate_translation_map();
+const std::pair<CoordinateTranslationMap, MeshShape>& get_system_mesh_coordinate_translation_map();
 
 }  // namespace tt::tt_metal::distributed

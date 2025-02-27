@@ -23,7 +23,7 @@ protected:
         if (!check_board_is_n300()) {
             GTEST_SKIP() << "Skipping N300 specific tests";
         }
-        ttml::autograd::ctx().set_mesh_shape({1, 2});
+        ttml::autograd::ctx().set_mesh_shape(tt::tt_metal::distributed::MeshShape(1, 2));
         ttml::autograd::ctx().open_device();
     }
 
@@ -143,7 +143,7 @@ TEST_F(N300UtilsTest, TestXTensorReplicateAllReduceBadTiles) {
     auto* device = &ttml::autograd::ctx().get_device();
     auto mesh_shape = device->shape();
 
-    xt::xarray<float> xtensor = xt::random::rand({32}, -0.05, 0.05).reshape({1, 1, 1, 32});
+    xt::xarray<float> xtensor = xt::random::rand({32}, -1.F, 1.F).reshape({1, 1, 4, 8});
 
     ttml::core::XTensorToMeshVariant<float> replicate_composer = ttml::core::ReplicateXTensorToMesh<float>(mesh_shape);
     auto tensor = ttml::core::from_xtensor(xtensor, device, replicate_composer);
