@@ -356,7 +356,7 @@ void to_string_row_major(
     const std::size_t buffer_offset,
     int64_t rank,
     int64_t dim = 0) {
-    auto stride = strides[dim];
+    auto stride = dim < strides.size() ? strides[dim] : 0;
 
     std::string spaces = std::string(TENSOR_TYPE_STRING_PLUS_OPEN_PARENTHESIS_LENGTH + dim, ' ');
     std::string before;
@@ -376,7 +376,7 @@ void to_string_row_major(
         ss << spaces;
     }
     ss << "[";
-    auto dimension_shortener = get_dimension_shortener(shape[-rank]);
+    auto dimension_shortener = get_dimension_shortener(rank != 0 ? shape[-rank] : 1);
     for (std::size_t index = 0;
          dimension_shortener.print_parenthesis_and_advance_index_if_reached_half_of_max_and_check_if_loop_is_done(
              ss, index, before, after);
@@ -396,7 +396,7 @@ void to_string_row_major(
         } else {
             print_datum(ss, buffer[buffer_offset + index]);
         }
-        print_trailing_comma(ss, index, shape[-rank], after_comma);
+        print_trailing_comma(ss, index, rank != 0 ? shape[-rank] : 1, after_comma);
     }
     ss << "]";
 }
