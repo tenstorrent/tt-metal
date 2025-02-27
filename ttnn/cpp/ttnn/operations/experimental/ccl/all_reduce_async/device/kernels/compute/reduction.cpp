@@ -55,5 +55,7 @@ void MAIN {
 
         block_num_tiles_cnt += num_tiles_to_pack;
     }
+
+    cb_push_back(cb_out0, block_num_tiles);
 }
 }  // namespace NAMESPACE

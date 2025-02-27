@@ -56,27 +56,6 @@ AllReduceAsync create_all_reduce_async_struct(
         enable_persistent_fabric_mode};
 }
 
-uint32_t find_scatter_dim(const ttnn::Shape& input_tensor_padded_shape, size_t num_workers) {
-    // iterate until we find a dimension that is divisible by num_workers
-    TT_FATAL(input_tensor_padded_shape.size() == 4, "Expected input tensor to have 4 dimensions");
-    ttnn::Shape input_tensor_shape_in_tiles{
-        input_tensor_padded_shape[0],
-        input_tensor_padded_shape[1],
-        input_tensor_padded_shape[2] / tt::constants::TILE_HEIGHT,
-        input_tensor_padded_shape[3] / tt::constants::TILE_WIDTH};
-    for (uint32_t dim = 0; dim < 4; ++dim) {
-        if (input_tensor_shape_in_tiles[dim] % num_workers == 0) {
-            tt::log_debug(
-                "Found scatter dimension {} for input tensor with padded shape {}", dim, input_tensor_padded_shape);
-            return dim;
-        }
-    }
-    TT_THROW(
-        "No scatter dimension found for input tensor with padded shape {} and num_workers {}",
-        input_tensor_padded_shape,
-        num_workers);
-}
-
 }  // namespace all_reduce_detail
 }  // namespace ccl
 
@@ -104,25 +83,9 @@ void AllReduceAsync::validate(const std::vector<Tensor>& input_tensors) const {
         input_tensor.memory_config().memory_layout);
 }
 
-static void validate_output_tensor_allocation(const std::vector<Tensor>& output_tensors) {
-    for (const auto& output_tensor : output_tensors) {
-        const auto& buffers = output_tensor.buffers();
-        const auto first_address = buffers.front()->address();
-        TT_FATAL(
-            std::all_of(
-                buffers.begin(),
-                buffers.end(),
-                [&first_address](const auto& buffer) {
-                    return buffer != nullptr && buffer->address() == first_address;
-                }),
-            "Output buffers for all_reduce async must be lock-step allocated but some of the tensors were allocated at "
-            "different addresses across devices.");
-    }
-}
-
 std::vector<ttnn::TensorSpec> AllReduceAsync::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
     const auto& input_tensor = input_tensors[0];
-    auto shape = input_tensor.get_padded_shape();  // TODO: Replace with get_logical_shape()
+    auto shape = input_tensor.get_padded_shape();
     return {TensorSpec(
         shape,
         TensorLayout(input_tensor.get_dtype(), input_tensor.get_tensor_spec().page_config(), output_mem_config))};
@@ -151,7 +114,7 @@ operation::ProgramWithCallbacks AllReduceAsync::create_program(
     tt::log_debug(
         tt::LogOp, "output_tensor_memory_config.shard_spec->shape: {}", output_tensor_memory_config.shard_spec->shape);
 
-    tt::log_info(tt::LogOp, "Running TG Llama specific all_reduce_async_minimal_multi_core_with_workers");
+    tt::log_debug(tt::LogOp, "Running TG Llama specific all_reduce_async_minimal_multi_core_with_workers");
     return all_reduce_async_minimal_multi_core_with_workers(
         input_tensors[0],
         input_tensors[1],
@@ -191,7 +154,7 @@ namespace ccl {
 
 Tensor all_reduce_async(
     const Tensor& input_tensor,
-    Tensor& all_gather_output_tensor,
+    Tensor& buffer_tensor,
     const uint32_t cluster_axis,
     const MeshDevice& mesh_device,
     const ttnn::ccl::Topology topology,
@@ -208,8 +171,6 @@ Tensor all_reduce_async(
     std::size_t num_devices = (cluster_axis == 0) ? mesh_view.num_rows() : mesh_view.num_cols();
 
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
-    CoreCoord grid_size = devices[0]->compute_with_storage_grid_size();
-    auto core_grid = CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1});
     std::vector<GlobalSemaphore> semaphores = multi_device_global_semaphore.global_semaphores;
 
     operation::launch_op(
@@ -235,7 +196,7 @@ Tensor all_reduce_async(
                                                                 : mesh_view.get_devices_on_row(coordinate[0]);
 
             const auto& input_tensor = input_tensors.at(0);
-            const auto& all_gather_output_tensor = input_tensors.at(1);
+            const auto& buffer_tensor = input_tensors.at(1);
 
             return operation::run(
                 ttnn::ccl::all_reduce_detail::create_all_reduce_async_struct(
@@ -247,9 +208,9 @@ Tensor all_reduce_async(
                     semaphores,
                     subdevice_id,
                     enable_persistent_fabric_mode),
-                {input_tensor, all_gather_output_tensor});
+                {input_tensor, buffer_tensor});
         },
-        {input_tensor, all_gather_output_tensor},
+        {input_tensor, buffer_tensor},
         output_tensors);
     return output_tensors.at(0);
 }
