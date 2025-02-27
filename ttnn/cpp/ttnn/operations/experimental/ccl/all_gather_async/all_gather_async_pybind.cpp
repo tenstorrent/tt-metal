@@ -30,6 +30,7 @@ void bind_all_gather_async(pybind11::module& module, const ccl_operation_t& oper
                const ttnn::Tensor& input_tensor,
                const int32_t dim,
                const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
+               bool uses_2d_fabric,
                const uint32_t num_links,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const ttnn::ccl::Topology topology,
@@ -43,12 +44,14 @@ void bind_all_gather_async(pybind11::module& module, const ccl_operation_t& oper
                     memory_config,
                     topology,
                     subdevice_id,
-                    enable_persistent_fabric_mode);
+                    enable_persistent_fabric_mode,
+                    uses_2d_fabric);
             },
             py::arg("input_tensor"),
             py::arg("dim"),
             py::arg("multi_device_global_semaphore"),
             py::kw_only(),
+            py::arg("uses_2d_fabric") = false,
             py::arg("num_links") = 1,
             py::arg("memory_config") = std::nullopt,
             py::arg("topology") = ttnn::ccl::Topology::Ring,
@@ -59,14 +62,56 @@ void bind_all_gather_async(pybind11::module& module, const ccl_operation_t& oper
             [](const ccl_operation_t& self,
                const ttnn::Tensor& input_tensor,
                const int32_t dim,
+               const MeshDevice& mesh_device,
+               const ttnn::ccl::Topology topology,
+               const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
+               bool uses_2d_fabric,
+               const std::optional<size_t> num_preferred_links,
+               const std::optional<MemoryConfig>& memory_config,
+               std::optional<SubDeviceId> subdevice_id,
+               bool enable_persistent_fabric_mode,
+               bool transpose_mesh_direction) -> ttnn::Tensor {
+                return self(
+                    input_tensor,
+                    dim,
+                    0,
+                    mesh_device,
+                    topology,
+                    multi_device_global_semaphore,
+                    memory_config,        // = std::nullopt,
+                    num_preferred_links,  // = std::nullopt,
+                    subdevice_id,         // = std::nullopt,
+                    enable_persistent_fabric_mode,
+                    transpose_mesh_direction,
+                    uses_2d_fabric);  // = false,
+            },
+            py::arg("input_tensor"),
+            py::arg("dim"),
+            py::arg("mesh_device"),
+            py::arg("topology"),
+            py::arg("multi_device_global_semaphore"),
+            py::kw_only(),
+            py::arg("uses_2d_fabric") = false,
+            py::arg("num_links") = std::nullopt,
+            py::arg("memory_config") = std::nullopt,
+            py::arg("subdevice_id") = std::nullopt,
+            py::arg("enable_persistent_fabric_mode") = false,
+            py::arg("transpose_mesh_direction") = false},
+
+        ttnn::pybind_overload_t{
+            [](const ccl_operation_t& self,
+               const ttnn::Tensor& input_tensor,
+               const int32_t dim,
                const uint32_t cluster_axis,
                const MeshDevice& mesh_device,
                const ttnn::ccl::Topology topology,
                const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
+               bool uses_2d_fabric,
                const std::optional<size_t> num_preferred_links,
                const std::optional<MemoryConfig>& memory_config,
                std::optional<SubDeviceId> subdevice_id,
-               bool enable_persistent_fabric_mode) -> ttnn::Tensor {
+               bool enable_persistent_fabric_mode,
+               bool transpose_mesh_direction) -> ttnn::Tensor {
                 return self(
                     input_tensor,
                     dim,
@@ -74,10 +119,12 @@ void bind_all_gather_async(pybind11::module& module, const ccl_operation_t& oper
                     mesh_device,
                     topology,
                     multi_device_global_semaphore,
-                    memory_config,                   // = std::nullopt,
-                    num_preferred_links,             // = std::nullopt,
-                    subdevice_id,                    // = std::nullopt,
-                    enable_persistent_fabric_mode);  // = false,
+                    memory_config,        // = std::nullopt,
+                    num_preferred_links,  // = std::nullopt,
+                    subdevice_id,         // = std::nullopt,
+                    enable_persistent_fabric_mode,
+                    transpose_mesh_direction,
+                    uses_2d_fabric);  // = false,
             },
             py::arg("input_tensor"),
             py::arg("dim"),
@@ -86,10 +133,12 @@ void bind_all_gather_async(pybind11::module& module, const ccl_operation_t& oper
             py::arg("topology"),
             py::arg("multi_device_global_semaphore"),
             py::kw_only(),
+            py::arg("uses_2d_fabric") = false,
             py::arg("num_links") = std::nullopt,
             py::arg("memory_config") = std::nullopt,
             py::arg("subdevice_id") = std::nullopt,
-            py::arg("enable_persistent_fabric_mode") = false});
+            py::arg("enable_persistent_fabric_mode") = false,
+            py::arg("transpose_mesh_direction") = false});
 }
 
 }  // namespace detail
@@ -112,6 +161,7 @@ void py_bind_all_gather_async(pybind11::module& module) {
         Mesh Tensor Programming Guide : https://github.com/tenstorrent/tt-metal/blob/main/tech_reports/Programming%20Mesh%20of%20Devices/Programming%20Mesh%20of%20Devices%20with%20TT-NN.md
 
         Keyword Args:
+            uses_2d_fabric (bool, optional): Whether to use 2D fabric for the operation. Defaults to `False`.
             num_links (int, optional): Number of links to use for the all-gather operation. Defaults to `1`.
             memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `input tensor memory config`.
             topology (ttnn.Topology, optional): The topology configuration to run the operation in. Valid options are Ring and Linear. Defaults to `ttnn.Topology.Ring`.
@@ -128,6 +178,7 @@ void py_bind_all_gather_async(pybind11::module& module) {
                             dtype=input_dtype,
                             device=mesh_device,
                             layout=layout,
+                            uses_2d_fabric=True,
                             memory_config=mem_config,
                             mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=(1, 8), dims=(-1, -2)))
             >>> ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)

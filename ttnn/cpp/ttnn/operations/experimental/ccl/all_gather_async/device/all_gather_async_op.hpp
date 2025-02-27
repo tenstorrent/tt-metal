@@ -31,6 +31,73 @@ enum class AllGatherAsyncVersion {
     LLAMA_POST_BINARY_MATMUL = 2,
 };
 
+enum class AllGather2DVersion {
+    GENERIC = 0,
+};
+
+struct AllGather2D {
+    const tt::tt_metal::distributed::MeshCoordinate device_coord;
+    const MeshShape grid_size;
+    const size_t num_rows;
+    const size_t num_cols;
+    const size_t num_devices;
+    const MemoryConfig output_mem_config;
+    const ccl::Topology topology;
+    const GlobalSemaphore semaphore;
+    const uint32_t dim;
+    const uint32_t lower_pages;
+    const uint32_t higher_pages;
+    const uint32_t page_size;
+    bool is_horizontal;
+    const uint32_t semaphore_target_value;
+    AllGather2D(
+        const tt::tt_metal::distributed::MeshCoordinate device_coord,
+        const MeshShape grid_size,
+        const size_t num_rows,
+        const size_t num_cols,
+        const size_t num_devices,
+        const MemoryConfig output_mem_config,
+        const ccl::Topology topology,
+        const GlobalSemaphore semaphore,
+        const uint32_t dim,
+        const uint32_t lower_pages,
+        const uint32_t higher_pages,
+        const uint32_t page_size,
+        bool is_horizontal,
+        const uint32_t semaphore_target_value) :
+        device_coord(device_coord),
+        grid_size(grid_size),
+        num_rows(num_rows),
+        num_cols(num_cols),
+        num_devices(num_devices),
+        output_mem_config(output_mem_config),
+        topology(topology),
+        semaphore(semaphore),
+        dim(dim),
+        lower_pages(lower_pages),
+        higher_pages(higher_pages),
+        page_size(page_size),
+        is_horizontal(is_horizontal),
+        semaphore_target_value(semaphore_target_value) {}
+
+    auto attributes() const {
+        using tt::stl::reflection::Attribute;
+        std::vector<std::tuple<std::string, Attribute>> attrs;
+
+        attrs.emplace_back("output_mem_config", output_mem_config);
+        attrs.emplace_back("topology", topology);
+        attrs.emplace_back("semaphore", semaphore);
+
+        return attrs;
+    }
+    void validate(const std::vector<Tensor>& input_tensors) const;
+    std::vector<ttnn::TensorSpec> compute_output_specs(const std::vector<Tensor>& input_tensors) const;
+    operation::ProgramWithCallbacks create_program(
+        const std::vector<Tensor>& input_tensors, std::vector<Tensor>& output_tensors) const;
+    AllGather2DVersion select_version(const Tensor& input_tensor) const;
+    const operation::Hash compute_program_hash(const std::vector<Tensor>& input_tensors) const;
+};
+
 struct AllGatherAsync {
     std::optional<IDevice*> forward_device;
     std::optional<IDevice*> backward_device;
@@ -111,6 +178,23 @@ AllGatherAsync create_all_gather_async_struct(
 // All Gather Variants
 std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores(
     size_t num_links, size_t num_workers_per_link, bool persistent_fabric_mode, IDevice* device, const std::optional<SubDeviceId>& sub_device_id);
+
+operation::ProgramWithCallbacks all_gather_2D_multi_core_with_workers(
+    const Tensor& input_tensor,
+    Tensor& output_tensor,
+    const tt::tt_metal::distributed::MeshCoordinate device_coord,
+    const MeshShape grid_size,
+    const size_t num_rows,
+    const size_t num_cols,
+    const MemoryConfig output_mem_config,
+    const ccl::Topology topology,
+    const GlobalSemaphore semaphore,
+    const uint32_t lower_pages,
+    const uint32_t higher_pages,
+    const uint32_t num_devices,
+    const uint32_t page_size,
+    bool is_horizontal,
+    const uint32_t semaphore_target_value);
 operation::ProgramWithCallbacks all_gather_async_multi_core_with_workers(
     const Tensor& input_tensor,
     std::optional<IDevice*> forward_device,
@@ -163,7 +247,8 @@ Tensor all_gather_async(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const ttnn::ccl::Topology topology = ttnn::ccl::Topology::Ring,
     std::optional<SubDeviceId> sub_device_id = std::nullopt,
-    bool enable_persistent_fabric_mode = false);  // TODO make reference
+    bool enable_persistent_fabric_mode = false,
+    bool uses_2d_fabric = false);  // TODO make reference
 
 Tensor all_gather_async(
     const Tensor& input_tensor,
@@ -175,7 +260,20 @@ Tensor all_gather_async(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<size_t> num_preferred_links = std::nullopt,
     std::optional<SubDeviceId> sub_device_id = std::nullopt,
-    bool enable_persistent_fabric_mode = false);
+    bool enable_persistent_fabric_mode = false,
+    bool transpose_mesh_direction = false,
+    bool uses_2d_fabric = false);
+
+Tensor all_gather_async(
+    const Tensor& input_tensor,
+    const int32_t dim,
+    const MeshDevice& mesh_device,
+    const ttnn::ccl::Topology topology,
+    const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<size_t> num_preferred_links = std::nullopt,
+    bool transpose_mesh_direction = false,
+    bool uses_2d_fabric = false);
 
 }  // namespace ccl
 }  // namespace experimental

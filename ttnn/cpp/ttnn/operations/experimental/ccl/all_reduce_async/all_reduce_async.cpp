@@ -61,7 +61,8 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         out_memory_config,
         topology,
         worker_subdevice_id_opt,
-        true);
+        true,
+        false);
 }
 
 ttnn::Tensor ExecuteAllReduceAsync::invoke(
@@ -103,7 +104,8 @@ ttnn::Tensor ExecuteAllReduceAsync::invoke(
         out_memory_config,
         num_preferred_links,
         worker_subdevice_id_opt,
-        true);
+        true,
+        false);
 }
 
 }  // namespace ttnn::operations::experimental::ccl

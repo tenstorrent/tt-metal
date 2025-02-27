@@ -137,12 +137,15 @@ typedef struct test_board {
             throw std::runtime_error("Odd number of chips detected, not supported currently");
         }
 
-        if (metal_fabric_init_level != 0) {
-            tt::tt_metal::detail::InitializeFabricSetting(tt::tt_metal::detail::FabricSetting::FABRIC);
+        if (metal_fabric_init_level == 0) {
+            tt::tt_metal::detail::InitializeFabricConfig(tt::FabricConfig::CUSTOM);
+        } else if (metal_fabric_init_level == 1) {
+            tt::tt_metal::detail::InitializeFabricConfig(tt::FabricConfig::FABRIC_2D);
         }
         device_handle_map = tt::tt_metal::detail::CreateDevices(available_chip_ids);
         if (metal_fabric_init_level == 0) {
             _init_control_plane(mesh_graph_descriptor);
+            control_plane->configure_routing_tables();
         } else {
             control_plane = tt::DevicePool::instance().get_control_plane();
         }
@@ -298,8 +301,8 @@ typedef struct test_board {
         // for each physical chip id, store the neighbors
         // TDOD: update the logic to find inter-mesh neighbors
         for (auto chip_id : physical_chip_ids) {
-            auto neighbors = tt::Cluster::instance().get_ethernet_connected_device_ids(chip_id);
-            for (auto neighbor : neighbors) {
+            auto neighbors = tt::Cluster::instance().get_ethernet_cores_grouped_by_connected_chips(chip_id);
+            for (const auto& [neighbor, cores] : neighbors) {
                 // only append valid chip IDs since the neighbors could include mmio chips (wh galaxy) or
                 // could be outside of the board type (in case of partial galaxy configurations)
                 if (is_valid_chip_id(neighbor)) {
@@ -501,13 +504,12 @@ typedef struct test_device {
         core_range_end_virtual = device_handle->worker_core_from_logical_core(CoreCoord(7, 7));
 
         // populate router cores
-        auto neighbors = tt::Cluster::instance().get_ethernet_connected_device_ids(physical_chip_id);
-        for (auto neighbor : neighbors) {
-            if (!(board_handle->is_valid_chip_id(neighbor))) {
+        auto neighbors = tt::Cluster::instance().get_ethernet_cores_grouped_by_connected_chips(device_handle->id());
+        for (const auto& [neighbor_chip, connected_logical_cores] : neighbors) {
+            if (!(board_handle->is_valid_chip_id(neighbor_chip))) {
                 continue;
             }
 
-            auto connected_logical_cores = device_handle->get_ethernet_sockets(neighbor);
             for (auto logical_core : connected_logical_cores) {
                 router_logical_cores.push_back(logical_core);
                 router_virtual_cores.push_back(device_handle->ethernet_core_from_logical_core(logical_core));

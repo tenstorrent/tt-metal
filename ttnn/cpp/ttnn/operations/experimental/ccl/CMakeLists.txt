@@ -15,6 +15,7 @@ set(CCL_EXPERIMENTAL_TTNN_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/all_gather_async/all_gather_async.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/all_gather_async/all_gather_async_pybind.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/all_gather_async/device/all_gather_async_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/all_gather_async/device/all_gather_2D_program.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/all_gather_async/device/all_gather_async_program.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/all_gather_async/device/all_gather_async_program_minimal_variants.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/all_reduce_async/all_reduce_async.cpp
