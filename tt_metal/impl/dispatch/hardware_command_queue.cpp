@@ -178,6 +178,7 @@ void HWCommandQueue::enqueue_read_buffer(
     const BufferRegion& region,
     bool blocking,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
+    std::cout << "hw command queue: enqueue_read_buffer" << std::endl;
     ZoneScopedN("HWCommandQueue_read_buffer");
     TT_FATAL(!this->manager.get_bypass_mode(), "Enqueue Read Buffer cannot be used with tracing");
     Buffer& buffer_obj = get_buffer_object(buffer);
@@ -232,6 +233,7 @@ void HWCommandQueue::enqueue_write_buffer(
     bool blocking,
     tt::stl::Span<const SubDeviceId> sub_device_ids) {
     ZoneScopedN("HWCommandQueue_write_buffer");
+    std::cout << "hw command queue: enqueue_write_buffer" << std::endl;
     TT_FATAL(!this->manager.get_bypass_mode(), "Enqueue Write Buffer cannot be used with tracing");
     // Top level API to accept different variants for buffer and src
     // For shared pointer variants, object lifetime is guaranteed at least till the end of this function

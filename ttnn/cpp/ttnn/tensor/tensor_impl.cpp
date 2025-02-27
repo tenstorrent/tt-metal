@@ -529,6 +529,7 @@ Tensor to_host_helper(const Tensor& tensor, bool blocking = true, ttnn::QueueId 
     std::vector<T> data_vec;
     const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
+        std::cout << "tensor impl: read data from device buffer" << std::endl;
         data_vec.resize(size_in_bytes / sizeof(T));
         read_data_from_device_buffer<T>(device->command_queue(*cq_id), device_buffer, data_vec.data(), blocking);
     } else {
@@ -666,6 +667,7 @@ std::shared_ptr<Buffer> initialize_data_on_device(
 
     const char* TT_METAL_SLOW_DISPATCH_MODE = std::getenv("TT_METAL_SLOW_DISPATCH_MODE");
     if (TT_METAL_SLOW_DISPATCH_MODE == nullptr) {
+        std::cout << "tensor impl: write data to device buffer" << std::endl;
         write_data_to_device_buffer<T>(device->command_queue(*cq_id), data_to_write, device_buffer);
     } else {
         write_data_to_device_buffer<T>(data_to_write, *device_buffer);
