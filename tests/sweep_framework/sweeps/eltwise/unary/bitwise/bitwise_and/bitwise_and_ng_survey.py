@@ -23,13 +23,13 @@ from models.utility_functions import torch_random
 # Each suite has a key name (in this case "suite_1") which will associate the test vectors to this specific suite of inputs.
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
-    "bitwise_and_1": {
+    "bitwise_and_rm_1": {
         # "input_shape": [{"self": [1, 1, 1024, 1024], "other": [1, 1, 1024, 1024]}],
         "input_shape": [{"self": [1, 1, 512, 512], "other": [1, 1, 512, 512]}],  # for float32 and int32 dtypes
         "input_a_dtype": [ttnn.int32],
         "input_b_dtype": [ttnn.int32],
-        "input_a_layout": [ttnn.TILE_LAYOUT],
-        "input_b_layout": [ttnn.TILE_LAYOUT],
+        "input_a_layout": [ttnn.ROW_MAJOR_LAYOUT],
+        "input_b_layout": [ttnn.ROW_MAJOR_LAYOUT],
         "input_mem_config": [
             {"a_mem": "l1_interleaved", "b_mem": "l1_interleaved"},
             {"a_mem": "l1_interleaved", "b_mem": "dram_interleaved"},

@@ -17,10 +17,10 @@ from models.utility_functions import torch_random
 # Each suite has a key name (in this case "suite_1") which will associate the test vectors to this specific suite of inputs.
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
-    "div_rm_2": {
+    "logical_or_rm_2": {
         "input_shape": [{"self": [1, 1, 512, 512], "other": [1, 1, 512, 512]}],  # no bcast
         # "input_shape": [
-        #     {"self": [4, 8, 64, 512], "other": [1, 8, 64, 1]},  # col_b, N_b
+        #     {"self": [4, 8, 64, 512], "other": [1, 8, 64, 1]},  # col_b, N_b #0.98
         #     {"self": [4, 8, 64, 512], "other": [4, 1, 1, 512]},  # row_b, C_b
         #     {"self": [4, 8, 64, 512], "other": [4, 8, 1, 1]},  # B scalar
         #     {"self": [1, 8, 64, 1], "other": [4, 8, 64, 512]},  # col_a, N_a
@@ -176,7 +176,7 @@ def run(
 
     if isinstance(input_shape["other"], list):
         torch_input_tensor_b = gen_func_with_cast_tt(
-            partial(torch_random, low=-100, high=-1, dtype=torch.float32), input_b_dtype
+            partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
         )(input_shape["other"])
     else:
         torch_input_tensor_b = torch.tensor(input_shape["other"], dtype=torch.float32)
@@ -203,11 +203,11 @@ def run(
     torch_input_tensor_a = ttnn.to_torch(input_tensor_a)
     torch_input_tensor_b = ttnn.to_torch(input_tensor_b)
 
-    golden_function = ttnn.get_golden_function(ttnn.experimental.div)
+    golden_function = ttnn.get_golden_function(ttnn.experimental.logical_or)
     torch_output_tensor = golden_function(torch_input_tensor_a, torch_input_tensor_b)
 
     start_time = start_measuring_time()
-    result = ttnn.experimental.div(input_tensor_a, input_tensor_b)
+    result = ttnn.experimental.logical_or(input_tensor_a, input_tensor_b)
     output_tensor = ttnn.to_torch(result)
     e2e_perf = stop_measuring_time(start_time)
 

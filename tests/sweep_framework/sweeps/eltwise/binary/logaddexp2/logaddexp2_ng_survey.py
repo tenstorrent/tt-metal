@@ -17,14 +17,13 @@ from models.utility_functions import torch_random
 # Each suite has a key name (in this case "suite_1") which will associate the test vectors to this specific suite of inputs.
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
-    "logaddexp2_mixed_2": {
-        # "input_shape": [{"self": [1, 1, 1024, 1024], "other": [1, 1, 1024, 1024]}],
-        "input_shape": [{"self": [1, 1, 512, 512], "other": [1, 1, 512, 512]}],  # for float32 and int32 dtypes
+    "logaddexp2_rm_2": {
+        "input_shape": [{"self": [1, 1, 512, 512], "other": [1, 1, 512, 512]}],  # no bcast
         "input_dtype": [
-            # {"input_a_dtype": "ttnn.bfloat16", "input_b_dtype": "ttnn.bfloat16"},
-            # {"input_a_dtype": "ttnn.float32", "input_b_dtype": "ttnn.float32"},
-            # {"input_a_dtype": "ttnn.bfloat8_b", "input_b_dtype": "ttnn.bfloat8_b"},
-            # {"input_a_dtype": "ttnn.bfloat4_b", "input_b_dtype": "ttnn.bfloat4_b"}, # same dtype
+            {"input_a_dtype": "ttnn.bfloat16", "input_b_dtype": "ttnn.bfloat16"},
+            {"input_a_dtype": "ttnn.float32", "input_b_dtype": "ttnn.float32"},
+            {"input_a_dtype": "ttnn.bfloat8_b", "input_b_dtype": "ttnn.bfloat8_b"},
+            {"input_a_dtype": "ttnn.bfloat4_b", "input_b_dtype": "ttnn.bfloat4_b"},  # same dtype
             {"input_a_dtype": "ttnn.bfloat16", "input_b_dtype": "ttnn.float32"},
             {"input_a_dtype": "ttnn.bfloat16", "input_b_dtype": "ttnn.bfloat8_b"},
             {"input_a_dtype": "ttnn.bfloat16", "input_b_dtype": "ttnn.bfloat4_b"},
@@ -38,31 +37,33 @@ parameters = {
             {"input_a_dtype": "ttnn.bfloat4_b", "input_b_dtype": "ttnn.bfloat16"},
             {"input_a_dtype": "ttnn.bfloat4_b", "input_b_dtype": "ttnn.bfloat8_b"},  # mixed dtype
         ],
-        "input_a_layout": [ttnn.TILE_LAYOUT],
-        "input_b_layout": [ttnn.TILE_LAYOUT],
+        # "input_a_layout": [ttnn.TILE_LAYOUT],
+        # "input_b_layout": [ttnn.TILE_LAYOUT],
+        "input_a_layout": [ttnn.ROW_MAJOR_LAYOUT],
+        "input_b_layout": [ttnn.ROW_MAJOR_LAYOUT],
         "input_mem_config": [
             {"a_mem": "l1_interleaved", "b_mem": "l1_interleaved"},
             {"a_mem": "l1_interleaved", "b_mem": "dram_interleaved"},
             {"a_mem": "dram_interleaved", "b_mem": "l1_interleaved"},
             {"a_mem": "dram_interleaved", "b_mem": "dram_interleaved"},  # l1 - dram combination
-            # {"a_mem": "l1_height_sharded_rm", "b_mem": "l1_height_sharded_rm"},
-            # {"a_mem": "dram_interleaved", "b_mem": "l1_height_sharded_rm"},
-            # {"a_mem": "l1_height_sharded_rm", "b_mem": "dram_interleaved"},  # HS
-            # {"a_mem": "l1_width_sharded_rm", "b_mem": "l1_width_sharded_rm"},
-            # {"a_mem": "dram_interleaved", "b_mem": "l1_width_sharded_rm"},
-            # {"a_mem": "l1_width_sharded_rm", "b_mem": "dram_interleaved"},  # WS
-            # {"a_mem": "l1_block_sharded_rm", "b_mem": "l1_block_sharded_rm"},
-            # {"a_mem": "dram_interleaved", "b_mem": "l1_block_sharded_rm"},
-            # {"a_mem": "l1_block_sharded_rm", "b_mem": "dram_interleaved"},  # BS #row_major orientation
-            # {"a_mem": "l1_height_sharded_cm", "b_mem": "l1_height_sharded_cm"},
-            # {"a_mem": "dram_interleaved", "b_mem": "l1_height_sharded_cm"},
-            # {"a_mem": "l1_height_sharded_cm", "b_mem": "dram_interleaved"},  # HS
-            # {"a_mem": "l1_width_sharded_cm", "b_mem": "l1_width_sharded_cm"},
-            # {"a_mem": "dram_interleaved", "b_mem": "l1_width_sharded_cm"},
-            # {"a_mem": "l1_width_sharded_cm", "b_mem": "dram_interleaved"},  # WS
-            # {"a_mem": "l1_block_sharded_cm", "b_mem": "l1_block_sharded_cm"},
-            # {"a_mem": "dram_interleaved", "b_mem": "l1_block_sharded_cm"},
-            # {"a_mem": "l1_block_sharded_cm", "b_mem": "dram_interleaved"},  # BS #col_major orientation
+            {"a_mem": "l1_height_sharded_rm", "b_mem": "l1_height_sharded_rm"},
+            {"a_mem": "dram_interleaved", "b_mem": "l1_height_sharded_rm"},
+            {"a_mem": "l1_height_sharded_rm", "b_mem": "dram_interleaved"},  # HS
+            {"a_mem": "l1_width_sharded_rm", "b_mem": "l1_width_sharded_rm"},
+            {"a_mem": "dram_interleaved", "b_mem": "l1_width_sharded_rm"},
+            {"a_mem": "l1_width_sharded_rm", "b_mem": "dram_interleaved"},  # WS
+            {"a_mem": "l1_block_sharded_rm", "b_mem": "l1_block_sharded_rm"},
+            {"a_mem": "dram_interleaved", "b_mem": "l1_block_sharded_rm"},
+            {"a_mem": "l1_block_sharded_rm", "b_mem": "dram_interleaved"},  # BS #row_major orientation
+            {"a_mem": "l1_height_sharded_cm", "b_mem": "l1_height_sharded_cm"},
+            {"a_mem": "dram_interleaved", "b_mem": "l1_height_sharded_cm"},
+            {"a_mem": "l1_height_sharded_cm", "b_mem": "dram_interleaved"},  # HS
+            {"a_mem": "l1_width_sharded_cm", "b_mem": "l1_width_sharded_cm"},
+            {"a_mem": "dram_interleaved", "b_mem": "l1_width_sharded_cm"},
+            {"a_mem": "l1_width_sharded_cm", "b_mem": "dram_interleaved"},  # WS
+            {"a_mem": "l1_block_sharded_cm", "b_mem": "l1_block_sharded_cm"},
+            {"a_mem": "dram_interleaved", "b_mem": "l1_block_sharded_cm"},
+            {"a_mem": "l1_block_sharded_cm", "b_mem": "dram_interleaved"},  # BS #col_major orientation
         ],
     },
 }
@@ -160,12 +161,12 @@ def run(
     input_b_dtype = return_dtype(input_dtype["input_b_dtype"])
 
     torch_input_tensor_a = gen_func_with_cast_tt(
-        partial(torch_random, low=-64, high=64, dtype=torch.float32), input_a_dtype
+        partial(torch_random, low=-72, high=72, dtype=torch.float32), input_a_dtype
     )(input_shape["self"])
 
     if isinstance(input_shape["other"], list):
         torch_input_tensor_b = gen_func_with_cast_tt(
-            partial(torch_random, low=-64, high=64, dtype=torch.float32), input_b_dtype
+            partial(torch_random, low=-72, high=72, dtype=torch.float32), input_b_dtype
         )(input_shape["other"])
     else:
         torch_input_tensor_b = torch.tensor(input_shape["other"], dtype=torch.float32)
