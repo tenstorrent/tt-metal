@@ -41,19 +41,19 @@ void kernel_main() {
 
     constexpr bool page_size_is_pow2 = get_compile_time_arg_val(3) == 1;
 
-#if (page_size_is_pow2)
-    const InterleavedPow2AddrGen<src_is_dram> src_addrgen = {
-        .bank_base_address = src_addr,
-        .log_base_2_of_page_size = log_base_2_of_page_size  // TODO(AP): refactor
-    };
-    const InterleavedPow2AddrGen<dst_is_dram> dst_addrgen = {
-        .bank_base_address = dst_addr,
-        .log_base_2_of_page_size = log_base_2_of_page_size  // TODO(AP): refactor
-    };
-#else
-    const InterleavedAddrGen<src_is_dram> src_addrgen = {.bank_base_address = src_addr, .page_size = page_size};
-    const InterleavedAddrGen<dst_is_dram> dst_addrgen = {.bank_base_address = dst_addr, .page_size = page_size};
-#endif
+    if constexpr (page_size_is_pow2) {
+        const InterleavedPow2AddrGen<src_is_dram> src_addrgen = {
+            .bank_base_address = src_addr,
+            .log_base_2_of_page_size = log_base_2_of_page_size  // TODO(AP): refactor
+        };
+        const InterleavedPow2AddrGen<dst_is_dram> dst_addrgen = {
+            .bank_base_address = dst_addr,
+            .log_base_2_of_page_size = log_base_2_of_page_size  // TODO(AP): refactor
+        };
+    } else {
+        const InterleavedAddrGen<src_is_dram> src_addrgen = {.bank_base_address = src_addr, .page_size = page_size};
+        const InterleavedAddrGen<dst_is_dram> dst_addrgen = {.bank_base_address = dst_addr, .page_size = page_size};
+    }
 
     // if controller core then this local address will be incremented by remote cores,
     // otherwise controller core will set this to signal that write to dst can be done once controller core sees
