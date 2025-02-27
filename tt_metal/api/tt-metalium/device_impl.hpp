@@ -49,8 +49,8 @@ public:
     Device(const Device &other) = delete;
     Device& operator=(const Device &other) = delete;
 
-    Device(Device &&other) = default;
-    Device& operator=(Device &&other) = default;
+    Device(Device&& other);
+    Device& operator=(Device&& other);
 
     tt::ARCH arch() const override;
 

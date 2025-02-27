@@ -43,6 +43,9 @@ namespace tt {
 
 namespace tt_metal {
 
+Device::Device(Device&& other) = default;
+Device& Device::operator=(Device&& other) = default;
+
 Device::Device(
     chip_id_t device_id,
     const uint8_t num_hw_cqs,
