@@ -1536,7 +1536,7 @@ void pytensor_module(py::module& m_tensor) {
             [](const Tensor& self) -> uint32_t {
                 return std::visit(
                     tt::stl::overloaded{
-                        [](const DeviceStorage& s) -> uint32_t { return s.buffer->address(); },
+                        [](const DeviceStorage& s) -> uint32_t { return s.get_buffer()->address(); },
                         [&](auto&&) -> uint32_t {
                             TT_THROW(
                                 "{} doesn't support buffer_address method",

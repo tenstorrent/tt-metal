@@ -127,7 +127,11 @@ static inline Tensor move(QueueId queue_id, const Tensor& input_tensor, const st
 static inline Tensor move_sharded(
     QueueId queue_id, const Tensor& input_tensor, const std::optional<MemoryConfig>& mem_config) {
     std::vector<Tensor> output_tensors = {Tensor(operation::get_workers_for_op_output({input_tensor}))};
-    bool from_multi_device = distributed::is_multi_device_tensor(input_tensor);
+    bool from_multi_device = false;
+    if (std::holds_alternative<DeviceStorage>(input_tensor.storage())) {
+        auto& device_storage = std::get<DeviceStorage>(input_tensor.storage());
+        from_multi_device = device_storage.mesh_buffer != nullptr;
+    }
     operation::launch_op(
         [from_multi_device, mem_config](
             const std::vector<Tensor>& input_tensors,
