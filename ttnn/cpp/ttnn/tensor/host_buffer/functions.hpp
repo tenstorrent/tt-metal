@@ -134,6 +134,9 @@ Buffer<T> get_as(Tensor& tensor) {
             using StorageType = std::decay_t<decltype(storage)>;
             if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
                 return get_as<T>(storage.buffer);
+            } else if constexpr (std::is_same_v<StorageType, MultiDeviceHostStorage>) {
+                TT_FATAL(storage.buffers.size() == 1, "Can't get a single buffer from multi device host storage");
+                return get_as<T>(storage.buffers[0]);
             } else {
                 TT_THROW("Tensor must have OwnedStorage");
             }
@@ -150,7 +153,7 @@ Buffer<T> get_as(const Tensor& tensor) {
             if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
                 return get_as<T>(storage.buffer);
             } else if constexpr (std::is_same_v<StorageType, MultiDeviceHostStorage>) {
-                TT_FATAL(storage.buffers.size() == 1, "Only single buffer storage is supported");
+                TT_FATAL(storage.buffers.size() == 1, "Can't get a single buffer from multi device host storage");
                 return get_as<T>(storage.buffers[0]);
             } else {
                 TT_THROW("Tensor must have OwnedStorage");
@@ -205,6 +208,9 @@ borrowed_buffer::Buffer<T> get_as(Tensor& tensor) {
             using StorageType = std::decay_t<decltype(storage)>;
             if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
                 return host_buffer::get_as<T>(storage.buffer);
+            } else if constexpr (std::is_same_v<StorageType, MultiDeviceHostStorage>) {
+                TT_FATAL(storage.buffers.size() == 1, "Can't get a single buffer from multi device host storage");
+                return host_buffer::get_as<T>(storage.buffers[0]);
             } else if constexpr (std::is_same_v<StorageType, BorrowedStorage>) {
                 return host_buffer::get_as<T>(storage.buffer);
             } else {
@@ -221,6 +227,9 @@ borrowed_buffer::Buffer<T> get_as(const Tensor& tensor) {
             using StorageType = std::decay_t<decltype(storage)>;
             if constexpr (std::is_same_v<StorageType, OwnedStorage>) {
                 return host_buffer::get_as<T>(storage.buffer);
+            } else if constexpr (std::is_same_v<StorageType, MultiDeviceHostStorage>) {
+                TT_FATAL(storage.buffers.size() == 1, "Can't get a single buffer from multi device host storage");
+                return host_buffer::get_as<T>(storage.buffers[0]);
             } else if constexpr (std::is_same_v<StorageType, BorrowedStorage>) {
                 return host_buffer::get_as<T>(storage.buffer);
             } else {
