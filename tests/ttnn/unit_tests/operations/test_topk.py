@@ -85,7 +85,7 @@ def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device):
     "sorted",
     [
         True,
-        # False, Please refer to https://github.com/tenstorrent/tt-metal/issues/13235#issuecomment-2601432673
+        False,
     ],
 )
 @pytest.mark.parametrize(
