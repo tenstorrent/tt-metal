@@ -5,6 +5,7 @@
 #include <stdint.h>
 
 #include "dataflow_api.h"
+#include "hw/inc/grayskull/tensix_types.h"
 
 // #define DEBUG
 #ifdef DEBUG
@@ -34,13 +35,15 @@ void kernel_main() {
 
     constexpr uint32_t onetile = 1;
     constexpr bool tile_dtype_is_bfloat16 = get_compile_time_arg_val(0) == 1;
-#if (tile_dtype_is_bfloat16)
+    DataFormat data_format = DataFormat::Invalid;
+    if constexpr (tile_dtype_is_bfloat16) {
+        data_format = DataFormat::Float16;
+    } else {
+        data_format = DataFormat::Bfp8_b;
+    }
+
     const InterleavedAddrGenFast<in0_is_dram_bool> s0 = {
-        .bank_base_address = in0_tensor_addr, .page_size = single_tile_size_bytes, .data_format = DataFormat::Float16};
-#else
-    const InterleavedAddrGenFast<in0_is_dram_bool> s0 = {
-        .bank_base_address = in0_tensor_addr, .page_size = single_tile_size_bytes, .data_format = DataFormat::Bfp8_b};
-#endif
+        .bank_base_address = in0_tensor_addr, .page_size = single_tile_size_bytes, .data_format = data_format};
 
     uint32_t tensor_stride = out_num_tiles_per_tensor_x;
     uint32_t tensor_stride_cum = 0;
