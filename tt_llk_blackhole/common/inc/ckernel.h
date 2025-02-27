@@ -589,9 +589,15 @@ inline void disable_gathering() {
     // Disable gathering: set bit 18
     asm(R"ASM(
         .option push
+        li   t1, 0x2
+        csrrs zero, 0x7c0, t1
         li   t1, 0x1
         slli t1, t1, 18
+        fence
         csrrs zero, 0x7c0, t1
+        li   t1, 0x2
+        csrrc zero, 0x7c0, t1
+        fence
         .option pop
          )ASM"
     :::"t1");
