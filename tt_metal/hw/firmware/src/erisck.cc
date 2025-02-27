@@ -16,6 +16,7 @@
 #include "stream_io_map.h"
 #include "tdma_xmov.h"
 #include "debug/dprint.h"
+#include "dataflow_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #include <kernel_includes.hpp>
 #include <stdint.h>
