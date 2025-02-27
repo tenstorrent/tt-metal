@@ -18,7 +18,7 @@ def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device):
     torch_dtype = torch.bfloat16
 
     input = torch.randn(shape, dtype=torch_dtype) * 0.9
-    pyt_topk_values, pyt_topk_indices = torch.topk(input, k, dim=dim, largest=largest, sorted=sorted)
+    pyt_topk_values, pyt_topk_indices = torch.topk(input, k, dim=dim, largest=largest, sorted=True)
 
     ttnn_input = ttnn.from_torch(input, dtype, layout=ttnn.Layout.TILE, device=device)
     ttnn_topk_values, ttnn_topk_indices = ttnn.topk(ttnn_input, k, dim=dim, largest=largest, sorted=sorted)
