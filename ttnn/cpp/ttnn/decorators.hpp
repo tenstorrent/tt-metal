@@ -332,6 +332,7 @@ private:
         const OptionalTensors optional_output_tensors =
             detail::extract_args_to_vector<std::optional<ttnn::Tensor>>(args...);
 
+        bool enable_autoformat = false;
         tt::tt_metal::operation::launch_op(
             [args...](
                 const Tensors& input_tensors,
@@ -349,7 +350,8 @@ private:
             input_tensors,
             output_tensors,
             optional_input_tensors,
-            optional_output_tensors);
+            optional_output_tensors,
+            enable_autoformat);
 
         if constexpr (std::is_same_v<std::decay_t<execute_on_worker_thread_return_t>, Tensor>) {
             return output_tensors.at(0);

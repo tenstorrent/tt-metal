@@ -357,13 +357,8 @@ std::vector<std::shared_ptr<MeshDevice>> MeshDevice::get_submeshes() const { ret
 std::ostream& operator<<(std::ostream& os, const MeshDevice& mesh_device) { return os << mesh_device.to_string(); }
 
 void MeshDevice::enable_async(bool enable) {
-    auto devices = this->get_devices();
-    if (enable && devices.size() == 1) {
-        tt::log_warning("Async mode is always disabled for a single device, ignoring enable_async call");
-        return;
-    }
-    for (auto device : devices) {
-        dynamic_cast<Device*>(device)->force_enable_async(enable);
+    for (auto device : this->get_devices()) {
+        device->enable_async(enable);
     }
 }
 
@@ -684,8 +679,6 @@ WorkExecutorMode MeshDevice::get_worker_mode() { return WorkExecutorMode::SYNCHR
 bool MeshDevice::is_worker_queue_empty() const { return true; }
 void MeshDevice::push_work(std::function<void()> work, bool blocking) {
     // Execute inline synchronously.
-    // Using a lock to provide the same call serialization guarantee as an async single device scheduling.
-    std::lock_guard lock(push_work_mutex_);
     work();
 }
 program_cache::detail::ProgramCache& MeshDevice::get_program_cache() { return reference_device()->get_program_cache(); }
