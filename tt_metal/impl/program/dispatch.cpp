@@ -3,8 +3,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_metal/impl/program/dispatch.hpp"
+#include <fmt/format.h>
 
 #include <command_queue.hpp>
+#include <iostream>
 #include <tt-metalium/command_queue_interface.hpp>
 #include <tt-metalium/dispatch_settings.hpp>
 #include <mesh_command_queue.hpp>
@@ -570,6 +572,7 @@ void assemble_runtime_args_commands(
     for (size_t kernel_id = 0; kernel_id < program.num_kernels(); kernel_id++) {
         auto kernel = detail::GetKernel(program, kernel_id);
         auto programmable_core_type = kernel->get_kernel_programmable_core_type();
+        std::cout << fmt::format("Assemble Common RTAs for Kernel {}\n", kernel->get_full_kernel_name());
         if (programmable_core_type == HalProgrammableCoreType::IDLE_ETH) {
             // Fast dispatch not supported on IDLE_ETH yet
             continue;
@@ -580,6 +583,10 @@ void assemble_runtime_args_commands(
         if (common_size != 0) {
             uint32_t max_runtime_args_len = common_size / sizeof(uint32_t);
             const auto& common_rt_args = kernel->common_runtime_args();
+            std::cout << fmt::format("  Number of CRTAs = {}\n", common_rt_args.size());
+            for (auto arg : common_rt_args) {
+                std::cout << " arg = 0x " << std::hex << arg << "\n";
+            }
             if (common_rt_args.size() > 0) {
                 CoreType core_type = hal.get_core_type(programmable_core_type_index);
                 if (core_type == CoreType::ETH) {
@@ -683,6 +690,8 @@ void assemble_runtime_args_commands(
 
                 const auto& common_rt_args = kernel->common_runtime_args();
                 if (common_rt_args.size() > 0) {
+                    std::cout << fmt::format(
+                        "  {} Now assemble common_rt_args {}\n", kernel->get_full_kernel_name(), common_rt_args.size());
                     common_rt_args_data.resize(common_rt_args_data.size() + 1);
                     common_rt_data_and_sizes.resize(common_rt_data_and_sizes.size() + 1);
 
@@ -704,27 +713,38 @@ void assemble_runtime_args_commands(
                                 device->virtual_core_from_logical_core(core_coord, CoreType::ETH);
                             unicast_sub_cmd.emplace_back(CQDispatchWritePackedUnicastSubCmd{
                                 .noc_xy_addr = device->get_noc_unicast_encoding(noc_index, virtual_core_coords)});
+
+                            std::cout << fmt::format(
+                                "    {} Unicast (ETH dispatch) to {}\n",
+                                kernel->get_full_kernel_name(),
+                                virtual_core_coords.str());
                         }
                     } else {
                         std::vector<std::pair<transfer_info_cores, uint32_t>> dst_noc_multicast_info =
                             device->extract_dst_noc_multicast_info(kernel->logical_coreranges(), core_type);
+
                         common_sub_cmds.emplace<std::vector<CQDispatchWritePackedMulticastSubCmd>>(
                             std::vector<CQDispatchWritePackedMulticastSubCmd>());
                         auto& multicast_sub_cmd =
                             std::get<std::vector<CQDispatchWritePackedMulticastSubCmd>>(common_sub_cmds);
                         multicast_sub_cmd.reserve(dst_noc_multicast_info.size());
                         for (const auto& mcast_dests : dst_noc_multicast_info) {
+                            const auto& cores = std::get<CoreRange>(mcast_dests.first);
                             multicast_sub_cmd.emplace_back(CQDispatchWritePackedMulticastSubCmd{
-                                .noc_xy_addr = device->get_noc_multicast_encoding(
-                                    noc_index, std::get<CoreRange>(mcast_dests.first)),
+                                .noc_xy_addr = device->get_noc_multicast_encoding(noc_index, cores),
                                 .num_mcast_dests = mcast_dests.second});
+                            std::cout << fmt::format(
+                                "    {} Using multicast to {} -- {} cores\n",
+                                kernel->get_full_kernel_name(),
+                                cores.str(),
+                                cores.size());
                         }
                     }
                 }
             }
 
             uint32_t crta_offset = program.get_program_config(index).crta_offsets[dispatch_class];
-
+            std::cout << "max prefetch cmd size = " << max_prefetch_command_size << "\n";
             // Common rtas are always expected to fit in one prefetch cmd
             // TODO: use a linear write instead of a packed-write
             std::visit(

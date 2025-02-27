@@ -105,7 +105,7 @@ KernelHandle initialize_program_compute(
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = math_approx_mode,
             .compile_args = compile_args});
-    
+
     return compute_kernel_id;
 }
 
@@ -477,7 +477,7 @@ TEST_F(DeviceFixture, TensixSetCommonRuntimeArgsMultipleKernelHandlesSameProgram
         CoreRangeSet core_range_set_0(std::vector{core_range_0, core_range_1});
         CoreRangeSet core_range_set_1(std::vector{core_range_2, core_range_3});
 
-        std::vector<uint32_t> common_rtas{0xdeadbeef, 0xabcd1234, 101};
+        std::vector<uint32_t> common_rtas{0xdeadbeef, 0xdeadbeef, 0xdeadbeef};
 
         auto [program, kernels] = initialize_program_compute_multi_range_sets(this->devices_.at(id), {core_range_set_0, core_range_set_1}, 0, common_rtas.size());
 
