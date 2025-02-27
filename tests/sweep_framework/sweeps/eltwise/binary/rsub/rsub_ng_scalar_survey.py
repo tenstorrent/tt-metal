@@ -19,12 +19,13 @@ from models.utility_functions import torch_random
 parameters = {
     "rsub_scalar_1": {
         "input_shape": [[1, 1, 1024, 1024]],
-        "input_a_dtype": [ttnn.bfloat16],
-        # "input_a_dtype": [ttnn.float32],
+        # "input_a_dtype": [ttnn.bfloat16],
+        "input_a_dtype": [ttnn.float32],
         # "input_a_dtype": [ttnn.int32],
         # "input_a_dtype": [ttnn.bfloat8_b],
         # "input_a_dtype": [ttnn.bfloat4_b],
-        "input_a_layout": [ttnn.TILE_LAYOUT],
+        # "input_a_layout": [ttnn.TILE_LAYOUT],
+        "input_a_layout": [ttnn.ROW_MAJOR_LAYOUT],
         "input_memory_config": [
             {"a_mem_config": "l1_interleaved"},
             {"a_mem_config": "dram_interleaved"},
@@ -115,7 +116,7 @@ def run(
     )(input_shape)
 
     scalar_value = random.uniform(-100, 100)
-    # scalar_value = random.randint(0, 32)
+    # scalar_value = random.randint(-100, 100)
 
     input_tensor_a = ttnn.from_torch(
         torch_input_tensor_a,
@@ -125,22 +126,13 @@ def run(
         memory_config=return_mem_config(input_a_memory_config),
     )
 
-    if input_a_dtype == ttnn.bfloat8_b:
-        torch_input_tensor_a = ttnn.to_torch(input_tensor_a)
+    torch_input_tensor_a = ttnn.to_torch(input_tensor_a)
 
-    if input_a_dtype == ttnn.bfloat4_b:
-        torch_input_tensor_a = ttnn.to_torch(input_tensor_a)
-
-    golden_function = ttnn.get_golden_function(ttnn.rsub)
+    golden_function = ttnn.get_golden_function(ttnn.experimental.rsub)
     torch_output_tensor = golden_function(torch_input_tensor_a, scalar_value)
     start_time = start_measuring_time()
     result = ttnn.experimental.rsub(input_tensor_a, scalar_value)
     output_tensor = ttnn.to_torch(result)
     e2e_perf = stop_measuring_time(start_time)
-    # print("torch_output_tensor", torch_output_tensor)
-    # print("output_tensor", output_tensor)
-    # diff = torch.abs(torch_output_tensor - output_tensor)
-    # max_atol = torch.max(diff)
-    # print(f"Max absolute tolerance (atol): {max_atol.item()}")
 
     return [check_with_pcc(torch_output_tensor, output_tensor, pcc=0.99), e2e_perf]

@@ -17,24 +17,24 @@ from models.utility_functions import torch_random
 # Each suite has a key name (in this case "suite_1") which will associate the test vectors to this specific suite of inputs.
 # Developers can create their own generator functions and pass them to the parameters as inputs.
 parameters = {
-    "add_bcast_mixed_1": {
-        # "input_shape": [{"self": [1, 1, 1024, 1024], "other": [1, 1, 1024, 1024]}],
-        # "input_shape": [{"self": [1, 1, 512, 512], "other": [1, 1, 512, 512]}],  # for float32 and int32 dtypes
-        "input_shape": [
-            {"self": [4, 8, 64, 512], "other": [1, 8, 64, 1]},  # col_b, N_b   # bf4b passes for [-100, 100]
-            {"self": [4, 8, 64, 512], "other": [4, 1, 1, 512]},  # row_b, C_b  # atol = nan for bf4b
-            {"self": [4, 8, 64, 512], "other": [4, 8, 1, 1]},  # B scalar      # bf4b passes for [-74, 74]
-            {"self": [1, 8, 64, 1], "other": [4, 8, 64, 512]},  # col_a, N_a   # atol = nan for bf4b
-            {"self": [4, 1, 1, 512], "other": [4, 8, 64, 512]},  # row_a, C_a  # atol = nan for bf4b
-            {"self": [4, 8, 1, 1], "other": [4, 8, 64, 512]},  # A scalar      # atol = nan for bf4b
-            {"self": [4, 8, 1, 512], "other": [4, 8, 64, 1]},  # row_a, col_b  # bf4b passes for [-100, 100]
-            {"self": [4, 8, 64, 1], "other": [4, 8, 1, 512]},  # row_b, col_a    # atol = nan for bf4b
-        ],  # for bcast
+    "add_rm_2": {
+        "input_shape": [{"self": [1, 1, 512, 512], "other": [1, 1, 512, 512]}],  # no bcast
+        # "input_shape": [
+        #     {"self": [4, 8, 64, 512], "other": [1, 8, 64, 1]},  # col_b, N_b   # bf4b passes for [-100, 100]
+        #     {"self": [4, 8, 64, 512], "other": [4, 1, 1, 512]},  # row_b, C_b  # atol = nan for bf4b
+        #     {"self": [4, 8, 64, 512], "other": [4, 8, 1, 1]},  # B scalar      # bf4b passes for [-74, 74]
+        #     {"self": [1, 8, 64, 1], "other": [4, 8, 64, 512]},  # col_a, N_a   # atol = nan for bf4b
+        #     {"self": [4, 1, 1, 512], "other": [4, 8, 64, 512]},  # row_a, C_a  # atol = nan for bf4b
+        #     {"self": [4, 8, 1, 1], "other": [4, 8, 64, 512]},  # A scalar      # atol = nan for bf4b
+        #     {"self": [4, 8, 1, 512], "other": [4, 8, 64, 1]},  # row_a, col_b  # bf4b passes for [-100, 100]
+        #     {"self": [4, 8, 64, 1], "other": [4, 8, 1, 512]},  # row_b, col_a    # atol = nan for bf4b
+        # ],  # bcast
         "input_dtype": [
-            # {"input_a_dtype": "ttnn.bfloat16", "input_b_dtype": "ttnn.bfloat16"},
-            # {"input_a_dtype": "ttnn.float32", "input_b_dtype": "ttnn.float32"},
-            # {"input_a_dtype": "ttnn.bfloat8_b", "input_b_dtype": "ttnn.bfloat8_b"},
-            # {"input_a_dtype": "ttnn.bfloat4_b", "input_b_dtype": "ttnn.bfloat4_b"},  # same dtype
+            {"input_a_dtype": "ttnn.bfloat16", "input_b_dtype": "ttnn.bfloat16"},
+            {"input_a_dtype": "ttnn.float32", "input_b_dtype": "ttnn.float32"},
+            {"input_a_dtype": "ttnn.bfloat8_b", "input_b_dtype": "ttnn.bfloat8_b"},
+            {"input_a_dtype": "ttnn.bfloat4_b", "input_b_dtype": "ttnn.bfloat4_b"},
+            {"input_a_dtype": "ttnn.int32", "input_b_dtype": "ttnn.int32"},  # same dtype
             {"input_a_dtype": "ttnn.bfloat16", "input_b_dtype": "ttnn.float32"},
             {"input_a_dtype": "ttnn.bfloat16", "input_b_dtype": "ttnn.bfloat8_b"},
             {"input_a_dtype": "ttnn.bfloat16", "input_b_dtype": "ttnn.bfloat4_b"},
@@ -48,31 +48,33 @@ parameters = {
             {"input_a_dtype": "ttnn.bfloat4_b", "input_b_dtype": "ttnn.bfloat16"},
             {"input_a_dtype": "ttnn.bfloat4_b", "input_b_dtype": "ttnn.bfloat8_b"},  # mixed dtype
         ],
-        "input_a_layout": [ttnn.TILE_LAYOUT],
-        "input_b_layout": [ttnn.TILE_LAYOUT],
+        # "input_a_layout": [ttnn.TILE_LAYOUT],
+        # "input_b_layout": [ttnn.TILE_LAYOUT],
+        "input_a_layout": [ttnn.ROW_MAJOR_LAYOUT],
+        "input_b_layout": [ttnn.ROW_MAJOR_LAYOUT],
         "input_mem_config": [
             {"a_mem": "l1_interleaved", "b_mem": "l1_interleaved"},
             {"a_mem": "l1_interleaved", "b_mem": "dram_interleaved"},
             {"a_mem": "dram_interleaved", "b_mem": "l1_interleaved"},
             {"a_mem": "dram_interleaved", "b_mem": "dram_interleaved"},  # l1 - dram combination
-            # {"a_mem": "l1_height_sharded_rm", "b_mem": "l1_height_sharded_rm"},
-            # {"a_mem": "dram_interleaved", "b_mem": "l1_height_sharded_rm"},
-            # {"a_mem": "l1_height_sharded_rm", "b_mem": "dram_interleaved"},  # HS
-            # {"a_mem": "l1_width_sharded_rm", "b_mem": "l1_width_sharded_rm"},
-            # {"a_mem": "dram_interleaved", "b_mem": "l1_width_sharded_rm"},
-            # {"a_mem": "l1_width_sharded_rm", "b_mem": "dram_interleaved"},  # WS
-            # {"a_mem": "l1_block_sharded_rm", "b_mem": "l1_block_sharded_rm"},
-            # {"a_mem": "dram_interleaved", "b_mem": "l1_block_sharded_rm"},
-            # {"a_mem": "l1_block_sharded_rm", "b_mem": "dram_interleaved"},  # BS #row_major orientation
-            # {"a_mem": "l1_height_sharded_cm", "b_mem": "l1_height_sharded_cm"},
-            # {"a_mem": "dram_interleaved", "b_mem": "l1_height_sharded_cm"},
-            # {"a_mem": "l1_height_sharded_cm", "b_mem": "dram_interleaved"},  # HS
-            # {"a_mem": "l1_width_sharded_cm", "b_mem": "l1_width_sharded_cm"},
-            # {"a_mem": "dram_interleaved", "b_mem": "l1_width_sharded_cm"},
-            # {"a_mem": "l1_width_sharded_cm", "b_mem": "dram_interleaved"},  # WS
-            # {"a_mem": "l1_block_sharded_cm", "b_mem": "l1_block_sharded_cm"},
-            # {"a_mem": "dram_interleaved", "b_mem": "l1_block_sharded_cm"},
-            # {"a_mem": "l1_block_sharded_cm", "b_mem": "dram_interleaved"},  # BS #col_major orientation
+            {"a_mem": "l1_height_sharded_rm", "b_mem": "l1_height_sharded_rm"},
+            {"a_mem": "dram_interleaved", "b_mem": "l1_height_sharded_rm"},
+            {"a_mem": "l1_height_sharded_rm", "b_mem": "dram_interleaved"},  # HS
+            {"a_mem": "l1_width_sharded_rm", "b_mem": "l1_width_sharded_rm"},
+            {"a_mem": "dram_interleaved", "b_mem": "l1_width_sharded_rm"},
+            {"a_mem": "l1_width_sharded_rm", "b_mem": "dram_interleaved"},  # WS
+            {"a_mem": "l1_block_sharded_rm", "b_mem": "l1_block_sharded_rm"},
+            {"a_mem": "dram_interleaved", "b_mem": "l1_block_sharded_rm"},
+            {"a_mem": "l1_block_sharded_rm", "b_mem": "dram_interleaved"},  # BS #row_major orientation
+            {"a_mem": "l1_height_sharded_cm", "b_mem": "l1_height_sharded_cm"},
+            {"a_mem": "dram_interleaved", "b_mem": "l1_height_sharded_cm"},
+            {"a_mem": "l1_height_sharded_cm", "b_mem": "dram_interleaved"},  # HS
+            {"a_mem": "l1_width_sharded_cm", "b_mem": "l1_width_sharded_cm"},
+            {"a_mem": "dram_interleaved", "b_mem": "l1_width_sharded_cm"},
+            {"a_mem": "l1_width_sharded_cm", "b_mem": "dram_interleaved"},  # WS
+            {"a_mem": "l1_block_sharded_cm", "b_mem": "l1_block_sharded_cm"},
+            {"a_mem": "dram_interleaved", "b_mem": "l1_block_sharded_cm"},
+            {"a_mem": "l1_block_sharded_cm", "b_mem": "dram_interleaved"},  # BS #col_major orientation
         ],
     },
 }
@@ -87,6 +89,8 @@ def return_dtype(dtype):
         return ttnn.bfloat8_b
     elif dtype == "ttnn.bfloat4_b":
         return ttnn.bfloat4_b
+    elif dtype == "ttnn.int32":
+        return ttnn.int32
 
 
 def return_mem_config(mem_config_string):
@@ -173,12 +177,9 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(input_shape["self"])
 
-    if isinstance(input_shape["other"], list):
-        torch_input_tensor_b = gen_func_with_cast_tt(
-            partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
-        )(input_shape["other"])
-    else:
-        torch_input_tensor_b = torch.tensor(input_shape["other"], dtype=torch.float32)
+    torch_input_tensor_b = gen_func_with_cast_tt(
+        partial(torch_random, low=-100, high=100, dtype=torch.float32), input_b_dtype
+    )(input_shape["other"])
 
     input_a_memory_config = input_mem_config["a_mem"]
     input_b_memory_config = input_mem_config["b_mem"]
