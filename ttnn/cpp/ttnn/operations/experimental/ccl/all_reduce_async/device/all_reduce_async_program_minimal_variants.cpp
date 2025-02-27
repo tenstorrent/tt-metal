@@ -44,7 +44,7 @@ CoreRangeSet cores_to_corerangeset(const std::vector<CoreCoord>& cores) {
 
 operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers(
     const Tensor& input_tensor,
-    const Tensor& all_gather_output_tensor,
+    const Tensor& buffer_tensor,
     std::optional<IDevice*> forward_device,
     std::optional<IDevice*> backward_device,
     Tensor& output_tensor,
@@ -56,10 +56,6 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
     const std::optional<SubDeviceId>& sub_device_id,
     bool enable_persistent_fabric_mode) {
     tt::tt_metal::Program program{};
-    const bool enable_async_output_tensor = false;
-    TT_FATAL(
-        enable_persistent_fabric_mode,
-        "only persistent fabric mode is supported for all_gather_async_llama_post_binary_matmul");
 
     IDevice* device = input_tensor.device();
     bool is_first_chip = ring_index == 0;
@@ -119,8 +115,7 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
     const size_t packet_size_bytes = local_fabric_handle->get_edm_buffer_size_bytes();
     uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size();
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
-    uint32_t cb_base_num_pages = std::lcm(input_tensor_shard_num_pages, output_tensor_shard_num_pages);
-    uint32_t cb_num_pages = input_tensor_num_pages;
+    uint32_t cb_num_pages = input_tensor_num_pages;  // TODO: Reduce this to double-buffer packet-size?
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     tt::DataFormat df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor.get_dtype());
     tt::tt_metal::CircularBufferConfig cb_src0_config =
@@ -139,12 +134,13 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
     auto reserved_packet_header_CB_handle =
         CreateCircularBuffer(program, sender_worker_core_range, cb_reserved_packet_header_config);
 
-    // Reduction kernel stuff
+    // Reduction kernel setup
     auto all_cores = output_tensor_cores.merge(sender_worker_core_range);
     auto input_cores_vec = corerange_to_cores(input_tensor_cores, std::nullopt, true);
     auto output_cores_vec = corerange_to_cores(output_tensor_cores, std::nullopt, true);
 
     // Create output tensor splits
+    // TODO: Currently does not support output shards being split across multiple links
     std::vector<CoreRangeSet> output_corerangeset_per_link;
     std::vector<uint32_t> num_output_cores_in_link(num_links, 0);
     uint32_t output_cores_per_link = tt::div_up(output_tensor_cores.num_cores(), num_links);
@@ -170,6 +166,23 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
     }
 
     // Create input tensor splits
+    /*
+        Overview of algorithm:
+
+        - Ouput: each link gets assigned a start and end core index, since multiple links
+            may have to read different offesets within a shard on the same core
+        - First, assign all the necessary cores needed for a link. This may result in the link
+            containing extra pages. This will result in an overflow, which is used to detect
+            the tile offset (within a shard) for the next link
+        - Once you have the start_core_idx, the end_core_idx is calculated by
+            getting the upper bound on the number of cores needed to read the pages assigned
+            to the link, accounting for the tile offset. This calculation is done by dividing
+            the upper bound on the number of pages assigned to this link
+            (num_pages_this_link + input_tensor_tile_offset) by the number of pages in a shard.
+            This gives the number of cores needed to read the pages assigned to this link.
+        - If an overflow is detected, then the start_core_idx for the next link is set
+            to the end_core_idx of the current link. Ie, 2 links read from the same core
+    */
     std::vector<std::pair<uint32_t, uint32_t>> input_cores_idx_per_link(num_links, {0, 0});
     std::vector<uint32_t> input_tensor_tile_offset_per_link(num_links, 0);
     uint32_t start_core_idx = 0;
@@ -204,7 +217,7 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
         }
     }
 
-    // Create reduction semaphore vector for each link
+    // Create reduction semaphores for each link
     std::vector<uint32_t> reduction_semaphore_ids(num_links, 0);
     for (uint32_t link = 0; link < num_links; link++) {
         reduction_semaphore_ids[link] = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
@@ -219,7 +232,7 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
     tt::tt_metal::CircularBufferConfig reduction_cb_config =
         tt::tt_metal::CircularBufferConfig(reduction_CB_size, {{reduction_cb_index, df}})
             .set_page_size(reduction_cb_index, reduction_CB_single_tile_size)
-            .set_globally_allocated_address(*all_gather_output_tensor.buffer());
+            .set_globally_allocated_address(*buffer_tensor.buffer());
     auto cb_reduction = tt::tt_metal::CreateCircularBuffer(program, all_cores, reduction_cb_config);
 
     /* out cb */
@@ -367,8 +380,6 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
         auto mcast_end_core =
             device->worker_core_from_logical_core(output_corerangeset_per_link[link].bounding_box().end_coord);
 
-        bool wait_output_semaphore = true;   // (link == 0) && !enable_async_output_tensor;
-        bool reset_global_semaphore = true;  // (link == 0) && !enable_async_output_tensor;
         uint32_t out_ready_sem_wait_value = ring_size;
         std::vector<uint32_t> writer_rt_args = {
             reduction_cb_index,                   // tensor_address0
@@ -377,8 +388,6 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
             worker_num_tiles_to_read,             // num_tiles_to_read
             output_first_core_tile_start_offset,  // first_core_tile_start_offset
             output_tensor_cores_x.size(),         // num_cores
-            wait_output_semaphore,                // wait_output_semaphore
-            reset_global_semaphore,               // reset_global_semaphore
             drain_sync_core.x,                    // out_ready_sem_noc0_x
             drain_sync_core.y,                    // out_ready_sem_noc0_y
             out_ready_sem_wait_value,             // out_ready_sem_wait_value
@@ -421,14 +430,12 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
         }
         tt::tt_metal::SetRuntimeArgs(program, worker_sender_writer_kernel_id, {core}, writer_rt_args);
 
+        // Set reduction worker runtime args
         std::vector<uint32_t> reduction_reader_rt_args = {
             reduction_semaphore_ids[link],  // reduction_semaphore_id
         };
         tt::tt_metal::SetRuntimeArgs(
             program, reduction_reader_kernel_id, output_corerangeset_per_link[link], reduction_reader_rt_args);
-
-        input_first_core_tile_start_offset =
-            (worker_num_tiles_to_read % input_tensor_shard_num_pages) + input_first_core_tile_start_offset;
     }
 
     auto override_runtime_arguments_callback =
@@ -440,7 +447,7 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
             const std::vector<Tensor>& output_tensors) {
             const auto& input = input_tensors[0];
             const auto& output = output_tensors[0];
-            const auto& all_gather_output = input_tensors[1];
+            const auto& buffer_tensor = input_tensors[1];
 
             auto semaphore = static_cast<const ttnn::AllReduceAsync*>(operation)->semaphore;
 
@@ -456,7 +463,7 @@ operation::ProgramWithCallbacks all_reduce_async_minimal_multi_core_with_workers
                 worker_writer_sender_runtime_args[1] = semaphore.address();
             }
             UpdateDynamicCircularBufferAddress(program, cb_out, *output.buffer());
-            UpdateDynamicCircularBufferAddress(program, cb_reduction, *all_gather_output.buffer());
+            UpdateDynamicCircularBufferAddress(program, cb_reduction, *buffer_tensor.buffer());
         };
 
     return {.program = std::move(program), .override_runtime_arguments_callback = override_runtime_arguments_callback};
