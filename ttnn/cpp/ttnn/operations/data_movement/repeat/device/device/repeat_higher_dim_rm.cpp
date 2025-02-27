@@ -27,7 +27,7 @@ void kernel_main() {
     constexpr uint32_t original_page_size_bytes = get_compile_time_arg_val(1);
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(2);
     constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(3);
-#define page_is_pow_2 (get_compile_time_arg_val(4) == 1)
+    constexpr bool page_is_pow_2 = (get_compile_time_arg_val(4) == 1);
     constexpr uint32_t page_pow_2 = get_compile_time_arg_val(5);
     //(higher_dim,rep_dim,lower_dim,page_size)
     // cb_id_in0 and cb_id_in1 is each 1 page of size:
