@@ -33,14 +33,8 @@ from models.utility_functions import skip_for_grayskull
 )
 @pytest.mark.parametrize(
     "paged_attention",
-    (
-        True,
-        # False
-    ),
-    ids=(
-        "paged_attention",
-        # "default_attention"
-    ),
+    (True, False),
+    ids=("paged_attention", "default_attention"),
 )
 @pytest.mark.parametrize(
     "page_params",
@@ -183,6 +177,7 @@ def test_decoder_inference(
             mode="decode",
             page_table=page_table_tt,
         )
+        print("out model")
         tt_out = ttnn.to_torch(
             tt_out,
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=model_args.cluster_shape),

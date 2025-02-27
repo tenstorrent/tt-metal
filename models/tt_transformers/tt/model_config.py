@@ -389,10 +389,12 @@ class ModelArgs:
 
             # For maximum performance, set the prefill grid row to 8, even if it can fit in a smaller grid
             # prefill_rows = lambda seq_len: min(seq_len, 1024) // self.tile_size
-            prefill_rows = 8
+            # prefill_rows = lambda seq_len: min(seq_len, 512) // self.tile_size
+            prefill_rows = 8  # TODO if BH = 10, if wh = 8
             mlp1_3_grid = lambda seq_len: (
                 (8, min(min(seq_len, 1024) // 32, 4))
                 if self.is_galaxy
+                # else self.find_prefill_grid(prefill_rows(seq_len), self.dim // self.tile_size)
                 else self.find_prefill_grid(prefill_rows, self.dim // self.tile_size)
             )
             mlp2_grid = lambda seq_len: (
@@ -402,13 +404,15 @@ class ModelArgs:
             )
 
             self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"] = lambda seq_len: self.matmul_config(
-                m=min(seq_len, 1024),
+                # m=min(seq_len, 1024),
+                m=min(seq_len, 512),
                 k=self.dim // self.cluster_shape[0],
                 n=self.hidden_dim // self.cluster_shape[1],
                 grid_size=mlp1_3_grid(seq_len),
             )
             self.model_config["PREFILL_MLP_W2_PRG_CONFIG"] = lambda seq_len: self.matmul_config(
-                m=min(seq_len, 1024),
+                # m=min(seq_len, 1024),
+                m=min(seq_len, 512),
                 k=self.hidden_dim // (self.cluster_shape[1] if self.is_galaxy else 1),
                 n=self.dim,
                 grid_size=mlp2_grid(seq_len),
@@ -1318,6 +1322,10 @@ class ModelArgs:
         """Find a grid such that the number of row tiles evenly divides into the number
         of rows and the number of column tiles evenly divides into the number of columns
         """
+        # TODO WH
+        # max_rows = 8
+        # max_cols = 8
+        # TODO BH
         max_rows = 8
         max_cols = 8
 
