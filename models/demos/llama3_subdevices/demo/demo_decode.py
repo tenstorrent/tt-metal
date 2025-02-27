@@ -310,15 +310,11 @@ def run_llama3_demo(
         tt_out_gathered = tt_model.tt_ccl.line_all_gather(
             tt_out[0], dim=3, num_links=2, cluster_axis=0, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
-        print("done gather")
         tt_out_rm = ttnn.untilize(tt_out_gathered, use_multicore=True, sub_core_grids=sub_core_grids)
-        print("done untilize")
         ttnn.deallocate(tt_out_gathered)
         tt_out_tok = ttnn.argmax(  # FIXME When ttnn.argmax supports multicore, avoid falling back to host
             tt_out_rm, dim=3, use_multicore=True, output_tensor=tt_out_tok, sub_core_grids=sub_core_grids
         )
-        print("done argmax")
-
         logger.info(f"sampling done")
 
     ttnn.plus_one(
@@ -362,7 +358,6 @@ def run_llama3_demo(
 
     ttnn.end_trace_capture(mesh_device, trace_id, cq_id=0)
     ttnn.synchronize_devices(mesh_device)
-    print("done capture")
 
     # Reset the decoding position for the proper run of the model
     current_pos_reset = ttnn.from_torch(
@@ -427,15 +422,8 @@ def run_llama3_demo(
                 mesh_shape=model_args.cluster_shape,
             ),
         )[0, 0, 0, :batch_size]
-        # print("done iteration",iteration, tt_output_torch)
         # Append the generated token to the list of outputs
         if iteration in range(len(encoded_prompts[0])):
-            # breakpoint()
-            # print("in prefill")
-            # print(encoded_prompts_tensor_whole_sequence)
-            # print(encoded_prompts)
-            # While in "prefill" mode, use the prompt tokens as the output
-            # ttnn.synchronize_devices(mesh_device)
             all_outputs.append(encoded_prompts[0][iteration])  # Update list of TT outputs
             tt_out_tok_reset = ttnn.from_torch(
                 encoded_prompts_tensor_whole_sequence[:, iteration].reshape(1, 1, 1, batch_size),
@@ -445,25 +433,7 @@ def run_llama3_demo(
             )
             ttnn.copy_host_to_device_tensor(tt_out_tok_reset, tt_out_tok)
         else:
-            # breakpoint()
-            # print("in deocde", tt_output_torch.tolist()[0])
             all_outputs.append(tt_output_torch.tolist()[0])  # Update generated token to list of TT outputs
-        # print("done", tt_output_torch)
-        # Save output token to print out later
-        # for user in range(1):
-        #     try:
-        #         user_tok = tt_output_torch[user].tolist()[0]
-        #         if (
-        #             user_tok != 128009 and user_done[user] == False
-        #         ):  # Stop saving the ouput after hitting the eos token (<|eot_id|>) (128009)
-        #             all_outputs.append(user_tok)
-        #         else:
-        #             user_done[user] = True
-        #             logger.trace(f"[User {user}] Finished decoding at iteration {iteration}")
-        #             if all(user_done):
-        #                 users_decoding = False
-        #     except Exception as e:
-        #         logger.error(f"Error decoding user {user} at iteration {iteration}. Error: {str(e)}")
 
         # Print out generated outputs for each user at the end of every iteration
         iteration_time = time() - iteration_time_start
