@@ -102,7 +102,7 @@ void py_module(py::module& module) {
         },
         py::arg("mesh_device"),
         py::kw_only(),
-        py::arg("cq_id") = ttnn::DefaultMeshCommandQueueId);
+        py::arg("mesh_cq_id") = ttnn::DefaultMeshCommandQueueId);
 
     module.def(
         "end_mesh_trace_capture",
@@ -112,7 +112,7 @@ void py_module(py::module& module) {
         py::arg("mesh_device"),
         py::arg("trace_id"),
         py::kw_only(),
-        py::arg("cq_id") = ttnn::DefaultMeshCommandQueueId);
+        py::arg("mesh_cq_id") = ttnn::DefaultMeshCommandQueueId);
 
     module.def(
         "execute_mesh_trace",
@@ -122,7 +122,7 @@ void py_module(py::module& module) {
         py::arg("mesh_device"),
         py::arg("trace_id"),
         py::kw_only(),
-        py::arg("cq_id") = ttnn::DefaultMeshCommandQueueId,
+        py::arg("mesh_cq_id") = ttnn::DefaultMeshCommandQueueId,
         py::arg("blocking") = true);
 
     module.def(

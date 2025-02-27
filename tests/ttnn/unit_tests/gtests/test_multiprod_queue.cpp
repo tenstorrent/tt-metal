@@ -101,7 +101,7 @@ TEST_F(MultiProducerCommandQueueTest, EventSync) {
 
     std::thread t0([&]() {
         std::vector<float> host_write_data(tensor_shape.volume());
-        for (int j = 0; j < 100; j++) {
+        for (int j = 0; j < 1000; j++) {
             if (j != 0) {
                 ttnn::event_synchronize(read_event);
             }
@@ -119,7 +119,7 @@ TEST_F(MultiProducerCommandQueueTest, EventSync) {
 
     std::thread t1([&]() {
         std::vector<float> host_readback_data(tensor_shape.volume());
-        for (int j = 0; j < 100; j++) {
+        for (int j = 0; j < 1000; j++) {
             ttnn::event_synchronize(write_event);
             write_event = std::make_shared<Event>();
 

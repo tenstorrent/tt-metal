@@ -243,20 +243,17 @@ int main(int argc, char** argv) {
     // =========== Step 7: Write inputs on MeshCQ1 ===========
     // IO is done through MeshCQ1 and Workload dispatch is done through MeshCQ0. Use MeshEvents to synchronize the
     // independent MeshCQs.
-    std::shared_ptr<MeshEvent> write_event = std::make_shared<MeshEvent>();
-    std::shared_ptr<MeshEvent> trace_event = std::make_shared<MeshEvent>();
-
     EnqueueWriteMeshBuffer(data_movement_cq, add_src0_buf, add_src0_vec);
     EnqueueWriteMeshBuffer(data_movement_cq, add_src1_buf, add_src1_vec);
     EnqueueWriteMeshBuffer(data_movement_cq, mul_sub_src0_buf, mul_sub_src0_vec);
     EnqueueWriteMeshBuffer(data_movement_cq, mul_sub_src1_buf, mul_sub_src1_vec);
     // Synchronize
-    EnqueueRecordEvent(data_movement_cq, write_event);
+    MeshEvent write_event = EnqueueRecordEvent(data_movement_cq);
     EnqueueWaitForEvent(workload_cq, write_event);
     // =========== Step 8: Run MeshTrace on MeshCQ0 ===========
     ReplayTrace(mesh_device.get(), workload_cq_id, trace_id, false);
     // Synchronize
-    EnqueueRecordEvent(workload_cq, trace_event);
+    MeshEvent trace_event = EnqueueRecordEvent(workload_cq);
     EnqueueWaitForEvent(data_movement_cq, trace_event);
     // =========== Step 9: Read Outputs on MeshCQ1 ===========
     std::vector<bfloat16> add_dst_vec = {};
