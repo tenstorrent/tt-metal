@@ -31,6 +31,7 @@
 #include "tracy/Tracy.hpp"
 #include <tt_align.hpp>
 #include <tuple>
+#include "lightmetal/host_api_capture_helpers.hpp"
 
 namespace tt::tt_metal {
 
@@ -54,17 +55,16 @@ void GenerateBinaries(IDevice* device, JitBuildOptions &build_options, const std
 #include <fstream>
 #endif
 
-size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions &build_options, uint32_t build_key, size_t device_kernel_defines_hash) {
+size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions& build_options, uint32_t build_key) {
     // Store the build key into the KernelCompile hash. This will be unique per command queue
     // configuration (necessary for dispatch kernels).
     // Also account for watcher/dprint enabled in hash because they enable additional code to
     // be compiled into the kernel.
     string compile_hash_str = fmt::format(
-        "{}_{}_{}_{}_{}",
+        "{}_{}_{}_{}",
         build_key,
         std::to_string(std::hash<tt_hlk_desc>{}(build_options.hlk_desc)),
         kernel->compute_hash(),
-        device_kernel_defines_hash,
         tt::llrt::RunTimeOptions::get_instance().get_watcher_enabled());
 
     for (int i = 0; i < llrt::RunTimeDebugFeatureCount; i++) {
@@ -79,7 +79,7 @@ size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions 
     {
         unique_lock<mutex> lock;
         f << kernel->name() << " :: " << build_key << "::" << std::hash<tt_hlk_desc>{}(build_options.hlk_desc)
-          << " :: " << kernel->compute_hash() << " :: " << device_kernel_defines_hash << " :: " << compile_hash_str << " " << compile_hash << std::endl
+          << " :: " << kernel->compute_hash() << " :: " << compile_hash_str << " " << compile_hash << std::endl
           << std::flush;
     }
 #endif
@@ -207,6 +207,7 @@ class Program_ {
     uint64_t id; // Need to make non-const due to move constructor
     uint64_t runtime_id;
     static std::atomic<uint64_t> program_counter;
+    // Programmable core type index -> KernelHandle -> Kernel
     std::vector<std::unordered_map<KernelHandle, std::shared_ptr<Kernel> >> kernels_;
     std::vector<CoreCoord> grid_extent_;
 
@@ -329,7 +330,10 @@ detail::Program_::Program_() :
     program_config_sizes_.resize(programmable_core_count + 2);
 }
 
-Program::Program() : pimpl_(std::make_unique<detail::Program_>()) {}
+Program::Program() : pimpl_(std::make_unique<detail::Program_>()) {
+    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
+    LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureProgramConstructor, *this);
+}
 
 KernelHandle detail::Program_::add_kernel(const std::shared_ptr<Kernel>& kernel, const HalProgrammableCoreType &programmable_core_type) {
     TT_FATAL(this->compiled_.empty(), "Cannot add kernel to an already compiled program {}", this->id);
@@ -406,7 +410,7 @@ KernelGroup::KernelGroup(
                     // If both brisc and ncrisc set the noc, then this is safe due to prior correctness validation
                     this->launch_msg.kernel_config.brisc_noc_id = 1 - std::get<DataMovementConfig>(kernel->config()).noc;
                     // if noc mode is already set to DM_DYNAMIC_NOC then we can't change back to DM_DEDICATED_NOC
-                    if (this->launch_msg.kernel_config.brisc_noc_mode == NOC_MODE::DM_DYNAMIC_NOC) {
+                    if (std::get<DataMovementConfig>(kernel->config()).noc_mode == NOC_MODE::DM_DYNAMIC_NOC) {
                         this->launch_msg.kernel_config.brisc_noc_mode = NOC_MODE::DM_DYNAMIC_NOC;
                     }
                 }
@@ -1355,6 +1359,12 @@ void detail::Program_::compile(IDevice* device, bool fd_bootloader_mode) {
     std::vector<std::shared_future<void>> events;
     DprintServerSetProfilerState(profile_kernel);
 
+    auto sync_events = [&events] {
+        for (auto& event : events) {
+            event.get();
+        }
+    };
+
     auto validate_kernel_placement = [&device, &fd_bootloader_mode](std::shared_ptr<Kernel> kernel) {
         // Placement rules:
         //  Slow dispatch:
@@ -1408,8 +1418,7 @@ void detail::Program_::compile(IDevice* device, bool fd_bootloader_mode) {
                     auto kernel_hash = KernelCompileHash(
                         kernel,
                         build_options,
-                        BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key,
-                        device->get_device_kernel_defines_hash());
+                        BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key);
                     std::string kernel_path_suffix = kernel->name() + "/" + std::to_string(kernel_hash) + "/";
                     kernel->set_full_name(kernel_path_suffix);
                     build_options.set_name(kernel_path_suffix);
@@ -1436,15 +1445,14 @@ void detail::Program_::compile(IDevice* device, bool fd_bootloader_mode) {
                 events);
         }
     }
-    sync_build_step(events);
+    sync_events();
 
     for (auto &kernels : kernels_) {
         for (auto &[id, kernel] : kernels) {
             launch_build_step([kernel, device] { kernel->read_binaries(device); }, events);
         }
     }
-
-    sync_build_step(events);
+    sync_events();
 
     if (detail::CompilationReporter::enabled()) {
         detail::CompilationReporter::inst().flush_program_entry(get_id(), num_kernels(), [this](size_t kernel_id) {

@@ -366,27 +366,33 @@ ttnn::Tensor ReshapeViewOperation::invoke(
         default_pad_value = (uint32_t)0;
     }
 
-    //const uint32_t tile_first_dim =tensor.get_tile().get_width();
-    //const uint32_t tile_second_dim =tensor.get_tile().get_height();
+    // const uint32_t tile_first_dim =tensor.get_tile().get_width();
+    // const uint32_t tile_second_dim =tensor.get_tile().get_height();
     const uint32_t tile_first_dim = 32;
     const uint32_t tile_second_dim = 32;
-    //The following case should only be called for the device storage case, the rest is a bandaid
-    //for issue 15317
+    // The following case should only be called for the device storage case, the rest is a bandaid
+    // for issue 15317
 
     const uint32_t shape_last_dim = logical_shape.rank() >= 1 ? logical_shape[-1] : 1;
     const uint32_t tensor_shape_last_dim = tensor_shape.rank() >= 1 ? tensor_shape[-1] : 1;
     const uint32_t shape_second_last_dim = logical_shape.rank() >= 2 ? logical_shape[-2] : 1;
-    const uint32_t tensor_shape_second_last_dim = tensor_shape.rank() >= 2 ? tensor_shape[-2]:1;
+    const uint32_t tensor_shape_second_last_dim = tensor_shape.rank() >= 2 ? tensor_shape[-2] : 1;
 
     // Just edit shape if shape has a 0 dimension
     if (tensor.get_logical_volume() == 0) {
         TT_FATAL(logical_shape.volume() == 0, "Tensor volume is 0, but shape's volume is not");
-        TT_FATAL((tensor.storage_type() != StorageType::MULTI_DEVICE &&
-                  tensor.storage_type() != StorageType::MULTI_DEVICE_HOST),
-                  "Reshaping a multi-device tensor with 0 volume is not supported");
+        TT_FATAL(
+            (tensor.storage_type() != StorageType::MULTI_DEVICE &&
+             tensor.storage_type() != StorageType::MULTI_DEVICE_HOST),
+            "Reshaping a multi-device tensor with 0 volume is not supported");
         return ttnn::experimental::view(tensor, logical_shape, padded_shape);
     }
     TT_FATAL(logical_shape.volume() != 0, "Tensor volume is not 0, but shape volume is 0");
+
+    if (!is_tensor_on_device_or_multidevice(tensor)) {
+        // This case has been allowed in the past though it means introducing padding values to the data
+        return ttnn::experimental::view(tensor, logical_shape, padded_shape);
+    }
 
     bool this_is_view =
         (tensor_shape_last_dim == shape_last_dim) && (mem_config.is_sharded() == tensor.memory_config().is_sharded()) &&
@@ -395,10 +401,6 @@ ttnn::Tensor ReshapeViewOperation::invoke(
          (tensor_shape_second_last_dim == shape_second_last_dim) ||  // Second last dimension is the same
          (shape_second_last_dim % tile_second_dim == 0 &&
           tensor_shape_second_last_dim % tile_first_dim == 0));  // There is no padding on the second last dimension
-    if (!(ttnn::has_storage_type_of(tensor, ttnn::StorageType::DEVICE))) {
-            // This case has been allowed in the past though it means introducing padding values to the data
-            return ttnn::experimental::view(tensor, logical_shape, padded_shape);
-        }
 
     if (this_is_view) {
         return PerformView(tensor, logical_shape, padded_shape, tile_first_dim, tile_second_dim);

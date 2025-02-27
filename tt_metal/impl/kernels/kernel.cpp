@@ -1,16 +1,19 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
 #include <kernel.hpp>
+#include <kernel_types.hpp>
 
 #include <fmt/core.h>
 #include <fmt/ranges.h>
 
+#include <magic_enum/magic_enum.hpp>
 #include <set>
 
 #include <build.hpp>
 #include "llrt.hpp"
+#include <string_view>
 #include <tt_metal.hpp>
 #include "tt_metal/impl/debug/watcher_server.hpp"
 #include "tt_metal/kernel.hpp"
@@ -105,7 +108,7 @@ CoreType Kernel::get_kernel_core_type() const {
     return CoreType::WORKER;
 }
 
-const string &Kernel::get_full_kernel_name() const { return this->kernel_full_name_; }
+const std::string& Kernel::get_full_kernel_name() const { return this->kernel_full_name_; }
 
 void Kernel::add_defines(const std::map<std::string, std::string>& defines) {
     this->defines_.insert(defines.begin(), defines.end());
@@ -140,6 +143,24 @@ void EthernetKernel::process_defines(
     // pass default noc mode as eth does not need it, just for compile to pass
     callback("NOC_MODE", std::to_string(NOC_MODE::DM_DEDICATED_NOC));
 }
+
+std::string_view DataMovementKernel::get_compiler_opt_level() const {
+    return magic_enum::enum_name(this->config_.opt_level);
+}
+
+std::string_view DataMovementKernel::get_linker_opt_level() const { return this->get_compiler_opt_level(); }
+
+std::string_view ComputeKernel::get_compiler_opt_level() const {
+    return magic_enum::enum_name(this->config_.opt_level);
+}
+
+std::string_view ComputeKernel::get_linker_opt_level() const { return this->get_compiler_opt_level(); }
+
+std::string_view EthernetKernel::get_compiler_opt_level() const {
+    return magic_enum::enum_name(this->config_.opt_level);
+}
+
+std::string_view EthernetKernel::get_linker_opt_level() const { return this->get_compiler_opt_level(); }
 
 void Kernel::process_compile_time_args(const std::function<void(int i, uint32_t value)> callback) const {
     for (int i = 0; i < this->compile_time_args_.size(); i++) {
@@ -415,7 +436,6 @@ void EthernetKernel::read_binaries(IDevice* device) {
     int erisc_id = magic_enum::enum_integer(this->config_.processor);
     const JitBuildState& build_state = BuildEnvManager::get_instance().get_kernel_build_state(
         device->build_id(), erisc_core_type, dm_class_idx, erisc_id);
-    int risc_id = erisc_id + (this->config_.eth_mode == Eth::IDLE ? 6 : 5); // TODO (abhullar): clean this up when llrt helpers use HAL
     // TODO: fix when active eth supports relo
     auto load_type = (this->config_.eth_mode == Eth::IDLE) ?
         ll_api::memory::Loading::CONTIGUOUS_XIP : ll_api::memory::Loading::DISCRETE;

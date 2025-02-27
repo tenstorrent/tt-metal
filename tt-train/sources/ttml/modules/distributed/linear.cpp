@@ -44,10 +44,10 @@ autograd::TensorPtr RowParallelLinear::operator()(autograd::TensorPtr tensor) {
 void RowParallelLinear::initialize_tensors(uint32_t in_features, uint32_t out_features, bool has_bias) {
     auto* device = &autograd::ctx().get_device();
     auto num_devices = static_cast<uint32_t>(device->num_devices());
-    if (out_features % num_devices != 0) {
+    if (in_features % num_devices != 0) {
         throw std::runtime_error(fmt::format(
-            "Output features must be divisible by the number of devices. Output features = {}, devices = {}",
-            out_features,
+            "Input features must be divisible by the number of devices. Input features = {}, devices = {}",
+            in_features,
             num_devices));
     }
 
@@ -83,6 +83,7 @@ ColumnParallelLinear::ColumnParallelLinear(
 }
 
 autograd::TensorPtr ColumnParallelLinear::operator()(autograd::TensorPtr tensor) {
+    tensor = ops::distributed::broadcast(tensor);
     tensor = ops::linear_op(tensor, m_weight, m_bias);
     if (m_gather_output) {
         tensor = ops::distributed::all_gather(tensor, tensor->get_rank() - 1U);
@@ -93,10 +94,10 @@ autograd::TensorPtr ColumnParallelLinear::operator()(autograd::TensorPtr tensor)
 void ColumnParallelLinear::initialize_tensors(uint32_t in_features, uint32_t out_features, bool has_bias) {
     auto* device = &autograd::ctx().get_device();
     auto num_devices = static_cast<uint32_t>(device->num_devices());
-    if (in_features % num_devices != 0) {
+    if (out_features % num_devices != 0) {
         throw std::runtime_error(fmt::format(
-            "Input features must be divisible by the number of devices. Input features = {}, devices = {}",
-            in_features,
+            "Output features must be divisible by the number of devices. Output features = {}, devices = {}",
+            out_features,
             num_devices));
     }
 
