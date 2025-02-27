@@ -841,10 +841,10 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
                           ? num_sticks_padded_per_core_group_1
                           : num_sticks_padded_per_core_group_2;
 
-    tt::tt_metal::CircularBufferConfig cb_src0_config =
-        tt::tt_metal::CircularBufferConfig(num_sticks * stick_size_padded_aligned, {{src0_cb_index, cb_data_format}})
-            .set_page_size(src0_cb_index, stick_size_padded_aligned);
-    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
+    // tt::tt_metal::CircularBufferConfig cb_src0_config =
+    //     tt::tt_metal::CircularBufferConfig(num_sticks * stick_size_padded_aligned, {{src0_cb_index, cb_data_format}})
+    //         .set_page_size(src0_cb_index, stick_size_padded_aligned);
+    // auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
 
     // construct const buffer with the pad_value
     bool not_pad_by_zero = pad_value != 0;
@@ -932,6 +932,7 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
         core_group_2,
         num_sticks_padded_per_core_group_2);
 
+    uint32_t max_num_read_per_barrier = 0;
     for (uint32_t i = 0; i < num_cores_total; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, all_runtime_args[i].first);
@@ -940,7 +941,13 @@ operation::ProgramWithCallbacks pad_rm_reader_writer_multi_core_v2(
             program, writer_kernel_id, core, all_runtime_args[i].second
 
         );
+        max_num_read_per_barrier = std::max(max_num_read_per_barrier, all_runtime_args[i].first[2]);
     }
+    tt::tt_metal::CircularBufferConfig cb_src0_config =
+        tt::tt_metal::CircularBufferConfig(
+            max_num_read_per_barrier * stick_size_padded_aligned, {{src0_cb_index, cb_data_format}})
+            .set_page_size(src0_cb_index, stick_size_padded_aligned);
+    auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, total_cores, cb_src0_config);
 
     auto override_runtime_args_callback =
         [reader_kernel_id, writer_kernel_id, compute_with_storage_grid_size, input_tensor_start](
