@@ -188,13 +188,13 @@ struct MultiDeviceHostStorage {
 
     OwnedBuffer get_buffer(int buffer_index) const {
         std::lock_guard<std::mutex> lock(mtx);
-        TT_ASSERT(buffer_index < buffers.size(), "Buffer not found for buffer_index {}", buffer_index);
+        TT_FATAL(buffer_index < buffers.size(), "Buffer not found for buffer_index {}", buffer_index);
         return buffers[buffer_index];
     }
 
     OwnedBuffer& get_buffer(int buffer_index) {
         std::lock_guard<std::mutex> lock(mtx);
-        TT_ASSERT(buffer_index < buffers.size(), "Buffer not found for buffer_index {}", buffer_index);
+        TT_FATAL(buffer_index < buffers.size(), "Buffer not found for buffer_index {}", buffer_index);
         return buffers[buffer_index];
     }
 
@@ -325,7 +325,7 @@ struct MultiDeviceStorage {
 
     inline std::shared_ptr<Buffer> get_buffer_for_device(IDevice* device) const {
         std::lock_guard<std::mutex> lock(buffer_mtx);
-        TT_ASSERT(buffers.find(device->id()) != buffers.end(), "Buffer not found for device {}", device->id());
+        TT_FATAL(buffers.find(device->id()) != buffers.end(), "Buffer not found for device {}", device->id());
         TT_ASSERT(
             buffers.at(device->id())->device() == device,
             "Mismatch between device derived from buffer and device derived from MultiDeviceStorage.");
@@ -334,7 +334,7 @@ struct MultiDeviceStorage {
 
     inline std::shared_ptr<Buffer>& get_buffer_for_device(IDevice* device) {
         std::lock_guard<std::mutex> lock(buffer_mtx);
-        TT_ASSERT(buffers.find(device->id()) != buffers.end(), "Buffer not found for device {}", device->id());
+        TT_FATAL(buffers.find(device->id()) != buffers.end(), "Buffer not found for device {}", device->id());
         TT_ASSERT(
             buffers.at(device->id())->device() == device,
             "Mismatch between device derived from buffer and device derived from MultiDeviceStorage.");
@@ -348,7 +348,7 @@ struct MultiDeviceStorage {
 
     inline TensorSpec get_tensor_spec_for_device(IDevice* device) const {
         std::lock_guard<std::mutex> lock(shape_mtx);
-        TT_ASSERT(specs.find(device->id()) != specs.end(), "Shape not found for device {}", device->id());
+        TT_FATAL(specs.find(device->id()) != specs.end(), "Shape not found for device {}", device->id());
         return specs.at(device->id());
     }
 
