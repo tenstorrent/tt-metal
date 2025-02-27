@@ -12,7 +12,7 @@ namespace ttnn::operations::reduction::detail {
 
 operation::ProgramWithCallbacks topk_single_core_interleaved(
     const Tensor& input_tensor,
-    const int32_t k,
+    const uint32_t k,
     const int8_t dim,
     const bool largest,
     const bool sorted,
@@ -183,7 +183,7 @@ static inline std::tuple<uint16_t, uint16_t, uint16_t, uint16_t> cores_utilized(
     uint16_t min_dim,
     uint16_t max_dim,
     CoreCoord grid,
-    int32_t k,
+    uint32_t k,
     const uint32_t l1_size,
     const uint32_t value_tile_size,
     const uint32_t index_tile_size) {
@@ -217,7 +217,7 @@ static inline std::tuple<uint16_t, uint16_t, uint16_t, uint16_t> cores_utilized(
  */
 operation::ProgramWithCallbacks topk_multicore_interleaved(
     const Tensor& input_tensor,
-    const int32_t k,
+    const uint32_t k,
     const int8_t dim,
     const bool largest,
     const bool sorted,
