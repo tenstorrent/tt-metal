@@ -7,6 +7,7 @@
 #include <array>
 
 #include "dataflow_api.h"
+#include "hw/inc/grayskull/tensix_types.h"
 
 // #define DEBUG
 
@@ -36,17 +37,16 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
 
     constexpr bool tile_dtype_is_bfloat16 = get_compile_time_arg_val(0) == 1;
-#if (tile_dtype_is_bfloat16)
+    DataFormat data_format = DataFormat::Invalid;
+    if constexpr (tile_dtype_is_bfloat16) {
+        data_format = DataFormat::Float16;
+    } else {
+        data_format = DataFormat::Bfp8_b;
+    }
     const InterleavedAddrGenFast<out_is_dram_bool> s0 = {
-        .bank_base_address = out0_tensor_addr, .page_size = single_tile_size_bytes, .data_format = DataFormat::Float16};
+        .bank_base_address = out0_tensor_addr, .page_size = single_tile_size_bytes, .data_format = data_format};
     const InterleavedAddrGenFast<out_is_dram_bool> s1 = {
-        .bank_base_address = out1_tensor_addr, .page_size = single_tile_size_bytes, .data_format = DataFormat::Float16};
-#else
-    const InterleavedAddrGenFast<out_is_dram_bool> s0 = {
-        .bank_base_address = out0_tensor_addr, .page_size = single_tile_size_bytes, .data_format = DataFormat::Bfp8_b};
-    const InterleavedAddrGenFast<out_is_dram_bool> s1 = {
-        .bank_base_address = out1_tensor_addr, .page_size = single_tile_size_bytes, .data_format = DataFormat::Bfp8_b};
-#endif
+        .bank_base_address = out1_tensor_addr, .page_size = single_tile_size_bytes, .data_format = data_format};
 
     std::array<InterleavedAddrGenFast<out_is_dram_bool>, 2> output_banks{s0, s1};
     uint32_t out_split_tensor_tile_id;
