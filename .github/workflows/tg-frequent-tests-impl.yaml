@@ -20,7 +20,7 @@ jobs:
       matrix:
         test-group: [
           { name: "TG Llama3 frequent tests", arch: wormhole_b0, model: llama3, timeout: 90, owner_id: U06F3ER8X9A}, # Stuti Raizada
-          { name: "TG resnet50 frequent tests", arch: wormhole_b0, model: resnet50, timeout: 90, owner_id: U013121KDH9}, # Austin Ho
+          { name: "TG resnet50 frequent tests", arch: wormhole_b0, model: resnet50, timeout: 90, owner_id: U055MU9S9CJ}, # Abhinav
           { name: "TG unit/distributed frequent tests", arch: wormhole_b0, model: unit, timeout: 90, owner_id: XXXXX}, # Add owner
         ]
     runs-on:
