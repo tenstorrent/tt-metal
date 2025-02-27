@@ -58,20 +58,19 @@ namespace kernel_profiler {
 }
 #endif
 
-extern "C" void notify_brisc_and_halt_to_iram(uint32_t status, uint32_t first_argument);
+extern "C" void notify_brisc_and_halt_to_iram(uint32_t status_register, uint32_t status, uint32_t first_argument);
 
 inline __attribute__((always_inline)) void notify_brisc_and_wait() {
     while (true) {
-        uint8_t run_value = *ncrisc_run;
-        if (run_value == RUN_SYNC_MSG_GO || run_value == RUN_SYNC_MSG_LOAD) {
+        uint8_t run_value = get_slave_sync_component(SLAVE_SYNC_MSG_OFFSET_DM1);
+        if (run_value == RUN_SYNC_MSG_LOAD || run_value == RUN_SYNC_MSG_GO) {
             break;
         }
-        invalidate_l1_cache();
     }
 }
 
 inline __attribute__((always_inline)) void signal_ncrisc_completion() {
-    *ncrisc_run = RUN_SYNC_MSG_DONE;
+    modify_slave_sync_component(SLAVE_SYNC_MSG_OFFSET_DM1, RUN_SYNC_MSG_GO, RUN_SYNC_MSG_DONE);
 }
 
 #if defined(ARCH_WORMHOLE)
@@ -133,14 +132,18 @@ int main(int argc, char *argv[]) {
         void (*kernel_address)(uint32_t) = (void (*)(uint32_t))
             (kernel_config_base + launch_msg->kernel_config.kernel_text_offset[index]);
 #if !defined(ARCH_WORMHOLE)
-        while (*ncrisc_run != RUN_SYNC_MSG_GO) {
-            invalidate_l1_cache();
+        while (get_slave_sync_component(SLAVE_SYNC_MSG_OFFSET_DM1) != RUN_SYNC_MSG_GO) {
         }
         (*kernel_address)((uint32_t)kernel_address);
 #else
         // Jumping to IRAM causes bizarre behavior, so signal the brisc to reset the ncrisc to the IRAM address.
         mailboxes->ncrisc_halt.resume_addr = (uint32_t)kernel_init;
-        notify_brisc_and_halt_to_iram(RUN_SYNC_MSG_WAITING_FOR_RESET, (uint32_t)kernel_address);
+        const uint32_t update_value = (RUN_SYNC_MSG_WAITING_FOR_RESET - RUN_SYNC_MSG_LOAD)
+                                      << (REMOTE_DEST_BUF_WORDS_FREE_INC + SLAVE_SYNC_MSG_OFFSET_DM1);
+        notify_brisc_and_halt_to_iram(
+            STREAM_REG_ADDR(SLAVE_SYNC_STREAM_REGISTER, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX),
+            update_value,
+            (uint32_t)kernel_address);
 #endif
         RECORD_STACK_USAGE();
         WAYPOINT("D");

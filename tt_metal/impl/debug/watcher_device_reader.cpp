@@ -630,16 +630,12 @@ void WatcherDeviceReader::DumpRunState(CoreDescriptor& core, const launch_msg_t*
         code = 'I';
     } else if (state == RUN_MSG_GO) {
         code = 'G';
+    } else if (state == RUN_SYNC_MSG_GO) {
+        code = 'G';
     } else if (state == RUN_MSG_DONE) {
         code = 'D';
     } else if (state == RUN_MSG_RESET_READ_PTR) {
         code = 'R';
-    } else if (state == RUN_SYNC_MSG_LOAD) {
-        code = 'L';
-    } else if (state == RUN_SYNC_MSG_WAITING_FOR_RESET) {
-        code = 'W';
-    } else if (state == RUN_SYNC_MSG_INIT_SYNC_REGISTERS) {
-        code = 'S';
     }
     if (code == 'U') {
         LogRunningKernels(core, launch_msg);
@@ -654,6 +650,45 @@ void WatcherDeviceReader::DumpRunState(CoreDescriptor& core, const launch_msg_t*
             RUN_SYNC_MSG_WAITING_FOR_RESET);
     } else {
         fprintf(f, "%c", code);
+    }
+}
+
+void WatcherDeviceReader::DumpStreamRunState(CoreDescriptor& core, const launch_msg_t* launch_msg) {
+    std::vector<uint32_t> data;
+    uint32_t base = NOC_OVERLAY_START_ADDR + SLAVE_SYNC_STREAM_REGISTER * NOC_STREAM_REG_SPACE_SIZE;
+    // TODO(fix)
+    uint32_t read_addr = base + STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX * sizeof(uint32_t);
+    data = tt::llrt::read_hex_vec_from_core(device->id(), core.coord, read_addr, sizeof(uint32_t));
+    uint32_t rcvd = data[0];
+    for (size_t i = 0; i < 4; i++) {
+        uint32_t state = rcvd & ((1 << SLAVE_SYNC_MESSAGE_WIDTH) - 1);
+        rcvd >>= SLAVE_SYNC_MESSAGE_WIDTH;
+        char code = 'U';
+        if (state == RUN_SYNC_MSG_GO) {
+            code = 'G';
+        } else if (state == RUN_SYNC_MSG_DONE) {
+            code = 'D';
+        } else if (state == RUN_SYNC_MSG_LOAD) {
+            code = 'L';
+        } else if (state == RUN_SYNC_MSG_WAITING_FOR_RESET) {
+            code = 'W';
+        } else if (state == RUN_SYNC_MSG_INIT_SYNC_REGISTERS) {
+            code = 'S';
+        }
+        if (code == 'U') {
+            LogRunningKernels(core, launch_msg);
+            TT_THROW(
+                "Watcher data corruption, unexpected run state on core{}: {} (expected {}, {}, {}, {}, or {})",
+                core.coord.str(),
+                state,
+                RUN_SYNC_MSG_GO,
+                RUN_SYNC_MSG_DONE,
+                RUN_SYNC_MSG_LOAD,
+                RUN_SYNC_MSG_WAITING_FOR_RESET,
+                RUN_SYNC_MSG_INIT_SYNC_REGISTERS);
+        } else {
+            fprintf(f, "%c", code);
+        }
     }
 }
 
@@ -736,10 +771,7 @@ void WatcherDeviceReader::DumpLaunchMessage(CoreDescriptor& core, const mailboxe
 
     if (!is_eth) {
         fprintf(f, "smsg:");
-        DumpRunState(core, launch_msg, slave_sync->dm1);
-        DumpRunState(core, launch_msg, slave_sync->trisc0);
-        DumpRunState(core, launch_msg, slave_sync->trisc1);
-        DumpRunState(core, launch_msg, slave_sync->trisc2);
+        DumpStreamRunState(core, launch_msg);
         fprintf(f, " ");
     } else if (device->arch() == ARCH::BLACKHOLE) {
         fprintf(f, "smsg:");

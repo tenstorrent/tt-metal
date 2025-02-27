@@ -20,6 +20,7 @@
 #include "circular_buffer_init.h"
 #endif
 #include "circular_buffer_constants.h"
+#include "debug/ring_buffer.h"
 // clang-format on
 
 #if defined(PROFILE_KERNEL)
@@ -51,10 +52,6 @@ uint32_t op_info_offset __attribute__((used)) = 0;
 
 const uint8_t thread_id = COMPILE_FOR_TRISC;
 
-#define GET_TRISC_RUN_EVAL(x, t) x##t
-#define GET_TRISC_RUN(x, t) GET_TRISC_RUN_EVAL(x, t)
-volatile tt_l1_ptr uint8_t *const trisc_run =
-    &GET_TRISC_RUN(((tt_l1_ptr mailboxes_t *)(MEM_MAILBOX_BASE))->slave_sync.trisc, COMPILE_FOR_TRISC);
 tt_l1_ptr mailboxes_t *const mailboxes = (tt_l1_ptr mailboxes_t *)(MEM_MAILBOX_BASE);
 }  // namespace ckernel
 
@@ -99,18 +96,22 @@ int main(int argc, char *argv[]) {
     for (int i = 0; i < 64; i++) regfile[i] = 0;
 
     reset_cfg_state_id();
+    const uint32_t stream_offset = (thread_id + 1) * SLAVE_SYNC_MESSAGE_WIDTH;
 
     // Cleanup profiler buffer incase we never get the go message
     while (1) {
         WAYPOINT("W");
-        while (*trisc_run != RUN_SYNC_MSG_GO) {
+        while (true) {
+            uint8_t component = get_slave_sync_component(stream_offset);
+            if (component == RUN_SYNC_MSG_GO) {
+                break;
+            }
             if constexpr (COMPILE_FOR_TRISC == 0) {
-                if (*trisc_run == RUN_SYNC_MSG_INIT_SYNC_REGISTERS) {
+                if (component == RUN_SYNC_MSG_INIT_SYNC_REGISTERS) {
                     init_sync_registers();
-                    *trisc_run = RUN_SYNC_MSG_DONE;
+                    modify_slave_sync_component(stream_offset, RUN_SYNC_MSG_INIT_SYNC_REGISTERS, RUN_SYNC_MSG_DONE);
                 }
             }
-            invalidate_l1_cache();
         }
         DeviceZoneScopedMainN("TRISC-FW");
 
@@ -146,6 +147,6 @@ int main(int argc, char *argv[]) {
 
         // Signal completion
         tensix_sync();
-        *trisc_run = RUN_SYNC_MSG_DONE;
+        modify_slave_sync_component(stream_offset, RUN_SYNC_MSG_GO, RUN_SYNC_MSG_DONE);
     }
 }

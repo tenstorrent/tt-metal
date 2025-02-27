@@ -39,16 +39,26 @@ constexpr uint32_t RUN_MSG_GO = 0x80;
 constexpr uint32_t RUN_MSG_RESET_READ_PTR = 0xc0;
 constexpr uint32_t RUN_MSG_DONE = 0;
 
-// 0x80808000 is a micro-optimization, calculated with 1 riscv insn
-constexpr uint32_t RUN_SYNC_MSG_INIT = 0x40;
-constexpr uint32_t RUN_SYNC_MSG_GO = 0x80;
-// Trigger loading CBs (and IRAM) before actually running the kernel.
-constexpr uint32_t RUN_SYNC_MSG_LOAD = 0x1;
-constexpr uint32_t RUN_SYNC_MSG_WAITING_FOR_RESET = 0x2;
-constexpr uint32_t RUN_SYNC_MSG_INIT_SYNC_REGISTERS = 0x3;
-constexpr uint32_t RUN_SYNC_MSG_DONE = 0;
-constexpr uint32_t RUN_SYNC_MSG_ALL_GO = 0x80808080;
+// Messages between BRISC and slave RISCS.
 constexpr uint32_t RUN_SYNC_MSG_ALL_SLAVES_DONE = 0;
+constexpr uint32_t RUN_SYNC_MSG_DONE = 0;
+constexpr uint32_t RUN_SYNC_MSG_GO = 1;
+// Trigger loading CBs (and IRAM) before actually running the kernel.
+constexpr uint32_t RUN_SYNC_MSG_LOAD = 2;
+constexpr uint32_t RUN_SYNC_MSG_WAITING_FOR_RESET = 3;
+constexpr uint32_t RUN_SYNC_MSG_INIT_SYNC_REGISTERS = 4;
+
+enum slave_sync_message_offsets {
+    // The stream register is 17 bits wide.
+    SLAVE_SYNC_MESSAGE_WIDTH = 4,
+
+    SLAVE_SYNC_MSG_OFFSET_DM1 = 0,
+    SLAVE_SYNC_MSG_OFFSET_TRISC0 = SLAVE_SYNC_MESSAGE_WIDTH * 1,
+    SLAVE_SYNC_MSG_OFFSET_TRISC1 = SLAVE_SYNC_MESSAGE_WIDTH * 2,
+    SLAVE_SYNC_MSG_OFFSET_TRISC2 = SLAVE_SYNC_MESSAGE_WIDTH * 3,
+};
+
+constexpr uint32_t SLAVE_SYNC_STREAM_REGISTER = 0;
 
 struct ncrisc_halt_msg_t {
     volatile uint32_t resume_addr;
@@ -143,14 +153,12 @@ struct launch_msg_t {  // must be cacheline aligned
     kernel_config_msg_t kernel_config;
 } __attribute__((packed));
 
+// Used only for erisc.
 struct slave_sync_msg_t {
     union {
         volatile uint32_t all;
         struct {
             volatile uint8_t dm1;  // ncrisc must come first, see ncrisc-halt.S
-            volatile uint8_t trisc0;
-            volatile uint8_t trisc1;
-            volatile uint8_t trisc2;
         };
     };
 };

@@ -16,6 +16,7 @@
 #include "noc/noc_parameters.h"
 #include "debug/dprint.h"
 #include "risc_common.h"
+#include "noc_overlay_parameters.h"
 
 extern uint16_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS];
 extern int32_t bank_to_dram_offset[NUM_DRAM_BANKS];
@@ -80,5 +81,36 @@ void wait_for_go_message() {
 
     while (mailboxes->go_message.signal != RUN_MSG_GO) {
         invalidate_l1_cache();
+    }
+}
+
+FORCE_INLINE
+void reset_stream_register(uint32_t stream_id) {
+    NOC_STREAM_WRITE_REG(stream_id, STREAM_REMOTE_DEST_BUF_SIZE_REG_INDEX, 0);
+}
+
+FORCE_INLINE
+void increment_stream_register(uint32_t stream_id, uint32_t value) {
+    NOC_STREAM_WRITE_REG(
+        stream_id, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX, value << REMOTE_DEST_BUF_WORDS_FREE_INC);
+}
+
+FORCE_INLINE
+uint32_t get_stream_register_value(uint32_t stream_id) {
+    return NOC_STREAM_READ_REG(stream_id, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX);
+}
+
+FORCE_INLINE
+uint32_t get_slave_sync_component(uint32_t offset) {
+    return (get_stream_register_value(SLAVE_SYNC_STREAM_REGISTER) >> offset) & ((1 << SLAVE_SYNC_MESSAGE_WIDTH) - 1);
+}
+
+template <bool barrier = true>
+FORCE_INLINE void modify_slave_sync_component(uint32_t offset, uint32_t from, uint32_t to) {
+    increment_stream_register(SLAVE_SYNC_STREAM_REGISTER, (to - from) << offset);
+    if constexpr (barrier) {
+        // Wait for the update to take effect, so later reads of the register have the correct value. This can be skpped
+        // if later reads happen much later, or if reading stale data won't cause problems.
+        NOC_STREAM_READ_REG(SLAVE_SYNC_STREAM_REGISTER, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_UPDATE_REG_INDEX);
     }
 }
