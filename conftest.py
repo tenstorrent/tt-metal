@@ -184,7 +184,8 @@ def all_devices(request, device_params):
 
 
 @pytest.fixture(scope="function")
-def mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device_params):
+def mesh_device(request, silicon_arch_name, silicon_arch_blackhole, device_params):
+    # def mesh_device(request, silicon_arch_name, silicon_arch_wormhole_b0, device_params):
     """
     Pytest fixture to set up a device mesh for tests.
 
@@ -397,6 +398,7 @@ ALL_ARCHS = set(
     [
         "grayskull",
         "wormhole_b0",
+        "blackhole",
     ]
 )
 
@@ -408,7 +410,7 @@ def pytest_addoption(parser):
         "--tt-arch",
         choices=[*ALL_ARCHS],
         default=ttnn.get_arch_name(),
-        help="Target arch, ex. grayskull, wormhole_b0",
+        help="Target arch, ex. grayskull, wormhole_b0, blackhole",
     )
     parser.addoption(
         "--pipeline-type",
@@ -511,6 +513,11 @@ def pytest_generate_tests(metafunc):
         "silicon_arch_wormhole_b0": set(
             [
                 "wormhole_b0",
+            ]
+        ),
+        "silicon_arch_blackhole": set(
+            [
+                "blackhole",
             ]
         ),
     }
