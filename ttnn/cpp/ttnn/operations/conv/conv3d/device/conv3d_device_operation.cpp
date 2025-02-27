@@ -18,8 +18,7 @@ void Conv3dOp::validate(
     const std::vector<Tensor>& input_tensors,
     const std::vector<std::optional<const Tensor>>& optional_input_tensors) const {
     const auto& input_tensor_a = input_tensors.at(0);
-    // const auto& input_tensor_b = input_tensors.at(1);
-    // TT_FATAL(input_tensor_b.memory_config().is_interleaved(), "Weights tensor must be interleaved.");
+
     TT_FATAL(input_tensor_a.shape().size() == 5, "Activation tensor must have 5 dimensions.");
     TT_FATAL(input_tensor_a.shape()[0] == 1, "Activation tensor must have batch size 1.");
     // check row-major
@@ -31,33 +30,50 @@ void Conv3dOp::validate(
         TT_FATAL(tensor.dtype() == DataType::BFLOAT16, "Activation tensor must be bfloat16.");
     }
 
-    // Add assertions for strides and groups
-    TT_FATAL(config.stride[0] == 1 && config.stride[1] == 1 && config.stride[2] == 1, "Strides must be (1,1,1).");
-    TT_FATAL(config.groups == 1, "Groups must be 1.");
-    // assert padding is 0
-    TT_FATAL(config.padding[0] == 0, "Padding must be (0,x,x).");
-    // TT_FATAL(config.padding[0] == 0 && config.padding[1] == 0 && config.padding[2] == 0, "Padding must be (0,0,0).");
-    TT_FATAL(
-        config.padding_mode == "zeros" || config.padding_mode == "replicate",
-        "Padding mode must be zeros or replicate.");
-
-    // TODO: Use tile_width instead of 32
-    if (config.C_out_block > 0) {
-        TT_FATAL(
-            config.output_channels % config.C_out_block == 0 && config.C_out_block % 32 == 0,
-            "C_out_block must be a multiple of 32 and divide evenly into output channels. Got C_out_block={} and "
-            "output_channels={}.",
-            config.C_out_block,
-            config.output_channels);
-    }
-
-    TT_FATAL(config.output_channels % 32 == 0, "Output channels must be a multiple of 32.");
+    const auto& weight_tensor = input_tensors.at(1);
+    TT_FATAL(weight_tensor.get_layout() == Layout::TILE, "Weight tensor must be tile-major.");
 
     if (optional_input_tensors.at(0).has_value()) {
         const auto& bias_tensor = optional_input_tensors.at(0).value();
         TT_FATAL(!bias_tensor.memory_config().is_sharded(), "Bias tensor must be interleaved.");
         TT_FATAL(bias_tensor.get_layout() == Layout::TILE, "Bias tensor must be tile-major.");
         TT_FATAL(bias_tensor.dtype() == DataType::BFLOAT16, "Bias tensor must be bfloat16.");
+        TT_FATAL(bias_tensor.shape().size() == 2, "Bias tensor must have 2 dimensions.");
+    }
+
+    // Add assertions for strides and groups
+    TT_FATAL(config.stride[0] == 1 && config.stride[1] == 1 && config.stride[2] == 1, "Strides must be (1,1,1).");
+    TT_FATAL(config.groups == 1, "Groups must be 1.");
+    // assert padding on T is zero
+    TT_FATAL(config.padding[0] == 0, "Padding must be (0,x,x).");
+    TT_FATAL(
+        config.padding_mode == "zeros" || config.padding_mode == "replicate",
+        "Padding mode must be zeros or replicate.");
+
+    if (config.C_out_block > 0) {
+        TT_FATAL(
+            config.output_channels % config.C_out_block == 0 && config.C_out_block % tt::constants::TILE_WIDTH == 0,
+            "C_out_block must be a multiple of {} and divide evenly into output channels. Got C_out_block={} and "
+            "output_channels={}.",
+            tt::constants::TILE_WIDTH,
+            config.C_out_block,
+            config.output_channels);
+    }
+
+    TT_FATAL(
+        config.output_channels % tt::constants::TILE_WIDTH == 0,
+        "Output channels must be a multiple of {}.",
+        tt::constants::TILE_WIDTH);
+
+    // Validate weight shape and config arguments
+    const auto patch_size =
+        config.kernel_size[0] * config.kernel_size[1] * config.kernel_size[2] * input_tensor_a.shape()[4];
+    TT_FATAL(weight_tensor.shape()[0] == patch_size, "Weight patch size must match input patch size.");
+    TT_FATAL(
+        weight_tensor.shape()[1] == config.output_channels, "Weight output channels must match input output channels.");
+    if (optional_input_tensors.at(0).has_value()) {
+        const auto& bias_tensor = optional_input_tensors.at(0).value();
+        TT_FATAL(bias_tensor.shape()[1] == config.output_channels, "Bias must match output channels.");
     }
 
     // Add grid size validation
@@ -72,13 +88,18 @@ void Conv3dOp::validate(
         device_grid.y);
 
     uint32_t C_in = input_tensor_a.shape()[4];
+    const uint32_t l1_alignment = tt::tt_metal::hal.get_alignment(tt::tt_metal::HalMemType::L1);
     if (config.C_in_block > 0) {
         TT_FATAL(
             C_in % config.C_in_block == 0,
             "Input channels ({}) must be divisible by C_in_block ({})",
             C_in,
             config.C_in_block);
-        TT_FATAL(config.C_in_block % 32 == 0, "C_in_block ({}) must be a multiple of 32", config.C_in_block);
+        TT_FATAL(
+            config.C_in_block % l1_alignment == 0,
+            "C_in_block ({}) must be a multiple of {}",
+            config.C_in_block,
+            l1_alignment);
     }
 
     // Verify number of C_in_blocks is <= the number of cores
@@ -93,7 +114,6 @@ void Conv3dOp::validate(
 }
 
 std::vector<TensorSpec> Conv3dOp::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
-    // Compute vol2col output shape
     const auto& input_tensor_a = input_tensors.at(0);
     const auto& input_tensor_a_shape = input_tensor_a.shape();
     uint32_t N = input_tensor_a_shape[0];
@@ -105,10 +125,6 @@ std::vector<TensorSpec> Conv3dOp::compute_output_specs(const std::vector<Tensor>
 
     auto [T_out, H_out, W_out] = detail::compute_output_dims(T_in, H_in, W_in, config.padding, config.kernel_size);
 
-    // uint32_t num_patches = N * T_out * H_out * W_out;
-    // uint32_t patch_size = config.kernel_size[0] * config.kernel_size[1] * config.kernel_size[2] * C_in;
-
-    // ttnn::SimpleShape output_shape({num_patches, patch_size});
     ttnn::SimpleShape output_shape({N, T_out, H_out, W_out, C_out});
 
     auto memory_config = input_tensor_a.memory_config();

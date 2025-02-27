@@ -17,7 +17,7 @@ def prepare_input_tensor(input_tensor, C, device, ALIGNMENT=16):
     return ttnn.from_torch(tt_input, device=device, dtype=ttnn.DataType.BFLOAT16, layout=ttnn.ROW_MAJOR_LAYOUT)
 
 
-def prepare_weights(conv3d_module, C, out_channels, C_in_block, device, ALIGNMENT=16):
+def prepare_weights(conv3d_module, C, out_channels, device, C_in_block=0, ALIGNMENT=16):
     """Prepare weights and bias for TTNN."""
     w = conv3d_module.weight.data  # out_chan, C, kD, kH, kW
     w = w.permute(2, 3, 4, 1, 0)  # kD, kH, kW, C, out_chan
@@ -137,7 +137,7 @@ def setup_conv3d_test(input_shape, out_channels, kernel_size, stride, padding, p
     return tt_input, conv3d_module, gt_output, kernel_config, (N, D_out, H_out, W_out)
 
 
-def run_vol2col_test(device, input_shape, out_channels, kernel_size, stride, padding, padding_mode, grid_size=(1, 1)):
+def run_conv3d_test(device, input_shape, out_channels, kernel_size, stride, padding, padding_mode, grid_size=(1, 1)):
     tt_input, conv3d_module, gt_output, kernel_config, output_dims = setup_conv3d_test(
         input_shape, out_channels, kernel_size, stride, padding, padding_mode, device
     )
@@ -145,8 +145,7 @@ def run_vol2col_test(device, input_shape, out_channels, kernel_size, stride, pad
     C = input_shape[1]
 
     # Prepare weights and bias for TTNN
-    C_in_block = C  # Default to full channel depth
-    tt_weight, tt_bias = prepare_weights(conv3d_module, C, out_channels, C_in_block, device)
+    tt_weight, tt_bias = prepare_weights(conv3d_module, C, out_channels, device, C_in_block=0)
 
     # Create config and run TTNN conv3d
     config = create_conv3d_config(
@@ -178,7 +177,7 @@ def run_vol2col_test(device, input_shape, out_channels, kernel_size, stride, pad
     assert pcc > min_pcc, f"PCC = {pcc}, MSE = {mse}, MAE = {mae}"
 
 
-def run_vol2col_test_sweep_blocks(
+def run_conv3d_sweep_blocks_test(
     device, input_shape, out_channels, kernel_size, stride, padding, padding_mode, grid_size=(1, 1)
 ):
     tt_input, conv3d_module, gt_output, kernel_config, output_dims = setup_conv3d_test(
@@ -192,7 +191,7 @@ def run_vol2col_test_sweep_blocks(
 
     for C_in_block in range(32, input_shape[1] + 1, 32):
         # Prepare weights with current C_in_block
-        tt_weight, tt_bias = prepare_weights(conv3d_module, C, out_channels, C_in_block, device)
+        tt_weight, tt_bias = prepare_weights(conv3d_module, C, out_channels, device, C_in_block=C_in_block)
         for C_out_block in range(32, out_channels + 1, 32):
             for T_out_block in [2**i for i in range(int(math.log2(D_out)))]:
                 for W_out_block in [2**i for i in range(int(math.log2(W_out)))]:
@@ -259,7 +258,7 @@ def run_vol2col_test_sweep_blocks(
 @pytest.mark.parametrize("stride", [(1, 1, 1)], ids=["stride_111"])
 @pytest.mark.parametrize("padding", [(0, 0, 0), (0, 1, 1)], ids=["padding_000", "padding_011"])
 @pytest.mark.parametrize("padding_mode", ["zeros", "replicate"])
-def test_vol2col_sweep(device, B, C_in, C_out, T, H, W, kernel_size, stride, padding, padding_mode):
+def test_conv3d_sweep_shapes(device, B, C_in, C_out, T, H, W, kernel_size, stride, padding, padding_mode):
     if padding == (0, 0, 0) and padding_mode == "replicate":
         pytest.skip("Skipping padding (0, 0, 0) and padding_mode replicate because it's duplicate")
     input_shape = (B, C_in, T, H, W)
@@ -269,39 +268,85 @@ def test_vol2col_sweep(device, B, C_in, C_out, T, H, W, kernel_size, stride, pad
     padding = padding
     padding_mode = padding_mode
     grid_size = device.compute_with_storage_grid_size()
-    run_vol2col_test(device, input_shape, out_channels, kernel_size, stride, padding, padding_mode, grid_size=grid_size)
+    run_conv3d_test(device, input_shape, out_channels, kernel_size, stride, padding, padding_mode, grid_size=grid_size)
 
 
 @pytest.mark.parametrize(
     "input_shape, out_channels, kernel_size, stride, padding, padding_mode",
     [
-        # # Real mochi shapes
-        # [(1, 12, 28, 60, 106), 768, (1, 1, 1), (1, 1, 1), (0, 0, 0), "zeros"],
-        # [(1, 768, 28, 60, 106), 768, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
-        # [(1, 512, 82, 120, 212), 512, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
-        # [(1, 256, 163, 240, 424), 256, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
-        # [(1, 128, 163, 480, 848), 128, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
-        # T parallel mochi shapes
-        # [(1, 12, 4, 60, 106), 768, (1, 1, 1), (1, 1, 1), (0, 0, 0), "zeros"],
-        # [(1, 768, 4, 60, 106), 768, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
-        # [(1, 512, 11, 120, 212), 512, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
-        # [(1, 256, 21, 240, 424), 256, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
-        # [(1, 128, 21, 480, 848), 128, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
-        # Relatively small shape to try
-        # [(1, 32, 16, 16, 16), 64, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
-        [(1, 64, 16, 16, 16), 64, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
-        # [(1, 128, 16, 16, 16), 128, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
-        # [(1, 256, 16, 16, 16), 256, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
-        # [(1, 512, 16, 16, 16), 512, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
-        # [(1, 768, 16, 16, 16), 768, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
+        [(1, 128, 16, 16, 16), 128, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
     ],
-    # ids=["variant0", "variant1", "variant2", "variant3", "variant4"]
 )
-def test_vol2col_torch_mochi_shapes(device, input_shape, out_channels, kernel_size, stride, padding, padding_mode):
+def test_conv3d_sweep_blocks(
+    device, input_shape, out_channels, kernel_size, stride, padding, padding_mode, use_program_cache
+):
+    """
+    For a specific shape, sweep through different block sizes.
+    Constrain the sweep such that the num_patches in a block doesn't exceed 64
+    """
+    import math
+
     grid_size = device.compute_with_storage_grid_size()
-    run_vol2col_test_sweep_blocks(
-        device, input_shape, out_channels, kernel_size, stride, padding, padding_mode, grid_size=grid_size
+    tt_input, conv3d_module, gt_output, kernel_config, output_dims = setup_conv3d_test(
+        input_shape, out_channels, kernel_size, stride, padding, padding_mode, device, debug=False
     )
+    N, D_out, H_out, W_out = output_dims
+    C = input_shape[1]
+    C_in_blocks = filter(lambda x: C % x == 0, range(32, C + 1, 32))
+    C_out_blocks = filter(lambda x: out_channels % x == 0, range(32, out_channels + 1, 32))
+    T_out_blocks = [2**i for i in range(int(math.log2(D_out)))]
+    H_out_blocks = [2**i for i in range(int(math.log2(H_out)))]
+    W_out_blocks = [2**i for i in range(int(math.log2(W_out)))]
+
+    MAX_NUM_PATCHES_IN_BLOCK = 64
+    prev_C_in_block = None
+
+    import itertools
+
+    for C_in_block, C_out_block, T_out_block, H_out_block, W_out_block in itertools.product(
+        C_in_blocks, C_out_blocks, T_out_blocks, H_out_blocks, W_out_blocks
+    ):
+        num_patches_in_block = T_out_block * H_out_block * W_out_block
+        if num_patches_in_block > MAX_NUM_PATCHES_IN_BLOCK:
+            continue
+        if (C_in_block == 128 or C_out_block == 128) and num_patches_in_block > 32:
+            continue
+
+        logger.info(f"Testing {C_in_block}, {C_out_block}, {T_out_block}, {H_out_block}, {W_out_block}")
+        # Prepare weights with specified C_in_block
+        if prev_C_in_block != C_in_block:
+            # Only prepare if changing C_in_block
+            tt_weight, tt_bias = prepare_weights(conv3d_module, C, out_channels, device, C_in_block=C_in_block)
+            prev_C_in_block = C_in_block
+
+        config = create_conv3d_config(
+            out_channels,
+            kernel_size,
+            stride,
+            padding,
+            padding_mode,
+            T_out_block=T_out_block,
+            H_out_block=H_out_block,
+            W_out_block=W_out_block,
+            C_out_block=C_out_block,
+            C_in_block=C_in_block,
+            compute_with_storage_grid_size=grid_size,
+        )
+
+        tt_output = ttnn.conv3d(
+            input_tensor=tt_input,
+            weight_tensor=tt_weight,
+            bias_tensor=tt_bias,
+            config=config,
+            compute_kernel_config=kernel_config,
+        )
+        # Reshape output and verify results
+        tt_output = reshape_output(tt_output, N, D_out, H_out, W_out, out_channels, device)
+
+        assert tt_output.shape == gt_output.shape
+        pcc, mse, mae = compute_metrics(gt_output, tt_output)
+        min_pcc = 0.99
+        assert pcc > min_pcc, f"PCC={pcc}, MSE={mse}, MAE={mae}"
 
 
 @pytest.mark.parametrize(
@@ -310,7 +355,7 @@ def test_vol2col_torch_mochi_shapes(device, input_shape, out_channels, kernel_si
         [(1, 64, 16, 16, 16), 64, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
     ],
 )
-def test_vol2col_cache_address(
+def test_conv3d_cache_address(
     device, input_shape, out_channels, kernel_size, stride, padding, padding_mode, use_program_cache
 ):
     # Test that program cache updates the addresses of the inputs
@@ -318,7 +363,7 @@ def test_vol2col_cache_address(
     dummy = []
     for _ in range(3):
         dummy.append(ttnn.from_torch(torch.randn(input_shape), device=device, layout=ttnn.TILE_LAYOUT))
-        run_vol2col_test(
+        run_conv3d_test(
             device, input_shape, out_channels, kernel_size, stride, padding, padding_mode, grid_size=grid_size
         )
 
@@ -329,7 +374,7 @@ def test_vol2col_cache_address(
         [(1, 64, 16, 16, 16), 64, (3, 3, 3), (1, 1, 1), (0, 1, 1), "replicate"],
     ],
 )
-def test_vol2col_cache_hash(
+def test_conv3d_cache_hash(
     device, input_shape, out_channels, kernel_size, stride, padding, padding_mode, use_program_cache
 ):
     # Test that program cache does not re-use the same program for different inputs
@@ -339,7 +384,7 @@ def test_vol2col_cache_hash(
         for i in range(2):
             new_shape = (input_shape[0], input_shape[1] * (i + 1), input_shape[2], input_shape[3], input_shape[4])
             dummy.append(ttnn.from_torch(torch.randn(new_shape), device=device, layout=ttnn.TILE_LAYOUT))
-            run_vol2col_test(
+            run_conv3d_test(
                 device, new_shape, out_channels, kernel_size, stride, padding, padding_mode, grid_size=grid_size
             )
 
@@ -353,69 +398,16 @@ def test_vol2col_cache_hash(
     ],
 )
 @pytest.mark.parametrize("grid_size", [[1, 1], [1, 8], [8, 8]], ids=["grid_1x1", "grid_1x8", "grid_8x8"])
-def test_vol2col_multicore(
+def test_conv3d_multicore(
     device, input_shape, out_channels, kernel_size, stride, padding, padding_mode, grid_size, use_program_cache
 ):
     # Test that program cache does not re-use the same program for different inputs
-    run_vol2col_test(device, input_shape, out_channels, kernel_size, stride, padding, padding_mode, grid_size=grid_size)
-
-
-@pytest.mark.parametrize(
-    "input_shape, out_channels, kernel_size, stride, padding, padding_mode",
-    [
-        [(1, 64, 3, 5, 4), 32, (3, 3, 3), (1, 1, 1), (0, 0, 0), "zeros"],
-    ],
-)
-@pytest.mark.parametrize("grid_size", [[1, 2]], ids=["grid_2x8"])
-def test_vol2col_multicore_reduction(
-    device, input_shape, out_channels, kernel_size, stride, padding, padding_mode, grid_size, use_program_cache
-):
-    C_in_block = 32
-    tt_input, conv3d_module, gt_output, kernel_config, output_dims = setup_conv3d_test(
-        input_shape, out_channels, kernel_size, stride, padding, padding_mode, device, debug=False
-    )
-    N, D_out, H_out, W_out = output_dims
-    C = input_shape[1]
-
-    # Prepare weights with specified C_in_block
-    tt_weight, tt_bias = prepare_weights(conv3d_module, C, out_channels, C_in_block, device)
-
-    config = create_conv3d_config(
-        out_channels,
-        kernel_size,
-        stride,
-        padding,
-        padding_mode,
-        T_out_block=1,
-        H_out_block=1,
-        W_out_block=2,
-        C_out_block=32,
-        C_in_block=C_in_block,
-        compute_with_storage_grid_size=grid_size,
-    )
-
-    tt_output = ttnn.conv3d(
-        input_tensor=tt_input,
-        weight_tensor=tt_weight,
-        bias_tensor=tt_bias,
-        config=config,
-        compute_kernel_config=kernel_config,
-    )
-    # Reshape output and verify results
-    tt_output = reshape_output(tt_output, N, D_out, H_out, W_out, out_channels, device)
-
-    assert tt_output.shape == gt_output.shape
-    pcc, mse, mae = compute_metrics(gt_output, tt_output)
-    min_pcc = 0.99
-    if not pcc > min_pcc:
-        breakpoint()
-    assert pcc > min_pcc, f"PCC={pcc}, MSE={mse}, MAE={mae}"
+    run_conv3d_test(device, input_shape, out_channels, kernel_size, stride, padding, padding_mode, grid_size=grid_size)
 
 
 @pytest.mark.parametrize(
     "input_shape, out_channels, kernel_size, stride, padding, padding_mode, blocking",
     [
-        # [(1, 12, 4, 60, 106), 768, (1, 1, 1), (1, 1, 1), (0, 0, 0), "zeros", (0, 32, 4, 2, 4)], # failing, but it's 1d so just a matmul
         [
             (1, 768, 4, 60, 106),
             768,
@@ -450,13 +442,13 @@ def test_vol2col_multicore_reduction(
             (1, 1, 1),
             (0, 1, 1),
             "replicate",
-            (32, 32, 4, 2, 4),
-        ],  # Default blocking
+            (128, 128, 1, 2, 16),
+        ],  # Best blocking found so far
     ],
     ids=["variant1", "variant2", "variant3", "variant4"],
 )
 @pytest.mark.parametrize("grid_size", [[8, 8]], ids=["grid_8x8"])
-def test_mochi_shapes(
+def test_conv3d_mochi_shapes(
     device,
     input_shape,
     out_channels,
@@ -476,7 +468,7 @@ def test_mochi_shapes(
     C = input_shape[1]
 
     # Prepare weights with specified C_in_block
-    tt_weight, tt_bias = prepare_weights(conv3d_module, C, out_channels, C_in_block, device)
+    tt_weight, tt_bias = prepare_weights(conv3d_module, C, out_channels, device, C_in_block=C_in_block)
 
     config = create_conv3d_config(
         out_channels,
@@ -504,9 +496,8 @@ def test_mochi_shapes(
 
     assert tt_output.shape == gt_output.shape
     pcc, mse, mae = compute_metrics(gt_output, tt_output)
-    min_pcc = 0.99
-    if not pcc > min_pcc:
-        breakpoint()
+    logger.info(f"PCC={pcc}, MSE={mse}, MAE={mae}")
+    min_pcc = 0.999
     assert pcc > min_pcc, f"PCC={pcc}, MSE={mse}, MAE={mae}"
 
 
@@ -521,7 +512,7 @@ def test_mochi_shapes(
     ids=["variant1", "variant2", "variant3", "variant4"],
 )
 @pytest.mark.parametrize("grid_size", [[8, 8]], ids=["grid_8x8"])
-def test_mochi_shapes_perf(
+def test_conv3d_mochi_shapes_sweep_blocks(
     device, input_shape, out_channels, kernel_size, stride, padding, padding_mode, grid_size, use_program_cache
 ):
     import math
@@ -544,7 +535,7 @@ def test_mochi_shapes_perf(
     ):
         logger.info(f"Testing {C_in_block}, {C_out_block}, {T_out_block}, {H_out_block}, {W_out_block}")
         # Prepare weights with specified C_in_block
-        tt_weight, tt_bias = prepare_weights(conv3d_module, C, out_channels, C_in_block, device)
+        tt_weight, tt_bias = prepare_weights(conv3d_module, C, out_channels, device, C_in_block=C_in_block)
 
         config = create_conv3d_config(
             out_channels,
@@ -577,6 +568,4 @@ def test_mochi_shapes_perf(
         assert tt_output.shape == gt_output.shape
         pcc, mse, mae = compute_metrics(gt_output, tt_output)
         min_pcc = 0.99
-        if not pcc > min_pcc:
-            breakpoint()
         assert pcc > min_pcc, f"PCC={pcc}, MSE={mse}, MAE={mae}"

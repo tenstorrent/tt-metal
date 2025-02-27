@@ -4,21 +4,7 @@
 
 #include <stdint.h>
 #include "dataflow_api.h"
-#include "debug/dprint.h"
 #include "hostdevcommon/common_values.hpp"
-
-void dprint_rm(uint32_t cb_write_ptr, uint32_t num_rows, uint32_t num_cols) {
-    volatile tt_l1_ptr uint16_t* ptr = (volatile tt_l1_ptr uint16_t*)cb_write_ptr;
-    uint32_t idx = 0;
-    for (uint32_t i = 0; i < num_rows; ++i) {
-        DPRINT << "row " << i << ": ";
-        for (uint32_t j = 0; j < num_cols; ++j) {
-            DPRINT << ptr[idx] << " ";
-            idx++;
-        }
-        DPRINT << ENDL();
-    }
-}
 
 void kernel_main() {
     constexpr uint32_t cb_matmul_result_rm = get_compile_time_arg_val(0);
@@ -104,17 +90,18 @@ void kernel_main() {
             noc_async_read_barrier();
             cb_push_back(cb_weight_tiled, weight_tiles);
 
-            // TODO: Only do bias if reducer core
             if constexpr (use_bias) {
-                cb_reserve_back(cb_bias_tiled, matmul_N_t);
-                uint32_t bias_write_ptr = get_write_ptr(cb_bias_tiled);
-                for (uint32_t i = c_out_offset_t; i < c_out_offset_t + matmul_N_t; i++) {
-                    uint32_t bias_idx = i;
-                    noc_async_read_tile(bias_idx, bias_reader, bias_write_ptr);
-                    bias_write_ptr += tile_bytes;
+                if (is_reducer) {
+                    cb_reserve_back(cb_bias_tiled, matmul_N_t);
+                    uint32_t bias_write_ptr = get_write_ptr(cb_bias_tiled);
+                    for (uint32_t i = c_out_offset_t; i < c_out_offset_t + matmul_N_t; i++) {
+                        uint32_t bias_idx = i;
+                        noc_async_read_tile(bias_idx, bias_reader, bias_write_ptr);
+                        bias_write_ptr += tile_bytes;
+                    }
+                    noc_async_read_barrier();
+                    cb_push_back(cb_bias_tiled, matmul_N_t);
                 }
-                noc_async_read_barrier();
-                cb_push_back(cb_bias_tiled, matmul_N_t);
             }
 
             // Write output for assigned ranges

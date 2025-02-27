@@ -11,8 +11,6 @@
 #include "compute_kernel_api/bcast.h"
 #include "compute_kernel_api/eltwise_binary.h"
 
-#include "debug/dprint_pages.h"
-
 // Slightly modified from compute_common.hpp
 void matmul_blocks(
     const uint32_t& in0_cb,
@@ -184,9 +182,10 @@ void MAIN {
             // Wait for new weights and bias
             cb_wait_front(cb_weight_tiled, weight_tiles);
 
-            // TODO: ONly do bias if reducer core
             if constexpr (use_bias) {
-                cb_wait_front(cb_bias_tiled, matmul_N_t);
+                if (is_reducer) {
+                    cb_wait_front(cb_bias_tiled, matmul_N_t);
+                }
             }
 
             // 3D blocking loops over assigned ranges:
@@ -287,7 +286,9 @@ void MAIN {
             // Free space for next block of weights
             cb_pop_front(cb_weight_tiled, weight_tiles);
             if constexpr (use_bias) {
-                cb_pop_front(cb_bias_tiled, matmul_N_t);
+                if (is_reducer) {
+                    cb_pop_front(cb_bias_tiled, matmul_N_t);
+                }
             }
         }
     }
