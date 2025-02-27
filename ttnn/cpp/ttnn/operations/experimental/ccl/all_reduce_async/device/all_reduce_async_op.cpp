@@ -62,6 +62,7 @@ AllReduceAsync create_all_reduce_async_struct(
 void AllReduceAsync::validate(const std::vector<Tensor>& input_tensors) const {
     TT_FATAL(input_tensors.size() == 2, "Error, Input tensor size should be 2 but has {}", input_tensors.size());
     const auto& input_tensor = input_tensors[0];
+    const auto& buffer_tensor = input_tensors[1];
     const auto& layout = input_tensors[0].get_layout();
     const auto& dtype = input_tensors[0].get_dtype();
     const auto& page_size = input_tensors[0].buffer()->page_size();
@@ -69,18 +70,43 @@ void AllReduceAsync::validate(const std::vector<Tensor>& input_tensors) const {
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_reduce need to be on device!");
     TT_FATAL(input_tensor.buffer() != nullptr, "Operands to all_reduce need to be allocated in buffers on device!");
+
+    TT_FATAL(buffer_tensor.storage_type() == StorageType::DEVICE, "Operands to all_reduce need to be on device!");
+    TT_FATAL(buffer_tensor.buffer() != nullptr, "Operands to all_reduce need to be allocated in buffers on device!");
+
     TT_FATAL(this->num_links > 0, "Error, num_links should be more than 0 but has {}", this->num_links);
     TT_FATAL(
         this->num_links <= input_tensor.device()->compute_with_storage_grid_size().y,
         "Worker cores used by links are parallelizaed over rows");
 
     TT_FATAL(
-        input_tensor.memory_config().memory_layout == TensorMemoryLayout::INTERLEAVED ||
-            input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED ||
-            input_tensor.memory_config().memory_layout == TensorMemoryLayout::BLOCK_SHARDED ||
-            input_tensor.memory_config().memory_layout == TensorMemoryLayout::HEIGHT_SHARDED,
-        "Unsupported memory layout {}.",
+        input_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
+        "Unsupported memory layout for input tensor{}.",
         input_tensor.memory_config().memory_layout);
+
+    TT_FATAL(
+        buffer_tensor.memory_config().memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
+        "Unsupported memory layout for buffer tensor {}.",
+        buffer_tensor.memory_config().memory_layout);
+    TT_FATAL(
+        this->output_mem_config.memory_layout == TensorMemoryLayout::WIDTH_SHARDED,
+        "Unsupported memory layout for output tensor {}.",
+        this->output_mem_config.memory_layout);
+
+    TT_FATAL(
+        buffer_tensor.memory_config().shard_spec->grid.contains(this->output_mem_config.shard_spec->grid),
+        "The output tensor must reside on a subset of the cores of the buffer tensor");
+
+    const uint32_t output_shard_shape_volume =
+        this->output_mem_config.shard_spec->shape[0] * this->output_mem_config.shard_spec->shape[1];
+    const uint32_t buffer_shard_shape_volume =
+        buffer_tensor.memory_config().shard_spec->shape[0] * buffer_tensor.memory_config().shard_spec->shape[1];
+    TT_FATAL(
+        output_shard_shape_volume * this->ring_size <= buffer_shard_shape_volume,
+        "The shard size for the buffer must be large enough to hold the intermediate tensor. Require at least {} but "
+        "has {}",
+        output_shard_shape_volume * this->ring_size,
+        buffer_shard_shape_volume);
 }
 
 std::vector<ttnn::TensorSpec> AllReduceAsync::compute_output_specs(const std::vector<Tensor>& input_tensors) const {
