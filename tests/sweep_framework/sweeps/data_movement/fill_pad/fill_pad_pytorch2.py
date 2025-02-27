@@ -112,6 +112,14 @@ def run(
     device.enable_async(False)
 
     torch.manual_seed(1234)
+    if isinstance(fill_value, str):
+        if fill_value.lower() == "inf":
+            fill_value = float("inf")
+        elif fill_value.lower() == "-inf":
+            fill_value = float("-inf")
+        else:
+            raise ValueError(f"Unexpected string fill_value: {fill_value}")
+
     torch_input_tensor, padded_torch_tensor = create_nd_padded_tiled_tensor(
         shape, 32, fill_value, ttnn_dtype_to_torch_dtype[dtype]
     )
