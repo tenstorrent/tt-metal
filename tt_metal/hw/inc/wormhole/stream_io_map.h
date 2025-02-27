@@ -11,6 +11,7 @@
 
 // TODO: in ll-buda we can probably just start at stream 0 and not at stream 8?
 /*
+   Register 0 is reserved for firmware use: syncing between RISCs.
    Kernel operand mapping scheme:
    - ID 0-7 (inputs, unpacker-only) => streams 8-15
    - ID 8-15 (params, unpacker-only) => streams 16-23

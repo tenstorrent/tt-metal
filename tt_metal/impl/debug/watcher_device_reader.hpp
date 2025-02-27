@@ -58,6 +58,7 @@ private:
     void DumpPauseStatus(CoreDescriptor& core, const std::string& core_str, const mailboxes_t* mbox_data);
     void DumpRingBuffer(CoreDescriptor& core, const mailboxes_t* mbox_data, bool to_stdout);
     void DumpRunState(CoreDescriptor& core, const launch_msg_t* launch_msg, uint32_t state);
+    void DumpStreamRunState(CoreDescriptor& core, const launch_msg_t* launch_msg);
     void DumpLaunchMessage(CoreDescriptor& core, const mailboxes_t* mbox_data);
     void DumpWaypoints(CoreDescriptor& core, const mailboxes_t* mbox_data, bool to_stdout);
     void DumpSyncRegs(CoreDescriptor& core);

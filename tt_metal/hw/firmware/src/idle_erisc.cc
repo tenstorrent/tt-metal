@@ -118,7 +118,7 @@ int main() {
 
     risc_init();
 
-    mailboxes->slave_sync.all = RUN_SYNC_MSG_ALL_SLAVES_DONE;
+    mailboxes->slave_sync.all = 0;
     set_deassert_addresses();
     //device_setup();
 
