@@ -104,7 +104,8 @@ std::shared_ptr<RuntimeArgs> LightMetalReplay::rt_args_from_flatbuffer(
 // LightMetalReplay Class           //
 //////////////////////////////////////
 
-LightMetalReplay::LightMetalReplay(LightMetalBinary&& binary) : binary_(std::move(binary)), fb_binary_(nullptr) {
+LightMetalReplay::LightMetalReplay(LightMetalBinary&& binary, IDevice* device) :
+    binary_(std::move(binary)), fb_binary_(nullptr), device_(device) {
     if (binary_.is_empty()) {
         log_warning(tt::LogMetalTrace, "Empty LightMetalBinary provided to LightMetalReplay.");
     }
@@ -227,8 +228,10 @@ void LightMetalReplay::remove_cb_handle_from_map(uint32_t global_id) { cb_handle
 //////////////////////////////////////
 
 // TODO (kmabee) - Hardcode for now, eventually capture/replay "systemdesc" from binary.
+// Alternatively, user can manage device open/close and pass to replay library.
 void LightMetalReplay::setup_devices() {
     log_debug(tt::LogMetalTrace, "LightMetalReplay(setup_devices) - Using hardcoded CreateDevices() as temp hack.");
+    TT_FATAL(!device_, "Device already setup in LightMetalReplay, no need to call setup_devices()");
     const size_t trace_region_size = 4096;  // Default is 0
     const int device_id = 0;
     const auto dispatch_core_type = tt_metal::DispatchCoreType::WORKER;
@@ -694,6 +697,8 @@ bool LightMetalReplay::execute_binary() {
         return false;
     }
 
+    const bool replay_manages_device = device_ == nullptr;
+
     try {
         const auto* trace_descs = fb_binary_->trace_descriptors();
         const auto* commands = fb_binary_->commands();
@@ -702,12 +707,16 @@ bool LightMetalReplay::execute_binary() {
             return false;
         }
 
-        setup_devices();
         log_info(
             tt::LogMetalTrace,
-            "Running LightMetal Binary with {} cmds, {} traces.",
+            "Running LightMetal Binary with {} cmds, {} traces. ManageDevice: {}",
             commands->size(),
-            trace_descs->size());
+            trace_descs->size(),
+            replay_manages_device);
+
+        if (replay_manages_device) {
+            setup_devices();
+        }
 
         // Just loop over all commands, and execute. This is purposely kept simple for prototyping v0.
         // TODO (kmabee) - should expand to cover, multiple devices, cqs, etc.
@@ -719,13 +728,18 @@ bool LightMetalReplay::execute_binary() {
         }
 
         clear_object_maps();
-        close_devices();
+
+        if (replay_manages_device) {
+            close_devices();
+        }
 
         return true;
     } catch (const std::exception& e) {
-        clear_object_maps();
-        close_devices();
         log_fatal(e.what());
+        clear_object_maps();
+        if (replay_manages_device) {
+            close_devices();
+        }
         return false;
     }
 }

@@ -54,7 +54,7 @@ inline namespace v0 {
 class LightMetalReplay {
 public:
     // Constructor that initializes the class with a binary blob and transfers ownership of the blob.
-    explicit LightMetalReplay(LightMetalBinary&& binary);
+    explicit LightMetalReplay(LightMetalBinary&& binary, IDevice* device = nullptr);
 
     // Execute the stored LightMetal binary by looping over all commands, and execting them.
     // Returns true if passed.  Currently has no side-effects/artifacts returned to user,

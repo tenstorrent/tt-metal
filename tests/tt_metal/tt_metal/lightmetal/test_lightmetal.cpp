@@ -308,6 +308,13 @@ TEST_F(LightMetalBasicTest, SingleRISCDataMovementRtArgsPerCoreVec) {
     SingleRISCDataMovement_test(device_, true);
 }
 
+// Same as above but let replay library manage open/close device instead of user (test), for coverage.
+TEST_F(LightMetalBasicTest, SingleRISCDataMovementReplayManageDevice) {
+    const bool replay_manage_device = true;
+    CreateDeviceAndBeginCapture(4096, replay_manage_device);
+    SingleRISCDataMovement_test(device_, false);
+}
+
 // Test simple case of 3 riscs used for datamovement and compute works for trace + replay.
 TEST_F(LightMetalBasicTest, ThreeRISCDataMovementCompute) {
     CreateDeviceAndBeginCapture(4096);
