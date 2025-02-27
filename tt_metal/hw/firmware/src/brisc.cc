@@ -269,17 +269,6 @@ void device_setup() {
     // core.ex_sem_init(semaphore::CFG_STATE_BUSY, MAX_CONFIG_STATES, 0, instrn_buf[0]);
 }
 
-void init_sync_registers() {
-    volatile tt_reg_ptr uint* tiles_received_ptr;
-    volatile tt_reg_ptr uint* tiles_acked_ptr;
-    for (uint32_t operand = 0; operand < NUM_CIRCULAR_BUFFERS; operand++) {
-        tiles_received_ptr = get_cb_tiles_received_ptr(operand);
-        tiles_received_ptr[0] = 0;
-        tiles_acked_ptr = get_cb_tiles_acked_ptr(operand);
-        tiles_acked_ptr[0] = 0;
-    }
-}
-
 inline void init_ncrisc_iram() {
 #if NCRISC_FIRMWARE_IN_IRAM
     uint16_t fw_size16 = mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.ncrisc_kernel_size16;
@@ -326,6 +315,11 @@ inline void set_ncrisc_kernel_resume_deassert_address() {
 }
 
 inline void run_triscs(dispatch_core_processor_masks enables) {
+    // Wait for init_sync_registers to complete. Should always be done by the time we get here.
+    while (mailboxes->slave_sync.trisc0 != RUN_SYNC_MSG_DONE) {
+        invalidate_l1_cache();
+    }
+
     if (enables & DISPATCH_CLASS_MASK_TENSIX_ENABLE_COMPUTE) {
         mailboxes->slave_sync.trisc0 = RUN_SYNC_MSG_GO;
         mailboxes->slave_sync.trisc1 = RUN_SYNC_MSG_GO;
@@ -371,6 +365,8 @@ inline void wait_ncrisc_trisc() {
     WAYPOINT("NTD");
 }
 
+inline void trigger_sync_register_init() { mailboxes->slave_sync.trisc0 = RUN_SYNC_MSG_INIT_SYNC_REGISTERS; }
+
 int main() {
     configure_l1_data_cache();
     DIRTY_STACK_MEMORY();
@@ -405,6 +401,7 @@ int main() {
     noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
     noc_local_state_init(noc_index);
     uint8_t prev_noc_mode = DM_DEDICATED_NOC;
+    trigger_sync_register_init();
 
 
 #if defined(ARCH_BLACKHOLE)
@@ -416,7 +413,6 @@ int main() {
 #endif
 
     while (1) {
-        init_sync_registers();
         reset_ncrisc_with_iram();
 
         WAYPOINT("GW");
@@ -549,6 +545,8 @@ int main() {
             WAYPOINT("D");
 
             wait_ncrisc_trisc();
+
+            trigger_sync_register_init();
 
             if (noc_mode == DM_DYNAMIC_NOC) {
                 // barrier to make sure all writes are finished

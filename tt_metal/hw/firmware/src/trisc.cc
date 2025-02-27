@@ -19,6 +19,7 @@
 #include "circular_buffer.h"
 #include "circular_buffer_init.h"
 #endif
+#include "circular_buffer_constants.h"
 // clang-format on
 
 #if defined(PROFILE_KERNEL)
@@ -75,6 +76,17 @@ constexpr bool cb_init_write = false;
 
 using namespace ckernel;
 
+void init_sync_registers() {
+    volatile tt_reg_ptr uint* tiles_received_ptr;
+    volatile tt_reg_ptr uint* tiles_acked_ptr;
+    for (uint32_t operand = 0; operand < NUM_CIRCULAR_BUFFERS; operand++) {
+        tiles_received_ptr = get_cb_tiles_received_ptr(operand);
+        tiles_received_ptr[0] = 0;
+        tiles_acked_ptr = get_cb_tiles_acked_ptr(operand);
+        tiles_acked_ptr[0] = 0;
+    }
+}
+
 int main(int argc, char *argv[]) {
     configure_l1_data_cache();
     DIRTY_STACK_MEMORY();
@@ -92,6 +104,12 @@ int main(int argc, char *argv[]) {
     while (1) {
         WAYPOINT("W");
         while (*trisc_run != RUN_SYNC_MSG_GO) {
+            if constexpr (COMPILE_FOR_TRISC == 0) {
+                if (*trisc_run == RUN_SYNC_MSG_INIT_SYNC_REGISTERS) {
+                    init_sync_registers();
+                    *trisc_run = RUN_SYNC_MSG_DONE;
+                }
+            }
             invalidate_l1_cache();
         }
         DeviceZoneScopedMainN("TRISC-FW");
