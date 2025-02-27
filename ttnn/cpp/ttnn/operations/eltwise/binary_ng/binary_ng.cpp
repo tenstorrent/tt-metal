@@ -15,6 +15,19 @@ inline bool needs_typecast_to_bfloat16(const ttnn::DataType input) {
 }
 
 namespace ttnn::operations::binary_ng {
+constexpr bool is_dtype_supported(BinaryOpType op, DataType dtype) {
+    switch (op) {
+        case BinaryOpType::SUB:
+        case BinaryOpType::ADD:
+            return (
+                dtype == DataType::FLOAT32 || dtype == DataType::BFLOAT16 || dtype == DataType::BFLOAT8_B ||
+                dtype == DataType::BFLOAT4_B || dtype == DataType::INT32);
+        default:
+            return (
+                dtype == DataType::FLOAT32 || dtype == DataType::BFLOAT16 || dtype == DataType::BFLOAT8_B ||
+                dtype == DataType::BFLOAT4_B);
+    }
+}
 
 template <BinaryOpType binary_op_type>
 Tensor BinaryNg<binary_op_type>::invoke(
@@ -29,6 +42,8 @@ Tensor BinaryNg<binary_op_type>::invoke(
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> post_activations) {
     const ttnn::DataType a_dtype = input_tensor_a.get_dtype();
     const ttnn::DataType b_dtype = input_tensor_b.get_dtype();
+    TT_FATAL(is_dtype_supported(binary_op_type, a_dtype), "Unsupported data type");
+    TT_FATAL(is_dtype_supported(binary_op_type, b_dtype), "Unsupported data type");
     const bool output_preallocated = optional_output_tensor.has_value();
     const ttnn::DataType out_dtype =
         output_preallocated ? optional_output_tensor->get_dtype() : output_dtype.value_or(a_dtype);
@@ -141,6 +156,7 @@ Tensor BinaryNg<binary_op_type>::invoke(
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> rhs_activations,
     tt::stl::Span<const ttnn::operations::unary::UnaryWithParam> post_activations) {
     const ttnn::DataType a_dtype = input_tensor_a.get_dtype();
+    TT_FATAL(is_dtype_supported(binary_op_type, a_dtype), "Unsupported data type");
     const bool output_preallocated = optional_output_tensor.has_value();
     const ttnn::DataType out_dtype =
         output_preallocated ? optional_output_tensor->get_dtype() : output_dtype.value_or(a_dtype);
