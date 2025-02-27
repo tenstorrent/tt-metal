@@ -391,7 +391,7 @@ TEST_F(N300TensorParallelLinearTest, RowParallelLinearHasBiasNanoGPT) {
     xt::xarray<float> test_data = xt::random::rand({in_features * batch_size * sequence_length}, -1.F, 1.F)
                                       .reshape({batch_size, 1U, sequence_length, in_features});
     ttml::core::XTensorToMeshVariant<float> replicate_composer = ttml::core::ReplicateXTensorToMesh<float>(mesh_shape);
-    auto tt_tensor = ttml::core::from_xtensor<float, DataType::BFLOAT16>(test_data, device, replicate_composer);
+    auto tt_tensor = ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(test_data, device, replicate_composer);
     auto tensor = ttml::autograd::create_tensor(tt_tensor);
     auto output = layer(tensor);
     output->backward();
@@ -458,7 +458,7 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearHasBiasNanoGPT) {
     xt::xarray<float> test_data = xt::random::rand({in_features * batch_size * sequence_length}, -1.F, 1.F)
                                       .reshape({batch_size, 1U, sequence_length, in_features});
     ttml::core::XTensorToMeshVariant<float> replicate_composer = ttml::core::ReplicateXTensorToMesh<float>(mesh_shape);
-    auto tt_tensor = ttml::core::from_xtensor<float, DataType::BFLOAT16>(test_data, device, replicate_composer);
+    auto tt_tensor = ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(test_data, device, replicate_composer);
     auto tensor = ttml::autograd::create_tensor(tt_tensor);
     auto output = layer(tensor);
     output->backward();
@@ -525,7 +525,7 @@ TEST_F(N300TensorParallelLinearTest, ColumnParallelLinearNoBiasNanoGPT) {
     xt::xarray<float> test_data = xt::random::rand({in_features * batch_size * sequence_length}, -1.F, 1.F)
                                       .reshape({batch_size, 1U, sequence_length, in_features});
     ttml::core::XTensorToMeshVariant<float> replicate_composer = ttml::core::ReplicateXTensorToMesh<float>(mesh_shape);
-    auto tt_tensor = ttml::core::from_xtensor<float, DataType::BFLOAT16>(test_data, device, replicate_composer);
+    auto tt_tensor = ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(test_data, device, replicate_composer);
     auto tensor = ttml::autograd::create_tensor(tt_tensor);
     auto output = layer(tensor);
     output->backward();

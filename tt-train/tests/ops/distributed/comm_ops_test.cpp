@@ -103,7 +103,7 @@ TEST_F(N300CommOpsTest, TestAllReduceNanoGPT) {
     xt::xarray<float> test_data = xt::adapt(test_data_vec);
     xt::xarray<float> xtensor = test_data.reshape({batch, 1U, height, size});
     ttml::core::XTensorToMeshVariant<float> shard_composer = ttml::core::ShardXTensorToMesh<float>(mesh_shape, 3);
-    auto tt_tensor = ttml::core::from_xtensor<float, DataType::BFLOAT16>(xtensor, device, shard_composer);
+    auto tt_tensor = ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(xtensor, device, shard_composer);
     auto tensor = ttml::autograd::create_tensor(tt_tensor);
     auto all_reduce_tensor = ttml::ops::distributed::all_reduce(tensor);
 
@@ -119,7 +119,8 @@ TEST_F(N300CommOpsTest, TestAllReduceNanoGPT) {
 
     xt::xarray<float> grad_data = xt::random::rand(all_reduce_expected.shape(), 0.F, 1.F);
     ttml::core::XTensorToMeshVariant<float> replicate_composer = ttml::core::ReplicateXTensorToMesh<float>(mesh_shape);
-    auto tt_grad_tensor = ttml::core::from_xtensor<float, DataType::BFLOAT16>(grad_data, device, replicate_composer);
+    auto tt_grad_tensor =
+        ttml::core::from_xtensor<float, ttnn::DataType::BFLOAT16>(grad_data, device, replicate_composer);
     all_reduce_tensor->set_grad(tt_grad_tensor);
     all_reduce_tensor->backward();
 
