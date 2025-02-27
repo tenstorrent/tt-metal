@@ -12,7 +12,7 @@ static inline bool verify_available_cores(
     uint16_t min_dim,
     uint16_t max_dim,
     CoreCoord grid,
-    int32_t k,
+    uint32_t k,
     const uint32_t l1_size,
     const uint32_t value_tile_size,
     const uint32_t index_tile_size) {
