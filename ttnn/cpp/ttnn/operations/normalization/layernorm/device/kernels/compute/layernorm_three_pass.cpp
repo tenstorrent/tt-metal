@@ -1,4 +1,3 @@
-
 // SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
@@ -100,12 +99,11 @@ void MAIN {
         /*
          * X + Y
          */
-        ACQ();
-        cb_reserve_back(cb_ex, onetile);
         auto prepare_cb_x = [&]() {
-#ifdef FUSE_PRE_ADD
             reconfig_data_format(cb_in, cb_inb);
             pack_reconfig_data_format(cb_x);
+#ifdef FUSE_PRE_ADD
+            tile_regs_acquire();
             add_tiles_init(cb_in, cb_inb);
             cb_wait_front(cb_in, blk);
 
@@ -113,10 +111,14 @@ void MAIN {
             cb_reserve_back(cb_x, blk);
             for (uint32_t j = 0; j < blk; j++) {
                 add_tiles(cb_in, cb_inb, j, j, j);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t j = 0; j < blk; j++) {
                 pack_tile(j, cb_x);
             }
-
-            cb_push_back(cb_x, blk);  // push the sum into the same buffer
+            cb_push_back(cb_x, blk);
+            tile_regs_release();
             cb_pop_front(cb_inb, blk);
             cb_pop_front(cb_in, blk);
 #endif
@@ -124,62 +126,83 @@ void MAIN {
         };
         // E[x]
         // aka ∑(x-E[x])
+
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
             prepare_cb_x();
+            tile_regs_acquire();
+            if (wt > 0) {
+                reconfig_data_format_srca(cb_ex);
+                binary_dest_reuse_tiles_init_custom<ELWADD, EltwiseBinaryReuseDestType::NONE, BroadcastType::NONE>(
+                    cb_ex);
+                binary_dest_reuse_tiles_custom<ELWADD, EltwiseBinaryReuseDestType::NONE, BroadcastType::NONE>(
+                    cb_ex, 0, dst0);
+                cb_pop_front(cb_ex, 1);
+            }
             reconfig_data_format(cb_x, cb_scaler);
             pack_reconfig_data_format(cb_ex);
             reduce_init_delta<false>(cb_x, cb_scaler, cb_ex);
             for (uint32_t j = 0; j < blk; j++) {
-                reduce_tile(cb_x, cb_scaler, j, scaler0, 1);
+                reduce_tile(cb_x, cb_scaler, j, scaler0, dst0);
             }
+            tile_regs_commit();
+            tile_regs_wait();
+            cb_reserve_back(cb_ex, onetile);
+            pack_tile(1, cb_ex);
+            reduce_revert_delta(cb_ex);
+            cb_push_back(cb_ex, 1);
+            tile_regs_release();
             cb_pop_front(cb_x, blk);
         }
-        pack_tile(1, cb_ex);
-        reduce_revert_delta(cb_ex);
-        cb_push_back(cb_ex, 1);
-        REL();
         // cb_pop_front(cb_ex, 1);
         // cb_pop_front(cb_x, blk);
 
         // Var Calculation
         // aka ∑(x-E[x])^2
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            ACQ();
             prepare_cb_x();
+
+            tile_regs_acquire();
+
             reconfig_data_format(cb_x, cb_ex);
             pack_reconfig_data_format(cb_xmm);
-            cb_reserve_back(cb_xmm, blk);
-            sub_bcast_cols_init_short(cb_x, cb_ex);
 
             cb_wait_front(cb_ex, 1);
+            sub_bcast_cols_init_short(cb_x, cb_ex);
             // x-E[x]
             for (uint32_t j = 0; j < blk; j++) {
-                // add init for sub
                 sub_tiles_bcast_cols(cb_x, cb_ex, j, 0, j);  // tile *= 1/(sum(exp(x)))
             }
             cb_pop_front(cb_x, blk);
             square_tile_init();
             //(x-E[x])^2
             for (uint32_t j = 0; j < blk; j++) {
-                square_tile(dst1);
-                pack_tile(dst1, cb_xmm);
+                square_tile(j);
             }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t j = 0; j < blk; j++) {
+                pack_tile(j, cb_xmm);
+            }
+            tile_regs_release();
+
             cb_reserve_back(cb_xmm, blk);
             cb_push_back(cb_xmm, blk);
-            REL();
 
-            ACQ();
+            tile_regs_acquire();
             if (wt > 0) {
                 // adds the last loop iterations reduction value to dst0 since dst0 is overwritten between loop
                 // iterations
-                cb_wait_front(cb_ex2, 1);
                 reconfig_data_format(cb_ex2, cb_scaler);
+
+                cb_wait_front(cb_ex2, 1);
                 reduce_init_delta<false>(cb_ex2, cb_scaler, cb_ex2);
                 reduce_tile(cb_ex2, cb_scaler, 0, scaler0, dst0);
                 cb_pop_front(cb_ex2, 1);
             }
 
             reconfig_data_format(cb_xmm, cb_scaler);
+            pack_reconfig_data_format(cb_ex2);
+
             reduce_init_delta<false>(cb_xmm, cb_scaler, cb_ex2);
             // ∑(x-E[x])^2
             for (uint32_t j = 0; j < blk; j++) {
@@ -187,58 +210,70 @@ void MAIN {
             }
             cb_pop_front(cb_xmm, blk);
 
-            pack_reconfig_data_format(cb_ex2);
+            tile_regs_commit();
+            tile_regs_wait();
+
             pack_tile(dst0, cb_ex2);
-            reduce_revert_delta(cb_ex2);
+            tile_regs_release();
+
             cb_reserve_back(cb_ex2, 1);
             cb_push_back(cb_ex2, 1);
-            REL();
+
+            reduce_revert_delta(cb_ex2);
         }
 
-        ACQ();
+        tile_regs_acquire();
+
+        reconfig_data_format(cb_ex2, cb_eps);
+        pack_reconfig_data_format(cb_ex2pe);
+
         add_tiles_init(cb_ex2, cb_eps);
         add_tiles(cb_ex2, cb_eps, 0, 0, dst0);
 
-        cb_reserve_back(cb_ex2pe, onetile);  // 1
         sqrt_tile_init();
         sqrt_tile(dst0);
+
         recip_tile_init();
         recip_tile(dst0);
+
+        tile_regs_commit();
+        tile_regs_wait();
+
         pack_tile(dst0, cb_ex2pe);
+        tile_regs_release();
+
+        cb_reserve_back(cb_ex2pe, onetile);  // 1
         cb_push_back(cb_ex2pe, onetile);
-        REL();
         cb_pop_front(cb_ex2, onetile);
         // Final Val Calc
-        ACQ();
+
+        // DPRINT << "WT: " <<Wt << " \n\n" << ENDL();
+        cb_wait_front(cb_ex2pe, 1);
         for (uint32_t wt = 0; wt < Wt; wt++) {
-            PACK(DPRINT << wt << "Before prepare_cb_x \n\n!" << ENDL());
+            // DPRINT << wt << "Before prepare_cb_x \n\n!" << ENDL();
             prepare_cb_x();
-            PACK(DPRINT << wt << "After prepare_cb_x \n\n!" << ENDL());
+            // DPRINT << wt << "After prepare_cb_x \n\n!" << ENDL();
+            tile_regs_acquire();
+
             reconfig_data_format(cb_x, cb_ex);
-            cb_reserve_back(cb_xmm, blk);
+            pack_reconfig_data_format(cb_x, cb_out);
+
             sub_bcast_cols_init_short(cb_x, cb_ex);
-            PACK(DPRINT << wt << "Before sub pack thread!" << ENDL());
+            cb_wait_front(cb_ex, 1);
             for (uint32_t j = 0; j < blk; j++) {
                 // populate block with x - mean
                 sub_tiles_bcast_cols(cb_x, cb_ex, j, 0, j);  // tile *= 1/(sum(exp(x)))
             }
             cb_pop_front(cb_x, blk);
 
-            PACK(DPRINT << wt << " After sub pack thread x!" << ENDL());
             binary_dest_reuse_tiles_init_custom<ELWMUL, EltwiseBinaryReuseDestType::NONE, BroadcastType::COL>(cb_ex2pe);
             for (uint32_t j = 0; j < blk; j++) {
                 // continue to mult with var
                 binary_dest_reuse_tiles_custom<ELWMUL, EltwiseBinaryReuseDestType::NONE, BroadcastType::COL>(
                     cb_ex2pe, j, j);
             }
-            PACK(DPRINT << wt << " After mult pack thread x!" << ENDL());
             if (do_gamma) {
                 cb_wait_front(cb_gamma, blk);
-            }
-            if (do_beta) {
-                cb_wait_front(cb_beta, blk);
-            }
-            if (do_gamma) {
                 binary_dest_reuse_tiles_init_custom<ELWMUL, EltwiseBinaryReuseDestType::NONE, BroadcastType::ROW>(
                     cb_gamma);
                 for (uint32_t j = 0; j < blk; j++) {
@@ -248,6 +283,7 @@ void MAIN {
                 cb_pop_front(cb_gamma, blk);
             }
             if (do_beta) {
+                cb_wait_front(cb_beta, blk);
                 binary_dest_reuse_tiles_init_custom<ELWADD, EltwiseBinaryReuseDestType::NONE, BroadcastType::ROW>(
                     cb_beta);
                 for (uint32_t j = 0; j < blk; j++) {
@@ -256,17 +292,18 @@ void MAIN {
                 }
                 cb_pop_front(cb_beta, blk);
             }
-            PACK(DPRINT << wt << "Before pack reconfig!\n\n\n" << ENDL());
-            pack_reconfig_data_format(cb_x, cb_out);
-            PACK(DPRINT << wt << "After pack reconfig!\n\n\n" << ENDL());
+            // DPRINT << wt << "Before pack reconfig!\n\n\n" << ENDL();
+            // DPRINT << wt << "After pack reconfig!\n\n\n" << ENDL();
+            // DPRINT << wt << "Before cb_out reserve!\n\n\n" << ENDL();
+            cb_reserve_back(cb_out, blk);
+            tile_regs_commit();
+            tile_regs_wait();
             for (uint32_t j = 0; j < blk; j++) {
                 pack_tile(j, cb_out);
             }
-            cb_reserve_back(cb_out, blk);
+            tile_regs_release();
             cb_push_back(cb_out, blk);
         }
-        REL();
-        DPRINT << "ENDED!" << ENDL();
     }  // NCHt loop
     // cb_pop_front(cb_scaler, 1); // optional for correctness
     // cb_pop_front(cb_eps, 1); // optional for correctness
