@@ -26,6 +26,7 @@
 #include "risc_attribs.h"
 #include "utils/utils.h"
 #include "debug/assert.h"
+#include "compile_time_args.h"
 #include "dev_msgs.h"
 #include "dataflow_api_common.h"
 #include "dataflow_api_addrgen.h"
@@ -150,32 +151,6 @@ FORCE_INLINE T get_common_arg_val(int arg_idx) {
     static_assert("Error: only 4B args are supported" && sizeof(T) == 4);
     return *((tt_l1_ptr T*)(get_common_arg_addr(arg_idx)));
 }
-
-template <class T, class... Ts>
-FORCE_INLINE constexpr std::array<T, sizeof...(Ts)> make_array(Ts... values) {
-    return {T(values)...};
-}
-
-#if defined(KERNEL_COMPILE_TIME_ARGS)
-constexpr auto kernel_compile_time_args = make_array<std::uint32_t>(KERNEL_COMPILE_TIME_ARGS);
-#else
-constexpr auto kernel_compile_time_args = make_array<std::uint32_t>();
-#endif
-
-// clang-format off
-/**
- * Returns the value of a constexpr argument from kernel_compile_time_args array provided during kernel creation using
- * CreateKernel calls.
- *
- * Return value: constexpr uint32_t
- *
- * | Argument              | Description                        | Type                  | Valid Range | Required |
- * |-----------------------|------------------------------------|-----------------------|-------------|----------|
- * | arg_idx               | The index of the argument          | uint32_t              | 0 to 31     | True     |
- */
-// clang-format on
-#define get_compile_time_arg_val(arg_idx) \
-    ((arg_idx) < kernel_compile_time_args.size() ? kernel_compile_time_args[(arg_idx)] : 0)
 
 // clang-format off
 /**
