@@ -31,6 +31,7 @@ template <
     bool is_width_sharded,
     bool is_read,
     bool is_col_major,
+    bool is_remote_config,
     bool enable_split_reader,
     bool is_reader>
 void copy_sticks_async(
@@ -58,8 +59,12 @@ void copy_sticks_async(
 
         // If split reader is enabled and this instance is a reader, set the start index to 3
         // to read all odd indexed entries
-        if constexpr (enable_split_reader && is_reader) {
-            start_index = 3;
+        if constexpr (enable_split_reader) {
+            // read odd entries for remote_config and even entries for local_config on the reader core and other way
+            // around for other core.
+            if constexpr ((is_reader && is_remote_config) || (!is_reader && !is_remote_config)) {
+                start_index = 3;
+            }
         }
         for (uint16_t j = start_index; j < length; j += read_offset) {
             uint16_t src_local_idx = config_data[i + j + 0];
@@ -192,6 +197,7 @@ void kernel_main() {
             is_width_sharded,
             remote_read,
             is_col_major,
+            true,
             enable_split_reader,
             is_reader>(config_data, my_noc_x, my_noc_y, in_base_l1_addr, out_base_l1_addr);
     }
@@ -206,6 +212,7 @@ void kernel_main() {
             is_width_sharded,
             false,
             is_col_major,
+            false,
             enable_split_reader,
             is_reader>(config_data, my_noc_x, my_noc_y, in_base_l1_addr, out_base_l1_addr);
     }
