@@ -33,14 +33,10 @@ def test_deit_self_attention_inference(device, pcc=0.99):
     input_shape = torch.Size([1, 1, 198, 768])
     hidden_state = torch.randn(input_shape)
 
-    torch_output = torch_self_attention(
-        hidden_state.squeeze(0), head_mask, output_attentions
-    )[0]
+    torch_output = torch_self_attention(hidden_state.squeeze(0), head_mask, output_attentions)[0]
 
     # setup tt model
-    tt_self_attention = TtDeiTSelfAttention(
-        DeiTConfig(), device, state_dict, base_address
-    )
+    tt_self_attention = TtDeiTSelfAttention(DeiTConfig(), device, state_dict, base_address)
 
     tt_input = torch_to_tt_tensor_rm(hidden_state, device, put_on_device=False)
     tt_out = tt_self_attention(tt_input, head_mask, output_attentions)

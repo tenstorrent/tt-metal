@@ -16,9 +16,7 @@ from models.utility_functions import comp_pcc, comp_allclose_and_pcc
     "model_name, pcc",
     (("hrnet_w18_small", 1.0),),
 )
-def test_hrnet_image_classification_inference(
-    model_name, pcc, imagenet_sample_input, reset_seeds
-):
+def test_hrnet_image_classification_inference(model_name, pcc, imagenet_sample_input, reset_seeds):
     Timm_model = timm.create_model(model_name, pretrained=True)
     state_dict = Timm_model.state_dict()
 

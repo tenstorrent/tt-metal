@@ -29,15 +29,15 @@
 2024-09-02T07:02:01.3157052Z ##[endgroup]
 2024-09-02T07:02:01.3466919Z Current date / time is Mon Sep 2 07:02:01 UTC 2024
 2024-09-02T07:02:01.9204494Z tt-smi reset was successful
-2024-09-02T07:02:02.3917786Z 
+2024-09-02T07:02:02.3917786Z
 2024-09-02T07:02:02.3918599Z [95m Detected Chips: [93m1[0m
 2024-09-02T07:02:02.3944114Z [1A[J
 2024-09-02T07:02:02.3947088Z [95m Detected Chips: [93m1[0m
-2024-09-02T07:02:02.3948223Z 
+2024-09-02T07:02:02.3948223Z
 2024-09-02T07:02:02.3949912Z [94m Detecting ARC: [93m|[0m
-2024-09-02T07:02:02.3950292Z 
+2024-09-02T07:02:02.3950292Z
 2024-09-02T07:02:02.3950806Z [94m Detecting DRAM: [93m|[0m
-2024-09-02T07:02:02.3954815Z 
+2024-09-02T07:02:02.3954815Z
 2024-09-02T07:02:02.3955292Z  [95m[][94m ETH: [93m|[0m
 2024-09-02T07:02:02.4017350Z Gathering Information ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 100% 0:00:00
 2024-09-02T07:02:02.4038815Z [95m Saved tt-smi log to: /opt/tt_metal_infra/smi.log [0m
@@ -102,7 +102,7 @@
 2024-09-02T07:03:43.3431372Z [0;33m---- ttSiliconDevice::init_hugepage: bind_area_to_memory_nodeset() failed (physical_device_id: 0 ch: 0). Hugepage allocation is not on NumaNode matching TT Device. Side-Effect is decreased Device->Host perf (Issue #893).
 2024-09-02T07:04:46.0573380Z [0m[       OK ] SiliconDriverGS.MultiThreadedMemBar (62717 ms)
 2024-09-02T07:04:46.0574457Z [----------] 9 tests from SiliconDriverGS (67413 ms total)
-2024-09-02T07:04:46.0575059Z 
+2024-09-02T07:04:46.0575059Z
 2024-09-02T07:04:46.0575364Z [----------] Global test environment tear-down
 2024-09-02T07:04:46.0576011Z [==========] 9 tests from 1 test suite ran. (67413 ms total)
 2024-09-02T07:04:46.0576606Z [  PASSED  ] 9 tests.

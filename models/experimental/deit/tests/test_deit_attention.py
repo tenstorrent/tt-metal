@@ -34,9 +34,7 @@ def test_deit_attention_inference(device, pcc=0.99):
     input_shape = torch.Size([1, 1, 198, 768])
     hidden_state = torch.randn(input_shape)
 
-    torch_output = torch_attention(
-        hidden_state.squeeze(0), head_mask, output_attentions
-    )[0]
+    torch_output = torch_attention(hidden_state.squeeze(0), head_mask, output_attentions)[0]
 
     # setup tt model
     tt_attention = TtDeiTAttention(DeiTConfig(), device, state_dict, base_address)

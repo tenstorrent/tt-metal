@@ -73,9 +73,7 @@ class BatchNormAct2d(nn.BatchNorm2d):
             track_running_stats=track_running_stats,
         )
 
-        self.act = create_act(
-            act_layer, act_kwargs=act_kwargs, inplace=inplace, apply_act=apply_act
-        )
+        self.act = create_act(act_layer, act_kwargs=act_kwargs, inplace=inplace, apply_act=apply_act)
 
     def forward(self, x):
         # cut & paste of torch.nn.BatchNorm2d.forward impl to avoid issues with torchscript and tracing
@@ -332,9 +330,7 @@ class SelectAdaptivePool2d(nn.Module):
     ):
         super(SelectAdaptivePool2d, self).__init__()
         assert input_fmt in ("NCHW", "NHWC")
-        self.pool_type = (
-            pool_type or ""
-        )  # convert other falsy values to empty string for consistent TS typing
+        self.pool_type = pool_type or ""  # convert other falsy values to empty string for consistent TS typing
         if not pool_type:
             self.pool = nn.Identity()  # pass through
             self.flatten = nn.Flatten(1) if flatten else nn.Identity()
@@ -355,15 +351,7 @@ class SelectAdaptivePool2d(nn.Module):
         return adaptive_pool_feat_mult(self.pool_type)
 
     def __repr__(self):
-        return (
-            self.__class__.__name__
-            + " ("
-            + "pool_type="
-            + self.pool_type
-            + ", flatten="
-            + str(self.flatten)
-            + ")"
-        )
+        return self.__class__.__name__ + " (" + "pool_type=" + self.pool_type + ", flatten=" + str(self.flatten) + ")"
 
 
 class ConvNormAct(nn.Module):
@@ -425,9 +413,7 @@ class ConvNormAct(nn.Module):
 
 def get_norm_act_layer(norm_layer, act_layer=None):
     assert isinstance(norm_layer, (type, str, types.FunctionType, functools.partial))
-    assert act_layer is None or isinstance(
-        act_layer, (type, str, types.FunctionType, functools.partial)
-    )
+    assert act_layer is None or isinstance(act_layer, (type, str, types.FunctionType, functools.partial))
     norm_act_kwargs = {}
 
     # unbind partial fn, so args can be rebound later
@@ -458,9 +444,7 @@ def get_norm_act_layer(norm_layer, act_layer=None):
         norm_act_kwargs.setdefault("act_layer", act_layer)
 
     if norm_act_kwargs:
-        norm_act_layer = functools.partial(
-            norm_act_layer, **norm_act_kwargs
-        )  # bind/rebind args
+        norm_act_layer = functools.partial(norm_act_layer, **norm_act_kwargs)  # bind/rebind args
     return norm_act_layer
 
 
@@ -506,9 +490,7 @@ class ClassifierHead(nn.Module):
                 use_conv=self.use_conv,
                 input_fmt=self.input_fmt,
             )
-            self.flatten = (
-                nn.Flatten(1) if self.use_conv and pool_type else nn.Identity()
-            )
+            self.flatten = nn.Flatten(1) if self.use_conv and pool_type else nn.Identity()
         else:
             num_pooled_features = self.in_features * self.global_pool.feat_mult()
             self.fc = _create_fc(
@@ -559,9 +541,7 @@ def _create_pool(
         assert (
             num_classes == 0 or use_conv
         ), "Pooling can only be disabled if classifier is also removed or conv classifier is used"
-        flatten_in_pool = (
-            False  # disable flattening if pooling is pass-through (no pooling)
-        )
+        flatten_in_pool = False  # disable flattening if pooling is pass-through (no pooling)
     global_pool = SelectAdaptivePool2d(
         pool_type=pool_type,
         flatten=flatten_in_pool,
@@ -613,9 +593,7 @@ class VoVNet(nn.Module):
             *[
                 ConvNormAct(in_chans, stem_chs[0], 3, stride=2, **conv_kwargs),
                 conv_type(stem_chs[0], stem_chs[1], 3, stride=1, **conv_kwargs),
-                conv_type(
-                    stem_chs[1], stem_chs[2], 3, stride=last_stem_stride, **conv_kwargs
-                ),
+                conv_type(stem_chs[1], stem_chs[2], 3, stride=last_stem_stride, **conv_kwargs),
             ]
         )
 
@@ -637,9 +615,7 @@ class VoVNet(nn.Module):
         )
         stages = []
         for i in range(4):  # num_stages
-            downsample = (
-                stem_stride == 2 or i > 0
-            )  # first stage has no stride/downsample if stem_stride is 4
+            downsample = stem_stride == 2 or i > 0  # first stage has no stride/downsample if stem_stride is 4
             stages += [
                 OsaStage(
                     in_ch_list[i],
@@ -663,9 +639,7 @@ class VoVNet(nn.Module):
 
         self.stages = nn.Sequential(*stages)
 
-        self.head = ClassifierHead(
-            self.num_features, num_classes, pool_type=global_pool
-        )
+        self.head = ClassifierHead(self.num_features, num_classes, pool_type=global_pool)
 
         for n, m in self.named_modules():
             if isinstance(m, nn.Conv2d):

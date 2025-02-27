@@ -38,9 +38,9 @@ pytest --disable-warnings -q -s --input-method=json --input-path='path_to_input_
 
 ## Running on a different number of devices
 
-- To run the demo on a different number of devices, an input file with the appropriate number of inputs must be prepared (the number of inputs should be (32 x num-devices)). 
+- To run the demo on a different number of devices, an input file with the appropriate number of inputs must be prepared (the number of inputs should be (32 x num-devices)).
 
-- Then, the command above can be modified to replace '8' with the desired number of devices. 
+- Then, the command above can be modified to replace '8' with the desired number of devices.
 
 - For example, to run with 4 devices:
 
