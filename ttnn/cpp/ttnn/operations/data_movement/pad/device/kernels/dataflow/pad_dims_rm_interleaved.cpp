@@ -28,26 +28,26 @@ void kernel_main() {
     constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
     constexpr bool dst_is_dram = get_compile_time_arg_val(1) == 1;
     constexpr bool src_stick_size_is_pow2 = get_compile_time_arg_val(2) == 1;
-#if (src_stick_size_is_pow2)
-    constexpr uint32_t src_log_base_2_of_page_size = get_compile_time_arg_val(3);
-    const InterleavedPow2AddrGen<src0_is_dram> s0 = {
-        .bank_base_address = src_addr,
-        .log_base_2_of_page_size = src_log_base_2_of_page_size  // TODO(AP): refactor
-    };
-#else
-    const InterleavedAddrGen<src0_is_dram> s0 = {.bank_base_address = src_addr, .page_size = unpadded_X_size};
-#endif
+    if constexpr (src_stick_size_is_pow2) {
+        constexpr uint32_t src_log_base_2_of_page_size = get_compile_time_arg_val(3);
+        const InterleavedPow2AddrGen<src0_is_dram> s0 = {
+            .bank_base_address = src_addr,
+            .log_base_2_of_page_size = src_log_base_2_of_page_size  // TODO(AP): refactor
+        };
+    } else {
+        const InterleavedAddrGen<src0_is_dram> s0 = {.bank_base_address = src_addr, .page_size = unpadded_X_size};
+    }
 
     constexpr bool dst_stick_size_is_pow2 = get_compile_time_arg_val(4) == 1;
-#if (dst_stick_size_is_pow2)
-    constexpr uint32_t dst_log_base_2_of_page_size = get_compile_time_arg_val(5);
-    const InterleavedPow2AddrGen<dst_is_dram> s1 = {
-        .bank_base_address = dst_addr,
-        .log_base_2_of_page_size = dst_log_base_2_of_page_size  // TODO(AP): refactor
-    };
-#else
-    const InterleavedAddrGen<dst_is_dram> s1 = {.bank_base_address = dst_addr, .page_size = padded_X_size};
-#endif
+    if constexpr (dst_stick_size_is_pow2) {
+        constexpr uint32_t dst_log_base_2_of_page_size = get_compile_time_arg_val(5);
+        const InterleavedPow2AddrGen<dst_is_dram> s1 = {
+            .bank_base_address = dst_addr,
+            .log_base_2_of_page_size = dst_log_base_2_of_page_size  // TODO(AP): refactor
+        };
+    } else {
+        const InterleavedAddrGen<dst_is_dram> s1 = {.bank_base_address = dst_addr, .page_size = padded_X_size};
+    }
 
     uint32_t padded_X_size_by_4 = padded_X_size >> 2;
     uint32_t padded_X_diff_size_by_4 = padded_X_diff_size >> 2;
