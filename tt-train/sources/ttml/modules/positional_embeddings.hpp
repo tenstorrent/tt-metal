@@ -12,6 +12,13 @@
 
 namespace ttml::modules {
 
+struct PositionalEmbeddingConfig {
+    uint32_t embedding_dim{};
+    uint32_t sequence_length{1024U};
+    float dropout_prob{0.F};
+    bool use_dropout_seed_per_device{true};
+};
+
 class PositionalEmbeddingBase : public autograd::ModuleBase {
 public:
     virtual autograd::TensorPtr operator()(const autograd::TensorPtr& input) = 0;
@@ -24,7 +31,7 @@ private:
     autograd::AutocastTensor m_positional_embedding;
 
 public:
-    explicit PositionalEmbedding(uint32_t embedding_dim, float dropout_prob = 0.F, uint32_t sequence_length = 1024);
+    explicit PositionalEmbedding(const PositionalEmbeddingConfig& config);
     [[nodiscard]] autograd::TensorPtr operator()(const autograd::TensorPtr& input) override;
 };
 
@@ -35,8 +42,7 @@ class TrainablePositionalEmbedding : public PositionalEmbeddingBase {
     void initialize_tensors(uint32_t sequence_length, uint32_t embedding_dim);
 
 public:
-    explicit TrainablePositionalEmbedding(
-        uint32_t embedding_dim, float dropout_prob = 0.F, uint32_t sequence_length = 1024);
+    explicit TrainablePositionalEmbedding(const PositionalEmbeddingConfig& config);
     [[nodiscard]] autograd::TensorPtr operator()(const autograd::TensorPtr& input) override;
 };
 
