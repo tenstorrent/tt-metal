@@ -637,6 +637,15 @@ void device_module(py::module& m_device) {
         | device           | Device to dump profiling data of | ttnn.Device           |             | Yes      |
         +------------------+----------------------------------+-----------------------+-------------+----------+
     )doc");
+    m_device.def("DumpDeviceProfiler", &DumpDeviceProfiler, py::arg("device"), R"doc(
+        Dump device side profiling data.
+
+        +------------------+----------------------------------+-----------------------+-------------+----------+
+        | Argument         | Description                      | Data type             | Valid range | Required |
+        +==================+==================================+=======================+=============+==========+
+        | device           | Device to dump profiling data of | ttnn.Device           |             | Yes      |
+        +------------------+----------------------------------+-----------------------+-------------+----------+
+    )doc");
 
     m_device.def(
         "get_arch_name",
