@@ -28,6 +28,7 @@
 #include "dev_msgs.h"
 #include "dataflow_api_common.h"
 #include "dataflow_api_addrgen.h"
+#include "tools/profiler/kernel_profiler.hpp"
 
 // clang-format off
 /**
