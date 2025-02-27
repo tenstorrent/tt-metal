@@ -1448,9 +1448,7 @@ def test_device_line_all_gather_8x4_data(mesh_device, cluster_axis: int, dim: in
     - Every device will have the shape: [4, 1, 32, 32]
     """
     if async_mode:
-        for i in mesh_device.get_device_ids():
-            device = mesh_device.get_device(i)
-            device.enable_async(True)
+        mesh_device.enable_async(True)
 
     (rows, cols), tile_size = mesh_device.shape, 32
     full_tensor = torch.zeros((1, 1, tile_size * rows, tile_size * cols), dtype=torch.bfloat16)

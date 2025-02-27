@@ -526,8 +526,7 @@ def test_FalconCausalLM_end_to_end_with_program_cache(
     model_config = get_model_config(model_config_str, llm_mode, input_shape, num_devices)
     devices = t3k_mesh_device.get_devices()
     # Set async mode
-    for device in devices:
-        device.enable_async(async_mode)
+    t3k_mesh_device.enable_async(async_mode)
     compute_grid_size = devices[0].compute_with_storage_grid_size()
     if compute_grid_size.x < model_config["MAX_GRID_SIZE"][0] or compute_grid_size.y < model_config["MAX_GRID_SIZE"][1]:
         pytest.skip(f"Requires grid size of at least {model_config['MAX_GRID_SIZE']} to run")
