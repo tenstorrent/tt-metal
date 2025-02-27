@@ -12,7 +12,7 @@
 #include <circular_buffer_constants.h>
 #include <tt-metalium/kernel.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
-#include "lightmetal/lightmetal_replay.hpp"
+#include <tt-metalium/lightmetal_replay.hpp>
 #include "command_queue_fixture.hpp"
 #include <lightmetal_binary.hpp>
 
