@@ -82,7 +82,6 @@ jobs:
         PROFILER_TEST_SCRIPTS_ROOT: /work/tests/tt_metal/tools/profiler
         PROFILER_ARTIFACTS_DIR: /work/generated/profiler
         PROFILER_OUTPUT_DIR: /work/generated/profiler/reports
-        TTNN_CONFIG_OVERRIDES: '{"enable_fast_runtime_mode": false}'
         NO_USE_VENV_PLZ: 1
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
