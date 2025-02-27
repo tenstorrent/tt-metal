@@ -35,9 +35,7 @@ class Sum(nn.Module):
         self.weight = weight  # apply weights boolean
         self.iter = range(n - 1)  # iter object
         if weight:
-            self.w = nn.Parameter(
-                -torch.arange(1.0, n) / 2, requires_grad=True
-            )  # layer weights
+            self.w = nn.Parameter(-torch.arange(1.0, n) / 2, requires_grad=True)  # layer weights
 
     def forward(self, x):
         y = x[0]  # no weight
@@ -65,16 +63,9 @@ class MixConv2d(nn.Module):
             a -= np.roll(a, 1, axis=1)
             a *= np.array(k) ** 2
             a[0] = 1
-            c_ = np.linalg.lstsq(a, b, rcond=None)[
-                0
-            ].round()  # solve for equal weight indices, ax = b
+            c_ = np.linalg.lstsq(a, b, rcond=None)[0].round()  # solve for equal weight indices, ax = b
 
-        self.m = nn.ModuleList(
-            [
-                nn.Conv2d(c1, int(c_[g]), k[g], s, k[g] // 2, bias=False)
-                for g in range(groups)
-            ]
-        )
+        self.m = nn.ModuleList([nn.Conv2d(c1, int(c_[g]), k[g], s, k[g] // 2, bias=False) for g in range(groups)])
         self.bn = nn.BatchNorm2d(c2)
         self.act = nn.LeakyReLU(0.1, inplace=True)
 
@@ -115,16 +106,12 @@ class ORT_NMS(torch.autograd.Function):
         batches = torch.randint(0, batch, (num_det,)).sort()[0].to(device)
         idxs = torch.arange(100, 100 + num_det).to(device)
         zeros = torch.zeros((num_det,), dtype=torch.int64).to(device)
-        selected_indices = torch.cat(
-            [batches[None], zeros[None], idxs[None]], 0
-        ).T.contiguous()
+        selected_indices = torch.cat([batches[None], zeros[None], idxs[None]], 0).T.contiguous()
         selected_indices = selected_indices.to(torch.int64)
         return selected_indices
 
     @staticmethod
-    def symbolic(
-        g, boxes, scores, max_output_boxes_per_class, iou_threshold, score_threshold
-    ):
+    def symbolic(g, boxes, scores, max_output_boxes_per_class, iou_threshold, score_threshold):
         return g.op(
             "NonMaxSuppression",
             boxes,
@@ -155,9 +142,7 @@ class TRT_NMS(torch.autograd.Function):
         num_det = torch.randint(0, max_output_boxes, (batch_size, 1), dtype=torch.int32)
         det_boxes = torch.randn(batch_size, max_output_boxes, 4)
         det_scores = torch.randn(batch_size, max_output_boxes)
-        det_classes = torch.randint(
-            0, num_classes, (batch_size, max_output_boxes), dtype=torch.int32
-        )
+        det_classes = torch.randint(0, num_classes, (batch_size, max_output_boxes), dtype=torch.int32)
         return num_det, det_boxes, det_scores, det_classes
 
     @staticmethod
@@ -229,9 +214,7 @@ class ONNX_ORT(nn.Module):
         dis = category_id.float() * self.max_wh
         nmsbox = boxes + dis
         max_score_tp = max_score.transpose(1, 2).contiguous()
-        selected_indices = ORT_NMS.apply(
-            nmsbox, max_score_tp, self.max_obj, self.iou_threshold, self.score_threshold
-        )
+        selected_indices = ORT_NMS.apply(nmsbox, max_score_tp, self.max_obj, self.iou_threshold, self.score_threshold)
         X, Y = selected_indices[:, 0], selected_indices[:, 2]
         selected_boxes = boxes[X, Y, :]
         selected_categories = category_id[X, Y, :].float()
@@ -306,9 +289,7 @@ class End2End(nn.Module):
         self.model = model.to(device)
         self.model.model[-1].end2end = True
         self.patch_model = ONNX_TRT if max_wh is None else ONNX_ORT
-        self.end2end = self.patch_model(
-            max_obj, iou_thres, score_thres, max_wh, device, n_classes
-        )
+        self.end2end = self.patch_model(max_obj, iou_thres, score_thres, max_wh, device, n_classes)
         self.end2end.eval()
 
     def forward(self, x):
@@ -323,9 +304,7 @@ def attempt_load(weights, map_location=None):
     for w in weights if isinstance(weights, list) else [weights]:
         # attempt_download(w)
         ckpt = torch.load(w, map_location=map_location)  # load
-        model.append(
-            ckpt["ema" if ckpt.get("ema") else "model"].float().fuse().eval()
-        )  # FP32 model
+        model.append(ckpt["ema" if ckpt.get("ema") else "model"].float().fuse().eval())  # FP32 model
     # Compatibility updates
     for m in model.modules():
         if type(m) in [nn.Hardswish, nn.LeakyReLU, nn.ReLU, nn.ReLU6, nn.SiLU]:

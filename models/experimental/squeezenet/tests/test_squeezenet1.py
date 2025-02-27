@@ -10,10 +10,8 @@ from tqdm import tqdm
 from models.utility_functions import (
     comp_allclose_and_pcc,
     comp_pcc,
-
 )
 from models.experimental.squeezenet.reference.squeezenet import squeezenet1_0
-
 
 
 _batch_size = 1
@@ -24,21 +22,15 @@ def test_squeezenet1_inference(device, fuse_ops, imagenet_sample_input):
     image = imagenet_sample_input
     batch_size = _batch_size
     with torch.no_grad():
-        torch_squeezenet = models.squeezenet1_0(
-            weights=models.SqueezeNet1_0_Weights.IMAGENET1K_V1
-        )
+        torch_squeezenet = models.squeezenet1_0(weights=models.SqueezeNet1_0_Weights.IMAGENET1K_V1)
 
         torch_squeezenet.eval()
 
         state_dict = torch_squeezenet.state_dict()
         if not fuse_ops:
-            tt_squeezenet = squeezenet1_0(
-                state_dict, device=device, disable_conv_on_tt_device=fuse_ops
-            )
+            tt_squeezenet = squeezenet1_0(state_dict, device=device, disable_conv_on_tt_device=fuse_ops)
         else:
-            tt_squeezenet = squeezenet1_0(
-                state_dict, device=None, disable_conv_on_tt_device=fuse_ops
-            )
+            tt_squeezenet = squeezenet1_0(state_dict, device=None, disable_conv_on_tt_device=fuse_ops)
         tt_squeezenet.eval()
         if fuse_ops:
             modules_to_fuse = [
@@ -71,9 +63,7 @@ def test_squeezenet1_inference(device, fuse_ops, imagenet_sample_input):
             modules_to_fuse.extend(fire_2)
             modules_to_fuse.extend(fire_3)
 
-            tt_squeezenet = torch.ao.quantization.fuse_modules(
-                tt_squeezenet, modules_to_fuse
-            )
+            tt_squeezenet = torch.ao.quantization.fuse_modules(tt_squeezenet, modules_to_fuse)
 
         torch_output = torch_squeezenet(image).unsqueeze(1).unsqueeze(1)
         tt_output = tt_squeezenet(image)

@@ -12,7 +12,7 @@ if(CMAKE_CXX_COMPILER AND CMAKE_C_COMPILER)
     message(STATUS "Using specifed C compiler: ${CMAKE_C_COMPILER}")
 else()
     message(STATUS "No C or C++ compiler specified, defaulting to Clang-17")
-    FIND_AND_SET_CLANG17()
+    find_and_set_clang17()
 endif()
 
 project(ml-framework-cpp)

@@ -2,9 +2,9 @@
 This document explains how we achieved over 92% DRAM bandwidth utilization on Tenstorrent Wormhole and Grayskull cards. On Grayskull, there are 8 DRAM banks placed on the grid, and on Wormhole there are 12 DRAM banks placed on the grid. We use DRAM reader kernels (RISC-V cores) to access the DRAM bank and issue read requests through NoC APIs. When receiving data from DRAM banks, the readers wait on a barrier until all data are returned.
 
 ## Reader data movement kernel saturating DRAM bandwidth of a single bank
-To achieve maximum bandwidth, the first step is saturating a single DRAM bank using one DRAM reader kernel. The DRAM reader issues read requests to the NoC, and the NoC transfers the request to a single DRAM bank. Once the bank receives the requests, it sends back the data to the reader core. 
+To achieve maximum bandwidth, the first step is saturating a single DRAM bank using one DRAM reader kernel. The DRAM reader issues read requests to the NoC, and the NoC transfers the request to a single DRAM bank. Once the bank receives the requests, it sends back the data to the reader core.
 
-Since in the single bank test, we only have one core using the NoC and reading from DRAM on the grid, we can place the reader on any coordinate in the worker grid. For simplicity, we choose physical coordinate (1,1) which is the top-left worker core as our DRAM reader. 
+Since in the single bank test, we only have one core using the NoC and reading from DRAM on the grid, we can place the reader on any coordinate in the worker grid. For simplicity, we choose physical coordinate (1,1) which is the top-left worker core as our DRAM reader.
 
 To mimic a real application, which requires to partition the data into several data blocks, and between each data block, we need to insert a barrier to make sure the block has been read back, so that compute can start computing using this block.
 
@@ -37,7 +37,7 @@ With these two methods, we can in principle achieve the maximum bandwidth.
 <img src="images/image3.png" style="width:500px;"/>
 
 ## WH reader and bank placement example
-The Wormhole card has rows harvested worker grid, which means from the software perspective we cannot use the harvested rows for data movement and computation. On N150, there's one row harvested and on N300 there are two rows harvested. The harvested rows can be arbitrary and can occur at any worker rows. 
+The Wormhole card has rows harvested worker grid, which means from the software perspective we cannot use the harvested rows for data movement and computation. On N150, there's one row harvested and on N300 there are two rows harvested. The harvested rows can be arbitrary and can occur at any worker rows.
 
 As shown in the diagram, some DRAM readers cannot be placed next to the DRAM bank, as those rows are harvested. We need to choose some coordinates so that after the DRAM readers are moved to those coordinates, there will be no routes overlapped. below is an example of how to choose a new coordinate for workers 4 and 9, we first shift them to the right and move upwards, till we find a row that has not been allocated with any readers so far. From the diagram we can see no routes are overlapped using this algorithm., and we can achieve 92% of the theoretical bandwidth.
 
@@ -49,11 +49,11 @@ As shown in the diagram, some DRAM readers cannot be placed next to the DRAM ban
 ## Sharded Tensors in DRAM exmaple
 Most of the OPs use interleaved tensor layout when storing tensors in DRAM, meaning each DRAM reader will access the DRAM banks in a round-robin style. This is fine if the OP is not DRAM-bound, however, for DRAM-bound applications, the interleaved strategy will cause NoC congestions.
 
-To mitigate the NoC congestion, we need to shard the tensor into DRAM banks, so that each DRAM reader reads only its own tensor partition from its assigned bank. One use case is matmul with 1d sharded input tensors. When in0 has small height and large width (ex, 32x1024) and in1 has large width (ex, 1024x8192), it becomes DRAM bound and we can use the same DRAM reader placement and optimization strategy mentioned earlier. 
+To mitigate the NoC congestion, we need to shard the tensor into DRAM banks, so that each DRAM reader reads only its own tensor partition from its assigned bank. One use case is matmul with 1d sharded input tensors. When in0 has small height and large width (ex, 32x1024) and in1 has large width (ex, 1024x8192), it becomes DRAM bound and we can use the same DRAM reader placement and optimization strategy mentioned earlier.
 
 Take Wormhole as an example, in0 is width sharded to the top rows on the grid, and in1 is width sharded into 12 DRAM banks. As shown in the diagram on the left, tensor shard D0 is sharded into DRAM bank 0, D1 is sharded into bank 1, etc. There are 12 DRAM readers, each reads a shard from its own DRAM bank. The compute kernels are placed on the same coordinate as the DRAM reader. To get in0 sharded tensor from the top rows, we need to multicast the in0 shards to all worker cores, as this is the only way to multicast data to the compute cores without sending the shards to one compute core one by one. In0 and in1 shards are also double buffered, to overlap the data movement with computation.
 
-After computation on the output shard is done, the output shards are sent back to the top rows, as our current sharding strategy assumes the tensor shards to be allocated contiguously. 
+After computation on the output shard is done, the output shards are sent back to the top rows, as our current sharding strategy assumes the tensor shards to be allocated contiguously.
 
 <!-- ![image5](images/image5.png){width=10 height=10} -->
 <img src="images/image5.png" style="width:800px;"/>
@@ -69,6 +69,5 @@ The table below shows the achieved bandwidth for DRAM u-benchmark and matmul in 
 | Mixtral8x7b decode    | 243-261                | 267-300                |
 
 
-## Future Work 
+## Future Work
 Since we have 12 banks on Wormhole cards, it's usually hard to divide in1 tensor evenly by 12, as our current software stack assumes the tile size to be 32x32, so when sharding the in1 tensor to 12 banks, the last bank could have uneven sharding width and cause the computation for different workers to be unbalanced. To solve this problem or at least mitigate it, we can use smaller tile sizes such as 32x16 or 32x8 so that there is less padding, and computation will be more balanced.
-

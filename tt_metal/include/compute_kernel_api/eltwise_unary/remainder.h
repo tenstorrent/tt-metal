@@ -26,7 +26,7 @@ namespace ckernel {
  *
  * | Argument       | Description                                                                 | Type     | Valid Range                                           | Required |
  * |----------------|-----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
- * | idst           | The index of the tile in DST register buffer to perform remainder operation | uint32_t | Must be less than the size of the DST register buffer | True     | 
+ * | idst           | The index of the tile in DST register buffer to perform remainder operation | uint32_t | Must be less than the size of the DST register buffer | True     |
  * | param0         | Denominator value to perform remainder operation                            | uint32_t |                                                       | True     |
  * | param1         | Reciprocal of param0, calculated on-host                                    | uint32_t |                                                       | False    |
  */

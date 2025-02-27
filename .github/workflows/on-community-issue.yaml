@@ -9,7 +9,7 @@ on:
 jobs:
   gh-slack-bridge:
     runs-on: ubuntu-latest
-    permissions:      
+    permissions:
       issues: write
       pull-requests: write
     steps:

@@ -12,7 +12,6 @@ from numpy import random
 from loguru import logger
 
 
-
 from models.experimental.yolov7.reference.models.experimental import attempt_load
 from models.experimental.yolov7.reference.utils.datasets import LoadImages
 from models.experimental.yolov7.reference.utils.general import (
@@ -64,9 +63,7 @@ def test_detect(model_location_generator):
 
     # Directories
     save_dir = Path(increment_path(Path(f) / "exp"))  # increment run
-    (save_dir / "labels" if save_txt else save_dir).mkdir(
-        parents=True, exist_ok=True
-    )  # make dir
+    (save_dir / "labels" if save_txt else save_dir).mkdir(parents=True, exist_ok=True)  # make dir
 
     # Second-stage classifier
     # classify = False
@@ -82,9 +79,7 @@ def test_detect(model_location_generator):
 
     # Run inference
     if device.type != "cpu":
-        model(
-            torch.zeros(1, 3, imgsz, imgsz).to(device).type_as(next(model.parameters()))
-        )  # run once
+        model(torch.zeros(1, 3, imgsz, imgsz).to(device).type_as(next(model.parameters())))  # run once
     old_img_w = old_img_h = imgsz
     old_img_b = 1
 
@@ -98,9 +93,7 @@ def test_detect(model_location_generator):
 
         # Warmup
         if device.type != "cpu" and (
-            old_img_b != img.shape[0]
-            or old_img_h != img.shape[2]
-            or old_img_w != img.shape[3]
+            old_img_b != img.shape[0] or old_img_h != img.shape[2] or old_img_w != img.shape[3]
         ):
             old_img_b = img.shape[0]
             old_img_h = img.shape[2]
@@ -115,9 +108,7 @@ def test_detect(model_location_generator):
         t2 = time_synchronized()
 
         # Apply NMS
-        pred = non_max_suppression(
-            pred, conf_thres, iou_thres, classes=classes, agnostic=agnostic_nms
-        )
+        pred = non_max_suppression(pred, conf_thres, iou_thres, classes=classes, agnostic=agnostic_nms)
         t3 = time_synchronized()
 
         # Apply Classifier
@@ -133,9 +124,7 @@ def test_detect(model_location_generator):
 
             p = Path(p)  # to Path
             save_path = str(save_dir / p.name)  # img.jpg
-            txt_path = str(save_dir / "labels" / p.stem) + (
-                "" if dataset.mode == "image" else f"_{frame}"
-            )  # img.txt
+            txt_path = str(save_dir / "labels" / p.stem) + ("" if dataset.mode == "image" else f"_{frame}")  # img.txt
             gn = torch.tensor(im0.shape)[[1, 0, 1, 0]]  # normalization gain whwh
             if len(det):
                 # Rescale boxes from img_size to im0 size
@@ -149,14 +138,8 @@ def test_detect(model_location_generator):
                 # Write results
                 for *xyxy, conf, cls in reversed(det):
                     if save_txt:  # Write to file
-                        xywh = (
-                            (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn)
-                            .view(-1)
-                            .tolist()
-                        )  # normalized xywh
-                        line = (
-                            (cls, *xywh, conf) if opt.save_conf else (cls, *xywh)
-                        )  # label format
+                        xywh = (xyxy2xywh(torch.tensor(xyxy).view(1, 4)) / gn).view(-1).tolist()  # normalized xywh
+                        line = (cls, *xywh, conf) if opt.save_conf else (cls, *xywh)  # label format
                         with open(txt_path + ".txt", "a") as f:
                             f.write(("%g " * len(line)).rstrip() % line + "\n")
 
@@ -171,9 +154,7 @@ def test_detect(model_location_generator):
                         )
 
             # Print time (inference + NMS)
-            logger.info(
-                f"{s}Done. ({(1E3 * (t2 - t1)):.1f}ms) Inference, ({(1E3 * (t3 - t2)):.1f}ms) NMS"
-            )
+            logger.info(f"{s}Done. ({(1E3 * (t2 - t1)):.1f}ms) Inference, ({(1E3 * (t3 - t2)):.1f}ms) NMS")
 
             # Save results (image with detections)
             if save_img:
@@ -182,10 +163,6 @@ def test_detect(model_location_generator):
                     logger.info(f" The image with the result is saved in: {save_path}")
 
     if save_txt or save_img:
-        s = (
-            f"\n{len(list(save_dir.glob('labels/*.txt')))} labels saved to {save_dir / 'labels'}"
-            if save_txt
-            else ""
-        )
+        s = f"\n{len(list(save_dir.glob('labels/*.txt')))} labels saved to {save_dir / 'labels'}" if save_txt else ""
 
     logger.info(f"Done. ({time.time() - t0:.3f}s)")

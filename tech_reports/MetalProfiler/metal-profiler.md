@@ -22,7 +22,7 @@ libTracyClient.a
 ```
 
 ### tracy-capture
-tracy-capture is a command line executable that acts as the tracy server to capture events from tracy-client. It will dump a .tracy file which you can feed into tracy-profiler GUI. 
+tracy-capture is a command line executable that acts as the tracy server to capture events from tracy-client. It will dump a .tracy file which you can feed into tracy-profiler GUI.
 ```
 cd capture/build/unix
 make all
@@ -78,8 +78,8 @@ Define TRACY_ENABLE=ON for the WHOLE project (otherwise, won't be able to collec
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DTRACY_ENABLE=ON")
 ```
 
-### 5. Insert macros 
-Insert tracy related macro calls into your code 
+### 5. Insert macros
+Insert tracy related macro calls into your code
 eg. Zones in Tracy are marked sections of code that users are interested in profiling. Tracy provides macros such as ZoneScoped; to accomplish this. Please refer to section 3 of Tracy’s documentation for further information on zones and available macros.
 ```
 TracyMessageL("hello");
@@ -108,7 +108,7 @@ Instead of starting tracy-capture via command line, you can start tracy-profiler
 ```
 
 ### 3. Start application
-Start your application in a different terminal. This is the application that has been compiled with all the stuff mentioned in Basic Tracy Integration. As your application runs, you will see tracy-capture capturing events/tracy-profiler capturing events. 
+Start your application in a different terminal. This is the application that has been compiled with all the stuff mentioned in Basic Tracy Integration. As your application runs, you will see tracy-capture capturing events/tracy-profiler capturing events.
 ```
 ./runner
 ```
@@ -116,7 +116,7 @@ Start your application in a different terminal. This is the application that has
 ### 4. (Only if did 1.) Feed .tracy into tracy-profiler
 If you used tracy-capture, it will dump a .tracy file once this is complete. You can then feed this .tracy file into the tracy-profiler to view the results.
 
-### 5. (Only if did 1.) View .tracy contents 
+### 5. (Only if did 1.) View .tracy contents
 You can also view the contents of the .tracy file as a csv file using tracy-csvexport. This will dump the results in csv format which you can pip into a file and view the results. Optionally, you can also save the .tracy file via the GUI itself and then feed it into the tracy-csvexport tool.
 ```
 ./tracy-csvexport hello.tracy
@@ -134,7 +134,7 @@ The following section will provide an example of how to use Tracy in a sample ap
     - hellolib.hpp
   - CMakeLists.txt
   - main.cpp
-  - hellolib.cpp 
+  - hellolib.cpp
 ```
 
 ### 2. Fill in contents of each file found below
@@ -170,7 +170,7 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DTRACY_ENABLE=ON")
 add_library(hellolib SHARED hellolib.cpp)
 
 target_include_directories(hellolib
-    PUBLIC 
+    PUBLIC
         ${CMAKE_SOURCE_DIR}/include
         ${CMAKE_SOURCE_DIR}/third_party/tracy/public
 )
@@ -241,10 +241,10 @@ int divide(int a, int b) {
 ### 3. Build Project
 This will build the executable and binarines in `build/` folder.
 ```
-mkdir -p build 
+mkdir -p build
 cd build/
-cmake -G Ninja -DTRACY_ENABLE=ON .. 
-ninja 
+cmake -G Ninja -DTRACY_ENABLE=ON ..
+ninja
 ```
 
 ### 4. Build tracy-capture
@@ -298,13 +298,13 @@ eg: target_link_libraries(tt_metal PUBLIC compiler_flags $<$<BOOL:${ENABLE_TRACY
 ```
 
 ### profiler.o
-A profiler object gets generated with various low level API calls within tt-metal. This object is linked against tt_metal.so. 
+A profiler object gets generated with various low level API calls within tt-metal. This object is linked against tt_metal.so.
 ```
 location: tt-metal/tt_metal/tools/profiler
 eg: profiler.cpp
 ```
 
-### Tracy module tool for dev convenience 
+### Tracy module tool for dev convenience
 ```
 location: tt-metal/ttnn/tracy
 eg: __main__.py

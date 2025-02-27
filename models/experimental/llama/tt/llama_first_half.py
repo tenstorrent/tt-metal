@@ -38,9 +38,7 @@ def build_decoders(
                 max_position_embeddings,
                 config,
             )
-            for decoder_idx in range(
-                num_decoder_start, num_decoder_start + num_decoders
-            )
+            for decoder_idx in range(num_decoder_start, num_decoder_start + num_decoders)
         ]
     )
     return decoder_list
@@ -70,12 +68,8 @@ class TtLlamaModelFirstHFModel(torch.nn.Module):
         self.config = config
 
         # firt part =================================================================
-        self.embeddings = torch.nn.Embedding(
-            self.config.vocab_size, self.config.hidden_size
-        )
-        self.embeddings.weight = torch.nn.Parameter(
-            state_dict[f"model.embed_tokens.weight"]
-        )
+        self.embeddings = torch.nn.Embedding(self.config.vocab_size, self.config.hidden_size)
+        self.embeddings.weight = torch.nn.Parameter(state_dict[f"model.embed_tokens.weight"])
 
         # stack all decoders
         self.decoders_first = build_decoders(
@@ -88,9 +82,7 @@ class TtLlamaModelFirstHFModel(torch.nn.Module):
             self.num_decoders,
         )
 
-    def _prepare_decoder_attention_mask(
-        self, attention_mask, input_shape, inputs_embeds, past_key_values_length
-    ):
+    def _prepare_decoder_attention_mask(self, attention_mask, input_shape, inputs_embeds, past_key_values_length):
         # create causal mask
         # [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len]
         combined_attention_mask = None
@@ -104,13 +96,11 @@ class TtLlamaModelFirstHFModel(torch.nn.Module):
 
         if attention_mask is not None:
             # [bsz, seq_len] -> [bsz, 1, tgt_seq_len, src_seq_len]
-            expanded_attn_mask = _expand_mask(
-                attention_mask, inputs_embeds.dtype, tgt_len=input_shape[-1]
-            ).to(inputs_embeds.device)
+            expanded_attn_mask = _expand_mask(attention_mask, inputs_embeds.dtype, tgt_len=input_shape[-1]).to(
+                inputs_embeds.device
+            )
             combined_attention_mask = (
-                expanded_attn_mask
-                if combined_attention_mask is None
-                else expanded_attn_mask + combined_attention_mask
+                expanded_attn_mask if combined_attention_mask is None else expanded_attn_mask + combined_attention_mask
             )
 
         return combined_attention_mask
@@ -127,35 +117,23 @@ class TtLlamaModelFirstHFModel(torch.nn.Module):
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
     ) -> Tuple:
-        output_attentions = (
-            output_attentions
-            if output_attentions is not None
-            else self.config.output_attentions
-        )
+        output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
-            output_hidden_states
-            if output_hidden_states is not None
-            else self.config.output_hidden_states
+            output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
         )
         use_cache = use_cache if use_cache is not None else self.config.use_cache
 
-        return_dict = (
-            return_dict if return_dict is not None else self.config.use_return_dict
-        )
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         # retrieve input_ids and inputs_embeds
         if input_ids is not None and inputs_embeds is not None:
-            raise ValueError(
-                "You cannot specify both decoder_input_ids and decoder_inputs_embeds at the same time"
-            )
+            raise ValueError("You cannot specify both decoder_input_ids and decoder_inputs_embeds at the same time")
         elif input_ids is not None:
             batch_size, seq_length = input_ids.shape
         elif inputs_embeds is not None:
             batch_size, seq_length, _ = inputs_embeds.shape
         else:
-            raise ValueError(
-                "You have to specify either decoder_input_ids or decoder_inputs_embeds"
-            )
+            raise ValueError("You have to specify either decoder_input_ids or decoder_inputs_embeds")
 
         seq_length_with_past = seq_length
         past_key_values_length = 0
@@ -205,9 +183,7 @@ class TtLlamaModelFirstHFModel(torch.nn.Module):
             if output_hidden_states:
                 all_hidden_states += (hidden_states,)
 
-            past_key_value = (
-                past_key_values[idx] if past_key_values is not None else None
-            )
+            past_key_value = past_key_values[idx] if past_key_values is not None else None
             layer_outputs = decoder_layer(
                 hidden_states,
                 attention_mask=attention_mask,
@@ -225,11 +201,7 @@ class TtLlamaModelFirstHFModel(torch.nn.Module):
 
         next_cache = next_decoder_cache if use_cache else None
         if not return_dict:
-            return tuple(
-                v
-                for v in [hidden_states, next_cache, all_hidden_states, all_self_attns]
-                if v is not None
-            )
+            return tuple(v for v in [hidden_states, next_cache, all_hidden_states, all_self_attns] if v is not None)
 
         return (
             hidden_states,
