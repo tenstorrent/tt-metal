@@ -282,10 +282,20 @@ def run_llama3_demo(
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=model_args.cluster_shape),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
+    sub_core_grids = ttnn.CoreRangeSet(
+        [
+            ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
+            ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
+        ]
+    )
 
     # Compile
     logger.info(f"Compiling model trace...")
-    for i in range(1):
+    if layers == 1:
+        num_compile_iters = 24
+    else:
+        num_compile_iters = 1
+    for i in range(num_compile_iters):
         tt_decode_input = tt_embd(tt_out_tok)
         logger.info(f"tt_decode_input done")
 
@@ -301,12 +311,6 @@ def run_llama3_demo(
         # Sampling
         # tt_out_tok_reset = tt_sampling(tt_out[0], tt_out_tok)
 
-        sub_core_grids = ttnn.CoreRangeSet(
-            [
-                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
-                ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
-            ]
-        )
         tt_out_gathered = tt_model.tt_ccl.line_all_gather(
             tt_out[0], dim=3, num_links=2, cluster_axis=0, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
@@ -462,6 +466,8 @@ def run_llama3_demo(
         logger.info(
             f"Iteration {iteration}: {1000*iteration_time:.0f}ms @ {tokens_per_second_per_user:.1f} tok/s/user ({batch_size*tokens_per_second_per_user:.1f} tok/s throughput)"
         )
+        tsu_threshold = 128 if layers == 1 else 28
+        assert tokens_per_second_per_user > tsu_threshold, "Throughput is less than 28 tokens per second per user"
         profiler.end(f"log_printing_iter_{iteration}", iteration=iteration)
 
         if iteration == 0:  # First iteration also accounts for compile time
