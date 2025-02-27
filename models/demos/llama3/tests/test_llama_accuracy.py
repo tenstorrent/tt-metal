@@ -13,7 +13,7 @@ from models.demos.llama3.tt.llama_common import (
     PagedAttentionConfig,
 )
 from models.demos.llama3.tt.llama_model import TtTransformer
-from models.demos.llama3.tt.model_config import TtModelArgs, LlamaOptimizations, LayerGroup, PrecisionSetting
+from models.demos.llama3.tt.model_config import TtModelArgs, LlamaOptimizations, TensorGroup, PrecisionSetting
 from models.demos.t3000.llama2_70b.reference.llama.llama31_8b.tokenizer import Tokenizer
 from models.demos.llama3.demo.demo import preprocess_inputs_prefill
 from pathlib import Path
@@ -75,55 +75,55 @@ def get_accuracy_thresholds(model_name: str, device_name: str, optimizations: Ll
     [
         pytest.param(
             LlamaOptimizations(
-                {LayerGroup.FF1_FF3: PrecisionSetting.BFP4_LOFI, LayerGroup.FF2: PrecisionSetting.BFP4_LOFI}
+                {TensorGroup.FF1_FF3: PrecisionSetting.BFP4_LOFI, TensorGroup.FF2: PrecisionSetting.BFP4_LOFI}
             ),
             id="precision_ff1_3_bfp4_lofi_ff2_bfp4_lofi",
         ),
         pytest.param(
             LlamaOptimizations(
-                {LayerGroup.FF1_FF3: PrecisionSetting.BFP4_LOFI, LayerGroup.FF2: PrecisionSetting.BFP8_HIFI2}
+                {TensorGroup.FF1_FF3: PrecisionSetting.BFP4_LOFI, TensorGroup.FF2: PrecisionSetting.BFP8_HIFI2}
             ),
             id="precision_ff1_3_bfp4_lofi_ff2_bfp8_hifi2",
         ),
         pytest.param(
             LlamaOptimizations(
-                {LayerGroup.FF1_FF3: PrecisionSetting.BFP4_LOFI, LayerGroup.FF2: PrecisionSetting.BF16_HIFI4}
+                {TensorGroup.FF1_FF3: PrecisionSetting.BFP4_LOFI, TensorGroup.FF2: PrecisionSetting.BF16_HIFI4}
             ),
             id="precision_ff1_3_bfp4_lofi_ff2_bf16_hifi4",
         ),
         pytest.param(
             LlamaOptimizations(
-                {LayerGroup.FF1_FF3: PrecisionSetting.BFP8_HIFI2, LayerGroup.FF2: PrecisionSetting.BFP4_LOFI}
+                {TensorGroup.FF1_FF3: PrecisionSetting.BFP8_HIFI2, TensorGroup.FF2: PrecisionSetting.BFP4_LOFI}
             ),
             id="precision_ff1_3_bfp8_hifi2_ff2_bfp4_lofi",
         ),
         pytest.param(
             LlamaOptimizations(
-                {LayerGroup.FF1_FF3: PrecisionSetting.BFP8_HIFI2, LayerGroup.FF2: PrecisionSetting.BFP8_HIFI2}
+                {TensorGroup.FF1_FF3: PrecisionSetting.BFP8_HIFI2, TensorGroup.FF2: PrecisionSetting.BFP8_HIFI2}
             ),
             id="precision_ff1_3_bfp8_hifi2_ff2_bfp8_hifi2",
         ),
         pytest.param(
             LlamaOptimizations(
-                {LayerGroup.FF1_FF3: PrecisionSetting.BFP8_HIFI2, LayerGroup.FF2: PrecisionSetting.BF16_HIFI4}
+                {TensorGroup.FF1_FF3: PrecisionSetting.BFP8_HIFI2, TensorGroup.FF2: PrecisionSetting.BF16_HIFI4}
             ),
             id="precision_ff1_3_bfp8_hifi2_ff2_bf16_hifi4",
         ),
         pytest.param(
             LlamaOptimizations(
-                {LayerGroup.FF1_FF3: PrecisionSetting.BF16_HIFI4, LayerGroup.FF2: PrecisionSetting.BFP4_LOFI}
+                {TensorGroup.FF1_FF3: PrecisionSetting.BF16_HIFI4, TensorGroup.FF2: PrecisionSetting.BFP4_LOFI}
             ),
             id="precision_ff1_3_bf16_hifi4_ff2_bfp4_lofi",
         ),
         pytest.param(
             LlamaOptimizations(
-                {LayerGroup.FF1_FF3: PrecisionSetting.BF16_HIFI4, LayerGroup.FF2: PrecisionSetting.BFP8_HIFI2}
+                {TensorGroup.FF1_FF3: PrecisionSetting.BF16_HIFI4, TensorGroup.FF2: PrecisionSetting.BFP8_HIFI2}
             ),
             id="precision_ff1_3_bf16_hifi4_ff2_bfp8_hifi2",
         ),
         pytest.param(
             LlamaOptimizations(
-                {LayerGroup.FF1_FF3: PrecisionSetting.BF16_HIFI4, LayerGroup.FF2: PrecisionSetting.BF16_HIFI4}
+                {TensorGroup.FF1_FF3: PrecisionSetting.BF16_HIFI4, TensorGroup.FF2: PrecisionSetting.BF16_HIFI4}
             ),
             id="precision_ff1_3_bf16_hifi4_ff2_bf16_hifi4",
         ),

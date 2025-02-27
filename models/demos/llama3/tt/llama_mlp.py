@@ -87,7 +87,7 @@ class TtLlamaMLP(LightweightModule):
         w1_out = ttnn.linear(
             x,
             self.w1,
-            compute_kernel_config=self.model_config["FF1_3_COMPUTE_KERNEL_CFG"],
+            compute_kernel_config=self.model_config["LI_FF1_3_COMPUTE_KERNEL_CFG"],
             core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_1 else None,
             dtype=ttnn.bfloat8_b if TG else ttnn.bfloat16,
             program_config=pc_1,
@@ -97,7 +97,7 @@ class TtLlamaMLP(LightweightModule):
         w3_out = ttnn.linear(
             x,
             self.w3,
-            compute_kernel_config=self.model_config["FF1_3_COMPUTE_KERNEL_CFG"],
+            compute_kernel_config=self.model_config["LI_FF1_3_COMPUTE_KERNEL_CFG"],
             core_grid=ttnn.CoreGrid(y=8, x=8) if not pc_3 else None,
             dtype=ttnn.bfloat8_b if TG else ttnn.bfloat16,
             program_config=pc_3,
@@ -179,7 +179,7 @@ class TtLlamaMLP(LightweightModule):
         w2_out = ttnn.linear(
             w2_in,
             self.w2,
-            compute_kernel_config=self.model_config["FF2_COMPUTE_KERNEL_CFG"],
+            compute_kernel_config=self.model_config["LI_FF2_COMPUTE_KERNEL_CFG"],
             dtype=self.args.ccl_dtype if TG else ttnn.bfloat16,
             program_config=pc_2,
             memory_config=(ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if mode == "decode" else ttnn.DRAM_MEMORY_CONFIG)

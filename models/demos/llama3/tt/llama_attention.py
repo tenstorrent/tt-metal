@@ -17,7 +17,7 @@ class TtLlamaAttention(LightweightModule):
         state_dict,
         weight_cache_path,
         layer_num,
-        dtype,
+        dtype,  # bfloat8_b set in the top-level test python code, e.g., demo.py
         transformation_mats,
         configuration,
         paged_attention_config=None,
@@ -77,7 +77,7 @@ class TtLlamaAttention(LightweightModule):
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
 
-        self.dtype = dtype
+        self.dtype = dtype  # NOTE: passed in from demo.py as bfloat8_b
 
         self.max_seq_len = configuration.max_seq_len
         self.grid_size = configuration.max_grid_size
@@ -134,7 +134,7 @@ class TtLlamaAttention(LightweightModule):
 
         self.wqkv = ttnn.as_tensor(
             qkv_cat,
-            dtype=self.dtype,
+            dtype=self.model_config["WQKV_DTYPE"],
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG if self.TG else wqkv_mem_config,
@@ -154,7 +154,7 @@ class TtLlamaAttention(LightweightModule):
 
         self.wo = ttnn.as_tensor(
             pt_wo,
-            dtype=ttnn.bfloat8_b,
+            dtype=self.model_config["WO_DTYPE"],
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG if (self.use_fused_all_gather_matmul or self.TG) else wo_mem_config,
@@ -167,7 +167,9 @@ class TtLlamaAttention(LightweightModule):
             if (self.use_fused_all_gather_matmul or self.TG)
             else cache_name("wo"),
         )
-        if not use_paged_kv_cache:
+        if (
+            not use_paged_kv_cache
+        ):  # use_paged_kv_cache is set to False/True in the top-level test python code, e.g., demo.py -- only long_context has True on this
             # vLLM provides its own kv cache
             self.init_kv_cache(configuration, weight_cache_path)
 
@@ -216,7 +218,7 @@ class TtLlamaAttention(LightweightModule):
         self.layer_past = [
             ttnn.as_tensor(
                 k_or_v,
-                dtype=self.dtype,
+                dtype=self.model_config["KV_CACHE_DTYPE"],
                 layout=self.model_config["ATTN_W_LAYOUT_TILE"],
                 device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -250,8 +252,8 @@ class TtLlamaAttention(LightweightModule):
             self.wqkv,
             memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
             program_config=self.model_config["XQKV_DECODE_PROGCFG"],
-            compute_kernel_config=self.compute_kernel_config_hifi2,
-            dtype=self.ccl_dtype if self.TG else ttnn.bfloat16,
+            compute_kernel_config=self.model_config["LI_QKV_DECODE_COMPUTE_KERNEL_CFG"],
+            dtype=self.ccl_dtype if self.TG else ttnn.bfloat16,  # NOTE: ccl_dtype is bfloat8_b set in model_config.py
         )
         ttnn.deallocate(x)
         xqkv_fused = tt_all_reduce(
@@ -262,7 +264,7 @@ class TtLlamaAttention(LightweightModule):
             num_all_gather_links=self.num_all_gather_links,
             memory_config=self.model_config["QKV_OUT_GATHERED_MEMCFG"](list(self.mesh_device.shape)[1]),
             sharded=True,
-            dtype=self.ccl_dtype,
+            dtype=self.ccl_dtype,  # NOTE: ccl_dtype only used for TG inside tt_all_reduce
         )
 
         if self.TG:
@@ -304,6 +306,7 @@ class TtLlamaAttention(LightweightModule):
         q_heads_1BQD = ttnn.experimental.rotary_embedding_llama(
             q_heads_pre_rot_1BQD, rot_mats[0], rot_mats[1], self.transformation_mats["decode"], is_decode_mode=True
         )
+        # NOTE: output tensor has same dtype as input tensor: https://github.com/tenstorrent/tt-metal/blob/gongyu/precision-fidelity-conf/ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/device/rotary_embedding_llama_device_operation.cpp#L131
 
         # K Rotary Embeddings
         k_heads_1BKD = ttnn.experimental.rotary_embedding_llama(
@@ -346,9 +349,10 @@ class TtLlamaAttention(LightweightModule):
                 page_table_tensor=page_table,
                 scale=self.scale,
                 program_config=self.model_config["SDPA_DECODE_PROGCFG"],
-                compute_kernel_config=self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"],
+                compute_kernel_config=self.model_config["SDPA_DECODE_COMPUTE_KERNEL_CFG"],
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
+            # NOTE: output tensor has same dtype as 1st input tensor: https://github.com/tenstorrent/tt-metal/blob/gongyu/precision-fidelity-conf/ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/sdpa_decode_op.cpp#L209
         else:
             attn_output_1G4D = ttnn.transformer.scaled_dot_product_attention_decode(
                 q_heads_1BQD,
@@ -357,9 +361,10 @@ class TtLlamaAttention(LightweightModule):
                 cur_pos_tensor=current_pos,
                 scale=self.scale,
                 program_config=self.model_config["SDPA_DECODE_PROGCFG"],
-                compute_kernel_config=self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"],
+                compute_kernel_config=self.model_config["SDPA_DECODE_COMPUTE_KERNEL_CFG"],
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,  # FIXME: why not L1 height sharded e.g. SCORES_BATCHED_MM_OUTPUT_MEMCFG?
             )
+            # NOTE: output tensor has same dtype as 1st input tensor: https://github.com/tenstorrent/tt-metal/blob/gongyu/precision-fidelity-conf/ttnn/cpp/ttnn/operations/transformer/sdpa_decode/device/sdpa_decode_op.cpp#L209
 
         ttnn.deallocate(q_heads_1BQD)
 
@@ -374,7 +379,7 @@ class TtLlamaAttention(LightweightModule):
         ttnn.deallocate(attn_output_11BH)
         ttnn.deallocate(attn_output_1G4D)
 
-        if self.use_fused_all_gather_matmul:
+        if self.use_fused_all_gather_matmul:  # NOTE: false for n300 due to ccl_topology() == ttnn.Topology.Linear
             attn_output_cat = ttnn.to_memory_config(
                 attn_output_cat, self.model_config["ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG"]
             )
@@ -385,7 +390,7 @@ class TtLlamaAttention(LightweightModule):
                 all_gather_core_grid_offset=(0, 4),
                 num_links=1,
                 program_config=self.model_config["ATTN_ALL_GATHER_MATMUL_PROGCFG"],
-                compute_kernel_config=self.compute_kernel_config_hifi2,
+                compute_kernel_config=self.model_config["LI_O_DECODE_COMPUTE_KERNEL_CFG"],
                 memory_config_ag=self.model_config["ATTN_ALL_GATHER_MATMUL_OUTPUT_MEMCFG"],
                 memory_config_mm=self.model_config["DECODE_RESIDUAL_MEMCFG"],
             )
@@ -424,7 +429,7 @@ class TtLlamaAttention(LightweightModule):
                 program_config=self.model_config["ATTN_OUTPUT_PROGCFG"] if not self.TG else None,
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG if self.TG else attn_output_cat.memory_config(),
                 dtype=ttnn.bfloat8_b if self.TG else None,
-                compute_kernel_config=self.compute_kernel_config_hifi2,
+                compute_kernel_config=self.model_config["LI_O_DECODE_COMPUTE_KERNEL_CFG"],
             )
 
             ttnn.deallocate(attn_output_cat)
@@ -483,7 +488,7 @@ class TtLlamaAttention(LightweightModule):
             self.wqkv,
             dtype=self.ccl_dtype if self.TG else ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=self.compute_kernel_config_hifi2,
+            compute_kernel_config=self.model_config["LI_QKV_PREFILL_COMPUTE_KERNEL_CFG"],
             program_config=self.model_config["XQKV_PREFILL_PROGCFG"](seq_len),
         )
 
@@ -551,7 +556,7 @@ class TtLlamaAttention(LightweightModule):
         else:
             keys_BKSD, values_BKSD = self.layer_past[0], self.layer_past[1]
 
-        k_heads_1KSD_8b = ttnn.typecast(k_heads_1KSD, dtype=ttnn.bfloat8_b)
+        k_heads_1KSD_8b = ttnn.typecast(k_heads_1KSD, dtype=self.model_config["KV_CACHE_DTYPE"])
         ttnn.deallocate(k_heads_1KSD)
 
         # sharding k_fill to deal with update_cache memory limitation
@@ -560,7 +565,7 @@ class TtLlamaAttention(LightweightModule):
         else:
             k_fill = k_heads_1KSD_8b
 
-        v_heads_1VSD_8b = ttnn.typecast(v_heads_1VSD, dtype=ttnn.bfloat8_b)
+        v_heads_1VSD_8b = ttnn.typecast(v_heads_1VSD, dtype=self.model_config["KV_CACHE_DTYPE"])
 
         ttnn.deallocate(v_heads_1VSD)
 
@@ -602,7 +607,9 @@ class TtLlamaAttention(LightweightModule):
             ttnn.deallocate(v_fill)
 
         # SDPA
-        q_heads_1QSD_8b = ttnn.typecast(q_heads_1QSD, dtype=ttnn.bfloat8_b)
+        q_heads_1QSD_8b = ttnn.typecast(
+            q_heads_1QSD, dtype=ttnn.bfloat8_b
+        )  # gongyu TODO: this is to be made configurable when dealing with activation dtype
         ttnn.deallocate(q_heads_1QSD)
 
         if chunk_start_idx is not None:
@@ -612,7 +619,7 @@ class TtLlamaAttention(LightweightModule):
                 values_BKSD,
                 page_table,
                 chunk_start_idx,
-                compute_kernel_config=self.compute_kernel_config_hifi4,
+                compute_kernel_config=self.model_config["SDPA_PREFILL_COMPUTE_KERNEL_CFG"],
                 program_config=self.model_config["SDPA_PROGCFG"](seq_len),
             )
         else:
@@ -622,7 +629,7 @@ class TtLlamaAttention(LightweightModule):
                 v_heads_1VSD_8b,
                 is_causal=True,
                 scale=self.scale,
-                compute_kernel_config=self.compute_kernel_config_hifi4,
+                compute_kernel_config=self.model_config["SDPA_PREFILL_COMPUTE_KERNEL_CFG"],
                 program_config=self.model_config["SDPA_PROGCFG"](seq_len),
             )
 
@@ -658,7 +665,7 @@ class TtLlamaAttention(LightweightModule):
         output_11SH = ttnn.linear(
             attn_output_11SH,
             self.wo,
-            compute_kernel_config=self.compute_kernel_config_hifi2_fp16,
+            compute_kernel_config=self.model_config["LI_O_PREFILL_COMPUTE_KERNEL_CFG"],
             dtype=ttnn.bfloat8_b,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             program_config=self.model_config["WO_PREFILL_PROGCFG"](seq_len),

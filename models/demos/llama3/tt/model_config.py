@@ -24,15 +24,47 @@ from tqdm import tqdm
 from enum import Enum, auto
 
 
-class PrecisionSetting(Enum):
-    BFP4_LOFI = "bfp4_lofi"
-    BFP8_HIFI2 = "bfp8_hifi2"
-    BF16_HIFI4 = "bf16_hifi4"
-
-
-class LayerGroup(Enum):
+class TensorGroup(Enum):
     FF1_FF3 = "ff1_3"
     FF2 = "ff2"
+    WQKV = "wqkv"
+    WO = "wo"
+    KV_CACHE = "kv_cache"
+
+
+class PrecisionSetting(Enum):
+    BFP4 = "bfp4"
+    BFP8 = "bfp8"
+    BF16 = "bf16"
+
+    @classmethod
+    def index(cls, value):
+        """Returns the 0-based index of the enum value"""
+        return list(cls).index(value)
+
+
+class OpGroup(Enum):
+    LI_FF1_FF3 = "li_ff1_3"
+    LI_FF2 = "li_ff2"
+    LI_QKV_DECODE = "li_qkv_decode"
+    LI_O_DECODE = "li_o_decode"
+    SDPA_DECODE = "sdpa_decode"
+    LI_QKV_PREFILL = "li_qkv_prefill"
+    LI_O_PREFILL = "li_o_prefill"
+    SDPA_PREFILL = "sdpa_prefill"
+
+
+class MathFidelitySetting(Enum):
+    LOFI = "lofi"
+    HIFI2 = "hifi2"
+    HIFI2_NA = "hifi2_na"
+    HIFI2_FP16 = "hifi2_fp16"
+    HIFI4 = "hifi4"
+
+    @classmethod
+    def index(cls, value):
+        """Returns the 0-based index of the enum value"""
+        return list(cls).index(value)
 
 
 class LlamaOptimizations:
@@ -53,20 +85,59 @@ class LlamaOptimizations:
         """Configuration optimized for performance
         All models use bfp4 MLPs in this configuration
         """
-        inst = cls({LayerGroup.FF1_FF3: PrecisionSetting.BFP4_LOFI})
+        inst = cls(
+            {
+                "TensorPrecision": {TensorGroup.FF1_FF3: PrecisionSetting.BFP4},
+                "OpFidelity": {OpGroup.LI_FF1_FF3: MathFidelitySetting.LOFI},
+            }
+        )
         inst.__name__ = "performance"
         return inst
 
-    def __init__(self, layer2precision: dict = None):
-        self.layer_settings = self._default_layer_settings()
-        self.layer_settings.update(layer2precision or {})
-        self.__name__ = "_".join([f"{k.value}_{v.value}" for k, v in self.layer_settings.items()])
+    def __init__(self, settings: dict = None):
+        self._opt_settings = self._default_settings()
+        self._names = {}
+        for key in ("TensorPrecision", "OpFidelity"):
+            self._opt_settings[key].update((settings or {}).get(key, {}))
+            self._names[key] = "_".join([f"{k.value}_{v.value}" for k, v in self._opt_settings[key].items()])
 
-    def _default_layer_settings(self):
+        self._full_name = self._names["TensorPrecision"] + "_" + self._names["OpFidelity"]
+        self.__name__ = (
+            f"p{''.join([str(PrecisionSetting.index(v)) for v in self._opt_settings['TensorPrecision'].values()])}"
+        )
+        self.__name__ += (
+            f"_f{''.join([str(MathFidelitySetting.index(v)) for v in self._opt_settings['OpFidelity'].values()])}"
+        )
+        # TODO: maybe we could warn about some unwanted settings here
+
+    def _default_settings(self):
         return {
-            LayerGroup.FF1_FF3: PrecisionSetting.BFP8_HIFI2,
-            LayerGroup.FF2: PrecisionSetting.BFP8_HIFI2,
+            "TensorPrecision": {
+                TensorGroup.FF1_FF3: PrecisionSetting.BFP8,
+                TensorGroup.FF2: PrecisionSetting.BFP8,
+                TensorGroup.WQKV: PrecisionSetting.BFP8,
+                TensorGroup.WO: PrecisionSetting.BFP8,
+                TensorGroup.KV_CACHE: PrecisionSetting.BFP8,
+            },
+            "OpFidelity": {
+                OpGroup.LI_FF1_FF3: MathFidelitySetting.HIFI2,
+                OpGroup.LI_FF2: MathFidelitySetting.HIFI2,
+                OpGroup.LI_QKV_DECODE: MathFidelitySetting.HIFI2,
+                OpGroup.SDPA_DECODE: MathFidelitySetting.HIFI2_NA,
+                OpGroup.LI_O_DECODE: MathFidelitySetting.HIFI2,
+                OpGroup.LI_QKV_PREFILL: MathFidelitySetting.HIFI2,
+                OpGroup.SDPA_PREFILL: MathFidelitySetting.HIFI4,
+                OpGroup.LI_O_PREFILL: MathFidelitySetting.HIFI2_FP16,
+            },
         }
+
+    @property
+    def tensor_dtype_settings(self):
+        return self._opt_settings["TensorPrecision"]
+
+    @property
+    def op_fidelity_settings(self):
+        return self._opt_settings["OpFidelity"]
 
 
 class TtModelArgs:
@@ -286,6 +357,12 @@ class TtModelArgs:
                 fp32_dest_acc_en=True,
                 packer_l1_acc=True,
             )
+            self.compute_kernel_config_hifi2_na = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi2,
+                math_approx_mode=False,
+                fp32_dest_acc_en=False,
+                packer_l1_acc=False,
+            )
             # NOTE: compute_kernel_config_sdpa seems not used in the any of the model files
             self.compute_kernel_config_sdpa = ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -297,14 +374,23 @@ class TtModelArgs:
             # Configure data precision and math fidelity for kernels
             self.model_config["COMPUTE_KERNEL_CONFIG_HIFI2"] = self.compute_kernel_config_hifi2
             precision_setting_lookup = {
-                PrecisionSetting.BFP4_LOFI: (ttnn.bfloat4_b, self.compute_kernel_config_lofi),
-                PrecisionSetting.BFP8_HIFI2: (ttnn.bfloat8_b, self.compute_kernel_config_hifi2),
-                PrecisionSetting.BF16_HIFI4: (ttnn.bfloat16, self.compute_kernel_config_hifi4),
+                PrecisionSetting.BFP4: ttnn.bfloat4_b,
+                PrecisionSetting.BFP8: ttnn.bfloat8_b,
+                PrecisionSetting.BF16: ttnn.bfloat16,
             }
-            for layer, precision in self.optimizations.layer_settings.items():
-                dtype, kernel_cfg = precision_setting_lookup[precision]
-                self.model_config[f"{layer.value.upper()}_DTYPE"] = dtype
-                self.model_config[f"{layer.value.upper()}_COMPUTE_KERNEL_CFG"] = kernel_cfg
+            for tensor_group, precision in self.optimizations.tensor_dtype_settings.items():
+                dtype = precision_setting_lookup[precision]
+                self.model_config[f"{tensor_group.value.upper()}_DTYPE"] = dtype
+            math_fidelity_setting_lookup = {
+                MathFidelitySetting.LOFI: self.compute_kernel_config_lofi,
+                MathFidelitySetting.HIFI2: self.compute_kernel_config_hifi2,
+                MathFidelitySetting.HIFI2_NA: self.compute_kernel_config_hifi2_na,
+                MathFidelitySetting.HIFI2_FP16: self.compute_kernel_config_hifi2_fp16,
+                MathFidelitySetting.HIFI4: self.compute_kernel_config_hifi4,
+            }
+            for op_group, math_fidelity in self.optimizations.op_fidelity_settings.items():
+                math_cfg = math_fidelity_setting_lookup[math_fidelity]
+                self.model_config[f"{op_group.value.upper()}_COMPUTE_KERNEL_CFG"] = math_cfg
 
             # Create memory config for sharded tensors
             residual_grid = self.dram_shard_core_grid_for_k(self.dim // self.num_devices)
@@ -468,12 +554,12 @@ class TtModelArgs:
                 k_chunk_size=256,
             )
 
-            self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"] = ttnn.WormholeComputeKernelConfig(
-                math_fidelity=ttnn.MathFidelity.HiFi2,
-                math_approx_mode=False,
-                fp32_dest_acc_en=False,
-                packer_l1_acc=False,
-            )
+            # self.model_config["SDPA_DECODE_COMPUTE_PROGCFG"] = ttnn.WormholeComputeKernelConfig(
+            #     math_fidelity=ttnn.MathFidelity.HiFi2,
+            #     math_approx_mode=False,
+            #     fp32_dest_acc_en=False,
+            #     packer_l1_acc=False,
+            # )
 
             # Useful core grid based on batch size
             if self.max_batch_size == 32:
@@ -1471,3 +1557,8 @@ def set_tg_attention_config(model_config, dim):
     )
 
     return model_config
+
+
+if __name__ == "__main__":
+    a = LlamaOptimizations()
+    print(a.__name__)
