@@ -677,3 +677,16 @@ def record_test_timestamp(record_property):
     yield
     end_timestamp = datetime.strftime(datetime.now(), "%Y-%m-%dT%H:%M:%S%z")
     record_property("end_timestamp", end_timestamp)
+
+
+def pytest_configure(config):
+    xmlpath = config.option.xmlpath
+    # Only override the xmlpath if it's set, and we're in a CI env (GHA)
+    if xmlpath and is_ci_env():
+        # Get the dir and filename for the generated xml
+        directory, filename = os.path.split(xmlpath)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        # Append timestamp to the end of the xml filename
+        new_filename = f"{os.path.splitext(filename)[0]}_{timestamp}{os.path.splitext(filename)[1]}"
+        new_xmlpath = os.path.join(directory, new_filename)
+        config.option.xmlpath = new_xmlpath
