@@ -12,37 +12,37 @@ void kernel_main() {
     constexpr uint32_t cb_id_out0 = get_compile_time_arg_val(1);
     constexpr uint32_t cb_id_weight = get_compile_time_arg_val(2);
 
-    constexpr uint32_t num_blocks_weight_h = get_compile_time_arg_val(5);
-    constexpr uint32_t weight_block_num_tiles = get_compile_time_arg_val(6);
-    constexpr uint32_t weight_block_height_num_outer = get_compile_time_arg_val(7);
-    constexpr uint32_t weight_block_height_ntiles = get_compile_time_arg_val(8);
-    constexpr uint32_t weight_block_width_ntiles = get_compile_time_arg_val(9);
-    constexpr uint32_t weight_stride_h = get_compile_time_arg_val(10);
-    constexpr uint32_t weight_next_block_stride_h = get_compile_time_arg_val(11);
-    constexpr uint32_t weight_next_block_stride_w = get_compile_time_arg_val(12);
+    constexpr uint32_t num_blocks_weight_h = get_compile_time_arg_val(8);
+    constexpr uint32_t weight_block_num_tiles = get_compile_time_arg_val(9);
+    constexpr uint32_t weight_block_height_num_outer = get_compile_time_arg_val(10);
+    constexpr uint32_t weight_block_height_ntiles = get_compile_time_arg_val(11);
+    constexpr uint32_t weight_block_width_ntiles = get_compile_time_arg_val(12);
+    constexpr uint32_t weight_stride_h = get_compile_time_arg_val(13);
+    constexpr uint32_t weight_next_block_stride_h = get_compile_time_arg_val(14);
+    constexpr uint32_t weight_next_block_stride_w = get_compile_time_arg_val(15);
 
     // Bias arg. Unused if bias fusion is not enabled.
-    constexpr uint32_t bias_ntiles = get_compile_time_arg_val(13);
+    constexpr uint32_t bias_ntiles = get_compile_time_arg_val(16);
 
-    constexpr uint32_t out_next_tile_stride_h = get_compile_time_arg_val(14);
-    constexpr uint32_t out_next_tile_stride_w = get_compile_time_arg_val(15);
-    constexpr uint32_t out_next_subblock_stride_h = get_compile_time_arg_val(16);
-    constexpr uint32_t out_next_subblock_stride_w = get_compile_time_arg_val(17);
-    constexpr uint32_t out_next_block_stride_h = get_compile_time_arg_val(18);
-    constexpr uint32_t out_next_block_stride_w = get_compile_time_arg_val(12);  // == weight_next_block_stride_w
-    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(19);
-    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(20);
-    constexpr uint32_t out_subblock_tile_count = get_compile_time_arg_val(21);
-    constexpr uint32_t out_num_subblocks_h = get_compile_time_arg_val(22);
-    constexpr uint32_t out_num_subblocks_w = get_compile_time_arg_val(23);
-    constexpr uint32_t out_num_blocks_h = get_compile_time_arg_val(24);
-    constexpr uint32_t out_num_blocks_w = get_compile_time_arg_val(25);
-    constexpr uint32_t out_block_height_num_tiles = get_compile_time_arg_val(26);
-    constexpr uint32_t out_height_num_tiles = get_compile_time_arg_val(27);
-    constexpr uint32_t out_width_num_tiles = get_compile_time_arg_val(28);
+    constexpr uint32_t out_next_tile_stride_h = get_compile_time_arg_val(17);
+    constexpr uint32_t out_next_tile_stride_w = get_compile_time_arg_val(18);
+    constexpr uint32_t out_next_subblock_stride_h = get_compile_time_arg_val(19);
+    constexpr uint32_t out_next_subblock_stride_w = get_compile_time_arg_val(20);
+    constexpr uint32_t out_next_block_stride_h = get_compile_time_arg_val(21);
+    constexpr uint32_t out_next_block_stride_w = get_compile_time_arg_val(15);  // == weight_next_block_stride_w
+    constexpr uint32_t out_subblock_h = get_compile_time_arg_val(22);
+    constexpr uint32_t out_subblock_w = get_compile_time_arg_val(23);
+    constexpr uint32_t out_subblock_tile_count = get_compile_time_arg_val(24);
+    constexpr uint32_t out_num_subblocks_h = get_compile_time_arg_val(25);
+    constexpr uint32_t out_num_subblocks_w = get_compile_time_arg_val(26);
+    constexpr uint32_t out_num_blocks_h = get_compile_time_arg_val(27);
+    constexpr uint32_t out_num_blocks_w = get_compile_time_arg_val(28);
+    constexpr uint32_t out_block_height_num_tiles = get_compile_time_arg_val(29);
+    constexpr uint32_t out_height_num_tiles = get_compile_time_arg_val(30);
+    constexpr uint32_t out_width_num_tiles = get_compile_time_arg_val(31);
 
-    constexpr uint32_t out_addr = get_compile_time_arg_val(29);
-    constexpr uint32_t output_rows_tiles = get_compile_time_arg_val(32);
+    constexpr uint32_t out_addr = get_compile_time_arg_val(32);
+    constexpr uint32_t output_rows_tiles = get_compile_time_arg_val(35);
     constexpr uint32_t total_weight_num_tiles =
         weight_block_height_num_outer * num_blocks_weight_h * weight_block_num_tiles;
 
