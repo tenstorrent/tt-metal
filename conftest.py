@@ -687,6 +687,7 @@ def pytest_configure(config):
         directory, filename = os.path.split(xmlpath)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         # Append timestamp to the end of the xml filename
+        # This avoids clobbering the xml file when pytest is invoked multiple times in test scripts
         new_filename = f"{os.path.splitext(filename)[0]}_{timestamp}{os.path.splitext(filename)[1]}"
         new_xmlpath = os.path.join(directory, new_filename)
         config.option.xmlpath = new_xmlpath
