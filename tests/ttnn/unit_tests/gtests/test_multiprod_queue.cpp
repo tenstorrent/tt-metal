@@ -97,10 +97,11 @@ TEST_F(MultiProducerCommandQueueTest, EventSync) {
     std::shared_ptr<Event> write_event = std::make_shared<Event>();
     std::shared_ptr<Event> read_event = std::make_shared<Event>();
 
+    std::vector<float> host_data(tensor_shape.volume());
+    std::iota(host_data.begin(), host_data.end(), 0);
     Tensor device_tensor = create_device_tensor(tensor_spec, device);
 
     std::thread t0([&]() {
-        std::vector<float> host_write_data(tensor_shape.volume());
         for (int j = 0; j < 1000; j++) {
             if (j != 0) {
                 ttnn::event_synchronize(read_event);
@@ -108,8 +109,7 @@ TEST_F(MultiProducerCommandQueueTest, EventSync) {
             read_event = std::make_shared<Event>();
 
             // Create tensor and transfer to device
-            std::iota(host_write_data.begin(), host_write_data.end(), j);
-            const Tensor host_tensor = Tensor::from_vector(host_write_data, tensor_spec);
+            const Tensor host_tensor = Tensor::from_vector(host_data, tensor_spec);
             memcpy(device->command_queue(*write_cq), device_tensor, host_tensor);
             EXPECT_TRUE(is_tensor_on_device(device_tensor));
 
@@ -118,7 +118,6 @@ TEST_F(MultiProducerCommandQueueTest, EventSync) {
     });
 
     std::thread t1([&]() {
-        std::vector<float> host_readback_data(tensor_shape.volume());
         for (int j = 0; j < 1000; j++) {
             ttnn::event_synchronize(write_event);
             write_event = std::make_shared<Event>();
@@ -126,8 +125,7 @@ TEST_F(MultiProducerCommandQueueTest, EventSync) {
             // Read back from device and verify
             const Tensor readback_tensor = device_tensor.cpu(/*blocking=*/false, read_cq);
             EXPECT_FALSE(is_tensor_on_device(readback_tensor));
-            std::iota(host_readback_data.begin(), host_readback_data.end(), j);
-            EXPECT_THAT(readback_tensor.to_vector<float>(), Pointwise(FloatEq(), host_readback_data));
+            EXPECT_THAT(readback_tensor.to_vector<float>(), Pointwise(FloatEq(), host_data));
 
             ttnn::record_event(device->command_queue(*read_cq), read_event);
         }
