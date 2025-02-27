@@ -1359,6 +1359,12 @@ void detail::Program_::compile(IDevice* device, bool fd_bootloader_mode) {
     std::vector<std::shared_future<void>> events;
     DprintServerSetProfilerState(profile_kernel);
 
+    auto sync_events = [&events] {
+        for (auto& event : events) {
+            event.get();
+        }
+    };
+
     auto validate_kernel_placement = [&device, &fd_bootloader_mode](std::shared_ptr<Kernel> kernel) {
         // Placement rules:
         //  Slow dispatch:
@@ -1439,15 +1445,14 @@ void detail::Program_::compile(IDevice* device, bool fd_bootloader_mode) {
                 events);
         }
     }
-    sync_build_step(events);
+    sync_events();
 
     for (auto &kernels : kernels_) {
         for (auto &[id, kernel] : kernels) {
             launch_build_step([kernel, device] { kernel->read_binaries(device); }, events);
         }
     }
-
-    sync_build_step(events);
+    sync_events();
 
     if (detail::CompilationReporter::enabled()) {
         detail::CompilationReporter::inst().flush_program_entry(get_id(), num_kernels(), [this](size_t kernel_id) {
