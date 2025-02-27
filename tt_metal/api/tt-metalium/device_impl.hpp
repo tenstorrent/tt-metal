@@ -202,7 +202,6 @@ public:
         tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) override;
 
     bool is_mmio_capable() const override;
-    std::vector<std::vector<chip_id_t>> get_tunnels_from_mmio() const override { return tunnels_from_mmio_; }
 
 private:
     static constexpr uint32_t DEFAULT_NUM_SUB_DEVICES = 1;

@@ -204,7 +204,6 @@ public:
         tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) = 0;
 
     virtual bool is_mmio_capable() const = 0;
-    virtual std::vector<std::vector<chip_id_t>> get_tunnels_from_mmio() const = 0;
 
     static constexpr MemoryAllocator allocator_scheme_ = MemoryAllocator::L1_BANKING;
 };

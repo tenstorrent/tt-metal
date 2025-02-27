@@ -911,8 +911,6 @@ void detail::Program_::validate_circular_buffer_region(const IDevice* device) {
     }
 }
 
-size_t Program::num_semaphores(const CoreCoord &core, CoreType core_type) const { return semaphores_on_core(core, core_type).size(); }
-
 size_t detail::Program_::num_semaphores() const { return semaphores_.size(); }
 
 size_t Program::num_semaphores() const { return pimpl_->num_semaphores(); }
@@ -1313,7 +1311,6 @@ void Program::set_launch_msg_sem_offsets() { pimpl_->set_launch_msg_sem_offsets(
 void Program::populate_dispatch_data(IDevice* device) { pimpl_->populate_dispatch_data(device); }
 
 void Program::generate_dispatch_commands(IDevice* device) {
-    bool is_cached = this->is_cached();
     uint64_t command_hash = BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key;
     if (not hal.is_coordinate_virtualization_enabled()) {
         // When coordinate virtualization is not enabled, explicitly encode the device
@@ -1321,7 +1318,7 @@ void Program::generate_dispatch_commands(IDevice* device) {
         command_hash = (command_hash << 32) | (device->id());
     }
     auto& cached_program_command_sequences = this->get_cached_program_command_sequences();
-    if (!is_cached) {
+    if (!pimpl_->is_cached()) {
         auto sub_device_id = this->determine_sub_device_ids(device)[0];
         ProgramCommandSequence program_command_sequence;
         program_dispatch::insert_empty_program_dispatch_preamble_cmd(program_command_sequence);
@@ -1329,7 +1326,7 @@ void Program::generate_dispatch_commands(IDevice* device) {
         program_dispatch::assemble_runtime_args_commands(program_command_sequence, *this, device);
         program_dispatch::assemble_device_commands(program_command_sequence, *this, device, sub_device_id);
         cached_program_command_sequences.insert({command_hash, std::move(program_command_sequence)});
-        this->set_cached();
+        pimpl_->set_cached();
     } else {
         auto cached_cmd_iter = cached_program_command_sequences.find(command_hash);
         TT_FATAL(cached_cmd_iter != cached_program_command_sequences.end(), "Enqueueing a Program across devices with different cores harvested is not supported, unless coordinate virtualization is enabled (only enabled on Wormhole and above).");
@@ -1609,9 +1606,6 @@ void detail::Program_::set_finalized() { this->finalized_ = true; }
 
 bool Program::is_finalized() const { return pimpl_->is_finalized(); }
 void Program::set_finalized() { pimpl_->set_finalized(); }
-
-bool Program::is_cached() const { return pimpl_->is_cached(); }
-void Program::set_cached() { pimpl_->set_cached(); }
 
 ProgramBinaryStatus Program::get_program_binary_status(std::size_t device_id) const { return pimpl_->get_program_binary_status(device_id); }
 void Program::set_program_binary_status(std::size_t device_id, ProgramBinaryStatus status) { pimpl_->set_program_binary_status(device_id, status); }

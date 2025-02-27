@@ -744,10 +744,6 @@ bool MeshDevice::is_mmio_capable() const {
     TT_THROW("is_mmio_capable() is not supported on MeshDevice - use individual devices instead");
     return reference_device()->is_mmio_capable();
 }
-std::vector<std::vector<chip_id_t>> MeshDevice::get_tunnels_from_mmio() const {
-    TT_THROW("get_tunnels_from_mmio() is not supported on MeshDevice - use individual devices instead");
-    return reference_device()->get_tunnels_from_mmio();
-}
 
 // Allocator methods
 std::optional<DeviceAddr> MeshDevice::lowest_occupied_compute_l1_address() const {
