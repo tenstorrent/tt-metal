@@ -31,8 +31,9 @@ class PrecisionSetting(Enum):
 
 
 class LayerGroup(Enum):
-    FF1_FF3 = "ff1_3"
+    FF1 = "ff1"
     FF2 = "ff2"
+    FF3 = "ff3"
 
 
 class LlamaOptimizations:
@@ -53,7 +54,7 @@ class LlamaOptimizations:
         """Configuration optimized for performance
         All models use bfp4 MLPs in this configuration
         """
-        inst = cls({LayerGroup.FF1_FF3: PrecisionSetting.BFP4_LOFI})
+        inst = cls({LayerGroup.FF1: PrecisionSetting.BFP4_LOFI, LayerGroup.FF3: PrecisionSetting.BFP4_LOFI})
         inst.__name__ = "performance"
         return inst
 
@@ -64,8 +65,9 @@ class LlamaOptimizations:
 
     def _default_layer_settings(self):
         return {
-            LayerGroup.FF1_FF3: PrecisionSetting.BFP8_HIFI2,
+            LayerGroup.FF1: PrecisionSetting.BFP8_HIFI2,
             LayerGroup.FF2: PrecisionSetting.BFP8_HIFI2,
+            LayerGroup.FF3: PrecisionSetting.BFP8_HIFI2,
         }
 
 
