@@ -21,14 +21,12 @@ class ModelFC : public ttml::autograd::ModuleBase {
 
 public:
     ModelFC() {
-        m_fc1 = std::make_shared<ttml::modules::LinearLayer>(64, 64);
         m_fc2 = std::make_shared<ttml::modules::LinearLayer>(64, 64);
+        m_fc1 = std::make_shared<ttml::modules::LinearLayer>(m_fc2->get_weight(), /* has_bias*/ true);
         create_name("ModelFC");
 
         register_module(m_fc1, "fc1");
         register_module(m_fc2, "fc2");
-
-        m_fc1->set_weight(m_fc2->get_weight());
     }
 
     ttml::autograd::TensorPtr operator()(const ttml::autograd::TensorPtr& x) {
@@ -53,14 +51,13 @@ class LanguageModel : public ttml::autograd::ModuleBase {
 
 public:
     LanguageModel() {
-        m_fc1 = std::make_shared<ttml::modules::LinearLayer>(128, 64);
         m_emb = std::make_shared<ttml::modules::Embedding>(64, 128);
+        m_fc1 = std::make_shared<ttml::modules::LinearLayer>(m_emb->get_weight(), /* has_bias*/ true);
+
         create_name("LanguageModel");
 
         register_module(m_fc1, "fc1");
         register_module(m_emb, "emb");
-
-        m_fc1->set_weight(m_emb->get_weight());
     }
 };
 
