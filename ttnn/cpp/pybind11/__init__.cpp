@@ -10,6 +10,7 @@
 #include "activation.hpp"
 #include "core.hpp"
 #include "device.hpp"
+#include "fabric.hpp"
 #include "profiler.hpp"
 #include "events.hpp"
 #include "global_circular_buffer.hpp"
@@ -50,6 +51,7 @@ PYBIND11_MODULE(_ttnn, module) {
     auto m_profiler = module.def_submodule("profiler", "Submodule defining the profiler");
     auto m_reports = module.def_submodule("reports", "ttnn reports");
     auto m_operations = module.def_submodule("operations", "ttnn Operations");
+    auto m_fabric = module.def_submodule("fabric", "Fabric instantiation APIs");
 
     // TYPES
     ttnn::tensor::tensor_mem_config_module_types(m_tensor);
@@ -60,6 +62,7 @@ PYBIND11_MODULE(_ttnn, module) {
     ttnn::activation::py_module_types(m_activation);
     ttnn::core::py_module_types(m_core);
     ttnn::device::py_device_module_types(m_device);
+    ttnn::fabric::py_bind_fabric_api(m_fabric);
     ttnn::distributed::py_module_types(m_multi_device);
     ttnn::events::py_module_types(m_events);
     ttnn::global_circular_buffer::py_module_types(m_global_circular_buffer);

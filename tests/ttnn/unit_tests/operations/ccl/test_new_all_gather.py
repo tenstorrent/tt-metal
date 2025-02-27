@@ -771,3 +771,8 @@ def test_line_all_gather_async_on_T3K_back_to_back_cols_and_rows_persistent_fabr
         create_persistent_fabric=False,
         teardown_persistent_fabric=True,
     )
+
+
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn._ttnn.fabric.FabricConfig.FABRIC_2D}], indirect=True)
+def test_fabric_sanity(mesh_device):
+    print("Device didn't crash?")
