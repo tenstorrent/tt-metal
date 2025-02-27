@@ -5,9 +5,9 @@
 // clang-format off
 #include "dataflow_api.h"
 #include "debug/dprint.h"
-#include "tt_fabric/hw/inc/tt_fabric.h"
-#include "tt_fabric/hw/inc/tt_fabric_interface.h"
-#include "tt_fabric/hw/inc/tt_fabric_api.h"
+#include "fabric/hw/inc/tt_fabric.h"
+#include "fabric/hw/inc/tt_fabric_interface.h"
+#include "fabric/hw/inc/tt_fabric_api.h"
 #include "tests/tt_metal/tt_metal/perf_microbenchmark/common/kernel_utils.hpp"
 
 // clang-format on
@@ -94,7 +94,7 @@ void kernel_main() {
             }
         }
         if (!last_device) {
-            fabric_wait_for_pull_request_bytes_flushed(PACKET_HEADER_SIZE_BYTES);
+            fabric_wait_for_pull_request_bytes_flushed(client_interface, PACKET_HEADER_SIZE_BYTES);
         }
         packet_header_t* packet_header = (packet_header_t*)(src_addr);
 
@@ -136,7 +136,7 @@ void kernel_main() {
                 uint32_t dst_offset =
                     i * num_devices * lower_pages * element_size + k + this_device_id * lower_pages * element_size;
                 uint64_t dst_noc_addr = get_noc_addr_helper(dst_offset, dst_addr);
-                noc_async_write_tile(i, s, l1_write_addr);
+                noc_async_write(l1_read_addr + src_offset, dst_noc_addr, num_bytes);
                 if (!last_device) {
                     fabric_async_write_multicast(
                         client_interface,
@@ -154,7 +154,7 @@ void kernel_main() {
             }
         }
         if (!last_device) {
-            fabric_wait_for_pull_request_bytes_flushed(PACKET_HEADER_SIZE_BYTES);
+            fabric_wait_for_pull_request_bytes_flushed(client_interface, PACKET_HEADER_SIZE_BYTES);
         }
         packet_header_t* packet_header = (packet_header_t*)(src_addr);
 

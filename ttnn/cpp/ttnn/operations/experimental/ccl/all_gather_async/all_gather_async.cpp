@@ -60,4 +60,29 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
         uses_2d_fabric);
 }
 
+ttnn::Tensor ExecuteAllGatherAsync::invoke(
+    const ttnn::Tensor& input_tensor,
+    const int32_t dim,
+    const MeshDevice& mesh_device,
+    const ttnn::ccl::Topology topology,
+    const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<size_t> num_preferred_links,
+    bool transpose_mesh_direction,
+    bool uses_2d_fabric) {
+    return ttnn::operations::experimental::ccl::all_gather_async(
+        input_tensor,
+        dim,
+        0,
+        mesh_device,
+        topology,
+        multi_device_global_semaphore,
+        memory_config,
+        num_preferred_links,
+        std::nullopt,
+        true,
+        transpose_mesh_direction,
+        uses_2d_fabric);
+}
+
 }  // namespace ttnn::operations::experimental::ccl

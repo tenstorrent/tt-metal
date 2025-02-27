@@ -77,8 +77,8 @@ struct AllGather2D {
         lower_pages(lower_pages),
         higher_pages(higher_pages),
         page_size(page_size),
-        semaphore_target_value(semaphore_target_value),
-        is_horizontal(is_horizontal) {}
+        is_horizontal(is_horizontal),
+        semaphore_target_value(semaphore_target_value) {}
 
     auto attributes() const {
         using tt::stl::reflection::Attribute;
@@ -261,6 +261,17 @@ Tensor all_gather_async(
     const std::optional<size_t> num_preferred_links = std::nullopt,
     std::optional<SubDeviceId> sub_device_id = std::nullopt,
     bool enable_persistent_fabric_mode = false,
+    bool transpose_mesh_direction = false,
+    bool uses_2d_fabric = false);
+
+Tensor all_gather_async(
+    const Tensor& input_tensor,
+    const int32_t dim,
+    const MeshDevice& mesh_device,
+    const ttnn::ccl::Topology topology,
+    const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<size_t> num_preferred_links = std::nullopt,
     bool transpose_mesh_direction = false,
     bool uses_2d_fabric = false);
 

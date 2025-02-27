@@ -2076,6 +2076,8 @@ void run_all_gather_2D_test(const size_t dim, const size_t num_links, const ttnn
         log_info("Test must be run on WH");
         return;
     }
+
+    tt::tt_metal::detail::InitializeFabricConfig(tt::FabricConfig::FABRIC_2D);
     T3000TestDevice test_fixture;
     auto view = test_fixture.mesh_device_->get_view();
 
@@ -2109,22 +2111,10 @@ void run_all_gather_2D_test(const size_t dim, const size_t num_links, const ttnn
     const Tensor input_mesh_tensor = ttnn::distributed::aggregate_as_tensor(device_input_tensors, AllGatherTensor{});
 
     // FABRIC setup
-    const bool enable_persistent_fabric = true;
 
     std::vector<Program> dummy_worker_programs;
     std::optional<SubdeviceInfo> subdevice_managers = std::nullopt;
-    std::optional<std::vector<Program>> fabric_programs;
-    std::vector<Program*> fabric_program_ptrs;
     std::optional<ttnn::ccl::EdmLineFabricOpInterface> fabric_handle;
-    setup_test_with_persistent_fabric(
-        devices,
-        dummy_worker_programs,
-        subdevice_managers,
-        fabric_programs,
-        fabric_program_ptrs,
-        fabric_handle,
-        enable_persistent_fabric,
-        num_links);
     log_info(tt::LogTest, "Lauching op");
 
     ttnn::global_semaphore::MultiDeviceGlobalSemaphore multi_device_global_semaphore =
@@ -2139,22 +2129,15 @@ void run_all_gather_2D_test(const size_t dim, const size_t num_links, const ttnn
     auto output_tensor = ttnn::operations::experimental::ccl::all_gather_async(
         input_mesh_tensor,
         dim,
-        multi_device_global_semaphore,
-        num_links,
-        operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        *test_fixture.mesh_device_.get(),
         ttnn::ccl::Topology::Linear,
-        SubDeviceId(0),
+        multi_device_global_semaphore,
+        operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
+        num_links,
+        false,
         true);
 
-    // wait for op completion
-    wait_for_worker_subdevice_program_completion(devices, subdevice_managers);
-    log_info(tt::LogTest, "Main op done");
-
-    log_info(tt::LogTest, "Fabric teardown");
-    persistent_fabric_teardown_sequence(
-        devices, subdevice_managers, fabric_handle.value(), tt::fabric::TerminationSignal::IMMEDIATELY_TERMINATE);
-
-    log_info(tt::LogTest, "Waiting for teardown completion");
+    log_info(tt::LogTest, "Synchronizing");
     for (auto d : devices) {
         tt_metal::Synchronize(d, *ttnn::DefaultQueueId);
     }

@@ -92,14 +92,13 @@ Tensor all_gather_2D_helper(
                     semaphore = semaphores.at(i);  // Get raw pointer
                 }
             }
-            auto number_of_devices = mesh_view.num_devices();
             return operation::run(
                 AllGather2D{
                     coordinate,
                     grid_size,
                     num_rows,
                     num_cols,
-                    number_of_devices,
+                    num_devices,
                     memory_config.value_or(input_device_tensor.memory_config()),
                     topology,
                     semaphore.value(),
@@ -108,7 +107,7 @@ Tensor all_gather_2D_helper(
                     higher_pages,
                     page_size,
                     do_horizontal,
-                    is_first ? number_of_devices : number_of_devices * 2},
+                    is_first ? num_devices : num_devices * 2},
                 {input_device_tensor});
         },
         {input_tensor},
@@ -586,6 +585,31 @@ Tensor all_gather_async(
         TT_FATAL(false, "Can't perform 2D fabric without supplying the mesh device");
     }
     return output_tensors.at(0);
+}
+
+Tensor all_gather_async(
+    const Tensor& input_tensor,
+    const int32_t dim,
+    const MeshDevice& mesh_device,
+    const ttnn::ccl::Topology topology,
+    const global_semaphore::MultiDeviceGlobalSemaphore& multi_device_global_semaphore,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<size_t> num_preferred_links,
+    bool transpose_mesh_dimension,
+    bool uses_2d_fabric) {
+    return all_gather_async(
+        input_tensor,
+        dim,
+        0,
+        mesh_device,
+        topology,
+        multi_device_global_semaphore,
+        memory_config,
+        num_preferred_links,
+        std::nullopt,
+        true,
+        transpose_mesh_dimension,
+        uses_2d_fabric);
 }
 
 Tensor all_gather_async(
