@@ -19,7 +19,7 @@ from models.utility_functions import torch_random
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
     post_process_output_and_move_to_host,
 )
-from models.demos.wormhole.stable_diffusion.tests.parametrizations import (
+from models.demos.wormhole.stable_diffusion.tests.parameterizations import (
     DOWN_MID_UP_BLOCKS_HIDDEN_STATES_INFO,
     CROSS_UP_BLOCKS_HIDDEN_STATES_INFO,
 )

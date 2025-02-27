@@ -18,7 +18,7 @@ from models.utility_functions import (
 from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions import (
     preprocess_and_push_input_to_device,
 )
-from models.demos.wormhole.stable_diffusion.tests.parametrizations import TRANSFORMER_PARAMETRIZATIONS
+from models.demos.wormhole.stable_diffusion.tests.parameterizations import TRANSFORMER_PARAMETERIZATIONS
 
 
 @skip_for_grayskull()
@@ -26,7 +26,7 @@ from models.demos.wormhole.stable_diffusion.tests.parametrizations import TRANSF
 @pytest.mark.parametrize("model_name", ["CompVis/stable-diffusion-v1-4"])
 @pytest.mark.parametrize(
     "input_shape, shard_layout, shard_end_core, shard_shape, attention_head_dim, block, block_index, attention_index",
-    TRANSFORMER_PARAMETRIZATIONS,
+    TRANSFORMER_PARAMETERIZATIONS,
 )
 def test_basic_transformer_block_512x512(
     device,

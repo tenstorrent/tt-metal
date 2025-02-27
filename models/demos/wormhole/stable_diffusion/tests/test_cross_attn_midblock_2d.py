@@ -17,7 +17,7 @@ from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions
     preprocess_and_push_input_to_device,
     post_process_output_and_move_to_host,
 )
-from models.demos.wormhole.stable_diffusion.tests.parametrizations import DOWN_MID_UP_BLOCKS_HIDDEN_STATES_INFO
+from models.demos.wormhole.stable_diffusion.tests.parameterizations import DOWN_MID_UP_BLOCKS_HIDDEN_STATES_INFO
 from models.utility_functions import skip_for_grayskull, torch_random
 from ttnn.model_preprocessing import preprocess_model_parameters
 from tests.ttnn.utils_for_testing import assert_with_pcc

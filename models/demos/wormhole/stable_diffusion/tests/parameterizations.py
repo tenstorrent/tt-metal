@@ -20,7 +20,7 @@ CROSS_UP_BLOCKS_HIDDEN_STATES_INFO = (
 )
 
 # hidden states info, attention head dim, block (up/down/min), block index, attention index
-TRANSFORMER_PARAMETRIZATIONS = (
+TRANSFORMER_PARAMETERIZATIONS = (
     (CROSS_DOWN_BLOCKS_HIDDEN_STATES_INFO[0] + (40, "down", 0, 0)),
     (CROSS_DOWN_BLOCKS_HIDDEN_STATES_INFO[0] + (40, "down", 0, 1)),
     (CROSS_DOWN_BLOCKS_HIDDEN_STATES_INFO[1] + (80, "down", 1, 0)),

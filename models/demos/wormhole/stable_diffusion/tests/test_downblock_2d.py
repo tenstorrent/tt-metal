@@ -22,7 +22,7 @@ from models.demos.wormhole.stable_diffusion.tt.ttnn_functional_utility_functions
     preprocess_and_push_input_to_device,
     post_process_output_and_move_to_host,
 )
-from models.demos.wormhole.stable_diffusion.tests.parametrizations import DOWN_MID_UP_BLOCKS_HIDDEN_STATES_INFO
+from models.demos.wormhole.stable_diffusion.tests.parameterizations import DOWN_MID_UP_BLOCKS_HIDDEN_STATES_INFO
 
 
 @skip_for_grayskull()
