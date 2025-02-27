@@ -381,7 +381,7 @@ void HWCommandQueue::enqueue_record_event(
     event->cq_id = this->id_;
     event->event_id = this->manager.get_next_event(this->id_);
     event->device = this->device_;
-    event->ready = true;  // what does this mean???
+    event->ready = true;
 
     sub_device_ids = buffer_dispatch::select_sub_device_ids(this->device_, sub_device_ids);
     event_dispatch::issue_record_event_commands(
