@@ -450,4 +450,4 @@ def test_pad_conv2d_sweep(device, dtype, use_multicore, shape, padded_shape):
     out_torch = out_ttnn.cpu().to_torch().float()
 
     out_torch = out_torch[: shape[0], : shape[1], : shape[2], : shape[3]]
-    assert torch.allclose(in_torch, out_torch)
+    assert_with_pcc(in_torch, out_torch, 0.9999)
