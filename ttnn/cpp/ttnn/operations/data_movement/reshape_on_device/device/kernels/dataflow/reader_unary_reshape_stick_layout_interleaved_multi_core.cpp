@@ -18,17 +18,9 @@ void kernel_main() {
     constexpr auto cb_in0 = tt::CBIndex::c_0;
 
     constexpr bool stick_size_is_pow2 = get_compile_time_arg_val(2) == 1;
-#if (stick_size_is_pow2)
-    constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(3);
-#else
-    constexpr uint32_t page_size = get_compile_time_arg_val(3);
-#endif
-#if (stick_size_is_pow2)
-    const InterleavedPow2AddrGen<src_is_dram> s = {
-        .bank_base_address = src_addr, .log_base_2_of_page_size = log_base_2_of_page_size};
-#else
-    const InterleavedAddrGen<src_is_dram> s = {.bank_base_address = src_addr, .page_size = page_size};
-#endif
+    constexpr uint32_t size = get_compile_time_arg_val(3);
+
+    const auto s = get_interleaved_addr_gen<src_is_dram, stick_size_is_pow2>(src_addr, size);
 
     uint32_t i_stick = start_id;
     uint32_t curr_c = 0, curr_h = 0, curr_n = 0;
