@@ -202,12 +202,20 @@ class TtLlamaRotarySetup(LightweightModule):
                 [self.batch_size_per_device_group, 1, cos.shape[-1]]
                 # (self.batch_size_per_device_group, 32, cos.shape[-1]),
             ),
+            ttnn.Shape(
+                # [self.batch_size_per_device_group, 1, sin.shape[-1]]
+                (self.batch_size_per_device_group, 32, sin.shape[-1]),
+            ),
         )
         sin = ttnn.reshape(
             sin,
             ttnn.Shape(
                 [self.batch_size_per_device_group, 1, sin.shape[-1]]
                 # (self.batch_size_per_device_group, 32, sin.shape[-1]),
+            ),
+            ttnn.Shape(
+                # [self.batch_size_per_device_group, 1, sin.shape[-1]]
+                (self.batch_size_per_device_group, 32, sin.shape[-1]),
             ),
         )
 

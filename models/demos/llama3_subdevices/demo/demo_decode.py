@@ -285,7 +285,7 @@ def run_llama3_demo(
 
     # Compile
     logger.info(f"Compiling model trace...")
-    for i in range(24):
+    for i in range(1):
         tt_decode_input = tt_embd(tt_out_tok)
         logger.info(f"tt_decode_input done")
 
