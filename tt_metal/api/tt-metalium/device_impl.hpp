@@ -249,7 +249,7 @@ private:
 
     // Work Executor for this device - can asynchronously process host side work for
     // all tasks scheduled on this device
-    std::shared_ptr<WorkExecutor> work_executor_;
+    std::unique_ptr<WorkExecutor> work_executor_;
     uint32_t worker_thread_core_ = 0;
     uint32_t completion_queue_reader_core_ = 0;
     std::unique_ptr<SystemMemoryManager> sysmem_manager_;
