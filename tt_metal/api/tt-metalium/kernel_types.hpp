@@ -40,11 +40,17 @@ struct DataMovementConfig {
 };
 
 struct ReaderDataMovementConfig : public DataMovementConfig {
-    ReaderDataMovementConfig(std::vector<uint32_t> compile_args = {}, std::map<std::string, std::string> defines = {});
+    ReaderDataMovementConfig(
+        std::vector<uint32_t> compile_args = {},
+        std::map<std::string, std::string> defines = {},
+        KernelBuildOptLevel opt_level = KernelBuildOptLevel::O2);
 };
 
 struct WriterDataMovementConfig : public DataMovementConfig {
-    WriterDataMovementConfig(std::vector<uint32_t> compile_args = {}, std::map<std::string, std::string> defines = {});
+    WriterDataMovementConfig(
+        std::vector<uint32_t> compile_args = {},
+        std::map<std::string, std::string> defines = {},
+        KernelBuildOptLevel opt_level = KernelBuildOptLevel::O2);
 };
 
 struct ComputeConfig {
