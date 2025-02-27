@@ -2,7 +2,7 @@ import os
 import re
 
 # List of operations
-ops = ["elu", "heaviside", "rsqrt", "relu6", "erfc"]
+ops = ["isinf", "isnan", "isposinf", "isneginf", "sin"]
 
 
 # Function to modify the file
