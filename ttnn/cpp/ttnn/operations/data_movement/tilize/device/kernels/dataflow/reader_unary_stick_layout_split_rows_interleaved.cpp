@@ -20,16 +20,10 @@ void kernel_main() {
 
     constexpr bool src0_is_dram = get_compile_time_arg_val(0) == 1;
     constexpr bool stick_size_is_power_of_two = get_compile_time_arg_val(1) == 1;
-
-#if (stick_size_is_power_of_two)
     constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(2);
-    const InterleavedPow2AddrGen<src0_is_dram> s = {
-        .bank_base_address = src_addr,
-        .log_base_2_of_page_size = log_base_2_of_page_size  // TODO(AP): refactor
-    };
-#else
-    const InterleavedAddrGen<src0_is_dram> s = {.bank_base_address = src_addr, .page_size = stick_size};
-#endif
+
+    const auto s = get_interleaved_addr_gen<src0_is_dram, stick_size_is_power_of_two>(
+        src_addr, stick_size, log_base_2_of_page_size);
 
     uint64_t base_src_noc_addr[tile_height];
 
