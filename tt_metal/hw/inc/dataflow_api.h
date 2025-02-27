@@ -26,6 +26,7 @@
 #include "utils/utils.h"
 #include "debug/assert.h"
 #include "dev_msgs.h"
+#include "dataflow_api_common.h"
 #include "dataflow_api_addrgen.h"
 
 // clang-format off
