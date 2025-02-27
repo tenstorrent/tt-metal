@@ -154,11 +154,12 @@ void copy_sticks_async(
             uint32_t src_offset = src_local_idx * input_aligned_page_size;
 
             uint32_t src_addr = in_base_l1_addr + src_offset;
-            DPRINT << "src_offset: " << src_offset << " dst_offset: " << dst_offset << " nsticks: " << nsticks << "\n";
+            // DPRINT << "src_offset: " << src_offset << " dst_offset: " << dst_offset << " nsticks: " << nsticks <<
+            // "\n";
             for (uint16_t k = 0; k < nsticks; k++) {
                 const uint64_t dst_addr =
                     get_noc_addr(my_noc_x, my_noc_y, out_base_l1_addr + dst_offset + k * stick_nbytes);
-                DPRINT << "k: " << k << " src_addr: " << src_addr << " dst_addr: " << dst_addr << "\n";
+                // DPRINT << "k: " << k << " src_addr: " << src_addr << " dst_addr: " << dst_addr << "\n";
                 if (src_addr != dst_addr) {
                     noc_async_write(src_addr, dst_addr, stick_nbytes);
                 }
@@ -224,10 +225,10 @@ void kernel_main() {
         const uint64_t in_l1_addr = get_noc_addr(my_noc_x, my_noc_y, get_read_ptr(in_cb_id));
         uint64_t src_addr = in_l1_addr;
         uint64_t dst_addr = out_base_l1_addr;
-        DPRINT << "in_nsticks: " << in_nsticks << "\n";
-        DPRINT << "input_shard_0: " << input_shard_0 << "\n";
+        // DPRINT << "in_nsticks: " << in_nsticks << "\n";
+        // DPRINT << "input_shard_0: " << input_shard_0 << "\n";
         for (uint32_t i = 0; i < in_nsticks; ++i) {
-            DPRINT << "i: " << i << " src_addr: " << src_addr << " dst_addr: " << dst_addr << "\n";
+            // DPRINT << "i: " << i << " src_addr: " << src_addr << " dst_addr: " << dst_addr << "\n";
             noc_async_read(src_addr, dst_addr, stick_nbytes);
             src_addr += stick_nbytes;
             dst_addr += stick_nbytes;
@@ -283,6 +284,7 @@ void kernel_main() {
     }
 
     if constexpr (padding_config_cb_id) {
+        DPRINT << "PADDING COPY" << ENDL();
         const uint64_t my_semaphore_noc_addr = get_noc_addr(my_noc_x, my_noc_y, semaphore_addr);
         volatile tt_l1_ptr uint32_t* my_semaphore_noc_addr_ptr =
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(my_semaphore_noc_addr);
@@ -334,6 +336,6 @@ void kernel_main() {
     noc_async_write_barrier();
 
     if (remote_config_cb_id) {
-        tt::data_movement::common::print_bf16_pages(out_base_l1_addr, 32, 64);
+        // tt::data_movement::common::print_bf16_pages(out_base_l1_addr, 32, 64);
     }
 }

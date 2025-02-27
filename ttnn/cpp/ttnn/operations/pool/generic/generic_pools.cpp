@@ -155,7 +155,7 @@ Tensor Pool2DOp<pool_type>::invoke(
         output_tensor = ttnn::to_memory_config(output_tensor, memory_config.value(), std::nullopt);
     }
 
-    return output_tensor;
+    return haloed_tensor;
 }
 
 template class Pool2DOp<Pool2DType::MAX_POOL2D>;

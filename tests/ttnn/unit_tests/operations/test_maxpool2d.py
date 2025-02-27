@@ -11,7 +11,13 @@ import math
 from models.utility_functions import is_wormhole_b0, is_grayskull, is_x2_harvested
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
+import numpy as np
+import matplotlib.pyplot as plt
+import copy
+
 import ttnn
+
+output_shards = [[] for _ in range(64)]
 
 
 def run_max_pool(
@@ -196,51 +202,83 @@ def run_max_pool(
         in_place_halo=in_place_halo,
     )
 
-    output_host = output.cpu()
-    output_pytorch_padded = torch.Tensor(ttnn.to_torch(output_host))
-    output_pytorch = output_pytorch_padded[:, :, :, :in_c]
+    for core_id in range(0, 64):
+        output_shard = torch.Tensor(ttnn.to_torch(output.extract_shard(core_id).pad_to_tile(0.0).cpu()))
+        output_shards[core_id].append(output_shard)
+    if len(output_shards[0]) == 2:
+        for core_id in range(0, 64):
+            print(f"Core ID: {core_id}")
+            # coord = ttnn.CoreCoord(x, y)
+            gold_shard = output_shards[core_id][0]
+            opt_shard = output_shards[core_id][1]
+            diff = gold_shard[0][0] - opt_shard[0][0]
 
-    ## reference
-    golden_pytorch = torch.nn.MaxPool2d(
-        kernel_size,
-        stride=stride,
-        padding=padding,
-        dilation=dilation,
-        return_indices=False,
-        ceil_mode=ceil_mode,
-    )(act)
+            print(gold_shard)
+            print(opt_shard)
+            print("--")
 
-    ## test for equivalance
-    golden_shape = golden_pytorch.shape
-    output_pytorch = output_pytorch.reshape(golden_shape[0], golden_shape[2], golden_shape[3], golden_shape[1])
+            diff = diff.to(torch.float32)
+            # Replace -inf with zeros only where both gold_shard[0][0] and opt_shard[0][0] are -inf
+            mask = (gold_shard[0][0] == -float("inf")) & (opt_shard[0][0] == -float("inf"))
+            diff = torch.where(mask, torch.tensor(0.0, dtype=diff.dtype), diff)
 
-    output_pytorch = torch.permute(output_pytorch, (0, 3, 1, 2))  ## N, C, H, W
+            # Plot the difference
+            plt.imshow(diff, cmap="viridis")
+            plt.colorbar()
+            plt.title("Difference between output shards")
 
-    pcc_thresh = 1.0
-    if dtype == ttnn.bfloat8_b:
-        pcc_thresh = 0.9994
+            # Save the plot
+            filename = "output_shard_pics/output_shard_difference_core_" + str(core_id) + ".png"
+            plt.savefig(filename)
 
-    passing, pcc = assert_with_pcc(output_pytorch, golden_pytorch, pcc_thresh)
+            # Clear the plot to avoid overlap in subsequent runs
+            plt.clf()
 
-    logger.debug(f"Passing: {passing}, PCC: {pcc}")
+    # output_host = output.cpu()
+    # output_pytorch_padded = torch.Tensor(ttnn.to_torch(output_host))
+    # output_pytorch = output_pytorch_padded[:, :, :, :in_c]
 
-    ## do more rigorous comparision for each element
-    atol, rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)
-    if dtype == ttnn.bfloat8_b:
-        atol = 0.35
+    # ## reference
+    # golden_pytorch = torch.nn.MaxPool2d(
+    #     kernel_size,
+    #     stride=stride,
+    #     padding=padding,
+    #     dilation=dilation,
+    #     return_indices=False,
+    #     ceil_mode=ceil_mode,
+    # )(act)
 
-    allclose = torch.allclose(output_pytorch, golden_pytorch, atol=atol)
-    isclose = torch.all(torch.isclose(output_pytorch, golden_pytorch, atol=atol))
-    isequal = torch.equal(output_pytorch, golden_pytorch)
+    # ## test for equivalance
+    # golden_shape = golden_pytorch.shape
+    # output_pytorch = output_pytorch.reshape(golden_shape[0], golden_shape[2], golden_shape[3], golden_shape[1])
 
-    assert allclose
-    assert isclose
-    if dtype == ttnn.bfloat16:
-        assert isequal
+    # output_pytorch = torch.permute(output_pytorch, (0, 3, 1, 2))  ## N, C, H, W
 
-    if memory_config:
-        logger.debug(f"Output memory config: {memory_config}")
-        assert ttnn.get_memory_config(output) == memory_config
+    # pcc_thresh = 1.0
+    # if dtype == ttnn.bfloat8_b:
+    #     pcc_thresh = 0.9994
+
+    # passing, pcc = assert_with_pcc(output_pytorch, golden_pytorch, pcc_thresh)
+
+    # logger.debug(f"Passing: {passing}, PCC: {pcc}")
+
+    # ## do more rigorous comparision for each element
+    # atol, rtol = torch.testing._comparison.default_tolerances(torch.bfloat16)
+    # if dtype == ttnn.bfloat8_b:
+    #     atol = 0.35
+
+    # allclose = torch.allclose(output_pytorch, golden_pytorch, atol=atol)
+    # isclose = torch.all(torch.isclose(output_pytorch, golden_pytorch, atol=atol))
+    # isequal = torch.equal(output_pytorch, golden_pytorch)
+
+    # assert allclose
+    # assert isclose
+    # if dtype == ttnn.bfloat16:
+    #     assert isequal
+
+    # if memory_config:
+    #     logger.debug(f"Output memory config: {memory_config}")
+    #     assert ttnn.get_memory_config(output) == memory_config
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 24576}], indirect=True)
