@@ -87,7 +87,7 @@ void JitBuildEnv::init(
     switch (arch) {
         case ARCH::GRAYSKULL: common_flags = "-mcpu=tt-gs "; break;
         case ARCH::WORMHOLE_B0: common_flags = "-mcpu=tt-wh "; break;
-        case ARCH::BLACKHOLE: common_flags = "-mcpu=tt-bh "; break;
+        case ARCH::BLACKHOLE: common_flags = "-mcpu=tt-bh " + " -fno-rvtt-sfpu-replay "; break;
         default: TT_ASSERT(false, "Invalid arch"); break;
     }
     common_flags += "-std=c++17 -flto -ffast-math ";
@@ -330,7 +330,7 @@ JitBuildCompute::JitBuildCompute(const JitBuildEnv& env, const JitBuiltStateConf
     JitBuildState(env, build_config) {
     TT_ASSERT(this->core_id_ >= 0 && this->core_id_ < 3, "Invalid compute processor");
     this->lflags_ = env.lflags_;
-    this->cflags_ = env.cflags_ + " -fno-rvtt-sfpu-replay ";
+    this->cflags_ = env.cflags_;
     this->default_compile_opt_level_ = "O3";
     this->default_linker_opt_level_ = "O3";
     this->out_path_ = this->is_fw_ ? env_.out_firmware_root_ : env_.out_kernel_root_;
