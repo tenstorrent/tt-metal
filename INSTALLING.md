@@ -47,8 +47,7 @@ sudo ./install_dependencies.sh
 git clone https://github.com/tenstorrent/tt-kmd.git
 cd tt-kmd
 sudo dkms add .
-latest_version=$(./tools/current-version)
-sudo dkms install "tenstorrent/$latest_version"
+sudo dkms install "tenstorrent/$(./tools/current-version)"
 sudo modprobe tenstorrent
 cd ..
 ```
@@ -77,8 +76,7 @@ tt-flash --version
 - Download and install the latest TT-Firmware version:
 ```
 file_name=$(curl -s "https://raw.githubusercontent.com/tenstorrent/tt-firmware/main/latest.fwbundle")
-full_url="https://github.com/tenstorrent/tt-firmware/raw/main/$file_name"
-curl -L -o "$file_name" "$full_url"
+curl -L -o "$file_name" "https://github.com/tenstorrent/tt-firmware/raw/main/$file_name"
 tt-flash flash --fw-tar $file_name
 ```
 
