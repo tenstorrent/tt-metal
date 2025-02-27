@@ -22,20 +22,20 @@ void kernel_main() {
     constexpr bool src0_is_dram = get_compile_time_arg_val(3) == 1;
     constexpr bool src1_is_dram = get_compile_time_arg_val(4) == 1;
     constexpr bool src_stick_size_is_pow2 = get_compile_time_arg_val(5) == 1;
-#if (src_stick_size_is_pow2)
-    constexpr uint32_t src_log_base_2_of_page_size = get_compile_time_arg_val(6);
-    const InterleavedPow2AddrGen<src0_is_dram> s0 = {
-        .bank_base_address = input_addr_a,
-        .log_base_2_of_page_size = src_log_base_2_of_page_size  // TODO(AP): refactor
-    };
-    const InterleavedPow2AddrGen<src1_is_dram> s1 = {
-        .bank_base_address = input_addr_b,
-        .log_base_2_of_page_size = src_log_base_2_of_page_size  // TODO(AP): refactor
-    };
-#else
-    const InterleavedAddrGen<src0_is_dram> s0 = {.bank_base_address = input_addr_a, .page_size = stick_size};
-    const InterleavedAddrGen<src1_is_dram> s1 = {.bank_base_address = input_addr_b, .page_size = stick_size};
-#endif
+    if constexpr (src_stick_size_is_pow2) {
+        constexpr uint32_t src_log_base_2_of_page_size = get_compile_time_arg_val(6);
+        const InterleavedPow2AddrGen<src0_is_dram> s0 = {
+            .bank_base_address = input_addr_a,
+            .log_base_2_of_page_size = src_log_base_2_of_page_size  // TODO(AP): refactor
+        };
+        const InterleavedPow2AddrGen<src1_is_dram> s1 = {
+            .bank_base_address = input_addr_b,
+            .log_base_2_of_page_size = src_log_base_2_of_page_size  // TODO(AP): refactor
+        };
+    } else {
+        const InterleavedAddrGen<src0_is_dram> s0 = {.bank_base_address = input_addr_a, .page_size = stick_size};
+        const InterleavedAddrGen<src1_is_dram> s1 = {.bank_base_address = input_addr_b, .page_size = stick_size};
+    }
 
     const InterleavedAddrGen<batch_ids_is_dram> batchAddr = {
         .bank_base_address = batch_ids_addr, .page_size = batch_id_size << 2};

@@ -29,16 +29,16 @@ void kernel_main() {
 
     constexpr bool stick_size_is_power_of_two = get_compile_time_arg_val(2) == 1;
 
-#if (stick_size_is_power_of_two)
-    constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(3);
-    const InterleavedPow2AddrGen<dst_is_dram> s = {
-        .bank_base_address = dst_addr, .log_base_2_of_page_size = log_base_2_of_page_size};
-#else
-    const InterleavedAddrGen<dst_is_dram> s = {
-        .bank_base_address = dst_addr,
-        .page_size = dst_page_size,
-    };
-#endif
+    if constexpr (stick_size_is_power_of_two) {
+        constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(3);
+        const InterleavedPow2AddrGen<dst_is_dram> s = {
+            .bank_base_address = dst_addr, .log_base_2_of_page_size = log_base_2_of_page_size};
+    } else {
+        const InterleavedAddrGen<dst_is_dram> s = {
+            .bank_base_address = dst_addr,
+            .page_size = dst_page_size,
+        };
+    }
 
     auto dst_noc_addr = NOC_XY_ADDR(NOC_X(my_x[0]), NOC_Y(my_y[0]), scratch_addr);
 
