@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 #include <optional>
-#include <lightmetal_binary.hpp>
+#include <tt-metalium/lightmetal_binary.hpp>
 
 #include <tt-metalium/device.hpp>
 
