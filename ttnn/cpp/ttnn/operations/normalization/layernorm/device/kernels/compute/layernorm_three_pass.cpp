@@ -18,13 +18,32 @@
 
 ALWI void ACQ() { acquire_dst(); }
 ALWI void REL() { release_dst(); }
+void tile_regs_commit_then_wait() {
+    tile_regs_commit();
+    tile_regs_wait();
+}
 
 namespace NAMESPACE {
+
 template <
     EltwiseBinaryType eltwise_binary_type = ELWADD,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
     BroadcastType b_type = BroadcastType::NONE>
-ALWI void binary_dest_reuse_tiles_init_custom(uint32_t icb0) {
+void Processes_blk_from_cb(uint32_t icb0, uint32_t blk) {
+    // Created this function since, binary size was getting too large
+    cb_wait_front(icb0, blk);
+    binary_dest_reuse_tiles_init_custom<eltwise_binary_type, binary_reuse_dest, b_type>(icb0);
+    for (uint32_t j = 0; j < blk; j++) {
+        binary_dest_reuse_tiles_custom<eltwise_binary_type, binary_reuse_dest, b_type>(icb0, j, j);
+    }
+    cb_pop_front(icb0, blk);
+}
+
+template <
+    EltwiseBinaryType eltwise_binary_type = ELWADD,
+    EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
+    BroadcastType b_type = BroadcastType::NONE>
+void binary_dest_reuse_tiles_init_custom(uint32_t icb0) {
     UNPACK((llk_unpack_A_init<b_type, true, binary_reuse_dest>(false, false, icb0)));
     MATH((llk_math_eltwise_binary_init<eltwise_binary_type, NONE, MATH_FIDELITY, binary_reuse_dest>(false, false)));
 }
@@ -32,7 +51,7 @@ template <
     EltwiseBinaryType eltwise_binary_type = ELWADD,
     EltwiseBinaryReuseDestType binary_reuse_dest = EltwiseBinaryReuseDestType::NONE,
     BroadcastType b_type = BroadcastType::NONE>
-ALWI void binary_dest_reuse_tiles_custom(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile_index) {
+void binary_dest_reuse_tiles_custom(uint32_t in_cb_id, uint32_t in_tile_index, uint32_t dst_tile_index) {
     UNPACK((llk_unpack_A<BroadcastType::NONE, true, binary_reuse_dest>(in_cb_id, in_tile_index)));
     MATH((llk_math_eltwise_binary<eltwise_binary_type, NONE, MATH_FIDELITY, binary_reuse_dest, DST_ACCUM_MODE>(
         in_tile_index, in_tile_index, dst_tile_index)));
@@ -93,9 +112,6 @@ void MAIN {
     for (uint32_t ncht = 0; ncht < NCHt; ncht++) {
         constexpr int onetile = 1;
         constexpr int dst0 = 0;
-        constexpr int dst1 = 1;
-        constexpr int dst2 = 2;
-
         /*
          * X + Y
          */
@@ -112,8 +128,7 @@ void MAIN {
             for (uint32_t j = 0; j < blk; j++) {
                 add_tiles(cb_in, cb_inb, j, j, j);
             }
-            tile_regs_commit();
-            tile_regs_wait();
+            tile_regs_commit_then_wait();
             for (uint32_t j = 0; j < blk; j++) {
                 pack_tile(j, cb_x);
             }
@@ -132,6 +147,7 @@ void MAIN {
             tile_regs_acquire();
             if (wt > 0) {
                 reconfig_data_format_srca(cb_ex);
+                cb_wait_front(cb_ex, onetile);
                 binary_dest_reuse_tiles_init_custom<ELWADD, EltwiseBinaryReuseDestType::NONE, BroadcastType::NONE>(
                     cb_ex);
                 binary_dest_reuse_tiles_custom<ELWADD, EltwiseBinaryReuseDestType::NONE, BroadcastType::NONE>(
@@ -144,12 +160,11 @@ void MAIN {
             for (uint32_t j = 0; j < blk; j++) {
                 reduce_tile(cb_x, cb_scaler, j, scaler0, dst0);
             }
-            tile_regs_commit();
-            tile_regs_wait();
+            tile_regs_commit_then_wait();
             cb_reserve_back(cb_ex, onetile);
             pack_tile(1, cb_ex);
             reduce_revert_delta(cb_ex);
-            cb_push_back(cb_ex, 1);
+            cb_push_back(cb_ex, onetile);
             tile_regs_release();
             cb_pop_front(cb_x, blk);
         }
@@ -166,7 +181,7 @@ void MAIN {
             reconfig_data_format(cb_x, cb_ex);
             pack_reconfig_data_format(cb_xmm);
 
-            cb_wait_front(cb_ex, 1);
+            cb_wait_front(cb_ex, onetile);
             sub_bcast_cols_init_short(cb_x, cb_ex);
             // x-E[x]
             for (uint32_t j = 0; j < blk; j++) {
@@ -178,8 +193,7 @@ void MAIN {
             for (uint32_t j = 0; j < blk; j++) {
                 square_tile(j);
             }
-            tile_regs_commit();
-            tile_regs_wait();
+            tile_regs_commit_then_wait();
             for (uint32_t j = 0; j < blk; j++) {
                 pack_tile(j, cb_xmm);
             }
@@ -197,12 +211,13 @@ void MAIN {
                 cb_wait_front(cb_ex2, 1);
                 reduce_init_delta<false>(cb_ex2, cb_scaler, cb_ex2);
                 reduce_tile(cb_ex2, cb_scaler, 0, scaler0, dst0);
-                cb_pop_front(cb_ex2, 1);
+                cb_pop_front(cb_ex2, onetile);
             }
 
             reconfig_data_format(cb_xmm, cb_scaler);
             pack_reconfig_data_format(cb_ex2);
 
+            cb_wait_front(cb_xmm, blk);
             reduce_init_delta<false>(cb_xmm, cb_scaler, cb_ex2);
             // ∑(x-E[x])^2
             for (uint32_t j = 0; j < blk; j++) {
@@ -210,14 +225,13 @@ void MAIN {
             }
             cb_pop_front(cb_xmm, blk);
 
-            tile_regs_commit();
-            tile_regs_wait();
+            tile_regs_commit_then_wait();
 
             pack_tile(dst0, cb_ex2);
             tile_regs_release();
 
-            cb_reserve_back(cb_ex2, 1);
-            cb_push_back(cb_ex2, 1);
+            cb_reserve_back(cb_ex2, onetile);
+            cb_push_back(cb_ex2, onetile);
 
             reduce_revert_delta(cb_ex2);
         }
@@ -236,8 +250,7 @@ void MAIN {
         recip_tile_init();
         recip_tile(dst0);
 
-        tile_regs_commit();
-        tile_regs_wait();
+        tile_regs_commit_then_wait();
 
         pack_tile(dst0, cb_ex2pe);
         tile_regs_release();
@@ -266,43 +279,26 @@ void MAIN {
             }
             cb_pop_front(cb_x, blk);
 
-            binary_dest_reuse_tiles_init_custom<ELWMUL, EltwiseBinaryReuseDestType::NONE, BroadcastType::COL>(cb_ex2pe);
-            for (uint32_t j = 0; j < blk; j++) {
-                // continue to mult with var
-                binary_dest_reuse_tiles_custom<ELWMUL, EltwiseBinaryReuseDestType::NONE, BroadcastType::COL>(
-                    cb_ex2pe, j, j);
-            }
-            if (do_gamma) {
+            Processes_blk_from_cb<ELWMUL, EltwiseBinaryReuseDestType::NONE, BroadcastType::COL>(cb_beta, blk);
+
+            constexpr if (do_gamma) {
                 cb_wait_front(cb_gamma, blk);
-                binary_dest_reuse_tiles_init_custom<ELWMUL, EltwiseBinaryReuseDestType::NONE, BroadcastType::ROW>(
-                    cb_gamma);
-                for (uint32_t j = 0; j < blk; j++) {
-                    binary_dest_reuse_tiles_custom<ELWMUL, EltwiseBinaryReuseDestType::NONE, BroadcastType::ROW>(
-                        cb_gamma, j, j);
-                }
+                Processes_blk_from_cb<ELWMUL, EltwiseBinaryReuseDestType::NONE, BroadcastType::ROW>(cb_gamma, blk);
                 cb_pop_front(cb_gamma, blk);
             }
             if (do_beta) {
                 cb_wait_front(cb_beta, blk);
-                binary_dest_reuse_tiles_init_custom<ELWADD, EltwiseBinaryReuseDestType::NONE, BroadcastType::ROW>(
-                    cb_beta);
-                for (uint32_t j = 0; j < blk; j++) {
-                    binary_dest_reuse_tiles_custom<ELWADD, EltwiseBinaryReuseDestType::NONE, BroadcastType::ROW>(
-                        cb_beta, j, j);
-                }
+                Processes_blk_from_cb<ELWADD, EltwiseBinaryReuseDestType::NONE, BroadcastType::ROW>(cb_beta, blk);
                 cb_pop_front(cb_beta, blk);
             }
-            // DPRINT << wt << "Before pack reconfig!\n\n\n" << ENDL();
-            // DPRINT << wt << "After pack reconfig!\n\n\n" << ENDL();
-            // DPRINT << wt << "Before cb_out reserve!\n\n\n" << ENDL();
             cb_reserve_back(cb_out, blk);
-            tile_regs_commit();
-            tile_regs_wait();
+            tile_regs_commit_then_wait();
             for (uint32_t j = 0; j < blk; j++) {
                 pack_tile(j, cb_out);
             }
             tile_regs_release();
             cb_push_back(cb_out, blk);
+            //            DPRINT << wt << "Before cb_out reserve!\n\n\n" << ENDL();
         }
     }  // NCHt loop
     // cb_pop_front(cb_scaler, 1); // optional for correctness
