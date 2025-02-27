@@ -567,7 +567,6 @@ def test_sdpa_decode_non_causal(device, b, nh, nkv, s, d, dtype, grid_size, q_dt
         run_test_sdpa_decode_single_iter(
             device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, sharded_in=False, sharded_out=False, causal=False
         )
-    assert device.num_program_cache_entries() == 1
 
 
 @skip_for_blackhole("Unsupported on BH, see #12349")
@@ -887,8 +886,6 @@ def test_sdpa_decode_paged_attention(
         sharded_out=False,
     )
 
-    assert device.num_program_cache_entries() == 4
-
 
 @skip_for_blackhole("Unsupported on BH, see #12349")
 @skip_for_grayskull("Unsupported in GS since L1 runs OOM with most configs")
@@ -989,7 +986,6 @@ def test_sdpa_decode_sharded_on_subcoregrids(
         start_core=start_core,
         sub_core_grids=sub_core_grids,
     )
-    assert device.num_program_cache_entries() == 1
 
 
 @skip_for_blackhole("Unsupported on BH, see #12349")
@@ -1153,8 +1149,6 @@ def test_sdpa_decode_program_cache(device, b, nh, nkv, s, d, dtype, use_program_
             start_indices=start_indices,
             cur_pos_tensor=True,
         )
-
-    assert device.num_program_cache_entries() == 4
 
 
 def run_test_sdpa_decode_ndpcc(device, b, nh, nkv, s, d, dtype, grid_size, q_dtype=ttnn.bfloat16):

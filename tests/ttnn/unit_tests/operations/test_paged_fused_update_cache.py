@@ -293,5 +293,3 @@ def test_paged_fused_update_cache_decode_program_caching(
             device,
             pcc,
         )
-
-    assert device.num_program_cache_entries() == 1

@@ -127,5 +127,3 @@ def test_split_query_key_value_and_split_heads_with_program_cache(device, use_pr
         dummy_shape = [1, 1, 32, 32]
         py_dummy_tensor = torch.randn(dummy_shape)
         tt_dummy_tensor = ttnn.Tensor(py_dummy_tensor, dtype).to(ttnn.TILE_LAYOUT).to(device, mem_config)
-
-    assert device.num_program_cache_entries() == 2

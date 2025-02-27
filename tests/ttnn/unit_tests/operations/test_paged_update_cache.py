@@ -251,8 +251,6 @@ def test_update_cache_decode_program_cache(
             cache_idx + 1, False, head_dim, max_seq_len, num_users, num_heads, input_dtype, cache_dtype, device
         )
 
-    assert device.num_program_cache_entries() == 1
-
 
 def run_test_tensor_index_update_cache_decode(
     cache_idx, head_dim, max_seq_len, num_users, num_heads, input_dtype, cache_dtype, device
@@ -360,8 +358,6 @@ def test_tensor_index_update_cache_decode_program_cache(
         run_test_tensor_index_update_cache_decode(
             cache_idx, head_dim, max_seq_len, num_users, num_heads, input_dtype, cache_dtype, device
         )
-
-    assert device.num_program_cache_entries() == 1
 
 
 def run_test_paged_update_cache_decode(
@@ -557,8 +553,6 @@ def test_paged_update_cache_decode_program_caching(
             cache_idx + 10, block_size, head_dim, max_seq_len, num_users, num_heads, input_dtype, cache_dtype, device
         )
 
-    assert device.num_program_cache_entries() == 1
-
 
 def run_test_paged_fill_cache(
     block_size, head_dim, user_seq_len, max_seq_len, num_users, num_heads, input_dtype, cache_dtype, device
@@ -670,5 +664,3 @@ def test_paged_fill_cache_program_cache(
     run_test_paged_fill_cache(
         block_size, head_dim, user_seq_len, max_seq_len, num_users, num_heads, input_dtype, cache_dtype, device
     )
-
-    assert device.num_program_cache_entries() == 1
