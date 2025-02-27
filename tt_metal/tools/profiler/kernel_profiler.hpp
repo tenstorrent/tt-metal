@@ -16,7 +16,6 @@
 
 #include "hostdevcommon/profiler_common.h"
 #include "risc_attribs.h"
-#include "dataflow_api_addrgen.h"
 
 #include <dev_msgs.h>
 

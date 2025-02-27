@@ -4,7 +4,8 @@
 
 #pragma once
 
-#if defined(PROFILE_NOC_EVENTS)
+#if defined(PROFILE_NOC_EVENTS) && (defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC) || \
+                                    defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC))
 
 #include <utility>
 #include <tuple>
@@ -68,8 +69,8 @@ FORCE_INLINE void recordNocEvent(
     ev_md.noc_type =
         (noc == 1) ? KernelProfilerNocEventMetadata::NocType::NOC_1 : KernelProfilerNocEventMetadata::NocType::NOC_0;
 
-    kernel_profiler::flush_to_dram_if_full<true>();
-    kernel_profiler::timeStampedData<STATIC_ID, false>(ev_md.asU64());
+    kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>();
+    kernel_profiler::timeStampedData<STATIC_ID, kernel_profiler::DoingDispatch::DISPATCH>(ev_md.asU64());
 }
 
 template <uint32_t STATIC_ID = 12345>
@@ -94,7 +95,8 @@ FORCE_INLINE void recordMulticastNocEvent(
     ev_md.noc_type =
         (noc == 1) ? KernelProfilerNocEventMetadata::NocType::NOC_1 : KernelProfilerNocEventMetadata::NocType::NOC_0;
 
-    kernel_profiler::timeStampedData<STATIC_ID, false>(ev_md.asU64());
+    kernel_profiler::flush_to_dram_if_full<kernel_profiler::DoingDispatch::DISPATCH>();
+    kernel_profiler::timeStampedData<STATIC_ID, kernel_profiler::DoingDispatch::DISPATCH>(ev_md.asU64());
 }
 
 template <bool DRAM, typename NocIDU32>

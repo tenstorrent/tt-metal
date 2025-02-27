@@ -34,6 +34,8 @@ struct alignas(uint64_t) KernelProfilerNocEventMetadata {
         WRITE_BARRIER_WITH_TRID,
         WRITE_FLUSH,
 
+        FULL_BARRIER,
+
         ATOMIC_BARRIER,
         SEMAPHORE_INC,
         SEMAPHORE_WAIT,
