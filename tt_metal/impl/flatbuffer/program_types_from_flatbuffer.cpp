@@ -90,7 +90,7 @@ std::vector<SubDeviceId> from_flatbuffer(const flatbuffers::Vector<uint8_t>* fb_
     std::vector<SubDeviceId> sub_device_ids;
     sub_device_ids.reserve(fb_sub_device_ids->size());
     for (size_t i = 0; i < sub_device_ids.size(); ++i) {
-        sub_device_ids[i] = SubDeviceId{(*fb_sub_device_ids)[i]};
+        sub_device_ids.push_back(SubDeviceId{(*fb_sub_device_ids)[i]});
     }
 
     return sub_device_ids;
