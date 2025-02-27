@@ -11,6 +11,7 @@
 #include "core/tt_tensor_utils.hpp"
 #include "cpu_initializers.hpp"
 namespace ttml::init {
+
 void uniform_init(ttml::autograd::TensorPtr& t, const ttnn::Shape& shape, UniformRange range) {
     auto* device = &autograd::ctx().get_device();
     assert(device);

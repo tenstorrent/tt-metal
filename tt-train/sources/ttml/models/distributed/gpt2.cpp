@@ -6,13 +6,18 @@
 
 #include "autograd/graph_utils.hpp"
 #include "autograd/tensor.hpp"
+#include "core/distributed_mapping.hpp"
 #include "core/scoped.hpp"
+#include "core/tt_tensor_utils.hpp"
 #include "init/tensor_initializers.hpp"
+#include "modules/distributed/gpt_block.hpp"
+#include "modules/distributed/linear.hpp"
+#include "modules/gpt_block.hpp"
 #include "modules/positional_embeddings.hpp"
 #include "ops/binary_ops.hpp"
 #include "ops/unary_ops.hpp"
 
-namespace ttml::models::gpt2 {
+namespace ttml::models::distributed::gpt2 {
 
 namespace {
 
@@ -60,12 +65,19 @@ autograd::TensorPtr memory_efficient_runner(
     return out;
 }
 
-void weights_initialization(Transformer& model) {
+void weights_initialization(DistributedTransformer& model) {
     auto params = model.parameters();
     for (auto& [name, tensor_ptr] : params) {
         const auto& tensor = tensor_ptr->get_value();
         if (name.find("weight") != std::string::npos) {
-            init::normal_init(tensor_ptr, tensor.get_logical_shape(), {0.F, 0.02F});
+            auto tensor_shape = tensor.get_logical_shape();
+            auto* device = &autograd::ctx().get_device();
+            auto num_devices = static_cast<uint32_t>(device->num_devices());
+            tensor_shape[0] *= num_devices;
+            core::XTensorToMeshVariant<float> shard_composer = core::ShardXTensorToMesh<float>(device->shape(), 0);
+            auto weight_xtensor = init::normal_init(tensor_shape, {0.F, 0.02F});
+            tensor_ptr->set_value(
+                core::from_xtensor<float, DataType::BFLOAT16>(weight_xtensor, device, shard_composer));
         } else if (name.find("bias") != std::string::npos) {
             init::constant_init(tensor_ptr, tensor.get_logical_shape(), 0.F);
         }
@@ -74,7 +86,7 @@ void weights_initialization(Transformer& model) {
 
 }  // namespace
 
-Transformer::Transformer(const TransformerConfig& config) {
+DistributedTransformer::DistributedTransformer(const TransformerConfig& config) {
     uint32_t vocab_size = config.vocab_size;
     uint32_t max_sequence_length = config.max_sequence_length;
     uint32_t embedding_dim = config.embedding_dim;
@@ -85,7 +97,7 @@ Transformer::Transformer(const TransformerConfig& config) {
     auto use_composite_layernorm = config.experimental.use_composite_layernorm;
     runner_type = config.runner_type;
 
-    fmt::print("Transformer configuration:\n");
+    fmt::print("DistributedTransformer configuration:\n");
     fmt::print("    Vocab size: {}\n", vocab_size);
     fmt::print("    Max sequence length: {}\n", max_sequence_length);
     fmt::print("    Embedding dim: {}\n", embedding_dim);
@@ -136,11 +148,12 @@ Transformer::Transformer(const TransformerConfig& config) {
     pos_emb = create_positional_embedding();
     blocks.reserve(num_blocks);
     for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
-        blocks.push_back(
-            std::make_shared<ttml::modules::GPTBlock>(embedding_dim, num_heads, dropout_prob, use_composite_layernorm));
+        blocks.push_back(std::make_shared<ttml::modules::distributed::DistributedGPTBlock>(
+            embedding_dim, num_heads, dropout_prob, use_composite_layernorm));
     }
     ln_fc = std::make_shared<ttml::modules::LayerNormLayer>(embedding_dim, use_composite_layernorm);
-    fc = std::make_shared<ttml::modules::LinearLayer>(embedding_dim, vocab_size, /* bias */ false);
+    fc = std::make_shared<ttml::modules::distributed::ColumnParallelLinear>(
+        embedding_dim, vocab_size, /* bias */ false, /* gather_output */ true);
 
     create_name("transformer");
     register_module(tok_emb, "tok_emb");
@@ -152,14 +165,13 @@ Transformer::Transformer(const TransformerConfig& config) {
     register_module(fc, "fc");
 
     if (config.weight_tying == WeightTyingType::Enabled) {
-        // tie weights between embedding and fc
-        tok_emb->set_weight(fc->get_weight());
+        throw std::logic_error("Weight tying is not supported yet for DistributedTransformer!");
     }
 
     weights_initialization(*this);
 }
 
-ttml::autograd::TensorPtr Transformer::operator()(
+ttml::autograd::TensorPtr DistributedTransformer::operator()(
     const ttml::autograd::TensorPtr& x, const ttml::autograd::TensorPtr& mask) {
     auto tok_emb_out = (*tok_emb)(x);
     auto out = (*pos_emb)(tok_emb_out);
@@ -178,79 +190,13 @@ ttml::autograd::TensorPtr Transformer::operator()(
     return log_softmax;
 }
 
-RunnerType read_runner_type(const YAML::Node& config) {
-    auto runner_type_str = config["runner_type"].as<std::string>("default");
-    if (runner_type_str == "default") {
-        return RunnerType::Default;
-    } else if (runner_type_str == "memory_efficient") {
-        return RunnerType::MemoryEfficient;
-    } else {
-        throw std::runtime_error(fmt::format(
-            "Unknown runner type: {}. Supported runner types [default, memory_efficient]", runner_type_str));
-    }
+std::shared_ptr<DistributedTransformer> create(const TransformerConfig& config) {
+    return std::make_shared<DistributedTransformer>(config);
 }
 
-PositionalEmbeddingType read_positional_embedding_type(const YAML::Node& config) {
-    auto positional_embedding_str = config["positional_embedding_type"].as<std::string>("trainable");
-    if (positional_embedding_str == "trainable") {
-        return PositionalEmbeddingType::Trainable;
-    } else if (positional_embedding_str == "fixed") {
-        return PositionalEmbeddingType::Fixed;
-    } else {
-        throw std::runtime_error(fmt::format(
-            "Unknown positional embedding type: {}. Supported positional embedding types [trainable, fixed]",
-            positional_embedding_str));
-    }
+std::shared_ptr<DistributedTransformer> create(const YAML::Node& config) {
+    TransformerConfig transformer_config = models::gpt2::read_config(config);
+    return std::make_shared<DistributedTransformer>(transformer_config);
 }
 
-WeightTyingType read_weight_tying_type(const YAML::Node& config) {
-    auto weight_tying_str = config["weight_tying"].as<std::string>("disabled");
-    if (weight_tying_str == "disabled") {
-        return WeightTyingType::Disabled;
-    } else if (weight_tying_str == "enabled") {
-        return WeightTyingType::Enabled;
-    } else {
-        throw std::runtime_error(fmt::format(
-            "Unknown weight tying type: {}. Supported weight tying types [disabled, enabled]", weight_tying_str));
-    }
-}
-
-TransformerConfig read_config(const YAML::Node& config) {
-    TransformerConfig transformer_config;
-    transformer_config.num_heads = config["num_heads"].as<uint32_t>();
-    transformer_config.embedding_dim = config["embedding_dim"].as<uint32_t>();
-    transformer_config.dropout_prob = config["dropout_prob"].as<float>();
-    transformer_config.num_blocks = config["num_blocks"].as<uint32_t>();
-    transformer_config.vocab_size = config["vocab_size"].as<uint32_t>();
-    transformer_config.max_sequence_length = config["max_sequence_length"].as<uint32_t>();
-    transformer_config.positional_embedding_type = read_positional_embedding_type(config);
-    transformer_config.runner_type = read_runner_type(config);
-    transformer_config.weight_tying = read_weight_tying_type(config);
-
-    if (auto experimental_config = config["experimental"]) {
-        transformer_config.experimental.use_composite_layernorm =
-            experimental_config["use_composite_layernorm"].as<bool>();
-    }
-    return transformer_config;
-}
-
-YAML::Node write_config(const TransformerConfig& mlp_config) {
-    YAML::Node config;
-    config["num_heads"] = mlp_config.num_heads;
-    config["embedding_dim"] = mlp_config.embedding_dim;
-    config["dropout_prob"] = mlp_config.dropout_prob;
-    config["num_blocks"] = mlp_config.num_blocks;
-    config["vocab_size"] = mlp_config.vocab_size;
-    config["max_sequence_length"] = mlp_config.max_sequence_length;
-    return config;
-}
-
-std::shared_ptr<Transformer> create(const TransformerConfig& config) {
-    return std::make_shared<Transformer>(config);
-}
-std::shared_ptr<Transformer> create(const YAML::Node& config) {
-    TransformerConfig transformer_config = read_config(config);
-    return std::make_shared<Transformer>(transformer_config);
-}
-
-}  // namespace ttml::models::gpt2
+}  // namespace ttml::models::distributed::gpt2
