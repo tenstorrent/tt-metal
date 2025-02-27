@@ -170,7 +170,7 @@ def run_generate(
                 attention_mask=None,
                 parameters=parameters.decoder,
                 device=device,
-                decode_pos=i if kv_cache else None,
+                decode_pos=(i + 1) if kv_cache else None,
                 create_attention_mask=(not kv_cache),
             )
             logger.info(f"Decode iter time: {time.time() - start_iter}")
