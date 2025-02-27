@@ -11,10 +11,10 @@
 
 #include "device.hpp"
 
-#include "mesh_common.hpp"
 #include "mesh_config.hpp"
 #include "mesh_coord.hpp"
 #include "mesh_device_view.hpp"
+#include "mesh_trace_id.hpp"
 #include "sub_device_types.hpp"
 #include "span.hpp"
 
@@ -65,11 +65,14 @@ private:
     std::unique_ptr<SubDeviceManagerTracker> sub_device_manager_tracker_;
     std::unordered_map<MeshTraceId, std::shared_ptr<MeshTraceBuffer>> trace_buffer_pool_;
     uint32_t trace_buffers_size_ = 0;
+    std::recursive_mutex push_work_mutex_;
     // This is a reference device used to query properties that are the same for all devices in the mesh.
     IDevice* reference_device() const;
 
     // Returns the devices in row-major order for the new mesh shape
     std::vector<IDevice*> get_row_major_devices(const MeshShape& new_shape) const;
+
+    std::shared_ptr<MeshTraceBuffer>& create_mesh_trace(const MeshTraceId& trace_id);
 
 public:
     MeshDevice(
@@ -150,9 +153,9 @@ public:
     // MeshTrace Internal APIs - these should be used to deprecate the single device backed trace APIs
     void begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id);
     void end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id);
+    void replay_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id, bool blocking);
     void release_mesh_trace(const MeshTraceId& trace_id);
     std::shared_ptr<MeshTraceBuffer> get_mesh_trace(const MeshTraceId& trace_id);
-    std::shared_ptr<MeshTraceBuffer>& create_mesh_trace(const MeshTraceId& trace_id);
     uint32_t get_trace_buffers_size() const override;
     void set_trace_buffers_size(uint32_t size) override;
 

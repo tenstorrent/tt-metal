@@ -357,8 +357,13 @@ std::vector<std::shared_ptr<MeshDevice>> MeshDevice::get_submeshes() const { ret
 std::ostream& operator<<(std::ostream& os, const MeshDevice& mesh_device) { return os << mesh_device.to_string(); }
 
 void MeshDevice::enable_async(bool enable) {
-    for (auto device : this->get_devices()) {
-        device->enable_async(enable);
+    auto devices = this->get_devices();
+    if (enable && devices.size() == 1) {
+        tt::log_warning("Async mode is always disabled for a single device, ignoring enable_async call");
+        return;
+    }
+    for (auto device : devices) {
+        dynamic_cast<Device*>(device)->force_enable_async(enable);
     }
 }
 
@@ -611,6 +616,10 @@ void MeshDevice::end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) {
     MeshTrace::populate_mesh_buffer(*(mesh_command_queues_[cq_id]), trace_buffer);
 }
 
+void MeshDevice::replay_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id, bool blocking) {
+    mesh_command_queues_[cq_id]->enqueue_trace(trace_id, blocking);
+}
+
 std::shared_ptr<TraceBuffer> MeshDevice::get_trace(uint32_t tid) {
     TT_THROW("get_trace() is not supported on MeshDevice - use individual devices instead");
     return reference_device()->get_trace(tid);
@@ -675,6 +684,8 @@ WorkExecutorMode MeshDevice::get_worker_mode() { return WorkExecutorMode::SYNCHR
 bool MeshDevice::is_worker_queue_empty() const { return true; }
 void MeshDevice::push_work(std::function<void()> work, bool blocking) {
     // Execute inline synchronously.
+    // Using a lock to provide the same call serialization guarantee as an async single device scheduling.
+    std::lock_guard lock(push_work_mutex_);
     work();
 }
 program_cache::detail::ProgramCache& MeshDevice::get_program_cache() { return reference_device()->get_program_cache(); }
