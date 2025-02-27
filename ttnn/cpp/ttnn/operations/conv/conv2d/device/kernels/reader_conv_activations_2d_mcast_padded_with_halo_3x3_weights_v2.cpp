@@ -159,43 +159,43 @@ void kernel_main() {
 
         for (uint32_t bh = 0; bh < act_block_h_datums / 2; bh++) {
             uint32_t two_reader_indices = packed_reader_indices_ptr[reader_idx];
-#if DILATION_W == 1
-            read_channels(
-                l1_write_addr_act,
-                act_l1_read_addr,
-                two_reader_indices & 0xffff,
-                conv_act_c_read_bytes,
-                coalesced_read_bytes,
-                stride_h_bytes);
-            if constexpr (act_block_w_extra_align_bytes) {
-                l1_write_addr_act += act_block_w_extra_align_bytes;
+            if constexpr (DILATION_W == 1) {
+                read_channels(
+                    l1_write_addr_act,
+                    act_l1_read_addr,
+                    two_reader_indices & 0xffff,
+                    conv_act_c_read_bytes,
+                    coalesced_read_bytes,
+                    stride_h_bytes);
+                if constexpr (act_block_w_extra_align_bytes) {
+                    l1_write_addr_act += act_block_w_extra_align_bytes;
+                }
+                read_channels(
+                    l1_write_addr_act,
+                    act_l1_read_addr,
+                    two_reader_indices >> 16,
+                    conv_act_c_read_bytes,
+                    coalesced_read_bytes,
+                    stride_h_bytes);
+                if constexpr (act_block_w_extra_align_bytes) {
+                    l1_write_addr_act += act_block_w_extra_align_bytes;
+                }
+            } else {
+                read_dilated_channels<weight_size_h, weight_size_w>(
+                    l1_write_addr_act,
+                    act_l1_read_addr,
+                    two_reader_indices & 0xffff,
+                    conv_act_c_read_bytes,
+                    stride_h_bytes,
+                    stride_w_bytes);
+                read_dilated_channels<weight_size_h, weight_size_w>(
+                    l1_write_addr_act,
+                    act_l1_read_addr,
+                    two_reader_indices >> 16,
+                    conv_act_c_read_bytes,
+                    stride_h_bytes,
+                    stride_w_bytes);
             }
-            read_channels(
-                l1_write_addr_act,
-                act_l1_read_addr,
-                two_reader_indices >> 16,
-                conv_act_c_read_bytes,
-                coalesced_read_bytes,
-                stride_h_bytes);
-            if constexpr (act_block_w_extra_align_bytes) {
-                l1_write_addr_act += act_block_w_extra_align_bytes;
-            }
-#else
-            read_dilated_channels<weight_size_h, weight_size_w>(
-                l1_write_addr_act,
-                act_l1_read_addr,
-                two_reader_indices & 0xffff,
-                conv_act_c_read_bytes,
-                stride_h_bytes,
-                stride_w_bytes);
-            read_dilated_channels<weight_size_h, weight_size_w>(
-                l1_write_addr_act,
-                act_l1_read_addr,
-                two_reader_indices >> 16,
-                conv_act_c_read_bytes,
-                stride_h_bytes,
-                stride_w_bytes);
-#endif
             reader_idx++;
         }
         // incrementing num issued in one shot is actually slower
