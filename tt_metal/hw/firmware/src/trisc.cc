@@ -76,6 +76,9 @@ constexpr bool cb_init_write = false;
 using namespace ckernel;
 
 int main(int argc, char *argv[]) {
+    // Comment out disable_gathering to introduce a #18094 hang
+    disable_gathering();
+
     configure_l1_data_cache();
     DIRTY_STACK_MEMORY();
     WAYPOINT("I");

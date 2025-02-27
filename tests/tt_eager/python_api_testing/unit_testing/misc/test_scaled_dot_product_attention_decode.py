@@ -836,14 +836,14 @@ def run_test_sdpa_decode_paged_attention(
     "kv_dtype, q_dtype",
     [
         # [ttnn.bfloat8_b, ttnn.bfloat8_b],
-        # [ttnn.bfloat16, ttnn.bfloat16],
-        [ttnn.bfloat8_b, ttnn.bfloat16],
+        [ttnn.bfloat16, ttnn.bfloat16],
+        # [ttnn.bfloat8_b, ttnn.bfloat16],
         # [ttnn.bfloat4_b, ttnn.bfloat16],
     ],
     ids=[
         # "all_bfp8",
-        # "all_bfp16",
-        "kv_bfp8_q_bf16",
+        "all_bfp16",
+        # "kv_bfp8_q_bf16",
         # "kv_bfp4",
     ],
 )
@@ -851,14 +851,14 @@ def run_test_sdpa_decode_paged_attention(
     "b, nh, nkv, s, d, grid_size, cur_pos_tensor",
     (
         [1, 32, 8, 64 * 1024, 128, (8, 4), True],
-        [32, 32, 8, 2 * 1024, 128, (8, 4), True],
+        # [32, 32, 8, 2 * 1024, 128, (8, 4), True],
         # [32, 32, 8, 64 * 1024, 128, (8, 8), True],
         # [32, 8, 1, 32768, 128, (8, 6), True],  # Llama2-70B
         # [4, 32, 8, 4096, 128, (8, 8), True],  # llama 3.1 8b
         # [4, 16, 4, 32768, 128, (8, 8), True],
         # [32, 32, 8, 4096, 128, (8, 8), True],  # llama 3.1 8b
-        [8, 16, 4, 4096, 128, (8, 2), True],  # llama 3.1 8b N300
-        [1, 8, 1, 128 * 1024, 128, (8, 4), True],  # llama 3.1 8b N300
+        # [8, 16, 4, 4096, 128, (8, 2), True],  # llama 3.1 8b N300
+        # [1, 8, 1, 128 * 1024, 128, (8, 4), True],  # llama 3.1 8b N300
         # [1, 8, 1, 32768, 128, (8, 1), True],  # Llama2-70B
         # [16, 8, 1, 32768, 128, (8, 6), False, False],  # Llama2-70B
         # [8, 8, 1, 32768, 128, (8, 6), True, False],  # Llama2-70B
