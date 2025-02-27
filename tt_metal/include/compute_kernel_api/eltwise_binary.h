@@ -41,6 +41,48 @@ ALWI void binary_op_init_common(uint32_t icb0, uint32_t icb1, uint32_t ocb) {
 
 // clang-format off
 /**
+ * Short init function
+ *
+ * | Argument       | Description                                                   | Type     | Valid Range | Required |
+ * |----------------|---------------------------------------------------------------|----------|-------------|----------|
+ * | icb0           | The identifier of the circular buffer (CB) containing A       | uint32_t | 0 to 31     | True     |
+ * | icb1           | The identifier of the circular buffer (CB) containing B       | uint32_t | 0 to 31     | True     |
+ */
+// clang-format on
+ALWI void mul_tiles_init(uint32_t icb0, uint32_t icb1) { binary_tiles_init<true, ELWMUL>(icb0, icb1); }
+
+// clang-format off
+/**
+ * Short init function
+ *
+ * | Argument       | Description                                                   | Type     | Valid Range | Required |
+ * |----------------|---------------------------------------------------------------|----------|-------------|----------|
+ * | icb0           | The identifier of the circular buffer (CB) containing A       | uint32_t | 0 to 31     | True     |
+ * | icb1           | The identifier of the circular buffer (CB) containing B       | uint32_t | 0 to 31     | True     |
+ * | acc_to_dest    | If true, operation = A + B + dst_tile_idx of add_tiles        | bool     | 0,1         | False    |
+ */
+// clang-format on
+ALWI void add_tiles_init(uint32_t icb0, uint32_t icb1, bool acc_to_dest = false) {
+    binary_tiles_init<true, ELWADD>(icb0, icb1, acc_to_dest);
+}
+
+// clang-format off
+/**
+ * Short init function
+ *
+ * | Argument       | Description                                                   | Type     | Valid Range | Required |
+ * |----------------|---------------------------------------------------------------|----------|-------------|----------|
+ * | icb0           | The identifier of the circular buffer (CB) containing A       | uint32_t | 0 to 31     | True     |
+ * | icb1           | The identifier of the circular buffer (CB) containing B       | uint32_t | 0 to 31     | True     |
+ * | acc_to_dest    | If true, operation = A - B + dst_tile_idx of sub_tiles        | bool     | 0,1         | False    |
+ */
+// clang-format on
+ALWI void sub_tiles_init(uint32_t icb0, uint32_t icb1, bool acc_to_dest = false) {
+    binary_tiles_init<true, ELWSUB>(icb0, icb1, acc_to_dest);
+}
+
+// clang-format off
+/**
  * Performs element-wise multiplication C=A*B of tiles in two CBs at given
  * indices and writes the result to the DST register at index dst_tile_index.
  * The DST register buffer must be in acquired state via *acquire_dst* call.
@@ -120,15 +162,25 @@ ALWI void sub_tiles(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itil
         icb0, icb1, idst)));
 }
 
-/**
+ /**
  * Template for initializing element-wise binary operations.
+ * Template parameters:
+ * full_init: if true, the full init is performed (unpack+math), otherwise a nof init is performed (only math)
+ * eltwise_binary_op_type: the binary operation type
+ *
+ * Function
+ * | Argument       | Description                                                   | Type     | Valid Range | Required |
+ * |----------------|---------------------------------------------------------------|----------|-------------|----------|
+ * | icb0           | The identifier of the circular buffer (CB) containing A       | uint32_t | 0 to 31     | True     |
+ * | icb1           | The identifier of the circular buffer (CB) containing B       | uint32_t | 0 to 31     | True     |
+ * | acc_to_dest    | If true, operation = A - B + dst_tile_idx of sub_tiles        | bool     | 0,1         | False    |
  */
-template <bool full_init, EltwiseBinaryType eltwise_binary_type = ELWADD>
-ALWI void binary_tiles_init(uint32_t icb0, uint32_t icb1) {
-    MATH((llk_math_eltwise_binary_init<eltwise_binary_type, NONE, MATH_FIDELITY>()));
+template <bool full_init, EltwiseBinaryType eltwise_binary_op_type>
+ALWI void binary_tiles_init(uint32_t icb0, uint32_t icb1, bool acc_to_dest = false) {
+    MATH((llk_math_eltwise_binary_init<eltwise_binary_type, NONE, MATH_FIDELITY>(0 /*transpose*/, acc_to_dest)));
 
     if constexpr (full_init) {
-        UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1)));
+        UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1, 0 /*transpose*/, acc_to_dest)));
     }
 }
 
