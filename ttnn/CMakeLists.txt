@@ -749,6 +749,24 @@ function(use_precompiled_header TARGET)
     endif()
 endfunction()
 
+#TODO : should be using pybind11_add_module, but right now it introduces many build problems
+#pybinds will always be built as a shared library
+list(
+    APPEND
+    TTNN_SRC_PYBIND
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/__init__.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/types.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/events.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/global_circular_buffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/global_semaphore.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/device.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/fabric.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/profiler.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/tensor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/pybind11/pytensor.cpp
+    ${TT_LIB_SRCS}
+) # TT_LIB_SRCS from tt_eager/tt_lib/CMakeLists.txt for python bindings
+
 set(PRECOMPILED_HEADER_TARGET "")
 
 function(add_ttnn_sublibrary SUBLIBRARY_NAME)
