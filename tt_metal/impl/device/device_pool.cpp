@@ -26,6 +26,8 @@
 
 #include "tt_cluster.hpp"
 
+#include <unistd.h>  // Warning Linux Only, needed for _SC_NPROCESSORS_ONLN
+
 using namespace tt::tt_metal;
 
 namespace tt {

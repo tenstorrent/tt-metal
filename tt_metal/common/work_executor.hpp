@@ -15,6 +15,7 @@
 
 #include "env_lib.hpp"
 #include "multi_producer_single_consumer_queue.hpp"
+#include "work_executor_types.hpp"
 #include "tracy/Tracy.hpp"
 
 #if defined(TRACY_ENABLE)
@@ -26,17 +27,6 @@
 #endif
 
 namespace tt {
-
-enum class WorkExecutorMode {
-    SYNCHRONOUS = 0,
-    ASYNCHRONOUS = 1,
-};
-
-enum class WorkerState {
-    RUNNING = 0,
-    TERMINATE = 1,
-    IDLE = 2,
-};
 
 inline void set_device_thread_affinity(std::thread& thread_, int cpu_core_for_worker) {
     // Bind a device worker/reader thread to a CPU core, determined using round-robin.

@@ -8,7 +8,6 @@
 #include "types.hpp"
 #include <buffer_constants.hpp>
 #include <buffer.hpp>
-#include <work_executor.hpp>
 
 //==================================================
 //               DEVICE MANAGEMENT
