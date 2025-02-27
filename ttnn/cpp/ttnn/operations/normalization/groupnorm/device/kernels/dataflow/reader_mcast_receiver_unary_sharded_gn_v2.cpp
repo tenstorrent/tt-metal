@@ -28,8 +28,8 @@ void kernel_main() {
     constexpr uint32_t cb_ex = tt::CBIndex::c_9;          // E[x] partial reduce
     constexpr uint32_t cb_ex_global = tt::CBIndex::c_15;  // E[x] global reduce
     constexpr uint32_t cb_in0 = tt::CBIndex::c_0;         // sharded cb
-    constexpr uint32_t cb_repack = tt::CBIndex::c_26;
-    constexpr uint32_t cb_repack_out = tt::CBIndex::c_31;
+    constexpr uint32_t cb_repack = tt::CBIndex::c_11;
+    constexpr uint32_t cb_repack_out = tt::CBIndex::c_12;
     constexpr uint32_t cb_out0 = tt::CBIndex::c_16;
 
     const uint32_t single_tile_size_bytes = get_tile_size(cb_ex_partial);  // tile size
