@@ -16,6 +16,7 @@ show_help() {
     echo "  -u, --enable-ubsan               Enable UndefinedBehaviorSanitizer."
     echo "  -p, --enable-profiler            Enable Tracy profiler."
     echo "  --install-prefix                 Where to install build artifacts."
+    echo "  --build-dir                      Build directory."
     echo "  --build-tests                    Build All Testcases."
     echo "  --build-ttnn-tests               Build ttnn Testcases."
     echo "  --build-metal-tests              Build metal Testcases."
@@ -55,6 +56,7 @@ enable_tsan="OFF"
 enable_ubsan="OFF"
 build_type="Release"
 enable_profiler="OFF"
+build_dir=""
 build_tests="OFF"
 build_ttnn_tests="OFF"
 build_metal_tests="OFF"
@@ -90,6 +92,7 @@ enable-ubsan
 build-type:
 enable-profiler
 install-prefix:
+build-dir:
 build-tests
 build-ttnn-tests
 build-metal-tests
@@ -146,6 +149,8 @@ while true; do
             enable_ubsan="ON";;
         --enable-coverage)
             enable_coverage="ON";;
+	--build-dir)
+            build_dir="$2";shift;;
         -b|--build-type)
             build_type="$2";shift;;
         -p|--enable-profiler)
@@ -215,10 +220,16 @@ if [[ ! " ${VALID_BUILD_TYPES[@]} " =~ " ${build_type} " ]]; then
     exit 1
 fi
 
-build_dir="build_$build_type"
-
-if [ "$enable_profiler" = "ON" ]; then
-    build_dir="${build_dir}_tracy"
+# If build-dir is not specified
+# Use build_type and enable_profiler setting to choose a default path
+if [ "$build_dir" = "" ]; then
+    build_dir="build_$build_type"
+    if [ "$enable_profiler" = "ON" ]; then
+        build_dir="${build_dir}_tracy"
+    fi
+    # Create and link the build directory
+    mkdir -p $build_dir
+    ln -nsf $build_dir build
 fi
 
 install_prefix_default=$build_dir
@@ -368,10 +379,6 @@ if [ "$cxx_compiler_path" == "" ]; then
     echo "INFO: CMAKE_TOOLCHAIN_FILE: $toolchain_path"
     cmake_args+=("-DCMAKE_TOOLCHAIN_FILE=${toolchain_path}")
 fi
-
-# Create and link the build directory
-mkdir -p $build_dir
-ln -nsf $build_dir build
 
 echo "INFO: Configuring Project"
 echo "INFO: Running: cmake "${cmake_args[@]}""
