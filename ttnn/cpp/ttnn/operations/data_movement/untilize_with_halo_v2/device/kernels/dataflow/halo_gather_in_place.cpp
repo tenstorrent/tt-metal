@@ -7,7 +7,7 @@
 
 #include "dataflow_api.h"
 
-#define ENABLE_DEBUG 0
+#define ENABLE_DEBUG 1
 
 #if ENABLE_DEBUG
 #include "debug/dprint.h"
@@ -143,11 +143,8 @@ void copy_sticks_async(
     int length = config_data[i + 2];
 
     while (length) {
-        uint16_t noc_x = ((is_block_sharded && !is_col_major) || is_width_sharded) ? my_noc_x : config_data[i + 0];
-        uint16_t noc_y = ((is_block_sharded && is_col_major) || is_width_sharded) ? my_noc_y : config_data[i + 1];
         length = config_data[i + 2];
         i += 3;
-        const uint64_t base_addr = get_noc_addr(noc_x, noc_y, is_read ? in_base_l1_addr : out_base_l1_addr);
         for (uint16_t j = 0; j < length; j += 3) {
             uint16_t src_local_idx = config_data[i + j + 0];
             uint16_t dst_local_idx = config_data[i + j + 1];
@@ -155,30 +152,18 @@ void copy_sticks_async(
             uint32_t size = nsticks * stick_nbytes;
             uint32_t dst_offset = dst_local_idx * stick_nbytes;
             uint32_t src_offset = src_local_idx * input_aligned_page_size;
-            if constexpr (is_read) {
-                uint32_t dst_addr = out_base_l1_addr + dst_offset;
-                uint64_t src_addr = base_addr + src_offset;
-                if constexpr (stick_nbytes == input_aligned_page_size) {
-                    noc_async_read(src_addr, dst_addr, size);
-                } else {
-                    for (uint16_t k = 0; k < nsticks; k++) {
-                        noc_async_read(src_addr, dst_addr, stick_nbytes);
-                        dst_addr += stick_nbytes;
-                        src_addr += input_aligned_page_size;
-                    }
+
+            uint32_t src_addr = in_base_l1_addr + src_offset;
+            DPRINT << "src_offset: " << src_offset << " dst_offset: " << dst_offset << " nsticks: " << nsticks << "\n";
+            for (uint16_t k = 0; k < nsticks; k++) {
+                const uint64_t dst_addr =
+                    get_noc_addr(my_noc_x, my_noc_y, out_base_l1_addr + dst_offset + k * stick_nbytes);
+                DPRINT << "k: " << k << " src_addr: " << src_addr << " dst_addr: " << dst_addr << "\n";
+                if (src_addr != dst_addr) {
+                    noc_async_write(src_addr, dst_addr, stick_nbytes);
                 }
-            } else {
-                uint64_t dst_addr = base_addr + dst_offset;
-                uint32_t src_addr = in_base_l1_addr + src_offset;
-                if constexpr (stick_nbytes == input_aligned_page_size) {
-                    noc_async_write(src_addr, dst_addr, size);
-                } else {
-                    for (uint16_t k = 0; k < nsticks; k++) {
-                        noc_async_write(src_addr, dst_addr, stick_nbytes);
-                        dst_addr += stick_nbytes;
-                        src_addr += input_aligned_page_size;
-                    }
-                }
+                // dst_addr += stick_nbytes;
+                src_addr += input_aligned_page_size;
             }
         }
 
@@ -210,6 +195,7 @@ void kernel_main() {
     constexpr uint32_t num_cores_c = get_compile_time_arg_val(20);
     constexpr uint32_t num_cores_x = get_compile_time_arg_val(21);
     constexpr uint32_t semaphore_id = get_compile_time_arg_val(22);
+    constexpr uint32_t input_shard_0 = get_compile_time_arg_val(23);
 
     constexpr uint32_t num_cores = num_cores_nhw * num_cores_c;
 
@@ -238,7 +224,10 @@ void kernel_main() {
         const uint64_t in_l1_addr = get_noc_addr(my_noc_x, my_noc_y, get_read_ptr(in_cb_id));
         uint64_t src_addr = in_l1_addr;
         uint64_t dst_addr = out_base_l1_addr;
+        DPRINT << "in_nsticks: " << in_nsticks << "\n";
+        DPRINT << "input_shard_0: " << input_shard_0 << "\n";
         for (uint32_t i = 0; i < in_nsticks; ++i) {
+            DPRINT << "i: " << i << " src_addr: " << src_addr << " dst_addr: " << dst_addr << "\n";
             noc_async_read(src_addr, dst_addr, stick_nbytes);
             src_addr += stick_nbytes;
             dst_addr += stick_nbytes;
@@ -248,7 +237,14 @@ void kernel_main() {
     noc_async_read_barrier();
     noc_async_write_barrier();
 
+    // if constexpr (local_config_cb_id) {
+    //     tt::data_movement::common::print_bf16_pages(in_base_l1_addr, 32, in_nsticks);
+    //     DPRINT << "---" << ENDL();
+    //     tt::data_movement::common::print_bf16_pages(out_base_l1_addr, 32, in_nsticks);
+    // }
+
     if constexpr (remote_config_cb_id && remote_temp_cb_id) {
+        DPRINT << "TEMP COPY" << ENDL();
         const uint32_t temp_base_l1_addr = get_write_ptr(remote_temp_cb_id);
         uint32_t config_data_l1_addr = get_read_ptr(remote_config_cb_id);
         const tt_l1_ptr uint16_t* config_data = reinterpret_cast<const tt_l1_ptr uint16_t*>(config_data_l1_addr);
@@ -336,4 +332,8 @@ void kernel_main() {
 
     noc_async_read_barrier();
     noc_async_write_barrier();
+
+    if (remote_config_cb_id) {
+        tt::data_movement::common::print_bf16_pages(out_base_l1_addr, 32, 64);
+    }
 }

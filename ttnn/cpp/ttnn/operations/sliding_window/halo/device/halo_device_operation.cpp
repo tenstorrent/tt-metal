@@ -71,8 +71,8 @@ std::vector<TensorSpec> HaloDeviceOperation::compute_output_specs(const std::vec
     }
 
     if (this->in_place_) {
-        tt::log_info(tt::LogAlways, "halo_device_operation - Using in-place mode so deallocating input buffer");
-        DeallocateBuffer(*input_tensor.buffer());
+        // tt::log_info(tt::LogAlways, "halo_device_operation - Using in-place mode so deallocating input buffer");
+        // DeallocateBuffer(*input_tensor.buffer());
     }
 
     auto out_mem_config = output_memory_config_;

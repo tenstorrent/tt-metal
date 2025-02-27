@@ -250,14 +250,14 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         ncores_nhw,
         ncores_c,
         num_cores_x,
-        semaphore_id};
+        semaphore_id,
+        input_shard_shape[0]};
 
-    reader_ct_args[0] = 0;
+    reader_ct_args[0] = padding_config_cb_id;
     reader_ct_args[1] = local_config_cb_id;
-    reader_ct_args[2] = in_place ? remote_config_cb_id : 0;
-    ;
+    reader_ct_args[2] = remote_config_cb_id;
     reader_ct_args[3] = 0;
-    reader_ct_args[4] = in_place ? remote_temp_cb_id : 0;
+    reader_ct_args[4] = remote_temp_cb_id;
 
     KernelHandle reader_kernel_id0 = CreateKernel(
         program,
@@ -269,11 +269,11 @@ operation::ProgramWithCallbacks untilize_with_halo_multi_core_v2(
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default, .compile_args = reader_ct_args});
 
-    reader_ct_args[0] = padding_config_cb_id;
+    reader_ct_args[0] = 0;
     reader_ct_args[1] = 0;
-    reader_ct_args[2] = in_place ? 0 : remote_config_cb_id;
+    reader_ct_args[2] = 0;
     reader_ct_args[3] = 0;
-    reader_ct_args[4] = in_place ? 0 : remote_temp_cb_id;
+    reader_ct_args[4] = 0;
 
     KernelHandle reader_kernel_id1 = CreateKernel(
         program,

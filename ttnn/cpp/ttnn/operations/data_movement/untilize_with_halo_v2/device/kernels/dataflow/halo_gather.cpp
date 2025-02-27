@@ -7,7 +7,7 @@
 
 #include "dataflow_api.h"
 
-#define ENABLE_DEBUG 0
+#define ENABLE_DEBUG 1
 
 #if ENABLE_DEBUG
 #include "debug/dprint.h"
@@ -69,6 +69,8 @@ void copy_sticks_async(
             } else {
                 uint64_t dst_addr = base_addr + dst_offset;
                 uint32_t src_addr = in_base_l1_addr + src_offset;
+                DPRINT << "src_offset: " << src_offset << " dst_offset: " << dst_offset << " nsticks: " << nsticks
+                       << "\n";
                 if constexpr (stick_nbytes == input_aligned_page_size) {
                     noc_async_write(src_addr, dst_addr, size);
                 } else {
@@ -169,4 +171,8 @@ void kernel_main() {
 
     noc_async_read_barrier();
     noc_async_write_barrier();
+
+    if (local_config_cb_id) {
+        tt::data_movement::common::print_bf16_pages(out_base_l1_addr, 32, 64);
+    }
 }
