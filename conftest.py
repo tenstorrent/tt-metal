@@ -682,7 +682,7 @@ def record_test_timestamp(record_property):
 def pytest_configure(config):
     xmlpath = config.option.xmlpath
     # Only override the xmlpath if it's set, and we're in a CI env (GHA)
-    if xmlpath and is_ci_env():
+    if xmlpath and os.getenv("CI") == "true":
         # Get the dir and filename for the generated xml
         directory, filename = os.path.split(xmlpath)
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
