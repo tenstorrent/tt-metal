@@ -68,8 +68,6 @@ All contributions require:
 Furthermore, all PRs must follow the [contribution
 standards](#contribution-standards).
 
-## Machine setup
-
 ## Developing tt-metal
 
 Currently, the most convenient way to develop is to do so on our cloud
