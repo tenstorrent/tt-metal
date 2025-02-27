@@ -13,12 +13,6 @@
 #include "ttnn/tensor/xtensor/partition.hpp"
 #include <algorithm>
 #include <tt-metalium/assert.hpp>
-#include "ttnn/distributed/api.hpp"
-#include "ttnn/distributed/distributed_tensor_config.hpp"
-#include "ttnn/distributed/types.hpp"
-#include "ttnn/tensor/xtensor/partition.hpp"
-#include <algorithm>
-#include <tt-metalium/assert.hpp>
 
 namespace ttnn::distributed {
 
