@@ -11,7 +11,6 @@
 #include <utility>
 
 using address_t = uint32_t;
-using tt::tt_metal::BufferType;
 
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS
@@ -26,10 +25,6 @@ constexpr uint32_t tensor0_page_size = get_compile_time_arg_val(5);
 constexpr uint32_t num_targets_forward_direction = get_compile_time_arg_val(6);
 constexpr uint32_t num_targets_backward_direction = get_compile_time_arg_val(7);
 
-/*
- * CCL Send will present various operating modes. Although there is only a single send kernel, it may (compile time)
- * dispatch implementations depending on those invocation parameters.
- */
 void kernel_main() {
     ///////////////////////////////////////////////////
     // ARGS
@@ -37,16 +32,14 @@ void kernel_main() {
 
     size_t arg_idx = 0;
     // Load the input tensor spec
-    uint32_t reduction_output_cb_id = get_arg_val<address_t>(arg_idx++);
-    address_t tensor_address0 = get_write_ptr(reduction_output_cb_id);
+    uint32_t reduction_input_cb_id = get_arg_val<address_t>(arg_idx++);
+    address_t reduction_input_addr = get_write_ptr(reduction_input_cb_id);
 
     const size_t out_ready_sem_bank_addr = get_arg_val<uint32_t>(arg_idx++);
     uint32_t num_tiles_per_core = get_arg_val<uint32_t>(arg_idx++);
     uint32_t num_tiles_to_read = get_arg_val<uint32_t>(arg_idx++);
     uint32_t first_core_tile_start_offset = get_arg_val<uint32_t>(arg_idx++);
     uint32_t num_cores = get_arg_val<uint32_t>(arg_idx++);
-    bool wait_output_semaphore = get_arg_val<uint32_t>(arg_idx++);
-    bool reset_global_semaphore = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
     uint32_t out_ready_sem_wait_value = get_arg_val<uint32_t>(arg_idx++);
@@ -57,8 +50,7 @@ void kernel_main() {
     const uint32_t mcast_dest_noc_end_y = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t link = get_arg_val<uint32_t>(arg_idx++);
 
-    // DPRINT << "reduction_output_cb_id: " << reduction_semaphore_send_addr << "\n";
-
+    // Set up for mcasting to reduction workers
     volatile tt_l1_ptr uint32_t* reduction_semaphore_send_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(reduction_semaphore_send_addr);
     noc_semaphore_set(reduction_semaphore_send_addr_ptr, VALID);
@@ -97,7 +89,7 @@ void kernel_main() {
 
     // 1. mcast via fabric to remote tensor addresses
     uint32_t tiles_read = 0;
-    uint32_t shard_tile_id = 0;  // first_core_tile_start_offset;
+    uint32_t shard_tile_id = first_core_tile_start_offset;
     uint32_t core_id = 0;
     uint32_t writer_chip_offset = my_chip_id * num_tiles_per_core * tensor0_page_size;
 
@@ -107,12 +99,10 @@ void kernel_main() {
         cb_wait_front(cb0_id, num_tiles_to_read_this_core);
         size_t l1_read_addr = get_read_ptr(cb0_id);
 
-        uint64_t noc0_dest_noc_addr =
-            get_noc_addr(core_noc_x[core_id], core_noc_y[core_id], tensor_address0 + writer_chip_offset, 0 /*noc_id*/);
+        uint64_t noc0_dest_noc_addr = get_noc_addr(
+            core_noc_x[core_id], core_noc_y[core_id], reduction_input_addr + writer_chip_offset, 0 /*noc_id*/);
 
-        // Offset the writer chip offset
-        // noc0_dest_noc_addr +=  writer_chip_offset;
-
+        // Within-shard offset
         noc0_dest_noc_addr += shard_tile_id * tensor0_page_size;
 
         write_and_advance_local_read_address_for_fabric_write(
@@ -162,11 +152,8 @@ void kernel_main() {
         safe_get_noc_addr(out_ready_sem_noc0_x, out_ready_sem_noc0_y, out_ready_sem_bank_addr);
     noc_semaphore_inc(out_ready_sem_noc_addr, 1);
 
-    // DPRINT << "wait for output semphore \n";
     // 3. wait for mcast output ready semaphore
-    if (wait_output_semaphore) {
-        while (*reinterpret_cast<volatile uint32_t*>(out_ready_sem_bank_addr) < out_ready_sem_wait_value);
-    }
+    while (*reinterpret_cast<volatile uint32_t*>(out_ready_sem_bank_addr) < out_ready_sem_wait_value);
 
     // Signal the reduction workers
     const uint64_t reduction_semaphore_recv_noc_addr = get_noc_multicast_addr(
@@ -184,13 +171,9 @@ void kernel_main() {
         false,  // TODO: Why?
         0);
 
-    // DPRINT << "wait done for output semphore \n";
-
     // 4. global semaphore reset
-    if (reset_global_semaphore) {
-        const uint64_t dest_noc_addr = get_noc_addr(my_x[0], my_y[0], out_ready_sem_bank_addr);
-        noc_inline_dw_write(dest_noc_addr, 0);
-    }
+    const uint64_t dest_noc_addr = get_noc_addr(my_x[0], my_y[0], out_ready_sem_bank_addr);
+    noc_inline_dw_write(dest_noc_addr, 0);
 
     if (fabric_connection.is_logically_connected()) {
         fabric_connection.close();
