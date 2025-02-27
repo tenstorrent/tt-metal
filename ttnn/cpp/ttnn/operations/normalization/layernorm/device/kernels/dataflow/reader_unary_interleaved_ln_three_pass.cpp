@@ -91,38 +91,38 @@ void kernel_main() {
         };
         read_in0_and_in1();
 
-        DPRINT << "First read done \n\n\n" << ENDL();
+        //        DPRINT << "First read done \n\n\n" << ENDL();
         read_in0_and_in1();
 
-        DPRINT << "Second read done \n\n\n" << ENDL();
+        //       DPRINT << "Second read done \n\n\n" << ENDL();
         for (uint32_t wt = 0; wt < Wt; wt += blk) {
-            DPRINT << wt << " start \n\n\n" << ENDL();
+            //          DPRINT << wt << " start \n\n\n" << ENDL();
             read_row_from_cb(cb_id_in0, src_a, src0_tile_bytes, offs + wt + tile_offset, blk);
-            DPRINT << wt << " in0 done one \n\n\n" << ENDL();
+            //         DPRINT << wt << " in0 done one \n\n\n" << ENDL();
 #ifdef FUSE_PRE_ADD
             // TODO(AP): refactor the ifdefs
             read_row_from_cb(cb_id_in1, src_b, src1_tile_bytes, offs + wt + tile_offset, blk);
-            DPRINT << wt << " in1 done one \n\n\n" << ENDL();
+            //        DPRINT << wt << " in1 done one \n\n\n" << ENDL();
 #endif
 #if defined FUSE_GAMMA || defined FUSE_BETA
             if (ncht == 0) {
 #ifdef FUSE_GAMMA
                 {
                     read_row_from_cb(cb_id_gamma, addrg, gamma_tile_bytes, wt, blk);
-                    DPRINT << wt << " gamma done one \n\n\n" << ENDL();
+                    //               DPRINT << wt << " gamma done one \n\n\n" << ENDL();
                 }
 #endif
 
 #ifdef FUSE_BETA
                 {
                     read_row_from_cb(cb_id_beta, addrb, beta_tile_bytes, wt, blk);
-                    DPRINT << wt << " beta done one \n\n\n" << ENDL();
+                    //              DPRINT << wt << " beta done one \n\n\n" << ENDL();
                 }
 
 #endif
             }  // if statement
 #endif
-            DPRINT << "end \n\n\n" << ENDL();
+            //     DPRINT << "end \n\n\n" << ENDL();
         }  // wt loop
         offs += Wt;
     }  // ncht loop
