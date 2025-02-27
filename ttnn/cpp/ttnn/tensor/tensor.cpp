@@ -44,7 +44,11 @@ Tensor create_owned_tensor_from_row_major_data(
     Tensor output(OwnedStorage{owned_buffer::create(std::move(physical_data))}, spec);
 
     if (device.has_value()) {
-        output = output.to_device(device->get_devices(), spec.memory_config());
+        if (auto mesh_device = device->get_mesh_device()) {
+            output = output.to_device(mesh_device, spec.memory_config());
+        } else {
+            output = output.to_device(device->get_devices(), spec.memory_config());
+        }
     }
 
     return output;
