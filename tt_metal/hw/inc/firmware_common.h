@@ -16,6 +16,7 @@
 #include "noc/noc_parameters.h"
 #include "debug/dprint.h"
 #include "risc_common.h"
+#include "tools/profiler/kernel_profiler.hpp"
 
 extern uint16_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS];
 extern int32_t bank_to_dram_offset[NUM_DRAM_BANKS];
@@ -80,5 +81,6 @@ void wait_for_go_message() {
 
     while (mailboxes->go_message.signal != RUN_MSG_GO) {
         invalidate_l1_cache();
+        // DeviceZonesPush();
     }
 }

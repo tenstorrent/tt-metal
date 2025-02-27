@@ -57,6 +57,9 @@ namespace kernel_profiler {
     uint32_t stackSize __attribute__((used));
     uint32_t sums[SUM_COUNT] __attribute__((used));
     uint32_t sumIDs[SUM_COUNT] __attribute__((used));
+    uint32_t core_flat_id __attribute__((used));
+    uint32_t profiler_core_count_per_dram __attribute__((used));
+    uint32_t dram_buffer_page_size __attribute__((used));
 }
 #endif
 
@@ -119,6 +122,7 @@ int main(int argc, char *argv[]) {
     // Need to save address to jump to after BRISC resumes NCRISC
     set_ncrisc_resume_addr();
 
+    DeviceProfilerInit();
     // Cleanup profiler buffer incase we never get the go message
     while (1) {
         WAYPOINT("W");
