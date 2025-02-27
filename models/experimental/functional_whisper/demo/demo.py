@@ -94,6 +94,7 @@ def run_generate(
     device,
     generation_config,
     kv_cache=None,
+    stream_generation=False,
 ):
     unpadded_batch_size = input_embeds.shape[0]
     assert unpadded_batch_size == 1, "Only batch size 1 is supported for inference"
@@ -124,64 +125,122 @@ def run_generate(
     output_ids = []
     logger.info("Starting decode inference run")
 
-    for i in tqdm(range(MAX_GEN_LEN), desc="Decode inference iterations"):
-        start_iter = time.time()
-        output = ttnn_model.decoder(
-            config,
-            decoder_hidden_states,
-            decoder_attention_mask=decoder_attention_mask,
-            encoder_hidden_states=encoder_hidden_states,
-            kv_cache=kv_cache,
-            current_decode_pos=current_decode_pos,
-            parameters=parameters.decoder,
-        )
+    def _run_generate(decoder_hidden_states, decoder_attention_mask):
+        for i in tqdm(range(MAX_GEN_LEN), desc="Decode inference iterations"):
+            start_iter = time.time()
+            output = ttnn_model.decoder(
+                config,
+                decoder_hidden_states,
+                decoder_attention_mask=decoder_attention_mask,
+                encoder_hidden_states=encoder_hidden_states,
+                kv_cache=kv_cache,
+                current_decode_pos=current_decode_pos,
+                parameters=parameters.decoder,
+            )
 
-        if not kv_cache:
-            # Note: if not using a kv cache, the entire sequence is recomputed at each step
-            # Only run the lm head on the last tile to fix bad outputs and reduce redundant computation
-            last_tile_start_idx = i // 32 * 32
-            output_idx = i % 32
-            output = output[:, last_tile_start_idx : last_tile_start_idx + 32, :]
-        else:
-            output_idx = 0
+            if not kv_cache:
+                # Note: if not using a kv cache, the entire sequence is recomputed at each step
+                # Only run the lm head on the last tile to fix bad outputs and reduce redundant computation
+                last_tile_start_idx = i // 32 * 32
+                output_idx = i % 32
+                output = output[:, last_tile_start_idx : last_tile_start_idx + 32, :]
+            else:
+                output_idx = 0
 
-        output = output @ ttnn_linear_weight
-        logits_to_torch = ttnn.to_torch(output)
-        next_token_logits = logits_to_torch[:, output_idx, :]
+            output = output @ ttnn_linear_weight
+            logits_to_torch = ttnn.to_torch(output)
+            next_token_logits = logits_to_torch[:, output_idx, :]
 
-        next_tokens_scores = logits_processor(input_features, next_token_logits)
-        next_tokens = torch.argmax(next_tokens_scores, dim=-1)
-        output_ids.append(next_tokens)
+            next_tokens_scores = logits_processor(input_features, next_token_logits)
+            next_tokens = torch.argmax(next_tokens_scores, dim=-1)
+            output_ids.append(next_tokens)
 
-        # Update input_ids and current_decode_pos
-        if not kv_cache:
-            if (i + 1) % 32 == 0:
-                input_ids = torch.cat([input_ids, decoder_start_values], dim=1)
-            input_ids[:, i + 1] = next_tokens[:, None]
-        else:
-            input_ids = next_tokens[:, None]
-            ttnn.plus_one(current_decode_pos)
+            # Update input_ids and current_decode_pos
+            if not kv_cache:
+                if (i + 1) % 32 == 0:
+                    input_ids = torch.cat([input_ids, decoder_start_values], dim=1)
+                input_ids[:, i + 1] = next_tokens[:, None]
+            else:
+                input_ids = next_tokens[:, None]
+                ttnn.plus_one(current_decode_pos)
 
-        decoder_hidden_states, decoder_attention_mask = ttnn_model.preprocess_decoder_inputs(
+            decoder_hidden_states, decoder_attention_mask = ttnn_model.preprocess_decoder_inputs(
+                config=config,
+                input_ids=input_ids,
+                attention_mask=None,
+                parameters=parameters.decoder,
+                device=device,
+                decode_pos=(i + 1) if kv_cache else None,
+                create_attention_mask=(not kv_cache),
+            )
+            logger.info(f"Decode iter time: {time.time() - start_iter}")
+
+            ttnn_transcription = processor.batch_decode(next_tokens.unsqueeze(dim=1), skip_special_tokens=True)[0]
+            if print_each_iter:
+                logger.info(ttnn_transcription)
+            yield ttnn_transcription
+
+            if next_tokens == config.eos_token_id:
+                break
+
+    # conditionally return generator or full response
+    if stream_generation:
+        return _run_generate(decoder_hidden_states, decoder_attention_mask)
+    else:
+        return "".join(_run_generate(decoder_hidden_states, decoder_attention_mask))
+
+
+def create_functional_whisper_for_conditional_generation_inference_pipeline(ttnn_model, device):
+    """
+    Returns a callable with signature (data, sampling_rate, stream), where data is is a 1D numpy array
+    and sampling_rate is an int representing the sampling rate used to acquire data, and stream turns
+    signals the callable to return a generator if True, yielding the decoded tokens as they are processed, else
+    the callable returns the full decoded output.
+    """
+    hf_ref_model, config, processor, feature_extractor = load_conditional_generation_ref_model()
+    parameters, ttnn_linear_weight, kv_cache = init_conditional_generation_tt_model(
+        hf_ref_model, config, ttnn_model, device
+    )
+
+    dtype_to_use = torch.bfloat16
+
+    def _model_pipeline(data, sampling_rate, stream=False):
+        inputs = feature_extractor(data, sampling_rate=sampling_rate, return_tensors="pt")
+        input_features = inputs.input_features.type(dtype_to_use)
+
+        decoder_input_ids = torch.tensor([[1, 1]]) * config.decoder_start_token_id
+        decoder_input_ids = pad_input_32(decoder_input_ids, config.pad_token_id).to(torch.long)
+
+        attention_mask = None
+
+        (input_embeds, decoder_hidden_states, decoder_attention_mask) = ttnn_model.preprocess_inputs(
             config=config,
-            input_ids=input_ids,
-            attention_mask=None,
-            parameters=parameters.decoder,
+            input_features=input_features,
+            input_ids=decoder_input_ids,
+            attention_mask=attention_mask,
+            parameters=parameters,
             device=device,
-            decode_pos=(i + 1) if kv_cache else None,
             create_attention_mask=(not kv_cache),
         )
-        logger.info(f"Decode iter time: {time.time() - start_iter}")
 
-        if next_tokens == config.eos_token_id:
-            break
+        generation_config = hf_ref_model.generation_config
+        return run_generate(
+            config,
+            input_embeds,
+            input_features,
+            ttnn_model,
+            decoder_hidden_states,
+            decoder_attention_mask=decoder_attention_mask,
+            parameters=parameters,
+            processor=processor,
+            ttnn_linear_weight=ttnn_linear_weight,
+            device=device,
+            generation_config=generation_config,
+            kv_cache=kv_cache,
+            stream_generation=stream,
+        )
 
-        if print_each_iter:
-            logger.info(processor.batch_decode(torch.stack(output_ids, dim=1), skip_special_tokens=True)[0])
-
-    ttnn_transcription = processor.batch_decode(torch.stack(output_ids, dim=1), skip_special_tokens=True)[0]
-
-    return ttnn_transcription
+    return _model_pipeline
 
 
 def run_demo_functional_whisper_for_audio_classification_inference(input_path, ttnn_model, device, num_inputs):
@@ -242,53 +301,23 @@ def run_demo_functional_whisper_for_audio_classification_inference(input_path, t
 def run_demo_functional_whisper_for_conditional_generation_inference(input_path, ttnn_model, device, num_inputs):
     torch.manual_seed(0)
 
-    hf_ref_model, config, processor, feature_extractor = load_conditional_generation_ref_model()
-    parameters, ttnn_linear_weight, kv_cache = init_conditional_generation_tt_model(
-        hf_ref_model, config, ttnn_model, device
-    )
+    # instantiate model inference pipeline
+    model_pipeline = create_functional_whisper_for_conditional_generation_inference_pipeline(ttnn_model, device)
 
+    # load data
     input_data = load_input_paths(input_path)
 
     if len(input_data) < num_inputs:
         assert False, "num_inputs exceeds number of audio files available in folder"
     output_list = {}
+
     for i in range(num_inputs):
         input_file_path = input_data[i]
         samplerate, data = wavfile.read(input_file_path)
-        inputs = feature_extractor(data, sampling_rate=samplerate, return_tensors="pt")
-        dtype_to_use = torch.bfloat16
-        input_features = inputs.input_features.type(dtype_to_use)
 
-        decoder_input_ids = torch.tensor([[1, 1]]) * config.decoder_start_token_id
-        decoder_input_ids = pad_input_32(decoder_input_ids, config.pad_token_id).to(torch.long)
+        # perform model inference
+        ttnn_output = model_pipeline(data, samplerate, stream=False)
 
-        attention_mask = None
-
-        (input_embeds, decoder_hidden_states, decoder_attention_mask) = ttnn_model.preprocess_inputs(
-            config=config,
-            input_features=input_features,
-            input_ids=decoder_input_ids,
-            attention_mask=attention_mask,
-            parameters=parameters,
-            device=device,
-            create_attention_mask=(not kv_cache),
-        )
-
-        generation_config = hf_ref_model.generation_config
-        ttnn_output = run_generate(
-            config,
-            input_embeds,
-            input_features,
-            ttnn_model,
-            decoder_hidden_states,
-            decoder_attention_mask=decoder_attention_mask,
-            parameters=parameters,
-            processor=processor,
-            ttnn_linear_weight=ttnn_linear_weight,
-            device=device,
-            generation_config=generation_config,
-            kv_cache=kv_cache,
-        )
         logger.info("Model Output")
         logger.info(ttnn_output)
         output_list[i] = ttnn_output
@@ -352,46 +381,16 @@ def run_demo_functional_whisper_for_audio_classification_dataset(ttnn_model, dev
 def run_demo_functional_whisper_for_conditional_generation_dataset(ttnn_model, device):
     torch.manual_seed(0)
 
-    hf_ref_model, config, processor, feature_extractor = load_conditional_generation_ref_model()
-    parameters, ttnn_linear_weight, kv_cache = init_conditional_generation_tt_model(
-        hf_ref_model, config, ttnn_model, device
-    )
+    # instantiate model inference pipeline
+    model_pipeline = create_functional_whisper_for_conditional_generation_inference_pipeline(ttnn_model, device)
 
+    # load data
     ds = load_dataset("hf-internal-testing/librispeech_asr_dummy", "clean", split="validation")
-    inputs = feature_extractor(ds[4]["audio"]["array"], sampling_rate=16000, return_tensors="pt")
-    dtype_to_use = torch.bfloat16
-    input_features = inputs.input_features.type(dtype_to_use)
+    data = ds[4]["audio"]["array"]
+    sampling_rate = 16000
 
-    decoder_input_ids = torch.tensor([[1, 1]]) * config.decoder_start_token_id
-    decoder_input_ids = pad_input_32(decoder_input_ids, config.pad_token_id).to(torch.long)
-
-    attention_mask = None
-
-    (input_embeds, decoder_hidden_states, decoder_attention_mask) = ttnn_model.preprocess_inputs(
-        config=config,
-        input_features=input_features,
-        input_ids=decoder_input_ids,
-        attention_mask=attention_mask,
-        parameters=parameters,
-        device=device,
-        create_attention_mask=(not kv_cache),
-    )
-
-    generation_config = hf_ref_model.generation_config
-    ttnn_output = run_generate(
-        config,
-        input_embeds,
-        input_features,
-        ttnn_model,
-        decoder_hidden_states,
-        decoder_attention_mask=decoder_attention_mask,
-        parameters=parameters,
-        processor=processor,
-        ttnn_linear_weight=ttnn_linear_weight,
-        device=device,
-        generation_config=generation_config,
-        kv_cache=kv_cache,
-    )
+    # perform model inference
+    ttnn_output = model_pipeline(data, sampling_rate, stream=False)
     logger.info("Model Output")
     logger.info(ttnn_output)
 
@@ -417,7 +416,7 @@ def test_demo_for_audio_classification(
 )
 @pytest.mark.parametrize(
     "num_inputs",
-    ((1),),
+    ((2),),
 )
 @pytest.mark.parametrize("enable_async_mode", (True,), indirect=True)
 def test_demo_for_conditional_generation(
