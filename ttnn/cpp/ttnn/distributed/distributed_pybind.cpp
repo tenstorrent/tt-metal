@@ -706,12 +706,13 @@ void py_module(py::module& module) {
            const TensorToMesh& mapper,
            std::optional<std::reference_wrapper<MeshDevice>> mesh_device = std::nullopt) -> Tensor {
             Tensor cpu_tensor;
+            printf("printingc %d\n", is_multi_device_tensor(cpu_tensor) || is_device_tensor(tensor));
             if (tensor.storage_type() == StorageType::MULTI_DEVICE_HOST) {
                 cpu_tensor = tt::tt_metal::tensor_impl::to_host_mesh_tensor_wrapper(tensor, true);
             } else {
                 cpu_tensor = from_device(tensor);
             }
-
+            printf("printingc %d\n", is_multi_device_tensor(cpu_tensor) || is_device_tensor(tensor));
             return distribute_tensor(cpu_tensor, mapper, mesh_device);
         },
         py::arg("tensor"),

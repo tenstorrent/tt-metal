@@ -156,7 +156,7 @@ def from_torch(
     layout: Optional[ttnn.Layout] = ttnn.ROW_MAJOR_LAYOUT,
     device: Optional[ttnn.Device] = None,
     memory_config: Optional[ttnn.MemoryConfig] = None,
-    mesh_mapper: Union[ttnn.TensorToMesh, ttnn.CppTensorToMesh] = None,
+    mesh_mapper: Optional[Union[ttnn.TensorToMesh, ttnn.CppTensorToMesh]] = None,
     cq_id: Optional[int] = ttnn.DefaultQueueId,
 ) -> ttnn.Tensor:
     """
@@ -208,7 +208,7 @@ def from_torch(
     if dtype == ttnn.bfloat8_b or dtype == ttnn.bfloat4_b:
         if layout != ttnn.TILE_LAYOUT:
             raise RuntimeError("ttnn.from_torch: bfloat8_b/bfloat4_b requires TILE_LAYOUT!")
-        # Tilize tensor, TODO: this is incredibly non-performant
+        # Tilize tensor, TODO: this is incredibly non-performant when done on host
         tensor = ttnn.from_torch(tensor, layout=ttnn.TILE_LAYOUT, tile=tile, pad_value=pad_value, mesh_mapper=None)
         logical_shape = tensor.shape
         padded_shape = tensor.padded_shape
@@ -219,22 +219,32 @@ def from_torch(
     if mesh_mapper:
         if isinstance(mesh_mapper, ttnn.CppTensorToMesh):
             tensor = ttnn.distribute_tensor(tensor, mesh_mapper, device)
+            if tile is not None:
+                tensor = ttnn.Tensor(ttnn.to_torch(tensor), dtype, {}, tile)
         else:
-            shards = mesh_mapper.map(tensor)
-            tensor = ttnn.aggregate_as_tensor(shards)
-
-    if tile is not None:
-        tensor = ttnn.Tensor(tensor, dtype, {}, tile)
+            shards = mesh_mapper.map(ttnn.to_torch(tensor))
+            if tile is not None:
+                tensor = ttnn.Tensor(shards, dtype, mesh_mapper.config(), tile)
+            else:
+                tensor = ttnn.Tensor(shards, dtype, mesh_mapper.config())
+    else:
+        if tile is not None:
+            tensor = ttnn.Tensor(ttnn.to_torch(tensor), dtype, {}, tile)
 
     if layout is not None and not (dtype == ttnn.bfloat8_b or dtype == ttnn.bfloat4_b):
         if pad_value is not None:
             tensor = tensor.pad_to_tile(pad_value)
-        tensor = ttnn.to_layout(tensor, layout)
+        if ttnn.is_tensor_storage_on_device(tensor):
+            # TODO: support tilizing non bfloat/float types on device tensors making this expensive conversion unnecessary
+            tensor = ttnn.from_device(tensor, cq_id=cq_id)
+        tensor = ttnn.to_layout(tensor, layout, device=device)
 
     if device is not None:
         if memory_config is None:
             memory_config = ttnn.DRAM_MEMORY_CONFIG
-        tensor = ttnn.to_device(tensor, device, memory_config=memory_config, cq_id=cq_id)
+        # Handle sharding case which will have already output to a multidevice
+        if not ttnn.is_tensor_storage_on_device(tensor):
+            tensor = ttnn.to_device(tensor, device, memory_config=memory_config, cq_id=cq_id)
 
     if logical_shape is not None and logical_shape != tensor.shape and mesh_mapper is None:
         tensor = ttnn.reshape(tensor, logical_shape, padded_shape)
