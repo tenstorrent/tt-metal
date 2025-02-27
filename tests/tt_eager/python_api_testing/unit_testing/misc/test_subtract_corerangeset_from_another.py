@@ -6,10 +6,6 @@ import ttnn
 import pytest
 
 
-import ttnn
-import pytest
-
-
 @pytest.mark.parametrize(
     "base_ranges, subtract_ranges, expected_result",
     [
