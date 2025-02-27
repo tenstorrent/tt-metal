@@ -33,9 +33,9 @@ void kernel_main() {
     // if it is an odd number equal to original_page_size_bytes * 16 + 128
     constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(3);
     constexpr uint32_t cb_id_in1 = get_compile_time_arg_val(4);
-#define source_page_is_pow_2 (get_compile_time_arg_val(5) == 1)
+    constexpr bool source_page_is_pow_2 = (get_compile_time_arg_val(5) == 1);
     constexpr uint32_t source_page_pow_2 = get_compile_time_arg_val(6);
-#define dest_page_is_pow_2 (get_compile_time_arg_val(7) == 1)
+    constexpr bool dest_page_is_pow_2 = (get_compile_time_arg_val(7) == 1);
     constexpr uint32_t dest_page_pow_2 = get_compile_time_arg_val(8);
     constexpr uint32_t dest_page_size_bytes = original_page_size_bytes * num_repeats;
     // Number of times we must double the input page to make it write aligned
