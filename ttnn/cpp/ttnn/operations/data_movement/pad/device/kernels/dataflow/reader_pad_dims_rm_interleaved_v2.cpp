@@ -44,12 +44,17 @@ void kernel_main() {
     constexpr uint32_t front_padding = get_compile_time_arg_val(9);
     constexpr bool unaligned = get_compile_time_arg_val(22) == 1;
 
+    uint32_t packed_pad_value = 0;
+    uint32_t row_major_min_bytes = 0;
+    uint32_t num_front_pad_sticks_read = 0;
+    uint32_t num_end_pad_sticks_read = 0;
+    uint32_t num_sticks_padded_read = 0;
     if constexpr (not_pad_by_zero) {
-        constexpr uint32_t packed_pad_value = get_compile_time_arg_val(14);
-        constexpr uint32_t row_major_min_bytes = get_compile_time_arg_val(15);
-        constexpr uint32_t num_front_pad_sticks_read = get_compile_time_arg_val(16);
-        constexpr uint32_t num_end_pad_sticks_read = get_compile_time_arg_val(17);
-        constexpr uint32_t num_sticks_padded_read = get_compile_time_arg_val(18);
+        packed_pad_value = kernel_compile_time_args[14];
+        row_major_min_bytes = kernel_compile_time_args[15];
+        num_front_pad_sticks_read = kernel_compile_time_args[16];
+        num_end_pad_sticks_read = kernel_compile_time_args[17];
+        num_sticks_padded_read = kernel_compile_time_args[18];
     }
 
     constexpr uint32_t cb_in0 = tt::CBIndex::c_0;
@@ -57,18 +62,11 @@ void kernel_main() {
     constexpr uint32_t cb_pad_align = tt::CBIndex::c_2;
 
     constexpr bool stick_size_is_pow2 = get_compile_time_arg_val(19) == 1;
-    if constexpr (stick_size_is_pow2) {
-        constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(20);
-    } else {
-        constexpr uint32_t page_size = get_compile_time_arg_val(20);
-    }
+    constexpr uint32_t log_base_2_of_page_size = get_compile_time_arg_val(20);
+    constexpr uint32_t page_size = get_compile_time_arg_val(20);
 
-    if constexpr (stick_size_is_pow2) {
-        const InterleavedPow2AddrGen<src_is_dram> s = {
-            .bank_base_address = src_addr, .log_base_2_of_page_size = log_base_2_of_page_size};
-    } else {
-        const InterleavedAddrGen<src_is_dram> s = {.bank_base_address = src_addr, .page_size = page_size};
-    }
+    const auto s =
+        get_interleaved_addr_gen<src_is_dram, stick_size_is_pow2>(src_addr, page_size, log_base_2_of_page_size);
 
     uint64_t zeros_noc_addr = get_noc_addr(MEM_ZEROS_BASE);
 
@@ -79,11 +77,7 @@ void kernel_main() {
     uint64_t pad_align_write_addr = get_write_ptr(cb_pad_align);
     uint64_t pad_align_noc_addr = get_noc_addr(pad_align_addr);
 
-#if (not_pad_by_zero)
     fill_pad_cb_with_val(cb_pad, stick_size_padded, packed_pad_value);
-#else
-    fill_pad_cb_with_val(cb_pad, stick_size_padded, 0);
-#endif
 
     uint32_t i_stick = start_id;
     uint32_t curr_c = start_dim_offset[2], curr_h = start_dim_offset[1], curr_n = start_dim_offset[3];
