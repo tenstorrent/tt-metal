@@ -23,6 +23,18 @@ from tests.tt_eager.python_api_testing.unit_testing.misc.test_matmul_1d_gather_i
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
 
+def check_mesh_tensor_alloc(tensor):
+    device_tensors = ttnn.get_device_tensors(tensor)
+    buffer_addr = device_tensors[0].buffer_address()
+
+    if len(device_tensors) > 1:
+        for i in range(1, len(device_tensors)):
+            addr = device_tensors[i].buffer_address()
+            if not addr == buffer_addr:
+                return False
+    return True
+
+
 def run_all_reduce_impl(
     mesh_device,
     output_shape,
@@ -147,6 +159,7 @@ def run_all_reduce_impl(
             memory_config=input_mem_config,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
         )
+        check_mesh_tensor_alloc(tt_input_tensor)
 
         intermediate_tensor = torch.zeros(intermediate_shape)
         tt_intermediate_tensors = []
@@ -159,6 +172,9 @@ def run_all_reduce_impl(
                 memory_config=intermediate_mem_config,
                 mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=cluster_shape),
             )
+
+            # Validate that the tensor is allocated in same location across devices
+            check_mesh_tensor_alloc(tt_intermediate_tensor)
             tt_intermediate_tensors.append(tt_intermediate_tensor)
 
         # All-Reduce Golden
