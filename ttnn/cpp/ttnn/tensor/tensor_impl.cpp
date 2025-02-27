@@ -1379,6 +1379,11 @@ Tensor unpad(const Tensor& tensor, const ttnn::Shape& output_tensor_start, const
                 const auto input_data = host_buffer::get_as<T>(storage.buffer);
                 return unpad(input_data);
             },
+            [&unpad](const MultiDeviceHostStorage& storage) {
+                TT_FATAL(storage.buffers.size() == 1, "Only single buffer is supported");
+                const auto input_data = host_buffer::get_as<T>(storage.buffers[0]);
+                return unpad(input_data);
+            },
             [](const auto& s) -> owned_buffer::Buffer<T> {
                 TT_THROW("Unsupported storage type {}", tt::stl::get_type_name(s));
             }},
